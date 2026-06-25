@@ -677,7 +677,7 @@ func TestBoardNodeCardsArchiveCanceledTaskInDoneNode(t *testing.T) {
 	if err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
-	forceLegacyCanceledBacklogPlacement(t, ctx, store, task.ID, workflowID)
+	forceCanceledBacklogPlacementWithoutTerminal(t, ctx, store, task.ID, workflowID)
 	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
@@ -824,7 +824,7 @@ func TestBoardNodeCardsDoNotArchiveCanceledTaskInAlternateTerminalNode(t *testin
 	if err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
-	forceLegacyCanceledBacklogPlacement(t, ctx, store, task.ID, workflowID)
+	forceCanceledBacklogPlacementWithoutTerminal(t, ctx, store, task.ID, workflowID)
 	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
 	if err != nil {
 		t.Fatalf("GetBoard: %v", err)
@@ -1674,20 +1674,28 @@ func newWorkflowViewTestContextService(t *testing.T) (context.Context, *metadata
 	return context.Background(), store, workflowStore, binding, view
 }
 
-func forceLegacyCanceledBacklogPlacement(t *testing.T, ctx context.Context, store *metadata.Store, taskID workflow.TaskID, workflowID workflow.WorkflowID) {
+func forceCanceledBacklogPlacementWithoutTerminal(t *testing.T, ctx context.Context, store *metadata.Store, taskID workflow.TaskID, workflowID workflow.WorkflowID) {
 	t.Helper()
-	if _, err := store.DB().ExecContext(ctx, `
-DELETE FROM task_node_placements
-WHERE task_id = ?
-  AND node_id IN (SELECT id FROM workflow_nodes WHERE workflow_id = ? AND kind = 'terminal')`, string(taskID), string(workflowID)); err != nil {
-		t.Fatalf("force legacy canceled terminal placement removal: %v", err)
+	var startNodeID string
+	if err := store.DB().QueryRowContext(ctx, `
+SELECT id
+FROM workflow_nodes
+WHERE workflow_id = ?
+  AND kind = 'start'`, string(workflowID)).Scan(&startNodeID); err != nil {
+		t.Fatalf("resolve canceled backlog start node: %v", err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `
-UPDATE task_node_placements
-SET state = 'active'
-WHERE task_id = ?
-  AND node_id IN (SELECT id FROM workflow_nodes WHERE workflow_id = ? AND kind = 'start')`, string(taskID), string(workflowID)); err != nil {
-		t.Fatalf("force legacy canceled backlog placement: %v", err)
+	if _, err := store.Queries().DeleteTaskNodePlacementsByTask(ctx, string(taskID)); err != nil {
+		t.Fatalf("remove canceled task placements: %v", err)
+	}
+	if err := store.Queries().InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{
+		ID:              "placement-canceled-backlog-" + string(taskID),
+		TaskID:          string(taskID),
+		NodeID:          startNodeID,
+		State:           "active",
+		CreatedAtUnixMs: 1,
+		UpdatedAtUnixMs: 1,
+	}); err != nil {
+		t.Fatalf("insert canceled backlog placement: %v", err)
 	}
 }
 

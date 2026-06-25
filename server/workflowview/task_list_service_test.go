@@ -63,42 +63,62 @@ func TestListTasksDefaultSelectionAndOrdering(t *testing.T) {
 	}
 }
 
-func TestListTasksIncludesLegacyTasksWithoutVisibleStatusAfterPagination(t *testing.T) {
+func TestListTasksExcludesTasksWithoutBoardPlacement(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
 	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	visibleTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Visible", Body: "Body"})
+	firstVisibleTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "First visible", Body: "Body"})
 	if err != nil {
-		t.Fatalf("CreateTask visible: %v", err)
+		t.Fatalf("CreateTask first visible: %v", err)
 	}
-	legacyTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Legacy", Body: "Body"})
+	secondVisibleTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Second visible", Body: "Body"})
 	if err != nil {
-		t.Fatalf("CreateTask legacy: %v", err)
+		t.Fatalf("CreateTask second visible: %v", err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `DELETE FROM task_node_placements WHERE task_id = ?`, string(legacyTask.ID)); err != nil {
-		t.Fatalf("remove legacy placements: %v", err)
+	orphanTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Title: "Orphan", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask orphan: %v", err)
 	}
-	for taskID, timestamp := range map[string]int64{string(visibleTask.ID): 100, string(legacyTask.ID): 200} {
+	if _, err := store.Queries().DeleteTaskNodePlacementsByTask(ctx, string(orphanTask.ID)); err != nil {
+		t.Fatalf("remove orphan placements: %v", err)
+	}
+	for taskID, timestamp := range map[string]int64{string(firstVisibleTask.ID): 100, string(orphanTask.ID): 200, string(secondVisibleTask.ID): 300} {
 		if _, err := store.DB().ExecContext(ctx, `UPDATE tasks SET created_at_unix_ms = ?, updated_at_unix_ms = ? WHERE id = ?`, timestamp, timestamp, taskID); err != nil {
 			t.Fatalf("force task timestamp %s: %v", taskID, err)
 		}
 	}
 
-	first, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: binding.ProjectID, PageSize: 1}, workflow.StaticRoleResolver{"coder": true})
+	first, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID: binding.ProjectID,
+		PageSize:  1,
+		Sort:      []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldUpdated, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
+	}, workflow.StaticRoleResolver{"coder": true})
 	if err != nil {
 		t.Fatalf("ListTasks first page: %v", err)
 	}
-	if len(first.Tasks) != 1 || first.Tasks[0].TaskID != string(visibleTask.ID) || first.NextPageToken == "" {
-		t.Fatalf("first page = %+v, want visible task and next token", first)
+	if len(first.Tasks) != 1 || first.Tasks[0].TaskID != string(firstVisibleTask.ID) || first.NextPageToken == "" {
+		t.Fatalf("first page = %+v, want first visible task and next page", first)
 	}
-	second, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: binding.ProjectID, PageSize: 1, PageToken: first.NextPageToken}, workflow.StaticRoleResolver{"coder": true})
+	second, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID: binding.ProjectID,
+		PageSize:  1,
+		PageToken: first.NextPageToken,
+		Sort:      []serverapi.WorkflowTaskListSort{{Field: serverapi.WorkflowTaskListSortFieldUpdated, Direction: serverapi.WorkflowTaskListSortDirectionAsc}},
+	}, workflow.StaticRoleResolver{"coder": true})
 	if err != nil {
 		t.Fatalf("ListTasks second page: %v", err)
 	}
-	if len(second.Tasks) != 1 || second.Tasks[0].TaskID != string(legacyTask.ID) || len(second.Tasks[0].StatusKeys) != 0 || second.NextPageToken != "" {
-		t.Fatalf("second page = %+v, want legacy task with empty status_keys and no next token", second)
+	if len(second.Tasks) != 1 || second.Tasks[0].TaskID != string(secondVisibleTask.ID) || second.NextPageToken != "" {
+		t.Fatalf("second page = %+v, want second visible task and no next page", second)
+	}
+	openResp, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: binding.ProjectID, RunStatuses: []serverapi.WorkflowTaskRunStatus{serverapi.WorkflowTaskRunStatusOpen}}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("ListTasks open run-status filter: %v", err)
+	}
+	if !reflect.DeepEqual(taskListIDs(openResp.Tasks), taskListIDSet{string(firstVisibleTask.ID): true, string(secondVisibleTask.ID): true}) {
+		t.Fatalf("open-filtered tasks = %+v, want only visible open tasks", openResp.Tasks)
 	}
 }
 
@@ -242,7 +262,7 @@ func TestListTasksVisibleStatusPlacementSemantics(t *testing.T) {
 		if err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
 			t.Fatalf("CancelTask: %v", err)
 		}
-		forceLegacyCanceledBacklogPlacement(t, ctx, store, task.ID, workflowID)
+		forceCanceledBacklogPlacementWithoutTerminal(t, ctx, store, task.ID, workflowID)
 
 		resp, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
 		if err != nil {
