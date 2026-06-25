@@ -24,22 +24,6 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-var statPathForAvailability = os.Stat
-
-// SetAvailabilityStatForTest overrides path availability probing and returns a restore function.
-// It exists to keep availability-driven tests deterministic across platforms.
-func SetAvailabilityStatForTest(fn func(string) (os.FileInfo, error)) func() {
-	previous := statPathForAvailability
-	if fn == nil {
-		statPathForAvailability = os.Stat
-	} else {
-		statPathForAvailability = fn
-	}
-	return func() {
-		statPathForAvailability = previous
-	}
-}
-
 type Binding struct {
 	ProjectID       string
 	ProjectKey      string
@@ -1806,7 +1790,7 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 }
 
 func availabilityForPath(path string) string {
-	if _, err := statPathForAvailability(path); err != nil {
+	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "missing"
 		}
