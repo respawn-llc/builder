@@ -207,7 +207,7 @@ WHERE r.id = ?`, string(branchRunsByNode[implA.ID])).Scan(&batchID); err != nil 
 		t.Fatalf("BeginTx: %v", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	arrivals, err := joinArrivals(ctx, tx, batchID, join.ID)
+	arrivals, err := joinArrivals(ctx, store.queries.WithTx(tx), batchID, join.ID)
 	if err != nil {
 		t.Fatalf("joinArrivals: %v", err)
 	}

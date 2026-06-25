@@ -18,7 +18,6 @@ import (
 	"core/server/workflowsvc"
 	"core/server/workflowview"
 	"core/shared/client"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
@@ -349,118 +348,6 @@ func TestTaskCommandsExposeJSONAndPersistState(t *testing.T) {
 	}
 }
 
-func TestTaskHumanOnlyActionsAreDeniedInsideKentSession(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "session-agent")
-	previous := workflowCommandRemoteOpener
-	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
-		t.Fatal("human-only task command opened workflow remote")
-		return config.App{}, nil, nil
-	}
-	defer func() {
-		workflowCommandRemoteOpener = previous
-	}()
-
-	for _, args := range [][]string{
-		{"task", "start", "TASK-1"},
-		{"task", "cancel", "TASK-1"},
-		{"task", "resume", "TASK-1"},
-		{"task", "approve", "transition-1"},
-		{"task", "move", "TASK-1", "node-1"},
-		{"task", "comment", "delete", "comment-1"},
-	} {
-		stdout, _, code := runWorkflowRootCommand(args...)
-		if code != 1 {
-			t.Fatalf("%v exit = %d, want 1", args, code)
-		}
-		if stdout != "" {
-			t.Fatalf("%v stdout = %q, want empty", args, stdout)
-		}
-	}
-}
-
-func TestTaskStartPollsUntilRunSessionIsAttached(t *testing.T) {
-	originalTimeout := taskStartSessionPollTimeout
-	originalInterval := taskStartSessionPollInterval
-	taskStartSessionPollTimeout = 50 * time.Millisecond
-	taskStartSessionPollInterval = time.Millisecond
-	t.Cleanup(func() {
-		taskStartSessionPollTimeout = originalTimeout
-		taskStartSessionPollInterval = originalInterval
-	})
-
-	cfg := config.App{WorkspaceRoot: t.TempDir()}
-	remote := &taskStartPollingRemote{
-		projectID:   "project-1",
-		taskID:      "task-1",
-		shortID:     "BLD-1",
-		workflowID:  "workflow-1",
-		workflow:    "Workflow",
-		placementID: "placement-1",
-		runID:       "run-1",
-		sessionID:   "session-1",
-		nodeID:      "node-1",
-		nodeKey:     "implement",
-	}
-	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
-	defer restore()
-
-	if _, stderr, code := runWorkflowRootCommand("task", "start", "--project", "project-1", "BLD-1"); code != 0 {
-		t.Fatalf("task start exit=%d stderr=%q, want success", code, stderr)
-	}
-	if remote.startRequests != 1 {
-		t.Fatalf("start requests = %d, want one StartWorkflowTask call", remote.startRequests)
-	}
-	if remote.taskIDDetailCalls < 2 {
-		t.Fatalf("task detail calls = %d, want polling before session assignment", remote.taskIDDetailCalls)
-	}
-}
-
-func TestTaskSafeActionsRemainAvailableInsideKentSession(t *testing.T) {
-	t.Setenv(sessionenv.SessionIDEnv, "session-agent")
-	cfg, binding, remote := newWorkflowCommandLoopback(t)
-	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
-	defer restore()
-
-	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Safe Task Workflow")
-	createOut, _, code := runWorkflowRootCommand("task", "create", "--json", "--title", "Safe Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
-	if code != 0 {
-		t.Fatalf("task create inside session exit=%d, want 0", code)
-	}
-	var created taskShowOutput
-	if err := json.Unmarshal([]byte(createOut), &created); err != nil {
-		t.Fatalf("task create --json = %q, want JSON: %v", createOut, err)
-	}
-
-	if _, _, code := runWorkflowRootCommand("task", "list", "--project", binding.ProjectID, "--json"); code != 0 {
-		t.Fatalf("task list inside session exit=%d, want 0", code)
-	}
-	if _, _, code := runWorkflowRootCommand("task", "show", "--project", binding.ProjectID, "--json", created.Summary.ShortID); code != 0 {
-		t.Fatalf("task show inside session exit=%d, want 0", code)
-	}
-
-	commentOut, _, code := runWorkflowRootCommand("task", "comment", "add", created.Summary.ShortID, "--project", binding.ProjectID, "--author", "user", "--body", "note")
-	if code != 0 {
-		t.Fatalf("task comment add inside session exit=%d, want 0", code)
-	}
-	commentID := labeledOutputValue(t, commentOut, "comment_id")
-	if commentID == "" {
-		t.Fatalf("task comment add output did not include a comment id")
-	}
-	if _, _, code := runWorkflowRootCommand("task", "comment", "list", created.Summary.ShortID, "--project", binding.ProjectID); code != 0 {
-		t.Fatalf("task comment list inside session exit=%d, want 0", code)
-	}
-	if _, _, code := runWorkflowRootCommand("task", "comment", "replace", commentID, "--body", "edited"); code != 0 {
-		t.Fatalf("task comment replace inside session exit=%d, want 0", code)
-	}
-	resp, err := remote.ListWorkflowTaskComments(context.Background(), serverapi.WorkflowTaskCommentListRequest{TaskID: created.Summary.ID, PageSize: 10})
-	if err != nil {
-		t.Fatalf("ListWorkflowTaskComments: %v", err)
-	}
-	if len(resp.Comments) != 1 || resp.Comments[0].ID != commentID || resp.Comments[0].Body != "edited" {
-		t.Fatalf("comments after replace = %+v, want edited comment", resp.Comments)
-	}
-}
-
 func TestTaskCommentAuthorForAddUsesCurrentWorkflowRun(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "session-workflow")
 	remote := &commentAuthorRemote{task: serverapi.WorkflowTaskDetail{
@@ -628,41 +515,6 @@ func TestWorkflowProjectPathResolutionRejectsUnboundPath(t *testing.T) {
 	_, _, code := runWorkflowRootCommand("task", "list", "--project", t.TempDir())
 	if code != 1 {
 		t.Fatalf("task list unbound path exit=%d, want resolution failure", code)
-	}
-}
-
-func TestTaskShowUsesRegisteredTaskWorktreeRootAsCurrentProject(t *testing.T) {
-	cfg, binding, remote := newWorkflowCommandLoopback(t)
-	worktreeRoot := t.TempDir()
-	worktreeCfg := cfg
-	worktreeCfg.WorkspaceRoot = worktreeRoot
-	remote.projectBindingsByRoot = map[string]serverapi.ProjectBinding{
-		worktreeRoot: {
-			ProjectID:     binding.ProjectID,
-			ProjectKey:    binding.ProjectKey,
-			ProjectName:   binding.ProjectName,
-			WorkspaceID:   binding.WorkspaceID,
-			CanonicalRoot: worktreeRoot,
-		},
-	}
-	restore := replaceWorkflowCommandRemoteOpener(t, worktreeCfg, remote)
-	defer restore()
-
-	workflowID := createRunnableWorkflowForCommandTest(t, "Task Worktree Workflow")
-	workflowLinkForTest(t, binding.ProjectID, workflowID, "--default")
-	createOut, _ := runWorkflowRootCommandOK(t, "task", "create", "--json", "--title", "Worktree Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
-	var created taskShowOutput
-	if err := json.Unmarshal([]byte(createOut), &created); err != nil {
-		t.Fatalf("task create --json = %q, want JSON: %v", createOut, err)
-	}
-
-	showOut, _ := runWorkflowRootCommandOK(t, "task", "show", "--json", created.Summary.ShortID)
-	var shown taskShowOutput
-	if err := json.Unmarshal([]byte(showOut), &shown); err != nil {
-		t.Fatalf("task show --json = %q, want JSON: %v", showOut, err)
-	}
-	if shown.Summary.ID != created.Summary.ID || shown.Project.ProjectID != binding.ProjectID {
-		t.Fatalf("task show from worktree root = %+v, want task in registered project", shown)
 	}
 }
 
@@ -917,30 +769,6 @@ func workflowTransitionGroupForID(def serverapi.WorkflowDefinition, groupID stri
 	return serverapi.WorkflowTransitionGroup{}
 }
 
-func labeledOutputValue(t *testing.T, output string, label string) string {
-	t.Helper()
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Split(line, "\t")
-		if len(fields) == 2 && fields[0] == label {
-			return fields[1]
-		}
-	}
-	if strings.TrimSpace(output) == "" {
-		t.Fatalf("label %q not found in empty output", label)
-	}
-	return ""
-}
-
-func taskDetailHeadingShortID(t *testing.T, output string) string {
-	t.Helper()
-	firstLine, _, _ := strings.Cut(output, "\n")
-	shortID, _, ok := strings.Cut(firstLine, ": ")
-	if !ok || strings.TrimSpace(shortID) == "" {
-		t.Fatalf("task detail heading not found in output %q", output)
-	}
-	return shortID
-}
-
 func workflowCommandStoredEdgeByID(t *testing.T, ctx context.Context, store *workflowstore.Store, workflowID string, edgeID string) workflow.Edge {
 	t.Helper()
 	def, _, err := store.GetDefinition(ctx, workflow.WorkflowID(workflowID))
@@ -971,15 +799,6 @@ func workflowCommandEdgeRecord(edge workflow.Edge) workflowstore.EdgeRecord {
 		Parameters:         edge.Parameters,
 		OutputRequirements: edge.OutputRequirements,
 	}
-}
-
-func createRunnableWorkflowForCommandTest(t *testing.T, name string) string {
-	t.Helper()
-	workflowID := workflowCreateForTest(t, name).ID
-	workflowNodeAddForTest(t, workflowID, "--key", "implement", "--kind", "agent", "--agent", "workflow-test", "--prompt", "Do work")
-	workflowEdgeAddForTest(t, workflowID, "--from", "backlog", "--transition", "start", "--edge-key", "start", "--to", "implement", "--context", "new_session", "--prompt", "Do work")
-	workflowEdgeAddForTest(t, workflowID, "--from", "implement", "--transition", "done", "--edge-key", "done", "--to", "done", "--context", "new_session")
-	return workflowID
 }
 
 type pagedWorkflowListRemote struct {
@@ -1032,188 +851,6 @@ func (r *pagedWorkflowListRemote) GetWorkflow(ctx context.Context, req serverapi
 		return serverapi.WorkflowGetResponse{}, sql.ErrNoRows
 	}
 	return serverapi.WorkflowGetResponse{Definition: def}, nil
-}
-
-type pagedTaskListRemote struct {
-	client.WorkflowClient
-	board    serverapi.WorkflowBoard
-	pages    map[string]serverapi.WorkflowBoard
-	requests []serverapi.WorkflowTaskListRequest
-}
-
-func (r *pagedTaskListRemote) Close() error { return nil }
-
-func (r *pagedTaskListRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	return serverapi.ProjectResolvePathResponse{}, nil
-}
-
-func (r *pagedTaskListRemote) GetWorkflowBoard(_ context.Context, req serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoardResponse, error) {
-	if strings.TrimSpace(req.PageToken) == "" {
-		return serverapi.WorkflowBoardResponse{Board: r.board}, nil
-	}
-	return serverapi.WorkflowBoardResponse{Board: r.pages[req.PageToken]}, nil
-}
-
-func (r *pagedTaskListRemote) ListWorkflowTasks(_ context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
-	r.requests = append(r.requests, req)
-	board := r.board
-	if strings.TrimSpace(req.PageToken) != "" {
-		board = r.pages[req.PageToken]
-	}
-	return workflowTaskListResponseFromBoard(board), nil
-}
-
-func workflowTaskListResponseFromBoard(board serverapi.WorkflowBoard) serverapi.WorkflowTaskListResponse {
-	cards := append([]serverapi.WorkflowBoardTaskCard{}, board.Cards...)
-	cards = append(cards, board.DonePreview...)
-	tasks := make([]serverapi.WorkflowTaskListItem, 0, len(cards))
-	for _, card := range cards {
-		tasks = append(tasks, serverapi.WorkflowTaskListItem{
-			TaskID:          card.TaskID,
-			ShortID:         card.ShortID,
-			WorkflowID:      card.WorkflowID,
-			Title:           card.Title,
-			CreatedAtUnixMs: 1,
-			UpdatedAtUnixMs: card.UpdatedAtUnixMs,
-			StatusKeys:      workflowTaskListStatusKeysFromCardStatus(card.Status),
-			RunStatus:       serverapi.WorkflowTaskRunStatus(workflowTaskListRunStatusFromCardStatus(card.Status)),
-			RunCount:        len(card.Status.RunIDs),
-		})
-	}
-	return serverapi.WorkflowTaskListResponse{ProjectID: board.ProjectID, WorkflowID: board.SelectedWorkflow.WorkflowID, SelectedWorkflow: &board.SelectedWorkflow, NextPageToken: board.NextPageToken, Tasks: tasks}
-}
-
-func workflowTaskListStatusKeysFromCardStatus(status serverapi.WorkflowTaskStatus) []string {
-	switch status.Kind {
-	case "done":
-		return []string{"done"}
-	case "backlog":
-		return []string{"backlog"}
-	default:
-		return []string{"agent"}
-	}
-}
-
-func workflowTaskListRunStatusFromCardStatus(status serverapi.WorkflowTaskStatus) string {
-	switch status.Kind {
-	case "done":
-		return "done"
-	case "canceled":
-		return "canceled"
-	case "running", "interrupted", "waiting_question", "waiting_approval":
-		return "running"
-	default:
-		return "open"
-	}
-}
-
-type commentAuthorRemote struct {
-	client.WorkflowClient
-	task        serverapi.WorkflowTaskDetail
-	sessionName string
-}
-
-func (r *commentAuthorRemote) Close() error { return nil }
-
-func (r *commentAuthorRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	return serverapi.ProjectResolvePathResponse{}, nil
-}
-
-func (r *commentAuthorRemote) GetWorkflowTask(context.Context, serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-	return serverapi.WorkflowTaskGetResponse{Task: r.task}, nil
-}
-
-func (r *commentAuthorRemote) GetSessionMainView(context.Context, serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-	return serverapi.SessionMainViewResponse{MainView: clientui.RuntimeMainView{
-		Session: clientui.RuntimeSessionView{SessionName: r.sessionName},
-	}}, nil
-}
-
-type crossProjectTaskShowRemote struct {
-	client.WorkflowClient
-	scopedErr     error
-	unscopedErr   error
-	unscopedCalls int
-}
-
-func (r *crossProjectTaskShowRemote) Close() error { return nil }
-
-func (r *crossProjectTaskShowRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	return serverapi.ProjectResolvePathResponse{}, nil
-}
-
-func (r *crossProjectTaskShowRemote) GetWorkflowTask(_ context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-	if req.ProjectID == "project-current" && req.ShortID == "OTH-1" {
-		if r.scopedErr != nil {
-			return serverapi.WorkflowTaskGetResponse{}, r.scopedErr
-		}
-		return serverapi.WorkflowTaskGetResponse{}, sql.ErrNoRows
-	}
-	if req.ProjectID == "" && req.ShortID == "OTH-1" {
-		r.unscopedCalls++
-		if r.unscopedErr != nil {
-			return serverapi.WorkflowTaskGetResponse{}, r.unscopedErr
-		}
-		return serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
-			Summary: serverapi.WorkflowTaskSummary{ID: "task-other", ProjectID: "project-other", WorkflowID: "workflow-other", ShortID: "OTH-1", Title: "Other Task"},
-			Project: serverapi.ProjectBoardProject{ProjectID: "project-other", ProjectKey: "OTH", DisplayName: "Other"},
-		}}, nil
-	}
-	return serverapi.WorkflowTaskGetResponse{}, sql.ErrNoRows
-}
-
-type taskStartPollingRemote struct {
-	client.WorkflowClient
-	projectID         string
-	taskID            string
-	shortID           string
-	workflowID        string
-	workflow          string
-	placementID       string
-	runID             string
-	sessionID         string
-	nodeID            string
-	nodeKey           string
-	startRequests     int
-	taskIDDetailCalls int
-}
-
-func (r *taskStartPollingRemote) Close() error { return nil }
-
-func (r *taskStartPollingRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	return serverapi.ProjectResolvePathResponse{Binding: &serverapi.ProjectBinding{ProjectID: r.projectID}}, nil
-}
-
-func (r *taskStartPollingRemote) GetWorkflowTask(_ context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-	if req.ProjectID == r.projectID && req.ShortID == r.shortID {
-		return serverapi.WorkflowTaskGetResponse{Task: r.taskDetail("")}, nil
-	}
-	if req.TaskID == r.taskID {
-		r.taskIDDetailCalls++
-		if r.taskIDDetailCalls == 1 {
-			return serverapi.WorkflowTaskGetResponse{Task: r.taskDetail("")}, nil
-		}
-		return serverapi.WorkflowTaskGetResponse{Task: r.taskDetail(r.sessionID)}, nil
-	}
-	return serverapi.WorkflowTaskGetResponse{}, sql.ErrNoRows
-}
-
-func (r *taskStartPollingRemote) StartWorkflowTask(context.Context, serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
-	r.startRequests++
-	return serverapi.WorkflowTaskStartResponse{TransitionID: "transition-1", PlacementID: r.placementID, RunID: r.runID}, nil
-}
-
-func (r *taskStartPollingRemote) taskDetail(sessionID string) serverapi.WorkflowTaskDetail {
-	return serverapi.WorkflowTaskDetail{
-		Summary:  serverapi.WorkflowTaskSummary{ID: r.taskID, ShortID: r.shortID, WorkflowID: r.workflowID, ProjectID: r.projectID, Title: "Task"},
-		Workflow: serverapi.WorkflowPickerItem{WorkflowID: r.workflowID, DisplayName: r.workflow},
-		Placements: []serverapi.WorkflowPlacement{
-			{ID: r.placementID, TaskID: r.taskID, NodeID: r.nodeID, NodeKey: r.nodeKey},
-		},
-		Runs: []serverapi.WorkflowRun{
-			{ID: r.runID, TaskID: r.taskID, PlacementID: r.placementID, NodeID: r.nodeID, SessionID: sessionID},
-		},
-	}
 }
 
 type preservingNodeUpdateRemote struct {

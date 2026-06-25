@@ -72,7 +72,7 @@ func forceWorkflowGraphRowsForSnapshotTest(t *testing.T, ctx context.Context, st
 		if node.WorkflowID == "" {
 			node.WorkflowID = workflowID
 		}
-		if err := upsertWorkflowNode(ctx, tx, node, int64(10000+i*100)); err != nil {
+		if err := upsertWorkflowNode(ctx, q, node, int64(10000+i*100)); err != nil {
 			t.Fatalf("force workflow node %s: %v", node.ID, err)
 		}
 	}
@@ -80,7 +80,7 @@ func forceWorkflowGraphRowsForSnapshotTest(t *testing.T, ctx context.Context, st
 		if group.WorkflowID == "" {
 			group.WorkflowID = workflowID
 		}
-		if err := upsertWorkflowTransitionGroup(ctx, tx, group, int64(10000+i*100)); err != nil {
+		if err := upsertWorkflowTransitionGroup(ctx, q, group, int64(10000+i*100)); err != nil {
 			t.Fatalf("force workflow transition group %s: %v", group.ID, err)
 		}
 	}
@@ -88,7 +88,7 @@ func forceWorkflowGraphRowsForSnapshotTest(t *testing.T, ctx context.Context, st
 		if edge.WorkflowID == "" {
 			edge.WorkflowID = workflowID
 		}
-		if err := upsertWorkflowEdge(ctx, tx, edge, int64(10000+i*100)); err != nil {
+		if err := upsertWorkflowEdge(ctx, q, edge, int64(10000+i*100)); err != nil {
 			t.Fatalf("force workflow edge %s: %v", edge.ID, err)
 		}
 	}
