@@ -1,5 +1,5 @@
 import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "../../api";
-import type { draftDefinitionFromSource } from "./workflowEditorDraft";
+import type { draftDefinitionFromSource } from "../../features/workflow-editor/workflowEditorDraft";
 
 export const workflowDefinition: WorkflowDefinition = {
   workflow: {
