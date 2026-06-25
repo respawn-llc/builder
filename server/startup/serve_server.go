@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"core/server/auth"
@@ -25,55 +23,6 @@ type ServeServer struct {
 }
 
 var localSocketListener = listenLocalSocket
-
-var (
-	testListenReservationsMu sync.Mutex
-	testListenReservations   = map[string]net.Listener{}
-)
-
-// ReserveTestListenReservation keeps a test-owned listener alive until the
-// configured daemon bind path is ready to claim the same address.
-func ReserveTestListenReservation(listener net.Listener) {
-	if listener == nil {
-		return
-	}
-	addr := strings.TrimSpace(listener.Addr().String())
-	if addr == "" {
-		_ = listener.Close()
-		return
-	}
-	testListenReservationsMu.Lock()
-	if existing := testListenReservations[addr]; existing != nil {
-		_ = existing.Close()
-	}
-	testListenReservations[addr] = listener
-	testListenReservationsMu.Unlock()
-	go drainTestListenReservation(listener)
-}
-
-func drainTestListenReservation(listener net.Listener) {
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			return
-		}
-		_ = conn.Close()
-	}
-}
-
-func ReleaseTestListenReservation(addr string) {
-	trimmed := strings.TrimSpace(addr)
-	if trimmed == "" {
-		return
-	}
-	testListenReservationsMu.Lock()
-	listener := testListenReservations[trimmed]
-	delete(testListenReservations, trimmed)
-	testListenReservationsMu.Unlock()
-	if listener != nil {
-		_ = listener.Close()
-	}
-}
 
 func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*ServeServer, error) {
 	appCore, err := StartCore(ctx, req, authHandler, onboardingHandler)
@@ -149,7 +98,6 @@ func startCoreRPC(appCore *core.Core) (*runningRPC, error) {
 	}
 	listenCfg := appCore.Config()
 	listenAddress := net.JoinHostPort(listenCfg.Settings.ServerHost, strconv.Itoa(listenCfg.Settings.ServerPort))
-	ReleaseTestListenReservation(listenAddress)
 	tcpListener, err := net.Listen("tcp", listenAddress)
 	if err != nil {
 		return nil, fmt.Errorf("listen local control endpoint: %w", err)

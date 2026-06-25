@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -155,8 +156,39 @@ func configureBindingCommandTestServerPort(t *testing.T) {
 		t.Fatalf("Listen: %v", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	_ = listener.Close()
+	reserveBindingCommandTestPort(t, listener)
 	t.Setenv("KENT_SERVER_PORT", fmt.Sprintf("%d", port))
+}
+
+var bindingCommandTestPortReservations = struct {
+	sync.Mutex
+	listeners map[string]net.Listener
+}{listeners: map[string]net.Listener{}}
+
+func reserveBindingCommandTestPort(t *testing.T, listener net.Listener) {
+	t.Helper()
+	addr := listener.Addr().String()
+	bindingCommandTestPortReservations.Lock()
+	if existing := bindingCommandTestPortReservations.listeners[addr]; existing != nil {
+		_ = existing.Close()
+	}
+	bindingCommandTestPortReservations.listeners[addr] = listener
+	bindingCommandTestPortReservations.Unlock()
+	t.Cleanup(func() { releaseBindingCommandTestPort(addr) })
+}
+
+func releaseBindingCommandTestPort(addr string) {
+	bindingCommandTestPortReservations.Lock()
+	listener := bindingCommandTestPortReservations.listeners[addr]
+	delete(bindingCommandTestPortReservations.listeners, addr)
+	bindingCommandTestPortReservations.Unlock()
+	if listener != nil {
+		_ = listener.Close()
+	}
+}
+
+func releaseBindingCommandTestPortForConfig(cfg config.App) {
+	releaseBindingCommandTestPort(net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)))
 }
 
 func registerBindingCommandWorkspace(t *testing.T, workspace string) metadata.Binding {
@@ -227,11 +259,6 @@ func newBindingCommandWorkspaceConfig(t *testing.T) (string, config.App) {
 
 func startBindingCommandServer(t *testing.T, workspace string) func() {
 	t.Helper()
-	cfg, err := config.Load(workspace, config.LoadOptions{})
-	if err != nil {
-		t.Fatalf("config.Load server workspace: %v", err)
-	}
-	serverstartup.ReleaseTestListenReservation(net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)))
 	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, Model: "gpt-5"}, bindingCommandMemoryAuthHandler{state: auth.State{
 		Scope:     auth.ScopeGlobal,
 		Method:    auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
@@ -243,6 +270,7 @@ func startBindingCommandServer(t *testing.T, workspace string) func() {
 	serveCtx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseBindingCommandTestPortForConfig(srv.Config())
 		errCh <- srv.Serve(serveCtx)
 	}()
 	waitForBindingCommandServer(t, workspace)

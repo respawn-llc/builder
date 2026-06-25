@@ -2,14 +2,11 @@ package app
 
 import (
 	"context"
-	"net"
-	"strconv"
 
 	"core/cli/app/internal/daemonlaunch"
 	"core/cli/app/internal/remoteattach"
 	"core/cli/app/internal/serverattach"
 	"core/cli/app/internal/startupconfig"
-	serverstartup "core/server/startup"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
@@ -18,16 +15,13 @@ import (
 var launchSessionServerDaemon = startLocalInteractiveSessionDaemon
 var startInteractiveEmbeddedSessionServer = startEmbeddedServer
 
-// resolveDaemonExecutablePath, buildServeArgsFunc, buildServeEnvFunc, and
-// releaseServeReservationFunc support launching a local `kent serve` daemon for
-// the interactive TUI. The headless run path no longer starts servers, so these
-// live with the interactive session server that still uses them.
+// resolveDaemonExecutablePath, buildServeArgsFunc, and buildServeEnvFunc support
+// launching a local `kent serve` daemon for the interactive TUI. The headless
+// run path no longer starts servers, so these live with the interactive session
+// server that still uses them.
 var resolveDaemonExecutablePath = startupconfig.ServeExecutablePath
 var buildServeArgsFunc = func(_ string, _ Options) []string { return startupconfig.ServeArgs() }
 var buildServeEnvFunc = startupconfig.ServeEnv
-var releaseServeReservationFunc = func(cfg config.App) {
-	serverstartup.ReleaseTestListenReservation(net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)))
-}
 
 func startSessionServer(ctx context.Context, opts Options, interactor authInteractor, interactive bool) (interactiveSessionServer, error) {
 	cfg, err := startupconfig.ResolveSessionConfig(startupConfigRequest(opts))
@@ -90,7 +84,6 @@ func startLocalInteractiveSessionDaemon(ctx context.Context, opts Options) (*cli
 	if !ok {
 		return nil, nil, false, nil
 	}
-	releaseServeReservationFunc(cfg)
 	return daemonlaunch.Launch[*client.Remote](ctx, daemonlaunch.Request[*client.Remote]{
 		ExecutablePath: execPath,
 		Args:           buildServeArgsFunc("", opts),

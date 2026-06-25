@@ -151,7 +151,6 @@ type systemPromptRuntimeTemplateData struct {
 
 type defaultSystemPromptTemplateData struct {
 	LaunchCommand                                string
-	BuilderCommand                               string // deprecated alias of LaunchCommand; kept so migrated custom prompts render during the Builder->Kent window.
 	EstimatedToolCallsForContext                 int
 	EditingToolName                              string
 	DefaultSystemPromptPersonality               string
@@ -163,7 +162,6 @@ type defaultSystemPromptTemplateData struct {
 
 type systemPromptTemplateData struct {
 	LaunchCommand                                string
-	BuilderCommand                               string // deprecated alias of LaunchCommand; kept so migrated custom prompts render during the Builder->Kent window.
 	EstimatedToolCallsForContext                 int
 	EditingToolName                              string
 	DefaultSystemPrompt                          string
@@ -703,7 +701,6 @@ func renderDefaultSystemPromptTemplateWithSections(text string, args SystemPromp
 	}
 	data := defaultSystemPromptTemplateData{
 		LaunchCommand:                                LaunchCommand(),
-		BuilderCommand:                               LaunchCommand(),
 		EstimatedToolCallsForContext:                 args.EstimatedToolCallsForContext,
 		EditingToolName:                              strings.TrimSpace(args.EditingToolName),
 		DefaultSystemPromptPersonality:               strings.TrimSpace(sections.personality),
@@ -725,7 +722,6 @@ func renderSystemPromptTemplateWithSections(text string, args SystemPromptTempla
 	}
 	data := systemPromptTemplateData{
 		LaunchCommand:                                LaunchCommand(),
-		BuilderCommand:                               LaunchCommand(),
 		EstimatedToolCallsForContext:                 args.EstimatedToolCallsForContext,
 		EditingToolName:                              strings.TrimSpace(args.EditingToolName),
 		DefaultSystemPrompt:                          strings.TrimSpace(defaultSystemPrompt),
