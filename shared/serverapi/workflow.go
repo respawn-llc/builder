@@ -502,7 +502,6 @@ type WorkflowEdgeUpdateResponse struct {
 type WorkflowLinkProjectRequest struct {
 	ProjectID     string                         `json:"project_id"`
 	WorkflowID    string                         `json:"workflow_id"`
-	Default       bool                           `json:"default"`
 	DefaultPolicy WorkflowProjectLinkDefaultMode `json:"default_policy,omitempty"`
 }
 

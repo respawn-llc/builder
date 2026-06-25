@@ -611,7 +611,15 @@ func workflowLinkSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 	defer cancel()
-	resp, err := remote.LinkWorkflowToProject(ctx, serverapi.WorkflowLinkProjectRequest{ProjectID: projectID, WorkflowID: workflowID, Default: *defaultLink})
+	defaultPolicy := serverapi.WorkflowProjectLinkDefaultNever
+	if *defaultLink {
+		defaultPolicy = serverapi.WorkflowProjectLinkDefaultAlways
+	}
+	resp, err := remote.LinkWorkflowToProject(ctx, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     projectID,
+		WorkflowID:    workflowID,
+		DefaultPolicy: defaultPolicy,
+	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
