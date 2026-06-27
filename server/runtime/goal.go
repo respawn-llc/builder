@@ -214,7 +214,8 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 		if _, err := e.setGoalForStep(stepID, mutation.objective, mutation.actor); err != nil {
 			return err
 		}
-		return e.StartGoalLoop()
+		e.deferGoalLoopStart()
+		return nil
 	case activeStepGoalMutationComplete:
 		_, err := e.setGoalStatusForStep(stepID, session.GoalStatusComplete, mutation.actor)
 		return err
@@ -296,6 +297,29 @@ func steerGoalStatusUpdateIntent(update GoalStatusUpdate) steeringIntent {
 }
 
 func (e *Engine) StartGoalLoop() error {
+	return e.startGoalLoop(true)
+}
+
+func (e *Engine) deferGoalLoopStart() {
+	if e == nil {
+		return
+	}
+	e.activeStepGoalMutationsMu.Lock()
+	e.pendingGoalLoopStart = true
+	e.activeStepGoalMutationsMu.Unlock()
+}
+
+func (e *Engine) startPendingGoalLoop() error {
+	if e == nil {
+		return nil
+	}
+	e.activeStepGoalMutationsMu.Lock()
+	pending := e.pendingGoalLoopStart
+	e.pendingGoalLoopStart = false
+	e.activeStepGoalMutationsMu.Unlock()
+	if !pending {
+		return nil
+	}
 	return e.startGoalLoop(true)
 }
 

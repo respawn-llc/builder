@@ -128,6 +128,9 @@ func (s *defaultExclusiveStepLifecycle) Run(ctx context.Context, options exclusi
 		} else if s.background != nil {
 			s.background.ScheduleIfIdle()
 		}
+		if startErr := s.engine.startPendingGoalLoop(); startErr != nil {
+			err = errors.Join(err, startErr)
+		}
 		if panicValue != nil {
 			panic(panicValue)
 		}
