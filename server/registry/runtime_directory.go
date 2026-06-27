@@ -42,15 +42,6 @@ func newRuntimeDirectory() *runtimeDirectory {
 	return &runtimeDirectory{entries: make(map[string]*runtimeEntry)}
 }
 
-func newRuntimeEntry(engine *runtime.Engine, generation uint64, rebind func(string) error) *runtimeEntry {
-	entry := newBuildingRuntimeEntry(generation)
-	entry.engine = engine
-	entry.rebind = rebind
-	entry.built = true
-	close(entry.ready)
-	return entry
-}
-
 func newBuildingRuntimeEntry(generation uint64) *runtimeEntry {
 	entry := &runtimeEntry{
 		generation:      generation,
@@ -197,33 +188,6 @@ func (e *runtimeEntry) awaitReady(ctx context.Context) (*runtime.Engine, error) 
 	return e.engine, nil
 }
 
-func (d *runtimeDirectory) Register(sessionID string, engine *runtime.Engine, rebind func(string) error, beforeReplace func(*runtimeEntry)) *runtimeEntry {
-	if d == nil || engine == nil {
-		return nil
-	}
-	id := strings.TrimSpace(sessionID)
-	if id == "" {
-		return nil
-	}
-	_, previous := d.installEntry(id, func(generation uint64) *runtimeEntry {
-		return newRuntimeEntry(engine, generation, rebind)
-	}, beforeReplace)
-	return previous
-}
-
-func (d *runtimeDirectory) Claim(sessionID string) (*runtimeEntry, *runtimeEntry) {
-	if d == nil {
-		return nil, nil
-	}
-	id := strings.TrimSpace(sessionID)
-	if id == "" {
-		return nil, nil
-	}
-	return d.installEntry(id, func(generation uint64) *runtimeEntry {
-		return newBuildingRuntimeEntry(generation)
-	}, nil)
-}
-
 func (d *runtimeDirectory) acquireOrCreateBuilding(sessionID string) (*runtimeEntry, bool, bool) {
 	id := strings.TrimSpace(sessionID)
 	if d == nil || id == "" {
@@ -257,86 +221,6 @@ func (d *runtimeDirectory) installBuildingIfAbsent(sessionID string) (*runtimeEn
 	entry := newBuildingRuntimeEntry(d.generation)
 	d.entries[id] = entry
 	return entry, nil
-}
-
-func (d *runtimeDirectory) installEntry(id string, makeEntry func(generation uint64) *runtimeEntry, beforeReplace func(*runtimeEntry)) (*runtimeEntry, *runtimeEntry) {
-	for {
-		d.mu.Lock()
-		previous := d.entries[id]
-		if previous == nil {
-			d.generation++
-			entry := makeEntry(d.generation)
-			d.entries[id] = entry
-			d.mu.Unlock()
-			return entry, nil
-		}
-		previous.markClosing()
-		d.mu.Unlock()
-
-		previous.waitForGuards()
-
-		d.mu.Lock()
-		if d.entries[id] != previous {
-			d.mu.Unlock()
-			continue
-		}
-		ref, ok := previous.beginReplacement()
-		if !ok {
-			d.mu.Unlock()
-			continue
-		}
-		d.mu.Unlock()
-		if beforeReplace != nil {
-			beforeReplace(previous)
-		}
-		d.mu.Lock()
-		if d.entries[id] != previous {
-			d.mu.Unlock()
-			ref.Release()
-			continue
-		}
-		d.generation++
-		entry := makeEntry(d.generation)
-		d.entries[id] = entry
-		d.mu.Unlock()
-		ref.Release()
-		return entry, previous
-	}
-}
-
-func (d *runtimeDirectory) Unregister(sessionID string, engine *runtime.Engine) (string, *runtimeEntry) {
-	if d == nil {
-		return "", nil
-	}
-	id := strings.TrimSpace(sessionID)
-	if id == "" {
-		return "", nil
-	}
-	for {
-		d.mu.Lock()
-		entry := d.entries[id]
-		if entry == nil || (engine != nil && entry.engine != engine) {
-			d.mu.Unlock()
-			return "", nil
-		}
-		entry.markClosing()
-		d.mu.Unlock()
-
-		entry.waitForGuards()
-
-		d.mu.Lock()
-		if d.entries[id] != entry {
-			d.mu.Unlock()
-			return "", nil
-		}
-		if entry.hasInFlight() {
-			d.mu.Unlock()
-			continue
-		}
-		delete(d.entries, id)
-		d.mu.Unlock()
-		return id, entry
-	}
 }
 
 func (d *runtimeDirectory) BeginClose(sessionID string, engine *runtime.Engine) (string, *runtimeEntry, *runtimeCloseDrainRef) {
@@ -468,20 +352,6 @@ func (e *runtimeEntry) beginCloseDrain() (*runtimeCloseDrainRef, bool) {
 	return &runtimeCloseDrainRef{entry: e}, true
 }
 
-func (e *runtimeEntry) beginReplacement() (*runtimeReplacementRef, bool) {
-	if e == nil {
-		return nil, false
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.inFlight > 0 {
-		return nil, false
-	}
-	e.inFlight++
-	e.cond.Broadcast()
-	return &runtimeReplacementRef{entry: e}, true
-}
-
 func (e *runtimeEntry) isClosing() bool {
 	if e == nil {
 		return false
@@ -523,16 +393,6 @@ func (e *runtimeEntry) waitForGuards() {
 	e.mu.Unlock()
 }
 
-func (e *runtimeEntry) hasInFlight() bool {
-	if e == nil {
-		return false
-	}
-	e.mu.Lock()
-	hasInFlight := e.inFlight > 0
-	e.mu.Unlock()
-	return hasInFlight
-}
-
 func (e *runtimeEntry) waitForGuardsExceptCloseDrain() {
 	if e == nil {
 		return
@@ -548,31 +408,6 @@ type runtimeCloseDrainRef struct {
 	entry     *runtimeEntry
 	releaseMu sync.Mutex
 	released  bool
-}
-
-type runtimeReplacementRef struct {
-	entry     *runtimeEntry
-	releaseMu sync.Mutex
-	released  bool
-}
-
-func (r *runtimeReplacementRef) Release() {
-	if r == nil || r.entry == nil {
-		return
-	}
-	r.releaseMu.Lock()
-	if r.released {
-		r.releaseMu.Unlock()
-		return
-	}
-	r.released = true
-	r.releaseMu.Unlock()
-	r.entry.mu.Lock()
-	if r.entry.inFlight > 0 {
-		r.entry.inFlight--
-	}
-	r.entry.cond.Broadcast()
-	r.entry.mu.Unlock()
 }
 
 func (r *runtimeCloseDrainRef) WaitForGuards() {

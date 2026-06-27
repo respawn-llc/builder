@@ -94,11 +94,19 @@ func newUIRuntimeClientFromEngine(engine *runtime.Engine) clientui.RuntimeClient
 	resolver := sessionview.NewStaticRuntimeResolver(engine)
 	reads := client.NewLoopbackSessionViewClient(sessionview.NewService(nil, resolver, nil))
 	controlRegistry := registry.NewRuntimeRegistry()
-	controlRegistry.Register(engine.SessionID(), engine)
+	registerUIRuntime(controlRegistry, engine.SessionID(), engine)
 	controls := client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(controlRegistry))
 	runtimeClient := newUIRuntimeClientWithReads(engine.SessionID(), reads, controls).(*sessionRuntimeClient)
 	runtimeClient.storeMainView(runtimeview.MainViewFromRuntime(engine))
 	return runtimeClient
+}
+
+func registerUIRuntime(r *registry.RuntimeRegistry, sessionID string, engine *runtime.Engine) {
+	claim, _, _ := r.AcquireRuntimeClaim(sessionID, "")
+	if claim == nil {
+		return
+	}
+	claim.Resolve(engine, nil, nil)
 }
 
 func newUIRuntimeClient(engine *runtime.Engine) clientui.RuntimeClient {

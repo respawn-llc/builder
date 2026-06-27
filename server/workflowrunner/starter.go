@@ -62,7 +62,6 @@ type TaskWorktreeEnsurer interface {
 }
 
 type RuntimeEventRegistry interface {
-	runtimewire.RuntimeRegistry
 	PublishRuntimeEvent(sessionID string, evt runtime.Event)
 	AwaitPromptResponse(ctx context.Context, sessionID string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error)
 }

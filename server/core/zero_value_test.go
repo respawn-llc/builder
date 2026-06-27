@@ -58,8 +58,6 @@ func TestCoreZeroValueMethodsDoNotPanic(t *testing.T) {
 		{name: "WorktreeClient", run: func(c *Core) { _ = c.WorktreeClient() }},
 		{name: "RegisterSessionStore", run: func(c *Core) { c.RegisterSessionStore(nil) }},
 		{name: "ResolveSessionStore", run: func(c *Core) { _, _ = c.ResolveSessionStore("session") }},
-		{name: "RegisterRuntime", run: func(c *Core) { c.RegisterRuntime("session", nil) }},
-		{name: "UnregisterRuntime", run: func(c *Core) { c.UnregisterRuntime("session", nil) }},
 		{name: "PublishRuntimeEvent", run: func(c *Core) { c.PublishRuntimeEvent("session", runtime.Event{}) }},
 		{name: "BeginPendingPrompt", run: func(c *Core) { c.BeginPendingPrompt("session", askquestion.AskQuestionRequest{}) }},
 		{name: "CompletePendingPrompt", run: func(c *Core) { c.CompletePendingPrompt("session", "request") }},

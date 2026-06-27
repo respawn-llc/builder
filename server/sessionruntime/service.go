@@ -44,26 +44,11 @@ type Service struct {
 	recoveredWarning         string
 	recoveredWarningProvider func() (string, bool, error)
 
-	mu      sync.Mutex
-	handles map[string]*runtimeHandle
+	mu sync.Mutex
 
 	idleUnloadDelay        time.Duration
 	runFinishedUnloadDelay time.Duration
 	idleTimers             map[string]*runtimeIdleTimer
-}
-
-type runtimeHandle struct {
-	ownerRefs      int
-	ownerIDs       map[string]struct{}
-	activationErr  error
-	closing        bool
-	ready          chan struct{}
-	closed         chan struct{}
-	closedOnce     sync.Once
-	rebind         func(string) error
-	engine         *runtime.Engine
-	close          func()
-	closeWithDrain func(context.Context, func(context.Context) error) error
 }
 
 type runtimeIdleTimer struct {
@@ -87,7 +72,6 @@ func NewService(persistenceRoot string, metadataStore *metadata.Store, authManag
 		runtimes:               runtimes,
 		sessionStores:          sessionStores,
 		storeOptions:           append([]session.StoreOption(nil), storeOptions...),
-		handles:                make(map[string]*runtimeHandle),
 		idleUnloadDelay:        defaultRuntimeIdleUnloadDelay,
 		runFinishedUnloadDelay: defaultRunFinishedIdleUnloadDelay,
 		idleTimers:             make(map[string]*runtimeIdleTimer),
@@ -176,16 +160,11 @@ func (s *Service) RunOnAcquiredRuntime(ctx context.Context, sessionID string, en
 	if fn == nil {
 		return nil
 	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	s.mu.Lock()
-	current := s.handles[trimmedSessionID]
-	overtaken := current == nil || current.engine != engine || current.closing
-	var closed chan struct{}
-	if !overtaken {
-		closed = current.closed
+	if s.runtimes == nil {
+		return ErrAcquiredRuntimeOvertaken
 	}
-	s.mu.Unlock()
-	if overtaken {
+	closed, ok := s.runtimes.AcquiredRuntimeClosed(strings.TrimSpace(sessionID), engine)
+	if !ok {
 		return ErrAcquiredRuntimeOvertaken
 	}
 	runCtx, cancel := context.WithCancel(ctx)
@@ -211,58 +190,42 @@ type RuntimeBuilder func(ctx context.Context) (RuntimeBuildResult, error)
 func (s *Service) AcquireRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) error {
 	sessionID = strings.TrimSpace(sessionID)
 	ownerID = strings.TrimSpace(ownerID)
-	var handle *runtimeHandle
+	if s.runtimes == nil {
+		return runtimeUnavailableErr(sessionID)
+	}
 	for {
-		s.mu.Lock()
-		hasLocalHandle := s.handles[sessionID] != nil
-		s.mu.Unlock()
-		if !hasLocalHandle {
-			if _, ok := s.confirmExternalSessionRuntimeActive(ctx, sessionID); ok {
-				return nil
-			}
+		claim, reused, closing := s.runtimes.AcquireRuntimeClaim(sessionID, ownerID)
+		if claim == nil {
+			return runtimeUnavailableErr(sessionID)
 		}
-		var reused, closing bool
-		handle, reused, closing = s.claimActivation(sessionID, ownerID)
 		if closing {
-			if err := waitForRuntimeHandleClosed(ctx, handle); err != nil {
+			if err := claim.AwaitClosed(ctx); err != nil {
 				return err
 			}
 			continue
 		}
-		if reused {
-			if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
-				return err
-			}
-			s.mu.Lock()
-			current := s.handles[sessionID]
-			if current != handle {
-				s.mu.Unlock()
-				continue
-			}
-			if current.closing {
-				s.mu.Unlock()
-				if err := waitForRuntimeHandleClosed(ctx, handle); err != nil {
-					return err
-				}
-				continue
-			}
-			if current.activationErr != nil {
-				activationErr := current.activationErr
-				s.mu.Unlock()
-				return activationErr
-			}
-			s.addOwnerRefLocked(current, ownerID)
-			s.mu.Unlock()
+		if !reused {
+			return s.buildIntoClaim(ctx, sessionID, claim, build)
+		}
+		if _, err := claim.AwaitReady(ctx); err != nil {
+			return err
+		}
+		outcome, activationErr := claim.JoinAsOwner(ownerID)
+		switch outcome {
+		case registry.ClaimJoined:
 			s.cancelScheduledIdleUnload(sessionID)
 			return nil
+		case registry.ClaimFailed:
+			return activationErr
+		case registry.ClaimClosing:
+			if err := claim.AwaitClosed(ctx); err != nil {
+				return err
+			}
 		}
-		break
 	}
-
-	return s.buildIntoClaimedHandle(ctx, sessionID, handle, build)
 }
 
-func (s *Service) buildIntoClaimedHandle(ctx context.Context, sessionID string, handle *runtimeHandle, build RuntimeBuilder) (err error) {
+func (s *Service) buildIntoClaim(ctx context.Context, sessionID string, claim *registry.RuntimeClaim, build RuntimeBuilder) (err error) {
 	var cleanup func()
 	defer func() {
 		if err == nil {
@@ -271,34 +234,28 @@ func (s *Service) buildIntoClaimedHandle(ctx context.Context, sessionID string, 
 		if cleanup != nil {
 			cleanup()
 		}
-		s.failActivation(sessionID, handle, err)
+		claim.Fail(err)
 	}()
 	var built RuntimeBuildResult
 	built, err = build(ctx)
 	if err != nil {
 		return err
 	}
-	var runtimeRegistry runtimewire.RuntimeRegistry
-	if s.runtimes != nil {
-		runtimeRegistry = s.runtimes
-	}
-	var backgroundRouter runtimewire.BackgroundRouter
+	engine := built.Engine
+	rebind := runtimeRebindFunc(built.LocalRebind, engine)
 	if s.backgroundRouter != nil {
-		backgroundRouter = s.backgroundRouter
+		s.backgroundRouter.SetActiveSession(sessionID, engine)
 	}
-	handle.rebind = runtimeRebindFunc(built.LocalRebind, built.Engine)
-	registration := runtimewire.RegisterSessionRuntime(sessionID, built.Engine, runtimeRegistry, backgroundRouter, runtimewire.WithRuntimeRebind(handle.rebind))
-	closeWithDrain := func(ctx context.Context, drain func(context.Context) error) error {
-		err := registration.CloseWithDrain(ctx, drain)
+	teardown := func() {
+		if s.backgroundRouter != nil {
+			s.backgroundRouter.ClearActiveSession(sessionID, engine)
+		}
 		if built.Close != nil {
 			built.Close()
 		}
-		return err
 	}
-	cleanup = func() {
-		_ = closeWithDrain(context.Background(), nil)
-	}
-	s.completeActivation(handle, built.Engine, closeWithDrain)
+	cleanup = teardown
+	claim.Resolve(engine, rebind, teardown)
 	s.cancelScheduledIdleUnload(sessionID)
 	cleanup = nil
 	return nil
@@ -307,106 +264,49 @@ func (s *Service) buildIntoClaimedHandle(ctx context.Context, sessionID string, 
 type AcquiredRuntimeRelease func(ctx context.Context) error
 
 func (s *Service) RecreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) (AcquiredRuntimeRelease, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	handle, err := s.claimFreshActivation(ctx, sessionID, strings.TrimSpace(ownerID))
-	if err != nil {
-		return nil, err
-	}
-	if err := s.buildIntoClaimedHandle(ctx, sessionID, handle, build); err != nil {
-		return nil, err
-	}
-	return func(ctx context.Context) error { return s.closeAcquiredRuntime(ctx, sessionID, handle) }, nil
-}
-
-func (s *Service) claimFreshActivation(ctx context.Context, sessionID string, ownerID string) (*runtimeHandle, error) {
-	for {
-		s.mu.Lock()
-		current := s.handles[sessionID]
-		if current == nil {
-			handle := newRuntimeHandle(ownerID)
-			s.handles[sessionID] = handle
-			s.mu.Unlock()
-			return handle, nil
-		}
-		s.mu.Unlock()
-		if err := waitForRuntimeHandleReady(ctx, current); err != nil {
-			return nil, err
-		}
-		s.closeReleasedRuntimeHandle(sessionID, current)
-	}
+	return s.recreateRuntime(ctx, sessionID, ownerID, build, nil)
 }
 
 func (s *Service) RecreateRuntimeRejectingActiveRun(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) (AcquiredRuntimeRelease, error) {
+	return s.recreateRuntime(ctx, sessionID, ownerID, build, func(engine *runtime.Engine) error {
+		if engine != nil && engine.ActiveRun() != nil {
+			return ErrSessionRunActive
+		}
+		return nil
+	})
+}
+
+func (s *Service) recreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder, beforeReplace func(*runtime.Engine) error) (AcquiredRuntimeRelease, error) {
 	sessionID = strings.TrimSpace(sessionID)
-	handle, err := s.claimFreshActivationRejectingActiveRun(ctx, sessionID, strings.TrimSpace(ownerID))
+	if s.runtimes == nil {
+		return nil, runtimeUnavailableErr(sessionID)
+	}
+	claim, err := s.runtimes.ClaimFreshRuntime(ctx, sessionID, strings.TrimSpace(ownerID), beforeReplace)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.buildIntoClaimedHandle(ctx, sessionID, handle, build); err != nil {
+	if err := s.buildIntoClaim(ctx, sessionID, claim, build); err != nil {
 		return nil, err
 	}
-	return func(ctx context.Context) error { return s.closeAcquiredRuntime(ctx, sessionID, handle) }, nil
+	return func(ctx context.Context) error { return s.closeAcquiredClaim(ctx, sessionID, claim) }, nil
 }
 
-func (s *Service) claimFreshActivationRejectingActiveRun(ctx context.Context, sessionID string, ownerID string) (*runtimeHandle, error) {
-	for {
-		s.mu.Lock()
-		current := s.handles[sessionID]
-		if current == nil {
-			handle := newRuntimeHandle(ownerID)
-			s.handles[sessionID] = handle
-			s.mu.Unlock()
-			return handle, nil
-		}
-		s.mu.Unlock()
-		if err := waitForRuntimeHandleReady(ctx, current); err != nil {
-			return nil, err
-		}
-		active, err := s.runtimeHasActiveRun(ctx, sessionID)
-		if err != nil {
-			return nil, err
-		}
-		if active {
-			return nil, ErrSessionRunActive
-		}
-		s.closeReleasedRuntimeHandle(sessionID, current)
-	}
-}
-
-func (s *Service) closeAcquiredRuntime(ctx context.Context, sessionID string, handle *runtimeHandle) error {
-	if handle == nil {
+func (s *Service) closeAcquiredClaim(ctx context.Context, sessionID string, claim *registry.RuntimeClaim) error {
+	if claim == nil {
 		return nil
 	}
 	sessionID = strings.TrimSpace(sessionID)
-	if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
-		s.closeReleasedRuntimeHandle(sessionID, handle)
+	if _, err := claim.AwaitReady(ctx); err != nil {
+		_, _ = claim.Close(ctx, nil)
 		return err
 	}
-	s.mu.Lock()
-	current := s.handles[sessionID]
-	if current != handle || current.closing {
-		s.mu.Unlock()
-		return nil
-	}
-	current.closing = true
-	closeWithDrain := current.closeWithDrain
-	engine := current.engine
-	s.mu.Unlock()
-	var drainErr error
-	if closeWithDrain != nil {
-		drainErr = closeWithDrain(ctx, func(ctx context.Context) error {
-			if engine == nil {
-				return nil
-			}
-			return engine.DrainQueuedUserMessagesBeforeClose(ctx)
-		})
-	}
-	s.mu.Lock()
-	if s.handles[sessionID] == current {
-		delete(s.handles, sessionID)
-		signalRuntimeHandleClosed(current)
-	}
-	s.mu.Unlock()
+	engine := claim.Engine()
+	_, drainErr := claim.Close(ctx, func(ctx context.Context) error {
+		if engine == nil {
+			return nil
+		}
+		return engine.DrainQueuedUserMessagesBeforeClose(ctx)
+	})
 	s.clearScheduledIdleUnload(sessionID)
 	return drainErr
 }
@@ -488,15 +388,6 @@ func activationResponse() serverapi.SessionRuntimeActivateResponse {
 	return serverapi.SessionRuntimeActivateResponse{}
 }
 
-func (s *Service) externalSessionRuntimeActive(sessionID string) bool {
-	if s == nil || s.runtimes == nil || !s.runtimes.IsSessionRuntimeActive(sessionID) {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.handles[strings.TrimSpace(sessionID)] == nil
-}
-
 func (s *Service) SessionRunActive(sessionID string) bool {
 	if s == nil || s.runtimes == nil {
 		return false
@@ -523,17 +414,6 @@ func runtimeUnavailableErr(sessionID string) error {
 	return errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %q has no active runtime available", strings.TrimSpace(sessionID)))
 }
 
-func (s *Service) confirmExternalSessionRuntimeActive(ctx context.Context, sessionID string) (*runtime.Engine, bool) {
-	if !s.externalSessionRuntimeActive(sessionID) || s.runtimes == nil {
-		return nil, false
-	}
-	engine, err := s.runtimes.ResolveRuntime(ctx, sessionID)
-	if err != nil || engine == nil {
-		return nil, false
-	}
-	return engine, s.externalSessionRuntimeActive(sessionID)
-}
-
 func runtimeRebindFunc(localRebind func(string) error, engine *runtime.Engine) func(string) error {
 	return func(workdir string) error {
 		if localRebind != nil {
@@ -553,89 +433,66 @@ func (s *Service) ReleaseSessionRuntime(ctx context.Context, req serverapi.Sessi
 		return serverapi.SessionRuntimeReleaseResponse{}, err
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
-	s.mu.Lock()
-	handle := s.handles[sessionID]
-	s.mu.Unlock()
-	if handle == nil {
+	if s.runtimes == nil {
 		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
 	}
-	if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
-		s.closeReleasedRuntimeHandle(sessionID, handle)
+	claim := s.runtimes.RuntimeClaimFor(sessionID)
+	if claim == nil {
+		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
+	}
+	if _, err := claim.AwaitReady(ctx); err != nil {
+		_, _ = claim.Close(ctx, nil)
 		return serverapi.SessionRuntimeReleaseResponse{}, err
 	}
-	s.mu.Lock()
-	current := s.handles[sessionID]
-	if current == nil || current != handle {
-		s.mu.Unlock()
+	decision, expectedRefs := claim.BeginRelease(req.OwnerID, req.DropOwner, req.OnlyIfIdle)
+	switch decision {
+	case registry.RuntimeReleaseStale, registry.RuntimeReleaseDroppedRef:
 		return serverapi.SessionRuntimeReleaseResponse{}, nil
-	}
-	if current.closing {
-		s.mu.Unlock()
+	case registry.RuntimeReleaseClosing, registry.RuntimeReleaseNotOwner:
 		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
-	}
-	if trimmedOwnerID := strings.TrimSpace(req.OwnerID); trimmedOwnerID != "" {
-		if _, owns := current.ownerIDs[trimmedOwnerID]; !owns {
-			s.mu.Unlock()
-			return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
-		}
-	}
-	if req.OnlyIfIdle {
-		if req.DropOwner && current.ownerRefs > 1 {
-			current.ownerRefs--
-			if trimmedOwnerID := strings.TrimSpace(req.OwnerID); trimmedOwnerID != "" {
-				delete(current.ownerIDs, trimmedOwnerID)
-			}
-			s.mu.Unlock()
-			return serverapi.SessionRuntimeReleaseResponse{}, nil
-		}
-		expectedOwnerRefs := current.ownerRefs
-		s.mu.Unlock()
+	case registry.RuntimeReleaseIdleCheck:
 		active, err := s.runtimeHasActiveRun(ctx, sessionID)
 		if err != nil {
 			return serverapi.SessionRuntimeReleaseResponse{}, err
 		}
 		if active {
 			if req.DropOwner {
-				s.markRuntimeHandleOrphaned(sessionID, handle, req.OwnerID)
+				s.markClaimOrphaned(sessionID, claim, req.OwnerID)
 			}
 			return serverapi.SessionRuntimeReleaseResponse{Active: true}, nil
 		}
 		if s.runtimeHasSubscribers(sessionID) {
 			if req.DropOwner {
-				s.markRuntimeHandleOrphaned(sessionID, handle, req.OwnerID)
+				s.markClaimOrphaned(sessionID, claim, req.OwnerID)
 			}
 			return serverapi.SessionRuntimeReleaseResponse{}, nil
 		}
-		s.mu.Lock()
-		current = s.handles[sessionID]
-		if current == nil || current != handle || current.ownerRefs != expectedOwnerRefs {
-			s.mu.Unlock()
+		closed, err := claim.CloseIfIdle(ctx, expectedRefs, s.drainBeforeClose(claim))
+		if err != nil {
+			return serverapi.SessionRuntimeReleaseResponse{}, err
+		}
+		if !closed {
 			return serverapi.SessionRuntimeReleaseResponse{}, nil
 		}
+		s.clearScheduledIdleUnload(sessionID)
+		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
+	default:
+		if _, err := claim.Close(ctx, s.drainBeforeClose(claim)); err != nil {
+			return serverapi.SessionRuntimeReleaseResponse{}, err
+		}
+		s.clearScheduledIdleUnload(sessionID)
+		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
 	}
-	current.closing = true
-	closeWithDrain := current.closeWithDrain
-	closeFn := current.close
-	closingEngine := current.engine
-	s.mu.Unlock()
-	if closeWithDrain != nil {
-		_ = closeWithDrain(ctx, func(ctx context.Context) error {
-			if closingEngine == nil {
-				return nil
-			}
-			return closingEngine.DrainQueuedUserMessagesBeforeClose(ctx)
-		})
-	} else if closeFn != nil {
-		closeFn()
+}
+
+func (s *Service) drainBeforeClose(claim *registry.RuntimeClaim) func(context.Context) error {
+	engine := claim.Engine()
+	return func(ctx context.Context) error {
+		if engine == nil {
+			return nil
+		}
+		return engine.DrainQueuedUserMessagesBeforeClose(ctx)
 	}
-	s.mu.Lock()
-	if s.handles[sessionID] == current {
-		delete(s.handles, sessionID)
-		signalRuntimeHandleClosed(current)
-	}
-	s.mu.Unlock()
-	s.clearScheduledIdleUnload(sessionID)
-	return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
 }
 
 func (s *Service) runtimeHasActiveRun(ctx context.Context, sessionID string) (bool, error) {
@@ -649,61 +506,12 @@ func (s *Service) runtimeHasActiveRun(ctx context.Context, sessionID string) (bo
 	return engine.ActiveRun() != nil, nil
 }
 
-func (s *Service) markRuntimeHandleOrphaned(sessionID string, handle *runtimeHandle, ownerID string) {
-	if s == nil || handle == nil {
+func (s *Service) markClaimOrphaned(sessionID string, claim *registry.RuntimeClaim, ownerID string) {
+	if s == nil || claim == nil {
 		return
 	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	s.mu.Lock()
-	current := s.handles[trimmedSessionID]
-	if current == handle {
-		trimmedOwnerID := strings.TrimSpace(ownerID)
-		if trimmedOwnerID != "" && len(current.ownerIDs) > 0 {
-			if _, ok := current.ownerIDs[trimmedOwnerID]; ok {
-				delete(current.ownerIDs, trimmedOwnerID)
-				if current.ownerRefs > 0 {
-					current.ownerRefs--
-				}
-			}
-		} else if current.ownerRefs > 0 {
-			current.ownerRefs--
-		}
-	}
-	s.mu.Unlock()
-	s.scheduleIdleUnload(trimmedSessionID, s.defaultIdleUnloadDelay())
-}
-
-func (s *Service) addRuntimeHandleOwnerRef(sessionID string, handle *runtimeHandle, ownerID string) {
-	if s == nil || handle == nil {
-		return
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return
-	}
-	s.mu.Lock()
-	if current := s.handles[trimmedSessionID]; current == handle && !current.closing {
-		s.addOwnerRefLocked(current, ownerID)
-	}
-	s.mu.Unlock()
-	s.cancelScheduledIdleUnload(trimmedSessionID)
-}
-
-func (s *Service) addOwnerRefLocked(handle *runtimeHandle, ownerID string) {
-	if handle == nil {
-		return
-	}
-	if trimmedOwnerID := strings.TrimSpace(ownerID); trimmedOwnerID != "" {
-		if handle.ownerIDs == nil {
-			handle.ownerIDs = make(map[string]struct{})
-		}
-		if _, exists := handle.ownerIDs[trimmedOwnerID]; !exists {
-			handle.ownerIDs[trimmedOwnerID] = struct{}{}
-			handle.ownerRefs++
-		}
-		return
-	}
-	handle.ownerRefs++
+	claim.DropOwner(ownerID)
+	s.scheduleIdleUnload(strings.TrimSpace(sessionID), s.defaultIdleUnloadDelay())
 }
 
 func (s *Service) runtimeInterestChanged(sessionID string, reason registry.RuntimeInterestReason) {
@@ -806,12 +614,11 @@ func (s *Service) runScheduledIdleUnload(sessionID string, generation uint64) {
 		s.mu.Unlock()
 		return
 	}
-	handle := s.handles[trimmedSessionID]
-	if handle == nil || handle.closing || handle.ownerRefs > 0 {
-		s.mu.Unlock()
+	s.mu.Unlock()
+	claim := s.runtimes.RuntimeClaimFor(trimmedSessionID)
+	if claim == nil || claim.Closing() || claim.OwnerCount() > 0 {
 		return
 	}
-	s.mu.Unlock()
 	if s.runtimeHasSubscribers(trimmedSessionID) {
 		return
 	}
@@ -831,32 +638,6 @@ func (s *Service) runtimeHasSubscribers(sessionID string) bool {
 		return false
 	}
 	return s.runtimes.HasRuntimeSubscribers(strings.TrimSpace(sessionID))
-}
-
-func (s *Service) closeReleasedRuntimeHandle(sessionID string, handle *runtimeHandle) {
-	if handle == nil {
-		return
-	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	s.mu.Lock()
-	current := s.handles[trimmedSessionID]
-	if current == nil || current != handle {
-		s.mu.Unlock()
-		return
-	}
-	current.closing = true
-	closeFn := current.close
-	s.mu.Unlock()
-	if closeFn != nil {
-		closeFn()
-	}
-	s.mu.Lock()
-	if s.handles[trimmedSessionID] == current {
-		delete(s.handles, trimmedSessionID)
-		signalRuntimeHandleClosed(current)
-	}
-	s.mu.Unlock()
-	s.clearScheduledIdleUnload(trimmedSessionID)
 }
 
 func (s *Service) HasActiveRun(ctx context.Context, sessionID string) (bool, error) {
@@ -880,30 +661,18 @@ func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, tar
 		}
 		normalizedReminder = &normalized
 	}
-	handle, err := s.activeRuntimeHandle(ctx, trimmedSessionID)
+	claim, err := s.activeRuntimeClaim(ctx, trimmedSessionID)
 	if err != nil {
 		return err
 	}
-	if handle == nil || handle.rebind == nil {
-		if s.externalSessionRuntimeActive(trimmedSessionID) {
-			if err := s.WithRuntimeEngine(ctx, trimmedSessionID, func(engine *runtime.Engine) error {
-				return engine.RunWhenIdle(ctx, func() error {
-					engine.SetTranscriptWorkingDir(trimmedWorkdir)
-					return nil
-				})
-			}); err != nil {
-				return err
-			}
+	if claim != nil {
+		if err := s.WithRuntimeEngine(ctx, trimmedSessionID, func(engine *runtime.Engine) error {
+			return engine.RunWhenIdle(ctx, func() error {
+				return claim.Rebind(trimmedWorkdir)
+			})
+		}); err != nil {
+			return err
 		}
-		return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
-	}
-	rebind := handle.rebind
-	if err := s.WithRuntimeEngine(ctx, trimmedSessionID, func(engine *runtime.Engine) error {
-		return engine.RunWhenIdle(ctx, func() error {
-			return rebind(trimmedWorkdir)
-		})
-	}); err != nil {
-		return err
 	}
 	return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
 }
@@ -970,85 +739,24 @@ func (s *Service) resolveStore(ctx context.Context, sessionID string) (*session.
 	return store, nil
 }
 
-func (s *Service) activeRuntimeHandle(ctx context.Context, sessionID string) (*runtimeHandle, error) {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	s.mu.Lock()
-	handle := s.handles[trimmedSessionID]
-	s.mu.Unlock()
-	if handle == nil {
+func (s *Service) activeRuntimeClaim(ctx context.Context, sessionID string) (*registry.RuntimeClaim, error) {
+	if s.runtimes == nil {
 		return nil, nil
 	}
-	if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
+	claim := s.runtimes.RuntimeClaimFor(strings.TrimSpace(sessionID))
+	if claim == nil {
+		return nil, nil
+	}
+	if _, err := claim.AwaitReady(ctx); err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	current := s.handles[trimmedSessionID]
-	s.mu.Unlock()
-	if current == nil || current != handle {
+	if !claim.IsCurrent() {
 		return nil, nil
 	}
-	if current.activationErr != nil {
-		return nil, current.activationErr
+	if err := claim.ActivationErr(); err != nil {
+		return nil, err
 	}
-	return current, nil
-}
-
-func (s *Service) claimActivation(sessionID string, ownerID string) (handle *runtimeHandle, reused bool, closing bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if current := s.handles[sessionID]; current != nil {
-		if current.closing {
-			return current, false, true
-		}
-		return current, true, false
-	}
-	handle = newRuntimeHandle(ownerID)
-	s.handles[sessionID] = handle
-	return handle, false, false
-}
-
-func newRuntimeHandle(ownerID string) *runtimeHandle {
-	handle := &runtimeHandle{
-		ownerRefs: 1,
-		ready:     make(chan struct{}),
-		closed:    make(chan struct{}),
-	}
-	if trimmedOwnerID := strings.TrimSpace(ownerID); trimmedOwnerID != "" {
-		handle.ownerIDs = map[string]struct{}{trimmedOwnerID: {}}
-	}
-	return handle
-}
-
-func (s *Service) completeActivation(handle *runtimeHandle, engine *runtime.Engine, closeWithDrain func(context.Context, func(context.Context) error) error) {
-	if handle == nil {
-		return
-	}
-	handle.engine = engine
-	handle.closeWithDrain = closeWithDrain
-	handle.close = func() {
-		if closeWithDrain != nil {
-			_ = closeWithDrain(context.Background(), nil)
-		}
-	}
-	if handle.ownerRefs <= 0 {
-		handle.ownerRefs = 1
-	}
-	close(handle.ready)
-}
-
-func (s *Service) failActivation(sessionID string, handle *runtimeHandle, err error) {
-	if handle == nil {
-		return
-	}
-	handle.activationErr = err
-	close(handle.ready)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	current := s.handles[strings.TrimSpace(sessionID)]
-	if current == nil || current != handle {
-		return
-	}
-	delete(s.handles, strings.TrimSpace(sessionID))
+	return claim, nil
 }
 
 func (s *Service) resolveExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
@@ -1056,39 +764,6 @@ func (s *Service) resolveExecutionTarget(ctx context.Context, sessionID string) 
 		return clientui.SessionExecutionTarget{}, fmt.Errorf("metadata store is required")
 	}
 	return s.metadataStore.ResolveSessionExecutionTarget(ctx, sessionID)
-}
-
-func waitForRuntimeHandleReady(ctx context.Context, handle *runtimeHandle) error {
-	if handle == nil || handle.ready == nil {
-		return nil
-	}
-	select {
-	case <-handle.ready:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func waitForRuntimeHandleClosed(ctx context.Context, handle *runtimeHandle) error {
-	if handle == nil || handle.closed == nil {
-		return nil
-	}
-	select {
-	case <-handle.closed:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func signalRuntimeHandleClosed(handle *runtimeHandle) {
-	if handle == nil || handle.closed == nil {
-		return
-	}
-	handle.closedOnce.Do(func() {
-		close(handle.closed)
-	})
 }
 
 // errUnknownToolID is returned when an enabled-tool id cannot be parsed into a known tool.

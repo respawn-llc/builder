@@ -142,46 +142,6 @@ func NewRuntimeRegistry() *RuntimeRegistry {
 	return r
 }
 
-func (r *RuntimeRegistry) Register(sessionID string, engine *runtime.Engine) {
-	r.RegisterRuntimeHooks(sessionID, engine, nil)
-}
-
-func (r *RuntimeRegistry) RegisterRuntimeHooks(sessionID string, engine *runtime.Engine, rebind func(string) error) {
-	if r == nil || engine == nil {
-		return
-	}
-	previous := r.directory.Register(sessionID, engine, rebind, func(previous *runtimeEntry) {
-		publishExternalRuntimeStatusToEntry(previous, clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateClosing, QueueAccepting: false})
-		failRuntimeEntryQueuedMessages(previous, runtime.QueuedUserMessageFailureClosing)
-	})
-	closeRuntimeEntry(previous, io.EOF)
-	if previous != nil {
-		r.updateAggregateRunState(sessionID, false)
-	}
-}
-
-func (r *RuntimeRegistry) Unregister(sessionID string, engine *runtime.Engine) {
-	if r == nil {
-		return
-	}
-	id, entry := r.directory.Unregister(sessionID, engine)
-	if id == "" {
-		return
-	}
-	publishExternalRuntimeStatusToEntry(entry, clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateClosing, QueueAccepting: false})
-	publishExternalRuntimeStatusToEntry(entry, clientui.ExternalRuntimeStatus{})
-	closeRuntimeEntry(entry, io.EOF)
-	r.updateAggregateRunState(id, false)
-}
-
-func (r *RuntimeRegistry) CloseRuntimeWithDrain(ctx context.Context, sessionID string, engine *runtime.Engine, drain func(context.Context) error) error {
-	if r == nil {
-		return nil
-	}
-	_, err := r.closeEntry(ctx, sessionID, engine, drain)
-	return err
-}
-
 func (r *RuntimeRegistry) closeEntry(ctx context.Context, sessionID string, engine *runtime.Engine, drain func(context.Context) error) (bool, error) {
 	if r == nil {
 		return false, nil
@@ -553,13 +513,6 @@ func (r *RuntimeRegistry) updateAggregateRunState(sessionID string, running bool
 	if observer != nil {
 		observer(active)
 	}
-}
-
-func failRuntimeEntryQueuedMessages(entry *runtimeEntry, reason runtime.QueuedUserMessageFailureReason) {
-	if entry == nil || entry.engine == nil {
-		return
-	}
-	entry.engine.FailQueuedUserMessages(reason)
 }
 
 func (r *RuntimeRegistry) publishExternalRuntimeStatus(sessionID string) {

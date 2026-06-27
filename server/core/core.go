@@ -286,7 +286,6 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) clien
 		FastModeState:    s.safeBundles().Runtime.fastModeState,
 		Background:       s.safeBundles().Runtime.background,
 		RuntimeRegistry:  s.safeBundles().Runtime.runtimeRegistry,
-		BackgroundRouter: s.safeBundles().Runtime.backgroundRouter,
 		PromptHistory:    s.safeBundles().Persistence.metadataStore,
 		SessionRuntime:   s.safeBundles().Runtime.sessionRuntimeService,
 		PersistenceRoot:  projectCtx.config.PersistenceRoot,
@@ -526,20 +525,6 @@ func (s *Core) ResolveSessionStore(sessionID string) (*session.Store, error) {
 		return nil, nil
 	}
 	return s.safeBundles().Persistence.sessionStores.ResolveStore(context.Background(), sessionID)
-}
-
-func (s *Core) RegisterRuntime(sessionID string, engine *runtime.Engine) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return
-	}
-	s.safeBundles().Runtime.runtimeRegistry.Register(sessionID, engine)
-}
-
-func (s *Core) UnregisterRuntime(sessionID string, engine *runtime.Engine) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return
-	}
-	s.safeBundles().Runtime.runtimeRegistry.Unregister(sessionID, engine)
 }
 
 func (s *Core) PublishRuntimeEvent(sessionID string, evt runtime.Event) {

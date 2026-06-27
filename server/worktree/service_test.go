@@ -910,7 +910,8 @@ func TestDeleteWorktreeAllowsSessionAfterRuntimeRegistryCleanup(t *testing.T) {
 	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
 	runtimes := registry.NewRuntimeRegistry()
 	engine := &runtimepkg.Engine{}
-	runtimes.Register(otherSession.Meta().SessionID, engine)
+	claim, _, _ := runtimes.AcquireRuntimeClaim(otherSession.Meta().SessionID, "")
+	claim.Resolve(engine, nil, nil)
 	env.service.active = runtimes
 	env.runtime.runningSessions = map[string]bool{otherSession.Meta().SessionID: true}
 
@@ -919,7 +920,9 @@ func TestDeleteWorktreeAllowsSessionAfterRuntimeRegistryCleanup(t *testing.T) {
 		t.Fatalf("DeleteWorktree before runtime cleanup error = %v, want ErrWorktreeBlocked", err)
 	}
 
-	runtimes.Unregister(otherSession.Meta().SessionID, engine)
+	if claim := runtimes.RuntimeClaimFor(otherSession.Meta().SessionID); claim != nil {
+		_, _ = claim.Close(env.ctx, nil)
+	}
 	_, err = env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-after-runtime-cleanup", created.WorktreeID))
 	if err != nil {
 		t.Fatalf("DeleteWorktree after runtime cleanup: %v", err)

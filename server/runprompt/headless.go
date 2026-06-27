@@ -46,12 +46,10 @@ type HeadlessBootstrap struct {
 	FastModeState   *runtime.FastModeState
 	Background      *shelltool.Manager
 	RuntimeRegistry interface {
-		runtimewire.RuntimeRegistry
 		PublishRuntimeEvent(sessionID string, evt runtime.Event)
 	}
-	BackgroundRouter runtimewire.BackgroundRouter
-	PromptHistory    promptHistoryStore
-	SessionRuntime   *sessionruntime.Service
+	PromptHistory  promptHistoryStore
+	SessionRuntime *sessionruntime.Service
 	// PersistenceRoot is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to
 	// ~/.kent inside the runtime resolvers.

@@ -643,7 +643,7 @@ func TestRuntimeClientMainViewIncludesActiveRunFromRealEngine(t *testing.T) {
 	}}
 	store, eng := newAppRuntimeEngine(t, fakeLLM, runtime.Config{}, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: runtimeClientBlockingTool{started: started, release: release}})
 	runtimeRegistry := registry.NewRuntimeRegistry()
-	runtimeRegistry.Register(store.Meta().SessionID, eng)
+	registerUIRuntime(runtimeRegistry, store.Meta().SessionID, eng)
 
 	runtimeClient := newUIRuntimeClientWithReads(
 		store.Meta().SessionID,
@@ -695,7 +695,7 @@ func TestRuntimeClientMainViewFallsBackToLocalRuntimeProjectionOnReadError(t *te
 		t.Fatalf("set thinking level: %v", err)
 	}
 	runtimeRegistry := registry.NewRuntimeRegistry()
-	runtimeRegistry.Register(store.Meta().SessionID, eng)
+	registerUIRuntime(runtimeRegistry, store.Meta().SessionID, eng)
 
 	runtimeClient := newUIRuntimeClientWithReads(
 		store.Meta().SessionID,
@@ -721,7 +721,7 @@ func TestRuntimeClientMainViewSnapshotDoesNotPopulateTranscriptEndpoint(t *testi
 	}
 	eng := newAppRuntimeEngineWithStore(t, store, &runtimeClientFakeLLM{}, runtime.Config{})
 	runtimeRegistry := registry.NewRuntimeRegistry()
-	runtimeRegistry.Register(store.Meta().SessionID, eng)
+	registerUIRuntime(runtimeRegistry, store.Meta().SessionID, eng)
 
 	runtimeClient := newUIRuntimeClientWithReads(
 		store.Meta().SessionID,

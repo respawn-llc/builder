@@ -19,10 +19,8 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/runtime"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -450,38 +448,6 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 	}
 	if string(beforeEvents) != string(afterEvents) {
 		t.Fatalf("events file mutated during dormant read")
-	}
-}
-
-func TestSessionViewClientUsesRegisteredRuntimeByID(t *testing.T) {
-	workspace := newRegisteredEmbeddedWorkspace(t)
-
-	server := startReadyEmbeddedServer(t, serverbootstrap.Request{
-		WorkspaceRoot: workspace,
-	})
-
-	store := createEmbeddedProjectSession(t, server, workspace)
-	eng, err := runtime.New(store, &fakeEmbeddedClient{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5"})
-	if err != nil {
-		t.Fatalf("new engine: %v", err)
-	}
-	server.RegisterRuntime(store.Meta().SessionID, eng)
-	defer server.UnregisterRuntime(store.Meta().SessionID, eng)
-	eng.SetStreamingError("runtime-only")
-
-	resp, err := server.SessionViewClient().GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("get session main view: %v", err)
-	}
-	if resp.MainView.Session.SessionID != store.Meta().SessionID {
-		t.Fatalf("unexpected session main view: %+v", resp.MainView)
-	}
-	page, err := server.SessionViewClient().GetSessionTranscriptPage(context.Background(), serverapi.SessionTranscriptPageRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("get session transcript page: %v", err)
-	}
-	if page.Transcript.StreamingError != "runtime-only" {
-		t.Fatalf("expected registered runtime transcript, got %+v", page.Transcript)
 	}
 }
 
