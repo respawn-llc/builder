@@ -37,6 +37,8 @@ func (s stubRuntimeResolver) WithGuardedRuntime(_ context.Context, _ string, fn 
 	return true, fn(s.engine)
 }
 
+func (s stubRuntimeResolver) SessionRunsBlocked(string) bool { return false }
+
 var runtimeControlPromptHistoryStores sync.Map
 
 type runtimeControlPromptHistoryStore struct {

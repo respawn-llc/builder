@@ -1193,3 +1193,23 @@ func TestPendingPromptStoreCloseDoesNotBlockWhenResponseAlreadyBuffered(t *testi
 		t.Fatal("closePendingPrompts blocked with buffered response")
 	}
 }
+
+func TestRuntimeRegistryBlockSessionRunsRefCounts(t *testing.T) {
+	r := NewRuntimeRegistry()
+	if r.SessionRunsBlocked("s1") {
+		t.Fatal("s1 should start unblocked")
+	}
+	releaseA := r.BlockSessionRuns([]string{"s1", "s2"})
+	releaseB := r.BlockSessionRuns([]string{"s1"})
+	if !r.SessionRunsBlocked("s1") || !r.SessionRunsBlocked("s2") {
+		t.Fatal("s1 and s2 should be blocked while exclusions are held")
+	}
+	releaseB()
+	if !r.SessionRunsBlocked("s1") {
+		t.Fatal("s1 should remain blocked while the first exclusion still holds it")
+	}
+	releaseA()
+	if r.SessionRunsBlocked("s1") || r.SessionRunsBlocked("s2") {
+		t.Fatal("all sessions should be unblocked after every exclusion is released")
+	}
+}

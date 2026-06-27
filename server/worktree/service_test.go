@@ -26,6 +26,7 @@ type serviceTestRuntime struct {
 	activeSessions  map[string]bool
 	runningSessions map[string]bool
 	syncErrSessions map[string]error
+	blockedRuns     map[string]int
 	rebindErr       error
 	rebindErrRoot   string
 	rebindHook      func(context.Context, string, string, string)
@@ -74,6 +75,40 @@ func (r *serviceTestRuntime) IsSessionRuntimeActive(sessionID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.activeSessions[strings.TrimSpace(sessionID)]
+}
+
+func (r *serviceTestRuntime) BlockSessionRuns(sessionIDs []string) func() {
+	r.mu.Lock()
+	if r.blockedRuns == nil {
+		r.blockedRuns = make(map[string]int)
+	}
+	blocked := make([]string, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		trimmed := strings.TrimSpace(sessionID)
+		if trimmed == "" {
+			continue
+		}
+		r.blockedRuns[trimmed]++
+		blocked = append(blocked, trimmed)
+	}
+	r.mu.Unlock()
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		for _, sessionID := range blocked {
+			if r.blockedRuns[sessionID] <= 1 {
+				delete(r.blockedRuns, sessionID)
+				continue
+			}
+			r.blockedRuns[sessionID]--
+		}
+	}
+}
+
+func (r *serviceTestRuntime) runsBlocked(sessionID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.blockedRuns[strings.TrimSpace(sessionID)] > 0
 }
 
 type serviceTestProcessSource struct {

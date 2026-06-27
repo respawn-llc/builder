@@ -27,6 +27,52 @@ type RuntimeRegistry struct {
 	sleepObserver   func(active bool)
 	runStateMu      sync.Mutex
 	runningSessions map[string]bool
+	runBlockMu      sync.Mutex
+	blockedRuns     map[string]int
+}
+
+func (r *RuntimeRegistry) BlockSessionRuns(sessionIDs []string) func() {
+	if r == nil {
+		return func() {}
+	}
+	blocked := make([]string, 0, len(sessionIDs))
+	r.runBlockMu.Lock()
+	if r.blockedRuns == nil {
+		r.blockedRuns = make(map[string]int)
+	}
+	for _, sessionID := range sessionIDs {
+		trimmed := strings.TrimSpace(sessionID)
+		if trimmed == "" {
+			continue
+		}
+		r.blockedRuns[trimmed]++
+		blocked = append(blocked, trimmed)
+	}
+	r.runBlockMu.Unlock()
+	return func() {
+		r.runBlockMu.Lock()
+		defer r.runBlockMu.Unlock()
+		for _, sessionID := range blocked {
+			if r.blockedRuns[sessionID] <= 1 {
+				delete(r.blockedRuns, sessionID)
+				continue
+			}
+			r.blockedRuns[sessionID]--
+		}
+	}
+}
+
+func (r *RuntimeRegistry) SessionRunsBlocked(sessionID string) bool {
+	if r == nil {
+		return false
+	}
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return false
+	}
+	r.runBlockMu.Lock()
+	defer r.runBlockMu.Unlock()
+	return r.blockedRuns[trimmed] > 0
 }
 
 type GuardedPromptResponder interface {

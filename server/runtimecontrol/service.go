@@ -19,6 +19,7 @@ import (
 type RuntimeResolver interface {
 	ResolveRuntime(ctx context.Context, sessionID string) (*runtime.Engine, error)
 	WithGuardedRuntime(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) (bool, error)
+	SessionRunsBlocked(sessionID string) bool
 }
 
 type PromptHistoryStore interface {
@@ -443,6 +444,9 @@ func (s *Service) HasQueuedUserWork(ctx context.Context, req serverapi.RuntimeHa
 func (s *Service) SubmitQueuedUserMessages(ctx context.Context, req serverapi.RuntimeSubmitQueuedUserMessagesRequest) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, err
+	}
+	if s.runtimes != nil && s.runtimes.SessionRunsBlocked(strings.TrimSpace(req.SessionID)) {
+		return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, serverapi.ErrSessionWorktreeDeleting
 	}
 	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(req.SessionID)}
 	return s.queuedSubmits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool { return a.SessionID == b.SessionID }, func(ctx context.Context) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {

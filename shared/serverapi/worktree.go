@@ -9,6 +9,7 @@ import (
 
 var ErrWorktreeNotFound = errors.New("worktree not found")
 var ErrWorktreeBlocked = errors.New("worktree is blocked")
+var ErrSessionWorktreeDeleting = errors.New("session worktree is being deleted; try again once deletion finishes")
 
 type WorktreeView struct {
 	WorktreeID      string `json:"worktree_id"`

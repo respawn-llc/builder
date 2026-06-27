@@ -47,6 +47,7 @@ func (f leaseFunc) Release() {
 
 type activeRuntimeSource interface {
 	IsSessionRuntimeActive(sessionID string) bool
+	BlockSessionRuns(sessionIDs []string) func()
 }
 
 type processSource interface {
@@ -1185,6 +1186,18 @@ func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, 
 	if err != nil {
 		return func() {}, err
 	}
+	targetSessionIDs := make([]string, 0, len(blockers))
+	for _, blocker := range blockers {
+		sessionID := strings.TrimSpace(blocker.SessionID)
+		if sessionID == "" || sessionID == strings.TrimSpace(currentSessionID) {
+			continue
+		}
+		targetSessionIDs = append(targetSessionIDs, sessionID)
+	}
+	release := func() {}
+	if s.active != nil && len(targetSessionIDs) > 0 {
+		release = s.active.BlockSessionRuns(targetSessionIDs)
+	}
 	otherSessions := make([]metadata.WorktreeSessionBlocker, 0, len(blockers))
 	for _, blocker := range blockers {
 		sessionID := strings.TrimSpace(blocker.SessionID)
@@ -1200,6 +1213,7 @@ func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, 
 		}
 		active, err := s.runtime.HasActiveRun(ctx, sessionID)
 		if err != nil {
+			release()
 			return func() {}, err
 		}
 		if active {
@@ -1207,6 +1221,7 @@ func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, 
 		}
 	}
 	if len(otherSessions) > 0 {
+		release()
 		sort.Slice(otherSessions, func(i int, j int) bool {
 			return otherSessions[i].UpdatedAt.After(otherSessions[j].UpdatedAt)
 		})
@@ -1222,9 +1237,10 @@ func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, 
 	}
 	processBlockers := s.backgroundProcessBlockers(worktreeRoot)
 	if len(processBlockers) > 0 {
+		release()
 		return func() {}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
 	}
-	return func() {}, nil
+	return release, nil
 }
 
 func (s *Service) backgroundProcessBlockers(worktreeRoot string) []string {

@@ -172,6 +172,7 @@
 - Task worktree branch name is the task short ID.
 - Worktree creation reuses existing worktree branch/root collision handling.
 - Worktree deletion/retargeting treats non-terminal tasks referencing a managed worktree as blockers.
+- Worktree deletion blocks if another session targeting the worktree has an active run, and holds a run-exclusion on all targeting sessions across the `git` removal so no new run can start mid-deletion; a run submitted during the window is rejected with `ErrSessionWorktreeDeleting` until the exclusion releases.
 - Workflow worktree creation uses lower-level primitives directly.
 
 ## Project Keys And Task IDs

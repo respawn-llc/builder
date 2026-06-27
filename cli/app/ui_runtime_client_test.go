@@ -139,6 +139,8 @@ func (r *mutableRuntimeResolver) WithGuardedRuntime(_ context.Context, _ string,
 	return true, fn(engine)
 }
 
+func (r *mutableRuntimeResolver) SessionRunsBlocked(string) bool { return false }
+
 type flakySessionViewClient struct {
 	mu        sync.Mutex
 	responses []serverapi.SessionMainViewResponse
