@@ -382,16 +382,14 @@ func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.Runt
 	}
 	memoReq := sessionCommandMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Command: req.Command}
 	_, err := s.shells.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionCommandMemoRequest, func(ctx context.Context) (struct{}, error) {
-		engine, err := s.resolve(ctx, req.SessionID)
-		if err != nil {
-			return struct{}{}, err
-		}
 		runCtx := context.Background()
 		if ctx != nil {
 			runCtx = context.WithoutCancel(ctx)
 		}
-		_, err = engine.SubmitUserShellCommand(runCtx, memoReq.Command)
-		return struct{}{}, err
+		return struct{}{}, s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+			_, err := engine.SubmitUserShellCommand(runCtx, memoReq.Command)
+			return err
+		})
 	})
 	return err
 }

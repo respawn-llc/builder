@@ -553,6 +553,7 @@ func (s *Service) ReleaseSessionRuntime(ctx context.Context, req serverapi.Sessi
 			s.mu.Unlock()
 			return serverapi.SessionRuntimeReleaseResponse{}, nil
 		}
+		expectedOwnerRefs := current.ownerRefs
 		s.mu.Unlock()
 		active, err := s.runtimeHasActiveRun(ctx, sessionID)
 		if err != nil {
@@ -572,7 +573,7 @@ func (s *Service) ReleaseSessionRuntime(ctx context.Context, req serverapi.Sessi
 		}
 		s.mu.Lock()
 		current = s.handles[sessionID]
-		if current == nil || current != handle {
+		if current == nil || current != handle || current.ownerRefs != expectedOwnerRefs {
 			s.mu.Unlock()
 			return serverapi.SessionRuntimeReleaseResponse{}, nil
 		}

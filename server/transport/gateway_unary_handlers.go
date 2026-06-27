@@ -219,7 +219,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ReleaseSessionRuntime(ctx, params)
-			if err == nil {
+			if err == nil && (resp.Released || params.DropOwner) {
 				state.removeOwnedRuntime(params.SessionID)
 			}
 			return resp, err
