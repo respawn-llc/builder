@@ -13,8 +13,9 @@ import (
 func (c *sessionRuntimeClient) SetSessionName(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	if err := c.retryControlCallNoResult(ctx, func() error {
-		return c.controls.SetSessionName(ctx, serverapi.RuntimeSetSessionNameRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Name: name})
+		return c.controls.SetSessionName(ctx, serverapi.RuntimeSetSessionNameRequest{ClientRequestID: requestID, SessionID: c.sessionID, Name: name})
 	}); err != nil {
 		return err
 	}
@@ -27,8 +28,9 @@ func (c *sessionRuntimeClient) SetSessionName(name string) error {
 func (c *sessionRuntimeClient) SetThinkingLevel(level string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	if err := c.retryControlCallNoResult(ctx, func() error {
-		return c.controls.SetThinkingLevel(ctx, serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Level: level})
+		return c.controls.SetThinkingLevel(ctx, serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: requestID, SessionID: c.sessionID, Level: level})
 	}); err != nil {
 		return err
 	}
@@ -41,8 +43,9 @@ func (c *sessionRuntimeClient) SetThinkingLevel(level string) error {
 func (c *sessionRuntimeClient) SetFastModeEnabled(enabled bool) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-		return c.controls.SetFastModeEnabled(ctx, serverapi.RuntimeSetFastModeEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Enabled: enabled})
+		return c.controls.SetFastModeEnabled(ctx, serverapi.RuntimeSetFastModeEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err == nil {
 		c.patchMainView(func(view *clientui.RuntimeMainView) {
@@ -55,8 +58,9 @@ func (c *sessionRuntimeClient) SetFastModeEnabled(enabled bool) (bool, error) {
 func (c *sessionRuntimeClient) SetReviewerEnabled(enabled bool) (bool, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-		return c.controls.SetReviewerEnabled(ctx, serverapi.RuntimeSetReviewerEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Enabled: enabled})
+		return c.controls.SetReviewerEnabled(ctx, serverapi.RuntimeSetReviewerEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err == nil {
 		c.patchMainView(func(view *clientui.RuntimeMainView) {
@@ -70,8 +74,9 @@ func (c *sessionRuntimeClient) SetReviewerEnabled(enabled bool) (bool, string, e
 func (c *sessionRuntimeClient) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-		return c.controls.SetAutoCompactionEnabled(ctx, serverapi.RuntimeSetAutoCompactionEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Enabled: enabled})
+		return c.controls.SetAutoCompactionEnabled(ctx, serverapi.RuntimeSetAutoCompactionEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err != nil {
 		return false, false, err
@@ -85,8 +90,9 @@ func (c *sessionRuntimeClient) SetAutoCompactionEnabled(enabled bool) (bool, boo
 func (c *sessionRuntimeClient) SetQuestionsEnabled(enabled bool) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-		return c.controls.SetQuestionsEnabled(ctx, serverapi.RuntimeSetQuestionsEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Enabled: enabled})
+		return c.controls.SetQuestionsEnabled(ctx, serverapi.RuntimeSetQuestionsEnabledRequest{ClientRequestID: requestID, SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err != nil {
 		return false, err
@@ -116,8 +122,9 @@ func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 func (c *sessionRuntimeClient) SetGoal(objective string) (*clientui.RuntimeGoal, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeGoalShowResponse, error) {
-		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Objective: objective, Actor: "user"})
+		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: requestID, SessionID: c.sessionID, Objective: objective, Actor: "user"})
 	})
 	if err != nil {
 		return nil, err
@@ -144,8 +151,9 @@ func (c *sessionRuntimeClient) ResumeGoal() (*clientui.RuntimeGoal, error) {
 func (c *sessionRuntimeClient) ClearGoal() (*clientui.RuntimeGoal, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeGoalShowResponse, error) {
-		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Actor: "user"})
+		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
 	})
 	if err != nil {
 		return nil, err
@@ -160,8 +168,9 @@ func (c *sessionRuntimeClient) ClearGoal() (*clientui.RuntimeGoal, error) {
 func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error)) (*clientui.RuntimeGoal, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeGoalShowResponse, error) {
-		return call(ctx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Actor: "user"})
+		return call(ctx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
 	})
 	if err != nil {
 		return nil, err
@@ -200,8 +209,9 @@ func (c *sessionRuntimeClient) AppendCommittedEntry(role, text string) error {
 func (c *sessionRuntimeClient) AppendCommittedEntryWithNoticeID(role, text, noticeID string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	return c.retryControlCallNoResult(ctx, func() error {
-		return c.controls.AppendCommittedEntry(ctx, serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Role: role, Text: text, NoticeID: strings.TrimSpace(noticeID)})
+		return c.controls.AppendCommittedEntry(ctx, serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: requestID, SessionID: c.sessionID, Role: role, Text: text, NoticeID: strings.TrimSpace(noticeID)})
 	})
 }
 
@@ -222,14 +232,16 @@ func (c *sessionRuntimeClient) SubmitUserMessageWithPromptHistoryRecorded(ctx co
 }
 
 func (c *sessionRuntimeClient) SubmitUserShellCommand(ctx context.Context, command string) error {
+	requestID := uuid.NewString()
 	return c.retryControlCallNoResult(ctx, func() error {
-		return c.controls.SubmitUserShellCommand(ctx, serverapi.RuntimeSubmitUserShellCommandRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Command: command})
+		return c.controls.SubmitUserShellCommand(ctx, serverapi.RuntimeSubmitUserShellCommandRequest{ClientRequestID: requestID, SessionID: c.sessionID, Command: command})
 	})
 }
 
 func (c *sessionRuntimeClient) CompactContext(ctx context.Context, args string) error {
+	requestID := uuid.NewString()
 	return c.retryControlCallNoResult(ctx, func() error {
-		return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Args: args})
+		return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{ClientRequestID: requestID, SessionID: c.sessionID, Args: args})
 	})
 }
 
@@ -246,8 +258,9 @@ func (c *sessionRuntimeClient) HasQueuedUserWork() (bool, error) {
 }
 
 func (c *sessionRuntimeClient) SubmitQueuedUserMessages(ctx context.Context) (string, error) {
+	requestID := uuid.NewString()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
-		return c.controls.SubmitQueuedUserMessages(ctx, serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID})
+		return c.controls.SubmitQueuedUserMessages(ctx, serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: requestID, SessionID: c.sessionID})
 	})
 	return resp.Message, err
 }
@@ -255,8 +268,9 @@ func (c *sessionRuntimeClient) SubmitQueuedUserMessages(ctx context.Context) (st
 func (c *sessionRuntimeClient) Interrupt() error {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	return c.retryControlCallNoResult(ctx, func() error {
-		return c.controls.Interrupt(ctx, serverapi.RuntimeInterruptRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID})
+		return c.controls.Interrupt(ctx, serverapi.RuntimeInterruptRequest{ClientRequestID: requestID, SessionID: c.sessionID})
 	})
 }
 
@@ -288,8 +302,9 @@ func (c *sessionRuntimeClient) QueueUserMessageWithClientRequestID(text string, 
 func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
+	requestID := uuid.NewString()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-		return c.controls.DiscardQueuedUserMessage(ctx, serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, QueueItemID: queueItemID})
+		return c.controls.DiscardQueuedUserMessage(ctx, serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: requestID, SessionID: c.sessionID, QueueItemID: queueItemID})
 	})
 	if err != nil {
 		return false

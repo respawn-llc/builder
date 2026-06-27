@@ -25,11 +25,13 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				return err
 			}
 			compacted := false
+			compactionBusy := false
 			if shouldCompact {
 				if err := engine.CompactContextForPreSubmit(runCtx); err != nil {
 					if !runtime.IsAgentBusyError(err) {
 						return err
 					}
+					compactionBusy = true
 				} else {
 					compacted = true
 				}
@@ -38,6 +40,11 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				if _, _, err := s.recordPromptHistory(runCtx, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text); err != nil {
 					return err
 				}
+			}
+			if compactionBusy {
+				queued := engine.QueueUserMessageWithClientRequestID(memoReq.Text, strings.TrimSpace(req.ClientRequestID))
+				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
+				return nil
 			}
 			msg, queued, err := engine.SubmitUserMessageOrSteer(runCtx, memoReq.Text, strings.TrimSpace(req.ClientRequestID))
 			if err != nil {
