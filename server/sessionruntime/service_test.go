@@ -609,7 +609,7 @@ func TestRecreateRuntimeClosesExistingHandleBeforeRebuilding(t *testing.T) {
 
 	builderCalls := atomic.Int32{}
 	wantErr := errors.New("build failed")
-	err := fixture.service.RecreateRuntime(context.Background(), sessionID, "owner-B", func(context.Context) (RuntimeBuildResult, error) {
+	_, err := fixture.service.RecreateRuntime(context.Background(), sessionID, "owner-B", func(context.Context) (RuntimeBuildResult, error) {
 		builderCalls.Add(1)
 		return RuntimeBuildResult{}, wantErr
 	})

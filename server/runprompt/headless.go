@@ -185,7 +185,8 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 			},
 		}, nil
 	}
-	if err := l.boot.SessionRuntime.RecreateRuntimeRejectingActiveRun(ctx, sessionID, ownerID, build); err != nil {
+	releaseRuntime, err := l.boot.SessionRuntime.RecreateRuntimeRejectingActiveRun(ctx, sessionID, ownerID, build)
+	if err != nil {
 		_ = diagLogger.Close()
 		if errors.Is(err, sessionruntime.ErrSessionRunActive) {
 			return nil, ErrSessionRunning
@@ -199,7 +200,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		diagLogger:     diagLogger,
 		eventBridge:    eventBridge,
 		close: func() {
-			_ = l.boot.SessionRuntime.CloseSessionRuntime(context.Background(), sessionID)
+			_ = releaseRuntime(context.Background())
 			_ = diagLogger.Close()
 		},
 	}, nil

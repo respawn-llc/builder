@@ -747,7 +747,8 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 			Close:       func() { _ = wiring.Close() },
 		}, nil
 	}
-	if err := s.sessionRuntime.RecreateRuntime(ctx, sessionID, ownerID, build); err != nil {
+	releaseRuntime, err := s.sessionRuntime.RecreateRuntime(ctx, sessionID, ownerID, build)
+	if err != nil {
 		reason := ReasonRuntimeFailed
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			reason = ReasonRuntimeCanceled
@@ -756,7 +757,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		return
 	}
 	defer func() {
-		_ = s.sessionRuntime.CloseSessionRuntime(context.Background(), sessionID)
+		_ = releaseRuntime(context.Background())
 	}()
 	// Compact exactly once per compact_and_continue handoff. The compaction's
 	// provenance is recorded atomically in its history_replaced event and rebuilt
