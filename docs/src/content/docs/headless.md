@@ -66,6 +66,8 @@ You can talk to a headless agent if you select it in the `/resume` (session pick
 
 Sessions with a goal cannot be continued headlessly. Clear the goal from the interactive session before using `kent run --continue`.
 
+A session that still has an active run cannot be continued with `kent run --continue`. Steer the active run instead (`--steer` or stdin on the running `run` process), stop it, or wait for it to finish, then continue.
+
 ## Workspace Binding
 
 Headless runs fail if the selected workspace is not already attached to a Kent project.
