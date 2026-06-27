@@ -59,17 +59,19 @@ func (s Service) ResolveCreateTarget(target string) (serverapi.WorktreeCreateTar
 }
 
 func (s Service) Create(req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
+	clientRequestID := s.clientRequestID()
 	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeCreateResponse, error) {
-		req.ClientRequestID = s.clientRequestID()
+		req.ClientRequestID = clientRequestID
 		req.SessionID = s.SessionID
 		return s.Client.CreateWorktree(ctx, req)
 	})
 }
 
 func (s Service) Switch(worktreeID string) (serverapi.WorktreeSwitchResponse, error) {
+	clientRequestID := s.clientRequestID()
 	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeSwitchResponse, error) {
 		return s.Client.SwitchWorktree(ctx, serverapi.WorktreeSwitchRequest{
-			ClientRequestID: s.clientRequestID(),
+			ClientRequestID: clientRequestID,
 			SessionID:       s.SessionID,
 			WorktreeID:      strings.TrimSpace(worktreeID),
 		})
@@ -77,9 +79,10 @@ func (s Service) Switch(worktreeID string) (serverapi.WorktreeSwitchResponse, er
 }
 
 func (s Service) Delete(worktreeID string, deleteBranch bool) (serverapi.WorktreeDeleteResponse, error) {
+	clientRequestID := s.clientRequestID()
 	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeDeleteResponse, error) {
 		return s.Client.DeleteWorktree(ctx, serverapi.WorktreeDeleteRequest{
-			ClientRequestID: s.clientRequestID(),
+			ClientRequestID: clientRequestID,
 			SessionID:       s.SessionID,
 			WorktreeID:      strings.TrimSpace(worktreeID),
 			DeleteBranch:    deleteBranch,
