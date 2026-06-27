@@ -208,7 +208,10 @@ func (s *Service) AcquireRuntime(ctx context.Context, sessionID string, ownerID 
 		break
 	}
 
-	var err error
+	return s.buildIntoClaimedHandle(ctx, sessionID, handle, build)
+}
+
+func (s *Service) buildIntoClaimedHandle(ctx context.Context, sessionID string, handle *runtimeHandle, build RuntimeBuilder) (err error) {
 	var cleanup func()
 	defer func() {
 		if err == nil {
@@ -248,19 +251,29 @@ func (s *Service) AcquireRuntime(ctx context.Context, sessionID string, ownerID 
 
 func (s *Service) RecreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) error {
 	sessionID = strings.TrimSpace(sessionID)
+	handle, err := s.claimFreshActivation(ctx, sessionID, strings.TrimSpace(ownerID))
+	if err != nil {
+		return err
+	}
+	return s.buildIntoClaimedHandle(ctx, sessionID, handle, build)
+}
+
+func (s *Service) claimFreshActivation(ctx context.Context, sessionID string, ownerID string) (*runtimeHandle, error) {
 	for {
 		s.mu.Lock()
-		handle := s.handles[sessionID]
+		current := s.handles[sessionID]
+		if current == nil {
+			handle := newRuntimeHandle(ownerID)
+			s.handles[sessionID] = handle
+			s.mu.Unlock()
+			return handle, nil
+		}
 		s.mu.Unlock()
-		if handle == nil {
-			break
+		if err := waitForRuntimeHandleReady(ctx, current); err != nil {
+			return nil, err
 		}
-		if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
-			return err
-		}
-		s.closeReleasedRuntimeHandle(sessionID, handle)
+		s.closeReleasedRuntimeHandle(sessionID, current)
 	}
-	return s.AcquireRuntime(ctx, sessionID, ownerID, build)
 }
 
 func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivateRequest, sessionID string) RuntimeBuilder {

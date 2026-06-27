@@ -688,7 +688,6 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 	}
 	sessionID := plan.Store.Meta().SessionID
 	ownerID := uuid.NewString()
-	failQueuedOnClose := false
 	var engine *runtime.Engine
 	build := func(_ context.Context) (sessionruntime.RuntimeBuildResult, error) {
 		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, workflowRuntimeEnabledTools(plan.EnabledTools), input.WorktreeRoot, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
@@ -757,7 +756,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		return
 	}
 	defer func() {
-		if failQueuedOnClose && engine != nil {
+		if engine != nil {
 			engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
 		}
 		_, _ = s.sessionRuntime.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
@@ -781,7 +780,6 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 	if input.ContextMode == workflow.ContextModeCompactAndContinueSession &&
 		engine.LastCompactionWorkflowRunID() != string(req.RunID) {
 		if err := engine.CompactContext(ctx, ""); err != nil {
-			failQueuedOnClose = true
 			reason := ReasonRuntimeFailed
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				reason = ReasonRuntimeCanceled
@@ -791,7 +789,6 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		}
 	}
 	if _, submitErr := engine.SubmitWorkflowTurn(ctx); submitErr != nil {
-		failQueuedOnClose = true
 		reason := ReasonRuntimeFailed
 		if errors.Is(submitErr, context.Canceled) || ctx.Err() != nil {
 			reason = ReasonRuntimeCanceled
