@@ -12,8 +12,8 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
-	if s.runtimes != nil && s.runtimes.SessionRunsBlocked(strings.TrimSpace(req.SessionID)) {
-		return serverapi.RuntimeSubmitUserTurnResponse{}, serverapi.ErrSessionWorktreeDeleting
+	if err := s.ensureRunsNotBlocked(req.SessionID); err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
 	memoReq := turnSubmitMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text, PromptHistoryRecorded: req.PromptHistoryRecorded}
 	return s.turnSubmits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameTurnSubmitMemoRequest, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, error) {

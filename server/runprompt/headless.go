@@ -108,6 +108,7 @@ type headlessRuntimePlan struct {
 	sessionRuntime *sessionruntime.Service
 	sessionID      string
 	ownerID        string
+	engine         *runtime.Engine
 	diagLogger     *runlog.RunLogger
 	eventBridge    *runtimewire.EventBridge
 	close          func()
@@ -141,6 +142,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		diagLogger.Logf("config.source %s", line)
 	}
 	var eventBridge *runtimewire.EventBridge
+	var acquiredEngine *runtime.Engine
 	build := func(ctx context.Context) (sessionruntime.RuntimeBuildResult, error) {
 		engineLogger, err := runlog.NewRunLogger(plan.Store.Dir(), nil)
 		if err != nil {
@@ -172,6 +174,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 			wiring.AskBroker.SetAskHandler(RunPromptAskHandler)
 		}
 		eventBridge = wiring.EventBridge
+		acquiredEngine = wiring.Engine
 		var localRebind func(string) error
 		if wiring.LocalTools != nil {
 			localRebind = wiring.LocalTools.Rebind
@@ -197,6 +200,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		sessionRuntime: l.boot.SessionRuntime,
 		sessionID:      sessionID,
 		ownerID:        ownerID,
+		engine:         acquiredEngine,
 		diagLogger:     diagLogger,
 		eventBridge:    eventBridge,
 		close: func() {
@@ -243,12 +247,15 @@ func (r *headlessPromptRuntime) RecordPromptHistory(ctx context.Context, clientR
 func (r *headlessPromptRuntime) SubmitUserMessage(ctx context.Context, prompt string) (PromptAssistantMessage, error) {
 	var content string
 	var sessionName string
-	err := r.plan.sessionRuntime.WithRuntimeEngine(ctx, r.plan.sessionID, func(engine *runtime.Engine) error {
-		assistant, submitErr := engine.SubmitUserMessage(ctx, prompt)
+	var err error
+	if r.plan.engine == nil {
+		err = errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("headless session %q has no acquired runtime", r.plan.sessionID))
+	} else {
+		assistant, submitErr := r.plan.engine.SubmitUserMessage(ctx, prompt)
 		content = assistant.Content
-		sessionName = engine.SessionName()
-		return submitErr
-	})
+		sessionName = r.plan.engine.SessionName()
+		err = submitErr
+	}
 	var dropped uint64
 	if r.plan.eventBridge != nil {
 		dropped = r.plan.eventBridge.Dropped.Load()
