@@ -155,6 +155,7 @@ type RuntimeBuildResult struct {
 
 var ErrSessionRunActive = errors.New("session has an active run")
 var ErrAcquiredRuntimeOvertaken = errors.New("acquired runtime was overtaken or closed before the operation completed")
+var ErrSessionRunsBlocked = errors.New("session runs are blocked while its worktree is being deleted")
 
 func (s *Service) RunOnAcquiredRuntime(ctx context.Context, sessionID string, engine *runtime.Engine, fn func(context.Context) error) error {
 	if fn == nil {
@@ -281,6 +282,11 @@ func (s *Service) recreateRuntime(ctx context.Context, sessionID string, ownerID
 	if s.runtimes == nil {
 		return nil, runtimeUnavailableErr(sessionID)
 	}
+	releaseRun, ok := s.runtimes.BeginSessionRun(sessionID)
+	if !ok {
+		return nil, errors.Join(ErrSessionRunsBlocked, fmt.Errorf("session %q runs are blocked", sessionID))
+	}
+	defer releaseRun()
 	claim, err := s.runtimes.ClaimFreshRuntime(ctx, sessionID, strings.TrimSpace(ownerID), beforeReplace)
 	if err != nil {
 		return nil, err

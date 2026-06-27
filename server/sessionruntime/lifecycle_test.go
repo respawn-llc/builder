@@ -235,6 +235,30 @@ func TestRecreateRuntimeOvertakesExisting(t *testing.T) {
 	}
 }
 
+func TestRecreateRuntimeRejectedWhileSessionBlocked(t *testing.T) {
+	fixture, reg := newRuntimeServiceFixture(t)
+	sessionID := fixture.store.Meta().SessionID
+	state, build := newLifecycleBuilder(t, fixture)
+
+	unblock := reg.BlockSessionRuns([]string{sessionID})
+	defer unblock()
+
+	if _, err := fixture.service.RecreateRuntime(context.Background(), sessionID, "owner-a", build); !errors.Is(err, ErrSessionRunsBlocked) {
+		t.Fatalf("RecreateRuntime error=%v, want ErrSessionRunsBlocked", err)
+	}
+	if reg.IsSessionRuntimeActive(sessionID) || state.engine != nil {
+		t.Fatal("blocked recreate must not build or install a runtime")
+	}
+
+	unblock()
+	if _, err := fixture.service.RecreateRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
+		t.Fatalf("RecreateRuntime after unblock: %v", err)
+	}
+	if !reg.IsSessionRuntimeActive(sessionID) {
+		t.Fatal("recreate must install the runtime once unblocked")
+	}
+}
+
 func TestSyncExecutionTargetRebindsActiveRuntime(t *testing.T) {
 	fixture, _ := newRuntimeServiceFixture(t)
 	sessionID := fixture.store.Meta().SessionID
