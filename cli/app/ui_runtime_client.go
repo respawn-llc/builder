@@ -374,13 +374,9 @@ func (c *sessionRuntimeClient) refreshTranscriptPageSync(req clientui.Transcript
 	c.patchMainView(func(view *clientui.RuntimeMainView) {
 		view.Status.ConversationFreshness = page.ConversationFreshness
 		view.Session.ConversationFreshness = page.ConversationFreshness
-		committedEntryCount := view.Session.Transcript.CommittedEntryCount
-		if isRecentTailTranscriptRequest(req) {
-			committedEntryCount = page.CommittedEntryCount
-		}
 		view.Session.Transcript = clientui.TranscriptMetadata{
 			Revision:            page.Revision,
-			CommittedEntryCount: committedEntryCount,
+			CommittedEntryCount: view.Session.Transcript.CommittedEntryCount,
 		}
 		if isRecentTailTranscriptRequest(req) {
 			view.Session.Chat = clientui.ChatSnapshot{
@@ -399,7 +395,7 @@ func (c *sessionRuntimeClient) refreshCommittedTranscriptSuffixSync(_ clientui.C
 		if err != nil {
 			return clientui.CommittedTranscriptSuffix{SessionID: c.sessionID}, err
 		}
-		return committedTranscriptSuffixFromPage(page), nil
+		return c.committedTranscriptSuffixFromPage(page), nil
 	}
 	suffixClient, ok := c.reads.(client.SessionCommittedTranscriptSuffixClient)
 	if !ok {
@@ -513,8 +509,6 @@ func transcriptPageFromSessionView(view clientui.RuntimeSessionView) clientui.Tr
 		SessionName:           view.SessionName,
 		ConversationFreshness: view.ConversationFreshness,
 		Revision:              view.Transcript.Revision,
-		CommittedEntryCount:   total,
-		StartEntryCount:       0,
 		HasMoreAbove:          hasMore,
 		Entries:               cloneTranscriptEntries(view.Chat.Entries),
 	}
@@ -526,22 +520,30 @@ func transcriptPageFromCommittedTranscriptSuffix(suffix clientui.CommittedTransc
 		SessionName:           suffix.SessionName,
 		ConversationFreshness: suffix.ConversationFreshness,
 		Revision:              suffix.Revision,
-		CommittedEntryCount:   suffix.CommittedEntryCount,
-		StartEntryCount:       suffix.StartEntryCount,
 		HasMoreAbove:          suffix.HasMoreCommittedEntries,
+		HasMoreBelow:          suffix.NextEntryCount < suffix.CommittedEntryCount,
 		Entries:               cloneTranscriptEntries(suffix.Entries),
 	}
 }
 
-func committedTranscriptSuffixFromPage(page clientui.TranscriptPage) clientui.CommittedTranscriptSuffix {
+func (c *sessionRuntimeClient) committedTranscriptSuffixFromPage(page clientui.TranscriptPage) clientui.CommittedTranscriptSuffix {
+	view := c.MainView()
+	committedCount := view.Session.Transcript.CommittedEntryCount
+	if committedCount == 0 {
+		committedCount = len(page.Entries)
+	}
+	start := committedCount - len(page.Entries)
+	if start < 0 {
+		start = 0
+	}
 	return clientui.CommittedTranscriptSuffix{
 		SessionID:               page.SessionID,
 		SessionName:             page.SessionName,
 		ConversationFreshness:   page.ConversationFreshness,
 		Revision:                page.Revision,
-		CommittedEntryCount:     page.CommittedEntryCount,
-		StartEntryCount:         page.StartEntryCount,
-		NextEntryCount:          page.StartEntryCount + len(page.Entries),
+		CommittedEntryCount:     committedCount,
+		StartEntryCount:         start,
+		NextEntryCount:          start + len(page.Entries),
 		HasMoreCommittedEntries: page.HasMoreAbove,
 		Entries:                 cloneTranscriptEntries(page.Entries),
 	}

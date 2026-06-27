@@ -24,7 +24,7 @@ type recordingTranscriptRuntimeClient struct {
 
 func (c *recordingTranscriptRuntimeClient) LoadTranscriptPage(req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
 	c.loadRequests = append(c.loadRequests, req)
-	if c.loadPage.SessionID != "" || len(c.loadPage.Entries) > 0 || c.loadPage.CommittedEntryCount > 0 {
+	if c.loadPage.SessionID != "" || len(c.loadPage.Entries) > 0 {
 		return c.loadPage, nil
 	}
 	return c.Transcript(), nil
@@ -116,20 +116,20 @@ func TestCtrlTShowsLatestDetailTailWithoutResolvingMetricsEagerly(t *testing.T) 
 }
 
 func TestCtrlTPrimesDetailFromCurrentTailWhenPreviousDetailPageIsStale(t *testing.T) {
-	stalePage := clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 0, CommittedEntryCount: 1}
+	stalePage := clientui.TranscriptPage{SessionID: "session-1"}
 	stalePage.Entries = append(stalePage.Entries, clientui.ChatEntry{Role: "assistant", Text: "stale detail page"})
-	currentPage := clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 0, CommittedEntryCount: 1}
+	currentPage := clientui.TranscriptPage{SessionID: "session-1"}
 	currentPage.Entries = append(currentPage.Entries, clientui.ChatEntry{Role: "assistant", Text: "fresh ongoing tail"})
 	client := &recordingTranscriptRuntimeClient{loadPage: currentPage}
 	m := setTestUITerminalSize(newProjectedClosedUIModel(client), 100, 12)
 	m.sessionID = "session-1"
-	m.transcriptBaseOffset = currentPage.StartEntryCount
-	m.transcriptTotalEntries = currentPage.CommittedEntryCount
+	m.transcriptBaseOffset = 0
+	m.transcriptTotalEntries = 1
 	m.transcriptEntries = transcriptEntriesFromPage(currentPage)
 	m.detailTranscript.replace(stalePage)
 	m.forwardToView(tui.SetConversationMsg{
-		BaseOffset:   currentPage.StartEntryCount,
-		TotalEntries: currentPage.CommittedEntryCount,
+		BaseOffset:   m.transcriptBaseOffset,
+		TotalEntries: m.transcriptTotalEntries,
 		Entries:      transcriptEntriesFromPage(currentPage),
 	})
 	m.layout().syncViewport()
@@ -177,13 +177,14 @@ func TestCtrlTPrimesDetailFromCurrentTailAfterOngoingAdvancedSincePreviousDetail
 }
 
 func TestCtrlTPreservesLoadedDetailWindowWhenNoLocalTailIsKnown(t *testing.T) {
-	stalePage := clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 100, CommittedEntryCount: 500}
+	stalePage := clientui.TranscriptPage{SessionID: "session-1", HasMoreAbove: true, HasMoreBelow: true}
 	for i := 0; i < 250; i++ {
 		stalePage.Entries = append(stalePage.Entries, clientui.ChatEntry{Role: "assistant", Text: fmt.Sprintf("history %03d", 100+i)})
 	}
 	client := &recordingTranscriptRuntimeClient{loadPage: stalePage}
 	m := setTestUITerminalSize(newProjectedClosedUIModel(client), 100, 12)
 	m.sessionID = "session-1"
+	m.detailTranscript.setKnownBounds(100, 500)
 	m.detailTranscript.replace(stalePage)
 	m.layout().syncViewport()
 
@@ -193,8 +194,8 @@ func TestCtrlTPreservesLoadedDetailWindowWhenNoLocalTailIsKnown(t *testing.T) {
 	if detail.view.Mode() != tui.ModeDetail {
 		t.Fatalf("expected detail mode after ctrl+t, got %q", detail.view.Mode())
 	}
-	if detail.view.TranscriptBaseOffset() != stalePage.StartEntryCount {
-		t.Fatalf("expected loaded detail window offset preserved, got %d want %d", detail.view.TranscriptBaseOffset(), stalePage.StartEntryCount)
+	if detail.view.TranscriptBaseOffset() != 100 {
+		t.Fatalf("expected loaded detail window offset preserved, got %d want %d", detail.view.TranscriptBaseOffset(), 100)
 	}
 	view := stripANSIAndTrimRight(detail.view.View())
 	if !strings.Contains(view, "history 349") {
@@ -209,16 +210,17 @@ func TestDetailEdgePagingWaitsForFirstNavigationToResolveMetrics(t *testing.T) {
 	m := setTestUITerminalSize(newProjectedClosedUIModel(client), 100, 12)
 	m.layout().syncViewport()
 
-	page := clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 100, CommittedEntryCount: 500}
+	page := clientui.TranscriptPage{SessionID: "session-1", HasMoreAbove: true, HasMoreBelow: true}
 	for i := 0; i < 250; i++ {
 		page.Entries = append(page.Entries, clientui.ChatEntry{Role: "assistant", Text: fmt.Sprintf("line %03d", 100+i)})
 	}
 	page.NewerCursor = 5000
 	page.HasMoreBelow = true
 	entries := transcriptEntriesFromPage(page)
+	m.detailTranscript.setKnownBounds(100, 500)
 	m.detailTranscript.replace(page)
 	m.detailTranscript.lastRequest = clientui.TranscriptPageRequest{Cursor: 4096}
-	m.forwardToView(tui.SetConversationMsg{BaseOffset: page.StartEntryCount, TotalEntries: page.CommittedEntryCount, Entries: entries})
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 100, TotalEntries: 500, Entries: entries})
 
 	next, enterCmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlT})
 	_ = enterCmd
@@ -258,12 +260,13 @@ func TestDetailEdgePagingWaitsForFirstNavigationToResolveMetrics(t *testing.T) {
 }
 
 func TestCtrlTDeferredDetailLoadSkipsDuplicateSeededPageRequest(t *testing.T) {
-	seed := clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 300, CommittedEntryCount: 500}
+	seed := clientui.TranscriptPage{SessionID: "session-1", HasMoreAbove: true}
 	for i := 0; i < 200; i++ {
 		seed.Entries = append(seed.Entries, clientui.ChatEntry{Role: "assistant", Text: fmt.Sprintf("line %03d", 300+i)})
 	}
 	client := &recordingTranscriptRuntimeClient{loadPage: seed}
 	m := setTestUITerminalSize(newProjectedClosedUIModel(client), 100, 12)
+	m.transcriptTotalEntries = 500
 	_ = m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, seed, clientui.TranscriptRecoveryCauseNone)
 	m.layout().syncViewport()
 
@@ -302,12 +305,13 @@ func TestCtrlTDeferredDetailLoadSkipsDuplicateSeededPageRequest(t *testing.T) {
 }
 
 func TestCtrlTDeferredDetailLoadSkippedKeepsDetailMetricsLazyEndToEnd(t *testing.T) {
-	seed := clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 300, CommittedEntryCount: 500}
+	seed := clientui.TranscriptPage{SessionID: "session-1", HasMoreAbove: true}
 	for i := 0; i < 200; i++ {
 		seed.Entries = append(seed.Entries, clientui.ChatEntry{Role: "assistant", Text: fmt.Sprintf("line %03d", 300+i)})
 	}
 	client := &recordingTranscriptRuntimeClient{loadPage: seed}
 	m := setTestUITerminalSize(newProjectedClosedUIModel(client), 100, 12)
+	m.transcriptTotalEntries = 500
 	_ = m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, seed, clientui.TranscriptRecoveryCauseNone)
 	m.layout().syncViewport()
 
@@ -337,12 +341,13 @@ func TestCtrlTDeferredDetailLoadSkippedKeepsDetailMetricsLazyEndToEnd(t *testing
 }
 
 func TestDeferredDetailLoadRefreshesWhenTranscriptDirty(t *testing.T) {
-	seed := clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 300, CommittedEntryCount: 500}
+	seed := clientui.TranscriptPage{SessionID: "session-1", HasMoreAbove: true}
 	for i := 0; i < 200; i++ {
 		seed.Entries = append(seed.Entries, clientui.ChatEntry{Role: "assistant", Text: fmt.Sprintf("line %03d", 300+i)})
 	}
 	client := &recordingTranscriptRuntimeClient{loadPage: seed}
 	m := setTestUITerminalSize(newProjectedClosedUIModel(client), 100, 12)
+	m.transcriptTotalEntries = 500
 	_ = m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, seed, clientui.TranscriptRecoveryCauseNone)
 	m.layout().syncViewport()
 
@@ -553,9 +558,7 @@ func TestStartupHydrationKeepsCompactionSummaryVerbose(t *testing.T) {
 	client := &startupTranscriptRuntimeClient{
 		view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1", SessionName: "incident triage"}},
 		page: clientui.TranscriptPage{
-			SessionID:           "session-1",
-			StartEntryCount:     0,
-			CommittedEntryCount: 2,
+			SessionID: "session-1",
 			Entries: []clientui.ChatEntry{
 				{Role: "compaction_notice", Text: "context compacted for the 1st time"},
 				{Role: "compaction_summary", Text: "summary line one\nsummary line two"},
@@ -609,9 +612,7 @@ func TestStartupHydrationKeepsDefaultCacheWarningVerbose(t *testing.T) {
 	client := &startupTranscriptRuntimeClient{
 		view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1", SessionName: "incident triage"}},
 		page: clientui.TranscriptPage{
-			SessionID:           "session-1",
-			StartEntryCount:     0,
-			CommittedEntryCount: 2,
+			SessionID: "session-1",
 			Entries: []clientui.ChatEntry{
 				{Role: "assistant", Text: "latest answer"},
 				{Role: "cache_warning", Text: warningText, Visibility: clientui.EntryVisibilityVerbose},

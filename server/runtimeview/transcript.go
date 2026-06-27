@@ -28,18 +28,6 @@ func TranscriptPageFromRuntime(engine *runtime.Engine, req clientui.TranscriptPa
 		engine.TranscriptRevision(),
 		segment,
 	)
-	if req.NewerCursor <= 0 && req.Cursor <= 0 {
-		if page.HasMoreAbove {
-			total := engine.CommittedTranscriptEntryCount()
-			page.CommittedEntryCount = total
-			if offset := total - len(page.Entries); offset >= 0 {
-				page.StartEntryCount = offset
-			}
-		} else {
-			page.StartEntryCount = 0
-			page.CommittedEntryCount = len(page.Entries)
-		}
-	}
 	return page, nil
 }
 
@@ -97,7 +85,7 @@ func CommittedTranscriptSuffixFromSegment(sessionID, sessionName string, freshne
 		CommittedEntryCount:     len(entries),
 		StartEntryCount:         0,
 		NextEntryCount:          len(entries),
-		HasMoreCommittedEntries: false,
+		HasMoreCommittedEntries: page.HasMoreAbove,
 		Entries:                 entries,
 	}
 }

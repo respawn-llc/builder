@@ -176,8 +176,6 @@ type TranscriptPage struct {
 	SessionName           string
 	ConversationFreshness ConversationFreshness
 	Revision              int64
-	CommittedEntryCount   int
-	StartEntryCount       int
 	OlderCursor           int64
 	HasMoreAbove          bool
 	NewerCursor           int64

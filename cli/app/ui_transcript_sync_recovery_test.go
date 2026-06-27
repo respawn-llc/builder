@@ -38,7 +38,7 @@ func TestSessionActivityGapRecoveryEventuallyHydratesCommittedTranscriptInBothMo
 	client := &refreshingRuntimeClient{
 		transcripts: []clientui.TranscriptPage{
 			{SessionID: "session-1"},
-			{SessionID: "session-1", SessionName: "debug session", Entries: []clientui.ChatEntry{{Role: "assistant", Text: "final answer after retry"}}, CommittedEntryCount: 1},
+			{SessionID: "session-1", SessionName: "debug session", Entries: []clientui.ChatEntry{{Role: "assistant", Text: "final answer after retry"}}},
 		},
 		errs: []error{errors.New("temporary refresh failure"), nil},
 	}
@@ -177,18 +177,16 @@ func newSupervisorTerminalFenceRepro(t *testing.T) (*uiModel, string) {
 	client := &refreshingRuntimeClient{
 		transcripts: []clientui.TranscriptPage{
 			{
-				SessionID:           "session-1",
-				Revision:            12,
-				CommittedEntryCount: 2,
+				SessionID: "session-1",
+				Revision:  12,
 				Entries: []clientui.ChatEntry{
 					{Role: "assistant", Text: "seed", Phase: string(llm.MessagePhaseFinal)},
 					{Role: "user", Text: "supervisor feedback"},
 				},
 			},
 			{
-				SessionID:           "session-1",
-				Revision:            13,
-				CommittedEntryCount: 4,
+				SessionID: "session-1",
+				Revision:  13,
 				Entries: []clientui.ChatEntry{
 					{Role: "assistant", Text: "seed", Phase: string(llm.MessagePhaseFinal)},
 					{Role: "user", Text: "supervisor feedback"},
@@ -204,7 +202,6 @@ func newSupervisorTerminalFenceRepro(t *testing.T) (*uiModel, string) {
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         13,
-		CommittedEntryCount:        4,
 		CommittedEntryStart:        2,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries: []clientui.ChatEntry{{
@@ -218,7 +215,6 @@ func newSupervisorTerminalFenceRepro(t *testing.T) (*uiModel, string) {
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         13,
-		CommittedEntryCount:        4,
 		CommittedEntryStart:        3,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries:          []clientui.ChatEntry{{Role: "reviewer_status", Text: "Supervisor ran: 1 suggestion, applied."}},
@@ -233,10 +229,9 @@ func newSupervisorTerminalFenceRepro(t *testing.T) (*uiModel, string) {
 	m.activity = uiActivityRunning
 	m.forwardToView(tui.SetViewportSizeMsg{Lines: 20, Width: 100})
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            11,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed", Phase: string(llm.MessagePhaseFinal)}},
+		SessionID: "session-1",
+		Revision:  11,
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "seed", Phase: string(llm.MessagePhaseFinal)}},
 	}, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		m = applyRuntimeEventBatchMessagesFromCommand(t, m, cmd)
 	}
@@ -247,7 +242,6 @@ func newSupervisorTerminalFenceRepro(t *testing.T) (*uiModel, string) {
 			StepID:                     "step-1",
 			CommittedTranscriptChanged: true,
 			TranscriptRevision:         12,
-			CommittedEntryCount:        2,
 			CommittedEntryStart:        1,
 			CommittedEntryStartSet:     true,
 			UserMessage:                "supervisor feedback",
@@ -258,7 +252,6 @@ func newSupervisorTerminalFenceRepro(t *testing.T) (*uiModel, string) {
 			StepID:                     "step-1",
 			CommittedTranscriptChanged: true,
 			TranscriptRevision:         13,
-			CommittedEntryCount:        4,
 		},
 	}})
 	m = next.(*uiModel)
@@ -301,7 +294,7 @@ func applyRuntimeEventBatchMessagesFromCommand(t *testing.T, m *uiModel, cmd tea
 
 func TestDeferredContinuityRefreshPreservesRecoveryCauseAcrossBusyHydration(t *testing.T) {
 	client := &refreshingRuntimeClient{
-		transcripts: []clientui.TranscriptPage{{SessionID: "session-1", Entries: []clientui.ChatEntry{{Role: "assistant", Text: "authoritative after gap"}}, CommittedEntryCount: 1}},
+		transcripts: []clientui.TranscriptPage{{SessionID: "session-1", Entries: []clientui.ChatEntry{{Role: "assistant", Text: "authoritative after gap"}}}},
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil

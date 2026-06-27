@@ -126,13 +126,13 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 		})
 	}
 	if m.detailTranscript.loaded && !allTranscriptEntriesTransient(convertedEntries) {
+		m.detailTranscript.setKnownBounds(startOffset, m.transcriptTotalEntries)
 		page := clientui.TranscriptPage{
-			Revision:            m.transcriptRevision,
-			StartEntryCount:     startOffset,
-			CommittedEntryCount: m.transcriptTotalEntries,
-			Entries:             cloneChatEntries(entries),
-			Streaming:           m.view.OngoingStreamingText(),
-			StreamingError:      m.view.OngoingErrorText(),
+			Revision:       m.transcriptRevision,
+			HasMoreAbove:   startOffset > 0,
+			Entries:        cloneChatEntries(entries),
+			Streaming:      m.view.OngoingStreamingText(),
+			StreamingError: m.view.OngoingErrorText(),
 		}
 		m.detailTranscript.apply(page)
 	}
@@ -190,13 +190,14 @@ func (a uiRuntimeAdapter) applyActiveAssistantFinalizerGapAsRecentTail(evt clien
 	if shouldClearAssistantStreamForCommittedTranscriptEntries(entries, m.view.OngoingStreamingText()) {
 		m.clearAssistantStreamForCommittedAppend()
 	}
+	totalEntries := max(evt.CommittedEntryCount, start+len(evt.TranscriptEntries))
+	m.transcriptTotalEntries = max(m.transcriptTotalEntries, totalEntries)
 	page := clientui.TranscriptPage{
-		Revision:            evt.TranscriptRevision,
-		StartEntryCount:     start,
-		CommittedEntryCount: max(evt.CommittedEntryCount, start+len(evt.TranscriptEntries)),
-		Entries:             cloneChatEntries(evt.TranscriptEntries),
-		Streaming:           m.view.OngoingStreamingText(),
-		StreamingError:      m.view.OngoingErrorText(),
+		Revision:       evt.TranscriptRevision,
+		HasMoreAbove:   start > 0,
+		Entries:        cloneChatEntries(evt.TranscriptEntries),
+		Streaming:      m.view.OngoingStreamingText(),
+		StreamingError: m.view.OngoingErrorText(),
 	}
 	detailPinnedAwayFromTail := m.detailTranscript.loaded && m.detailTranscript.hasMoreBelow
 	if detailPinnedAwayFromTail {
@@ -213,16 +214,16 @@ func (a uiRuntimeAdapter) applyActiveAssistantFinalizerGapAsRecentTail(evt clien
 		detailPage.SessionName = page.SessionName
 		detailPage.Revision = page.Revision
 		m.forwardToView(tui.SetConversationMsg{
-			BaseOffset:   detailPage.StartEntryCount,
-			TotalEntries: detailPage.CommittedEntryCount,
+			BaseOffset:   m.detailTranscript.offset,
+			TotalEntries: m.detailTranscript.totalEntries,
 			Entries:      transcriptEntriesFromPage(detailPage),
 			Ongoing:      detailPage.Streaming,
 			OngoingError: detailPage.StreamingError,
 		})
 	default:
 		m.forwardToView(tui.SetConversationMsg{
-			BaseOffset:   page.StartEntryCount,
-			TotalEntries: page.CommittedEntryCount,
+			BaseOffset:   m.transcriptBaseOffset,
+			TotalEntries: m.transcriptTotalEntries,
 			Entries:      entries,
 			Ongoing:      page.Streaming,
 			OngoingError: page.StreamingError,

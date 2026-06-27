@@ -158,9 +158,8 @@ func TestSessionActivityEventsDoNotLogDiagnosticsWhenDisabled(t *testing.T) {
 func TestBridgeGapHydratesTranscriptStateInProjectedUI(t *testing.T) {
 	client := &refreshingRuntimeClient{
 		transcripts: []clientui.TranscriptPage{{
-			SessionID:           "session-1",
-			Revision:            7,
-			CommittedEntryCount: 2,
+			SessionID: "session-1",
+			Revision:  7,
 			Entries: []clientui.ChatEntry{
 				{Role: "tool_call", Text: "pwd", ToolCallID: "call-1", ToolCall: &clientui.ToolCallMeta{ToolName: "shell", IsShell: true, Command: "pwd"}},
 				{Role: "tool_result_ok", Text: "/tmp", ToolCallID: "call-1"},

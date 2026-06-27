@@ -32,7 +32,6 @@ func TestNewAssistantTurnFlushesSupersededStuckCommentary(t *testing.T) {
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        2,
 		TranscriptRevision:         2,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role:  "assistant",
@@ -93,7 +92,6 @@ func TestNewToolTurnFlushesSupersededStuckCommentary(t *testing.T) {
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        2,
 		TranscriptRevision:         2,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role:  "assistant",
@@ -108,10 +106,9 @@ func TestNewToolTurnFlushesSupersededStuckCommentary(t *testing.T) {
 	}
 
 	_, c3 := m.handleRuntimeEventBatch([]clientui.Event{{
-		Kind:                clientui.EventToolCallStarted,
-		StepID:              "step-2",
-		TranscriptRevision:  3,
-		CommittedEntryCount: 3,
+		Kind:               clientui.EventToolCallStarted,
+		StepID:             "step-2",
+		TranscriptRevision: 3,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role:       "tool_call",
 			Text:       "pwd",

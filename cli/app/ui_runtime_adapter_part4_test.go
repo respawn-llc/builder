@@ -19,11 +19,9 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionTailReplacementWhenAuthor
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
+		SessionID: "session-1",
+		Revision:  10,
+		Entries:   []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -42,10 +40,8 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionTailReplacementWhenAuthor
 	}
 
 	corrected := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 3,
+		SessionID: "session-1",
+		Revision:  10,
 		Entries: []clientui.ChatEntry{
 			{Role: "user", Text: "prompt"},
 			{Role: "tool_call", Text: "pwd", ToolCallID: "call-1", ToolCall: &clientui.ToolCallMeta{ToolName: "shell", IsShell: true, Command: "pwd"}},
@@ -84,10 +80,8 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionReplacementWhenToolMetada
 	m := newProjectedStaticUIModel()
 
 	baseline := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 2,
+		SessionID: "session-1",
+		Revision:  10,
 		Entries: []clientui.ChatEntry{
 			{Role: "user", Text: "prompt"},
 			{Role: "tool_call", Text: "run", ToolCallID: "call-1", ToolCall: &clientui.ToolCallMeta{ToolName: "shell", IsShell: true, Command: "pwd"}},
@@ -99,10 +93,8 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionReplacementWhenToolMetada
 	m.transcriptLiveDirty = true
 
 	corrected := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 2,
+		SessionID: "session-1",
+		Revision:  10,
 		Entries: []clientui.ChatEntry{
 			{Role: "user", Text: "prompt"},
 			{Role: "tool_call", Text: "run", ToolCallID: "call-1", ToolCall: &clientui.ToolCallMeta{ToolName: "shell", IsShell: true, Command: "ls"}},
@@ -134,11 +126,9 @@ func TestProjectedAssistantToolCallEntriesApplyAsCommittedInRuntimeMode(t *testi
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
+		SessionID: "session-1",
+		Revision:  10,
+		Entries:   []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -148,7 +138,6 @@ func TestProjectedAssistantToolCallEntriesApplyAsCommittedInRuntimeMode(t *testi
 		Kind:                       clientui.EventAssistantMessage,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         11,
-		CommittedEntryCount:        2,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role:       "tool_call",
 			Text:       "pwd",
@@ -177,11 +166,9 @@ func TestRuntimeAuthoritativeHydrateDoesNotRepairCommittedToolPathWhenLiveProjec
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
+		SessionID: "session-1",
+		Revision:  10,
+		Entries:   []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -191,7 +178,6 @@ func TestRuntimeAuthoritativeHydrateDoesNotRepairCommittedToolPathWhenLiveProjec
 		Kind:                       clientui.EventAssistantMessage,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         11,
-		CommittedEntryCount:        2,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role:       "tool_call",
 			Text:       "pwd",
@@ -204,7 +190,6 @@ func TestRuntimeAuthoritativeHydrateDoesNotRepairCommittedToolPathWhenLiveProjec
 		Kind:                       clientui.EventToolCallCompleted,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         12,
-		CommittedEntryCount:        3,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role:       "tool_result_ok",
 			Text:       "/tmp",
@@ -214,10 +199,8 @@ func TestRuntimeAuthoritativeHydrateDoesNotRepairCommittedToolPathWhenLiveProjec
 		cmd)
 
 	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            12,
-		StartEntryCount:     0,
-		CommittedEntryCount: 3,
+		SessionID: "session-1",
+		Revision:  12,
 		Entries: []clientui.ChatEntry{
 			{Role: "user", Text: "prompt"},
 			{Role: "tool_call", Text: "pwd", ToolCallID: "call-1", ToolCall: &clientui.ToolCallMeta{ToolName: "shell", IsShell: true, Command: "pwd"}},
@@ -247,11 +230,9 @@ func TestRuntimeAuthoritativeHydrateDoesNotRepairCommittedReviewerStatusPathWhen
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		SessionID: "session-1",
+		Revision:  10,
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -261,7 +242,6 @@ func TestRuntimeAuthoritativeHydrateDoesNotRepairCommittedReviewerStatusPathWhen
 		Kind:                       clientui.EventLocalEntryAdded,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         11,
-		CommittedEntryCount:        2,
 		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries: []clientui.ChatEntry{{
@@ -276,10 +256,8 @@ func TestRuntimeAuthoritativeHydrateDoesNotRepairCommittedReviewerStatusPathWhen
 	}
 
 	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            11,
-		StartEntryCount:     0,
-		CommittedEntryCount: 2,
+		SessionID: "session-1",
+		Revision:  11,
 		Entries: []clientui.ChatEntry{
 			{Role: "assistant", Text: "seed"},
 			{Role: "reviewer_status", Text: "Supervisor ran and applied 2 suggestions."},
@@ -307,11 +285,9 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionTailReplacementWhenOngoin
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		SessionID: "session-1",
+		Revision:  10,
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -319,12 +295,10 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionTailReplacementWhenOngoin
 	m.transcriptLiveDirty = true
 
 	runtimeOnly := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
-		StreamingError:      "background continuation failed",
+		SessionID:      "session-1",
+		Revision:       10,
+		Entries:        []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		StreamingError: "background continuation failed",
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, runtimeOnly, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -345,12 +319,10 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionTailReplacementWhenOngoin
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
-		StreamingError:      "background continuation failed",
+		SessionID:      "session-1",
+		Revision:       10,
+		Entries:        []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		StreamingError: "background continuation failed",
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -358,12 +330,10 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionTailReplacementWhenOngoin
 	m.transcriptLiveDirty = true
 
 	cleared := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
-		StreamingError:      "",
+		SessionID:      "session-1",
+		Revision:       10,
+		Entries:        []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		StreamingError: "",
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, cleared, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -387,10 +357,8 @@ func TestApplyRuntimeTranscriptPageRejectsEqualRevisionShiftedTailReplacement(t 
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 2,
+		SessionID: "session-1",
+		Revision:  10,
 		Entries: []clientui.ChatEntry{
 			{Role: "assistant", Text: "seed-0"},
 			{Role: "assistant", Text: "seed-1"},
@@ -402,11 +370,9 @@ func TestApplyRuntimeTranscriptPageRejectsEqualRevisionShiftedTailReplacement(t 
 	m.transcriptLiveDirty = true
 
 	shifted := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     1,
-		CommittedEntryCount: 2,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed-1"}},
+		SessionID: "session-1",
+		Revision:  10,
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "seed-1"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, shifted, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		if msg := cmd(); msg != nil {
@@ -435,11 +401,9 @@ func TestApplyRuntimeTranscriptPageAcceptsNewerRevisionTailReplacementAfterLiveA
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		SessionID: "session-1",
+		Revision:  10,
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -449,10 +413,8 @@ func TestApplyRuntimeTranscriptPageAcceptsNewerRevisionTailReplacementAfterLiveA
 	}
 
 	fresh := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            11,
-		StartEntryCount:     0,
-		CommittedEntryCount: 2,
+		SessionID: "session-1",
+		Revision:  11,
 		Entries: []clientui.ChatEntry{
 			{Role: "assistant", Text: "seed"},
 			{Role: "assistant", Text: "live append"},
@@ -481,16 +443,17 @@ func TestApplyProjectedTranscriptEntriesUsesTailOffsetWhileViewingOlderDetailPag
 	m.termHeight = 20
 	m.windowSizeKnown = true
 
-	recentTail := clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 300, CommittedEntryCount: 500}
+	recentTail := clientui.TranscriptPage{SessionID: "session-1", HasMoreAbove: true}
 	for i := 0; i < 200; i++ {
 		recentTail.Entries = append(recentTail.Entries, clientui.ChatEntry{Role: "assistant", Text: fmt.Sprintf("tail %03d", 300+i)})
 	}
+	m.transcriptTotalEntries = 500
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, recentTail, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
 	}
 
 	m.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail, SkipDetailWarmup: true})
-	olderDetailPage := clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 0, CommittedEntryCount: 500}
+	olderDetailPage := clientui.TranscriptPage{SessionID: "session-1", HasMoreBelow: true}
 	for i := 0; i < 300; i++ {
 		olderDetailPage.Entries = append(olderDetailPage.Entries, clientui.ChatEntry{Role: "assistant", Text: fmt.Sprintf("history %03d", i)})
 	}
@@ -501,8 +464,8 @@ func TestApplyProjectedTranscriptEntriesUsesTailOffsetWhileViewingOlderDetailPag
 	if m.view.TranscriptBaseOffset() != 0 {
 		t.Fatalf("expected detail view to remain on older page, got base=%d", m.view.TranscriptBaseOffset())
 	}
-	if got := m.transcriptBaseOffset; got != recentTail.StartEntryCount {
-		t.Fatalf("live tail base offset = %d, want %d", got, recentTail.StartEntryCount)
+	if got := m.transcriptBaseOffset; got != 300 {
+		t.Fatalf("live tail base offset = %d, want %d", got, 300)
 	}
 
 	appended := []clientui.ChatEntry{{Role: "assistant", Text: "tail 500"}, {Role: "assistant", Text: "tail 501"}}
@@ -544,9 +507,13 @@ func TestApplyProjectedTranscriptEntriesUsesTailOffsetWhileViewingOlderDetailPag
 
 func TestStartupSeedsFromRuntimeClientTranscriptAccessorBeforeBoundedSync(t *testing.T) {
 	client := &startupTranscriptRuntimeClient{
-		view:     clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1", SessionName: "incident triage"}},
-		page:     clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 10, CommittedEntryCount: 15, Entries: []clientui.ChatEntry{{Role: "assistant", Text: "cached tail"}}},
-		loadPage: clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 14, CommittedEntryCount: 15, Entries: []clientui.ChatEntry{{Role: "assistant", Text: "authoritative tail"}}},
+		view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{
+			SessionID:   "session-1",
+			SessionName: "incident triage",
+			Transcript:  clientui.TranscriptMetadata{CommittedEntryCount: 15},
+		}},
+		page:     clientui.TranscriptPage{SessionID: "session-1", HasMoreAbove: true, Entries: []clientui.ChatEntry{{Role: "assistant", Text: "cached tail"}}},
+		loadPage: clientui.TranscriptPage{SessionID: "session-1", HasMoreAbove: true, Entries: []clientui.ChatEntry{{Role: "assistant", Text: "authoritative tail"}}},
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 
@@ -611,7 +578,6 @@ func TestAssistantCommentaryCommitPlusDeltaDoesNotSplitOngoingView(t *testing.T)
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         1,
-		CommittedEntryCount:        1,
 		Message: llm.Message{
 			Role:    llm.RoleAssistant,
 			Content: "Decision: keep tool name patch; expose custom tool with Lark grammar.",
@@ -752,7 +718,6 @@ func TestProjectedAssistantMessageDoesNotClearStreamingTextWhenCommitIsSkipped(t
 		Kind:                       clientui.EventAssistantMessage,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         5,
-		CommittedEntryCount:        1,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role: "assistant",
 			Text: "older",
@@ -780,7 +745,6 @@ func TestProjectedAssistantMessageClearsStreamingTextWhenSkippedCommitMatchesLiv
 		Kind:                       clientui.EventAssistantMessage,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         5,
-		CommittedEntryCount:        1,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role: "assistant",
 			Text: "final",
@@ -805,9 +769,8 @@ func TestApplyRuntimeTranscriptPagePreservesNonEmptyAuthoritativeOngoingEvenWhen
 	m.forwardToView(tui.SetConversationMsg{Ongoing: "final"})
 
 	page := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            3,
-		CommittedEntryCount: 1,
+		SessionID: "session-1",
+		Revision:  3,
 		Entries: []clientui.ChatEntry{{
 			Role:  "assistant",
 			Text:  "final",
@@ -842,9 +805,8 @@ func TestApplyRuntimeTranscriptPageAllowsEqualRevisionToClearDuplicateCommittedA
 	m.forwardToView(tui.SetConversationMsg{Entries: m.transcriptEntries, Ongoing: "final"})
 
 	page := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            3,
-		CommittedEntryCount: 1,
+		SessionID: "session-1",
+		Revision:  3,
 		Entries: []clientui.ChatEntry{{
 			Role:  "assistant",
 			Text:  "final",
@@ -876,9 +838,8 @@ func TestApplyRuntimeTranscriptPagePreservesAuthoritativeNonEmptyOngoingOverStal
 	m.forwardToView(tui.SetConversationMsg{Entries: m.transcriptEntries, Ongoing: "final"})
 
 	page := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            4,
-		CommittedEntryCount: 1,
+		SessionID: "session-1",
+		Revision:  4,
 		Entries: []clientui.ChatEntry{{
 			Role:  "assistant",
 			Text:  "final",
@@ -935,11 +896,9 @@ func TestApplyRuntimeTranscriptPageRejectsEqualRevisionReasoningClear(t *testing
 	m.forwardToView(tui.ToggleModeMsg{})
 
 	baseline := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "user", Text: "u"}},
+		SessionID: "session-1",
+		Revision:  10,
+		Entries:   []clientui.ChatEntry{{Role: "user", Text: "u"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -950,11 +909,9 @@ func TestApplyRuntimeTranscriptPageRejectsEqualRevisionReasoningClear(t *testing
 	}
 
 	stale := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            10,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "user", Text: "u"}},
+		SessionID: "session-1",
+		Revision:  10,
+		Entries:   []clientui.ChatEntry{{Role: "user", Text: "u"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, stale, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)

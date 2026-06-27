@@ -12,7 +12,6 @@ func TestRuntimeEventCanDeferCommittedConversationFence(t *testing.T) {
 		Kind:                       clientui.EventConversationUpdated,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         7,
-		CommittedEntryCount:        2,
 	}
 	if !runtimeEventCanDeferCommittedConversationFence(update) {
 		t.Fatal("expected empty committed conversation update to be deferrable fence")
@@ -34,7 +33,6 @@ func TestWaitRuntimeEventDoesNotDeferCommittedGoalFeedback(t *testing.T) {
 		Kind:                       clientui.EventConversationUpdated,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         7,
-		CommittedEntryCount:        1,
 		CommittedEntryStart:        0,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries: []clientui.ChatEntry{{

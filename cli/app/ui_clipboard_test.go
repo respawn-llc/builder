@@ -126,7 +126,6 @@ func TestCopySlashCommandDoesNotUseVisibleProjectionWhenRuntimeStatusIsStale(t *
 	next, _ := m.Update(runtimeEventMsg{event: clientui.Event{
 		Kind:                       clientui.EventAssistantMessage,
 		CommittedTranscriptChanged: true,
-		CommittedEntryCount:        1,
 		CommittedEntryStart:        0,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries: []clientui.ChatEntry{{

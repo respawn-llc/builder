@@ -696,11 +696,9 @@ func TestRuntimeIdleEventResumesVisibleQueuedMessagesWithoutBlankEnter(t *testin
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("first queued", "second queued")
 	client.transcript = clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            4,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "done"}},
+		SessionID: "session-1",
+		Revision:  4,
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "done"}},
 	}
 
 	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
@@ -790,11 +788,9 @@ func TestRuntimeIdleQueuedDrainNotifiesTurnQueueHookOnce(t *testing.T) {
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("follow up")
 	client.transcript = clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            4,
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "done"}},
+		SessionID: "session-1",
+		Revision:  4,
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "done"}},
 	}
 
 	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
@@ -1208,7 +1204,6 @@ func TestInterruptedSubmitDoneDoesNotRestoreFlushedSubmittedText(t *testing.T) {
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         1,
-		CommittedEntryCount:        1,
 		CommittedEntryStart:        0,
 		CommittedEntryStartSet:     true,
 		UserMessage:                "already flushed",
@@ -1282,7 +1277,6 @@ func TestVerboseReviewerSuggestionsStaySingleAfterInterruptAndNextSubmit(t *test
 			StepID:                     "step-1",
 			CommittedTranscriptChanged: true,
 			TranscriptRevision:         1,
-			CommittedEntryCount:        1,
 			CommittedEntryStart:        0,
 			CommittedEntryStartSet:     true,
 			UserMessage:                suggestions,
@@ -1293,7 +1287,6 @@ func TestVerboseReviewerSuggestionsStaySingleAfterInterruptAndNextSubmit(t *test
 			StepID:                     "step-1",
 			CommittedTranscriptChanged: true,
 			TranscriptRevision:         2,
-			CommittedEntryCount:        2,
 			CommittedEntryStart:        1,
 			CommittedEntryStartSet:     true,
 			TranscriptEntries: []clientui.ChatEntry{{
@@ -1329,7 +1322,6 @@ func TestVerboseReviewerSuggestionsStaySingleAfterInterruptAndNextSubmit(t *test
 		StepID:                     "step-2",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         3,
-		CommittedEntryCount:        3,
 		CommittedEntryStart:        2,
 		CommittedEntryStartSet:     true,
 		UserMessage:                "next request",
@@ -1540,11 +1532,9 @@ func TestIdleCompactDoneRefreshesCommittedSteeringOutput(t *testing.T) {
 	next, checkCmd := m.Update(compactDoneMsg{})
 	updated := next.(*uiModel)
 	client.transcript = clientui.TranscriptPage{
-		SessionID:           "session-1",
-		StartEntryCount:     0,
-		CommittedEntryCount: 1,
-		Revision:            1,
-		NewerCursor:         1,
+		SessionID:   "session-1",
+		Revision:    1,
+		NewerCursor: 1,
 		Entries: []clientui.ChatEntry{
 			{Role: "compaction_notice", Text: "context compacted for the 1st time"},
 		},

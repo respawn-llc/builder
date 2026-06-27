@@ -304,16 +304,20 @@ func TestRuntimeClientRefreshCommittedTranscriptSuffixUsesSessionViewSuffixAPI(t
 
 func TestRuntimeClientCommittedSuffixDisablesUnsupportedRPC(t *testing.T) {
 	reads := &countingSessionViewClient{
+		view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{
+			SessionID:  "session-1",
+			Transcript: clientui.TranscriptMetadata{Revision: 7, CommittedEntryCount: 3},
+		}},
 		page: clientui.TranscriptPage{
-			SessionID:           "session-1",
-			Revision:            7,
-			CommittedEntryCount: 4,
-			StartEntryCount:     2,
-			Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "page fallback"}},
+			SessionID:    "session-1",
+			Revision:     7,
+			HasMoreAbove: true,
+			Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "page fallback"}},
 		},
 		suffixErr: serverapi.ErrMethodNotFound,
 	}
 	runtimeClient := newRuntimeClientReadOnlyTest(reads).(*sessionRuntimeClient)
+	runtimeClient.storeMainView(reads.view)
 	req := clientui.CommittedTranscriptSuffixRequest{}
 
 	suffix, err := runtimeClient.RefreshCommittedTranscriptSuffix(req)
@@ -329,11 +333,9 @@ func TestRuntimeClientCommittedSuffixDisablesUnsupportedRPC(t *testing.T) {
 
 	reads.suffixErr = nil
 	reads.suffix = clientui.CommittedTranscriptSuffix{
-		SessionID:           "session-1",
-		CommittedEntryCount: 4,
-		StartEntryCount:     2,
-		NextEntryCount:      3,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "rpc should stay disabled"}},
+		SessionID:      "session-1",
+		NextEntryCount: 3,
+		Entries:        []clientui.ChatEntry{{Role: "assistant", Text: "rpc should stay disabled"}},
 	}
 	suffix, err = runtimeClient.RefreshCommittedTranscriptSuffix(req)
 	if err != nil {
@@ -352,8 +354,7 @@ func TestStartupRuntimeTranscriptSeedsFromCommittedSuffix(t *testing.T) {
 		view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{
 			SessionID: "session-1",
 			Transcript: clientui.TranscriptMetadata{
-				Revision:            10,
-				CommittedEntryCount: 600,
+				Revision: 10,
 			},
 		}},
 		suffix: clientui.CommittedTranscriptSuffix{
@@ -395,12 +396,10 @@ func newSeededCommittedSuffixTestModel(t *testing.T) (*uiModel, *countingSession
 			Transcript: clientui.TranscriptMetadata{Revision: 1, CommittedEntryCount: 1},
 		}},
 		suffix: clientui.CommittedTranscriptSuffix{
-			SessionID:           "session-1",
-			Revision:            1,
-			CommittedEntryCount: 1,
-			StartEntryCount:     0,
-			NextEntryCount:      1,
-			Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+			SessionID:      "session-1",
+			Revision:       1,
+			NextEntryCount: 1,
+			Entries:        []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 		},
 	}
 	runtimeClient := newRuntimeClientReadOnlyTest(reads)
@@ -420,7 +419,6 @@ func TestContiguousCommittedRuntimeEventAppliesFromEventWithoutServerRead(t *tes
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         2,
-		CommittedEntryCount:        2,
 		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "answer", Phase: string(llm.MessagePhaseFinal)}},
@@ -444,11 +442,9 @@ func TestCommittedRuntimeEventWithForwardGapFallsBackToServerRead(t *testing.T) 
 	baselineSuffixReads := reads.suffixCount.Load()
 	baselinePageReads := reads.pageCount.Load()
 	reads.page = clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            3,
-		StartEntryCount:     0,
-		CommittedEntryCount: 6,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "authoritative tail"}},
+		SessionID: "session-1",
+		Revision:  3,
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "authoritative tail"}},
 	}
 
 	result := model.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
@@ -456,7 +452,6 @@ func TestCommittedRuntimeEventWithForwardGapFallsBackToServerRead(t *testing.T) 
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         3,
-		CommittedEntryCount:        6,
 		CommittedEntryStart:        5,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "gapped", Phase: string(llm.MessagePhaseFinal)}},
@@ -480,7 +475,7 @@ func TestCommittedRuntimeEventWithForwardGapFallsBackToServerRead(t *testing.T) 
 }
 
 func TestRuntimeClientLoadTranscriptPageAlwaysReadsFromServerAuthority(t *testing.T) {
-	reads := &countingSessionViewClient{page: clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: 300, CommittedEntryCount: 500}}
+	reads := &countingSessionViewClient{page: clientui.TranscriptPage{SessionID: "session-1"}}
 	runtimeClient := newRuntimeClientReadOnlyTest(reads)
 	req := clientui.TranscriptPageRequest{Cursor: 4096}
 
@@ -496,7 +491,7 @@ func TestRuntimeClientLoadTranscriptPageAlwaysReadsFromServerAuthority(t *testin
 }
 
 func TestRuntimeClientLoadTranscriptPageCachesByRequestKey(t *testing.T) {
-	reads := &countingSessionViewClient{page: clientui.TranscriptPage{SessionID: "session-1", CommittedEntryCount: 500}}
+	reads := &countingSessionViewClient{page: clientui.TranscriptPage{SessionID: "session-1"}}
 	runtimeClient := newRuntimeClientReadOnlyTest(reads)
 
 	if _, err := runtimeClient.LoadTranscriptPage(clientui.TranscriptPageRequest{Cursor: 4096}); err != nil {
@@ -530,17 +525,13 @@ func TestRuntimeClientLoadTranscriptPageDoesNotPopulateTranscriptAccessor(t *tes
 		pageForRequest: func(req serverapi.SessionTranscriptPageRequest) clientui.TranscriptPage {
 			if req.Cursor <= 0 {
 				return clientui.TranscriptPage{
-					SessionID:           "session-1",
-					StartEntryCount:     0,
-					CommittedEntryCount: 500,
-					Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "tail"}},
+					SessionID: "session-1",
+					Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "tail"}},
 				}
 			}
 			return clientui.TranscriptPage{
-				SessionID:           "session-1",
-				StartEntryCount:     100,
-				CommittedEntryCount: 500,
-				Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "paged"}},
+				SessionID: "session-1",
+				Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "paged"}},
 			}
 		},
 	}
@@ -566,17 +557,13 @@ func TestRuntimeClientTranscriptDoesNotReadFromServer(t *testing.T) {
 		pageForRequest: func(req serverapi.SessionTranscriptPageRequest) clientui.TranscriptPage {
 			if req.Cursor <= 0 {
 				return clientui.TranscriptPage{
-					SessionID:           "session-1",
-					StartEntryCount:     490,
-					CommittedEntryCount: 500,
-					Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "tail"}},
+					SessionID: "session-1",
+					Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "tail"}},
 				}
 			}
 			return clientui.TranscriptPage{
-				SessionID:           "session-1",
-				StartEntryCount:     100,
-				CommittedEntryCount: 500,
-				Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "paged"}},
+				SessionID: "session-1",
+				Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "paged"}},
 			}
 		},
 	}
@@ -617,9 +604,6 @@ func TestRuntimeClientFromEngineDoesNotSeedTranscriptAccessor(t *testing.T) {
 	authoritative, err := runtimeClient.RefreshTranscript()
 	if err != nil {
 		t.Fatalf("refresh transcript: %v", err)
-	}
-	if got, want := authoritative.CommittedEntryCount, 2; got != want {
-		t.Fatalf("total entries = %d, want %d", got, want)
 	}
 	if got, want := len(authoritative.Entries), 2; got != want {
 		t.Fatalf("entry count = %d, want %d", got, want)
@@ -795,8 +779,7 @@ func TestRuntimeClientMainViewLeavesTranscriptHydrationToTranscriptEndpoint(t *t
 	reads := &countingSessionViewClient{view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{
 		SessionID: "session-1",
 		Transcript: clientui.TranscriptMetadata{
-			Revision:            3,
-			CommittedEntryCount: 1,
+			Revision: 3,
 		},
 		Chat: clientui.ChatSnapshot{
 			Entries: []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
@@ -821,8 +804,7 @@ func TestRuntimeClientMainViewBootstrapDoesNotSeedStreamingOngoingState(t *testi
 	reads := &countingSessionViewClient{view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{
 		SessionID: "session-1",
 		Transcript: clientui.TranscriptMetadata{
-			Revision:            3,
-			CommittedEntryCount: 1,
+			Revision: 3,
 		},
 		Chat: clientui.ChatSnapshot{
 			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
@@ -843,17 +825,15 @@ func TestRuntimeClientRefreshMainViewDoesNotDowngradeCachedTranscriptTail(t *tes
 		view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{
 			SessionID: "session-1",
 			Transcript: clientui.TranscriptMetadata{
-				Revision:            3,
-				CommittedEntryCount: 2,
+				Revision: 3,
 			},
 			Chat: clientui.ChatSnapshot{
 				Entries: []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 			},
 		}},
 		page: clientui.TranscriptPage{
-			SessionID:           "session-1",
-			Revision:            3,
-			CommittedEntryCount: 2,
+			SessionID: "session-1",
+			Revision:  3,
 			Entries: []clientui.ChatEntry{
 				{Role: "assistant", Text: "seed"},
 				{Role: "reviewer_status", Text: "Supervisor ran and applied 2 suggestions."},
@@ -888,13 +868,11 @@ func TestRuntimeClientRefreshMainViewDoesNotDowngradeCachedTranscriptTail(t *tes
 func TestRuntimeClientRefreshTranscriptUpdatesMainViewChatForWindowedRecentTail(t *testing.T) {
 	reads := &countingSessionViewClient{
 		page: clientui.TranscriptPage{
-			SessionID:           "session-1",
-			Revision:            3,
-			StartEntryCount:     490,
-			CommittedEntryCount: 500,
-			HasMoreAbove:        true,
-			Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "windowed tail"}},
-			Streaming:           "streaming",
+			SessionID:    "session-1",
+			Revision:     3,
+			HasMoreAbove: true,
+			Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "windowed tail"}},
+			Streaming:    "streaming",
 		},
 	}
 	runtimeClient := newRuntimeClientReadTest(reads)
@@ -1006,11 +984,9 @@ func TestRuntimeClientRefreshTranscriptPageRecoveryReturnsAuthoritativePage(t *t
 	}
 	seedReq := clientui.TranscriptPageRequest{Cursor: 4096}
 	authoritativePage := clientui.TranscriptPage{
-		SessionID:           "session-1",
-		Revision:            8,
-		StartEntryCount:     25,
-		CommittedEntryCount: 41,
-		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "authoritative page"}},
+		SessionID: "session-1",
+		Revision:  8,
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "authoritative page"}},
 	}
 
 	var observed []error

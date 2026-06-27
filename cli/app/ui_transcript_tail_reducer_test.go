@@ -112,9 +112,9 @@ func TestReduceDeferredCommittedTailMergeConsumesCoveredPostEventTail(t *testing
 	reduction := reduceDeferredCommittedTailMerge(state, clientui.Event{
 		Kind:                       clientui.EventAssistantMessage,
 		CommittedTranscriptChanged: true,
+		CommittedEntryCount:        6,
 		CommittedEntryStart:        4,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        6,
 		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
 	})
 

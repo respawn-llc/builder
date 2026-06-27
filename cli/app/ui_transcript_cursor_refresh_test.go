@@ -24,6 +24,7 @@ func TestDetailRecentTailRefreshDoesNotTeleportScrolledAwayWindow(t *testing.T) 
 	older.HasMoreAbove = true
 	older.NewerCursor = 9001
 	older.HasMoreBelow = true
+	m.detailTranscript.setKnownBounds(100, 400)
 	m.detailTranscript.replace(older)
 
 	beforeOffset := m.detailTranscript.offset
@@ -51,7 +52,10 @@ func TestDetailRecentTailRefreshUpdatesWindowAtLiveTail(t *testing.T) {
 	atTail.OlderCursor = 4096
 	atTail.HasMoreAbove = true
 	atTail.HasMoreBelow = false
+	m.detailTranscript.setKnownBounds(100, 105)
 	m.detailTranscript.replace(atTail)
+	m.transcriptBaseOffset = 380
+	m.transcriptTotalEntries = 400
 
 	tail := testTranscriptPage(380, 5, 400)
 	tail.HasMoreAbove = true
@@ -71,6 +75,7 @@ func TestDetailContentMatchingPageRefreshesEdgeCursors(t *testing.T) {
 	}
 
 	seed := testTranscriptPage(100, 5, 105)
+	m.detailTranscript.setKnownBounds(100, 105)
 	m.detailTranscript.replace(seed)
 	if _, ok := m.detailTranscript.pageBefore(); ok {
 		t.Fatal("precondition: cursorless tail must not expose a scroll-up page")
@@ -95,24 +100,27 @@ func TestRefreshTranscriptPagePreservesCommittedCountForCursorPages(t *testing.T
 		errs: []error{nil, nil},
 		pages: []serverapi.SessionTranscriptPageResponse{
 			{Transcript: clientui.TranscriptPage{
-				SessionID:           "session-1",
-				Revision:            7,
-				StartEntryCount:     395,
-				CommittedEntryCount: 400,
-				Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "tail"}},
+				SessionID: "session-1",
+				Revision:  7,
+				Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "tail"}},
 			}},
 			{Transcript: clientui.TranscriptPage{
-				SessionID:           "session-1",
-				Revision:            7,
-				StartEntryCount:     0,
-				CommittedEntryCount: 12,
-				NewerCursor:         9001,
-				HasMoreBelow:        true,
-				Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "older"}},
+				SessionID:    "session-1",
+				Revision:     7,
+				NewerCursor:  9001,
+				HasMoreBelow: true,
+				Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "older"}},
 			}},
 		},
 	}
 	concrete := newRuntimeClientReadTest(reads).(*sessionRuntimeClient)
+	concrete.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{
+		SessionID: "session-1",
+		Transcript: clientui.TranscriptMetadata{
+			Revision:            7,
+			CommittedEntryCount: 400,
+		},
+	}})
 
 	if _, err := concrete.refreshTranscriptPageSync(clientui.TranscriptPageRequest{}, time.Millisecond); err != nil {
 		t.Fatalf("recent-tail refresh error: %v", err)
