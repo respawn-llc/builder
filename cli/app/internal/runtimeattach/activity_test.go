@@ -77,13 +77,12 @@ func TestSubscribeActivitiesReturnsBothSubscriptions(t *testing.T) {
 	}
 }
 
-func TestSubscribeActivitiesReleasesLeaseOnSessionSubscribeFailure(t *testing.T) {
+func TestSubscribeActivitiesReleasesOnSessionSubscribeFailure(t *testing.T) {
 	runtime := &fakeRuntimeService{}
 	subscribeErr := errors.New("session subscribe failed")
 	_, err := SubscribeActivities(context.Background(), ActivityRequest{
 		SessionID:       "session-1",
 		Runtime:         runtime,
-		LeaseID:         "lease-1",
 		SessionActivity: &fakeSessionActivityService{err: subscribeErr},
 		PromptActivity:  &fakePromptActivityService{sub: fakePromptActivitySubscription{}},
 	})
@@ -95,14 +94,13 @@ func TestSubscribeActivitiesReleasesLeaseOnSessionSubscribeFailure(t *testing.T)
 	}
 }
 
-func TestSubscribeActivitiesClosesSessionSubscriptionAndReleasesLeaseOnPromptFailure(t *testing.T) {
+func TestSubscribeActivitiesClosesSessionSubscriptionAndReleasesOnPromptFailure(t *testing.T) {
 	sessionSub := &fakeSessionActivitySubscription{}
 	runtime := &fakeRuntimeService{}
 	subscribeErr := errors.New("prompt subscribe failed")
 	_, err := SubscribeActivities(context.Background(), ActivityRequest{
 		SessionID:       "session-1",
 		Runtime:         runtime,
-		LeaseID:         "lease-1",
 		SessionActivity: &fakeSessionActivityService{sub: sessionSub},
 		PromptActivity:  &fakePromptActivityService{err: subscribeErr},
 	})
@@ -114,80 +112,5 @@ func TestSubscribeActivitiesClosesSessionSubscriptionAndReleasesLeaseOnPromptFai
 	}
 	if len(runtime.releaseRequests) != 1 {
 		t.Fatalf("release requests = %d, want 1", len(runtime.releaseRequests))
-	}
-}
-
-func TestSubscribeActivitiesDoesNotReleaseReadOnlyAttachOnFailure(t *testing.T) {
-	runtime := &fakeRuntimeService{}
-	_, err := SubscribeActivities(context.Background(), ActivityRequest{
-		SessionID:       "session-1",
-		Runtime:         runtime,
-		ReadOnly:        true,
-		SessionActivity: &fakeSessionActivityService{err: errors.New("session subscribe failed")},
-		PromptActivity:  &fakePromptActivityService{sub: fakePromptActivitySubscription{}},
-	})
-	if err == nil {
-		t.Fatal("expected subscribe failure")
-	}
-	if len(runtime.releaseRequests) != 0 {
-		t.Fatalf("release requests = %d, want none for read-only attach", len(runtime.releaseRequests))
-	}
-}
-
-func TestSubscribeActivitiesReadOnlyDoesNotRequirePromptActivity(t *testing.T) {
-	sessionSub := &fakeSessionActivitySubscription{}
-	activities, err := SubscribeActivities(context.Background(), ActivityRequest{
-		SessionID:       "session-1",
-		ReadOnly:        true,
-		SessionActivity: &fakeSessionActivityService{sub: sessionSub},
-	})
-	if err != nil {
-		t.Fatalf("SubscribeActivities: %v", err)
-	}
-	if activities.Session != sessionSub {
-		t.Fatal("expected session subscription")
-	}
-	if activities.Prompt != nil {
-		t.Fatal("expected no prompt subscription for read-only attach")
-	}
-}
-
-func TestSubscribeActivitiesCollaborativeSubscribesPromptActivityWithoutLease(t *testing.T) {
-	sessionSub := &fakeSessionActivitySubscription{}
-	promptSub := fakePromptActivitySubscription{}
-	sessionActivity := &fakeSessionActivityService{sub: sessionSub}
-	promptActivity := &fakePromptActivityService{sub: promptSub}
-	activities, err := SubscribeActivities(context.Background(), ActivityRequest{
-		SessionID:       "session-1",
-		Mode:            serverapi.SessionRuntimeAttachModeCollaborative,
-		SessionActivity: sessionActivity,
-		PromptActivity:  promptActivity,
-	})
-	if err != nil {
-		t.Fatalf("SubscribeActivities: %v", err)
-	}
-	if activities.Session != sessionSub || activities.Prompt == nil {
-		t.Fatalf("activities = %+v, want session and prompt subscriptions", activities)
-	}
-	if len(promptActivity.subscribeRequests) != 1 || promptActivity.subscribeRequests[0].SessionID != "session-1" {
-		t.Fatalf("prompt requests = %#v, want collaborative prompt subscription", promptActivity.subscribeRequests)
-	}
-}
-
-func TestSubscribeActivitiesNoControlDoesNotRequirePromptActivity(t *testing.T) {
-	sessionSub := &fakeSessionActivitySubscription{}
-	activities, err := SubscribeActivities(context.Background(), ActivityRequest{
-		SessionID:       "session-1",
-		Mode:            serverapi.SessionRuntimeAttachModeNoControl,
-		SessionActivity: &fakeSessionActivityService{sub: sessionSub},
-	})
-	if err != nil {
-		t.Fatalf("SubscribeActivities: %v", err)
-	}
-	if activities.Session != sessionSub {
-		t.Fatal("expected session subscription")
-	}
-	if activities.Prompt != nil {
-		t.Fatal("expected no prompt subscription for no-control attach")
 	}
 }

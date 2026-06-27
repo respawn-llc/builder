@@ -3,7 +3,6 @@ package worktree
 import (
 	"context"
 	"core/server/metadata"
-	"core/server/primaryrun"
 	"core/server/registry"
 	runtimepkg "core/server/runtime"
 	"core/server/session"
@@ -22,55 +21,22 @@ import (
 
 type serviceTestRuntime struct {
 	mu              sync.Mutex
-	requireCalls    []serviceRuntimeCall
 	rebindCalls     []serviceRuntimeCall
 	reminderCalls   []session.WorktreeReminderState
 	activeSessions  map[string]bool
+	runningSessions map[string]bool
 	syncErrSessions map[string]error
 	rebindErr       error
 	rebindErrRoot   string
 	rebindHook      func(context.Context, string, string, string)
-	requireErr      error
-	controllerSeen  bool
-	activeGuards    int
-	releasedGuards  int
 }
 
 type serviceRuntimeCall struct {
 	sessionID string
-	leaseID   string
 	root      string
 }
 
-func (r *serviceTestRuntime) RequireControllerLease(_ context.Context, sessionID string, leaseID string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.controllerSeen = true
-	r.requireCalls = append(r.requireCalls, serviceRuntimeCall{sessionID: sessionID, leaseID: leaseID})
-	return r.requireErr
-}
-
-func (r *serviceTestRuntime) RebindLocalTools(ctx context.Context, sessionID string, leaseID string, workspaceRoot string) error {
-	if r.rebindHook != nil {
-		r.rebindHook(ctx, sessionID, leaseID, workspaceRoot)
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.rebindCalls = append(r.rebindCalls, serviceRuntimeCall{sessionID: sessionID, leaseID: leaseID, root: workspaceRoot})
-	if r.rebindErr != nil && (strings.TrimSpace(r.rebindErrRoot) == "" || strings.TrimSpace(r.rebindErrRoot) == strings.TrimSpace(workspaceRoot)) {
-		return r.rebindErr
-	}
-	return nil
-}
-
-func (r *serviceTestRuntime) RecordWorktreeTransition(_ context.Context, _ string, _ string, state session.WorktreeReminderState) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.reminderCalls = append(r.reminderCalls, state)
-	return nil
-}
-
-func (r *serviceTestRuntime) SyncExecutionTarget(_ context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+func (r *serviceTestRuntime) SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 	trimmedSessionID := strings.TrimSpace(sessionID)
 	r.mu.Lock()
 	if reminder != nil {
@@ -85,87 +51,29 @@ func (r *serviceTestRuntime) SyncExecutionTarget(_ context.Context, sessionID st
 		return err
 	}
 	r.mu.Unlock()
-	guard, err := r.BeginCollaborativeRuntimeGuard(context.Background(), sessionID, serverapi.SessionRuntimeOperationWorktreeManage)
-	if err != nil {
-		return err
+	root := strings.TrimSpace(target.EffectiveWorkdir)
+	if r.rebindHook != nil {
+		r.rebindHook(ctx, sessionID, "", root)
 	}
-	defer guard.Release()
-	return guard.Rebind(strings.TrimSpace(target.EffectiveWorkdir))
-}
-
-func (r *serviceTestRuntime) PersistWorktreeReminderState(_ context.Context, _ string, reminder *session.WorktreeReminderState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if reminder != nil {
-		r.reminderCalls = append(r.reminderCalls, *reminder)
+	r.rebindCalls = append(r.rebindCalls, serviceRuntimeCall{sessionID: sessionID, root: root})
+	if r.rebindErr != nil && (strings.TrimSpace(r.rebindErrRoot) == "" || strings.TrimSpace(r.rebindErrRoot) == root) {
+		return r.rebindErr
 	}
 	return nil
 }
 
-func (r *serviceTestRuntime) BeginCollaborativeRuntimeGuard(_ context.Context, sessionID string, _ serverapi.SessionRuntimeOperation) (interface {
-	Release()
-	Rebind(workdir string) error
-}, error) {
+func (r *serviceTestRuntime) HasActiveRun(_ context.Context, sessionID string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if r.activeSessions != nil && !r.activeSessions[trimmedSessionID] {
-		return nil, errors.New("collaborative runtime unavailable")
-	}
-	r.requireCalls = append(r.requireCalls, serviceRuntimeCall{sessionID: sessionID})
-	r.activeGuards++
-	return &serviceTestCollaborativeRuntimeAccess{runtime: r, sessionID: sessionID}, nil
-}
-
-func (r *serviceTestRuntime) WithCollaborativeRuntimeEngine(ctx context.Context, sessionID string, op serverapi.SessionRuntimeOperation, fn func(*runtimepkg.Engine) error) error {
-	lease, err := r.BeginCollaborativeRuntimeGuard(ctx, sessionID, op)
-	if err != nil {
-		return err
-	}
-	defer lease.Release()
-	return fn(&runtimepkg.Engine{})
-}
-
-type serviceTestCollaborativeRuntimeAccess struct {
-	runtime   *serviceTestRuntime
-	sessionID string
-	once      sync.Once
-}
-
-func (a *serviceTestCollaborativeRuntimeAccess) Rebind(workspaceRoot string) error {
-	return a.runtime.RebindLocalTools(context.Background(), a.sessionID, "", workspaceRoot)
-}
-
-func (a *serviceTestCollaborativeRuntimeAccess) Release() {
-	a.once.Do(func() {
-		a.runtime.mu.Lock()
-		defer a.runtime.mu.Unlock()
-		if a.runtime.activeGuards > 0 {
-			a.runtime.activeGuards--
-		}
-		a.runtime.releasedGuards++
-	})
+	return r.runningSessions[strings.TrimSpace(sessionID)], nil
 }
 
 func (r *serviceTestRuntime) IsSessionRuntimeActive(sessionID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.activeSessions[strings.TrimSpace(sessionID)]
-}
-
-type serviceTestGate struct {
-	err  error
-	busy map[string]bool
-}
-
-func (g serviceTestGate) AcquirePrimaryRun(sessionID string) (primaryrun.Lease, error) {
-	if g.busy[strings.TrimSpace(sessionID)] {
-		return nil, primaryrun.ErrActivePrimaryRun
-	}
-	if g.err != nil {
-		return nil, g.err
-	}
-	return primaryrun.LeaseFunc(func() {}), nil
 }
 
 type serviceTestProcessSource struct {
@@ -255,12 +163,11 @@ func TestCreateWorktreeMarksProvenanceAndRunsSetupScriptWithProjectID(t *testing
 	env.service.setupScript = scriptRelpath
 
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		ClientRequestID:   "req-create",
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-		BaseRef:           "HEAD",
-		CreateBranch:      true,
-		BranchName:        "feature/create-provenance",
+		ClientRequestID: "req-create",
+		SessionID:       env.session.Meta().SessionID,
+		BaseRef:         "HEAD",
+		CreateBranch:    true,
+		BranchName:      "feature/create-provenance",
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree: %v", err)
@@ -352,11 +259,10 @@ func TestCreateWorktreeAllowsExistingRefWithoutCreatingBranch(t *testing.T) {
 	runGit(t, env.workspaceRoot, "branch", "feature/existing-ref")
 
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		ClientRequestID:   "req-create-existing-ref",
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-		BaseRef:           "feature/existing-ref",
-		CreateBranch:      false,
+		ClientRequestID: "req-create-existing-ref",
+		SessionID:       env.session.Meta().SessionID,
+		BaseRef:         "feature/existing-ref",
+		CreateBranch:    false,
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree existing ref: %v", err)
@@ -432,11 +338,10 @@ func TestDeleteWorktreeKeepsExistingBranchUnlessExplicitlyRequested(t *testing.T
 	env := newServiceTestEnv(t)
 	runGit(t, env.workspaceRoot, "branch", "feature/shared-branch")
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		ClientRequestID:   "req-create-shared-branch",
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-		BaseRef:           "feature/shared-branch",
-		CreateBranch:      false,
+		ClientRequestID: "req-create-shared-branch",
+		SessionID:       env.session.Meta().SessionID,
+		BaseRef:         "feature/shared-branch",
+		CreateBranch:    false,
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree existing branch: %v", err)
@@ -466,11 +371,10 @@ func TestDeleteWorktreeDeletesExistingBranchWhenExplicitlyRequested(t *testing.T
 	env := newServiceTestEnv(t)
 	runGit(t, env.workspaceRoot, "branch", "feature/shared-branch")
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		ClientRequestID:   "req-create-shared-branch-explicit",
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-		BaseRef:           "feature/shared-branch",
-		CreateBranch:      false,
+		ClientRequestID: "req-create-shared-branch-explicit",
+		SessionID:       env.session.Meta().SessionID,
+		BaseRef:         "feature/shared-branch",
+		CreateBranch:    false,
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree existing branch: %v", err)
@@ -572,68 +476,6 @@ func TestSwitchWorktreeClampsCwdAndRecordsPendingReminder(t *testing.T) {
 	}
 }
 
-func TestSwitchWorktreeCollaborativeRuntimeReusesScopedGuardForRebind(t *testing.T) {
-	env := newServiceTestEnv(t)
-	created := mustCreateWorktree(t, env, "feature/collaborative-scoped-rebind")
-	env.runtime.mu.Lock()
-	env.runtime.activeSessions[env.session.Meta().SessionID] = true
-	env.runtime.requireCalls = nil
-	env.runtime.rebindCalls = nil
-	env.runtime.reminderCalls = nil
-	env.runtime.releasedGuards = 0
-	env.runtime.mu.Unlock()
-
-	_, err := env.service.SwitchWorktree(env.ctx, serverapi.WorktreeSwitchRequest{
-		ClientRequestID: "req-switch-collaborative-scoped-rebind",
-		SessionID:       env.session.Meta().SessionID,
-		WorktreeID:      created.WorktreeID,
-	})
-	if err != nil {
-		t.Fatalf("SwitchWorktree collaborative: %v", err)
-	}
-	env.runtime.mu.Lock()
-	requireCalls := append([]serviceRuntimeCall(nil), env.runtime.requireCalls...)
-	rebindCalls := append([]serviceRuntimeCall(nil), env.runtime.rebindCalls...)
-	activeGuards := env.runtime.activeGuards
-	releasedGuards := env.runtime.releasedGuards
-	env.runtime.mu.Unlock()
-	if len(requireCalls) != 1 {
-		t.Fatalf("collaborative guard acquisitions = %d, want 1; calls=%+v", len(requireCalls), requireCalls)
-	}
-	if len(rebindCalls) != 1 || rebindCalls[0].root != created.CanonicalRoot {
-		t.Fatalf("collaborative rebind calls = %+v, want one rebind to %q", rebindCalls, created.CanonicalRoot)
-	}
-	if activeGuards != 0 || releasedGuards != 1 {
-		t.Fatalf("collaborative guard counts active=%d released=%d, want active=0 released=1", activeGuards, releasedGuards)
-	}
-}
-
-func TestListWorktreesRequiresControllerLease(t *testing.T) {
-	env := newServiceTestEnv(t)
-	env.runtime.requireErr = serverapi.ErrInvalidControllerLease
-
-	_, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-	})
-	if !errors.Is(err, serverapi.ErrInvalidControllerLease) {
-		t.Fatalf("ListWorktrees error = %v, want ErrInvalidControllerLease", err)
-	}
-}
-
-func TestListWorktreesRequiresIdlePrimaryRun(t *testing.T) {
-	env := newServiceTestEnv(t)
-	env.service.gate = serviceTestGate{err: primaryrun.ErrActivePrimaryRun}
-
-	_, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-	})
-	if !errors.Is(err, serverapi.ErrWorktreeMutationRequiresIdle) {
-		t.Fatalf("ListWorktrees error = %v, want ErrWorktreeMutationRequiresIdle", err)
-	}
-}
-
 func TestListWorktreesRetargetsMissingCurrentWorktreeBeforePruning(t *testing.T) {
 	env := newServiceTestEnv(t)
 	created := mustCreateWorktree(t, env, "feature/missing-current")
@@ -647,7 +489,7 @@ func TestListWorktreesRetargetsMissingCurrentWorktreeBeforePruning(t *testing.T)
 	env.runtime.reminderCalls = nil
 	runGit(t, env.workspaceRoot, "worktree", "remove", "--force", created.CanonicalRoot)
 
-	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID, ControllerLeaseID: env.leaseID})
+	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}
@@ -791,12 +633,11 @@ func TestCreateWorktreeCleansUpCreatedStateWhenPostCreateSwitchFails(t *testing.
 	env.runtime.rebindErr = errors.New("boom")
 
 	_, err = env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		ClientRequestID:   "req-create-rollback",
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-		BaseRef:           "HEAD",
-		CreateBranch:      true,
-		BranchName:        "feature/create-rollback",
+		ClientRequestID: "req-create-rollback",
+		SessionID:       env.session.Meta().SessionID,
+		BaseRef:         "HEAD",
+		CreateBranch:    true,
+		BranchName:      "feature/create-rollback",
 	})
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("CreateWorktree error = %v, want rebind failure", err)
@@ -831,7 +672,7 @@ func TestDeleteWorktreeBlocksWhenAnotherSessionTargetsIt(t *testing.T) {
 	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
 	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
 	env.runtime.activeSessions[otherSession.Meta().SessionID] = true
-	env.service.gate = serviceTestGate{busy: map[string]bool{otherSession.Meta().SessionID: true}}
+	env.runtime.runningSessions = map[string]bool{otherSession.Meta().SessionID: true}
 
 	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-blocked-session", created.WorktreeID))
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
@@ -937,7 +778,7 @@ func TestListWorktreesReportsDirtyFileCount(t *testing.T) {
 		t.Fatalf("write untracked file: %v", err)
 	}
 
-	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID, ControllerLeaseID: env.leaseID, IncludeDirtyCount: true})
+	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID, IncludeDirtyCount: true})
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}
@@ -952,7 +793,7 @@ func TestListWorktreesDirtyCountProbeFailureIsBestEffort(t *testing.T) {
 	created := mustCreateWorktree(t, env, "feature/dirty-probe-failure")
 	env.service.git = NewGitInspector(&dirtyCountFailingGitRunner{base: execGitCommandRunner{}, dirtyRoot: created.CanonicalRoot})
 
-	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID, ControllerLeaseID: env.leaseID, IncludeDirtyCount: true})
+	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID, IncludeDirtyCount: true})
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}
@@ -1012,7 +853,7 @@ func TestDeleteWorktreeBlocksOnlyActiveSessionsTargetingIt(t *testing.T) {
 	updateServiceTestSessionTarget(t, env, dormantSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
 	updateServiceTestSessionTarget(t, env, activeSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
 	env.runtime.activeSessions[activeSession.Meta().SessionID] = true
-	env.service.gate = serviceTestGate{busy: map[string]bool{activeSession.Meta().SessionID: true}}
+	env.runtime.runningSessions = map[string]bool{activeSession.Meta().SessionID: true}
 
 	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-mixed-session-blockers", created.WorktreeID))
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
@@ -1036,7 +877,7 @@ func TestDeleteWorktreeAllowsSessionAfterRuntimeRegistryCleanup(t *testing.T) {
 	engine := &runtimepkg.Engine{}
 	runtimes.Register(otherSession.Meta().SessionID, engine)
 	env.service.active = runtimes
-	env.service.gate = serviceTestGate{busy: map[string]bool{otherSession.Meta().SessionID: true}}
+	env.runtime.runningSessions = map[string]bool{otherSession.Meta().SessionID: true}
 
 	_, err := env.service.DeleteWorktree(env.ctx, worktreeDeleteRequest(env, "req-delete-before-runtime-cleanup", created.WorktreeID))
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {

@@ -2,45 +2,35 @@ package transport
 
 import "strings"
 
-func (s *connectionState) recordOwnedRuntimeLease(sessionID string, leaseID string) {
+func (s *connectionState) recordOwnedRuntime(sessionID string) {
 	if s == nil {
 		return
 	}
 	trimmedSessionID := strings.TrimSpace(sessionID)
-	trimmedLeaseID := strings.TrimSpace(leaseID)
-	if trimmedSessionID == "" || trimmedLeaseID == "" {
+	if trimmedSessionID == "" {
 		return
 	}
-	if s.ownedRuntimeLeases == nil {
-		s.ownedRuntimeLeases = make(map[string]connectionOwnedRuntimeLease)
+	if s.ownedRuntimes == nil {
+		s.ownedRuntimes = make(map[string]struct{})
 	}
-	s.ownedRuntimeLeases[trimmedSessionID] = connectionOwnedRuntimeLease{SessionID: trimmedSessionID, LeaseID: trimmedLeaseID, OwnerID: strings.TrimSpace(s.runtimeOwnerID)}
+	s.ownedRuntimes[trimmedSessionID] = struct{}{}
 }
 
-func (s *connectionState) removeOwnedRuntimeLease(sessionID string, leaseID string) {
-	if s == nil || len(s.ownedRuntimeLeases) == 0 {
+func (s *connectionState) removeOwnedRuntime(sessionID string) {
+	if s == nil || len(s.ownedRuntimes) == 0 {
 		return
 	}
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	trimmedLeaseID := strings.TrimSpace(leaseID)
-	owned := s.ownedRuntimeLeases[trimmedSessionID]
-	if strings.TrimSpace(owned.LeaseID) != trimmedLeaseID {
-		return
-	}
-	delete(s.ownedRuntimeLeases, trimmedSessionID)
+	delete(s.ownedRuntimes, strings.TrimSpace(sessionID))
 }
 
-func (s *connectionState) takeOwnedRuntimeLeases() []connectionOwnedRuntimeLease {
-	if s == nil || len(s.ownedRuntimeLeases) == 0 {
+func (s *connectionState) takeOwnedRuntimes() []string {
+	if s == nil || len(s.ownedRuntimes) == 0 {
 		return nil
 	}
-	owned := make([]connectionOwnedRuntimeLease, 0, len(s.ownedRuntimeLeases))
-	for sessionID, lease := range s.ownedRuntimeLeases {
-		if strings.TrimSpace(lease.SessionID) == "" {
-			lease.SessionID = sessionID
-		}
-		owned = append(owned, lease)
+	owned := make([]string, 0, len(s.ownedRuntimes))
+	for sessionID := range s.ownedRuntimes {
+		owned = append(owned, sessionID)
 	}
-	s.ownedRuntimeLeases = nil
+	s.ownedRuntimes = nil
 	return owned
 }

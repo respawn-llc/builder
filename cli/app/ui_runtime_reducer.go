@@ -44,10 +44,10 @@ func (r uiRuntimeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		m.observeRuntimeRequestResult(msg.err)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, waitRuntimeConnectionStateChange(m.runtimeConnectionEvents))
-	case runtimeLeaseRecoveryWarningMsg:
+	case runtimeReconnectWarningMsg:
 		cmd := m.sendTransientStatusWithNoticeID(msg.text, uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, "")
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, sequenceCmds(cmd, waitRuntimeLeaseRecoveryWarning(m.runtimeLeaseRecoveryWarning)))
+		return handledUIFeatureUpdate(m, sequenceCmds(cmd, waitRuntimeReconnectWarning(m.runtimeReconnectWarning)))
 	case runtimeMainViewRefreshedMsg:
 		cmd := m.handleRuntimeMainViewRefreshed(msg)
 		m.layout().syncViewport()

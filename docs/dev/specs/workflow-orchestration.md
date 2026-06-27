@@ -91,7 +91,7 @@
 - `RunPromptService.RunPrompt` final text is not workflow completion authority.
 - Existing user goal state is not reused as workflow autonomy state.
 - Workflow task sessions reject `/goal`; the workflow node/run is the task objective driver.
-- If terminal workflow completion commits before accepted limited-control steering is drained, the queued steering resolves with a visible failure and is not applied to the completed run.
+- If terminal workflow completion commits before accepted client steering is drained, the queued steering resolves with a visible failure and is not applied to the completed run.
 - Task comment bodies are not automatically injected into agent context. When a task has visible comments, workflow-mode instructions include the visible comment count and a `kent task comment list <task>` pull command. Kent re-queries the visible comment count each time the workflow instructions are appended without mutating previously persisted model-visible prompt items.
 
 ## Questions And Approvals
@@ -172,7 +172,7 @@
 - Task worktree branch name is the task short ID.
 - Worktree creation reuses existing worktree branch/root collision handling.
 - Worktree deletion/retargeting treats non-terminal tasks referencing a managed worktree as blockers.
-- Workflow worktree creation uses lower-level primitives and does not require an interactive session controller lease.
+- Workflow worktree creation uses lower-level primitives directly.
 
 ## Project Keys And Task IDs
 

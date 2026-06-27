@@ -236,15 +236,11 @@ Terminal-owned history of normal-buffer output. Kent does not replay, clear, or 
 
 ### Active Session Runtime
 
-The live runtime a session registers while it is running. It exists independently of who is driving it: a run owner may hold it, or it may be registered but idle between activations.
+The single shared live runtime (engine) a session registers while active. There is exactly one engine per session; every interactive client and any headless or workflow run resolves and drives that same shared engine through its queue/steer/exclusive-step boundary. It exists independently of any particular client and may be registered but idle between activations.
 
-### Run Owner
+### Equal Full-Control Attach
 
-The headless or workflow run that holds the session's primary-run lease for the whole run and drives the runtime loop. While a run owns the session, no other writer drives the step loop.
-
-### Limited-Control Attach
-
-An interactive client attached to a session whose active runtime is owned by a run. It gets a live view plus steering (queued user messages) and the allowed controls (goal, settings, compaction, worktree, process view), but not controller ownership. A limited-control attach to a running workflow task may steer and chat as usual; the only workflow-specific limit is that the model cannot submit a structured-output final answer that is invalid for the node. When no active runtime is reachable for an attach, the failure surfaces as the typed runtime-unavailable error, not internal wording.
+Every client attached to a session is an equal, full-control surface over the shared runtime. There is no ownership, no leases, no controller/limited-control distinction, no read-only attach, and no per-operation gating: any client may chat, steer, interrupt, run shell commands, toggle settings, manage the goal, compact, and manage worktrees. Concurrent submissions to a busy runtime are steered/queued into the in-flight step rather than rejected. The server owns runtime orchestration only (the single shared engine, safe-point application, and persistence), not client authorization. While a workflow or headless run is in flight, interactive chat and steering remain available; the only behavioral limit is that the model cannot submit a structured-output final answer that is invalid for the active node. When no active runtime is reachable for an attach, the failure surfaces as the typed runtime-unavailable error.
 
 ### Goal
 

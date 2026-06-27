@@ -92,7 +92,7 @@ func newUIRuntimeClientFromEngine(engine *runtime.Engine) clientui.RuntimeClient
 	}
 	resolver := sessionview.NewStaticRuntimeResolver(engine)
 	reads := client.NewLoopbackSessionViewClient(sessionview.NewService(nil, resolver, nil))
-	controls := client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(resolver, nil))
+	controls := client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(resolver))
 	runtimeClient := newUIRuntimeClientWithReads(engine.SessionID(), reads, controls).(*sessionRuntimeClient)
 	runtimeClient.storeMainView(runtimeview.MainViewFromRuntime(engine))
 	return runtimeClient

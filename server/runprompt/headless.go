@@ -10,7 +10,6 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/metadata"
-	"core/server/primaryrun"
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimeview"
@@ -41,7 +40,6 @@ type HeadlessBootstrap struct {
 	FastModeState   *runtime.FastModeState
 	Background      *shelltool.Manager
 	RuntimeRegistry interface {
-		primaryrun.Gate
 		runtimewire.RuntimeRegistry
 		PublishRuntimeEvent(sessionID string, evt runtime.Event)
 	}
@@ -86,24 +84,11 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 		return nil, err
 	}
 	plan := result.Plan
-	var primaryLease primaryrun.Lease
-	if l.boot.RuntimeRegistry != nil {
-		primaryLease, err = l.boot.RuntimeRegistry.AcquirePrimaryRun(plan.Store.Meta().SessionID)
-		if err != nil {
-			return nil, err
-		}
-	}
 	if plan.Store.Meta().Goal != nil {
-		if primaryLease != nil {
-			primaryLease.Release()
-		}
 		return nil, fmt.Errorf("%w", ErrHeadlessGoalSession)
 	}
-	runtimePlan, err := l.prepareRuntime(plan, progress, primaryLease)
+	runtimePlan, err := l.prepareRuntime(plan, progress)
 	if err != nil {
-		if primaryLease != nil {
-			primaryLease.Release()
-		}
 		return nil, err
 	}
 	return &headlessPromptRuntime{plan: runtimePlan, warnings: result.Warnings, history: l.boot.PromptHistory}, nil
@@ -123,7 +108,7 @@ func (p *headlessRuntimePlan) Close() {
 	p.close()
 }
 
-func (l *headlessPromptLauncher) prepareRuntime(plan launch.SessionPlan, progress serverapi.RunPromptProgressSink, primaryLease primaryrun.Lease) (*headlessRuntimePlan, error) {
+func (l *headlessPromptLauncher) prepareRuntime(plan launch.SessionPlan, progress serverapi.RunPromptProgressSink) (*headlessRuntimePlan, error) {
 	logger, err := NewRunLogger(plan.Store.Dir(), func(diag RunLoggerDiagnostic) {
 		if progress != nil {
 			progress.PublishRunPromptProgress(serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindWarning, Message: "Run logging degraded"})
@@ -181,9 +166,6 @@ func (l *headlessPromptLauncher) prepareRuntime(plan launch.SessionPlan, progres
 		engine:      wiring.Engine,
 		eventBridge: wiring.EventBridge,
 		close: func() {
-			if primaryLease != nil {
-				defer primaryLease.Release()
-			}
 			_ = registration.CloseWithDrain(context.Background(), func(ctx context.Context) error {
 				return wiring.Engine.DrainQueuedUserMessagesBeforeClose(ctx)
 			})

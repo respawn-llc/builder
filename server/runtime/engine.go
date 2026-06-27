@@ -169,8 +169,6 @@ type Engine struct {
 	queuedUserWorkMu           sync.Mutex
 	queuedUserWorkScheduled    bool
 	queuedUserWorkAutoDrainIDs map[string]struct{}
-	activeRunGoalMutationsMu   sync.Mutex
-	activeRunGoalMutations     map[string][]activeRunGoalMutation
 	// userInjectionScopeMu guards activeUserInjectionScope, the queued
 	// user-injection IDs the in-flight top-level step should flush. The engine
 	// owns this scope so the step executor derives it directly and reviewer

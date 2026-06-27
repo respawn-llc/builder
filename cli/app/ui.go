@@ -50,12 +50,12 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-c
 		})
 	}
 	if configurable, ok := m.engine.(interface {
-		SetLeaseRecoveryWarningObserver(func(string, clientui.EntryVisibility))
+		SetRuntimeReconnectWarningObserver(func(string, clientui.EntryVisibility))
 	}); ok {
-		runtimeLeaseRecoveryWarning := make(chan runtimeLeaseRecoveryWarningMsg, 1)
-		m.runtimeLeaseRecoveryWarning = runtimeLeaseRecoveryWarning
-		configurable.SetLeaseRecoveryWarningObserver(func(text string, visibility clientui.EntryVisibility) {
-			enqueueRuntimeLeaseRecoveryWarning(runtimeLeaseRecoveryWarning, text, visibility)
+		runtimeReconnectWarning := make(chan runtimeReconnectWarningMsg, 1)
+		m.runtimeReconnectWarning = runtimeReconnectWarning
+		configurable.SetRuntimeReconnectWarningObserver(func(text string, visibility clientui.EntryVisibility) {
+			enqueueRuntimeReconnectWarning(runtimeReconnectWarning, text, visibility)
 		})
 	}
 	mainView := m.runtimeMainView()
@@ -213,8 +213,8 @@ func (m *uiModel) Init() tea.Cmd {
 	if m.runtimeConnectionEvents != nil {
 		cmds = append(cmds, waitRuntimeConnectionStateChange(m.runtimeConnectionEvents))
 	}
-	if m.runtimeLeaseRecoveryWarning != nil {
-		cmds = append(cmds, waitRuntimeLeaseRecoveryWarning(m.runtimeLeaseRecoveryWarning))
+	if m.runtimeReconnectWarning != nil {
+		cmds = append(cmds, waitRuntimeReconnectWarning(m.runtimeReconnectWarning))
 	}
 	cmds = append([]tea.Cmd{tea.ClearScreen}, cmds...)
 	if startupSubmitCmd := m.startupSubmitCmd(); startupSubmitCmd != nil {

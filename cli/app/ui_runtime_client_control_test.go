@@ -10,7 +10,7 @@ import (
 )
 
 type runtimeControlStatusPatchClient struct {
-	leaseRetryRuntimeControlClient
+	reconnectRetryRuntimeControlClient
 	fastModeResp       serverapi.RuntimeSetFastModeEnabledResponse
 	reviewerResp       serverapi.RuntimeSetReviewerEnabledResponse
 	autoCompactionResp serverapi.RuntimeSetAutoCompactionEnabledResponse
@@ -102,21 +102,15 @@ func TestRuntimeClientQueueUserMessageErrorNotifiesConnectionObserver(t *testing
 	}
 }
 
-func TestRuntimeClientSetGoalRecoversInvalidLeaseAndCachesGoal(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{
+func TestRuntimeClientSetGoalCachesGoal(t *testing.T) {
+	controls := &reconnectRetryRuntimeControlClient{
 		setGoalResp: serverapi.RuntimeGoalShowResponse{Goal: &serverapi.RuntimeGoal{ID: "goal-1", Objective: "ship", Status: "active"}},
 	}
 	runtimeClient := newUIRuntimeClientWithReads("session-1", &countingSessionViewClient{}, controls).(*sessionRuntimeClient)
-	leaseManager := newControllerLeaseManager("lease-old")
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) { return "lease-new", nil })
-	runtimeClient.SetControllerLeaseManager(leaseManager)
 
 	goal, err := runtimeClient.SetGoal("ship")
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
-	}
-	if got := controls.goalLeaseIDs(); len(got) != 2 || got[0] != "lease-old" || got[1] != "lease-new" {
-		t.Fatalf("goal lease ids = %+v, want [lease-old lease-new]", got)
 	}
 	view, ok := runtimeClient.CachedMainView()
 	if !ok {

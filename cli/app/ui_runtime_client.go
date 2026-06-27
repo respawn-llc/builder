@@ -18,146 +18,24 @@ import (
 
 const uiRuntimeControlTimeout = 3 * time.Second
 const uiRuntimeHydrationReadTimeout = 10 * time.Second
-const collaborativeFallbackRefreshCooldown = 750 * time.Millisecond
-const runtimeLeaseRecoveryWarningText = "Lost connection to the session runtime; reconnected."
+const runtimeReconnectWarningText = "Lost connection to the session runtime; reconnected."
 
 var uiRuntimeReadTimeout = 300 * time.Millisecond
-var errReadOnlyRuntime = errors.New("session is unavailable for runtime control attachment")
-var errCollaborativeOperationBlocked = errors.New("operation is unavailable for collaborative runtime attach")
 
 type sessionRuntimeClient struct {
-	reads                   client.SessionViewClient
-	controls                client.RuntimeControlClient
-	sessionID               string
-	controllerLease         *controllerLeaseManager
-	diagLogf                func(string)
-	transcriptDiagnostics   bool
-	connectionStateObserver func(error)
-	leaseRecoveryWarning    func(string, clientui.EntryVisibility)
-	readOnly                bool
-	accessMode              serverapi.SessionRuntimeAttachMode
-	allowedOperations       map[serverapi.SessionRuntimeOperation]bool
+	reads                    client.SessionViewClient
+	controls                 client.RuntimeControlClient
+	sessionID                string
+	reactivator              *runtimeReactivator
+	diagLogf                 func(string)
+	transcriptDiagnostics    bool
+	connectionStateObserver  func(error)
+	reconnectWarningObserver func(string, clientui.EntryVisibility)
 
 	mu                   sync.RWMutex
 	mainView             clientui.RuntimeMainView
 	hasMainView          bool
-	mainViewFallback     bool
-	mainViewRetryAfter   time.Time
 	suffixRPCUnsupported bool
-}
-
-func (c *sessionRuntimeClient) SetReadOnly(readOnly bool) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	c.readOnly = readOnly
-	c.mu.Unlock()
-}
-
-func (c *sessionRuntimeClient) SetAccessMode(mode serverapi.SessionRuntimeAttachMode, operations []serverapi.SessionRuntimeOperation) {
-	if c == nil {
-		return
-	}
-	allowed := make(map[serverapi.SessionRuntimeOperation]bool, len(operations))
-	for _, op := range operations {
-		allowed[op] = true
-	}
-	if mode == serverapi.SessionRuntimeAttachModeCollaborative && len(allowed) == 0 {
-		for _, op := range defaultCollaborativeRuntimeOperations() {
-			allowed[op] = true
-		}
-	}
-	c.mu.Lock()
-	c.accessMode = mode
-	c.readOnly = mode == serverapi.SessionRuntimeAttachModeNoControl
-	c.allowedOperations = allowed
-	if mode == serverapi.SessionRuntimeAttachModeCollaborative {
-		c.controllerLease = nil
-		if c.applyCollaborativeMainViewFallbackLocked(&c.mainView) {
-			c.mainViewFallback = true
-			c.mainViewRetryAfter = time.Time{}
-		}
-		c.hasMainView = true
-	} else {
-		c.mainViewFallback = false
-		c.mainViewRetryAfter = time.Time{}
-	}
-	c.mu.Unlock()
-}
-
-func (c *sessionRuntimeClient) applyCollaborativeMainViewFallbackLocked(view *clientui.RuntimeMainView) bool {
-	if c == nil || view == nil || c.accessMode != serverapi.SessionRuntimeAttachModeCollaborative {
-		return false
-	}
-	if view.Session.SessionID == "" {
-		view.Session.SessionID = c.sessionID
-	}
-	if view.ExternalRuntime == nil || view.ExternalRuntime.State == "" {
-		status := clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateOwnerRunning, QueueAccepting: true}
-		view.ExternalRuntime = &status
-		return true
-	}
-	return false
-}
-
-func defaultCollaborativeRuntimeOperations() []serverapi.SessionRuntimeOperation {
-	return []serverapi.SessionRuntimeOperation{
-		serverapi.SessionRuntimeOperationSubmitUserTurn,
-		serverapi.SessionRuntimeOperationQueueUserMessage,
-		serverapi.SessionRuntimeOperationPromptAnswer,
-	}
-}
-
-func (c *sessionRuntimeClient) ensureOperation(op serverapi.SessionRuntimeOperation) error {
-	if err := c.ensureWritable(); err != nil {
-		return err
-	}
-	c.mu.RLock()
-	mode := c.accessMode
-	allowed := c.allowedOperations[op]
-	c.mu.RUnlock()
-	if mode == serverapi.SessionRuntimeAttachModeCollaborative && !allowed {
-		return errCollaborativeOperationBlocked
-	}
-	return nil
-}
-
-func (c *sessionRuntimeClient) ensureWritable() error {
-	if c == nil {
-		return errReadOnlyRuntime
-	}
-	if c.isReadOnly() {
-		return errReadOnlyRuntime
-	}
-	return nil
-}
-
-func (c *sessionRuntimeClient) isReadOnly() bool {
-	if c == nil {
-		return true
-	}
-	c.mu.RLock()
-	readOnly := c.readOnly
-	c.mu.RUnlock()
-	return readOnly
-}
-
-func (c *sessionRuntimeClient) isCollaborative() bool {
-	if c == nil {
-		return false
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.accessMode == serverapi.SessionRuntimeAttachModeCollaborative
-}
-
-func (c *sessionRuntimeClient) IsCollaborativeRuntime() bool {
-	return c.isCollaborative()
-}
-
-func (c *sessionRuntimeClient) CanAppendCommittedEntries() bool {
-	return c != nil && !c.isReadOnly() && !c.isCollaborative()
 }
 
 func newUIRuntimeClientWithReads(sessionID string, reads client.SessionViewClient, controls client.RuntimeControlClient) clientui.RuntimeClient {
@@ -165,79 +43,60 @@ func newUIRuntimeClientWithReads(sessionID string, reads client.SessionViewClien
 		return nil
 	}
 	return &sessionRuntimeClient{
-		sessionID:       sessionID,
-		accessMode:      serverapi.SessionRuntimeAttachModeController,
-		controllerLease: newControllerLeaseManager("local-ui-controller"),
-		reads:           reads,
-		controls:        controls,
-		mainView:        clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}},
+		sessionID:   sessionID,
+		reactivator: newRuntimeReactivator(),
+		reads:       reads,
+		controls:    controls,
+		mainView:    clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}},
 	}
 }
 
-func (c *sessionRuntimeClient) SetControllerLeaseManager(manager *controllerLeaseManager) {
-	if c == nil || manager == nil {
+func (c *sessionRuntimeClient) SetRuntimeReactivator(reactivator *runtimeReactivator) {
+	if c == nil || reactivator == nil {
 		return
 	}
 	c.mu.Lock()
-	c.controllerLease = manager
+	c.reactivator = reactivator
 	c.mu.Unlock()
 }
 
-func (c *sessionRuntimeClient) SetControllerLeaseID(leaseID string) {
-	if c == nil {
-		return
-	}
-	if manager := c.controllerLeaseManager(); manager != nil {
-		manager.Set(leaseID)
-	}
-}
-
-func (c *sessionRuntimeClient) controllerLeaseIDValue() string {
-	if manager := c.controllerLeaseManager(); manager != nil {
-		return manager.Value()
-	}
-	return ""
-}
-
-func (c *sessionRuntimeClient) controllerLeaseManager() *controllerLeaseManager {
+func (c *sessionRuntimeClient) runtimeReactivator() *runtimeReactivator {
 	if c == nil {
 		return nil
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.controllerLease
+	return c.reactivator
 }
 
-func (c *sessionRuntimeClient) recoverControllerLeaseWithWarning(ctx context.Context, trigger error, appendWarning bool) error {
-	manager := c.controllerLeaseManager()
-	if manager == nil {
-		return errControllerLeaseRecoveryUnavailable
+func (c *sessionRuntimeClient) recoverRuntimeConnectionWithWarning(ctx context.Context, trigger error, appendWarning bool) error {
+	reactivator := c.runtimeReactivator()
+	if reactivator == nil {
+		return errRuntimeReactivationUnavailable
 	}
-	leaseID, err := manager.Recover(ctx)
-	if err != nil {
+	if err := reactivator.Reactivate(ctx); err != nil {
 		return err
 	}
 	if appendWarning && isRecoverableRuntimeControlError(trigger) {
-		c.appendLeaseRecoveryWarning(leaseID)
+		c.appendRuntimeReconnectWarning()
 	}
 	return nil
 }
 
-func (c *sessionRuntimeClient) appendLeaseRecoveryWarning(controllerLeaseID string) {
+func (c *sessionRuntimeClient) appendRuntimeReconnectWarning() {
 	if c == nil || c.controls == nil {
 		return
 	}
 	warningCtx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
 	if err := c.controls.AppendCommittedEntry(warningCtx, serverapi.RuntimeAppendCommittedEntryRequest{
-		ClientRequestID:   uuid.NewString(),
-		SessionID:         c.sessionID,
-		ControllerLeaseID: controllerLeaseID,
-		Role:              "warning",
-		Text:              runtimeLeaseRecoveryWarningText,
-		Visibility:        string(clientui.EntryVisibilityAll),
+		ClientRequestID: uuid.NewString(),
+		SessionID:       c.sessionID,
+		Role:            "warning",
+		Text:            runtimeReconnectWarningText,
+		Visibility:      string(clientui.EntryVisibilityAll),
 	}); err != nil {
-		c.notifyLeaseRecoveryWarning(runtimeLeaseRecoveryWarningText, clientui.EntryVisibilityAll)
+		c.notifyRuntimeReconnectWarning(runtimeReconnectWarningText, clientui.EntryVisibilityAll)
 	}
 }
 
@@ -245,39 +104,23 @@ func isRecoverableRuntimeControlError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return errors.Is(err, serverapi.ErrInvalidControllerLease) || errors.Is(err, serverapi.ErrRuntimeUnavailable)
+	return errors.Is(err, serverapi.ErrRuntimeUnavailable)
 }
 
-func (c *sessionRuntimeClient) retryControlCallNoResult(ctx context.Context, call func(controllerLeaseID string) error) error {
-	_, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (struct{}, error) {
-		return struct{}{}, call(controllerLeaseID)
+func (c *sessionRuntimeClient) retryControlCallNoResult(ctx context.Context, call func() error) error {
+	_, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (struct{}, error) {
+		return struct{}{}, call()
 	})
 	return err
 }
 
-func retryRuntimeControlCall[T any](ctx context.Context, currentLeaseID func() string, recoverLease func(context.Context, error, bool) error, appendRecoveryWarning bool, call func(controllerLeaseID string) (T, error)) (T, error) {
-	leaseID := strings.TrimSpace(currentLeaseID())
-	value, err := call(leaseID)
-	if !isRecoverableRuntimeControlError(err) {
-		return value, err
-	}
-	if leaseID == "" {
-		return value, err
-	}
-	var zero T
-	if recoverErr := recoverLease(ctx, err, appendRecoveryWarning); recoverErr != nil {
-		return zero, recoverErr
-	}
-	return call(currentLeaseID())
-}
-
-func retryRuntimeUnavailableCall[T any](ctx context.Context, recoverLease func(context.Context, error, bool) error, appendRecoveryWarning bool, call func() (T, error)) (T, error) {
+func retryRuntimeUnavailableCall[T any](ctx context.Context, recoverRuntimeConnection func(context.Context, error, bool) error, appendRecoveryWarning bool, call func() (T, error)) (T, error) {
 	value, err := call()
 	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return value, err
 	}
 	var zero T
-	if recoverErr := recoverLease(ctx, err, appendRecoveryWarning); recoverErr != nil {
+	if recoverErr := recoverRuntimeConnection(ctx, err, appendRecoveryWarning); recoverErr != nil {
 		return zero, recoverErr
 	}
 	return call()
@@ -313,18 +156,18 @@ func (c *sessionRuntimeClient) SetConnectionStateObserver(observer func(error)) 
 	c.connectionStateObserver = observer
 }
 
-func (c *sessionRuntimeClient) SetLeaseRecoveryWarningObserver(observer func(string, clientui.EntryVisibility)) {
+func (c *sessionRuntimeClient) SetRuntimeReconnectWarningObserver(observer func(string, clientui.EntryVisibility)) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.leaseRecoveryWarning = observer
+	c.reconnectWarningObserver = observer
 }
 
 func (c *sessionRuntimeClient) MainView() clientui.RuntimeMainView {
-	view, hasView, fallback := c.cachedMainViewState()
-	if !hasView || (fallback && c.claimMainViewFallbackRefresh()) {
+	view, hasView := c.cachedMainView()
+	if !hasView {
 		refreshed, err := c.refreshMainViewSync(uiRuntimeReadTimeout)
 		if err == nil {
 			return refreshed
@@ -374,35 +217,13 @@ func (c *sessionRuntimeClient) readContext(timeout time.Duration) (context.Conte
 }
 
 func (c *sessionRuntimeClient) cachedMainView() (clientui.RuntimeMainView, bool) {
-	view, hasView, _ := c.cachedMainViewState()
-	return view, hasView
-}
-
-func (c *sessionRuntimeClient) cachedMainViewState() (clientui.RuntimeMainView, bool, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	view := c.mainView
 	if !c.hasMainView {
-		return view, false, false
+		return view, false
 	}
-	return view, true, c.mainViewFallback
-}
-
-func (c *sessionRuntimeClient) claimMainViewFallbackRefresh() bool {
-	if c == nil {
-		return false
-	}
-	now := time.Now()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.mainViewFallback {
-		return false
-	}
-	if !c.mainViewRetryAfter.IsZero() && now.Before(c.mainViewRetryAfter) {
-		return false
-	}
-	c.mainViewRetryAfter = now.Add(collaborativeFallbackRefreshCooldown)
-	return true
+	return view, true
 }
 
 func (c *sessionRuntimeClient) CachedMainView() (clientui.RuntimeMainView, bool) {
@@ -419,8 +240,6 @@ func (c *sessionRuntimeClient) storeMainView(view clientui.RuntimeMainView) clie
 	c.mu.Lock()
 	c.mainView = view
 	c.hasMainView = true
-	c.mainViewFallback = false
-	c.mainViewRetryAfter = time.Time{}
 	c.mu.Unlock()
 	return view
 }
@@ -470,7 +289,7 @@ func runtimeGoalFromStatusUpdate(existing *clientui.RuntimeGoal, update clientui
 func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration) (clientui.RuntimeMainView, error) {
 	ctx, cancel := c.readContext(timeout)
 	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverControllerLeaseWithWarning, false, func() (serverapi.SessionMainViewResponse, error) {
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, false, func() (serverapi.SessionMainViewResponse, error) {
 		return c.reads.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: c.sessionID})
 	})
 	c.notifyConnectionState(err)
@@ -479,10 +298,6 @@ func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration) (clien
 		view := c.mainView
 		if view.Session.SessionID == "" {
 			view.Session.SessionID = c.sessionID
-		}
-		if c.applyCollaborativeMainViewFallbackLocked(&view) {
-			c.mainViewFallback = true
-			c.mainViewRetryAfter = time.Now().Add(collaborativeFallbackRefreshCooldown)
 		}
 		c.mainView = view
 		c.hasMainView = true
@@ -495,7 +310,7 @@ func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration) (clien
 func (c *sessionRuntimeClient) refreshTranscriptPageSync(req clientui.TranscriptPageRequest, timeout time.Duration) (clientui.TranscriptPage, error) {
 	ctx, cancel := c.readContext(timeout)
 	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverControllerLeaseWithWarning, false, func() (serverapi.SessionTranscriptPageResponse, error) {
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, false, func() (serverapi.SessionTranscriptPageResponse, error) {
 		return c.reads.GetSessionTranscriptPage(ctx, serverapi.SessionTranscriptPageRequest{
 			SessionID:   c.sessionID,
 			Cursor:      req.Cursor,
@@ -561,7 +376,7 @@ func (c *sessionRuntimeClient) refreshCommittedTranscriptSuffixSync(_ clientui.C
 	}
 	ctx, cancel := c.readContext(timeout)
 	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverControllerLeaseWithWarning, false, func() (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, false, func() (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
 		return suffixClient.GetSessionCommittedTranscriptSuffix(ctx, serverapi.SessionCommittedTranscriptSuffixRequest{
 			SessionID: c.sessionID,
 		})
@@ -623,12 +438,12 @@ func (c *sessionRuntimeClient) notifyConnectionState(err error) {
 	observer(err)
 }
 
-func (c *sessionRuntimeClient) notifyLeaseRecoveryWarning(text string, visibility clientui.EntryVisibility) {
+func (c *sessionRuntimeClient) notifyRuntimeReconnectWarning(text string, visibility clientui.EntryVisibility) {
 	if c == nil || strings.TrimSpace(text) == "" {
 		return
 	}
 	c.mu.RLock()
-	observer := c.leaseRecoveryWarning
+	observer := c.reconnectWarningObserver
 	c.mu.RUnlock()
 	if observer == nil {
 		return

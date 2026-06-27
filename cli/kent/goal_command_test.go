@@ -5,20 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"core/prompts"
 	"core/server/metadata"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -98,9 +94,6 @@ func TestGoalShowUsesSessionIDEnv(t *testing.T) {
 
 func TestGoalAgentEnvAllowsSetWithAgentActor(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "session-1")
-	t.Setenv(sessionenv.ShellTokenEnv, "shell-token-1")
-	t.Setenv(sessionenv.ShellRunIDEnv, "run-1")
-	t.Setenv(sessionenv.ShellStepIDEnv, "step-1")
 	remote := &recordingGoalRemote{goal: &serverapi.RuntimeGoal{ID: "goal-1", Objective: "new goal", Status: "active"}}
 	restore := replaceGoalCommandRemoteOpener(t, remote)
 	defer restore()
@@ -115,15 +108,6 @@ func TestGoalAgentEnvAllowsSetWithAgentActor(t *testing.T) {
 	}
 	if remote.setReq[0].SessionID != "session-1" || remote.setReq[0].Actor != "agent" || remote.setReq[0].Objective != "new goal" {
 		t.Fatalf("set request = %+v", remote.setReq[0])
-	}
-	if remote.setReq[0].ShellToken != "shell-token-1" {
-		t.Fatalf("set shell token = %q, want shell-token-1", remote.setReq[0].ShellToken)
-	}
-	if remote.setReq[0].ShellRunID != "run-1" || remote.setReq[0].ShellStepID != "step-1" {
-		t.Fatalf("set shell run context = %q/%q, want run-1/step-1", remote.setReq[0].ShellRunID, remote.setReq[0].ShellStepID)
-	}
-	if !strings.Contains(stdout.String(), "Goal: new goal") {
-		t.Fatalf("stdout = %q", stdout.String())
 	}
 }
 
@@ -202,24 +186,12 @@ func TestGoalAgentCompleteRequiresConfirmTripwire(t *testing.T) {
 	if code := goalSubcommand([]string{"complete"}, new(strings.Builder), stderr); code == 0 {
 		t.Fatalf("goal complete without confirm exit = 0")
 	}
-	if !strings.Contains(stderr.String(), "<goal>\nship goal mode\n</goal>") {
-		t.Fatalf("stderr did not include active goal text: %q", stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "--confirm") {
-		t.Fatalf("stderr did not include confirm instruction: %q", stderr.String())
-	}
-	if strings.Contains(stderr.String(), "{{") {
-		t.Fatalf("stderr contained unrendered template placeholder: %q", stderr.String())
-	}
 	if len(remote.completeReq) != 0 {
 		t.Fatalf("complete called before confirm: %+v", remote.completeReq)
 	}
 
 	stdout := new(strings.Builder)
 	stderr.Reset()
-	t.Setenv(sessionenv.ShellTokenEnv, "shell-token-1")
-	t.Setenv(sessionenv.ShellRunIDEnv, "run-1")
-	t.Setenv(sessionenv.ShellStepIDEnv, "step-1")
 	if code := goalSubcommand([]string{"complete", "--confirm"}, stdout, stderr); code != 0 {
 		t.Fatalf("goal complete --confirm exit = %d stderr=%q", code, stderr.String())
 	}
@@ -228,12 +200,6 @@ func TestGoalAgentCompleteRequiresConfirmTripwire(t *testing.T) {
 	}
 	if remote.completeReq[0].SessionID != "session-1" || remote.completeReq[0].Actor != "agent" {
 		t.Fatalf("complete req = %+v", remote.completeReq[0])
-	}
-	if remote.completeReq[0].ShellToken != "shell-token-1" {
-		t.Fatalf("complete shell token = %q, want shell-token-1", remote.completeReq[0].ShellToken)
-	}
-	if remote.completeReq[0].ShellRunID != "run-1" || remote.completeReq[0].ShellStepID != "step-1" {
-		t.Fatalf("complete shell run context = %q/%q, want run-1/step-1", remote.completeReq[0].ShellRunID, remote.completeReq[0].ShellStepID)
 	}
 }
 
@@ -288,16 +254,6 @@ func TestGoalCompleteUsesFreshTimeoutForCompletionRPC(t *testing.T) {
 	}
 	if !remote.completeDeadline.After(remote.showDeadline) {
 		t.Fatalf("complete deadline = %v, want fresh deadline after show deadline %v", remote.completeDeadline, remote.showDeadline)
-	}
-}
-
-func TestGoalCompleteHelpExposesConfirmFlag(t *testing.T) {
-	stderr := new(strings.Builder)
-	if code := goalSubcommand([]string{"complete", "--help"}, new(strings.Builder), stderr); code != 0 {
-		t.Fatalf("goal complete --help exit = %d", code)
-	}
-	if !strings.Contains(stderr.String(), "-confirm") {
-		t.Fatalf("goal complete help missing confirm flag: %q", stderr.String())
 	}
 }
 
@@ -360,21 +316,19 @@ func TestGoalCommandSubprocessTargetsLiveSessionFromUnboundWorktree(t *testing.T
 	settings := cfg.Settings
 	settings.Model = "gpt-5"
 	settings.ProviderOverride = "openai"
-	activateResp, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+	if _, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-goal-cli-e2e",
 		SessionID:       store.Meta().SessionID,
 		ActiveSettings:  settings,
 		EnabledToolIDs:  toolIDsAsStrings(config.EnabledToolIDs(settings)),
 		Source:          cfg.Source,
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
 	defer func() {
 		_, _ = remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 			ClientRequestID: "release-goal-cli-e2e",
 			SessionID:       store.Meta().SessionID,
-			LeaseID:         activateResp.LeaseID,
 		})
 	}()
 
@@ -407,10 +361,9 @@ func TestGoalCommandSubprocessTargetsLiveSessionFromUnboundWorktree(t *testing.T
 	}
 
 	if err := remote.SubmitUserShellCommand(context.Background(), serverapi.RuntimeSubmitUserShellCommandRequest{
-		ClientRequestID:   "shell-goal-complete-e2e",
-		SessionID:         store.Meta().SessionID,
-		ControllerLeaseID: activateResp.LeaseID,
-		Command:           shellQuote(kentPath) + " goal complete --confirm",
+		ClientRequestID: "shell-goal-complete-e2e",
+		SessionID:       store.Meta().SessionID,
+		Command:         shellQuote(kentPath) + " goal complete --confirm",
 	}); err != nil {
 		t.Fatalf("shell goal complete: %v", err)
 	}
@@ -423,158 +376,6 @@ func TestGoalCommandSubprocessTargetsLiveSessionFromUnboundWorktree(t *testing.T
 	}
 	if goal := record.Meta.Goal; goal == nil || goal.Objective != "exercise live goal CLI" || goal.Status != session.GoalStatusComplete {
 		t.Fatalf("persisted goal after complete = %+v", goal)
-	}
-}
-
-func TestGoalCommandSubprocessSetPersistsWhilePrimaryRunActive(t *testing.T) {
-	kentPath := filepath.Join(t.TempDir(), "kent")
-	buildCmd := exec.Command("go", "build", "-o", kentPath, ".")
-	if output, err := buildCmd.CombinedOutput(); err != nil {
-		t.Fatalf("build subprocess kent: %v\n%s", err, output)
-	}
-
-	home := t.TempDir()
-	workspace := t.TempDir()
-	unboundWorktree := t.TempDir()
-	t.Setenv("HOME", home)
-	configureBindingCommandTestServerPort(t)
-
-	cfg, err := config.Load(workspace, config.LoadOptions{})
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	defer func() { _ = metadataStore.Close() }()
-	binding, err := metadataStore.RegisterWorkspaceBinding(context.Background(), cfg.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("RegisterWorkspaceBinding: %v", err)
-	}
-	store, err := session.Create(
-		filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions"),
-		filepath.Base(cfg.WorkspaceRoot),
-		cfg.WorkspaceRoot,
-		metadataStore.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		t.Fatalf("session.Create: %v", err)
-	}
-	if err := store.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable: %v", err)
-	}
-
-	modelRequestStarted := make(chan struct{}, 1)
-	releaseModelRequest := make(chan struct{})
-	var releaseModelOnce sync.Once
-	releaseModel := func() {
-		releaseModelOnce.Do(func() {
-			close(releaseModelRequest)
-		})
-	}
-	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case modelRequestStarted <- struct{}{}:
-		default:
-		}
-		select {
-		case <-releaseModelRequest:
-			http.Error(w, "released", http.StatusInternalServerError)
-		case <-r.Context().Done():
-		}
-	}))
-	defer modelServer.Close()
-	defer releaseModel()
-
-	cleanup := startBindingCommandServer(t, unboundWorktree)
-	defer cleanup()
-	remote, err := client.DialConfiguredRemoteForProjectWorkspace(context.Background(), cfg, binding.ProjectID, cfg.WorkspaceRoot)
-	if err != nil {
-		t.Fatalf("DialConfiguredRemoteForProjectWorkspace: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-	settings := cfg.Settings
-	settings.Model = "gpt-5"
-	settings.ProviderOverride = "openai"
-	settings.OpenAIBaseURL = modelServer.URL + "/v1"
-	settings.Timeouts.ModelRequestSeconds = 30
-	activateResp, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-goal-cli-busy-e2e",
-		SessionID:       store.Meta().SessionID,
-		ActiveSettings:  settings,
-		EnabledToolIDs:  toolIDsAsStrings(config.EnabledToolIDs(settings)),
-		Source:          cfg.Source,
-	})
-	if err != nil {
-		t.Fatalf("ActivateSessionRuntime: %v", err)
-	}
-	defer func() {
-		_, _ = remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: "release-goal-cli-busy-e2e",
-			SessionID:       store.Meta().SessionID,
-			LeaseID:         activateResp.LeaseID,
-		})
-	}()
-
-	submitCtx, cancelSubmit := context.WithCancel(context.Background())
-	defer cancelSubmit()
-	submitDone := make(chan error, 1)
-	go func() {
-		_, err := remote.SubmitUserMessage(submitCtx, serverapi.RuntimeSubmitUserMessageRequest{
-			ClientRequestID:   "submit-hanging-run",
-			SessionID:         store.Meta().SessionID,
-			ControllerLeaseID: activateResp.LeaseID,
-			Text:              "hold the primary run",
-		})
-		submitDone <- err
-	}()
-	select {
-	case <-modelRequestStarted:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for active model request")
-	}
-
-	stdout, stderr, err := runGoalCommandSubprocessRaw(t, kentPath, unboundWorktree, "", "set", "--session", store.Meta().SessionID, "new goal while busy")
-	if err == nil {
-		t.Fatalf("goal set unexpectedly succeeded during active primary run stdout=%q stderr=%q", stdout, stderr)
-	}
-	if stdout != "" {
-		t.Fatalf("goal set stdout = %q, want empty", stdout)
-	}
-	if !strings.Contains(stderr, "active primary run") {
-		t.Fatalf("goal set stderr = %q, want active primary run rejection", stderr)
-	}
-	record, err := metadataStore.ResolvePersistedSession(context.Background(), store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ResolvePersistedSession: %v", err)
-	}
-	if record.Meta == nil {
-		t.Fatal("persisted session metadata missing")
-	}
-	if goal := record.Meta.Goal; goal != nil {
-		t.Fatalf("persisted goal after rejected busy set = %+v, want nil", goal)
-	}
-	events, err := sessiontest.CollectEvents(store)
-	if err != nil {
-		t.Fatalf("ReadEvents: %v", err)
-	}
-	foundGoalSet := false
-	for _, event := range events {
-		if event.Kind == "goal_set" {
-			foundGoalSet = true
-		}
-	}
-	if foundGoalSet {
-		t.Fatalf("goal_set event persisted after rejected busy subprocess set")
-	}
-
-	cancelSubmit()
-	releaseModel()
-	select {
-	case <-submitDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for active model request to stop")
 	}
 }
 

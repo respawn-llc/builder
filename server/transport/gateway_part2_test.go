@@ -418,8 +418,8 @@ func TestGatewayRemoteSessionActivityStreamsDirectSubmittedUserMessage(t *testin
 	defer server.Close()
 
 	store := createGatewayAuthoritativeSession(t, appCore)
-	controllerLeaseID := activateGatewayController(t, appCore, store.Meta().SessionID)
-	defer releaseGatewayController(t, appCore, store.Meta().SessionID, controllerLeaseID)
+	activateGatewayController(t, appCore, store.Meta().SessionID)
+	defer releaseGatewayController(t, appCore, store.Meta().SessionID)
 	eng, err := runtime.New(store, gatewayTestLLMClient{response: llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"}, Usage: llm.Usage{WindowTokens: 200000}}}, tools.NewRegistry(), runtime.Config{Model: "gpt-5", OnEvent: func(evt runtime.Event) {
 		appCore.PublishRuntimeEvent(store.Meta().SessionID, evt)
 	}})
@@ -442,7 +442,7 @@ func TestGatewayRemoteSessionActivityStreamsDirectSubmittedUserMessage(t *testin
 	}
 	defer func() { _ = sub.Close() }()
 
-	if _, err := remote.SubmitUserMessage(context.Background(), serverapi.RuntimeSubmitUserMessageRequest{ClientRequestID: "submit-say-hi", SessionID: store.Meta().SessionID, ControllerLeaseID: controllerLeaseID, Text: "say hi"}); err != nil {
+	if _, err := remote.SubmitUserMessage(context.Background(), serverapi.RuntimeSubmitUserMessageRequest{ClientRequestID: "submit-say-hi", SessionID: store.Meta().SessionID, Text: "say hi"}); err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
 
@@ -476,8 +476,8 @@ func TestGatewayRemoteSessionActivityPreservesActiveSubmitOrderingUsingAssistant
 	defer server.Close()
 
 	store := createGatewayAuthoritativeSession(t, appCore)
-	controllerLeaseID := activateGatewayController(t, appCore, store.Meta().SessionID)
-	defer releaseGatewayController(t, appCore, store.Meta().SessionID, controllerLeaseID)
+	activateGatewayController(t, appCore, store.Meta().SessionID)
+	defer releaseGatewayController(t, appCore, store.Meta().SessionID)
 	eng, err := runtime.New(store, &gatewayTestStreamingClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: gatewayTestShellTool{}}), runtime.Config{Model: "gpt-5", OnEvent: func(evt runtime.Event) {
 		appCore.PublishRuntimeEvent(store.Meta().SessionID, evt)
 	}})
@@ -502,7 +502,7 @@ func TestGatewayRemoteSessionActivityPreservesActiveSubmitOrderingUsingAssistant
 
 	submitDone := make(chan error, 1)
 	go func() {
-		_, submitErr := remote.SubmitUserMessage(context.Background(), serverapi.RuntimeSubmitUserMessageRequest{ClientRequestID: "submit-run-tools", SessionID: store.Meta().SessionID, ControllerLeaseID: controllerLeaseID, Text: "run tools"})
+		_, submitErr := remote.SubmitUserMessage(context.Background(), serverapi.RuntimeSubmitUserMessageRequest{ClientRequestID: "submit-run-tools", SessionID: store.Meta().SessionID, Text: "run tools"})
 		submitDone <- submitErr
 	}()
 

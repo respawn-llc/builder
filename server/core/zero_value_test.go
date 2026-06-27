@@ -66,7 +66,6 @@ func TestCoreZeroValueMethodsDoNotPanic(t *testing.T) {
 		{name: "AwaitPromptResponse", run: func(c *Core) {
 			_, _ = c.AwaitPromptResponse(context.Background(), "session", askquestion.AskQuestionRequest{})
 		}},
-		{name: "AcquirePrimaryRun", run: func(c *Core) { _, _ = c.AcquirePrimaryRun("session") }},
 		{name: "RunPromptClient", run: func(c *Core) { _ = c.RunPromptClient() }},
 	}
 

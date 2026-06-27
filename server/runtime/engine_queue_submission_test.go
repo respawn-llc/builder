@@ -133,6 +133,92 @@ func TestQueuedUserMessagesCoalesceFromStoredSteeringIntents(t *testing.T) {
 	}
 }
 
+func TestRunWhenIdleRunsImmediatelyWhenIdle(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	ran := false
+	if err := eng.RunWhenIdle(context.Background(), func() error {
+		ran = true
+		return nil
+	}); err != nil {
+		t.Fatalf("RunWhenIdle: %v", err)
+	}
+	if !ran {
+		t.Fatal("expected fn to run when idle")
+	}
+}
+
+func TestRunWhenIdleRetriesUntilBetweenSteps(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	attempts := 0
+	eng.stepLifecycle = &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, _ exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
+		attempts++
+		if attempts == 1 {
+			return errExclusiveStepBusy
+		}
+		return fn(ctx, "stub-step")
+	}}
+
+	ran := false
+	if err := eng.RunWhenIdle(context.Background(), func() error {
+		ran = true
+		return nil
+	}); err != nil {
+		t.Fatalf("RunWhenIdle: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected one busy retry before running, got %d attempts", attempts)
+	}
+	if !ran {
+		t.Fatal("expected fn to run after the busy step yielded")
+	}
+}
+
+func TestSubmitUserMessageOrSteerRunsWhenIdle(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "answered", Phase: llm.MessagePhaseFinal},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	msg, queued, err := eng.SubmitUserMessageOrSteer(context.Background(), "hello", "req-1")
+	if err != nil {
+		t.Fatalf("SubmitUserMessageOrSteer: %v", err)
+	}
+	if queued != nil {
+		t.Fatalf("expected idle submit to run, got queued item %+v", queued)
+	}
+	if msg.Content != "answered" {
+		t.Fatalf("assistant content = %q, want answered", msg.Content)
+	}
+}
+
+func TestSubmitUserMessageOrSteerSteersWhenBusy(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng.stepLifecycle = &stubExclusiveStepLifecycle{busy: true, runFn: func(context.Context, exclusiveStepOptions, func(stepCtx context.Context, stepID string) error) error {
+		return errExclusiveStepBusy
+	}}
+
+	msg, queued, err := eng.SubmitUserMessageOrSteer(context.Background(), "steer me", "req-2")
+	if err != nil {
+		t.Fatalf("SubmitUserMessageOrSteer busy: %v", err)
+	}
+	if queued == nil {
+		t.Fatalf("expected busy submit to steer, got assistant %+v", msg)
+	}
+	if queued.Text != "steer me" || queued.ClientRequestID != "req-2" {
+		t.Fatalf("queued item = %+v, want steered text/request id", queued)
+	}
+	if len(client.calls) != 0 {
+		t.Fatalf("expected no model call for steered submit, got %d", len(client.calls))
+	}
+}
+
 func TestSubmitQueuedUserMessagesRetriesTransientBusyErrors(t *testing.T) {
 	store := mustCreateTestSession(t)
 

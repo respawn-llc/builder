@@ -218,7 +218,7 @@ func newRuntimeClientReadTest(reads sharedclient.SessionViewClient) clientui.Run
 	return newUIRuntimeClientWithReads(
 		"session-1",
 		reads,
-		sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(registry.NewRuntimeRegistry(), nil)),
+		sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(registry.NewRuntimeRegistry())),
 	)
 }
 
@@ -226,7 +226,7 @@ func newRuntimeClientReadOnlyTest(reads sharedclient.SessionViewClient) clientui
 	return newUIRuntimeClientWithReads(
 		"session-1",
 		reads,
-		sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(nil, nil)),
+		sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(nil)),
 	)
 }
 
@@ -636,7 +636,7 @@ func TestRuntimeClientMainViewIncludesActiveRunFromRealEngine(t *testing.T) {
 	runtimeClient := newUIRuntimeClientWithReads(
 		store.Meta().SessionID,
 		sharedclient.NewLoopbackSessionViewClient(sessionview.NewService(nil, runtimeRegistry, nil)),
-		sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(runtimeRegistry, runtimeRegistry)),
+		sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(runtimeRegistry)),
 	)
 	result := make(chan error, 1)
 	go func() {
@@ -688,7 +688,7 @@ func TestRuntimeClientMainViewFallsBackToLocalRuntimeProjectionOnReadError(t *te
 	runtimeClient := newUIRuntimeClientWithReads(
 		store.Meta().SessionID,
 		sharedclient.NewLoopbackSessionViewClient(sessionview.NewService(nil, runtimeRegistry, nil)),
-		sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(runtimeRegistry, runtimeRegistry)),
+		sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(runtimeRegistry)),
 	)
 	view := runtimeClient.MainView()
 	if view.Session.SessionID != store.Meta().SessionID {
@@ -714,7 +714,7 @@ func TestRuntimeClientMainViewSnapshotDoesNotPopulateTranscriptEndpoint(t *testi
 	runtimeClient := newUIRuntimeClientWithReads(
 		store.Meta().SessionID,
 		sharedclient.NewLoopbackSessionViewClient(sessionview.NewService(nil, runtimeRegistry, nil)),
-		sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(runtimeRegistry, runtimeRegistry)),
+		sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(runtimeRegistry)),
 	)
 	view := runtimeClient.MainView()
 	if got := len(view.Session.Chat.Entries); got != 0 {
@@ -912,73 +912,6 @@ func TestRuntimeClientMainViewFailsFastWhenReadStalls(t *testing.T) {
 	}
 	if view.Session.SessionID != "session-1" {
 		t.Fatalf("expected fallback main view to preserve session id, got %+v", view)
-	}
-}
-
-func TestRuntimeClientCollaborativeMainViewSeedsBusyFallbackBeforeHydration(t *testing.T) {
-	withUIRuntimeReadTimeout(t, time.Millisecond)
-
-	reads := &blockingCountingSessionViewClient{}
-	runtimeClient := newRuntimeClientReadTest(reads).(*sessionRuntimeClient)
-	runtimeClient.SetAccessMode(serverapi.SessionRuntimeAttachModeCollaborative, []serverapi.SessionRuntimeOperation{
-		serverapi.SessionRuntimeOperationQueueUserMessage,
-	})
-
-	view := runtimeClient.MainView()
-	if view.Session.SessionID != "session-1" {
-		t.Fatalf("fallback session id = %q, want session-1", view.Session.SessionID)
-	}
-	if view.ExternalRuntime == nil || view.ExternalRuntime.State != clientui.ExternalRuntimeStateOwnerRunning || !view.ExternalRuntime.QueueAccepting {
-		t.Fatalf("external runtime fallback = %+v, want owner-running accepting", view.ExternalRuntime)
-	}
-	if got := reads.count.Load(); got != 1 {
-		t.Fatalf("main view read count = %d, want one hydration attempt before fallback", got)
-	}
-}
-
-func TestRuntimeClientCollaborativeMainViewThrottlesFallbackHydrationRetry(t *testing.T) {
-	withUIRuntimeReadTimeout(t, time.Millisecond)
-
-	reads := &blockingCountingSessionViewClient{}
-	runtimeClient := newRuntimeClientReadTest(reads).(*sessionRuntimeClient)
-	runtimeClient.SetAccessMode(serverapi.SessionRuntimeAttachModeCollaborative, []serverapi.SessionRuntimeOperation{
-		serverapi.SessionRuntimeOperationQueueUserMessage,
-	})
-
-	_ = runtimeClient.MainView()
-	_ = runtimeClient.MainView()
-	if got := reads.count.Load(); got != 1 {
-		t.Fatalf("main view read count before fallback retry cooldown = %d, want 1", got)
-	}
-}
-
-func TestRuntimeClientCollaborativeRefreshMainViewKeepsBusyFallbackOnReadError(t *testing.T) {
-	runtimeClient := newRuntimeClientReadTest(&blockingCountingSessionViewClient{}).(*sessionRuntimeClient)
-	runtimeClient.SetAccessMode(serverapi.SessionRuntimeAttachModeCollaborative, nil)
-
-	view, err := runtimeClient.refreshMainViewSync(time.Millisecond)
-	if err == nil {
-		t.Fatal("expected refresh error")
-	}
-	if view.ExternalRuntime == nil || view.ExternalRuntime.State != clientui.ExternalRuntimeStateOwnerRunning || !view.ExternalRuntime.QueueAccepting {
-		t.Fatalf("external runtime fallback = %+v, want owner-running accepting", view.ExternalRuntime)
-	}
-}
-
-func TestRuntimeClientCollaborativeRefreshMainViewAllowsAuthoritativeDowngrade(t *testing.T) {
-	reads := &countingSessionViewClient{view: clientui.RuntimeMainView{
-		Session:         clientui.RuntimeSessionView{SessionID: "session-1"},
-		ExternalRuntime: &clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateRegisteredIdle, QueueAccepting: true},
-	}}
-	runtimeClient := newRuntimeClientReadTest(reads).(*sessionRuntimeClient)
-	runtimeClient.SetAccessMode(serverapi.SessionRuntimeAttachModeCollaborative, nil)
-
-	view, err := runtimeClient.RefreshMainView()
-	if err != nil {
-		t.Fatalf("RefreshMainView: %v", err)
-	}
-	if view.ExternalRuntime == nil || view.ExternalRuntime.State != clientui.ExternalRuntimeStateRegisteredIdle || !view.ExternalRuntime.QueueAccepting {
-		t.Fatalf("external runtime state = %+v, want authoritative registered-idle accepting", view.ExternalRuntime)
 	}
 }
 

@@ -12,6 +12,26 @@ import (
 
 const queuedUserSubmissionBusyRetryDelay = 25 * time.Millisecond
 
+func (e *Engine) RunWhenIdle(ctx context.Context, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	e.ensureOrchestrationCollaborators()
+	for {
+		err := e.stepLifecycle.Run(ctx, exclusiveStepOptions{}, func(context.Context, string) error {
+			return fn()
+		})
+		if !errors.Is(err, errExclusiveStepBusy) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(queuedUserSubmissionBusyRetryDelay):
+		}
+	}
+}
+
 // SubmitQueuedUserMessages starts a fresh step from already-queued injected user
 // messages or background notices. This is used when a non-turn busy operation
 // (for example manual compaction) completes while queued steering is waiting.
@@ -53,6 +73,18 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 		case <-time.After(queuedUserSubmissionBusyRetryDelay):
 		}
 	}
+}
+
+func (e *Engine) SubmitUserMessageOrSteer(ctx context.Context, text string, clientRequestID string) (assistant llm.Message, queued *QueuedUserMessage, err error) {
+	if strings.TrimSpace(text) == "" {
+		return llm.Message{}, nil, errors.New("empty message")
+	}
+	msg, err := e.SubmitUserMessage(ctx, text)
+	if errors.Is(err, errExclusiveStepBusy) {
+		item := e.QueueUserMessageWithClientRequestID(text, clientRequestID)
+		return llm.Message{}, &item, nil
+	}
+	return msg, nil, err
 }
 
 func (e *Engine) HasQueuedUserWork() bool {

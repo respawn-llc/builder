@@ -137,7 +137,7 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 			runtimePlan.Close()
 			return runErr
 		}
-		if err := persistSessionDraftToServer(ctx, server, plan.SessionID, runtimePlan.CurrentControllerLeaseID(), finalModel); err != nil {
+		if err := persistSessionDraftToServer(ctx, server, plan.SessionID, finalModel); err != nil {
 			runtimePlan.Close()
 			return err
 		}
@@ -147,16 +147,7 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 			runtimePlan.Close()
 			return nil
 		}
-		var resolved resolvedSessionAction
-		if runtimePlan.HasControllerLease() {
-			resolved, err = resolveSessionAction(ctx, server, interactor, plan.SessionID, runtimePlan.CurrentControllerLeaseID(), transition)
-		} else if runtimePlan.AccessMode == serverapi.SessionRuntimeAttachModeCollaborative {
-			resolved, err = resolveCollaborativeSessionAction(ctx, server, interactor, plan.SessionID, transition)
-		} else if runtimePlan.ReadOnly {
-			resolved, err = resolveReadOnlySessionAction(ctx, server, interactor, plan.SessionID, transition)
-		} else {
-			resolved, err = resolveCollaborativeSessionAction(ctx, server, interactor, plan.SessionID, transition)
-		}
+		resolved, err := resolveSessionAction(ctx, server, interactor, plan.SessionID, transition)
 		runtimePlan.Close()
 		if err != nil {
 			return err
@@ -207,11 +198,8 @@ func sessionLaunchInitialInputFromServer(ctx context.Context, server sessionInit
 	return resp.Input
 }
 
-func persistSessionDraftToServer(ctx context.Context, server sessionDraftPersistenceServer, sessionID string, controllerLeaseID string, model any) error {
+func persistSessionDraftToServer(ctx context.Context, server sessionDraftPersistenceServer, sessionID string, model any) error {
 	if strings.TrimSpace(sessionID) == "" {
-		return nil
-	}
-	if strings.TrimSpace(controllerLeaseID) == "" {
 		return nil
 	}
 	ui, ok := model.(*uiModel)
@@ -221,7 +209,7 @@ func persistSessionDraftToServer(ctx context.Context, server sessionDraftPersist
 	if server == nil || server.SessionLifecycleClient() == nil {
 		return nil
 	}
-	_, err := server.SessionLifecycleClient().PersistInputDraft(ctx, serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: strings.TrimSpace(sessionID), ControllerLeaseID: strings.TrimSpace(controllerLeaseID), Input: ui.input})
+	_, err := server.SessionLifecycleClient().PersistInputDraft(ctx, serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: strings.TrimSpace(sessionID), Input: ui.input})
 	return err
 }
 
@@ -235,48 +223,7 @@ type resolvedSessionAction struct {
 	ShouldContinue               bool
 }
 
-func resolveReadOnlySessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition) (resolvedSessionAction, error) {
-	return resolvePureNavigationSessionAction(ctx, server, interactor, sessionID, transition, errReadOnlyRuntime)
-}
-
-func resolveCollaborativeSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition) (resolvedSessionAction, error) {
-	return resolvePureNavigationSessionAction(ctx, server, interactor, sessionID, transition, errCollaborativeOperationBlocked)
-}
-
-func resolvePureNavigationSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition, blockedErr error) (resolvedSessionAction, error) {
-	switch transition.Action {
-	case UIActionNewSession:
-		return resolvedSessionAction{
-			InitialPrompt:                transition.InitialPrompt,
-			InitialPromptHistoryRecorded: transition.InitialPromptHistoryRecorded,
-			ParentSessionID:              transition.ParentSessionID,
-			ForceNewSession:              true,
-			ShouldContinue:               true,
-		}, nil
-	case UIActionResume:
-		return resolvedSessionAction{ShouldContinue: true}, nil
-	case UIActionOpenSession:
-		return resolvedSessionAction{
-			NextSessionID:  transition.TargetSessionID,
-			InitialInput:   transition.InitialInput,
-			ShouldContinue: true,
-		}, nil
-	case UIActionLogout:
-		if server == nil {
-			return resolvedSessionAction{}, errors.New("session lifecycle client is required")
-		}
-		if err := server.Reauthenticate(ctx, interactor, true); err != nil {
-			return resolvedSessionAction{}, err
-		}
-		return resolvedSessionAction{NextSessionID: strings.TrimSpace(sessionID), ShouldContinue: true}, nil
-	case UIActionExit, "":
-		return resolvedSessionAction{}, nil
-	default:
-		return resolvedSessionAction{}, blockedErr
-	}
-}
-
-func resolveSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, controllerLeaseID string, transition UITransition) (resolvedSessionAction, error) {
+func resolveSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition) (resolvedSessionAction, error) {
 	if transition.Exit {
 		return resolvedSessionAction{}, nil
 	}
@@ -284,9 +231,8 @@ func resolveSessionAction(ctx context.Context, server sessionTransitionServer, i
 		return resolvedSessionAction{}, errors.New("session lifecycle client is required")
 	}
 	resolved, err := server.SessionLifecycleClient().ResolveTransition(ctx, serverapi.SessionResolveTransitionRequest{
-		ClientRequestID:   uuid.NewString(),
-		SessionID:         strings.TrimSpace(sessionID),
-		ControllerLeaseID: strings.TrimSpace(controllerLeaseID),
+		ClientRequestID: uuid.NewString(),
+		SessionID:       strings.TrimSpace(sessionID),
 		Transition: serverapi.SessionTransition{
 			Action:                       transition.Action,
 			InitialPrompt:                transition.InitialPrompt,

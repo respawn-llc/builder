@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"core/server/llm"
-	"core/server/primaryrun"
 	"core/server/runtime"
 	"core/server/session"
 	askquestion "core/server/tools"
@@ -404,29 +403,6 @@ func TestRuntimeRegistryReplacementWaitsForCloseDrainOwnership(t *testing.T) {
 		t.Fatal("expected replacement runtime after drain completes")
 	}
 	registry.Unregister("session-1", second)
-}
-
-func TestRuntimeRegistryCloseDrainDoesNotClearOwnerPrimaryRunLease(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registry.Register("session-1", engine)
-	ownerLease, err := registry.AcquirePrimaryRun("session-1")
-	if err != nil {
-		t.Fatalf("AcquirePrimaryRun owner: %v", err)
-	}
-
-	if err := registry.CloseRuntimeWithDrain(context.Background(), "session-1", engine, nil); err != nil {
-		t.Fatalf("CloseRuntimeWithDrain: %v", err)
-	}
-	if _, err := registry.AcquirePrimaryRun("session-1"); !errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-		t.Fatalf("AcquirePrimaryRun before owner release error = %v, want active primary run", err)
-	}
-	ownerLease.Release()
-	if lease, err := registry.AcquirePrimaryRun("session-1"); err != nil {
-		t.Fatalf("AcquirePrimaryRun after owner release: %v", err)
-	} else {
-		lease.Release()
-	}
 }
 
 func TestRuntimeRegistryUnregisterWaitsForCloseDrainOwnership(t *testing.T) {
@@ -1005,48 +981,6 @@ func TestRuntimeRegistryAwaitPromptResponseContextCanceledRemovesPendingPrompt(t
 	}
 }
 
-func TestRuntimeRegistryAcquirePrimaryRunEnforcesSingleLeasePerSession(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	lease, err := registry.AcquirePrimaryRun("session-1")
-	if err != nil {
-		t.Fatalf("AcquirePrimaryRun first: %v", err)
-	}
-	if _, err := registry.AcquirePrimaryRun("session-1"); !errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-		t.Fatalf("AcquirePrimaryRun second error = %v, want active primary run", err)
-	}
-	lease.Release()
-	lease.Release()
-	if _, err := registry.AcquirePrimaryRun("session-1"); err != nil {
-		t.Fatalf("AcquirePrimaryRun after release: %v", err)
-	}
-	if _, err := registry.AcquirePrimaryRun("session-2"); err != nil {
-		t.Fatalf("AcquirePrimaryRun other session: %v", err)
-	}
-}
-
-func TestRuntimeRegistryPreservesPrimaryRunLeaseWhenRuntimeIsReplaced(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	older := &runtime.Engine{}
-	newer := &runtime.Engine{}
-
-	registry.Register("session-1", older)
-	lease, err := registry.AcquirePrimaryRun("session-1")
-	if err != nil {
-		t.Fatalf("AcquirePrimaryRun first: %v", err)
-	}
-	registry.Register("session-1", newer)
-	if _, err := registry.AcquirePrimaryRun("session-1"); !errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-		t.Fatalf("AcquirePrimaryRun after replace error = %v, want active primary run", err)
-	}
-	lease.Release()
-
-	secondLease, err := registry.AcquirePrimaryRun("session-1")
-	if err != nil {
-		t.Fatalf("AcquirePrimaryRun after replace: %v", err)
-	}
-	secondLease.Release()
-}
-
 func TestRuntimeRegistryBeginRuntimeGuardUsesCurrentEntryAfterReplacement(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	older := &runtime.Engine{}
@@ -1156,7 +1090,7 @@ func TestRuntimeRegistryRegisterWaitsForOldGuardsBeforePublishingReplacement(t *
 	t.Cleanup(func() { registry.Unregister("session-1", newer) })
 }
 
-func TestRuntimeRegistryExternalRuntimeStatusReflectsPrimaryRunAndCloseBarrier(t *testing.T) {
+func TestRuntimeRegistryExternalRuntimeStatusReflectsRunStateAndCloseBarrier(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := &runtime.Engine{}
 	registry.Register("session-1", engine)
@@ -1165,15 +1099,12 @@ func TestRuntimeRegistryExternalRuntimeStatusReflectsPrimaryRunAndCloseBarrier(t
 	if status.State != clientui.ExternalRuntimeStateRegisteredIdle || !status.QueueAccepting {
 		t.Fatalf("idle external status = %+v, want registered idle accepting", status)
 	}
-	lease, err := registry.AcquirePrimaryRun("session-1")
-	if err != nil {
-		t.Fatalf("AcquirePrimaryRun: %v", err)
-	}
+	publishRunState(registry, "session-1", true)
 	status = registry.ExternalRuntimeStatus("session-1")
 	if status.State != clientui.ExternalRuntimeStateOwnerRunning || !status.QueueAccepting {
 		t.Fatalf("running external status = %+v, want owner running accepting", status)
 	}
-	lease.Release()
+	publishRunState(registry, "session-1", false)
 	guard, err := registry.BeginRuntimeGuard(context.Background(), "session-1")
 	if err != nil {
 		t.Fatalf("BeginRuntimeGuard: %v", err)
@@ -1238,82 +1169,6 @@ func waitForExternalRuntimeStatus(t *testing.T, registry *RuntimeRegistry, sessi
 			t.Fatalf("external runtime status = %+v, want state=%q queue=%t", status, state, queueAccepting)
 		case <-time.After(10 * time.Millisecond):
 		}
-	}
-}
-
-func TestRuntimeRegistryPublishesExternalRuntimeStatusEvents(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-	registry.Register("session-1", engine)
-	sub, err := registry.SubscribeSessionActivity(context.Background(), "session-1")
-	if err != nil {
-		t.Fatalf("SubscribeSessionActivity: %v", err)
-	}
-	defer func() { _ = sub.Close() }()
-
-	lease, err := registry.AcquirePrimaryRun("session-1")
-	if err != nil {
-		t.Fatalf("AcquirePrimaryRun: %v", err)
-	}
-	assertNextExternalRuntimeStatus(t, sub, clientui.ExternalRuntimeStateOwnerRunning, true)
-	lease.Release()
-	assertNextExternalRuntimeStatus(t, sub, clientui.ExternalRuntimeStateRegisteredIdle, true)
-
-	started := make(chan struct{})
-	releaseDrain := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- registry.CloseRuntimeWithDrain(context.Background(), "session-1", engine, func(context.Context) error {
-			close(started)
-			<-releaseDrain
-			return nil
-		})
-	}()
-	assertNextExternalRuntimeStatus(t, sub, clientui.ExternalRuntimeStateDraining, false)
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for close drain")
-	}
-	close(releaseDrain)
-	assertNextExternalRuntimeStatus(t, sub, "", false)
-	if err := <-done; err != nil {
-		t.Fatalf("CloseRuntimeWithDrain: %v", err)
-	}
-}
-
-func TestRuntimeRegistryClearsPrimaryRunLeaseWhenRuntimeIsRemoved(t *testing.T) {
-	registry := NewRuntimeRegistry()
-	engine := &runtime.Engine{}
-
-	registry.Register("session-1", engine)
-	lease, err := registry.AcquirePrimaryRun("session-1")
-	if err != nil {
-		t.Fatalf("AcquirePrimaryRun first: %v", err)
-	}
-	registry.Unregister("session-1", engine)
-	lease.Release()
-
-	thirdLease, err := registry.AcquirePrimaryRun("session-1")
-	if err != nil {
-		t.Fatalf("AcquirePrimaryRun after unregister: %v", err)
-	}
-	thirdLease.Release()
-}
-
-func assertNextExternalRuntimeStatus(t *testing.T, sub serverapi.SessionActivitySubscription, state clientui.ExternalRuntimeState, queueAccepting bool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	evt, err := sub.Next(ctx)
-	if err != nil {
-		t.Fatalf("Next external runtime status: %v", err)
-	}
-	if evt.Kind != clientui.EventExternalRuntimeStatus || evt.ExternalRuntimeStatus == nil {
-		t.Fatalf("event = %+v, want external runtime status", evt)
-	}
-	if evt.ExternalRuntimeStatus.State != state || evt.ExternalRuntimeStatus.QueueAccepting != queueAccepting {
-		t.Fatalf("external runtime status = %+v, want state=%q queue=%t", evt.ExternalRuntimeStatus, state, queueAccepting)
 	}
 }
 

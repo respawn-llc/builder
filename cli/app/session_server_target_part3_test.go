@@ -46,16 +46,15 @@ func TestStartSessionServerUsesConfiguredDaemonForSessionLifecycleDraftPersisten
 
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "session lifecycle draft persistence")
 	defer runtimePlan.Close()
-	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, ControllerLeaseID: runtimePlan.ControllerLeaseID, Input: "saved draft"}); err != nil {
+	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Input: "saved draft"}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
 	if got := sessionLaunchInitialInputFromServer(context.Background(), server, plan.SessionID, "transition draft"); got != "saved draft" {
 		t.Fatalf("sessionLaunchInitialInputFromServer = %q, want saved draft", got)
 	}
 	resolved, err := server.SessionLifecycleClient().ResolveTransition(context.Background(), serverapi.SessionResolveTransitionRequest{
-		ClientRequestID:   uuid.NewString(),
-		SessionID:         plan.SessionID,
-		ControllerLeaseID: runtimePlan.ControllerLeaseID,
+		ClientRequestID: uuid.NewString(),
+		SessionID:       plan.SessionID,
 		Transition: serverapi.SessionTransition{
 			Action:          "open_session",
 			TargetSessionID: plan.SessionID,
@@ -448,7 +447,7 @@ func runInteractiveWorkflowScenario(t *testing.T, server interactiveSessionServe
 	if message != wantReply {
 		t.Fatalf("assistant message = %q, want %q", message, wantReply)
 	}
-	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, ControllerLeaseID: runtimePlan.ControllerLeaseID, Input: "workflow draft"}); err != nil {
+	if _, err := server.SessionLifecycleClient().PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Input: "workflow draft"}); err != nil {
 		t.Fatalf("PersistInputDraft: %v", err)
 	}
 	if got := sessionLaunchInitialInputFromServer(context.Background(), server, plan.SessionID, "transition draft"); got != "workflow draft" {

@@ -7,53 +7,12 @@ import (
 )
 
 const SessionIDEnv = brand.SessionIDEnv
-const ShellTokenEnv = brand.EnvPrefix + "SHELL_TOKEN"
-const ShellRunIDEnv = brand.EnvPrefix + "SHELL_RUN_ID"
-const ShellStepIDEnv = brand.EnvPrefix + "SHELL_STEP_ID"
 
 func LookupSessionID(lookup func(string) (string, bool)) (string, bool) {
 	if lookup == nil {
 		return "", false
 	}
 	value, ok := lookup(SessionIDEnv)
-	if !ok {
-		return "", false
-	}
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "", false
-	}
-	return trimmed, true
-}
-
-func LookupShellToken(lookup func(string) (string, bool)) (string, bool) {
-	if lookup == nil {
-		return "", false
-	}
-	value, ok := lookup(ShellTokenEnv)
-	if !ok {
-		return "", false
-	}
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return "", false
-	}
-	return trimmed, true
-}
-
-func LookupShellRunID(lookup func(string) (string, bool)) (string, bool) {
-	return lookupTrimmed(lookup, ShellRunIDEnv)
-}
-
-func LookupShellStepID(lookup func(string) (string, bool)) (string, bool) {
-	return lookupTrimmed(lookup, ShellStepIDEnv)
-}
-
-func lookupTrimmed(lookup func(string) (string, bool), key string) (string, bool) {
-	if lookup == nil {
-		return "", false
-	}
-	value, ok := lookup(key)
 	if !ok {
 		return "", false
 	}

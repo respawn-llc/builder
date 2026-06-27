@@ -10,10 +10,7 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/primaryrun"
 	"core/shared/clientui"
-	"core/shared/serverapi"
-	"core/shared/transcript"
 )
 
 type runtimeControlFakeClient struct {
@@ -74,7 +71,6 @@ type runtimeControlFakeClient struct {
 	submitQueuedErr        error
 	interruptErr           error
 	recordPromptHistoryErr error
-	collaborative          bool
 }
 
 type timeoutNetError struct{}
@@ -89,7 +85,6 @@ func (f *runtimeControlFakeClient) MainView() clientui.RuntimeMainView {
 	}
 	return clientui.RuntimeMainView{Status: f.status, Session: f.sessionView}
 }
-func (f *runtimeControlFakeClient) IsCollaborativeRuntime() bool { return f.collaborative }
 func (f *runtimeControlFakeClient) CachedMainView() (clientui.RuntimeMainView, bool) {
 	if f.hasCachedMainView {
 		return f.cachedMainView, true
@@ -627,126 +622,6 @@ func TestRuntimeControlHelpersFallbackWithoutRuntimeClient(t *testing.T) {
 	}
 }
 
-func TestSubmitErrorWithRuntimeClientAppendsActivePrimaryRunEntry(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	m := newProjectedStaticUIModel()
-	m.engine = client
-	m.setBusy(true)
-
-	next, cmd := m.Update(submitDoneMsg{err: primaryrun.ErrActivePrimaryRun})
-	updated := next.(*uiModel)
-	if updated.isBusy() {
-		t.Fatal("did not expect busy after active primary run error")
-	}
-	if updated.activity != uiActivityError {
-		t.Fatalf("expected error activity, got %v", updated.activity)
-	}
-	if len(updated.transcriptEntries) != 0 {
-		t.Fatalf("did not expect immediate local transcript entry, got %+v", updated.transcriptEntries)
-	}
-	if client.appendedRole != "" || client.appendedText != "" {
-		t.Fatalf("did not expect runtime append during Update, got role=%q text=%q", client.appendedRole, client.appendedText)
-	}
-	_ = collectCmdMessages(t, cmd)
-	if client.appendedRole != string(transcript.EntryRoleDeveloperErrorFeedback) || client.appendedText != primaryrun.ErrActivePrimaryRun.Error() {
-		t.Fatalf("unexpected runtime committed entry: role=%q text=%q", client.appendedRole, client.appendedText)
-	}
-	if len(updated.transcriptEntries) != 0 {
-		t.Fatalf("did not expect local fallback after successful runtime append, got %+v", updated.transcriptEntries)
-	}
-}
-
-func TestCollaborativeSubmitActiveOwnerRaceQueuesSubmittedText(t *testing.T) {
-	client := &runtimeControlFakeClient{collaborative: true}
-	m := newProjectedStaticUIModel()
-	m.engine = client
-	m.setBusy(true)
-
-	next, cmd := m.Update(submitDoneMsg{err: serverapi.ErrActivePrimaryRun, submittedText: "race text"})
-	updated := next.(*uiModel)
-	if updated.activity != uiActivityRunning {
-		t.Fatalf("activity = %v, want running while queue create is pending", updated.activity)
-	}
-	if updated.input != "" {
-		t.Fatalf("input = %q, want submitted text kept out of input while queued", updated.input)
-	}
-	for _, msg := range collectCmdMessages(t, cmd) {
-		next, _ = updated.Update(msg)
-		updated = next.(*uiModel)
-	}
-	if client.queueUserMessageCalls != 1 || client.queuedText != "race text" {
-		t.Fatalf("queue calls=%d text=%q, want one queue of submitted text", client.queueUserMessageCalls, client.queuedText)
-	}
-	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "race text" {
-		t.Fatalf("pending injected = %+v, want queued submitted text", updated.pendingInjected)
-	}
-	if !updated.isBusy() {
-		t.Fatal("expected active-owner fallback to stay busy while queued text waits for owner")
-	}
-	if client.submitQueuedCalls != 0 {
-		t.Fatalf("SubmitQueuedUserMessages calls = %d, want none while owner is active", client.submitQueuedCalls)
-	}
-	if updated.input != "" {
-		t.Fatalf("input = %q, want no restored text after successful queue", updated.input)
-	}
-}
-
-func TestCollaborativeSubmitActiveOwnerRaceQueueFailureRestoresSubmittedText(t *testing.T) {
-	client := &runtimeControlFakeClient{collaborative: true, queueUserMessageErr: errors.New("queue closed")}
-	m := newProjectedStaticUIModel()
-	m.engine = client
-	m.setBusy(true)
-
-	next, cmd := m.Update(submitDoneMsg{err: serverapi.ErrActivePrimaryRun, submittedText: "race text"})
-	updated := next.(*uiModel)
-	for _, msg := range collectCmdMessages(t, cmd) {
-		next, _ = updated.Update(msg)
-		updated = next.(*uiModel)
-	}
-	if client.queueUserMessageCalls != 1 {
-		t.Fatalf("queue calls=%d, want one queue attempt", client.queueUserMessageCalls)
-	}
-	if len(updated.pendingInjected) != 0 {
-		t.Fatalf("pending injected = %+v, want restored after queue failure", updated.pendingInjected)
-	}
-	if strings.TrimSpace(updated.input) != "race text" {
-		t.Fatalf("input = %q, want restored submitted text", updated.input)
-	}
-}
-
-func TestActiveSubmitErrorShowsStatusOnlyWhenRuntimeAppendFails(t *testing.T) {
-	client := &runtimeControlFakeClient{appendErr: errors.New("append failed")}
-	m := newProjectedStaticUIModel()
-	m.engine = client
-	m.setBusy(true)
-
-	next, cmd := m.Update(submitDoneMsg{err: primaryrun.ErrActivePrimaryRun})
-	updated := next.(*uiModel)
-
-	if updated.activity != uiActivityError {
-		t.Fatalf("expected error activity, got %v", updated.activity)
-	}
-	if client.appendedRole != "" || client.appendedText != "" {
-		t.Fatalf("did not expect runtime append during Update, got role=%q text=%q", client.appendedRole, client.appendedText)
-	}
-	for _, msg := range collectCmdMessages(t, cmd) {
-		next, _ = updated.Update(msg)
-		updated = next.(*uiModel)
-	}
-	if client.appendedRole != string(transcript.EntryRoleDeveloperErrorFeedback) || client.appendedText != primaryrun.ErrActivePrimaryRun.Error() {
-		t.Fatalf("unexpected runtime committed entry attempt: role=%q text=%q", client.appendedRole, client.appendedText)
-	}
-	if len(updated.transcriptEntries) != 0 {
-		t.Fatalf("runtime append failure must not create local transcript entries: %+v", updated.transcriptEntries)
-	}
-	if committed := committedTranscriptEntriesForApp(updated.transcriptEntries); len(committed) != 0 {
-		t.Fatalf("runtime append failure advanced committed transcript entries: %+v", committed)
-	}
-	if updated.transientStatus != "append failed" || updated.transientStatusKind != uiStatusNoticeError {
-		t.Fatalf("expected append failure status, got status=%q kind=%v", updated.transientStatus, updated.transientStatusKind)
-	}
-}
-
 func TestSubmitErrorShowsStatusOnlyWhenRuntimeAppendFails(t *testing.T) {
 	client := &runtimeControlFakeClient{appendErr: errors.New("append failed")}
 	m := newProjectedStaticUIModel()
@@ -895,28 +770,6 @@ func TestRuntimeControlOpTimeoutDoesNotMarkDisconnect(t *testing.T) {
 	}
 	if m.runtimeDisconnectStatusVisible() {
 		t.Fatal("did not expect op timeout to mark disconnect")
-	}
-}
-
-func TestCollaborativeRuntimeLocalFeedbackDoesNotAppendCommittedEntry(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	runtimeClient.SetAccessMode(serverapi.SessionRuntimeAttachModeCollaborative, []serverapi.SessionRuntimeOperation{
-		serverapi.SessionRuntimeOperationSubmitUserTurn,
-	})
-	m := newProjectedStaticUIModel()
-	m.engine = runtimeClient
-
-	cmd := m.appendLocalEntryWithNoticeID("error", "blocked command", "notice-1")
-
-	if cmd == nil {
-		t.Fatal("expected transient status clear command")
-	}
-	if m.transientStatus != "blocked command" || m.transientStatusKind != uiStatusNoticeError {
-		t.Fatalf("transient status = %q kind=%d, want local error feedback", m.transientStatus, m.transientStatusKind)
-	}
-	if entries := controls.appendedLocalEntries(); len(entries) != 0 {
-		t.Fatalf("did not expect collaborative local feedback to append committed entries, got %+v", entries)
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	"core/server/primaryrun"
 	"core/server/runtime"
 	"core/server/runtimeview"
 	askquestion "core/server/tools"
@@ -22,7 +21,6 @@ const (
 
 type RuntimeRegistry struct {
 	directory       *runtimeDirectory
-	leases          *primaryRunLeaseStore
 	observerMu      sync.Mutex
 	observer        func(sessionID string, reason RuntimeInterestReason)
 	sleepObserverMu sync.Mutex
@@ -45,7 +43,6 @@ const (
 func NewRuntimeRegistry() *RuntimeRegistry {
 	return &RuntimeRegistry{
 		directory:       newRuntimeDirectory(),
-		leases:          newPrimaryRunLeaseStore(),
 		runningSessions: make(map[string]bool),
 	}
 }
@@ -78,7 +75,6 @@ func (r *RuntimeRegistry) Unregister(sessionID string, engine *runtime.Engine) {
 	}
 	publishExternalRuntimeStatusToEntry(entry, clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateClosing, QueueAccepting: false})
 	publishExternalRuntimeStatusToEntry(entry, clientui.ExternalRuntimeStatus{})
-	r.leases.Clear(id)
 	closeRuntimeEntry(entry, io.EOF)
 	r.updateAggregateRunState(id, false)
 }
@@ -168,7 +164,7 @@ func (r *RuntimeRegistry) externalRuntimeStatusForEntry(sessionID string, entry 
 			QueueAccepting: false,
 		}
 	}
-	if r.leases.Active(sessionID) {
+	if r.sessionRunning(sessionID) {
 		return clientui.ExternalRuntimeStatus{
 			State:          clientui.ExternalRuntimeStateOwnerRunning,
 			QueueAccepting: true,
@@ -207,6 +203,7 @@ func (r *RuntimeRegistry) PublishRuntimeEvent(sessionID string, evt runtime.Even
 	}
 	if evt.Kind == runtime.EventRunStateChanged && evt.RunState != nil {
 		r.updateAggregateRunState(sessionID, evt.RunState.Lifecycle.IsRunning())
+		r.publishExternalRuntimeStatus(sessionID)
 	}
 }
 
@@ -339,20 +336,17 @@ func (r *RuntimeRegistry) SubmitPromptResponse(sessionID string, resp askquestio
 	})
 }
 
-func (r *RuntimeRegistry) AcquirePrimaryRun(sessionID string) (primaryrun.Lease, error) {
+func (r *RuntimeRegistry) sessionRunning(sessionID string) bool {
 	if r == nil {
-		return nil, primaryrun.ErrActivePrimaryRun
+		return false
 	}
 	id := strings.TrimSpace(sessionID)
-	lease, err := r.leases.Acquire(id)
-	if err != nil {
-		return nil, err
+	if id == "" {
+		return false
 	}
-	r.publishExternalRuntimeStatus(id)
-	return primaryrun.LeaseFunc(func() {
-		lease.Release()
-		r.publishExternalRuntimeStatus(id)
-	}), nil
+	r.runStateMu.Lock()
+	defer r.runStateMu.Unlock()
+	return r.runningSessions[id]
 }
 
 func (r *RuntimeRegistry) SetInterestObserver(observer func(sessionID string, reason RuntimeInterestReason)) {

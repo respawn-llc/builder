@@ -65,12 +65,6 @@ type testEmbeddedServer struct {
 	reauthenticate       func(ctx context.Context, interactor authInteractor) error
 }
 
-type noopEmbeddedSessionLifecycleLeaseVerifier struct{}
-
-func (noopEmbeddedSessionLifecycleLeaseVerifier) RequireControllerLease(context.Context, string, string) error {
-	return nil
-}
-
 type noOpSessionActivitySubscription struct{}
 
 func (noOpSessionActivitySubscription) Next(context.Context) (clientui.Event, error) {
@@ -88,7 +82,7 @@ func (c *recordingSessionRuntimeClient) ActivateSessionRuntime(ctx context.Conte
 	if c.activate != nil {
 		return c.activate(ctx, req)
 	}
-	return serverapi.SessionRuntimeActivateResponse{LeaseID: "lease-test"}, nil
+	return serverapi.SessionRuntimeActivateResponse{}, nil
 }
 
 func (c *recordingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
@@ -308,7 +302,7 @@ func (s *testEmbeddedServer) RuntimeControlClient() client.RuntimeControlClient 
 		return s.runtimeControlClient
 	}
 	registry := registry.NewRuntimeRegistry()
-	return client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(registry, registry))
+	return client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(registry))
 }
 
 func (s *testEmbeddedServer) sessionStoreRegistry() *registry.SessionStoreRegistry {
@@ -348,7 +342,7 @@ func (s *testEmbeddedServer) SessionLifecycleClient() client.SessionLifecycleCli
 			s.sessionStoreRegistry(),
 			s.authManager,
 			metadataStore.AuthoritativeSessionStoreOptions()...,
-		).WithPersistenceRoot(s.cfg.PersistenceRoot).WithControllerLeaseVerifier(noopEmbeddedSessionLifecycleLeaseVerifier{})
+		).WithPersistenceRoot(s.cfg.PersistenceRoot)
 		return client.NewLoopbackSessionLifecycleClient(service)
 	}
 	containerDir := strings.TrimSpace(s.containerDir)
@@ -359,7 +353,7 @@ func (s *testEmbeddedServer) SessionLifecycleClient() client.SessionLifecycleCli
 		}
 		containerDir = filepath.Join(filepath.Join(s.cfg.PersistenceRoot, "projects"), projectID, "sessions")
 	}
-	service := sessionservice.NewSessionLifecycleService(containerDir, s.sessionStoreRegistry(), s.authManager).WithPersistenceRoot(s.cfg.PersistenceRoot).WithControllerLeaseVerifier(noopEmbeddedSessionLifecycleLeaseVerifier{})
+	service := sessionservice.NewSessionLifecycleService(containerDir, s.sessionStoreRegistry(), s.authManager).WithPersistenceRoot(s.cfg.PersistenceRoot)
 	return client.NewLoopbackSessionLifecycleClient(service)
 }
 
@@ -460,7 +454,7 @@ func TestEmbeddedAppServerPrepareRuntimeRegistersRuntimeForSessionViews(t *testi
 
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive}, io.Discard, "test prepare runtime")
 	defer runtimePlan.Close()
-	if err := runtimePlan.Wiring.runtimeControls.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, ControllerLeaseID: runtimePlan.ControllerLeaseID, Level: "high"}); err != nil {
+	if err := runtimePlan.Wiring.runtimeControls.SetThinkingLevel(context.Background(), serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: uuid.NewString(), SessionID: plan.SessionID, Level: "high"}); err != nil {
 		t.Fatalf("set thinking level: %v", err)
 	}
 

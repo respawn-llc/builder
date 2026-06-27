@@ -58,8 +58,10 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	if tableExists(t, store.db, "workflow_events") {
 		t.Fatal("workflow_events should not exist; workflow invalidations are process-local live signals")
 	}
+	if tableExists(t, store.db, "runtime_leases") {
+		t.Fatal("runtime_leases should not exist; runtime ownership is process-local run state")
+	}
 	for _, index := range []string{
-		"runtime_leases_session_idx",
 		"workspaces_project_idx",
 		"workflow_transition_groups_source_transition_idx",
 		"tasks_project_short_id_idx",
@@ -165,14 +167,6 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 		if columnExists(t, store.db, "task_comments", column) {
 			t.Fatalf("task_comments.%s should not exist; comments are hard-deleted task notes", column)
 		}
-	}
-	for _, column := range []string{"client_id", "request_id", "acquired_at_unix_ms", "metadata_json"} {
-		if columnExists(t, store.db, "runtime_leases", column) {
-			t.Fatalf("runtime_leases.%s should not exist; runtime leases store durable token facts only", column)
-		}
-	}
-	if !columnExists(t, store.db, "runtime_leases", "released_at_unix_ms") {
-		t.Fatal("runtime_leases.released_at_unix_ms should exist for released-lease invalidation")
 	}
 	var foreignKeys int
 	if err := store.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {

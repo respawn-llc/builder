@@ -11,13 +11,10 @@ import (
 )
 
 func (c *sessionRuntimeClient) SetSessionName(name string) error {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationSettingsSessionName); err != nil {
-		return err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	if err := c.retryControlCallNoResult(ctx, func(controllerLeaseID string) error {
-		return c.controls.SetSessionName(ctx, serverapi.RuntimeSetSessionNameRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Name: name})
+	if err := c.retryControlCallNoResult(ctx, func() error {
+		return c.controls.SetSessionName(ctx, serverapi.RuntimeSetSessionNameRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Name: name})
 	}); err != nil {
 		return err
 	}
@@ -28,13 +25,10 @@ func (c *sessionRuntimeClient) SetSessionName(name string) error {
 }
 
 func (c *sessionRuntimeClient) SetThinkingLevel(level string) error {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationSettingsThinkingLevel); err != nil {
-		return err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	if err := c.retryControlCallNoResult(ctx, func(controllerLeaseID string) error {
-		return c.controls.SetThinkingLevel(ctx, serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Level: level})
+	if err := c.retryControlCallNoResult(ctx, func() error {
+		return c.controls.SetThinkingLevel(ctx, serverapi.RuntimeSetThinkingLevelRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Level: level})
 	}); err != nil {
 		return err
 	}
@@ -45,13 +39,10 @@ func (c *sessionRuntimeClient) SetThinkingLevel(level string) error {
 }
 
 func (c *sessionRuntimeClient) SetFastModeEnabled(enabled bool) (bool, error) {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationSettingsFastMode); err != nil {
-		return false, err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-		return c.controls.SetFastModeEnabled(ctx, serverapi.RuntimeSetFastModeEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Enabled: enabled})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSetFastModeEnabledResponse, error) {
+		return c.controls.SetFastModeEnabled(ctx, serverapi.RuntimeSetFastModeEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err == nil {
 		c.patchMainView(func(view *clientui.RuntimeMainView) {
@@ -62,13 +53,10 @@ func (c *sessionRuntimeClient) SetFastModeEnabled(enabled bool) (bool, error) {
 }
 
 func (c *sessionRuntimeClient) SetReviewerEnabled(enabled bool) (bool, string, error) {
-	if c.isReadOnly() || c.isCollaborative() {
-		return false, "", errCollaborativeOperationBlocked
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-		return c.controls.SetReviewerEnabled(ctx, serverapi.RuntimeSetReviewerEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Enabled: enabled})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSetReviewerEnabledResponse, error) {
+		return c.controls.SetReviewerEnabled(ctx, serverapi.RuntimeSetReviewerEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err == nil {
 		c.patchMainView(func(view *clientui.RuntimeMainView) {
@@ -80,13 +68,10 @@ func (c *sessionRuntimeClient) SetReviewerEnabled(enabled bool) (bool, string, e
 }
 
 func (c *sessionRuntimeClient) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationSettingsAutoCompaction); err != nil {
-		return false, false, err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-		return c.controls.SetAutoCompactionEnabled(ctx, serverapi.RuntimeSetAutoCompactionEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Enabled: enabled})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
+		return c.controls.SetAutoCompactionEnabled(ctx, serverapi.RuntimeSetAutoCompactionEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err != nil {
 		return false, false, err
@@ -98,13 +83,10 @@ func (c *sessionRuntimeClient) SetAutoCompactionEnabled(enabled bool) (bool, boo
 }
 
 func (c *sessionRuntimeClient) SetQuestionsEnabled(enabled bool) (bool, error) {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationSettingsQuestions); err != nil {
-		return false, err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-		return c.controls.SetQuestionsEnabled(ctx, serverapi.RuntimeSetQuestionsEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Enabled: enabled})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
+		return c.controls.SetQuestionsEnabled(ctx, serverapi.RuntimeSetQuestionsEnabledRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Enabled: enabled})
 	})
 	if err != nil {
 		return false, err
@@ -118,7 +100,7 @@ func (c *sessionRuntimeClient) SetQuestionsEnabled(enabled bool) (bool, error) {
 func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverControllerLeaseWithWarning, false, func() (serverapi.RuntimeGoalShowResponse, error) {
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, false, func() (serverapi.RuntimeGoalShowResponse, error) {
 		return c.controls.ShowGoal(ctx, serverapi.RuntimeGoalShowRequest{SessionID: c.sessionID})
 	})
 	if err != nil {
@@ -132,13 +114,10 @@ func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 }
 
 func (c *sessionRuntimeClient) SetGoal(objective string) (*clientui.RuntimeGoal, error) {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationGoalManage); err != nil {
-		return nil, err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeGoalShowResponse, error) {
-		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Objective: objective, Actor: "user"})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeGoalShowResponse, error) {
+		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Objective: objective, Actor: "user"})
 	})
 	if err != nil {
 		return nil, err
@@ -163,13 +142,10 @@ func (c *sessionRuntimeClient) ResumeGoal() (*clientui.RuntimeGoal, error) {
 }
 
 func (c *sessionRuntimeClient) ClearGoal() (*clientui.RuntimeGoal, error) {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationGoalManage); err != nil {
-		return nil, err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeGoalShowResponse, error) {
-		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Actor: "user"})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeGoalShowResponse, error) {
+		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Actor: "user"})
 	})
 	if err != nil {
 		return nil, err
@@ -182,13 +158,10 @@ func (c *sessionRuntimeClient) ClearGoal() (*clientui.RuntimeGoal, error) {
 }
 
 func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error)) (*clientui.RuntimeGoal, error) {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationGoalManage); err != nil {
-		return nil, err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeGoalShowResponse, error) {
-		return call(ctx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Actor: "user"})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeGoalShowResponse, error) {
+		return call(ctx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Actor: "user"})
 	})
 	if err != nil {
 		return nil, err
@@ -225,60 +198,45 @@ func (c *sessionRuntimeClient) AppendCommittedEntry(role, text string) error {
 }
 
 func (c *sessionRuntimeClient) AppendCommittedEntryWithNoticeID(role, text, noticeID string) error {
-	if c.isReadOnly() || c.isCollaborative() {
-		return errCollaborativeOperationBlocked
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	return c.retryControlCallNoResult(ctx, func(controllerLeaseID string) error {
-		return c.controls.AppendCommittedEntry(ctx, serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Role: role, Text: text, NoticeID: strings.TrimSpace(noticeID)})
+	return c.retryControlCallNoResult(ctx, func() error {
+		return c.controls.AppendCommittedEntry(ctx, serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Role: role, Text: text, NoticeID: strings.TrimSpace(noticeID)})
 	})
 }
 
 func (c *sessionRuntimeClient) SubmitUserMessage(ctx context.Context, text string) (string, error) {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationSubmitUserTurn); err != nil {
-		return "", err
-	}
 	requestID := uuid.NewString()
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: requestID, SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Text: text})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSubmitUserTurnResponse, error) {
+		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: requestID, SessionID: c.sessionID, Text: text})
 	})
 	return resp.Message, err
 }
 
 func (c *sessionRuntimeClient) SubmitUserMessageWithPromptHistoryRecorded(ctx context.Context, text string) (string, error) {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationSubmitUserTurn); err != nil {
-		return "", err
-	}
 	requestID := uuid.NewString()
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: requestID, SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Text: text, PromptHistoryRecorded: true})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSubmitUserTurnResponse, error) {
+		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: requestID, SessionID: c.sessionID, Text: text, PromptHistoryRecorded: true})
 	})
 	return resp.Message, err
 }
 
 func (c *sessionRuntimeClient) SubmitUserShellCommand(ctx context.Context, command string) error {
-	if c.isReadOnly() || c.isCollaborative() {
-		return errCollaborativeOperationBlocked
-	}
-	return c.retryControlCallNoResult(ctx, func(controllerLeaseID string) error {
-		return c.controls.SubmitUserShellCommand(ctx, serverapi.RuntimeSubmitUserShellCommandRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Command: command})
+	return c.retryControlCallNoResult(ctx, func() error {
+		return c.controls.SubmitUserShellCommand(ctx, serverapi.RuntimeSubmitUserShellCommandRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Command: command})
 	})
 }
 
 func (c *sessionRuntimeClient) CompactContext(ctx context.Context, args string) error {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationCompactManual); err != nil {
-		return err
-	}
-	return c.retryControlCallNoResult(ctx, func(controllerLeaseID string) error {
-		return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Args: args})
+	return c.retryControlCallNoResult(ctx, func() error {
+		return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Args: args})
 	})
 }
 
 func (c *sessionRuntimeClient) HasQueuedUserWork() (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverControllerLeaseWithWarning, false, func() (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, false, func() (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
 		return c.controls.HasQueuedUserWork(ctx, serverapi.RuntimeHasQueuedUserWorkRequest{SessionID: c.sessionID})
 	})
 	if err != nil {
@@ -288,23 +246,17 @@ func (c *sessionRuntimeClient) HasQueuedUserWork() (bool, error) {
 }
 
 func (c *sessionRuntimeClient) SubmitQueuedUserMessages(ctx context.Context) (string, error) {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationSubmitQueuedUserMessages); err != nil {
-		return "", err
-	}
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
-		return c.controls.SubmitQueuedUserMessages(ctx, serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
+		return c.controls.SubmitQueuedUserMessages(ctx, serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID})
 	})
 	return resp.Message, err
 }
 
 func (c *sessionRuntimeClient) Interrupt() error {
-	if c.isReadOnly() || c.isCollaborative() {
-		return errCollaborativeOperationBlocked
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	return c.retryControlCallNoResult(ctx, func(controllerLeaseID string) error {
-		return c.controls.Interrupt(ctx, serverapi.RuntimeInterruptRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID})
+	return c.retryControlCallNoResult(ctx, func() error {
+		return c.controls.Interrupt(ctx, serverapi.RuntimeInterruptRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID})
 	})
 }
 
@@ -313,17 +265,14 @@ func (c *sessionRuntimeClient) QueueUserMessage(text string) (clientui.QueuedUse
 }
 
 func (c *sessionRuntimeClient) QueueUserMessageWithClientRequestID(text string, clientRequestID string) (clientui.QueuedUserMessage, error) {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationQueueUserMessage); err != nil {
-		return clientui.QueuedUserMessage{}, err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
 	requestID := strings.TrimSpace(clientRequestID)
 	if requestID == "" {
 		requestID = uuid.NewString()
 	}
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeQueueUserMessageResponse, error) {
-		return c.controls.QueueUserMessage(ctx, serverapi.RuntimeQueueUserMessageRequest{ClientRequestID: requestID, SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Text: text})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeQueueUserMessageResponse, error) {
+		return c.controls.QueueUserMessage(ctx, serverapi.RuntimeQueueUserMessageRequest{ClientRequestID: requestID, SessionID: c.sessionID, Text: text})
 	})
 	if err != nil {
 		c.notifyConnectionState(err)
@@ -337,13 +286,10 @@ func (c *sessionRuntimeClient) QueueUserMessageWithClientRequestID(text string, 
 }
 
 func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationDiscardQueuedUserMessage); err != nil {
-		return false
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
-	resp, err := retryRuntimeControlCall(ctx, c.controllerLeaseIDValue, c.recoverControllerLeaseWithWarning, true, func(controllerLeaseID string) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-		return c.controls.DiscardQueuedUserMessage(ctx, serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, QueueItemID: queueItemID})
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
+		return c.controls.DiscardQueuedUserMessage(ctx, serverapi.RuntimeDiscardQueuedUserMessageRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, QueueItemID: queueItemID})
 	})
 	if err != nil {
 		return false
@@ -352,13 +298,10 @@ func (c *sessionRuntimeClient) DiscardQueuedUserMessage(queueItemID string) bool
 }
 
 func (c *sessionRuntimeClient) RecordPromptHistory(text string) error {
-	if err := c.ensureOperation(serverapi.SessionRuntimeOperationRecordPromptHistory); err != nil {
-		return err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
 	defer cancel()
 	requestID := uuid.NewString()
-	return c.retryControlCallNoResult(ctx, func(controllerLeaseID string) error {
-		return c.controls.RecordPromptHistory(ctx, serverapi.RuntimeRecordPromptHistoryRequest{ClientRequestID: requestID, SessionID: c.sessionID, ControllerLeaseID: controllerLeaseID, Text: text})
+	return c.retryControlCallNoResult(ctx, func() error {
+		return c.controls.RecordPromptHistory(ctx, serverapi.RuntimeRecordPromptHistoryRequest{ClientRequestID: requestID, SessionID: c.sessionID, Text: text})
 	})
 }

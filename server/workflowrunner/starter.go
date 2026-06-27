@@ -17,7 +17,6 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/primaryrun"
 	"core/server/runprompt"
 	"core/server/runtime"
 	"core/server/runtimeview"
@@ -60,7 +59,6 @@ type TaskWorktreeEnsurer interface {
 }
 
 type RuntimeEventRegistry interface {
-	primaryrun.Gate
 	runtimewire.RuntimeRegistry
 	PublishRuntimeEvent(sessionID string, evt runtime.Event)
 	AwaitPromptResponse(ctx context.Context, sessionID string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error)
@@ -739,33 +737,14 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		rebind = runtimewire.RuntimeRebindFunc(wiring.LocalTools.Rebind, wiring.Engine)
 	}
 	sessionID := plan.Store.Meta().SessionID
-	var workflowTurnLease primaryrun.Lease
-	workflowTurnLease, err = s.acquirePrimaryRun(sessionID)
-	if err != nil {
-		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonRuntimeFailed, err)
-		return
-	}
-	workflowTurnLeaseHeld := true
 	failQueuedOnClose := false
 	registration := runtimewire.RegisterSessionRuntime(sessionID, wiring.Engine, runtimeRegistry, s.backgroundRouter, runtimewire.WithRuntimeRebind(rebind))
 	defer func() {
-		if workflowTurnLeaseHeld && workflowTurnLease != nil {
-			defer workflowTurnLease.Release()
-		}
 		_ = registration.CloseWithDrain(context.Background(), func(drainCtx context.Context) error {
 			if failQueuedOnClose {
 				wiring.Engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
 				return nil
 			}
-			if workflowTurnLeaseHeld {
-				return wiring.Engine.DrainQueuedUserMessagesBeforeClose(drainCtx)
-			}
-			lease, err := s.acquirePrimaryRun(plan.Store.Meta().SessionID)
-			if err != nil {
-				wiring.Engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
-				return err
-			}
-			defer lease.Release()
 			return wiring.Engine.DrainQueuedUserMessagesBeforeClose(drainCtx)
 		})
 	}()
@@ -800,13 +779,6 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		}
 		s.interrupt(context.Background(), req.RunID, req.Generation, reason, err)
 	}
-}
-
-func (s *Starter) acquirePrimaryRun(sessionID string) (primaryrun.Lease, error) {
-	if s == nil || s.runtimes == nil {
-		return primaryrun.LeaseFunc(nil), nil
-	}
-	return s.runtimes.AcquirePrimaryRun(sessionID)
 }
 
 func (s *Starter) finish(runID workflow.RunID, generation int64) {

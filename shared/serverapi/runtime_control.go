@@ -9,24 +9,21 @@ import (
 )
 
 type RuntimeSetSessionNameRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Name              string `json:"name"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Name            string `json:"name"`
 }
 
 type RuntimeSetThinkingLevelRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Level             string `json:"level"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Level           string `json:"level"`
 }
 
 type RuntimeSetFastModeEnabledRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Enabled           bool   `json:"enabled"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Enabled         bool   `json:"enabled"`
 }
 
 type RuntimeSetFastModeEnabledResponse struct {
@@ -34,10 +31,9 @@ type RuntimeSetFastModeEnabledResponse struct {
 }
 
 type RuntimeSetReviewerEnabledRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Enabled           bool   `json:"enabled"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Enabled         bool   `json:"enabled"`
 }
 
 type RuntimeSetReviewerEnabledResponse struct {
@@ -46,10 +42,9 @@ type RuntimeSetReviewerEnabledResponse struct {
 }
 
 type RuntimeSetAutoCompactionEnabledRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Enabled           bool   `json:"enabled"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Enabled         bool   `json:"enabled"`
 }
 
 type RuntimeSetAutoCompactionEnabledResponse struct {
@@ -58,10 +53,9 @@ type RuntimeSetAutoCompactionEnabledResponse struct {
 }
 
 type RuntimeSetQuestionsEnabledRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Enabled           bool   `json:"enabled"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Enabled         bool   `json:"enabled"`
 }
 
 type RuntimeSetQuestionsEnabledResponse struct {
@@ -70,13 +64,12 @@ type RuntimeSetQuestionsEnabledResponse struct {
 }
 
 type RuntimeAppendCommittedEntryRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Role              string `json:"role"`
-	Text              string `json:"text"`
-	Visibility        string `json:"visibility,omitempty"`
-	NoticeID          string `json:"notice_id,omitempty"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Role            string `json:"role"`
+	Text            string `json:"text"`
+	Visibility      string `json:"visibility,omitempty"`
+	NoticeID        string `json:"notice_id,omitempty"`
 }
 
 type RuntimeShouldCompactBeforeUserMessageRequest struct {
@@ -89,47 +82,46 @@ type RuntimeShouldCompactBeforeUserMessageResponse struct {
 }
 
 type RuntimeSubmitUserMessageRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Text              string `json:"text"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Text            string `json:"text"`
 }
 
 type RuntimeSubmitUserMessageResponse struct {
-	Message string `json:"message"`
+	Message     string `json:"message"`
+	Steered     bool   `json:"steered,omitempty"`
+	QueueItemID string `json:"queue_item_id,omitempty"`
 }
 
 type RuntimeSubmitUserTurnRequest struct {
 	ClientRequestID       string `json:"client_request_id"`
 	SessionID             string `json:"session_id"`
-	ControllerLeaseID     string `json:"controller_lease_id"`
 	Text                  string `json:"text"`
 	PromptHistoryRecorded bool   `json:"prompt_history_recorded,omitempty"`
 }
 
 type RuntimeSubmitUserTurnResponse struct {
-	Message   string `json:"message"`
-	Compacted bool   `json:"compacted,omitempty"`
+	Message     string `json:"message"`
+	Compacted   bool   `json:"compacted,omitempty"`
+	Steered     bool   `json:"steered,omitempty"`
+	QueueItemID string `json:"queue_item_id,omitempty"`
 }
 
 type RuntimeSubmitUserShellCommandRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Command           string `json:"command"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Command         string `json:"command"`
 }
 
 type RuntimeCompactContextRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Args              string `json:"args"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Args            string `json:"args"`
 }
 
 type RuntimeCompactContextForPreSubmitRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
 }
 
 type RuntimeHasQueuedUserWorkRequest struct {
@@ -141,9 +133,8 @@ type RuntimeHasQueuedUserWorkResponse struct {
 }
 
 type RuntimeSubmitQueuedUserMessagesRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
 }
 
 type RuntimeSubmitQueuedUserMessagesResponse struct {
@@ -151,16 +142,14 @@ type RuntimeSubmitQueuedUserMessagesResponse struct {
 }
 
 type RuntimeInterruptRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
 }
 
 type RuntimeQueueUserMessageRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Text              string `json:"text"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Text            string `json:"text"`
 }
 
 type RuntimeQueueUserMessageResponse struct {
@@ -170,10 +159,9 @@ type RuntimeQueueUserMessageResponse struct {
 }
 
 type RuntimeDiscardQueuedUserMessageRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	QueueItemID       string `json:"queue_item_id"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	QueueItemID     string `json:"queue_item_id"`
 }
 
 type RuntimeDiscardQueuedUserMessageResponse struct {
@@ -181,10 +169,9 @@ type RuntimeDiscardQueuedUserMessageResponse struct {
 }
 
 type RuntimeRecordPromptHistoryRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Text              string `json:"text"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Text            string `json:"text"`
 }
 
 type RuntimeGoal struct {
@@ -205,38 +192,22 @@ type RuntimeGoalShowResponse struct {
 }
 
 type RuntimeGoalSetRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id,omitempty"`
-	ShellToken        string `json:"shell_token,omitempty"`
-	ShellRunID        string `json:"shell_run_id,omitempty"`
-	ShellStepID       string `json:"shell_step_id,omitempty"`
-	Objective         string `json:"objective"`
-	Actor             string `json:"actor"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Objective       string `json:"objective"`
+	Actor           string `json:"actor"`
 }
 
 type RuntimeGoalStatusRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id,omitempty"`
-	ShellToken        string `json:"shell_token,omitempty"`
-	ShellRunID        string `json:"shell_run_id,omitempty"`
-	ShellStepID       string `json:"shell_step_id,omitempty"`
-	Actor             string `json:"actor"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Actor           string `json:"actor"`
 }
 
 type RuntimeGoalClearRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id,omitempty"`
-	Actor             string `json:"actor"`
-}
-
-func validateControllerLeaseID(leaseID string) error {
-	if strings.TrimSpace(leaseID) == "" {
-		return errors.New("controller_lease_id is required")
-	}
-	return nil
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Actor           string `json:"actor"`
 }
 
 func validateClientRequestID(clientRequestID string) error {
@@ -255,27 +226,11 @@ func validateGoalActor(actor string) error {
 	}
 }
 
-func validateRuntimeControllerRequest(clientRequestID string, sessionID string, controllerLeaseID string) error {
+func validateRuntimeControlRequest(clientRequestID string, sessionID string) error {
 	if err := validateClientRequestID(clientRequestID); err != nil {
 		return err
 	}
-	if err := validateRequiredSessionID(sessionID); err != nil {
-		return err
-	}
-	return validateControllerLeaseID(controllerLeaseID)
-}
-
-func validateRuntimeControlRequest(clientRequestID string, sessionID string, controllerLeaseID string) error {
-	if err := validateClientRequestID(clientRequestID); err != nil {
-		return err
-	}
-	if err := validateRequiredSessionID(sessionID); err != nil {
-		return err
-	}
-	if strings.TrimSpace(controllerLeaseID) != "" {
-		return validateControllerLeaseID(controllerLeaseID)
-	}
-	return nil
+	return validateRequiredSessionID(sessionID)
 }
 
 func validateRuntimeGoalActionRequest(clientRequestID string, sessionID string, actor string) error {
@@ -289,25 +244,25 @@ func validateRuntimeGoalActionRequest(clientRequestID string, sessionID string, 
 }
 
 func (r RuntimeSetSessionNameRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeSetThinkingLevelRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeSetFastModeEnabledRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeSetReviewerEnabledRequest) Validate() error {
-	return validateRuntimeControllerRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeSetAutoCompactionEnabledRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeSetQuestionsEnabledRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeAppendCommittedEntryRequest) Validate() error {
-	if err := validateRuntimeControllerRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID); err != nil {
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
 	if visibility := transcript.NormalizeEntryVisibility(transcript.EntryVisibility(r.Visibility)); visibility != "" && visibility != transcript.EntryVisibilityAll && visibility != transcript.EntryVisibilityVerbose {
@@ -319,34 +274,34 @@ func (r RuntimeShouldCompactBeforeUserMessageRequest) Validate() error {
 	return validateRequiredSessionID(r.SessionID)
 }
 func (r RuntimeSubmitUserMessageRequest) Validate() error {
-	return validateRuntimeControllerRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeSubmitUserTurnRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeSubmitUserShellCommandRequest) Validate() error {
-	return validateRuntimeControllerRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeCompactContextRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeCompactContextForPreSubmitRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeHasQueuedUserWorkRequest) Validate() error {
 	return validateRequiredSessionID(r.SessionID)
 }
 func (r RuntimeSubmitQueuedUserMessagesRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeInterruptRequest) Validate() error {
-	return validateRuntimeControllerRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeQueueUserMessageRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeDiscardQueuedUserMessageRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID); err != nil {
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(r.QueueItemID) == "" {
@@ -355,13 +310,13 @@ func (r RuntimeDiscardQueuedUserMessageRequest) Validate() error {
 	return nil
 }
 func (r RuntimeRecordPromptHistoryRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID)
+	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeGoalShowRequest) Validate() error {
 	return validateRequiredSessionID(r.SessionID)
 }
 func (r RuntimeGoalSetRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID); err != nil {
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(r.Objective) == "" {
@@ -370,13 +325,13 @@ func (r RuntimeGoalSetRequest) Validate() error {
 	return validateGoalActor(r.Actor)
 }
 func (r RuntimeGoalStatusRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID); err != nil {
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
 	return validateGoalActor(r.Actor)
 }
 func (r RuntimeGoalClearRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID, r.ControllerLeaseID); err != nil {
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
 	return validateGoalActor(r.Actor)

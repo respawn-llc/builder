@@ -3,9 +3,7 @@ package promptcontrol
 import (
 	"context"
 	"errors"
-	"strings"
 
-	"core/server/registry"
 	"core/server/requestmemo"
 	askquestion "core/server/tools"
 	servicecontract "core/shared/apicontract"
@@ -17,29 +15,10 @@ type PendingPromptResponder interface {
 	SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error
 }
 
-type ControllerLeaseVerifier interface {
-	RequireControllerLease(ctx context.Context, sessionID string, leaseID string) error
-}
-
-type CollaborativePromptResponderResolver interface {
-	WithCollaborativePromptResponder(ctx context.Context, sessionID string, op serverapi.SessionRuntimeOperation, fn func(registry.GuardedPromptResponder) error) error
-}
-
 type PromptControlService struct {
-	prompts       PendingPromptResponder
-	control       ControllerLeaseVerifier
-	collaborative CollaborativePromptResponderResolver
-	asks          *requestmemo.Memo[askAnswerMemoRequest, struct{}]
-	approvals     *requestmemo.Memo[approvalAnswerMemoRequest, struct{}]
-}
-
-type guardedPromptResponder struct {
-	sessionID string
-	prompts   registry.GuardedPromptResponder
-}
-
-func (r guardedPromptResponder) SubmitPromptResponse(_ string, resp askquestion.AskQuestionResponse, err error) error {
-	return r.prompts.SubmitPromptResponse(resp, err)
+	prompts   PendingPromptResponder
+	asks      *requestmemo.Memo[askAnswerMemoRequest, struct{}]
+	approvals *requestmemo.Memo[approvalAnswerMemoRequest, struct{}]
 }
 
 type askAnswerMemoRequest struct {
@@ -67,42 +46,8 @@ func NewPromptControlService(prompts PendingPromptResponder) *PromptControlServi
 	}
 }
 
-func (s *PromptControlService) WithControllerLeaseVerifier(verifier ControllerLeaseVerifier) *PromptControlService {
-	if s == nil {
-		return nil
-	}
-	s.control = verifier
-	return s
-}
-
-func (s *PromptControlService) WithCollaborativeRuntimeResolver(resolver CollaborativePromptResponderResolver) *PromptControlService {
-	if s == nil {
-		return nil
-	}
-	s.collaborative = resolver
-	return s
-}
-
-func (s *PromptControlService) requireControllerLease(ctx context.Context, sessionID string, leaseID string) error {
-	if s == nil || s.control == nil {
-		return nil
-	}
-	return s.control.RequireControllerLease(ctx, sessionID, leaseID)
-}
-
-func (s *PromptControlService) withPromptAccess(ctx context.Context, sessionID string, leaseID string, fn func(PendingPromptResponder) error) error {
-	if strings.TrimSpace(leaseID) != "" {
-		if err := s.requireControllerLease(ctx, sessionID, leaseID); err != nil {
-			return err
-		}
-		return fn(s.prompts)
-	}
-	if s == nil || s.collaborative == nil {
-		return serverapi.ErrInvalidControllerLease
-	}
-	return s.collaborative.WithCollaborativePromptResponder(ctx, sessionID, serverapi.SessionRuntimeOperationPromptAnswer, func(prompts registry.GuardedPromptResponder) error {
-		return fn(guardedPromptResponder{sessionID: sessionID, prompts: prompts})
-	})
+func (s *PromptControlService) withPromptAccess(fn func(PendingPromptResponder) error) error {
+	return fn(s.prompts)
 }
 
 func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskAnswerRequest) error {
@@ -121,7 +66,7 @@ func (s *PromptControlService) AnswerAsk(ctx context.Context, req serverapi.AskA
 		FreeformAnswer:       req.FreeformAnswer,
 	}
 	_, err := s.asks.Do(ctx, req.ClientRequestID, memoReq, sameAskAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withPromptAccess(ctx, req.SessionID, req.ControllerLeaseID, func(prompts PendingPromptResponder) error {
+		return struct{}{}, s.withPromptAccess(func(prompts PendingPromptResponder) error {
 			if req.ErrorMessage != "" {
 				return prompts.SubmitPromptResponse(req.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID}, errors.New(req.ErrorMessage))
 			}
@@ -151,7 +96,7 @@ func (s *PromptControlService) AnswerApproval(ctx context.Context, req serverapi
 		Commentary:   req.Commentary,
 	}
 	_, err := s.approvals.Do(ctx, req.ClientRequestID, memoReq, sameApprovalAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withPromptAccess(ctx, req.SessionID, req.ControllerLeaseID, func(prompts PendingPromptResponder) error {
+		return struct{}{}, s.withPromptAccess(func(prompts PendingPromptResponder) error {
 			if req.ErrorMessage != "" {
 				return prompts.SubmitPromptResponse(req.SessionID, askquestion.AskQuestionResponse{RequestID: req.ApprovalID}, errors.New(req.ErrorMessage))
 			}

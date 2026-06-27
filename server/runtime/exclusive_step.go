@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -34,7 +33,6 @@ type exclusiveRunState struct {
 	cancel    context.CancelFunc
 	runID     string
 	stepID    string
-	closing   bool
 	startedAt time.Time
 }
 
@@ -74,12 +72,6 @@ func (s *defaultExclusiveStepLifecycle) Run(ctx context.Context, options exclusi
 	}
 	defer func() {
 		panicValue := recover()
-		s.closeActiveRunGate()
-		if panicValue == nil && err == nil {
-			if drainErr := s.engine.drainActiveRunGoalMutations(stepID); drainErr != nil {
-				err = errors.Join(err, fmt.Errorf("drain active-run goal mutations: %w", drainErr))
-			}
-		}
 		finishedAt := time.Now().UTC()
 		status := statusFromRunError(err)
 		if panicValue != nil {
@@ -168,34 +160,6 @@ func (s *defaultExclusiveStepLifecycle) Snapshot() *RunSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneRunSnapshot(s.snapshotLocked())
-}
-
-func (s *defaultExclusiveStepLifecycle) WithActiveRun(runID string, stepID string, fn func() error) (bool, error) {
-	if s == nil {
-		return false, nil
-	}
-	runID = strings.TrimSpace(runID)
-	stepID = strings.TrimSpace(stepID)
-	if runID == "" || stepID == "" || fn == nil {
-		return false, nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.active == nil || s.active.closing || s.active.runID != runID || s.active.stepID != stepID {
-		return false, nil
-	}
-	return true, fn()
-}
-
-func (s *defaultExclusiveStepLifecycle) closeActiveRunGate() {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.active != nil {
-		s.active.closing = true
-	}
 }
 
 func (s *defaultExclusiveStepLifecycle) begin(ctx context.Context, options exclusiveStepOptions) (context.Context, string, error) {

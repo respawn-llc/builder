@@ -3,8 +3,6 @@ package shell
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -149,7 +147,6 @@ func (m *Manager) emitEvent(evt Event) {
 func (m *Manager) waitForExit(entry *processEntry) {
 	defer close(entry.done)
 	err := entry.cmd.Wait()
-	m.unregisterEntryShellToken(entry)
 	exitCode, state := processExitState(err)
 	if !entry.isBackgrounded() {
 		entry.setExited(exitCode, state)
@@ -236,76 +233,7 @@ func (m *Manager) allocateProcessSlot() (string, string, error) {
 func (m *Manager) releaseEntry(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	entry := m.entries[id]
 	delete(m.entries, id)
-	if entry != nil {
-		m.unregisterSessionTokenLocked(entry.ownerSessionID, entry.shellToken)
-	}
-}
-
-func (m *Manager) unregisterEntryShellToken(entry *processEntry) {
-	if m == nil || entry == nil {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.unregisterSessionTokenLocked(entry.ownerSessionID, entry.shellToken)
-}
-
-func (m *Manager) VerifyShellToken(sessionID string, token string) bool {
-	if m == nil {
-		return false
-	}
-	sessionID = strings.TrimSpace(sessionID)
-	token = strings.TrimSpace(token)
-	if sessionID == "" || token == "" {
-		return false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.sessionTokens[sessionID][token] > 0
-}
-
-func (m *Manager) registerSessionTokenLocked(sessionID string, token string) {
-	sessionID = strings.TrimSpace(sessionID)
-	token = strings.TrimSpace(token)
-	if sessionID == "" || token == "" {
-		return
-	}
-	tokens := m.sessionTokens[sessionID]
-	if tokens == nil {
-		tokens = make(map[string]int)
-		m.sessionTokens[sessionID] = tokens
-	}
-	tokens[token]++
-}
-
-func (m *Manager) unregisterSessionTokenLocked(sessionID string, token string) {
-	sessionID = strings.TrimSpace(sessionID)
-	token = strings.TrimSpace(token)
-	if sessionID == "" || token == "" {
-		return
-	}
-	tokens := m.sessionTokens[sessionID]
-	if tokens == nil {
-		return
-	}
-	if tokens[token] <= 1 {
-		delete(tokens, token)
-	} else {
-		tokens[token]--
-	}
-	if len(tokens) == 0 {
-		delete(m.sessionTokens, sessionID)
-	}
-}
-
-func newShellToken() (string, error) {
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("generate shell token: %w", err)
-	}
-	return hex.EncodeToString(b[:]), nil
 }
 
 func (m *Manager) normalizeExecYieldTime(value time.Duration) time.Duration {

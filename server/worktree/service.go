@@ -16,8 +16,6 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/primaryrun"
-	runtimepkg "core/server/runtime"
 	"core/server/session"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
@@ -31,67 +29,20 @@ const setupScriptTimeout = 20 * time.Second
 const rollbackSessionTargetTimeout = 5 * time.Second
 
 type runtimeController interface {
-	RequireControllerLease(ctx context.Context, sessionID string, leaseID string) error
-	RebindLocalTools(ctx context.Context, sessionID string, leaseID string, workspaceRoot string) error
-	RecordWorktreeTransition(ctx context.Context, sessionID string, leaseID string, state session.WorktreeReminderState) error
 	SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error
-	PersistWorktreeReminderState(ctx context.Context, sessionID string, reminder *session.WorktreeReminderState) error
+	HasActiveRun(ctx context.Context, sessionID string) (bool, error)
 }
 
-type collaborativeRuntimeController interface {
-	WithCollaborativeRuntimeEngine(ctx context.Context, sessionID string, op serverapi.SessionRuntimeOperation, fn func(*runtimepkg.Engine) error) error
-}
-
-type collaborativeRuntimeGuardController interface {
-	BeginCollaborativeRuntimeGuard(ctx context.Context, sessionID string, op serverapi.SessionRuntimeOperation) (interface {
-		Release()
-		Rebind(workdir string) error
-	}, error)
-}
-
-type collaborativeRuntimeAccess interface {
+type worktreeLease interface {
 	Release()
-	Rebind(workdir string) error
 }
 
-type mutationRuntimeAccess interface {
-	Release()
-	SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error
-}
+type leaseFunc func()
 
-type controllerMutationRuntimeAccess struct {
-	runtime runtimeController
-}
-
-func (a controllerMutationRuntimeAccess) Release() {}
-
-func (a controllerMutationRuntimeAccess) SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-	return a.runtime.SyncExecutionTarget(ctx, sessionID, target, reminder)
-}
-
-type collaborativeMutationRuntimeAccess struct {
-	runtime runtimeController
-	guard   collaborativeRuntimeAccess
-}
-
-func (a collaborativeMutationRuntimeAccess) Release() {
-	if a.guard != nil {
-		a.guard.Release()
+func (f leaseFunc) Release() {
+	if f != nil {
+		f()
 	}
-}
-
-func (a collaborativeMutationRuntimeAccess) SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-	trimmedWorkdir := strings.TrimSpace(target.EffectiveWorkdir)
-	if trimmedWorkdir == "" {
-		return errors.New("execution target effective workdir is required")
-	}
-	if a.guard == nil {
-		return errors.Join(serverapi.ErrRuntimeUnavailable, errors.New("worktree control is unavailable for this session's active runtime"))
-	}
-	if err := a.guard.Rebind(trimmedWorkdir); err != nil {
-		return err
-	}
-	return a.runtime.PersistWorktreeReminderState(ctx, sessionID, reminder)
 }
 
 type activeRuntimeSource interface {
@@ -115,7 +66,6 @@ type ServiceOptions struct {
 type Service struct {
 	metadata    *metadata.Store
 	git         *GitInspector
-	gate        primaryrun.Gate
 	runtime     runtimeController
 	active      activeRuntimeSource
 	processes   processSource
@@ -186,20 +136,18 @@ type DeleteTaskWorktreeResponse struct {
 	BranchDeleted bool
 }
 
-func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, gate primaryrun.Gate, runtime runtimeController, processes processSource, localNotes localEntryAppender, opts ServiceOptions) *Service {
+func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, active activeRuntimeSource, runtime runtimeController, processes processSource, localNotes localEntryAppender, opts ServiceOptions) *Service {
 	if gitInspector == nil {
 		gitInspector = NewGitInspector(nil)
 	}
-	var active activeRuntimeSource
-	if source, ok := gate.(activeRuntimeSource); ok {
-		active = source
-	} else if source, ok := runtime.(activeRuntimeSource); ok {
-		active = source
+	if active == nil {
+		if source, ok := runtime.(activeRuntimeSource); ok {
+			active = source
+		}
 	}
 	return &Service{
 		metadata:       metadataStore,
 		git:            gitInspector,
-		gate:           gate,
 		runtime:        runtime,
 		active:         active,
 		processes:      processes,
@@ -539,7 +487,7 @@ func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListR
 	if err := req.Validate(); err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
-	release, workspaceCtx, _, err := s.beginMutation(ctx, req.SessionID, req.ControllerLeaseID)
+	release, workspaceCtx, err := s.beginMutation(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
@@ -582,7 +530,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
-	release, workspaceCtx, runtimeAccess, err := s.beginMutation(ctx, req.SessionID, req.ControllerLeaseID)
+	release, workspaceCtx, err := s.beginMutation(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
@@ -635,11 +583,11 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		return serverapi.WorktreeCreateResponse{}, err
 	}
 	previous := currentSyncedWorktree(synced, workspaceCtx.target)
-	nextTarget, err := s.switchSessionTarget(ctx, workspaceCtx, runtimeAccess, req.ControllerLeaseID, previous, created)
+	nextTarget, err := s.switchSessionTarget(ctx, workspaceCtx, previous, created)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
-	setupScheduled := s.scheduleSetupScript(workspaceCtx, req.ControllerLeaseID, created, strings.TrimSpace(created.git.BranchName), createdBranch)
+	setupScheduled := s.scheduleSetupScript(workspaceCtx, created, strings.TrimSpace(created.git.BranchName), createdBranch)
 	createdView := worktreeViewFromSynced(created, nextTarget)
 	createdView.Managed = true
 	createdView.CreatedBranch = createdBranch
@@ -707,7 +655,7 @@ func (s *Service) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwit
 	if err := req.Validate(); err != nil {
 		return serverapi.WorktreeSwitchResponse{}, err
 	}
-	release, workspaceCtx, runtimeAccess, err := s.beginMutation(ctx, req.SessionID, req.ControllerLeaseID)
+	release, workspaceCtx, err := s.beginMutation(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.WorktreeSwitchResponse{}, err
 	}
@@ -721,7 +669,7 @@ func (s *Service) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwit
 		return serverapi.WorktreeSwitchResponse{}, serverapi.ErrWorktreeNotFound
 	}
 	previous := currentSyncedWorktree(synced, workspaceCtx.target)
-	nextTarget, err := s.switchSessionTarget(ctx, workspaceCtx, runtimeAccess, req.ControllerLeaseID, previous, targetWorktree)
+	nextTarget, err := s.switchSessionTarget(ctx, workspaceCtx, previous, targetWorktree)
 	if err != nil {
 		return serverapi.WorktreeSwitchResponse{}, err
 	}
@@ -732,7 +680,7 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 	if err := req.Validate(); err != nil {
 		return serverapi.WorktreeDeleteResponse{}, err
 	}
-	release, workspaceCtx, runtimeAccess, err := s.beginMutation(ctx, req.SessionID, req.ControllerLeaseID)
+	release, workspaceCtx, err := s.beginMutation(ctx, req.SessionID)
 	if err != nil {
 		return serverapi.WorktreeDeleteResponse{}, err
 	}
@@ -758,7 +706,7 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		if !mainFound {
 			return serverapi.WorktreeDeleteResponse{}, fmt.Errorf("main worktree not found for workspace %q", workspaceCtx.workspaceID)
 		}
-		if _, err := s.switchSessionTarget(ctx, workspaceCtx, runtimeAccess, req.ControllerLeaseID, &targetWorktree, mainWorktree); err != nil {
+		if _, err := s.switchSessionTarget(ctx, workspaceCtx, &targetWorktree, mainWorktree); err != nil {
 			return serverapi.WorktreeDeleteResponse{}, err
 		}
 		workspaceCtx, err = s.resolveSessionWorkspaceContext(ctx, workspaceCtx.sessionID)
@@ -804,85 +752,35 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 	return serverapi.WorktreeDeleteResponse{Target: finalTarget, Worktree: worktreeViewFromSynced(targetWorktree, finalTarget), BranchDeleted: branchDeleted, BranchCleanupMessage: branchCleanupMessage}, nil
 }
 
-func (s *Service) beginMutation(ctx context.Context, sessionID string, leaseID string) (primaryrun.Lease, sessionWorkspaceContext, mutationRuntimeAccess, error) {
+func (s *Service) beginMutation(ctx context.Context, sessionID string) (worktreeLease, sessionWorkspaceContext, error) {
 	if s == nil || s.metadata == nil {
-		return nil, sessionWorkspaceContext{}, nil, errors.New("worktree service metadata store is required")
+		return nil, sessionWorkspaceContext{}, errors.New("worktree service metadata store is required")
 	}
 	if s.runtime == nil {
-		return nil, sessionWorkspaceContext{}, nil, errors.New("worktree service runtime controller is required")
-	}
-	if s.gate == nil {
-		return nil, sessionWorkspaceContext{}, nil, errors.New("worktree service primary-run gate is required")
-	}
-	runtimeRelease, err := s.beginMutationRuntimeAccess(ctx, sessionID, leaseID)
-	if err != nil {
-		return nil, sessionWorkspaceContext{}, nil, err
-	}
-	release, err := s.gate.AcquirePrimaryRun(strings.TrimSpace(sessionID))
-	if err != nil {
-		runtimeRelease.Release()
-		if errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-			return nil, sessionWorkspaceContext{}, nil, errors.Join(serverapi.ErrWorktreeMutationRequiresIdle, err)
-		}
-		return nil, sessionWorkspaceContext{}, nil, err
+		return nil, sessionWorkspaceContext{}, errors.New("worktree service runtime controller is required")
 	}
 	for {
 		workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
 		if err != nil {
-			release.Release()
-			runtimeRelease.Release()
-			return nil, sessionWorkspaceContext{}, nil, err
+			return nil, sessionWorkspaceContext{}, err
 		}
 		workspaceLease := s.acquireWorkspaceMutationLock(workspaceCtx.workspaceID)
 		lockedWorkspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
 		if err != nil {
 			workspaceLease.Release()
-			release.Release()
-			runtimeRelease.Release()
-			return nil, sessionWorkspaceContext{}, nil, err
+			return nil, sessionWorkspaceContext{}, err
 		}
 		if strings.TrimSpace(lockedWorkspaceCtx.workspaceID) == strings.TrimSpace(workspaceCtx.workspaceID) {
-			return primaryrun.LeaseFunc(func() {
-				workspaceLease.Release()
-				release.Release()
-				runtimeRelease.Release()
-			}), lockedWorkspaceCtx, runtimeRelease, nil
+			return workspaceLease, lockedWorkspaceCtx, nil
 		}
 		workspaceLease.Release()
 	}
 }
 
-func (s *Service) beginMutationRuntimeAccess(ctx context.Context, sessionID string, leaseID string) (mutationRuntimeAccess, error) {
-	if strings.TrimSpace(leaseID) != "" {
-		if err := s.runtime.RequireControllerLease(ctx, sessionID, leaseID); err != nil {
-			return nil, err
-		}
-		return controllerMutationRuntimeAccess{runtime: s.runtime}, nil
-	}
-	scoped, ok := s.runtime.(collaborativeRuntimeGuardController)
-	if ok {
-		guard, err := scoped.BeginCollaborativeRuntimeGuard(ctx, sessionID, serverapi.SessionRuntimeOperationWorktreeManage)
-		if err != nil {
-			return nil, err
-		}
-		return collaborativeMutationRuntimeAccess{runtime: s.runtime, guard: guard}, nil
-	}
-	collaborative, ok := s.runtime.(collaborativeRuntimeController)
-	if !ok {
-		return nil, serverapi.ErrInvalidControllerLease
-	}
-	if err := collaborative.WithCollaborativeRuntimeEngine(ctx, sessionID, serverapi.SessionRuntimeOperationWorktreeManage, func(*runtimepkg.Engine) error {
-		return errors.Join(serverapi.ErrRuntimeUnavailable, errors.New("worktree control is unavailable for this session's active runtime"))
-	}); err != nil {
-		return nil, err
-	}
-	return nil, errors.Join(serverapi.ErrRuntimeUnavailable, errors.New("worktree control is unavailable for this session's active runtime"))
-}
-
-func (s *Service) acquireWorkspaceMutationLock(workspaceID string) primaryrun.Lease {
+func (s *Service) acquireWorkspaceMutationLock(workspaceID string) worktreeLease {
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
 	if s == nil || trimmedWorkspaceID == "" {
-		return primaryrun.LeaseFunc(func() {})
+		return leaseFunc(func() {})
 	}
 	s.workspaceMu.Lock()
 	if s.workspaceLocks == nil {
@@ -897,7 +795,7 @@ func (s *Service) acquireWorkspaceMutationLock(workspaceID string) primaryrun.Le
 	s.workspaceMu.Unlock()
 	lock.mu.Lock()
 	var once sync.Once
-	return primaryrun.LeaseFunc(func() {
+	return leaseFunc(func() {
 		once.Do(func() {
 			lock.mu.Unlock()
 			s.workspaceMu.Lock()
@@ -1167,7 +1065,7 @@ func worktreeHasStableIdentity(entry GitWorktree) bool {
 	return strings.TrimSpace(entry.BranchRef) != "" || strings.TrimSpace(entry.HeadOID) != "" || entry.Detached || entry.IsMain || entry.Bare
 }
 
-func (s *Service) switchSessionTarget(ctx context.Context, workspaceCtx sessionWorkspaceContext, runtimeAccess mutationRuntimeAccess, leaseID string, previous *syncedWorktree, next syncedWorktree) (clientui.SessionExecutionTarget, error) {
+func (s *Service) switchSessionTarget(ctx context.Context, workspaceCtx sessionWorkspaceContext, previous *syncedWorktree, next syncedWorktree) (clientui.SessionExecutionTarget, error) {
 	nextWorktreeID := strings.TrimSpace(next.record.ID)
 	nextBaseRoot := strings.TrimSpace(next.record.CanonicalRoot)
 	if next.git.IsMain {
@@ -1181,46 +1079,33 @@ func (s *Service) switchSessionTarget(ctx context.Context, workspaceCtx sessionW
 	}
 	nextTarget, err := s.metadata.ResolveSessionExecutionTarget(ctx, workspaceCtx.sessionID)
 	if err != nil {
-		s.rollbackSessionTarget(ctx, workspaceCtx, runtimeAccess, leaseID, previousTarget)
+		s.rollbackSessionTarget(ctx, workspaceCtx, previousTarget)
 		return clientui.SessionExecutionTarget{}, err
 	}
 	if reminder, ok := worktreeReminderStateForTransition(previous, previousTarget, next, nextTarget); ok {
-		if err := s.applySessionTarget(ctx, workspaceCtx.sessionID, runtimeAccess, leaseID, nextTarget, &reminder); err != nil {
-			s.rollbackSessionTarget(ctx, workspaceCtx, runtimeAccess, leaseID, previousTarget)
+		if err := s.applySessionTarget(ctx, workspaceCtx.sessionID, nextTarget, &reminder); err != nil {
+			s.rollbackSessionTarget(ctx, workspaceCtx, previousTarget)
 			return clientui.SessionExecutionTarget{}, err
 		}
 		return nextTarget, nil
 	}
-	if err := s.applySessionTarget(ctx, workspaceCtx.sessionID, runtimeAccess, leaseID, nextTarget, nil); err != nil {
-		s.rollbackSessionTarget(ctx, workspaceCtx, runtimeAccess, leaseID, previousTarget)
+	if err := s.applySessionTarget(ctx, workspaceCtx.sessionID, nextTarget, nil); err != nil {
+		s.rollbackSessionTarget(ctx, workspaceCtx, previousTarget)
 		return clientui.SessionExecutionTarget{}, err
 	}
 	return nextTarget, nil
 }
 
-func (s *Service) applySessionTarget(ctx context.Context, sessionID string, runtimeAccess mutationRuntimeAccess, leaseID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
-	if strings.TrimSpace(leaseID) == "" {
-		return runtimeAccess.SyncExecutionTarget(ctx, sessionID, target, reminder)
-	}
-	if err := s.runtime.RebindLocalTools(ctx, sessionID, leaseID, target.EffectiveWorkdir); err != nil {
-		return err
-	}
-	if reminder == nil {
-		return nil
-	}
-	return s.runtime.RecordWorktreeTransition(ctx, sessionID, leaseID, *reminder)
+func (s *Service) applySessionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
+	return s.runtime.SyncExecutionTarget(ctx, sessionID, target, reminder)
 }
 
-func (s *Service) rollbackSessionTarget(ctx context.Context, workspaceCtx sessionWorkspaceContext, runtimeAccess mutationRuntimeAccess, leaseID string, previousTarget clientui.SessionExecutionTarget) {
+func (s *Service) rollbackSessionTarget(ctx context.Context, workspaceCtx sessionWorkspaceContext, previousTarget clientui.SessionExecutionTarget) {
 	rollbackCtx, cancel := liveRollbackContext(ctx)
 	defer cancel()
 	_ = s.metadata.UpdateSessionExecutionTargetByID(rollbackCtx, workspaceCtx.sessionID, workspaceCtx.workspaceID, previousTarget.WorktreeID, previousTarget.CwdRelpath)
 	if strings.TrimSpace(previousTarget.EffectiveWorkdir) != "" {
-		if strings.TrimSpace(leaseID) == "" {
-			_ = runtimeAccess.SyncExecutionTarget(rollbackCtx, workspaceCtx.sessionID, previousTarget, nil)
-		} else {
-			_ = s.runtime.RebindLocalTools(rollbackCtx, workspaceCtx.sessionID, leaseID, previousTarget.EffectiveWorkdir)
-		}
+		_ = s.runtime.SyncExecutionTarget(rollbackCtx, workspaceCtx.sessionID, previousTarget, nil)
 	}
 }
 
@@ -1301,14 +1186,6 @@ func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, 
 		return func() {}, err
 	}
 	otherSessions := make([]metadata.WorktreeSessionBlocker, 0, len(blockers))
-	leases := make([]primaryrun.Lease, 0, len(blockers))
-	releaseLeases := func() {
-		for i := len(leases) - 1; i >= 0; i-- {
-			if leases[i] != nil {
-				leases[i].Release()
-			}
-		}
-	}
 	for _, blocker := range blockers {
 		sessionID := strings.TrimSpace(blocker.SessionID)
 		if sessionID == "" || sessionID == strings.TrimSpace(currentSessionID) {
@@ -1321,19 +1198,15 @@ func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, 
 		if !s.active.IsSessionRuntimeActive(sessionID) {
 			continue
 		}
-		lease, err := s.gate.AcquirePrimaryRun(sessionID)
+		active, err := s.runtime.HasActiveRun(ctx, sessionID)
 		if err != nil {
-			if errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-				otherSessions = append(otherSessions, blocker)
-				continue
-			}
-			releaseLeases()
 			return func() {}, err
 		}
-		leases = append(leases, lease)
+		if active {
+			otherSessions = append(otherSessions, blocker)
+		}
 	}
 	if len(otherSessions) > 0 {
-		releaseLeases()
 		sort.Slice(otherSessions, func(i int, j int) bool {
 			return otherSessions[i].UpdatedAt.After(otherSessions[j].UpdatedAt)
 		})
@@ -1349,10 +1222,9 @@ func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, 
 	}
 	processBlockers := s.backgroundProcessBlockers(worktreeRoot)
 	if len(processBlockers) > 0 {
-		releaseLeases()
 		return func() {}, errors.Join(serverapi.ErrWorktreeBlocked, fmt.Errorf("worktree has active background processes: %s", strings.Join(processBlockers, ", ")))
 	}
-	return releaseLeases, nil
+	return func() {}, nil
 }
 
 func (s *Service) backgroundProcessBlockers(worktreeRoot string) []string {
@@ -1469,14 +1341,14 @@ func nextAvailableWorktreeRoot(baseRoot string) (string, error) {
 	return "", fmt.Errorf("no available worktree root under %q after %d attempts: %w", canonicalBase, maxCollisionSuffixAttempts, ErrWorktreeRootCollisionCap)
 }
 
-func (s *Service) scheduleSetupScript(workspaceCtx sessionWorkspaceContext, leaseID string, created syncedWorktree, branchName string, createdBranch bool) bool {
+func (s *Service) scheduleSetupScript(workspaceCtx sessionWorkspaceContext, created syncedWorktree, branchName string, createdBranch bool) bool {
 	trimmedScript := strings.TrimSpace(s.setupScript)
 	if trimmedScript == "" {
 		return false
 	}
 	scriptPath, err := resolveSetupScriptPath(workspaceCtx.workspaceRoot, trimmedScript)
 	if err != nil {
-		s.appendLocalNote(context.Background(), workspaceCtx.sessionID, leaseID, fmt.Sprintf("Worktree setup script skipped: %v", err))
+		s.appendLocalNote(context.Background(), workspaceCtx.sessionID, fmt.Sprintf("Worktree setup script skipped: %v", err))
 		return false
 	}
 	payload := setupScriptPayload{
@@ -1530,17 +1402,16 @@ func (s *Service) runSetupScript(scriptPath string, sessionID string, payload se
 	s.appendSessionNote(context.Background(), sessionID, fmt.Sprintf("Worktree setup failed for %s: %s", payload.WorktreeRoot, detail))
 }
 
-func (s *Service) appendLocalNote(ctx context.Context, sessionID string, leaseID string, text string) {
+func (s *Service) appendLocalNote(ctx context.Context, sessionID string, text string) {
 	trimmedText := strings.TrimSpace(text)
 	if s == nil || s.localNotes == nil || trimmedText == "" {
 		return
 	}
 	_ = s.localNotes.AppendCommittedEntry(ctx, serverapi.RuntimeAppendCommittedEntryRequest{
-		ClientRequestID:   uuid.NewString(),
-		SessionID:         strings.TrimSpace(sessionID),
-		ControllerLeaseID: strings.TrimSpace(leaseID),
-		Role:              "system",
-		Text:              trimmedText,
+		ClientRequestID: uuid.NewString(),
+		SessionID:       strings.TrimSpace(sessionID),
+		Role:            "system",
+		Text:            trimmedText,
 	})
 }
 

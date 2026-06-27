@@ -112,9 +112,9 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 			return warning, true, nil
 		})
 	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, storeOptions...)
-	promptControlService := promptcontrol.NewPromptControlService(runtimeRegistry).WithControllerLeaseVerifier(sessionRuntimeService).WithCollaborativeRuntimeResolver(sessionRuntimeService)
+	promptControlService := promptcontrol.NewPromptControlService(runtimeRegistry)
 	promptActivityService := promptcontrol.NewPromptActivityService(runtimeRegistry)
-	runtimeControlService := runtimecontrol.NewService(runtimeRegistry, runtimeRegistry).WithControllerLeaseVerifier(sessionRuntimeService).WithCollaborativeRuntimeResolver(sessionRuntimeService).WithPromptHistoryStore(metadataStore).WithWorkflowSessionResolver(sessionStoreResolver).WithShellTokenVerifier(runtimeSupport.Background)
+	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).WithPromptHistoryStore(metadataStore).WithWorkflowSessionResolver(sessionStoreResolver)
 	worktreeService := worktree.NewService(metadataStore, nil, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, runtimeControlService, worktree.ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir, SetupScript: cfg.Settings.Worktrees.SetupScript})
 	projectViews := client.NewLoopbackProjectViewClient(projectService)
 	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods())
@@ -122,7 +122,7 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg)
 	updateStatusService := serverstatus.NewUpdateStatusService(config.Version)
 	sessionViewService := sessionview.NewService(sessionStoreResolver, runtimeRegistry, metadataStore).WithCacheWarningMode(cfg.Settings.CacheWarningMode).WithUpdateStatusProvider(updateStatusService)
-	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, sessionStoreRegistry, authSupport.AuthManager, storeOptions...).WithControllerLeaseVerifier(sessionRuntimeService)
+	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, sessionStoreRegistry, authSupport.AuthManager, storeOptions...)
 	sessionActivityService := sessionservice.NewSessionActivityService(runtimeRegistry)
 	var workflowRuntimeStarter *workflowrunner.Starter
 	var workflowScheduler *workflowrunner.SchedulerService

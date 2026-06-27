@@ -11,7 +11,6 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/metadata"
-	"core/server/primaryrun"
 	"core/server/runprompt"
 	"core/server/runtime"
 	"core/server/runtimewire"
@@ -568,13 +567,6 @@ func (s *Core) AwaitPromptResponse(ctx context.Context, sessionID string, req as
 		return askquestion.AskQuestionResponse{}, fmt.Errorf("runtime registry is required")
 	}
 	return s.safeBundles().Runtime.runtimeRegistry.AwaitPromptResponse(ctx, sessionID, req)
-}
-
-func (s *Core) AcquirePrimaryRun(sessionID string) (primaryrun.Lease, error) {
-	if s == nil || s.safeBundles().Runtime.runtimeRegistry == nil {
-		return nil, primaryrun.ErrActivePrimaryRun
-	}
-	return s.safeBundles().Runtime.runtimeRegistry.AcquirePrimaryRun(sessionID)
 }
 
 func (s *Core) RunPromptClient() client.RunPromptClient {

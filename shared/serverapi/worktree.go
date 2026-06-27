@@ -8,7 +8,6 @@ import (
 )
 
 var ErrWorktreeNotFound = errors.New("worktree not found")
-var ErrWorktreeMutationRequiresIdle = errors.New("worktree mutation requires idle session")
 var ErrWorktreeBlocked = errors.New("worktree is blocked")
 
 type WorktreeView struct {
@@ -31,7 +30,6 @@ type WorktreeView struct {
 
 type WorktreeListRequest struct {
 	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
 	IncludeDirtyCount bool   `json:"include_dirty_count,omitempty"`
 }
 
@@ -64,13 +62,12 @@ type WorktreeCreateTargetResolveResponse struct {
 }
 
 type WorktreeCreateRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	BaseRef           string `json:"base_ref,omitempty"`
-	CreateBranch      bool   `json:"create_branch,omitempty"`
-	BranchName        string `json:"branch_name,omitempty"`
-	RootPath          string `json:"root_path,omitempty"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	BaseRef         string `json:"base_ref,omitempty"`
+	CreateBranch    bool   `json:"create_branch,omitempty"`
+	BranchName      string `json:"branch_name,omitempty"`
+	RootPath        string `json:"root_path,omitempty"`
 }
 
 type WorktreeCreateResponse struct {
@@ -81,10 +78,9 @@ type WorktreeCreateResponse struct {
 }
 
 type WorktreeSwitchRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	WorktreeID        string `json:"worktree_id"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	WorktreeID      string `json:"worktree_id"`
 }
 
 type WorktreeSwitchResponse struct {
@@ -93,11 +89,10 @@ type WorktreeSwitchResponse struct {
 }
 
 type WorktreeDeleteRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	WorktreeID        string `json:"worktree_id"`
-	DeleteBranch      bool   `json:"delete_branch,omitempty"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	WorktreeID      string `json:"worktree_id"`
+	DeleteBranch    bool   `json:"delete_branch,omitempty"`
 }
 
 type WorktreeDeleteResponse struct {

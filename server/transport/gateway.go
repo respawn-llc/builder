@@ -129,13 +129,7 @@ type connectionState struct {
 	attachedWorkspaceRoot string
 	attachedSession       string
 	runtimeOwnerID        string
-	ownedRuntimeLeases    map[string]connectionOwnedRuntimeLease
-}
-
-type connectionOwnedRuntimeLease struct {
-	SessionID string
-	LeaseID   string
-	OwnerID   string
+	ownedRuntimes         map[string]struct{}
 }
 
 type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request)
@@ -213,7 +207,7 @@ func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
 		cancel()
 	}()
 	state := &connectionState{runtimeOwnerID: uuid.NewString()}
-	defer g.cleanupConnectionRuntimeLeases(state)
+	defer g.cleanupConnectionRuntimes(state)
 	for {
 		req, err := receiveRequest(connCtx, conn)
 		if err != nil {
@@ -238,8 +232,8 @@ func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
 
 const gatewayRuntimeCleanupTimeout = 3 * time.Second
 
-func (g *Gateway) cleanupConnectionRuntimeLeases(state *connectionState) {
-	owned := state.takeOwnedRuntimeLeases()
+func (g *Gateway) cleanupConnectionRuntimes(state *connectionState) {
+	owned := state.takeOwnedRuntimes()
 	if len(owned) == 0 || g == nil || isNilGatewayDependencies(g.deps) {
 		return
 	}
@@ -247,15 +241,15 @@ func (g *Gateway) cleanupConnectionRuntimeLeases(state *connectionState) {
 	if client == nil {
 		return
 	}
-	for _, lease := range owned {
+	ownerID := strings.TrimSpace(state.runtimeOwnerID)
+	for _, sessionID := range owned {
 		ctx, cancel := context.WithTimeout(context.Background(), gatewayRuntimeCleanupTimeout)
 		_, _ = client.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
 			ClientRequestID: uuid.NewString(),
-			SessionID:       lease.SessionID,
-			LeaseID:         lease.LeaseID,
+			SessionID:       sessionID,
 			OnlyIfIdle:      true,
 			DropOwner:       true,
-			OwnerID:         lease.OwnerID,
+			OwnerID:         ownerID,
 		})
 		cancel()
 	}
@@ -351,17 +345,8 @@ func protocolError(err error) (int, string) {
 	if errors.Is(err, serverapi.ErrProjectUnavailable) {
 		return protocol.ErrCodeProjectUnavailable, message
 	}
-	if errors.Is(err, serverapi.ErrSessionAlreadyControlled) {
-		return protocol.ErrCodeSessionAlreadyControlled, message
-	}
-	if errors.Is(err, serverapi.ErrInvalidControllerLease) {
-		return protocol.ErrCodeInvalidControllerLease, message
-	}
 	if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return protocol.ErrCodeRuntimeUnavailable, message
-	}
-	if errors.Is(err, serverapi.ErrActivePrimaryRun) {
-		return protocol.ErrCodeActivePrimaryRun, message
 	}
 	if errors.Is(err, serverapi.ErrStreamUnavailable) {
 		return protocol.ErrCodeStreamUnavailable, message

@@ -3,7 +3,6 @@ package worktree
 import (
 	"context"
 	"core/server/metadata"
-	"core/server/primaryrun"
 	"core/server/session"
 	shelltool "core/server/tools/shell"
 	"core/shared/config"
@@ -70,7 +69,7 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
 
-	firstRelease, _, _, err := env.service.beginMutation(env.ctx, env.session.Meta().SessionID, env.leaseID)
+	firstRelease, _, err := env.service.beginMutation(env.ctx, env.session.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("beginMutation first: %v", err)
 	}
@@ -82,12 +81,12 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	})
 
 	type mutationResult struct {
-		release primaryrun.Lease
+		release worktreeLease
 		err     error
 	}
 	resultCh := make(chan mutationResult, 1)
 	go func() {
-		release, _, _, err := env.service.beginMutation(env.ctx, otherSession.Meta().SessionID, "lease-2")
+		release, _, err := env.service.beginMutation(env.ctx, otherSession.Meta().SessionID)
 		resultCh <- mutationResult{release: release, err: err}
 	}()
 
@@ -117,31 +116,6 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	result.release.Release()
 }
 
-func TestBeginMutationCollaborativeRuntimeGuardHeldUntilRelease(t *testing.T) {
-	env := newServiceTestEnv(t)
-	env.runtime.activeSessions[env.session.Meta().SessionID] = true
-
-	release, _, _, err := env.service.beginMutation(env.ctx, env.session.Meta().SessionID, "")
-	if err != nil {
-		t.Fatalf("beginMutation collaborative: %v", err)
-	}
-	env.runtime.mu.Lock()
-	activeGuards := env.runtime.activeGuards
-	releasedGuards := env.runtime.releasedGuards
-	env.runtime.mu.Unlock()
-	if activeGuards != 1 || releasedGuards != 0 {
-		t.Fatalf("guard counts before release active=%d released=%d, want active=1 released=0", activeGuards, releasedGuards)
-	}
-	release.Release()
-	env.runtime.mu.Lock()
-	activeGuards = env.runtime.activeGuards
-	releasedGuards = env.runtime.releasedGuards
-	env.runtime.mu.Unlock()
-	if activeGuards != 0 || releasedGuards != 1 {
-		t.Fatalf("guard counts after release active=%d released=%d, want active=0 released=1", activeGuards, releasedGuards)
-	}
-}
-
 func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *testing.T) {
 	env := newServiceTestEnv(t)
 	secondWorkspace := t.TempDir()
@@ -165,13 +139,13 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	}()
 
 	type mutationResult struct {
-		release      primaryrun.Lease
+		release      worktreeLease
 		workspaceCtx sessionWorkspaceContext
 		err          error
 	}
 	firstCh := make(chan mutationResult, 1)
 	go func() {
-		release, workspaceCtx, _, err := env.service.beginMutation(env.ctx, env.session.Meta().SessionID, env.leaseID)
+		release, workspaceCtx, err := env.service.beginMutation(env.ctx, env.session.Meta().SessionID)
 		firstCh <- mutationResult{release: release, workspaceCtx: workspaceCtx, err: err}
 	}()
 
@@ -198,7 +172,7 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 
 	secondCh := make(chan mutationResult, 1)
 	go func() {
-		release, workspaceCtx, _, err := env.service.beginMutation(env.ctx, secondSession.Meta().SessionID, "lease-2")
+		release, workspaceCtx, err := env.service.beginMutation(env.ctx, secondSession.Meta().SessionID)
 		secondCh <- mutationResult{release: release, workspaceCtx: workspaceCtx, err: err}
 	}()
 	select {
@@ -323,7 +297,7 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 	runtime.activeSessions = map[string]bool{sess.Meta().SessionID: true}
 	processes := &serviceTestProcessSource{}
 	localNotes := &serviceTestLocalNotes{}
-	service := NewService(store, nil, serviceTestGate{}, runtime, processes, localNotes, ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir})
+	service := NewService(store, nil, runtime, runtime, processes, localNotes, ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir})
 	return &serviceTestEnv{
 		t:             t,
 		ctx:           ctx,
@@ -451,12 +425,11 @@ func waitForFileLines(t *testing.T, path string) []string {
 func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) serverapi.WorktreeView {
 	t.Helper()
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		ClientRequestID:   "req-create-" + strings.ReplaceAll(branchName, "/", "-"),
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-		BaseRef:           "HEAD",
-		CreateBranch:      true,
-		BranchName:        branchName,
+		ClientRequestID: "req-create-" + strings.ReplaceAll(branchName, "/", "-"),
+		SessionID:       env.session.Meta().SessionID,
+		BaseRef:         "HEAD",
+		CreateBranch:    true,
+		BranchName:      branchName,
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree(%s): %v", branchName, err)
@@ -466,19 +439,17 @@ func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) se
 
 func worktreeSwitchRequest(env *serviceTestEnv, clientRequestID string, worktreeID string) serverapi.WorktreeSwitchRequest {
 	return serverapi.WorktreeSwitchRequest{
-		ClientRequestID:   clientRequestID,
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-		WorktreeID:        worktreeID,
+		ClientRequestID: clientRequestID,
+		SessionID:       env.session.Meta().SessionID,
+		WorktreeID:      worktreeID,
 	}
 }
 
 func worktreeDeleteRequest(env *serviceTestEnv, clientRequestID string, worktreeID string) serverapi.WorktreeDeleteRequest {
 	return serverapi.WorktreeDeleteRequest{
-		ClientRequestID:   clientRequestID,
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-		WorktreeID:        worktreeID,
+		ClientRequestID: clientRequestID,
+		SessionID:       env.session.Meta().SessionID,
+		WorktreeID:      worktreeID,
 	}
 }
 
@@ -491,7 +462,7 @@ func updateServiceTestSessionTarget(t *testing.T, env *serviceTestEnv, sessionID
 
 func mustListWorktrees(t *testing.T, env *serviceTestEnv) serverapi.WorktreeListResponse {
 	t.Helper()
-	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID, ControllerLeaseID: env.leaseID})
+	resp, err := env.service.ListWorktrees(env.ctx, serverapi.WorktreeListRequest{SessionID: env.session.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}

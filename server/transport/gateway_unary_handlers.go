@@ -209,8 +209,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ActivateSessionRuntime(ctx, params)
-			if err == nil && !resp.ReadOnly {
-				state.recordOwnedRuntimeLease(params.SessionID, resp.LeaseID)
+			if err == nil {
+				state.recordOwnedRuntime(params.SessionID)
 			}
 			return resp, err
 		})
@@ -220,7 +220,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ReleaseSessionRuntime(ctx, params)
 			if err == nil && resp.Released {
-				state.removeOwnedRuntimeLease(params.SessionID, params.LeaseID)
+				state.removeOwnedRuntime(params.SessionID)
 			}
 			return resp, err
 		})

@@ -67,32 +67,6 @@ func TestEnrichForSessionInjectsSessionIDEnv(t *testing.T) {
 	}
 }
 
-func TestEnrichForSessionTokenInjectsShellTokenEnv(t *testing.T) {
-	env := envMap(t, EnrichShellEnvForSessionToken([]string{"PATH=/bin", "KEEP=1"}, " session-1 ", " token-1 "))
-	if got := env[sessionenv.SessionIDEnv]; got != "session-1" {
-		t.Fatalf("%s = %q, want session-1", sessionenv.SessionIDEnv, got)
-	}
-	if got := env[sessionenv.ShellTokenEnv]; got != "token-1" {
-		t.Fatalf("%s = %q, want token-1", sessionenv.ShellTokenEnv, got)
-	}
-}
-
-func TestEnrichForSessionRunTokenInjectsRunContextEnv(t *testing.T) {
-	env := envMap(t, EnrichShellEnvForSessionRunToken([]string{"PATH=/bin", "KEEP=1"}, " session-1 ", " run-1 ", " step-1 ", " token-1 "))
-	if got := env[sessionenv.SessionIDEnv]; got != "session-1" {
-		t.Fatalf("%s = %q, want session-1", sessionenv.SessionIDEnv, got)
-	}
-	if got := env[sessionenv.ShellTokenEnv]; got != "token-1" {
-		t.Fatalf("%s = %q, want token-1", sessionenv.ShellTokenEnv, got)
-	}
-	if got := env[sessionenv.ShellRunIDEnv]; got != "run-1" {
-		t.Fatalf("%s = %q, want run-1", sessionenv.ShellRunIDEnv, got)
-	}
-	if got := env[sessionenv.ShellStepIDEnv]; got != "step-1" {
-		t.Fatalf("%s = %q, want step-1", sessionenv.ShellStepIDEnv, got)
-	}
-}
-
 func TestEnrichForSessionOverridesExistingSessionIDEnv(t *testing.T) {
 	env := envMap(t, EnrichShellEnvForSession([]string{sessionenv.SessionIDEnv + "=old"}, "new"))
 	if got := env[sessionenv.SessionIDEnv]; got != "new" {
