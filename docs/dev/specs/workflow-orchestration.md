@@ -147,10 +147,10 @@
 
 ## Scheduler And Recovery
 
-- Scheduler has durable inputs in SQLite, but pending scheduler work and active runtime ownership are live memory, not durable run states.
+- Scheduler has durable inputs in SQLite, but pending scheduler work and active runtime execution are live memory, not durable run states.
 - Runnable work derives from active executable placements with approved automation intent, no terminal run outcome, and no task cancellation.
 - Pending-work ordering is scheduler memory.
-- Active execution derives from live runtime registry/scheduler ownership.
+- Active execution derives from the live runtime registry and scheduler.
 - Concurrency limit is global only and configured in `[workflow].concurrency`.
 - Scheduler does not control runtime execution. Runtime execution is ownerless registry lifecycle state, not scheduling authority.
 - Startup rebuilds runnable work from durable state.

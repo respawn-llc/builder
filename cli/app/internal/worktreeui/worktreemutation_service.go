@@ -116,6 +116,11 @@ func (s Service) resolveMutationContext(mutation bool) (context.Context, context
 			return ctx, cancel, nil
 		}
 	}
+	if s.ResolveContext != nil {
+		if ctx, cancel := s.ResolveContext(); ctx != nil && cancel != nil {
+			return ctx, cancel, nil
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), defaultMutationTimeout)
 	return ctx, cancel, nil
 }

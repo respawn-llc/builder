@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
@@ -95,7 +96,11 @@ func TestSecondClientSteersDuringActiveRun(t *testing.T) {
 		runDone <- runErr
 	}()
 
-	<-started
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for run to reach model request")
+	}
 
 	steerResp, err := appCore.RuntimeControlClient().QueueUserMessage(context.Background(), serverapi.RuntimeQueueUserMessageRequest{
 		ClientRequestID: "steer-1",
@@ -110,7 +115,12 @@ func TestSecondClientSteersDuringActiveRun(t *testing.T) {
 	}
 
 	close(release)
-	if runErr := <-runDone; runErr != nil {
-		t.Fatalf("RunPrompt: %v", runErr)
+	select {
+	case runErr := <-runDone:
+		if runErr != nil {
+			t.Fatalf("RunPrompt: %v", runErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for RunPrompt to finish")
 	}
 }
