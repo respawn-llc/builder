@@ -178,26 +178,49 @@ func (r *RuntimeRegistry) CloseRuntimeWithDrain(ctx context.Context, sessionID s
 	if r == nil {
 		return nil
 	}
+	_, err := r.closeEntry(ctx, sessionID, engine, drain)
+	return err
+}
+
+func (r *RuntimeRegistry) closeEntry(ctx context.Context, sessionID string, engine *runtime.Engine, drain func(context.Context) error) (bool, error) {
+	if r == nil {
+		return false, nil
+	}
 	id, entry, drainRef := r.directory.BeginClose(sessionID, engine)
 	if id == "" || entry == nil || drainRef == nil {
-		return nil
+		return false, nil
 	}
+	return r.finishClose(ctx, id, engine, entry, drainRef, drain)
+}
+
+func (r *RuntimeRegistry) finishClose(ctx context.Context, sessionID string, engine *runtime.Engine, entry *runtimeEntry, drainRef *runtimeCloseDrainRef, drain func(context.Context) error) (bool, error) {
 	publishExternalRuntimeStatusToEntry(entry, clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateDraining, QueueAccepting: false})
 	drainRef.WaitForGuards()
 	var drainErr error
 	if drain != nil {
 		drainErr = drain(ctx)
 	}
-	removedID, removedEntry := r.directory.RemoveClosing(id, engine, entry)
+	removedID, removedEntry := r.directory.RemoveClosing(sessionID, engine, entry)
 	if removedID == "" || removedEntry == nil {
 		drainRef.Release()
-		return drainErr
+		return false, drainErr
 	}
 	publishExternalRuntimeStatusToEntry(removedEntry, clientui.ExternalRuntimeStatus{})
 	drainRef.Release()
-	closeRuntimeEntry(removedEntry, io.EOF)
-	r.updateAggregateRunState(removedID, false)
-	return drainErr
+	r.finishEntryTeardown(removedID, removedEntry)
+	return true, drainErr
+}
+
+func (r *RuntimeRegistry) finishEntryTeardown(sessionID string, entry *runtimeEntry) {
+	if entry == nil {
+		return
+	}
+	closeRuntimeEntry(entry, io.EOF)
+	if entry.teardown != nil {
+		entry.teardown()
+	}
+	entry.signalClosed()
+	r.updateAggregateRunState(sessionID, false)
 }
 
 type RuntimeGuard interface {
