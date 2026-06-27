@@ -167,6 +167,8 @@ type RuntimeBuildResult struct {
 	Close       func()
 }
 
+var ErrSessionRunActive = errors.New("session has an active run")
+
 type RuntimeBuilder func(ctx context.Context) (RuntimeBuildResult, error)
 
 func (s *Service) AcquireRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) error {
@@ -274,6 +276,59 @@ func (s *Service) claimFreshActivation(ctx context.Context, sessionID string, ow
 		}
 		s.closeReleasedRuntimeHandle(sessionID, current)
 	}
+}
+
+func (s *Service) RecreateRuntimeRejectingActiveRun(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) error {
+	sessionID = strings.TrimSpace(sessionID)
+	handle, err := s.claimFreshActivationRejectingActiveRun(ctx, sessionID, strings.TrimSpace(ownerID))
+	if err != nil {
+		return err
+	}
+	return s.buildIntoClaimedHandle(ctx, sessionID, handle, build)
+}
+
+func (s *Service) claimFreshActivationRejectingActiveRun(ctx context.Context, sessionID string, ownerID string) (*runtimeHandle, error) {
+	for {
+		s.mu.Lock()
+		current := s.handles[sessionID]
+		if current == nil {
+			handle := newRuntimeHandle(ownerID)
+			s.handles[sessionID] = handle
+			s.mu.Unlock()
+			return handle, nil
+		}
+		s.mu.Unlock()
+		if err := waitForRuntimeHandleReady(ctx, current); err != nil {
+			return nil, err
+		}
+		active, err := s.runtimeHasActiveRun(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if active {
+			return nil, ErrSessionRunActive
+		}
+		s.closeReleasedRuntimeHandle(sessionID, current)
+	}
+}
+
+func (s *Service) CloseSessionRuntime(ctx context.Context, sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	s.mu.Lock()
+	handle := s.handles[sessionID]
+	s.mu.Unlock()
+	if handle == nil {
+		return nil
+	}
+	if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
+		s.closeReleasedRuntimeHandle(sessionID, handle)
+		return err
+	}
+	_ = s.WithRuntimeEngine(ctx, sessionID, func(engine *runtime.Engine) error {
+		return engine.DrainQueuedUserMessagesBeforeClose(ctx)
+	})
+	s.closeReleasedRuntimeHandle(sessionID, handle)
+	return nil
 }
 
 func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivateRequest, sessionID string) RuntimeBuilder {

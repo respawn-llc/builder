@@ -756,16 +756,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		return
 	}
 	defer func() {
-		if engine != nil {
-			engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
-		}
-		_, _ = s.sessionRuntime.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: uuid.NewString(),
-			SessionID:       sessionID,
-			OwnerID:         ownerID,
-			OnlyIfIdle:      true,
-			DropOwner:       true,
-		})
+		_ = s.sessionRuntime.CloseSessionRuntime(context.Background(), sessionID)
 	}()
 	// Compact exactly once per compact_and_continue handoff. The compaction's
 	// provenance is recorded atomically in its history_replaced event and rebuilt
