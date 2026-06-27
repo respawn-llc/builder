@@ -103,6 +103,68 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	}
 }
 
+func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		WorkflowRun:  &workflowruntime.Config{Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("workflow-run-1")}},
+	})
+	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step-1", snapshot: &RunSnapshot{RunID: "run-1", StepID: "step-1"}}
+
+	if _, queued, err := engine.QueueAgentShellSetGoal("queued goal", session.GoalActorAgent); err != nil || !queued {
+		t.Fatalf("QueueAgentShellSetGoal queued=%t err=%v, want queued", queued, err)
+	}
+	if g := engine.Goal(); g != nil {
+		t.Fatalf("goal applied before drain: %+v", g)
+	}
+	assistant := llm.Message{
+		Role:  llm.RoleAssistant,
+		Phase: llm.MessagePhaseCommentary,
+		ToolCalls: []llm.ToolCall{{
+			ID:   "call-shell",
+			Name: string(toolspec.ToolExecCommand),
+		}},
+	}
+	if err := engine.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistant})); err != nil {
+		t.Fatalf("append assistant tool call: %v", err)
+	}
+	result := tools.Result{
+		CallID:  "call-shell",
+		Name:    toolspec.ToolExecCommand,
+		Output:  json.RawMessage(`{"output":"ok","exit_code":0,"truncated":false}`),
+		Summary: "ok",
+	}
+	if err := engine.steer("step-1", steerToolCompletionIntent(result)); err != nil {
+		t.Fatalf("append tool completion: %v", err)
+	}
+	if err := engine.drainActiveStepGoalMutations("step-1"); err != nil {
+		t.Fatalf("drain goal mutations: %v", err)
+	}
+
+	if g := engine.Goal(); g == nil || g.Objective != "queued goal" || g.Status != session.GoalStatusActive {
+		t.Fatalf("goal after drain = %+v, want active 'queued goal'", g)
+	}
+	messages := engine.transcriptRuntimeState().SnapshotMessages()
+	assistantIdx, toolIdx, goalIdx := -1, -1, -1
+	for idx, msg := range messages {
+		if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) == 1 && msg.ToolCalls[0].ID == "call-shell" {
+			assistantIdx = idx
+		}
+		if msg.Role == llm.RoleTool && msg.ToolCallID == "call-shell" {
+			toolIdx = idx
+		}
+		if msg.Role == llm.RoleDeveloper && msg.MessageType == llm.MessageTypeGoal {
+			goalIdx = idx
+		}
+	}
+	if assistantIdx < 0 || toolIdx < 0 || goalIdx < 0 {
+		t.Fatalf("message indexes assistant/tool/goal = %d/%d/%d, messages=%+v", assistantIdx, toolIdx, goalIdx, messages)
+	}
+	if !(assistantIdx < toolIdx && toolIdx < goalIdx) {
+		t.Fatalf("message order assistant/tool/goal = %d/%d/%d, want tool result before goal mutation", assistantIdx, toolIdx, goalIdx)
+	}
+}
+
 func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	events := make([]Event, 0, 10)

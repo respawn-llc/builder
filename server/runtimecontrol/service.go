@@ -575,6 +575,14 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 				if goalBlocksAgentSet(currentGoal) {
 					return goalAgentOverwriteDeniedError{Objective: currentGoal.Objective, Status: string(currentGoal.Status)}
 				}
+				goal, queued, qErr := engine.QueueAgentShellSetGoal(trimmedObjective, session.GoalActor(req.Actor))
+				if qErr != nil {
+					return qErr
+				}
+				if queued {
+					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
+					return nil
+				}
 			}
 			if err := engine.RequireGoalLoopStartAllowed(); err != nil {
 				return err
@@ -639,6 +647,16 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 				if current != nil && current.Status == session.GoalStatusComplete {
 					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current, false)}
 					return nil
+				}
+				if current != nil && strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) {
+					goal, queued, qErr := engine.QueueAgentShellCompleteGoal(session.GoalActor(req.Actor))
+					if qErr != nil {
+						return qErr
+					}
+					if queued {
+						response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
+						return nil
+					}
 				}
 			}
 			if status == session.GoalStatusActive {

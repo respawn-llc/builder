@@ -76,6 +76,11 @@ func (s *defaultExclusiveStepLifecycle) Run(ctx context.Context, options exclusi
 	}
 	defer func() {
 		panicValue := recover()
+		if panicValue == nil {
+			if drainErr := s.engine.drainActiveStepGoalMutations(stepID); drainErr != nil {
+				err = errors.Join(err, fmt.Errorf("drain active-step goal mutations: %w", drainErr))
+			}
+		}
 		finishedAt := time.Now().UTC()
 		status := statusFromRunError(err)
 		if panicValue != nil {
@@ -164,6 +169,18 @@ func (s *defaultExclusiveStepLifecycle) Snapshot() *RunSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneRunSnapshot(s.snapshotLocked())
+}
+
+func (s *defaultExclusiveStepLifecycle) WithActiveStep(fn func(stepID string) error) (bool, error) {
+	if s == nil || fn == nil {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == nil || s.active.stepID == "" {
+		return false, nil
+	}
+	return true, fn(s.active.stepID)
 }
 
 func (s *defaultExclusiveStepLifecycle) begin(ctx context.Context, options exclusiveStepOptions) (context.Context, string, error) {
