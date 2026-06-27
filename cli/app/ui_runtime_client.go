@@ -74,7 +74,9 @@ func (c *sessionRuntimeClient) recoverRuntimeConnectionWithWarning(ctx context.C
 	if reactivator == nil {
 		return errRuntimeReactivationUnavailable
 	}
-	if err := reactivator.Reactivate(ctx); err != nil {
+	reconnectCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), uiRuntimeControlTimeout)
+	defer cancel()
+	if err := reactivator.Reactivate(reconnectCtx); err != nil {
 		return err
 	}
 	if appendWarning && isRecoverableRuntimeControlError(trigger) {
