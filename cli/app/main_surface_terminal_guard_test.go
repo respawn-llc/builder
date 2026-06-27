@@ -122,7 +122,7 @@ func collectNativeScrollbackAssistantStreamingCallSites(t *testing.T, repoRoot s
 
 func shouldSkipMainSurfaceGuardDir(name string) bool {
 	switch name {
-	case ".git", ".kent", "bin", "dist", "node_modules", "vendor":
+	case ".git", ".kent", ".claude", "bin", "dist", "node_modules", "vendor":
 		return true
 	default:
 		return false
