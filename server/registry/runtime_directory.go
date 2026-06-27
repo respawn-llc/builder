@@ -20,6 +20,9 @@ type runtimeEntry struct {
 	mu              sync.Mutex
 	cond            *sync.Cond
 	generation      uint64
+	built           bool
+	buildErr        error
+	ready           chan struct{}
 	closing         bool
 	closeDraining   bool
 	inFlight        int
@@ -35,16 +38,61 @@ func newRuntimeDirectory() *runtimeDirectory {
 }
 
 func newRuntimeEntry(engine *runtime.Engine, generation uint64, rebind func(string) error) *runtimeEntry {
+	entry := newBuildingRuntimeEntry(generation)
+	entry.engine = engine
+	entry.rebind = rebind
+	entry.built = true
+	close(entry.ready)
+	return entry
+}
+
+func newBuildingRuntimeEntry(generation uint64) *runtimeEntry {
 	entry := &runtimeEntry{
 		generation:      generation,
-		engine:          engine,
-		rebind:          rebind,
+		ready:           make(chan struct{}),
 		sessionActivity: newSessionActivityBroker(),
 		promptActivity:  newPromptActivityBroker(),
 		pendingPrompts:  newPendingPromptStore(),
 	}
 	entry.cond = sync.NewCond(&entry.mu)
 	return entry
+}
+
+func (e *runtimeEntry) resolveBuild(engine *runtime.Engine, rebind func(string) error, buildErr error) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.built || e.buildErr != nil {
+		return
+	}
+	if buildErr == nil && engine == nil {
+		buildErr = fmt.Errorf("runtime build produced no engine")
+	}
+	e.engine = engine
+	e.rebind = rebind
+	e.buildErr = buildErr
+	e.built = buildErr == nil
+	close(e.ready)
+	e.cond.Broadcast()
+}
+
+func (e *runtimeEntry) awaitReady(ctx context.Context) (*runtime.Engine, error) {
+	if e == nil {
+		return nil, fmt.Errorf("runtime entry is unavailable")
+	}
+	select {
+	case <-e.ready:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.buildErr != nil {
+		return nil, e.buildErr
+	}
+	return e.engine, nil
 }
 
 func (d *runtimeDirectory) Register(sessionID string, engine *runtime.Engine, rebind func(string) error, beforeReplace func(*runtimeEntry)) *runtimeEntry {
@@ -55,15 +103,35 @@ func (d *runtimeDirectory) Register(sessionID string, engine *runtime.Engine, re
 	if id == "" {
 		return nil
 	}
+	_, previous := d.installEntry(id, func(generation uint64) *runtimeEntry {
+		return newRuntimeEntry(engine, generation, rebind)
+	}, beforeReplace)
+	return previous
+}
+
+func (d *runtimeDirectory) Claim(sessionID string) (*runtimeEntry, *runtimeEntry) {
+	if d == nil {
+		return nil, nil
+	}
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return nil, nil
+	}
+	return d.installEntry(id, func(generation uint64) *runtimeEntry {
+		return newBuildingRuntimeEntry(generation)
+	}, nil)
+}
+
+func (d *runtimeDirectory) installEntry(id string, makeEntry func(generation uint64) *runtimeEntry, beforeReplace func(*runtimeEntry)) (*runtimeEntry, *runtimeEntry) {
 	for {
 		d.mu.Lock()
 		previous := d.entries[id]
 		if previous == nil {
 			d.generation++
-			entry := newRuntimeEntry(engine, d.generation, rebind)
+			entry := makeEntry(d.generation)
 			d.entries[id] = entry
 			d.mu.Unlock()
-			return nil
+			return entry, nil
 		}
 		previous.markClosing()
 		d.mu.Unlock()
@@ -91,11 +159,11 @@ func (d *runtimeDirectory) Register(sessionID string, engine *runtime.Engine, re
 			continue
 		}
 		d.generation++
-		entry := newRuntimeEntry(engine, d.generation, rebind)
+		entry := makeEntry(d.generation)
 		d.entries[id] = entry
 		d.mu.Unlock()
 		ref.Release()
-		return previous
+		return entry, previous
 	}
 }
 
