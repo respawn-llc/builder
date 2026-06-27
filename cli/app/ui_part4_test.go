@@ -696,11 +696,11 @@ func TestRuntimeIdleEventResumesVisibleQueuedMessagesWithoutBlankEnter(t *testin
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("first queued", "second queued")
 	client.transcript = clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     4,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "done"}},
+		SessionID:           "session-1",
+		Revision:            4,
+		StartEntryCount:     0,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "done"}},
 	}
 
 	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
@@ -790,11 +790,11 @@ func TestRuntimeIdleQueuedDrainNotifiesTurnQueueHookOnce(t *testing.T) {
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("follow up")
 	client.transcript = clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     4,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "done"}},
+		SessionID:           "session-1",
+		Revision:            4,
+		StartEntryCount:     0,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "done"}},
 	}
 
 	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
@@ -1540,11 +1540,11 @@ func TestIdleCompactDoneRefreshesCommittedSteeringOutput(t *testing.T) {
 	next, checkCmd := m.Update(compactDoneMsg{})
 	updated := next.(*uiModel)
 	client.transcript = clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Offset:       0,
-		TotalEntries: 1,
-		Revision:     1,
-		NewerCursor:  1,
+		SessionID:           "session-1",
+		StartEntryCount:     0,
+		CommittedEntryCount: 1,
+		Revision:            1,
+		NewerCursor:         1,
 		Entries: []clientui.ChatEntry{
 			{Role: "compaction_notice", Text: "context compacted for the 1st time"},
 		},

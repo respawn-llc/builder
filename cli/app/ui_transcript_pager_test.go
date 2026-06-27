@@ -230,7 +230,7 @@ func TestDetailTranscriptWindowResetClearsState(t *testing.T) {
 }
 
 func testTranscriptPage(offset, count, total int) clientui.TranscriptPage {
-	page := clientui.TranscriptPage{SessionID: "session-1", Offset: offset, TotalEntries: total}
+	page := clientui.TranscriptPage{SessionID: "session-1", StartEntryCount: offset, CommittedEntryCount: total}
 	for i := 0; i < count; i++ {
 		index := offset + i
 		page.Entries = append(page.Entries, clientui.ChatEntry{Role: "assistant", Text: fmt.Sprintf("line %03d", index)})

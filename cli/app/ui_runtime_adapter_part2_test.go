@@ -53,11 +53,11 @@ func TestProjectedAssistantMessageUsesCommittedEntryStartWhenPersistedToolCallsS
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 
 	baseline := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
+		SessionID:           "session-1",
+		Revision:            10,
+		StartEntryCount:     0,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -93,10 +93,10 @@ func TestProjectedToolCallStartedUsesCommittedEntryStartWithinSharedCommittedCou
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 
 	baseline := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 2,
+		SessionID:           "session-1",
+		Revision:            10,
+		StartEntryCount:     0,
+		CommittedEntryCount: 2,
 		Entries: []clientui.ChatEntry{
 			{Role: "user", Text: "prompt"},
 			{Role: "assistant", Text: "working", Phase: string(llm.MessagePhaseCommentary)},
@@ -140,11 +140,11 @@ func TestProjectedAssistantMessageUpdatesDetailViewImmediatelyWhenCommitted(t *t
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		SessionID:           "session-1",
+		Revision:            10,
+		StartEntryCount:     0,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -201,11 +201,11 @@ func TestProjectedReviewerCompletedUpdatesDetailViewImmediatelyWhenCommitted(t *
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		SessionID:           "session-1",
+		Revision:            10,
+		StartEntryCount:     0,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -477,11 +477,11 @@ func TestProjectedCompactionStatusClearsCompactingWithoutTranscriptNotice(t *tes
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		SessionID:           "session-1",
+		Revision:            10,
+		StartEntryCount:     0,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -518,10 +518,10 @@ func TestProjectedCompactionStatusDoesNotDuplicateCommittedSummary(t *testing.T)
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     11,
-		Offset:       0,
-		TotalEntries: 2,
+		SessionID:           "session-1",
+		Revision:            11,
+		StartEntryCount:     0,
+		CommittedEntryCount: 2,
 		Entries: []clientui.ChatEntry{
 			{Role: "assistant", Text: "seed"},
 			{Role: "compaction_summary", Text: "summary", CondensedText: "context compacted for the 1st time", CompactLabel: "context compacted for the 1st time"},
@@ -564,11 +564,11 @@ func TestProjectedCompactionStatusDoesNotAppendOngoingNoticeInDetailMode(t *test
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		SessionID:           "session-1",
+		Revision:            10,
+		StartEntryCount:     0,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -603,11 +603,11 @@ func TestProjectedCompactionStatusUsesPersistedLocalEntryAsTranscriptSource(t *t
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		SessionID:           "session-1",
+		Revision:            10,
+		StartEntryCount:     0,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -673,11 +673,11 @@ func TestProjectedCompactionReplacementEntriesAndNoticeAppendWithoutHydration(t 
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "user", Text: "before compaction"}},
+		SessionID:           "session-1",
+		Revision:            10,
+		StartEntryCount:     0,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "user", Text: "before compaction"}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -785,11 +785,11 @@ func TestLocalEntryAddedRemainsVisibleAfterHydrationSync(t *testing.T) {
 	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "seed", Phase: string(llm.MessagePhaseFinal)}},
+		SessionID:           "session-1",
+		Revision:            10,
+		StartEntryCount:     0,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "seed", Phase: string(llm.MessagePhaseFinal)}},
 	}
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
@@ -810,10 +810,10 @@ func TestLocalEntryAddedRemainsVisibleAfterHydrationSync(t *testing.T) {
 		cmd
 
 	hydrated := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 2,
+		SessionID:           "session-1",
+		Revision:            10,
+		StartEntryCount:     0,
+		CommittedEntryCount: 2,
 		Entries: []clientui.ChatEntry{
 			{Role: "assistant", Text: "seed", Phase: string(llm.MessagePhaseFinal)},
 			{Role: "reviewer_suggestions", Text: "Supervisor suggested:\n1. Add verification notes.", CondensedText: "Supervisor made 1 suggestion."},
@@ -864,10 +864,10 @@ func TestLocalFirstEntryHydrationAcknowledgesNoticeIDWithoutDroppingDistinctEntr
 		cmd
 
 	hydrated := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     2,
-		Offset:       0,
-		TotalEntries: 2,
+		SessionID:           "session-1",
+		Revision:            2,
+		StartEntryCount:     0,
+		CommittedEntryCount: 2,
 		Entries: []clientui.ChatEntry{
 			{Role: "system", Text: "same feedback", NoticeID: "notice-1"},
 			{Role: "system", Text: "same feedback", NoticeID: "notice-2"},

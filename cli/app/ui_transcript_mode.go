@@ -56,7 +56,7 @@ func (m *uiModel) primeDetailTranscriptFromCurrentTail() {
 	page := m.currentDetailTailPage()
 	if m.detailTranscript.loaded {
 		if m.shouldPreserveLoadedDetailWindowOnPrime(page) {
-			m.detailTranscript.totalEntries = max(m.detailTranscript.totalEntries, page.TotalEntries)
+			m.detailTranscript.totalEntries = max(m.detailTranscript.totalEntries, page.CommittedEntryCount)
 			m.detailTranscript.ongoing = page.Streaming
 			m.detailTranscript.ongoingError = page.StreamingError
 			return
@@ -73,10 +73,10 @@ func (m *uiModel) shouldPreserveLoadedDetailWindowOnPrime(page clientui.Transcri
 
 func (m *uiModel) currentDetailTailPage() clientui.TranscriptPage {
 	page := clientui.TranscriptPage{
-		Offset:         m.transcriptBaseOffset,
-		TotalEntries:   m.transcriptTotalEntries,
-		Streaming:      m.view.OngoingStreamingText(),
-		StreamingError: m.view.OngoingErrorText(),
+		StartEntryCount:     m.transcriptBaseOffset,
+		CommittedEntryCount: m.transcriptTotalEntries,
+		Streaming:           m.view.OngoingStreamingText(),
+		StreamingError:      m.view.OngoingErrorText(),
 	}
 	for _, entry := range committedTranscriptEntriesForApp(m.transcriptEntries) {
 		page.Entries = append(page.Entries, clientui.ChatEntry{
@@ -93,12 +93,12 @@ func (m *uiModel) currentDetailTailPage() clientui.TranscriptPage {
 			ToolCall:          transcriptToolCallMetaClient(entry.ToolCall),
 		})
 	}
-	if page.TotalEntries == 0 {
-		page.TotalEntries = page.Offset + len(page.Entries)
+	if page.CommittedEntryCount == 0 {
+		page.CommittedEntryCount = page.StartEntryCount + len(page.Entries)
 	}
 	if len(page.Entries) == 0 && len(m.transcriptEntries) > 0 {
 		page.Entries = m.localRuntimeTranscript().Entries
-		page.TotalEntries = max(page.TotalEntries, page.Offset+len(page.Entries))
+		page.CommittedEntryCount = max(page.CommittedEntryCount, page.StartEntryCount+len(page.Entries))
 	}
 	return page
 }

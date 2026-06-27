@@ -260,8 +260,8 @@ func TestRemoteInteractiveRuntimeTwoClientsConvergeOnSameSessionAcrossWorkspaces
 	if pageA.Revision != pageB.Revision {
 		t.Fatalf("expected clients to converge on same transcript revision, a=%d b=%d", pageA.Revision, pageB.Revision)
 	}
-	if pageA.TotalEntries != pageB.TotalEntries {
-		t.Fatalf("expected clients to converge on same transcript size, a=%d b=%d", pageA.TotalEntries, pageB.TotalEntries)
+	if pageA.CommittedEntryCount != pageB.CommittedEntryCount {
+		t.Fatalf("expected clients to converge on same transcript size, a=%d b=%d", pageA.CommittedEntryCount, pageB.CommittedEntryCount)
 	}
 	if !transcriptPageContainsAssistantText(pageA, "shared daemon reply") || !transcriptPageContainsAssistantText(pageB, "shared daemon reply") {
 		t.Fatalf("expected both clients to hydrate assistant reply, pageA=%+v pageB=%+v", pageA, pageB)
@@ -294,7 +294,7 @@ func TestRemoteReadOnlyClientHydratesCommittedTranscriptAcrossWorkspaces(t *test
 	if !transcriptPageContainsAssistantText(hydratedB, "reply while client B disconnected") {
 		t.Fatalf("expected reconnecting client to hydrate missed committed reply, got %+v", hydratedB)
 	}
-	if hydratedB.Revision != pageA1.Revision || hydratedB.TotalEntries != pageA1.TotalEntries {
+	if hydratedB.Revision != pageA1.Revision || hydratedB.CommittedEntryCount != pageA1.CommittedEntryCount {
 		t.Fatalf("expected reconnect hydrate to match authoritative transcript head, hydrated=%+v pageA=%+v", hydratedB, pageA1)
 	}
 
@@ -316,7 +316,7 @@ func TestRemoteReadOnlyClientHydratesCommittedTranscriptAcrossWorkspaces(t *test
 	pageB2 := waitForRemoteTranscriptPage(t, fixture.serverB.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
 		return transcriptPageContainsAssistantText(page, "reply after client B reconnects")
 	})
-	if pageA2.Revision != pageB2.Revision || pageA2.TotalEntries != pageB2.TotalEntries {
+	if pageA2.Revision != pageB2.Revision || pageA2.CommittedEntryCount != pageB2.CommittedEntryCount {
 		t.Fatalf("expected both clients to converge after read-only hydrate, a=%+v b=%+v", pageA2, pageB2)
 	}
 }
@@ -453,9 +453,9 @@ func TestRemoteSessionActivityLaggingSubscriberHydratesAndResubscribesAcrossWork
 		return transcriptPageContainsAssistantText(page, "reply before remote gap")
 	})
 	pageB := waitForRemoteTranscriptPage(t, fixture.serverB.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
-		return page.Revision == pageA.Revision && page.TotalEntries == pageA.TotalEntries
+		return page.Revision == pageA.Revision && page.CommittedEntryCount == pageA.CommittedEntryCount
 	})
-	if pageA.Revision != pageB.Revision || pageA.TotalEntries != pageB.TotalEntries {
+	if pageA.Revision != pageB.Revision || pageA.CommittedEntryCount != pageB.CommittedEntryCount {
 		t.Fatalf("expected authoritative transcript hydrate to converge after stream gap, a=%+v b=%+v", pageA, pageB)
 	}
 
@@ -498,7 +498,7 @@ func TestRemoteSessionActivityLaggingSubscriberHydratesAndResubscribesAcrossWork
 	pageB2 := waitForRemoteTranscriptPage(t, fixture.serverB.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
 		return transcriptPageContainsAssistantText(page, "reply after gap recovery")
 	})
-	if pageA2.Revision != pageB2.Revision || pageA2.TotalEntries != pageB2.TotalEntries {
+	if pageA2.Revision != pageB2.Revision || pageA2.CommittedEntryCount != pageB2.CommittedEntryCount {
 		t.Fatalf("expected both clients to converge after gap recovery, a=%+v b=%+v", pageA2, pageB2)
 	}
 }

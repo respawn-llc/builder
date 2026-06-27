@@ -164,7 +164,7 @@ func runtimeTranscriptPageReplacementRejectReason(state runtimeTranscriptPageSta
 	if !replacesRecentTailForRuntimeTranscriptPage(state, req) {
 		return ""
 	}
-	if page.Revision == effectiveRevision && page.TotalEntries < effectiveCommittedCount {
+	if page.Revision == effectiveRevision && page.CommittedEntryCount < effectiveCommittedCount {
 		return "stale_total_entries"
 	}
 	if page.Revision == effectiveRevision && strings.TrimSpace(state.liveOngoing) != "" && strings.TrimSpace(page.Streaming) == "" {
@@ -221,7 +221,7 @@ func authoritativePageCommitsLiveAssistantOngoing(state runtimeTranscriptPageSta
 		if strings.TrimSpace(entry.Text) != trimmedLiveOngoing {
 			return false
 		}
-		absolute := page.Offset + idx
+		absolute := page.StartEntryCount + idx
 		if absolute < currentStart || absolute >= currentEnd {
 			return true
 		}
@@ -255,8 +255,8 @@ func committedTranscriptAlreadyMatchesAssistantOngoing(entries []tui.TranscriptE
 func shouldAcceptEqualRevisionTailReplacement(state runtimeTranscriptPageState, page clientui.TranscriptPage) bool {
 	currentStart := state.baseOffset
 	currentEnd := currentStart + len(state.entries)
-	pageStart := page.Offset
-	pageEnd := page.Offset + len(page.Entries)
+	pageStart := page.StartEntryCount
+	pageEnd := page.StartEntryCount + len(page.Entries)
 	if pageStart > currentStart || pageEnd < currentEnd {
 		return false
 	}

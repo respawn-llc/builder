@@ -42,8 +42,8 @@ func (m *uiModel) invalidateTransientTranscriptState() {
 		page = m.detailTranscript.page()
 	}
 	m.forwardToView(tui.SetConversationMsg{
-		BaseOffset:   page.Offset,
-		TotalEntries: page.TotalEntries,
+		BaseOffset:   page.StartEntryCount,
+		TotalEntries: page.CommittedEntryCount,
 		Entries:      transcriptEntriesFromPage(page),
 		Ongoing:      "",
 		OngoingError: "",

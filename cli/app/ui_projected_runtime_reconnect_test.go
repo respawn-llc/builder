@@ -33,9 +33,9 @@ func TestSessionActivityStreamGapHydratesThenRearmsOngoingRuntimeWait(t *testing
 	defer stop()
 
 	client := &refreshingRuntimeClient{transcripts: []clientui.TranscriptPage{{
-		SessionID:    "session-1",
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "hydrated after restart"}},
+		SessionID:           "session-1",
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "hydrated after restart"}},
 	}}}
 	m := newProjectedRuntimeEventsUIModel(client, runtimeEvents)
 	m.startupCmds = nil

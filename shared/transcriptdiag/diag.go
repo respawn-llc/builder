@@ -87,8 +87,8 @@ func PageDigest(page clientui.TranscriptPage) string {
 	parts := []string{
 		page.SessionID,
 		strconv.FormatInt(page.Revision, 10),
-		strconv.Itoa(page.Offset),
-		strconv.Itoa(page.TotalEntries),
+		strconv.Itoa(page.StartEntryCount),
+		strconv.Itoa(page.CommittedEntryCount),
 		EntriesDigest(page.Entries),
 		page.Streaming,
 		page.StreamingError,
@@ -118,8 +118,8 @@ func AddPageFields(fields map[string]string, page clientui.TranscriptPage) map[s
 		fields = map[string]string{}
 	}
 	fields["revision"] = strconv.FormatInt(page.Revision, 10)
-	fields["offset"] = strconv.Itoa(page.Offset)
-	fields["total_entries"] = strconv.Itoa(page.TotalEntries)
+	fields["start_entry_count"] = strconv.Itoa(page.StartEntryCount)
+	fields["committed_entry_count"] = strconv.Itoa(page.CommittedEntryCount)
 	fields["streaming_chars"] = strconv.Itoa(len(page.Streaming))
 	fields["page_digest"] = PageDigest(page)
 	return AddEntriesFields(fields, page.Entries)

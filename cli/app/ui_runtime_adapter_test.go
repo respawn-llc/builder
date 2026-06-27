@@ -118,7 +118,7 @@ func (c *startupTranscriptRuntimeClient) RefreshTranscript() (clientui.Transcrip
 func (c *startupTranscriptRuntimeClient) LoadTranscriptPage(req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
 	c.loadRequests = append(c.loadRequests, req)
 	page := c.page
-	if c.loadPage.SessionID != "" || c.loadPage.TotalEntries > 0 || len(c.loadPage.Entries) > 0 {
+	if c.loadPage.SessionID != "" || c.loadPage.CommittedEntryCount > 0 || len(c.loadPage.Entries) > 0 {
 		page = c.loadPage
 	}
 	if page.SessionID == "" {

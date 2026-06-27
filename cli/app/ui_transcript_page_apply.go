@@ -14,10 +14,9 @@ import (
 func (a uiRuntimeAdapter) applyProjectedChatSnapshot(snapshot clientui.ChatSnapshot) tea.Cmd {
 	page := a.model.runtimeTranscript()
 	page.Entries = cloneTranscriptEntries(snapshot.Entries)
-	page.TotalEntries = len(page.Entries)
-	page.Offset = 0
-	page.NextOffset = 0
-	page.HasMore = false
+	page.CommittedEntryCount = len(page.Entries)
+	page.StartEntryCount = 0
+	page.HasMoreAbove = false
 	page.Streaming = snapshot.Streaming
 	page.StreamingError = snapshot.StreamingError
 	return a.applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, page, clientui.TranscriptRecoveryCauseNone)
@@ -143,8 +142,8 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 				m.forwardToView(tui.ClearStreamingReasoningMsg{})
 			}
 			m.forwardToView(tui.SetConversationMsg{
-				BaseOffset:   page.Offset,
-				TotalEntries: page.TotalEntries,
+				BaseOffset:   page.StartEntryCount,
+				TotalEntries: page.CommittedEntryCount,
 				Entries:      entries,
 				Ongoing:      page.Streaming,
 				OngoingError: page.StreamingError,
@@ -185,8 +184,8 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 				m.forwardToView(tui.ClearStreamingReasoningMsg{})
 			}
 			m.forwardToView(tui.SetConversationMsg{
-				BaseOffset:   detailPage.Offset,
-				TotalEntries: detailPage.TotalEntries,
+				BaseOffset:   detailPage.StartEntryCount,
+				TotalEntries: detailPage.CommittedEntryCount,
 				Entries:      transcriptEntriesFromPage(detailPage),
 				Ongoing:      detailPage.Streaming,
 				OngoingError: detailPage.StreamingError,
@@ -230,9 +229,9 @@ func (a uiRuntimeAdapter) applyAuthoritativeRecentTailPage(page clientui.Transcr
 	if m == nil {
 		return
 	}
-	m.transcriptBaseOffset = page.Offset
+	m.transcriptBaseOffset = page.StartEntryCount
 	m.transcriptEntries = append(m.transcriptEntries[:0], entries...)
-	m.transcriptTotalEntries = max(page.TotalEntries, page.Offset+len(entries))
+	m.transcriptTotalEntries = max(page.CommittedEntryCount, page.StartEntryCount+len(entries))
 	m.transcriptRevision = max(m.transcriptRevision, page.Revision)
 	m.transcriptLiveDirty = false
 	if !preserveLiveReasoning {

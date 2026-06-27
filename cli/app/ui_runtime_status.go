@@ -362,8 +362,8 @@ func (m *uiModel) localRuntimeTranscript() clientui.TranscriptPage {
 		SessionName:           m.sessionName,
 		ConversationFreshness: m.conversationFreshness,
 		Revision:              m.transcriptRevision,
-		TotalEntries:          totalEntries,
-		Offset:                m.transcriptBaseOffset,
+		CommittedEntryCount:   totalEntries,
+		StartEntryCount:       m.transcriptBaseOffset,
 		Entries:               entries,
 		Streaming:             m.view.OngoingStreamingText(),
 	}

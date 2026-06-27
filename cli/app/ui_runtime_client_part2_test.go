@@ -543,10 +543,10 @@ func TestRuntimeClientSubmitTurnRecoveryContinuesFirstPrompt(t *testing.T) {
 func TestRuntimeClientHydrationRecoversRuntimeUnavailableSilently(t *testing.T) {
 	controls := &reconnectRetryRuntimeControlClient{}
 	authoritativePage := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     4,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "authoritative"}},
+		SessionID:           "session-1",
+		Revision:            4,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "authoritative"}},
 	}
 	reads := &flakySessionViewClient{
 		errs:  []error{serverapi.ErrRuntimeUnavailable, nil},
@@ -646,10 +646,10 @@ func TestRuntimeClientMainViewRecoveryPreservesReadDeadline(t *testing.T) {
 func TestRuntimeUnavailableHydrationRecoveryResumesOngoingEventFence(t *testing.T) {
 	controls := &reconnectRetryRuntimeControlClient{}
 	authoritativePage := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     5,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "hydrated"}},
+		SessionID:           "session-1",
+		Revision:            5,
+		CommittedEntryCount: 1,
+		Entries:             []clientui.ChatEntry{{Role: "assistant", Text: "hydrated"}},
 	}
 	reads := &flakySessionViewClient{
 		errs:  []error{serverapi.ErrRuntimeUnavailable, nil},

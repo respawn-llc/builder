@@ -15,7 +15,7 @@ func (m *uiModel) localRuntimeSessionView() clientui.RuntimeSessionView {
 		ConversationFreshness: m.conversationFreshness,
 		Transcript: clientui.TranscriptMetadata{
 			Revision:            transcript.Revision,
-			CommittedEntryCount: transcript.TotalEntries,
+			CommittedEntryCount: transcript.CommittedEntryCount,
 		},
 		Chat: clientui.ChatSnapshot{
 			Entries:   transcript.Entries,

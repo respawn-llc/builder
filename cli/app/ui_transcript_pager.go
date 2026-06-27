@@ -57,16 +57,16 @@ func (w uiDetailTranscriptWindow) page() clientui.TranscriptPage {
 		})
 	}
 	return clientui.TranscriptPage{
-		SessionID:      w.sessionID,
-		TotalEntries:   w.totalEntries,
-		Offset:         w.offset,
-		OlderCursor:    w.olderCursor,
-		HasMoreAbove:   w.hasMoreAbove,
-		NewerCursor:    w.newerCursor,
-		HasMoreBelow:   w.hasMoreBelow,
-		Entries:        entries,
-		Streaming:      w.ongoing,
-		StreamingError: w.ongoingError,
+		SessionID:           w.sessionID,
+		CommittedEntryCount: w.totalEntries,
+		StartEntryCount:     w.offset,
+		OlderCursor:         w.olderCursor,
+		HasMoreAbove:        w.hasMoreAbove,
+		NewerCursor:         w.newerCursor,
+		HasMoreBelow:        w.hasMoreBelow,
+		Entries:             entries,
+		Streaming:           w.ongoing,
+		StreamingError:      w.ongoingError,
 	}
 }
 
@@ -125,12 +125,12 @@ func (w *uiDetailTranscriptWindow) syncTail(page clientui.TranscriptPage) {
 		return
 	}
 	end := w.offset + len(w.entries)
-	pageEnd := page.Offset + len(page.Entries)
-	w.totalEntries = page.TotalEntries
+	pageEnd := page.StartEntryCount + len(page.Entries)
+	w.totalEntries = page.CommittedEntryCount
 	w.ongoing = page.Streaming
 	w.ongoingError = page.StreamingError
-	if page.Offset >= end || pageEnd <= w.offset {
-		if pageEnd >= page.TotalEntries {
+	if page.StartEntryCount >= end || pageEnd <= w.offset {
+		if pageEnd >= page.CommittedEntryCount {
 			w.replace(page)
 		}
 		return
@@ -160,8 +160,8 @@ func (w uiDetailTranscriptWindow) matchesPage(page clientui.TranscriptPage) bool
 	if transcriptPageSessionChanged(w.sessionID, page.SessionID) {
 		return false
 	}
-	totalEntries := max(page.TotalEntries, page.Offset+len(page.Entries))
-	if w.offset != page.Offset || w.totalEntries != totalEntries {
+	totalEntries := max(page.CommittedEntryCount, page.StartEntryCount+len(page.Entries))
+	if w.offset != page.StartEntryCount || w.totalEntries != totalEntries {
 		return false
 	}
 	if w.ongoing != page.Streaming || w.ongoingError != page.StreamingError {
@@ -183,15 +183,15 @@ func (w *uiDetailTranscriptWindow) replace(page clientui.TranscriptPage) {
 		return
 	}
 	w.sessionID = strings.TrimSpace(page.SessionID)
-	w.offset = page.Offset
-	w.totalEntries = max(page.TotalEntries, page.Offset+len(page.Entries))
+	w.offset = page.StartEntryCount
+	w.totalEntries = max(page.CommittedEntryCount, page.StartEntryCount+len(page.Entries))
 	w.entries = transcriptEntriesFromPage(page)
 	w.ongoing = page.Streaming
 	w.ongoingError = page.StreamingError
 	w.loaded = true
 	w.segments = []residentSegmentMeta{segmentMetaFromPage(0, page)}
 	w.refreshBounds()
-	w.trimToSegments(page.Offset)
+	w.trimToSegments(page.StartEntryCount)
 }
 
 func (w *uiDetailTranscriptWindow) prependCursorPage(page clientui.TranscriptPage) {
@@ -276,7 +276,7 @@ func (w *uiDetailTranscriptWindow) merge(page clientui.TranscriptPage) {
 		return
 	}
 	if len(page.Entries) == 0 {
-		w.totalEntries = max(w.totalEntries, page.TotalEntries)
+		w.totalEntries = max(w.totalEntries, page.CommittedEntryCount)
 		w.ongoing = page.Streaming
 		w.ongoingError = page.StreamingError
 		return
@@ -284,8 +284,8 @@ func (w *uiDetailTranscriptWindow) merge(page clientui.TranscriptPage) {
 	pageEntries := transcriptEntriesFromPage(page)
 	currentStart := w.offset
 	currentEnd := w.offset + len(w.entries)
-	pageStart := page.Offset
-	pageEnd := page.Offset + len(pageEntries)
+	pageStart := page.StartEntryCount
+	pageEnd := page.StartEntryCount + len(pageEntries)
 	if pageEnd < currentStart || pageStart > currentEnd {
 		w.replace(page)
 		return
@@ -298,7 +298,7 @@ func (w *uiDetailTranscriptWindow) merge(page clientui.TranscriptPage) {
 	frontGrowth := currentStart - mergedStart
 	w.offset = mergedStart
 	w.entries = merged
-	w.totalEntries = max(max(w.totalEntries, page.TotalEntries), mergedEnd)
+	w.totalEntries = max(max(w.totalEntries, page.CommittedEntryCount), mergedEnd)
 	w.ongoing = page.Streaming
 	w.ongoingError = page.StreamingError
 	w.loaded = true
@@ -320,7 +320,7 @@ func (w *uiDetailTranscriptWindow) merge(page clientui.TranscriptPage) {
 		w.segments = []residentSegmentMeta{segmentMetaFromPage(0, page)}
 	}
 	w.refreshBounds()
-	w.trimToSegments(page.Offset)
+	w.trimToSegments(page.StartEntryCount)
 }
 
 func (w *uiDetailTranscriptWindow) trimToSegments(anchorOffset int) {

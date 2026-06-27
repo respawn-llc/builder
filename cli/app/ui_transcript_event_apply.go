@@ -127,12 +127,12 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	}
 	if m.detailTranscript.loaded && !allTranscriptEntriesTransient(convertedEntries) {
 		page := clientui.TranscriptPage{
-			Revision:       m.transcriptRevision,
-			Offset:         startOffset,
-			TotalEntries:   m.transcriptTotalEntries,
-			Entries:        cloneChatEntries(entries),
-			Streaming:      m.view.OngoingStreamingText(),
-			StreamingError: m.view.OngoingErrorText(),
+			Revision:            m.transcriptRevision,
+			StartEntryCount:     startOffset,
+			CommittedEntryCount: m.transcriptTotalEntries,
+			Entries:             cloneChatEntries(entries),
+			Streaming:           m.view.OngoingStreamingText(),
+			StreamingError:      m.view.OngoingErrorText(),
 		}
 		m.detailTranscript.apply(page)
 	}
@@ -191,12 +191,12 @@ func (a uiRuntimeAdapter) applyActiveAssistantFinalizerGapAsRecentTail(evt clien
 		m.clearAssistantStreamForCommittedAppend()
 	}
 	page := clientui.TranscriptPage{
-		Revision:       evt.TranscriptRevision,
-		Offset:         start,
-		TotalEntries:   max(evt.CommittedEntryCount, start+len(evt.TranscriptEntries)),
-		Entries:        cloneChatEntries(evt.TranscriptEntries),
-		Streaming:      m.view.OngoingStreamingText(),
-		StreamingError: m.view.OngoingErrorText(),
+		Revision:            evt.TranscriptRevision,
+		StartEntryCount:     start,
+		CommittedEntryCount: max(evt.CommittedEntryCount, start+len(evt.TranscriptEntries)),
+		Entries:             cloneChatEntries(evt.TranscriptEntries),
+		Streaming:           m.view.OngoingStreamingText(),
+		StreamingError:      m.view.OngoingErrorText(),
 	}
 	detailPinnedAwayFromTail := m.detailTranscript.loaded && m.detailTranscript.hasMoreBelow
 	if detailPinnedAwayFromTail {
@@ -213,16 +213,16 @@ func (a uiRuntimeAdapter) applyActiveAssistantFinalizerGapAsRecentTail(evt clien
 		detailPage.SessionName = page.SessionName
 		detailPage.Revision = page.Revision
 		m.forwardToView(tui.SetConversationMsg{
-			BaseOffset:   detailPage.Offset,
-			TotalEntries: detailPage.TotalEntries,
+			BaseOffset:   detailPage.StartEntryCount,
+			TotalEntries: detailPage.CommittedEntryCount,
 			Entries:      transcriptEntriesFromPage(detailPage),
 			Ongoing:      detailPage.Streaming,
 			OngoingError: detailPage.StreamingError,
 		})
 	default:
 		m.forwardToView(tui.SetConversationMsg{
-			BaseOffset:   page.Offset,
-			TotalEntries: page.TotalEntries,
+			BaseOffset:   page.StartEntryCount,
+			TotalEntries: page.CommittedEntryCount,
 			Entries:      entries,
 			Ongoing:      page.Streaming,
 			OngoingError: page.StreamingError,

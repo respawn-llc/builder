@@ -31,13 +31,13 @@ func TranscriptPageFromRuntime(engine *runtime.Engine, req clientui.TranscriptPa
 	if req.NewerCursor <= 0 && req.Cursor <= 0 {
 		if page.HasMoreAbove {
 			total := engine.CommittedTranscriptEntryCount()
-			page.TotalEntries = total
+			page.CommittedEntryCount = total
 			if offset := total - len(page.Entries); offset >= 0 {
-				page.Offset = offset
+				page.StartEntryCount = offset
 			}
 		} else {
-			page.Offset = 0
-			page.TotalEntries = len(page.Entries)
+			page.StartEntryCount = 0
+			page.CommittedEntryCount = len(page.Entries)
 		}
 	}
 	return page, nil
@@ -90,15 +90,15 @@ func CommittedTranscriptSuffixFromSegment(sessionID, sessionName string, freshne
 	snapshot := ChatSnapshotFromRuntime(page.Snapshot)
 	entries := cloneChatEntries(snapshot.Entries)
 	return clientui.CommittedTranscriptSuffix{
-		SessionID:             sessionID,
-		SessionName:           sessionName,
-		ConversationFreshness: freshness,
-		Revision:              revision,
-		CommittedEntryCount:   len(entries),
-		StartEntryCount:       0,
-		NextEntryCount:        len(entries),
-		HasMore:               false,
-		Entries:               entries,
+		SessionID:               sessionID,
+		SessionName:             sessionName,
+		ConversationFreshness:   freshness,
+		Revision:                revision,
+		CommittedEntryCount:     len(entries),
+		StartEntryCount:         0,
+		NextEntryCount:          len(entries),
+		HasMoreCommittedEntries: false,
+		Entries:                 entries,
 	}
 }
 

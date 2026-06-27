@@ -1430,14 +1430,14 @@ func TestNativeRecentTailHydrateDeliversRecoveredCommittedRows(t *testing.T) {
 
 	exitMainThread := m.enterUIMainThread("native recent-tail hydrate test")
 	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     2,
-		Offset:       0,
-		TotalEntries: 2,
-		NewerCursor:  2,
-		HasMoreBelow: false,
-		HasMoreAbove: false,
-		OlderCursor:  0,
+		SessionID:           "session-1",
+		Revision:            2,
+		StartEntryCount:     0,
+		CommittedEntryCount: 2,
+		NewerCursor:         2,
+		HasMoreBelow:        false,
+		HasMoreAbove:        false,
+		OlderCursor:         0,
 		Entries: []clientui.ChatEntry{
 			{Role: "user", Text: "prompt"},
 			{Role: "assistant", Text: "recovered answer", Phase: string(clientui.MessagePhaseFinal)},
