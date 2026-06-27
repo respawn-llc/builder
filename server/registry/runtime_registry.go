@@ -50,17 +50,20 @@ func (r *RuntimeRegistry) BlockSessionRuns(sessionIDs []string) func() {
 		r.runStateCond.Wait()
 	}
 	r.runStateMu.Unlock()
+	var once sync.Once
 	return func() {
-		r.runStateMu.Lock()
-		defer r.runStateMu.Unlock()
-		for _, sessionID := range blocked {
-			if r.blockedRuns[sessionID] <= 1 {
-				delete(r.blockedRuns, sessionID)
-				continue
+		once.Do(func() {
+			r.runStateMu.Lock()
+			defer r.runStateMu.Unlock()
+			for _, sessionID := range blocked {
+				if r.blockedRuns[sessionID] <= 1 {
+					delete(r.blockedRuns, sessionID)
+					continue
+				}
+				r.blockedRuns[sessionID]--
 			}
-			r.blockedRuns[sessionID]--
-		}
-		r.runStateCond.Broadcast()
+			r.runStateCond.Broadcast()
+		})
 	}
 }
 
@@ -420,6 +423,9 @@ func (r *RuntimeRegistry) SubmitPromptResponse(sessionID string, resp askquestio
 	entry := r.directory.Entry(id)
 	if entry == nil {
 		return fmt.Errorf("runtime %q is unavailable", id)
+	}
+	if entry.isClosing() {
+		return fmt.Errorf("runtime %q is closing", id)
 	}
 	return entry.pendingPrompts.Submit(resp, err, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
 		entry.PublishPendingPrompt(id, snapshot, eventType)

@@ -699,6 +699,43 @@ func TestRuntimeRegistrySubmitPromptResponseRemovesPendingPromptBeforeWaiterRetu
 	}
 }
 
+func TestRuntimeRegistryBeginGuardWaitsForBuild(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	claim, _, _ := registry.AcquireRuntimeClaim("session-1", "owner-a")
+	engine := &runtime.Engine{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := registry.BeginRuntimeGuard(ctx, "session-1"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("BeginRuntimeGuard on a building runtime err=%v, want a wait (context.DeadlineExceeded), not a guard over a nil engine", err)
+	}
+
+	claim.Resolve(engine, nil, func() {})
+	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
+
+	guard, err := registry.BeginRuntimeGuard(context.Background(), "session-1")
+	if err != nil {
+		t.Fatalf("BeginRuntimeGuard after build: %v", err)
+	}
+	defer guard.Release()
+	if guard.Engine() != engine {
+		t.Fatal("guard must expose the freshly built engine")
+	}
+}
+
+func TestRuntimeRegistrySubmitPromptResponseRejectedWhileClosing(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := &runtime.Engine{}
+	registerReady(t, registry, "session-1", engine)
+	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
+
+	registry.directory.Entry("session-1").markClosing()
+
+	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); err == nil {
+		t.Fatal("SubmitPromptResponse must be rejected while the runtime is closing")
+	}
+}
+
 func TestRuntimeRegistryAwaitPromptResponseContextCanceledRemovesPendingPrompt(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := &runtime.Engine{}
@@ -824,10 +861,18 @@ func TestRuntimeRegistryBlockSessionRunsWaitsForInFlightStart(t *testing.T) {
 	go func() {
 		blocked <- r.BlockSessionRuns([]string{"s1"})
 	}()
+	deadline := time.After(time.Second)
+	for !r.SessionRunsBlocked("s1") {
+		select {
+		case <-deadline:
+			t.Fatal("BlockSessionRuns never registered the block")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 	select {
 	case <-blocked:
 		t.Fatal("BlockSessionRuns must wait for the in-flight start to drain")
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	releaseRun()
 	select {

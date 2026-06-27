@@ -314,13 +314,14 @@ func (d *runtimeDirectory) BeginGuard(ctx context.Context, sessionID string) (*r
 	}
 	d.mu.RLock()
 	entry := d.entries[id]
+	d.mu.RUnlock()
 	if entry == nil {
-		d.mu.RUnlock()
 		return nil, fmt.Errorf("runtime %q is unavailable", id)
 	}
-	guard, err := entry.beginGuard(ctx, id)
-	d.mu.RUnlock()
-	return guard, err
+	if _, err := entry.awaitReady(ctx); err != nil {
+		return nil, err
+	}
+	return entry.beginGuard(ctx, id)
 }
 
 func (e *runtimeEntry) beginGuard(ctx context.Context, sessionID string) (*runtimeGuard, error) {
