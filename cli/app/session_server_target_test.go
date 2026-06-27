@@ -82,7 +82,8 @@ func TestStartSessionServerUsesConfiguredDaemonForInteractiveFlow(t *testing.T) 
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test remote interactive runtime")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive daemon")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive daemon")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -189,7 +190,8 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test daemon environment cwd")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive daemon")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive daemon")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -236,7 +238,8 @@ func TestRemoteInteractiveRuntimeTwoClientsConvergeOnSameSessionAcrossWorkspaces
 	defer fakeResponses.Close()
 	fixture := startRemoteMultiClientRuntimeFixture(t, fakeResponses.URL)
 
-	message, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello from client A")
+	submission, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello from client A")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage A: %v", err)
 	}
@@ -270,7 +273,8 @@ func TestRemoteReadOnlyClientHydratesCommittedTranscriptAcrossWorkspaces(t *test
 	defer fakeResponses.Close()
 	fixture := startRemoteMultiClientRuntimeFixture(t, fakeResponses.URL)
 
-	firstMessage, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message while client B is disconnected")
+	firstSubmission, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message while client B is disconnected")
+	firstMessage := firstSubmission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage before reconnect: %v", err)
 	}
@@ -294,7 +298,8 @@ func TestRemoteReadOnlyClientHydratesCommittedTranscriptAcrossWorkspaces(t *test
 		t.Fatalf("expected reconnect hydrate to match authoritative transcript head, hydrated=%+v pageA=%+v", hydratedB, pageA1)
 	}
 
-	secondMessage, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message after client B reconnects")
+	secondSubmission, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message after client B reconnects")
+	secondMessage := secondSubmission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage after reconnect: %v", err)
 	}
@@ -427,7 +432,8 @@ func TestRemoteSessionActivityLaggingSubscriberHydratesAndResubscribesAcrossWork
 	defer fakeResponses.Close()
 	fixture := startRemoteMultiClientRuntimeFixture(t, fakeResponses.URL)
 
-	message, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message before remote gap")
+	submission, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message before remote gap")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage before gap: %v", err)
 	}
@@ -459,7 +465,8 @@ func TestRemoteSessionActivityLaggingSubscriberHydratesAndResubscribesAcrossWork
 	}
 	defer func() { _ = recoveredSub.Close() }()
 
-	message, err = fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message after lagging subscriber recovers")
+	submission, err = fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message after lagging subscriber recovers")
+	message = submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage after gap recovery: %v", err)
 	}

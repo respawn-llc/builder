@@ -130,7 +130,8 @@ func TestStartSessionServerRejectsIncompatibleDiscoveredDaemonAndFallsBack(t *te
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through embedded fallback")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through embedded fallback")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -180,7 +181,8 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutProcessOutputCapability
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after capability fallback")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after capability fallback")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -232,7 +234,8 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutAuthBootstrapCapability
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after auth bootstrap fallback")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after auth bootstrap fallback")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -284,7 +287,8 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutProjectAttachCapability
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test project attach fallback runtime")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after project attach fallback")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after project attach fallback")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -335,7 +339,8 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutTranscriptPagingCapabil
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after transcript paging fallback")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after transcript paging fallback")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -628,7 +633,8 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test remote interactive runtime override")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive override")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive override")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}

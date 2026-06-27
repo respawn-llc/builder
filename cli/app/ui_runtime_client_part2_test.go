@@ -426,7 +426,8 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesReques
 	})
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
-	message, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -451,7 +452,8 @@ func TestRuntimeClientSubmitUserMessageCanSkipPromptHistoryAcrossReconnect(t *te
 	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
-	message, err := runtimeClient.SubmitUserMessageWithPromptHistoryRecorded(context.Background(), "expanded hidden prompt")
+	submission, err := runtimeClient.SubmitUserMessageWithPromptHistoryRecorded(context.Background(), "expanded hidden prompt")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessageWithPromptHistoryRecorded: %v", err)
 	}
@@ -513,7 +515,8 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) 
 	})
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
-	message, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -790,7 +793,8 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
-	message, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -835,7 +839,8 @@ func TestRuntimeClientServerRestartFirstPromptRecoversAndWarnsOngoing(t *testing
 	sized, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	model = sized.(*uiModel)
 
-	message, err := runtimeClient.SubmitUserMessage(context.Background(), "hello after restart")
+	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello after restart")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("submitRuntimeUserMessage: %v", err)
 	}

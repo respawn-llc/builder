@@ -193,20 +193,20 @@ func (f *runtimeControlFakeClient) ShouldCompactBeforeUserMessage(_ context.Cont
 	}
 	return f.shouldCompactResult, f.err
 }
-func (f *runtimeControlFakeClient) SubmitUserMessage(_ context.Context, text string) (string, error) {
+func (f *runtimeControlFakeClient) SubmitUserMessage(_ context.Context, text string) (clientui.UserTurnSubmission, error) {
 	f.submitText = text
 	if f.submitErr != nil {
-		return f.submitResult, f.submitErr
+		return clientui.UserTurnSubmission{Message: f.submitResult}, f.submitErr
 	}
-	return f.submitResult, f.err
+	return clientui.UserTurnSubmission{Message: f.submitResult}, f.err
 }
-func (f *runtimeControlFakeClient) SubmitUserMessageWithPromptHistoryRecorded(_ context.Context, text string) (string, error) {
+func (f *runtimeControlFakeClient) SubmitUserMessageWithPromptHistoryRecorded(_ context.Context, text string) (clientui.UserTurnSubmission, error) {
 	f.submitText = text
 	f.submitRecorded = append(f.submitRecorded, true)
 	if f.submitErr != nil {
-		return f.submitResult, f.submitErr
+		return clientui.UserTurnSubmission{Message: f.submitResult}, f.submitErr
 	}
-	return f.submitResult, f.err
+	return clientui.UserTurnSubmission{Message: f.submitResult}, f.err
 }
 func (f *runtimeControlFakeClient) SubmitUserShellCommand(_ context.Context, command string) error {
 	f.submitShellCommand = command
@@ -325,7 +325,8 @@ func TestRuntimeControlHelpersDelegateToRuntimeClient(t *testing.T) {
 		t.Fatalf("clear runtime goal = (%+v, %v), want nil goal", goal, err)
 	}
 	m.appendRuntimeLocalEntryWithNoticeID("system", "hello", "")
-	message, err := m.submitRuntimeUserMessage(context.Background(), "prompt", false)
+	submission, err := m.submitRuntimeUserMessage(context.Background(), "prompt", false)
+	message := submission.Message
 	if err != nil || message != "assistant" {
 		t.Fatalf("submit runtime user message = (%q, %v), want (assistant, nil)", message, err)
 	}
@@ -588,8 +589,8 @@ func TestRuntimeControlHelpersFallbackWithoutRuntimeClient(t *testing.T) {
 	if goal, err := m.clearRuntimeGoal(); goal != nil || err != nil {
 		t.Fatalf("clear runtime goal without client = (%+v, %v), want (nil, nil)", goal, err)
 	}
-	if message, err := m.submitRuntimeUserMessage(context.Background(), "prompt", false); message != "" || err != nil {
-		t.Fatalf("submit runtime user message without client = (%q, %v), want (empty, nil)", message, err)
+	if submission, err := m.submitRuntimeUserMessage(context.Background(), "prompt", false); submission.Message != "" || err != nil {
+		t.Fatalf("submit runtime user message without client = (%q, %v), want (empty, nil)", submission.Message, err)
 	}
 	if err := m.submitRuntimeUserShellCommand(context.Background(), "echo hi"); err != nil {
 		t.Fatalf("submit runtime shell command without client: %v", err)

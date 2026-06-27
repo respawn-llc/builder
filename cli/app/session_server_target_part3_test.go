@@ -440,7 +440,8 @@ func runInteractiveWorkflowScenario(t *testing.T, server interactiveSessionServe
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "workflow parity")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello parity")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello parity")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}

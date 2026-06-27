@@ -760,3 +760,18 @@ func TestMainInputCtrlUDeletesCurrentLine(t *testing.T) {
 		t.Fatalf("expected cursor at start of joined line after delete, got %d", updated.inputCursor)
 	}
 }
+
+func TestRegisterSteeredQueuedUserMessageTracksDiscardablePendingItem(t *testing.T) {
+	m := &uiModel{}
+	m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{ID: "srv-1", Text: "queued while busy", ClientRequestID: "req-1"})
+	if len(m.pendingInjected) != 1 || m.pendingInjected[0].ID != "srv-1" || m.pendingInjected[0].Text != "queued while busy" {
+		t.Fatalf("pendingInjected = %+v, want one srv-1 item", m.pendingInjected)
+	}
+	if idx := m.injectedQueueIndexByAnyID("srv-1"); idx < 0 || m.injectedQueue[idx].State != injectedRuntimeQueueEnqueued {
+		t.Fatalf("injectedQueue = %+v, want enqueued srv-1", m.injectedQueue)
+	}
+	m.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{ID: "srv-1", Text: "queued while busy"})
+	if len(m.pendingInjected) != 1 || len(m.injectedQueue) != 1 {
+		t.Fatalf("re-register duplicated item, pending=%+v queue=%+v", m.pendingInjected, m.injectedQueue)
+	}
+}

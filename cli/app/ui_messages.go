@@ -14,6 +14,7 @@ type submitDoneMsg struct {
 	message       string
 	submittedText string
 	silentFinal   bool
+	queued        clientui.QueuedUserMessage
 	err           error
 }
 

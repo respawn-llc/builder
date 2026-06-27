@@ -118,6 +118,11 @@ type QueuedUserMessage struct {
 	ClientRequestID string
 }
 
+type UserTurnSubmission struct {
+	Message string
+	Queued  QueuedUserMessage
+}
+
 type TranscriptMetadata struct {
 	Revision            int64
 	CommittedEntryCount int
@@ -190,7 +195,7 @@ type RuntimeClient interface {
 	ClearGoal() (*RuntimeGoal, error)
 	AppendCommittedEntry(role, text string) error
 	AppendCommittedEntryWithNoticeID(role, text, noticeID string) error
-	SubmitUserMessage(ctx context.Context, text string) (string, error)
+	SubmitUserMessage(ctx context.Context, text string) (UserTurnSubmission, error)
 	SubmitUserShellCommand(ctx context.Context, command string) error
 	CompactContext(ctx context.Context, args string) error
 	HasQueuedUserWork() (bool, error)

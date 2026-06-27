@@ -74,14 +74,16 @@ func (c uiInputController) submitCmd(text string, queuedID string, promptHistory
 		if client == nil {
 			return newSubmitDoneMsg(token, "", text, errors.New("runtime engine is not configured"))
 		}
-		message, err := m.submitRuntimeUserMessage(context.Background(), text, promptHistoryRecorded)
+		submission, err := m.submitRuntimeUserMessage(context.Background(), text, promptHistoryRecorded)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return newSubmitDoneMsg(token, "", text, runtimeattach.ErrSubmissionInterrupted)
 			}
 			return newSubmitDoneMsg(token, "", text, err)
 		}
-		return newSubmitDoneMsg(token, message, text, nil)
+		done := newSubmitDoneMsg(token, submission.Message, text, nil)
+		done.queued = submission.Queued
+		return done
 	}
 }
 
@@ -258,6 +260,9 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	}
 
 	m.activity = uiActivityIdle
+	if msg.queued.ID != "" {
+		m.registerSteeredQueuedUserMessage(msg.queued)
+	}
 	if msg.silentFinal && m.turnQueueHook != nil {
 		m.turnQueueHook.OnTurnQueueAborted()
 	}

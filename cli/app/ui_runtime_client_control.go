@@ -215,20 +215,28 @@ func (c *sessionRuntimeClient) AppendCommittedEntryWithNoticeID(role, text, noti
 	})
 }
 
-func (c *sessionRuntimeClient) SubmitUserMessage(ctx context.Context, text string) (string, error) {
+func (c *sessionRuntimeClient) SubmitUserMessage(ctx context.Context, text string) (clientui.UserTurnSubmission, error) {
 	requestID := uuid.NewString()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: requestID, SessionID: c.sessionID, Text: text})
 	})
-	return resp.Message, err
+	return userTurnSubmissionFromResponse(resp, text, requestID), err
 }
 
-func (c *sessionRuntimeClient) SubmitUserMessageWithPromptHistoryRecorded(ctx context.Context, text string) (string, error) {
+func (c *sessionRuntimeClient) SubmitUserMessageWithPromptHistoryRecorded(ctx context.Context, text string) (clientui.UserTurnSubmission, error) {
 	requestID := uuid.NewString()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: requestID, SessionID: c.sessionID, Text: text, PromptHistoryRecorded: true})
 	})
-	return resp.Message, err
+	return userTurnSubmissionFromResponse(resp, text, requestID), err
+}
+
+func userTurnSubmissionFromResponse(resp serverapi.RuntimeSubmitUserTurnResponse, text string, requestID string) clientui.UserTurnSubmission {
+	submission := clientui.UserTurnSubmission{Message: resp.Message}
+	if resp.Steered && strings.TrimSpace(resp.QueueItemID) != "" {
+		submission.Queued = clientui.QueuedUserMessage{ID: resp.QueueItemID, Text: text, ClientRequestID: requestID}
+	}
+	return submission
 }
 
 func (c *sessionRuntimeClient) SubmitUserShellCommand(ctx context.Context, command string) error {
