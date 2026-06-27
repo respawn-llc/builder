@@ -442,8 +442,8 @@ func TestGatewayRemoteSessionActivityStreamsDirectSubmittedUserMessage(t *testin
 	}
 	defer func() { _ = sub.Close() }()
 
-	if _, err := remote.SubmitUserMessage(context.Background(), serverapi.RuntimeSubmitUserMessageRequest{ClientRequestID: "submit-say-hi", SessionID: store.Meta().SessionID, Text: "say hi"}); err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
+	if _, err := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: "submit-say-hi", SessionID: store.Meta().SessionID, Text: "say hi"}); err != nil {
+		t.Fatalf("SubmitUserTurn: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -502,7 +502,7 @@ func TestGatewayRemoteSessionActivityPreservesActiveSubmitOrderingUsingAssistant
 
 	submitDone := make(chan error, 1)
 	go func() {
-		_, submitErr := remote.SubmitUserMessage(context.Background(), serverapi.RuntimeSubmitUserMessageRequest{ClientRequestID: "submit-run-tools", SessionID: store.Meta().SessionID, Text: "run tools"})
+		_, submitErr := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: "submit-run-tools", SessionID: store.Meta().SessionID, Text: "run tools"})
 		submitDone <- submitErr
 	}()
 

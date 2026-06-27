@@ -81,18 +81,6 @@ type RuntimeShouldCompactBeforeUserMessageResponse struct {
 	ShouldCompact bool `json:"should_compact"`
 }
 
-type RuntimeSubmitUserMessageRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Text            string `json:"text"`
-}
-
-type RuntimeSubmitUserMessageResponse struct {
-	Message     string `json:"message"`
-	Steered     bool   `json:"steered,omitempty"`
-	QueueItemID string `json:"queue_item_id,omitempty"`
-}
-
 type RuntimeSubmitUserTurnRequest struct {
 	ClientRequestID       string `json:"client_request_id"`
 	SessionID             string `json:"session_id"`
@@ -272,9 +260,6 @@ func (r RuntimeAppendCommittedEntryRequest) Validate() error {
 }
 func (r RuntimeShouldCompactBeforeUserMessageRequest) Validate() error {
 	return validateRequiredSessionID(r.SessionID)
-}
-func (r RuntimeSubmitUserMessageRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeSubmitUserTurnRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)

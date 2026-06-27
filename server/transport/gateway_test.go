@@ -426,7 +426,6 @@ func TestGatewayPreAuthMethodPolicy(t *testing.T) {
 		{name: "process list", method: protocol.MethodProcessList, requiresAuth: false},
 		{name: "session plan", method: protocol.MethodSessionPlan, requiresAuth: true},
 		{name: "persist input draft", method: protocol.MethodSessionPersistInputDraft, requiresAuth: true},
-		{name: "runtime submit", method: protocol.MethodRuntimeSubmitUserMessage, requiresAuth: true},
 		{name: "run prompt", method: protocol.MethodRunPrompt, requiresAuth: true},
 	}
 	for _, tt := range tests {

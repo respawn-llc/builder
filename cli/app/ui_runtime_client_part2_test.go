@@ -140,10 +140,6 @@ func (c *reconnectRetryRuntimeControlClient) ShouldCompactBeforeUserMessage(cont
 	return serverapi.RuntimeShouldCompactBeforeUserMessageResponse{}, nil
 }
 
-func (c *reconnectRetryRuntimeControlClient) SubmitUserMessage(context.Context, serverapi.RuntimeSubmitUserMessageRequest) (serverapi.RuntimeSubmitUserMessageResponse, error) {
-	return serverapi.RuntimeSubmitUserMessageResponse{}, nil
-}
-
 func (c *reconnectRetryRuntimeControlClient) SubmitUserTurn(_ context.Context, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

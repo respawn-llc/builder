@@ -42,7 +42,6 @@ type Service struct {
 	reviewers      *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetReviewerEnabledResponse]
 	autoCompacts   *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse]
 	questions      *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetQuestionsEnabledResponse]
-	submits        *requestmemo.Memo[sessionTextMemoRequest, serverapi.RuntimeSubmitUserMessageResponse]
 	turnSubmits    *requestmemo.Memo[turnSubmitMemoRequest, serverapi.RuntimeSubmitUserTurnResponse]
 	queues         *requestmemo.Memo[sessionTextMemoRequest, serverapi.RuntimeQueueUserMessageResponse]
 	shells         *requestmemo.Memo[sessionCommandMemoRequest, struct{}]
@@ -128,7 +127,6 @@ func NewService(runtimes RuntimeResolver) *Service {
 		reviewers:      requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetReviewerEnabledResponse](),
 		autoCompacts:   requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse](),
 		questions:      requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetQuestionsEnabledResponse](),
-		submits:        requestmemo.New[sessionTextMemoRequest, serverapi.RuntimeSubmitUserMessageResponse](),
 		turnSubmits:    requestmemo.New[turnSubmitMemoRequest, serverapi.RuntimeSubmitUserTurnResponse](),
 		queues:         requestmemo.New[sessionTextMemoRequest, serverapi.RuntimeQueueUserMessageResponse](),
 		shells:         requestmemo.New[sessionCommandMemoRequest, struct{}](),
@@ -358,41 +356,6 @@ func (s *Service) ShouldCompactBeforeUserMessage(ctx context.Context, req server
 		return serverapi.RuntimeShouldCompactBeforeUserMessageResponse{}, err
 	}
 	return serverapi.RuntimeShouldCompactBeforeUserMessageResponse{ShouldCompact: shouldCompact}, nil
-}
-
-func (s *Service) SubmitUserMessage(ctx context.Context, req serverapi.RuntimeSubmitUserMessageRequest) (serverapi.RuntimeSubmitUserMessageResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeSubmitUserMessageResponse{}, err
-	}
-	release, err := s.beginRunStart(req.SessionID)
-	if err != nil {
-		return serverapi.RuntimeSubmitUserMessageResponse{}, err
-	}
-	defer release()
-	memoReq := sessionTextMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text}
-	return s.submits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionTextMemoRequest, func(ctx context.Context) (serverapi.RuntimeSubmitUserMessageResponse, error) {
-		runCtx := context.Background()
-		if ctx != nil {
-			runCtx = context.WithoutCancel(ctx)
-		}
-		var resp serverapi.RuntimeSubmitUserMessageResponse
-		err := s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			if _, _, err := s.recordPromptHistory(runCtx, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text); err != nil {
-				return err
-			}
-			msg, queued, err := engine.SubmitUserMessageOrSteer(runCtx, memoReq.Text, strings.TrimSpace(req.ClientRequestID))
-			if err != nil {
-				return err
-			}
-			if queued != nil {
-				resp = serverapi.RuntimeSubmitUserMessageResponse{QueueItemID: queued.ID, Steered: true}
-				return nil
-			}
-			resp = serverapi.RuntimeSubmitUserMessageResponse{Message: msg.Content}
-			return nil
-		})
-		return resp, err
-	})
 }
 
 func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.RuntimeSubmitUserShellCommandRequest) error {

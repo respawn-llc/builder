@@ -106,7 +106,6 @@ const (
 	MethodRuntimeSetQuestionsEnabled            = "runtime.setQuestionsEnabled"
 	MethodRuntimeAppendCommittedEntry           = "runtime.appendCommittedEntry"
 	MethodRuntimeShouldCompactBeforeUserMessage = "runtime.shouldCompactBeforeUserMessage"
-	MethodRuntimeSubmitUserMessage              = "runtime.submitUserMessage"
 	MethodRuntimeSubmitUserTurn                 = "runtime.submitUserTurn"
 	MethodRuntimeSubmitUserShellCommand         = "runtime.submitUserShellCommand"
 	MethodRuntimeCompactContext                 = "runtime.compactContext"

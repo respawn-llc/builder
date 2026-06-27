@@ -237,59 +237,12 @@ func (c *runtimeControlFakeClient) ProviderCapabilities(context.Context) (llm.Pr
 	return c.capabilities, nil
 }
 
-func TestServiceSubmitUserMessageReturnsTypedRuntimeUnavailable(t *testing.T) {
-	service := NewService(stubRuntimeResolver{})
-	req := serverapi.RuntimeSubmitUserMessageRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		Text:            "hello",
-	}
-
-	_, err := service.SubmitUserMessage(context.Background(), req)
-	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("SubmitUserMessage error = %v, want ErrRuntimeUnavailable", err)
-	}
-}
-
-func TestServiceSubmitUserMessageDetachesRunFromCallerCancellation(t *testing.T) {
-	client := newCancelObservingRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		_, err := service.SubmitUserMessage(ctx, runtimeControlUserMessageRequest(store, "req-detached", "hello"))
-		done <- err
-	}()
-
-	select {
-	case <-client.started:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for submit to start")
-	}
-	cancel()
-	select {
-	case <-client.ctxCanceled:
-		t.Fatal("runtime context was canceled by caller cancellation")
-	case <-time.After(50 * time.Millisecond):
-	}
-	select {
-	case err := <-done:
-		t.Fatalf("submit returned before runtime was released: %v", err)
-	default:
-	}
-
-	close(client.release)
-	if err := <-done; err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-}
-
-func TestServiceSubmitUserMessageStillCancelsOnExplicitInterrupt(t *testing.T) {
+func TestServiceSubmitUserTurnStillCancelsOnExplicitInterrupt(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
 	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
 	done := make(chan error, 1)
 	go func() {
-		_, err := service.SubmitUserMessage(context.Background(), runtimeControlUserMessageRequest(store, "req-interrupt", "hello"))
+		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "req-interrupt", "hello"))
 		done <- err
 	}()
 
@@ -856,47 +809,6 @@ func TestServiceSetSessionNameDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitUserMessageDedupesSuccessfulRetry(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	req := runtimeControlUserMessageRequest(store, "req-1", "hello")
-
-	first, err := service.SubmitUserMessage(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SubmitUserMessage first: %v", err)
-	}
-	second, err := service.SubmitUserMessage(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SubmitUserMessage retry: %v", err)
-	}
-	if first.Message != "done" || second.Message != "done" {
-		t.Fatalf("responses = (%q, %q), want both done", first.Message, second.Message)
-	}
-	if client.calls != 1 {
-		t.Fatalf("generate call count = %d, want 1", client.calls)
-	}
-	if got := countPromptHistoryEvents(t, store, "hello"); got != 1 {
-		t.Fatalf("prompt history count = %d, want 1", got)
-	}
-}
-
-func TestServiceSubmitUserMessageRejectsClientRequestIDPayloadMismatch(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	first := runtimeControlUserMessageRequest(store, "req-1", "hello")
-	if _, err := service.SubmitUserMessage(context.Background(), first); err != nil {
-		t.Fatalf("SubmitUserMessage first: %v", err)
-	}
-	second := first
-	second.Text = "different"
-	if _, err := service.SubmitUserMessage(context.Background(), second); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("SubmitUserMessage mismatch error = %v, want request id payload mismatch", err)
-	}
-	if client.calls != 1 {
-		t.Fatalf("generate call count = %d, want 1", client.calls)
-	}
-}
-
 func TestServiceSubmitUserTurnRecordsPromptHistoryAndSubmits(t *testing.T) {
 	client := finalResponseRuntimeControlClient()
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
@@ -1217,14 +1129,6 @@ func countUserMessagesWithContent(t *testing.T, store *session.Store, content st
 		}
 	}
 	return count
-}
-
-func runtimeControlUserMessageRequest(store *session.Store, requestID string, text string) serverapi.RuntimeSubmitUserMessageRequest {
-	return serverapi.RuntimeSubmitUserMessageRequest{
-		ClientRequestID: requestID,
-		SessionID:       store.Meta().SessionID,
-		Text:            text,
-	}
 }
 
 func runtimeControlUserTurnRequest(store *session.Store, requestID string, text string) serverapi.RuntimeSubmitUserTurnRequest {
