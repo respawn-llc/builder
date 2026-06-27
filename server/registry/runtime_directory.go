@@ -23,11 +23,16 @@ type runtimeEntry struct {
 	built           bool
 	buildErr        error
 	ready           chan struct{}
+	closed          chan struct{}
+	closedOnce      sync.Once
+	ownerRefs       int
+	ownerIDs        map[string]struct{}
 	closing         bool
 	closeDraining   bool
 	inFlight        int
 	engine          *runtime.Engine
 	rebind          func(string) error
+	closeWithDrain  func(context.Context, func(context.Context) error) error
 	sessionActivity *sessionActivityBroker
 	promptActivity  *promptActivityBroker
 	pendingPrompts  *pendingPromptStore
@@ -50,6 +55,8 @@ func newBuildingRuntimeEntry(generation uint64) *runtimeEntry {
 	entry := &runtimeEntry{
 		generation:      generation,
 		ready:           make(chan struct{}),
+		closed:          make(chan struct{}),
+		ownerIDs:        make(map[string]struct{}),
 		sessionActivity: newSessionActivityBroker(),
 		promptActivity:  newPromptActivityBroker(),
 		pendingPrompts:  newPendingPromptStore(),
@@ -58,7 +65,68 @@ func newBuildingRuntimeEntry(generation uint64) *runtimeEntry {
 	return entry
 }
 
-func (e *runtimeEntry) resolveBuild(engine *runtime.Engine, rebind func(string) error, buildErr error) {
+func (e *runtimeEntry) addOwner(ownerID string) int {
+	if e == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ownerRefs++
+	if trimmed := strings.TrimSpace(ownerID); trimmed != "" {
+		if e.ownerIDs == nil {
+			e.ownerIDs = make(map[string]struct{})
+		}
+		e.ownerIDs[trimmed] = struct{}{}
+	}
+	return e.ownerRefs
+}
+
+func (e *runtimeEntry) dropOwner(ownerID string) int {
+	if e == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if trimmed := strings.TrimSpace(ownerID); trimmed != "" {
+		delete(e.ownerIDs, trimmed)
+	}
+	if e.ownerRefs > 0 {
+		e.ownerRefs--
+	}
+	return e.ownerRefs
+}
+
+func (e *runtimeEntry) ownerCount() int {
+	if e == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.ownerRefs
+}
+
+func (e *runtimeEntry) signalClosed() {
+	if e == nil || e.closed == nil {
+		return
+	}
+	e.closedOnce.Do(func() {
+		close(e.closed)
+	})
+}
+
+func (e *runtimeEntry) awaitClosed(ctx context.Context) error {
+	if e == nil || e.closed == nil {
+		return nil
+	}
+	select {
+	case <-e.closed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (e *runtimeEntry) resolveBuild(engine *runtime.Engine, rebind func(string) error, closeWithDrain func(context.Context, func(context.Context) error) error, buildErr error) {
 	if e == nil {
 		return
 	}
@@ -72,8 +140,12 @@ func (e *runtimeEntry) resolveBuild(engine *runtime.Engine, rebind func(string) 
 	}
 	e.engine = engine
 	e.rebind = rebind
+	e.closeWithDrain = closeWithDrain
 	e.buildErr = buildErr
 	e.built = buildErr == nil
+	if e.built && e.ownerRefs <= 0 {
+		e.ownerRefs = 1
+	}
 	close(e.ready)
 	e.cond.Broadcast()
 }
