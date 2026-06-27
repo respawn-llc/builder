@@ -127,6 +127,18 @@ func (r *RuntimeRegistry) ResolveRuntime(_ context.Context, sessionID string) (*
 	return r.directory.Resolve(sessionID), nil
 }
 
+func (r *RuntimeRegistry) WithGuardedRuntime(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) (bool, error) {
+	if r == nil {
+		return false, nil
+	}
+	guard, err := r.directory.BeginGuard(ctx, sessionID)
+	if err != nil {
+		return false, nil
+	}
+	defer guard.Release()
+	return true, fn(guard.Engine())
+}
+
 func (r *RuntimeRegistry) IsSessionRuntimeActive(sessionID string) bool {
 	if r == nil {
 		return false

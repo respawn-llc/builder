@@ -30,6 +30,13 @@ func (s stubRuntimeResolver) ResolveRuntime(context.Context, string) (*runtime.E
 	return s.engine, nil
 }
 
+func (s stubRuntimeResolver) WithGuardedRuntime(_ context.Context, _ string, fn func(*runtime.Engine) error) (bool, error) {
+	if s.engine == nil {
+		return false, nil
+	}
+	return true, fn(s.engine)
+}
+
 var runtimeControlPromptHistoryStores sync.Map
 
 type runtimeControlPromptHistoryStore struct {

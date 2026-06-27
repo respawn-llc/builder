@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
 	"core/server/runtimeview"
@@ -92,7 +93,9 @@ func newUIRuntimeClientFromEngine(engine *runtime.Engine) clientui.RuntimeClient
 	}
 	resolver := sessionview.NewStaticRuntimeResolver(engine)
 	reads := client.NewLoopbackSessionViewClient(sessionview.NewService(nil, resolver, nil))
-	controls := client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(resolver))
+	controlRegistry := registry.NewRuntimeRegistry()
+	controlRegistry.Register(engine.SessionID(), engine)
+	controls := client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(controlRegistry))
 	runtimeClient := newUIRuntimeClientWithReads(engine.SessionID(), reads, controls).(*sessionRuntimeClient)
 	runtimeClient.storeMainView(runtimeview.MainViewFromRuntime(engine))
 	return runtimeClient

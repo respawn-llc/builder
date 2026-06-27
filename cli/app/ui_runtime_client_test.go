@@ -129,6 +129,16 @@ func (r *mutableRuntimeResolver) ResolveRuntime(context.Context, string) (*runti
 	return r.engine, nil
 }
 
+func (r *mutableRuntimeResolver) WithGuardedRuntime(_ context.Context, _ string, fn func(*runtime.Engine) error) (bool, error) {
+	r.mu.Lock()
+	engine := r.engine
+	r.mu.Unlock()
+	if engine == nil {
+		return false, nil
+	}
+	return true, fn(engine)
+}
+
 type flakySessionViewClient struct {
 	mu        sync.Mutex
 	responses []serverapi.SessionMainViewResponse

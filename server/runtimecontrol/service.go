@@ -18,6 +18,7 @@ import (
 
 type RuntimeResolver interface {
 	ResolveRuntime(ctx context.Context, sessionID string) (*runtime.Engine, error)
+	WithGuardedRuntime(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) (bool, error)
 }
 
 type PromptHistoryStore interface {
@@ -161,11 +162,15 @@ func (s *Service) WithWorkflowSessionResolver(resolver WorkflowSessionResolver) 
 }
 
 func (s *Service) withRuntimeAccess(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) error {
-	engine, err := s.resolve(ctx, sessionID)
-	if err != nil {
-		return err
+	if s == nil || s.runtimes == nil {
+		return fmt.Errorf("runtime resolver is required")
 	}
-	return fn(engine)
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	acquired, err := s.runtimes.WithGuardedRuntime(ctx, trimmedSessionID, fn)
+	if !acquired {
+		return errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("runtime for session %q is unavailable", trimmedSessionID))
+	}
+	return err
 }
 
 func (s *Service) resolve(ctx context.Context, sessionID string) (*runtime.Engine, error) {

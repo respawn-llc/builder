@@ -150,6 +150,14 @@ func (r staticRuntimeResolver) ResolveRuntime(_ context.Context, sessionID strin
 	return r.engine, nil
 }
 
+func (r staticRuntimeResolver) WithGuardedRuntime(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) (bool, error) {
+	engine, err := r.ResolveRuntime(ctx, sessionID)
+	if err != nil || engine == nil {
+		return false, nil
+	}
+	return true, fn(engine)
+}
+
 func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionMainViewResponse{}, err
