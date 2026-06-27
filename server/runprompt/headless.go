@@ -251,10 +251,12 @@ func (r *headlessPromptRuntime) SubmitUserMessage(ctx context.Context, prompt st
 	if r.plan.engine == nil {
 		err = errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("headless session %q has no acquired runtime", r.plan.sessionID))
 	} else {
-		assistant, submitErr := r.plan.engine.SubmitUserMessage(ctx, prompt)
-		content = assistant.Content
-		sessionName = r.plan.engine.SessionName()
-		err = submitErr
+		err = r.plan.sessionRuntime.RunOnAcquiredRuntime(ctx, r.plan.sessionID, r.plan.engine, func(runCtx context.Context) error {
+			assistant, submitErr := r.plan.engine.SubmitUserMessage(runCtx, prompt)
+			content = assistant.Content
+			sessionName = r.plan.engine.SessionName()
+			return submitErr
+		})
 	}
 	var dropped uint64
 	if r.plan.eventBridge != nil {

@@ -170,6 +170,41 @@ type RuntimeBuildResult struct {
 }
 
 var ErrSessionRunActive = errors.New("session has an active run")
+var ErrAcquiredRuntimeOvertaken = errors.New("acquired runtime was overtaken or closed before the operation completed")
+
+func (s *Service) RunOnAcquiredRuntime(ctx context.Context, sessionID string, engine *runtime.Engine, fn func(context.Context) error) error {
+	if fn == nil {
+		return nil
+	}
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	s.mu.Lock()
+	current := s.handles[trimmedSessionID]
+	overtaken := current == nil || current.engine != engine || current.closing
+	var closed chan struct{}
+	if !overtaken {
+		closed = current.closed
+	}
+	s.mu.Unlock()
+	if overtaken {
+		return ErrAcquiredRuntimeOvertaken
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-closed:
+			cancel()
+		case <-runCtx.Done():
+		}
+	}()
+	err := fn(runCtx)
+	select {
+	case <-closed:
+		return errors.Join(ErrAcquiredRuntimeOvertaken, err)
+	default:
+		return err
+	}
+}
 
 type RuntimeBuilder func(ctx context.Context) (RuntimeBuildResult, error)
 
@@ -579,9 +614,18 @@ func (s *Service) ReleaseSessionRuntime(ctx context.Context, req serverapi.Sessi
 		}
 	}
 	current.closing = true
+	closeWithDrain := current.closeWithDrain
 	closeFn := current.close
+	closingEngine := current.engine
 	s.mu.Unlock()
-	if closeFn != nil {
+	if closeWithDrain != nil {
+		_ = closeWithDrain(ctx, func(ctx context.Context) error {
+			if closingEngine == nil {
+				return nil
+			}
+			return closingEngine.DrainQueuedUserMessagesBeforeClose(ctx)
+		})
+	} else if closeFn != nil {
 		closeFn()
 	}
 	s.mu.Lock()

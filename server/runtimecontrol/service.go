@@ -19,7 +19,7 @@ import (
 type RuntimeResolver interface {
 	ResolveRuntime(ctx context.Context, sessionID string) (*runtime.Engine, error)
 	WithGuardedRuntime(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) (bool, error)
-	SessionRunsBlocked(sessionID string) bool
+	BeginSessionRun(sessionID string) (func(), bool)
 }
 
 type PromptHistoryStore interface {
@@ -174,11 +174,15 @@ func (s *Service) withRuntimeAccess(ctx context.Context, sessionID string, fn fu
 	return err
 }
 
-func (s *Service) ensureRunsNotBlocked(sessionID string) error {
-	if s != nil && s.runtimes != nil && s.runtimes.SessionRunsBlocked(strings.TrimSpace(sessionID)) {
-		return serverapi.ErrSessionWorktreeDeleting
+func (s *Service) beginRunStart(sessionID string) (func(), error) {
+	if s == nil || s.runtimes == nil {
+		return func() {}, nil
 	}
-	return nil
+	release, ok := s.runtimes.BeginSessionRun(strings.TrimSpace(sessionID))
+	if !ok {
+		return nil, serverapi.ErrSessionWorktreeDeleting
+	}
+	return release, nil
 }
 
 func (s *Service) resolve(ctx context.Context, sessionID string) (*runtime.Engine, error) {
@@ -360,9 +364,11 @@ func (s *Service) SubmitUserMessage(ctx context.Context, req serverapi.RuntimeSu
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitUserMessageResponse{}, err
 	}
-	if err := s.ensureRunsNotBlocked(req.SessionID); err != nil {
+	release, err := s.beginRunStart(req.SessionID)
+	if err != nil {
 		return serverapi.RuntimeSubmitUserMessageResponse{}, err
 	}
+	defer release()
 	memoReq := sessionTextMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text}
 	return s.submits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionTextMemoRequest, func(ctx context.Context) (serverapi.RuntimeSubmitUserMessageResponse, error) {
 		runCtx := context.Background()
@@ -393,11 +399,13 @@ func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.Runt
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	if err := s.ensureRunsNotBlocked(req.SessionID); err != nil {
+	release, err := s.beginRunStart(req.SessionID)
+	if err != nil {
 		return err
 	}
+	defer release()
 	memoReq := sessionCommandMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Command: req.Command}
-	_, err := s.shells.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionCommandMemoRequest, func(ctx context.Context) (struct{}, error) {
+	_, err = s.shells.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionCommandMemoRequest, func(ctx context.Context) (struct{}, error) {
 		runCtx := context.Background()
 		if ctx != nil {
 			runCtx = context.WithoutCancel(ctx)
@@ -459,9 +467,11 @@ func (s *Service) SubmitQueuedUserMessages(ctx context.Context, req serverapi.Ru
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, err
 	}
-	if err := s.ensureRunsNotBlocked(req.SessionID); err != nil {
+	release, err := s.beginRunStart(req.SessionID)
+	if err != nil {
 		return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, err
 	}
+	defer release()
 	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(req.SessionID)}
 	return s.queuedSubmits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool { return a.SessionID == b.SessionID }, func(ctx context.Context) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
 		runCtx := context.Background()

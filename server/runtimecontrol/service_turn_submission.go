@@ -12,9 +12,11 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
-	if err := s.ensureRunsNotBlocked(req.SessionID); err != nil {
+	release, err := s.beginRunStart(req.SessionID)
+	if err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
+	defer release()
 	memoReq := turnSubmitMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text, PromptHistoryRecorded: req.PromptHistoryRecorded}
 	return s.turnSubmits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameTurnSubmitMemoRequest, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		runCtx := context.Background()
@@ -45,7 +47,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				}
 			}
 			if compactionBusy {
-				queued := engine.QueueUserMessageWithClientRequestID(memoReq.Text, strings.TrimSpace(req.ClientRequestID))
+				queued := engine.QueueUserMessageForAutoDrain(memoReq.Text, strings.TrimSpace(req.ClientRequestID))
 				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
 				return nil
 			}

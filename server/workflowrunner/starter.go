@@ -769,23 +769,22 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 	// (same ID) whose compaction committed skips; one interrupted before commit
 	// recompacts; a later in-place handoff (new run ID, same session) compacts
 	// again because its continuation compaction is always the run's first action.
-	if input.ContextMode == workflow.ContextModeCompactAndContinueSession &&
-		engine.LastCompactionWorkflowRunID() != string(req.RunID) {
-		if err := engine.CompactContext(ctx, ""); err != nil {
-			reason := ReasonRuntimeFailed
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-				reason = ReasonRuntimeCanceled
+	turnErr := s.sessionRuntime.RunOnAcquiredRuntime(ctx, sessionID, engine, func(runCtx context.Context) error {
+		if input.ContextMode == workflow.ContextModeCompactAndContinueSession &&
+			engine.LastCompactionWorkflowRunID() != string(req.RunID) {
+			if err := engine.CompactContext(runCtx, ""); err != nil {
+				return err
 			}
-			s.interrupt(context.Background(), req.RunID, req.Generation, reason, err)
-			return
 		}
-	}
-	if _, submitErr := engine.SubmitWorkflowTurn(ctx); submitErr != nil {
+		_, submitErr := engine.SubmitWorkflowTurn(runCtx)
+		return submitErr
+	})
+	if turnErr != nil {
 		reason := ReasonRuntimeFailed
-		if errors.Is(submitErr, context.Canceled) || ctx.Err() != nil {
+		if errors.Is(turnErr, context.Canceled) || errors.Is(turnErr, sessionruntime.ErrAcquiredRuntimeOvertaken) || ctx.Err() != nil {
 			reason = ReasonRuntimeCanceled
 		}
-		s.interrupt(context.Background(), req.RunID, req.Generation, reason, submitErr)
+		s.interrupt(context.Background(), req.RunID, req.Generation, reason, turnErr)
 	}
 }
 

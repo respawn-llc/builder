@@ -26,9 +26,10 @@ type RuntimeRegistry struct {
 	sleepObserverMu sync.Mutex
 	sleepObserver   func(active bool)
 	runStateMu      sync.Mutex
+	runStateCond    *sync.Cond
 	runningSessions map[string]bool
-	runBlockMu      sync.Mutex
 	blockedRuns     map[string]int
+	inFlightStarts  map[string]int
 }
 
 func (r *RuntimeRegistry) BlockSessionRuns(sessionIDs []string) func() {
@@ -36,10 +37,7 @@ func (r *RuntimeRegistry) BlockSessionRuns(sessionIDs []string) func() {
 		return func() {}
 	}
 	blocked := make([]string, 0, len(sessionIDs))
-	r.runBlockMu.Lock()
-	if r.blockedRuns == nil {
-		r.blockedRuns = make(map[string]int)
-	}
+	r.runStateMu.Lock()
 	for _, sessionID := range sessionIDs {
 		trimmed := strings.TrimSpace(sessionID)
 		if trimmed == "" {
@@ -48,10 +46,13 @@ func (r *RuntimeRegistry) BlockSessionRuns(sessionIDs []string) func() {
 		r.blockedRuns[trimmed]++
 		blocked = append(blocked, trimmed)
 	}
-	r.runBlockMu.Unlock()
+	for r.anyInFlightStartLocked(blocked) {
+		r.runStateCond.Wait()
+	}
+	r.runStateMu.Unlock()
 	return func() {
-		r.runBlockMu.Lock()
-		defer r.runBlockMu.Unlock()
+		r.runStateMu.Lock()
+		defer r.runStateMu.Unlock()
 		for _, sessionID := range blocked {
 			if r.blockedRuns[sessionID] <= 1 {
 				delete(r.blockedRuns, sessionID)
@@ -59,7 +60,17 @@ func (r *RuntimeRegistry) BlockSessionRuns(sessionIDs []string) func() {
 			}
 			r.blockedRuns[sessionID]--
 		}
+		r.runStateCond.Broadcast()
 	}
+}
+
+func (r *RuntimeRegistry) anyInFlightStartLocked(sessionIDs []string) bool {
+	for _, sessionID := range sessionIDs {
+		if r.inFlightStarts[sessionID] > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RuntimeRegistry) SessionRunsBlocked(sessionID string) bool {
@@ -70,9 +81,43 @@ func (r *RuntimeRegistry) SessionRunsBlocked(sessionID string) bool {
 	if trimmed == "" {
 		return false
 	}
-	r.runBlockMu.Lock()
-	defer r.runBlockMu.Unlock()
+	r.runStateMu.Lock()
+	defer r.runStateMu.Unlock()
 	return r.blockedRuns[trimmed] > 0
+}
+
+func (r *RuntimeRegistry) BeginSessionRun(sessionID string) (func(), bool) {
+	if r == nil {
+		return func() {}, true
+	}
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return func() {}, true
+	}
+	r.runStateMu.Lock()
+	if r.blockedRuns[trimmed] > 0 {
+		r.runStateMu.Unlock()
+		return nil, false
+	}
+	r.inFlightStarts[trimmed]++
+	r.runStateMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.runStateMu.Lock()
+			defer r.runStateMu.Unlock()
+			r.clearInFlightStartLocked(trimmed)
+		})
+	}, true
+}
+
+func (r *RuntimeRegistry) clearInFlightStartLocked(sessionID string) {
+	if r.inFlightStarts[sessionID] <= 1 {
+		delete(r.inFlightStarts, sessionID)
+	} else {
+		r.inFlightStarts[sessionID]--
+	}
+	r.runStateCond.Broadcast()
 }
 
 type GuardedPromptResponder interface {
@@ -87,10 +132,14 @@ const (
 )
 
 func NewRuntimeRegistry() *RuntimeRegistry {
-	return &RuntimeRegistry{
+	r := &RuntimeRegistry{
 		directory:       newRuntimeDirectory(),
 		runningSessions: make(map[string]bool),
+		blockedRuns:     make(map[string]int),
+		inFlightStarts:  make(map[string]int),
 	}
+	r.runStateCond = sync.NewCond(&r.runStateMu)
+	return r
 }
 
 func (r *RuntimeRegistry) Register(sessionID string, engine *runtime.Engine) {
@@ -464,6 +513,8 @@ func (r *RuntimeRegistry) updateAggregateRunState(sessionID string, running bool
 	wasActive := len(r.runningSessions) > 0
 	if running {
 		r.runningSessions[id] = true
+		delete(r.inFlightStarts, id)
+		r.runStateCond.Broadcast()
 	} else {
 		delete(r.runningSessions, id)
 	}

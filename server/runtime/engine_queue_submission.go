@@ -81,10 +81,17 @@ func (e *Engine) SubmitUserMessageOrSteer(ctx context.Context, text string, clie
 	}
 	msg, err := e.SubmitUserMessage(ctx, text)
 	if errors.Is(err, errExclusiveStepBusy) {
-		item := e.QueueUserMessageWithClientRequestID(text, clientRequestID)
+		item := e.QueueUserMessageForAutoDrain(text, clientRequestID)
 		return llm.Message{}, &item, nil
 	}
 	return msg, nil, err
+}
+
+func (e *Engine) QueueUserMessageForAutoDrain(text string, clientRequestID string) QueuedUserMessage {
+	item := e.QueueUserMessageWithClientRequestID(text, clientRequestID)
+	e.markQueuedUserInjectionForAutoDrain(item.ID)
+	e.scheduleQueuedUserInjectionsIfIdle()
+	return item
 }
 
 func (e *Engine) HasQueuedUserWork() bool {

@@ -1213,3 +1213,41 @@ func TestRuntimeRegistryBlockSessionRunsRefCounts(t *testing.T) {
 		t.Fatal("all sessions should be unblocked after every exclusion is released")
 	}
 }
+
+func TestRuntimeRegistryBeginSessionRunRejectedWhenBlocked(t *testing.T) {
+	r := NewRuntimeRegistry()
+	release := r.BlockSessionRuns([]string{"s1"})
+	defer release()
+	if _, ok := r.BeginSessionRun("s1"); ok {
+		t.Fatal("BeginSessionRun must be rejected while the session is blocked")
+	}
+	releaseRun, ok := r.BeginSessionRun("s2")
+	if !ok {
+		t.Fatal("an unrelated session must not be blocked")
+	}
+	releaseRun()
+}
+
+func TestRuntimeRegistryBlockSessionRunsWaitsForInFlightStart(t *testing.T) {
+	r := NewRuntimeRegistry()
+	releaseRun, ok := r.BeginSessionRun("s1")
+	if !ok {
+		t.Fatal("BeginSessionRun should succeed when unblocked")
+	}
+	blocked := make(chan func(), 1)
+	go func() {
+		blocked <- r.BlockSessionRuns([]string{"s1"})
+	}()
+	select {
+	case <-blocked:
+		t.Fatal("BlockSessionRuns must wait for the in-flight start to drain")
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseRun()
+	select {
+	case release := <-blocked:
+		release()
+	case <-time.After(time.Second):
+		t.Fatal("BlockSessionRuns must return once the in-flight start drains")
+	}
+}

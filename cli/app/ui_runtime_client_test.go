@@ -139,7 +139,7 @@ func (r *mutableRuntimeResolver) WithGuardedRuntime(_ context.Context, _ string,
 	return true, fn(engine)
 }
 
-func (r *mutableRuntimeResolver) SessionRunsBlocked(string) bool { return false }
+func (r *mutableRuntimeResolver) BeginSessionRun(string) (func(), bool) { return func() {}, true }
 
 type flakySessionViewClient struct {
 	mu        sync.Mutex
