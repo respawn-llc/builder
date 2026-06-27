@@ -176,8 +176,13 @@ func (s *Service) AcquireRuntime(ctx context.Context, sessionID string, ownerID 
 	ownerID = strings.TrimSpace(ownerID)
 	var handle *runtimeHandle
 	for {
-		if _, ok := s.confirmExternalSessionRuntimeActive(ctx, sessionID); ok {
-			return nil
+		s.mu.Lock()
+		hasLocalHandle := s.handles[sessionID] != nil
+		s.mu.Unlock()
+		if !hasLocalHandle {
+			if _, ok := s.confirmExternalSessionRuntimeActive(ctx, sessionID); ok {
+				return nil
+			}
 		}
 		var reused, closing bool
 		handle, reused, closing = s.claimActivation(sessionID, ownerID)
@@ -488,6 +493,10 @@ func (s *Service) ReleaseSessionRuntime(ctx context.Context, req serverapi.Sessi
 	if current == nil || current != handle {
 		s.mu.Unlock()
 		return serverapi.SessionRuntimeReleaseResponse{}, nil
+	}
+	if current.closing {
+		s.mu.Unlock()
+		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
 	}
 	if trimmedOwnerID := strings.TrimSpace(req.OwnerID); trimmedOwnerID != "" {
 		if _, owns := current.ownerIDs[trimmedOwnerID]; !owns {

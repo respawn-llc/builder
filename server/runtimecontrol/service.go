@@ -507,7 +507,7 @@ func (s *Service) DiscardQueuedUserMessage(ctx context.Context, req serverapi.Ru
 	return s.queuedDiscards.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameQueuedUserMessageMemoRequest, func(ctx context.Context) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
 		var resp serverapi.RuntimeDiscardQueuedUserMessageResponse
 		err := s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			resp = serverapi.RuntimeDiscardQueuedUserMessageResponse{Discarded: engine.DiscardQueuedUserMessage(req.QueueItemID)}
+			resp = serverapi.RuntimeDiscardQueuedUserMessageResponse{Discarded: engine.DiscardQueuedUserMessage(memoReq.QueueItemID)}
 			return nil
 		})
 		return resp, err
