@@ -392,4 +392,3 @@ func TestGatewayProcessOutputSubscriptionStreamsOutputAndCompletion(t *testing.T
 		t.Fatalf("unexpected completion params: %+v", complete)
 	}
 }
-

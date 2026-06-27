@@ -281,14 +281,14 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) clien
 		return cached
 	}
 	client := runprompt.NewLoopbackRunPromptClient(runprompt.HeadlessBootstrap{
-		SessionLaunch:    s.sessionLaunchServiceForProjectContext(projectCtx),
-		AuthManager:      s.safeBundles().Auth.support.AuthManager,
-		FastModeState:    s.safeBundles().Runtime.fastModeState,
-		Background:       s.safeBundles().Runtime.background,
-		RuntimeRegistry:  s.safeBundles().Runtime.runtimeRegistry,
-		PromptHistory:    s.safeBundles().Persistence.metadataStore,
-		SessionRuntime:   s.safeBundles().Runtime.sessionRuntimeService,
-		PersistenceRoot:  projectCtx.config.PersistenceRoot,
+		SessionLaunch:   s.sessionLaunchServiceForProjectContext(projectCtx),
+		AuthManager:     s.safeBundles().Auth.support.AuthManager,
+		FastModeState:   s.safeBundles().Runtime.fastModeState,
+		Background:      s.safeBundles().Runtime.background,
+		RuntimeRegistry: s.safeBundles().Runtime.runtimeRegistry,
+		PromptHistory:   s.safeBundles().Persistence.metadataStore,
+		SessionRuntime:  s.safeBundles().Runtime.sessionRuntimeService,
+		PersistenceRoot: projectCtx.config.PersistenceRoot,
 	})
 	s.safeBundles().Sessions.runPromptMap[scopeKey] = client
 	return client
