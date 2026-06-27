@@ -60,7 +60,10 @@ func (r *RuntimeRegistry) ClaimFreshRuntime(ctx context.Context, sessionID strin
 			return &RuntimeClaim{registry: r, id: id, entry: entry}, nil
 		}
 		if _, err := existing.awaitReady(ctx); err != nil {
-			return nil, err
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue
 		}
 		if beforeReplace != nil {
 			if err := beforeReplace(existing.engineRef()); err != nil {
