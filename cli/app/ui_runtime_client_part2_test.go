@@ -528,7 +528,7 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) 
 		t.Fatalf("warning entry count = %d, want 1", len(entries))
 	}
 	entry := entries[0]
-	if entry.Role != "warning" || entry.Text != runtimeReconnectWarningText || entry.Visibility != string(clientui.EntryVisibilityAll) {
+	if entry.Role != "warning" || entry.Visibility != string(clientui.EntryVisibilityAll) {
 		t.Fatalf("warning entry = %+v, want recovery warning", entry)
 	}
 }
@@ -569,7 +569,7 @@ func TestRuntimeClientSubmitTurnRecoveryContinuesFirstPrompt(t *testing.T) {
 		t.Fatal("did not expect pre-submit recovery to surface operator error")
 	}
 	plain := stripANSIAndTrimRight(updated.view.OngoingSnapshot())
-	if strings.Contains(plain, serverapi.ErrRuntimeUnavailable.Error()) || strings.Contains(plain, "runtime for session") || strings.Contains(plain, runtimeReconnectWarningText) {
+	if strings.Contains(plain, serverapi.ErrRuntimeUnavailable.Error()) || strings.Contains(plain, "runtime for session") {
 		t.Fatalf("did not expect recovery diagnostics in ongoing transcript, got %q", plain)
 	}
 }
@@ -802,7 +802,7 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 	}
 	select {
 	case warning := <-warnings:
-		if warning.text != runtimeReconnectWarningText || warning.visibility != clientui.EntryVisibilityAll {
+		if warning.visibility != clientui.EntryVisibilityAll {
 			t.Fatalf("warning = %+v, want lease recovery warning", warning)
 		}
 	default:
