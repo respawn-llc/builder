@@ -1,4 +1,4 @@
-package runprompt
+package runlog
 
 import (
 	"errors"

@@ -17,6 +17,7 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	"core/server/session"
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -1284,9 +1285,11 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	client := NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: mode == config.WorkflowCompletionModeStructuredOutput}, steps...)
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
 	runtimes := registry.NewRuntimeRegistry()
-	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, nil, runtimes, StarterOptions{
-		ClientFactory: clientFactory,
-		Worktrees:     worktrees,
+	sessionRuntime := sessionruntime.NewService(cfg.PersistenceRoot, metadataStore, nil, nil, nil, nil, runtimes, nil)
+	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, runtimes, StarterOptions{
+		ClientFactory:  clientFactory,
+		Worktrees:      worktrees,
+		SessionRuntime: sessionRuntime,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)
@@ -1315,9 +1318,11 @@ func (f *starterFixture) rebuildStarter(t *testing.T) {
 	if f.runtimes == nil {
 		f.runtimes = registry.NewRuntimeRegistry()
 	}
-	starter, err := NewStarter(f.cfg, f.metadata, f.store, nil, nil, nil, f.runtimes, StarterOptions{
-		ClientFactory: f.clientFactory,
-		Worktrees:     f.worktrees,
+	sessionRuntime := sessionruntime.NewService(f.cfg.PersistenceRoot, f.metadata, nil, nil, nil, nil, f.runtimes.(*registry.RuntimeRegistry), nil)
+	starter, err := NewStarter(f.cfg, f.metadata, f.store, nil, nil, f.runtimes, StarterOptions{
+		ClientFactory:  f.clientFactory,
+		Worktrees:      f.worktrees,
+		SessionRuntime: sessionRuntime,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)

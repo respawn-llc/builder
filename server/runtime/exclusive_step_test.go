@@ -62,18 +62,6 @@ func (s *stubExclusiveStepLifecycle) Snapshot() *RunSnapshot {
 	return cloneRunSnapshot(s.snapshot)
 }
 
-func (s *stubExclusiveStepLifecycle) WithActiveRun(runID string, stepID string, fn func() error) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.snapshot == nil || s.snapshot.RunID != runID || s.snapshot.StepID != stepID {
-		return false, nil
-	}
-	if fn == nil {
-		return true, nil
-	}
-	return true, fn()
-}
-
 func (s *stubExclusiveStepLifecycle) setBusy(busy bool) {
 	s.mu.Lock()
 	s.busy = busy

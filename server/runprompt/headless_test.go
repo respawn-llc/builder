@@ -17,8 +17,10 @@ import (
 	"core/server/launch"
 	"core/server/registry"
 	"core/server/requestmemo"
+	"core/server/runlog"
 	"core/server/session"
 	"core/server/sessionlaunch"
+	"core/server/sessionruntime"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -58,6 +60,10 @@ func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManag
 		Config:       cfg,
 		ContainerDir: containerDir,
 	}, registry.NewSessionStoreRegistry()).WithAuthStateReader(authManager)
+}
+
+func newTestHeadlessSessionRuntime(root string, authManager *auth.Manager, runtimes *registry.RuntimeRegistry) *sessionruntime.Service {
+	return sessionruntime.NewService(root, nil, authManager, nil, nil, nil, runtimes, nil)
 }
 
 func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
@@ -188,9 +194,12 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 			OpenAIBaseURL: "http://wrong.invalid",
 		},
 	}
+	runtimes := registry.NewRuntimeRegistry()
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch: newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
-		AuthManager:   authManager,
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
+		AuthManager:     authManager,
+		RuntimeRegistry: runtimes,
+		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
 	})
 
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
@@ -290,6 +299,7 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
+		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
 	})
 
 	done := make(chan error, 1)
@@ -371,9 +381,12 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	cfg.Settings.Model = "base-model"
 	cfg.Settings.OpenAIBaseURL = server.URL
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolPatch: true}
+	runtimes := registry.NewRuntimeRegistry()
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch: newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
-		AuthManager:   authManager,
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
+		AuthManager:     authManager,
+		RuntimeRegistry: runtimes,
+		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
 	})
 
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
@@ -391,7 +404,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	if response.Result != "locked response" {
 		t.Fatalf("result = %q, want locked response", response.Result)
 	}
-	runLog, err := os.ReadFile(filepath.Join(store.Dir(), RunLogFileName))
+	runLog, err := os.ReadFile(filepath.Join(store.Dir(), runlog.RunLogFileName))
 	if err != nil {
 		t.Fatalf("read run log: %v", err)
 	}

@@ -111,6 +111,7 @@ var allowedSmallPackages = map[string]string{
 	"server/metadata/lifecyclegen":       "repo-owned generator command for the narrow SQLite lifecycle generated seam",
 	"server/metadata/sqlitelifecyclegen": "generated SQLite lifecycle seam isolated from sqlc output because sqlc does not emit transaction-scoped PRAGMA statements",
 	"server/projectview":                 "cohesive project read-model service owner with substantial service tests",
+	"server/runlog":                      "shared run-logging and runtime-event formatting helpers extracted from runprompt so sessionruntime and workflowrunner consume them without the runprompt import cycle",
 	"server/requestmemo":                 "cross-service infrastructure used by runtime, prompt, session, process, and workflow services",
 	"server/runtimecontrol":              "cohesive runtime mutation service owner with focused service tests",
 	"server/runtimeview":                 "cohesive runtime projection owner with focused service tests",

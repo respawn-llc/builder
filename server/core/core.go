@@ -288,6 +288,7 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) clien
 		RuntimeRegistry:  s.safeBundles().Runtime.runtimeRegistry,
 		BackgroundRouter: s.safeBundles().Runtime.backgroundRouter,
 		PromptHistory:    s.safeBundles().Persistence.metadataStore,
+		SessionRuntime:   s.safeBundles().Runtime.sessionRuntimeService,
 		PersistenceRoot:  projectCtx.config.PersistenceRoot,
 	})
 	s.safeBundles().Sessions.runPromptMap[scopeKey] = client

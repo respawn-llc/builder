@@ -151,7 +151,7 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: view: %w", err)
 	}
-	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeSupport.BackgroundRouter, runtimeRegistry, workflowrunner.StarterOptions{Worktrees: taskWorktreeEnsurer{service: worktreeService}})
+	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{Worktrees: taskWorktreeEnsurer{service: worktreeService}, SessionRuntime: sessionRuntimeService})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)

@@ -24,9 +24,14 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			if err != nil {
 				return err
 			}
+			compacted := false
 			if shouldCompact {
 				if err := engine.CompactContextForPreSubmit(runCtx); err != nil {
-					return err
+					if !runtime.IsAgentBusyError(err) {
+						return err
+					}
+				} else {
+					compacted = true
 				}
 			}
 			if !req.PromptHistoryRecorded {
@@ -39,10 +44,10 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 				return err
 			}
 			if queued != nil {
-				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: shouldCompact, Steered: true, QueueItemID: queued.ID}
+				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
 				return nil
 			}
-			resp = serverapi.RuntimeSubmitUserTurnResponse{Message: msg.Content, Compacted: shouldCompact}
+			resp = serverapi.RuntimeSubmitUserTurnResponse{Message: msg.Content, Compacted: compacted}
 			return nil
 		})
 		return resp, err

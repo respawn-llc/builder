@@ -17,11 +17,12 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/runprompt"
+	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimeview"
 	"core/server/runtimewire"
 	"core/server/session"
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
@@ -31,6 +32,8 @@ import (
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"core/shared/transcriptdiag"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -65,17 +68,17 @@ type RuntimeEventRegistry interface {
 }
 
 type Starter struct {
-	cfg              config.App
-	metadata         *metadata.Store
-	store            RuntimeStore
-	authManager      *auth.Manager
-	background       *shelltool.Manager
-	backgroundRouter runtimewire.BackgroundRouter
-	runtimes         RuntimeEventRegistry
-	storeOptions     []session.StoreOption
-	clientFactory    func(SchedulerStartRunRequest) llm.Client
-	worktrees        TaskWorktreeEnsurer
-	finished         func(workflow.RunID, int64)
+	cfg            config.App
+	metadata       *metadata.Store
+	store          RuntimeStore
+	authManager    *auth.Manager
+	background     *shelltool.Manager
+	runtimes       RuntimeEventRegistry
+	sessionRuntime *sessionruntime.Service
+	storeOptions   []session.StoreOption
+	clientFactory  func(SchedulerStartRunRequest) llm.Client
+	worktrees      TaskWorktreeEnsurer
+	finished       func(workflow.RunID, int64)
 
 	mu     sync.Mutex
 	cancel map[workflow.RunID]context.CancelFunc
@@ -86,11 +89,12 @@ type Starter struct {
 }
 
 type StarterOptions struct {
-	ClientFactory func(SchedulerStartRunRequest) llm.Client
-	Worktrees     TaskWorktreeEnsurer
+	ClientFactory  func(SchedulerStartRunRequest) llm.Client
+	Worktrees      TaskWorktreeEnsurer
+	SessionRuntime *sessionruntime.Service
 }
 
-func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, background *shelltool.Manager, backgroundRouter runtimewire.BackgroundRouter, runtimes RuntimeEventRegistry, opts StarterOptions) (*Starter, error) {
+func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, background *shelltool.Manager, runtimes RuntimeEventRegistry, opts StarterOptions) (*Starter, error) {
 	if strings.TrimSpace(cfg.PersistenceRoot) == "" {
 		return nil, errors.New("workflow runtime persistence root is required")
 	}
@@ -100,20 +104,23 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 	if store == nil {
 		return nil, errors.New("workflow runtime store is required")
 	}
+	if opts.SessionRuntime == nil {
+		return nil, errors.New("workflow runtime session-runtime service is required")
+	}
 	return &Starter{
-		cfg:              cfg,
-		metadata:         metadataStore,
-		store:            store,
-		authManager:      authManager,
-		background:       background,
-		backgroundRouter: backgroundRouter,
-		runtimes:         runtimes,
-		storeOptions:     metadataStore.AuthoritativeSessionStoreOptions(),
-		clientFactory:    opts.ClientFactory,
-		worktrees:        opts.Worktrees,
-		cancel:           map[workflow.RunID]context.CancelFunc{},
-		task:             map[workflow.RunID]workflow.TaskID{},
-		done:             map[workflow.RunID]chan struct{}{},
+		cfg:            cfg,
+		metadata:       metadataStore,
+		store:          store,
+		authManager:    authManager,
+		background:     background,
+		runtimes:       runtimes,
+		sessionRuntime: opts.SessionRuntime,
+		storeOptions:   metadataStore.AuthoritativeSessionStoreOptions(),
+		clientFactory:  opts.ClientFactory,
+		worktrees:      opts.Worktrees,
+		cancel:         map[workflow.RunID]context.CancelFunc{},
+		task:           map[workflow.RunID]workflow.TaskID{},
+		done:           map[workflow.RunID]chan struct{}{},
 	}, nil
 }
 
@@ -664,7 +671,7 @@ func (s *Starter) validateRole(role string) error {
 func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, warnings []string, client llm.Client, effectiveMode workflowruntime.CompletionMode) {
 	defer s.wg.Done()
 	defer s.finish(req.RunID, req.Generation)
-	logger, err := runprompt.NewRunLogger(plan.Store.Dir(), nil)
+	logger, err := runlog.NewRunLogger(plan.Store.Dir(), nil)
 	if err != nil {
 		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonRuntimeFailed, err)
 		return
@@ -679,73 +686,86 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonRuntimeFailed, instructionsErr)
 		return
 	}
-	wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, workflowRuntimeEnabledTools(plan.EnabledTools), input.WorktreeRoot, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
-		Headless:        true,
-		FastMode:        nil,
-		Sources:         plan.Source.Sources,
-		Client:          client,
-		GlobalConfigDir: s.cfg.PersistenceRoot,
-		WorkflowRun: &workflowruntime.Config{
-			RunID:                        req.RunID,
-			Contract:                     workflowCompletionContract(req, input),
-			CompletionMode:               effectiveMode,
-			MaxInvalidCompletionAttempts: s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
-			Controller:                   workflowruntime.StoreController{Store: s.store},
-			TaskCommentCounter:           s.store,
-			Instructions:                 instructions,
-		},
-		OnEvent: func(evt runtime.Event) {
-			logger.Logf("%s", runprompt.FormatRuntimeEvent(evt))
-			if transcriptdiag.Enabled(plan.ActiveSettings.Debug, os.Getenv) {
-				projected := runtimeview.EventFromRuntime(evt)
-				logger.Logf("%s", runprompt.FormatTranscriptProjectionDiagnostic(plan.Store.Meta().SessionID, projected))
-				logger.Logf("%s", runprompt.FormatTranscriptPublishDiagnostic(plan.Store.Meta().SessionID, projected))
-			}
-			if s.runtimes != nil {
-				s.runtimes.PublishRuntimeEvent(plan.Store.Meta().SessionID, evt)
-			}
-		},
-	})
-	if err != nil {
-		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonRuntimeFailed, err)
+	sessionID := plan.Store.Meta().SessionID
+	ownerID := uuid.NewString()
+	failQueuedOnClose := false
+	var engine *runtime.Engine
+	build := func(_ context.Context) (sessionruntime.RuntimeBuildResult, error) {
+		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, workflowRuntimeEnabledTools(plan.EnabledTools), input.WorktreeRoot, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
+			Headless:        true,
+			FastMode:        nil,
+			Sources:         plan.Source.Sources,
+			Client:          client,
+			GlobalConfigDir: s.cfg.PersistenceRoot,
+			WorkflowRun: &workflowruntime.Config{
+				RunID:                        req.RunID,
+				Contract:                     workflowCompletionContract(req, input),
+				CompletionMode:               effectiveMode,
+				MaxInvalidCompletionAttempts: s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
+				Controller:                   workflowruntime.StoreController{Store: s.store},
+				TaskCommentCounter:           s.store,
+				Instructions:                 instructions,
+			},
+			OnEvent: func(evt runtime.Event) {
+				logger.Logf("%s", runlog.FormatRuntimeEvent(evt))
+				if transcriptdiag.Enabled(plan.ActiveSettings.Debug, os.Getenv) {
+					projected := runtimeview.EventFromRuntime(evt)
+					logger.Logf("%s", runlog.FormatTranscriptProjectionDiagnostic(sessionID, projected))
+					logger.Logf("%s", runlog.FormatTranscriptPublishDiagnostic(sessionID, projected))
+				}
+				if s.runtimes != nil {
+					s.runtimes.PublishRuntimeEvent(sessionID, evt)
+				}
+			},
+		})
+		if err != nil {
+			return sessionruntime.RuntimeBuildResult{}, err
+		}
+		if wiring.AskBroker != nil && s.runtimes != nil {
+			wiring.AskBroker.SetAskHandler(func(askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+				if err := s.store.SetRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID); err != nil {
+					return askquestion.AskQuestionResponse{}, err
+				}
+				resp, askErr := s.runtimes.AwaitPromptResponse(ctx, sessionID, askReq)
+				if clearErr := s.store.ClearRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID); clearErr != nil && askErr == nil {
+					return askquestion.AskQuestionResponse{}, clearErr
+				}
+				return resp, askErr
+			})
+		} else if wiring.AskBroker != nil {
+			wiring.AskBroker.SetAskHandler(func(askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+				return askquestion.AskQuestionResponse{}, errors.New("workflow questions require runtime registry")
+			})
+		}
+		var localRebind func(string) error
+		if wiring.LocalTools != nil {
+			localRebind = wiring.LocalTools.Rebind
+		}
+		engine = wiring.Engine
+		return sessionruntime.RuntimeBuildResult{
+			Engine:      wiring.Engine,
+			LocalRebind: localRebind,
+			Close:       func() { _ = wiring.Close() },
+		}, nil
+	}
+	if err := s.sessionRuntime.RecreateRuntime(ctx, sessionID, ownerID, build); err != nil {
+		reason := ReasonRuntimeFailed
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			reason = ReasonRuntimeCanceled
+		}
+		s.interrupt(context.Background(), req.RunID, req.Generation, reason, err)
 		return
 	}
-	defer func() { _ = wiring.Close() }()
-	var runtimeRegistry runtimewire.RuntimeRegistry
-	if s.runtimes != nil {
-		runtimeRegistry = s.runtimes
-	}
-	if wiring.AskBroker != nil && s.runtimes != nil {
-		sessionID := plan.Store.Meta().SessionID
-		wiring.AskBroker.SetAskHandler(func(askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-			if err := s.store.SetRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID); err != nil {
-				return askquestion.AskQuestionResponse{}, err
-			}
-			resp, askErr := s.runtimes.AwaitPromptResponse(ctx, sessionID, askReq)
-			if clearErr := s.store.ClearRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID); clearErr != nil && askErr == nil {
-				return askquestion.AskQuestionResponse{}, clearErr
-			}
-			return resp, askErr
-		})
-	} else if wiring.AskBroker != nil {
-		wiring.AskBroker.SetAskHandler(func(askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-			return askquestion.AskQuestionResponse{}, errors.New("workflow questions require runtime registry")
-		})
-	}
-	var rebind func(string) error
-	if wiring.LocalTools != nil {
-		rebind = runtimewire.RuntimeRebindFunc(wiring.LocalTools.Rebind, wiring.Engine)
-	}
-	sessionID := plan.Store.Meta().SessionID
-	failQueuedOnClose := false
-	registration := runtimewire.RegisterSessionRuntime(sessionID, wiring.Engine, runtimeRegistry, s.backgroundRouter, runtimewire.WithRuntimeRebind(rebind))
 	defer func() {
-		_ = registration.CloseWithDrain(context.Background(), func(drainCtx context.Context) error {
-			if failQueuedOnClose {
-				wiring.Engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
-				return nil
-			}
-			return wiring.Engine.DrainQueuedUserMessagesBeforeClose(drainCtx)
+		if failQueuedOnClose && engine != nil {
+			engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
+		}
+		_, _ = s.sessionRuntime.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+			ClientRequestID: uuid.NewString(),
+			SessionID:       sessionID,
+			OwnerID:         ownerID,
+			OnlyIfIdle:      true,
+			DropOwner:       true,
 		})
 	}()
 	// Compact exactly once per compact_and_continue handoff. The compaction's
@@ -759,8 +779,8 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 	// recompacts; a later in-place handoff (new run ID, same session) compacts
 	// again because its continuation compaction is always the run's first action.
 	if input.ContextMode == workflow.ContextModeCompactAndContinueSession &&
-		wiring.Engine.LastCompactionWorkflowRunID() != string(req.RunID) {
-		if err := wiring.Engine.CompactContext(ctx, ""); err != nil {
+		engine.LastCompactionWorkflowRunID() != string(req.RunID) {
+		if err := engine.CompactContext(ctx, ""); err != nil {
 			failQueuedOnClose = true
 			reason := ReasonRuntimeFailed
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
@@ -770,14 +790,13 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 			return
 		}
 	}
-	_, err = wiring.Engine.SubmitWorkflowTurn(ctx)
-	if err != nil {
+	if _, submitErr := engine.SubmitWorkflowTurn(ctx); submitErr != nil {
 		failQueuedOnClose = true
 		reason := ReasonRuntimeFailed
-		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		if errors.Is(submitErr, context.Canceled) || ctx.Err() != nil {
 			reason = ReasonRuntimeCanceled
 		}
-		s.interrupt(context.Background(), req.RunID, req.Generation, reason, err)
+		s.interrupt(context.Background(), req.RunID, req.Generation, reason, submitErr)
 	}
 }
 

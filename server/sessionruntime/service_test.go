@@ -593,6 +593,83 @@ func TestReleaseSessionRuntimeOnlyIfIdleClosesIdleRuntime(t *testing.T) {
 	}
 }
 
+func TestRecreateRuntimeClosesExistingHandleBeforeRebuilding(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	fixture.service.runtimes = registry.NewRuntimeRegistry()
+	sessionID := fixture.store.Meta().SessionID
+	closed := atomic.Int32{}
+	existing := &runtimeHandle{
+		ownerRefs: 1,
+		ownerIDs:  map[string]struct{}{"owner-A": {}},
+		ready:     make(chan struct{}),
+		close:     func() { closed.Add(1) },
+	}
+	close(existing.ready)
+	fixture.service.handles[sessionID] = existing
+
+	builderCalls := atomic.Int32{}
+	wantErr := errors.New("build failed")
+	err := fixture.service.RecreateRuntime(context.Background(), sessionID, "owner-B", func(context.Context) (RuntimeBuildResult, error) {
+		builderCalls.Add(1)
+		return RuntimeBuildResult{}, wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("RecreateRuntime err = %v, want %v", err, wantErr)
+	}
+	if closed.Load() != 1 {
+		t.Fatalf("existing close count = %d, want 1 (overtake must close the prior engine)", closed.Load())
+	}
+	if builderCalls.Load() != 1 {
+		t.Fatalf("builder calls = %d, want 1 (must rebuild after closing the prior engine)", builderCalls.Load())
+	}
+	if _, ok := fixture.service.handles[sessionID]; ok {
+		t.Fatal("expected no handle after a failed rebuild")
+	}
+}
+
+func TestReleaseSessionRuntimeFromNonOwnerDoesNotTearDownSharedRuntime(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	fixture.service.runtimes = registry.NewRuntimeRegistry()
+	closed := atomic.Int32{}
+	handle := &runtimeHandle{
+		ownerRefs: 1,
+		ownerIDs:  map[string]struct{}{"owner-A": {}},
+		ready:     make(chan struct{}),
+		close: func() {
+			closed.Add(1)
+		},
+	}
+	close(handle.ready)
+	fixture.service.handles[fixture.store.Meta().SessionID] = handle
+
+	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+		ClientRequestID: "rel-1",
+		SessionID:       fixture.store.Meta().SessionID,
+		OnlyIfIdle:      true,
+		DropOwner:       true,
+		OwnerID:         "owner-B",
+	})
+	if err != nil {
+		t.Fatalf("ReleaseSessionRuntime non-owner: %v", err)
+	}
+	if !resp.Released {
+		t.Fatalf("release response = %+v, want released no-op", resp)
+	}
+	if closed.Load() != 0 {
+		t.Fatalf("runtime close count = %d, want 0 (non-owner must not close)", closed.Load())
+	}
+	current, ok := fixture.service.handles[fixture.store.Meta().SessionID]
+	if !ok {
+		t.Fatal("expected runtime handle to remain after non-owner release")
+	}
+	if current.ownerRefs != 1 {
+		t.Fatalf("ownerRefs = %d, want 1 (non-owner must not drop another owner's ref)", current.ownerRefs)
+	}
+	if _, stillOwner := current.ownerIDs["owner-A"]; !stillOwner {
+		t.Fatal("expected owner-A to remain after non-owner release")
+	}
+}
+
 func TestIdleRuntimeUnloadReleasesOrphanedRuntimeAfterRunFinishes(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	runtimeRegistry := registry.NewRuntimeRegistry()

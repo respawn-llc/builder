@@ -15,7 +15,7 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	"core/server/requestmemo"
-	"core/server/runprompt"
+	"core/server/runlog"
 	"core/server/session"
 	sessionruntime "core/server/sessionruntime"
 	"core/shared/config"
@@ -524,7 +524,7 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 	if err != nil {
 		t.Fatalf("OpenByID child: %v", err)
 	}
-	logBody, err := os.ReadFile(filepath.Join(childStore.Dir(), runprompt.RunLogFileName))
+	logBody, err := os.ReadFile(filepath.Join(childStore.Dir(), runlog.RunLogFileName))
 	if err != nil {
 		t.Fatalf("ReadFile steps.log: %v", err)
 	}

@@ -13,7 +13,7 @@ import (
 	"core/server/auth"
 	"core/server/metadata"
 	"core/server/registry"
-	"core/server/runprompt"
+	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimeview"
 	"core/server/runtimewire"
@@ -155,22 +155,39 @@ func (s *Service) ActivateSessionRuntime(ctx context.Context, req serverapi.Sess
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
 	ownerID := strings.TrimSpace(req.OwnerID)
+	if err := s.AcquireRuntime(ctx, sessionID, ownerID, s.interactiveRuntimeBuilder(req, sessionID)); err != nil {
+		return serverapi.SessionRuntimeActivateResponse{}, err
+	}
+	return activationResponse(), nil
+}
+
+type RuntimeBuildResult struct {
+	Engine      *runtime.Engine
+	LocalRebind func(string) error
+	Close       func()
+}
+
+type RuntimeBuilder func(ctx context.Context) (RuntimeBuildResult, error)
+
+func (s *Service) AcquireRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) error {
+	sessionID = strings.TrimSpace(sessionID)
+	ownerID = strings.TrimSpace(ownerID)
 	var handle *runtimeHandle
 	for {
 		if _, ok := s.confirmExternalSessionRuntimeActive(ctx, sessionID); ok {
-			return activationResponse(), nil
+			return nil
 		}
 		var reused, closing bool
 		handle, reused, closing = s.claimActivation(sessionID, ownerID)
 		if closing {
 			if err := waitForRuntimeHandleClosed(ctx, handle); err != nil {
-				return serverapi.SessionRuntimeActivateResponse{}, err
+				return err
 			}
 			continue
 		}
 		if reused {
 			if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
-				return serverapi.SessionRuntimeActivateResponse{}, err
+				return err
 			}
 			s.mu.Lock()
 			current := s.handles[sessionID]
@@ -183,10 +200,10 @@ func (s *Service) ActivateSessionRuntime(ctx context.Context, req serverapi.Sess
 				continue
 			}
 			if activationErr != nil {
-				return serverapi.SessionRuntimeActivateResponse{}, activationErr
+				return activationErr
 			}
 			s.addRuntimeHandleOwnerRef(sessionID, handle, ownerID)
-			return activationResponse(), nil
+			return nil
 		}
 		break
 	}
@@ -202,61 +219,10 @@ func (s *Service) ActivateSessionRuntime(ctx context.Context, req serverapi.Sess
 		}
 		s.failActivation(sessionID, handle, err)
 	}()
-	store, err := s.resolveStore(ctx, sessionID)
+	var built RuntimeBuildResult
+	built, err = build(ctx)
 	if err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	if err := store.EnsureDurable(); err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	if err := s.appendRecoveredWarningIfNeeded(store); err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	target, err := s.resolveExecutionTarget(ctx, sessionID)
-	if err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	logger, err := runprompt.NewRunLogger(store.Dir(), nil)
-	if err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	logger.Logf("app.interactive.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, target.WorkspaceRoot, target.EffectiveWorkdir, req.ActiveSettings.Model)
-	logger.Logf("config.settings path=%s created=%t", req.Source.SettingsPath, req.Source.CreatedDefaultConfig)
-	for _, line := range configSourceLines(req.Source.Sources) {
-		logger.Logf("config.source %s", line)
-	}
-	enabledTools, err := parseToolIDs(req.EnabledToolIDs)
-	if err != nil {
-		_ = logger.Close()
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	wiring, err := runtimewire.NewRuntimeWiringWithBackground(store, req.ActiveSettings, enabledTools, target.EffectiveWorkdir, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
-		FastMode:        s.fastModeState,
-		Sources:         req.Source.Sources,
-		GlobalConfigDir: s.persistenceRoot,
-		OnEvent: func(evt runtime.Event) {
-			logger.Logf("%s", runprompt.FormatRuntimeEvent(evt))
-			if transcriptdiag.Enabled(req.ActiveSettings.Debug, os.Getenv) {
-				projected := runtimeview.EventFromRuntime(evt)
-				logger.Logf("%s", runprompt.FormatTranscriptProjectionDiagnostic(sessionID, projected))
-				logger.Logf("%s", runprompt.FormatTranscriptPublishDiagnostic(sessionID, projected))
-			}
-			if s.runtimes != nil {
-				s.runtimes.PublishRuntimeEvent(sessionID, evt)
-			}
-		},
-	})
-	if err != nil {
-		_ = logger.Close()
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	if wiring.AskBroker != nil && s.runtimes != nil {
-		wiring.AskBroker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-			return s.runtimes.AwaitPromptResponse(context.Background(), sessionID, req)
-		})
+		return err
 	}
 	var runtimeRegistry runtimewire.RuntimeRegistry
 	if s.runtimes != nil {
@@ -266,21 +232,108 @@ func (s *Service) ActivateSessionRuntime(ctx context.Context, req serverapi.Sess
 	if s.backgroundRouter != nil {
 		backgroundRouter = s.backgroundRouter
 	}
-	var localRebind func(string) error
-	if wiring.LocalTools != nil {
-		localRebind = wiring.LocalTools.Rebind
-	}
-	handle.rebind = runtimeRebindFunc(localRebind, wiring.Engine)
-	registration := runtimewire.RegisterSessionRuntime(sessionID, wiring.Engine, runtimeRegistry, backgroundRouter, runtimewire.WithRuntimeRebind(handle.rebind))
+	handle.rebind = runtimeRebindFunc(built.LocalRebind, built.Engine)
+	registration := runtimewire.RegisterSessionRuntime(sessionID, built.Engine, runtimeRegistry, backgroundRouter, runtimewire.WithRuntimeRebind(handle.rebind))
 	cleanup = func() {
 		registration.Close()
-		_ = wiring.Close()
-		_ = logger.Close()
+		if built.Close != nil {
+			built.Close()
+		}
 	}
 	s.completeActivation(handle, cleanup)
 	s.cancelScheduledIdleUnload(sessionID)
 	cleanup = nil
-	return activationResponse(), nil
+	return nil
+}
+
+func (s *Service) RecreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) error {
+	sessionID = strings.TrimSpace(sessionID)
+	for {
+		s.mu.Lock()
+		handle := s.handles[sessionID]
+		s.mu.Unlock()
+		if handle == nil {
+			break
+		}
+		if err := waitForRuntimeHandleReady(ctx, handle); err != nil {
+			return err
+		}
+		s.closeReleasedRuntimeHandle(sessionID, handle)
+	}
+	return s.AcquireRuntime(ctx, sessionID, ownerID, build)
+}
+
+func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivateRequest, sessionID string) RuntimeBuilder {
+	return func(ctx context.Context) (RuntimeBuildResult, error) {
+		store, err := s.resolveStore(ctx, sessionID)
+		if err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		if err := store.EnsureDurable(); err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		if err := s.appendRecoveredWarningIfNeeded(store); err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		target, err := s.resolveExecutionTarget(ctx, sessionID)
+		if err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		logger, err := runlog.NewRunLogger(store.Dir(), nil)
+		if err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		logger.Logf("app.interactive.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, target.WorkspaceRoot, target.EffectiveWorkdir, req.ActiveSettings.Model)
+		logger.Logf("config.settings path=%s created=%t", req.Source.SettingsPath, req.Source.CreatedDefaultConfig)
+		for _, line := range configSourceLines(req.Source.Sources) {
+			logger.Logf("config.source %s", line)
+		}
+		enabledTools, err := parseToolIDs(req.EnabledToolIDs)
+		if err != nil {
+			_ = logger.Close()
+			return RuntimeBuildResult{}, err
+		}
+		wiring, err := runtimewire.NewRuntimeWiringWithBackground(store, req.ActiveSettings, enabledTools, target.EffectiveWorkdir, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
+			FastMode:        s.fastModeState,
+			Sources:         req.Source.Sources,
+			GlobalConfigDir: s.persistenceRoot,
+			OnEvent: func(evt runtime.Event) {
+				logger.Logf("%s", runlog.FormatRuntimeEvent(evt))
+				if transcriptdiag.Enabled(req.ActiveSettings.Debug, os.Getenv) {
+					projected := runtimeview.EventFromRuntime(evt)
+					logger.Logf("%s", runlog.FormatTranscriptProjectionDiagnostic(sessionID, projected))
+					logger.Logf("%s", runlog.FormatTranscriptPublishDiagnostic(sessionID, projected))
+				}
+				if s.runtimes != nil {
+					s.runtimes.PublishRuntimeEvent(sessionID, evt)
+				}
+			},
+		})
+		if err != nil {
+			_ = logger.Close()
+			return RuntimeBuildResult{}, err
+		}
+		if wiring.AskBroker != nil && s.runtimes != nil {
+			wiring.AskBroker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+				return s.runtimes.AwaitPromptResponse(context.Background(), sessionID, req)
+			})
+		}
+		var localRebind func(string) error
+		if wiring.LocalTools != nil {
+			localRebind = wiring.LocalTools.Rebind
+		}
+		return RuntimeBuildResult{
+			Engine:      wiring.Engine,
+			LocalRebind: localRebind,
+			Close: func() {
+				_ = wiring.Close()
+				_ = logger.Close()
+			},
+		}, nil
+	}
 }
 
 func activationResponse() serverapi.SessionRuntimeActivateResponse {
@@ -294,6 +347,13 @@ func (s *Service) externalSessionRuntimeActive(sessionID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.handles[strings.TrimSpace(sessionID)] == nil
+}
+
+func (s *Service) SessionRunActive(sessionID string) bool {
+	if s == nil || s.runtimes == nil {
+		return false
+	}
+	return s.runtimes.ExternalRuntimeStatus(sessionID).State == clientui.ExternalRuntimeStateOwnerRunning
 }
 
 func (s *Service) WithRuntimeEngine(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) error {
@@ -360,6 +420,12 @@ func (s *Service) ReleaseSessionRuntime(ctx context.Context, req serverapi.Sessi
 	if current == nil || current != handle {
 		s.mu.Unlock()
 		return serverapi.SessionRuntimeReleaseResponse{}, nil
+	}
+	if trimmedOwnerID := strings.TrimSpace(req.OwnerID); trimmedOwnerID != "" {
+		if _, owns := current.ownerIDs[trimmedOwnerID]; !owns {
+			s.mu.Unlock()
+			return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
+		}
 	}
 	if req.OnlyIfIdle {
 		if req.DropOwner && current.ownerRefs > 1 {

@@ -15,6 +15,10 @@ import (
 
 var errExclusiveStepBusy = errors.New("agent is busy")
 
+func IsAgentBusyError(err error) bool {
+	return errors.Is(err, errExclusiveStepBusy)
+}
+
 // errMarkInFlightFalse wraps failures to clear the in-flight marker at step end.
 var errMarkInFlightFalse = errors.New("mark in-flight false")
 
