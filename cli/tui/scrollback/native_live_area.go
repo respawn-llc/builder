@@ -152,7 +152,7 @@ func (area *NativeLiveAreaImpl) renderPhysicalDuringAssistantStreamLocked() erro
 	if area == nil || len(area.frame.Lines) == 0 {
 		return nil
 	}
-	payload := terminalSaveCursor + terminalLineBreak + strings.Join(area.frame.Lines, terminalLineBreak) + xansi.HideCursor + terminalRestoreCursor
+	payload := terminalSaveCursor + xansi.CursorDown(1) + "\r" + strings.Join(area.frame.Lines, terminalLineBreak) + xansi.HideCursor + terminalRestoreCursor
 	written, err := io.WriteString(area.buffer.stableWriter, payload)
 	if err != nil {
 		return fmt.Errorf("render live area during assistant stream failed: %s: %w", liveAreaWriteDiagnostics(payload, area.terminalWidth, area.terminalHeight, written), err)

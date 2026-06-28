@@ -224,7 +224,7 @@ func TestStableStreamingErasesLiveAreaUntilFinish(t *testing.T) {
 	}
 }
 
-func TestNativeLiveAreaRenderDuringAssistantStreamingUsesStreamAnchor(t *testing.T) {
+func TestNativeLiveAreaRenderDuringAssistantStreamingKeepsChromeVisibleWithoutLinefeed(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
 	defer buffer.close()
@@ -239,7 +239,7 @@ func TestNativeLiveAreaRenderDuringAssistantStreamingUsesStreamAnchor(t *testing
 		t.Fatalf("render during stream returned error: %v", err)
 	}
 	wantAfterRender := "old live" + xansi.HideCursor + liveAreaEraseSequence(1) + "stream" +
-		terminalSaveCursor + terminalLineBreak + "latest live" + xansi.HideCursor + terminalRestoreCursor
+		terminalSaveCursor + xansi.CursorDown(1) + "\r" + "latest live" + xansi.HideCursor + terminalRestoreCursor
 	if got := out.String(); got != wantAfterRender {
 		t.Fatalf("live render during stream output = %q, want %q", got, wantAfterRender)
 	}
@@ -254,7 +254,7 @@ func TestNativeLiveAreaRenderDuringAssistantStreamingUsesStreamAnchor(t *testing
 	}
 }
 
-func TestAssistantStreamAppendErasesStreamAnchoredLiveAreaBeforeCursorMoves(t *testing.T) {
+func TestAssistantStreamAppendErasesStreamChromeWithoutAddingLinefeed(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
 	defer buffer.close()
@@ -274,7 +274,7 @@ func TestAssistantStreamAppendErasesStreamAnchoredLiveAreaBeforeCursorMoves(t *t
 
 	streamAnchoredErase := terminalSaveCursor + xansi.CursorDown(1) + "\r" + liveAreaEraseSequence(1) + terminalRestoreCursor
 	want := "old live" + xansi.HideCursor + liveAreaEraseSequence(1) + "stream" +
-		terminalSaveCursor + terminalLineBreak + "latest live" + xansi.HideCursor + terminalRestoreCursor +
+		terminalSaveCursor + xansi.CursorDown(1) + "\r" + "latest live" + xansi.HideCursor + terminalRestoreCursor +
 		streamAnchoredErase + " moved"
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
