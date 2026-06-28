@@ -10,13 +10,5 @@ What This Does:
   Run one shared local `kent serve` as a background service that starts at login.
   Lifecycle commands that stop or restart the service are refused inside Kent shell commands; use `install --no-start` or `uninstall --keep-running` for registration-only changes there.
 
-Platforms:
-  macOS, Linux/WSL2, and Windows.
-
 Windows Notes:
   `install` and `uninstall` prompt for Administrator elevation; other commands need no elevation.
-
-Examples:
-  kent service status
-  kent service install
-  kent service restart

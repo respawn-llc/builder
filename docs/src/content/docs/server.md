@@ -16,12 +16,7 @@ While annoying at times, this:
 
 ## Background Service
 
-`kent service` installs and manages a supervised background `kent serve` process.
-The service starts at login and keeps the local server always available.
-
-```bash
-kent service install
-```
+`kent service` runs a local `kent serve` as a background service that starts at login.
 
 ## Commands
 
@@ -46,10 +41,10 @@ All service commands accept `--persistence-root` and honor `KENT_PERSISTENCE_ROO
 
 ### Windows
 
-The background server runs as you, in your session, with your full environment (`%USERPROFILE%`, git config, SSH keys, Windows Credential Manager) and no console window. It starts when you log in and restarts on failure.
+The background server runs as you, with your user environment, and starts when you log in.
 
-- `install` and `uninstall` prompt for Administrator elevation (UAC). `status`, `start`, `stop`, and `restart` run without elevation.
-- `stop`, a service restart, and system shutdown stop the server gracefully, force-killing it only if it does not exit within the stop window.
+- `install` and `uninstall` prompt for Administrator elevation (UAC). Other commands run without elevation.
+- `stop`, a service restart, and system shutdown shut the server down gracefully.
 
 Linux headless machines may need lingering enabled so the server survives logout:
 
@@ -60,7 +55,7 @@ loginctl enable-linger "$USER"
 ## Port Conflicts
 
 Service install/start commands refuse to change the service when Kent's configured server endpoint is already owned by a manual `kent serve` process or by a non-Kent listener.
-If the service is installed but unloaded, `restart` can stop a healthy Kent listener on the configured endpoint and attach that endpoint back to the background service.
+When the service is installed, `restart` reclaims the configured endpoint from a healthy Kent listener and attaches it back to the service.
 If you started `kent serve` manually, stop that process before installing or starting the background service.
 
 Running another server on a different configured port is fine. Kent only checks the endpoint resolved from `server_host` and `server_port`.
