@@ -126,7 +126,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	ownerSessionID := strings.TrimSpace(req.OwnerSessionID)
 	ownerRunID := strings.TrimSpace(req.OwnerRunID)
 	ownerStepID := strings.TrimSpace(req.OwnerStepID)
-	cmd.Env = tools.EnrichShellEnvForSession(os.Environ(), ownerSessionID)
+	cmd.Env = tools.EnrichShellEnvForInvocation(os.Environ(), ownerSessionID, ownerRunID, ownerStepID)
 	prepareManagedExec(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

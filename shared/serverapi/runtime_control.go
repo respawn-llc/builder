@@ -183,12 +183,16 @@ type RuntimeGoalSetRequest struct {
 	SessionID       string `json:"session_id"`
 	Objective       string `json:"objective"`
 	Actor           string `json:"actor"`
+	RunID           string `json:"run_id,omitempty"`
+	StepID          string `json:"step_id,omitempty"`
 }
 
 type RuntimeGoalStatusRequest struct {
 	ClientRequestID string `json:"client_request_id"`
 	SessionID       string `json:"session_id"`
 	Actor           string `json:"actor"`
+	RunID           string `json:"run_id,omitempty"`
+	StepID          string `json:"step_id,omitempty"`
 }
 
 type RuntimeGoalClearRequest struct {

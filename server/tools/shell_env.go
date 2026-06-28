@@ -44,6 +44,10 @@ func EnrichShellEnv(base []string) []string {
 }
 
 func EnrichShellEnvForSession(base []string, sessionID string) []string {
+	return EnrichShellEnvForInvocation(base, sessionID, "", "")
+}
+
+func EnrichShellEnvForInvocation(base []string, sessionID string, runID string, stepID string) []string {
 	env := make(map[string]string, len(base)+len(overrides))
 	order := make([]string, 0, len(base)+len(overrides))
 
@@ -74,6 +78,18 @@ func EnrichShellEnvForSession(base []string, sessionID string) []string {
 			order = append(order, sessionenv.SessionIDEnv)
 		}
 		env[sessionenv.SessionIDEnv] = sessionID
+	}
+	if runID = strings.TrimSpace(runID); runID != "" {
+		if _, exists := env[sessionenv.RunIDEnv]; !exists {
+			order = append(order, sessionenv.RunIDEnv)
+		}
+		env[sessionenv.RunIDEnv] = runID
+	}
+	if stepID = strings.TrimSpace(stepID); stepID != "" {
+		if _, exists := env[sessionenv.StepIDEnv]; !exists {
+			order = append(order, sessionenv.StepIDEnv)
+		}
+		env[sessionenv.StepIDEnv] = stepID
 	}
 
 	if _, exists := env["RIPGREP_CONFIG_PATH"]; !exists {

@@ -67,6 +67,19 @@ func TestEnrichForSessionInjectsSessionIDEnv(t *testing.T) {
 	}
 }
 
+func TestEnrichForInvocationInjectsRunAndStepEnv(t *testing.T) {
+	env := envMap(t, EnrichShellEnvForInvocation([]string{"PATH=/bin"}, "session-1", " run-1 ", " step-1 "))
+	if got := env[sessionenv.SessionIDEnv]; got != "session-1" {
+		t.Fatalf("%s = %q, want session-1", sessionenv.SessionIDEnv, got)
+	}
+	if got := env[sessionenv.RunIDEnv]; got != "run-1" {
+		t.Fatalf("%s = %q, want run-1", sessionenv.RunIDEnv, got)
+	}
+	if got := env[sessionenv.StepIDEnv]; got != "step-1" {
+		t.Fatalf("%s = %q, want step-1", sessionenv.StepIDEnv, got)
+	}
+}
+
 func TestEnrichForSessionOverridesExistingSessionIDEnv(t *testing.T) {
 	env := envMap(t, EnrichShellEnvForSession([]string{sessionenv.SessionIDEnv + "=old"}, "new"))
 	if got := env[sessionenv.SessionIDEnv]; got != "new" {

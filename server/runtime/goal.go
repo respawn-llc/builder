@@ -19,6 +19,7 @@ const goalLoopBusyRetryDelay = 50 * time.Millisecond
 
 var ErrGoalRequiresAskQuestion = errors.New("active goal requires ask_question tool visibility; start with ask_question available or pause/clear the goal")
 var errGoalLoopInactive = errors.New("goal loop inactive")
+var errAgentGoalStepInactive = errors.New("agent goal command originating step is no longer active")
 
 type activeStepGoalMutationKind uint8
 
@@ -111,7 +112,15 @@ func (e *Engine) QueueAgentShellSetGoal(objective string, actor session.GoalActo
 	return e.QueueGoalSetForActiveStep(objective, actor)
 }
 
+func (e *Engine) QueueAgentShellSetGoalForStep(stepID string, objective string, actor session.GoalActor) (session.GoalState, bool, error) {
+	return e.queueGoalSetForStep(strings.TrimSpace(stepID), objective, actor)
+}
+
 func (e *Engine) QueueGoalSetForActiveStep(objective string, actor session.GoalActor) (session.GoalState, bool, error) {
+	return e.queueGoalSetForStep("", objective, actor)
+}
+
+func (e *Engine) queueGoalSetForStep(stepID string, objective string, actor session.GoalActor) (session.GoalState, bool, error) {
 	if e == nil || e.store == nil {
 		return session.GoalState{}, false, fmt.Errorf("runtime engine is required")
 	}
@@ -119,7 +128,7 @@ func (e *Engine) QueueGoalSetForActiveStep(objective string, actor session.GoalA
 	if objective == "" {
 		return session.GoalState{}, false, errors.New("goal objective is required")
 	}
-	accepted, queued, err := e.enqueueActiveStepGoalMutation(activeStepGoalMutation{
+	accepted, queued, err := e.enqueueActiveStepGoalMutationForStep(stepID, activeStepGoalMutation{
 		kind:      activeStepGoalMutationSet,
 		objective: objective,
 		actor:     actor,
@@ -143,7 +152,15 @@ func (e *Engine) QueueAgentShellCompleteGoal(actor session.GoalActor) (session.G
 	return e.QueueGoalStatusForActiveStep(session.GoalStatusComplete, actor)
 }
 
+func (e *Engine) QueueAgentShellCompleteGoalForStep(stepID string, actor session.GoalActor) (session.GoalState, bool, error) {
+	return e.queueGoalStatusForStep(strings.TrimSpace(stepID), session.GoalStatusComplete, actor)
+}
+
 func (e *Engine) QueueGoalStatusForActiveStep(status session.GoalStatus, actor session.GoalActor) (session.GoalState, bool, error) {
+	return e.queueGoalStatusForStep("", status, actor)
+}
+
+func (e *Engine) queueGoalStatusForStep(stepID string, status session.GoalStatus, actor session.GoalActor) (session.GoalState, bool, error) {
 	if e == nil || e.store == nil {
 		return session.GoalState{}, false, fmt.Errorf("runtime engine is required")
 	}
@@ -157,7 +174,7 @@ func (e *Engine) QueueGoalStatusForActiveStep(status session.GoalStatus, actor s
 		actor:  actor,
 		status: status,
 	}
-	accepted, queued, err := e.enqueueActiveStepGoalMutation(mutation, func(current *session.GoalState) (session.GoalState, error) {
+	accepted, queued, err := e.enqueueActiveStepGoalMutationForStep(stepID, mutation, func(current *session.GoalState) (session.GoalState, error) {
 		if current == nil {
 			return session.GoalState{}, errors.New("goal is not set")
 		}
@@ -230,14 +247,22 @@ func foldGoalMutations(goal *session.GoalState, mutations []activeStepGoalMutati
 }
 
 func (e *Engine) enqueueActiveStepGoalMutation(mutation activeStepGoalMutation, preview func(*session.GoalState) (session.GoalState, error)) (session.GoalState, bool, error) {
+	return e.enqueueActiveStepGoalMutationForStep("", mutation, preview)
+}
+
+func (e *Engine) enqueueActiveStepGoalMutationForStep(expectedStepID string, mutation activeStepGoalMutation, preview func(*session.GoalState) (session.GoalState, error)) (session.GoalState, bool, error) {
 	if e == nil || e.stepLifecycle == nil {
 		return session.GoalState{}, false, nil
 	}
+	expectedStepID = strings.TrimSpace(expectedStepID)
 	var accepted session.GoalState
 	queued, err := e.stepLifecycle.WithActiveStep(func(stepID string) error {
 		stepID = strings.TrimSpace(stepID)
 		if stepID == "" {
 			return nil
+		}
+		if expectedStepID != "" && stepID != expectedStepID {
+			return errAgentGoalStepInactive
 		}
 		e.activeStepGoalMutationsMu.Lock()
 		defer e.activeStepGoalMutationsMu.Unlock()
@@ -261,6 +286,9 @@ func (e *Engine) enqueueActiveStepGoalMutation(mutation activeStepGoalMutation, 
 	})
 	if err != nil {
 		return session.GoalState{}, false, err
+	}
+	if expectedStepID != "" && !queued {
+		return session.GoalState{}, false, errAgentGoalStepInactive
 	}
 	return accepted, queued, err
 }

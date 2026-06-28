@@ -134,10 +134,12 @@ func goalSetSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), goalCommandTimeout)
 	defer cancel()
 	actor := "user"
+	runID, stepID := "", ""
 	if agent {
 		actor = "agent"
+		runID, stepID = sessionenv.LookupRunStepID(os.LookupEnv)
 	}
-	resp, err := remote.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: uuid.NewString(), SessionID: target, Objective: objective, Actor: actor})
+	resp, err := remote.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: uuid.NewString(), SessionID: target, Objective: objective, Actor: actor, RunID: runID, StepID: stepID})
 	if err != nil {
 		fmt.Fprintln(stderr, formatGoalCommandError(err))
 		return 1
@@ -230,12 +232,14 @@ func goalCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		return 1
 	}
 	actor := "user"
+	runID, stepID := "", ""
 	if agent {
 		actor = "agent"
+		runID, stepID = sessionenv.LookupRunStepID(os.LookupEnv)
 	}
 	completeCtx, completeCancel := context.WithTimeout(context.Background(), goalCommandTimeout)
 	defer completeCancel()
-	resp, err := remote.CompleteGoal(completeCtx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: uuid.NewString(), SessionID: target, Actor: actor})
+	resp, err := remote.CompleteGoal(completeCtx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: uuid.NewString(), SessionID: target, Actor: actor, RunID: runID, StepID: stepID})
 	if err != nil {
 		fmt.Fprintln(stderr, formatGoalCommandError(err))
 		return 1

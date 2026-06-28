@@ -891,7 +891,7 @@ func TestServiceSubmitUserShellCommandDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitUserShellCommandRecordsPromptHistory(t *testing.T) {
+func TestServiceSubmitUserShellCommandDoesNotRecordPromptHistory(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
 	req := runtimeControlShellCommandRequest(store, "req-1", "pwd")
 
@@ -899,11 +899,12 @@ func TestServiceSubmitUserShellCommandRecordsPromptHistory(t *testing.T) {
 		t.Fatalf("SubmitUserShellCommand: %v", err)
 	}
 	history := service.promptStore.(*runtimeControlPromptHistoryStore)
-	waitForRuntimeControlPromptHistoryCount(t, history, "$ pwd", 1)
 	if err := service.SubmitUserShellCommand(context.Background(), req); err != nil {
 		t.Fatalf("SubmitUserShellCommand replay: %v", err)
 	}
-	waitForRuntimeControlPromptHistoryCount(t, history, "$ pwd", 1)
+	if got := history.CountText("$ pwd"); got != 0 {
+		t.Fatalf("shell prompt history count = %d, want 0", got)
+	}
 }
 
 func TestServiceSubmitUserShellCommandRejectsClientRequestIDPayloadMismatch(t *testing.T) {

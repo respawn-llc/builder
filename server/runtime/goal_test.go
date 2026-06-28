@@ -212,6 +212,21 @@ func TestQueuedAgentShellGoalSetRejectsPendingActiveGoal(t *testing.T) {
 	}
 }
 
+func TestAgentShellGoalSetForEndedStepIsRejected(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step-2", snapshot: &RunSnapshot{RunID: "run-2", StepID: "step-2"}}
+
+	if _, queued, err := engine.QueueAgentShellSetGoalForStep("step-1", "stale background goal", session.GoalActorAgent); queued || !errors.Is(err, errAgentGoalStepInactive) {
+		t.Fatalf("QueueAgentShellSetGoalForStep queued=%t err=%v, want inactive originating step", queued, err)
+	}
+	if g := engine.Goal(); g != nil {
+		t.Fatalf("stale background shell mutated goal: %+v", g)
+	}
+}
+
 func TestUserGoalMutationsQueueDuringActiveStep(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
