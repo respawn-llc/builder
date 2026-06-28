@@ -454,7 +454,7 @@ func TestWorkflowActiveGoalRequiresAskQuestionToolVisibilityBeforeModelTurn(t *t
 		t.Fatalf("SetGoal: %v", err)
 	}
 
-	if err := engine.requireAskQuestionForActiveGoal(); !errors.Is(err, ErrGoalRequiresAskQuestion) {
+	if err := engine.requireAskQuestionWhenGoalActive(); !errors.Is(err, ErrGoalRequiresAskQuestion) {
 		t.Fatalf("workflow active goal preflight error = %v, want ErrGoalRequiresAskQuestion", err)
 	}
 }

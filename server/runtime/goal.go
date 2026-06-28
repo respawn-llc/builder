@@ -52,10 +52,7 @@ func (e *Engine) SetGoal(objective string, actor session.GoalActor) (session.Goa
 }
 
 func (e *Engine) setGoalForStep(stepID string, objective string, actor session.GoalActor) (session.GoalState, error) {
-	return e.setGoalStateForStep(stepID, session.GoalState{Objective: objective}, actor)
-}
-
-func (e *Engine) setGoalStateForStep(stepID string, goalState session.GoalState, actor session.GoalActor) (session.GoalState, error) {
+	goalState := session.GoalState{Objective: objective}
 	if e == nil || e.store == nil {
 		return session.GoalState{}, fmt.Errorf("runtime engine is required")
 	}
@@ -81,7 +78,7 @@ func (e *Engine) setGoalStatusForStep(stepID string, status session.GoalStatus, 
 		return session.GoalState{}, fmt.Errorf("runtime engine is required")
 	}
 	if status == session.GoalStatusActive {
-		if err := e.requireAskQuestionForGoalActivation(); err != nil {
+		if err := e.RequireGoalLoopStartAllowed(); err != nil {
 			return session.GoalState{}, err
 		}
 	}
@@ -334,7 +331,7 @@ func (e *Engine) startGoalLoop(firstTurnAlreadyPrompted bool) error {
 	if e.workflowRunActive() {
 		return nil
 	}
-	if err := e.requireAskQuestionForGoalLoopStart(); err != nil {
+	if err := e.RequireGoalLoopStartAllowed(); err != nil {
 		return err
 	}
 	if !e.goalLoopState().Start() {
@@ -364,7 +361,7 @@ func (e *Engine) finishGoalLoop() {
 func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool) {
 	appendNudge := !firstTurnAlreadyPrompted
 	for {
-		if !e.shouldContinueGoalLoop(ctx) {
+		if !e.shouldContinueGoalLoop() {
 			return
 		}
 		if _, err := e.runGoalTurn(ctx, appendNudge); err != nil {
@@ -436,18 +433,11 @@ func (e *Engine) recordGoalLoopError(err error) {
 	e.SetStreamingError(message)
 }
 
-func (e *Engine) shouldContinueGoalLoop(ctx context.Context) bool {
+func (e *Engine) shouldContinueGoalLoop() bool {
 	if e == nil {
 		return false
 	}
-	if e.goalLoopState().Suspended() {
-		return false
-	}
-	outcome, err := e.goalContinuation().Evaluate(ctx, llm.Message{})
-	if err != nil {
-		return false
-	}
-	return !outcome.Done
+	return !e.goalLoopState().Suspended() && e.goalActive()
 }
 
 func (e *Engine) goalActive() bool {
@@ -467,31 +457,7 @@ func (e *Engine) goalLoopState() *goalLoopState {
 	return e.goalLoop
 }
 
-func (e *Engine) requireAskQuestionForActiveGoal() error {
-	goal := e.Goal()
-	if goal == nil || goal.Status != session.GoalStatusActive {
-		return nil
-	}
-	return e.requireAskQuestionForGoalLoopStart()
-}
-
 func (e *Engine) RequireGoalLoopStartAllowed() error {
-	return e.requireAskQuestionForGoalLoopStart()
-}
-
-func (e *Engine) requireAskQuestionForGoalActivation() error {
-	goal := e.Goal()
-	if goal == nil || goal.Status == session.GoalStatusActive {
-		return nil
-	}
-	return e.requireAskQuestionForGoalLoopStart()
-}
-
-func (e *Engine) requireAskQuestionForGoalLoopStart() error {
-	// Goals require ask_question to be part of the session's locked tool surface,
-	// because goal work may need user decisions. The /questions command only
-	// toggles whether ask_question calls are answered; it must not block or stop
-	// an already-visible goal loop.
 	shape, err := e.lockedRequestShape()
 	if err != nil {
 		return err
@@ -502,6 +468,14 @@ func (e *Engine) requireAskQuestionForGoalLoopStart() error {
 		}
 	}
 	return ErrGoalRequiresAskQuestion
+}
+
+func (e *Engine) requireAskQuestionWhenGoalActive() error {
+	goal := e.Goal()
+	if goal == nil || goal.Status != session.GoalStatusActive {
+		return nil
+	}
+	return e.RequireGoalLoopStartAllowed()
 }
 
 func goalSetCompactText(objective string) string {

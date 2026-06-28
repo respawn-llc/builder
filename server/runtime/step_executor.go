@@ -549,7 +549,7 @@ func (s *defaultStepExecutor) prepareModelTurn(ctx context.Context, stepID strin
 	if err != nil {
 		return err
 	}
-	if err := e.requireAskQuestionForActiveGoal(); err != nil {
+	if err := e.requireAskQuestionWhenGoalActive(); err != nil {
 		return err
 	}
 	if handoffCompacted {

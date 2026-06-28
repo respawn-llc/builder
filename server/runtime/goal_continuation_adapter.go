@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"strings"
 
 	"core/prompts"
@@ -15,11 +14,6 @@ type goalContinuation struct {
 
 func (e *Engine) goalContinuation() goalContinuation {
 	return goalContinuation{engine: e}
-}
-
-func (c goalContinuation) Evaluate(_ context.Context, _ llm.Message) (objectiveOutcome, error) {
-	_, active := c.activeGoal()
-	return objectiveOutcome{Applicable: true, Done: !active}, nil
 }
 
 func (c goalContinuation) activeGoal() (session.GoalState, bool) {
