@@ -238,6 +238,26 @@ Terminal-owned history of normal-buffer output. Kent does not replay, clear, or 
 
 The single shared live runtime (engine) a session registers while active. There is exactly one engine per session; every interactive client and any headless or workflow run resolves and drives that same shared engine through its queue/steer/exclusive-step boundary. It exists independently of any particular client and may be registered but idle between activations.
 
+### Step
+
+One model request/response iteration in the runtime loop, including any tool calls it triggers. Steps run back-to-back to form a turn.
+
+### Turn
+
+A full agent run from a user submission until the runtime returns to idle: the agent produces its final message and no further step is scheduled. A turn is composed of one or more steps.
+
+### Queue
+
+The user-facing TUI action that holds user messages until the current turn ends. Queued messages wait for the runtime to go idle, then drain into the next turn.
+
+### Steer
+
+The user-facing TUI action that injects a message to take effect after the current step ends, mid-turn between steps, rather than waiting for the turn to finish.
+
+### Steer Queue
+
+The internal queue that holds step-end-drained submissions until the current step completes. It is the single submission path for (almost) every message that lands in the transcript — user steering, queued-message flushes, worktree reminders, workflow-step output, mode-change notices, and error messages — built from typed steering intents rather than ad-hoc appenders or direct transcript writes.
+
 ### Equal Full-Control Attach
 
 Every client attached to a session is an equal, full-control surface over the shared runtime: there is no ownership, no leases, no controller/limited-control distinction, no read-only attach, and no per-operation gating. The server owns runtime orchestration only (the single shared engine, safe-point application, and persistence), not client authorization.
