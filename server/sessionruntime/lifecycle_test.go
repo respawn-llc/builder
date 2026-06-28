@@ -235,6 +235,35 @@ func TestRecreateRuntimeOvertakesExisting(t *testing.T) {
 	}
 }
 
+func TestRecreateRuntimeHoldsRunBlockUntilRelease(t *testing.T) {
+	fixture, reg := newRuntimeServiceFixture(t)
+	sessionID := fixture.store.Meta().SessionID
+	_, build := newLifecycleBuilder(t, fixture)
+
+	release, err := fixture.service.RecreateRuntime(context.Background(), sessionID, "owner-a", build)
+	if err != nil {
+		t.Fatalf("RecreateRuntime: %v", err)
+	}
+
+	blocked := make(chan func(), 1)
+	go func() { blocked <- reg.BlockSessionRuns([]string{sessionID}) }()
+	select {
+	case <-blocked:
+		t.Fatal("BlockSessionRuns proceeded before the acquired runtime released its run block")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := release(context.Background()); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	select {
+	case unblock := <-blocked:
+		unblock()
+	case <-time.After(2 * time.Second):
+		t.Fatal("BlockSessionRuns did not proceed after the acquired runtime released its run block")
+	}
+}
+
 func TestRecreateRuntimeRejectedWhileSessionBlocked(t *testing.T) {
 	fixture, reg := newRuntimeServiceFixture(t)
 	sessionID := fixture.store.Meta().SessionID

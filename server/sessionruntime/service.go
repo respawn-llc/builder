@@ -286,15 +286,20 @@ func (s *Service) recreateRuntime(ctx context.Context, sessionID string, ownerID
 	if !ok {
 		return nil, errors.Join(ErrSessionRunsBlocked, fmt.Errorf("session %q runs are blocked", sessionID))
 	}
-	defer releaseRun()
 	claim, err := s.runtimes.ClaimFreshRuntime(ctx, sessionID, strings.TrimSpace(ownerID), beforeReplace)
 	if err != nil {
+		releaseRun()
 		return nil, err
 	}
 	if err := s.buildIntoClaim(ctx, sessionID, claim, build); err != nil {
+		releaseRun()
 		return nil, err
 	}
-	return func(ctx context.Context) error { return s.closeAcquiredClaim(ctx, sessionID, claim) }, nil
+	var releaseOnce sync.Once
+	return func(ctx context.Context) error {
+		defer releaseOnce.Do(releaseRun)
+		return s.closeAcquiredClaim(ctx, sessionID, claim)
+	}, nil
 }
 
 func (s *Service) closeAcquiredClaim(ctx context.Context, sessionID string, claim *registry.RuntimeClaim) error {
