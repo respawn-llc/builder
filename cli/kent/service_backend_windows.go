@@ -103,6 +103,8 @@ func (scmServiceBackend) Install(ctx context.Context, spec serviceSpec, force bo
 	// will require Administrator, so it must not fail the install.
 	_ = grantUserServiceAccess(service)
 
+	persistInstallUser(spec)
+
 	if start {
 		if err := service.Start(); err != nil {
 			return fmt.Errorf("start service: %w", err)
@@ -140,6 +142,7 @@ func (scmServiceBackend) Uninstall(ctx context.Context, spec serviceSpec, stop b
 	}
 	removeLegacyWindowsRegistration(ctx, spec)
 	_ = os.Remove(windowsServerPIDPath(spec))
+	_ = os.Remove(installUserSIDPath(spec))
 	return nil
 }
 
@@ -234,6 +237,33 @@ func readWindowsServerPID(spec serviceSpec) int {
 		return 0
 	}
 	return parsePositiveInt(string(data))
+}
+
+// installUserSIDPath records the SID of the user the service was installed for,
+// so the supervisor launches the server only for that user's console session and
+// never for a different user against the installer's baked persistence root.
+func installUserSIDPath(spec serviceSpec) string {
+	return filepath.Join(windowsServiceDir(spec), "install_user.sid")
+}
+
+// persistInstallUser records the interactive user's SID at install time. It is
+// best-effort: when the SID cannot be resolved the supervisor falls back to
+// serving whichever user holds the console.
+func persistInstallUser(spec serviceSpec) {
+	sid, err := interactiveUserSID()
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(windowsServiceDir(spec), 0o755)
+	_ = os.WriteFile(installUserSIDPath(spec), []byte(sid.String()), 0o644)
+}
+
+func readInstallUserSID(spec serviceSpec) string {
+	data, err := os.ReadFile(installUserSIDPath(spec))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // windowsServiceRunArguments are the arguments baked into the registered service

@@ -39,15 +39,24 @@ const (
 // has the user's full identity (profile, DPAPI, Credential Manager, git/ssh),
 // and with CREATE_NO_WINDOW so no console window appears.
 type serverSupervisor struct {
-	spec   serviceSpec
-	wanted atomic.Uint32 // target interactive session id; 0 = no user session
-	wake   chan struct{}
-	mu     sync.Mutex
-	child  *managedChild
+	spec      serviceSpec
+	installer string        // SID the service was installed for; "" serves any console user
+	wanted    atomic.Uint32 // target interactive session id; 0 = no user session
+	wake      chan struct{}
+	mu        sync.Mutex
+	child     *managedChild
 }
 
 func newServerSupervisor(spec serviceSpec) *serverSupervisor {
-	return &serverSupervisor{spec: spec, wake: make(chan struct{}, 1)}
+	return &serverSupervisor{spec: spec, installer: readInstallUserSID(spec), wake: make(chan struct{}, 1)}
+}
+
+// targetSession is the console session the server should run in: the active
+// console session when it belongs to the install-time user (or when no installer
+// SID was recorded), else 0 so the supervisor does not launch the server for a
+// different user against the installer's persistence root.
+func (s *serverSupervisor) targetSession() uint32 {
+	return activeUserSessionForSID(s.installer)
 }
 
 // setWanted records the session the server should run in and nudges the run loop.
@@ -188,10 +197,11 @@ func growBackoff(current time.Duration) time.Duration {
 	return next
 }
 
-// activeUserSession returns the interactive console session id when a user is
-// logged in and a primary token can be obtained, else 0 (session 0 is the
-// non-interactive services session and is never a target).
-func activeUserSession() uint32 {
+// activeUserSessionForSID returns the interactive console session id when a user
+// is logged in, a primary token can be obtained, and (when wantSID is non-empty)
+// that user matches the install-time user, else 0. Session 0 is the
+// non-interactive services session and is never a target.
+func activeUserSessionForSID(wantSID string) uint32 {
 	session := windows.WTSGetActiveConsoleSessionId()
 	if session == 0xFFFFFFFF || session == 0 {
 		return 0
@@ -200,13 +210,19 @@ func activeUserSession() uint32 {
 	if err := windows.WTSQueryUserToken(session, &token); err != nil {
 		return 0
 	}
-	_ = token.Close()
+	defer func() { _ = token.Close() }()
+	if wantSID == "" {
+		return session
+	}
+	user, err := token.GetTokenUser()
+	if err != nil || user.User.Sid.String() != wantSID {
+		return 0
+	}
 	return session
 }
 
-// managedChild is a launched server process plus the user resources that must be
-// released when it exits (logon token, loaded profile, environment block, log
-// file handles).
+// managedChild is a launched server process plus the resources that must be
+// released when it exits (logon token, loaded profile, shutdown event, job).
 type managedChild struct {
 	session  uint32
 	pid      uint32
@@ -215,7 +231,6 @@ type managedChild struct {
 	profile  windows.Handle
 	shutdown windows.Handle
 	job      windows.Handle
-	logs     []windows.Handle
 	exited   chan struct{}
 	released sync.Once
 }
@@ -256,9 +271,6 @@ func (c *managedChild) terminate() {
 
 func (c *managedChild) release() {
 	c.released.Do(func() {
-		for _, h := range c.logs {
-			_ = windows.CloseHandle(h)
-		}
 		if c.shutdown != 0 {
 			_ = windows.CloseHandle(c.shutdown)
 		}
@@ -316,43 +328,26 @@ func launchServerAsUser(spec serviceSpec, session uint32) (child *managedChild, 
 		}
 	}()
 
-	env, err := userEnvironment(token, shutdownEventEnvVar, shutdownName)
-	if err != nil {
-		return nil, err
-	}
-
 	if err := ensureServiceLogDir(spec); err != nil {
 		return nil, err
 	}
-	stdout, err := openInheritableAppendFile(spec.StdoutLogPath)
+	// CreateProcessAsUser cannot inherit handles across sessions, so the server
+	// opens its own log files from these paths (see redirectServiceLogs) instead
+	// of receiving inherited std handles.
+	env, err := userEnvironment(token, map[string]string{
+		shutdownEventEnvVar: shutdownName,
+		stdoutLogEnvVar:     spec.StdoutLogPath,
+		stderrLogEnvVar:     spec.StderrLogPath,
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if !committed {
-			_ = windows.CloseHandle(stdout)
-		}
-	}()
-	stderr, err := openInheritableAppendFile(spec.StderrLogPath)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if !committed {
-			_ = windows.CloseHandle(stderr)
-		}
-	}()
 
 	desktop, err := windows.UTF16PtrFromString(`winsta0\default`)
 	if err != nil {
 		return nil, err
 	}
-	si := windows.StartupInfo{
-		Desktop:   desktop,
-		Flags:     windows.STARTF_USESTDHANDLES,
-		StdOutput: stdout,
-		StdErr:    stderr,
-	}
+	si := windows.StartupInfo{Desktop: desktop}
 	si.Cb = uint32(unsafe.Sizeof(si))
 
 	appName, err := windows.UTF16PtrFromString(spec.Executable)
@@ -372,7 +367,7 @@ func launchServerAsUser(spec serviceSpec, session uint32) (child *managedChild, 
 
 	var pi windows.ProcessInformation
 	flags := uint32(windows.CREATE_NO_WINDOW | windows.CREATE_UNICODE_ENVIRONMENT)
-	err = windows.CreateProcessAsUser(token, appName, cmdLine, nil, nil, true, flags, &env[0], cwd, &si, &pi)
+	err = windows.CreateProcessAsUser(token, appName, cmdLine, nil, nil, false, flags, &env[0], cwd, &si, &pi)
 	runtime.KeepAlive(env)
 	if err != nil {
 		return nil, fmt.Errorf("launch server as user in session %d: %w", session, err)
@@ -395,7 +390,6 @@ func launchServerAsUser(spec serviceSpec, session uint32) (child *managedChild, 
 		profile:  profile,
 		shutdown: shutdown,
 		job:      job,
-		logs:     []windows.Handle{stdout, stderr},
 		exited:   make(chan struct{}),
 	}
 	go c.watch()
@@ -447,13 +441,16 @@ func createShutdownEvent() (windows.Handle, string, error) {
 // profile environment with one extra variable set, returning a Go-owned block
 // the caller keeps alive across CreateProcessAsUser. The extra var carries the
 // graceful-stop event name only to the supervised child.
-func userEnvironment(token windows.Token, key string, value string) ([]uint16, error) {
+func userEnvironment(token windows.Token, extra map[string]string) ([]uint16, error) {
 	var block *uint16
 	if err := windows.CreateEnvironmentBlock(&block, token, false); err != nil {
 		return nil, fmt.Errorf("create environment block: %w", err)
 	}
 	defer func() { _ = windows.DestroyEnvironmentBlock(block) }()
-	entries := append(splitEnvironmentBlock(block), key+"="+value)
+	entries := splitEnvironmentBlock(block)
+	for key, value := range extra {
+		entries = append(entries, key+"="+value)
+	}
 	return buildEnvironmentBlock(entries)
 }
 
@@ -518,26 +515,4 @@ func assignProcessToKillJob(process windows.Handle) (windows.Handle, error) {
 		return 0, fmt.Errorf("assign server to job: %w", err)
 	}
 	return job, nil
-}
-
-func openInheritableAppendFile(path string) (windows.Handle, error) {
-	namePtr, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return 0, err
-	}
-	sa := windows.SecurityAttributes{InheritHandle: 1}
-	sa.Length = uint32(unsafe.Sizeof(sa))
-	handle, err := windows.CreateFile(
-		namePtr,
-		windows.FILE_APPEND_DATA,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
-		&sa,
-		windows.OPEN_ALWAYS,
-		windows.FILE_ATTRIBUTE_NORMAL,
-		0,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("open log file %s: %w", path, err)
-	}
-	return handle, nil
 }

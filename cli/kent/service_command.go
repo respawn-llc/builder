@@ -109,6 +109,19 @@ func serviceStatusSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 	return runServiceCommandAction(context.Background(), serviceActionStatus, serviceCommandOptions{JSON: *jsonOut}, stdout, stderr)
 }
 
+// guardBeforeElevation evaluates the current-session lifecycle guard before any
+// UAC relaunch. The elevated child does not inherit KENT_SESSION_ID, so without
+// this the guard (enforced later in runServiceCommandAction) would pass in the
+// elevated process and let a user reinstall/stop the service hosting their own
+// active session. Returns (code, true) when the caller should stop.
+func guardBeforeElevation(action serviceAction, opts serviceCommandOptions, stderr io.Writer) (int, bool) {
+	if err := ensureServiceLifecycleAllowed(action, opts); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1, true
+	}
+	return 0, false
+}
+
 func serviceInstallSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" service install", stderr, serviceInstallUsage)
 	force := fs.Bool("force", false, "rewrite existing service registration")
@@ -124,10 +137,14 @@ func serviceInstallSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
 		return code
 	}
+	opts := serviceCommandOptions{Force: *force, NoStart: *noStart}
+	if code, blocked := guardBeforeElevation(serviceActionInstall, opts, stderr); blocked {
+		return code
+	}
 	if code, handled := elevateServiceAction(serviceActionInstall); handled {
 		return code
 	}
-	return runServiceCommandAction(context.Background(), serviceActionInstall, serviceCommandOptions{Force: *force, NoStart: *noStart}, stdout, stderr)
+	return runServiceCommandAction(context.Background(), serviceActionInstall, opts, stdout, stderr)
 }
 
 func serviceUninstallSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -144,10 +161,14 @@ func serviceUninstallSubcommand(args []string, stdout io.Writer, stderr io.Write
 	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
 		return code
 	}
+	opts := serviceCommandOptions{KeepRunning: *keepRunning}
+	if code, blocked := guardBeforeElevation(serviceActionUninstall, opts, stderr); blocked {
+		return code
+	}
 	if code, handled := elevateServiceAction(serviceActionUninstall); handled {
 		return code
 	}
-	return runServiceCommandAction(context.Background(), serviceActionUninstall, serviceCommandOptions{KeepRunning: *keepRunning}, stdout, stderr)
+	return runServiceCommandAction(context.Background(), serviceActionUninstall, opts, stdout, stderr)
 }
 
 func serviceLifecycleSubcommand(action serviceAction, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -183,6 +204,10 @@ func serviceRestartSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
 		return code
 	}
+	opts := serviceCommandOptions{IfInstalled: *ifInstalled}
+	if code, blocked := guardBeforeElevation(serviceActionRestart, opts, stderr); blocked {
+		return code
+	}
 	// `restart --if-installed` rewrites the registration (reinstall), which needs
 	// Administrator on Windows; plain restart only stops/starts via the granted
 	// DACL and stays unprivileged. Elevate just the reinstall path.
@@ -191,7 +216,7 @@ func serviceRestartSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 			return code
 		}
 	}
-	return runServiceCommandAction(context.Background(), serviceActionRestart, serviceCommandOptions{IfInstalled: *ifInstalled}, stdout, stderr)
+	return runServiceCommandAction(context.Background(), serviceActionRestart, opts, stdout, stderr)
 }
 
 // serviceRunSubcommand is the internal entry the OS service manager invokes via

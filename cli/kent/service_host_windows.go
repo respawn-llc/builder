@@ -56,7 +56,7 @@ func (h *windowsServiceHandler) Execute(_ []string, r <-chan svc.ChangeRequest, 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	supervisor := newServerSupervisor(h.spec)
-	supervisor.setWanted(activeUserSession())
+	supervisor.setWanted(supervisor.targetSession())
 
 	done := make(chan struct{})
 	go func() {
@@ -82,9 +82,9 @@ func (h *windowsServiceHandler) Execute(_ []string, r <-chan svc.ChangeRequest, 
 				return false, 0
 			case svc.SessionChange:
 				// Any logon/logoff/lock change: recompute the target interactive
-				// session (0 when no user is logged in) and let the supervisor
-				// relaunch or stop the server accordingly.
-				supervisor.setWanted(activeUserSession())
+				// session (0 when no matching user is logged in) and let the
+				// supervisor relaunch or stop the server accordingly.
+				supervisor.setWanted(supervisor.targetSession())
 			}
 		}
 	}
