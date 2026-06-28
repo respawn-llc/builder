@@ -109,9 +109,29 @@ func isRecoverableRuntimeControlError(err error) bool {
 	return errors.Is(err, serverapi.ErrRuntimeUnavailable)
 }
 
-func (c *sessionRuntimeClient) retryControlCallNoResult(ctx context.Context, call func() error) error {
-	_, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, true, func() (struct{}, error) {
-		return struct{}{}, call()
+func runtimeControlCall[T any](c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeControlTimeout)
+	defer cancel()
+	return runtimeRequestCall(ctx, c, appendWarning, call)
+}
+
+func runtimeRequestCall[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
+	requestID := uuid.NewString()
+	return retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, appendWarning, func() (T, error) {
+		return call(ctx, requestID)
+	})
+}
+
+func runtimeControlCallNoResult(c *sessionRuntimeClient, call func(ctx context.Context, requestID string) error) error {
+	_, err := runtimeControlCall(c, true, func(ctx context.Context, requestID string) (struct{}, error) {
+		return struct{}{}, call(ctx, requestID)
+	})
+	return err
+}
+
+func runtimeRequestCallNoResult(ctx context.Context, c *sessionRuntimeClient, call func(ctx context.Context, requestID string) error) error {
+	_, err := runtimeRequestCall(ctx, c, true, func(ctx context.Context, requestID string) (struct{}, error) {
+		return struct{}{}, call(ctx, requestID)
 	})
 	return err
 }
