@@ -51,8 +51,12 @@ const (
 	ServiceLaunchdLabel = "sh.kent.server"
 	// ServiceSystemdUnitName is the Linux systemd user-unit name.
 	ServiceSystemdUnitName = "kent.service"
-	// ServiceWindowsTaskName is the Windows Scheduled Task name.
+	// ServiceWindowsTaskName is the legacy Windows Scheduled Task name, retained
+	// only so installs can tear down the pre-SCM scheduled task / Startup item.
 	ServiceWindowsTaskName = Product + " Server"
+	// ServiceWindowsServiceName is the Windows Service Control Manager service
+	// name for the SCM-backed background service.
+	ServiceWindowsServiceName = Product + "Server"
 )
 
 // Distribution identity. Repository, docs, and package-manager coordinates.

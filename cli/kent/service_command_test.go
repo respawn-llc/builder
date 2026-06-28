@@ -345,66 +345,6 @@ func TestServiceRestartIfInstalledTreatsRootMismatchAsNoOp(t *testing.T) {
 	}
 }
 
-func TestWindowsRegisteredTaskRunPathParsesListOutput(t *testing.T) {
-	output := strings.Join([]string{
-		"Folder: \\",
-		"HostName:                             DESKTOP",
-		"TaskName:                             \\Kent",
-		"Task To Run:                          C:\\OtherRoot\\service\\server.cmd",
-		"Start In:                             N/A",
-	}, "\n")
-	got, ok := windowsRegisteredTaskRunPath(output)
-	if !ok || got != "C:\\OtherRoot\\service\\server.cmd" {
-		t.Fatalf("windowsRegisteredTaskRunPath = (%q, %v), want the registered Task To Run path", got, ok)
-	}
-}
-
-func TestWindowsRegisteredTaskRunPathAbsentReturnsFalse(t *testing.T) {
-	if got, ok := windowsRegisteredTaskRunPath("ERROR: The system cannot find the file specified."); ok {
-		t.Fatalf("windowsRegisteredTaskRunPath = (%q, true), want not found when no Task To Run field is present", got)
-	}
-}
-
-func TestWindowsStartupItemScriptPathParsesLauncher(t *testing.T) {
-	launcher := "@echo off\r\nstart \"\" /min cmd.exe /d /c \"C:\\OtherRoot\\service\\server.cmd\"\r\n"
-	got, ok := windowsStartupItemScriptPath(launcher)
-	if !ok || got != "C:\\OtherRoot\\service\\server.cmd" {
-		t.Fatalf("windowsStartupItemScriptPath = (%q, %v), want the launcher's embedded script path", got, ok)
-	}
-}
-
-func TestWindowsStartupItemScriptPathAbsentReturnsFalse(t *testing.T) {
-	if got, ok := windowsStartupItemScriptPath("@echo off\r\n"); ok {
-		t.Fatalf("windowsStartupItemScriptPath = (%q, true), want not found when no launcher line is present", got)
-	}
-}
-
-func TestWindowsRegisteredScriptPathPrefersTaskActionOverStartupLauncher(t *testing.T) {
-	taskOutput := "Task To Run:                          C:\\TaskRoot\\service\\server.cmd"
-	startupLauncher := "start \"\" /min cmd.exe /d /c \"C:\\StartupRoot\\service\\server.cmd\""
-	got, ok := windowsRegisteredScriptPath(taskOutput, startupLauncher)
-	if !ok || got != "C:\\TaskRoot\\service\\server.cmd" {
-		t.Fatalf("windowsRegisteredScriptPath = (%q, %v), want the scheduled-task action path", got, ok)
-	}
-}
-
-func TestWindowsRegisteredScriptPathFallsBackToStartupLauncher(t *testing.T) {
-	startupLauncher := "start \"\" /min cmd.exe /d /c \"C:\\StartupRoot\\service\\server.cmd\""
-	got, ok := windowsRegisteredScriptPath("ERROR: no such task", startupLauncher)
-	if !ok || got != "C:\\StartupRoot\\service\\server.cmd" {
-		t.Fatalf("windowsRegisteredScriptPath = (%q, %v), want the Startup launcher path when no task action exists", got, ok)
-	}
-}
-
-func TestWindowsRegisteredScriptPathAbsentReturnsFalse(t *testing.T) {
-	// With neither an authoritative task action nor a Startup launcher, the
-	// installed root is indeterminate and callers must not substitute a
-	// requested-root path.
-	if got, ok := windowsRegisteredScriptPath("", ""); ok {
-		t.Fatalf("windowsRegisteredScriptPath = (%q, true), want indeterminate when no registration path exists", got)
-	}
-}
-
 func TestRootMismatchErrorRejectsUnpinnedRegistrationForExplicitRoot(t *testing.T) {
 	// A registration with no --persistence-root (a pre-isolation or hand-installed
 	// service) is the single global default-root service; targeting it with an

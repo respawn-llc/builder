@@ -25,6 +25,10 @@ const (
 	serviceActionStart     serviceAction = "start"
 	serviceActionStop      serviceAction = "stop"
 	serviceActionRestart   serviceAction = "restart"
+	// serviceActionRun is the internal entry the OS service manager invokes to
+	// host the background service in-process. It is not advertised in usage and
+	// is only meaningful on platforms with an SCM-style host (Windows).
+	serviceActionRun serviceAction = "run"
 )
 
 type serviceCommandOptions struct {
@@ -78,6 +82,8 @@ func serviceSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return serviceLifecycleSubcommand(action, args[1:], stdout, stderr)
 	case serviceActionRestart:
 		return serviceRestartSubcommand(args[1:], stdout, stderr)
+	case serviceActionRun:
+		return serviceRunSubcommand(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown service command: %s\n\n", args[0])
 		fs := newCommandFlagSet(config.Command+" service", stderr, serviceUsage)
@@ -118,6 +124,9 @@ func serviceInstallSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
 		return code
 	}
+	if code, handled := elevateServiceAction(serviceActionInstall); handled {
+		return code
+	}
 	return runServiceCommandAction(context.Background(), serviceActionInstall, serviceCommandOptions{Force: *force, NoStart: *noStart}, stdout, stderr)
 }
 
@@ -133,6 +142,9 @@ func serviceUninstallSubcommand(args []string, stdout io.Writer, stderr io.Write
 		return 2
 	}
 	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
+		return code
+	}
+	if code, handled := elevateServiceAction(serviceActionUninstall); handled {
 		return code
 	}
 	return runServiceCommandAction(context.Background(), serviceActionUninstall, serviceCommandOptions{KeepRunning: *keepRunning}, stdout, stderr)
@@ -172,6 +184,34 @@ func serviceRestartSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 		return code
 	}
 	return runServiceCommandAction(context.Background(), serviceActionRestart, serviceCommandOptions{IfInstalled: *ifInstalled}, stdout, stderr)
+}
+
+// serviceRunSubcommand is the internal entry the OS service manager invokes via
+// the registered command (`<exe> service run --persistence-root <root>`). It
+// resolves the spec for the baked root and hands off to the platform host, which
+// supervises the background server. It is not a user-facing command.
+func serviceRunSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := newCommandFlagSet(config.Command+" service run", stderr, commandUsage{
+		title: "Usage of " + config.Command + " service run:",
+		lines: []string{"  " + config.Command + " service run  (internal: hosted by the OS service manager)"},
+	})
+	persistenceRoot := fs.String("persistence-root", "", servicePersistenceRootFlagUsage)
+	if ok, exitCode := parseCommandFlags(fs, args); !ok {
+		return exitCode
+	}
+	if len(fs.Args()) != 0 {
+		fmt.Fprintln(stderr, "service run does not accept positional arguments")
+		return 2
+	}
+	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
+		return code
+	}
+	spec, err := loadServiceSpec()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return serviceHostRun(spec, stdout, stderr)
 }
 
 func runServiceCommandAction(ctx context.Context, action serviceAction, opts serviceCommandOptions, stdout io.Writer, stderr io.Writer) int {
@@ -364,68 +404,6 @@ func persistenceRootFromServiceCommand(command []string) (string, bool) {
 		if value, ok := strings.CutPrefix(arg, flag+"="); ok {
 			return value, true
 		}
-	}
-	return "", false
-}
-
-// windowsRegisteredTaskRunPath extracts the action path registered for the
-// scheduled task from `schtasks /Query /V /FO LIST` output (its "Task To Run"
-// field). That value reflects the actual global registration regardless of the
-// requested persistence root, so the resolved command can be compared against
-// the requested root instead of trusting a script path under it. Defined here
-// rather than in the build-tagged Windows backend so the parsing is unit-testable
-// on every platform.
-func windowsRegisteredTaskRunPath(taskQueryOutput string) (string, bool) {
-	const field = "task to run:"
-	for _, raw := range strings.Split(taskQueryOutput, "\n") {
-		line := strings.TrimSpace(raw)
-		if !strings.HasPrefix(strings.ToLower(line), field) {
-			continue
-		}
-		value := strings.Trim(strings.TrimSpace(line[len(field):]), "\"")
-		if value == "" {
-			return "", false
-		}
-		return value, true
-	}
-	return "", false
-}
-
-// windowsRegisteredScriptPath resolves the server.cmd path the OS actually has
-// registered, independent of any requested persistence root. It prefers the
-// scheduled task action ("Task To Run") and falls back to the script path
-// embedded in the Startup-folder launcher. It returns false when neither source
-// carries a path, in which case the installed root is indeterminate and callers
-// must not substitute a path derived from the requested root: lifecycle actions
-// target the single global registration, so a requested-root guess would either
-// fabricate a false root match or mask a real cross-root mismatch. Defined here
-// rather than in the build-tagged Windows backend so the parsing is unit-testable
-// on every platform.
-func windowsRegisteredScriptPath(taskQueryOutput string, startupLauncher string) (string, bool) {
-	if path, ok := windowsRegisteredTaskRunPath(taskQueryOutput); ok {
-		return path, true
-	}
-	return windowsStartupItemScriptPath(startupLauncher)
-}
-
-// windowsStartupItemScriptPath extracts the server.cmd path the Windows
-// Startup-folder fallback launcher invokes. The launcher line has the shape
-// `start "" /min cmd.exe /d /c "<script path>"`; the script path is the final
-// token after the `/d /c ` marker, optionally quoted. It returns false when no
-// launcher line is present, mirroring an absent scheduled-task action.
-func windowsStartupItemScriptPath(startupLauncher string) (string, bool) {
-	const marker = "/d /c "
-	for _, raw := range strings.Split(startupLauncher, "\n") {
-		line := strings.TrimSpace(raw)
-		idx := strings.LastIndex(strings.ToLower(line), marker)
-		if idx < 0 {
-			continue
-		}
-		candidate := strings.Trim(strings.TrimSpace(line[idx+len(marker):]), "\"")
-		if candidate == "" {
-			continue
-		}
-		return candidate, true
 	}
 	return "", false
 }

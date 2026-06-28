@@ -45,6 +45,7 @@ func serveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx = installServiceShutdownTrigger(ctx)
 	authHandler, onboardingHandler := newServeStartupHandlers()
 	server, err := startServeServer(ctx, serverstartup.Request{
 		AllowUnauthenticated: true,

@@ -17,13 +17,14 @@ import (
 )
 
 const (
-	serviceDisplayName     = config.ServiceDisplayName
-	serviceLaunchdLabel    = config.ServiceLaunchdLabel
-	serviceSystemdUnitName = config.ServiceSystemdUnitName
-	serviceWindowsTaskName = config.ServiceWindowsTaskName
-	serviceLogDirName      = "logs"
-	serviceStdoutLogName   = "server.log"
-	serviceStderrLogName   = "server.err.log"
+	serviceDisplayName        = config.ServiceDisplayName
+	serviceLaunchdLabel       = config.ServiceLaunchdLabel
+	serviceSystemdUnitName    = config.ServiceSystemdUnitName
+	serviceWindowsTaskName    = config.ServiceWindowsTaskName
+	serviceWindowsServiceName = config.ServiceWindowsServiceName
+	serviceLogDirName         = "logs"
+	serviceStdoutLogName      = "server.log"
+	serviceStderrLogName      = "server.err.log"
 )
 
 type serviceSpec struct {
@@ -84,6 +85,7 @@ func (e serviceCommandError) Error() string {
 
 var runServiceCommand = func(ctx context.Context, name string, args ...string) (serviceCommandResult, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
+	configureNoWindow(cmd)
 	stdout, err := cmd.Output()
 	result := serviceCommandResult{Stdout: string(stdout)}
 	if err == nil {

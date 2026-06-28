@@ -15,11 +15,15 @@ What This Does:
 Backends:
   macOS: launchd LaunchAgent.
   Linux/WSL2: systemd --user unit.
-  Windows: Scheduled Task, with Startup folder fallback when needed.
+  Windows: Windows Service (SCM), supervising `kent serve` in your session as you (no stored password).
 
 macOS Notes:
   `restart --if-installed` rewrites the LaunchAgent, unloads the loaded job, and bootstraps it again.
   `start` bootstraps an unloaded LaunchAgent; launchd starts it through RunAtLoad.
+
+Windows Notes:
+  `install`/`uninstall` require Administrator and prompt for elevation automatically.
+  `status`/`start`/`stop`/`restart` run without elevation.
 
 Examples:
   kent service status
