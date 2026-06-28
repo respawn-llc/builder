@@ -18,7 +18,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
 	defer release()
-	memoReq := turnSubmitMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text, PromptHistoryRecorded: req.PromptHistoryRecorded}
+	memoReq := turnSubmitMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text}
 	return s.turnSubmits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameTurnSubmitMemoRequest, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		runCtx := context.Background()
 		if ctx != nil {
@@ -40,11 +40,6 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 					compactionBusy = true
 				} else {
 					compacted = true
-				}
-			}
-			if !req.PromptHistoryRecorded {
-				if _, _, err := s.recordPromptHistory(runCtx, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text); err != nil {
-					return err
 				}
 			}
 			if compactionBusy {

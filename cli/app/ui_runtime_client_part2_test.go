@@ -58,7 +58,6 @@ type reconnectRetryRuntimeControlClient struct {
 	queueCalls      int
 	recordCalls     int
 	submitRequestID []string
-	submitRecorded  []bool
 	queueRequestID  []string
 	recordRequestID []string
 	localEntries    []serverapi.RuntimeAppendCommittedEntryRequest
@@ -73,12 +72,6 @@ func (c *reconnectRetryRuntimeControlClient) submitRequestIDs() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.submitRequestID...)
-}
-
-func (c *reconnectRetryRuntimeControlClient) submitPromptHistoryRecorded() []bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]bool(nil), c.submitRecorded...)
 }
 
 func (c *reconnectRetryRuntimeControlClient) queueRequestIDs() []string {
@@ -145,7 +138,6 @@ func (c *reconnectRetryRuntimeControlClient) SubmitUserTurn(_ context.Context, r
 	defer c.mu.Unlock()
 	c.submitCalls++
 	c.submitRequestID = append(c.submitRequestID, req.ClientRequestID)
-	c.submitRecorded = append(c.submitRecorded, req.PromptHistoryRecorded)
 	if c.submitCalls == 1 && c.firstSubmitErr != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, c.firstSubmitErr
 	}
@@ -435,32 +427,6 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesReques
 	}
 	if got := controls.submitRequestIDs(); len(got) != 2 || got[0] == "" || got[0] != got[1] {
 		t.Fatalf("submit request ids = %+v, want same non-empty id across retry", got)
-	}
-	if got := controls.submitPromptHistoryRecorded(); !reflect.DeepEqual(got, []bool{false, false}) {
-		t.Fatalf("submit prompt-history-recorded flags = %+v, want false across retry", got)
-	}
-}
-
-func TestRuntimeClientSubmitUserMessageCanSkipPromptHistoryAcrossReconnect(t *testing.T) {
-	controls := &reconnectRetryRuntimeControlClient{firstSubmitErr: serverapi.ErrRuntimeUnavailable}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	reactivator := newRuntimeReactivator()
-	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
-	runtimeClient.SetRuntimeReactivator(reactivator)
-
-	submission, err := runtimeClient.SubmitUserMessageWithPromptHistoryRecorded(context.Background(), "expanded hidden prompt")
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessageWithPromptHistoryRecorded: %v", err)
-	}
-	if message != "recovered" {
-		t.Fatalf("SubmitUserMessageWithPromptHistoryRecorded message = %q, want recovered", message)
-	}
-	if got := controls.submitRequestIDs(); len(got) != 2 || got[0] == "" || got[0] != got[1] {
-		t.Fatalf("submit request ids = %+v, want same non-empty id across retry", got)
-	}
-	if got := controls.submitPromptHistoryRecorded(); !reflect.DeepEqual(got, []bool{true, true}) {
-		t.Fatalf("submit prompt-history-recorded flags = %+v, want true across retry", got)
 	}
 }
 

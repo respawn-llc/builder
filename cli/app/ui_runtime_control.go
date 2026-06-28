@@ -132,25 +132,9 @@ func (m *uiModel) appendRuntimeLocalEntryWithNoticeID(role, text, noticeID strin
 	return nil
 }
 
-type promptHistoryRecordedUserMessageSubmitter interface {
-	SubmitUserMessageWithPromptHistoryRecorded(ctx context.Context, text string) (clientui.UserTurnSubmission, error)
-}
-
-func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string, promptHistoryRecorded bool) (clientui.UserTurnSubmission, error) {
+func (m *uiModel) submitRuntimeUserMessage(ctx context.Context, text string) (clientui.UserTurnSubmission, error) {
 	if client := m.runtimeClient(); client != nil {
-		var (
-			submission clientui.UserTurnSubmission
-			err        error
-		)
-		if promptHistoryRecorded {
-			if submitter, ok := client.(promptHistoryRecordedUserMessageSubmitter); ok {
-				submission, err = submitter.SubmitUserMessageWithPromptHistoryRecorded(ctx, text)
-			} else {
-				submission, err = client.SubmitUserMessage(ctx, text)
-			}
-		} else {
-			submission, err = client.SubmitUserMessage(ctx, text)
-		}
+		submission, err := client.SubmitUserMessage(ctx, text)
 		m.observeRuntimeRequestResult(err)
 		return submission, err
 	}

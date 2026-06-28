@@ -82,10 +82,9 @@ type RuntimeShouldCompactBeforeUserMessageResponse struct {
 }
 
 type RuntimeSubmitUserTurnRequest struct {
-	ClientRequestID       string `json:"client_request_id"`
-	SessionID             string `json:"session_id"`
-	Text                  string `json:"text"`
-	PromptHistoryRecorded bool   `json:"prompt_history_recorded,omitempty"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Text            string `json:"text"`
 }
 
 type RuntimeSubmitUserTurnResponse struct {

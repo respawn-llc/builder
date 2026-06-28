@@ -184,15 +184,6 @@ func (c *sessionRuntimeClient) SubmitUserMessage(ctx context.Context, text strin
 	return userTurnSubmissionFromResponse(resp, text, requestID), err
 }
 
-func (c *sessionRuntimeClient) SubmitUserMessageWithPromptHistoryRecorded(ctx context.Context, text string) (clientui.UserTurnSubmission, error) {
-	var requestID string
-	resp, err := runtimeRequestCall(ctx, c, true, func(ctx context.Context, id string) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-		requestID = id
-		return c.controls.SubmitUserTurn(ctx, serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: id, SessionID: c.sessionID, Text: text, PromptHistoryRecorded: true})
-	})
-	return userTurnSubmissionFromResponse(resp, text, requestID), err
-}
-
 func userTurnSubmissionFromResponse(resp serverapi.RuntimeSubmitUserTurnResponse, text string, requestID string) clientui.UserTurnSubmission {
 	submission := clientui.UserTurnSubmission{Message: resp.Message}
 	if resp.Steered && strings.TrimSpace(resp.QueueItemID) != "" {

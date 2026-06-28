@@ -74,9 +74,8 @@ type sessionTextMemoRequest struct {
 }
 
 type turnSubmitMemoRequest struct {
-	SessionID             string
-	Text                  string
-	PromptHistoryRecorded bool
+	SessionID string
+	Text      string
 }
 
 type queuedUserMessageMemoRequest struct {
@@ -732,7 +731,7 @@ func sameSessionTextMemoRequest(a sessionTextMemoRequest, b sessionTextMemoReque
 }
 
 func sameTurnSubmitMemoRequest(a turnSubmitMemoRequest, b turnSubmitMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Text == b.Text && a.PromptHistoryRecorded == b.PromptHistoryRecorded
+	return a.SessionID == b.SessionID && a.Text == b.Text
 }
 
 func sameQueuedUserMessageMemoRequest(a queuedUserMessageMemoRequest, b queuedUserMessageMemoRequest) bool {

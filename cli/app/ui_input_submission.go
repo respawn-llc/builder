@@ -20,7 +20,7 @@ const (
 	preSubmitQueueFront
 )
 
-func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string, queuePosition preSubmitQueuePosition, queuedID string, promptHistoryRecorded bool) tea.Cmd {
+func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
 	m := c.model
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
 		return disconnectCmd
@@ -47,10 +47,7 @@ func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string
 	if isUserShell {
 		return tea.Batch(c.submitUserShellCmd(text, command), m.reconcileSpinnerTicking(false))
 	}
-	if m.hasRuntimeClient() {
-		return tea.Batch(c.submitCmd(text, queuedID, promptHistoryRecorded), m.reconcileSpinnerTicking(false))
-	}
-	return tea.Batch(c.submitCmd(text, queuedID, promptHistoryRecorded), m.reconcileSpinnerTicking(false))
+	return tea.Batch(c.submitCmd(text, queuedID), m.reconcileSpinnerTicking(false))
 }
 
 func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
@@ -59,14 +56,16 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 		return disconnectCmd
 	}
 	_, isUserShell := parseUserShellCommand(text)
-	if m.hasRuntimeClient() && !isUserShell {
+	var recordCmd tea.Cmd
+	if isUserShell {
 		m.rememberPromptHistoryLocally(text)
-		return c.startSubmissionWithPreSubmitQueuePosition(text, queuePosition, queuedID, false)
+	} else {
+		recordCmd = m.recordPromptHistory(text)
 	}
-	return sequenceCmds(m.recordPromptHistory(text), c.startSubmissionWithPreSubmitQueuePosition(text, queuePosition, queuedID, false))
+	return tea.Batch(recordCmd, c.startSubmissionWithPreSubmitQueuePosition(text, queuePosition, queuedID))
 }
 
-func (c uiInputController) submitCmd(text string, queuedID string, promptHistoryRecorded bool) tea.Cmd {
+func (c uiInputController) submitCmd(text string, queuedID string) tea.Cmd {
 	m := c.model
 	token := m.beginSubmitAttempt(text, queuedID)
 	client := m.runtimeClient()
@@ -74,7 +73,7 @@ func (c uiInputController) submitCmd(text string, queuedID string, promptHistory
 		if client == nil {
 			return newSubmitDoneMsg(token, "", text, errors.New("runtime engine is not configured"))
 		}
-		submission, err := m.submitRuntimeUserMessage(context.Background(), text, promptHistoryRecorded)
+		submission, err := m.submitRuntimeUserMessage(context.Background(), text)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return newSubmitDoneMsg(token, "", text, runtimeattach.ErrSubmissionInterrupted)

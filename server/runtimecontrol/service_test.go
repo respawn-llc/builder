@@ -809,88 +809,6 @@ func TestServiceSetSessionNameDedupesSuccessfulRetry(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitUserTurnRecordsPromptHistoryAndSubmits(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-
-	resp, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "req-1", "hello"))
-	if err != nil {
-		t.Fatalf("SubmitUserTurn: %v", err)
-	}
-	if resp.Message != "done" {
-		t.Fatalf("message = %q, want done", resp.Message)
-	}
-	if client.calls != 1 {
-		t.Fatalf("generate call count = %d, want 1", client.calls)
-	}
-	if got := countPromptHistoryEvents(t, store, "hello"); got != 1 {
-		t.Fatalf("prompt history count = %d, want 1", got)
-	}
-}
-
-func TestServiceSubmitUserTurnRecordsPromptHistoryWithUncancelledRunContext(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	history := service.promptStore.(*runtimeControlPromptHistoryStore)
-	cancelledRecordCtx := errors.New("record context was cancelled")
-	history.SetRecordContextError(cancelledRecordCtx)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	resp, err := service.SubmitUserTurn(ctx, runtimeControlUserTurnRequest(store, "req-uncancelled-history", "hello after cancel"))
-	if err != nil {
-		t.Fatalf("SubmitUserTurn: %v", err)
-	}
-	if resp.Message != "done" {
-		t.Fatalf("message = %q, want done", resp.Message)
-	}
-	if got := countPromptHistoryEvents(t, store, "hello after cancel"); got != 1 {
-		t.Fatalf("prompt history count = %d, want 1", got)
-	}
-}
-
-func TestServiceSubmitUserTurnSkipsPromptHistoryWhenAlreadyRecorded(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	req := runtimeControlUserTurnRequest(store, "req-1", "expanded hidden prompt")
-	req.PromptHistoryRecorded = true
-
-	resp, err := service.SubmitUserTurn(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SubmitUserTurn: %v", err)
-	}
-	if resp.Message != "done" {
-		t.Fatalf("response = %q, want done", resp.Message)
-	}
-	if got := countPromptHistoryEvents(t, store, "expanded hidden prompt"); got != 0 {
-		t.Fatalf("hidden expanded prompt history count = %d, want 0", got)
-	}
-	if got := countUserMessagesWithContent(t, store, "expanded hidden prompt"); got != 1 {
-		t.Fatalf("submitted user message count = %d, want 1", got)
-	}
-}
-
-func TestServiceSubmitUserTurnRejectsPromptHistoryRecordedMismatch(t *testing.T) {
-	client := finalResponseRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
-	first := runtimeControlUserTurnRequest(store, "req-1", "expanded hidden prompt")
-	first.PromptHistoryRecorded = true
-	if _, err := service.SubmitUserTurn(context.Background(), first); err != nil {
-		t.Fatalf("SubmitUserTurn first: %v", err)
-	}
-	second := first
-	second.PromptHistoryRecorded = false
-	if _, err := service.SubmitUserTurn(context.Background(), second); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
-		t.Fatalf("SubmitUserTurn mismatch error = %v, want request id payload mismatch", err)
-	}
-	if got := countPromptHistoryEvents(t, store, "expanded hidden prompt"); got != 0 {
-		t.Fatalf("hidden expanded prompt history count = %d, want 0", got)
-	}
-	if client.calls != 1 {
-		t.Fatalf("generate call count = %d, want 1", client.calls)
-	}
-}
-
 func TestServiceSubmitUserTurnDedupesSuccessfulRetry(t *testing.T) {
 	client := finalResponseRuntimeControlClient()
 	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
@@ -909,9 +827,6 @@ func TestServiceSubmitUserTurnDedupesSuccessfulRetry(t *testing.T) {
 	}
 	if client.calls != 1 {
 		t.Fatalf("generate call count = %d, want 1", client.calls)
-	}
-	if got := countPromptHistoryEvents(t, store, "hello"); got != 1 {
-		t.Fatalf("prompt history count = %d, want 1", got)
 	}
 }
 
