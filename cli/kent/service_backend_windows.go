@@ -11,10 +11,22 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
+)
+
+var (
+	wtsapi32DLL                    = windows.NewLazySystemDLL("wtsapi32.dll")
+	procWTSQuerySessionInformation = wtsapi32DLL.NewProc("WTSQuerySessionInformationW")
+	procWTSFreeMemory              = wtsapi32DLL.NewProc("WTSFreeMemory")
+)
+
+const (
+	wtsInfoUserName   = 5 // WTSUserName
+	wtsInfoDomainName = 7 // WTSDomainName
 )
 
 // scmServiceBackend registers the background server as a Windows Service Control
@@ -266,18 +278,9 @@ func openServiceWithAccess(access uint32) (*mgr.Service, func(), error) {
 	return service, cleanup, nil
 }
 
-// grantUserServiceAccess adds an ACE granting the installing user start/stop/query
-// on the service so lifecycle commands work without elevation.
+// grantUserServiceAccess adds an ACE granting the interactive user
+// start/stop/query on the service so lifecycle commands work without elevation.
 func grantUserServiceAccess(service *mgr.Service) error {
-	token, err := windows.OpenCurrentProcessToken()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = token.Close() }()
-	user, err := token.GetTokenUser()
-	if err != nil {
-		return err
-	}
 	descriptor, err := windows.GetSecurityInfo(service.Handle, windows.SE_SERVICE, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		return err
@@ -286,6 +289,22 @@ func grantUserServiceAccess(service *mgr.Service) error {
 	if err != nil {
 		return err
 	}
+	sid, err := interactiveUserSID()
+	if err != nil {
+		// Fall back to the elevated process's own user. For an admin-approval-mode
+		// UAC install (the common case) this is the same console user; only a
+		// credential-prompt install under a different admin loses the grant here.
+		token, terr := windows.OpenCurrentProcessToken()
+		if terr != nil {
+			return terr
+		}
+		defer func() { _ = token.Close() }()
+		user, uerr := token.GetTokenUser()
+		if uerr != nil {
+			return uerr
+		}
+		sid = user.User.Sid
+	}
 	entry := windows.EXPLICIT_ACCESS{
 		AccessPermissions: windows.SERVICE_START | windows.SERVICE_STOP | windows.SERVICE_QUERY_STATUS | windows.SERVICE_QUERY_CONFIG | windows.READ_CONTROL,
 		AccessMode:        windows.GRANT_ACCESS,
@@ -293,7 +312,7 @@ func grantUserServiceAccess(service *mgr.Service) error {
 		Trustee: windows.TRUSTEE{
 			TrusteeForm:  windows.TRUSTEE_IS_SID,
 			TrusteeType:  windows.TRUSTEE_IS_USER,
-			TrusteeValue: windows.TrusteeValueFromSID(user.User.Sid),
+			TrusteeValue: windows.TrusteeValueFromSID(sid),
 		},
 	}
 	merged, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{entry}, existing)
@@ -301,6 +320,53 @@ func grantUserServiceAccess(service *mgr.Service) error {
 		return err
 	}
 	return windows.SetSecurityInfo(service.Handle, windows.SE_SERVICE, windows.DACL_SECURITY_INFORMATION, nil, nil, merged, nil)
+}
+
+// interactiveUserSID resolves the SID of the user owning the active console
+// session, so a credential-prompt UAC install run under a different admin still
+// grants service lifecycle rights to the person who will run start/stop/status.
+func interactiveUserSID() (*windows.SID, error) {
+	session := windows.WTSGetActiveConsoleSessionId()
+	if session == 0xFFFFFFFF {
+		return nil, errors.New("no active console session")
+	}
+	user, err := wtsSessionString(session, wtsInfoUserName)
+	if err != nil {
+		return nil, err
+	}
+	if user == "" {
+		return nil, errors.New("active console session has no user")
+	}
+	domain, err := wtsSessionString(session, wtsInfoDomainName)
+	if err != nil {
+		return nil, err
+	}
+	account := user
+	if domain != "" {
+		account = domain + `\` + user
+	}
+	sid, _, _, err := windows.LookupSID("", account)
+	if err != nil {
+		return nil, fmt.Errorf("resolve interactive user %q: %w", account, err)
+	}
+	return sid, nil
+}
+
+func wtsSessionString(session uint32, infoClass uint32) (string, error) {
+	var buffer *uint16
+	var bytesReturned uint32
+	ret, _, callErr := procWTSQuerySessionInformation.Call(
+		0, // WTS_CURRENT_SERVER_HANDLE
+		uintptr(session),
+		uintptr(infoClass),
+		uintptr(unsafe.Pointer(&buffer)),
+		uintptr(unsafe.Pointer(&bytesReturned)),
+	)
+	if ret == 0 {
+		return "", fmt.Errorf("WTSQuerySessionInformation: %w", callErr)
+	}
+	defer procWTSFreeMemory.Call(uintptr(unsafe.Pointer(buffer)))
+	return windows.UTF16PtrToString(buffer), nil
 }
 
 func waitForServiceState(service *mgr.Service, state svc.State, timeout time.Duration) error {

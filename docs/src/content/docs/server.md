@@ -52,7 +52,6 @@ On Windows the background service is a real Service Control Manager service that
 - `status` / `start` / `stop` / `restart` run without elevation — install grants your account start/stop rights on the service.
 - `stop` (and a service restart or system shutdown) shuts the server down gracefully — the supervisor signals it to exit cleanly, exactly as `Ctrl+C` would, and only force-kills it if it does not exit within the stop window.
 - Installing or uninstalling also removes any leftover registration from older Kent versions (the previous logon scheduled task and Startup-folder launcher), which is what caused stray console windows.
-- **Upgrading from an older Kent is a one-time migration**: updating the binary alone keeps the old scheduled-task registration. Run `kent service install` once to switch to the SCM service — it removes the legacy registration automatically.
 
 
 Linux headless machines may need lingering enabled so the server survives logout:

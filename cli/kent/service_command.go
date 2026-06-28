@@ -183,6 +183,14 @@ func serviceRestartSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
 		return code
 	}
+	// `restart --if-installed` rewrites the registration (reinstall), which needs
+	// Administrator on Windows; plain restart only stops/starts via the granted
+	// DACL and stays unprivileged. Elevate just the reinstall path.
+	if *ifInstalled {
+		if code, handled := elevateServiceAction(serviceActionRestart); handled {
+			return code
+		}
+	}
 	return runServiceCommandAction(context.Background(), serviceActionRestart, serviceCommandOptions{IfInstalled: *ifInstalled}, stdout, stderr)
 }
 

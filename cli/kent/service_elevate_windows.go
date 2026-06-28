@@ -6,6 +6,7 @@ import (
 	brand "core/shared/config"
 	"fmt"
 	"os"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -49,7 +50,9 @@ type shellExecuteInfo struct {
 // action needs no elevation). Start/stop/restart/status are never elevated: the
 // install grants the user a service DACL so they run unprivileged.
 func elevateServiceAction(action serviceAction) (int, bool) {
-	if action != serviceActionInstall && action != serviceActionUninstall {
+	switch action {
+	case serviceActionInstall, serviceActionUninstall, serviceActionRestart:
+	default:
 		return 0, false
 	}
 	if windows.GetCurrentProcessToken().IsElevated() {
@@ -70,7 +73,7 @@ func elevateServiceAction(action serviceAction) (int, bool) {
 		fmt.Fprintln(os.Stderr, err)
 		return 1, true
 	}
-	paramsPtr, err := windows.UTF16PtrFromString(windows.ComposeCommandLine(os.Args[1:]))
+	paramsPtr, err := windows.UTF16PtrFromString(windows.ComposeCommandLine(elevatedServiceParams()))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1, true
@@ -103,4 +106,20 @@ func elevateServiceAction(action serviceAction) (int, bool) {
 		return 1, true
 	}
 	return int(code), true
+}
+
+// elevatedServiceParams forwards this invocation's arguments to the elevated
+// child, pinning the persistence root to the absolute value resolved for the
+// current interactive user. UAC may run the child under a different administrator
+// whose default root differs, and the elevated process does not inherit this
+// process's environment, so without an explicit root the registered service
+// would point at the wrong profile. The appended flag wins via last-flag-wins
+// parsing, so any relative or omitted root is overridden.
+func elevatedServiceParams() []string {
+	args := os.Args[1:]
+	cfg, err := brand.LoadGlobal(brand.LoadOptions{})
+	if err != nil || strings.TrimSpace(cfg.PersistenceRoot) == "" {
+		return args
+	}
+	return append(append([]string{}, args...), "--persistence-root", cfg.PersistenceRoot)
 }
