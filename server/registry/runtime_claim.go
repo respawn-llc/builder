@@ -70,11 +70,21 @@ func (r *RuntimeRegistry) ClaimFreshRuntime(ctx context.Context, sessionID strin
 				return nil, err
 			}
 		}
-		if eng := existing.engineRef(); eng != nil {
-			eng.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
+		eng := existing.engineRef()
+		failQueued := func(context.Context) error {
+			if eng != nil {
+				eng.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
+			}
+			return nil
 		}
-		if _, err := r.closeEntry(ctx, id, existing.engineRef(), nil); err != nil {
+		closed, err := r.closeEntry(ctx, id, eng, failQueued)
+		if err != nil {
 			return nil, err
+		}
+		if !closed {
+			if err := existing.awaitClosed(ctx); err != nil {
+				return nil, err
+			}
 		}
 	}
 }

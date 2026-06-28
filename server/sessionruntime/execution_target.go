@@ -49,6 +49,14 @@ func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, tar
 	return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
 }
 
+func (s *Service) ClearWorktreeReminder(ctx context.Context, sessionID string) error {
+	store, err := s.resolveStore(ctx, strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	return store.SetWorktreeReminderState(nil)
+}
+
 func (s *Service) persistWorktreeReminderState(ctx context.Context, sessionID string, reminder *session.WorktreeReminderState) error {
 	if reminder == nil {
 		return nil

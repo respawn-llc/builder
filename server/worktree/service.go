@@ -30,6 +30,7 @@ const rollbackSessionTargetTimeout = 5 * time.Second
 
 type runtimeController interface {
 	SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error
+	ClearWorktreeReminder(ctx context.Context, sessionID string) error
 	HasActiveRun(ctx context.Context, sessionID string) (bool, error)
 }
 

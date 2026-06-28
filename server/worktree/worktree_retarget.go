@@ -133,6 +133,9 @@ func (s *Service) rollbackRetargetedSessions(ctx context.Context, workspaceID st
 			cancel()
 			continue
 		}
+		if err := s.runtime.ClearWorktreeReminder(rollbackCtx, sessionID); err != nil {
+			collected = append(collected, fmt.Errorf("rollback session %q worktree reminder: %w", sessionID, err))
+		}
 		if s.active != nil && s.active.IsSessionRuntimeActive(sessionID) {
 			if err := s.runtime.SyncExecutionTarget(rollbackCtx, sessionID, item.previousTarget, nil); err != nil {
 				collected = append(collected, fmt.Errorf("rollback session %q runtime target: %w", sessionID, err))
@@ -212,6 +215,7 @@ func (s *Service) rollbackSessionTarget(ctx context.Context, workspaceCtx sessio
 	rollbackCtx, cancel := liveRollbackContext(ctx)
 	defer cancel()
 	_ = s.metadata.UpdateSessionExecutionTargetByID(rollbackCtx, workspaceCtx.sessionID, workspaceCtx.workspaceID, previousTarget.WorktreeID, previousTarget.CwdRelpath)
+	_ = s.runtime.ClearWorktreeReminder(rollbackCtx, workspaceCtx.sessionID)
 	if strings.TrimSpace(previousTarget.EffectiveWorkdir) != "" {
 		_ = s.runtime.SyncExecutionTarget(rollbackCtx, workspaceCtx.sessionID, previousTarget, nil)
 	}

@@ -20,16 +20,17 @@ import (
 )
 
 type serviceTestRuntime struct {
-	mu              sync.Mutex
-	rebindCalls     []serviceRuntimeCall
-	reminderCalls   []session.WorktreeReminderState
-	activeSessions  map[string]bool
-	runningSessions map[string]bool
-	syncErrSessions map[string]error
-	blockedRuns     map[string]int
-	rebindErr       error
-	rebindErrRoot   string
-	rebindHook      func(context.Context, string, string, string)
+	mu                    sync.Mutex
+	rebindCalls           []serviceRuntimeCall
+	reminderCalls         []session.WorktreeReminderState
+	clearReminderSessions []string
+	activeSessions        map[string]bool
+	runningSessions       map[string]bool
+	syncErrSessions       map[string]error
+	blockedRuns           map[string]int
+	rebindErr             error
+	rebindErrRoot         string
+	rebindHook            func(context.Context, string, string, string)
 }
 
 type serviceRuntimeCall struct {
@@ -62,6 +63,13 @@ func (r *serviceTestRuntime) SyncExecutionTarget(ctx context.Context, sessionID 
 	if r.rebindErr != nil && (strings.TrimSpace(r.rebindErrRoot) == "" || strings.TrimSpace(r.rebindErrRoot) == root) {
 		return r.rebindErr
 	}
+	return nil
+}
+
+func (r *serviceTestRuntime) ClearWorktreeReminder(_ context.Context, sessionID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.clearReminderSessions = append(r.clearReminderSessions, strings.TrimSpace(sessionID))
 	return nil
 }
 

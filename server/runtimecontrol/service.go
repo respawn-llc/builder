@@ -638,7 +638,7 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current, false)}
 					return nil
 				}
-				if current != nil && strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) {
+				if strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) {
 					goal, queued, qErr := engine.QueueAgentShellCompleteGoal(session.GoalActor(req.Actor))
 					if qErr != nil {
 						return qErr
