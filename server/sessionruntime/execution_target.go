@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"core/server/registry"
-	"core/server/runtime"
 	"core/server/session"
 	"core/shared/clientui"
 )
@@ -29,24 +28,32 @@ func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, tar
 		}
 		normalizedReminder = &normalized
 	}
-	claim, err := s.activeRuntimeClaim(ctx, trimmedSessionID)
-	if err != nil {
-		return err
-	}
-	if claim != nil {
-		if err := s.WithRuntimeEngine(ctx, trimmedSessionID, func(engine *runtime.Engine) error {
-			return engine.RunWhenIdle(ctx, func() error {
-				current := s.runtimes.RuntimeClaimFor(trimmedSessionID)
-				if current == nil || !current.IsCurrent() {
-					return errors.Join(ErrAcquiredRuntimeOvertaken, fmt.Errorf("session %q runtime was replaced during execution target sync", trimmedSessionID))
-				}
-				return current.Rebind(trimmedWorkdir)
-			})
-		}); err != nil {
+	for {
+		claim, err := s.activeRuntimeClaim(ctx, trimmedSessionID)
+		if err != nil {
 			return err
 		}
+		if claim == nil {
+			return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
+		}
+		engine := claim.Engine()
+		if engine == nil {
+			return runtimeUnavailableErr(trimmedSessionID)
+		}
+		err = engine.RunWhenIdleBeforeQueuedUserWork(ctx, func() error {
+			if !claim.IsCurrent() {
+				return errors.Join(ErrAcquiredRuntimeOvertaken, fmt.Errorf("session %q runtime was replaced during execution target sync", trimmedSessionID))
+			}
+			return claim.Rebind(trimmedWorkdir)
+		})
+		if errors.Is(err, ErrAcquiredRuntimeOvertaken) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
 	}
-	return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
 }
 
 func (s *Service) ClearWorktreeReminder(ctx context.Context, sessionID string) error {

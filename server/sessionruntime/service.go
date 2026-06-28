@@ -154,6 +154,25 @@ func (s *Service) RunOnAcquiredRuntime(ctx context.Context, sessionID string, en
 	if s.runtimes == nil {
 		return ErrAcquiredRuntimeOvertaken
 	}
+	acquired, err := s.runtimes.WithAcquiredRuntime(ctx, strings.TrimSpace(sessionID), engine, func(runCtx context.Context, guardedEngine *runtime.Engine) error {
+		return fn(runCtx)
+	})
+	if err != nil {
+		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+			return ErrAcquiredRuntimeOvertaken
+		}
+		return err
+	}
+	if !acquired {
+		return ErrAcquiredRuntimeOvertaken
+	}
+	return nil
+}
+
+func (s *Service) runOnAcquiredRuntimeWithClosedSignal(ctx context.Context, sessionID string, engine *runtime.Engine, fn func(context.Context) error) error {
+	if s.runtimes == nil {
+		return ErrAcquiredRuntimeOvertaken
+	}
 	closed, ok := s.runtimes.AcquiredRuntimeClosed(strings.TrimSpace(sessionID), engine)
 	if !ok {
 		return ErrAcquiredRuntimeOvertaken

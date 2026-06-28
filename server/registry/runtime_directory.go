@@ -2,12 +2,14 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
 	"core/server/runtime"
 	askquestion "core/server/tools"
+	"core/shared/serverapi"
 )
 
 type runtimeDirectory struct {
@@ -318,7 +320,7 @@ func (d *runtimeDirectory) BeginGuard(ctx context.Context, sessionID string) (*r
 	entry := d.entries[id]
 	d.mu.RUnlock()
 	if entry == nil {
-		return nil, fmt.Errorf("runtime %q is unavailable", id)
+		return nil, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("runtime %q is unavailable", id))
 	}
 	if _, err := entry.awaitReady(ctx); err != nil {
 		return nil, err
@@ -333,7 +335,7 @@ func (e *runtimeEntry) beginGuard(ctx context.Context, sessionID string) (*runti
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closing {
-		return nil, fmt.Errorf("runtime entry is closing")
+		return nil, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("runtime entry is closing"))
 	}
 	e.inFlight++
 	return &runtimeGuard{entry: e, engine: e.engine, sessionID: strings.TrimSpace(sessionID), generation: e.generation}, nil

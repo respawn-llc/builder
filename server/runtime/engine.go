@@ -169,6 +169,7 @@ type Engine struct {
 	// pending steering/user injections once a busy run releases.
 	queuedUserWorkMu           sync.Mutex
 	queuedUserWorkScheduled    bool
+	queuedUserWorkPauseCount   int
 	queuedUserWorkAutoDrainIDs map[string]struct{}
 	activeStepGoalMutationsMu  sync.Mutex
 	activeStepGoalMutations    map[string][]activeStepGoalMutation

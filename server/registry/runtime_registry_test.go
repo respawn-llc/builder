@@ -882,3 +882,57 @@ func TestRuntimeRegistryBlockSessionRunsWaitsForInFlightStart(t *testing.T) {
 		t.Fatal("BlockSessionRuns must return once the in-flight start drains")
 	}
 }
+
+func TestRuntimeRegistryBlockSessionRunsWaitsForAllInFlightStarts(t *testing.T) {
+	r := NewRuntimeRegistry()
+	releaseFirst, ok := r.BeginSessionRun("s1")
+	if !ok {
+		t.Fatal("first BeginSessionRun should succeed")
+	}
+	releaseSecond, ok := r.BeginSessionRun("s1")
+	if !ok {
+		t.Fatal("second BeginSessionRun should succeed")
+	}
+	blocked := make(chan func(), 1)
+	go func() {
+		blocked <- r.BlockSessionRuns([]string{"s1"})
+	}()
+	deadline := time.After(time.Second)
+	for !r.SessionRunsBlocked("s1") {
+		select {
+		case <-deadline:
+			t.Fatal("BlockSessionRuns never registered the block")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	releaseFirst()
+	select {
+	case <-blocked:
+		t.Fatal("BlockSessionRuns must wait for the second in-flight start after the first release")
+	default:
+	}
+	releaseSecond()
+	select {
+	case release := <-blocked:
+		release()
+	case <-time.After(time.Second):
+		t.Fatal("BlockSessionRuns must return after every in-flight start drains")
+	}
+}
+
+func TestRuntimeRegistryExclusiveStartRejectsNormalStartsUntilReleased(t *testing.T) {
+	r := NewRuntimeRegistry()
+	releaseExclusive, acquired, blocked := r.BeginExclusiveSessionRun("s1")
+	if !acquired || blocked {
+		t.Fatalf("BeginExclusiveSessionRun = acquired %t blocked %t, want acquired", acquired, blocked)
+	}
+	if _, ok := r.BeginSessionRun("s1"); ok {
+		t.Fatal("normal start must be rejected while exclusive start is reserved")
+	}
+	releaseExclusive()
+	releaseNormal, ok := r.BeginSessionRun("s1")
+	if !ok {
+		t.Fatal("normal start should succeed after exclusive reservation release")
+	}
+	releaseNormal()
+}

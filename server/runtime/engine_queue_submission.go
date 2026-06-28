@@ -32,6 +32,15 @@ func (e *Engine) RunWhenIdle(ctx context.Context, fn func() error) error {
 	}
 }
 
+func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	e.pauseQueuedUserAutoDrain()
+	defer e.resumeQueuedUserAutoDrain()
+	return e.RunWhenIdle(ctx, fn)
+}
+
 // SubmitQueuedUserMessages starts a fresh step from already-queued injected user
 // messages or background notices. This is used when a non-turn busy operation
 // (for example manual compaction) completes while queued steering is waiting.
@@ -44,6 +53,11 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 	for {
 		if e.failQueuedUserWorkIfTerminal() {
 			return llm.Message{}, nil
+		}
+		if len(queueItemIDs) > 0 {
+			if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
+				return llm.Message{}, err
+			}
 		}
 		err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, PersistRunLifecycle: true}, func(stepCtx context.Context, stepID string) error {
 			if e.failQueuedUserWorkIfTerminal() {
@@ -70,6 +84,37 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 		select {
 		case <-ctx.Done():
 			return llm.Message{}, ctx.Err()
+		case <-time.After(queuedUserSubmissionBusyRetryDelay):
+		}
+	}
+}
+
+func (e *Engine) pauseQueuedUserAutoDrain() {
+	e.queuedUserWorkMu.Lock()
+	e.queuedUserWorkPauseCount++
+	e.queuedUserWorkMu.Unlock()
+}
+
+func (e *Engine) resumeQueuedUserAutoDrain() {
+	e.queuedUserWorkMu.Lock()
+	if e.queuedUserWorkPauseCount > 0 {
+		e.queuedUserWorkPauseCount--
+	}
+	e.queuedUserWorkMu.Unlock()
+	e.scheduleQueuedUserInjectionsIfIdle()
+}
+
+func (e *Engine) waitQueuedUserAutoDrainAllowed(ctx context.Context) error {
+	for {
+		e.queuedUserWorkMu.Lock()
+		paused := e.queuedUserWorkPauseCount > 0
+		e.queuedUserWorkMu.Unlock()
+		if !paused {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-time.After(queuedUserSubmissionBusyRetryDelay):
 		}
 	}

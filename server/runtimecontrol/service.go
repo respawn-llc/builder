@@ -166,10 +166,13 @@ func (s *Service) withRuntimeAccess(ctx context.Context, sessionID string, fn fu
 	}
 	trimmedSessionID := strings.TrimSpace(sessionID)
 	acquired, err := s.runtimes.WithGuardedRuntime(ctx, trimmedSessionID, fn)
+	if err != nil {
+		return err
+	}
 	if !acquired {
 		return errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("runtime for session %q is unavailable", trimmedSessionID))
 	}
-	return err
+	return nil
 }
 
 func (s *Service) beginRunStart(sessionID string) (func(), error) {
@@ -312,17 +315,15 @@ func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.Runtim
 	visibility := transcript.NormalizeEntryVisibility(transcript.EntryVisibility(req.Visibility))
 	memoReq := localEntryMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Role: strings.TrimSpace(req.Role), Text: req.Text, Visibility: visibility, NoticeID: strings.TrimSpace(req.NoticeID)}
 	_, err := s.localEntries.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLocalEntryMemoRequest, func(ctx context.Context) (struct{}, error) {
-		engine, err := s.resolve(ctx, req.SessionID)
-		if err != nil {
-			return struct{}{}, err
-		}
-		if visibility == transcript.EntryVisibilityAuto && strings.TrimSpace(req.NoticeID) != "" {
-			return struct{}{}, engine.AppendCommittedEntryWithNoticeID(req.Role, req.Text, req.NoticeID)
-		}
-		if visibility == transcript.EntryVisibilityAuto {
-			return struct{}{}, engine.AppendCommittedEntry(req.Role, req.Text)
-		}
-		return struct{}{}, engine.AppendCommittedEntryWithVisibility(req.Role, req.Text, visibility)
+		return struct{}{}, s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+			if visibility == transcript.EntryVisibilityAuto && strings.TrimSpace(req.NoticeID) != "" {
+				return engine.AppendCommittedEntryWithNoticeID(req.Role, req.Text, req.NoticeID)
+			}
+			if visibility == transcript.EntryVisibilityAuto {
+				return engine.AppendCommittedEntry(req.Role, req.Text)
+			}
+			return engine.AppendCommittedEntryWithVisibility(req.Role, req.Text, visibility)
+		})
 	})
 	return err
 }
@@ -340,11 +341,9 @@ func (s *Service) AppendSessionEntry(ctx context.Context, sessionID string, role
 	if trimmedText == "" {
 		return fmt.Errorf("text is required")
 	}
-	engine, err := s.resolve(ctx, trimmedSessionID)
-	if err != nil {
-		return err
-	}
-	return engine.AppendCommittedEntry(trimmedRole, trimmedText)
+	return s.withRuntimeAccess(ctx, trimmedSessionID, func(engine *runtime.Engine) error {
+		return engine.AppendCommittedEntry(trimmedRole, trimmedText)
+	})
 }
 
 func (s *Service) ShouldCompactBeforeUserMessage(ctx context.Context, req serverapi.RuntimeShouldCompactBeforeUserMessageRequest) (serverapi.RuntimeShouldCompactBeforeUserMessageResponse, error) {
@@ -366,13 +365,13 @@ func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.Runt
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	release, err := s.beginRunStart(req.SessionID)
-	if err != nil {
-		return err
-	}
-	defer release()
 	memoReq := sessionCommandMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Command: req.Command}
-	_, err = s.shells.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionCommandMemoRequest, func(ctx context.Context) (struct{}, error) {
+	_, err := s.shells.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionCommandMemoRequest, func(ctx context.Context) (struct{}, error) {
+		release, err := s.beginRunStart(req.SessionID)
+		if err != nil {
+			return struct{}{}, err
+		}
+		defer release()
 		runCtx := context.Background()
 		if ctx != nil {
 			runCtx = context.WithoutCancel(ctx)
@@ -391,6 +390,11 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Args}
 	_, err := s.compactions.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, error) {
+		release, err := s.beginRunStart(req.SessionID)
+		if err != nil {
+			return struct{}{}, err
+		}
+		defer release()
 		runCtx := context.Background()
 		if ctx != nil {
 			runCtx = context.WithoutCancel(ctx)
@@ -408,6 +412,11 @@ func (s *Service) CompactContextForPreSubmit(ctx context.Context, req serverapi.
 	}
 	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(req.SessionID)}
 	_, err := s.preSubmitCompactions.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool { return a.SessionID == b.SessionID }, func(ctx context.Context) (struct{}, error) {
+		release, err := s.beginRunStart(req.SessionID)
+		if err != nil {
+			return struct{}{}, err
+		}
+		defer release()
 		runCtx := context.Background()
 		if ctx != nil {
 			runCtx = context.WithoutCancel(ctx)
@@ -434,19 +443,19 @@ func (s *Service) SubmitQueuedUserMessages(ctx context.Context, req serverapi.Ru
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, err
 	}
-	release, err := s.beginRunStart(req.SessionID)
-	if err != nil {
-		return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, err
-	}
-	defer release()
 	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(req.SessionID)}
 	return s.queuedSubmits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool { return a.SessionID == b.SessionID }, func(ctx context.Context) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
+		release, err := s.beginRunStart(req.SessionID)
+		if err != nil {
+			return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, err
+		}
+		defer release()
 		runCtx := context.Background()
 		if ctx != nil {
 			runCtx = context.WithoutCancel(ctx)
 		}
 		var resp serverapi.RuntimeSubmitQueuedUserMessagesResponse
-		err := s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+		err = s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
 			msg, err := engine.SubmitQueuedUserMessages(runCtx)
 			resp = serverapi.RuntimeSubmitQueuedUserMessagesResponse{Message: msg.Content}
 			return err

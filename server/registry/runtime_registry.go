@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -29,8 +30,12 @@ type RuntimeRegistry struct {
 	runStateCond    *sync.Cond
 	runningSessions map[string]bool
 	blockedRuns     map[string]int
-	inFlightStarts  map[string]int
-	exclusiveStarts map[string]int
+	starts          map[string]map[uint64]runStartReservation
+	nextStartID     uint64
+}
+
+type runStartReservation struct {
+	exclusive bool
 }
 
 func (r *RuntimeRegistry) BlockSessionRuns(sessionIDs []string) func() {
@@ -70,7 +75,7 @@ func (r *RuntimeRegistry) BlockSessionRuns(sessionIDs []string) func() {
 
 func (r *RuntimeRegistry) anyInFlightStartLocked(sessionIDs []string) bool {
 	for _, sessionID := range sessionIDs {
-		if r.inFlightStarts[sessionID] > 0 {
+		if len(r.starts[sessionID]) > 0 {
 			return true
 		}
 	}
@@ -99,18 +104,18 @@ func (r *RuntimeRegistry) BeginSessionRun(sessionID string) (func(), bool) {
 		return func() {}, true
 	}
 	r.runStateMu.Lock()
-	if r.blockedRuns[trimmed] > 0 || r.exclusiveStarts[trimmed] > 0 {
+	if r.blockedRuns[trimmed] > 0 || r.hasExclusiveStartLocked(trimmed) {
 		r.runStateMu.Unlock()
 		return nil, false
 	}
-	r.inFlightStarts[trimmed]++
+	startID := r.addStartLocked(trimmed, false)
 	r.runStateMu.Unlock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			r.runStateMu.Lock()
 			defer r.runStateMu.Unlock()
-			r.clearInFlightStartLocked(trimmed)
+			r.clearStartLocked(trimmed, startID)
 		})
 	}, true
 }
@@ -128,39 +133,47 @@ func (r *RuntimeRegistry) BeginExclusiveSessionRun(sessionID string) (release fu
 		r.runStateMu.Unlock()
 		return nil, false, true
 	}
-	if r.inFlightStarts[trimmed] > 0 {
+	if len(r.starts[trimmed]) > 0 {
 		r.runStateMu.Unlock()
 		return nil, false, false
 	}
-	r.inFlightStarts[trimmed]++
-	r.exclusiveStarts[trimmed]++
+	startID := r.addStartLocked(trimmed, true)
 	r.runStateMu.Unlock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			r.runStateMu.Lock()
 			defer r.runStateMu.Unlock()
-			r.clearExclusiveStartLocked(trimmed)
-			r.clearInFlightStartLocked(trimmed)
+			r.clearStartLocked(trimmed, startID)
 		})
 	}, true, false
 }
 
-func (r *RuntimeRegistry) clearInFlightStartLocked(sessionID string) {
-	if r.inFlightStarts[sessionID] <= 1 {
-		delete(r.inFlightStarts, sessionID)
-	} else {
-		r.inFlightStarts[sessionID]--
+func (r *RuntimeRegistry) addStartLocked(sessionID string, exclusive bool) uint64 {
+	r.nextStartID++
+	startID := r.nextStartID
+	if r.starts[sessionID] == nil {
+		r.starts[sessionID] = make(map[uint64]runStartReservation)
+	}
+	r.starts[sessionID][startID] = runStartReservation{exclusive: exclusive}
+	return startID
+}
+
+func (r *RuntimeRegistry) clearStartLocked(sessionID string, startID uint64) {
+	delete(r.starts[sessionID], startID)
+	if len(r.starts[sessionID]) == 0 {
+		delete(r.starts, sessionID)
 	}
 	r.runStateCond.Broadcast()
 }
 
-func (r *RuntimeRegistry) clearExclusiveStartLocked(sessionID string) {
-	if r.exclusiveStarts[sessionID] <= 1 {
-		delete(r.exclusiveStarts, sessionID)
-	} else {
-		r.exclusiveStarts[sessionID]--
+func (r *RuntimeRegistry) hasExclusiveStartLocked(sessionID string) bool {
+	for _, reservation := range r.starts[sessionID] {
+		if reservation.exclusive {
+			return true
+		}
 	}
+	return false
 }
 
 type GuardedPromptResponder interface {
@@ -179,8 +192,7 @@ func NewRuntimeRegistry() *RuntimeRegistry {
 		directory:       newRuntimeDirectory(),
 		runningSessions: make(map[string]bool),
 		blockedRuns:     make(map[string]int),
-		inFlightStarts:  make(map[string]int),
-		exclusiveStarts: make(map[string]int),
+		starts:          make(map[string]map[uint64]runStartReservation),
 	}
 	r.runStateCond = sync.NewCond(&r.runStateMu)
 	return r
@@ -255,10 +267,28 @@ func (r *RuntimeRegistry) WithGuardedRuntime(ctx context.Context, sessionID stri
 	}
 	guard, err := r.directory.BeginGuard(ctx, sessionID)
 	if err != nil {
-		return false, nil
+		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+			return false, nil
+		}
+		return false, err
 	}
 	defer guard.Release()
 	return true, fn(guard.Engine())
+}
+
+func (r *RuntimeRegistry) WithAcquiredRuntime(ctx context.Context, sessionID string, engine *runtime.Engine, fn func(context.Context, *runtime.Engine) error) (bool, error) {
+	if r == nil {
+		return false, nil
+	}
+	guard, err := r.directory.BeginGuard(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	defer guard.Release()
+	if guard.Engine() != engine {
+		return false, nil
+	}
+	return true, fn(ctx, guard.Engine())
 }
 
 func (r *RuntimeRegistry) IsSessionRuntimeActive(sessionID string) bool {
@@ -461,16 +491,12 @@ func (r *RuntimeRegistry) SubmitPromptResponse(sessionID string, resp askquestio
 		return fmt.Errorf("runtime registry is required")
 	}
 	id := strings.TrimSpace(sessionID)
-	entry := r.directory.Entry(id)
-	if entry == nil {
-		return fmt.Errorf("runtime %q is unavailable", id)
+	guard, guardErr := r.directory.BeginGuard(context.Background(), id)
+	if guardErr != nil {
+		return guardErr
 	}
-	if entry.isClosing() {
-		return fmt.Errorf("runtime %q is closing", id)
-	}
-	return entry.pendingPrompts.Submit(resp, err, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
-		entry.PublishPendingPrompt(id, snapshot, eventType)
-	})
+	defer guard.Release()
+	return guard.SubmitPromptResponse(resp, err)
 }
 
 func (r *RuntimeRegistry) sessionRunning(sessionID string) bool {
@@ -543,8 +569,6 @@ func (r *RuntimeRegistry) updateAggregateRunState(sessionID string, running bool
 	wasActive := len(r.runningSessions) > 0
 	if running {
 		r.runningSessions[id] = true
-		delete(r.inFlightStarts, id)
-		r.runStateCond.Broadcast()
 	} else {
 		delete(r.runningSessions, id)
 	}

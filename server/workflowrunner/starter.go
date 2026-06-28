@@ -746,7 +746,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 			Close:       func() { _ = wiring.Close() },
 		}, nil
 	}
-	releaseRuntime, err := s.sessionRuntime.RecreateRuntime(ctx, sessionID, ownerID, build)
+	releaseRuntime, err := s.sessionRuntime.RecreateRuntimeRejectingActiveRun(ctx, sessionID, ownerID, build)
 	if err != nil {
 		reason := ReasonRuntimeFailed
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {

@@ -288,7 +288,11 @@ func (c *RuntimeClaim) Close(ctx context.Context, drain func(context.Context) er
 	if c == nil {
 		return false, nil
 	}
-	return c.registry.closeEntry(ctx, c.id, c.entry.engineRef(), drain)
+	drainRef, ok := c.beginClose()
+	if !ok {
+		return false, nil
+	}
+	return c.registry.finishClose(ctx, c.id, c.entry.engineRef(), c.entry, drainRef, drain)
 }
 
 func (c *RuntimeClaim) CloseIfIdle(ctx context.Context, expectedRefs int, drain func(context.Context) error) (bool, error) {
@@ -313,6 +317,26 @@ func (c *RuntimeClaim) beginIdleClose(expectedRefs int) (*runtimeCloseDrainRef, 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closing || e.closeDraining || e.ownerRefs != expectedRefs {
+		return nil, false
+	}
+	e.closing = true
+	e.closeDraining = true
+	e.inFlight++
+	e.cond.Broadcast()
+	return &runtimeCloseDrainRef{entry: e}, true
+}
+
+func (c *RuntimeClaim) beginClose() (*runtimeCloseDrainRef, bool) {
+	d := c.registry.directory
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.entries[c.id] != c.entry {
+		return nil, false
+	}
+	e := c.entry
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closing || e.closeDraining {
 		return nil, false
 	}
 	e.closing = true
