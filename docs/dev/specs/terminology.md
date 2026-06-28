@@ -240,7 +240,7 @@ The single shared live runtime (engine) a session registers while active. There 
 
 ### Equal Full-Control Attach
 
-Every client attached to a session is an equal, full-control surface over the shared runtime. There is no ownership, no leases, no controller/limited-control distinction, no read-only attach, and no per-operation gating: any client may chat, steer, interrupt, run shell commands, toggle settings, manage the goal, compact, and manage worktrees. Concurrent submissions to a busy runtime are steered/queued into the in-flight step rather than rejected. The server owns runtime orchestration only (the single shared engine, safe-point application, and persistence), not client authorization. While a workflow or headless run is in flight, interactive chat and steering remain available; the only behavioral limit is that the model cannot submit a structured-output final answer that is invalid for the active node. When no active runtime is reachable for an attach, the failure surfaces as the typed runtime-unavailable error.
+Every client attached to a session is an equal, full-control surface over the shared runtime: there is no ownership, no leases, no controller/limited-control distinction, no read-only attach, and no per-operation gating. The server owns runtime orchestration only (the single shared engine, safe-point application, and persistence), not client authorization.
 
 ### Goal
 
