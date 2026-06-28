@@ -19,25 +19,29 @@ import (
 )
 
 const (
-	nativeScrollbackBufferName        = "NativeScrollbackBuffer"
-	nativeScrollbackBufferPackagePath = "core/cli/tui/scrollback"
-	ongoingScrollbackBufferImplName   = "OngoingScrollbackBufferImpl"
+	nativeOngoingSurfaceName        = "NativeOngoingSurface"
+	nativeOngoingSurfacePackagePath = "core/cli/tui/scrollback"
+	ongoingScrollbackBufferImplName = "OngoingScrollbackBufferImpl"
 )
 
-var nativeScrollbackBufferMethods = map[string]struct{}{
+var nativeOngoingSurfaceMethods = map[string]struct{}{
 	"Steer":                          {},
 	"StreamMarkdownAssistantContent": {},
 	"FinishAssistantStreaming":       {},
+	"RenderLive":                     {},
+	"AssistantStreaming":             {},
+	"AssistantStreamTailLines":       {},
+	"FlushHoldoff":                   {},
 }
 
-func TestNativeScrollbackBufferInterfaceShape(t *testing.T) {
+func TestNativeOngoingSurfaceInterfaceShape(t *testing.T) {
 	repoRoot := repositoryRoot(t)
-	methodNames := nativeScrollbackBufferMethodNames(t, repoRoot)
+	methodNames := nativeOngoingSurfaceMethodNames(t, repoRoot)
 
 	assertExactMethodNameSet(t, methodNames)
 }
 
-func TestOngoingScrollbackBufferImplExportsOnlyNativeScrollbackBufferMethods(t *testing.T) {
+func TestOngoingScrollbackBufferImplExportsOnlyNativeOngoingSurfaceMethods(t *testing.T) {
 	implType := reflect.TypeOf(&OngoingScrollbackBufferImpl{})
 	methodNames := make([]string, 0, implType.NumMethod())
 	for index := 0; index < implType.NumMethod(); index++ {
@@ -47,21 +51,21 @@ func TestOngoingScrollbackBufferImplExportsOnlyNativeScrollbackBufferMethods(t *
 	assertExactMethodNameSet(t, methodNames)
 }
 
-func TestExactlyOneNativeScrollbackBufferImplementation(t *testing.T) {
+func TestExactlyOneNativeOngoingSurfaceImplementation(t *testing.T) {
 	repoRoot := repositoryRoot(t)
 	pkgs := loadRepositoryPackages(t, repoRoot)
-	iface := nativeScrollbackBufferInterface(t, pkgs)
-	implementations := nativeScrollbackBufferImplementations(pkgs, iface, repoRoot)
+	iface := nativeOngoingSurfaceInterface(t, pkgs)
+	implementations := nativeOngoingSurfaceImplementations(pkgs, iface, repoRoot)
 
 	if len(implementations) != 1 {
-		t.Fatalf("expected exactly one %s implementation, got %d: %s", nativeScrollbackBufferName, len(implementations), strings.Join(implementations, ", "))
+		t.Fatalf("expected exactly one %s implementation, got %d: %s", nativeOngoingSurfaceName, len(implementations), strings.Join(implementations, ", "))
 	}
 	if implementations[0] != ongoingScrollbackBufferImplName {
-		t.Fatalf("expected the only %s implementation to be %s, got %s", nativeScrollbackBufferName, ongoingScrollbackBufferImplName, implementations[0])
+		t.Fatalf("expected the only %s implementation to be %s, got %s", nativeOngoingSurfaceName, ongoingScrollbackBufferImplName, implementations[0])
 	}
 }
 
-func nativeScrollbackBufferMethodNames(t *testing.T, repoRoot string) []string {
+func nativeOngoingSurfaceMethodNames(t *testing.T, repoRoot string) []string {
 	t.Helper()
 
 	fileSet := token.NewFileSet()
@@ -88,19 +92,19 @@ func nativeScrollbackBufferMethodNames(t *testing.T, repoRoot string) []string {
 			}
 			for _, spec := range genDecl.Specs {
 				typeSpec, ok := spec.(*ast.TypeSpec)
-				if !ok || typeSpec.Name.Name != nativeScrollbackBufferName {
+				if !ok || typeSpec.Name.Name != nativeOngoingSurfaceName {
 					continue
 				}
 
 				interfaceType, ok := typeSpec.Type.(*ast.InterfaceType)
 				if !ok {
-					t.Fatalf("%s must be an interface", nativeScrollbackBufferName)
+					t.Fatalf("%s must be an interface", nativeOngoingSurfaceName)
 				}
 
 				methodNames := make([]string, 0, len(interfaceType.Methods.List))
 				for _, field := range interfaceType.Methods.List {
 					if len(field.Names) == 0 {
-						t.Fatalf("%s must declare methods directly, got an embedded interface/type", nativeScrollbackBufferName)
+						t.Fatalf("%s must declare methods directly, got an embedded interface/type", nativeOngoingSurfaceName)
 					}
 					for _, name := range field.Names {
 						methodNames = append(methodNames, name.Name)
@@ -111,38 +115,38 @@ func nativeScrollbackBufferMethodNames(t *testing.T, repoRoot string) []string {
 		}
 	}
 
-	t.Fatalf("could not find %s in %s", nativeScrollbackBufferName, scrollbackDir)
+	t.Fatalf("could not find %s in %s", nativeOngoingSurfaceName, scrollbackDir)
 	return nil
 }
 
 func assertExactMethodNameSet(t *testing.T, methodNames []string) {
 	t.Helper()
 
-	if len(methodNames) != len(nativeScrollbackBufferMethods) {
-		t.Fatalf("expected %s to have exactly %d methods, got %d: %s", nativeScrollbackBufferName, len(nativeScrollbackBufferMethods), len(methodNames), strings.Join(methodNames, ", "))
+	if len(methodNames) != len(nativeOngoingSurfaceMethods) {
+		t.Fatalf("expected %s to have exactly %d methods, got %d: %s", nativeOngoingSurfaceName, len(nativeOngoingSurfaceMethods), len(methodNames), strings.Join(methodNames, ", "))
 	}
 
 	seen := make(map[string]struct{}, len(methodNames))
 	for _, methodName := range methodNames {
-		if _, ok := nativeScrollbackBufferMethods[methodName]; !ok {
-			t.Fatalf("unexpected %s method %q; expected exactly: %s", nativeScrollbackBufferName, methodName, expectedMethodNames())
+		if _, ok := nativeOngoingSurfaceMethods[methodName]; !ok {
+			t.Fatalf("unexpected %s method %q; expected exactly: %s", nativeOngoingSurfaceName, methodName, expectedMethodNames())
 		}
 		if _, ok := seen[methodName]; ok {
-			t.Fatalf("duplicate %s method %q", nativeScrollbackBufferName, methodName)
+			t.Fatalf("duplicate %s method %q", nativeOngoingSurfaceName, methodName)
 		}
 		seen[methodName] = struct{}{}
 	}
 
-	for expectedMethodName := range nativeScrollbackBufferMethods {
+	for expectedMethodName := range nativeOngoingSurfaceMethods {
 		if _, ok := seen[expectedMethodName]; !ok {
-			t.Fatalf("missing %s method %q; expected exactly: %s", nativeScrollbackBufferName, expectedMethodName, expectedMethodNames())
+			t.Fatalf("missing %s method %q; expected exactly: %s", nativeOngoingSurfaceName, expectedMethodName, expectedMethodNames())
 		}
 	}
 }
 
 func expectedMethodNames() string {
-	methodNames := make([]string, 0, len(nativeScrollbackBufferMethods))
-	for methodName := range nativeScrollbackBufferMethods {
+	methodNames := make([]string, 0, len(nativeOngoingSurfaceMethods))
+	for methodName := range nativeOngoingSurfaceMethods {
 		methodNames = append(methodNames, methodName)
 	}
 	sort.Strings(methodNames)
@@ -161,7 +165,7 @@ func loadRepositoryPackages(t *testing.T, repoRoot string) []*packages.Package {
 		t.Fatalf("load repository packages: %v", err)
 	}
 	if errors := packageErrors(pkgs); len(errors) > 0 {
-		t.Fatalf("repository packages must type-check before scanning %s implementations:\n%s", nativeScrollbackBufferName, strings.Join(errors, "\n"))
+		t.Fatalf("repository packages must type-check before scanning %s implementations:\n%s", nativeOngoingSurfaceName, strings.Join(errors, "\n"))
 	}
 
 	return pkgs
@@ -178,15 +182,15 @@ func packageErrors(pkgs []*packages.Package) []string {
 	return errors
 }
 
-func nativeScrollbackBufferInterface(t *testing.T, pkgs []*packages.Package) *types.Interface {
+func nativeOngoingSurfaceInterface(t *testing.T, pkgs []*packages.Package) *types.Interface {
 	t.Helper()
 
 	for _, pkg := range pkgs {
-		if normalizedPackagePath(pkg.PkgPath) != nativeScrollbackBufferPackagePath || pkg.Types == nil {
+		if normalizedPackagePath(pkg.PkgPath) != nativeOngoingSurfacePackagePath || pkg.Types == nil {
 			continue
 		}
 
-		obj := pkg.Types.Scope().Lookup(nativeScrollbackBufferName)
+		obj := pkg.Types.Scope().Lookup(nativeOngoingSurfaceName)
 		typeName, ok := obj.(*types.TypeName)
 		if !ok {
 			continue
@@ -202,11 +206,11 @@ func nativeScrollbackBufferInterface(t *testing.T, pkgs []*packages.Package) *ty
 		return iface.Complete()
 	}
 
-	t.Fatalf("could not find %s.%s", nativeScrollbackBufferPackagePath, nativeScrollbackBufferName)
+	t.Fatalf("could not find %s.%s", nativeOngoingSurfacePackagePath, nativeOngoingSurfaceName)
 	return nil
 }
 
-func nativeScrollbackBufferImplementations(pkgs []*packages.Package, iface *types.Interface, repoRoot string) []string {
+func nativeOngoingSurfaceImplementations(pkgs []*packages.Package, iface *types.Interface, repoRoot string) []string {
 	implementationsBySource := map[string]string{}
 
 	for _, pkg := range pkgs {

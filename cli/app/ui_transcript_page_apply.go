@@ -106,7 +106,7 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 	}
 	m.conversationFreshness = page.ConversationFreshness
 	nativeSurfaceConfigured := m.nativeSurfaceConfigured()
-	nativeStableReady := nativeSurfaceConfigured && m.nativeSurface.StableBuffer() != nil
+	nativeStableReady := nativeSurfaceConfigured && m.nativeSurface.initialized()
 	nativeAssistantStreamActive := nativeSurfaceConfigured && m.nativeSurface.AssistantStreaming()
 	nativeAssistantStreamWasIncomplete := m.nativeAssistantStreamIncomplete
 	previousNativeStableProjection := tui.TranscriptProjection{}

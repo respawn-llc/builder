@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -19,13 +20,14 @@ type OngoingScrollbackBufferImpl struct {
 	cancelWatcher             context.CancelFunc
 	closeOnce                 sync.Once
 	stableWriter              io.Writer
-	liveArea                  *NativeLiveAreaImpl
+	liveArea                  *nativeLiveAreaImpl
 	queuedSteers              []stableSteerRequest
 	heldStableOps             []stableHoldoffOperation
 	terminalWidth             int
 	terminalHeight            int
 	isStreaming               bool
 	assistantStreamOpenLine   bool
+	assistantStreamTail       string
 	closed                    bool
 	normalBufferAvailable     func() bool
 	delayedWriteErrorListener func(error)
@@ -110,6 +112,7 @@ func (buffer *OngoingScrollbackBufferImpl) close() {
 		buffer.closed = true
 		buffer.isStreaming = false
 		buffer.assistantStreamOpenLine = false
+		buffer.assistantStreamTail = ""
 		buffer.turnEndedDuringActiveFlow.Store(false)
 		buffer.queuedSteers = nil
 		buffer.heldStableOps = nil
@@ -196,12 +199,11 @@ func (buffer *OngoingScrollbackBufferImpl) StreamMarkdownAssistantContent(ansi s
 	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
 		delayedErr = err
 	}
-	err := buffer.withLiveErasedForAssistantStreamLocked(func() error {
-		return buffer.writeAssistantStreamPayloadLocked(ansi)
-	})
+	err := buffer.writeAssistantStreamPayloadLocked(ansi)
 	if err != nil {
 		buffer.isStreaming = false
 		buffer.assistantStreamOpenLine = false
+		buffer.assistantStreamTail = ""
 		buffer.turnEndedDuringActiveFlow.Store(false)
 	}
 	buffer.mu.Unlock()
@@ -249,6 +251,51 @@ func (buffer *OngoingScrollbackBufferImpl) FinishAssistantStreaming() error {
 	return err
 }
 
+func (buffer *OngoingScrollbackBufferImpl) RenderLive(frame NativeLiveAreaFrame) error {
+	buffer.validateReadyBeforeLock("renderLive", "")
+
+	buffer.mu.Lock()
+	if buffer.closed {
+		buffer.mu.Unlock()
+		return buffer.closedError("renderLive")
+	}
+	if buffer.liveArea == nil {
+		buffer.liveArea = &nativeLiveAreaImpl{
+			buffer:         buffer,
+			terminalWidth:  buffer.terminalWidth,
+			terminalHeight: buffer.terminalHeight,
+		}
+	}
+	liveArea := buffer.liveArea
+	buffer.mu.Unlock()
+	return liveArea.Render(frame)
+}
+
+func (buffer *OngoingScrollbackBufferImpl) AssistantStreaming() bool {
+	if buffer == nil {
+		return false
+	}
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.isStreaming
+}
+
+func (buffer *OngoingScrollbackBufferImpl) AssistantStreamTailLines() []string {
+	if buffer == nil {
+		return nil
+	}
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	if buffer.assistantStreamTail == "" || xansi.StringWidth(buffer.assistantStreamTail) == 0 {
+		return nil
+	}
+	return []string{buffer.assistantStreamTail}
+}
+
+func (buffer *OngoingScrollbackBufferImpl) FlushHoldoff() error {
+	return buffer.flushHoldoff()
+}
+
 func (buffer *OngoingScrollbackBufferImpl) flushHoldoff() error {
 	buffer.validateReadyBeforeLock("flushHoldoff", "")
 
@@ -291,7 +338,7 @@ func (buffer *OngoingScrollbackBufferImpl) markTurnEnded() {
 	}
 }
 
-func (buffer *OngoingScrollbackBufferImpl) attachLiveArea(liveArea *NativeLiveAreaImpl) {
+func (buffer *OngoingScrollbackBufferImpl) attachLiveArea(liveArea *nativeLiveAreaImpl) {
 	buffer.validateReadyBeforeLock("attachLiveArea", "")
 	if liveArea == nil {
 		panicScrollbackInvariant("attachLiveArea", "live area is required", "", buffer.terminalWidth, buffer.terminalHeight, 0)
@@ -339,9 +386,7 @@ func (buffer *OngoingScrollbackBufferImpl) flushHeldStableOpsLocked() (bool, err
 	operations := append([]stableHoldoffOperation(nil), buffer.heldStableOps...)
 	buffer.heldStableOps = nil
 	if buffer.isStreaming {
-		return true, buffer.withLiveErasedForAssistantStreamLocked(func() error {
-			return buffer.writeStableHoldoffOperationsLocked(operations)
-		})
+		return true, buffer.writeStableHoldoffOperationsLocked(operations)
 	}
 	return true, buffer.withLiveErasedForStableLocked(func() error {
 		return buffer.writeStableHoldoffOperationsLocked(operations)
@@ -384,13 +429,20 @@ func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamTerminatorAndQueu
 }
 
 func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamTerminatorLocked() error {
-	if !buffer.assistantStreamOpenLine {
+	if !buffer.assistantStreamOpenLine && buffer.assistantStreamTail == "" {
 		return nil
 	}
-	written, writeErr := io.WriteString(buffer.stableWriter, terminalLineBreak)
-	err := buffer.stableWriteResult("finishAssistantStreaming", terminalLineBreak, written, writeErr)
+	if buffer.assistantStreamTail != "" && xansi.StringWidth(buffer.assistantStreamTail) == 0 {
+		buffer.assistantStreamOpenLine = false
+		buffer.assistantStreamTail = ""
+		return nil
+	}
+	payload := buffer.assistantStreamTail + terminalLineBreak
+	written, writeErr := io.WriteString(buffer.stableWriter, payload)
+	err := buffer.stableWriteResult("finishAssistantStreaming", payload, written, writeErr)
 	if err == nil {
 		buffer.assistantStreamOpenLine = false
+		buffer.assistantStreamTail = ""
 	}
 	return err
 }
@@ -413,12 +465,62 @@ func (buffer *OngoingScrollbackBufferImpl) writeSteerPayloadLocked(line string) 
 
 func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(ansi string) error {
 	payload := normalizeTerminalLineBreaks(ansi)
-	written, writeErr := io.WriteString(buffer.stableWriter, payload)
-	err := buffer.stableWriteResult("streamMarkdownAssistantContent", payload, written, writeErr)
-	if err == nil {
-		buffer.assistantStreamOpenLine = assistantStreamPayloadLeavesOpenLine(buffer.assistantStreamOpenLine, payload)
+	rows := buffer.appendAssistantStreamPayloadRowsLocked(payload)
+	if len(rows) == 0 {
+		buffer.assistantStreamOpenLine = buffer.assistantStreamTail != ""
+		return nil
 	}
-	return err
+	return buffer.withLiveErasedForAssistantStreamLocked(func() error {
+		var firstErr error
+		for _, row := range rows {
+			stablePayload := row + terminalLineBreak
+			written, writeErr := io.WriteString(buffer.stableWriter, stablePayload)
+			err := buffer.stableWriteResult("streamMarkdownAssistantContent", stablePayload, written, writeErr)
+			if firstErr == nil && err != nil {
+				firstErr = err
+			}
+		}
+		if firstErr == nil {
+			buffer.assistantStreamOpenLine = buffer.assistantStreamTail != ""
+		}
+		return firstErr
+	})
+}
+
+func (buffer *OngoingScrollbackBufferImpl) appendAssistantStreamPayloadRowsLocked(payload string) []string {
+	if payload == "" {
+		return nil
+	}
+	rows := []string{}
+	for index := 0; index < len(payload); {
+		if sequence, nextIndex, ok := readCSISequence(payload, index); ok {
+			buffer.assistantStreamTail += sequence
+			index = nextIndex
+			continue
+		}
+		char, size := utf8.DecodeRuneInString(payload[index:])
+		if char == utf8.RuneError && size == 0 {
+			break
+		}
+		index += size
+		switch char {
+		case '\r':
+			continue
+		case '\n':
+			if buffer.assistantStreamTail == "" || xansi.StringWidth(buffer.assistantStreamTail) > 0 {
+				rows = append(rows, buffer.assistantStreamTail)
+			}
+			buffer.assistantStreamTail = ""
+		default:
+			buffer.assistantStreamTail += string(char)
+			for xansi.StringWidth(buffer.assistantStreamTail) >= buffer.terminalWidth {
+				prefix, suffix := splitVisualPrefix(buffer.assistantStreamTail, buffer.terminalWidth)
+				rows = append(rows, prefix)
+				buffer.assistantStreamTail = suffix
+			}
+		}
+	}
+	return rows
 }
 
 func (buffer *OngoingScrollbackBufferImpl) withLiveErasedForStableLocked(writeStable func() error) error {
@@ -443,6 +545,9 @@ func (buffer *OngoingScrollbackBufferImpl) withLiveErasedForAssistantStreamLocke
 	err := error(nil)
 	if liveArea := buffer.liveArea; liveArea != nil {
 		err = liveArea.erasePhysicalLocked()
+		if err == nil {
+			liveArea.pendingPhysicalRender = true
+		}
 	}
 	if err == nil && writeStable != nil {
 		err = writeStable()
@@ -526,20 +631,127 @@ func normalizeTerminalLineBreaks(payload string) string {
 	return out.String()
 }
 
-func assistantStreamPayloadLeavesOpenLine(previous bool, payload string) bool {
-	if payload == "" {
-		return previous
+func splitVisualPrefix(text string, width int) (string, string) {
+	if width <= 0 || text == "" {
+		return "", text
 	}
-	plain := xansi.Strip(payload)
-	if plain == "" {
-		return previous
+	visualWidth := xansi.StringWidth(text)
+	if visualWidth < width {
+		return text, ""
 	}
-	return !strings.HasSuffix(plain, terminalLineBreak) && !strings.HasSuffix(plain, "\n") && !strings.HasSuffix(plain, "\r")
+	prefix := xansi.Cut(text, 0, width)
+	suffix := xansi.Cut(text, width, visualWidth)
+	if prefix != "" {
+		if activeStyle := activeSGRPrefixAtVisualWidth(text, width); activeStyle != "" {
+			suffix = activeStyle + suffix
+		}
+		return prefix, suffix
+	}
+	fallbackVisualWidth := 0
+	end := 0
+	for index, char := range text {
+		nextWidth := fallbackVisualWidth + lipgloss.Width(string(char))
+		if nextWidth > width {
+			break
+		}
+		fallbackVisualWidth = nextWidth
+		end = index + len(string(char))
+		if fallbackVisualWidth == width {
+			break
+		}
+	}
+	if end == 0 {
+		_, size := utf8.DecodeRuneInString(text)
+		return text[:size], text[size:]
+	}
+	return text[:end], text[end:]
+}
+
+func activeSGRPrefixAtVisualWidth(text string, width int) string {
+	if width <= 0 || text == "" {
+		return ""
+	}
+	var active strings.Builder
+	visualWidth := 0
+	for index := 0; index < len(text) && visualWidth < width; {
+		if sequence, nextIndex, ok := readCSISequence(text, index); ok {
+			if csiSequenceIsSGR(sequence) {
+				if csiSGRResetsAll(sequence) {
+					active.Reset()
+				}
+				if !csiSGRIsPureReset(sequence) {
+					active.WriteString(sequence)
+				}
+			}
+			index = nextIndex
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(text[index:])
+		if r == utf8.RuneError && size == 0 {
+			break
+		}
+		visualWidth += lipgloss.Width(string(r))
+		index += size
+	}
+	return active.String()
+}
+
+func readCSISequence(text string, index int) (string, int, bool) {
+	if index < 0 || index+2 >= len(text) || text[index] != '\x1b' || text[index+1] != '[' {
+		return "", index, false
+	}
+	for cursor := index + 2; cursor < len(text); cursor++ {
+		if text[cursor] >= 0x40 && text[cursor] <= 0x7e {
+			return text[index : cursor+1], cursor + 1, true
+		}
+	}
+	return "", index, false
+}
+
+func csiSequenceIsSGR(sequence string) bool {
+	return len(sequence) >= 3 && sequence[len(sequence)-1] == 'm'
+}
+
+func csiSGRResetsAll(sequence string) bool {
+	params := csiSGRParams(sequence)
+	if params == "" {
+		return true
+	}
+	for _, param := range strings.FieldsFunc(params, csiSGRParamSeparator) {
+		if param == "" || param == "0" {
+			return true
+		}
+	}
+	return false
+}
+
+func csiSGRIsPureReset(sequence string) bool {
+	params := csiSGRParams(sequence)
+	if params == "" {
+		return true
+	}
+	for _, param := range strings.FieldsFunc(params, csiSGRParamSeparator) {
+		if param != "" && param != "0" {
+			return false
+		}
+	}
+	return true
+}
+
+func csiSGRParams(sequence string) string {
+	if len(sequence) <= len("\x1b[m") {
+		return ""
+	}
+	return sequence[2 : len(sequence)-1]
+}
+
+func csiSGRParamSeparator(r rune) bool {
+	return r == ';' || r == ':'
 }
 
 func panicScrollbackInvariant(operation string, reason string, payload string, terminalWidth int, terminalHeight int, visualWidth int) {
 	panic(fmt.Sprintf(
-		"NativeScrollbackBuffer invariant violation\noperation=%s\nreason=%s\nterminal_width=%d\nterminal_height=%d\nvisual_width=%d\nbyte_len=%d\npayload_quoted=%q\npayload_raw_hex=% x\nstack:\n%s",
+		"NativeOngoingSurface invariant violation\noperation=%s\nreason=%s\nterminal_width=%d\nterminal_height=%d\nvisual_width=%d\nbyte_len=%d\npayload_quoted=%q\npayload_raw_hex=% x\nstack:\n%s",
 		operation,
 		reason,
 		terminalWidth,

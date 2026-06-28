@@ -25,8 +25,8 @@ func TestNativeOngoingViewWritesLiveAreaAndReturnsEmpty(t *testing.T) {
 	if rendered != "" {
 		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
 	}
-	if m.nativeSurface == nil || m.nativeSurface.StableBuffer() == nil {
-		t.Fatal("expected native surface and stable buffer to be initialized")
+	if m.nativeSurface == nil || !m.nativeSurface.initialized() {
+		t.Fatal("expected native surface to be initialized")
 	}
 	raw := out.String()
 	plain := stripANSIAndTrimRight(raw)
@@ -211,8 +211,8 @@ func TestNativeOngoingDefersLiveAreaUntilTerminalSizeKnown(t *testing.T) {
 	if out.String() != "" {
 		t.Fatalf("native live area wrote before terminal size was known: %q", out.String())
 	}
-	if m.nativeSurface.StableBuffer() != nil {
-		t.Fatal("native stable buffer initialized before terminal size was known")
+	if m.nativeSurface.initialized() {
+		t.Fatal("native surface initialized before terminal size was known")
 	}
 
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
@@ -388,8 +388,11 @@ func TestNativeFinalAssistantCommitFinishesStreamWithoutDuplicateStableWrite(t *
 		AssistantDeltaPhase: clientui.MessagePhaseFinal,
 	})
 	_ = collectCmdMessages(t, streamed.cmd)
-	if count := strings.Count(stripANSIAndTrimRight(out.String()), "native streamed final"); count != 1 {
-		t.Fatalf("native final stream write count = %d, want 1 in %q", count, stripANSIAndTrimRight(out.String()))
+	if count := strings.Count(stripANSIAndTrimRight(out.String()), "native streamed final"); count != 0 {
+		t.Fatalf("native final stream wrote stable output before promotion count = %d in %q", count, stripANSIAndTrimRight(out.String()))
+	}
+	if got, want := strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""), "native streamed final"; got != want {
+		t.Fatalf("native final stream tail = %q, want %q", got, want)
 	}
 
 	out.Reset()
@@ -407,8 +410,8 @@ func TestNativeFinalAssistantCommitFinishesStreamWithoutDuplicateStableWrite(t *
 	if m.nativeSurface.AssistantStreaming() {
 		t.Fatal("expected native assistant stream to finish after committed final")
 	}
-	if count := strings.Count(stripANSIAndTrimRight(out.String()), "native streamed final"); count != 0 {
-		t.Fatalf("committed final duplicated native stable stream %d time(s), output=%q", count, stripANSIAndTrimRight(out.String()))
+	if count := strings.Count(stripANSIAndTrimRight(out.String()), "native streamed final"); count != 1 {
+		t.Fatalf("committed final should promote native stable stream once, got %d time(s), output=%q", count, stripANSIAndTrimRight(out.String()))
 	}
 }
 
@@ -479,8 +482,8 @@ func TestNativeSurfaceCommentaryStreamSurvivesGeometryReplacement(t *testing.T) 
 	if !m.nativeSurface.AssistantStreaming() {
 		t.Fatal("expected commentary delta to start native assistant streaming")
 	}
-	if got := stripANSIAndTrimRight(out.String()); !strings.Contains(got, "commentary before resize") {
-		t.Fatalf("native commentary stream did not write before replacement, got %q", got)
+	if got, want := strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""), "commentary before resize"; got != want {
+		t.Fatalf("native commentary stream tail before replacement = %q, want %q", got, want)
 	}
 	out.Reset()
 
@@ -500,8 +503,8 @@ func TestNativeSurfaceCommentaryStreamSurvivesGeometryReplacement(t *testing.T) 
 		AssistantDeltaPhase: clientui.MessagePhaseCommentary,
 	})
 	_ = collectCmdMessages(t, continued.cmd)
-	if got := stripANSIAndTrimRight(out.String()); !strings.Contains(got, "and after resize") {
-		t.Fatalf("native commentary stream did not continue after replacement, got %q", got)
+	if got, want := strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""), " and after resize"; got != want {
+		t.Fatalf("native commentary stream tail after replacement = %q, want %q", got, want)
 	}
 }
 
@@ -966,8 +969,8 @@ func TestNativeAssistantDeltaBuffersWhileDetailSurfaceIsActive(t *testing.T) {
 		AssistantDeltaPhase: clientui.MessagePhaseFinal,
 	})
 	_ = collectCmdMessages(t, back.cmd)
-	if got := stripANSIAndTrimRight(out.String()); !strings.Contains(got, "back") {
-		t.Fatalf("native stream did not continue after held detail chunk, got %q", got)
+	if got, want := strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""), "away back"; got != want {
+		t.Fatalf("native stream tail after held detail chunk = %q, want %q", got, want)
 	}
 	out.Reset()
 
@@ -985,8 +988,8 @@ func TestNativeAssistantDeltaBuffersWhileDetailSurfaceIsActive(t *testing.T) {
 	if m.nativeSurface.AssistantStreaming() {
 		t.Fatal("expected native assistant stream to finish after committed final")
 	}
-	if count := strings.Count(stripANSIAndTrimRight(out.String()), "away back"); count != 0 {
-		t.Fatalf("committed buffered detail stream duplicated final %d time(s), output=%q", count, stripANSIAndTrimRight(out.String()))
+	if count := strings.Count(stripANSIAndTrimRight(out.String()), "away back"); count != 1 {
+		t.Fatalf("committed buffered detail stream should promote active tail once, got %d time(s), output=%q", count, stripANSIAndTrimRight(out.String()))
 	}
 }
 
@@ -1024,7 +1027,7 @@ func TestNativeSurfaceStreamWriteErrorDoesNotMarkAssistantStreamActive(t *testin
 		t.Fatal("expected native surface to initialize")
 	}
 
-	err := surface.StreamAssistantFinalAnswerContent("chunk")
+	err := surface.StreamAssistantFinalAnswerContent(strings.Repeat("x", 80))
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("stream error = %v, want %v", err, writeErr)
 	}
@@ -1047,7 +1050,7 @@ func TestNativeStableWriteErrorDisablesNativeSurface(t *testing.T) {
 	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
 		Kind:                clientui.EventAssistantDelta,
 		StepID:              "step-final",
-		AssistantDelta:      "partial",
+		AssistantDelta:      strings.Repeat("x", 120),
 		AssistantDeltaPhase: clientui.MessagePhaseFinal,
 	})
 	_ = collectCmdMessages(t, result.cmd)

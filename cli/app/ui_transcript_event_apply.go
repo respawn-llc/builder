@@ -79,7 +79,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	entries := plan.entries
 	previousNativeStableProjection := tui.TranscriptProjection{}
 	nativeSurfaceConfigured := m.nativeSurfaceConfigured()
-	nativeStableReady := nativeSurfaceConfigured && m.nativeSurface.StableBuffer() != nil
+	nativeStableReady := nativeSurfaceConfigured && m.nativeSurface.initialized()
 	if nativeSurfaceConfigured {
 		previousNativeStableProjection = m.nativeCommittedProjectionForEntries(m.transcriptEntries)
 	}

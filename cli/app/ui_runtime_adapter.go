@@ -192,7 +192,7 @@ func (m *uiModel) streamNativeAssistantDelta(delta string, phase clientui.Messag
 		if m.nativeAssistantStreamIncomplete {
 			return false, nil
 		}
-		if m.nativeSurface.StableBuffer() == nil {
+		if !m.nativeSurface.initialized() {
 			m.nativeAssistantStreamIncomplete = true
 			return false, nil
 		}
@@ -201,7 +201,7 @@ func (m *uiModel) streamNativeAssistantDelta(delta string, phase clientui.Messag
 		if m.nativeAssistantStreamIncomplete {
 			return false, nil
 		}
-		if m.nativeSurface.StableBuffer() == nil {
+		if !m.nativeSurface.initialized() {
 			m.nativeAssistantStreamIncomplete = true
 			return false, nil
 		}
@@ -219,7 +219,7 @@ func (m *uiModel) finishNativeAssistantStreaming() error {
 	defer func() {
 		m.nativeAssistantStreamIncomplete = false
 	}()
-	if m.nativeSurface.StableBuffer() == nil {
+	if !m.nativeSurface.initialized() {
 		return nil
 	}
 	return m.nativeSurface.FinishAssistantStreaming()
