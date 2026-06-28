@@ -264,6 +264,33 @@ func TestRecreateRuntimeHoldsRunBlockUntilRelease(t *testing.T) {
 	}
 }
 
+func TestRecreateRejectingActiveRunRejectsInFlightStart(t *testing.T) {
+	fixture, reg := newRuntimeServiceFixture(t)
+	sessionID := fixture.store.Meta().SessionID
+	_, build := newLifecycleBuilder(t, fixture)
+
+	release, ok := reg.BeginSessionRun(sessionID)
+	if !ok {
+		t.Fatal("BeginSessionRun")
+	}
+
+	if _, err := fixture.service.RecreateRuntimeRejectingActiveRun(context.Background(), sessionID, "owner-headless", build); !errors.Is(err, ErrSessionRunActive) {
+		t.Fatalf("RecreateRuntimeRejectingActiveRun err=%v, want ErrSessionRunActive while a run start is in flight", err)
+	}
+	if reg.IsSessionRuntimeActive(sessionID) {
+		t.Fatal("rejected headless recreate must not build a runtime")
+	}
+
+	release()
+	acquiredRelease, err := fixture.service.RecreateRuntimeRejectingActiveRun(context.Background(), sessionID, "owner-headless", build)
+	if err != nil {
+		t.Fatalf("RecreateRuntimeRejectingActiveRun after start cleared: %v", err)
+	}
+	if err := acquiredRelease(context.Background()); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+}
+
 func TestRecreateRuntimeRejectedWhileSessionBlocked(t *testing.T) {
 	fixture, reg := newRuntimeServiceFixture(t)
 	sessionID := fixture.store.Meta().SessionID

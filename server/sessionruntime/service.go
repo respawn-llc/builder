@@ -265,7 +265,7 @@ func (s *Service) buildIntoClaim(ctx context.Context, sessionID string, claim *r
 type AcquiredRuntimeRelease func(ctx context.Context) error
 
 func (s *Service) RecreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) (AcquiredRuntimeRelease, error) {
-	return s.recreateRuntime(ctx, sessionID, ownerID, build, nil)
+	return s.recreateRuntime(ctx, sessionID, ownerID, build, nil, false)
 }
 
 func (s *Service) RecreateRuntimeRejectingActiveRun(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) (AcquiredRuntimeRelease, error) {
@@ -274,17 +274,35 @@ func (s *Service) RecreateRuntimeRejectingActiveRun(ctx context.Context, session
 			return ErrSessionRunActive
 		}
 		return nil
-	})
+	}, true)
 }
 
-func (s *Service) recreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder, beforeReplace func(*runtime.Engine) error) (AcquiredRuntimeRelease, error) {
+func (s *Service) beginRecreateRun(sessionID string, exclusive bool) (func(), error) {
+	if exclusive {
+		release, acquired, blocked := s.runtimes.BeginExclusiveSessionRun(sessionID)
+		if acquired {
+			return release, nil
+		}
+		if blocked {
+			return nil, errors.Join(ErrSessionRunsBlocked, fmt.Errorf("session %q runs are blocked", sessionID))
+		}
+		return nil, ErrSessionRunActive
+	}
+	release, ok := s.runtimes.BeginSessionRun(sessionID)
+	if !ok {
+		return nil, errors.Join(ErrSessionRunsBlocked, fmt.Errorf("session %q runs are blocked", sessionID))
+	}
+	return release, nil
+}
+
+func (s *Service) recreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder, beforeReplace func(*runtime.Engine) error, exclusive bool) (AcquiredRuntimeRelease, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if s.runtimes == nil {
 		return nil, runtimeUnavailableErr(sessionID)
 	}
-	releaseRun, ok := s.runtimes.BeginSessionRun(sessionID)
-	if !ok {
-		return nil, errors.Join(ErrSessionRunsBlocked, fmt.Errorf("session %q runs are blocked", sessionID))
+	releaseRun, err := s.beginRecreateRun(sessionID, exclusive)
+	if err != nil {
+		return nil, err
 	}
 	claim, err := s.runtimes.ClaimFreshRuntime(ctx, sessionID, strings.TrimSpace(ownerID), beforeReplace)
 	if err != nil {

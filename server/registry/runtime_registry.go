@@ -114,6 +114,35 @@ func (r *RuntimeRegistry) BeginSessionRun(sessionID string) (func(), bool) {
 	}, true
 }
 
+func (r *RuntimeRegistry) BeginExclusiveSessionRun(sessionID string) (release func(), acquired bool, blocked bool) {
+	if r == nil {
+		return func() {}, true, false
+	}
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return func() {}, true, false
+	}
+	r.runStateMu.Lock()
+	if r.blockedRuns[trimmed] > 0 {
+		r.runStateMu.Unlock()
+		return nil, false, true
+	}
+	if r.inFlightStarts[trimmed] > 0 {
+		r.runStateMu.Unlock()
+		return nil, false, false
+	}
+	r.inFlightStarts[trimmed]++
+	r.runStateMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.runStateMu.Lock()
+			defer r.runStateMu.Unlock()
+			r.clearInFlightStartLocked(trimmed)
+		})
+	}, true, false
+}
+
 func (r *RuntimeRegistry) clearInFlightStartLocked(sessionID string) {
 	if r.inFlightStarts[sessionID] <= 1 {
 		delete(r.inFlightStarts, sessionID)
