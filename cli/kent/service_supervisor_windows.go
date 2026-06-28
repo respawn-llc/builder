@@ -189,7 +189,11 @@ func activeUserSessionForSID(wantSID string) uint32 {
 	var consoleFallback uint32
 	for i := range sessions {
 		id := sessions[i].SessionID
-		if sessions[i].State != windows.WTSActive || id == 0 {
+		state := sessions[i].State
+		if id == 0 {
+			continue
+		}
+		if state != windows.WTSActive && state != windows.WTSDisconnected {
 			continue
 		}
 		sid, err := sessionUserSID(id)
@@ -200,6 +204,9 @@ func activeUserSessionForSID(wantSID string) uint32 {
 			if sid == wantSID {
 				return id
 			}
+			continue
+		}
+		if state != windows.WTSActive {
 			continue
 		}
 		if id == console {

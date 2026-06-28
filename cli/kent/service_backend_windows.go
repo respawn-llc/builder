@@ -73,8 +73,22 @@ func (scmServiceBackend) Install(ctx context.Context, spec serviceSpec, force bo
 	if err != nil {
 		return fmt.Errorf("create service: %w", err)
 	}
+	if err := configureCreatedService(service, spec); err != nil {
+		_ = service.Delete()
+		_ = service.Close()
+		return err
+	}
 	defer func() { _ = service.Close() }()
 
+	if start {
+		if err := service.Start(); err != nil {
+			return fmt.Errorf("start service: %w", err)
+		}
+	}
+	return nil
+}
+
+func configureCreatedService(service *mgr.Service, spec serviceSpec) error {
 	if err := service.SetRecoveryActions([]mgr.RecoveryAction{
 		{Type: mgr.ServiceRestart, Delay: 2 * time.Second},
 		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
@@ -82,17 +96,11 @@ func (scmServiceBackend) Install(ctx context.Context, spec serviceSpec, force bo
 	}, serviceRecoveryResetPeriod); err != nil {
 		return fmt.Errorf("configure restart-on-failure: %w", err)
 	}
-
 	if err := grantUserServiceAccess(service); err != nil {
 		return fmt.Errorf("grant service control to the installing user: %w", err)
 	}
-
-	persistInstallUser(spec)
-
-	if start {
-		if err := service.Start(); err != nil {
-			return fmt.Errorf("start service: %w", err)
-		}
+	if err := persistInstallUser(spec); err != nil {
+		return err
 	}
 	return nil
 }
@@ -224,13 +232,18 @@ func installUserSIDPath(spec serviceSpec) string {
 	return filepath.Join(windowsServiceDir(spec), "install_user.sid")
 }
 
-func persistInstallUser(spec serviceSpec) {
+func persistInstallUser(spec serviceSpec) error {
 	sid, err := interactiveUserSID()
 	if err != nil {
-		return
+		return fmt.Errorf("resolve installing user: %w", err)
 	}
-	_ = os.MkdirAll(windowsServiceDir(spec), 0o755)
-	_ = os.WriteFile(installUserSIDPath(spec), []byte(sid.String()), 0o644)
+	if err := os.MkdirAll(windowsServiceDir(spec), 0o755); err != nil {
+		return fmt.Errorf("create service directory: %w", err)
+	}
+	if err := os.WriteFile(installUserSIDPath(spec), []byte(sid.String()), 0o644); err != nil {
+		return fmt.Errorf("persist installing user: %w", err)
+	}
+	return nil
 }
 
 func readInstallUserSID(spec serviceSpec) string {

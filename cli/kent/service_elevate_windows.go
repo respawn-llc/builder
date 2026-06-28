@@ -105,9 +105,13 @@ func elevateServiceAction(action serviceAction) (int, bool) {
 
 func elevatedServiceParams() []string {
 	args := os.Args[1:]
-	cfg, err := brand.LoadGlobal(brand.LoadOptions{})
-	if err != nil || strings.TrimSpace(cfg.PersistenceRoot) == "" {
+	root := strings.TrimSpace(os.Getenv(brand.PersistenceRootEnvName))
+	if root == "" {
+		root = brand.DefaultPersistence
+	}
+	abs, err := brand.NormalizePersistenceRoot(root)
+	if err != nil {
 		return args
 	}
-	return append(append([]string{}, args...), "--persistence-root", cfg.PersistenceRoot)
+	return append(append([]string{}, args...), "--persistence-root", abs)
 }
