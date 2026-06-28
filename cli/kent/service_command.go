@@ -391,6 +391,22 @@ func rootMismatchError(status serviceStatus, spec serviceSpec) error {
 	return fmt.Errorf("no %s is installed for persistence root %s; the installed service targets %s. Reinstall with `%s service install --persistence-root %s` or manage the matching root instead", serviceDisplayName, spec.Config.PersistenceRoot, installedRoot, config.Command, spec.Config.PersistenceRoot)
 }
 
+func argsWithoutPersistenceRoot(args []string) []string {
+	const flag = "--persistence-root"
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] == flag {
+			i++
+			continue
+		}
+		if _, ok := strings.CutPrefix(args[i], flag+"="); ok {
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
+}
+
 func persistenceRootFromServiceCommand(command []string) (string, bool) {
 	const flag = "--persistence-root"
 	for i, arg := range command {

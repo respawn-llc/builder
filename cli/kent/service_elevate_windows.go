@@ -113,5 +113,5 @@ func elevatedServiceParams() []string {
 	if err != nil {
 		return args
 	}
-	return append(append([]string{}, args...), "--persistence-root", abs)
+	return append(argsWithoutPersistenceRoot(args), "--persistence-root", abs)
 }
