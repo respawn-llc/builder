@@ -272,6 +272,17 @@ func (e *Engine) SetStreamingError(text string) {
 	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 }
 
+func (e *Engine) ReportPromptHistoryPersistError(reason string) {
+	if e == nil {
+		return
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return
+	}
+	_ = e.steer("", steerEventIntent(Event{Kind: EventPromptHistoryPersistFailed, Error: reason}))
+}
+
 func (e *Engine) ClearStreamingError() {
 	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ClearStreamingError()
 	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))

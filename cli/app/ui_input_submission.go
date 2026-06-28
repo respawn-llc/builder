@@ -55,14 +55,11 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
 		return disconnectCmd
 	}
-	_, isUserShell := parseUserShellCommand(text)
-	var recordCmd tea.Cmd
-	if isUserShell {
-		m.rememberPromptHistoryLocally(text)
-	} else {
-		recordCmd = m.recordPromptHistory(text)
+	if blocked, blockCmd := c.blockInjectedQueueSubmission(); blocked {
+		return blockCmd
 	}
-	return tea.Batch(recordCmd, c.startSubmissionWithPreSubmitQueuePosition(text, queuePosition, queuedID))
+	m.rememberPromptHistoryLocally(text)
+	return c.startSubmissionWithPreSubmitQueuePosition(text, queuePosition, queuedID)
 }
 
 func (c uiInputController) submitCmd(text string, queuedID string) tea.Cmd {

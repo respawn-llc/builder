@@ -25,7 +25,9 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			runCtx = context.WithoutCancel(ctx)
 		}
 		var resp serverapi.RuntimeSubmitUserTurnResponse
+		var recordEngine *runtime.Engine
 		err = s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+			recordEngine = engine
 			shouldCompact, err := engine.ShouldCompactBeforeUserMessage(runCtx, memoReq.Text)
 			if err != nil {
 				return err
@@ -58,6 +60,20 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			resp = serverapi.RuntimeSubmitUserTurnResponse{Message: msg.Content, Compacted: compacted}
 			return nil
 		})
+		if err == nil {
+			s.recordPromptHistoryAsync(recordEngine, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
+		}
 		return resp, err
 	})
+}
+
+func (s *Service) recordPromptHistoryAsync(engine *runtime.Engine, sessionID string, sourceID string, text string) {
+	if s == nil || s.promptStore == nil {
+		return
+	}
+	go func() {
+		if _, _, err := s.recordPromptHistory(context.Background(), sessionID, sourceID, text); err != nil {
+			engine.ReportPromptHistoryPersistError(err.Error())
+		}
+	}()
 }
