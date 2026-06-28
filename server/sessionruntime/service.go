@@ -285,7 +285,7 @@ func (s *Service) RecreateRuntime(ctx context.Context, sessionID string, ownerID
 
 func (s *Service) RecreateRuntimeRejectingActiveRun(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) (AcquiredRuntimeRelease, error) {
 	return s.recreateRuntime(ctx, sessionID, ownerID, build, func(engine *runtime.Engine) error {
-		if engine != nil && engine.ActiveRun() != nil {
+		if engine != nil && (engine.ActiveRun() != nil || engine.HasQueuedUserWork()) {
 			return ErrSessionRunActive
 		}
 		return nil

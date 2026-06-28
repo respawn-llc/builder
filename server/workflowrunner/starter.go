@@ -755,7 +755,11 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		s.interrupt(context.Background(), req.RunID, req.Generation, reason, err)
 		return
 	}
+	failQueuedOnClose := false
 	defer func() {
+		if failQueuedOnClose && engine != nil {
+			engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
+		}
 		_ = releaseRuntime(context.Background())
 	}()
 	// Compact exactly once per compact_and_continue handoff. The compaction's
@@ -779,6 +783,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		return submitErr
 	})
 	if turnErr != nil {
+		failQueuedOnClose = true
 		reason := ReasonRuntimeFailed
 		if errors.Is(turnErr, context.Canceled) || errors.Is(turnErr, sessionruntime.ErrAcquiredRuntimeOvertaken) || ctx.Err() != nil {
 			reason = ReasonRuntimeCanceled

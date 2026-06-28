@@ -33,6 +33,12 @@ type serviceTestRuntime struct {
 	rebindHook            func(context.Context, string, string, string)
 }
 
+func (r *serviceTestRuntime) blockedRunCount(sessionID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.blockedRuns[strings.TrimSpace(sessionID)]
+}
+
 type serviceRuntimeCall struct {
 	sessionID string
 	root      string

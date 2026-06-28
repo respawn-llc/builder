@@ -299,6 +299,26 @@ func TestRecreateRejectingActiveRunRejectsInFlightStart(t *testing.T) {
 	}
 }
 
+func TestRecreateRejectingActiveRunRejectsQueuedUserWork(t *testing.T) {
+	fixture, reg := newRuntimeServiceFixture(t)
+	sessionID := fixture.store.Meta().SessionID
+	state, build := newLifecycleBuilder(t, fixture)
+	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
+		t.Fatalf("AcquireRuntime: %v", err)
+	}
+	state.engine.QueueUserMessageForAutoDrain("queued user work", "queue-1")
+
+	if _, err := fixture.service.RecreateRuntimeRejectingActiveRun(context.Background(), sessionID, "owner-headless", build); !errors.Is(err, ErrSessionRunActive) {
+		t.Fatalf("RecreateRuntimeRejectingActiveRun err=%v, want ErrSessionRunActive while queued user work is accepted", err)
+	}
+	if !reg.IsSessionRuntimeActive(sessionID) {
+		t.Fatal("rejected headless recreate must not close the queued runtime")
+	}
+	if !state.engine.HasQueuedUserWork() {
+		t.Fatal("rejected headless recreate must leave accepted queued user work intact")
+	}
+}
+
 func TestRecreateRuntimeRejectedWhileSessionBlocked(t *testing.T) {
 	fixture, reg := newRuntimeServiceFixture(t)
 	sessionID := fixture.store.Meta().SessionID

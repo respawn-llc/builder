@@ -60,6 +60,22 @@ func (s *Service) retargetSessionsFromWorktree(ctx context.Context, workspaceID 
 	if reminderFactory == nil {
 		reminderFactory = worktreeReminderStateForExitedWorktree
 	}
+	targetSessionIDs := make([]string, 0, len(blockers))
+	for _, blocker := range blockers {
+		sessionID := strings.TrimSpace(blocker.SessionID)
+		if sessionID == "" {
+			continue
+		}
+		if options.filter != nil && !options.filter(blocker) {
+			continue
+		}
+		targetSessionIDs = append(targetSessionIDs, sessionID)
+	}
+	releaseRuns := func() {}
+	if s.active != nil && len(targetSessionIDs) > 0 {
+		releaseRuns = s.active.BlockSessionRuns(targetSessionIDs)
+	}
+	defer releaseRuns()
 	pending := make([]pendingWorktreeSessionRetarget, 0, len(blockers))
 	collected := make([]error, 0)
 	appendErr := func(sessionID string, err error) {

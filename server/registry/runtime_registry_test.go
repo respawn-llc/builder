@@ -723,6 +723,40 @@ func TestRuntimeRegistryBeginGuardWaitsForBuild(t *testing.T) {
 	}
 }
 
+func TestRuntimeClaimIdleReleaseDropsOwnerBeforeCloseRace(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := &runtime.Engine{}
+	claim, _, _ := registry.AcquireRuntimeClaim("session-1", "owner-a")
+	claim.Resolve(engine, nil, nil)
+
+	decision, expectedRefs := claim.BeginRelease("owner-a", true, true)
+	if decision != RuntimeReleaseIdleCheck || expectedRefs != 0 {
+		t.Fatalf("BeginRelease owner-a decision=%v refs=%d, want idle check with zero refs", decision, expectedRefs)
+	}
+	if _, err := claim.JoinAsOwner("owner-b"); err != nil {
+		t.Fatalf("JoinAsOwner owner-b: %v", err)
+	}
+	closed, err := claim.CloseIfIdle(context.Background(), expectedRefs, nil)
+	if err != nil {
+		t.Fatalf("CloseIfIdle owner-a race: %v", err)
+	}
+	if closed {
+		t.Fatal("CloseIfIdle must lose after a new owner joins")
+	}
+
+	decision, expectedRefs = claim.BeginRelease("owner-b", true, true)
+	if decision != RuntimeReleaseIdleCheck || expectedRefs != 0 {
+		t.Fatalf("BeginRelease owner-b decision=%v refs=%d, want idle check with zero refs", decision, expectedRefs)
+	}
+	closed, err = claim.CloseIfIdle(context.Background(), expectedRefs, nil)
+	if err != nil {
+		t.Fatalf("CloseIfIdle owner-b: %v", err)
+	}
+	if !closed {
+		t.Fatal("runtime should close after the last real owner releases")
+	}
+}
+
 func TestRuntimeRegistrySubmitPromptResponseRejectedWhileClosing(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := &runtime.Engine{}

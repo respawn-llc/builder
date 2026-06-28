@@ -250,6 +250,37 @@ func TestRetargetSessionsFromMissingWorktreeRollsBackActiveSessionMetadataOnRunt
 	}
 }
 
+func TestRetargetSessionsFromMissingWorktreeBlocksStartsUntilRuntimeSync(t *testing.T) {
+	env := newServiceTestEnv(t)
+	created := mustCreateWorktree(t, env, "feature/missing-block-runs")
+	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
+	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, created.WorktreeID)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	env.runtime.activeSessions = map[string]bool{otherSession.Meta().SessionID: true}
+	checked := make(chan struct{})
+	env.runtime.rebindHook = func(context.Context, string, string, string) {
+		if got := env.runtime.blockedRunCount(otherSession.Meta().SessionID); got == 0 {
+			t.Fatalf("session starts were not blocked while syncing retargeted runtime")
+		}
+		close(checked)
+	}
+
+	if err := env.service.retargetSessionsFromWorktree(env.ctx, env.binding.WorkspaceID, env.workspaceRoot, record, worktreeSessionRetargetOptions{reminder: worktreeReminderStateForExitedWorktree}); err != nil {
+		t.Fatalf("retargetSessionsFromWorktree: %v", err)
+	}
+	select {
+	case <-checked:
+	default:
+		t.Fatal("expected runtime sync hook to observe blocked session starts")
+	}
+	if got := env.runtime.blockedRunCount(otherSession.Meta().SessionID); got != 0 {
+		t.Fatalf("session starts still blocked after retarget = %d, want 0", got)
+	}
+}
+
 func TestNextAvailableWorktreeRootFailsAfterCollisionCap(t *testing.T) {
 	baseRoot := filepath.Join(t.TempDir(), "collision")
 	for idx := 0; idx < 1024; idx++ {

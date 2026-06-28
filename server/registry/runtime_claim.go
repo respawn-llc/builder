@@ -281,6 +281,13 @@ func (c *RuntimeClaim) BeginRelease(ownerID string, dropOwner bool, onlyIfIdle b
 		}
 		return RuntimeReleaseDroppedRef, e.ownerRefs
 	}
+	if dropOwner && e.ownerRefs > 0 {
+		e.ownerRefs--
+		if trimmed != "" {
+			delete(e.ownerIDs, trimmed)
+		}
+		return RuntimeReleaseIdleCheck, e.ownerRefs
+	}
 	return RuntimeReleaseIdleCheck, e.ownerRefs
 }
 
