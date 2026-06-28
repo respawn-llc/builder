@@ -47,6 +47,7 @@ compile_app_icon() {
 	[ -d "$icon_dir" ] || return 0
 
 	if ! command -v actool >/dev/null 2>&1; then
+		rm -f "$out_car"
 		echo "actool not found; skipping liquid-glass app icon (Xcode 26+ required). Tauri will fall back to PNG -> icns." >&2
 		return 0
 	fi
