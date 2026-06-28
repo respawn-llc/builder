@@ -34,25 +34,22 @@ kent service start
 kent service uninstall
 ```
 
-All service commands accept `--persistence-root` (and honor `KENT_PERSISTENCE_ROOT`). The root you install with is baked into the generated registration (bound to `--persistence-root <root>`), so the supervised service uses the same config+data root rather than re-resolving `~/.kent` under whatever user the supervisor runs as. Use the same root on `status`/`start`/`stop`/`restart`/`uninstall` to target that instance.
+All service commands accept `--persistence-root` and honor `KENT_PERSISTENCE_ROOT`. The root you install with is remembered, so pass the same root on `status`/`start`/`stop`/`restart`/`uninstall` to target that instance.
 
 ## Backends
 
-| OS | Supervisor |
+| OS | Service |
 | --- | --- |
 | macOS | LaunchAgent |
 | Linux / WSL2 | `systemd --user` |
-| Windows | Windows Service (SCM), runs as the logged-in user |
+| Windows | Windows Service |
 
 ### Windows
 
-On Windows the background service is a real Service Control Manager service that starts at boot and restarts on failure. The service itself runs as `LocalSystem`, but it is only a supervisor: it launches `kent serve` **in your interactive session, as you**, using your logon token — so the server keeps your full identity (`%USERPROFILE%`, git config, SSH keys, Windows Credential Manager) with **no password stored anywhere**. The server runs with no console window, and starts as soon as you log in.
+The background server runs as you, in your session, with your full environment (`%USERPROFILE%`, git config, SSH keys, Windows Credential Manager) and no console window. It starts when you log in and restarts on failure.
 
-- `install` / `uninstall` need Administrator and prompt for elevation (UAC) automatically.
-- `status` / `start` / `stop` / `restart` run without elevation — install grants your account start/stop rights on the service.
-- `stop` (and a service restart or system shutdown) shuts the server down gracefully — the supervisor signals it to exit cleanly, exactly as `Ctrl+C` would, and only force-kills it if it does not exit within the stop window.
-- Installing or uninstalling also removes any leftover registration from older Kent versions (the previous logon scheduled task and Startup-folder launcher), which is what caused stray console windows.
-
+- `install` and `uninstall` prompt for Administrator elevation (UAC). `status`, `start`, `stop`, and `restart` run without elevation.
+- `stop`, a service restart, and system shutdown stop the server gracefully, force-killing it only if it does not exit within the stop window.
 
 Linux headless machines may need lingering enabled so the server survives logout:
 
