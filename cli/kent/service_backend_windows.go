@@ -64,7 +64,10 @@ func (scmServiceBackend) Install(ctx context.Context, spec serviceSpec, force bo
 			return errors.New(brand.ServiceDisplayName + " is already installed; use --force to rewrite it")
 		}
 		if _, err := existing.Control(svc.Stop); err == nil {
-			_ = waitForServiceState(existing, svc.Stopped, serviceStopWindow)
+			if werr := waitForServiceState(existing, svc.Stopped, serviceStopWindow); werr != nil {
+				_ = existing.Close()
+				return fmt.Errorf("stop existing service before reinstall: %w", werr)
+			}
 		}
 		deleteErr := existing.Delete()
 		_ = existing.Close()
@@ -165,6 +168,9 @@ func (scmServiceBackend) Stop(ctx context.Context, spec serviceSpec) error {
 	}
 	defer cleanup()
 	if _, err := service.Control(svc.Stop); err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+			return nil
+		}
 		return fmt.Errorf("stop service: %w", err)
 	}
 	if err := waitForServiceState(service, svc.Stopped, serviceStopWindow); err != nil {
@@ -431,9 +437,17 @@ func waitForServiceAbsent(m *mgr.Mgr, timeout time.Duration) error {
 	}
 }
 
+// stopLegacyServer ends any still-running pre-SCM scheduled-task server so the
+// unmanaged-server preflight does not block migration. The registration itself
+// is removed by removeLegacyWindowsRegistration during install/uninstall.
+func (scmServiceBackend) stopLegacyServer(ctx context.Context, spec serviceSpec) {
+	_, _ = runServiceCommand(ctx, "schtasks", "/End", "/TN", serviceWindowsTaskName)
+}
+
 // removeLegacyWindowsRegistration tears down the pre-SCM scheduled task and
 // Startup-folder launcher so upgraders stop getting the old console windows.
 func removeLegacyWindowsRegistration(ctx context.Context, spec serviceSpec) {
+	_, _ = runServiceCommand(ctx, "schtasks", "/End", "/TN", serviceWindowsTaskName)
 	_, _ = runServiceCommand(ctx, "schtasks", "/Delete", "/F", "/TN", serviceWindowsTaskName)
 	_ = os.Remove(legacyWindowsStartupItemPath())
 	_ = os.Remove(filepath.Join(windowsServiceDir(spec), "server.cmd"))

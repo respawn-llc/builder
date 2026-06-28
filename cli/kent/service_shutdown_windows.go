@@ -25,6 +25,9 @@ const shutdownEventEnvVar = brand.EnvPrefix + "SERVICE_SHUTDOWN_EVENT"
 // opened) the original context is returned unchanged.
 func installServiceShutdownTrigger(ctx context.Context) context.Context {
 	name := os.Getenv(shutdownEventEnvVar)
+	// Consume the variable so commands spawned by shell tools (which build their
+	// environment from os.Environ()) do not inherit this service-only marker.
+	_ = os.Unsetenv(shutdownEventEnvVar)
 	if name == "" {
 		return ctx
 	}

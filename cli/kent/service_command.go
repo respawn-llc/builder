@@ -208,14 +208,6 @@ func serviceRestartSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	if code, blocked := guardBeforeElevation(serviceActionRestart, opts, stderr); blocked {
 		return code
 	}
-	// `restart --if-installed` rewrites the registration (reinstall), which needs
-	// Administrator on Windows; plain restart only stops/starts via the granted
-	// DACL and stays unprivileged. Elevate just the reinstall path.
-	if *ifInstalled {
-		if code, handled := elevateServiceAction(serviceActionRestart); handled {
-			return code
-		}
-	}
 	return runServiceCommandAction(context.Background(), serviceActionRestart, opts, stdout, stderr)
 }
 
@@ -245,6 +237,23 @@ func serviceRunSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		return 1
 	}
 	return serviceHostRun(spec, stdout, stderr)
+}
+
+// legacyServerStopper is implemented by backends whose previous-generation
+// registration may have a still-running server that would otherwise trip the
+// unmanaged-server preflight during migration.
+type legacyServerStopper interface {
+	stopLegacyServer(ctx context.Context, spec serviceSpec)
+}
+
+// stopLegacyManagedServer best-effort stops a previous-generation server (e.g.
+// the Windows scheduled-task launcher) before the install/restart preflight, so
+// upgrading from an older Kent does not require manually killing the old server
+// first. A no-op on backends without a legacy generation.
+func stopLegacyManagedServer(ctx context.Context, backend serviceBackend, spec serviceSpec) {
+	if stopper, ok := backend.(legacyServerStopper); ok {
+		stopper.stopLegacyServer(ctx, spec)
+	}
 }
 
 func runServiceCommandAction(ctx context.Context, action serviceAction, opts serviceCommandOptions, stdout io.Writer, stderr io.Writer) int {
@@ -280,6 +289,7 @@ func runServiceCommandAction(ctx context.Context, action serviceAction, opts ser
 		writeServiceStatus(stdout, status)
 		return 0
 	case serviceActionInstall:
+		stopLegacyManagedServer(ctx, backend, spec)
 		if err := ensureNoUnmanagedServerConflictForAction(ctx, backend, spec, serviceActionInstall); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -344,6 +354,13 @@ func runServiceCommandAction(ctx context.Context, action serviceAction, opts ser
 			if rootMismatchError(status, spec) != nil {
 				return 0
 			}
+			// Reinstall rewrites the registration (admin-only on Windows). Elevate
+			// only now that a matching installation is confirmed, so a not-installed
+			// or root-mismatch no-op above never triggers an unnecessary UAC prompt.
+			if code, handled := elevateServiceAction(serviceActionRestart); handled {
+				return code
+			}
+			stopLegacyManagedServer(ctx, backend, spec)
 			if err := ensureNoUnmanagedServerConflictForAction(ctx, backend, spec, action); err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1

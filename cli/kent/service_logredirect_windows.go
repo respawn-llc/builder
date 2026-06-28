@@ -32,6 +32,10 @@ func redirectServiceLogs() {
 
 func redirectStdStream(envVar string, target **os.File, stdHandle uint32) {
 	path := os.Getenv(envVar)
+	// Consume the variable so user/model commands spawned by shell tools (which
+	// build their environment from os.Environ()) do not inherit it and redirect
+	// their own output into the service logs.
+	_ = os.Unsetenv(envVar)
 	if path == "" {
 		return
 	}
