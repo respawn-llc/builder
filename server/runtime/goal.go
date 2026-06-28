@@ -131,8 +131,8 @@ func (e *Engine) QueueAgentShellCompleteGoal(actor session.GoalActor) (session.G
 	if e == nil || e.store == nil {
 		return session.GoalState{}, false, fmt.Errorf("runtime engine is required")
 	}
-	current := e.Goal()
-	if current == nil {
+	current := e.effectiveGoalForActiveStep()
+	if current == nil || current.Status == session.GoalStatusComplete {
 		return session.GoalState{}, false, errors.New("goal is not set")
 	}
 	queued, err := e.enqueueActiveStepGoalMutation(activeStepGoalMutation{
@@ -146,6 +146,41 @@ func (e *Engine) QueueAgentShellCompleteGoal(actor session.GoalActor) (session.G
 	accepted.Status = session.GoalStatusComplete
 	accepted.UpdatedAt = time.Now().UTC()
 	return accepted, true, nil
+}
+
+func (e *Engine) effectiveGoalForActiveStep() *session.GoalState {
+	goal := e.Goal()
+	_, _ = e.stepLifecycle.WithActiveStep(func(stepID string) error {
+		stepID = strings.TrimSpace(stepID)
+		if stepID == "" {
+			return nil
+		}
+		e.activeStepGoalMutationsMu.Lock()
+		pending := append([]activeStepGoalMutation(nil), e.activeStepGoalMutations[stepID]...)
+		e.activeStepGoalMutationsMu.Unlock()
+		goal = foldGoalMutations(goal, pending)
+		return nil
+	})
+	return goal
+}
+
+func foldGoalMutations(goal *session.GoalState, mutations []activeStepGoalMutation) *session.GoalState {
+	for _, mutation := range mutations {
+		switch mutation.kind {
+		case activeStepGoalMutationSet:
+			now := time.Now().UTC()
+			next := session.GoalState{Objective: mutation.objective, Status: session.GoalStatusActive, CreatedAt: now, UpdatedAt: now}
+			goal = &next
+		case activeStepGoalMutationComplete:
+			if goal != nil {
+				next := *goal
+				next.Status = session.GoalStatusComplete
+				next.UpdatedAt = time.Now().UTC()
+				goal = &next
+			}
+		}
+	}
+	return goal
 }
 
 func (e *Engine) enqueueActiveStepGoalMutation(mutation activeStepGoalMutation) (bool, error) {

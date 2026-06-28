@@ -165,6 +165,31 @@ func TestQueuedAgentShellGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	}
 }
 
+func TestQueuedAgentShellGoalCompleteSeesQueuedSet(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step-1", snapshot: &RunSnapshot{RunID: "run-1", StepID: "step-1"}}
+
+	if _, queued, err := engine.QueueAgentShellSetGoal("queued goal", session.GoalActorAgent); err != nil || !queued {
+		t.Fatalf("QueueAgentShellSetGoal queued=%t err=%v, want queued", queued, err)
+	}
+	accepted, queued, err := engine.QueueAgentShellCompleteGoal(session.GoalActorAgent)
+	if err != nil || !queued {
+		t.Fatalf("QueueAgentShellCompleteGoal queued=%t err=%v, want queued completion of the queued set", queued, err)
+	}
+	if accepted.Objective != "queued goal" || accepted.Status != session.GoalStatusComplete {
+		t.Fatalf("accepted completion = %+v, want completed 'queued goal'", accepted)
+	}
+	if err := engine.drainActiveStepGoalMutations("step-1"); err != nil {
+		t.Fatalf("drain goal mutations: %v", err)
+	}
+	if g := engine.Goal(); g == nil || g.Objective != "queued goal" || g.Status != session.GoalStatusComplete {
+		t.Fatalf("goal after drain = %+v, want completed 'queued goal'", g)
+	}
+}
+
 func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	events := make([]Event, 0, 10)
