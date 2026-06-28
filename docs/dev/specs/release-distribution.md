@@ -54,7 +54,9 @@
 - `desktop-checksums.txt` carries sha256s for the distributable bundles.
 - macOS bundles are Developer ID signed in CI (`APPLE_CERTIFICATE`); notarization is
   off for v1 (Apple-side blocked), so v1 ships signed + un-notarized. The macOS
-  build runner is pinned `macos-26` for the liquid-glass icon toolchain.
+  build runner is pinned `macos-26` for the liquid-glass icon toolchain. Minimum
+  deployment target is macOS 15 (Sequoia); Liquid Glass UI falls back to
+  `NSVisualEffectView` on pre-26 macOS.
 
 ## Desktop App Updates
 
@@ -107,8 +109,8 @@ together. (This reverses an earlier draft that called for `auto_updates true`.)
 (it downloads the published `.dmg` to compute the `sha256`); without that flag it
 updates only the `kent` formula. The generated cask declares
 `depends_on formula: "kent"` (server present + lockstepped), `depends_on arch: :arm64`,
-`depends_on macos: :tahoe` (macOS 26 minimum — the liquid-glass UI uses
-`NSGlassEffectView`, which is 26+; mirrored by `minimumSystemVersion` in
+`depends_on macos: :sequoia` (macOS 15 minimum — the liquid-glass UI degrades to
+`NSVisualEffectView` on pre-26 macOS; mirrored by `minimumSystemVersion` in
 `tauri.conf.json`), `app "Kent.app"`, and the `postflight` gate. It carries **no**
 `auto_updates`, and is validated by `brew style`.
 
