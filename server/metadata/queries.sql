@@ -3140,19 +3140,19 @@ WITH attention_candidates(
     UNION ALL
     SELECT
         'interrupted_run' AS kind,
-        CAST('interrupted_run:' || r.id AS TEXT) AS id,
+        CAST('interrupted_run:' || t.id AS TEXT) AS id,
         t.project_id,
         t.workflow_id,
         t.id AS task_id,
         t.short_id,
         t.title,
-        r.id AS run_id,
-        COALESCE(r.session_id, '') AS session_id,
+        '' AS run_id,
+        '' AS session_id,
         '' AS ask_id,
         '' AS task_transition_id,
-        r.interruption_reason,
-        r.interruption_detail_json,
-        r.interrupted_at_unix_ms AS occurred_at_unix_ms
+        '' AS interruption_reason,
+        '' AS interruption_detail_json,
+        MAX(r.interrupted_at_unix_ms) AS occurred_at_unix_ms
     FROM task_run_records r
     JOIN task_records t ON t.id = r.task_id
     JOIN task_node_placements p ON p.id = r.placement_id
@@ -3162,11 +3162,12 @@ WITH attention_candidates(
       AND t.canceled_at_unix_ms = 0
       AND (sqlc.arg(project_id) = '' OR t.project_id = sqlc.arg(project_id))
       AND (sqlc.arg(task_id) = '' OR t.id = sqlc.arg(task_id))
-      AND (
-          CAST(sqlc.arg(cursor_active) AS INTEGER) = 0
-          OR r.interrupted_at_unix_ms < sqlc.arg(cursor_occurred_at_unix_ms)
-          OR (r.interrupted_at_unix_ms = sqlc.arg(cursor_occurred_at_unix_ms) AND ('interrupted_run:' || r.id) < sqlc.arg(cursor_item_id))
-      )
+    GROUP BY t.id
+    HAVING (
+        CAST(sqlc.arg(cursor_active) AS INTEGER) = 0
+        OR MAX(r.interrupted_at_unix_ms) < sqlc.arg(cursor_occurred_at_unix_ms)
+        OR (MAX(r.interrupted_at_unix_ms) = sqlc.arg(cursor_occurred_at_unix_ms) AND ('interrupted_run:' || t.id) < sqlc.arg(cursor_item_id))
+    )
     UNION ALL
     SELECT
         'validation_blocker' AS kind,
@@ -3238,7 +3239,7 @@ ORDER BY r.updated_at_unix_ms DESC, (
 ) DESC;
 
 -- name: ListWorkflowInterruptedRunAttentionItems :many
-SELECT r.id AS run_id, COALESCE(r.session_id, '') AS session_id, r.interruption_reason, r.interruption_detail_json, t.project_id, t.workflow_id, t.id AS task_id, t.short_id, t.title, r.interrupted_at_unix_ms
+SELECT t.project_id, t.workflow_id, t.id AS task_id, t.short_id, t.title, CAST(COALESCE(MAX(r.interrupted_at_unix_ms), 0) AS INTEGER) AS interrupted_at_unix_ms
 FROM task_run_records r
 JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
@@ -3248,11 +3249,8 @@ WHERE r.interrupted_at_unix_ms > 0
   AND t.canceled_at_unix_ms = 0
   AND (sqlc.arg(project_id) = '' OR t.project_id = sqlc.arg(project_id))
   AND (sqlc.arg(task_id) = '' OR t.id = sqlc.arg(task_id))
-ORDER BY r.interrupted_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = r.id
-) DESC;
+GROUP BY t.id
+ORDER BY interrupted_at_unix_ms DESC, t.id DESC;
 
 -- name: ListWorkflowValidationAttentionItems :many
 SELECT project_id, workflow_id, updated_at_unix_ms
@@ -3507,7 +3505,7 @@ FROM task_run_records r
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
 WHERE r.task_id = sqlc.arg(task_id)
-  AND (sqlc.arg(run_id) = '' OR r.id = sqlc.arg(run_id))
+  AND (sqlc.arg(session_id) = '' OR r.session_id = sqlc.arg(session_id))
   AND r.started_at_unix_ms > 0
   AND r.completed_at_unix_ms = 0
   AND r.interrupted_at_unix_ms = 0
@@ -3527,7 +3525,6 @@ FROM task_run_records r
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
 WHERE r.task_id = sqlc.arg(task_id)
-  AND (sqlc.arg(run_id) = '' OR r.id = sqlc.arg(run_id))
   AND r.completed_at_unix_ms = 0
   AND r.interrupted_at_unix_ms > 0
   AND p.state = 'active'

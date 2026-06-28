@@ -108,12 +108,8 @@ function card(over: Partial<BoardCard>): BoardCard {
     actions: {
       canStart: true,
       canInterrupt: false,
-      interruptRunID: "",
       canResume: false,
-      resumeRunID: "",
       canCancel: false,
-      needsDetailForInterrupt: false,
-      needsDetailForResume: false,
       manualMoveTargetNodeIDs: [],
     },
     updatedAt: 1,

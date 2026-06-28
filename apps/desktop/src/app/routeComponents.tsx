@@ -74,7 +74,7 @@ function RoutePersistence() {
         void navigate({
           to: "/projects/$projectId",
           params: { projectId: restored.projectId },
-          search: { workflowId: restored.workflowId, taskId: "", resumeRunId: "" },
+          search: { workflowId: restored.workflowId, taskId: "" },
           replace: true,
         });
       }
@@ -119,7 +119,6 @@ export function ProjectRoute() {
   return (
     <BoardRoute
       projectId={params.projectId}
-      resumeRunId={search.resumeRunId}
       selectedTaskId={search.taskId}
       workflowId={search.workflowId}
     />

@@ -555,26 +555,53 @@ func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.Workf
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
-	interrupted, err := s.store.InterruptTaskRun(ctx, workflow.TaskID(req.TaskID), workflow.RunID(req.RunID), req.Reason)
+	interrupted, err := s.store.InterruptTaskRuns(ctx, workflow.TaskID(req.TaskID), req.SessionID, req.Reason)
 	if err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
-	if canceler, ok := s.runtimeCancel.(taskRuntimeRunCanceler); ok {
-		if err := canceler.CancelRun(ctx, interrupted.ID); err != nil {
-			return serverapi.WorkflowTaskInterruptResponse{}, err
+	cancelErr := s.cancelInterruptedRuntimes(ctx, workflow.TaskID(req.TaskID), req.SessionID, interrupted)
+	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
+		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "interrupted", req.TaskID)
+	}
+	if cancelErr != nil {
+		return serverapi.WorkflowTaskInterruptResponse{}, cancelErr
+	}
+	return serverapi.WorkflowTaskInterruptResponse{Runs: workflowTaskRunSummaries(interrupted)}, nil
+}
+
+func (s *Service) cancelInterruptedRuntimes(ctx context.Context, taskID workflow.TaskID, sessionID string, interrupted []workflowstore.RunRecord) error {
+	if s.runtimeCancel == nil {
+		return nil
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return s.runtimeCancel.CancelTaskRuns(ctx, taskID)
+	}
+	canceler, ok := s.runtimeCancel.(taskRuntimeRunCanceler)
+	if !ok {
+		return nil
+	}
+	errs := make([]error, 0, len(interrupted))
+	for _, run := range interrupted {
+		if err := canceler.CancelRun(ctx, run.ID); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "interrupted", req.TaskID, string(interrupted.ID))
+	return errors.Join(errs...)
+}
+
+func workflowTaskRunSummaries(runs []workflowstore.RunRecord) []serverapi.WorkflowTaskRunSummary {
+	summaries := make([]serverapi.WorkflowTaskRunSummary, 0, len(runs))
+	for _, run := range runs {
+		summaries = append(summaries, serverapi.WorkflowTaskRunSummary{PlacementID: string(run.PlacementID), NodeID: string(run.NodeID), Generation: run.Generation, SessionID: run.SessionID})
 	}
-	return serverapi.WorkflowTaskInterruptResponse{RunID: string(interrupted.ID)}, nil
+	return summaries
 }
 
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
-	resumed, err := s.store.ResumeTaskRunByID(ctx, workflow.TaskID(req.TaskID), workflow.RunID(req.RunID))
+	resumed, err := s.store.ResumeTaskRuns(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
@@ -582,9 +609,9 @@ func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		s.schedulerWake.Notify()
 	}
 	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
-		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "resumed", req.TaskID, string(resumed.ID))
+		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "resumed", req.TaskID)
 	}
-	return serverapi.WorkflowTaskResumeResponse{RunID: string(resumed.ID), PlacementID: string(resumed.PlacementID), NodeID: string(resumed.NodeID), Generation: resumed.Generation, SessionID: resumed.SessionID}, nil
+	return serverapi.WorkflowTaskResumeResponse{Runs: workflowTaskRunSummaries(resumed)}, nil
 }
 
 func (s *Service) StartTaskAutomation(ctx context.Context, taskID string) (workflowstore.StartTaskResult, error) {

@@ -30,6 +30,8 @@ type Service struct {
 
 const attentionKindInterruptedRun = "interrupted_run"
 
+const interruptedRunAttentionMessage = "This task's run was stopped."
+
 // Sentinel errors returned by the workflow view service. Callers and tests must
 // match these with errors.Is/errors.As rather than comparing rendered message
 // text. Dynamic context is wrapped via fmt.Errorf("... %w", Err...).
@@ -936,7 +938,7 @@ func (s *Service) attentionItemFromCandidate(ctx context.Context, row attentionC
 		}
 		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "question", ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, AskID: row.askID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case attentionKindInterruptedRun:
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, Message: interruptedRunMessage(row.interruptionReason, row.interruptionDetailJSON), OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, Message: interruptedRunAttentionMessage, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "validation_blocker":
 		def, _, err := s.definition(ctx, row.workflowID)
 		if err != nil {
@@ -1593,8 +1595,7 @@ func (s *Service) interruptedRunAttentionItems(ctx context.Context, projectID st
 	}
 	items := make([]serverapi.WorkflowAttentionItem, 0, len(rows))
 	for _, row := range rows {
-		message := interruptedRunMessage(row.InterruptionReason, row.InterruptionDetailJson)
-		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: message, OccurredAtUnixMs: row.InterruptedAtUnixMs})
+		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.TaskID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, Message: interruptedRunAttentionMessage, OccurredAtUnixMs: row.InterruptedAtUnixMs})
 	}
 	return items, nil
 }
@@ -1888,16 +1889,8 @@ func taskStatusAndActions(task sqlitegen.TaskRecord, summary serverapi.WorkflowT
 	if taskActive {
 		actions.ManualMoveTargetNodeIDs = manualMoveTargetNodeIDs(def, placements, nodeKinds)
 	}
-	actions.CanInterrupt = taskActive && len(runningRunIDs) == 1
-	actions.NeedsDetailForInterrupt = taskActive && len(runningRunIDs) > 1
-	if actions.CanInterrupt {
-		actions.InterruptRunID = runningRunIDs[0]
-	}
-	actions.CanResume = taskActive && len(interruptedRunIDs) == 1
-	actions.NeedsDetailForResume = taskActive && len(interruptedRunIDs) > 1
-	if actions.CanResume {
-		actions.ResumeRunID = interruptedRunIDs[0]
-	}
+	actions.CanInterrupt = taskActive && len(runningRunIDs) >= 1
+	actions.CanResume = taskActive && len(interruptedRunIDs) >= 1
 	switch {
 	case task.CanceledAtUnixMs != 0:
 		status.Kind = "canceled"

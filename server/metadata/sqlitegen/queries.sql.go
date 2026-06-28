@@ -4082,7 +4082,7 @@ FROM task_run_records r
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
 WHERE r.task_id = ?1
-  AND (?2 = '' OR r.id = ?2)
+  AND (?2 = '' OR r.session_id = ?2)
   AND r.started_at_unix_ms > 0
   AND r.completed_at_unix_ms = 0
   AND r.interrupted_at_unix_ms = 0
@@ -4096,12 +4096,12 @@ ORDER BY r.started_at_unix_ms DESC, (
 `
 
 type ListInterruptTaskRunCandidatesParams struct {
-	TaskID string
-	RunID  interface{}
+	TaskID    string
+	SessionID interface{}
 }
 
 func (q *Queries) ListInterruptTaskRunCandidates(ctx context.Context, arg ListInterruptTaskRunCandidatesParams) ([]TaskRunRecord, error) {
-	rows, err := q.db.QueryContext(ctx, listInterruptTaskRunCandidates, arg.TaskID, arg.RunID)
+	rows, err := q.db.QueryContext(ctx, listInterruptTaskRunCandidates, arg.TaskID, arg.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -4870,7 +4870,6 @@ FROM task_run_records r
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
 WHERE r.task_id = ?1
-  AND (?2 = '' OR r.id = ?2)
   AND r.completed_at_unix_ms = 0
   AND r.interrupted_at_unix_ms > 0
   AND p.state = 'active'
@@ -4882,18 +4881,13 @@ ORDER BY r.interrupted_at_unix_ms DESC, (
 ) DESC
 `
 
-type ListResumeTaskRunCandidatesParams struct {
-	TaskID string
-	RunID  interface{}
-}
-
 type ListResumeTaskRunCandidatesRow struct {
 	ID                   string
 	RunStartSnapshotJson string
 }
 
-func (q *Queries) ListResumeTaskRunCandidates(ctx context.Context, arg ListResumeTaskRunCandidatesParams) ([]ListResumeTaskRunCandidatesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listResumeTaskRunCandidates, arg.TaskID, arg.RunID)
+func (q *Queries) ListResumeTaskRunCandidates(ctx context.Context, taskID string) ([]ListResumeTaskRunCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listResumeTaskRunCandidates, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -6267,19 +6261,19 @@ WITH attention_candidates(
     UNION ALL
     SELECT
         'interrupted_run' AS kind,
-        CAST('interrupted_run:' || r.id AS TEXT) AS id,
+        CAST('interrupted_run:' || t.id AS TEXT) AS id,
         t.project_id,
         t.workflow_id,
         t.id AS task_id,
         t.short_id,
         t.title,
-        r.id AS run_id,
-        COALESCE(r.session_id, '') AS session_id,
+        '' AS run_id,
+        '' AS session_id,
         '' AS ask_id,
         '' AS task_transition_id,
-        r.interruption_reason,
-        r.interruption_detail_json,
-        r.interrupted_at_unix_ms AS occurred_at_unix_ms
+        '' AS interruption_reason,
+        '' AS interruption_detail_json,
+        MAX(r.interrupted_at_unix_ms) AS occurred_at_unix_ms
     FROM task_run_records r
     JOIN task_records t ON t.id = r.task_id
     JOIN task_node_placements p ON p.id = r.placement_id
@@ -6289,11 +6283,12 @@ WITH attention_candidates(
       AND t.canceled_at_unix_ms = 0
       AND (?2 = '' OR t.project_id = ?2)
       AND (?3 = '' OR t.id = ?3)
-      AND (
-          CAST(?4 AS INTEGER) = 0
-          OR r.interrupted_at_unix_ms < ?5
-          OR (r.interrupted_at_unix_ms = ?5 AND ('interrupted_run:' || r.id) < ?6)
-      )
+    GROUP BY t.id
+    HAVING (
+        CAST(?4 AS INTEGER) = 0
+        OR MAX(r.interrupted_at_unix_ms) < ?5
+        OR (MAX(r.interrupted_at_unix_ms) = ?5 AND ('interrupted_run:' || t.id) < ?6)
+    )
     UNION ALL
     SELECT
         'validation_blocker' AS kind,
@@ -6489,7 +6484,7 @@ func (q *Queries) ListWorkflowEdges(ctx context.Context, workflowID string) ([]L
 }
 
 const listWorkflowInterruptedRunAttentionItems = `-- name: ListWorkflowInterruptedRunAttentionItems :many
-SELECT r.id AS run_id, COALESCE(r.session_id, '') AS session_id, r.interruption_reason, r.interruption_detail_json, t.project_id, t.workflow_id, t.id AS task_id, t.short_id, t.title, r.interrupted_at_unix_ms
+SELECT t.project_id, t.workflow_id, t.id AS task_id, t.short_id, t.title, CAST(COALESCE(MAX(r.interrupted_at_unix_ms), 0) AS INTEGER) AS interrupted_at_unix_ms
 FROM task_run_records r
 JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
@@ -6499,11 +6494,8 @@ WHERE r.interrupted_at_unix_ms > 0
   AND t.canceled_at_unix_ms = 0
   AND (?1 = '' OR t.project_id = ?1)
   AND (?2 = '' OR t.id = ?2)
-ORDER BY r.interrupted_at_unix_ms DESC, (
-    SELECT storage.rowid
-    FROM task_runs storage
-    WHERE storage.id = r.id
-) DESC
+GROUP BY t.id
+ORDER BY interrupted_at_unix_ms DESC, t.id DESC
 `
 
 type ListWorkflowInterruptedRunAttentionItemsParams struct {
@@ -6512,16 +6504,12 @@ type ListWorkflowInterruptedRunAttentionItemsParams struct {
 }
 
 type ListWorkflowInterruptedRunAttentionItemsRow struct {
-	RunID                  string
-	SessionID              string
-	InterruptionReason     string
-	InterruptionDetailJson string
-	ProjectID              string
-	WorkflowID             string
-	TaskID                 string
-	ShortID                string
-	Title                  string
-	InterruptedAtUnixMs    int64
+	ProjectID           string
+	WorkflowID          string
+	TaskID              string
+	ShortID             string
+	Title               string
+	InterruptedAtUnixMs int64
 }
 
 func (q *Queries) ListWorkflowInterruptedRunAttentionItems(ctx context.Context, arg ListWorkflowInterruptedRunAttentionItemsParams) ([]ListWorkflowInterruptedRunAttentionItemsRow, error) {
@@ -6534,10 +6522,6 @@ func (q *Queries) ListWorkflowInterruptedRunAttentionItems(ctx context.Context, 
 	for rows.Next() {
 		var i ListWorkflowInterruptedRunAttentionItemsRow
 		if err := rows.Scan(
-			&i.RunID,
-			&i.SessionID,
-			&i.InterruptionReason,
-			&i.InterruptionDetailJson,
 			&i.ProjectID,
 			&i.WorkflowID,
 			&i.TaskID,

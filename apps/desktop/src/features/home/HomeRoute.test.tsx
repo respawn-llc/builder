@@ -458,12 +458,8 @@ const taskDetailResponse = {
     actions: {
       can_start: false,
       can_interrupt: true,
-      interrupt_run_id: "run-1",
       can_resume: false,
-      resume_run_id: "",
       can_cancel: true,
-      needs_detail_for_interrupt: false,
-      needs_detail_for_resume: false,
       manual_move_target_node_ids: [],
     },
     attention: [],

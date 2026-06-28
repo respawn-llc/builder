@@ -5,6 +5,7 @@ import type { AttentionItem, TaskDetail } from "../../api";
 import { Island } from "../../ui";
 import {
   ApprovalBox,
+  InterruptedRunBox,
   QuestionBox,
 } from "./TaskDetailAttention";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
@@ -118,6 +119,13 @@ function InboxItem({
           mutations={mutations}
           transitions={transitions}
         />
+      </div>
+    );
+  }
+  if (attention.kind === "interrupted_run") {
+    return (
+      <div ref={focusTargetRef}>
+        <InterruptedRunBox attention={attention} disabled={disabled} mutations={mutations} />
       </div>
     );
   }

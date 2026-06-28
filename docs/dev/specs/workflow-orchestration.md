@@ -158,7 +158,8 @@
 - Waiting-for-question remains only if the pending ask can rehydrate.
 - Started runs with no terminal outcome and no live owner after startup become interrupted with restart/shutdown reason.
 - Interrupted runs are never automatically retried.
-- Explicit resume continues the interrupted session/run from current transcript/worktree state.
+- Explicit resume is task-level: it continues every interrupted run of the task from current transcript/worktree state, with no run selection.
+- Explicit interrupt is task-level with an optional session-id selector: no session interrupts all running runs of the task; a specific session interrupts only that run. Run id is never an operator-facing selector — the public per-run identifier is the session id.
 - Completion/transition application uses a fence/generation or compare-and-swap so stale runtime callbacks cannot mutate superseded runs.
 - Run completion and transition application remain one SQLite transaction.
 - Runtime failures, cancellation, crashes, model/runtime interruptions, and fixable scheduling validation blockers converge on interrupted outcome with reason metadata.

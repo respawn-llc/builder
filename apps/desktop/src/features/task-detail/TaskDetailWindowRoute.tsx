@@ -15,7 +15,7 @@ export function TaskDetailWindowRoute({ taskID }: Readonly<{ taskID: string }>) 
         data-tauri-drag-region
       />
       <div className="app-region-no-drag min-h-0 overflow-hidden">
-        <TaskDetailSurface enabled resumeRunId="" taskId={taskID} />
+        <TaskDetailSurface enabled taskId={taskID} />
       </div>
     </main>
   );

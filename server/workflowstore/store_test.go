@@ -3211,10 +3211,14 @@ func TestResumeTaskRunRequeuesInterruptedRunWithSameSession(t *testing.T) {
 		t.Fatalf("InterruptRunGeneration: %v", err)
 	}
 
-	resumed, err := store.ResumeTaskRun(ctx, task.ID)
+	resumedRuns, err := store.ResumeTaskRuns(ctx, task.ID)
 	if err != nil {
-		t.Fatalf("ResumeTaskRun: %v", err)
+		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
+	if len(resumedRuns) != 1 {
+		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
+	}
+	resumed := resumedRuns[0]
 	if resumed.ID != started.RunID || resumed.SessionID != sessionID || resumed.StartedAt != 0 || resumed.InterruptedAt != 0 || resumed.Generation <= claimed.Generation {
 		t.Fatalf("resumed run = %+v, want same run/session requeued with newer generation", resumed)
 	}
@@ -3248,8 +3252,8 @@ func TestResumeTaskRunRejectsRoleDrift(t *testing.T) {
 	store.roleResolver = workflow.StaticRoleResolver{}
 
 	var roleErr WorkflowValidationError
-	if _, err := store.ResumeTaskRun(ctx, task.ID); !errors.As(err, &roleErr) || !roleErr.HasCode(workflow.CodeAgentRoleMissing) {
-		t.Fatalf("ResumeTaskRun role drift error = %v, want %s", err, workflow.CodeAgentRoleMissing)
+	if _, err := store.ResumeTaskRuns(ctx, task.ID); !errors.As(err, &roleErr) || !roleErr.HasCode(workflow.CodeAgentRoleMissing) {
+		t.Fatalf("ResumeTaskRuns role drift error = %v, want %s", err, workflow.CodeAgentRoleMissing)
 	}
 }
 
@@ -3275,10 +3279,14 @@ func TestResumeTaskRunAllowsDefaultAgentRoleWithoutResolver(t *testing.T) {
 	}
 	store.roleResolver = workflow.StaticRoleResolver{}
 
-	resumed, err := store.ResumeTaskRun(ctx, task.ID)
+	resumedRuns, err := store.ResumeTaskRuns(ctx, task.ID)
 	if err != nil {
-		t.Fatalf("ResumeTaskRun default role: %v", err)
+		t.Fatalf("ResumeTaskRuns default role: %v", err)
 	}
+	if len(resumedRuns) != 1 {
+		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
+	}
+	resumed := resumedRuns[0]
 	if resumed.ID != started.RunID || resumed.InterruptedAt != 0 || resumed.StartedAt != 0 {
 		t.Fatalf("resumed run = %+v, want default-role run requeued", resumed)
 	}
@@ -3304,17 +3312,21 @@ func TestResumeTaskRunCanResumeInterruptedWaitingAskRun(t *testing.T) {
 		t.Fatalf("InterruptRun: %v", err)
 	}
 
-	resumed, err := store.ResumeTaskRun(ctx, task.ID)
+	resumedRuns, err := store.ResumeTaskRuns(ctx, task.ID)
 	if err != nil {
-		t.Fatalf("ResumeTaskRun: %v", err)
+		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
+	if len(resumedRuns) != 1 {
+		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
+	}
+	resumed := resumedRuns[0]
 	if resumed.ID != started.RunID || resumed.WaitingAskID != "" || resumed.InterruptedAt != 0 || resumed.StartedAt != 0 {
 		t.Fatalf("resumed waiting ask run = %+v, want requeued same run without waiting ask", resumed)
 	}
 }
 
-func TestInterruptAndResumeTaskRunCanTargetSpecificRun(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
+func TestInterruptTargetsBySessionAndResumeRequeuesAllRuns(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task, branchRuns := startFanoutTask(t, ctx, store, binding.ProjectID, workflowID)
@@ -3325,33 +3337,43 @@ func TestInterruptAndResumeTaskRunCanTargetSpecificRun(t *testing.T) {
 	if len(runIDs) != 2 {
 		t.Fatalf("branch runs = %+v, want two", branchRuns)
 	}
+	sessions := make(map[workflow.RunID]string, len(runIDs))
 	for _, runID := range runIDs {
-		if _, err := store.ClaimRun(ctx, runID, 0); err != nil {
+		claimed, err := store.ClaimRun(ctx, runID, 0)
+		if err != nil {
 			t.Fatalf("ClaimRun %s: %v", runID, err)
 		}
+		sessionID := createTestSession(t, ctx, store, binding, cfg)
+		if err := store.AttachRunSession(ctx, runID, claimed.Generation, sessionID); err != nil {
+			t.Fatalf("AttachRunSession %s: %v", runID, err)
+		}
+		sessions[runID] = sessionID
 	}
-	if _, err := store.InterruptTaskRun(ctx, task.ID, "", "manual"); !errors.Is(err, ErrRunIDRequired) {
-		t.Fatalf("InterruptTaskRun ambiguous error = %v", err)
-	}
-	interrupted, err := store.InterruptTaskRun(ctx, task.ID, runIDs[0], "manual")
+	interrupted, err := store.InterruptTaskRuns(ctx, task.ID, sessions[runIDs[0]], "manual")
 	if err != nil {
-		t.Fatalf("InterruptTaskRun selected: %v", err)
+		t.Fatalf("InterruptTaskRuns by session: %v", err)
 	}
-	if interrupted.ID != runIDs[0] || interrupted.InterruptedAt == 0 {
-		t.Fatalf("interrupted = %+v, want %s", interrupted, runIDs[0])
+	if len(interrupted) != 1 || interrupted[0].ID != runIDs[0] || interrupted[0].InterruptedAt == 0 {
+		t.Fatalf("interrupted = %+v, want only %s", interrupted, runIDs[0])
 	}
-	if _, err := store.InterruptTaskRun(ctx, task.ID, runIDs[1], "manual"); err != nil {
-		t.Fatalf("InterruptTaskRun second selected: %v", err)
-	}
-	if _, err := store.ResumeTaskRunByID(ctx, task.ID, ""); !errors.Is(err, ErrRunIDRequired) {
-		t.Fatalf("ResumeTaskRun ambiguous error = %v", err)
-	}
-	resumed, err := store.ResumeTaskRunByID(ctx, task.ID, runIDs[0])
+	interruptedRest, err := store.InterruptTaskRuns(ctx, task.ID, "", "manual")
 	if err != nil {
-		t.Fatalf("ResumeTaskRunByID selected: %v", err)
+		t.Fatalf("InterruptTaskRuns all: %v", err)
 	}
-	if resumed.ID != runIDs[0] || resumed.InterruptedAt != 0 || resumed.StartedAt != 0 {
-		t.Fatalf("resumed = %+v, want selected run reset", resumed)
+	if len(interruptedRest) != 1 || interruptedRest[0].ID != runIDs[1] {
+		t.Fatalf("interrupted rest = %+v, want only %s", interruptedRest, runIDs[1])
+	}
+	resumed, err := store.ResumeTaskRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ResumeTaskRuns: %v", err)
+	}
+	if len(resumed) != 2 {
+		t.Fatalf("resumed = %+v, want both runs", resumed)
+	}
+	for _, run := range resumed {
+		if run.InterruptedAt != 0 || run.StartedAt != 0 {
+			t.Fatalf("resumed run = %+v, want reset", run)
+		}
 	}
 }
 

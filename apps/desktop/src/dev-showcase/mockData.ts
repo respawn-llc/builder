@@ -142,9 +142,9 @@ const statuses = {
 
 const taskActions = {
   start: actions({ canStart: true, manualMoveTargetNodeIDs: ["node-design"] }),
-  running: actions({ canInterrupt: true, interruptRunID: "run-a7f2" }),
+  running: actions({ canInterrupt: true }),
   waiting: actions({}),
-  resume: actions({ canResume: true, resumeRunID: "run-99da" }),
+  resume: actions({ canResume: true }),
   done: actions({}),
 } as const;
 
@@ -415,11 +415,7 @@ function actions(overrides: Partial<TaskActions>): TaskActions {
     canInterrupt: false,
     canResume: false,
     canStart: false,
-    interruptRunID: "",
     manualMoveTargetNodeIDs: [],
-    needsDetailForInterrupt: false,
-    needsDetailForResume: false,
-    resumeRunID: "",
     ...overrides,
   };
 }

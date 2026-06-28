@@ -40,12 +40,11 @@ export type BoardRouteProps = Readonly<{
   projectId: string;
   workflowId: string;
   selectedTaskId: string;
-  resumeRunId: string;
 }>;
 
 const emptyExpandedEmptyColumnIDs: ReadonlySet<string> = new Set();
 
-export function BoardRoute({ projectId, workflowId, selectedTaskId, resumeRunId }: BoardRouteProps) {
+export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRouteProps) {
   const { t } = useTranslation();
   const { push } = useStatusController();
   const navigation = useAppNavigation();
@@ -126,7 +125,6 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId, resumeRunId 
     <BoardContent
       board={board}
       boardQueryWorkflowID={workflowId}
-      resumeRunId={resumeRunId}
       selectedTaskId={selectedTaskId}
     />
   );
@@ -136,12 +134,10 @@ function BoardContent({
   board,
   boardQueryWorkflowID,
   selectedTaskId,
-  resumeRunId,
 }: Readonly<{
   board: WorkflowBoard;
   boardQueryWorkflowID: string;
   selectedTaskId: string;
-  resumeRunId: string;
 }>) {
   const { t } = useTranslation();
   const [workflowIssuesCollapsed, setWorkflowIssuesCollapsed] = useState(false);
@@ -218,7 +214,6 @@ function BoardContent({
       kind: "taskDetail",
       mode: "overlay",
       onMutated: undefined,
-      resumeRunID: resumeRunId,
       taskID: selectedTaskId,
     }).then((result) => {
       if (active && result.status === "canceled" && result.reason === "closed") {
@@ -236,7 +231,6 @@ function BoardContent({
     navigation,
     openSidebar,
     reportNavigationError,
-    resumeRunId,
     selectedTaskId,
   ]);
 
@@ -301,12 +295,12 @@ function BoardContent({
     });
   }
 
-  function interruptTask(taskID: string, runID: string): void {
-    void actions.interrupt.mutateAsync({ taskID, runID }).catch(reportInterruptError);
+  function interruptTask(taskID: string): void {
+    void actions.interrupt.mutateAsync(taskID).catch(reportInterruptError);
   }
 
-  function resumeTask(taskID: string, runID: string): void {
-    void actions.resume.mutateAsync({ taskID, runID }).catch(reportResumeError);
+  function resumeTask(taskID: string): void {
+    void actions.resume.mutateAsync(taskID).catch(reportResumeError);
   }
 
   function deleteTask(taskID: string): void {

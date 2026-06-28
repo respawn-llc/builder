@@ -165,12 +165,10 @@ export function PropertiesIsland({
   detail,
   disabled,
   mutations,
-  resumeRunId,
 }: Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
-  resumeRunId: string;
 }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
@@ -181,11 +179,13 @@ export function PropertiesIsland({
     [detail.runs],
   );
   const cliCommand = useMemo(() => sessionCommand(detail.runs), [detail.runs]);
-  const activeRuns = useMemo(
-    () => detail.runs.filter((run) => run.completedAt === 0 && run.interruptedAt === 0),
+  const interruptableRuns = useMemo(
+    () =>
+      detail.runs.filter(
+        (run) => run.completedAt === 0 && run.interruptedAt === 0 && run.sessionID.trim().length > 0,
+      ),
     [detail.runs],
   );
-  const resumeID = resumeRunId.length > 0 ? resumeRunId : detail.actions.resumeRunID;
 
   async function openInCli(): Promise<void> {
     if (cliCommand.length === 0) {
@@ -237,7 +237,7 @@ export function PropertiesIsland({
           <Button
             disabled={disabled}
             onClick={() => {
-              void mutations.resume.mutateAsync(resumeID);
+              void mutations.resume.mutateAsync();
             }}
             variant="primary"
           >
@@ -245,16 +245,16 @@ export function PropertiesIsland({
           </Button>
         ) : null}
         {detail.actions.canInterrupt
-          ? activeRuns.map((run) => (
+          ? interruptableRuns.map((run) => (
               <Button
                 disabled={disabled}
                 key={run.id}
                 onClick={() => {
-                  void mutations.interrupt.mutateAsync(run.id);
+                  void mutations.interrupt.mutateAsync(run.sessionID);
                 }}
                 variant="secondary"
               >
-                {t("board.interrupt")} <span className="font-mono">{run.id}</span>
+                {t("board.interrupt")} <span>{run.sessionName.trim() || run.sessionID}</span>
               </Button>
             ))
           : null}

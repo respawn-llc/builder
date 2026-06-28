@@ -77,8 +77,8 @@ export type BoardRailMotionControllerProps = Readonly<{
   onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
   onExpandColumn: (columnID: string) => void;
   onInterruptedRunObserved: (input: Readonly<{ runID: string; taskID: string }>) => void;
-  onInterruptTask: (taskID: string, runID: string) => void;
-  onResumeTask: (taskID: string, runID: string) => void;
+  onInterruptTask: (taskID: string) => void;
+  onResumeTask: (taskID: string) => void;
   pendingCardMove: PendingBoardCardMove | null;
   scrollportRef: RefObject<HTMLDivElement | null>;
 }>;
@@ -494,10 +494,10 @@ function BoardColumnMotionBoundary({
   onDropTask: (event: DragEvent<HTMLElement>, column: BoardColumn) => void;
   onExpandColumn: (columnID: string) => void;
   onInterruptedRunObserved: (input: Readonly<{ runID: string; taskID: string }>) => void;
-  onInterruptTask: (taskID: string, runID: string) => void;
+  onInterruptTask: (taskID: string) => void;
   onReportColumnSnapshot: (columnID: string, snapshot: BoardColumnQuerySnapshot) => void;
   onRegisterColumn: (columnID: string, element: HTMLElement | null) => void;
-  onResumeTask: (taskID: string, runID: string) => void;
+  onResumeTask: (taskID: string) => void;
   scrollportRef: RefObject<HTMLDivElement | null>;
 }>) {
   const [columnElement, setColumnElement] = useState<HTMLElement | null>(null);

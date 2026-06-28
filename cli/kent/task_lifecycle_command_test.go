@@ -221,12 +221,6 @@ func TestTaskMutationOutputRenderers(t *testing.T) {
 		t.Fatalf("start output = %q, want %q", got, want)
 	}
 
-	var resume bytes.Buffer
-	writeTaskResumeResult(&resume, task, serverapi.WorkflowTaskResumeResponse{RunID: "run-1", PlacementID: "placement-1", NodeID: "node-1", SessionID: "session-1"})
-	if got, want := resume.String(), "Resumed task BLD-1 in session session-1.\nCurrent node: implement\n"; got != want {
-		t.Fatalf("resume output = %q, want %q", got, want)
-	}
-
 	var approve bytes.Buffer
 	writeTaskTransitionResult(&approve, "Approved transition of", task, "transition-1", []string{"run-2"})
 	if got, want := approve.String(), "Approved transition of BLD-1 from `implement` to `done`.\nBecause of this, started node review in session session-2.\n"; got != want {

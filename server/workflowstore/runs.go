@@ -116,38 +116,51 @@ func (s *Store) InterruptRunGeneration(ctx context.Context, runID workflow.RunID
 	return nil
 }
 
-func (s *Store) InterruptTaskRun(ctx context.Context, taskID workflow.TaskID, runID workflow.RunID, reason string) (RunRecord, error) {
+func (s *Store) InterruptTaskRuns(ctx context.Context, taskID workflow.TaskID, sessionID string, reason string) ([]RunRecord, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
-		return RunRecord{}, errors.New("task id is required")
+		return nil, errors.New("task id is required")
 	}
-	trimmedRunID := strings.TrimSpace(string(runID))
 	rows, err := s.queries.ListInterruptTaskRunCandidates(ctx, sqlitegen.ListInterruptTaskRunCandidatesParams{
-		TaskID: string(taskID),
-		RunID:  trimmedRunID,
+		TaskID:    string(taskID),
+		SessionID: strings.TrimSpace(sessionID),
 	})
 	if err != nil {
-		return RunRecord{}, err
+		return nil, err
 	}
 	candidates := runRecordsFromTaskRunRecords(rows)
 	if len(candidates) == 0 {
-		return RunRecord{}, errors.New("task has no active workflow run to interrupt")
+		return nil, errors.New("task has no active workflow run to interrupt")
 	}
-	if trimmedRunID == "" && len(candidates) != 1 {
-		return RunRecord{}, fmt.Errorf("task has multiple active workflow runs; %w", ErrRunIDRequired)
-	}
-	selected := candidates[0]
 	interruptReason := strings.TrimSpace(reason)
 	if interruptReason == "" {
 		interruptReason = "user_interrupt"
 	}
-	if err := s.InterruptRun(ctx, selected.ID, interruptReason, "{}"); err != nil {
-		return RunRecord{}, err
-	}
-	run, err := s.queries.GetTaskRun(ctx, string(selected.ID))
+	now := s.now().UnixMilli()
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return RunRecord{}, err
+		return nil, err
 	}
-	return runRecordFromTaskRun(run), nil
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	interrupted := make([]RunRecord, 0, len(candidates))
+	for _, candidate := range candidates {
+		updated, err := q.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{ID: string(candidate.ID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: now, InterruptionReason: interruptReason, InterruptionDetailJson: "{}"})
+		if err != nil {
+			return nil, err
+		}
+		if updated != 1 {
+			return nil, sql.ErrNoRows
+		}
+		run, err := q.GetTaskRun(ctx, string(candidate.ID))
+		if err != nil {
+			return nil, err
+		}
+		interrupted = append(interrupted, runRecordFromTaskRun(run))
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return interrupted, nil
 }
 
 func (s *Store) ReconcileStartedRuns(ctx context.Context, reason string) (int64, error) {
@@ -167,58 +180,59 @@ func (s *Store) ListWaitingAskRuns(ctx context.Context) ([]RunRecord, error) {
 	return out, nil
 }
 
-func (s *Store) ResumeTaskRun(ctx context.Context, taskID workflow.TaskID) (RunRecord, error) {
-	return s.ResumeTaskRunByID(ctx, taskID, "")
-}
-
-func (s *Store) ResumeTaskRunByID(ctx context.Context, taskID workflow.TaskID, runID workflow.RunID) (RunRecord, error) {
+func (s *Store) ResumeTaskRuns(ctx context.Context, taskID workflow.TaskID) ([]RunRecord, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
-		return RunRecord{}, errors.New("task id is required")
+		return nil, errors.New("task id is required")
 	}
 	task, err := s.queries.GetTask(ctx, string(taskID))
 	if err != nil {
-		return RunRecord{}, err
+		return nil, err
 	}
 	if task.CanceledAtUnixMs != 0 {
-		return RunRecord{}, ErrTaskCanceled
+		return nil, ErrTaskCanceled
 	}
-	trimmedRunID := strings.TrimSpace(string(runID))
-	candidates, err := s.queries.ListResumeTaskRunCandidates(ctx, sqlitegen.ListResumeTaskRunCandidatesParams{
-		TaskID: string(taskID),
-		RunID:  trimmedRunID,
-	})
+	candidates, err := s.queries.ListResumeTaskRunCandidates(ctx, string(taskID))
 	if err != nil {
-		return RunRecord{}, err
+		return nil, err
 	}
 	if len(candidates) == 0 {
-		return RunRecord{}, errors.New("task has no interrupted workflow run to resume")
+		return nil, errors.New("task has no interrupted workflow run to resume")
 	}
-	if trimmedRunID == "" && len(candidates) != 1 {
-		return RunRecord{}, fmt.Errorf("task has multiple interrupted workflow runs; %w", ErrRunIDRequired)
-	}
-	snapshot := runStartSnapshot{}
-	if err := workflow.UnmarshalString(candidates[0].RunStartSnapshotJson, &snapshot); err != nil {
-		return RunRecord{}, err
-	}
-	if err := s.validateRunnableRole(snapshot.Node.SubagentRole); err != nil {
-		return RunRecord{}, err
+	for _, candidate := range candidates {
+		snapshot := runStartSnapshot{}
+		if err := workflow.UnmarshalString(candidate.RunStartSnapshotJson, &snapshot); err != nil {
+			return nil, err
+		}
+		if err := s.validateRunnableRole(snapshot.Node.SubagentRole); err != nil {
+			return nil, err
+		}
 	}
 	now := s.now().UnixMilli()
-	updated, err := s.queries.ResumeTaskRun(ctx, sqlitegen.ResumeTaskRunParams{
-		UpdatedAtUnixMs: now,
-		RunID:           candidates[0].ID,
-	})
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return RunRecord{}, err
+		return nil, err
 	}
-	if updated != 1 {
-		return RunRecord{}, sql.ErrNoRows
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	resumed := make([]RunRecord, 0, len(candidates))
+	for _, candidate := range candidates {
+		updated, err := q.ResumeTaskRun(ctx, sqlitegen.ResumeTaskRunParams{UpdatedAtUnixMs: now, RunID: candidate.ID})
+		if err != nil {
+			return nil, err
+		}
+		if updated != 1 {
+			return nil, sql.ErrNoRows
+		}
+		run, err := q.GetTaskRun(ctx, candidate.ID)
+		if err != nil {
+			return nil, err
+		}
+		resumed = append(resumed, runRecordFromTaskRun(run))
 	}
-	run, err := s.queries.GetTaskRun(ctx, candidates[0].ID)
-	if err != nil {
-		return RunRecord{}, err
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
-	return runRecordFromTaskRun(run), nil
+	return resumed, nil
 }
 
 func (s *Store) validateRunnableRole(role string) error {

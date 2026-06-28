@@ -312,6 +312,39 @@ export function ApprovalBox({
   );
 }
 
+export function InterruptedRunBox({
+  attention,
+  disabled,
+  mutations,
+}: Readonly<{
+  attention: AttentionItem;
+  disabled: boolean;
+  mutations: ReturnType<typeof useTaskMutations>;
+}>) {
+  const { t } = useTranslation();
+  return (
+    <Island
+      aria-label={t("task.interrupted")}
+      className="grid gap-[var(--space-2)] p-[var(--space-4)]"
+      level={1}
+      radius="l"
+      unpadded
+    >
+      <strong>{t("task.interrupted")}</strong>
+      {attention.message.length > 0 ? (
+        <p className="m-0 text-sm text-[var(--color-muted)]">{attention.message}</p>
+      ) : null}
+      <Button
+        disabled={disabled || mutations.resume.isPending}
+        onClick={() => void mutations.resume.mutateAsync()}
+        variant="primary"
+      >
+        {t("board.resume")}
+      </Button>
+    </Island>
+  );
+}
+
 function ApprovalOutputValues({
   nativeBridge,
   onCopyFailed,
