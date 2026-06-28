@@ -149,11 +149,11 @@ func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.
 		t.Fatal("active-step callback ran after queue close")
 		return nil
 	})
-	if err != nil {
-		t.Fatalf("WithActiveStep after close: %v", err)
+	if !errors.Is(err, ErrAgentBusy) {
+		t.Fatalf("WithActiveStep after close error = %v, want ErrAgentBusy", err)
 	}
-	if active {
-		t.Fatal("WithActiveStep after close active=true, want false")
+	if !active {
+		t.Fatal("WithActiveStep after close active=false, want true with busy error")
 	}
 	lifecycle.end()
 }

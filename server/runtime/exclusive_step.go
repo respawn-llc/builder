@@ -180,7 +180,7 @@ func (s *defaultExclusiveStepLifecycle) WithActiveStep(fn func(stepID string) er
 		return false, nil
 	}
 	if s.active.closing {
-		return false, nil
+		return true, ErrAgentBusy
 	}
 	return true, fn(s.active.stepID)
 }

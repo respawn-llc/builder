@@ -237,6 +237,28 @@ func TestUserGoalMutationsQueueDuringActiveStep(t *testing.T) {
 	}
 }
 
+func TestGoalMutationDuringClosingActiveStepReturnsBusy(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+	engine.stepLifecycle = lifecycle
+	_, stepID, err := lifecycle.begin(context.Background(), exclusiveStepOptions{})
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	lifecycle.closeActiveStepQueue(stepID)
+
+	if _, queued, err := engine.QueueGoalSetForActiveStep("late goal", session.GoalActorUser); queued || !errors.Is(err, ErrAgentBusy) {
+		t.Fatalf("QueueGoalSetForActiveStep queued=%t err=%v, want busy without queue", queued, err)
+	}
+	if g := engine.Goal(); g != nil {
+		t.Fatalf("goal applied while active-step queue is closing: %+v", g)
+	}
+	lifecycle.end()
+}
+
 func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	events := make([]Event, 0, 10)
