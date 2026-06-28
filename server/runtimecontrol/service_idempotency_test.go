@@ -387,21 +387,3 @@ func TestServiceRecordPromptHistoryDedupesSuccessfulRetry(t *testing.T) {
 		t.Fatalf("prompt history count = %d, want 1", got)
 	}
 }
-
-func countPromptHistoryEvents(t *testing.T, store *session.Store, text string) int {
-	t.Helper()
-	registered, ok := runtimeControlPromptHistoryStores.Load(store.Meta().SessionID)
-	if !ok {
-		return 0
-	}
-	history := registered.(*runtimeControlPromptHistoryStore)
-	history.mu.Lock()
-	defer history.mu.Unlock()
-	count := 0
-	for _, record := range history.records {
-		if record.Text == text {
-			count++
-		}
-	}
-	return count
-}

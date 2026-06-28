@@ -190,6 +190,53 @@ func TestQueuedAgentShellGoalCompleteSeesQueuedSet(t *testing.T) {
 	}
 }
 
+func TestQueuedAgentShellGoalSetRejectsPendingActiveGoal(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step-1", snapshot: &RunSnapshot{RunID: "run-1", StepID: "step-1"}}
+
+	if _, queued, err := engine.QueueAgentShellSetGoal("first goal", session.GoalActorAgent); err != nil || !queued {
+		t.Fatalf("QueueAgentShellSetGoal first queued=%t err=%v, want queued", queued, err)
+	}
+	var blocked session.GoalAgentOverwriteBlockedError
+	if _, queued, err := engine.QueueAgentShellSetGoal("second goal", session.GoalActorAgent); queued || !errors.As(err, &blocked) {
+		t.Fatalf("QueueAgentShellSetGoal second queued=%t err=%T %[2]v, want overwrite blocked", queued, err)
+	}
+	if err := engine.drainActiveStepGoalMutations("step-1"); err != nil {
+		t.Fatalf("drain goal mutations: %v", err)
+	}
+	if g := engine.Goal(); g == nil || g.Objective != "first goal" || g.Status != session.GoalStatusActive {
+		t.Fatalf("goal after drain = %+v, want active first goal", g)
+	}
+}
+
+func TestUserGoalMutationsQueueDuringActiveStep(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step-1", snapshot: &RunSnapshot{RunID: "run-1", StepID: "step-1"}}
+
+	accepted, queued, err := engine.QueueGoalSetForActiveStep("queued user goal", session.GoalActorUser)
+	if err != nil || !queued {
+		t.Fatalf("QueueGoalSetForActiveStep queued=%t err=%v, want queued", queued, err)
+	}
+	if accepted.Objective != "queued user goal" || accepted.Status != session.GoalStatusActive {
+		t.Fatalf("accepted goal = %+v, want active queued user goal", accepted)
+	}
+	if g := engine.Goal(); g != nil {
+		t.Fatalf("goal applied before drain: %+v", g)
+	}
+	if err := engine.drainActiveStepGoalMutations("step-1"); err != nil {
+		t.Fatalf("drain goal mutations: %v", err)
+	}
+	if g := engine.Goal(); g == nil || g.Objective != "queued user goal" || g.Status != session.GoalStatusActive {
+		t.Fatalf("goal after drain = %+v, want active queued user goal", g)
+	}
+}
+
 func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	events := make([]Event, 0, 10)

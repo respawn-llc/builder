@@ -123,6 +123,41 @@ func TestExclusiveStepLifecycleRejectsConcurrentRun(t *testing.T) {
 	}
 }
 
+func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	stepCtx, stepID, err := lifecycle.begin(context.Background(), exclusiveStepOptions{})
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if stepCtx == nil || stepID == "" {
+		t.Fatalf("begin returned ctx=%v stepID=%q, want active step", stepCtx, stepID)
+	}
+
+	called := false
+	active, err := lifecycle.WithActiveStep(func(string) error {
+		called = true
+		return nil
+	})
+	if err != nil || !active || !called {
+		t.Fatalf("WithActiveStep before close active=%t called=%t err=%v, want active callback", active, called, err)
+	}
+
+	lifecycle.closeActiveStepQueue(stepID)
+	active, err = lifecycle.WithActiveStep(func(string) error {
+		t.Fatal("active-step callback ran after queue close")
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithActiveStep after close: %v", err)
+	}
+	if active {
+		t.Fatal("WithActiveStep after close active=true, want false")
+	}
+	lifecycle.end()
+}
+
 func TestExclusiveStepLifecycleSnapshotTracksActiveRun(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})

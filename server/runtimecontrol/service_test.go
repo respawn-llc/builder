@@ -99,6 +99,45 @@ func (s *runtimeControlPromptHistoryStore) SetRecordContextError(err error) {
 	s.recordCtxErr = err
 }
 
+func (s *runtimeControlPromptHistoryStore) CountText(text string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, record := range s.records {
+		if record.Text == text {
+			count++
+		}
+	}
+	return count
+}
+
+func waitForRuntimeControlPromptHistoryCount(t *testing.T, store *runtimeControlPromptHistoryStore, text string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if got := store.CountText(text); got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("prompt history count for %q = %d, want %d", text, store.CountText(text), want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func countPromptHistoryEvents(t *testing.T, store *session.Store, text string) int {
+	t.Helper()
+	registered, ok := runtimeControlPromptHistoryStores.Load(store.Meta().SessionID)
+	if !ok {
+		return 0
+	}
+	history, ok := registered.(*runtimeControlPromptHistoryStore)
+	if !ok {
+		t.Fatalf("prompt history store type = %T, want *runtimeControlPromptHistoryStore", registered)
+	}
+	return history.CountText(text)
+}
+
 type staticRuntimeControlSessionResolver struct {
 	store *session.Store
 }
@@ -850,6 +889,21 @@ func TestServiceSubmitUserShellCommandDedupesSuccessfulRetry(t *testing.T) {
 	if afterReplay != 1 {
 		t.Fatalf("direct shell message count after replay = %d, want 1", afterReplay)
 	}
+}
+
+func TestServiceSubmitUserShellCommandRecordsPromptHistory(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
+	req := runtimeControlShellCommandRequest(store, "req-1", "pwd")
+
+	if err := service.SubmitUserShellCommand(context.Background(), req); err != nil {
+		t.Fatalf("SubmitUserShellCommand: %v", err)
+	}
+	history := service.promptStore.(*runtimeControlPromptHistoryStore)
+	waitForRuntimeControlPromptHistoryCount(t, history, "$ pwd", 1)
+	if err := service.SubmitUserShellCommand(context.Background(), req); err != nil {
+		t.Fatalf("SubmitUserShellCommand replay: %v", err)
+	}
+	waitForRuntimeControlPromptHistoryCount(t, history, "$ pwd", 1)
 }
 
 func TestServiceSubmitUserShellCommandRejectsClientRequestIDPayloadMismatch(t *testing.T) {

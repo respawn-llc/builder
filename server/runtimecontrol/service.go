@@ -376,10 +376,16 @@ func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.Runt
 		if ctx != nil {
 			runCtx = context.WithoutCancel(ctx)
 		}
-		return struct{}{}, s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+		var recordEngine *runtime.Engine
+		err = s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+			recordEngine = engine
 			_, err := engine.SubmitUserShellCommand(runCtx, memoReq.Command)
 			return err
 		})
+		if err == nil {
+			s.recordPromptHistoryAsync(recordEngine, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), "$ "+strings.TrimSpace(memoReq.Command))
+		}
+		return struct{}{}, err
 	})
 	return err
 }
@@ -574,18 +580,22 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 	return s.goals.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameGoalSetMemoRequest, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
 		var response serverapi.RuntimeGoalShowResponse
 		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			if strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) {
-				goal, queued, qErr := engine.QueueAgentShellSetGoal(trimmedObjective, session.GoalActor(req.Actor))
-				if qErr != nil {
-					var blocked session.GoalAgentOverwriteBlockedError
-					if errors.As(qErr, &blocked) {
-						return goalAgentOverwriteDeniedError{Objective: blocked.Goal.Objective, Status: string(blocked.Goal.Status)}
-					}
-					return qErr
+			goal, queued, qErr := engine.QueueGoalSetForActiveStep(trimmedObjective, session.GoalActor(req.Actor))
+			if qErr != nil {
+				var blocked session.GoalAgentOverwriteBlockedError
+				if errors.As(qErr, &blocked) {
+					return goalAgentOverwriteDeniedError{Objective: blocked.Goal.Objective, Status: string(blocked.Goal.Status)}
 				}
-				if queued {
-					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
-					return nil
+				return qErr
+			}
+			if queued {
+				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
+				return nil
+			}
+			if strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) {
+				current := engine.Goal()
+				if current != nil && current.Status != session.GoalStatusComplete {
+					return goalAgentOverwriteDeniedError{Objective: current.Objective, Status: string(current.Status)}
 				}
 			}
 			if err := engine.RequireGoalLoopStartAllowed(); err != nil {
@@ -642,21 +652,19 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 	return s.goalStatuses.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameGoalStatusMemoRequest, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
 		var response serverapi.RuntimeGoalShowResponse
 		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+			goal, queued, qErr := engine.QueueGoalStatusForActiveStep(status, session.GoalActor(req.Actor))
+			if qErr != nil {
+				return qErr
+			}
+			if queued {
+				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
+				return nil
+			}
 			if status == session.GoalStatusComplete {
 				current := engine.Goal()
 				if current != nil && current.Status == session.GoalStatusComplete {
 					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current, false)}
 					return nil
-				}
-				if strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) {
-					goal, queued, qErr := engine.QueueAgentShellCompleteGoal(session.GoalActor(req.Actor))
-					if qErr != nil {
-						return qErr
-					}
-					if queued {
-						response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
-						return nil
-					}
 				}
 			}
 			if status == session.GoalStatusActive {
@@ -687,6 +695,13 @@ func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearR
 	memoReq := goalClearMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Actor: strings.TrimSpace(req.Actor)}
 	return s.goalClears.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameGoalClearMemoRequest, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
 		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+			_, queued, qErr := engine.QueueGoalClearForActiveStep(session.GoalActor(req.Actor))
+			if qErr != nil {
+				return qErr
+			}
+			if queued {
+				return nil
+			}
 			_, err := engine.ClearGoal(session.GoalActor(req.Actor))
 			return err
 		})
