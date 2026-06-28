@@ -237,6 +237,35 @@ func TestUserGoalMutationsQueueDuringActiveStep(t *testing.T) {
 	}
 }
 
+func TestQueuedActiveGoalResumeRestartsSuspendedGoalLoop(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step-1", snapshot: &RunSnapshot{RunID: "run-1", StepID: "step-1"}}
+	if _, err := engine.SetGoal("queued resume goal", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	engine.goalLoopState().Suspend()
+
+	accepted, queued, err := engine.QueueGoalStatusForActiveStep(session.GoalStatusActive, session.GoalActorUser)
+	if err != nil || !queued {
+		t.Fatalf("QueueGoalStatusForActiveStep queued=%t err=%v, want queued suspended resume", queued, err)
+	}
+	if accepted.Status != session.GoalStatusActive {
+		t.Fatalf("accepted status = %q, want active", accepted.Status)
+	}
+	if engine.pendingGoalLoopStart {
+		t.Fatal("goal loop restart must wait until active-step mutation drain")
+	}
+	if err := engine.drainActiveStepGoalMutations("step-1"); err != nil {
+		t.Fatalf("drain goal mutations: %v", err)
+	}
+	if !engine.pendingGoalLoopStart {
+		t.Fatal("expected queued active resume to schedule goal loop restart")
+	}
+}
+
 func TestGoalMutationDuringClosingActiveStepReturnsBusy(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{

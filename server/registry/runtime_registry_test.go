@@ -757,6 +757,24 @@ func TestRuntimeClaimIdleReleaseDropsOwnerBeforeCloseRace(t *testing.T) {
 	}
 }
 
+func TestRuntimeClaimResolveRejectsClosedClaim(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	claim, _, _ := registry.AcquireRuntimeClaim("session-1", "owner-a")
+	closed, err := claim.Close(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !closed {
+		t.Fatal("expected building claim close to remove the entry")
+	}
+	if ok := claim.Resolve(&runtime.Engine{}, nil, nil); ok {
+		t.Fatal("Resolve must reject a claim that was closed before build completed")
+	}
+	if registry.IsSessionRuntimeActive("session-1") {
+		t.Fatal("closed stale build must not become active")
+	}
+}
+
 func TestRuntimeRegistrySubmitPromptResponseRejectedWhileClosing(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := &runtime.Engine{}

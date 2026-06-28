@@ -26,6 +26,7 @@ const (
 	activeStepGoalMutationSet activeStepGoalMutationKind = iota
 	activeStepGoalMutationStatus
 	activeStepGoalMutationClear
+	activeStepGoalMutationRestartGoalLoop
 )
 
 type activeStepGoalMutation struct {
@@ -151,11 +152,12 @@ func (e *Engine) QueueGoalStatusForActiveStep(status session.GoalStatus, actor s
 			return session.GoalState{}, false, err
 		}
 	}
-	accepted, queued, err := e.enqueueActiveStepGoalMutation(activeStepGoalMutation{
+	mutation := activeStepGoalMutation{
 		kind:   activeStepGoalMutationStatus,
 		actor:  actor,
 		status: status,
-	}, func(current *session.GoalState) (session.GoalState, error) {
+	}
+	accepted, queued, err := e.enqueueActiveStepGoalMutation(mutation, func(current *session.GoalState) (session.GoalState, error) {
 		if current == nil {
 			return session.GoalState{}, errors.New("goal is not set")
 		}
@@ -221,6 +223,7 @@ func foldGoalMutations(goal *session.GoalState, mutations []activeStepGoalMutati
 			}
 		case activeStepGoalMutationClear:
 			goal = nil
+		case activeStepGoalMutationRestartGoalLoop:
 		}
 	}
 	return goal
@@ -245,7 +248,10 @@ func (e *Engine) enqueueActiveStepGoalMutation(mutation activeStepGoalMutation, 
 		}
 		accepted = next
 		if mutation.kind == activeStepGoalMutationStatus && current != nil && current.Status == mutation.status {
-			return nil
+			if mutation.status != session.GoalStatusActive || !e.GoalLoopSuspended() {
+				return nil
+			}
+			mutation.kind = activeStepGoalMutationRestartGoalLoop
 		}
 		if e.activeStepGoalMutations == nil {
 			e.activeStepGoalMutations = make(map[string][]activeStepGoalMutation)
@@ -316,6 +322,9 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 	case activeStepGoalMutationClear:
 		_, err := e.clearGoalForStep(stepID, mutation.actor)
 		return err
+	case activeStepGoalMutationRestartGoalLoop:
+		e.deferGoalLoopStart()
+		return nil
 	default:
 		return fmt.Errorf("unsupported active-step goal mutation kind %d", mutation.kind)
 	}

@@ -113,8 +113,15 @@ type headlessRuntimePlan struct {
 }
 
 func (p *headlessRuntimePlan) Close() {
+	p.CloseWithFailure(false)
+}
+
+func (p *headlessRuntimePlan) CloseWithFailure(failed bool) {
 	if p == nil || p.close == nil {
 		return
+	}
+	if failed && p.engine != nil {
+		p.engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
 	}
 	p.close()
 }
@@ -276,6 +283,14 @@ func (r *headlessPromptRuntime) Close() error {
 		return nil
 	}
 	r.plan.Close()
+	return nil
+}
+
+func (r *headlessPromptRuntime) CloseWithFailure() error {
+	if r == nil || r.plan == nil {
+		return nil
+	}
+	r.plan.CloseWithFailure(true)
 	return nil
 }
 

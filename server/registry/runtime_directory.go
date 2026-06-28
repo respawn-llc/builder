@@ -130,8 +130,24 @@ func (e *runtimeEntry) resolveBuild(engine *runtime.Engine, rebind func(string) 
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.resolveBuildLocked(engine, rebind, teardown, buildErr)
+}
+
+func (e *runtimeEntry) resolveBuildIfOpen(engine *runtime.Engine, rebind func(string) error, teardown func(), buildErr error) bool {
+	if e == nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closing || e.closeDraining {
+		return false
+	}
+	return e.resolveBuildLocked(engine, rebind, teardown, buildErr)
+}
+
+func (e *runtimeEntry) resolveBuildLocked(engine *runtime.Engine, rebind func(string) error, teardown func(), buildErr error) bool {
 	if e.built || e.buildErr != nil {
-		return
+		return false
 	}
 	if buildErr == nil && engine == nil {
 		buildErr = fmt.Errorf("runtime build produced no engine")
@@ -146,6 +162,7 @@ func (e *runtimeEntry) resolveBuild(engine *runtime.Engine, rebind func(string) 
 	}
 	close(e.ready)
 	e.cond.Broadcast()
+	return true
 }
 
 func (e *runtimeEntry) engineRef() *runtime.Engine {

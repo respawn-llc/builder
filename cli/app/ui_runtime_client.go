@@ -70,11 +70,23 @@ func (c *sessionRuntimeClient) runtimeReactivator() *runtimeReactivator {
 }
 
 func (c *sessionRuntimeClient) recoverRuntimeConnectionWithWarning(ctx context.Context, trigger error, appendWarning bool) error {
+	return c.recoverRuntimeConnection(ctx, trigger, appendWarning, true)
+}
+
+func (c *sessionRuntimeClient) recoverRuntimeConnectionPreservingContext(ctx context.Context, trigger error, appendWarning bool) error {
+	return c.recoverRuntimeConnection(ctx, trigger, appendWarning, false)
+}
+
+func (c *sessionRuntimeClient) recoverRuntimeConnection(ctx context.Context, trigger error, appendWarning bool, detach bool) error {
 	reactivator := c.runtimeReactivator()
 	if reactivator == nil {
 		return errRuntimeReactivationUnavailable
 	}
-	reconnectCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), uiRuntimeControlTimeout)
+	reconnectBase := ctx
+	if detach {
+		reconnectBase = context.WithoutCancel(ctx)
+	}
+	reconnectCtx, cancel := context.WithTimeout(reconnectBase, uiRuntimeControlTimeout)
 	defer cancel()
 	if err := reactivator.Reactivate(reconnectCtx); err != nil {
 		return err
@@ -311,7 +323,7 @@ func runtimeGoalFromStatusUpdate(existing *clientui.RuntimeGoal, update clientui
 func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration) (clientui.RuntimeMainView, error) {
 	ctx, cancel := c.readContext(timeout)
 	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, false, func() (serverapi.SessionMainViewResponse, error) {
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionPreservingContext, false, func() (serverapi.SessionMainViewResponse, error) {
 		return c.reads.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: c.sessionID})
 	})
 	c.notifyConnectionState(err)
@@ -332,7 +344,7 @@ func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration) (clien
 func (c *sessionRuntimeClient) refreshTranscriptPageSync(req clientui.TranscriptPageRequest, timeout time.Duration) (clientui.TranscriptPage, error) {
 	ctx, cancel := c.readContext(timeout)
 	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, false, func() (serverapi.SessionTranscriptPageResponse, error) {
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionPreservingContext, false, func() (serverapi.SessionTranscriptPageResponse, error) {
 		return c.reads.GetSessionTranscriptPage(ctx, serverapi.SessionTranscriptPageRequest{
 			SessionID:   c.sessionID,
 			Cursor:      req.Cursor,
@@ -398,7 +410,7 @@ func (c *sessionRuntimeClient) refreshCommittedTranscriptSuffixSync(_ clientui.C
 	}
 	ctx, cancel := c.readContext(timeout)
 	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, false, func() (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
+	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionPreservingContext, false, func() (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
 		return suffixClient.GetSessionCommittedTranscriptSuffix(ctx, serverapi.SessionCommittedTranscriptSuffixRequest{
 			SessionID: c.sessionID,
 		})

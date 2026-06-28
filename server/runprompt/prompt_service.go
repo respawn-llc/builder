@@ -37,6 +37,10 @@ type PromptSessionRuntime interface {
 	Close() error
 }
 
+type failedPromptSessionRuntime interface {
+	CloseWithFailure() error
+}
+
 type HeadlessPromptLauncher interface {
 	PrepareHeadlessPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (PromptSessionRuntime, error)
 }
@@ -71,7 +75,14 @@ func (s *PromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRe
 	if err != nil {
 		return serverapi.RunPromptResponse{}, err
 	}
+	closeWithFailure := false
 	defer func() {
+		if closeWithFailure {
+			if failureRuntime, ok := runtimeHandle.(failedPromptSessionRuntime); ok {
+				_ = failureRuntime.CloseWithFailure()
+				return
+			}
+		}
 		_ = runtimeHandle.Close()
 	}()
 
@@ -84,6 +95,7 @@ func (s *PromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRe
 
 	startedAt := time.Now()
 	if err := runtimeHandle.RecordPromptHistory(runCtx, req.ClientRequestID, req.Prompt); err != nil {
+		closeWithFailure = true
 		return serverapi.RunPromptResponse{}, err
 	}
 	assistant, runErr := runtimeHandle.SubmitUserMessage(runCtx, req.Prompt)
@@ -99,6 +111,7 @@ func (s *PromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRe
 		runtimeHandle.Logf("runtime.event.drop.total=%d", dropped)
 	}
 	if runErr != nil {
+		closeWithFailure = true
 		runtimeHandle.Logf("app.run_prompt.exit err=%q", runErr.Error())
 		return result, runErr
 	}

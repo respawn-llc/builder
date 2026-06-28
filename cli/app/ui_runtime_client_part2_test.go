@@ -10,6 +10,7 @@ import (
 	sharedclient "core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"errors"
 	"reflect"
 	"strings"
 	"sync"
@@ -612,6 +613,33 @@ func TestRuntimeClientMainViewRefreshRecoversRuntimeUnavailableSilently(t *testi
 	}
 	if entries := controls.appendedLocalEntries(); len(entries) != 0 {
 		t.Fatalf("did not expect visible recovery warning during main-view refresh, got %+v", entries)
+	}
+}
+
+func TestRuntimeClientMainViewRecoveryPreservesReadDeadline(t *testing.T) {
+	controls := &reconnectRetryRuntimeControlClient{}
+	reads := &flakySessionViewClient{errs: []error{serverapi.ErrRuntimeUnavailable}}
+	runtimeClient := newTestSessionRuntimeClient(reads, controls)
+	reactivator := newRuntimeReactivator()
+	reactivationStarted := make(chan struct{})
+	reactivator.SetReactivateFunc(func(ctx context.Context) error {
+		close(reactivationStarted)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	runtimeClient.SetRuntimeReactivator(reactivator)
+
+	start := time.Now()
+	if _, err := runtimeClient.refreshMainViewSync(uiRuntimeReadTimeout); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("refreshMainViewSync error = %v, want reactivation deadline error", err)
+	}
+	if elapsed := time.Since(start); elapsed > uiRuntimeReadTimeout+500*time.Millisecond {
+		t.Fatalf("refreshMainViewSync elapsed = %s, want bounded by read timeout %s", elapsed, uiRuntimeReadTimeout)
+	}
+	select {
+	case <-reactivationStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reactivation did not start")
 	}
 }
 

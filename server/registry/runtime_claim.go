@@ -134,11 +134,20 @@ func (c *RuntimeClaim) AwaitClosed(ctx context.Context) error {
 	return c.entry.awaitClosed(ctx)
 }
 
-func (c *RuntimeClaim) Resolve(engine *runtime.Engine, rebind func(string) error, teardown func()) {
+func (c *RuntimeClaim) Resolve(engine *runtime.Engine, rebind func(string) error, teardown func()) bool {
 	if c == nil {
-		return
+		return false
 	}
-	c.entry.resolveBuild(engine, rebind, teardown, nil)
+	d := c.registry.directory
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.entries[c.id] != c.entry {
+		return false
+	}
+	if !c.entry.resolveBuildIfOpen(engine, rebind, teardown, nil) {
+		return false
+	}
+	return true
 }
 
 func (c *RuntimeClaim) Fail(err error) {

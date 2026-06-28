@@ -271,7 +271,9 @@ func (s *Service) buildIntoClaim(ctx context.Context, sessionID string, claim *r
 		}
 	}
 	cleanup = teardown
-	claim.Resolve(engine, rebind, teardown)
+	if !claim.Resolve(engine, rebind, teardown) {
+		return runtimeUnavailableErr(sessionID)
+	}
 	s.cancelScheduledIdleUnload(sessionID)
 	cleanup = nil
 	return nil
