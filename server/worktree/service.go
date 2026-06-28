@@ -33,18 +33,6 @@ type runtimeController interface {
 	HasActiveRun(ctx context.Context, sessionID string) (bool, error)
 }
 
-type worktreeLease interface {
-	Release()
-}
-
-type leaseFunc func()
-
-func (f leaseFunc) Release() {
-	if f != nil {
-		f()
-	}
-}
-
 type activeRuntimeSource interface {
 	IsSessionRuntimeActive(sessionID string) bool
 	BlockSessionRuns(sessionIDs []string) func()
@@ -183,7 +171,7 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 		return EnsureTaskWorktreeResponse{}, err
 	}
 	release := s.acquireWorkspaceMutationLock(workspace.WorkspaceID)
-	defer release.Release()
+	defer release()
 	task, err = s.metadata.Queries().GetTask(ctx, taskID)
 	if err != nil {
 		return EnsureTaskWorktreeResponse{}, err
@@ -293,7 +281,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 		return DeleteTaskWorktreeResponse{}, fmt.Errorf("workspace %q has no root path", strings.TrimSpace(record.WorkspaceID))
 	}
 	release := s.acquireWorkspaceMutationLock(record.WorkspaceID)
-	defer release.Release()
+	defer release()
 	task, err = s.metadata.Queries().GetTask(ctx, taskID)
 	if err != nil {
 		return DeleteTaskWorktreeResponse{}, err
@@ -492,7 +480,7 @@ func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListR
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
-	defer release.Release()
+	defer release()
 	synced, err := s.syncWorkspace(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot, req.IncludeDirtyCount)
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
@@ -535,7 +523,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
-	defer release.Release()
+	defer release()
 	cleanup := failedCreateCleanup{
 		workspaceID:   workspaceCtx.workspaceID,
 		workspaceRoot: workspaceCtx.workspaceRoot,
@@ -660,7 +648,7 @@ func (s *Service) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwit
 	if err != nil {
 		return serverapi.WorktreeSwitchResponse{}, err
 	}
-	defer release.Release()
+	defer release()
 	synced, err := s.syncWorkspace(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot, false)
 	if err != nil {
 		return serverapi.WorktreeSwitchResponse{}, err
@@ -685,7 +673,7 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 	if err != nil {
 		return serverapi.WorktreeDeleteResponse{}, err
 	}
-	defer release.Release()
+	defer release()
 	synced, err := s.syncWorkspace(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot, false)
 	if err != nil {
 		return serverapi.WorktreeDeleteResponse{}, err
@@ -753,7 +741,7 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 	return serverapi.WorktreeDeleteResponse{Target: finalTarget, Worktree: worktreeViewFromSynced(targetWorktree, finalTarget), BranchDeleted: branchDeleted, BranchCleanupMessage: branchCleanupMessage}, nil
 }
 
-func (s *Service) beginMutation(ctx context.Context, sessionID string) (worktreeLease, sessionWorkspaceContext, error) {
+func (s *Service) beginMutation(ctx context.Context, sessionID string) (func(), sessionWorkspaceContext, error) {
 	if s == nil || s.metadata == nil {
 		return nil, sessionWorkspaceContext{}, errors.New("worktree service metadata store is required")
 	}
@@ -768,20 +756,20 @@ func (s *Service) beginMutation(ctx context.Context, sessionID string) (worktree
 		workspaceLease := s.acquireWorkspaceMutationLock(workspaceCtx.workspaceID)
 		lockedWorkspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
 		if err != nil {
-			workspaceLease.Release()
+			workspaceLease()
 			return nil, sessionWorkspaceContext{}, err
 		}
 		if strings.TrimSpace(lockedWorkspaceCtx.workspaceID) == strings.TrimSpace(workspaceCtx.workspaceID) {
 			return workspaceLease, lockedWorkspaceCtx, nil
 		}
-		workspaceLease.Release()
+		workspaceLease()
 	}
 }
 
-func (s *Service) acquireWorkspaceMutationLock(workspaceID string) worktreeLease {
+func (s *Service) acquireWorkspaceMutationLock(workspaceID string) func() {
 	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
 	if s == nil || trimmedWorkspaceID == "" {
-		return leaseFunc(func() {})
+		return func() {}
 	}
 	s.workspaceMu.Lock()
 	if s.workspaceLocks == nil {
@@ -796,7 +784,7 @@ func (s *Service) acquireWorkspaceMutationLock(workspaceID string) worktreeLease
 	s.workspaceMu.Unlock()
 	lock.mu.Lock()
 	var once sync.Once
-	return leaseFunc(func() {
+	return func() {
 		once.Do(func() {
 			lock.mu.Unlock()
 			s.workspaceMu.Lock()
@@ -806,7 +794,7 @@ func (s *Service) acquireWorkspaceMutationLock(workspaceID string) worktreeLease
 				delete(s.workspaceLocks, trimmedWorkspaceID)
 			}
 		})
-	})
+	}
 }
 
 func (s *Service) resolveSessionWorkspaceContext(ctx context.Context, sessionID string) (sessionWorkspaceContext, error) {

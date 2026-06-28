@@ -76,12 +76,12 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	firstReleased := false
 	t.Cleanup(func() {
 		if !firstReleased {
-			firstRelease.Release()
+			firstRelease()
 		}
 	})
 
 	type mutationResult struct {
-		release worktreeLease
+		release func()
 		err     error
 	}
 	resultCh := make(chan mutationResult, 1)
@@ -93,13 +93,13 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	select {
 	case result := <-resultCh:
 		if result.release != nil {
-			result.release.Release()
+			result.release()
 		}
 		t.Fatalf("expected second mutation to wait for workspace lock, got err=%v", result.err)
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	firstRelease.Release()
+	firstRelease()
 	firstReleased = true
 	var result mutationResult
 	select {
@@ -113,7 +113,7 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	if result.release == nil {
 		t.Fatal("expected second mutation lease")
 	}
-	result.release.Release()
+	result.release()
 }
 
 func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *testing.T) {
@@ -134,12 +134,12 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	firstLockReleased := false
 	defer func() {
 		if !firstLockReleased {
-			firstWorkspaceLock.Release()
+			firstWorkspaceLock()
 		}
 	}()
 
 	type mutationResult struct {
-		release      worktreeLease
+		release      func()
 		workspaceCtx sessionWorkspaceContext
 		err          error
 	}
@@ -150,7 +150,7 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	}()
 
 	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, secondBinding.WorkspaceID, "", ".")
-	firstWorkspaceLock.Release()
+	firstWorkspaceLock()
 	firstLockReleased = true
 
 	var first mutationResult
@@ -166,7 +166,7 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 		t.Fatal("expected first mutation lease")
 	}
 	if first.workspaceCtx.workspaceID != secondBinding.WorkspaceID {
-		first.release.Release()
+		first.release()
 		t.Fatalf("first mutation workspace id = %q, want %q", first.workspaceCtx.workspaceID, secondBinding.WorkspaceID)
 	}
 
@@ -178,14 +178,14 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	select {
 	case result := <-secondCh:
 		if result.release != nil {
-			result.release.Release()
+			result.release()
 		}
-		first.release.Release()
+		first.release()
 		t.Fatalf("expected second mutation to block on reacquired workspace lock, got %+v", result)
 	case <-time.After(150 * time.Millisecond):
 	}
 
-	first.release.Release()
+	first.release()
 	select {
 	case result := <-secondCh:
 		if result.err != nil {
@@ -195,10 +195,10 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 			t.Fatal("expected second mutation lease")
 		}
 		if result.workspaceCtx.workspaceID != secondBinding.WorkspaceID {
-			result.release.Release()
+			result.release()
 			t.Fatalf("second mutation workspace id = %q, want %q", result.workspaceCtx.workspaceID, secondBinding.WorkspaceID)
 		}
-		result.release.Release()
+		result.release()
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for second mutation")
 	}
