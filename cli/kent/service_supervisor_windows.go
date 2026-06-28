@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -447,11 +448,36 @@ func userEnvironment(token windows.Token, extra map[string]string) ([]uint16, er
 		return nil, fmt.Errorf("create environment block: %w", err)
 	}
 	defer func() { _ = windows.DestroyEnvironmentBlock(block) }()
-	entries := splitEnvironmentBlock(block)
-	for key, value := range extra {
-		entries = append(entries, key+"="+value)
+	return buildEnvironmentBlock(upsertEnvironmentEntries(splitEnvironmentBlock(block), extra))
+}
+
+// upsertEnvironmentEntries appends extra KEY=VALUE entries after removing any
+// existing entries with a matching name. Windows environment names are
+// case-insensitive and the first match in the block wins, so a preexisting
+// same-name entry would otherwise shadow the supervisor's value.
+func upsertEnvironmentEntries(entries []string, extra map[string]string) []string {
+	if len(extra) == 0 {
+		return entries
 	}
-	return buildEnvironmentBlock(entries)
+	replaced := make(map[string]struct{}, len(extra))
+	for key := range extra {
+		replaced[strings.ToLower(key)] = struct{}{}
+	}
+	result := make([]string, 0, len(entries)+len(extra))
+	for _, entry := range entries {
+		name := entry
+		if i := strings.IndexByte(entry, '='); i >= 0 {
+			name = entry[:i]
+		}
+		if _, dup := replaced[strings.ToLower(name)]; dup {
+			continue
+		}
+		result = append(result, entry)
+	}
+	for key, value := range extra {
+		result = append(result, key+"="+value)
+	}
+	return result
 }
 
 // splitEnvironmentBlock decodes a double-null-terminated UTF-16 environment block
