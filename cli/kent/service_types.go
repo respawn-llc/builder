@@ -127,10 +127,6 @@ func defaultLoadServiceSpec() (serviceSpec, error) {
 	}, nil
 }
 
-// serviceServeArguments builds the `serve` arguments for an installed service.
-// The resolved config+data root is baked in as --persistence-root so the
-// launched service uses the same root the operator installed with, rather than
-// re-resolving ~/.kent under whatever user/HOME the service manager runs as.
 func serviceServeArguments(persistenceRoot string) []string {
 	args := []string{"serve"}
 	if trimmed := strings.TrimSpace(persistenceRoot); trimmed != "" {

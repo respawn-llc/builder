@@ -9,8 +9,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// configureNoWindow makes a service helper subprocess (e.g. the legacy schtasks
-// teardown) run without allocating a console window.
 func configureNoWindow(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}

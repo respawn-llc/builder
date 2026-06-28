@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,27 +23,17 @@ import (
 const (
 	supervisorInitialBackoff = 1 * time.Second
 	supervisorMaxBackoff     = 30 * time.Second
-	stillActiveExitCode      = 259 // STILL_ACTIVE
-	// supervisorStopGracePeriod is how long a graceful stop waits for the server
-	// to exit after its shutdown event is signalled before falling back to a hard
-	// terminate. Kept well under the service stop WaitHint so the SCM never kills
-	// the supervisor (which would orphan the server) mid-shutdown.
+	stillActiveExitCode      = 259
+
 	supervisorStopGracePeriod = 15 * time.Second
-	// shutdownEventSDDL grants the supervisor (LocalSystem) and Administrators full
-	// control of the graceful-stop event and the interactive user wait access, so
-	// the server launched under the user token can open and wait on it.
+
 	shutdownEventSDDL = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x00100000;;;IU)"
 )
 
-// serverSupervisor runs inside the LocalSystem service process and keeps a
-// `kent serve` child alive in the interactive user's session. The child is
-// launched with the logged-in user's primary token (no stored password), so it
-// has the user's full identity (profile, DPAPI, Credential Manager, git/ssh),
-// and with CREATE_NO_WINDOW so no console window appears.
 type serverSupervisor struct {
 	spec      serviceSpec
-	installer string        // SID the service was installed for; "" serves any console user
-	wanted    atomic.Uint32 // target interactive session id; 0 = no user session
+	installer string
+	wanted    atomic.Uint32
 	wake      chan struct{}
 	mu        sync.Mutex
 	child     *managedChild
@@ -52,15 +43,10 @@ func newServerSupervisor(spec serviceSpec) *serverSupervisor {
 	return &serverSupervisor{spec: spec, installer: readInstallUserSID(spec), wake: make(chan struct{}, 1)}
 }
 
-// targetSession is the console session the server should run in: the active
-// console session when it belongs to the install-time user (or when no installer
-// SID was recorded), else 0 so the supervisor does not launch the server for a
-// different user against the installer's persistence root.
 func (s *serverSupervisor) targetSession() uint32 {
 	return activeUserSessionForSID(s.installer)
 }
 
-// setWanted records the session the server should run in and nudges the run loop.
 func (s *serverSupervisor) setWanted(session uint32) {
 	s.wanted.Store(session)
 	select {
@@ -69,9 +55,6 @@ func (s *serverSupervisor) setWanted(session uint32) {
 	}
 }
 
-// run is the supervision loop. It launches the child in the wanted session,
-// restarts it with backoff if it exits unexpectedly, relaunches it when the
-// interactive session changes, and tears it down when the context is cancelled.
 func (s *serverSupervisor) run(ctx context.Context) {
 	backoff := supervisorInitialBackoff
 	for {
@@ -137,8 +120,6 @@ func (s *serverSupervisor) run(ctx context.Context) {
 	}
 }
 
-// sleep waits for the duration, an early wake, or context cancellation. It
-// returns false when the context was cancelled (caller should exit).
 func (s *serverSupervisor) sleep(ctx context.Context, d time.Duration) bool {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
@@ -172,8 +153,6 @@ func (s *serverSupervisor) clearPID() {
 	_ = os.Remove(windowsServerPIDPath(s.spec))
 }
 
-// logf appends a supervisor diagnostic to the service error log so launch
-// failures are observable even though the supervisor has no console.
 func (s *serverSupervisor) logf(format string, args ...any) {
 	appendServiceLog(s.spec, format, args...)
 }
@@ -198,32 +177,57 @@ func growBackoff(current time.Duration) time.Duration {
 	return next
 }
 
-// activeUserSessionForSID returns the interactive console session id when a user
-// is logged in, a primary token can be obtained, and (when wantSID is non-empty)
-// that user matches the install-time user, else 0. Session 0 is the
-// non-interactive services session and is never a target.
 func activeUserSessionForSID(wantSID string) uint32 {
-	session := windows.WTSGetActiveConsoleSessionId()
-	if session == 0xFFFFFFFF || session == 0 {
+	var infos *windows.WTS_SESSION_INFO
+	var count uint32
+	if err := windows.WTSEnumerateSessions(0, 0, 1, &infos, &count); err != nil {
 		return 0
 	}
-	var token windows.Token
-	if err := windows.WTSQueryUserToken(session, &token); err != nil {
-		return 0
+	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(infos)))
+	sessions := unsafe.Slice(infos, count)
+	console := windows.WTSGetActiveConsoleSessionId()
+	var consoleFallback uint32
+	for i := range sessions {
+		id := sessions[i].SessionID
+		if sessions[i].State != windows.WTSActive || id == 0 {
+			continue
+		}
+		sid, err := sessionUserSID(id)
+		if err != nil {
+			continue
+		}
+		if wantSID != "" {
+			if sid == wantSID {
+				return id
+			}
+			continue
+		}
+		if id == console {
+			return id
+		}
+		if consoleFallback == 0 {
+			consoleFallback = id
+		}
 	}
-	defer func() { _ = token.Close() }()
 	if wantSID == "" {
-		return session
+		return consoleFallback
 	}
-	user, err := token.GetTokenUser()
-	if err != nil || user.User.Sid.String() != wantSID {
-		return 0
-	}
-	return session
+	return 0
 }
 
-// managedChild is a launched server process plus the resources that must be
-// released when it exits (logon token, loaded profile, shutdown event, job).
+func sessionUserSID(session uint32) (string, error) {
+	var token windows.Token
+	if err := windows.WTSQueryUserToken(session, &token); err != nil {
+		return "", err
+	}
+	defer func() { _ = token.Close() }()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	return user.User.Sid.String(), nil
+}
+
 type managedChild struct {
 	session  uint32
 	pid      uint32
@@ -249,10 +253,6 @@ func (c *managedChild) alive() bool {
 	return code == stillActiveExitCode
 }
 
-// terminate stops the server, preferring a graceful shutdown: it signals the
-// server's shutdown event (equivalent to Ctrl+C) and waits up to the grace
-// period for a clean exit, falling back to a hard TerminateProcess only if the
-// server does not exit in time or no shutdown event is available.
 func (c *managedChild) terminate() {
 	if c.shutdown != 0 && windows.SetEvent(c.shutdown) == nil {
 		select {
@@ -290,9 +290,6 @@ func (c *managedChild) release() {
 	})
 }
 
-// launchServerAsUser starts `kent serve` in the given interactive session as the
-// logged-in user, with the user's profile/environment loaded and stdout/stderr
-// redirected to the service log files. No console window is created.
 func launchServerAsUser(spec serviceSpec, session uint32) (child *managedChild, err error) {
 	var token windows.Token
 	if err := windows.WTSQueryUserToken(session, &token); err != nil {
@@ -332,9 +329,7 @@ func launchServerAsUser(spec serviceSpec, session uint32) (child *managedChild, 
 	if err := ensureServiceLogDir(spec); err != nil {
 		return nil, err
 	}
-	// CreateProcessAsUser cannot inherit handles across sessions, so the server
-	// opens its own log files from these paths (see redirectServiceLogs) instead
-	// of receiving inherited std handles.
+
 	env, err := userEnvironment(token, map[string]string{
 		shutdownEventEnvVar: shutdownName,
 		stdoutLogEnvVar:     spec.StdoutLogPath,
@@ -375,9 +370,6 @@ func launchServerAsUser(spec serviceSpec, session uint32) (child *managedChild, 
 	}
 	_ = windows.CloseHandle(pi.Thread)
 
-	// Best-effort: jobbing the server so a supervisor crash cannot leave it
-	// orphaned (which the SCM restart would then duplicate). A failure here only
-	// loses that safety net; graceful stop and normal teardown still work.
 	job, jobErr := assignProcessToKillJob(pi.Process)
 	if jobErr != nil {
 		appendServiceLog(spec, "kill-on-crash job unavailable for session %d: %v", session, jobErr)
@@ -410,11 +402,6 @@ func tokenUserName(token windows.Token) (string, error) {
 	return account, nil
 }
 
-// createShutdownEvent creates the per-server manual-reset event the supervisor
-// signals for a graceful stop. It lives in the Global namespace (the supervisor
-// has SeCreateGlobalPrivilege; the server, running as the user, only opens it)
-// with a DACL granting the interactive user wait access. The unique random name
-// is passed to the server so multiple installs never collide.
 func createShutdownEvent() (windows.Handle, string, error) {
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -438,23 +425,19 @@ func createShutdownEvent() (windows.Handle, string, error) {
 	return event, name, nil
 }
 
-// userEnvironment builds the environment block for the server from the user's
-// profile environment with one extra variable set, returning a Go-owned block
-// the caller keeps alive across CreateProcessAsUser. The extra var carries the
-// graceful-stop event name only to the supervised child.
 func userEnvironment(token windows.Token, extra map[string]string) ([]uint16, error) {
 	var block *uint16
 	if err := windows.CreateEnvironmentBlock(&block, token, false); err != nil {
 		return nil, fmt.Errorf("create environment block: %w", err)
 	}
 	defer func() { _ = windows.DestroyEnvironmentBlock(block) }()
-	return buildEnvironmentBlock(upsertEnvironmentEntries(splitEnvironmentBlock(block), extra))
+	entries := upsertEnvironmentEntries(splitEnvironmentBlock(block), extra)
+	sort.Slice(entries, func(i, j int) bool {
+		return strings.ToLower(entries[i]) < strings.ToLower(entries[j])
+	})
+	return buildEnvironmentBlock(entries)
 }
 
-// upsertEnvironmentEntries appends extra KEY=VALUE entries after removing any
-// existing entries with a matching name. Windows environment names are
-// case-insensitive and the first match in the block wins, so a preexisting
-// same-name entry would otherwise shadow the supervisor's value.
 func upsertEnvironmentEntries(entries []string, extra map[string]string) []string {
 	if len(extra) == 0 {
 		return entries
@@ -480,8 +463,6 @@ func upsertEnvironmentEntries(entries []string, extra map[string]string) []strin
 	return result
 }
 
-// splitEnvironmentBlock decodes a double-null-terminated UTF-16 environment block
-// into its "KEY=VALUE" entries.
 func splitEnvironmentBlock(block *uint16) []string {
 	if block == nil {
 		return nil
@@ -501,8 +482,6 @@ func splitEnvironmentBlock(block *uint16) []string {
 	return entries
 }
 
-// buildEnvironmentBlock encodes "KEY=VALUE" entries into a double-null-terminated
-// UTF-16 environment block.
 func buildEnvironmentBlock(entries []string) ([]uint16, error) {
 	var block []uint16
 	for _, entry := range entries {
@@ -519,9 +498,6 @@ func buildEnvironmentBlock(entries []string) ([]uint16, error) {
 	return block, nil
 }
 
-// assignProcessToKillJob puts the server in a job that kills it when the job
-// handle closes, so an abnormal supervisor exit terminates the server with it
-// instead of orphaning it.
 func assignProcessToKillJob(process windows.Handle) (windows.Handle, error) {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {

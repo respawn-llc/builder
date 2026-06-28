@@ -25,9 +25,7 @@ const (
 	serviceActionStart     serviceAction = "start"
 	serviceActionStop      serviceAction = "stop"
 	serviceActionRestart   serviceAction = "restart"
-	// serviceActionRun is the internal entry the OS service manager invokes to
-	// host the background service in-process. It is not advertised in usage and
-	// is only meaningful on platforms with an SCM-style host (Windows).
+
 	serviceActionRun serviceAction = "run"
 )
 
@@ -41,10 +39,6 @@ type serviceCommandOptions struct {
 
 const servicePersistenceRootFlagUsage = "config and data root directory (overrides KENT_PERSISTENCE_ROOT and the default ~/.kent)"
 
-// commitServicePersistenceRoot publishes a --persistence-root flag value to
-// KENT_PERSISTENCE_ROOT so every service operation resolves the same config+data
-// root (install bakes it into the launched unit; status/start/stop target the
-// matching instance). It returns (exitCode, false) when the value is invalid.
 func commitServicePersistenceRoot(value string, stderr io.Writer) (int, bool) {
 	if err := publishPersistenceRootEnv(value); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -109,11 +103,6 @@ func serviceStatusSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 	return runServiceCommandAction(context.Background(), serviceActionStatus, serviceCommandOptions{JSON: *jsonOut}, stdout, stderr)
 }
 
-// guardBeforeElevation evaluates the current-session lifecycle guard before any
-// UAC relaunch. The elevated child does not inherit KENT_SESSION_ID, so without
-// this the guard (enforced later in runServiceCommandAction) would pass in the
-// elevated process and let a user reinstall/stop the service hosting their own
-// active session. Returns (code, true) when the caller should stop.
 func guardBeforeElevation(action serviceAction, opts serviceCommandOptions, stderr io.Writer) (int, bool) {
 	if err := ensureServiceLifecycleAllowed(action, opts); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -204,16 +193,10 @@ func serviceRestartSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
 		return code
 	}
-	// The session guard and elevation for restart are applied inside
-	// runServiceCommandAction, after confirming a matching installation exists,
-	// so `restart --if-installed` can still no-op from inside a Kent session.
+
 	return runServiceCommandAction(context.Background(), serviceActionRestart, serviceCommandOptions{IfInstalled: *ifInstalled}, stdout, stderr)
 }
 
-// serviceRunSubcommand is the internal entry the OS service manager invokes via
-// the registered command (`<exe> service run --persistence-root <root>`). It
-// resolves the spec for the baked root and hands off to the platform host, which
-// supervises the background server. It is not a user-facing command.
 func serviceRunSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" service run", stderr, commandUsage{
 		title: "Usage of " + config.Command + " service run:",
@@ -238,17 +221,10 @@ func serviceRunSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 	return serviceHostRun(spec, stdout, stderr)
 }
 
-// legacyServerStopper is implemented by backends whose previous-generation
-// registration may have a still-running server that would otherwise trip the
-// unmanaged-server preflight during migration.
 type legacyServerStopper interface {
 	stopLegacyServer(ctx context.Context, spec serviceSpec)
 }
 
-// stopLegacyManagedServer best-effort stops a previous-generation server (e.g.
-// the Windows scheduled-task launcher) before the install/restart preflight, so
-// upgrading from an older Kent does not require manually killing the old server
-// first. A no-op on backends without a legacy generation.
 func stopLegacyManagedServer(ctx context.Context, backend serviceBackend, spec serviceSpec) {
 	if stopper, ok := backend.(legacyServerStopper); ok {
 		stopper.stopLegacyServer(ctx, spec)
@@ -288,9 +264,7 @@ func runServiceCommandAction(ctx context.Context, action serviceAction, opts ser
 		writeServiceStatus(stdout, status)
 		return 0
 	case serviceActionInstall:
-		// Only end the legacy server on paths allowed to stop the service, so a
-		// registration-only install (--no-start without --force) never halts a
-		// session hosted by the old launcher.
+
 		if serviceLifecycleGuardApplies(serviceActionInstall, opts) {
 			stopLegacyManagedServer(ctx, backend, spec)
 		}
@@ -353,14 +327,11 @@ func runServiceCommandAction(ctx context.Context, action serviceAction, opts ser
 			if !status.Installed {
 				return 0
 			}
-			// A registration for a different root is "not installed" from this
-			// invocation's perspective, so --if-installed exits as a quiet no-op.
+
 			if rootMismatchError(status, spec) != nil {
 				return 0
 			}
-			// Reinstall rewrites the registration (admin-only on Windows). Elevate
-			// only now that a matching installation is confirmed, so a not-installed
-			// or root-mismatch no-op above never triggers an unnecessary UAC prompt.
+
 			if code, handled := elevateServiceAction(serviceActionRestart); handled {
 				return code
 			}
@@ -386,13 +357,6 @@ func runServiceCommandAction(ctx context.Context, action serviceAction, opts ser
 	return 0
 }
 
-// ensureServiceRootMatch reads the current registration and returns an error
-// when the installed service serves a different config+data root than the
-// resolved spec (or when the status read itself fails). It returns nil when
-// there is no conflict (or the installed root cannot be determined). Used by
-// stop/uninstall, which otherwise do not read status; start/restart reuse the
-// status fetched by ensureNoUnmanagedServerConflictForAction instead of paying a
-// second read.
 func ensureServiceRootMatch(ctx context.Context, backend serviceBackend, spec serviceSpec) error {
 	status, err := backend.Status(ctx, spec)
 	if err != nil {
@@ -401,32 +365,13 @@ func ensureServiceRootMatch(ctx context.Context, backend serviceBackend, spec se
 	return rootMismatchError(status, spec)
 }
 
-// rootMismatchError compares the persistence root baked into an installed
-// registration's command against the resolved spec root. Lifecycle actions
-// target the single global OS registration, so acting on a registration that
-// serves a different root is a cross-root footgun. It returns nil when they
-// match, when nothing is installed, or when the requested root is the default
-// and the installed registration's root cannot be confirmed (a legitimate
-// default-root service). Every service this binary installs now bakes
-// --persistence-root, and backends report the actual registration command (the
-// Windows backend resolves it from the registered scheduled-task action or the
-// Startup-folder launcher, never a path under the requested root), so the real
-// cross-root footguns — a default/other-root registration targeted with a
-// different --persistence-root, or an unpinned/unreadable legacy/manual
-// registration targeted with an explicit non-default root — are caught.
 func rootMismatchError(status serviceStatus, spec serviceSpec) error {
 	if !status.Installed {
 		return nil
 	}
 	installedRoot, ok := persistenceRootFromServiceCommand(status.Command)
 	if !ok {
-		// The registration's root cannot be confirmed: either the backend could
-		// not read/parse its command (empty command — e.g. a malformed plist or
-		// unit), or the command carries no --persistence-root (predates root
-		// isolation or was installed by hand). Both are indeterminate and treated
-		// as the default/global root. Acting on such a registration for an explicit
-		// non-default root would target the wrong (single, global) registration, so
-		// refuse unless the requested root is itself the default.
+
 		requestedIsDefault, err := config.IsDefaultPersistenceRoot(spec.Config.PersistenceRoot)
 		if err != nil {
 			return err
@@ -442,10 +387,6 @@ func rootMismatchError(status serviceStatus, spec serviceSpec) error {
 	return fmt.Errorf("no %s is installed for persistence root %s; the installed service targets %s. Reinstall with `%s service install --persistence-root %s` or manage the matching root instead", serviceDisplayName, spec.Config.PersistenceRoot, installedRoot, config.Command, spec.Config.PersistenceRoot)
 }
 
-// persistenceRootFromServiceCommand extracts the --persistence-root value baked
-// into an installed service command. It scans structured argv tokens (both the
-// "--persistence-root <root>" and "--persistence-root=<root>" forms) rather than
-// matching substrings.
 func persistenceRootFromServiceCommand(command []string) (string, bool) {
 	const flag = "--persistence-root"
 	for i, arg := range command {
@@ -467,8 +408,7 @@ func ensureNoUnmanagedServerConflictForAction(ctx context.Context, backend servi
 	if err != nil {
 		return err
 	}
-	// start/restart must not act on a registration installed for a different
-	// root. install (re)writes the registration, so it is exempt.
+
 	if action == serviceActionStart || action == serviceActionRestart {
 		if mismatch := rootMismatchError(status, spec); mismatch != nil {
 			return mismatch
@@ -513,8 +453,7 @@ func serviceLifecycleGuardApplies(action serviceAction, opts serviceCommandOptio
 	case serviceActionRestart:
 		return true
 	case serviceActionInstall:
-		// --force rewrites (stops, deletes, recreates) an existing service, so it
-		// can halt the session even with --no-start; guard it regardless.
+
 		return !opts.NoStart || opts.Force
 	case serviceActionUninstall:
 		return !opts.KeepRunning
@@ -542,9 +481,7 @@ func readServiceStatus(ctx context.Context, backend serviceBackend, spec service
 	if err != nil {
 		return serviceStatus{}, err
 	}
-	// Evaluate the root match against the raw registration command before the
-	// substitution below replaces an empty command with the requested-root one,
-	// which would otherwise mask a registration that serves a different root.
+
 	mismatched := rootMismatchError(status, spec) != nil
 	status.Backend = backend.Name()
 	status.Endpoint = spec.Endpoint
@@ -553,9 +490,7 @@ func readServiceStatus(ctx context.Context, backend serviceBackend, spec service
 		status.Command = serviceCommand(spec)
 	}
 	if mismatched {
-		// A registration for a different (or unconfirmable) root is "not
-		// installed" from the requested root's perspective, so status never
-		// reports another root's service as installed/running for this one.
+
 		status.Installed = false
 		status.Loaded = false
 		status.Running = false

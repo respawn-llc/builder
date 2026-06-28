@@ -22,9 +22,6 @@ const (
 	swShowNormal          = 1
 )
 
-// shellExecuteInfo mirrors SHELLEXECUTEINFOW; ShellExecuteEx writes the launched
-// process handle into the trailing process field when SEE_MASK_NOCLOSEPROCESS is
-// set.
 type shellExecuteInfo struct {
 	cbSize        uint32
 	mask          uint32
@@ -43,12 +40,6 @@ type shellExecuteInfo struct {
 	process       windows.Handle
 }
 
-// elevateServiceAction re-launches the current command elevated when the action
-// requires Administrator (install/uninstall) and this process is not elevated.
-// It returns (exitCode, true) when an elevated child handled the action, or
-// (0, false) when the caller should proceed in-process (already elevated, or the
-// action needs no elevation). Start/stop/restart/status are never elevated: the
-// install grants the user a service DACL so they run unprivileged.
 func elevateServiceAction(action serviceAction) (int, bool) {
 	switch action {
 	case serviceActionInstall, serviceActionUninstall, serviceActionRestart:
@@ -108,13 +99,6 @@ func elevateServiceAction(action serviceAction) (int, bool) {
 	return int(code), true
 }
 
-// elevatedServiceParams forwards this invocation's arguments to the elevated
-// child, pinning the persistence root to the absolute value resolved for the
-// current interactive user. UAC may run the child under a different administrator
-// whose default root differs, and the elevated process does not inherit this
-// process's environment, so without an explicit root the registered service
-// would point at the wrong profile. The appended flag wins via last-flag-wins
-// parsing, so any relative or omitted root is overridden.
 func elevatedServiceParams() []string {
 	args := os.Args[1:]
 	cfg, err := brand.LoadGlobal(brand.LoadOptions{})

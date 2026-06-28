@@ -120,10 +120,7 @@ func withServiceCommandTestBackendEndpoint(t *testing.T, backend *stubServiceBac
 	loadServiceSpec = func() (serviceSpec, error) {
 		host, portText, _ := net.SplitHostPort(strings.TrimPrefix(endpoint, "http://"))
 		port := parsePositiveInt(portText)
-		// These cases pass no --persistence-root, so the resolved root is the
-		// default; an unpinned `serve` registration is the default-root service and
-		// must not trip the cross-root guard. Explicit-root cases use
-		// withServiceCommandTestSpecRoot, which bakes a matching --persistence-root.
+
 		return serviceSpec{
 			Config:        config.App{PersistenceRoot: config.DefaultPersistence, Settings: config.Settings{ServerHost: host, ServerPort: port}},
 			Executable:    "/usr/local/bin/kent",
@@ -227,7 +224,7 @@ func TestServiceUninstallKeepRunning(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr.String())
 	}
-	// uninstall first reads status to verify the registration targets this root.
+
 	want := []serviceAction{serviceActionStatus, serviceActionUninstall}
 	if strings.Join(actionsToStrings(backend.calls), ",") != strings.Join(actionsToStrings(want), ",") {
 		t.Fatalf("calls = %+v, want %+v", backend.calls, want)
@@ -261,8 +258,7 @@ func TestServiceUninstallRejectsKentShellSession(t *testing.T) {
 
 func withServiceCommandTestSpecRoot(t *testing.T, root string) {
 	t.Helper()
-	// `serviceSubcommand(... --persistence-root ...)` publishes KENT_PERSISTENCE_ROOT
-	// process-wide; register it so it is restored and does not leak into later tests.
+
 	t.Setenv(config.PersistenceRootEnvName, "")
 	original := loadServiceSpec
 	t.Cleanup(func() { loadServiceSpec = original })
@@ -361,9 +357,7 @@ func TestServiceRestartIfInstalledTreatsRootMismatchAsNoOp(t *testing.T) {
 }
 
 func TestRootMismatchErrorRejectsUnpinnedRegistrationForExplicitRoot(t *testing.T) {
-	// A registration with no --persistence-root (a pre-isolation or hand-installed
-	// service) is the single global default-root service; targeting it with an
-	// explicit non-default root must be refused rather than acting on the wrong one.
+
 	explicitRoot := filepath.Join(t.TempDir(), "iso")
 	status := serviceStatus{Installed: true, Command: []string{"/usr/local/bin/kent", "serve"}}
 	spec := serviceSpec{Config: config.App{PersistenceRoot: explicitRoot}}
@@ -385,10 +379,7 @@ func TestRootMismatchErrorAllowsUnpinnedRegistrationForDefaultRoot(t *testing.T)
 }
 
 func TestRootMismatchErrorRejectsUnreadableRegistrationForExplicitRoot(t *testing.T) {
-	// An installed service whose registered command the backend could not
-	// read/parse (empty command — e.g. a malformed plist or unit) is a root that
-	// cannot be confirmed; targeting it with an explicit non-default root must be
-	// refused rather than acting on the single global registration.
+
 	explicitRoot := filepath.Join(t.TempDir(), "iso")
 	status := serviceStatus{Installed: true, Command: nil}
 	spec := serviceSpec{Config: config.App{PersistenceRoot: explicitRoot}}
@@ -410,9 +401,7 @@ func TestRootMismatchErrorAllowsUnreadableRegistrationForDefaultRoot(t *testing.
 }
 
 func TestServiceStatusReportsNotInstalledForForeignRoot(t *testing.T) {
-	// A registration whose command targets a different root must be reported as
-	// not installed for the requested root, so `service status --persistence-root`
-	// never presents another root's service as installed/running for this one.
+
 	requestedRoot := filepath.Join(t.TempDir(), "requested")
 	installedRoot := filepath.Join(t.TempDir(), "installed")
 	backend := &stubServiceBackend{status: serviceStatus{

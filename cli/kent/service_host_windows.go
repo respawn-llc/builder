@@ -12,11 +12,6 @@ import (
 	"golang.org/x/sys/windows/svc"
 )
 
-// serviceHostRun is the SCM entry point. The service manager launches the
-// registered command (`kent service run --persistence-root <root>`); svc.Run
-// connects this process to the service control dispatcher and drives the
-// supervisor until the SCM stops it. Invoked by hand it reports that it is not
-// running under the SCM.
 func serviceHostRun(spec serviceSpec, _ io.Writer, stderr io.Writer) int {
 	isService, err := svc.IsWindowsService()
 	if err != nil {
@@ -34,11 +29,6 @@ func serviceHostRun(spec serviceSpec, _ io.Writer, stderr io.Writer) int {
 	return 0
 }
 
-// serviceStopWindow is the single source of truth for how long a stop may take:
-// the graceful server shutdown (event signal + grace period + hard-terminate
-// fallback) plus SCM dispatch overhead. The SCM WaitHint advertises it so the
-// SCM waits instead of killing the supervisor (which would orphan the server),
-// and the lifecycle commands wait this long for a stop to complete.
 const (
 	serviceStopWindow         = 30 * time.Second
 	serviceStopWaitHintMillis = uint32(serviceStopWindow / time.Millisecond)
@@ -81,9 +71,7 @@ func (h *windowsServiceHandler) Execute(_ []string, r <-chan svc.ChangeRequest, 
 				changes <- svc.Status{State: svc.Stopped}
 				return false, 0
 			case svc.SessionChange:
-				// Any logon/logoff/lock change: recompute the target interactive
-				// session (0 when no matching user is logged in) and let the
-				// supervisor relaunch or stop the server accordingly.
+
 				supervisor.setWanted(supervisor.targetSession())
 			}
 		}

@@ -737,10 +737,6 @@ func TestTerminalCursorProgramStartupReplayAfterClearScreenKeepsOngoingOutputVis
 	}
 }
 
-// terminalCursorOutputContains reads the program output buffer under the same
-// lock the cursor writer holds while writing, so a test can synchronize on bytes
-// Bubble Tea flushes asynchronously through its command pipeline without racing
-// concurrent writes.
 func terminalCursorOutputContains(state *uiTerminalCursorState, out *bytes.Buffer, want string) bool {
 	state.writeMu.Lock()
 	defer state.writeMu.Unlock()
