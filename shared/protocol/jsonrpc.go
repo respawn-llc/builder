@@ -25,8 +25,6 @@ const (
 	ErrCodeWorkspaceNotRegistered        = -32013
 	ErrCodeProjectNotFound               = -32014
 	ErrCodeProjectUnavailable            = -32015
-	ErrCodeSessionAlreadyControlled      = -32016
-	ErrCodeInvalidControllerLease        = -32017
 	ErrCodeAuthRequired                  = -32018
 	ErrCodeRuntimeUnavailable            = -32019
 	ErrCodePromptNotFound                = -32020
@@ -37,7 +35,6 @@ const (
 	ErrCodeProtocolVersionMismatch       = -32025
 	ErrCodeWorkflowTaskCompleteAmbiguous = -32026
 	ErrCodeWorkflowTaskCompleteNotFound  = -32027
-	ErrCodeActivePrimaryRun              = -32028
 )
 
 type Request struct {

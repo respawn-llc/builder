@@ -207,6 +207,9 @@ func steerCacheObservationIntent(events []session.EventInput, warning transcript
 }
 
 func (e *Engine) steer(stepID string, intents ...steeringIntent) error {
+	if e.closed.Load() {
+		return ErrEngineClosed
+	}
 	ordered := make([]steeringIntent, 0, len(intents))
 	for _, intent := range intents {
 		if len(intent.items) == 0 {

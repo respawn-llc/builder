@@ -122,9 +122,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 	for _, err := range callErrs {
 		joined = errors.Join(joined, err)
 	}
-	if joined == nil {
-		joined = errors.Join(joined, e.drainActiveRunGoalMutations(stepID))
-	}
+	joined = errors.Join(joined, e.drainActiveStepGoalMutations(stepID))
 	if joined != nil {
 		return results, joined
 	}

@@ -209,8 +209,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ActivateSessionRuntime(ctx, params)
-			if err == nil && !resp.ReadOnly {
-				state.recordOwnedRuntimeLease(params.SessionID, resp.LeaseID)
+			if err == nil {
+				state.recordOwnedRuntime(params.SessionID)
 			}
 			return resp, err
 		})
@@ -219,8 +219,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		return decodeAndHandle(req, func(params serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 			params.OwnerID = state.runtimeOwnerID
 			resp, err := g.deps.SessionRuntimeClient().ReleaseSessionRuntime(ctx, params)
-			if err == nil && resp.Released {
-				state.removeOwnedRuntimeLease(params.SessionID, params.LeaseID)
+			if err == nil && (resp.Released || params.DropOwner) {
+				state.removeOwnedRuntime(params.SessionID)
 			}
 			return resp, err
 		})
@@ -233,7 +233,6 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodRuntimeSetQuestionsEnabled:            gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeSetQuestionsEnabledRequest, serverapi.RuntimeSetQuestionsEnabledResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.SetQuestionsEnabled),
 	protocol.MethodRuntimeAppendCommittedEntry:           gatewayClientCallNoResponse[client.RuntimeControlClient, serverapi.RuntimeAppendCommittedEntryRequest](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.AppendCommittedEntry),
 	protocol.MethodRuntimeShouldCompactBeforeUserMessage: gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeShouldCompactBeforeUserMessageRequest, serverapi.RuntimeShouldCompactBeforeUserMessageResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.ShouldCompactBeforeUserMessage),
-	protocol.MethodRuntimeSubmitUserMessage:              gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeSubmitUserMessageRequest, serverapi.RuntimeSubmitUserMessageResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.SubmitUserMessage),
 	protocol.MethodRuntimeSubmitUserTurn:                 gatewayClientCall[client.RuntimeControlClient, serverapi.RuntimeSubmitUserTurnRequest, serverapi.RuntimeSubmitUserTurnResponse](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.SubmitUserTurn),
 	protocol.MethodRuntimeSubmitUserShellCommand:         gatewayClientCallNoResponse[client.RuntimeControlClient, serverapi.RuntimeSubmitUserShellCommandRequest](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.SubmitUserShellCommand),
 	protocol.MethodRuntimeCompactContext:                 gatewayClientCallNoResponse[client.RuntimeControlClient, serverapi.RuntimeCompactContextRequest](GatewayDependencies.RuntimeControlClient, client.RuntimeControlClient.CompactContext),

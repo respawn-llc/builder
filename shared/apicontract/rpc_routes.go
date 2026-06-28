@@ -265,7 +265,6 @@ var routeContracts = []Route{
 	unary[serverapi.RuntimeSetQuestionsEnabledRequest, serverapi.RuntimeSetQuestionsEnabledResponse](protocol.MethodRuntimeSetQuestionsEnabled, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	unary[serverapi.RuntimeAppendCommittedEntryRequest, struct{}](protocol.MethodRuntimeAppendCommittedEntry, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	unary[serverapi.RuntimeShouldCompactBeforeUserMessageRequest, serverapi.RuntimeShouldCompactBeforeUserMessageResponse](protocol.MethodRuntimeShouldCompactBeforeUserMessage, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
-	dedicatedUnary[serverapi.RuntimeSubmitUserMessageRequest, serverapi.RuntimeSubmitUserMessageResponse](protocol.MethodRuntimeSubmitUserMessage, "runtime-submit-user-message", ScopeSessionActiveProject, DependencyRuntimeControl),
 	dedicatedUnary[serverapi.RuntimeSubmitUserTurnRequest, serverapi.RuntimeSubmitUserTurnResponse](protocol.MethodRuntimeSubmitUserTurn, "runtime-submit-user-turn", ScopeSessionActiveProject, DependencyRuntimeControl),
 	dedicatedUnary[serverapi.RuntimeSubmitUserShellCommandRequest, struct{}](protocol.MethodRuntimeSubmitUserShellCommand, "runtime-submit-user-shell-command", ScopeSessionActiveProject, DependencyRuntimeControl),
 	dedicatedUnary[serverapi.RuntimeCompactContextRequest, struct{}](protocol.MethodRuntimeCompactContext, "runtime-compact-context", ScopeSessionActiveProject, DependencyRuntimeControl),

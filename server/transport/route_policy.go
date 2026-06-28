@@ -272,8 +272,6 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.RuntimeShouldCompactBeforeUserMessageRequest:
 		return p.SessionID, true
-	case serverapi.RuntimeSubmitUserMessageRequest:
-		return p.SessionID, true
 	case serverapi.RuntimeSubmitUserTurnRequest:
 		return p.SessionID, true
 	case serverapi.RuntimeSubmitUserShellCommandRequest:

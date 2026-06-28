@@ -117,6 +117,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"TranscriptPageRequest":            {},
 		"TranscriptRecoveryCause":          {},
 		"UpdateStatus":                     {},
+		"UserTurnSubmission":               {},
 		"WorkflowSessionStatus":            {},
 	}
 	allowedFuncs := map[string]struct{}{

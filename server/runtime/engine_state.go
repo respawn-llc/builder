@@ -11,7 +11,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/config"
-	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
@@ -271,6 +270,17 @@ func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
 func (e *Engine) SetStreamingError(text string) {
 	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).SetStreamingError(text)
 	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+}
+
+func (e *Engine) ReportPromptHistoryPersistError(reason string) {
+	if e == nil {
+		return
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return
+	}
+	_ = e.steer("", steerEventIntent(Event{Kind: EventPromptHistoryPersistFailed, Error: reason}))
 }
 
 func (e *Engine) ClearStreamingError() {
@@ -720,17 +730,6 @@ type historyReplacementPayload struct {
 	PendingHandoffFutureMessage       string             `json:"pending_handoff_future_message,omitempty"`
 	LastCommittedAssistantFinalAnswer string             `json:"last_committed_assistant_final_answer,omitempty"`
 	Items                             []llm.ResponseItem `json:"items"`
-}
-
-func toToolNames(ids []toolspec.ID) []string {
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if id == "" {
-			continue
-		}
-		out = append(out, string(id))
-	}
-	return out
 }
 
 func (e *Engine) setLastUsage(usage llm.Usage) {

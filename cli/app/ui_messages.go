@@ -14,6 +14,7 @@ type submitDoneMsg struct {
 	message       string
 	submittedText string
 	silentFinal   bool
+	queued        clientui.QueuedUserMessage
 	err           error
 }
 
@@ -189,7 +190,7 @@ type runtimeConnectionStateChangedMsg struct {
 	err error
 }
 
-type runtimeLeaseRecoveryWarningMsg struct {
+type runtimeReconnectWarningMsg struct {
 	text       string
 	visibility clientui.EntryVisibility
 }

@@ -160,7 +160,6 @@ func (e *PollingCanceledError) Unwrap() error {
 type processEntry struct {
 	id             string
 	ownerSessionID string
-	shellToken     string
 	ownerRunID     string
 	ownerStepID    string
 	command        string

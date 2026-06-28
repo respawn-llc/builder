@@ -6,7 +6,6 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
 	"core/server/metadata"
-	"core/server/runtime"
 	"core/server/session"
 	shelltool "core/server/tools/shell"
 	rpccontract "core/shared/apicontract"
@@ -182,7 +181,7 @@ func newGatewayTestAuthSupport(t *testing.T, ready bool) serverbootstrap.AuthSup
 	return authSupport
 }
 
-func activateGatewayController(t *testing.T, appCore *core.Core, sessionID string) string {
+func activateGatewayController(t *testing.T, appCore *core.Core, sessionID string) {
 	t.Helper()
 	settings := appCore.Config().Settings
 	if strings.TrimSpace(settings.Model) == "" {
@@ -191,27 +190,21 @@ func activateGatewayController(t *testing.T, appCore *core.Core, sessionID strin
 	if strings.TrimSpace(settings.ProviderOverride) == "" && strings.TrimSpace(settings.OpenAIBaseURL) == "" {
 		settings.ProviderOverride = "openai"
 	}
-	resp, err := appCore.SessionRuntimeClient().ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+	if _, err := appCore.SessionRuntimeClient().ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-" + strings.TrimSpace(sessionID),
 		SessionID:       strings.TrimSpace(sessionID),
 		ActiveSettings:  settings,
 		Source:          appCore.Config().Source,
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
-	return resp.LeaseID
 }
 
-func releaseGatewayController(t *testing.T, appCore *core.Core, sessionID string, leaseID string) {
+func releaseGatewayController(t *testing.T, appCore *core.Core, sessionID string) {
 	t.Helper()
-	if strings.TrimSpace(leaseID) == "" {
-		return
-	}
 	if _, err := appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-" + strings.TrimSpace(sessionID),
 		SessionID:       strings.TrimSpace(sessionID),
-		LeaseID:         strings.TrimSpace(leaseID),
 	}); err != nil {
 		t.Fatalf("ReleaseSessionRuntime: %v", err)
 	}
@@ -283,7 +276,13 @@ func newGatewayRuntimeClientOverrideServer(t *testing.T, runtimeClient remotecli
 }
 
 func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
+	appCore, _ := newGatewayTestCore(t, true, true)
+	counter := &countingSessionRuntimeClient{SessionRuntimeClient: appCore.SessionRuntimeClient()}
+	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptest.NewServer(gateway.Handler())
 	defer func() { _ = appCore.Close() }()
 	defer server.Close()
 	store := createGatewayAuthoritativeSession(t, appCore)
@@ -293,56 +292,12 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 	handshakeGateway(t, conn)
 	var activation serverapi.SessionRuntimeActivateResponse
 	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"), &activation)
-	if strings.TrimSpace(activation.LeaseID) == "" {
-		t.Fatalf("activation response missing lease: %+v", activation)
-	}
 	if err := conn.Close(); err != nil {
 		t.Fatalf("close gateway connection: %v", err)
 	}
-
-	metadataStore, err := metadata.Open(appCore.Config().PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	defer func() { _ = metadataStore.Close() }()
-	waitForGatewayCondition(t, "idle runtime lease release", func() bool {
-		_, err := metadataStore.ValidateRuntimeLease(context.Background(), store.Meta().SessionID, activation.LeaseID)
-		return err != nil
+	waitForGatewayCondition(t, "idle owned runtime release on disconnect", func() bool {
+		return counter.releaseCount.Load() >= 1
 	})
-}
-
-func TestGatewayConnectionCloseKeepsActiveOwnedRuntime(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-	store := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(store)
-
-	conn := dialGateway(t, server)
-	handshakeGateway(t, conn)
-	var activation serverapi.SessionRuntimeActivateResponse
-	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"), &activation)
-	if strings.TrimSpace(activation.LeaseID) == "" {
-		t.Fatalf("activation response missing lease: %+v", activation)
-	}
-	active, err := appCore.AcquirePrimaryRun(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("AcquirePrimaryRun: %v", err)
-	}
-	defer active.Release()
-	if err := conn.Close(); err != nil {
-		t.Fatalf("close gateway connection: %v", err)
-	}
-
-	metadataStore, err := metadata.Open(appCore.Config().PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	defer func() { _ = metadataStore.Close() }()
-	time.Sleep(100 * time.Millisecond)
-	if _, err := metadataStore.ValidateRuntimeLease(context.Background(), store.Meta().SessionID, activation.LeaseID); err != nil {
-		t.Fatalf("active runtime lease should remain valid after owner disconnect: %v", err)
-	}
 }
 
 func TestGatewayExplicitReleaseRemovesOwnedRuntimeLeaseBeforeConnectionClose(t *testing.T) {
@@ -362,14 +317,10 @@ func TestGatewayExplicitReleaseRemovesOwnedRuntimeLeaseBeforeConnectionClose(t *
 	handshakeGateway(t, conn)
 	var activation serverapi.SessionRuntimeActivateResponse
 	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"), &activation)
-	if strings.TrimSpace(activation.LeaseID) == "" {
-		t.Fatalf("activation response missing lease: %+v", activation)
-	}
 	var release serverapi.SessionRuntimeReleaseResponse
 	callGateway(t, conn, "release-runtime", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-runtime",
 		SessionID:       store.Meta().SessionID,
-		LeaseID:         activation.LeaseID,
 	}, &release)
 	if !release.Released {
 		t.Fatalf("release response = %+v, want released", release)
@@ -380,57 +331,6 @@ func TestGatewayExplicitReleaseRemovesOwnedRuntimeLeaseBeforeConnectionClose(t *
 	time.Sleep(100 * time.Millisecond)
 	if got := counter.releaseCount.Load(); got != 1 {
 		t.Fatalf("runtime release call count = %d, want only explicit release", got)
-	}
-}
-
-func TestGatewayActiveOnlyIfIdleReleaseKeepsOwnedRuntimeLeaseForCloseCleanup(t *testing.T) {
-	appCore, _ := newGatewayTestCore(t, true, true)
-	counter := &countingSessionRuntimeClient{SessionRuntimeClient: appCore.SessionRuntimeClient()}
-	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-	server := httptest.NewServer(gateway.Handler())
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-	store := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(store)
-
-	conn := dialGateway(t, server)
-	handshakeGateway(t, conn)
-	var activation serverapi.SessionRuntimeActivateResponse
-	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"), &activation)
-	if strings.TrimSpace(activation.LeaseID) == "" {
-		t.Fatalf("activation response missing lease: %+v", activation)
-	}
-	active, err := appCore.AcquirePrimaryRun(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("AcquirePrimaryRun: %v", err)
-	}
-	defer active.Release()
-	var release serverapi.SessionRuntimeReleaseResponse
-	callGateway(t, conn, "release-runtime", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "release-runtime",
-		SessionID:       store.Meta().SessionID,
-		LeaseID:         activation.LeaseID,
-		OnlyIfIdle:      true,
-	}, &release)
-	if !release.Active || release.Released {
-		t.Fatalf("release response = %+v, want active and unreleased", release)
-	}
-	if err := conn.Close(); err != nil {
-		t.Fatalf("close gateway connection: %v", err)
-	}
-	waitForGatewayCondition(t, "close cleanup release retry", func() bool {
-		return counter.releaseCount.Load() >= 2
-	})
-	metadataStore, err := metadata.Open(appCore.Config().PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	defer func() { _ = metadataStore.Close() }()
-	if _, err := metadataStore.ValidateRuntimeLease(context.Background(), store.Meta().SessionID, activation.LeaseID); err != nil {
-		t.Fatalf("active runtime lease should remain valid after close cleanup retry: %v", err)
 	}
 }
 
@@ -457,84 +357,6 @@ func TestGatewayFailedActivationDoesNotRecordOwnedRuntimeLease(t *testing.T) {
 	if got := counter.releaseCount.Load(); got != 0 {
 		t.Fatalf("runtime release call count after failed activation = %d, want 0", got)
 	}
-}
-
-func TestGatewayCollaborativeRuntimeActivationDoesNotRecordOwnedLease(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-	store := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(store)
-	engine := &runtime.Engine{}
-	appCore.RegisterRuntime(store.Meta().SessionID, engine)
-	defer appCore.UnregisterRuntime(store.Meta().SessionID, engine)
-
-	conn := dialGateway(t, server)
-	handshakeGateway(t, conn)
-	var activation serverapi.SessionRuntimeActivateResponse
-	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"), &activation)
-	if !activation.ReadOnly || activation.Mode != serverapi.SessionRuntimeAttachModeCollaborative || strings.TrimSpace(activation.LeaseID) != "" || len(activation.AllowedOperations) == 0 {
-		t.Fatalf("activation response = %+v, want collaborative legacy read-only without lease and with allowed operations", activation)
-	}
-	if err := conn.Close(); err != nil {
-		t.Fatalf("close gateway connection: %v", err)
-	}
-
-	conn = dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-	callGateway(t, conn, "activate-runtime-again", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime-again"), &activation)
-	if !activation.ReadOnly || activation.Mode != serverapi.SessionRuntimeAttachModeCollaborative || strings.TrimSpace(activation.LeaseID) != "" || len(activation.AllowedOperations) == 0 {
-		t.Fatalf("activation after collaborative disconnect = %+v, want collaborative legacy read-only without lease and with allowed operations", activation)
-	}
-}
-
-func TestGatewayTakeoverConnectionCloseDoesNotReleaseNewOwnerLease(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-	store := createGatewayAuthoritativeSession(t, appCore)
-	appCore.RegisterSessionStore(store)
-
-	first := dialGateway(t, server)
-	handshakeGateway(t, first)
-	var firstActivation serverapi.SessionRuntimeActivateResponse
-	callGateway(t, first, "activate-runtime-1", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime-1"), &firstActivation)
-	if strings.TrimSpace(firstActivation.LeaseID) == "" {
-		t.Fatalf("first activation response missing lease: %+v", firstActivation)
-	}
-
-	second := dialGateway(t, server)
-	defer func() { _ = second.Close() }()
-	handshakeGateway(t, second)
-	var secondActivation serverapi.SessionRuntimeActivateResponse
-	callGateway(t, second, "activate-runtime-2", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime-2"), &secondActivation)
-	if strings.TrimSpace(secondActivation.LeaseID) == "" || secondActivation.LeaseID == firstActivation.LeaseID {
-		t.Fatalf("second activation response = %+v, want distinct takeover lease", secondActivation)
-	}
-
-	metadataStore, err := metadata.Open(appCore.Config().PersistenceRoot)
-	if err != nil {
-		t.Fatalf("metadata.Open: %v", err)
-	}
-	defer func() { _ = metadataStore.Close() }()
-	if _, err := metadataStore.ValidateRuntimeLease(context.Background(), store.Meta().SessionID, firstActivation.LeaseID); err == nil {
-		t.Fatal("first owner lease should be invalid after takeover")
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("close first gateway connection: %v", err)
-	}
-	time.Sleep(100 * time.Millisecond)
-	if _, err := metadataStore.ValidateRuntimeLease(context.Background(), store.Meta().SessionID, secondActivation.LeaseID); err != nil {
-		t.Fatalf("second owner lease should remain valid after first connection closes: %v", err)
-	}
-	if err := second.Close(); err != nil {
-		t.Fatalf("close second gateway connection: %v", err)
-	}
-	waitForGatewayCondition(t, "second owner lease release", func() bool {
-		_, err := metadataStore.ValidateRuntimeLease(context.Background(), store.Meta().SessionID, secondActivation.LeaseID)
-		return err != nil
-	})
 }
 
 func TestGatewayHandshakeAndProjectList(t *testing.T) {
@@ -604,7 +426,6 @@ func TestGatewayPreAuthMethodPolicy(t *testing.T) {
 		{name: "process list", method: protocol.MethodProcessList, requiresAuth: false},
 		{name: "session plan", method: protocol.MethodSessionPlan, requiresAuth: true},
 		{name: "persist input draft", method: protocol.MethodSessionPersistInputDraft, requiresAuth: true},
-		{name: "runtime submit", method: protocol.MethodRuntimeSubmitUserMessage, requiresAuth: true},
 		{name: "run prompt", method: protocol.MethodRunPrompt, requiresAuth: true},
 	}
 	for _, tt := range tests {
@@ -884,7 +705,7 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 	if _, err := remote.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: foreignSession.Meta().SessionID}); err == nil {
 		t.Fatal("expected foreign-project session view access to be rejected")
 	}
-	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: "persist-foreign", SessionID: foreignSession.Meta().SessionID, ControllerLeaseID: "lease-foreign", Input: "should fail"}); err == nil {
+	if _, err := remote.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{ClientRequestID: "persist-foreign", SessionID: foreignSession.Meta().SessionID, Input: "should fail"}); err == nil {
 		t.Fatal("expected foreign-project session mutation to be rejected")
 	}
 	if _, err := remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: "retarget-foreign", SessionID: foreignSession.Meta().SessionID, WorkspaceRoot: resolvedA.Config.WorkspaceRoot}); err == nil {

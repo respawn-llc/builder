@@ -14,11 +14,12 @@ import (
 )
 
 type stubExclusiveStepLifecycle struct {
-	mu       sync.Mutex
-	busy     bool
-	runCalls int
-	runFn    func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
-	snapshot *RunSnapshot
+	mu           sync.Mutex
+	busy         bool
+	runCalls     int
+	runFn        func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
+	snapshot     *RunSnapshot
+	activeStepID string
 }
 
 type stubBackgroundNoticeScheduler struct {
@@ -62,16 +63,14 @@ func (s *stubExclusiveStepLifecycle) Snapshot() *RunSnapshot {
 	return cloneRunSnapshot(s.snapshot)
 }
 
-func (s *stubExclusiveStepLifecycle) WithActiveRun(runID string, stepID string, fn func() error) (bool, error) {
+func (s *stubExclusiveStepLifecycle) WithActiveStep(fn func(stepID string) error) (bool, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.snapshot == nil || s.snapshot.RunID != runID || s.snapshot.StepID != stepID {
+	stepID := s.activeStepID
+	s.mu.Unlock()
+	if stepID == "" || fn == nil {
 		return false, nil
 	}
-	if fn == nil {
-		return true, nil
-	}
-	return true, fn()
+	return true, fn(stepID)
 }
 
 func (s *stubExclusiveStepLifecycle) setBusy(busy bool) {
@@ -111,7 +110,7 @@ func TestExclusiveStepLifecycleRejectsConcurrentRun(t *testing.T) {
 	err := lifecycle.Run(context.Background(), exclusiveStepOptions{}, func(stepCtx context.Context, stepID string) error {
 		return nil
 	})
-	if !errors.Is(err, errExclusiveStepBusy) {
+	if !errors.Is(err, ErrAgentBusy) {
 		t.Fatalf("expected busy error, got %v", err)
 	}
 
@@ -122,6 +121,41 @@ func TestExclusiveStepLifecycleRejectsConcurrentRun(t *testing.T) {
 	if lifecycle.IsBusy() {
 		t.Fatal("expected exclusive step lifecycle to be idle after completion")
 	}
+}
+
+func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+	stepCtx, stepID, err := lifecycle.begin(context.Background(), exclusiveStepOptions{})
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if stepCtx == nil || stepID == "" {
+		t.Fatalf("begin returned ctx=%v stepID=%q, want active step", stepCtx, stepID)
+	}
+
+	called := false
+	active, err := lifecycle.WithActiveStep(func(string) error {
+		called = true
+		return nil
+	})
+	if err != nil || !active || !called {
+		t.Fatalf("WithActiveStep before close active=%t called=%t err=%v, want active callback", active, called, err)
+	}
+
+	lifecycle.closeActiveStepQueue(stepID)
+	active, err = lifecycle.WithActiveStep(func(string) error {
+		t.Fatal("active-step callback ran after queue close")
+		return nil
+	})
+	if !errors.Is(err, ErrAgentBusy) {
+		t.Fatalf("WithActiveStep after close error = %v, want ErrAgentBusy", err)
+	}
+	if !active {
+		t.Fatal("WithActiveStep after close active=false, want true with busy error")
+	}
+	lifecycle.end()
 }
 
 func TestExclusiveStepLifecycleSnapshotTracksActiveRun(t *testing.T) {
@@ -287,34 +321,6 @@ func TestExclusiveStepLifecycleEmitsInterruptedRunStatePayloads(t *testing.T) {
 	}
 	if latest == nil || latest.RunID != startedEvent.RunID || latest.Status != session.RunStatusInterrupted {
 		t.Fatalf("unexpected durable interrupted run: %+v", latest)
-	}
-}
-
-func TestExclusiveStepLifecyclePersistsPanicsAsFailedRuns(t *testing.T) {
-	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-
-	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
-	func() {
-		defer func() {
-			if recovered := recover(); recovered == nil {
-				t.Fatal("expected panic from exclusive step")
-			}
-		}()
-		_ = lifecycle.Run(context.Background(), exclusiveStepOptions{EmitRunState: true, PersistRunLifecycle: true}, func(context.Context, string) error {
-			panic("boom")
-		})
-	}()
-
-	latest, err := store.LatestRun()
-	if err != nil {
-		t.Fatalf("latest run: %v", err)
-	}
-	if latest == nil || latest.Status != session.RunStatusFailed {
-		t.Fatalf("expected panic to persist as failed run, got %+v", latest)
-	}
-	if latest.FinishedAt.IsZero() {
-		t.Fatalf("expected failed run to be finished, got %+v", latest)
 	}
 }
 

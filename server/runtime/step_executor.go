@@ -35,7 +35,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
 		}
-		if err := e.drainActiveRunGoalMutations(stepID); err != nil {
+		if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 			return stepLoopResult{}, err
 		}
 		if terminal, err := s.workflowDurableCompletionTerminal(ctx, stepID); err != nil {
@@ -309,7 +309,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				}
 				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion}))
 			}
-			if err := e.drainActiveRunGoalMutations(stepID); err != nil {
+			if err := e.drainActiveStepGoalMutations(stepID); err != nil {
 				return stepLoopResult{}, err
 			}
 			return stepLoopResult{Message: resolved, ExecutedToolCall: executedToolCall, AssistantCommittedStart: resolvedCommittedStart, AssistantCommittedStartSet: resolvedCommittedStartSet}, nil
@@ -549,7 +549,7 @@ func (s *defaultStepExecutor) prepareModelTurn(ctx context.Context, stepID strin
 	if err != nil {
 		return err
 	}
-	if err := e.requireAskQuestionForActiveGoal(); err != nil {
+	if err := e.requireAskQuestionWhenGoalActive(); err != nil {
 		return err
 	}
 	if handoffCompacted {

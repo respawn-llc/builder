@@ -2,12 +2,12 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"sync"
 
-	"core/server/primaryrun"
 	"core/server/runtime"
 	"core/server/runtimeview"
 	askquestion "core/server/tools"
@@ -22,13 +22,158 @@ const (
 
 type RuntimeRegistry struct {
 	directory       *runtimeDirectory
-	leases          *primaryRunLeaseStore
 	observerMu      sync.Mutex
 	observer        func(sessionID string, reason RuntimeInterestReason)
 	sleepObserverMu sync.Mutex
 	sleepObserver   func(active bool)
 	runStateMu      sync.Mutex
+	runStateCond    *sync.Cond
 	runningSessions map[string]bool
+	blockedRuns     map[string]int
+	starts          map[string]map[uint64]runStartReservation
+	nextStartID     uint64
+}
+
+type runStartReservation struct {
+	exclusive bool
+}
+
+func (r *RuntimeRegistry) BlockSessionRuns(sessionIDs []string) func() {
+	if r == nil {
+		return func() {}
+	}
+	blocked := make([]string, 0, len(sessionIDs))
+	r.runStateMu.Lock()
+	for _, sessionID := range sessionIDs {
+		trimmed := strings.TrimSpace(sessionID)
+		if trimmed == "" {
+			continue
+		}
+		r.blockedRuns[trimmed]++
+		blocked = append(blocked, trimmed)
+	}
+	for r.anyInFlightStartLocked(blocked) {
+		r.runStateCond.Wait()
+	}
+	r.runStateMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.runStateMu.Lock()
+			defer r.runStateMu.Unlock()
+			for _, sessionID := range blocked {
+				if r.blockedRuns[sessionID] <= 1 {
+					delete(r.blockedRuns, sessionID)
+					continue
+				}
+				r.blockedRuns[sessionID]--
+			}
+			r.runStateCond.Broadcast()
+		})
+	}
+}
+
+func (r *RuntimeRegistry) anyInFlightStartLocked(sessionIDs []string) bool {
+	for _, sessionID := range sessionIDs {
+		if len(r.starts[sessionID]) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *RuntimeRegistry) SessionRunsBlocked(sessionID string) bool {
+	if r == nil {
+		return false
+	}
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return false
+	}
+	r.runStateMu.Lock()
+	defer r.runStateMu.Unlock()
+	return r.blockedRuns[trimmed] > 0
+}
+
+func (r *RuntimeRegistry) BeginSessionRun(sessionID string) (func(), bool) {
+	if r == nil {
+		return func() {}, true
+	}
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return func() {}, true
+	}
+	r.runStateMu.Lock()
+	if r.blockedRuns[trimmed] > 0 || r.hasExclusiveStartLocked(trimmed) {
+		r.runStateMu.Unlock()
+		return nil, false
+	}
+	startID := r.addStartLocked(trimmed, false)
+	r.runStateMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.runStateMu.Lock()
+			defer r.runStateMu.Unlock()
+			r.clearStartLocked(trimmed, startID)
+		})
+	}, true
+}
+
+func (r *RuntimeRegistry) BeginExclusiveSessionRun(sessionID string) (release func(), acquired bool, blocked bool) {
+	if r == nil {
+		return func() {}, true, false
+	}
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return func() {}, true, false
+	}
+	r.runStateMu.Lock()
+	if r.blockedRuns[trimmed] > 0 {
+		r.runStateMu.Unlock()
+		return nil, false, true
+	}
+	if len(r.starts[trimmed]) > 0 {
+		r.runStateMu.Unlock()
+		return nil, false, false
+	}
+	startID := r.addStartLocked(trimmed, true)
+	r.runStateMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.runStateMu.Lock()
+			defer r.runStateMu.Unlock()
+			r.clearStartLocked(trimmed, startID)
+		})
+	}, true, false
+}
+
+func (r *RuntimeRegistry) addStartLocked(sessionID string, exclusive bool) uint64 {
+	r.nextStartID++
+	startID := r.nextStartID
+	if r.starts[sessionID] == nil {
+		r.starts[sessionID] = make(map[uint64]runStartReservation)
+	}
+	r.starts[sessionID][startID] = runStartReservation{exclusive: exclusive}
+	return startID
+}
+
+func (r *RuntimeRegistry) clearStartLocked(sessionID string, startID uint64) {
+	delete(r.starts[sessionID], startID)
+	if len(r.starts[sessionID]) == 0 {
+		delete(r.starts, sessionID)
+	}
+	r.runStateCond.Broadcast()
+}
+
+func (r *RuntimeRegistry) hasExclusiveStartLocked(sessionID string) bool {
+	for _, reservation := range r.starts[sessionID] {
+		if reservation.exclusive {
+			return true
+		}
+	}
+	return false
 }
 
 type GuardedPromptResponder interface {
@@ -43,70 +188,56 @@ const (
 )
 
 func NewRuntimeRegistry() *RuntimeRegistry {
-	return &RuntimeRegistry{
+	r := &RuntimeRegistry{
 		directory:       newRuntimeDirectory(),
-		leases:          newPrimaryRunLeaseStore(),
 		runningSessions: make(map[string]bool),
+		blockedRuns:     make(map[string]int),
+		starts:          make(map[string]map[uint64]runStartReservation),
 	}
+	r.runStateCond = sync.NewCond(&r.runStateMu)
+	return r
 }
 
-func (r *RuntimeRegistry) Register(sessionID string, engine *runtime.Engine) {
-	r.RegisterRuntimeHooks(sessionID, engine, nil)
-}
-
-func (r *RuntimeRegistry) RegisterRuntimeHooks(sessionID string, engine *runtime.Engine, rebind func(string) error) {
-	if r == nil || engine == nil {
-		return
-	}
-	previous := r.directory.Register(sessionID, engine, rebind, func(previous *runtimeEntry) {
-		publishExternalRuntimeStatusToEntry(previous, clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateClosing, QueueAccepting: false})
-		failRuntimeEntryQueuedMessages(previous, runtime.QueuedUserMessageFailureClosing)
-	})
-	closeRuntimeEntry(previous, io.EOF)
-	if previous != nil {
-		r.updateAggregateRunState(sessionID, false)
-	}
-}
-
-func (r *RuntimeRegistry) Unregister(sessionID string, engine *runtime.Engine) {
+func (r *RuntimeRegistry) closeEntry(ctx context.Context, sessionID string, engine *runtime.Engine, drain func(context.Context) error) (bool, error) {
 	if r == nil {
-		return
-	}
-	id, entry := r.directory.Unregister(sessionID, engine)
-	if id == "" {
-		return
-	}
-	publishExternalRuntimeStatusToEntry(entry, clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateClosing, QueueAccepting: false})
-	publishExternalRuntimeStatusToEntry(entry, clientui.ExternalRuntimeStatus{})
-	r.leases.Clear(id)
-	closeRuntimeEntry(entry, io.EOF)
-	r.updateAggregateRunState(id, false)
-}
-
-func (r *RuntimeRegistry) CloseRuntimeWithDrain(ctx context.Context, sessionID string, engine *runtime.Engine, drain func(context.Context) error) error {
-	if r == nil {
-		return nil
+		return false, nil
 	}
 	id, entry, drainRef := r.directory.BeginClose(sessionID, engine)
 	if id == "" || entry == nil || drainRef == nil {
-		return nil
+		return false, nil
 	}
+	return r.finishClose(ctx, id, engine, entry, drainRef, drain)
+}
+
+func (r *RuntimeRegistry) finishClose(ctx context.Context, sessionID string, engine *runtime.Engine, entry *runtimeEntry, drainRef *runtimeCloseDrainRef, drain func(context.Context) error) (bool, error) {
 	publishExternalRuntimeStatusToEntry(entry, clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateDraining, QueueAccepting: false})
 	drainRef.WaitForGuards()
 	var drainErr error
 	if drain != nil {
 		drainErr = drain(ctx)
 	}
-	removedID, removedEntry := r.directory.RemoveClosing(id, engine, entry)
+	drainRef.WaitForGuards()
+	removedID, removedEntry := r.directory.RemoveClosing(sessionID, engine, entry)
 	if removedID == "" || removedEntry == nil {
 		drainRef.Release()
-		return drainErr
+		return false, drainErr
 	}
 	publishExternalRuntimeStatusToEntry(removedEntry, clientui.ExternalRuntimeStatus{})
 	drainRef.Release()
-	closeRuntimeEntry(removedEntry, io.EOF)
-	r.updateAggregateRunState(removedID, false)
-	return drainErr
+	r.finishEntryTeardown(removedID, removedEntry)
+	return true, drainErr
+}
+
+func (r *RuntimeRegistry) finishEntryTeardown(sessionID string, entry *runtimeEntry) {
+	if entry == nil {
+		return
+	}
+	closeRuntimeEntry(entry, io.EOF)
+	if entry.teardown != nil {
+		entry.teardown()
+	}
+	entry.signalClosed()
+	r.updateAggregateRunState(sessionID, false)
 }
 
 type RuntimeGuard interface {
@@ -129,6 +260,36 @@ func (r *RuntimeRegistry) ResolveRuntime(_ context.Context, sessionID string) (*
 		return nil, nil
 	}
 	return r.directory.Resolve(sessionID), nil
+}
+
+func (r *RuntimeRegistry) WithGuardedRuntime(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) (bool, error) {
+	if r == nil {
+		return false, nil
+	}
+	guard, err := r.directory.BeginGuard(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer guard.Release()
+	return true, fn(guard.Engine())
+}
+
+func (r *RuntimeRegistry) WithAcquiredRuntime(ctx context.Context, sessionID string, engine *runtime.Engine, fn func(context.Context, *runtime.Engine) error) (bool, error) {
+	if r == nil {
+		return false, nil
+	}
+	guard, err := r.directory.BeginGuard(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	defer guard.Release()
+	if guard.Engine() != engine {
+		return false, nil
+	}
+	return true, fn(ctx, guard.Engine())
 }
 
 func (r *RuntimeRegistry) IsSessionRuntimeActive(sessionID string) bool {
@@ -168,7 +329,7 @@ func (r *RuntimeRegistry) externalRuntimeStatusForEntry(sessionID string, entry 
 			QueueAccepting: false,
 		}
 	}
-	if r.leases.Active(sessionID) {
+	if r.sessionRunning(sessionID) {
 		return clientui.ExternalRuntimeStatus{
 			State:          clientui.ExternalRuntimeStateOwnerRunning,
 			QueueAccepting: true,
@@ -207,6 +368,7 @@ func (r *RuntimeRegistry) PublishRuntimeEvent(sessionID string, evt runtime.Even
 	}
 	if evt.Kind == runtime.EventRunStateChanged && evt.RunState != nil {
 		r.updateAggregateRunState(sessionID, evt.RunState.Lifecycle.IsRunning())
+		r.publishExternalRuntimeStatus(sessionID)
 	}
 }
 
@@ -330,29 +492,25 @@ func (r *RuntimeRegistry) SubmitPromptResponse(sessionID string, resp askquestio
 		return fmt.Errorf("runtime registry is required")
 	}
 	id := strings.TrimSpace(sessionID)
-	entry := r.directory.Entry(id)
-	if entry == nil {
-		return fmt.Errorf("runtime %q is unavailable", id)
+	guard, guardErr := r.directory.BeginPromptResponseGuard(context.Background(), id, resp.RequestID)
+	if guardErr != nil {
+		return guardErr
 	}
-	return entry.pendingPrompts.Submit(resp, err, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
-		entry.PublishPendingPrompt(id, snapshot, eventType)
-	})
+	defer guard.Release()
+	return guard.SubmitPromptResponse(resp, err)
 }
 
-func (r *RuntimeRegistry) AcquirePrimaryRun(sessionID string) (primaryrun.Lease, error) {
+func (r *RuntimeRegistry) sessionRunning(sessionID string) bool {
 	if r == nil {
-		return nil, primaryrun.ErrActivePrimaryRun
+		return false
 	}
 	id := strings.TrimSpace(sessionID)
-	lease, err := r.leases.Acquire(id)
-	if err != nil {
-		return nil, err
+	if id == "" {
+		return false
 	}
-	r.publishExternalRuntimeStatus(id)
-	return primaryrun.LeaseFunc(func() {
-		lease.Release()
-		r.publishExternalRuntimeStatus(id)
-	}), nil
+	r.runStateMu.Lock()
+	defer r.runStateMu.Unlock()
+	return r.runningSessions[id]
 }
 
 func (r *RuntimeRegistry) SetInterestObserver(observer func(sessionID string, reason RuntimeInterestReason)) {
@@ -427,13 +585,6 @@ func (r *RuntimeRegistry) updateAggregateRunState(sessionID string, running bool
 	if observer != nil {
 		observer(active)
 	}
-}
-
-func failRuntimeEntryQueuedMessages(entry *runtimeEntry, reason runtime.QueuedUserMessageFailureReason) {
-	if entry == nil || entry.engine == nil {
-		return
-	}
-	entry.engine.FailQueuedUserMessages(reason)
 }
 
 func (r *RuntimeRegistry) publishExternalRuntimeStatus(sessionID string) {

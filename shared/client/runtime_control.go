@@ -48,10 +48,6 @@ func (c *loopbackRuntimeControlClient) ShouldCompactBeforeUserMessage(ctx contex
 	return callLoopbackClient(c, "runtime control service is required", ctx, req, servicecontract.RuntimeControlService.ShouldCompactBeforeUserMessage)
 }
 
-func (c *loopbackRuntimeControlClient) SubmitUserMessage(ctx context.Context, req serverapi.RuntimeSubmitUserMessageRequest) (serverapi.RuntimeSubmitUserMessageResponse, error) {
-	return callLoopbackClient(c, "runtime control service is required", ctx, req, servicecontract.RuntimeControlService.SubmitUserMessage)
-}
-
 func (c *loopbackRuntimeControlClient) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 	return callLoopbackClient(c, "runtime control service is required", ctx, req, servicecontract.RuntimeControlService.SubmitUserTurn)
 }

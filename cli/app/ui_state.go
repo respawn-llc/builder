@@ -33,15 +33,15 @@ type uiRuntimeFeatureState struct {
 	processClientExplicit bool
 	worktreeClient        client.WorktreeClient
 
-	runtimeEvents               <-chan clientui.Event
-	pendingRuntimeEvents        []clientui.Event
-	askEvents                   <-chan askEvent
-	pathReferenceEvents         <-chan uiPathReferenceSearchEvent
-	runtimeConnectionEvents     <-chan runtimeConnectionStateChangedMsg
-	runtimeLeaseRecoveryWarning <-chan runtimeLeaseRecoveryWarningMsg
-	runtimeContextUsage         clientui.RuntimeContextUsage
-	runtimeContextUsageSession  string
-	logger                      uiLogger
+	runtimeEvents              <-chan clientui.Event
+	pendingRuntimeEvents       []clientui.Event
+	askEvents                  <-chan askEvent
+	pathReferenceEvents        <-chan uiPathReferenceSearchEvent
+	runtimeConnectionEvents    <-chan runtimeConnectionStateChangedMsg
+	runtimeReconnectWarning    <-chan runtimeReconnectWarningMsg
+	runtimeContextUsage        clientui.RuntimeContextUsage
+	runtimeContextUsageSession string
+	logger                     uiLogger
 }
 
 type uiInputFeatureState struct {

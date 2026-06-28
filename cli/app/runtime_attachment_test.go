@@ -47,12 +47,12 @@ func TestRuntimeAttachmentSubscribeFailureReleasesRuntime(t *testing.T) {
 			server := runtimeAttachmentTestServer{
 				runtime: &recordingSessionRuntimeClient{
 					activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-						return serverapi.SessionRuntimeActivateResponse{LeaseID: "lease-1"}, nil
+						return serverapi.SessionRuntimeActivateResponse{}, nil
 					},
 					release: func(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 						releaseCount++
 						released <- ctx
-						if req.SessionID != "session-1" || req.LeaseID != "lease-1" {
+						if req.SessionID != "session-1" {
 							t.Fatalf("unexpected release request: %+v", req)
 						}
 						return serverapi.SessionRuntimeReleaseResponse{}, nil
@@ -112,11 +112,11 @@ func TestRuntimeAttachmentCloseReleasesRuntime(t *testing.T) {
 	server := runtimeAttachmentTestServer{
 		runtime: &recordingSessionRuntimeClient{
 			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return serverapi.SessionRuntimeActivateResponse{LeaseID: "lease-close"}, nil
+				return serverapi.SessionRuntimeActivateResponse{}, nil
 			},
 			release: func(_ context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 				releaseCount++
-				if req.SessionID != "session-close" || req.LeaseID != "lease-close" {
+				if req.SessionID != "session-close" {
 					t.Fatalf("unexpected release request: %+v", req)
 				}
 				return serverapi.SessionRuntimeReleaseResponse{}, nil
@@ -133,7 +133,7 @@ func TestRuntimeAttachmentCloseReleasesRuntime(t *testing.T) {
 			},
 		},
 		sessionViews:   &countingSessionViewClient{},
-		runtimeControl: &leaseRetryRuntimeControlClient{},
+		runtimeControl: &reconnectRetryRuntimeControlClient{},
 	}
 
 	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-close"}, io.Discard, "test")
@@ -146,110 +146,7 @@ func TestRuntimeAttachmentCloseReleasesRuntime(t *testing.T) {
 	}
 }
 
-func TestRuntimeAttachmentLegacyReadOnlyActivationIsNoControl(t *testing.T) {
-	releaseCount := 0
-	controls := &leaseRetryRuntimeControlClient{allowEmptySubmit: true}
-	server := runtimeAttachmentTestServer{
-		runtime: &recordingSessionRuntimeClient{
-			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return serverapi.SessionRuntimeActivateResponse{ReadOnly: true}, nil
-			},
-			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-				releaseCount++
-				return serverapi.SessionRuntimeReleaseResponse{}, nil
-			},
-		},
-		sessionEvents: &recordingSessionActivityClient{
-			subscribe: func(context.Context, serverapi.SessionActivitySubscribeRequest) (serverapi.SessionActivitySubscription, error) {
-				return noOpSessionActivitySubscription{}, nil
-			},
-		},
-		promptEvents: &recordingPromptActivityClient{
-			subscribe: func(context.Context, serverapi.PromptActivitySubscribeRequest) (serverapi.PromptActivitySubscription, error) {
-				return nil, nil
-			},
-		},
-		sessionViews:   &countingSessionViewClient{},
-		runtimeControl: controls,
-	}
-
-	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-readonly"}, io.Discard, "test")
-	if err != nil {
-		t.Fatalf("prepareSharedRuntime: %v", err)
-	}
-	if !plan.ReadOnly || plan.AccessMode != serverapi.SessionRuntimeAttachModeNoControl {
-		t.Fatalf("plan readOnly=%v mode=%q, want read-only no-control", plan.ReadOnly, plan.AccessMode)
-	}
-	if _, err := plan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello"); err != nil {
-		if !errors.Is(err, errReadOnlyRuntime) {
-			t.Fatalf("SubmitUserMessage error = %v, want read-only runtime", err)
-		}
-	} else {
-		t.Fatal("SubmitUserMessage unexpectedly succeeded for read-only no-control attach")
-	}
-	plan.Close()
-	if releaseCount != 0 {
-		t.Fatalf("release count = %d, want none for read-only attach", releaseCount)
-	}
-}
-
-func TestRuntimeAttachmentCollaborativeSubmitUsesLiveRuntimeWithoutLeaseOrRelease(t *testing.T) {
-	releaseCount := 0
-	controls := &leaseRetryRuntimeControlClient{allowEmptySubmit: true}
-	server := runtimeAttachmentTestServer{
-		runtime: &recordingSessionRuntimeClient{
-			activate: func(context.Context, serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				return serverapi.SessionRuntimeActivateResponse{
-					Mode: serverapi.SessionRuntimeAttachModeCollaborative,
-					AllowedOperations: []serverapi.SessionRuntimeOperation{
-						serverapi.SessionRuntimeOperationSubmitUserTurn,
-						serverapi.SessionRuntimeOperationQueueUserMessage,
-					},
-				}, nil
-			},
-			release: func(context.Context, serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-				releaseCount++
-				return serverapi.SessionRuntimeReleaseResponse{}, nil
-			},
-		},
-		sessionEvents: &recordingSessionActivityClient{
-			subscribe: func(context.Context, serverapi.SessionActivitySubscribeRequest) (serverapi.SessionActivitySubscription, error) {
-				return noOpSessionActivitySubscription{}, nil
-			},
-		},
-		promptEvents: &recordingPromptActivityClient{
-			subscribe: func(context.Context, serverapi.PromptActivitySubscribeRequest) (serverapi.PromptActivitySubscription, error) {
-				return nil, nil
-			},
-		},
-		sessionViews:   &countingSessionViewClient{},
-		runtimeControl: controls,
-	}
-
-	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-collab"}, io.Discard, "test")
-	if err != nil {
-		t.Fatalf("prepareSharedRuntime: %v", err)
-	}
-	if plan.ReadOnly || plan.HasControllerLease() {
-		t.Fatalf("plan readOnly=%v lease=%q, want collaborative without controller lease", plan.ReadOnly, plan.CurrentControllerLeaseID())
-	}
-	message, err := plan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "steer live runtime")
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "collaborative" {
-		t.Fatalf("message = %q, want collaborative", message)
-	}
-	if got := controls.submitLeaseIDs(); len(got) != 1 || got[0] != "" {
-		t.Fatalf("submit lease ids = %+v, want one empty lease", got)
-	}
-	plan.Close()
-	if releaseCount != 0 {
-		t.Fatalf("release count = %d, want no release for collaborative attach", releaseCount)
-	}
-}
-
-func TestRuntimeAttachmentLeaseRecoveryUsesActivation(t *testing.T) {
+func TestRuntimeAttachmentReactivationUsesActivation(t *testing.T) {
 	activateCalls := 0
 	server := runtimeAttachmentTestServer{
 		runtime: &recordingSessionRuntimeClient{
@@ -261,26 +158,19 @@ func TestRuntimeAttachmentLeaseRecoveryUsesActivation(t *testing.T) {
 				if req.ActiveSettings.Model != "gpt-test" {
 					t.Fatalf("model = %q, want gpt-test", req.ActiveSettings.Model)
 				}
-				return serverapi.SessionRuntimeActivateResponse{LeaseID: map[int]string{1: "lease-1", 2: "lease-2"}[activateCalls]}, nil
+				return serverapi.SessionRuntimeActivateResponse{}, nil
 			},
 		},
 	}
-	lease, manager, err := activateSharedRuntime(context.Background(), server.RuntimeAttachmentClients(), sessionLaunchPlan{
+	reactivator, _, err := activateSharedRuntime(context.Background(), server.RuntimeAttachmentClients(), sessionLaunchPlan{
 		SessionID:      "session-recover",
 		ActiveSettings: config.Settings{Model: "gpt-test"},
 	})
 	if err != nil {
 		t.Fatalf("activateSharedRuntime: %v", err)
 	}
-	if lease.ID != "lease-1" || manager.Value() != "lease-1" {
-		t.Fatalf("initial lease = %q manager = %q, want lease-1", lease.ID, manager.Value())
-	}
-	recovered, err := manager.Recover(context.Background())
-	if err != nil {
-		t.Fatalf("recover lease: %v", err)
-	}
-	if recovered != "lease-2" || manager.Value() != "lease-2" {
-		t.Fatalf("recovered lease = %q manager = %q, want lease-2", recovered, manager.Value())
+	if err := reactivator.Reactivate(context.Background()); err != nil {
+		t.Fatalf("reactivate: %v", err)
 	}
 	if activateCalls != 2 {
 		t.Fatalf("activate calls = %d, want 2", activateCalls)

@@ -106,7 +106,7 @@ func ResolvePromptFacingSnapshotConfig(app config.App, store *session.Store, ski
 	}
 	if meta.Locked != nil && (!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") {
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
-			EnabledTools:    toolIDNames(enabledTools),
+			EnabledTools:    toolspec.IDStrings(enabledTools),
 			HasEnabledTools: true,
 			WebSearchMode:   strings.TrimSpace(active.WebSearch),
 		})
@@ -171,7 +171,7 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	}
 	if meta.Locked != nil && (!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") {
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
-			EnabledTools:    toolIDNames(enabledTools),
+			EnabledTools:    toolspec.IDStrings(enabledTools),
 			HasEnabledTools: true,
 			WebSearchMode:   strings.TrimSpace(active.WebSearch),
 		})
@@ -675,17 +675,6 @@ func ActiveToolIDsForPlan(settings config.Settings, source config.SourceReport, 
 		return nil, ErrPatchEditToolsConflict
 	}
 	return DedupeSortToolIDs(enabledToolIDs(enabled)), nil
-}
-
-func toolIDNames(ids []toolspec.ID) []string {
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if id == "" {
-			continue
-		}
-		out = append(out, string(id))
-	}
-	return out
 }
 
 func bothEditToolSourcesDefault(source config.SourceReport) bool {

@@ -15,10 +15,9 @@ import (
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
-	"core/server/primaryrun"
 	"core/server/registry"
-	"core/server/runtime"
 	"core/server/session"
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
@@ -102,27 +101,6 @@ func TestSchedulerNamesFreshWorkflowSessionFromAcceptedTransition(t *testing.T) 
 	}
 	if meta.FirstPromptPreview != startEdgePrompt {
 		t.Fatalf("session preview = %q, want rendered start edge prompt %q", meta.FirstPromptPreview, startEdgePrompt)
-	}
-}
-
-func TestStarterHoldsPrimaryRunLeaseThroughWorkflowRuntimeCloseDrain(t *testing.T) {
-	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"finished structured"}`))
-	trackingRuntimes := &primaryRunAcquireTrackingRegistry{RuntimeRegistry: registry.NewRuntimeRegistry()}
-	fixture.runtimes = trackingRuntimes
-	fixture.rebuildStarter(t)
-	task := fixture.createStartedTask(t)
-	scheduler := fixture.scheduler(t)
-
-	if err := scheduler.Process(context.Background()); err != nil {
-		t.Fatalf("Process: %v", err)
-	}
-	fixture.waitForCompletedRun(t, task.ID)
-
-	if got := trackingRuntimes.AcquireCount(); got != 1 {
-		t.Fatalf("primary-run acquisitions = %d, want only workflow owner acquisition before close drain", got)
-	}
-	if !trackingRuntimes.RegisterObservedOwnerLeaseBlock() {
-		t.Fatal("runtime registration did not observe workflow owner primary-run lease already held")
 	}
 }
 
@@ -1264,52 +1242,10 @@ type starterFixture struct {
 	projectID     string
 }
 
-type primaryRunAcquireTrackingRegistry struct {
-	*registry.RuntimeRegistry
-	mu                              sync.Mutex
-	acquireCount                    int
-	registerObservedOwnerLeaseBlock bool
-}
-
 type starterRuntimeRegistry interface {
 	RuntimeEventRegistry
 	ListPendingPrompts(sessionID string) []registry.PendingPromptSnapshot
 	SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error
-}
-
-func (r *primaryRunAcquireTrackingRegistry) AcquirePrimaryRun(sessionID string) (primaryrun.Lease, error) {
-	lease, err := r.RuntimeRegistry.AcquirePrimaryRun(sessionID)
-	if err != nil {
-		return nil, err
-	}
-	r.mu.Lock()
-	r.acquireCount++
-	r.mu.Unlock()
-	return lease, nil
-}
-
-func (r *primaryRunAcquireTrackingRegistry) RegisterRuntimeHooks(sessionID string, engine *runtime.Engine, rebind func(string) error) {
-	lease, err := r.RuntimeRegistry.AcquirePrimaryRun(sessionID)
-	ownerLeaseHeld := errors.Is(err, primaryrun.ErrActivePrimaryRun)
-	if err == nil && lease != nil {
-		lease.Release()
-	}
-	r.mu.Lock()
-	r.registerObservedOwnerLeaseBlock = ownerLeaseHeld
-	r.mu.Unlock()
-	r.RuntimeRegistry.RegisterRuntimeHooks(sessionID, engine, rebind)
-}
-
-func (r *primaryRunAcquireTrackingRegistry) AcquireCount() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.acquireCount
-}
-
-func (r *primaryRunAcquireTrackingRegistry) RegisterObservedOwnerLeaseBlock() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.registerObservedOwnerLeaseBlock
 }
 
 func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps ...ScriptedRuntimeStep) starterFixture {
@@ -1349,9 +1285,11 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	client := NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: mode == config.WorkflowCompletionModeStructuredOutput}, steps...)
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
 	runtimes := registry.NewRuntimeRegistry()
-	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, nil, runtimes, StarterOptions{
-		ClientFactory: clientFactory,
-		Worktrees:     worktrees,
+	sessionRuntime := sessionruntime.NewService(cfg.PersistenceRoot, metadataStore, nil, nil, nil, nil, runtimes, nil)
+	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, runtimes, StarterOptions{
+		ClientFactory:  clientFactory,
+		Worktrees:      worktrees,
+		SessionRuntime: sessionRuntime,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)
@@ -1380,9 +1318,11 @@ func (f *starterFixture) rebuildStarter(t *testing.T) {
 	if f.runtimes == nil {
 		f.runtimes = registry.NewRuntimeRegistry()
 	}
-	starter, err := NewStarter(f.cfg, f.metadata, f.store, nil, nil, nil, f.runtimes, StarterOptions{
-		ClientFactory: f.clientFactory,
-		Worktrees:     f.worktrees,
+	sessionRuntime := sessionruntime.NewService(f.cfg.PersistenceRoot, f.metadata, nil, nil, nil, nil, f.runtimes.(*registry.RuntimeRegistry), nil)
+	starter, err := NewStarter(f.cfg, f.metadata, f.store, nil, nil, f.runtimes, StarterOptions{
+		ClientFactory:  f.clientFactory,
+		Worktrees:      f.worktrees,
+		SessionRuntime: sessionRuntime,
 	})
 	if err != nil {
 		t.Fatalf("NewStarter: %v", err)

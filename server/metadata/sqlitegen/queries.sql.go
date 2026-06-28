@@ -1659,29 +1659,6 @@ func (q *Queries) GetRunWaitingAskEventIdentity(ctx context.Context, runID strin
 	return i, err
 }
 
-const getRuntimeLeaseByID = `-- name: GetRuntimeLeaseByID :one
-SELECT
-    id,
-    session_id,
-    created_at_unix_ms,
-    released_at_unix_ms
-FROM runtime_leases
-WHERE id = ?1
-LIMIT 1
-`
-
-func (q *Queries) GetRuntimeLeaseByID(ctx context.Context, leaseID string) (RuntimeLease, error) {
-	row := q.db.QueryRowContext(ctx, getRuntimeLeaseByID, leaseID)
-	var i RuntimeLease
-	err := row.Scan(
-		&i.ID,
-		&i.SessionID,
-		&i.CreatedAtUnixMs,
-		&i.ReleasedAtUnixMs,
-	)
-	return i, err
-}
-
 const getSessionExecutionTargetByID = `-- name: GetSessionExecutionTargetByID :one
 SELECT
     s.id AS session_id,
@@ -2721,29 +2698,6 @@ func (q *Queries) InsertProjectWorkflowLink(ctx context.Context, arg InsertProje
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
 	)
-	return err
-}
-
-const insertRuntimeLease = `-- name: InsertRuntimeLease :exec
-INSERT INTO runtime_leases (
-    id,
-    session_id,
-    created_at_unix_ms
-) VALUES (
-    ?1,
-    ?2,
-    ?3
-)
-`
-
-type InsertRuntimeLeaseParams struct {
-	ID              string
-	SessionID       string
-	CreatedAtUnixMs int64
-}
-
-func (q *Queries) InsertRuntimeLease(ctx context.Context, arg InsertRuntimeLeaseParams) error {
-	_, err := q.db.ExecContext(ctx, insertRuntimeLease, arg.ID, arg.SessionID, arg.CreatedAtUnixMs)
 	return err
 }
 
@@ -7757,25 +7711,6 @@ func (q *Queries) RejectPendingApprovalTransition(ctx context.Context, transitio
 		return 0, err
 	}
 	return result.RowsAffected()
-}
-
-const releaseRuntimeLease = `-- name: ReleaseRuntimeLease :exec
-UPDATE runtime_leases
-SET released_at_unix_ms = ?1
-WHERE id = ?2
-  AND session_id = ?3
-  AND released_at_unix_ms = 0
-`
-
-type ReleaseRuntimeLeaseParams struct {
-	ReleasedAtUnixMs int64
-	LeaseID          string
-	SessionID        string
-}
-
-func (q *Queries) ReleaseRuntimeLease(ctx context.Context, arg ReleaseRuntimeLeaseParams) error {
-	_, err := q.db.ExecContext(ctx, releaseRuntimeLease, arg.ReleasedAtUnixMs, arg.LeaseID, arg.SessionID)
-	return err
 }
 
 const resolveActiveRunCompletionTargetByProjectShortID = `-- name: ResolveActiveRunCompletionTargetByProjectShortID :many

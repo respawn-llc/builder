@@ -156,6 +156,13 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 		}
 		cmds = append(cmds, m.inputController().appendSystemFeedbackWithMirroredStatus(reduction.Notices.DiagnosticNotice.Message, kind))
 	}
+	if reduction.Notices.TransientDiagnostic != nil {
+		kind := uiStatusNoticeNeutral
+		if reduction.Notices.TransientDiagnostic.Kind == runtimestate.BackgroundNoticeError {
+			kind = uiStatusNoticeError
+		}
+		cmds = append(cmds, m.sendTransientStatusWithNoticeID(reduction.Notices.TransientDiagnostic.Message, kind, transientStatusDuration, uiStatusNoticeReplace, ""))
+	}
 	if transcriptSync.Reason != runtimestate.RuntimeTranscriptSyncNone {
 		syncDecision := a.syncConversationFromRuntimeTranscriptCommand(transcriptSync)
 		cmds = append(cmds, syncDecision.cmd)
@@ -307,7 +314,7 @@ func waitRuntimeConnectionStateChange(ch <-chan runtimeConnectionStateChangedMsg
 	}
 }
 
-func waitRuntimeLeaseRecoveryWarning(ch <-chan runtimeLeaseRecoveryWarningMsg) tea.Cmd {
+func waitRuntimeReconnectWarning(ch <-chan runtimeReconnectWarningMsg) tea.Cmd {
 	if ch == nil {
 		return nil
 	}

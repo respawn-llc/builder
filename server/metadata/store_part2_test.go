@@ -242,69 +242,6 @@ func TestResolvePersistedSessionUsesReboundWorkspaceRoot(t *testing.T) {
 	}
 }
 
-func TestRuntimeLeaseReleaseInvalidatesControllerToken(t *testing.T) {
-	ctx := context.Background()
-	store, cfg, binding := newMetadataTestStore(t)
-	sess := createMetadataTestSession(t, store, cfg, binding)
-
-	lease, err := store.CreateRuntimeLease(ctx, sess.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("CreateRuntimeLease: %v", err)
-	}
-	if lease.LeaseID == "" || lease.SessionID != sess.Meta().SessionID || lease.CreatedAt.IsZero() {
-		t.Fatalf("unexpected lease record: %+v", lease)
-	}
-	if !lease.ReleasedAt.IsZero() {
-		t.Fatalf("new lease released at = %v, want zero", lease.ReleasedAt)
-	}
-
-	validated, err := store.ValidateRuntimeLease(ctx, sess.Meta().SessionID, lease.LeaseID)
-	if err != nil {
-		t.Fatalf("ValidateRuntimeLease: %v", err)
-	}
-	if validated.LeaseID != lease.LeaseID || validated.SessionID != lease.SessionID {
-		t.Fatalf("validated lease = %+v, want %+v", validated, lease)
-	}
-
-	again, err := store.ValidateRuntimeLease(ctx, sess.Meta().SessionID, lease.LeaseID)
-	if err != nil {
-		t.Fatalf("ValidateRuntimeLease retry: %v", err)
-	}
-	if again.LeaseID != lease.LeaseID || again.SessionID != lease.SessionID {
-		t.Fatalf("retry validated lease = %+v, want %+v", again, lease)
-	}
-
-	released, err := store.ReleaseRuntimeLease(ctx, sess.Meta().SessionID, lease.LeaseID)
-	if err != nil {
-		t.Fatalf("ReleaseRuntimeLease: %v", err)
-	}
-	if released.LeaseID != lease.LeaseID || released.SessionID != lease.SessionID || released.ReleasedAt.IsZero() {
-		t.Fatalf("released lease = %+v, want released %+v", released, lease)
-	}
-	if _, err := store.ValidateRuntimeLease(ctx, sess.Meta().SessionID, lease.LeaseID); !errors.Is(err, ErrRuntimeLeaseReleased) {
-		t.Fatalf("ValidateRuntimeLease after release err = %v, want released error", err)
-	}
-	releasedAgain, err := store.ReleaseRuntimeLease(ctx, sess.Meta().SessionID, lease.LeaseID)
-	if err != nil {
-		t.Fatalf("ReleaseRuntimeLease retry: %v", err)
-	}
-	if releasedAgain.ReleasedAt.IsZero() || !releasedAgain.ReleasedAt.Equal(released.ReleasedAt) {
-		t.Fatalf("retry released lease = %+v, want released_at %v", releasedAgain, released.ReleasedAt)
-	}
-}
-
-func TestValidateRuntimeLeaseRejectsBlankIDsBeforeLookup(t *testing.T) {
-	ctx := context.Background()
-	store, _, _ := newMetadataTestStore(t)
-
-	if _, err := store.ValidateRuntimeLease(ctx, " ", "lease-1"); !errors.Is(err, ErrRuntimeLeaseSessionIDRequired) {
-		t.Fatalf("ValidateRuntimeLease blank session err = %v, want session id required", err)
-	}
-	if _, err := store.ValidateRuntimeLease(ctx, "session-1", " "); !errors.Is(err, ErrRuntimeLeaseIDRequired) {
-		t.Fatalf("ValidateRuntimeLease blank lease err = %v, want lease id required", err)
-	}
-}
-
 func TestHiddenDurableSessionStaysOutOfProjectListingsUntilVisible(t *testing.T) {
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)

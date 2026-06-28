@@ -40,10 +40,9 @@ type SessionInitialInputResponse struct {
 }
 
 type SessionPersistInputDraftRequest struct {
-	ClientRequestID   string `json:"client_request_id"`
-	SessionID         string `json:"session_id"`
-	ControllerLeaseID string `json:"controller_lease_id"`
-	Input             string `json:"input,omitempty"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Input           string `json:"input,omitempty"`
 }
 
 type SessionPersistInputDraftResponse struct{}
@@ -59,10 +58,9 @@ type SessionRetargetWorkspaceResponse struct {
 }
 
 type SessionResolveTransitionRequest struct {
-	ClientRequestID   string            `json:"client_request_id"`
-	SessionID         string            `json:"session_id,omitempty"`
-	ControllerLeaseID string            `json:"controller_lease_id,omitempty"`
-	Transition        SessionTransition `json:"transition"`
+	ClientRequestID string            `json:"client_request_id"`
+	SessionID       string            `json:"session_id,omitempty"`
+	Transition      SessionTransition `json:"transition"`
 }
 
 type SessionResolveTransitionResponse struct {
@@ -80,10 +78,7 @@ func (r SessionPersistInputDraftRequest) Validate() error {
 	if strings.TrimSpace(r.ClientRequestID) == "" {
 		return ErrClientRequestIDRequired
 	}
-	if err := validateScopedSessionID(r.SessionID); err != nil {
-		return err
-	}
-	return validateControllerLeaseID(r.ControllerLeaseID)
+	return validateScopedSessionID(r.SessionID)
 }
 
 func (r SessionInitialInputRequest) Validate() error {
@@ -112,9 +107,6 @@ func (r SessionResolveTransitionRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.SessionID) != "" {
 		if err := validateScopedSessionID(r.SessionID); err != nil {
-			return err
-		}
-		if err := validateControllerLeaseID(r.ControllerLeaseID); err != nil {
 			return err
 		}
 	}

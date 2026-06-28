@@ -141,40 +141,7 @@ func TestOpenAllowsDatabaseAtRemovedMigrationVersion(t *testing.T) {
 	}
 }
 
-func TestOpenMigratesRuntimeLeaseLivenessColumnsAway(t *testing.T) {
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 3)
-	if err != nil {
-		t.Fatalf("open test database at version 3: %v", err)
-	}
-	if _, err := db.Exec(metadataDBTestSQL(t, "version3_runtime_lease_liveness.sql")); err != nil {
-		t.Fatalf("seed version 3 runtime lease: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close version 3 db: %v", err)
-	}
-
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-	columns := runtimeLeaseColumns(t, store.db)
-	for _, removed := range []string{"state", "expires_at_unix_ms"} {
-		if columns[removed] {
-			t.Fatalf("runtime_leases column %q should have been removed; columns=%+v", removed, columns)
-		}
-	}
-	if !columns["released_at_unix_ms"] {
-		t.Fatalf("runtime_leases.released_at_unix_ms should exist after release-state migration; columns=%+v", columns)
-	}
-	if _, err := store.ValidateRuntimeLease(t.Context(), "session-1", "lease-1"); err != nil {
-		t.Fatalf("ValidateRuntimeLease after migration: %v", err)
-	}
-}
-
-func TestOpenMigratesCommentsAndRuntimeLeasesToMinimalStorage(t *testing.T) {
+func TestOpenMigratesCommentsToMinimalStorage(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
 	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 19)
@@ -198,14 +165,6 @@ func TestOpenMigratesCommentsAndRuntimeLeasesToMinimalStorage(t *testing.T) {
 			t.Fatalf("task_comments.%s should have been removed", column)
 		}
 	}
-	for _, column := range []string{"client_id", "request_id", "acquired_at_unix_ms", "metadata_json"} {
-		if columnExists(t, store.db, "runtime_leases", column) {
-			t.Fatalf("runtime_leases.%s should have been removed", column)
-		}
-	}
-	if !columnExists(t, store.db, "runtime_leases", "released_at_unix_ms") {
-		t.Fatal("runtime_leases.released_at_unix_ms should exist after release-state migration")
-	}
 	comments, err := store.DB().QueryContext(t.Context(), `SELECT id, body FROM task_comments ORDER BY updated_at_unix_ms DESC`)
 	if err != nil {
 		t.Fatalf("query migrated comments: %v", err)
@@ -226,9 +185,6 @@ func TestOpenMigratesCommentsAndRuntimeLeasesToMinimalStorage(t *testing.T) {
 	}
 	if err := comments.Err(); err != nil {
 		t.Fatalf("iterate migrated comments: %v", err)
-	}
-	if _, err := store.ValidateRuntimeLease(t.Context(), "session-minimal", "lease-minimal"); err != nil {
-		t.Fatalf("ValidateRuntimeLease after minimal storage migration: %v", err)
 	}
 }
 
@@ -664,32 +620,6 @@ func openDatabaseAtPathWithoutMigrationsForTest(root string, dbPath string) (*sq
 		return nil, err
 	}
 	return db, nil
-}
-
-func runtimeLeaseColumns(t *testing.T, db *sql.DB) map[string]bool {
-	t.Helper()
-	rows, err := db.Query("PRAGMA table_info(runtime_leases)")
-	if err != nil {
-		t.Fatalf("query runtime_leases columns: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	columns := map[string]bool{}
-	for rows.Next() {
-		var cid int
-		var name string
-		var typ string
-		var notNull int
-		var defaultValue sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			t.Fatalf("scan runtime_leases column: %v", err)
-		}
-		columns[name] = true
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate runtime_leases columns: %v", err)
-	}
-	return columns
 }
 
 func primaryWorkspaceIDsByProject(t *testing.T, db *sql.DB) map[string]string {

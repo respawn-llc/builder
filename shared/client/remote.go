@@ -507,10 +507,6 @@ func (c *Remote) ShouldCompactBeforeUserMessage(ctx context.Context, req servera
 	return callControlRPC[serverapi.RuntimeShouldCompactBeforeUserMessageRequest, serverapi.RuntimeShouldCompactBeforeUserMessageResponse](c, ctx, protocol.MethodRuntimeShouldCompactBeforeUserMessage, req)
 }
 
-func (c *Remote) SubmitUserMessage(ctx context.Context, req serverapi.RuntimeSubmitUserMessageRequest) (serverapi.RuntimeSubmitUserMessageResponse, error) {
-	return callDedicatedRPC[serverapi.RuntimeSubmitUserMessageRequest, serverapi.RuntimeSubmitUserMessageResponse](c, ctx, "runtime-submit-user-message", protocol.MethodRuntimeSubmitUserMessage, req)
-}
-
 func (c *Remote) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 	return callDedicatedRPC[serverapi.RuntimeSubmitUserTurnRequest, serverapi.RuntimeSubmitUserTurnResponse](c, ctx, "runtime-submit-user-turn", protocol.MethodRuntimeSubmitUserTurn, req)
 }

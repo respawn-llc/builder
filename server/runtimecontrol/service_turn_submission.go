@@ -2,6 +2,7 @@ package runtimecontrol
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/server/runtime"
@@ -12,37 +13,67 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
-	memoReq := turnSubmitMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text, PromptHistoryRecorded: req.PromptHistoryRecorded}
+	memoReq := turnSubmitMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text}
 	return s.turnSubmits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameTurnSubmitMemoRequest, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-		lease, err := s.acquirePrimaryRun(memoReq.SessionID)
+		release, err := s.beginRunStart(req.SessionID)
 		if err != nil {
 			return serverapi.RuntimeSubmitUserTurnResponse{}, err
 		}
-		defer lease.Release()
+		defer release()
 		runCtx := context.Background()
 		if ctx != nil {
 			runCtx = context.WithoutCancel(ctx)
 		}
 		var resp serverapi.RuntimeSubmitUserTurnResponse
-		err = s.withRuntimeAccess(ctx, req.SessionID, req.ControllerLeaseID, serverapi.SessionRuntimeOperationSubmitUserTurn, func(engine *runtime.Engine) error {
+		var recordEngine *runtime.Engine
+		err = s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+			recordEngine = engine
 			shouldCompact, err := engine.ShouldCompactBeforeUserMessage(runCtx, memoReq.Text)
 			if err != nil {
 				return err
 			}
+			compacted := false
+			compactionBusy := false
 			if shouldCompact {
 				if err := engine.CompactContextForPreSubmit(runCtx); err != nil {
-					return err
+					if !errors.Is(err, runtime.ErrAgentBusy) {
+						return err
+					}
+					compactionBusy = true
+				} else {
+					compacted = true
 				}
 			}
-			if !req.PromptHistoryRecorded {
-				if _, _, err := s.recordPromptHistory(runCtx, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text); err != nil {
-					return err
-				}
+			if compactionBusy {
+				queued := engine.QueueUserMessageForAutoDrain(memoReq.Text, strings.TrimSpace(req.ClientRequestID))
+				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
+				return nil
 			}
-			msg, err := engine.SubmitUserMessage(runCtx, memoReq.Text)
-			resp = serverapi.RuntimeSubmitUserTurnResponse{Message: msg.Content, Compacted: shouldCompact}
-			return err
+			msg, queued, err := engine.SubmitUserMessageOrSteer(runCtx, memoReq.Text, strings.TrimSpace(req.ClientRequestID))
+			if err != nil {
+				return err
+			}
+			if queued != nil {
+				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
+				return nil
+			}
+			resp = serverapi.RuntimeSubmitUserTurnResponse{Message: msg.Content, Compacted: compacted}
+			return nil
 		})
+		if err == nil {
+			s.recordPromptHistoryAsync(recordEngine, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
+		}
 		return resp, err
 	})
+}
+
+func (s *Service) recordPromptHistoryAsync(engine *runtime.Engine, sessionID string, sourceID string, text string) {
+	if s == nil || s.promptStore == nil {
+		return
+	}
+	go func() {
+		if _, _, err := s.recordPromptHistory(context.Background(), sessionID, sourceID, text); err != nil {
+			engine.ReportPromptHistoryPersistError(err.Error())
+		}
+	}()
 }

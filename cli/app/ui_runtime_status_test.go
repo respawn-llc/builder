@@ -372,7 +372,7 @@ func TestRuntimeStatusLineReopenActiveGoalFromStartupMainViewUsesIdleDot(t *test
 			Goal: &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusActive},
 		},
 	}}
-	runtimeClient := newTestSessionRuntimeClient(reads, &leaseRetryRuntimeControlClient{})
+	runtimeClient := newTestSessionRuntimeClient(reads, &reconnectRetryRuntimeControlClient{})
 
 	m := newProjectedTestUIModel(runtimeClient, closedProjectedRuntimeEvents(), closedAskEvents(), WithUISessionID("session-1"))
 
@@ -395,7 +395,7 @@ func TestStatusLineRenderDoesNotRefreshMainViewWhenCacheMissing(t *testing.T) {
 			ContextUsage: clientui.RuntimeContextUsage{UsedTokens: 100, WindowTokens: 1_000},
 		},
 	}}
-	client := newTestSessionRuntimeClient(reads, &leaseRetryRuntimeControlClient{})
+	client := newTestSessionRuntimeClient(reads, &reconnectRetryRuntimeControlClient{})
 	m := newSizedProjectedClosedUIModel(client, 120, 20, WithUISessionID("session-1"))
 	clearSessionRuntimeClientMainViewCache(client)
 	reads.count.Store(0)
@@ -414,7 +414,7 @@ func TestViewRenderDoesNotRefreshMainViewWhenCacheMissing(t *testing.T) {
 			ContextUsage: clientui.RuntimeContextUsage{UsedTokens: 100, WindowTokens: 1_000},
 		},
 	}}
-	client := newTestSessionRuntimeClient(reads, &leaseRetryRuntimeControlClient{})
+	client := newTestSessionRuntimeClient(reads, &reconnectRetryRuntimeControlClient{})
 	m := newSizedProjectedClosedUIModel(client, 120, 20, WithUISessionID("session-1"))
 	clearSessionRuntimeClientMainViewCache(client)
 	reads.count.Store(0)
@@ -431,7 +431,7 @@ func TestSlashCommandPickerRenderDoesNotRefreshMainViewWhenCacheMissing(t *testi
 		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
 		Status:  clientui.RuntimeStatus{ParentSessionID: "parent-1"},
 	}}
-	client := newTestSessionRuntimeClient(reads, &leaseRetryRuntimeControlClient{})
+	client := newTestSessionRuntimeClient(reads, &reconnectRetryRuntimeControlClient{})
 	m := newSizedProjectedClosedUIModel(client, 120, 20, WithUISessionID("session-1"))
 	m.input = "/ba"
 	m.refreshSlashCommandFilterFromInputWithAuth(true)
@@ -585,7 +585,7 @@ func TestRuntimeStatusUsesLiveContextUsageFromRuntimeEvents(t *testing.T) {
 }
 
 func TestRuntimeGoalStatusEventUpdatesCachedGoal(t *testing.T) {
-	runtimeClient := newTestSessionRuntimeClientWithControls(&leaseRetryRuntimeControlClient{})
+	runtimeClient := newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{})
 	runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}})
 	m := newProjectedTestUIModel(runtimeClient, closedProjectedRuntimeEvents(), closedAskEvents(), WithUISessionID("session-1"))
 	m.activity = uiActivityRunning

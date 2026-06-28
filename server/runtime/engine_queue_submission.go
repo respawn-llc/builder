@@ -12,6 +12,35 @@ import (
 
 const queuedUserSubmissionBusyRetryDelay = 25 * time.Millisecond
 
+func (e *Engine) RunWhenIdle(ctx context.Context, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	e.ensureOrchestrationCollaborators()
+	for {
+		err := e.stepLifecycle.Run(ctx, exclusiveStepOptions{}, func(context.Context, string) error {
+			return fn()
+		})
+		if !errors.Is(err, ErrAgentBusy) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(queuedUserSubmissionBusyRetryDelay):
+		}
+	}
+}
+
+func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	e.pauseQueuedUserAutoDrain()
+	defer e.resumeQueuedUserAutoDrain()
+	return e.RunWhenIdle(ctx, fn)
+}
+
 // SubmitQueuedUserMessages starts a fresh step from already-queued injected user
 // messages or background notices. This is used when a non-turn busy operation
 // (for example manual compaction) completes while queued steering is waiting.
@@ -24,6 +53,11 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 	for {
 		if e.failQueuedUserWorkIfTerminal() {
 			return llm.Message{}, nil
+		}
+		if len(queueItemIDs) > 0 {
+			if err := e.waitQueuedUserAutoDrainAllowed(ctx); err != nil {
+				return llm.Message{}, err
+			}
 		}
 		err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, PersistRunLifecycle: true}, func(stepCtx context.Context, stepID string) error {
 			if e.failQueuedUserWorkIfTerminal() {
@@ -43,7 +77,7 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			assistant = msg
 			return runErr
 		})
-		if !errors.Is(err, errExclusiveStepBusy) {
+		if !errors.Is(err, ErrAgentBusy) {
 			return assistant, err
 		}
 
@@ -53,6 +87,56 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 		case <-time.After(queuedUserSubmissionBusyRetryDelay):
 		}
 	}
+}
+
+func (e *Engine) pauseQueuedUserAutoDrain() {
+	e.queuedUserWorkMu.Lock()
+	e.queuedUserWorkPauseCount++
+	e.queuedUserWorkMu.Unlock()
+}
+
+func (e *Engine) resumeQueuedUserAutoDrain() {
+	e.queuedUserWorkMu.Lock()
+	if e.queuedUserWorkPauseCount > 0 {
+		e.queuedUserWorkPauseCount--
+	}
+	e.queuedUserWorkMu.Unlock()
+	e.scheduleQueuedUserInjectionsIfIdle()
+}
+
+func (e *Engine) waitQueuedUserAutoDrainAllowed(ctx context.Context) error {
+	for {
+		e.queuedUserWorkMu.Lock()
+		paused := e.queuedUserWorkPauseCount > 0
+		e.queuedUserWorkMu.Unlock()
+		if !paused {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(queuedUserSubmissionBusyRetryDelay):
+		}
+	}
+}
+
+func (e *Engine) SubmitUserMessageOrSteer(ctx context.Context, text string, clientRequestID string) (assistant llm.Message, queued *QueuedUserMessage, err error) {
+	if strings.TrimSpace(text) == "" {
+		return llm.Message{}, nil, errors.New("empty message")
+	}
+	msg, err := e.SubmitUserMessage(ctx, text)
+	if errors.Is(err, ErrAgentBusy) {
+		item := e.QueueUserMessageForAutoDrain(text, clientRequestID)
+		return llm.Message{}, &item, nil
+	}
+	return msg, nil, err
+}
+
+func (e *Engine) QueueUserMessageForAutoDrain(text string, clientRequestID string) QueuedUserMessage {
+	item := e.QueueUserMessageWithClientRequestID(text, clientRequestID)
+	e.markQueuedUserInjectionForAutoDrain(item.ID)
+	e.scheduleQueuedUserInjectionsIfIdle()
+	return item
 }
 
 func (e *Engine) HasQueuedUserWork() bool {

@@ -54,6 +54,18 @@ func newQueuedInputItem(text string) queuedInputItem {
 	return queuedInputItem{ID: uuid.NewString(), Text: text}
 }
 
+func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMessage) {
+	serverID := strings.TrimSpace(queued.ID)
+	if serverID == "" {
+		return
+	}
+	if m.injectedQueueIndexByAnyID(serverID) >= 0 {
+		return
+	}
+	m.pendingInjected = append(m.pendingInjected, clientui.QueuedUserMessage{ID: serverID, Text: queued.Text, ClientRequestID: queued.ClientRequestID})
+	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{LocalID: serverID, ServerID: serverID, Text: queued.Text, ClientRequestID: queued.ClientRequestID, State: injectedRuntimeQueueEnqueued})
+}
+
 func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *clientui.PromptAnswer) tea.Cmd {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {

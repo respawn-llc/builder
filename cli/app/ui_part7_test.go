@@ -787,9 +787,6 @@ func TestStartupSubmitUsesRecordedPromptHistoryFlag(t *testing.T) {
 	if client.submitText == "" {
 		t.Fatal("expected startup submit to submit initial prompt")
 	}
-	if len(client.submitRecorded) != 1 || !client.submitRecorded[0] {
-		t.Fatalf("expected startup submit to use prompt-history-recorded path, got %+v", client.submitRecorded)
-	}
 	if client.recordedPromptHistory != "" {
 		t.Fatalf("did not expect startup submit to record expanded prompt history, got %q", client.recordedPromptHistory)
 	}

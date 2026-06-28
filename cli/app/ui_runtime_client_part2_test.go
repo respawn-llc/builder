@@ -22,7 +22,7 @@ import (
 
 func TestRuntimeClientMainViewDoesNotRefreshCachedSnapshotBehindUIBack(t *testing.T) {
 	reads := &countingSessionViewClient{view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}}}
-	controls := sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(registry.NewRuntimeRegistry(), nil))
+	controls := sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(registry.NewRuntimeRegistry()))
 	runtimeClient := newTestSessionRuntimeClient(reads, controls)
 	runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}})
 	notified := make(chan error, 1)
@@ -42,112 +42,89 @@ func TestRuntimeClientMainViewDoesNotRefreshCachedSnapshotBehindUIBack(t *testin
 	}
 }
 
-type leaseRetryRuntimeControlClient struct {
-	mu               sync.Mutex
-	firstSubmitErr   error
-	allowEmptySubmit bool
-	appendErr        error
-	compactErr       error
-	compactCalls     int
-	showGoalErr      error
-	showGoalCalls    int
-	queuedWorkErr    error
-	queuedWork       bool
-	queuedWorkCalls  int
-	submitLeaseID    []string
-	submitRequestID  []string
-	submitRecorded   []bool
-	queueRequestID   []string
-	recordRequestID  []string
-	goalLeaseID      []string
-	localEntries     []serverapi.RuntimeAppendCommittedEntryRequest
-	showGoalResp     serverapi.RuntimeGoalShowResponse
-	setGoalResp      serverapi.RuntimeGoalShowResponse
-	pauseGoalResp    serverapi.RuntimeGoalShowResponse
-	resumeGoalResp   serverapi.RuntimeGoalShowResponse
-	clearGoalResp    serverapi.RuntimeGoalShowResponse
+type reconnectRetryRuntimeControlClient struct {
+	mu              sync.Mutex
+	firstSubmitErr  error
+	firstQueueErr   error
+	firstRecordErr  error
+	appendErr       error
+	compactErr      error
+	compactCalls    int
+	showGoalErr     error
+	showGoalCalls   int
+	queuedWorkErr   error
+	queuedWork      bool
+	queuedWorkCalls int
+	submitCalls     int
+	queueCalls      int
+	recordCalls     int
+	submitRequestID []string
+	queueRequestID  []string
+	recordRequestID []string
+	localEntries    []serverapi.RuntimeAppendCommittedEntryRequest
+	showGoalResp    serverapi.RuntimeGoalShowResponse
+	setGoalResp     serverapi.RuntimeGoalShowResponse
+	pauseGoalResp   serverapi.RuntimeGoalShowResponse
+	resumeGoalResp  serverapi.RuntimeGoalShowResponse
+	clearGoalResp   serverapi.RuntimeGoalShowResponse
 }
 
-func (c *leaseRetryRuntimeControlClient) submitLeaseIDs() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]string(nil), c.submitLeaseID...)
-}
-
-func (c *leaseRetryRuntimeControlClient) submitRequestIDs() []string {
+func (c *reconnectRetryRuntimeControlClient) submitRequestIDs() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.submitRequestID...)
 }
 
-func (c *leaseRetryRuntimeControlClient) submitPromptHistoryRecorded() []bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]bool(nil), c.submitRecorded...)
-}
-
-func (c *leaseRetryRuntimeControlClient) queueRequestIDs() []string {
+func (c *reconnectRetryRuntimeControlClient) queueRequestIDs() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.queueRequestID...)
 }
 
-func (c *leaseRetryRuntimeControlClient) recordRequestIDs() []string {
+func (c *reconnectRetryRuntimeControlClient) recordRequestIDs() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.recordRequestID...)
 }
 
-func (c *leaseRetryRuntimeControlClient) goalLeaseIDs() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return append([]string(nil), c.goalLeaseID...)
-}
-
-func (c *leaseRetryRuntimeControlClient) resetGoalLeaseIDs() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.goalLeaseID = nil
-}
-
-func (c *leaseRetryRuntimeControlClient) appendedLocalEntries() []serverapi.RuntimeAppendCommittedEntryRequest {
+func (c *reconnectRetryRuntimeControlClient) appendedLocalEntries() []serverapi.RuntimeAppendCommittedEntryRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]serverapi.RuntimeAppendCommittedEntryRequest(nil), c.localEntries...)
 }
 
-func (c *leaseRetryRuntimeControlClient) SetSessionName(context.Context, serverapi.RuntimeSetSessionNameRequest) error {
+func (c *reconnectRetryRuntimeControlClient) SetSessionName(context.Context, serverapi.RuntimeSetSessionNameRequest) error {
 	return nil
 }
 
-func (c *leaseRetryRuntimeControlClient) SetThinkingLevel(context.Context, serverapi.RuntimeSetThinkingLevelRequest) error {
+func (c *reconnectRetryRuntimeControlClient) SetThinkingLevel(context.Context, serverapi.RuntimeSetThinkingLevelRequest) error {
 	return nil
 }
 
-func (c *leaseRetryRuntimeControlClient) SetFastModeEnabled(context.Context, serverapi.RuntimeSetFastModeEnabledRequest) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) SetFastModeEnabled(context.Context, serverapi.RuntimeSetFastModeEnabledRequest) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
 	return serverapi.RuntimeSetFastModeEnabledResponse{}, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) SetReviewerEnabled(context.Context, serverapi.RuntimeSetReviewerEnabledRequest) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) SetReviewerEnabled(context.Context, serverapi.RuntimeSetReviewerEnabledRequest) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
 	return serverapi.RuntimeSetReviewerEnabledResponse{}, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) SetAutoCompactionEnabled(context.Context, serverapi.RuntimeSetAutoCompactionEnabledRequest) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) SetAutoCompactionEnabled(context.Context, serverapi.RuntimeSetAutoCompactionEnabledRequest) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
 	return serverapi.RuntimeSetAutoCompactionEnabledResponse{}, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) SetQuestionsEnabled(context.Context, serverapi.RuntimeSetQuestionsEnabledRequest) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) SetQuestionsEnabled(context.Context, serverapi.RuntimeSetQuestionsEnabledRequest) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
 	return serverapi.RuntimeSetQuestionsEnabledResponse{}, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) AppendCommittedEntry(_ context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {
+func (c *reconnectRetryRuntimeControlClient) AppendCommittedEntry(_ context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.localEntries = append(c.localEntries, req)
 	return c.appendErr
 }
 
-func (c *leaseRetryRuntimeControlClient) ShouldCompactBeforeUserMessage(context.Context, serverapi.RuntimeShouldCompactBeforeUserMessageRequest) (serverapi.RuntimeShouldCompactBeforeUserMessageResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) ShouldCompactBeforeUserMessage(context.Context, serverapi.RuntimeShouldCompactBeforeUserMessageRequest) (serverapi.RuntimeShouldCompactBeforeUserMessageResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.compactCalls++
@@ -157,59 +134,30 @@ func (c *leaseRetryRuntimeControlClient) ShouldCompactBeforeUserMessage(context.
 	return serverapi.RuntimeShouldCompactBeforeUserMessageResponse{}, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) SubmitUserMessage(_ context.Context, req serverapi.RuntimeSubmitUserMessageRequest) (serverapi.RuntimeSubmitUserMessageResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) SubmitUserTurn(_ context.Context, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.submitLeaseID = append(c.submitLeaseID, req.ControllerLeaseID)
+	c.submitCalls++
 	c.submitRequestID = append(c.submitRequestID, req.ClientRequestID)
-	switch req.ControllerLeaseID {
-	case "lease-old":
-		if c.firstSubmitErr != nil {
-			return serverapi.RuntimeSubmitUserMessageResponse{}, c.firstSubmitErr
-		}
-		return serverapi.RuntimeSubmitUserMessageResponse{}, serverapi.ErrInvalidControllerLease
-	case "lease-new":
-		return serverapi.RuntimeSubmitUserMessageResponse{Message: "recovered"}, nil
-	default:
-		return serverapi.RuntimeSubmitUserMessageResponse{}, errors.New("unexpected controller lease")
+	if c.submitCalls == 1 && c.firstSubmitErr != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, c.firstSubmitErr
 	}
+	return serverapi.RuntimeSubmitUserTurnResponse{Message: "recovered"}, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) SubmitUserTurn(_ context.Context, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.submitLeaseID = append(c.submitLeaseID, req.ControllerLeaseID)
-	c.submitRequestID = append(c.submitRequestID, req.ClientRequestID)
-	c.submitRecorded = append(c.submitRecorded, req.PromptHistoryRecorded)
-	if c.allowEmptySubmit && req.ControllerLeaseID == "" {
-		return serverapi.RuntimeSubmitUserTurnResponse{Message: "collaborative"}, nil
-	}
-	switch req.ControllerLeaseID {
-	case "lease-old":
-		if c.firstSubmitErr != nil {
-			return serverapi.RuntimeSubmitUserTurnResponse{}, c.firstSubmitErr
-		}
-		return serverapi.RuntimeSubmitUserTurnResponse{}, serverapi.ErrInvalidControllerLease
-	case "lease-new":
-		return serverapi.RuntimeSubmitUserTurnResponse{Message: "recovered"}, nil
-	default:
-		return serverapi.RuntimeSubmitUserTurnResponse{}, errors.New("unexpected controller lease")
-	}
-}
-
-func (c *leaseRetryRuntimeControlClient) SubmitUserShellCommand(context.Context, serverapi.RuntimeSubmitUserShellCommandRequest) error {
+func (c *reconnectRetryRuntimeControlClient) SubmitUserShellCommand(context.Context, serverapi.RuntimeSubmitUserShellCommandRequest) error {
 	return nil
 }
 
-func (c *leaseRetryRuntimeControlClient) CompactContext(context.Context, serverapi.RuntimeCompactContextRequest) error {
+func (c *reconnectRetryRuntimeControlClient) CompactContext(context.Context, serverapi.RuntimeCompactContextRequest) error {
 	return nil
 }
 
-func (c *leaseRetryRuntimeControlClient) CompactContextForPreSubmit(context.Context, serverapi.RuntimeCompactContextForPreSubmitRequest) error {
+func (c *reconnectRetryRuntimeControlClient) CompactContextForPreSubmit(context.Context, serverapi.RuntimeCompactContextForPreSubmitRequest) error {
 	return nil
 }
 
-func (c *leaseRetryRuntimeControlClient) HasQueuedUserWork(context.Context, serverapi.RuntimeHasQueuedUserWorkRequest) (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) HasQueuedUserWork(context.Context, serverapi.RuntimeHasQueuedUserWorkRequest) (serverapi.RuntimeHasQueuedUserWorkResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.queuedWorkCalls++
@@ -219,47 +167,41 @@ func (c *leaseRetryRuntimeControlClient) HasQueuedUserWork(context.Context, serv
 	return serverapi.RuntimeHasQueuedUserWorkResponse{HasQueuedUserWork: c.queuedWork}, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) SubmitQueuedUserMessages(context.Context, serverapi.RuntimeSubmitQueuedUserMessagesRequest) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) SubmitQueuedUserMessages(context.Context, serverapi.RuntimeSubmitQueuedUserMessagesRequest) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
 	return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) Interrupt(context.Context, serverapi.RuntimeInterruptRequest) error {
+func (c *reconnectRetryRuntimeControlClient) Interrupt(context.Context, serverapi.RuntimeInterruptRequest) error {
 	return nil
 }
 
-func (c *leaseRetryRuntimeControlClient) QueueUserMessage(_ context.Context, req serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) QueueUserMessage(_ context.Context, req serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.queueCalls++
 	c.queueRequestID = append(c.queueRequestID, req.ClientRequestID)
-	switch req.ControllerLeaseID {
-	case "lease-old":
-		return serverapi.RuntimeQueueUserMessageResponse{}, serverapi.ErrInvalidControllerLease
-	case "lease-new":
-		return serverapi.RuntimeQueueUserMessageResponse{QueueItemID: "queue-1", Text: req.Text}, nil
-	default:
-		return serverapi.RuntimeQueueUserMessageResponse{}, errors.New("unexpected controller lease")
+	if c.queueCalls == 1 && c.firstQueueErr != nil {
+		return serverapi.RuntimeQueueUserMessageResponse{}, c.firstQueueErr
 	}
+	return serverapi.RuntimeQueueUserMessageResponse{QueueItemID: "queue-1", Text: req.Text, ClientRequestID: req.ClientRequestID}, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) DiscardQueuedUserMessage(context.Context, serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) DiscardQueuedUserMessage(context.Context, serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
 	return serverapi.RuntimeDiscardQueuedUserMessageResponse{}, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) RecordPromptHistory(_ context.Context, req serverapi.RuntimeRecordPromptHistoryRequest) error {
+func (c *reconnectRetryRuntimeControlClient) RecordPromptHistory(_ context.Context, req serverapi.RuntimeRecordPromptHistoryRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.recordCalls++
 	c.recordRequestID = append(c.recordRequestID, req.ClientRequestID)
-	switch req.ControllerLeaseID {
-	case "lease-old":
-		return serverapi.ErrInvalidControllerLease
-	case "lease-new":
-		return nil
-	default:
-		return errors.New("unexpected controller lease")
+	if c.recordCalls == 1 && c.firstRecordErr != nil {
+		return c.firstRecordErr
 	}
+	return nil
 }
 
-func (c *leaseRetryRuntimeControlClient) ShowGoal(context.Context, serverapi.RuntimeGoalShowRequest) (serverapi.RuntimeGoalShowResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) ShowGoal(context.Context, serverapi.RuntimeGoalShowRequest) (serverapi.RuntimeGoalShowResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.showGoalCalls++
@@ -269,34 +211,24 @@ func (c *leaseRetryRuntimeControlClient) ShowGoal(context.Context, serverapi.Run
 	return c.showGoalResp, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) SetGoal(_ context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return c.goalWriteResponse(req.ControllerLeaseID, c.setGoalResp)
+func (c *reconnectRetryRuntimeControlClient) SetGoal(context.Context, serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return c.setGoalResp, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) PauseGoal(_ context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return c.goalWriteResponse(req.ControllerLeaseID, c.pauseGoalResp)
+func (c *reconnectRetryRuntimeControlClient) PauseGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return c.pauseGoalResp, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) ResumeGoal(_ context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return c.goalWriteResponse(req.ControllerLeaseID, c.resumeGoalResp)
+func (c *reconnectRetryRuntimeControlClient) ResumeGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return c.resumeGoalResp, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) CompleteGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
+func (c *reconnectRetryRuntimeControlClient) CompleteGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
 	return serverapi.RuntimeGoalShowResponse{}, nil
 }
 
-func (c *leaseRetryRuntimeControlClient) ClearGoal(_ context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return c.goalWriteResponse(req.ControllerLeaseID, c.clearGoalResp)
-}
-
-func (c *leaseRetryRuntimeControlClient) goalWriteResponse(leaseID string, resp serverapi.RuntimeGoalShowResponse) (serverapi.RuntimeGoalShowResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.goalLeaseID = append(c.goalLeaseID, leaseID)
-	if leaseID == "lease-old" {
-		return serverapi.RuntimeGoalShowResponse{}, serverapi.ErrInvalidControllerLease
-	}
-	return resp, nil
+func (c *reconnectRetryRuntimeControlClient) ClearGoal(context.Context, serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error) {
+	return c.clearGoalResp, nil
 }
 
 func TestRuntimeClientGoalMethodsPatchCachedMainView(t *testing.T) {
@@ -304,7 +236,7 @@ func TestRuntimeClientGoalMethodsPatchCachedMainView(t *testing.T) {
 	setGoal := &serverapi.RuntimeGoal{ID: "goal-set", Objective: "set goal", Status: "active", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	pauseGoal := &serverapi.RuntimeGoal{ID: "goal-pause", Objective: "pause goal", Status: "paused", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	resumeGoal := &serverapi.RuntimeGoal{ID: "goal-resume", Objective: "resume goal", Status: "active", CreatedAt: time.Now(), UpdatedAt: time.Now()}
-	controls := &leaseRetryRuntimeControlClient{
+	controls := &reconnectRetryRuntimeControlClient{
 		showGoalResp:   serverapi.RuntimeGoalShowResponse{Goal: showGoal},
 		setGoalResp:    serverapi.RuntimeGoalShowResponse{Goal: setGoal},
 		pauseGoalResp:  serverapi.RuntimeGoalShowResponse{Goal: pauseGoal},
@@ -312,9 +244,9 @@ func TestRuntimeClientGoalMethodsPatchCachedMainView(t *testing.T) {
 		clearGoalResp:  serverapi.RuntimeGoalShowResponse{},
 	}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	leaseManager := newControllerLeaseManager("lease-old")
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) { return "lease-new", nil })
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	reactivator := newRuntimeReactivator()
+	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
+	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	goal, err := runtimeClient.ShowGoal()
 	if err != nil {
@@ -334,14 +266,9 @@ func TestRuntimeClientGoalMethodsPatchCachedMainView(t *testing.T) {
 		{name: "clear", call: runtimeClient.ClearGoal, want: nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			leaseManager.Set("lease-old")
-			controls.resetGoalLeaseIDs()
 			goal, err := tt.call()
 			if err != nil {
 				t.Fatalf("%s goal: %v", tt.name, err)
-			}
-			if got := controls.goalLeaseIDs(); !reflect.DeepEqual(got, []string{"lease-old", "lease-new"}) {
-				t.Fatalf("%s goal lease ids = %+v, want [lease-old lease-new]", tt.name, got)
 			}
 			assertRuntimeClientGoalCached(t, runtimeClient, goal, runtimeGoalFromAPI(tt.want))
 		})
@@ -363,7 +290,7 @@ func TestCloneRuntimeGoalReturnsIndependentCopy(t *testing.T) {
 }
 
 func TestRuntimeClientGoalStatusEventPatchesCachedMainView(t *testing.T) {
-	runtimeClient := newTestSessionRuntimeClientWithControls(&leaseRetryRuntimeControlClient{})
+	runtimeClient := newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{})
 	runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}})
 
 	runtimeClient.observeRuntimeEventStatus(clientui.Event{
@@ -434,7 +361,7 @@ func TestRuntimeClientGoalStatusEventNormalizesSuspendedCache(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runtimeClient := newTestSessionRuntimeClientWithControls(&leaseRetryRuntimeControlClient{})
+			runtimeClient := newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{})
 			runtimeClient.storeMainView(clientui.RuntimeMainView{
 				Session: clientui.RuntimeSessionView{SessionID: "session-1"},
 				Status:  clientui.RuntimeStatus{Goal: cloneRuntimeGoal(tt.existing)},
@@ -477,18 +404,19 @@ func assertRuntimeGoalConversionDropsAPITimestamps(t *testing.T, got *clientui.R
 	}
 }
 
-func TestRuntimeClientSubmitUserMessageRecoversInvalidControllerLease(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{}
+func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesRequestID(t *testing.T) {
+	controls := &reconnectRetryRuntimeControlClient{firstSubmitErr: serverapi.ErrRuntimeUnavailable}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	leaseManager := newControllerLeaseManager("lease-old")
+	reactivator := newRuntimeReactivator()
 	recoveryCalls := 0
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) {
+	reactivator.SetReactivateFunc(func(context.Context) error {
 		recoveryCalls++
-		return "lease-new", nil
+		return nil
 	})
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	runtimeClient.SetRuntimeReactivator(reactivator)
 
-	message, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -498,78 +426,17 @@ func TestRuntimeClientSubmitUserMessageRecoversInvalidControllerLease(t *testing
 	if recoveryCalls != 1 {
 		t.Fatalf("recovery call count = %d, want 1", recoveryCalls)
 	}
-	if got := runtimeClient.controllerLeaseIDValue(); got != "lease-new" {
-		t.Fatalf("controller lease id = %q, want lease-new", got)
-	}
-	if got := controls.submitLeaseIDs(); !reflect.DeepEqual(got, []string{"lease-old", "lease-new"}) {
-		t.Fatalf("submit lease ids = %+v, want [lease-old lease-new]", got)
-	}
 	if got := controls.submitRequestIDs(); len(got) != 2 || got[0] == "" || got[0] != got[1] {
 		t.Fatalf("submit request ids = %+v, want same non-empty id across retry", got)
 	}
-	if got := controls.submitPromptHistoryRecorded(); !reflect.DeepEqual(got, []bool{false, false}) {
-		t.Fatalf("submit prompt-history-recorded flags = %+v, want false across retry", got)
-	}
 }
 
-func TestRuntimeClientCollaborativeSubmitDoesNotRecoverControllerLease(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{}
+func TestRuntimeClientQueueUserMessageReusesRequestIDAcrossReconnect(t *testing.T) {
+	controls := &reconnectRetryRuntimeControlClient{firstQueueErr: serverapi.ErrRuntimeUnavailable}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	runtimeClient.SetAccessMode(serverapi.SessionRuntimeAttachModeCollaborative, []serverapi.SessionRuntimeOperation{
-		serverapi.SessionRuntimeOperationSubmitUserTurn,
-	})
-
-	_, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
-	if err == nil || !strings.Contains(err.Error(), "unexpected controller lease") {
-		t.Fatalf("SubmitUserMessage error = %v, want original server error", err)
-	}
-	if got := controls.submitLeaseIDs(); !reflect.DeepEqual(got, []string{""}) {
-		t.Fatalf("submit lease ids = %+v, want one empty collaborative lease", got)
-	}
-}
-
-func TestRuntimeClientCollaborativeEmptyOperationsStillAllowsSteering(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	runtimeClient.SetAccessMode(serverapi.SessionRuntimeAttachModeCollaborative, nil)
-
-	_, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
-	if err == nil || !strings.Contains(err.Error(), "unexpected controller lease") {
-		t.Fatalf("SubmitUserMessage error = %v, want original server error after allowed collaborative submit", err)
-	}
-	if got := controls.submitLeaseIDs(); !reflect.DeepEqual(got, []string{""}) {
-		t.Fatalf("submit lease ids = %+v, want one empty collaborative lease", got)
-	}
-}
-
-func TestRuntimeClientSubmitUserMessageCanSkipPromptHistoryAcrossLeaseRecovery(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{firstSubmitErr: serverapi.ErrRuntimeUnavailable}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	leaseManager := newControllerLeaseManager("lease-old")
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) { return "lease-new", nil })
-	runtimeClient.SetControllerLeaseManager(leaseManager)
-
-	message, err := runtimeClient.SubmitUserMessageWithPromptHistoryRecorded(context.Background(), "expanded hidden prompt")
-	if err != nil {
-		t.Fatalf("SubmitUserMessageWithPromptHistoryRecorded: %v", err)
-	}
-	if message != "recovered" {
-		t.Fatalf("SubmitUserMessageWithPromptHistoryRecorded message = %q, want recovered", message)
-	}
-	if got := controls.submitRequestIDs(); len(got) != 2 || got[0] == "" || got[0] != got[1] {
-		t.Fatalf("submit request ids = %+v, want same non-empty id across retry", got)
-	}
-	if got := controls.submitPromptHistoryRecorded(); !reflect.DeepEqual(got, []bool{true, true}) {
-		t.Fatalf("submit prompt-history-recorded flags = %+v, want true across retry", got)
-	}
-}
-
-func TestRuntimeClientQueueUserMessageReusesRequestIDAcrossLeaseRecovery(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	leaseManager := newControllerLeaseManager("lease-old")
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) { return "lease-new", nil })
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	reactivator := newRuntimeReactivator()
+	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
+	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	item, err := runtimeClient.QueueUserMessage("queued")
 	if err != nil {
@@ -585,12 +452,12 @@ func TestRuntimeClientQueueUserMessageReusesRequestIDAcrossLeaseRecovery(t *test
 	}
 }
 
-func TestRuntimeClientRecordPromptHistoryReusesRequestIDAcrossLeaseRecovery(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{}
+func TestRuntimeClientRecordPromptHistoryReusesRequestIDAcrossReconnect(t *testing.T) {
+	controls := &reconnectRetryRuntimeControlClient{firstRecordErr: serverapi.ErrRuntimeUnavailable}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	leaseManager := newControllerLeaseManager("lease-old")
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) { return "lease-new", nil })
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	reactivator := newRuntimeReactivator()
+	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
+	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	if err := runtimeClient.RecordPromptHistory("/status"); err != nil {
 		t.Fatalf("RecordPromptHistory: %v", err)
@@ -601,17 +468,18 @@ func TestRuntimeClientRecordPromptHistoryReusesRequestIDAcrossLeaseRecovery(t *t
 }
 
 func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{firstSubmitErr: serverapi.ErrRuntimeUnavailable}
+	controls := &reconnectRetryRuntimeControlClient{firstSubmitErr: serverapi.ErrRuntimeUnavailable}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	leaseManager := newControllerLeaseManager("lease-old")
+	reactivator := newRuntimeReactivator()
 	recoveryCalls := 0
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) {
+	reactivator.SetReactivateFunc(func(context.Context) error {
 		recoveryCalls++
-		return "lease-new", nil
+		return nil
 	})
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	runtimeClient.SetRuntimeReactivator(reactivator)
 
-	message, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -621,30 +489,22 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) 
 	if recoveryCalls != 1 {
 		t.Fatalf("recovery call count = %d, want 1", recoveryCalls)
 	}
-	if got := runtimeClient.controllerLeaseIDValue(); got != "lease-new" {
-		t.Fatalf("controller lease id = %q, want lease-new", got)
-	}
-	if got := controls.submitLeaseIDs(); !reflect.DeepEqual(got, []string{"lease-old", "lease-new"}) {
-		t.Fatalf("submit lease ids = %+v, want [lease-old lease-new]", got)
-	}
 	entries := controls.appendedLocalEntries()
 	if len(entries) != 1 {
 		t.Fatalf("warning entry count = %d, want 1", len(entries))
 	}
 	entry := entries[0]
-	if entry.ControllerLeaseID != "lease-new" || entry.Role != "warning" || entry.Text != runtimeLeaseRecoveryWarningText || entry.Visibility != string(clientui.EntryVisibilityAll) {
-		t.Fatalf("warning entry = %+v, want new lease warning", entry)
+	if entry.Role != "warning" || entry.Visibility != string(clientui.EntryVisibilityAll) {
+		t.Fatalf("warning entry = %+v, want recovery warning", entry)
 	}
 }
 
 func TestRuntimeClientSubmitTurnRecoveryContinuesFirstPrompt(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{firstSubmitErr: serverapi.ErrRuntimeUnavailable}
+	controls := &reconnectRetryRuntimeControlClient{firstSubmitErr: serverapi.ErrRuntimeUnavailable}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	leaseManager := newControllerLeaseManager("lease-old")
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) {
-		return "lease-new", nil
-	})
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	reactivator := newRuntimeReactivator()
+	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
+	runtimeClient.SetRuntimeReactivator(reactivator)
 	model := newProjectedClosedUIModel(runtimeClient)
 	model.startupCmds = nil
 
@@ -675,13 +535,13 @@ func TestRuntimeClientSubmitTurnRecoveryContinuesFirstPrompt(t *testing.T) {
 		t.Fatal("did not expect pre-submit recovery to surface operator error")
 	}
 	plain := stripANSIAndTrimRight(updated.view.OngoingSnapshot())
-	if strings.Contains(plain, serverapi.ErrRuntimeUnavailable.Error()) || strings.Contains(plain, "runtime for session") || strings.Contains(plain, runtimeLeaseRecoveryWarningText) {
+	if strings.Contains(plain, serverapi.ErrRuntimeUnavailable.Error()) || strings.Contains(plain, "runtime for session") {
 		t.Fatalf("did not expect recovery diagnostics in ongoing transcript, got %q", plain)
 	}
 }
 
 func TestRuntimeClientHydrationRecoversRuntimeUnavailableSilently(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{}
+	controls := &reconnectRetryRuntimeControlClient{}
 	authoritativePage := clientui.TranscriptPage{
 		SessionID:    "session-1",
 		Revision:     4,
@@ -693,13 +553,13 @@ func TestRuntimeClientHydrationRecoversRuntimeUnavailableSilently(t *testing.T) 
 		pages: []serverapi.SessionTranscriptPageResponse{{}, {Transcript: authoritativePage}},
 	}
 	runtimeClient := newTestSessionRuntimeClient(reads, controls)
-	leaseManager := newControllerLeaseManager("lease-old")
+	reactivator := newRuntimeReactivator()
 	recoveryCalls := 0
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) {
+	reactivator.SetReactivateFunc(func(context.Context) error {
 		recoveryCalls++
-		return "lease-new", nil
+		return nil
 	})
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	page, err := runtimeClient.RefreshTranscriptPage(clientui.TranscriptPageRequest{})
 	if err != nil {
@@ -720,7 +580,7 @@ func TestRuntimeClientHydrationRecoversRuntimeUnavailableSilently(t *testing.T) 
 }
 
 func TestRuntimeClientMainViewRefreshRecoversRuntimeUnavailableSilently(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{}
+	controls := &reconnectRetryRuntimeControlClient{}
 	authoritativeView := clientui.RuntimeMainView{
 		Session: clientui.RuntimeSessionView{SessionID: "session-1", SessionName: "restored"},
 		Status:  clientui.RuntimeStatus{ThinkingLevel: "high"},
@@ -730,13 +590,13 @@ func TestRuntimeClientMainViewRefreshRecoversRuntimeUnavailableSilently(t *testi
 		responses: []serverapi.SessionMainViewResponse{{}, {MainView: authoritativeView}},
 	}
 	runtimeClient := newTestSessionRuntimeClient(reads, controls)
-	leaseManager := newControllerLeaseManager("lease-old")
+	reactivator := newRuntimeReactivator()
 	recoveryCalls := 0
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) {
+	reactivator.SetReactivateFunc(func(context.Context) error {
 		recoveryCalls++
-		return "lease-new", nil
+		return nil
 	})
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	view, err := runtimeClient.RefreshMainView()
 	if err != nil {
@@ -756,8 +616,35 @@ func TestRuntimeClientMainViewRefreshRecoversRuntimeUnavailableSilently(t *testi
 	}
 }
 
+func TestRuntimeClientMainViewRecoveryPreservesReadDeadline(t *testing.T) {
+	controls := &reconnectRetryRuntimeControlClient{}
+	reads := &flakySessionViewClient{errs: []error{serverapi.ErrRuntimeUnavailable}}
+	runtimeClient := newTestSessionRuntimeClient(reads, controls)
+	reactivator := newRuntimeReactivator()
+	reactivationStarted := make(chan struct{})
+	reactivator.SetReactivateFunc(func(ctx context.Context) error {
+		close(reactivationStarted)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	runtimeClient.SetRuntimeReactivator(reactivator)
+
+	start := time.Now()
+	if _, err := runtimeClient.refreshMainViewSync(uiRuntimeReadTimeout); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("refreshMainViewSync error = %v, want reactivation deadline error", err)
+	}
+	if elapsed := time.Since(start); elapsed > uiRuntimeReadTimeout+500*time.Millisecond {
+		t.Fatalf("refreshMainViewSync elapsed = %s, want bounded by read timeout %s", elapsed, uiRuntimeReadTimeout)
+	}
+	select {
+	case <-reactivationStarted:
+	case <-time.After(time.Second):
+		t.Fatal("reactivation did not start")
+	}
+}
+
 func TestRuntimeUnavailableHydrationRecoveryResumesOngoingEventFence(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{}
+	controls := &reconnectRetryRuntimeControlClient{}
 	authoritativePage := clientui.TranscriptPage{
 		SessionID:    "session-1",
 		Revision:     5,
@@ -769,11 +656,9 @@ func TestRuntimeUnavailableHydrationRecoveryResumesOngoingEventFence(t *testing.
 		pages: []serverapi.SessionTranscriptPageResponse{{}, {Transcript: authoritativePage}},
 	}
 	runtimeClient := newTestSessionRuntimeClient(reads, controls)
-	leaseManager := newControllerLeaseManager("lease-old")
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) {
-		return "lease-new", nil
-	})
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	reactivator := newRuntimeReactivator()
+	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
+	runtimeClient.SetRuntimeReactivator(reactivator)
 	runtimeEvents := make(chan clientui.Event, 1)
 	runtimeEvents <- clientui.Event{Kind: clientui.EventAssistantDelta, AssistantDelta: "after hydrate"}
 	model := newProjectedRuntimeEventsUIModel(runtimeClient, runtimeEvents)
@@ -824,18 +709,18 @@ func TestRuntimeUnavailableHydrationRecoveryResumesOngoingEventFence(t *testing.
 
 func TestRuntimeClientShowGoalRecoversRuntimeUnavailableSilently(t *testing.T) {
 	goal := &serverapi.RuntimeGoal{ID: "goal-1", Objective: "ship", Status: "active"}
-	controls := &leaseRetryRuntimeControlClient{
+	controls := &reconnectRetryRuntimeControlClient{
 		showGoalErr:  serverapi.ErrRuntimeUnavailable,
 		showGoalResp: serverapi.RuntimeGoalShowResponse{Goal: goal},
 	}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	leaseManager := newControllerLeaseManager("lease-old")
+	reactivator := newRuntimeReactivator()
 	recoveryCalls := 0
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) {
+	reactivator.SetReactivateFunc(func(context.Context) error {
 		recoveryCalls++
-		return "lease-new", nil
+		return nil
 	})
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	got, err := runtimeClient.ShowGoal()
 	if err != nil {
@@ -856,18 +741,18 @@ func TestRuntimeClientShowGoalRecoversRuntimeUnavailableSilently(t *testing.T) {
 }
 
 func TestRuntimeClientHasQueuedUserWorkRecoversRuntimeUnavailableSilently(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{
+	controls := &reconnectRetryRuntimeControlClient{
 		queuedWorkErr: serverapi.ErrRuntimeUnavailable,
 		queuedWork:    true,
 	}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	leaseManager := newControllerLeaseManager("lease-old")
+	reactivator := newRuntimeReactivator()
 	recoveryCalls := 0
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) {
+	reactivator.SetReactivateFunc(func(context.Context) error {
 		recoveryCalls++
-		return "lease-new", nil
+		return nil
 	})
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	hasWork, err := runtimeClient.HasQueuedUserWork()
 	if err != nil {
@@ -887,33 +772,31 @@ func TestRuntimeClientHasQueuedUserWorkRecoversRuntimeUnavailableSilently(t *tes
 	}
 }
 
-func TestRuntimeClientLeaseRecoveryWarningFailureDoesNotBlockSubmit(t *testing.T) {
-	controls := &leaseRetryRuntimeControlClient{firstSubmitErr: serverapi.ErrRuntimeUnavailable, appendErr: serverapi.ErrRuntimeUnavailable}
+func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
+	controls := &reconnectRetryRuntimeControlClient{firstSubmitErr: serverapi.ErrRuntimeUnavailable, appendErr: serverapi.ErrRuntimeUnavailable}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	warnings := make(chan runtimeLeaseRecoveryWarningMsg, 1)
-	runtimeClient.SetLeaseRecoveryWarningObserver(func(text string, visibility clientui.EntryVisibility) {
-		warnings <- runtimeLeaseRecoveryWarningMsg{text: text, visibility: visibility}
+	warnings := make(chan runtimeReconnectWarningMsg, 1)
+	runtimeClient.SetRuntimeReconnectWarningObserver(func(text string, visibility clientui.EntryVisibility) {
+		warnings <- runtimeReconnectWarningMsg{text: text, visibility: visibility}
 	})
-	leaseManager := newControllerLeaseManager("lease-old")
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) { return "lease-new", nil })
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	reactivator := newRuntimeReactivator()
+	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
+	runtimeClient.SetRuntimeReactivator(reactivator)
 
-	message, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
 	if message != "recovered" {
 		t.Fatalf("SubmitUserMessage message = %q, want recovered", message)
 	}
-	if got := controls.submitLeaseIDs(); !reflect.DeepEqual(got, []string{"lease-old", "lease-new"}) {
-		t.Fatalf("submit lease ids = %+v, want [lease-old lease-new]", got)
-	}
 	if entries := controls.appendedLocalEntries(); len(entries) != 1 {
 		t.Fatalf("warning append attempts = %d, want 1", len(entries))
 	}
 	select {
 	case warning := <-warnings:
-		if warning.text != runtimeLeaseRecoveryWarningText || warning.visibility != clientui.EntryVisibilityAll {
+		if warning.visibility != clientui.EntryVisibilityAll {
 			t.Fatalf("warning = %+v, want lease recovery warning", warning)
 		}
 	default:
@@ -934,19 +817,20 @@ func TestRuntimeClientServerRestartFirstPromptRecoversAndWarnsOngoing(t *testing
 		},
 	})
 	resolver := &mutableRuntimeResolver{}
-	controls := sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(resolver, nil))
+	controls := sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(resolver))
 	runtimeClient := newUIRuntimeClientWithReads(store.Meta().SessionID, &countingSessionViewClient{}, controls).(*sessionRuntimeClient)
-	leaseManager := newControllerLeaseManager("lease-old")
-	leaseManager.SetRecoverFunc(func(context.Context) (string, error) {
+	reactivator := newRuntimeReactivator()
+	reactivator.SetReactivateFunc(func(context.Context) error {
 		resolver.Set(engine)
-		return "lease-new", nil
+		return nil
 	})
-	runtimeClient.SetControllerLeaseManager(leaseManager)
+	runtimeClient.SetRuntimeReactivator(reactivator)
 	model := newProjectedClosedUIModel(nil)
 	sized, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	model = sized.(*uiModel)
 
-	message, err := runtimeClient.SubmitUserMessage(context.Background(), "hello after restart")
+	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello after restart")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("submitRuntimeUserMessage: %v", err)
 	}
@@ -964,7 +848,7 @@ func TestRuntimeClientServerRestartFirstPromptRecoversAndWarnsOngoing(t *testing
 		_ = collectCmdMessages(t, cmd)
 	}
 	view := stripANSIAndTrimRight(updated.view.OngoingSnapshot())
-	if !strings.Contains(view, runtimeLeaseRecoveryWarningText) {
+	if !strings.Contains(view, runtimeReconnectWarningText) {
 		t.Fatalf("expected ongoing warning in view, events=%d entries=%+v view=%q", eventCount, updated.transcriptEntries, view)
 	}
 	if strings.Contains(view, "runtime for session") {

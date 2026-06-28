@@ -236,15 +236,31 @@ Terminal-owned history of normal-buffer output. Kent does not replay, clear, or 
 
 ### Active Session Runtime
 
-The live runtime a session registers while it is running. It exists independently of who is driving it: a run owner may hold it, or it may be registered but idle between activations.
+The single shared live runtime (engine) a session registers while active. There is exactly one engine per session; every interactive client and any headless or workflow run resolves and drives that same shared engine through its queue/steer/exclusive-step boundary. It exists independently of any particular client and may be registered but idle between activations.
 
-### Run Owner
+### Step
 
-The headless or workflow run that holds the session's primary-run lease for the whole run and drives the runtime loop. While a run owns the session, no other writer drives the step loop.
+One model request/response iteration in the runtime loop, including any tool calls it triggers. Steps run back-to-back to form a turn.
 
-### Limited-Control Attach
+### Turn
 
-An interactive client attached to a session whose active runtime is owned by a run. It gets a live view plus steering (queued user messages) and the allowed controls (goal, settings, compaction, worktree, process view), but not controller ownership. A limited-control attach to a running workflow task may steer and chat as usual; the only workflow-specific limit is that the model cannot submit a structured-output final answer that is invalid for the node. When no active runtime is reachable for an attach, the failure surfaces as the typed runtime-unavailable error, not internal wording.
+A full agent run from a user submission until the runtime returns to idle: the agent produces its final message and no further step is scheduled. A turn is composed of one or more steps.
+
+### Queue
+
+The user-facing TUI action that holds user messages until the current turn ends. Queued messages wait for the runtime to go idle, then drain into the next turn.
+
+### Steer
+
+The user-facing TUI action that injects a message to take effect after the current step ends, mid-turn between steps, rather than waiting for the turn to finish.
+
+### Steer Queue
+
+The internal queue that holds step-end-drained submissions until the current step completes. It is the single submission path for (almost) every message that lands in the transcript — user steering, queued-message flushes, worktree reminders, workflow-step output, mode-change notices, and error messages — built from typed steering intents rather than ad-hoc appenders or direct transcript writes.
+
+### Equal Full-Control Attach
+
+Every client attached to a session is an equal, full-control surface over the shared runtime: there is no ownership, no leases, no controller/limited-control distinction, no read-only attach, and no per-operation gating. The server owns runtime orchestration only (the single shared engine, safe-point application, and persistence), not client authorization.
 
 ### Goal
 

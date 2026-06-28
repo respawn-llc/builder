@@ -10,21 +10,26 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/metadata"
-	"core/server/primaryrun"
 	"core/server/requestmemo"
+	"core/server/runlog"
 	"core/server/runtime"
 	"core/server/runtimeview"
 	"core/server/runtimewire"
 	"core/server/sessionlaunch"
+	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	servicecontract "core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/serverapi"
 	"core/shared/transcriptdiag"
+
+	"github.com/google/uuid"
 )
 
 var ErrHeadlessGoalSession = errors.New("headless runs cannot continue sessions with goals; clear the goal first")
+
+var ErrSessionRunning = errors.New("the target session is not finished - it still has an active run. Communicate with the agent via --steer or stdin on the active `run` process, stop the run, or wait for it to finish first")
 
 // ErrHeadlessAskUnsupported is returned by the headless ask handler when the
 // model attempts to ask a question in headless/background mode, where no
@@ -41,12 +46,10 @@ type HeadlessBootstrap struct {
 	FastModeState   *runtime.FastModeState
 	Background      *shelltool.Manager
 	RuntimeRegistry interface {
-		primaryrun.Gate
-		runtimewire.RuntimeRegistry
 		PublishRuntimeEvent(sessionID string, evt runtime.Event)
 	}
-	BackgroundRouter runtimewire.BackgroundRouter
-	PromptHistory    promptHistoryStore
+	PromptHistory  promptHistoryStore
+	SessionRuntime *sessionruntime.Service
 	// PersistenceRoot is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to
 	// ~/.kent inside the runtime resolvers.
@@ -73,6 +76,9 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 	if l.boot.SessionLaunch == nil {
 		return nil, errors.New("headless session launch service is required")
 	}
+	if selected := strings.TrimSpace(req.SelectedSessionID); selected != "" && l.boot.SessionRuntime != nil && l.boot.SessionRuntime.SessionRunActive(selected) {
+		return nil, ErrSessionRunning
+	}
 	launchReq := serverapi.SessionPlanRequest{
 		ClientRequestID:   req.ClientRequestID,
 		Mode:              serverapi.SessionLaunchModeHeadless,
@@ -86,45 +92,47 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 		return nil, err
 	}
 	plan := result.Plan
-	var primaryLease primaryrun.Lease
-	if l.boot.RuntimeRegistry != nil {
-		primaryLease, err = l.boot.RuntimeRegistry.AcquirePrimaryRun(plan.Store.Meta().SessionID)
-		if err != nil {
-			return nil, err
-		}
-	}
 	if plan.Store.Meta().Goal != nil {
-		if primaryLease != nil {
-			primaryLease.Release()
-		}
 		return nil, fmt.Errorf("%w", ErrHeadlessGoalSession)
 	}
-	runtimePlan, err := l.prepareRuntime(plan, progress, primaryLease)
+	runtimePlan, err := l.prepareRuntime(ctx, plan, progress)
 	if err != nil {
-		if primaryLease != nil {
-			primaryLease.Release()
-		}
 		return nil, err
 	}
 	return &headlessPromptRuntime{plan: runtimePlan, warnings: result.Warnings, history: l.boot.PromptHistory}, nil
 }
 
 type headlessRuntimePlan struct {
-	logger      *RunLogger
-	engine      *runtime.Engine
-	eventBridge *runtimewire.EventBridge
-	close       func()
+	sessionRuntime *sessionruntime.Service
+	sessionID      string
+	ownerID        string
+	engine         *runtime.Engine
+	diagLogger     *runlog.RunLogger
+	eventBridge    *runtimewire.EventBridge
+	close          func()
 }
 
 func (p *headlessRuntimePlan) Close() {
+	p.CloseWithFailure(false)
+}
+
+func (p *headlessRuntimePlan) CloseWithFailure(failed bool) {
 	if p == nil || p.close == nil {
 		return
+	}
+	if failed && p.engine != nil {
+		p.engine.FailQueuedUserMessages(runtime.QueuedUserMessageFailureClosing)
 	}
 	p.close()
 }
 
-func (l *headlessPromptLauncher) prepareRuntime(plan launch.SessionPlan, progress serverapi.RunPromptProgressSink, primaryLease primaryrun.Lease) (*headlessRuntimePlan, error) {
-	logger, err := NewRunLogger(plan.Store.Dir(), func(diag RunLoggerDiagnostic) {
+func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch.SessionPlan, progress serverapi.RunPromptProgressSink) (*headlessRuntimePlan, error) {
+	if l.boot.SessionRuntime == nil {
+		return nil, errors.New("headless run prompt requires a session runtime service")
+	}
+	sessionID := plan.Store.Meta().SessionID
+	ownerID := uuid.NewString()
+	diagLogger, err := runlog.NewRunLogger(plan.Store.Dir(), func(diag runlog.RunLoggerDiagnostic) {
 		if progress != nil {
 			progress.PublishRunPromptProgress(serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindWarning, Message: "Run logging degraded"})
 		}
@@ -133,62 +141,76 @@ func (l *headlessPromptLauncher) prepareRuntime(plan launch.SessionPlan, progres
 		return nil, err
 	}
 	workdir := headlessRuntimeWorkdir(plan)
-	logger.Logf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", plan.Store.Meta().SessionID, plan.WorkspaceRoot, workdir, plan.ActiveSettings.Model)
-	logger.Logf("config.settings path=%s created=%t", plan.Source.SettingsPath, plan.Source.CreatedDefaultConfig)
+	diagLogger.Logf("app.run_prompt.start session_id=%s workspace=%s workdir=%s model=%s", sessionID, plan.WorkspaceRoot, workdir, plan.ActiveSettings.Model)
+	diagLogger.Logf("config.settings path=%s created=%t", plan.Source.SettingsPath, plan.Source.CreatedDefaultConfig)
 	for _, line := range configSourceLines(plan.Source.Sources) {
-		logger.Logf("config.source %s", line)
+		diagLogger.Logf("config.source %s", line)
 	}
-	wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, plan.EnabledTools, workdir, l.boot.AuthManager, logger, l.boot.Background, runtimewire.RuntimeWiringOptions{
-		Headless:        true,
-		FastMode:        l.boot.FastModeState,
-		Sources:         plan.Source.Sources,
-		GlobalConfigDir: l.boot.PersistenceRoot,
-		OnEvent: func(evt runtime.Event) {
-			logger.Logf("%s", FormatRuntimeEvent(evt))
-			if transcriptdiag.Enabled(plan.ActiveSettings.Debug, os.Getenv) {
-				projected := runtimeview.EventFromRuntime(evt)
-				logger.Logf("%s", FormatTranscriptProjectionDiagnostic(plan.Store.Meta().SessionID, projected))
-				logger.Logf("%s", FormatTranscriptPublishDiagnostic(plan.Store.Meta().SessionID, projected))
-			}
-			if l.boot.RuntimeRegistry != nil {
-				l.boot.RuntimeRegistry.PublishRuntimeEvent(plan.Store.Meta().SessionID, evt)
-			}
-			PublishRunPromptProgress(progress, evt)
-		},
-	})
+	var eventBridge *runtimewire.EventBridge
+	var acquiredEngine *runtime.Engine
+	build := func(ctx context.Context) (sessionruntime.RuntimeBuildResult, error) {
+		engineLogger, err := runlog.NewRunLogger(plan.Store.Dir(), nil)
+		if err != nil {
+			return sessionruntime.RuntimeBuildResult{}, err
+		}
+		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, plan.EnabledTools, workdir, l.boot.AuthManager, engineLogger, l.boot.Background, runtimewire.RuntimeWiringOptions{
+			Headless:        true,
+			FastMode:        l.boot.FastModeState,
+			Sources:         plan.Source.Sources,
+			GlobalConfigDir: l.boot.PersistenceRoot,
+			OnEvent: func(evt runtime.Event) {
+				engineLogger.Logf("%s", runlog.FormatRuntimeEvent(evt))
+				if transcriptdiag.Enabled(plan.ActiveSettings.Debug, os.Getenv) {
+					projected := runtimeview.EventFromRuntime(evt)
+					engineLogger.Logf("%s", runlog.FormatTranscriptProjectionDiagnostic(sessionID, projected))
+					engineLogger.Logf("%s", runlog.FormatTranscriptPublishDiagnostic(sessionID, projected))
+				}
+				if l.boot.RuntimeRegistry != nil {
+					l.boot.RuntimeRegistry.PublishRuntimeEvent(sessionID, evt)
+				}
+				PublishRunPromptProgress(progress, evt)
+			},
+		})
+		if err != nil {
+			_ = engineLogger.Close()
+			return sessionruntime.RuntimeBuildResult{}, err
+		}
+		if wiring.AskBroker != nil {
+			wiring.AskBroker.SetAskHandler(RunPromptAskHandler)
+		}
+		eventBridge = wiring.EventBridge
+		acquiredEngine = wiring.Engine
+		var localRebind func(string) error
+		if wiring.LocalTools != nil {
+			localRebind = wiring.LocalTools.Rebind
+		}
+		return sessionruntime.RuntimeBuildResult{
+			Engine:      wiring.Engine,
+			LocalRebind: localRebind,
+			Close: func() {
+				_ = wiring.Close()
+				_ = engineLogger.Close()
+			},
+		}, nil
+	}
+	releaseRuntime, err := l.boot.SessionRuntime.RecreateRuntimeRejectingActiveRun(ctx, sessionID, ownerID, build)
 	if err != nil {
-		_ = logger.Close()
+		_ = diagLogger.Close()
+		if errors.Is(err, sessionruntime.ErrSessionRunActive) {
+			return nil, ErrSessionRunning
+		}
 		return nil, err
 	}
-	if wiring.AskBroker != nil {
-		wiring.AskBroker.SetAskHandler(RunPromptAskHandler)
-	}
-	var runtimeRegistry runtimewire.RuntimeRegistry
-	if l.boot.RuntimeRegistry != nil {
-		runtimeRegistry = l.boot.RuntimeRegistry
-	}
-	var backgroundRouter runtimewire.BackgroundRouter
-	if l.boot.BackgroundRouter != nil {
-		backgroundRouter = l.boot.BackgroundRouter
-	}
-	var rebind func(string) error
-	if wiring.LocalTools != nil {
-		rebind = runtimewire.RuntimeRebindFunc(wiring.LocalTools.Rebind, wiring.Engine)
-	}
-	registration := runtimewire.RegisterSessionRuntime(plan.Store.Meta().SessionID, wiring.Engine, runtimeRegistry, backgroundRouter, runtimewire.WithRuntimeRebind(rebind))
 	return &headlessRuntimePlan{
-		logger:      logger,
-		engine:      wiring.Engine,
-		eventBridge: wiring.EventBridge,
+		sessionRuntime: l.boot.SessionRuntime,
+		sessionID:      sessionID,
+		ownerID:        ownerID,
+		engine:         acquiredEngine,
+		diagLogger:     diagLogger,
+		eventBridge:    eventBridge,
 		close: func() {
-			if primaryLease != nil {
-				defer primaryLease.Release()
-			}
-			_ = registration.CloseWithDrain(context.Background(), func(ctx context.Context) error {
-				return wiring.Engine.DrainQueuedUserMessagesBeforeClose(ctx)
-			})
-			_ = wiring.Close()
-			_ = logger.Close()
+			_ = releaseRuntime(context.Background())
+			_ = diagLogger.Close()
 		},
 	}, nil
 }
@@ -215,12 +237,12 @@ type headlessPromptRuntime struct {
 }
 
 func (r *headlessPromptRuntime) RecordPromptHistory(ctx context.Context, clientRequestID string, prompt string) error {
-	if r == nil || r.history == nil || r.plan == nil || r.plan.engine == nil {
+	if r == nil || r.history == nil || r.plan == nil {
 		return nil
 	}
 	requestID := strings.TrimSpace(clientRequestID)
 	_, _, err := r.history.RecordPromptHistoryEntry(ctx, metadata.PromptHistoryEntry{
-		SessionID: r.plan.engine.SessionID(),
+		SessionID: r.plan.sessionID,
 		SourceID:  requestID,
 		Text:      prompt,
 	})
@@ -228,21 +250,47 @@ func (r *headlessPromptRuntime) RecordPromptHistory(ctx context.Context, clientR
 }
 
 func (r *headlessPromptRuntime) SubmitUserMessage(ctx context.Context, prompt string) (PromptAssistantMessage, error) {
-	assistant, err := r.plan.engine.SubmitUserMessage(ctx, prompt)
+	var content string
+	var sessionName string
+	var err error
+	if r.plan.engine == nil {
+		err = errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("headless session %q has no acquired runtime", r.plan.sessionID))
+	} else {
+		err = r.plan.sessionRuntime.RunOnAcquiredRuntime(ctx, r.plan.sessionID, r.plan.engine, func(runCtx context.Context) error {
+			assistant, submitErr := r.plan.engine.SubmitUserMessage(runCtx, prompt)
+			content = assistant.Content
+			sessionName = r.plan.engine.SessionName()
+			return submitErr
+		})
+	}
+	var dropped uint64
+	if r.plan.eventBridge != nil {
+		dropped = r.plan.eventBridge.Dropped.Load()
+	}
 	return PromptAssistantMessage{
-		SessionID:     r.plan.engine.SessionID(),
-		SessionName:   r.plan.engine.SessionName(),
-		Content:       assistant.Content,
+		SessionID:     r.plan.sessionID,
+		SessionName:   sessionName,
+		Content:       content,
 		Warnings:      append([]string(nil), r.warnings...),
-		DroppedEvents: r.plan.eventBridge.Dropped.Load(),
+		DroppedEvents: dropped,
 	}, err
 }
-func (r *headlessPromptRuntime) Logf(format string, args ...any) { r.plan.logger.Logf(format, args...) }
+func (r *headlessPromptRuntime) Logf(format string, args ...any) {
+	r.plan.diagLogger.Logf(format, args...)
+}
 func (r *headlessPromptRuntime) Close() error {
 	if r == nil || r.plan == nil {
 		return nil
 	}
 	r.plan.Close()
+	return nil
+}
+
+func (r *headlessPromptRuntime) CloseWithFailure() error {
+	if r == nil || r.plan == nil {
+		return nil
+	}
+	r.plan.CloseWithFailure(true)
 	return nil
 }
 

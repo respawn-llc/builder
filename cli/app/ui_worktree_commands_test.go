@@ -16,27 +16,27 @@ import (
 )
 
 type worktreeCommandTestClient struct {
-	listResp        serverapi.WorktreeListResponse
-	listErr         error
-	listCtx         context.Context
-	listRequests    []serverapi.WorktreeListRequest
-	resolveCtx      context.Context
-	resolveResp     serverapi.WorktreeCreateTargetResolveResponse
-	resolveErr      error
-	createCtx       context.Context
-	createResp      serverapi.WorktreeCreateResponse
-	createErr       error
-	deleteCtx       context.Context
-	deleteResp      serverapi.WorktreeDeleteResponse
-	deleteErr       error
-	switchCtx       context.Context
-	switchResp      serverapi.WorktreeSwitchResponse
-	switchErr       error
-	resolveRequests []serverapi.WorktreeCreateTargetResolveRequest
-	createRequests  []serverapi.WorktreeCreateRequest
-	deleteRequests  []serverapi.WorktreeDeleteRequest
-	switchRequests  []serverapi.WorktreeSwitchRequest
-	leaseFailures   map[string]int
+	listResp          serverapi.WorktreeListResponse
+	listErr           error
+	listCtx           context.Context
+	listRequests      []serverapi.WorktreeListRequest
+	resolveCtx        context.Context
+	resolveResp       serverapi.WorktreeCreateTargetResolveResponse
+	resolveErr        error
+	createCtx         context.Context
+	createResp        serverapi.WorktreeCreateResponse
+	createErr         error
+	deleteCtx         context.Context
+	deleteResp        serverapi.WorktreeDeleteResponse
+	deleteErr         error
+	switchCtx         context.Context
+	switchResp        serverapi.WorktreeSwitchResponse
+	switchErr         error
+	resolveRequests   []serverapi.WorktreeCreateTargetResolveRequest
+	createRequests    []serverapi.WorktreeCreateRequest
+	deleteRequests    []serverapi.WorktreeDeleteRequest
+	switchRequests    []serverapi.WorktreeSwitchRequest
+	reconnectFailures map[string]int
 }
 
 func (c *worktreeCommandTestClient) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
@@ -60,8 +60,8 @@ func (c *worktreeCommandTestClient) ResolveWorktreeCreateTarget(ctx context.Cont
 func (c *worktreeCommandTestClient) CreateWorktree(ctx context.Context, req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
 	c.createCtx = ctx
 	c.createRequests = append(c.createRequests, req)
-	if c.consumeLeaseFailure("create", req.ControllerLeaseID) {
-		return serverapi.WorktreeCreateResponse{}, serverapi.ErrInvalidControllerLease
+	if c.consumeReconnectFailure("create") {
+		return serverapi.WorktreeCreateResponse{}, serverapi.ErrRuntimeUnavailable
 	}
 	return c.createResp, c.createErr
 }
@@ -69,8 +69,8 @@ func (c *worktreeCommandTestClient) CreateWorktree(ctx context.Context, req serv
 func (c *worktreeCommandTestClient) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwitchRequest) (serverapi.WorktreeSwitchResponse, error) {
 	c.switchCtx = ctx
 	c.switchRequests = append(c.switchRequests, req)
-	if c.consumeLeaseFailure("switch", req.ControllerLeaseID) {
-		return serverapi.WorktreeSwitchResponse{}, serverapi.ErrInvalidControllerLease
+	if c.consumeReconnectFailure("switch") {
+		return serverapi.WorktreeSwitchResponse{}, serverapi.ErrRuntimeUnavailable
 	}
 	return c.switchResp, c.switchErr
 }
@@ -78,29 +78,27 @@ func (c *worktreeCommandTestClient) SwitchWorktree(ctx context.Context, req serv
 func (c *worktreeCommandTestClient) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResponse, error) {
 	c.deleteCtx = ctx
 	c.deleteRequests = append(c.deleteRequests, req)
-	if c.consumeLeaseFailure("delete", req.ControllerLeaseID) {
-		return serverapi.WorktreeDeleteResponse{}, serverapi.ErrInvalidControllerLease
+	if c.consumeReconnectFailure("delete") {
+		return serverapi.WorktreeDeleteResponse{}, serverapi.ErrRuntimeUnavailable
 	}
 	return c.deleteResp, c.deleteErr
 }
 
-func (c *worktreeCommandTestClient) consumeLeaseFailure(kind string, leaseID string) bool {
-	if c == nil || c.leaseFailures == nil {
+func (c *worktreeCommandTestClient) consumeReconnectFailure(kind string) bool {
+	if c == nil || c.reconnectFailures == nil {
 		return false
 	}
-	key := kind + ":" + strings.TrimSpace(leaseID)
-	remaining := c.leaseFailures[key]
+	remaining := c.reconnectFailures[kind]
 	if remaining <= 0 {
 		return false
 	}
-	c.leaseFailures[key] = remaining - 1
+	c.reconnectFailures[kind] = remaining - 1
 	return true
 }
 
 func newWorktreeTestRuntimeClient(sessionID string) *sessionRuntimeClient {
 	reads := &countingSessionViewClient{view: clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: sessionID}}}
 	runtimeClient := newUIRuntimeClientWithReads(sessionID, reads, sharedclient.NewLoopbackRuntimeControlClient(nil)).(*sessionRuntimeClient)
-	runtimeClient.SetControllerLeaseID("lease-1")
 	return runtimeClient
 }
 
@@ -343,9 +341,6 @@ func TestListWorktreesForCurrentSessionUsesBoundedControlContext(t *testing.T) {
 	}
 	if len(client.listRequests) != 1 {
 		t.Fatalf("expected one list request, got %+v", client.listRequests)
-	}
-	if client.listRequests[0].ControllerLeaseID != "lease-1" {
-		t.Fatalf("controller lease id = %q, want lease-1", client.listRequests[0].ControllerLeaseID)
 	}
 }
 

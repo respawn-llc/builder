@@ -28,7 +28,7 @@ func (e *Engine) lockedRequestShape() (lockedRequestShape, error) {
 	}
 	if hasEnabled && webSearchMode != "" && !locked.HasEnabledTools {
 		result, err := e.store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
-			EnabledTools:    toToolNames(ids),
+			EnabledTools:    toolspec.IDStrings(ids),
 			HasEnabledTools: true,
 			WebSearchMode:   webSearchMode,
 		})
@@ -49,7 +49,7 @@ func (e *Engine) lockedRequestShape() (lockedRequestShape, error) {
 		webSearchMode = strings.TrimSpace(e.cfg.WebSearchMode)
 	}
 	result, err := e.store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
-		EnabledTools:    toToolNames(fallbackIDs),
+		EnabledTools:    toolspec.IDStrings(fallbackIDs),
 		HasEnabledTools: true,
 		WebSearchMode:   webSearchMode,
 	})

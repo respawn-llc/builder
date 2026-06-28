@@ -44,14 +44,10 @@ func EnrichShellEnv(base []string) []string {
 }
 
 func EnrichShellEnvForSession(base []string, sessionID string) []string {
-	return EnrichShellEnvForSessionToken(base, sessionID, "")
+	return EnrichShellEnvForInvocation(base, sessionID, "", "")
 }
 
-func EnrichShellEnvForSessionToken(base []string, sessionID string, shellToken string) []string {
-	return EnrichShellEnvForSessionRunToken(base, sessionID, "", "", shellToken)
-}
-
-func EnrichShellEnvForSessionRunToken(base []string, sessionID string, runID string, stepID string, shellToken string) []string {
+func EnrichShellEnvForInvocation(base []string, sessionID string, runID string, stepID string) []string {
 	env := make(map[string]string, len(base)+len(overrides))
 	order := make([]string, 0, len(base)+len(overrides))
 
@@ -83,23 +79,17 @@ func EnrichShellEnvForSessionRunToken(base []string, sessionID string, runID str
 		}
 		env[sessionenv.SessionIDEnv] = sessionID
 	}
-	if shellToken = strings.TrimSpace(shellToken); shellToken != "" {
-		if _, exists := env[sessionenv.ShellTokenEnv]; !exists {
-			order = append(order, sessionenv.ShellTokenEnv)
-		}
-		env[sessionenv.ShellTokenEnv] = shellToken
-	}
 	if runID = strings.TrimSpace(runID); runID != "" {
-		if _, exists := env[sessionenv.ShellRunIDEnv]; !exists {
-			order = append(order, sessionenv.ShellRunIDEnv)
+		if _, exists := env[sessionenv.RunIDEnv]; !exists {
+			order = append(order, sessionenv.RunIDEnv)
 		}
-		env[sessionenv.ShellRunIDEnv] = runID
+		env[sessionenv.RunIDEnv] = runID
 	}
 	if stepID = strings.TrimSpace(stepID); stepID != "" {
-		if _, exists := env[sessionenv.ShellStepIDEnv]; !exists {
-			order = append(order, sessionenv.ShellStepIDEnv)
+		if _, exists := env[sessionenv.StepIDEnv]; !exists {
+			order = append(order, sessionenv.StepIDEnv)
 		}
-		env[sessionenv.ShellStepIDEnv] = stepID
+		env[sessionenv.StepIDEnv] = stepID
 	}
 
 	if _, exists := env["RIPGREP_CONFIG_PATH"]; !exists {

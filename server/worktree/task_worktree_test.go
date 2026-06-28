@@ -15,7 +15,6 @@ import (
 func TestEnsureTaskWorktreeCreatesShortIDBranchWithoutControllerLease(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
-	env.runtime.requireErr = errors.New("controller lease should not be required")
 
 	resp, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: string(task.ID)})
 	if err != nil {
@@ -32,9 +31,6 @@ func TestEnsureTaskWorktreeCreatesShortIDBranchWithoutControllerLease(t *testing
 	}
 	if resp.Worktree.BranchName != task.ShortID {
 		t.Fatalf("branch name = %q, want task short id %q", resp.Worktree.BranchName, task.ShortID)
-	}
-	if env.runtime.controllerSeen {
-		t.Fatal("task worktree ensure used controller lease path")
 	}
 	if got := runGit(t, env.workspaceRoot, "branch", "--list", task.ShortID); !strings.Contains(got, task.ShortID) {
 		t.Fatalf("branch list = %q, want task branch %q", got, task.ShortID)
@@ -136,10 +132,9 @@ func TestDeleteWorktreeBlocksNonTerminalTaskManagedWorktree(t *testing.T) {
 	}
 
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		ClientRequestID:   "req-delete-task-worktree",
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-		WorktreeID:        created.Worktree.WorktreeID,
+		ClientRequestID: "req-delete-task-worktree",
+		SessionID:       env.session.Meta().SessionID,
+		WorktreeID:      created.Worktree.WorktreeID,
 	})
 	if !errors.Is(err, serverapi.ErrWorktreeBlocked) {
 		t.Fatalf("DeleteWorktree error = %v, want ErrWorktreeBlocked", err)
@@ -162,10 +157,9 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 	}
 
 	_, err = env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
-		ClientRequestID:   "req-delete-terminal-task-worktree",
-		SessionID:         env.session.Meta().SessionID,
-		ControllerLeaseID: env.leaseID,
-		WorktreeID:        created.Worktree.WorktreeID,
+		ClientRequestID: "req-delete-terminal-task-worktree",
+		SessionID:       env.session.Meta().SessionID,
+		WorktreeID:      created.Worktree.WorktreeID,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree terminal task worktree: %v", err)

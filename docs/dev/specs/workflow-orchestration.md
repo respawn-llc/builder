@@ -91,7 +91,7 @@
 - `RunPromptService.RunPrompt` final text is not workflow completion authority.
 - Existing user goal state is not reused as workflow autonomy state.
 - Workflow task sessions reject `/goal`; the workflow node/run is the task objective driver.
-- If terminal workflow completion commits before accepted limited-control steering is drained, the queued steering resolves with a visible failure and is not applied to the completed run.
+- If terminal workflow completion commits before accepted client steering is drained, the queued steering resolves with a visible failure and is not applied to the completed run.
 - Task comment bodies are not automatically injected into agent context. When a task has visible comments, workflow-mode instructions include the visible comment count and a `kent task comment list <task>` pull command. Kent re-queries the visible comment count each time the workflow instructions are appended without mutating previously persisted model-visible prompt items.
 
 ## Questions And Approvals
@@ -147,12 +147,12 @@
 
 ## Scheduler And Recovery
 
-- Scheduler has durable inputs in SQLite, but pending scheduler work and active runtime ownership are live memory, not durable run states.
+- Scheduler has durable inputs in SQLite, but pending scheduler work and active runtime execution are live memory, not durable run states.
 - Runnable work derives from active executable placements with approved automation intent, no terminal run outcome, and no task cancellation.
 - Pending-work ordering is scheduler memory.
-- Active execution derives from live runtime registry/scheduler ownership.
+- Active execution derives from the live runtime registry and scheduler.
 - Concurrency limit is global only and configured in `[workflow].concurrency`.
-- Scheduler does not own runtime leases. Runtime leases remain execution-control state, not scheduling authority.
+- Scheduler does not control runtime execution. Runtime execution is ownerless registry lifecycle state, not scheduling authority.
 - Startup rebuilds runnable work from durable state.
 - Completed runs and pending approvals remain as-is.
 - Waiting-for-question remains only if the pending ask can rehydrate.
@@ -172,7 +172,8 @@
 - Task worktree branch name is the task short ID.
 - Worktree creation reuses existing worktree branch/root collision handling.
 - Worktree deletion/retargeting treats non-terminal tasks referencing a managed worktree as blockers.
-- Workflow worktree creation uses lower-level primitives and does not require an interactive session controller lease.
+- Worktree deletion blocks if another session targeting the worktree has an active run, and holds a run-exclusion on all targeting sessions across the `git` removal so no new run can start mid-deletion; a run submitted during the window is rejected with `ErrSessionWorktreeDeleting` until the exclusion releases.
+- Workflow worktree creation uses lower-level primitives directly.
 
 ## Project Keys And Task IDs
 
@@ -219,7 +220,6 @@
 - Direct duplicated `tasks.project_id` and `tasks.workflow_id` columns are removed with a hard cutover.
 - Project default pointers use `projects.default_project_workflow_link_id` and `projects.primary_workspace_id`, each constrained to rows owned by the same project.
 - Workspace/worktree labels, availability, primary/default status, and main-worktree status are read-model facts derived from canonical roots/pointers.
-- Runtime leases persist durable controller-token facts only: `id`, `session_id`, and `created_at_unix_ms`.
 - Workflow invalidation events are process-local live signals, not durable/replayable sequence state. SQLite does not store `workflow_events`.
 - GUI clients refetch read models after subscription ACK/reconnect/error and treat live events as invalidation hints.
 - There is no product archive lifecycle for workflows or nodes.
@@ -232,7 +232,7 @@
 
 ## Schema Minimization Decisions
 
-- Approved cutover removals include `workflow_events`, `project_workflow_links.unlinked_at_unix_ms`, duplicated task project/workflow columns, workflow graph opaque metadata, `runtime_leases.request_id`, workspace/worktree display labels, `task_comments.source_run_id`, comment soft-delete, and redundant indexes when equivalent unique/leading-key indexes remain.
+- Approved cutover removals include `workflow_events`, `project_workflow_links.unlinked_at_unix_ms`, duplicated task project/workflow columns, workflow graph opaque metadata, the `runtime_leases` table, workspace/worktree display labels, `task_comments.source_run_id`, comment soft-delete, and redundant indexes when equivalent unique/leading-key indexes remain.
 - Keep `tasks.source_url` as a structured task field.
 - Keep `tasks.short_id` as stored durable product data.
 - Task sequence allocation is transactional behavior, not product state stored as `projects.next_task_seq`.

@@ -216,7 +216,7 @@ func TestRemoteDeleteWorktreeCarriesDeleteBranchFlagAndResponseFields(t *testing
 		if !params.DeleteBranch {
 			t.Fatalf("expected delete_branch=true in params, got %+v", params)
 		}
-		if params.WorktreeID != "wt-1" || params.ControllerLeaseID != "lease-1" {
+		if params.WorktreeID != "wt-1" {
 			t.Fatalf("unexpected delete params: %+v", params)
 		}
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeDeleteResponse{
@@ -236,11 +236,10 @@ func TestRemoteDeleteWorktreeCarriesDeleteBranchFlagAndResponseFields(t *testing
 	defer func() { _ = remote.Close() }()
 
 	resp, err := remote.DeleteWorktree(context.Background(), serverapi.WorktreeDeleteRequest{
-		ClientRequestID:   "req-1",
-		SessionID:         "session-1",
-		ControllerLeaseID: "lease-1",
-		WorktreeID:        "wt-1",
-		DeleteBranch:      true,
+		ClientRequestID: "req-1",
+		SessionID:       "session-1",
+		WorktreeID:      "wt-1",
+		DeleteBranch:    true,
 	})
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)

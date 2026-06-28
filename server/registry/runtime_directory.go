@@ -2,12 +2,14 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
 	"core/server/runtime"
 	askquestion "core/server/tools"
+	"core/shared/serverapi"
 )
 
 type runtimeDirectory struct {
@@ -20,11 +22,19 @@ type runtimeEntry struct {
 	mu              sync.Mutex
 	cond            *sync.Cond
 	generation      uint64
+	built           bool
+	buildErr        error
+	ready           chan struct{}
+	closed          chan struct{}
+	closedOnce      sync.Once
+	ownerRefs       int
+	ownerIDs        map[string]struct{}
 	closing         bool
 	closeDraining   bool
 	inFlight        int
 	engine          *runtime.Engine
 	rebind          func(string) error
+	teardown        func()
 	sessionActivity *sessionActivityBroker
 	promptActivity  *promptActivityBroker
 	pendingPrompts  *pendingPromptStore
@@ -34,11 +44,12 @@ func newRuntimeDirectory() *runtimeDirectory {
 	return &runtimeDirectory{entries: make(map[string]*runtimeEntry)}
 }
 
-func newRuntimeEntry(engine *runtime.Engine, generation uint64, rebind func(string) error) *runtimeEntry {
+func newBuildingRuntimeEntry(generation uint64) *runtimeEntry {
 	entry := &runtimeEntry{
 		generation:      generation,
-		engine:          engine,
-		rebind:          rebind,
+		ready:           make(chan struct{}),
+		closed:          make(chan struct{}),
+		ownerIDs:        make(map[string]struct{}),
 		sessionActivity: newSessionActivityBroker(),
 		promptActivity:  newPromptActivityBroker(),
 		pendingPrompts:  newPendingPromptStore(),
@@ -47,91 +58,190 @@ func newRuntimeEntry(engine *runtime.Engine, generation uint64, rebind func(stri
 	return entry
 }
 
-func (d *runtimeDirectory) Register(sessionID string, engine *runtime.Engine, rebind func(string) error, beforeReplace func(*runtimeEntry)) *runtimeEntry {
-	if d == nil || engine == nil {
+func (e *runtimeEntry) addOwner(ownerID string) int {
+	if e == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ownerRefs++
+	if trimmed := strings.TrimSpace(ownerID); trimmed != "" {
+		if e.ownerIDs == nil {
+			e.ownerIDs = make(map[string]struct{})
+		}
+		e.ownerIDs[trimmed] = struct{}{}
+	}
+	return e.ownerRefs
+}
+
+func (e *runtimeEntry) dropOwner(ownerID string) int {
+	if e == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if trimmed := strings.TrimSpace(ownerID); trimmed != "" {
+		if _, ok := e.ownerIDs[trimmed]; !ok {
+			return e.ownerRefs
+		}
+		delete(e.ownerIDs, trimmed)
+	} else if e.ownerRefs <= len(e.ownerIDs) {
+		return e.ownerRefs
+	}
+	if e.ownerRefs > 0 {
+		e.ownerRefs--
+	}
+	return e.ownerRefs
+}
+
+func (e *runtimeEntry) ownerCount() int {
+	if e == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.ownerRefs
+}
+
+func (e *runtimeEntry) signalClosed() {
+	if e == nil || e.closed == nil {
+		return
+	}
+	e.closedOnce.Do(func() {
+		close(e.closed)
+	})
+}
+
+func (e *runtimeEntry) awaitClosed(ctx context.Context) error {
+	if e == nil || e.closed == nil {
 		return nil
 	}
-	id := strings.TrimSpace(sessionID)
-	if id == "" {
+	select {
+	case <-e.closed:
 		return nil
-	}
-	for {
-		d.mu.Lock()
-		previous := d.entries[id]
-		if previous == nil {
-			d.generation++
-			entry := newRuntimeEntry(engine, d.generation, rebind)
-			d.entries[id] = entry
-			d.mu.Unlock()
-			return nil
-		}
-		previous.markClosing()
-		d.mu.Unlock()
-
-		previous.waitForGuards()
-
-		d.mu.Lock()
-		if d.entries[id] != previous {
-			d.mu.Unlock()
-			continue
-		}
-		ref, ok := previous.beginReplacement()
-		if !ok {
-			d.mu.Unlock()
-			continue
-		}
-		d.mu.Unlock()
-		if beforeReplace != nil {
-			beforeReplace(previous)
-		}
-		d.mu.Lock()
-		if d.entries[id] != previous {
-			d.mu.Unlock()
-			ref.Release()
-			continue
-		}
-		d.generation++
-		entry := newRuntimeEntry(engine, d.generation, rebind)
-		d.entries[id] = entry
-		d.mu.Unlock()
-		ref.Release()
-		return previous
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
-func (d *runtimeDirectory) Unregister(sessionID string, engine *runtime.Engine) (string, *runtimeEntry) {
-	if d == nil {
-		return "", nil
+func (e *runtimeEntry) resolveBuild(engine *runtime.Engine, rebind func(string) error, teardown func(), buildErr error) {
+	if e == nil {
+		return
 	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.resolveBuildLocked(engine, rebind, teardown, buildErr)
+}
+
+func (e *runtimeEntry) resolveBuildIfOpen(engine *runtime.Engine, rebind func(string) error, teardown func(), buildErr error) bool {
+	if e == nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closing || e.closeDraining {
+		return false
+	}
+	return e.resolveBuildLocked(engine, rebind, teardown, buildErr)
+}
+
+func (e *runtimeEntry) resolveBuildLocked(engine *runtime.Engine, rebind func(string) error, teardown func(), buildErr error) bool {
+	if e.built || e.buildErr != nil {
+		return false
+	}
+	if buildErr == nil && engine == nil {
+		buildErr = fmt.Errorf("runtime build produced no engine")
+	}
+	e.engine = engine
+	e.rebind = rebind
+	e.teardown = teardown
+	e.buildErr = buildErr
+	e.built = buildErr == nil
+	if e.built && e.ownerRefs <= 0 {
+		e.ownerRefs = 1
+	}
+	close(e.ready)
+	e.cond.Broadcast()
+	return true
+}
+
+func (e *runtimeEntry) engineRef() *runtime.Engine {
+	if e == nil {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.engine
+}
+
+func (e *runtimeEntry) rebindWorkdir(workdir string) error {
+	trimmedWorkdir := strings.TrimSpace(workdir)
+	if trimmedWorkdir == "" {
+		return fmt.Errorf("runtime workdir is required")
+	}
+	e.mu.Lock()
+	rebind := e.rebind
+	engine := e.engine
+	e.mu.Unlock()
+	if rebind != nil {
+		return rebind(trimmedWorkdir)
+	}
+	if engine != nil {
+		engine.SetTranscriptWorkingDir(trimmedWorkdir)
+	}
+	return nil
+}
+
+func (e *runtimeEntry) awaitReady(ctx context.Context) (*runtime.Engine, error) {
+	if e == nil {
+		return nil, fmt.Errorf("runtime entry is unavailable")
+	}
+	select {
+	case <-e.ready:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.buildErr != nil {
+		return nil, e.buildErr
+	}
+	return e.engine, nil
+}
+
+func (d *runtimeDirectory) acquireOrCreateBuilding(sessionID string) (*runtimeEntry, bool, bool) {
 	id := strings.TrimSpace(sessionID)
-	if id == "" {
-		return "", nil
+	if d == nil || id == "" {
+		return nil, false, false
 	}
-	for {
-		d.mu.Lock()
-		entry := d.entries[id]
-		if entry == nil || (engine != nil && entry.engine != engine) {
-			d.mu.Unlock()
-			return "", nil
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if entry := d.entries[id]; entry != nil {
+		if entry.isClosing() {
+			return entry, false, true
 		}
-		entry.markClosing()
-		d.mu.Unlock()
-
-		entry.waitForGuards()
-
-		d.mu.Lock()
-		if d.entries[id] != entry {
-			d.mu.Unlock()
-			return "", nil
-		}
-		if entry.hasInFlight() {
-			d.mu.Unlock()
-			continue
-		}
-		delete(d.entries, id)
-		d.mu.Unlock()
-		return id, entry
+		return entry, true, false
 	}
+	d.generation++
+	entry := newBuildingRuntimeEntry(d.generation)
+	d.entries[id] = entry
+	return entry, false, false
+}
+
+func (d *runtimeDirectory) installBuildingIfAbsent(sessionID string) (*runtimeEntry, *runtimeEntry) {
+	id := strings.TrimSpace(sessionID)
+	if d == nil || id == "" {
+		return nil, nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if existing := d.entries[id]; existing != nil {
+		return nil, existing
+	}
+	d.generation++
+	entry := newBuildingRuntimeEntry(d.generation)
+	d.entries[id] = entry
+	return entry, nil
 }
 
 func (d *runtimeDirectory) BeginClose(sessionID string, engine *runtime.Engine) (string, *runtimeEntry, *runtimeCloseDrainRef) {
@@ -181,7 +291,7 @@ func (d *runtimeDirectory) Resolve(sessionID string) *runtime.Engine {
 	if entry == nil {
 		return nil
 	}
-	return entry.engine
+	return entry.engineRef()
 }
 
 func (d *runtimeDirectory) Active(sessionID string) bool {
@@ -225,11 +335,39 @@ func (d *runtimeDirectory) BeginGuard(ctx context.Context, sessionID string) (*r
 	}
 	d.mu.RLock()
 	entry := d.entries[id]
+	d.mu.RUnlock()
 	if entry == nil {
-		d.mu.RUnlock()
-		return nil, fmt.Errorf("runtime %q is unavailable", id)
+		return nil, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("runtime %q is unavailable", id))
 	}
-	guard, err := entry.beginGuard(ctx, id)
+	if _, err := entry.awaitReady(ctx); err != nil {
+		return nil, err
+	}
+	return entry.beginGuard(ctx, id)
+}
+
+func (d *runtimeDirectory) BeginPromptResponseGuard(ctx context.Context, sessionID string, requestID string) (*runtimeGuard, error) {
+	if d == nil {
+		return nil, fmt.Errorf("runtime directory is required")
+	}
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return nil, fmt.Errorf("runtime session id is required")
+	}
+	d.mu.RLock()
+	entry := d.entries[id]
+	d.mu.RUnlock()
+	if entry == nil {
+		return nil, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("runtime %q is unavailable", id))
+	}
+	if _, err := entry.awaitReady(ctx); err != nil {
+		return nil, err
+	}
+	d.mu.RLock()
+	if d.entries[id] != entry {
+		d.mu.RUnlock()
+		return nil, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("runtime %q is unavailable", id))
+	}
+	guard, err := entry.beginPromptResponseGuard(ctx, id, requestID)
 	d.mu.RUnlock()
 	return guard, err
 }
@@ -241,7 +379,23 @@ func (e *runtimeEntry) beginGuard(ctx context.Context, sessionID string) (*runti
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closing {
-		return nil, fmt.Errorf("runtime entry is closing")
+		return nil, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("runtime entry is closing"))
+	}
+	e.inFlight++
+	return &runtimeGuard{entry: e, engine: e.engine, sessionID: strings.TrimSpace(sessionID), generation: e.generation}, nil
+}
+
+func (e *runtimeEntry) beginPromptResponseGuard(ctx context.Context, sessionID string, requestID string) (*runtimeGuard, error) {
+	if e == nil {
+		return nil, fmt.Errorf("runtime entry is unavailable")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closing && !e.pendingPrompts.Has(requestID) {
+		return nil, fmt.Errorf("prompt %q not found: %w", strings.TrimSpace(requestID), serverapi.ErrPromptNotFound)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	e.inFlight++
 	return &runtimeGuard{entry: e, engine: e.engine, sessionID: strings.TrimSpace(sessionID), generation: e.generation}, nil
@@ -263,18 +417,13 @@ func (e *runtimeEntry) beginCloseDrain() (*runtimeCloseDrainRef, bool) {
 	return &runtimeCloseDrainRef{entry: e}, true
 }
 
-func (e *runtimeEntry) beginReplacement() (*runtimeReplacementRef, bool) {
+func (e *runtimeEntry) isClosing() bool {
 	if e == nil {
-		return nil, false
+		return false
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.inFlight > 0 {
-		return nil, false
-	}
-	e.inFlight++
-	e.cond.Broadcast()
-	return &runtimeReplacementRef{entry: e}, true
+	return e.closing
 }
 
 func (e *runtimeEntry) closeState() (bool, bool) {
@@ -309,16 +458,6 @@ func (e *runtimeEntry) waitForGuards() {
 	e.mu.Unlock()
 }
 
-func (e *runtimeEntry) hasInFlight() bool {
-	if e == nil {
-		return false
-	}
-	e.mu.Lock()
-	hasInFlight := e.inFlight > 0
-	e.mu.Unlock()
-	return hasInFlight
-}
-
 func (e *runtimeEntry) waitForGuardsExceptCloseDrain() {
 	if e == nil {
 		return
@@ -334,31 +473,6 @@ type runtimeCloseDrainRef struct {
 	entry     *runtimeEntry
 	releaseMu sync.Mutex
 	released  bool
-}
-
-type runtimeReplacementRef struct {
-	entry     *runtimeEntry
-	releaseMu sync.Mutex
-	released  bool
-}
-
-func (r *runtimeReplacementRef) Release() {
-	if r == nil || r.entry == nil {
-		return
-	}
-	r.releaseMu.Lock()
-	if r.released {
-		r.releaseMu.Unlock()
-		return
-	}
-	r.released = true
-	r.releaseMu.Unlock()
-	r.entry.mu.Lock()
-	if r.entry.inFlight > 0 {
-		r.entry.inFlight--
-	}
-	r.entry.cond.Broadcast()
-	r.entry.mu.Unlock()
 }
 
 func (r *runtimeCloseDrainRef) WaitForGuards() {
@@ -412,20 +526,10 @@ func (g *runtimeGuard) Generation() uint64 {
 }
 
 func (g *runtimeGuard) Rebind(workdir string) error {
-	if g == nil {
+	if g == nil || g.entry == nil {
 		return fmt.Errorf("runtime guard is unavailable")
 	}
-	trimmedWorkdir := strings.TrimSpace(workdir)
-	if trimmedWorkdir == "" {
-		return fmt.Errorf("runtime workdir is required")
-	}
-	if g.entry != nil && g.entry.rebind != nil {
-		return g.entry.rebind(trimmedWorkdir)
-	}
-	if g.engine != nil {
-		g.engine.SetTranscriptWorkingDir(trimmedWorkdir)
-	}
-	return nil
+	return g.entry.rebindWorkdir(workdir)
 }
 
 func (g *runtimeGuard) SubmitPromptResponse(resp askquestion.AskQuestionResponse, err error) error {

@@ -3033,34 +3033,6 @@ FROM sessions
 WHERE worktree_id = sqlc.arg(worktree_id)
 ORDER BY updated_at_unix_ms DESC, rowid DESC;
 
--- name: InsertRuntimeLease :exec
-INSERT INTO runtime_leases (
-    id,
-    session_id,
-    created_at_unix_ms
-) VALUES (
-    sqlc.arg(id),
-    sqlc.arg(session_id),
-    sqlc.arg(created_at_unix_ms)
-);
-
--- name: GetRuntimeLeaseByID :one
-SELECT
-    id,
-    session_id,
-    created_at_unix_ms,
-    released_at_unix_ms
-FROM runtime_leases
-WHERE id = sqlc.arg(lease_id)
-LIMIT 1;
-
--- name: ReleaseRuntimeLease :exec
-UPDATE runtime_leases
-SET released_at_unix_ms = sqlc.arg(released_at_unix_ms)
-WHERE id = sqlc.arg(lease_id)
-  AND session_id = sqlc.arg(session_id)
-  AND released_at_unix_ms = 0;
-
 -- name: InsertSessionPromptHistoryEntry :execrows
 INSERT INTO session_prompt_history_entries (
     session_id,

@@ -41,27 +41,17 @@ func enqueueRuntimeConnectionStateChange(ch chan runtimeConnectionStateChangedMs
 	if ch == nil {
 		return
 	}
-	msg := runtimeConnectionStateChangedMsg{err: err}
-	select {
-	case ch <- msg:
-		return
-	default:
-	}
-	select {
-	case <-ch:
-	default:
-	}
-	select {
-	case ch <- msg:
-	default:
-	}
+	coalesceLatest(ch, runtimeConnectionStateChangedMsg{err: err})
 }
 
-func enqueueRuntimeLeaseRecoveryWarning(ch chan runtimeLeaseRecoveryWarningMsg, text string, visibility clientui.EntryVisibility) {
+func enqueueRuntimeReconnectWarning(ch chan runtimeReconnectWarningMsg, text string, visibility clientui.EntryVisibility) {
 	if ch == nil || strings.TrimSpace(text) == "" {
 		return
 	}
-	msg := runtimeLeaseRecoveryWarningMsg{text: strings.TrimSpace(text), visibility: visibility}
+	coalesceLatest(ch, runtimeReconnectWarningMsg{text: strings.TrimSpace(text), visibility: visibility})
+}
+
+func coalesceLatest[T any](ch chan T, msg T) {
 	select {
 	case ch <- msg:
 		return

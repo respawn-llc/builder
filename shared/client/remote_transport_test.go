@@ -399,13 +399,13 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 				continue
 			}
 			switch req.Method {
-			case protocol.MethodRuntimeSubmitUserMessage:
+			case protocol.MethodRuntimeSubmitUserTurn:
 				select {
 				case submitStarted <- struct{}{}:
 				default:
 				}
 				<-releaseSubmit
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserMessageResponse{Message: "done"}))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.RuntimeSubmitUserTurnResponse{Message: "done"}))); err != nil {
 					reportHandlerError(handlerErrs, "send submit response: %w", err)
 				}
 				return
@@ -434,7 +434,7 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 
 	submitDone := make(chan error, 1)
 	go func() {
-		_, submitErr := remote.SubmitUserMessage(context.Background(), serverapi.RuntimeSubmitUserMessageRequest{ClientRequestID: "submit-1", SessionID: "session-1", ControllerLeaseID: "lease-1", Text: "run"})
+		_, submitErr := remote.SubmitUserTurn(context.Background(), serverapi.RuntimeSubmitUserTurnRequest{ClientRequestID: "submit-1", SessionID: "session-1", Text: "run"})
 		submitDone <- submitErr
 	}()
 
@@ -448,7 +448,7 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 
 	interruptCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	if err := remote.Interrupt(interruptCtx, serverapi.RuntimeInterruptRequest{ClientRequestID: "interrupt-1", SessionID: "session-1", ControllerLeaseID: "lease-1"}); err != nil {
+	if err := remote.Interrupt(interruptCtx, serverapi.RuntimeInterruptRequest{ClientRequestID: "interrupt-1", SessionID: "session-1"}); err != nil {
 		t.Fatalf("Interrupt: %v", err)
 	}
 	select {

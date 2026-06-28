@@ -39,16 +39,14 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		return nil, errors.New("server is required")
 	}
 	clients := source.RuntimeAttachmentClients()
-	lease, leaseManager, err := activateSharedRuntime(ctx, clients, plan)
+	reactivator, ownerID, err := activateSharedRuntime(ctx, clients, plan)
 	if err != nil {
 		return nil, err
 	}
 	activities, err := runtimeattach.SubscribeActivities(ctx, runtimeattach.ActivityRequest{
 		SessionID:       plan.SessionID,
+		OwnerID:         ownerID,
 		Runtime:         clients.SessionRuntime,
-		LeaseID:         lease.ID,
-		Mode:            lease.Mode,
-		ReadOnly:        lease.ReadOnly,
 		SessionActivity: clients.SessionActivity,
 		PromptActivity:  clients.PromptActivity,
 	})
@@ -58,25 +56,19 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 	logger := &runLogger{}
 	_ = diagnosticWriter
 	logger.Logf("%s", startLogLine)
-	wiring, stopRuntimeEvents, stopAskEvents := prepareSharedRuntimeWiring(ctx, clients, plan, activities, lease, leaseManager, logger)
+	wiring, stopRuntimeEvents, stopAskEvents := prepareSharedRuntimeWiring(ctx, clients, plan, activities, reactivator, logger)
 	return &runtimeLaunchPlan{
-		Logger:            logger,
-		Wiring:            wiring,
-		ControllerLeaseID: lease.ID,
-		ReadOnly:          lease.ReadOnly,
-		AccessMode:        lease.Mode,
-		controllerLease:   leaseManager,
+		Logger: logger,
+		Wiring: wiring,
 		close: func() {
 			stopAskEvents()
 			stopRuntimeEvents()
-			if lease.Mode == serverapi.SessionRuntimeAttachModeController {
-				runtimeattach.Release(clients.SessionRuntime, plan.SessionID, leaseManager.Value())
-			}
+			runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
 		},
 	}, nil
 }
 
-func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan) (runtimeattach.Lease, *controllerLeaseManager, error) {
+func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan) (*runtimeReactivator, string, error) {
 	lease, err := runtimeattach.Activate(ctx, clients.SessionRuntime, runtimeattach.Request{
 		SessionID:      plan.SessionID,
 		ActiveSettings: plan.ActiveSettings,
@@ -84,21 +76,17 @@ func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients
 		Source:         plan.Source,
 	})
 	if err != nil {
-		return runtimeattach.Lease{}, nil, err
+		return nil, "", err
 	}
-	if lease.Mode != serverapi.SessionRuntimeAttachModeController {
-		return lease, nil, nil
-	}
-	leaseManager := newControllerLeaseManager(lease.ID)
-	leaseManager.SetRecoverFunc(lease.Recover)
-	return lease, leaseManager, nil
+	reactivator := newRuntimeReactivator()
+	reactivator.SetReactivateFunc(lease.Reactivate)
+	return reactivator, lease.OwnerID, nil
 }
 
-func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan, activities runtimeattach.Activities, lease runtimeattach.Lease, leaseManager *controllerLeaseManager, logger *runLogger) (*runtimeWiring, func(), func()) {
+func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan, activities runtimeattach.Activities, reactivator *runtimeReactivator, logger *runLogger) (*runtimeWiring, func(), func()) {
 	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls).(*sessionRuntimeClient)
-	runtimeClient.SetAccessMode(lease.Mode, lease.AllowedOperations)
-	if leaseManager != nil {
-		runtimeClient.SetControllerLeaseManager(leaseManager)
+	if reactivator != nil {
+		runtimeClient.SetRuntimeReactivator(reactivator)
 	}
 	runtimeClient.SetTranscriptDiagnosticsEnabled(transcriptdiag.Enabled(plan.ActiveSettings.Debug, os.Getenv))
 	runtimeEvents, stopRuntimeEvents := startSessionActivityEvents(ctx, activities.Session, func(ctx context.Context, afterSequence uint64) (serverapi.SessionActivitySubscription, error) {
@@ -119,7 +107,7 @@ func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentCl
 	if activities.Prompt != nil {
 		askEvents, stopAskEvents = startPendingPromptEvents(ctx, activities.Prompt, func(ctx context.Context, afterSequence uint64) (serverapi.PromptActivitySubscription, error) {
 			return clients.PromptActivity.SubscribePromptActivity(ctx, serverapi.PromptActivitySubscribeRequest{SessionID: plan.SessionID, AfterSequence: afterSequence})
-		}, clients.PromptControl, leaseManager)
+		}, clients.PromptControl)
 	}
 	wiring := &runtimeWiring{
 		runtimeEvents:         runtimeEvents,

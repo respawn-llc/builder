@@ -1,4 +1,4 @@
-package runprompt
+package runlog
 
 import (
 	"errors"
@@ -157,7 +157,7 @@ func FormatRuntimeEvent(evt runtime.Event) string {
 			}
 			return line
 		}
-	case runtime.EventInFlightClearFailed:
+	case runtime.EventInFlightClearFailed, runtime.EventPromptHistoryPersistFailed:
 		if strings.TrimSpace(evt.Error) != "" {
 			return fmt.Sprintf("runtime.event kind=%s step_id=%s err=%q", evt.Kind, evt.StepID, evt.Error)
 		}

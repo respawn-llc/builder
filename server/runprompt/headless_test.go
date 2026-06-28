@@ -15,11 +15,12 @@ import (
 
 	"core/server/auth"
 	"core/server/launch"
-	"core/server/primaryrun"
 	"core/server/registry"
 	"core/server/requestmemo"
+	"core/server/runlog"
 	"core/server/session"
 	"core/server/sessionlaunch"
+	"core/server/sessionruntime"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -61,6 +62,10 @@ func newTestHeadlessSessionLaunch(cfg config.App, containerDir string, authManag
 	}, registry.NewSessionStoreRegistry()).WithAuthStateReader(authManager)
 }
 
+func newTestHeadlessSessionRuntime(root string, authManager *auth.Manager, runtimes *registry.RuntimeRegistry) *sessionruntime.Service {
+	return sessionruntime.NewService(root, nil, authManager, nil, nil, nil, runtimes, nil)
+}
+
 func TestHeadlessRuntimeWorkdirUsesInheritedWorktreeReminderCWD(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace", "/tmp/workspace")
 	if err != nil {
@@ -97,32 +102,6 @@ func TestHeadlessRuntimeWorkdirFallsBackToInheritedWorktreePath(t *testing.T) {
 	got := headlessRuntimeWorkdir(launch.SessionPlan{Store: store, WorkspaceRoot: "/tmp/workspace"})
 	if got != "/tmp/worktree" {
 		t.Fatalf("headless runtime workdir = %q, want /tmp/worktree", got)
-	}
-}
-
-func TestGuardingPromptServiceRejectsConcurrentSelectedSessionRun(t *testing.T) {
-	release := make(chan struct{})
-	inner := &stubRunPromptService{run: func(_ context.Context, req serverapi.RunPromptRequest, _ serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-		<-release
-		return serverapi.RunPromptResponse{SessionID: req.SelectedSessionID, Result: "ok"}, nil
-	}}
-	gate := newTestPrimaryRunGate()
-	service := primaryrun.NewGuardingPromptService(gate, inner)
-
-	firstDone := make(chan error, 1)
-	go func() {
-		_, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-1", SelectedSessionID: "session-1", Prompt: "hello"}, nil)
-		firstDone <- err
-	}()
-
-	gate.waitForAcquire(t, 1)
-	_, err := service.RunPrompt(context.Background(), serverapi.RunPromptRequest{ClientRequestID: "req-2", SelectedSessionID: "session-1", Prompt: "different"}, nil)
-	if !errors.Is(err, primaryrun.ErrActivePrimaryRun) {
-		t.Fatalf("second RunPrompt error = %v, want active primary run", err)
-	}
-	close(release)
-	if err := <-firstDone; err != nil {
-		t.Fatalf("first RunPrompt error: %v", err)
 	}
 }
 
@@ -215,9 +194,12 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 			OpenAIBaseURL: "http://wrong.invalid",
 		},
 	}
+	runtimes := registry.NewRuntimeRegistry()
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch: newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
-		AuthManager:   authManager,
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
+		AuthManager:     authManager,
+		RuntimeRegistry: runtimes,
+		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
 	})
 
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
@@ -317,6 +299,7 @@ func TestLoopbackRunPromptClientUnregistersRuntimeAfterCompletion(t *testing.T) 
 		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
 		AuthManager:     authManager,
 		RuntimeRegistry: runtimes,
+		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
 	})
 
 	done := make(chan error, 1)
@@ -398,9 +381,12 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	cfg.Settings.Model = "base-model"
 	cfg.Settings.OpenAIBaseURL = server.URL
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolPatch: true}
+	runtimes := registry.NewRuntimeRegistry()
 	client := NewLoopbackRunPromptClient(HeadlessBootstrap{
-		SessionLaunch: newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
-		AuthManager:   authManager,
+		SessionLaunch:   newTestHeadlessSessionLaunch(cfg, containerDir, authManager),
+		AuthManager:     authManager,
+		RuntimeRegistry: runtimes,
+		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
 	})
 
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
@@ -418,7 +404,7 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	if response.Result != "locked response" {
 		t.Fatalf("result = %q, want locked response", response.Result)
 	}
-	runLog, err := os.ReadFile(filepath.Join(store.Dir(), RunLogFileName))
+	runLog, err := os.ReadFile(filepath.Join(store.Dir(), runlog.RunLogFileName))
 	if err != nil {
 		t.Fatalf("read run log: %v", err)
 	}
@@ -444,44 +430,4 @@ func TestHeadlessRunPromptOverridesRespectLockedModelContract(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for provider request payload")
 	}
-}
-
-type testPrimaryRunGate struct {
-	mu           sync.Mutex
-	active       map[string]bool
-	acquireCount int
-}
-
-func newTestPrimaryRunGate() *testPrimaryRunGate {
-	return &testPrimaryRunGate{active: map[string]bool{}}
-}
-
-func (g *testPrimaryRunGate) AcquirePrimaryRun(sessionID string) (primaryrun.Lease, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.acquireCount++
-	if g.active[sessionID] {
-		return nil, primaryrun.ErrActivePrimaryRun
-	}
-	g.active[sessionID] = true
-	return primaryrun.LeaseFunc(func() {
-		g.mu.Lock()
-		delete(g.active, sessionID)
-		g.mu.Unlock()
-	}), nil
-}
-
-func (g *testPrimaryRunGate) waitForAcquire(t *testing.T, want int) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		g.mu.Lock()
-		got := g.acquireCount
-		g.mu.Unlock()
-		if got >= want {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("timed out waiting for %d primary run acquires", want)
 }

@@ -31,3 +31,19 @@ func TestLookupSessionIDNilLookup(t *testing.T) {
 		t.Fatalf("LookupSessionID(nil) = (%q, %t), want empty false", got, ok)
 	}
 }
+
+func TestLookupRunStepID(t *testing.T) {
+	runID, stepID := LookupRunStepID(func(key string) (string, bool) {
+		switch key {
+		case RunIDEnv:
+			return " run-1 ", true
+		case StepIDEnv:
+			return " step-1 ", true
+		default:
+			return "", false
+		}
+	})
+	if runID != "run-1" || stepID != "step-1" {
+		t.Fatalf("LookupRunStepID = (%q, %q), want run-1 step-1", runID, stepID)
+	}
+}

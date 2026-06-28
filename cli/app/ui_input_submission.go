@@ -9,7 +9,6 @@ import (
 	"core/cli/app/internal/runtimeattach"
 	"core/cli/tui"
 	"core/shared/clientui"
-	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -21,7 +20,7 @@ const (
 	preSubmitQueueFront
 )
 
-func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string, queuePosition preSubmitQueuePosition, queuedID string, promptHistoryRecorded bool) tea.Cmd {
+func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
 	m := c.model
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
 		return disconnectCmd
@@ -48,10 +47,7 @@ func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string
 	if isUserShell {
 		return tea.Batch(c.submitUserShellCmd(text, command), m.reconcileSpinnerTicking(false))
 	}
-	if m.hasRuntimeClient() {
-		return tea.Batch(c.submitCmd(text, queuedID, promptHistoryRecorded), m.reconcileSpinnerTicking(false))
-	}
-	return tea.Batch(c.submitCmd(text, queuedID, promptHistoryRecorded), m.reconcileSpinnerTicking(false))
+	return tea.Batch(c.submitCmd(text, queuedID), m.reconcileSpinnerTicking(false))
 }
 
 func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID(text string, queuePosition preSubmitQueuePosition, queuedID string) tea.Cmd {
@@ -59,15 +55,14 @@ func (c uiInputController) startSubmissionWithPromptHistoryAndQueuePositionAndID
 	if blocked, disconnectCmd := c.blockDisconnectedSubmission(true, text); blocked {
 		return disconnectCmd
 	}
-	_, isUserShell := parseUserShellCommand(text)
-	if m.hasRuntimeClient() && !isUserShell {
-		m.rememberPromptHistoryLocally(text)
-		return c.startSubmissionWithPreSubmitQueuePosition(text, queuePosition, queuedID, false)
+	if blocked, blockCmd := c.blockInjectedQueueSubmission(); blocked {
+		return blockCmd
 	}
-	return sequenceCmds(m.recordPromptHistory(text), c.startSubmissionWithPreSubmitQueuePosition(text, queuePosition, queuedID, false))
+	m.rememberPromptHistoryLocally(text)
+	return c.startSubmissionWithPreSubmitQueuePosition(text, queuePosition, queuedID)
 }
 
-func (c uiInputController) submitCmd(text string, queuedID string, promptHistoryRecorded bool) tea.Cmd {
+func (c uiInputController) submitCmd(text string, queuedID string) tea.Cmd {
 	m := c.model
 	token := m.beginSubmitAttempt(text, queuedID)
 	client := m.runtimeClient()
@@ -75,14 +70,16 @@ func (c uiInputController) submitCmd(text string, queuedID string, promptHistory
 		if client == nil {
 			return newSubmitDoneMsg(token, "", text, errors.New("runtime engine is not configured"))
 		}
-		message, err := m.submitRuntimeUserMessage(context.Background(), text, promptHistoryRecorded)
+		submission, err := m.submitRuntimeUserMessage(context.Background(), text)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return newSubmitDoneMsg(token, "", text, runtimeattach.ErrSubmissionInterrupted)
 			}
 			return newSubmitDoneMsg(token, "", text, err)
 		}
-		return newSubmitDoneMsg(token, message, text, nil)
+		done := newSubmitDoneMsg(token, submission.Message, text, nil)
+		done.queued = submission.Queued
+		return done
 	}
 }
 
@@ -235,13 +232,6 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	c.finishBusyActivity(false)
 	m.discardQueuedInput(activeQueuedID)
 	if msg.err != nil {
-		if errors.Is(msg.err, serverapi.ErrActivePrimaryRun) && m.canQueueOnCollaborativeActiveOwner() && strings.TrimSpace(msg.submittedText) != "" {
-			m.setExternalRuntimeStatus(&clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateOwnerRunning, QueueAccepting: true})
-			m.setBusy(true)
-			m.activity = uiActivityRunning
-			m.layout().syncViewport()
-			return m, c.enqueueSubmittedTextAfterActiveOwnerRace(msg.submittedText)
-		}
 		if m.turnQueueHook != nil {
 			m.turnQueueHook.OnTurnQueueAborted()
 		}
@@ -266,6 +256,9 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	}
 
 	m.activity = uiActivityIdle
+	if msg.queued.ID != "" {
+		m.registerSteeredQueuedUserMessage(msg.queued)
+	}
 	if msg.silentFinal && m.turnQueueHook != nil {
 		m.turnQueueHook.OnTurnQueueAborted()
 	}
@@ -293,20 +286,6 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	c.notifyTurnQueueDrainedIfIdle()
 	m.layout().syncViewport()
 	return m, nil
-}
-
-func (m *uiModel) canQueueOnCollaborativeActiveOwner() bool {
-	if m == nil || !m.hasRuntimeClient() {
-		return false
-	}
-	client, ok := m.runtimeClient().(interface{ IsCollaborativeRuntime() bool })
-	return ok && client.IsCollaborativeRuntime()
-}
-
-func (c uiInputController) enqueueSubmittedTextAfterActiveOwnerRace(text string) tea.Cmd {
-	m := c.model
-	cmd := m.enqueueInjectedInputWithApprovalAnswer(text, nil)
-	return cmd
 }
 
 func (c uiInputController) queuedDrainRequiresHydration() bool {

@@ -96,8 +96,8 @@ func (s stubRuntimeClient) AppendCommittedEntryWithNoticeID(string, string, stri
 	return nil
 }
 
-func (s stubRuntimeClient) SubmitUserMessage(context.Context, string) (string, error) {
-	return "", nil
+func (s stubRuntimeClient) SubmitUserMessage(context.Context, string) (clientui.UserTurnSubmission, error) {
+	return clientui.UserTurnSubmission{}, nil
 }
 
 func (s stubRuntimeClient) SubmitUserShellCommand(context.Context, string) error { return nil }

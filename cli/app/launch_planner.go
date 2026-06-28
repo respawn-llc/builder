@@ -60,13 +60,9 @@ type resolvedSessionPlanRequest struct {
 }
 
 type runtimeLaunchPlan struct {
-	Logger            *runLogger
-	Wiring            *runtimeWiring
-	ControllerLeaseID string
-	ReadOnly          bool
-	AccessMode        serverapi.SessionRuntimeAttachMode
-	controllerLease   *controllerLeaseManager
-	close             func()
+	Logger *runLogger
+	Wiring *runtimeWiring
+	close  func()
 }
 
 func (p *runtimeLaunchPlan) Close() {
@@ -74,22 +70,6 @@ func (p *runtimeLaunchPlan) Close() {
 		return
 	}
 	p.close()
-}
-
-func (p *runtimeLaunchPlan) CurrentControllerLeaseID() string {
-	if p == nil {
-		return ""
-	}
-	if p.controllerLease != nil {
-		if leaseID := strings.TrimSpace(p.controllerLease.Value()); leaseID != "" {
-			return leaseID
-		}
-	}
-	return strings.TrimSpace(p.ControllerLeaseID)
-}
-
-func (p *runtimeLaunchPlan) HasControllerLease() bool {
-	return strings.TrimSpace(p.CurrentControllerLeaseID()) != ""
 }
 
 type sessionPickerRunner func([]clientui.SessionSummary, string, sessionPickerHeaderInfo) (sessionPickerResult, error)

@@ -81,6 +81,20 @@ func (s *pendingPromptStore) List() []PendingPromptSnapshot {
 	return items
 }
 
+func (s *pendingPromptStore) Has(requestID string) bool {
+	if s == nil {
+		return false
+	}
+	id := strings.TrimSpace(requestID)
+	if id == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	pending := s.pending[id]
+	return pending != nil && !pending.closed
+}
+
 func (s *pendingPromptStore) Await(ctx context.Context, req askquestion.AskQuestionRequest, publish func(PendingPromptSnapshot, pendingPromptEventType)) (askquestion.AskQuestionResponse, error) {
 	if s == nil {
 		return askquestion.AskQuestionResponse{}, fmt.Errorf("pending prompt store is required")

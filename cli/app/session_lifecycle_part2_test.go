@@ -64,11 +64,11 @@ func TestBackTeleportLifecycleSeedsParentDraftWithoutAutoSubmit(t *testing.T) {
 			if cmd == nil {
 				t.Fatal("expected quit cmd for /back")
 			}
-			if err := persistSessionDraftToServer(context.Background(), server, childStore.Meta().SessionID, "lease-test-controller", updatedChild); err != nil {
+			if err := persistSessionDraftToServer(context.Background(), server, childStore.Meta().SessionID, updatedChild); err != nil {
 				t.Fatalf("persist child draft: %v", err)
 			}
 
-			resolved, err := resolveSessionAction(context.Background(), server, nil, childStore.Meta().SessionID, "lease-test-controller", updatedChild.Transition())
+			resolved, err := resolveSessionAction(context.Background(), server, nil, childStore.Meta().SessionID, updatedChild.Transition())
 			if err != nil {
 				t.Fatalf("resolve session action: %v", err)
 			}
@@ -126,7 +126,6 @@ func TestForkRollbackNativeStartupReplayUsesForkedHistory(t *testing.T) {
 		&testEmbeddedServer{cfg: config.App{PersistenceRoot: root}, containerDir: root},
 		nil,
 		store.Meta().SessionID,
-		"lease-test-controller",
 		UITransition{Action: UIActionForkRollback, InitialPrompt: "edited user message", ForkRollbackTargetID: rollbacktarget.EncodeUserMessageSeq(userMessageSeqAt(t, store, 2))},
 	)
 	if err != nil {

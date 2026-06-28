@@ -158,9 +158,6 @@ func (m *uiModel) appendLocalEntryWithNoticeID(role, text, noticeID string) tea.
 	if !m.hasRuntimeClient() {
 		return m.sendTransientStatusWithNoticeID(text, statusKindForLocalEntryRole(role), transientStatusDuration, uiStatusNoticeReplace, noticeID)
 	}
-	if capability, ok := m.runtimeClient().(interface{ CanAppendCommittedEntries() bool }); ok && !capability.CanAppendCommittedEntries() {
-		return m.sendTransientStatusWithNoticeID(text, statusKindForLocalEntryRole(role), transientStatusDuration, uiStatusNoticeReplace, noticeID)
-	}
 	return m.persistLocalEntryCmd(role, text, noticeID)
 }
 

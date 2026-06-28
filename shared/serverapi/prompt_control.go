@@ -10,7 +10,6 @@ import (
 type AskAnswerRequest struct {
 	ClientRequestID      string `json:"client_request_id"`
 	SessionID            string `json:"session_id"`
-	ControllerLeaseID    string `json:"controller_lease_id"`
 	AskID                string `json:"ask_id"`
 	ErrorMessage         string `json:"error_message,omitempty"`
 	Answer               string `json:"answer,omitempty"`
@@ -19,13 +18,12 @@ type AskAnswerRequest struct {
 }
 
 type ApprovalAnswerRequest struct {
-	ClientRequestID   string                    `json:"client_request_id"`
-	SessionID         string                    `json:"session_id"`
-	ControllerLeaseID string                    `json:"controller_lease_id"`
-	ApprovalID        string                    `json:"approval_id"`
-	ErrorMessage      string                    `json:"error_message,omitempty"`
-	Decision          clientui.ApprovalDecision `json:"decision"`
-	Commentary        string                    `json:"commentary,omitempty"`
+	ClientRequestID string                    `json:"client_request_id"`
+	SessionID       string                    `json:"session_id"`
+	ApprovalID      string                    `json:"approval_id"`
+	ErrorMessage    string                    `json:"error_message,omitempty"`
+	Decision        clientui.ApprovalDecision `json:"decision"`
+	Commentary      string                    `json:"commentary,omitempty"`
 }
 
 func (r AskAnswerRequest) Validate() error {
@@ -34,11 +32,6 @@ func (r AskAnswerRequest) Validate() error {
 	}
 	if err := validateRequiredSessionID(r.SessionID); err != nil {
 		return err
-	}
-	if strings.TrimSpace(r.ControllerLeaseID) != "" {
-		if err := validateControllerLeaseID(r.ControllerLeaseID); err != nil {
-			return err
-		}
 	}
 	if strings.TrimSpace(r.AskID) == "" {
 		return errors.New("ask_id is required")
@@ -52,11 +45,6 @@ func (r ApprovalAnswerRequest) Validate() error {
 	}
 	if err := validateRequiredSessionID(r.SessionID); err != nil {
 		return err
-	}
-	if strings.TrimSpace(r.ControllerLeaseID) != "" {
-		if err := validateControllerLeaseID(r.ControllerLeaseID); err != nil {
-			return err
-		}
 	}
 	if strings.TrimSpace(r.ApprovalID) == "" {
 		return errors.New("approval_id is required")

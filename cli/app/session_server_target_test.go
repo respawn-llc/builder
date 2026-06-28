@@ -82,7 +82,8 @@ func TestStartSessionServerUsesConfiguredDaemonForInteractiveFlow(t *testing.T) 
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test remote interactive runtime")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive daemon")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive daemon")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -189,7 +190,8 @@ func TestConfiguredDaemonEnvironmentContextUsesSessionWorkspaceRootForCWD(t *tes
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test daemon environment cwd")
 	defer runtimePlan.Close()
 
-	message, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive daemon")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive daemon")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -236,7 +238,8 @@ func TestRemoteInteractiveRuntimeTwoClientsConvergeOnSameSessionAcrossWorkspaces
 	defer fakeResponses.Close()
 	fixture := startRemoteMultiClientRuntimeFixture(t, fakeResponses.URL)
 
-	message, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello from client A")
+	submission, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello from client A")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage A: %v", err)
 	}
@@ -270,7 +273,8 @@ func TestRemoteReadOnlyClientHydratesCommittedTranscriptAcrossWorkspaces(t *test
 	defer fakeResponses.Close()
 	fixture := startRemoteMultiClientRuntimeFixture(t, fakeResponses.URL)
 
-	firstMessage, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message while client B is disconnected")
+	firstSubmission, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message while client B is disconnected")
+	firstMessage := firstSubmission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage before reconnect: %v", err)
 	}
@@ -294,7 +298,8 @@ func TestRemoteReadOnlyClientHydratesCommittedTranscriptAcrossWorkspaces(t *test
 		t.Fatalf("expected reconnect hydrate to match authoritative transcript head, hydrated=%+v pageA=%+v", hydratedB, pageA1)
 	}
 
-	secondMessage, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message after client B reconnects")
+	secondSubmission, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message after client B reconnects")
+	secondMessage := secondSubmission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage after reconnect: %v", err)
 	}
@@ -316,7 +321,7 @@ func TestRemoteReadOnlyClientHydratesCommittedTranscriptAcrossWorkspaces(t *test
 	}
 }
 
-func TestRemoteInteractiveRuntimeAskAnswersRequireControllerLeaseAcrossWorkspaces(t *testing.T) {
+func TestRemoteInteractiveRuntimeAskAnswersFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
 	fixture := startRemoteMultiClientRuntimeFixture(t, "")
 
 	askDone := make(chan struct {
@@ -343,22 +348,12 @@ func TestRemoteInteractiveRuntimeAskAnswersRequireControllerLeaseAcrossWorkspace
 	waitForPendingAskResources(t, runtimeClientsB.AskViews, fixture.planA.SessionID, 1)
 
 	if err := runtimeClientsB.PromptControl.AnswerAsk(context.Background(), serverapi.AskAnswerRequest{
-		ClientRequestID:   uuid.NewString(),
-		SessionID:         fixture.planA.SessionID,
-		ControllerLeaseID: "invalid-lease",
-		AskID:             "ask-race-1",
-		Answer:            "answer from client B",
-	}); !errors.Is(err, serverapi.ErrInvalidControllerLease) {
-		t.Fatalf("expected invalid controller lease for read-only client, got %v", err)
-	}
-	if err := runtimeClientsA.PromptControl.AnswerAsk(context.Background(), serverapi.AskAnswerRequest{
-		ClientRequestID:   uuid.NewString(),
-		SessionID:         fixture.planA.SessionID,
-		ControllerLeaseID: fixture.runtimePlanA.ControllerLeaseID,
-		AskID:             "ask-race-1",
-		Answer:            "answer from client A",
+		ClientRequestID: uuid.NewString(),
+		SessionID:       fixture.planA.SessionID,
+		AskID:           "ask-race-1",
+		Answer:          "answer from client B",
 	}); err != nil {
-		t.Fatalf("AnswerAsk controller: %v", err)
+		t.Fatalf("AnswerAsk from attached client B: %v", err)
 	}
 
 	select {
@@ -366,7 +361,7 @@ func TestRemoteInteractiveRuntimeAskAnswersRequireControllerLeaseAcrossWorkspace
 		if result.err != nil {
 			t.Fatalf("AwaitPromptResponse ask: %v", result.err)
 		}
-		if result.resp.RequestID != "ask-race-1" || result.resp.Answer != "answer from client A" {
+		if result.resp.RequestID != "ask-race-1" || result.resp.Answer != "answer from client B" {
 			t.Fatalf("unexpected ask response: %+v", result.resp)
 		}
 	case <-time.After(5 * time.Second):
@@ -376,7 +371,7 @@ func TestRemoteInteractiveRuntimeAskAnswersRequireControllerLeaseAcrossWorkspace
 	waitForPendingAskResources(t, runtimeClientsB.AskViews, fixture.planA.SessionID, 0)
 }
 
-func TestRemoteInteractiveRuntimeApprovalAnswersRequireControllerLeaseAcrossWorkspaces(t *testing.T) {
+func TestRemoteInteractiveRuntimeApprovalAnswersFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
 	fixture := startRemoteMultiClientRuntimeFixture(t, "")
 
 	approvalDone := make(chan struct {
@@ -405,24 +400,13 @@ func TestRemoteInteractiveRuntimeApprovalAnswersRequireControllerLeaseAcrossWork
 	waitForPendingApprovalResources(t, runtimeClientsB.ApprovalViews, fixture.planA.SessionID, 1)
 
 	if err := runtimeClientsB.PromptControl.AnswerApproval(context.Background(), serverapi.ApprovalAnswerRequest{
-		ClientRequestID:   uuid.NewString(),
-		SessionID:         fixture.planA.SessionID,
-		ControllerLeaseID: "invalid-lease",
-		ApprovalID:        "approval-race-1",
-		Decision:          clientui.ApprovalDecisionDeny,
-		Commentary:        "denied by client B",
-	}); !errors.Is(err, serverapi.ErrInvalidControllerLease) {
-		t.Fatalf("expected invalid controller lease for read-only client, got %v", err)
-	}
-	if err := runtimeClientsA.PromptControl.AnswerApproval(context.Background(), serverapi.ApprovalAnswerRequest{
-		ClientRequestID:   uuid.NewString(),
-		SessionID:         fixture.planA.SessionID,
-		ControllerLeaseID: fixture.runtimePlanA.ControllerLeaseID,
-		ApprovalID:        "approval-race-1",
-		Decision:          clientui.ApprovalDecisionAllowOnce,
-		Commentary:        "approved by client A",
+		ClientRequestID: uuid.NewString(),
+		SessionID:       fixture.planA.SessionID,
+		ApprovalID:      "approval-race-1",
+		Decision:        clientui.ApprovalDecisionAllowOnce,
+		Commentary:      "approved by client B",
 	}); err != nil {
-		t.Fatalf("AnswerApproval controller: %v", err)
+		t.Fatalf("AnswerApproval from attached client B: %v", err)
 	}
 
 	select {
@@ -433,7 +417,7 @@ func TestRemoteInteractiveRuntimeApprovalAnswersRequireControllerLeaseAcrossWork
 		if result.resp.RequestID != "approval-race-1" || result.resp.Approval == nil {
 			t.Fatalf("unexpected approval response: %+v", result.resp)
 		}
-		if result.resp.Approval.Decision != askquestion.AskQuestionApprovalDecisionAllowOnce || result.resp.Approval.Commentary != "approved by client A" {
+		if result.resp.Approval.Decision != askquestion.AskQuestionApprovalDecisionAllowOnce || result.resp.Approval.Commentary != "approved by client B" {
 			t.Fatalf("unexpected approval response: %+v", result.resp)
 		}
 	case <-time.After(5 * time.Second):
@@ -448,7 +432,8 @@ func TestRemoteSessionActivityLaggingSubscriberHydratesAndResubscribesAcrossWork
 	defer fakeResponses.Close()
 	fixture := startRemoteMultiClientRuntimeFixture(t, fakeResponses.URL)
 
-	message, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message before remote gap")
+	submission, err := fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message before remote gap")
+	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage before gap: %v", err)
 	}
@@ -480,7 +465,8 @@ func TestRemoteSessionActivityLaggingSubscriberHydratesAndResubscribesAcrossWork
 	}
 	defer func() { _ = recoveredSub.Close() }()
 
-	message, err = fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message after lagging subscriber recovers")
+	submission, err = fixture.runtimePlanA.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "message after lagging subscriber recovers")
+	message = submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage after gap recovery: %v", err)
 	}

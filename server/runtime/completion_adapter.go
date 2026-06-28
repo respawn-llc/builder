@@ -52,4 +52,3 @@ func (a workflowCompletionAdapter) Evaluate(ctx context.Context, final llm.Messa
 }
 
 var _ CompletionAdapter = workflowCompletionAdapter{}
-var _ CompletionAdapter = goalContinuation{}

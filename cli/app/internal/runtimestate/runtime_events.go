@@ -135,8 +135,9 @@ const (
 )
 
 type RuntimeNoticeReduction struct {
-	BackgroundNotice *BackgroundNotice
-	DiagnosticNotice *BackgroundNotice
+	BackgroundNotice    *BackgroundNotice
+	DiagnosticNotice    *BackgroundNotice
+	TransientDiagnostic *BackgroundNotice
 }
 
 type RuntimeBackgroundProcessReduction struct {
@@ -378,6 +379,12 @@ func ReduceRuntimeNoticeEvent(evt clientui.Event) RuntimeNoticeReduction {
 			return RuntimeNoticeReduction{}
 		}
 		return RuntimeNoticeReduction{DiagnosticNotice: &BackgroundNotice{Message: "sleep prevention failed: " + msg, Kind: BackgroundNoticeError}}
+	case clientui.EventPromptHistoryPersistFailed:
+		msg := strings.TrimSpace(evt.Error)
+		if msg == "" {
+			return RuntimeNoticeReduction{}
+		}
+		return RuntimeNoticeReduction{TransientDiagnostic: &BackgroundNotice{Message: "prompt history persistence failed: " + msg, Kind: BackgroundNoticeError}}
 	}
 	return RuntimeNoticeReduction{}
 }
