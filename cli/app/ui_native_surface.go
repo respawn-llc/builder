@@ -391,7 +391,10 @@ func (m *uiModel) nativeStableProjectionLineText(line tui.TranscriptProjectionLi
 
 func (l uiViewLayout) renderNativeLiveAreaFrame(frame uiRenderFrame) string {
 	m := l.model
-	if m == nil || !m.ensureNativeSurface(frame.width, frame.height) {
+	if m == nil || !m.windowSizeKnown || m.termWidth <= 0 || m.termHeight <= 0 {
+		return ""
+	}
+	if !m.ensureNativeSurface(frame.width, frame.height) {
 		return frame.renderWithCursorVisibility(!l.shouldShowRealTerminalCursor(frame))
 	}
 	lines := frame.renderLines()

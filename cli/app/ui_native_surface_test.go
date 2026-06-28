@@ -200,6 +200,35 @@ func TestNativeOngoingLiveAreaBoundsFullFrameToTerminalHeight(t *testing.T) {
 	}
 }
 
+func TestNativeOngoingDefersLiveAreaUntilTerminalSizeKnown(t *testing.T) {
+	var out bytes.Buffer
+	m := newProjectedClosedUIModel(nil, WithUINativeSurfaceWriter(&out))
+	m.replaceMainInput("startup width", -1)
+
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q before terminal size, want empty renderer payload", rendered)
+	}
+	if out.String() != "" {
+		t.Fatalf("native live area wrote before terminal size was known: %q", out.String())
+	}
+	if m.nativeSurface.StableBuffer() != nil {
+		t.Fatal("native stable buffer initialized before terminal size was known")
+	}
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	m = next.(*uiModel)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q after terminal size, want empty renderer payload", rendered)
+	}
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("native live area render error = %v, want nil", m.nativeLiveAreaError)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if !strings.Contains(plain, strings.Repeat("─", 100)) {
+		t.Fatalf("native live area did not render at known terminal width, got %q", plain)
+	}
+}
+
 func TestNativeOngoingSlashCommandPickerRowsFitLiveAreaWidth(t *testing.T) {
 	var out bytes.Buffer
 	registry := commands.NewRegistry()

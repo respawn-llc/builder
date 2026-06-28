@@ -254,6 +254,33 @@ func TestNativeLiveAreaRenderDuringAssistantStreamingUsesStreamAnchor(t *testing
 	}
 }
 
+func TestAssistantStreamAppendErasesStreamAnchoredLiveAreaBeforeCursorMoves(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
+	defer buffer.close()
+	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	if err := liveArea.Render(nativeLiveAreaFrame("old live")); err != nil {
+		t.Fatalf("render returned error: %v", err)
+	}
+	if err := buffer.StreamMarkdownAssistantContent("stream"); err != nil {
+		t.Fatalf("first stream returned error: %v", err)
+	}
+	if err := liveArea.Render(nativeLiveAreaFrame("latest live")); err != nil {
+		t.Fatalf("render during stream returned error: %v", err)
+	}
+	if err := buffer.StreamMarkdownAssistantContent(" moved"); err != nil {
+		t.Fatalf("second stream returned error: %v", err)
+	}
+
+	streamAnchoredErase := terminalSaveCursor + xansi.CursorDown(1) + "\r" + liveAreaEraseSequence(1) + terminalRestoreCursor
+	want := "old live" + xansi.HideCursor + liveAreaEraseSequence(1) + "stream" +
+		terminalSaveCursor + terminalLineBreak + "latest live" + xansi.HideCursor + terminalRestoreCursor +
+		streamAnchoredErase + " moved"
+	if got := out.String(); got != want {
+		t.Fatalf("terminal output = %q, want %q", got, want)
+	}
+}
+
 func TestNativeLiveAreaHoldoffFlushDuringAssistantStreamingDefersLiveRestore(t *testing.T) {
 	var out bytes.Buffer
 	available := true
