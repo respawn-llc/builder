@@ -679,7 +679,11 @@ func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, tar
 	if claim != nil {
 		if err := s.WithRuntimeEngine(ctx, trimmedSessionID, func(engine *runtime.Engine) error {
 			return engine.RunWhenIdle(ctx, func() error {
-				return claim.Rebind(trimmedWorkdir)
+				current := s.runtimes.RuntimeClaimFor(trimmedSessionID)
+				if current == nil || !current.IsCurrent() {
+					return errors.Join(ErrAcquiredRuntimeOvertaken, fmt.Errorf("session %q runtime was replaced during execution target sync", trimmedSessionID))
+				}
+				return current.Rebind(trimmedWorkdir)
 			})
 		}); err != nil {
 			return err

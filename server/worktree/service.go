@@ -1067,6 +1067,12 @@ func worktreeHasStableIdentity(entry GitWorktree) bool {
 }
 
 func (s *Service) switchSessionTarget(ctx context.Context, workspaceCtx sessionWorkspaceContext, previous *syncedWorktree, next syncedWorktree) (clientui.SessionExecutionTarget, error) {
+	if s.active != nil {
+		if sessionID := strings.TrimSpace(workspaceCtx.sessionID); sessionID != "" {
+			release := s.active.BlockSessionRuns([]string{sessionID})
+			defer release()
+		}
+	}
 	nextWorktreeID := strings.TrimSpace(next.record.ID)
 	nextBaseRoot := strings.TrimSpace(next.record.CanonicalRoot)
 	if next.git.IsMain {
