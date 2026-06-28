@@ -30,6 +30,7 @@ type RuntimeRegistry struct {
 	runningSessions map[string]bool
 	blockedRuns     map[string]int
 	inFlightStarts  map[string]int
+	exclusiveStarts map[string]int
 }
 
 func (r *RuntimeRegistry) BlockSessionRuns(sessionIDs []string) func() {
@@ -98,7 +99,7 @@ func (r *RuntimeRegistry) BeginSessionRun(sessionID string) (func(), bool) {
 		return func() {}, true
 	}
 	r.runStateMu.Lock()
-	if r.blockedRuns[trimmed] > 0 {
+	if r.blockedRuns[trimmed] > 0 || r.exclusiveStarts[trimmed] > 0 {
 		r.runStateMu.Unlock()
 		return nil, false
 	}
@@ -132,12 +133,14 @@ func (r *RuntimeRegistry) BeginExclusiveSessionRun(sessionID string) (release fu
 		return nil, false, false
 	}
 	r.inFlightStarts[trimmed]++
+	r.exclusiveStarts[trimmed]++
 	r.runStateMu.Unlock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			r.runStateMu.Lock()
 			defer r.runStateMu.Unlock()
+			r.clearExclusiveStartLocked(trimmed)
 			r.clearInFlightStartLocked(trimmed)
 		})
 	}, true, false
@@ -150,6 +153,14 @@ func (r *RuntimeRegistry) clearInFlightStartLocked(sessionID string) {
 		r.inFlightStarts[sessionID]--
 	}
 	r.runStateCond.Broadcast()
+}
+
+func (r *RuntimeRegistry) clearExclusiveStartLocked(sessionID string) {
+	if r.exclusiveStarts[sessionID] <= 1 {
+		delete(r.exclusiveStarts, sessionID)
+	} else {
+		r.exclusiveStarts[sessionID]--
+	}
 }
 
 type GuardedPromptResponder interface {
@@ -169,6 +180,7 @@ func NewRuntimeRegistry() *RuntimeRegistry {
 		runningSessions: make(map[string]bool),
 		blockedRuns:     make(map[string]int),
 		inFlightStarts:  make(map[string]int),
+		exclusiveStarts: make(map[string]int),
 	}
 	r.runStateCond = sync.NewCond(&r.runStateMu)
 	return r

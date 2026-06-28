@@ -270,7 +270,7 @@ func (d *runtimeDirectory) Resolve(sessionID string) *runtime.Engine {
 	if entry == nil {
 		return nil
 	}
-	return entry.engine
+	return entry.engineRef()
 }
 
 func (d *runtimeDirectory) Active(sessionID string) bool {

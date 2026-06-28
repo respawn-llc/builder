@@ -13,19 +13,19 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
-	release, err := s.beginRunStart(req.SessionID)
-	if err != nil {
-		return serverapi.RuntimeSubmitUserTurnResponse{}, err
-	}
-	defer release()
 	memoReq := turnSubmitMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text}
 	return s.turnSubmits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameTurnSubmitMemoRequest, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, error) {
+		release, err := s.beginRunStart(req.SessionID)
+		if err != nil {
+			return serverapi.RuntimeSubmitUserTurnResponse{}, err
+		}
+		defer release()
 		runCtx := context.Background()
 		if ctx != nil {
 			runCtx = context.WithoutCancel(ctx)
 		}
 		var resp serverapi.RuntimeSubmitUserTurnResponse
-		err := s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+		err = s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
 			shouldCompact, err := engine.ShouldCompactBeforeUserMessage(runCtx, memoReq.Text)
 			if err != nil {
 				return err

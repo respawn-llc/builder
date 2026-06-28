@@ -31,6 +31,7 @@ type activeStepGoalMutation struct {
 	kind      activeStepGoalMutationKind
 	objective string
 	actor     session.GoalActor
+	goalID    string
 }
 
 func (e *Engine) Goal() *session.GoalState {
@@ -112,6 +113,9 @@ func (e *Engine) QueueAgentShellSetGoal(objective string, actor session.GoalActo
 	if objective == "" {
 		return session.GoalState{}, false, errors.New("goal objective is required")
 	}
+	if current := e.effectiveGoalForActiveStep(); current != nil && current.Status != session.GoalStatusComplete {
+		return session.GoalState{}, false, session.GoalAgentOverwriteBlockedError{Goal: *current}
+	}
 	if err := e.RequireGoalLoopStartAllowed(); err != nil {
 		return session.GoalState{}, false, err
 	}
@@ -136,8 +140,9 @@ func (e *Engine) QueueAgentShellCompleteGoal(actor session.GoalActor) (session.G
 		return session.GoalState{}, false, errors.New("goal is not set")
 	}
 	queued, err := e.enqueueActiveStepGoalMutation(activeStepGoalMutation{
-		kind:  activeStepGoalMutationComplete,
-		actor: actor,
+		kind:   activeStepGoalMutationComplete,
+		actor:  actor,
+		goalID: strings.TrimSpace(current.ID),
 	})
 	if err != nil || !queued {
 		return session.GoalState{}, queued, err
@@ -249,6 +254,12 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 		e.deferGoalLoopStart()
 		return nil
 	case activeStepGoalMutationComplete:
+		if mutation.goalID != "" {
+			current := e.Goal()
+			if current == nil || strings.TrimSpace(current.ID) != mutation.goalID {
+				return nil
+			}
+		}
 		_, err := e.setGoalStatusForStep(stepID, session.GoalStatusComplete, mutation.actor)
 		return err
 	default:

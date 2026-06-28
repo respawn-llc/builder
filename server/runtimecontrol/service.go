@@ -20,6 +20,7 @@ type RuntimeResolver interface {
 	ResolveRuntime(ctx context.Context, sessionID string) (*runtime.Engine, error)
 	WithGuardedRuntime(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) (bool, error)
 	BeginSessionRun(sessionID string) (func(), bool)
+	SessionRunsBlocked(sessionID string) bool
 }
 
 type PromptHistoryStore interface {
@@ -175,9 +176,13 @@ func (s *Service) beginRunStart(sessionID string) (func(), error) {
 	if s == nil || s.runtimes == nil {
 		return func() {}, nil
 	}
-	release, ok := s.runtimes.BeginSessionRun(strings.TrimSpace(sessionID))
+	trimmed := strings.TrimSpace(sessionID)
+	release, ok := s.runtimes.BeginSessionRun(trimmed)
 	if !ok {
-		return nil, serverapi.ErrSessionWorktreeDeleting
+		if s.runtimes.SessionRunsBlocked(trimmed) {
+			return nil, serverapi.ErrSessionWorktreeDeleting
+		}
+		return nil, serverapi.ErrSessionRunStarting
 	}
 	return release, nil
 }
@@ -561,12 +566,12 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 		var response serverapi.RuntimeGoalShowResponse
 		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
 			if strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) {
-				currentGoal := engine.Goal()
-				if goalBlocksAgentSet(currentGoal) {
-					return goalAgentOverwriteDeniedError{Objective: currentGoal.Objective, Status: string(currentGoal.Status)}
-				}
 				goal, queued, qErr := engine.QueueAgentShellSetGoal(trimmedObjective, session.GoalActor(req.Actor))
 				if qErr != nil {
+					var blocked session.GoalAgentOverwriteBlockedError
+					if errors.As(qErr, &blocked) {
+						return goalAgentOverwriteDeniedError{Objective: blocked.Goal.Objective, Status: string(blocked.Goal.Status)}
+					}
 					return qErr
 				}
 				if queued {
@@ -593,10 +598,6 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 		})
 		return response, err
 	})
-}
-
-func goalBlocksAgentSet(goal *session.GoalState) bool {
-	return goal != nil && goal.Status != session.GoalStatusComplete
 }
 
 // goalAgentOverwriteDeniedError is returned when an agent attempts to overwrite an
