@@ -7,6 +7,7 @@ import (
 	brand "core/shared/config"
 	"fmt"
 	"io"
+	"time"
 
 	"golang.org/x/sys/windows/svc"
 )
@@ -33,11 +34,15 @@ func serviceHostRun(spec serviceSpec, _ io.Writer, stderr io.Writer) int {
 	return 0
 }
 
-// serviceStopWaitHintMillis tells the SCM how long the service may take to stop
-// so it waits for the graceful server shutdown (event signal + grace period +
-// hard-terminate fallback) instead of killing the supervisor, which would orphan
-// the server.
-const serviceStopWaitHintMillis = 30000
+// serviceStopWindow is the single source of truth for how long a stop may take:
+// the graceful server shutdown (event signal + grace period + hard-terminate
+// fallback) plus SCM dispatch overhead. The SCM WaitHint advertises it so the
+// SCM waits instead of killing the supervisor (which would orphan the server),
+// and the lifecycle commands wait this long for a stop to complete.
+const (
+	serviceStopWindow         = 30 * time.Second
+	serviceStopWaitHintMillis = uint32(serviceStopWindow / time.Millisecond)
+)
 
 type windowsServiceHandler struct {
 	spec serviceSpec

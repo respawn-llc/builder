@@ -51,8 +51,9 @@ func (scmServiceBackend) Install(ctx context.Context, spec serviceSpec, force bo
 			_ = existing.Close()
 			return errors.New(brand.ServiceDisplayName + " is already installed; use --force to rewrite it")
 		}
-		_, _ = existing.Control(svc.Stop)
-		waitForServiceState(existing, svc.Stopped, 5*time.Second)
+		if _, err := existing.Control(svc.Stop); err == nil {
+			_ = waitForServiceState(existing, svc.Stopped, serviceStopWindow)
+		}
 		deleteErr := existing.Delete()
 		_ = existing.Close()
 		if deleteErr != nil {
@@ -107,6 +108,9 @@ func (scmServiceBackend) Uninstall(ctx context.Context, spec serviceSpec, stop b
 
 	service, err := m.OpenService(serviceWindowsServiceName)
 	if err != nil {
+		if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return fmt.Errorf("open service: %w", err)
+		}
 		// Not installed: clean up any leftover legacy registration and pid file.
 		removeLegacyWindowsRegistration(ctx, spec)
 		_ = os.Remove(windowsServerPIDPath(spec))
@@ -115,8 +119,9 @@ func (scmServiceBackend) Uninstall(ctx context.Context, spec serviceSpec, stop b
 	defer func() { _ = service.Close() }()
 
 	if stop {
-		_, _ = service.Control(svc.Stop)
-		waitForServiceState(service, svc.Stopped, 5*time.Second)
+		if _, err := service.Control(svc.Stop); err == nil {
+			_ = waitForServiceState(service, svc.Stopped, serviceStopWindow)
+		}
 	}
 	if err := service.Delete(); err != nil {
 		return fmt.Errorf("delete service: %w", err)
@@ -147,7 +152,9 @@ func (scmServiceBackend) Stop(ctx context.Context, spec serviceSpec) error {
 	if _, err := service.Control(svc.Stop); err != nil {
 		return fmt.Errorf("stop service: %w", err)
 	}
-	waitForServiceState(service, svc.Stopped, 5*time.Second)
+	if err := waitForServiceState(service, svc.Stopped, serviceStopWindow); err != nil {
+		return fmt.Errorf("stop service: %w", err)
+	}
 	return nil
 }
 
@@ -158,7 +165,9 @@ func (scmServiceBackend) Restart(ctx context.Context, spec serviceSpec) error {
 	}
 	defer cleanup()
 	if _, err := service.Control(svc.Stop); err == nil {
-		waitForServiceState(service, svc.Stopped, 5*time.Second)
+		if err := waitForServiceState(service, svc.Stopped, serviceStopWindow); err != nil {
+			return fmt.Errorf("wait for service to stop before restart: %w", err)
+		}
 	}
 	if err := service.Start(); err != nil {
 		return fmt.Errorf("start service: %w", err)
@@ -278,7 +287,7 @@ func grantUserServiceAccess(service *mgr.Service) error {
 		return err
 	}
 	entry := windows.EXPLICIT_ACCESS{
-		AccessPermissions: windows.SERVICE_START | windows.SERVICE_STOP | windows.SERVICE_QUERY_STATUS | windows.READ_CONTROL,
+		AccessPermissions: windows.SERVICE_START | windows.SERVICE_STOP | windows.SERVICE_QUERY_STATUS | windows.SERVICE_QUERY_CONFIG | windows.READ_CONTROL,
 		AccessMode:        windows.GRANT_ACCESS,
 		Inheritance:       windows.NO_INHERITANCE,
 		Trustee: windows.TRUSTEE{
@@ -294,12 +303,18 @@ func grantUserServiceAccess(service *mgr.Service) error {
 	return windows.SetSecurityInfo(service.Handle, windows.SE_SERVICE, windows.DACL_SECURITY_INFORMATION, nil, nil, merged, nil)
 }
 
-func waitForServiceState(service *mgr.Service, state svc.State, timeout time.Duration) {
+func waitForServiceState(service *mgr.Service, state svc.State, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	for {
 		status, err := service.Query()
-		if err != nil || status.State == state {
-			return
+		if err != nil {
+			return fmt.Errorf("query service state: %w", err)
+		}
+		if status.State == state {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for service to reach state %d", state)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
