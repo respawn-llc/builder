@@ -27,14 +27,17 @@ func TestNativeOngoingSurfaceStreamsThroughSourceBackedStablePromotionAndLiveTai
 		t.Fatalf("tail lines = %q, want %q", got, want)
 	}
 
-	if err := surface.StreamMarkdownAssistantContent(" world"); err != nil {
+	if err := surface.StreamMarkdownAssistantContent(" world\nnext\n"); err != nil {
 		t.Fatalf("stream wrap returned error: %v", err)
 	}
-	if got, want := surface.AssistantStreamTailLines(), []string{"world"}; strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("tail lines after wrap = %q, want %q", got, want)
+	if got, want := surface.AssistantStreamTailLines(), []string{"next"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("tail lines after completed wrapped line = %q, want %q", got, want)
 	}
 	if got := out.String(); !strings.Contains(got, "hello "+terminalLineBreak) {
 		t.Fatalf("wrapped stable row was not promoted through scrollback output: %q", got)
+	}
+	if got := out.String(); !strings.Contains(got, "world"+terminalLineBreak) {
+		t.Fatalf("wrapped stable tail row was not promoted through scrollback output: %q", got)
 	}
 
 	if err := surface.FinishAssistantStreaming(); err != nil {
@@ -43,7 +46,7 @@ func TestNativeOngoingSurfaceStreamsThroughSourceBackedStablePromotionAndLiveTai
 	if got := surface.AssistantStreamTailLines(); len(got) != 0 {
 		t.Fatalf("tail after finish = %q, want empty", got)
 	}
-	if got := out.String(); !strings.Contains(got, "world"+terminalLineBreak) {
+	if got := out.String(); !strings.Contains(got, "next"+terminalLineBreak) {
 		t.Fatalf("final tail was not promoted through scrollback output: %q", got)
 	}
 }

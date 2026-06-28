@@ -91,6 +91,183 @@ func TestOngoingScrollbackBufferAssistantStreamNormalizesLineBreaksForTerminal(t
 	}
 }
 
+func TestOngoingScrollbackBufferAssistantStreamPromotesRenderedRows(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithAssistantMarkdownRenderer(func(source string, width int) []string {
+			return strings.Split(strings.TrimSuffix(strings.ReplaceAll(source, "**", ""), "\n"), "\n")
+		}),
+	)
+	defer buffer.close()
+	defer buffer.close()
+
+	if err := buffer.StreamMarkdownAssistantContent("**bold**\n"); err != nil {
+		t.Fatalf("stream first row returned error: %v", err)
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("first completed source line promoted before following line: %q", got)
+	}
+	if err := buffer.StreamMarkdownAssistantContent("next\n"); err != nil {
+		t.Fatalf("stream second row returned error: %v", err)
+	}
+	if got := out.String(); strings.Contains(got, "**") {
+		t.Fatalf("stable output promoted raw markdown markers: %q", got)
+	}
+	if got, want := out.String(), "bold"+terminalLineBreak; got != want {
+		t.Fatalf("stable output = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(buffer.AssistantStreamTailLines(), ""), "next"; got != want {
+		t.Fatalf("tail after promoted first row = %q, want %q", got, want)
+	}
+}
+
+func TestOngoingScrollbackBufferAssistantStreamAllowsEquivalentANSIChurn(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithAssistantMarkdownRenderer(func(source string, width int) []string {
+			if strings.Contains(source, "third") {
+				return []string{"\x1b[0;1mrow\x1b[0m", "next", "third"}
+			}
+			return []string{"\x1b[1mrow\x1b[0m", "next"}
+		}),
+	)
+
+	if err := buffer.StreamMarkdownAssistantContent("row\nnext\n"); err != nil {
+		t.Fatalf("stream first promotion returned error: %v", err)
+	}
+	if err := buffer.StreamMarkdownAssistantContent("third\n"); err != nil {
+		t.Fatalf("equivalent ANSI churn changed promoted-row key: %v", err)
+	}
+}
+
+func TestOngoingScrollbackBufferAssistantStreamPanicsWhenPromotedRowStyleChanges(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithAssistantMarkdownRenderer(func(source string, width int) []string {
+			if strings.Contains(source, "third") {
+				return []string{"\x1b[1mrow\x1b[0m", "next", "third"}
+			}
+			return []string{"row", "next"}
+		}),
+	)
+
+	if err := buffer.StreamMarkdownAssistantContent("row\nnext\n"); err != nil {
+		t.Fatalf("stream first promotion returned error: %v", err)
+	}
+	panicText := capturePanicText(t, func() {
+		_ = buffer.StreamMarkdownAssistantContent("third\n")
+	})
+	assertPanicContains(t, panicText, "assistant renderer changed an already-promoted stable row")
+}
+
+func TestOngoingScrollbackBufferAssistantStreamPanicsWhenPromotedRowFinalPenChanges(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithAssistantMarkdownRenderer(func(source string, width int) []string {
+			if strings.Contains(source, "third") {
+				return []string{"row\x1b[31m", "next", "third"}
+			}
+			return []string{"row\x1b[0m", "next"}
+		}),
+	)
+
+	if err := buffer.StreamMarkdownAssistantContent("row\nnext\n"); err != nil {
+		t.Fatalf("stream first promotion returned error: %v", err)
+	}
+	panicText := capturePanicText(t, func() {
+		_ = buffer.StreamMarkdownAssistantContent("third\n")
+	})
+	assertPanicContains(t, panicText, "assistant renderer changed an already-promoted stable row")
+}
+
+func TestOngoingScrollbackBufferAssistantStreamPipeHoldbackDoesNotUnpromoteRows(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
+	defer buffer.close()
+
+	if err := buffer.StreamMarkdownAssistantContent("first\nsecond\n"); err != nil {
+		t.Fatalf("stream initial rows returned error: %v", err)
+	}
+	if got, want := out.String(), "first"+terminalLineBreak; got != want {
+		t.Fatalf("stable output after initial rows = %q, want %q", got, want)
+	}
+	if err := buffer.StreamMarkdownAssistantContent("uses | separator\n"); err != nil {
+		t.Fatalf("stream pipe row returned error: %v", err)
+	}
+	if got, want := out.String(), "first"+terminalLineBreak; got != want {
+		t.Fatalf("pipe holdback changed stable output = %q, want %q", got, want)
+	}
+	tail := strings.Join(buffer.AssistantStreamTailLines(), "\n")
+	if !strings.Contains(tail, "second") || !strings.Contains(tail, "uses | separator") {
+		t.Fatalf("pipe holdback tail skipped unpromoted rows: %q", tail)
+	}
+}
+
+func TestOngoingScrollbackBufferAssistantStreamFenceHoldbackDoesNotUnpromoteRows(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
+	defer buffer.close()
+
+	if err := buffer.StreamMarkdownAssistantContent("first\nsecond\n"); err != nil {
+		t.Fatalf("stream initial rows returned error: %v", err)
+	}
+	if got, want := out.String(), "first"+terminalLineBreak; got != want {
+		t.Fatalf("stable output after initial rows = %q, want %q", got, want)
+	}
+	if err := buffer.StreamMarkdownAssistantContent("```go\n"); err != nil {
+		t.Fatalf("stream fence opener returned error: %v", err)
+	}
+	if got, want := out.String(), "first"+terminalLineBreak; got != want {
+		t.Fatalf("fence holdback changed stable output = %q, want %q", got, want)
+	}
+	tail := strings.Join(buffer.AssistantStreamTailLines(), "\n")
+	if !strings.Contains(tail, "second") || !strings.Contains(tail, "```go") {
+		t.Fatalf("fence holdback tail skipped unpromoted rows: %q", tail)
+	}
+}
+
+func TestOngoingScrollbackBufferAssistantStreamPreservesTabOnlyTail(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithAssistantMarkdownRenderer(func(source string, width int) []string {
+			return []string{source}
+		}),
+	)
+	defer buffer.close()
+
+	if err := buffer.StreamMarkdownAssistantContent("\t"); err != nil {
+		t.Fatalf("stream tab-only row returned error: %v", err)
+	}
+	if got, want := strings.Join(buffer.AssistantStreamTailLines(), ""), "\t"; got != want {
+		t.Fatalf("tab-only tail = %q, want %q", got, want)
+	}
+}
+
 func TestOngoingScrollbackBufferAssistantStreamSplitsStyledRowsWithoutBreakingEscapes(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 6, 24, &out, nil)
@@ -139,10 +316,19 @@ func TestOngoingScrollbackBufferAssistantStreamTailPreservesWhitespace(t *testin
 
 func TestOngoingScrollbackBufferAssistantStreamDoesNotExposeStyleOnlyTail(t *testing.T) {
 	var out bytes.Buffer
-	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 6, 24, &out, nil)
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		6,
+		24,
+		&out,
+		nil,
+		WithAssistantMarkdownRenderer(func(source string, width int) []string {
+			return []string{"\x1b[31m"}
+		}),
+	)
 	defer buffer.close()
 
-	if err := buffer.StreamMarkdownAssistantContent("\x1b[31mhello "); err != nil {
+	if err := buffer.StreamMarkdownAssistantContent("style"); err != nil {
 		t.Fatalf("stream returned error: %v", err)
 	}
 	if got := buffer.AssistantStreamTailLines(); len(got) != 0 {
@@ -151,13 +337,8 @@ func TestOngoingScrollbackBufferAssistantStreamDoesNotExposeStyleOnlyTail(t *tes
 	if err := buffer.FinishAssistantStreaming(); err != nil {
 		t.Fatalf("finish returned error: %v", err)
 	}
-
-	rows := strings.Split(strings.TrimSuffix(out.String(), terminalLineBreak), terminalLineBreak)
-	if got, want := len(rows), 1; got != want {
-		t.Fatalf("row count = %d, want %d: %q", got, want, out.String())
-	}
-	if got, want := xansi.Strip(rows[0]), "hello "; got != want {
-		t.Fatalf("row 0 stripped = %q, want %q; raw output %q", got, want, out.String())
+	if got := out.String(); got != "" {
+		t.Fatalf("style-only stream wrote stable output: %q", got)
 	}
 }
 
@@ -231,7 +412,7 @@ func TestOngoingScrollbackBufferWriteFailuresReturnErrors(t *testing.T) {
 		t.Fatalf("steer error = %v, want %v", err, writeErr)
 	}
 
-	err = buffer.StreamMarkdownAssistantContent(strings.Repeat("x", 80))
+	err = buffer.StreamMarkdownAssistantContent(strings.Repeat("x", 81) + "\nnext\n")
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("stream error = %v, want %v", err, writeErr)
 	}
@@ -243,7 +424,7 @@ func TestOngoingScrollbackBufferFailedFirstStreamDoesNotKeepStreamingState(t *te
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, writer, nil)
 	defer buffer.close()
 
-	if err := buffer.StreamMarkdownAssistantContent(strings.Repeat("x", 80)); !errors.Is(err, writeErr) {
+	if err := buffer.StreamMarkdownAssistantContent(strings.Repeat("x", 81) + "\nnext\n"); !errors.Is(err, writeErr) {
 		t.Fatalf("stream error = %v, want %v", err, writeErr)
 	}
 	if err := buffer.Steer("stable"); err != nil {

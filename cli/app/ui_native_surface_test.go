@@ -391,8 +391,8 @@ func TestNativeFinalAssistantCommitFinishesStreamWithoutDuplicateStableWrite(t *
 	if count := strings.Count(stripANSIAndTrimRight(out.String()), "native streamed final"); count != 0 {
 		t.Fatalf("native final stream wrote stable output before promotion count = %d in %q", count, stripANSIAndTrimRight(out.String()))
 	}
-	if got, want := strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""), "native streamed final"; got != want {
-		t.Fatalf("native final stream tail = %q, want %q", got, want)
+	if got := xansi.Strip(strings.Join(m.nativeSurface.AssistantStreamTailLines(), "")); !strings.Contains(got, "native streamed final") {
+		t.Fatalf("native final stream tail skipped assistant text: %q", got)
 	}
 
 	out.Reset()
@@ -412,6 +412,308 @@ func TestNativeFinalAssistantCommitFinishesStreamWithoutDuplicateStableWrite(t *
 	}
 	if count := strings.Count(stripANSIAndTrimRight(out.String()), "native streamed final"); count != 1 {
 		t.Fatalf("committed final should promote native stable stream once, got %d time(s), output=%q", count, stripANSIAndTrimRight(out.String()))
+	}
+}
+
+func TestNativeFinalAssistantStreamingUsesMarkdownProjection(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "**native streamed final**",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, streamed.cmd)
+	tail := xansi.Strip(strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""))
+	if strings.Contains(tail, "**") {
+		t.Fatalf("native stream tail exposed raw markdown markers: %q", tail)
+	}
+	if !strings.Contains(tail, "native streamed final") {
+		t.Fatalf("native stream tail skipped rendered assistant text: %q", tail)
+	}
+
+	out.Reset()
+	committed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-final",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         1,
+		CommittedEntryCount:        1,
+		CommittedEntryStart:        0,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "**native streamed final**", Phase: string(clientui.MessagePhaseFinal)}},
+	})
+	_ = collectCmdMessages(t, committed.cmd)
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "**") {
+		t.Fatalf("native stable stream promotion exposed raw markdown markers: %q", plain)
+	}
+	if !strings.Contains(plain, "native streamed final") {
+		t.Fatalf("native stable stream promotion skipped rendered assistant text: %q", plain)
+	}
+}
+
+func TestNativeFinalAssistantStreamingPromotesMarkdownAcrossDeltas(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	first := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "**rendered first**\n",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, first.cmd)
+	if got := stripANSIAndTrimRight(out.String()); got != "" {
+		t.Fatalf("first newline-terminated rendered markdown row promoted before following line: %q", got)
+	}
+
+	second := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "second row\n",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, second.cmd)
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "**") {
+		t.Fatalf("native stable stream promotion exposed raw markdown markers: %q", plain)
+	}
+	if !strings.Contains(plain, "rendered first") {
+		t.Fatalf("native stable stream promotion skipped first rendered row: %q", plain)
+	}
+	tail := xansi.Strip(strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""))
+	if !strings.Contains(tail, "second row") {
+		t.Fatalf("native rendered tail skipped second row: %q", tail)
+	}
+}
+
+func TestNativeFinalAssistantStreamingHoldsUnterminatedLongLine(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	first := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      strings.Repeat("long paragraph segment ", 8),
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, first.cmd)
+	second := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      strings.Repeat("continued segment ", 8),
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, second.cmd)
+	if got := stripANSIAndTrimRight(out.String()); got != "" {
+		t.Fatalf("unterminated source line promoted before newline: %q", got)
+	}
+	if tail := xansi.Strip(strings.Join(m.nativeSurface.AssistantStreamTailLines(), "")); !strings.Contains(tail, "long paragraph") || !strings.Contains(tail, "continued") {
+		t.Fatalf("unterminated line tail skipped streamed text: %q", tail)
+	}
+}
+
+func TestNativeFinalAssistantStreamingHoldsUnterminatedInlineCodeLine(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 77, 36, WithUINativeSurfaceWriter(&out))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	source := "The QA capture shows the live assistant stream rendered as markdown in the live area with the input/status chrome intact. I saved proof at `/Users/nek/Dev/kent/.kent/qa/proofs/20260628T205525Z-native-rendered-markdown-active-final`;"
+	for _, chunk := range []string{source[:120], source[120:]} {
+		result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              "step-final",
+			AssistantDelta:      chunk,
+			AssistantDeltaPhase: clientui.MessagePhaseFinal,
+		})
+		_ = collectCmdMessages(t, result.cmd)
+	}
+	if got := stripANSIAndTrimRight(out.String()); got != "" {
+		t.Fatalf("unterminated inline-code source line promoted before newline: %q", got)
+	}
+	tail := xansi.Strip(strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""))
+	if !strings.Contains(tail, "QA capture") || !strings.Contains(tail, "markdown-active-final") {
+		t.Fatalf("unterminated inline-code tail skipped streamed text: %q", tail)
+	}
+}
+
+func TestNativeFinalAssistantStreamingPreservesWhitespaceOnlyTail(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "\t",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, result.cmd)
+	tail := strings.Join(m.nativeSurface.AssistantStreamTailLines(), "\n")
+	if !strings.Contains(tail, "\t") {
+		t.Fatalf("native whitespace-only stream tail skipped source whitespace: %#v", m.nativeSurface.AssistantStreamTailLines())
+	}
+}
+
+func TestNativeFinalAssistantStreamingHoldsUnstableMarkdownTable(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	chunks := []string{
+		"| Name | Value |\n",
+		"| --- | --- |\n",
+		"| alpha | beta |\n",
+	}
+	for _, chunk := range chunks {
+		result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              "step-final",
+			AssistantDelta:      chunk,
+			AssistantDeltaPhase: clientui.MessagePhaseFinal,
+		})
+		_ = collectCmdMessages(t, result.cmd)
+	}
+	if got := stripANSIAndTrimRight(out.String()); got != "" {
+		t.Fatalf("unstable markdown table promoted before table boundary: %q", got)
+	}
+	tail := xansi.Strip(strings.Join(m.nativeSurface.AssistantStreamTailLines(), "\n"))
+	if !strings.Contains(tail, "Name") || !strings.Contains(tail, "alpha") {
+		t.Fatalf("native rendered table tail skipped table content: %q", tail)
+	}
+
+	out.Reset()
+	committed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-final",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         1,
+		CommittedEntryCount:        1,
+		CommittedEntryStart:        0,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: strings.Join(chunks, ""), Phase: string(clientui.MessagePhaseFinal)}},
+	})
+	_ = collectCmdMessages(t, committed.cmd)
+	plain := stripANSIAndTrimRight(out.String())
+	if !strings.Contains(plain, "Name") || !strings.Contains(plain, "alpha") {
+		t.Fatalf("native stable table finalization skipped table content: %q", plain)
+	}
+}
+
+func TestNativeFinalAssistantStreamingHoldsUnclosedFenceWithBlankLine(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	open := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "```go\nline1\n\n",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, open.cmd)
+	more := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "line2\n",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, more.cmd)
+	if got := stripANSIAndTrimRight(out.String()); got != "" {
+		t.Fatalf("unclosed fenced code block promoted before fence closed: %q", got)
+	}
+
+	close := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "```\n",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, close.cmd)
+	plain := stripANSIAndTrimRight(out.String())
+	if !strings.Contains(plain, "line1") || !strings.Contains(plain, "line2") {
+		t.Fatalf("native rendered code promotion skipped fenced content: %q", plain)
+	}
+}
+
+func TestNativeFinalAssistantStreamingKeepsMismatchedFenceMarkerOpen(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	open := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "```go\nline1\n~~~ not close\n\n",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, open.cmd)
+	more := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "line2\n",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, more.cmd)
+	if got := stripANSIAndTrimRight(out.String()); got != "" {
+		t.Fatalf("mismatched fence marker closed fenced code block early: %q", got)
+	}
+}
+
+func TestNativeFinalAssistantStreamingKeepsFenceWithTrailingTextOpen(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	open := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "```go\nline1\n``` not close\n\n",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, open.cmd)
+	more := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "line2\n",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, more.cmd)
+	if got := stripANSIAndTrimRight(out.String()); got != "" {
+		t.Fatalf("fence line with trailing text closed fenced code block early: %q", got)
 	}
 }
 
@@ -482,8 +784,8 @@ func TestNativeSurfaceCommentaryStreamSurvivesGeometryReplacement(t *testing.T) 
 	if !m.nativeSurface.AssistantStreaming() {
 		t.Fatal("expected commentary delta to start native assistant streaming")
 	}
-	if got, want := strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""), "commentary before resize"; got != want {
-		t.Fatalf("native commentary stream tail before replacement = %q, want %q", got, want)
+	if got := xansi.Strip(strings.Join(m.nativeSurface.AssistantStreamTailLines(), "")); !strings.Contains(got, "commentary before resize") {
+		t.Fatalf("native commentary stream tail before replacement skipped assistant text: %q", got)
 	}
 	out.Reset()
 
@@ -503,8 +805,8 @@ func TestNativeSurfaceCommentaryStreamSurvivesGeometryReplacement(t *testing.T) 
 		AssistantDeltaPhase: clientui.MessagePhaseCommentary,
 	})
 	_ = collectCmdMessages(t, continued.cmd)
-	if got, want := strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""), " and after resize"; got != want {
-		t.Fatalf("native commentary stream tail after replacement = %q, want %q", got, want)
+	if got := xansi.Strip(strings.Join(m.nativeSurface.AssistantStreamTailLines(), "")); !strings.Contains(got, "and after resize") {
+		t.Fatalf("native commentary stream tail after replacement skipped assistant text: %q", got)
 	}
 }
 
@@ -969,8 +1271,8 @@ func TestNativeAssistantDeltaBuffersWhileDetailSurfaceIsActive(t *testing.T) {
 		AssistantDeltaPhase: clientui.MessagePhaseFinal,
 	})
 	_ = collectCmdMessages(t, back.cmd)
-	if got, want := strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""), "away back"; got != want {
-		t.Fatalf("native stream tail after held detail chunk = %q, want %q", got, want)
+	if got := xansi.Strip(strings.Join(m.nativeSurface.AssistantStreamTailLines(), "")); !strings.Contains(got, "away back") {
+		t.Fatalf("native stream tail after held detail chunk skipped assistant text: %q", got)
 	}
 	out.Reset()
 
@@ -1027,7 +1329,7 @@ func TestNativeSurfaceStreamWriteErrorDoesNotMarkAssistantStreamActive(t *testin
 		t.Fatal("expected native surface to initialize")
 	}
 
-	err := surface.StreamAssistantFinalAnswerContent(strings.Repeat("x", 80))
+	err := surface.StreamAssistantFinalAnswerContent(strings.Repeat("x", 81) + "\nnext\n")
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("stream error = %v, want %v", err, writeErr)
 	}
@@ -1050,7 +1352,7 @@ func TestNativeStableWriteErrorDisablesNativeSurface(t *testing.T) {
 	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
 		Kind:                clientui.EventAssistantDelta,
 		StepID:              "step-final",
-		AssistantDelta:      strings.Repeat("x", 120),
+		AssistantDelta:      strings.Repeat("x", 120) + "\nnext\n",
 		AssistantDeltaPhase: clientui.MessagePhaseFinal,
 	})
 	_ = collectCmdMessages(t, result.cmd)

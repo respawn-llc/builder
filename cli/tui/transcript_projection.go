@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	sharedtheme "core/shared/theme"
+
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 type TranscriptProjection struct {
@@ -561,7 +563,6 @@ func (p *TranscriptViewProjector) CommittedOngoingLines(input TranscriptProjecti
 }
 
 func (p *TranscriptViewProjector) StreamingOngoingLines(text string, state TranscriptProjectionViewState) []TranscriptProjectionLine {
-	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
 	}
@@ -576,18 +577,23 @@ func (p *TranscriptViewProjector) StreamingOngoingLines(text string, state Trans
 	if p != nil && p.streamingSet && p.streamingKey == key {
 		return p.streamingLines
 	}
-	renderer := transcriptProjectionRenderer(key.Theme, key.Width, 0)
-	plain := renderer.flattenEntryPlain(RenderIntentAssistant, text)
-	lines := make([]TranscriptProjectionLine, 0, len(plain))
-	for _, line := range plain {
-		lines = append(lines, TranscriptProjectionLine{Kind: VisibleLineContent, Text: line})
-	}
+	lines := RenderAssistantMarkdownStreamingProjection(text, key.Theme, key.Width)
 	if p != nil {
 		p.streamingKey = key
 		p.streamingLines = lines
 		p.streamingSet = true
 	}
 	return lines
+}
+
+func RenderAssistantMarkdownStreamingProjection(text string, theme string, width int) []TranscriptProjectionLine {
+	if text == "" {
+		return nil
+	}
+	if strings.TrimSpace(text) == "" {
+		return renderAssistantWhitespaceStreamingProjection(text, width)
+	}
+	return RenderAssistantMarkdownProjection(text, theme, width)
 }
 
 func RenderAssistantMarkdownProjection(text string, theme string, width int) []TranscriptProjectionLine {
@@ -601,6 +607,39 @@ func RenderAssistantMarkdownProjection(text string, theme string, width int) []T
 		lines = append(lines, TranscriptProjectionLine{Kind: VisibleLineContent, Text: line})
 	}
 	return lines
+}
+
+func renderAssistantWhitespaceStreamingProjection(text string, width int) []TranscriptProjectionLine {
+	if width < 1 {
+		width = 120
+	}
+	normalized := strings.ReplaceAll(text, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	parts := strings.Split(normalized, "\n")
+	if strings.HasSuffix(normalized, "\n") && len(parts) > 0 {
+		parts = parts[:len(parts)-1]
+	}
+	lines := make([]TranscriptProjectionLine, 0, len(parts))
+	for _, part := range parts {
+		for _, row := range wrapAssistantWhitespaceLine(part, width) {
+			lines = append(lines, TranscriptProjectionLine{Kind: VisibleLineContent, Text: row})
+		}
+	}
+	return lines
+}
+
+func wrapAssistantWhitespaceLine(line string, width int) []string {
+	if line == "" {
+		return []string{""}
+	}
+	rows := []string{}
+	remaining := line
+	for xansi.StringWidth(remaining) > width {
+		visualWidth := xansi.StringWidth(remaining)
+		rows = append(rows, xansi.Cut(remaining, 0, width))
+		remaining = xansi.Cut(remaining, width, visualWidth)
+	}
+	return append(rows, remaining)
 }
 
 func (p *TranscriptViewProjector) StreamingDetailAssistantLines(text string, state TranscriptProjectionViewState) []string {

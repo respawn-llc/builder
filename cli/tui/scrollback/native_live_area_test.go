@@ -269,23 +269,23 @@ func TestAssistantStreamAppendErasesStreamChromeWithoutAddingLinefeed(t *testing
 	if err := liveArea.Render(nativeLiveAreaFrame("input", "hello")); err != nil {
 		t.Fatalf("render during stream returned error: %v", err)
 	}
-	if err := buffer.StreamMarkdownAssistantContent(" world"); err != nil {
+	if err := buffer.StreamMarkdownAssistantContent(" world\nnext\n"); err != nil {
 		t.Fatalf("second stream returned error: %v", err)
 	}
 
 	want := "old" + xansi.HideCursor +
 		liveAreaEraseSequence(1) + "input" + terminalLineBreak + "hello" + xansi.HideCursor +
-		liveAreaEraseSequence(2) + "hello " + terminalLineBreak
+		liveAreaEraseSequence(2) + "hello " + terminalLineBreak + "world" + terminalLineBreak
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
-	if got, want := strings.Join(buffer.AssistantStreamTailLines(), "|"), "world"; got != want {
+	if got, want := strings.Join(buffer.AssistantStreamTailLines(), "|"), "next"; got != want {
 		t.Fatalf("assistant stream tail = %q, want %q", got, want)
 	}
-	if err := liveArea.Render(nativeLiveAreaFrame("input", "world")); err != nil {
+	if err := liveArea.Render(nativeLiveAreaFrame("input", "next")); err != nil {
 		t.Fatalf("render latest tail returned error: %v", err)
 	}
-	wantAfterRender := want + "input" + terminalLineBreak + "world" + xansi.HideCursor
+	wantAfterRender := want + "input" + terminalLineBreak + "next" + xansi.HideCursor
 	if got := out.String(); got != wantAfterRender {
 		t.Fatalf("terminal output after live tail render = %q, want %q", got, wantAfterRender)
 	}
@@ -305,18 +305,18 @@ func TestAssistantStreamAppendErasesMultilineStreamChromeFromBottom(t *testing.T
 	if err := liveArea.Render(nativeLiveAreaFrame("new 1", "new 2", "hello")); err != nil {
 		t.Fatalf("render during stream returned error: %v", err)
 	}
-	if err := buffer.StreamMarkdownAssistantContent(" world"); err != nil {
+	if err := buffer.StreamMarkdownAssistantContent(" world\nnext\n"); err != nil {
 		t.Fatalf("second stream returned error: %v", err)
 	}
 
 	want := "old 1" + terminalLineBreak + "old 2" + terminalLineBreak + "old 3" + xansi.HideCursor +
 		liveAreaEraseSequence(3) +
 		"new 1" + terminalLineBreak + "new 2" + terminalLineBreak + "hello" + xansi.HideCursor +
-		liveAreaEraseSequence(3) + "hello " + terminalLineBreak
+		liveAreaEraseSequence(3) + "hello " + terminalLineBreak + "world" + terminalLineBreak
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
-	if got, want := strings.Join(buffer.AssistantStreamTailLines(), "|"), "world"; got != want {
+	if got, want := strings.Join(buffer.AssistantStreamTailLines(), "|"), "next"; got != want {
 		t.Fatalf("assistant stream tail = %q, want %q", got, want)
 	}
 }

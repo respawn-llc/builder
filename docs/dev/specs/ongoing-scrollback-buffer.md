@@ -57,11 +57,15 @@ All terminal buffer writes assert terminal-main-thread ownership. Blocking or no
 
 ## Assistant Streaming
 
-Assistant streaming is source-backed. `StreamMarkdownAssistantContent` appends incoming assistant content to the surface's active assistant stream state. Complete visual rows are promoted into the stable zone through normal stable-write transactions. The mutable active tail remains in surface state and is exposed as live-area tail lines for rendering with input, status, and pending chrome.
+Assistant streaming is source-backed. `StreamMarkdownAssistantContent` appends incoming assistant content to the surface's active assistant stream state, renders the complete source through the assistant markdown projection for the active theme and terminal width, and promotes rendered projection rows into the stable zone through normal stable-write transactions. The mutable active rendered tail remains in surface state and is exposed as live-area tail lines for rendering with input, status, and pending chrome.
 
-Partial assistant chunks must not be raw-written into normal-buffer scrollback. The active stream tail is the only mutable assistant stream content. `FinishAssistantStreaming` promotes the remaining tail into the stable zone, flushes queued stable appends, clears active stream state, and restores the latest live area.
+Partial assistant chunks must not be raw-written into normal-buffer scrollback. Stable stream rows are rendered markdown projection rows, not raw deltas or raw terminal wrapping. The active stream tail is the only mutable assistant stream content. `FinishAssistantStreaming` promotes the remaining rendered tail into the stable zone, flushes queued stable appends, clears active stream state, and restores the latest live area.
 
-Active tail reads preserve whitespace. Leading spaces and indentation in markdown/code-block streams are source content, not empty UI chrome.
+Already-promoted rendered stream rows are immutable. The immutability key is the canonical rendered terminal state for the row, including text, display width, per-cell style, per-cell hyperlinks, and final pen/link state after the row. Equivalent escape-sequence churn does not change the key. If re-rendering the source changes a promoted row's canonical terminal state, the surface fails fast instead of rewriting, restyling, clearing, or replaying stable scrollback content.
+
+Streaming promotion keeps the mutable rendered tail live. Rendered rows for unterminated source lines remain in the live tail because later source can reflow the line. An empty stable source prefix promotes no rendered rows, even if the markdown renderer emits structural blank rows for empty input. Markdown blocks whose earlier rendered rows can change as the block grows, including active pipe tables and unclosed fenced code blocks, remain in the live tail until a block boundary or stream finish makes the rendered prefix stable. Holdback is monotonic at the promoted-row boundary: heuristics may hold newly rendered rows, but they must not move the promotion limit behind rows already emitted to stable scrollback.
+
+Active tail reads preserve whitespace. Leading spaces, tabs, and indentation in markdown/code-block streams are source content, not empty UI chrome.
 
 Only assistant deltas with structured commentary or final-answer phase may use native assistant streaming. Missing-phase deltas do not use native streaming; that assistant's committed transcript message is written as stable committed transcript content instead of finalizing a partial native stream.
 

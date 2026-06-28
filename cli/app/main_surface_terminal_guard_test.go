@@ -370,7 +370,7 @@ type mainSurfaceGuardFunctionContext struct {
 func mainSurfaceGuardAllowsTerminalWrite(context mainSurfaceGuardFunctionContext) bool {
 	if context.receiver == "OngoingScrollbackBufferImpl" {
 		switch context.name {
-		case "Steer", "StreamMarkdownAssistantContent", "FinishAssistantStreaming", "writeSteerPayloadLocked", "writeAssistantStreamPayloadLocked", "writeAssistantStreamTerminatorLocked":
+		case "Steer", "StreamMarkdownAssistantContent", "FinishAssistantStreaming", "writeSteerPayloadLocked", "writeAssistantStreamPayloadLocked", "writeAssistantStreamTerminatorLocked", "writeAssistantStreamRowsLocked":
 			return true
 		}
 	}
