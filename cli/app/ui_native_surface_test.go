@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"core/cli/app/commands"
 	"core/cli/tui"
 	"core/shared/clientui"
 	"core/shared/transcript"
@@ -196,6 +197,63 @@ func TestNativeOngoingLiveAreaBoundsFullFrameToTerminalHeight(t *testing.T) {
 	}
 	if !strings.Contains(plain, "queued two") || !strings.Contains(plain, "input one") || !strings.Contains(plain, "input two") || !strings.Contains(plain, "status") {
 		t.Fatalf("native bounded full frame dropped expected tail lines, got %q", plain)
+	}
+}
+
+func TestNativeOngoingSlashCommandPickerRowsFitLiveAreaWidth(t *testing.T) {
+	var out bytes.Buffer
+	registry := commands.NewRegistry()
+	registry.RegisterWithOptions("long", strings.Repeat("wide description ", 12), commands.RegisterOptions{}, func(string) commands.Result {
+		return commands.Result{Handled: true}
+	})
+	m := newSizedProjectedClosedUIModel(nil, 76, 36, WithUINativeSurfaceWriter(&out), WithUICommandRegistry(registry))
+	m.replaceMainInput("/", -1)
+	m.refreshSlashCommandFilterFromInputWithAuth(false)
+	assertNativeFrameLinesFitTerminalWidth(t, m)
+
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("native live area render error = %v, want nil", m.nativeLiveAreaError)
+	}
+}
+
+func TestNativeOngoingPathReferencePickerRowsFitLiveAreaWidth(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 32, 18, WithUINativeSurfaceWriter(&out))
+	m.replaceMainInput("inspect @wide", -1)
+	m.pathReference.tracked = uiPathReferenceQuery{
+		Active:          true,
+		Start:           8,
+		End:             13,
+		RawQuery:        "wide",
+		NormalizedQuery: "wide",
+	}
+	m.pathReference.matches = []uiPathReferenceCandidate{{
+		Path: strings.Repeat("nested-directory/", 8) + "target.go",
+	}}
+	assertNativeFrameLinesFitTerminalWidth(t, m)
+
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("native live area render error = %v, want nil", m.nativeLiveAreaError)
+	}
+}
+
+func assertNativeFrameLinesFitTerminalWidth(t *testing.T, m *uiModel) {
+	t.Helper()
+	frame := m.layout().composeNativeLiveFrame(uiThemeStyles(m.theme), m.termWidth, m.termHeight)
+	lines := frame.renderLines()
+	if len(lines) == 0 {
+		t.Fatal("expected native frame lines")
+	}
+	for _, line := range lines {
+		if got := lipgloss.Width(line); got > m.termWidth {
+			t.Fatalf("native frame line width = %d, terminal width is %d, raw=%q", got, m.termWidth, line)
+		}
 	}
 }
 

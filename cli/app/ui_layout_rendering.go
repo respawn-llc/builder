@@ -126,6 +126,7 @@ func (l uiViewLayout) renderActivePicker(width int) []string {
 				}
 			}
 		}
+		line = truncateANSIRight(line, width)
 		out = append(out, padANSIRight(line, width))
 	}
 	return out
