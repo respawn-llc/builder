@@ -229,6 +229,27 @@ func TestNativeOngoingDefersLiveAreaUntilTerminalSizeKnown(t *testing.T) {
 	}
 }
 
+func TestNativeSurfaceModelCloseDoesNotWriteAfterProgramExit(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 80, 20)
+	m.nativeSurface = newUINativeSurface(
+		uiMainThreadTerminalWriter{model: m, out: &out, kind: "native surface"},
+		m.nativeNormalBufferAvailable,
+		m.handleNativeDelayedWriteError,
+	)
+	m.replaceMainInput("close without terminal write", -1)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	m.Close()
+
+	if out.String() != "" {
+		t.Fatalf("model close wrote to terminal after program exit: %q", out.String())
+	}
+}
+
 func TestNativeOngoingSlashCommandPickerRowsFitLiveAreaWidth(t *testing.T) {
 	var out bytes.Buffer
 	registry := commands.NewRegistry()
@@ -1171,6 +1192,67 @@ func TestNativeCompleteStreamFinalizerDeliversMergedCommittedRows(t *testing.T) 
 	}
 }
 
+func TestNativeStableProjectionChangeAppendsAfterOverlappingRecentTail(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := nativeStableProjectionForTest("old-a", "old-b")
+	current := nativeStableProjectionForTest("old-b", "new-c", "new-d")
+	exitMainThread := m.enterUIMainThread("native stable overlap test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false)
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("overlapping projection delivery returned error: %v", err)
+	}
+
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "old-b") {
+		t.Fatalf("overlapping projection delivery replayed overlap block, got %q", plain)
+	}
+	if !strings.Contains(plain, "new-c") || !strings.Contains(plain, "new-d") {
+		t.Fatalf("overlapping projection delivery skipped new tail blocks, got %q", plain)
+	}
+}
+
+func TestNativeStableProjectionChangeSkipsStreamedBlockAfterOverlappingRecentTail(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+	streamExitMainThread := m.enterUIMainThread("native stable overlap stream setup")
+	if err := m.nativeSurface.StreamAssistantFinalAnswerContent("streamed-answer"); err != nil {
+		streamExitMainThread()
+		t.Fatalf("stream native assistant content: %v", err)
+	}
+	streamExitMainThread()
+
+	previous := nativeStableProjectionForTest("old-a", "old-b")
+	current := nativeStableProjectionForTest("old-b", "streamed-answer", "after-stream")
+	exitMainThread := m.enterUIMainThread("native stable overlap active stream test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false)
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("overlapping active-stream projection delivery returned error: %v", err)
+	}
+
+	plain := stripANSIAndTrimRight(out.String())
+	if got := strings.Count(plain, "streamed-answer"); got != 1 {
+		t.Fatalf("overlapping active-stream delivery wrote streamed block %d times, want once; output=%q", got, plain)
+	}
+	if strings.Contains(plain, "old-b") {
+		t.Fatalf("overlapping active-stream delivery replayed overlap block, got %q", plain)
+	}
+	if !strings.Contains(plain, "after-stream") {
+		t.Fatalf("overlapping active-stream delivery skipped post-stream block, got %q", plain)
+	}
+}
+
 func TestNativeStableReplaceDeliversCommittedProjectionAppend(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
@@ -1264,7 +1346,7 @@ func TestNativeStableReplacePanicsOnNonAppendProjectionRewriteInDebug(t *testing
 	if !strings.Contains(panicText, "Native scrollback invariant violation") {
 		t.Fatalf("panic text missing invariant header:\n%s", panicText)
 	}
-	if !strings.Contains(panicText, "operation=steerNativeStableAppend") {
+	if !strings.Contains(panicText, "operation=deliverNativeStableProjectionChange") {
 		t.Fatalf("panic text missing operation:\n%s", panicText)
 	}
 	if !strings.Contains(panicText, "native stable append is not contiguous") {
@@ -1273,6 +1355,17 @@ func TestNativeStableReplacePanicsOnNonAppendProjectionRewriteInDebug(t *testing
 	if !strings.Contains(panicText, "stack:") {
 		t.Fatalf("panic text missing stack:\n%s", panicText)
 	}
+}
+
+func nativeStableProjectionForTest(lines ...string) tui.TranscriptProjection {
+	blocks := make([]tui.TranscriptProjectionBlock, 0, len(lines))
+	for _, line := range lines {
+		blocks = append(blocks, tui.TranscriptProjectionBlock{
+			DividerGroup: "test",
+			Lines:        []string{line},
+		})
+	}
+	return tui.TranscriptProjection{Blocks: blocks}
 }
 
 func newNativeSurfaceTestModel(out *bytes.Buffer) *uiModel {

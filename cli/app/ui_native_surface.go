@@ -67,10 +67,20 @@ func (s *uiNativeSurface) ready(width int, height int) bool {
 }
 
 func (s *uiNativeSurface) Close() {
+	s.close(true)
+}
+
+func (s *uiNativeSurface) Drop() {
+	s.close(false)
+}
+
+func (s *uiNativeSurface) close(clearLive bool) {
 	if s == nil {
 		return
 	}
-	s.clearLiveFrame()
+	if clearLive {
+		s.clearLiveFrame()
+	}
 	s.width = 0
 	s.height = 0
 	s.buffer = nil
@@ -240,6 +250,19 @@ func (m *uiModel) closeNativeSurface() {
 	m.syncRendererOutputGate()
 }
 
+func (m *uiModel) dropNativeSurface() {
+	if m == nil || m.nativeSurface == nil {
+		return
+	}
+	m.nativeSurface.Drop()
+	m.nativeSurface = nil
+	m.nativeAssistantStreamIncomplete = false
+	m.nativeResizeRehydrateToken = 0
+	m.nativeResizeRehydrateSettled = false
+	m.nativeResizeRehydrateActive = false
+	m.syncRendererOutputGate()
+}
+
 func (m *uiModel) nativePhysicalAltScreenActive() bool {
 	return m != nil && m.rendererOutputGate != nil && m.rendererOutputGate.PhysicalAltScreenActive()
 }
@@ -315,6 +338,25 @@ func (m *uiModel) steerNativeStableAppend(previous tui.TranscriptProjection, cur
 		return m.nativeStableProjectionInvariantError("steerNativeStableAppend", previous, current)
 	}
 	return m.steerNativeProjectionLines(current.LinesFromBlock(len(previous.Blocks), tui.TranscriptDivider))
+}
+
+func (m *uiModel) steerNativeStableProjectionChange(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+	if m == nil || m.nativeSurface == nil || m.nativeSurface.StableBuffer() == nil {
+		return nil
+	}
+	if current.Empty() {
+		return nil
+	}
+	if previous.Empty() {
+		return m.steerNativeProjectionLines(current.Lines(tui.TranscriptDivider))
+	}
+	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
+		return m.steerNativeProjectionLines(current.LinesFromBlock(len(previous.Blocks), tui.TranscriptDivider))
+	}
+	if overlap := current.SharedSuffixPrefixBlockCount(previous); overlap > 0 {
+		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
+	}
+	return m.nativeStableProjectionInvariantError(operation, previous, current)
 }
 
 func (m *uiModel) steerNativeStableAppendFromBlock(current tui.TranscriptProjection, startBlock int) error {

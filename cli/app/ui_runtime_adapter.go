@@ -241,18 +241,21 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 		return nil
 	}
 	if !nativeAssistantStreamActive {
-		return m.steerNativeStableAppend(previous, current)
+		return m.steerNativeStableProjectionChange("deliverNativeStableProjectionChange", previous, current)
 	}
 	if err := m.finishNativeAssistantStreaming(); err != nil {
 		return err
 	}
 	if nativeAssistantStreamWasIncomplete {
-		return m.steerNativeStableAppend(previous, current)
+		return m.steerNativeStableProjectionChange("deliverNativeStableProjectionChange", previous, current)
 	}
-	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
-		return m.nativeStableProjectionInvariantError("deliverNativeStableProjectionChange", previous, current)
+	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
+		return m.steerNativeStableAppendFromBlock(current, len(previous.Blocks)+1)
 	}
-	return m.steerNativeStableAppendFromBlock(current, len(previous.Blocks)+1)
+	if overlap := current.SharedSuffixPrefixBlockCount(previous); overlap > 0 {
+		return m.steerNativeStableAppendFromBlock(current, overlap+1)
+	}
+	return m.nativeStableProjectionInvariantError("deliverNativeStableProjectionChange", previous, current)
 }
 
 func (m *uiModel) nativeSurfaceErrorCmd(action string, err error) tea.Cmd {

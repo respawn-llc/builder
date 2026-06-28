@@ -310,7 +310,7 @@ func (m *uiModel) Close() {
 	if m == nil {
 		return
 	}
-	m.closeNativeSurface()
+	m.dropNativeSurface()
 	m.syncRendererOutputGate()
 	if m.pathReferenceSearch != nil {
 		m.pathReferenceSearch.Stop()

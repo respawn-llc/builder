@@ -40,6 +40,12 @@ func (l uiViewLayout) calcChatLines() int {
 }
 
 func (l uiViewLayout) syncViewport() {
+	if l.model == nil {
+		return
+	}
+	if l.model.nativeSurfaceConfigured() && (l.model.termWidth <= 0 || l.model.termHeight <= 0) {
+		return
+	}
 	width := l.effectiveWidth()
 	l.model.forwardToView(tui.SetViewportSizeMsg{
 		Lines: l.calcChatLines(),
