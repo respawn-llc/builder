@@ -83,6 +83,8 @@ func (e *runtimeEntry) dropOwner(ownerID string) int {
 			return e.ownerRefs
 		}
 		delete(e.ownerIDs, trimmed)
+	} else if e.ownerRefs <= len(e.ownerIDs) {
+		return e.ownerRefs
 	}
 	if e.ownerRefs > 0 {
 		e.ownerRefs--

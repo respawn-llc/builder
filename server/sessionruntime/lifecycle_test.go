@@ -247,10 +247,18 @@ func TestRecreateRuntimeHoldsRunBlockUntilRelease(t *testing.T) {
 
 	blocked := make(chan func(), 1)
 	go func() { blocked <- reg.BlockSessionRuns([]string{sessionID}) }()
+	deadline := time.After(time.Second)
+	for !reg.SessionRunsBlocked(sessionID) {
+		select {
+		case <-deadline:
+			t.Fatal("BlockSessionRuns never registered the block")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 	select {
 	case <-blocked:
 		t.Fatal("BlockSessionRuns proceeded before the acquired runtime released its run block")
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 
 	if err := release(context.Background()); err != nil {

@@ -407,7 +407,7 @@ func (e *Engine) finishGoalLoop() {
 func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool) {
 	appendNudge := !firstTurnAlreadyPrompted
 	for {
-		if !e.shouldContinueGoalLoop() {
+		if !e.shouldContinueGoalLoop(ctx) {
 			return
 		}
 		if _, err := e.runGoalTurn(ctx, appendNudge); err != nil {
@@ -479,8 +479,11 @@ func (e *Engine) recordGoalLoopError(err error) {
 	e.SetStreamingError(message)
 }
 
-func (e *Engine) shouldContinueGoalLoop() bool {
+func (e *Engine) shouldContinueGoalLoop(ctx context.Context) bool {
 	if e == nil {
+		return false
+	}
+	if ctx != nil && ctx.Err() != nil {
 		return false
 	}
 	return !e.goalLoopState().Suspended() && e.goalActive()

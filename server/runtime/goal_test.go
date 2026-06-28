@@ -831,7 +831,7 @@ func TestGoalLoopRetriesWhenExclusiveStepIsBusy(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", got)
 	}
 	for _, entry := range engine.ChatSnapshot().Entries {
-		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && strings.Contains(entry.Text, ErrAgentBusy.Error()) {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
 			t.Fatalf("did not expect busy retry to persist goal-loop error, entries=%+v", engine.ChatSnapshot().Entries)
 		}
 	}

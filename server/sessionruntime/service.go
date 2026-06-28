@@ -233,6 +233,12 @@ func (s *Service) buildIntoClaim(ctx context.Context, sessionID string, claim *r
 		return err
 	}
 	engine := built.Engine
+	if engine == nil {
+		if built.Close != nil {
+			cleanup = built.Close
+		}
+		return errors.New("runtime build produced no engine")
+	}
 	rebind := runtimeRebindFunc(built.LocalRebind, engine)
 	if s.backgroundRouter != nil {
 		s.backgroundRouter.SetActiveSession(sessionID, engine)
@@ -287,6 +293,9 @@ func (s *Service) beginRecreateRun(sessionID string, exclusive bool) (func(), er
 
 func (s *Service) recreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder, beforeReplace func(*runtime.Engine) error, exclusive bool) (AcquiredRuntimeRelease, error) {
 	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, errors.New("session id is required")
+	}
 	if s.runtimes == nil {
 		return nil, runtimeUnavailableErr(sessionID)
 	}
@@ -298,6 +307,10 @@ func (s *Service) recreateRuntime(ctx context.Context, sessionID string, ownerID
 	if err != nil {
 		releaseRun()
 		return nil, err
+	}
+	if claim == nil {
+		releaseRun()
+		return nil, runtimeUnavailableErr(sessionID)
 	}
 	if err := s.buildIntoClaim(ctx, sessionID, claim, build); err != nil {
 		releaseRun()

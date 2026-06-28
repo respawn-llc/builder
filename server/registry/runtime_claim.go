@@ -263,17 +263,20 @@ func (c *RuntimeClaim) BeginRelease(ownerID string, dropOwner bool, onlyIfIdle b
 	if e.closing {
 		return RuntimeReleaseClosing, 0
 	}
-	if trimmed := strings.TrimSpace(ownerID); trimmed != "" {
+	trimmed := strings.TrimSpace(ownerID)
+	if trimmed != "" {
 		if _, owns := e.ownerIDs[trimmed]; !owns {
 			return RuntimeReleaseNotOwner, 0
 		}
+	} else if dropOwner && e.ownerRefs > 0 && len(e.ownerIDs) >= e.ownerRefs {
+		return RuntimeReleaseNotOwner, 0
 	}
 	if !onlyIfIdle {
 		return RuntimeReleaseClose, e.ownerRefs
 	}
 	if dropOwner && e.ownerRefs > 1 {
 		e.ownerRefs--
-		if trimmed := strings.TrimSpace(ownerID); trimmed != "" {
+		if trimmed != "" {
 			delete(e.ownerIDs, trimmed)
 		}
 		return RuntimeReleaseDroppedRef, e.ownerRefs
