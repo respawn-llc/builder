@@ -108,7 +108,7 @@ func (area *NativeLiveAreaImpl) erasePhysicalLocked() error {
 	}
 	sequence := liveAreaCursorRestoreAnchorSequence(area.cursorPlaced, area.placedCursor, area.renderedLines) + liveAreaEraseSequence(area.renderedLines)
 	if area.streamAnchored {
-		sequence = area.streamAnchoredLiveAreaEraseSequence(area.renderedLines)
+		sequence = streamAnchoredLiveAreaEraseSequence(area.renderedLines)
 	}
 	written, err := io.WriteString(area.buffer.stableWriter, sequence)
 	if err != nil {
@@ -152,7 +152,7 @@ func (area *NativeLiveAreaImpl) renderPhysicalDuringAssistantStreamLocked() erro
 	if area == nil || len(area.frame.Lines) == 0 {
 		return nil
 	}
-	payload := terminalSaveCursor + area.streamLiveAreaStartSequence(len(area.frame.Lines)) + strings.Join(area.frame.Lines, terminalLineBreak) + xansi.HideCursor + terminalRestoreCursor
+	payload := terminalSaveCursor + xansi.CursorDown(1) + "\r" + strings.Join(area.frame.Lines, terminalLineBreak) + xansi.HideCursor + terminalRestoreCursor
 	written, err := io.WriteString(area.buffer.stableWriter, payload)
 	if err != nil {
 		return fmt.Errorf("render live area during assistant stream failed: %s: %w", liveAreaWriteDiagnostics(payload, area.terminalWidth, area.terminalHeight, written), err)
@@ -245,47 +245,11 @@ func liveAreaEraseSequence(renderedLines int) string {
 	return out.String()
 }
 
-func (area *NativeLiveAreaImpl) streamAnchoredLiveAreaEraseSequence(renderedLines int) string {
+func streamAnchoredLiveAreaEraseSequence(renderedLines int) string {
 	if renderedLines <= 0 {
 		return ""
 	}
-	return terminalSaveCursor + area.streamLiveAreaStartSequence(renderedLines) + liveAreaEraseForwardSequence(renderedLines) + terminalRestoreCursor
-}
-
-func (area *NativeLiveAreaImpl) streamLiveAreaStartSequence(renderedLines int) string {
-	if area == nil {
-		return streamLiveAreaStartSequence(renderedLines, 0)
-	}
-	return streamLiveAreaStartSequence(renderedLines, area.terminalHeight)
-}
-
-func streamLiveAreaStartSequence(renderedLines int, terminalHeight int) string {
-	if renderedLines <= 0 {
-		return ""
-	}
-	if terminalHeight <= 0 {
-		return xansi.CursorDown(renderedLines) + "\r"
-	}
-	row := terminalHeight - renderedLines + 1
-	if row < 1 {
-		row = 1
-	}
-	return xansi.CursorPosition(1, row)
-}
-
-func liveAreaEraseForwardSequence(renderedLines int) string {
-	if renderedLines <= 0 {
-		return ""
-	}
-	var out strings.Builder
-	for index := 0; index < renderedLines; index++ {
-		if index > 0 {
-			out.WriteString(xansi.CursorDown(1))
-			out.WriteString("\r")
-		}
-		out.WriteString(xansi.EraseEntireLine)
-	}
-	return out.String()
+	return terminalSaveCursor + xansi.CursorDown(renderedLines) + "\r" + liveAreaEraseSequence(renderedLines) + terminalRestoreCursor
 }
 
 func liveAreaCursorPlacementSequence(cursor NativeLiveAreaCursor, renderedLines int) string {
