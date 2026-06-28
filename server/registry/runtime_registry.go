@@ -216,6 +216,7 @@ func (r *RuntimeRegistry) finishClose(ctx context.Context, sessionID string, eng
 	if drain != nil {
 		drainErr = drain(ctx)
 	}
+	drainRef.WaitForGuards()
 	removedID, removedEntry := r.directory.RemoveClosing(sessionID, engine, entry)
 	if removedID == "" || removedEntry == nil {
 		drainRef.Release()
@@ -491,7 +492,7 @@ func (r *RuntimeRegistry) SubmitPromptResponse(sessionID string, resp askquestio
 		return fmt.Errorf("runtime registry is required")
 	}
 	id := strings.TrimSpace(sessionID)
-	guard, guardErr := r.directory.BeginGuard(context.Background(), id)
+	guard, guardErr := r.directory.BeginPromptResponseGuard(context.Background(), id, resp.RequestID)
 	if guardErr != nil {
 		return guardErr
 	}

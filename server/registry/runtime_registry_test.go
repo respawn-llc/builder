@@ -783,8 +783,61 @@ func TestRuntimeRegistrySubmitPromptResponseRejectedWhileClosing(t *testing.T) {
 
 	registry.directory.Entry("session-1").markClosing()
 
-	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); err == nil {
-		t.Fatal("SubmitPromptResponse must be rejected while the runtime is closing")
+	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); !errors.Is(err, serverapi.ErrPromptNotFound) {
+		t.Fatalf("SubmitPromptResponse error=%v, want ErrPromptNotFound for stale closing response", err)
+	}
+}
+
+func TestRuntimeRegistrySubmitPromptResponseAllowedForClosingDrainPrompt(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := &runtime.Engine{}
+	registerReady(t, registry, "session-1", engine)
+
+	claim := registry.RuntimeClaimFor("session-1")
+	drainStarted := make(chan struct{})
+	closeDone := make(chan error, 1)
+	go func() {
+		_, err := claim.Close(context.Background(), func(ctx context.Context) error {
+			close(drainStarted)
+			resp, err := registry.AwaitPromptResponse(ctx, "session-1", askquestion.AskQuestionRequest{ID: "ask-1", Question: "Proceed?"})
+			if err != nil {
+				return err
+			}
+			if resp.Answer != "yes" {
+				return fmt.Errorf("prompt answer = %q, want yes", resp.Answer)
+			}
+			return nil
+		})
+		closeDone <- err
+	}()
+
+	select {
+	case <-drainStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for close drain")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		items := registry.ListPendingPrompts("session-1")
+		if len(items) == 1 && items[0].Request.ID == "ask-1" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pending drain prompt was not published: %+v", items)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "yes"}, nil); err != nil {
+		t.Fatalf("SubmitPromptResponse while closing drain waits: %v", err)
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("close drain: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close drain hung after prompt response")
 	}
 }
 

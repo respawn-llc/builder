@@ -345,6 +345,33 @@ func (d *runtimeDirectory) BeginGuard(ctx context.Context, sessionID string) (*r
 	return entry.beginGuard(ctx, id)
 }
 
+func (d *runtimeDirectory) BeginPromptResponseGuard(ctx context.Context, sessionID string, requestID string) (*runtimeGuard, error) {
+	if d == nil {
+		return nil, fmt.Errorf("runtime directory is required")
+	}
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return nil, fmt.Errorf("runtime session id is required")
+	}
+	d.mu.RLock()
+	entry := d.entries[id]
+	d.mu.RUnlock()
+	if entry == nil {
+		return nil, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("runtime %q is unavailable", id))
+	}
+	if _, err := entry.awaitReady(ctx); err != nil {
+		return nil, err
+	}
+	d.mu.RLock()
+	if d.entries[id] != entry {
+		d.mu.RUnlock()
+		return nil, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("runtime %q is unavailable", id))
+	}
+	guard, err := entry.beginPromptResponseGuard(ctx, id, requestID)
+	d.mu.RUnlock()
+	return guard, err
+}
+
 func (e *runtimeEntry) beginGuard(ctx context.Context, sessionID string) (*runtimeGuard, error) {
 	if e == nil {
 		return nil, fmt.Errorf("runtime entry is unavailable")
@@ -353,6 +380,22 @@ func (e *runtimeEntry) beginGuard(ctx context.Context, sessionID string) (*runti
 	defer e.mu.Unlock()
 	if e.closing {
 		return nil, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("runtime entry is closing"))
+	}
+	e.inFlight++
+	return &runtimeGuard{entry: e, engine: e.engine, sessionID: strings.TrimSpace(sessionID), generation: e.generation}, nil
+}
+
+func (e *runtimeEntry) beginPromptResponseGuard(ctx context.Context, sessionID string, requestID string) (*runtimeGuard, error) {
+	if e == nil {
+		return nil, fmt.Errorf("runtime entry is unavailable")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closing && !e.pendingPrompts.Has(requestID) {
+		return nil, fmt.Errorf("prompt %q not found: %w", strings.TrimSpace(requestID), serverapi.ErrPromptNotFound)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	e.inFlight++
 	return &runtimeGuard{entry: e, engine: e.engine, sessionID: strings.TrimSpace(sessionID), generation: e.generation}, nil
