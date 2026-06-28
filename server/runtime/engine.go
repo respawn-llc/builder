@@ -153,6 +153,7 @@ type Engine struct {
 	lifecycleCancel context.CancelFunc
 	lifecycleWG     sync.WaitGroup
 	lifecycleClosed bool
+	closed          atomic.Bool
 
 	store    *session.Store
 	llm      llm.Client
@@ -363,6 +364,7 @@ func (e *Engine) Close() error {
 		return interruptErr
 	}
 	e.lifecycleClosed = true
+	e.closed.Store(true)
 	cancel := e.lifecycleCancel
 	e.lifecycleMu.Unlock()
 	if cancel != nil {
@@ -445,6 +447,9 @@ func (e *Engine) SubmitUserMessage(ctx context.Context, text string) (assistant 
 	if text == "" {
 		return llm.Message{}, errors.New("empty message")
 	}
+	if e.closed.Load() {
+		return llm.Message{}, ErrEngineClosed
+	}
 
 	e.ensureOrchestrationCollaborators()
 	e.goalLoopState().Resume()
@@ -475,6 +480,9 @@ func (e *Engine) SubmitUserMessage(ctx context.Context, text string) (assistant 
 func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message, err error) {
 	if !e.workflowRunActive() {
 		return llm.Message{}, errors.New("workflow turn requires an active workflow run")
+	}
+	if e.closed.Load() {
+		return llm.Message{}, ErrEngineClosed
 	}
 
 	e.ensureOrchestrationCollaborators()

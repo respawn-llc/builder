@@ -15,6 +15,8 @@ import (
 
 var ErrAgentBusy = errors.New("agent is busy")
 
+var ErrEngineClosed = errors.New("runtime engine is closed")
+
 // errMarkInFlightFalse wraps failures to clear the in-flight marker at step end.
 var errMarkInFlightFalse = errors.New("mark in-flight false")
 

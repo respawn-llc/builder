@@ -942,3 +942,17 @@ func TestReviewerAppliedFollowUpRemainsVisibleInTranscript(t *testing.T) {
 		t.Fatalf("expected restored reviewer suggestions entry, got %+v", restoredSnapshot.Entries)
 	}
 }
+
+func TestSubmitUserMessageRejectedAfterClose(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	if err := engine.Close(); err != nil {
+		t.Fatalf("close engine: %v", err)
+	}
+	if _, err := engine.SubmitUserMessage(context.Background(), "stale turn"); !errors.Is(err, ErrEngineClosed) {
+		t.Fatalf("SubmitUserMessage after close err=%v, want ErrEngineClosed", err)
+	}
+	if err := engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "stale append"}})); !errors.Is(err, ErrEngineClosed) {
+		t.Fatalf("steer after close err=%v, want ErrEngineClosed", err)
+	}
+}
