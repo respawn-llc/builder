@@ -151,6 +151,10 @@ func serviceUninstallSubcommand(args []string, stdout io.Writer, stderr io.Write
 		return code
 	}
 	opts := serviceCommandOptions{KeepRunning: *keepRunning}
+	if opts.KeepRunning && !keepRunningUninstallSupported() {
+		fmt.Fprintln(stderr, "uninstall --keep-running is not supported on Windows: the background server runs as a child of the service and cannot be kept running while the service is removed")
+		return 2
+	}
 	if code, blocked := guardBeforeElevation(serviceActionUninstall, opts, stderr); blocked {
 		return code
 	}

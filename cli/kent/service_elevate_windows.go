@@ -40,6 +40,10 @@ type shellExecuteInfo struct {
 	process       windows.Handle
 }
 
+func keepRunningUninstallSupported() bool {
+	return false
+}
+
 func elevateServiceAction(action serviceAction) (int, bool) {
 	switch action {
 	case serviceActionInstall, serviceActionUninstall, serviceActionRestart:

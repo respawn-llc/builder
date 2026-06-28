@@ -45,6 +45,7 @@ The background server runs as you, with your user environment, and starts when y
 
 - `install` and `uninstall` prompt for Administrator elevation (UAC). Other commands run without elevation.
 - `stop`, a service restart, and system shutdown shut the server down gracefully.
+- `uninstall --keep-running` is not supported; the server is bound to the service and stops with it.
 
 Linux headless machines may need lingering enabled so the server survives logout:
 

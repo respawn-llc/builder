@@ -11,23 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
-)
-
-var (
-	wtsapi32DLL                    = windows.NewLazySystemDLL("wtsapi32.dll")
-	procWTSQuerySessionInformation = wtsapi32DLL.NewProc("WTSQuerySessionInformationW")
-	procWTSFreeMemory              = wtsapi32DLL.NewProc("WTSFreeMemory")
-)
-
-const (
-	wtsInfoUserName     = 5
-	wtsInfoDomainName   = 7
-	wtsInvalidSessionID = 0xFFFFFFFF
 )
 
 type scmServiceBackend struct{}
@@ -59,11 +46,14 @@ func (scmServiceBackend) Install(ctx context.Context, spec serviceSpec, force bo
 			_ = existing.Close()
 			return errors.New(brand.ServiceDisplayName + " is already installed; use --force to rewrite it")
 		}
-		if _, err := existing.Control(svc.Stop); err == nil {
-			if werr := waitForServiceState(existing, svc.Stopped, serviceStopWindow); werr != nil {
+		if _, err := existing.Control(svc.Stop); err != nil {
+			if !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
 				_ = existing.Close()
-				return fmt.Errorf("stop existing service before reinstall: %w", werr)
+				return fmt.Errorf("stop existing service before reinstall: %w", err)
 			}
+		} else if werr := waitForServiceState(existing, svc.Stopped, serviceStopWindow); werr != nil {
+			_ = existing.Close()
+			return fmt.Errorf("stop existing service before reinstall: %w", werr)
 		}
 		deleteErr := existing.Delete()
 		_ = existing.Close()
@@ -133,10 +123,12 @@ func (scmServiceBackend) Uninstall(ctx context.Context, spec serviceSpec, stop b
 	defer func() { _ = service.Close() }()
 
 	if stop {
-		if _, err := service.Control(svc.Stop); err == nil {
-			if werr := waitForServiceState(service, svc.Stopped, serviceStopWindow); werr != nil {
-				return fmt.Errorf("stop service before uninstall: %w", werr)
+		if _, err := service.Control(svc.Stop); err != nil {
+			if !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+				return fmt.Errorf("stop service before uninstall: %w", err)
 			}
+		} else if werr := waitForServiceState(service, svc.Stopped, serviceStopWindow); werr != nil {
+			return fmt.Errorf("stop service before uninstall: %w", werr)
 		}
 		endLegacyWindowsTask(ctx)
 	}
@@ -341,47 +333,23 @@ func grantUserServiceAccess(service *mgr.Service) error {
 }
 
 func interactiveUserSID() (*windows.SID, error) {
-	session := windows.WTSGetActiveConsoleSessionId()
-	if session == wtsInvalidSessionID {
-		return nil, errors.New("no active console session")
+	var session uint32
+	if err := windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &session); err != nil {
+		return nil, fmt.Errorf("resolve install session: %w", err)
 	}
-	user, err := wtsSessionString(session, wtsInfoUserName)
+	if session == 0 {
+		return nil, errors.New("install is not running in an interactive session")
+	}
+	var token windows.Token
+	if err := windows.WTSQueryUserToken(session, &token); err != nil {
+		return nil, fmt.Errorf("query install session user token: %w", err)
+	}
+	defer func() { _ = token.Close() }()
+	user, err := token.GetTokenUser()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get install session user: %w", err)
 	}
-	if user == "" {
-		return nil, errors.New("active console session has no user")
-	}
-	domain, err := wtsSessionString(session, wtsInfoDomainName)
-	if err != nil {
-		return nil, err
-	}
-	account := user
-	if domain != "" {
-		account = domain + `\` + user
-	}
-	sid, _, _, err := windows.LookupSID("", account)
-	if err != nil {
-		return nil, fmt.Errorf("resolve interactive user %q: %w", account, err)
-	}
-	return sid, nil
-}
-
-func wtsSessionString(session uint32, infoClass uint32) (string, error) {
-	var buffer *uint16
-	var bytesReturned uint32
-	ret, _, callErr := procWTSQuerySessionInformation.Call(
-		0,
-		uintptr(session),
-		uintptr(infoClass),
-		uintptr(unsafe.Pointer(&buffer)),
-		uintptr(unsafe.Pointer(&bytesReturned)),
-	)
-	if ret == 0 {
-		return "", fmt.Errorf("WTSQuerySessionInformation: %w", callErr)
-	}
-	defer procWTSFreeMemory.Call(uintptr(unsafe.Pointer(buffer)))
-	return windows.UTF16PtrToString(buffer), nil
+	return user.User.Sid, nil
 }
 
 func waitForServiceState(service *mgr.Service, state svc.State, timeout time.Duration) error {

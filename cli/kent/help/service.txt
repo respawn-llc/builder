@@ -12,3 +12,4 @@ What This Does:
 
 Windows Notes:
   `install` and `uninstall` prompt for Administrator elevation; other commands need no elevation.
+  `uninstall --keep-running` is not supported; the server is bound to the service and stops with it.
