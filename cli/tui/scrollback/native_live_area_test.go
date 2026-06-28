@@ -239,7 +239,7 @@ func TestNativeLiveAreaRenderDuringAssistantStreamingKeepsChromeVisibleWithoutLi
 		t.Fatalf("render during stream returned error: %v", err)
 	}
 	wantAfterRender := "old live" + xansi.HideCursor + liveAreaEraseSequence(1) + "stream" +
-		terminalSaveCursor + xansi.CursorDown(1) + "\r" + "latest live" + xansi.HideCursor + terminalRestoreCursor
+		terminalSaveCursor + xansi.CursorPosition(1, 24) + "latest live" + xansi.HideCursor + terminalRestoreCursor
 	if got := out.String(); got != wantAfterRender {
 		t.Fatalf("live render during stream output = %q, want %q", got, wantAfterRender)
 	}
@@ -247,7 +247,7 @@ func TestNativeLiveAreaRenderDuringAssistantStreamingKeepsChromeVisibleWithoutLi
 		t.Fatalf("finish returned error: %v", err)
 	}
 
-	streamAnchoredErase := terminalSaveCursor + xansi.CursorDown(1) + "\r" + liveAreaEraseSequence(1) + terminalRestoreCursor
+	streamAnchoredErase := terminalSaveCursor + xansi.CursorPosition(1, 24) + liveAreaEraseForwardSequence(1) + terminalRestoreCursor
 	want := wantAfterRender + streamAnchoredErase + terminalLineBreak + "latest live" + xansi.HideCursor
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
@@ -272,9 +272,9 @@ func TestAssistantStreamAppendErasesStreamChromeWithoutAddingLinefeed(t *testing
 		t.Fatalf("second stream returned error: %v", err)
 	}
 
-	streamAnchoredErase := terminalSaveCursor + xansi.CursorDown(1) + "\r" + liveAreaEraseSequence(1) + terminalRestoreCursor
+	streamAnchoredErase := terminalSaveCursor + xansi.CursorPosition(1, 24) + liveAreaEraseForwardSequence(1) + terminalRestoreCursor
 	want := "old live" + xansi.HideCursor + liveAreaEraseSequence(1) + "stream" +
-		terminalSaveCursor + xansi.CursorDown(1) + "\r" + "latest live" + xansi.HideCursor + terminalRestoreCursor +
+		terminalSaveCursor + xansi.CursorPosition(1, 24) + "latest live" + xansi.HideCursor + terminalRestoreCursor +
 		streamAnchoredErase + " moved"
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
@@ -299,10 +299,10 @@ func TestAssistantStreamAppendErasesMultilineStreamChromeFromBottom(t *testing.T
 		t.Fatalf("second stream returned error: %v", err)
 	}
 
-	streamAnchoredErase := terminalSaveCursor + xansi.CursorDown(3) + "\r" + liveAreaEraseSequence(3) + terminalRestoreCursor
+	streamAnchoredErase := terminalSaveCursor + xansi.CursorPosition(1, 22) + liveAreaEraseForwardSequence(3) + terminalRestoreCursor
 	want := "old live 1" + terminalLineBreak + "old live 2" + terminalLineBreak + "old live 3" + xansi.HideCursor +
 		liveAreaEraseSequence(3) + "stream" +
-		terminalSaveCursor + xansi.CursorDown(1) + "\r" +
+		terminalSaveCursor + xansi.CursorPosition(1, 22) +
 		"latest live 1" + terminalLineBreak + "latest live 2" + terminalLineBreak + "latest live 3" +
 		xansi.HideCursor + terminalRestoreCursor +
 		streamAnchoredErase + " moved"
