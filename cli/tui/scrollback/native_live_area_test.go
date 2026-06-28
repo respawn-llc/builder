@@ -281,6 +281,36 @@ func TestAssistantStreamAppendErasesStreamChromeWithoutAddingLinefeed(t *testing
 	}
 }
 
+func TestAssistantStreamAppendErasesMultilineStreamChromeFromBottom(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
+	defer buffer.close()
+	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	if err := liveArea.Render(nativeLiveAreaFrame("old live 1", "old live 2", "old live 3")); err != nil {
+		t.Fatalf("render returned error: %v", err)
+	}
+	if err := buffer.StreamMarkdownAssistantContent("stream"); err != nil {
+		t.Fatalf("first stream returned error: %v", err)
+	}
+	if err := liveArea.Render(nativeLiveAreaFrame("latest live 1", "latest live 2", "latest live 3")); err != nil {
+		t.Fatalf("render during stream returned error: %v", err)
+	}
+	if err := buffer.StreamMarkdownAssistantContent(" moved"); err != nil {
+		t.Fatalf("second stream returned error: %v", err)
+	}
+
+	streamAnchoredErase := terminalSaveCursor + xansi.CursorDown(3) + "\r" + liveAreaEraseSequence(3) + terminalRestoreCursor
+	want := "old live 1" + terminalLineBreak + "old live 2" + terminalLineBreak + "old live 3" + xansi.HideCursor +
+		liveAreaEraseSequence(3) + "stream" +
+		terminalSaveCursor + xansi.CursorDown(1) + "\r" +
+		"latest live 1" + terminalLineBreak + "latest live 2" + terminalLineBreak + "latest live 3" +
+		xansi.HideCursor + terminalRestoreCursor +
+		streamAnchoredErase + " moved"
+	if got := out.String(); got != want {
+		t.Fatalf("terminal output = %q, want %q", got, want)
+	}
+}
+
 func TestNativeLiveAreaHoldoffFlushDuringAssistantStreamingDefersLiveRestore(t *testing.T) {
 	var out bytes.Buffer
 	available := true

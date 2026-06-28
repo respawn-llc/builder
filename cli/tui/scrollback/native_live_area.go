@@ -108,7 +108,7 @@ func (area *NativeLiveAreaImpl) erasePhysicalLocked() error {
 	}
 	sequence := liveAreaCursorRestoreAnchorSequence(area.cursorPlaced, area.placedCursor, area.renderedLines) + liveAreaEraseSequence(area.renderedLines)
 	if area.streamAnchored {
-		sequence = terminalSaveCursor + xansi.CursorDown(1) + "\r" + liveAreaEraseSequence(area.renderedLines) + terminalRestoreCursor
+		sequence = streamAnchoredLiveAreaEraseSequence(area.renderedLines)
 	}
 	written, err := io.WriteString(area.buffer.stableWriter, sequence)
 	if err != nil {
@@ -243,6 +243,13 @@ func liveAreaEraseSequence(renderedLines int) string {
 	}
 	out.WriteString("\r")
 	return out.String()
+}
+
+func streamAnchoredLiveAreaEraseSequence(renderedLines int) string {
+	if renderedLines <= 0 {
+		return ""
+	}
+	return terminalSaveCursor + xansi.CursorDown(renderedLines) + "\r" + liveAreaEraseSequence(renderedLines) + terminalRestoreCursor
 }
 
 func liveAreaCursorPlacementSequence(cursor NativeLiveAreaCursor, renderedLines int) string {
