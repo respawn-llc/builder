@@ -368,7 +368,7 @@ func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool)
 			return
 		}
 		if _, err := e.runGoalTurn(ctx, appendNudge); err != nil {
-			if errors.Is(err, errExclusiveStepBusy) {
+			if errors.Is(err, ErrAgentBusy) {
 				if !e.waitBeforeGoalLoopBusyRetry(ctx) {
 					return
 				}

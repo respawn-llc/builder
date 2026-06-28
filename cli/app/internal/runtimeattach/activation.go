@@ -16,11 +16,10 @@ import (
 const ReleaseTimeout = 3 * time.Second
 
 type Request struct {
-	SessionID          string
-	ActiveSettings     config.Settings
-	EnabledTools       []toolspec.ID
-	Source             config.SourceReport
-	NewClientRequestID func() string
+	SessionID      string
+	ActiveSettings config.Settings
+	EnabledTools   []toolspec.ID
+	Source         config.SourceReport
 }
 
 type Activation struct {
@@ -52,7 +51,7 @@ func Release(service servicecontract.SessionRuntimeService, sessionID string, ow
 	ctx, cancel := context.WithTimeout(context.Background(), ReleaseTimeout)
 	defer cancel()
 	_, _ = service.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: newClientRequestID(nil),
+		ClientRequestID: uuid.NewString(),
 		SessionID:       sessionID,
 		OnlyIfIdle:      true,
 		DropOwner:       true,
@@ -62,26 +61,11 @@ func Release(service servicecontract.SessionRuntimeService, sessionID string, ow
 
 func activateRequest(req Request, ownerID string) serverapi.SessionRuntimeActivateRequest {
 	return serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: newClientRequestID(req.NewClientRequestID),
+		ClientRequestID: uuid.NewString(),
 		SessionID:       req.SessionID,
 		OwnerID:         ownerID,
 		ActiveSettings:  req.ActiveSettings,
-		EnabledToolIDs:  toolIDs(req.EnabledTools),
+		EnabledToolIDs:  toolspec.IDStrings(req.EnabledTools),
 		Source:          req.Source,
 	}
-}
-
-func toolIDs(enabledTools []toolspec.ID) []string {
-	ids := make([]string, 0, len(enabledTools))
-	for _, id := range enabledTools {
-		ids = append(ids, string(id))
-	}
-	return ids
-}
-
-func newClientRequestID(newID func() string) string {
-	if newID == nil {
-		return uuid.NewString()
-	}
-	return newID()
 }

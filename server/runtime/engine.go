@@ -597,7 +597,7 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 		MaxOutputToken:    e.cfg.MaxTokens,
 		ContextWindow:     contextBudget.window,
 		ContextPercent:    contextBudget.percent,
-		EnabledTools:      toToolNames(e.cfg.EnabledTools),
+		EnabledTools:      toolspec.IDStrings(e.cfg.EnabledTools),
 		WebSearchMode:     strings.TrimSpace(e.cfg.WebSearchMode),
 		ModelCapabilities: e.cfg.ModelCapabilities,
 		ToolPreambles: func() *bool {

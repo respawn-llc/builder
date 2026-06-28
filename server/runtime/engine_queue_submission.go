@@ -21,7 +21,7 @@ func (e *Engine) RunWhenIdle(ctx context.Context, fn func() error) error {
 		err := e.stepLifecycle.Run(ctx, exclusiveStepOptions{}, func(context.Context, string) error {
 			return fn()
 		})
-		if !errors.Is(err, errExclusiveStepBusy) {
+		if !errors.Is(err, ErrAgentBusy) {
 			return err
 		}
 		select {
@@ -63,7 +63,7 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			assistant = msg
 			return runErr
 		})
-		if !errors.Is(err, errExclusiveStepBusy) {
+		if !errors.Is(err, ErrAgentBusy) {
 			return assistant, err
 		}
 
@@ -80,7 +80,7 @@ func (e *Engine) SubmitUserMessageOrSteer(ctx context.Context, text string, clie
 		return llm.Message{}, nil, errors.New("empty message")
 	}
 	msg, err := e.SubmitUserMessage(ctx, text)
-	if errors.Is(err, errExclusiveStepBusy) {
+	if errors.Is(err, ErrAgentBusy) {
 		item := e.QueueUserMessageForAutoDrain(text, clientRequestID)
 		return llm.Message{}, &item, nil
 	}

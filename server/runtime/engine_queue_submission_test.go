@@ -156,7 +156,7 @@ func TestRunWhenIdleRetriesUntilBetweenSteps(t *testing.T) {
 	eng.stepLifecycle = &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, _ exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
 		attempts++
 		if attempts == 1 {
-			return errExclusiveStepBusy
+			return ErrAgentBusy
 		}
 		return fn(ctx, "stub-step")
 	}}
@@ -201,7 +201,7 @@ func TestSubmitUserMessageOrSteerSteersWhenBusy(t *testing.T) {
 	client := &fakeClient{}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 	eng.stepLifecycle = &stubExclusiveStepLifecycle{busy: true, runFn: func(context.Context, exclusiveStepOptions, func(stepCtx context.Context, stepID string) error) error {
-		return errExclusiveStepBusy
+		return ErrAgentBusy
 	}}
 
 	msg, queued, err := eng.SubmitUserMessageOrSteer(context.Background(), "steer me", "req-2")
@@ -232,7 +232,7 @@ func TestSubmitQueuedUserMessagesRetriesTransientBusyErrors(t *testing.T) {
 	eng.stepLifecycle = &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
 		attempts++
 		if attempts == 1 {
-			return errExclusiveStepBusy
+			return ErrAgentBusy
 		}
 		return fn(ctx, "stub-step")
 	}}
@@ -356,7 +356,7 @@ func TestSubmitQueuedUserMessagesStopsRetryingWhenContextIsCanceled(t *testing.T
 	attempts := 0
 	eng.stepLifecycle = &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
 		attempts++
-		return errExclusiveStepBusy
+		return ErrAgentBusy
 	}}
 	eng.QueueUserMessage("steer now")
 

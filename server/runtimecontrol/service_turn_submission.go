@@ -2,6 +2,7 @@ package runtimecontrol
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/server/runtime"
@@ -33,7 +34,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			compactionBusy := false
 			if shouldCompact {
 				if err := engine.CompactContextForPreSubmit(runCtx); err != nil {
-					if !runtime.IsAgentBusyError(err) {
+					if !errors.Is(err, runtime.ErrAgentBusy) {
 						return err
 					}
 					compactionBusy = true

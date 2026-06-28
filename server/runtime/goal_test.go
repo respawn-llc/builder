@@ -781,7 +781,7 @@ func TestGoalLoopRetriesWhenExclusiveStepIsBusy(t *testing.T) {
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
 		attempts++
 		if attempts == 1 {
-			return errExclusiveStepBusy
+			return ErrAgentBusy
 		}
 		return baseLifecycle.Run(ctx, options, fn)
 	}}
@@ -806,7 +806,7 @@ func TestGoalLoopRetriesWhenExclusiveStepIsBusy(t *testing.T) {
 		t.Fatalf("model calls = %d, want 1", got)
 	}
 	for _, entry := range engine.ChatSnapshot().Entries {
-		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && strings.Contains(entry.Text, errExclusiveStepBusy.Error()) {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) && strings.Contains(entry.Text, ErrAgentBusy.Error()) {
 			t.Fatalf("did not expect busy retry to persist goal-loop error, entries=%+v", engine.ChatSnapshot().Entries)
 		}
 	}

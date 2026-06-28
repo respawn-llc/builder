@@ -11,7 +11,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/config"
-	"core/shared/toolspec"
 	"core/shared/transcript"
 )
 
@@ -720,17 +719,6 @@ type historyReplacementPayload struct {
 	PendingHandoffFutureMessage       string             `json:"pending_handoff_future_message,omitempty"`
 	LastCommittedAssistantFinalAnswer string             `json:"last_committed_assistant_final_answer,omitempty"`
 	Items                             []llm.ResponseItem `json:"items"`
-}
-
-func toToolNames(ids []toolspec.ID) []string {
-	out := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if id == "" {
-			continue
-		}
-		out = append(out, string(id))
-	}
-	return out
 }
 
 func (e *Engine) setLastUsage(usage llm.Usage) {

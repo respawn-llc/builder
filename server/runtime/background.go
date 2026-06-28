@@ -215,7 +215,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		assistant = msg
 		return runErr
 	})
-	if errors.Is(err, errExclusiveStepBusy) {
+	if errors.Is(err, ErrAgentBusy) {
 		b.clearScheduled()
 		return llm.Message{}, nil
 	}

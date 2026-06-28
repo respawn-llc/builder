@@ -134,7 +134,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 				}
 				pendingMu.Unlock()
 				for _, promptID := range resolved {
-					if !emitter.emit(pollCtx, resolvedPromptEvent(promptID)) {
+					if !emitter.emit(pollCtx, askEvent{resolvedPromptID: strings.TrimSpace(promptID)}) {
 						_ = current.Close()
 						return
 					}
@@ -162,7 +162,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 				pendingMu.Lock()
 				delete(pendingPromptIDs, evt.PromptID)
 				pendingMu.Unlock()
-				if !emitter.emit(pollCtx, resolvedPromptEvent(evt.PromptID)) {
+				if !emitter.emit(pollCtx, askEvent{resolvedPromptID: strings.TrimSpace(evt.PromptID)}) {
 					_ = current.Close()
 					return
 				}
@@ -280,10 +280,6 @@ func pendingPromptEvent(ctx context.Context, item clientui.PendingPromptEvent, c
 		}
 	}()
 	return askEvent{req: req, reply: reply, cancel: cancelPrompt}
-}
-
-func resolvedPromptEvent(promptID string) askEvent {
-	return askEvent{resolvedPromptID: strings.TrimSpace(promptID)}
 }
 
 func shouldRetryPromptAnswerError(err error) bool {

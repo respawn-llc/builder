@@ -34,11 +34,10 @@ func (s *fakeRuntimeService) ReleaseSessionRuntime(_ context.Context, req server
 func TestActivateBuildsRequest(t *testing.T) {
 	service := &fakeRuntimeService{}
 	_, err := Activate(context.Background(), service, Request{
-		SessionID:          "session-1",
-		EnabledTools:       []toolspec.ID{"shell", "patch"},
-		ActiveSettings:     config.Settings{Model: "gpt-test"},
-		Source:             config.SourceReport{SettingsPath: "/config.toml"},
-		NewClientRequestID: fixedIDs("request-1"),
+		SessionID:      "session-1",
+		EnabledTools:   []toolspec.ID{"shell", "patch"},
+		ActiveSettings: config.Settings{Model: "gpt-test"},
+		Source:         config.SourceReport{SettingsPath: "/config.toml"},
 	})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
@@ -47,8 +46,8 @@ func TestActivateBuildsRequest(t *testing.T) {
 		t.Fatalf("activate requests = %d, want 1", len(service.activateRequests))
 	}
 	req := service.activateRequests[0]
-	if req.ClientRequestID != "request-1" || req.SessionID != "session-1" {
-		t.Fatalf("request ids = %+v, want request/session ids", req)
+	if req.ClientRequestID == "" || req.SessionID != "session-1" {
+		t.Fatalf("request ids = %+v, want non-empty client id and session id", req)
 	}
 	if !reflect.DeepEqual(req.EnabledToolIDs, []string{"shell", "patch"}) {
 		t.Fatalf("enabled tools = %#v, want shell/patch", req.EnabledToolIDs)
@@ -61,8 +60,7 @@ func TestActivateBuildsRequest(t *testing.T) {
 func TestActivateReactivatesRuntimeWithFreshRequestID(t *testing.T) {
 	service := &fakeRuntimeService{}
 	lease, err := Activate(context.Background(), service, Request{
-		SessionID:          "session-1",
-		NewClientRequestID: fixedIDs("request-1", "request-2"),
+		SessionID: "session-1",
 	})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
@@ -70,9 +68,10 @@ func TestActivateReactivatesRuntimeWithFreshRequestID(t *testing.T) {
 	if err := lease.Reactivate(context.Background()); err != nil {
 		t.Fatalf("Reactivate: %v", err)
 	}
-	gotIDs := []string{service.activateRequests[0].ClientRequestID, service.activateRequests[1].ClientRequestID}
-	if !reflect.DeepEqual(gotIDs, []string{"request-1", "request-2"}) {
-		t.Fatalf("request ids = %#v, want fresh ids", gotIDs)
+	firstID := service.activateRequests[0].ClientRequestID
+	secondID := service.activateRequests[1].ClientRequestID
+	if firstID == "" || secondID == "" || firstID == secondID {
+		t.Fatalf("request ids = %q,%q, want two distinct non-empty fresh ids", firstID, secondID)
 	}
 	ownerID := service.activateRequests[0].OwnerID
 	if ownerID == "" {
@@ -93,17 +92,5 @@ func TestReleaseSkipsNilServiceAndIssuesRequest(t *testing.T) {
 	req := service.releaseRequests[0]
 	if req.SessionID != "session-1" || req.ClientRequestID == "" || !req.OnlyIfIdle || !req.DropOwner || req.OwnerID != "owner-1" {
 		t.Fatalf("release request = %+v, want session/request/owner ids", req)
-	}
-}
-
-func fixedIDs(ids ...string) func() string {
-	index := 0
-	return func() string {
-		if index >= len(ids) {
-			return ids[len(ids)-1]
-		}
-		id := ids[index]
-		index++
-		return id
 	}
 }
