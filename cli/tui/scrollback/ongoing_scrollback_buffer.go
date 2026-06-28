@@ -94,7 +94,7 @@ func NewOngoingScrollbackBufferImpl(ctx context.Context, terminalWidth int, term
 	return buffer
 }
 
-func (buffer *OngoingScrollbackBufferImpl) Close() {
+func (buffer *OngoingScrollbackBufferImpl) close() {
 	if buffer == nil {
 		return
 	}
@@ -102,7 +102,11 @@ func (buffer *OngoingScrollbackBufferImpl) Close() {
 		if buffer.cancelWatcher != nil {
 			buffer.cancelWatcher()
 		}
+		var delayedErr error
 		buffer.mu.Lock()
+		if buffer.liveArea != nil && buffer.normalBufferAvailableLocked() {
+			delayedErr = buffer.liveArea.erasePhysicalLocked()
+		}
 		buffer.closed = true
 		buffer.isStreaming = false
 		buffer.assistantStreamOpenLine = false
@@ -110,6 +114,7 @@ func (buffer *OngoingScrollbackBufferImpl) Close() {
 		buffer.queuedSteers = nil
 		buffer.heldStableOps = nil
 		buffer.mu.Unlock()
+		buffer.notifyDelayedWriteError(delayedErr)
 	})
 }
 
@@ -244,7 +249,7 @@ func (buffer *OngoingScrollbackBufferImpl) FinishAssistantStreaming() error {
 	return err
 }
 
-func (buffer *OngoingScrollbackBufferImpl) FlushHoldoff() error {
+func (buffer *OngoingScrollbackBufferImpl) flushHoldoff() error {
 	buffer.validateReadyBeforeLock("flushHoldoff", "")
 
 	buffer.mu.Lock()

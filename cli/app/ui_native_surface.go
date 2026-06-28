@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"runtime/debug"
 	"strings"
 
 	"core/cli/tui"
@@ -11,14 +13,18 @@ import (
 )
 
 type uiNativeSurface struct {
-	writer                    io.Writer
-	normalBufferAvailable     func() bool
-	delayedWriteErrorListener func(error)
-	width                     int
-	height                    int
-	buffer                    *scrollback.OngoingScrollbackBufferImpl
-	live                      scrollback.NativeLiveArea
-	assistantStreamActive     bool
+	writer                     io.Writer
+	normalBufferAvailable      func() bool
+	delayedWriteErrorListener  func(error)
+	forceNormalBufferAvailable bool
+	width                      int
+	height                     int
+	buffer                     *scrollback.OngoingScrollbackBufferImpl
+	stable                     scrollback.NativeScrollbackBuffer
+	live                       scrollback.NativeLiveArea
+	lastFrame                  scrollback.NativeLiveAreaFrame
+	lastFrameSet               bool
+	assistantStreamActive      bool
 }
 
 func newUINativeSurface(writer io.Writer, normalBufferAvailable func() bool, delayedWriteErrorListener func(error)) *uiNativeSurface {
@@ -48,9 +54,10 @@ func (s *uiNativeSurface) ensure(width int, height int) bool {
 		height,
 		s.writer,
 		nil,
-		scrollback.WithNormalBufferAvailability(s.normalBufferAvailable),
+		scrollback.WithNormalBufferAvailability(s.normalBufferAvailableForBuffer),
 		scrollback.WithDelayedWriteErrorListener(s.delayedWriteErrorListener),
 	)
+	s.stable = s.buffer
 	s.live = scrollback.NewNativeLiveAreaImpl(s.buffer, width, height)
 	return true
 }
@@ -63,13 +70,14 @@ func (s *uiNativeSurface) Close() {
 	if s == nil {
 		return
 	}
-	if s.buffer != nil {
-		s.buffer.Close()
-	}
+	s.clearLiveFrame()
 	s.width = 0
 	s.height = 0
 	s.buffer = nil
+	s.stable = nil
 	s.live = nil
+	s.lastFrame = scrollback.NativeLiveAreaFrame{}
+	s.lastFrameSet = false
 	s.assistantStreamActive = false
 }
 
@@ -77,21 +85,26 @@ func (s *uiNativeSurface) Render(frame scrollback.NativeLiveAreaFrame) error {
 	if s == nil || s.live == nil {
 		return errors.New("native live area is not initialized")
 	}
-	return s.live.Render(frame)
+	if err := s.live.Render(frame); err != nil {
+		return err
+	}
+	s.lastFrame = copyNativeLiveAreaFrameForApp(frame)
+	s.lastFrameSet = true
+	return nil
 }
 
 func (s *uiNativeSurface) StableBuffer() scrollback.NativeScrollbackBuffer {
-	if s == nil || s.buffer == nil {
+	if s == nil || s.stable == nil {
 		return nil
 	}
-	return s.buffer
+	return s.stable
 }
 
 func (s *uiNativeSurface) StreamAssistantCommentaryContent(ansi string) error {
-	if s == nil || s.buffer == nil {
+	if s == nil || s.stable == nil {
 		return errors.New("native scrollback buffer is not initialized")
 	}
-	if err := s.buffer.StreamMarkdownAssistantContent(ansi); err != nil {
+	if err := s.stable.StreamMarkdownAssistantContent(ansi); err != nil {
 		return err
 	}
 	s.assistantStreamActive = true
@@ -99,10 +112,10 @@ func (s *uiNativeSurface) StreamAssistantCommentaryContent(ansi string) error {
 }
 
 func (s *uiNativeSurface) StreamAssistantFinalAnswerContent(ansi string) error {
-	if s == nil || s.buffer == nil {
+	if s == nil || s.stable == nil {
 		return errors.New("native scrollback buffer is not initialized")
 	}
-	if err := s.buffer.StreamMarkdownAssistantContent(ansi); err != nil {
+	if err := s.stable.StreamMarkdownAssistantContent(ansi); err != nil {
 		return err
 	}
 	s.assistantStreamActive = true
@@ -114,21 +127,56 @@ func (s *uiNativeSurface) FinishAssistantStreaming() error {
 		return nil
 	}
 	s.assistantStreamActive = false
-	if s.buffer == nil {
+	if s.stable == nil {
 		return nil
 	}
-	return s.buffer.FinishAssistantStreaming()
+	return s.stable.FinishAssistantStreaming()
 }
 
 func (s *uiNativeSurface) FlushHoldoff() error {
-	if s == nil || s.buffer == nil {
+	if s == nil || s.live == nil || !s.lastFrameSet {
 		return nil
 	}
-	return s.buffer.FlushHoldoff()
+	return s.live.Render(s.lastFrame)
 }
 
 func (s *uiNativeSurface) AssistantStreaming() bool {
 	return s != nil && s.assistantStreamActive
+}
+
+func (s *uiNativeSurface) normalBufferAvailableForBuffer() bool {
+	if s == nil {
+		return false
+	}
+	if s.forceNormalBufferAvailable {
+		return true
+	}
+	if s.normalBufferAvailable == nil {
+		return true
+	}
+	return s.normalBufferAvailable()
+}
+
+func (s *uiNativeSurface) clearLiveFrame() {
+	if s == nil || s.live == nil {
+		return
+	}
+	s.forceNormalBufferAvailable = true
+	err := s.live.Render(scrollback.NativeLiveAreaFrame{Lines: []string{""}})
+	s.forceNormalBufferAvailable = false
+	if err != nil && s.delayedWriteErrorListener != nil {
+		s.live = nil
+		s.buffer = nil
+		s.stable = nil
+		s.delayedWriteErrorListener(err)
+	}
+}
+
+func copyNativeLiveAreaFrameForApp(frame scrollback.NativeLiveAreaFrame) scrollback.NativeLiveAreaFrame {
+	return scrollback.NativeLiveAreaFrame{
+		Lines:  append([]string(nil), frame.Lines...),
+		Cursor: frame.Cursor,
+	}
 }
 
 func (m *uiModel) nativeSurfaceEnabled() bool {
@@ -264,7 +312,7 @@ func (m *uiModel) steerNativeStableAppend(previous tui.TranscriptProjection, cur
 		return m.steerNativeProjectionLines(current.Lines(tui.TranscriptDivider))
 	}
 	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
-		return errors.New("native stable append is not contiguous with current transcript projection")
+		return m.nativeStableProjectionInvariantError("steerNativeStableAppend", previous, current)
 	}
 	return m.steerNativeProjectionLines(current.LinesFromBlock(len(previous.Blocks), tui.TranscriptDivider))
 }
@@ -290,6 +338,23 @@ func nativeStableProjectionNeedsDelivery(previous tui.TranscriptProjection, curr
 		return true
 	}
 	return len(current.Blocks) > len(previous.Blocks)
+}
+
+func (m *uiModel) nativeStableProjectionInvariantError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+	const reason = "native stable append is not contiguous with current transcript projection"
+	if m != nil && m.debugMode {
+		panic(fmt.Sprintf(
+			"Native scrollback invariant violation\noperation=%s\nreason=%s\nprevious_blocks=%d\ncurrent_blocks=%d\nprevious_empty=%t\ncurrent_empty=%t\nstack:\n%s",
+			operation,
+			reason,
+			len(previous.Blocks),
+			len(current.Blocks),
+			previous.Empty(),
+			current.Empty(),
+			debug.Stack(),
+		))
+	}
+	return errors.New(reason)
 }
 
 func (m *uiModel) steerNativeProjectionLines(lines []tui.TranscriptProjectionLine) error {

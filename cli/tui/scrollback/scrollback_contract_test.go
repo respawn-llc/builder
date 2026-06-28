@@ -10,6 +10,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -32,6 +33,16 @@ var nativeScrollbackBufferMethods = map[string]struct{}{
 func TestNativeScrollbackBufferInterfaceShape(t *testing.T) {
 	repoRoot := repositoryRoot(t)
 	methodNames := nativeScrollbackBufferMethodNames(t, repoRoot)
+
+	assertExactMethodNameSet(t, methodNames)
+}
+
+func TestOngoingScrollbackBufferImplExportsOnlyNativeScrollbackBufferMethods(t *testing.T) {
+	implType := reflect.TypeOf(&OngoingScrollbackBufferImpl{})
+	methodNames := make([]string, 0, implType.NumMethod())
+	for index := 0; index < implType.NumMethod(); index++ {
+		methodNames = append(methodNames, implType.Method(index).Name)
+	}
 
 	assertExactMethodNameSet(t, methodNames)
 }

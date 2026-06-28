@@ -15,7 +15,7 @@ import (
 func TestOngoingScrollbackBufferSteerWritesExactLine(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	if err := buffer.Steer("stable line"); err != nil {
 		t.Fatalf("steer returned error: %v", err)
@@ -29,7 +29,7 @@ func TestOngoingScrollbackBufferSteerWritesExactLine(t *testing.T) {
 func TestOngoingScrollbackBufferSteerWaitsForStreamingAndFlushesFIFO(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	if err := buffer.StreamMarkdownAssistantContent("stream"); err != nil {
 		t.Fatalf("stream returned error: %v", err)
@@ -60,7 +60,7 @@ func TestOngoingScrollbackBufferSteerWaitsForStreamingAndFlushesFIFO(t *testing.
 func TestOngoingScrollbackBufferFinishTerminatesOpenAssistantLine(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	if err := buffer.StreamMarkdownAssistantContent("done"); err != nil {
 		t.Fatalf("stream returned error: %v", err)
@@ -77,7 +77,7 @@ func TestOngoingScrollbackBufferFinishTerminatesOpenAssistantLine(t *testing.T) 
 func TestOngoingScrollbackBufferAssistantStreamNormalizesLineBreaksForTerminal(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	if err := buffer.StreamMarkdownAssistantContent("one\ntwo\r\nthree"); err != nil {
 		t.Fatalf("stream returned error: %v", err)
@@ -92,7 +92,7 @@ func TestOngoingScrollbackBufferTurnEndedWithoutFinishPanicsOnNextStream(t *test
 	var out bytes.Buffer
 	turnEnded := make(chan struct{}, 1)
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, turnEnded)
-	defer buffer.Close()
+	defer buffer.close()
 
 	if err := buffer.StreamMarkdownAssistantContent("stream"); err != nil {
 		t.Fatalf("stream returned error: %v", err)
@@ -112,7 +112,7 @@ func TestOngoingScrollbackBufferTurnEndedWithoutFinishPanicsOnNextStream(t *test
 func TestOngoingScrollbackBufferSteerWidthPanicIncludesDiagnostics(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 3, 24, &out, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	panicText := capturePanicText(t, func() {
 		_ = buffer.Steer("abcd")
@@ -129,7 +129,7 @@ func TestOngoingScrollbackBufferSteerWidthPanicIncludesDiagnostics(t *testing.T)
 func TestOngoingScrollbackBufferSteerNewlinePanics(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	panicText := capturePanicText(t, func() {
 		_ = buffer.Steer("line\n")
@@ -140,7 +140,7 @@ func TestOngoingScrollbackBufferSteerNewlinePanics(t *testing.T) {
 func TestOngoingScrollbackBufferFinishWithoutStreamingPanics(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	panicText := capturePanicText(t, func() {
 		_ = buffer.FinishAssistantStreaming()
@@ -151,7 +151,7 @@ func TestOngoingScrollbackBufferFinishWithoutStreamingPanics(t *testing.T) {
 func TestOngoingScrollbackBufferWriteFailuresReturnErrors(t *testing.T) {
 	writeErr := errors.New("terminal closed")
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, failingWriter{err: writeErr}, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	err := buffer.Steer("line")
 	if !errors.Is(err, writeErr) {
@@ -168,7 +168,7 @@ func TestOngoingScrollbackBufferFailedFirstStreamDoesNotKeepStreamingState(t *te
 	writeErr := errors.New("terminal closed")
 	writer := &scriptedWriter{errors: []error{writeErr, nil}}
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, writer, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	if err := buffer.StreamMarkdownAssistantContent("chunk"); !errors.Is(err, writeErr) {
 		t.Fatalf("stream error = %v, want %v", err, writeErr)
@@ -186,7 +186,7 @@ func TestOngoingScrollbackBufferQueuedFlushKeepsAttemptingAfterWriteFailure(t *t
 	writeErr := errors.New("first queued write failed")
 	writer := &scriptedWriter{errors: []error{nil, nil, writeErr, nil}}
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, writer, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	if err := buffer.StreamMarkdownAssistantContent("stream"); err != nil {
 		t.Fatalf("stream returned error: %v", err)
@@ -216,7 +216,7 @@ func TestOngoingScrollbackBufferQueuedFlushKeepsAttemptingAfterWriteFailure(t *t
 
 func TestOngoingScrollbackBufferShortWritesReturnErrors(t *testing.T) {
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, shortWriter{}, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	err := buffer.Steer("line")
 	if !errors.Is(err, io.ErrShortWrite) {
@@ -236,7 +236,7 @@ func TestOngoingScrollbackBufferCloseDropsQueuedSteers(t *testing.T) {
 	}
 	waitForQueuedSteers(t, buffer, 1)
 
-	buffer.Close()
+	buffer.close()
 
 	if got, want := out.String(), "stream"; got != want {
 		t.Fatalf("close should not flush queued steer, output = %q, want %q", got, want)
@@ -254,7 +254,7 @@ func TestOngoingScrollbackBufferHoldoffBuffersAssistantStreamingAndQueuedSteers(
 		nil,
 		WithNormalBufferAvailability(func() bool { return available }),
 	)
-	defer buffer.Close()
+	defer buffer.close()
 
 	if err := buffer.StreamMarkdownAssistantContent("he"); err != nil {
 		t.Fatalf("stream he returned error: %v", err)
@@ -273,7 +273,7 @@ func TestOngoingScrollbackBufferHoldoffBuffersAssistantStreamingAndQueuedSteers(
 	}
 
 	available = true
-	if err := buffer.FlushHoldoff(); err != nil {
+	if err := buffer.flushHoldoff(); err != nil {
 		t.Fatalf("flush holdoff returned error: %v", err)
 	}
 	if got, want := out.String(), "hello"+terminalLineBreak+" queued"+terminalLineBreak; got != want {
@@ -297,7 +297,7 @@ func TestOngoingScrollbackBufferHoldoffFlushReportsDelayedErrorsToListener(t *te
 			delayed = append(delayed, err)
 		}),
 	)
-	defer buffer.Close()
+	defer buffer.close()
 
 	if err := buffer.Steer("first"); err != nil {
 		t.Fatalf("held first steer returned error: %v", err)
@@ -307,7 +307,7 @@ func TestOngoingScrollbackBufferHoldoffFlushReportsDelayedErrorsToListener(t *te
 	}
 
 	available = true
-	err := buffer.FlushHoldoff()
+	err := buffer.flushHoldoff()
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("flush error = %v, want %v", err, writeErr)
 	}
@@ -330,7 +330,7 @@ func TestOngoingScrollbackBufferHoldoffFlushRendersLatestPendingLiveFrame(t *tes
 		nil,
 		WithNormalBufferAvailability(func() bool { return available }),
 	)
-	defer buffer.Close()
+	defer buffer.close()
 	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
 
 	if err := liveArea.Render(nativeLiveAreaFrame("old live")); err != nil {
@@ -347,7 +347,7 @@ func TestOngoingScrollbackBufferHoldoffFlushRendersLatestPendingLiveFrame(t *tes
 	}
 
 	available = true
-	if err := buffer.FlushHoldoff(); err != nil {
+	if err := buffer.flushHoldoff(); err != nil {
 		t.Fatalf("flush holdoff returned error: %v", err)
 	}
 
@@ -372,7 +372,7 @@ func TestOngoingScrollbackBufferDelayedFlushFailureDoesNotDropCurrentSteer(t *te
 			delayed = append(delayed, err)
 		}),
 	)
-	defer buffer.Close()
+	defer buffer.close()
 
 	if err := buffer.Steer("held"); err != nil {
 		t.Fatalf("held steer returned error: %v", err)
@@ -394,7 +394,7 @@ func TestOngoingScrollbackBufferDelayedFlushFailureDoesNotDropCurrentSteer(t *te
 func TestOngoingScrollbackBufferClosedWritesReturnErrors(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	buffer.Close()
+	buffer.close()
 
 	if err := buffer.Steer("line"); !errors.Is(err, errOngoingScrollbackBufferClosed) {
 		t.Fatalf("steer after close error = %v, want closed buffer error", err)

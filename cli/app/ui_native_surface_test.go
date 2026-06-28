@@ -387,6 +387,74 @@ func TestNativeSurfaceResizeRecreatesWithoutReplayingStableTranscript(t *testing
 	}
 }
 
+func TestNativeSurfaceResizeErasesPreviousLiveFrameBeforeReplacingGeometry(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out))
+	m.replaceMainInput("resize anchor", -1)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	m.termWidth = 180
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q after resize, want empty renderer payload", rendered)
+	}
+
+	raw := out.String()
+	if !strings.Contains(raw, xansi.EraseEntireLine) {
+		t.Fatalf("native resize did not erase previous live frame before replacement, raw=%q", raw)
+	}
+	plain := stripANSIAndTrimRight(raw)
+	if !strings.Contains(plain, "resize anchor") {
+		t.Fatalf("native resize did not render replacement live frame, got %q", plain)
+	}
+}
+
+func TestNativeSurfaceCommentaryStreamSurvivesGeometryReplacement(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-commentary",
+		AssistantDelta:      "commentary before resize",
+		AssistantDeltaPhase: clientui.MessagePhaseCommentary,
+	})
+	_ = collectCmdMessages(t, streamed.cmd)
+	if !m.nativeSurface.AssistantStreaming() {
+		t.Fatal("expected commentary delta to start native assistant streaming")
+	}
+	if got := stripANSIAndTrimRight(out.String()); !strings.Contains(got, "commentary before resize") {
+		t.Fatalf("native commentary stream did not write before replacement, got %q", got)
+	}
+	out.Reset()
+
+	m.termWidth = 180
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q after resize, want empty renderer payload", rendered)
+	}
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("native commentary resize replacement error = %v, want nil", m.nativeLiveAreaError)
+	}
+	out.Reset()
+
+	continued := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-commentary",
+		AssistantDelta:      " and after resize",
+		AssistantDeltaPhase: clientui.MessagePhaseCommentary,
+	})
+	_ = collectCmdMessages(t, continued.cmd)
+	if got := stripANSIAndTrimRight(out.String()); !strings.Contains(got, "and after resize") {
+		t.Fatalf("native commentary stream did not continue after replacement, got %q", got)
+	}
+}
+
 func TestNativeSurfaceResizeSettlesWithoutReplayingStableTranscript(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
@@ -945,6 +1013,32 @@ func TestNativeStableWriteErrorDisablesNativeSurface(t *testing.T) {
 	}
 }
 
+func TestNativeSurfaceCloseCleanupWriteErrorDoesNotRecurse(t *testing.T) {
+	cleanupErr := errors.New("cleanup terminal closed")
+	writer := &nativeSurfaceScriptedWriter{errors: []error{nil, cleanupErr}}
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(writer))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+
+	exitMainThread := m.enterUIMainThread("native surface cleanup failure test")
+	m.closeNativeSurface()
+	exitMainThread()
+
+	if m.nativeSurface != nil {
+		t.Fatal("expected cleanup write failure to leave native surface closed")
+	}
+	if m.nativeLiveAreaError == nil {
+		t.Fatal("expected cleanup write failure to be recorded")
+	}
+	if !errors.Is(m.nativeLiveAreaError, cleanupErr) {
+		t.Fatalf("cleanup write error = %v, want %v", m.nativeLiveAreaError, cleanupErr)
+	}
+	if writer.attempts != 2 {
+		t.Fatalf("writer attempts = %d, want initial frame render plus one cleanup erase attempt", writer.attempts)
+	}
+}
+
 func TestNativeLiveRenderErrorSurfacesInStatusLine(t *testing.T) {
 	writeErr := errors.New("terminal closed")
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(nativeSurfaceFailingWriter{err: writeErr}))
@@ -1114,6 +1208,44 @@ func TestNativeStableReplaceRejectsNonAppendProjectionRewrite(t *testing.T) {
 	}
 }
 
+func TestNativeStableReplacePanicsOnNonAppendProjectionRewriteInDebug(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "original prompt", Committed: true},
+		{Role: tui.TranscriptRoleAssistant, Text: "original answer", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+
+	panicText := captureNativeSurfacePanicText(t, func() {
+		result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+			Kind:                       clientui.EventConversationUpdated,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         2,
+			CommittedEntryCount:        2,
+			CommittedEntryStart:        0,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries:          []clientui.ChatEntry{{Role: "user", Text: "rewritten prompt"}},
+		})
+		_ = collectCmdMessages(t, result.cmd)
+	})
+
+	if !strings.Contains(panicText, "Native scrollback invariant violation") {
+		t.Fatalf("panic text missing invariant header:\n%s", panicText)
+	}
+	if !strings.Contains(panicText, "operation=steerNativeStableAppend") {
+		t.Fatalf("panic text missing operation:\n%s", panicText)
+	}
+	if !strings.Contains(panicText, "native stable append is not contiguous") {
+		t.Fatalf("panic text missing reason:\n%s", panicText)
+	}
+	if !strings.Contains(panicText, "stack:") {
+		t.Fatalf("panic text missing stack:\n%s", panicText)
+	}
+}
+
 func newNativeSurfaceTestModel(out *bytes.Buffer) *uiModel {
 	return newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(out))
 }
@@ -1172,11 +1304,13 @@ func (w nativeSurfaceFailingWriter) Write([]byte) (int, error) {
 }
 
 type nativeSurfaceScriptedWriter struct {
-	errors []error
-	writes []string
+	errors   []error
+	writes   []string
+	attempts int
 }
 
 func (w *nativeSurfaceScriptedWriter) Write(p []byte) (int, error) {
+	w.attempts++
 	if len(w.errors) > 0 {
 		err := w.errors[0]
 		w.errors = w.errors[1:]

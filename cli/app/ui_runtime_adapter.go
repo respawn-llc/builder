@@ -1,7 +1,6 @@
 package app
 
 import (
-	"errors"
 	"strconv"
 	"strings"
 
@@ -251,7 +250,7 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 		return m.steerNativeStableAppend(previous, current)
 	}
 	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
-		return errors.New("native stable append is not contiguous with current transcript projection")
+		return m.nativeStableProjectionInvariantError("deliverNativeStableProjectionChange", previous, current)
 	}
 	return m.steerNativeStableAppendFromBlock(current, len(previous.Blocks)+1)
 }
