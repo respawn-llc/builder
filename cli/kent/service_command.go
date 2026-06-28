@@ -25,6 +25,8 @@ const (
 	serviceActionStart     serviceAction = "start"
 	serviceActionStop      serviceAction = "stop"
 	serviceActionRestart   serviceAction = "restart"
+
+	serviceActionRun serviceAction = "run"
 )
 
 type serviceCommandOptions struct {
@@ -37,10 +39,6 @@ type serviceCommandOptions struct {
 
 const servicePersistenceRootFlagUsage = "config and data root directory (overrides KENT_PERSISTENCE_ROOT and the default ~/.kent)"
 
-// commitServicePersistenceRoot publishes a --persistence-root flag value to
-// KENT_PERSISTENCE_ROOT so every service operation resolves the same config+data
-// root (install bakes it into the launched unit; status/start/stop target the
-// matching instance). It returns (exitCode, false) when the value is invalid.
 func commitServicePersistenceRoot(value string, stderr io.Writer) (int, bool) {
 	if err := publishPersistenceRootEnv(value); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -78,6 +76,8 @@ func serviceSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return serviceLifecycleSubcommand(action, args[1:], stdout, stderr)
 	case serviceActionRestart:
 		return serviceRestartSubcommand(args[1:], stdout, stderr)
+	case serviceActionRun:
+		return serviceRunSubcommand(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown service command: %s\n\n", args[0])
 		fs := newCommandFlagSet(config.Command+" service", stderr, serviceUsage)
@@ -103,6 +103,14 @@ func serviceStatusSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 	return runServiceCommandAction(context.Background(), serviceActionStatus, serviceCommandOptions{JSON: *jsonOut}, stdout, stderr)
 }
 
+func guardBeforeElevation(action serviceAction, opts serviceCommandOptions, stderr io.Writer) (int, bool) {
+	if err := ensureServiceLifecycleAllowed(action, opts); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1, true
+	}
+	return 0, false
+}
+
 func serviceInstallSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" service install", stderr, serviceInstallUsage)
 	force := fs.Bool("force", false, "rewrite existing service registration")
@@ -118,7 +126,14 @@ func serviceInstallSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
 		return code
 	}
-	return runServiceCommandAction(context.Background(), serviceActionInstall, serviceCommandOptions{Force: *force, NoStart: *noStart}, stdout, stderr)
+	opts := serviceCommandOptions{Force: *force, NoStart: *noStart}
+	if code, blocked := guardBeforeElevation(serviceActionInstall, opts, stderr); blocked {
+		return code
+	}
+	if code, handled := elevateServiceAction(serviceActionInstall); handled {
+		return code
+	}
+	return runServiceCommandAction(context.Background(), serviceActionInstall, opts, stdout, stderr)
 }
 
 func serviceUninstallSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -135,7 +150,18 @@ func serviceUninstallSubcommand(args []string, stdout io.Writer, stderr io.Write
 	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
 		return code
 	}
-	return runServiceCommandAction(context.Background(), serviceActionUninstall, serviceCommandOptions{KeepRunning: *keepRunning}, stdout, stderr)
+	opts := serviceCommandOptions{KeepRunning: *keepRunning}
+	if opts.KeepRunning && !keepRunningUninstallSupported() {
+		fmt.Fprintln(stderr, "uninstall --keep-running is not supported on Windows: the background server runs as a child of the service and cannot be kept running while the service is removed")
+		return 2
+	}
+	if code, blocked := guardBeforeElevation(serviceActionUninstall, opts, stderr); blocked {
+		return code
+	}
+	if code, handled := elevateServiceAction(serviceActionUninstall); handled {
+		return code
+	}
+	return runServiceCommandAction(context.Background(), serviceActionUninstall, opts, stdout, stderr)
 }
 
 func serviceLifecycleSubcommand(action serviceAction, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -171,7 +197,42 @@ func serviceRestartSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
 		return code
 	}
+
 	return runServiceCommandAction(context.Background(), serviceActionRestart, serviceCommandOptions{IfInstalled: *ifInstalled}, stdout, stderr)
+}
+
+func serviceRunSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := newCommandFlagSet(config.Command+" service run", stderr, commandUsage{
+		title: "Usage of " + config.Command + " service run:",
+		lines: []string{"  " + config.Command + " service run  (internal: hosted by the OS service manager)"},
+	})
+	persistenceRoot := fs.String("persistence-root", "", servicePersistenceRootFlagUsage)
+	if ok, exitCode := parseCommandFlags(fs, args); !ok {
+		return exitCode
+	}
+	if len(fs.Args()) != 0 {
+		fmt.Fprintln(stderr, "service run does not accept positional arguments")
+		return 2
+	}
+	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
+		return code
+	}
+	spec, err := loadServiceSpec()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	return serviceHostRun(spec, stdout, stderr)
+}
+
+type legacyServerStopper interface {
+	stopLegacyServer(ctx context.Context, spec serviceSpec)
+}
+
+func stopLegacyManagedServer(ctx context.Context, backend serviceBackend, spec serviceSpec) {
+	if stopper, ok := backend.(legacyServerStopper); ok {
+		stopper.stopLegacyServer(ctx, spec)
+	}
 }
 
 func runServiceCommandAction(ctx context.Context, action serviceAction, opts serviceCommandOptions, stdout io.Writer, stderr io.Writer) int {
@@ -207,6 +268,10 @@ func runServiceCommandAction(ctx context.Context, action serviceAction, opts ser
 		writeServiceStatus(stdout, status)
 		return 0
 	case serviceActionInstall:
+
+		if serviceLifecycleGuardApplies(serviceActionInstall, opts) {
+			stopLegacyManagedServer(ctx, backend, spec)
+		}
 		if err := ensureNoUnmanagedServerConflictForAction(ctx, backend, spec, serviceActionInstall); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -266,11 +331,15 @@ func runServiceCommandAction(ctx context.Context, action serviceAction, opts ser
 			if !status.Installed {
 				return 0
 			}
-			// A registration for a different root is "not installed" from this
-			// invocation's perspective, so --if-installed exits as a quiet no-op.
+
 			if rootMismatchError(status, spec) != nil {
 				return 0
 			}
+
+			if code, handled := elevateServiceAction(serviceActionRestart); handled {
+				return code
+			}
+			stopLegacyManagedServer(ctx, backend, spec)
 			if err := ensureNoUnmanagedServerConflictForAction(ctx, backend, spec, action); err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
@@ -292,13 +361,6 @@ func runServiceCommandAction(ctx context.Context, action serviceAction, opts ser
 	return 0
 }
 
-// ensureServiceRootMatch reads the current registration and returns an error
-// when the installed service serves a different config+data root than the
-// resolved spec (or when the status read itself fails). It returns nil when
-// there is no conflict (or the installed root cannot be determined). Used by
-// stop/uninstall, which otherwise do not read status; start/restart reuse the
-// status fetched by ensureNoUnmanagedServerConflictForAction instead of paying a
-// second read.
 func ensureServiceRootMatch(ctx context.Context, backend serviceBackend, spec serviceSpec) error {
 	status, err := backend.Status(ctx, spec)
 	if err != nil {
@@ -307,32 +369,13 @@ func ensureServiceRootMatch(ctx context.Context, backend serviceBackend, spec se
 	return rootMismatchError(status, spec)
 }
 
-// rootMismatchError compares the persistence root baked into an installed
-// registration's command against the resolved spec root. Lifecycle actions
-// target the single global OS registration, so acting on a registration that
-// serves a different root is a cross-root footgun. It returns nil when they
-// match, when nothing is installed, or when the requested root is the default
-// and the installed registration's root cannot be confirmed (a legitimate
-// default-root service). Every service this binary installs now bakes
-// --persistence-root, and backends report the actual registration command (the
-// Windows backend resolves it from the registered scheduled-task action or the
-// Startup-folder launcher, never a path under the requested root), so the real
-// cross-root footguns — a default/other-root registration targeted with a
-// different --persistence-root, or an unpinned/unreadable legacy/manual
-// registration targeted with an explicit non-default root — are caught.
 func rootMismatchError(status serviceStatus, spec serviceSpec) error {
 	if !status.Installed {
 		return nil
 	}
 	installedRoot, ok := persistenceRootFromServiceCommand(status.Command)
 	if !ok {
-		// The registration's root cannot be confirmed: either the backend could
-		// not read/parse its command (empty command — e.g. a malformed plist or
-		// unit), or the command carries no --persistence-root (predates root
-		// isolation or was installed by hand). Both are indeterminate and treated
-		// as the default/global root. Acting on such a registration for an explicit
-		// non-default root would target the wrong (single, global) registration, so
-		// refuse unless the requested root is itself the default.
+
 		requestedIsDefault, err := config.IsDefaultPersistenceRoot(spec.Config.PersistenceRoot)
 		if err != nil {
 			return err
@@ -348,10 +391,22 @@ func rootMismatchError(status serviceStatus, spec serviceSpec) error {
 	return fmt.Errorf("no %s is installed for persistence root %s; the installed service targets %s. Reinstall with `%s service install --persistence-root %s` or manage the matching root instead", serviceDisplayName, spec.Config.PersistenceRoot, installedRoot, config.Command, spec.Config.PersistenceRoot)
 }
 
-// persistenceRootFromServiceCommand extracts the --persistence-root value baked
-// into an installed service command. It scans structured argv tokens (both the
-// "--persistence-root <root>" and "--persistence-root=<root>" forms) rather than
-// matching substrings.
+func argsWithoutPersistenceRoot(args []string) []string {
+	const flag = "--persistence-root"
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		if args[i] == flag {
+			i++
+			continue
+		}
+		if _, ok := strings.CutPrefix(args[i], flag+"="); ok {
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
+}
+
 func persistenceRootFromServiceCommand(command []string) (string, bool) {
 	const flag = "--persistence-root"
 	for i, arg := range command {
@@ -368,75 +423,12 @@ func persistenceRootFromServiceCommand(command []string) (string, bool) {
 	return "", false
 }
 
-// windowsRegisteredTaskRunPath extracts the action path registered for the
-// scheduled task from `schtasks /Query /V /FO LIST` output (its "Task To Run"
-// field). That value reflects the actual global registration regardless of the
-// requested persistence root, so the resolved command can be compared against
-// the requested root instead of trusting a script path under it. Defined here
-// rather than in the build-tagged Windows backend so the parsing is unit-testable
-// on every platform.
-func windowsRegisteredTaskRunPath(taskQueryOutput string) (string, bool) {
-	const field = "task to run:"
-	for _, raw := range strings.Split(taskQueryOutput, "\n") {
-		line := strings.TrimSpace(raw)
-		if !strings.HasPrefix(strings.ToLower(line), field) {
-			continue
-		}
-		value := strings.Trim(strings.TrimSpace(line[len(field):]), "\"")
-		if value == "" {
-			return "", false
-		}
-		return value, true
-	}
-	return "", false
-}
-
-// windowsRegisteredScriptPath resolves the server.cmd path the OS actually has
-// registered, independent of any requested persistence root. It prefers the
-// scheduled task action ("Task To Run") and falls back to the script path
-// embedded in the Startup-folder launcher. It returns false when neither source
-// carries a path, in which case the installed root is indeterminate and callers
-// must not substitute a path derived from the requested root: lifecycle actions
-// target the single global registration, so a requested-root guess would either
-// fabricate a false root match or mask a real cross-root mismatch. Defined here
-// rather than in the build-tagged Windows backend so the parsing is unit-testable
-// on every platform.
-func windowsRegisteredScriptPath(taskQueryOutput string, startupLauncher string) (string, bool) {
-	if path, ok := windowsRegisteredTaskRunPath(taskQueryOutput); ok {
-		return path, true
-	}
-	return windowsStartupItemScriptPath(startupLauncher)
-}
-
-// windowsStartupItemScriptPath extracts the server.cmd path the Windows
-// Startup-folder fallback launcher invokes. The launcher line has the shape
-// `start "" /min cmd.exe /d /c "<script path>"`; the script path is the final
-// token after the `/d /c ` marker, optionally quoted. It returns false when no
-// launcher line is present, mirroring an absent scheduled-task action.
-func windowsStartupItemScriptPath(startupLauncher string) (string, bool) {
-	const marker = "/d /c "
-	for _, raw := range strings.Split(startupLauncher, "\n") {
-		line := strings.TrimSpace(raw)
-		idx := strings.LastIndex(strings.ToLower(line), marker)
-		if idx < 0 {
-			continue
-		}
-		candidate := strings.Trim(strings.TrimSpace(line[idx+len(marker):]), "\"")
-		if candidate == "" {
-			continue
-		}
-		return candidate, true
-	}
-	return "", false
-}
-
 func ensureNoUnmanagedServerConflictForAction(ctx context.Context, backend serviceBackend, spec serviceSpec, action serviceAction) error {
 	status, err := backend.Status(ctx, spec)
 	if err != nil {
 		return err
 	}
-	// start/restart must not act on a registration installed for a different
-	// root. install (re)writes the registration, so it is exempt.
+
 	if action == serviceActionStart || action == serviceActionRestart {
 		if mismatch := rootMismatchError(status, spec); mismatch != nil {
 			return mismatch
@@ -481,7 +473,8 @@ func serviceLifecycleGuardApplies(action serviceAction, opts serviceCommandOptio
 	case serviceActionRestart:
 		return true
 	case serviceActionInstall:
-		return !opts.NoStart
+
+		return !opts.NoStart || opts.Force
 	case serviceActionUninstall:
 		return !opts.KeepRunning
 	case serviceActionStart:
@@ -508,9 +501,7 @@ func readServiceStatus(ctx context.Context, backend serviceBackend, spec service
 	if err != nil {
 		return serviceStatus{}, err
 	}
-	// Evaluate the root match against the raw registration command before the
-	// substitution below replaces an empty command with the requested-root one,
-	// which would otherwise mask a registration that serves a different root.
+
 	mismatched := rootMismatchError(status, spec) != nil
 	status.Backend = backend.Name()
 	status.Endpoint = spec.Endpoint
@@ -519,9 +510,7 @@ func readServiceStatus(ctx context.Context, backend serviceBackend, spec service
 		status.Command = serviceCommand(spec)
 	}
 	if mismatched {
-		// A registration for a different (or unconfirmable) root is "not
-		// installed" from the requested root's perspective, so status never
-		// reports another root's service as installed/running for this one.
+
 		status.Installed = false
 		status.Loaded = false
 		status.Running = false

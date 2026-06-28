@@ -72,6 +72,7 @@ var runInteractiveApp = app.Run
 var runPromptApp = app.RunPrompt
 
 func main() {
+	redirectServiceLogs()
 	if exitCode := rootCommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); exitCode != 0 {
 		os.Exit(exitCode)
 	}

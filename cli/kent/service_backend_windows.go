@@ -4,352 +4,448 @@ package main
 
 import (
 	"context"
+	brand "core/shared/config"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+	"unsafe"
 
-	brand "core/shared/config"
+	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/mgr"
 )
 
-type scheduledTaskServiceBackend struct{}
+type scmServiceBackend struct{}
 
 func currentServiceBackend() serviceBackend {
-	return scheduledTaskServiceBackend{}
+	return scmServiceBackend{}
 }
 
-func (scheduledTaskServiceBackend) Name() string {
-	return "schtasks"
+func (scmServiceBackend) Name() string {
+	return "scm"
 }
 
-func (scheduledTaskServiceBackend) Install(ctx context.Context, spec serviceSpec, force bool, start bool) error {
+var serviceRecoveryResetPeriod = uint32((24 * time.Hour).Seconds())
+
+func (scmServiceBackend) Install(ctx context.Context, spec serviceSpec, force bool, start bool) error {
 	if err := ensureServiceLogDir(spec); err != nil {
 		return err
 	}
-	scriptPath := windowsTaskScriptPath(spec)
-	nextScript := renderWindowsTaskScript(spec)
-	installed, _ := windowsScheduledTaskInstalled(ctx)
-	startupInstalled := windowsStartupItemInstalled()
-	existingScript, scriptErr := os.ReadFile(scriptPath)
-	scriptExists := scriptErr == nil
-	if !force && (installed || startupInstalled) {
-		if !scriptExists || string(existingScript) != nextScript {
-			return fmt.Errorf(brand.ServiceDisplayName + " is already installed; use --force to rewrite it")
+	removeLegacyWindowsRegistration(ctx, spec)
+
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("connect to the service manager (installing requires Administrator): %w", err)
+	}
+	defer func() { _ = m.Disconnect() }()
+
+	if existing, openErr := m.OpenService(serviceWindowsServiceName); openErr == nil {
+		if !force {
+			_ = existing.Close()
+			return errors.New(brand.ServiceDisplayName + " is already installed; use --force to rewrite it")
 		}
-		if start {
-			return scheduledTaskServiceBackend{}.Start(ctx, spec)
+		if err := stopServiceAndWait(existing); err != nil {
+			_ = existing.Close()
+			return fmt.Errorf("stop existing service before reinstall: %w", err)
 		}
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
-		return fmt.Errorf("create task script dir: %w", err)
-	}
-	if err := os.WriteFile(scriptPath, []byte(nextScript), 0o644); err != nil {
-		return fmt.Errorf("write task script: %w", err)
-	}
-	createArgs := []string{"/Create"}
-	if force {
-		createArgs = append(createArgs, "/F")
-	}
-	createArgs = append(createArgs, "/SC", "ONLOGON", "/RL", "LIMITED", "/TN", serviceWindowsTaskName, "/TR", scriptPath)
-	if _, err := runServiceCommand(ctx, "schtasks", createArgs...); err != nil {
-		if fallbackErr := installWindowsStartupItem(ctx, spec, start); fallbackErr != nil {
-			return errors.Join(err, fmt.Errorf("startup fallback failed: %w", fallbackErr))
+		deleteErr := existing.Delete()
+		_ = existing.Close()
+		if deleteErr != nil {
+			return fmt.Errorf("remove existing service before reinstall: %w", deleteErr)
 		}
-		return nil
-	}
-	if err := os.Remove(windowsStartupItemPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove Startup folder fallback after scheduled task registration: %w", err)
-	}
-	if start {
-		if _, err := runServiceCommand(ctx, "schtasks", "/Run", "/TN", serviceWindowsTaskName); err != nil {
+		if err := waitForServiceAbsent(m, 5*time.Second); err != nil {
 			return err
 		}
 	}
-	return nil
-}
 
-func (scheduledTaskServiceBackend) Uninstall(ctx context.Context, spec serviceSpec, stop bool) error {
-	if stop {
-		_ = scheduledTaskServiceBackend{}.Stop(ctx, spec)
+	config := mgr.Config{
+		ServiceType:      windows.SERVICE_WIN32_OWN_PROCESS,
+		StartType:        windows.SERVICE_AUTO_START,
+		ErrorControl:     windows.SERVICE_ERROR_NORMAL,
+		DisplayName:      brand.ServiceDisplayName,
+		Description:      brand.Product + " background server.",
+		ServiceStartName: "LocalSystem",
 	}
-	_, _ = runServiceCommand(ctx, "schtasks", "/Delete", "/F", "/TN", serviceWindowsTaskName)
-	if err := os.Remove(windowsStartupItemPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove Startup folder item: %w", err)
+	service, err := m.CreateService(serviceWindowsServiceName, spec.Executable, config, windowsServiceRunArguments(spec.Config.PersistenceRoot)...)
+	if err != nil {
+		return fmt.Errorf("create service: %w", err)
 	}
-	if err := os.Remove(windowsTaskScriptPath(spec)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove task script: %w", err)
-	}
-	return nil
-}
-
-func (scheduledTaskServiceBackend) Start(ctx context.Context, spec serviceSpec) error {
-	if installed, _ := windowsScheduledTaskInstalled(ctx); installed {
-		_, err := runServiceCommand(ctx, "schtasks", "/Run", "/TN", serviceWindowsTaskName)
+	if err := configureCreatedService(service, spec); err != nil {
+		_ = service.Delete()
+		_ = service.Close()
 		return err
 	}
-	if _, err := os.Stat(windowsStartupItemPath()); err == nil {
-		return launchWindowsTaskScript(ctx, spec)
-	}
-	return errors.New(brand.ServiceDisplayName + " is not installed; run `" + brand.Command + " service install`")
-}
+	defer func() { _ = service.Close() }()
 
-func (scheduledTaskServiceBackend) Stop(ctx context.Context, spec serviceSpec) error {
-	if installed, _ := windowsScheduledTaskInstalled(ctx); installed {
-		_, _ = runServiceCommand(ctx, "schtasks", "/End", "/TN", serviceWindowsTaskName)
-		_ = stopWindowsTaskScriptProcess(ctx, spec)
-		return nil
+	if start {
+		if err := service.Start(); err != nil {
+			return fmt.Errorf("start service: %w", err)
+		}
 	}
-	if windowsStartupItemInstalled() {
-		return stopWindowsTaskScriptProcess(ctx, spec)
-	}
-	_ = stopWindowsTaskScriptProcess(ctx, spec)
 	return nil
 }
 
-func (scheduledTaskServiceBackend) Restart(ctx context.Context, spec serviceSpec) error {
-	_ = scheduledTaskServiceBackend{}.Stop(ctx, spec)
-	return scheduledTaskServiceBackend{}.Start(ctx, spec)
+func configureCreatedService(service *mgr.Service, spec serviceSpec) error {
+	if err := service.SetRecoveryActions([]mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 2 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 5 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 10 * time.Second},
+	}, serviceRecoveryResetPeriod); err != nil {
+		return fmt.Errorf("configure restart-on-failure: %w", err)
+	}
+	if err := grantUserServiceAccess(service); err != nil {
+		return fmt.Errorf("grant service control to the installing user: %w", err)
+	}
+	if err := persistInstallUser(spec); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (scheduledTaskServiceBackend) Status(ctx context.Context, spec serviceSpec) (serviceStatus, error) {
-	taskInstalled, taskOutput := windowsScheduledTaskInstalled(ctx)
-	startupInstalled, err := windowsStartupItemInstalledChecked()
+func (scmServiceBackend) Uninstall(ctx context.Context, spec serviceSpec, stop bool) error {
+	m, err := mgr.Connect()
 	if err != nil {
-		return serviceStatus{}, fmt.Errorf("stat Startup folder item: %w", err)
+		return fmt.Errorf("connect to the service manager (uninstalling requires Administrator): %w", err)
 	}
-	taskScriptPIDs := windowsTaskScriptPIDs(ctx, spec)
-	serverPIDs := windowsRegisteredCommandPIDs(ctx, spec)
-	running := len(taskScriptPIDs) > 0
-	pid := 0
-	if running && len(serverPIDs) > 0 {
-		pid = serverPIDs[0]
-	}
-	return serviceStatus{
-		Backend:     "schtasks",
-		Installed:   taskInstalled || startupInstalled,
-		Loaded:      taskInstalled || startupInstalled,
-		Running:     running,
-		PID:         pid,
-		Command:     readWindowsRegisteredCommand(taskOutput),
-		Endpoint:    spec.Endpoint,
-		Logs:        []string{spec.StdoutLogPath, spec.StderrLogPath},
-		InstallPath: windowsTaskScriptPath(spec),
-		Detail:      strings.TrimSpace(taskOutput),
-	}, nil
-}
+	defer func() { _ = m.Disconnect() }()
 
-// readWindowsRegisteredCommand resolves the argv of the installed service from
-// the authoritative OS registration only: the scheduled task action path, or the
-// script path embedded in the Startup-folder launcher. It never derives the
-// command from a path under the requested persistence root, because lifecycle
-// actions target the single global registration -- guessing a requested-root
-// command would either fabricate a false root match or mask a real cross-root
-// mismatch (the rootMismatchError guard relies on this). It returns nil when no
-// authoritative registration path is available, which the guard treats as an
-// indeterminate (fail-open) root rather than a false match against the request.
-func readWindowsRegisteredCommand(taskQueryOutput string) []string {
-	scriptPath, ok := windowsRegisteredScriptPath(taskQueryOutput, readWindowsStartupLauncher())
-	if !ok {
+	service, err := m.OpenService(serviceWindowsServiceName)
+	if err != nil {
+		if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return fmt.Errorf("open service: %w", err)
+		}
+		if stop {
+			endLegacyWindowsTask(ctx)
+		}
+		removeLegacyWindowsRegistration(ctx, spec)
+		_ = os.Remove(windowsServerPIDPath(spec))
 		return nil
 	}
-	return readWindowsScriptCommand(scriptPath)
+	defer func() { _ = service.Close() }()
+
+	if stop {
+		if err := stopServiceAndWait(service); err != nil {
+			return fmt.Errorf("stop service before uninstall: %w", err)
+		}
+		endLegacyWindowsTask(ctx)
+	}
+	if err := service.Delete(); err != nil {
+		return fmt.Errorf("delete service: %w", err)
+	}
+	removeLegacyWindowsRegistration(ctx, spec)
+	_ = os.Remove(windowsServerPIDPath(spec))
+	_ = os.Remove(installUserSIDPath(spec))
+	return nil
 }
 
-func readWindowsStartupLauncher() string {
-	data, err := os.ReadFile(windowsStartupItemPath())
+func (scmServiceBackend) Start(ctx context.Context, spec serviceSpec) error {
+	service, cleanup, err := openServiceWithAccess(windows.SERVICE_START | windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if err := service.Start(); err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
+			return nil
+		}
+		return fmt.Errorf("start service: %w", err)
+	}
+	return nil
+}
+
+func (scmServiceBackend) Stop(ctx context.Context, spec serviceSpec) error {
+	service, cleanup, err := openServiceWithAccess(windows.SERVICE_STOP | windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if err := stopServiceAndWait(service); err != nil {
+		return fmt.Errorf("stop service: %w", err)
+	}
+	return nil
+}
+
+func (scmServiceBackend) Restart(ctx context.Context, spec serviceSpec) error {
+	service, cleanup, err := openServiceWithAccess(windows.SERVICE_START | windows.SERVICE_STOP | windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	if err := stopServiceAndWait(service); err != nil {
+		return fmt.Errorf("stop service before restart: %w", err)
+	}
+	if err := service.Start(); err != nil {
+		return fmt.Errorf("start service: %w", err)
+	}
+	return nil
+}
+
+func (scmServiceBackend) Status(ctx context.Context, spec serviceSpec) (serviceStatus, error) {
+	status := serviceStatus{
+		Backend:     "scm",
+		Endpoint:    spec.Endpoint,
+		Logs:        []string{spec.StdoutLogPath, spec.StderrLogPath},
+		InstallPath: spec.Executable,
+	}
+	service, cleanup, err := openServiceWithAccess(windows.SERVICE_QUERY_STATUS | windows.SERVICE_QUERY_CONFIG)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return status, nil
+		}
+		return serviceStatus{}, err
+	}
+	defer cleanup()
+	status.Installed = true
+	status.Loaded = true
+	if query, err := service.Query(); err == nil {
+		status.Running = query.State == svc.Running || query.State == svc.StartPending
+	}
+	if cfg, err := service.Config(); err == nil {
+		if command, err := windows.DecomposeCommandLine(cfg.BinaryPathName); err == nil {
+			status.Command = command
+		}
+	}
+	status.PID = readWindowsServerPID(spec)
+	return status, nil
+}
+
+func windowsServiceDir(spec serviceSpec) string {
+	return filepath.Join(spec.Config.PersistenceRoot, "service")
+}
+
+func windowsServerPIDPath(spec serviceSpec) string {
+	return filepath.Join(windowsServiceDir(spec), "server.pid")
+}
+
+func readWindowsServerPID(spec serviceSpec) int {
+	data, err := os.ReadFile(windowsServerPIDPath(spec))
+	if err != nil {
+		return 0
+	}
+	return parsePositiveInt(string(data))
+}
+
+func installUserSIDPath(spec serviceSpec) string {
+	return filepath.Join(windowsServiceDir(spec), "install_user.sid")
+}
+
+func persistInstallUser(spec serviceSpec) error {
+	sid, err := interactiveUserSID()
+	if err != nil {
+		return fmt.Errorf("resolve installing user: %w", err)
+	}
+	if err := os.MkdirAll(windowsServiceDir(spec), 0o755); err != nil {
+		return fmt.Errorf("create service directory: %w", err)
+	}
+	if err := os.WriteFile(installUserSIDPath(spec), []byte(sid.String()), 0o644); err != nil {
+		return fmt.Errorf("persist installing user: %w", err)
+	}
+	return nil
+}
+
+func readInstallUserSID(spec serviceSpec) string {
+	data, err := os.ReadFile(installUserSIDPath(spec))
 	if err != nil {
 		return ""
 	}
-	return string(data)
+	return strings.TrimSpace(string(data))
 }
 
-func readWindowsScriptCommand(scriptPath string) []string {
-	data, err := os.ReadFile(scriptPath)
-	if err != nil {
-		return nil
+func windowsServiceRunArguments(persistenceRoot string) []string {
+	args := []string{string(serviceActionRun)}
+	args = append([]string{"service"}, args...)
+	if trimmed := strings.TrimSpace(persistenceRoot); trimmed != "" {
+		args = append(args, "--persistence-root", trimmed)
 	}
-	for _, rawLine := range strings.Split(string(data), "\n") {
-		line := strings.TrimSpace(rawLine)
-		lower := strings.ToLower(line)
-		if line == "" || strings.HasPrefix(lower, "@echo") || strings.HasPrefix(lower, "rem ") || strings.HasPrefix(lower, "cd /d ") {
-			continue
-		}
-		if before, _, ok := strings.Cut(line, " 1>>"); ok {
-			line = before
-		}
-		return parseWindowsCommandLine(line)
-	}
-	return nil
-}
-
-func parseWindowsCommandLine(value string) []string {
-	args := []string{}
-	var builder strings.Builder
-	inQuote := false
-	flush := func() {
-		if builder.Len() == 0 {
-			return
-		}
-		args = append(args, builder.String())
-		builder.Reset()
-	}
-	for _, r := range value {
-		switch r {
-		case '"':
-			inQuote = !inQuote
-		case ' ', '\t':
-			if inQuote {
-				builder.WriteRune(r)
-			} else {
-				flush()
-			}
-		default:
-			builder.WriteRune(r)
-		}
-	}
-	flush()
 	return args
 }
 
-func windowsScheduledTaskInstalled(ctx context.Context) (bool, string) {
-	result, err := runServiceCommand(ctx, "schtasks", "/Query", "/TN", serviceWindowsTaskName, "/V", "/FO", "LIST")
+func openServiceWithAccess(access uint32) (*mgr.Service, func(), error) {
+	scm, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
-		return false, strings.TrimSpace(strings.Join([]string{result.Stdout, result.Stderr}, "\n"))
+		return nil, nil, fmt.Errorf("connect to the service manager: %w", err)
 	}
-	return true, strings.TrimSpace(strings.Join([]string{result.Stdout, result.Stderr}, "\n"))
-}
-
-func windowsStartupItemInstalled() bool {
-	installed, _ := windowsStartupItemInstalledChecked()
-	return installed
-}
-
-func windowsStartupItemInstalledChecked() (bool, error) {
-	if _, err := os.Stat(windowsStartupItemPath()); err == nil {
-		return true, nil
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return false, err
+	namePtr, err := windows.UTF16PtrFromString(serviceWindowsServiceName)
+	if err != nil {
+		_ = windows.CloseServiceHandle(scm)
+		return nil, nil, err
 	}
-	return false, nil
+	handle, err := windows.OpenService(scm, namePtr, access)
+	if err != nil {
+		_ = windows.CloseServiceHandle(scm)
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return nil, nil, windows.ERROR_SERVICE_DOES_NOT_EXIST
+		}
+		return nil, nil, fmt.Errorf("open service (is it installed? run `%s service install`): %w", brand.Command, err)
+	}
+	service := &mgr.Service{Name: serviceWindowsServiceName, Handle: handle}
+	cleanup := func() {
+		_ = windows.CloseServiceHandle(handle)
+		_ = windows.CloseServiceHandle(scm)
+	}
+	return service, cleanup, nil
 }
 
-func windowsTaskScriptPath(spec serviceSpec) string {
-	return filepath.Join(spec.Config.PersistenceRoot, "service", "server.cmd")
+func grantUserServiceAccess(service *mgr.Service) error {
+	descriptor, err := windows.GetSecurityInfo(service.Handle, windows.SE_SERVICE, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		return err
+	}
+	existing, _, err := descriptor.DACL()
+	if err != nil {
+		return err
+	}
+	sid, err := interactiveUserSID()
+	if err != nil {
+
+		token, terr := windows.OpenCurrentProcessToken()
+		if terr != nil {
+			return terr
+		}
+		defer func() { _ = token.Close() }()
+		user, uerr := token.GetTokenUser()
+		if uerr != nil {
+			return uerr
+		}
+		sid = user.User.Sid
+	}
+	entry := windows.EXPLICIT_ACCESS{
+		AccessPermissions: windows.SERVICE_START | windows.SERVICE_STOP | windows.SERVICE_QUERY_STATUS | windows.SERVICE_QUERY_CONFIG | windows.READ_CONTROL,
+		AccessMode:        windows.GRANT_ACCESS,
+		Inheritance:       windows.NO_INHERITANCE,
+		Trustee: windows.TRUSTEE{
+			TrusteeForm:  windows.TRUSTEE_IS_SID,
+			TrusteeType:  windows.TRUSTEE_IS_USER,
+			TrusteeValue: windows.TrusteeValueFromSID(sid),
+		},
+	}
+	merged, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{entry}, existing)
+	if err != nil {
+		return err
+	}
+	return windows.SetSecurityInfo(service.Handle, windows.SE_SERVICE, windows.DACL_SECURITY_INFORMATION, nil, nil, merged, nil)
 }
 
-func windowsStartupItemPath() string {
+var (
+	wtsapi32DLL                    = windows.NewLazySystemDLL("wtsapi32.dll")
+	procWTSQuerySessionInformation = wtsapi32DLL.NewProc("WTSQuerySessionInformationW")
+)
+
+const (
+	wtsInfoUserName   = 5
+	wtsInfoDomainName = 7
+)
+
+func interactiveUserSID() (*windows.SID, error) {
+	var session uint32
+	if err := windows.ProcessIdToSessionId(windows.GetCurrentProcessId(), &session); err != nil {
+		return nil, fmt.Errorf("resolve install session: %w", err)
+	}
+	if session == 0 {
+		return nil, errors.New("install is not running in an interactive session")
+	}
+	user, err := wtsSessionString(session, wtsInfoUserName)
+	if err != nil {
+		return nil, err
+	}
+	if user == "" {
+		return nil, errors.New("install session has no user")
+	}
+	domain, err := wtsSessionString(session, wtsInfoDomainName)
+	if err != nil {
+		return nil, err
+	}
+	account := user
+	if domain != "" {
+		account = domain + `\` + user
+	}
+	sid, _, _, err := windows.LookupSID("", account)
+	if err != nil {
+		return nil, fmt.Errorf("resolve install user %q: %w", account, err)
+	}
+	return sid, nil
+}
+
+func wtsSessionString(session uint32, infoClass uint32) (string, error) {
+	var buffer *uint16
+	var bytesReturned uint32
+	ret, _, callErr := procWTSQuerySessionInformation.Call(
+		0,
+		uintptr(session),
+		uintptr(infoClass),
+		uintptr(unsafe.Pointer(&buffer)),
+		uintptr(unsafe.Pointer(&bytesReturned)),
+	)
+	if ret == 0 {
+		return "", fmt.Errorf("WTSQuerySessionInformation: %w", callErr)
+	}
+	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(buffer)))
+	return windows.UTF16PtrToString(buffer), nil
+}
+
+func stopServiceAndWait(service *mgr.Service) error {
+	if _, err := service.Control(svc.Stop); err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+			return nil
+		}
+		return err
+	}
+	return waitForServiceState(service, svc.Stopped, serviceStopWindow)
+}
+
+func waitForServiceState(service *mgr.Service, state svc.State, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		status, err := service.Query()
+		if err != nil {
+			return fmt.Errorf("query service state: %w", err)
+		}
+		if status.State == state {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for service to reach state %d", state)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func waitForServiceAbsent(m *mgr.Mgr, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		service, err := m.OpenService(serviceWindowsServiceName)
+		if err != nil {
+			return nil
+		}
+		_ = service.Close()
+		if time.Now().After(deadline) {
+			return errors.New("existing service still registered after delete; reboot or stop dependent processes and retry")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func (scmServiceBackend) stopLegacyServer(ctx context.Context, spec serviceSpec) {
+	endLegacyWindowsTask(ctx)
+}
+
+func endLegacyWindowsTask(ctx context.Context) {
+	_, _ = runServiceCommand(ctx, "schtasks", "/End", "/TN", serviceWindowsTaskName)
+}
+
+func removeLegacyWindowsRegistration(ctx context.Context, spec serviceSpec) {
+	_, _ = runServiceCommand(ctx, "schtasks", "/Delete", "/F", "/TN", serviceWindowsTaskName)
+	_ = os.Remove(legacyWindowsStartupItemPath())
+	_ = os.Remove(filepath.Join(windowsServiceDir(spec), "server.cmd"))
+}
+
+func legacyWindowsStartupItemPath() string {
 	base := strings.TrimSpace(os.Getenv("APPDATA"))
 	if base == "" {
 		base = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Roaming")
 	}
 	return filepath.Join(base, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", serviceWindowsTaskName+".cmd")
-}
-
-func installWindowsStartupItem(ctx context.Context, spec serviceSpec, start bool) error {
-	path := windowsStartupItemPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create Startup folder: %w", err)
-	}
-	contents := "@echo off\r\nstart \"\" /min cmd.exe /d /c " + windowsCmdQuote(windowsTaskScriptPath(spec)) + "\r\n"
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-		return fmt.Errorf("write Startup folder item: %w", err)
-	}
-	if start {
-		return launchWindowsTaskScript(ctx, spec)
-	}
-	return nil
-}
-
-func launchWindowsTaskScript(ctx context.Context, spec serviceSpec) error {
-	_, err := runServiceCommand(ctx, "cmd.exe", "/d", "/c", "start", "", "/min", "cmd.exe", "/d", "/c", windowsTaskScriptPath(spec))
-	return err
-}
-
-func stopWindowsTaskScriptProcess(ctx context.Context, spec serviceSpec) error {
-	for _, pid := range windowsTaskScriptPIDs(ctx, spec) {
-		if pid <= 0 {
-			continue
-		}
-		_, _ = runServiceCommand(ctx, "taskkill", "/T", "/F", "/PID", fmt.Sprintf("%d", pid))
-	}
-	return nil
-}
-
-func windowsTaskScriptPIDs(ctx context.Context, spec serviceSpec) []int {
-	needle := strings.ReplaceAll(windowsTaskScriptPath(spec), "/", "\\")
-	return windowsProcessPIDsMatchingAll(ctx, []string{needle})
-}
-
-func windowsRegisteredCommandPIDs(ctx context.Context, spec serviceSpec) []int {
-	// PID matching is scoped to the requested root's server script (the running/PID
-	// display is per requested root), which is a deliberately different concern
-	// from which root owns the global registration. Read the requested-root script
-	// directly here rather than the authoritative registration.
-	command := readWindowsScriptCommand(windowsTaskScriptPath(spec))
-	if len(command) == 0 {
-		return nil
-	}
-	return windowsProcessPIDsMatchingAll(ctx, command)
-}
-
-func windowsProcessPIDsMatchingAll(ctx context.Context, needles []string) []int {
-	filteredNeedles := make([]string, 0, len(needles))
-	for _, needle := range needles {
-		trimmed := strings.TrimSpace(strings.ReplaceAll(needle, "/", "\\"))
-		if trimmed != "" {
-			filteredNeedles = append(filteredNeedles, trimmed)
-		}
-	}
-	if len(filteredNeedles) == 0 {
-		return nil
-	}
-	var script strings.Builder
-	script.WriteString("$self = $PID; $needles = @(")
-	for i, needle := range filteredNeedles {
-		if i > 0 {
-			script.WriteString(", ")
-		}
-		script.WriteString(windowsPowerShellSingleQuote(needle))
-	}
-	script.WriteString("); Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $self -and $_.CommandLine } | Where-Object { $cmd = ($_.CommandLine -replace '/', '\\'); $ok = $true; foreach ($needle in $needles) { if ($cmd.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -lt 0) { $ok = $false; break } }; $ok } | ForEach-Object { $_.ProcessId }")
-	result, err := runServiceCommand(ctx, "powershell", "-NoProfile", "-Command", script.String())
-	if err != nil {
-		return nil
-	}
-	pids := []int{}
-	for _, line := range strings.Split(result.Stdout, "\n") {
-		if pid := parsePositiveInt(line); pid > 0 {
-			pids = append(pids, pid)
-		}
-	}
-	return pids
-}
-
-func windowsPowerShellSingleQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
-}
-
-func renderWindowsTaskScript(spec serviceSpec) string {
-	lines := []string{"@echo off"}
-	lines = append(lines, "cd /d "+windowsCmdQuote(spec.Config.PersistenceRoot))
-	lines = append(lines, serviceCommandLineWindows(serviceCommand(spec))+" 1>>"+windowsCmdQuote(spec.StdoutLogPath)+" 2>>"+windowsCmdQuote(spec.StderrLogPath))
-	return strings.Join(lines, "\r\n") + "\r\n"
-}
-
-func serviceCommandLineWindows(args []string) string {
-	parts := make([]string, 0, len(args))
-	for _, arg := range args {
-		parts = append(parts, windowsCmdQuote(arg))
-	}
-	return strings.Join(parts, " ")
-}
-
-func windowsCmdQuote(value string) string {
-	escaped := strings.ReplaceAll(value, `"`, `\"`)
-	if escaped == "" || strings.ContainsAny(escaped, " \t&()[]{}^=;!'+,`~") {
-		return `"` + escaped + `"`
-	}
-	return escaped
 }

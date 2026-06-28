@@ -7,21 +7,9 @@ Usage of kent service:
   kent service restart [--if-installed]
 
 What This Does:
-  Manage the Kent server background service for one shared local `kent serve`.
-  The service starts at login and is supervised by the OS.
-  Lifecycle commands that can stop or restart the service are refused inside Kent shell commands.
-  Use `install --no-start` or `uninstall --keep-running` for registration-only changes from a Kent shell.
+  Run one shared local `kent serve` as a background service that starts at login.
+  Lifecycle commands that stop or restart the service are refused inside Kent shell commands; use `install --no-start` or `uninstall --keep-running` for registration-only changes there.
 
-Backends:
-  macOS: launchd LaunchAgent.
-  Linux/WSL2: systemd --user unit.
-  Windows: Scheduled Task, with Startup folder fallback when needed.
-
-macOS Notes:
-  `restart --if-installed` rewrites the LaunchAgent, unloads the loaded job, and bootstraps it again.
-  `start` bootstraps an unloaded LaunchAgent; launchd starts it through RunAtLoad.
-
-Examples:
-  kent service status
-  kent service install
-  kent service restart
+Windows Notes:
+  `install` and `uninstall` prompt for Administrator elevation; other commands need no elevation.
+  `uninstall --keep-running` is not supported; the server is bound to the service and stops with it.

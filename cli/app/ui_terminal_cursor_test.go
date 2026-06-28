@@ -737,6 +737,12 @@ func TestTerminalCursorProgramStartupReplayAfterClearScreenKeepsOngoingOutputVis
 	}
 }
 
+func terminalCursorOutputContains(state *uiTerminalCursorState, out *bytes.Buffer, want string) bool {
+	state.writeMu.Lock()
+	defer state.writeMu.Unlock()
+	return strings.Contains(out.String(), want)
+}
+
 func terminalOutputAfterLastClearScreen(output string) string {
 	index := strings.LastIndex(output, xansi.EraseEntireScreen)
 	if index < 0 {
@@ -774,12 +780,12 @@ func TestTerminalCursorProgramSurvivesAltScreenTransitionAfterPlacement(t *testi
 		return ok
 	})
 	program.Send(tea.KeyMsg{Type: tea.KeyShiftTab})
-	waitForTestCondition(t, 2*time.Second, "detail alt-screen active", func() bool {
-		return model.view.Mode() == "detail" && model.altScreenActive
+	waitForTestCondition(t, 2*time.Second, "alt-screen enter flushed to output", func() bool {
+		return terminalCursorOutputContains(state, &out, "\x1b[?1049h")
 	})
 	program.Send(tea.KeyMsg{Type: tea.KeyShiftTab})
-	waitForTestCondition(t, 2*time.Second, "ongoing mode restored", func() bool {
-		return model.view.Mode() == "ongoing" && !model.altScreenActive
+	waitForTestCondition(t, 2*time.Second, "alt-screen exit flushed to output", func() bool {
+		return terminalCursorOutputContains(state, &out, "\x1b[?1049l")
 	})
 	program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
 	select {
