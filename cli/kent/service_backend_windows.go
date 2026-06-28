@@ -137,7 +137,9 @@ func (scmServiceBackend) Uninstall(ctx context.Context, spec serviceSpec, stop b
 
 	if stop {
 		if _, err := service.Control(svc.Stop); err == nil {
-			_ = waitForServiceState(service, svc.Stopped, serviceStopWindow)
+			if werr := waitForServiceState(service, svc.Stopped, serviceStopWindow); werr != nil {
+				return fmt.Errorf("stop service before uninstall: %w", werr)
+			}
 		}
 	}
 	if err := service.Delete(); err != nil {
@@ -156,6 +158,9 @@ func (scmServiceBackend) Start(ctx context.Context, spec serviceSpec) error {
 	}
 	defer cleanup()
 	if err := service.Start(); err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
+			return nil
+		}
 		return fmt.Errorf("start service: %w", err)
 	}
 	return nil

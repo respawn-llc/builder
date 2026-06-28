@@ -204,11 +204,10 @@ func serviceRestartSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	if code, ok := commitServicePersistenceRoot(*persistenceRoot, stderr); !ok {
 		return code
 	}
-	opts := serviceCommandOptions{IfInstalled: *ifInstalled}
-	if code, blocked := guardBeforeElevation(serviceActionRestart, opts, stderr); blocked {
-		return code
-	}
-	return runServiceCommandAction(context.Background(), serviceActionRestart, opts, stdout, stderr)
+	// The session guard and elevation for restart are applied inside
+	// runServiceCommandAction, after confirming a matching installation exists,
+	// so `restart --if-installed` can still no-op from inside a Kent session.
+	return runServiceCommandAction(context.Background(), serviceActionRestart, serviceCommandOptions{IfInstalled: *ifInstalled}, stdout, stderr)
 }
 
 // serviceRunSubcommand is the internal entry the OS service manager invokes via
@@ -289,7 +288,12 @@ func runServiceCommandAction(ctx context.Context, action serviceAction, opts ser
 		writeServiceStatus(stdout, status)
 		return 0
 	case serviceActionInstall:
-		stopLegacyManagedServer(ctx, backend, spec)
+		// Only end the legacy server on paths allowed to stop the service, so a
+		// registration-only install (--no-start without --force) never halts a
+		// session hosted by the old launcher.
+		if serviceLifecycleGuardApplies(serviceActionInstall, opts) {
+			stopLegacyManagedServer(ctx, backend, spec)
+		}
 		if err := ensureNoUnmanagedServerConflictForAction(ctx, backend, spec, serviceActionInstall); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -509,7 +513,9 @@ func serviceLifecycleGuardApplies(action serviceAction, opts serviceCommandOptio
 	case serviceActionRestart:
 		return true
 	case serviceActionInstall:
-		return !opts.NoStart
+		// --force rewrites (stops, deletes, recreates) an existing service, so it
+		// can halt the session even with --no-start; guard it regardless.
+		return !opts.NoStart || opts.Force
 	case serviceActionUninstall:
 		return !opts.KeepRunning
 	case serviceActionStart:
