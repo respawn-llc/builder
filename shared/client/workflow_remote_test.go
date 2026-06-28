@@ -42,6 +42,7 @@ func TestRemoteWorkflowListRoute(t *testing.T) {
 			return
 		}
 		handlerErr <- nil
+		_ = websocket.JSON.Receive(ws, &req)
 	}))
 	defer server.Close()
 
