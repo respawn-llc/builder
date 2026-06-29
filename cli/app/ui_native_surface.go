@@ -440,6 +440,39 @@ func nativeStableProjectionNeedsDelivery(previous tui.TranscriptProjection, curr
 	return len(current.Blocks) > len(previous.Blocks)
 }
 
+func nativeStableAppendBlocksForProjectionChange(previous tui.TranscriptProjection, current tui.TranscriptProjection) ([]int, bool) {
+	if current.Empty() {
+		return nil, true
+	}
+	if previous.Empty() {
+		return nativeStableBlockIndexRange(0, len(current.Blocks)), true
+	}
+	if _, ok := current.RenderNativeStableAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
+		return nativeStableBlockIndexRange(len(previous.Blocks), len(current.Blocks)), true
+	}
+	if overlap := current.SharedNativeStableSuffixPrefixBlockCount(previous); overlap > 0 {
+		return nativeStableBlockIndexRange(overlap, len(current.Blocks)), true
+	}
+	if blockIndexes, ok := nativeStableAppendBlockIndexesForLocalReconciliation(previous, current); ok {
+		return blockIndexes, true
+	}
+	return nil, false
+}
+
+func nativeStableBlockIndexRange(start int, end int) []int {
+	if start < 0 {
+		start = 0
+	}
+	if end <= start {
+		return nil
+	}
+	indexes := make([]int, 0, end-start)
+	for idx := start; idx < end; idx++ {
+		indexes = append(indexes, idx)
+	}
+	return indexes
+}
+
 func nativeStableAppendBlockIndexesForLocalReconciliation(previous tui.TranscriptProjection, current tui.TranscriptProjection) ([]int, bool) {
 	prefix := current.SharedNativeStablePrefixBlockCount(previous)
 	previousSuffixIsLocal := prefix < len(previous.Blocks)

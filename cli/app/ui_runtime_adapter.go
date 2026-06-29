@@ -246,23 +246,22 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 	if !nativeAssistantStreamActive {
 		return m.steerNativeStableRuntimeProjectionChange("deliverNativeStableProjectionChange", previous, current)
 	}
-	appendable := false
-	if _, ok := current.RenderNativeStableAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
-		appendable = true
+	appendBlocks, ok := nativeStableAppendBlocksForProjectionChange(previous, current)
+	if !ok {
+		return m.nativeStableProjectionRecoverableError("deliverNativeStableProjectionChange", previous, current)
 	}
-	overlap := 0
-	if !appendable {
-		overlap = current.SharedNativeStableSuffixPrefixBlockCount(previous)
-		if overlap == 0 {
-			return m.nativeStableProjectionRecoverableError("deliverNativeStableProjectionChange", previous, current)
-		}
+	if len(appendBlocks) == 0 {
+		return nil
 	}
-	skippedStreamBlock := len(previous.Blocks)
-	if !appendable {
-		skippedStreamBlock = overlap
-	}
-	if skippedStreamBlock >= len(current.Blocks) || !m.nativeAssistantStreamMatchesProjectionBlock(nativeAssistantStreamText, current.Blocks[skippedStreamBlock]) {
+	streamBlockIndex := appendBlocks[0]
+	if streamBlockIndex >= len(current.Blocks) {
 		return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
+	}
+	if !m.nativeAssistantStreamMatchesProjectionBlock(nativeAssistantStreamText, current.Blocks[streamBlockIndex]) {
+		if nativeStableProjectionBlockCanFinalizeAssistantStream(current.Blocks[streamBlockIndex]) {
+			return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
+		}
+		return m.steerNativeStableAppendBlocks(current, previous, appendBlocks)
 	}
 	if err := m.finishNativeAssistantStreaming(); err != nil {
 		return err
@@ -270,10 +269,11 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 	if nativeAssistantStreamWasIncomplete {
 		return m.steerNativeStableRuntimeProjectionChange("deliverNativeStableProjectionChange", previous, current)
 	}
-	if appendable {
-		return m.steerNativeStableAppendFromBlock(current, len(previous.Blocks)+1)
-	}
-	return m.steerNativeStableAppendFromBlock(current, overlap+1)
+	return m.steerNativeStableAppendBlocks(current, previous, appendBlocks[1:])
+}
+
+func nativeStableProjectionBlockCanFinalizeAssistantStream(block tui.TranscriptProjectionBlock) bool {
+	return block.Role == tui.RenderIntentAssistant || block.Role == tui.RenderIntentAssistantCommentary
 }
 
 func (m *uiModel) nativeSurfaceErrorCmd(action string, err error) tea.Cmd {

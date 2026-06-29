@@ -2008,6 +2008,64 @@ func TestNativeStableAppendWithActiveStreamPanicsOnMismatchedCommittedBlockInDeb
 	}
 }
 
+func TestNativeStableAppendWithActiveStreamQueuesNonAssistantCommittedRows(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamExitMainThread := m.enterUIMainThread("native active stream non-assistant setup")
+	if err := m.nativeSurface.StreamAssistantCommentaryContent("working"); err != nil {
+		streamExitMainThread()
+		t.Fatalf("stream native assistant content: %v", err)
+	}
+	streamExitMainThread()
+
+	previous := nativeStableProjectionForTest("old-a")
+	previous.Blocks[0].Role = tui.RenderIntentUser
+	previous.Blocks[0].DividerGroup = string(tui.RenderIntentUser)
+	current := previous.Clone()
+	current.Blocks = append(current.Blocks,
+		tui.TranscriptProjectionBlock{
+			Role:         tui.RenderIntentToolPatchSuccess,
+			DividerGroup: string(tui.RenderIntentTool),
+			Lines:        []string{"⇄ ./.builder/plans/BUI-146-goal-interrupt-recon.md -1 +1"},
+		},
+		tui.TranscriptProjectionBlock{
+			Role:         tui.RenderIntentUser,
+			DividerGroup: string(tui.RenderIntentUser),
+			Lines:        []string{"❯ you can talk to me via commentary channel"},
+		},
+	)
+	exitMainThread := m.enterUIMainThread("native active stream non-assistant append test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "working")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("active stream non-assistant delivery returned error: %v", err)
+	}
+	if !m.nativeSurface.AssistantStreaming() {
+		t.Fatal("non-assistant committed rows finalized active assistant stream")
+	}
+	if got := stripANSIAndTrimRight(out.String()); got != "" {
+		t.Fatalf("queued non-assistant rows wrote before active stream finished: %q", got)
+	}
+
+	finishExitMainThread := m.enterUIMainThread("native active stream non-assistant finish")
+	err = m.finishNativeAssistantStreaming()
+	finishExitMainThread()
+	if err != nil {
+		t.Fatalf("finish native assistant stream after queued rows returned error: %v", err)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if !strings.Contains(plain, "working") ||
+		!strings.Contains(plain, "BUI-146-goal-interrupt-recon.md") ||
+		!strings.Contains(plain, "you can talk to me") {
+		t.Fatalf("finish skipped stream or queued non-assistant rows, got %q", plain)
+	}
+}
+
 func TestNativeStableAppendWithActiveStreamFinalizesFromAppSourceWhenViewStreamIsEmpty(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
