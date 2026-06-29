@@ -394,7 +394,7 @@ func (m *uiModel) steerNativeStableRuntimeProjectionChange(operation string, pre
 	if overlap := current.SharedSuffixPrefixBlockCount(previous); overlap > 0 {
 		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
 	}
-	return m.nativeStableProjectionRecoverableError(operation)
+	return m.nativeStableProjectionRecoverableError(operation, previous, current)
 }
 
 func (m *uiModel) steerNativeStableAppendFromBlock(current tui.TranscriptProjection, startBlock int) error {
@@ -422,7 +422,10 @@ func nativeStableProjectionNeedsDelivery(previous tui.TranscriptProjection, curr
 
 const nativeStableProjectionNonContiguousReason = "native stable append is not contiguous with current transcript projection"
 
-func (m *uiModel) nativeStableProjectionRecoverableError(operation string) error {
+func (m *uiModel) nativeStableProjectionRecoverableError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+	if m != nil && m.debugMode {
+		return m.nativeStableProjectionInvariantError(operation, previous, current)
+	}
 	return errors.New(nativeStableProjectionNonContiguousReason)
 }
 
@@ -482,9 +485,6 @@ func (m *uiModel) steerNativeProjectionLines(lines []tui.TranscriptProjectionLin
 }
 
 func (m *uiModel) nativeStableProjectionLineText(line tui.TranscriptProjectionLine) string {
-	if line.Kind != tui.VisibleLineDivider {
-		return line.Text
-	}
 	width := 120
 	theme := ""
 	if m != nil {
@@ -493,6 +493,9 @@ func (m *uiModel) nativeStableProjectionLineText(line tui.TranscriptProjectionLi
 	}
 	if width <= 0 {
 		width = 120
+	}
+	if line.Kind != tui.VisibleLineDivider {
+		return truncateANSIRight(line.Text, width)
 	}
 	return uiThemeStyles(theme).meta.Render(strings.Repeat("─", width))
 }
