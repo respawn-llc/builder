@@ -65,7 +65,11 @@ func TestStreamIdleWatchdogPassthroughWhenIdleNonPositive(t *testing.T) {
 
 func TestStreamIdleWatchdogStopDoesNotOverrideStallCause(t *testing.T) {
 	w := newStreamIdleWatchdog(context.Background(), 20*time.Millisecond)
-	<-w.ctx.Done()
+	select {
+	case <-w.ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watchdog did not fire after idle window")
+	}
 	w.stop()
 	if !errors.Is(context.Cause(w.ctx), ErrModelStreamStalled) {
 		t.Fatalf("stop overrode stall cause: %v", context.Cause(w.ctx))

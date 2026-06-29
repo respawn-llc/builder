@@ -8,9 +8,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/shared/clientui"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type runtimeControlFakeClient struct {
@@ -475,12 +478,16 @@ func TestRuntimeControlHelpersFallbackWithoutRuntimeClient(t *testing.T) {
 		t.Fatalf("record runtime prompt history without client: %v", err)
 	}
 }
-func TestSubmitErrorShowsStatusOnlyWhenRuntimeAppendFails(t *testing.T) {
-	client := &runtimeControlFakeClient{appendErr: errors.New("append failed")}
+func TestSubmitErrorShowsTransientStatusWithoutPersisting(t *testing.T) {
+	originalClear := scheduleTransientStatusClear
+	scheduleTransientStatusClear = func(time.Duration, uint64) tea.Cmd { return nil }
+	defer func() { scheduleTransientStatusClear = originalClear }()
+
+	client := &runtimeControlFakeClient{}
 	m := newProjectedStaticUIModel()
 	m.engine = client
 	m.setBusy(true)
-	m.activeSubmit = activeSubmitState{token: 1, text: "prompt"}
+	m.activeSubmit = activeSubmitState{token: 1, text: "prompt", stepID: "step-1"}
 
 	next, cmd := m.Update(submitDoneMsg{token: 1, submittedText: "prompt", err: errors.New("submit failed")})
 	updated := next.(*uiModel)
@@ -492,38 +499,14 @@ func TestSubmitErrorShowsStatusOnlyWhenRuntimeAppendFails(t *testing.T) {
 		next, _ = updated.Update(msg)
 		updated = next.(*uiModel)
 	}
-	if len(updated.transcriptEntries) != 0 {
-		t.Fatalf("runtime append failure must not create local transcript entries: %+v", updated.transcriptEntries)
-	}
-	if committed := committedTranscriptEntriesForApp(updated.transcriptEntries); len(committed) != 0 {
-		t.Fatalf("runtime append failure advanced committed transcript entries: %+v", committed)
-	}
-	if updated.transientStatus != "append failed" || updated.transientStatusKind != uiStatusNoticeError {
-		t.Fatalf("expected append failure status, got status=%q kind=%v", updated.transientStatus, updated.transientStatusKind)
-	}
-}
-
-func TestSubmitErrorSuppressesClientAppendWhenRunReachedEngine(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	m := newProjectedStaticUIModel()
-	m.engine = client
-	m.setBusy(true)
-	m.activeSubmit = activeSubmitState{token: 1, text: "prompt", stepID: "step-1"}
-
-	next, cmd := m.Update(submitDoneMsg{token: 1, submittedText: "prompt", err: errors.New("model generation failed after retries")})
-	updated := next.(*uiModel)
-	if updated.activity != uiActivityError {
-		t.Fatalf("expected error activity, got %v", updated.activity)
-	}
-	for _, msg := range collectCmdMessages(t, cmd) {
-		next, _ = updated.Update(msg)
-		updated = next.(*uiModel)
-	}
 	if client.appendedRole != "" || client.appendedText != "" {
-		t.Fatalf("run reached engine: client must not persist a duplicate entry, got role=%q text=%q", client.appendedRole, client.appendedText)
+		t.Fatalf("engine is sole persister: client must not persist a run-error entry, got role=%q text=%q", client.appendedRole, client.appendedText)
 	}
 	if committed := committedTranscriptEntriesForApp(updated.transcriptEntries); len(committed) != 0 {
-		t.Fatalf("run reached engine: client must not advance committed transcript, got %+v", committed)
+		t.Fatalf("client must not advance committed transcript on submit error: %+v", committed)
+	}
+	if updated.transientStatus == "" || updated.transientStatusKind != uiStatusNoticeError {
+		t.Fatalf("expected a transient error status for a submit failure, got status=%q kind=%v", updated.transientStatus, updated.transientStatusKind)
 	}
 }
 

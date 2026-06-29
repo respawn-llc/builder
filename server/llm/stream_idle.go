@@ -43,10 +43,10 @@ func (c *idleWatchdogClient) GenerateStreamWithEvents(ctx context.Context, reque
 
 	previousActivity := callbacks.OnStreamActivity
 	callbacks.OnStreamActivity = func() {
+		watchdog.ping()
 		if previousActivity != nil {
 			previousActivity()
 		}
-		watchdog.ping()
 	}
 
 	resp, err := c.streamingModelClient.GenerateStreamWithEvents(watchdog.ctx, request, callbacks)

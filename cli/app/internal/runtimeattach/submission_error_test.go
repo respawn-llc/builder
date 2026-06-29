@@ -11,8 +11,12 @@ import (
 
 func TestFormatSubmissionErrorSurfacesStall(t *testing.T) {
 	stall := fmt.Errorf("model generation failed after retries: %w", llmerrors.ErrModelStreamStalled)
-	if got := FormatSubmissionError(stall); got == "" {
-		t.Fatal("expected stall error to format a non-empty submission message")
+	want := llmerrors.UserFacingError(stall)
+	if want == "" {
+		t.Fatal("expected stall error to have a mapped user-facing message")
+	}
+	if got := FormatSubmissionError(stall); got != want {
+		t.Fatalf("FormatSubmissionError(stall) = %q, want %q", got, want)
 	}
 }
 
