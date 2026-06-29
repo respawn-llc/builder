@@ -378,6 +378,9 @@ func (m *uiModel) steerNativeStableProjectionChange(operation string, previous t
 	if overlap := current.SharedNativeStableSuffixPrefixBlockCount(previous); overlap > 0 {
 		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
 	}
+	if startBlock, ok := nativeStableAuthoritativeAppendAfterLocalSuffix(previous, current); ok {
+		return m.steerNativeProjectionLines(current.LinesFromBlock(startBlock, tui.TranscriptDivider))
+	}
 	return m.nativeStableProjectionInvariantError(operation, nativeStableProjectionNonContiguousReason, previous, current)
 }
 
@@ -396,6 +399,9 @@ func (m *uiModel) steerNativeStableRuntimeProjectionChange(operation string, pre
 	}
 	if overlap := current.SharedNativeStableSuffixPrefixBlockCount(previous); overlap > 0 {
 		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
+	}
+	if startBlock, ok := nativeStableAuthoritativeAppendAfterLocalSuffix(previous, current); ok {
+		return m.steerNativeProjectionLines(current.LinesFromBlock(startBlock, tui.TranscriptDivider))
 	}
 	return m.nativeStableProjectionRecoverableError(operation, previous, current)
 }
@@ -418,9 +424,29 @@ func nativeStableProjectionNeedsDelivery(previous tui.TranscriptProjection, curr
 		return true
 	}
 	if _, ok := current.RenderNativeStableAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
+		if startBlock, ok := nativeStableAuthoritativeAppendAfterLocalSuffix(previous, current); ok {
+			return startBlock < len(current.Blocks)
+		}
 		return true
 	}
 	return len(current.Blocks) > len(previous.Blocks)
+}
+
+func nativeStableAuthoritativeAppendAfterLocalSuffix(previous tui.TranscriptProjection, current tui.TranscriptProjection) (int, bool) {
+	prefix := current.SharedNativeStablePrefixBlockCount(previous)
+	if prefix >= len(previous.Blocks) {
+		return 0, false
+	}
+	for _, block := range previous.Blocks[prefix:] {
+		if !nativeStableLocalAppendOnlyBlock(block) {
+			return 0, false
+		}
+	}
+	return prefix, true
+}
+
+func nativeStableLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
+	return block.Role == tui.RenderIntentReviewerStatus
 }
 
 const nativeStableProjectionNonContiguousReason = "native stable append is not contiguous with current transcript projection"

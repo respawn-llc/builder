@@ -392,6 +392,16 @@ func (p TranscriptProjection) SharedPrefixBlockCount(other TranscriptProjection)
 	return limit
 }
 
+func (p TranscriptProjection) SharedNativeStablePrefixBlockCount(other TranscriptProjection) int {
+	limit := min(len(p.Blocks), len(other.Blocks))
+	for idx := 0; idx < limit; idx++ {
+		if !p.Blocks[idx].nativeStableEqual(other.Blocks[idx]) {
+			return idx
+		}
+	}
+	return limit
+}
+
 func (p TranscriptProjection) SharedNativeStableSuffixPrefixBlockCount(previous TranscriptProjection) int {
 	limit := min(len(p.Blocks), len(previous.Blocks))
 	for overlap := limit; overlap > 0; overlap-- {
