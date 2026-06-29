@@ -460,6 +460,9 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsInaccessibleProjectRoot(t 
 			t.Fatalf("restore workspace parent permissions: %v", err)
 		}
 	})
+	if _, err := os.Stat(workspaceA); err == nil {
+		t.Skip("filesystem permissions do not prevent stat for current user")
+	}
 	metadataStore, err := metadata.Open(resolvedA.Config.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("metadata.Open: %v", err)
