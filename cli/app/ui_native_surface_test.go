@@ -2131,6 +2131,66 @@ func TestNativeStableProjectionChangeAppendsCompactionResetAsPhysicalEpoch(t *te
 	}
 }
 
+func TestNativeSurfaceResizeReprojectsDeliveredCompactionEpochSuffix(t *testing.T) {
+	m := newProjectedClosedUIModel(nil)
+	oldEpoch := tui.TranscriptProjectionBlock{
+		Role:         tui.RenderIntentCompactionSummary,
+		DividerGroup: string(tui.RenderIntentCompactionSummary),
+		SourceKey:    "compaction-epoch-1",
+		Lines:        []string{"compaction marker before resize"},
+	}
+	current := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{{
+		Role:         tui.RenderIntentCompactionSummary,
+		DividerGroup: string(tui.RenderIntentCompactionSummary),
+		SourceKey:    "compaction-epoch-1",
+		Lines:        []string{"compaction marker", "after resize"},
+	}}}
+	oldPhysical := nativeStableProjectionForTest("pre-compaction physical row")
+	oldPhysical.Blocks = append(oldPhysical.Blocks, oldEpoch)
+	m.nativeDeliveredStableProjection = oldPhysical
+
+	reprojected, ok := m.reprojectNativeDeliveredStableProjectionSuffixPrefix(current)
+	if !ok {
+		t.Fatal("compaction epoch suffix was not reprojected")
+	}
+	appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(reprojected, current)
+	if !ok {
+		t.Fatal("reprojected compaction epoch suffix did not reconcile")
+	}
+	if len(appendBlocks) != 0 {
+		t.Fatalf("reprojected compaction epoch wanted append blocks %v, want none", appendBlocks)
+	}
+}
+
+func TestNativeStableProjectionChangeRejectsCorrectionAfterDeliveredCompactionMarker(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	preCompaction := nativeStableProjectionForTest("old-a", "old-b")
+	compaction := nativeStableProjectionForTest("context compacted")
+	compaction.Blocks[0].Role = tui.RenderIntentCompactionSummary
+	compaction.Blocks[0].DividerGroup = string(tui.RenderIntentCompactionSummary)
+	delivered := nativeStableProjectionWithAppendedBlocks(preCompaction, compaction, []int{0})
+	originalPostCompaction := nativeStableProjectionForTest("original post-compaction row")
+	delivered.Blocks = append(delivered.Blocks, originalPostCompaction.Blocks[0])
+	current := compaction.Clone()
+	current.Blocks = append(current.Blocks, nativeStableProjectionForTest("corrected post-compaction row").Blocks[0])
+
+	exitMainThread := m.enterUIMainThread("native stable post-compaction correction test")
+	err := m.deliverNativeStableProjectionChange(delivered, current, true, false, false, "")
+	exitMainThread()
+	if err == nil {
+		t.Fatal("expected correction after delivered compaction marker to be rejected")
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("post-compaction correction wrote native bytes: %q", got)
+	}
+}
+
 func TestNativeStableProjectionChangeRejectsAuthoritativeTailAfterPriorReviewerStatus(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
@@ -2309,6 +2369,50 @@ func TestNativeStableProjectionChangeAppendsInsertedSystemNoticeAtPhysicalTail(t
 	}
 	if !strings.Contains(plain, "next prompt") {
 		t.Fatalf("post-system-notice delivery skipped new prompt, got %q", plain)
+	}
+}
+
+func TestNativeStableProjectionChangeSkipsPriorLocalSuffixWhenAuthoritativeRowsArriveBeforeIt(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	systemNotice := tui.TranscriptProjectionBlock{
+		Role:         tui.RenderIntentSystem,
+		DividerGroup: string(tui.RenderIntentSystem),
+		Lines:        []string{"Background shell 9911 completed (exit 0)"},
+	}
+	previous := nativeStableProjectionForTest("prompt")
+	previous.Blocks[0].Role = tui.RenderIntentUser
+	previous.Blocks[0].DividerGroup = string(tui.RenderIntentUser)
+	previous.Blocks = append(previous.Blocks, systemNotice)
+	authoritative := nativeStableProjectionForTest("committed answer")
+	authoritative.Blocks[0].Role = tui.RenderIntentAssistant
+	authoritative.Blocks[0].DividerGroup = string(tui.RenderIntentAssistant)
+	current := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		previous.Blocks[0],
+		authoritative.Blocks[0],
+		systemNotice,
+	}}
+
+	exitMainThread := m.enterUIMainThread("native stable local suffix before authoritative row test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("local suffix reconciliation returned error: %v", err)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "Background shell 9911") || strings.Contains(plain, "prompt") {
+		t.Fatalf("local suffix reconciliation replayed delivered rows, got %q", plain)
+	}
+	if !strings.Contains(plain, "committed answer") {
+		t.Fatalf("local suffix reconciliation skipped authoritative row, got %q", plain)
+	}
+	if m.nativeStableProjectionNeedsDelivery(m.nativeDeliveredStableProjection, current) {
+		t.Fatal("logical current projection should reconcile after appending authoritative row behind local suffix")
 	}
 }
 

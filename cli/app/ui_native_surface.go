@@ -512,7 +512,7 @@ func (m *uiModel) nativeStableAppendBlocksForProjectionChange(previous tui.Trans
 		!m.nativeStableOverlapAppendWouldReplayDeliveredPrefix(previous, current, overlap) {
 		return nativeStableBlockIndexRange(overlap, len(current.Blocks)), true
 	}
-	if nativeStableProjectionStartsCompactionReset(current) {
+	if nativeStableProjectionStartsCompactionReset(current) && !m.nativeStableProjectionContainsReprojectIdentity(previous.Blocks, current.Blocks[0]) {
 		return nativeStableBlockIndexRange(0, len(current.Blocks)), true
 	}
 	if blockIndexes, ok := m.nativeStableAppendBlockIndexesForLocalReconciliation(previous, current); ok {
@@ -628,6 +628,10 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 	if previousSuffixIsLocal {
 		blockIndexes := make([]int, 0, len(current.Blocks)-prefix)
 		for idx := prefix; idx < len(current.Blocks); idx++ {
+			block := current.Blocks[idx]
+			if nativeStableCurrentLocalAppendOnlyBlock(block) && m.nativeStableProjectionContainsBlock(previous.Blocks[prefix:], block) {
+				continue
+			}
 			blockIndexes = append(blockIndexes, idx)
 		}
 		return blockIndexes, true
@@ -639,8 +643,8 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 			matchedPrevious++
 			continue
 		}
-		if matchedPrevious < len(previous.Blocks) && nativeStableCurrentLocalAppendOnlyBlock(block) {
-			if m.nativeStableProjectionContainsBlock(previous.Blocks[matchedPrevious:], block) {
+		if nativeStableCurrentLocalAppendOnlyBlock(block) {
+			if m.nativeStableProjectionContainsBlock(previous.Blocks, block) {
 				continue
 			}
 			blockIndexes = append(blockIndexes, idx)
@@ -648,6 +652,10 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 		}
 		if matchedPrevious < len(previous.Blocks) {
 			matchedPrevious = m.nativeStableSkipDeliveredLocalBlocksPresentInCurrent(previous.Blocks, current.Blocks, matchedPrevious)
+			if matchedPrevious < len(previous.Blocks) && m.nativeStableProjectionBlocksEqual(previous.Blocks[matchedPrevious], block) {
+				matchedPrevious++
+				continue
+			}
 			if matchedPrevious < len(previous.Blocks) {
 				return nil, false
 			}
@@ -675,6 +683,15 @@ func (m *uiModel) nativeStableSkipDeliveredLocalBlocksPresentInCurrent(previous 
 func (m *uiModel) nativeStableProjectionContainsBlock(blocks []tui.TranscriptProjectionBlock, target tui.TranscriptProjectionBlock) bool {
 	for _, block := range blocks {
 		if m.nativeStableProjectionBlocksEqual(block, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *uiModel) nativeStableProjectionContainsReprojectIdentity(blocks []tui.TranscriptProjectionBlock, target tui.TranscriptProjectionBlock) bool {
+	for _, block := range blocks {
+		if nativeStableProjectionBlocksSameReprojectIdentity(block, target) {
 			return true
 		}
 	}

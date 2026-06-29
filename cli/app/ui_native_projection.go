@@ -117,7 +117,13 @@ func (m *uiModel) reprojectNativeDeliveredStableProjectionForCurrentGeometry() {
 	}
 	current := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
 	deliveredCount := len(m.nativeDeliveredStableProjection.Blocks)
-	if deliveredCount == 0 || deliveredCount > len(current.Blocks) {
+	if deliveredCount == 0 {
+		return
+	}
+	if deliveredCount > len(current.Blocks) {
+		if reprojected, ok := m.reprojectNativeDeliveredStableProjectionSuffixPrefix(current); ok {
+			m.nativeDeliveredStableProjection = reprojected
+		}
 		return
 	}
 	if reprojected, ok := m.reprojectNativeDeliveredStableProjectionPrefix(current, deliveredCount); ok {
@@ -127,6 +133,33 @@ func (m *uiModel) reprojectNativeDeliveredStableProjectionForCurrentGeometry() {
 	if reprojected, ok := m.reprojectNativeDeliveredStableProjectionByPhysicalShape(current, deliveredCount); ok {
 		m.nativeDeliveredStableProjection = reprojected
 	}
+}
+
+func (m *uiModel) reprojectNativeDeliveredStableProjectionSuffixPrefix(current tui.TranscriptProjection) (tui.TranscriptProjection, bool) {
+	limit := min(len(current.Blocks), len(m.nativeDeliveredStableProjection.Blocks))
+	for overlap := limit; overlap > 0; overlap-- {
+		start := len(m.nativeDeliveredStableProjection.Blocks) - overlap
+		matches := true
+		for idx := 0; idx < overlap; idx++ {
+			deliveredBlock := m.nativeDeliveredStableProjection.Blocks[start+idx]
+			currentBlock := current.Blocks[idx]
+			if !nativeStableProjectionBlocksSameReprojectIdentity(deliveredBlock, currentBlock) {
+				matches = false
+				break
+			}
+		}
+		if !matches {
+			continue
+		}
+		reprojected := m.nativeDeliveredStableProjection.Clone()
+		for idx := 0; idx < overlap; idx++ {
+			block := current.Blocks[idx]
+			block.Lines = append([]string(nil), block.Lines...)
+			reprojected.Blocks[start+idx] = block
+		}
+		return reprojected, true
+	}
+	return tui.TranscriptProjection{}, false
 }
 
 func (m *uiModel) reprojectNativeDeliveredStableProjectionPrefix(current tui.TranscriptProjection, deliveredCount int) (tui.TranscriptProjection, bool) {
