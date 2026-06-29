@@ -16,6 +16,18 @@ import (
 	"core/shared/toolspec"
 )
 
+func openAIFirstPartyNativeWebSearchCaps() llm.ProviderCapabilities {
+	return llm.ProviderCapabilities{
+		ProviderID:                    "openai",
+		SupportsResponsesAPI:          true,
+		SupportsResponsesCompact:      true,
+		SupportsNativeWebSearch:       true,
+		SupportsReasoningEncrypted:    true,
+		SupportsServerSideContextEdit: true,
+		IsOpenAIFirstParty:            true,
+	}
+}
+
 func TestSetReviewerEnabledConcurrentWithBusyStep(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -220,6 +232,41 @@ func TestHostedWebSearchExecutionRejectsWhitespaceSearchQuery(t *testing.T) {
 	}
 }
 
+func TestHostedWebSearchExecutionRejectsHallucinatedSearchQuery(t *testing.T) {
+	item := llm.ResponseItem{
+		Type: llm.ResponseItemTypeOther,
+		Raw: json.RawMessage(`{
+			"type":"web_search_call",
+			"id":"ws_4",
+			"status":"completed",
+			"action":{"type":"search","query":"web search"}
+		}`),
+	}
+
+	executions := hostedToolExecutionsFromOutputItems([]llm.ResponseItem{item}, tools.DefinitionsFor([]toolspec.ID{toolspec.ToolWebSearch}))
+	if len(executions) != 1 {
+		t.Fatal("expected hosted web search execution")
+	}
+	execution := executions[0]
+	if !execution.Result.IsError {
+		t.Fatalf("expected hosted hallucinated query to fail, got %+v", execution.Result)
+	}
+	var output map[string]string
+	if err := json.Unmarshal(execution.Result.Output, &output); err != nil {
+		t.Fatalf("decode hosted output: %v", err)
+	}
+	if output["error"] != tools.InvalidWebSearchQueryMessage {
+		t.Fatalf("expected invalid query error, got %+v", output)
+	}
+	var input map[string]string
+	if err := json.Unmarshal(execution.Call.Input, &input); err != nil {
+		t.Fatalf("decode hosted input: %v", err)
+	}
+	if input["query"] != "web search" {
+		t.Fatalf("expected hosted input to preserve normalized query, got %+v", input)
+	}
+}
+
 func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -239,15 +286,7 @@ func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	client.caps = llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsNativeWebSearch:       true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
-	}
+	client.caps = openAIFirstPartyNativeWebSearchCaps()
 
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:         "gpt-5",
@@ -307,6 +346,98 @@ func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
 	}
 }
 
+func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
+	store := mustCreateTestSession(t)
+
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: ""},
+			OutputItems: []llm.ResponseItem{
+				{
+					Type: llm.ResponseItemTypeOther,
+					Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_invalid","status":"completed","action":{"type":"search","query":"web search"}}`),
+				},
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done"},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	}}
+	client.caps = openAIFirstPartyNativeWebSearchCaps()
+
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model:         "gpt-5",
+		WebSearchMode: "native",
+		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
+	})
+
+	msg, err := eng.SubmitUserMessage(context.Background(), "find latest")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if msg.Content != "done" {
+		t.Fatalf("assistant content = %q, want done", msg.Content)
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("expected 2 model calls, got %d", len(client.calls))
+	}
+	if !client.calls[0].EnableNativeWebSearch {
+		t.Fatalf("expected first request to enable native web search")
+	}
+
+	foundHostedOutput := false
+	for _, item := range client.calls[1].Items {
+		if item.Type != llm.ResponseItemTypeFunctionCallOutput || item.CallID != "ws_invalid" {
+			continue
+		}
+		foundHostedOutput = true
+		var output map[string]string
+		if err := json.Unmarshal(item.Output, &output); err != nil {
+			t.Fatalf("decode hosted tool output: %v", err)
+		}
+		if output["error"] != tools.InvalidWebSearchQueryMessage {
+			t.Fatalf("expected invalid query error in follow-up output, got %+v", output)
+		}
+	}
+	if !foundHostedOutput {
+		t.Fatalf("expected invalid hosted tool output item in follow-up request, got %+v", client.calls[1].Items)
+	}
+
+	events, err := sessiontest.CollectEvents(store)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	foundPersistedError := false
+	for _, evt := range events {
+		if evt.Kind != "tool_completed" {
+			continue
+		}
+		var completion storedToolCompletion
+		if err := json.Unmarshal(evt.Payload, &completion); err != nil {
+			t.Fatalf("decode tool_completed payload: %v", err)
+		}
+		if completion.CallID != "ws_invalid" {
+			continue
+		}
+		foundPersistedError = true
+		if !completion.IsError {
+			t.Fatalf("expected persisted hosted completion to be error, got %+v", completion)
+		}
+		var output map[string]string
+		if err := json.Unmarshal(completion.Output, &output); err != nil {
+			t.Fatalf("decode persisted hosted output: %v", err)
+		}
+		if output["error"] != tools.InvalidWebSearchQueryMessage {
+			t.Fatalf("expected persisted invalid query error, got %+v", output)
+		}
+	}
+	if !foundPersistedError {
+		t.Fatalf("expected persisted hosted completion for ws_invalid")
+	}
+}
+
 func TestSubmitUserMessageFinalAnswerWithHostedToolCallMaterializesToolBeforeFinal(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -328,15 +459,7 @@ func TestSubmitUserMessageFinalAnswerWithHostedToolCallMaterializesToolBeforeFin
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	client.caps = llm.ProviderCapabilities{
-		ProviderID:                    "openai",
-		SupportsResponsesAPI:          true,
-		SupportsResponsesCompact:      true,
-		SupportsNativeWebSearch:       true,
-		SupportsReasoningEncrypted:    true,
-		SupportsServerSideContextEdit: true,
-		IsOpenAIFirstParty:            true,
-	}
+	client.caps = openAIFirstPartyNativeWebSearchCaps()
 
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:         "gpt-5",

@@ -7,7 +7,10 @@ import (
 	"strings"
 )
 
-const InvalidWebSearchQueryMessage = "you provided an invalid search query"
+const (
+	InvalidWebSearchQueryMessage = "you provided an invalid search query"
+	blockedWebSearchQuery        = "web search"
+)
 
 // ErrInvalidWebSearchQuery is the sentinel for rejected web search queries.
 // Callers match it via errors.Is; the message wording lives in
@@ -29,10 +32,18 @@ func ParseWebSearchInput(raw json.RawMessage) (WebSearchInput, error) {
 }
 
 func ValidateWebSearchQuery(query string) error {
-	if strings.TrimSpace(query) == "" {
+	if !isValidWebSearchQuery(normalizeWebSearchQuery(query)) {
 		return ErrInvalidWebSearchQuery
 	}
 	return nil
+}
+
+func normalizeWebSearchQuery(query string) string {
+	return strings.TrimSpace(query)
+}
+
+func isValidWebSearchQuery(normalizedQuery string) bool {
+	return normalizedQuery != "" && normalizedQuery != blockedWebSearchQuery
 }
 
 func ValidateWebSearchInput(raw json.RawMessage) error {
@@ -44,8 +55,8 @@ func ValidateWebSearchInput(raw json.RawMessage) error {
 }
 
 func FormatWebSearchDisplayText(query string) string {
-	trimmed := strings.TrimSpace(query)
-	if trimmed == "" {
+	trimmed := normalizeWebSearchQuery(query)
+	if !isValidWebSearchQuery(trimmed) {
 		return "web search: invalid query"
 	}
 	return fmt.Sprintf("web search: %q", trimmed)
