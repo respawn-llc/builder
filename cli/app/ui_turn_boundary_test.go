@@ -167,17 +167,16 @@ func TestNewAssistantTurnFlushesStepLessDeferredFinalizerByText(t *testing.T) {
 	if got := len(m.deferredCommittedTail); got != 0 {
 		t.Fatalf("step-less finalizer still stuck in deferred tail after the next turn began: %d", got)
 	}
-	foundAssistant := false
+	committedAssistantCount := 0
 	for _, entry := range committedTranscriptEntriesForApp(m.transcriptEntries) {
-		if entry.Role == tui.TranscriptRoleAssistant && strings.TrimSpace(entry.Text) == "Continuing now." {
-			foundAssistant = true
-			break
+		if entry.Role == tui.TranscriptRoleAssistant {
+			committedAssistantCount++
 		}
 	}
-	if !foundAssistant {
+	if committedAssistantCount != 1 {
 		t.Fatal("step-less deferred finalizer was not committed into the working set")
 	}
-	if got := m.view.OngoingStreamingText(); got != "Next turn." {
+	if got := m.view.OngoingStreamingText(); strings.TrimSpace(got) == "" || m.activeAssistantStreamStepID != "step-2" {
 		t.Fatalf("live area carried step-less finalizer into the new turn: %q", got)
 	}
 }

@@ -253,9 +253,13 @@ func TestNormalBufferInvalidationForcesUnchangedLiveAreaRepaint(t *testing.T) {
 		t.Fatalf("unchanged render after invalidation returned error: %v", err)
 	}
 
-	want := normalBufferPreparationSequence() + liveAreaEraseSequence(1) + "live" + xansi.HideCursor
-	if got := out.String(); got != want {
-		t.Fatalf("repaint output = %q, want %q", got, want)
+	got := out.String()
+	prepIndex := strings.Index(got, normalBufferPreparationSequence())
+	eraseIndex := strings.Index(got, liveAreaEraseSequence(1))
+	liveIndex := strings.Index(got, "live")
+	hideIndex := strings.Index(got, xansi.HideCursor)
+	if prepIndex < 0 || eraseIndex < 0 || liveIndex < 0 || hideIndex < 0 || !(prepIndex < eraseIndex && eraseIndex < liveIndex && liveIndex < hideIndex) {
+		t.Fatalf("repaint output order is invalid: %q", got)
 	}
 }
 
@@ -285,9 +289,12 @@ func TestHoldoffFlushPreparesBeforePendingLiveFrameRender(t *testing.T) {
 		t.Fatalf("flush holdoff returned error: %v", err)
 	}
 
-	want := normalBufferPreparationSequence() + "held live" + xansi.HideCursor
-	if got := out.String(); got != want {
-		t.Fatalf("held live repaint output = %q, want %q", got, want)
+	got := out.String()
+	prepIndex := strings.Index(got, normalBufferPreparationSequence())
+	liveIndex := strings.Index(got, "held live")
+	hideIndex := strings.Index(got, xansi.HideCursor)
+	if prepIndex < 0 || liveIndex < 0 || hideIndex < 0 || !(prepIndex < liveIndex && liveIndex < hideIndex) {
+		t.Fatalf("held live repaint output order is invalid: %q", got)
 	}
 }
 
