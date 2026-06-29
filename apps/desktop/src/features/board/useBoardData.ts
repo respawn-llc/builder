@@ -194,7 +194,7 @@ export function useBoardTaskActions(
       },
     }),
     interrupt: useMutation({
-      mutationFn: async (taskID: string) => api.interruptTask(taskID, ""),
+      mutationFn: async (taskID: string) => api.interruptTask(taskID),
       onSuccess: refresh,
     }),
     delete: useMutation({

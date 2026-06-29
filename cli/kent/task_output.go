@@ -22,7 +22,12 @@ func writeTaskResumeResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, 
 	for _, run := range resp.Runs {
 		placement, _ := workflowTaskPlacementByID(task, run.PlacementID)
 		nodeKey := placementDisplayKey(placement, run.NodeID)
-		fmt.Fprintf(stdout, "Resumed node %s in session %s.\n", nodeKey, strings.TrimSpace(run.SessionID))
+		sessionID := strings.TrimSpace(run.SessionID)
+		if sessionID == "" {
+			fmt.Fprintf(stdout, "Resumed node %s.\n", nodeKey)
+			continue
+		}
+		fmt.Fprintf(stdout, "Resumed node %s in session %s.\n", nodeKey, sessionID)
 	}
 }
 

@@ -161,13 +161,18 @@ func TestNativeMainUIDefersLiveAreaUntilProgramWindowSize(t *testing.T) {
 		_, err := program.Run()
 		done <- err
 	}()
-	time.Sleep(30 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for rendererOut.Len() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if nativeOut.String() != "" {
 		t.Fatalf("native live area wrote before Bubble Tea delivered window size: %q", nativeOut.String())
 	}
 
 	program.Send(tea.WindowSizeMsg{Width: 100, Height: 28})
-	time.Sleep(30 * time.Millisecond)
+	for !strings.Contains(xansi.Strip(nativeOut.String()), strings.Repeat("─", 100)) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
 	select {
 	case err := <-done:

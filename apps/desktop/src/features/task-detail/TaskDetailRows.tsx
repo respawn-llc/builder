@@ -179,12 +179,17 @@ export function PropertiesIsland({
     [detail.runs],
   );
   const cliCommand = useMemo(() => sessionCommand(detail.runs), [detail.runs]);
-  const interruptableRuns = useMemo(
-    () =>
-      detail.runs.filter(
-        (run) => run.completedAt === 0 && run.interruptedAt === 0 && run.sessionID.trim().length > 0,
-      ),
+  const activeRuns = useMemo(
+    () => detail.runs.filter((run) => run.completedAt === 0 && run.interruptedAt === 0),
     [detail.runs],
+  );
+  const interruptableRuns = useMemo(
+    () => activeRuns.filter((run) => run.sessionID.trim().length > 0),
+    [activeRuns],
+  );
+  const hasTaskWideInterrupt = useMemo(
+    () => activeRuns.some((run) => run.sessionID.trim().length === 0),
+    [activeRuns],
   );
 
   async function openInCli(): Promise<void> {
@@ -242,6 +247,17 @@ export function PropertiesIsland({
             variant="primary"
           >
             {t("board.resume")}
+          </Button>
+        ) : null}
+        {detail.actions.canInterrupt && hasTaskWideInterrupt ? (
+          <Button
+            disabled={disabled}
+            onClick={() => {
+              void mutations.interrupt.mutateAsync(undefined);
+            }}
+            variant="secondary"
+          >
+            {t("board.interrupt")}
           </Button>
         ) : null}
         {detail.actions.canInterrupt

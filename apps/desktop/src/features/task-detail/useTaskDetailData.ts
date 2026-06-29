@@ -133,7 +133,7 @@ export function useTaskMutations(taskID: string, onChanged?: () => void) {
       onSuccess: refresh,
     }),
     interrupt: useMutation({
-      mutationFn: async (sessionID: string) => api.interruptTask(taskID, sessionID),
+      mutationFn: async (sessionID?: string) => api.interruptTask(taskID, sessionID),
       onSuccess: refresh,
     }),
     resume: useMutation({
