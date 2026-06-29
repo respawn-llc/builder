@@ -1875,6 +1875,69 @@ func TestNativeStableAppendWithActiveStreamPanicsOnMismatchedCommittedBlockInDeb
 	}
 }
 
+func TestNativeStableAppendWithActiveStreamFinalizesFromAppSourceWhenViewStreamIsEmpty(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "final answer",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, streamed.cmd)
+	if m.nativeSurface == nil || !m.nativeSurface.AssistantStreaming() {
+		t.Fatal("expected native assistant stream to be active before authoritative append")
+	}
+	if got := m.activeAssistantStreamText(); got != "final answer" {
+		t.Fatalf("active assistant stream source = %q, want final answer", got)
+	}
+	m.forwardToView(tui.ClearOngoingAssistantMsg{})
+	if got := m.view.OngoingStreamingText(); got != "" {
+		t.Fatalf("view stream = %q, want empty split-brain repro state", got)
+	}
+	out.Reset()
+
+	committed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-final",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "final answer",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	})
+	_ = collectCmdMessages(t, committed.cmd)
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("matching committed final produced native error: %v", m.nativeLiveAreaError)
+	}
+	if m.nativeSurface == nil {
+		t.Fatal("matching committed final disabled native surface")
+	}
+	if m.nativeSurface.AssistantStreaming() {
+		t.Fatal("matching committed final left native assistant stream active")
+	}
+	if got := m.activeAssistantStreamText(); got != "" {
+		t.Fatalf("active assistant stream source = %q, want cleared", got)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if count := strings.Count(plain, "final answer"); count != 1 {
+		t.Fatalf("matching committed final output count = %d, want 1 in %q", count, plain)
+	}
+}
+
 func TestNativeStableTranscriptPageRecoveryPanicsOnActiveStreamMismatchedCommittedAppendInDebug(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))

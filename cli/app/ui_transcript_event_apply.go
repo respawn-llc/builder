@@ -89,8 +89,8 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	for _, entry := range entries {
 		convertedEntries = append(convertedEntries, transcriptEntryFromProjectedChatEntry(entry, reduction.projectedTransient, reduction.projectedCommitted))
 	}
-	nativeAssistantStreamText := m.view.OngoingStreamingText()
-	committedAppendClearsAssistantStream := shouldClearAssistantStreamForCommittedTranscriptEntries(convertedEntries, m.view.OngoingStreamingText())
+	nativeAssistantStreamText := m.activeAssistantStreamText()
+	committedAppendClearsAssistantStream := shouldClearAssistantStreamForCommittedTranscriptEntries(convertedEntries, nativeAssistantStreamText)
 	nativeAssistantStreamWasIncomplete := m.nativeAssistantStreamIncomplete
 	nativeAssistantStreamActive := m.nativeSurfaceConfigured() &&
 		m.nativeSurface.AssistantStreaming() &&
@@ -121,7 +121,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			BaseOffset:   m.transcriptBaseOffset,
 			TotalEntries: m.transcriptTotalEntries,
 			Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
-			Ongoing:      m.view.OngoingStreamingText(),
+			Ongoing:      m.activeAssistantStreamText(),
 			OngoingError: m.view.OngoingErrorText(),
 		})
 	}
@@ -131,7 +131,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			Offset:         startOffset,
 			TotalEntries:   m.transcriptTotalEntries,
 			Entries:        cloneChatEntries(entries),
-			Streaming:      m.view.OngoingStreamingText(),
+			Streaming:      m.activeAssistantStreamText(),
 			StreamingError: m.view.OngoingErrorText(),
 		}
 		m.detailTranscript.apply(page)
@@ -141,7 +141,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			BaseOffset:   m.transcriptBaseOffset,
 			TotalEntries: m.transcriptTotalEntries,
 			Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
-			Ongoing:      m.view.OngoingStreamingText(),
+			Ongoing:      m.activeAssistantStreamText(),
 			OngoingError: m.view.OngoingErrorText(),
 		})
 	}
@@ -150,7 +150,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			BaseOffset:   m.detailTranscript.offset,
 			TotalEntries: m.detailTranscript.totalEntries,
 			Entries:      append([]tui.TranscriptEntry(nil), m.detailTranscript.entries...),
-			Ongoing:      m.view.OngoingStreamingText(),
+			Ongoing:      m.activeAssistantStreamText(),
 			OngoingError: m.view.OngoingErrorText(),
 		})
 	}
@@ -187,7 +187,7 @@ func (a uiRuntimeAdapter) applyActiveAssistantFinalizerGapAsRecentTail(evt clien
 	for _, entry := range evt.TranscriptEntries {
 		entries = append(entries, transcriptEntryFromProjectedChatEntry(entry, false, evt.CommittedTranscriptChanged))
 	}
-	if shouldClearAssistantStreamForCommittedTranscriptEntries(entries, m.view.OngoingStreamingText()) {
+	if shouldClearAssistantStreamForCommittedTranscriptEntries(entries, m.activeAssistantStreamText()) {
 		m.clearAssistantStreamForCommittedAppend()
 	}
 	page := clientui.TranscriptPage{
@@ -195,7 +195,7 @@ func (a uiRuntimeAdapter) applyActiveAssistantFinalizerGapAsRecentTail(evt clien
 		Offset:         start,
 		TotalEntries:   max(evt.CommittedEntryCount, start+len(evt.TranscriptEntries)),
 		Entries:        cloneChatEntries(evt.TranscriptEntries),
-		Streaming:      m.view.OngoingStreamingText(),
+		Streaming:      m.activeAssistantStreamText(),
 		StreamingError: m.view.OngoingErrorText(),
 	}
 	detailPinnedAwayFromTail := m.detailTranscript.loaded && m.detailTranscript.hasMoreBelow

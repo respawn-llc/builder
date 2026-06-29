@@ -184,6 +184,7 @@ type uiStatusFeatureState struct {
 
 type uiTranscriptFeatureState struct {
 	sawAssistantDelta                bool
+	activeAssistantStreamSource      string
 	lastCommittedAssistantStepID     string
 	transcriptEntries                []tui.TranscriptEntry
 	transcriptBaseOffset             int

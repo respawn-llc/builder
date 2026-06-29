@@ -89,7 +89,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 		transcriptMutated = transcriptMutated || mutated
 		awaitsHydration = awaitsHydration || needsHydration
 		streamFinalizer := mutated && isAssistantStreamFinalizerEvent(projectedState, evt)
-		if (shouldClearAssistantStreamForCommittedAssistantEvent(evt, m.view.OngoingStreamingText()) && (mutated || skippedAssistantCommitMatchesActiveLiveStream(m, evt))) || streamFinalizer {
+		if (shouldClearAssistantStreamForCommittedAssistantEvent(evt, m.activeAssistantStreamText()) && (mutated || skippedAssistantCommitMatchesActiveLiveStream(m, evt))) || streamFinalizer {
 			if stepID := strings.TrimSpace(evt.StepID); stepID != "" {
 				m.lastCommittedAssistantStepID = stepID
 			}
@@ -97,6 +97,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 				cmds = append(cmds, m.nativeSurfaceErrorCmd("finish assistant stream", err))
 			}
 			m.sawAssistantDelta = false
+			m.clearActiveAssistantStreamSource()
 			m.forwardToView(tui.ClearOngoingAssistantMsg{})
 		}
 	}
@@ -111,6 +112,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 				continue
 			}
 			m.sawAssistantDelta = true
+			m.appendActiveAssistantStreamDelta(delta)
 			if handled, err := m.streamNativeAssistantDelta(delta, streamCommand.Phase); handled && err != nil {
 				cmds = append(cmds, m.nativeSurfaceErrorCmd("stream assistant content", err))
 			}
@@ -123,6 +125,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 				cmds = append(cmds, m.nativeSurfaceErrorCmd("finish assistant stream", err))
 			}
 			m.sawAssistantDelta = false
+			m.clearActiveAssistantStreamSource()
 			m.forwardToView(tui.ClearOngoingAssistantMsg{})
 			cmds = append(cmds, m.releaseDeferredRuntimeSyncs())
 		}
