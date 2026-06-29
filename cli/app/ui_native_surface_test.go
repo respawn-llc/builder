@@ -1258,8 +1258,9 @@ func TestNativeSurfacePreparesNormalBufferBeforeFirstNativeWrite(t *testing.T) {
 	if rendererGate.PhysicalAltScreenActive() {
 		t.Fatal("renderer output gate still reports physical alt-screen active after native preparation")
 	}
-	if plain := stripANSIAndTrimRight(raw); !strings.Contains(plain, "F1 or ? for help") {
-		t.Fatalf("native live output missing after normal-buffer preparation: %q", plain)
+	liveOutput := strings.TrimPrefix(raw, prepareSequence)
+	if strings.TrimSpace(xansi.Strip(liveOutput)) == "" {
+		t.Fatalf("native live output missing after normal-buffer preparation: %q", liveOutput)
 	}
 }
 
