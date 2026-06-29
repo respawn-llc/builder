@@ -72,7 +72,24 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			if bootstrapClient == nil {
 				return serverapi.AuthCompleteBootstrapResponse{}, serverapi.ErrServerAuthRequired
 			}
-			return bootstrapClient.CompleteAuthBootstrap(ctx, params)
+			resp, err := bootstrapClient.CompleteAuthBootstrap(ctx, params)
+			if err == nil {
+				state.noAuthAccepted = resp.NoAuthSelected
+			}
+			return resp, err
+		})
+	},
+	protocol.MethodAuthAcknowledgeNoAuth: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeAndHandle(req, func(params serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+			bootstrapClient := g.deps.AuthBootstrapClient()
+			if bootstrapClient == nil {
+				return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
+			}
+			resp, err := bootstrapClient.AcknowledgeNoAuth(ctx, params)
+			if err == nil {
+				state.noAuthAccepted = resp.NoAuthSelected
+			}
+			return resp, err
 		})
 	},
 	protocol.MethodAuthGetStatus: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {

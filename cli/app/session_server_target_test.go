@@ -104,6 +104,86 @@ func TestStartSessionServerUsesConfiguredDaemonForInteractiveFlow(t *testing.T) 
 
 }
 
+func TestStartSessionServerConfiguredDaemonNoAuthSkipsLaterPrompt(t *testing.T) {
+	_, workspace := newRegisteredAppWorkspace(t)
+	fakeResponses, hits := newNoAuthFakeResponsesServer(t, []string{"first no-auth reply", "second no-auth reply"})
+	defer fakeResponses.Close()
+
+	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootExplicit: true,
+		Model:                 "gpt-5",
+		AllowUnauthenticated:  true,
+	}, memoryAuthHandler{}, autoOnboarding)
+	if err != nil {
+		t.Fatalf("serve.Start: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+
+	stopServing := serveAppServer(t, srv)
+	defer stopServing()
+	waitForConfiguredRemoteIdentity(t, workspace)
+
+	pickerCalls := 0
+	firstInteractor := &interactiveAuthInteractor{
+		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
+			pickerCalls++
+			if pickerCalls > 1 {
+				t.Fatal("no-auth selection must not re-enter the auth picker")
+			}
+			return authMethodPickerResult{Choice: authMethodChoiceSkip}, nil
+		},
+	}
+	firstServer, err := startSessionServer(context.Background(), Options{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootExplicit: true,
+		Model:                 "gpt-5",
+	}, firstInteractor, true)
+	if err != nil {
+		t.Fatalf("first startSessionServer: %v", err)
+	}
+	_, firstRuntimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, firstServer, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, fakeResponses.URL, io.Discard, "test remote no-auth runtime")
+	firstSubmission, err := firstRuntimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after no auth")
+	if err != nil {
+		t.Fatalf("first SubmitUserMessage: %v", err)
+	}
+	if firstSubmission.Message != "first no-auth reply" {
+		t.Fatalf("first assistant message = %q, want first no-auth reply", firstSubmission.Message)
+	}
+	firstRuntimePlan.Close()
+	if err := firstServer.Close(); err != nil {
+		t.Fatalf("first server close: %v", err)
+	}
+
+	secondInteractor := &interactiveAuthInteractor{
+		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
+			t.Fatal("persisted no-auth must not open the auth picker on a later launch")
+			return authMethodPickerResult{}, nil
+		},
+	}
+	secondServer, err := startSessionServer(context.Background(), Options{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootExplicit: true,
+		Model:                 "gpt-5",
+	}, secondInteractor, true)
+	if err != nil {
+		t.Fatalf("second startSessionServer: %v", err)
+	}
+	defer func() { _ = secondServer.Close() }()
+	_, secondRuntimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, secondServer, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, fakeResponses.URL, io.Discard, "test remote persisted no-auth runtime")
+	secondSubmission, err := secondRuntimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after persisted no auth")
+	if err != nil {
+		t.Fatalf("second SubmitUserMessage: %v", err)
+	}
+	if secondSubmission.Message != "second no-auth reply" {
+		t.Fatalf("second assistant message = %q, want second no-auth reply", secondSubmission.Message)
+	}
+	secondRuntimePlan.Close()
+	if hits.Load() != 2 {
+		t.Fatalf("expected fake LLM calls twice, got %d", hits.Load())
+	}
+}
+
 func TestConfiguredDaemonPlanSessionUsesSessionWorkspaceLocalConfig(t *testing.T) {
 	home := newAppTestHome(t)
 	workspace := t.TempDir()

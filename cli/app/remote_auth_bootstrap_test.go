@@ -11,8 +11,14 @@ import (
 )
 
 type stubAuthBootstrapClient struct {
-	status      serverapi.AuthGetBootstrapStatusResponse
-	completeReq serverapi.AuthCompleteBootstrapRequest
+	status          serverapi.AuthGetBootstrapStatusResponse
+	completeReq     serverapi.AuthCompleteBootstrapRequest
+	completeCalls   int
+	completeResp    serverapi.AuthCompleteBootstrapResponse
+	acknowledgeReq  serverapi.AuthAcknowledgeNoAuthRequest
+	acknowledge     int
+	acknowledgeResp serverapi.AuthAcknowledgeNoAuthResponse
+	acknowledgeErr  error
 }
 
 func (c *stubAuthBootstrapClient) GetAuthBootstrapStatus(context.Context, serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
@@ -20,8 +26,24 @@ func (c *stubAuthBootstrapClient) GetAuthBootstrapStatus(context.Context, server
 }
 
 func (c *stubAuthBootstrapClient) CompleteAuthBootstrap(_ context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
+	c.completeCalls++
 	c.completeReq = req
+	if c.completeResp != (serverapi.AuthCompleteBootstrapResponse{}) {
+		return c.completeResp, nil
+	}
 	return serverapi.AuthCompleteBootstrapResponse{AuthReady: true, MethodType: "oauth"}, nil
+}
+
+func (c *stubAuthBootstrapClient) AcknowledgeNoAuth(_ context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+	c.acknowledge++
+	c.acknowledgeReq = req
+	if c.acknowledgeErr != nil {
+		return serverapi.AuthAcknowledgeNoAuthResponse{}, c.acknowledgeErr
+	}
+	if c.acknowledgeResp != (serverapi.AuthAcknowledgeNoAuthResponse{}) {
+		return c.acknowledgeResp, nil
+	}
+	return serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: true}, nil
 }
 
 func TestRemoteAuthBootstrapHybridBrowserAcceptsCallbackOrPaste(t *testing.T) {
@@ -154,5 +176,123 @@ func TestRemoteAuthBootstrapRejectsMismatchedOAuthState(t *testing.T) {
 	}
 	if flowErr == nil || !errors.Is(flowErr, ErrOAuthStateMismatch) {
 		t.Fatalf("flow error = %v, want oauth state mismatch", flowErr)
+	}
+}
+
+func TestRemoteAuthBootstrapNoAuthSelectionCompletesWithoutRePrompt(t *testing.T) {
+	remote := &stubAuthBootstrapClient{
+		status: serverapi.AuthGetBootstrapStatusResponse{
+			AuthReady:    false,
+			AuthRequired: true,
+			SupportedModes: []serverapi.AuthBootstrapMode{
+				serverapi.AuthBootstrapModeNone,
+			},
+		},
+		completeResp:    serverapi.AuthCompleteBootstrapResponse{AuthReady: false, NoAuthSelected: true},
+		acknowledgeResp: serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: false, NoAuthSelected: true},
+	}
+	pickerCalls := 0
+	interactor := &interactiveAuthInteractor{
+		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
+			pickerCalls++
+			if pickerCalls > 1 {
+				t.Fatal("no-auth completion must not re-enter the auth picker")
+			}
+			return authMethodPickerResult{Choice: authMethodChoiceSkip}, nil
+		},
+	}
+
+	if err := ensureRemoteAuthReady(context.Background(), remote, config.Settings{}, interactor, true); err != nil {
+		t.Fatalf("ensureRemoteAuthReady: %v", err)
+	}
+	if remote.completeReq.Mode != serverapi.AuthBootstrapModeNone {
+		t.Fatalf("complete mode = %q, want none", remote.completeReq.Mode)
+	}
+	if remote.acknowledge != 1 {
+		t.Fatalf("acknowledge calls = %d, want 1", remote.acknowledge)
+	}
+}
+
+func TestRemoteAuthBootstrapNoAuthSelectionPropagatesAcknowledgementError(t *testing.T) {
+	ackErr := errors.New("ack failed")
+	remote := &stubAuthBootstrapClient{
+		status: serverapi.AuthGetBootstrapStatusResponse{
+			AuthReady:      false,
+			AuthRequired:   true,
+			SupportedModes: []serverapi.AuthBootstrapMode{serverapi.AuthBootstrapModeNone},
+		},
+		completeResp:   serverapi.AuthCompleteBootstrapResponse{AuthReady: false, NoAuthSelected: true},
+		acknowledgeErr: ackErr,
+	}
+	pickerCalls := 0
+	interactor := &interactiveAuthInteractor{
+		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
+			pickerCalls++
+			if pickerCalls > 1 {
+				t.Fatal("acknowledgement failure after persisted no-auth must not re-open the auth picker")
+			}
+			return authMethodPickerResult{Choice: authMethodChoiceSkip}, nil
+		},
+	}
+
+	err := ensureRemoteAuthReady(context.Background(), remote, config.Settings{}, interactor, true)
+	if !errors.Is(err, ackErr) {
+		t.Fatalf("ensureRemoteAuthReady error = %v, want ackErr", err)
+	}
+	if pickerCalls != 1 {
+		t.Fatalf("picker calls = %d, want 1", pickerCalls)
+	}
+}
+
+func TestRemoteAuthBootstrapPersistedNoAuthAcknowledgesWithoutPicker(t *testing.T) {
+	remote := &stubAuthBootstrapClient{
+		status: serverapi.AuthGetBootstrapStatusResponse{
+			AuthReady:      false,
+			AuthRequired:   true,
+			NoAuthSelected: true,
+			SupportedModes: []serverapi.AuthBootstrapMode{
+				serverapi.AuthBootstrapModeNone,
+			},
+		},
+		acknowledgeResp: serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: false, NoAuthSelected: true},
+	}
+	interactor := &interactiveAuthInteractor{
+		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
+			t.Fatal("persisted no-auth should not open auth picker")
+			return authMethodPickerResult{}, nil
+		},
+	}
+
+	if err := ensureRemoteAuthReady(context.Background(), remote, config.Settings{}, interactor, true); err != nil {
+		t.Fatalf("ensureRemoteAuthReady: %v", err)
+	}
+	if remote.acknowledge != 1 {
+		t.Fatalf("acknowledge calls = %d, want 1", remote.acknowledge)
+	}
+	if remote.completeCalls != 0 {
+		t.Fatalf("complete calls = %d, want 0", remote.completeCalls)
+	}
+}
+
+func TestRemoteAuthBootstrapHeadlessDoesNotAcknowledgePersistedNoAuth(t *testing.T) {
+	remote := &stubAuthBootstrapClient{
+		status: serverapi.AuthGetBootstrapStatusResponse{
+			AuthReady:      false,
+			AuthRequired:   true,
+			NoAuthSelected: true,
+			SupportedModes: []serverapi.AuthBootstrapMode{serverapi.AuthBootstrapModeNone},
+		},
+		acknowledgeResp: serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: false, NoAuthSelected: true},
+	}
+
+	err := ensureRemoteAuthReady(context.Background(), remote, config.Settings{}, newHeadlessAuthInteractor(), false)
+	if !errors.Is(err, serverapi.ErrServerAuthRequired) {
+		t.Fatalf("ensureRemoteAuthReady error = %v, want ErrServerAuthRequired", err)
+	}
+	if remote.acknowledge != 0 {
+		t.Fatalf("acknowledge calls = %d, want 0", remote.acknowledge)
+	}
+	if remote.completeCalls != 0 {
+		t.Fatalf("complete calls = %d, want 0", remote.completeCalls)
 	}
 }

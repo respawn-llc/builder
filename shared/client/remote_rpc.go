@@ -211,6 +211,10 @@ func (c *Remote) openRPCConn(ctx context.Context) (rpcwire.Conn, func(), error) 
 		cleanup()
 		return nil, nil, err
 	}
+	if err := c.acknowledgeNoAuthOnConn(ctx, conn); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 	if err := attachProjectRPC(ctx, conn, c.projectID, c.workspaceID, c.workspaceRoot); err != nil {
 		cleanup()
 		return nil, nil, err

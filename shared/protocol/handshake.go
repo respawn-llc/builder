@@ -12,6 +12,7 @@ const (
 	MethodServerReadinessGet                    = "server.readiness.get"
 	MethodAuthGetBootstrapStatus                = "auth.getBootstrapStatus"
 	MethodAuthCompleteBootstrap                 = "auth.completeBootstrap"
+	MethodAuthAcknowledgeNoAuth                 = "auth.acknowledgeNoAuth"
 	MethodAuthGetStatus                         = "auth.getStatus"
 	MethodAttachProject                         = "project.attach"
 	MethodAttachSession                         = "session.attach"

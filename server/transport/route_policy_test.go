@@ -20,16 +20,16 @@ import (
 
 func TestRoutePolicyAuthPolicyHandlesBlankAndUnknownMethods(t *testing.T) {
 	executor := newRoutePolicyExecutor(nil)
-	if err := executor.requireAuth(context.Background(), ""); err != nil {
+	if err := executor.requireAuth(context.Background(), nil, ""); err != nil {
 		t.Fatalf("blank method auth: %v", err)
 	}
-	if err := executor.requireAuth(context.Background(), protocol.MethodProjectList); err != nil {
+	if err := executor.requireAuth(context.Background(), nil, protocol.MethodProjectList); err != nil {
 		t.Fatalf("pre-auth method auth: %v", err)
 	}
-	if err := executor.requireAuth(context.Background(), protocol.MethodProjectAttachWorkspace); !errors.Is(err, serverapi.ErrServerAuthRequired) {
+	if err := executor.requireAuth(context.Background(), nil, protocol.MethodProjectAttachWorkspace); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("auth-required method error = %v, want server auth required", err)
 	}
-	if err := executor.requireAuth(context.Background(), "missing.method"); !errors.Is(err, serverapi.ErrServerAuthRequired) {
+	if err := executor.requireAuth(context.Background(), nil, "missing.method"); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("unknown method error = %v, want server auth required", err)
 	}
 }

@@ -158,6 +158,21 @@ func prepareAppRuntimePlan(t *testing.T, server launchPlannerServer, req session
 	return plan, runtimePlan
 }
 
+func prepareAppRuntimePlanWithOpenAIBaseURL(t *testing.T, server launchPlannerServer, req sessionLaunchRequest, openAIBaseURL string, diagnosticWriter io.Writer, startLogLine string) (sessionLaunchPlan, *runtimeLaunchPlan) {
+	t.Helper()
+	planner := newSessionLaunchPlanner(server)
+	plan, err := planner.PlanSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	plan.ActiveSettings.OpenAIBaseURL = openAIBaseURL
+	runtimePlan, err := planner.PrepareRuntime(context.Background(), plan, diagnosticWriter, startLogLine)
+	if err != nil {
+		t.Fatalf("PrepareRuntime: %v", err)
+	}
+	return plan, runtimePlan
+}
+
 func newAppRuntimeEngine(t *testing.T, client llm.Client, cfg runtime.Config, handlers ...tools.HandlerRegistration) (*session.Store, *runtime.Engine) {
 	t.Helper()
 	store := createAppRuntimeSession(t)

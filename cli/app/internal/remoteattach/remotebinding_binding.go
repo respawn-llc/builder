@@ -51,6 +51,12 @@ func BindProjectWorkspace(ctx context.Context, req ProjectWorkspaceBindingReques
 		_ = nextRemote.Close()
 		return ProjectWorkspaceBinding{}, err
 	}
+	if req.Current.NoAuthBootstrapAcknowledgementEnabled() {
+		if err := nextRemote.EnableNoAuthBootstrapAcknowledgement(ctx); err != nil {
+			_ = nextRemote.Close()
+			return ProjectWorkspaceBinding{}, err
+		}
+	}
 	_ = req.Current.Close()
 	var closeFn func() error
 	if req.OwnsServer && req.OwnedClose != nil {
