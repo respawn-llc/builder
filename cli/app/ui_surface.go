@@ -106,6 +106,9 @@ func (r uiPresentationFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult 
 		if m.nativePhysicalAltScreenActive() {
 			return handledUIFeatureUpdate(m, nativeSurfaceResumeRetryCmd())
 		}
+		if m.nativeSurface != nil {
+			m.nativeSurface.InvalidateNormalBufferPreparation()
+		}
 		if err := m.flushNativeSurfaceHoldoff(); err != nil {
 			return handledUIFeatureUpdate(m, m.nativeSurfaceErrorCmd("flush native holdoff", err))
 		}

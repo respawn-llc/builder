@@ -402,10 +402,30 @@ func (buffer *OngoingScrollbackBufferImpl) attachLiveArea(liveArea *nativeLiveAr
 }
 
 func (buffer *OngoingScrollbackBufferImpl) normalBufferAvailableLocked() bool {
-	if buffer.normalBufferAvailable == nil {
-		return true
+	available := true
+	if buffer.normalBufferAvailable != nil {
+		available = buffer.normalBufferAvailable()
 	}
-	return buffer.normalBufferAvailable()
+	if !available {
+		buffer.normalBufferPrepared = false
+	}
+	return available
+}
+
+func InvalidateNormalBufferPreparation(buffer *OngoingScrollbackBufferImpl) {
+	if buffer == nil {
+		return
+	}
+	buffer.invalidateNormalBufferPreparation()
+}
+
+func (buffer *OngoingScrollbackBufferImpl) invalidateNormalBufferPreparation() {
+	if buffer == nil {
+		return
+	}
+	buffer.mu.Lock()
+	buffer.normalBufferPrepared = false
+	buffer.mu.Unlock()
 }
 
 func (buffer *OngoingScrollbackBufferImpl) flushHoldoffLocked() (bool, error) {
