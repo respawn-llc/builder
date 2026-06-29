@@ -47,6 +47,10 @@ import { Icon } from '@astrojs/starlight/components';
     button.setAttribute('aria-label', `Switch to ${nextTheme} theme`);
   };
 
+  const updateAllToggleUis = () => {
+    document.querySelectorAll('kent-theme-toggle').forEach(updateToggleUi);
+  };
+
   class KentThemeToggle extends HTMLElement {
     constructor() {
       super();
@@ -54,13 +58,13 @@ import { Icon } from '@astrojs/starlight/components';
       this.onSystemThemeChange = () => {
         if (getStoredTheme() === null) {
           setTheme(getSystemTheme(), false);
-          updateToggleUi(this);
+          updateAllToggleUis();
         }
       };
       this.onToggleClick = () => {
         const nextTheme = getEffectiveTheme() === darkTheme ? lightTheme : darkTheme;
         setTheme(nextTheme, true);
-        updateToggleUi(this);
+        updateAllToggleUis();
       };
     }
 
@@ -71,7 +75,7 @@ import { Icon } from '@astrojs/starlight/components';
       }
 
       setTheme(getEffectiveTheme(), false);
-      updateToggleUi(this);
+      updateAllToggleUis();
       button.addEventListener('click', this.onToggleClick);
 
       this.mediaQuery.addEventListener('change', this.onSystemThemeChange);
@@ -110,7 +114,10 @@ import { Icon } from '@astrojs/starlight/components';
       background: transparent;
       color: var(--sl-color-text-accent);
       cursor: pointer;
-      transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+      transition:
+        background-color var(--kent-motion-fast),
+        border-color var(--kent-motion-fast),
+        color var(--kent-motion-fast);
     }
 
     .theme-toggle:hover {
