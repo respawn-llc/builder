@@ -52,6 +52,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 	if m.turnQueueHook != nil {
 		m.turnQueueHook.OnProjectedRuntimeEvent(evt)
 	}
+	turnBoundaryCmd, turnBoundaryMutated, turnBoundaryAwaitsHydration := a.flushDeferredCommittedTailAtNewTurnBoundary(projectedState, evt)
 	reduction := runtimestate.ReduceRuntimeEvent(
 		a.runtimeRunState(),
 		a.runtimeConversationState(),
@@ -79,10 +80,11 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 			cmds = append(cmds, m.nativeSurfaceErrorCmd("finish assistant stream", err))
 		}
 	}
+	cmds = append(cmds, turnBoundaryCmd)
 	cmds = append(cmds, a.applyRuntimeEventReduction(reduction))
 	cmds = append(cmds, a.reconcileInterruptFromRunState(evt))
-	transcriptMutated := false
-	awaitsHydration := false
+	transcriptMutated := turnBoundaryMutated
+	awaitsHydration := turnBoundaryAwaitsHydration
 	if len(evt.TranscriptEntries) > 0 {
 		cmd, mutated, needsHydration := a.applyProjectedTranscriptEntries(evt)
 		cmds = append(cmds, cmd)
@@ -175,6 +177,38 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 	return runtimeEventApplyResult{cmd: batchCmds(cmds...), transcriptMutated: transcriptMutated, awaitsHydration: awaitsHydration}
 }
 
+func (a uiRuntimeAdapter) flushDeferredCommittedTailAtNewTurnBoundary(state projectedTranscriptEventState, evt clientui.Event) (tea.Cmd, bool, bool) {
+	m := a.model
+	if m == nil || len(m.deferredCommittedTail) == 0 || !eventStartsDifferentAssistantStep(state, evt) {
+		return nil, false, false
+	}
+	flushEvent, remaining, ok := deferredCommittedTailFinalizerFlushEvent(
+		newDeferredCommittedTailState(deferredCommittedTailSnapshotFromModel(m)),
+		state.liveAssistantText,
+		state.liveAssistantStepID,
+	)
+	if !ok {
+		return nil, false, false
+	}
+	m.deferredCommittedTail = remaining
+	m.logDeferredCommittedTailTurnBoundaryFlushDiag(evt, flushEvent)
+	return a.applyProjectedTranscriptEntries(flushEvent)
+}
+
+func eventStartsDifferentAssistantStep(state projectedTranscriptEventState, evt clientui.Event) bool {
+	activeStepID := strings.TrimSpace(state.liveAssistantStepID)
+	eventStepID := strings.TrimSpace(evt.StepID)
+	if activeStepID == "" || eventStepID == "" || activeStepID == eventStepID || !state.liveAssistantPending {
+		return false
+	}
+	switch evt.Kind {
+	case clientui.EventAssistantDelta, clientui.EventToolCallStarted:
+		return true
+	default:
+		return false
+	}
+}
+
 func runtimeTranscriptSyncReasonLabel(sync runtimestate.RuntimeTranscriptSyncCommand) string {
 	if sync.Reason == runtimestate.RuntimeTranscriptSyncNone {
 		return ""
@@ -232,7 +266,7 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 	if m == nil {
 		return nil
 	}
-	nativeStableNeedsDelivery := nativeStableProjectionNeedsDelivery(previous, current)
+	nativeStableNeedsDelivery := m.nativeStableProjectionNeedsDelivery(previous, current)
 	if !nativeStableNeedsDelivery {
 		if nativeAssistantStreamActive {
 			return m.finishNativeAssistantStreaming()
@@ -246,22 +280,39 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 	if !nativeAssistantStreamActive {
 		return m.steerNativeStableRuntimeProjectionChange("deliverNativeStableProjectionChange", previous, current)
 	}
-	appendBlocks, ok := nativeStableAppendBlocksForProjectionChange(previous, current)
+	appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(previous, current)
 	if !ok {
 		return m.nativeStableProjectionRecoverableError("deliverNativeStableProjectionChange", previous, current)
 	}
 	if len(appendBlocks) == 0 {
 		return nil
 	}
-	streamBlockIndex := appendBlocks[0]
+	deliveredAppendBlocks := append([]int(nil), appendBlocks...)
+	streamAppendPosition := -1
+	streamBlockIndex := -1
+	for position, blockIndex := range appendBlocks {
+		if blockIndex >= len(current.Blocks) {
+			return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
+		}
+		if !nativeStableProjectionBlockCanFinalizeAssistantStream(current.Blocks[blockIndex]) {
+			continue
+		}
+		streamAppendPosition = position
+		streamBlockIndex = blockIndex
+		break
+	}
+	if streamAppendPosition < 0 {
+		if err := m.steerNativeStableAppendBlocks(current, previous, appendBlocks); err != nil {
+			return err
+		}
+		m.nativeDeliveredStableProjection = nativeStableProjectionWithAppendedBlocks(previous, current, appendBlocks)
+		return nil
+	}
 	if streamBlockIndex >= len(current.Blocks) {
 		return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
 	}
 	if !m.nativeAssistantStreamMatchesProjectionBlock(nativeAssistantStreamText, current.Blocks[streamBlockIndex]) {
-		if nativeStableProjectionBlockCanFinalizeAssistantStream(current.Blocks[streamBlockIndex]) {
-			return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
-		}
-		return m.steerNativeStableAppendBlocks(current, previous, appendBlocks)
+		return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
 	}
 	if err := m.finishNativeAssistantStreaming(); err != nil {
 		return err
@@ -269,7 +320,12 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 	if nativeAssistantStreamWasIncomplete {
 		return m.steerNativeStableRuntimeProjectionChange("deliverNativeStableProjectionChange", previous, current)
 	}
-	return m.steerNativeStableAppendBlocks(current, previous, appendBlocks[1:])
+	appendBlocks = append(append([]int(nil), appendBlocks[:streamAppendPosition]...), appendBlocks[streamAppendPosition+1:]...)
+	if err := m.steerNativeStableAppendBlocks(current, previous, appendBlocks); err != nil {
+		return err
+	}
+	m.nativeDeliveredStableProjection = nativeStableProjectionWithAppendedBlocks(previous, current, deliveredAppendBlocks)
+	return nil
 }
 
 func nativeStableProjectionBlockCanFinalizeAssistantStream(block tui.TranscriptProjectionBlock) bool {

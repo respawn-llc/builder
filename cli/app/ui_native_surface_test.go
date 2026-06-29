@@ -1292,7 +1292,7 @@ func TestNativeSurfacePreparesNormalBufferBeforeFirstNativeWrite(t *testing.T) {
 		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
 	}
 	raw := out.String()
-	prepareSequence := xansi.ResetModeAltScreenSaveCursor + "\x1b[?6l" + "\x1b[r"
+	prepareSequence := xansi.ResetModeAltScreenSaveCursor + xansi.SaveCursor + "\x1b[?6l" + "\x1b[r" + xansi.RestoreCursor
 	if !strings.HasPrefix(raw, prepareSequence) {
 		t.Fatalf("native output prefix = %q, want normal-buffer preparation", raw)
 	}
@@ -1675,6 +1675,54 @@ func TestNativeStableProjectionChangeAppendsAfterOverlappingRecentTail(t *testin
 	}
 }
 
+func TestNativeStableProjectionChangeAppendsCompactionResetAsPhysicalEpoch(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := nativeStableProjectionForTest("old-a", "old-b")
+	compaction := nativeStableProjectionForTest("context compacted")
+	compaction.Blocks[0].Role = tui.RenderIntentCompactionSummary
+	compaction.Blocks[0].DividerGroup = string(tui.RenderIntentCompactionSummary)
+	exitMainThread := m.enterUIMainThread("native stable compaction reset test")
+	err := m.deliverNativeStableProjectionChange(previous, compaction, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("compaction reset delivery returned error: %v", err)
+	}
+
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "old-a") || strings.Contains(plain, "old-b") {
+		t.Fatalf("compaction reset delivery replayed pre-compaction rows, got %q", plain)
+	}
+	if !strings.Contains(plain, "context compacted") {
+		t.Fatalf("compaction reset delivery skipped compaction marker, got %q", plain)
+	}
+	if got := len(m.nativeDeliveredStableProjection.Blocks); got != 3 {
+		t.Fatalf("delivered native ledger block count = %d, want old history plus compaction marker", got)
+	}
+
+	out.Reset()
+	current := compaction.Clone()
+	current.Blocks = append(current.Blocks, nativeStableProjectionForTest("post-compaction user").Blocks[0])
+	exitMainThread = m.enterUIMainThread("native stable post compaction append test")
+	err = m.deliverNativeStableProjectionChange(m.nativeDeliveredStableProjection, current, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("post-compaction append delivery returned error: %v", err)
+	}
+	plain = stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "context compacted") {
+		t.Fatalf("post-compaction append replayed compaction marker, got %q", plain)
+	}
+	if !strings.Contains(plain, "post-compaction user") {
+		t.Fatalf("post-compaction append skipped new row, got %q", plain)
+	}
+}
+
 func TestNativeStableProjectionChangeAppendsAuthoritativeTailAfterLocalStatus(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
@@ -1730,6 +1778,27 @@ func TestNativeStableProjectionChangeIgnoresAuthoritativePrefixBehindLocalPatchS
 	}
 	if got := out.String(); got != "" {
 		t.Fatalf("authoritative prefix behind local patch success wrote native bytes: %q", got)
+	}
+}
+
+func TestNativeStableProjectionChangeIgnoresTextBeyondEmittedWidth(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 12, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := nativeStableProjectionForTest("same-prefix-before-old")
+	current := nativeStableProjectionForTest("same-prefix-before-new")
+	exitMainThread := m.enterUIMainThread("native stable truncated equality test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("truncated-equivalent projection delivery returned error: %v", err)
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("truncated-equivalent projection wrote native bytes: %q", got)
 	}
 }
 
@@ -2063,6 +2132,74 @@ func TestNativeStableAppendWithActiveStreamQueuesNonAssistantCommittedRows(t *te
 		!strings.Contains(plain, "BUI-146-goal-interrupt-recon.md") ||
 		!strings.Contains(plain, "you can talk to me") {
 		t.Fatalf("finish skipped stream or queued non-assistant rows, got %q", plain)
+	}
+}
+
+func TestNativeStableAppendWithActiveStreamSkipsLaterMatchingFinalizer(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamExitMainThread := m.enterUIMainThread("native active stream later finalizer setup")
+	if err := m.nativeSurface.StreamAssistantFinalAnswerContent("final answer"); err != nil {
+		streamExitMainThread()
+		t.Fatalf("stream native assistant content: %v", err)
+	}
+	streamExitMainThread()
+
+	previous := nativeStableProjectionForTest("old-a")
+	previous.Blocks[0].Role = tui.RenderIntentUser
+	previous.Blocks[0].DividerGroup = string(tui.RenderIntentUser)
+	streamProjection := m.nativeCommittedProjectionForEntries([]tui.TranscriptEntry{{
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      "final answer",
+		Committed: true,
+	}})
+	current := previous.Clone()
+	current.Blocks = append(current.Blocks,
+		tui.TranscriptProjectionBlock{
+			Role:         tui.RenderIntentUser,
+			DividerGroup: string(tui.RenderIntentUser),
+			Lines:        []string{"❯ queued user"},
+		},
+		streamProjection.Blocks[0],
+	)
+	exitMainThread := m.enterUIMainThread("native active stream later finalizer append test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "final answer")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("active stream later finalizer delivery returned error: %v", err)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if got := strings.Count(plain, "final answer"); got != 1 {
+		t.Fatalf("later finalizer wrote final answer %d times, want once; output=%q", got, plain)
+	}
+	if !strings.Contains(plain, "queued user") {
+		t.Fatalf("later finalizer skipped queued user row, got %q", plain)
+	}
+}
+
+func TestAssistantStreamFinalizerRejectsDifferentNonEmptyStepIDDespiteMatchingText(t *testing.T) {
+	state := projectedTranscriptEventState{
+		liveAssistantPending: true,
+		liveAssistantText:    "same text",
+		liveAssistantStepID:  "active-step",
+	}
+	evt := clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "other-step",
+		CommittedTranscriptChanged: true,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role: "assistant",
+			Text: "same text",
+		}},
+	}
+
+	if isAssistantStreamFinalizerEvent(state, evt) {
+		t.Fatal("different non-empty assistant step IDs must not fall back to text matching")
 	}
 }
 
@@ -2535,10 +2672,8 @@ func TestNativeStableAppendsBackgroundNoticeAfterCompletedTurn(t *testing.T) {
 	}
 	exitMainThread := m.enterUIMainThread("native background notice hydrate test")
 	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-		Revision:     6,
-		Offset:       0,
-		TotalEntries: len(authoritative),
-		Entries:      authoritative,
+		Revision: 6,
+		Entries:  authoritative,
 	}, clientui.TranscriptRecoveryCauseNone)
 	exitMainThread()
 	_ = collectCmdMessages(t, cmd)
@@ -2574,9 +2709,7 @@ func TestNativeStableTranscriptPageRecoveryPanicsOnActiveStreamMismatchedCommitt
 		exitMainThread := m.enterUIMainThread("native active stream mismatched page recovery test")
 		defer exitMainThread()
 		_ = m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-			Revision:     2,
-			Offset:       0,
-			TotalEntries: 2,
+			Revision: 2,
 			Entries: []clientui.ChatEntry{{
 				Role: "user",
 				Text: "prompt",

@@ -140,6 +140,56 @@ func reduceDeferredCommittedTailMerge(state deferredCommittedTailState, evt clie
 	}
 }
 
+func deferredCommittedTailFinalizerFlushEvent(state deferredCommittedTailState, activeAssistantText string, activeAssistantStepID string) (clientui.Event, []deferredProjectedTranscriptTail, bool) {
+	activeAssistantText = strings.TrimSpace(activeAssistantText)
+	activeAssistantStepID = strings.TrimSpace(activeAssistantStepID)
+	if len(state.tails) == 0 || activeAssistantText == "" || activeAssistantStepID == "" {
+		return clientui.Event{}, append([]deferredProjectedTranscriptTail(nil), state.tails...), false
+	}
+	currentEnd := state.baseOffset + len(state.committedEntries)
+	entries := make([]clientui.ChatEntry, 0, len(state.tails))
+	chainEnd := currentEnd
+	revision := state.revision
+	consumed := 0
+	finalizerFound := false
+	for _, tail := range state.tails {
+		if tail.rangeStart != chainEnd {
+			break
+		}
+		for _, entry := range tail.entries {
+			entries = append(entries, cloneChatEntries([]clientui.ChatEntry{entry})...)
+			if tui.TranscriptRoleFromWire(entry.Role) == tui.TranscriptRoleAssistant && strings.TrimSpace(entry.Text) == activeAssistantText {
+				finalizerFound = true
+			}
+		}
+		if tail.revision > revision {
+			revision = tail.revision
+		}
+		chainEnd = tail.rangeEnd
+		consumed++
+		if finalizerFound {
+			break
+		}
+	}
+	if !finalizerFound || len(entries) == 0 {
+		return clientui.Event{}, append([]deferredProjectedTranscriptTail(nil), state.tails...), false
+	}
+	totalEntries := state.totalEntries
+	if chainEnd > totalEntries {
+		totalEntries = chainEnd
+	}
+	return clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     activeAssistantStepID,
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        currentEnd,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        totalEntries,
+		TranscriptRevision:         revision,
+		TranscriptEntries:          entries,
+	}, append([]deferredProjectedTranscriptTail(nil), state.tails[consumed:]...), true
+}
+
 func deferredPendingInjectedBatchFromEvent(evt clientui.Event) []string {
 	if evt.Kind != clientui.EventUserMessageFlushed {
 		return nil

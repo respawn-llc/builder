@@ -4,7 +4,7 @@
 
 This spec owns ongoing mode's normal-buffer terminal surface. Alt-screen surfaces, alternate-scroll mode changes, BEL, and OSC notifications are outside the ongoing scrollback surface contract.
 
-The runtime transcript, event log, session view, and committed transcript read models remain authoritative. The client must not keep a physical-terminal ledger, physical projection, acknowledgement cursor, replay cursor, or emitted-byte copy of content already written into the normal-buffer stable zone.
+The runtime transcript, event log, session view, and committed transcript read models remain authoritative. The app may keep a bounded delivered-stable projection ledger for native append reconciliation. That ledger records terminal-visible projection blocks only after successful native stable delivery, resets with the native surface lifecycle, and is never a transcript source of truth, replay cursor, acknowledgement cursor, raw byte cache, or emitted-byte copy.
 
 ## Zones
 
@@ -13,7 +13,7 @@ The ongoing normal-buffer surface has two zones:
 - Stable zone: immutable terminal scrollback content.
 - Live area: the visible mutable terminal area rendered from current UI state.
 
-Stable-zone writes are fire-and-forget. After bytes are written to the stable zone, the client treats those bytes as unavailable terminal state. The client does not track what has been physically emitted there, and it does not rewrite, restyle, replay, gate, acknowledge, or synchronize emitted stable-zone content.
+Stable-zone writes are fire-and-forget terminal operations. After bytes are written to the stable zone, the client treats those bytes as unavailable terminal state. The client may remember the terminal-visible blocks it successfully asked native to append so future app-working-set projections can be reconciled against physical history. It does not rewrite, restyle, replay, gate, acknowledge, synchronize, or reconstruct emitted stable-zone bytes.
 
 The live area is erased completely and re-rendered from current live-area state whenever that state changes. It does not render on a clock. Animations produce changes, and those changes may schedule renders. When no live-area state changes or animation ticks exist, the live area stays stable and stops rendering.
 
@@ -21,7 +21,7 @@ The live area is erased completely and re-rendered from current live-area state 
 
 `NativeOngoingSurface` is the only production owner for ongoing normal-buffer terminal output. It owns stable-zone writes, assistant streaming, live-area rendering, holdoff flushing, active stream-tail reads, terminal geometry, and the shared exclusion boundary around all terminal bytes for this surface.
 
-Production app code must not construct or retain a separate stable writer, live writer, live-area implementation, physical-terminal projection, or cursor writer for ongoing mode. The app may submit complete live frames and assistant-stream deltas through `NativeOngoingSurface`; it may not write around that owner.
+Production app code must not construct or retain a separate stable writer, live writer, live-area implementation, raw physical-terminal byte projection, or cursor writer for ongoing mode. The app may submit complete live frames, assistant-stream deltas, and delivered stable projection reconciliation state through `NativeOngoingSurface`; it may not write around that owner.
 
 The surface accepts these terminal intents:
 
@@ -84,6 +84,10 @@ Contract and invariant violations fail fast with diagnostic detail. Diagnostics 
 Runtime transcript reconciliation can produce an authoritative committed transcript replacement that is not appendable to already-emitted stable scrollback. In production, the native surface must not append rewritten content, clear/replay history, or panic for that runtime recovery input; it surfaces a native-surface error and disables native ongoing output so the standard renderer can continue from authoritative state. In debug mode, all native scrollback developer errors and invariant violations fail fast with invariant diagnostics. Direct native stable append calls that violate the append-only contract remain invariant violations.
 
 Native committed-projection reconciliation compares terminal-visible block identity: render intent, divider group, and rendered lines. UI-only metadata such as source entry indexes, selection state, expanded state, and expandability does not affect native append or overlap detection because that metadata is not emitted to the terminal stable zone.
+
+Native committed-projection reconciliation compares the app's current committed projection against the delivered-stable projection ledger, not against the previous bounded app working set. Successful stable delivery appends the delivered blocks to that ledger. Finalizing an active native assistant stream records the matching committed assistant block in the ledger even when that block is not written again, because the stream itself already promoted those rows into stable scrollback.
+
+Compaction replaces the bounded app working set but does not erase terminal scrollback. When the post-compaction committed projection starts with a compaction block and no delivered-history overlap exists, native appends the compaction block as a new physical epoch marker and carries the earlier delivered ledger forward. Later post-compaction rows overlap against that marker. Native must not compare the shrunk working set against the pre-compaction working set as a rewrite.
 
 Local append-only status/tool-result blocks that have already been emitted to native stable scrollback remain physical history even when a later authoritative transcript projection does not include them. If the authoritative projection shares the terminal-visible prefix before those local rows, native appends any authoritative suffix after the local rows; if the authoritative projection is only behind that local suffix, native writes nothing. It must not rewrite, delete, or replay the local rows.
 

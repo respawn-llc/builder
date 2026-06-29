@@ -430,6 +430,9 @@ func (buffer *OngoingScrollbackBufferImpl) flushHeldStableOpsLocked() (bool, err
 	if !buffer.normalBufferAvailableLocked() || len(buffer.heldStableOps) == 0 {
 		return false, nil
 	}
+	if err := buffer.prepareNormalBufferLocked(); err != nil {
+		return false, err
+	}
 	operations := append([]stableHoldoffOperation(nil), buffer.heldStableOps...)
 	buffer.heldStableOps = nil
 	if buffer.isStreaming {
@@ -738,7 +741,7 @@ func (buffer *OngoingScrollbackBufferImpl) prepareNormalBufferLocked() error {
 }
 
 func normalBufferPreparationSequence() string {
-	return xansi.ResetModeAltScreenSaveCursor + "\x1b[?6l" + "\x1b[r"
+	return xansi.ResetModeAltScreenSaveCursor + xansi.SaveCursor + "\x1b[?6l" + "\x1b[r" + xansi.RestoreCursor
 }
 
 func stableWriteDiagnostics(payload string, terminalWidth int, terminalHeight int, written int) string {
@@ -928,7 +931,7 @@ func assistantMarkdownBlockIsUnstable(block string) bool {
 
 func assistantMarkdownStablePrefixCanPromote(source string) bool {
 	for _, block := range assistantMarkdownStablePrefixBlocks(source) {
-		if assistantMarkdownBlockEndsWithClosedFence(block) {
+		if assistantMarkdownClosedFenceBlockCanPromote(block) {
 			continue
 		}
 		if !assistantMarkdownPlainParagraphBlockCanPromote(block) {
@@ -936,6 +939,20 @@ func assistantMarkdownStablePrefixCanPromote(source string) bool {
 		}
 	}
 	return true
+}
+
+func assistantMarkdownClosedFenceBlockCanPromote(block string) bool {
+	if !assistantMarkdownBlockEndsWithClosedFence(block) {
+		return false
+	}
+	for _, line := range strings.Split(block, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		_, ok := assistantMarkdownFenceOpener(line)
+		return ok
+	}
+	return false
 }
 
 func assistantMarkdownStablePrefixBlocks(source string) []string {

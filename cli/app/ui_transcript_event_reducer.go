@@ -276,8 +276,8 @@ func isAssistantStreamFinalizerEvent(state projectedTranscriptEventState, evt cl
 	if evt.Kind != clientui.EventAssistantMessage || !evt.CommittedTranscriptChanged {
 		return false
 	}
-	if strings.TrimSpace(state.liveAssistantStepID) != "" && strings.TrimSpace(evt.StepID) != "" && activeAssistantStepMatchesEvent(state, evt) {
-		return true
+	if strings.TrimSpace(state.liveAssistantStepID) != "" && strings.TrimSpace(evt.StepID) != "" {
+		return activeAssistantStepMatchesEvent(state, evt)
 	}
 	activeStream := strings.TrimSpace(state.liveAssistantText)
 	if activeStream == "" {
