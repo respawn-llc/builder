@@ -807,7 +807,7 @@ func TestNativeSurfaceResizeRecreatesWithoutReplayingStableTranscript(t *testing
 	}
 }
 
-func TestNativeSurfaceResizeErasesPreviousLiveFrameBeforeReplacingGeometry(t *testing.T) {
+func TestNativeSurfaceResizeDropsPreviousLiveFrameBeforeReplacingGeometry(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out))
 	m.replaceMainInput("resize anchor", -1)
@@ -822,8 +822,8 @@ func TestNativeSurfaceResizeErasesPreviousLiveFrameBeforeReplacingGeometry(t *te
 	}
 
 	raw := out.String()
-	if !strings.Contains(raw, xansi.EraseEntireLine) {
-		t.Fatalf("native resize did not erase previous live frame before replacement, raw=%q", raw)
+	if strings.Contains(raw, xansi.EraseEntireLine) {
+		t.Fatalf("native resize erased previous live frame before replacement, raw=%q", raw)
 	}
 	plain := stripANSIAndTrimRight(raw)
 	if !strings.Contains(plain, "resize anchor") {
@@ -974,6 +974,362 @@ func TestNativeSurfaceResizePendingAppendFlushesOnlyNewStableRows(t *testing.T) 
 	}
 }
 
+func TestNativeSurfaceResizeReprojectsDeliveredLedgerForPendingAppend(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 48, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "resize ledger prompt with enough content to clamp differently after resize", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 28, Height: 30})
+	m = next.(*uiModel)
+	out.Reset()
+
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "append after narrow resize", Phase: string(clientui.MessagePhaseFinal)}},
+	})
+	_ = collectCmdMessages(t, result.cmd)
+	if got := out.String(); got != "" {
+		t.Fatalf("committed append wrote during resize debounce: %q", got)
+	}
+
+	next, resizeCmd := m.Update(nativeSurfaceResizeRehydrateMsg{token: m.nativeResizeRehydrateToken, width: 28, height: 30})
+	m = next.(*uiModel)
+	if resizeCmd != nil {
+		t.Fatal("did not expect follow-up command after settled resize rehydrate")
+	}
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("resize ledger reproject surfaced native error: %v", m.nativeLiveAreaError)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "resize ledger prompt") {
+		t.Fatalf("settled resize replayed already-emitted prompt, got %q", plain)
+	}
+	if !strings.Contains(plain, "append after narrow resize") {
+		t.Fatalf("settled resize skipped pending append, got %q", plain)
+	}
+}
+
+func TestNativeSurfaceResizePendingAppendSurvivesSecondResizeBeforeSettle(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 48, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "first resize prompt with enough content to wrap", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 36, Height: 30})
+	m = next.(*uiModel)
+	firstToken := m.nativeResizeRehydrateToken
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "append after first resize", Phase: string(clientui.MessagePhaseFinal)}},
+	})
+	_ = collectCmdMessages(t, result.cmd)
+	if got := out.String(); got != "" {
+		t.Fatalf("committed append wrote during first resize debounce: %q", got)
+	}
+
+	next, _ = m.Update(tea.WindowSizeMsg{Width: 30, Height: 30})
+	m = next.(*uiModel)
+	if m.nativeResizeRehydrateToken == firstToken {
+		t.Fatal("second resize did not replace resize token")
+	}
+	next, staleCmd := m.Update(nativeSurfaceResizeRehydrateMsg{token: firstToken, width: 36, height: 30})
+	m = next.(*uiModel)
+	if staleCmd != nil {
+		t.Fatal("stale resize settle returned command")
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("stale resize settle wrote pending append: %q", got)
+	}
+
+	next, resizeCmd := m.Update(nativeSurfaceResizeRehydrateMsg{token: m.nativeResizeRehydrateToken, width: 30, height: 30})
+	m = next.(*uiModel)
+	if resizeCmd != nil {
+		t.Fatal("did not expect follow-up command after second settled resize")
+	}
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("second settled resize surfaced native error: %v", m.nativeLiveAreaError)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "first resize prompt") {
+		t.Fatalf("second settled resize replayed already-emitted prompt, got %q", plain)
+	}
+	if strings.Count(plain, "append after first resize") != 1 {
+		t.Fatalf("second settled resize append count in %q, want exactly one", plain)
+	}
+}
+
+func TestNativeSurfaceResizeDisablesActiveNativeAssistantStreamBeforeFinalizer(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 80, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(false))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-stream",
+		AssistantDelta:      "promoted prefix\n\nmutable tail",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, streamed.cmd)
+	if m.nativeSurface == nil || !m.nativeSurface.AssistantStreaming() {
+		t.Fatal("expected assistant delta to start native assistant streaming")
+	}
+	if !strings.Contains(stripANSIAndTrimRight(out.String()), "promoted prefix") {
+		t.Fatalf("assistant stream did not write promoted prefix setup output: %q", out.String())
+	}
+	out.Reset()
+
+	next, resizeCmd := m.Update(tea.WindowSizeMsg{Width: 60, Height: 30})
+	m = next.(*uiModel)
+	_ = collectCmdMessages(t, resizeCmd)
+	if m.nativeSurface != nil {
+		t.Fatal("resize with active native assistant stream should disable native")
+	}
+	if m.nativeLiveAreaError == nil {
+		t.Fatal("resize with active native assistant stream did not surface native error")
+	}
+	if strings.Contains(out.String(), xansi.EraseEntireLine) {
+		t.Fatalf("resize active-stream disable cleared stale live frame: %q", out.String())
+	}
+
+	finalized := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-stream",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         1,
+		CommittedEntryCount:        1,
+		CommittedEntryStart:        0,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "promoted prefix\n\nmutable tail",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	})
+	_ = collectCmdMessages(t, finalized.cmd)
+	if strings.Contains(stripANSIAndTrimRight(out.String()), "promoted prefix") {
+		t.Fatalf("finalizer replayed promoted stream prefix through native after resize disable: %q", out.String())
+	}
+}
+
+func TestNativeSurfaceResizeDoesNotReprojectDeliveredBlockToReplacementContent(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 48, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(false))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "original prompt before resize", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 30})
+	m = next.(*uiModel)
+	replacement := clientui.Event{
+		Kind:                       clientui.EventUserMessageFlushed,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        1,
+		CommittedEntryStart:        0,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "user", Text: "replacement prompt during resize"}},
+	}
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, replacement)
+	_ = collectCmdMessages(t, result.cmd)
+	if got := out.String(); got != "" {
+		t.Fatalf("replacement wrote during resize debounce: %q", got)
+	}
+
+	next, resizeCmd := m.Update(nativeSurfaceResizeRehydrateMsg{token: m.nativeResizeRehydrateToken, width: 30, height: 30})
+	m = next.(*uiModel)
+	_ = collectCmdMessages(t, resizeCmd)
+	if m.nativeSurface != nil {
+		t.Fatal("non-appendable replacement during resize should disable native after settle")
+	}
+	if m.nativeLiveAreaError == nil {
+		t.Fatal("non-appendable replacement during resize did not surface native error")
+	}
+	if strings.Contains(stripANSIAndTrimRight(out.String()), "replacement prompt during resize") {
+		t.Fatalf("replacement content was written through native stable path: %q", out.String())
+	}
+}
+
+func TestNativeSurfaceResizeDoesNotReprojectWhitespaceReplacementContent(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 48, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(false))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "ab", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 30})
+	m = next.(*uiModel)
+	replacement := clientui.Event{
+		Kind:                       clientui.EventUserMessageFlushed,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        1,
+		CommittedEntryStart:        0,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "user", Text: "a b"}},
+	}
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, replacement)
+	_ = collectCmdMessages(t, result.cmd)
+	if got := out.String(); got != "" {
+		t.Fatalf("whitespace replacement wrote during resize debounce: %q", got)
+	}
+
+	next, resizeCmd := m.Update(nativeSurfaceResizeRehydrateMsg{token: m.nativeResizeRehydrateToken, width: 30, height: 30})
+	m = next.(*uiModel)
+	_ = collectCmdMessages(t, resizeCmd)
+	if m.nativeSurface != nil {
+		t.Fatal("whitespace replacement during resize should disable native after settle")
+	}
+	if m.nativeLiveAreaError == nil {
+		t.Fatal("whitespace replacement during resize did not surface native error")
+	}
+	if strings.Contains(stripANSIAndTrimRight(out.String()), "a b") {
+		t.Fatalf("whitespace replacement content was written through native stable path: %q", out.String())
+	}
+}
+
+func TestNativeSurfaceResizeRejectsNonLocalPhysicalReorder(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 80, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(false))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "first stable user", Committed: true},
+		{Role: tui.TranscriptRoleAssistant, Text: "second stable assistant", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	logicalWide := m.nativeDeliveredStableProjection.Clone()
+	if got := len(logicalWide.Blocks); got != 2 {
+		t.Fatalf("seeded block count = %d, want 2", got)
+	}
+	out.Reset()
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 40, Height: 30})
+	m = next.(*uiModel)
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        3,
+		CommittedEntryStart:        0,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries: []clientui.ChatEntry{
+			{Role: "assistant", Text: "second stable assistant", Phase: string(clientui.MessagePhaseFinal)},
+			{Role: "user", Text: "first stable user"},
+			{Role: "assistant", Text: "third stable assistant", Phase: string(clientui.MessagePhaseFinal)},
+		},
+	})
+	_ = collectCmdMessages(t, result.cmd)
+	if got := out.String(); got != "" {
+		t.Fatalf("append wrote during resize debounce: %q", got)
+	}
+
+	next, resizeCmd := m.Update(nativeSurfaceResizeRehydrateMsg{token: m.nativeResizeRehydrateToken, width: 40, height: 30})
+	m = next.(*uiModel)
+	_ = collectCmdMessages(t, resizeCmd)
+	if m.nativeSurface != nil {
+		t.Fatal("non-local physical reorder should disable native after resize settle")
+	}
+	if m.nativeLiveAreaError == nil {
+		t.Fatal("non-local physical reorder did not surface native error")
+	}
+	if strings.Contains(stripANSIAndTrimRight(out.String()), "third stable assistant") {
+		t.Fatalf("non-local physical reorder wrote new append through native stable path: %q", out.String())
+	}
+}
+
+func TestNativeSurfaceResizeReprojectsPhysicalLedgerOrderForLocalSystemNotice(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 64, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "resize prompt before active stream notice", Committed: true},
+		{Role: tui.TranscriptRoleSystem, Text: "Background shell 8128 completed (exit 0)", Committed: true},
+		{Role: tui.TranscriptRoleAssistant, Text: "watcher found six threads", Committed: true, Phase: clientui.MessagePhaseCommentary},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	logicalWide := m.nativeDeliveredStableProjection.Clone()
+	if got := len(logicalWide.Blocks); got != 3 {
+		t.Fatalf("seeded block count = %d, want 3", got)
+	}
+	m.nativeDeliveredStableProjection = tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		logicalWide.Blocks[0],
+		logicalWide.Blocks[2],
+		logicalWide.Blocks[1],
+	}}
+	out.Reset()
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 32, Height: 30})
+	m = next.(*uiModel)
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventUserMessageFlushed,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        4,
+		CommittedEntryStart:        3,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "user", Text: "next prompt after resize"}},
+	})
+	_ = collectCmdMessages(t, result.cmd)
+	if got := out.String(); got != "" {
+		t.Fatalf("committed append wrote during resize debounce: %q", got)
+	}
+
+	next, resizeCmd := m.Update(nativeSurfaceResizeRehydrateMsg{token: m.nativeResizeRehydrateToken, width: 32, height: 30})
+	m = next.(*uiModel)
+	if resizeCmd != nil {
+		t.Fatal("did not expect follow-up command after settled resize rehydrate")
+	}
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("resize physical-order reproject surfaced native error: %v", m.nativeLiveAreaError)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	for _, replayed := range []string{"resize prompt before", "Background shell 8128", "watcher found six threads"} {
+		if strings.Contains(plain, replayed) {
+			t.Fatalf("settled resize replayed already-emitted %q in %q", replayed, plain)
+		}
+	}
+	if !strings.Contains(plain, "next prompt after resize") {
+		t.Fatalf("settled resize skipped pending append, got %q", plain)
+	}
+	tail := m.nativeDeliveredStableProjection.Blocks
+	if len(tail) != 4 || tail[1].Role != tui.RenderIntentAssistantCommentary || tail[2].Role != tui.RenderIntentSystem || tail[3].Role != tui.RenderIntentUser {
+		t.Fatalf("delivered ledger roles after resize append = %#v", tail)
+	}
+}
+
 func TestNativeSurfaceResizeDebounceClampsWideCommittedPatchSummary(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 36, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
@@ -1019,13 +1375,23 @@ func TestNativeSurfaceResizeDebounceClampsWideCommittedPatchSummary(t *testing.T
 	if !strings.Contains(plain, "workflowEditorGraph") {
 		t.Fatalf("settled resize flush did not write wide patch summary, got %q", plain)
 	}
-	for _, rawLine := range strings.Split(strings.ReplaceAll(out.String(), "\r\n", "\n"), "\n") {
+	checkedPatchLine := false
+	for _, rawLine := range strings.FieldsFunc(out.String(), func(r rune) bool {
+		return r == '\n' || r == '\r'
+	}) {
 		if rawLine == "" {
 			continue
 		}
+		if !strings.Contains(xansi.Strip(rawLine), "workflow") {
+			continue
+		}
+		checkedPatchLine = true
 		if got := lipgloss.Width(rawLine); got > m.termWidth {
 			t.Fatalf("resize flush stable write width = %d, want <= %d, raw=%q", got, m.termWidth, rawLine)
 		}
+	}
+	if !checkedPatchLine {
+		t.Fatalf("settled resize flush did not expose patch summary line in raw output: %q", out.String())
 	}
 }
 
@@ -1102,7 +1468,7 @@ func TestNativeSurfaceResizeDebounceHoldsCommittedAppendsUntilSettledRehydrate(t
 	}
 }
 
-func TestNativeSurfaceResizeMarksActiveAssistantStreamIncompleteForCommitRepair(t *testing.T) {
+func TestNativeSurfaceResizeDisablesActiveAssistantStreamInsteadOfCommitRepair(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
 	if rendered := m.View(); rendered != "" {
@@ -1123,11 +1489,12 @@ func TestNativeSurfaceResizeMarksActiveAssistantStreamIncompleteForCommitRepair(
 
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = next.(*uiModel)
-	if !m.nativeAssistantStreamIncomplete {
-		t.Fatal("expected resize to mark native assistant stream incomplete")
+	if m.nativeSurface != nil {
+		t.Fatal("expected resize to disable native surface with active assistant stream")
 	}
-	next, _ = m.Update(nativeSurfaceResizeRehydrateMsg{token: m.nativeResizeRehydrateToken, width: 100, height: 30})
-	m = next.(*uiModel)
+	if m.nativeLiveAreaError == nil {
+		t.Fatal("expected resize to surface native assistant stream error")
+	}
 	out.Reset()
 
 	committed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
@@ -1144,8 +1511,8 @@ func TestNativeSurfaceResizeMarksActiveAssistantStreamIncompleteForCommitRepair(
 		t.Fatal("expected committed final to clear incomplete native assistant stream")
 	}
 	plain := stripANSIAndTrimRight(out.String())
-	if count := strings.Count(plain, "stream interrupted by resize"); count != 1 {
-		t.Fatalf("committed resize repair count = %d, want 1 in %q", count, plain)
+	if strings.Contains(plain, "stream interrupted by resize") {
+		t.Fatalf("committed finalizer replayed active stream after resize disable: %q", plain)
 	}
 }
 
@@ -1791,7 +2158,7 @@ func TestNativeStableProjectionChangeRejectsAuthoritativeTailAfterPriorReviewerS
 	}
 }
 
-func TestNativeStableProjectionChangeIgnoresAuthoritativePrefixBehindLocalPatchSuccess(t *testing.T) {
+func TestNativeStableProjectionChangeRejectsAuthoritativePrefixBehindPriorToolPatchSuccess(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
 	if rendered := m.View(); rendered != "" {
@@ -1811,11 +2178,11 @@ func TestNativeStableProjectionChangeIgnoresAuthoritativePrefixBehindLocalPatchS
 	exitMainThread := m.enterUIMainThread("native stable local patch prefix test")
 	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
 	exitMainThread()
-	if err != nil {
-		t.Fatalf("local patch authoritative-prefix delivery returned error: %v", err)
+	if err == nil {
+		t.Fatal("expected prior tool patch row removal to be rejected as non-appendable")
 	}
 	if got := out.String(); got != "" {
-		t.Fatalf("authoritative prefix behind local patch success wrote native bytes: %q", got)
+		t.Fatalf("prior tool patch rejection wrote native bytes: %q", got)
 	}
 }
 
@@ -2281,6 +2648,116 @@ func TestNativeStableAppendWithActiveStreamRejectsLaterMatchingFinalizer(t *test
 	}
 }
 
+func TestNativeStableAppendWithActiveStreamAppendsInsertedSystemBeforeFinalizerAtPhysicalTail(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamExitMainThread := m.enterUIMainThread("native active stream local system before finalizer setup")
+	if err := m.nativeSurface.StreamAssistantCommentaryContent("watcher found six threads"); err != nil {
+		streamExitMainThread()
+		t.Fatalf("stream native assistant content: %v", err)
+	}
+	streamExitMainThread()
+
+	previous := nativeStableProjectionForTest("old-a")
+	previous.Blocks[0].Role = tui.RenderIntentToolShellSuccess
+	previous.Blocks[0].DividerGroup = string(tui.RenderIntentTool)
+	streamProjection := m.nativeCommittedProjectionForEntries([]tui.TranscriptEntry{{
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      "watcher found six threads",
+		Committed: true,
+		Phase:     clientui.MessagePhaseCommentary,
+	}})
+	current := previous.Clone()
+	current.Blocks = append(current.Blocks,
+		tui.TranscriptProjectionBlock{
+			Role:         tui.RenderIntentSystem,
+			DividerGroup: string(tui.RenderIntentSystem),
+			Lines:        []string{"Background shell 8128 completed (exit 0)"},
+		},
+		streamProjection.Blocks[0],
+	)
+
+	exitMainThread := m.enterUIMainThread("native active stream local system before finalizer append test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "watcher found six threads")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("active stream local system-before-finalizer delivery returned error: %v", err)
+	}
+	if m.nativeSurface.AssistantStreaming() {
+		t.Fatal("matching committed commentary left native assistant stream active")
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	streamIndex := strings.Index(plain, "watcher found six threads")
+	systemIndex := strings.Index(plain, "Background shell 8128 completed")
+	if streamIndex < 0 || systemIndex < 0 || streamIndex > systemIndex {
+		t.Fatalf("physical output order = %q, want streamed assistant before local system notice", plain)
+	}
+	if got := len(m.nativeDeliveredStableProjection.Blocks); got != len(previous.Blocks)+2 {
+		t.Fatalf("delivered block count = %d, want %d", got, len(previous.Blocks)+2)
+	}
+	tail := m.nativeDeliveredStableProjection.Blocks[len(m.nativeDeliveredStableProjection.Blocks)-2:]
+	if tail[0].Role != tui.RenderIntentAssistantCommentary || tail[1].Role != tui.RenderIntentSystem {
+		t.Fatalf("delivered physical tail roles = %s,%s; want assistant_commentary,system", tail[0].Role, tail[1].Role)
+	}
+	if m.nativeStableProjectionNeedsDelivery(m.nativeDeliveredStableProjection, current) {
+		t.Fatal("logical current projection should reconcile against physical delivered stream/system order without replay")
+	}
+}
+
+func TestNativeStableAppendWithActiveStreamUsesFinalizedStreamAsPostAppendDividerBaseline(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamExitMainThread := m.enterUIMainThread("native active stream post-finalizer divider setup")
+	if err := m.nativeSurface.StreamAssistantFinalAnswerContent("final answer"); err != nil {
+		streamExitMainThread()
+		t.Fatalf("stream native assistant content: %v", err)
+	}
+	streamExitMainThread()
+
+	previous := nativeStableProjectionForTest("prompt")
+	previous.Blocks[0].Role = tui.RenderIntentUser
+	previous.Blocks[0].DividerGroup = string(tui.RenderIntentUser)
+	streamProjection := m.nativeCommittedProjectionForEntries([]tui.TranscriptEntry{{
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      "final answer",
+		Committed: true,
+	}})
+	current := previous.Clone()
+	current.Blocks = append(current.Blocks,
+		streamProjection.Blocks[0],
+		tui.TranscriptProjectionBlock{
+			Role:         tui.RenderIntentToolShellSuccess,
+			DividerGroup: string(tui.RenderIntentTool),
+			Lines:        []string{"$ gh pr checks 457 --watch=false"},
+		},
+	)
+
+	exitMainThread := m.enterUIMainThread("native active stream post-finalizer divider append test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "final answer")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("active stream post-finalizer delivery returned error: %v", err)
+	}
+
+	plain := stripANSIAndTrimRight(out.String())
+	finalIndex := strings.Index(plain, "final answer")
+	dividerIndex := strings.Index(plain, tui.TranscriptDivider)
+	toolIndex := strings.Index(plain, "gh pr checks")
+	if finalIndex < 0 || dividerIndex < 0 || toolIndex < 0 || !(finalIndex < dividerIndex && dividerIndex < toolIndex) {
+		t.Fatalf("output = %q, want finalized stream then divider then tool append", plain)
+	}
+}
+
 func TestAssistantStreamFinalizerRejectsDifferentNonEmptyStepIDDespiteMatchingText(t *testing.T) {
 	state := projectedTranscriptEventState{
 		liveAssistantPending: true,
@@ -2299,6 +2776,125 @@ func TestAssistantStreamFinalizerRejectsDifferentNonEmptyStepIDDespiteMatchingTe
 
 	if isAssistantStreamFinalizerEvent(state, evt) {
 		t.Fatal("different non-empty assistant step IDs must not fall back to text matching")
+	}
+}
+
+func TestActiveAssistantStreamSourceResetsWhenStepIDChanges(t *testing.T) {
+	m := newProjectedClosedUIModel(nil)
+	m.appendActiveAssistantStreamDelta("step-1", "old text")
+	m.appendActiveAssistantStreamDelta("step-2", "new text")
+
+	if got := m.activeAssistantStreamText(); got != "new text" {
+		t.Fatalf("active assistant stream text = %q, want new text", got)
+	}
+	if got := m.activeAssistantStreamStepID; got != "step-2" {
+		t.Fatalf("active assistant stream step = %q, want step-2", got)
+	}
+}
+
+func TestAssistantDeltaStepChangeDisablesActiveNativeStreamBeforeReset(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	first := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-1",
+		AssistantDelta:      "old text",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, first.cmd)
+	if m.nativeSurface == nil || !m.nativeSurface.AssistantStreaming() {
+		t.Fatal("expected first step to start a native assistant stream")
+	}
+
+	second := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-2",
+		AssistantDelta:      "new text",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, second.cmd)
+	if m.nativeSurface != nil {
+		t.Fatal("step change with active native stream should disable native instead of appending into the old stream")
+	}
+	if got := m.activeAssistantStreamText(); got != "new text" {
+		t.Fatalf("active assistant stream text = %q, want new text", got)
+	}
+	if got := m.view.OngoingStreamingText(); got != "new text" {
+		t.Fatalf("view assistant stream text = %q, want new text", got)
+	}
+}
+
+func TestToolCallStartedStepChangeDisablesActiveNativeStreamBeforeQueuingToolRows(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	first := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-1",
+		AssistantDelta:      "old text",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, first.cmd)
+	if m.nativeSurface == nil || !m.nativeSurface.AssistantStreaming() {
+		t.Fatal("expected first step to start a native assistant stream")
+	}
+
+	toolStarted := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventToolCallStarted,
+		StepID:                     "step-2",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         1,
+		CommittedEntryCount:        1,
+		CommittedEntryStart:        0,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:       "tool_call",
+			Text:       "pwd",
+			ToolCallID: "call-step-2",
+			ToolCall:   &clientui.ToolCallMeta{ToolName: "exec_command", IsShell: true, Command: "pwd"},
+		}},
+	})
+	_ = collectCmdMessages(t, toolStarted.cmd)
+	if m.nativeSurface != nil {
+		t.Fatal("tool-start step change with active native stream should disable native instead of queuing behind the old stream")
+	}
+	if got := m.activeAssistantStreamText(); got != "" {
+		t.Fatalf("active assistant stream text = %q, want cleared", got)
+	}
+	if got := m.view.OngoingStreamingText(); got != "" {
+		t.Fatalf("view assistant stream text = %q, want cleared", got)
+	}
+	if m.activeAssistantStreamPending() {
+		t.Fatal("tool-start step reset left assistant stream marked pending")
+	}
+}
+
+func TestAssistantDeltaStepChangeClearsViewOnlyStreamText(t *testing.T) {
+	m := newProjectedClosedUIModel(nil)
+	m.sawAssistantDelta = true
+	m.forwardToView(tui.StreamAssistantMsg{Delta: "view-only old text"})
+
+	_, cmd := m.handleRuntimeEventBatch([]clientui.Event{{
+		Kind:           clientui.EventAssistantDelta,
+		StepID:         "step-2",
+		AssistantDelta: "new text",
+	}})
+	_ = collectCmdMessages(t, cmd)
+
+	if got := m.activeAssistantStreamText(); got != "new text" {
+		t.Fatalf("active assistant stream text = %q, want new text", got)
+	}
+	if got := m.view.OngoingStreamingText(); got != "new text" {
+		t.Fatalf("view assistant stream text = %q, want new text", got)
 	}
 }
 

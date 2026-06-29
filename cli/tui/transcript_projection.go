@@ -214,6 +214,7 @@ type TranscriptProjectionBlock struct {
 	DividerGroup string
 	EntryIndex   int
 	EntryEnd     int
+	SourceKey    string
 	Selectable   bool
 	Expanded     bool
 	Expandable   bool
@@ -235,6 +236,7 @@ func (p TranscriptProjection) Clone() TranscriptProjection {
 			DividerGroup: block.DividerGroup,
 			EntryIndex:   block.EntryIndex,
 			EntryEnd:     block.EntryEnd,
+			SourceKey:    block.SourceKey,
 			Selectable:   block.Selectable,
 			Expanded:     block.Expanded,
 			Expandable:   block.Expandable,

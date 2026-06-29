@@ -143,7 +143,7 @@ func reduceDeferredCommittedTailMerge(state deferredCommittedTailState, evt clie
 func deferredCommittedTailFinalizerFlushEvent(state deferredCommittedTailState, activeAssistantText string, activeAssistantStepID string) (clientui.Event, []deferredProjectedTranscriptTail, bool) {
 	activeAssistantText = strings.TrimSpace(activeAssistantText)
 	activeAssistantStepID = strings.TrimSpace(activeAssistantStepID)
-	if len(state.tails) == 0 || activeAssistantText == "" || activeAssistantStepID == "" {
+	if len(state.tails) == 0 || activeAssistantText == "" {
 		return clientui.Event{}, append([]deferredProjectedTranscriptTail(nil), state.tails...), false
 	}
 	currentEnd := state.baseOffset + len(state.committedEntries)

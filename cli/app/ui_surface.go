@@ -130,17 +130,21 @@ func (r uiPresentationFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult 
 		surfaceReady := m.nativeSurface.ready(msg.width, msg.height)
 		m.nativeResizeRehydrateActive = true
 		if !surfaceReady {
-			m.nativeSurface.Close()
-		}
-		if !surfaceReady && !m.nativeSurface.ensure(msg.width, msg.height) {
-			m.nativeResizeRehydrateActive = false
-			m.nativeResizeRehydrateToken = 0
-			m.nativeResizeRehydrateSettled = false
-			return handledUIFeatureUpdate(m, nil)
+			m.nativeSurface.Drop()
+			if !m.nativeSurface.ensure(msg.width, msg.height) {
+				m.nativeResizeRehydrateActive = false
+				m.nativeResizeRehydrateToken = 0
+				m.nativeResizeRehydrateSettled = false
+				return handledUIFeatureUpdate(m, nil)
+			}
+			m.reprojectNativeDeliveredStableProjectionForCurrentGeometry()
 		}
 		m.nativeResizeRehydrateActive = false
 		m.nativeResizeRehydrateToken = 0
 		m.nativeResizeRehydrateSettled = false
+		if err := m.deliverCurrentNativeStableProjectionAfterResize(); err != nil {
+			return handledUIFeatureUpdate(m, m.nativeSurfaceErrorCmd("resize native stable", err))
+		}
 		if err := m.flushNativeSurfaceHoldoff(); err != nil {
 			return handledUIFeatureUpdate(m, m.nativeSurfaceErrorCmd("resize flush native stable", err))
 		}
