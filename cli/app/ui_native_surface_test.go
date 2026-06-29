@@ -2218,6 +2218,44 @@ func TestNativeStableProjectionChangeRejectsAuthoritativeTailAfterPriorReviewerS
 	}
 }
 
+func TestNativeStableProjectionChangeAppendsBehindPriorLocalReviewerStatus(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := nativeStableProjectionForTest("final answer", "reviewer diagnostic")
+	previous.Blocks[0].Role = tui.RenderIntentAssistant
+	previous.Blocks[0].DividerGroup = string(tui.RenderIntentAssistant)
+	previous.Blocks[1].Role = tui.RenderIntentReviewerStatus
+	previous.Blocks[1].DividerGroup = string(tui.RenderIntentReviewerStatus)
+	previous.Blocks[1].LocalAppendOnly = true
+	current := nativeStableProjectionForTest("final answer", "next user prompt")
+	current.Blocks[0].Role = tui.RenderIntentAssistant
+	current.Blocks[0].DividerGroup = string(tui.RenderIntentAssistant)
+	current.Blocks[1].Role = tui.RenderIntentUser
+	current.Blocks[1].DividerGroup = string(tui.RenderIntentUser)
+
+	exitMainThread := m.enterUIMainThread("native stable local reviewer suffix append test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("local reviewer-status suffix delivery returned error: %v", err)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "reviewer diagnostic") || strings.Contains(plain, "final answer") {
+		t.Fatalf("local reviewer-status suffix delivery replayed delivered rows, got %q", plain)
+	}
+	if !strings.Contains(plain, "next user prompt") {
+		t.Fatalf("local reviewer-status suffix delivery skipped user row, got %q", plain)
+	}
+	if m.nativeStableProjectionNeedsDelivery(m.nativeDeliveredStableProjection, current) {
+		t.Fatal("logical current projection should reconcile after appending user behind local reviewer status")
+	}
+}
+
 func TestNativeStableProjectionChangeRejectsAuthoritativePrefixBehindPriorToolPatchSuccess(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
@@ -2413,6 +2451,46 @@ func TestNativeStableProjectionChangeSkipsPriorLocalSuffixWhenAuthoritativeRowsA
 	}
 	if m.nativeStableProjectionNeedsDelivery(m.nativeDeliveredStableProjection, current) {
 		t.Fatal("logical current projection should reconcile after appending authoritative row behind local suffix")
+	}
+}
+
+func TestNativeStableProjectionChangeAppendsInsertedLocalCacheWarningAtPhysicalTail(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := nativeStableProjectionForTest("answer commentary")
+	previous.Blocks[0].Role = tui.RenderIntentAssistantCommentary
+	previous.Blocks[0].DividerGroup = string(tui.RenderIntentAssistant)
+	cacheWarning := tui.TranscriptProjectionBlock{
+		Role:            tui.RenderIntentCacheWarning,
+		DividerGroup:    string(tui.RenderIntentCacheWarning),
+		LocalAppendOnly: true,
+		Lines:           []string{"Cache miss: request was not a postfix"},
+	}
+	current := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		cacheWarning,
+		previous.Blocks[0],
+	}}
+
+	exitMainThread := m.enterUIMainThread("native stable inserted local cache warning test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("inserted local cache warning delivery returned error: %v", err)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "answer commentary") {
+		t.Fatalf("inserted local cache warning replayed already emitted assistant row, got %q", plain)
+	}
+	if !strings.Contains(plain, "Cache miss") {
+		t.Fatalf("inserted local cache warning skipped warning row, got %q", plain)
+	}
+	if m.nativeStableProjectionNeedsDelivery(m.nativeDeliveredStableProjection, current) {
+		t.Fatal("logical current projection should reconcile after appending local cache warning at physical tail")
 	}
 }
 
@@ -2749,6 +2827,44 @@ func TestNativeStableAppendWithActiveStreamRejectsLaterMatchingFinalizer(t *test
 	}
 	if strings.Contains(plain, "queued user") {
 		t.Fatalf("later finalizer rejection reordered queued user after stream, got %q", plain)
+	}
+}
+
+func TestNativeStableAppendWithActiveStreamRecoveryMismatchReturnsErrorWithoutPanic(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamExitMainThread := m.enterUIMainThread("native active stream recovery mismatch setup")
+	if err := m.nativeSurface.StreamAssistantFinalAnswerContent("live active stream"); err != nil {
+		streamExitMainThread()
+		t.Fatalf("stream native assistant content: %v", err)
+	}
+	streamExitMainThread()
+
+	previous := nativeStableProjectionForTest("tool row")
+	previous.Blocks[0].Role = tui.RenderIntentToolShellSuccess
+	previous.Blocks[0].DividerGroup = string(tui.RenderIntentTool)
+	current := previous.Clone()
+	mismatched := m.nativeCommittedProjectionForEntries([]tui.TranscriptEntry{{
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      "different committed assistant",
+		Committed: true,
+		Phase:     clientui.MessagePhaseFinal,
+	}})
+	current.Blocks = append(current.Blocks, mismatched.Blocks[0])
+
+	exitMainThread := m.enterUIMainThread("native active stream recovery mismatch test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "live active stream", true)
+	exitMainThread()
+	if err == nil {
+		t.Fatal("expected recovery mismatch to return an error")
+	}
+	if got := out.String(); strings.Contains(got, "different committed assistant") {
+		t.Fatalf("recovery mismatch wrote committed assistant through native stable path: %q", got)
 	}
 }
 
@@ -3481,7 +3597,7 @@ func TestNativeStableAppendsBackgroundNoticeAfterCompletedTurn(t *testing.T) {
 	}
 }
 
-func TestNativeStableTranscriptPageRecoveryPanicsOnActiveStreamMismatchedCommittedAppendInDebug(t *testing.T) {
+func TestNativeStableTranscriptPageRecoveryDisablesActiveStreamMismatchWithoutPanic(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
 	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
@@ -3504,25 +3620,25 @@ func TestNativeStableTranscriptPageRecoveryPanicsOnActiveStreamMismatchedCommitt
 	}
 	out.Reset()
 
-	panicText := captureNativeSurfacePanicText(t, func() {
-		exitMainThread := m.enterUIMainThread("native active stream mismatched page recovery test")
-		defer exitMainThread()
-		_ = m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-			Revision: 2,
-			Entries: []clientui.ChatEntry{{
-				Role: "user",
-				Text: "prompt",
-			}, {
-				Role:  "assistant",
-				Text:  "corrected answer",
-				Phase: string(clientui.MessagePhaseFinal),
-			}},
-		}, clientui.TranscriptRecoveryCauseStreamGap)
-	})
-	if !strings.Contains(panicText, "Native scrollback invariant violation") ||
-		!strings.Contains(panicText, nativeStableProjectionActiveStreamMismatchReason) ||
-		!strings.Contains(panicText, "operation=deliverNativeStableProjectionChange") {
-		t.Fatalf("panic = %q, want debug native active-stream mismatch diagnostic", panicText)
+	exitMainThread := m.enterUIMainThread("native active stream mismatched page recovery test")
+	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
+		Revision: 2,
+		Entries: []clientui.ChatEntry{{
+			Role: "user",
+			Text: "prompt",
+		}, {
+			Role:  "assistant",
+			Text:  "corrected answer",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	}, clientui.TranscriptRecoveryCauseStreamGap)
+	exitMainThread()
+	_ = collectCmdMessages(t, cmd)
+	if m.nativeSurface != nil {
+		t.Fatal("mismatched page recovery should disable native")
+	}
+	if m.nativeLiveAreaError == nil {
+		t.Fatal("mismatched page recovery did not surface native error")
 	}
 	plain := stripANSIAndTrimRight(out.String())
 	if strings.Contains(plain, "draft answer") {

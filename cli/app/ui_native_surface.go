@@ -672,7 +672,7 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 func (m *uiModel) nativeStableSkipDeliveredLocalBlocksPresentInCurrent(previous []tui.TranscriptProjectionBlock, current []tui.TranscriptProjectionBlock, start int) int {
 	for start < len(previous) {
 		block := previous[start]
-		if !nativeStablePreviouslyLocalAppendOnlyBlock(block) || !m.nativeStableProjectionContainsBlock(current, block) {
+		if !nativeStablePreviouslyLocalAppendOnlyBlock(block) {
 			return start
 		}
 		start++
@@ -727,6 +727,9 @@ func nativeStableAppendLinesForBlockIndexes(current tui.TranscriptProjection, pr
 }
 
 func nativeStablePreviouslyLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
+	if block.LocalAppendOnly {
+		return true
+	}
 	switch block.Role {
 	case tui.RenderIntentSystem:
 		return true
@@ -736,6 +739,9 @@ func nativeStablePreviouslyLocalAppendOnlyBlock(block tui.TranscriptProjectionBl
 }
 
 func nativeStableCurrentLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
+	if block.LocalAppendOnly {
+		return true
+	}
 	switch block.Role {
 	case tui.RenderIntentSystem:
 		return true
@@ -759,6 +765,13 @@ func (m *uiModel) nativeStableProjectionRecoverableRuntimeError(operation string
 		return m.nativeStableProjectionInvariantError(operation, nativeStableProjectionActiveStreamMismatchReason, previous, current)
 	}
 	return errors.New(nativeStableProjectionActiveStreamMismatchReason)
+}
+
+func (m *uiModel) nativeStableProjectionActiveStreamMismatchError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection, recoverable bool) error {
+	if recoverable {
+		return errors.New(nativeStableProjectionActiveStreamMismatchReason)
+	}
+	return m.nativeStableProjectionRecoverableRuntimeError(operation, previous, current)
 }
 
 func (m *uiModel) nativeAssistantStreamMatchesProjectionBlock(streamText string, block tui.TranscriptProjectionBlock) bool {

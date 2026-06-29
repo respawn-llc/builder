@@ -31,6 +31,7 @@ func (m *uiModel) attachNativeProjectionSourceKeys(projection *tui.TranscriptPro
 	for idx := range projection.Blocks {
 		block := &projection.Blocks[idx]
 		block.SourceKey = nativeProjectionBlockSourceKey(*block, entries, baseOffset)
+		block.LocalAppendOnly = nativeProjectionBlockLocalAppendOnly(*block, entries, baseOffset)
 	}
 }
 
@@ -87,6 +88,42 @@ func nativeProjectionBlockLocalEntryIndex(absolute int, entries []tui.Transcript
 		return absolute, true
 	}
 	return 0, false
+}
+
+func nativeProjectionBlockLocalAppendOnly(block tui.TranscriptProjectionBlock, entries []tui.TranscriptEntry, baseOffset int) bool {
+	start, ok := nativeProjectionBlockLocalEntryIndex(block.EntryIndex, entries, baseOffset)
+	if !ok {
+		return false
+	}
+	end, ok := nativeProjectionBlockLocalEntryIndex(block.EntryEnd, entries, baseOffset)
+	if !ok || end < start {
+		end = start
+	}
+	end = min(end, len(entries)-1)
+	for idx := start; idx <= end; idx++ {
+		entry := entries[idx]
+		if entry.Committed || !nativeProjectionEntryRoleLocalAppendOnly(entry.Role) {
+			return false
+		}
+	}
+	return true
+}
+
+func nativeProjectionEntryRoleLocalAppendOnly(role tui.TranscriptRole) bool {
+	switch role {
+	case tui.TranscriptRoleSystem,
+		tui.TranscriptRoleReviewerStatus,
+		tui.TranscriptRoleReviewerSuggestions,
+		tui.TranscriptRoleWarning,
+		tui.TranscriptRoleCacheWarning,
+		tui.TranscriptRoleError,
+		tui.TranscriptRoleDeveloperFeedback,
+		tui.TranscriptRoleDeveloperErrorFeedback,
+		tui.TranscriptRoleGoalFeedback:
+		return true
+	default:
+		return false
+	}
 }
 
 func nativeProjectionBlockLineSourceKey(block tui.TranscriptProjectionBlock) string {

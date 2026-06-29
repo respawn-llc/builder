@@ -210,15 +210,16 @@ type TranscriptProjectionLine struct {
 }
 
 type TranscriptProjectionBlock struct {
-	Role         RenderIntent
-	DividerGroup string
-	EntryIndex   int
-	EntryEnd     int
-	SourceKey    string
-	Selectable   bool
-	Expanded     bool
-	Expandable   bool
-	Lines        []string
+	Role            RenderIntent
+	DividerGroup    string
+	EntryIndex      int
+	EntryEnd        int
+	SourceKey       string
+	LocalAppendOnly bool
+	Selectable      bool
+	Expanded        bool
+	Expandable      bool
+	Lines           []string
 }
 
 func (p TranscriptProjection) Empty() bool {
@@ -232,15 +233,16 @@ func (p TranscriptProjection) Clone() TranscriptProjection {
 	blocks := make([]TranscriptProjectionBlock, 0, len(p.Blocks))
 	for _, block := range p.Blocks {
 		blocks = append(blocks, TranscriptProjectionBlock{
-			Role:         block.Role,
-			DividerGroup: block.DividerGroup,
-			EntryIndex:   block.EntryIndex,
-			EntryEnd:     block.EntryEnd,
-			SourceKey:    block.SourceKey,
-			Selectable:   block.Selectable,
-			Expanded:     block.Expanded,
-			Expandable:   block.Expandable,
-			Lines:        append([]string(nil), block.Lines...),
+			Role:            block.Role,
+			DividerGroup:    block.DividerGroup,
+			EntryIndex:      block.EntryIndex,
+			EntryEnd:        block.EntryEnd,
+			SourceKey:       block.SourceKey,
+			LocalAppendOnly: block.LocalAppendOnly,
+			Selectable:      block.Selectable,
+			Expanded:        block.Expanded,
+			Expandable:      block.Expandable,
+			Lines:           append([]string(nil), block.Lines...),
 		})
 	}
 	return TranscriptProjection{Blocks: blocks}

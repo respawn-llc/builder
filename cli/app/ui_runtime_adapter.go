@@ -289,10 +289,11 @@ func (m *uiModel) finishNativeAssistantStreaming() error {
 	return m.nativeSurface.FinishAssistantStreaming()
 }
 
-func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptProjection, current tui.TranscriptProjection, nativeStableReady bool, nativeAssistantStreamActive bool, nativeAssistantStreamWasIncomplete bool, nativeAssistantStreamText string) error {
+func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptProjection, current tui.TranscriptProjection, nativeStableReady bool, nativeAssistantStreamActive bool, nativeAssistantStreamWasIncomplete bool, nativeAssistantStreamText string, recoverActiveStreamMismatch ...bool) error {
 	if m == nil {
 		return nil
 	}
+	activeStreamMismatchRecoverable := len(recoverActiveStreamMismatch) > 0 && recoverActiveStreamMismatch[0]
 	nativeStableNeedsDelivery := m.nativeStableProjectionNeedsDelivery(previous, current)
 	if !nativeStableNeedsDelivery {
 		if nativeAssistantStreamActive {
@@ -337,14 +338,14 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 	preStreamAppendBlocks := appendBlocks[:streamAppendPosition]
 	for _, blockIndex := range preStreamAppendBlocks {
 		if blockIndex >= len(current.Blocks) || !nativeStableCurrentLocalAppendOnlyBlock(current.Blocks[blockIndex]) {
-			return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
+			return m.nativeStableProjectionActiveStreamMismatchError("deliverNativeStableProjectionChange", previous, current, activeStreamMismatchRecoverable)
 		}
 	}
 	if streamBlockIndex >= len(current.Blocks) {
-		return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
+		return m.nativeStableProjectionActiveStreamMismatchError("deliverNativeStableProjectionChange", previous, current, activeStreamMismatchRecoverable)
 	}
 	if !m.nativeAssistantStreamMatchesProjectionBlock(nativeAssistantStreamText, current.Blocks[streamBlockIndex]) {
-		return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
+		return m.nativeStableProjectionActiveStreamMismatchError("deliverNativeStableProjectionChange", previous, current, activeStreamMismatchRecoverable)
 	}
 	if err := m.finishNativeAssistantStreaming(); err != nil {
 		return err
