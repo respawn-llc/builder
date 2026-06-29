@@ -247,12 +247,12 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 		return m.steerNativeStableRuntimeProjectionChange("deliverNativeStableProjectionChange", previous, current)
 	}
 	appendable := false
-	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
+	if _, ok := current.RenderNativeStableAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
 		appendable = true
 	}
 	overlap := 0
 	if !appendable {
-		overlap = current.SharedSuffixPrefixBlockCount(previous)
+		overlap = current.SharedNativeStableSuffixPrefixBlockCount(previous)
 		if overlap == 0 {
 			return m.nativeStableProjectionRecoverableError("deliverNativeStableProjectionChange", previous, current)
 		}

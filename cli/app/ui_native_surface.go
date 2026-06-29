@@ -356,7 +356,7 @@ func (m *uiModel) steerNativeStableAppend(previous tui.TranscriptProjection, cur
 	if previous.Empty() {
 		return m.steerNativeProjectionLines(current.Lines(tui.TranscriptDivider))
 	}
-	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
+	if _, ok := current.RenderNativeStableAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
 		return m.nativeStableProjectionInvariantError("steerNativeStableAppend", nativeStableProjectionNonContiguousReason, previous, current)
 	}
 	return m.steerNativeProjectionLines(current.LinesFromBlock(len(previous.Blocks), tui.TranscriptDivider))
@@ -372,10 +372,10 @@ func (m *uiModel) steerNativeStableProjectionChange(operation string, previous t
 	if previous.Empty() {
 		return m.steerNativeProjectionLines(current.Lines(tui.TranscriptDivider))
 	}
-	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
+	if _, ok := current.RenderNativeStableAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
 		return m.steerNativeProjectionLines(current.LinesFromBlock(len(previous.Blocks), tui.TranscriptDivider))
 	}
-	if overlap := current.SharedSuffixPrefixBlockCount(previous); overlap > 0 {
+	if overlap := current.SharedNativeStableSuffixPrefixBlockCount(previous); overlap > 0 {
 		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
 	}
 	return m.nativeStableProjectionInvariantError(operation, nativeStableProjectionNonContiguousReason, previous, current)
@@ -391,10 +391,10 @@ func (m *uiModel) steerNativeStableRuntimeProjectionChange(operation string, pre
 	if previous.Empty() {
 		return m.steerNativeProjectionLines(current.Lines(tui.TranscriptDivider))
 	}
-	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
+	if _, ok := current.RenderNativeStableAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
 		return m.steerNativeProjectionLines(current.LinesFromBlock(len(previous.Blocks), tui.TranscriptDivider))
 	}
-	if overlap := current.SharedSuffixPrefixBlockCount(previous); overlap > 0 {
+	if overlap := current.SharedNativeStableSuffixPrefixBlockCount(previous); overlap > 0 {
 		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
 	}
 	return m.nativeStableProjectionRecoverableError(operation, previous, current)
@@ -417,7 +417,7 @@ func nativeStableProjectionNeedsDelivery(previous tui.TranscriptProjection, curr
 	if previous.Empty() {
 		return true
 	}
-	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
+	if _, ok := current.RenderNativeStableAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
 		return true
 	}
 	return len(current.Blocks) > len(previous.Blocks)

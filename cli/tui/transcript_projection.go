@@ -364,6 +364,24 @@ func (p TranscriptProjection) RenderAppendDeltaFrom(previous TranscriptProjectio
 	return p.renderFromBlock(len(previous.Blocks), divider), true
 }
 
+func (p TranscriptProjection) RenderNativeStableAppendDeltaFrom(previous TranscriptProjection, divider string) (string, bool) {
+	if len(previous.Blocks) == 0 {
+		return p.Render(divider), true
+	}
+	if len(previous.Blocks) > len(p.Blocks) {
+		return "", false
+	}
+	for idx, prior := range previous.Blocks {
+		if !prior.nativeStableEqual(p.Blocks[idx]) {
+			return "", false
+		}
+	}
+	if len(previous.Blocks) == len(p.Blocks) {
+		return "", true
+	}
+	return p.renderFromBlock(len(previous.Blocks), divider), true
+}
+
 func (p TranscriptProjection) SharedPrefixBlockCount(other TranscriptProjection) int {
 	limit := min(len(p.Blocks), len(other.Blocks))
 	for idx := 0; idx < limit; idx++ {
@@ -372,6 +390,24 @@ func (p TranscriptProjection) SharedPrefixBlockCount(other TranscriptProjection)
 		}
 	}
 	return limit
+}
+
+func (p TranscriptProjection) SharedNativeStableSuffixPrefixBlockCount(previous TranscriptProjection) int {
+	limit := min(len(p.Blocks), len(previous.Blocks))
+	for overlap := limit; overlap > 0; overlap-- {
+		start := len(previous.Blocks) - overlap
+		matches := true
+		for idx := 0; idx < overlap; idx++ {
+			if !p.Blocks[idx].nativeStableEqual(previous.Blocks[start+idx]) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return overlap
+		}
+	}
+	return 0
 }
 
 func (p TranscriptProjection) SharedSuffixPrefixBlockCount(previous TranscriptProjection) int {
@@ -433,6 +469,18 @@ func (b TranscriptProjectionBlock) equal(other TranscriptProjectionBlock) bool {
 		return false
 	}
 	if b.Selectable != other.Selectable || b.Expanded != other.Expanded || b.Expandable != other.Expandable {
+		return false
+	}
+	for idx := range b.Lines {
+		if b.Lines[idx] != other.Lines[idx] {
+			return false
+		}
+	}
+	return true
+}
+
+func (b TranscriptProjectionBlock) nativeStableEqual(other TranscriptProjectionBlock) bool {
+	if b.Role != other.Role || b.DividerGroup != other.DividerGroup || len(b.Lines) != len(other.Lines) {
 		return false
 	}
 	for idx := range b.Lines {

@@ -28,6 +28,7 @@ type OngoingScrollbackBufferImpl struct {
 	terminalHeight            int
 	isStreaming               bool
 	assistantMarkdownRenderer AssistantMarkdownRenderer
+	assistantStablePrefix     assistantStreamStablePrefixFunc
 	assistantStreamSource     string
 	assistantStreamPromoted   []assistantStreamPromotedRow
 	assistantStreamTail       []string
@@ -42,6 +43,7 @@ type OngoingScrollbackBufferImpl struct {
 type OngoingScrollbackBufferOption func(*OngoingScrollbackBufferImpl)
 
 type AssistantMarkdownRenderer func(source string, width int) []string
+type assistantStreamStablePrefixFunc func(source string) string
 
 type assistantStreamPromotedRow struct {
 	stableKey string
@@ -83,6 +85,7 @@ func WithAssistantMarkdownRenderer(renderer AssistantMarkdownRenderer) OngoingSc
 	return func(buffer *OngoingScrollbackBufferImpl) {
 		if renderer != nil {
 			buffer.assistantMarkdownRenderer = renderer
+			buffer.assistantStablePrefix = assistantMarkdownDocumentStablePromotionPrefix
 		}
 	}
 }
@@ -120,6 +123,9 @@ func NewOngoingScrollbackBufferImpl(ctx context.Context, terminalWidth int, term
 	}
 	if buffer.assistantMarkdownRenderer == nil {
 		buffer.assistantMarkdownRenderer = defaultAssistantMarkdownRenderer
+	}
+	if buffer.assistantStablePrefix == nil {
+		buffer.assistantStablePrefix = assistantLineStablePromotionPrefix
 	}
 	return buffer
 }
@@ -550,8 +556,10 @@ func (buffer *OngoingScrollbackBufferImpl) assistantStreamPromoteLimitLocked(row
 	promotedCount := len(buffer.assistantStreamPromoted)
 	promoteLimit := 0
 	if prefix, ok := unstableAssistantMarkdownBlockStablePrefix(buffer.assistantStreamSource); ok {
-		promoteLimit = buffer.assistantStreamRenderedPrefixLimitLocked(prefix, rows)
-	} else if stableLinePrefix := assistantStreamStablePromotionPrefix(buffer.assistantStreamSource); stableLinePrefix != "" {
+		if assistantMarkdownStablePrefixCanPromote(prefix) {
+			promoteLimit = buffer.assistantStreamRenderedPrefixLimitLocked(prefix, rows)
+		}
+	} else if stableLinePrefix := buffer.assistantStablePrefix(buffer.assistantStreamSource); stableLinePrefix != "" {
 		promoteLimit = buffer.assistantStreamRenderedPrefixLimitLocked(stableLinePrefix, rows)
 	}
 	if promoteLimit < promotedCount && promotedCount <= len(rows) {
@@ -798,7 +806,33 @@ func assistantStreamRowHasStableContent(row string) bool {
 	return row == "" || xansi.StringWidth(row) > 0 || xansi.Strip(row) != ""
 }
 
-func assistantStreamStablePromotionPrefix(source string) string {
+func assistantMarkdownDocumentStablePromotionPrefix(source string) string {
+	normalized := strings.ReplaceAll(source, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	prefix, activeBlock := assistantMarkdownActiveBlock(normalized)
+	if strings.HasSuffix(normalized, "\n") &&
+		assistantMarkdownBlockEndsWithClosedFence(activeBlock) &&
+		assistantMarkdownStablePrefixCanPromote(normalized) {
+		return normalized
+	}
+	if strings.TrimSpace(activeBlock) == "" {
+		if strings.HasSuffix(normalized, "\n") &&
+			assistantMarkdownBlockEndsWithClosedFence(prefix) &&
+			assistantMarkdownStablePrefixCanPromote(prefix) {
+			return prefix
+		}
+		return ""
+	}
+	if prefix == "" || strings.TrimSpace(activeBlock) == "" {
+		return ""
+	}
+	if !assistantMarkdownStablePrefixCanPromote(prefix) {
+		return ""
+	}
+	return prefix
+}
+
+func assistantLineStablePromotionPrefix(source string) string {
 	normalized := strings.ReplaceAll(source, "\r\n", "\n")
 	normalized = strings.ReplaceAll(normalized, "\r", "\n")
 	if !strings.Contains(normalized, "\n") {
@@ -892,6 +926,95 @@ func assistantMarkdownBlockIsUnstable(block string) bool {
 	return assistantMarkdownBlockHasPipeTable(block) || assistantMarkdownBlockHasUnclosedFence(block)
 }
 
+func assistantMarkdownStablePrefixCanPromote(source string) bool {
+	for _, block := range assistantMarkdownStablePrefixBlocks(source) {
+		if assistantMarkdownBlockEndsWithClosedFence(block) {
+			continue
+		}
+		if !assistantMarkdownPlainParagraphBlockCanPromote(block) {
+			return false
+		}
+	}
+	return true
+}
+
+func assistantMarkdownStablePrefixBlocks(source string) []string {
+	normalized := strings.ReplaceAll(source, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	blocks := []string{}
+	var current strings.Builder
+	fenceOpen := false
+	activeFence := assistantMarkdownFence{}
+	for _, part := range strings.SplitAfter(normalized, "\n") {
+		line := strings.TrimSuffix(part, "\n")
+		trimmed := strings.TrimSpace(line)
+		if fenceOpen {
+			current.WriteString(part)
+			if assistantMarkdownFenceCloses(line, activeFence) {
+				fenceOpen = false
+				activeFence = assistantMarkdownFence{}
+				blocks = append(blocks, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		if trimmed == "" {
+			if current.Len() > 0 {
+				blocks = append(blocks, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		if fence, ok := assistantMarkdownFenceOpener(line); ok {
+			activeFence = fence
+			fenceOpen = true
+		}
+		current.WriteString(part)
+	}
+	if current.Len() > 0 {
+		blocks = append(blocks, current.String())
+	}
+	return blocks
+}
+
+func assistantMarkdownPlainParagraphBlockCanPromote(block string) bool {
+	if strings.TrimSpace(block) == "" {
+		return false
+	}
+	if strings.ContainsAny(block, "[]|") || assistantMarkdownBlockHasUnclosedFence(block) {
+		return false
+	}
+	for _, line := range strings.Split(block, "\n") {
+		if assistantMarkdownLineStartsDocumentMutableBlock(line) {
+			return false
+		}
+	}
+	return true
+}
+
+func assistantMarkdownLineStartsDocumentMutableBlock(line string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "#") ||
+		strings.HasPrefix(trimmed, ">") ||
+		strings.HasPrefix(trimmed, "- ") ||
+		strings.HasPrefix(trimmed, "* ") ||
+		strings.HasPrefix(trimmed, "+ ") {
+		return true
+	}
+	digitSeen := false
+	for index, char := range trimmed {
+		if char >= '0' && char <= '9' {
+			digitSeen = true
+			continue
+		}
+		return digitSeen && (char == '.' || char == ')') && len(trimmed) > index+1 && trimmed[index+1] == ' '
+	}
+	return false
+}
+
 func assistantMarkdownBlockHasPipeTable(block string) bool {
 	lines := assistantMarkdownNonEmptyLines(block)
 	for _, line := range lines {
@@ -919,6 +1042,35 @@ func assistantMarkdownBlockHasUnclosedFence(block string) bool {
 		}
 	}
 	return fenceOpen
+}
+
+func assistantMarkdownBlockEndsWithClosedFence(block string) bool {
+	activeFence := assistantMarkdownFence{}
+	fenceOpen := false
+	closedAtEnd := false
+	for _, line := range strings.Split(block, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if fenceOpen {
+			if assistantMarkdownFenceCloses(line, activeFence) {
+				fenceOpen = false
+				activeFence = assistantMarkdownFence{}
+				closedAtEnd = true
+			} else {
+				closedAtEnd = false
+			}
+			continue
+		}
+		if fence, ok := assistantMarkdownFenceOpener(line); ok {
+			activeFence = fence
+			fenceOpen = true
+			closedAtEnd = false
+			continue
+		}
+		closedAtEnd = false
+	}
+	return !fenceOpen && closedAtEnd
 }
 
 type assistantMarkdownFence struct {
