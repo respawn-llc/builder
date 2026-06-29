@@ -421,12 +421,17 @@ func nativeStableProjectionNeedsDelivery(previous tui.TranscriptProjection, curr
 }
 
 const nativeStableProjectionNonContiguousReason = "native stable append is not contiguous with current transcript projection"
+const nativeStableProjectionActiveStreamMismatchReason = "native active assistant stream does not match committed transcript projection"
 
 func (m *uiModel) nativeStableProjectionRecoverableError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
 	if m != nil && m.debugMode {
 		return m.nativeStableProjectionInvariantError(operation, previous, current)
 	}
 	return errors.New(nativeStableProjectionNonContiguousReason)
+}
+
+func (m *uiModel) nativeStableProjectionRecoverableRuntimeError() error {
+	return errors.New(nativeStableProjectionActiveStreamMismatchReason)
 }
 
 func (m *uiModel) nativeAssistantStreamMatchesProjectionBlock(streamText string, block tui.TranscriptProjectionBlock) bool {
