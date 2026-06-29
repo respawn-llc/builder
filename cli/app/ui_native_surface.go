@@ -29,6 +29,8 @@ type uiNativeSurface struct {
 	lastFrameSet               bool
 }
 
+var errNativeAssistantStreamResized = errors.New("native assistant stream resized before finalization")
+
 func newUINativeSurface(writer io.Writer, normalBufferAvailable func() bool, delayedWriteErrorListener func(error)) *uiNativeSurface {
 	if writer == nil {
 		return nil
@@ -47,7 +49,7 @@ func (s *uiNativeSurface) ensure(width int, height int) bool {
 	if s.surface != nil && s.width == width && s.height == height {
 		return true
 	}
-	s.Close()
+	s.Drop()
 	s.width = width
 	s.height = height
 	s.buffer = scrollback.NewOngoingScrollbackBufferImpl(
@@ -130,7 +132,7 @@ func (s *uiNativeSurface) FinishAssistantStreaming() error {
 }
 
 func (s *uiNativeSurface) FlushHoldoff() error {
-	if s == nil || s.surface == nil || !s.lastFrameSet {
+	if s == nil || s.surface == nil {
 		return nil
 	}
 	return s.surface.FlushHoldoff()
@@ -216,6 +218,9 @@ func (m *uiModel) ensureNativeSurface(width int, height int) bool {
 	if !m.nativeSurface.ensure(width, height) {
 		return false
 	}
+	if recreate && wasInitialized {
+		m.reprojectNativeDeliveredStableProjectionForCurrentGeometry()
+	}
 	if recreate && shouldRehydrate && !wasInitialized {
 		if err := m.rehydrateNativeStableFromCurrentTranscript(); err != nil {
 			m.nativeLiveAreaError = err
@@ -253,6 +258,22 @@ func (m *uiModel) nativeResizeRehydrateScheduled() bool {
 
 func (m *uiModel) nativeResizeRehydratePending() bool {
 	return m != nil && m.nativeResizeRehydrateToken != 0 && !m.nativeResizeRehydrateActive
+}
+
+func (m *uiModel) nativeStableSurfaceReadyForCurrentGeometry() bool {
+	return m != nil &&
+		m.nativeSurface != nil &&
+		m.nativeSurface.ready(m.termWidth, m.termHeight)
+}
+
+func (m *uiModel) ensureNativeStableSurfaceForCurrentGeometry() bool {
+	if m == nil || m.nativeSurface == nil || m.termWidth <= 0 || m.termHeight <= 0 {
+		return false
+	}
+	if m.nativeSurface.ready(m.termWidth, m.termHeight) {
+		return true
+	}
+	return m.ensureNativeSurface(m.termWidth, m.termHeight)
 }
 
 func (m *uiModel) closeNativeSurface() {
@@ -339,13 +360,6 @@ func (l uiViewLayout) renderNativeLiveChatPanel(width int, height int, style uiS
 		lineKinds = append(lineKinds, line.Kind)
 	}
 	return l.renderChatContentLines(rawLines, lineKinds, width, style)
-}
-
-func (m *uiModel) nativeCommittedProjectionForEntries(entries []tui.TranscriptEntry) tui.TranscriptProjection {
-	if m == nil {
-		return tui.TranscriptProjection{}
-	}
-	return m.view.CommittedOngoingProjectionForEntries(committedTranscriptEntriesForApp(entries))
 }
 
 func (m *uiModel) rehydrateNativeStableFromCurrentTranscript() error {
@@ -494,7 +508,8 @@ func (m *uiModel) nativeStableAppendBlocksForProjectionChange(previous tui.Trans
 	if m.nativeStableProjectionHasAppendPrefix(previous, current) {
 		return nativeStableBlockIndexRange(len(previous.Blocks), len(current.Blocks)), true
 	}
-	if overlap := m.nativeStableSharedSuffixPrefixBlockCount(current, previous); overlap > 0 {
+	if overlap := m.nativeStableSharedSuffixPrefixBlockCount(current, previous); overlap > 0 &&
+		!m.nativeStableOverlapAppendWouldReplayDeliveredPrefix(previous, current, overlap) {
 		return nativeStableBlockIndexRange(overlap, len(current.Blocks)), true
 	}
 	if nativeStableProjectionStartsCompactionReset(current) {
@@ -570,6 +585,19 @@ func (m *uiModel) nativeStableSharedSuffixPrefixBlockCount(current tui.Transcrip
 		}
 	}
 	return 0
+}
+
+func (m *uiModel) nativeStableOverlapAppendWouldReplayDeliveredPrefix(previous tui.TranscriptProjection, current tui.TranscriptProjection, overlap int) bool {
+	if overlap <= 0 || overlap > len(previous.Blocks) || overlap > len(current.Blocks) {
+		return false
+	}
+	deliveredPrefix := previous.Blocks[:len(previous.Blocks)-overlap]
+	for _, block := range current.Blocks[overlap:] {
+		if m.nativeStableProjectionContainsBlock(deliveredPrefix, block) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *uiModel) nativeStableProjectionBlocksEqual(left tui.TranscriptProjectionBlock, right tui.TranscriptProjectionBlock) bool {
@@ -683,11 +711,7 @@ func nativeStableAppendLinesForBlockIndexes(current tui.TranscriptProjection, pr
 
 func nativeStablePreviouslyLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
 	switch block.Role {
-	case tui.RenderIntentSystem,
-		tui.RenderIntentToolShellSuccess,
-		tui.RenderIntentToolShellError,
-		tui.RenderIntentToolPatchSuccess,
-		tui.RenderIntentToolPatchError:
+	case tui.RenderIntentSystem:
 		return true
 	default:
 		return false

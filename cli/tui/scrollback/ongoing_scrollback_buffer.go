@@ -425,6 +425,9 @@ func (buffer *OngoingScrollbackBufferImpl) invalidateNormalBufferPreparation() {
 	}
 	buffer.mu.Lock()
 	buffer.normalBufferPrepared = false
+	if buffer.liveArea != nil {
+		buffer.liveArea.pendingPhysicalRender = true
+	}
 	buffer.mu.Unlock()
 }
 
@@ -434,7 +437,9 @@ func (buffer *OngoingScrollbackBufferImpl) flushHoldoffLocked() (bool, error) {
 	}
 	flushed, firstErr := buffer.flushHeldStableOpsLocked()
 	if !buffer.isStreaming && buffer.liveArea != nil && buffer.liveArea.pendingPhysicalRender {
-		if err := buffer.liveArea.erasePhysicalLocked(); firstErr == nil && err != nil {
+		if err := buffer.prepareNormalBufferLocked(); firstErr == nil && err != nil {
+			firstErr = err
+		} else if err := buffer.liveArea.erasePhysicalLocked(); firstErr == nil && err != nil {
 			firstErr = err
 		} else if err == nil {
 			if renderErr := buffer.liveArea.renderPhysicalLocked(); firstErr == nil {

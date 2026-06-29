@@ -110,9 +110,10 @@ func (m *uiModel) appendActiveAssistantStreamDelta(stepID string, delta string) 
 		return
 	}
 	if trimmedStepID := strings.TrimSpace(stepID); trimmedStepID != "" {
-		if m.activeAssistantStreamStepID == "" || m.activeAssistantStreamStepID == trimmedStepID {
-			m.activeAssistantStreamStepID = trimmedStepID
+		if m.activeAssistantStreamStepID != "" && m.activeAssistantStreamStepID != trimmedStepID {
+			m.activeAssistantStreamSource = ""
 		}
+		m.activeAssistantStreamStepID = trimmedStepID
 	}
 	m.activeAssistantStreamSource += delta
 }

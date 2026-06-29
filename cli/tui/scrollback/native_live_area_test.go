@@ -231,6 +231,66 @@ func TestNormalBufferPreparationPrecedesFirstNativeWrite(t *testing.T) {
 	}
 }
 
+func TestNormalBufferInvalidationForcesUnchangedLiveAreaRepaint(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithNormalBufferPreparation(),
+	)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
+
+	if err := liveArea.Render(nativeLiveAreaFrame("live")); err != nil {
+		t.Fatalf("render returned error: %v", err)
+	}
+	out.Reset()
+	InvalidateNormalBufferPreparation(buffer)
+	if err := liveArea.Render(nativeLiveAreaFrame("live")); err != nil {
+		t.Fatalf("unchanged render after invalidation returned error: %v", err)
+	}
+
+	want := normalBufferPreparationSequence() + liveAreaEraseSequence(1) + "live" + xansi.HideCursor
+	if got := out.String(); got != want {
+		t.Fatalf("repaint output = %q, want %q", got, want)
+	}
+}
+
+func TestHoldoffFlushPreparesBeforePendingLiveFrameRender(t *testing.T) {
+	var out bytes.Buffer
+	available := false
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithNormalBufferAvailability(func() bool { return available }),
+		WithNormalBufferPreparation(),
+	)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
+
+	if err := liveArea.Render(nativeLiveAreaFrame("held live")); err != nil {
+		t.Fatalf("held render returned error: %v", err)
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("held render wrote while normal buffer unavailable: %q", got)
+	}
+	available = true
+	if err := buffer.flushHoldoff(); err != nil {
+		t.Fatalf("flush holdoff returned error: %v", err)
+	}
+
+	want := normalBufferPreparationSequence() + "held live" + xansi.HideCursor
+	if got := out.String(); got != want {
+		t.Fatalf("held live repaint output = %q, want %q", got, want)
+	}
+}
+
 func TestStableStreamingKeepsPartialAssistantContentInLiveTailUntilFinish(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)

@@ -106,7 +106,10 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 	}
 	m.conversationFreshness = page.ConversationFreshness
 	nativeSurfaceConfigured := m.nativeSurfaceConfigured()
-	nativeStableReady := nativeSurfaceConfigured && m.nativeSurface.initialized()
+	if nativeSurfaceConfigured && !m.nativeResizeRehydratePending() {
+		m.ensureNativeStableSurfaceForCurrentGeometry()
+	}
+	nativeStableReady := nativeSurfaceConfigured && !m.nativeResizeRehydratePending() && m.nativeStableSurfaceReadyForCurrentGeometry()
 	nativeAssistantStreamActive := nativeSurfaceConfigured && m.nativeSurface.AssistantStreaming()
 	nativeAssistantStreamWasIncomplete := m.nativeAssistantStreamIncomplete
 	nativeAssistantStreamText := m.activeAssistantStreamText()
