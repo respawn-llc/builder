@@ -259,7 +259,7 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 		skippedStreamBlock = overlap
 	}
 	if skippedStreamBlock >= len(current.Blocks) || !m.nativeAssistantStreamMatchesProjectionBlock(nativeAssistantStreamText, current.Blocks[skippedStreamBlock]) {
-		return m.nativeStableProjectionRecoverableRuntimeError()
+		return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
 	}
 	if err := m.finishNativeAssistantStreaming(); err != nil {
 		return err

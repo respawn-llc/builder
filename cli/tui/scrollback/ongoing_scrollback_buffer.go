@@ -31,6 +31,8 @@ type OngoingScrollbackBufferImpl struct {
 	assistantStreamSource     string
 	assistantStreamPromoted   []assistantStreamPromotedRow
 	assistantStreamTail       []string
+	prepareNormalBuffer       bool
+	normalBufferPrepared      bool
 	closed                    bool
 	normalBufferAvailable     func() bool
 	delayedWriteErrorListener func(error)
@@ -82,6 +84,12 @@ func WithAssistantMarkdownRenderer(renderer AssistantMarkdownRenderer) OngoingSc
 		if renderer != nil {
 			buffer.assistantMarkdownRenderer = renderer
 		}
+	}
+}
+
+func WithNormalBufferPreparation() OngoingScrollbackBufferOption {
+	return func(buffer *OngoingScrollbackBufferImpl) {
+		buffer.prepareNormalBuffer = true
 	}
 }
 
@@ -162,6 +170,10 @@ func (buffer *OngoingScrollbackBufferImpl) Steer(line string) error {
 		buffer.mu.Unlock()
 		return nil
 	}
+	if err := buffer.prepareNormalBufferLocked(); err != nil {
+		buffer.mu.Unlock()
+		return err
+	}
 	delayedErr := error(nil)
 	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
 		delayedErr = err
@@ -214,6 +226,13 @@ func (buffer *OngoingScrollbackBufferImpl) StreamMarkdownAssistantContent(ansi s
 		buffer.mu.Unlock()
 		return nil
 	}
+	if err := buffer.prepareNormalBufferLocked(); err != nil {
+		buffer.isStreaming = false
+		buffer.clearAssistantStreamStateLocked()
+		buffer.turnEndedDuringActiveFlow.Store(false)
+		buffer.mu.Unlock()
+		return err
+	}
 	delayedErr := error(nil)
 	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
 		delayedErr = err
@@ -257,6 +276,10 @@ func (buffer *OngoingScrollbackBufferImpl) FinishAssistantStreaming() error {
 		buffer.heldStableOps = append(buffer.heldStableOps, stableHoldoffOperation{kind: stableHoldoffFinishAssistantStream, queuedSteers: queuedSteers})
 		buffer.mu.Unlock()
 		return nil
+	}
+	if err := buffer.prepareNormalBufferLocked(); err != nil {
+		buffer.mu.Unlock()
+		return err
 	}
 	delayedErr := error(nil)
 	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
@@ -688,6 +711,26 @@ func (buffer *OngoingScrollbackBufferImpl) stableWriteResult(operation string, p
 
 func (buffer *OngoingScrollbackBufferImpl) closedError(operation string) error {
 	return fmt.Errorf("%s: %w", operation, errOngoingScrollbackBufferClosed)
+}
+
+func (buffer *OngoingScrollbackBufferImpl) prepareNormalBufferLocked() error {
+	if buffer == nil || !buffer.prepareNormalBuffer || buffer.normalBufferPrepared {
+		return nil
+	}
+	payload := normalBufferPreparationSequence()
+	written, err := io.WriteString(buffer.stableWriter, payload)
+	if err != nil {
+		return fmt.Errorf("prepare normal buffer failed: %s: %w", stableWriteDiagnostics(payload, buffer.terminalWidth, buffer.terminalHeight, written), err)
+	}
+	if written != len(payload) {
+		return fmt.Errorf("prepare normal buffer short write: %s: %w", stableWriteDiagnostics(payload, buffer.terminalWidth, buffer.terminalHeight, written), io.ErrShortWrite)
+	}
+	buffer.normalBufferPrepared = true
+	return nil
+}
+
+func normalBufferPreparationSequence() string {
+	return xansi.ResetModeAltScreenSaveCursor + "\x1b[?6l" + "\x1b[r"
 }
 
 func stableWriteDiagnostics(payload string, terminalWidth int, terminalHeight int, written int) string {

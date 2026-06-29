@@ -205,6 +205,32 @@ func TestStableSteerErasesAndRestoresLiveAreaInOneFrame(t *testing.T) {
 	}
 }
 
+func TestNormalBufferPreparationPrecedesFirstNativeWrite(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithNormalBufferPreparation(),
+	)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
+
+	if err := liveArea.Render(nativeLiveAreaFrame("live")); err != nil {
+		t.Fatalf("render returned error: %v", err)
+	}
+	if err := buffer.Steer("stable"); err != nil {
+		t.Fatalf("steer returned error: %v", err)
+	}
+
+	want := normalBufferPreparationSequence() + "live" + xansi.HideCursor + liveAreaEraseSequence(1) + "stable" + terminalLineBreak + "live" + xansi.HideCursor
+	if got := out.String(); got != want {
+		t.Fatalf("terminal output = %q, want %q", got, want)
+	}
+}
+
 func TestStableStreamingKeepsPartialAssistantContentInLiveTailUntilFinish(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
