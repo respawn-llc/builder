@@ -1878,8 +1878,7 @@ type staticTranscriptProvider struct {
 
 func (p staticTranscriptProvider) GetSessionTranscriptPage(_ context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
 	entries := append([]clientui.ChatEntry(nil), p.pages[strings.TrimSpace(req.SessionID)].Entries...)
-	total := len(entries)
-	page := clientui.TranscriptPage{TotalEntries: total, Offset: 0, NextOffset: total, Entries: entries}
+	page := clientui.TranscriptPage{Entries: entries}
 	return serverapi.SessionTranscriptPageResponse{Transcript: page}, nil
 }
 
