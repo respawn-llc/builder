@@ -251,7 +251,7 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 	if !appendable {
 		overlap = current.SharedSuffixPrefixBlockCount(previous)
 		if overlap == 0 {
-			return m.nativeStableProjectionRecoverableError("deliverNativeStableProjectionChange")
+			return m.nativeStableProjectionRecoverableError("deliverNativeStableProjectionChange", previous, current)
 		}
 	}
 	skippedStreamBlock := len(previous.Blocks)
@@ -259,7 +259,7 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 		skippedStreamBlock = overlap
 	}
 	if skippedStreamBlock >= len(current.Blocks) || !m.nativeAssistantStreamMatchesProjectionBlock(nativeAssistantStreamText, current.Blocks[skippedStreamBlock]) {
-		return m.nativeStableProjectionRecoverableError("deliverNativeStableProjectionChange")
+		return m.nativeStableProjectionRecoverableError("deliverNativeStableProjectionChange", previous, current)
 	}
 	if err := m.finishNativeAssistantStreaming(); err != nil {
 		return err

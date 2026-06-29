@@ -370,6 +370,42 @@ func TestNativeSurfaceSteersCommittedRuntimeAppend(t *testing.T) {
 	}
 }
 
+func TestNativeSurfaceSteersWideCommittedPatchSummaryWithoutPanic(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 77, 36, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventToolCallCompleted,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         1,
+		CommittedEntryCount:        2,
+		CommittedEntryStart:        0,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          nativeWidePatchSummaryClientEntriesForTest(),
+	})
+	_ = collectCmdMessages(t, result.cmd)
+
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("wide native stable patch summary surfaced error: %v", m.nativeLiveAreaError)
+	}
+	for _, rawLine := range strings.Split(strings.ReplaceAll(out.String(), "\r\n", "\n"), "\n") {
+		if rawLine == "" {
+			continue
+		}
+		if got := lipgloss.Width(rawLine); got > m.termWidth {
+			t.Fatalf("native stable write width = %d, want <= %d, raw=%q", got, m.termWidth, rawLine)
+		}
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if !strings.Contains(plain, "workflow-editor/workflowEditorGraph") {
+		t.Fatalf("wide native stable patch summary was not written, got %q", plain)
+	}
+}
+
 func TestNativeFinalAssistantCommitFinishesStreamWithoutDuplicateStableWrite(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
@@ -848,6 +884,61 @@ func TestNativeSurfaceResizeSettlesWithoutReplayingStableTranscript(t *testing.T
 	plain := stripANSIAndTrimRight(out.String())
 	if strings.Contains(plain, "debounced resize prompt") {
 		t.Fatalf("settled resize replayed already-emitted transcript, got %q", plain)
+	}
+}
+
+func TestNativeSurfaceResizeDebounceClampsWideCommittedPatchSummary(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 36, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{{Role: tui.TranscriptRoleUser, Text: "resize base prompt", Committed: true}})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	next, cmd := m.Update(tea.WindowSizeMsg{Width: 77, Height: 36})
+	m = next.(*uiModel)
+	if cmd == nil {
+		t.Fatal("expected resize to schedule native stable rehydrate")
+	}
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q after resize, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventToolCallCompleted,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        3,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          nativeWidePatchSummaryClientEntriesForTest(),
+	})
+	_ = collectCmdMessages(t, result.cmd)
+	if got := out.String(); got != "" {
+		t.Fatalf("wide patch summary wrote during resize debounce: %q", got)
+	}
+
+	next, resizeCmd := m.Update(nativeSurfaceResizeRehydrateMsg{token: m.nativeResizeRehydrateToken, width: 77, height: 36})
+	m = next.(*uiModel)
+	if resizeCmd != nil {
+		t.Fatal("did not expect follow-up command after settled resize rehydrate")
+	}
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("wide patch summary resize flush surfaced error: %v", m.nativeLiveAreaError)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if !strings.Contains(plain, "workflowEditorGraph") {
+		t.Fatalf("settled resize flush did not write wide patch summary, got %q", plain)
+	}
+	for _, rawLine := range strings.Split(strings.ReplaceAll(out.String(), "\r\n", "\n"), "\n") {
+		if rawLine == "" {
+			continue
+		}
+		if got := lipgloss.Width(rawLine); got > m.termWidth {
+			t.Fatalf("resize flush stable write width = %d, want <= %d, raw=%q", got, m.termWidth, rawLine)
+		}
 	}
 }
 
@@ -1618,7 +1709,7 @@ func TestNativeStableReplaceRejectsNonAppendProjectionRewrite(t *testing.T) {
 	}
 }
 
-func TestNativeStableReplaceDisablesNativeSurfaceOnNonAppendProjectionRewriteInDebug(t *testing.T) {
+func TestNativeStableReplacePanicsOnNonAppendProjectionRewriteInDebug(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
 	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
@@ -1629,29 +1720,26 @@ func TestNativeStableReplaceDisablesNativeSurfaceOnNonAppendProjectionRewriteInD
 		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
 	}
 
-	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
-		Kind:                       clientui.EventConversationUpdated,
-		CommittedTranscriptChanged: true,
-		TranscriptRevision:         2,
-		CommittedEntryCount:        2,
-		CommittedEntryStart:        0,
-		CommittedEntryStartSet:     true,
-		TranscriptEntries:          []clientui.ChatEntry{{Role: "user", Text: "rewritten prompt"}},
+	panicText := captureNativeSurfacePanicText(t, func() {
+		result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+			Kind:                       clientui.EventConversationUpdated,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         2,
+			CommittedEntryCount:        2,
+			CommittedEntryStart:        0,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries:          []clientui.ChatEntry{{Role: "user", Text: "rewritten prompt"}},
+		})
+		_ = collectCmdMessages(t, result.cmd)
 	})
-	_ = collectCmdMessages(t, result.cmd)
-
-	if m.nativeLiveAreaError == nil {
-		t.Fatal("expected native stable replacement rewrite to surface an error")
-	}
-	if !strings.Contains(m.nativeLiveAreaError.Error(), "native stable append is not contiguous") {
-		t.Fatalf("native stable replacement error = %v, want non-contiguous append error", m.nativeLiveAreaError)
-	}
-	if m.nativeSurface != nil {
-		t.Fatal("expected native stable replacement rewrite to disable native surface")
+	if !strings.Contains(panicText, "Native scrollback invariant violation") ||
+		!strings.Contains(panicText, "native stable append is not contiguous") ||
+		!strings.Contains(panicText, "operation=deliverNativeStableProjectionChange") {
+		t.Fatalf("panic = %q, want debug native stable invariant diagnostic", panicText)
 	}
 }
 
-func TestNativeStableReplaceWithActiveStreamDoesNotFinalizeNonAppendTail(t *testing.T) {
+func TestNativeStableReplaceWithActiveStreamPanicsBeforeFinalizingNonAppendTailInDebug(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
 	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
@@ -1676,11 +1764,15 @@ func TestNativeStableReplaceWithActiveStreamDoesNotFinalizeNonAppendTail(t *test
 	previous := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
 	current := nativeStableProjectionForTest("rewritten prompt", "original answer")
 
-	exitMainThread := m.enterUIMainThread("native active stream non-append replacement test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "mutable stream tail")
-	exitMainThread()
-	if err == nil {
-		t.Fatal("expected native stable replacement rewrite to return an error")
+	panicText := captureNativeSurfacePanicText(t, func() {
+		exitMainThread := m.enterUIMainThread("native active stream non-append replacement test")
+		defer exitMainThread()
+		_ = m.deliverNativeStableProjectionChange(previous, current, true, true, false, "mutable stream tail")
+	})
+	if !strings.Contains(panicText, "Native scrollback invariant violation") ||
+		!strings.Contains(panicText, "native stable append is not contiguous") ||
+		!strings.Contains(panicText, "operation=deliverNativeStableProjectionChange") {
+		t.Fatalf("panic = %q, want debug native stable invariant diagnostic", panicText)
 	}
 	plain := stripANSIAndTrimRight(out.String())
 	if strings.Contains(plain, "mutable stream tail") {
@@ -1691,7 +1783,7 @@ func TestNativeStableReplaceWithActiveStreamDoesNotFinalizeNonAppendTail(t *test
 	}
 }
 
-func TestNativeStableAppendWithActiveStreamDoesNotSkipMismatchedCommittedBlock(t *testing.T) {
+func TestNativeStableAppendWithActiveStreamPanicsBeforeSkippingMismatchedCommittedBlockInDebug(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
 	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
@@ -1721,11 +1813,15 @@ func TestNativeStableAppendWithActiveStreamDoesNotSkipMismatchedCommittedBlock(t
 	})
 	current := m.nativeCommittedProjectionForEntries(entries)
 
-	exitMainThread := m.enterUIMainThread("native active stream mismatched append test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "draft answer")
-	exitMainThread()
-	if err == nil {
-		t.Fatal("expected mismatched active stream append to return an error")
+	panicText := captureNativeSurfacePanicText(t, func() {
+		exitMainThread := m.enterUIMainThread("native active stream mismatched append test")
+		defer exitMainThread()
+		_ = m.deliverNativeStableProjectionChange(previous, current, true, true, false, "draft answer")
+	})
+	if !strings.Contains(panicText, "Native scrollback invariant violation") ||
+		!strings.Contains(panicText, "native stable append is not contiguous") ||
+		!strings.Contains(panicText, "operation=deliverNativeStableProjectionChange") {
+		t.Fatalf("panic = %q, want debug native stable invariant diagnostic", panicText)
 	}
 	plain := stripANSIAndTrimRight(out.String())
 	if strings.Contains(plain, "draft answer") {
@@ -1745,6 +1841,31 @@ func nativeStableProjectionForTest(lines ...string) tui.TranscriptProjection {
 		})
 	}
 	return tui.TranscriptProjection{Blocks: blocks}
+}
+
+const nativeWidePatchSummaryPathForTest = "./apps/desktop/src/test-support/workflow-editor/workflowEditorGraphMutationFixtures.ts"
+
+func nativeWidePatchSummaryClientEntriesForTest() []clientui.ChatEntry {
+	patchSummary := nativeWidePatchSummaryPathForTest + " -1 +1"
+	return []clientui.ChatEntry{{
+		Role:       "tool_call",
+		Text:       "patch " + nativeWidePatchSummaryPathForTest,
+		ToolCallID: "call_patch",
+		ToolCall: &clientui.ToolCallMeta{
+			ToolName:    "patch",
+			Command:     nativeWidePatchSummaryPathForTest,
+			CompactText: nativeWidePatchSummaryPathForTest,
+		},
+	}, {
+		Role:       "tool_result_ok",
+		ToolCallID: "call_patch",
+		ToolCall: &clientui.ToolCallMeta{
+			ToolName:     "patch",
+			Command:      patchSummary,
+			CompactText:  patchSummary,
+			PatchSummary: patchSummary,
+		},
+	}}
 }
 
 func newNativeSurfaceTestModel(out *bytes.Buffer) *uiModel {
