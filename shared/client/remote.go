@@ -138,6 +138,9 @@ func (c *Remote) acknowledgeNoAuthOnConn(ctx context.Context, conn rpcwire.Conn)
 	}
 	var resp serverapi.AuthAcknowledgeNoAuthResponse
 	if err := callRPC(ctx, conn, "auth-acknowledge-no-auth", protocol.MethodAuthAcknowledgeNoAuth, serverapi.AuthAcknowledgeNoAuthRequest{}, &resp); err != nil {
+		if errors.Is(err, serverapi.ErrServerAuthRequired) {
+			c.noAuthAck.Store(false)
+		}
 		return err
 	}
 	if resp.NoAuthSelected {

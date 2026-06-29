@@ -73,8 +73,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 				return serverapi.AuthCompleteBootstrapResponse{}, serverapi.ErrServerAuthRequired
 			}
 			resp, err := bootstrapClient.CompleteAuthBootstrap(ctx, params)
-			if err == nil && resp.NoAuthSelected {
-				state.noAuthAccepted = true
+			if err == nil {
+				state.noAuthAccepted = resp.NoAuthSelected
 			}
 			return resp, err
 		})
@@ -86,8 +86,8 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 				return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
 			}
 			resp, err := bootstrapClient.AcknowledgeNoAuth(ctx, params)
-			if err == nil && resp.NoAuthSelected {
-				state.noAuthAccepted = true
+			if err == nil {
+				state.noAuthAccepted = resp.NoAuthSelected
 			}
 			return resp, err
 		})

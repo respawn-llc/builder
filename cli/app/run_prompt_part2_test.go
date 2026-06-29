@@ -419,6 +419,9 @@ func newNoAuthFakeResponsesServer(t *testing.T, assistantReplies []string) (*htt
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
+		if got := strings.TrimSpace(r.Header.Get("Authorization")); got != "" {
+			t.Fatalf("unexpected authorization header %q", got)
+		}
 		index := int(hits.Add(1)) - 1
 		if index >= len(assistantReplies) {
 			t.Fatalf("unexpected response request index %d", index)
