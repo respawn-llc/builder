@@ -102,7 +102,9 @@ const shouldRenderSearch =
     }
 
     :global(header.header) {
-      transition: transform 160ms ease, box-shadow 160ms ease;
+      transition:
+        transform var(--kent-motion-fast),
+        box-shadow var(--kent-motion-fast);
       will-change: transform;
     }
 

@@ -1,0 +1,133 @@
+---
+import DefaultHead from '@astrojs/starlight/components/Head.astro';
+import { ClientRouter } from 'astro:transitions';
+---
+
+<DefaultHead />
+<ClientRouter />
+
+<script>
+  const smoothHashScrollInstalledKey = '__kentDocsSmoothHashScrollInstalled';
+  const tocHashLinkSelector = [
+    'starlight-toc a[href^="#"]',
+    'mobile-starlight-toc a[href^="#"]',
+  ].join(',');
+  const smoothScrollDurationMs = 400;
+  let activeScrollAnimation = 0;
+
+  const decodeHash = (hash) => {
+    try {
+      return decodeURIComponent(hash.slice(1));
+    } catch {
+      return hash.slice(1);
+    }
+  };
+
+  const getHashTarget = (hash) => document.getElementById(decodeHash(hash));
+
+  const prefersReducedMotion = () =>
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const easeOutCubic = (progress) => 1 - Math.pow(1 - progress, 3);
+
+  const getTargetScrollY = (target) => {
+    const scrollPaddingTop =
+      parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0;
+    const maxScrollY = document.documentElement.scrollHeight - window.innerHeight;
+    const targetScrollY = target.getBoundingClientRect().top + window.scrollY - scrollPaddingTop;
+    return Math.max(0, Math.min(targetScrollY, maxScrollY));
+  };
+
+  // User decision: Firefox ignored CSS/native smooth-scrolling for Starlight ToC
+  // hash links, so this narrow ToC-only bridge uses a custom tween while still
+  // respecting reduced motion.
+  const animateScrollTo = (targetScrollY, onComplete) => {
+    activeScrollAnimation += 1;
+    const animationId = activeScrollAnimation;
+
+    if (prefersReducedMotion()) {
+      window.scrollTo({ top: targetScrollY, behavior: 'auto' });
+      onComplete?.();
+      return;
+    }
+
+    const startScrollY = window.scrollY;
+    const delta = targetScrollY - startScrollY;
+    if (Math.abs(delta) < 1) {
+      window.scrollTo({ top: targetScrollY, behavior: 'auto' });
+      onComplete?.();
+      return;
+    }
+
+    const startTime = performance.now();
+    const step = (now) => {
+      if (animationId !== activeScrollAnimation) {
+        return;
+      }
+
+      const progress = Math.min(1, (now - startTime) / smoothScrollDurationMs);
+      window.scrollTo({ top: startScrollY + delta * easeOutCubic(progress), behavior: 'auto' });
+      if (progress < 1) {
+        requestAnimationFrame(step);
+      } else {
+        onComplete?.();
+      }
+    };
+
+    requestAnimationFrame(step);
+  };
+
+  const scrollToHashTarget = (hash, target) => {
+    const targetScrollY = getTargetScrollY(target);
+    const stateBeforeHash = window.history.state;
+    animateScrollTo(targetScrollY, () => {
+      if (window.location.hash !== hash) {
+        window.location.hash = hash;
+        if (
+          window.history.state === null &&
+          stateBeforeHash &&
+          typeof stateBeforeHash === 'object'
+        ) {
+          window.history.replaceState(
+            { ...stateBeforeHash, scrollX: window.scrollX, scrollY: window.scrollY },
+            '',
+          );
+        }
+      }
+    });
+    return true;
+  };
+
+  if (!window[smoothHashScrollInstalledKey]) {
+    window[smoothHashScrollInstalledKey] = true;
+    document.addEventListener(
+      'click',
+      (event) => {
+        const link =
+          event.target instanceof Element ? event.target.closest(tocHashLinkSelector) : null;
+        if (!(link instanceof HTMLAnchorElement)) {
+          return;
+        }
+        if (
+          link.origin !== window.location.origin ||
+          link.pathname !== window.location.pathname ||
+          link.search !== window.location.search
+        ) {
+          return;
+        }
+        const target = getHashTarget(link.hash);
+        if (!target) {
+          return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const mobileToc = link.closest('details');
+        if (mobileToc) {
+          mobileToc.open = false;
+        }
+        scrollToHashTarget(link.hash, target);
+      },
+      { capture: true },
+    );
+  }
+</script>
