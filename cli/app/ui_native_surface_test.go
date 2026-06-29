@@ -1723,7 +1723,7 @@ func TestNativeStableProjectionChangeAppendsCompactionResetAsPhysicalEpoch(t *te
 	}
 }
 
-func TestNativeStableProjectionChangeAppendsAuthoritativeTailAfterLocalStatus(t *testing.T) {
+func TestNativeStableProjectionChangeRejectsAuthoritativeTailAfterPriorReviewerStatus(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
 	if rendered := m.View(); rendered != "" {
@@ -1740,16 +1740,13 @@ func TestNativeStableProjectionChangeAppendsAuthoritativeTailAfterLocalStatus(t 
 	exitMainThread := m.enterUIMainThread("native stable local status append test")
 	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
 	exitMainThread()
-	if err != nil {
-		t.Fatalf("local-status projection delivery returned error: %v", err)
+	if err == nil {
+		t.Fatal("expected prior reviewer-status suffix to be rejected as non-appendable")
 	}
 
 	plain := stripANSIAndTrimRight(out.String())
-	if strings.Contains(plain, "old-a") || strings.Contains(plain, "local status") {
-		t.Fatalf("local-status delivery replayed existing blocks, got %q", plain)
-	}
-	if !strings.Contains(plain, "new user prompt") {
-		t.Fatalf("local-status delivery skipped authoritative append, got %q", plain)
+	if strings.Contains(plain, "new user prompt") {
+		t.Fatalf("prior reviewer-status rejection wrote authoritative suffix, got %q", plain)
 	}
 }
 
