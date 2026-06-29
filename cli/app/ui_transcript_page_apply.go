@@ -112,7 +112,7 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 	nativeAssistantStreamText := m.activeAssistantStreamText()
 	previousNativeStableProjection := tui.TranscriptProjection{}
 	if nativeSurfaceConfigured {
-		previousNativeStableProjection = m.nativeCommittedProjectionForEntries(m.transcriptEntries)
+		previousNativeStableProjection = m.nativeDeliveredStableProjection
 	}
 	reduction := reduceRuntimeTranscriptPage(newRuntimeTranscriptPageState(runtimeTranscriptPageSnapshotFromModel(m)), req, page, recoveryCause)
 	pageReq := reduction.request

@@ -219,6 +219,28 @@ func TestOngoingScrollbackBufferAssistantStreamHoldsReferenceBlockBeforeClosedFe
 	}
 }
 
+func TestOngoingScrollbackBufferAssistantStreamHoldsReferenceLineImmediatelyBeforeClosedFence(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithAssistantMarkdownRenderer(func(source string, width int) []string {
+			return nonEmptyAssistantTestRows(strings.Split(strings.TrimSuffix(source, "\n"), "\n"))
+		}),
+	)
+	defer buffer.close()
+
+	if err := buffer.StreamMarkdownAssistantContent("[label][ref]\n```go\nline\n```\n\n"); err != nil {
+		t.Fatalf("stream reference line and immediately closed fence returned error: %v", err)
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("closed fence promoted earlier reference-sensitive line: %q", got)
+	}
+}
+
 func TestOngoingScrollbackBufferAssistantStreamHoldsReferenceBlockBeforeActiveTable(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(
@@ -506,6 +528,17 @@ func TestOngoingScrollbackBufferSteerNewlinePanics(t *testing.T) {
 	assertPanicContains(t, panicText, "line contains CR or LF")
 }
 
+func TestNormalBufferPreparationSequencePreservesCursorAcrossModeResets(t *testing.T) {
+	sequence := normalBufferPreparationSequence()
+	if !strings.Contains(sequence, xansi.SaveCursor) || !strings.Contains(sequence, xansi.RestoreCursor) {
+		t.Fatalf("normal buffer preparation sequence must save/restore cursor, got %q", sequence)
+	}
+	if strings.Index(sequence, xansi.SaveCursor) > strings.Index(sequence, "\x1b[?6l") ||
+		strings.Index(sequence, xansi.RestoreCursor) < strings.Index(sequence, "\x1b[r") {
+		t.Fatalf("normal buffer preparation sequence does not wrap mode resets with cursor restore, got %q", sequence)
+	}
+}
+
 func TestOngoingScrollbackBufferFinishWithoutStreamingPanics(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
@@ -647,6 +680,33 @@ func TestOngoingScrollbackBufferHoldoffBuffersAssistantStreamingAndQueuedSteers(
 	}
 	if got, want := out.String(), "hello"+terminalLineBreak+" queued"+terminalLineBreak; got != want {
 		t.Fatalf("held output = %q, want %q", got, want)
+	}
+}
+
+func TestOngoingScrollbackBufferHoldoffFlushPreparesNormalBufferBeforeHeldWrites(t *testing.T) {
+	var out bytes.Buffer
+	available := false
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithNormalBufferAvailability(func() bool { return available }),
+		WithNormalBufferPreparation(),
+	)
+	defer buffer.close()
+
+	if err := buffer.Steer("held stable"); err != nil {
+		t.Fatalf("held steer returned error: %v", err)
+	}
+	available = true
+	if err := buffer.flushHoldoff(); err != nil {
+		t.Fatalf("flush holdoff returned error: %v", err)
+	}
+
+	if got, want := out.String(), normalBufferPreparationSequence()+"held stable"+terminalLineBreak; got != want {
+		t.Fatalf("held prepared output = %q, want %q", got, want)
 	}
 }
 

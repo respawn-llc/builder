@@ -41,8 +41,8 @@ func TestNewAssistantTurnFlushesSupersededStuckCommentary(t *testing.T) {
 	}})
 	_ = collectCmdMessages(t, c2)
 
-	if got := len(m.deferredCommittedTail); got != 0 {
-		t.Fatalf("prior-turn commentary commit should not remain deferred, got %d", got)
+	if got := len(m.deferredCommittedTail); got != 1 {
+		t.Fatalf("mismatched-step commentary commit should defer until the next turn boundary, got %d", got)
 	}
 
 	_, c3 := m.handleRuntimeEventBatch([]clientui.Event{{
@@ -101,8 +101,8 @@ func TestNewToolTurnFlushesSupersededStuckCommentary(t *testing.T) {
 	}})
 	_ = collectCmdMessages(t, c2)
 
-	if got := len(m.deferredCommittedTail); got != 0 {
-		t.Fatalf("prior-turn commentary commit should not remain deferred, got %d", got)
+	if got := len(m.deferredCommittedTail); got != 1 {
+		t.Fatalf("mismatched-step commentary commit should defer until the next turn boundary, got %d", got)
 	}
 
 	_, c3 := m.handleRuntimeEventBatch([]clientui.Event{{
