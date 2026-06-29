@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowValidation } from "../../api";
 import type { WorkflowGraphEdge, WorkflowGraphNode } from "./workflowGraphLayout";
 import { layoutWorkflowGraph, workflowGraphLayoutWithDraftProjection } from "./workflowGraphLayout";
-import { workflowGraphAbsoluteNodeRect, workflowGraphEndpointPoint } from "./workflowGraphLayoutTestHelpers";
+import {
+  workflowGraphAbsoluteNodeRect,
+  workflowGraphEndpointPoint,
+} from "../../test-support/workflow-editor/workflowGraphLayoutTestHelpers";
 
 describe("layoutWorkflowGraph", () => {
   it("builds grouped workflow graph nodes and labeled edges", async () => {

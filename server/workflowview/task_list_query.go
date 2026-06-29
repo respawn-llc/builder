@@ -175,7 +175,6 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 		return nil, err
 	}
 	sortSlots := workflowTaskListSortSlots(req.sortSelectors)
-	sentinelStatusOrder := workflowTaskListSentinelStatusOrder(req.columns)
 	rows, err := s.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
 		StatusFilterSet:        boolInt64(len(req.statusKeys) > 0),
 		StatusKeysJson:         string(statusKeysJSON),
@@ -185,7 +184,6 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 		ProjectID:              req.projectID,
 		WorkflowID:             req.workflowID,
 		CanceledTerminalNodeID: req.canceledTerminalID,
-		SentinelStatusOrder:    sentinelStatusOrder,
 		CursorSet:              boolInt64(req.cursorSet),
 		CursorTaskID:           req.cursor.TaskID,
 		CursorCreatedAtUnixMs:  req.cursor.CreatedAtUnixMs,
@@ -237,16 +235,6 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 		})
 	}
 	return out, nil
-}
-
-func workflowTaskListSentinelStatusOrder(columns []serverapi.WorkflowBoardColumn) int64 {
-	sentinel := int64(len(columns))
-	for _, column := range columns {
-		if order := int64(column.SortOrder); order >= sentinel {
-			sentinel = order + 1
-		}
-	}
-	return sentinel
 }
 
 func workflowTaskListSortSlots(sortSelectors []serverapi.WorkflowTaskListSort) [5]workflowTaskListSortSlot {

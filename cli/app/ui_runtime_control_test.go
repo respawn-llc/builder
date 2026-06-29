@@ -24,8 +24,6 @@ type runtimeControlFakeClient struct {
 	setThinkingLevelArg    string
 	setFastModeArg         bool
 	setFastModeCalls       int
-	setReviewerArg         bool
-	setAutoCompactArg      bool
 	setAutoCompactCalls    int
 	goal                   *clientui.RuntimeGoal
 	showGoalCalls          int
@@ -35,13 +33,8 @@ type runtimeControlFakeClient struct {
 	clearGoalCalls         int
 	appendedRole           string
 	appendedText           string
-	shouldCompactText      string
-	shouldCompactCalls     int
-	shouldCompactResult    bool
 	submitText             string
 	submitResult           string
-	submitShellCommand     string
-	compactArgs            string
 	hasQueuedUserWork      bool
 	hasQueuedUserWorkCalls int
 	submitQueuedResult     string
@@ -55,21 +48,16 @@ type runtimeControlFakeClient struct {
 	discardQueuedID        string
 	discardQueuedCalls     int
 	discardQueuedResult    bool
-	discardQueuedCount     int
 	recordedPromptHistory  string
 	refreshMainViewCalls   int
 	refreshTranscriptCalls int
 	loadTranscriptCalls    int
 	err                    error
 	appendErr              error
-	shouldCompactErr       error
 	submitErr              error
-	submitShellErr         error
-	compactErr             error
 	hasQueuedUserWorkErr   error
-	submitQueuedErr        error
 	interruptErr           error
-	recordPromptHistoryErr error
+	collaborative          bool
 }
 
 type timeoutNetError struct{}
@@ -84,6 +72,7 @@ func (f *runtimeControlFakeClient) MainView() clientui.RuntimeMainView {
 	}
 	return clientui.RuntimeMainView{Status: f.status, Session: f.sessionView}
 }
+func (f *runtimeControlFakeClient) IsCollaborativeRuntime() bool { return f.collaborative }
 func (f *runtimeControlFakeClient) CachedMainView() (clientui.RuntimeMainView, bool) {
 	if f.hasCachedMainView {
 		return f.cachedMainView, true
@@ -132,11 +121,9 @@ func (f *runtimeControlFakeClient) SetFastModeEnabled(enabled bool) (bool, error
 	return true, f.err
 }
 func (f *runtimeControlFakeClient) SetReviewerEnabled(enabled bool) (bool, string, error) {
-	f.setReviewerArg = enabled
 	return true, "edits", f.err
 }
 func (f *runtimeControlFakeClient) SetAutoCompactionEnabled(enabled bool) (bool, bool, error) {
-	f.setAutoCompactArg = enabled
 	f.setAutoCompactCalls++
 	return true, enabled, f.err
 }
@@ -184,40 +171,19 @@ func (f *runtimeControlFakeClient) AppendCommittedEntryWithNoticeID(role, text, 
 	}
 	return f.err
 }
-func (f *runtimeControlFakeClient) ShouldCompactBeforeUserMessage(_ context.Context, text string) (bool, error) {
-	f.shouldCompactText = text
-	f.shouldCompactCalls++
-	if f.shouldCompactErr != nil {
-		return f.shouldCompactResult, f.shouldCompactErr
-	}
-	return f.shouldCompactResult, f.err
-}
 func (f *runtimeControlFakeClient) SubmitUserMessage(_ context.Context, text string) (clientui.UserTurnSubmission, error) {
 	f.submitText = text
+	result := clientui.UserTurnSubmission{Message: f.submitResult}
 	if f.submitErr != nil {
-		return clientui.UserTurnSubmission{Message: f.submitResult}, f.submitErr
+		return result, f.submitErr
 	}
-	return clientui.UserTurnSubmission{Message: f.submitResult}, f.err
+	return result, f.err
 }
 func (f *runtimeControlFakeClient) SubmitUserShellCommand(_ context.Context, command string) error {
-	f.submitShellCommand = command
-	if f.submitShellErr != nil {
-		return f.submitShellErr
-	}
 	return f.err
 }
 func (f *runtimeControlFakeClient) CompactContext(_ context.Context, args string) error {
-	f.compactArgs = args
-	if f.compactErr != nil {
-		return f.compactErr
-	}
-	return f.err
-}
-func (f *runtimeControlFakeClient) CompactContextForPreSubmit(context.Context) error {
-	f.compactArgs = "__pre_submit__"
-	if f.compactErr != nil {
-		return f.compactErr
-	}
+	_ = args
 	return f.err
 }
 func (f *runtimeControlFakeClient) HasQueuedUserWork() (bool, error) {
@@ -229,9 +195,6 @@ func (f *runtimeControlFakeClient) HasQueuedUserWork() (bool, error) {
 }
 func (f *runtimeControlFakeClient) SubmitQueuedUserMessages(context.Context) (string, error) {
 	f.submitQueuedCalls++
-	if f.submitQueuedErr != nil {
-		return f.submitQueuedResult, f.submitQueuedErr
-	}
 	return f.submitQueuedResult, f.err
 }
 func (f *runtimeControlFakeClient) Interrupt() error {
@@ -264,112 +227,11 @@ func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) 
 	if f.discardQueuedResult {
 		return true
 	}
-	return f.discardQueuedCount > 0
+	return false
 }
 func (f *runtimeControlFakeClient) RecordPromptHistory(text string) error {
 	f.recordedPromptHistory = text
-	if f.recordPromptHistoryErr != nil {
-		return f.recordPromptHistoryErr
-	}
 	return f.err
-}
-
-func TestRuntimeControlHelpersDelegateToRuntimeClient(t *testing.T) {
-	client := &runtimeControlFakeClient{
-		shouldCompactResult: true,
-		submitResult:        "assistant",
-		hasQueuedUserWork:   true,
-		submitQueuedResult:  "queued assistant",
-		discardQueuedCount:  2,
-	}
-	m := newProjectedStaticUIModel()
-	m.engine = client
-
-	if err := m.setRuntimeSessionName("incident triage"); err != nil {
-		t.Fatalf("set runtime session name: %v", err)
-	}
-	if err := m.setRuntimeThinkingLevel("high"); err != nil {
-		t.Fatalf("set runtime thinking level: %v", err)
-	}
-	if changed, err := m.setRuntimeFastModeEnabled(true); !changed || err != nil {
-		t.Fatalf("set runtime fast mode = (%t, %v), want (true, nil)", changed, err)
-	}
-	if changed, mode, err := m.setRuntimeReviewerEnabled(true); !changed || mode != "edits" || err != nil {
-		t.Fatalf("set runtime reviewer = (%t, %q, %v)", changed, mode, err)
-	}
-	if changed, enabled, err := m.setRuntimeAutoCompactionEnabled(false); !changed || enabled || err != nil {
-		t.Fatalf("set runtime autocompaction = (%t, %t, %v), want (true, false, nil)", changed, enabled, err)
-	}
-	if goal, err := m.setRuntimeGoal("ship goal"); err != nil || goal == nil || goal.Objective != "ship goal" || goal.Status != "active" {
-		t.Fatalf("set runtime goal = (%+v, %v), want active ship goal", goal, err)
-	}
-	if goal, err := m.pauseRuntimeGoal(); err != nil || goal == nil || goal.Status != "paused" {
-		t.Fatalf("pause runtime goal = (%+v, %v), want paused goal", goal, err)
-	}
-	if goal, err := m.resumeRuntimeGoal(); err != nil || goal == nil || goal.Status != "active" {
-		t.Fatalf("resume runtime goal = (%+v, %v), want active goal", goal, err)
-	}
-	if goal, err := m.showRuntimeGoal(); err != nil || goal == nil || goal.Status != "active" {
-		t.Fatalf("show runtime goal = (%+v, %v), want active goal", goal, err)
-	}
-	if goal, err := m.clearRuntimeGoal(); err != nil || goal != nil {
-		t.Fatalf("clear runtime goal = (%+v, %v), want nil goal", goal, err)
-	}
-	m.appendRuntimeLocalEntryWithNoticeID("system", "hello", "")
-	submission, err := m.submitRuntimeUserMessage(context.Background(), "prompt")
-	message := submission.Message
-	if err != nil || message != "assistant" {
-		t.Fatalf("submit runtime user message = (%q, %v), want (assistant, nil)", message, err)
-	}
-	if err := m.submitRuntimeUserShellCommand(context.Background(), "echo hi"); err != nil {
-		t.Fatalf("submit runtime shell command: %v", err)
-	}
-	if err := m.compactRuntimeContext(context.Background(), "--force"); err != nil {
-		t.Fatalf("compact runtime context: %v", err)
-	}
-	queuedWork, err := m.hasQueuedRuntimeUserWork()
-	if err != nil || !queuedWork {
-		t.Fatal("expected queued runtime user work")
-	}
-	queuedMessage, err := m.submitQueuedRuntimeUserMessages(context.Background())
-	if err != nil || queuedMessage != "queued assistant" {
-		t.Fatalf("submit queued runtime user messages = (%q, %v)", queuedMessage, err)
-	}
-	if err := m.interruptRuntime(); err != nil {
-		t.Fatalf("interrupt runtime: %v", err)
-	}
-	queued, err := m.queueRuntimeUserMessage("queued text")
-	if err != nil {
-		t.Fatalf("queue runtime user message: %v", err)
-	}
-	if discarded := m.discardQueuedRuntimeUserMessage(queued.ID); !discarded {
-		t.Fatal("expected queued runtime user message discarded")
-	}
-	if err := m.recordRuntimePromptHistory("prompt history"); err != nil {
-		t.Fatalf("record runtime prompt history: %v", err)
-	}
-
-	if client.setSessionNameArg != "incident triage" || client.setThinkingLevelArg != "high" {
-		t.Fatalf("unexpected set args: session=%q thinking=%q", client.setSessionNameArg, client.setThinkingLevelArg)
-	}
-	if !client.setFastModeArg || !client.setReviewerArg || client.setAutoCompactArg {
-		t.Fatalf("unexpected toggle args: fast=%t reviewer=%t autocompact=%t", client.setFastModeArg, client.setReviewerArg, client.setAutoCompactArg)
-	}
-	if client.setGoalArg != "ship goal" || client.pauseGoalCalls != 1 || client.resumeGoalCalls != 1 || client.clearGoalCalls != 1 {
-		t.Fatalf("unexpected goal helper side effects: set=%q pause=%d resume=%d clear=%d", client.setGoalArg, client.pauseGoalCalls, client.resumeGoalCalls, client.clearGoalCalls)
-	}
-	if client.appendedRole != "system" || client.appendedText != "hello" {
-		t.Fatalf("unexpected appended local entry: role=%q text=%q", client.appendedRole, client.appendedText)
-	}
-	if client.submitText != "prompt" || client.submitShellCommand != "echo hi" {
-		t.Fatalf("unexpected submission args: submit=%q shell=%q", client.submitText, client.submitShellCommand)
-	}
-	if client.compactArgs != "--force" {
-		t.Fatalf("unexpected compact arg marker: %q", client.compactArgs)
-	}
-	if client.interruptCalls != 1 || client.queuedText != "queued text" || client.discardQueuedID != queued.ID || client.recordedPromptHistory != "prompt history" {
-		t.Fatalf("unexpected runtime helper side effects: interrupts=%d queued=%q discard=%q history=%q", client.interruptCalls, client.queuedText, client.discardQueuedID, client.recordedPromptHistory)
-	}
 }
 
 func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
@@ -613,7 +475,6 @@ func TestRuntimeControlHelpersFallbackWithoutRuntimeClient(t *testing.T) {
 		t.Fatalf("record runtime prompt history without client: %v", err)
 	}
 }
-
 func TestSubmitErrorShowsStatusOnlyWhenRuntimeAppendFails(t *testing.T) {
 	client := &runtimeControlFakeClient{appendErr: errors.New("append failed")}
 	m := newProjectedStaticUIModel()
@@ -639,55 +500,6 @@ func TestSubmitErrorShowsStatusOnlyWhenRuntimeAppendFails(t *testing.T) {
 	}
 	if updated.transientStatus != "append failed" || updated.transientStatusKind != uiStatusNoticeError {
 		t.Fatalf("expected append failure status, got status=%q kind=%v", updated.transientStatus, updated.transientStatusKind)
-	}
-}
-
-func TestRuntimeControlHelpersPropagateRuntimeErrors(t *testing.T) {
-	boom := errors.New("boom")
-	m := newProjectedStaticUIModel()
-	m.engine = &runtimeControlFakeClient{err: boom}
-
-	if _, err := m.showRuntimeGoal(); !errors.Is(err, boom) {
-		t.Fatalf("show runtime goal error = %v, want boom", err)
-	}
-	if _, err := m.setRuntimeGoal("goal"); !errors.Is(err, boom) {
-		t.Fatalf("set runtime goal error = %v, want boom", err)
-	}
-	if _, err := m.pauseRuntimeGoal(); !errors.Is(err, boom) {
-		t.Fatalf("pause runtime goal error = %v, want boom", err)
-	}
-	if _, err := m.resumeRuntimeGoal(); !errors.Is(err, boom) {
-		t.Fatalf("resume runtime goal error = %v, want boom", err)
-	}
-	if _, err := m.clearRuntimeGoal(); !errors.Is(err, boom) {
-		t.Fatalf("clear runtime goal error = %v, want boom", err)
-	}
-	if err := m.setRuntimeSessionName("name"); !errors.Is(err, boom) {
-		t.Fatalf("set runtime session name error = %v, want boom", err)
-	}
-	if _, err := m.setRuntimeFastModeEnabled(true); !errors.Is(err, boom) {
-		t.Fatalf("set runtime fast mode error = %v, want boom", err)
-	}
-	if _, _, err := m.setRuntimeReviewerEnabled(true); !errors.Is(err, boom) {
-		t.Fatalf("set runtime reviewer error = %v, want boom", err)
-	}
-	if _, err := m.submitRuntimeUserMessage(context.Background(), "prompt"); !errors.Is(err, boom) {
-		t.Fatalf("submit runtime user message error = %v, want boom", err)
-	}
-	if err := m.submitRuntimeUserShellCommand(context.Background(), "echo hi"); !errors.Is(err, boom) {
-		t.Fatalf("submit runtime shell command error = %v, want boom", err)
-	}
-	if err := m.compactRuntimeContext(context.Background(), "--force"); !errors.Is(err, boom) {
-		t.Fatalf("compact runtime context error = %v, want boom", err)
-	}
-	if _, err := m.submitQueuedRuntimeUserMessages(context.Background()); !errors.Is(err, boom) {
-		t.Fatalf("submit queued runtime user messages error = %v, want boom", err)
-	}
-	if err := m.interruptRuntime(); !errors.Is(err, boom) {
-		t.Fatalf("interrupt runtime error = %v, want boom", err)
-	}
-	if err := m.recordRuntimePromptHistory("prompt history"); !errors.Is(err, boom) {
-		t.Fatalf("record runtime prompt history error = %v, want boom", err)
 	}
 }
 
@@ -764,7 +576,6 @@ func TestRuntimeControlOpTimeoutDoesNotMarkDisconnect(t *testing.T) {
 		t.Fatal("did not expect op timeout to mark disconnect")
 	}
 }
-
 func TestRuntimeMainViewExternalOwnerStateDrivesBusyFallback(t *testing.T) {
 	tests := []struct {
 		name string

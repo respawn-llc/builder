@@ -50,20 +50,6 @@ type RuntimeSupport struct {
 	Generated        prompts.GeneratedSyncResult
 }
 
-var syncGenerated = prompts.GeneratedSync
-
-func SetGeneratedSyncForTest(fn func(context.Context, prompts.GeneratedSyncOptions) (prompts.GeneratedSyncResult, error)) func() {
-	previous := syncGenerated
-	if fn == nil {
-		syncGenerated = prompts.GeneratedSync
-	} else {
-		syncGenerated = fn
-	}
-	return func() {
-		syncGenerated = previous
-	}
-}
-
 func ResolveConfig(req Request) (ConfigPlan, error) {
 	now := req.Now
 	if now == nil {
@@ -141,7 +127,7 @@ func BuildGeneratedSupport(ctx context.Context, persistenceRoot string) (prompts
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return syncGenerated(ctx, prompts.GeneratedSyncOptions{ConfigRoot: strings.TrimSpace(persistenceRoot)})
+	return prompts.GeneratedSync(ctx, prompts.GeneratedSyncOptions{ConfigRoot: strings.TrimSpace(persistenceRoot)})
 }
 
 func loadConfig(loadOpts config.LoadOptions, workspaceRoot, openAIBaseURL string, useOpenAIBaseURL bool) (config.App, error) {

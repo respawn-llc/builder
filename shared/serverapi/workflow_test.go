@@ -495,10 +495,18 @@ func TestWorkflowProjectLinkRequestValidation(t *testing.T) {
 	if err := (WorkflowLinkProjectRequest{ProjectID: "project-1", WorkflowID: "workflow-1"}).Validate(); err != nil {
 		t.Fatalf("valid link request rejected: %v", err)
 	}
-	if err := (WorkflowLinkProjectRequest{ProjectID: "project-1", WorkflowID: "workflow-1", DefaultPolicy: WorkflowProjectLinkDefaultIfProjectHasNone}).Validate(); err != nil {
+	if err := (WorkflowLinkProjectRequest{
+		ProjectID:     "project-1",
+		WorkflowID:    "workflow-1",
+		DefaultPolicy: WorkflowProjectLinkDefaultIfProjectHasNone,
+	}).Validate(); err != nil {
 		t.Fatalf("valid link default policy rejected: %v", err)
 	}
-	if err := (WorkflowLinkProjectRequest{ProjectID: "project-1", WorkflowID: "workflow-1", DefaultPolicy: "sometimes"}).Validate(); !isWorkflowFieldError(err, "default_policy", WorkflowRequestErrorInvalidMode) {
+	if err := (WorkflowLinkProjectRequest{
+		ProjectID:     "project-1",
+		WorkflowID:    "workflow-1",
+		DefaultPolicy: "sometimes",
+	}).Validate(); !isWorkflowFieldError(err, "default_policy", WorkflowRequestErrorInvalidMode) {
 		t.Fatalf("invalid link default policy error = %#v, want invalid_mode on default_policy", err)
 	}
 	if err := (WorkflowCreateAndLinkProjectRequest{Name: "Workflow", ProjectID: "project-1", DefaultPolicy: WorkflowProjectLinkDefaultIfProjectHasNone}).Validate(); err != nil {

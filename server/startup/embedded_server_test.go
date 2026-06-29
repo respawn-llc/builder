@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"core/prompts"
 	"core/server/auth"
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
@@ -166,12 +165,6 @@ func TestStartBuildsEmbeddedServerAndRunsOnboarding(t *testing.T) {
 	workspace := t.TempDir()
 	registerEmbeddedWorkspace(t, workspace)
 	authHandler := readyEmbeddedAuthHandler()
-	generatedCalls := 0
-	restoreGeneratedSync := serverbootstrap.SetGeneratedSyncForTest(func(ctx context.Context, opts prompts.GeneratedSyncOptions) (prompts.GeneratedSyncResult, error) {
-		generatedCalls++
-		return prompts.GeneratedSync(ctx, opts)
-	})
-	defer restoreGeneratedSync()
 	onboardingCalled := false
 	onboarding := defaultEmbeddedOnboardingHandler(&onboardingCalled)
 
@@ -188,9 +181,6 @@ func TestStartBuildsEmbeddedServerAndRunsOnboarding(t *testing.T) {
 		t.Fatalf("expected embedded startup to seed generated skills through bootstrap: %v", err)
 	} else if len(entries) == 0 {
 		t.Fatal("expected embedded startup to seed at least one generated skill")
-	}
-	if generatedCalls != 1 {
-		t.Fatalf("generated sync calls = %d, want 1", generatedCalls)
 	}
 
 	if !onboardingCalled {

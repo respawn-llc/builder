@@ -7,7 +7,7 @@ import {
   groupableWorkflowDefinition,
   joinWorkflowDefinition,
   workflowDefinition,
-} from "./workflowEditorGraphMutationFixtures";
+} from "../../test-support/workflow-editor/workflowEditorGraphMutationFixtures";
 import {
   addWorkflowNode,
   addWorkflowNodeToGroup,

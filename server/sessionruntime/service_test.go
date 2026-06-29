@@ -85,7 +85,7 @@ func startRegisteredActiveRun(t *testing.T, fixture sessionRuntimeFixture, reg *
 	if err != nil {
 		t.Fatalf("runtime.New: %v", err)
 	}
-	claim, _, _ := reg.AcquireRuntimeClaim(fixture.store.Meta().SessionID, "")
+	claim, _, _ := reg.AcquireRuntimeClaim(fixture.store.Meta().SessionID, "test-owner")
 	claim.Resolve(engine, nil, nil)
 	t.Cleanup(func() { _ = engine.Close() })
 	done := make(chan error, 1)
@@ -320,9 +320,21 @@ func TestActivateSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 	_, err := svc.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "req-1",
 		SessionID:       "../session-1",
+		OwnerID:         "owner-a",
 	})
 	if !errors.Is(err, serverapi.ErrSessionIDNotSingle) {
 		t.Fatalf("expected path-like session id rejection, got %v", err)
+	}
+}
+
+func TestActivateSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
+	svc := &Service{}
+	_, err := svc.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID: "req-1",
+		SessionID:       "session-1",
+	})
+	if !errors.Is(err, registry.ErrRuntimeOwnerIDRequired) {
+		t.Fatalf("expected runtime owner id rejection, got %v", err)
 	}
 }
 
@@ -331,9 +343,23 @@ func TestReleaseSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 	_, err := svc.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "req-1",
 		SessionID:       "sessions/workspace-a/session-1",
+		OwnerID:         "owner-a",
 	})
 	if !errors.Is(err, serverapi.ErrSessionIDNotSingle) {
 		t.Fatalf("expected path-like session id rejection, got %v", err)
+	}
+}
+
+func TestReleaseSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
+	svc := &Service{}
+	_, err := svc.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+		ClientRequestID: "req-1",
+		SessionID:       "session-1",
+		OnlyIfIdle:      true,
+		DropOwner:       true,
+	})
+	if !errors.Is(err, registry.ErrRuntimeOwnerIDRequired) {
+		t.Fatalf("expected runtime owner id rejection, got %v", err)
 	}
 }
 

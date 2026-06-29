@@ -2,10 +2,13 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"core/server/runtime"
 )
+
+var ErrRuntimeOwnerIDRequired = errors.New("runtime owner id is required")
 
 type RuntimeClaim struct {
 	registry *RuntimeRegistry
@@ -214,6 +217,10 @@ func (c *RuntimeClaim) JoinAsOwner(ownerID string) (ClaimJoinOutcome, error) {
 	if c == nil {
 		return ClaimStale, nil
 	}
+	trimmed := strings.TrimSpace(ownerID)
+	if trimmed == "" {
+		return ClaimFailed, ErrRuntimeOwnerIDRequired
+	}
 	d := c.registry.directory
 	d.mu.RLock()
 	defer d.mu.RUnlock()
@@ -229,17 +236,13 @@ func (c *RuntimeClaim) JoinAsOwner(ownerID string) (ClaimJoinOutcome, error) {
 	if e.buildErr != nil {
 		return ClaimFailed, e.buildErr
 	}
-	if trimmed := strings.TrimSpace(ownerID); trimmed != "" {
-		if e.ownerIDs == nil {
-			e.ownerIDs = make(map[string]struct{})
-		}
-		if _, exists := e.ownerIDs[trimmed]; !exists {
-			e.ownerIDs[trimmed] = struct{}{}
-			e.ownerRefs++
-		}
-		return ClaimJoined, nil
+	if e.ownerIDs == nil {
+		e.ownerIDs = make(map[string]struct{})
 	}
-	e.ownerRefs++
+	if _, exists := e.ownerIDs[trimmed]; !exists {
+		e.ownerIDs[trimmed] = struct{}{}
+		e.ownerRefs++
+	}
 	return ClaimJoined, nil
 }
 
@@ -273,11 +276,14 @@ func (c *RuntimeClaim) BeginRelease(ownerID string, dropOwner bool, onlyIfIdle b
 		return RuntimeReleaseClosing, 0
 	}
 	trimmed := strings.TrimSpace(ownerID)
+	if dropOwner && trimmed == "" {
+		return RuntimeReleaseNotOwner, 0
+	}
 	if trimmed != "" {
 		if _, owns := e.ownerIDs[trimmed]; !owns {
 			return RuntimeReleaseNotOwner, 0
 		}
-	} else if dropOwner && e.ownerRefs > 0 && len(e.ownerIDs) >= e.ownerRefs {
+	} else if e.ownerRefs > 0 {
 		return RuntimeReleaseNotOwner, 0
 	}
 	if !onlyIfIdle {

@@ -22,13 +22,10 @@ import (
 	shelltool "core/server/tools/shell"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
-	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"core/shared/transcriptdiag"
-
-	"github.com/google/uuid"
 )
 
 type Service struct {
@@ -200,6 +197,9 @@ type RuntimeBuilder func(ctx context.Context) (RuntimeBuildResult, error)
 func (s *Service) AcquireRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) error {
 	sessionID = strings.TrimSpace(sessionID)
 	ownerID = strings.TrimSpace(ownerID)
+	if ownerID == "" {
+		return runtimeOwnerIDRequiredError()
+	}
 	if s.runtimes == nil {
 		return runtimeUnavailableErr(sessionID)
 	}
@@ -314,8 +314,12 @@ func (s *Service) beginRecreateRun(sessionID string, exclusive bool) (func(), er
 
 func (s *Service) recreateRuntime(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder, beforeReplace func(*runtime.Engine) error, exclusive bool) (AcquiredRuntimeRelease, error) {
 	sessionID = strings.TrimSpace(sessionID)
+	ownerID = strings.TrimSpace(ownerID)
 	if sessionID == "" {
 		return nil, errors.New("session id is required")
+	}
+	if ownerID == "" {
+		return nil, runtimeOwnerIDRequiredError()
 	}
 	if s.runtimes == nil {
 		return nil, runtimeUnavailableErr(sessionID)
@@ -324,7 +328,7 @@ func (s *Service) recreateRuntime(ctx context.Context, sessionID string, ownerID
 	if err != nil {
 		return nil, err
 	}
-	claim, err := s.runtimes.ClaimFreshRuntime(ctx, sessionID, strings.TrimSpace(ownerID), beforeReplace)
+	claim, err := s.runtimes.ClaimFreshRuntime(ctx, sessionID, ownerID, beforeReplace)
 	if err != nil {
 		releaseRun()
 		return nil, err
@@ -486,6 +490,9 @@ func (s *Service) ReleaseSessionRuntime(ctx context.Context, req serverapi.Sessi
 		return serverapi.SessionRuntimeReleaseResponse{}, err
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
+	if strings.TrimSpace(req.OwnerID) == "" {
+		return serverapi.SessionRuntimeReleaseResponse{}, runtimeOwnerIDRequiredError()
+	}
 	if s.runtimes == nil {
 		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
 	}
@@ -602,18 +609,8 @@ func configSourceLines(src map[string]string) []string {
 	return lines
 }
 
-func NewActivateRequest(clientRequestID string, sessionID string, settings config.Settings, enabledToolIDs []string, source config.SourceReport) serverapi.SessionRuntimeActivateRequest {
-	id := strings.TrimSpace(clientRequestID)
-	if id == "" {
-		id = uuid.NewString()
-	}
-	return serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: id,
-		SessionID:       strings.TrimSpace(sessionID),
-		ActiveSettings:  settings,
-		EnabledToolIDs:  append([]string(nil), enabledToolIDs...),
-		Source:          source,
-	}
+func runtimeOwnerIDRequiredError() error {
+	return errors.Join(registry.ErrRuntimeOwnerIDRequired, errors.New("runtime owner_id is required; upgrade the client or connect through the current Kent gateway"))
 }
 
 var _ servicecontract.SessionRuntimeService = (*Service)(nil)

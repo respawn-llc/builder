@@ -125,7 +125,7 @@ func TestReleaseOnlyIfIdleKeepsActiveRun(t *testing.T) {
 	release := startRegisteredActiveRun(t, fixture, reg)
 	defer release()
 
-	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "", true, false))
+	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), releaseRequest(sessionID, "test-owner", true, false))
 	if err != nil {
 		t.Fatalf("ReleaseSessionRuntime: %v", err)
 	}

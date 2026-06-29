@@ -699,9 +699,8 @@ func TestSubmitDoneWithRuntimeClientDoesNotRequestTranscriptCatchUpWithoutQueued
 func TestSubmitDoneWithQueuedWorkWaitsForInFlightTranscriptCatchUp(t *testing.T) {
 	client := &refreshingRuntimeClient{
 		transcripts: []clientui.TranscriptPage{{
-			SessionID:    "session-1",
-			TotalEntries: 1,
-			Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
+			SessionID: "session-1",
+			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
 		}},
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
@@ -799,7 +798,6 @@ func TestStaleHydrateKeepsQueuedDrainReadyAfterCommittedGapUserFlush(t *testing.
 		StepID:                       "step-1",
 		CommittedTranscriptChanged:   true,
 		TranscriptRevision:           7,
-		CommittedEntryCount:          2,
 		UserMessage:                  "steered message",
 		UserMessageBatchQueueItemIDs: []string{"queue-test-0"},
 		TranscriptEntries:            []clientui.ChatEntry{{Role: "user", Text: "steered message"}},
@@ -821,11 +819,9 @@ func TestStaleHydrateKeepsQueuedDrainReadyAfterCommittedGapUserFlush(t *testing.
 		token: 7,
 		req:   clientui.TranscriptPageRequest{},
 		transcript: clientui.TranscriptPage{
-			SessionID:    "session-1",
-			Revision:     6,
-			Offset:       0,
-			TotalEntries: 1,
-			Entries:      []clientui.ChatEntry{{Role: "user", Text: "seed"}},
+			SessionID: "session-1",
+			Revision:  6,
+			Entries:   []clientui.ChatEntry{{Role: "user", Text: "seed"}},
 		},
 	})
 	updated := next.(*uiModel)
@@ -846,9 +842,8 @@ func TestStaleHydrateKeepsQueuedDrainReadyAfterCommittedGapUserFlush(t *testing.
 func TestHydrationCompletionDoesNotRedrainQueuedTurnAfterManualDrainStarts(t *testing.T) {
 	client := &refreshingRuntimeClient{
 		transcripts: []clientui.TranscriptPage{{
-			SessionID:    "session-1",
-			TotalEntries: 1,
-			Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
+			SessionID: "session-1",
+			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
 		}},
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())

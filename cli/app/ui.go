@@ -294,8 +294,8 @@ func (m *uiModel) forwardToView(msg tea.Msg) {
 		m.primeDetailTranscriptFromCurrentTail()
 		page := m.detailTranscript.page()
 		nextDetail, _ := m.view.Update(tui.SetConversationMsg{
-			BaseOffset:   page.Offset,
-			TotalEntries: page.TotalEntries,
+			BaseOffset:   m.detailTranscript.offset,
+			TotalEntries: m.detailTranscript.totalEntries,
 			Entries:      transcriptEntriesFromPage(page),
 			Ongoing:      page.Streaming,
 			OngoingError: page.StreamingError,

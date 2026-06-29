@@ -169,7 +169,6 @@ func TestGoalSetRendersCommittedGoalFeedbackBeforeLaterRuntimeEvents(t *testing.
 		Kind:                       clientui.EventConversationUpdated,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         1,
-		CommittedEntryCount:        1,
 		CommittedEntryStart:        0,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries: []clientui.ChatEntry{{

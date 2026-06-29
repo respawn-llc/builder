@@ -14,10 +14,7 @@ import (
 func (a uiRuntimeAdapter) applyProjectedChatSnapshot(snapshot clientui.ChatSnapshot) tea.Cmd {
 	page := a.model.runtimeTranscript()
 	page.Entries = cloneTranscriptEntries(snapshot.Entries)
-	page.TotalEntries = len(page.Entries)
-	page.Offset = 0
-	page.NextOffset = 0
-	page.HasMore = false
+	page.HasMoreAbove = false
 	page.Streaming = snapshot.Streaming
 	page.StreamingError = snapshot.StreamingError
 	return a.applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, page, clientui.TranscriptRecoveryCauseNone)
@@ -43,6 +40,9 @@ func (a uiRuntimeAdapter) applyProjectedSessionMetadata(view clientui.RuntimeSes
 	targetCmd := a.applyProjectedExecutionTarget(view.ExecutionTarget)
 	if view.Transcript.Revision > m.transcriptRevision {
 		m.transcriptRevision = view.Transcript.Revision
+	}
+	if view.Transcript.CommittedEntryCount > m.transcriptTotalEntries {
+		m.transcriptTotalEntries = view.Transcript.CommittedEntryCount
 	}
 	titleCmd := tea.Cmd(nil)
 	if previousWindowTitle != sessionTitle(m.sessionName) {
@@ -137,14 +137,15 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 	}
 	m.detailTranscript.lastRequest = pageReq
 	if isRecentTailTranscriptRequest(pageReq) && m.view.Mode() != tui.ModeDetail {
+		m.detailTranscript.setKnownBounds(m.transcriptBaseOffset, m.transcriptTotalEntries)
 		m.detailTranscript.syncTail(page)
 		if m.view.Mode() != tui.ModeDetail {
 			if !reduction.preserveLiveReasoning {
 				m.forwardToView(tui.ClearStreamingReasoningMsg{})
 			}
 			m.forwardToView(tui.SetConversationMsg{
-				BaseOffset:   page.Offset,
-				TotalEntries: page.TotalEntries,
+				BaseOffset:   m.transcriptBaseOffset,
+				TotalEntries: m.transcriptTotalEntries,
 				Entries:      entries,
 				Ongoing:      page.Streaming,
 				OngoingError: page.StreamingError,
@@ -168,6 +169,7 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 			} else if pageReq.Cursor > 0 {
 				m.detailTranscript.prependCursorPage(page)
 			} else {
+				m.detailTranscript.setKnownBounds(m.transcriptBaseOffset, m.transcriptTotalEntries)
 				m.detailTranscript.apply(page)
 			}
 		}
@@ -185,8 +187,8 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 				m.forwardToView(tui.ClearStreamingReasoningMsg{})
 			}
 			m.forwardToView(tui.SetConversationMsg{
-				BaseOffset:   detailPage.Offset,
-				TotalEntries: detailPage.TotalEntries,
+				BaseOffset:   m.detailTranscript.offset,
+				TotalEntries: m.detailTranscript.totalEntries,
 				Entries:      transcriptEntriesFromPage(detailPage),
 				Ongoing:      detailPage.Streaming,
 				OngoingError: detailPage.StreamingError,
@@ -230,9 +232,22 @@ func (a uiRuntimeAdapter) applyAuthoritativeRecentTailPage(page clientui.Transcr
 	if m == nil {
 		return
 	}
-	m.transcriptBaseOffset = page.Offset
+	totalEntries := max(m.transcriptTotalEntries, len(entries))
+	if !page.HasMoreAbove {
+		totalEntries = len(entries)
+	}
+	baseOffset := 0
+	if page.HasMoreBelow && m.transcriptBaseOffset > 0 && m.transcriptBaseOffset+len(entries) <= totalEntries {
+		baseOffset = m.transcriptBaseOffset
+	} else if page.HasMoreAbove {
+		baseOffset = totalEntries - len(entries)
+		if baseOffset < 0 {
+			baseOffset = 0
+		}
+	}
+	m.transcriptBaseOffset = baseOffset
 	m.transcriptEntries = append(m.transcriptEntries[:0], entries...)
-	m.transcriptTotalEntries = max(page.TotalEntries, page.Offset+len(entries))
+	m.transcriptTotalEntries = max(totalEntries, baseOffset+len(entries))
 	m.transcriptRevision = max(m.transcriptRevision, page.Revision)
 	m.transcriptLiveDirty = false
 	if !preserveLiveReasoning {

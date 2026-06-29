@@ -17,47 +17,9 @@ type SessionSnapshotSource interface {
 }
 
 type SessionSnapshot interface {
-	Capabilities() SessionSnapshotCapabilities
 	MainView(ctx context.Context) (clientui.RuntimeMainView, error)
 	TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error)
 	CommittedTranscriptSuffix(ctx context.Context, req clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error)
-}
-
-type SessionSnapshotCapabilities struct {
-	TranscriptMetadata     bool
-	MainViewState          bool
-	RunView                bool
-	TranscriptPages        bool
-	CommittedSuffixes      bool
-	Freshness              bool
-	ExecutionTarget        bool
-	UpdateStatus           bool
-	CacheWarningVisibility bool
-	CompactionProjections  bool
-	CursorPagination       bool
-}
-
-func requiredSessionSnapshotCapabilities() SessionSnapshotCapabilities {
-	return SessionSnapshotCapabilities{
-		TranscriptMetadata:     true,
-		MainViewState:          true,
-		RunView:                true,
-		TranscriptPages:        true,
-		CommittedSuffixes:      true,
-		Freshness:              true,
-		ExecutionTarget:        true,
-		UpdateStatus:           true,
-		CacheWarningVisibility: true,
-		CompactionProjections:  true,
-		CursorPagination:       true,
-	}
-}
-
-func coreSessionSnapshotCapabilities() SessionSnapshotCapabilities {
-	capabilities := requiredSessionSnapshotCapabilities()
-	capabilities.ExecutionTarget = false
-	capabilities.UpdateStatus = false
-	return capabilities
 }
 
 type enrichedSessionSnapshotSource struct {
@@ -99,13 +61,6 @@ type enrichedSessionSnapshot struct {
 	base    SessionSnapshot
 	targets ExecutionTargetResolver
 	updates func() UpdateStatusProvider
-}
-
-func (s enrichedSessionSnapshot) Capabilities() SessionSnapshotCapabilities {
-	capabilities := s.base.Capabilities()
-	capabilities.ExecutionTarget = true
-	capabilities.UpdateStatus = true
-	return capabilities
 }
 
 func (s enrichedSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
@@ -192,10 +147,6 @@ type liveRuntimeSessionSnapshot struct {
 	external clientui.ExternalRuntimeStatus
 }
 
-func (s liveRuntimeSessionSnapshot) Capabilities() SessionSnapshotCapabilities {
-	return coreSessionSnapshotCapabilities()
-}
-
 func (s liveRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
 	view := runtimeview.MainViewFromRuntime(s.engine)
 	if s.external.State != "" {
@@ -267,10 +218,6 @@ func (s *dormantSessionSnapshotSource) cacheWarningModeOrDefault() config.CacheW
 type dormantSessionSnapshot struct {
 	source *dormantSessionSnapshotSource
 	store  *session.Store
-}
-
-func (s dormantSessionSnapshot) Capabilities() SessionSnapshotCapabilities {
-	return coreSessionSnapshotCapabilities()
 }
 
 func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {

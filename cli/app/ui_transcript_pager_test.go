@@ -9,7 +9,8 @@ import (
 
 func TestDetailTranscriptWindowMergeExpandsOverlappingPages(t *testing.T) {
 	window := uiDetailTranscriptWindow{}
-	window.replace(testTranscriptPage(100, 3, 110))
+	replaceTestTranscriptPage(&window, 100, 3, 110)
+	window.setKnownBounds(103, 110)
 	window.merge(testTranscriptPage(103, 2, 110))
 
 	if !window.loaded {
@@ -110,6 +111,7 @@ func TestDetailTranscriptWindowPageRequests(t *testing.T) {
 	page.HasMoreAbove = true
 	page.NewerCursor = 9001
 	page.HasMoreBelow = true
+	window.setKnownBounds(250, 800)
 	window.replace(page)
 
 	before, ok := window.pageBefore()
@@ -229,8 +231,17 @@ func TestDetailTranscriptWindowResetClearsState(t *testing.T) {
 	}
 }
 
+func replaceTestTranscriptPage(window *uiDetailTranscriptWindow, offset, count, total int) {
+	window.setKnownBounds(offset, total)
+	window.replace(testTranscriptPage(offset, count, total))
+}
+
 func testTranscriptPage(offset, count, total int) clientui.TranscriptPage {
-	page := clientui.TranscriptPage{SessionID: "session-1", Offset: offset, TotalEntries: total}
+	page := clientui.TranscriptPage{
+		SessionID:    "session-1",
+		HasMoreAbove: offset > 0,
+		HasMoreBelow: offset+count < total,
+	}
 	for i := 0; i < count; i++ {
 		index := offset + i
 		page.Entries = append(page.Entries, clientui.ChatEntry{Role: "assistant", Text: fmt.Sprintf("line %03d", index)})

@@ -15,10 +15,8 @@ func TestReduceRuntimeTranscriptPageRejectsOlderTailRevision(t *testing.T) {
 		effectiveCommittedCount: 1,
 		viewMode:                tui.ModeOngoing,
 	}), clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "older"}},
+		Revision: 10,
+		Entries:  []clientui.ChatEntry{{Role: "assistant", Text: "older"}},
 	}, clientui.TranscriptRecoveryCauseNone)
 
 	if reduction.decision != runtimeTranscriptPageDecisionReject {
@@ -38,10 +36,8 @@ func TestReduceRuntimeTranscriptPageRejectsEqualRevisionTailPageThatClearsLiveOn
 		viewMode:                tui.ModeOngoing,
 		liveOngoing:             "working",
 	}), clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		Revision: 10,
+		Entries:  []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}, clientui.TranscriptRecoveryCauseNone)
 
 	if reduction.decision != runtimeTranscriptPageDecisionReject {
@@ -62,10 +58,8 @@ func TestReduceRuntimeTranscriptPagePreservesLiveOngoingForEqualRevisionDetailPa
 		liveOngoing:             "working",
 		liveOngoingError:        "boom",
 	}), clientui.TranscriptPageRequest{Cursor: 4096}, clientui.TranscriptPage{
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		Revision: 10,
+		Entries:  []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}, clientui.TranscriptRecoveryCauseNone)
 
 	if reduction.decision != runtimeTranscriptPageDecisionApply {
@@ -87,10 +81,8 @@ func TestReduceRuntimeTranscriptPageDefaultDetailHydrationUsesDetailMerge(t *tes
 		effectiveCommittedCount: 1,
 		viewMode:                tui.ModeDetail,
 	}), clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		Revision: 10,
+		Entries:  []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}, clientui.TranscriptRecoveryCauseNone)
 
 	if reduction.decision != runtimeTranscriptPageDecisionApply {
@@ -113,9 +105,7 @@ func TestReduceRuntimeTranscriptPageAcceptsEqualRevisionTailCorrection(t *testin
 		viewMode:                tui.ModeOngoing,
 		transcriptLiveDirty:     true,
 	}), clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-		Revision:     10,
-		Offset:       0,
-		TotalEntries: 3,
+		Revision: 10,
 		Entries: []clientui.ChatEntry{
 			{Role: "user", Text: "prompt"},
 			{Role: "tool_call", Text: "pwd", ToolCallID: "call-1"},
