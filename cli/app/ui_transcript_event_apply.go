@@ -89,6 +89,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	for _, entry := range entries {
 		convertedEntries = append(convertedEntries, transcriptEntryFromProjectedChatEntry(entry, reduction.projectedTransient, reduction.projectedCommitted))
 	}
+	nativeAssistantStreamText := m.view.OngoingStreamingText()
 	committedAppendClearsAssistantStream := shouldClearAssistantStreamForCommittedTranscriptEntries(convertedEntries, m.view.OngoingStreamingText())
 	nativeAssistantStreamWasIncomplete := m.nativeAssistantStreamIncomplete
 	nativeAssistantStreamActive := m.nativeSurfaceConfigured() &&
@@ -158,7 +159,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	}
 	if (plan.mode == projectedTranscriptEntryPlanAppend || plan.mode == projectedTranscriptEntryPlanReplace) && nativeSurfaceConfigured {
 		currentNativeStableProjection := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
-		if err := m.deliverNativeStableProjectionChange(previousNativeStableProjection, currentNativeStableProjection, nativeStableReady, nativeAssistantStreamActive, nativeAssistantStreamWasIncomplete); err != nil {
+		if err := m.deliverNativeStableProjectionChange(previousNativeStableProjection, currentNativeStableProjection, nativeStableReady, nativeAssistantStreamActive, nativeAssistantStreamWasIncomplete, nativeAssistantStreamText); err != nil {
 			return m.nativeSurfaceErrorCmd("steer committed transcript", err), true, false
 		}
 	}

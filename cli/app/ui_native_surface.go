@@ -378,6 +378,25 @@ func (m *uiModel) steerNativeStableProjectionChange(operation string, previous t
 	return m.nativeStableProjectionInvariantError(operation, previous, current)
 }
 
+func (m *uiModel) steerNativeStableRuntimeProjectionChange(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+	if m == nil || m.nativeSurface == nil || !m.nativeSurface.initialized() {
+		return nil
+	}
+	if current.Empty() {
+		return nil
+	}
+	if previous.Empty() {
+		return m.steerNativeProjectionLines(current.Lines(tui.TranscriptDivider))
+	}
+	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
+		return m.steerNativeProjectionLines(current.LinesFromBlock(len(previous.Blocks), tui.TranscriptDivider))
+	}
+	if overlap := current.SharedSuffixPrefixBlockCount(previous); overlap > 0 {
+		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
+	}
+	return m.nativeStableProjectionRecoverableError(operation)
+}
+
 func (m *uiModel) steerNativeStableAppendFromBlock(current tui.TranscriptProjection, startBlock int) error {
 	if m == nil || m.nativeSurface == nil || !m.nativeSurface.initialized() {
 		return nil
@@ -401,13 +420,42 @@ func nativeStableProjectionNeedsDelivery(previous tui.TranscriptProjection, curr
 	return len(current.Blocks) > len(previous.Blocks)
 }
 
+const nativeStableProjectionNonContiguousReason = "native stable append is not contiguous with current transcript projection"
+
+func (m *uiModel) nativeStableProjectionRecoverableError(operation string) error {
+	return errors.New(nativeStableProjectionNonContiguousReason)
+}
+
+func (m *uiModel) nativeAssistantStreamMatchesProjectionBlock(streamText string, block tui.TranscriptProjectionBlock) bool {
+	if streamText == "" {
+		return false
+	}
+	projection := m.nativeCommittedProjectionForEntries([]tui.TranscriptEntry{{
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      streamText,
+		Committed: true,
+	}})
+	if len(projection.Blocks) != 1 {
+		return false
+	}
+	streamBlock := projection.Blocks[0]
+	if streamBlock.Role != block.Role || streamBlock.DividerGroup != block.DividerGroup || len(streamBlock.Lines) != len(block.Lines) {
+		return false
+	}
+	for idx := range streamBlock.Lines {
+		if streamBlock.Lines[idx] != block.Lines[idx] {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *uiModel) nativeStableProjectionInvariantError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
-	const reason = "native stable append is not contiguous with current transcript projection"
 	if m != nil && m.debugMode {
 		panic(fmt.Sprintf(
 			"Native scrollback invariant violation\noperation=%s\nreason=%s\nprevious_blocks=%d\ncurrent_blocks=%d\nprevious_empty=%t\ncurrent_empty=%t\nstack:\n%s",
 			operation,
-			reason,
+			nativeStableProjectionNonContiguousReason,
 			len(previous.Blocks),
 			len(current.Blocks),
 			previous.Empty(),
@@ -415,7 +463,7 @@ func (m *uiModel) nativeStableProjectionInvariantError(operation string, previou
 			debug.Stack(),
 		))
 	}
-	return errors.New(reason)
+	return errors.New(nativeStableProjectionNonContiguousReason)
 }
 
 func (m *uiModel) steerNativeProjectionLines(lines []tui.TranscriptProjectionLine) error {

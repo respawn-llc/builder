@@ -77,6 +77,10 @@ Immediate normal-buffer terminal write failures surface synchronously to the cal
 
 Contract and invariant violations fail fast with diagnostic detail. Diagnostics include the attempted operation, terminal geometry, calculated visual width when relevant, quoted payload or frame content, raw payload bytes when relevant, and stack trace.
 
+Runtime transcript reconciliation can produce an authoritative committed transcript replacement that is not appendable to already-emitted stable scrollback. The native surface must not append rewritten content, clear/replay history, or panic for that runtime recovery input; it surfaces a native-surface error and disables native ongoing output so the standard renderer can continue from authoritative state. Direct native stable append calls that violate the append-only contract remain invariant violations.
+
+When an authoritative committed projection arrives while a native assistant stream is active, the surface may finalize the active stream and skip the corresponding committed block only if that block's rendered rows match the active stream source. If the committed block differs from the mutable stream, the surface must not finalize or skip it; it treats the projection as non-appendable recovery and disables native output.
+
 The stable-line append intent accepts exactly one visual terminal line. Visual width is ANSI-aware display cell width according to the active terminal width. If the input occupies more than one terminal line or contains embedded carriage return or line feed, it is an invariant violation.
 
 Live-area content must be non-empty, contain no embedded carriage return or line feed inside a submitted line, fit within terminal height, and have every line fit within terminal-width ANSI-aware display cells. Native cursor row and column must fit inside the submitted live frame.

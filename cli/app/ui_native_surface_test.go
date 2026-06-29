@@ -1508,7 +1508,7 @@ func TestNativeStableProjectionChangeAppendsAfterOverlappingRecentTail(t *testin
 	previous := nativeStableProjectionForTest("old-a", "old-b")
 	current := nativeStableProjectionForTest("old-b", "new-c", "new-d")
 	exitMainThread := m.enterUIMainThread("native stable overlap test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false)
+	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("overlapping projection delivery returned error: %v", err)
@@ -1538,9 +1538,18 @@ func TestNativeStableProjectionChangeSkipsStreamedBlockAfterOverlappingRecentTai
 	streamExitMainThread()
 
 	previous := nativeStableProjectionForTest("old-a", "old-b")
-	current := nativeStableProjectionForTest("old-b", "streamed-answer", "after-stream")
+	streamProjection := m.nativeCommittedProjectionForEntries([]tui.TranscriptEntry{{
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      "streamed-answer",
+		Committed: true,
+	}})
+	current := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		previous.Blocks[1],
+		streamProjection.Blocks[0],
+		{DividerGroup: "test", Lines: []string{"after-stream"}},
+	}}
 	exitMainThread := m.enterUIMainThread("native stable overlap active stream test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false)
+	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "streamed-answer")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("overlapping active-stream projection delivery returned error: %v", err)
@@ -1624,7 +1633,7 @@ func TestNativeStableReplaceRejectsNonAppendProjectionRewrite(t *testing.T) {
 	}
 }
 
-func TestNativeStableReplacePanicsOnNonAppendProjectionRewriteInDebug(t *testing.T) {
+func TestNativeStableReplaceDisablesNativeSurfaceOnNonAppendProjectionRewriteInDebug(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
 	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
@@ -1635,30 +1644,110 @@ func TestNativeStableReplacePanicsOnNonAppendProjectionRewriteInDebug(t *testing
 		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
 	}
 
-	panicText := captureNativeSurfacePanicText(t, func() {
-		result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
-			Kind:                       clientui.EventConversationUpdated,
-			CommittedTranscriptChanged: true,
-			TranscriptRevision:         2,
-			CommittedEntryCount:        2,
-			CommittedEntryStart:        0,
-			CommittedEntryStartSet:     true,
-			TranscriptEntries:          []clientui.ChatEntry{{Role: "user", Text: "rewritten prompt"}},
-		})
-		_ = collectCmdMessages(t, result.cmd)
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventConversationUpdated,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        2,
+		CommittedEntryStart:        0,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "user", Text: "rewritten prompt"}},
 	})
+	_ = collectCmdMessages(t, result.cmd)
 
-	if !strings.Contains(panicText, "Native scrollback invariant violation") {
-		t.Fatalf("panic text missing invariant header:\n%s", panicText)
+	if m.nativeLiveAreaError == nil {
+		t.Fatal("expected native stable replacement rewrite to surface an error")
 	}
-	if !strings.Contains(panicText, "operation=deliverNativeStableProjectionChange") {
-		t.Fatalf("panic text missing operation:\n%s", panicText)
+	if !strings.Contains(m.nativeLiveAreaError.Error(), "native stable append is not contiguous") {
+		t.Fatalf("native stable replacement error = %v, want non-contiguous append error", m.nativeLiveAreaError)
 	}
-	if !strings.Contains(panicText, "native stable append is not contiguous") {
-		t.Fatalf("panic text missing reason:\n%s", panicText)
+	if m.nativeSurface != nil {
+		t.Fatal("expected native stable replacement rewrite to disable native surface")
 	}
-	if !strings.Contains(panicText, "stack:") {
-		t.Fatalf("panic text missing stack:\n%s", panicText)
+}
+
+func TestNativeStableReplaceWithActiveStreamDoesNotFinalizeNonAppendTail(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "original prompt", Committed: true},
+		{Role: tui.TranscriptRoleAssistant, Text: "original answer", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "mutable stream tail",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, streamed.cmd)
+	if m.nativeSurface == nil || !m.nativeSurface.AssistantStreaming() {
+		t.Fatal("expected native assistant stream to be active before non-append replacement")
+	}
+	previous := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
+	current := nativeStableProjectionForTest("rewritten prompt", "original answer")
+
+	exitMainThread := m.enterUIMainThread("native active stream non-append replacement test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "mutable stream tail")
+	exitMainThread()
+	if err == nil {
+		t.Fatal("expected native stable replacement rewrite to return an error")
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "mutable stream tail") {
+		t.Fatalf("non-append replacement finalized mutable stream tail before disabling native: %q", plain)
+	}
+	if strings.Contains(plain, "rewritten prompt") {
+		t.Fatalf("non-append replacement wrote rewritten stable content before disabling native: %q", plain)
+	}
+}
+
+func TestNativeStableAppendWithActiveStreamDoesNotSkipMismatchedCommittedBlock(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "draft answer",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, streamed.cmd)
+	if m.nativeSurface == nil || !m.nativeSurface.AssistantStreaming() {
+		t.Fatal("expected native assistant stream to be active before authoritative append")
+	}
+	previous := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
+	entries := append([]tui.TranscriptEntry(nil), m.transcriptEntries...)
+	entries = append(entries, tui.TranscriptEntry{
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      "corrected answer",
+		Committed: true,
+	})
+	current := m.nativeCommittedProjectionForEntries(entries)
+
+	exitMainThread := m.enterUIMainThread("native active stream mismatched append test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "draft answer")
+	exitMainThread()
+	if err == nil {
+		t.Fatal("expected mismatched active stream append to return an error")
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "draft answer") {
+		t.Fatalf("mismatched committed append finalized draft stream tail before disabling native: %q", plain)
+	}
+	if strings.Contains(plain, "corrected answer") {
+		t.Fatalf("mismatched committed append skipped/wrote authoritative block through native stable path: %q", plain)
 	}
 }
 
