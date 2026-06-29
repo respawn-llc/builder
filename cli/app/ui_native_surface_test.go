@@ -1692,6 +1692,76 @@ func TestNativeStableProjectionChangeAppendsAuthoritativeTailAfterLocalStatus(t 
 	}
 }
 
+func TestNativeStableProjectionChangeIgnoresAuthoritativePrefixBehindLocalPatchSuccess(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	current := nativeStableProjectionForTest("old-a", "commentary")
+	current.Blocks[1].Role = tui.RenderIntentAssistantCommentary
+	current.Blocks[1].DividerGroup = string(tui.RenderIntentAssistant)
+	previous := current.Clone()
+	previous.Blocks = append(previous.Blocks, tui.TranscriptProjectionBlock{
+		Role:         tui.RenderIntentToolPatchSuccess,
+		DividerGroup: string(tui.RenderIntentTool),
+		Lines:        []string{"⇄ ./cli/tui/transcript_projection.go +10"},
+	})
+	exitMainThread := m.enterUIMainThread("native stable local patch prefix test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("local patch authoritative-prefix delivery returned error: %v", err)
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("authoritative prefix behind local patch success wrote native bytes: %q", got)
+	}
+}
+
+func TestNativeStableProjectionChangeAppendsInsertedLocalStatusAfterEmittedRows(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := nativeStableProjectionForTest("assistant answer", "user crash report", "commentary")
+	previous.Blocks[0].Role = tui.RenderIntentAssistant
+	previous.Blocks[0].DividerGroup = string(tui.RenderIntentAssistant)
+	previous.Blocks[1].Role = tui.RenderIntentUser
+	previous.Blocks[1].DividerGroup = string(tui.RenderIntentUser)
+	previous.Blocks[2].Role = tui.RenderIntentAssistantCommentary
+	previous.Blocks[2].DividerGroup = string(tui.RenderIntentAssistant)
+	current := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		previous.Blocks[0],
+		{
+			Role:         tui.RenderIntentReviewerStatus,
+			DividerGroup: string(tui.RenderIntentReviewerStatus),
+			Lines:        []string{"§ Supervisor ran: 2 suggestions, applied."},
+		},
+		previous.Blocks[1],
+		previous.Blocks[2],
+	}}
+
+	exitMainThread := m.enterUIMainThread("native stable inserted local status test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("inserted local-status projection delivery returned error: %v", err)
+	}
+
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "user crash report") || strings.Contains(plain, "commentary") {
+		t.Fatalf("inserted local-status delivery replayed already emitted blocks, got %q", plain)
+	}
+	if !strings.Contains(plain, "Supervisor ran") {
+		t.Fatalf("inserted local-status delivery skipped local status, got %q", plain)
+	}
+}
+
 func TestNativeStableProjectionChangeSkipsStreamedBlockAfterOverlappingRecentTail(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
