@@ -1895,6 +1895,69 @@ func TestNativeStableProjectionChangeRejectsInsertedLocalStatusBeforeEmittedRows
 	}
 }
 
+func TestNativeStableProjectionChangeAppendsInsertedSystemNoticeAtPhysicalTail(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := nativeStableProjectionForTest("shell command", "poll result", "commentary")
+	previous.Blocks[0].Role = tui.RenderIntentToolShellSuccess
+	previous.Blocks[0].DividerGroup = string(tui.RenderIntentTool)
+	previous.Blocks[1].Role = tui.RenderIntentToolShellSuccess
+	previous.Blocks[1].DividerGroup = string(tui.RenderIntentTool)
+	previous.Blocks[2].Role = tui.RenderIntentAssistantCommentary
+	previous.Blocks[2].DividerGroup = string(tui.RenderIntentAssistant)
+	systemNotice := tui.TranscriptProjectionBlock{
+		Role:         tui.RenderIntentSystem,
+		DividerGroup: string(tui.RenderIntentSystem),
+		Lines:        []string{"Background shell 7645 completed (exit 0)"},
+	}
+	current := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		previous.Blocks[0],
+		previous.Blocks[1],
+		systemNotice,
+		previous.Blocks[2],
+	}}
+
+	exitMainThread := m.enterUIMainThread("native stable inserted system notice test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("inserted system notice delivery returned error: %v", err)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "shell command") || strings.Contains(plain, "poll result") || strings.Contains(plain, "commentary") {
+		t.Fatalf("inserted system notice delivery replayed already emitted blocks, got %q", plain)
+	}
+	if !strings.Contains(plain, "Background shell 7645 completed") {
+		t.Fatalf("inserted system notice delivery skipped local notice, got %q", plain)
+	}
+
+	out.Reset()
+	next := current.Clone()
+	next.Blocks = append(next.Blocks, tui.TranscriptProjectionBlock{
+		Role:         tui.RenderIntentUser,
+		DividerGroup: string(tui.RenderIntentUser),
+		Lines:        []string{"next prompt"},
+	})
+	exitMainThread = m.enterUIMainThread("native stable after inserted system notice test")
+	err = m.deliverNativeStableProjectionChange(m.nativeDeliveredStableProjection, next, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("post-system-notice delivery returned error: %v", err)
+	}
+	plain = stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "Background shell 7645 completed") || strings.Contains(plain, "commentary") {
+		t.Fatalf("post-system-notice delivery replayed reordered local or old row, got %q", plain)
+	}
+	if !strings.Contains(plain, "next prompt") {
+		t.Fatalf("post-system-notice delivery skipped new prompt, got %q", plain)
+	}
+}
+
 func TestNativeStableProjectionChangeSkipsStreamedBlockAfterOverlappingRecentTail(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)

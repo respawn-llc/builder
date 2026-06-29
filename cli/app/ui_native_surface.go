@@ -611,15 +611,46 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 			matchedPrevious++
 			continue
 		}
+		if matchedPrevious < len(previous.Blocks) && nativeStableCurrentLocalAppendOnlyBlock(block) {
+			if m.nativeStableProjectionContainsBlock(previous.Blocks[matchedPrevious:], block) {
+				continue
+			}
+			blockIndexes = append(blockIndexes, idx)
+			continue
+		}
 		if matchedPrevious < len(previous.Blocks) {
-			return nil, false
+			matchedPrevious = m.nativeStableSkipDeliveredLocalBlocksPresentInCurrent(previous.Blocks, current.Blocks, matchedPrevious)
+			if matchedPrevious < len(previous.Blocks) {
+				return nil, false
+			}
 		}
 		blockIndexes = append(blockIndexes, idx)
 	}
+	matchedPrevious = m.nativeStableSkipDeliveredLocalBlocksPresentInCurrent(previous.Blocks, current.Blocks, matchedPrevious)
 	if matchedPrevious != len(previous.Blocks) {
 		return nil, false
 	}
 	return blockIndexes, true
+}
+
+func (m *uiModel) nativeStableSkipDeliveredLocalBlocksPresentInCurrent(previous []tui.TranscriptProjectionBlock, current []tui.TranscriptProjectionBlock, start int) int {
+	for start < len(previous) {
+		block := previous[start]
+		if !nativeStablePreviouslyLocalAppendOnlyBlock(block) || !m.nativeStableProjectionContainsBlock(current, block) {
+			return start
+		}
+		start++
+	}
+	return start
+}
+
+func (m *uiModel) nativeStableProjectionContainsBlock(blocks []tui.TranscriptProjectionBlock, target tui.TranscriptProjectionBlock) bool {
+	for _, block := range blocks {
+		if m.nativeStableProjectionBlocksEqual(block, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func nativeStableAppendLinesForBlockIndexes(current tui.TranscriptProjection, previous tui.TranscriptProjection, blockIndexes []int) []tui.TranscriptProjectionLine {
@@ -652,13 +683,23 @@ func nativeStableAppendLinesForBlockIndexes(current tui.TranscriptProjection, pr
 
 func nativeStablePreviouslyLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
 	switch block.Role {
-	case tui.RenderIntentToolShellSuccess,
+	case tui.RenderIntentSystem,
+		tui.RenderIntentToolShellSuccess,
 		tui.RenderIntentToolShellError,
 		tui.RenderIntentToolPatchSuccess,
 		tui.RenderIntentToolPatchError:
 		return true
 	default:
 		return false
+	}
+}
+
+func nativeStableCurrentLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
+	switch block.Role {
+	case tui.RenderIntentSystem:
+		return true
+	default:
+		return nativeStablePreviouslyLocalAppendOnlyBlock(block)
 	}
 }
 
