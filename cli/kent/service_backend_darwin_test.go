@@ -75,20 +75,36 @@ func TestLaunchdStartBootstrapsUnloadedServiceWithoutKickstart(t *testing.T) {
 
 func TestLaunchdReloadWaitsForBootoutEvictionBeforeBootstrap(t *testing.T) {
 	withFastLaunchdShutdownPolling(t)
+	bootstrapped := false
+	oldServerStopped := false
+	server := newLaunchdHealthTestServer(t, func() (string, int) {
+		if bootstrapped {
+			return `{"status":"ok","pid":77}`, http.StatusOK
+		}
+		if oldServerStopped {
+			return "stopped", http.StatusServiceUnavailable
+		}
+		return `{"status":"ok","pid":42}`, http.StatusOK
+	})
 	spec := newLaunchdTestSpec(t)
+	spec.Endpoint = server.URL
 	path := writeLaunchdTestPlist(t, spec)
 	postBootoutPrints := 0
 	var calls *launchdCommandRecorder
 	calls = captureLaunchdServiceCommands(t, func(_ context.Context, name string, args ...string) (serviceCommandResult, error) {
 		switch launchdCommandKey(name, args...) {
 		case "launchctl\x00print\x00" + launchdServiceTarget():
+			if bootstrapped {
+				return serviceCommandResult{Stdout: launchdPrintOutput(77, serviceCommand(spec))}, nil
+			}
 			if calls.count("bootout") == 0 {
-				return serviceCommandResult{Stdout: "state = running\npid = 42\n"}, nil
+				return serviceCommandResult{Stdout: launchdPrintOutput(42, serviceCommand(spec))}, nil
 			}
 			postBootoutPrints++
 			if postBootoutPrints <= 2 {
-				return serviceCommandResult{Stdout: "state = running\npid = 42\n"}, nil
+				return serviceCommandResult{Stdout: launchdPrintOutput(42, serviceCommand(spec))}, nil
 			}
+			oldServerStopped = true
 			return launchdMissingResult(name, args)
 		case "launchctl\x00bootout\x00" + launchdServiceTarget():
 			return serviceCommandResult{}, nil
@@ -96,6 +112,7 @@ func TestLaunchdReloadWaitsForBootoutEvictionBeforeBootstrap(t *testing.T) {
 			if postBootoutPrints <= 2 {
 				t.Fatalf("bootstrap ran before launchd stopped reporting the old label loaded")
 			}
+			bootstrapped = true
 			return serviceCommandResult{}, nil
 		default:
 			return serviceCommandResult{}, errors.New("unexpected command")
@@ -135,7 +152,7 @@ func TestLaunchdReloadStopsUnloadedHealthyServerBeforeBootstrap(t *testing.T) {
 		switch launchdCommandKey(name, args...) {
 		case "launchctl\x00print\x00" + launchdServiceTarget():
 			if bootstrapped {
-				return serviceCommandResult{Stdout: "state = running\npid = 77\n"}, nil
+				return serviceCommandResult{Stdout: launchdPrintOutput(77, serviceCommand(spec))}, nil
 			}
 			return launchdMissingResult(name, args)
 		case "launchctl\x00bootstrap\x00" + launchdDomainTarget() + "\x00" + path:
@@ -170,7 +187,7 @@ func TestLaunchdBootstrapTransientRecoveryBootsOutBeforeRetry(t *testing.T) {
 			if calls.count("bootout") > 0 {
 				return launchdMissingResult(name, args)
 			}
-			return serviceCommandResult{Stdout: "state = running\npid = 42\n"}, nil
+			return serviceCommandResult{Stdout: launchdPrintOutput(42, serviceCommand(spec))}, nil
 		case "launchctl\x00bootstrap\x00" + launchdDomainTarget() + "\x00" + path:
 			if calls.count("bootstrap") == 1 {
 				return serviceCommandResult{Stderr: "Bootstrap failed: 5: Input/output error", Code: 5}, serviceCommandError{Name: name, Args: args, Result: serviceCommandResult{Stderr: "Bootstrap failed: 5: Input/output error", Code: 5}}
@@ -255,7 +272,7 @@ func TestLaunchdReloadDoesNotBootstrapWhileOldServerStillRunning(t *testing.T) {
 	calls := captureLaunchdServiceCommands(t, func(_ context.Context, name string, args ...string) (serviceCommandResult, error) {
 		switch launchdCommandKey(name, args...) {
 		case "launchctl\x00print\x00" + launchdServiceTarget():
-			return serviceCommandResult{Stdout: "state = running\npid = 42\n"}, nil
+			return serviceCommandResult{Stdout: launchdPrintOutput(42, serviceCommand(spec))}, nil
 		case "launchctl\x00bootout\x00" + launchdServiceTarget():
 			return serviceCommandResult{}, nil
 		default:
@@ -310,6 +327,31 @@ func writeLaunchdTestPlist(t *testing.T, spec serviceSpec) string {
 		t.Fatalf("write plist: %v", err)
 	}
 	return path
+}
+
+func writeLaunchdTestPlistWithCommand(t *testing.T, spec serviceSpec, command []string) string {
+	t.Helper()
+	custom := spec
+	if len(command) > 0 {
+		custom.Executable = command[0]
+		custom.Arguments = append([]string(nil), command[1:]...)
+	}
+	return writeLaunchdTestPlist(t, custom)
+}
+
+func launchdPrintOutput(pid int, command []string) string {
+	var builder strings.Builder
+	builder.WriteString("state = running\n")
+	builder.WriteString("pid = ")
+	builder.WriteString(strconv.Itoa(pid))
+	builder.WriteString("\n")
+	builder.WriteString("arguments = {\n")
+	for _, arg := range command {
+		builder.WriteString(arg)
+		builder.WriteString("\n")
+	}
+	builder.WriteString("}\n")
+	return builder.String()
 }
 
 func testLaunchdServiceSpec(t *testing.T) serviceSpec {

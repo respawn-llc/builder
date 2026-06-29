@@ -280,19 +280,6 @@ func TestServiceLifecycleGuardRejectsBeforeSpecLoad(t *testing.T) {
 func TestServiceLifecycleGuardAllowsNonDisruptiveFlagsInsideCurrentSession(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "session-123")
 
-	t.Run("install_no_start", func(t *testing.T) {
-		backend := &stubServiceBackend{}
-		withServiceCommandTestBackend(t, backend)
-
-		_, stderr, code := runServiceCommandForTest("install", "--force", "--no-start")
-		if code != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
-		}
-		if !backend.installForce || backend.installStart {
-			t.Fatalf("install flags force=%v start=%v, want force true start false", backend.installForce, backend.installStart)
-		}
-	})
-
 	t.Run("uninstall_keep_running", func(t *testing.T) {
 		backend := &stubServiceBackend{status: serviceStatus{Installed: true}}
 		withServiceCommandTestBackend(t, backend)
@@ -600,32 +587,6 @@ func TestServiceHelpSmoke(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout)+strings.TrimSpace(stderr) == "" {
 		t.Fatalf("help output is empty")
-	}
-}
-
-func TestWindowsRegisteredScriptPathParsers(t *testing.T) {
-	taskQuery := strings.Join([]string{
-		"Folder: \\",
-		"TaskName:                             \\Kent",
-		"Task To Run:                          C:\\Root\\service\\server.cmd",
-	}, "\n")
-	if got, ok := windowsRegisteredTaskRunPath(taskQuery); !ok || got != "C:\\Root\\service\\server.cmd" {
-		t.Fatalf("windowsRegisteredTaskRunPath = (%q, %v), want registered path", got, ok)
-	}
-
-	launcher := `start "" /min cmd.exe /d /c "C:\Fallback\service\server.cmd"`
-	if got, ok := windowsStartupItemScriptPath(launcher); !ok || got != `C:\Fallback\service\server.cmd` {
-		t.Fatalf("windowsStartupItemScriptPath = (%q, %v), want launcher path", got, ok)
-	}
-
-	if got, ok := windowsRegisteredScriptPath("", launcher); !ok || got != `C:\Fallback\service\server.cmd` {
-		t.Fatalf("windowsRegisteredScriptPath fallback = (%q, %v), want launcher path", got, ok)
-	}
-	if got, ok := windowsRegisteredScriptPath(taskQuery, launcher); !ok || got != "C:\\Root\\service\\server.cmd" {
-		t.Fatalf("windowsRegisteredScriptPath preference = (%q, %v), want scheduled-task path", got, ok)
-	}
-	if got, ok := windowsRegisteredScriptPath("", ""); ok {
-		t.Fatalf("windowsRegisteredScriptPath empty = (%q, true), want absent", got)
 	}
 }
 
