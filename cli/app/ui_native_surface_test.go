@@ -507,12 +507,12 @@ func TestNativeFinalAssistantStreamingPromotesMarkdownAcrossDeltas(t *testing.T)
 	first := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
 		Kind:                clientui.EventAssistantDelta,
 		StepID:              "step-final",
-		AssistantDelta:      "**rendered first**\n",
+		AssistantDelta:      "**rendered first**\n\n",
 		AssistantDeltaPhase: clientui.MessagePhaseFinal,
 	})
 	_ = collectCmdMessages(t, first.cmd)
 	if got := stripANSIAndTrimRight(out.String()); got != "" {
-		t.Fatalf("first newline-terminated rendered markdown row promoted before following line: %q", got)
+		t.Fatalf("completed markdown block promoted before following block started: %q", got)
 	}
 
 	second := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
@@ -532,6 +532,38 @@ func TestNativeFinalAssistantStreamingPromotesMarkdownAcrossDeltas(t *testing.T)
 	tail := xansi.Strip(strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""))
 	if !strings.Contains(tail, "second row") {
 		t.Fatalf("native rendered tail skipped second row: %q", tail)
+	}
+}
+
+func TestNativeFinalAssistantStreamingContinuesActiveParagraphAfterStableBlockPromotion(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 157, 36, WithUINativeSurfaceWriter(&out))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	first := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "Fixed and committed as `92ad33a5 fix: stabilize native background scrollback`.\n\nWhat",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, first.cmd)
+	if plain := stripANSIAndTrimRight(out.String()); !strings.Contains(plain, "Fixed and committed") {
+		t.Fatalf("completed first markdown block was not promoted after next block started: %q", plain)
+	}
+
+	continued := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "ever comes next stays in the mutable live tail.",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, continued.cmd)
+	tail := xansi.Strip(strings.Join(m.nativeSurface.AssistantStreamTailLines(), ""))
+	if !strings.Contains(tail, "Whatever comes next") {
+		t.Fatalf("native rendered tail skipped continued active paragraph: %q", tail)
 	}
 }
 
@@ -1472,7 +1504,7 @@ func TestNativeStableWriteErrorDisablesNativeSurface(t *testing.T) {
 	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
 		Kind:                clientui.EventAssistantDelta,
 		StepID:              "step-final",
-		AssistantDelta:      strings.Repeat("x", 120) + "\nnext\n",
+		AssistantDelta:      strings.Repeat("x", 120) + "\n\nnext\n",
 		AssistantDeltaPhase: clientui.MessagePhaseFinal,
 	})
 	_ = collectCmdMessages(t, result.cmd)
