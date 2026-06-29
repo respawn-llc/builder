@@ -1783,7 +1783,7 @@ func TestNativeStableReplaceWithActiveStreamPanicsBeforeFinalizingNonAppendTailI
 	}
 }
 
-func TestNativeStableAppendWithActiveStreamPanicsBeforeSkippingMismatchedCommittedBlockInDebug(t *testing.T) {
+func TestNativeStableAppendWithActiveStreamReturnsRecoverableErrorOnMismatchedCommittedBlockInDebug(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
 	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
@@ -1813,15 +1813,14 @@ func TestNativeStableAppendWithActiveStreamPanicsBeforeSkippingMismatchedCommitt
 	})
 	current := m.nativeCommittedProjectionForEntries(entries)
 
-	panicText := captureNativeSurfacePanicText(t, func() {
-		exitMainThread := m.enterUIMainThread("native active stream mismatched append test")
-		defer exitMainThread()
-		_ = m.deliverNativeStableProjectionChange(previous, current, true, true, false, "draft answer")
-	})
-	if !strings.Contains(panicText, "Native scrollback invariant violation") ||
-		!strings.Contains(panicText, "native stable append is not contiguous") ||
-		!strings.Contains(panicText, "operation=deliverNativeStableProjectionChange") {
-		t.Fatalf("panic = %q, want debug native stable invariant diagnostic", panicText)
+	exitMainThread := m.enterUIMainThread("native active stream mismatched append test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "draft answer")
+	exitMainThread()
+	if err == nil {
+		t.Fatal("mismatched committed append error = nil, want recoverable native disable error")
+	}
+	if !strings.Contains(err.Error(), nativeStableProjectionActiveStreamMismatchReason) {
+		t.Fatalf("mismatched committed append error = %v, want native stable recovery reason", err)
 	}
 	plain := stripANSIAndTrimRight(out.String())
 	if strings.Contains(plain, "draft answer") {
@@ -1829,6 +1828,63 @@ func TestNativeStableAppendWithActiveStreamPanicsBeforeSkippingMismatchedCommitt
 	}
 	if strings.Contains(plain, "corrected answer") {
 		t.Fatalf("mismatched committed append skipped/wrote authoritative block through native stable path: %q", plain)
+	}
+}
+
+func TestNativeStableTranscriptPageRecoveryDisablesNativeOnActiveStreamMismatchedCommittedAppendInDebug(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-final",
+		AssistantDelta:      "draft answer",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, streamed.cmd)
+	if m.nativeSurface == nil || !m.nativeSurface.AssistantStreaming() {
+		t.Fatal("expected native assistant stream to be active before authoritative append")
+	}
+	out.Reset()
+
+	exitMainThread := m.enterUIMainThread("native active stream mismatched page recovery test")
+	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
+		Revision:     2,
+		Offset:       0,
+		TotalEntries: 2,
+		Entries: []clientui.ChatEntry{{
+			Role: "user",
+			Text: "prompt",
+		}, {
+			Role:  "assistant",
+			Text:  "corrected answer",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	}, clientui.TranscriptRecoveryCauseStreamGap)
+	exitMainThread()
+	_ = collectCmdMessages(t, cmd)
+	if m.nativeLiveAreaError == nil {
+		t.Fatal("native live area error = nil, want active stream mismatch to disable native")
+	}
+	if !strings.Contains(m.nativeLiveAreaError.Error(), nativeStableProjectionActiveStreamMismatchReason) {
+		t.Fatalf("native live area error = %v, want native stable recovery reason", m.nativeLiveAreaError)
+	}
+	if m.nativeSurface != nil {
+		t.Fatal("native surface remained active after active stream mismatch")
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "draft answer") {
+		t.Fatalf("mismatched runtime append finalized draft stream tail before disabling native: %q", plain)
+	}
+	if strings.Contains(plain, "corrected answer") {
+		t.Fatalf("mismatched runtime append wrote authoritative block through native stable path: %q", plain)
 	}
 }
 
