@@ -416,6 +416,9 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 	for _, evt := range events {
 		if evt.Kind == EventBackgroundUpdated && evt.Background != nil && evt.Background.ID == "1000" {
 			hasImmediateBackgroundUpdate = true
+			if evt.CommittedEntryCount != 0 || evt.CommittedEntryStartSet {
+				t.Fatalf("background update should not claim committed transcript range, got %+v", evt)
+			}
 			break
 		}
 	}

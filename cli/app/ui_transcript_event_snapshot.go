@@ -19,6 +19,7 @@ func projectedTranscriptEventSnapshotFromModel(m *uiModel) projectedTranscriptEv
 		busy:                 m.isBusy(),
 		liveAssistantPending: m.activeAssistantStreamPending(),
 		liveAssistantText:    liveAssistantText,
+		liveAssistantStepID:  m.activeAssistantStreamStepID,
 	}
 }
 

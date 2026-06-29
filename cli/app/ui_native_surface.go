@@ -10,6 +10,8 @@ import (
 
 	"core/cli/tui"
 	"core/cli/tui/scrollback"
+
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 type uiNativeSurface struct {
@@ -442,6 +444,9 @@ func (m *uiModel) nativeAssistantStreamMatchesProjectionBlock(streamText string,
 	if streamText == "" {
 		return false
 	}
+	if block.Role != tui.RenderIntentAssistant && block.Role != tui.RenderIntentAssistantCommentary {
+		return false
+	}
 	projection := m.nativeCommittedProjectionForEntries([]tui.TranscriptEntry{{
 		Role:      tui.TranscriptRoleAssistant,
 		Text:      streamText,
@@ -451,7 +456,7 @@ func (m *uiModel) nativeAssistantStreamMatchesProjectionBlock(streamText string,
 		return false
 	}
 	streamBlock := projection.Blocks[0]
-	if streamBlock.Role != block.Role || streamBlock.DividerGroup != block.DividerGroup || len(streamBlock.Lines) != len(block.Lines) {
+	if streamBlock.DividerGroup != block.DividerGroup || len(streamBlock.Lines) != len(block.Lines) {
 		return false
 	}
 	for idx := range streamBlock.Lines {
@@ -465,17 +470,43 @@ func (m *uiModel) nativeAssistantStreamMatchesProjectionBlock(streamText string,
 func (m *uiModel) nativeStableProjectionInvariantError(operation string, reason string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
 	if m != nil && m.debugMode {
 		panic(fmt.Sprintf(
-			"Native scrollback invariant violation\noperation=%s\nreason=%s\nprevious_blocks=%d\ncurrent_blocks=%d\nprevious_empty=%t\ncurrent_empty=%t\nstack:\n%s",
+			"Native scrollback invariant violation\noperation=%s\nreason=%s\nprevious_blocks=%d\ncurrent_blocks=%d\nprevious_empty=%t\ncurrent_empty=%t\nprevious_tail=%s\ncurrent_tail=%s\nstack:\n%s",
 			operation,
 			reason,
 			len(previous.Blocks),
 			len(current.Blocks),
 			previous.Empty(),
 			current.Empty(),
+			nativeProjectionTailSummary(previous, 3),
+			nativeProjectionTailSummary(current, 5),
 			debug.Stack(),
 		))
 	}
 	return errors.New(reason)
+}
+
+func nativeProjectionTailSummary(projection tui.TranscriptProjection, limit int) string {
+	if limit <= 0 || len(projection.Blocks) == 0 {
+		return "[]"
+	}
+	start := max(0, len(projection.Blocks)-limit)
+	parts := make([]string, 0, len(projection.Blocks)-start)
+	for idx := start; idx < len(projection.Blocks); idx++ {
+		block := projection.Blocks[idx]
+		line := ""
+		if len(block.Lines) > 0 {
+			line = block.Lines[0]
+		}
+		parts = append(parts, fmt.Sprintf(
+			"{idx=%d role=%s group=%s lines=%d first=%q}",
+			idx,
+			block.Role,
+			block.DividerGroup,
+			len(block.Lines),
+			xansi.Cut(line, 0, min(80, xansi.StringWidth(line))),
+		))
+	}
+	return "[" + strings.Join(parts, " ") + "]"
 }
 
 func (m *uiModel) steerNativeProjectionLines(lines []tui.TranscriptProjectionLine) error {

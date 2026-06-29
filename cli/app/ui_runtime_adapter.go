@@ -112,7 +112,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 				continue
 			}
 			m.sawAssistantDelta = true
-			m.appendActiveAssistantStreamDelta(delta)
+			m.appendActiveAssistantStreamDelta(streamCommand.StepID, delta)
 			if handled, err := m.streamNativeAssistantDelta(delta, streamCommand.Phase); handled && err != nil {
 				cmds = append(cmds, m.nativeSurfaceErrorCmd("stream assistant content", err))
 			}
