@@ -175,12 +175,19 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 		}
 	}
 	if err := stream.Err(); err != nil {
-		if accumulator.hasCompleted() {
+		if accumulator.hasCompleted() && !callerCanceledStreamRead(ctx) {
 			return accumulator.Response(), nil
 		}
 		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 	}
 	return accumulator.Response(), nil
+}
+
+func callerCanceledStreamRead(ctx context.Context) bool {
+	if ctx.Err() == nil {
+		return false
+	}
+	return !errors.Is(context.Cause(ctx), ErrModelStreamStalled)
 }
 
 func (t *HTTPTransport) streamingHTTPClient() *http.Client {

@@ -148,6 +148,29 @@ func TestGenerateStream_StallAfterCompletedSalvagesResponse(t *testing.T) {
 	}
 }
 
+func TestGenerateStream_CallerCancelAfterCompletedIsNotSalvaged(t *testing.T) {
+	client := newPacedWatchdogClient(t, 5*time.Second,
+		pacedStreamEvent{delay: 20 * time.Millisecond, data: `{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`},
+		pacedStreamEvent{delay: 20 * time.Millisecond, data: `{"type":"response.output_text.delta","delta":"Done"}`},
+		completedStreamEvent(20*time.Millisecond),
+		pacedStreamEvent{delay: 5 * time.Second, data: `[DONE]`},
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(120 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := client.GenerateStreamWithEvents(ctx, Request{Model: "gpt-5"}, StreamCallbacks{})
+	if err == nil {
+		t.Fatal("caller cancellation after a completed event must not be salvaged into a successful response")
+	}
+	if errors.Is(err, ErrModelStreamStalled) {
+		t.Fatalf("caller cancel must not be classified as a stall: %v", err)
+	}
+}
+
 func TestGenerateStream_TransportEmitsActivityHeartbeatPerEvent(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
