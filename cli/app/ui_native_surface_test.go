@@ -1236,7 +1236,34 @@ func TestNativeSurfaceDoesNotWriteStableBytesWhileDetailSurfaceIsActive(t *testi
 	}
 }
 
-func TestNativeSurfaceWaitsForPhysicalAltScreenExit(t *testing.T) {
+func TestNativeSurfacePreparesNormalBufferBeforeFirstNativeWrite(t *testing.T) {
+	var out bytes.Buffer
+	rendererGate := newUIRendererOutputGateState()
+	m := newSizedProjectedClosedUIModel(
+		nil,
+		120,
+		30,
+		WithUIRendererOutputGateState(rendererGate),
+		WithUINativeSurfaceWriter(&out),
+	)
+
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	raw := out.String()
+	prepareSequence := xansi.ResetModeAltScreenSaveCursor + "\x1b[?6l" + "\x1b[r"
+	if !strings.HasPrefix(raw, prepareSequence) {
+		t.Fatalf("native output prefix = %q, want normal-buffer preparation", raw)
+	}
+	if rendererGate.PhysicalAltScreenActive() {
+		t.Fatal("renderer output gate still reports physical alt-screen active after native preparation")
+	}
+	if plain := stripANSIAndTrimRight(raw); !strings.Contains(plain, "F1 or ? for help") {
+		t.Fatalf("native live output missing after normal-buffer preparation: %q", plain)
+	}
+}
+
+func TestNativeSurfaceWaitsForKnownPhysicalAltScreenExit(t *testing.T) {
 	var out bytes.Buffer
 	rendererGate := newUIRendererOutputGateState()
 	m := newSizedProjectedClosedUIModel(
@@ -1451,7 +1478,7 @@ func TestNativeStableWriteErrorDisablesNativeSurface(t *testing.T) {
 
 func TestNativeSurfaceCloseCleanupWriteErrorDoesNotRecurse(t *testing.T) {
 	cleanupErr := errors.New("cleanup terminal closed")
-	writer := &nativeSurfaceScriptedWriter{errors: []error{nil, cleanupErr}}
+	writer := &nativeSurfaceScriptedWriter{errors: []error{nil, nil, cleanupErr}}
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(writer))
 	if rendered := m.View(); rendered != "" {
 		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
@@ -1470,8 +1497,8 @@ func TestNativeSurfaceCloseCleanupWriteErrorDoesNotRecurse(t *testing.T) {
 	if !errors.Is(m.nativeLiveAreaError, cleanupErr) {
 		t.Fatalf("cleanup write error = %v, want %v", m.nativeLiveAreaError, cleanupErr)
 	}
-	if writer.attempts != 2 {
-		t.Fatalf("writer attempts = %d, want initial frame render plus one cleanup erase attempt", writer.attempts)
+	if writer.attempts != 3 {
+		t.Fatalf("writer attempts = %d, want normal-buffer preparation, initial frame render, and one cleanup erase attempt", writer.attempts)
 	}
 }
 
@@ -1783,7 +1810,7 @@ func TestNativeStableReplaceWithActiveStreamPanicsBeforeFinalizingNonAppendTailI
 	}
 }
 
-func TestNativeStableAppendWithActiveStreamReturnsRecoverableErrorOnMismatchedCommittedBlockInDebug(t *testing.T) {
+func TestNativeStableAppendWithActiveStreamPanicsOnMismatchedCommittedBlockInDebug(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
 	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
@@ -1813,14 +1840,15 @@ func TestNativeStableAppendWithActiveStreamReturnsRecoverableErrorOnMismatchedCo
 	})
 	current := m.nativeCommittedProjectionForEntries(entries)
 
-	exitMainThread := m.enterUIMainThread("native active stream mismatched append test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "draft answer")
-	exitMainThread()
-	if err == nil {
-		t.Fatal("mismatched committed append error = nil, want recoverable native disable error")
-	}
-	if !strings.Contains(err.Error(), nativeStableProjectionActiveStreamMismatchReason) {
-		t.Fatalf("mismatched committed append error = %v, want native stable recovery reason", err)
+	panicText := captureNativeSurfacePanicText(t, func() {
+		exitMainThread := m.enterUIMainThread("native active stream mismatched append test")
+		defer exitMainThread()
+		_ = m.deliverNativeStableProjectionChange(previous, current, true, true, false, "draft answer")
+	})
+	if !strings.Contains(panicText, "Native scrollback invariant violation") ||
+		!strings.Contains(panicText, nativeStableProjectionActiveStreamMismatchReason) ||
+		!strings.Contains(panicText, "operation=deliverNativeStableProjectionChange") {
+		t.Fatalf("panic = %q, want debug native active-stream mismatch diagnostic", panicText)
 	}
 	plain := stripANSIAndTrimRight(out.String())
 	if strings.Contains(plain, "draft answer") {
@@ -1831,7 +1859,7 @@ func TestNativeStableAppendWithActiveStreamReturnsRecoverableErrorOnMismatchedCo
 	}
 }
 
-func TestNativeStableTranscriptPageRecoveryDisablesNativeOnActiveStreamMismatchedCommittedAppendInDebug(t *testing.T) {
+func TestNativeStableTranscriptPageRecoveryPanicsOnActiveStreamMismatchedCommittedAppendInDebug(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
 	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
@@ -1854,30 +1882,27 @@ func TestNativeStableTranscriptPageRecoveryDisablesNativeOnActiveStreamMismatche
 	}
 	out.Reset()
 
-	exitMainThread := m.enterUIMainThread("native active stream mismatched page recovery test")
-	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
-		Revision:     2,
-		Offset:       0,
-		TotalEntries: 2,
-		Entries: []clientui.ChatEntry{{
-			Role: "user",
-			Text: "prompt",
-		}, {
-			Role:  "assistant",
-			Text:  "corrected answer",
-			Phase: string(clientui.MessagePhaseFinal),
-		}},
-	}, clientui.TranscriptRecoveryCauseStreamGap)
-	exitMainThread()
-	_ = collectCmdMessages(t, cmd)
-	if m.nativeLiveAreaError == nil {
-		t.Fatal("native live area error = nil, want active stream mismatch to disable native")
-	}
-	if !strings.Contains(m.nativeLiveAreaError.Error(), nativeStableProjectionActiveStreamMismatchReason) {
-		t.Fatalf("native live area error = %v, want native stable recovery reason", m.nativeLiveAreaError)
-	}
-	if m.nativeSurface != nil {
-		t.Fatal("native surface remained active after active stream mismatch")
+	panicText := captureNativeSurfacePanicText(t, func() {
+		exitMainThread := m.enterUIMainThread("native active stream mismatched page recovery test")
+		defer exitMainThread()
+		_ = m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
+			Revision:     2,
+			Offset:       0,
+			TotalEntries: 2,
+			Entries: []clientui.ChatEntry{{
+				Role: "user",
+				Text: "prompt",
+			}, {
+				Role:  "assistant",
+				Text:  "corrected answer",
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		}, clientui.TranscriptRecoveryCauseStreamGap)
+	})
+	if !strings.Contains(panicText, "Native scrollback invariant violation") ||
+		!strings.Contains(panicText, nativeStableProjectionActiveStreamMismatchReason) ||
+		!strings.Contains(panicText, "operation=deliverNativeStableProjectionChange") {
+		t.Fatalf("panic = %q, want debug native active-stream mismatch diagnostic", panicText)
 	}
 	plain := stripANSIAndTrimRight(out.String())
 	if strings.Contains(plain, "draft answer") {

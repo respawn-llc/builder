@@ -56,6 +56,7 @@ func (s *uiNativeSurface) ensure(width int, height int) bool {
 		scrollback.WithNormalBufferAvailability(s.normalBufferAvailableForBuffer),
 		scrollback.WithDelayedWriteErrorListener(s.delayedWriteErrorListener),
 		scrollback.WithAssistantMarkdownRenderer(s.assistantMarkdownRenderer),
+		scrollback.WithNormalBufferPreparation(),
 	)
 	s.surface = s.buffer
 	return true
@@ -354,7 +355,7 @@ func (m *uiModel) steerNativeStableAppend(previous tui.TranscriptProjection, cur
 		return m.steerNativeProjectionLines(current.Lines(tui.TranscriptDivider))
 	}
 	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
-		return m.nativeStableProjectionInvariantError("steerNativeStableAppend", previous, current)
+		return m.nativeStableProjectionInvariantError("steerNativeStableAppend", nativeStableProjectionNonContiguousReason, previous, current)
 	}
 	return m.steerNativeProjectionLines(current.LinesFromBlock(len(previous.Blocks), tui.TranscriptDivider))
 }
@@ -375,7 +376,7 @@ func (m *uiModel) steerNativeStableProjectionChange(operation string, previous t
 	if overlap := current.SharedSuffixPrefixBlockCount(previous); overlap > 0 {
 		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
 	}
-	return m.nativeStableProjectionInvariantError(operation, previous, current)
+	return m.nativeStableProjectionInvariantError(operation, nativeStableProjectionNonContiguousReason, previous, current)
 }
 
 func (m *uiModel) steerNativeStableRuntimeProjectionChange(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
@@ -425,12 +426,15 @@ const nativeStableProjectionActiveStreamMismatchReason = "native active assistan
 
 func (m *uiModel) nativeStableProjectionRecoverableError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
 	if m != nil && m.debugMode {
-		return m.nativeStableProjectionInvariantError(operation, previous, current)
+		return m.nativeStableProjectionInvariantError(operation, nativeStableProjectionNonContiguousReason, previous, current)
 	}
 	return errors.New(nativeStableProjectionNonContiguousReason)
 }
 
-func (m *uiModel) nativeStableProjectionRecoverableRuntimeError() error {
+func (m *uiModel) nativeStableProjectionRecoverableRuntimeError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+	if m != nil && m.debugMode {
+		return m.nativeStableProjectionInvariantError(operation, nativeStableProjectionActiveStreamMismatchReason, previous, current)
+	}
 	return errors.New(nativeStableProjectionActiveStreamMismatchReason)
 }
 
@@ -458,12 +462,12 @@ func (m *uiModel) nativeAssistantStreamMatchesProjectionBlock(streamText string,
 	return true
 }
 
-func (m *uiModel) nativeStableProjectionInvariantError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+func (m *uiModel) nativeStableProjectionInvariantError(operation string, reason string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
 	if m != nil && m.debugMode {
 		panic(fmt.Sprintf(
 			"Native scrollback invariant violation\noperation=%s\nreason=%s\nprevious_blocks=%d\ncurrent_blocks=%d\nprevious_empty=%t\ncurrent_empty=%t\nstack:\n%s",
 			operation,
-			nativeStableProjectionNonContiguousReason,
+			reason,
 			len(previous.Blocks),
 			len(current.Blocks),
 			previous.Empty(),
@@ -471,7 +475,7 @@ func (m *uiModel) nativeStableProjectionInvariantError(operation string, previou
 			debug.Stack(),
 		))
 	}
-	return errors.New(nativeStableProjectionNonContiguousReason)
+	return errors.New(reason)
 }
 
 func (m *uiModel) steerNativeProjectionLines(lines []tui.TranscriptProjectionLine) error {
