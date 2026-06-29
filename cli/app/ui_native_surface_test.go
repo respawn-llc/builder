@@ -1853,7 +1853,7 @@ func TestNativeStableProjectionChangeIgnoresTextBeyondEmittedWidth(t *testing.T)
 	}
 }
 
-func TestNativeStableProjectionChangeAppendsInsertedLocalStatusAfterEmittedRows(t *testing.T) {
+func TestNativeStableProjectionChangeRejectsInsertedLocalStatusBeforeEmittedRows(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
 	if rendered := m.View(); rendered != "" {
@@ -1882,16 +1882,16 @@ func TestNativeStableProjectionChangeAppendsInsertedLocalStatusAfterEmittedRows(
 	exitMainThread := m.enterUIMainThread("native stable inserted local status test")
 	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
 	exitMainThread()
-	if err != nil {
-		t.Fatalf("inserted local-status projection delivery returned error: %v", err)
+	if err == nil {
+		t.Fatal("expected inserted local-status before emitted rows to be rejected")
 	}
 
 	plain := stripANSIAndTrimRight(out.String())
 	if strings.Contains(plain, "user crash report") || strings.Contains(plain, "commentary") {
 		t.Fatalf("inserted local-status delivery replayed already emitted blocks, got %q", plain)
 	}
-	if !strings.Contains(plain, "Supervisor ran") {
-		t.Fatalf("inserted local-status delivery skipped local status, got %q", plain)
+	if strings.Contains(plain, "Supervisor ran") {
+		t.Fatalf("inserted local-status delivery wrote out-of-order local status, got %q", plain)
 	}
 }
 

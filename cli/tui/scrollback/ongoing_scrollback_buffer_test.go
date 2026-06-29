@@ -539,6 +539,32 @@ func TestNormalBufferPreparationSequencePreservesCursorAcrossModeResets(t *testi
 	}
 }
 
+func TestOngoingScrollbackBufferNormalBufferPreparationCanBeInvalidated(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithNormalBufferPreparation(),
+	)
+	defer buffer.close()
+
+	if err := buffer.Steer("first stable"); err != nil {
+		t.Fatalf("first steer returned error: %v", err)
+	}
+	out.Reset()
+	buffer.invalidateNormalBufferPreparation()
+	if err := buffer.Steer("second stable"); err != nil {
+		t.Fatalf("second steer returned error: %v", err)
+	}
+
+	if got, want := out.String(), normalBufferPreparationSequence()+"second stable"+terminalLineBreak; got != want {
+		t.Fatalf("reprepared output = %q, want %q", got, want)
+	}
+}
+
 func TestOngoingScrollbackBufferFinishWithoutStreamingPanics(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)

@@ -136,6 +136,13 @@ func (s *uiNativeSurface) FlushHoldoff() error {
 	return s.surface.FlushHoldoff()
 }
 
+func (s *uiNativeSurface) InvalidateNormalBufferPreparation() {
+	if s == nil || s.buffer == nil {
+		return
+	}
+	scrollback.InvalidateNormalBufferPreparation(s.buffer)
+}
+
 func (s *uiNativeSurface) AssistantStreaming() bool {
 	return s != nil && s.surface != nil && s.surface.AssistantStreaming()
 }
@@ -604,7 +611,7 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 			matchedPrevious++
 			continue
 		}
-		if matchedPrevious < len(previous.Blocks) && !nativeStableCurrentLocalAppendOnlyBlock(block) {
+		if matchedPrevious < len(previous.Blocks) {
 			return nil, false
 		}
 		blockIndexes = append(blockIndexes, idx)
@@ -652,16 +659,6 @@ func nativeStablePreviouslyLocalAppendOnlyBlock(block tui.TranscriptProjectionBl
 		return true
 	default:
 		return false
-	}
-}
-
-func nativeStableCurrentLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
-	switch block.Role {
-	case tui.RenderIntentReviewerStatus,
-		tui.RenderIntentReviewerSuggestions:
-		return true
-	default:
-		return nativeStablePreviouslyLocalAppendOnlyBlock(block)
 	}
 }
 
