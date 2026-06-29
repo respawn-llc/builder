@@ -67,6 +67,7 @@ func CommittedTranscriptSuffixFromRuntime(engine *runtime.Engine, _ clientui.Com
 		total := engine.CommittedTranscriptEntryCount()
 		suffix.CommittedEntryCount = total
 		suffix.NextEntryCount = total
+		suffix.HasMoreCommittedEntries = true
 		if start := total - len(suffix.Entries); start >= 0 {
 			suffix.StartEntryCount = start
 		}
@@ -85,7 +86,7 @@ func CommittedTranscriptSuffixFromSegment(sessionID, sessionName string, freshne
 		CommittedEntryCount:     len(entries),
 		StartEntryCount:         0,
 		NextEntryCount:          len(entries),
-		HasMoreCommittedEntries: page.HasMoreAbove,
+		HasMoreCommittedEntries: false,
 		Entries:                 entries,
 	}
 }

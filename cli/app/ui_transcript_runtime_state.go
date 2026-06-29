@@ -38,12 +38,16 @@ func (m *uiModel) invalidateTransientTranscriptState() {
 	}
 	m.forwardToView(tui.ClearStreamingReasoningMsg{})
 	page := m.localRuntimeTranscript()
+	baseOffset := m.transcriptBaseOffset
+	totalEntries := m.transcriptTotalEntries
 	if m.view.Mode() == tui.ModeDetail && m.detailTranscript.loaded {
 		page = m.detailTranscript.page()
+		baseOffset = m.detailTranscript.offset
+		totalEntries = m.detailTranscript.totalEntries
 	}
 	m.forwardToView(tui.SetConversationMsg{
-		BaseOffset:   m.transcriptBaseOffset,
-		TotalEntries: m.transcriptTotalEntries,
+		BaseOffset:   baseOffset,
+		TotalEntries: totalEntries,
 		Entries:      transcriptEntriesFromPage(page),
 		Ongoing:      "",
 		OngoingError: "",

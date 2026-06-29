@@ -151,6 +151,48 @@ func TestActiveAssistantFinalizerGapRequestsRecentTailWhenDetailPinned(t *testin
 	}
 }
 
+func TestActiveAssistantFinalizerGapUsesEventBoundsAtTail(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	m.windowSizeKnown = true
+	m.termWidth = 100
+	m.termHeight = 20
+	m.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail, SkipDetailWarmup: true})
+	m.forwardToView(tui.SetConversationMsg{Ongoing: "final answer"})
+	m.transcriptBaseOffset = 39
+	m.transcriptTotalEntries = 40
+	m.transcriptEntries = []tui.TranscriptEntry{{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true}}
+	m.detailTranscript.setKnownBounds(39, 40)
+	m.detailTranscript.replace(clientui.TranscriptPage{
+		HasMoreAbove: true,
+		Entries:      []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
+	})
+
+	_, handled := uiRuntimeAdapter{model: m}.applyActiveAssistantFinalizerGapAsRecentTail(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        40,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        41,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
+	})
+
+	if !handled {
+		t.Fatal("finalizer-gap event in detail mode should be handled")
+	}
+	if got := m.detailTranscript.offset; got != 39 {
+		t.Fatalf("detail offset = %d, want existing tail offset 39", got)
+	}
+	if got := m.detailTranscript.totalEntries; got != 41 {
+		t.Fatalf("detail total entries = %d, want finalizer total 41", got)
+	}
+	if got := len(m.detailTranscript.entries); got != 2 {
+		t.Fatalf("detail entries = %d, want existing row plus finalizer", got)
+	}
+	if got := m.detailTranscript.entries[1].Text; got != "final answer" {
+		t.Fatalf("finalizer entry text = %q, want appended final answer", got)
+	}
+}
+
 func TestReduceProjectedTranscriptEventSkipsDuplicateToolStart(t *testing.T) {
 	state := projectedTranscriptEventState{
 		entries: []tui.TranscriptEntry{{

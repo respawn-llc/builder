@@ -74,14 +74,15 @@ func (w *uiDetailTranscriptWindow) setKnownBounds(offset, totalEntries int) {
 	if w == nil {
 		return
 	}
-	if offset > 0 {
-		w.knownPageStart = offset
-		w.knownPageStartSet = true
+	if offset < 0 {
+		offset = 0
 	}
+	w.knownPageStart = offset
+	w.knownPageStartSet = true
 	if totalEntries > w.totalEntries {
 		w.totalEntries = totalEntries
 	}
-	if !w.loaded && offset > 0 {
+	if !w.loaded {
 		w.offset = offset
 	}
 }

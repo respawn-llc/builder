@@ -203,6 +203,32 @@ func TestCtrlTPreservesLoadedDetailWindowWhenNoLocalTailIsKnown(t *testing.T) {
 	}
 }
 
+func TestCtrlTPrimesDetailTailWithAbsoluteBounds(t *testing.T) {
+	m := setTestUITerminalSize(newProjectedStaticUIModel(), 100, 12)
+	m.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail, SkipDetailWarmup: true})
+	m.transcriptBaseOffset = 380
+	m.transcriptTotalEntries = 400
+	m.transcriptEntries = []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleAssistant, Text: "tail 380", Committed: true},
+		{Role: tui.TranscriptRoleAssistant, Text: "tail 381", Committed: true},
+	}
+
+	m.primeDetailTranscriptFromCurrentTail()
+
+	if got := m.detailTranscript.offset; got != 380 {
+		t.Fatalf("detail offset = %d, want live tail base offset 380", got)
+	}
+	if got := m.detailTranscript.totalEntries; got != 400 {
+		t.Fatalf("detail total entries = %d, want 400", got)
+	}
+	if !m.detailTranscript.hasMoreAbove {
+		t.Fatal("detail tail should preserve that older transcript segments exist")
+	}
+	if got := len(m.detailTranscript.entries); got != 2 {
+		t.Fatalf("detail entries = %d, want current committed tail", got)
+	}
+}
+
 func TestDetailEdgePagingWaitsForFirstNavigationToResolveMetrics(t *testing.T) {
 	client := &recordingTranscriptRuntimeClient{
 		loadPage: clientui.TranscriptPage{SessionID: "session-1"},

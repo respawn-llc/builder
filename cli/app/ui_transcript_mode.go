@@ -54,6 +54,7 @@ func (m *uiModel) primeDetailTranscriptFromCurrentTail() {
 		return
 	}
 	page := m.currentDetailTailPage()
+	m.detailTranscript.setKnownBounds(m.transcriptBaseOffset, m.transcriptTotalEntries)
 	if m.detailTranscript.loaded {
 		if m.shouldPreserveLoadedDetailWindowOnPrime(page) {
 			m.detailTranscript.totalEntries = max(m.detailTranscript.totalEntries, m.transcriptTotalEntries)
@@ -75,6 +76,7 @@ func (m *uiModel) currentDetailTailPage() clientui.TranscriptPage {
 	page := clientui.TranscriptPage{
 		Streaming:      m.view.OngoingStreamingText(),
 		StreamingError: m.view.OngoingErrorText(),
+		HasMoreAbove:   m.transcriptBaseOffset > 0,
 	}
 	for _, entry := range committedTranscriptEntriesForApp(m.transcriptEntries) {
 		page.Entries = append(page.Entries, clientui.ChatEntry{

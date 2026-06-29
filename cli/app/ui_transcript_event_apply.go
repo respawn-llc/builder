@@ -205,6 +205,7 @@ func (a uiRuntimeAdapter) applyActiveAssistantFinalizerGapAsRecentTail(evt clien
 	}
 	a.applyAuthoritativeRecentTailPage(page, entries, false)
 	if m.detailTranscript.loaded {
+		m.detailTranscript.setKnownBounds(start, totalEntries)
 		m.detailTranscript.apply(page)
 	}
 	switch {
