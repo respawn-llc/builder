@@ -193,6 +193,7 @@ func activateGatewayController(t *testing.T, appCore *core.Core, sessionID strin
 	if _, err := appCore.SessionRuntimeClient().ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-" + strings.TrimSpace(sessionID),
 		SessionID:       strings.TrimSpace(sessionID),
+		OwnerID:         "gateway-test-owner",
 		ActiveSettings:  settings,
 		Source:          appCore.Config().Source,
 	}); err != nil {
@@ -205,6 +206,7 @@ func releaseGatewayController(t *testing.T, appCore *core.Core, sessionID string
 	if _, err := appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "release-" + strings.TrimSpace(sessionID),
 		SessionID:       strings.TrimSpace(sessionID),
+		OwnerID:         "gateway-test-owner",
 	}); err != nil {
 		t.Fatalf("ReleaseSessionRuntime: %v", err)
 	}
