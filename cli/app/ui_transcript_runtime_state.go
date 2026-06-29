@@ -105,9 +105,14 @@ func (m *uiModel) beginCommittedTranscriptContinuityRecovery() {
 	m.invalidateTransientTranscriptState()
 }
 
-func (m *uiModel) appendActiveAssistantStreamDelta(delta string) {
+func (m *uiModel) appendActiveAssistantStreamDelta(stepID string, delta string) {
 	if m == nil {
 		return
+	}
+	if trimmedStepID := strings.TrimSpace(stepID); trimmedStepID != "" {
+		if m.activeAssistantStreamStepID == "" || m.activeAssistantStreamStepID == trimmedStepID {
+			m.activeAssistantStreamStepID = trimmedStepID
+		}
 	}
 	m.activeAssistantStreamSource += delta
 }
@@ -117,6 +122,7 @@ func (m *uiModel) clearActiveAssistantStreamSource() {
 		return
 	}
 	m.activeAssistantStreamSource = ""
+	m.activeAssistantStreamStepID = ""
 }
 
 func (m *uiModel) activeAssistantStreamText() string {

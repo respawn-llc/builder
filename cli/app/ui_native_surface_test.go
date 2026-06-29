@@ -8,6 +8,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/cli/tui"
+	"core/server/runtime"
 	"core/shared/clientui"
 	"core/shared/transcript"
 
@@ -1935,6 +1936,424 @@ func TestNativeStableAppendWithActiveStreamFinalizesFromAppSourceWhenViewStreamI
 	plain := stripANSIAndTrimRight(out.String())
 	if count := strings.Count(plain, "final answer"); count != 1 {
 		t.Fatalf("matching committed final output count = %d, want 1 in %q", count, plain)
+	}
+}
+
+func TestNativeStableAppendWithActiveCommentaryStreamFinalizesCommittedCommentary(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	streamed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-commentary",
+		AssistantDelta:      "I am fixing the deterministic test.",
+		AssistantDeltaPhase: clientui.MessagePhaseCommentary,
+	})
+	_ = collectCmdMessages(t, streamed.cmd)
+	if m.nativeSurface == nil || !m.nativeSurface.AssistantStreaming() {
+		t.Fatal("expected native commentary stream to be active before committed commentary")
+	}
+	out.Reset()
+
+	committed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-commentary",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "I am fixing the deterministic test.",
+			Phase: string(clientui.MessagePhaseCommentary),
+		}},
+	})
+	_ = collectCmdMessages(t, committed.cmd)
+
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("matching committed commentary produced native error: %v", m.nativeLiveAreaError)
+	}
+	if m.nativeSurface == nil {
+		t.Fatal("matching committed commentary disabled native surface")
+	}
+	if m.nativeSurface.AssistantStreaming() {
+		t.Fatal("matching committed commentary left native assistant stream active")
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if count := strings.Count(plain, "I am fixing the deterministic test."); count != 1 {
+		t.Fatalf("matching committed commentary output count = %d, want 1 in %q", count, plain)
+	}
+}
+
+func TestNativeStableSameStepCommentaryToolErrorSequenceStaysAppendOnly(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 160, 40, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	stepID := "step-background"
+	firstCommentary := "I am waiting for QA-REAL-BG-DONE."
+	firstCompletion := "Background shell completed successfully with QA-REAL-BG-DONE."
+	secondCommentary := "Waiting for background shell 1005."
+	secondCompletion := "Background shell completed: QA-REAL-BG-DONE."
+
+	events := []clientui.Event{
+		{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              stepID,
+			AssistantDelta:      firstCommentary,
+			AssistantDeltaPhase: clientui.MessagePhaseCommentary,
+		},
+		{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         2,
+			CommittedEntryCount:        3,
+			CommittedEntryStart:        1,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  firstCommentary,
+				Phase: string(clientui.MessagePhaseCommentary),
+			}, {
+				Role:       "tool_call",
+				Text:       "Polled session 1005 for 20s",
+				ToolCallID: "call-first-poll",
+				ToolCall: &clientui.ToolCallMeta{
+					ToolName:    "write_stdin",
+					CompactText: "Polled session 1005 for 20s",
+				},
+			}},
+		},
+		{
+			Kind:                       clientui.EventToolCallCompleted,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         3,
+			CommittedEntryCount:        4,
+			CommittedEntryStart:        3,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:       "tool_result_ok",
+				Text:       "QA-REAL-BG-DONE",
+				ToolCallID: "call-first-poll",
+			}},
+		},
+		{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              stepID,
+			AssistantDelta:      firstCompletion,
+			AssistantDeltaPhase: clientui.MessagePhaseFinal,
+		},
+		{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         4,
+			CommittedEntryCount:        6,
+			CommittedEntryStart:        4,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  firstCompletion,
+				Phase: string(clientui.MessagePhaseFinal),
+			}, {
+				Role:       "tool_call",
+				Text:       `{"t_content":"QA-REAL-BG-DONE"}`,
+				ToolCallID: "call-final-answer",
+				ToolCall: &clientui.ToolCallMeta{
+					ToolName:    "final_answer",
+					CompactText: `{"t_content":"QA-REAL-BG-DONE"}`,
+				},
+			}},
+		},
+		{
+			Kind:                       clientui.EventToolCallCompleted,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         5,
+			CommittedEntryCount:        7,
+			CommittedEntryStart:        6,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:       "tool_result_error",
+				Text:       `{"error":"unknown tool"}`,
+				ToolCallID: "call-final-answer",
+			}},
+		},
+		{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              stepID,
+			AssistantDelta:      secondCommentary,
+			AssistantDeltaPhase: clientui.MessagePhaseCommentary,
+		},
+		{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         6,
+			CommittedEntryCount:        9,
+			CommittedEntryStart:        7,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  secondCommentary,
+				Phase: string(clientui.MessagePhaseCommentary),
+			}, {
+				Role:       "tool_call",
+				Text:       "Polled session 1005 for 20s",
+				ToolCallID: "call-second-poll",
+				ToolCall: &clientui.ToolCallMeta{
+					ToolName:    "write_stdin",
+					CompactText: "Polled session 1005 for 20s",
+				},
+			}},
+		},
+		{
+			Kind:                       clientui.EventToolCallCompleted,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         7,
+			CommittedEntryCount:        10,
+			CommittedEntryStart:        9,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:       "tool_result_ok",
+				Text:       "No output",
+				ToolCallID: "call-second-poll",
+			}},
+		},
+		{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              stepID,
+			AssistantDelta:      secondCompletion,
+			AssistantDeltaPhase: clientui.MessagePhaseFinal,
+		},
+		{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         8,
+			CommittedEntryCount:        11,
+			CommittedEntryStart:        10,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  secondCompletion,
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		},
+	}
+	for _, evt := range events {
+		result := applyNativeSurfaceRuntimeEventForTest(t, m, evt)
+		_ = collectCmdMessages(t, result.cmd)
+		if m.nativeLiveAreaError != nil {
+			t.Fatalf("native surface error after %s: %v", evt.Kind, m.nativeLiveAreaError)
+		}
+		if m.nativeSurface == nil {
+			t.Fatalf("native surface disabled after %s", evt.Kind)
+		}
+	}
+
+	plain := stripANSIAndTrimRight(out.String())
+	for _, want := range []string{firstCommentary, firstCompletion, "QA-REAL-BG-DONE", secondCommentary, secondCompletion} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("native output missing %q after same-step commentary/tool sequence: %q", want, plain)
+		}
+	}
+	if m.nativeSurface.AssistantStreaming() {
+		t.Fatal("same-step commentary/tool sequence left native assistant stream active")
+	}
+}
+
+func TestNativeStableAppendsBackgroundNoticeAfterCompletedTurn(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(&runtimeControlFakeClient{}, 160, 40, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	stepID := "step-background-notice"
+	events := []clientui.Event{
+		{
+			Kind:                       clientui.EventUserMessageFlushed,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         1,
+			CommittedEntryCount:        1,
+			CommittedEntryStart:        0,
+			CommittedEntryStartSet:     true,
+			UserMessage:                "run background",
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role: "user",
+				Text: "run background",
+			}},
+		},
+		{
+			Kind:                       clientui.EventToolCallStarted,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         2,
+			CommittedEntryCount:        2,
+			CommittedEntryStart:        1,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:       "tool_call",
+				Text:       "sleep 20 && echo QA-REAL-BG-SECOND",
+				ToolCallID: "call-bg",
+				ToolCall: &clientui.ToolCallMeta{
+					ToolName:    "exec_command",
+					IsShell:     true,
+					Command:     "sleep 20 && echo QA-REAL-BG-SECOND",
+					CompactText: "sleep 20 && echo QA-REAL-BG-SECOND",
+				},
+			}},
+		},
+		{
+			Kind:                       clientui.EventToolCallCompleted,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         3,
+			CommittedEntryCount:        3,
+			CommittedEntryStart:        2,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:       "tool_result_ok",
+				Text:       "Process moved to background with ID 1001.\nNo output",
+				ToolCallID: "call-bg",
+			}},
+		},
+		{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              stepID,
+			AssistantDelta:      "Waiting for QA-REAL-BG-SECOND to complete from the background session.",
+			AssistantDeltaPhase: clientui.MessagePhaseCommentary,
+		},
+		{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         4,
+			CommittedEntryCount:        5,
+			CommittedEntryStart:        3,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  "Waiting for QA-REAL-BG-SECOND to complete from the background session.",
+				Phase: string(clientui.MessagePhaseCommentary),
+			}, {
+				Role:       "tool_call",
+				Text:       "Polled session 1001 for 25s",
+				ToolCallID: "call-poll",
+				ToolCall: &clientui.ToolCallMeta{
+					ToolName:    "write_stdin",
+					CompactText: "Polled session 1001 for 25s",
+				},
+			}},
+		},
+		{
+			Kind:                       clientui.EventToolCallCompleted,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         5,
+			CommittedEntryCount:        6,
+			CommittedEntryStart:        5,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:       "tool_result_ok",
+				Text:       "QA-REAL-BG-SECOND",
+				ToolCallID: "call-poll",
+			}},
+		},
+		{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              stepID,
+			AssistantDelta:      "Background session completed successfully, output confirmed: QA-REAL-BG-SECOND.",
+			AssistantDeltaPhase: clientui.MessagePhaseFinal,
+		},
+		{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     stepID,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         6,
+			CommittedEntryCount:        7,
+			CommittedEntryStart:        6,
+			CommittedEntryStartSet:     true,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  "Background session completed successfully, output confirmed: QA-REAL-BG-SECOND.",
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		},
+	}
+	for _, evt := range events {
+		result := applyNativeSurfaceRuntimeEventForTest(t, m, evt)
+		_ = collectCmdMessages(t, result.cmd)
+		if m.nativeLiveAreaError != nil {
+			t.Fatalf("native surface error after %s: %v", evt.Kind, m.nativeLiveAreaError)
+		}
+	}
+
+	notice := projectRuntimeEvent(runtime.Event{
+		Kind:                runtime.EventBackgroundUpdated,
+		TranscriptRevision:  6,
+		CommittedEntryCount: 7,
+		Background: &runtime.BackgroundShellEvent{
+			Type:        "completed",
+			ID:          "1001",
+			State:       "completed",
+			NoticeText:  "Background shell 1001 completed (exit 0)",
+			CompactText: "Background shell 1001 completed (exit 0)",
+		},
+	})
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, notice)
+	_ = collectCmdMessages(t, result.cmd)
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("background notice disabled native surface: %v", m.nativeLiveAreaError)
+	}
+	if m.nativeSurface == nil {
+		t.Fatal("background notice disabled native surface")
+	}
+	authoritative := make([]clientui.ChatEntry, 0, len(m.transcriptEntries))
+	for _, entry := range committedTranscriptEntriesForApp(m.transcriptEntries) {
+		authoritative = append(authoritative, clientui.ChatEntry{
+			Role:              string(entry.Role),
+			Text:              entry.Text,
+			CondensedText:     entry.CondensedText,
+			Phase:             string(entry.Phase),
+			MessageType:       string(entry.MessageType),
+			ToolCallID:        entry.ToolCallID,
+			CompactLabel:      entry.CompactLabel,
+			ToolResultSummary: entry.ToolResultSummary,
+			ToolCall:          transcriptToolCallMetaClient(entry.ToolCall),
+		})
+	}
+	exitMainThread := m.enterUIMainThread("native background notice hydrate test")
+	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
+		Revision:     6,
+		Offset:       0,
+		TotalEntries: len(authoritative),
+		Entries:      authoritative,
+	}, clientui.TranscriptRecoveryCauseNone)
+	exitMainThread()
+	_ = collectCmdMessages(t, cmd)
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("authoritative page without transient background notice disabled native: %v", m.nativeLiveAreaError)
 	}
 }
 
