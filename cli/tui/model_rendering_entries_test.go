@@ -189,6 +189,23 @@ func TestRenderAssistantMarkdownProjectionHandlesStreamingMarkdownChunksAtWidths
 	}
 }
 
+func TestRenderAssistantMarkdownStreamingProjectionPreservesWhitespaceOnlySource(t *testing.T) {
+	lines := RenderAssistantMarkdownStreamingProjection("   \n\t", "dark", 2)
+	if len(lines) == 0 {
+		t.Fatal("expected whitespace-only streaming source to render")
+	}
+	rendered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		rendered = append(rendered, line.Text)
+		if width := lipgloss.Width(line.Text); width > 2 {
+			t.Fatalf("whitespace streaming line width = %d, want <= 2: %#v", width, line.Text)
+		}
+	}
+	if got := strings.Join(rendered, "\n"); !strings.Contains(got, " ") || !strings.Contains(got, "\t") {
+		t.Fatalf("whitespace streaming projection skipped source whitespace: %#v", rendered)
+	}
+}
+
 func TestOngoingViewDoesNotDuplicatePunctuationBoundaryLine(t *testing.T) {
 	m := NewModel(WithPreviewLines(4))
 	m = updateModel(t, m, SetViewportSizeMsg{Lines: 4, Width: 12})

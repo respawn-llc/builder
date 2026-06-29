@@ -44,7 +44,6 @@ export function TaskDetailList({
   onSaveDraft,
   openLink,
   questionSelections,
-  resumeRunId,
   selectedTab,
   setTab,
   updateError,
@@ -66,7 +65,6 @@ export function TaskDetailList({
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
   openLink: (url: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
-  resumeRunId: string;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
@@ -140,7 +138,6 @@ export function TaskDetailList({
           onSaveDraft={onSaveDraft}
           openLink={openLink}
           questionSelections={questionSelections}
-          resumeRunId={resumeRunId}
           selectedTab={selectedTab}
           setTab={setTab}
           updateError={updateError}
@@ -174,7 +171,6 @@ type TaskDetailListRowProps = Readonly<{
   onSaveDraft: (draft?: TaskDraft) => Promise<void>;
   openLink: (url: string) => void;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
-  resumeRunId: string;
   selectedTab: DetailTab;
   setTab: (tab: DetailTab) => void;
   updateError: unknown;
@@ -234,7 +230,6 @@ function BodyRow({
   draft,
   mutations,
   onDraftChange,
-  resumeRunId,
   updateError,
   updatePending,
 }: TaskDetailListRowProps): ReactNode {
@@ -253,7 +248,6 @@ function BodyRow({
         detail={detail}
         disabled={disabled}
         mutations={mutations}
-        resumeRunId={resumeRunId}
       />
     </div>
   );

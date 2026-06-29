@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"runtime/debug"
 	"strings"
 
 	"core/cli/tui"
@@ -11,14 +13,17 @@ import (
 )
 
 type uiNativeSurface struct {
-	writer                    io.Writer
-	normalBufferAvailable     func() bool
-	delayedWriteErrorListener func(error)
-	width                     int
-	height                    int
-	buffer                    *scrollback.OngoingScrollbackBufferImpl
-	live                      scrollback.NativeLiveArea
-	assistantStreamActive     bool
+	writer                     io.Writer
+	normalBufferAvailable      func() bool
+	delayedWriteErrorListener  func(error)
+	assistantMarkdownRenderer  scrollback.AssistantMarkdownRenderer
+	forceNormalBufferAvailable bool
+	width                      int
+	height                     int
+	buffer                     *scrollback.OngoingScrollbackBufferImpl
+	surface                    scrollback.NativeOngoingSurface
+	lastFrame                  scrollback.NativeLiveAreaFrame
+	lastFrameSet               bool
 }
 
 func newUINativeSurface(writer io.Writer, normalBufferAvailable func() bool, delayedWriteErrorListener func(error)) *uiNativeSurface {
@@ -36,7 +41,7 @@ func (s *uiNativeSurface) ensure(width int, height int) bool {
 	if s == nil || s.writer == nil || width <= 0 || height <= 0 {
 		return false
 	}
-	if s.buffer != nil && s.live != nil && s.width == width && s.height == height {
+	if s.surface != nil && s.width == width && s.height == height {
 		return true
 	}
 	s.Close()
@@ -48,87 +53,128 @@ func (s *uiNativeSurface) ensure(width int, height int) bool {
 		height,
 		s.writer,
 		nil,
-		scrollback.WithNormalBufferAvailability(s.normalBufferAvailable),
+		scrollback.WithNormalBufferAvailability(s.normalBufferAvailableForBuffer),
 		scrollback.WithDelayedWriteErrorListener(s.delayedWriteErrorListener),
+		scrollback.WithAssistantMarkdownRenderer(s.assistantMarkdownRenderer),
 	)
-	s.live = scrollback.NewNativeLiveAreaImpl(s.buffer, width, height)
+	s.surface = s.buffer
 	return true
 }
 
 func (s *uiNativeSurface) ready(width int, height int) bool {
-	return s != nil && s.buffer != nil && s.live != nil && s.width == width && s.height == height
+	return s != nil && s.surface != nil && s.width == width && s.height == height
+}
+
+func (s *uiNativeSurface) initialized() bool {
+	return s != nil && s.surface != nil
 }
 
 func (s *uiNativeSurface) Close() {
+	s.close(true)
+}
+
+func (s *uiNativeSurface) Drop() {
+	s.close(false)
+}
+
+func (s *uiNativeSurface) close(clearLive bool) {
 	if s == nil {
 		return
 	}
-	if s.buffer != nil {
-		s.buffer.Close()
+	if clearLive {
+		s.clearLiveFrame()
 	}
 	s.width = 0
 	s.height = 0
 	s.buffer = nil
-	s.live = nil
-	s.assistantStreamActive = false
+	s.surface = nil
+	s.lastFrame = scrollback.NativeLiveAreaFrame{}
+	s.lastFrameSet = false
 }
 
 func (s *uiNativeSurface) Render(frame scrollback.NativeLiveAreaFrame) error {
-	if s == nil || s.live == nil {
-		return errors.New("native live area is not initialized")
+	if s == nil || s.surface == nil {
+		return errors.New("native ongoing surface is not initialized")
 	}
-	return s.live.Render(frame)
-}
-
-func (s *uiNativeSurface) StableBuffer() scrollback.NativeScrollbackBuffer {
-	if s == nil || s.buffer == nil {
-		return nil
+	if err := s.surface.RenderLive(frame); err != nil {
+		return err
 	}
-	return s.buffer
+	s.lastFrame = copyNativeLiveAreaFrameForApp(frame)
+	s.lastFrameSet = true
+	return nil
 }
 
 func (s *uiNativeSurface) StreamAssistantCommentaryContent(ansi string) error {
-	if s == nil || s.buffer == nil {
-		return errors.New("native scrollback buffer is not initialized")
+	if s == nil || s.surface == nil {
+		return errors.New("native ongoing surface is not initialized")
 	}
-	if err := s.buffer.StreamMarkdownAssistantContent(ansi); err != nil {
-		return err
-	}
-	s.assistantStreamActive = true
-	return nil
+	return s.surface.StreamMarkdownAssistantContent(ansi)
 }
 
 func (s *uiNativeSurface) StreamAssistantFinalAnswerContent(ansi string) error {
-	if s == nil || s.buffer == nil {
-		return errors.New("native scrollback buffer is not initialized")
+	if s == nil || s.surface == nil {
+		return errors.New("native ongoing surface is not initialized")
 	}
-	if err := s.buffer.StreamMarkdownAssistantContent(ansi); err != nil {
-		return err
-	}
-	s.assistantStreamActive = true
-	return nil
+	return s.surface.StreamMarkdownAssistantContent(ansi)
 }
 
 func (s *uiNativeSurface) FinishAssistantStreaming() error {
-	if s == nil || !s.assistantStreamActive {
+	if s == nil || s.surface == nil || !s.surface.AssistantStreaming() {
 		return nil
 	}
-	s.assistantStreamActive = false
-	if s.buffer == nil {
-		return nil
-	}
-	return s.buffer.FinishAssistantStreaming()
+	return s.surface.FinishAssistantStreaming()
 }
 
 func (s *uiNativeSurface) FlushHoldoff() error {
-	if s == nil || s.buffer == nil {
+	if s == nil || s.surface == nil || !s.lastFrameSet {
 		return nil
 	}
-	return s.buffer.FlushHoldoff()
+	return s.surface.FlushHoldoff()
 }
 
 func (s *uiNativeSurface) AssistantStreaming() bool {
-	return s != nil && s.assistantStreamActive
+	return s != nil && s.surface != nil && s.surface.AssistantStreaming()
+}
+
+func (s *uiNativeSurface) AssistantStreamTailLines() []string {
+	if s == nil || s.surface == nil {
+		return nil
+	}
+	return s.surface.AssistantStreamTailLines()
+}
+
+func (s *uiNativeSurface) normalBufferAvailableForBuffer() bool {
+	if s == nil {
+		return false
+	}
+	if s.forceNormalBufferAvailable {
+		return true
+	}
+	if s.normalBufferAvailable == nil {
+		return true
+	}
+	return s.normalBufferAvailable()
+}
+
+func (s *uiNativeSurface) clearLiveFrame() {
+	if s == nil || s.surface == nil {
+		return
+	}
+	s.forceNormalBufferAvailable = true
+	err := s.surface.RenderLive(scrollback.NativeLiveAreaFrame{Lines: []string{""}})
+	s.forceNormalBufferAvailable = false
+	if err != nil && s.delayedWriteErrorListener != nil {
+		s.buffer = nil
+		s.surface = nil
+		s.delayedWriteErrorListener(err)
+	}
+}
+
+func copyNativeLiveAreaFrameForApp(frame scrollback.NativeLiveAreaFrame) scrollback.NativeLiveAreaFrame {
+	return scrollback.NativeLiveAreaFrame{
+		Lines:  append([]string(nil), frame.Lines...),
+		Cursor: frame.Cursor,
+	}
 }
 
 func (m *uiModel) nativeSurfaceEnabled() bool {
@@ -152,9 +198,10 @@ func (m *uiModel) ensureNativeSurface(width int, height int) bool {
 	if m == nil || m.nativeSurface == nil {
 		return false
 	}
+	m.nativeSurface.assistantMarkdownRenderer = m.nativeAssistantMarkdownRenderer()
 	shouldRehydrate := !m.nativeResizeRehydrateScheduled()
 	recreate := !m.nativeSurface.ready(width, height)
-	wasInitialized := m.nativeSurface.StableBuffer() != nil
+	wasInitialized := m.nativeSurface.initialized()
 	if !m.nativeSurface.ensure(width, height) {
 		return false
 	}
@@ -171,6 +218,24 @@ func (m *uiModel) ensureNativeSurface(width int, height int) bool {
 	return true
 }
 
+func (m *uiModel) nativeAssistantMarkdownRenderer() scrollback.AssistantMarkdownRenderer {
+	theme := ""
+	if m != nil {
+		theme = m.theme
+	}
+	return func(source string, width int) []string {
+		rendered := tui.RenderAssistantMarkdownStreamingProjection(source, theme, width)
+		if len(rendered) == 0 {
+			return nil
+		}
+		lines := make([]string, 0, len(rendered))
+		for _, line := range rendered {
+			lines = append(lines, line.Text)
+		}
+		return lines
+	}
+}
+
 func (m *uiModel) nativeResizeRehydrateScheduled() bool {
 	return m != nil && m.nativeResizeRehydrateToken != 0
 }
@@ -184,6 +249,19 @@ func (m *uiModel) closeNativeSurface() {
 		return
 	}
 	m.nativeSurface.Close()
+	m.nativeSurface = nil
+	m.nativeAssistantStreamIncomplete = false
+	m.nativeResizeRehydrateToken = 0
+	m.nativeResizeRehydrateSettled = false
+	m.nativeResizeRehydrateActive = false
+	m.syncRendererOutputGate()
+}
+
+func (m *uiModel) dropNativeSurface() {
+	if m == nil || m.nativeSurface == nil {
+		return
+	}
+	m.nativeSurface.Drop()
 	m.nativeSurface = nil
 	m.nativeAssistantStreamIncomplete = false
 	m.nativeResizeRehydrateToken = 0
@@ -221,7 +299,19 @@ func (l uiViewLayout) renderNativeLiveChatPanel(width int, height int, style uiS
 	spinner := pendingToolSpinnerFrame(l.model.spinnerFrame)
 	lines := l.model.view.LiveOngoingLinesWithPendingSpinnerFrame(spinner)
 	if l.model.nativeSurface.AssistantStreaming() {
+		if err := l.model.nativeSurface.FlushHoldoff(); err != nil {
+			l.model.nativeLiveAreaError = err
+			l.model.logf("native.surface.flush_holdoff err=%q", err.Error())
+		}
 		lines = l.model.view.PendingOngoingLinesWithPendingSpinnerFrame(spinner)
+		if tailLines := l.model.nativeSurface.AssistantStreamTailLines(); len(tailLines) > 0 {
+			if len(lines) > 0 {
+				lines = append(lines, tui.TranscriptProjectionLine{Kind: tui.VisibleLineDivider, Text: tui.TranscriptDivider})
+			}
+			for _, line := range tailLines {
+				lines = append(lines, tui.TranscriptProjectionLine{Kind: tui.VisibleLineContent, Text: line})
+			}
+		}
 	}
 	if len(lines) == 0 {
 		return nil
@@ -246,7 +336,7 @@ func (m *uiModel) nativeCommittedProjectionForEntries(entries []tui.TranscriptEn
 }
 
 func (m *uiModel) rehydrateNativeStableFromCurrentTranscript() error {
-	if m == nil || m.nativeSurface == nil || m.nativeSurface.StableBuffer() == nil {
+	if m == nil || m.nativeSurface == nil || !m.nativeSurface.initialized() {
 		return nil
 	}
 	projection := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
@@ -254,7 +344,7 @@ func (m *uiModel) rehydrateNativeStableFromCurrentTranscript() error {
 }
 
 func (m *uiModel) steerNativeStableAppend(previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
-	if m == nil || m.nativeSurface == nil || m.nativeSurface.StableBuffer() == nil {
+	if m == nil || m.nativeSurface == nil || !m.nativeSurface.initialized() {
 		return nil
 	}
 	if current.Empty() {
@@ -264,13 +354,51 @@ func (m *uiModel) steerNativeStableAppend(previous tui.TranscriptProjection, cur
 		return m.steerNativeProjectionLines(current.Lines(tui.TranscriptDivider))
 	}
 	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
-		return errors.New("native stable append is not contiguous with current transcript projection")
+		return m.nativeStableProjectionInvariantError("steerNativeStableAppend", previous, current)
 	}
 	return m.steerNativeProjectionLines(current.LinesFromBlock(len(previous.Blocks), tui.TranscriptDivider))
 }
 
+func (m *uiModel) steerNativeStableProjectionChange(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+	if m == nil || m.nativeSurface == nil || !m.nativeSurface.initialized() {
+		return nil
+	}
+	if current.Empty() {
+		return nil
+	}
+	if previous.Empty() {
+		return m.steerNativeProjectionLines(current.Lines(tui.TranscriptDivider))
+	}
+	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
+		return m.steerNativeProjectionLines(current.LinesFromBlock(len(previous.Blocks), tui.TranscriptDivider))
+	}
+	if overlap := current.SharedSuffixPrefixBlockCount(previous); overlap > 0 {
+		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
+	}
+	return m.nativeStableProjectionInvariantError(operation, previous, current)
+}
+
+func (m *uiModel) steerNativeStableRuntimeProjectionChange(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+	if m == nil || m.nativeSurface == nil || !m.nativeSurface.initialized() {
+		return nil
+	}
+	if current.Empty() {
+		return nil
+	}
+	if previous.Empty() {
+		return m.steerNativeProjectionLines(current.Lines(tui.TranscriptDivider))
+	}
+	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
+		return m.steerNativeProjectionLines(current.LinesFromBlock(len(previous.Blocks), tui.TranscriptDivider))
+	}
+	if overlap := current.SharedSuffixPrefixBlockCount(previous); overlap > 0 {
+		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
+	}
+	return m.nativeStableProjectionRecoverableError(operation)
+}
+
 func (m *uiModel) steerNativeStableAppendFromBlock(current tui.TranscriptProjection, startBlock int) error {
-	if m == nil || m.nativeSurface == nil || m.nativeSurface.StableBuffer() == nil {
+	if m == nil || m.nativeSurface == nil || !m.nativeSurface.initialized() {
 		return nil
 	}
 	if current.Empty() || startBlock >= len(current.Blocks) {
@@ -292,16 +420,61 @@ func nativeStableProjectionNeedsDelivery(previous tui.TranscriptProjection, curr
 	return len(current.Blocks) > len(previous.Blocks)
 }
 
+const nativeStableProjectionNonContiguousReason = "native stable append is not contiguous with current transcript projection"
+
+func (m *uiModel) nativeStableProjectionRecoverableError(operation string) error {
+	return errors.New(nativeStableProjectionNonContiguousReason)
+}
+
+func (m *uiModel) nativeAssistantStreamMatchesProjectionBlock(streamText string, block tui.TranscriptProjectionBlock) bool {
+	if streamText == "" {
+		return false
+	}
+	projection := m.nativeCommittedProjectionForEntries([]tui.TranscriptEntry{{
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      streamText,
+		Committed: true,
+	}})
+	if len(projection.Blocks) != 1 {
+		return false
+	}
+	streamBlock := projection.Blocks[0]
+	if streamBlock.Role != block.Role || streamBlock.DividerGroup != block.DividerGroup || len(streamBlock.Lines) != len(block.Lines) {
+		return false
+	}
+	for idx := range streamBlock.Lines {
+		if streamBlock.Lines[idx] != block.Lines[idx] {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *uiModel) nativeStableProjectionInvariantError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+	if m != nil && m.debugMode {
+		panic(fmt.Sprintf(
+			"Native scrollback invariant violation\noperation=%s\nreason=%s\nprevious_blocks=%d\ncurrent_blocks=%d\nprevious_empty=%t\ncurrent_empty=%t\nstack:\n%s",
+			operation,
+			nativeStableProjectionNonContiguousReason,
+			len(previous.Blocks),
+			len(current.Blocks),
+			previous.Empty(),
+			current.Empty(),
+			debug.Stack(),
+		))
+	}
+	return errors.New(nativeStableProjectionNonContiguousReason)
+}
+
 func (m *uiModel) steerNativeProjectionLines(lines []tui.TranscriptProjectionLine) error {
 	if len(lines) == 0 || m == nil || m.nativeSurface == nil {
 		return nil
 	}
-	stable := m.nativeSurface.StableBuffer()
-	if stable == nil {
+	if !m.nativeSurface.initialized() {
 		return nil
 	}
 	for _, line := range lines {
-		if err := stable.Steer(m.nativeStableProjectionLineText(line)); err != nil {
+		if err := m.nativeSurface.surface.Steer(m.nativeStableProjectionLineText(line)); err != nil {
 			return err
 		}
 	}
@@ -326,7 +499,10 @@ func (m *uiModel) nativeStableProjectionLineText(line tui.TranscriptProjectionLi
 
 func (l uiViewLayout) renderNativeLiveAreaFrame(frame uiRenderFrame) string {
 	m := l.model
-	if m == nil || !m.ensureNativeSurface(frame.width, frame.height) {
+	if m == nil || !m.windowSizeKnown || m.termWidth <= 0 || m.termHeight <= 0 {
+		return ""
+	}
+	if !m.ensureNativeSurface(frame.width, frame.height) {
 		return frame.renderWithCursorVisibility(!l.shouldShowRealTerminalCursor(frame))
 	}
 	lines := frame.renderLines()

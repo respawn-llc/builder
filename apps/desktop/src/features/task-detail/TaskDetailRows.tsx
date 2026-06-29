@@ -165,12 +165,10 @@ export function PropertiesIsland({
   detail,
   disabled,
   mutations,
-  resumeRunId,
 }: Readonly<{
   detail: TaskDetail;
   disabled: boolean;
   mutations: ReturnType<typeof useTaskMutations>;
-  resumeRunId: string;
 }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
@@ -185,7 +183,14 @@ export function PropertiesIsland({
     () => detail.runs.filter((run) => run.completedAt === 0 && run.interruptedAt === 0),
     [detail.runs],
   );
-  const resumeID = resumeRunId.length > 0 ? resumeRunId : detail.actions.resumeRunID;
+  const interruptableRuns = useMemo(
+    () => activeRuns.filter((run) => run.sessionID.trim().length > 0),
+    [activeRuns],
+  );
+  const hasTaskWideInterrupt = useMemo(
+    () => activeRuns.some((run) => run.sessionID.trim().length === 0),
+    [activeRuns],
+  );
 
   async function openInCli(): Promise<void> {
     if (cliCommand.length === 0) {
@@ -237,24 +242,35 @@ export function PropertiesIsland({
           <Button
             disabled={disabled}
             onClick={() => {
-              void mutations.resume.mutateAsync(resumeID);
+              void mutations.resume.mutateAsync();
             }}
             variant="primary"
           >
             {t("board.resume")}
           </Button>
         ) : null}
+        {detail.actions.canInterrupt && hasTaskWideInterrupt ? (
+          <Button
+            disabled={disabled}
+            onClick={() => {
+              void mutations.interrupt.mutateAsync(undefined);
+            }}
+            variant="secondary"
+          >
+            {t("board.interrupt")}
+          </Button>
+        ) : null}
         {detail.actions.canInterrupt
-          ? activeRuns.map((run) => (
+          ? interruptableRuns.map((run) => (
               <Button
                 disabled={disabled}
                 key={run.id}
                 onClick={() => {
-                  void mutations.interrupt.mutateAsync(run.id);
+                  void mutations.interrupt.mutateAsync(run.sessionID);
                 }}
                 variant="secondary"
               >
-                {t("board.interrupt")} <span className="font-mono">{run.id}</span>
+                {t("board.interrupt")} <span>{run.sessionName.trim() || run.sessionID}</span>
               </Button>
             ))
           : null}

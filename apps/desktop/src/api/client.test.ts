@@ -782,8 +782,6 @@ const emptyTaskDetailResponse = {
       can_interrupt: false,
       can_resume: false,
       can_cancel: true,
-      needs_detail_for_interrupt: false,
-      needs_detail_for_resume: false,
       manual_move_target_node_ids: [],
     },
     attention: null,

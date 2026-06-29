@@ -18,15 +18,17 @@ func writeTaskStartResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, r
 }
 
 func writeTaskResumeResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, resp serverapi.WorkflowTaskResumeResponse) {
-	sessionID := strings.TrimSpace(resp.SessionID)
-	run, ok := workflowTaskRunByID(task, resp.RunID)
-	if sessionID == "" && ok {
-		sessionID = strings.TrimSpace(run.SessionID)
+	fmt.Fprintf(stdout, "Resumed task %s.\n", taskDisplayID(task))
+	for _, run := range resp.Runs {
+		placement, _ := workflowTaskPlacementByID(task, run.PlacementID)
+		nodeKey := placementDisplayKey(placement, run.NodeID)
+		sessionID := strings.TrimSpace(run.SessionID)
+		if sessionID == "" {
+			fmt.Fprintf(stdout, "Resumed node %s.\n", nodeKey)
+			continue
+		}
+		fmt.Fprintf(stdout, "Resumed node %s in session %s.\n", nodeKey, sessionID)
 	}
-	placement, _ := workflowTaskPlacementByID(task, resp.PlacementID)
-	nodeKey := placementDisplayKey(placement, resp.NodeID)
-	fmt.Fprintf(stdout, "Resumed task %s in session %s.\n", taskDisplayID(task), sessionID)
-	fmt.Fprintf(stdout, "Current node: %s\n", nodeKey)
 }
 
 func writeTaskTransitionResult(stdout io.Writer, action string, task serverapi.WorkflowTaskDetail, transitionID string, runIDs []string) {

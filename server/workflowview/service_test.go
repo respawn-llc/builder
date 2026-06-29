@@ -793,7 +793,7 @@ func TestBoardNodeCardsIgnoreInterruptedRunsFromCompletedPlacementsAfterResetToB
 	if len(page.Cards) != 1 || page.Cards[0].TaskID != string(task.ID) || page.Cards[0].Status.Kind != "backlog" {
 		t.Fatalf("backlog page = %+v, want reset backlog task", page)
 	}
-	if !page.Cards[0].Actions.CanStart || page.Cards[0].Actions.CanResume || page.Cards[0].Actions.ResumeRunID != "" {
+	if !page.Cards[0].Actions.CanStart || page.Cards[0].Actions.CanResume {
 		t.Fatalf("reset backlog card actions = %+v, want start-only action state", page.Cards[0].Actions)
 	}
 	attention, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
@@ -1006,7 +1006,7 @@ func TestTaskDetailProjectsCancellationAndInterruptedRun(t *testing.T) {
 	if len(detail.Runs) != 1 || detail.Runs[0].InterruptedAtUnixMs == 0 || detail.Runs[0].InterruptionReason != "task_canceled" {
 		t.Fatalf("runs do not project interruption: %+v", detail.Runs)
 	}
-	if detail.Actions.CanResume || detail.Actions.ResumeRunID != "" || detail.Actions.NeedsDetailForResume {
+	if detail.Actions.CanResume {
 		t.Fatalf("canceled task should not expose resume actions: %+v", detail.Actions)
 	}
 }
@@ -1057,7 +1057,7 @@ func TestInterruptedTaskStatusUsesAttentionKind(t *testing.T) {
 	if detail.Status.Kind != "interrupted" || len(detail.Status.AttentionTypes) != 1 || detail.Status.AttentionTypes[0] != attentionKindInterruptedRun {
 		t.Fatalf("detail status = %+v", detail.Status)
 	}
-	if len(detail.Attention) != 1 || detail.Attention[0].Kind != attentionKindInterruptedRun || detail.Attention[0].RunID != string(started.RunID) {
+	if len(detail.Attention) != 1 || detail.Attention[0].Kind != attentionKindInterruptedRun || detail.Attention[0].TaskID != string(task.ID) || detail.Attention[0].RunID != "" {
 		t.Fatalf("detail attention = %+v", detail.Attention)
 	}
 }
@@ -1484,11 +1484,8 @@ func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 	for _, item := range resp.Items {
 		kinds[item.Kind] = item
 	}
-	if kinds["approval"].TaskTransitionID != string(pendingApproval.TransitionID) || kinds["question"].AskID != "ask-attention" || kinds["interrupted_run"].RunID != string(interruptedStarted.RunID) {
+	if kinds["approval"].TaskTransitionID != string(pendingApproval.TransitionID) || kinds["question"].AskID != "ask-attention" || kinds["interrupted_run"].TaskID != string(interruptedTask.ID) || kinds["interrupted_run"].RunID != "" {
 		t.Fatalf("attention items = %+v", resp.Items)
-	}
-	if !strings.Contains(kinds["interrupted_run"].Message, "role missing") {
-		t.Fatalf("interrupted attention message = %q, want detail error", kinds["interrupted_run"].Message)
 	}
 	firstPage, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID, PageSize: 1}, workflow.StaticRoleResolver{"coder": true})
 	if err != nil {

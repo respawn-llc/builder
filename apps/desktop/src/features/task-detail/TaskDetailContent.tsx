@@ -27,7 +27,6 @@ export function TaskDetailContent({
   initialFocus,
   onMutated,
   openLink,
-  resumeRunId,
 }: Readonly<{
   activity: ReturnType<typeof useTaskActivity>;
   comments: ReturnType<typeof useTaskComments>;
@@ -35,7 +34,6 @@ export function TaskDetailContent({
   initialFocus?: "firstQuestion" | undefined;
   onMutated?: (() => void) | undefined;
   openLink: (url: string) => void;
-  resumeRunId: string;
 }>) {
   const serverDraft = taskDraft(detail);
   const [draftState, setDraftState] = useState<TaskDraftState>(() => ({
@@ -109,7 +107,6 @@ export function TaskDetailContent({
       onSaveDraft={saveDraft}
       openLink={openLink}
       questionSelections={questionSelections}
-      resumeRunId={resumeRunId}
       selectedTab={selectedTab}
       setTab={setSelectedTab}
       updateError={update.error}

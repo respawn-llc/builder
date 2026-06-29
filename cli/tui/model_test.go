@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestModeToggleReturnsToLatestRecentTail(t *testing.T) {
@@ -21,7 +22,7 @@ func TestModeToggleReturnsToLatestRecentTail(t *testing.T) {
 	if len(linesBefore) != 2 {
 		t.Fatalf("ongoing lines = %d, want 2", len(linesBefore))
 	}
-	if strings.TrimSpace(linesBefore[0]) != "l3" || strings.TrimSpace(linesBefore[1]) != "l4" {
+	if strings.TrimSpace(xansi.Strip(linesBefore[0])) != "l3" || strings.TrimSpace(xansi.Strip(linesBefore[1])) != "l4" {
 		t.Fatalf("unexpected ongoing tail before toggle: %q", before)
 	}
 
@@ -42,7 +43,7 @@ func TestModeToggleReturnsToLatestRecentTail(t *testing.T) {
 	if len(after) != 2 {
 		t.Fatalf("ongoing lines after toggle = %d, want 2", len(after))
 	}
-	if strings.TrimSpace(after[0]) != "l3" || strings.TrimSpace(after[1]) != "l4" {
+	if strings.TrimSpace(xansi.Strip(after[0])) != "l3" || strings.TrimSpace(xansi.Strip(after[1])) != "l4" {
 		t.Fatalf("unexpected ongoing tail after toggle: %q", m.View())
 	}
 }

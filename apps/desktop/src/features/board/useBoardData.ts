@@ -194,8 +194,7 @@ export function useBoardTaskActions(
       },
     }),
     interrupt: useMutation({
-      mutationFn: async (input: Readonly<{ taskID: string; runID: string }>) =>
-        api.interruptTask(input.taskID, input.runID),
+      mutationFn: async (taskID: string) => api.interruptTask(taskID),
       onSuccess: refresh,
     }),
     delete: useMutation({
@@ -205,8 +204,7 @@ export function useBoardTaskActions(
       },
     }),
     resume: useMutation({
-      mutationFn: async (input: Readonly<{ taskID: string; runID: string }>) =>
-        api.resumeTask(input.taskID, input.runID),
+      mutationFn: async (taskID: string) => api.resumeTask(taskID),
       onSuccess: refresh,
     }),
   };

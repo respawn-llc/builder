@@ -10,10 +10,6 @@ import (
 	xansi "github.com/charmbracelet/x/ansi"
 )
 
-type NativeLiveArea interface {
-	Render(frame NativeLiveAreaFrame) error
-}
-
 type NativeLiveAreaFrame struct {
 	Lines  []string
 	Cursor NativeLiveAreaCursor
@@ -25,7 +21,7 @@ type NativeLiveAreaCursor struct {
 	Col     int
 }
 
-type NativeLiveAreaImpl struct {
+type nativeLiveAreaImpl struct {
 	buffer                *OngoingScrollbackBufferImpl
 	terminalWidth         int
 	terminalHeight        int
@@ -33,21 +29,20 @@ type NativeLiveAreaImpl struct {
 	renderedLines         int
 	cursorPlaced          bool
 	placedCursor          NativeLiveAreaCursor
-	streamAnchored        bool
 	pendingPhysicalRender bool
 }
 
-func NewNativeLiveAreaImpl(buffer *OngoingScrollbackBufferImpl, terminalWidth int, terminalHeight int) *NativeLiveAreaImpl {
+func newNativeLiveAreaImpl(buffer *OngoingScrollbackBufferImpl, terminalWidth int, terminalHeight int) *nativeLiveAreaImpl {
 	if buffer == nil {
-		panicLiveAreaInvariant("NewNativeLiveAreaImpl", "stable buffer is required", NativeLiveAreaFrame{}, terminalWidth, terminalHeight)
+		panicLiveAreaInvariant("newNativeLiveAreaImpl", "stable buffer is required", NativeLiveAreaFrame{}, terminalWidth, terminalHeight)
 	}
 	if terminalWidth <= 0 || terminalHeight <= 0 {
-		panicLiveAreaInvariant("NewNativeLiveAreaImpl", "terminal dimensions must be positive", NativeLiveAreaFrame{}, terminalWidth, terminalHeight)
+		panicLiveAreaInvariant("newNativeLiveAreaImpl", "terminal dimensions must be positive", NativeLiveAreaFrame{}, terminalWidth, terminalHeight)
 	}
 	if terminalWidth != buffer.terminalWidth || terminalHeight != buffer.terminalHeight {
-		panicLiveAreaInvariant("NewNativeLiveAreaImpl", "live area terminal dimensions must match stable buffer dimensions", NativeLiveAreaFrame{}, terminalWidth, terminalHeight)
+		panicLiveAreaInvariant("newNativeLiveAreaImpl", "live area terminal dimensions must match stable buffer dimensions", NativeLiveAreaFrame{}, terminalWidth, terminalHeight)
 	}
-	liveArea := &NativeLiveAreaImpl{
+	liveArea := &nativeLiveAreaImpl{
 		buffer:         buffer,
 		terminalWidth:  terminalWidth,
 		terminalHeight: terminalHeight,
@@ -56,7 +51,7 @@ func NewNativeLiveAreaImpl(buffer *OngoingScrollbackBufferImpl, terminalWidth in
 	return liveArea
 }
 
-func (area *NativeLiveAreaImpl) Render(frame NativeLiveAreaFrame) error {
+func (area *nativeLiveAreaImpl) Render(frame NativeLiveAreaFrame) error {
 	area.validateFrameBeforeLock("render", frame)
 	nextFrame := copyNativeLiveAreaFrame(frame)
 
@@ -89,7 +84,7 @@ func (area *NativeLiveAreaImpl) Render(frame NativeLiveAreaFrame) error {
 			area.buffer.mu.Unlock()
 			return err
 		}
-		err := area.renderPhysicalDuringAssistantStreamLocked()
+		err := area.renderPhysicalLocked()
 		area.buffer.mu.Unlock()
 		return err
 	}
@@ -102,14 +97,11 @@ func (area *NativeLiveAreaImpl) Render(frame NativeLiveAreaFrame) error {
 	return err
 }
 
-func (area *NativeLiveAreaImpl) erasePhysicalLocked() error {
+func (area *nativeLiveAreaImpl) erasePhysicalLocked() error {
 	if area == nil || area.renderedLines == 0 {
 		return nil
 	}
 	sequence := liveAreaCursorRestoreAnchorSequence(area.cursorPlaced, area.placedCursor, area.renderedLines) + liveAreaEraseSequence(area.renderedLines)
-	if area.streamAnchored {
-		sequence = terminalSaveCursor + xansi.CursorDown(1) + "\r" + liveAreaEraseSequence(area.renderedLines) + terminalRestoreCursor
-	}
 	written, err := io.WriteString(area.buffer.stableWriter, sequence)
 	if err != nil {
 		return fmt.Errorf("erase live area failed: %s: %w", liveAreaWriteDiagnostics(sequence, area.terminalWidth, area.terminalHeight, written), err)
@@ -120,11 +112,10 @@ func (area *NativeLiveAreaImpl) erasePhysicalLocked() error {
 	area.renderedLines = 0
 	area.cursorPlaced = false
 	area.placedCursor = NativeLiveAreaCursor{}
-	area.streamAnchored = false
 	return nil
 }
 
-func (area *NativeLiveAreaImpl) renderPhysicalLocked() error {
+func (area *nativeLiveAreaImpl) renderPhysicalLocked() error {
 	if area == nil || len(area.frame.Lines) == 0 {
 		return nil
 	}
@@ -144,33 +135,12 @@ func (area *NativeLiveAreaImpl) renderPhysicalLocked() error {
 	} else {
 		area.placedCursor = NativeLiveAreaCursor{}
 	}
-	area.streamAnchored = false
 	return nil
 }
 
-func (area *NativeLiveAreaImpl) renderPhysicalDuringAssistantStreamLocked() error {
-	if area == nil || len(area.frame.Lines) == 0 {
-		return nil
-	}
-	payload := terminalSaveCursor + terminalLineBreak + strings.Join(area.frame.Lines, terminalLineBreak) + xansi.HideCursor + terminalRestoreCursor
-	written, err := io.WriteString(area.buffer.stableWriter, payload)
-	if err != nil {
-		return fmt.Errorf("render live area during assistant stream failed: %s: %w", liveAreaWriteDiagnostics(payload, area.terminalWidth, area.terminalHeight, written), err)
-	}
-	if written != len(payload) {
-		return fmt.Errorf("render live area during assistant stream short write: %s: %w", liveAreaWriteDiagnostics(payload, area.terminalWidth, area.terminalHeight, written), io.ErrShortWrite)
-	}
-	area.renderedLines = len(area.frame.Lines)
-	area.pendingPhysicalRender = false
-	area.cursorPlaced = false
-	area.placedCursor = NativeLiveAreaCursor{}
-	area.streamAnchored = true
-	return nil
-}
-
-func (area *NativeLiveAreaImpl) validateFrameBeforeLock(operation string, frame NativeLiveAreaFrame) {
+func (area *nativeLiveAreaImpl) validateFrameBeforeLock(operation string, frame NativeLiveAreaFrame) {
 	if area == nil {
-		panicLiveAreaInvariant(operation, "nil NativeLiveAreaImpl receiver", frame, 0, 0)
+		panicLiveAreaInvariant(operation, "nil nativeLiveAreaImpl receiver", frame, 0, 0)
 	}
 	if area.buffer == nil {
 		panicLiveAreaInvariant(operation, "stable buffer is required", frame, area.terminalWidth, area.terminalHeight)
@@ -290,9 +260,6 @@ func liveAreaWriteDiagnostics(payload string, terminalWidth int, terminalHeight 
 		[]byte(payload),
 	)
 }
-
-const terminalSaveCursor = "\x1b7"
-const terminalRestoreCursor = "\x1b8"
 
 func panicLiveAreaInvariant(operation string, reason string, frame NativeLiveAreaFrame, terminalWidth int, terminalHeight int) {
 	panic(fmt.Sprintf(

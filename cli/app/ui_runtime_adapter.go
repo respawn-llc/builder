@@ -1,7 +1,6 @@
 package app
 
 import (
-	"errors"
 	"strconv"
 	"strings"
 
@@ -193,7 +192,7 @@ func (m *uiModel) streamNativeAssistantDelta(delta string, phase clientui.Messag
 		if m.nativeAssistantStreamIncomplete {
 			return false, nil
 		}
-		if m.nativeSurface.StableBuffer() == nil {
+		if !m.nativeSurface.initialized() {
 			m.nativeAssistantStreamIncomplete = true
 			return false, nil
 		}
@@ -202,7 +201,7 @@ func (m *uiModel) streamNativeAssistantDelta(delta string, phase clientui.Messag
 		if m.nativeAssistantStreamIncomplete {
 			return false, nil
 		}
-		if m.nativeSurface.StableBuffer() == nil {
+		if !m.nativeSurface.initialized() {
 			m.nativeAssistantStreamIncomplete = true
 			return false, nil
 		}
@@ -220,13 +219,13 @@ func (m *uiModel) finishNativeAssistantStreaming() error {
 	defer func() {
 		m.nativeAssistantStreamIncomplete = false
 	}()
-	if m.nativeSurface.StableBuffer() == nil {
+	if !m.nativeSurface.initialized() {
 		return nil
 	}
 	return m.nativeSurface.FinishAssistantStreaming()
 }
 
-func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptProjection, current tui.TranscriptProjection, nativeStableReady bool, nativeAssistantStreamActive bool, nativeAssistantStreamWasIncomplete bool) error {
+func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptProjection, current tui.TranscriptProjection, nativeStableReady bool, nativeAssistantStreamActive bool, nativeAssistantStreamWasIncomplete bool, nativeAssistantStreamText string) error {
 	if m == nil {
 		return nil
 	}
@@ -242,18 +241,36 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 		return nil
 	}
 	if !nativeAssistantStreamActive {
-		return m.steerNativeStableAppend(previous, current)
+		return m.steerNativeStableRuntimeProjectionChange("deliverNativeStableProjectionChange", previous, current)
+	}
+	appendable := false
+	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); ok {
+		appendable = true
+	}
+	overlap := 0
+	if !appendable {
+		overlap = current.SharedSuffixPrefixBlockCount(previous)
+		if overlap == 0 {
+			return m.nativeStableProjectionRecoverableError("deliverNativeStableProjectionChange")
+		}
+	}
+	skippedStreamBlock := len(previous.Blocks)
+	if !appendable {
+		skippedStreamBlock = overlap
+	}
+	if skippedStreamBlock >= len(current.Blocks) || !m.nativeAssistantStreamMatchesProjectionBlock(nativeAssistantStreamText, current.Blocks[skippedStreamBlock]) {
+		return m.nativeStableProjectionRecoverableError("deliverNativeStableProjectionChange")
 	}
 	if err := m.finishNativeAssistantStreaming(); err != nil {
 		return err
 	}
 	if nativeAssistantStreamWasIncomplete {
-		return m.steerNativeStableAppend(previous, current)
+		return m.steerNativeStableRuntimeProjectionChange("deliverNativeStableProjectionChange", previous, current)
 	}
-	if _, ok := current.RenderAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
-		return errors.New("native stable append is not contiguous with current transcript projection")
+	if appendable {
+		return m.steerNativeStableAppendFromBlock(current, len(previous.Blocks)+1)
 	}
-	return m.steerNativeStableAppendFromBlock(current, len(previous.Blocks)+1)
+	return m.steerNativeStableAppendFromBlock(current, overlap+1)
 }
 
 func (m *uiModel) nativeSurfaceErrorCmd(action string, err error) tea.Cmd {

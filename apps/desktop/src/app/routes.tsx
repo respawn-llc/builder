@@ -25,7 +25,6 @@ const optionalSearchString = z.preprocess(
 const projectSearchSchema = z.object({
   workflowId: optionalSearchString,
   taskId: optionalSearchString,
-  resumeRunId: optionalSearchString,
 });
 
 const workflowEditorSearchSchema = z.object({

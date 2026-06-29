@@ -106,9 +106,10 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 	}
 	m.conversationFreshness = page.ConversationFreshness
 	nativeSurfaceConfigured := m.nativeSurfaceConfigured()
-	nativeStableReady := nativeSurfaceConfigured && m.nativeSurface.StableBuffer() != nil
+	nativeStableReady := nativeSurfaceConfigured && m.nativeSurface.initialized()
 	nativeAssistantStreamActive := nativeSurfaceConfigured && m.nativeSurface.AssistantStreaming()
 	nativeAssistantStreamWasIncomplete := m.nativeAssistantStreamIncomplete
+	nativeAssistantStreamText := m.view.OngoingStreamingText()
 	previousNativeStableProjection := tui.TranscriptProjection{}
 	if nativeSurfaceConfigured {
 		previousNativeStableProjection = m.nativeCommittedProjectionForEntries(m.transcriptEntries)
@@ -214,7 +215,7 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 	}
 	if nativeSurfaceConfigured && reduction.shouldApplyRecentTail {
 		currentNativeStableProjection := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
-		if err := m.deliverNativeStableProjectionChange(previousNativeStableProjection, currentNativeStableProjection, nativeStableReady, nativeAssistantStreamActive, nativeAssistantStreamWasIncomplete); err != nil {
+		if err := m.deliverNativeStableProjectionChange(previousNativeStableProjection, currentNativeStableProjection, nativeStableReady, nativeAssistantStreamActive, nativeAssistantStreamWasIncomplete, nativeAssistantStreamText); err != nil {
 			cmds = append(cmds, m.nativeSurfaceErrorCmd("steer committed transcript", err))
 		}
 	}

@@ -19,7 +19,7 @@ export function StandaloneTaskRoute({ taskId }: StandaloneTaskRouteProps) {
           {t("app.backHome")}
         </Button>
       </header>
-      <TaskDetailSurface enabled resumeRunId="" taskId={taskId} />
+      <TaskDetailSurface enabled taskId={taskId} />
     </section>
   );
 }

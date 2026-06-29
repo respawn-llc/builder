@@ -257,7 +257,6 @@ const AttentionRow = memo(function AttentionRow({
             inboxNav: true,
             mode: "overlay",
             onMutated: undefined,
-            resumeRunID: "",
             taskID: item.taskID,
           });
           return;

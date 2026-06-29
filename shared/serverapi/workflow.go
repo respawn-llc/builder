@@ -665,15 +665,17 @@ type WorkflowTaskStartResponse struct {
 
 type WorkflowTaskResumeRequest struct {
 	TaskID string `json:"task_id"`
-	RunID  string `json:"run_id,omitempty"`
 }
 
-type WorkflowTaskResumeResponse struct {
-	RunID       string `json:"run_id"`
+type WorkflowTaskRunSummary struct {
 	PlacementID string `json:"placement_id"`
 	NodeID      string `json:"node_id"`
 	Generation  int64  `json:"generation"`
 	SessionID   string `json:"session_id,omitempty"`
+}
+
+type WorkflowTaskResumeResponse struct {
+	Runs []WorkflowTaskRunSummary `json:"runs"`
 }
 
 type WorkflowTaskApproveRequest struct {
@@ -763,13 +765,13 @@ type WorkflowTaskDeleteRequest struct {
 }
 
 type WorkflowTaskInterruptRequest struct {
-	TaskID string `json:"task_id"`
-	RunID  string `json:"run_id,omitempty"`
-	Reason string `json:"reason,omitempty"`
+	TaskID    string `json:"task_id"`
+	SessionID string `json:"session_id,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 type WorkflowTaskInterruptResponse struct {
-	RunID string `json:"run_id"`
+	Runs []WorkflowTaskRunSummary `json:"runs"`
 }
 
 type WorkflowAttentionListRequest struct {
@@ -1028,12 +1030,8 @@ type WorkflowTaskStatus struct {
 type WorkflowTaskActions struct {
 	CanStart                bool     `json:"can_start"`
 	CanInterrupt            bool     `json:"can_interrupt"`
-	InterruptRunID          string   `json:"interrupt_run_id,omitempty"`
 	CanResume               bool     `json:"can_resume"`
-	ResumeRunID             string   `json:"resume_run_id,omitempty"`
 	CanCancel               bool     `json:"can_cancel"`
-	NeedsDetailForInterrupt bool     `json:"needs_detail_for_interrupt"`
-	NeedsDetailForResume    bool     `json:"needs_detail_for_resume"`
 	ManualMoveTargetNodeIDs []string `json:"manual_move_target_node_ids,omitempty"`
 }
 

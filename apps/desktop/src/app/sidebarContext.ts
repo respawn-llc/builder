@@ -53,7 +53,6 @@ export type SidebarDestination =
       mode?: SidebarMode;
       initialFocus?: "firstQuestion" | undefined;
       taskID: string;
-      resumeRunID: string;
       onMutated?: (() => void) | undefined;
       // Set when opened from the Home inbox so the sidebar header exposes live
       // Previous/Next navigation across the attention feed.

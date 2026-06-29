@@ -1174,10 +1174,14 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 		t.Fatalf("interrupted run session = %+v", runs)
 	}
 	originalSessionID := runs[0].SessionID
-	resumed, err := fixture.store.ResumeTaskRun(context.Background(), task.ID)
+	resumedRuns, err := fixture.store.ResumeTaskRuns(context.Background(), task.ID)
 	if err != nil {
-		t.Fatalf("ResumeTaskRun: %v", err)
+		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
+	if len(resumedRuns) != 1 {
+		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
+	}
+	resumed := resumedRuns[0]
 	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
 		t.Fatalf("Process resumed: %v", err)
 	}

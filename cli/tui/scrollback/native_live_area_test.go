@@ -13,8 +13,8 @@ import (
 func TestNativeLiveAreaRenderWritesPreSplitLines(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 
 	if err := liveArea.Render(nativeLiveAreaFrame("one", "two")); err != nil {
 		t.Fatalf("render returned error: %v", err)
@@ -28,8 +28,8 @@ func TestNativeLiveAreaRenderWritesPreSplitLines(t *testing.T) {
 func TestNativeLiveAreaRenderErasesPreviousFrameBeforeDrawingNext(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 
 	if err := liveArea.Render(nativeLiveAreaFrame("one", "two")); err != nil {
 		t.Fatalf("first render returned error: %v", err)
@@ -47,8 +47,8 @@ func TestNativeLiveAreaRenderErasesPreviousFrameBeforeDrawingNext(t *testing.T) 
 func TestNativeLiveAreaRenderSkipsIdenticalFrame(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 
 	frame := nativeLiveAreaFrame("one", "two")
 	if err := liveArea.Render(frame); err != nil {
@@ -67,8 +67,8 @@ func TestNativeLiveAreaRenderSkipsIdenticalFrame(t *testing.T) {
 func TestNativeLiveAreaRenderPlacesVisibleCursorFromFrame(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 
 	if err := liveArea.Render(NativeLiveAreaFrame{
 		Lines:  []string{"one", "two"},
@@ -86,8 +86,8 @@ func TestNativeLiveAreaRenderPlacesVisibleCursorFromFrame(t *testing.T) {
 func TestNativeLiveAreaRenderPanicsWhenCursorRowIsOutsideFrame(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 
 	panicText := capturePanicText(t, func() {
 		_ = liveArea.Render(NativeLiveAreaFrame{
@@ -101,8 +101,8 @@ func TestNativeLiveAreaRenderPanicsWhenCursorRowIsOutsideFrame(t *testing.T) {
 func TestNativeLiveAreaRenderPanicsWhenCursorColumnIsOutsideTerminalWidth(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 
 	panicText := capturePanicText(t, func() {
 		_ = liveArea.Render(NativeLiveAreaFrame{
@@ -116,8 +116,8 @@ func TestNativeLiveAreaRenderPanicsWhenCursorColumnIsOutsideTerminalWidth(t *tes
 func TestNativeLiveAreaRenderPanicsForEmptyContent(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 
 	panicText := capturePanicText(t, func() {
 		_ = liveArea.Render(NativeLiveAreaFrame{})
@@ -128,8 +128,8 @@ func TestNativeLiveAreaRenderPanicsForEmptyContent(t *testing.T) {
 func TestNativeLiveAreaRenderPanicsWhenContentExceedsTerminalHeight(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 2, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 2)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 2)
 
 	panicText := capturePanicText(t, func() {
 		_ = liveArea.Render(nativeLiveAreaFrame("one", "two", "three"))
@@ -141,8 +141,8 @@ func TestNativeLiveAreaRenderPanicsWhenContentExceedsTerminalHeight(t *testing.T
 func TestNativeLiveAreaRenderPanicsWhenLineExceedsTerminalWidth(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 3, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 3, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 3, 24)
 
 	panicText := capturePanicText(t, func() {
 		_ = liveArea.Render(nativeLiveAreaFrame("abcd"))
@@ -154,8 +154,8 @@ func TestNativeLiveAreaRenderPanicsWhenLineExceedsTerminalWidth(t *testing.T) {
 func TestNativeLiveAreaRenderPanicsWhenLineContainsNewline(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 
 	panicText := capturePanicText(t, func() {
 		_ = liveArea.Render(nativeLiveAreaFrame("one\ntwo"))
@@ -166,10 +166,10 @@ func TestNativeLiveAreaRenderPanicsWhenLineContainsNewline(t *testing.T) {
 func TestNativeLiveAreaConstructorPanicsForMismatchedStableBufferDimensions(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
+	defer buffer.close()
 
 	panicText := capturePanicText(t, func() {
-		_ = NewNativeLiveAreaImpl(buffer, 79, 24)
+		_ = newNativeLiveAreaImpl(buffer, 79, 24)
 	})
 	assertPanicContains(t, panicText, "live area terminal dimensions must match stable buffer dimensions")
 }
@@ -177,11 +177,11 @@ func TestNativeLiveAreaConstructorPanicsForMismatchedStableBufferDimensions(t *t
 func TestNativeLiveAreaConstructorPanicsWhenAlreadyAttached(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	_ = NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	_ = newNativeLiveAreaImpl(buffer, 80, 24)
 
 	panicText := capturePanicText(t, func() {
-		_ = NewNativeLiveAreaImpl(buffer, 80, 24)
+		_ = newNativeLiveAreaImpl(buffer, 80, 24)
 	})
 	assertPanicContains(t, panicText, "live area already attached")
 }
@@ -189,8 +189,8 @@ func TestNativeLiveAreaConstructorPanicsWhenAlreadyAttached(t *testing.T) {
 func TestStableSteerErasesAndRestoresLiveAreaInOneFrame(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 	if err := liveArea.Render(nativeLiveAreaFrame("live")); err != nil {
 		t.Fatalf("render returned error: %v", err)
 	}
@@ -205,11 +205,11 @@ func TestStableSteerErasesAndRestoresLiveAreaInOneFrame(t *testing.T) {
 	}
 }
 
-func TestStableStreamingErasesLiveAreaUntilFinish(t *testing.T) {
+func TestStableStreamingKeepsPartialAssistantContentInLiveTailUntilFinish(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 	if err := liveArea.Render(nativeLiveAreaFrame("live")); err != nil {
 		t.Fatalf("render returned error: %v", err)
 	}
@@ -218,17 +218,20 @@ func TestStableStreamingErasesLiveAreaUntilFinish(t *testing.T) {
 		t.Fatalf("stream returned error: %v", err)
 	}
 
-	want := "live" + xansi.HideCursor + liveAreaEraseSequence(1) + "he"
+	want := "live" + xansi.HideCursor
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
+	if got, want := strings.Join(buffer.AssistantStreamTailLines(), "|"), "he"; got != want {
+		t.Fatalf("assistant stream tail = %q, want %q", got, want)
+	}
 }
 
-func TestNativeLiveAreaRenderDuringAssistantStreamingUsesStreamAnchor(t *testing.T) {
+func TestNativeLiveAreaRenderDuringAssistantStreamingKeepsChromeVisibleWithoutLinefeed(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 	if err := liveArea.Render(nativeLiveAreaFrame("old live")); err != nil {
 		t.Fatalf("render returned error: %v", err)
 	}
@@ -238,8 +241,7 @@ func TestNativeLiveAreaRenderDuringAssistantStreamingUsesStreamAnchor(t *testing
 	if err := liveArea.Render(nativeLiveAreaFrame("latest live")); err != nil {
 		t.Fatalf("render during stream returned error: %v", err)
 	}
-	wantAfterRender := "old live" + xansi.HideCursor + liveAreaEraseSequence(1) + "stream" +
-		terminalSaveCursor + terminalLineBreak + "latest live" + xansi.HideCursor + terminalRestoreCursor
+	wantAfterRender := "old live" + xansi.HideCursor + liveAreaEraseSequence(1) + "latest live" + xansi.HideCursor
 	if got := out.String(); got != wantAfterRender {
 		t.Fatalf("live render during stream output = %q, want %q", got, wantAfterRender)
 	}
@@ -247,10 +249,75 @@ func TestNativeLiveAreaRenderDuringAssistantStreamingUsesStreamAnchor(t *testing
 		t.Fatalf("finish returned error: %v", err)
 	}
 
-	streamAnchoredErase := terminalSaveCursor + xansi.CursorDown(1) + "\r" + liveAreaEraseSequence(1) + terminalRestoreCursor
-	want := wantAfterRender + streamAnchoredErase + terminalLineBreak + "latest live" + xansi.HideCursor
+	want := wantAfterRender + liveAreaEraseSequence(1) + "stream" + terminalLineBreak + "latest live" + xansi.HideCursor
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
+	}
+}
+
+func TestAssistantStreamAppendErasesStreamChromeWithoutAddingLinefeed(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 6, 24, &out, nil)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 6, 24)
+	if err := liveArea.Render(nativeLiveAreaFrame("old")); err != nil {
+		t.Fatalf("render returned error: %v", err)
+	}
+	if err := buffer.StreamMarkdownAssistantContent("hello"); err != nil {
+		t.Fatalf("first stream returned error: %v", err)
+	}
+	if err := liveArea.Render(nativeLiveAreaFrame("input", "hello")); err != nil {
+		t.Fatalf("render during stream returned error: %v", err)
+	}
+	if err := buffer.StreamMarkdownAssistantContent(" world\nnext\n"); err != nil {
+		t.Fatalf("second stream returned error: %v", err)
+	}
+
+	want := "old" + xansi.HideCursor +
+		liveAreaEraseSequence(1) + "input" + terminalLineBreak + "hello" + xansi.HideCursor +
+		liveAreaEraseSequence(2) + "hello " + terminalLineBreak + "world" + terminalLineBreak
+	if got := out.String(); got != want {
+		t.Fatalf("terminal output = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(buffer.AssistantStreamTailLines(), "|"), "next"; got != want {
+		t.Fatalf("assistant stream tail = %q, want %q", got, want)
+	}
+	if err := liveArea.Render(nativeLiveAreaFrame("input", "next")); err != nil {
+		t.Fatalf("render latest tail returned error: %v", err)
+	}
+	wantAfterRender := want + "input" + terminalLineBreak + "next" + xansi.HideCursor
+	if got := out.String(); got != wantAfterRender {
+		t.Fatalf("terminal output after live tail render = %q, want %q", got, wantAfterRender)
+	}
+}
+
+func TestAssistantStreamAppendErasesMultilineStreamChromeFromBottom(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 6, 24, &out, nil)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 6, 24)
+	if err := liveArea.Render(nativeLiveAreaFrame("old 1", "old 2", "old 3")); err != nil {
+		t.Fatalf("render returned error: %v", err)
+	}
+	if err := buffer.StreamMarkdownAssistantContent("hello"); err != nil {
+		t.Fatalf("first stream returned error: %v", err)
+	}
+	if err := liveArea.Render(nativeLiveAreaFrame("new 1", "new 2", "hello")); err != nil {
+		t.Fatalf("render during stream returned error: %v", err)
+	}
+	if err := buffer.StreamMarkdownAssistantContent(" world\nnext\n"); err != nil {
+		t.Fatalf("second stream returned error: %v", err)
+	}
+
+	want := "old 1" + terminalLineBreak + "old 2" + terminalLineBreak + "old 3" + xansi.HideCursor +
+		liveAreaEraseSequence(3) +
+		"new 1" + terminalLineBreak + "new 2" + terminalLineBreak + "hello" + xansi.HideCursor +
+		liveAreaEraseSequence(3) + "hello " + terminalLineBreak + "world" + terminalLineBreak
+	if got := out.String(); got != want {
+		t.Fatalf("terminal output = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(buffer.AssistantStreamTailLines(), "|"), "next"; got != want {
+		t.Fatalf("assistant stream tail = %q, want %q", got, want)
 	}
 }
 
@@ -265,8 +332,8 @@ func TestNativeLiveAreaHoldoffFlushDuringAssistantStreamingDefersLiveRestore(t *
 		nil,
 		WithNormalBufferAvailability(func() bool { return available }),
 	)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 	if err := liveArea.Render(nativeLiveAreaFrame("old live")); err != nil {
 		t.Fatalf("render returned error: %v", err)
 	}
@@ -279,17 +346,17 @@ func TestNativeLiveAreaHoldoffFlushDuringAssistantStreamingDefersLiveRestore(t *
 	}
 
 	available = true
-	if err := buffer.FlushHoldoff(); err != nil {
+	if err := buffer.flushHoldoff(); err != nil {
 		t.Fatalf("flush holdoff returned error: %v", err)
 	}
-	wantAfterFlush := "old live" + xansi.HideCursor + liveAreaEraseSequence(1) + "he"
+	wantAfterFlush := "old live" + xansi.HideCursor
 	if got := out.String(); got != wantAfterFlush {
 		t.Fatalf("holdoff flush during stream output = %q, want %q", got, wantAfterFlush)
 	}
 	if err := buffer.FinishAssistantStreaming(); err != nil {
 		t.Fatalf("finish returned error: %v", err)
 	}
-	wantAfterFinish := wantAfterFlush + terminalLineBreak + "latest live" + xansi.HideCursor
+	wantAfterFinish := wantAfterFlush + liveAreaEraseSequence(1) + "he" + terminalLineBreak + "latest live" + xansi.HideCursor
 	if got := out.String(); got != wantAfterFinish {
 		t.Fatalf("finish output = %q, want %q", got, wantAfterFinish)
 	}
@@ -298,8 +365,8 @@ func TestNativeLiveAreaHoldoffFlushDuringAssistantStreamingDefersLiveRestore(t *
 func TestQueuedSteeringFlushErasesOnceAndRestoresOnce(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 	if err := liveArea.Render(nativeLiveAreaFrame("live")); err != nil {
 		t.Fatalf("render returned error: %v", err)
 	}
@@ -335,8 +402,8 @@ func TestStableWriteSkipsWhenLiveEraseFails(t *testing.T) {
 	eraseErr := errors.New("erase failed")
 	writer := &scriptedWriter{errors: []error{nil, eraseErr}}
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, writer, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 	if err := liveArea.Render(nativeLiveAreaFrame("live")); err != nil {
 		t.Fatalf("render returned error: %v", err)
 	}
@@ -355,8 +422,8 @@ func TestStableWriteFailureStillAttemptsLiveRestore(t *testing.T) {
 	stableErr := errors.New("stable failed")
 	writer := &scriptedWriter{errors: []error{nil, nil, stableErr, nil}}
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, writer, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 	if err := liveArea.Render(nativeLiveAreaFrame("live")); err != nil {
 		t.Fatalf("render returned error: %v", err)
 	}
@@ -375,8 +442,8 @@ func TestLiveAreaRenderFailureStoresDesiredContentForLaterStableRestore(t *testi
 	renderErr := errors.New("render failed")
 	writer := &scriptedWriter{errors: []error{renderErr, nil, nil, nil}}
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, writer, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 
 	err := liveArea.Render(nativeLiveAreaFrame("desired"))
 	if !errors.Is(err, renderErr) {
@@ -402,8 +469,8 @@ func TestNativeLiveAreaHoldoffStoresLatestFrameUntilFlush(t *testing.T) {
 		nil,
 		WithNormalBufferAvailability(func() bool { return available }),
 	)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 
 	if err := liveArea.Render(nativeLiveAreaFrame("old")); err != nil {
 		t.Fatalf("old render returned error: %v", err)
@@ -419,7 +486,7 @@ func TestNativeLiveAreaHoldoffStoresLatestFrameUntilFlush(t *testing.T) {
 	}
 
 	available = true
-	if err := buffer.FlushHoldoff(); err != nil {
+	if err := buffer.flushHoldoff(); err != nil {
 		t.Fatalf("flush holdoff returned error: %v", err)
 	}
 	want := "new" + xansi.ShowCursor + "\r" + xansi.CursorForward(2)
@@ -431,8 +498,8 @@ func TestNativeLiveAreaHoldoffStoresLatestFrameUntilFlush(t *testing.T) {
 func TestStableWriteAfterCursorPlacementRestoresAnchorBeforeErasingLiveArea(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
-	defer buffer.Close()
-	liveArea := NewNativeLiveAreaImpl(buffer, 80, 24)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
 	frame := NativeLiveAreaFrame{
 		Lines:  []string{"one", "two"},
 		Cursor: NativeLiveAreaCursor{Visible: true, Row: 0, Col: 2},
@@ -450,6 +517,29 @@ func TestStableWriteAfterCursorPlacementRestoresAnchorBeforeErasingLiveArea(t *t
 	want := "one" + terminalLineBreak + "two" + placeCursor +
 		restoreAnchor + liveAreaEraseSequence(2) + "stable" + terminalLineBreak +
 		"one" + terminalLineBreak + "two" + placeCursor
+	if got := out.String(); got != want {
+		t.Fatalf("terminal output = %q, want %q", got, want)
+	}
+}
+
+func TestCloseErasesRenderedLiveFrameBeforeReleasingOwnership(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
+	frame := NativeLiveAreaFrame{
+		Lines:  []string{"old top", "old input", "old bottom"},
+		Cursor: NativeLiveAreaCursor{Visible: true, Row: 1, Col: 4},
+	}
+	if err := liveArea.Render(frame); err != nil {
+		t.Fatalf("render returned error: %v", err)
+	}
+
+	buffer.close()
+
+	placeCursor := xansi.ShowCursor + "\r" + xansi.CursorUp(1) + xansi.CursorForward(4)
+	restoreAnchor := xansi.CursorDown(1) + "\r"
+	want := "old top" + terminalLineBreak + "old input" + terminalLineBreak + "old bottom" + placeCursor +
+		restoreAnchor + liveAreaEraseSequence(3)
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}

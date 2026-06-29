@@ -147,3 +147,47 @@ func TestMainUIStartsInNormalBufferAndShowsReplayAfterWindowSize(t *testing.T) {
 		t.Fatalf("expected native replay text after first window size, got %q", plain)
 	}
 }
+
+func TestNativeMainUIDefersLiveAreaUntilProgramWindowSize(t *testing.T) {
+	nativeOut := &bytes.Buffer{}
+	rendererOut := &bytes.Buffer{}
+	model := newProjectedStaticUIModel(
+		WithUINativeSurfaceWriter(nativeOut),
+		WithUIInitialInput("startup width"),
+	)
+	program := tea.NewProgram(model, tea.WithInput(strings.NewReader("")), tea.WithOutput(rendererOut), tea.WithoutSignals())
+	done := make(chan error, 1)
+	go func() {
+		_, err := program.Run()
+		done <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for rendererOut.Len() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if nativeOut.String() != "" {
+		t.Fatalf("native live area wrote before Bubble Tea delivered window size: %q", nativeOut.String())
+	}
+
+	program.Send(tea.WindowSizeMsg{Width: 100, Height: 28})
+	for !strings.Contains(xansi.Strip(nativeOut.String()), strings.Repeat("─", 100)) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("program run failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("program did not terminate")
+	}
+
+	raw := nativeOut.String()
+	if !strings.Contains(xansi.Strip(raw), strings.Repeat("─", 100)) {
+		t.Fatalf("native live area did not render at program window width after window size, got %q", raw)
+	}
+	if strings.Contains(xansi.Strip(raw), strings.Repeat("─", 120)) {
+		t.Fatalf("native live area rendered fallback-width frame, got %q", raw)
+	}
+}

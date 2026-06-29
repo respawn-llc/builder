@@ -444,12 +444,8 @@ export type TaskStatus = Readonly<{
 export type TaskActions = Readonly<{
   canStart: boolean;
   canInterrupt: boolean;
-  interruptRunID: string;
   canResume: boolean;
-  resumeRunID: string;
   canCancel: boolean;
-  needsDetailForInterrupt: boolean;
-  needsDetailForResume: boolean;
   manualMoveTargetNodeIDs: readonly string[];
 }>;
 

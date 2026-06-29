@@ -505,15 +505,15 @@ export class ApiClient {
     return response;
   }
 
-  async interruptTask(taskID: string, runID: string): Promise<void> {
+  async interruptTask(taskID: string, sessionID?: string): Promise<void> {
     await this.transport.call(
       "workflow.task.interrupt",
-      compactJsonObject({ task_id: taskID, run_id: runID }),
+      compactJsonObject({ task_id: taskID, session_id: sessionID }),
     );
   }
 
-  async resumeTask(taskID: string, runID: string): Promise<void> {
-    await this.transport.call("workflow.task.resume", compactJsonObject({ task_id: taskID, run_id: runID }));
+  async resumeTask(taskID: string): Promise<void> {
+    await this.transport.call("workflow.task.resume", compactJsonObject({ task_id: taskID }));
   }
 
   async approveTransition(taskTransitionID: string): Promise<void> {

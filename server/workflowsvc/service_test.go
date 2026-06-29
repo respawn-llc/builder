@@ -699,8 +699,11 @@ func TestServiceInterruptTaskTargetsRunAndCancelsRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InterruptWorkflowTask: %v", err)
 	}
-	if interrupted.RunID != started.RunID || len(canceler.runIDs) != 1 || canceler.runIDs[0] != workflow.RunID(started.RunID) {
-		t.Fatalf("interrupt response=%+v canceled runs=%+v", interrupted, canceler.runIDs)
+	if len(interrupted.Runs) != 1 {
+		t.Fatalf("interrupt response=%+v, want one run", interrupted)
+	}
+	if len(canceler.taskIDs) != 1 || canceler.taskIDs[0] != workflow.TaskID(task.Task.ID) {
+		t.Fatalf("canceled task runtimes=%+v, want task %s", canceler.taskIDs, task.Task.ID)
 	}
 }
 
@@ -810,7 +813,7 @@ func TestServiceResumeTaskRequeuesRunAndNotifiesScheduler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeWorkflowTask: %v", err)
 	}
-	if resumed.RunID != started.RunID || resumed.Generation <= claimed.Generation || resumed.PlacementID == "" || resumed.NodeID == "" {
+	if len(resumed.Runs) != 1 || resumed.Runs[0].Generation <= claimed.Generation || resumed.Runs[0].PlacementID == "" || resumed.Runs[0].NodeID == "" {
 		t.Fatalf("resume response = %+v, want same run requeued", resumed)
 	}
 	if notifier.count != 1 {

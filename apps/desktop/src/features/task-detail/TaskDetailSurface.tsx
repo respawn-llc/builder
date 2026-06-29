@@ -10,7 +10,6 @@ export type TaskDetailSurfaceProps = Readonly<{
   taskId: string;
   enabled: boolean;
   initialFocus?: "firstQuestion" | undefined;
-  resumeRunId: string;
   onMutated?: (() => void) | undefined;
 }>;
 
@@ -18,7 +17,6 @@ export function TaskDetailSurface({
   taskId,
   enabled,
   initialFocus,
-  resumeRunId,
   onMutated,
 }: TaskDetailSurfaceProps) {
   const { t } = useTranslation();
@@ -41,7 +39,6 @@ export function TaskDetailSurface({
       initialFocus={initialFocus}
       onMutated={onMutated}
       openLink={openLink}
-      resumeRunId={resumeRunId}
     />
   );
 }
