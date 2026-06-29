@@ -89,6 +89,8 @@ Local append-only status/tool-result blocks that have already been emitted to na
 
 When an authoritative committed projection arrives while a native assistant stream is active, the surface may finalize the active stream and skip the corresponding committed assistant block only if that block's rendered rows match the active stream source. Assistant final-answer and commentary blocks are both valid finalizers because native assistant streaming is phase-less after markdown projection; non-assistant blocks are never valid stream finalizers. If the committed block differs from the mutable stream, the surface must not finalize or skip it. Production surfaces an active-stream mismatch and disables native output; debug mode panics with invariant diagnostics.
 
+Committed non-assistant rows may arrive while an assistant stream is still active. Those rows are stable transcript history, not stream finalizers. Native queues them behind the active stream through the same stable append path and keeps the assistant stream mutable until a matching assistant finalizer or explicit stream finish.
+
 The stable-line append intent accepts exactly one visual terminal line. Visual width is ANSI-aware display cell width according to the active terminal width. App-owned committed projection lines are ANSI-aware clamped before submission to the native surface. If submitted input occupies more than one terminal line or contains embedded carriage return or line feed, it is an invariant violation.
 
 Live-area content must be non-empty, contain no embedded carriage return or line feed inside a submitted line, fit within terminal height, and have every line fit within terminal-width ANSI-aware display cells. Native cursor row and column must fit inside the submitted live frame.
