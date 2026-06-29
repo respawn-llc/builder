@@ -1675,6 +1675,36 @@ func TestNativeStableProjectionChangeAppendsAfterOverlappingRecentTail(t *testin
 	}
 }
 
+func TestNativeStableProjectionChangeAppendsAuthoritativeTailAfterLocalStatus(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := nativeStableProjectionForTest("old-a", "local status")
+	previous.Blocks[1].Role = tui.RenderIntentReviewerStatus
+	previous.Blocks[1].DividerGroup = string(tui.RenderIntentReviewerStatus)
+	current := nativeStableProjectionForTest("old-a", "new user prompt")
+	current.Blocks[1].Role = tui.RenderIntentUser
+	current.Blocks[1].DividerGroup = string(tui.RenderIntentUser)
+	exitMainThread := m.enterUIMainThread("native stable local status append test")
+	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("local-status projection delivery returned error: %v", err)
+	}
+
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "old-a") || strings.Contains(plain, "local status") {
+		t.Fatalf("local-status delivery replayed existing blocks, got %q", plain)
+	}
+	if !strings.Contains(plain, "new user prompt") {
+		t.Fatalf("local-status delivery skipped authoritative append, got %q", plain)
+	}
+}
+
 func TestNativeStableProjectionChangeSkipsStreamedBlockAfterOverlappingRecentTail(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
