@@ -151,6 +151,37 @@ func TestBootstrapAppNoAuthPreferenceDoesNotOpenAuthPicker(t *testing.T) {
 	}
 }
 
+func TestBootstrapAppRequiredNoAuthPreferenceDoesNotOpenAuthPicker(t *testing.T) {
+	home, workspace := newRegisteredAppWorkspace(t)
+	if err := os.MkdirAll(filepath.Join(home, config.ConfigDirName), 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, config.ConfigDirName, "config.toml"), []byte("model = \"gpt-5\"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
+	store := auth.NewFileStore(config.GlobalAuthConfigPath(cfg))
+	if err := store.Save(context.Background(), auth.State{
+		Scope:               auth.ScopeGlobal,
+		Method:              auth.Method{Type: auth.MethodNone},
+		EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
+	}); err != nil {
+		t.Fatalf("save no-auth state: %v", err)
+	}
+	interactor := &interactiveAuthInteractor{
+		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
+			t.Fatal("persisted no-auth under required auth must not open auth picker")
+			return authMethodPickerResult{}, nil
+		},
+	}
+
+	boot, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, Model: "gpt-5"}, interactor, true)
+	if err != nil {
+		t.Fatalf("bootstrap app: %v", err)
+	}
+	defer func() { _ = boot.Close() }()
+}
+
 func TestResolveSessionActionLogoutUsesBootstrapAuthInteractor(t *testing.T) {
 	ctx := context.Background()
 	mgr := auth.NewManager(auth.NewMemoryStore(auth.State{

@@ -589,6 +589,90 @@ func TestGatewayAuthBootstrapAPIKeyCompletionEnablesAuthRequiredMethods(t *testi
 	}
 }
 
+func TestGatewayAuthBootstrapNoneAuthorizesSameConnectionOnly(t *testing.T) {
+	appCore, server, _ := newGatewayTestServerWithAuth(t, false)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+	if respErr := callGatewayExpectError(t, conn, "plan-before-no-auth", protocol.MethodSessionPlan, gatewaySessionPlanRequest("plan-before-no-auth")); respErr.Code != protocol.ErrCodeAuthRequired {
+		t.Fatalf("session.plan before no-auth = %+v, want auth required", respErr)
+	}
+
+	var complete serverapi.AuthCompleteBootstrapResponse
+	callGateway(t, conn, "complete-no-auth", protocol.MethodAuthCompleteBootstrap, serverapi.AuthCompleteBootstrapRequest{Mode: serverapi.AuthBootstrapModeNone}, &complete)
+	if complete.AuthReady || !complete.NoAuthSelected {
+		t.Fatalf("auth.completeBootstrap none = %+v, want not ready and no-auth selected", complete)
+	}
+
+	var plan serverapi.SessionPlanResponse
+	callGateway(t, conn, "plan-after-no-auth", protocol.MethodSessionPlan, gatewaySessionPlanRequest("plan-after-no-auth"), &plan)
+	if strings.TrimSpace(plan.Plan.WorkspaceRoot) == "" {
+		t.Fatalf("session.plan after no-auth returned empty workspace root: %+v", plan)
+	}
+}
+
+func TestGatewayBootstrapStatusDoesNotAuthorizeNoAuthConnection(t *testing.T) {
+	appCore, server, authSupport := newGatewayTestServerWithAuth(t, false)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	if _, err := authSupport.AuthManager.SwitchMethodAndSetEnvAPIKeyPreference(context.Background(), auth.Method{Type: auth.MethodNone}, auth.EnvAPIKeyPreferencePreferSaved, true, true); err != nil {
+		t.Fatalf("SwitchMethodAndSetEnvAPIKeyPreference: %v", err)
+	}
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+
+	var status serverapi.AuthGetBootstrapStatusResponse
+	callGateway(t, conn, "status-no-auth", protocol.MethodAuthGetBootstrapStatus, serverapi.AuthGetBootstrapStatusRequest{}, &status)
+	if status.AuthReady || !status.NoAuthSelected {
+		t.Fatalf("bootstrap status = %+v, want no-auth selected but not ready", status)
+	}
+	if respErr := callGatewayExpectError(t, conn, "plan-after-status", protocol.MethodSessionPlan, gatewaySessionPlanRequest("plan-after-status")); respErr.Code != protocol.ErrCodeAuthRequired {
+		t.Fatalf("session.plan after status = %+v, want auth required", respErr)
+	}
+
+	var ack serverapi.AuthAcknowledgeNoAuthResponse
+	callGateway(t, conn, "ack-no-auth", protocol.MethodAuthAcknowledgeNoAuth, serverapi.AuthAcknowledgeNoAuthRequest{}, &ack)
+	if ack.AuthReady || !ack.NoAuthSelected {
+		t.Fatalf("auth.acknowledgeNoAuth = %+v, want no-auth selected but not ready", ack)
+	}
+	callGateway(t, conn, "plan-after-ack", protocol.MethodSessionPlan, gatewaySessionPlanRequest("plan-after-ack"), nil)
+}
+
+func TestGatewayPersistedNoAuthDoesNotAuthorizeFreshConnectionsWithoutAck(t *testing.T) {
+	appCore, server, authSupport := newGatewayTestServerWithAuth(t, false)
+	defer func() { _ = appCore.Close() }()
+	store := createGatewayAuthoritativeSession(t, appCore)
+	appCore.RegisterSessionStore(store)
+	defer server.Close()
+	if _, err := authSupport.AuthManager.SwitchMethodAndSetEnvAPIKeyPreference(context.Background(), auth.Method{Type: auth.MethodNone}, auth.EnvAPIKeyPreferencePreferSaved, true, true); err != nil {
+		t.Fatalf("SwitchMethodAndSetEnvAPIKeyPreference: %v", err)
+	}
+
+	control := dialGateway(t, server)
+	defer func() { _ = control.Close() }()
+	handshakeGateway(t, control)
+	callGateway(t, control, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+	if respErr := callGatewayExpectError(t, control, "plan-fresh-no-ack", protocol.MethodSessionPlan, gatewaySessionPlanRequest("plan-fresh-no-ack")); respErr.Code != protocol.ErrCodeAuthRequired {
+		t.Fatalf("fresh session.plan = %+v, want auth required", respErr)
+	}
+
+	subscription := dialGateway(t, server)
+	defer func() { _ = subscription.Close() }()
+	handshakeGateway(t, subscription)
+	callGateway(t, subscription, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+	callGateway(t, subscription, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Meta().SessionID}, nil)
+	if respErr := callGatewayExpectError(t, subscription, "subscribe-fresh-no-ack", protocol.MethodSessionSubscribeActivity, serverapi.SessionActivitySubscribeRequest{SessionID: store.Meta().SessionID}); respErr.Code != protocol.ErrCodeAuthRequired {
+		t.Fatalf("fresh session activity subscribe = %+v, want auth required", respErr)
+	}
+}
+
 func TestGatewayRejectsProjectWorkspaceMutationBeforeServerAuthReady(t *testing.T) {
 	appCore, server, _ := newGatewayTestServerWithAuth(t, false)
 	defer func() { _ = appCore.Close() }()
@@ -629,6 +713,14 @@ func containsString(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func gatewaySessionPlanRequest(id string) serverapi.SessionPlanRequest {
+	return serverapi.SessionPlanRequest{
+		ClientRequestID: id,
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		ForceNewSession: true,
+	}
 }
 
 func sameStringSet(left []string, right []string) bool {

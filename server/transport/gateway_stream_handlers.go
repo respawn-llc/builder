@@ -25,7 +25,7 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 	if !state.handshakeDone {
 		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods"))
 	}
-	if err := newRoutePolicyExecutor(g).requireAuth(ctx, req.Method); err != nil {
+	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return sendResponse(ctx, conn, responseForError(req.ID, err))
 	}
 	decoded, preflightResp, failed := g.preflightRouteRequest(ctx, state, route, req)
@@ -73,7 +73,7 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods"))
 		return
 	}
-	if err := newRoutePolicyExecutor(g).requireAuth(ctx, req.Method); err != nil {
+	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
 		return
 	}

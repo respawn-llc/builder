@@ -122,6 +122,9 @@ func (i *interactiveAuthInteractor) Interact(ctx context.Context, req authIntera
 	if authui.NeedsAuthEnvConflictResolution(req) {
 		return authui.AuthInteractionOutcome{}, i.resolveEnvAPIKeyConflict(ctx, req)
 	}
+	if req.AuthRequired && req.State.IsNoAuthSelected() {
+		return authui.AuthInteractionOutcome{ProceedWithoutAuth: true}, nil
+	}
 
 	for {
 		choice, err := i.chooseMethod(req)

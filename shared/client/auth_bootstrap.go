@@ -10,6 +10,7 @@ import (
 type AuthBootstrapClient interface {
 	GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error)
 	CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error)
+	AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error)
 }
 
 type loopbackAuthBootstrapClient struct {
@@ -26,4 +27,8 @@ func (c *loopbackAuthBootstrapClient) GetAuthBootstrapStatus(ctx context.Context
 
 func (c *loopbackAuthBootstrapClient) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
 	return callLoopbackClient(c, "auth bootstrap service is required", ctx, req, servicecontract.AuthBootstrapService.CompleteBootstrap)
+}
+
+func (c *loopbackAuthBootstrapClient) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+	return callLoopbackClient(c, "auth bootstrap service is required", ctx, req, servicecontract.AuthBootstrapService.AcknowledgeNoAuth)
 }

@@ -23,6 +23,7 @@ type Remote struct {
 	workspaceID    string
 	workspaceRoot  string
 	expectedRootID atomic.Value // string; empty disables root validation
+	noAuthAck      atomic.Bool
 	closed         atomic.Bool
 }
 
@@ -101,6 +102,54 @@ func (c *Remote) rootID() string {
 	return ""
 }
 
+func (c *Remote) EnableNoAuthBootstrapAcknowledgement(ctx context.Context) error {
+	if c == nil {
+		return errors.New("remote client is required")
+	}
+	resp, err := c.AcknowledgeNoAuth(ctx, serverapi.AuthAcknowledgeNoAuthRequest{})
+	if err != nil {
+		c.noAuthAck.Store(false)
+		return err
+	}
+	if resp.NoAuthSelected {
+		c.noAuthAck.Store(true)
+		return nil
+	}
+	c.noAuthAck.Store(false)
+	if resp.AuthReady {
+		return nil
+	}
+	return serverapi.ErrServerAuthRequired
+}
+
+func (c *Remote) DisableNoAuthBootstrapAcknowledgement() {
+	if c != nil {
+		c.noAuthAck.Store(false)
+	}
+}
+
+func (c *Remote) NoAuthBootstrapAcknowledgementEnabled() bool {
+	return c != nil && c.noAuthAck.Load()
+}
+
+func (c *Remote) acknowledgeNoAuthOnConn(ctx context.Context, conn rpcwire.Conn) error {
+	if c == nil || !c.noAuthAck.Load() {
+		return nil
+	}
+	var resp serverapi.AuthAcknowledgeNoAuthResponse
+	if err := callRPC(ctx, conn, "auth-acknowledge-no-auth", protocol.MethodAuthAcknowledgeNoAuth, serverapi.AuthAcknowledgeNoAuthRequest{}, &resp); err != nil {
+		return err
+	}
+	if resp.NoAuthSelected {
+		return nil
+	}
+	c.noAuthAck.Store(false)
+	if resp.AuthReady {
+		return nil
+	}
+	return serverapi.ErrServerAuthRequired
+}
+
 func (c *Remote) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
 	return callUnscopedRPC[serverapi.ServerReadinessRequest, serverapi.ServerReadinessResponse](c, ctx, protocol.MethodServerReadinessGet, req)
 }
@@ -146,7 +195,19 @@ func (c *Remote) GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthG
 }
 
 func (c *Remote) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	return callUnscopedRPC[serverapi.AuthCompleteBootstrapRequest, serverapi.AuthCompleteBootstrapResponse](c, ctx, protocol.MethodAuthCompleteBootstrap, req)
+	resp, err := callUnscopedRPC[serverapi.AuthCompleteBootstrapRequest, serverapi.AuthCompleteBootstrapResponse](c, ctx, protocol.MethodAuthCompleteBootstrap, req)
+	if err == nil {
+		if resp.NoAuthSelected {
+			c.noAuthAck.Store(true)
+		} else if resp.AuthReady {
+			c.noAuthAck.Store(false)
+		}
+	}
+	return resp, err
+}
+
+func (c *Remote) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+	return callUnscopedRPC[serverapi.AuthAcknowledgeNoAuthRequest, serverapi.AuthAcknowledgeNoAuthResponse](c, ctx, protocol.MethodAuthAcknowledgeNoAuth, req)
 }
 
 func (c *Remote) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
@@ -673,6 +734,10 @@ func (c *Remote) openControlRPCConn(ctx context.Context) (rpcwire.Conn, protocol
 		return nil, protocol.ServerIdentity{}, err
 	}
 	if err := validateIdentityRoot(c.rootID(), identity); err != nil {
+		cleanup()
+		return nil, protocol.ServerIdentity{}, err
+	}
+	if err := c.acknowledgeNoAuthOnConn(ctx, conn); err != nil {
 		cleanup()
 		return nil, protocol.ServerIdentity{}, err
 	}
