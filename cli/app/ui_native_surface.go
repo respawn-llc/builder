@@ -378,8 +378,8 @@ func (m *uiModel) steerNativeStableProjectionChange(operation string, previous t
 	if overlap := current.SharedNativeStableSuffixPrefixBlockCount(previous); overlap > 0 {
 		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
 	}
-	if startBlock, ok := nativeStableAuthoritativeAppendAfterLocalSuffix(previous, current); ok {
-		return m.steerNativeProjectionLines(current.LinesFromBlock(startBlock, tui.TranscriptDivider))
+	if blockIndexes, ok := nativeStableAppendBlockIndexesForLocalReconciliation(previous, current); ok {
+		return m.steerNativeStableAppendBlocks(current, previous, blockIndexes)
 	}
 	return m.nativeStableProjectionInvariantError(operation, nativeStableProjectionNonContiguousReason, previous, current)
 }
@@ -400,8 +400,8 @@ func (m *uiModel) steerNativeStableRuntimeProjectionChange(operation string, pre
 	if overlap := current.SharedNativeStableSuffixPrefixBlockCount(previous); overlap > 0 {
 		return m.steerNativeProjectionLines(current.LinesFromBlock(overlap, tui.TranscriptDivider))
 	}
-	if startBlock, ok := nativeStableAuthoritativeAppendAfterLocalSuffix(previous, current); ok {
-		return m.steerNativeProjectionLines(current.LinesFromBlock(startBlock, tui.TranscriptDivider))
+	if blockIndexes, ok := nativeStableAppendBlockIndexesForLocalReconciliation(previous, current); ok {
+		return m.steerNativeStableAppendBlocks(current, previous, blockIndexes)
 	}
 	return m.nativeStableProjectionRecoverableError(operation, previous, current)
 }
@@ -416,6 +416,14 @@ func (m *uiModel) steerNativeStableAppendFromBlock(current tui.TranscriptProject
 	return m.steerNativeProjectionLines(current.LinesFromBlock(startBlock, tui.TranscriptDivider))
 }
 
+func (m *uiModel) steerNativeStableAppendBlocks(current tui.TranscriptProjection, previous tui.TranscriptProjection, blockIndexes []int) error {
+	if m == nil || m.nativeSurface == nil || !m.nativeSurface.initialized() || len(blockIndexes) == 0 {
+		return nil
+	}
+	lines := nativeStableAppendLinesForBlockIndexes(current, previous, blockIndexes)
+	return m.steerNativeProjectionLines(lines)
+}
+
 func nativeStableProjectionNeedsDelivery(previous tui.TranscriptProjection, current tui.TranscriptProjection) bool {
 	if current.Empty() {
 		return false
@@ -424,29 +432,88 @@ func nativeStableProjectionNeedsDelivery(previous tui.TranscriptProjection, curr
 		return true
 	}
 	if _, ok := current.RenderNativeStableAppendDeltaFrom(previous, tui.TranscriptDivider); !ok {
-		if startBlock, ok := nativeStableAuthoritativeAppendAfterLocalSuffix(previous, current); ok {
-			return startBlock < len(current.Blocks)
+		if blockIndexes, ok := nativeStableAppendBlockIndexesForLocalReconciliation(previous, current); ok {
+			return len(blockIndexes) > 0
 		}
 		return true
 	}
 	return len(current.Blocks) > len(previous.Blocks)
 }
 
-func nativeStableAuthoritativeAppendAfterLocalSuffix(previous tui.TranscriptProjection, current tui.TranscriptProjection) (int, bool) {
+func nativeStableAppendBlockIndexesForLocalReconciliation(previous tui.TranscriptProjection, current tui.TranscriptProjection) ([]int, bool) {
 	prefix := current.SharedNativeStablePrefixBlockCount(previous)
-	if prefix >= len(previous.Blocks) {
-		return 0, false
-	}
+	previousSuffixIsLocal := prefix < len(previous.Blocks)
 	for _, block := range previous.Blocks[prefix:] {
 		if !nativeStableLocalAppendOnlyBlock(block) {
-			return 0, false
+			previousSuffixIsLocal = false
+			break
 		}
 	}
-	return prefix, true
+	if previousSuffixIsLocal {
+		blockIndexes := make([]int, 0, len(current.Blocks)-prefix)
+		for idx := prefix; idx < len(current.Blocks); idx++ {
+			blockIndexes = append(blockIndexes, idx)
+		}
+		return blockIndexes, true
+	}
+	matchedPrevious := 0
+	blockIndexes := make([]int, 0)
+	for idx, block := range current.Blocks {
+		if matchedPrevious < len(previous.Blocks) && previous.Blocks[matchedPrevious].NativeStableEqual(block) {
+			matchedPrevious++
+			continue
+		}
+		if matchedPrevious < len(previous.Blocks) && !nativeStableLocalAppendOnlyBlock(block) {
+			return nil, false
+		}
+		blockIndexes = append(blockIndexes, idx)
+	}
+	if matchedPrevious != len(previous.Blocks) {
+		return nil, false
+	}
+	return blockIndexes, true
+}
+
+func nativeStableAppendLinesForBlockIndexes(current tui.TranscriptProjection, previous tui.TranscriptProjection, blockIndexes []int) []tui.TranscriptProjectionLine {
+	if len(blockIndexes) == 0 {
+		return nil
+	}
+	lines := make([]tui.TranscriptProjectionLine, 0, len(blockIndexes)*2)
+	lastGroup := ""
+	haveLastGroup := false
+	if len(previous.Blocks) > 0 {
+		lastGroup = previous.Blocks[len(previous.Blocks)-1].DividerGroup
+		haveLastGroup = true
+	}
+	for _, blockIndex := range blockIndexes {
+		if blockIndex < 0 || blockIndex >= len(current.Blocks) {
+			continue
+		}
+		block := current.Blocks[blockIndex]
+		if haveLastGroup && lastGroup != block.DividerGroup {
+			lines = append(lines, tui.TranscriptProjectionLine{Kind: tui.VisibleLineDivider, Text: tui.TranscriptDivider})
+		}
+		for _, line := range block.Lines {
+			lines = append(lines, tui.TranscriptProjectionLine{Kind: tui.VisibleLineContent, Text: line})
+		}
+		lastGroup = block.DividerGroup
+		haveLastGroup = true
+	}
+	return lines
 }
 
 func nativeStableLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
-	return block.Role == tui.RenderIntentReviewerStatus
+	switch block.Role {
+	case tui.RenderIntentReviewerStatus,
+		tui.RenderIntentReviewerSuggestions,
+		tui.RenderIntentToolShellSuccess,
+		tui.RenderIntentToolShellError,
+		tui.RenderIntentToolPatchSuccess,
+		tui.RenderIntentToolPatchError:
+		return true
+	default:
+		return false
+	}
 }
 
 const nativeStableProjectionNonContiguousReason = "native stable append is not contiguous with current transcript projection"

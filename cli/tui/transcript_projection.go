@@ -501,6 +501,10 @@ func (b TranscriptProjectionBlock) nativeStableEqual(other TranscriptProjectionB
 	return true
 }
 
+func (b TranscriptProjectionBlock) NativeStableEqual(other TranscriptProjectionBlock) bool {
+	return b.nativeStableEqual(other)
+}
+
 func (m Model) CommittedOngoingProjection() TranscriptProjection {
 	return m.CommittedOngoingProjectionForEntries(m.transcriptInput.Entries)
 }
