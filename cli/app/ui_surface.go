@@ -128,7 +128,6 @@ func (r uiPresentationFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult 
 		m.nativeResizeRehydrateActive = true
 		if !surfaceReady {
 			m.nativeSurface.Close()
-			m.nativeDeliveredStableProjection = tui.TranscriptProjection{}
 		}
 		if !surfaceReady && !m.nativeSurface.ensure(msg.width, msg.height) {
 			m.nativeResizeRehydrateActive = false

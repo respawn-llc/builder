@@ -920,6 +920,60 @@ func TestNativeSurfaceResizeSettlesWithoutReplayingStableTranscript(t *testing.T
 	}
 }
 
+func TestNativeSurfaceResizePendingAppendFlushesOnlyNewStableRows(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "resize held prompt", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	next, cmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = next.(*uiModel)
+	if cmd == nil {
+		t.Fatal("expected resize to schedule native stable rehydrate")
+	}
+	token := m.nativeResizeRehydrateToken
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q after resize, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "resize held answer",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	})
+	_ = collectCmdMessages(t, result.cmd)
+	if got := out.String(); got != "" {
+		t.Fatalf("resize-pending append wrote before holdoff flush: %q", got)
+	}
+
+	next, resizeCmd := m.Update(nativeSurfaceResizeRehydrateMsg{token: token, width: 100, height: 30})
+	m = next.(*uiModel)
+	if resizeCmd != nil {
+		t.Fatal("did not expect follow-up command after settled resize rehydrate")
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "resize held prompt") {
+		t.Fatalf("resize holdoff flushed already-emitted prompt, got %q", plain)
+	}
+	if !strings.Contains(plain, "resize held answer") {
+		t.Fatalf("resize holdoff skipped new committed answer, got %q", plain)
+	}
+}
+
 func TestNativeSurfaceResizeDebounceClampsWideCommittedPatchSummary(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 36, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
@@ -2117,7 +2171,7 @@ func TestNativeStableAppendWithActiveStreamQueuesNonAssistantCommittedRows(t *te
 	}
 }
 
-func TestNativeStableAppendWithActiveStreamSkipsLaterMatchingFinalizer(t *testing.T) {
+func TestNativeStableAppendWithActiveStreamRejectsLaterMatchingFinalizer(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
 	if rendered := m.View(); rendered != "" {
@@ -2152,15 +2206,15 @@ func TestNativeStableAppendWithActiveStreamSkipsLaterMatchingFinalizer(t *testin
 	exitMainThread := m.enterUIMainThread("native active stream later finalizer append test")
 	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "final answer")
 	exitMainThread()
-	if err != nil {
-		t.Fatalf("active stream later finalizer delivery returned error: %v", err)
+	if err == nil {
+		t.Fatal("expected later active stream finalizer to be rejected instead of reordered")
 	}
 	plain := stripANSIAndTrimRight(out.String())
-	if got := strings.Count(plain, "final answer"); got != 1 {
-		t.Fatalf("later finalizer wrote final answer %d times, want once; output=%q", got, plain)
+	if strings.Contains(plain, "final answer") {
+		t.Fatalf("later finalizer rejection finished or rewrote stream, got %q", plain)
 	}
-	if !strings.Contains(plain, "queued user") {
-		t.Fatalf("later finalizer skipped queued user row, got %q", plain)
+	if strings.Contains(plain, "queued user") {
+		t.Fatalf("later finalizer rejection reordered queued user after stream, got %q", plain)
 	}
 }
 
