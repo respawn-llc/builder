@@ -587,7 +587,7 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 	prefix := m.nativeStableSharedPrefixBlockCount(current, previous)
 	previousSuffixIsLocal := prefix < len(previous.Blocks)
 	for _, block := range previous.Blocks[prefix:] {
-		if !nativeStableLocalAppendOnlyBlock(block) {
+		if !nativeStablePreviouslyLocalAppendOnlyBlock(block) {
 			previousSuffixIsLocal = false
 			break
 		}
@@ -606,7 +606,7 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 			matchedPrevious++
 			continue
 		}
-		if matchedPrevious < len(previous.Blocks) && !nativeStableLocalAppendOnlyBlock(block) {
+		if matchedPrevious < len(previous.Blocks) && !nativeStableCurrentLocalAppendOnlyBlock(block) {
 			return nil, false
 		}
 		blockIndexes = append(blockIndexes, idx)
@@ -645,17 +645,25 @@ func nativeStableAppendLinesForBlockIndexes(current tui.TranscriptProjection, pr
 	return lines
 }
 
-func nativeStableLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
+func nativeStablePreviouslyLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
 	switch block.Role {
-	case tui.RenderIntentReviewerStatus,
-		tui.RenderIntentReviewerSuggestions,
-		tui.RenderIntentToolShellSuccess,
+	case tui.RenderIntentToolShellSuccess,
 		tui.RenderIntentToolShellError,
 		tui.RenderIntentToolPatchSuccess,
 		tui.RenderIntentToolPatchError:
 		return true
 	default:
 		return false
+	}
+}
+
+func nativeStableCurrentLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
+	switch block.Role {
+	case tui.RenderIntentReviewerStatus,
+		tui.RenderIntentReviewerSuggestions:
+		return true
+	default:
+		return nativeStablePreviouslyLocalAppendOnlyBlock(block)
 	}
 }
 
