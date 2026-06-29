@@ -10,6 +10,7 @@ import (
 
 	"core/cli/tui"
 	"core/cli/tui/scrollback"
+	"core/shared/clientui"
 
 	xansi "github.com/charmbracelet/x/ansi"
 )
@@ -205,9 +206,6 @@ func (m *uiModel) ensureNativeSurface(width int, height int) bool {
 	shouldRehydrate := !m.nativeResizeRehydrateScheduled()
 	recreate := !m.nativeSurface.ready(width, height)
 	wasInitialized := m.nativeSurface.initialized()
-	if recreate {
-		m.nativeDeliveredStableProjection = tui.TranscriptProjection{}
-	}
 	if !m.nativeSurface.ensure(width, height) {
 		return false
 	}
@@ -492,7 +490,7 @@ func (m *uiModel) nativeStableAppendBlocksForProjectionChange(previous tui.Trans
 	if overlap := m.nativeStableSharedSuffixPrefixBlockCount(current, previous); overlap > 0 {
 		return nativeStableBlockIndexRange(overlap, len(current.Blocks)), true
 	}
-	if nativeStableProjectionStartsCompactionReset(current) && len(current.Blocks) < len(previous.Blocks) {
+	if nativeStableProjectionStartsCompactionReset(current) {
 		return nativeStableBlockIndexRange(0, len(current.Blocks)), true
 	}
 	if blockIndexes, ok := m.nativeStableAppendBlockIndexesForLocalReconciliation(previous, current); ok {
@@ -691,24 +689,20 @@ func (m *uiModel) nativeAssistantStreamMatchesProjectionBlock(streamText string,
 	if block.Role != tui.RenderIntentAssistant && block.Role != tui.RenderIntentAssistantCommentary {
 		return false
 	}
+	phase := clientui.MessagePhaseFinal
+	if block.Role == tui.RenderIntentAssistantCommentary {
+		phase = clientui.MessagePhaseCommentary
+	}
 	projection := m.nativeCommittedProjectionForEntries([]tui.TranscriptEntry{{
 		Role:      tui.TranscriptRoleAssistant,
 		Text:      streamText,
 		Committed: true,
+		Phase:     phase,
 	}})
 	if len(projection.Blocks) != 1 {
 		return false
 	}
-	streamBlock := projection.Blocks[0]
-	if streamBlock.DividerGroup != block.DividerGroup || len(streamBlock.Lines) != len(block.Lines) {
-		return false
-	}
-	for idx := range streamBlock.Lines {
-		if streamBlock.Lines[idx] != block.Lines[idx] {
-			return false
-		}
-	}
-	return true
+	return m.nativeStableProjectionBlocksEqual(projection.Blocks[0], block)
 }
 
 func (m *uiModel) nativeStableProjectionInvariantError(operation string, reason string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {

@@ -4,7 +4,7 @@
 
 This spec owns ongoing mode's normal-buffer terminal surface. Alt-screen surfaces, alternate-scroll mode changes, BEL, and OSC notifications are outside the ongoing scrollback surface contract.
 
-The runtime transcript, event log, session view, and committed transcript read models remain authoritative. The app may keep a bounded delivered-stable projection ledger for native append reconciliation. That ledger records terminal-visible projection blocks only after successful native stable delivery, resets with the native surface lifecycle, and is never a transcript source of truth, replay cursor, acknowledgement cursor, raw byte cache, or emitted-byte copy.
+The runtime transcript, event log, session view, and committed transcript read models remain authoritative. The app may keep a bounded delivered-stable projection ledger for native append reconciliation. That ledger records terminal-visible projection blocks only after successful native stable delivery and is never a transcript source of truth, replay cursor, acknowledgement cursor, raw byte cache, or emitted-byte copy. The ledger resets when native ongoing output is shut down or dropped; geometry-only native buffer recreation keeps the ledger because normal-buffer scrollback remains physical history.
 
 ## Zones
 
@@ -92,6 +92,8 @@ Compaction replaces the bounded app working set but does not erase terminal scro
 Local append-only status/tool-result blocks that have already been emitted to native stable scrollback remain physical history even when a later authoritative transcript projection does not include them. If the authoritative projection shares the terminal-visible prefix before those local rows, native appends any authoritative suffix after the local rows; if the authoritative projection is only behind that local suffix, native writes nothing. It must not rewrite, delete, or replay the local rows.
 
 When an authoritative committed projection arrives while a native assistant stream is active, the surface may finalize the active stream and skip the corresponding committed assistant block only if that block's rendered rows match the active stream source. Assistant final-answer and commentary blocks are both valid finalizers because native assistant streaming is phase-less after markdown projection; non-assistant blocks are never valid stream finalizers. If the committed block differs from the mutable stream, the surface must not finalize or skip it. Production surfaces an active-stream mismatch and disables native output; debug mode panics with invariant diagnostics.
+
+The matching assistant finalizer must be the first appended committed block while native assistant streaming is active. If earlier committed blocks precede the matching finalizer, native cannot write those earlier blocks before a stream that already exists physically without rewriting scrollback. Production surfaces an active-stream mismatch and disables native output; debug mode panics.
 
 Committed non-assistant rows may arrive while an assistant stream is still active. Those rows are stable transcript history, not stream finalizers. Native queues them behind the active stream through the same stable append path and keeps the assistant stream mutable until a matching assistant finalizer or explicit stream finish.
 

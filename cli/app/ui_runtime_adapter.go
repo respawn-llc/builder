@@ -308,6 +308,9 @@ func (m *uiModel) deliverNativeStableProjectionChange(previous tui.TranscriptPro
 		m.nativeDeliveredStableProjection = nativeStableProjectionWithAppendedBlocks(previous, current, appendBlocks)
 		return nil
 	}
+	if streamAppendPosition != 0 {
+		return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
+	}
 	if streamBlockIndex >= len(current.Blocks) {
 		return m.nativeStableProjectionRecoverableRuntimeError("deliverNativeStableProjectionChange", previous, current)
 	}
