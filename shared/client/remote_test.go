@@ -11,10 +11,21 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"golang.org/x/net/websocket"
 )
+
+func TestProtocolErrorReconstructsModelStreamStalled(t *testing.T) {
+	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeModelStreamStalled, Message: "model generation failed after retries: model stream stalled"})
+	if !errors.Is(err, llmerrors.ErrModelStreamStalled) {
+		t.Fatalf("reconstructed error = %v, want errors.Is ErrModelStreamStalled", err)
+	}
+	if llmerrors.UserFacingError(err) == "" {
+		t.Fatal("expected reconstructed stall error to map to a user-facing message")
+	}
+}
 
 func newRemoteTestServer(t *testing.T, handle func(*websocket.Conn)) *httptest.Server {
 	t.Helper()

@@ -227,6 +227,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	if msg.token != 0 && m.activeSubmit.flushed {
 		restoreSubmittedText = false
 	}
+	runReachedEngine := strings.TrimSpace(m.activeSubmit.stepID) != ""
 	activeQueuedID := m.activeSubmit.queuedID
 	m.activeSubmit = activeSubmitState{}
 	c.finishBusyActivity(false)
@@ -249,9 +250,12 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		}
 		detailErr := runtimeattach.FormatSubmissionError(msg.err)
 		m.activity = uiActivityError
-		appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
 		m.logf("step.error err=%q", detailErr)
 		m.layout().syncViewport()
+		if runReachedEngine {
+			return m, tea.Batch(unlockCmd, restoreInjectedCmd)
+		}
+		appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
 		return m, tea.Batch(unlockCmd, restoreInjectedCmd, appendCmd)
 	}
 

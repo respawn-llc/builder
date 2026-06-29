@@ -503,6 +503,30 @@ func TestSubmitErrorShowsStatusOnlyWhenRuntimeAppendFails(t *testing.T) {
 	}
 }
 
+func TestSubmitErrorSuppressesClientAppendWhenRunReachedEngine(t *testing.T) {
+	client := &runtimeControlFakeClient{}
+	m := newProjectedStaticUIModel()
+	m.engine = client
+	m.setBusy(true)
+	m.activeSubmit = activeSubmitState{token: 1, text: "prompt", stepID: "step-1"}
+
+	next, cmd := m.Update(submitDoneMsg{token: 1, submittedText: "prompt", err: errors.New("model generation failed after retries")})
+	updated := next.(*uiModel)
+	if updated.activity != uiActivityError {
+		t.Fatalf("expected error activity, got %v", updated.activity)
+	}
+	for _, msg := range collectCmdMessages(t, cmd) {
+		next, _ = updated.Update(msg)
+		updated = next.(*uiModel)
+	}
+	if client.appendedRole != "" || client.appendedText != "" {
+		t.Fatalf("run reached engine: client must not persist a duplicate entry, got role=%q text=%q", client.appendedRole, client.appendedText)
+	}
+	if committed := committedTranscriptEntriesForApp(updated.transcriptEntries); len(committed) != 0 {
+		t.Fatalf("run reached engine: client must not advance committed transcript, got %+v", committed)
+	}
+}
+
 func TestRuntimeControlMarksDisconnectOnTransportError(t *testing.T) {
 	client := &runtimeControlFakeClient{submitErr: io.EOF}
 	m := newProjectedTestUIModel(client, nil, nil)
