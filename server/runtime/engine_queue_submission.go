@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -226,10 +225,7 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) {
 	}
 	ids := e.queuedUserAutoDrainIDSnapshot()
 	if _, err := e.submitQueuedUserMessages(ctx, ids); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		e.AppendCommittedEntry("error", fmt.Sprintf("queued steering continuation failed: %v", err))
+		e.surfaceRunError(err)
 		return
 	}
 	completed = true
