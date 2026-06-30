@@ -2016,6 +2016,56 @@ func TestNativeRecentTailHydrateDeliversRecoveredCommittedRows(t *testing.T) {
 	}
 }
 
+func TestNativeTranscriptPageRecoveryDisablesInsertedCommittedToolBeforeDeliveredTail(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	previousClientEntries := nativeShellClientEntriesForTest("call-continue", "kent run --continue \"ab410dc6\" \"Fixed remaining\"", "continued")
+	previousClientEntries = append(previousClientEntries, nativeShellClientEntriesForTest("call-poll", "Polled session 12283 for 5m0s", "polled")...)
+	previousClientEntries = append(previousClientEntries, nativeShellClientEntriesForTest("call-status", "git status --short", "")...)
+	previousEntries := make([]tui.TranscriptEntry, 0, len(previousClientEntries))
+	for _, entry := range previousClientEntries {
+		previousEntries = append(previousEntries, transcriptEntryFromProjectedChatEntry(entry, false, true))
+	}
+	seedNativeSurfaceTranscript(m, previousEntries)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	m.nativeDeliveredStableProjection = m.nativeCommittedProjectionForEntries(previousEntries)
+	out.Reset()
+
+	recoveredEntries := append([]clientui.ChatEntry{}, nativeWidePatchSummaryClientEntriesForTest()...)
+	recoveredEntries = append(recoveredEntries, previousClientEntries...)
+	recoveredEntries = append(recoveredEntries, nativeShellClientEntriesForTest("call-complete", "kent task complete --commentary 'Revised plan'", "completed")...)
+	exitMainThread := m.enterUIMainThread("native recovery inserted committed tool app test")
+	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
+		SessionID: "session-1",
+		Revision:  2,
+		Entries:   recoveredEntries,
+	}, clientui.TranscriptRecoveryCauseStreamGap)
+	exitMainThread()
+	_ = collectCmdMessages(t, cmd)
+
+	if m.nativeSurface != nil {
+		t.Fatal("non-contiguous recovery page should disable native")
+	}
+	if m.nativeLiveAreaError == nil {
+		t.Fatal("non-contiguous recovery page did not surface native error")
+	}
+	if !strings.Contains(m.nativeLiveAreaError.Error(), nativeStableProjectionNonContiguousReason) {
+		t.Fatalf("native error = %v, want non-contiguous reason", m.nativeLiveAreaError)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, nativeWidePatchSummaryPathForTest) || strings.Contains(plain, "kent task complete") {
+		t.Fatalf("non-contiguous recovery page wrote inserted committed rows into native scrollback: %q", plain)
+	}
+	if len(m.transcriptEntries) != len(recoveredEntries) {
+		t.Fatalf("transcript entry count = %d, want recovered page count %d", len(m.transcriptEntries), len(recoveredEntries))
+	}
+	if !strings.Contains(m.transcriptEntries[0].Text, nativeWidePatchSummaryPathForTest) {
+		t.Fatalf("authoritative transcript was not updated from recovery page, first entry = %#v", m.transcriptEntries[0])
+	}
+}
+
 func TestNativeCompleteStreamFinalizerDeliversMergedCommittedRows(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
@@ -2068,7 +2118,7 @@ func TestNativeStableProjectionChangeAppendsAfterOverlappingRecentTail(t *testin
 	previous := nativeStableProjectionForTest("old-a", "old-b")
 	current := nativeStableProjectionForTest("old-b", "new-c", "new-d")
 	exitMainThread := m.enterUIMainThread("native stable overlap test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("overlapping projection delivery returned error: %v", err)
@@ -2096,7 +2146,7 @@ func TestNativeStableProjectionChangeAppendsCompactionResetAsPhysicalEpoch(t *te
 	compaction.Blocks[0].Role = tui.RenderIntentCompactionSummary
 	compaction.Blocks[0].DividerGroup = string(tui.RenderIntentCompactionSummary)
 	exitMainThread := m.enterUIMainThread("native stable compaction reset test")
-	err := m.deliverNativeStableProjectionChange(previous, compaction, true, false, false, "")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, compaction, true, false, false, "")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("compaction reset delivery returned error: %v", err)
@@ -2117,7 +2167,7 @@ func TestNativeStableProjectionChangeAppendsCompactionResetAsPhysicalEpoch(t *te
 	current := compaction.Clone()
 	current.Blocks = append(current.Blocks, nativeStableProjectionForTest("post-compaction user").Blocks[0])
 	exitMainThread = m.enterUIMainThread("native stable post compaction append test")
-	err = m.deliverNativeStableProjectionChange(m.nativeDeliveredStableProjection, current, true, false, false, "")
+	err = m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), m.nativeDeliveredStableProjection, current, true, false, false, "")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("post-compaction append delivery returned error: %v", err)
@@ -2153,7 +2203,7 @@ func TestNativeSurfaceResizeReprojectsDeliveredCompactionEpochSuffix(t *testing.
 	if !ok {
 		t.Fatal("compaction epoch suffix was not reprojected")
 	}
-	appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(reprojected, current)
+	appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(nativeStableLiveAppendIntent("test"), reprojected, current)
 	if !ok {
 		t.Fatal("reprojected compaction epoch suffix did not reconcile")
 	}
@@ -2181,7 +2231,7 @@ func TestNativeStableProjectionChangeRejectsCorrectionAfterDeliveredCompactionMa
 	current.Blocks = append(current.Blocks, nativeStableProjectionForTest("corrected post-compaction row").Blocks[0])
 
 	exitMainThread := m.enterUIMainThread("native stable post-compaction correction test")
-	err := m.deliverNativeStableProjectionChange(delivered, current, true, false, false, "")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), delivered, current, true, false, false, "")
 	exitMainThread()
 	if err == nil {
 		t.Fatal("expected correction after delivered compaction marker to be rejected")
@@ -2206,7 +2256,7 @@ func TestNativeStableProjectionChangeRejectsAuthoritativeTailAfterPriorReviewerS
 	current.Blocks[1].Role = tui.RenderIntentUser
 	current.Blocks[1].DividerGroup = string(tui.RenderIntentUser)
 	exitMainThread := m.enterUIMainThread("native stable local status append test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
 	exitMainThread()
 	if err == nil {
 		t.Fatal("expected prior reviewer-status suffix to be rejected as non-appendable")
@@ -2239,7 +2289,7 @@ func TestNativeStableProjectionChangeAppendsBehindPriorLocalReviewerStatus(t *te
 	current.Blocks[1].DividerGroup = string(tui.RenderIntentUser)
 
 	exitMainThread := m.enterUIMainThread("native stable local reviewer suffix append test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("local reviewer-status suffix delivery returned error: %v", err)
@@ -2251,7 +2301,7 @@ func TestNativeStableProjectionChangeAppendsBehindPriorLocalReviewerStatus(t *te
 	if !strings.Contains(plain, "next user prompt") {
 		t.Fatalf("local reviewer-status suffix delivery skipped user row, got %q", plain)
 	}
-	if m.nativeStableProjectionNeedsDelivery(m.nativeDeliveredStableProjection, current) {
+	if m.nativeStableProjectionNeedsDelivery(nativeStableLiveAppendIntent("test"), m.nativeDeliveredStableProjection, current) {
 		t.Fatal("logical current projection should reconcile after appending user behind local reviewer status")
 	}
 }
@@ -2274,7 +2324,7 @@ func TestNativeStableProjectionChangeRejectsAuthoritativePrefixBehindPriorToolPa
 		Lines:        []string{"⇄ ./cli/tui/transcript_projection.go +10"},
 	})
 	exitMainThread := m.enterUIMainThread("native stable local patch prefix test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
 	exitMainThread()
 	if err == nil {
 		t.Fatal("expected prior tool patch row removal to be rejected as non-appendable")
@@ -2295,7 +2345,7 @@ func TestNativeStableProjectionChangeIgnoresTextBeyondEmittedWidth(t *testing.T)
 	previous := nativeStableProjectionForTest("same-prefix-before-old")
 	current := nativeStableProjectionForTest("same-prefix-before-new")
 	exitMainThread := m.enterUIMainThread("native stable truncated equality test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("truncated-equivalent projection delivery returned error: %v", err)
@@ -2332,7 +2382,7 @@ func TestNativeStableProjectionChangeRejectsInsertedLocalStatusBeforeEmittedRows
 	}}
 
 	exitMainThread := m.enterUIMainThread("native stable inserted local status test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
 	exitMainThread()
 	if err == nil {
 		t.Fatal("expected inserted local-status before emitted rows to be rejected")
@@ -2375,7 +2425,7 @@ func TestNativeStableProjectionChangeAppendsInsertedSystemNoticeAtPhysicalTail(t
 	}}
 
 	exitMainThread := m.enterUIMainThread("native stable inserted system notice test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("inserted system notice delivery returned error: %v", err)
@@ -2396,7 +2446,7 @@ func TestNativeStableProjectionChangeAppendsInsertedSystemNoticeAtPhysicalTail(t
 		Lines:        []string{"next prompt"},
 	})
 	exitMainThread = m.enterUIMainThread("native stable after inserted system notice test")
-	err = m.deliverNativeStableProjectionChange(m.nativeDeliveredStableProjection, next, true, false, false, "")
+	err = m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), m.nativeDeliveredStableProjection, next, true, false, false, "")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("post-system-notice delivery returned error: %v", err)
@@ -2437,7 +2487,7 @@ func TestNativeStableProjectionChangeSkipsPriorLocalSuffixWhenAuthoritativeRowsA
 	}}
 
 	exitMainThread := m.enterUIMainThread("native stable local suffix before authoritative row test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("local suffix reconciliation returned error: %v", err)
@@ -2449,7 +2499,7 @@ func TestNativeStableProjectionChangeSkipsPriorLocalSuffixWhenAuthoritativeRowsA
 	if !strings.Contains(plain, "committed answer") {
 		t.Fatalf("local suffix reconciliation skipped authoritative row, got %q", plain)
 	}
-	if m.nativeStableProjectionNeedsDelivery(m.nativeDeliveredStableProjection, current) {
+	if m.nativeStableProjectionNeedsDelivery(nativeStableLiveAppendIntent("test"), m.nativeDeliveredStableProjection, current) {
 		t.Fatal("logical current projection should reconcile after appending authoritative row behind local suffix")
 	}
 }
@@ -2477,7 +2527,7 @@ func TestNativeStableProjectionChangeAppendsInsertedLocalCacheWarningAtPhysicalT
 	}}
 
 	exitMainThread := m.enterUIMainThread("native stable inserted local cache warning test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, false, false, "")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("inserted local cache warning delivery returned error: %v", err)
@@ -2489,7 +2539,7 @@ func TestNativeStableProjectionChangeAppendsInsertedLocalCacheWarningAtPhysicalT
 	if !strings.Contains(plain, "Cache miss") {
 		t.Fatalf("inserted local cache warning skipped warning row, got %q", plain)
 	}
-	if m.nativeStableProjectionNeedsDelivery(m.nativeDeliveredStableProjection, current) {
+	if m.nativeStableProjectionNeedsDelivery(nativeStableLiveAppendIntent("test"), m.nativeDeliveredStableProjection, current) {
 		t.Fatal("logical current projection should reconcile after appending local cache warning at physical tail")
 	}
 }
@@ -2520,7 +2570,7 @@ func TestNativeStableProjectionChangeSkipsStreamedBlockAfterOverlappingRecentTai
 		{DividerGroup: "test", Lines: []string{"after-stream"}},
 	}}
 	exitMainThread := m.enterUIMainThread("native stable overlap active stream test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "streamed-answer")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, true, false, "streamed-answer")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("overlapping active-stream projection delivery returned error: %v", err)
@@ -2660,7 +2710,7 @@ func TestNativeStableReplaceWithActiveStreamPanicsBeforeFinalizingNonAppendTailI
 	panicText := captureNativeSurfacePanicText(t, func() {
 		exitMainThread := m.enterUIMainThread("native active stream non-append replacement test")
 		defer exitMainThread()
-		_ = m.deliverNativeStableProjectionChange(previous, current, true, true, false, "mutable stream tail")
+		_ = m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, true, false, "mutable stream tail")
 	})
 	if !strings.Contains(panicText, "Native scrollback invariant violation") ||
 		!strings.Contains(panicText, "native stable append is not contiguous") ||
@@ -2709,7 +2759,7 @@ func TestNativeStableAppendWithActiveStreamPanicsOnMismatchedCommittedBlockInDeb
 	panicText := captureNativeSurfacePanicText(t, func() {
 		exitMainThread := m.enterUIMainThread("native active stream mismatched append test")
 		defer exitMainThread()
-		_ = m.deliverNativeStableProjectionChange(previous, current, true, true, false, "draft answer")
+		_ = m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, true, false, "draft answer")
 	})
 	if !strings.Contains(panicText, "Native scrollback invariant violation") ||
 		!strings.Contains(panicText, nativeStableProjectionActiveStreamMismatchReason) ||
@@ -2757,7 +2807,7 @@ func TestNativeStableAppendWithActiveStreamQueuesNonAssistantCommittedRows(t *te
 		},
 	)
 	exitMainThread := m.enterUIMainThread("native active stream non-assistant append test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "working")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, true, false, "working")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("active stream non-assistant delivery returned error: %v", err)
@@ -2816,7 +2866,7 @@ func TestNativeStableAppendWithActiveStreamRejectsLaterMatchingFinalizer(t *test
 		streamProjection.Blocks[0],
 	)
 	exitMainThread := m.enterUIMainThread("native active stream later finalizer append test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "final answer")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, true, false, "final answer")
 	exitMainThread()
 	if err == nil {
 		t.Fatal("expected later active stream finalizer to be rejected instead of reordered")
@@ -2858,13 +2908,147 @@ func TestNativeStableAppendWithActiveStreamRecoveryMismatchReturnsErrorWithoutPa
 	current.Blocks = append(current.Blocks, mismatched.Blocks[0])
 
 	exitMainThread := m.enterUIMainThread("native active stream recovery mismatch test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "live active stream", true)
+	err := m.deliverNativeStableProjectionChange(nativeStableRecoveryReconcileIntent("deliverNativeStableProjectionChange"), previous, current, true, true, false, "live active stream")
 	exitMainThread()
 	if err == nil {
 		t.Fatal("expected recovery mismatch to return an error")
 	}
 	if got := out.String(); strings.Contains(got, "different committed assistant") {
 		t.Fatalf("recovery mismatch wrote committed assistant through native stable path: %q", got)
+	}
+}
+
+func TestNativeStableRecoveryReconcileReturnsErrorForInsertedCommittedToolBeforeDeliveredTailInDebug(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		{
+			Role:         tui.RenderIntentToolShellSuccess,
+			DividerGroup: string(tui.RenderIntentTool),
+			SourceKey:    "tool-shell-continue",
+			Lines:        []string{"$ kent run --continue \"ab410dc6\" \"Fixed remaining\""},
+		},
+		{
+			Role:         tui.RenderIntentToolShellSuccess,
+			DividerGroup: string(tui.RenderIntentTool),
+			SourceKey:    "tool-shell-poll",
+			Lines:        []string{"$ Polled session 12283 for 5m0s"},
+		},
+		{
+			Role:         tui.RenderIntentToolShellSuccess,
+			DividerGroup: string(tui.RenderIntentTool),
+			SourceKey:    "tool-shell-status",
+			Lines:        []string{"$ git status --short"},
+		},
+	}}
+	current := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		{
+			Role:         tui.RenderIntentToolPatchSuccess,
+			DividerGroup: string(tui.RenderIntentTool),
+			SourceKey:    "tool-patch-plan",
+			Lines:        []string{"⇄ ./.builder/plans/bui-142-queued-steering-compaction.md -1 +1"},
+		},
+		previous.Blocks[0],
+		previous.Blocks[1],
+		previous.Blocks[2],
+		{
+			Role:         tui.RenderIntentToolShellSuccess,
+			DividerGroup: string(tui.RenderIntentTool),
+			SourceKey:    "tool-shell-complete",
+			Lines:        []string{"$ kent task complete --commentary 'Revised plan'"},
+		},
+	}}
+
+	exitMainThread := m.enterUIMainThread("native recovery inserted committed tool before delivered tail test")
+	err := m.deliverNativeStableProjectionChange(nativeStableRecoveryReconcileIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
+	exitMainThread()
+	if err == nil {
+		t.Fatal("expected recovery reconcile to return an error")
+	}
+	if !strings.Contains(err.Error(), nativeStableProjectionNonContiguousReason) {
+		t.Fatalf("error = %v, want non-contiguous projection reason", err)
+	}
+	if plain := stripANSIAndTrimRight(out.String()); strings.Contains(plain, "bui-142-queued-steering-compaction") || strings.Contains(plain, "kent task complete") {
+		t.Fatalf("recovery reconcile wrote non-contiguous committed rows into native scrollback: %q", plain)
+	}
+}
+
+func TestNativeStablePendingRecoveryIntentSurvivesLaterLiveAppendBeforeResizeSettle(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 120, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		{
+			Role:         tui.RenderIntentToolShellSuccess,
+			DividerGroup: string(tui.RenderIntentTool),
+			SourceKey:    "tool-shell-continue",
+			Lines:        []string{"$ kent run --continue \"ab410dc6\" \"Fixed remaining\""},
+		},
+		{
+			Role:         tui.RenderIntentToolShellSuccess,
+			DividerGroup: string(tui.RenderIntentTool),
+			SourceKey:    "tool-shell-poll",
+			Lines:        []string{"$ Polled session 12283 for 5m0s"},
+		},
+	}}
+	recovered := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		{
+			Role:         tui.RenderIntentToolPatchSuccess,
+			DividerGroup: string(tui.RenderIntentTool),
+			SourceKey:    "tool-patch-plan",
+			Lines:        []string{"⇄ ./.builder/plans/bui-142-queued-steering-compaction.md -1 +1"},
+		},
+		previous.Blocks[0],
+		previous.Blocks[1],
+	}}
+	liveAfterRecovery := recovered.Clone()
+	liveAfterRecovery.Blocks = append(liveAfterRecovery.Blocks, tui.TranscriptProjectionBlock{
+		Role:         tui.RenderIntentToolShellSuccess,
+		DividerGroup: string(tui.RenderIntentTool),
+		SourceKey:    "tool-shell-complete",
+		Lines:        []string{"$ kent task complete --commentary 'Revised plan'"},
+	})
+
+	exitMainThread := m.enterUIMainThread("native pending recovery intent setup")
+	err := m.deliverNativeStableProjectionChange(nativeStableRecoveryReconcileIntent("deliverNativeStableProjectionChange"), previous, recovered, false, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("deferred recovery delivery returned error before resize settle: %v", err)
+	}
+	if m.nativePendingStableIntent.source != nativeStableDeliveryRecoveryReconcile {
+		t.Fatalf("pending intent after recovery = %q, want recovery", m.nativePendingStableIntent.source)
+	}
+
+	exitMainThread = m.enterUIMainThread("native pending live append after recovery")
+	err = m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, liveAfterRecovery, false, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("deferred live delivery returned error before resize settle: %v", err)
+	}
+	if m.nativePendingStableIntent.source != nativeStableDeliveryRecoveryReconcile {
+		t.Fatalf("pending intent after later live append = %q, want recovery", m.nativePendingStableIntent.source)
+	}
+
+	exitMainThread = m.enterUIMainThread("native pending recovery resize settle")
+	err = m.deliverNativeStableProjectionChange(m.nativePendingStableIntent, previous, liveAfterRecovery, true, false, false, "")
+	exitMainThread()
+	if err == nil {
+		t.Fatal("expected recovery-shaped pending delivery to return non-contiguous error after resize settle")
+	}
+	if !strings.Contains(err.Error(), nativeStableProjectionNonContiguousReason) {
+		t.Fatalf("error = %v, want non-contiguous reason", err)
+	}
+	if plain := stripANSIAndTrimRight(out.String()); strings.Contains(plain, "bui-142-queued-steering-compaction") || strings.Contains(plain, "kent task complete") {
+		t.Fatalf("pending recovery wrote non-contiguous rows into native scrollback: %q", plain)
 	}
 }
 
@@ -2903,7 +3087,7 @@ func TestNativeStableAppendWithActiveStreamAppendsInsertedSystemBeforeFinalizerA
 	)
 
 	exitMainThread := m.enterUIMainThread("native active stream local system before finalizer append test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "watcher found six threads")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, true, false, "watcher found six threads")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("active stream local system-before-finalizer delivery returned error: %v", err)
@@ -2924,7 +3108,7 @@ func TestNativeStableAppendWithActiveStreamAppendsInsertedSystemBeforeFinalizerA
 	if tail[0].Role != tui.RenderIntentAssistantCommentary || tail[1].Role != tui.RenderIntentSystem {
 		t.Fatalf("delivered physical tail roles = %s,%s; want assistant_commentary,system", tail[0].Role, tail[1].Role)
 	}
-	if m.nativeStableProjectionNeedsDelivery(m.nativeDeliveredStableProjection, current) {
+	if m.nativeStableProjectionNeedsDelivery(nativeStableLiveAppendIntent("test"), m.nativeDeliveredStableProjection, current) {
 		t.Fatal("logical current projection should reconcile against physical delivered stream/system order without replay")
 	}
 }
@@ -2963,7 +3147,7 @@ func TestNativeStableAppendWithActiveStreamUsesFinalizedStreamAsPostAppendDivide
 	)
 
 	exitMainThread := m.enterUIMainThread("native active stream post-finalizer divider append test")
-	err := m.deliverNativeStableProjectionChange(previous, current, true, true, false, "final answer")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, true, false, "final answer")
 	exitMainThread()
 	if err != nil {
 		t.Fatalf("active stream post-finalizer delivery returned error: %v", err)
@@ -3682,6 +3866,26 @@ func nativeWidePatchSummaryClientEntriesForTest() []clientui.ChatEntry {
 			CompactText:  patchSummary,
 			PatchSummary: patchSummary,
 		},
+	}}
+}
+
+func nativeShellClientEntriesForTest(toolCallID string, command string, output string) []clientui.ChatEntry {
+	meta := &clientui.ToolCallMeta{
+		ToolName:    "exec_command",
+		IsShell:     true,
+		Command:     command,
+		CompactText: command,
+	}
+	return []clientui.ChatEntry{{
+		Role:       "tool_call",
+		Text:       command,
+		ToolCallID: toolCallID,
+		ToolCall:   meta,
+	}, {
+		Role:       "tool_result_ok",
+		Text:       output,
+		ToolCallID: toolCallID,
+		ToolCall:   meta,
 	}}
 }
 

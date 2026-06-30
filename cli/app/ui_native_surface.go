@@ -283,6 +283,7 @@ func (m *uiModel) closeNativeSurface() {
 	m.nativeSurface.Close()
 	m.nativeSurface = nil
 	m.nativeDeliveredStableProjection = tui.TranscriptProjection{}
+	m.nativePendingStableIntent = nativeStableDeliveryIntent{}
 	m.nativeAssistantStreamIncomplete = false
 	m.nativeResizeRehydrateToken = 0
 	m.nativeResizeRehydrateSettled = false
@@ -297,6 +298,7 @@ func (m *uiModel) dropNativeSurface() {
 	m.nativeSurface.Drop()
 	m.nativeSurface = nil
 	m.nativeDeliveredStableProjection = tui.TranscriptProjection{}
+	m.nativePendingStableIntent = nativeStableDeliveryIntent{}
 	m.nativeAssistantStreamIncomplete = false
 	m.nativeResizeRehydrateToken = 0
 	m.nativeResizeRehydrateSettled = false
@@ -388,7 +390,7 @@ func (m *uiModel) steerNativeStableAppend(previous tui.TranscriptProjection, cur
 		m.nativeDeliveredStableProjection = current.Clone()
 		return nil
 	}
-	appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(previous, current)
+	appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(nativeStableLiveAppendIntent("steerNativeStableAppend"), previous, current)
 	if !ok {
 		return m.nativeStableProjectionInvariantError("steerNativeStableAppend", nativeStableProjectionNonContiguousReason, previous, current)
 	}
@@ -413,7 +415,7 @@ func (m *uiModel) steerNativeStableProjectionChange(operation string, previous t
 		m.nativeDeliveredStableProjection = current.Clone()
 		return nil
 	}
-	if appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(previous, current); ok {
+	if appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(nativeStableLiveAppendIntent(operation), previous, current); ok {
 		if err := m.steerNativeStableAppendBlocks(current, previous, appendBlocks); err != nil {
 			return err
 		}
@@ -423,7 +425,7 @@ func (m *uiModel) steerNativeStableProjectionChange(operation string, previous t
 	return m.nativeStableProjectionInvariantError(operation, nativeStableProjectionNonContiguousReason, previous, current)
 }
 
-func (m *uiModel) steerNativeStableRuntimeProjectionChange(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+func (m *uiModel) steerNativeStableRuntimeProjectionChange(intent nativeStableDeliveryIntent, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
 	if m == nil || m.nativeSurface == nil || !m.nativeSurface.initialized() {
 		return nil
 	}
@@ -437,14 +439,14 @@ func (m *uiModel) steerNativeStableRuntimeProjectionChange(operation string, pre
 		m.nativeDeliveredStableProjection = current.Clone()
 		return nil
 	}
-	if appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(previous, current); ok {
+	if appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(intent, previous, current); ok {
 		if err := m.steerNativeStableAppendBlocks(current, previous, appendBlocks); err != nil {
 			return err
 		}
 		m.nativeDeliveredStableProjection = nativeStableProjectionWithAppendedBlocks(previous, current, appendBlocks)
 		return nil
 	}
-	return m.nativeStableProjectionRecoverableError(operation, previous, current)
+	return m.nativeStableProjectionDeliveryError(intent, nativeStableProjectionNonContiguousReason, previous, current)
 }
 
 func (m *uiModel) steerNativeStableAppendFromBlock(current tui.TranscriptProjection, startBlock int) error {
@@ -484,39 +486,52 @@ func nativeStableProjectionWithAppendedBlocks(previous tui.TranscriptProjection,
 	return out
 }
 
-func (m *uiModel) nativeStableProjectionNeedsDelivery(previous tui.TranscriptProjection, current tui.TranscriptProjection) bool {
+func (m *uiModel) nativeStableProjectionNeedsDelivery(intent nativeStableDeliveryIntent, previous tui.TranscriptProjection, current tui.TranscriptProjection) bool {
 	if current.Empty() {
 		return false
 	}
 	if previous.Empty() {
 		return true
 	}
-	appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(previous, current)
+	appendBlocks, ok := m.nativeStableAppendBlocksForProjectionChange(intent, previous, current)
 	if !ok {
 		return true
 	}
 	return len(appendBlocks) > 0
 }
 
-func (m *uiModel) nativeStableAppendBlocksForProjectionChange(previous tui.TranscriptProjection, current tui.TranscriptProjection) ([]int, bool) {
+func (m *uiModel) nativeStableAppendBlocksForProjectionChange(intent nativeStableDeliveryIntent, previous tui.TranscriptProjection, current tui.TranscriptProjection) ([]int, bool) {
 	if current.Empty() {
 		return nil, true
 	}
 	if previous.Empty() {
+		if !intent.allowCommittedStableAppend() {
+			return nil, false
+		}
 		return nativeStableBlockIndexRange(0, len(current.Blocks)), true
 	}
 	if m.nativeStableProjectionHasAppendPrefix(previous, current) {
+		if !intent.allowCommittedStableAppend() {
+			if len(previous.Blocks) == len(current.Blocks) {
+				return nil, true
+			}
+			return nil, false
+		}
 		return nativeStableBlockIndexRange(len(previous.Blocks), len(current.Blocks)), true
 	}
-	if overlap := m.nativeStableSharedSuffixPrefixBlockCount(current, previous); overlap > 0 &&
-		!m.nativeStableOverlapAppendWouldReplayDeliveredPrefix(previous, current, overlap) {
-		return nativeStableBlockIndexRange(overlap, len(current.Blocks)), true
+	if intent.allowRecentTailOverlapAppend() {
+		if overlap := m.nativeStableSharedSuffixPrefixBlockCount(current, previous); overlap > 0 &&
+			!m.nativeStableOverlapAppendWouldReplayDeliveredPrefix(previous, current, overlap) {
+			return nativeStableBlockIndexRange(overlap, len(current.Blocks)), true
+		}
 	}
-	if nativeStableProjectionStartsCompactionReset(current) && !m.nativeStableProjectionContainsReprojectIdentity(previous.Blocks, current.Blocks[0]) {
+	if intent.allowCompactionEpochTransition() && nativeStableProjectionStartsCompactionReset(current) && !m.nativeStableProjectionContainsReprojectIdentity(previous.Blocks, current.Blocks[0]) {
 		return nativeStableBlockIndexRange(0, len(current.Blocks)), true
 	}
-	if blockIndexes, ok := m.nativeStableAppendBlockIndexesForLocalReconciliation(previous, current); ok {
-		return blockIndexes, true
+	if intent.allowLocalAppendOnlyReconciliation() {
+		if blockIndexes, ok := m.nativeStableAppendBlockIndexesForLocalReconciliation(previous, current); ok {
+			return blockIndexes, true
+		}
 	}
 	return nil, false
 }
@@ -753,25 +768,120 @@ func nativeStableCurrentLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock
 const nativeStableProjectionNonContiguousReason = "native stable append is not contiguous with current transcript projection"
 const nativeStableProjectionActiveStreamMismatchReason = "native active assistant stream does not match committed transcript projection"
 
-func (m *uiModel) nativeStableProjectionRecoverableError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
-	if m != nil && m.debugMode {
-		return m.nativeStableProjectionInvariantError(operation, nativeStableProjectionNonContiguousReason, previous, current)
-	}
-	return errors.New(nativeStableProjectionNonContiguousReason)
+type nativeStableDeliverySource string
+
+const (
+	nativeStableDeliveryLiveAppend        nativeStableDeliverySource = "live_append"
+	nativeStableDeliveryRecoveryReconcile nativeStableDeliverySource = "recovery_reconcile"
+	nativeStableDeliveryGeometryReproject nativeStableDeliverySource = "geometry_reproject"
+)
+
+type nativeStableDeliveryIntent struct {
+	operation string
+	source    nativeStableDeliverySource
+	policies  nativeStableDeliveryPolicies
 }
 
-func (m *uiModel) nativeStableProjectionRecoverableRuntimeError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
-	if m != nil && m.debugMode {
-		return m.nativeStableProjectionInvariantError(operation, nativeStableProjectionActiveStreamMismatchReason, previous, current)
-	}
-	return errors.New(nativeStableProjectionActiveStreamMismatchReason)
+type nativeStableDeliveryPolicies struct {
+	committedStableAppend        bool
+	recentTailOverlapAppend      bool
+	compactionEpochTransition    bool
+	localAppendOnlyReconcile     bool
+	activeStreamFinalizeFromText bool
 }
 
-func (m *uiModel) nativeStableProjectionActiveStreamMismatchError(operation string, previous tui.TranscriptProjection, current tui.TranscriptProjection, recoverable bool) error {
-	if recoverable {
-		return errors.New(nativeStableProjectionActiveStreamMismatchReason)
+func nativeStableLiveAppendIntent(operation string) nativeStableDeliveryIntent {
+	return nativeStableDeliveryIntent{
+		operation: operation,
+		source:    nativeStableDeliveryLiveAppend,
+		policies: nativeStableDeliveryPolicies{
+			committedStableAppend:        true,
+			recentTailOverlapAppend:      true,
+			compactionEpochTransition:    true,
+			localAppendOnlyReconcile:     true,
+			activeStreamFinalizeFromText: true,
+		},
 	}
-	return m.nativeStableProjectionRecoverableRuntimeError(operation, previous, current)
+}
+
+func nativeStableRecoveryReconcileIntent(operation string) nativeStableDeliveryIntent {
+	return nativeStableDeliveryIntent{
+		operation: operation,
+		source:    nativeStableDeliveryRecoveryReconcile,
+		policies: nativeStableDeliveryPolicies{
+			committedStableAppend:    true,
+			recentTailOverlapAppend:  true,
+			localAppendOnlyReconcile: true,
+		},
+	}
+}
+
+func nativeStableGeometryReprojectIntent(operation string) nativeStableDeliveryIntent {
+	return nativeStableDeliveryIntent{
+		operation: operation,
+		source:    nativeStableDeliveryGeometryReproject,
+	}
+}
+
+func nativeStableMergePendingDeliveryIntent(existing nativeStableDeliveryIntent, incoming nativeStableDeliveryIntent) nativeStableDeliveryIntent {
+	if !existing.set() {
+		return incoming
+	}
+	if !incoming.set() {
+		return existing
+	}
+	if existing.source == nativeStableDeliveryRecoveryReconcile || incoming.source == nativeStableDeliveryRecoveryReconcile {
+		return nativeStableRecoveryReconcileIntent(incoming.operationLabel())
+	}
+	if existing.source == nativeStableDeliveryGeometryReproject {
+		return incoming
+	}
+	if incoming.source == nativeStableDeliveryGeometryReproject {
+		return existing
+	}
+	return existing
+}
+
+func (intent nativeStableDeliveryIntent) set() bool {
+	return intent.source != ""
+}
+
+func (intent nativeStableDeliveryIntent) operationLabel() string {
+	if strings.TrimSpace(intent.operation) == "" {
+		return "deliverNativeStableProjectionChange"
+	}
+	return intent.operation
+}
+
+func (intent nativeStableDeliveryIntent) debugInvariantViolation() bool {
+	return intent.source == "" || intent.source == nativeStableDeliveryLiveAppend
+}
+
+func (intent nativeStableDeliveryIntent) allowCommittedStableAppend() bool {
+	return intent.policies.committedStableAppend
+}
+
+func (intent nativeStableDeliveryIntent) allowRecentTailOverlapAppend() bool {
+	return intent.policies.recentTailOverlapAppend
+}
+
+func (intent nativeStableDeliveryIntent) allowCompactionEpochTransition() bool {
+	return intent.policies.compactionEpochTransition
+}
+
+func (intent nativeStableDeliveryIntent) allowLocalAppendOnlyReconciliation() bool {
+	return intent.policies.localAppendOnlyReconcile
+}
+
+func (intent nativeStableDeliveryIntent) allowActiveStreamFinalizeFromText() bool {
+	return intent.policies.activeStreamFinalizeFromText
+}
+
+func (m *uiModel) nativeStableProjectionDeliveryError(intent nativeStableDeliveryIntent, reason string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+	if intent.debugInvariantViolation() {
+		return m.nativeStableProjectionInvariantError(intent.operationLabel(), reason, previous, current)
+	}
+	return fmt.Errorf("%s: %s", intent.source, reason)
 }
 
 func (m *uiModel) nativeAssistantStreamMatchesProjectionBlock(streamText string, block tui.TranscriptProjectionBlock) bool {

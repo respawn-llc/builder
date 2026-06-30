@@ -138,7 +138,12 @@ func (m *uiModel) deliverCurrentNativeStableProjectionAfterResize() error {
 	if m == nil || !m.nativeSurfaceConfigured() || !m.nativeStableSurfaceReadyForCurrentGeometry() {
 		return nil
 	}
+	intent := m.nativePendingStableIntent
+	if !intent.set() {
+		intent = nativeStableGeometryReprojectIntent("deliverNativeStableProjectionChange")
+	}
 	return m.deliverNativeStableProjectionChange(
+		intent,
 		m.nativeDeliveredStableProjection,
 		m.nativeCommittedProjectionForEntries(m.transcriptEntries),
 		true,

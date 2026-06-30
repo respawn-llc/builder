@@ -162,7 +162,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	}
 	if (plan.mode == projectedTranscriptEntryPlanAppend || plan.mode == projectedTranscriptEntryPlanReplace) && nativeSurfaceConfigured {
 		currentNativeStableProjection := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
-		if err := m.deliverNativeStableProjectionChange(previousNativeStableProjection, currentNativeStableProjection, nativeStableReady, nativeAssistantStreamActive, nativeAssistantStreamWasIncomplete, nativeAssistantStreamText); err != nil {
+		if err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previousNativeStableProjection, currentNativeStableProjection, nativeStableReady, nativeAssistantStreamActive, nativeAssistantStreamWasIncomplete, nativeAssistantStreamText); err != nil {
 			return m.nativeSurfaceErrorCmd("steer committed transcript", err), true, false
 		}
 	}
