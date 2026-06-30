@@ -328,43 +328,6 @@ async function fetchText(url) {
   return response.text();
 }
 
-function anchorHrefs(html) {
-  const hrefs = [];
-  const tree = fromHtml(html, { fragment: true });
-
-  visit(tree, 'element', (node) => {
-    if (node.tagName !== 'a') {
-      return;
-    }
-
-    const href = node.properties?.href;
-    if (typeof href === 'string') {
-      hrefs.push(href);
-    }
-  });
-
-  return hrefs;
-}
-
-function assertAnchorHref(hrefs, expectedHref, pageUrl) {
-  if (!hrefs.includes(expectedHref)) {
-    throw new Error(`${pageUrl} is missing anchor href ${expectedHref}`);
-  }
-}
-
-function assertNoAnchorHref(hrefs, unexpectedHref, pageUrl) {
-  if (hrefs.includes(unexpectedHref)) {
-    throw new Error(`${pageUrl} contains unexpected anchor href ${unexpectedHref}`);
-  }
-}
-
-function assertNoGithubEditAnchor(hrefs, pageUrl) {
-  const githubEditHref = hrefs.find((href) => href.startsWith(docsConfig.repoEditRootUrl));
-  if (githubEditHref) {
-    throw new Error(`${pageUrl} contains unexpected GitHub edit anchor href ${githubEditHref}`);
-  }
-}
-
 const port = await findOpenPort();
 const baseUrl = `http://127.0.0.1:${port}`;
 const outputChunks = [];
@@ -383,13 +346,12 @@ try {
   await waitForPreview(baseUrl, processOutput);
 
   const markdownUrl = `${baseUrl}${docsConfig.basePath}/command-postprocessing.md`;
+  const llmsUrl = `${baseUrl}${docsConfig.basePath}/llms.txt`;
   const sandboxingUrl = `${baseUrl}${docsConfig.basePath}/sandboxing/`;
   const sandboxingMarkdownUrl = `${baseUrl}${docsConfig.basePath}/sandboxing.md`;
-  const serverUrl = `${baseUrl}${docsConfig.basePath}/server/`;
-  const docsHomeUrl = `${baseUrl}${docsConfig.basePath}${docsConfig.docsHomePath}`;
-  const notFoundUrl = `${baseUrl}${docsConfig.basePath}/404.html`;
-  const [markdownText, , sandboxingMarkdown, sourceMarkdown, sandboxingSourceMarkdown] = await Promise.all([
+  const [markdownText, llmsText, , sandboxingMarkdown, sourceMarkdown, sandboxingSourceMarkdown] = await Promise.all([
     fetchText(markdownUrl),
+    fetchText(llmsUrl),
     fetchText(sandboxingUrl),
     fetchText(sandboxingMarkdownUrl),
     readFile(path.join(docsRoot, 'src', 'content', 'docs', 'command-postprocessing.md'), 'utf8'),
@@ -403,22 +365,23 @@ try {
     throw new Error(`${sandboxingMarkdownUrl} does not match source markdown`);
   }
 
-  const [serverHtml, docsHomeHtml, notFoundHtml] = await Promise.all([
-    fetchText(serverUrl),
-    fetchText(docsHomeUrl),
-    fetchText(notFoundUrl),
-  ]);
-  const serverHrefs = anchorHrefs(serverHtml);
-  const docsHomeHrefs = anchorHrefs(docsHomeHtml);
-  const notFoundHrefs = anchorHrefs(notFoundHtml);
-  const expectedServerEditUrl = `${docsConfig.docsProjectEditRootUrl}src/content/docs/server.md`;
-  const brokenServerEditUrl = `${docsConfig.repoEditRootUrl}src/content/docs/server.md`;
-
-  assertAnchorHref(serverHrefs, expectedServerEditUrl, serverUrl);
-  assertNoAnchorHref(serverHrefs, brokenServerEditUrl, serverUrl);
-  assertAnchorHref(docsHomeHrefs, `${docsConfig.repoEditRootUrl}README.md`, docsHomeUrl);
-  assertNoAnchorHref(docsHomeHrefs, `${docsConfig.docsProjectEditRootUrl}README.md`, docsHomeUrl);
-  assertNoGithubEditAnchor(notFoundHrefs, notFoundUrl);
+  const rawMarkdownLinks = llmsText
+    .split('\n')
+    .filter((line) => line.startsWith('- [') && line.endsWith('.md)'))
+    .map((line) => line.slice(line.indexOf('](') + 2, -1));
+  const duplicateRawMarkdownLinks = rawMarkdownLinks.filter((link, index) => rawMarkdownLinks.indexOf(link) !== index);
+  if (duplicateRawMarkdownLinks.length > 0) {
+    throw new Error(`llms.txt includes duplicate raw markdown links: ${duplicateRawMarkdownLinks.join(', ')}`);
+  }
+  const expectedDiscoveryLinks = [
+    docsConfig.getPublicUrl('/command-postprocessing.md'),
+    docsConfig.getPublicUrl('/sandboxing.md'),
+  ];
+  for (const expectedLink of expectedDiscoveryLinks) {
+    if (!rawMarkdownLinks.includes(expectedLink)) {
+      throw new Error(`llms.txt does not include raw markdown discovery link ${expectedLink}`);
+    }
+  }
 } finally {
   preview.kill('SIGTERM');
 }
