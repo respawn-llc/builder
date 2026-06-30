@@ -84,21 +84,27 @@ func (area *nativeLiveAreaImpl) Render(frame NativeLiveAreaFrame) error {
 		}
 	}
 	if area.buffer.isStreaming {
-		if err := area.erasePhysicalLocked(); err != nil {
-			area.buffer.mu.Unlock()
-			return err
-		}
-		err := area.renderPhysicalLocked()
+		err := area.redrawPhysicalLocked()
 		area.buffer.mu.Unlock()
 		return err
 	}
-	if err := area.erasePhysicalLocked(); err != nil {
-		area.buffer.mu.Unlock()
-		return err
-	}
-	err := area.renderPhysicalLocked()
+	err := area.redrawPhysicalLocked()
 	area.buffer.mu.Unlock()
 	return err
+}
+
+func (area *nativeLiveAreaImpl) redrawPhysicalLocked() error {
+	oldRenderedLines := 0
+	if area != nil {
+		oldRenderedLines = area.renderedLines
+	}
+	if err := area.erasePhysicalLocked(); err != nil {
+		return err
+	}
+	if err := area.preserveStableRowsForLiveGrowthLocked(oldRenderedLines, len(area.frame.Lines)); err != nil {
+		return err
+	}
+	return area.renderPhysicalLocked()
 }
 
 func (area *nativeLiveAreaImpl) erasePhysicalLocked() error {
@@ -116,6 +122,21 @@ func (area *nativeLiveAreaImpl) erasePhysicalLocked() error {
 	area.renderedLines = 0
 	area.cursorPlaced = false
 	area.placedCursor = NativeLiveAreaCursor{}
+	return nil
+}
+
+func (area *nativeLiveAreaImpl) preserveStableRowsForLiveGrowthLocked(oldRenderedLines int, newRenderedLines int) error {
+	if area == nil || oldRenderedLines <= 0 || newRenderedLines <= oldRenderedLines {
+		return nil
+	}
+	sequence := liveAreaGrowthPreserveSequence(newRenderedLines-oldRenderedLines, area.terminalHeight)
+	written, err := io.WriteString(area.buffer.stableWriter, sequence)
+	if err != nil {
+		return fmt.Errorf("preserve stable rows for live growth failed: %s: %w", liveAreaWriteDiagnostics(sequence, area.terminalWidth, area.terminalHeight, written), err)
+	}
+	if written != len(sequence) {
+		return fmt.Errorf("preserve stable rows for live growth short write: %s: %w", liveAreaWriteDiagnostics(sequence, area.terminalWidth, area.terminalHeight, written), io.ErrShortWrite)
+	}
 	return nil
 }
 
@@ -230,10 +251,6 @@ func liveAreaEraseSequenceForTerminal(renderedLines int, terminalHeight int) str
 	return out.String()
 }
 
-func liveAreaCursorPlacementSequence(cursor NativeLiveAreaCursor, renderedLines int) string {
-	return liveAreaCursorPlacementSequenceForTerminal(cursor, renderedLines, 24)
-}
-
 func liveAreaCursorPlacementSequenceForTerminal(cursor NativeLiveAreaCursor, renderedLines int, terminalHeight int) string {
 	if !cursor.Visible {
 		return xansi.HideCursor + xansi.CursorPosition(1, terminalHeight)
@@ -250,6 +267,20 @@ func liveAreaViewportTopRow(renderedLines int, terminalHeight int) int {
 		return 1
 	}
 	return top
+}
+
+func liveAreaGrowthPreserveSequence(growthRows int, terminalHeight int) string {
+	if growthRows <= 0 {
+		return ""
+	}
+	var out strings.Builder
+	out.WriteString(resetScrollingRegionSequence())
+	out.WriteString(xansi.CursorPosition(1, terminalHeight))
+	for range growthRows {
+		out.WriteString(terminalLineBreak)
+		out.WriteString(xansi.EraseEntireLine)
+	}
+	return out.String()
 }
 
 func nativeLiveAreaMaxRows(terminalHeight int) int {

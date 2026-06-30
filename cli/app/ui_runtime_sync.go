@@ -87,10 +87,14 @@ func (m *uiModel) requestRuntimeBootstrapTranscriptSync() tea.Cmd {
 }
 
 func (m *uiModel) requestRuntimeCommittedConversationSync() tea.Cmd {
+	return m.requestRuntimeCommittedConversationSyncDecision().cmd
+}
+
+func (m *uiModel) requestRuntimeCommittedConversationSyncDecision() runtimeTranscriptSyncDecision {
 	if !m.hasRuntimeClient() {
-		return nil
+		return runtimeTranscriptSyncDecision{}
 	}
-	return m.startRuntimeTranscriptSyncRequest(runtimeTranscriptSyncRequestForPage(m.transcriptRequestForCurrentMode(), false, runtimeTranscriptSyncCauseCommittedConversation, clientui.TranscriptRecoveryCauseNone)).cmd
+	return m.startRuntimeTranscriptSyncRequest(runtimeTranscriptSyncRequestForPage(m.transcriptRequestForCurrentMode(), false, runtimeTranscriptSyncCauseCommittedConversation, clientui.TranscriptRecoveryCauseNone))
 }
 
 func (m *uiModel) requestRuntimeCommittedGapSync() tea.Cmd {
@@ -506,15 +510,11 @@ func (m *uiModel) handleRuntimeTranscriptRefreshed(msg runtimeTranscriptRefreshe
 			"err":            msg.err.Error(),
 		}))
 		retryCmd := m.scheduleRuntimeTranscriptRetryForRequest(activeReq)
-		resumeCmd := m.resumeRuntimeEventsAfterHydrationIfUnowned()
 		drain := m.drainPendingRuntimeTranscriptSync()
-		if drain.started {
-			if resumeCmd != nil {
-				m.waitRuntimeEventAfterHydration = true
-			}
+		if drain.started || m.waitRuntimeEventAfterHydration {
 			return tea.Batch(retryCmd, drain.cmd)
 		}
-		return tea.Batch(retryCmd, drain.cmd, resumeCmd)
+		return tea.Batch(retryCmd, drain.cmd)
 	}
 	m.observeRuntimeRequestResult(nil)
 	m.logTranscriptPageDiag("transcript.diag.client.hydrate_response", msg.req, msg.transcript, map[string]string{

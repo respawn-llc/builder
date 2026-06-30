@@ -373,7 +373,8 @@ func TestAssistantStreamAppendErasesStreamChromeWithoutAddingLinefeed(t *testing
 	}
 
 	want := nativeLiveAreaRenderSequenceForTest("old") +
-		liveAreaEraseSequence(1) + nativeLiveAreaRenderSequenceForTest("input", "hello") +
+		liveAreaEraseSequence(1) + liveAreaGrowthPreserveSequence(1, 24) + nativeLiveAreaRenderSequenceForTest("input", "hello") +
+		liveAreaEraseSequence(2) +
 		nativeStableInsertForTest("hello ", 2) + nativeStableInsertForTest("world", 2)
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
@@ -384,7 +385,7 @@ func TestAssistantStreamAppendErasesStreamChromeWithoutAddingLinefeed(t *testing
 	if err := liveArea.Render(nativeLiveAreaFrame("input", "next")); err != nil {
 		t.Fatalf("render latest tail returned error: %v", err)
 	}
-	wantAfterRender := want + liveAreaEraseSequence(2) + nativeLiveAreaRenderSequenceForTest("input", "next")
+	wantAfterRender := want + nativeLiveAreaRenderSequenceForTest("input", "next")
 	if got := out.String(); got != wantAfterRender {
 		t.Fatalf("terminal output after live tail render = %q, want %q", got, wantAfterRender)
 	}
@@ -411,6 +412,7 @@ func TestAssistantStreamAppendErasesMultilineStreamChromeFromBottom(t *testing.T
 	want := nativeLiveAreaRenderSequenceForTest("old 1", "old 2", "old 3") +
 		liveAreaEraseSequence(3) +
 		nativeLiveAreaRenderSequenceForTest("new 1", "new 2", "hello") +
+		liveAreaEraseSequence(3) +
 		nativeStableInsertForTest("hello ", 3) + nativeStableInsertForTest("world", 3)
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)

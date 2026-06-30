@@ -37,7 +37,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEventsBatch(events []clientui.Eve
 		if result.awaitsHydration {
 			if m != nil && idx+1 < len(events) {
 				tail := append([]clientui.Event(nil), events[idx+1:]...)
-				m.pendingRuntimeEvents = append(tail, m.pendingRuntimeEvents...)
+				m.pendingRuntimeEvents = append(m.pendingRuntimeEvents, tail...)
 			}
 			break
 		}
@@ -189,7 +189,9 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 		cmds = append(cmds, syncDecision.cmd)
 		awaitsHydration = awaitsHydration || syncDecision.awaitsHydration
 	} else if shouldRefreshDeferredCommittedTailOnRunEnd(m, evt) {
-		cmds = append(cmds, m.requestRuntimeCommittedConversationSync())
+		syncDecision := m.requestRuntimeCommittedConversationSyncDecision()
+		cmds = append(cmds, syncDecision.cmd)
+		awaitsHydration = awaitsHydration || syncDecision.started || syncDecision.busyPending || syncDecision.awaitsHydration
 	}
 	return runtimeEventApplyResult{cmd: batchCmds(cmds...), transcriptMutated: transcriptMutated, awaitsHydration: awaitsHydration}
 }

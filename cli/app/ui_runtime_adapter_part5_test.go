@@ -1008,11 +1008,14 @@ func TestDeferredCommittedUserFlushRequestsTranscriptRefreshWhenRunEndsWithoutCa
 		entries:    []clientui.ChatEntry{{Role: "user", Text: "steered message"}},
 	}}
 
-	cmd := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
 		Kind:     clientui.EventRunStateChanged,
 		RunState: &clientui.RunState{Lifecycle: clientui.IdleRunLifecycle()},
-	}).
-		cmd
+	})
+	cmd := result.cmd
+	if !result.awaitsHydration {
+		t.Fatal("expected run-end deferred tail refresh to await hydration")
+	}
 	msgs := collectCmdMessages(t, cmd)
 	refreshFound := false
 	for _, msg := range msgs {

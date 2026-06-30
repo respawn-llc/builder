@@ -698,7 +698,10 @@ func (buffer *OngoingScrollbackBufferImpl) withStableHistoryWriteLocked(writeSta
 func (buffer *OngoingScrollbackBufferImpl) withAssistantStreamStableWriteLocked(writeStable func() error) error {
 	err := error(nil)
 	if liveArea := buffer.liveArea; liveArea != nil {
-		liveArea.pendingPhysicalRender = true
+		err = liveArea.erasePhysicalLocked()
+		if err == nil {
+			liveArea.pendingPhysicalRender = true
+		}
 	}
 	if err == nil && writeStable != nil {
 		err = writeStable()

@@ -439,6 +439,31 @@ func TestRuntimeBatchStopsAtContinuityHydrationAndQueuesTail(t *testing.T) {
 	}
 }
 
+func TestRuntimeBatchHydrationTailQueuesAfterExistingPendingEvents(t *testing.T) {
+	client := &runtimeControlFakeClient{}
+	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m.startupCmds = nil
+	m.pendingRuntimeEvents = []clientui.Event{{Kind: clientui.EventAssistantDelta, AssistantDelta: "older pending"}}
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEventsBatch([]clientui.Event{
+		{Kind: clientui.EventStreamGap, RecoveryCause: clientui.TranscriptRecoveryCauseStreamGap},
+		{Kind: clientui.EventAssistantDelta, AssistantDelta: "same batch tail"},
+	})
+
+	if !result.awaitsHydration {
+		t.Fatal("expected stream-gap batch to await hydration")
+	}
+	if got := len(m.pendingRuntimeEvents); got != 2 {
+		t.Fatalf("pending runtime event count = %d, want 2", got)
+	}
+	if got := m.pendingRuntimeEvents[0].AssistantDelta; got != "older pending" {
+		t.Fatalf("first pending event = %q, want older pending", got)
+	}
+	if got := m.pendingRuntimeEvents[1].AssistantDelta; got != "same batch tail" {
+		t.Fatalf("second pending event = %q, want same batch tail", got)
+	}
+}
+
 func TestHydratingClientAndLiveClientConvergeWithoutDuplicateCommittedRows(t *testing.T) {
 	baseline := clientui.TranscriptPage{
 		SessionID: "session-1",
@@ -530,7 +555,7 @@ func TestHydratingClientAndLiveClientConvergeWithoutDuplicateCommittedRows(t *te
 	}
 }
 
-func TestHydrationRetryErrorReleasesRuntimeEventFenceWhileRetryIsScheduled(t *testing.T) {
+func TestHydrationRetryErrorKeepsRuntimeEventFenceWhileRetryIsScheduled(t *testing.T) {
 	previousRetryDelay := uiRuntimeHydrationRetryDelay
 	uiRuntimeHydrationRetryDelay = time.Millisecond
 	t.Cleanup(func() {
@@ -548,8 +573,8 @@ func TestHydrationRetryErrorReleasesRuntimeEventFenceWhileRetryIsScheduled(t *te
 
 	next, cmd := m.Update(runtimeTranscriptRefreshedMsg{token: 7, err: errors.New("temporary refresh failure")})
 	updated := next.(*uiModel)
-	if updated.waitRuntimeEventAfterHydration {
-		t.Fatal("expected hydration retry path to release runtime event fence after failure")
+	if !updated.waitRuntimeEventAfterHydration {
+		t.Fatal("expected hydration retry path to keep runtime event fence after failure")
 	}
 	if updated.runtimeTranscriptBusy {
 		t.Fatal("expected hydration retry path to clear in-flight busy flag after failure")
@@ -570,11 +595,11 @@ func TestHydrationRetryErrorReleasesRuntimeEventFenceWhileRetryIsScheduled(t *te
 	if !retryFound {
 		t.Fatalf("expected hydration retry to remain scheduled after failure, got %+v", msgs)
 	}
-	if !resumed {
-		t.Fatalf("expected runtime event consumption to resume while retry is pending, got %+v", msgs)
+	if resumed {
+		t.Fatalf("did not expect runtime event consumption to resume while retry is pending, got %+v", msgs)
 	}
-	if len(runtimeEvents) != 0 {
-		t.Fatalf("expected resumed runtime wait to consume pending event, remaining=%d", len(runtimeEvents))
+	if len(runtimeEvents) != 1 {
+		t.Fatalf("expected runtime event to remain queued while retry is pending, remaining=%d", len(runtimeEvents))
 	}
 }
 

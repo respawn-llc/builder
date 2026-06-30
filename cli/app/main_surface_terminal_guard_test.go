@@ -376,7 +376,7 @@ func mainSurfaceGuardAllowsTerminalWrite(context mainSurfaceGuardFunctionContext
 	}
 	if context.receiver == "nativeLiveAreaImpl" {
 		switch context.name {
-		case "erasePhysicalLocked", "renderPhysicalLocked":
+		case "erasePhysicalLocked", "preserveStableRowsForLiveGrowthLocked", "renderPhysicalLocked":
 			return true
 		}
 	}
