@@ -57,28 +57,29 @@ const (
 type Dependency string
 
 const (
-	DependencyProtocol           Dependency = "protocol"
-	DependencyServerStatus       Dependency = "server_status"
-	DependencyAuthBootstrap      Dependency = "auth_bootstrap"
-	DependencyAuthStatus         Dependency = "auth_status"
-	DependencyProjectView        Dependency = "project_view"
-	DependencySessionLaunch      Dependency = "session_launch"
-	DependencySessionView        Dependency = "session_view"
-	DependencySessionLifecycle   Dependency = "session_lifecycle"
-	DependencySessionRuntime     Dependency = "session_runtime"
-	DependencyWorktree           Dependency = "worktree"
-	DependencyRuntimeControl     Dependency = "runtime_control"
-	DependencyProcessView        Dependency = "process_view"
-	DependencyProcessControl     Dependency = "process_control"
-	DependencyProcessOutput      Dependency = "process_output"
-	DependencyAskView            Dependency = "ask_view"
-	DependencyApprovalView       Dependency = "approval_view"
-	DependencyPromptControl      Dependency = "prompt_control"
-	DependencyPromptActivity     Dependency = "prompt_activity"
-	DependencySessionActivity    Dependency = "session_activity"
-	DependencyRunPrompt          Dependency = "run_prompt"
-	DependencyStreamNotification Dependency = "stream_notification"
-	DependencyWorkflow           Dependency = "workflow"
+	DependencyProtocol              Dependency = "protocol"
+	DependencyServerStatus          Dependency = "server_status"
+	DependencyAuthBootstrap         Dependency = "auth_bootstrap"
+	DependencyAuthStatus            Dependency = "auth_status"
+	DependencyProjectView           Dependency = "project_view"
+	DependencySessionLaunch         Dependency = "session_launch"
+	DependencySessionView           Dependency = "session_view"
+	DependencySessionLifecycle      Dependency = "session_lifecycle"
+	DependencySessionRuntime        Dependency = "session_runtime"
+	DependencyWorktree              Dependency = "worktree"
+	DependencyRuntimeControl        Dependency = "runtime_control"
+	DependencyProcessView           Dependency = "process_view"
+	DependencyProcessControl        Dependency = "process_control"
+	DependencyProcessOutput         Dependency = "process_output"
+	DependencyAskView               Dependency = "ask_view"
+	DependencyApprovalView          Dependency = "approval_view"
+	DependencyPromptControl         Dependency = "prompt_control"
+	DependencyPromptActivity        Dependency = "prompt_activity"
+	DependencyAttentionNotification Dependency = "attention_notification"
+	DependencySessionActivity       Dependency = "session_activity"
+	DependencyRunPrompt             Dependency = "run_prompt"
+	DependencyStreamNotification    Dependency = "stream_notification"
+	DependencyWorkflow              Dependency = "workflow"
 )
 
 type Route struct {
@@ -293,6 +294,8 @@ var routeContracts = []Route{
 	subscription[serverapi.SessionActivitySubscribeRequest, protocol.SessionActivityEventParams](protocol.MethodSessionSubscribeActivity, AuthServer, ScopeAttachedSession, DependencySessionActivity, protocol.MethodSessionActivityEvent, protocol.MethodSessionActivityComplete),
 	subscription[serverapi.ProcessOutputSubscribeRequest, protocol.ProcessOutputEventParams](protocol.MethodProcessSubscribeOutput, AuthServer, ScopeProcessActiveProject, DependencyProcessOutput, protocol.MethodProcessOutputEvent, protocol.MethodProcessOutputComplete),
 	subscription[serverapi.PromptActivitySubscribeRequest, protocol.PromptActivityEventParams](protocol.MethodPromptSubscribeActivity, AuthServer, ScopeAttachedSession, DependencyPromptActivity, protocol.MethodPromptActivityEvent, protocol.MethodPromptActivityComplete),
+	subscription[serverapi.AttentionNotificationSubscribeRequest, protocol.AttentionNotificationEventParams](protocol.MethodAttentionNotificationSubscribe, AuthServer, ScopeNone, DependencyAttentionNotification, protocol.MethodAttentionNotificationEvent, protocol.MethodAttentionNotificationComplete),
+	subscription[serverapi.AttentionSessionNotificationSubscribeRequest, protocol.AttentionNotificationEventParams](protocol.MethodAttentionSessionNotificationSubscribe, AuthServer, ScopeAttachedSession, DependencyAttentionNotification, protocol.MethodAttentionSessionNotificationEvent, protocol.MethodAttentionSessionNotificationComplete),
 	subscription[serverapi.WorkflowSubscribeRequest, protocol.WorkflowProjectEventParams](protocol.MethodWorkflowSubscribe, AuthServer, ScopeNone, DependencyWorkflow, protocol.MethodWorkflowEvent, protocol.MethodWorkflowComplete),
 	subscription[serverapi.WorkflowProjectSubscribeRequest, protocol.WorkflowProjectEventParams](protocol.MethodWorkflowSubscribeProject, AuthServer, ScopeProjectView, DependencyWorkflow, protocol.MethodWorkflowProjectEvent, protocol.MethodWorkflowProjectComplete),
 	notification[serverapi.RunPromptProgress](protocol.MethodRunPromptProgress),
@@ -302,6 +305,10 @@ var routeContracts = []Route{
 	notification[protocol.StreamCompleteParams](protocol.MethodProcessOutputComplete),
 	notification[protocol.PromptActivityEventParams](protocol.MethodPromptActivityEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodPromptActivityComplete),
+	notification[protocol.AttentionNotificationEventParams](protocol.MethodAttentionNotificationEvent),
+	notification[protocol.StreamCompleteParams](protocol.MethodAttentionNotificationComplete),
+	notification[protocol.AttentionNotificationEventParams](protocol.MethodAttentionSessionNotificationEvent),
+	notification[protocol.StreamCompleteParams](protocol.MethodAttentionSessionNotificationComplete),
 	notification[protocol.WorkflowProjectEventParams](protocol.MethodWorkflowEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodWorkflowComplete),
 	notification[protocol.WorkflowProjectEventParams](protocol.MethodWorkflowProjectEvent),

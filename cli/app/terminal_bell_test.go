@@ -45,6 +45,21 @@ func newUnfocusedBellHooks(ringer *countRinger) *bellHooks {
 	return newBellHooks(ringer, nil, func() bool { return false })
 }
 
+func testAttentionPendingEvent(id string, kind clientui.AttentionNotificationKind, title string, body string) clientui.AttentionNotificationEvent {
+	return clientui.AttentionNotificationEvent{
+		Type: clientui.AttentionNotificationEventPending,
+		Pending: &clientui.AttentionNotification{
+			ID:   id,
+			Kind: kind,
+			Presentation: clientui.AttentionNotificationPresentation{
+				Title: title,
+				Body:  body,
+				Count: 1,
+			},
+		},
+	}
+}
+
 func TestTerminalBellRingerWritesBellCharacter(t *testing.T) {
 	var out bytes.Buffer
 	notifier := newTerminalNotifier(notificationMethodBEL, &out, nil)
@@ -113,12 +128,12 @@ func TestAutoNotifierFallsBackToBELForWindowsTerminal(t *testing.T) {
 	}
 }
 
-func TestBellHooksRingOnAskRequests(t *testing.T) {
+func TestBellHooksRingOnAttentionNotifications(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
 
-	hooks.OnAsk(clientui.PendingPromptEvent{Question: "question"})
-	hooks.OnAsk(clientui.PendingPromptEvent{Question: "approval", Approval: true})
+	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "Question", "question"))
+	hooks.OnAttentionNotification(testAttentionPendingEvent("approval-1", clientui.AttentionNotificationKindApproval, "Action required", "approval"))
 
 	if got := ringer.Count(); got != 2 {
 		t.Fatalf("ring count = %d, want 2", got)
@@ -132,7 +147,7 @@ func TestBellHooksUseSessionNameAndQuestionTextForAskNotifications(t *testing.T)
 	ringer := &countRinger{}
 	hooks := newBellHooks(ringer, func() string { return "incident triage" })
 
-	hooks.OnAsk(clientui.PendingPromptEvent{Question: "Which rollback strategy should I use?"})
+	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "Question", "Which rollback strategy should I use?"))
 
 	if got := ringer.Last(); got != "incident triage: Question: Which rollback strategy should I use?" {
 		t.Fatalf("last message = %q, want %q", got, "incident triage: Question: Which rollback strategy should I use?")
@@ -143,7 +158,7 @@ func TestBellHooksAskUsesBellOnlyWhileFocused(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newBellHooks(ringer, nil, func() bool { return true })
 
-	hooks.OnAsk(clientui.PendingPromptEvent{Question: "question"})
+	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "Question", "question"))
 
 	if got := ringer.Count(); got != 1 {
 		t.Fatalf("ring count while focused = %d, want 1", got)
@@ -157,41 +172,71 @@ func TestBellHooksAskUsesRawBellOnlyWithOSC9NotifierWhileFocused(t *testing.T) {
 	var out bytes.Buffer
 	hooks := newBellHooks(newOSC9TerminalNotifier(&out), nil, func() bool { return true })
 
-	hooks.OnAsk(clientui.PendingPromptEvent{Question: "question"})
+	hooks.OnAttentionNotification(testAttentionPendingEvent("question-1", clientui.AttentionNotificationKindQuestion, "Question", "question"))
 
 	if got := out.String(); got != terminalBell {
 		t.Fatalf("focused OSC9 ask output = %q, want raw bell", got)
 	}
 }
 
-func TestUIAskEventNotifiesBellHookForActiveAndQueuedPrompts(t *testing.T) {
+func TestUIAskEventDoesNotNotifyBellHookForActiveOrQueuedPrompts(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
-	m := newProjectedStaticUIModel(WithUIAskNotificationHook(hooks))
+	m := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
 
 	next, _ := m.Update(askEventMsg{event: askEvent{req: clientui.PendingPromptEvent{PromptID: "ask-1", Question: "First?"}}})
 	m = next.(*uiModel)
 	next, _ = m.Update(askEventMsg{event: askEvent{req: clientui.PendingPromptEvent{PromptID: "ask-2", Question: "Second?"}}})
 	_ = next.(*uiModel)
 
-	if got := ringer.Count(); got != 2 {
-		t.Fatalf("ask notification count = %d, want 2", got)
-	}
-	if got := ringer.Last(); got != "kent: Question: Second?" {
-		t.Fatalf("last ask notification = %q, want %q", got, "kent: Question: Second?")
+	if got := ringer.Count(); got != 0 {
+		t.Fatalf("ask notification count = %d, want 0; prompt activity must not notify", got)
 	}
 }
 
 func TestUIResolvedAskEventDoesNotNotifyBellHook(t *testing.T) {
 	ringer := &countRinger{}
 	hooks := newUnfocusedBellHooks(ringer)
-	m := newProjectedStaticUIModel(WithUIAskNotificationHook(hooks))
+	m := newProjectedStaticUIModel(WithUITurnQueueHook(hooks))
 
 	next, _ := m.Update(askEventMsg{event: askEvent{resolvedPromptID: "ask-1"}})
 	_ = next.(*uiModel)
 
 	if got := ringer.Count(); got != 0 {
 		t.Fatalf("resolved ask notification count = %d, want 0", got)
+	}
+}
+
+func TestAttentionNotificationLedgerSuppressesPendingUpdatesUntilResolved(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+	surfaced := map[string]struct{}{}
+
+	applyAttentionNotificationEvent(testAttentionPendingEvent("question-batch-1", clientui.AttentionNotificationKindQuestion, "KT-1: 2 questions", "question from agent"), surfaced, hooks)
+	applyAttentionNotificationEvent(testAttentionPendingEvent("question-batch-1", clientui.AttentionNotificationKindQuestion, "KT-1: 2 questions", "second materialized"), surfaced, hooks)
+
+	if got := ringer.Count(); got != 1 {
+		t.Fatalf("attention notification count before resolved = %d, want 1", got)
+	}
+
+	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{Type: clientui.AttentionNotificationEventResolved, ID: "question-batch-1"}, surfaced, hooks)
+	applyAttentionNotificationEvent(testAttentionPendingEvent("question-batch-1", clientui.AttentionNotificationKindQuestion, "KT-1: 2 questions", "new unresolved"), surfaced, hooks)
+
+	if got := ringer.Count(); got != 2 {
+		t.Fatalf("attention notification count after resolved = %d, want 2", got)
+	}
+}
+
+func TestAttentionNotificationLedgerIgnoresSnapshotCompleteAndUnknownResolved(t *testing.T) {
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+	surfaced := map[string]struct{}{}
+
+	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{Type: clientui.AttentionNotificationEventSnapshotComplete, SessionID: "session-1"}, surfaced, hooks)
+	applyAttentionNotificationEvent(clientui.AttentionNotificationEvent{Type: clientui.AttentionNotificationEventResolved, ID: "missing"}, surfaced, hooks)
+
+	if got := ringer.Count(); got != 0 {
+		t.Fatalf("attention notification count = %d, want 0", got)
 	}
 }
 

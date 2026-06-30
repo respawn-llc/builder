@@ -119,6 +119,8 @@ func expectedLoopbackServiceContractType(dependency rpccontract.Dependency) stri
 	switch dependency {
 	case rpccontract.DependencyApprovalView:
 		return "ApprovalViewService"
+	case rpccontract.DependencyAttentionNotification:
+		return "AttentionNotificationService"
 	case rpccontract.DependencyAskView:
 		return "AskViewService"
 	case rpccontract.DependencyAuthBootstrap:

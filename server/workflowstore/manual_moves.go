@@ -145,6 +145,9 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 		return ManualMoveResult{}, err
 	}
 	result := ManualMoveResult{TransitionID: workflow.TransitionID(transitionID), State: transitionState, RequiresApproval: edge.RequiresApproval}
+	if pendingApprovalTransitionID != "" {
+		result.ResolvedApprovalTransitionIDs = []workflow.TransitionID{workflow.TransitionID(pendingApprovalTransitionID)}
+	}
 	targetPlacementID := ""
 	if transitionState == "applied" {
 		targetPlacementID = prefixedID("placement")

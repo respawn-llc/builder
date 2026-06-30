@@ -2063,6 +2063,39 @@ func (q *Queries) GetTransitionApprovalState(ctx context.Context, transitionID s
 	return i, err
 }
 
+const listPendingApprovalTransitionIDsByWorkflow = `-- name: ListPendingApprovalTransitionIDsByWorkflow :many
+SELECT tt.id
+FROM task_transition_records tt
+JOIN task_records t ON t.id = tt.task_id
+WHERE t.workflow_id = ?1
+  AND t.canceled_at_unix_ms = 0
+  AND tt.state = 'pending_approval'
+ORDER BY tt.created_at_unix_ms ASC, tt.id ASC
+`
+
+func (q *Queries) ListPendingApprovalTransitionIDsByWorkflow(ctx context.Context, workflowID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingApprovalTransitionIDsByWorkflow, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getWorkflow = `-- name: GetWorkflow :one
 SELECT
     id,

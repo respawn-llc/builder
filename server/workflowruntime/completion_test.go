@@ -1,6 +1,7 @@
 package workflowruntime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -8,6 +9,8 @@ import (
 
 	"core/server/llm"
 	"core/server/workflow"
+	"core/server/workflowattention"
+	"core/server/workflowstore"
 	"core/shared/config"
 )
 
@@ -51,6 +54,23 @@ func TestSelectCompletionMode(t *testing.T) {
 				t.Fatalf("mode = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStoreControllerFinalizesWorkflowAttentionAfterCompleteRun(t *testing.T) {
+	store := &recordingCompletionStore{result: workflowstore.CompleteRunResult{TransitionID: "transition-1", State: "pending_approval"}}
+	finalizer := &recordingCompletionAttentionFinalizer{}
+	controller := StoreController{Store: store, AttentionFinalizer: finalizer}
+
+	result, err := controller.CompleteWorkflowRun(context.Background(), CompletionRequest{RunID: "run-1", TransitionID: "done"})
+	if err != nil {
+		t.Fatalf("CompleteWorkflowRun: %v", err)
+	}
+	if result.TransitionID != "transition-1" || result.State != "pending_approval" {
+		t.Fatalf("completion result = %+v", result)
+	}
+	if len(finalizer.results) != 1 || finalizer.results[0].TransitionID != "transition-1" || finalizer.results[0].State != "pending_approval" {
+		t.Fatalf("attention finalizer results = %+v", finalizer.results)
 	}
 }
 
@@ -370,4 +390,30 @@ func TestDecodeCompletionAcceptsNullForUnselectedTransitionParameter(t *testing.
 	if _, exists := parsed.OutputValues["risk"]; exists {
 		t.Fatalf("risk should be omitted after null input: %+v", parsed.OutputValues)
 	}
+}
+
+type recordingCompletionStore struct {
+	result workflowstore.CompleteRunResult
+	req    workflowstore.CompleteRunRequest
+}
+
+func (s *recordingCompletionStore) CompleteRun(_ context.Context, req workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error) {
+	s.req = req
+	return s.result, nil
+}
+
+func (s *recordingCompletionStore) RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error) {
+	panic("RecordProtocolViolation not expected")
+}
+
+func (s *recordingCompletionStore) GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error) {
+	panic("GetRun not expected")
+}
+
+type recordingCompletionAttentionFinalizer struct {
+	results []workflowattention.TransitionResult
+}
+
+func (f *recordingCompletionAttentionFinalizer) FinalizeTransition(_ context.Context, result workflowattention.TransitionResult) {
+	f.results = append(f.results, result)
 }

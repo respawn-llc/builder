@@ -223,6 +223,21 @@
 - Interrupt acts immediately with no confirmation.
 - Standalone task detail opened from Home attention stays open after resolution; feed/status update and Home row is removed or resorted in background.
 
+## Desktop Attention Notifications
+
+- The desktop client listens to one server-owned global attention-notification stream for notification-worthy attention in the connected persistence root.
+- The notification stream is live-only. Home Inbox and task detail remain backed by durable attention read models and are not rebuilt from notification events.
+- Notification batching is runtime-owned. Questions emitted by one assistant turn/tool-call batch in the same task run produce one desktop surface; the surface shows the task short ID and question count when more than one question is pending in the batch.
+- Desktop surfaces task questions and task approvals that have an openable task-detail target. Attention without a GUI-openable target is ignored by desktop notifications.
+- A focused desktop window shows a persistent in-app Sonner above all app content, including the sidebar. Clicking the Sonner opens the task detail sidebar; an `Open` action may duplicate the same behavior.
+- An unfocused desktop window sends a native system notification through the browser or desktop native bridge. If the native notification cannot be delivered, Kent falls back to a persistent in-app Sonner waiting in the app.
+- When native delivery is enabled, an unfocused desktop window sends the native notification even when the relevant project, task, or task-detail sidebar is already open in the background.
+- Native notification activation carries Kent's structured task-detail target. Clicking the delivered notification focuses Kent and opens the matching task detail focus target.
+- Kent checks native notification permission at startup and before sending a native notification. A denied startup permission produces one non-persistent warning Sonner per app launch and may offer to open system notification settings when supported without custom platform code.
+- Clicking a native notification focuses the main Kent window and opens task detail in the overlay sidebar. Notification clicks do not open native child task-detail windows.
+- Question notifications focus the first unresolved question in the batch. Approval notifications focus the matching approval item.
+- Resolved/cleared notification events dismiss matching persistent in-app Sonners.
+
 ## Connection Loss
 
 - Mutating actions are disabled while disconnected.

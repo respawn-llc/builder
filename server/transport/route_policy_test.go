@@ -89,6 +89,7 @@ func TestRouteScopeAccessorKindsMatchRouteContract(t *testing.T) {
 		protocol.MethodApprovalAnswer,
 		protocol.MethodSessionSubscribeActivity,
 		protocol.MethodPromptSubscribeActivity,
+		protocol.MethodAttentionSessionNotificationSubscribe,
 	} {
 		expected[method] = routeAccessorSessionID
 	}

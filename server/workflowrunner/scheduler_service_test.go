@@ -3,6 +3,7 @@ package workflowrunner
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -385,6 +386,7 @@ func newSchedulerTestStore(t *testing.T) (*workflowstore.Store, metadata.Binding
 	home := t.TempDir()
 	workspaceRoot := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, "kent-root"))
 	cfg, err := config.Load(workspaceRoot, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)

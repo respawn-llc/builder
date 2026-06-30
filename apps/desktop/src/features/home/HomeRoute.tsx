@@ -7,7 +7,7 @@ import { errorMessage } from "../../api/errors";
 import { basename, formatRelativeTime, projectKeyFromName } from "../../app/formatters";
 import { useAppNavigation } from "../../app/navigation";
 import { queryKeys } from "../../app/queryKeys";
-import { useSidebar } from "../../app/sidebarContext";
+import { useSidebar, type TaskDetailInitialFocus } from "../../app/sidebarContext";
 import { useAppServices } from "../../app/useAppServices";
 import { useNativeDialogFallback } from "../../app/useNativeDialogFallback";
 import { useStatusController } from "../../app/useStatusController";
@@ -253,7 +253,7 @@ const AttentionRow = memo(function AttentionRow({
         if (item.taskID.length > 0) {
           void openSidebar({
             kind: "taskDetail",
-            initialFocus: item.kind === "question" ? "firstQuestion" : undefined,
+            initialFocus: attentionItemInitialFocus(item),
             inboxNav: true,
             mode: "overlay",
             onMutated: undefined,
@@ -300,6 +300,16 @@ function attentionRowPropsEqual(
   }>,
 ): boolean {
   return previous.openSidebar === next.openSidebar && previous.navigation === next.navigation && attentionItemsEqual(previous.item, next.item);
+}
+
+function attentionItemInitialFocus(item: AttentionItem): TaskDetailInitialFocus | undefined {
+  if (item.kind === "question" && item.askID.length > 0) {
+    return { kind: "question", askIDs: [item.askID] };
+  }
+  if (item.kind === "approval" && item.taskTransitionID.length > 0) {
+    return { kind: "approval", taskTransitionID: item.taskTransitionID };
+  }
+  return undefined;
 }
 
 function attentionItemsEqual(previous: AttentionItem, next: AttentionItem): boolean {

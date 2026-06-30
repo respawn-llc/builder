@@ -34,6 +34,10 @@ export type WorkflowInspectorSelection =
   | Readonly<{ kind: "group"; groupID: string }>
   | Readonly<{ kind: "edge"; edgeID: string }>;
 
+export type TaskDetailInitialFocus =
+  | Readonly<{ kind: "question"; askIDs: readonly string[] }>
+  | Readonly<{ kind: "approval"; taskTransitionID: string }>;
+
 export type SidebarResult =
   | SidebarCanceledResult
   | SidebarNewTaskResult
@@ -51,7 +55,7 @@ export type SidebarDestination =
   | Readonly<{
       kind: "taskDetail";
       mode?: SidebarMode;
-      initialFocus?: "firstQuestion" | undefined;
+      initialFocus?: TaskDetailInitialFocus | undefined;
       taskID: string;
       onMutated?: (() => void) | undefined;
       // Set when opened from the Home inbox so the sidebar header exposes live

@@ -312,6 +312,8 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.PromptActivitySubscribeRequest:
 		return p.SessionID, true
+	case serverapi.AttentionSessionNotificationSubscribeRequest:
+		return p.SessionID, true
 	default:
 		return "", false
 	}

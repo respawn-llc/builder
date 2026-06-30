@@ -125,19 +125,22 @@ func (s *embeddedAppServer) RuntimeAttachmentClients() runtimeAttachmentClients 
 	if s == nil || s.inner == nil {
 		return runtimeAttachmentClients{}
 	}
+	attention := s.inner.AttentionNotificationClient()
 	return runtimeAttachmentClients{
-		ApprovalViews:   s.inner.ApprovalViewClient(),
-		AskViews:        s.inner.AskViewClient(),
-		ProcessControls: s.inner.ProcessControlClient(),
-		ProcessOutput:   s.inner.ProcessOutputClient(),
-		ProcessViews:    s.inner.ProcessViewClient(),
-		PromptActivity:  s.inner.PromptActivityClient(),
-		PromptControl:   s.inner.PromptControlClient(),
-		RuntimeControls: s.inner.RuntimeControlClient(),
-		SessionActivity: s.inner.SessionActivityClient(),
-		SessionRuntime:  s.inner.SessionRuntimeClient(),
-		SessionViews:    s.inner.SessionViewClient(),
-		Worktrees:       s.inner.WorktreeClient(),
+		ApprovalViews:                   s.inner.ApprovalViewClient(),
+		AskViews:                        s.inner.AskViewClient(),
+		Attention:                       attention,
+		AttentionNotificationsSupported: attention != nil,
+		ProcessControls:                 s.inner.ProcessControlClient(),
+		ProcessOutput:                   s.inner.ProcessOutputClient(),
+		ProcessViews:                    s.inner.ProcessViewClient(),
+		PromptActivity:                  s.inner.PromptActivityClient(),
+		PromptControl:                   s.inner.PromptControlClient(),
+		RuntimeControls:                 s.inner.RuntimeControlClient(),
+		SessionActivity:                 s.inner.SessionActivityClient(),
+		SessionRuntime:                  s.inner.SessionRuntimeClient(),
+		SessionViews:                    s.inner.SessionViewClient(),
+		Worktrees:                       s.inner.WorktreeClient(),
 	}
 }
 

@@ -2357,6 +2357,9 @@ func TestManualMoveFromPendingApprovalToBacklogDiscardsApproval(t *testing.T) {
 	if moved.State != "applied" || len(moved.PlacementIDs) != 1 {
 		t.Fatalf("approval-to-backlog move = %+v, want applied with one placement", moved)
 	}
+	if len(moved.ResolvedApprovalTransitionIDs) != 1 || moved.ResolvedApprovalTransitionIDs[0] != approval.TransitionID {
+		t.Fatalf("resolved approval ids = %+v, want %s", moved.ResolvedApprovalTransitionIDs, approval.TransitionID)
+	}
 
 	transitions, err := store.ListTransitions(ctx, task.ID)
 	if err != nil {
@@ -4760,6 +4763,7 @@ func newTestStoreWithConfig(t *testing.T) (*Store, metadata.Binding, config.App)
 	home := t.TempDir()
 	workspaceRoot := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, "kent-root"))
 	cfg, err := config.Load(workspaceRoot, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)

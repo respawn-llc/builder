@@ -37,7 +37,7 @@ func newPendingPromptStore() *pendingPromptStore {
 	return &pendingPromptStore{pending: make(map[string]*pendingPromptEntry)}
 }
 
-func (s *pendingPromptStore) Begin(req askquestion.AskQuestionRequest) (PendingPromptSnapshot, bool) {
+func (s *pendingPromptStore) Begin(req askquestion.AskQuestionRequest, publish func(PendingPromptSnapshot, pendingPromptEventType)) (PendingPromptSnapshot, bool) {
 	if s == nil {
 		return PendingPromptSnapshot{}, false
 	}
@@ -48,6 +48,9 @@ func (s *pendingPromptStore) Begin(req askquestion.AskQuestionRequest) (PendingP
 	snapshot := PendingPromptSnapshot{Request: req, CreatedAt: time.Now()}
 	s.mu.Lock()
 	s.pending[requestID] = &pendingPromptEntry{PendingPromptSnapshot: snapshot}
+	if publish != nil {
+		publish(snapshot, pendingPromptEventPending)
+	}
 	s.mu.Unlock()
 	return snapshot, true
 }
@@ -113,8 +116,8 @@ func (s *pendingPromptStore) Await(ctx context.Context, req askquestion.AskQuest
 		return askquestion.AskQuestionResponse{}, fmt.Errorf("prompt %q is already pending", requestID)
 	}
 	s.pending[requestID] = pending
-	s.mu.Unlock()
 	publish(pending.PendingPromptSnapshot, pendingPromptEventPending)
+	s.mu.Unlock()
 	defer func() {
 		var shouldPublishResolved bool
 		s.mu.Lock()
@@ -197,6 +200,15 @@ func (s *pendingPromptStore) Close(err error) {
 }
 
 func (s *pendingPromptStore) WithLockedSnapshotResult(fn func([]PendingPromptSnapshot) (*promptActivitySubscription, error)) (*promptActivitySubscription, error) {
+	if s == nil {
+		return nil, fmt.Errorf("pending prompt store is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fn(s.listLocked())
+}
+
+func (s *pendingPromptStore) WithLockedAttentionSnapshotResult(fn func([]PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error)) (serverapi.AttentionNotificationSubscription, error) {
 	if s == nil {
 		return nil, fmt.Errorf("pending prompt store is required")
 	}
