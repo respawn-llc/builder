@@ -55,6 +55,7 @@ func SubscribeActivities(ctx context.Context, req ActivityRequest) (Activities, 
 	}
 	attentionSub, err := req.Attention.SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: req.SessionID, IncludePendingPromptSnapshot: true})
 	if err != nil {
+		//nolint:nilerr // Attention notifications are best-effort; keep prompt fallback alive when this stream is unavailable.
 		return Activities{Session: sessionSub, Prompt: promptSub}, nil
 	}
 	return Activities{Session: sessionSub, Prompt: promptSub, Attention: attentionSub}, nil

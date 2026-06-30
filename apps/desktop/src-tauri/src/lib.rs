@@ -4,7 +4,10 @@ use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
@@ -56,9 +59,11 @@ struct AttentionNotificationRequest {
 #[derive(Default)]
 struct AttentionNotificationState {
     active: Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
+    next_token: AtomicU64,
 }
 
 struct AttentionNotificationRecord {
+    token: u64,
     closer: Box<dyn AttentionNotificationCloser>,
 }
 
@@ -155,12 +160,14 @@ fn send_attention_notification(
         target: notification.target,
     };
     let backend_id = notification.backend_id;
+    let token = state.next_token.fetch_add(1, Ordering::Relaxed);
     let native_notification =
         attention_native_notification(backend_id, &notification.title, &notification.body);
     show_attention_notification(
         app,
         state.active.clone(),
         backend_id,
+        token,
         activation,
         native_notification,
     )
@@ -198,6 +205,7 @@ fn show_attention_notification(
     app: tauri::AppHandle,
     active: Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
     backend_id: u32,
+    token: u64,
     activation: AttentionNotificationActivation,
     notification: notify_rust::Notification,
 ) -> Result<(), String> {
@@ -207,6 +215,7 @@ fn show_attention_notification(
     insert_attention_notification_record(
         &active,
         backend_id,
+        token,
         Box::new(MacAttentionNotificationCloser {
             notification_id: attention_notification_backend_key(backend_id),
         }),
@@ -214,7 +223,7 @@ fn show_attention_notification(
     tauri::async_runtime::spawn_blocking(move || {
         handle.wait_for_action(|action| {
             let was_active =
-                remove_attention_notification_record_without_closing(&active, backend_id);
+                remove_attention_notification_record_without_closing(&active, backend_id, token);
             if action != "__closed" && was_active {
                 let _ = app.emit_to("main", "app://attention-notification-activated", activation);
             }
@@ -228,6 +237,7 @@ fn show_attention_notification(
     app: tauri::AppHandle,
     active: Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
     backend_id: u32,
+    token: u64,
     activation: AttentionNotificationActivation,
     notification: notify_rust::Notification,
 ) -> Result<(), String> {
@@ -239,6 +249,7 @@ fn show_attention_notification(
     insert_attention_notification_record(
         &active,
         backend_id,
+        token,
         Box::new(UnixAttentionNotificationCloser {
             handle: handle.clone(),
         }),
@@ -246,8 +257,9 @@ fn show_attention_notification(
     tauri::async_runtime::spawn(async move {
         handle
             .wait_for_action_async(|response| {
-                let was_active =
-                    remove_attention_notification_record_without_closing(&active, backend_id);
+                let was_active = remove_attention_notification_record_without_closing(
+                    &active, backend_id, token,
+                );
                 let activated = matches!(
                     response,
                     notify_rust::NotificationResponse::Default
@@ -269,6 +281,7 @@ fn show_attention_notification(
     app: tauri::AppHandle,
     active: Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
     backend_id: u32,
+    token: u64,
     activation: AttentionNotificationActivation,
     notification: notify_rust::Notification,
 ) -> Result<(), String> {
@@ -278,6 +291,7 @@ fn show_attention_notification(
     insert_attention_notification_record(
         &active,
         backend_id,
+        token,
         Box::new(WindowsAttentionNotificationCloser {
             app_id: attention_notification_backend_key(backend_id),
         }),
@@ -285,7 +299,7 @@ fn show_attention_notification(
     tauri::async_runtime::spawn_blocking(move || {
         handle.wait_for_action(|action| {
             let was_active =
-                remove_attention_notification_record_without_closing(&active, backend_id);
+                remove_attention_notification_record_without_closing(&active, backend_id, token);
             if action != "__closed" && was_active {
                 let _ = app.emit_to("main", "app://attention-notification-activated", activation);
             }
@@ -299,6 +313,7 @@ fn show_attention_notification(
     _app: tauri::AppHandle,
     _active: Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
     _backend_id: u32,
+    _token: u64,
     _activation: AttentionNotificationActivation,
     _notification: notify_rust::Notification,
 ) -> Result<(), String> {
@@ -308,12 +323,13 @@ fn show_attention_notification(
 fn insert_attention_notification_record(
     active: &Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
     backend_id: u32,
+    token: u64,
     closer: Box<dyn AttentionNotificationCloser>,
 ) -> Result<(), String> {
     let replaced = active
         .lock()
         .map_err(|_| "Attention notification state lock poisoned.".to_string())?
-        .insert(backend_id, AttentionNotificationRecord { closer });
+        .insert(backend_id, AttentionNotificationRecord { token, closer });
     if let Some(record) = replaced {
         record.closer.close()?;
     }
@@ -338,10 +354,19 @@ fn remove_attention_notification_backend(
 fn remove_attention_notification_record_without_closing(
     active: &Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
     backend_id: u32,
+    token: u64,
 ) -> bool {
     active
         .lock()
-        .map(|mut active_notifications| active_notifications.remove(&backend_id).is_some())
+        .map(|mut active_notifications| {
+            if active_notifications
+                .get(&backend_id)
+                .is_some_and(|record| record.token == token)
+            {
+                return active_notifications.remove(&backend_id).is_some();
+            }
+            false
+        })
         .unwrap_or(false)
 }
 
@@ -797,6 +822,7 @@ mod tests {
         insert_attention_notification_record(
             &state.active,
             42,
+            1,
             Box::new(RecordingAttentionNotificationCloser {
                 closed: closed.clone(),
             }),
@@ -816,6 +842,7 @@ mod tests {
         insert_attention_notification_record(
             &state.active,
             42,
+            1,
             Box::new(RecordingAttentionNotificationCloser {
                 closed: closed.clone(),
             }),
@@ -824,7 +851,8 @@ mod tests {
 
         assert!(remove_attention_notification_record_without_closing(
             &state.active,
-            42
+            42,
+            1
         ));
 
         assert!(!closed.load(Ordering::SeqCst));
@@ -839,6 +867,7 @@ mod tests {
         insert_attention_notification_record(
             &state.active,
             42,
+            1,
             Box::new(RecordingAttentionNotificationCloser {
                 closed: first_closed.clone(),
             }),
@@ -848,6 +877,7 @@ mod tests {
         insert_attention_notification_record(
             &state.active,
             42,
+            2,
             Box::new(RecordingAttentionNotificationCloser {
                 closed: second_closed.clone(),
             }),
@@ -858,6 +888,41 @@ mod tests {
         assert!(!second_closed.load(Ordering::SeqCst));
         remove_attention_notification_backend(&state, 42).expect("remove replacement");
         assert!(second_closed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn stale_attention_notification_callback_does_not_remove_replacement() {
+        let state = AttentionNotificationState::default();
+        let first_closed = Arc::new(AtomicBool::new(false));
+        let second_closed = Arc::new(AtomicBool::new(false));
+        insert_attention_notification_record(
+            &state.active,
+            42,
+            1,
+            Box::new(RecordingAttentionNotificationCloser {
+                closed: first_closed.clone(),
+            }),
+        )
+        .expect("insert first notification");
+        insert_attention_notification_record(
+            &state.active,
+            42,
+            2,
+            Box::new(RecordingAttentionNotificationCloser {
+                closed: second_closed.clone(),
+            }),
+        )
+        .expect("replace notification");
+
+        assert!(!remove_attention_notification_record_without_closing(
+            &state.active,
+            42,
+            1
+        ));
+
+        assert!(first_closed.load(Ordering::SeqCst));
+        assert!(!second_closed.load(Ordering::SeqCst));
+        assert!(state.active.lock().expect("active lock").contains_key(&42));
     }
 
     #[test]
