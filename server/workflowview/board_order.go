@@ -213,9 +213,7 @@ func (g boardColumnGraph) stronglyConnectedVisibleComponents(nodeIDs []string, p
 	nextIndex := 0
 	components := make([][]string, 0)
 	orderedNodeIDs := append([]string(nil), nodeIDs...)
-	sort.SliceStable(orderedNodeIDs, func(i, j int) bool {
-		return g.boardOrderNodeIDLess(orderedNodeIDs[i], orderedNodeIDs[j])
-	})
+	g.sortNodeIDsByBoardOrder(orderedNodeIDs)
 	var visit func(string)
 	visit = func(nodeID string) {
 		indexByNodeID[nodeID] = nextIndex
@@ -224,9 +222,7 @@ func (g boardColumnGraph) stronglyConnectedVisibleComponents(nodeIDs []string, p
 		stack = append(stack, nodeID)
 		onStack[nodeID] = true
 		targetIDs := mapKeys(precedence[nodeID])
-		sort.SliceStable(targetIDs, func(i, j int) bool {
-			return g.boardOrderNodeIDLess(targetIDs[i], targetIDs[j])
-		})
+		g.sortNodeIDsByBoardOrder(targetIDs)
 		for _, targetID := range targetIDs {
 			if _, seen := indexByNodeID[targetID]; !seen {
 				visit(targetID)
@@ -250,9 +246,7 @@ func (g boardColumnGraph) stronglyConnectedVisibleComponents(nodeIDs []string, p
 				break
 			}
 		}
-		sort.SliceStable(component, func(i, j int) bool {
-			return g.boardOrderNodeIDLess(component[i], component[j])
-		})
+		g.sortNodeIDsByBoardOrder(component)
 		components = append(components, component)
 	}
 	for _, nodeID := range orderedNodeIDs {
@@ -281,14 +275,10 @@ func (g boardColumnGraph) structurallyOrderedComponentMembers(component []string
 	}
 	if len(roots) == 0 {
 		sorted := append([]string(nil), component...)
-		sort.SliceStable(sorted, func(i, j int) bool {
-			return g.boardOrderNodeIDLess(sorted[i], sorted[j])
-		})
+		g.sortNodeIDsByBoardOrder(sorted)
 		roots = append(roots, sorted[0])
 	}
-	sort.SliceStable(roots, func(i, j int) bool {
-		return g.boardOrderNodeIDLess(roots[i], roots[j])
-	})
+	g.sortNodeIDsByBoardOrder(roots)
 
 	ordered := make([]string, 0, len(component))
 	queued := make(map[string]bool, len(component))
@@ -305,9 +295,7 @@ func (g boardColumnGraph) structurallyOrderedComponentMembers(component []string
 		queue = queue[1:]
 		ordered = append(ordered, nodeID)
 		targetIDs := mapKeys(precedence[nodeID])
-		sort.SliceStable(targetIDs, func(i, j int) bool {
-			return g.boardOrderNodeIDLess(targetIDs[i], targetIDs[j])
-		})
+		g.sortNodeIDsByBoardOrder(targetIDs)
 		for _, targetID := range targetIDs {
 			if !componentSet[targetID] || queued[targetID] {
 				continue
@@ -323,9 +311,7 @@ func (g boardColumnGraph) structurallyOrderedComponentMembers(component []string
 			unvisited = append(unvisited, nodeID)
 		}
 	}
-	sort.SliceStable(unvisited, func(i, j int) bool {
-		return g.boardOrderNodeIDLess(unvisited[i], unvisited[j])
-	})
+	g.sortNodeIDsByBoardOrder(unvisited)
 	return append(ordered, unvisited...)
 }
 
@@ -365,6 +351,12 @@ func (g boardColumnGraph) boardOrderNodeIDLess(leftID string, rightID string) bo
 		return !leftTerminal
 	}
 	return workflowNodeKeyLess(left, right)
+}
+
+func (g boardColumnGraph) sortNodeIDsByBoardOrder(nodeIDs []string) {
+	sort.SliceStable(nodeIDs, func(i, j int) bool {
+		return g.boardOrderNodeIDLess(nodeIDs[i], nodeIDs[j])
+	})
 }
 
 func (g boardColumnGraph) componentHasTerminalNode(component []string) bool {
