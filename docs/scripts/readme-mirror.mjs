@@ -137,7 +137,7 @@ function serializeOpeningTag(node) {
 
     const html = toHtml({
       ...node,
-      children: [{ type: 'text', value: sentinel }],
+      children: [...node.children, { type: 'text', value: sentinel }],
     });
     const sentinelIndex = html.indexOf(sentinel);
     if (sentinelIndex !== -1) {

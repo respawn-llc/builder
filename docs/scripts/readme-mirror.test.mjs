@@ -86,3 +86,25 @@ test('mirrorRepoMarkdownDocument preserves split raw html opening tags while rew
     /Before <a data-token="kent-raw-html-opening-tag-sentinel-0" href="\/security\/">security<\/a> after\./,
   );
 });
+
+test('mirrorRepoMarkdownDocument preserves child markup in split raw html opening fragments', () => {
+  const mirrored = mirrorRepoMarkdownDocument(
+    [
+      '<details><summary><a href="SECURITY.md">security</a></summary>',
+      '',
+      '[readme](README.md)',
+      '',
+      '</details>',
+      '',
+    ].join('\n'),
+    docsConfig,
+    {
+      title: 'Mirrored',
+      editPath: 'README.md',
+    },
+  );
+
+  assert.match(mirrored, /<details><summary><a href="\/security\/">security<\/a><\/summary>/);
+  assert.match(mirrored, /\[readme\]\(\/docs\/\)/);
+  assert.match(mirrored, /<\/details>/);
+});
