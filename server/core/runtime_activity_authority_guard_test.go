@@ -370,6 +370,7 @@ var allowedLargeProductionFiles = map[string]string{
 	filepath.Join("cli", "app", "session_lifecycle.go"):                              "existing lifecycle composition; BUI-146 forced-exit edits must split cleanup policy",
 	filepath.Join("cli", "app", "ui_input_queue.go"):                                 "existing queue-input controller; BUI-146 operation reconciliation must delegate additions",
 	filepath.Join("cli", "app", "ui_model.go"):                                       "existing UI state surface; BUI-146 must not add runtime liveness state here",
+	filepath.Join("cli", "app", "ui_native_surface.go"):                              "existing native transcript surface from main; BUI-146 runtime activity edits must not expand it",
 	filepath.Join("cli", "app", "ui_update.go"):                                      "existing Bubble Tea update dispatcher; BUI-146 runtime branches must delegate",
 	filepath.Join("cli", "app", "ui_view.go"):                                        "existing Bubble Tea view dispatcher; BUI-146 runtime rendering must delegate",
 	filepath.Join("cli", "kent", "main.go"):                                          "existing CLI composition entrypoint",
