@@ -61,6 +61,7 @@ func (s *uiNativeSurface) ensure(width int, height int) bool {
 		scrollback.WithNormalBufferAvailability(s.normalBufferAvailableForBuffer),
 		scrollback.WithDelayedWriteErrorListener(s.delayedWriteErrorListener),
 		scrollback.WithAssistantMarkdownRenderer(s.assistantMarkdownRenderer),
+		scrollback.WithAssistantStreamPromotion(false),
 		scrollback.WithNormalBufferPreparation(),
 	)
 	s.surface = s.buffer
@@ -924,6 +925,9 @@ func (intent nativeStableDeliveryIntent) allowActiveStreamFinalizeFromText() boo
 }
 
 func (m *uiModel) nativeStableProjectionDeliveryError(intent nativeStableDeliveryIntent, reason string, previous tui.TranscriptProjection, current tui.TranscriptProjection) error {
+	if m != nil && m.debugMode {
+		return m.nativeStableProjectionInvariantError(intent.operationLabel(), reason, previous, current)
+	}
 	if intent.debugInvariantViolation() {
 		return m.nativeStableProjectionInvariantError(intent.operationLabel(), reason, previous, current)
 	}

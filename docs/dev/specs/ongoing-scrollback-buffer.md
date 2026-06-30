@@ -61,11 +61,13 @@ All terminal buffer writes assert terminal-main-thread ownership. Blocking or no
 
 ## Assistant Streaming
 
-Assistant streaming is source-backed. `StreamMarkdownAssistantContent` appends incoming assistant content to the surface's active assistant stream state, renders the complete source through the assistant markdown projection for the active theme and terminal width, and promotes rendered projection rows into the stable zone through normal stable-write transactions. The mutable active rendered tail remains in surface state and is exposed as live-area tail lines for rendering with input, status, and pending chrome.
+Assistant streaming is source-backed. `StreamMarkdownAssistantContent` appends incoming assistant content to the surface's active assistant stream state, renders the complete source through the assistant markdown projection for the active theme and terminal width, and exposes the mutable active rendered tail as live-area tail lines for rendering with input, status, and pending chrome.
 
 The app keeps the active assistant stream source as transcript reconciliation state. Committed assistant finalization compares the authoritative committed projection against that source, not against live-area view text. Live-area text may be cleared or rehydrated independently; it must not decide whether a native active stream is the committed block being finalized.
 
 Partial assistant chunks must not be raw-written into normal-buffer scrollback. Stable stream rows are rendered markdown projection rows, not raw deltas or raw terminal wrapping. The active stream tail is the only mutable assistant stream content. `FinishAssistantStreaming` promotes the remaining rendered tail into the stable zone, flushes queued stable appends, clears active stream state, and restores the latest live area.
+
+Native streaming promotion is allowed only for renderers with a prefix-stability policy. A document-scoped Markdown renderer that can reinterpret earlier rows when later Markdown arrives keeps all assistant-stream rows in the mutable live tail until finalization.
 
 Already-promoted rendered stream rows are immutable. The immutability key is the canonical rendered terminal state for the row, including text, display width, per-cell style, per-cell hyperlinks, and final pen/link state after the row. Equivalent escape-sequence churn does not change the key. If re-rendering the source changes a promoted row's canonical terminal state, the surface fails fast instead of rewriting, restyling, clearing, or replaying stable scrollback content.
 
@@ -89,7 +91,7 @@ Native stable delivery uses explicit source policies:
 - Recovery reconcile: transcript page hydration, reconnect, and recent-tail recovery. A recovery page may append only a proven suffix or overlap and explicit local append-only rows. It must not start a compaction epoch, finalize an active native assistant stream, or write non-contiguous committed corrections into existing scrollback.
 - Geometry reproject: resize-only reconciliation of the delivered ledger. Geometry is not transcript authority and must not append transcript rows by itself.
 
-Runtime transcript reconciliation can produce an authoritative committed transcript replacement that is not appendable to already-emitted stable scrollback. In production and debug mode, recovery and geometry mismatches surface a native-surface error and disable native ongoing output so the standard renderer can continue from authoritative state; they do not append rewritten content, clear/replay history, or panic. In debug mode, live-append native scrollback developer errors and invariant violations fail fast with invariant diagnostics. Direct native stable append calls that violate the append-only contract remain invariant violations.
+Runtime transcript reconciliation can produce an authoritative committed transcript replacement that is not appendable to already-emitted stable scrollback. In production, recovery and geometry mismatches surface a native-surface error and disable native ongoing output so the standard renderer can continue from authoritative state. In debug mode, native projection mismatches fail fast with invariant diagnostics. They never append rewritten content or clear/replay history.
 
 Native committed-projection reconciliation compares terminal-visible block identity: render intent, divider group, rendered lines, and durable source identity. Source identity includes the committed entry range and payload identity so repeated committed rows with identical rendered text remain distinct across resize. UI-only metadata such as selection state, expanded state, and expandability does not affect native append or overlap detection because that metadata is not emitted to the terminal stable zone.
 
