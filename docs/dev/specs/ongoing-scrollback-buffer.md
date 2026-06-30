@@ -54,7 +54,7 @@ When normal-buffer ownership is unavailable, the TUI queues typed emission event
 
 When a subscriber becomes available again, including returning from detail mode to ongoing mode, the TUI drains pending typed emission events in order through the normal ongoing emission path. If the pending emission-event queue grows beyond 1000 items, the TUI drops all queued events and runs scratch rehydration instead.
 
-Ordinary alt-screen transitions do not recreate the ongoing surface and do not rehydrate transcript history unless the queued typed emission events overflow. Scratch rehydration is allowed only for terminal resize, connection/subscription loss that created a real delivered-data gap, or navigation/event buffering overflow.
+Ordinary alt-screen transitions do not recreate the ongoing surface and do not rehydrate transcript history unless the queued typed emission events overflow. Scratch rehydration is allowed only for a terminal resize that leaves emitted transcript content visually broken under the previous geometry, connection/subscription loss that created a real delivered-data gap, or navigation/event buffering overflow.
 
 ## Scratch Rehydration
 
@@ -90,7 +90,7 @@ Only essential UI-local state survives scratch rehydration. The current input dr
 
 Ongoing transcript rows that must survive scratch rehydration must be server-owned before they are printed. This includes background shell completion/update transcript rows, warnings, cache warnings, reviewer status/suggestions, goal/status feedback, and runtime-local entries persisted through the session event log. Unpersisted app-local error or diagnostic rows are not recovered by scratch rehydration; if such a row was already printed, its old copy remains only in immutable terminal history.
 
-Terminal resize uses a 1 second debounce before scratch rehydration. Resize events received during the debounce restart the timer. Stable output generated during the debounce remains queued as typed emission events unless the queue overflows, in which case the queue is dropped and scratch rehydration runs after resize settles.
+Terminal resize uses a 1 second debounce before scratch rehydration when the resize leaves emitted transcript content visually broken under the previous geometry. Resize events received during the debounce restart the timer. Stable output generated during the debounce remains queued as typed emission events unless the queue overflows, in which case the queue is dropped and scratch rehydration runs after resize settles.
 
 ## Write Ordering
 
@@ -132,7 +132,7 @@ Immediate normal-buffer terminal write failures surface synchronously to the cal
 
 Contract and invariant violations fail fast with diagnostic detail. Diagnostics include the attempted operation, terminal geometry, calculated visual width when relevant, quoted payload or frame content, raw payload bytes when relevant, and stack trace.
 
-Terminal resize, connection/subscription loss with a real delivered-data gap, and navigation/event buffering overflow trigger scratch rehydration. Runtime transcript divergence, invalid ordering, overlap mismatch, active-stream mismatch, and client/server expectation mismatches caused by implementation bugs are not scratch-rehydration excuses; they surface as native errors in production and fail fast in debug. Production exits with a fatal error if scratch rehydration fails. No failure path may compare against, rewrite, delete, or replay already emitted immutable history.
+A terminal resize that leaves emitted transcript content visually broken under the previous geometry, connection/subscription loss with a real delivered-data gap, and navigation/event buffering overflow trigger scratch rehydration. Runtime transcript divergence, invalid ordering, overlap mismatch, active-stream mismatch, and client/server expectation mismatches caused by implementation bugs are not scratch-rehydration excuses; they surface as native errors in production and fail fast in debug. Production exits with a fatal error if scratch rehydration fails. No failure path may compare against, rewrite, delete, or replay already emitted immutable history.
 
 Runtime event batches stop at the first event whose application must await scratch rehydration. Unprocessed events from the same batch remain queued as typed emission events until hydration applies. Native must not deliver later live committed rows while an earlier scratch rehydration is outstanding, because that can move physical scrollback past committed rows that hydration is about to append.
 
