@@ -156,7 +156,7 @@ func TestRuntimeAttachmentSubscribeFailureReleasesRuntime(t *testing.T) {
 	}
 }
 
-func TestRuntimeAttachmentAttentionSubscribeFailureReleasesRuntime(t *testing.T) {
+func TestRuntimeAttachmentAttentionSubscribeFailureFallsBackToPromptActivity(t *testing.T) {
 	releaseCount := 0
 	subscribeErr := errors.New("attention stream unavailable")
 	server := runtimeAttachmentTestServer{
@@ -188,10 +188,11 @@ func TestRuntimeAttachmentAttentionSubscribeFailureReleasesRuntime(t *testing.T)
 		runtimeControl: &reconnectRetryRuntimeControlClient{},
 	}
 
-	_, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-fallback"}, io.Discard, "test")
-	if !errors.Is(err, subscribeErr) {
-		t.Fatalf("prepareSharedRuntime error = %v, want %v", err, subscribeErr)
+	plan, err := prepareSharedRuntime(context.Background(), server, sessionLaunchPlan{SessionID: "session-fallback"}, io.Discard, "test")
+	if err != nil {
+		t.Fatalf("prepareSharedRuntime: %v", err)
 	}
+	plan.Close()
 	if releaseCount != 1 {
 		t.Fatalf("release count = %d, want 1", releaseCount)
 	}

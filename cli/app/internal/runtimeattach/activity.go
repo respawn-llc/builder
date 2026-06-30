@@ -55,10 +55,7 @@ func SubscribeActivities(ctx context.Context, req ActivityRequest) (Activities, 
 	}
 	attentionSub, err := req.Attention.SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: req.SessionID, IncludePendingPromptSnapshot: true})
 	if err != nil {
-		_ = promptSub.Close()
-		_ = sessionSub.Close()
-		Release(req.Runtime, req.SessionID, req.OwnerID)
-		return Activities{}, err
+		return Activities{Session: sessionSub, Prompt: promptSub}, nil
 	}
 	return Activities{Session: sessionSub, Prompt: promptSub, Attention: attentionSub}, nil
 }

@@ -12,6 +12,7 @@ import type {
   AttentionNotificationTaskDetailFocus,
   AttentionNotificationTaskDetailTarget,
 } from "../api";
+import { RpcError } from "../api/errors";
 import type { RpcSubscription } from "../api/transport";
 import type { TaskDetailInitialFocus } from "./sidebarContext";
 import { useAppServices } from "./useAppServices";
@@ -148,6 +149,19 @@ export function AttentionNotificationController() {
     [bridge.notifications, logger, status],
   );
 
+  const reconcileSurfacedNotifications = useCallback((): void => {
+    const records = [...surfacedRef.current.entries()];
+    if (records.length === 0) {
+      return;
+    }
+    void reconcileActiveSurfaces(records, api, logger).then((staleIDs) => {
+      for (const id of staleIDs) {
+        dismissSurface(surfacedRef.current, status, id);
+        removeActiveNotification(bridge.notifications, logger, id);
+      }
+    });
+  }, [api, bridge.notifications, logger, status]);
+
   useEffect(() => {
     let active = true;
     void bridge.window
@@ -215,24 +229,8 @@ export function AttentionNotificationController() {
       return;
     }
     reconciledGenerationRef.current = connection.generation;
-    const records = [...surfacedRef.current.entries()];
-    if (records.length === 0) {
-      return;
-    }
-    let active = true;
-    void reconcileActiveSurfaces(records, api, logger).then((staleIDs) => {
-      if (!active) {
-        return;
-      }
-      for (const id of staleIDs) {
-        dismissSurface(surfacedRef.current, status, id);
-        removeActiveNotification(bridge.notifications, logger, id);
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, [api, bridge.notifications, connection.generation, connection.phase, logger, status]);
+    reconcileSurfacedNotifications();
+  }, [connection.generation, connection.phase, reconcileSurfacedNotifications]);
 
   useEffect(() => {
     let subscription: RpcSubscription | null = api.subscribeAttentionNotifications({
@@ -252,12 +250,13 @@ export function AttentionNotificationController() {
         void logger.append("warn", "Attention notification stream failed.", {
           error: errorMessage(error),
         });
+        reconcileSurfacedNotifications();
       },
     });
     return () => {
       subscription?.close();
     };
-  }, [api, handlePending, handleResolved, logger]);
+  }, [api, handlePending, handleResolved, logger, reconcileSurfacedNotifications]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -324,6 +323,10 @@ async function reconcileActiveSurfaces(
         staleIDs.push(id);
       }
     } catch (error) {
+      if (isTaskNotFoundError(error)) {
+        staleIDs.push(id);
+        continue;
+      }
       await logger.append("warn", "Reconciling attention notification state failed.", {
         error: errorMessage(error),
         notificationID: id,
@@ -331,6 +334,10 @@ async function reconcileActiveSurfaces(
     }
   }
   return staleIDs;
+}
+
+function isTaskNotFoundError(error: unknown): boolean {
+  return error instanceof RpcError && error.message === "workflow task not found";
 }
 
 function dismissSurface(

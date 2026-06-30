@@ -157,11 +157,11 @@ func TestSubscribeActivitiesClosesSessionSubscriptionAndReleasesOnPromptFailure(
 	}
 }
 
-func TestSubscribeActivitiesReturnsErrorOnSupportedAttentionSubscribeFailure(t *testing.T) {
+func TestSubscribeActivitiesFallsBackToPromptActivityOnSupportedAttentionSubscribeFailure(t *testing.T) {
 	sessionSub := &fakeSessionActivitySubscription{}
 	promptSub := &fakeAttentionPromptSubscription{}
 	subscribeErr := errors.New("attention subscribe failed")
-	_, err := SubscribeActivities(context.Background(), ActivityRequest{
+	activities, err := SubscribeActivities(context.Background(), ActivityRequest{
 		SessionID:                       "session-1",
 		Runtime:                         &fakeRuntimeService{},
 		SessionActivity:                 &fakeSessionActivityService{sub: sessionSub},
@@ -169,11 +169,14 @@ func TestSubscribeActivitiesReturnsErrorOnSupportedAttentionSubscribeFailure(t *
 		Attention:                       &fakeAttentionNotificationService{err: subscribeErr},
 		AttentionNotificationsSupported: true,
 	})
-	if !errors.Is(err, subscribeErr) {
-		t.Fatalf("SubscribeActivities error = %v, want %v", err, subscribeErr)
+	if err != nil {
+		t.Fatalf("SubscribeActivities: %v", err)
 	}
-	if !sessionSub.closed || !promptSub.closed {
-		t.Fatalf("subscriptions should be closed after attention failure; session=%v prompt=%v", sessionSub.closed, promptSub.closed)
+	if activities.Session != sessionSub || activities.Prompt != promptSub || activities.Attention != nil {
+		t.Fatalf("activities = %+v, want session and prompt fallback only", activities)
+	}
+	if sessionSub.closed || promptSub.closed {
+		t.Fatalf("subscriptions should stay open after attention fallback; session=%v prompt=%v", sessionSub.closed, promptSub.closed)
 	}
 }
 
