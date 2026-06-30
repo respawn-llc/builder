@@ -13,9 +13,9 @@ The ongoing normal-buffer surface has two zones:
 - Stable zone: immutable terminal scrollback content.
 - Live area: the visible mutable terminal area rendered from current UI state.
 
-Stable-zone writes are fire-and-forget terminal operations. After bytes are written to the stable zone, the client treats those bytes as unavailable terminal state. The client may remember the terminal-visible blocks it successfully asked native to append so future app-working-set projections can be reconciled against physical history. It does not rewrite, restyle, replay, gate, acknowledge, synchronize, or reconstruct emitted stable-zone bytes.
+Stable-zone writes are fire-and-forget terminal operations. After bytes are written to the stable zone, the client treats those bytes as unavailable terminal state. While a live area is visible, stable rows are inserted above the live viewport with a terminal scroll region that excludes the live viewport; appending stable history must not erase, replay, or repaint the live viewport. The client may remember the terminal-visible blocks it successfully asked native to append so future app-working-set projections can be reconciled against physical history. It does not rewrite, restyle, replay, gate, acknowledge, synchronize, or reconstruct emitted stable-zone bytes.
 
-The live area is erased completely and re-rendered from current live-area state whenever that state changes. It does not render on a clock. Animations produce changes, and those changes may schedule renders. When no live-area state changes or animation ticks exist, the live area stays stable and stops rendering.
+The live area is an absolute-positioned viewport at the bottom of the normal screen. When the terminal has more than one row, the live area reserves at least one row above it for stable-history insertion. It is cleared and re-rendered from current live-area state whenever that state changes. It does not render on a clock. Animations produce changes, and those changes may schedule renders. When no live-area state changes or animation ticks exist, the live area stays stable and stops rendering.
 
 ## Ownership
 
@@ -47,11 +47,11 @@ Ordinary alt-screen transitions do not recreate the ongoing surface and do not r
 
 ## Write Ordering
 
-Any stable-zone write request first requires full live-area erasure. The stable-zone write happens only after the current live-area contents are removed from the terminal. After the stable-zone write completes, the latest live area is restored before the terminal frame is considered complete.
+Any stable-zone write request with a rendered or pending live viewport inserts the stable row above the viewport by constraining the terminal scroll region to the rows above the viewport, moving to the bottom of that region, writing one line feed plus the stable row, resetting the scroll region, and restoring the live cursor state. If a pending live frame differs from the already-rendered live frame, the insertion excludes enough rows for both the rendered frame and the pending frame before repainting live content. The live viewport is outside the scroll region, so stable appends do not erase or restore it. The app establishes the first live viewport before initial stable transcript hydration, so production ongoing output never depends on raw cursor-position append for startup history. Stable writes without live viewport state write plain append output for package-local no-live use.
 
-Stable and live writes are emitted as one terminal frame under the shared exclusion boundary. A stable write with attached live content erases the live area, writes the stable bytes, restores the live area, and only then releases the boundary.
+Stable and live writes are emitted under the shared exclusion boundary. A stable write with attached live content uses the scroll-region insert before releasing the boundary. Live-frame changes clear and repaint only the live viewport rows by absolute terminal coordinates.
 
-Erase failure skips both the stable write and live restore. Stable write failure still attempts live restore. Finishing assistant streaming erases once, flushes the stream tail and queued stable-line appends, and restores once. If a held flush contains multiple stable writes, later writes are attempted after earlier failures.
+Stable write failure surfaces without replaying live content. A failed or partial scroll-region insertion attempts a best-effort reset of the terminal scroll region and live cursor state before surfacing the write error. If a held flush contains multiple stable writes, later writes are attempted after earlier failures.
 
 Active assistant stream row promotion must not restore a live frame that contains the previous stream tail. The surface erases stale live content, writes promoted rows contiguously, and renders the updated live frame from the latest stream tail on the next live render. Assistant-stream finish writes all remaining stable stream content before restoring live content.
 

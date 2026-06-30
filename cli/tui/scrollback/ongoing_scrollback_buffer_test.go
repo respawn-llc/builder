@@ -652,6 +652,26 @@ func TestOngoingScrollbackBufferShortWritesReturnErrors(t *testing.T) {
 	}
 }
 
+func TestOngoingScrollbackBufferStableInsertShortWriteResetsScrollRegion(t *testing.T) {
+	writer := &partialThenRecordingWriter{}
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, writer, nil)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
+	if err := liveArea.Render(nativeLiveAreaFrame("live")); err != nil {
+		t.Fatalf("render live returned error: %v", err)
+	}
+	writer.Reset()
+
+	err := buffer.Steer("line")
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("steer error = %v, want %v", err, io.ErrShortWrite)
+	}
+	recovery := resetScrollingRegionSequence() + xansi.HideCursor + xansi.CursorPosition(1, 24)
+	if got, want := strings.Join(writer.Writes(), "|"), recovery; got != want {
+		t.Fatalf("scroll-region recovery writes = %q, want %q", got, want)
+	}
+}
+
 func TestOngoingScrollbackBufferCloseDropsQueuedSteers(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
@@ -766,11 +786,9 @@ func TestOngoingScrollbackBufferHeldStreamFlushDoesNotInterleaveLiveFrameBeforeT
 		t.Fatalf("flush holdoff returned error: %v", err)
 	}
 
-	want := "input" + xansi.HideCursor +
-		liveAreaEraseSequence(1) +
-		"hello " + terminalLineBreak +
-		"world" + terminalLineBreak +
-		"input" + xansi.HideCursor
+	want := nativeLiveAreaRenderSequenceForTest("input") +
+		nativeStableInsertForTest("hello ", 1) +
+		nativeStableInsertForTest("world", 1)
 	if got := out.String(); got != want {
 		t.Fatalf("held stream output = %q, want %q", got, want)
 	}
@@ -846,8 +864,51 @@ func TestOngoingScrollbackBufferHoldoffFlushRendersLatestPendingLiveFrame(t *tes
 		t.Fatalf("flush holdoff returned error: %v", err)
 	}
 
-	if got, want := out.String(), "held stable"+terminalLineBreak+"latest live"+xansi.HideCursor; got != want {
+	if got, want := out.String(), nativeStableInsertForTest("held stable", 1)+nativeLiveAreaRenderSequenceForTest("latest live"); got != want {
 		t.Fatalf("held stable/latest live output = %q, want %q", got, want)
+	}
+}
+
+func TestOngoingScrollbackBufferHeldStableFlushUsesPendingExpandedLiveViewport(t *testing.T) {
+	var out bytes.Buffer
+	available := true
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithNormalBufferAvailability(func() bool { return available }),
+	)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
+	if err := liveArea.Render(nativeLiveAreaFrame("old live")); err != nil {
+		t.Fatalf("old live render returned error: %v", err)
+	}
+	available = false
+	pendingFrame := NativeLiveAreaFrame{
+		Lines:  []string{"new top", "new middle", "new input"},
+		Cursor: NativeLiveAreaCursor{Visible: true, Row: 2, Col: 4},
+	}
+	if err := liveArea.Render(pendingFrame); err != nil {
+		t.Fatalf("pending live render returned error: %v", err)
+	}
+	if err := buffer.Steer("held stable"); err != nil {
+		t.Fatalf("held steer returned error: %v", err)
+	}
+
+	available = true
+	if err := buffer.flushHoldoff(); err != nil {
+		t.Fatalf("flush holdoff returned error: %v", err)
+	}
+
+	want := nativeLiveAreaRenderSequenceForTest("old live") +
+		stableHistoryInsertSequence("held stable", 24, len(pendingFrame.Lines)) +
+		liveAreaCursorPlacementSequenceForTerminal(pendingFrame.Cursor, len(pendingFrame.Lines), 24) +
+		liveAreaEraseSequence(1) +
+		nativeLiveAreaRenderFrameSequenceForTest(pendingFrame)
+	if got := out.String(); got != want {
+		t.Fatalf("held stable output = %q, want %q", got, want)
 	}
 }
 
@@ -992,5 +1053,28 @@ func (w *scriptedWriter) Write(p []byte) (int, error) {
 }
 
 func (w *scriptedWriter) Writes() []string {
+	return append([]string(nil), w.writes...)
+}
+
+type partialThenRecordingWriter struct {
+	writes      []string
+	partialNext bool
+}
+
+func (w *partialThenRecordingWriter) Write(p []byte) (int, error) {
+	if w.partialNext {
+		w.partialNext = false
+		return len(p) - 1, nil
+	}
+	w.writes = append(w.writes, string(p))
+	return len(p), nil
+}
+
+func (w *partialThenRecordingWriter) Reset() {
+	w.writes = nil
+	w.partialNext = true
+}
+
+func (w *partialThenRecordingWriter) Writes() []string {
 	return append([]string(nil), w.writes...)
 }

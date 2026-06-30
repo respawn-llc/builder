@@ -68,6 +68,11 @@ type stableHoldoffOperation struct {
 	queuedSteers []stableSteerRequest
 }
 
+type stableHistoryInsertPlan struct {
+	payload  string
+	recovery string
+}
+
 var errOngoingScrollbackBufferClosed = errors.New("native scrollback buffer is closed")
 
 func WithNormalBufferAvailability(available func() bool) OngoingScrollbackBufferOption {
@@ -192,10 +197,8 @@ func (buffer *OngoingScrollbackBufferImpl) Steer(line string) error {
 	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
 		delayedErr = err
 	}
-	err := buffer.withLiveErasedForStableLocked(func() error {
-		payload := line + terminalLineBreak
-		written, writeErr := io.WriteString(buffer.stableWriter, payload)
-		return buffer.stableWriteResult("steer", payload, written, writeErr)
+	err := buffer.withStableHistoryWriteLocked(func() error {
+		return buffer.writeSteerPayloadLocked(line)
 	})
 	buffer.mu.Unlock()
 	buffer.notifyDelayedWriteError(delayedErr)
@@ -471,7 +474,7 @@ func (buffer *OngoingScrollbackBufferImpl) flushHeldStableOpsLocked() (bool, err
 	if buffer.isStreaming {
 		return true, buffer.writeStableHoldoffOperationsLocked(operations)
 	}
-	return true, buffer.withLiveErasedForStableLocked(func() error {
+	return true, buffer.withStableHistoryWriteLocked(func() error {
 		return buffer.writeStableHoldoffOperationsLocked(operations)
 	})
 }
@@ -498,7 +501,7 @@ func (buffer *OngoingScrollbackBufferImpl) writeStableHoldoffOperationsLocked(op
 }
 
 func (buffer *OngoingScrollbackBufferImpl) finishAssistantStreamingLocked(queuedSteers []stableSteerRequest) error {
-	return buffer.withLiveErasedForStableLocked(func() error {
+	return buffer.withStableHistoryWriteLocked(func() error {
 		return buffer.writeAssistantStreamTerminatorAndQueuedSteersLocked(queuedSteers)
 	})
 }
@@ -539,9 +542,9 @@ func (buffer *OngoingScrollbackBufferImpl) writeQueuedSteersLocked(queuedSteers 
 }
 
 func (buffer *OngoingScrollbackBufferImpl) writeSteerPayloadLocked(line string) error {
-	payload := line + terminalLineBreak
-	written, writeErr := io.WriteString(buffer.stableWriter, payload)
-	return buffer.stableWriteResult("steer", payload, written, writeErr)
+	plan := buffer.stableHistoryInsertPlanLocked(line)
+	written, writeErr := io.WriteString(buffer.stableWriter, plan.payload)
+	return buffer.stableWritePlanResult("steer", plan, written, writeErr)
 }
 
 func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(delta string) error {
@@ -564,7 +567,7 @@ func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(del
 	if len(rows) == 0 {
 		return nil
 	}
-	return buffer.withLiveErasedForAssistantStreamLocked(func() error {
+	return buffer.withAssistantStreamStableWriteLocked(func() error {
 		firstErr := buffer.writeAssistantStreamRowsLocked("streamMarkdownAssistantContent", rows)
 		if firstErr == nil {
 			buffer.appendAssistantStreamPromotedRowsLocked(rows)
@@ -650,9 +653,9 @@ func (buffer *OngoingScrollbackBufferImpl) updateAssistantStreamProjectionLocked
 
 func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamRowsLocked(operation string, rows []string) error {
 	for _, row := range rows {
-		stablePayload := row + terminalLineBreak
-		written, writeErr := io.WriteString(buffer.stableWriter, stablePayload)
-		err := buffer.stableWriteResult(operation, stablePayload, written, writeErr)
+		plan := buffer.stableHistoryInsertPlanLocked(row)
+		written, writeErr := io.WriteString(buffer.stableWriter, plan.payload)
+		err := buffer.stableWritePlanResult(operation, plan, written, writeErr)
 		if err != nil {
 			return err
 		}
@@ -684,36 +687,64 @@ func (buffer *OngoingScrollbackBufferImpl) clearAssistantStreamStateLocked() {
 	buffer.assistantStreamTail = nil
 }
 
-func (buffer *OngoingScrollbackBufferImpl) withLiveErasedForStableLocked(writeStable func() error) error {
+func (buffer *OngoingScrollbackBufferImpl) withStableHistoryWriteLocked(writeStable func() error) error {
 	err := error(nil)
-	liveErased := false
-	if liveArea := buffer.liveArea; liveArea != nil {
-		err = liveArea.erasePhysicalLocked()
-		liveErased = err == nil
-	}
-	if err == nil && writeStable != nil {
+	if writeStable != nil {
 		err = writeStable()
-	}
-	if liveArea := buffer.liveArea; liveArea != nil && liveErased {
-		if restoreErr := liveArea.renderPhysicalLocked(); err == nil {
-			err = restoreErr
-		}
 	}
 	return err
 }
 
-func (buffer *OngoingScrollbackBufferImpl) withLiveErasedForAssistantStreamLocked(writeStable func() error) error {
+func (buffer *OngoingScrollbackBufferImpl) withAssistantStreamStableWriteLocked(writeStable func() error) error {
 	err := error(nil)
 	if liveArea := buffer.liveArea; liveArea != nil {
-		err = liveArea.erasePhysicalLocked()
-		if err == nil {
-			liveArea.pendingPhysicalRender = true
-		}
+		liveArea.pendingPhysicalRender = true
 	}
 	if err == nil && writeStable != nil {
 		err = writeStable()
 	}
 	return err
+}
+
+func (buffer *OngoingScrollbackBufferImpl) stableHistoryInsertPlanLocked(line string) stableHistoryInsertPlan {
+	cursorRestore := xansi.HideCursor + xansi.CursorPosition(1, buffer.terminalHeight)
+	viewportRows := 0
+	if buffer.liveArea != nil {
+		pendingRows := len(buffer.liveArea.frame.Lines)
+		if buffer.liveArea.pendingPhysicalRender && pendingRows > 0 {
+			viewportRows = buffer.liveArea.renderedLines
+			if pendingRows > viewportRows {
+				viewportRows = pendingRows
+			}
+			cursorRestore = liveAreaCursorPlacementSequenceForTerminal(buffer.liveArea.frame.Cursor, pendingRows, buffer.terminalHeight)
+		} else if buffer.liveArea.renderedLines > 0 {
+			viewportRows = buffer.liveArea.renderedLines
+			cursorRestore = liveAreaCursorPlacementSequenceForTerminal(buffer.liveArea.frame.Cursor, buffer.liveArea.renderedLines, buffer.terminalHeight)
+		} else if pendingRows > 0 {
+			viewportRows = pendingRows
+			cursorRestore = liveAreaCursorPlacementSequenceForTerminal(buffer.liveArea.frame.Cursor, pendingRows, buffer.terminalHeight)
+		}
+	}
+	if viewportRows > 0 {
+		return stableHistoryInsertPlan{
+			payload:  stableHistoryInsertSequence(line, buffer.terminalHeight, viewportRows) + cursorRestore,
+			recovery: resetScrollingRegionSequence() + cursorRestore,
+		}
+	}
+	return stableHistoryInsertPlan{payload: line + terminalLineBreak}
+}
+
+func stableHistoryInsertSequence(line string, terminalHeight int, viewportRows int) string {
+	scrollBottom := terminalHeight - viewportRows
+	if scrollBottom < 1 {
+		scrollBottom = 1
+	}
+	return xansi.SetScrollingRegion(1, scrollBottom) +
+		xansi.CursorPosition(1, scrollBottom) +
+		terminalLineBreak +
+		xansi.EraseEntireLine +
+		line +
+		resetScrollingRegionSequence()
 }
 
 func (buffer *OngoingScrollbackBufferImpl) notifyDelayedWriteError(err error) {
@@ -756,6 +787,19 @@ func (buffer *OngoingScrollbackBufferImpl) stableWriteResult(operation string, p
 	return nil
 }
 
+func (buffer *OngoingScrollbackBufferImpl) stableWritePlanResult(operation string, plan stableHistoryInsertPlan, written int, err error) error {
+	result := buffer.stableWriteResult(operation, plan.payload, written, err)
+	if result == nil || plan.recovery == "" {
+		return result
+	}
+	recoveryWritten, recoveryErr := io.WriteString(buffer.stableWriter, plan.recovery)
+	if recoveryErr != nil || recoveryWritten != len(plan.recovery) {
+		recoveryResult := buffer.stableWriteResult(operation+" recovery", plan.recovery, recoveryWritten, recoveryErr)
+		return errors.Join(result, recoveryResult)
+	}
+	return result
+}
+
 func (buffer *OngoingScrollbackBufferImpl) closedError(operation string) error {
 	return fmt.Errorf("%s: %w", operation, errOngoingScrollbackBufferClosed)
 }
@@ -777,7 +821,11 @@ func (buffer *OngoingScrollbackBufferImpl) prepareNormalBufferLocked() error {
 }
 
 func normalBufferPreparationSequence() string {
-	return xansi.ResetModeAltScreenSaveCursor + xansi.SaveCursor + "\x1b[?6l" + "\x1b[r" + xansi.RestoreCursor
+	return xansi.ResetModeAltScreenSaveCursor + xansi.SaveCursor + "\x1b[?6l" + resetScrollingRegionSequence() + xansi.RestoreCursor
+}
+
+func resetScrollingRegionSequence() string {
+	return "\x1b[r"
 }
 
 func stableWriteDiagnostics(payload string, terminalWidth int, terminalHeight int, written int) string {

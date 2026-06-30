@@ -213,7 +213,6 @@ func (m *uiModel) ensureNativeSurface(width int, height int) bool {
 		return false
 	}
 	m.nativeSurface.assistantMarkdownRenderer = m.nativeAssistantMarkdownRenderer()
-	shouldRehydrate := !m.nativeResizeRehydrateScheduled()
 	recreate := !m.nativeSurface.ready(width, height)
 	wasInitialized := m.nativeSurface.initialized()
 	if !m.nativeSurface.ensure(width, height) {
@@ -221,16 +220,6 @@ func (m *uiModel) ensureNativeSurface(width int, height int) bool {
 	}
 	if recreate && wasInitialized {
 		m.reprojectNativeDeliveredStableProjectionForCurrentGeometry()
-	}
-	if recreate && shouldRehydrate && !wasInitialized {
-		if err := m.rehydrateNativeStableFromCurrentTranscript(); err != nil {
-			m.nativeLiveAreaError = err
-			m.logf("native.stable.rehydrate err=%q", err.Error())
-		} else {
-			if strings.TrimSpace(m.view.OngoingStreamingText()) == "" {
-				m.nativeAssistantStreamIncomplete = false
-			}
-		}
 	}
 	return true
 }
@@ -1035,12 +1024,18 @@ func (l uiViewLayout) renderNativeLiveAreaFrame(frame uiRenderFrame) string {
 	if m == nil || !m.windowSizeKnown || m.termWidth <= 0 || m.termHeight <= 0 {
 		return ""
 	}
+	rehydrateAfterLiveRender := m.nativeSurface != nil &&
+		!m.nativeSurface.initialized() &&
+		!m.nativeResizeRehydrateScheduled()
 	if !m.ensureNativeSurface(frame.width, frame.height) {
 		return frame.renderWithCursorVisibility(!l.shouldShowRealTerminalCursor(frame))
 	}
 	lines := frame.renderLines()
 	if len(lines) == 0 {
 		lines = []string{""}
+	}
+	if maxLines := nativeLiveAreaMaxRows(frame.height); len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
 	}
 	nativeFrame := scrollback.NativeLiveAreaFrame{
 		Lines:  lines,
@@ -1057,7 +1052,22 @@ func (l uiViewLayout) renderNativeLiveAreaFrame(frame uiRenderFrame) string {
 		return l.renderFrame(fallbackFrame)
 	}
 	m.nativeLiveAreaError = nil
+	if rehydrateAfterLiveRender {
+		if err := m.rehydrateNativeStableFromCurrentTranscript(); err != nil {
+			m.nativeLiveAreaError = err
+			m.logf("native.stable.rehydrate err=%q", err.Error())
+		} else if strings.TrimSpace(m.view.OngoingStreamingText()) == "" {
+			m.nativeAssistantStreamIncomplete = false
+		}
+	}
 	return ""
+}
+
+func nativeLiveAreaMaxRows(height int) int {
+	if height <= 1 {
+		return 1
+	}
+	return height - 1
 }
 
 func (l uiViewLayout) nativeLiveAreaCursor(frame uiRenderFrame, lines []string) scrollback.NativeLiveAreaCursor {

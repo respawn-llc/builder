@@ -105,7 +105,7 @@ func (area *nativeLiveAreaImpl) erasePhysicalLocked() error {
 	if area == nil || area.renderedLines == 0 {
 		return nil
 	}
-	sequence := liveAreaCursorRestoreAnchorSequence(area.cursorPlaced, area.placedCursor, area.renderedLines) + liveAreaEraseSequence(area.renderedLines)
+	sequence := liveAreaEraseSequenceForTerminal(area.renderedLines, area.terminalHeight)
 	written, err := io.WriteString(area.buffer.stableWriter, sequence)
 	if err != nil {
 		return fmt.Errorf("erase live area failed: %s: %w", liveAreaWriteDiagnostics(sequence, area.terminalWidth, area.terminalHeight, written), err)
@@ -123,7 +123,7 @@ func (area *nativeLiveAreaImpl) renderPhysicalLocked() error {
 	if area == nil || len(area.frame.Lines) == 0 {
 		return nil
 	}
-	payload := strings.Join(area.frame.Lines, terminalLineBreak) + liveAreaCursorPlacementSequence(area.frame.Cursor, len(area.frame.Lines))
+	payload := liveAreaRenderSequence(area.frame, area.terminalHeight)
 	written, err := io.WriteString(area.buffer.stableWriter, payload)
 	if err != nil {
 		return fmt.Errorf("render live area failed: %s: %w", liveAreaWriteDiagnostics(payload, area.terminalWidth, area.terminalHeight, written), err)
@@ -157,6 +157,9 @@ func (area *nativeLiveAreaImpl) validateFrameBeforeLock(operation string, frame 
 	}
 	if len(frame.Lines) > area.terminalHeight {
 		panicLiveAreaInvariant(operation, "live area content exceeds terminal height", frame, area.terminalWidth, area.terminalHeight)
+	}
+	if len(frame.Lines) > nativeLiveAreaMaxRows(area.terminalHeight) {
+		panicLiveAreaInvariant(operation, "live area content leaves no stable history row", frame, area.terminalWidth, area.terminalHeight)
 	}
 	for index, line := range frame.Lines {
 		if strings.ContainsAny(line, "\r\n") {
@@ -196,60 +199,64 @@ func nativeLiveAreaFramesEqual(left NativeLiveAreaFrame, right NativeLiveAreaFra
 	return true
 }
 
+func liveAreaRenderSequence(frame NativeLiveAreaFrame, terminalHeight int) string {
+	if len(frame.Lines) == 0 {
+		return ""
+	}
+	top := liveAreaViewportTopRow(len(frame.Lines), terminalHeight)
+	var out strings.Builder
+	for index, line := range frame.Lines {
+		out.WriteString(xansi.CursorPosition(1, top+index))
+		out.WriteString(xansi.EraseEntireLine)
+		out.WriteString(line)
+	}
+	out.WriteString(liveAreaCursorPlacementSequenceForTerminal(frame.Cursor, len(frame.Lines), terminalHeight))
+	return out.String()
+}
+
 func liveAreaEraseSequence(renderedLines int) string {
+	return liveAreaEraseSequenceForTerminal(renderedLines, 24)
+}
+
+func liveAreaEraseSequenceForTerminal(renderedLines int, terminalHeight int) string {
 	if renderedLines <= 0 {
 		return ""
 	}
 	var out strings.Builder
-	if renderedLines > 1 {
-		out.WriteString(xansi.CursorUp(renderedLines - 1))
-	}
-	out.WriteString("\r")
 	for index := 0; index < renderedLines; index++ {
-		if index > 0 {
-			out.WriteString(xansi.CursorDown(1))
-			out.WriteString("\r")
-		}
+		out.WriteString(xansi.CursorPosition(1, liveAreaViewportTopRow(renderedLines, terminalHeight)+index))
 		out.WriteString(xansi.EraseEntireLine)
 	}
-	if renderedLines > 1 {
-		out.WriteString(xansi.CursorUp(renderedLines - 1))
-	}
-	out.WriteString("\r")
 	return out.String()
 }
 
 func liveAreaCursorPlacementSequence(cursor NativeLiveAreaCursor, renderedLines int) string {
-	if !cursor.Visible {
-		return xansi.HideCursor
-	}
-	anchorRow := renderedLines - 1
-	rowsUp := anchorRow - cursor.Row
-	if rowsUp < 0 {
-		rowsUp = 0
-	}
-	var out strings.Builder
-	out.WriteString(xansi.ShowCursor)
-	out.WriteString("\r")
-	if rowsUp > 0 {
-		out.WriteString(xansi.CursorUp(rowsUp))
-	}
-	if cursor.Col > 0 {
-		out.WriteString(xansi.CursorForward(cursor.Col))
-	}
-	return out.String()
+	return liveAreaCursorPlacementSequenceForTerminal(cursor, renderedLines, 24)
 }
 
-func liveAreaCursorRestoreAnchorSequence(cursorPlaced bool, cursor NativeLiveAreaCursor, renderedLines int) string {
-	if !cursorPlaced {
-		return ""
+func liveAreaCursorPlacementSequenceForTerminal(cursor NativeLiveAreaCursor, renderedLines int, terminalHeight int) string {
+	if !cursor.Visible {
+		return xansi.HideCursor + xansi.CursorPosition(1, terminalHeight)
 	}
-	anchorRow := renderedLines - 1
-	rowsDown := anchorRow - cursor.Row
-	if rowsDown <= 0 {
-		return "\r"
+	return xansi.ShowCursor + xansi.CursorPosition(cursor.Col+1, liveAreaViewportTopRow(renderedLines, terminalHeight)+cursor.Row)
+}
+
+func liveAreaViewportTopRow(renderedLines int, terminalHeight int) int {
+	if renderedLines <= 0 {
+		return terminalHeight
 	}
-	return xansi.CursorDown(rowsDown) + "\r"
+	top := terminalHeight - renderedLines + 1
+	if top < 1 {
+		return 1
+	}
+	return top
+}
+
+func nativeLiveAreaMaxRows(terminalHeight int) int {
+	if terminalHeight <= 1 {
+		return 1
+	}
+	return terminalHeight - 1
 }
 
 func liveAreaWriteDiagnostics(payload string, terminalWidth int, terminalHeight int, written int) string {

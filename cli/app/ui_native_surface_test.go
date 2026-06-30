@@ -194,8 +194,45 @@ func TestNativeOngoingLiveAreaBoundsFullFrameToTerminalHeight(t *testing.T) {
 	if strings.Contains(plain, "pending tool") || strings.Contains(plain, "queued one") {
 		t.Fatalf("native bounded full frame kept far-edge lines instead of tail, got %q", plain)
 	}
-	if !strings.Contains(plain, "queued two") || !strings.Contains(plain, "input one") || !strings.Contains(plain, "input two") || !strings.Contains(plain, "status") {
+	if strings.Contains(plain, "queued two") {
+		t.Fatalf("native bounded full frame did not reserve a stable history row, got %q", plain)
+	}
+	if !strings.Contains(plain, "input one") || !strings.Contains(plain, "input two") || !strings.Contains(plain, "status") {
 		t.Fatalf("native bounded full frame dropped expected tail lines, got %q", plain)
+	}
+}
+
+func TestNativeOngoingLargeInputKeepsTailAndCursorInsideReservedViewport(t *testing.T) {
+	var out bytes.Buffer
+	m := newSizedProjectedClosedUIModel(nil, 80, 8, WithUINativeSurfaceWriter(&out))
+	m.replaceMainInput(strings.Join([]string{
+		"line 01",
+		"line 02",
+		"line 03",
+		"line 04",
+		"line 05",
+		"line 06 tail-marker",
+	}, "\n"), -1)
+
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	if m.nativeSurface == nil || !m.nativeSurface.lastFrameSet {
+		t.Fatal("native surface did not record a live frame")
+	}
+	frame := m.nativeSurface.lastFrame
+	if len(frame.Lines) > nativeLiveAreaMaxRows(m.termHeight) {
+		t.Fatalf("native live frame has %d lines, max reserved live rows is %d", len(frame.Lines), nativeLiveAreaMaxRows(m.termHeight))
+	}
+	if !frame.Cursor.Visible {
+		t.Fatalf("large input tail cursor is not visible in native live frame: %+v", frame)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if !strings.Contains(plain, "line 06 tail-marker") {
+		t.Fatalf("native large input viewport dropped current tail, got %q", plain)
+	}
+	if strings.Contains(plain, "line 01") {
+		t.Fatalf("native large input viewport kept far-edge input instead of cursor tail, got %q", plain)
 	}
 }
 
@@ -309,6 +346,7 @@ func assertNativeFrameLinesFitTerminalWidth(t *testing.T, m *uiModel) {
 func TestNativeSurfaceRehydratesCommittedTranscriptOnFirstRender(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
+	m.replaceMainInput("startup live input", -1)
 	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
 		{Role: tui.TranscriptRoleUser, Text: "native stable prompt", Committed: true},
 		{Role: tui.TranscriptRoleAssistant, Text: "native stable answer", Committed: true},
@@ -320,6 +358,13 @@ func TestNativeSurfaceRehydratesCommittedTranscriptOnFirstRender(t *testing.T) {
 	plain := stripANSIAndTrimRight(out.String())
 	if !strings.Contains(plain, "native stable prompt") || !strings.Contains(plain, "native stable answer") {
 		t.Fatalf("native stable rehydrate did not write committed transcript, got %q", plain)
+	}
+	raw := out.String()
+	strippedRaw := xansi.Strip(raw)
+	liveIndex := strings.Index(strippedRaw, "startup live input")
+	stableIndex := strings.Index(strippedRaw, "native stable prompt")
+	if liveIndex < 0 || stableIndex < 0 || liveIndex > stableIndex {
+		t.Fatalf("native stable rehydrate must happen after first live viewport render; live_index=%d stable_index=%d raw=%q", liveIndex, stableIndex, raw)
 	}
 }
 
@@ -852,8 +897,8 @@ func TestNativeSurfaceResizeDropsPreviousLiveFrameBeforeReplacingGeometry(t *tes
 	}
 
 	raw := out.String()
-	if strings.Contains(raw, xansi.EraseEntireLine) {
-		t.Fatalf("native resize erased previous live frame before replacement, raw=%q", raw)
+	if !strings.Contains(raw, xansi.CursorPosition(1, 27)) {
+		t.Fatalf("native resize did not repaint replacement live frame at an absolute viewport anchor, raw=%q", raw)
 	}
 	plain := stripANSIAndTrimRight(raw)
 	if !strings.Contains(plain, "resize anchor") {
@@ -1517,7 +1562,11 @@ func TestNativeSurfaceResizeDebounceClampsWideCommittedPatchSummary(t *testing.T
 			continue
 		}
 		checkedPatchLine = true
-		if got := lipgloss.Width(rawLine); got > m.termWidth {
+		visibleStableLine := xansi.Strip(rawLine)
+		if dividerIndex := strings.Index(visibleStableLine, "──"); dividerIndex >= 0 {
+			visibleStableLine = visibleStableLine[:dividerIndex]
+		}
+		if got := lipgloss.Width(visibleStableLine); got > m.termWidth {
 			t.Fatalf("resize flush stable write width = %d, want <= %d, raw=%q", got, m.termWidth, rawLine)
 		}
 	}
