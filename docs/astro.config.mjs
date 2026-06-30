@@ -79,7 +79,7 @@ export default defineConfig({
         },
       ],
       editLink: {
-        baseUrl: docsConfig.repoEditRootUrl,
+        baseUrl: docsConfig.docsProjectEditRootUrl,
       },
       customCss: ['./src/styles/custom.css'],
       markdown: {
