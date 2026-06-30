@@ -54,7 +54,7 @@ When normal-buffer ownership is unavailable, the TUI queues typed emission event
 
 When a subscriber becomes available again, including returning from detail mode to ongoing mode, the TUI drains pending typed emission events in order through the normal ongoing emission path. If the pending emission-event queue grows beyond 1000 items, the TUI drops all queued events and runs scratch rehydration instead.
 
-Ordinary alt-screen transitions do not recreate the ongoing surface and do not rehydrate transcript history unless the queued typed emission events overflow. Terminal resize, transcript divergence, and connection/subscription loss are scratch-rehydration triggers.
+Ordinary alt-screen transitions do not recreate the ongoing surface and do not rehydrate transcript history unless the queued typed emission events overflow. Scratch rehydration is allowed only for terminal resize, connection/subscription loss that created a real delivered-data gap, or navigation/event buffering overflow.
 
 ## Scratch Rehydration
 
@@ -64,7 +64,7 @@ Acceptable triggers, where emitted scrollback is genuinely misleading:
 
 - Connection or subscription loss left a real gap in delivered data, so emitted history misrepresents the conversation. Leaving `the quick brown <gap> lazy dog` on screen as `the quick brown lazy dog` is unacceptable; re-issuing the active segment is the only repair.
 - Terminal resize wrapped earlier scrollback at the old geometry, so content far from the current frame is visually broken and unreachable for in-place repair. Re-issuing the active segment since the latest compaction at the new geometry is the chosen, sufficient repair.
-- Client-side divergence accumulated past the point where incremental replay can be trusted, such as navigating away and buffering more than the pending-event queue limit, so continuing to append risks a broken transcript.
+- The user navigated to another destination and the pending typed emission-event queue grew beyond 1000 items, so continuing to replay the buffered events is no longer trusted.
 
 Never triggers; these are ordinary appends or bugs to fix at the cause, never re-emissions:
 
@@ -132,7 +132,7 @@ Immediate normal-buffer terminal write failures surface synchronously to the cal
 
 Contract and invariant violations fail fast with diagnostic detail. Diagnostics include the attempted operation, terminal geometry, calculated visual width when relevant, quoted payload or frame content, raw payload bytes when relevant, and stack trace.
 
-Runtime transcript divergence, invalid ordering, overlap mismatch, active-stream mismatch, connection/subscription loss, and resize are not immutable-area redraw cases. They trigger scratch rehydration. Production exits with a fatal error if scratch rehydration fails; debug mode fails fast with invariant diagnostics. No failure path may compare against, rewrite, delete, or replay already emitted immutable history.
+Terminal resize, connection/subscription loss with a real delivered-data gap, and navigation/event buffering overflow trigger scratch rehydration. Runtime transcript divergence, invalid ordering, overlap mismatch, active-stream mismatch, and client/server expectation mismatches caused by implementation bugs are not scratch-rehydration excuses; they surface as native errors in production and fail fast in debug. Production exits with a fatal error if scratch rehydration fails. No failure path may compare against, rewrite, delete, or replay already emitted immutable history.
 
 Runtime event batches stop at the first event whose application must await scratch rehydration. Unprocessed events from the same batch remain queued as typed emission events until hydration applies. Native must not deliver later live committed rows while an earlier scratch rehydration is outstanding, because that can move physical scrollback past committed rows that hydration is about to append.
 
