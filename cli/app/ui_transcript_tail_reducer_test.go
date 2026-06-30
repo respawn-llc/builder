@@ -136,6 +136,35 @@ func TestReduceDeferredCommittedTailMergeConsumesCoveredPostEventTail(t *testing
 	}
 }
 
+func TestReduceDeferredCommittedTailMergeRejectsKnownDifferentStepTail(t *testing.T) {
+	state := deferredCommittedTailState{
+		committedEntries: []tui.TranscriptEntry{{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true}},
+		baseOffset:       0,
+		tails: []deferredProjectedTranscriptTail{{
+			rangeStart: 1,
+			rangeEnd:   2,
+			revision:   7,
+			stepID:     "step-b",
+			entries:    []clientui.ChatEntry{{Role: "assistant", Text: "same text"}},
+		}},
+	}
+	reduction := reduceDeferredCommittedTailMerge(state, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-c",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        2,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "new answer"}},
+	})
+
+	if reduction.merged {
+		t.Fatalf("expected different-step deferred tail not to merge, got %+v", reduction)
+	}
+	if len(reduction.remaining) != 1 {
+		t.Fatalf("remaining tails = %d, want original tail preserved", len(reduction.remaining))
+	}
+}
+
 func TestReduceDeferredCommittedTailMergeRejectsChainGap(t *testing.T) {
 	evt := clientui.Event{
 		Kind:                       clientui.EventAssistantMessage,

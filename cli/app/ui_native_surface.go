@@ -567,7 +567,7 @@ func (m *uiModel) nativeStableProjectionHasAppendPrefix(previous tui.TranscriptP
 		return false
 	}
 	for idx, block := range previous.Blocks {
-		if !m.nativeStableProjectionBlocksEqual(block, current.Blocks[idx]) {
+		if !m.nativeStableProjectionBlocksSameAppendIdentity(block, current.Blocks[idx]) {
 			return false
 		}
 	}
@@ -577,7 +577,7 @@ func (m *uiModel) nativeStableProjectionHasAppendPrefix(previous tui.TranscriptP
 func (m *uiModel) nativeStableSharedPrefixBlockCount(current tui.TranscriptProjection, previous tui.TranscriptProjection) int {
 	limit := min(len(current.Blocks), len(previous.Blocks))
 	for idx := 0; idx < limit; idx++ {
-		if !m.nativeStableProjectionBlocksEqual(current.Blocks[idx], previous.Blocks[idx]) {
+		if !m.nativeStableProjectionBlocksSameAppendIdentity(current.Blocks[idx], previous.Blocks[idx]) {
 			return idx
 		}
 	}
@@ -590,7 +590,7 @@ func (m *uiModel) nativeStableSharedSuffixPrefixBlockCount(current tui.Transcrip
 		start := len(previous.Blocks) - overlap
 		matches := true
 		for idx := 0; idx < overlap; idx++ {
-			if !m.nativeStableProjectionBlocksEqual(current.Blocks[idx], previous.Blocks[start+idx]) {
+			if !m.nativeStableProjectionBlocksSameAppendIdentity(current.Blocks[idx], previous.Blocks[start+idx]) {
 				matches = false
 				break
 			}
@@ -613,6 +613,13 @@ func (m *uiModel) nativeStableOverlapAppendWouldReplayDeliveredPrefix(previous t
 		}
 	}
 	return false
+}
+
+func (m *uiModel) nativeStableProjectionBlocksSameAppendIdentity(left tui.TranscriptProjectionBlock, right tui.TranscriptProjectionBlock) bool {
+	if left.SourceKey != "" || right.SourceKey != "" {
+		return nativeStableProjectionBlocksSameReprojectIdentity(left, right)
+	}
+	return m.nativeStableProjectionBlocksEqual(left, right)
 }
 
 func (m *uiModel) nativeStableProjectionBlocksEqual(left tui.TranscriptProjectionBlock, right tui.TranscriptProjectionBlock) bool {
@@ -657,7 +664,7 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 	matchedPrevious := 0
 	blockIndexes := make([]int, 0)
 	for idx, block := range current.Blocks {
-		if matchedPrevious < len(previous.Blocks) && m.nativeStableProjectionBlocksEqual(previous.Blocks[matchedPrevious], block) {
+		if matchedPrevious < len(previous.Blocks) && m.nativeStableProjectionBlocksSameAppendIdentity(previous.Blocks[matchedPrevious], block) {
 			matchedPrevious++
 			continue
 		}
@@ -670,7 +677,7 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 		}
 		if matchedPrevious < len(previous.Blocks) {
 			matchedPrevious = m.nativeStableSkipDeliveredLocalBlocksPresentInCurrent(previous.Blocks, current.Blocks, matchedPrevious)
-			if matchedPrevious < len(previous.Blocks) && m.nativeStableProjectionBlocksEqual(previous.Blocks[matchedPrevious], block) {
+			if matchedPrevious < len(previous.Blocks) && m.nativeStableProjectionBlocksSameAppendIdentity(previous.Blocks[matchedPrevious], block) {
 				matchedPrevious++
 				continue
 			}

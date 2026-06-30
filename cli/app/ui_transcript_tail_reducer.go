@@ -108,6 +108,9 @@ func reduceDeferredCommittedTailMerge(state deferredCommittedTailState, evt clie
 		if deferred.rangeStart != chainEnd || deferred.rangeEnd > eventStart {
 			break
 		}
+		if !deferredCommittedTailCanMergeIntoEvent(deferred, evt) {
+			break
+		}
 		mergedEntries = append(mergedEntries, cloneChatEntries(deferred.entries)...)
 		chainEnd = deferred.rangeEnd
 		used++
@@ -119,6 +122,9 @@ func reduceDeferredCommittedTailMerge(state deferredCommittedTailState, evt clie
 	chainEnd = eventEnd
 	for _, deferred := range state.tails[used:] {
 		if deferred.rangeStart != chainEnd || evt.CommittedEntryCount < deferred.rangeEnd {
+			break
+		}
+		if !deferredCommittedTailCanMergeIntoEvent(deferred, evt) {
 			break
 		}
 		mergedEntries = append(mergedEntries, cloneChatEntries(deferred.entries)...)
@@ -139,6 +145,12 @@ func reduceDeferredCommittedTailMerge(state deferredCommittedTailState, evt clie
 		mergedStart:   mergedStart,
 		mergedCount:   len(mergedEntries),
 	}
+}
+
+func deferredCommittedTailCanMergeIntoEvent(tail deferredProjectedTranscriptTail, evt clientui.Event) bool {
+	tailStepID := strings.TrimSpace(tail.stepID)
+	eventStepID := strings.TrimSpace(evt.StepID)
+	return tailStepID == "" || eventStepID == "" || tailStepID == eventStepID
 }
 
 func deferredCommittedTailFinalizerFlushEvent(state deferredCommittedTailState, activeAssistantText string, activeAssistantStepID string) (clientui.Event, []deferredProjectedTranscriptTail, bool) {

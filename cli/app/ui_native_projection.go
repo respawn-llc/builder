@@ -57,11 +57,21 @@ func nativeProjectionBlockSourceKey(block tui.TranscriptProjectionBlock, entries
 		end = start
 	}
 	end = min(end, len(entries)-1)
-	payload, err := json.Marshal(nativeProjectionEntrySourceKeys(entries[start : end+1]))
+	payload, err := json.Marshal(nativeProjectionBlockSourceIdentity{
+		EntryStart: baseOffset + start,
+		EntryEnd:   baseOffset + end,
+		Entries:    nativeProjectionEntrySourceKeys(entries[start : end+1]),
+	})
 	if err == nil {
 		return string(payload)
 	}
-	return nativeProjectionEntriesFallbackSourceKey(entries[start : end+1])
+	return nativeProjectionEntriesFallbackSourceKey(baseOffset+start, baseOffset+end, entries[start:end+1])
+}
+
+type nativeProjectionBlockSourceIdentity struct {
+	EntryStart int                              `json:"entry_start"`
+	EntryEnd   int                              `json:"entry_end"`
+	Entries    []nativeProjectionEntrySourceKey `json:"entries"`
 }
 
 type nativeProjectionEntrySourceKey struct {
@@ -102,8 +112,9 @@ func nativeProjectionEntrySourceKeys(entries []tui.TranscriptEntry) []nativeProj
 	return keys
 }
 
-func nativeProjectionEntriesFallbackSourceKey(entries []tui.TranscriptEntry) string {
-	parts := make([]string, 0, len(entries)*12)
+func nativeProjectionEntriesFallbackSourceKey(entryStart int, entryEnd int, entries []tui.TranscriptEntry) string {
+	parts := make([]string, 0, len(entries)*12+2)
+	parts = append(parts, fmt.Sprintf("%d", entryStart), fmt.Sprintf("%d", entryEnd))
 	for _, entry := range entries {
 		parts = append(parts,
 			string(entry.Visibility),

@@ -89,9 +89,10 @@ func projectedEventEntryLocalAppendOnly(evt clientui.Event, role tui.TranscriptR
 	}
 	switch evt.Kind {
 	case clientui.EventBackgroundUpdated,
-		clientui.EventCacheWarning,
 		clientui.EventLocalEntryAdded:
 		return true
+	case clientui.EventCacheWarning:
+		return !evt.CommittedTranscriptChanged
 	default:
 		return false
 	}

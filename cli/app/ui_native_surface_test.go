@@ -2379,6 +2379,21 @@ func TestNativeProjectionSourceKeyIgnoresHydrationVolatileFlags(t *testing.T) {
 	}
 }
 
+func TestNativeProjectionSourceKeyIncludesCommittedPosition(t *testing.T) {
+	first := tui.TranscriptProjectionBlock{EntryIndex: 10, EntryEnd: 10}
+	second := tui.TranscriptProjectionBlock{EntryIndex: 11, EntryEnd: 11}
+	entries := []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleAssistant, Text: "same answer", Committed: true},
+		{Role: tui.TranscriptRoleAssistant, Text: "same answer", Committed: true},
+	}
+
+	firstKey := nativeProjectionBlockSourceKey(first, entries, 10)
+	secondKey := nativeProjectionBlockSourceKey(second, entries, 10)
+	if firstKey == secondKey {
+		t.Fatalf("duplicate committed rows produced identical source key %q", firstKey)
+	}
+}
+
 func TestNativeProjectionLocalAppendOnlyRequiresEventProvenance(t *testing.T) {
 	systemEntry := clientui.ChatEntry{Role: "system", Text: "background notice"}
 	hydrated := transcriptEntryFromProjectedChatEntry(systemEntry, false, false)
@@ -2392,6 +2407,14 @@ func TestNativeProjectionLocalAppendOnlyRequiresEventProvenance(t *testing.T) {
 	committedSystem := transcriptEntryFromProjectedEventEntry(clientui.Event{Kind: clientui.EventAssistantMessage}, systemEntry, false, true)
 	if committedSystem.LocalAppendOnly {
 		t.Fatal("committed system row from authoritative event was marked local append-only")
+	}
+	committedCacheWarning := transcriptEntryFromProjectedEventEntry(clientui.Event{Kind: clientui.EventCacheWarning, CommittedTranscriptChanged: true}, clientui.ChatEntry{Role: "cache_warning", Text: "cache warning"}, false, true)
+	if committedCacheWarning.LocalAppendOnly {
+		t.Fatal("committed cache warning event was marked local append-only")
+	}
+	localCacheWarning := transcriptEntryFromProjectedEventEntry(clientui.Event{Kind: clientui.EventCacheWarning}, clientui.ChatEntry{Role: "cache_warning", Text: "cache warning"}, false, false)
+	if !localCacheWarning.LocalAppendOnly {
+		t.Fatal("uncommitted cache warning event was not marked local append-only")
 	}
 }
 
