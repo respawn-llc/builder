@@ -270,6 +270,9 @@ func (p workflowApprovalProjection) ApprovalProjection(ctx context.Context, tran
 		if item.Kind != "approval" || item.TaskTransitionID != string(transitionID) {
 			continue
 		}
+		if strings.TrimSpace(item.RunID) == "" || strings.TrimSpace(item.SessionID) == "" {
+			break
+		}
 		return workflowattention.ApprovalProjection{
 			TransitionID:     transitionID,
 			ProjectID:        item.ProjectID,

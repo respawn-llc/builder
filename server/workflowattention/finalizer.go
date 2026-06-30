@@ -82,7 +82,7 @@ func (f *Finalizer) FinalizeTransition(ctx context.Context, result TransitionRes
 	switch strings.TrimSpace(result.State) {
 	case "pending_approval":
 		f.publishPending(ctx, result.TransitionID)
-	case "approved", "applied":
+	case "approved":
 		f.publishResolved(ctx, result.TransitionID)
 	}
 }

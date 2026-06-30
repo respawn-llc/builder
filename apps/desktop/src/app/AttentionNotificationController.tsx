@@ -243,8 +243,10 @@ export function AttentionNotificationController() {
           handleResolved(event.id);
         }
       },
-      onComplete() {
-        subscription = null;
+      onComplete(code) {
+        if (code === 0) {
+          subscription = null;
+        }
       },
       onError(error) {
         void logger.append("warn", "Attention notification stream failed.", {
