@@ -94,7 +94,7 @@ export default defineConfig({
         },
       ],
       editLink: {
-        baseUrl: docsConfig.docsProjectEditRootUrl,
+        baseUrl: docsConfig.repoEditRootUrl,
       },
       customCss: ['./src/styles/custom.css'],
       pagefind: false,

@@ -29,7 +29,6 @@ func (m *uiModel) invalidateTransientTranscriptState() {
 	m.transcriptLiveDirty = false
 	m.reasoningLiveDirty = false
 	m.sawAssistantDelta = false
-	m.clearActiveAssistantStreamSource()
 	if m.detailTranscript.loaded {
 		m.detailTranscript.ongoing = ""
 		m.detailTranscript.ongoingError = ""
@@ -109,47 +108,6 @@ func (m *uiModel) beginCommittedTranscriptContinuityRecovery() {
 	m.invalidateTransientTranscriptState()
 }
 
-func (m *uiModel) appendActiveAssistantStreamDelta(stepID string, delta string) {
-	if m == nil {
-		return
-	}
-	if trimmedStepID := strings.TrimSpace(stepID); trimmedStepID != "" {
-		if m.activeAssistantStreamStepID != "" && m.activeAssistantStreamStepID != trimmedStepID {
-			m.activeAssistantStreamSource = ""
-		}
-		m.activeAssistantStreamStepID = trimmedStepID
-	}
-	m.activeAssistantStreamSource += delta
-}
-
-func (m *uiModel) clearActiveAssistantStreamSource() {
-	if m == nil {
-		return
-	}
-	m.activeAssistantStreamSource = ""
-	m.activeAssistantStreamStepID = ""
-}
-
-func (m *uiModel) activeAssistantStreamText() string {
-	if m == nil {
-		return ""
-	}
-	if strings.TrimSpace(m.activeAssistantStreamSource) != "" {
-		return m.activeAssistantStreamSource
-	}
-	return m.view.OngoingStreamingText()
-}
-
-func (m *uiModel) activeAssistantStreamPending() bool {
-	if m == nil {
-		return false
-	}
-	if strings.TrimSpace(m.activeAssistantStreamText()) != "" || m.sawAssistantDelta {
-		return true
-	}
-	return m.nativeSurfaceConfigured() && m.nativeSurface.AssistantStreaming()
-}
-
 func shouldClearAssistantStreamForCommittedAssistantEvent(evt clientui.Event, activeStream string) bool {
 	if evt.Kind != clientui.EventAssistantMessage {
 		return false
@@ -206,12 +164,11 @@ func (m *uiModel) clearAssistantStreamForCommittedAppend() {
 	}
 	m.sawAssistantDelta = false
 	m.nativeAssistantStreamIncomplete = false
-	m.clearActiveAssistantStreamSource()
 	m.forwardToView(tui.ClearOngoingAssistantMsg{})
 }
 
 func skippedAssistantCommitMatchesActiveLiveStream(m *uiModel, evt clientui.Event) bool {
-	if m == nil || strings.TrimSpace(m.activeAssistantStreamText()) == "" {
+	if m == nil || strings.TrimSpace(m.view.OngoingStreamingText()) == "" {
 		return false
 	}
 	assistantText := ""
@@ -222,7 +179,7 @@ func skippedAssistantCommitMatchesActiveLiveStream(m *uiModel, evt clientui.Even
 		assistantText = strings.TrimSpace(entry.Text)
 		break
 	}
-	if assistantText == "" || assistantText != strings.TrimSpace(m.activeAssistantStreamText()) {
+	if assistantText == "" || assistantText != strings.TrimSpace(m.view.OngoingStreamingText()) {
 		return false
 	}
 	committedEntries := committedTranscriptEntriesForApp(m.transcriptEntries)

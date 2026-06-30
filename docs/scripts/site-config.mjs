@@ -11,8 +11,6 @@ const SECURITY_PATH = '/security/';
 const REPO_URL = 'https://github.com/respawn-llc/kent';
 const REPO_DEFAULT_BRANCH = 'main';
 const REPO_EDIT_ROOT_URL = `${REPO_URL}/edit/${REPO_DEFAULT_BRANCH}/`;
-const DOCS_PROJECT_PATH = 'docs';
-const DOCS_PROJECT_EDIT_ROOT_URL = new URL(`${DOCS_PROJECT_PATH}/`, REPO_EDIT_ROOT_URL).toString();
 const REPO_BLOB_ROOT_URL = `${REPO_URL}/blob/${REPO_DEFAULT_BRANCH}/`;
 const REPO_RAW_ROOT_URL = `https://raw.githubusercontent.com/respawn-llc/kent/${REPO_DEFAULT_BRANCH}/`;
 const DOCSEARCH_APP_ID = 'YFIMJHUME7';
@@ -109,7 +107,6 @@ export function resolveDocsConfig(env = process.env) {
         repoUrl: REPO_URL,
         repoDefaultBranch: REPO_DEFAULT_BRANCH,
         repoEditRootUrl: REPO_EDIT_ROOT_URL,
-        docsProjectEditRootUrl: DOCS_PROJECT_EDIT_ROOT_URL,
         repoBlobRootUrl: REPO_BLOB_ROOT_URL,
         repoRawRootUrl: REPO_RAW_ROOT_URL,
         socialPreviewPath: SOCIAL_PREVIEW_PATH,

@@ -188,7 +188,6 @@ func (c uiInputController) startBusyActivity(compacting bool) {
 	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.sawAssistantDelta = false
-	m.clearActiveAssistantStreamSource()
 	if compacting {
 		m.setCompacting(true)
 	}
@@ -273,7 +272,6 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	m.localConversationTurn = true
 	m.logf("step.done assistant_chars=%d", len(msg.message))
 	m.sawAssistantDelta = false
-	m.clearActiveAssistantStreamSource()
 	if len(m.queued) > 0 {
 		if m.hasRuntimeClient() && c.queuedDrainRequiresHydration() {
 			m.pendingQueuedDrainAfterHydration = true

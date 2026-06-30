@@ -67,10 +67,6 @@ func (area *nativeLiveAreaImpl) Render(frame NativeLiveAreaFrame) error {
 		area.buffer.mu.Unlock()
 		return nil
 	}
-	if err := area.buffer.prepareNormalBufferLocked(); err != nil {
-		area.buffer.mu.Unlock()
-		return err
-	}
 	if len(area.buffer.heldStableOps) > 0 {
 		_, err := area.buffer.flushHoldoffLocked()
 		if err != nil {

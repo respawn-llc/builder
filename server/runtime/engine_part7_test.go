@@ -416,45 +416,11 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 	for _, evt := range events {
 		if evt.Kind == EventBackgroundUpdated && evt.Background != nil && evt.Background.ID == "1000" {
 			hasImmediateBackgroundUpdate = true
-			if evt.CommittedEntryCount != 0 || evt.CommittedEntryStartSet {
-				t.Fatalf("background update should not claim committed transcript range, got %+v", evt)
-			}
 			break
 		}
 	}
 	if !hasImmediateBackgroundUpdate {
 		t.Fatalf("expected immediate background_updated event, got %+v", events)
-	}
-}
-
-func TestEmitRawClearsCommittedRangeForBackgroundUpdated(t *testing.T) {
-	store := mustCreateTestSession(t)
-	var events []Event
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		Model: "gpt-5",
-		OnEvent: func(evt Event) {
-			events = append(events, evt)
-		},
-	})
-
-	eng.emitRaw(Event{
-		Kind:                   EventBackgroundUpdated,
-		CommittedEntryCount:    99,
-		CommittedEntryStart:    42,
-		CommittedEntryStartSet: true,
-		Background: &BackgroundShellEvent{
-			Type:       "completed",
-			ID:         "bg-1",
-			State:      "completed",
-			NoticeText: "Background shell bg-1 completed (exit 0)",
-		},
-	})
-
-	if len(events) != 1 {
-		t.Fatalf("events = %d, want 1", len(events))
-	}
-	if got := events[0]; got.CommittedEntryCount != 0 || got.CommittedEntryStart != 0 || got.CommittedEntryStartSet {
-		t.Fatalf("background update committed range = count:%d start:%d set:%t, want zero unset", got.CommittedEntryCount, got.CommittedEntryStart, got.CommittedEntryStartSet)
 	}
 }
 

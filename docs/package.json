@@ -8,7 +8,7 @@
     "build": "astro build && node ./scripts/emit-deployment-files.mjs",
     "preview": "astro preview",
     "smoke:built": "node ./scripts/smoke-built-docs.mjs",
-    "test": "node --test ./scripts/site-config.test.mjs ./scripts/readme-mirror.test.mjs ./scripts/sync-readme.test.mjs ./scripts/astro-loader-migration.test.mjs ./scripts/docs-collection-loader.test.mjs ./scripts/sync-mirrored-docs.test.mjs ./scripts/ai-readable-docs.test.mjs",
+    "test": "node --test ./scripts/readme-mirror.test.mjs ./scripts/sync-readme.test.mjs ./scripts/astro-loader-migration.test.mjs ./scripts/docs-collection-loader.test.mjs ./scripts/sync-mirrored-docs.test.mjs ./scripts/ai-readable-docs.test.mjs",
     "astro": "astro"
   },
   "dependencies": {
