@@ -2177,6 +2177,52 @@ func TestNativeStableProjectionChangeAppendsAfterOverlappingRecentTail(t *testin
 	}
 }
 
+func TestNativeStableProjectionChangeAppendsRepeatedBlockAfterOverlappingRecentTail(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		{
+			Role:         tui.RenderIntentUser,
+			DividerGroup: string(tui.RenderIntentUser),
+			SourceKey:    "user-1",
+			Lines:        []string{"repeat prompt"},
+		},
+		{
+			Role:         tui.RenderIntentAssistant,
+			DividerGroup: string(tui.RenderIntentAssistant),
+			SourceKey:    "assistant-1",
+			Lines:        []string{"overlap answer"},
+		},
+	}}
+	current := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		previous.Blocks[1],
+		{
+			Role:         tui.RenderIntentUser,
+			DividerGroup: string(tui.RenderIntentUser),
+			SourceKey:    "user-2",
+			Lines:        []string{"repeat prompt"},
+		},
+	}}
+	exitMainThread := m.enterUIMainThread("native stable repeated overlap test")
+	err := m.deliverNativeStableProjectionChange(nativeStableRecoveryReconcileIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("repeated block after overlap returned error: %v", err)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if strings.Contains(plain, "overlap answer") {
+		t.Fatalf("overlap append replayed overlapping block, got %q", plain)
+	}
+	if !strings.Contains(plain, "repeat prompt") {
+		t.Fatalf("overlap append skipped repeated new block, got %q", plain)
+	}
+}
+
 func TestNativeStableProjectionChangeAppendsCompactionResetAsPhysicalEpoch(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
@@ -2273,6 +2319,37 @@ func TestNativeProjectionSourceKeyIgnoresHydrationVolatileFlags(t *testing.T) {
 	hydratedKey := nativeProjectionBlockSourceKey(block, hydrated, 0)
 	if liveKey != hydratedKey {
 		t.Fatalf("source key changed across hydration flags:\nlive=%q\nhydrated=%q", liveKey, hydratedKey)
+	}
+}
+
+func TestNativeCommittedProjectionUsesAppTailBaseOffsetWhileDetailViewIsOpen(t *testing.T) {
+	m := newSizedProjectedClosedUIModel(nil, 120, 30)
+	m.transcriptBaseOffset = 200
+	m.transcriptEntries = []tui.TranscriptEntry{{
+		Role:      tui.TranscriptRoleUser,
+		Text:      "tail prompt",
+		Committed: true,
+	}}
+	m.transcriptTotalEntries = 201
+	m.forwardToView(tui.SetConversationMsg{
+		BaseOffset:   10,
+		TotalEntries: 201,
+		Entries: []tui.TranscriptEntry{{
+			Role:      tui.TranscriptRoleUser,
+			Text:      "detail prompt",
+			Committed: true,
+		}},
+	})
+
+	projection := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
+	if len(projection.Blocks) != 1 {
+		t.Fatalf("projection block count = %d, want 1", len(projection.Blocks))
+	}
+	if got := projection.Blocks[0].EntryIndex; got != 200 {
+		t.Fatalf("native projection entry index = %d, want app tail offset 200", got)
+	}
+	if projection.Blocks[0].SourceKey == nativeProjectionBlockLineSourceKey(projection.Blocks[0]) {
+		t.Fatalf("native projection fell back to line source key instead of tail entry payload key: %#v", projection.Blocks[0])
 	}
 }
 

@@ -608,7 +608,7 @@ func (m *uiModel) nativeStableOverlapAppendWouldReplayDeliveredPrefix(previous t
 	}
 	deliveredPrefix := previous.Blocks[:len(previous.Blocks)-overlap]
 	for _, block := range current.Blocks[overlap:] {
-		if m.nativeStableProjectionContainsBlock(deliveredPrefix, block) {
+		if m.nativeStableProjectionContainsDeliveredIdentity(deliveredPrefix, block) {
 			return true
 		}
 	}
@@ -700,6 +700,21 @@ func (m *uiModel) nativeStableSkipDeliveredLocalBlocksPresentInCurrent(previous 
 
 func (m *uiModel) nativeStableProjectionContainsBlock(blocks []tui.TranscriptProjectionBlock, target tui.TranscriptProjectionBlock) bool {
 	for _, block := range blocks {
+		if m.nativeStableProjectionBlocksEqual(block, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *uiModel) nativeStableProjectionContainsDeliveredIdentity(blocks []tui.TranscriptProjectionBlock, target tui.TranscriptProjectionBlock) bool {
+	for _, block := range blocks {
+		if block.SourceKey != "" || target.SourceKey != "" {
+			if nativeStableProjectionBlocksSameReprojectIdentity(block, target) {
+				return true
+			}
+			continue
+		}
 		if m.nativeStableProjectionBlocksEqual(block, target) {
 			return true
 		}

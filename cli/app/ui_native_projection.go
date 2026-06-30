@@ -16,7 +16,18 @@ func (m *uiModel) nativeCommittedProjectionForEntries(entries []tui.TranscriptEn
 		return tui.TranscriptProjection{}
 	}
 	committedEntries := committedTranscriptEntriesForApp(entries)
-	projection := m.view.CommittedOngoingProjectionForEntries(committedEntries)
+	state := m.view.TranscriptProjectionViewState()
+	var projector tui.CommittedOngoingProjector
+	projection := projector.Project(committedEntries, tui.CommittedOngoingProjectionKey{
+		Revision:              m.transcriptRevision,
+		Width:                 state.ViewportWidth,
+		Theme:                 state.Theme,
+		BaseOffset:            m.transcriptBaseOffset,
+		EntryCount:            len(committedEntries),
+		CompactDetail:         state.CompactDetail,
+		SelectedEntry:         state.SelectedEntry,
+		SelectedEntryIsActive: state.SelectedEntryIsActive,
+	})
 	m.attachNativeProjectionSourceKeys(&projection, committedEntries)
 	return projection
 }
