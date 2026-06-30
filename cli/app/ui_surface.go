@@ -130,6 +130,10 @@ func (r uiPresentationFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult 
 		surfaceReady := m.nativeSurface.ready(msg.width, msg.height)
 		m.nativeResizeRehydrateActive = true
 		if !surfaceReady {
+			if err := m.flushNativeSurfaceHoldoff(); err != nil {
+				m.nativeResizeRehydrateActive = false
+				return handledUIFeatureUpdate(m, m.nativeSurfaceErrorCmd("resize flush native holdoff", err))
+			}
 			m.nativeSurface.Drop()
 			if !m.nativeSurface.ensure(msg.width, msg.height) {
 				m.nativeResizeRehydrateActive = false

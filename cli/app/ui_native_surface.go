@@ -778,6 +778,9 @@ func nativeStablePreviouslyLocalAppendOnlyBlock(block tui.TranscriptProjectionBl
 	if block.LocalAppendOnly {
 		return true
 	}
+	if block.SourceKey != "" {
+		return false
+	}
 	switch block.Role {
 	case tui.RenderIntentSystem:
 		return true
@@ -789,6 +792,9 @@ func nativeStablePreviouslyLocalAppendOnlyBlock(block tui.TranscriptProjectionBl
 func nativeStableCurrentLocalAppendOnlyBlock(block tui.TranscriptProjectionBlock) bool {
 	if block.LocalAppendOnly {
 		return true
+	}
+	if block.SourceKey != "" {
+		return false
 	}
 	switch block.Role {
 	case tui.RenderIntentSystem:

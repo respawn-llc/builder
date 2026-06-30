@@ -57,7 +57,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 	}
 	turnBoundaryCmd, turnBoundaryMutated, turnBoundaryAwaitsHydration := a.flushDeferredCommittedTailAtNewTurnBoundary(projectedState, evt)
 	turnBoundaryResetCmd := tea.Cmd(nil)
-	if eventStartsDifferentAssistantStep(projectedState, evt) {
+	if m.shouldResetActiveAssistantStreamForNewStep(projectedState, evt) {
 		turnBoundaryResetCmd = m.resetActiveAssistantStreamForNewStep(evt.StepID)
 	}
 	reduction := runtimestate.ReduceRuntimeEvent(
@@ -234,6 +234,16 @@ func eventStartsDifferentAssistantStep(state projectedTranscriptEventState, evt 
 	default:
 		return false
 	}
+}
+
+func (m *uiModel) shouldResetActiveAssistantStreamForNewStep(state projectedTranscriptEventState, evt clientui.Event) bool {
+	if !eventStartsDifferentAssistantStep(state, evt) {
+		return false
+	}
+	if strings.TrimSpace(state.liveAssistantStepID) == "" && m != nil && m.nativeSurfaceConfigured() && m.nativeSurface.AssistantStreaming() {
+		return false
+	}
+	return true
 }
 
 func runtimeTranscriptSyncReasonLabel(sync runtimestate.RuntimeTranscriptSyncCommand) string {

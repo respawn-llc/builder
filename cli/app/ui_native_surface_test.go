@@ -974,6 +974,63 @@ func TestNativeSurfaceResizePendingAppendFlushesOnlyNewStableRows(t *testing.T) 
 	}
 }
 
+func TestNativeSurfaceResizeFlushesHeldStableRowsBeforeDrop(t *testing.T) {
+	var out bytes.Buffer
+	rendererGate := newUIRendererOutputGateState()
+	m := newSizedProjectedClosedUIModel(
+		nil,
+		120,
+		30,
+		WithUIRendererOutputGateState(rendererGate),
+		WithUINativeSurfaceWriter(&out),
+	)
+	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
+		{Role: tui.TranscriptRoleUser, Text: "holdoff prompt", Committed: true},
+	})
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	rendererGate.observeWrittenPayload([]byte(xansi.SetModeAltScreenSaveCursor))
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "held stable answer",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	})
+	_ = collectCmdMessages(t, result.cmd)
+	if got := out.String(); got != "" {
+		t.Fatalf("native holdoff wrote while alt-screen was active: %q", got)
+	}
+	if got := len(m.nativeDeliveredStableProjection.Blocks); got != 2 {
+		t.Fatalf("delivered ledger count = %d, want held row recorded", got)
+	}
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = next.(*uiModel)
+	rendererGate.observeWrittenPayload([]byte(xansi.ResetModeAltScreenSaveCursor))
+	next, resizeCmd := m.Update(nativeSurfaceResizeRehydrateMsg{token: m.nativeResizeRehydrateToken, width: 100, height: 30})
+	m = next.(*uiModel)
+	if resizeCmd != nil {
+		t.Fatal("did not expect follow-up command after settled resize rehydrate")
+	}
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("resize holdoff flush surfaced native error: %v", m.nativeLiveAreaError)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if !strings.Contains(plain, "held stable answer") {
+		t.Fatalf("resize dropped held stable row before flush, got %q", plain)
+	}
+}
+
 func TestNativeSurfaceResizeReprojectsDeliveredLedgerForPendingAppend(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 48, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
@@ -1274,7 +1331,7 @@ func TestNativeSurfaceResizeReprojectsPhysicalLedgerOrderForLocalSystemNotice(t 
 	m := newSizedProjectedClosedUIModel(nil, 64, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
 	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
 		{Role: tui.TranscriptRoleUser, Text: "resize prompt before active stream notice", Committed: true},
-		{Role: tui.TranscriptRoleSystem, Text: "Background shell 8128 completed (exit 0)", Committed: true},
+		{Role: tui.TranscriptRoleSystem, Text: "Background shell 8128 completed (exit 0)"},
 		{Role: tui.TranscriptRoleAssistant, Text: "watcher found six threads", Committed: true, Phase: clientui.MessagePhaseCommentary},
 	})
 	if rendered := m.View(); rendered != "" {
@@ -2528,6 +2585,57 @@ func TestNativeStableProjectionChangeRejectsAuthoritativePrefixBehindPriorToolPa
 	}
 }
 
+func TestNativeStableProjectionChangeRejectsCommittedSystemRewrite(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		{
+			Role:         tui.RenderIntentUser,
+			DividerGroup: string(tui.RenderIntentUser),
+			SourceKey:    "user-1",
+			Lines:        []string{"prompt"},
+		},
+		{
+			Role:         tui.RenderIntentSystem,
+			DividerGroup: string(tui.RenderIntentSystem),
+			SourceKey:    "committed-system-1",
+			Lines:        []string{"committed system row"},
+		},
+		{
+			Role:         tui.RenderIntentAssistant,
+			DividerGroup: string(tui.RenderIntentAssistant),
+			SourceKey:    "assistant-1",
+			Lines:        []string{"answer"},
+		},
+	}}
+	current := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		previous.Blocks[0],
+		{
+			Role:         tui.RenderIntentAssistant,
+			DividerGroup: string(tui.RenderIntentAssistant),
+			SourceKey:    "assistant-2",
+			Lines:        []string{"inserted answer"},
+		},
+		previous.Blocks[1],
+		previous.Blocks[2],
+	}}
+
+	exitMainThread := m.enterUIMainThread("native committed system rewrite test")
+	err := m.deliverNativeStableProjectionChange(nativeStableRecoveryReconcileIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
+	exitMainThread()
+	if err == nil {
+		t.Fatal("expected committed system reorder to be rejected")
+	}
+	if plain := stripANSIAndTrimRight(out.String()); strings.Contains(plain, "inserted answer") {
+		t.Fatalf("committed system rewrite wrote inserted row through native stable path: %q", plain)
+	}
+}
+
 func TestNativeStableProjectionChangeIgnoresTextBeyondEmittedWidth(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 12, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
@@ -3374,6 +3482,35 @@ func TestAssistantStreamFinalizerRejectsDifferentNonEmptyStepIDDespiteMatchingTe
 
 	if isAssistantStreamFinalizerEvent(state, evt) {
 		t.Fatal("different non-empty assistant step IDs must not fall back to text matching")
+	}
+}
+
+func TestNativeAssistantStreamStepResetRequiresKnownActiveStepID(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	result := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		AssistantDelta:      "stream started before step IDs were known",
+		AssistantDeltaPhase: clientui.MessagePhaseFinal,
+	})
+	_ = collectCmdMessages(t, result.cmd)
+	state := newProjectedTranscriptEventState(projectedTranscriptEventSnapshotFromModel(m))
+	evt := clientui.Event{
+		Kind:   clientui.EventAssistantDelta,
+		StepID: "known-step",
+	}
+	if !eventStartsDifferentAssistantStep(state, evt) {
+		t.Fatal("new non-empty step ID should still be a turn-boundary signal")
+	}
+	if m.shouldResetActiveAssistantStreamForNewStep(state, evt) {
+		t.Fatal("unknown active native step ID should not reset native assistant stream")
+	}
+	state.liveAssistantStepID = "active-step"
+	if !m.shouldResetActiveAssistantStreamForNewStep(state, evt) {
+		t.Fatal("known mismatched step IDs should reset native assistant stream")
 	}
 }
 
