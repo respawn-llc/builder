@@ -17,7 +17,7 @@
     "@astrojs/starlight-docsearch": "^0.7.0",
     "@docsearch/css": "^3.9.0",
     "@docsearch/js": "^3.9.0",
-    "astro": "^6.2.0",
+    "astro": "^6.4.6",
     "hast-util-from-html": "^2.0.3",
     "hast-util-to-html": "^9.0.5",
     "preact": "^10.29.1",
