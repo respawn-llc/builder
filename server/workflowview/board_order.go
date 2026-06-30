@@ -136,6 +136,9 @@ func (g boardColumnGraph) topologicalVisibleNodeIDs(reachableVisibleIDs []string
 			componentByNodeID[nodeID] = componentID
 		}
 	}
+	for componentID, component := range components {
+		components[componentID] = g.structurallyOrderedComponentMembers(component, componentByNodeID, precedence)
+	}
 	componentEdges := make(map[int]map[int]bool, len(components))
 	indegree := make(map[int]int, len(components))
 	for componentID := range components {
@@ -168,12 +171,7 @@ func (g boardColumnGraph) topologicalVisibleNodeIDs(reachableVisibleIDs []string
 	emitted := make(map[int]bool, len(components))
 	for len(available) > 0 {
 		sort.SliceStable(available, func(i, j int) bool {
-			leftTerminal := g.componentHasTerminalNode(components[available[i]])
-			rightTerminal := g.componentHasTerminalNode(components[available[j]])
-			if leftTerminal != rightTerminal {
-				return !leftTerminal
-			}
-			return workflowNodeKeyLess(g.nodesByID[components[available[i]][0]], g.nodesByID[components[available[j]][0]])
+			return g.boardOrderComponentLess(components[available[i]], components[available[j]])
 		})
 		componentID := available[0]
 		available = available[1:]
@@ -184,12 +182,7 @@ func (g boardColumnGraph) topologicalVisibleNodeIDs(reachableVisibleIDs []string
 		emitted[componentID] = true
 		targetComponentIDs := mapIntKeys(componentEdges[componentID])
 		sort.SliceStable(targetComponentIDs, func(i, j int) bool {
-			leftTerminal := g.componentHasTerminalNode(components[targetComponentIDs[i]])
-			rightTerminal := g.componentHasTerminalNode(components[targetComponentIDs[j]])
-			if leftTerminal != rightTerminal {
-				return !leftTerminal
-			}
-			return workflowNodeKeyLess(g.nodesByID[components[targetComponentIDs[i]][0]], g.nodesByID[components[targetComponentIDs[j]][0]])
+			return g.boardOrderComponentLess(components[targetComponentIDs[i]], components[targetComponentIDs[j]])
 		})
 		for _, targetComponentID := range targetComponentIDs {
 			indegree[targetComponentID]--
@@ -221,7 +214,7 @@ func (g boardColumnGraph) stronglyConnectedVisibleComponents(nodeIDs []string, p
 	components := make([][]string, 0)
 	orderedNodeIDs := append([]string(nil), nodeIDs...)
 	sort.SliceStable(orderedNodeIDs, func(i, j int) bool {
-		return workflowNodeKeyLess(g.nodesByID[orderedNodeIDs[i]], g.nodesByID[orderedNodeIDs[j]])
+		return g.boardOrderNodeIDLess(orderedNodeIDs[i], orderedNodeIDs[j])
 	})
 	var visit func(string)
 	visit = func(nodeID string) {
@@ -232,7 +225,7 @@ func (g boardColumnGraph) stronglyConnectedVisibleComponents(nodeIDs []string, p
 		onStack[nodeID] = true
 		targetIDs := mapKeys(precedence[nodeID])
 		sort.SliceStable(targetIDs, func(i, j int) bool {
-			return workflowNodeKeyLess(g.nodesByID[targetIDs[i]], g.nodesByID[targetIDs[j]])
+			return g.boardOrderNodeIDLess(targetIDs[i], targetIDs[j])
 		})
 		for _, targetID := range targetIDs {
 			if _, seen := indexByNodeID[targetID]; !seen {
@@ -258,7 +251,7 @@ func (g boardColumnGraph) stronglyConnectedVisibleComponents(nodeIDs []string, p
 			}
 		}
 		sort.SliceStable(component, func(i, j int) bool {
-			return workflowNodeKeyLess(g.nodesByID[component[i]], g.nodesByID[component[j]])
+			return g.boardOrderNodeIDLess(component[i], component[j])
 		})
 		components = append(components, component)
 	}
@@ -268,6 +261,110 @@ func (g boardColumnGraph) stronglyConnectedVisibleComponents(nodeIDs []string, p
 		}
 	}
 	return components
+}
+
+func (g boardColumnGraph) structurallyOrderedComponentMembers(component []string, componentByNodeID map[string]int, precedence map[string]map[string]bool) []string {
+	if len(component) < 2 {
+		return append([]string(nil), component...)
+	}
+	componentSet := make(map[string]bool, len(component))
+	for _, nodeID := range component {
+		componentSet[nodeID] = true
+	}
+	roots := g.componentEntryNodeIDs(componentSet, componentByNodeID, precedence)
+	if len(roots) == 0 {
+		for _, nodeID := range g.startNodeIDs {
+			if componentSet[nodeID] {
+				roots = append(roots, nodeID)
+			}
+		}
+	}
+	if len(roots) == 0 {
+		sorted := append([]string(nil), component...)
+		sort.SliceStable(sorted, func(i, j int) bool {
+			return g.boardOrderNodeIDLess(sorted[i], sorted[j])
+		})
+		roots = append(roots, sorted[0])
+	}
+	sort.SliceStable(roots, func(i, j int) bool {
+		return g.boardOrderNodeIDLess(roots[i], roots[j])
+	})
+
+	ordered := make([]string, 0, len(component))
+	queued := make(map[string]bool, len(component))
+	queue := make([]string, 0, len(component))
+	for _, root := range roots {
+		if queued[root] {
+			continue
+		}
+		queued[root] = true
+		queue = append(queue, root)
+	}
+	for len(queue) > 0 {
+		nodeID := queue[0]
+		queue = queue[1:]
+		ordered = append(ordered, nodeID)
+		targetIDs := mapKeys(precedence[nodeID])
+		sort.SliceStable(targetIDs, func(i, j int) bool {
+			return g.boardOrderNodeIDLess(targetIDs[i], targetIDs[j])
+		})
+		for _, targetID := range targetIDs {
+			if !componentSet[targetID] || queued[targetID] {
+				continue
+			}
+			queued[targetID] = true
+			queue = append(queue, targetID)
+		}
+	}
+
+	unvisited := make([]string, 0, len(component)-len(ordered))
+	for _, nodeID := range component {
+		if !queued[nodeID] {
+			unvisited = append(unvisited, nodeID)
+		}
+	}
+	sort.SliceStable(unvisited, func(i, j int) bool {
+		return g.boardOrderNodeIDLess(unvisited[i], unvisited[j])
+	})
+	return append(ordered, unvisited...)
+}
+
+func (g boardColumnGraph) componentEntryNodeIDs(componentSet map[string]bool, componentByNodeID map[string]int, precedence map[string]map[string]bool) []string {
+	entries := make([]string, 0)
+	for sourceID, targetIDs := range precedence {
+		sourceComponent, sourceKnown := componentByNodeID[sourceID]
+		for targetID := range targetIDs {
+			if !componentSet[targetID] {
+				continue
+			}
+			targetComponent, targetKnown := componentByNodeID[targetID]
+			if !sourceKnown || !targetKnown || sourceComponent == targetComponent {
+				continue
+			}
+			entries = append(entries, targetID)
+		}
+	}
+	return dedupeStrings(entries)
+}
+
+func (g boardColumnGraph) boardOrderComponentLess(left []string, right []string) bool {
+	leftTerminal := g.componentHasTerminalNode(left)
+	rightTerminal := g.componentHasTerminalNode(right)
+	if leftTerminal != rightTerminal {
+		return !leftTerminal
+	}
+	return g.boardOrderNodeIDLess(left[0], right[0])
+}
+
+func (g boardColumnGraph) boardOrderNodeIDLess(leftID string, rightID string) bool {
+	left := g.nodesByID[leftID]
+	right := g.nodesByID[rightID]
+	leftTerminal := workflow.NodeKind(left.Kind) == workflow.NodeKindTerminal
+	rightTerminal := workflow.NodeKind(right.Kind) == workflow.NodeKindTerminal
+	if leftTerminal != rightTerminal {
+		return !leftTerminal
+	}
+	return workflowNodeKeyLess(left, right)
 }
 
 func (g boardColumnGraph) componentHasTerminalNode(component []string) bool {
