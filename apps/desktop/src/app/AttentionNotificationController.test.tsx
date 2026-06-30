@@ -83,8 +83,34 @@ describe("AttentionNotificationController", () => {
       services.transport.emit("attention.notification", attentionPendingEvent({ revision: 2, sequence: 2 }));
     });
     await waitFor(() => {
-      expect(native.notify).toHaveBeenCalledOnce();
+      expect(native.notify).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("surfaces the latest pending notification when an update races focus resolution", async () => {
+    const focus = deferred<boolean>();
+    const native = nativeBridgeHarness({ focused: focus.promise, nativeAvailable: false });
+    const services = createTestServices(startupRoutes, native.bridge);
+
+    render(<App services={services} />);
+    await waitForAttentionSubscription(services.transport);
+    act(() => {
+      services.transport.emit(
+        "attention.notification",
+        attentionPendingEvent({ revision: 1, sequence: 1, body: "Old question text" }),
+      );
+      services.transport.emit(
+        "attention.notification",
+        attentionPendingEvent({ revision: 2, sequence: 2, body: "Latest question text" }),
+      );
+    });
+    await act(async () => {
+      focus.resolve(true);
+      await focus.promise;
+    });
+
+    expect(await screen.findByText("Latest question text")).toBeInTheDocument();
+    expect(screen.queryByText("Old question text")).not.toBeInTheDocument();
   });
 
   it("falls back to one persistent Sonner when native delivery is unavailable or fails", async () => {
@@ -293,6 +319,42 @@ describe("AttentionNotificationController", () => {
     });
   });
 
+  it("treats a reused ask id from another run as stale during reconnect reconciliation", async () => {
+    const native = nativeBridgeHarness({ focused: true, nativeAvailable: false });
+    const services = createTestServices(
+      [
+        ...startupRoutes,
+        {
+          method: "workflow.task.get",
+          result: taskDetailResult([
+            durableAttentionItem({
+              askID: "ask-1",
+              runID: "run-2",
+              sessionID: "session-1",
+            }),
+          ]),
+        },
+      ],
+      native.bridge,
+    );
+
+    render(<App services={services} />);
+    await waitForAttentionSubscription(services.transport);
+    act(() => {
+      services.transport.emit("attention.notification", attentionPendingEvent({ revision: 1, sequence: 1 }));
+    });
+    expect(await screen.findByText("Pick a deployment target")).toBeInTheDocument();
+
+    act(() => {
+      services.transport.connection.set("disconnected", "stream gap");
+      services.transport.connection.set("connected");
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Pick a deployment target")).not.toBeInTheDocument();
+    });
+  });
+
   it("does not notify durable baseline attention loaded during startup", async () => {
     const native = nativeBridgeHarness({ focused: false, nativeAvailable: true });
     const services = createTestServices(
@@ -325,7 +387,7 @@ function nativeBridgeHarness({
   permission = "granted",
   requestedPermission,
 }: Readonly<{
-  focused: boolean;
+  focused: boolean | Promise<boolean>;
   nativeAvailable: boolean;
   notifyError?: Error | undefined;
   permission?: NativeNotificationPermission | undefined;
@@ -388,16 +450,19 @@ function nativeBridgeHarness({
 
 async function waitForAttentionSubscription(transport: { subscriptions: readonly { method: string }[] }) {
   return waitFor(() => {
-    expect(transport.subscriptions.some((subscription) => subscription.method === "attention.notification.subscribe")).toBe(
-      true,
-    );
+    expect(
+      transport.subscriptions.some(
+        (subscription) => subscription.method === "attention.notification.subscribe",
+      ),
+    ).toBe(true);
   });
 }
 
 function attentionPendingEvent({
+  body = "Pick a deployment target",
   revision,
   sequence,
-}: Readonly<{ revision: number; sequence: number }>): unknown {
+}: Readonly<{ body?: string | undefined; revision: number; sequence: number }>): unknown {
   return {
     event: {
       type: "pending",
@@ -429,7 +494,7 @@ function attentionPendingEvent({
         },
         presentation: {
           title: "KT-1: Question",
-          body: "Pick a deployment target",
+          body,
           count: 2,
         },
       },
@@ -450,7 +515,15 @@ function attentionResolvedEvent({ sequence }: Readonly<{ sequence: number }>): u
   };
 }
 
-function durableAttentionItem(): unknown {
+function durableAttentionItem({
+  askID = "ask-old",
+  runID = "run-1",
+  sessionID = "session-1",
+}: Readonly<{
+  askID?: string | undefined;
+  runID?: string | undefined;
+  sessionID?: string | undefined;
+}> = {}): unknown {
   return {
     id: "attention-old",
     kind: "question",
@@ -459,14 +532,30 @@ function durableAttentionItem(): unknown {
     task_id: "task-1",
     task_short_id: "KT-1",
     task_title: "Needs answer",
-    run_id: "run-1",
-    session_id: "session-1",
-    ask_id: "ask-old",
+    run_id: runID,
+    session_id: sessionID,
+    ask_id: askID,
     task_transition_id: "",
     message: "Old pending question",
     suggestions: [],
     recommended_option_index: 0,
     occurred_at_unix_ms: 1,
+  };
+}
+
+function deferred<T>(): Readonly<{
+  promise: Promise<T>;
+  resolve(value: T): void;
+}> {
+  let resolve: ((value: T) => void) | null = null;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return {
+    promise,
+    resolve(value: T): void {
+      resolve?.(value);
+    },
   };
 }
 

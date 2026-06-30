@@ -22,7 +22,7 @@ import { useStatusController } from "./useStatusController";
 
 type SurfaceRecord = Readonly<{
   notification: AttentionNotification;
-  toastID: string | null;
+  state: "activating" | "activation_failed" | "dismissed" | "native" | "surfacing" | "toast";
 }>;
 
 const attentionToastIDPrefix = "attention:";
@@ -75,13 +75,34 @@ export function AttentionNotificationController() {
       const markDismissed = () => {
         const existing = surfacedRef.current.get(notification.id);
         if (existing !== undefined) {
-          surfacedRef.current.set(notification.id, { notification: existing.notification, toastID: null });
+          surfacedRef.current.set(notification.id, {
+            notification: existing.notification,
+            state: "dismissed",
+          });
         }
       };
       const activate = () => {
         status.dismiss(toastID);
-        surfacedRef.current.set(notification.id, { notification, toastID: null });
-        void openTarget(target);
+        surfacedRef.current.set(notification.id, { notification, state: "activating" });
+        void openTarget(target)
+          .then(() => {
+            const current = surfacedRef.current.get(notification.id);
+            if (current?.state === "activating") {
+              surfacedRef.current.set(notification.id, {
+                notification: current.notification,
+                state: "dismissed",
+              });
+            }
+          })
+          .catch(() => {
+            const current = surfacedRef.current.get(notification.id);
+            if (current?.state === "activating") {
+              surfacedRef.current.set(notification.id, {
+                notification: current.notification,
+                state: "activation_failed",
+              });
+            }
+          });
       };
       status.push({
         id: toastID,
@@ -94,9 +115,47 @@ export function AttentionNotificationController() {
         onDismiss: markDismissed,
         durationMs: Infinity,
       });
-      surfacedRef.current.set(notification.id, { notification, toastID });
+      surfacedRef.current.set(notification.id, { notification, state: "toast" });
     },
     [openTarget, status, t],
+  );
+
+  const surfaceCurrentPending = useCallback(
+    async (id: string): Promise<void> => {
+      for (;;) {
+        const pending = await readCurrentPendingSurface({
+          focusedRef,
+          id,
+          logger,
+          surfaced: surfacedRef.current,
+          windowControls: bridge.window,
+        });
+        if (pending === null) {
+          return;
+        }
+        const outcome = await deliverPendingSurface({
+          focused: pending.focused,
+          hasNativeNotifications: bridge.capabilities.notifications.basic,
+          logger,
+          notification: pending.record.notification,
+          notifications: bridge.notifications,
+          showToast: showAttentionToast,
+          surfaced: surfacedRef.current,
+          t,
+        });
+        if (outcome !== "retry") {
+          return;
+        }
+      }
+    },
+    [
+      bridge.capabilities.notifications.basic,
+      bridge.notifications,
+      bridge.window,
+      logger,
+      showAttentionToast,
+      t,
+    ],
   );
 
   const handlePending = useCallback(
@@ -106,39 +165,21 @@ export function AttentionNotificationController() {
       }
       const existing = surfacedRef.current.get(notification.id);
       if (existing !== undefined) {
-        if (existing.toastID !== null) {
+        if (existing.state === "activation_failed" || existing.state === "toast") {
           showAttentionToast(notification);
-        } else {
-          surfacedRef.current.set(notification.id, { notification, toastID: null });
-        }
-        return;
-      }
-      surfacedRef.current.set(notification.id, { notification, toastID: null });
-      const focused = await resolveWindowFocus(bridge.window, focusedRef, logger);
-      if (!surfaceIsActive(surfacedRef.current, notification.id)) {
-        return;
-      }
-      if (focused || !bridge.capabilities.notifications.basic) {
-        showAttentionToast(notification);
-        return;
-      }
-      try {
-        await bridge.notifications.notify(nativeNotification(notification, t));
-        if (!surfaceIsActive(surfacedRef.current, notification.id)) {
-          removeActiveNotification(bridge.notifications, logger, notification.id);
-        }
-      } catch (error) {
-        if (!surfaceIsActive(surfacedRef.current, notification.id)) {
           return;
         }
-        await logger.append("warn", "Native attention notification delivery failed.", {
-          error: errorMessage(error),
-          notificationID: notification.id,
-        });
-        showAttentionToast(notification);
+        surfacedRef.current.set(notification.id, { notification, state: existing.state });
+        if (existing.state === "native") {
+          surfacedRef.current.set(notification.id, { notification, state: "surfacing" });
+          await surfaceCurrentPending(notification.id);
+        }
+        return;
       }
+      surfacedRef.current.set(notification.id, { notification, state: "surfacing" });
+      await surfaceCurrentPending(notification.id);
     },
-    [bridge.capabilities.notifications.basic, bridge.notifications, bridge.window, logger, showAttentionToast, t],
+    [showAttentionToast, surfaceCurrentPending],
   );
 
   const handleResolved = useCallback(
@@ -309,6 +350,114 @@ async function resolveWindowFocus(
   }
 }
 
+async function readCurrentPendingSurface({
+  focusedRef,
+  id,
+  logger,
+  surfaced,
+  windowControls,
+}: Readonly<{
+  focusedRef: RefObject<boolean | null>;
+  id: string;
+  logger: ReturnType<typeof useAppServices>["logger"];
+  surfaced: ReadonlyMap<string, SurfaceRecord>;
+  windowControls: ReturnType<typeof useAppServices>["nativeBridge"]["window"];
+}>): Promise<Readonly<{ focused: boolean; record: SurfaceRecord }> | null> {
+  if (surfaced.get(id)?.state !== "surfacing") {
+    return null;
+  }
+  const focused = await resolveWindowFocus(windowControls, focusedRef, logger);
+  const record = surfaced.get(id);
+  if (record?.state !== "surfacing") {
+    return null;
+  }
+  return { focused, record };
+}
+
+async function deliverPendingSurface({
+  focused,
+  hasNativeNotifications,
+  logger,
+  notification,
+  notifications,
+  showToast,
+  surfaced,
+  t,
+}: Readonly<{
+  focused: boolean;
+  hasNativeNotifications: boolean;
+  logger: ReturnType<typeof useAppServices>["logger"];
+  notification: AttentionNotification;
+  notifications: ReturnType<typeof useAppServices>["nativeBridge"]["notifications"];
+  showToast: (notification: AttentionNotification) => void;
+  surfaced: Map<string, SurfaceRecord>;
+  t: (key: string) => string;
+}>): Promise<"done" | "retry"> {
+  if (focused || !hasNativeNotifications) {
+    removeActiveNotification(notifications, logger, notification.id);
+    showToast(notification);
+    return "done";
+  }
+  return deliverNativePendingSurface({ logger, notification, notifications, showToast, surfaced, t });
+}
+
+async function deliverNativePendingSurface({
+  logger,
+  notification,
+  notifications,
+  showToast,
+  surfaced,
+  t,
+}: Readonly<{
+  logger: ReturnType<typeof useAppServices>["logger"];
+  notification: AttentionNotification;
+  notifications: ReturnType<typeof useAppServices>["nativeBridge"]["notifications"];
+  showToast: (notification: AttentionNotification) => void;
+  surfaced: Map<string, SurfaceRecord>;
+  t: (key: string) => string;
+}>): Promise<"done" | "retry"> {
+  try {
+    await notifications.notify(nativeNotification(notification, t));
+  } catch (error) {
+    await handleNativeDeliveryError({ error, logger, notification, showToast, surfaced });
+    return "done";
+  }
+  const latest = surfaced.get(notification.id);
+  if (latest?.state !== "surfacing") {
+    removeActiveNotification(notifications, logger, notification.id);
+    return "done";
+  }
+  if (latest.notification.revision !== notification.revision) {
+    return "retry";
+  }
+  surfaced.set(notification.id, { notification, state: "native" });
+  return "done";
+}
+
+async function handleNativeDeliveryError({
+  error,
+  logger,
+  notification,
+  showToast,
+  surfaced,
+}: Readonly<{
+  error: unknown;
+  logger: ReturnType<typeof useAppServices>["logger"];
+  notification: AttentionNotification;
+  showToast: (notification: AttentionNotification) => void;
+  surfaced: Map<string, SurfaceRecord>;
+}>): Promise<void> {
+  const latest = surfaced.get(notification.id);
+  if (latest?.state !== "surfacing") {
+    return;
+  }
+  await logger.append("warn", "Native attention notification delivery failed.", {
+    error: errorMessage(error),
+    notificationID: notification.id,
+  });
+  showToast(latest.notification);
+}
+
 async function reconcileActiveSurfaces(
   records: readonly (readonly [string, SurfaceRecord])[],
   api: ReturnType<typeof useAppServices>["api"],
@@ -321,7 +470,7 @@ async function reconcileActiveSurfaces(
     }
     try {
       const task = await api.getTask(record.notification.target.taskID);
-      if (!attentionTargetIsActive(task.attention, record.notification.target.focus)) {
+      if (!attentionTargetIsActive(task.attention, record.notification.target)) {
         staleIDs.push(id);
       }
     } catch (error) {
@@ -348,14 +497,10 @@ function dismissSurface(
   id: string,
 ): void {
   const existing = surfaced.get(id);
-  if (existing?.toastID !== null && existing?.toastID !== undefined) {
-    status.dismiss(existing.toastID);
+  if (existing?.state === "toast") {
+    status.dismiss(attentionToastID(id));
   }
   surfaced.delete(id);
-}
-
-function surfaceIsActive(surfaced: ReadonlyMap<string, SurfaceRecord>, id: string): boolean {
-  return surfaced.has(id);
 }
 
 function removeActiveNotification(
@@ -373,14 +518,25 @@ function removeActiveNotification(
 
 function attentionTargetIsActive(
   attention: readonly AttentionItem[],
-  focus: AttentionNotificationTaskDetailFocus,
+  target: AttentionNotificationTaskDetailTarget,
 ): boolean {
+  const { focus } = target;
   if (focus.kind === "question") {
     const askIDs = new Set(focus.askIDs);
-    return attention.some((item) => item.kind === "question" && askIDs.has(item.askID));
+    return attention.some(
+      (item) =>
+        item.kind === "question" &&
+        item.runID === target.runID &&
+        item.sessionID === target.sessionID &&
+        askIDs.has(item.askID),
+    );
   }
   return attention.some(
-    (item) => item.kind === "approval" && item.taskTransitionID === focus.taskTransitionID,
+    (item) =>
+      item.kind === "approval" &&
+      item.runID === target.runID &&
+      item.sessionID === target.sessionID &&
+      item.taskTransitionID === focus.taskTransitionID,
   );
 }
 
@@ -399,7 +555,10 @@ async function openNativeActivation(
   }
 }
 
-function nativeNotification(notification: AttentionNotification, t: (key: string) => string): NativeNotification {
+function nativeNotification(
+  notification: AttentionNotification,
+  t: (key: string) => string,
+): NativeNotification {
   const target = nativeTarget(notification.target);
   if (target === null) {
     throw new Error("Attention notification target is not native-openable.");
