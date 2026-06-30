@@ -60,7 +60,7 @@ func (c uiInputController) handleQueuedRuntimeWorkCheckDone(msg queuedRuntimeWor
 		m.layout().syncViewport()
 		return m, tea.Batch(restoreCmd, appendCmd)
 	}
-	blocked := m.injectedQueueBlocksDrain() || m.isBusy() || m.isInputSubmitLocked()
+	blocked := m.injectedQueueBlocksDrain() || m.blocksRuntimeInput() || m.isInputSubmitLocked()
 	if !msg.hasWork {
 		c.notifyUserCompactionCompleted(compactionOrigin, true)
 		if blocked {
@@ -73,7 +73,7 @@ func (c uiInputController) handleQueuedRuntimeWorkCheckDone(msg queuedRuntimeWor
 		return m, nil
 	}
 	c.notifyUserCompactionCompleted(compactionOrigin, false)
-	c.startBusyActivity(false)
+	c.startRuntimeOperationAffordance(false)
 	m.logf("step.resume_queued_injected pending_injected=%d", len(m.pendingInjected))
 	m.layout().syncViewport()
 	return m, tea.Batch(c.submitQueuedUserMessagesCmd(), c.model.reconcileSpinnerTicking(false))
@@ -89,13 +89,14 @@ func (c uiInputController) requestIdleRuntimeControlCommittedTranscriptSync(orig
 
 func (c uiInputController) submitQueuedUserMessagesCmd() tea.Cmd {
 	m := c.model
-	token := m.beginSubmitAttempt("", "")
+	operationRef := newRuntimeOperationRef(clientui.RuntimeOperationKindSubmitQueued)
+	token := m.beginSubmitAttempt("", "", operationRef)
 	client := m.runtimeClient()
 	return func() tea.Msg {
 		if client == nil {
 			return newSubmitDoneMsg(token, "", "", errors.New("runtime engine is not configured"))
 		}
-		msg, err := submitQueuedRuntimeUserMessages(context.Background(), client)
+		msg, err := submitQueuedRuntimeUserMessages(context.Background(), client, operationRef)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return newSubmitDoneMsg(token, "", "", runtimeattach.ErrSubmissionInterrupted)
@@ -106,9 +107,9 @@ func (c uiInputController) submitQueuedUserMessagesCmd() tea.Cmd {
 	}
 }
 
-func submitQueuedRuntimeUserMessages(ctx context.Context, client clientui.RuntimeClient) (string, error) {
+func submitQueuedRuntimeUserMessages(ctx context.Context, client clientui.RuntimeClient, operationRef clientui.RuntimeOperationRef) (string, error) {
 	if client == nil {
 		return "", errors.New("runtime engine is not configured")
 	}
-	return client.SubmitQueuedUserMessages(ctx)
+	return client.SubmitRuntimeQueued(ctx, clientui.RuntimeSubmitQueuedRequest{OperationRef: operationRef})
 }

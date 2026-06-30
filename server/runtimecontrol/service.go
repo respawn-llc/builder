@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
-	"core/prompts"
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runtime"
+	"core/server/runtimeactivity"
+	"core/server/runtimeops"
 	"core/server/session"
 	servicecontract "core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/transcript"
 )
@@ -19,8 +22,76 @@ import (
 type RuntimeResolver interface {
 	ResolveRuntime(ctx context.Context, sessionID string) (*runtime.Engine, error)
 	WithGuardedRuntime(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) (bool, error)
+	BeginCancellableSessionRun(sessionID string) (context.Context, func(), bool)
 	BeginSessionRun(sessionID string) (func(), bool)
 	SessionRunsBlocked(sessionID string) bool
+}
+
+type runtimeRegistrySnapshotProvider interface {
+	RuntimeActivityRegistrySnapshot(sessionID string) runtimeactivity.RegistrySnapshot
+}
+
+type runtimeReadModelSnapshotProvider interface {
+	RuntimeReadModelSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error)
+}
+
+type RuntimeActivityResolver interface {
+	Snapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error)
+}
+
+type defaultRuntimeControlActivityResolver struct {
+	runtimes RuntimeResolver
+}
+
+func newDefaultRuntimeControlActivityResolver(runtimes RuntimeResolver) RuntimeActivityResolver {
+	return defaultRuntimeControlActivityResolver{runtimes: runtimes}
+}
+
+func (r defaultRuntimeControlActivityResolver) Snapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
+	if provider, ok := r.runtimes.(runtimeReadModelSnapshotProvider); ok {
+		return provider.RuntimeReadModelSnapshot(ctx, sessionID, refs)
+	}
+	var engine *runtime.Engine
+	var err error
+	if r.runtimes != nil {
+		engine, err = r.runtimes.ResolveRuntime(ctx, sessionID)
+	}
+	if err != nil {
+		return runtimeactivity.ResponseSnapshot{}, err
+	}
+	registry := runtimeactivity.RegistrySnapshot{Registered: engine != nil, QueueAccepting: true}
+	if provider, ok := r.runtimes.(runtimeRegistrySnapshotProvider); ok {
+		registry = provider.RuntimeActivityRegistrySnapshot(sessionID)
+	}
+	return runtimeactivity.BuildSnapshot(sessionID, func(version clientui.ReadModelVersion) (runtimeactivity.SnapshotInput, error) {
+		return runtimeactivity.SnapshotInput{
+			Resolver:            runtimeactivity.ResolverSnapshot{Registry: registry, Active: runtimeactivity.ActiveStepFromProvider(engine)},
+			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
+		}, nil
+	})
+}
+
+type runtimeRunStart interface {
+	Context() context.Context
+	Release()
+}
+
+type releaseOnlyRunStart struct {
+	ctx     context.Context
+	release func()
+}
+
+func (s releaseOnlyRunStart) Context() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+
+func (s releaseOnlyRunStart) Release() {
+	if s.release != nil {
+		s.release()
+	}
 }
 
 type PromptHistoryStore interface {
@@ -35,28 +106,23 @@ var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction ca
 
 type Service struct {
 	runtimes       RuntimeResolver
+	activity       RuntimeActivityResolver
 	promptStore    PromptHistoryStore
 	workflowStates WorkflowSessionResolver
+	operations     *runtimeops.Coordinator
 	sessionNames   *requestmemo.Memo[sessionStringMemoRequest, struct{}]
 	thinkingLevels *requestmemo.Memo[sessionStringMemoRequest, struct{}]
 	fastModes      *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetFastModeEnabledResponse]
 	reviewers      *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetReviewerEnabledResponse]
 	autoCompacts   *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse]
 	questions      *requestmemo.Memo[sessionBoolMemoRequest, serverapi.RuntimeSetQuestionsEnabledResponse]
-	turnSubmits    *requestmemo.Memo[turnSubmitMemoRequest, serverapi.RuntimeSubmitUserTurnResponse]
-	queues         *requestmemo.Memo[sessionTextMemoRequest, serverapi.RuntimeQueueUserMessageResponse]
-	shells         *requestmemo.Memo[sessionCommandMemoRequest, struct{}]
 
-	localEntries         *requestmemo.Memo[localEntryMemoRequest, struct{}]
-	compactions          *requestmemo.Memo[sessionStringMemoRequest, struct{}]
-	preSubmitCompactions *requestmemo.Memo[sessionOnlyMemoRequest, struct{}]
-	queuedSubmits        *requestmemo.Memo[sessionOnlyMemoRequest, serverapi.RuntimeSubmitQueuedUserMessagesResponse]
-	interrupts           *requestmemo.Memo[sessionOnlyMemoRequest, struct{}]
-	queuedDiscards       *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
-	promptHistory        *requestmemo.Memo[sessionTextMemoRequest, struct{}]
-	goals                *requestmemo.Memo[goalSetMemoRequest, serverapi.RuntimeGoalShowResponse]
-	goalStatuses         *requestmemo.Memo[goalStatusMemoRequest, serverapi.RuntimeGoalShowResponse]
-	goalClears           *requestmemo.Memo[goalClearMemoRequest, serverapi.RuntimeGoalShowResponse]
+	localEntries   *requestmemo.Memo[localEntryMemoRequest, struct{}]
+	queuedDiscards *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
+	promptHistory  *requestmemo.Memo[sessionTextMemoRequest, struct{}]
+	goals          *requestmemo.Memo[goalSetMemoRequest, serverapi.RuntimeGoalShowResponse]
+	goalStatuses   *requestmemo.Memo[goalStatusMemoRequest, serverapi.RuntimeGoalShowResponse]
+	goalClears     *requestmemo.Memo[goalClearMemoRequest, serverapi.RuntimeGoalShowResponse]
 }
 
 type sessionStringMemoRequest struct {
@@ -72,6 +138,12 @@ type sessionBoolMemoRequest struct {
 type sessionTextMemoRequest struct {
 	SessionID string
 	Text      string
+}
+
+type runtimeQueuedMessageMemoRequest struct {
+	SessionID    string
+	Text         string
+	OperationRef clientui.RuntimeOperationRef
 }
 
 type turnSubmitMemoRequest struct {
@@ -91,6 +163,12 @@ type sessionCommandMemoRequest struct {
 
 type sessionOnlyMemoRequest struct {
 	SessionID string
+}
+
+type runtimeInterruptMemoRequest struct {
+	SessionID            string
+	TargetOperationRef   *clientui.RuntimeOperationRef
+	PendingOperationRefs []clientui.RuntimeOperationRef
 }
 
 type localEntryMemoRequest struct {
@@ -125,27 +203,44 @@ type goalClearMemoRequest struct {
 func NewService(runtimes RuntimeResolver) *Service {
 	return &Service{
 		runtimes:       runtimes,
+		activity:       newDefaultRuntimeControlActivityResolver(runtimes),
+		operations:     runtimeops.NewCoordinator(),
 		sessionNames:   requestmemo.New[sessionStringMemoRequest, struct{}](),
 		thinkingLevels: requestmemo.New[sessionStringMemoRequest, struct{}](),
 		fastModes:      requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetFastModeEnabledResponse](),
 		reviewers:      requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetReviewerEnabledResponse](),
 		autoCompacts:   requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetAutoCompactionEnabledResponse](),
 		questions:      requestmemo.New[sessionBoolMemoRequest, serverapi.RuntimeSetQuestionsEnabledResponse](),
-		turnSubmits:    requestmemo.New[turnSubmitMemoRequest, serverapi.RuntimeSubmitUserTurnResponse](),
-		queues:         requestmemo.New[sessionTextMemoRequest, serverapi.RuntimeQueueUserMessageResponse](),
-		shells:         requestmemo.New[sessionCommandMemoRequest, struct{}](),
 
-		localEntries:         requestmemo.New[localEntryMemoRequest, struct{}](),
-		compactions:          requestmemo.New[sessionStringMemoRequest, struct{}](),
-		preSubmitCompactions: requestmemo.New[sessionOnlyMemoRequest, struct{}](),
-		queuedSubmits:        requestmemo.New[sessionOnlyMemoRequest, serverapi.RuntimeSubmitQueuedUserMessagesResponse](),
-		interrupts:           requestmemo.New[sessionOnlyMemoRequest, struct{}](),
-		queuedDiscards:       requestmemo.New[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](),
-		promptHistory:        requestmemo.New[sessionTextMemoRequest, struct{}](),
-		goals:                requestmemo.New[goalSetMemoRequest, serverapi.RuntimeGoalShowResponse](),
-		goalStatuses:         requestmemo.New[goalStatusMemoRequest, serverapi.RuntimeGoalShowResponse](),
-		goalClears:           requestmemo.New[goalClearMemoRequest, serverapi.RuntimeGoalShowResponse](),
+		localEntries:   requestmemo.New[localEntryMemoRequest, struct{}](),
+		queuedDiscards: requestmemo.New[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](),
+		promptHistory:  requestmemo.New[sessionTextMemoRequest, struct{}](),
+		goals:          requestmemo.New[goalSetMemoRequest, serverapi.RuntimeGoalShowResponse](),
+		goalStatuses:   requestmemo.New[goalStatusMemoRequest, serverapi.RuntimeGoalShowResponse](),
+		goalClears:     requestmemo.New[goalClearMemoRequest, serverapi.RuntimeGoalShowResponse](),
 	}
+}
+
+func (s *Service) WithRuntimeActivityResolver(resolver RuntimeActivityResolver) *Service {
+	if s == nil {
+		return nil
+	}
+	if resolver == nil {
+		resolver = newDefaultRuntimeControlActivityResolver(s.runtimes)
+	}
+	s.activity = resolver
+	return s
+}
+
+func (s *Service) WithOperationCoordinator(coordinator *runtimeops.Coordinator) *Service {
+	if s == nil {
+		return nil
+	}
+	if coordinator == nil {
+		coordinator = runtimeops.NewCoordinator()
+	}
+	s.operations = coordinator
+	return s
 }
 
 func (s *Service) WithPromptHistoryStore(store PromptHistoryStore) *Service {
@@ -179,19 +274,84 @@ func (s *Service) withRuntimeAccess(ctx context.Context, sessionID string, fn fu
 	return nil
 }
 
-func (s *Service) beginRunStart(sessionID string) (func(), error) {
+func (s *Service) beginRunStart(sessionID string) (runtimeRunStart, error) {
 	if s == nil || s.runtimes == nil {
-		return func() {}, nil
+		return releaseOnlyRunStart{ctx: context.Background()}, nil
 	}
 	trimmed := strings.TrimSpace(sessionID)
-	release, ok := s.runtimes.BeginSessionRun(trimmed)
-	if !ok {
-		if s.runtimes.SessionRunsBlocked(trimmed) {
-			return nil, serverapi.ErrSessionWorktreeDeleting
-		}
-		return nil, serverapi.ErrSessionRunStarting
+	startCtx, release, ok := s.runtimes.BeginCancellableSessionRun(trimmed)
+	if ok {
+		return releaseOnlyRunStart{ctx: startCtx, release: release}, nil
 	}
-	return release, nil
+	if s.sessionRunsBlocked(trimmed) {
+		return nil, serverapi.ErrSessionWorktreeDeleting
+	}
+	return nil, serverapi.ErrSessionRunStarting
+}
+
+func (s *Service) sessionRunsBlocked(sessionID string) bool {
+	if s == nil || s.runtimes == nil {
+		return false
+	}
+	return s.runtimes.SessionRunsBlocked(sessionID)
+}
+
+func mergeOperationContexts(contexts ...context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var once sync.Once
+	stop := func() { once.Do(cancel) }
+	for _, source := range contexts {
+		if source == nil {
+			continue
+		}
+		if err := source.Err(); err != nil {
+			stop()
+			continue
+		}
+		done := source.Done()
+		if done == nil {
+			continue
+		}
+		go func() {
+			select {
+			case <-done:
+				stop()
+			case <-ctx.Done():
+			}
+		}()
+	}
+	return ctx, stop
+}
+
+func releaseRunStartOnContextDone(start runtimeRunStart, ctx context.Context) func() {
+	if start == nil || ctx == nil || ctx.Done() == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	var once sync.Once
+	stop := func() {
+		once.Do(func() { close(done) })
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			start.Release()
+		case <-done:
+		}
+	}()
+	return stop
+}
+
+func (s *Service) operationAttemptCanceled(err error, attempt runtimeops.Attempt) bool {
+	return err != nil && attempt.Context().Err() != nil
+}
+
+func (s *Service) recordRuntimeAccessFailureOrCancellation(sessionID string, ref clientui.RuntimeOperationRef, err error, attempt runtimeops.Attempt) {
+	if s.operationAttemptCanceled(err, attempt) {
+		s.operations.RecordCanceledNotCommitted(sessionID, ref)
+		return
+	}
+	s.operations.RecordRuntimeAccessFailure(sessionID, ref)
 }
 
 func (s *Service) resolve(ctx context.Context, sessionID string) (*runtime.Engine, error) {
@@ -370,20 +530,28 @@ func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.Runt
 		return err
 	}
 	memoReq := sessionCommandMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Command: req.Command}
-	_, err := s.shells.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionCommandMemoRequest, func(ctx context.Context) (struct{}, error) {
-		release, err := s.beginRunStart(req.SessionID)
+	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionCommandMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
+		start, err := s.beginRunStart(req.SessionID)
 		if err != nil {
+			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
 			return struct{}{}, err
 		}
-		defer release()
-		runCtx := context.Background()
-		if ctx != nil {
-			runCtx = context.WithoutCancel(ctx)
-		}
-		err = s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			_, err := engine.SubmitUserShellCommand(runCtx, memoReq.Command)
+		defer start.Release()
+		stopStartCancel := releaseRunStartOnContextDone(start, attempt.Context())
+		defer stopStartCancel()
+		runCtx, stopRunCtx := mergeOperationContexts(attempt.Context(), start.Context())
+		defer stopRunCtx()
+		err = s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
+			_, err := engine.SubmitUserShellCommandWithActiveHook(runCtx, memoReq.Command, func() {
+				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
+			})
 			return err
 		})
+		if s.operationAttemptCanceled(err, attempt) {
+			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
+		} else {
+			s.operations.RecordShellCompletion(memoReq.SessionID, req.OperationRef, err)
+		}
 		return struct{}{}, err
 	})
 	return err
@@ -394,19 +562,28 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 		return err
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Args}
-	_, err := s.compactions.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, error) {
-		release, err := s.beginRunStart(req.SessionID)
+	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameSessionStringMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
+		start, err := s.beginRunStart(req.SessionID)
 		if err != nil {
+			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
 			return struct{}{}, err
 		}
-		defer release()
-		runCtx := context.Background()
-		if ctx != nil {
-			runCtx = context.WithoutCancel(ctx)
-		}
-		return struct{}{}, s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			return engine.CompactContext(runCtx, req.Args)
+		defer start.Release()
+		stopStartCancel := releaseRunStartOnContextDone(start, attempt.Context())
+		defer stopStartCancel()
+		runCtx, stopRunCtx := mergeOperationContexts(attempt.Context(), start.Context())
+		defer stopRunCtx()
+		err = s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
+			return engine.CompactContextWithActiveHook(runCtx, req.Args, func() {
+				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
+			})
 		})
+		if s.operationAttemptCanceled(err, attempt) {
+			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
+		} else {
+			s.operations.RecordCompactCompletion(memoReq.SessionID, req.OperationRef, err)
+		}
+		return struct{}{}, err
 	})
 	return err
 }
@@ -416,19 +593,28 @@ func (s *Service) CompactContextForPreSubmit(ctx context.Context, req serverapi.
 		return err
 	}
 	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(req.SessionID)}
-	_, err := s.preSubmitCompactions.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool { return a.SessionID == b.SessionID }, func(ctx context.Context) (struct{}, error) {
-		release, err := s.beginRunStart(req.SessionID)
+	_, err := runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool { return a.SessionID == b.SessionID }, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
+		start, err := s.beginRunStart(req.SessionID)
 		if err != nil {
+			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
 			return struct{}{}, err
 		}
-		defer release()
-		runCtx := context.Background()
-		if ctx != nil {
-			runCtx = context.WithoutCancel(ctx)
-		}
-		return struct{}{}, s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			return engine.CompactContextForPreSubmit(runCtx)
+		defer start.Release()
+		stopStartCancel := releaseRunStartOnContextDone(start, attempt.Context())
+		defer stopStartCancel()
+		runCtx, stopRunCtx := mergeOperationContexts(attempt.Context(), start.Context())
+		defer stopRunCtx()
+		err = s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
+			return engine.CompactContextForPreSubmitWithActiveHook(runCtx, func() {
+				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
+			})
 		})
+		if s.operationAttemptCanceled(err, attempt) {
+			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
+		} else {
+			s.operations.RecordCompactCompletion(memoReq.SessionID, req.OperationRef, err)
+		}
+		return struct{}{}, err
 	})
 	return err
 }
@@ -449,61 +635,165 @@ func (s *Service) SubmitQueuedUserMessages(ctx context.Context, req serverapi.Ru
 		return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, err
 	}
 	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(req.SessionID)}
-	return s.queuedSubmits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool { return a.SessionID == b.SessionID }, func(ctx context.Context) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
-		release, err := s.beginRunStart(req.SessionID)
+	return runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool { return a.SessionID == b.SessionID }, func(ctx context.Context, attempt runtimeops.Attempt) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
+		start, err := s.beginRunStart(req.SessionID)
 		if err != nil {
+			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
 			return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, err
 		}
-		defer release()
-		runCtx := context.Background()
-		if ctx != nil {
-			runCtx = context.WithoutCancel(ctx)
-		}
+		defer start.Release()
+		stopStartCancel := releaseRunStartOnContextDone(start, attempt.Context())
+		defer stopStartCancel()
+		runCtx, stopRunCtx := mergeOperationContexts(attempt.Context(), start.Context())
+		defer stopRunCtx()
 		var resp serverapi.RuntimeSubmitQueuedUserMessagesResponse
-		err = s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+		err = s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
 			msg, err := engine.SubmitQueuedUserMessages(runCtx)
 			resp = serverapi.RuntimeSubmitQueuedUserMessagesResponse{Message: msg.Content}
 			return err
 		})
+		if s.operationAttemptCanceled(err, attempt) {
+			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, req.OperationRef)
+		} else {
+			s.operations.RecordQueuedMessageStatus(memoReq.SessionID, req.OperationRef, err == nil)
+		}
 		return resp, err
 	})
 }
 
-func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) error {
+func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
 	if err := req.Validate(); err != nil {
-		return err
+		return serverapi.RuntimeInterruptResponse{}, err
 	}
-	memoReq := sessionOnlyMemoRequest{SessionID: strings.TrimSpace(req.SessionID)}
-	_, err := s.interrupts.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool { return a.SessionID == b.SessionID }, func(ctx context.Context) (struct{}, error) {
-		engine, err := s.resolve(ctx, req.SessionID)
+	if s == nil || s.runtimes == nil {
+		return serverapi.RuntimeInterruptResponse{}, fmt.Errorf("runtime resolver is required")
+	}
+	sessionID := strings.TrimSpace(req.SessionID)
+	reqData := runtimeInterruptMemoRequest{
+		SessionID:            sessionID,
+		TargetOperationRef:   cloneRuntimeOperationRefPtr(req.TargetOperationRef),
+		PendingOperationRefs: append([]clientui.RuntimeOperationRef(nil), req.PendingOperationRefs...),
+	}
+	return s.interrupt(ctx, reqData)
+}
+
+func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest) (serverapi.RuntimeInterruptResponse, error) {
+	sessionID := strings.TrimSpace(req.SessionID)
+	pendingRefs := append([]clientui.RuntimeOperationRef(nil), req.PendingOperationRefs...)
+	interruptActive := req.TargetOperationRef == nil
+	targetQueuedMessage := false
+	var cancelResult runtimeops.CancellationResult
+	if req.TargetOperationRef != nil {
+		targetQueuedMessage = req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage
+		var err error
+		cancelResult, err = s.operations.CancelOperationTarget(sessionID, *req.TargetOperationRef)
 		if err != nil {
-			return struct{}{}, err
+			return serverapi.RuntimeInterruptResponse{}, err
 		}
-		return struct{}{}, engine.Interrupt()
-	})
-	return err
+		interruptActive = !targetQueuedMessage && cancelResult.InterruptActive && s.runtimeActivityActiveForControl(ctx, sessionID, pendingRefs)
+		if !runtimeOperationRefsContain(pendingRefs, *req.TargetOperationRef) {
+			pendingRefs = append([]clientui.RuntimeOperationRef{*req.TargetOperationRef}, pendingRefs...)
+		}
+	}
+	engine, err := s.runtimes.ResolveRuntime(ctx, sessionID)
+	if err != nil {
+		return serverapi.RuntimeInterruptResponse{}, err
+	}
+	if engine != nil && interruptActive {
+		if err := engine.Interrupt(); err != nil {
+			return serverapi.RuntimeInterruptResponse{}, err
+		}
+	}
+	if req.TargetOperationRef != nil {
+		cancelResult.CancelOperationAttempt()
+	}
+	if engine != nil && req.TargetOperationRef != nil && req.TargetOperationRef.Kind == clientui.RuntimeOperationKindQueuedMessage && strings.TrimSpace(req.TargetOperationRef.QueueItemID) != "" {
+		engine.DiscardQueuedUserMessage(req.TargetOperationRef.QueueItemID)
+	}
+	return s.runtimeInterruptResponse(sessionID, engine, pendingRefs), nil
+}
+
+func cloneRuntimeOperationRefPtr(ref *clientui.RuntimeOperationRef) *clientui.RuntimeOperationRef {
+	if ref == nil {
+		return nil
+	}
+	clone := *ref
+	return &clone
+}
+
+func (s *Service) runtimeActivityActiveForControl(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) bool {
+	if s == nil || s.activity == nil {
+		return false
+	}
+	snapshot, err := s.activity.Snapshot(ctx, sessionID, refs)
+	return err == nil && snapshot.Activity.ActiveForControl()
+}
+
+func (s *Service) runtimeInterruptResponse(sessionID string, engine *runtime.Engine, refs []clientui.RuntimeOperationRef) serverapi.RuntimeInterruptResponse {
+	snapshot, err := s.activity.Snapshot(context.Background(), sessionID, refs)
+	if err != nil {
+		version := runtimeactivity.NextReadModelVersion(sessionID)
+		return serverapi.RuntimeInterruptResponse{
+			Version:             version,
+			Activity:            clientui.MustRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{DiagnosticRecovery: true}),
+			InputReconciliation: s.operations.Snapshot(sessionID, version, refs),
+		}
+	}
+	return serverapi.RuntimeInterruptResponse{
+		Version:             snapshot.Version,
+		Activity:            snapshot.Activity,
+		InputReconciliation: s.interruptInputReconciliation(sessionID, snapshot, refs),
+	}
+}
+
+func (s *Service) interruptInputReconciliation(sessionID string, snapshot runtimeactivity.ResponseSnapshot, refs []clientui.RuntimeOperationRef) clientui.RuntimeInputReconciliationSnapshot {
+	if len(refs) == 0 || len(snapshot.InputReconciliation.Operations) > 0 {
+		return snapshot.InputReconciliation
+	}
+	return s.operations.Snapshot(sessionID, snapshot.Version, refs)
 }
 
 func (s *Service) QueueUserMessage(ctx context.Context, req serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeQueueUserMessageResponse{}, err
 	}
-	memoReq := sessionTextMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text}
-	return s.queues.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionTextMemoRequest, func(ctx context.Context) (serverapi.RuntimeQueueUserMessageResponse, error) {
+	memoReq := runtimeQueuedMessageMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text, OperationRef: req.OperationRef}
+	return runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameRuntimeQueuedMessageMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (serverapi.RuntimeQueueUserMessageResponse, error) {
 		var resp serverapi.RuntimeQueueUserMessageResponse
-		err := s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+		runCtx, stopRunCtx := mergeOperationContexts(ctx, attempt.Context())
+		defer stopRunCtx()
+		err := s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
 			text := memoReq.Text
 			if s != nil && s.promptStore != nil {
-				record, _, err := s.recordPromptHistory(ctx, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
+				record, _, err := s.recordPromptHistory(runCtx, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
 				if err != nil {
 					return err
 				}
 				text = record.Text
 			}
-			item := engine.QueueUserMessageWithClientRequestID(text, strings.TrimSpace(req.ClientRequestID))
-			resp = serverapi.RuntimeQueueUserMessageResponse{QueueItemID: item.ID, Text: item.Text, ClientRequestID: item.ClientRequestID}
+			if err := attempt.Context().Err(); err != nil {
+				return err
+			}
+			committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, memoReq.OperationRef, func() error {
+				item := engine.QueueUserMessageWithClientRequestID(text, strings.TrimSpace(req.ClientRequestID))
+				resp = serverapi.RuntimeQueueUserMessageResponse{QueueItemID: item.ID, Text: item.Text, ClientRequestID: item.ClientRequestID}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if !committed {
+				return runtimeops.ErrOperationCanceled
+			}
 			return nil
 		})
+		if s.operationAttemptCanceled(err, attempt) {
+			s.operations.RecordCanceledNotCommitted(memoReq.SessionID, memoReq.OperationRef)
+		} else if err != nil {
+			s.operations.RecordQueuedMessageFailed(memoReq.SessionID, memoReq.OperationRef)
+		} else {
+			s.operations.RecordCommitted(memoReq.SessionID, memoReq.OperationRef)
+		}
 		return resp, err
 	})
 }
@@ -548,197 +838,6 @@ func (s *Service) recordPromptHistory(ctx context.Context, sessionID string, sou
 	})
 }
 
-func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeGoalShowResponse{}, err
-	}
-	engine, err := s.resolve(ctx, req.SessionID)
-	if err != nil {
-		return serverapi.RuntimeGoalShowResponse{}, err
-	}
-	goal := engine.Goal()
-	if goal == nil {
-		return serverapi.RuntimeGoalShowResponse{}, nil
-	}
-	return serverapi.RuntimeGoalShowResponse{Goal: &serverapi.RuntimeGoal{
-		ID:        strings.TrimSpace(goal.ID),
-		Objective: goal.Objective,
-		Status:    strings.TrimSpace(string(goal.Status)),
-		Suspended: engine.GoalLoopSuspended(),
-		CreatedAt: goal.CreatedAt,
-		UpdatedAt: goal.UpdatedAt,
-	}}, nil
-}
-
-func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeGoalShowResponse{}, err
-	}
-	trimmedObjective := strings.TrimSpace(req.Objective)
-	memoReq := goalSetMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Objective: trimmedObjective, Actor: strings.TrimSpace(req.Actor), RunID: strings.TrimSpace(req.RunID), StepID: strings.TrimSpace(req.StepID)}
-	return s.goals.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameGoalSetMemoRequest, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
-		var response serverapi.RuntimeGoalShowResponse
-		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			goal, queued, qErr := queueGoalSetForRequest(engine, req, trimmedObjective)
-			if qErr != nil {
-				var blocked session.GoalAgentOverwriteBlockedError
-				if errors.As(qErr, &blocked) {
-					return goalAgentOverwriteDeniedError{Objective: blocked.Goal.Objective, Status: string(blocked.Goal.Status)}
-				}
-				return qErr
-			}
-			if queued {
-				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
-				return nil
-			}
-			if strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) {
-				current := engine.Goal()
-				if current != nil && current.Status != session.GoalStatusComplete {
-					return goalAgentOverwriteDeniedError{Objective: current.Objective, Status: string(current.Status)}
-				}
-			}
-			if err := engine.RequireGoalLoopStartAllowed(); err != nil {
-				return err
-			}
-			goal, err := engine.SetGoal(trimmedObjective, session.GoalActor(req.Actor))
-			if err != nil {
-				var blocked session.GoalAgentOverwriteBlockedError
-				if errors.As(err, &blocked) {
-					return goalAgentOverwriteDeniedError{Objective: blocked.Goal.Objective, Status: string(blocked.Goal.Status)}
-				}
-				return err
-			}
-			if err := engine.StartGoalLoop(); err != nil {
-				return err
-			}
-			response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
-			return nil
-		})
-		return response, err
-	})
-}
-
-// goalAgentOverwriteDeniedError is returned when an agent attempts to overwrite an
-// existing active or paused goal. It carries the existing goal's objective and status
-// so callers can react to the specific denial, and renders the agent-facing denial
-// prompt for the surfaced error message.
-type goalAgentOverwriteDeniedError struct {
-	Objective string
-	Status    string
-}
-
-func (e goalAgentOverwriteDeniedError) Error() string {
-	return strings.TrimSpace(prompts.RenderGoalAgentDuplicateSetDeniedPrompt(e.Objective, e.Status))
-}
-
-func (s *Service) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return s.setGoalStatus(ctx, req, session.GoalStatusPaused)
-}
-
-func (s *Service) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return s.setGoalStatus(ctx, req, session.GoalStatusActive)
-}
-
-func (s *Service) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return s.setGoalStatus(ctx, req, session.GoalStatusComplete)
-}
-
-func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalStatusRequest, status session.GoalStatus) (serverapi.RuntimeGoalShowResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeGoalShowResponse{}, err
-	}
-	memoReq := goalStatusMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Status: strings.TrimSpace(string(status)), Actor: strings.TrimSpace(req.Actor), RunID: strings.TrimSpace(req.RunID), StepID: strings.TrimSpace(req.StepID)}
-	return s.goalStatuses.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameGoalStatusMemoRequest, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
-		var response serverapi.RuntimeGoalShowResponse
-		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			goal, queued, qErr := queueGoalStatusForRequest(engine, req, status)
-			if qErr != nil {
-				return qErr
-			}
-			if queued {
-				response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
-				return nil
-			}
-			if status == session.GoalStatusComplete {
-				current := engine.Goal()
-				if current != nil && current.Status == session.GoalStatusComplete {
-					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current, false)}
-					return nil
-				}
-			}
-			if status == session.GoalStatusActive {
-				if err := engine.RequireGoalLoopStartAllowed(); err != nil {
-					return err
-				}
-			}
-			goal, err := engine.SetGoalStatus(status, session.GoalActor(req.Actor))
-			if err != nil {
-				return err
-			}
-			if status == session.GoalStatusActive {
-				if err := engine.StartGoalLoop(); err != nil {
-					return err
-				}
-			}
-			response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(goal, false)}
-			return nil
-		})
-		return response, err
-	})
-}
-
-func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeGoalShowResponse{}, err
-	}
-	memoReq := goalClearMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Actor: strings.TrimSpace(req.Actor)}
-	return s.goalClears.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameGoalClearMemoRequest, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
-		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			_, queued, qErr := engine.QueueGoalClearForActiveStep(session.GoalActor(req.Actor))
-			if qErr != nil {
-				return qErr
-			}
-			if queued {
-				return nil
-			}
-			_, err := engine.ClearGoal(session.GoalActor(req.Actor))
-			return err
-		})
-		return serverapi.RuntimeGoalShowResponse{}, err
-	})
-}
-
-func (s *Service) withGoalMutationAccess(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) error {
-	return s.withRuntimeAccess(ctx, sessionID, fn)
-}
-
-func queueGoalSetForRequest(engine *runtime.Engine, req serverapi.RuntimeGoalSetRequest, objective string) (session.GoalState, bool, error) {
-	actor := session.GoalActor(req.Actor)
-	if strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) && strings.TrimSpace(req.StepID) != "" {
-		return engine.QueueAgentShellSetGoalForStep(req.StepID, objective, actor)
-	}
-	return engine.QueueGoalSetForActiveStep(objective, actor)
-}
-
-func queueGoalStatusForRequest(engine *runtime.Engine, req serverapi.RuntimeGoalStatusRequest, status session.GoalStatus) (session.GoalState, bool, error) {
-	actor := session.GoalActor(req.Actor)
-	if strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) && strings.TrimSpace(req.StepID) != "" && status == session.GoalStatusComplete {
-		return engine.QueueAgentShellCompleteGoalForStep(req.StepID, actor)
-	}
-	return engine.QueueGoalStatusForActiveStep(status, actor)
-}
-
-func runtimeGoalFromSessionGoal(goal session.GoalState, suspended bool) *serverapi.RuntimeGoal {
-	return &serverapi.RuntimeGoal{
-		ID:        strings.TrimSpace(goal.ID),
-		Objective: goal.Objective,
-		Status:    strings.TrimSpace(string(goal.Status)),
-		Suspended: suspended,
-		CreatedAt: goal.CreatedAt,
-		UpdatedAt: goal.UpdatedAt,
-	}
-}
-
 func (s *Service) rejectWorkflowAutoCompactionDisable(ctx context.Context, sessionID string, engine *runtime.Engine) error {
 	workflowSession, err := s.workflowTaskSession(ctx, sessionID, engine)
 	if err != nil {
@@ -768,6 +867,10 @@ func (s *Service) workflowTaskSession(ctx context.Context, sessionID string, eng
 
 func sameSessionTextMemoRequest(a sessionTextMemoRequest, b sessionTextMemoRequest) bool {
 	return a.SessionID == b.SessionID && a.Text == b.Text
+}
+
+func sameRuntimeQueuedMessageMemoRequest(a runtimeQueuedMessageMemoRequest, b runtimeQueuedMessageMemoRequest) bool {
+	return a.SessionID == b.SessionID && a.Text == b.Text && a.OperationRef == b.OperationRef
 }
 
 func sameTurnSubmitMemoRequest(a turnSubmitMemoRequest, b turnSubmitMemoRequest) bool {
@@ -804,6 +907,15 @@ func sameGoalStatusMemoRequest(a goalStatusMemoRequest, b goalStatusMemoRequest)
 
 func sameGoalClearMemoRequest(a goalClearMemoRequest, b goalClearMemoRequest) bool {
 	return a.SessionID == b.SessionID && a.Actor == b.Actor
+}
+
+func runtimeOperationRefsContain(refs []clientui.RuntimeOperationRef, want clientui.RuntimeOperationRef) bool {
+	for _, ref := range refs {
+		if ref == want {
+			return true
+		}
+	}
+	return false
 }
 
 var _ servicecontract.RuntimeControlService = (*Service)(nil)

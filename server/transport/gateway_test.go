@@ -250,8 +250,9 @@ func waitForGatewayCondition(t *testing.T, label string, condition func() bool) 
 
 type countingSessionRuntimeClient struct {
 	remoteclient.SessionRuntimeClient
-	releaseCount atomic.Int32
-	activateErr  error
+	releaseCount    atomic.Int32
+	activateErr     error
+	releaseRequests chan serverapi.SessionRuntimeReleaseRequest
 }
 
 func (c *countingSessionRuntimeClient) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
@@ -263,6 +264,9 @@ func (c *countingSessionRuntimeClient) ActivateSessionRuntime(ctx context.Contex
 
 func (c *countingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 	c.releaseCount.Add(1)
+	if c.releaseRequests != nil {
+		c.releaseRequests <- req
+	}
 	return c.SessionRuntimeClient.ReleaseSessionRuntime(ctx, req)
 }
 
@@ -341,6 +345,101 @@ func TestGatewayExplicitReleaseRemovesOwnedRuntimeLeaseBeforeConnectionClose(t *
 	time.Sleep(100 * time.Millisecond)
 	if got := counter.releaseCount.Load(); got != 1 {
 		t.Fatalf("runtime release call count = %d, want only explicit release", got)
+	}
+}
+
+func TestGatewayDetachOnlyReleaseInjectsOwnerAndSkipsDisconnectRelease(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	counter := &countingSessionRuntimeClient{
+		SessionRuntimeClient: appCore.SessionRuntimeClient(),
+		releaseRequests:      make(chan serverapi.SessionRuntimeReleaseRequest, 4),
+	}
+	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptest.NewServer(gateway.Handler())
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	store := createGatewayAuthoritativeSession(t, appCore)
+	appCore.RegisterSessionStore(store)
+
+	conn := dialGateway(t, server)
+	handshakeGateway(t, conn)
+	var activation serverapi.SessionRuntimeActivateResponse
+	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"), &activation)
+	var release serverapi.SessionRuntimeReleaseResponse
+	callGateway(t, conn, "release-runtime", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
+		ClientRequestID: "release-runtime",
+		SessionID:       store.Meta().SessionID,
+		OwnerID:         "client-spoof",
+		DropOwner:       true,
+		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+	}, &release)
+	if !release.Released || release.Active {
+		t.Fatalf("detach-only release response = %+v, want released inactive response", release)
+	}
+	select {
+	case req := <-counter.releaseRequests:
+		if req.OwnerID == "" || req.OwnerID == "client-spoof" {
+			t.Fatalf("gateway did not inject connection owner id: %+v", req)
+		}
+		if !req.DropOwner || req.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
+			t.Fatalf("gateway release request = %+v, want detach-only drop owner", req)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for explicit detach-only release")
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close gateway connection: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := counter.releaseCount.Load(); got != 1 {
+		t.Fatalf("runtime release call count = %d, want only explicit detach-only release", got)
+	}
+}
+
+func TestGatewayCloseIfIdleReleasePropagatesPolicy(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	counter := &countingSessionRuntimeClient{
+		SessionRuntimeClient: appCore.SessionRuntimeClient(),
+		releaseRequests:      make(chan serverapi.SessionRuntimeReleaseRequest, 4),
+	}
+	gateway, err := NewGateway(&gatewayRuntimeClientOverride{Core: appCore, runtimeClient: counter}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptest.NewServer(gateway.Handler())
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	store := createGatewayAuthoritativeSession(t, appCore)
+	appCore.RegisterSessionStore(store)
+
+	conn := dialGateway(t, server)
+	handshakeGateway(t, conn)
+	var activation serverapi.SessionRuntimeActivateResponse
+	callGateway(t, conn, "activate-runtime", protocol.MethodSessionRuntimeActivate, gatewayRuntimeActivateRequest(appCore, store.Meta().SessionID, "activate-runtime"), &activation)
+	var release serverapi.SessionRuntimeReleaseResponse
+	callGateway(t, conn, "release-runtime", protocol.MethodSessionRuntimeRelease, serverapi.SessionRuntimeReleaseRequest{
+		ClientRequestID: "release-runtime",
+		SessionID:       store.Meta().SessionID,
+		OnlyIfIdle:      true,
+		DropOwner:       true,
+		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
+	}, &release)
+	if !release.Released {
+		t.Fatalf("close-if-idle release response = %+v, want released", release)
+	}
+	select {
+	case req := <-counter.releaseRequests:
+		if req.OwnerID == "" {
+			t.Fatalf("gateway did not inject owner id: %+v", req)
+		}
+		if !req.OnlyIfIdle || !req.DropOwner || req.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle {
+			t.Fatalf("gateway release request = %+v, want explicit close-if-idle drop owner", req)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for explicit close-if-idle release")
 	}
 }
 

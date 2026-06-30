@@ -19,6 +19,10 @@ import (
 const (
 	sessionFile = "session.json"
 	eventsFile  = "events.jsonl"
+
+	eventModelRecoveryPending   = "model_recovery_pending"
+	eventModelRecoveryConsumed  = "model_recovery_consumed"
+	eventModelRecoveryDiscarded = "model_recovery_discarded"
 )
 
 var ErrSessionNotFound = sessioncontract.ErrSessionNotFound
@@ -312,12 +316,83 @@ func (s *Store) EnsureDurable() error {
 	return s.mutateAndPersist(func() error { return nil })
 }
 
-func (s *Store) MarkInFlight(inFlight bool) error {
-	return s.mutateAndPersist(func() error {
-		s.meta.InFlightStep = inFlight
-		s.meta.UpdatedAt = time.Now().UTC()
-		return nil
+func (s *Store) SetPendingModelRecovery(recovery PendingModelRecovery) error {
+	next := normalizePendingModelRecovery(recovery)
+	return s.persistPendingModelRecoveryEvent(eventModelRecoveryPending, next.StepID, next, func() {
+		s.meta.PendingModelRecovery = &next
 	})
+}
+
+func (s *Store) ClearPendingModelRecovery() error {
+	current := s.Meta().PendingModelRecovery
+	if current == nil {
+		return nil
+	}
+	consumed := clonePendingModelRecovery(current)
+	return s.persistPendingModelRecoveryEvent(eventModelRecoveryConsumed, consumed.StepID, consumed, func() {
+		s.meta.PendingModelRecovery = nil
+	})
+}
+
+func (s *Store) DiscardPendingModelRecoveryCandidate() error {
+	current := s.Meta().PendingModelRecovery
+	if current == nil {
+		return nil
+	}
+	discarded := clonePendingModelRecovery(current)
+	return s.persistPendingModelRecoveryEvent(eventModelRecoveryDiscarded, discarded.StepID, discarded, func() {
+		s.meta.PendingModelRecovery = nil
+	})
+}
+
+func (s *Store) DiscardLegacyPendingModelRecoveryCandidate(recovery PendingModelRecovery) error {
+	discarded := normalizePendingModelRecovery(recovery)
+	return s.persistPendingModelRecoveryEvent(eventModelRecoveryDiscarded, discarded.StepID, discarded, func() {
+		s.meta.LegacyInFlightStepRecovery = false
+	})
+}
+
+func normalizePendingModelRecovery(recovery PendingModelRecovery) PendingModelRecovery {
+	next := recovery
+	next.RecoveryID = strings.TrimSpace(next.RecoveryID)
+	next.StepID = strings.TrimSpace(next.StepID)
+	next.Reason = strings.TrimSpace(next.Reason)
+	if next.CreatedAt.IsZero() {
+		next.CreatedAt = time.Now().UTC()
+	}
+	next.OutstandingToolCallIDs = append([]string(nil), next.OutstandingToolCallIDs...)
+	return next
+}
+
+func clonePendingModelRecovery(recovery *PendingModelRecovery) PendingModelRecovery {
+	if recovery == nil {
+		return PendingModelRecovery{}
+	}
+	return normalizePendingModelRecovery(*recovery)
+}
+
+func (s *Store) persistPendingModelRecoveryEvent(kind string, stepID string, payload PendingModelRecovery, apply func()) error {
+	s.mu.Lock()
+	previousMeta := s.meta
+	previousFreshness := s.conversationFreshness
+	apply()
+	evt, err := s.buildEventLocked(stepID, kind, payload, time.Now().UTC())
+	if err != nil {
+		s.meta = previousMeta
+		s.conversationFreshness = previousFreshness
+		s.mu.Unlock()
+		return err
+	}
+	observation, committed, err := s.appendEventsAtomicLockedWithCommitStatus([]Event{evt})
+	if err != nil && !committed {
+		s.meta = previousMeta
+		s.conversationFreshness = previousFreshness
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.observePersistence(observation)
 }
 
 func (s *Store) SetName(name string) error {
@@ -360,17 +435,47 @@ func (s *Store) SetWorkspaceRoot(workspaceRoot string) error {
 func (s *Store) SetInputDraft(inputDraft string) error {
 	s.mu.Lock()
 
-	if s.meta.InputDraft == inputDraft && (!s.persisted || s.hasDurableMetadataLocked()) {
+	if s.meta.InputDraft == inputDraft && len(s.meta.InputDraftRecoveryBuffers) == 0 && (!s.persisted || s.hasDurableMetadataLocked()) {
 		s.mu.Unlock()
 		return nil
 	}
 	s.meta.InputDraft = inputDraft
+	s.meta.InputDraftRecoveryBuffers = nil
 	s.meta.UpdatedAt = time.Now().UTC()
 	if !s.persisted && inputDraft == "" {
 		s.mu.Unlock()
 		return nil
 	}
 	return s.unlockAndObservePersistence(s.persistMetaLocked())
+}
+
+func (s *Store) SetInputDraftRecovery(inputDraft string, buffers []InputDraftRecoveryBuffer) error {
+	s.mu.Lock()
+	nextBuffers := append([]InputDraftRecoveryBuffer(nil), buffers...)
+	if s.meta.InputDraft == inputDraft && inputDraftRecoveryBuffersEqual(s.meta.InputDraftRecoveryBuffers, nextBuffers) && (!s.persisted || s.hasDurableMetadataLocked()) {
+		s.mu.Unlock()
+		return nil
+	}
+	s.meta.InputDraft = inputDraft
+	s.meta.InputDraftRecoveryBuffers = nextBuffers
+	s.meta.UpdatedAt = time.Now().UTC()
+	if !s.persisted && inputDraft == "" && len(nextBuffers) == 0 {
+		s.mu.Unlock()
+		return nil
+	}
+	return s.unlockAndObservePersistence(s.persistMetaLocked())
+}
+
+func inputDraftRecoveryBuffersEqual(a, b []InputDraftRecoveryBuffer) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) SetHeadlessActive(active bool) error {
@@ -875,7 +980,6 @@ func (s *Store) appendObservedEventsLockedWithCommitStatus(events []Event) (bool
 	previousFreshness := s.conversationFreshness
 	s.captureFirstPromptPreviewLocked(events)
 	s.advanceConversationFreshnessLocked(events)
-	s.updateLatestRunLocked(events)
 	observation, committed, err := s.appendEventsAtomicLockedWithCommitStatus(events)
 	if err != nil && !committed {
 		s.meta = previousMeta
@@ -950,6 +1054,16 @@ func readMetaFile(path string) (Meta, error) {
 	var meta Meta
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return Meta{}, fmt.Errorf("parse session meta: %w", err)
+	}
+	var legacyFields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &legacyFields); err == nil && meta.PendingModelRecovery == nil {
+		var legacyInFlight bool
+		if raw := legacyFields["in_flight_step"]; len(raw) > 0 {
+			_ = json.Unmarshal(raw, &legacyInFlight)
+		}
+		if legacyInFlight {
+			meta.LegacyInFlightStepRecovery = true
+		}
 	}
 	return meta, nil
 }

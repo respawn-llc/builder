@@ -83,14 +83,32 @@ func TestActivateReactivatesRuntimeWithFreshRequestID(t *testing.T) {
 }
 
 func TestReleaseSkipsNilServiceAndIssuesRequest(t *testing.T) {
-	Release(nil, "session-1", "owner-1")
+	if err := Release(nil, "session-1", "owner-1"); err != nil {
+		t.Fatalf("Release nil service: %v", err)
+	}
 	service := &fakeRuntimeService{releaseErr: errors.New("release failed")}
-	Release(service, "session-1", "owner-1")
+	if err := Release(service, "session-1", "owner-1"); !errors.Is(err, service.releaseErr) {
+		t.Fatalf("Release error = %v, want release failed", err)
+	}
 	if len(service.releaseRequests) != 1 {
 		t.Fatalf("release requests = %d, want 1", len(service.releaseRequests))
 	}
 	req := service.releaseRequests[0]
 	if req.SessionID != "session-1" || req.ClientRequestID == "" || !req.OnlyIfIdle || !req.DropOwner || req.OwnerID != "owner-1" {
 		t.Fatalf("release request = %+v, want session/request/owner ids", req)
+	}
+}
+
+func TestReleaseWithDetachOnlyUsesOwnerDropClosePolicy(t *testing.T) {
+	service := &fakeRuntimeService{}
+	if err := ReleaseWithClosePolicy(service, "session-1", "owner-1", serverapi.SessionRuntimeReleaseClosePolicyDetachOnly); err != nil {
+		t.Fatalf("ReleaseWithClosePolicy: %v", err)
+	}
+	if len(service.releaseRequests) != 1 {
+		t.Fatalf("release requests = %d, want 1", len(service.releaseRequests))
+	}
+	req := service.releaseRequests[0]
+	if !req.DropOwner || req.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyDetachOnly || req.OwnerID != "owner-1" {
+		t.Fatalf("release request = %+v, want detach-only owner drop", req)
 	}
 }

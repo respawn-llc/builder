@@ -133,14 +133,14 @@ func TestConversationSnapshotCommitClearsSawAssistantDelta(t *testing.T) {
 	m.termWidth = 100
 	m.termHeight = 20
 	m.windowSizeKnown = true
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	_ = m.runtimeAdapter().handleRuntimeEvent(runtime.Event{Kind: runtime.EventAssistantDelta, AssistantDelta: "partial"})
 	if !m.sawAssistantDelta {
 		t.Fatal("expected sawAssistantDelta true after assistant delta")
 	}
 
 	_ = m.runtimeAdapter().applyChatSnapshot(runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{Role: "assistant", Text: "partial"}}, Streaming: ""})
-	m.setBusy(false)
+	m.setRuntimeActivityBusyForTest(false)
 	m.layout().syncViewport()
 
 	if m.sawAssistantDelta {
@@ -931,7 +931,7 @@ func TestProjectedUserMessageFlushedDefersCommittedGapWhileAssistantStreamIsLive
 	m.termWidth = 100
 	m.termHeight = 20
 	m.windowSizeKnown = true
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.pendingInjected = queuedUserMessagesForTest("steered message")
 	m.input = "steered message"
 	m.lockedInjectText = "steered message"

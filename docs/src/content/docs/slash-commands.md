@@ -19,7 +19,7 @@ Press Tab to autocomplete a command, and Enter to autocomplete and send. Press T
 | <code>/supervisor [on&#124;off]</code> | optional single value | Toggle supervisor invocation. |
 | <code>/autocompaction [on&#124;off]</code> | optional single value | Toggle auto-compaction. |
 | `/status` | none | Open a page with detailed information about the config, git, runtime, and model. |
-| <code>/goal [pause&#124;resume&#124;clear&#124;&lt;objective&gt;]</code> | optional action or objective | Set or manage the current session goal (ralph-loop). Empty input opens the goal page. |
+| <code>/goal [pause&#124;resume&#124;complete&#124;clear&#124;&lt;objective&gt;]</code> | optional action or objective | Set or manage the current session goal (ralph-loop). Empty input opens the goal page. |
 | <code>/ps [kill&#124;inline&#124;logs] &lt;id&gt;</code> | optional action + id | Open the background-process picker, or manage a specific background shell. |
 | <code>/wt</code> | none | Open the Worktrees page. |
 | <code>/wt create</code> | none | Open the create-worktree dialog; new branches require a non-empty base ref. |
@@ -37,7 +37,10 @@ Press Tab to autocomplete a command, and Enter to autocomplete and send. Press T
 - `Enter` runs the selected command immediately, even when the name is only partially typed.
 - `Tab` on a partial command autocompletes the selected command and inserts a trailing space so you can continue with arguments.
 - `Tab` on an exact known command adds it into the queue. Use this to make chains of prompts and slash commands like /compact -> /review -> /prompts:commit.
-- While the model is working on an active goal, `/goal` still opens the read-only goal page. `/goal pause` and `/goal clear` run immediately and append one persistent goal info line; setting or resuming a goal is rejected until the runtime is idle.
+- While Kent is busy, `/goal` opens the read-only goal page and goal mutations are queued in runtime order. Setting a new goal or running `/goal pause`, `/goal resume`, `/goal complete`, or `/goal clear` updates the server-owned goal state when the active step can safely accept the mutation.
+- An interrupted goal remains active and suspended. `/goal resume` restarts the goal loop when the runtime is available; running it for an already active, unsuspended goal is a no-op.
+- `/goal clear` requires active-goal confirmation whenever the goal status is active, including interrupted/suspended goals. `/goal complete` marks the goal complete without clearing its record.
+- Pressing Ctrl/Cmd+C once requests an interrupt for active runtime work. Pressing it again while the interrupt is pending exits the local TUI and detaches from the runtime without closing a shared daemon session.
 - If `ask_question` is disabled, Kent opens sessions with active goals for management, but goal set/resume fails until `ask_question` is enabled; pause and clear remain available.
 
 ### 2. Built-In and Custom Prompts

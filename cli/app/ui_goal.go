@@ -26,10 +26,12 @@ func (c uiInputController) handleGoalCommand(mode commands.GoalMode, objective s
 		return m, m.goalRuntimeCommand(goalRuntimePause, "")
 	case commands.GoalModeResume:
 		return m, m.goalRuntimeCommand(goalRuntimeResume, "")
+	case commands.GoalModeComplete:
+		return m, m.goalRuntimeCommand(goalRuntimeComplete, "")
 	case commands.GoalModeClear:
 		return m, m.goalRuntimeCommand(goalRuntimeCheckClear, "")
 	default:
-		errText := "Usage: /goal [show|pause|resume|clear|<objective>]"
+		errText := "Usage: /goal [show|pause|resume|complete|clear|<objective>]"
 		return m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", errText, ""), c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 	}
 }
@@ -62,7 +64,7 @@ func goalIsPresent(goal *clientui.RuntimeGoal) bool {
 }
 
 func goalRequiresClearConfirmation(goal *clientui.RuntimeGoal) bool {
-	return goalIsActive(goal) && !goal.Suspended
+	return goalIsActive(goal)
 }
 
 func (c uiInputController) startGoalFlowCmd() tea.Cmd {
@@ -85,15 +87,7 @@ func (c uiInputController) handleGoalOverlayKey(msg tea.KeyMsg) (tea.Model, tea.
 	}
 	switch strings.ToLower(msg.String()) {
 	case "ctrl+c":
-		if m.isBusy() {
-			return m, c.interruptBusyRuntime()
-		}
-		m.exitAction = UIActionExit
-		if overlayCmd := m.restoreTranscriptSurface(); overlayCmd != nil {
-			m.closeGoalOverlay()
-			return m, tea.Sequence(overlayCmd, tea.Quit)
-		}
-		return m, tea.Quit
+		return c.handleRuntimeCtrlC(c.closeTranscriptSurfaceForRuntimeCtrlC(m.closeGoalOverlay))
 	case "esc", "q":
 		return m, c.stopGoalFlowCmd()
 	case "up":
@@ -116,15 +110,7 @@ func (c uiInputController) handleGoalConfirmKey(msg tea.KeyMsg) (tea.Model, tea.
 	m := c.model
 	switch strings.ToLower(msg.String()) {
 	case "ctrl+c":
-		if m.isBusy() {
-			return m, c.interruptBusyRuntime()
-		}
-		m.exitAction = UIActionExit
-		if overlayCmd := m.restoreTranscriptSurface(); overlayCmd != nil {
-			m.closeGoalOverlay()
-			return m, tea.Sequence(overlayCmd, tea.Quit)
-		}
-		return m, tea.Quit
+		return c.handleRuntimeCtrlC(c.closeTranscriptSurfaceForRuntimeCtrlC(m.closeGoalOverlay))
 	case "esc", "q", "n":
 		return m, c.stopGoalFlowCmd()
 	case "tab", "shift+tab", "left", "right", "h", "l":
@@ -187,7 +173,7 @@ type goalRuntimePendingState struct {
 
 func goalRuntimeOperationMutates(operation goalRuntimeOperation) bool {
 	switch operation {
-	case goalRuntimeSet, goalRuntimePause, goalRuntimeResume, goalRuntimeClear:
+	case goalRuntimeSet, goalRuntimePause, goalRuntimeResume, goalRuntimeComplete, goalRuntimeClear:
 		return true
 	default:
 		return false
@@ -250,6 +236,8 @@ func (m *uiModel) goalRuntimeCommand(operation goalRuntimeOperation, objective s
 			msg.goal, msg.err = client.PauseGoal()
 		case goalRuntimeResume:
 			msg.goal, msg.err = client.ResumeGoal()
+		case goalRuntimeComplete:
+			msg.goal, msg.err = client.CompleteGoal()
 		case goalRuntimeClear:
 			msg.goal, msg.err = client.ClearGoal()
 		}
@@ -330,6 +318,9 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		m.goal.goal = cloneRuntimeGoal(msg.goal)
 		return followUpCmd
 	case goalRuntimeResume:
+		m.goal.goal = cloneRuntimeGoal(msg.goal)
+		return followUpCmd
+	case goalRuntimeComplete:
 		m.goal.goal = cloneRuntimeGoal(msg.goal)
 		return followUpCmd
 	case goalRuntimeClear:

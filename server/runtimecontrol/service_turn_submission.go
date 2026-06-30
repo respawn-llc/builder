@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"core/server/runtime"
+	"core/server/runtimeops"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
@@ -14,19 +16,32 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
 	memoReq := turnSubmitMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text}
-	return s.turnSubmits.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameTurnSubmitMemoRequest, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-		release, err := s.beginRunStart(req.SessionID)
+	return runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameTurnSubmitMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (serverapi.RuntimeSubmitUserTurnResponse, error) {
+		start, err := s.beginRunStart(req.SessionID)
 		if err != nil {
+			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
 			return serverapi.RuntimeSubmitUserTurnResponse{}, err
 		}
-		defer release()
-		runCtx := context.Background()
-		if ctx != nil {
-			runCtx = context.WithoutCancel(ctx)
-		}
+		defer start.Release()
+		stopStartCancel := releaseRunStartOnContextDone(start, attempt.Context())
+		defer stopStartCancel()
+		runCtx, stopRunCtx := mergeOperationContexts(attempt.Context(), start.Context())
+		defer stopRunCtx()
 		var resp serverapi.RuntimeSubmitUserTurnResponse
 		var recordEngine *runtime.Engine
-		err = s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
+		inputAccepted := false
+		recordAccepted := func(queued bool) {
+			if inputAccepted {
+				return
+			}
+			inputAccepted = true
+			if queued {
+				s.operations.RecordQueuedMessageSubmitted(memoReq.SessionID, req.OperationRef)
+			} else {
+				s.operations.RecordUserMessageFlushed(memoReq.SessionID, req.OperationRef)
+			}
+		}
+		err = s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
 			recordEngine = engine
 			shouldCompact, err := engine.ShouldCompactBeforeUserMessage(runCtx, memoReq.Text)
 			if err != nil {
@@ -35,9 +50,10 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			compacted := false
 			compactionBusy := false
 			if shouldCompact {
-				if err := engine.CompactContextForPreSubmit(runCtx); err != nil {
-					if !errors.Is(err, runtime.ErrAgentBusy) {
-						return err
+				compactErr := s.runPreSubmitCompaction(runCtx, memoReq.SessionID, req.PreSubmitCompactionOperationRef, engine)
+				if compactErr != nil {
+					if !errors.Is(compactErr, runtime.ErrAgentBusy) {
+						return compactErr
 					}
 					compactionBusy = true
 				} else {
@@ -46,10 +62,13 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			}
 			if compactionBusy {
 				queued := engine.QueueUserMessageForAutoDrain(memoReq.Text, strings.TrimSpace(req.ClientRequestID))
+				recordAccepted(true)
 				resp = serverapi.RuntimeSubmitUserTurnResponse{Compacted: compacted, Steered: true, QueueItemID: queued.ID}
 				return nil
 			}
-			msg, queued, err := engine.SubmitUserMessageOrSteer(runCtx, memoReq.Text, strings.TrimSpace(req.ClientRequestID))
+			msg, queued, err := engine.SubmitUserMessageOrSteerWithHooks(runCtx, memoReq.Text, strings.TrimSpace(req.ClientRequestID), func() {
+				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
+			}, recordAccepted)
 			if err != nil {
 				return err
 			}
@@ -62,9 +81,32 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 		})
 		if err == nil {
 			s.recordPromptHistoryAsync(recordEngine, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
+		} else if inputAccepted {
+			s.recordPromptHistoryAsync(recordEngine, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
+		} else {
+			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
 		}
 		return resp, err
 	})
+}
+
+func (s *Service) runPreSubmitCompaction(ctx context.Context, sessionID string, ref clientui.RuntimeOperationRef, engine *runtime.Engine) error {
+	_, err := runtimeops.Do(s.operations, ctx, sessionID, ref, sessionOnlyMemoRequest{SessionID: strings.TrimSpace(sessionID)}, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool {
+		return a.SessionID == b.SessionID
+	}, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {
+		runCtx, stopRunCtx := mergeOperationContexts(ctx, attempt.Context())
+		defer stopRunCtx()
+		compactErr := engine.CompactContextForPreSubmitWithActiveHook(runCtx, func() {
+			s.operations.MarkOperationActive(sessionID, ref)
+		})
+		if s.operationAttemptCanceled(compactErr, attempt) {
+			s.operations.RecordCanceledNotCommitted(sessionID, ref)
+		} else {
+			s.operations.RecordCompactCompletion(sessionID, ref, compactErr)
+		}
+		return struct{}{}, compactErr
+	})
+	return err
 }
 
 func (s *Service) recordPromptHistoryAsync(engine *runtime.Engine, sessionID string, sourceID string, text string) {

@@ -193,6 +193,10 @@ func (e *Engine) ActiveRun() *RunSnapshot {
 	return e.stepLifecycle.Snapshot()
 }
 
+func (e *Engine) ActiveStepSnapshot() *RunSnapshot {
+	return e.ActiveRun()
+}
+
 func (e *Engine) LastCommittedAssistantFinalAnswer() string {
 	if e == nil {
 		return ""

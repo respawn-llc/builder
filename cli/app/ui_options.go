@@ -190,6 +190,12 @@ func WithUIInitialInput(text string) UIOption {
 	}
 }
 
+func WithUIInitialRecoveryBuffers(buffers []serverapi.SessionDraftRecoveryBuffer) UIOption {
+	return func(m *uiModel) {
+		m.restoreSessionDraftRecoveryBuffers(buffers)
+	}
+}
+
 func WithUISessionName(name string) UIOption {
 	return func(m *uiModel) {
 		m.sessionName = strings.TrimSpace(name)

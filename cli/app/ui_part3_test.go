@@ -550,7 +550,7 @@ func TestPromptHistoryBellWritesRawTerminalBell(t *testing.T) {
 
 func TestInterruptedQueuedPromptDoesNotEnterLocalHistoryBeforeFlush(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "queued later"
 
@@ -649,7 +649,8 @@ func TestCtrlCWhileSubmitRestoresQueuedDraft(t *testing.T) {
 	if !updated.isBusy() || !updated.hasPendingInterrupt() {
 		t.Fatal("expected ctrl+c to wait for server interrupted run state")
 	}
-	updated = applyInterruptedRunStateForTest(t, updated)
+	updated.activeSubmit.operationRef = clientui.RuntimeOperationRef{}
+	updated = applyIdleRuntimeActivityForTest(t, updated)
 	if updated.isBusy() {
 		t.Fatal("expected busy=false after ctrl+c during submit")
 	}
@@ -669,7 +670,7 @@ func TestCtrlCWhileGoalRunWaitsForInterruptedRunStateBeforeCleanup(t *testing.T)
 		Goal: &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusActive},
 	}}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
-	m.setGoalRun(true)
+	m.setRuntimeGoalRunForTest(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("queued while goal runs")
 
@@ -708,11 +709,188 @@ func TestCtrlCWhileGoalRunWaitsForInterruptedRunStateBeforeCleanup(t *testing.T)
 	}
 }
 
+func TestCtrlCWhileGoalRunCleansUpFromAuthoritativeIdleActivity(t *testing.T) {
+	client := &runtimeControlFakeClient{status: clientui.RuntimeStatus{
+		Goal: &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusActive},
+	}}
+	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m.setRuntimeGoalRunForTest(true)
+	m.activity = uiActivityRunning
+	m.queued = queuedInputsForTest("queued while goal runs")
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		if typed, ok := msg.(runtimeControlDoneMsg); ok {
+			next, _ = updated.Update(typed)
+			updated = next.(*uiModel)
+		}
+	}
+	if !updated.isBusy() || !updated.hasPendingInterrupt() {
+		t.Fatalf("expected pending interrupt setup, busy=%t pending=%t", updated.isBusy(), updated.hasPendingInterrupt())
+	}
+
+	updated = applyIdleRuntimeActivityForTest(t, updated)
+	if updated.isBusy() || updated.hasPendingInterrupt() {
+		t.Fatalf("authoritative idle activity must unblock CLI, busy=%t pending=%t", updated.isBusy(), updated.hasPendingInterrupt())
+	}
+	if updated.input != "queued while goal runs" || len(updated.queued) != 0 {
+		t.Fatalf("expected queued goal draft restored into input, input=%q queue=%+v", updated.input, updated.queued)
+	}
+}
+
+func TestBUI146GoalInterruptMissedTerminalRunStateLeavesSecondCtrlCExitPath(t *testing.T) {
+	client := &runtimeControlFakeClient{status: clientui.RuntimeStatus{
+		Goal: &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusActive},
+	}}
+	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m.setRuntimeGoalRunForTest(true)
+	m.activity = uiActivityRunning
+	m.queued = queuedInputsForTest("queued while goal runs")
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		if typed, ok := msg.(runtimeControlDoneMsg); ok {
+			next, _ = updated.Update(typed)
+			updated = next.(*uiModel)
+		}
+	}
+	if !updated.isBusy() || !updated.hasPendingInterrupt() {
+		t.Fatalf("reproduction setup requires pending/busy after interrupt ack without terminal event, busy=%t pending=%t", updated.isBusy(), updated.hasPendingInterrupt())
+	}
+
+	next, quitCmd := updated.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	updated = next.(*uiModel)
+	if quitCmd == nil {
+		t.Fatal("second Ctrl+C during pending interrupt must quit locally")
+	}
+	if updated.exitAction != UIActionExit {
+		t.Fatalf("exit action = %q, want %q", updated.exitAction, UIActionExit)
+	}
+	if !updated.forcedLocalExit {
+		t.Fatal("second Ctrl+C during pending interrupt must mark forced local exit")
+	}
+}
+
+func TestCtrlCWhileSubmitDispatchedBeforeRuntimeActivityDoesNotExit(t *testing.T) {
+	client := &runtimeControlFakeClient{}
+	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m.activeSubmit = activeSubmitState{token: 1, text: "say hi", restoreOnInterrupt: true}
+	m.activity = uiActivityIdle
+	m.setRuntimeActivityBusyForTest(false)
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	updated := next.(*uiModel)
+	if updated.exitAction == UIActionExit {
+		t.Fatal("first ctrl+c during pre-active dispatch exited instead of interrupting")
+	}
+	if !updated.hasPendingInterrupt() {
+		t.Fatal("expected ctrl+c during pre-active dispatch to mark pending interrupt")
+	}
+	_ = collectCmdMessages(t, cmd)
+	if client.interruptCalls != 1 {
+		t.Fatalf("expected transitional untargeted interrupt call, got %d", client.interruptCalls)
+	}
+
+	next, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	updated = next.(*uiModel)
+	if updated.exitAction != UIActionExit || !updated.forcedLocalExit {
+		t.Fatalf("second ctrl+c should force local exit, exit=%q forced=%t", updated.exitAction, updated.forcedLocalExit)
+	}
+	if cmd == nil {
+		t.Fatal("expected second ctrl+c to quit")
+	}
+}
+
+func TestPreActiveCtrlCRawTerminalCleansOnlyAfterActiveTokenBinds(t *testing.T) {
+	client := &runtimeControlFakeClient{}
+	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m.activeSubmit = activeSubmitState{token: 1, text: "say hi", restoreOnInterrupt: true}
+	m.queued = queuedInputsForTest("queued while pre-active")
+	m.activity = uiActivityIdle
+	m.setRuntimeActivityBusyForTest(false)
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	updated := next.(*uiModel)
+	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{
+		Kind:   clientui.EventRunStateChanged,
+		StepID: "step-1",
+		RunState: &clientui.RunState{
+			RunID:     "run-1",
+			Status:    clientui.RunStatusInterrupted,
+			Lifecycle: clientui.IdleRunLifecycle(),
+		},
+	}})
+	updated = next.(*uiModel)
+	if !updated.hasPendingInterrupt() || updated.input != "" || len(updated.queued) != 1 {
+		t.Fatalf("raw terminal before active token bind must be diagnostic, pending=%t input=%q queue=%+v", updated.hasPendingInterrupt(), updated.input, updated.queued)
+	}
+
+	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
+		ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+		RunID:      "run-1",
+		StepID:     "step-1",
+	})
+	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{
+		Kind:             clientui.EventRuntimeActivityChanged,
+		ReadModelVersion: nextRuntimeReadModelVersionForTest(updated),
+		RuntimeActivity:  &activity,
+	}})
+	updated = next.(*uiModel)
+	if updated.interruptRunID != "run-1" || updated.interruptStepID != "step-1" {
+		t.Fatalf("pre-active interrupt token was not bound to active run, run=%q step=%q", updated.interruptRunID, updated.interruptStepID)
+	}
+
+	updated = applyIdleRuntimeActivityForTest(t, updated)
+	if updated.hasPendingInterrupt() || updated.input != "say hi\n\nqueued while pre-active" || len(updated.queued) != 0 {
+		t.Fatalf("authoritative idle activity after token bind should cleanup, pending=%t input=%q queue=%+v", updated.hasPendingInterrupt(), updated.input, updated.queued)
+	}
+}
+
+func TestPendingInterruptRawTerminalMissingActiveTokenIsDiagnosticOnly(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	m.engine = &runtimeControlFakeClient{}
+	m.queued = queuedInputsForTest("queued while active")
+
+	updated := applyRunningRuntimeActivityForTest(t, m, "run-1", "step-1")
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	updated = next.(*uiModel)
+
+	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{
+		Kind:   clientui.EventRunStateChanged,
+		StepID: "",
+		RunState: &clientui.RunState{
+			RunID:     "run-1",
+			Status:    clientui.RunStatusInterrupted,
+			Lifecycle: clientui.IdleRunLifecycle(),
+		},
+	}})
+	updated = next.(*uiModel)
+	if !updated.hasPendingInterrupt() || updated.input != "" || len(updated.queued) != 1 {
+		t.Fatalf("missing-step raw terminal must be diagnostic, pending=%t input=%q queue=%+v", updated.hasPendingInterrupt(), updated.input, updated.queued)
+	}
+
+	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{
+		Kind:   clientui.EventRunStateChanged,
+		StepID: "step-1",
+		RunState: &clientui.RunState{
+			RunID:     "",
+			Status:    clientui.RunStatusInterrupted,
+			Lifecycle: clientui.IdleRunLifecycle(),
+		},
+	}})
+	updated = next.(*uiModel)
+	if !updated.hasPendingInterrupt() || updated.input != "" || len(updated.queued) != 1 {
+		t.Fatalf("missing-run raw terminal must be diagnostic, pending=%t input=%q queue=%+v", updated.hasPendingInterrupt(), updated.input, updated.queued)
+	}
+}
+
 func TestCtrlCInterruptControlErrorKeepsPendingCleanupForLaterRunState(t *testing.T) {
 	client := &runtimeControlFakeClient{interruptErr: errors.New("interrupt transport failed")}
 	m := newProjectedStaticUIModel()
 	m.engine = client
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.queued = queuedInputsForTest("queued after delayed interrupt")
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -873,7 +1051,7 @@ func TestApprovalAskTabInCommentaryDoesNotReturnToPicker(t *testing.T) {
 func TestApprovalAskTabCommentaryUsesCurrentSelection(t *testing.T) {
 	_, eng := newAppRuntimeEngine(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
 	m := newProjectedEngineUIModel(eng)
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	reply := make(chan askReply, 1)
 	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionAllowSession, Label: "Allow for this session"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
 
@@ -943,7 +1121,7 @@ func TestApprovalAskPickerSubmitIgnoresPendingCommentaryDraft(t *testing.T) {
 
 func TestBusyInputRemainsEditableUntilSubmitLock(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.input = "seed"
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})

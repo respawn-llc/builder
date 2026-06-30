@@ -251,6 +251,7 @@ func (g *Gateway) cleanupConnectionRuntimes(state *connectionState) {
 			SessionID:       sessionID,
 			OnlyIfIdle:      true,
 			DropOwner:       true,
+			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
 			OwnerID:         ownerID,
 		})
 		cancel()

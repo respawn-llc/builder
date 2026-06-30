@@ -78,10 +78,18 @@ func (e *Engine) SetGoalStatus(status session.GoalStatus, actor session.GoalActo
 }
 
 func (e *Engine) setGoalStatusForStep(stepID string, status session.GoalStatus, actor session.GoalActor) (session.GoalState, error) {
+	return e.setGoalStatusForStepWithGoalLoopAdmission(stepID, status, actor, true)
+}
+
+func (e *Engine) SetGoalStatusWithoutGoalLoopStart(status session.GoalStatus, actor session.GoalActor) (session.GoalState, error) {
+	return e.setGoalStatusForStepWithGoalLoopAdmission("", status, actor, false)
+}
+
+func (e *Engine) setGoalStatusForStepWithGoalLoopAdmission(stepID string, status session.GoalStatus, actor session.GoalActor, requireGoalLoopStart bool) (session.GoalState, error) {
 	if e == nil || e.store == nil {
 		return session.GoalState{}, fmt.Errorf("runtime engine is required")
 	}
-	if status == session.GoalStatusActive {
+	if status == session.GoalStatusActive && requireGoalLoopStart {
 		if err := e.RequireGoalLoopStartAllowed(); err != nil {
 			return session.GoalState{}, err
 		}
@@ -136,8 +144,10 @@ func (e *Engine) queueGoalSetForStep(stepID string, objective string, actor sess
 		if actor == session.GoalActorAgent && current != nil && current.Status != session.GoalStatusComplete {
 			return session.GoalState{}, session.GoalAgentOverwriteBlockedError{Goal: *current}
 		}
-		if err := e.RequireGoalLoopStartAllowed(); err != nil {
-			return session.GoalState{}, err
+		if !e.workflowRunActive() {
+			if err := e.RequireGoalLoopStartAllowed(); err != nil {
+				return session.GoalState{}, err
+			}
 		}
 		now := time.Now().UTC()
 		return session.GoalState{Objective: objective, Status: session.GoalStatusActive, CreatedAt: now, UpdatedAt: now}, nil
@@ -164,7 +174,7 @@ func (e *Engine) queueGoalStatusForStep(stepID string, status session.GoalStatus
 	if e == nil || e.store == nil {
 		return session.GoalState{}, false, fmt.Errorf("runtime engine is required")
 	}
-	if status == session.GoalStatusActive {
+	if status == session.GoalStatusActive && !e.workflowRunActive() {
 		if err := e.RequireGoalLoopStartAllowed(); err != nil {
 			return session.GoalState{}, false, err
 		}
@@ -337,13 +347,15 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 		if _, err := e.setGoalForStep(stepID, mutation.objective, mutation.actor); err != nil {
 			return err
 		}
-		e.deferGoalLoopStart()
+		if !e.workflowRunActive() {
+			e.deferGoalLoopStart()
+		}
 		return nil
 	case activeStepGoalMutationStatus:
-		if _, err := e.setGoalStatusForStep(stepID, mutation.status, mutation.actor); err != nil {
+		if _, err := e.setGoalStatusForStepWithGoalLoopAdmission(stepID, mutation.status, mutation.actor, !e.workflowRunActive()); err != nil {
 			return err
 		}
-		if mutation.status == session.GoalStatusActive {
+		if mutation.status == session.GoalStatusActive && !e.workflowRunActive() {
 			e.deferGoalLoopStart()
 		}
 		return nil
@@ -447,6 +459,18 @@ func (e *Engine) deferGoalLoopStart() {
 	e.activeStepGoalMutationsMu.Unlock()
 }
 
+func (e *Engine) resumeSuspendedGoalAfterSuccessfulUserTurn() {
+	if e == nil || !e.goalActive() {
+		return
+	}
+	state := e.goalLoopState()
+	if !state.Suspended() {
+		return
+	}
+	state.Resume()
+	e.deferGoalLoopStart()
+}
+
 func (e *Engine) startPendingGoalLoop() error {
 	if e == nil {
 		return nil
@@ -521,7 +545,7 @@ func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool)
 
 func (e *Engine) runGoalTurn(ctx context.Context, appendNudge bool) (assistant llm.Message, err error) {
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, PersistRunLifecycle: true, GoalLoop: true}, func(stepCtx context.Context, stepID string) error {
+	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindGoalLoop}, func(stepCtx context.Context, stepID string) error {
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}

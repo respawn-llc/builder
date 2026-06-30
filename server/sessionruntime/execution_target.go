@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/server/registry"
+	"core/server/runtime"
 	"core/server/session"
 	"core/shared/clientui"
 )
@@ -40,7 +41,7 @@ func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, tar
 		if engine == nil {
 			return runtimeUnavailableErr(trimmedSessionID)
 		}
-		err = engine.RunWhenIdleBeforeQueuedUserWork(ctx, func() error {
+		err = engine.RunWhenIdleBeforeQueuedUserWork(ctx, runtime.ActiveKindRuntimeMaintenance, func() error {
 			if !claim.IsCurrent() {
 				return errors.Join(ErrAcquiredRuntimeOvertaken, fmt.Errorf("session %q runtime was replaced during execution target sync", trimmedSessionID))
 			}
