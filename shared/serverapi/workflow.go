@@ -502,7 +502,6 @@ type WorkflowEdgeUpdateResponse struct {
 type WorkflowLinkProjectRequest struct {
 	ProjectID     string                         `json:"project_id"`
 	WorkflowID    string                         `json:"workflow_id"`
-	Default       bool                           `json:"default"`
 	DefaultPolicy WorkflowProjectLinkDefaultMode `json:"default_policy,omitempty"`
 }
 
@@ -958,7 +957,6 @@ type WorkflowBoard struct {
 	HasHiddenDoneCards bool                    `json:"has_hidden_done_cards"`
 	NextPageToken      string                  `json:"next_page_token"`
 	GeneratedAtUnixMs  int64                   `json:"generated_at_unix_ms"`
-	Workflows          []WorkflowBoardWorkflow `json:"legacy_workflows,omitempty"`
 }
 
 type ProjectBoardProject struct {
@@ -1060,18 +1058,6 @@ type WorkflowProjectSubscription interface {
 type WorkflowSubscription interface {
 	Next(ctx context.Context) (WorkflowProjectEvent, error)
 	Close() error
-}
-
-type WorkflowBoardWorkflow struct {
-	Workflow WorkflowRecord        `json:"workflow"`
-	Nodes    []WorkflowBoardNode   `json:"nodes"`
-	Tasks    []WorkflowTaskSummary `json:"tasks"`
-}
-
-type WorkflowBoardNode struct {
-	Node             WorkflowNode          `json:"node"`
-	ActivePlacements []WorkflowPlacement   `json:"active_placements"`
-	Tasks            []WorkflowTaskSummary `json:"tasks"`
 }
 
 type WorkflowTaskGetRequest struct {

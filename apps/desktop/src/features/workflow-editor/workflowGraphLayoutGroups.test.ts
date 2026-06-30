@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowValidation } from "../../api";
 import type { WorkflowGraphEdge, WorkflowGraphNode, WorkflowGraphPoint } from "./workflowGraphLayout";
 import { layoutWorkflowGraph } from "./workflowGraphLayout";
-import { workflowGraphAbsoluteNodeRect, workflowGraphEndpointPoint } from "./workflowGraphLayoutTestHelpers";
+import {
+  workflowGraphAbsoluteNodeRect,
+  workflowGraphEndpointPoint,
+} from "../../test-support/workflow-editor/workflowGraphLayoutTestHelpers";
 
 describe("layoutWorkflowGraph node group bounds", () => {
   it("keeps unrelated nodes outside populated node group bounds", async () => {

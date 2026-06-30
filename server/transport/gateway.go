@@ -15,6 +15,7 @@ import (
 	"core/server/metadata"
 	rpccontract "core/shared/apicontract"
 	"core/shared/client"
+	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
@@ -125,6 +126,7 @@ func protocolSubscriptionMethodSet() map[string]struct{} {
 
 type connectionState struct {
 	handshakeDone         bool
+	noAuthAccepted        bool
 	attachedProject       string
 	attachedWorkspaceID   string
 	attachedWorkspaceRoot string
@@ -265,7 +267,7 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if req.Method != protocol.MethodHandshake && !state.handshakeDone {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods")
 	}
-	if err := newRoutePolicyExecutor(g).requireAuth(ctx, req.Method); err != nil {
+	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return responseForError(req.ID, err)
 	}
 	handler, ok := gatewayUnaryHandlers[req.Method]
@@ -335,6 +337,9 @@ func protocolError(err error) (int, string) {
 			message = canceledByClientMessage
 		}
 		return protocol.ErrCodeRequestCanceled, message
+	}
+	if errors.Is(err, llmerrors.ErrModelStreamStalled) {
+		return protocol.ErrCodeModelStreamStalled, message
 	}
 	if errors.Is(err, serverapi.ErrStreamGap) {
 		return protocol.ErrCodeStreamGap, message

@@ -6,7 +6,7 @@ import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "../../api";
 import { initializeI18n } from "../../i18n/setup";
 import type { WorkflowEditorDraftController } from "./workflowEditorDraftBridgeCore";
 import { initializeWorkflowEditorDraft, workflowEditorDirtyState } from "./workflowEditorDraft";
-import { workflowDefinition } from "./workflowEditorGraphMutationFixtures";
+import { workflowDefinition } from "../../test-support/workflow-editor/workflowEditorGraphMutationFixtures";
 import { WorkflowDraftInspectorContent } from "./WorkflowDraftInspector";
 
 void initializeI18n();

@@ -29,7 +29,7 @@ func (registryRuntimeFakeClient) ProviderCapabilities(context.Context) (llm.Prov
 
 func registerReady(t *testing.T, r *RuntimeRegistry, sessionID string, engine *runtime.Engine) {
 	t.Helper()
-	claim, _, _ := r.AcquireRuntimeClaim(sessionID, "")
+	claim, _, _ := r.AcquireRuntimeClaim(sessionID, "test-owner")
 	if claim == nil {
 		t.Fatalf("AcquireRuntimeClaim(%q) returned nil claim", sessionID)
 	}
@@ -720,6 +720,23 @@ func TestRuntimeRegistryBeginGuardWaitsForBuild(t *testing.T) {
 	defer guard.Release()
 	if guard.Engine() != engine {
 		t.Fatal("guard must expose the freshly built engine")
+	}
+}
+
+func TestRuntimeClaimRejectsOwnerlessLeaseMutation(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := &runtime.Engine{}
+	claim, _, _ := registry.AcquireRuntimeClaim("session-1", "")
+	claim.Resolve(engine, nil, nil)
+
+	if claim.OwnerCount() != 0 {
+		t.Fatalf("owner count = %d, want no anonymous owner ref", claim.OwnerCount())
+	}
+	if outcome, err := claim.JoinAsOwner(" "); outcome != ClaimFailed || !errors.Is(err, ErrRuntimeOwnerIDRequired) {
+		t.Fatalf("JoinAsOwner empty = (%v, %v), want owner-id-required failure", outcome, err)
+	}
+	if decision, _ := claim.BeginRelease("", true, true); decision != RuntimeReleaseNotOwner {
+		t.Fatalf("BeginRelease empty owner = %v, want not-owner", decision)
 	}
 }
 

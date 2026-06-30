@@ -29,6 +29,7 @@ func ensureRemoteAuthReady(ctx context.Context, remote client.AuthBootstrapClien
 		return err
 	}
 	if status.AuthReady {
+		disableRemoteNoAuth(remote)
 		return nil
 	}
 	if interactor == nil {
@@ -38,6 +39,9 @@ func ensureRemoteAuthReady(ctx context.Context, remote client.AuthBootstrapClien
 		return nil
 	}
 	if interactive, ok := interactor.(*interactiveAuthInteractor); ok {
+		if status.NoAuthSelected {
+			return enableRemoteNoAuth(ctx, remote)
+		}
 		return interactive.completeRemoteAuthBootstrap(ctx, remote, settings, status, false)
 	}
 	apiKey := strings.TrimSpace(interactor.LookupEnv("OPENAI_API_KEY"))
@@ -54,6 +58,7 @@ func ensureRemoteAuthReady(ctx context.Context, remote client.AuthBootstrapClien
 	if !resp.AuthReady {
 		return serverapi.ErrServerAuthRequired
 	}
+	disableRemoteNoAuth(remote)
 	return nil
 }
 
@@ -83,12 +88,48 @@ func (i *interactiveAuthInteractor) completeRemoteAuthBootstrap(ctx context.Cont
 			req.FlowErr = err
 			continue
 		}
+		if completeReq.Mode == serverapi.AuthBootstrapModeNone && resp.NoAuthSelected {
+			if err := enableRemoteNoAuth(ctx, remote); err != nil {
+				return err
+			}
+			i.printAuthSection(req.Theme, "Server Auth Skipped", []string{lipgloss.NewStyle().Foreground(uiPalette(req.Theme).muted).Faint(true).Render("Kent will proceed without configured server auth.")})
+			return nil
+		}
 		if !resp.AuthReady {
 			req.FlowErr = serverapi.ErrServerAuthRequired
 			continue
 		}
+		disableRemoteNoAuth(remote)
 		i.printAuthSection(req.Theme, "Server Auth Ready", []string{lipgloss.NewStyle().Foreground(uiPalette(req.Theme).muted).Faint(true).Render("Kent configured auth on the server.")})
 		return nil
+	}
+}
+
+type remoteNoAuthAcknowledgementEnabler interface {
+	EnableNoAuthBootstrapAcknowledgement(context.Context) error
+}
+
+type remoteNoAuthAcknowledgementDisabler interface {
+	DisableNoAuthBootstrapAcknowledgement()
+}
+
+func enableRemoteNoAuth(ctx context.Context, remote client.AuthBootstrapClient) error {
+	if enabler, ok := remote.(remoteNoAuthAcknowledgementEnabler); ok {
+		return enabler.EnableNoAuthBootstrapAcknowledgement(ctx)
+	}
+	resp, err := remote.AcknowledgeNoAuth(ctx, serverapi.AuthAcknowledgeNoAuthRequest{})
+	if err != nil {
+		return err
+	}
+	if resp.NoAuthSelected || resp.AuthReady {
+		return nil
+	}
+	return serverapi.ErrServerAuthRequired
+}
+
+func disableRemoteNoAuth(remote client.AuthBootstrapClient) {
+	if disabler, ok := remote.(remoteNoAuthAcknowledgementDisabler); ok {
+		disabler.DisableNoAuthBootstrapAcknowledgement()
 	}
 }
 

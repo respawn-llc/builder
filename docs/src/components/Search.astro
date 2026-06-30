@@ -1,0 +1,226 @@
+---
+import '@docsearch/css/dist/modal.css';
+import type docsearch from '@docsearch/js';
+
+type DocSearchTranslationProps = Pick<
+  Parameters<typeof docsearch>[0],
+  'placeholder' | 'translations'
+>;
+
+const pick = (keyStart: string) =>
+  Object.fromEntries(
+    Object.entries(Astro.locals.t.all())
+      .filter(([key]) => key.startsWith(keyStart))
+      .map(([key, value]) => [key.replace(keyStart, ''), value]),
+  );
+
+const docsearchTranslations: DocSearchTranslationProps = {
+  placeholder: Astro.locals.t('search.label'),
+  translations: {
+    button: {
+      buttonText: Astro.locals.t('search.label'),
+      buttonAriaLabel: Astro.locals.t('search.label'),
+    },
+    modal: {
+      searchBox: pick('docsearch.searchBox.'),
+      startScreen: pick('docsearch.startScreen.'),
+      errorScreen: pick('docsearch.errorScreen.'),
+      footer: pick('docsearch.footer.'),
+      noResultsScreen: pick('docsearch.noResultsScreen.'),
+    },
+  },
+};
+---
+
+<sl-doc-search data-translations={JSON.stringify(docsearchTranslations)}>
+  <button
+    type="button"
+    class="DocSearch DocSearch-Button"
+    aria-label={Astro.locals.t('search.label')}
+  >
+    <span class="DocSearch-Button-Container">
+      <svg width="20" height="20" class="DocSearch-Search-Icon" viewBox="0 0 20 20">
+        <path
+          d="M14.386 14.386l4.0877 4.0877-4.0877-4.0877c-2.9418 2.9419-7.7115 2.9419-10.6533 0-2.9419-2.9418-2.9419-7.7115 0-10.6533 2.9418-2.9419 7.7115-2.9419 10.6533 0 2.9419 2.9418 2.9419 7.7115 0 10.6533z"
+          stroke="currentColor"
+          fill="none"
+          fill-rule="evenodd"
+          stroke-linecap="round"
+          stroke-linejoin="round"></path>
+      </svg>
+      <span class="DocSearch-Button-Placeholder">{Astro.locals.t('search.label')}</span>
+    </span>
+    <span class="DocSearch-Button-Keys"></span>
+  </button>
+</sl-doc-search>
+
+<style is:global>
+  :root {
+    --docsearch-primary-color: var(--sl-color-text-accent);
+    --docsearch-text-color: var(--sl-color-text);
+    --docsearch-spacing: 12px;
+    --docsearch-icon-stroke-width: 1.4;
+    --docsearch-highlight-color: var(--docsearch-primary-color);
+    --docsearch-muted-color: var(--sl-color-gray-3);
+    --docsearch-container-background: var(--sl-color-backdrop-overlay);
+    --docsearch-modal-width: 560px;
+    --docsearch-modal-height: 600px;
+    --docsearch-modal-background: var(--sl-color-gray-6);
+    --docsearch-modal-shadow: var(--sl-shadow-lg);
+    --docsearch-searchbox-height: 56px;
+    --docsearch-searchbox-background: var(--sl-color-gray-7, var(--sl-color-gray-6));
+    --docsearch-searchbox-focus-background: var(--sl-color-black);
+    --docsearch-searchbox-shadow: inset 0 0 0 1px var(--docsearch-primary-color);
+    --docsearch-hit-height: 56px;
+    --docsearch-hit-color: var(--sl-color-white);
+    --docsearch-hit-active-color: var(--sl-color-black);
+    --docsearch-hit-background: var(--sl-color-black);
+    --docsearch-key-gradient: linear-gradient(
+      var(--sl-color-bg-inline-code) 0%,
+      var(--sl-color-bg-inline-code) 100%
+    );
+    --docsearch-footer-height: 44px;
+    --docsearch-footer-background: var(--sl-color-black);
+    --docsearch-footer-shadow: 0 -1px 0 0 var(--sl-color-hairline-light);
+  }
+
+  .DocSearch-Modal {
+    border: 1px solid var(--sl-color-hairline-light);
+  }
+
+  .DocSearch-Logo svg * {
+    fill: var(--docsearch-muted-color);
+  }
+
+  .DocSearch-Button {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 0;
+    background-color: transparent;
+    color: var(--sl-color-gray-1);
+    cursor: pointer;
+    height: 2.5rem;
+    font-size: var(--sl-text-xl);
+  }
+
+  .DocSearch-Button-Container {
+    display: contents;
+  }
+
+  .DocSearch-Search-Icon {
+    width: 0.875em;
+    height: 0.875em;
+    stroke-width: 0.125rem;
+  }
+
+  .DocSearch-Button-Placeholder,
+  .DocSearch-Button-Keys,
+  .DocSearch-Button-Key {
+    display: none;
+  }
+
+  @media (min-width: 50rem) {
+    sl-doc-search {
+      width: 100%;
+    }
+
+    .DocSearch-Button {
+      border: 1px solid var(--sl-color-gray-5);
+      border-radius: 0.5rem;
+      padding-inline-start: 0.75rem;
+      padding-inline-end: 1rem;
+      background-color: var(--sl-color-black);
+      color: var(--sl-color-gray-2);
+      font-size: var(--sl-text-sm);
+      width: 100%;
+      max-width: 22rem;
+    }
+
+    .DocSearch-Button:hover {
+      border-color: var(--sl-color-gray-2);
+      color: var(--sl-color-white);
+    }
+
+    .DocSearch-Button-Placeholder,
+    .DocSearch-Button-Keys {
+      display: flex;
+    }
+
+    .DocSearch-Button-Keys {
+      margin-inline-start: auto;
+    }
+
+    .DocSearch-Button-Keys::before {
+      content: '/';
+      display: grid;
+      place-items: center;
+      width: 1.4em;
+      height: 1.4em;
+      border: 1px solid var(--sl-color-gray-5);
+      border-radius: 0.25rem;
+      font-size: 0.75em;
+    }
+  }
+</style>
+
+<script>
+  import config from 'virtual:starlight/docsearch-config';
+
+  class StarlightDocSearch extends HTMLElement {
+    constructor() {
+      super();
+      this.docsearchMounted = false;
+      this.cleanupDocSearch = undefined;
+    }
+
+    async connectedCallback() {
+      if (this.docsearchMounted) {
+        return;
+      }
+
+      this.docsearchMounted = true;
+      this.dataset.docsearchMounted = 'true';
+      const [{ default: docsearch }, { render }] = await Promise.all([
+        import('@docsearch/js'),
+        import('preact'),
+      ]);
+
+      if (!this.isConnected) {
+        this.docsearchMounted = false;
+        delete this.dataset.docsearchMounted;
+        return;
+      }
+
+      for (const container of document.querySelectorAll('.DocSearch-Container')) {
+        container.remove();
+      }
+
+      const options = { ...config, container: this };
+      try {
+        const translations = JSON.parse(this.dataset.translations || '{}');
+        Object.assign(options, translations);
+      } catch (error) {
+        console.warn('Failed to parse DocSearch translations; using default translations.', error);
+      }
+      docsearch(options);
+      this.cleanupDocSearch = () => {
+        render(null, this);
+        for (const container of document.querySelectorAll('.DocSearch-Container')) {
+          container.remove();
+        }
+        this.docsearchMounted = false;
+        delete this.dataset.docsearchMounted;
+      };
+    }
+
+    disconnectedCallback() {
+      this.cleanupDocSearch?.();
+      this.cleanupDocSearch = undefined;
+    }
+  }
+
+  if (!customElements.get('sl-doc-search')) {
+    customElements.define('sl-doc-search', StarlightDocSearch);
+  }
+</script>

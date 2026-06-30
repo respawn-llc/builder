@@ -80,11 +80,11 @@ func (e gatewayRouteError) Error() string {
 	return e.message
 }
 
-func (e routePolicyExecutor) requireAuth(ctx context.Context, method string) error {
+func (e routePolicyExecutor) requireAuth(ctx context.Context, state *connectionState, method string) error {
 	if !e.requiresServerAuth(method) {
 		return nil
 	}
-	ready, err := e.serverAuthReady(ctx)
+	ready, err := e.serverAuthReady(ctx, state)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func (e routePolicyExecutor) requiresServerAuth(method string) bool {
 	}
 }
 
-func (e routePolicyExecutor) serverAuthReady(ctx context.Context) (bool, error) {
+func (e routePolicyExecutor) serverAuthReady(ctx context.Context, connection *connectionState) (bool, error) {
 	g := e.gateway
 	if g == nil || g.deps == nil {
 		return false, nil
@@ -126,7 +126,17 @@ func (e routePolicyExecutor) serverAuthReady(ctx context.Context) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	return auth.EvaluateStartupGate(state).Ready, nil
+	if auth.EvaluateStartupGate(state).Ready {
+		return true, nil
+	}
+	if connection != nil && connection.noAuthAccepted {
+		stored, err := g.deps.AuthManager().StoredState(ctx)
+		if err != nil {
+			return false, err
+		}
+		return stored.IsNoAuthSelected(), nil
+	}
+	return false, nil
 }
 
 func decodeRouteParams(route rpccontract.Route, raw json.RawMessage) (any, error) {

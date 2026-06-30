@@ -258,7 +258,7 @@ func newOpenAIProviderClient(opts ProviderClientOptions) (Client, error) {
 		transport.ProviderCapabilitiesOverride = &caps
 	}
 	transport.Store = opts.Store
-	return NewOpenAIClient(transport), nil
+	return newIdleWatchdogClient(NewOpenAIClient(transport), transport.Client.Timeout), nil
 }
 
 func allowsAnonymousOpenAIBaseURL(baseURL string) bool {

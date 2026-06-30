@@ -409,6 +409,28 @@ func newFakeResponsesServer(t *testing.T, assistantReplies []string) (*httptest.
 	return server, &hits
 }
 
+func newNoAuthFakeResponsesServer(t *testing.T, assistantReplies []string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if handleTestOpenAIInputTokenCount(w, r, 11) {
+			return
+		}
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		if got := strings.TrimSpace(r.Header.Get("Authorization")); got != "" {
+			t.Fatalf("unexpected authorization header %q", got)
+		}
+		index := int(hits.Add(1)) - 1
+		if index >= len(assistantReplies) {
+			t.Fatalf("unexpected response request index %d", index)
+		}
+		writeTestOpenAICompletedResponseStream(w, assistantReplies[index], 11, 7)
+	}))
+	return server, &hits
+}
+
 func openAuthoritativeWorkspaceSessionStore(t *testing.T, workspaceRoot, openAIBaseURL, sessionID string) *session.Store {
 	t.Helper()
 	loadOpts := config.LoadOptions{}

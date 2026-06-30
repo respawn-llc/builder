@@ -6,9 +6,6 @@ import (
 	"time"
 
 	"core/server/registry"
-	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 type runtimeIdleTimer struct {
@@ -132,12 +129,10 @@ func (s *Service) runScheduledIdleUnload(sessionID string, generation uint64) {
 	if active, err := s.runtimeHasActiveRun(context.Background(), trimmedSessionID); err != nil || active {
 		return
 	}
-	_, _ = s.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       trimmedSessionID,
-		OnlyIfIdle:      true,
-		DropOwner:       true,
-	})
+	closed, err := claim.CloseIfIdle(context.Background(), 0, s.drainBeforeClose(claim))
+	if err == nil && closed {
+		s.clearScheduledIdleUnload(trimmedSessionID)
+	}
 }
 
 func (s *Service) runtimeHasSubscribers(sessionID string) bool {

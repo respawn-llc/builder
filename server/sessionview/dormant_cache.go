@@ -173,10 +173,5 @@ func (e dormantTranscriptCacheEntry) mainView(meta session.Meta, freshness clien
 }
 
 func (e dormantTranscriptCacheEntry) newestSegmentPage(meta session.Meta, freshness clientui.ConversationFreshness) clientui.TranscriptPage {
-	page := runtimeview.TranscriptPageFromSegment(meta.SessionID, meta.Name, freshness, meta.LastSequence, e.newestSegment)
-	if !page.HasMoreAbove {
-		page.Offset = 0
-		page.TotalEntries = len(page.Entries)
-	}
-	return page
+	return runtimeview.TranscriptPageFromSegment(meta.SessionID, meta.Name, freshness, meta.LastSequence, e.newestSegment)
 }

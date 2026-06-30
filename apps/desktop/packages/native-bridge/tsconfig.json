@@ -15,6 +15,7 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
     "noUncheckedIndexedAccess": true,
+    "noUncheckedSideEffectImports": true,
     "skipLibCheck": false,
     "isolatedModules": true,
     "verbatimModuleSyntax": true

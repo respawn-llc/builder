@@ -154,7 +154,7 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 
 	service := responses.NewResponseService(
 		option.WithBaseURL(t.serviceBaseURL(mode)),
-		option.WithHTTPClient(t.Client),
+		option.WithHTTPClient(t.streamingHTTPClient()),
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
@@ -166,15 +166,36 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 
 	accumulator := newResponseStreamAccumulator(callbacks, windowTokens)
 	for stream.Next() {
+		if callbacks.OnStreamActivity != nil {
+			callbacks.OnStreamActivity()
+		}
 		accumulator.Consume(stream.Current())
 		if err := accumulator.Err(providerCaps.ProviderID); err != nil {
 			return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 		}
 	}
 	if err := stream.Err(); err != nil {
+		if accumulator.hasCompleted() && !callerCanceledStreamRead(ctx) {
+			return accumulator.Response(), nil
+		}
 		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 	}
 	return accumulator.Response(), nil
+}
+
+func callerCanceledStreamRead(ctx context.Context) bool {
+	if ctx.Err() == nil {
+		return false
+	}
+	return !errors.Is(context.Cause(ctx), ErrModelStreamStalled)
+}
+
+func (t *HTTPTransport) streamingHTTPClient() *http.Client {
+	transport := t.Client.Transport
+	if transport == nil {
+		transport = sharedHTTPTransport
+	}
+	return &http.Client{Transport: transport}
 }
 
 func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionRequest) (OpenAICompactionResponse, error) {

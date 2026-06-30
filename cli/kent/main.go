@@ -17,6 +17,7 @@ import (
 	"core/cli/app"
 	"core/prompts"
 	"core/shared/config"
+	"core/shared/llmerrors"
 	"core/shared/sessionenv"
 	"golang.org/x/term"
 )
@@ -342,12 +343,12 @@ func runSubcommand(args []string) int {
 				DurationMS:  result.Duration.Milliseconds(),
 				Error: &runJSONError{
 					Code:    code,
-					Message: runErr.Error(),
+					Message: runErrorMessage(runErr),
 				},
 			})
 		} else {
 			emitWarnings(os.Stderr, result.Warnings)
-			fmt.Fprintln(os.Stderr, runErr)
+			fmt.Fprintln(os.Stderr, runErrorMessage(runErr))
 			if continueHint != "" {
 				fmt.Fprintln(os.Stderr)
 				fmt.Fprintln(os.Stderr, continueHint)
@@ -499,6 +500,13 @@ func parseRunProgressMode(raw string) (runProgressMode, error) {
 	default:
 		return "", fmt.Errorf("invalid --progress-mode value %q", raw)
 	}
+}
+
+func runErrorMessage(err error) string {
+	if message := llmerrors.UserFacingError(err); message != "" {
+		return message
+	}
+	return err.Error()
 }
 
 func runErrorCode(err error) string {

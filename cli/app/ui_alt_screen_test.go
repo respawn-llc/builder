@@ -297,7 +297,6 @@ func TestReturningFromDetailSyncsCommittedSuffixTailIntoOngoingView(t *testing.T
 		Kind:                       clientui.EventAssistantMessage,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         2,
-		CommittedEntryCount:        2,
 		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "answer"}},

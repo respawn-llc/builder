@@ -35,7 +35,10 @@ func (m *uiModel) scheduleNativeResizeRehydrate(resized bool) tea.Cmd {
 	if !resized || m == nil || !m.nativeSurfaceConfigured() || m.termWidth <= 0 || m.termHeight <= 0 {
 		return nil
 	}
-	if strings.TrimSpace(m.view.OngoingStreamingText()) != "" || m.nativeSurface.AssistantStreaming() {
+	if m.nativeSurface.AssistantStreaming() {
+		return m.nativeSurfaceDropErrorCmd("resize active native assistant stream", errNativeAssistantStreamResized)
+	}
+	if strings.TrimSpace(m.view.OngoingStreamingText()) != "" {
 		m.nativeAssistantStreamIncomplete = true
 	}
 	m.nativeResizeRehydrateToken++

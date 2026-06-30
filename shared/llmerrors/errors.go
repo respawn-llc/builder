@@ -8,6 +8,8 @@ import (
 	"core/shared/auth"
 )
 
+var ErrModelStreamStalled = errors.New("model stream stalled")
+
 type APIStatusError struct {
 	StatusCode int
 	Body       string
@@ -202,6 +204,9 @@ func HasHTTPStatus(err error, statusCode int) bool {
 func UserFacingError(err error) string {
 	if err == nil {
 		return ""
+	}
+	if errors.Is(err, ErrModelStreamStalled) {
+		return "The model request stalled: no streaming activity within the timeout window (timeouts.model_request_seconds). The model may be overloaded; retry, or raise the timeout."
 	}
 	var providerSelectionErr *ProviderSelectionError
 	if errors.As(err, &providerSelectionErr) {

@@ -155,6 +155,11 @@
 - Startup auth failures and 401s surface as normal actionable UX.
 - Startup auth picker uses themed startup picker style and friendly titles with one-line explanations.
 - Picker exposes browser OAuth, device-code OAuth, `No auth`, and env-key adoption when available.
+- Choosing `No auth` persists the no-auth sentinel, clears active server auth, and disables env-key fallback. The sentinel does not satisfy raw startup auth readiness.
+- Interactive remote clients may acknowledge a persisted `No auth` choice per JSON-RPC connection to pass startup-owned `AuthServer` route checks while the sentinel remains selected.
+- Recurring no-auth acknowledgements are non-mutating. They must not clear real API-key or OAuth auth, and successful real-auth configuration revokes any client-side no-auth acknowledgement policy.
+- Remote client rebinding preserves and re-acknowledges the no-auth connection policy before the rebound client uses startup-owned server routes.
+- Headless clients, fresh external clients, and remote connections that have not explicitly acknowledged no-auth remain blocked when Kent-managed OpenAI auth is required and no real auth is configured.
 - Browser OAuth uses a hybrid callback flow accepting local callback or pasted callback URL/code.
 - OAuth issuer routing is not configurable in production. `KENT_OAUTH_ISSUER` is intentionally unsupported.
 - Interactive startup treats `OPENAI_API_KEY` as chooser-backed auth source, not unconditional override.

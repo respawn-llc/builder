@@ -231,6 +231,73 @@ func TestNormalBufferPreparationPrecedesFirstNativeWrite(t *testing.T) {
 	}
 }
 
+func TestNormalBufferInvalidationForcesUnchangedLiveAreaRepaint(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithNormalBufferPreparation(),
+	)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
+
+	if err := liveArea.Render(nativeLiveAreaFrame("live")); err != nil {
+		t.Fatalf("render returned error: %v", err)
+	}
+	out.Reset()
+	InvalidateNormalBufferPreparation(buffer)
+	if err := liveArea.Render(nativeLiveAreaFrame("live")); err != nil {
+		t.Fatalf("unchanged render after invalidation returned error: %v", err)
+	}
+
+	got := out.String()
+	prepIndex := strings.Index(got, normalBufferPreparationSequence())
+	eraseIndex := strings.Index(got, liveAreaEraseSequence(1))
+	liveIndex := strings.Index(got, "live")
+	hideIndex := strings.Index(got, xansi.HideCursor)
+	if prepIndex < 0 || eraseIndex < 0 || liveIndex < 0 || hideIndex < 0 || !(prepIndex < eraseIndex && eraseIndex < liveIndex && liveIndex < hideIndex) {
+		t.Fatalf("repaint output order is invalid: %q", got)
+	}
+}
+
+func TestHoldoffFlushPreparesBeforePendingLiveFrameRender(t *testing.T) {
+	var out bytes.Buffer
+	available := false
+	buffer := NewOngoingScrollbackBufferImpl(
+		context.Background(),
+		80,
+		24,
+		&out,
+		nil,
+		WithNormalBufferAvailability(func() bool { return available }),
+		WithNormalBufferPreparation(),
+	)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 24)
+
+	if err := liveArea.Render(nativeLiveAreaFrame("held live")); err != nil {
+		t.Fatalf("held render returned error: %v", err)
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("held render wrote while normal buffer unavailable: %q", got)
+	}
+	available = true
+	if err := buffer.flushHoldoff(); err != nil {
+		t.Fatalf("flush holdoff returned error: %v", err)
+	}
+
+	got := out.String()
+	prepIndex := strings.Index(got, normalBufferPreparationSequence())
+	liveIndex := strings.Index(got, "held live")
+	hideIndex := strings.Index(got, xansi.HideCursor)
+	if prepIndex < 0 || liveIndex < 0 || hideIndex < 0 || !(prepIndex < liveIndex && liveIndex < hideIndex) {
+		t.Fatalf("held live repaint output order is invalid: %q", got)
+	}
+}
+
 func TestStableStreamingKeepsPartialAssistantContentInLiveTailUntilFinish(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)

@@ -22,7 +22,7 @@
 - Runtime/task state remains in Kanban and task detail. The editor edits workflow definitions, not live task execution.
 - The canvas renders start/backlog, agent, join, terminal/done, disconnected nodes, and node groups.
 - Join nodes are inspectable internal merge plumbing. Board/Kanban read models still omit join columns.
-- Board/Kanban column order is derived from workflow graph structure. Persisted node list order is not a board-order source; structurally ambiguous non-terminal sibling branches are ordered by node key, and reachable terminal columns sort after reachable non-terminal columns when graph precedence does not decide their order.
+- Board/Kanban column order is derived from workflow graph structure. Persisted node list order is not a board-order source; structurally ambiguous non-terminal sibling branches are ordered by node key, and reachable terminal columns sort after reachable non-terminal columns when graph precedence does not decide their order. Visible cycles from backward/rework transitions are ordered from their structural entry and graph-discovery order, so downstream review or gate nodes do not move before the upstream family that leads to them.
 - GUI-authored node groups are execution-shaped parallel groups. A saved node group contains branch nodes and one join; its fan-out is represented by one fan-out transition.
 - One-node node groups may exist only as unsaved invalid drafts while the operator is building the parallel group.
 - Agent nodes show name plus assignee role. Non-agent/no-role nodes have blank role line.

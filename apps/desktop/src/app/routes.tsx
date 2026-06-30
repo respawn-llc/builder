@@ -4,7 +4,6 @@ import { z } from "zod";
 import { createNativeDialogRoutes, workspaceUnlinkNativeDialogPath } from "./nativeDialogRoutes";
 import {
   HomeShellRoute,
-  LegacyWorkflowEditorRedirectRoute,
   ProjectRoute,
   RootRoute,
   TaskRoute,
@@ -59,14 +58,6 @@ const workflowEditorRoute = createRoute({
   component: WorkflowEditorShellRoute,
 });
 
-const legacyWorkflowEditorRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/projects/$projectId/workflows/$workflowId/editor",
-  validateSearch: (search: Record<string, unknown>) =>
-    projectSearchSchema.pick({ workflowId: true }).parse(search),
-  component: LegacyWorkflowEditorRedirectRoute,
-});
-
 const taskRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tasks/$taskId",
@@ -82,7 +73,6 @@ const routeTree = rootRoute.addChildren([
   projectRoute,
   workflowLibraryRoute,
   workflowEditorRoute,
-  legacyWorkflowEditorRoute,
   taskRoute,
   ...nativeDialogRoutes,
   workflowDeleteWindowRoute,

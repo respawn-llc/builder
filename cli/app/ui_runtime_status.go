@@ -264,6 +264,7 @@ func (m *uiModel) startupRuntimeTranscript() clientui.TranscriptPage {
 			suffix, err := suffixClient.RefreshCommittedTranscriptSuffix(m.startupCommittedTranscriptSuffixRequest())
 			if err == nil {
 				m.observeRuntimeRequestResult(nil)
+				m.applyCommittedTranscriptSuffixBounds(suffix)
 				return transcriptPageFromCommittedTranscriptSuffix(suffix)
 			}
 			m.observeRuntimeRequestResult(err)
@@ -278,6 +279,18 @@ func (m *uiModel) startupRuntimeTranscript() clientui.TranscriptPage {
 
 func (m *uiModel) startupCommittedTranscriptSuffixRequest() clientui.CommittedTranscriptSuffixRequest {
 	return clientui.CommittedTranscriptSuffixRequest{}
+}
+
+func (m *uiModel) applyCommittedTranscriptSuffixBounds(suffix clientui.CommittedTranscriptSuffix) {
+	if m == nil {
+		return
+	}
+	if suffix.CommittedEntryCount > 0 {
+		m.transcriptTotalEntries = max(m.transcriptTotalEntries, suffix.CommittedEntryCount)
+	}
+	if suffix.StartEntryCount > 0 {
+		m.transcriptBaseOffset = suffix.StartEntryCount
+	}
 }
 
 func (m *uiModel) refreshRuntimeTranscript() clientui.TranscriptPage {
@@ -362,8 +375,6 @@ func (m *uiModel) localRuntimeTranscript() clientui.TranscriptPage {
 		SessionName:           m.sessionName,
 		ConversationFreshness: m.conversationFreshness,
 		Revision:              m.transcriptRevision,
-		TotalEntries:          totalEntries,
-		Offset:                m.transcriptBaseOffset,
 		Entries:               entries,
 		Streaming:             m.view.OngoingStreamingText(),
 	}

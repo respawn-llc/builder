@@ -924,7 +924,7 @@ func TestDeleteWorktreeAllowsSessionAfterRuntimeRegistryCleanup(t *testing.T) {
 	updateServiceTestSessionTarget(t, env, otherSession.Meta().SessionID, env.binding.WorkspaceID, created.WorktreeID, ".")
 	runtimes := registry.NewRuntimeRegistry()
 	engine := &runtimepkg.Engine{}
-	claim, _, _ := runtimes.AcquireRuntimeClaim(otherSession.Meta().SessionID, "")
+	claim, _, _ := runtimes.AcquireRuntimeClaim(otherSession.Meta().SessionID, "test-owner")
 	claim.Resolve(engine, nil, nil)
 	env.service.active = runtimes
 	env.runtime.runningSessions = map[string]bool{otherSession.Meta().SessionID: true}

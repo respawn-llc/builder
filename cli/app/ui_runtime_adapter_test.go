@@ -118,7 +118,7 @@ func (c *startupTranscriptRuntimeClient) RefreshTranscript() (clientui.Transcrip
 func (c *startupTranscriptRuntimeClient) LoadTranscriptPage(req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
 	c.loadRequests = append(c.loadRequests, req)
 	page := c.page
-	if c.loadPage.SessionID != "" || c.loadPage.TotalEntries > 0 || len(c.loadPage.Entries) > 0 {
+	if c.loadPage.SessionID != "" || len(c.loadPage.Entries) > 0 {
 		page = c.loadPage
 	}
 	if page.SessionID == "" {
@@ -431,7 +431,6 @@ func TestOngoingReviewerEntriesAfterCommittedFinalKeepFinalVisibleWithoutHydrati
 			StepID:                     "step-1",
 			CommittedTranscriptChanged: true,
 			TranscriptRevision:         1,
-			CommittedEntryCount:        1,
 			CommittedEntryStart:        0,
 			CommittedEntryStartSet:     true,
 			TranscriptEntries: []clientui.ChatEntry{{
@@ -445,7 +444,6 @@ func TestOngoingReviewerEntriesAfterCommittedFinalKeepFinalVisibleWithoutHydrati
 			StepID:                     "step-1",
 			CommittedTranscriptChanged: true,
 			TranscriptRevision:         2,
-			CommittedEntryCount:        2,
 			CommittedEntryStart:        1,
 			CommittedEntryStartSet:     true,
 			TranscriptEntries: []clientui.ChatEntry{{
@@ -459,7 +457,6 @@ func TestOngoingReviewerEntriesAfterCommittedFinalKeepFinalVisibleWithoutHydrati
 			StepID:                     "step-1",
 			CommittedTranscriptChanged: true,
 			TranscriptRevision:         3,
-			CommittedEntryCount:        3,
 			CommittedEntryStart:        2,
 			CommittedEntryStartSet:     true,
 			TranscriptEntries: []clientui.ChatEntry{{
@@ -676,7 +673,6 @@ func TestHandleProjectedRuntimeEventSkipsCommittedOverlapThatStartsBeforeCurrent
 		CommittedTranscriptChanged: true,
 		StepID:                     "step-1",
 		TranscriptRevision:         12,
-		CommittedEntryCount:        7,
 		CommittedEntryStart:        4,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries: []clientui.ChatEntry{
@@ -717,7 +713,6 @@ func TestHandleProjectedRuntimeEventAppendsCommittedSuffixWhenOverlapStartsBefor
 		CommittedTranscriptChanged: true,
 		StepID:                     "step-1",
 		TranscriptRevision:         12,
-		CommittedEntryCount:        8,
 		CommittedEntryStart:        4,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries: []clientui.ChatEntry{
@@ -762,7 +757,6 @@ func TestApplyProjectedTranscriptEntriesForwardsCompactMetadataToLiveView(t *tes
 	cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
 		Kind:                       clientui.EventLocalEntryAdded,
 		CommittedTranscriptChanged: true,
-		CommittedEntryCount:        2,
 		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries:          []clientui.ChatEntry{entry},
@@ -984,7 +978,6 @@ func TestHandleProjectedRuntimeEventDoesNotSuppressPendingToolCallStart(t *testi
 		CommittedTranscriptChanged: true,
 		StepID:                     "step-1",
 		TranscriptRevision:         10,
-		CommittedEntryCount:        2,
 		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries: []clientui.ChatEntry{{

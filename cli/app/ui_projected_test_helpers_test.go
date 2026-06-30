@@ -102,7 +102,7 @@ func newUIRuntimeClientFromEngine(engine *runtime.Engine) clientui.RuntimeClient
 }
 
 func registerUIRuntime(r *registry.RuntimeRegistry, sessionID string, engine *runtime.Engine) {
-	claim, _, _ := r.AcquireRuntimeClaim(sessionID, "")
+	claim, _, _ := r.AcquireRuntimeClaim(sessionID, "test-owner")
 	if claim == nil {
 		return
 	}

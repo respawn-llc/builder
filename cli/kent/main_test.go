@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"core/cli/app"
 	serverstartup "core/server/startup"
 	"core/shared/config"
+	"core/shared/llmerrors"
 	"core/shared/sessionenv"
 )
 
@@ -493,6 +495,24 @@ func TestRunErrorCode(t *testing.T) {
 	}
 	if got := runErrorCode(errors.New("boom")); got != "runtime" {
 		t.Fatalf("run error code = %q, want runtime", got)
+	}
+}
+
+func TestRunErrorMessageRoutesStallThroughUserFacingError(t *testing.T) {
+	stall := fmt.Errorf("model generation failed after retries: %w", llmerrors.ErrModelStreamStalled)
+	want := llmerrors.UserFacingError(stall)
+	if want == "" {
+		t.Fatal("expected a stall to have a user-facing message")
+	}
+	if got := runErrorMessage(stall); got != want {
+		t.Fatalf("run error message = %q, want user-facing message %q", got, want)
+	}
+}
+
+func TestRunErrorMessageFallsBackToRawErrorWhenUnmapped(t *testing.T) {
+	raw := errors.New("boom")
+	if got := runErrorMessage(raw); got != raw.Error() {
+		t.Fatalf("run error message = %q, want raw error %q", got, raw.Error())
 	}
 }
 

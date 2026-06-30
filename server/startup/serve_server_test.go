@@ -68,18 +68,35 @@ var noopOnboarding = OnboardingHandler(func(_ context.Context, req OnboardingReq
 	return reloaded, nil
 })
 
-type notifyingListener struct {
-	net.Listener
-	acceptDone chan struct{}
-	once       sync.Once
+var serveTestPortReservations = struct {
+	sync.Mutex
+	listeners map[string]net.Listener
+}{listeners: map[string]net.Listener{}}
+
+func reserveServeTestPort(t *testing.T, listener net.Listener) {
+	t.Helper()
+	addr := listener.Addr().String()
+	serveTestPortReservations.Lock()
+	if existing := serveTestPortReservations.listeners[addr]; existing != nil {
+		_ = existing.Close()
+	}
+	serveTestPortReservations.listeners[addr] = listener
+	serveTestPortReservations.Unlock()
+	t.Cleanup(func() { releaseServeTestPort(addr) })
 }
 
-func (l *notifyingListener) Accept() (net.Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		l.once.Do(func() { close(l.acceptDone) })
+func releaseServeTestPort(addr string) {
+	serveTestPortReservations.Lock()
+	listener := serveTestPortReservations.listeners[addr]
+	delete(serveTestPortReservations.listeners, addr)
+	serveTestPortReservations.Unlock()
+	if listener != nil {
+		_ = listener.Close()
 	}
-	return conn, err
+}
+
+func releaseServeTestPortForConfig(cfg config.App) {
+	releaseServeTestPort(net.JoinHostPort(cfg.Settings.ServerHost, strconv.Itoa(cfg.Settings.ServerPort)))
 }
 
 func registerServeWorkspace(t *testing.T, workspace string) {
@@ -119,38 +136,9 @@ func configureServeTestServerPort(t *testing.T) {
 		t.Fatalf("reserve server port: %v", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
-	ReserveTestListenReservation(listener)
-	t.Cleanup(func() { ReleaseTestListenReservation(listener.Addr().String()) })
+	reserveServeTestPort(t, listener)
 	t.Setenv("KENT_SERVER_HOST", "127.0.0.1")
 	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(port))
-}
-
-func TestReserveTestListenReservationDrainerStopsAfterRelease(t *testing.T) {
-	base, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	listener := &notifyingListener{Listener: base, acceptDone: make(chan struct{})}
-	addr := listener.Addr().String()
-	t.Cleanup(func() { ReleaseTestListenReservation(addr) })
-
-	ReserveTestListenReservation(listener)
-	conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-	if err != nil {
-		t.Fatalf("dial reserved listener: %v", err)
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	if _, err := conn.Read(make([]byte, 1)); err == nil {
-		t.Fatal("expected reserved listener drainer to close accepted connection")
-	}
-	_ = conn.Close()
-
-	ReleaseTestListenReservation(addr)
-	select {
-	case <-listener.acceptDone:
-	case <-time.After(time.Second):
-		t.Fatal("reserved listener drainer did not exit after release")
-	}
 }
 
 func TestStartBuildsStandaloneServerFromCoreStartup(t *testing.T) {
@@ -239,6 +227,7 @@ func TestServeExposesConfiguredHealthEndpoints(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseServeTestPortForConfig(server.Config())
 		errCh <- server.Serve(ctx)
 	}()
 
@@ -321,6 +310,7 @@ func TestServeExposesDerivedLocalUnixSocketAndCleansStalePath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseServeTestPortForConfig(server.Config())
 		errCh <- server.Serve(ctx)
 	}()
 	defer func() {
@@ -382,6 +372,7 @@ func TestEmbeddedServeBackgroundExposesAttachEndpointUntilClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start embedded: %v", err)
 	}
+	releaseServeTestPortForConfig(server.Config())
 	if err := server.ServeBackground(); err != nil {
 		_ = server.Close()
 		t.Fatalf("ServeBackground: %v", err)
@@ -453,6 +444,7 @@ func TestServeDegradesToTCPWhenDerivedLocalSocketFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseServeTestPortForConfig(server.Config())
 		errCh <- server.Serve(ctx)
 	}()
 	defer func() {
@@ -499,6 +491,7 @@ func TestServeStartsUnauthenticatedAndReportsBootstrapReadiness(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseServeTestPortForConfig(server.Config())
 		errCh <- server.Serve(ctx)
 	}()
 
@@ -579,6 +572,7 @@ model = "blocked-model"
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
+		releaseServeTestPortForConfig(server.Config())
 		errCh <- server.Serve(ctx)
 	}()
 	defer func() {
@@ -675,7 +669,7 @@ func TestServeFailsWhenConfiguredPortIsOccupied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
-	ReleaseTestListenReservation(net.JoinHostPort(loadCfg.Settings.ServerHost, strconv.Itoa(loadCfg.Settings.ServerPort)))
+	releaseServeTestPortForConfig(loadCfg)
 	listener, err := net.Listen("tcp", net.JoinHostPort(loadCfg.Settings.ServerHost, strconv.Itoa(loadCfg.Settings.ServerPort)))
 	if err != nil {
 		t.Fatalf("occupy configured port: %v", err)

@@ -355,9 +355,6 @@ func allowedCLIServerImports() map[string]map[string]string {
 		filepath.Join("cli", "app", "onboarding_workflow.go"): {
 			"core/server/llm": "onboarding workflow renders server-owned model labels after deleting the app bridge package",
 		},
-		filepath.Join("cli", "app", "session_server_target.go"): {
-			"core/server/startup": "interactive session server launches a local serve daemon after deleting the app bridge package",
-		},
 		filepath.Join("cli", "app", "ui_layout_rendering_status.go"): {
 			"core/server/llm": "status line uses the server-owned model display label after deleting the app bridge package",
 		},

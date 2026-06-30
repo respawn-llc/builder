@@ -33,10 +33,18 @@ type AuthGetBootstrapStatusRequest struct{}
 type AuthGetBootstrapStatusResponse struct {
 	AuthReady              bool                     `json:"auth_ready"`
 	AuthRequired           bool                     `json:"auth_required"`
+	NoAuthSelected         bool                     `json:"no_auth_selected,omitempty"`
 	AuthBootstrapSupported bool                     `json:"auth_bootstrap_supported"`
 	AllowedPreAuthMethods  []string                 `json:"allowed_pre_auth_methods,omitempty"`
 	SupportedModes         []AuthBootstrapMode      `json:"supported_modes,omitempty"`
 	OAuth                  AuthBootstrapOAuthConfig `json:"oauth,omitempty"`
+}
+
+type AuthAcknowledgeNoAuthRequest struct{}
+
+type AuthAcknowledgeNoAuthResponse struct {
+	AuthReady      bool `json:"auth_ready"`
+	NoAuthSelected bool `json:"no_auth_selected,omitempty"`
 }
 
 type AuthCompleteBootstrapRequest struct {
@@ -52,10 +60,11 @@ type AuthCompleteBootstrapRequest struct {
 }
 
 type AuthCompleteBootstrapResponse struct {
-	AuthReady  bool   `json:"auth_ready"`
-	MethodType string `json:"method_type,omitempty"`
-	AccountID  string `json:"account_id,omitempty"`
-	Email      string `json:"email,omitempty"`
+	AuthReady      bool   `json:"auth_ready"`
+	NoAuthSelected bool   `json:"no_auth_selected,omitempty"`
+	MethodType     string `json:"method_type,omitempty"`
+	AccountID      string `json:"account_id,omitempty"`
+	Email          string `json:"email,omitempty"`
 }
 
 func (r AuthCompleteBootstrapRequest) Validate() error {

@@ -374,13 +374,9 @@ func (c *sessionRuntimeClient) refreshTranscriptPageSync(req clientui.Transcript
 	c.patchMainView(func(view *clientui.RuntimeMainView) {
 		view.Status.ConversationFreshness = page.ConversationFreshness
 		view.Session.ConversationFreshness = page.ConversationFreshness
-		committedEntryCount := view.Session.Transcript.CommittedEntryCount
-		if isRecentTailTranscriptRequest(req) {
-			committedEntryCount = page.TotalEntries
-		}
 		view.Session.Transcript = clientui.TranscriptMetadata{
 			Revision:            page.Revision,
-			CommittedEntryCount: committedEntryCount,
+			CommittedEntryCount: view.Session.Transcript.CommittedEntryCount,
 		}
 		if isRecentTailTranscriptRequest(req) {
 			view.Session.Chat = clientui.ChatSnapshot{
@@ -399,7 +395,7 @@ func (c *sessionRuntimeClient) refreshCommittedTranscriptSuffixSync(_ clientui.C
 		if err != nil {
 			return clientui.CommittedTranscriptSuffix{SessionID: c.sessionID}, err
 		}
-		return committedTranscriptSuffixFromPage(page), nil
+		return c.committedTranscriptSuffixFromPage(page), nil
 	}
 	suffixClient, ok := c.reads.(client.SessionCommittedTranscriptSuffixClient)
 	if !ok {
@@ -508,52 +504,48 @@ func transcriptPageFromSessionView(view clientui.RuntimeSessionView) clientui.Tr
 		total = len(view.Chat.Entries)
 	}
 	hasMore := total > len(view.Chat.Entries)
-	nextOffset := 0
-	if hasMore {
-		nextOffset = len(view.Chat.Entries)
-	}
 	return clientui.TranscriptPage{
 		SessionID:             view.SessionID,
 		SessionName:           view.SessionName,
 		ConversationFreshness: view.ConversationFreshness,
 		Revision:              view.Transcript.Revision,
-		TotalEntries:          total,
-		Offset:                0,
-		NextOffset:            nextOffset,
-		HasMore:               hasMore,
+		HasMoreAbove:          hasMore,
 		Entries:               cloneTranscriptEntries(view.Chat.Entries),
 	}
 }
 
 func transcriptPageFromCommittedTranscriptSuffix(suffix clientui.CommittedTranscriptSuffix) clientui.TranscriptPage {
-	nextOffset := 0
-	if suffix.HasMore {
-		nextOffset = suffix.NextEntryCount
-	}
 	return clientui.TranscriptPage{
 		SessionID:             suffix.SessionID,
 		SessionName:           suffix.SessionName,
 		ConversationFreshness: suffix.ConversationFreshness,
 		Revision:              suffix.Revision,
-		TotalEntries:          suffix.CommittedEntryCount,
-		Offset:                suffix.StartEntryCount,
-		NextOffset:            nextOffset,
-		HasMore:               suffix.HasMore,
+		HasMoreAbove:          suffix.HasMoreCommittedEntries,
+		HasMoreBelow:          suffix.NextEntryCount < suffix.CommittedEntryCount,
 		Entries:               cloneTranscriptEntries(suffix.Entries),
 	}
 }
 
-func committedTranscriptSuffixFromPage(page clientui.TranscriptPage) clientui.CommittedTranscriptSuffix {
+func (c *sessionRuntimeClient) committedTranscriptSuffixFromPage(page clientui.TranscriptPage) clientui.CommittedTranscriptSuffix {
+	view := c.MainView()
+	committedCount := view.Session.Transcript.CommittedEntryCount
+	if committedCount == 0 {
+		committedCount = len(page.Entries)
+	}
+	start := committedCount - len(page.Entries)
+	if start < 0 {
+		start = 0
+	}
 	return clientui.CommittedTranscriptSuffix{
-		SessionID:             page.SessionID,
-		SessionName:           page.SessionName,
-		ConversationFreshness: page.ConversationFreshness,
-		Revision:              page.Revision,
-		CommittedEntryCount:   page.TotalEntries,
-		StartEntryCount:       page.Offset,
-		NextEntryCount:        page.Offset + len(page.Entries),
-		HasMore:               page.HasMore,
-		Entries:               cloneTranscriptEntries(page.Entries),
+		SessionID:               page.SessionID,
+		SessionName:             page.SessionName,
+		ConversationFreshness:   page.ConversationFreshness,
+		Revision:                page.Revision,
+		CommittedEntryCount:     committedCount,
+		StartEntryCount:         start,
+		NextEntryCount:          start + len(page.Entries),
+		HasMoreCommittedEntries: page.HasMoreAbove,
+		Entries:                 cloneTranscriptEntries(page.Entries),
 	}
 }
 

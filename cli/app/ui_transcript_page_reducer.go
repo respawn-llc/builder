@@ -164,7 +164,7 @@ func runtimeTranscriptPageReplacementRejectReason(state runtimeTranscriptPageSta
 	if !replacesRecentTailForRuntimeTranscriptPage(state, req) {
 		return ""
 	}
-	if page.Revision == effectiveRevision && page.TotalEntries < effectiveCommittedCount {
+	if page.Revision == effectiveRevision && runtimeTranscriptPageTotalEntries(state, page) < effectiveCommittedCount {
 		return "stale_total_entries"
 	}
 	if page.Revision == effectiveRevision && strings.TrimSpace(state.liveOngoing) != "" && strings.TrimSpace(page.Streaming) == "" {
@@ -221,7 +221,7 @@ func authoritativePageCommitsLiveAssistantOngoing(state runtimeTranscriptPageSta
 		if strings.TrimSpace(entry.Text) != trimmedLiveOngoing {
 			return false
 		}
-		absolute := page.Offset + idx
+		absolute := runtimeTranscriptPageStartEntry(state, page) + idx
 		if absolute < currentStart || absolute >= currentEnd {
 			return true
 		}
@@ -255,8 +255,8 @@ func committedTranscriptAlreadyMatchesAssistantOngoing(entries []tui.TranscriptE
 func shouldAcceptEqualRevisionTailReplacement(state runtimeTranscriptPageState, page clientui.TranscriptPage) bool {
 	currentStart := state.baseOffset
 	currentEnd := currentStart + len(state.entries)
-	pageStart := page.Offset
-	pageEnd := page.Offset + len(page.Entries)
+	pageStart := runtimeTranscriptPageStartEntry(state, page)
+	pageEnd := pageStart + len(page.Entries)
 	if pageStart > currentStart || pageEnd < currentEnd {
 		return false
 	}
@@ -287,4 +287,24 @@ func shouldAcceptEqualRevisionTailReplacement(state runtimeTranscriptPageState, 
 		return true
 	}
 	return false
+}
+
+func runtimeTranscriptPageStartEntry(state runtimeTranscriptPageState, page clientui.TranscriptPage) int {
+	if !page.HasMoreAbove {
+		return 0
+	}
+	totalEntries := runtimeTranscriptPageTotalEntries(state, page)
+	start := totalEntries - len(page.Entries)
+	if start < 0 {
+		return 0
+	}
+	return start
+}
+
+func runtimeTranscriptPageTotalEntries(state runtimeTranscriptPageState, page clientui.TranscriptPage) int {
+	if !page.HasMoreAbove && !page.HasMoreBelow {
+		return len(page.Entries)
+	}
+	_, effectiveCommittedCount := state.effectiveCommittedState()
+	return max(effectiveCommittedCount, len(page.Entries))
 }

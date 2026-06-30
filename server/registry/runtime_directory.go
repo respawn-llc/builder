@@ -64,12 +64,16 @@ func (e *runtimeEntry) addOwner(ownerID string) int {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.ownerRefs++
-	if trimmed := strings.TrimSpace(ownerID); trimmed != "" {
-		if e.ownerIDs == nil {
-			e.ownerIDs = make(map[string]struct{})
-		}
+	trimmed := strings.TrimSpace(ownerID)
+	if trimmed == "" {
+		return e.ownerRefs
+	}
+	if e.ownerIDs == nil {
+		e.ownerIDs = make(map[string]struct{})
+	}
+	if _, exists := e.ownerIDs[trimmed]; !exists {
 		e.ownerIDs[trimmed] = struct{}{}
+		e.ownerRefs++
 	}
 	return e.ownerRefs
 }
@@ -80,14 +84,14 @@ func (e *runtimeEntry) dropOwner(ownerID string) int {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if trimmed := strings.TrimSpace(ownerID); trimmed != "" {
-		if _, ok := e.ownerIDs[trimmed]; !ok {
-			return e.ownerRefs
-		}
-		delete(e.ownerIDs, trimmed)
-	} else if e.ownerRefs <= len(e.ownerIDs) {
+	trimmed := strings.TrimSpace(ownerID)
+	if trimmed == "" {
 		return e.ownerRefs
 	}
+	if _, ok := e.ownerIDs[trimmed]; !ok {
+		return e.ownerRefs
+	}
+	delete(e.ownerIDs, trimmed)
 	if e.ownerRefs > 0 {
 		e.ownerRefs--
 	}
@@ -157,9 +161,6 @@ func (e *runtimeEntry) resolveBuildLocked(engine *runtime.Engine, rebind func(st
 	e.teardown = teardown
 	e.buildErr = buildErr
 	e.built = buildErr == nil
-	if e.built && e.ownerRefs <= 0 {
-		e.ownerRefs = 1
-	}
 	close(e.ready)
 	e.cond.Broadcast()
 	return true

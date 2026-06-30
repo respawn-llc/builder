@@ -176,10 +176,6 @@ type TranscriptPage struct {
 	SessionName           string
 	ConversationFreshness ConversationFreshness
 	Revision              int64
-	TotalEntries          int
-	Offset                int
-	NextOffset            int
-	HasMore               bool
 	OlderCursor           int64
 	HasMoreAbove          bool
 	NewerCursor           int64
@@ -192,15 +188,15 @@ type TranscriptPage struct {
 type CommittedTranscriptSuffixRequest struct{}
 
 type CommittedTranscriptSuffix struct {
-	SessionID             string
-	SessionName           string
-	ConversationFreshness ConversationFreshness
-	Revision              int64
-	CommittedEntryCount   int
-	StartEntryCount       int
-	NextEntryCount        int
-	HasMore               bool
-	Entries               []ChatEntry
+	SessionID               string
+	SessionName             string
+	ConversationFreshness   ConversationFreshness
+	Revision                int64
+	CommittedEntryCount     int
+	StartEntryCount         int
+	NextEntryCount          int
+	HasMoreCommittedEntries bool
+	Entries                 []ChatEntry
 }
 
 type ToolPresentationKind string

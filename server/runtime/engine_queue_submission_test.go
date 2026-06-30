@@ -9,6 +9,7 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/transcript"
 )
 
 func TestSubmitQueuedUserMessagesStartsTurnFromQueuedInjection(t *testing.T) {
@@ -57,6 +58,37 @@ func TestSubmitQueuedUserMessagesStartsTurnFromQueuedInjection(t *testing.T) {
 	}
 	if !hasQueuedUser {
 		t.Fatalf("expected first request to include queued user message, got %+v", requestMessages(client.calls[0]))
+	}
+}
+
+func TestSubmitQueuedUserMessagesSurfacesRunError(t *testing.T) {
+	store := mustCreateTestSession(t)
+
+	client := &fakeClient{errors: []error{&llm.ProviderAPIError{
+		ProviderID: "openai",
+		Code:       llm.UnifiedErrorCodeProviderContract,
+		Message:    "provider down",
+	}}}
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+
+	eng.QueueUserMessage("steer now")
+
+	if _, err := eng.SubmitQueuedUserMessages(context.Background()); err == nil {
+		t.Fatal("expected explicit queued submission to surface the model failure")
+	}
+
+	snapshot := eng.ChatSnapshot()
+	found := false
+	for _, entry := range snapshot.Entries {
+		if entry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected explicit queued-drain failure to persist a developer error entry, got %+v", snapshot.Entries)
+	}
+	if snapshot.StreamingError == "" {
+		t.Fatal("expected explicit queued-drain failure to set the streaming error banner")
 	}
 }
 

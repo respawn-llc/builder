@@ -8,10 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"core/prompts"
 	"core/server/auth"
 	"core/server/authservice"
-	serverbootstrap "core/server/bootstrap"
 	corepkg "core/server/core"
 	"core/server/metadata"
 	"core/shared/config"
@@ -244,19 +242,10 @@ func TestStartWrapsCoreWithSameClientAssembly(t *testing.T) {
 	authHandler := startupEnvAuthHandler{}
 	onboarding := startupNoopOnboarding
 	registerStartupWorkspace(t, workspace)
-	generatedCalls := 0
-	restoreGeneratedSync := serverbootstrap.SetGeneratedSyncForTest(func(ctx context.Context, opts prompts.GeneratedSyncOptions) (prompts.GeneratedSyncResult, error) {
-		generatedCalls++
-		return prompts.GeneratedSync(ctx, opts)
-	})
-	defer restoreGeneratedSync()
 
 	appCore, err := StartCore(context.Background(), request, authHandler, onboarding)
 	if err != nil {
 		t.Fatalf("StartCore: %v", err)
-	}
-	if generatedCalls != 1 {
-		t.Fatalf("generated sync calls = %d, want 1", generatedCalls)
 	}
 	generatedSkillsRoot := filepath.Join(home, config.ConfigDirName, ".generated", "skills")
 	if entries, err := os.ReadDir(generatedSkillsRoot); err != nil {

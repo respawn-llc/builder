@@ -96,6 +96,71 @@ func TestStartEmbeddedServerUnknownWorkspaceCreateProjectFlowCanPlanSession(t *t
 	}
 }
 
+func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T) {
+	newAppTestHome(t)
+	workspace := t.TempDir()
+	configureAppTestServerPort(t)
+	fakeResponses, hits := newNoAuthFakeResponsesServer(t, []string{"rebound no-auth reply"})
+	defer fakeResponses.Close()
+
+	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{
+		Model:                "gpt-5",
+		AllowUnauthenticated: true,
+	}, memoryAuthHandler{}, autoOnboarding)
+	if err != nil {
+		t.Fatalf("serve.Start: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+	stopServing := serveAppServer(t, srv)
+	defer stopServing()
+	waitForConfiguredRunPromptDaemon(t, workspace)
+
+	originalPicker := runProjectBindingPickerFlow
+	originalPrompt := runProjectNamePromptFlow
+	t.Cleanup(func() {
+		runProjectBindingPickerFlow = originalPicker
+		runProjectNamePromptFlow = originalPrompt
+	})
+	runProjectBindingPickerFlow = func(projects []clientui.ProjectSummary, theme string) (projectBindingPickerResult, error) {
+		return projectBindingPickerResult{CreateNew: true}, nil
+	}
+	runProjectNamePromptFlow = func(defaultName string, theme string) (string, error) {
+		return "Remote No Auth Project", nil
+	}
+
+	authPickerCalls := 0
+	interactor := &interactiveAuthInteractor{
+		pickMethod: func(authInteraction) (authMethodPickerResult, error) {
+			authPickerCalls++
+			if authPickerCalls > 1 {
+				t.Fatal("remote no-auth binding flow must not re-enter auth picker")
+			}
+			return authMethodPickerResult{Choice: authMethodChoiceSkip}, nil
+		},
+	}
+	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, Model: "gpt-5"}, interactor, true)
+	if err != nil {
+		t.Fatalf("startSessionServer: %v", err)
+	}
+	defer func() { _ = server.Close() }()
+	bound, err := ensureInteractiveProjectBinding(context.Background(), server)
+	if err != nil {
+		t.Fatalf("ensureInteractiveProjectBinding: %v", err)
+	}
+	_, runtimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, bound, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, fakeResponses.URL, io.Discard, "test remote no-auth rebound runtime")
+	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after rebound no auth")
+	if err != nil {
+		t.Fatalf("SubmitUserMessage: %v", err)
+	}
+	if submission.Message != "rebound no-auth reply" {
+		t.Fatalf("assistant message = %q, want rebound no-auth reply", submission.Message)
+	}
+	runtimePlan.Close()
+	if hits.Load() != 1 {
+		t.Fatalf("expected fake LLM call once, got %d", hits.Load())
+	}
+}
+
 func TestStartSessionServerRejectsIncompatibleDiscoveredDaemonAndFallsBack(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 

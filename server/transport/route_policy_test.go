@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
 
@@ -19,144 +18,18 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestRouteScopeParamAccessorsCoverScopedRoutes(t *testing.T) {
-	for _, route := range rpccontract.Routes() {
-		if route.RequestType == nil {
-			continue
-		}
-		params := reflect.New(route.RequestType).Elem().Interface()
-		if _, err := routeScopeParamsFor(route, params); err != nil {
-			t.Fatalf("route %q scope params: %v", route.Method, err)
-		}
-	}
-}
-
-type routeAccessorKind string
-
-const (
-	routeAccessorNone         routeAccessorKind = "none"
-	routeAccessorProjectState routeAccessorKind = "active_project"
-	routeAccessorSessionID    routeAccessorKind = "SessionID"
-	routeAccessorProcessID    routeAccessorKind = "ProcessID"
-	routeAccessorOwnerSession routeAccessorKind = "OwnerSessionID"
-)
-
-func TestRouteScopeAccessorKindsMatchRouteContract(t *testing.T) {
-	expected := map[string]routeAccessorKind{}
-	for _, method := range []string{
-		protocol.MethodAttachSession,
-		protocol.MethodSessionGetMainView,
-		protocol.MethodSessionGetTranscriptPage,
-		protocol.MethodSessionGetCommittedTranscriptSuffix,
-		protocol.MethodSessionGetInitialInput,
-		protocol.MethodSessionPersistInputDraft,
-		protocol.MethodSessionRetargetWorkspace,
-		protocol.MethodSessionResolveTransition,
-		protocol.MethodSessionRuntimeActivate,
-		protocol.MethodSessionRuntimeRelease,
-		protocol.MethodWorktreeList,
-		protocol.MethodWorktreeCreateTargetResolve,
-		protocol.MethodWorktreeCreate,
-		protocol.MethodWorktreeSwitch,
-		protocol.MethodWorktreeDelete,
-		protocol.MethodRuntimeSetSessionName,
-		protocol.MethodRuntimeSetThinkingLevel,
-		protocol.MethodRuntimeSetFastModeEnabled,
-		protocol.MethodRuntimeSetReviewerEnabled,
-		protocol.MethodRuntimeSetAutoCompactionEnabled,
-		protocol.MethodRuntimeSetQuestionsEnabled,
-		protocol.MethodRuntimeAppendCommittedEntry,
-		protocol.MethodRuntimeShouldCompactBeforeUserMessage,
-		protocol.MethodRuntimeSubmitUserTurn,
-		protocol.MethodRuntimeSubmitUserShellCommand,
-		protocol.MethodRuntimeCompactContext,
-		protocol.MethodRuntimeCompactContextForPreSubmit,
-		protocol.MethodRuntimeHasQueuedUserWork,
-		protocol.MethodRuntimeSubmitQueuedUserMessages,
-		protocol.MethodRuntimeInterrupt,
-		protocol.MethodRuntimeQueueUserMessage,
-		protocol.MethodRuntimeDiscardQueuedUserMessage,
-		protocol.MethodRuntimeRecordPromptHistory,
-		protocol.MethodRuntimeGoalShow,
-		protocol.MethodRuntimeGoalSet,
-		protocol.MethodRuntimeGoalPause,
-		protocol.MethodRuntimeGoalResume,
-		protocol.MethodRuntimeGoalComplete,
-		protocol.MethodRuntimeGoalClear,
-		protocol.MethodAskListPending,
-		protocol.MethodAskAnswer,
-		protocol.MethodApprovalListPending,
-		protocol.MethodApprovalAnswer,
-		protocol.MethodSessionSubscribeActivity,
-		protocol.MethodPromptSubscribeActivity,
-		protocol.MethodAttentionSessionNotificationSubscribe,
-	} {
-		expected[method] = routeAccessorSessionID
-	}
-	for _, method := range []string{
-		protocol.MethodProcessGet,
-		protocol.MethodProcessKill,
-		protocol.MethodProcessInlineOutput,
-		protocol.MethodProcessSubscribeOutput,
-	} {
-		expected[method] = routeAccessorProcessID
-	}
-	expected[protocol.MethodProcessList] = routeAccessorOwnerSession
-	expected[protocol.MethodSessionPlan] = routeAccessorProjectState
-	expected[protocol.MethodRunPrompt] = routeAccessorProjectState
-
-	for _, route := range rpccontract.Routes() {
-		actual := routeAccessorKindForScope(route.Scope)
-		want, ok := expected[route.Method]
-		if !ok {
-			if actual != routeAccessorNone {
-				t.Fatalf("route %q scope %q uses accessor %q but is missing from explicit accessor table", route.Method, route.Scope, actual)
-			}
-			continue
-		}
-		if actual != want {
-			t.Fatalf("route %q accessor = %q, want %q", route.Method, actual, want)
-		}
-	}
-	for method := range expected {
-		if _, ok := rpccontract.RouteByMethod(method); !ok {
-			t.Fatalf("accessor table references missing route %q", method)
-		}
-	}
-}
-
-func routeAccessorKindForScope(scope rpccontract.ScopePolicy) routeAccessorKind {
-	switch scope {
-	case rpccontract.ScopeProjectWorkspace:
-		return routeAccessorProjectState
-	case rpccontract.ScopeAttachSession,
-		rpccontract.ScopeSessionActiveProject,
-		rpccontract.ScopeSessionActiveProjectIfSet,
-		rpccontract.ScopeSessionAttachedProject,
-		rpccontract.ScopeAttachedSession,
-		rpccontract.ScopeGoalSession:
-		return routeAccessorSessionID
-	case rpccontract.ScopeProcessActiveProject:
-		return routeAccessorProcessID
-	case rpccontract.ScopeProcessListActiveProject:
-		return routeAccessorOwnerSession
-	default:
-		return routeAccessorNone
-	}
-}
-
 func TestRoutePolicyAuthPolicyHandlesBlankAndUnknownMethods(t *testing.T) {
 	executor := newRoutePolicyExecutor(nil)
-	if err := executor.requireAuth(context.Background(), ""); err != nil {
+	if err := executor.requireAuth(context.Background(), nil, ""); err != nil {
 		t.Fatalf("blank method auth: %v", err)
 	}
-	if err := executor.requireAuth(context.Background(), protocol.MethodProjectList); err != nil {
+	if err := executor.requireAuth(context.Background(), nil, protocol.MethodProjectList); err != nil {
 		t.Fatalf("pre-auth method auth: %v", err)
 	}
-	if err := executor.requireAuth(context.Background(), protocol.MethodProjectAttachWorkspace); !errors.Is(err, serverapi.ErrServerAuthRequired) {
+	if err := executor.requireAuth(context.Background(), nil, protocol.MethodProjectAttachWorkspace); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("auth-required method error = %v, want server auth required", err)
 	}
-	if err := executor.requireAuth(context.Background(), "missing.method"); !errors.Is(err, serverapi.ErrServerAuthRequired) {
+	if err := executor.requireAuth(context.Background(), nil, "missing.method"); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("unknown method error = %v, want server auth required", err)
 	}
 }

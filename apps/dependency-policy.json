@@ -63,6 +63,7 @@
         "tailwindcss",
         "typescript",
         "typescript-eslint",
+        "typescript7",
         "vite",
         "vitest"
       ]
@@ -76,7 +77,7 @@
         "@tauri-apps/plugin-store",
         "@tauri-apps/plugin-updater"
       ],
-      "devDependencies": ["typescript", "vitest"]
+      "devDependencies": ["typescript", "typescript7", "vitest"]
     }
   }
 }

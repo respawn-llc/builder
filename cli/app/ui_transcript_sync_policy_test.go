@@ -12,9 +12,8 @@ import (
 func TestRuntimeSyncPolicyDefersRoutineCommittedUpdateWhileStreaming(t *testing.T) {
 	client := &runtimeControlFakeClient{
 		transcript: clientui.TranscriptPage{
-			SessionID:    "session-1",
-			Revision:     3,
-			TotalEntries: 2,
+			SessionID: "session-1",
+			Revision:  3,
 			Entries: []clientui.ChatEntry{
 				{Role: "assistant", Text: "seed"},
 				{Role: "assistant", Text: "authoritative"},
@@ -31,7 +30,6 @@ func TestRuntimeSyncPolicyDefersRoutineCommittedUpdateWhileStreaming(t *testing.
 		Kind:                       clientui.EventConversationUpdated,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         4,
-		CommittedEntryCount:        3,
 	}}})
 	updated := next.(*uiModel)
 	msgs := collectCmdMessages(t, cmd)
@@ -54,9 +52,8 @@ func TestRuntimeSyncPolicyDefersRoutineCommittedUpdateWhileStreaming(t *testing.
 func TestRuntimeSyncPolicyReleasesDeferredTranscriptWhenProcessOverlayCloses(t *testing.T) {
 	client := &runtimeControlFakeClient{
 		transcript: clientui.TranscriptPage{
-			SessionID:    "session-1",
-			Revision:     3,
-			TotalEntries: 2,
+			SessionID: "session-1",
+			Revision:  3,
 			Entries: []clientui.ChatEntry{
 				{Role: "assistant", Text: "seed"},
 				{Role: "assistant", Text: "authoritative"},
@@ -71,7 +68,6 @@ func TestRuntimeSyncPolicyReleasesDeferredTranscriptWhenProcessOverlayCloses(t *
 		Kind:                       clientui.EventConversationUpdated,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         4,
-		CommittedEntryCount:        3,
 	}).
 		cmd
 	assertNoRuntimeTranscriptRefreshMsg(t, collectCmdMessages(t, cmd))
@@ -92,10 +88,9 @@ func TestRuntimeSyncPolicyReleasesDeferredTranscriptWhenProcessOverlayCloses(t *
 func TestRuntimeSyncPolicyAllowsRecoveryWhileStreaming(t *testing.T) {
 	client := &runtimeControlFakeClient{
 		transcript: clientui.TranscriptPage{
-			SessionID:    "session-1",
-			Revision:     2,
-			TotalEntries: 1,
-			Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "recovered"}},
+			SessionID: "session-1",
+			Revision:  2,
+			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "recovered"}},
 		},
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
@@ -127,10 +122,9 @@ func TestRuntimeSyncPolicyDropsRoutineTranscriptResponseWhenBlockerAppears(t *te
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
 	client.transcript = clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     2,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "authoritative"}},
+		SessionID: "session-1",
+		Revision:  2,
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "authoritative"}},
 	}
 	cmd := m.requestRuntimeCommittedConversationSync()
 	if cmd == nil {
@@ -253,10 +247,9 @@ func TestRuntimeSyncPolicyDropsRoutineMainViewResponseWhenBlockerAppears(t *test
 func TestRuntimeSyncPolicyQueuedDrainSurvivesRecoveryCoalescing(t *testing.T) {
 	client := &runtimeControlFakeClient{
 		transcript: clientui.TranscriptPage{
-			SessionID:    "session-1",
-			Revision:     2,
-			TotalEntries: 1,
-			Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "recovered"}},
+			SessionID: "session-1",
+			Revision:  2,
+			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "recovered"}},
 		},
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())

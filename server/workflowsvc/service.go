@@ -144,20 +144,20 @@ func (s *Service) CreateWorkflow(ctx context.Context, req serverapi.WorkflowCrea
 	return serverapi.WorkflowCreateResponse{Workflow: workflowRecord(created)}, nil
 }
 
-func (s *Service) CreateAndLinkWorkflowToProject(ctx context.Context, req serverapi.WorkflowCreateAndLinkProjectRequest) (serverapi.WorkflowCreateAndLinkProjectResponse, error) {
-	if err := req.Validate(); err != nil {
+func (s *Service) CreateAndLinkWorkflowToProject(ctx context.Context, request serverapi.WorkflowCreateAndLinkProjectRequest) (serverapi.WorkflowCreateAndLinkProjectResponse, error) {
+	if err := request.Validate(); err != nil {
 		return serverapi.WorkflowCreateAndLinkProjectResponse{}, err
 	}
 	created, link, err := s.store.CreateAndLinkWorkflow(ctx, workflowstore.CreateAndLinkWorkflowRequest{
-		Name:          req.Name,
-		Description:   req.Description,
-		ProjectID:     req.ProjectID,
-		DefaultPolicy: workflowStoreDefaultPolicy(req.DefaultPolicy, false),
+		Name:          request.Name,
+		Description:   request.Description,
+		ProjectID:     request.ProjectID,
+		DefaultPolicy: workflowStoreDefaultPolicy(request.DefaultPolicy),
 	})
 	if err != nil {
 		return serverapi.WorkflowCreateAndLinkProjectResponse{}, err
 	}
-	s.publishWorkflowEvent(ctx, req.ProjectID, string(created.ID), "workflow_link", "linked", link.ID)
+	s.publishWorkflowEvent(ctx, request.ProjectID, string(created.ID), "workflow_link", "linked", link.ID)
 	return serverapi.WorkflowCreateAndLinkProjectResponse{Workflow: workflowRecord(created), Link: projectWorkflowLink(link)}, nil
 }
 
@@ -329,15 +329,15 @@ func (s *Service) UpdateWorkflowEdge(ctx context.Context, req serverapi.Workflow
 	return serverapi.WorkflowEdgeUpdateResponse{Version: revision}, nil
 }
 
-func (s *Service) LinkWorkflowToProject(ctx context.Context, req serverapi.WorkflowLinkProjectRequest) (serverapi.WorkflowLinkProjectResponse, error) {
-	if err := req.Validate(); err != nil {
+func (s *Service) LinkWorkflowToProject(ctx context.Context, request serverapi.WorkflowLinkProjectRequest) (serverapi.WorkflowLinkProjectResponse, error) {
+	if err := request.Validate(); err != nil {
 		return serverapi.WorkflowLinkProjectResponse{}, err
 	}
-	link, err := s.store.LinkWorkflowWithDefaultPolicy(ctx, req.ProjectID, workflow.WorkflowID(req.WorkflowID), workflowStoreDefaultPolicy(req.DefaultPolicy, req.Default))
+	link, err := s.store.LinkWorkflowWithDefaultPolicy(ctx, request.ProjectID, workflow.WorkflowID(request.WorkflowID), workflowStoreDefaultPolicy(request.DefaultPolicy))
 	if err != nil {
 		return serverapi.WorkflowLinkProjectResponse{}, err
 	}
-	s.publishWorkflowEvent(ctx, req.ProjectID, req.WorkflowID, "workflow_link", "linked", link.ID)
+	s.publishWorkflowEvent(ctx, request.ProjectID, request.WorkflowID, "workflow_link", "linked", link.ID)
 	return serverapi.WorkflowLinkProjectResponse{Link: projectWorkflowLink(link)}, nil
 }
 
@@ -1143,10 +1143,7 @@ func projectWorkflowLink(row workflowstore.ProjectWorkflowLinkRecord) serverapi.
 	return serverapi.ProjectWorkflowLink{ID: row.ID, ProjectID: row.ProjectID, WorkflowID: string(row.WorkflowID), Default: row.IsDefault}
 }
 
-func workflowStoreDefaultPolicy(policy serverapi.WorkflowProjectLinkDefaultMode, legacyDefault bool) workflowstore.WorkflowLinkDefaultPolicy {
-	if legacyDefault {
-		return workflowstore.WorkflowLinkDefaultAlways
-	}
+func workflowStoreDefaultPolicy(policy serverapi.WorkflowProjectLinkDefaultMode) workflowstore.WorkflowLinkDefaultPolicy {
 	switch policy {
 	case serverapi.WorkflowProjectLinkDefaultAlways:
 		return workflowstore.WorkflowLinkDefaultAlways

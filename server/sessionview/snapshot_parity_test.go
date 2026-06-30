@@ -294,22 +294,22 @@ func normalizedTranscriptPage(page clientui.TranscriptPage) comparableTranscript
 }
 
 type comparableCommittedSuffix struct {
-	SessionID             string
-	SessionName           string
-	ConversationFreshness clientui.ConversationFreshness
-	Revision              int64
-	HasMore               bool
-	Entries               []comparableChatEntry
+	SessionID               string
+	SessionName             string
+	ConversationFreshness   clientui.ConversationFreshness
+	Revision                int64
+	HasMoreCommittedEntries bool
+	Entries                 []comparableChatEntry
 }
 
 func normalizedCommittedSuffix(suffix clientui.CommittedTranscriptSuffix) comparableCommittedSuffix {
 	return comparableCommittedSuffix{
-		SessionID:             suffix.SessionID,
-		SessionName:           suffix.SessionName,
-		ConversationFreshness: suffix.ConversationFreshness,
-		Revision:              suffix.Revision,
-		HasMore:               suffix.HasMore,
-		Entries:               normalizedChatEntries(suffix.Entries),
+		SessionID:               suffix.SessionID,
+		SessionName:             suffix.SessionName,
+		ConversationFreshness:   suffix.ConversationFreshness,
+		Revision:                suffix.Revision,
+		HasMoreCommittedEntries: suffix.HasMoreCommittedEntries,
+		Entries:                 normalizedChatEntries(suffix.Entries),
 	}
 }
 

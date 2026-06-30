@@ -137,7 +137,7 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `shell.postprocessing_mode` | string | `builtin` | `KENT_SHELL_POSTPROCESSING_MODE` |  | Semantic post-processing mode for `exec_command`. Allowed: `none`, `builtin`, `user`, `all`. `builtin` enables Kent processors only. `all` runs Kent processors first, then your hook. |
 | `shell.postprocess_hook` | string | `""` | `KENT_SHELL_POSTPROCESS_HOOK` |  | Optional executable/script path for a single local command post-processing hook. Kent sends JSON on stdin and expects JSON on stdout. |
 | `prevent_sleep` | string | `active` | `KENT_PREVENT_SLEEP` |  | Prevent system sleep while Kent is running. Allowed: `always` (while the server process is live), `active` (while any agent is working, plus up to one minute of idle-confirmation grace), `never` (disabled). Only system sleep is inhibited; screensaver and display sleep are unaffected. |
-| `timeouts.model_request_seconds` | int | `400` | `KENT_TIMEOUTS_MODEL_REQUEST_SECONDS` | `kent run --model-timeout-seconds` | HTTP timeout for model requests. Must be `> 0`. |
+| `timeouts.model_request_seconds` | int | `400` | `KENT_TIMEOUTS_MODEL_REQUEST_SECONDS` | `kent run --model-timeout-seconds` | Model request timeout. Must be `> 0`. For non-streaming requests it bounds the whole request. For streaming responses it is a per-event idle window: the request is only aborted when no streaming activity arrives within this duration (measured from dispatch, so it also bounds time-to-first-event), letting a healthy long generation stream past it while a dead stream fails fast. |
 
 
 ### Workflow

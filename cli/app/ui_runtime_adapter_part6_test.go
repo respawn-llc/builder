@@ -51,7 +51,6 @@ func TestProjectedConversationUpdatedSkipsHydrationAfterDeferredUserFlush(t *tes
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         7,
-		CommittedEntryCount:        2,
 	}).
 		cmd
 	for _, msg := range collectCmdMessages(t, cmd) {
@@ -87,7 +86,6 @@ func TestProjectedAssistantMessageMergesDeferredCommittedUserFlushWithoutHydrati
 		StepID:                       "step-1",
 		CommittedTranscriptChanged:   true,
 		TranscriptRevision:           7,
-		CommittedEntryCount:          2,
 		UserMessage:                  "steered message",
 		UserMessageBatchQueueItemIDs: []string{"queue-test-0"},
 		TranscriptEntries:            []clientui.ChatEntry{{Role: "user", Text: "steered message"}},
@@ -150,7 +148,6 @@ func TestProjectedAssistantMessageReplacesNonTailCommittedRangeWithoutHydration(
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         11,
-		CommittedEntryCount:        3,
 		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries: []clientui.ChatEntry{{
@@ -203,7 +200,6 @@ func TestProjectedCommittedGapClearsDeferredCommittedTailBeforeHydration(t *test
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         8,
-		CommittedEntryCount:        4,
 		CommittedEntryStart:        3,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries: []clientui.ChatEntry{{

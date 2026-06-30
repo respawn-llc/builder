@@ -39,12 +39,16 @@ func (m *uiModel) invalidateTransientTranscriptState() {
 	}
 	m.forwardToView(tui.ClearStreamingReasoningMsg{})
 	page := m.localRuntimeTranscript()
+	baseOffset := m.transcriptBaseOffset
+	totalEntries := m.transcriptTotalEntries
 	if m.view.Mode() == tui.ModeDetail && m.detailTranscript.loaded {
 		page = m.detailTranscript.page()
+		baseOffset = m.detailTranscript.offset
+		totalEntries = m.detailTranscript.totalEntries
 	}
 	m.forwardToView(tui.SetConversationMsg{
-		BaseOffset:   page.Offset,
-		TotalEntries: page.TotalEntries,
+		BaseOffset:   baseOffset,
+		TotalEntries: totalEntries,
 		Entries:      transcriptEntriesFromPage(page),
 		Ongoing:      "",
 		OngoingError: "",
@@ -110,9 +114,10 @@ func (m *uiModel) appendActiveAssistantStreamDelta(stepID string, delta string) 
 		return
 	}
 	if trimmedStepID := strings.TrimSpace(stepID); trimmedStepID != "" {
-		if m.activeAssistantStreamStepID == "" || m.activeAssistantStreamStepID == trimmedStepID {
-			m.activeAssistantStreamStepID = trimmedStepID
+		if m.activeAssistantStreamStepID != "" && m.activeAssistantStreamStepID != trimmedStepID {
+			m.activeAssistantStreamSource = ""
 		}
+		m.activeAssistantStreamStepID = trimmedStepID
 	}
 	m.activeAssistantStreamSource += delta
 }
@@ -122,6 +127,17 @@ func (m *uiModel) clearActiveAssistantStreamSource() {
 		return
 	}
 	m.activeAssistantStreamSource = ""
+	m.activeAssistantStreamStepID = ""
+}
+
+func (m *uiModel) refreshActiveAssistantStreamFromAuthoritativePageStreaming(streaming string) {
+	if m == nil {
+		return
+	}
+	if strings.TrimSpace(streaming) == "" {
+		return
+	}
+	m.activeAssistantStreamSource = streaming
 	m.activeAssistantStreamStepID = ""
 }
 

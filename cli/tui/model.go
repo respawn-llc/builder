@@ -26,6 +26,7 @@ type TranscriptEntry struct {
 	RollbackTargetID  string
 	Transient         bool
 	Committed         bool
+	LocalAppendOnly   bool
 	Role              TranscriptRole
 	Text              string
 	CondensedText     string
@@ -74,6 +75,7 @@ type AppendTranscriptMsg struct {
 	Visibility        transcript.EntryVisibility
 	Transient         bool
 	Committed         bool
+	LocalAppendOnly   bool
 	Role              TranscriptRole
 	Text              string
 	CondensedText     string

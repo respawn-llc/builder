@@ -365,10 +365,8 @@ func TestDetailModeEnterDoesNotRequestTranscriptPage(t *testing.T) {
 		m.forwardToView(tui.AppendTranscriptMsg{Role: "assistant", Text: fmt.Sprintf("entry %02d\nhidden", idx)})
 	}
 	m.detailTranscript.replace(clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Offset:       100,
-		TotalEntries: 200,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		SessionID: "session-1",
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	})
 	m = updateUIModel(t, m, tea.KeyMsg{Type: tea.KeyShiftTab})
 
@@ -503,8 +501,7 @@ func TestRollbackSelectionInDetailUsesPagedDetailWindow(t *testing.T) {
 	m.termHeight = 10
 	m.layout().syncViewport()
 	detailPage := clientui.TranscriptPage{
-		Offset:       100,
-		TotalEntries: 104,
+		HasMoreAbove: true,
 		Entries: []clientui.ChatEntry{
 			{Role: "user", Text: "older user one"},
 			{Role: "assistant", Text: "older answer one"},
@@ -512,11 +509,12 @@ func TestRollbackSelectionInDetailUsesPagedDetailWindow(t *testing.T) {
 			{Role: "assistant", Text: "older answer two"},
 		},
 	}
+	m.detailTranscript.setKnownBounds(100, 104)
 	m.detailTranscript.replace(detailPage)
 	m.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail})
 	m.forwardToView(tui.SetConversationMsg{
-		BaseOffset:   detailPage.Offset,
-		TotalEntries: detailPage.TotalEntries,
+		BaseOffset:   m.detailTranscript.offset,
+		TotalEntries: m.detailTranscript.totalEntries,
 		Entries:      transcriptEntriesFromPage(detailPage),
 	})
 	seedTestRollbackTargets(m)
@@ -578,8 +576,7 @@ func TestRollbackForkSubmissionUsesPagedDetailAbsoluteIndex(t *testing.T) {
 	m.termHeight = 10
 	m.layout().syncViewport()
 	detailPage := clientui.TranscriptPage{
-		Offset:       40,
-		TotalEntries: 44,
+		HasMoreAbove: true,
 		Entries: []clientui.ChatEntry{
 			{Role: "user", Text: "first paged user"},
 			{Role: "assistant", Text: "first answer"},
@@ -587,11 +584,12 @@ func TestRollbackForkSubmissionUsesPagedDetailAbsoluteIndex(t *testing.T) {
 			{Role: "assistant", Text: "second answer"},
 		},
 	}
+	m.detailTranscript.setKnownBounds(100, 104)
 	m.detailTranscript.replace(detailPage)
 	m.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail})
 	m.forwardToView(tui.SetConversationMsg{
-		BaseOffset:   detailPage.Offset,
-		TotalEntries: detailPage.TotalEntries,
+		BaseOffset:   m.detailTranscript.offset,
+		TotalEntries: m.detailTranscript.totalEntries,
 		Entries:      transcriptEntriesFromPage(detailPage),
 	})
 	seedTestRollbackTargets(m)
@@ -627,8 +625,6 @@ func TestRollbackSelectionPagesBeforeCompactionTail(t *testing.T) {
 	client := &recordingTranscriptRuntimeClient{
 		loadPage: clientui.TranscriptPage{
 			SessionID:    "session-1",
-			Offset:       0,
-			TotalEntries: 104,
 			OlderCursor:  0,
 			HasMoreAbove: false,
 			Entries:      olderEntries,
@@ -646,17 +642,16 @@ func TestRollbackSelectionPagesBeforeCompactionTail(t *testing.T) {
 	tailEntries[58] = clientui.ChatEntry{Role: "user", Text: "tail user", RollbackTargetID: rollbackTargetIDForTestSelection(158)}
 	detailPage := clientui.TranscriptPage{
 		SessionID:    "session-1",
-		Offset:       100,
-		TotalEntries: 160,
 		OlderCursor:  100,
 		HasMoreAbove: true,
 		Entries:      tailEntries,
 	}
+	m.detailTranscript.setKnownBounds(100, 160)
 	m.detailTranscript.replace(detailPage)
 	m.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail})
 	m.forwardToView(tui.SetConversationMsg{
-		BaseOffset:   detailPage.Offset,
-		TotalEntries: detailPage.TotalEntries,
+		BaseOffset:   m.detailTranscript.offset,
+		TotalEntries: m.detailTranscript.totalEntries,
 		Entries:      transcriptEntriesFromPage(detailPage),
 	})
 	seedTestRollbackTargets(m)
@@ -744,8 +739,6 @@ func (c *pagedRollbackRuntimeClient) LoadTranscriptPage(req clientui.TranscriptP
 	}
 	return clientui.TranscriptPage{
 		SessionID:    "session-1",
-		Offset:       start,
-		TotalEntries: 1502,
 		OlderCursor:  int64(start),
 		HasMoreAbove: start > 0,
 		Entries:      entries,
@@ -767,17 +760,16 @@ func TestRollbackSelectionPagesToFirstUserAcrossTrimmedDetailWindow(t *testing.T
 	tailEntries[250] = clientui.ChatEntry{Role: "user", Text: "user 1500", RollbackTargetID: rollbackTargetIDForTestSelection(1500)}
 	detailPage := clientui.TranscriptPage{
 		SessionID:    "session-1",
-		Offset:       1250,
-		TotalEntries: 1502,
 		OlderCursor:  1250,
 		HasMoreAbove: true,
 		Entries:      tailEntries,
 	}
+	m.detailTranscript.setKnownBounds(1250, 1502)
 	m.detailTranscript.replace(detailPage)
 	m.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail})
 	m.forwardToView(tui.SetConversationMsg{
-		BaseOffset:   detailPage.Offset,
-		TotalEntries: detailPage.TotalEntries,
+		BaseOffset:   m.detailTranscript.offset,
+		TotalEntries: m.detailTranscript.totalEntries,
 		Entries:      transcriptEntriesFromPage(detailPage),
 	})
 	seedTestRollbackTargets(m)

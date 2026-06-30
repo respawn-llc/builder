@@ -250,10 +250,10 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		}
 		detailErr := runtimeattach.FormatSubmissionError(msg.err)
 		m.activity = uiActivityError
-		appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
 		m.logf("step.error err=%q", detailErr)
 		m.layout().syncViewport()
-		return m, tea.Batch(unlockCmd, restoreInjectedCmd, appendCmd)
+		statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+		return m, tea.Batch(unlockCmd, restoreInjectedCmd, statusCmd)
 	}
 
 	m.activity = uiActivityIdle

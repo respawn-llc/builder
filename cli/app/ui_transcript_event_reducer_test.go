@@ -42,7 +42,6 @@ func TestActiveAssistantFinalizerGapPreservesRecentTailWhenDetailPinned(t *testi
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        40,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        41,
 		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
 	})
 	if !handled {
@@ -88,7 +87,6 @@ func TestActiveAssistantFinalizerGapPreservesPinnedDetailWindow(t *testing.T) {
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        40,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        41,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role: "assistant",
 			Text: "final answer",
@@ -137,7 +135,6 @@ func TestActiveAssistantFinalizerGapRequestsRecentTailWhenDetailPinned(t *testin
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        40,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        41,
 		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
 	})
 	if !handled {
@@ -151,6 +148,48 @@ func TestActiveAssistantFinalizerGapRequestsRecentTailWhenDetailPinned(t *testin
 	}
 	if got := m.runtimeTranscriptActiveRequest.syncCause; got != runtimeTranscriptSyncCauseCommittedGap {
 		t.Fatalf("finalizer-gap sync cause = %q, want %q", got, runtimeTranscriptSyncCauseCommittedGap)
+	}
+}
+
+func TestActiveAssistantFinalizerGapUsesEventBoundsAtTail(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	m.windowSizeKnown = true
+	m.termWidth = 100
+	m.termHeight = 20
+	m.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail, SkipDetailWarmup: true})
+	m.forwardToView(tui.SetConversationMsg{Ongoing: "final answer"})
+	m.transcriptBaseOffset = 39
+	m.transcriptTotalEntries = 40
+	m.transcriptEntries = []tui.TranscriptEntry{{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true}}
+	m.detailTranscript.setKnownBounds(39, 40)
+	m.detailTranscript.replace(clientui.TranscriptPage{
+		HasMoreAbove: true,
+		Entries:      []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
+	})
+
+	_, handled := uiRuntimeAdapter{model: m}.applyActiveAssistantFinalizerGapAsRecentTail(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        40,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        41,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
+	})
+
+	if !handled {
+		t.Fatal("finalizer-gap event in detail mode should be handled")
+	}
+	if got := m.detailTranscript.offset; got != 39 {
+		t.Fatalf("detail offset = %d, want existing tail offset 39", got)
+	}
+	if got := m.detailTranscript.totalEntries; got != 41 {
+		t.Fatalf("detail total entries = %d, want finalizer total 41", got)
+	}
+	if got := len(m.detailTranscript.entries); got != 2 {
+		t.Fatalf("detail entries = %d, want existing row plus finalizer", got)
+	}
+	if got := m.detailTranscript.entries[1].Text; got != "final answer" {
+		t.Fatalf("finalizer entry text = %q, want appended final answer", got)
 	}
 }
 
@@ -218,7 +257,6 @@ func TestReduceProjectedTranscriptEventHydratesCommittedGap(t *testing.T) {
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        3,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        4,
 		TranscriptRevision:         4,
 		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "answer"}},
 	})
@@ -246,7 +284,6 @@ func TestReduceProjectedTranscriptEventAppendsCommittedSuffix(t *testing.T) {
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        0,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        2,
 		TranscriptRevision:         2,
 		TranscriptEntries: []clientui.ChatEntry{
 			{Role: "user", Text: "prompt"},
@@ -279,7 +316,6 @@ func TestReduceProjectedTranscriptEventDefersUserFlushWhileLiveAssistantPending(
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        0,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        1,
 		TranscriptRevision:         1,
 		TranscriptEntries:          []clientui.ChatEntry{{Role: "user", Text: "follow up"}},
 	})
@@ -362,7 +398,6 @@ func TestReduceProjectedTranscriptEventAllowsFinalAssistantCommitToFinalizeLiveS
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        0,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        1,
 		TranscriptRevision:         1,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role:  "assistant",
@@ -390,7 +425,6 @@ func TestReduceProjectedTranscriptEventAllowsLiveOnlyUnresolvedToolStartWhileLiv
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        2,
 		TranscriptRevision:         2,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role:       "tool_call",
@@ -421,7 +455,6 @@ func TestReduceProjectedTranscriptEventAllowsToolCompletionForVisiblePendingTool
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
-		CommittedEntryCount:        2,
 		TranscriptRevision:         2,
 		TranscriptEntries: []clientui.ChatEntry{{
 			Role:       "tool_result_ok",

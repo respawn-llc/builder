@@ -1,4 +1,4 @@
-import type { WorkflowGraphNode, WorkflowGraphPoint } from "./workflowGraphLayout";
+import type { WorkflowGraphNode, WorkflowGraphPoint } from "../../features/workflow-editor/workflowGraphLayout";
 
 type WorkflowGraphEndpointSide = "source" | "target";
 

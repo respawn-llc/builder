@@ -1179,7 +1179,11 @@ func TestServiceWorkflowLinkFirstDefaultAndDuplicateIdempotency(t *testing.T) {
 func TestServiceWorkflowUnlinkRejectsTaskReferencesAndHardDeletesUnusedLinks(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
-	link := linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{ProjectID: binding.ProjectID, WorkflowID: workflowID, Default: true})
+	link := linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     binding.ProjectID,
+		WorkflowID:    workflowID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultAlways,
+	})
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 	blocked, err := service.UnlinkWorkflowFromProject(ctx, serverapi.WorkflowUnlinkProjectRequest{LinkID: link.Link.ID})
 	if err != nil {
@@ -1791,7 +1795,11 @@ func linkWorkflowServiceProject(t *testing.T, ctx context.Context, service *Serv
 
 func linkDefaultWorkflowServiceProject(t *testing.T, ctx context.Context, service *Service, projectID, workflowID string) {
 	t.Helper()
-	linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{ProjectID: projectID, WorkflowID: workflowID, Default: true})
+	linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     projectID,
+		WorkflowID:    workflowID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultAlways,
+	})
 }
 
 func createWorkflowServiceTask(t *testing.T, ctx context.Context, service *Service, req serverapi.WorkflowTaskCreateRequest) serverapi.WorkflowTaskCreateResponse {

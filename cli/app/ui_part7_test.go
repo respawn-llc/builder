@@ -20,9 +20,8 @@ import (
 func TestHydrationCompletionKeepsDeferredQueuedDrainArmedUntilUnrelatedBusyStateClears(t *testing.T) {
 	client := &refreshingRuntimeClient{
 		transcripts: []clientui.TranscriptPage{{
-			SessionID:    "session-1",
-			TotalEntries: 1,
-			Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
+			SessionID: "session-1",
+			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
 		}},
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
@@ -414,9 +413,8 @@ func TestBusyQueuedReviewSlashCommandStartsFreshSessionAfterTurn(t *testing.T) {
 func TestBusyQueuedReviewSlashCommandWaitsForHydrationBeforePromptSubmission(t *testing.T) {
 	client := &refreshingRuntimeClient{
 		transcripts: []clientui.TranscriptPage{{
-			SessionID:    "session-1",
-			TotalEntries: 1,
-			Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
+			SessionID: "session-1",
+			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "final answer"}},
 		}},
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())

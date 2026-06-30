@@ -127,14 +127,12 @@ func TestWaitRuntimeEventPrefersRichCommittedEventOverBareCommittedConversationU
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         11,
-		CommittedEntryCount:        1,
 	}
 	ch <- clientui.Event{
 		Kind:                       clientui.EventAssistantMessage,
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         11,
-		CommittedEntryCount:        1,
 		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "final"}},
 	}
 
@@ -210,7 +208,6 @@ func TestPlainConversationUpdateDoesNotDelayCompactionNoticeAppend(t *testing.T)
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         11,
-		CommittedEntryCount:        2,
 		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
 		TranscriptEntries: []clientui.ChatEntry{{
@@ -296,9 +293,8 @@ func TestWaitRuntimeEventCmdStaysPausedWhileHydrationFenceIsArmed(t *testing.T) 
 func TestConversationUpdateHydrationFencesLaterRuntimeEvents(t *testing.T) {
 	client := &refreshingRuntimeClient{
 		transcripts: []clientui.TranscriptPage{{
-			SessionID:    "session-1",
-			TotalEntries: 1,
-			Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "hydrated"}},
+			SessionID: "session-1",
+			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "hydrated"}},
 		}},
 	}
 	runtimeEvents := make(chan clientui.Event, 1)
@@ -346,9 +342,8 @@ func TestConversationUpdateHydrationFencesLaterRuntimeEvents(t *testing.T) {
 func TestStreamGapInvalidatesTransientStateBeforeHydrationFence(t *testing.T) {
 	client := &refreshingRuntimeClient{
 		transcripts: []clientui.TranscriptPage{{
-			SessionID:    "session-1",
-			TotalEntries: 1,
-			Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "hydrated after gap"}},
+			SessionID: "session-1",
+			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "hydrated after gap"}},
 		}},
 	}
 	runtimeEvents := make(chan clientui.Event, 1)
@@ -386,15 +381,13 @@ func TestStreamGapInvalidatesTransientStateBeforeHydrationFence(t *testing.T) {
 
 func TestHydratingClientAndLiveClientConvergeWithoutDuplicateCommittedRows(t *testing.T) {
 	baseline := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     10,
-		TotalEntries: 1,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
+		SessionID: "session-1",
+		Revision:  10,
+		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 	}
 	authoritative := clientui.TranscriptPage{
-		SessionID:    "session-1",
-		Revision:     11,
-		TotalEntries: 2,
+		SessionID: "session-1",
+		Revision:  11,
 		Entries: []clientui.ChatEntry{
 			{Role: "assistant", Text: "seed"},
 			{Role: "assistant", Text: "final", Phase: string(llm.MessagePhaseFinal)},
@@ -583,14 +576,12 @@ func TestRuntimeModelSkipsBareCommittedConversationUpdateWhenRichCommittedEventI
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         11,
-		CommittedEntryCount:        1,
 	}
 	runtimeEvents <- clientui.Event{
 		Kind:                       clientui.EventAssistantMessage,
 		StepID:                     "step-1",
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         11,
-		CommittedEntryCount:        1,
 		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "final"}},
 	}
 	close(runtimeEvents)
@@ -696,7 +687,7 @@ func TestRuntimeModelReplacementAndSameStepTailConvergeWithoutDuplicateRows(t *t
 	client := &runtimeControlFakeClient{transcript: clientui.TranscriptPage{
 		SessionID:    "session-1",
 		Revision:     11,
-		TotalEntries: 4,
+		HasMoreAbove: true,
 		Entries: []clientui.ChatEntry{
 			{Role: "assistant", Text: "replacement summary"},
 			{Role: "reviewer_status", Text: "Supervisor ran: no changes."},
@@ -770,7 +761,6 @@ func TestRuntimeModelRefreshesOngoingErrorOnDedicatedUpdateEvent(t *testing.T) {
 	client := &runtimeControlFakeClient{transcript: clientui.TranscriptPage{
 		SessionID:      "session-1",
 		Revision:       10,
-		TotalEntries:   1,
 		Entries:        []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 		StreamingError: "background continuation failed",
 	}}
@@ -797,14 +787,12 @@ func TestRuntimeModelStreamingErrorUpdatedSetsAndClearsBannerLifecycle(t *testin
 			{
 				SessionID:      "session-1",
 				Revision:       10,
-				TotalEntries:   1,
 				Entries:        []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 				StreamingError: "background continuation failed",
 			},
 			{
 				SessionID:      "session-1",
 				Revision:       10,
-				TotalEntries:   1,
 				Entries:        []clientui.ChatEntry{{Role: "assistant", Text: "seed"}},
 				StreamingError: "",
 			},

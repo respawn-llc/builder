@@ -8,6 +8,23 @@ import remarkParse from 'remark-parse';
 import remarkStringify from 'remark-stringify';
 import { visit } from 'unist-util-visit';
 
+const RAW_HTML_OPENING_TAG_SENTINEL_PREFIX = 'kent-raw-html-opening-tag-sentinel';
+const VOID_HTML_ELEMENTS = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'source',
+  'track',
+  'wbr',
+]);
+
 function isFragmentOnly(url) {
   return url.startsWith('#') || url.startsWith('?');
 }
@@ -77,7 +94,11 @@ function rewriteRelativeUrl(url, docsConfig) {
   return new URL(normalizedPath, `${targetRoot}`).toString() + hash;
 }
 
-function rewriteHtmlUrlProperties(html, docsConfig) {
+function rewriteHtmlUrlProperties(html, docsConfig, { preserveOpeningTag = false } = {}) {
+  if (html.trim().startsWith('</')) {
+    return html;
+  }
+
   const tree = fromHtml(html, { fragment: true });
 
   visit(tree, 'element', (node) => {
@@ -90,7 +111,83 @@ function rewriteHtmlUrlProperties(html, docsConfig) {
     }
   });
 
+  const firstChild = tree.children[0];
+  if (preserveOpeningTag && isSingleNonVoidHtmlElement(tree.children, firstChild)) {
+    return serializeOpeningTag(firstChild);
+  }
+
   return toHtml(tree);
+}
+
+function isSingleNonVoidHtmlElement(children, node) {
+  return (
+    children.length === 1 &&
+    node?.type === 'element' &&
+    !VOID_HTML_ELEMENTS.has(node.tagName)
+  );
+}
+
+function serializeOpeningTag(node) {
+  const serializedNode = toHtml(node);
+  for (let index = 0; index < 100; index += 1) {
+    const sentinel = `${RAW_HTML_OPENING_TAG_SENTINEL_PREFIX}-${index}`;
+    if (serializedNode.includes(sentinel)) {
+      continue;
+    }
+
+    const html = toHtml({
+      ...node,
+      children: [...node.children, { type: 'text', value: sentinel }],
+    });
+    const sentinelIndex = html.indexOf(sentinel);
+    if (sentinelIndex !== -1) {
+      return html.slice(0, sentinelIndex);
+    }
+  }
+
+  throw new Error(`failed to preserve raw HTML opening tag <${node.tagName}> while mirroring docs`);
+}
+
+function getHtmlElementFromFragment(html) {
+  const tree = fromHtml(html, { fragment: true });
+  const firstChild = tree.children[0];
+  return isSingleNonVoidHtmlElement(tree.children, firstChild) ? firstChild : undefined;
+}
+
+function closingHtmlTagName(html) {
+  const trimmedHtml = html.trim();
+  if (!trimmedHtml.startsWith('</') || !trimmedHtml.endsWith('>')) {
+    return undefined;
+  }
+
+  const tagNameStart = 2;
+  let tagNameEnd = tagNameStart;
+  while (tagNameEnd < trimmedHtml.length && ![' ', '\t', '\n', '\r', '>'].includes(trimmedHtml[tagNameEnd])) {
+    tagNameEnd += 1;
+  }
+  const tagName = trimmedHtml.slice(tagNameStart, tagNameEnd).toLowerCase();
+  return tagName.length > 0 ? tagName : undefined;
+}
+
+function isSplitRawHtmlOpeningTag(node, index, parent) {
+  if (node.type !== 'html' || typeof index !== 'number' || !parent?.children) {
+    return false;
+  }
+
+  const element = getHtmlElementFromFragment(node.value);
+  if (!element) {
+    return false;
+  }
+
+  return parent.children
+    .slice(index + 1)
+    .some((sibling) => sibling.type === 'html' && closingHtmlTagName(sibling.value) === element.tagName);
+}
+
+function rewriteMarkdownHtmlNode(node, docsConfig, index, parent) {
+  node.value = rewriteHtmlUrlProperties(node.value, docsConfig, {
+    preserveOpeningTag: isSplitRawHtmlOpeningTag(node, index, parent),
+  });
 }
 
 function buildFrontmatter(title, editUrl) {
@@ -117,12 +214,12 @@ export function mirrorRepoMarkdownDocument(markdown, docsConfig, options) {
         tree.children.splice(firstTopLevelHeadingIndex, 1);
       }
 
-      visit(tree, (node) => {
+      visit(tree, (node, index, parent) => {
         if ((node.type === 'link' || node.type === 'image') && shouldRewriteUrl(node.url)) {
           node.url = rewriteRelativeUrl(node.url, docsConfig);
         }
         if (node.type === 'html') {
-          node.value = rewriteHtmlUrlProperties(node.value, docsConfig);
+          rewriteMarkdownHtmlNode(node, docsConfig, index, parent);
         }
       });
     })
