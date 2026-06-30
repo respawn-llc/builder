@@ -1330,6 +1330,50 @@ func TestNativeSurfaceResizeReprojectsPhysicalLedgerOrderForLocalSystemNotice(t 
 	}
 }
 
+func TestNativeSurfaceResizeReprojectsLocalInsertBeforeToolRow(t *testing.T) {
+	m := newProjectedClosedUIModel(nil)
+	tool := tui.TranscriptProjectionBlock{
+		Role:         tui.RenderIntentToolShellSuccess,
+		DividerGroup: string(tui.RenderIntentTool),
+		SourceKey:    "tool-shell-1",
+		Lines:        []string{"$ sleep 20 && echo done"},
+	}
+	notice := tui.TranscriptProjectionBlock{
+		Role:            tui.RenderIntentSystem,
+		DividerGroup:    string(tui.RenderIntentSystem),
+		SourceKey:       "notice-1",
+		LocalAppendOnly: true,
+		Lines:           []string{"Background shell completed"},
+	}
+	m.nativeDeliveredStableProjection = tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{tool, notice}}
+	current := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		{
+			Role:            notice.Role,
+			DividerGroup:    notice.DividerGroup,
+			SourceKey:       notice.SourceKey,
+			LocalAppendOnly: true,
+			Lines:           []string{"Background shell completed after resize"},
+		},
+		{
+			Role:         tool.Role,
+			DividerGroup: tool.DividerGroup,
+			SourceKey:    tool.SourceKey,
+			Lines:        []string{"$ sleep 20 && echo done after resize"},
+		},
+	}}
+
+	reprojected, ok := m.reprojectNativeDeliveredStableProjectionByPhysicalShape(current, 2)
+	if !ok {
+		t.Fatal("local insert before tool row was not accepted during resize reproject")
+	}
+	if got := reprojected.Blocks[0].Lines[0]; !strings.Contains(got, "after resize") {
+		t.Fatalf("tool block was not reprojected to current geometry/content, got %q", got)
+	}
+	if got := reprojected.Blocks[1].Lines[0]; !strings.Contains(got, "after resize") {
+		t.Fatalf("local block was not reprojected to current geometry/content, got %q", got)
+	}
+}
+
 func TestNativeSurfaceResizeDebounceClampsWideCommittedPatchSummary(t *testing.T) {
 	var out bytes.Buffer
 	m := newSizedProjectedClosedUIModel(nil, 120, 36, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
@@ -2212,6 +2256,26 @@ func TestNativeSurfaceResizeReprojectsDeliveredCompactionEpochSuffix(t *testing.
 	}
 }
 
+func TestNativeProjectionSourceKeyIgnoresHydrationVolatileFlags(t *testing.T) {
+	block := tui.TranscriptProjectionBlock{EntryIndex: 0, EntryEnd: 0}
+	live := []tui.TranscriptEntry{{
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      "same durable answer",
+		Committed: true,
+	}}
+	hydrated := []tui.TranscriptEntry{{
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      "same durable answer",
+		Transient: true,
+	}}
+
+	liveKey := nativeProjectionBlockSourceKey(block, live, 0)
+	hydratedKey := nativeProjectionBlockSourceKey(block, hydrated, 0)
+	if liveKey != hydratedKey {
+		t.Fatalf("source key changed across hydration flags:\nlive=%q\nhydrated=%q", liveKey, hydratedKey)
+	}
+}
+
 func TestNativeStableProjectionChangeRejectsCorrectionAfterDeliveredCompactionMarker(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
@@ -2303,6 +2367,59 @@ func TestNativeStableProjectionChangeAppendsBehindPriorLocalReviewerStatus(t *te
 	}
 	if m.nativeStableProjectionNeedsDelivery(nativeStableLiveAppendIntent("test"), m.nativeDeliveredStableProjection, current) {
 		t.Fatal("logical current projection should reconcile after appending user behind local reviewer status")
+	}
+}
+
+func TestNativeStableProjectionChangeAppendsDuplicateLocalNoticeWithDistinctSource(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceTestModel(&out)
+	if rendered := m.View(); rendered != "" {
+		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
+	}
+	out.Reset()
+
+	previous := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		{
+			Role:         tui.RenderIntentUser,
+			DividerGroup: string(tui.RenderIntentUser),
+			SourceKey:    "user-1",
+			Lines:        []string{"prompt"},
+		},
+		{
+			Role:            tui.RenderIntentSystem,
+			DividerGroup:    string(tui.RenderIntentSystem),
+			SourceKey:       "notice-1",
+			LocalAppendOnly: true,
+			Lines:           []string{"Background shell completed"},
+		},
+		{
+			Role:         tui.RenderIntentAssistant,
+			DividerGroup: string(tui.RenderIntentAssistant),
+			SourceKey:    "assistant-1",
+			Lines:        []string{"answer"},
+		},
+	}}
+	current := tui.TranscriptProjection{Blocks: []tui.TranscriptProjectionBlock{
+		previous.Blocks[0],
+		{
+			Role:            tui.RenderIntentSystem,
+			DividerGroup:    string(tui.RenderIntentSystem),
+			SourceKey:       "notice-2",
+			LocalAppendOnly: true,
+			Lines:           []string{"Background shell completed"},
+		},
+		previous.Blocks[2],
+	}}
+
+	exitMainThread := m.enterUIMainThread("native duplicate local notice append test")
+	err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previous, current, true, false, false, "")
+	exitMainThread()
+	if err != nil {
+		t.Fatalf("duplicate local notice delivery returned error: %v", err)
+	}
+	plain := stripANSIAndTrimRight(out.String())
+	if !strings.Contains(plain, "Background shell completed") {
+		t.Fatalf("duplicate local notice was treated as already delivered, got %q", plain)
 	}
 }
 

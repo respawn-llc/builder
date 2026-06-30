@@ -616,6 +616,9 @@ func (m *uiModel) nativeStableOverlapAppendWouldReplayDeliveredPrefix(previous t
 }
 
 func (m *uiModel) nativeStableProjectionBlocksEqual(left tui.TranscriptProjectionBlock, right tui.TranscriptProjectionBlock) bool {
+	if (nativeStablePreviouslyLocalAppendOnlyBlock(left) || nativeStableCurrentLocalAppendOnlyBlock(right)) && (left.SourceKey != "" || right.SourceKey != "") {
+		return nativeStableProjectionBlocksSameReprojectIdentity(left, right)
+	}
 	if left.Role != right.Role || left.DividerGroup != right.DividerGroup || len(left.Lines) != len(right.Lines) {
 		return false
 	}
@@ -644,7 +647,7 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 		blockIndexes := make([]int, 0, len(current.Blocks)-prefix)
 		for idx := prefix; idx < len(current.Blocks); idx++ {
 			block := current.Blocks[idx]
-			if nativeStableCurrentLocalAppendOnlyBlock(block) && m.nativeStableProjectionContainsBlock(previous.Blocks[prefix:], block) {
+			if nativeStableCurrentLocalAppendOnlyBlock(block) && m.nativeStableProjectionContainsLocalAppendOnlyIdentity(previous.Blocks[prefix:], block) {
 				continue
 			}
 			blockIndexes = append(blockIndexes, idx)
@@ -659,7 +662,7 @@ func (m *uiModel) nativeStableAppendBlockIndexesForLocalReconciliation(previous 
 			continue
 		}
 		if nativeStableCurrentLocalAppendOnlyBlock(block) {
-			if m.nativeStableProjectionContainsBlock(previous.Blocks, block) {
+			if m.nativeStableProjectionContainsLocalAppendOnlyIdentity(previous.Blocks, block) {
 				continue
 			}
 			blockIndexes = append(blockIndexes, idx)
@@ -697,6 +700,21 @@ func (m *uiModel) nativeStableSkipDeliveredLocalBlocksPresentInCurrent(previous 
 
 func (m *uiModel) nativeStableProjectionContainsBlock(blocks []tui.TranscriptProjectionBlock, target tui.TranscriptProjectionBlock) bool {
 	for _, block := range blocks {
+		if m.nativeStableProjectionBlocksEqual(block, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *uiModel) nativeStableProjectionContainsLocalAppendOnlyIdentity(blocks []tui.TranscriptProjectionBlock, target tui.TranscriptProjectionBlock) bool {
+	for _, block := range blocks {
+		if block.SourceKey != "" || target.SourceKey != "" {
+			if nativeStableProjectionBlocksSameReprojectIdentity(block, target) {
+				return true
+			}
+			continue
+		}
 		if m.nativeStableProjectionBlocksEqual(block, target) {
 			return true
 		}

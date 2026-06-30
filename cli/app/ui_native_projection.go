@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/cli/tui"
+	"core/shared/clientui"
 
 	xansi "github.com/charmbracelet/x/ansi"
 )
@@ -45,21 +46,57 @@ func nativeProjectionBlockSourceKey(block tui.TranscriptProjectionBlock, entries
 		end = start
 	}
 	end = min(end, len(entries)-1)
-	payload, err := json.Marshal(entries[start : end+1])
+	payload, err := json.Marshal(nativeProjectionEntrySourceKeys(entries[start : end+1]))
 	if err == nil {
 		return string(payload)
 	}
 	return nativeProjectionEntriesFallbackSourceKey(entries[start : end+1])
 }
 
+type nativeProjectionEntrySourceKey struct {
+	Visibility        clientui.EntryVisibility `json:"visibility,omitempty"`
+	RollbackTargetID  string                   `json:"rollback_target_id,omitempty"`
+	Role              tui.TranscriptRole       `json:"role,omitempty"`
+	Text              string                   `json:"text,omitempty"`
+	CondensedText     string                   `json:"condensed_text,omitempty"`
+	Phase             clientui.MessagePhase    `json:"phase,omitempty"`
+	MessageType       clientui.MessageType     `json:"message_type,omitempty"`
+	SourcePath        string                   `json:"source_path,omitempty"`
+	CompactLabel      string                   `json:"compact_label,omitempty"`
+	ToolResultSummary string                   `json:"tool_result_summary,omitempty"`
+	ToolCallID        string                   `json:"tool_call_id,omitempty"`
+	NoticeID          string                   `json:"notice_id,omitempty"`
+	ToolCall          any                      `json:"tool_call,omitempty"`
+}
+
+func nativeProjectionEntrySourceKeys(entries []tui.TranscriptEntry) []nativeProjectionEntrySourceKey {
+	keys := make([]nativeProjectionEntrySourceKey, 0, len(entries))
+	for _, entry := range entries {
+		keys = append(keys, nativeProjectionEntrySourceKey{
+			Visibility:        entry.Visibility,
+			RollbackTargetID:  entry.RollbackTargetID,
+			Role:              entry.Role,
+			Text:              entry.Text,
+			CondensedText:     entry.CondensedText,
+			Phase:             entry.Phase,
+			MessageType:       entry.MessageType,
+			SourcePath:        entry.SourcePath,
+			CompactLabel:      entry.CompactLabel,
+			ToolResultSummary: entry.ToolResultSummary,
+			ToolCallID:        entry.ToolCallID,
+			NoticeID:          entry.NoticeID,
+			ToolCall:          entry.ToolCall,
+		})
+	}
+	return keys
+}
+
 func nativeProjectionEntriesFallbackSourceKey(entries []tui.TranscriptEntry) string {
-	parts := make([]string, 0, len(entries)*14)
+	parts := make([]string, 0, len(entries)*12)
 	for _, entry := range entries {
 		parts = append(parts,
 			string(entry.Visibility),
 			entry.RollbackTargetID,
-			fmt.Sprint(entry.Transient),
-			fmt.Sprint(entry.Committed),
 			string(entry.Role),
 			entry.Text,
 			entry.CondensedText,
@@ -262,7 +299,7 @@ func (m *uiModel) nativeStableCurrentBlockIndexForDeliveredShape(delivered tui.T
 func nativeStableReprojectIndexesPreserveAllowedPhysicalOrder(blocks []tui.TranscriptProjectionBlock, currentIndexes []int) bool {
 	normalized := make([]int, 0, len(currentIndexes))
 	for idx := 0; idx < len(currentIndexes); {
-		if nativeStableProjectionBlockCanFinalizeAssistantStream(blocks[idx]) {
+		if !nativeStablePreviouslyLocalAppendOnlyBlock(blocks[idx]) {
 			next := idx + 1
 			for next < len(currentIndexes) && nativeStablePreviouslyLocalAppendOnlyBlock(blocks[next]) && currentIndexes[next] < currentIndexes[idx] {
 				next++
