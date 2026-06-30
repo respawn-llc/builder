@@ -1,9 +1,14 @@
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
-use tauri::Manager;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
+use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
 
 mod native_glass;
@@ -32,6 +37,38 @@ struct NativeContext {
     platform: String,
     theme: String,
     home_path: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttentionNotificationActivation {
+    id: String,
+    target: serde_json::Value,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AttentionNotificationRequest {
+    backend_id: u32,
+    id: String,
+    title: String,
+    body: String,
+    target: serde_json::Value,
+}
+
+#[derive(Default)]
+struct AttentionNotificationState {
+    active: Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
+    next_token: AtomicU64,
+}
+
+struct AttentionNotificationRecord {
+    token: u64,
+    closer: Box<dyn AttentionNotificationCloser>,
+}
+
+trait AttentionNotificationCloser: Send {
+    fn close(self: Box<Self>) -> Result<(), String>;
 }
 
 #[tauri::command]
@@ -110,6 +147,309 @@ fn append_gui_log(entry: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn send_attention_notification(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AttentionNotificationState>,
+    notification: AttentionNotificationRequest,
+) -> Result<(), String> {
+    if notification.id.trim().is_empty() || notification.title.trim().is_empty() {
+        return Err("Attention notification id and title are required.".to_string());
+    }
+    let activation = AttentionNotificationActivation {
+        id: notification.id,
+        target: notification.target,
+    };
+    let backend_id = notification.backend_id;
+    let token = state.next_token.fetch_add(1, Ordering::Relaxed);
+    let native_notification =
+        attention_native_notification(backend_id, &notification.title, &notification.body);
+    show_attention_notification(
+        app,
+        state.active.clone(),
+        backend_id,
+        token,
+        activation,
+        native_notification,
+    )
+}
+
+#[tauri::command]
+fn remove_attention_notification(
+    state: tauri::State<'_, AttentionNotificationState>,
+    backend_id: u32,
+) -> Result<(), String> {
+    if backend_id == 0 {
+        return Err("Attention notification backend id is required.".to_string());
+    }
+    remove_attention_notification_backend(&state, backend_id)
+}
+
+fn attention_native_notification(
+    backend_id: u32,
+    title: &str,
+    body: &str,
+) -> notify_rust::Notification {
+    let mut notification = notify_rust::Notification::new();
+    notification
+        .appname("Kent")
+        .summary(title)
+        .body(body)
+        .action("default", "Open")
+        .action("open", "Open");
+    configure_attention_notification_identity(&mut notification, backend_id);
+    notification
+}
+
+#[cfg(target_os = "macos")]
+fn show_attention_notification(
+    app: tauri::AppHandle,
+    active: Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
+    backend_id: u32,
+    token: u64,
+    activation: AttentionNotificationActivation,
+    notification: notify_rust::Notification,
+) -> Result<(), String> {
+    let handle = notification
+        .show()
+        .map_err(|error| format!("Send native attention notification failed: {error}"))?;
+    insert_attention_notification_record(
+        &active,
+        backend_id,
+        token,
+        Box::new(MacAttentionNotificationCloser {
+            notification_id: attention_notification_backend_key(backend_id),
+        }),
+    )?;
+    tauri::async_runtime::spawn_blocking(move || {
+        handle.wait_for_action(|action| {
+            let was_active =
+                remove_attention_notification_record_without_closing(&active, backend_id, token);
+            if action != "__closed" && was_active {
+                let _ = app.emit_to("main", "app://attention-notification-activated", activation);
+            }
+        });
+    });
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn show_attention_notification(
+    app: tauri::AppHandle,
+    active: Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
+    backend_id: u32,
+    token: u64,
+    activation: AttentionNotificationActivation,
+    notification: notify_rust::Notification,
+) -> Result<(), String> {
+    let handle = Arc::new(
+        notification
+            .show()
+            .map_err(|error| format!("Send native attention notification failed: {error}"))?,
+    );
+    insert_attention_notification_record(
+        &active,
+        backend_id,
+        token,
+        Box::new(UnixAttentionNotificationCloser {
+            handle: handle.clone(),
+        }),
+    )?;
+    tauri::async_runtime::spawn(async move {
+        handle
+            .wait_for_action_async(|response| {
+                let was_active = remove_attention_notification_record_without_closing(
+                    &active, backend_id, token,
+                );
+                let activated = matches!(
+                    response,
+                    notify_rust::NotificationResponse::Default
+                        | notify_rust::NotificationResponse::Action(_)
+                        | notify_rust::NotificationResponse::Reply(_)
+                );
+                if activated && was_active {
+                    let _ =
+                        app.emit_to("main", "app://attention-notification-activated", activation);
+                }
+            })
+            .await;
+    });
+    Ok(())
+}
+
+#[cfg(windows)]
+fn show_attention_notification(
+    app: tauri::AppHandle,
+    active: Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
+    backend_id: u32,
+    token: u64,
+    activation: AttentionNotificationActivation,
+    notification: notify_rust::Notification,
+) -> Result<(), String> {
+    let handle = notification
+        .show()
+        .map_err(|error| format!("Send native attention notification failed: {error}"))?;
+    insert_attention_notification_record(
+        &active,
+        backend_id,
+        token,
+        Box::new(WindowsAttentionNotificationCloser {
+            app_id: attention_notification_backend_key(backend_id),
+        }),
+    )?;
+    tauri::async_runtime::spawn_blocking(move || {
+        handle.wait_for_action(|action| {
+            let was_active =
+                remove_attention_notification_record_without_closing(&active, backend_id, token);
+            if action != "__closed" && was_active {
+                let _ = app.emit_to("main", "app://attention-notification-activated", activation);
+            }
+        });
+    });
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn show_attention_notification(
+    _app: tauri::AppHandle,
+    _active: Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
+    _backend_id: u32,
+    _token: u64,
+    _activation: AttentionNotificationActivation,
+    _notification: notify_rust::Notification,
+) -> Result<(), String> {
+    Err("Native attention notifications are unsupported on this platform.".to_string())
+}
+
+fn insert_attention_notification_record(
+    active: &Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
+    backend_id: u32,
+    token: u64,
+    closer: Box<dyn AttentionNotificationCloser>,
+) -> Result<(), String> {
+    let replaced = active
+        .lock()
+        .map_err(|_| "Attention notification state lock poisoned.".to_string())?
+        .insert(backend_id, AttentionNotificationRecord { token, closer });
+    if let Some(record) = replaced {
+        record.closer.close()?;
+    }
+    Ok(())
+}
+
+fn remove_attention_notification_backend(
+    state: &AttentionNotificationState,
+    backend_id: u32,
+) -> Result<(), String> {
+    let record = state
+        .active
+        .lock()
+        .map_err(|_| "Attention notification state lock poisoned.".to_string())?
+        .remove(&backend_id);
+    if let Some(record) = record {
+        record.closer.close()?;
+    }
+    Ok(())
+}
+
+fn remove_attention_notification_record_without_closing(
+    active: &Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
+    backend_id: u32,
+    token: u64,
+) -> bool {
+    active
+        .lock()
+        .map(|mut active_notifications| {
+            if active_notifications
+                .get(&backend_id)
+                .is_some_and(|record| record.token == token)
+            {
+                return active_notifications.remove(&backend_id).is_some();
+            }
+            false
+        })
+        .unwrap_or(false)
+}
+
+fn attention_notification_backend_key(backend_id: u32) -> String {
+    format!("kent-attention-{backend_id}")
+}
+
+#[cfg(target_os = "macos")]
+fn configure_attention_notification_identity(
+    notification: &mut notify_rust::Notification,
+    backend_id: u32,
+) {
+    notification.id(attention_notification_backend_key(backend_id));
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn configure_attention_notification_identity(
+    notification: &mut notify_rust::Notification,
+    backend_id: u32,
+) {
+    notification.id(backend_id);
+}
+
+#[cfg(windows)]
+fn configure_attention_notification_identity(
+    notification: &mut notify_rust::Notification,
+    backend_id: u32,
+) {
+    notification.id(backend_id);
+    notification.app_id(&attention_notification_backend_key(backend_id));
+}
+
+#[cfg(not(any(unix, windows)))]
+fn configure_attention_notification_identity(
+    _notification: &mut notify_rust::Notification,
+    _backend_id: u32,
+) {
+}
+
+#[cfg(target_os = "macos")]
+struct MacAttentionNotificationCloser {
+    notification_id: String,
+}
+
+#[cfg(target_os = "macos")]
+impl AttentionNotificationCloser for MacAttentionNotificationCloser {
+    fn close(self: Box<Self>) -> Result<(), String> {
+        mac_usernotifications::blocking::close_delivered(&self.notification_id);
+        Ok(())
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+struct UnixAttentionNotificationCloser {
+    handle: Arc<notify_rust::NotificationHandle>,
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+impl AttentionNotificationCloser for UnixAttentionNotificationCloser {
+    fn close(self: Box<Self>) -> Result<(), String> {
+        tauri::async_runtime::block_on(self.handle.close_async());
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+struct WindowsAttentionNotificationCloser {
+    app_id: String,
+}
+
+#[cfg(windows)]
+impl AttentionNotificationCloser for WindowsAttentionNotificationCloser {
+    fn close(self: Box<Self>) -> Result<(), String> {
+        use windows::core::HSTRING;
+        use windows::UI::Notifications::ToastNotificationManager;
+
+        ToastNotificationManager::History()
+            .and_then(|history| history.ClearWithId(&HSTRING::from(self.app_id)))
+            .map_err(|error| format!("Remove native attention notification failed: {error}"))
+    }
+}
+
+#[tauri::command]
 async fn apply_native_window_glass(
     app: tauri::AppHandle,
     label: String,
@@ -131,10 +471,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(AttentionNotificationState::default())
         .setup(|app| {
             #[cfg(any(target_os = "macos", windows))]
             if let Some(window) = app.get_webview_window("main") {
@@ -151,6 +493,8 @@ pub fn run() {
             select_directory,
             open_external_url,
             append_gui_log,
+            send_attention_notification,
+            remove_attention_notification,
             apply_native_window_glass,
             set_native_window_glass_tint,
         ])
@@ -366,7 +710,10 @@ fn resolve_configured_path(value: &str) -> Result<PathBuf, String> {
     // KENT_PERSISTENCE_ROOT=~\kent-root is accepted by the CLI/server, so the
     // desktop must resolve the same value rather than reject it as relative and
     // fail to connect to the matching selected-root server.
-    let expanded = if let Some(rest) = trimmed.strip_prefix("~/").or_else(|| trimmed.strip_prefix("~\\")) {
+    let expanded = if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
         home_dir()?.join(rest)
     } else {
         PathBuf::from(trimmed)
@@ -446,9 +793,137 @@ fn trim_log_if_needed(path: &Path, append_bytes: u64) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clean_path, parse_theme, persistence_root_hash, resolve_configured_path, server_rpc_url,
+        clean_path, insert_attention_notification_record, parse_theme, persistence_root_hash,
+        remove_attention_notification_backend,
+        remove_attention_notification_record_without_closing, resolve_configured_path,
+        server_rpc_url, AttentionNotificationCloser, AttentionNotificationState,
     };
     use std::path::{Path, PathBuf};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    struct RecordingAttentionNotificationCloser {
+        closed: Arc<AtomicBool>,
+    }
+
+    impl AttentionNotificationCloser for RecordingAttentionNotificationCloser {
+        fn close(self: Box<Self>) -> Result<(), String> {
+            self.closed.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn remove_attention_notification_closes_native_surface() {
+        let state = AttentionNotificationState::default();
+        let closed = Arc::new(AtomicBool::new(false));
+        insert_attention_notification_record(
+            &state.active,
+            42,
+            1,
+            Box::new(RecordingAttentionNotificationCloser {
+                closed: closed.clone(),
+            }),
+        )
+        .expect("insert notification");
+
+        remove_attention_notification_backend(&state, 42).expect("remove notification");
+
+        assert!(closed.load(Ordering::SeqCst));
+        assert!(state.active.lock().expect("active lock").is_empty());
+    }
+
+    #[test]
+    fn activated_attention_notification_removal_does_not_close_native_surface() {
+        let state = AttentionNotificationState::default();
+        let closed = Arc::new(AtomicBool::new(false));
+        insert_attention_notification_record(
+            &state.active,
+            42,
+            1,
+            Box::new(RecordingAttentionNotificationCloser {
+                closed: closed.clone(),
+            }),
+        )
+        .expect("insert notification");
+
+        assert!(remove_attention_notification_record_without_closing(
+            &state.active,
+            42,
+            1
+        ));
+
+        assert!(!closed.load(Ordering::SeqCst));
+        assert!(state.active.lock().expect("active lock").is_empty());
+    }
+
+    #[test]
+    fn inserting_replacement_attention_notification_closes_previous_surface() {
+        let state = AttentionNotificationState::default();
+        let first_closed = Arc::new(AtomicBool::new(false));
+        let second_closed = Arc::new(AtomicBool::new(false));
+        insert_attention_notification_record(
+            &state.active,
+            42,
+            1,
+            Box::new(RecordingAttentionNotificationCloser {
+                closed: first_closed.clone(),
+            }),
+        )
+        .expect("insert first notification");
+
+        insert_attention_notification_record(
+            &state.active,
+            42,
+            2,
+            Box::new(RecordingAttentionNotificationCloser {
+                closed: second_closed.clone(),
+            }),
+        )
+        .expect("replace notification");
+
+        assert!(first_closed.load(Ordering::SeqCst));
+        assert!(!second_closed.load(Ordering::SeqCst));
+        remove_attention_notification_backend(&state, 42).expect("remove replacement");
+        assert!(second_closed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn stale_attention_notification_callback_does_not_remove_replacement() {
+        let state = AttentionNotificationState::default();
+        let first_closed = Arc::new(AtomicBool::new(false));
+        let second_closed = Arc::new(AtomicBool::new(false));
+        insert_attention_notification_record(
+            &state.active,
+            42,
+            1,
+            Box::new(RecordingAttentionNotificationCloser {
+                closed: first_closed.clone(),
+            }),
+        )
+        .expect("insert first notification");
+        insert_attention_notification_record(
+            &state.active,
+            42,
+            2,
+            Box::new(RecordingAttentionNotificationCloser {
+                closed: second_closed.clone(),
+            }),
+        )
+        .expect("replace notification");
+
+        assert!(!remove_attention_notification_record_without_closing(
+            &state.active,
+            42,
+            1
+        ));
+
+        assert!(first_closed.load(Ordering::SeqCst));
+        assert!(!second_closed.load(Ordering::SeqCst));
+        assert!(state.active.lock().expect("active lock").contains_key(&42));
+    }
 
     #[test]
     fn persistence_root_hash_matches_go_golden_value() {

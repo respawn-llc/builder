@@ -41,6 +41,7 @@ type RuntimeWiringOptions struct {
 	Sources                             map[string]string
 	Client                              llm.Client
 	WorkflowRun                         *workflowruntime.Config
+	AskQuestionBatchSkipped             func(askquestion.AskQuestionBatchMetadata)
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
 	SkipContinuationAgentRoleValidation bool
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
@@ -174,6 +175,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 		HeadlessMode:                  opts.Headless,
 		ToolPreambles:                 active.ToolPreambles,
 		WorkflowRun:                   opts.WorkflowRun,
+		AskQuestionBatchSkipped:       opts.AskQuestionBatchSkipped,
 		TranscriptWorkingDir:          workspaceRoot,
 		GlobalConfigDir:               opts.GlobalConfigDir,
 		Reviewer: runtime.ReviewerConfig{

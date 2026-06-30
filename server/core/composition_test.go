@@ -11,10 +11,12 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/llm"
 	"core/server/registry"
+	"core/server/runtime"
 	"core/server/session"
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
@@ -191,6 +193,185 @@ func TestComposedWorkflowTaskDetailResolvesPendingQuestionFromSessionTranscript(
 	if len(detail.Task.Attention) != 1 || detail.Task.Attention[0].Message != "Question from composed session transcript?" {
 		t.Fatalf("attention = %+v", detail.Task.Attention)
 	}
+}
+
+func TestComposedAttentionClientUsesOneRootGlobalTaskDetailBroker(t *testing.T) {
+	ctx := context.Background()
+	appCore := newComposedCoreForAttentionTest(t)
+	registerCoreRuntime(t, appCore, "session-1")
+	registerCoreRuntime(t, appCore, "session-2")
+
+	desktop, err := appCore.AttentionNotificationClient().SubscribeAttentionNotifications(ctx, serverapi.AttentionNotificationSubscribeRequest{})
+	if err != nil {
+		t.Fatalf("SubscribeAttentionNotifications: %v", err)
+	}
+	sessionOne, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications session-1: %v", err)
+	}
+	sessionTwo, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-2"})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications session-2: %v", err)
+	}
+
+	appCore.BeginPendingPrompt("session-1", coreTaskBatchAskRequest("ask-a", "project-a", "task-a", "session-1"))
+	appCore.BeginPendingPrompt("session-2", coreTaskBatchAskRequest("ask-b", "project-b", "task-b", "session-2"))
+
+	firstDesktop := nextCoreAttentionEvent(t, desktop)
+	secondDesktop := nextCoreAttentionEvent(t, desktop)
+	if firstDesktop.Pending.Target.ProjectID != "project-a" || secondDesktop.Pending.Target.ProjectID != "project-b" {
+		t.Fatalf("desktop project delivery = %+v then %+v", firstDesktop, secondDesktop)
+	}
+	if event := nextCoreAttentionEvent(t, sessionOne); event.Pending.Target.TaskID != "task-a" {
+		t.Fatalf("session-1 task-detail event = %+v", event)
+	}
+	if event := nextCoreAttentionEvent(t, sessionTwo); event.Pending.Target.TaskID != "task-b" {
+		t.Fatalf("session-2 task-detail event = %+v", event)
+	}
+}
+
+func TestComposedAttentionClientKeepsGenericPromptsOffDesktopRoute(t *testing.T) {
+	ctx := context.Background()
+	appCore := newComposedCoreForAttentionTest(t)
+	registerCoreRuntime(t, appCore, "session-1")
+
+	desktop, err := appCore.AttentionNotificationClient().SubscribeAttentionNotifications(ctx, serverapi.AttentionNotificationSubscribeRequest{})
+	if err != nil {
+		t.Fatalf("SubscribeAttentionNotifications: %v", err)
+	}
+	sessionSub, err := appCore.AttentionNotificationClient().SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
+	}
+
+	appCore.BeginPendingPrompt("session-1", askquestion.AskQuestionRequest{ID: "ask-generic", Question: "Generic prompt?"})
+	pending := nextCoreAttentionEvent(t, sessionSub)
+	if pending.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt {
+		t.Fatalf("generic prompt target = %+v", pending.Pending.Target)
+	}
+	if event, err := desktop.Next(shortCoreAttentionContext(t)); err == nil {
+		t.Fatalf("desktop received generic pending event: %+v", event)
+	}
+
+	appCore.CompletePendingPrompt("session-1", "ask-generic")
+	resolved := nextCoreAttentionEvent(t, sessionSub)
+	if resolved.Type != clientui.AttentionNotificationEventResolved || resolved.ID != "prompt:session-1:ask-generic" {
+		t.Fatalf("generic resolved event = %+v", resolved)
+	}
+	if event, err := desktop.Next(shortCoreAttentionContext(t)); err == nil {
+		t.Fatalf("desktop received generic resolved event: %+v", event)
+	}
+}
+
+func TestComposedAttentionClientRoutesTargetlessTaskDetailResolvedToDesktop(t *testing.T) {
+	ctx := context.Background()
+	appCore := newComposedCoreForAttentionTest(t)
+	registerCoreRuntime(t, appCore, "session-1")
+
+	desktop, err := appCore.AttentionNotificationClient().SubscribeAttentionNotifications(ctx, serverapi.AttentionNotificationSubscribeRequest{})
+	if err != nil {
+		t.Fatalf("SubscribeAttentionNotifications: %v", err)
+	}
+	req := coreTaskBatchAskRequest("ask-a", "project-a", "task-a", "session-1")
+	appCore.BeginPendingPrompt("session-1", req)
+	pending := nextCoreAttentionEvent(t, desktop)
+	if pending.Type != clientui.AttentionNotificationEventPending {
+		t.Fatalf("pending event = %+v", pending)
+	}
+	appCore.bundles.Runtime.runtimeRegistry.MarkTaskQuestionCleared(*req.QuestionBatch, "ask-a")
+	resolved := nextCoreAttentionEvent(t, desktop)
+	if resolved.Type != clientui.AttentionNotificationEventResolved || resolved.Pending != nil || resolved.ID != pending.Pending.ID {
+		t.Fatalf("targetless resolved event = %+v", resolved)
+	}
+}
+
+func newComposedCoreForAttentionTest(t *testing.T) *Core {
+	t.Helper()
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildAuthSupport: %v", err)
+	}
+	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
+	if err != nil {
+		t.Fatalf("BuildRuntimeSupport: %v", err)
+	}
+	appCore, err := NewWithContext(t.Context(), resolved.Config, authSupport, runtimeSupport)
+	if err != nil {
+		t.Fatalf("NewWithContext: %v", err)
+	}
+	t.Cleanup(func() { _ = appCore.Close() })
+	return appCore
+}
+
+func registerCoreRuntime(t *testing.T, appCore *Core, sessionID string) {
+	t.Helper()
+	claim, _, _ := appCore.bundles.Runtime.runtimeRegistry.AcquireRuntimeClaim(sessionID, "")
+	if claim == nil {
+		t.Fatalf("AcquireRuntimeClaim(%q) returned nil claim", sessionID)
+	}
+	claim.Resolve(&runtime.Engine{}, nil, nil)
+	t.Cleanup(func() {
+		if active := appCore.bundles.Runtime.runtimeRegistry.RuntimeClaimFor(sessionID); active != nil {
+			_, _ = active.Close(context.Background(), nil)
+		}
+	})
+}
+
+func coreTaskBatchAskRequest(askID string, projectID string, taskID string, sessionID string) askquestion.AskQuestionRequest {
+	return askquestion.AskQuestionRequest{
+		ID:       askID,
+		Question: "Task question?",
+		QuestionBatch: &askquestion.AskQuestionBatchMetadata{
+			Origin:              askquestion.AskQuestionOriginModelTool,
+			RunID:               "run-" + taskID,
+			StepID:              "step-" + taskID,
+			BatchID:             "batch-" + taskID,
+			PromptID:            askID,
+			BatchPromptIDs:      []string{askID},
+			CandidateOrdinal:    0,
+			PreparedPromptCount: 1,
+		},
+		AttentionTarget: &clientui.AttentionNotificationTarget{
+			Kind:      clientui.AttentionNotificationTargetTaskDetail,
+			ProjectID: projectID,
+			TaskID:    taskID,
+			SessionID: sessionID,
+			RunID:     "run-" + taskID,
+			Focus: &clientui.AttentionNotificationTaskDetailFocus{
+				Kind:   clientui.AttentionNotificationFocusQuestion,
+				AskIDs: []string{askID},
+			},
+		},
+		AttentionPresentation: &clientui.AttentionNotificationPresentation{
+			Title: "Task question",
+			Body:  "Task question?",
+			Count: 1,
+		},
+	}
+}
+
+func nextCoreAttentionEvent(t *testing.T, sub serverapi.AttentionNotificationSubscription) clientui.AttentionNotificationEvent {
+	t.Helper()
+	event, err := sub.Next(context.Background())
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	return event
+}
+
+func shortCoreAttentionContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	t.Cleanup(cancel)
+	return ctx
 }
 
 type fakePendingPromptSource struct {

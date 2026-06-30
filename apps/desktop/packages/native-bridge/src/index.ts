@@ -2,8 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
 
 import {
   fitCurrentWindowToContent,
@@ -18,6 +16,27 @@ import {
   writeTauriDesktopSettings,
   type DesktopSettings,
 } from "./desktopSettings";
+import {
+  createBrowserCapabilities,
+  createTauriCapabilities,
+  normalizeNativePlatform,
+  type NativeCapabilityState,
+  type NativePlatform,
+} from "./capabilities";
+import {
+  createBrowserNativeNotifications,
+  createTauriNativeNotifications,
+  type NativeNotificationBridge,
+} from "./notifications";
+import {
+  createBrowserWindowFocusControls,
+  createTauriWindowFocusControls,
+} from "./windowFocus";
+import {
+  createBrowserUpdates,
+  createTauriUpdates,
+  type NativeUpdateBridge,
+} from "./updates";
 
 export type { NativeDialogContentSize, NativeDialogTheme, NativeDialogWindowOptions } from "./dialogs";
 export {
@@ -27,53 +46,47 @@ export {
   type DesktopSelfUpdate,
   type DesktopSettings,
 } from "./desktopSettings";
-
-export type NativeCapabilityState = Readonly<{
-  platform: NativePlatform;
-  clipboard: Readonly<{
-    writeText: boolean;
-    readText: boolean;
-  }>;
-  directories: Readonly<{
-    select: boolean;
-  }>;
-  notifications: Readonly<{
-    basic: boolean;
-  }>;
-  links: Readonly<{
-    openExternal: boolean;
-  }>;
-  logging: Readonly<{
-    localFile: boolean;
-  }>;
-  tray: boolean;
-  appMenu: boolean;
-  updater: boolean;
-  settings: boolean;
-  windowControls: boolean;
-  windowDrag: boolean;
-  dialogWindows: boolean;
-  projectCreationWindow: boolean;
-  macosVibrancy: boolean;
-}>;
-
-export type NativePlatform = "browser" | "linux" | "macos" | "unknown" | "windows";
-
-export type NativeUpdateAvailability =
-  | Readonly<{ available: false }>
-  | Readonly<{
-      available: true;
-      version: string;
-      currentVersion: string;
-      notes: string | null;
-      publishedAt: Date | null;
-    }>;
-
-export type NativeUpdateDownloadProgress = Readonly<{
-  downloadedBytes: number;
-  // Total bytes to download; null when the update server sent no Content-Length.
-  totalBytes: number | null;
-}>;
+export {
+  createBrowserCapabilities,
+  createTauriCapabilities,
+  normalizeNativePlatform,
+  type NativeCapabilityState,
+  type NativePlatform,
+} from "./capabilities";
+export {
+  NativeNotificationIDMapper,
+  hashNativeNotificationID,
+  type NativeNotificationBackendID,
+} from "./notificationIds";
+export {
+  createUnavailableNativeNotifications,
+  createBrowserNativeNotifications,
+  createTauriNativeNotifications,
+  parseNativeNotificationActivationPayload,
+  validateNativeNotification,
+  type NativeNotification,
+  type NativeNotificationActivation,
+  type NativeNotificationApprovalFocus,
+  type NativeNotificationPermission,
+  type NativeNotificationQuestionFocus,
+  type NativeNotificationTarget,
+  type NativeNotificationTaskDetailTarget,
+  type NativeNotificationBridge,
+  type NativeNotificationUnlisten,
+  type TauriNativeNotificationOptions,
+} from "./notifications";
+export {
+  createBrowserWindowFocusControls,
+  createTauriWindowFocusControls,
+  type NativeWindowFocusControls,
+} from "./windowFocus";
+export {
+  createBrowserUpdates,
+  createTauriUpdates,
+  type NativeUpdateAvailability,
+  type NativeUpdateBridge,
+  type NativeUpdateDownloadProgress,
+} from "./updates";
 
 export type NativeBridge = Readonly<{
   capabilities: NativeCapabilityState;
@@ -84,26 +97,14 @@ export type NativeBridge = Readonly<{
   directories: Readonly<{
     selectDirectory(options: NativeDirectoryPickerOptions): Promise<NativeDirectorySelection>;
   }>;
-  notifications: Readonly<{
-    notify(message: NativeNotification): Promise<void>;
-  }>;
+  notifications: NativeNotificationBridge;
   links: Readonly<{
     openExternal(url: string): Promise<void>;
   }>;
   logging: Readonly<{
     append(entry: NativeLogEntry): Promise<void>;
   }>;
-  updates: Readonly<{
-    // Reports whether the running install can self-update. The Tauri Linux updater
-    // only services AppImage bundles, so deb/plain-binary launches return false
-    // even though the updater capability is present.
-    supported(): Promise<boolean>;
-    check(): Promise<NativeUpdateAvailability>;
-    downloadAndInstall(
-      onProgress?: (progress: NativeUpdateDownloadProgress) => void,
-    ): Promise<void>;
-    relaunch(): Promise<void>;
-  }>;
+  updates: NativeUpdateBridge;
   settings: Readonly<{
     read(): Promise<DesktopSettings>;
     write(next: DesktopSettings): Promise<void>;
@@ -115,6 +116,9 @@ export type NativeBridge = Readonly<{
   window: Readonly<{
     startDragging(): Promise<void>;
     closeCurrent(): Promise<void>;
+    isFocused(): Promise<boolean>;
+    focusMain(): Promise<void>;
+    onFocusChanged(handler: (focused: boolean) => void): Promise<NativeUnlisten>;
     fitCurrentToContent(size: NativeDialogContentSize): Promise<void>;
     setCurrentGlassTint(tint: NativeWindowGlassTint | null): Promise<void>;
   }>;
@@ -156,11 +160,6 @@ export type NativeWindowGlassTint = Readonly<{
 }>;
 
 const nativeWindowGlassTintChannels = ["red", "green", "blue", "alpha"] as const;
-
-export type NativeNotification = Readonly<{
-  title: string;
-  body: string;
-}>;
 
 export type NativeDirectoryPickerOptions = Readonly<{
   title: string;
@@ -226,45 +225,6 @@ export type NativeWorkflowDeleted = Readonly<{
 
 export type NativeUnlisten = () => void;
 
-const unavailableCapabilities: NativeCapabilityState = {
-  platform: "browser",
-  clipboard: {
-    writeText: false,
-    readText: false,
-  },
-  directories: {
-    select: false,
-  },
-  notifications: {
-    basic: false,
-  },
-  links: {
-    openExternal: false,
-  },
-  logging: {
-    localFile: false,
-  },
-  tray: false,
-  appMenu: false,
-  updater: false,
-  settings: false,
-  windowControls: false,
-  windowDrag: false,
-  dialogWindows: false,
-  projectCreationWindow: false,
-  macosVibrancy: false,
-};
-
-const unavailableUpdate: NativeUpdateAvailability = { available: false };
-
-function parseUpdateDate(value: string | undefined): Date | null {
-  if (value === undefined) {
-    return null;
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
 export const nativeDialogWindowHorizontalInsetPx = 16;
 const projectDeletedEvent = "app://project-deleted";
 const workspaceUnlinkRequestEvent = "app://workspace-unlink-request";
@@ -286,9 +246,10 @@ export function createBrowserNativeBridge(options: BrowserNativeBridgeOptions = 
   // Settings persist via localStorage so the browser QA shell (dev:browser) can
   // exercise settings-driven UI; the self-update gate never relies on this since
   // the browser shell is not updater-capable.
-  const capabilities = { ...unavailableCapabilities, platform: options.platform ?? "browser", settings: true };
+  const capabilities = createBrowserCapabilities(options.platform ?? "browser");
   const projectDeletionHandlers = new Set<(event: NativeProjectDeleted) => void>();
   const workflowDeletionHandlers = new Set<(event: NativeWorkflowDeleted) => void>();
+  const browserWindowFocus = createBrowserWindowFocusControls();
   return {
     capabilities,
     clipboard: {
@@ -304,11 +265,7 @@ export function createBrowserNativeBridge(options: BrowserNativeBridgeOptions = 
         throw new Error("Directory selection is unavailable in this shell.");
       },
     },
-    notifications: {
-      async notify(): Promise<void> {
-        throw new Error("Native notifications are unavailable in this shell.");
-      },
-    },
+    notifications: createBrowserNativeNotifications(),
     links: {
       async openExternal(url: string): Promise<void> {
         window.open(validateExternalUrl(url), "_blank", "noopener,noreferrer");
@@ -319,20 +276,7 @@ export function createBrowserNativeBridge(options: BrowserNativeBridgeOptions = 
         return Promise.resolve();
       },
     },
-    updates: {
-      async supported(): Promise<boolean> {
-        return false;
-      },
-      async check(): Promise<NativeUpdateAvailability> {
-        return unavailableUpdate;
-      },
-      async downloadAndInstall(): Promise<void> {
-        throw new Error("Application updates are unavailable in this shell.");
-      },
-      async relaunch(): Promise<void> {
-        throw new Error("Application relaunch is unavailable in this shell.");
-      },
-    },
+    updates: createBrowserUpdates(),
     settings: {
       async read(): Promise<DesktopSettings> {
         return readBrowserDesktopSettings();
@@ -363,6 +307,9 @@ export function createBrowserNativeBridge(options: BrowserNativeBridgeOptions = 
       async closeCurrent(): Promise<void> {
         return Promise.resolve();
       },
+      isFocused: browserWindowFocus.isFocused,
+      focusMain: browserWindowFocus.focusMain,
+      onFocusChanged: browserWindowFocus.onFocusChanged,
       async fitCurrentToContent(): Promise<void> {
         return Promise.resolve();
       },
@@ -442,10 +389,7 @@ export function createBrowserNativeBridge(options: BrowserNativeBridgeOptions = 
 
 export function createTauriNativeBridge(platform: NativePlatform = "unknown"): NativeBridge {
   const capabilities = createTauriCapabilities(platform);
-  // The Update handle returned by check() carries the connection used to download
-  // and install; we hold it so downloadAndInstall() operates on the last check
-  // result without leaking the plugin's Update type across the bridge boundary.
-  let pendingUpdate: Update | null = null;
+  const tauriWindowFocus = createTauriWindowFocusControls();
   return {
     capabilities,
     clipboard: {
@@ -462,11 +406,7 @@ export function createTauriNativeBridge(platform: NativePlatform = "unknown"): N
         return path === null ? null : { path };
       },
     },
-    notifications: {
-      async notify(): Promise<void> {
-        throw new Error("Native notifications are unavailable in this shell.");
-      },
-    },
+    notifications: createTauriNativeNotifications({ platform }),
     links: {
       async openExternal(url: string): Promise<void> {
         await invoke("open_external_url", { url: validateExternalUrl(url) });
@@ -477,46 +417,7 @@ export function createTauriNativeBridge(platform: NativePlatform = "unknown"): N
         await invoke("append_gui_log", { entry: JSON.stringify(entry) });
       },
     },
-    updates: {
-      async supported(): Promise<boolean> {
-        return invoke<boolean>("self_update_supported");
-      },
-      async check(): Promise<NativeUpdateAvailability> {
-        const update = await checkForUpdate();
-        pendingUpdate = update;
-        if (update === null) {
-          return unavailableUpdate;
-        }
-        return {
-          available: true,
-          version: update.version,
-          currentVersion: update.currentVersion,
-          notes: update.body ?? null,
-          publishedAt: parseUpdateDate(update.date),
-        };
-      },
-      async downloadAndInstall(
-        onProgress?: (progress: NativeUpdateDownloadProgress) => void,
-      ): Promise<void> {
-        if (pendingUpdate === null) {
-          throw new Error("No update is pending; call updates.check() first.");
-        }
-        let downloadedBytes = 0;
-        let totalBytes: number | null = null;
-        await pendingUpdate.downloadAndInstall((event) => {
-          if (event.event === "Started") {
-            totalBytes = event.data.contentLength ?? null;
-            downloadedBytes = 0;
-          } else if (event.event === "Progress") {
-            downloadedBytes += event.data.chunkLength;
-          }
-          onProgress?.({ downloadedBytes, totalBytes });
-        });
-      },
-      async relaunch(): Promise<void> {
-        await relaunch();
-      },
-    },
+    updates: createTauriUpdates(async () => invoke<boolean>("self_update_supported")),
     settings: {
       read: readTauriDesktopSettings,
       write: writeTauriDesktopSettings,
@@ -536,6 +437,9 @@ export function createTauriNativeBridge(platform: NativePlatform = "unknown"): N
       async closeCurrent(): Promise<void> {
         await getCurrentWindow().close();
       },
+      isFocused: tauriWindowFocus.isFocused,
+      focusMain: tauriWindowFocus.focusMain,
+      onFocusChanged: tauriWindowFocus.onFocusChanged,
       async fitCurrentToContent(size: NativeDialogContentSize): Promise<void> {
         await fitCurrentWindowToContent(size);
       },
@@ -641,13 +545,6 @@ function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
 }
 
-function normalizeNativePlatform(platform: string): NativePlatform {
-  if (platform === "linux" || platform === "macos" || platform === "windows") {
-    return platform;
-  }
-  return "unknown";
-}
-
 function validateExternalUrl(url: string): string {
   const parsed = new URL(url);
   if (!["http:", "https:", "mailto:"].includes(parsed.protocol)) {
@@ -666,35 +563,4 @@ function validateNativeWindowGlassTint(tint: NativeWindowGlassTint | null): void
       throw new Error(`Native glass tint ${channel} channel must be a finite number from 0 to 1.`);
     }
   }
-}
-
-function createTauriCapabilities(platform: NativePlatform): NativeCapabilityState {
-  return {
-    platform,
-    clipboard: {
-      writeText: true,
-      readText: true,
-    },
-    directories: {
-      select: true,
-    },
-    notifications: {
-      basic: false,
-    },
-    links: {
-      openExternal: true,
-    },
-    logging: {
-      localFile: true,
-    },
-    tray: false,
-    appMenu: false,
-    updater: true,
-    settings: true,
-    windowControls: false,
-    windowDrag: true,
-    dialogWindows: true,
-    projectCreationWindow: true,
-    macosVibrancy: false,
-  };
 }

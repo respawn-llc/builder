@@ -2177,6 +2177,22 @@ FROM task_transition_records
 WHERE id = sqlc.arg(transition_id)
 LIMIT 1;
 
+-- name: ListPendingApprovalTransitionIDsByWorkflow :many
+SELECT tt.id
+FROM task_transition_records tt
+JOIN task_records t ON t.id = tt.task_id
+WHERE t.workflow_id = sqlc.arg(workflow_id)
+  AND t.canceled_at_unix_ms = 0
+  AND tt.state = 'pending_approval'
+ORDER BY tt.created_at_unix_ms ASC, tt.id ASC;
+
+-- name: ListPendingApprovalTransitionIDsByTask :many
+SELECT id
+FROM task_transition_records
+WHERE task_id = sqlc.arg(task_id)
+  AND state = 'pending_approval'
+ORDER BY created_at_unix_ms ASC, id ASC;
+
 -- name: ApprovePendingTransition :execrows
 UPDATE task_transitions
 SET state = 'approved', applied_at_unix_ms = sqlc.arg(applied_at_unix_ms)

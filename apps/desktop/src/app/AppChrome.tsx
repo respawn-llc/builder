@@ -5,6 +5,7 @@ import { useCallback, type MouseEvent, type PointerEvent, type ReactNode } from 
 import { useTranslation } from "react-i18next";
 
 import { toggleInMemoryThemeOverride } from "../appEnvironment";
+import { AttentionNotificationController } from "./AttentionNotificationController";
 import { AppUpdateChip } from "./AppUpdateChip";
 import { useDesktopUpdate, type DesktopUpdateState } from "./useDesktopUpdate";
 import {
@@ -109,6 +110,7 @@ export function AppChrome({ children }: AppChromeProps) {
         <WorkflowEditorDraftBridgeProvider>
           <ProjectDeletionEventHandler />
           <WorkflowDeletionEventHandler />
+          <AttentionNotificationController />
           <div
             className="app-region-no-drag relative flex min-h-0 min-w-0 w-full overflow-hidden"
             data-testid="app-shell-content"

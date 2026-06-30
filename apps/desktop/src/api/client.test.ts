@@ -1,4 +1,5 @@
 import { ApiClient } from "./client";
+import type { AttentionNotificationEvent } from "./attentionNotifications";
 import { ContractError } from "./errors";
 import { FakeRpcTransport } from "./fakeTransport";
 import { protocolVersion } from "./jsonRpcSocket";
@@ -41,6 +42,97 @@ describe("ApiClient", () => {
     );
 
     await expect(client.getReadiness()).rejects.toBeInstanceOf(ContractError);
+  });
+
+  it("subscribes to typed attention notifications and rejects malformed events at the API boundary", () => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    const events: AttentionNotificationEvent[] = [];
+    const errors: Error[] = [];
+
+    client.subscribeAttentionNotifications({
+      onEvent(event) {
+        events.push(event);
+      },
+      onComplete() {
+        return;
+      },
+      onError(error) {
+        errors.push(error);
+      },
+    });
+
+    expect(transport.subscriptions).toContainEqual({
+      method: "attention.notification.subscribe",
+      params: {},
+    });
+    transport.emit("attention.notification", {
+      event: {
+        type: "pending",
+        sequence: 1,
+        source: "live",
+        pending: {
+          id: "question_batch:run-1:batch-1",
+          kind: "question",
+          occurred_at: "2026-06-29T12:00:00Z",
+          revision: 1,
+          question: {
+            prepared_ask_ids: ["ask-1", "ask-2"],
+            materialized_ask_ids: ["ask-1"],
+            current_unresolved_ask_ids: ["ask-1"],
+            skipped_ask_ids: [],
+            display_count: 2,
+            materialized_count: 1,
+          },
+          target: {
+            kind: "task_detail",
+            project_id: "project-1",
+            workflow_id: "workflow-1",
+            task_id: "task-1",
+            task_short_id: "KT-1",
+            task_title: "Needs answer",
+            session_id: "session-1",
+            run_id: "run-1",
+            focus: { kind: "question", ask_ids: ["ask-1", "ask-2"] },
+          },
+          presentation: {
+            title: "KT-1: 2 questions",
+            body: "question from agent",
+            count: 2,
+          },
+        },
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    const event = events[0];
+    if (event?.type !== "pending") {
+      throw new Error("Expected parsed attention pending event.");
+    }
+    expect(event.pending.id).toBe("question_batch:run-1:batch-1");
+    expect(event.pending.question?.displayCount).toBe(2);
+    if (event.pending.target.kind !== "task_detail") {
+      throw new Error("Expected task-detail attention target.");
+    }
+    expect(event.pending.target.focus).toEqual({ kind: "question", askIDs: ["ask-1", "ask-2"] });
+
+    transport.emit("attention.notification", {
+      event: {
+        type: "pending",
+        sequence: 2,
+        source: "live",
+        pending: {
+          id: "broken",
+          kind: "question",
+          occurred_at: "2026-06-29T12:00:00Z",
+          revision: 1,
+          target: { kind: "task_detail", task_id: "task-1" },
+          presentation: { title: "Question", body: "question", count: 1 },
+        },
+      },
+    });
+
+    expect(errors[0]).toBeInstanceOf(ContractError);
   });
 
   it("surfaces workflow move auto-approval failures returned in successful responses", async () => {

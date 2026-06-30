@@ -27,6 +27,20 @@ func (s *Store) ListTransitions(ctx context.Context, taskID workflow.TaskID) ([]
 	return out, nil
 }
 
+func (s *Store) ListPendingApprovalTransitionIDs(ctx context.Context, taskID workflow.TaskID) ([]workflow.TransitionID, error) {
+	rows, err := s.queries.ListPendingApprovalTransitionIDsByTask(ctx, string(taskID))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]workflow.TransitionID, 0, len(rows))
+	for _, row := range rows {
+		if strings.TrimSpace(row) != "" {
+			out = append(out, workflow.TransitionID(row))
+		}
+	}
+	return out, nil
+}
+
 func (s *Store) ListTransitionEdges(ctx context.Context, transitionID workflow.TransitionID) ([]TransitionEdgeRecord, error) {
 	rows, err := s.queries.ListTaskTransitionEdges(ctx, string(transitionID))
 	if err != nil {
@@ -58,6 +72,52 @@ func (s *Store) TaskIdentityForTransition(ctx context.Context, transitionID work
 		return "", "", "", err
 	}
 	return row.ID, row.ProjectID, row.WorkflowID, nil
+}
+
+type ApprovalTransitionProjection struct {
+	TransitionID     workflow.TransitionID
+	ProjectID        string
+	WorkflowID       string
+	TaskID           workflow.TaskID
+	TaskShortID      string
+	TaskTitle        string
+	SourceRunID      workflow.RunID
+	SessionID        string
+	OccurredAtUnixMs int64
+}
+
+func (s *Store) ApprovalTransitionProjection(ctx context.Context, transitionID workflow.TransitionID) (ApprovalTransitionProjection, error) {
+	id := strings.TrimSpace(string(transitionID))
+	if id == "" {
+		return ApprovalTransitionProjection{}, ErrTransitionIDRequired
+	}
+	transition, err := s.queries.GetTransitionApprovalState(ctx, id)
+	if err != nil {
+		return ApprovalTransitionProjection{}, err
+	}
+	task, err := s.queries.GetTask(ctx, transition.TaskID)
+	if err != nil {
+		return ApprovalTransitionProjection{}, err
+	}
+	runID := workflow.RunID("")
+	sessionID := ""
+	if transition.SourceRunID.Valid && strings.TrimSpace(transition.SourceRunID.String) != "" {
+		runID = workflow.RunID(transition.SourceRunID.String)
+		if run, runErr := s.GetRun(ctx, runID); runErr == nil {
+			sessionID = run.SessionID
+		}
+	}
+	return ApprovalTransitionProjection{
+		TransitionID:     workflow.TransitionID(id),
+		ProjectID:        task.ProjectID,
+		WorkflowID:       task.WorkflowID,
+		TaskID:           workflow.TaskID(task.ID),
+		TaskShortID:      task.ShortID,
+		TaskTitle:        task.Title,
+		SourceRunID:      runID,
+		SessionID:        sessionID,
+		OccurredAtUnixMs: transition.CreatedAtUnixMs,
+	}, nil
 }
 
 func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.TransitionID) (CompleteRunResult, error) {

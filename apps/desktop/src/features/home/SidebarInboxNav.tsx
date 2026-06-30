@@ -2,7 +2,8 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { SidebarDestination } from "../../app/sidebarContext";
+import type { AttentionItem } from "../../api";
+import type { SidebarDestination, TaskDetailInitialFocus } from "../../app/sidebarContext";
 import { useSidebar } from "../../app/sidebarContext";
 import { IconTooltipButton } from "../../ui";
 import { inboxNavNeighbors, orderedInboxTaskIDs } from "./inboxNavNeighbors";
@@ -24,10 +25,11 @@ export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDet
   // resolved and drops out of the live inbox; updated only while it is present.
   const [anchorIndex, setAnchorIndex] = useState(0);
 
-  const taskIDs = useMemo(
-    () => orderedInboxTaskIDs(attention.data?.pages.flatMap((page) => page.items) ?? []),
+  const attentionItems = useMemo(
+    () => attention.data?.pages.flatMap((page) => page.items) ?? [],
     [attention.data],
   );
+  const taskIDs = useMemo(() => orderedInboxTaskIDs(attentionItems), [attentionItems]);
 
   // Adjust the remembered anchor while rendering (the sanctioned alternative to a
   // ref read or an effect): whenever the open task is present, its current index
@@ -43,7 +45,7 @@ export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDet
     if (taskID === null) {
       return;
     }
-    void openSidebar({ ...destination, initialFocus: "firstQuestion", taskID });
+    void openSidebar({ ...destination, initialFocus: initialFocusForTask(attentionItems, taskID), taskID });
   };
 
   const previousTaskID = neighbors.previousTaskID;
@@ -73,4 +75,18 @@ export function SidebarInboxNav({ destination }: Readonly<{ destination: TaskDet
       )}
     </>
   );
+}
+
+function initialFocusForTask(
+  items: readonly AttentionItem[],
+  taskID: string,
+): TaskDetailInitialFocus | undefined {
+  const item = items.find((candidate) => candidate.taskID === taskID);
+  if (item?.kind === "question" && item.askID.length > 0) {
+    return { kind: "question", askIDs: [item.askID] };
+  }
+  if (item?.kind === "approval" && item.taskTransitionID.length > 0) {
+    return { kind: "approval", taskTransitionID: item.taskTransitionID };
+  }
+  return undefined;
 }

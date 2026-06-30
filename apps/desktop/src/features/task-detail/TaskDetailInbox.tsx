@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { AttentionItem, TaskDetail } from "../../api";
+import type { TaskDetailInitialFocus } from "../../app/sidebarContext";
+import { useAppServices } from "../../app/useAppServices";
 import { Island } from "../../ui";
 import {
   ApprovalBox,
@@ -15,7 +17,7 @@ export function TaskInbox({
   currentVersion,
   detail,
   disabled,
-  focusFirstQuestion = false,
+  initialFocus,
   mutations,
   questionSelections,
   onQuestionSelectionChange,
@@ -23,14 +25,30 @@ export function TaskInbox({
   currentVersion: number;
   detail: TaskDetail;
   disabled: boolean;
-  focusFirstQuestion?: boolean | undefined;
+  initialFocus?: TaskDetailInitialFocus | undefined;
   mutations: ReturnType<typeof useTaskMutations>;
   questionSelections: ReadonlyMap<string, QuestionSelectionState>;
   onQuestionSelectionChange: (askID: string, selection: QuestionSelectionState) => void;
 }>) {
-  const firstQuestionID = focusFirstQuestion
-    ? (detail.attention.find((item) => item.kind === "question")?.id ?? "")
-    : "";
+  const { logger } = useAppServices();
+  const missingFocusLogKeyRef = useRef<string | null>(null);
+  const focusedAttentionID = focusedAttentionItemID(detail.attention, initialFocus);
+
+  useEffect(() => {
+    if (initialFocus === undefined || focusedAttentionID !== undefined) {
+      return;
+    }
+    const key = initialFocusKey(initialFocus);
+    if (missingFocusLogKeyRef.current === key) {
+      return;
+    }
+    missingFocusLogKeyRef.current = key;
+    void logger.append("warn", "Task detail initial focus target did not match current attention rows.", {
+      taskID: detail.id,
+      ...initialFocusLogContext(initialFocus),
+    });
+  }, [detail.id, focusedAttentionID, initialFocus, logger]);
+
   return (
     <>
       {detail.attention.map((item) => (
@@ -38,7 +56,7 @@ export function TaskInbox({
           attention={item}
           currentVersion={currentVersion}
           disabled={disabled}
-          focusOnMount={item.id === firstQuestionID}
+          focusOnMount={item.id === focusedAttentionID}
           key={item.id}
           mutations={mutations}
           onQuestionSelectionChange={onQuestionSelectionChange}
@@ -49,6 +67,41 @@ export function TaskInbox({
       ))}
     </>
   );
+}
+
+function initialFocusLogContext(focus: TaskDetailInitialFocus): Readonly<Record<string, string>> {
+  if (focus.kind === "question") {
+    return { focusAskIDs: focus.askIDs.join(","), focusKind: focus.kind };
+  }
+  return { focusKind: focus.kind, focusTaskTransitionID: focus.taskTransitionID };
+}
+
+function initialFocusKey(focus: TaskDetailInitialFocus): string {
+  if (focus.kind === "question") {
+    return `question:${focus.askIDs.join(",")}`;
+  }
+  return `approval:${focus.taskTransitionID}`;
+}
+
+function focusedAttentionItemID(
+  attentionItems: readonly AttentionItem[],
+  initialFocus: TaskDetailInitialFocus | undefined,
+): string | undefined {
+  if (initialFocus === undefined) {
+    return undefined;
+  }
+  if (initialFocus.kind === "question") {
+    const itemIDByAskID = new Map<string, string>();
+    for (const item of attentionItems) {
+      if (item.kind === "question" && !itemIDByAskID.has(item.askID)) {
+        itemIDByAskID.set(item.askID, item.id);
+      }
+    }
+    return initialFocus.askIDs.map((askID) => itemIDByAskID.get(askID)).find((itemID) => itemID !== undefined);
+  }
+  return attentionItems.find(
+    (item) => item.kind === "approval" && item.taskTransitionID === initialFocus.taskTransitionID,
+  )?.id;
 }
 
 function InboxItem({

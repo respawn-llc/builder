@@ -58,7 +58,7 @@ func (e *promptEventEmitter) close() {
 	close(e.out)
 }
 
-func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivitySubscription, subscribe promptActivitySubscriber, control client.PromptControlClient) (<-chan askEvent, func()) {
+func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivitySubscription, subscribe promptActivitySubscriber, control client.PromptControlClient, notificationFallback attentionNotificationHook) (<-chan askEvent, func()) {
 	emitter := newPromptEventEmitter(16)
 	out := (<-chan askEvent)(emitter.out)
 	if sub == nil || subscribe == nil || control == nil {
@@ -141,6 +141,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 				}
 				for _, pendingEvt := range pendingEvents {
 					askEvt := pendingPromptEvent(pollCtx, pendingEvt, control, requeue)
+					notifyPromptActivityFallback(notificationFallback, pendingEvt, clientui.AttentionNotificationSourceSnapshot)
 					if !emitter.emit(pollCtx, askEvt) {
 						_ = current.Close()
 						return
@@ -188,6 +189,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 				continue
 			}
 			askEvt := pendingPromptEvent(pollCtx, evt, control, requeue)
+			notifyPromptActivityFallback(notificationFallback, evt, clientui.AttentionNotificationSourceLive)
 			if !emitter.emit(pollCtx, askEvt) {
 				_ = current.Close()
 				return
@@ -195,6 +197,49 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 		}
 	}()
 	return out, cancel
+}
+
+func notifyPromptActivityFallback(hook attentionNotificationHook, evt clientui.PendingPromptEvent, source clientui.AttentionNotificationSource) {
+	if hook == nil || evt.Type != clientui.PendingPromptEventPending || strings.TrimSpace(evt.PromptID) == "" {
+		return
+	}
+	occurredAt := evt.CreatedAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	kind := clientui.AttentionNotificationKindQuestion
+	title := "Question"
+	fallbackBody := "question from agent"
+	if evt.Approval {
+		kind = clientui.AttentionNotificationKindApproval
+		title = "Action required"
+		fallbackBody = "action required"
+	}
+	body := strings.TrimSpace(evt.Question)
+	if body == "" {
+		body = fallbackBody
+	}
+	hook.OnAttentionNotification(clientui.AttentionNotificationEvent{
+		Type:   clientui.AttentionNotificationEventPending,
+		Source: source,
+		Pending: &clientui.AttentionNotification{
+			ID:         "prompt:" + strings.TrimSpace(evt.SessionID) + ":" + strings.TrimSpace(evt.PromptID),
+			Kind:       kind,
+			OccurredAt: occurredAt,
+			Revision:   1,
+			Target: clientui.AttentionNotificationTarget{
+				Kind:      clientui.AttentionNotificationTargetSessionPrompt,
+				SessionID: strings.TrimSpace(evt.SessionID),
+			},
+			Presentation: clientui.AttentionNotificationPresentation{
+				Title:        title,
+				Body:         body,
+				Preview:      strings.TrimSpace(evt.Question),
+				FallbackBody: fallbackBody,
+				Count:        1,
+			},
+		},
+	})
 }
 
 func resubscribePromptActivity(ctx context.Context, subscribe promptActivitySubscriber, afterSequence uint64) (serverapi.PromptActivitySubscription, bool, error) {

@@ -156,6 +156,18 @@ func (g *Gateway) servePromptActivitySubscription(conn rpcwire.Conn, ctx context
 	})
 }
 
+func (g *Gateway) serveAttentionNotificationSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
+	serveGatewaySubscription(conn, ctx, route, req, g.deps.AttentionNotificationClient().SubscribeAttentionNotifications, attentionNotificationEventParams)
+}
+
+func (g *Gateway) serveSessionAttentionNotificationSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
+	serveGatewaySubscription(conn, ctx, route, req, g.deps.AttentionNotificationClient().SubscribeSessionAttentionNotifications, attentionNotificationEventParams)
+}
+
+func attentionNotificationEventParams(evt clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
+	return protocol.AttentionNotificationEventParams{Event: evt}
+}
+
 func (g *Gateway) serveWorkflowProjectSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
 	serveGatewaySubscription(conn, ctx, route, req, g.deps.WorkflowClient().SubscribeWorkflowProject, workflowProjectEventParams)
 }

@@ -13,6 +13,7 @@ import (
 	"core/server/requestmemo"
 	askquestion "core/server/tools"
 	"core/server/workflow"
+	"core/server/workflowattention"
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/shared/serverapi"
@@ -29,6 +30,7 @@ type Service struct {
 	events              *workflowProjectEventBroker
 	prompts             pendingPromptResponder
 	approve             transitionApprover
+	attentionFinalizer  workflowAttentionFinalizer
 	questionMemo        *requestmemo.Memo[taskQuestionAnswerMemoRequest, struct{}]
 }
 
@@ -61,6 +63,10 @@ type transitionApprover func(ctx context.Context, transitionID workflow.Transiti
 
 type pendingPromptResponder interface {
 	SubmitPromptResponse(sessionID string, resp askquestion.AskQuestionResponse, err error) error
+}
+
+type workflowAttentionFinalizer interface {
+	FinalizeTransition(context.Context, workflowattention.TransitionResult)
 }
 
 type taskQuestionAnswerMemoRequest struct {
@@ -102,6 +108,12 @@ func WithSchedulerNotifier(notifier schedulerNotifier) Option {
 func WithPromptResponder(responder pendingPromptResponder) Option {
 	return func(s *Service) {
 		s.prompts = responder
+	}
+}
+
+func WithWorkflowAttentionFinalizer(finalizer workflowAttentionFinalizer) Option {
+	return func(s *Service) {
+		s.attentionFinalizer = finalizer
 	}
 }
 
@@ -406,6 +418,7 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 	if !resp.Deleted {
 		return resp, nil
 	}
+	s.finalizeWorkflowApprovalProjections(ctx, result.ResolvedApprovalTransitionProjections)
 	s.publishWorkflowEvent(ctx, "", req.WorkflowID, "workflow", "deleted", req.WorkflowID)
 	seen := map[string]bool{}
 	for _, link := range links {
@@ -649,6 +662,7 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
+	s.finalizeWorkflowAttention(ctx, approved)
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
@@ -665,14 +679,17 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
 	approvalError := ""
+	resolvedApprovals := append([]workflow.TransitionID(nil), moved.ResolvedApprovalTransitionIDs...)
 	if req.AutoApprove && moved.State == "pending_approval" && !moved.RequiresApproval {
 		approved, approveErr := s.approve(ctx, moved.TransitionID)
 		if approveErr != nil {
 			approvalError = approveErr.Error()
 		} else {
+			approved.ResolvedApprovalTransitionIDs = append(resolvedApprovals, approved.ResolvedApprovalTransitionIDs...)
 			moved = approved
 		}
 	}
+	s.finalizeWorkflowAttention(ctx, moved)
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()
 	}
@@ -715,6 +732,7 @@ func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.Workfl
 	if err != nil {
 		return serverapi.WorkflowTaskCompleteResponse{}, err
 	}
+	s.finalizeWorkflowAttention(ctx, completed)
 	if req.ActorKind == serverapi.WorkflowTaskCompleteActorUser {
 		notifyScheduler := true
 		if requester, ok := s.runtimeCancel.(taskRuntimeRunCancelRequester); ok {
@@ -736,6 +754,17 @@ func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.Workfl
 		PlacementIDs: placementIDs(completed.PlacementIDs),
 		RunIDs:       runIDs(completed.RunIDs),
 	}, nil
+}
+
+func (s *Service) finalizeWorkflowAttention(ctx context.Context, result workflowstore.CompleteRunResult) {
+	if s == nil || s.attentionFinalizer == nil {
+		return
+	}
+	s.attentionFinalizer.FinalizeTransition(ctx, workflowattention.TransitionResult{
+		TransitionID:                  result.TransitionID,
+		State:                         result.State,
+		ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
+	})
 }
 
 func workflowCompletionTargetSelector(req serverapi.WorkflowTaskCompleteRequest) workflowstore.ActiveRunCompletionTargetSelector {
@@ -769,9 +798,14 @@ func (s *Service) CancelWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if reason == "" {
 		reason = "user_canceled"
 	}
+	pendingApprovals, err := s.pendingApprovalTransitionIDs(ctx, workflow.TaskID(req.TaskID))
+	if err != nil {
+		return err
+	}
 	if err := s.store.CancelTask(ctx, workflow.TaskID(req.TaskID), reason); err != nil {
 		return err
 	}
+	s.finalizeWorkflowAttention(ctx, workflowstore.CompleteRunResult{ResolvedApprovalTransitionIDs: pendingApprovals})
 	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "canceled", req.TaskID)
 	}
@@ -794,6 +828,10 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 			return err
 		}
 	}
+	pendingApprovals, err := s.pendingApprovalTransitionProjections(ctx, workflow.TaskID(req.TaskID))
+	if err != nil {
+		return err
+	}
 	if s.runtimeCancel != nil {
 		if err := s.runtimeCancel.CancelTaskRuns(ctx, workflow.TaskID(req.TaskID)); err != nil {
 			return err
@@ -808,8 +846,54 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err != nil {
 		return err
 	}
+	s.finalizeWorkflowApprovalProjections(ctx, pendingApprovals)
 	s.publishWorkflowEvent(ctx, task.ProjectID, string(task.WorkflowID), "task", "deleted", req.TaskID)
 	return nil
+}
+
+func (s *Service) finalizeWorkflowApprovalProjections(ctx context.Context, projections []workflowstore.ApprovalTransitionProjection) {
+	if s == nil || s.attentionFinalizer == nil || len(projections) == 0 {
+		return
+	}
+	resolved := make([]workflowattention.ApprovalProjection, 0, len(projections))
+	for _, projection := range projections {
+		resolved = append(resolved, workflowattention.ApprovalProjection{
+			TransitionID:     projection.TransitionID,
+			ProjectID:        projection.ProjectID,
+			WorkflowID:       projection.WorkflowID,
+			TaskID:           projection.TaskID,
+			TaskShortID:      projection.TaskShortID,
+			TaskTitle:        projection.TaskTitle,
+			RunID:            string(projection.SourceRunID),
+			SessionID:        projection.SessionID,
+			Message:          "action required",
+			OccurredAtUnixMs: projection.OccurredAtUnixMs,
+		})
+	}
+	s.attentionFinalizer.FinalizeTransition(ctx, workflowattention.TransitionResult{ResolvedApprovalProjections: resolved})
+}
+
+func (s *Service) pendingApprovalTransitionIDs(ctx context.Context, taskID workflow.TaskID) ([]workflow.TransitionID, error) {
+	if s == nil || s.store == nil {
+		return nil, nil
+	}
+	return s.store.ListPendingApprovalTransitionIDs(ctx, taskID)
+}
+
+func (s *Service) pendingApprovalTransitionProjections(ctx context.Context, taskID workflow.TaskID) ([]workflowstore.ApprovalTransitionProjection, error) {
+	transitionIDs, err := s.pendingApprovalTransitionIDs(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]workflowstore.ApprovalTransitionProjection, 0, len(transitionIDs))
+	for _, transitionID := range transitionIDs {
+		projection, err := s.store.ApprovalTransitionProjection(ctx, transitionID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, projection)
+	}
+	return out, nil
 }
 
 func (s *Service) ListWorkflowAttention(ctx context.Context, req serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
