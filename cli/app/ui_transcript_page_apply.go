@@ -106,13 +106,16 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 	}
 	m.conversationFreshness = page.ConversationFreshness
 	nativeSurfaceConfigured := m.nativeSurfaceConfigured()
-	nativeStableReady := nativeSurfaceConfigured && m.nativeSurface.initialized()
+	if nativeSurfaceConfigured && !m.nativeResizeRehydratePending() {
+		m.ensureNativeStableSurfaceForCurrentGeometry()
+	}
+	nativeStableReady := nativeSurfaceConfigured && !m.nativeResizeRehydratePending() && m.nativeStableSurfaceReadyForCurrentGeometry()
 	nativeAssistantStreamActive := nativeSurfaceConfigured && m.nativeSurface.AssistantStreaming()
 	nativeAssistantStreamWasIncomplete := m.nativeAssistantStreamIncomplete
-	nativeAssistantStreamText := m.view.OngoingStreamingText()
+	nativeAssistantStreamText := m.activeAssistantStreamText()
 	previousNativeStableProjection := tui.TranscriptProjection{}
 	if nativeSurfaceConfigured {
-		previousNativeStableProjection = m.nativeCommittedProjectionForEntries(m.transcriptEntries)
+		previousNativeStableProjection = m.nativeDeliveredStableProjection
 	}
 	reduction := reduceRuntimeTranscriptPage(newRuntimeTranscriptPageState(runtimeTranscriptPageSnapshotFromModel(m)), req, page, recoveryCause)
 	pageReq := reduction.request
@@ -135,6 +138,7 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 		m.clearDeferredCommittedTail("authoritative_hydrate")
 		a.applyAuthoritativeRecentTailPage(page, entries, reduction.preserveLiveReasoning)
 	}
+	m.refreshActiveAssistantStreamFromAuthoritativePageStreaming(page.Streaming)
 	m.detailTranscript.lastRequest = pageReq
 	if isRecentTailTranscriptRequest(pageReq) && m.view.Mode() != tui.ModeDetail {
 		m.detailTranscript.setKnownBounds(m.transcriptBaseOffset, m.transcriptTotalEntries)
@@ -199,6 +203,7 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 	nativeFinishErr := error(nil)
 	if strings.TrimSpace(page.Streaming) == "" {
 		m.sawAssistantDelta = false
+		m.clearActiveAssistantStreamSource()
 		if !nativeSurfaceConfigured || !reduction.shouldApplyRecentTail {
 			nativeFinishErr = m.finishNativeAssistantStreaming()
 		}
@@ -217,7 +222,7 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 	}
 	if nativeSurfaceConfigured && reduction.shouldApplyRecentTail {
 		currentNativeStableProjection := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
-		if err := m.deliverNativeStableProjectionChange(previousNativeStableProjection, currentNativeStableProjection, nativeStableReady, nativeAssistantStreamActive, nativeAssistantStreamWasIncomplete, nativeAssistantStreamText); err != nil {
+		if err := m.deliverNativeStableProjectionChange(nativeStableRecoveryReconcileIntent("deliverNativeStableProjectionChange"), previousNativeStableProjection, currentNativeStableProjection, nativeStableReady, nativeAssistantStreamActive, nativeAssistantStreamWasIncomplete, nativeAssistantStreamText); err != nil {
 			cmds = append(cmds, m.nativeSurfaceErrorCmd("steer committed transcript", err))
 		}
 	}

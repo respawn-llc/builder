@@ -1,8 +1,8 @@
 import { defineConfig } from 'astro/config';
+import { satteri } from '@astrojs/markdown-satteri';
 import sitemap from '@astrojs/sitemap';
 import starlight from '@astrojs/starlight';
 import starlightDocSearch from '@astrojs/starlight-docsearch';
-import remarkGfm from 'remark-gfm';
 import starlightLlmsTxt from 'starlight-llms-txt';
 
 import { resolveDocsConfig } from './scripts/site-config.mjs';
@@ -94,7 +94,7 @@ export default defineConfig({
         },
       ],
       editLink: {
-        baseUrl: docsConfig.repoEditRootUrl,
+        baseUrl: docsConfig.docsProjectEditRootUrl,
       },
       customCss: ['./src/styles/custom.css'],
       pagefind: false,
@@ -217,6 +217,11 @@ export default defineConfig({
     sitemap(),
   ],
   markdown: {
-    remarkPlugins: [remarkGfm],
+    processor: satteri({
+      features: {
+        gfm: true,
+        smartPunctuation: true,
+      },
+    }),
   },
 });

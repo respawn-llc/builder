@@ -251,6 +251,7 @@ type deferredProjectedTranscriptTail struct {
 	rangeStart int
 	rangeEnd   int
 	revision   int64
+	stepID     string
 	entries    []clientui.ChatEntry
 	pending    []string
 }

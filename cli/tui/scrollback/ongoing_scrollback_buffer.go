@@ -28,9 +28,13 @@ type OngoingScrollbackBufferImpl struct {
 	terminalHeight            int
 	isStreaming               bool
 	assistantMarkdownRenderer AssistantMarkdownRenderer
+	assistantStablePrefix     assistantStreamStablePrefixFunc
+	assistantStreamPromotion  bool
 	assistantStreamSource     string
 	assistantStreamPromoted   []assistantStreamPromotedRow
 	assistantStreamTail       []string
+	prepareNormalBuffer       bool
+	normalBufferPrepared      bool
 	closed                    bool
 	normalBufferAvailable     func() bool
 	delayedWriteErrorListener func(error)
@@ -40,6 +44,7 @@ type OngoingScrollbackBufferImpl struct {
 type OngoingScrollbackBufferOption func(*OngoingScrollbackBufferImpl)
 
 type AssistantMarkdownRenderer func(source string, width int) []string
+type assistantStreamStablePrefixFunc func(source string) string
 
 type assistantStreamPromotedRow struct {
 	stableKey string
@@ -81,7 +86,20 @@ func WithAssistantMarkdownRenderer(renderer AssistantMarkdownRenderer) OngoingSc
 	return func(buffer *OngoingScrollbackBufferImpl) {
 		if renderer != nil {
 			buffer.assistantMarkdownRenderer = renderer
+			buffer.assistantStablePrefix = assistantMarkdownDocumentStablePromotionPrefix
 		}
+	}
+}
+
+func WithAssistantStreamPromotion(enabled bool) OngoingScrollbackBufferOption {
+	return func(buffer *OngoingScrollbackBufferImpl) {
+		buffer.assistantStreamPromotion = enabled
+	}
+}
+
+func WithNormalBufferPreparation() OngoingScrollbackBufferOption {
+	return func(buffer *OngoingScrollbackBufferImpl) {
+		buffer.prepareNormalBuffer = true
 	}
 }
 
@@ -97,10 +115,11 @@ func NewOngoingScrollbackBufferImpl(ctx context.Context, terminalWidth int, term
 	}
 	watcherCtx, cancelWatcher := context.WithCancel(ctx)
 	buffer := &OngoingScrollbackBufferImpl{
-		cancelWatcher:  cancelWatcher,
-		stableWriter:   stableWriter,
-		terminalWidth:  terminalWidth,
-		terminalHeight: terminalHeight,
+		cancelWatcher:            cancelWatcher,
+		stableWriter:             stableWriter,
+		terminalWidth:            terminalWidth,
+		terminalHeight:           terminalHeight,
+		assistantStreamPromotion: true,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -112,6 +131,9 @@ func NewOngoingScrollbackBufferImpl(ctx context.Context, terminalWidth int, term
 	}
 	if buffer.assistantMarkdownRenderer == nil {
 		buffer.assistantMarkdownRenderer = defaultAssistantMarkdownRenderer
+	}
+	if buffer.assistantStablePrefix == nil {
+		buffer.assistantStablePrefix = assistantLineStablePromotionPrefix
 	}
 	return buffer
 }
@@ -161,6 +183,10 @@ func (buffer *OngoingScrollbackBufferImpl) Steer(line string) error {
 		buffer.queuedSteers = append(buffer.queuedSteers, stableSteerRequest{line: line})
 		buffer.mu.Unlock()
 		return nil
+	}
+	if err := buffer.prepareNormalBufferLocked(); err != nil {
+		buffer.mu.Unlock()
+		return err
 	}
 	delayedErr := error(nil)
 	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
@@ -214,6 +240,13 @@ func (buffer *OngoingScrollbackBufferImpl) StreamMarkdownAssistantContent(ansi s
 		buffer.mu.Unlock()
 		return nil
 	}
+	if err := buffer.prepareNormalBufferLocked(); err != nil {
+		buffer.isStreaming = false
+		buffer.clearAssistantStreamStateLocked()
+		buffer.turnEndedDuringActiveFlow.Store(false)
+		buffer.mu.Unlock()
+		return err
+	}
 	delayedErr := error(nil)
 	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
 		delayedErr = err
@@ -257,6 +290,10 @@ func (buffer *OngoingScrollbackBufferImpl) FinishAssistantStreaming() error {
 		buffer.heldStableOps = append(buffer.heldStableOps, stableHoldoffOperation{kind: stableHoldoffFinishAssistantStream, queuedSteers: queuedSteers})
 		buffer.mu.Unlock()
 		return nil
+	}
+	if err := buffer.prepareNormalBufferLocked(); err != nil {
+		buffer.mu.Unlock()
+		return err
 	}
 	delayedErr := error(nil)
 	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
@@ -373,10 +410,33 @@ func (buffer *OngoingScrollbackBufferImpl) attachLiveArea(liveArea *nativeLiveAr
 }
 
 func (buffer *OngoingScrollbackBufferImpl) normalBufferAvailableLocked() bool {
-	if buffer.normalBufferAvailable == nil {
-		return true
+	available := true
+	if buffer.normalBufferAvailable != nil {
+		available = buffer.normalBufferAvailable()
 	}
-	return buffer.normalBufferAvailable()
+	if !available {
+		buffer.normalBufferPrepared = false
+	}
+	return available
+}
+
+func InvalidateNormalBufferPreparation(buffer *OngoingScrollbackBufferImpl) {
+	if buffer == nil {
+		return
+	}
+	buffer.invalidateNormalBufferPreparation()
+}
+
+func (buffer *OngoingScrollbackBufferImpl) invalidateNormalBufferPreparation() {
+	if buffer == nil {
+		return
+	}
+	buffer.mu.Lock()
+	buffer.normalBufferPrepared = false
+	if buffer.liveArea != nil {
+		buffer.liveArea.pendingPhysicalRender = true
+	}
+	buffer.mu.Unlock()
 }
 
 func (buffer *OngoingScrollbackBufferImpl) flushHoldoffLocked() (bool, error) {
@@ -385,7 +445,9 @@ func (buffer *OngoingScrollbackBufferImpl) flushHoldoffLocked() (bool, error) {
 	}
 	flushed, firstErr := buffer.flushHeldStableOpsLocked()
 	if !buffer.isStreaming && buffer.liveArea != nil && buffer.liveArea.pendingPhysicalRender {
-		if err := buffer.liveArea.erasePhysicalLocked(); firstErr == nil && err != nil {
+		if err := buffer.prepareNormalBufferLocked(); firstErr == nil && err != nil {
+			firstErr = err
+		} else if err := buffer.liveArea.erasePhysicalLocked(); firstErr == nil && err != nil {
 			firstErr = err
 		} else if err == nil {
 			if renderErr := buffer.liveArea.renderPhysicalLocked(); firstErr == nil {
@@ -400,6 +462,9 @@ func (buffer *OngoingScrollbackBufferImpl) flushHoldoffLocked() (bool, error) {
 func (buffer *OngoingScrollbackBufferImpl) flushHeldStableOpsLocked() (bool, error) {
 	if !buffer.normalBufferAvailableLocked() || len(buffer.heldStableOps) == 0 {
 		return false, nil
+	}
+	if err := buffer.prepareNormalBufferLocked(); err != nil {
+		return false, err
 	}
 	operations := append([]stableHoldoffOperation(nil), buffer.heldStableOps...)
 	buffer.heldStableOps = nil
@@ -525,10 +590,15 @@ func (buffer *OngoingScrollbackBufferImpl) assistantStreamPromoteLimitLocked(row
 		return 0
 	}
 	promotedCount := len(buffer.assistantStreamPromoted)
+	if !buffer.assistantStreamPromotion {
+		return promotedCount
+	}
 	promoteLimit := 0
 	if prefix, ok := unstableAssistantMarkdownBlockStablePrefix(buffer.assistantStreamSource); ok {
-		promoteLimit = buffer.assistantStreamRenderedPrefixLimitLocked(prefix, rows)
-	} else if stableLinePrefix := assistantStreamStablePromotionPrefix(buffer.assistantStreamSource); stableLinePrefix != "" {
+		if assistantMarkdownStablePrefixCanPromote(prefix) {
+			promoteLimit = buffer.assistantStreamRenderedPrefixLimitLocked(prefix, rows)
+		}
+	} else if stableLinePrefix := buffer.assistantStablePrefix(buffer.assistantStreamSource); stableLinePrefix != "" {
 		promoteLimit = buffer.assistantStreamRenderedPrefixLimitLocked(stableLinePrefix, rows)
 	}
 	if promoteLimit < promotedCount && promotedCount <= len(rows) {
@@ -690,6 +760,26 @@ func (buffer *OngoingScrollbackBufferImpl) closedError(operation string) error {
 	return fmt.Errorf("%s: %w", operation, errOngoingScrollbackBufferClosed)
 }
 
+func (buffer *OngoingScrollbackBufferImpl) prepareNormalBufferLocked() error {
+	if buffer == nil || !buffer.prepareNormalBuffer || buffer.normalBufferPrepared {
+		return nil
+	}
+	payload := normalBufferPreparationSequence()
+	written, err := io.WriteString(buffer.stableWriter, payload)
+	if err != nil {
+		return fmt.Errorf("prepare normal buffer failed: %s: %w", stableWriteDiagnostics(payload, buffer.terminalWidth, buffer.terminalHeight, written), err)
+	}
+	if written != len(payload) {
+		return fmt.Errorf("prepare normal buffer short write: %s: %w", stableWriteDiagnostics(payload, buffer.terminalWidth, buffer.terminalHeight, written), io.ErrShortWrite)
+	}
+	buffer.normalBufferPrepared = true
+	return nil
+}
+
+func normalBufferPreparationSequence() string {
+	return xansi.ResetModeAltScreenSaveCursor + xansi.SaveCursor + "\x1b[?6l" + "\x1b[r" + xansi.RestoreCursor
+}
+
 func stableWriteDiagnostics(payload string, terminalWidth int, terminalHeight int, written int) string {
 	return fmt.Sprintf(
 		"terminal_width=%d terminal_height=%d visual_width=%d byte_len=%d written=%d payload_quoted=%q payload_raw_hex=% x",
@@ -755,7 +845,33 @@ func assistantStreamRowHasStableContent(row string) bool {
 	return row == "" || xansi.StringWidth(row) > 0 || xansi.Strip(row) != ""
 }
 
-func assistantStreamStablePromotionPrefix(source string) string {
+func assistantMarkdownDocumentStablePromotionPrefix(source string) string {
+	normalized := strings.ReplaceAll(source, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	prefix, activeBlock := assistantMarkdownActiveBlock(normalized)
+	if strings.HasSuffix(normalized, "\n") &&
+		assistantMarkdownBlockEndsWithClosedFence(activeBlock) &&
+		assistantMarkdownStablePrefixCanPromote(normalized) {
+		return normalized
+	}
+	if strings.TrimSpace(activeBlock) == "" {
+		if strings.HasSuffix(normalized, "\n") &&
+			assistantMarkdownBlockEndsWithClosedFence(prefix) &&
+			assistantMarkdownStablePrefixCanPromote(prefix) {
+			return prefix
+		}
+		return ""
+	}
+	if prefix == "" || strings.TrimSpace(activeBlock) == "" {
+		return ""
+	}
+	if !assistantMarkdownStablePrefixCanPromote(prefix) {
+		return ""
+	}
+	return prefix
+}
+
+func assistantLineStablePromotionPrefix(source string) string {
 	normalized := strings.ReplaceAll(source, "\r\n", "\n")
 	normalized = strings.ReplaceAll(normalized, "\r", "\n")
 	if !strings.Contains(normalized, "\n") {
@@ -849,6 +965,109 @@ func assistantMarkdownBlockIsUnstable(block string) bool {
 	return assistantMarkdownBlockHasPipeTable(block) || assistantMarkdownBlockHasUnclosedFence(block)
 }
 
+func assistantMarkdownStablePrefixCanPromote(source string) bool {
+	for _, block := range assistantMarkdownStablePrefixBlocks(source) {
+		if assistantMarkdownClosedFenceBlockCanPromote(block) {
+			continue
+		}
+		if !assistantMarkdownPlainParagraphBlockCanPromote(block) {
+			return false
+		}
+	}
+	return true
+}
+
+func assistantMarkdownClosedFenceBlockCanPromote(block string) bool {
+	if !assistantMarkdownBlockEndsWithClosedFence(block) {
+		return false
+	}
+	for _, line := range strings.Split(block, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		_, ok := assistantMarkdownFenceOpener(line)
+		return ok
+	}
+	return false
+}
+
+func assistantMarkdownStablePrefixBlocks(source string) []string {
+	normalized := strings.ReplaceAll(source, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	blocks := []string{}
+	var current strings.Builder
+	fenceOpen := false
+	activeFence := assistantMarkdownFence{}
+	for _, part := range strings.SplitAfter(normalized, "\n") {
+		line := strings.TrimSuffix(part, "\n")
+		trimmed := strings.TrimSpace(line)
+		if fenceOpen {
+			current.WriteString(part)
+			if assistantMarkdownFenceCloses(line, activeFence) {
+				fenceOpen = false
+				activeFence = assistantMarkdownFence{}
+				blocks = append(blocks, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		if trimmed == "" {
+			if current.Len() > 0 {
+				blocks = append(blocks, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		if fence, ok := assistantMarkdownFenceOpener(line); ok {
+			activeFence = fence
+			fenceOpen = true
+		}
+		current.WriteString(part)
+	}
+	if current.Len() > 0 {
+		blocks = append(blocks, current.String())
+	}
+	return blocks
+}
+
+func assistantMarkdownPlainParagraphBlockCanPromote(block string) bool {
+	if strings.TrimSpace(block) == "" {
+		return false
+	}
+	if strings.ContainsAny(block, "[]|") || assistantMarkdownBlockHasUnclosedFence(block) {
+		return false
+	}
+	for _, line := range strings.Split(block, "\n") {
+		if assistantMarkdownLineStartsDocumentMutableBlock(line) {
+			return false
+		}
+	}
+	return true
+}
+
+func assistantMarkdownLineStartsDocumentMutableBlock(line string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "#") ||
+		strings.HasPrefix(trimmed, ">") ||
+		strings.HasPrefix(trimmed, "- ") ||
+		strings.HasPrefix(trimmed, "* ") ||
+		strings.HasPrefix(trimmed, "+ ") {
+		return true
+	}
+	digitSeen := false
+	for index, char := range trimmed {
+		if char >= '0' && char <= '9' {
+			digitSeen = true
+			continue
+		}
+		return digitSeen && (char == '.' || char == ')') && len(trimmed) > index+1 && trimmed[index+1] == ' '
+	}
+	return false
+}
+
 func assistantMarkdownBlockHasPipeTable(block string) bool {
 	lines := assistantMarkdownNonEmptyLines(block)
 	for _, line := range lines {
@@ -876,6 +1095,35 @@ func assistantMarkdownBlockHasUnclosedFence(block string) bool {
 		}
 	}
 	return fenceOpen
+}
+
+func assistantMarkdownBlockEndsWithClosedFence(block string) bool {
+	activeFence := assistantMarkdownFence{}
+	fenceOpen := false
+	closedAtEnd := false
+	for _, line := range strings.Split(block, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if fenceOpen {
+			if assistantMarkdownFenceCloses(line, activeFence) {
+				fenceOpen = false
+				activeFence = assistantMarkdownFence{}
+				closedAtEnd = true
+			} else {
+				closedAtEnd = false
+			}
+			continue
+		}
+		if fence, ok := assistantMarkdownFenceOpener(line); ok {
+			activeFence = fence
+			fenceOpen = true
+			closedAtEnd = false
+			continue
+		}
+		closedAtEnd = false
+	}
+	return !fenceOpen && closedAtEnd
 }
 
 type assistantMarkdownFence struct {

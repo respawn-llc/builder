@@ -849,7 +849,13 @@ func (e *Engine) modelRequests() *modelRequestRuntimeState {
 
 func (e *Engine) emitRaw(evt Event) {
 	evt.TranscriptRevision = e.TranscriptRevision()
-	if evt.CommittedEntryCount == 0 {
+	carriesCommittedRange := eventShouldCarryCommittedEntryCount(evt)
+	if !carriesCommittedRange {
+		evt.CommittedEntryCount = 0
+		evt.CommittedEntryStart = 0
+		evt.CommittedEntryStartSet = false
+	}
+	if evt.CommittedEntryCount == 0 && carriesCommittedRange {
 		evt.CommittedEntryCount = e.CommittedTranscriptEntryCount()
 	}
 	if evt.ContextUsage == nil && eventShouldCarryContextUsage(evt) {
@@ -883,9 +889,18 @@ func eventShouldCarryContextUsage(evt Event) bool {
 	}
 }
 
+func eventShouldCarryCommittedEntryCount(evt Event) bool {
+	switch evt.Kind {
+	case EventBackgroundUpdated:
+		return false
+	default:
+		return true
+	}
+}
+
 func eventMayInferCommittedEntryStart(kind EventKind) bool {
 	switch kind {
-	case EventCompactionCompleted, EventCompactionFailed:
+	case EventCompactionCompleted, EventCompactionFailed, EventBackgroundUpdated:
 		return false
 	default:
 		return true

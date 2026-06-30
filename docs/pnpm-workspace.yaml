@@ -1,3 +1,24 @@
+overrides:
+  starlight-llms-txt>@astrojs/mdx: 7.0.0
+
+packageExtensions:
+  starlight-llms-txt@0.10.0:
+    dependencies:
+      "@astrojs/mdx": 7.0.0
+    peerDependencies:
+      astro: ^6.0.0 || ^7.0.0
+
+peerDependencyRules:
+  allowedVersions:
+    starlight-llms-txt>astro: ^6.0.0 || ^7.0.0
+
 allowBuilds:
   esbuild: true
   sharp: true
+
+# starlight-llms-txt eagerly creates an Astro container at module load even when
+# rawContent is enabled, which makes Astro 7 validate nested deprecated Markdown
+# defaults during route generation. Keep the patch scoped to this release until
+# upstream lazy-initializes the container or accepts Astro 7's processor config.
+patchedDependencies:
+  starlight-llms-txt@0.10.0: patches/starlight-llms-txt@0.10.0.patch
