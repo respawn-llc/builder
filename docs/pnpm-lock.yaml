@@ -10,7 +10,9 @@ overrides:
 packageExtensionsChecksum: sha256-9bP4ZQJhF7RBuceMKpVF1QyEorv12k2Fz91P0QWa4Ng=
 
 patchedDependencies:
-  starlight-llms-txt@0.10.0: 8ddfabcb3487854ebd6ac126dda0237ee76af55163a1ddd82a28160a687c03ea
+  starlight-llms-txt@0.10.0:
+    hash: 8ddfabcb3487854ebd6ac126dda0237ee76af55163a1ddd82a28160a687c03ea
+    path: patches/starlight-llms-txt@0.10.0.patch
 
 importers:
 
