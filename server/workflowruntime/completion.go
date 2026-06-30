@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"core/server/llm"
 	"core/server/workflow"
@@ -17,8 +18,9 @@ import (
 )
 
 const (
-	CompleteNodeToolName = "complete_node"
-	structuredOutputName = "workflow_completion"
+	CompleteNodeToolName         = "complete_node"
+	structuredOutputName         = "workflow_completion"
+	attentionFinalizationTimeout = 5 * time.Second
 )
 
 // ErrStructuredOutputUnsupported is returned when structured-output completion
@@ -169,7 +171,9 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 		return CompletionResult{}, normalizeStoreCompletionError(err)
 	}
 	if c.AttentionFinalizer != nil {
-		c.AttentionFinalizer.FinalizeTransition(ctx, workflowattention.TransitionResult{
+		finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
+		defer cancel()
+		c.AttentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
 			TransitionID:                  result.TransitionID,
 			State:                         result.State,
 			ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),

@@ -373,6 +373,7 @@ func (s *testEmbeddedServer) WorktreeClient() client.WorktreeClient {
 
 func (s *testEmbeddedServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 	attention := s.attentionClient
+	supported := attention != nil
 	if attention == nil {
 		attention = &recordingAttentionNotificationClient{}
 	}
@@ -380,7 +381,7 @@ func (s *testEmbeddedServer) RuntimeAttachmentClients() runtimeAttachmentClients
 		ApprovalViews:                   s.approvalViewClient,
 		AskViews:                        s.askViewClient,
 		Attention:                       attention,
-		AttentionNotificationsSupported: attention != nil,
+		AttentionNotificationsSupported: supported,
 		ProcessControls:                 s.processControlClient,
 		ProcessOutput:                   s.processOutputClient,
 		ProcessViews:                    s.processViewClient,

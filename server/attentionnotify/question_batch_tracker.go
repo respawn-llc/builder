@@ -180,9 +180,17 @@ func (t *QuestionBatchTracker) batch(batchID string, askID string) (*questionBat
 }
 
 func (t *QuestionBatchTracker) publishBatch(batch *questionBatch) error {
-	batch.revision++
+	nextRevision := batch.revision + 1
+	previousRevision := batch.revision
+	batch.revision = nextRevision
+	notification := *batch.notification()
+	batch.revision = previousRevision
+	if err := t.broker.PublishPending(batch.Delivery, notification); err != nil {
+		return err
+	}
+	batch.revision = nextRevision
 	batch.emitted = true
-	return t.broker.PublishPending(batch.Delivery, *batch.notification())
+	return nil
 }
 
 func (b *questionBatch) notification() *clientui.AttentionNotification {
@@ -201,13 +209,18 @@ func (b *questionBatch) notification() *clientui.AttentionNotification {
 }
 
 func (t *QuestionBatchTracker) resolveIfComplete(batch *questionBatch) error {
-	if !batch.complete() || !batch.emitted || batch.resolved {
+	if !batch.complete() || batch.resolved {
 		return nil
 	}
-	batch.resolved = true
+	if !batch.emitted {
+		batch.resolved = true
+		delete(t.batches, batch.ID)
+		return nil
+	}
 	if err := t.broker.PublishResolved(batch.Delivery, batch.ID, clientui.AttentionNotificationKindQuestion, time.Now().UTC()); err != nil {
 		return err
 	}
+	batch.resolved = true
 	delete(t.batches, batch.ID)
 	return nil
 }

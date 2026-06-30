@@ -27,6 +27,20 @@ func (s *Store) ListTransitions(ctx context.Context, taskID workflow.TaskID) ([]
 	return out, nil
 }
 
+func (s *Store) ListPendingApprovalTransitionIDs(ctx context.Context, taskID workflow.TaskID) ([]workflow.TransitionID, error) {
+	rows, err := s.queries.ListPendingApprovalTransitionIDsByTask(ctx, string(taskID))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]workflow.TransitionID, 0, len(rows))
+	for _, row := range rows {
+		if strings.TrimSpace(row) != "" {
+			out = append(out, workflow.TransitionID(row))
+		}
+	}
+	return out, nil
+}
+
 func (s *Store) ListTransitionEdges(ctx context.Context, transitionID workflow.TransitionID) ([]TransitionEdgeRecord, error) {
 	rows, err := s.queries.ListTaskTransitionEdges(ctx, string(transitionID))
 	if err != nil {

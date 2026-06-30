@@ -45,13 +45,21 @@ export function AttentionNotificationController() {
           error: errorMessage(error),
         });
       }
-      void openSidebar({
-        kind: "taskDetail",
-        initialFocus: taskDetailInitialFocus(target.focus),
-        inboxNav: true,
-        mode: "overlay",
-        taskID: target.taskID,
-      });
+      try {
+        await openSidebar({
+          kind: "taskDetail",
+          initialFocus: taskDetailInitialFocus(target.focus),
+          inboxNav: true,
+          mode: "overlay",
+          taskID: target.taskID,
+        });
+      } catch (error) {
+        await logger.append("warn", "Opening attention notification target failed.", {
+          error: errorMessage(error),
+          taskID: target.taskID,
+        });
+        throw error;
+      }
     },
     [bridge.window, logger, openSidebar],
   );

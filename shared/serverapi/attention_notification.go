@@ -96,8 +96,30 @@ func validateAttentionNotification(notification clientui.AttentionNotification) 
 	if err := validateAttentionNotificationTarget(notification.Target); err != nil {
 		return err
 	}
+	if err := validateAttentionNotificationKindTarget(notification); err != nil {
+		return err
+	}
 	if notification.Presentation.Title == "" || notification.Presentation.Body == "" {
 		return errors.New("attention notification presentation title and body are required")
+	}
+	return nil
+}
+
+func validateAttentionNotificationKindTarget(notification clientui.AttentionNotification) error {
+	switch notification.Kind {
+	case clientui.AttentionNotificationKindQuestion:
+		if notification.Target.Kind == clientui.AttentionNotificationTargetTaskDetail &&
+			(notification.Target.Focus == nil || notification.Target.Focus.Kind != clientui.AttentionNotificationFocusQuestion) {
+			return errors.New("question attention notification task-detail target focus kind must be question")
+		}
+	case clientui.AttentionNotificationKindApproval:
+		if notification.Question != nil {
+			return errors.New("approval attention notification must not carry question state")
+		}
+		if notification.Target.Kind == clientui.AttentionNotificationTargetTaskDetail &&
+			(notification.Target.Focus == nil || notification.Target.Focus.Kind != clientui.AttentionNotificationFocusApproval) {
+			return errors.New("approval attention notification task-detail target focus kind must be approval")
+		}
 	}
 	return nil
 }

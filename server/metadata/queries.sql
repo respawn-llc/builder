@@ -2186,6 +2186,13 @@ WHERE t.workflow_id = sqlc.arg(workflow_id)
   AND tt.state = 'pending_approval'
 ORDER BY tt.created_at_unix_ms ASC, tt.id ASC;
 
+-- name: ListPendingApprovalTransitionIDsByTask :many
+SELECT id
+FROM task_transition_records
+WHERE task_id = sqlc.arg(task_id)
+  AND state = 'pending_approval'
+ORDER BY created_at_unix_ms ASC, id ASC;
+
 -- name: ApprovePendingTransition :execrows
 UPDATE task_transitions
 SET state = 'approved', applied_at_unix_ms = sqlc.arg(applied_at_unix_ms)

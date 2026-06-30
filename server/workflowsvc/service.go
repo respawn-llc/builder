@@ -877,17 +877,7 @@ func (s *Service) pendingApprovalTransitionIDs(ctx context.Context, taskID workf
 	if s == nil || s.store == nil {
 		return nil, nil
 	}
-	transitions, err := s.store.ListTransitions(ctx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]workflow.TransitionID, 0)
-	for _, transition := range transitions {
-		if transition.State == "pending_approval" {
-			out = append(out, transition.ID)
-		}
-	}
-	return out, nil
+	return s.store.ListPendingApprovalTransitionIDs(ctx, taskID)
 }
 
 func (s *Service) pendingApprovalTransitionProjections(ctx context.Context, taskID workflow.TaskID) ([]workflowstore.ApprovalTransitionProjection, error) {

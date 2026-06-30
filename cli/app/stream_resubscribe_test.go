@@ -389,7 +389,7 @@ func TestPendingPromptEventRequeuesWhenAnswerRPCFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}}}
+	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Sequence: 1, Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}}}
 	control := &retryingPromptControlClient{askErr: errors.New("transport down")}
 
 	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
@@ -494,6 +494,9 @@ func TestStartPendingPromptEventsFallbackNotifiesFromPromptActivity(t *testing.T
 	notification := hook.wait(t, time.Second)
 	if notification.Type != clientui.AttentionNotificationEventPending || notification.Pending == nil {
 		t.Fatalf("unexpected fallback notification: %+v", notification)
+	}
+	if notification.Source != clientui.AttentionNotificationSourceLive {
+		t.Fatalf("fallback notification source = %q, want live", notification.Source)
 	}
 	if notification.Pending.ID != "prompt:session-1:ask-1" || notification.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt {
 		t.Fatalf("unexpected fallback pending notification: %+v", notification.Pending)

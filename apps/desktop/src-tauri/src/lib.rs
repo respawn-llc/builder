@@ -155,12 +155,15 @@ fn send_attention_notification(
         target: notification.target,
     };
     let backend_id = notification.backend_id;
-    let native_notification = attention_native_notification(
+    let native_notification =
+        attention_native_notification(backend_id, &notification.title, &notification.body);
+    show_attention_notification(
+        app,
+        state.active.clone(),
         backend_id,
-        &notification.title,
-        &notification.body,
-    );
-    show_attention_notification(app, state.active.clone(), backend_id, activation, native_notification)
+        activation,
+        native_notification,
+    )
 }
 
 #[tauri::command]
@@ -210,7 +213,8 @@ fn show_attention_notification(
     )?;
     tauri::async_runtime::spawn_blocking(move || {
         handle.wait_for_action(|action| {
-            let was_active = remove_attention_notification_record_without_closing(&active, backend_id);
+            let was_active =
+                remove_attention_notification_record_without_closing(&active, backend_id);
             if action != "__closed" && was_active {
                 let _ = app.emit_to("main", "app://attention-notification-activated", activation);
             }
@@ -242,7 +246,8 @@ fn show_attention_notification(
     tauri::async_runtime::spawn(async move {
         handle
             .wait_for_action_async(|response| {
-                let was_active = remove_attention_notification_record_without_closing(&active, backend_id);
+                let was_active =
+                    remove_attention_notification_record_without_closing(&active, backend_id);
                 let activated = matches!(
                     response,
                     notify_rust::NotificationResponse::Default
@@ -250,7 +255,8 @@ fn show_attention_notification(
                         | notify_rust::NotificationResponse::Reply(_)
                 );
                 if activated && was_active {
-                    let _ = app.emit_to("main", "app://attention-notification-activated", activation);
+                    let _ =
+                        app.emit_to("main", "app://attention-notification-activated", activation);
                 }
             })
             .await;
@@ -278,7 +284,8 @@ fn show_attention_notification(
     )?;
     tauri::async_runtime::spawn_blocking(move || {
         handle.wait_for_action(|action| {
-            let was_active = remove_attention_notification_record_without_closing(&active, backend_id);
+            let was_active =
+                remove_attention_notification_record_without_closing(&active, backend_id);
             if action != "__closed" && was_active {
                 let _ = app.emit_to("main", "app://attention-notification-activated", activation);
             }
@@ -303,10 +310,13 @@ fn insert_attention_notification_record(
     backend_id: u32,
     closer: Box<dyn AttentionNotificationCloser>,
 ) -> Result<(), String> {
-    active
+    let replaced = active
         .lock()
         .map_err(|_| "Attention notification state lock poisoned.".to_string())?
         .insert(backend_id, AttentionNotificationRecord { closer });
+    if let Some(record) = replaced {
+        record.closer.close()?;
+    }
     Ok(())
 }
 
@@ -675,7 +685,10 @@ fn resolve_configured_path(value: &str) -> Result<PathBuf, String> {
     // KENT_PERSISTENCE_ROOT=~\kent-root is accepted by the CLI/server, so the
     // desktop must resolve the same value rather than reject it as relative and
     // fail to connect to the matching selected-root server.
-    let expanded = if let Some(rest) = trimmed.strip_prefix("~/").or_else(|| trimmed.strip_prefix("~\\")) {
+    let expanded = if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
         home_dir()?.join(rest)
     } else {
         PathBuf::from(trimmed)
@@ -756,9 +769,9 @@ fn trim_log_if_needed(path: &Path, append_bytes: u64) -> Result<(), String> {
 mod tests {
     use super::{
         clean_path, insert_attention_notification_record, parse_theme, persistence_root_hash,
-        remove_attention_notification_backend, remove_attention_notification_record_without_closing,
-        resolve_configured_path, server_rpc_url, AttentionNotificationCloser,
-        AttentionNotificationState,
+        remove_attention_notification_backend,
+        remove_attention_notification_record_without_closing, resolve_configured_path,
+        server_rpc_url, AttentionNotificationCloser, AttentionNotificationState,
     };
     use std::path::{Path, PathBuf};
     use std::sync::{
@@ -809,10 +822,42 @@ mod tests {
         )
         .expect("insert notification");
 
-        assert!(remove_attention_notification_record_without_closing(&state.active, 42));
+        assert!(remove_attention_notification_record_without_closing(
+            &state.active,
+            42
+        ));
 
         assert!(!closed.load(Ordering::SeqCst));
         assert!(state.active.lock().expect("active lock").is_empty());
+    }
+
+    #[test]
+    fn inserting_replacement_attention_notification_closes_previous_surface() {
+        let state = AttentionNotificationState::default();
+        let first_closed = Arc::new(AtomicBool::new(false));
+        let second_closed = Arc::new(AtomicBool::new(false));
+        insert_attention_notification_record(
+            &state.active,
+            42,
+            Box::new(RecordingAttentionNotificationCloser {
+                closed: first_closed.clone(),
+            }),
+        )
+        .expect("insert first notification");
+
+        insert_attention_notification_record(
+            &state.active,
+            42,
+            Box::new(RecordingAttentionNotificationCloser {
+                closed: second_closed.clone(),
+            }),
+        )
+        .expect("replace notification");
+
+        assert!(first_closed.load(Ordering::SeqCst));
+        assert!(!second_closed.load(Ordering::SeqCst));
+        remove_attention_notification_backend(&state, 42).expect("remove replacement");
+        assert!(second_closed.load(Ordering::SeqCst));
     }
 
     #[test]

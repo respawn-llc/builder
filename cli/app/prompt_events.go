@@ -141,7 +141,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 				}
 				for _, pendingEvt := range pendingEvents {
 					askEvt := pendingPromptEvent(pollCtx, pendingEvt, control, requeue)
-					notifyPromptActivityFallback(notificationFallback, pendingEvt)
+					notifyPromptActivityFallback(notificationFallback, pendingEvt, clientui.AttentionNotificationSourceSnapshot)
 					if !emitter.emit(pollCtx, askEvt) {
 						_ = current.Close()
 						return
@@ -189,7 +189,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 				continue
 			}
 			askEvt := pendingPromptEvent(pollCtx, evt, control, requeue)
-			notifyPromptActivityFallback(notificationFallback, evt)
+			notifyPromptActivityFallback(notificationFallback, evt, clientui.AttentionNotificationSourceLive)
 			if !emitter.emit(pollCtx, askEvt) {
 				_ = current.Close()
 				return
@@ -199,7 +199,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 	return out, cancel
 }
 
-func notifyPromptActivityFallback(hook attentionNotificationHook, evt clientui.PendingPromptEvent) {
+func notifyPromptActivityFallback(hook attentionNotificationHook, evt clientui.PendingPromptEvent, source clientui.AttentionNotificationSource) {
 	if hook == nil || evt.Type != clientui.PendingPromptEventPending || strings.TrimSpace(evt.PromptID) == "" {
 		return
 	}
@@ -221,7 +221,7 @@ func notifyPromptActivityFallback(hook attentionNotificationHook, evt clientui.P
 	}
 	hook.OnAttentionNotification(clientui.AttentionNotificationEvent{
 		Type:   clientui.AttentionNotificationEventPending,
-		Source: clientui.AttentionNotificationSourceSnapshot,
+		Source: source,
 		Pending: &clientui.AttentionNotification{
 			ID:         "prompt:" + strings.TrimSpace(evt.SessionID) + ":" + strings.TrimSpace(evt.PromptID),
 			Kind:       kind,

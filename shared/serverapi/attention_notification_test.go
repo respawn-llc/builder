@@ -69,6 +69,38 @@ func TestValidateAttentionNotificationEventRejectsUnsupportedEnums(t *testing.T)
 	}
 }
 
+func TestValidateAttentionNotificationEventRejectsKindTargetFocusMismatch(t *testing.T) {
+	event := validAttentionNotificationEvent()
+	event.Pending.Kind = clientui.AttentionNotificationKindApproval
+	event.Pending.Question = nil
+	event.Pending.Target.Focus.Kind = clientui.AttentionNotificationFocusQuestion
+	if err := ValidateAttentionNotificationEvent(event); err == nil {
+		t.Fatal("ValidateAttentionNotificationEvent accepted task-detail approval with question focus")
+	}
+
+	event = validAttentionNotificationEvent()
+	event.Pending.Kind = clientui.AttentionNotificationKindApproval
+	event.Pending.Question = &clientui.AttentionNotificationQuestionState{PreparedAskIDs: []string{"ask-1"}}
+	event.Pending.Target.Focus = &clientui.AttentionNotificationTaskDetailFocus{
+		Kind:             clientui.AttentionNotificationFocusApproval,
+		TaskTransitionID: "transition-1",
+	}
+	if err := ValidateAttentionNotificationEvent(event); err == nil {
+		t.Fatal("ValidateAttentionNotificationEvent accepted approval with question state")
+	}
+
+	event = validAttentionNotificationEvent()
+	event.Pending.Kind = clientui.AttentionNotificationKindApproval
+	event.Pending.Question = nil
+	event.Pending.Target = clientui.AttentionNotificationTarget{
+		Kind:      clientui.AttentionNotificationTargetSessionPrompt,
+		SessionID: "session-1",
+	}
+	if err := ValidateAttentionNotificationEvent(event); err != nil {
+		t.Fatalf("ValidateAttentionNotificationEvent rejected session-prompt approval: %v", err)
+	}
+}
+
 func validAttentionNotificationEvent() clientui.AttentionNotificationEvent {
 	return clientui.AttentionNotificationEvent{
 		Sequence: 1,

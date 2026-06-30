@@ -53,6 +53,10 @@ export function createTauriUpdates(
   return {
     supported: selfUpdateSupported,
     async check(): Promise<NativeUpdateAvailability> {
+      if (!(await selfUpdateSupported())) {
+        pendingUpdate = null;
+        return unavailableUpdate;
+      }
       const update = await checkForUpdate();
       pendingUpdate = update;
       if (update === null) {

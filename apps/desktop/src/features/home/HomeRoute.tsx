@@ -319,6 +319,8 @@ function attentionItemsEqual(previous: AttentionItem, next: AttentionItem): bool
     previous.projectID === next.projectID &&
     previous.workflowID === next.workflowID &&
     previous.taskID === next.taskID &&
+    previous.askID === next.askID &&
+    previous.taskTransitionID === next.taskTransitionID &&
     previous.taskShortID === next.taskShortID &&
     previous.taskTitle === next.taskTitle &&
     previous.message === next.message &&

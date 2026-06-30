@@ -46,10 +46,16 @@ type Finalizer struct {
 	projection ApprovalProjectionProvider
 	publisher  Publisher
 	active     map[workflow.TransitionID]attentionnotify.DeliveryScope
+	resolved   map[workflow.TransitionID]struct{}
 }
 
 func NewFinalizer(projection ApprovalProjectionProvider, publisher Publisher) *Finalizer {
-	return &Finalizer{projection: projection, publisher: publisher, active: map[workflow.TransitionID]attentionnotify.DeliveryScope{}}
+	return &Finalizer{
+		projection: projection,
+		publisher:  publisher,
+		active:     map[workflow.TransitionID]attentionnotify.DeliveryScope{},
+		resolved:   map[workflow.TransitionID]struct{}{},
+	}
 }
 
 func (f *Finalizer) FinalizeTransition(ctx context.Context, result TransitionResult) {
@@ -95,13 +101,16 @@ func (f *Finalizer) publishPending(ctx context.Context, transitionID workflow.Tr
 	}
 	scope := approvalDeliveryScope(projection)
 	notification := approvalNotification(projection)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.resolved[transitionID]; ok {
+		return
+	}
 	if err := f.publisher.PublishPending(scope, notification); err != nil {
 		slog.Warn("workflow approval attention publish failed", "transition_id", string(transitionID), "task_id", string(projection.TaskID), "error", err)
 		return
 	}
-	f.mu.Lock()
 	f.active[transitionID] = scope
-	f.mu.Unlock()
 }
 
 func (f *Finalizer) publishResolved(ctx context.Context, transitionID workflow.TransitionID) {
@@ -113,6 +122,7 @@ func (f *Finalizer) publishResolved(ctx context.Context, transitionID workflow.T
 	if ok {
 		delete(f.active, transitionID)
 	}
+	f.resolved[transitionID] = struct{}{}
 	f.mu.Unlock()
 	if !ok {
 		var resolved bool
@@ -132,6 +142,7 @@ func (f *Finalizer) publishResolvedWithScope(transitionID workflow.TransitionID,
 	}
 	f.mu.Lock()
 	delete(f.active, transitionID)
+	f.resolved[transitionID] = struct{}{}
 	f.mu.Unlock()
 	if err := f.publisher.PublishResolved(scope, approvalNotificationID(transitionID), clientui.AttentionNotificationKindApproval, time.Now().UTC()); err != nil {
 		slog.Warn("workflow approval attention resolved publish failed", "transition_id", string(transitionID), "error", err)

@@ -728,7 +728,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 					if err := attention.PrepareTaskQuestionBatch(batch, sessionID, target, presentation, time.Now().UTC()); err != nil {
 						logger.Logf("workflow.attention.question_batch_prepare_failed run_id=%s task_id=%s batch_id=%s prompt_id=%s error=%s", req.RunID, req.TaskID, batch.BatchID, batch.PromptID, err)
 					}
-					attention.MarkTaskQuestionSkipped(batch)
+					markWorkflowTaskQuestionBatchSkipped(attention, batch, "")
 				}
 			},
 			OnEvent: func(evt runtime.Event) {
@@ -842,7 +842,7 @@ func (s *Starter) handleWorkflowAsk(ctx context.Context, sessionID string, req S
 		if askErr == nil {
 			return askquestion.AskQuestionResponse{}, clearErr
 		}
-		return resp, askErr
+		return resp, errors.Join(askErr, clearErr)
 	}
 	if attention, ok := s.runtimes.(RuntimeTaskQuestionAttentionRegistry); ok {
 		attention.MarkTaskQuestionCleared(*askReq.QuestionBatch, askReq.ID)
