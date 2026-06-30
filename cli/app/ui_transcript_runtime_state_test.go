@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"core/cli/tui"
+	"core/shared/clientui"
 )
 
 func TestInvalidateTransientTranscriptStateUsesDetailBounds(t *testing.T) {
@@ -29,5 +30,32 @@ func TestInvalidateTransientTranscriptStateUsesDetailBounds(t *testing.T) {
 	}
 	if got := m.view.TranscriptTotalEntries(); got != 500 {
 		t.Fatalf("view total entries = %d, want detail window total 500", got)
+	}
+}
+
+func TestRuntimeTranscriptPageRefreshesActiveAssistantStreamSourceFromStreaming(t *testing.T) {
+	m := newProjectedClosedUIModel(nil)
+	m.windowSizeKnown = true
+	m.termWidth = 100
+	m.termHeight = 20
+	m.activeAssistantStreamSource = "stale partial"
+	m.activeAssistantStreamStepID = "step-stale"
+	m.forwardToView(tui.SetConversationMsg{Ongoing: "stale partial"})
+
+	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
+		Revision:  2,
+		Entries:   []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
+		Streaming: "hydrated full stream",
+	}, clientui.TranscriptRecoveryCauseStreamGap)
+	_ = collectCmdMessages(t, cmd)
+
+	if got := m.activeAssistantStreamText(); got != "hydrated full stream" {
+		t.Fatalf("active stream text = %q, want hydrated streaming text", got)
+	}
+	if got := m.activeAssistantStreamStepID; got != "" {
+		t.Fatalf("active stream step ID = %q, want unknown after page streaming hydration", got)
+	}
+	if got := m.view.OngoingStreamingText(); got != "hydrated full stream" {
+		t.Fatalf("view ongoing = %q, want hydrated streaming text", got)
 	}
 }

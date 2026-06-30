@@ -138,6 +138,7 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 		m.clearDeferredCommittedTail("authoritative_hydrate")
 		a.applyAuthoritativeRecentTailPage(page, entries, reduction.preserveLiveReasoning)
 	}
+	m.refreshActiveAssistantStreamFromAuthoritativePageStreaming(page.Streaming)
 	m.detailTranscript.lastRequest = pageReq
 	if isRecentTailTranscriptRequest(pageReq) && m.view.Mode() != tui.ModeDetail {
 		m.detailTranscript.setKnownBounds(m.transcriptBaseOffset, m.transcriptTotalEntries)

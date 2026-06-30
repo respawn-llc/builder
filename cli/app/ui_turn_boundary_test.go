@@ -318,3 +318,60 @@ func TestCommittedUserFlushDoesNotMergeKnownMismatchedDeferredFinalizer(t *testi
 		}
 	}
 }
+
+func TestCommittedAssistantMessageClearsStaleKnownStepStreamAfterDeferredUserFlush(t *testing.T) {
+	m := newProjectedClosedUIModel(nil)
+	m.windowSizeKnown = true
+	m.termWidth = 100
+	m.termHeight = 20
+	m.transcriptEntries = []tui.TranscriptEntry{{Role: tui.TranscriptRoleAssistant, Text: "previous", Committed: true}}
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: m.transcriptEntries})
+	m.activeAssistantStreamSource = "stale partial"
+	m.activeAssistantStreamStepID = "step-a"
+
+	_, userCmd := m.handleRuntimeEventBatch([]clientui.Event{{
+		Kind:                       clientui.EventUserMessageFlushed,
+		StepID:                     "step-b",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        2,
+		TranscriptRevision:         2,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role: "user",
+			Text: "next prompt",
+		}},
+	}})
+	_ = collectCmdMessages(t, userCmd)
+	if got := len(m.deferredCommittedTail); got != 1 {
+		t.Fatalf("user flush should defer while stale stream is pending, got %d deferred tails", got)
+	}
+
+	_, assistantCmd := m.handleRuntimeEventBatch([]clientui.Event{{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-b",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        2,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        3,
+		TranscriptRevision:         3,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "next answer",
+			Phase: string(llm.MessagePhaseFinal),
+		}},
+	}})
+	_ = collectCmdMessages(t, assistantCmd)
+
+	if got := len(m.deferredCommittedTail); got != 0 {
+		t.Fatalf("committed assistant next-turn event stayed deferred behind stale stream: %d", got)
+	}
+	if got := m.activeAssistantStreamText(); strings.TrimSpace(got) != "" {
+		t.Fatalf("stale stream survived committed assistant next-turn event: %q", got)
+	}
+	if got := len(committedTranscriptEntriesForApp(m.transcriptEntries)); got != 3 {
+		t.Fatalf("committed transcript entries = %d, want previous + user + assistant", got)
+	}
+}

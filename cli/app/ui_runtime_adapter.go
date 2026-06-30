@@ -257,9 +257,30 @@ func eventStartsDifferentAssistantStep(state projectedTranscriptEventState, evt 
 	switch evt.Kind {
 	case clientui.EventAssistantDelta, clientui.EventToolCallStarted:
 		return true
+	case clientui.EventAssistantMessage:
+		return committedAssistantMessageStartsDifferentStep(state, evt)
 	default:
 		return false
 	}
+}
+
+func committedAssistantMessageStartsDifferentStep(state projectedTranscriptEventState, evt clientui.Event) bool {
+	if evt.Kind != clientui.EventAssistantMessage || !evt.CommittedTranscriptChanged || len(evt.TranscriptEntries) == 0 {
+		return false
+	}
+	if strings.TrimSpace(state.liveAssistantStepID) == "" {
+		return false
+	}
+	activeStream := strings.TrimSpace(state.liveAssistantText)
+	if activeStream == "" {
+		return true
+	}
+	for _, entry := range evt.TranscriptEntries {
+		if tui.TranscriptRoleFromWire(entry.Role) == tui.TranscriptRoleAssistant && strings.TrimSpace(entry.Text) == activeStream {
+			return false
+		}
+	}
+	return true
 }
 
 func eventCanFlushDeferredCommittedTailAtNewTurnBoundary(state projectedTranscriptEventState, evt clientui.Event) bool {

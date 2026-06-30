@@ -130,6 +130,17 @@ func (m *uiModel) clearActiveAssistantStreamSource() {
 	m.activeAssistantStreamStepID = ""
 }
 
+func (m *uiModel) refreshActiveAssistantStreamFromAuthoritativePageStreaming(streaming string) {
+	if m == nil {
+		return
+	}
+	if strings.TrimSpace(streaming) == "" {
+		return
+	}
+	m.activeAssistantStreamSource = streaming
+	m.activeAssistantStreamStepID = ""
+}
+
 func (m *uiModel) activeAssistantStreamText() string {
 	if m == nil {
 		return ""
