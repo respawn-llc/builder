@@ -379,6 +379,66 @@ func TestStreamGapInvalidatesTransientStateBeforeHydrationFence(t *testing.T) {
 	}
 }
 
+func TestRuntimeBatchStopsAtContinuityHydrationAndQueuesTail(t *testing.T) {
+	client := &refreshingRuntimeClient{
+		transcripts: []clientui.TranscriptPage{{
+			SessionID: "session-1",
+			Entries: []clientui.ChatEntry{
+				{Role: "user", Text: "prompt"},
+				{Role: "assistant", Text: "recovered gap", Phase: string(clientui.MessagePhaseFinal)},
+				{Role: "assistant", Text: "late event", Phase: string(clientui.MessagePhaseFinal)},
+			},
+		}},
+	}
+	m := newProjectedClosedUIModel(client)
+	m.transcriptEntries = []tui.TranscriptEntry{{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true}}
+	m.transcriptTotalEntries = 1
+
+	next, cmd := m.Update(runtimeEventBatchMsg{events: []clientui.Event{{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-gap",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryCount:        3,
+		CommittedEntryStart:        2,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "late event",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	}, {
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-after",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         3,
+		CommittedEntryCount:        4,
+		CommittedEntryStart:        3,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "must wait",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	}}})
+	updated := next.(*uiModel)
+	if !updated.waitRuntimeEventAfterHydration {
+		t.Fatal("expected continuity hydration to arm runtime event fence")
+	}
+	if len(updated.pendingRuntimeEvents) != 1 || updated.pendingRuntimeEvents[0].StepID != "step-after" {
+		t.Fatalf("pending runtime tail = %+v, want only step-after", updated.pendingRuntimeEvents)
+	}
+	if len(updated.transcriptEntries) != 1 || updated.transcriptEntries[0].Text != "prompt" {
+		t.Fatalf("hydration-triggering batch tail mutated transcript before page recovery: %+v", updated.transcriptEntries)
+	}
+	msgs := collectCmdMessages(t, cmd)
+	for _, msg := range msgs {
+		if batch, ok := msg.(runtimeEventBatchMsg); ok {
+			t.Fatalf("did not expect runtime event resume before hydration response, got %+v", batch)
+		}
+	}
+}
+
 func TestHydratingClientAndLiveClientConvergeWithoutDuplicateCommittedRows(t *testing.T) {
 	baseline := clientui.TranscriptPage{
 		SessionID: "session-1",

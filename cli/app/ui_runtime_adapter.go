@@ -25,14 +25,22 @@ type runtimeEventApplyResult struct {
 }
 
 func (a uiRuntimeAdapter) applyProjectedRuntimeEventsBatch(events []clientui.Event) runtimeEventApplyResult {
+	m := a.model
 	cmds := make([]tea.Cmd, 0, len(events)+1)
 	transcriptMutated := false
 	awaitsHydration := false
-	for _, evt := range events {
+	for idx, evt := range events {
 		result := a.applyProjectedRuntimeEvent(evt)
 		cmds = append(cmds, result.cmd)
 		transcriptMutated = transcriptMutated || result.transcriptMutated
 		awaitsHydration = awaitsHydration || result.awaitsHydration
+		if result.awaitsHydration {
+			if m != nil && idx+1 < len(events) {
+				tail := append([]clientui.Event(nil), events[idx+1:]...)
+				m.pendingRuntimeEvents = append(tail, m.pendingRuntimeEvents...)
+			}
+			break
+		}
 	}
 	batchedCmd := batchCmds(cmds...)
 	if !transcriptMutated {
