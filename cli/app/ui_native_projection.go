@@ -150,7 +150,7 @@ func nativeProjectionBlockLocalAppendOnly(block tui.TranscriptProjectionBlock, e
 	end = min(end, len(entries)-1)
 	for idx := start; idx <= end; idx++ {
 		entry := entries[idx]
-		if entry.Committed || !nativeProjectionEntryRoleLocalAppendOnly(entry.Role) {
+		if !entry.LocalAppendOnly {
 			return false
 		}
 	}

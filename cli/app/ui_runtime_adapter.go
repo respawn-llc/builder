@@ -44,7 +44,8 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEventsBatch(events []clientui.Eve
 func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtimeEventApplyResult {
 	m := a.model
 	projectedState := newProjectedTranscriptEventState(projectedTranscriptEventSnapshotFromModel(m))
-	skipDeferredTailMerge := projectedEventIsLiveOnlyUnresolvedToolStart(projectedState, evt)
+	skipDeferredTailMerge := projectedEventIsLiveOnlyUnresolvedToolStart(projectedState, evt) ||
+		m.deferredCommittedTailBypassesMergeAtNewTurnBoundary(projectedState, evt)
 	if !skipDeferredTailMerge {
 		if merge := reduceDeferredCommittedTailMerge(newDeferredCommittedTailState(deferredCommittedTailSnapshotFromModel(m)), evt); merge.merged {
 			evt = merge.event
@@ -187,7 +188,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 
 func (a uiRuntimeAdapter) flushDeferredCommittedTailAtNewTurnBoundary(state projectedTranscriptEventState, evt clientui.Event) (tea.Cmd, bool, bool) {
 	m := a.model
-	if m == nil || len(m.deferredCommittedTail) == 0 || !eventStartsDifferentAssistantStep(state, evt) {
+	if m == nil || !m.deferredCommittedTailCanFlushAtNewTurnBoundary(state, evt) {
 		return nil, false, false
 	}
 	flushEvent, remaining, ok := deferredCommittedTailFinalizerFlushEvent(
@@ -201,6 +202,31 @@ func (a uiRuntimeAdapter) flushDeferredCommittedTailAtNewTurnBoundary(state proj
 	m.deferredCommittedTail = remaining
 	m.logDeferredCommittedTailTurnBoundaryFlushDiag(evt, flushEvent)
 	return a.applyProjectedTranscriptEntries(flushEvent)
+}
+
+func (m *uiModel) deferredCommittedTailCanFlushAtNewTurnBoundary(state projectedTranscriptEventState, evt clientui.Event) bool {
+	if m == nil || len(m.deferredCommittedTail) == 0 || !eventCanFlushDeferredCommittedTailAtNewTurnBoundary(state, evt) {
+		return false
+	}
+	_, _, ok := deferredCommittedTailFinalizerFlushEvent(
+		newDeferredCommittedTailState(deferredCommittedTailSnapshotFromModel(m)),
+		state.liveAssistantText,
+		state.liveAssistantStepID,
+	)
+	return ok
+}
+
+func (m *uiModel) deferredCommittedTailBypassesMergeAtNewTurnBoundary(state projectedTranscriptEventState, evt clientui.Event) bool {
+	if m == nil || len(m.deferredCommittedTail) == 0 || !eventCanFlushDeferredCommittedTailAtNewTurnBoundary(state, evt) {
+		return false
+	}
+	deferredState := newDeferredCommittedTailState(deferredCommittedTailSnapshotFromModel(m))
+	_, _, canFlush := deferredCommittedTailFinalizerFlushEvent(
+		deferredState,
+		state.liveAssistantText,
+		state.liveAssistantStepID,
+	)
+	return canFlush || deferredCommittedTailHasKnownMismatchedActiveFinalizer(deferredState, state.liveAssistantText, state.liveAssistantStepID)
 }
 
 func (m *uiModel) resetActiveAssistantStreamForNewStep(stepID string) tea.Cmd {
@@ -234,6 +260,27 @@ func eventStartsDifferentAssistantStep(state projectedTranscriptEventState, evt 
 	default:
 		return false
 	}
+}
+
+func eventCanFlushDeferredCommittedTailAtNewTurnBoundary(state projectedTranscriptEventState, evt clientui.Event) bool {
+	if !eventStepDiffersFromActiveAssistant(state, evt) {
+		return false
+	}
+	switch evt.Kind {
+	case clientui.EventAssistantDelta,
+		clientui.EventAssistantMessage,
+		clientui.EventToolCallStarted,
+		clientui.EventUserMessageFlushed:
+		return true
+	default:
+		return false
+	}
+}
+
+func eventStepDiffersFromActiveAssistant(state projectedTranscriptEventState, evt clientui.Event) bool {
+	activeStepID := strings.TrimSpace(state.liveAssistantStepID)
+	eventStepID := strings.TrimSpace(evt.StepID)
+	return eventStepID != "" && activeStepID != eventStepID && state.liveAssistantPending
 }
 
 func (m *uiModel) shouldResetActiveAssistantStreamForNewStep(state projectedTranscriptEventState, evt clientui.Event) bool {

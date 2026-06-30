@@ -82,6 +82,7 @@ func reduceDeferredCommittedTailDefer(state deferredCommittedTailState, evt clie
 			rangeStart: start,
 			rangeEnd:   end,
 			revision:   evt.TranscriptRevision,
+			stepID:     strings.TrimSpace(evt.StepID),
 			entries:    cloneChatEntries(evt.TranscriptEntries),
 			pending:    pendingBatch,
 		},
@@ -156,9 +157,11 @@ func deferredCommittedTailFinalizerFlushEvent(state deferredCommittedTailState, 
 		if tail.rangeStart != chainEnd {
 			break
 		}
+		tailStepID := strings.TrimSpace(tail.stepID)
 		for _, entry := range tail.entries {
 			entries = append(entries, cloneChatEntries([]clientui.ChatEntry{entry})...)
-			if tui.TranscriptRoleFromWire(entry.Role) == tui.TranscriptRoleAssistant && strings.TrimSpace(entry.Text) == activeAssistantText {
+			stepMatches := tailStepID == "" || activeAssistantStepID != "" && tailStepID == activeAssistantStepID
+			if stepMatches && tui.TranscriptRoleFromWire(entry.Role) == tui.TranscriptRoleAssistant && strings.TrimSpace(entry.Text) == activeAssistantText {
 				finalizerFound = true
 			}
 		}
@@ -188,6 +191,29 @@ func deferredCommittedTailFinalizerFlushEvent(state deferredCommittedTailState, 
 		TranscriptRevision:         revision,
 		TranscriptEntries:          entries,
 	}, append([]deferredProjectedTranscriptTail(nil), state.tails[consumed:]...), true
+}
+
+func deferredCommittedTailHasKnownMismatchedActiveFinalizer(state deferredCommittedTailState, activeAssistantText string, activeAssistantStepID string) bool {
+	activeAssistantText = strings.TrimSpace(activeAssistantText)
+	activeAssistantStepID = strings.TrimSpace(activeAssistantStepID)
+	if len(state.tails) == 0 || activeAssistantText == "" {
+		return false
+	}
+	chainEnd := state.baseOffset + len(state.committedEntries)
+	for _, tail := range state.tails {
+		if tail.rangeStart != chainEnd {
+			return false
+		}
+		tailStepID := strings.TrimSpace(tail.stepID)
+		for _, entry := range tail.entries {
+			if tui.TranscriptRoleFromWire(entry.Role) != tui.TranscriptRoleAssistant || strings.TrimSpace(entry.Text) != activeAssistantText {
+				continue
+			}
+			return tailStepID != "" && tailStepID != activeAssistantStepID
+		}
+		chainEnd = tail.rangeEnd
+	}
+	return false
 }
 
 func deferredPendingInjectedBatchFromEvent(evt clientui.Event) []string {

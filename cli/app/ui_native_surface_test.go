@@ -1331,7 +1331,7 @@ func TestNativeSurfaceResizeReprojectsPhysicalLedgerOrderForLocalSystemNotice(t 
 	m := newSizedProjectedClosedUIModel(nil, 64, 30, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
 	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
 		{Role: tui.TranscriptRoleUser, Text: "resize prompt before active stream notice", Committed: true},
-		{Role: tui.TranscriptRoleSystem, Text: "Background shell 8128 completed (exit 0)"},
+		{Role: tui.TranscriptRoleSystem, Text: "Background shell 8128 completed (exit 0)", LocalAppendOnly: true},
 		{Role: tui.TranscriptRoleAssistant, Text: "watcher found six threads", Committed: true, Phase: clientui.MessagePhaseCommentary},
 	})
 	if rendered := m.View(); rendered != "" {
@@ -2376,6 +2376,22 @@ func TestNativeProjectionSourceKeyIgnoresHydrationVolatileFlags(t *testing.T) {
 	hydratedKey := nativeProjectionBlockSourceKey(block, hydrated, 0)
 	if liveKey != hydratedKey {
 		t.Fatalf("source key changed across hydration flags:\nlive=%q\nhydrated=%q", liveKey, hydratedKey)
+	}
+}
+
+func TestNativeProjectionLocalAppendOnlyRequiresEventProvenance(t *testing.T) {
+	systemEntry := clientui.ChatEntry{Role: "system", Text: "background notice"}
+	hydrated := transcriptEntryFromProjectedChatEntry(systemEntry, false, false)
+	if hydrated.LocalAppendOnly {
+		t.Fatal("hydrated authoritative system row was marked local append-only")
+	}
+	local := transcriptEntryFromProjectedEventEntry(clientui.Event{Kind: clientui.EventBackgroundUpdated}, systemEntry, false, false)
+	if !local.LocalAppendOnly {
+		t.Fatal("background event system row was not marked local append-only")
+	}
+	committedSystem := transcriptEntryFromProjectedEventEntry(clientui.Event{Kind: clientui.EventAssistantMessage}, systemEntry, false, true)
+	if committedSystem.LocalAppendOnly {
+		t.Fatal("committed system row from authoritative event was marked local append-only")
 	}
 }
 

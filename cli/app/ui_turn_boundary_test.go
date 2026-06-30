@@ -9,7 +9,7 @@ import (
 	"core/shared/clientui"
 )
 
-func TestNewAssistantTurnFlushesSupersededStuckCommentary(t *testing.T) {
+func TestNewAssistantTurnDoesNotFlushKnownMismatchedDeferredFinalizerByText(t *testing.T) {
 	m := newProjectedClosedUIModel(nil)
 	m.windowSizeKnown = true
 	m.termWidth = 100
@@ -52,8 +52,8 @@ func TestNewAssistantTurnFlushesSupersededStuckCommentary(t *testing.T) {
 	}})
 	_ = collectCmdMessages(t, c3)
 
-	if got := len(m.deferredCommittedTail); got != 0 {
-		t.Fatalf("turn-1 commentary still stuck in deferred tail after the next turn began: %d", got)
+	if got := len(m.deferredCommittedTail); got != 1 {
+		t.Fatalf("mismatched known-step finalizer was flushed by text alone, got deferred tail count %d", got)
 	}
 	if got := m.view.OngoingStreamingText(); got != "Now running tools." {
 		t.Fatalf("live area carried prior-turn commentary into the new turn: %q", got)
@@ -64,12 +64,12 @@ func TestNewAssistantTurnFlushesSupersededStuckCommentary(t *testing.T) {
 			foundAssistant = true
 		}
 	}
-	if !foundAssistant {
-		t.Fatal("superseded commentary was not committed into the working set")
+	if foundAssistant {
+		t.Fatal("mismatched known-step finalizer was committed into the working set")
 	}
 }
 
-func TestNewToolTurnFlushesSupersededStuckCommentary(t *testing.T) {
+func TestNewToolTurnDoesNotFlushKnownMismatchedDeferredFinalizerByText(t *testing.T) {
 	m := newProjectedClosedUIModel(nil)
 	m.windowSizeKnown = true
 	m.termWidth = 100
@@ -118,8 +118,8 @@ func TestNewToolTurnFlushesSupersededStuckCommentary(t *testing.T) {
 	}})
 	_ = collectCmdMessages(t, c3)
 
-	if got := len(m.deferredCommittedTail); got != 0 {
-		t.Fatalf("turn-1 commentary still stuck after a tools-only next turn began: %d", got)
+	if got := len(m.deferredCommittedTail); got != 1 {
+		t.Fatalf("mismatched known-step finalizer was flushed by text alone, got deferred tail count %d", got)
 	}
 	foundAssistant := false
 	for _, entry := range committedTranscriptEntriesForApp(m.transcriptEntries) {
@@ -128,8 +128,8 @@ func TestNewToolTurnFlushesSupersededStuckCommentary(t *testing.T) {
 			break
 		}
 	}
-	if !foundAssistant {
-		t.Fatal("superseded commentary was not committed into the working set by the tool turn")
+	if foundAssistant {
+		t.Fatal("mismatched known-step finalizer was committed into the working set by the tool turn")
 	}
 }
 
@@ -175,5 +175,146 @@ func TestNewAssistantTurnFlushesStepLessDeferredFinalizerByText(t *testing.T) {
 	}
 	if got := m.view.OngoingStreamingText(); strings.TrimSpace(got) == "" || m.activeAssistantStreamStepID != "step-2" {
 		t.Fatalf("live area carried step-less finalizer into the new turn: %q", got)
+	}
+}
+
+func TestCommittedUserFlushStartsNewTurnForDeferredFinalizer(t *testing.T) {
+	m := newProjectedClosedUIModel(nil)
+	m.windowSizeKnown = true
+	m.termWidth = 100
+	m.termHeight = 20
+	m.transcriptEntries = []tui.TranscriptEntry{{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true}}
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.deferredCommittedTail = []deferredProjectedTranscriptTail{{
+		rangeStart: 1,
+		rangeEnd:   2,
+		revision:   2,
+		stepID:     "step-1",
+		entries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "Prior answer.",
+			Phase: string(llm.MessagePhaseFinal),
+		}},
+	}}
+	m.activeAssistantStreamSource = "Prior answer."
+	m.activeAssistantStreamStepID = "step-1"
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: m.transcriptEntries})
+
+	_, cmd := m.handleRuntimeEventBatch([]clientui.Event{{
+		Kind:                       clientui.EventUserMessageFlushed,
+		StepID:                     "step-2",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        2,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        3,
+		TranscriptRevision:         3,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role: "user",
+			Text: "next prompt",
+		}},
+	}})
+	_ = collectCmdMessages(t, cmd)
+
+	if got := len(m.deferredCommittedTail); got != 0 {
+		t.Fatalf("deferred finalizer stayed pending after committed user turn boundary: %d", got)
+	}
+	if got := m.activeAssistantStreamText(); strings.TrimSpace(got) != "" {
+		t.Fatalf("prior stream survived committed user turn boundary: %q", got)
+	}
+}
+
+func TestCommittedAssistantMessageStartsNewTurnForDeferredFinalizer(t *testing.T) {
+	m := newProjectedClosedUIModel(nil)
+	m.windowSizeKnown = true
+	m.termWidth = 100
+	m.termHeight = 20
+	m.transcriptEntries = []tui.TranscriptEntry{{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true}}
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.deferredCommittedTail = []deferredProjectedTranscriptTail{{
+		rangeStart: 1,
+		rangeEnd:   2,
+		revision:   2,
+		stepID:     "step-1",
+		entries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "Prior answer.",
+			Phase: string(llm.MessagePhaseFinal),
+		}},
+	}}
+	m.activeAssistantStreamSource = "Prior answer."
+	m.activeAssistantStreamStepID = "step-1"
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: m.transcriptEntries})
+
+	_, cmd := m.handleRuntimeEventBatch([]clientui.Event{{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-2",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        2,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        3,
+		TranscriptRevision:         3,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "Next answer.",
+			Phase: string(llm.MessagePhaseFinal),
+		}},
+	}})
+	_ = collectCmdMessages(t, cmd)
+
+	if got := len(m.deferredCommittedTail); got != 0 {
+		t.Fatalf("deferred finalizer stayed pending after committed assistant turn boundary: %d", got)
+	}
+	if got := m.activeAssistantStreamText(); strings.TrimSpace(got) != "" {
+		t.Fatalf("prior stream survived committed assistant turn boundary: %q", got)
+	}
+}
+
+func TestCommittedUserFlushDoesNotMergeKnownMismatchedDeferredFinalizer(t *testing.T) {
+	m := newProjectedClosedUIModel(nil)
+	m.windowSizeKnown = true
+	m.termWidth = 100
+	m.termHeight = 20
+	m.transcriptEntries = []tui.TranscriptEntry{{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true}}
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.deferredCommittedTail = []deferredProjectedTranscriptTail{{
+		rangeStart: 1,
+		rangeEnd:   2,
+		revision:   2,
+		stepID:     "step-b",
+		entries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "Done",
+			Phase: string(llm.MessagePhaseFinal),
+		}},
+	}}
+	m.activeAssistantStreamSource = "Done"
+	m.activeAssistantStreamStepID = "step-a"
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: m.transcriptEntries})
+
+	_, cmd := m.handleRuntimeEventBatch([]clientui.Event{{
+		Kind:                       clientui.EventUserMessageFlushed,
+		StepID:                     "step-c",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        2,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        3,
+		TranscriptRevision:         3,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role: "user",
+			Text: "next prompt",
+		}},
+	}})
+	_ = collectCmdMessages(t, cmd)
+
+	if got := len(m.deferredCommittedTail); got != 2 {
+		t.Fatalf("mismatched known-step finalizer was merged into new-turn event, deferred tail count %d", got)
+	}
+	for _, entry := range committedTranscriptEntriesForApp(m.transcriptEntries) {
+		if entry.Role == tui.TranscriptRoleAssistant && strings.TrimSpace(entry.Text) == "Done" {
+			t.Fatal("mismatched known-step finalizer was committed through range-only merge")
+		}
 	}
 }

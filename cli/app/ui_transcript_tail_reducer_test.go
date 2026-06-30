@@ -160,3 +160,33 @@ func TestReduceDeferredCommittedTailMergeRejectsChainGap(t *testing.T) {
 		t.Fatalf("event changed on no-merge: %+v", reduction.event.TranscriptEntries)
 	}
 }
+
+func TestDeferredCommittedTailFinalizerFlushRequiresMatchingKnownStepID(t *testing.T) {
+	state := deferredCommittedTailState{
+		committedEntries: []tui.TranscriptEntry{{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true}},
+		baseOffset:       0,
+		revision:         1,
+		totalEntries:     2,
+		tails: []deferredProjectedTranscriptTail{{
+			rangeStart: 1,
+			rangeEnd:   2,
+			revision:   2,
+			stepID:     "step-b",
+			entries:    []clientui.ChatEntry{{Role: "assistant", Text: "Done"}},
+		}},
+	}
+
+	if _, _, ok := deferredCommittedTailFinalizerFlushEvent(state, "Done", "step-a"); ok {
+		t.Fatal("mismatched known deferred finalizer step was flushed by text alone")
+	}
+	flush, remaining, ok := deferredCommittedTailFinalizerFlushEvent(state, "Done", "step-b")
+	if !ok {
+		t.Fatal("matching known deferred finalizer step did not flush")
+	}
+	if flush.StepID != "step-b" || len(flush.TranscriptEntries) != 1 {
+		t.Fatalf("flush event = %+v, want matching step finalizer entry", flush)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("remaining tails = %d, want none", len(remaining))
+	}
+}
