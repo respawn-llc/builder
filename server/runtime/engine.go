@@ -475,6 +475,7 @@ func (e *Engine) SubmitUserMessage(ctx context.Context, text string) (assistant 
 		assistant = msg
 		return runErr
 	})
+	e.surfaceRunError(err)
 	return assistant, err
 }
 
@@ -495,6 +496,7 @@ func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message,
 		assistant = msg
 		return runErr
 	})
+	e.surfaceRunError(err)
 	return assistant, err
 }
 
@@ -689,9 +691,8 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 	if err := e.observePromptCacheRequest(stepID, prepared); err != nil {
 		return llm.Response{}, err
 	}
-	delays := generateRetryDelays
 	var lastErr error
-	for i := 0; i <= len(delays); i++ {
+	for i := 0; ; i++ {
 		var (
 			resp                    llm.Response
 			attemptErr              error
@@ -761,7 +762,11 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 			onAttemptReset()
 		}
 		lastErr = attemptErr
-		if i == len(delays) {
+		delays := generateRetryDelays
+		if errors.Is(attemptErr, llm.ErrModelStreamStalled) {
+			delays = idleStallRetryDelays
+		}
+		if i >= len(delays) {
 			break
 		}
 		if err := waitForRetryDelay(ctx, delays[i]); err != nil {

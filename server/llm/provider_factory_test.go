@@ -10,6 +10,18 @@ import (
 	"core/server/auth"
 )
 
+func openAIClientFromProvider(t *testing.T, client Client) *OpenAIClient {
+	t.Helper()
+	if watchdog, ok := client.(*idleWatchdogClient); ok {
+		client = watchdog.streamingModelClient
+	}
+	openAIClient, ok := client.(*OpenAIClient)
+	if !ok {
+		t.Fatalf("expected *OpenAIClient, got %T", client)
+	}
+	return openAIClient
+}
+
 type providerTestAuth struct{}
 
 func (providerTestAuth) AuthorizationHeader(context.Context) (string, error) {
@@ -53,10 +65,7 @@ func TestNewProviderClient_OpenAI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new provider client: %v", err)
 	}
-	openAIClient, ok := client.(*OpenAIClient)
-	if !ok {
-		t.Fatalf("expected *OpenAIClient, got %T", client)
-	}
+	openAIClient := openAIClientFromProvider(t, client)
 	transport, ok := openAIClient.transport.(*HTTPTransport)
 	if !ok {
 		t.Fatalf("expected *HTTPTransport, got %T", openAIClient.transport)
@@ -80,10 +89,7 @@ func TestNewProviderClient_CodexSparkUsesSparkMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new provider client: %v", err)
 	}
-	openAIClient, ok := client.(*OpenAIClient)
-	if !ok {
-		t.Fatalf("expected *OpenAIClient, got %T", client)
-	}
+	openAIClient := openAIClientFromProvider(t, client)
 	transport, ok := openAIClient.transport.(*HTTPTransport)
 	if !ok {
 		t.Fatalf("expected *HTTPTransport, got %T", openAIClient.transport)
@@ -113,10 +119,7 @@ func TestNewProviderClient_ExplicitProviderOverrideAllowsCustomModelAlias(t *tes
 		t.Fatalf("new provider client: %v", err)
 	}
 
-	openAIClient, ok := client.(*OpenAIClient)
-	if !ok {
-		t.Fatalf("expected *OpenAIClient, got %T", client)
-	}
+	openAIClient := openAIClientFromProvider(t, client)
 	providerCaps, err := openAIClient.ProviderCapabilities(context.Background())
 	if err != nil {
 		t.Fatalf("provider capabilities: %v", err)
@@ -151,10 +154,7 @@ func TestNewProviderClient_RemoteOpenAICompatibleBaseURLAllowsCustomModelFamily(
 		t.Fatalf("new provider client: %v", err)
 	}
 
-	openAIClient, ok := client.(*OpenAIClient)
-	if !ok {
-		t.Fatalf("expected *OpenAIClient, got %T", client)
-	}
+	openAIClient := openAIClientFromProvider(t, client)
 
 	transport, ok := openAIClient.transport.(*HTTPTransport)
 	if !ok {
@@ -195,10 +195,7 @@ func TestNewProviderClient_RemoteOpenAICompatibleBaseURLAllowsAnonymousCapabilit
 		t.Fatalf("new provider client: %v", err)
 	}
 
-	openAIClient, ok := client.(*OpenAIClient)
-	if !ok {
-		t.Fatalf("expected *OpenAIClient, got %T", client)
-	}
+	openAIClient := openAIClientFromProvider(t, client)
 
 	providerCaps, err := openAIClient.ProviderCapabilities(context.Background())
 	if err != nil {
@@ -218,10 +215,7 @@ func TestNewProviderClient_DefaultOpenAIBaseURLDoesNotStayExplicit(t *testing.T)
 	if err != nil {
 		t.Fatalf("new provider client: %v", err)
 	}
-	openAIClient, ok := client.(*OpenAIClient)
-	if !ok {
-		t.Fatalf("expected *OpenAIClient, got %T", client)
-	}
+	openAIClient := openAIClientFromProvider(t, client)
 	transport, ok := openAIClient.transport.(*HTTPTransport)
 	if !ok {
 		t.Fatalf("expected *HTTPTransport, got %T", openAIClient.transport)

@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -45,7 +44,9 @@ func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, fn func() 
 // messages or background notices. This is used when a non-turn busy operation
 // (for example manual compaction) completes while queued steering is waiting.
 func (e *Engine) SubmitQueuedUserMessages(ctx context.Context) (assistant llm.Message, err error) {
-	return e.submitQueuedUserMessages(ctx, nil)
+	assistant, err = e.submitQueuedUserMessages(ctx, nil)
+	e.surfaceRunError(err)
+	return assistant, err
 }
 
 func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[string]struct{}) (assistant llm.Message, err error) {
@@ -226,10 +227,7 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) {
 	}
 	ids := e.queuedUserAutoDrainIDSnapshot()
 	if _, err := e.submitQueuedUserMessages(ctx, ids); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return
-		}
-		e.AppendCommittedEntry("error", fmt.Sprintf("queued steering continuation failed: %v", err))
+		e.surfaceRunError(err)
 		return
 	}
 	completed = true

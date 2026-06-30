@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"core/shared/config"
+	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
@@ -471,6 +472,8 @@ func protocolError(resp *protocol.ResponseError) error {
 			return serverapi.ErrServerAuthRequired
 		}
 		return errors.Join(serverapi.ErrServerAuthRequired, errors.New(message))
+	case protocol.ErrCodeModelStreamStalled:
+		return errors.Join(llmerrors.ErrModelStreamStalled, errors.New(message))
 	case protocol.ErrCodeStreamGap:
 		return errors.Join(serverapi.ErrStreamGap, errors.New(message))
 	case protocol.ErrCodeWorkspaceNotRegistered:

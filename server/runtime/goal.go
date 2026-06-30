@@ -512,7 +512,7 @@ func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool)
 				}
 				continue
 			}
-			e.recordGoalLoopError(err)
+			e.surfaceRunError(err)
 			return
 		}
 		appendNudge = true
@@ -555,11 +555,18 @@ func (e *Engine) waitBeforeGoalLoopBusyRetry(ctx context.Context) bool {
 	}
 }
 
-func (e *Engine) recordGoalLoopError(err error) {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, errGoalLoopInactive) {
+func (e *Engine) surfaceRunError(err error) {
+	if err == nil ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, ErrAgentBusy) ||
+		errors.Is(err, errGoalLoopInactive) ||
+		errors.Is(err, ErrEngineClosed) {
 		return
 	}
-	message := "Goal loop stopped: " + err.Error()
+	message := llm.UserFacingError(err)
+	if message == "" {
+		message = err.Error()
+	}
 	if appendErr := e.steer("", steerLocalEntryIntent(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityAuto,
 		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
@@ -568,7 +575,7 @@ func (e *Engine) recordGoalLoopError(err error) {
 		_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
-			Text:       "Failed to persist goal loop error: " + appendErr.Error(),
+			Text:       "Failed to persist run error: " + appendErr.Error(),
 		}))
 	}
 	e.SetStreamingError(message)

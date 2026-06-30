@@ -2,6 +2,8 @@ package llm
 
 import "core/shared/llmerrors"
 
+var ErrModelStreamStalled = llmerrors.ErrModelStreamStalled
+
 type APIStatusError = llmerrors.APIStatusError
 type UnifiedErrorCode = llmerrors.UnifiedErrorCode
 type ProviderAPIError = llmerrors.ProviderAPIError

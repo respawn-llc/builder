@@ -645,10 +645,7 @@ func TestNewOpenAIProviderClientCanonicalizesBareDefaultOpenAIBaseURL(t *testing
 	if err != nil {
 		t.Fatalf("new openai provider client: %v", err)
 	}
-	openAIClient, ok := client.(*OpenAIClient)
-	if !ok {
-		t.Fatalf("expected *OpenAIClient, got %T", client)
-	}
+	openAIClient := openAIClientFromProvider(t, client)
 	transport, ok := openAIClient.transport.(*HTTPTransport)
 	if !ok {
 		t.Fatalf("expected *HTTPTransport, got %T", openAIClient.transport)

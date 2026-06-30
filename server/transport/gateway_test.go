@@ -10,6 +10,7 @@ import (
 	shelltool "core/server/tools/shell"
 	rpccontract "core/shared/apicontract"
 	remoteclient "core/shared/client"
+	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
@@ -69,6 +70,13 @@ func TestProtocolErrorMapsWorkflowTaskNotFound(t *testing.T) {
 	code, _ := protocolError(serverapi.ErrWorkflowTaskNotFound)
 	if code != protocol.ErrCodeWorkflowTaskNotFound {
 		t.Fatalf("protocol error code = %d, want %d", code, protocol.ErrCodeWorkflowTaskNotFound)
+	}
+}
+
+func TestProtocolErrorMapsModelStreamStalled(t *testing.T) {
+	code, _ := protocolError(fmt.Errorf("model generation failed after retries: %w", llmerrors.ErrModelStreamStalled))
+	if code != protocol.ErrCodeModelStreamStalled {
+		t.Fatalf("protocol error code = %d, want %d", code, protocol.ErrCodeModelStreamStalled)
 	}
 }
 

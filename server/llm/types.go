@@ -600,6 +600,7 @@ type ReasoningSummaryDelta struct {
 type StreamCallbacks struct {
 	OnAssistantDelta        func(delta AssistantDelta)
 	OnReasoningSummaryDelta func(delta ReasoningSummaryDelta)
+	OnStreamActivity        func()
 }
 
 type StreamEventsClient interface {

@@ -39,6 +39,10 @@ func newResponseStreamAccumulator(callbacks StreamCallbacks, windowTokens int) *
 	}
 }
 
+func (a *responseStreamAccumulator) hasCompleted() bool {
+	return a != nil && a.completed != nil
+}
+
 func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUnion) {
 	switch evt.Type {
 	case "response.output_text.delta":
