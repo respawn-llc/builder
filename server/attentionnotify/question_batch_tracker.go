@@ -61,10 +61,10 @@ func (t *QuestionBatchTracker) prepareLocked(batch QuestionBatch) error {
 	}
 	if _, ok := t.batches[batch.ID]; ok {
 		existing := t.batches[batch.ID]
+		existing.Presentation = batch.Presentation
 		if !existing.emitted {
 			existing.Delivery = batch.Delivery
 			existing.Target = batch.Target
-			existing.Presentation = batch.Presentation
 			existing.OccurredAt = batch.OccurredAt
 		}
 		return nil

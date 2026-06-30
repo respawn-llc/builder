@@ -281,11 +281,7 @@ function attentionTargetIsActive(
     );
   }
   return attention.some(
-    (item) =>
-      item.kind === "approval" &&
-      item.runID === target.runID &&
-      item.sessionID === target.sessionID &&
-      item.taskTransitionID === focus.taskTransitionID,
+    (item) => item.kind === "approval" && item.taskTransitionID === focus.taskTransitionID,
   );
 }
 

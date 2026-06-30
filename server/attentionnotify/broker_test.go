@@ -249,10 +249,17 @@ func TestQuestionBatchTrackerPublishesAggregateDisplayCountAndResolvesAfterClear
 	if first.Pending.Presentation.Title != "KT-1: 2 questions" || first.Pending.Presentation.Count != 2 {
 		t.Fatalf("first presentation = %+v", first.Pending.Presentation)
 	}
+	batch.Presentation.Body = "later question from agent"
+	if err := tracker.Prepare(batch); err != nil {
+		t.Fatalf("Prepare emitted batch update: %v", err)
+	}
 	if err := tracker.MarkMaterialized(batch.ID, "ask-2"); err != nil {
 		t.Fatalf("MarkMaterialized ask-2: %v", err)
 	}
-	_ = nextAttentionEvent(t, sub)
+	update := nextAttentionEvent(t, sub)
+	if update.Pending.Presentation.Body != "later question from agent" {
+		t.Fatalf("updated presentation body = %q", update.Pending.Presentation.Body)
+	}
 	if err := tracker.MarkDurablyCleared(batch.ID, "ask-1"); err != nil {
 		t.Fatalf("MarkDurablyCleared ask-1: %v", err)
 	}
