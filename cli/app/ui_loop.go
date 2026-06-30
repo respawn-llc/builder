@@ -31,10 +31,7 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 		sessionID = runtimeClient.MainView().Session.SessionID
 	}
 
-	model := NewProjectedUIModel(
-		runtimeClient,
-		runtimeEvents,
-		askEvents,
+	uiOptions := []UIOption{
 		WithUILogger(logger),
 		WithUIModelName(active.Model),
 		WithUIConfiguredModelName(configuredModelName),
@@ -59,7 +56,16 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 		WithUITerminalCursorState(terminalCursor),
 		WithUIRendererOutputGateState(rendererOutputGate),
 		WithUITerminalFocusState(wiring.terminalFocus),
-		WithUINativeSurfaceWriter(os.Stdout),
+	}
+	if nativeOngoingScrollbackEnabled() {
+		uiOptions = append(uiOptions, WithUINativeSurfaceWriter(os.Stdout))
+	}
+
+	model := NewProjectedUIModel(
+		runtimeClient,
+		runtimeEvents,
+		askEvents,
+		uiOptions...,
 	)
 	if closable, ok := model.(interface{ Close() }); ok {
 		defer closable.Close()
@@ -73,6 +79,10 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 	}
 	logger.Logf("app.exit ok")
 	return finalModel, nil
+}
+
+func nativeOngoingScrollbackEnabled() bool {
+	return envFlagEnabled("KENT_NATIVE_SCROLLBACK")
 }
 
 func mainUIProgramOptionsWithOutput(active config.Settings, terminalCursor *uiTerminalCursorState, rendererOutputGate *uiRendererOutputGateState, output io.Writer) []tea.ProgramOption {
