@@ -53,12 +53,23 @@ func committedTranscriptEntriesForApp(entries []tui.TranscriptEntry) []tui.Trans
 }
 
 func transcriptEntryFromProjectedChatEntry(entry clientui.ChatEntry, transient bool, committed bool) tui.TranscriptEntry {
+	role := tui.TranscriptRoleFromWire(entry.Role)
+	return transcriptEntryFromProjectedChatEntryWithLocalAppendOnly(entry, transient, committed, false, role)
+}
+
+func transcriptEntryFromProjectedEventEntry(evt clientui.Event, entry clientui.ChatEntry, transient bool, committed bool) tui.TranscriptEntry {
+	role := tui.TranscriptRoleFromWire(entry.Role)
+	return transcriptEntryFromProjectedChatEntryWithLocalAppendOnly(entry, transient, committed, projectedEventEntryLocalAppendOnly(evt, role), role)
+}
+
+func transcriptEntryFromProjectedChatEntryWithLocalAppendOnly(entry clientui.ChatEntry, transient bool, committed bool, localAppendOnly bool, role tui.TranscriptRole) tui.TranscriptEntry {
 	return tui.TranscriptEntry{
 		Visibility:        entry.Visibility,
 		RollbackTargetID:  entry.RollbackTargetID,
 		Transient:         transient,
 		Committed:         committed,
-		Role:              tui.TranscriptRoleFromWire(entry.Role),
+		LocalAppendOnly:   localAppendOnly,
+		Role:              role,
 		Text:              entry.Text,
 		CondensedText:     entry.CondensedText,
 		Phase:             clientui.MessagePhase(entry.Phase),
@@ -72,11 +83,27 @@ func transcriptEntryFromProjectedChatEntry(entry clientui.ChatEntry, transient b
 	}
 }
 
+func projectedEventEntryLocalAppendOnly(evt clientui.Event, role tui.TranscriptRole) bool {
+	if !nativeProjectionEntryRoleLocalAppendOnly(role) {
+		return false
+	}
+	switch evt.Kind {
+	case clientui.EventBackgroundUpdated,
+		clientui.EventLocalEntryAdded:
+		return true
+	case clientui.EventCacheWarning:
+		return !evt.CommittedTranscriptChanged
+	default:
+		return false
+	}
+}
+
 func appendTranscriptMsgFromEntry(entry tui.TranscriptEntry) tui.AppendTranscriptMsg {
 	return tui.AppendTranscriptMsg{
 		Visibility:        entry.Visibility,
 		Transient:         entry.Transient,
 		Committed:         entry.Committed,
+		LocalAppendOnly:   entry.LocalAppendOnly,
 		Role:              entry.Role,
 		Text:              entry.Text,
 		CondensedText:     entry.CondensedText,

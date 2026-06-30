@@ -136,6 +136,35 @@ func TestReduceDeferredCommittedTailMergeConsumesCoveredPostEventTail(t *testing
 	}
 }
 
+func TestReduceDeferredCommittedTailMergeRejectsKnownDifferentStepTail(t *testing.T) {
+	state := deferredCommittedTailState{
+		committedEntries: []tui.TranscriptEntry{{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true}},
+		baseOffset:       0,
+		tails: []deferredProjectedTranscriptTail{{
+			rangeStart: 1,
+			rangeEnd:   2,
+			revision:   7,
+			stepID:     "step-b",
+			entries:    []clientui.ChatEntry{{Role: "assistant", Text: "same text"}},
+		}},
+	}
+	reduction := reduceDeferredCommittedTailMerge(state, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-c",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        2,
+		CommittedEntryStartSet:     true,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "new answer"}},
+	})
+
+	if reduction.merged {
+		t.Fatalf("expected different-step deferred tail not to merge, got %+v", reduction)
+	}
+	if len(reduction.remaining) != 1 {
+		t.Fatalf("remaining tails = %d, want original tail preserved", len(reduction.remaining))
+	}
+}
+
 func TestReduceDeferredCommittedTailMergeRejectsChainGap(t *testing.T) {
 	evt := clientui.Event{
 		Kind:                       clientui.EventAssistantMessage,
@@ -158,5 +187,35 @@ func TestReduceDeferredCommittedTailMergeRejectsChainGap(t *testing.T) {
 	}
 	if len(reduction.event.TranscriptEntries) != 1 || reduction.event.TranscriptEntries[0].Text != "answer" {
 		t.Fatalf("event changed on no-merge: %+v", reduction.event.TranscriptEntries)
+	}
+}
+
+func TestDeferredCommittedTailFinalizerFlushRequiresMatchingKnownStepID(t *testing.T) {
+	state := deferredCommittedTailState{
+		committedEntries: []tui.TranscriptEntry{{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true}},
+		baseOffset:       0,
+		revision:         1,
+		totalEntries:     2,
+		tails: []deferredProjectedTranscriptTail{{
+			rangeStart: 1,
+			rangeEnd:   2,
+			revision:   2,
+			stepID:     "step-b",
+			entries:    []clientui.ChatEntry{{Role: "assistant", Text: "Done"}},
+		}},
+	}
+
+	if _, _, ok := deferredCommittedTailFinalizerFlushEvent(state, "Done", "step-a"); ok {
+		t.Fatal("mismatched known deferred finalizer step was flushed by text alone")
+	}
+	flush, remaining, ok := deferredCommittedTailFinalizerFlushEvent(state, "Done", "step-b")
+	if !ok {
+		t.Fatal("matching known deferred finalizer step did not flush")
+	}
+	if flush.StepID != "step-b" || len(flush.TranscriptEntries) != 1 {
+		t.Fatalf("flush event = %+v, want matching step finalizer entry", flush)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("remaining tails = %d, want none", len(remaining))
 	}
 }

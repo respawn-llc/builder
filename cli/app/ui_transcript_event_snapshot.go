@@ -17,8 +17,9 @@ func projectedTranscriptEventSnapshotFromModel(m *uiModel) projectedTranscriptEv
 		revision:             m.transcriptRevision,
 		hasRuntimeClient:     m.hasRuntimeClient(),
 		busy:                 m.isBusy(),
-		liveAssistantPending: strings.TrimSpace(liveAssistantText) != "" || m.sawAssistantDelta,
+		liveAssistantPending: m.activeAssistantStreamPending(),
 		liveAssistantText:    liveAssistantText,
+		liveAssistantStepID:  m.activeAssistantStreamStepID,
 	}
 }
 
@@ -27,7 +28,7 @@ func projectedActiveAssistantStreamText(m *uiModel) string {
 		return ""
 	}
 	values := []string{
-		m.view.OngoingStreamingText(),
+		m.activeAssistantStreamText(),
 	}
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {
