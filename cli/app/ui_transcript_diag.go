@@ -146,6 +146,24 @@ func (m *uiModel) logDeferredCommittedTailMergeDiag(evt clientui.Event, reductio
 	}))
 }
 
+func (m *uiModel) logDeferredCommittedTailTurnBoundaryFlushDiag(boundary clientui.Event, flush clientui.Event) {
+	if m == nil || !m.transcriptDiagnosticsEnabled() {
+		return
+	}
+	m.logTranscriptDiag(transcriptdiag.FormatLine("transcript.diag.client.flush_deferred_tail_turn_boundary", map[string]string{
+		"session_id":      strings.TrimSpace(m.sessionID),
+		"mode":            m.transcriptModeLabel(),
+		"boundary_kind":   string(boundary.Kind),
+		"boundary_step":   strings.TrimSpace(boundary.StepID),
+		"flush_step":      strings.TrimSpace(flush.StepID),
+		"flush_start":     strconv.Itoa(flush.CommittedEntryStart),
+		"flush_count":     strconv.Itoa(len(flush.TranscriptEntries)),
+		"entries_digest":  transcriptdiag.EntriesDigest(flush.TranscriptEntries),
+		"event_revision":  strconv.FormatInt(flush.TranscriptRevision, 10),
+		"committed_count": strconv.Itoa(flush.CommittedEntryCount),
+	}))
+}
+
 func (m *uiModel) logDeferredCommittedTailDeferDiag(evt clientui.Event, reduction deferredCommittedTailDeferReduction) {
 	if m == nil || !m.transcriptDiagnosticsEnabled() {
 		return

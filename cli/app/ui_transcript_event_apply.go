@@ -79,9 +79,12 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	entries := plan.entries
 	previousNativeStableProjection := tui.TranscriptProjection{}
 	nativeSurfaceConfigured := m.nativeSurfaceConfigured()
-	nativeStableReady := nativeSurfaceConfigured && m.nativeSurface.initialized()
+	if nativeSurfaceConfigured && !m.nativeResizeRehydratePending() {
+		m.ensureNativeStableSurfaceForCurrentGeometry()
+	}
+	nativeStableReady := nativeSurfaceConfigured && !m.nativeResizeRehydratePending() && m.nativeStableSurfaceReadyForCurrentGeometry()
 	if nativeSurfaceConfigured {
-		previousNativeStableProjection = m.nativeCommittedProjectionForEntries(m.transcriptEntries)
+		previousNativeStableProjection = m.nativeDeliveredStableProjection
 	}
 	m.transcriptLiveDirty = true
 	startOffset := m.transcriptBaseOffset + plan.rangeStart
@@ -89,8 +92,8 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	for _, entry := range entries {
 		convertedEntries = append(convertedEntries, transcriptEntryFromProjectedChatEntry(entry, reduction.projectedTransient, reduction.projectedCommitted))
 	}
-	nativeAssistantStreamText := m.view.OngoingStreamingText()
-	committedAppendClearsAssistantStream := shouldClearAssistantStreamForCommittedTranscriptEntries(convertedEntries, m.view.OngoingStreamingText())
+	nativeAssistantStreamText := m.activeAssistantStreamText()
+	committedAppendClearsAssistantStream := shouldClearAssistantStreamForCommittedTranscriptEntries(convertedEntries, nativeAssistantStreamText)
 	nativeAssistantStreamWasIncomplete := m.nativeAssistantStreamIncomplete
 	nativeAssistantStreamActive := m.nativeSurfaceConfigured() &&
 		m.nativeSurface.AssistantStreaming() &&
@@ -121,7 +124,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			BaseOffset:   m.transcriptBaseOffset,
 			TotalEntries: m.transcriptTotalEntries,
 			Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
-			Ongoing:      m.view.OngoingStreamingText(),
+			Ongoing:      m.activeAssistantStreamText(),
 			OngoingError: m.view.OngoingErrorText(),
 		})
 	}
@@ -131,7 +134,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			Revision:       m.transcriptRevision,
 			HasMoreAbove:   startOffset > 0,
 			Entries:        cloneChatEntries(entries),
-			Streaming:      m.view.OngoingStreamingText(),
+			Streaming:      m.activeAssistantStreamText(),
 			StreamingError: m.view.OngoingErrorText(),
 		}
 		m.detailTranscript.apply(page)
@@ -141,7 +144,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			BaseOffset:   m.transcriptBaseOffset,
 			TotalEntries: m.transcriptTotalEntries,
 			Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
-			Ongoing:      m.view.OngoingStreamingText(),
+			Ongoing:      m.activeAssistantStreamText(),
 			OngoingError: m.view.OngoingErrorText(),
 		})
 	}
@@ -150,7 +153,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			BaseOffset:   m.detailTranscript.offset,
 			TotalEntries: m.detailTranscript.totalEntries,
 			Entries:      append([]tui.TranscriptEntry(nil), m.detailTranscript.entries...),
-			Ongoing:      m.view.OngoingStreamingText(),
+			Ongoing:      m.activeAssistantStreamText(),
 			OngoingError: m.view.OngoingErrorText(),
 		})
 	}
@@ -187,7 +190,7 @@ func (a uiRuntimeAdapter) applyActiveAssistantFinalizerGapAsRecentTail(evt clien
 	for _, entry := range evt.TranscriptEntries {
 		entries = append(entries, transcriptEntryFromProjectedChatEntry(entry, false, evt.CommittedTranscriptChanged))
 	}
-	if shouldClearAssistantStreamForCommittedTranscriptEntries(entries, m.view.OngoingStreamingText()) {
+	if shouldClearAssistantStreamForCommittedTranscriptEntries(entries, m.activeAssistantStreamText()) {
 		m.clearAssistantStreamForCommittedAppend()
 	}
 	totalEntries := max(evt.CommittedEntryCount, start+len(evt.TranscriptEntries))
@@ -196,7 +199,7 @@ func (a uiRuntimeAdapter) applyActiveAssistantFinalizerGapAsRecentTail(evt clien
 		Revision:       evt.TranscriptRevision,
 		HasMoreAbove:   start > 0,
 		Entries:        cloneChatEntries(evt.TranscriptEntries),
-		Streaming:      m.view.OngoingStreamingText(),
+		Streaming:      m.activeAssistantStreamText(),
 		StreamingError: m.view.OngoingErrorText(),
 	}
 	detailPinnedAwayFromTail := m.detailTranscript.loaded && m.detailTranscript.hasMoreBelow

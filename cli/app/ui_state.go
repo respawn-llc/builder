@@ -120,6 +120,7 @@ type uiPresentationFeatureState struct {
 	rendererOutputGate              *uiRendererOutputGateState
 	nativeSurface                   *uiNativeSurface
 	nativeLiveAreaError             error
+	nativeDeliveredStableProjection tui.TranscriptProjection
 	nativeAssistantStreamIncomplete bool
 	nativeResizeRehydrateToken      uint64
 	nativeResizeRehydrateSettled    bool
@@ -184,6 +185,8 @@ type uiStatusFeatureState struct {
 
 type uiTranscriptFeatureState struct {
 	sawAssistantDelta                bool
+	activeAssistantStreamSource      string
+	activeAssistantStreamStepID      string
 	lastCommittedAssistantStepID     string
 	transcriptEntries                []tui.TranscriptEntry
 	transcriptBaseOffset             int
