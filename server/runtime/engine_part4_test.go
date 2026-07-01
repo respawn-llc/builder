@@ -167,7 +167,7 @@ func TestSubmitUserMessageCommentaryWithoutToolsEmitsRealtimeAssistantEvent(t *t
 	}
 }
 
-func TestSubmitUserMessageCommentaryWithToolCallsEmitsRealtimeAssistantEventWithoutDuplicateToolCalls(t *testing.T) {
+func TestSubmitUserMessageCommentaryWithToolCallsEmitsContiguousAssistantEvent(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	client := &fakeClient{responses: []llm.Response{
@@ -227,8 +227,8 @@ func TestSubmitUserMessageCommentaryWithToolCallsEmitsRealtimeAssistantEventWith
 	if len(assistantContents) != 2 || assistantContents[0] != "working" || assistantContents[1] != "done" {
 		t.Fatalf("assistant realtime events = %+v, want [working done]", assistantContents)
 	}
-	if commentaryToolCalls != 0 {
-		t.Fatalf("expected commentary assistant event to omit tool calls, got %d", commentaryToolCalls)
+	if commentaryToolCalls != 1 {
+		t.Fatalf("expected commentary assistant event to carry persisted tool call entries, got %d", commentaryToolCalls)
 	}
 }
 
@@ -357,6 +357,13 @@ func TestSubmitUserMessageCommentaryWithToolCallsPublishesCommittedEntryStartMet
 	}
 	if toolStartEvt.CommittedEntryStart >= toolCompleteEvt.CommittedEntryStart {
 		t.Fatalf("expected tool call before tool result in committed order, start=%+v complete=%+v", toolStartEvt, toolCompleteEvt)
+	}
+	assistantEntries := TranscriptEntriesFromEvent(assistantEvt)
+	if len(assistantEntries) < 2 {
+		t.Fatalf("commentary assistant event must carry persisted tool-call entries to avoid sparse committed frontier, got %+v", assistantEntries)
+	}
+	if assistantEntries[0].Role != "assistant" || assistantEntries[1].Role != "tool_call" {
+		t.Fatalf("unexpected commentary assistant event entries: %+v", assistantEntries)
 	}
 }
 

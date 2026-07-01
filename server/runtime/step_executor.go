@@ -587,11 +587,7 @@ func liveCommittedAssistantEventMessage(msg llm.Message) (llm.Message, bool) {
 	if strings.TrimSpace(msg.Content) == "" {
 		return llm.Message{}, false
 	}
-	return llm.Message{
-		Role:    llm.RoleAssistant,
-		Content: msg.Content,
-		Phase:   msg.Phase,
-	}, true
+	return msg, true
 }
 
 func sameVisibleAssistantMessage(a, b llm.Message) bool {
