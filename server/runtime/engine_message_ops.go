@@ -173,10 +173,17 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 		}
 	}
 	currentCommittedCount := e.CommittedTranscriptEntryCount()
-	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && msg.Role == llm.RoleDeveloper && (msg.MessageType == llm.MessageTypeGoal || msg.MessageType == llm.MessageTypeWorktreeMode || msg.MessageType == llm.MessageTypeWorktreeModeExit) {
+	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedDeveloperMessageEvent(msg) {
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
 	}
 	return nil
+}
+
+func shouldEmitCommittedDeveloperMessageEvent(msg llm.Message) bool {
+	if msg.Role != llm.RoleDeveloper {
+		return false
+	}
+	return len(VisibleChatEntriesFromMessage(msg)) > 0
 }
 
 func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch []string, queueItems []QueuedUserMessage) error {

@@ -30,6 +30,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 	patchEditsApplied := false
 	deferredFinal := llm.Message{}
 	deferredFinalCommittedStart := -1
+	deferredFinalEventEmitted := false
 	hasDeferredFinal := false
 	for {
 		if err := ctx.Err(); err != nil {
@@ -155,6 +156,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistantMsg})); err != nil {
 			return stepLoopResult{}, err
 		}
+		assistantEventEmitted := false
 		if !noopFinalAnswer {
 			executableCallIDs := make(map[string]struct{}, len(localToolCalls))
 			for _, call := range localToolCalls {
@@ -165,6 +167,21 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			toolCallStarts := map[string]int(nil)
 			assistantCommittedStart, toolCallStarts = committedStartsForPersistedAssistantMessage(e, assistantMsg, executableCallIDs)
 			e.rememberPendingToolCallStarts(toolCallStarts)
+		}
+		if shouldPublishFinalAssistantBeforeLaterCommittedRows(assistantMsg, noopFinalAnswer, options.EmitAssistantEvent) {
+			if err := e.steer(stepID, steerEventIntent(Event{
+				Kind:                       EventAssistantMessage,
+				StepID:                     stepID,
+				Message:                    assistantMsg,
+				CommittedTranscriptChanged: true,
+				CommittedEntryStart:        assistantCommittedStart,
+				CommittedEntryStartSet:     assistantCommittedStart >= 0,
+			})); err != nil {
+				return stepLoopResult{}, err
+			}
+			assistantEventEmitted = true
+		}
+		if !noopFinalAnswer {
 			if liveAssistant, ok := liveCommittedAssistantEventMessage(assistantMsg); ok && options.EmitAssistantEvent {
 				_ = e.steer(stepID, steerEventIntent(Event{
 					Kind:                       EventAssistantMessage,
@@ -252,6 +269,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				if assistantMsg.Phase == llm.MessagePhaseFinal && strings.TrimSpace(assistantMsg.Content) != "" && !noopFinalAnswer {
 					deferredFinal = assistantMsg
 					deferredFinalCommittedStart = assistantCommittedStart
+					deferredFinalEventEmitted = assistantEventEmitted
 					hasDeferredFinal = true
 				}
 				continue
@@ -267,12 +285,16 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			resolvedCommittedStartSet := assistantCommittedStart >= 0
 			var reviewerCompletion *ReviewerStatus
 			if hasDeferredFinal {
-				resolved = deferredFinal
-				resolvedNoopFinalAnswer = isNoopFinalAnswer(resolved)
-				resolvedCommittedStart = deferredFinalCommittedStart
-				resolvedCommittedStartSet = deferredFinalCommittedStart >= 0
+				if resolvedNoopFinalAnswer {
+					resolved = deferredFinal
+					resolvedNoopFinalAnswer = isNoopFinalAnswer(resolved)
+					resolvedCommittedStart = deferredFinalCommittedStart
+					resolvedCommittedStartSet = deferredFinalCommittedStart >= 0
+					assistantEventEmitted = deferredFinalEventEmitted
+				}
 				hasDeferredFinal = false
 				deferredFinalCommittedStart = -1
+				deferredFinalEventEmitted = false
 			}
 			if resolvedNoopFinalAnswer {
 				if e.goalActive() {
@@ -289,9 +311,8 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			if options.RefreshReviewerConfigOnResolve {
 				effectiveReviewerFrequency, effectiveReviewerClient = e.reviewerTurnConfigSnapshot()
 			}
-			assistantEventEmitted := false
 			if s.reviewer.ShouldRunTurn(effectiveReviewerFrequency, effectiveReviewerClient, patchEditsApplied) {
-				if options.EmitAssistantEvent {
+				if options.EmitAssistantEvent && !assistantEventEmitted {
 					// The answer is already committed before supervisor entries are appended.
 					// Publish it first so live clients never see supervisor entries as a gap
 					// after an unannounced committed assistant message.
@@ -588,6 +609,16 @@ func liveCommittedAssistantEventMessage(msg llm.Message) (llm.Message, bool) {
 		return llm.Message{}, false
 	}
 	return msg, true
+}
+
+func shouldPublishFinalAssistantBeforeLaterCommittedRows(msg llm.Message, noopFinalAnswer bool, emitAssistantEvent bool) bool {
+	if !emitAssistantEvent || noopFinalAnswer {
+		return false
+	}
+	if msg.Phase != llm.MessagePhaseFinal || strings.TrimSpace(msg.Content) == "" {
+		return false
+	}
+	return true
 }
 
 func sameVisibleAssistantMessage(a, b llm.Message) bool {

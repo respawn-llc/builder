@@ -378,6 +378,65 @@ func TestNativeRuntimeViewCommentaryToolCallEventKeepsCommittedFrontierContiguou
 	}
 }
 
+func TestNativeRuntimeViewQueuedUserFlushAfterFinalAssistantKeepsCommittedFrontierContiguous(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	seed := []tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleUser,
+		Text:      "start",
+	}}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = seed
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.forwardToView(tui.SetConversationMsg{
+		BaseOffset:   0,
+		TotalEntries: 1,
+		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
+	})
+
+	assistantEvent := projectRuntimeEvent(runtime.Event{
+		Kind:                       runtime.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        2,
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "first final",
+			Phase:   llm.MessagePhaseFinal,
+		},
+	})
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(assistantEvent)
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("assistant final event result = %+v, want mutation without hydration/fatal", result)
+	}
+
+	flushEvent := projectRuntimeEvent(runtime.Event{
+		Kind:                       runtime.EventUserMessageFlushed,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         3,
+		CommittedEntryStart:        2,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        3,
+		UserMessage:                "steer now",
+		UserMessageBatch:           []string{"steer now"},
+	})
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(flushEvent)
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("queued user flush after final assistant result = %+v, want mutation without hydration/fatal", result)
+	}
+	if got := len(m.transcriptEntries); got != 3 {
+		t.Fatalf("transcript entries after queued flush = %d, want 3: %+v", got, m.transcriptEntries)
+	}
+}
+
 func TestNativeScratchPageAppendsAfterActiveStream(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceSpecTestModel(&out)

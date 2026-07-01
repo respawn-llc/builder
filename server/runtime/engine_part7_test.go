@@ -728,6 +728,78 @@ func TestDeferredFinalWithQueuedUserInjectionAndTrailingNoopStillUsesDeferredFin
 	}
 }
 
+func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierContiguous(t *testing.T) {
+	dir := t.TempDir()
+	store := mustCreateTestSessionAt(t, dir)
+
+	var (
+		mu           sync.Mutex
+		events       []Event
+		queueOnce    sync.Once
+		eng          *Engine
+		backgroundID = "1000"
+	)
+	var client *hookClient
+	client = &hookClient{
+		response: llm.Response{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "foreground done", Phase: llm.MessagePhaseFinal},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		beforeReturn: func() error {
+			queueOnce.Do(func() {
+				eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
+					Type:       "completed",
+					ID:         backgroundID,
+					State:      "completed",
+					NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
+				}, true)
+				client.mu.Lock()
+				client.response = llm.Response{
+					Assistant: llm.Message{Role: llm.RoleAssistant, Content: reviewerNoopToken, Phase: llm.MessagePhaseFinal},
+					Usage:     llm.Usage{WindowTokens: 200000},
+				}
+				client.mu.Unlock()
+			})
+			return nil
+		},
+	}
+	eng = mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			mu.Lock()
+			events = append(events, evt)
+			mu.Unlock()
+		},
+	})
+	if _, err := eng.SubmitUserMessage(context.Background(), "run task"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	committedEvents := committedTranscriptEventsWithEntries(events)
+	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committedEvents)
+	assistantIdx := -1
+	backgroundIdx := -1
+	for idx, evt := range committedEvents {
+		if assistantIdx < 0 && evt.Kind == EventAssistantMessage && evt.Message.Content == "foreground done" {
+			assistantIdx = idx
+		}
+		if evt.Kind == EventConversationUpdated && evt.Message.MessageType == llm.MessageTypeBackgroundNotice {
+			backgroundIdx = idx
+		}
+	}
+	if assistantIdx < 0 {
+		t.Fatalf("expected foreground final assistant event, got %+v", committedEvents)
+	}
+	if backgroundIdx < 0 {
+		t.Fatalf("expected background notice committed event, got %+v", committedEvents)
+	}
+	if assistantIdx > backgroundIdx {
+		t.Fatalf("foreground final assistant must publish before background notice, assistant_idx=%d background_idx=%d events=%+v", assistantIdx, backgroundIdx, committedEvents)
+	}
+}
+
 func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)

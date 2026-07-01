@@ -578,25 +578,18 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 		if onActive != nil {
 			onActive()
 		}
-		hasQueuedInjected := e.messageFlow.HasPendingUserInjections()
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
 		userMessage := llm.Message{Role: llm.RoleUser, Content: text}
-		if !hasQueuedInjected {
-			intents := []steeringIntent{steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{userMessage})}
-			if flushed := flushedUserMessageEvent(userMessage, stepID); flushed != nil {
-				intents = append(intents, steerEventIntent(*flushed))
-			}
-			if err := e.steer(stepID, intents...); err != nil {
-				return err
-			}
-			if onFlushed != nil {
-				onFlushed()
-			}
-		} else if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{userMessage})); err != nil {
+		intents := []steeringIntent{steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{userMessage})}
+		if flushed := flushedUserMessageEvent(userMessage, stepID); flushed != nil {
+			intents = append(intents, steerEventIntent(*flushed))
+		}
+		if err := e.steer(stepID, intents...); err != nil {
 			return err
-		} else if onFlushed != nil {
+		}
+		if onFlushed != nil {
 			onFlushed()
 		}
 		msg, runErr := e.runStepLoop(stepCtx, stepID)

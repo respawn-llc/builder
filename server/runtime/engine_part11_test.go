@@ -60,6 +60,208 @@ func TestQueuedUserMessageFlushesWhenAssistantReturnsWithoutTools(t *testing.T) 
 	}
 }
 
+func TestQueuedUserMessageFlushAfterFinalAssistantPublishesCommittedAssistantFirst(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first final", Phase: llm.MessagePhaseFinal},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "after flush", Phase: llm.MessagePhaseFinal},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	}}
+
+	events := make([]Event, 0, 12)
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		OnEvent: func(evt Event) {
+			events = append(events, evt)
+		},
+	})
+
+	eng.QueueUserMessage("steer now")
+	msg, err := eng.SubmitUserMessage(context.Background(), "start")
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if msg.Content != "after flush" {
+		t.Fatalf("assistant content = %q, want after flush", msg.Content)
+	}
+
+	assistantIndex := -1
+	flushIndex := -1
+	for idx, evt := range events {
+		if evt.Kind == EventAssistantMessage && evt.Message.Content == "first final" {
+			assistantIndex = idx
+		}
+		if evt.Kind == EventUserMessageFlushed && evt.UserMessage == "steer now" {
+			flushIndex = idx
+		}
+	}
+	if assistantIndex < 0 {
+		t.Fatalf("expected first final assistant event before queued flush, got %+v", events)
+	}
+	if flushIndex < 0 {
+		t.Fatalf("expected queued user flush event, got %+v", events)
+	}
+	if assistantIndex > flushIndex {
+		t.Fatalf("first final assistant event index %d must be before queued flush index %d; events=%+v", assistantIndex, flushIndex, events)
+	}
+
+	assistant := events[assistantIndex]
+	flushed := events[flushIndex]
+	assistantEntries := TranscriptEntriesFromEvent(assistant)
+	if len(assistantEntries) == 0 {
+		t.Fatalf("assistant event carried no transcript entries: %+v", assistant)
+	}
+	wantFlushStart := assistant.CommittedEntryStart + len(assistantEntries)
+	if flushed.CommittedEntryStart != wantFlushStart {
+		t.Fatalf("queued user flush start = %d, want %d after assistant event; assistant=%+v flush=%+v", flushed.CommittedEntryStart, wantFlushStart, assistant, flushed)
+	}
+}
+
+func TestQueuedUserMessageFlushAfterFinalAssistantWithReasoningPublishesAssistantFirst(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first final", Phase: llm.MessagePhaseFinal},
+			Reasoning: []llm.ReasoningEntry{
+				{Role: "reasoning", Text: "Plan summary"},
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "after flush", Phase: llm.MessagePhaseFinal},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	}}
+
+	events := make([]Event, 0, 12)
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		OnEvent: func(evt Event) {
+			events = append(events, evt)
+		},
+	})
+
+	eng.QueueUserMessage("steer now")
+	if _, err := eng.SubmitUserMessage(context.Background(), "start"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	committedEvents := committedTranscriptEventsWithEntries(events)
+	if len(committedEvents) < 3 {
+		t.Fatalf("expected assistant, reasoning, and queued user committed events, got %+v", committedEvents)
+	}
+	userIdx := -1
+	for idx, evt := range committedEvents {
+		if evt.Kind == EventUserMessageFlushed && evt.UserMessage == "start" {
+			userIdx = idx
+			break
+		}
+	}
+	if userIdx < 0 {
+		t.Fatalf("expected initial user flush event, got %+v", committedEvents)
+	}
+	assistant := committedEvents[userIdx+1]
+	if assistant.Kind != EventAssistantMessage || assistant.Message.Content != "first final" {
+		t.Fatalf("committed event after initial user = %+v, want first final assistant before reasoning/queued rows; all=%+v", assistant, committedEvents)
+	}
+	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committedEvents)
+}
+
+func TestDirectUserMessageWithQueuedInjectionPublishesUserBeforeToolEvents(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "working", Phase: llm.MessagePhaseCommentary},
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call_shell_1",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{"command":"pwd"}`),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	}}
+
+	events := make([]Event, 0, 16)
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		OnEvent: func(evt Event) {
+			events = append(events, evt)
+		},
+	})
+
+	eng.QueueUserMessage("queued steer")
+	if _, err := eng.SubmitUserMessage(context.Background(), "start"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	committedEvents := committedTranscriptEventsWithEntries(events)
+	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committedEvents)
+	startIdx := -1
+	toolCompleteIdx := -1
+	for idx, evt := range committedEvents {
+		if evt.Kind == EventUserMessageFlushed && evt.UserMessage == "start" {
+			startIdx = idx
+		}
+		if evt.Kind == EventToolCallCompleted {
+			toolCompleteIdx = idx
+		}
+	}
+	if startIdx < 0 {
+		t.Fatalf("expected direct user message committed event, got %+v", committedEvents)
+	}
+	if toolCompleteIdx < 0 {
+		t.Fatalf("expected tool completion committed event, got %+v", committedEvents)
+	}
+	if startIdx > toolCompleteIdx {
+		t.Fatalf("direct user message must publish before tool completion, user_idx=%d tool_complete_idx=%d events=%+v", startIdx, toolCompleteIdx, committedEvents)
+	}
+}
+
+func committedTranscriptEventsWithEntries(events []Event) []Event {
+	out := make([]Event, 0, len(events))
+	for _, evt := range events {
+		if !evt.CommittedTranscriptChanged {
+			continue
+		}
+		if len(TranscriptEntriesFromEvent(evt)) == 0 {
+			continue
+		}
+		out = append(out, evt)
+	}
+	return out
+}
+
+func assertRuntimeEventsAdvanceCommittedFrontierContiguously(t *testing.T, events []Event) {
+	t.Helper()
+	if len(events) == 0 {
+		t.Fatal("expected committed transcript events")
+	}
+	frontier := -1
+	for _, evt := range events {
+		entries := TranscriptEntriesFromEvent(evt)
+		if len(entries) == 0 {
+			continue
+		}
+		if !evt.CommittedEntryStartSet {
+			t.Fatalf("committed transcript event missing start: %+v", evt)
+		}
+		eventEnd := evt.CommittedEntryStart + len(entries)
+		if frontier >= 0 && eventEnd <= frontier {
+			if evt.Kind == EventToolCallStarted {
+				continue
+			}
+			t.Fatalf("committed transcript event range overlaps previous emitted range: frontier=%d event=%+v entries=%+v all=%+v", frontier, evt, entries, events)
+		}
+		if frontier >= 0 && evt.CommittedEntryStart != frontier {
+			t.Fatalf("committed transcript event range is not contiguous: frontier=%d event=%+v entries=%+v all=%+v", frontier, evt, entries, events)
+		}
+		frontier = eventEnd
+	}
+}
+
 func TestModelResponseEventCarriesContextUsage(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
@@ -171,13 +373,13 @@ func TestQueuedUserMessagesCoalesceIntoSingleFlush(t *testing.T) {
 	}}
 
 	var (
-		flushCount int
-		flushed    Event
+		queuedFlushCount int
+		flushed          Event
 	)
 	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		OnEvent: func(evt Event) {
-			if evt.Kind == EventUserMessageFlushed {
-				flushCount++
+			if evt.Kind == EventUserMessageFlushed && len(evt.UserMessageBatch) == 2 {
+				queuedFlushCount++
 				flushed = evt
 			}
 		},
@@ -198,8 +400,8 @@ func TestQueuedUserMessagesCoalesceIntoSingleFlush(t *testing.T) {
 	if len(flushed.UserMessageBatch) != 2 {
 		t.Fatalf("expected two flushed user messages in batch, got %+v", flushed.UserMessageBatch)
 	}
-	if flushCount != 1 {
-		t.Fatalf("expected one flush event, got %d", flushCount)
+	if queuedFlushCount != 1 {
+		t.Fatalf("expected one coalesced queued flush event, got %d", queuedFlushCount)
 	}
 	if len(client.calls) < 2 {
 		t.Fatalf("expected at least 2 model calls, got %d", len(client.calls))
