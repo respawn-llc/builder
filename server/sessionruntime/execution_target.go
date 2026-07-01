@@ -10,6 +10,7 @@ import (
 	"core/server/runtime"
 	"core/server/session"
 	"core/shared/clientui"
+	"core/shared/serverapi"
 )
 
 func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
@@ -30,31 +31,41 @@ func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, tar
 		normalizedReminder = &normalized
 	}
 	for {
-		claim, err := s.activeRuntimeClaim(ctx, trimmedSessionID)
-		if err != nil {
-			return err
-		}
-		if claim == nil {
-			return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
-		}
-		engine := claim.Engine()
-		if engine == nil {
-			return runtimeUnavailableErr(trimmedSessionID)
-		}
-		err = engine.RunWhenIdleBeforeQueuedUserWork(ctx, runtime.ActiveKindRuntimeMaintenance, func() error {
-			if !claim.IsCurrent() {
-				return errors.Join(ErrAcquiredRuntimeOvertaken, fmt.Errorf("session %q runtime was replaced during execution target sync", trimmedSessionID))
-			}
-			return claim.Rebind(trimmedWorkdir)
-		})
+		guard, err := s.activeRuntimeGuard(ctx, trimmedSessionID)
 		if errors.Is(err, ErrAcquiredRuntimeOvertaken) {
 			continue
 		}
 		if err != nil {
 			return err
 		}
-		return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
+		if guard == nil {
+			return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
+		}
+		return s.syncActiveExecutionTarget(ctx, trimmedSessionID, trimmedWorkdir, guard, normalizedReminder)
 	}
+}
+
+func (s *Service) syncActiveExecutionTarget(ctx context.Context, sessionID string, workdir string, guard registry.RuntimeGuard, reminder *session.WorktreeReminderState) error {
+	defer guard.Release()
+	engine := guard.Engine()
+	if engine == nil {
+		return runtimeUnavailableErr(sessionID)
+	}
+	return engine.RunWhenIdleBeforeQueuedUserWork(ctx, runtime.ActiveKindRuntimeMaintenance, func() error {
+		previousWorkdir := engine.TranscriptWorkingDir()
+		previousReminder := engine.WorktreeReminderState()
+		if err := guard.Rebind(workdir); err != nil {
+			return err
+		}
+		if err := engine.SetWorktreeReminderState(reminder); err != nil {
+			rollbackErr := rollbackActiveExecutionTarget(engine, guard, previousWorkdir, previousReminder)
+			if rollbackErr != nil {
+				return errors.Join(err, rollbackErr, guard.Retire(runtime.QueuedUserMessageFailureRuntimeUnavailable))
+			}
+			return errors.Join(err, rollbackErr)
+		}
+		return nil
+	})
 }
 
 func (s *Service) ClearWorktreeReminder(ctx context.Context, sessionID string) error {
@@ -127,24 +138,37 @@ func (s *Service) resolveStore(ctx context.Context, sessionID string) (*session.
 	return store, nil
 }
 
-func (s *Service) activeRuntimeClaim(ctx context.Context, sessionID string) (*registry.RuntimeClaim, error) {
+func rollbackActiveExecutionTarget(engine *runtime.Engine, guard registry.RuntimeGuard, workdir string, reminder *session.WorktreeReminderState) error {
+	var collected []error
+	if strings.TrimSpace(workdir) != "" {
+		if err := guard.Rebind(workdir); err != nil {
+			collected = append(collected, fmt.Errorf("rollback runtime workdir: %w", err))
+		}
+	}
+	if err := engine.SetWorktreeReminderState(reminder); err != nil {
+		collected = append(collected, fmt.Errorf("rollback worktree reminder: %w", err))
+	}
+	return errors.Join(collected...)
+}
+
+func (s *Service) activeRuntimeGuard(ctx context.Context, sessionID string) (registry.RuntimeGuard, error) {
 	if s.runtimes == nil {
 		return nil, nil
 	}
-	claim := s.runtimes.RuntimeClaimFor(strings.TrimSpace(sessionID))
-	if claim == nil {
-		return nil, nil
-	}
-	if _, err := claim.AwaitReady(ctx); err != nil {
+	guard, err := s.runtimes.BeginRuntimeGuard(ctx, strings.TrimSpace(sessionID))
+	if err != nil {
+		if errors.Is(err, registry.ErrRuntimeGuardOvertaken) {
+			return nil, ErrAcquiredRuntimeOvertaken
+		}
+		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	if !claim.IsCurrent() {
+	if guard == nil {
 		return nil, nil
 	}
-	if err := claim.ActivationErr(); err != nil {
-		return nil, err
-	}
-	return claim, nil
+	return guard, nil
 }
 
 func (s *Service) resolveExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {

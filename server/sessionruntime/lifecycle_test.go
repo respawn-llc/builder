@@ -3,13 +3,16 @@ package sessionruntime
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"core/server/llm"
 	"core/server/registry"
 	runtimepkg "core/server/runtime"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -406,6 +409,258 @@ func TestSyncExecutionTargetRebindsActiveRuntime(t *testing.T) {
 	}
 	if got, _ := state.rebindDir.Load().(string); got != fixture.config.WorkspaceRoot {
 		t.Fatalf("rebind workdir = %q, want %q", got, fixture.config.WorkspaceRoot)
+	}
+}
+
+type lifecycleRequestCaptureClient struct {
+	mu      sync.Mutex
+	calls   []llm.Request
+	callCh  chan struct{}
+	callOne sync.Once
+}
+
+func newLifecycleRequestCaptureClient() *lifecycleRequestCaptureClient {
+	return &lifecycleRequestCaptureClient{callCh: make(chan struct{})}
+}
+
+func (c *lifecycleRequestCaptureClient) Generate(_ context.Context, req llm.Request) (llm.Response, error) {
+	c.mu.Lock()
+	c.calls = append(c.calls, req)
+	c.mu.Unlock()
+	c.callOne.Do(func() { close(c.callCh) })
+	return llm.Response{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}, nil
+}
+
+func (c *lifecycleRequestCaptureClient) firstCall(t *testing.T) llm.Request {
+	t.Helper()
+	select {
+	case <-c.callCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for queued user model request")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.calls) == 0 {
+		t.Fatal("expected captured model request")
+	}
+	return c.calls[0]
+}
+
+func TestSyncExecutionTargetPersistsReminderBeforeQueuedUserAutoDrain(t *testing.T) {
+	fixture, _ := newRuntimeServiceFixture(t)
+	sessionID := fixture.store.Meta().SessionID
+	client := newLifecycleRequestCaptureClient()
+	targetWorkdir := t.TempDir()
+	var engine *runtimepkg.Engine
+	build := func(context.Context) (RuntimeBuildResult, error) {
+		created, err := runtimepkg.New(fixture.store, client, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
+		if err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		engine = created
+		return RuntimeBuildResult{
+			Engine: created,
+			LocalRebind: func(string) error {
+				created.QueueUserMessageForAutoDrain("queued after switch", "req-queued-after-switch")
+				return nil
+			},
+			Close: func() { _ = created.Close() },
+		}, nil
+	}
+	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
+		t.Fatalf("AcquireRuntime: %v", err)
+	}
+	if engine == nil {
+		t.Fatal("expected active engine")
+	}
+	err := fixture.service.SyncExecutionTarget(context.Background(), sessionID, clientui.SessionExecutionTarget{
+		WorkspaceRoot:    fixture.config.WorkspaceRoot,
+		EffectiveWorkdir: targetWorkdir,
+	}, &session.WorktreeReminderState{
+		Mode:          session.WorktreeReminderModeEnter,
+		Branch:        "feature/queued-switch",
+		WorktreePath:  targetWorkdir,
+		WorkspaceRoot: fixture.config.WorkspaceRoot,
+		EffectiveCwd:  targetWorkdir,
+	})
+	if err != nil {
+		t.Fatalf("SyncExecutionTarget: %v", err)
+	}
+	req := client.firstCall(t)
+	for _, item := range req.Items {
+		if item.Type == llm.ResponseItemTypeMessage && item.Role == llm.RoleDeveloper && item.MessageType == llm.MessageTypeWorktreeMode && item.SourcePath == targetWorkdir {
+			return
+		}
+	}
+	t.Fatalf("queued request missing worktree developer message: %+v", req.Items)
+}
+
+type armedWorktreeReminderFailObserver struct {
+	armed atomic.Bool
+}
+
+func (o *armedWorktreeReminderFailObserver) ObservePersistedStore(context.Context, session.PersistedStoreSnapshot) error {
+	if o.armed.Load() {
+		return errors.New("observer persistence failed")
+	}
+	return nil
+}
+
+func TestSyncExecutionTargetRollsBackRebindWhenReminderPersistenceFails(t *testing.T) {
+	observer := &armedWorktreeReminderFailObserver{}
+	workspaceRoot := t.TempDir()
+	store, err := session.Create(t.TempDir(), "workspace", workspaceRoot, session.WithPersistenceObserver(observer))
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	reg := registry.NewRuntimeRegistry()
+	service := NewService("", nil, nil, nil, nil, nil, reg, registry.NewSessionStoreRegistry(), session.WithPersistenceObserver(observer))
+	sessionID := store.Meta().SessionID
+	targetWorkdir := t.TempDir()
+	var (
+		engine   *runtimepkg.Engine
+		rebindMu sync.Mutex
+		rebinds  []string
+	)
+	build := func(context.Context) (RuntimeBuildResult, error) {
+		created, err := runtimepkg.New(store, &sessionRuntimeTestLLMClient{}, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
+		if err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		engine = created
+		return RuntimeBuildResult{
+			Engine: created,
+			LocalRebind: func(dir string) error {
+				rebindMu.Lock()
+				rebinds = append(rebinds, dir)
+				rebindMu.Unlock()
+				return nil
+			},
+			Close: func() { _ = created.Close() },
+		}, nil
+	}
+	if err := service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
+		t.Fatalf("AcquireRuntime: %v", err)
+	}
+	if engine == nil {
+		t.Fatal("expected active engine")
+	}
+	observer.armed.Store(true)
+	err = service.SyncExecutionTarget(context.Background(), sessionID, clientui.SessionExecutionTarget{
+		WorkspaceRoot:    workspaceRoot,
+		EffectiveWorkdir: targetWorkdir,
+	}, &session.WorktreeReminderState{
+		Mode:          session.WorktreeReminderModeEnter,
+		Branch:        "feature/persist-fails",
+		WorktreePath:  targetWorkdir,
+		WorkspaceRoot: workspaceRoot,
+		EffectiveCwd:  targetWorkdir,
+	})
+	if err == nil {
+		t.Fatal("expected SyncExecutionTarget to fail when reminder persistence fails")
+	}
+	rebindMu.Lock()
+	gotRebinds := append([]string(nil), rebinds...)
+	rebindMu.Unlock()
+	wantRebinds := []string{targetWorkdir, workspaceRoot}
+	if !reflect.DeepEqual(gotRebinds, wantRebinds) {
+		t.Fatalf("rebinds = %+v, want %+v", gotRebinds, wantRebinds)
+	}
+	if got := engine.TranscriptWorkingDir(); got != workspaceRoot {
+		t.Fatalf("transcript workdir after rollback = %q, want %q", got, workspaceRoot)
+	}
+}
+
+func TestSyncExecutionTargetFailsQueuedUserWorkWhenRollbackRebindFails(t *testing.T) {
+	observer := &armedWorktreeReminderFailObserver{}
+	workspaceRoot := t.TempDir()
+	store, err := session.Create(t.TempDir(), "workspace", workspaceRoot, session.WithPersistenceObserver(observer))
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	reg := registry.NewRuntimeRegistry()
+	service := NewService("", nil, nil, nil, nil, nil, reg, registry.NewSessionStoreRegistry(), session.WithPersistenceObserver(observer))
+	sessionID := store.Meta().SessionID
+	targetWorkdir := t.TempDir()
+	client := newLifecycleRequestCaptureClient()
+	var (
+		engine      *runtimepkg.Engine
+		rebindCount atomic.Int32
+	)
+	build := func(context.Context) (RuntimeBuildResult, error) {
+		created, err := runtimepkg.New(store, client, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
+		if err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		engine = created
+		return RuntimeBuildResult{
+			Engine: created,
+			LocalRebind: func(string) error {
+				if rebindCount.Add(1) == 1 {
+					created.QueueUserMessageForAutoDrain("queued during failing switch", "req-failing-switch")
+					return nil
+				}
+				return errors.New("rollback rebind failed")
+			},
+			Close: func() { _ = created.Close() },
+		}, nil
+	}
+	if err := service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
+		t.Fatalf("AcquireRuntime: %v", err)
+	}
+	if engine == nil {
+		t.Fatal("expected active engine")
+	}
+	observer.armed.Store(true)
+	err = service.SyncExecutionTarget(context.Background(), sessionID, clientui.SessionExecutionTarget{
+		WorkspaceRoot:    workspaceRoot,
+		EffectiveWorkdir: targetWorkdir,
+	}, &session.WorktreeReminderState{
+		Mode:          session.WorktreeReminderModeEnter,
+		Branch:        "feature/rollback-rebind-fails",
+		WorktreePath:  targetWorkdir,
+		WorkspaceRoot: workspaceRoot,
+		EffectiveCwd:  targetWorkdir,
+	})
+	if err == nil {
+		t.Fatal("expected SyncExecutionTarget to fail when rollback rebind fails")
+	}
+	if got := rebindCount.Load(); got != 2 {
+		t.Fatalf("rebind count = %d, want 2", got)
+	}
+	if engine.HasQueuedUserWork() {
+		t.Fatal("queued user work must be failed when rollback cannot prove a coherent target")
+	}
+	select {
+	case <-client.callCh:
+		t.Fatal("queued user work reached the model after rollback failure")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if _, err := engine.SubmitUserMessage(context.Background(), "new work after failed switch"); !errors.Is(err, runtimepkg.ErrEngineClosed) {
+		t.Fatalf("SubmitUserMessage after failed rollback = %v, want ErrEngineClosed", err)
+	}
+	var rebuiltEngine *runtimepkg.Engine
+	rebuilt := false
+	rebuild := func(context.Context) (RuntimeBuildResult, error) {
+		created, err := runtimepkg.New(store, &sessionRuntimeTestLLMClient{}, tools.NewRegistry(), runtimepkg.Config{Model: "gpt-5"})
+		if err != nil {
+			return RuntimeBuildResult{}, err
+		}
+		rebuilt = true
+		rebuiltEngine = created
+		return RuntimeBuildResult{Engine: created, Close: func() { _ = created.Close() }}, nil
+	}
+	if err := service.AcquireRuntime(context.Background(), sessionID, "owner-b", rebuild); err != nil {
+		t.Fatalf("AcquireRuntime after retired rollback failure: %v", err)
+	}
+	if !rebuilt {
+		t.Fatal("expected acquire after retired rollback failure to build a fresh runtime")
+	}
+	if rebuiltEngine == nil || rebuiltEngine == engine {
+		t.Fatalf("rebuilt engine = %p, old engine = %p", rebuiltEngine, engine)
 	}
 }
 

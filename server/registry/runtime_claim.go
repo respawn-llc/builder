@@ -9,6 +9,7 @@ import (
 )
 
 var ErrRuntimeOwnerIDRequired = errors.New("runtime owner id is required")
+var ErrRuntimeGuardOvertaken = errors.New("runtime guard was overtaken")
 
 type RuntimeClaim struct {
 	registry *RuntimeRegistry

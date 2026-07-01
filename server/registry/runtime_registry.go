@@ -311,13 +311,41 @@ func (r *RuntimeRegistry) finishEntryTeardown(sessionID string, entry *runtimeEn
 		entry.teardown()
 	}
 	entry.signalClosed()
-	r.updateAggregateRuntimeActivity(sessionID, false)
+}
+
+func (r *RuntimeRegistry) retireGuardedRuntime(guard *runtimeGuard, reason runtime.QueuedUserMessageFailureReason) error {
+	if r == nil || guard == nil || guard.entry == nil {
+		return fmt.Errorf("runtime guard is unavailable")
+	}
+	id := strings.TrimSpace(guard.sessionID)
+	if id == "" {
+		return fmt.Errorf("runtime session id is required")
+	}
+	if guard.engine != nil {
+		guard.engine.FailQueuedUserMessages(reason)
+	}
+	r.directory.mu.Lock()
+	if r.directory.entries[id] != guard.entry {
+		r.directory.mu.Unlock()
+		return ErrRuntimeGuardOvertaken
+	}
+	delete(r.directory.entries, id)
+	r.directory.mu.Unlock()
+	guard.entry.markClosing()
+	r.publishUnavailableRuntimeActivityToEntry(id, guard.entry)
+	var closeErr error
+	if guard.engine != nil {
+		closeErr = guard.engine.Close()
+	}
+	go r.finishEntryTeardown(id, guard.entry)
+	return closeErr
 }
 
 type RuntimeGuard interface {
 	Engine() *runtime.Engine
 	Generation() uint64
 	Rebind(workdir string) error
+	Retire(reason runtime.QueuedUserMessageFailureReason) error
 	GuardedPromptResponder
 	Release()
 }
@@ -326,7 +354,11 @@ func (r *RuntimeRegistry) BeginRuntimeGuard(ctx context.Context, sessionID strin
 	if r == nil {
 		return nil, fmt.Errorf("runtime registry is required")
 	}
-	return r.directory.BeginGuard(ctx, sessionID)
+	guard, err := r.directory.BeginGuard(ctx, sessionID)
+	if guard != nil {
+		guard.registry = r
+	}
+	return guard, err
 }
 
 func (r *RuntimeRegistry) ResolveRuntime(_ context.Context, sessionID string) (*runtime.Engine, error) {
@@ -534,6 +566,21 @@ func (r *RuntimeRegistry) PublishRuntimeEvent(sessionID string, evt runtime.Even
 		return
 	}
 	entry := r.directory.Entry(sessionID)
+	r.publishRuntimeEventToEntry(sessionID, entry, evt)
+}
+
+func (r *RuntimeRegistry) PublishRuntimeEventForEngine(sessionID string, engine *runtime.Engine, evt runtime.Event) {
+	if r == nil || engine == nil {
+		return
+	}
+	entry := r.directory.Entry(sessionID)
+	if entry == nil || entry.engineRef() != engine {
+		return
+	}
+	r.publishRuntimeEventToEntry(sessionID, entry, evt)
+}
+
+func (r *RuntimeRegistry) publishRuntimeEventToEntry(sessionID string, entry *runtimeEntry, evt runtime.Event) {
 	if entry == nil || entry.sessionActivity == nil {
 		return
 	}

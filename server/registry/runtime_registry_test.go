@@ -1103,6 +1103,156 @@ func TestRuntimeRegistryBeginGuardWaitsForBuild(t *testing.T) {
 	}
 }
 
+func TestRuntimeGuardRetirePublishesQueuedFailureBeforeEntryRemoval(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	sessionID := "session-1"
+	var engine *runtime.Engine
+	engine = newRegistryTestRuntime(t, func(evt runtime.Event) {
+		registry.PublishRuntimeEventForEngine(sessionID, engine, evt)
+	})
+	registerReady(t, registry, sessionID, engine)
+	sub, err := registry.SubscribeSessionActivity(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("SubscribeSessionActivity: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+	engine.QueueUserMessageWithClientRequestID("restore this", "client-queue-1")
+	guard, err := registry.BeginRuntimeGuard(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("BeginRuntimeGuard: %v", err)
+	}
+	defer guard.Release()
+	if err := guard.Retire(runtime.QueuedUserMessageFailureRuntimeUnavailable); err != nil {
+		t.Fatalf("Retire: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for {
+		evt, err := sub.Next(ctx)
+		if err != nil {
+			t.Fatalf("Next queued failure: %v", err)
+		}
+		status := evt.QueuedUserMessageStatus
+		if status == nil || status.Status != clientui.QueuedUserMessageFailed {
+			continue
+		}
+		if status.ClientRequestID != "client-queue-1" {
+			t.Fatalf("client request id = %q, want client-queue-1", status.ClientRequestID)
+		}
+		if status.FailureReason != clientui.QueuedUserMessageFailureRuntimeUnavailable {
+			t.Fatalf("failure reason = %q, want runtime_unavailable", status.FailureReason)
+		}
+		if status.RestoreText != "restore this" {
+			t.Fatalf("restore text = %q, want restore this", status.RestoreText)
+		}
+		return
+	}
+}
+
+func TestRuntimeGuardRetireDelaysTeardownUntilGuardsRelease(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	sessionID := "session-1"
+	var engine *runtime.Engine
+	engine = newRegistryTestRuntime(t, func(evt runtime.Event) {
+		registry.PublishRuntimeEventForEngine(sessionID, engine, evt)
+	})
+	claim, _, _ := registry.AcquireRuntimeClaim(sessionID, "owner-a")
+	teardownDone := make(chan struct{})
+	claim.Resolve(engine, nil, func() { close(teardownDone) })
+	first, err := registry.BeginRuntimeGuard(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("BeginRuntimeGuard first: %v", err)
+	}
+	second, err := registry.BeginRuntimeGuard(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("BeginRuntimeGuard second: %v", err)
+	}
+	if err := first.Retire(runtime.QueuedUserMessageFailureRuntimeUnavailable); err != nil {
+		t.Fatalf("Retire: %v", err)
+	}
+	select {
+	case <-teardownDone:
+		t.Fatal("teardown ran while retiring guard was still held")
+	default:
+	}
+	first.Release()
+	select {
+	case <-teardownDone:
+		t.Fatal("teardown ran while second guard was still held")
+	case <-time.After(50 * time.Millisecond):
+	}
+	second.Release()
+	select {
+	case <-teardownDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for teardown after guards released")
+	}
+}
+
+func TestRuntimeGuardRetireTeardownDoesNotClearFreshActiveRuntime(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	sessionID := "session-1"
+	var oldEngine *runtime.Engine
+	oldEngine = newRegistryTestRuntime(t, func(evt runtime.Event) {
+		registry.PublishRuntimeEventForEngine(sessionID, oldEngine, evt)
+	})
+	oldClaim, _, _ := registry.AcquireRuntimeClaim(sessionID, "owner-a")
+	oldTeardownDone := make(chan struct{})
+	oldClaim.Resolve(oldEngine, nil, func() { close(oldTeardownDone) })
+	first, err := registry.BeginRuntimeGuard(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("BeginRuntimeGuard first: %v", err)
+	}
+	second, err := registry.BeginRuntimeGuard(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("BeginRuntimeGuard second: %v", err)
+	}
+	publishRunState(registry, sessionID, true)
+	if !registrySessionAggregateActive(registry, sessionID) {
+		t.Fatal("expected old active runtime to mark session active")
+	}
+	if err := first.Retire(runtime.QueuedUserMessageFailureRuntimeUnavailable); err != nil {
+		t.Fatalf("Retire: %v", err)
+	}
+	if registrySessionAggregateActive(registry, sessionID) {
+		t.Fatal("expected retired old runtime to clear session active state before fresh runtime starts")
+	}
+	var freshEngine *runtime.Engine
+	freshEngine = newRegistryTestRuntime(t, func(evt runtime.Event) {
+		registry.PublishRuntimeEventForEngine(sessionID, freshEngine, evt)
+	})
+	freshClaim, reused, closing := registry.AcquireRuntimeClaim(sessionID, "owner-b")
+	if freshClaim == nil || reused || closing {
+		t.Fatalf("fresh claim = (%v, reused=%t, closing=%t), want new claim", freshClaim, reused, closing)
+	}
+	if ok := freshClaim.Resolve(freshEngine, nil, func() { _ = freshEngine.Close() }); !ok {
+		t.Fatal("fresh claim resolve failed")
+	}
+	if current := registry.directory.Entry(sessionID); current == nil || current == oldClaim.entry {
+		t.Fatalf("fresh entry not current after resolve: current=%p old=%p", current, oldClaim.entry)
+	}
+	publishRunState(registry, sessionID, true)
+	if !registrySessionAggregateActive(registry, sessionID) {
+		t.Fatal("expected fresh active runtime to mark session active")
+	}
+	first.Release()
+	second.Release()
+	waitClosed(t, oldTeardownDone)
+	if !registrySessionAggregateActive(registry, sessionID) {
+		t.Fatal("old teardown cleared fresh active runtime state")
+	}
+	closeRuntime(registry, sessionID, freshEngine)
+	if registrySessionAggregateActive(registry, sessionID) {
+		t.Fatal("expected fresh runtime close to clear session active state")
+	}
+}
+
+func registrySessionAggregateActive(registry *RuntimeRegistry, sessionID string) bool {
+	registry.runStateMu.Lock()
+	defer registry.runStateMu.Unlock()
+	return registry.blockingActivitySessions[sessionID]
+}
+
 func TestRuntimeClaimRejectsOwnerlessLeaseMutation(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := &runtime.Engine{}

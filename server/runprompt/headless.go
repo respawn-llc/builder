@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"core/server/auth"
 	"core/server/launch"
@@ -48,6 +49,7 @@ type HeadlessBootstrap struct {
 	Background      *shelltool.Manager
 	RuntimeRegistry interface {
 		PublishRuntimeEvent(sessionID string, evt runtime.Event)
+		PublishRuntimeEventForEngine(sessionID string, engine *runtime.Engine, evt runtime.Event)
 		PublishRuntimeActivitySnapshot(sessionID string, snapshot runtimeactivity.ResponseSnapshot)
 	}
 	PromptHistory  promptHistoryStore
@@ -161,6 +163,47 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		if err != nil {
 			return sessionruntime.RuntimeBuildResult{}, err
 		}
+		var (
+			pendingRuntimeEvents  []runtime.Event
+			runtimeEventMu        sync.Mutex
+			runtimeEventsResolved bool
+		)
+		publishRuntimeEvent := func(evt runtime.Event) {
+			if l.boot.RuntimeRegistry == nil {
+				return
+			}
+			runtimeEventMu.Lock()
+			engine := acquiredEngine
+			if engine == nil || !runtimeEventsResolved {
+				pendingRuntimeEvents = append(pendingRuntimeEvents, evt)
+				runtimeEventMu.Unlock()
+				return
+			}
+			runtimeEventMu.Unlock()
+			l.boot.RuntimeRegistry.PublishRuntimeEventForEngine(sessionID, engine, evt)
+		}
+		bindRuntimeEventEngine := func(engine *runtime.Engine) {
+			if l.boot.RuntimeRegistry == nil {
+				return
+			}
+			runtimeEventMu.Lock()
+			acquiredEngine = engine
+			runtimeEventMu.Unlock()
+		}
+		flushRuntimeEventsAfterResolve := func() {
+			if l.boot.RuntimeRegistry == nil {
+				return
+			}
+			runtimeEventMu.Lock()
+			engine := acquiredEngine
+			runtimeEventsResolved = true
+			pending := append([]runtime.Event(nil), pendingRuntimeEvents...)
+			pendingRuntimeEvents = nil
+			runtimeEventMu.Unlock()
+			for _, evt := range pending {
+				l.boot.RuntimeRegistry.PublishRuntimeEventForEngine(sessionID, engine, evt)
+			}
+		}
 		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, plan.EnabledTools, workdir, l.boot.AuthManager, engineLogger, l.boot.Background, runtimewire.RuntimeWiringOptions{
 			Headless:        true,
 			FastMode:        l.boot.FastModeState,
@@ -174,9 +217,7 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 					engineLogger.Logf("%s", runlog.FormatTranscriptProjectionDiagnostic(sessionID, projected))
 					engineLogger.Logf("%s", runlog.FormatTranscriptPublishDiagnostic(sessionID, projected))
 				}
-				if l.boot.RuntimeRegistry != nil {
-					l.boot.RuntimeRegistry.PublishRuntimeEvent(sessionID, evt)
-				}
+				publishRuntimeEvent(evt)
 				PublishRunPromptProgress(progress, evt)
 			},
 		})
@@ -184,18 +225,19 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 			_ = engineLogger.Close()
 			return sessionruntime.RuntimeBuildResult{}, err
 		}
+		bindRuntimeEventEngine(wiring.Engine)
 		if wiring.AskBroker != nil {
 			wiring.AskBroker.SetAskHandler(RunPromptAskHandler)
 		}
 		eventBridge = wiring.EventBridge
-		acquiredEngine = wiring.Engine
 		var localRebind func(string) error
 		if wiring.LocalTools != nil {
 			localRebind = wiring.LocalTools.Rebind
 		}
 		return sessionruntime.RuntimeBuildResult{
-			Engine:      wiring.Engine,
-			LocalRebind: localRebind,
+			Engine:       wiring.Engine,
+			LocalRebind:  localRebind,
+			AfterResolve: flushRuntimeEventsAfterResolve,
 			Close: func() {
 				_ = wiring.Close()
 				_ = engineLogger.Close()

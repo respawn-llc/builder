@@ -690,6 +690,29 @@ func (e *Engine) SetTranscriptWorkingDir(workdir string) {
 	e.transcriptRuntimeState().SetWorkingDir(workdir)
 }
 
+func (e *Engine) TranscriptWorkingDir() string {
+	return e.transcriptWorkingDir()
+}
+
+func (e *Engine) WorktreeReminderState() *session.WorktreeReminderState {
+	if e == nil {
+		return nil
+	}
+	state := e.store.Meta().WorktreeReminder
+	if state == nil {
+		return nil
+	}
+	copyState := *state
+	return &copyState
+}
+
+func (e *Engine) SetWorktreeReminderState(state *session.WorktreeReminderState) error {
+	if e == nil {
+		return ErrEngineClosed
+	}
+	return e.store.SetWorktreeReminderState(state)
+}
+
 func (e *Engine) transcriptWorkingDir() string {
 	if e == nil {
 		return ""

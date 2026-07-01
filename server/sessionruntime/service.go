@@ -135,9 +135,10 @@ func (s *Service) ActivateSessionRuntime(ctx context.Context, req serverapi.Sess
 }
 
 type RuntimeBuildResult struct {
-	Engine      *runtime.Engine
-	LocalRebind func(string) error
-	Close       func()
+	Engine       *runtime.Engine
+	LocalRebind  func(string) error
+	AfterResolve func()
+	Close        func()
 }
 
 var ErrSessionRunActive = errors.New("session has an active run")
@@ -274,6 +275,9 @@ func (s *Service) buildIntoClaim(ctx context.Context, sessionID string, claim *r
 	if !claim.Resolve(engine, rebind, teardown) {
 		return runtimeUnavailableErr(sessionID)
 	}
+	if built.AfterResolve != nil {
+		built.AfterResolve()
+	}
 	s.cancelScheduledIdleUnload(sessionID)
 	cleanup = nil
 	return nil
@@ -405,6 +409,48 @@ func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivate
 			_ = logger.Close()
 			return RuntimeBuildResult{}, err
 		}
+		var (
+			activeEngine          *runtime.Engine
+			pendingRuntimeEvents  []runtime.Event
+			runtimeEventMu        sync.Mutex
+			runtimeEventsResolved bool
+		)
+		publishRuntimeEvent := func(evt runtime.Event) {
+			if s.runtimes == nil {
+				return
+			}
+			runtimeEventMu.Lock()
+			engine := activeEngine
+			if engine == nil || !runtimeEventsResolved {
+				pendingRuntimeEvents = append(pendingRuntimeEvents, evt)
+				runtimeEventMu.Unlock()
+				return
+			}
+			runtimeEventMu.Unlock()
+			s.runtimes.PublishRuntimeEventForEngine(sessionID, engine, evt)
+		}
+		bindRuntimeEventEngine := func(engine *runtime.Engine) {
+			if s.runtimes == nil {
+				return
+			}
+			runtimeEventMu.Lock()
+			activeEngine = engine
+			runtimeEventMu.Unlock()
+		}
+		flushRuntimeEventsAfterResolve := func() {
+			if s.runtimes == nil {
+				return
+			}
+			runtimeEventMu.Lock()
+			engine := activeEngine
+			runtimeEventsResolved = true
+			pending := append([]runtime.Event(nil), pendingRuntimeEvents...)
+			pendingRuntimeEvents = nil
+			runtimeEventMu.Unlock()
+			for _, evt := range pending {
+				s.runtimes.PublishRuntimeEventForEngine(sessionID, engine, evt)
+			}
+		}
 		wiring, err := runtimewire.NewRuntimeWiringWithBackground(store, req.ActiveSettings, enabledTools, target.EffectiveWorkdir, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
 			FastMode:        s.fastModeState,
 			Sources:         req.Source.Sources,
@@ -417,9 +463,7 @@ func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivate
 					logger.Logf("%s", runlog.FormatTranscriptProjectionDiagnostic(sessionID, projected))
 					logger.Logf("%s", runlog.FormatTranscriptPublishDiagnostic(sessionID, projected))
 				}
-				if s.runtimes != nil {
-					s.runtimes.PublishRuntimeEvent(sessionID, evt)
-				}
+				publishRuntimeEvent(evt)
 			},
 		})
 		if err != nil {
@@ -431,13 +475,15 @@ func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivate
 				return s.runtimes.AwaitPromptResponse(context.Background(), sessionID, req)
 			})
 		}
+		bindRuntimeEventEngine(wiring.Engine)
 		var localRebind func(string) error
 		if wiring.LocalTools != nil {
 			localRebind = wiring.LocalTools.Rebind
 		}
 		return RuntimeBuildResult{
-			Engine:      wiring.Engine,
-			LocalRebind: localRebind,
+			Engine:       wiring.Engine,
+			LocalRebind:  localRebind,
+			AfterResolve: flushRuntimeEventsAfterResolve,
 			Close: func() {
 				_ = wiring.Close()
 				_ = logger.Close()

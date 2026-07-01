@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"core/server/runtime"
-	askquestion "core/server/tools"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -355,7 +354,14 @@ func (d *runtimeDirectory) BeginGuard(ctx context.Context, sessionID string) (*r
 	if _, err := entry.awaitReady(ctx); err != nil {
 		return nil, err
 	}
-	return entry.beginGuard(ctx, id)
+	d.mu.RLock()
+	if d.entries[id] != entry {
+		d.mu.RUnlock()
+		return nil, errors.Join(ErrRuntimeGuardOvertaken, fmt.Errorf("runtime %q was replaced while acquiring guard", id))
+	}
+	guard, err := entry.beginGuard(ctx, id)
+	d.mu.RUnlock()
+	return guard, err
 }
 
 func (d *runtimeDirectory) BeginPromptResponseGuard(ctx context.Context, sessionID string, requestID string) (*runtimeGuard, error) {
@@ -513,71 +519,6 @@ func (r *runtimeCloseDrainRef) Release() {
 	r.entry.closeDraining = false
 	r.entry.cond.Broadcast()
 	r.entry.mu.Unlock()
-}
-
-type runtimeGuard struct {
-	entry      *runtimeEntry
-	engine     *runtime.Engine
-	sessionID  string
-	generation uint64
-	releaseMu  sync.Mutex
-	released   bool
-}
-
-func (g *runtimeGuard) Engine() *runtime.Engine {
-	if g == nil {
-		return nil
-	}
-	return g.engine
-}
-
-func (g *runtimeGuard) Generation() uint64 {
-	if g == nil {
-		return 0
-	}
-	return g.generation
-}
-
-func (g *runtimeGuard) Rebind(workdir string) error {
-	if g == nil || g.entry == nil {
-		return fmt.Errorf("runtime guard is unavailable")
-	}
-	return g.entry.rebindWorkdir(workdir)
-}
-
-func (g *runtimeGuard) SubmitPromptResponse(resp askquestion.AskQuestionResponse, err error) error {
-	if g == nil || g.entry == nil {
-		return fmt.Errorf("runtime guard is unavailable")
-	}
-	return g.entry.pendingPrompts.Submit(resp, err, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
-		g.entry.PublishPendingPrompt(g.sessionID, snapshot, eventType, g.entry.nextReadModelVersion(g.sessionID))
-	})
-}
-
-func (e *runtimeEntry) nextReadModelVersion(sessionID string) clientui.ReadModelVersion {
-	if e == nil || e.readModelVersion == nil {
-		return clientui.ReadModelVersion{}
-	}
-	return e.readModelVersion(sessionID)
-}
-
-func (g *runtimeGuard) Release() {
-	if g == nil || g.entry == nil {
-		return
-	}
-	g.releaseMu.Lock()
-	if g.released {
-		g.releaseMu.Unlock()
-		return
-	}
-	g.released = true
-	g.releaseMu.Unlock()
-	g.entry.mu.Lock()
-	if g.entry.inFlight > 0 {
-		g.entry.inFlight--
-	}
-	g.entry.cond.Broadcast()
-	g.entry.mu.Unlock()
 }
 
 func closeRuntimeEntry(entry *runtimeEntry, err error) {

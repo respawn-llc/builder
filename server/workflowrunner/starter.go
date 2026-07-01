@@ -64,6 +64,7 @@ type TaskWorktreeEnsurer interface {
 
 type RuntimeEventRegistry interface {
 	PublishRuntimeEvent(sessionID string, evt runtime.Event)
+	PublishRuntimeEventForEngine(sessionID string, engine *runtime.Engine, evt runtime.Event)
 	PublishRuntimeActivitySnapshot(sessionID string, snapshot runtimeactivity.ResponseSnapshot)
 	AwaitPromptResponse(ctx context.Context, sessionID string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error)
 }
@@ -691,6 +692,47 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 	ownerID := uuid.NewString()
 	var engine *runtime.Engine
 	build := func(_ context.Context) (sessionruntime.RuntimeBuildResult, error) {
+		var (
+			pendingRuntimeEvents  []runtime.Event
+			runtimeEventMu        sync.Mutex
+			runtimeEventsResolved bool
+		)
+		publishRuntimeEvent := func(evt runtime.Event) {
+			if s.runtimes == nil {
+				return
+			}
+			runtimeEventMu.Lock()
+			currentEngine := engine
+			if currentEngine == nil || !runtimeEventsResolved {
+				pendingRuntimeEvents = append(pendingRuntimeEvents, evt)
+				runtimeEventMu.Unlock()
+				return
+			}
+			runtimeEventMu.Unlock()
+			s.runtimes.PublishRuntimeEventForEngine(sessionID, currentEngine, evt)
+		}
+		bindRuntimeEventEngine := func(bound *runtime.Engine) {
+			if s.runtimes == nil {
+				return
+			}
+			runtimeEventMu.Lock()
+			engine = bound
+			runtimeEventMu.Unlock()
+		}
+		flushRuntimeEventsAfterResolve := func() {
+			if s.runtimes == nil {
+				return
+			}
+			runtimeEventMu.Lock()
+			currentEngine := engine
+			runtimeEventsResolved = true
+			pending := append([]runtime.Event(nil), pendingRuntimeEvents...)
+			pendingRuntimeEvents = nil
+			runtimeEventMu.Unlock()
+			for _, evt := range pending {
+				s.runtimes.PublishRuntimeEventForEngine(sessionID, currentEngine, evt)
+			}
+		}
 		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, workflowRuntimeEnabledTools(plan.EnabledTools), input.WorktreeRoot, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
 			Headless:        true,
 			FastMode:        nil,
@@ -714,14 +756,13 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 					logger.Logf("%s", runlog.FormatTranscriptProjectionDiagnostic(sessionID, projected))
 					logger.Logf("%s", runlog.FormatTranscriptPublishDiagnostic(sessionID, projected))
 				}
-				if s.runtimes != nil {
-					s.runtimes.PublishRuntimeEvent(sessionID, evt)
-				}
+				publishRuntimeEvent(evt)
 			},
 		})
 		if err != nil {
 			return sessionruntime.RuntimeBuildResult{}, err
 		}
+		bindRuntimeEventEngine(wiring.Engine)
 		if wiring.AskBroker != nil && s.runtimes != nil {
 			wiring.AskBroker.SetAskHandler(func(askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 				if err := s.store.SetRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID); err != nil {
@@ -744,9 +785,10 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		}
 		engine = wiring.Engine
 		return sessionruntime.RuntimeBuildResult{
-			Engine:      wiring.Engine,
-			LocalRebind: localRebind,
-			Close:       func() { _ = wiring.Close() },
+			Engine:       wiring.Engine,
+			LocalRebind:  localRebind,
+			AfterResolve: flushRuntimeEventsAfterResolve,
+			Close:        func() { _ = wiring.Close() },
 		}, nil
 	}
 	releaseRuntime, err := s.sessionRuntime.RecreateRuntimeRejectingActiveRun(ctx, sessionID, ownerID, build)
