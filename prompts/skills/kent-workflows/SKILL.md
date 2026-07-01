@@ -84,7 +84,35 @@ Each edge requires a context mode:
 
 Note that to prevent high costs due to cache invalidation, only compact and new_session context modes allow changing the subagent role of the target node when transitioning. For example, you cannot continue from `coding` to `code_review` roles unless you compact or start a new session.
 
-Use `--requires-approval` when a transition must stop for human review before the target node starts. This can happen asynchronously thus causing cache invalidation, so approvals across `continue_sesssion` are suboptimal.
+Continuation modes also have a context source. Use `--context-source <source>` on `workflow edge add` or `workflow edge update`.
+
+- `immediate_source`: continue or compact the session from the node that selected the transition. This is the default.
+- `node:<node-key>`: continue or compact the latest completed run of a specific guaranteed-prior agent node. Use this when the target needs context from an earlier node rather than the immediate source.
+- `previous_target`: continue or compact the latest completed run of this edge's target node. Use this only in guaranteed loops where the target always ran before the source. If no completed prior target run exists, the transition fails.
+- `previous_target_or_new`: continue or compact the latest completed run of this edge's target node when one exists; otherwise start the target as an effective `new_session`. Use this for optional re-review loops where the first pass should start fresh and later passes should continue the prior review session.
+
+Examples:
+
+```bash
+kent workflow edge update "Implementation Review" edge-review \
+  --context continue_session \
+  --context-source previous_target_or_new
+
+kent workflow edge update "Implementation Review" edge-rework \
+  --context compact_and_continue_session \
+  --context-source previous_target
+```
+
+Context source constraints:
+
+- `new_session` uses only `immediate_source`; source choices are meaningful only for continuation modes.
+- Start/backlog transitions use `immediate_source`.
+- `previous_target` requires an agent target that dominates the source node in the workflow graph.
+- `previous_target_or_new` requires an agent target but does not require dominance.
+- `node:<node-key>` requires an agent node that is guaranteed to run before the transition source and is not the edge target.
+- Manual task moves are blocked for `node:<node-key>`, `previous_target`, and `previous_target_or_new` continuation sources.
+
+Use `--requires-approval` when a transition must stop for human review before the target node starts. Pending approvals freeze the selected target branches and their context-source resolution, so later workflow edits or later completed runs do not change what approval starts. This can happen asynchronously thus causing cache invalidation, so approvals across `continue_session` are suboptimal.
 
 ## Completion modes
 The completion mode controls the technicality of how an agent node signals task completion.

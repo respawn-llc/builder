@@ -1452,6 +1452,42 @@ func TestServiceWorkflowGraphValidatePreviewAndSave(t *testing.T) {
 	}
 }
 
+func TestServiceWorkflowGraphSaveAcceptsPreviousTargetOrNewContextSource(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	source, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow source: %v", err)
+	}
+	graph := workflowGraphDraftFromDefinition(source.Definition)
+	graph = setWorkflowGraphDraftEdgeContext(graph, "edge-next-"+workflowID, "continue_session", serverapi.WorkflowContextSource{Kind: "previous_target_or_new"})
+
+	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: source.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave previous_target_or_new: %v", err)
+	}
+	if !preview.CanSave || len(preview.Blockers) != 0 || !preview.ValidationResults[serverapi.WorkflowValidationModeExecution].Valid {
+		t.Fatalf("previous_target_or_new preview = %+v, want savable valid graph", preview)
+	}
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: source.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph previous_target_or_new: %v", err)
+	}
+	edge := workflowServiceEdgeByID(t, *saved.Definition, "edge-next-"+workflowID)
+	if edge.ContextMode != "continue_session" || edge.ContextSource.Kind != "previous_target_or_new" || edge.ContextSource.NodeKey != "" {
+		t.Fatalf("saved edge context = mode %q source %+v, want previous_target_or_new continuation", edge.ContextMode, edge.ContextSource)
+	}
+}
+
 func TestServiceWorkflowGraphSaveDescriptionOnlyFeedsRuntimeTransitions(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -1846,6 +1882,19 @@ func setWorkflowGraphDraftEdgePrompt(graph serverapi.WorkflowGraphDraft, edgeID 
 	for _, edge := range graph.Edges {
 		if edge.ID == edgeID {
 			edge.PromptTemplate = promptTemplate
+		}
+		updated.Edges = append(updated.Edges, edge)
+	}
+	return updated
+}
+
+func setWorkflowGraphDraftEdgeContext(graph serverapi.WorkflowGraphDraft, edgeID string, contextMode string, contextSource serverapi.WorkflowContextSource) serverapi.WorkflowGraphDraft {
+	updated := graph
+	updated.Edges = make([]serverapi.WorkflowGraphDraftEdge, 0, len(graph.Edges))
+	for _, edge := range graph.Edges {
+		if edge.ID == edgeID {
+			edge.ContextMode = contextMode
+			edge.ContextSource = contextSource
 		}
 		updated.Edges = append(updated.Edges, edge)
 	}

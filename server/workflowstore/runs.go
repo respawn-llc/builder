@@ -410,7 +410,9 @@ func (s *Store) resolveRunTransitionContext(ctx context.Context, placementID str
 		if strings.TrimSpace(runMetadata.ContextMode) != "" {
 			resolved.ContextMode = workflow.ContextMode(strings.TrimSpace(runMetadata.ContextMode))
 		}
-		if strings.TrimSpace(runMetadata.SourceRunID) != "" {
+		if runMetadata.ContextResolutionFrozen && strings.TrimSpace(runMetadata.SourceRunID) == "" {
+			sourceRunID = sql.NullString{}
+		} else if strings.TrimSpace(runMetadata.SourceRunID) != "" {
 			sourceRunID = sql.NullString{String: strings.TrimSpace(runMetadata.SourceRunID), Valid: true}
 		}
 	}

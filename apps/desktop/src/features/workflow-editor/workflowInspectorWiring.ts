@@ -23,10 +23,19 @@ export const emptyWorkflowValidation: WorkflowValidation = { errors: [], valid: 
 export const immediateContextSourceOption = "__immediate_context_source__";
 export const missingContextSourceOption = "__missing_context_source__";
 export const previousTargetContextSourceOption = "__previous_target_context_source__";
+export const previousTargetOrNewContextSourceOption = "__previous_target_or_new_context_source__";
 export const immediateContextSource: WorkflowContextSource = { kind: "immediate_source", nodeKey: "" };
 export const previousTargetContextSource: WorkflowContextSource = { kind: "previous_target", nodeKey: "" };
+export const previousTargetOrNewContextSource: WorkflowContextSource = {
+  kind: "previous_target_or_new",
+  nodeKey: "",
+};
 
-export function edgeDetails(definition: WorkflowDefinition, edge: WorkflowEdge, validation: WorkflowValidation) {
+export function edgeDetails(
+  definition: WorkflowDefinition,
+  edge: WorkflowEdge,
+  validation: WorkflowValidation,
+) {
   const group = transitionGroupByID(definition, edge.transitionGroupID);
   const source = sourceNodeForTransition(definition, group);
   const target = nodeByID(definition, edge.targetNodeID);
@@ -177,6 +186,9 @@ export function formatContextSourceLabel(edge: WorkflowEdge, translate: Translat
   if (edge.contextSource.kind === "previous_target") {
     return translate("workflowEditor.contextSourcePreviousTarget");
   }
+  if (edge.contextSource.kind === "previous_target_or_new") {
+    return translate("workflowEditor.contextSourcePreviousTargetOrNew");
+  }
   return translate("workflowEditor.contextSourceImmediate");
 }
 
@@ -210,35 +222,57 @@ export function contextSourceOptions(
   edge: WorkflowEdge,
   translate: Translate,
 ): readonly SelectFieldOption[] {
-  const validNodes = validContextSourceNodes(definition, edge);
-  const nodeOptions = validNodes.map((node) => {
+  const disabledReason = translate("workflowEditor.contextSourceUnavailable");
+  const nodeCandidates = contextSourceNodeCandidates(definition, edge);
+  const nodeOptions = nodeCandidates.map((node) => {
     const label = fallbackLabel(node.key, node.name, node.key);
-    return {
-      label,
-      textValue: label,
-      value: node.id,
-    };
+    return withContextSourceAvailability(
+      {
+        label,
+        textValue: label,
+        value: node.id,
+      },
+      selectedNodeContextSourceAvailable(definition, edge, node),
+      disabledReason,
+    );
   });
   const options: SelectFieldOption[] = [
-    {
-      label: translate("workflowEditor.contextSourceImmediate"),
-      textValue: translate("workflowEditor.contextSourceImmediate"),
-      value: immediateContextSourceOption,
-    },
-    {
-      disabled: !previousTargetContextSourceAvailable(definition, edge),
-      label: translate("workflowEditor.contextSourcePreviousTarget"),
-      textValue: translate("workflowEditor.contextSourcePreviousTarget"),
-      value: previousTargetContextSourceOption,
-    },
+    withContextSourceAvailability(
+      {
+        label: translate("workflowEditor.contextSourceImmediate"),
+        textValue: translate("workflowEditor.contextSourceImmediate"),
+        value: immediateContextSourceOption,
+      },
+      immediateContextSourceAvailable(definition, edge),
+      disabledReason,
+    ),
+    withContextSourceAvailability(
+      {
+        label: translate("workflowEditor.contextSourcePreviousTarget"),
+        textValue: translate("workflowEditor.contextSourcePreviousTarget"),
+        value: previousTargetContextSourceOption,
+      },
+      previousTargetContextSourceAvailable(definition, edge),
+      disabledReason,
+    ),
+    withContextSourceAvailability(
+      {
+        label: translate("workflowEditor.contextSourcePreviousTargetOrNew"),
+        textValue: translate("workflowEditor.contextSourcePreviousTargetOrNew"),
+        value: previousTargetOrNewContextSourceOption,
+      },
+      previousTargetOrNewContextSourceAvailable(definition, edge),
+      disabledReason,
+    ),
     ...nodeOptions,
   ];
   if (
     edge.contextSource.kind === "selected_node" &&
-    !validNodes.some((node) => node.key === edge.contextSource.nodeKey)
+    !nodeCandidates.some((node) => node.key === edge.contextSource.nodeKey)
   ) {
     options.push({
       disabled: true,
+      disabledReason,
       label:
         edge.contextSource.nodeKey.length > 0
           ? edge.contextSource.nodeKey
@@ -254,12 +288,15 @@ export function contextSourceSelectValue(definition: WorkflowDefinition, edge: W
   if (edge.contextSource.kind === "previous_target") {
     return previousTargetContextSourceOption;
   }
+  if (edge.contextSource.kind === "previous_target_or_new") {
+    return previousTargetOrNewContextSourceOption;
+  }
   if (edge.contextSource.kind !== "selected_node") {
     return immediateContextSourceOption;
   }
   return (
-    validContextSourceNodes(definition, edge).find((node) => node.key === edge.contextSource.nodeKey)?.id ??
-    missingContextSourceOption
+    contextSourceNodeCandidates(definition, edge).find((node) => node.key === edge.contextSource.nodeKey)
+      ?.id ?? missingContextSourceOption
   );
 }
 
@@ -273,11 +310,20 @@ export function contextSourceFromSelectValue(
   if (value === previousTargetContextSourceOption) {
     return previousTargetContextSource;
   }
+  if (value === previousTargetOrNewContextSourceOption) {
+    return previousTargetOrNewContextSource;
+  }
   const node = definition.nodes.find((item) => item.id === value);
   return { kind: "selected_node", nodeKey: node?.key ?? "" };
 }
 
-export function previousTargetContextSourceAvailable(definition: WorkflowDefinition, edge: WorkflowEdge): boolean {
+export function previousTargetContextSourceAvailable(
+  definition: WorkflowDefinition,
+  edge: WorkflowEdge,
+): boolean {
+  if (!contextModeUsesSource(edge.contextMode)) {
+    return false;
+  }
   const target = nodeByID(definition, edge.targetNodeID);
   if (target?.kind !== "agent") {
     return false;
@@ -290,12 +336,53 @@ export function previousTargetContextSourceAvailable(definition: WorkflowDefinit
   return nodeDominates(definition, target.id, sourceNodeID);
 }
 
-export function validContextSourceNodes(definition: WorkflowDefinition, edge: WorkflowEdge): WorkflowDefinition["nodes"] {
-  return definition.nodes.filter(
-    (node) =>
-      node.kind === "agent" &&
-      node.id !== edge.targetNodeID &&
-      contextSourceNodeIsGuaranteedBeforeEdgeSource(definition, edge, node.id),
+export function immediateContextSourceAvailable(definition: WorkflowDefinition, edge: WorkflowEdge): boolean {
+  if (!contextModeUsesSource(edge.contextMode)) {
+    return true;
+  }
+  return edgeSourceNode(definition, edge)?.kind === "agent";
+}
+
+export function previousTargetOrNewContextSourceAvailable(
+  definition: WorkflowDefinition,
+  edge: WorkflowEdge,
+): boolean {
+  return (
+    contextModeUsesSource(edge.contextMode) &&
+    nodeByID(definition, edge.targetNodeID)?.kind === "agent" &&
+    edgeSourceNode(definition, edge)?.kind !== "start"
+  );
+}
+
+export function validContextSourceNodes(
+  definition: WorkflowDefinition,
+  edge: WorkflowEdge,
+): WorkflowDefinition["nodes"] {
+  return contextSourceNodeCandidates(definition, edge).filter((node) =>
+    selectedNodeContextSourceAvailable(definition, edge, node),
+  );
+}
+
+export function contextSourceNodeCandidates(
+  definition: WorkflowDefinition,
+  edge: WorkflowEdge,
+): WorkflowDefinition["nodes"] {
+  if (nodeByID(definition, edge.targetNodeID)?.kind !== "agent") {
+    return [];
+  }
+  return definition.nodes.filter((node) => node.kind === "agent");
+}
+
+export function selectedNodeContextSourceAvailable(
+  definition: WorkflowDefinition,
+  edge: WorkflowEdge,
+  node: WorkflowNode,
+): boolean {
+  return (
+    contextModeUsesSource(edge.contextMode) &&
+    node.kind === "agent" &&
+    node.id !== edge.targetNodeID &&
+    contextSourceNodeIsGuaranteedBeforeEdgeSource(definition, edge, node.id)
   );
 }
 
@@ -312,7 +399,11 @@ export function contextSourceNodeIsGuaranteedBeforeEdgeSource(
   return nodeDominates(definition, nodeID, sourceNodeID);
 }
 
-export function nodeDominates(definition: WorkflowDefinition, candidateID: string, targetID: string): boolean {
+export function nodeDominates(
+  definition: WorkflowDefinition,
+  candidateID: string,
+  targetID: string,
+): boolean {
   if (candidateID === targetID) {
     return true;
   }
@@ -345,13 +436,33 @@ export function reachableFromSkipping(
   return visited;
 }
 
-export function outgoingTargetNodeIDs(definition: WorkflowDefinition, sourceNodeID: string): readonly string[] {
+export function outgoingTargetNodeIDs(
+  definition: WorkflowDefinition,
+  sourceNodeID: string,
+): readonly string[] {
   const outgoingTransitionGroupIDs = new Set(
-    definition.transitionGroups.filter((group) => group.sourceNodeID === sourceNodeID).map((group) => group.id),
+    definition.transitionGroups
+      .filter((group) => group.sourceNodeID === sourceNodeID)
+      .map((group) => group.id),
   );
   return definition.edges
     .filter((edge) => outgoingTransitionGroupIDs.has(edge.transitionGroupID))
     .map((edge) => edge.targetNodeID);
+}
+
+function contextModeUsesSource(contextMode: string): boolean {
+  return contextMode === "continue_session" || contextMode === "compact_and_continue_session";
+}
+
+function withContextSourceAvailability(
+  option: SelectFieldOption,
+  available: boolean,
+  disabledReason: string,
+): SelectFieldOption {
+  if (available) {
+    return option;
+  }
+  return { ...option, disabled: true, disabledReason };
 }
 
 export function workflowAssigneeOptions(

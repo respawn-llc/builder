@@ -1211,6 +1211,61 @@ func TestContextSourceValidation(t *testing.T) {
 		assertHasCodes(t, result, workflow.CodeInvalidContextSource)
 	})
 
+	t.Run("previous target or new allows non dominating agent target", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow()
+		edge := edgeByIDForValidationTest(t, &def, "edge_implementation_review")
+		edge.ContextMode = workflow.ContextModeContinueSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+
+		result := validateForTask(def)
+
+		assertNoCode(t, result, workflow.CodeInvalidContextSource)
+	})
+
+	t.Run("previous target or new allows compact continuation", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow()
+		edge := edgeByIDForValidationTest(t, &def, "edge_implementation_review")
+		edge.ContextMode = workflow.ContextModeCompactAndContinueSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+
+		result := validateForTask(def)
+
+		assertNoCode(t, result, workflow.CodeInvalidContextSource)
+	})
+
+	t.Run("previous target or new requires continuation mode", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow()
+		edge := edgeByIDForValidationTest(t, &def, "edge_implementation_review")
+		edge.ContextMode = workflow.ContextModeNewSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+
+		result := validateForTask(def)
+
+		assertHasCodes(t, result, workflow.CodeInvalidContextSource)
+	})
+
+	t.Run("previous target or new requires an agent target", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow()
+		edge := edgeByIDForValidationTest(t, &def, "edge_open_pr_done")
+		edge.ContextMode = workflow.ContextModeContinueSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+
+		result := validateForTask(def)
+
+		assertHasCodes(t, result, workflow.CodeInvalidContextSource)
+	})
+
+	t.Run("previous target or new is invalid on start edge", func(t *testing.T) {
+		def := reviewAcceptanceWorkflow()
+		edge := edgeByIDForValidationTest(t, &def, "edge_start")
+		edge.ContextMode = workflow.ContextModeContinueSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+
+		result := validateForTask(def)
+
+		assertHasCodes(t, result, workflow.CodeInvalidContextSource)
+	})
+
 	t.Run("draft reports nonblocking context source semantics", func(t *testing.T) {
 		def := reviewAcceptanceWorkflow()
 		edge := edgeByIDForValidationTest(t, &def, "edge_accept_open_pr")

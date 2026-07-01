@@ -1423,9 +1423,9 @@ func validateWorkflowContextSource(source WorkflowContextSource) error {
 			return err
 		}
 		return nil
-	case "previous_target":
+	case "previous_target", "previous_target_or_new":
 		if strings.TrimSpace(source.NodeKey) != "" {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "context_source.node_key", "context_source.node_key must be empty for previous_target")
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "context_source.node_key", "context_source.node_key must be empty for target-derived context sources")
 		}
 		return nil
 	default:
@@ -1608,6 +1608,9 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 		}
 	}
 	for _, edge := range graph.Edges {
+		if err := validateWorkflowContextSource(edge.ContextSource); err != nil {
+			return err
+		}
 		if len(edge.Parameters) > WorkflowGraphDraftMaxFieldsPerEntity {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.edges.parameters", fmt.Sprintf("parameters must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
 		}

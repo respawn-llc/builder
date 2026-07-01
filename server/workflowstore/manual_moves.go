@@ -77,7 +77,7 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	if contextSource.Kind == workflow.ContextSourceSelectedNode {
 		return ManualMoveResult{}, ErrManualMoveSelectedContextSource
 	}
-	if contextSource.Kind == workflow.ContextSourcePreviousTarget {
+	if contextSource.Kind == workflow.ContextSourcePreviousTarget || contextSource.Kind == workflow.ContextSourcePreviousTargetOrNew {
 		return ManualMoveResult{}, ErrManualMovePreviousTargetContext
 	}
 	if edge.ContextMode == workflow.ContextModeContinueSession && strings.TrimSpace(sourceSessionID) == "" {

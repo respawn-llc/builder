@@ -36,9 +36,10 @@ const (
 type ContextSourceKind string
 
 const (
-	ContextSourceImmediateSource ContextSourceKind = "immediate_source"
-	ContextSourceSelectedNode    ContextSourceKind = "selected_node"
-	ContextSourcePreviousTarget  ContextSourceKind = "previous_target"
+	ContextSourceImmediateSource     ContextSourceKind = "immediate_source"
+	ContextSourceSelectedNode        ContextSourceKind = "selected_node"
+	ContextSourcePreviousTarget      ContextSourceKind = "previous_target"
+	ContextSourcePreviousTargetOrNew ContextSourceKind = "previous_target_or_new"
 )
 
 type ContextSource struct {
@@ -52,8 +53,8 @@ func CanonicalContextSource(source ContextSource) ContextSource {
 	if kind == "" || kind == ContextSourceImmediateSource {
 		return ContextSource{Kind: ContextSourceImmediateSource}
 	}
-	if kind == ContextSourcePreviousTarget {
-		return ContextSource{Kind: ContextSourcePreviousTarget}
+	if kind == ContextSourcePreviousTarget || kind == ContextSourcePreviousTargetOrNew {
+		return ContextSource{Kind: kind}
 	}
 	return ContextSource{Kind: kind, NodeKey: nodeKey}
 }

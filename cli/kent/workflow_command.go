@@ -348,7 +348,7 @@ func workflowEdgeAddSubcommand(args []string, stdout io.Writer, stderr io.Writer
 	edgeKey := fs.String("edge-key", "", "edge key")
 	toKey := fs.String("to", "", "target node key")
 	contextMode := fs.String("context", "", "context mode: new_session|continue_session|compact_and_continue_session")
-	contextSource := fs.String("context-source", "", "context source: immediate_source|node:<node-key>")
+	contextSource := fs.String("context-source", "", "context source: immediate_source|previous_target|previous_target_or_new|node:<node-key>")
 	requiresApproval := fs.Bool("requires-approval", false, "require approval before target runs")
 	prompt := fs.String("prompt", "", "branch prompt template for agent targets")
 	transitionDescription := fs.String("transition-description", "", "model-facing transition description explaining when to pick it")
@@ -462,7 +462,7 @@ func workflowEdgeUpdateSubcommand(args []string, stdout io.Writer, stderr io.Wri
 	edgeKey := fs.String("edge-key", "", "edge key")
 	toKey := fs.String("to", "", "target node key")
 	contextMode := fs.String("context", "", "context mode: new_session|continue_session|compact_and_continue_session")
-	contextSource := fs.String("context-source", "", "context source: immediate_source|node:<node-key>")
+	contextSource := fs.String("context-source", "", "context source: immediate_source|previous_target|previous_target_or_new|node:<node-key>")
 	requiresApproval := fs.Bool("requires-approval", false, "require approval before target runs (use --requires-approval=false to clear)")
 	prompt := fs.String("prompt", "", "branch prompt template for agent targets")
 	var params repeatedStringFlag
@@ -886,6 +886,10 @@ func workflowEdgeContextDetail(contextMode string, requiresApproval bool, contex
 	}
 	if source := canonicalAPIContextSource(contextSource); source.Kind == "selected_node" && strings.TrimSpace(source.NodeKey) != "" {
 		detail += ", context from " + strings.TrimSpace(source.NodeKey)
+	} else if source.Kind == "previous_target" {
+		detail += ", context from previous target"
+	} else if source.Kind == "previous_target_or_new" {
+		detail += ", context from previous target or new session"
 	}
 	return detail
 }
@@ -910,6 +914,9 @@ func parseWorkflowContextSourceSelector(raw string) (serverapi.WorkflowContextSo
 	if trimmed == "" || trimmed == "immediate_source" {
 		return serverapi.WorkflowContextSource{Kind: "immediate_source"}, nil
 	}
+	if trimmed == "previous_target" || trimmed == "previous_target_or_new" {
+		return serverapi.WorkflowContextSource{Kind: trimmed}, nil
+	}
 	prefix := "node:"
 	if strings.HasPrefix(trimmed, prefix) {
 		nodeKey := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
@@ -918,7 +925,7 @@ func parseWorkflowContextSourceSelector(raw string) (serverapi.WorkflowContextSo
 		}
 		return serverapi.WorkflowContextSource{Kind: "selected_node", NodeKey: nodeKey}, nil
 	}
-	return serverapi.WorkflowContextSource{}, fmt.Errorf("context source selector must be immediate_source or node:<node-key>")
+	return serverapi.WorkflowContextSource{}, fmt.Errorf("context source selector must be immediate_source, previous_target, previous_target_or_new, or node:<node-key>")
 }
 
 // repeatedStringFlag collects a flag that may be supplied multiple times.

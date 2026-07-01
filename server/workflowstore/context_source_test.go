@@ -200,6 +200,165 @@ func TestPreviousTargetContextSourceUsesLatestCompletedTargetRun(t *testing.T) {
 	}
 }
 
+func TestPreviousTargetOrNewContextSourceFallsBackThenContinuesTargetRun(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	implementationNode := nodeByKey(t, def, "implementation")
+	acceptanceNode := nodeByKey(t, def, "acceptance")
+	acceptEdge := edgeByKey(t, def, "accept")
+	if _, err := store.UpdateEdge(ctx, EdgeRecord{ID: acceptEdge.ID, WorkflowID: workflowID, TransitionGroupID: acceptEdge.TransitionGroupID, Key: acceptEdge.Key, TargetNodeID: acceptEdge.TargetNodeID, ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: acceptEdge.PromptTemplate, Parameters: acceptEdge.Parameters}); err != nil {
+		t.Fatalf("UpdateEdge accept context source: %v", err)
+	}
+	reworkGroup := workflow.TransitionGroupID("group-previous-target-or-new-rework-" + string(workflowID))
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: acceptanceNode.ID, TransitionID: "rework", DisplayName: "Rework"}); err != nil {
+		t.Fatalf("AddTransitionGroup rework: %v", err)
+	}
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: implementationNode.ID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Rework."}); err != nil {
+		t.Fatalf("AddEdge rework: %v", err)
+	}
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
+	firstImplementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: firstImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "first implementation"}})
+	firstAcceptanceRun := runForNode(t, ctx, store, task.ID, acceptanceNode.ID)
+	firstAcceptanceInput, err := store.GetRunStartContext(ctx, firstAcceptanceRun.ID)
+	if err != nil {
+		t.Fatalf("GetRunStartContext first acceptance: %v", err)
+	}
+	if firstAcceptanceInput.ContextMode != workflow.ContextModeNewSession || firstAcceptanceInput.SourceRunID != "" || firstAcceptanceInput.SourceSessionID != "" {
+		t.Fatalf("first acceptance context = mode %q source %q/%q, want new session without source", firstAcceptanceInput.ContextMode, firstAcceptanceInput.SourceRunID, firstAcceptanceInput.SourceSessionID)
+	}
+	firstAcceptanceClaim, err := store.ClaimRun(ctx, firstAcceptanceRun.ID, firstAcceptanceRun.Generation)
+	if err != nil {
+		t.Fatalf("ClaimRun first acceptance: %v", err)
+	}
+	firstAcceptanceSessionID := createTestSession(t, ctx, store, binding, cfg)
+	if err := store.AttachRunSession(ctx, firstAcceptanceRun.ID, firstAcceptanceClaim.Generation, firstAcceptanceSessionID); err != nil {
+		t.Fatalf("AttachRunSession first acceptance: %v", err)
+	}
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: firstAcceptanceRun.ID, TransitionID: "rework"})
+	secondImplementationRun := latestRunForNode(t, ctx, store, task.ID, implementationNode.ID)
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: secondImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "second implementation"}})
+	secondAcceptanceRun := latestRunForNode(t, ctx, store, task.ID, acceptanceNode.ID)
+	if secondAcceptanceRun.ID == firstAcceptanceRun.ID {
+		t.Fatalf("second acceptance run = first run %q", secondAcceptanceRun.ID)
+	}
+	secondAcceptanceInput, err := store.GetRunStartContext(ctx, secondAcceptanceRun.ID)
+	if err != nil {
+		t.Fatalf("GetRunStartContext second acceptance: %v", err)
+	}
+	if secondAcceptanceInput.ContextMode != workflow.ContextModeContinueSession || secondAcceptanceInput.SourceRunID != firstAcceptanceRun.ID || secondAcceptanceInput.SourceSessionID != firstAcceptanceSessionID {
+		t.Fatalf("second acceptance context = mode %q source %q/%q, want continue first acceptance %q/%q", secondAcceptanceInput.ContextMode, secondAcceptanceInput.SourceRunID, secondAcceptanceInput.SourceSessionID, firstAcceptanceRun.ID, firstAcceptanceSessionID)
+	}
+}
+
+func TestPendingApprovalFreezesPreviousTargetOrNewFallbackToNew(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	implementationNode := nodeByKey(t, def, "implementation")
+	acceptanceNode := nodeByKey(t, def, "acceptance")
+	acceptEdge := edgeByKey(t, def, "accept")
+	if _, err := store.UpdateEdge(ctx, EdgeRecord{ID: acceptEdge.ID, WorkflowID: workflowID, TransitionGroupID: acceptEdge.TransitionGroupID, Key: acceptEdge.Key, TargetNodeID: acceptEdge.TargetNodeID, ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, RequiresApproval: true, PromptTemplate: acceptEdge.PromptTemplate, Parameters: acceptEdge.Parameters}); err != nil {
+		t.Fatalf("UpdateEdge accept context source: %v", err)
+	}
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
+	implementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	pending := completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "first implementation"}})
+	if pending.State != "pending_approval" {
+		t.Fatalf("accept completion = %+v, want pending approval", pending)
+	}
+	competingSessionID := createTestSession(t, ctx, store, binding, cfg)
+	insertCompletedRunForNodeAfterTransition(t, ctx, store, task.ID, acceptanceNode.ID, implementationRun.ID, competingSessionID, pending.TransitionID)
+	approved, err := store.ApproveTransition(ctx, pending.TransitionID)
+	if err != nil {
+		t.Fatalf("ApproveTransition: %v", err)
+	}
+	if len(approved.RunIDs) != 1 {
+		t.Fatalf("approval result = %+v, want one acceptance run", approved)
+	}
+	input, err := store.GetRunStartContext(ctx, approved.RunIDs[0])
+	if err != nil {
+		t.Fatalf("GetRunStartContext approved acceptance: %v", err)
+	}
+	if input.ContextMode != workflow.ContextModeNewSession || input.SourceRunID != "" || input.SourceSessionID != "" {
+		t.Fatalf("approved fallback context = mode %q source %q/%q, want frozen new session without source; competing session was %q", input.ContextMode, input.SourceRunID, input.SourceSessionID, competingSessionID)
+	}
+}
+
+func TestPendingApprovalFreezesPreviousTargetOrNewPriorTargetRun(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	implementationNode := nodeByKey(t, def, "implementation")
+	acceptanceNode := nodeByKey(t, def, "acceptance")
+	acceptEdge := edgeByKey(t, def, "accept")
+	if _, err := store.UpdateEdge(ctx, EdgeRecord{ID: acceptEdge.ID, WorkflowID: workflowID, TransitionGroupID: acceptEdge.TransitionGroupID, Key: acceptEdge.Key, TargetNodeID: acceptEdge.TargetNodeID, ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, RequiresApproval: true, PromptTemplate: acceptEdge.PromptTemplate, Parameters: acceptEdge.Parameters}); err != nil {
+		t.Fatalf("UpdateEdge accept context source: %v", err)
+	}
+	reworkGroup := workflow.TransitionGroupID("group-previous-target-or-new-approval-rework-" + string(workflowID))
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: acceptanceNode.ID, TransitionID: "rework", DisplayName: "Rework"}); err != nil {
+		t.Fatalf("AddTransitionGroup rework: %v", err)
+	}
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-approval-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: implementationNode.ID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Rework."}); err != nil {
+		t.Fatalf("AddEdge rework: %v", err)
+	}
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
+	firstImplementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	firstPending := completeRun(t, ctx, store, CompleteRunRequest{RunID: firstImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "first implementation"}})
+	firstApproved, err := store.ApproveTransition(ctx, firstPending.TransitionID)
+	if err != nil {
+		t.Fatalf("ApproveTransition first acceptance: %v", err)
+	}
+	firstAcceptanceRunID := firstApproved.RunIDs[0]
+	firstAcceptanceRun, err := store.GetRun(ctx, firstAcceptanceRunID)
+	if err != nil {
+		t.Fatalf("GetRun first acceptance: %v", err)
+	}
+	firstClaim, err := store.ClaimRun(ctx, firstAcceptanceRunID, firstAcceptanceRun.Generation)
+	if err != nil {
+		t.Fatalf("ClaimRun first acceptance: %v", err)
+	}
+	firstAcceptanceSessionID := createTestSession(t, ctx, store, binding, cfg)
+	if err := store.AttachRunSession(ctx, firstAcceptanceRunID, firstClaim.Generation, firstAcceptanceSessionID); err != nil {
+		t.Fatalf("AttachRunSession first acceptance: %v", err)
+	}
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: firstAcceptanceRunID, TransitionID: "rework"})
+	secondImplementationRun := latestRunForNode(t, ctx, store, task.ID, implementationNode.ID)
+	secondPending := completeRun(t, ctx, store, CompleteRunRequest{RunID: secondImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "second implementation"}})
+	competingSessionID := createTestSession(t, ctx, store, binding, cfg)
+	insertCompletedRunForNodeAfterTransition(t, ctx, store, task.ID, acceptanceNode.ID, firstAcceptanceRunID, competingSessionID, secondPending.TransitionID)
+	secondApproved, err := store.ApproveTransition(ctx, secondPending.TransitionID)
+	if err != nil {
+		t.Fatalf("ApproveTransition second acceptance: %v", err)
+	}
+	input, err := store.GetRunStartContext(ctx, secondApproved.RunIDs[0])
+	if err != nil {
+		t.Fatalf("GetRunStartContext second approved acceptance: %v", err)
+	}
+	if input.ContextMode != workflow.ContextModeContinueSession || input.SourceRunID != firstAcceptanceRunID || input.SourceSessionID != firstAcceptanceSessionID {
+		t.Fatalf("second approved context = mode %q source %q/%q, want frozen first acceptance %q/%q; competing session was %q", input.ContextMode, input.SourceRunID, input.SourceSessionID, firstAcceptanceRunID, firstAcceptanceSessionID, competingSessionID)
+	}
+}
+
 func TestPendingApprovalResolvesPreviousTargetContextSourceOnCompletion(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)

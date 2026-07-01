@@ -40,12 +40,7 @@ describe("Field", () => {
     ];
 
     const { rerender } = render(
-      <SelectField
-        label="Source"
-        onValueChange={onValueChange}
-        options={options}
-        value="workspace-1"
-      />,
+      <SelectField label="Source" onValueChange={onValueChange} options={options} value="workspace-1" />,
     );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Source" }));
@@ -119,5 +114,37 @@ describe("Field", () => {
     await user.hover(trigger);
 
     await screen.findByRole("tooltip");
+  });
+
+  it("explains a disabled SelectField option with a tooltip reason", async () => {
+    const user = userEvent.setup();
+    const onValueChange = vi.fn();
+
+    render(
+      <SelectField
+        label="Source"
+        onValueChange={onValueChange}
+        options={[
+          { label: "Main", value: "workspace-1" },
+          {
+            disabled: true,
+            disabledReason: "N/A for current configuration",
+            label: "Docs",
+            value: "workspace-2",
+          },
+        ]}
+        value="workspace-1"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Source" }));
+    const disabledOption = await screen.findByRole("menuitemradio", { name: "Docs" });
+    expect(disabledOption).toHaveAttribute("aria-disabled", "true");
+
+    await user.hover(disabledOption);
+    await screen.findByRole("tooltip");
+    await user.click(disabledOption);
+
+    expect(onValueChange).not.toHaveBeenCalled();
   });
 });

@@ -60,8 +60,8 @@ export function WorkflowDraftInspectorContent({
     derivedWiring: controller.derivedWiring,
   };
   const validation = controller.dirty.graphDirty
-    ? controller.draftValidation ?? emptyWorkflowValidation
-    : controller.draftValidation ?? controller.executionValidation ?? emptyWorkflowValidation;
+    ? (controller.draftValidation ?? emptyWorkflowValidation)
+    : (controller.draftValidation ?? controller.executionValidation ?? emptyWorkflowValidation);
   if (selection.kind === "workflow") {
     return <WorkflowDraftDetails controller={controller} />;
   }
@@ -153,7 +153,6 @@ function EdgeDraftDetails({
   const continuationAvailable = details.sourceKind === "agent" || details.targetKind === "agent";
   const disabledReason = t("workflowEditor.edgeControlNotApplicable");
   const contextModeDisabled = startEdge;
-  const contextSourceDisabled = startEdge || edge.contextMode === "new_session" || !continuationAvailable;
   const requiresApprovalDisabled = startEdge;
   return (
     <InspectorStack>
@@ -240,21 +239,21 @@ function EdgeDraftDetails({
                   value={edge.contextMode}
                 />
               </DisabledInteractionGuard>
-              <DisabledInteractionGuard disabled={contextSourceDisabled} reason={disabledReason}>
-                <SelectField
-                  disabled={contextSourceDisabled}
-                  label={t("workflowEditor.contextSource")}
-                  labelHelp={t("workflowEditor.contextSourceHelp")}
-                  onValueChange={(value) => {
-                    controller.dispatch({
-                      input: { contextSource: contextSourceFromSelectValue(definition, value), edgeID: edge.id },
-                      type: "editEdgeRoute",
-                    });
-                  }}
-                  options={contextSourceOptions(definition, edge, t)}
-                  value={contextSourceSelectValue(definition, edge)}
-                />
-              </DisabledInteractionGuard>
+              <SelectField
+                label={t("workflowEditor.contextSource")}
+                labelHelp={t("workflowEditor.contextSourceHelp")}
+                onValueChange={(value) => {
+                  controller.dispatch({
+                    input: {
+                      contextSource: contextSourceFromSelectValue(definition, value),
+                      edgeID: edge.id,
+                    },
+                    type: "editEdgeRoute",
+                  });
+                }}
+                options={contextSourceOptions(definition, edge, t)}
+                value={contextSourceSelectValue(definition, edge)}
+              />
             </>
           ) : null}
           <DisabledInteractionGuard disabled={requiresApprovalDisabled} reason={disabledReason}>
@@ -264,7 +263,10 @@ function EdgeDraftDetails({
               label={t("workflowEditor.requiresApproval")}
               labelHelp={t("workflowEditor.requiresApprovalHelp")}
               onCheckedChange={(checked) => {
-                controller.dispatch({ input: { edgeID: edge.id, requiresApproval: checked }, type: "editEdgeRoute" });
+                controller.dispatch({
+                  input: { edgeID: edge.id, requiresApproval: checked },
+                  type: "editEdgeRoute",
+                });
               }}
             />
           </DisabledInteractionGuard>
@@ -321,7 +323,9 @@ function EdgeInvocationSections({
   );
 }
 
-function DerivedEdgeSections({ derivedEdge }: Readonly<{ derivedEdge: ReturnType<typeof derivedEdgeWiring> }>) {
+function DerivedEdgeSections({
+  derivedEdge,
+}: Readonly<{ derivedEdge: ReturnType<typeof derivedEdgeWiring> }>) {
   const { t } = useTranslation();
   return (
     <>
@@ -371,10 +375,7 @@ function WorkflowDraftDetails({ controller }: Readonly<{ controller: WorkflowEdi
         />
       </DetailSection>
       <DetailSection title={t("workflowEditor.inspectorOverview")}>
-        <DetailRow
-          label={t("workflowEditor.version")}
-          value={controller.draft.workflow.version.toString()}
-        />
+        <DetailRow label={t("workflowEditor.version")} value={controller.draft.workflow.version.toString()} />
         <DetailRow label={t("workflowEditor.nodeCount")} value={controller.draft.nodes.length.toString()} />
         <DetailRow label={t("workflowEditor.edgeCount")} value={controller.draft.edges.length.toString()} />
         <DetailRow

@@ -51,7 +51,8 @@ export const workflowEditorEnglish = {
   legendMultiAgentJoinHelp:
     "Static node that aggregates a group's parallel results into one read-only stream. Auto-created along with a group.",
   legendAgentNode: "Agent node",
-  legendAgentNodeHelp: "Execute an agentic loop using a specified subagent, with the prompt provided by the transition.",
+  legendAgentNodeHelp:
+    "Execute an agentic loop using a specified subagent, with the prompt provided by the transition.",
   inspectorTitle: "Inspect workflow",
   inspectorUnavailable: "Inspector unavailable",
   entityMissing: "The selected graph item no longer exists in the latest workflow definition.",
@@ -73,7 +74,8 @@ export const workflowEditorEnglish = {
   group: "Group",
   behavior: "Behavior",
   assignee: "Assignee",
-  assigneeHelp: "Subagent role that runs this node's agent loop. Subagent roles are configured in the server config file.",
+  assigneeHelp:
+    "Subagent role that runs this node's agent loop. Subagent roles are configured in the server config file.",
   selectAssignee: "Select assignee",
   completionMode: "Completion mode",
   completionModeHelp:
@@ -123,14 +125,16 @@ export const workflowEditorEnglish = {
     "How the target node begins its session.\n\nNew session: start fresh.\n\nContinue session: directly continue the session chosen as context source.\n\nCompact and continue session: ask the source agent to compact and start a new session from their summary.",
   contextSource: "Context source",
   contextSourceHelp:
-    "When continuing a session, where the conversation history comes from.\n\nImmediate source: the transition's source node.\n\nPrevious run: in cyclic workflows, the previous invocation of the loop.",
+    "When continuing a session, where the conversation history comes from.\n\nImmediate source: the transition's source node.\n\nPrevious run: a required previous run of the target node in guaranteed loops.\n\nPrevious run or new session: a previous target run when one exists, otherwise a new session.",
   contextModeNewSession: "New session",
   contextModeContinueSession: "Continue session",
   contextModeCompactContinueSession: "Compact and continue session",
   contextSourceImmediate: "Immediate source",
   contextSourcePreviousTarget: "Previous run of this target",
+  contextSourcePreviousTargetOrNew: "Previous run of this target, or new session",
   contextSourceSelected: "Selected node",
   contextSourceNode: "Node: {{nodeKey}}",
+  contextSourceUnavailable: "N/A for current configuration",
   edgeControlNotApplicable: "N/A for current branch configuration",
   nodeControlNotApplicable: "N/A for current node configuration",
   requiresApproval: "Requires approval",

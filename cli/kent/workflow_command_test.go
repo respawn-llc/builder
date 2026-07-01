@@ -173,6 +173,31 @@ func TestWorkflowEditCommandsPersistNodeAndEdgeMetadata(t *testing.T) {
 	}
 }
 
+func TestWorkflowEdgeCommandsPersistTargetDerivedContextSources(t *testing.T) {
+	cfg, _, remote := newWorkflowCommandLoopback(t)
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+
+	workflowID := workflowCreateForTest(t, "Target Context Workflow").ID
+	workflowNodeAddForTest(t, workflowID, "--key", "planning", "--kind", "agent", "--display-name", "Planning", "--agent", "workflow-test", "--prompt", "Plan.")
+	workflowNodeAddForTest(t, workflowID, "--key", "review", "--kind", "agent", "--display-name", "Review", "--agent", "workflow-test", "--prompt", "Review.")
+	workflowEdgeAddForTest(t, workflowID, "--from", "backlog", "--transition", "start", "--edge-key", "start", "--to", "planning", "--context", "new_session", "--prompt", "Plan.")
+	workflowEdgeAddForTest(t, workflowID, "--from", "planning", "--transition", "review", "--edge-key", "review", "--to", "review", "--context", "continue_session", "--context-source", "previous_target_or_new", "--prompt", "Review.")
+	reviewLoopEdgeID := workflowEdgeAddForTest(t, workflowID, "--from", "review", "--transition", "loop_review", "--edge-key", "loop_review", "--to", "review", "--context", "continue_session", "--prompt", "Review again.").EdgeID
+
+	def := workflowInspectDefinitionForTest(t, workflowID)
+	reviewEdge := workflowEdgeByKeyForTest(t, def, "review")
+	if reviewEdge.ContextSource.Kind != "previous_target_or_new" || reviewEdge.ContextSource.NodeKey != "" {
+		t.Fatalf("added review edge context source = %+v, want previous_target_or_new", reviewEdge.ContextSource)
+	}
+
+	runWorkflowRootCommandOK(t, "workflow", "edge", "update", workflowID, reviewLoopEdgeID, "--json", "--context-source", "previous_target")
+	updated := workflowEdgeByKeyForTest(t, workflowInspectDefinitionForTest(t, workflowID), "loop_review")
+	if updated.ContextSource.Kind != "previous_target" || updated.ContextSource.NodeKey != "" {
+		t.Fatalf("updated review edge context source = %+v, want previous_target", updated.ContextSource)
+	}
+}
+
 func TestWorkflowEdgeUpdateTogglesRequiresApproval(t *testing.T) {
 	cfg, _, remote := newWorkflowCommandLoopback(t)
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)

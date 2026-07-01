@@ -330,6 +330,29 @@ describe("ApiClient", () => {
     });
   });
 
+  it("maps previous-target-or-new workflow context sources", async () => {
+    const response = {
+      definition: {
+        ...workflowDefinitionResponse.definition,
+        edges: workflowDefinitionResponse.definition.edges.map((edge) => ({
+          ...edge,
+          context_source: { kind: "previous_target_or_new", node_key: "" },
+        })),
+      },
+    };
+    const transport = new FakeRpcTransport([{ method: "workflow.get", result: response }]);
+    const client = new ApiClient(transport);
+
+    await expect(client.getWorkflow("workflow-1")).resolves.toMatchObject({
+      edges: [
+        {
+          contextSource: { kind: "previous_target_or_new", nodeKey: "" },
+          id: "edge-1",
+        },
+      ],
+    });
+  });
+
   it("maps workflow library list, create, link, and project create-link contracts", async () => {
     const transport = new FakeRpcTransport([
       {

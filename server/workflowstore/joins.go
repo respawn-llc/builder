@@ -107,7 +107,7 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		source, err := s.resolveContextSourceRun(ctx, q, taskID, now, joinPlacementID, nil, joinSnapshot, outEdge)
+		resolution, err := s.resolveContextInvocation(ctx, q, taskID, now, joinPlacementID, nil, joinSnapshot, outEdge)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
@@ -115,15 +115,11 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		targetMetadataJSON, err := workflow.MarshalString(workflowRunMetadata{
-			ContextMode:          string(outEdge.ContextMode),
-			ContextSource:        workflow.CanonicalContextSource(outEdge.ContextSource),
-			SourceRunID:          source.runID,
-			SourceSessionID:      source.sessionID,
-			PromptTemplate:       strings.TrimSpace(outEdge.PromptTemplate),
-			Parameters:           append([]workflow.Parameter(nil), outEdge.Parameters...),
-			PriorParameterValues: clonePriorParameterValues(priorParameterValues),
-		})
+		targetMetadata := resolution.runMetadata(outEdge)
+		targetMetadata.PromptTemplate = strings.TrimSpace(outEdge.PromptTemplate)
+		targetMetadata.Parameters = append([]workflow.Parameter(nil), outEdge.Parameters...)
+		targetMetadata.PriorParameterValues = clonePriorParameterValues(priorParameterValues)
+		targetMetadataJSON, err := workflow.MarshalString(targetMetadata)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}

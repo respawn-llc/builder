@@ -187,25 +187,21 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		source, ok, err := resolvedContextSourceRunFromMetadata(ctx, q, edgeMetadata)
+		resolution, ok, err := resolvedContextInvocationFromMetadata(ctx, q, edgeMetadata, targetEdge.ContextMode)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
 		if !ok {
-			source, err = s.resolveContextSourceRun(ctx, q, transition.TaskID, transition.CreatedAtUnixMs, sourceRun.PlacementID, &sourceRun, sourceSnapshot, targetEdge)
+			resolution, err = s.resolveContextInvocation(ctx, q, transition.TaskID, transition.CreatedAtUnixMs, sourceRun.PlacementID, &sourceRun, sourceSnapshot, targetEdge)
 			if err != nil {
 				return CompleteRunResult{}, err
 			}
 		}
-		targetMetadataJSON, err := workflow.MarshalString(workflowRunMetadata{
-			ContextMode:          string(targetEdge.ContextMode),
-			ContextSource:        workflow.CanonicalContextSource(targetEdge.ContextSource),
-			SourceRunID:          source.runID,
-			SourceSessionID:      source.sessionID,
-			PromptTemplate:       strings.TrimSpace(targetEdge.PromptTemplate),
-			Parameters:           append([]workflow.Parameter(nil), targetEdge.Parameters...),
-			PriorParameterValues: clonePriorParameterValues(edgeMetadata.PriorParameterValues),
-		})
+		targetMetadata := resolution.runMetadata(targetEdge)
+		targetMetadata.PromptTemplate = strings.TrimSpace(targetEdge.PromptTemplate)
+		targetMetadata.Parameters = append([]workflow.Parameter(nil), targetEdge.Parameters...)
+		targetMetadata.PriorParameterValues = clonePriorParameterValues(edgeMetadata.PriorParameterValues)
+		targetMetadataJSON, err := workflow.MarshalString(targetMetadata)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}

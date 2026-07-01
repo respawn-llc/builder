@@ -10,6 +10,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "../components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 
 type SelectTriggerButtonProps = Omit<
   ComponentPropsWithoutRef<"button">,
@@ -30,19 +31,22 @@ export type SelectTriggerProps = SelectTriggerButtonProps &
     className?: string | undefined;
   }>;
 
-export const SelectTrigger = forwardRef<HTMLButtonElement, SelectTriggerProps>(function SelectTrigger({
-  className,
-  inputId,
-  menuId,
-  hintId,
-  errorId,
-  error,
-  selectedOption,
-  placeholder,
-  open,
-  disabled,
-  ...buttonProps
-}: SelectTriggerProps, ref) {
+export const SelectTrigger = forwardRef<HTMLButtonElement, SelectTriggerProps>(function SelectTrigger(
+  {
+    className,
+    inputId,
+    menuId,
+    hintId,
+    errorId,
+    error,
+    selectedOption,
+    placeholder,
+    open,
+    disabled,
+    ...buttonProps
+  }: SelectTriggerProps,
+  ref,
+) {
   return (
     <button
       {...buttonProps}
@@ -67,7 +71,10 @@ export const SelectTrigger = forwardRef<HTMLButtonElement, SelectTriggerProps>(f
       <span className="min-w-0 truncate">{selectedOption?.label ?? placeholder}</span>
       <ChevronDown
         aria-hidden="true"
-        className={cx("shrink-0 text-[var(--color-muted)] transition-transform", open ? "rotate-180" : undefined)}
+        className={cx(
+          "shrink-0 text-[var(--color-muted)] transition-transform",
+          open ? "rotate-180" : undefined,
+        )}
         size={16}
         strokeWidth={1.5}
       />
@@ -82,12 +89,7 @@ export type SelectOptionsListProps = Readonly<{
   onValueChange: (value: string) => void;
 }>;
 
-export function SelectOptionsList({
-  menuId,
-  options,
-  value,
-  onValueChange,
-}: SelectOptionsListProps) {
+export function SelectOptionsList({ menuId, options, value, onValueChange }: SelectOptionsListProps) {
   return (
     <DropdownMenuContent
       className="max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] w-[var(--radix-dropdown-menu-trigger-width)]"
@@ -95,18 +97,34 @@ export function SelectOptionsList({
       level={3}
       loop
     >
-      <DropdownMenuRadioGroup onValueChange={onValueChange} value={value}>
-        {options.map((option) => (
-          <DropdownMenuRadioItem
-            disabled={option.disabled === true}
-            key={option.value}
-            {...(option.textValue === undefined ? {} : { textValue: option.textValue })}
-            value={option.value}
-          >
-            <span className="min-w-0 truncate">{option.label}</span>
-          </DropdownMenuRadioItem>
-        ))}
-      </DropdownMenuRadioGroup>
+      <TooltipProvider delayDuration={0}>
+        <DropdownMenuRadioGroup onValueChange={onValueChange} value={value}>
+          {options.map((option) => (
+            <SelectOptionItem key={option.value} option={option} />
+          ))}
+        </DropdownMenuRadioGroup>
+      </TooltipProvider>
     </DropdownMenuContent>
+  );
+}
+
+function SelectOptionItem({ option }: Readonly<{ option: SelectFieldOption }>) {
+  const item = (
+    <DropdownMenuRadioItem
+      disabled={option.disabled === true}
+      {...(option.textValue === undefined ? {} : { textValue: option.textValue })}
+      value={option.value}
+    >
+      <span className="min-w-0 truncate">{option.label}</span>
+    </DropdownMenuRadioItem>
+  );
+  if (option.disabled !== true || option.disabledReason === undefined || option.disabledReason.length === 0) {
+    return item;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{item}</TooltipTrigger>
+      <TooltipContent level={3}>{option.disabledReason}</TooltipContent>
+    </Tooltip>
   );
 }

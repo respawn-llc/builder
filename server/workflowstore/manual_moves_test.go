@@ -284,6 +284,35 @@ func TestManualMoveRejectsPreviousTargetContextSourceV1(t *testing.T) {
 	}
 }
 
+func TestManualMoveRejectsPreviousTargetOrNewContextSourceV1(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	implementationNode := nodeByKey(t, def, "implementation")
+	acceptanceNode := nodeByKey(t, def, "acceptance")
+	reworkGroup := workflow.TransitionGroupID("group-previous-target-or-new-manual-rework-" + string(workflowID))
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: acceptanceNode.ID, TransitionID: "rework", DisplayName: "Rework"}); err != nil {
+		t.Fatalf("AddTransitionGroup rework: %v", err)
+	}
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-manual-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: implementationNode.ID, ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: "Rework."}); err != nil {
+		t.Fatalf("AddEdge rework: %v", err)
+	}
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
+	implementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
+
+	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: implementationNode.ID})
+	if !errors.Is(err, ErrManualMovePreviousTargetContext) {
+		t.Fatalf("ManualMoveTask previous target or new context source error = %v, want unsupported previous target context source", err)
+	}
+}
+
 func TestBackwardManualMoveRejectsHistoricalPreviousTargetContextSourceV1(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createSelectedContextSourceWorkflow(t, ctx, store, workflow.ContextModeContinueSession)

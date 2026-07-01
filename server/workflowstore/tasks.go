@@ -618,15 +618,11 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 	result := CompleteRunResult{TransitionID: workflow.TransitionID(transitionID), State: transitionState, RequiresApproval: requiresApproval}
 	for _, edge := range group.Edges {
 		if requiresApproval {
-			source, err := s.resolveContextSourceRun(ctx, q, run.TaskID, now, run.PlacementID, &run, snapshot, edge)
+			resolution, err := s.resolveContextInvocation(ctx, q, run.TaskID, now, run.PlacementID, &run, snapshot, edge)
 			if err != nil {
 				return CompleteRunResult{}, err
 			}
-			edgeMetadata := workflowRunMetadata{
-				ContextSource:   workflow.CanonicalContextSource(edge.ContextSource),
-				SourceRunID:     source.runID,
-				SourceSessionID: source.sessionID,
-			}
+			edgeMetadata := resolution.runMetadata(edge)
 			if edge.TargetNode.Kind == workflow.NodeKindAgent {
 				targetSnapshot, foundSnapshot, err := snapshot.forNode(edge.TargetNode)
 				if err != nil {
@@ -683,7 +679,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		source, err := s.resolveContextSourceRun(ctx, q, run.TaskID, now, run.PlacementID, &run, snapshot, edge)
+		resolution, err := s.resolveContextInvocation(ctx, q, run.TaskID, now, run.PlacementID, &run, snapshot, edge)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
@@ -691,15 +687,11 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		targetMetadataJSON, err := workflow.MarshalString(workflowRunMetadata{
-			ContextMode:          string(edge.ContextMode),
-			ContextSource:        workflow.CanonicalContextSource(edge.ContextSource),
-			SourceRunID:          source.runID,
-			SourceSessionID:      source.sessionID,
-			PromptTemplate:       strings.TrimSpace(edge.PromptTemplate),
-			Parameters:           append([]workflow.Parameter(nil), edge.Parameters...),
-			PriorParameterValues: clonePriorParameterValues(priorParameterValues),
-		})
+		targetMetadata := resolution.runMetadata(edge)
+		targetMetadata.PromptTemplate = strings.TrimSpace(edge.PromptTemplate)
+		targetMetadata.Parameters = append([]workflow.Parameter(nil), edge.Parameters...)
+		targetMetadata.PriorParameterValues = clonePriorParameterValues(priorParameterValues)
+		targetMetadataJSON, err := workflow.MarshalString(targetMetadata)
 		if err != nil {
 			return CompleteRunResult{}, err
 		}

@@ -10,6 +10,7 @@ export type SelectFieldOption = Readonly<{
   textValue?: string;
   value: string;
   disabled?: boolean;
+  disabledReason?: string | undefined;
 }>;
 
 export type SelectFieldProps = Readonly<{

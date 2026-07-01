@@ -582,6 +582,10 @@ func (s *validationState) validateRuntimeSupport() {
 
 func (s *validationState) validateContextSource(edge Edge, source Node, sourceExists bool, target Node, targetExists bool, ref ValidationError) (ContextSource, bool) {
 	contextSource := CanonicalContextSource(edge.ContextSource)
+	if contextSource.Kind != ContextSourceImmediateSource && sourceExists && source.Kind == NodeKindStart {
+		s.addSemantic(CodeInvalidContextSource, "start transitions require immediate context source", ref)
+		return contextSource, false
+	}
 	switch contextSource.Kind {
 	case ContextSourceImmediateSource:
 		if edge.ContextMode != ContextModeNewSession && sourceExists && source.Kind != NodeKindAgent {
@@ -638,6 +642,19 @@ func (s *validationState) validateContextSource(edge Edge, source Node, sourceEx
 		}
 		if target.ID != source.ID && !s.nodeDominates(target.ID, source.ID) {
 			s.addSemantic(CodeInvalidContextSource, "previous target context source requires the target node to be guaranteed before the edge source", ref)
+			return contextSource, false
+		}
+		return contextSource, true
+	case ContextSourcePreviousTargetOrNew:
+		if edge.ContextMode == ContextModeNewSession {
+			s.addSemantic(CodeInvalidContextSource, "previous target or new context source requires a continuation context mode", ref)
+			return contextSource, false
+		}
+		if !targetExists {
+			return contextSource, true
+		}
+		if target.Kind != NodeKindAgent {
+			s.addSemantic(CodeInvalidContextSource, "previous target or new context source requires an agent target node", ref)
 			return contextSource, false
 		}
 		return contextSource, true

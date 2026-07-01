@@ -1,9 +1,23 @@
 package protocol
 
-import "testing"
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+	"testing"
+)
 
-func TestProtocolVersionIncludesWorkflowPromptCommentaryParameter(t *testing.T) {
-	if Version != "29" {
-		t.Fatalf("protocol version = %q, want 29 for workflow prompt commentary parameter", Version)
+func TestProtocolVersionLoadsFromEmbeddedDefinition(t *testing.T) {
+	var definition struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(versionDefinition, &definition); err != nil {
+		t.Fatalf("unmarshal embedded protocol version definition: %v", err)
+	}
+	if Version != strings.TrimSpace(definition.Version) {
+		t.Fatalf("protocol version = %q, want embedded definition %q", Version, definition.Version)
+	}
+	if _, err := strconv.ParseUint(Version, 10, 64); err != nil {
+		t.Fatalf("protocol version = %q, want positive integer string: %v", Version, err)
 	}
 }

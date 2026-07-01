@@ -67,10 +67,21 @@ func TestWorkflowNodeAndEdgeRequestValidation(t *testing.T) {
 	if err := previousTargetEdge.Validate(); err != nil {
 		t.Fatalf("valid previous-target context source rejected: %v", err)
 	}
+	previousTargetOrNewEdge := validEdge
+	previousTargetOrNewEdge.ContextMode = "continue_session"
+	previousTargetOrNewEdge.ContextSource = WorkflowContextSource{Kind: "previous_target_or_new"}
+	if err := previousTargetOrNewEdge.Validate(); err != nil {
+		t.Fatalf("valid previous-target-or-new context source rejected: %v", err)
+	}
 	invalidPreviousTargetEdge := previousTargetEdge
 	invalidPreviousTargetEdge.ContextSource = WorkflowContextSource{Kind: "previous_target", NodeKey: "implement"}
 	if err := invalidPreviousTargetEdge.Validate(); !isWorkflowFieldError(err, "context_source.node_key", WorkflowRequestErrorInvalidValue) {
 		t.Fatalf("invalid previous-target context source error = %#v, want invalid_value on context_source.node_key", err)
+	}
+	invalidPreviousTargetOrNewEdge := previousTargetOrNewEdge
+	invalidPreviousTargetOrNewEdge.ContextSource = WorkflowContextSource{Kind: "previous_target_or_new", NodeKey: "implement"}
+	if err := invalidPreviousTargetOrNewEdge.Validate(); !isWorkflowFieldError(err, "context_source.node_key", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("invalid previous-target-or-new context source error = %#v, want invalid_value on context_source.node_key", err)
 	}
 	invalidSourceEdge := selectedSourceEdge
 	invalidSourceEdge.ContextSource = WorkflowContextSource{Kind: "selected_node", NodeKey: "Bad-Key"}
@@ -476,6 +487,22 @@ func TestWorkflowGraphDraftRequestValidation(t *testing.T) {
 	}
 	if err := invalidMode.Validate(); !isWorkflowFieldError(err, "graph.nodes.completion_mode", WorkflowRequestErrorInvalidValue) {
 		t.Fatalf("invalid graph node completion mode error = %#v, want invalid_value on graph.nodes.completion_mode", err)
+	}
+	validPreviousTargetOrNewGraph := WorkflowGraphDraft{
+		Edges: []WorkflowGraphDraftEdge{{ID: "edge-1", ContextSource: WorkflowContextSource{Kind: "previous_target_or_new"}}},
+	}
+	if err := (WorkflowGraphValidateDraftRequest{WorkflowID: "workflow-1", Modes: []WorkflowValidationMode{WorkflowValidationModeDraft}, Graph: validPreviousTargetOrNewGraph}).Validate(); err != nil {
+		t.Fatalf("valid graph previous_target_or_new context source rejected: %v", err)
+	}
+	invalidGraphSourceKind := validPreviousTargetOrNewGraph
+	invalidGraphSourceKind.Edges = []WorkflowGraphDraftEdge{{ID: "edge-1", ContextSource: WorkflowContextSource{Kind: "other"}}}
+	if err := (WorkflowGraphSaveRequest{WorkflowID: "workflow-1", ExpectedVersion: 1, Graph: invalidGraphSourceKind}).Validate(); !isWorkflowFieldError(err, "context_source.kind", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("invalid graph context source kind error = %#v, want invalid_value on context_source.kind", err)
+	}
+	invalidGraphSourceNodeKey := validPreviousTargetOrNewGraph
+	invalidGraphSourceNodeKey.Edges = []WorkflowGraphDraftEdge{{ID: "edge-1", ContextSource: WorkflowContextSource{Kind: "previous_target_or_new", NodeKey: "implement"}}}
+	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: "workflow-1", ExpectedVersion: 1, Graph: invalidGraphSourceNodeKey}).Validate(); !isWorkflowFieldError(err, "context_source.node_key", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("invalid graph context source node key error = %#v, want invalid_value on context_source.node_key", err)
 	}
 	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: "workflow-1", ExpectedVersion: -1}).Validate(); !isWorkflowFieldError(err, "expected_version", WorkflowRequestErrorInvalidValue) {
 		t.Fatalf("negative preview revision error = %#v, want invalid_value on expected_version", err)
