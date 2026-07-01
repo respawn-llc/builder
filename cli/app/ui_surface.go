@@ -84,7 +84,7 @@ func (m *uiModel) activateSurface(surface uiSurface) tea.Cmd {
 	}
 	transitionCmd := m.altScreenCmdForSurfaceTransition(prev, surface)
 	if surface == uiSurfaceOngoingTranscript {
-		return sequenceCmds(transitionCmd, m.nativeSurfaceResizeRehydrateNowCmd())
+		return sequenceCmds(transitionCmd, m.nativeSurfaceResizeRehydrateNowCmd(), m.drainNativePendingEmissions())
 	}
 	return transitionCmd
 }
@@ -112,7 +112,7 @@ func (r uiPresentationFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult 
 		if err := m.flushNativeSurfaceHoldoff(); err != nil {
 			return handledUIFeatureUpdate(m, m.nativeSurfaceErrorCmd("flush native holdoff", err))
 		}
-		return handledUIFeatureUpdate(m, m.nativeSurfaceResizeRehydrateNowCmd())
+		return handledUIFeatureUpdate(m, sequenceCmds(m.nativeSurfaceResizeRehydrateNowCmd(), m.drainNativePendingEmissions()))
 	}
 	switch msg := msg.(type) {
 	case nativeSurfaceResizeRehydrateMsg:
@@ -141,18 +141,15 @@ func (r uiPresentationFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult 
 				m.nativeResizeRehydrateSettled = false
 				return handledUIFeatureUpdate(m, nil)
 			}
-			m.reprojectNativeDeliveredStableProjectionForCurrentGeometry()
 		}
 		m.nativeResizeRehydrateActive = false
 		m.nativeResizeRehydrateToken = 0
 		m.nativeResizeRehydrateSettled = false
-		if err := m.deliverCurrentNativeStableProjectionAfterResize(); err != nil {
-			return handledUIFeatureUpdate(m, m.nativeSurfaceErrorCmd("resize native stable", err))
-		}
 		if err := m.flushNativeSurfaceHoldoff(); err != nil {
 			return handledUIFeatureUpdate(m, m.nativeSurfaceErrorCmd("resize flush native stable", err))
 		}
-		return handledUIFeatureUpdate(m, nil)
+		m.nativeScratchHydrationPending = true
+		return handledUIFeatureUpdate(m, m.requestRuntimeNativeScratchTranscriptSync())
 	}
 	return uiFeatureUpdateResult{}
 }

@@ -21,28 +21,31 @@ func (r uiWindowFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	m := r.model
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		resized := m.windowSizeKnown && (m.termWidth != msg.Width || m.termHeight != msg.Height)
+		widthChanged := m.windowSizeKnown && m.termWidth != msg.Width
 		m.termWidth = msg.Width
 		m.termHeight = msg.Height
 		m.windowSizeKnown = true
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, m.scheduleNativeResizeRehydrate(resized))
+		cmd := m.scheduleNativeResizeRehydrate(widthChanged)
+		if !m.nativeResizeRehydratePending() {
+			m.ensureNativeStableSurfaceForCurrentGeometry()
+			cmd = sequenceCmds(cmd, m.drainNativePendingEmissions())
+		}
+		return handledUIFeatureUpdate(m, cmd)
 	}
 	return uiFeatureUpdateResult{}
 }
 
-func (m *uiModel) scheduleNativeResizeRehydrate(resized bool) tea.Cmd {
-	if !resized || m == nil || !m.nativeSurfaceConfigured() || m.termWidth <= 0 || m.termHeight <= 0 {
+func (m *uiModel) scheduleNativeResizeRehydrate(widthChanged bool) tea.Cmd {
+	if !widthChanged || m == nil || !m.nativeSurfaceConfigured() || !m.nativeImmutableTranscriptWritten || m.termWidth <= 0 || m.termHeight <= 0 {
 		return nil
-	}
-	if m.nativeSurface.AssistantStreaming() {
-		return m.nativeSurfaceDropErrorCmd("resize active native assistant stream", errNativeAssistantStreamResized)
 	}
 	if strings.TrimSpace(m.view.OngoingStreamingText()) != "" {
 		m.nativeAssistantStreamIncomplete = true
 	}
 	m.nativeResizeRehydrateToken++
 	m.nativeResizeRehydrateSettled = false
+	m.nativeScratchHydrationPending = true
 	token := m.nativeResizeRehydrateToken
 	width := m.termWidth
 	height := m.termHeight

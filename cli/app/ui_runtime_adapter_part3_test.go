@@ -468,7 +468,7 @@ func TestApplyRuntimeTranscriptPageRejectsEqualRevisionTailReplacementAfterLiveA
 		t.Fatalf("transcript revision = %d, want 10", got)
 	}
 
-	if cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{Kind: clientui.EventAssistantMessage, TranscriptEntries: []clientui.ChatEntry{{Role: "assistant", Text: "live append"}}}); cmd != nil || !mutated || needsHydration {
+	if cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{Kind: clientui.EventAssistantMessage, TranscriptEntries: []clientui.ChatEntry{{Role: "assistant", Text: "live append"}}}); cmd != nil || !mutated || needsHydration {
 		t.Fatalf("expected live append without extra command, mutated=%t needsHydration=%t cmd=%v", mutated, needsHydration, cmd)
 	}
 	if !m.transcriptLiveDirty {

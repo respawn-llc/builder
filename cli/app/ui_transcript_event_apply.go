@@ -9,13 +9,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (tea.Cmd, bool, bool) {
+func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (tea.Cmd, bool, bool, bool) {
 	m := a.model
 	if len(evt.TranscriptEntries) == 0 {
-		return nil, false, false
+		return nil, false, false, false
 	}
 	incomingCount := len(evt.TranscriptEntries)
-	reduction := reduceProjectedTranscriptEvent(newProjectedTranscriptEventState(projectedTranscriptEventSnapshotFromModel(m)), evt)
+	state := newProjectedTranscriptEventState(projectedTranscriptEventSnapshotFromModel(m))
+	if cmd, fatal := m.preflightNativeCommittedTranscriptEvent(state, evt); fatal {
+		return cmd, false, false, true
+	}
+	reduction := reduceProjectedTranscriptEvent(state, evt)
 	if reduction.decision == projectedTranscriptDecisionSkip && reduction.duplicateToolStarts {
 		m.logTranscriptEventDiag("transcript.diag.client.append_entries", evt, map[string]string{
 			"path":           "live_event",
@@ -23,7 +27,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			"reason":         reduction.skipReason,
 			"applied_count":  "0",
 		})
-		return nil, false, false
+		return nil, false, false, false
 	}
 	plan := reduction.plan
 	m.logProjectedTranscriptPlanDiag(evt, plan, incomingCount)
@@ -39,7 +43,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			"reason":         reduction.skipReason,
 			"applied_count":  "0",
 		})
-		return nil, false, false
+		return nil, false, false, false
 	case projectedTranscriptDecisionHydrate:
 		if cmd, applied := a.applyActiveAssistantFinalizerGapAsRecentTail(evt); applied {
 			m.logTranscriptEventDiag("transcript.diag.client.append_entries", evt, map[string]string{
@@ -49,7 +53,10 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 				"divergence":     plan.divergence,
 				"applied_count":  strconv.Itoa(len(evt.TranscriptEntries)),
 			})
-			return cmd, true, false
+			return cmd, true, false, false
+		}
+		if m.nativeSurfaceConfigured() && m.nativeImmutableTranscriptWritten && reduction.hydrationCause == clientui.TranscriptRecoveryCauseNone {
+			return m.nativeFatalSurfaceErrorCmd("hydrate committed transcript", errNativeStableNonGapHydration), false, false, true
 		}
 		m.beginCommittedTranscriptContinuityRecovery()
 		m.logTranscriptEventDiag("transcript.diag.client.append_entries", evt, map[string]string{
@@ -61,11 +68,11 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 		})
 		if m.hasRuntimeClient() {
 			if reduction.hydrationCause != clientui.TranscriptRecoveryCauseNone {
-				return m.requestRuntimeTranscriptSyncForContinuityLoss(reduction.hydrationCause), false, true
+				return m.requestRuntimeTranscriptSyncForContinuityLoss(reduction.hydrationCause), false, true, false
 			}
-			return m.requestRuntimeCommittedGapSync(), false, true
+			return m.requestRuntimeCommittedGapSync(), false, true, false
 		}
-		return nil, false, false
+		return nil, false, false, false
 	case projectedTranscriptDecisionDefer:
 		m.deferProjectedCommittedTail(evt)
 		m.logTranscriptEventDiag("transcript.diag.client.append_entries", evt, map[string]string{
@@ -74,31 +81,33 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			"reason":         reduction.skipReason,
 			"applied_count":  "0",
 		})
-		return nil, false, false
+		return nil, false, false, false
 	}
 	entries := plan.entries
-	previousNativeStableProjection := tui.TranscriptProjection{}
-	nativeSurfaceConfigured := m.nativeSurfaceConfigured()
-	if nativeSurfaceConfigured && !m.nativeResizeRehydratePending() {
-		m.ensureNativeStableSurfaceForCurrentGeometry()
-	}
-	nativeStableReady := nativeSurfaceConfigured && !m.nativeResizeRehydratePending() && m.nativeStableSurfaceReadyForCurrentGeometry()
-	if nativeSurfaceConfigured {
-		previousNativeStableProjection = m.nativeDeliveredStableProjection
-	}
-	m.transcriptLiveDirty = true
-	startOffset := m.transcriptBaseOffset + plan.rangeStart
 	convertedEntries := make([]tui.TranscriptEntry, 0, len(entries))
 	for _, entry := range entries {
 		convertedEntries = append(convertedEntries, transcriptEntryFromProjectedEventEntry(evt, entry, reduction.projectedTransient, reduction.projectedCommitted))
 	}
+	nativeSurfaceConfigured := m.nativeSurfaceConfigured()
 	nativeAssistantStreamText := m.activeAssistantStreamText()
 	committedAppendClearsAssistantStream := shouldClearAssistantStreamForCommittedTranscriptEntries(convertedEntries, nativeAssistantStreamText)
-	nativeAssistantStreamWasIncomplete := m.nativeAssistantStreamIncomplete
-	nativeAssistantStreamActive := m.nativeSurfaceConfigured() &&
+	nativeAssistantStreamNeedsPrefixValidation := nativeSurfaceConfigured &&
+		nativeAssistantStreamText != "" &&
+		committedAppendClearsAssistantStream
+	nativeAssistantStreamActive := nativeSurfaceConfigured &&
 		m.nativeSurface.AssistantStreaming() &&
 		committedAppendClearsAssistantStream
-	if committedAppendClearsAssistantStream {
+	if plan.mode == projectedTranscriptEntryPlanAppend && nativeAssistantStreamNeedsPrefixValidation {
+		if _, err := planNativeAssistantStreamFinalizerEmission(convertedEntries, nativeAssistantStreamText); err != nil {
+			return m.nativeFatalSurfaceErrorCmd("finalize native assistant stream", err), false, false, true
+		}
+	}
+	if nativeSurfaceConfigured && !m.nativeScratchHydrationPending && !m.nativeResizeRehydratePending() {
+		m.ensureNativeStableSurfaceForCurrentGeometry()
+	}
+	m.transcriptLiveDirty = true
+	startOffset := m.transcriptBaseOffset + plan.rangeStart
+	if committedAppendClearsAssistantStream && !nativeAssistantStreamActive {
 		m.clearAssistantStreamForCommittedAppend()
 	}
 	showTransientInCurrentView := m.view.Mode() != tui.ModeDetail || !allTranscriptEntriesTransient(convertedEntries)
@@ -160,14 +169,42 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	if showTransientInCurrentView {
 		m.clearMirroredTransientStatus(convertedEntries)
 	}
-	if (plan.mode == projectedTranscriptEntryPlanAppend || plan.mode == projectedTranscriptEntryPlanReplace) && nativeSurfaceConfigured {
-		currentNativeStableProjection := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
-		if err := m.deliverNativeStableProjectionChange(nativeStableLiveAppendIntent("deliverNativeStableProjectionChange"), previousNativeStableProjection, currentNativeStableProjection, nativeStableReady, nativeAssistantStreamActive, nativeAssistantStreamWasIncomplete, nativeAssistantStreamText); err != nil {
-			return m.nativeSurfaceErrorCmd("steer committed transcript", err), true, false
+	if plan.mode == projectedTranscriptEntryPlanAppend && nativeSurfaceConfigured {
+		nativeEntries := convertedEntries
+		nativeRangeStart := plan.rangeStart
+		if nativeAssistantStreamActive {
+			var err error
+			var skippedLeading int
+			nativeEntries, skippedLeading, err = m.nativeCommittedEntriesAfterActiveAssistantFinalizer(convertedEntries, nativeAssistantStreamText)
+			if err != nil {
+				return m.nativeFatalSurfaceErrorCmd("finalize native assistant stream", err), true, false, true
+			}
+			nativeRangeStart += skippedLeading
+		}
+		committedNativeEntries := committedTranscriptEntriesForApp(nativeEntries)
+		if len(committedNativeEntries) > 0 {
+			prependDivider := m.nativePrependDividerBeforeRange(nativeRangeStart, committedNativeEntries)
+			if m.nativeStableOutputReady() {
+				if err := m.emitNativeCommittedEntries(committedNativeEntries, prependDivider); err != nil {
+					return m.nativeSurfaceErrorCmd("steer committed transcript", err), true, false, false
+				}
+			} else if err := m.queueNativeEmission(nativePendingEmission{kind: nativePendingEmissionEntries, entries: cloneTUITranscriptEntries(committedNativeEntries), prependDivider: prependDivider}); err != nil {
+				return m.nativeSurfaceErrorCmd("queue committed transcript", err), true, false, false
+			}
+			if m.nativeScratchHydrationPending {
+				return m.requestRuntimeNativeScratchTranscriptSync(), true, true, false
+			}
+		}
+	} else if plan.mode == projectedTranscriptEntryPlanReplace && nativeSurfaceConfigured && m.nativeImmutableTranscriptWritten && !allTranscriptEntriesTransient(convertedEntries) {
+		if evt.RecoveryCause == clientui.TranscriptRecoveryCauseStreamGap {
+			return m.requestRuntimeNativeScratchTranscriptSync(), true, true, false
+		}
+		if err := errNativeStableNonAppend; err != nil {
+			return m.nativeSurfaceErrorCmd("steer committed transcript", err), true, false, false
 		}
 	}
 	m.logProjectedTranscriptAppliedDiag(evt, plan, incomingCount, len(entries), startOffset, entries)
-	return nil, true, false
+	return nil, true, false, false
 }
 
 func (a uiRuntimeAdapter) applyActiveAssistantFinalizerGapAsRecentTail(evt clientui.Event) (tea.Cmd, bool) {

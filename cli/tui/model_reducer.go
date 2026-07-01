@@ -167,7 +167,6 @@ func (m *Model) reduceAppendTranscriptMsg(msg AppendTranscriptMsg, result *model
 		Visibility:        transcript.NormalizeEntryVisibility(msg.Visibility),
 		Transient:         msg.Transient,
 		Committed:         msg.Committed,
-		LocalAppendOnly:   msg.LocalAppendOnly,
 		Role:              role,
 		Text:              msg.Text,
 		CondensedText:     msg.CondensedText,

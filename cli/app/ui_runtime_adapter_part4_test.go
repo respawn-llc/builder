@@ -27,7 +27,7 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionTailReplacementWhenAuthor
 		_ = collectCmdMessages(t, cmd)
 	}
 
-	if cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{Kind: clientui.EventToolCallStarted, TranscriptEntries: []clientui.ChatEntry{{
+	if cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{Kind: clientui.EventToolCallStarted, TranscriptEntries: []clientui.ChatEntry{{
 		Role:       "tool_call",
 		Text:       "pwd",
 		ToolCallID: "stale-call",
@@ -76,7 +76,7 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionTailReplacementWhenAuthor
 	}
 }
 
-func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionReplacementWhenToolMetadataChanges(t *testing.T) {
+func TestApplyRuntimeTranscriptPageRejectsEqualRevisionReplacementWhenToolMetadataChanges(t *testing.T) {
 	m := newProjectedStaticUIModel()
 
 	baseline := clientui.TranscriptPage{
@@ -108,13 +108,13 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionReplacementWhenToolMetada
 		t.Fatalf("transcript entry count = %d, want %d", got, want)
 	}
 	if m.transcriptEntries[1].ToolCall == nil {
-		t.Fatalf("expected corrected tool metadata, got nil")
+		t.Fatalf("expected original tool metadata, got nil")
 	}
-	if got := m.transcriptEntries[1].ToolCall.Command; got != "ls" {
-		t.Fatalf("tool command = %q, want ls", got)
+	if got := m.transcriptEntries[1].ToolCall.Command; got != "pwd" {
+		t.Fatalf("tool command = %q, want pwd", got)
 	}
-	if m.transcriptLiveDirty {
-		t.Fatal("expected equal-revision metadata correction to clear transcriptLiveDirty")
+	if !m.transcriptLiveDirty {
+		t.Fatal("expected rejected equal-revision metadata replacement to keep transcriptLiveDirty")
 	}
 }
 
@@ -408,7 +408,7 @@ func TestApplyRuntimeTranscriptPageAcceptsNewerRevisionTailReplacementAfterLiveA
 	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
 	}
-	if cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{Kind: clientui.EventAssistantMessage, TranscriptEntries: []clientui.ChatEntry{{Role: "assistant", Text: "live append"}}}); cmd != nil || !mutated || needsHydration {
+	if cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{Kind: clientui.EventAssistantMessage, TranscriptEntries: []clientui.ChatEntry{{Role: "assistant", Text: "live append"}}}); cmd != nil || !mutated || needsHydration {
 		t.Fatalf("expected live append without extra command, mutated=%t needsHydration=%t cmd=%v", mutated, needsHydration, cmd)
 	}
 
@@ -469,7 +469,7 @@ func TestApplyProjectedTranscriptEntriesUsesTailOffsetWhileViewingOlderDetailPag
 	}
 
 	appended := []clientui.ChatEntry{{Role: "assistant", Text: "tail 500"}, {Role: "assistant", Text: "tail 501"}}
-	if cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{Kind: clientui.EventAssistantMessage, TranscriptEntries: appended}); cmd != nil || !mutated || needsHydration {
+	if cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{Kind: clientui.EventAssistantMessage, TranscriptEntries: appended}); cmd != nil || !mutated || needsHydration {
 		t.Fatalf("expected projected append to mutate without extra command, mutated=%t needsHydration=%t cmd=%v", mutated, needsHydration, cmd)
 	}
 

@@ -26,7 +26,6 @@ type TranscriptEntry struct {
 	RollbackTargetID  string
 	Transient         bool
 	Committed         bool
-	LocalAppendOnly   bool
 	Role              TranscriptRole
 	Text              string
 	CondensedText     string
@@ -75,7 +74,6 @@ type AppendTranscriptMsg struct {
 	Visibility        transcript.EntryVisibility
 	Transient         bool
 	Committed         bool
-	LocalAppendOnly   bool
 	Role              TranscriptRole
 	Text              string
 	CondensedText     string
@@ -464,6 +462,10 @@ func (m Model) PendingOngoingLines() []TranscriptProjectionLine {
 
 func (m Model) PendingOngoingLinesWithPendingSpinnerFrame(spinner string) []TranscriptProjectionLine {
 	return m.pendingLiveOngoingLines(uniformPendingSpinnerFrame(spinner)).lines
+}
+
+func (m Model) StreamingOngoingLines() []TranscriptProjectionLine {
+	return m.streamingOngoingProjectionLines()
 }
 
 func (m Model) OngoingStreamingText() string {

@@ -112,26 +112,27 @@ type uiInputFeatureState struct {
 }
 
 type uiPresentationFeatureState struct {
-	theme                           string
-	activeSurface                   uiSurface
-	altScreenActive                 bool
-	terminalFocus                   *terminalFocusState
-	terminalCursor                  *uiTerminalCursorState
-	rendererOutputGate              *uiRendererOutputGateState
-	nativeSurface                   *uiNativeSurface
-	nativeLiveAreaError             error
-	nativeDeliveredStableProjection tui.TranscriptProjection
-	nativePendingStableIntent       nativeStableDeliveryIntent
-	nativeAssistantStreamIncomplete bool
-	nativeResizeRehydrateToken      uint64
-	nativeResizeRehydrateSettled    bool
-	nativeResizeRehydrateActive     bool
-	termWidth                       int
-	termHeight                      int
-	windowSizeKnown                 bool
-	helpVisible                     bool
-	startupCmds                     []tea.Cmd
-	uiMainThread                    uiMainThreadState
+	theme                            string
+	activeSurface                    uiSurface
+	altScreenActive                  bool
+	terminalFocus                    *terminalFocusState
+	terminalCursor                   *uiTerminalCursorState
+	rendererOutputGate               *uiRendererOutputGateState
+	nativeSurface                    *uiNativeSurface
+	nativeLiveAreaError              error
+	nativeImmutableTranscriptWritten bool
+	nativePendingEmissions           []nativePendingEmission
+	nativeScratchHydrationPending    bool
+	nativeAssistantStreamIncomplete  bool
+	nativeResizeRehydrateToken       uint64
+	nativeResizeRehydrateSettled     bool
+	nativeResizeRehydrateActive      bool
+	termWidth                        int
+	termHeight                       int
+	windowSizeKnown                  bool
+	helpVisible                      bool
+	startupCmds                      []tea.Cmd
+	uiMainThread                     uiMainThreadState
 }
 
 type uiConversationFeatureState struct {

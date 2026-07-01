@@ -656,7 +656,7 @@ func TestHandleProjectedRuntimeEventSkipsAlreadyHydratedAssistantEntry(t *testin
 	}
 }
 
-func TestHandleProjectedRuntimeEventSkipsCommittedOverlapThatStartsBeforeCurrentWindow(t *testing.T) {
+func TestHandleProjectedRuntimeEventHydratesCommittedRangeThatStartsBeforeCurrentWindow(t *testing.T) {
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.transcriptEntries = []tui.TranscriptEntry{
@@ -668,7 +668,7 @@ func TestHandleProjectedRuntimeEventSkipsCommittedOverlapThatStartsBeforeCurrent
 	m.transcriptRevision = 12
 	m.forwardToView(tui.SetConversationMsg{BaseOffset: m.transcriptBaseOffset, TotalEntries: m.transcriptTotalEntries, Entries: m.transcriptEntries})
 
-	cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+	cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
 		Kind:                       clientui.EventLocalEntryAdded,
 		CommittedTranscriptChanged: true,
 		StepID:                     "step-1",
@@ -682,21 +682,21 @@ func TestHandleProjectedRuntimeEventSkipsCommittedOverlapThatStartsBeforeCurrent
 		},
 	})
 
-	if cmd != nil {
-		t.Fatalf("expected no hydrate/append command, got %v", cmd)
+	if cmd == nil {
+		t.Fatal("expected hydration command for partial committed range")
 	}
 	if mutated {
 		t.Fatalf("expected no transcript mutation, got %+v", m.transcriptEntries)
 	}
-	if needsHydration {
-		t.Fatal("expected before-window overlap to avoid hydration when visible overlap already matches")
+	if !needsHydration {
+		t.Fatal("expected partial committed range to require hydration")
 	}
 	if got := len(m.transcriptEntries); got != 2 {
 		t.Fatalf("transcript entry count = %d, want 2", got)
 	}
 }
 
-func TestHandleProjectedRuntimeEventAppendsCommittedSuffixWhenOverlapStartsBeforeCurrentWindow(t *testing.T) {
+func TestHandleProjectedRuntimeEventHydratesCommittedSuffixRangeThatStartsBeforeCurrentWindow(t *testing.T) {
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.transcriptEntries = []tui.TranscriptEntry{
@@ -708,7 +708,7 @@ func TestHandleProjectedRuntimeEventAppendsCommittedSuffixWhenOverlapStartsBefor
 	m.transcriptRevision = 12
 	m.forwardToView(tui.SetConversationMsg{BaseOffset: m.transcriptBaseOffset, TotalEntries: m.transcriptTotalEntries, Entries: m.transcriptEntries})
 
-	cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+	cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
 		Kind:                       clientui.EventLocalEntryAdded,
 		CommittedTranscriptChanged: true,
 		StepID:                     "step-1",
@@ -723,20 +723,17 @@ func TestHandleProjectedRuntimeEventAppendsCommittedSuffixWhenOverlapStartsBefor
 		},
 	})
 
-	if cmd != nil {
-		t.Fatalf("expected direct append without hydrate command, got %v", cmd)
+	if cmd == nil {
+		t.Fatal("expected hydration command for partial committed suffix range")
 	}
-	if !mutated {
-		t.Fatalf("expected transcript mutation, got %+v", m.transcriptEntries)
+	if mutated {
+		t.Fatalf("expected no transcript mutation, got %+v", m.transcriptEntries)
 	}
-	if needsHydration {
-		t.Fatal("expected before-window overlap append to avoid hydration")
+	if !needsHydration {
+		t.Fatal("expected partial committed suffix range to require hydration")
 	}
-	if got := len(m.transcriptEntries); got != 3 {
-		t.Fatalf("transcript entry count = %d, want 3", got)
-	}
-	if got := m.transcriptEntries[2].Text; got != "new-visible-suffix" {
-		t.Fatalf("appended suffix text = %q, want new-visible-suffix", got)
+	if got := len(m.transcriptEntries); got != 2 {
+		t.Fatalf("transcript entry count = %d, want 2", got)
 	}
 }
 
@@ -754,7 +751,7 @@ func TestApplyProjectedTranscriptEntriesForwardsCompactMetadataToLiveView(t *tes
 		ToolCallID:        " call-1 ",
 	}
 
-	cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+	cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
 		Kind:                       clientui.EventLocalEntryAdded,
 		CommittedTranscriptChanged: true,
 		CommittedEntryStart:        1,
@@ -810,7 +807,7 @@ func TestSkippedCommittedEventBeforeCurrentWindowStillAdvancesRevisionAndCount(t
 	m.transcriptRevision = 12
 	m.forwardToView(tui.SetConversationMsg{BaseOffset: m.transcriptBaseOffset, TotalEntries: m.transcriptTotalEntries, Entries: m.transcriptEntries})
 
-	cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+	cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
 		Kind:                       clientui.EventLocalEntryAdded,
 		CommittedTranscriptChanged: true,
 		StepID:                     "step-1",
@@ -853,7 +850,7 @@ func TestSkippedCommittedEventBeforeCurrentWindowDoesNotTriggerFollowUpConversat
 	m.transcriptRevision = 12
 	m.forwardToView(tui.SetConversationMsg{BaseOffset: m.transcriptBaseOffset, TotalEntries: m.transcriptTotalEntries, Entries: m.transcriptEntries})
 
-	cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+	cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
 		Kind:                       clientui.EventLocalEntryAdded,
 		CommittedTranscriptChanged: true,
 		StepID:                     "step-1",
@@ -889,7 +886,7 @@ func TestSkippedCommittedEventBeforeCurrentWindowDoesNotTriggerFollowUpConversat
 	}
 }
 
-func TestHandleProjectedRuntimeEventRepairsCoveredAssistantEntryInsteadOfSkipping(t *testing.T) {
+func TestHandleProjectedRuntimeEventDoesNotRepairCoveredAssistantEntryLocally(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.transcriptEntries = []tui.TranscriptEntry{
 		{Role: "assistant", Text: "seed", Phase: llm.MessagePhaseCommentary},
@@ -915,18 +912,18 @@ func TestHandleProjectedRuntimeEventRepairsCoveredAssistantEntryInsteadOfSkippin
 		cmd
 
 	if got := len(m.transcriptEntries); got != 2 {
-		t.Fatalf("expected repaired assistant entry without duplication, got %+v", m.transcriptEntries)
+		t.Fatalf("expected covered assistant range not to mutate local transcript, got %+v", m.transcriptEntries)
 	}
-	if got := m.transcriptEntries[1].Text; got != "fresh" {
-		t.Fatalf("assistant entry text = %q, want fresh", got)
+	if got := m.transcriptEntries[1].Text; got != "stale" {
+		t.Fatalf("assistant entry text = %q, want stale before hydration", got)
 	}
 	loaded := m.view.LoadedTranscriptEntries()
-	if len(loaded) != 2 || loaded[1].Text != "fresh" {
-		t.Fatalf("expected repaired assistant visible in view, got %+v", loaded)
+	if len(loaded) != 2 || loaded[1].Text != "stale" {
+		t.Fatalf("expected covered assistant unchanged in view, got %+v", loaded)
 	}
 }
 
-func TestHandleProjectedRuntimeEventRepairsCoveredAssistantEntryAndAppendsTrailingToolCall(t *testing.T) {
+func TestHandleProjectedRuntimeEventDoesNotRepairCoveredAssistantEntryOrAppendTrailingToolCall(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.transcriptEntries = []tui.TranscriptEntry{
 		{Role: "user", Text: "prompt"},
@@ -950,18 +947,15 @@ func TestHandleProjectedRuntimeEventRepairsCoveredAssistantEntryAndAppendsTraili
 	}).
 		cmd
 
-	if got := len(m.transcriptEntries); got != 3 {
-		t.Fatalf("expected repaired assistant plus appended tool call, got %+v", m.transcriptEntries)
+	if got := len(m.transcriptEntries); got != 2 {
+		t.Fatalf("expected covered range not to mutate local transcript, got %+v", m.transcriptEntries)
 	}
-	if got := m.transcriptEntries[1].Text; got != "fresh" {
-		t.Fatalf("assistant entry text = %q, want fresh", got)
-	}
-	if got := m.transcriptEntries[2].ToolCallID; got != "call-1" {
-		t.Fatalf("tool call id = %q, want call-1", got)
+	if got := m.transcriptEntries[1].Text; got != "stale" {
+		t.Fatalf("assistant entry text = %q, want stale before hydration", got)
 	}
 	loaded := m.view.LoadedTranscriptEntries()
-	if len(loaded) != 3 || loaded[1].Text != "fresh" || loaded[2].ToolCallID != "call-1" {
-		t.Fatalf("expected repaired assistant and tool call visible in view, got %+v", loaded)
+	if len(loaded) != 2 || loaded[1].Text != "stale" {
+		t.Fatalf("expected covered range unchanged in view, got %+v", loaded)
 	}
 }
 

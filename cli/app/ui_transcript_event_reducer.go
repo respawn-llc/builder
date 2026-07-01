@@ -5,7 +5,6 @@ import (
 
 	"core/cli/tui"
 	"core/shared/clientui"
-	"core/shared/transcript"
 )
 
 type projectedTranscriptEntryPlanMode uint8
@@ -143,74 +142,29 @@ func planProjectedTranscriptEntries(state projectedTranscriptEventState, evt cli
 		return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanSkip}
 	}
 	if eventStart < currentStart {
-		trimmedPrefixCount := currentStart - eventStart
-		if trimmedPrefixCount >= len(entries) {
-			return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanSkip}
-		}
-		entries = cloneChatEntries(entries[trimmedPrefixCount:])
-		eventStart = currentStart
-		eventEnd = eventStart + len(entries)
+		return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanHydrate, divergence: "partial_event_range"}
 	}
 	if evt.TranscriptRevision < state.revision {
 		if eventEnd > currentEnd {
 			return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanHydrate, divergence: "stale_revision_extends_tail"}
-		}
-		if projectedTranscriptEntriesMatchCurrentRange(state, eventStart, entries, evt.CommittedTranscriptChanged) {
-			return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanSkip}
 		}
 		return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanSkip}
 	}
 	if eventStart > currentEnd {
 		return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanHydrate, divergence: "gap_after_tail"}
 	}
-	overlapStart := max(eventStart, currentStart)
-	overlapEnd := min(eventEnd, currentEnd)
-	if projectedTranscriptEntriesMatchCurrentOverlap(state, eventStart, overlapStart, overlapEnd, entries, evt.CommittedTranscriptChanged) {
-		if eventEnd <= currentEnd {
-			return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanSkip}
-		}
-		suffixStart := currentEnd - eventStart
+	if eventStart == currentEnd {
 		return projectedTranscriptEntryPlan{
 			mode:       projectedTranscriptEntryPlanAppend,
 			rangeStart: len(state.entries),
 			rangeEnd:   len(state.entries),
-			entries:    cloneChatEntries(entries[suffixStart:]),
+			entries:    entries,
 		}
 	}
-	return projectedTranscriptEntryPlan{
-		mode:       projectedTranscriptEntryPlanReplace,
-		rangeStart: eventStart - currentStart,
-		rangeEnd:   min(eventEnd, currentEnd) - currentStart,
-		entries:    entries,
+	if eventEnd <= currentEnd {
+		return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanHydrate, divergence: "partial_event_range"}
 	}
-}
-
-func projectedTranscriptEntriesMatchCurrentRange(state projectedTranscriptEventState, eventStart int, entries []clientui.ChatEntry, requireCommitted bool) bool {
-	currentStart := state.baseOffset
-	currentEnd := currentStart + len(state.entries)
-	eventEnd := eventStart + len(entries)
-	if eventStart < currentStart || eventEnd > currentEnd {
-		return false
-	}
-	return projectedTranscriptEntriesMatchCurrentOverlap(state, eventStart, eventStart, eventEnd, entries, requireCommitted)
-}
-
-func projectedTranscriptEntriesMatchCurrentOverlap(state projectedTranscriptEventState, eventStart int, overlapStart int, overlapEnd int, entries []clientui.ChatEntry, requireCommitted bool) bool {
-	if overlapStart >= overlapEnd {
-		return true
-	}
-	currentStart := state.baseOffset
-	for absolute := overlapStart; absolute < overlapEnd; absolute++ {
-		currentIndex := absolute - currentStart
-		incomingIndex := absolute - eventStart
-		if requireCommitted && state.entries[currentIndex].Transient && !state.entries[currentIndex].Committed {
-			return false
-		}
-		if !transcript.EntryPayloadEqual(transcriptPayloadFromTUIEntry(state.entries[currentIndex]), transcriptPayloadFromClientEntry(entries[incomingIndex])) {
-			return false
-		}
-	}
-	return true
+	return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanHydrate, divergence: "partial_event_range"}
 }
 
 func (mode projectedTranscriptEntryPlanMode) label() string {
@@ -277,9 +231,11 @@ func isAssistantStreamFinalizerEvent(state projectedTranscriptEventState, evt cl
 		return false
 	}
 	if strings.TrimSpace(state.liveAssistantStepID) != "" && strings.TrimSpace(evt.StepID) != "" {
-		return activeAssistantStepMatchesEvent(state, evt)
+		if !activeAssistantStepMatchesEvent(state, evt) {
+			return false
+		}
 	}
-	activeStream := strings.TrimSpace(state.liveAssistantText)
+	activeStream := state.liveAssistantText
 	if activeStream == "" {
 		return false
 	}
@@ -287,7 +243,7 @@ func isAssistantStreamFinalizerEvent(state projectedTranscriptEventState, evt cl
 		if tui.TranscriptRoleFromWire(entry.Role) != tui.TranscriptRoleAssistant {
 			continue
 		}
-		if strings.TrimSpace(entry.Text) == activeStream {
+		if _, ok := assistantFinalTextExtendsStream(activeStream, entry.Text); ok && isFinalAssistantProjectedEntry(entry) {
 			return true
 		}
 	}

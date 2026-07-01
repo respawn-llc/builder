@@ -864,8 +864,8 @@ func TestBootstrapRefreshRejectsStaleAuthoritativePageAfterLocalCommittedEvent(t
 	if got := updated.transcriptEntries[1].Text; got != "live commit" {
 		t.Fatalf("second transcript entry = %q, want live commit", got)
 	}
-	if strings.Count(stripANSIAndTrimRight(updated.view.CommittedOngoingProjection().Render(tui.TranscriptDivider)), "live commit") != 1 {
-		t.Fatalf("expected live commit exactly once after stale bootstrap refresh, got %q", stripANSIAndTrimRight(updated.view.CommittedOngoingProjection().Render(tui.TranscriptDivider)))
+	if strings.Count(stripANSIAndTrimRight(committedOngoingProjectionForTest(updated.view).Render(tui.TranscriptDivider)), "live commit") != 1 {
+		t.Fatalf("expected live commit exactly once after stale bootstrap refresh, got %q", stripANSIAndTrimRight(committedOngoingProjectionForTest(updated.view).Render(tui.TranscriptDivider)))
 	}
 }
 

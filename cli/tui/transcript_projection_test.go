@@ -15,97 +15,6 @@ func defaultProjectionViewState() TranscriptProjectionViewState {
 	return TranscriptProjectionViewState{ViewportWidth: 80, ViewportLines: 20, Theme: "dark"}
 }
 
-func TestCommittedOngoingProjectionRenderAppendDeltaFromAppendedEntry(t *testing.T) {
-	m := NewModel(WithPreviewLines(20))
-	m = updateModel(t, m, AppendTranscriptMsg{Role: "assistant", Text: "seed"})
-	previous := m.CommittedOngoingProjection()
-
-	m = updateModel(t, m, AppendTranscriptMsg{Role: "assistant", Text: "tail"})
-	current := m.CommittedOngoingProjection()
-	delta, ok := current.RenderAppendDeltaFrom(previous, TranscriptDivider)
-	if !ok {
-		t.Fatal("expected append-only committed projection delta")
-	}
-	if !strings.Contains(delta, "tail") {
-		t.Fatalf("expected delta to include appended tail, got %q", delta)
-	}
-	if strings.Contains(delta, "seed") {
-		t.Fatalf("expected delta to exclude already committed prefix, got %q", delta)
-	}
-}
-
-func TestCommittedOngoingProjectorCachesByRevisionAndWidth(t *testing.T) {
-	var projector CommittedOngoingProjector
-	entries := []TranscriptEntry{{Role: "assistant", Text: "seed"}}
-	key := CommittedOngoingProjectionKey{Revision: 7, Width: 80, Theme: "dark", EntryCount: len(entries)}
-
-	initial := projector.Project(entries, key)
-	entries[0].Text = "changed"
-	sameKey := projector.Project(entries, key)
-	if rendered := sameKey.Render(TranscriptDivider); !strings.Contains(rendered, "seed") || strings.Contains(rendered, "changed") {
-		t.Fatalf("expected unchanged revision/width to reuse cached projection, got %q", rendered)
-	}
-
-	key.Revision = 8
-	updated := projector.Project(entries, key)
-	if rendered := updated.Render(TranscriptDivider); !strings.Contains(rendered, "changed") || strings.Contains(rendered, "seed") {
-		t.Fatalf("expected advanced revision to rebuild projection, got %q", rendered)
-	}
-	if initial.Render(TranscriptDivider) == updated.Render(TranscriptDivider) {
-		t.Fatalf("expected projection to change after revision advance")
-	}
-}
-
-func TestCommittedOngoingProjectorDoesNotCacheWithoutRevision(t *testing.T) {
-	var projector CommittedOngoingProjector
-	entries := []TranscriptEntry{{Role: "assistant", Text: "seed"}}
-	key := CommittedOngoingProjectionKey{Width: 80, Theme: "dark", EntryCount: len(entries)}
-
-	_ = projector.Project(entries, key)
-	entries[0].Text = "changed"
-	updated := projector.Project(entries, key)
-	if rendered := updated.Render(TranscriptDivider); !strings.Contains(rendered, "changed") || strings.Contains(rendered, "seed") {
-		t.Fatalf("expected revisionless projection to rebuild, got %q", rendered)
-	}
-}
-
-func TestCommittedOngoingProjectorPreservesBaseOffset(t *testing.T) {
-	var projector CommittedOngoingProjector
-	entries := []TranscriptEntry{{Role: "user", Text: "prompt"}, {Role: "assistant", Text: "answer"}}
-	projection := projector.Project(entries, CommittedOngoingProjectionKey{
-		Revision:   3,
-		Width:      80,
-		BaseOffset: 42,
-		EntryCount: len(entries),
-	})
-
-	if len(projection.Blocks) != 2 {
-		t.Fatalf("expected two projection blocks, got %#v", projection.Blocks)
-	}
-	if projection.Blocks[0].EntryIndex != 42 || projection.Blocks[1].EntryIndex != 43 {
-		t.Fatalf("expected absolute entry indices from base offset, got %#v", projection.Blocks)
-	}
-}
-
-func TestCommittedOngoingProjectionRenderAppendDeltaFromAssistantCommentaryContinuation(t *testing.T) {
-	m := NewModel(WithPreviewLines(20))
-	m = updateModel(t, m, AppendTranscriptMsg{Role: "assistant", Text: "Decision: keep", Phase: clientui.MessagePhaseCommentary})
-	previous := m.CommittedOngoingProjection()
-
-	m = updateModel(t, m, AppendTranscriptMsg{Role: "assistant", Text: "going"})
-	current := m.CommittedOngoingProjection()
-	delta, ok := current.RenderAppendDeltaFrom(previous, TranscriptDivider)
-	if !ok {
-		t.Fatal("expected append-only committed projection delta")
-	}
-	if strings.Contains(delta, TranscriptDivider) {
-		t.Fatalf("expected assistant commentary continuation delta without divider, got %q", delta)
-	}
-	if !strings.Contains(delta, "going") {
-		t.Fatalf("expected delta to include appended assistant continuation, got %q", delta)
-	}
-}
-
 func TestRenderAssistantMarkdownProjectionMatchesCommittedAssistantEntry(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -140,7 +49,7 @@ func TestRenderAssistantMarkdownProjectionMatchesCommittedAssistantEntry(t *test
 				Text:  tt.text,
 				Phase: tt.phase,
 			}}
-			committed := ProjectCommittedOngoingTranscript(entries, "dark", tt.width).Lines(TranscriptDivider)
+			committed := ProjectCommittedOngoingTranscript(entries, "dark", tt.width, 0, false, 0, false).Lines(TranscriptDivider)
 			streamed := RenderAssistantMarkdownProjection(tt.text, "dark", tt.width)
 
 			if !reflect.DeepEqual(streamed, committed) {
@@ -153,7 +62,6 @@ func TestRenderAssistantMarkdownProjectionMatchesCommittedAssistantEntry(t *test
 func TestCommittedOngoingProjectionCommitFrontierWaitsForToolResult(t *testing.T) {
 	m := NewModel(WithPreviewLines(20))
 	m = updateModel(t, m, AppendTranscriptMsg{Role: "user", Text: "prompt"})
-	base := m.CommittedOngoingProjection()
 
 	m = updateModel(t, m, AppendTranscriptMsg{
 		Role:       "tool_call",
@@ -161,22 +69,15 @@ func TestCommittedOngoingProjectionCommitFrontierWaitsForToolResult(t *testing.T
 		ToolCallID: "call_1",
 		ToolCall:   &transcript.ToolCallMeta{ToolName: "shell", IsShell: true, Command: "pwd"},
 	})
-	pending := m.CommittedOngoingProjection()
+	pending := ProjectCommittedOngoingTranscript(m.transcriptInput.Entries, "dark", 80, 0, false, 0, false)
 	if rendered := pending.Render(TranscriptDivider); strings.Contains(rendered, "pwd") {
 		t.Fatalf("expected unresolved tool call to stay out of committed projection, got %q", rendered)
 	}
 
 	m = updateModel(t, m, AppendTranscriptMsg{Role: "tool_result_ok", Text: "/tmp", ToolCallID: "call_1"})
-	current := m.CommittedOngoingProjection()
-	delta, ok := current.RenderAppendDeltaFrom(base, TranscriptDivider)
-	if !ok {
-		t.Fatal("expected tool completion to extend committed projection")
-	}
-	if !strings.Contains(delta, "pwd") {
-		t.Fatalf("expected committed delta to include finalized tool call, got %q", delta)
-	}
-	if strings.Contains(delta, "prompt") {
-		t.Fatalf("expected committed delta to exclude previously emitted prompt, got %q", delta)
+	current := ProjectCommittedOngoingTranscript(m.transcriptInput.Entries, "dark", 80, 0, false, 0, false)
+	if rendered := current.Render(TranscriptDivider); !strings.Contains(rendered, "pwd") || !strings.Contains(rendered, "prompt") {
+		t.Fatalf("expected committed projection to include finalized tool pair and prompt, got %q", rendered)
 	}
 }
 
@@ -210,140 +111,6 @@ func TestPendingOngoingSnapshotLinesUsePerEntrySpinnerCallback(t *testing.T) {
 	}
 	if len(seen) != 2 || seen[0] != "call_alpha" || seen[1] != "call_beta" {
 		t.Fatalf("spinner callback entries = %+v, want call_alpha/call_beta", seen)
-	}
-}
-
-func TestRenderAppendDeltaFromIgnoresHiddenSourceIndexShifts(t *testing.T) {
-	previous := TranscriptProjection{Blocks: []TranscriptProjectionBlock{{
-		Role:         "user",
-		DividerGroup: "user",
-		EntryIndex:   0,
-		EntryEnd:     0,
-		Lines:        []string{"❯ trigger"},
-	}}}
-	current := TranscriptProjection{Blocks: []TranscriptProjectionBlock{
-		{
-			Role:         "user",
-			DividerGroup: "user",
-			EntryIndex:   3,
-			EntryEnd:     3,
-			Lines:        []string{"❯ trigger"},
-		},
-		{
-			Role:         "assistant",
-			DividerGroup: "assistant",
-			EntryIndex:   4,
-			EntryEnd:     4,
-			Lines:        []string{"❮ FINAL-CONTENT"},
-		},
-	}}
-
-	delta, ok := current.RenderAppendDeltaFrom(previous, TranscriptDivider)
-	if !ok {
-		t.Fatal("expected append delta to survive hidden source index shifts")
-	}
-	if !strings.Contains(delta, "FINAL-CONTENT") {
-		t.Fatalf("expected delta to include appended assistant content, got %q", delta)
-	}
-	if strings.Contains(delta, "trigger") {
-		t.Fatalf("expected delta to exclude already rendered user content, got %q", delta)
-	}
-}
-
-func TestNativeStableAppendDeltaIgnoresNonTerminalBlockMetadata(t *testing.T) {
-	previous := TranscriptProjection{Blocks: []TranscriptProjectionBlock{{
-		Role:         "assistant",
-		DividerGroup: "assistant",
-		EntryIndex:   12,
-		EntryEnd:     12,
-		Selectable:   true,
-		Expanded:     true,
-		Expandable:   true,
-		Lines:        []string{"❮ already emitted"},
-	}}}
-	current := TranscriptProjection{Blocks: []TranscriptProjectionBlock{
-		{
-			Role:         "assistant",
-			DividerGroup: "assistant",
-			EntryIndex:   15,
-			EntryEnd:     15,
-			Selectable:   false,
-			Expanded:     false,
-			Expandable:   false,
-			Lines:        []string{"❮ already emitted"},
-		},
-		{
-			Role:         "tool_shell_success",
-			DividerGroup: "tool",
-			EntryIndex:   16,
-			EntryEnd:     16,
-			Lines:        []string{"✓ ./scripts/test.sh"},
-		},
-	}}
-
-	delta, ok := current.RenderNativeStableAppendDeltaFrom(previous, TranscriptDivider)
-	if !ok {
-		t.Fatal("expected native stable append delta to ignore metadata native never emitted")
-	}
-	if strings.Contains(delta, "already emitted") {
-		t.Fatalf("expected native delta to exclude already emitted block, got %q", delta)
-	}
-	if !strings.Contains(delta, "./scripts/test.sh") {
-		t.Fatalf("expected native delta to include appended visible block, got %q", delta)
-	}
-	if _, ok := current.RenderAppendDeltaFrom(previous, TranscriptDivider); ok {
-		t.Fatal("expected UI append delta to keep using full block metadata equality")
-	}
-}
-
-func TestNativeStableSuffixPrefixOverlapIgnoresNonTerminalBlockMetadata(t *testing.T) {
-	previous := TranscriptProjection{Blocks: []TranscriptProjectionBlock{
-		{Role: "tool_shell_success", DividerGroup: "tool", Selectable: true, Expanded: true, Lines: []string{"✓ first"}},
-		{Role: "assistant", DividerGroup: "assistant", Selectable: true, Expanded: true, Lines: []string{"❮ overlap"}},
-	}}
-	current := TranscriptProjection{Blocks: []TranscriptProjectionBlock{
-		{Role: "assistant", DividerGroup: "assistant", Selectable: false, Expanded: false, Lines: []string{"❮ overlap"}},
-		{Role: "assistant", DividerGroup: "assistant", Lines: []string{"❮ appended"}},
-	}}
-
-	if got := current.SharedNativeStableSuffixPrefixBlockCount(previous); got != 1 {
-		t.Fatalf("expected native overlap across metadata-only differences, got %d", got)
-	}
-	if got := current.SharedSuffixPrefixBlockCount(previous); got != 0 {
-		t.Fatalf("expected UI overlap to preserve metadata equality, got %d", got)
-	}
-}
-
-func TestTranscriptProjectionSharedPrefixBlockCountStopsAtFirstDivergence(t *testing.T) {
-	previous := TranscriptProjection{Blocks: []TranscriptProjectionBlock{
-		{Role: "user", DividerGroup: "user", Lines: []string{"❯ prompt"}},
-		{Role: "assistant", DividerGroup: "assistant", Lines: []string{"❮ before"}},
-		{Role: "user", DividerGroup: "user", Lines: []string{"❯ later"}},
-	}}
-	current := TranscriptProjection{Blocks: []TranscriptProjectionBlock{
-		{Role: "user", DividerGroup: "user", Lines: []string{"❯ prompt"}},
-		{Role: "assistant", DividerGroup: "assistant", Lines: []string{"❮ after"}},
-		{Role: "user", DividerGroup: "user", Lines: []string{"❯ later"}},
-	}}
-
-	if got := current.SharedPrefixBlockCount(previous); got != 1 {
-		t.Fatalf("expected shared prefix to stop before divergent assistant block, got %d", got)
-	}
-}
-
-func TestTranscriptProjectionSharedPrefixBlockCountUsesShorterProjectionLength(t *testing.T) {
-	previous := TranscriptProjection{Blocks: []TranscriptProjectionBlock{
-		{Role: "assistant", DividerGroup: "assistant", Lines: []string{"❮ one"}},
-		{Role: "assistant", DividerGroup: "assistant", Lines: []string{"❮ two"}},
-	}}
-	current := TranscriptProjection{Blocks: []TranscriptProjectionBlock{
-		{Role: "assistant", DividerGroup: "assistant", Lines: []string{"❮ one"}},
-		{Role: "assistant", DividerGroup: "assistant", Lines: []string{"❮ two"}},
-		{Role: "assistant", DividerGroup: "assistant", Lines: []string{"❮ three"}},
-	}}
-
-	if got := current.SharedPrefixBlockCount(previous); got != 2 {
-		t.Fatalf("expected shared prefix to include all shorter matching blocks, got %d", got)
 	}
 }
 
@@ -382,7 +149,7 @@ func TestCommittedOngoingProjectionPreservesSuccessStateForEmptyToolResult(t *te
 		{Role: "assistant", Text: "continued after empty result"},
 	}
 
-	projection := m.CommittedOngoingProjectionForEntries(entries)
+	projection := ProjectCommittedOngoingTranscript(entries, "dark", 80, 0, false, 0, false)
 	if len(projection.Blocks) < 3 {
 		t.Fatalf("expected patch success block plus assistant tail, got %#v", projection.Blocks)
 	}
@@ -441,7 +208,7 @@ func TestCommittedOngoingProjectionPreservesWebSearchSuccessState(t *testing.T) 
 		{Role: "tool_result_ok", Text: `{"type":"web_search_call","status":"completed"}`, ToolCallID: "call_web"},
 	}
 
-	projection := m.CommittedOngoingProjectionForEntries(entries)
+	projection := ProjectCommittedOngoingTranscript(entries, "dark", 80, 0, false, 0, false)
 	if len(projection.Blocks) != 1 {
 		t.Fatalf("expected a single merged web search success block, got %#v", projection.Blocks)
 	}

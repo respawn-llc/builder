@@ -55,6 +55,32 @@ func TestActiveAssistantFinalizerGapPreservesRecentTailWhenDetailPinned(t *testi
 	}
 }
 
+func TestActiveAssistantFinalizerGapRejectsSameStepNonPrefix(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	m.windowSizeKnown = true
+	m.termWidth = 100
+	m.termHeight = 20
+	m.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail, SkipDetailWarmup: true})
+	m.appendActiveAssistantStreamDelta("step-1", "hello")
+
+	_, handled := uiRuntimeAdapter{model: m}.applyActiveAssistantFinalizerGapAsRecentTail(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        40,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        41,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "goodbye"}},
+	})
+
+	if handled {
+		t.Fatal("same-step non-prefix finalizer gap must not bypass prefix validation")
+	}
+	if got := m.activeAssistantStreamText(); got != "hello" {
+		t.Fatalf("active stream text = %q, want preserved hello", got)
+	}
+}
+
 func TestActiveAssistantFinalizerGapPreservesPinnedDetailWindow(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.windowSizeKnown = true
@@ -282,13 +308,10 @@ func TestReduceProjectedTranscriptEventAppendsCommittedSuffix(t *testing.T) {
 	reduction := reduceProjectedTranscriptEvent(state, clientui.Event{
 		Kind:                       clientui.EventAssistantMessage,
 		CommittedTranscriptChanged: true,
-		CommittedEntryStart:        0,
+		CommittedEntryStart:        1,
 		CommittedEntryStartSet:     true,
 		TranscriptRevision:         2,
-		TranscriptEntries: []clientui.ChatEntry{
-			{Role: "user", Text: "prompt"},
-			{Role: "assistant", Text: "answer"},
-		},
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "answer"}},
 	})
 
 	if reduction.decision != projectedTranscriptDecisionApply || reduction.plan.mode != projectedTranscriptEntryPlanAppend {

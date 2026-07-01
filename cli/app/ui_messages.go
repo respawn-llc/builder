@@ -229,6 +229,7 @@ const (
 	runtimeTranscriptSyncCauseDirtyFollowUp           runtimeTranscriptSyncCause = "dirty_follow_up"
 	runtimeTranscriptSyncCauseContinuityRecovery      runtimeTranscriptSyncCause = "continuity_recovery"
 	runtimeTranscriptSyncCauseManualTranscriptRefresh runtimeTranscriptSyncCause = "manual_transcript_refresh"
+	runtimeTranscriptSyncCauseNativeScratch           runtimeTranscriptSyncCause = "native_scratch"
 )
 
 type runtimeMainViewRefreshCause string

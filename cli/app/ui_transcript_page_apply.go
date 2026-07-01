@@ -86,6 +86,10 @@ func (a uiRuntimeAdapter) applyProjectedExecutionTarget(target clientui.SessionE
 }
 
 func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.TranscriptPageRequest, page clientui.TranscriptPage, recoveryCause clientui.TranscriptRecoveryCause) tea.Cmd {
+	return a.applyRuntimeTranscriptPageWithSyncCause(req, page, runtimeTranscriptSyncCauseCommittedConversation, recoveryCause)
+}
+
+func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithSyncCause(req clientui.TranscriptPageRequest, page clientui.TranscriptPage, syncCause runtimeTranscriptSyncCause, recoveryCause clientui.TranscriptRecoveryCause) tea.Cmd {
 	m := a.model
 	m.logTranscriptPageDiag("transcript.diag.client.apply_page_start", req, page, map[string]string{"path": "hydrate", "recovery_cause": string(recoveryCause)})
 	if len(m.startupCmds) > 0 {
@@ -106,16 +110,8 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 	}
 	m.conversationFreshness = page.ConversationFreshness
 	nativeSurfaceConfigured := m.nativeSurfaceConfigured()
-	if nativeSurfaceConfigured && !m.nativeResizeRehydratePending() {
+	if nativeSurfaceConfigured && !m.nativeScratchHydrationPending && !m.nativeResizeRehydratePending() {
 		m.ensureNativeStableSurfaceForCurrentGeometry()
-	}
-	nativeStableReady := nativeSurfaceConfigured && !m.nativeResizeRehydratePending() && m.nativeStableSurfaceReadyForCurrentGeometry()
-	nativeAssistantStreamActive := nativeSurfaceConfigured && m.nativeSurface.AssistantStreaming()
-	nativeAssistantStreamWasIncomplete := m.nativeAssistantStreamIncomplete
-	nativeAssistantStreamText := m.activeAssistantStreamText()
-	previousNativeStableProjection := tui.TranscriptProjection{}
-	if nativeSurfaceConfigured {
-		previousNativeStableProjection = m.nativeDeliveredStableProjection
 	}
 	reduction := reduceRuntimeTranscriptPage(newRuntimeTranscriptPageState(runtimeTranscriptPageSnapshotFromModel(m)), req, page, recoveryCause)
 	pageReq := reduction.request
@@ -220,16 +216,55 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithRecovery(req clientui.Tr
 	if previousWindowTitle != sessionTitle(m.sessionName) {
 		cmds = append(cmds, tea.SetWindowTitle(sessionTitle(m.sessionName)))
 	}
-	if nativeSurfaceConfigured && reduction.shouldApplyRecentTail {
-		currentNativeStableProjection := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
-		if err := m.deliverNativeStableProjectionChange(nativeStableRecoveryReconcileIntent("deliverNativeStableProjectionChange"), previousNativeStableProjection, currentNativeStableProjection, nativeStableReady, nativeAssistantStreamActive, nativeAssistantStreamWasIncomplete, nativeAssistantStreamText); err != nil {
-			cmds = append(cmds, m.nativeSurfaceErrorCmd("steer committed transcript", err))
+	if nativeSurfaceConfigured && reduction.shouldApplyRecentTail && m.shouldAppendNativeTranscriptPage(syncCause, recoveryCause) {
+		if m.nativeSurfaceConfigured() && !m.nativeStableSurfaceReadyForCurrentGeometry() && !m.nativeResizeRehydratePending() {
+			m.ensureNativeStableSurfaceForCurrentGeometry()
+		}
+		nativeScratchPageEntries := cloneTUITranscriptEntries(m.transcriptEntries)
+		nativeScratchSupersedesPending := syncCause == runtimeTranscriptSyncCauseNativeScratch || recoveryCause == clientui.TranscriptRecoveryCauseStreamGap
+		if nativeScratchSupersedesPending {
+			m.nativePendingEmissions = nil
+		}
+		if m.nativeStableOutputReadyIgnoringScratch() {
+			if err := m.appendNativeScratchTranscript(nativeScratchPageEntries); err != nil {
+				if nativeScratchSupersedesPending {
+					cmds = append(cmds, m.nativeScratchHydrationFailed(err))
+				} else {
+					cmds = append(cmds, m.nativeSurfaceErrorCmd("append native transcript page", err))
+				}
+			} else {
+				m.nativeScratchHydrationPending = false
+				m.nativeAssistantStreamIncomplete = page.Streaming != ""
+			}
+			if !nativeScratchSupersedesPending && !m.nativeScratchHydrationPending {
+				cmds = append(cmds, m.drainNativePendingEmissions())
+			}
+		} else {
+			m.nativeScratchHydrationPending = true
+			m.nativeAssistantStreamIncomplete = page.Streaming != ""
+			if err := m.queueNativeEmission(nativePendingEmission{kind: nativePendingEmissionScratch, entries: nativeScratchPageEntries, fatalOnFailure: nativeScratchSupersedesPending}); err != nil {
+				if nativeScratchSupersedesPending {
+					cmds = append(cmds, m.nativeScratchHydrationFailed(err))
+				} else {
+					cmds = append(cmds, m.nativeSurfaceErrorCmd("queue native scratch page", err))
+				}
+			}
 		}
 	}
 	if nativeFinishErr != nil {
 		cmds = append(cmds, m.nativeSurfaceErrorCmd("finish assistant stream", nativeFinishErr))
 	}
 	return sequenceCmds(cmds...)
+}
+
+func (m *uiModel) shouldAppendNativeTranscriptPage(syncCause runtimeTranscriptSyncCause, recoveryCause clientui.TranscriptRecoveryCause) bool {
+	if m == nil {
+		return false
+	}
+	if syncCause == runtimeTranscriptSyncCauseNativeScratch || recoveryCause == clientui.TranscriptRecoveryCauseStreamGap {
+		return true
+	}
+	return syncCause == runtimeTranscriptSyncCauseBootstrap && !m.nativeImmutableTranscriptWritten
 }
 
 func (a uiRuntimeAdapter) applyAuthoritativeRecentTailPage(page clientui.TranscriptPage, entries []tui.TranscriptEntry, preserveLiveReasoning bool) {

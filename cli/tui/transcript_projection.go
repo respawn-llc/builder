@@ -13,10 +13,7 @@ type TranscriptProjection struct {
 	Blocks []TranscriptProjectionBlock
 }
 
-// CommittedOngoingProjectionKey identifies the render-affecting inputs for the
-// committed ongoing transcript projection. Revision must advance when transcript
-// content changes; revisionless keys intentionally skip projection caching.
-type CommittedOngoingProjectionKey struct {
+type committedOngoingProjectionCacheKey struct {
 	Revision              int64
 	Width                 int
 	Theme                 string
@@ -25,18 +22,6 @@ type CommittedOngoingProjectionKey struct {
 	CompactDetail         bool
 	SelectedEntry         int
 	SelectedEntryIsActive bool
-}
-
-// CommittedOngoingProjector reuses the ongoing transcript renderer and caches
-// committed projections by transcript revision and terminal width.
-type CommittedOngoingProjector struct {
-	key           CommittedOngoingProjectionKey
-	projection    TranscriptProjection
-	projectionSet bool
-	renderer      Model
-	rendererSet   bool
-	rendererTheme string
-	rendererWidth int
 }
 
 type TranscriptProjectionInput struct {
@@ -87,7 +72,7 @@ type TranscriptViewProjector struct {
 	detailViewKey        TranscriptViewProjectionKey
 	detailViewProjection TranscriptViewProjection
 	detailViewSet        bool
-	ongoingKey           CommittedOngoingProjectionKey
+	ongoingKey           committedOngoingProjectionCacheKey
 	ongoingLines         []TranscriptProjectionLine
 	ongoingGroup         string
 	ongoingSet           bool
@@ -210,16 +195,14 @@ type TranscriptProjectionLine struct {
 }
 
 type TranscriptProjectionBlock struct {
-	Role            RenderIntent
-	DividerGroup    string
-	EntryIndex      int
-	EntryEnd        int
-	SourceKey       string
-	LocalAppendOnly bool
-	Selectable      bool
-	Expanded        bool
-	Expandable      bool
-	Lines           []string
+	Role         RenderIntent
+	DividerGroup string
+	EntryIndex   int
+	EntryEnd     int
+	Selectable   bool
+	Expanded     bool
+	Expandable   bool
+	Lines        []string
 }
 
 func (p TranscriptProjection) Empty() bool {
@@ -233,16 +216,14 @@ func (p TranscriptProjection) Clone() TranscriptProjection {
 	blocks := make([]TranscriptProjectionBlock, 0, len(p.Blocks))
 	for _, block := range p.Blocks {
 		blocks = append(blocks, TranscriptProjectionBlock{
-			Role:            block.Role,
-			DividerGroup:    block.DividerGroup,
-			EntryIndex:      block.EntryIndex,
-			EntryEnd:        block.EntryEnd,
-			SourceKey:       block.SourceKey,
-			LocalAppendOnly: block.LocalAppendOnly,
-			Selectable:      block.Selectable,
-			Expanded:        block.Expanded,
-			Expandable:      block.Expandable,
-			Lines:           append([]string(nil), block.Lines...),
+			Role:         block.Role,
+			DividerGroup: block.DividerGroup,
+			EntryIndex:   block.EntryIndex,
+			EntryEnd:     block.EntryEnd,
+			Selectable:   block.Selectable,
+			Expanded:     block.Expanded,
+			Expandable:   block.Expandable,
+			Lines:        append([]string(nil), block.Lines...),
 		})
 	}
 	return TranscriptProjection{Blocks: blocks}
@@ -350,173 +331,6 @@ func (p TranscriptProjection) RenderWithBlockSeparator(separator string) string 
 	return strings.Join(lines, "\n")
 }
 
-func (p TranscriptProjection) RenderAppendDeltaFrom(previous TranscriptProjection, divider string) (string, bool) {
-	if len(previous.Blocks) == 0 {
-		return p.Render(divider), true
-	}
-	if len(previous.Blocks) > len(p.Blocks) {
-		return "", false
-	}
-	for idx, prior := range previous.Blocks {
-		if !prior.equal(p.Blocks[idx]) {
-			return "", false
-		}
-	}
-	if len(previous.Blocks) == len(p.Blocks) {
-		return "", true
-	}
-	return p.renderFromBlock(len(previous.Blocks), divider), true
-}
-
-func (p TranscriptProjection) RenderNativeStableAppendDeltaFrom(previous TranscriptProjection, divider string) (string, bool) {
-	if len(previous.Blocks) == 0 {
-		return p.Render(divider), true
-	}
-	if len(previous.Blocks) > len(p.Blocks) {
-		return "", false
-	}
-	for idx, prior := range previous.Blocks {
-		if !prior.nativeStableEqual(p.Blocks[idx]) {
-			return "", false
-		}
-	}
-	if len(previous.Blocks) == len(p.Blocks) {
-		return "", true
-	}
-	return p.renderFromBlock(len(previous.Blocks), divider), true
-}
-
-func (p TranscriptProjection) SharedPrefixBlockCount(other TranscriptProjection) int {
-	limit := min(len(p.Blocks), len(other.Blocks))
-	for idx := 0; idx < limit; idx++ {
-		if !p.Blocks[idx].equal(other.Blocks[idx]) {
-			return idx
-		}
-	}
-	return limit
-}
-
-func (p TranscriptProjection) SharedNativeStablePrefixBlockCount(other TranscriptProjection) int {
-	limit := min(len(p.Blocks), len(other.Blocks))
-	for idx := 0; idx < limit; idx++ {
-		if !p.Blocks[idx].nativeStableEqual(other.Blocks[idx]) {
-			return idx
-		}
-	}
-	return limit
-}
-
-func (p TranscriptProjection) SharedNativeStableSuffixPrefixBlockCount(previous TranscriptProjection) int {
-	limit := min(len(p.Blocks), len(previous.Blocks))
-	for overlap := limit; overlap > 0; overlap-- {
-		start := len(previous.Blocks) - overlap
-		matches := true
-		for idx := 0; idx < overlap; idx++ {
-			if !p.Blocks[idx].nativeStableEqual(previous.Blocks[start+idx]) {
-				matches = false
-				break
-			}
-		}
-		if matches {
-			return overlap
-		}
-	}
-	return 0
-}
-
-func (p TranscriptProjection) SharedSuffixPrefixBlockCount(previous TranscriptProjection) int {
-	limit := min(len(p.Blocks), len(previous.Blocks))
-	for overlap := limit; overlap > 0; overlap-- {
-		start := len(previous.Blocks) - overlap
-		matches := true
-		for idx := 0; idx < overlap; idx++ {
-			if !p.Blocks[idx].equal(previous.Blocks[start+idx]) {
-				matches = false
-				break
-			}
-		}
-		if matches {
-			return overlap
-		}
-	}
-	return 0
-}
-
-func (p TranscriptProjection) LinesFromBlock(start int, dividerText string) []TranscriptProjectionLine {
-	if start < 0 {
-		start = 0
-	}
-	if start >= len(p.Blocks) {
-		return nil
-	}
-	lines := make([]TranscriptProjectionLine, 0, (len(p.Blocks)-start)*2)
-	for idx := start; idx < len(p.Blocks); idx++ {
-		if idx > 0 && p.Blocks[idx-1].DividerGroup != p.Blocks[idx].DividerGroup {
-			lines = append(lines, TranscriptProjectionLine{Kind: VisibleLineDivider, Text: dividerText})
-		}
-		for _, line := range p.Blocks[idx].Lines {
-			lines = append(lines, TranscriptProjectionLine{Kind: VisibleLineContent, Text: line})
-		}
-	}
-	return lines
-}
-
-func (p TranscriptProjection) renderFromBlock(start int, divider string) string {
-	if start < 0 {
-		start = 0
-	}
-	if start >= len(p.Blocks) {
-		return ""
-	}
-	lines := make([]string, 0, (len(p.Blocks)-start)*2)
-	for idx := start; idx < len(p.Blocks); idx++ {
-		if idx > 0 && p.Blocks[idx-1].DividerGroup != p.Blocks[idx].DividerGroup {
-			lines = append(lines, divider)
-		}
-		lines = append(lines, p.Blocks[idx].Lines...)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (b TranscriptProjectionBlock) equal(other TranscriptProjectionBlock) bool {
-	if b.Role != other.Role || b.DividerGroup != other.DividerGroup || len(b.Lines) != len(other.Lines) {
-		return false
-	}
-	if b.Selectable != other.Selectable || b.Expanded != other.Expanded || b.Expandable != other.Expandable {
-		return false
-	}
-	for idx := range b.Lines {
-		if b.Lines[idx] != other.Lines[idx] {
-			return false
-		}
-	}
-	return true
-}
-
-func (b TranscriptProjectionBlock) nativeStableEqual(other TranscriptProjectionBlock) bool {
-	if b.Role != other.Role || b.DividerGroup != other.DividerGroup || len(b.Lines) != len(other.Lines) {
-		return false
-	}
-	for idx := range b.Lines {
-		if b.Lines[idx] != other.Lines[idx] {
-			return false
-		}
-	}
-	return true
-}
-
-func (m Model) CommittedOngoingProjection() TranscriptProjection {
-	return m.CommittedOngoingProjectionForEntries(m.transcriptInput.Entries)
-}
-
-func (m Model) CommittedOngoingProjectionForEntries(entries []TranscriptEntry) TranscriptProjection {
-	target := m.transcriptInput.Entries
-	if len(entries) > 0 {
-		target = entries
-	}
-	return projectCommittedOngoingTranscriptWithRenderer(m, target)
-}
-
 func (m Model) TranscriptProjectionInput() TranscriptProjectionInput {
 	input := m.transcriptProjectionInput()
 	input.Entries = cloneTranscriptEntries(input.Entries)
@@ -591,7 +405,7 @@ func ProjectTranscriptViews(input TranscriptProjectionInput, state TranscriptPro
 }
 
 func (p *TranscriptViewProjector) CommittedOngoingLines(input TranscriptProjectionInput, state TranscriptProjectionViewState) ([]TranscriptProjectionLine, string) {
-	key := CommittedOngoingProjectionKey{
+	key := committedOngoingProjectionCacheKey{
 		Revision:              input.EntriesRevision,
 		Width:                 state.ViewportWidth,
 		Theme:                 state.Theme,
@@ -601,7 +415,7 @@ func (p *TranscriptViewProjector) CommittedOngoingLines(input TranscriptProjecti
 		SelectedEntry:         state.SelectedEntry,
 		SelectedEntryIsActive: state.SelectedEntryIsActive,
 	}
-	key = normalizeCommittedOngoingProjectionKey(key, len(input.Entries))
+	key = normalizeCommittedOngoingProjectionCacheKey(key, len(input.Entries))
 	if key.Revision > 0 && p != nil && p.ongoingSet && p.ongoingKey == key {
 		return p.ongoingLines, p.ongoingGroup
 	}
@@ -917,37 +731,24 @@ func transcriptViewProjectionKeysEqual(left TranscriptViewProjectionKey, right T
 
 // ProjectCommittedOngoingTranscript renders committed ongoing transcript entries
 // without requiring callers to construct a throwaway tui.Model.
-func ProjectCommittedOngoingTranscript(entries []TranscriptEntry, theme string, width int) TranscriptProjection {
-	var projector CommittedOngoingProjector
-	return projector.Project(entries, CommittedOngoingProjectionKey{
-		Theme:      theme,
-		Width:      width,
-		EntryCount: len(entries),
-	})
-}
-
-// Project returns the committed ongoing projection for entries, reusing a cached
-// projection when the key still matches.
-func (p *CommittedOngoingProjector) Project(entries []TranscriptEntry, key CommittedOngoingProjectionKey) TranscriptProjection {
-	key = normalizeCommittedOngoingProjectionKey(key, len(entries))
-	cacheable := key.Revision > 0
-	if cacheable && p != nil && p.projectionSet && p.key == key {
-		return p.projection.Clone()
-	}
+func ProjectCommittedOngoingTranscript(entries []TranscriptEntry, theme string, width int, baseOffset int, compactDetail bool, selectedEntry int, selectedEntryActive bool) TranscriptProjection {
+	key := normalizeCommittedOngoingProjectionCacheKey(committedOngoingProjectionCacheKey{
+		Theme:                 theme,
+		Width:                 width,
+		BaseOffset:            baseOffset,
+		EntryCount:            len(entries),
+		CompactDetail:         compactDetail,
+		SelectedEntry:         selectedEntry,
+		SelectedEntryIsActive: selectedEntryActive,
+	}, len(entries))
 	renderer := transcriptProjectionRenderer(key.Theme, key.Width, key.BaseOffset)
-	if p != nil {
-		renderer = p.rendererFor(key.Theme, key.Width, key.BaseOffset)
-	}
-	projection := projectCommittedOngoingTranscriptWithRenderer(renderer, entries)
-	if cacheable && p != nil {
-		p.key = key
-		p.projection = projection.Clone()
-		p.projectionSet = true
-	}
-	return projection
+	renderer.compactDetail = key.CompactDetail
+	renderer.selectedTranscriptEntry = key.SelectedEntry
+	renderer.selectedTranscriptActive = key.SelectedEntryIsActive
+	return projectCommittedOngoingTranscriptWithRenderer(renderer, entries)
 }
 
-func normalizeCommittedOngoingProjectionKey(key CommittedOngoingProjectionKey, entryCount int) CommittedOngoingProjectionKey {
+func normalizeCommittedOngoingProjectionCacheKey(key committedOngoingProjectionCacheKey, entryCount int) committedOngoingProjectionCacheKey {
 	key.Theme = sharedtheme.Resolve(key.Theme)
 	if key.Width <= 0 {
 		key.Width = 120
@@ -956,21 +757,6 @@ func normalizeCommittedOngoingProjectionKey(key CommittedOngoingProjectionKey, e
 		key.EntryCount = entryCount
 	}
 	return key
-}
-
-func (p *CommittedOngoingProjector) rendererFor(theme string, width int, baseOffset int) Model {
-	theme = sharedtheme.Resolve(theme)
-	if width <= 0 {
-		width = 120
-	}
-	if !p.rendererSet || p.rendererTheme != theme || p.rendererWidth != width {
-		p.renderer = transcriptProjectionRenderer(theme, width, baseOffset)
-		p.rendererSet = true
-		p.rendererTheme = theme
-		p.rendererWidth = width
-	}
-	p.renderer.transcriptInput.BaseOffset = baseOffset
-	return p.renderer
 }
 
 func transcriptProjectionRenderer(theme string, width int, baseOffset int) Model {

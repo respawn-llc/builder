@@ -451,8 +451,8 @@ func TestHydratingClientAndLiveClientConvergeWithoutDuplicateCommittedRows(t *te
 	hydrating = next.(*uiModel)
 	_ = finalCmd
 
-	hydratingCommitted := stripANSIAndTrimRight(hydrating.view.CommittedOngoingProjection().Render(tui.TranscriptDivider))
-	liveCommitted := stripANSIAndTrimRight(live.view.CommittedOngoingProjection().Render(tui.TranscriptDivider))
+	hydratingCommitted := stripANSIAndTrimRight(committedOngoingProjectionForTest(hydrating.view).Render(tui.TranscriptDivider))
+	liveCommitted := stripANSIAndTrimRight(committedOngoingProjectionForTest(live.view).Render(tui.TranscriptDivider))
 	if got := len(hydrating.transcriptEntries); got != 2 {
 		t.Fatalf("hydrating client transcript entry count = %d, want 2", got)
 	}

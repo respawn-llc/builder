@@ -196,6 +196,9 @@ func runtimeTranscriptSyncRequestForPage(request clientui.TranscriptPageRequest,
 		priority:           10,
 	}
 	switch syncCause {
+	case runtimeTranscriptSyncCauseNativeScratch:
+		req.class = runtimeSyncPolicyClassAllowed
+		req.priority = 100
 	case runtimeTranscriptSyncCauseContinuityRecovery:
 		req.class = runtimeSyncPolicyClassAllowed
 		req.priority = 100
@@ -505,6 +508,9 @@ func (m *uiModel) handleRuntimeTranscriptRefreshed(msg runtimeTranscriptRefreshe
 			"recovery_cause": string(msg.recoveryCause),
 			"err":            msg.err.Error(),
 		}))
+		if activeReq.syncCause == runtimeTranscriptSyncCauseNativeScratch || activeReq.recoveryCause == clientui.TranscriptRecoveryCauseStreamGap {
+			return m.nativeScratchHydrationFailed(msg.err)
+		}
 		retryCmd := m.scheduleRuntimeTranscriptRetryForRequest(activeReq)
 		resumeCmd := m.resumeRuntimeEventsAfterHydrationIfUnowned()
 		drain := m.drainPendingRuntimeTranscriptSync()
@@ -530,7 +536,7 @@ func (m *uiModel) handleRuntimeTranscriptRefreshed(msg runtimeTranscriptRefreshe
 	if recovered {
 		m.logf("ui.runtime.transcript.recovered token=%d", msg.token)
 	}
-	applyCmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(msg.req, msg.transcript, msg.recoveryCause)
+	applyCmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithSyncCause(msg.req, msg.transcript, activeReq.syncCause, msg.recoveryCause)
 	resumeCmd := m.resumeRuntimeEventsAfterHydrationIfUnowned()
 	drain := m.drainPendingRuntimeTranscriptSync()
 	if drain.started {

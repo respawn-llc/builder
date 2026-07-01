@@ -18,7 +18,7 @@ func TestProjectedCommittedGoalFeedbackAppendsImmediately(t *testing.T) {
 	m.windowSizeKnown = true
 	m.forwardToView(tui.SetViewportSizeMsg{Width: 100, Lines: 20})
 
-	cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+	cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
 		Kind:                       clientui.EventConversationUpdated,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         1,
@@ -60,7 +60,7 @@ func TestProjectedAssistantMessageUsesCommittedEntryStartWhenPersistedToolCallsS
 		_ = collectCmdMessages(t, cmd)
 	}
 
-	cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+	cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
 		Kind:                       clientui.EventAssistantMessage,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         11,
@@ -100,7 +100,7 @@ func TestProjectedToolCallStartedUsesCommittedEntryStartWithinSharedCommittedCou
 		_ = collectCmdMessages(t, cmd)
 	}
 
-	cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+	cmd, mutated, needsHydration, _ := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
 		Kind:                       clientui.EventToolCallStarted,
 		CommittedTranscriptChanged: true,
 		TranscriptRevision:         11,

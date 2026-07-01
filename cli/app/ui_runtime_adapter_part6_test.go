@@ -127,7 +127,7 @@ func TestProjectedAssistantMessageMergesDeferredCommittedUserFlushWithoutHydrati
 	}
 }
 
-func TestProjectedAssistantMessageReplacesNonTailCommittedRangeWithoutHydration(t *testing.T) {
+func TestProjectedAssistantMessageHydratesNonTailCommittedRange(t *testing.T) {
 	client := &runtimeControlFakeClient{}
 	m := newProjectedClosedUIModel(client)
 	m.termWidth = 100
@@ -157,23 +157,27 @@ func TestProjectedAssistantMessageReplacesNonTailCommittedRangeWithoutHydration(
 		}},
 	}).
 		cmd
+	hydration := false
 	for _, msg := range collectCmdMessages(t, cmd) {
 		if _, ok := msg.(runtimeTranscriptRefreshedMsg); ok {
-			t.Fatalf("did not expect non-tail committed assistant replacement to trigger hydration, got %+v", msg)
+			hydration = true
 		}
+	}
+	if !hydration {
+		t.Fatal("expected non-tail committed assistant replacement to trigger hydration")
 	}
 	if got := len(m.transcriptEntries); got != 3 {
 		t.Fatalf("transcript entry count = %d, want 3", got)
 	}
-	if got := m.transcriptEntries[1].Text; got != "reviewed final" {
-		t.Fatalf("replaced assistant text = %q, want reviewed final", got)
+	if got := m.transcriptEntries[1].Text; got != "stale final" {
+		t.Fatalf("assistant text = %q, want stale final before hydration applies", got)
 	}
 	if got := m.transcriptEntries[2].Role; got != "reviewer_status" {
 		t.Fatalf("suffix role = %q, want reviewer_status", got)
 	}
-	committed := stripANSIAndTrimRight(m.view.CommittedOngoingProjection().Render(tui.TranscriptDivider))
-	if !containsInOrder(committed, "seed", "reviewed final", "Supervisor ran: no changes.") {
-		t.Fatalf("expected committed ongoing surface to keep reviewer suffix after assistant replacement, got %q", committed)
+	committed := stripANSIAndTrimRight(committedOngoingProjectionForTest(m.view).Render(tui.TranscriptDivider))
+	if !containsInOrder(committed, "seed", "stale final", "Supervisor ran: no changes.") {
+		t.Fatalf("expected committed ongoing surface unchanged before hydration, got %q", committed)
 	}
 }
 

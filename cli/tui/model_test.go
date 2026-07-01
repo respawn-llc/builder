@@ -809,7 +809,7 @@ func TestOngoingAskQuestionsKeepModelOrderAndSeparateToolGroup(t *testing.T) {
 		{Role: "tool_result_ok", ToolCallID: "call_first", Text: "first answer", CondensedText: "first answer"},
 	}
 
-	rendered := ProjectCommittedOngoingTranscript(entries, "dark", 80).Render(TranscriptDivider)
+	rendered := ProjectCommittedOngoingTranscript(entries, "dark", 80, 0, false, 0, false).Render(TranscriptDivider)
 	plain := plainTranscript(rendered)
 	if !containsInOrder(plain, "? First question?", "└ first answer", "$ pwd", "? Second question?", "└ second answer") {
 		t.Fatalf("expected questions emitted in model tool-call order, got %q", plain)
