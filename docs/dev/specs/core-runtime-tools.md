@@ -2,33 +2,24 @@
 
 ## Product Scope
 
-- Kent is a professional coding agent focused on output quality, speed, long-running work, and transparent activity.
-- Architecture stays composable and pluggable with low-friction extension points.
-- Full-access execution is the v1 default; there is no default sandbox.
-- The working CLI name is `kent` and should remain easy to rename.
+- There is and will not be virtualization / sandboxing in Kent. Kent ships Client-server architecture that enables true sandboxing (remote machine / Docker).
+- The product name is `Kent` and should remain easy to rename.
 - Public docs use Astro + Starlight from `docs/`, deploy as static Cloudflare Pages.
 
 ## Client/Server Boundary
 
-- Server owns durable lifecycle state, lifecycle mutations, and canonical lifecycle event streams.
-- CLI/TUI consumes client-facing DTOs and shared service clients. It does not own alternate durable/runtime lifecycle flows for embedded-local mode.
-- Embedded-local mode adapts through the same loopback service/client boundary as remote/shared-server mode. Direct in-process engine, broker, process, auth, or project objects may exist only behind server-owned adapters.
-- `shared/clientui` is a DTO/read-model boundary only. Runtime-event state transitions, pending-input policy, reasoning-stream presentation, activity transitions, transcript-sync commands, background notices, and prompt-history commands are owned by CLI packages.
-- `shared/serverapi` is a wire-contract package only: serializable request/response DTOs, validation helpers, typed wire errors, stream/progress DTOs, and route-facing value contracts.
-- Server-owned service interfaces, concrete service implementations, runtime handles, headless launchers, logging/timeout policy, lifecycle orchestration, and close/drop semantics must not live in `shared/serverapi`.
-- In-process route service interfaces live in `shared/apicontract`. That package is the narrow loopback boundary for shared clients/server adapters and contains route-shaped interfaces with no execution policy.
-- CLI production packages must not import `server/*` directly.
+- Server owns all tool calling, data persistence, agentic loop, network (API/provider) communication logic. 
+- Server-owned service interfaces, concrete service implementations, runtime handles, headless launchers, logging/timeout policy, lifecycle orchestration, and close/drop semantics must not live outside server-scoped code. CLI/GUI packages must not import `server/*` directly.
 - User-visible lifecycle side effects trigger at one client-facing accepted-event boundary, not inside only one transport/runtime path.
-- Any migration paths should be removed instead of preserved as compatibility shims. Breaking API/protocol changes are acceptable when documented and surfaced clearly.
+- Any migration paths should be removed instead of preserved as compatibility shims. Breaking API/protocol changes are acceptable after confirming with the human.
 
 ## Skills And Generated Assets
 
 - Skills are discovered from Kent-owned roots: `<persistence-root>/skills` (default `~/.kent/skills`), workspace `.kent/skills`, and generated embedded skills under `<persistence-root>/.generated/skills`. The global and generated roots follow the selected persistence root; only the workspace root stays workspace-relative. Global `AGENTS.md` and the global system-prompt file resolve under the same `<persistence-root>` (an empty value falls back to `~/.kent`).
-- First-run onboarding may optionally symlink skills and slash-command roots from supported source tools into Kent's layout; runtime discovery still reads only Kent-owned directories.
-- `config.toml` supports file-only `[skills]` boolean toggles for per-skill new-session enable/disable. Disabled skills remain visible in `/status` and only affect future skills-message injection.
+- Symlinks must be followed through when discovering, reading, loading skills and AGENTS.md.
+- `config.toml` supports file-only `[skills]` boolean toggles for per-skill new-session enable/disable. Disabled skills remain visible in GUI/TUI and only affect model visibility.
 - Preinstalled skills are seeded from binary-embedded deterministic assets under `prompts/skills/**` into `<persistence-root>/.generated/skills`.
-- `<persistence-root>/.generated` is deterministic, destructible, overwritten on server startup, and not user-owned.
-- Generated sync runs on server startup (`kent serve` or embedded server), not in clients.
+- `<persistence-root>/.generated` is deterministic, destructible, overwritten on server startup, and not user-owned. Generated sync runs on server startup (`kent serve` or embedded server), not in clients.
 - Edited/add/delete/rename/symlink/invalid-marker generated trees move to `<persistence-root>/recovered/<UTC timestamp>/.generated`, then regenerate.
 - If `<persistence-root>/recovered` is non-empty, every new session gets a user-facing, non-model-visible warning asking the user to clean recovered files and not edit `.generated`.
 - Generated skills are always seeded. Existing `[skills]` toggles only disable injection by normalized skill name.
@@ -37,24 +28,24 @@
 
 ## Core Tools
 
-- Core tools are `shell`, `write_stdin`, `view_image`, `patch`, `ask_question`, and `trigger_handoff`.
-- Goal management is CLI/runtime-owned. Kent must not add model-callable goal tools.
+- Core Model tools are `shell`, `write_stdin`, `view_image`, `patch`, `ask_question`, and `trigger_handoff`.
+- Goal management is CLI/runtime-owned. Kent must not add model-callable goal tools, worktree tools, task management tools, workflow tools (outside workflow runs). New tool addition happens strictly after human approval and spec edits.
 
 ## Runtime Output Boundary
 
 - Runtime owns one active conversation list/stateflow per session runtime.
-- Runtime producers materialize conversation-facing output through `steer`.
-- Runtime producers store delayed conversation-facing output through `queue`; queues store typed steering intents and flush through `steer`.
-- A steering intent may contain one item or an ordered pack of items. Item order inside the pack is preserved.
-- Steering items cover all transcript-visible, non-queued messages with exactly 1 exception: markdown line-by-line streaming of agent final_answer responses.
+- Runtime producers materialize conversation-facing output through `steer`. Steering is sumbitting events (messages, notices, user inputs) into the model's context/conversation via a FIFO queue that waits until the next available **step** boundary and drains the entire queue full at the first step boundary. User message submission, developer notices, mode switch notices, error notices, warning messages.  Steering of multiple items at once must be supported.
+- Tool calls are allowed to maintain special machinery due to tool start/end events discontinuity in addition to steering but must reuse the same code paths as much as possible, for example for emission of RPC events and TUI transcript.
+- Runtime producers store delayed conversation-facing output through `queue`; Queueing is submission of events (same as steering), but after the **model turn** boundary. See terminology.md for differences between turns and steps.
+- Steering items cover all transcript-visible, non-queued messages with exactly 1 exception: markdown line-by-line streaming of agent commentary and final_answer responses. Any other exception must be user-approved and locked in this spec.
 - Ordering, transcript visibility, ongoing/detail presentation, model visibility, dedupe, derived events, and post-persist state updates are steering policy, not separate append paths.
 - pending user text that they steered coalesces at flush into one user message separated by blank lines; the coalesced message is a normal steering intent.
-- Runtime events that do not create model-history items still route through the output boundary.
+- Runtime events that do not create model-visible items still route through the output boundary and are stored in the same transcript.
 - History replacement is an output mutation owned by the same boundary. Normal additions after replacement use `steer`. Messages about handoffs emitted to TUI scrollback buffer still use steer due to the rule above. Only logical/algorithmic history replacement procedure does not use steering, all user-facing history replacement effects are still regular `steer` api usages.
 
 ## Command Execution
 
-- `shell` is the only shell-command execution surface.
+- `shell` is the only model-facing shell-command execution surface.
 - Commands run in the user login shell, non-TTY mode, with direct shell invocation.
 - Execution inherits parent environment and adds non-interactive hints and other technical environment variables.
 - stdout/stderr merge into one stream without origin tags.
@@ -64,7 +55,7 @@
 - Interrupt escalation is `SIGINT` then `SIGKILL` after 10 seconds.
 - Command post-processing is Kent-owned, applied after execution, configured under `[shell]`, and bypassed by per-call `raw=true` parameter on the `shell` tool.
 - `[shell].postprocessing_mode` uses `none | builtin | user | all`.
-- The generic sanitizer runs before built-ins and hooks for every non-raw mode except `none`.
+- The generic command output sanitizer runs before built-ins and hooks for every non-raw mode except `none`. Generic sanitizer is just another command post-processor, not special infrastructure.
 - Built-ins run before the optional user hook. A built-in halt stops later built-ins only.
 - User hooks receive JSON stdin and return JSON stdout, receiving both original sanitized output and Kent's current processed output.
 - Hook failures do not change the provider-facing command-output envelope.
@@ -84,14 +75,15 @@
 - Workspace boundary checks apply after symlink resolution; symlink escapes are blocked.
 - Outside-workspace file reads are approval-gated through the same approver contract as `patch`.
 - Approved outside-workspace reads are written to run logs with requested/resolved path metadata.
-- Default `view_image` raster attachment materialization optimizes performance and minimizes provider-bound data transfer by validating then attempting to re-encode every supported non-raw raster image with source bytes `>= 100 KiB` into JPEG. If JPEG optimization fails or does not reduce payload size, Kent preserves the original validated image bytes and still enforces the attachment size cap.
+- Default `view_image` raster attachment materialization optimizes performance and minimizes provider-bound data transfer by validating then attempting to re-encode every supported non-raw raster image with source bytes `>= 100 KiB` into JPEG or WEBP. If JPEG/WEBP optimization fails or does not reduce payload size, Kent preserves the original validated image bytes and still enforces the attachment size cap.
 
 ## Tool Output And Failures
 
-- Large tool output is truncated for model consumption using standardized head/tail payloads with truncation metadata.
+- Large tool output is truncated for model consumption using standardized head/tail payloads with truncation metadata. Tool truncation threshold is not a tool post-processor, but a separate path that runs after the post-processor pipeline. 
+- Large output truncation threshold is configurable via a config file.
 - Model-step transient failures use exponential backoff retries with 5 attempts: `1s`, `2s`, `4s`, `8s`, `16s`.
 - Model/API errors in ongoing mode are shown as concise single-line errors; full details remain in detail/logs.
-- After a provider HTTP 400, Kent may repair tool calls that lack outputs (typically left dangling by an interruption) by appending a synthetic completion to each, then rebuilding the request and retrying. The repair is append-only: it never rewrites or removes persisted history, so the prompt-cache prefix through each repaired call stays intact, and the materialized output matches the original call kind. The synthetic result is an error stating the call was interrupted with no output, never a fabricated success. The repair defers to the resume path while interrupted calls still have pending re-execution starts, and no-ops when a 400 has no missing outputs (the original error then surfaces). Each repair appends one operator-only `developer_error_feedback` warning noting how many calls were closed.
+- Kent implements tool repair infrastructure after a provider HTTP 400: Kent may repair tool calls that lack outputs (typically left dangling by an interruption) by appending a synthetic completion to each, then rebuilding the request and retrying. The repair is append-only: it never rewrites or removes persisted history, so the prompt-cache prefix through each repaired call stays intact, and the materialized output matches the original call kind. The synthetic result is an error stating the call was interrupted with no output, never a fabricated success. The repair defers to the resume path while interrupted calls still have pending re-execution starts, and no-ops when a 400 has no missing outputs (the original error then surfaces). Each repair appends one operator-only `developer_error_feedback` warning noting how many calls were closed.
 - Persisted operator-facing turn-start failures that prevent the agent loop from starting use `developer_error_feedback` so they appear in ongoing scrollback.
 - Local command/validation failures that do not block a model turn remain plain `error` diagnostics.
 
@@ -101,7 +93,7 @@
 - Runtime `ask_question` pauses the active pipeline until answered.
 - Questions wait indefinitely; there is no timeout/default cancel.
 - Model-callable `ask_question` is limited to ordinary question/suggestion/freeform asks. Approval prompts are internal automated workflows and are not exposed to the model tool schema.
-- Suggestions support a freeform override branch. `Tab` toggles between picker and freeform commentary editing.
+- Suggestions support a freeform override branch. In the TUI, `Tab` toggles between picker and freeform commentary editing.
 - Suggestions use schema-level 1-based `recommended_option_index`.
 - Recommended suggestion UI shows a `success`-colored marker and faint recommended note; selected recommended row uses selected-row styling.
 - Selecting freeform with empty input opens freeform editing; submitting from that path still requires non-empty commentary.
@@ -116,12 +108,12 @@
 
 ## Sessions And Persistence
 
-- **Full transcript history is expected to weigh dozens of gigabytes. Production code must never load full `events.jsonl` into memory or walk the entire file. Session forking or cloning is the only accepted production full-walk operation because it explicitly copies history to the fork point.**
+- **Full transcript history is expected to weigh dozens of gigabytes. Production code must never load full `events.jsonl` into memory or walk the entire file under any circumstance. Session forking or cloning is the only accepted production full-walk operation because it explicitly copies history to the fork point.**
 - Sessions support stop/resume.
 - Persistence root is configurable; default is `~/.kent`.
 - Durable domain model is `project > workspace > worktree`.
 - SQLite is authoritative for structured metadata and server-owned resources.
-- Large append-only session artifacts remain file-backed under `projects/<project-id>/sessions/<session-id>`.
+- Large append-only session artifacts are file-backed under `projects/<project-id>/sessions/<session-id>`.
 - App-global daemon listen config is explicit through `server_host` and `server_port`. Kent binds exactly the configured address and fails startup if occupied.
 - Same-machine Unix-socket optimization is local-first and additive. Explicit `server_host` or `server_port` overrides stay authoritative.
 - JSON-RPC custom error codes in `shared/protocol` are wire contracts.
@@ -129,21 +121,15 @@
 - Server-browsing mode can open existing server projects/workspaces only; it must not offer binding or project creation for the client path.
 - Headless startup in an unregistered workspace fails fast; it must not auto-create hidden project/workspace state.
 - To recover from headless fail-fast workspace binding, `kent project [path]` inspects the project bound to a path, `kent attach [path]` binds a workspace to the project already bound to cwd, and `kent attach --project <project-id> [path]` binds with an explicit project override. All forms default `path` to cwd.
-- Minimum server-admin setup commands are `kent project list`, `kent project create --path <server-path> --name <project-name>`, and `kent attach --project <project-id> <server-path>`.
-- Server-admin project/binding commands prefer RPC to the configured running daemon when available; they must not require shutting down the server or taking local ownership of the persistence root.
-- Explicit relocation recovery is `kent rebind <session-id> <new-path>`, which retargets one session to a different workspace root.
-- When a session selected from the interactive picker has a stored workspace root different from Kent's current workspace root, startup shows `Workspace changed`. `Yes` retargets that session before opening; `No` returns to the session picker.
+- Server-admin project/binding commands use RPC to the configured running daemon. They must not require shutting down the server or taking local ownership of the persistence root.
+- Explicit relocation recovery is possible via CLI, which retargets one session to a different workspace root.
+- When a session selected from the interactive picker has a stored workspace root different from Kent's current workspace root, startup UI presents a prompt to rebind the workspace to the currently open destination.
 - Workspace relocation/rebinding is explicit user action; Kent does not infer auto-rebinds.
-- Session metadata authority lives in SQLite.
-- Interactive session creation is lazily durable.
-- Session start/setup becomes immutable at first model request dispatch, except thinking level can change on resume and system/reviewer prompt snapshots can refresh after successful compaction.
-- Lock covers model, core generation params, enabled tool IDs, native web-search mode, and system/reviewer prompt snapshots. Model/core generation fields, active enabled tool IDs, and native web-search mode remain locked for the session lifetime; system/reviewer prompt snapshot fields are locked per compaction generation. Developer meta context messages are transcript entries, not lazy-refreshed lock snapshots. Tool declarations for locked tool IDs are runtime-defined and are not persisted as session snapshots.
-- Locked enabled tool IDs distinguish explicit empty tool sets from legacy missing metadata with a presence field; explicit empty sets are authoritative.
-- Legacy request-shape locks that lack enabled-tool presence or native web-search mode are backfilled before use; failed backfill blocks request/launch planning instead of using mutable config fallback.
-- Transcript message order is immutable for cache stability.
-- Canonical model context/history is stored as Responses API input items; message-only chat is UI projection.
-- `events.jsonl` is append-only on normal writes; periodic compaction rewrites canonical JSONL to control growth.
-- Committed transcript is durable on disk (synchronous persistence on commit). Both active and dormant sessions project user-visible transcript by streaming the persisted event log through a windowed projector that retains only the requested page/recent-tail window; live reads overlay only the in-flight streaming delta. The in-memory transcript storage retains the bounded model working set (compaction checkpoint plus post-cutoff tail), not the full transcript: compaction trims pre-cutoff provider items, local entries, and tool completions; only an `O(1)` committed-entry counter survives for hot-path delta detection.
+- Interactive session creation **is lazy**. Sessions are created, persisted, initialized, started, and their data is loaded at the first usage point - user message or other trigger that leads to the agentic loop or model requests.
+- Just before the first model request at session start OR after each compaction (exactly matching cache key rotation/lifecycle), model tool definitions, tool list, system prompt, developer context entries, skills list, workspace info, current date/time sent to the model, and conversation context are all snapshotted and become immutable to prevent cache key rotation.
+- Developer-role meta context messages are transcript entries, not lazy-refreshed lock snapshots. Tool declarations for locked tool IDs, default (embedded) system prompt are code-defined (hardcoded in the binary) and are not persisted as session snapshots.
+- Transcript message order is immutable for cache stability. Under no circumstance without exclusion may the order of items in the persisted transcript change.
+- Committed transcript is durable on disk (asynchronous persistence on commit). Both active and dormant sessions project user-visible transcript by streaming the persisted event log through a windowed projector that retains only the requested page/recent-tail window; live reads overlay only the in-flight streaming delta. The in-memory transcript storage retains the bounded model working set (compaction checkpoint plus post-cutoff tail), not the full transcript: compaction trims pre-cutoff provider items, local entries, and tool completions; only an `O(1)` committed-entry counter survives for hot-path delta detection.
 - Crash-loss tolerance allows losing up to one in-flight tool call. No session event compression.
 
 ## Auth
