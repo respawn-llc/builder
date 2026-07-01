@@ -78,7 +78,6 @@ type transcriptBlockOptions struct {
 	mode             transcriptBlockMode
 	includeStreaming bool
 	applySelection   bool
-	appendOnly       bool
 }
 
 func (m Model) buildTranscriptBlocks(opts transcriptBlockOptions) []ongoingBlock {
@@ -138,7 +137,7 @@ func (m Model) entryBlock(entryIndex int, entry TranscriptEntry, role Transcript
 	case TranscriptRoleToolCall:
 		return m.toolCallBlock(entryIndex, entry, consumed, resultIndex, opts), true
 	case TranscriptRoleToolResult, TranscriptRoleToolResultOK, TranscriptRoleToolResultError:
-		if opts.mode == transcriptBlockModeOngoing && !opts.appendOnly {
+		if opts.mode == transcriptBlockModeOngoing {
 			return ongoingBlock{}, false
 		}
 		meta := cloneToolCallMeta(entry.ToolCall)
@@ -184,12 +183,9 @@ func (m Model) toolCallBlock(entryIndex int, entry TranscriptEntry, consumed map
 	}
 	combined := m.toolCallDisplayText(entry, blockRole, opts)
 	entryEnd := entryIndex
-	resultIdx := -1
-	if !opts.appendOnly {
-		blockRole, combined, resultIdx = m.applyToolResult(entryIndex, entry.ToolCall, blockRole, combined, consumed, resultIndex, opts)
-		if resultIdx >= 0 {
-			entryEnd = resultIdx
-		}
+	blockRole, combined, resultIdx := m.applyToolResult(entryIndex, entry.ToolCall, blockRole, combined, consumed, resultIndex, opts)
+	if resultIdx >= 0 {
+		entryEnd = resultIdx
 	}
 	effectiveMeta := entry.ToolCall
 	if resultIdx >= 0 && m.transcriptInput.Entries[resultIdx].ToolCall != nil {
@@ -309,7 +305,7 @@ func (m Model) askQuestionBlock(entryIndex int, entry TranscriptEntry, consumed 
 	question, suggestions, recommendedOptionIndex := askQuestionDisplay(entry.ToolCall, entry.Text)
 	answer := ""
 	entryEnd := entryIndex
-	if resultIdx := resultIndex.findMatchingToolResultIndex(m.transcriptInput.Entries, entryIndex, consumed); !opts.appendOnly && resultIdx >= 0 {
+	if resultIdx := resultIndex.findMatchingToolResultIndex(m.transcriptInput.Entries, entryIndex, consumed); resultIdx >= 0 {
 		resultEntry := m.transcriptInput.Entries[resultIdx]
 		nextRole := TranscriptRoleFromWire(string(resultEntry.Role))
 		if nextRole.IsToolResult() {

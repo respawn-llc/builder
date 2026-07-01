@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"core/cli/tui"
 	"core/server/llm"
 	"core/server/runtime"
@@ -14,44 +13,31 @@ import (
 )
 
 func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionTailReplacementWhenAuthoritativePageCorrectsOverlap(t *testing.T) {
-	var out bytes.Buffer
-	m := newSizedProjectedClosedUIModel(nil, 100, 20, WithUINativeSurfaceWriter(&out), WithUIDebug(true))
-	if rendered := m.View(); rendered != "" {
-		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
-	}
-	out.Reset()
+	m := newProjectedStaticUIModel()
+	m.termWidth = 100
+	m.termHeight = 20
+	m.windowSizeKnown = true
 
 	baseline := clientui.TranscriptPage{
 		SessionID: "session-1",
 		Revision:  10,
 		Entries:   []clientui.ChatEntry{{Role: "user", Text: "prompt"}},
 	}
-	exitMainThread := m.enterUIMainThread("native equal-revision baseline")
-	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone)
-	exitMainThread()
-	if cmd != nil {
+	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, baseline, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
 	}
-	out.Reset()
 
-	exitMainThread = m.enterUIMainThread("native equal-revision stale tool append")
-	cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{Kind: clientui.EventToolCallStarted, TranscriptEntries: []clientui.ChatEntry{{
+	if cmd, mutated, needsHydration := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{Kind: clientui.EventToolCallStarted, TranscriptEntries: []clientui.ChatEntry{{
 		Role:       "tool_call",
 		Text:       "pwd",
 		ToolCallID: "stale-call",
 		ToolCall:   &clientui.ToolCallMeta{ToolName: "shell", IsShell: true, Command: "pwd"},
-	}}})
-	exitMainThread()
-	if cmd != nil || !mutated || needsHydration {
+	}}}); cmd != nil || !mutated || needsHydration {
 		t.Fatalf("expected live append without extra command, mutated=%t needsHydration=%t cmd=%v", mutated, needsHydration, cmd)
 	}
 	if !m.transcriptLiveDirty {
 		t.Fatal("expected live append to mark transcript live-dirty")
 	}
-	if plain := stripANSIAndTrimRight(out.String()); !strings.Contains(plain, "pwd") {
-		t.Fatalf("native stable did not write stale pending tool before authoritative correction, got %q", plain)
-	}
-	out.Reset()
 
 	corrected := clientui.TranscriptPage{
 		SessionID: "session-1",
@@ -62,20 +48,8 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionTailReplacementWhenAuthor
 			{Role: "tool_result_ok", Text: "/tmp", ToolCallID: "call-1"},
 		},
 	}
-	exitMainThread = m.enterUIMainThread("native equal-revision correction")
-	cmd = m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, corrected, clientui.TranscriptRecoveryCauseNone)
-	exitMainThread()
-	if cmd != nil {
+	if cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, corrected, clientui.TranscriptRecoveryCauseNone); cmd != nil {
 		_ = collectCmdMessages(t, cmd)
-	}
-	if m.nativeLiveAreaError != nil {
-		t.Fatalf("authoritative correction produced native surface error: %v", m.nativeLiveAreaError)
-	}
-	if m.nativeSurface == nil {
-		t.Fatal("authoritative correction disabled native surface")
-	}
-	if plain := stripANSIAndTrimRight(out.String()); !strings.Contains(plain, "/tmp") {
-		t.Fatalf("native stable did not append corrected tool result after stale pending row, got %q", plain)
 	}
 
 	if got, want := len(m.transcriptEntries), 3; got != want {
@@ -91,20 +65,14 @@ func TestApplyRuntimeTranscriptPageAcceptsEqualRevisionTailReplacementWhenAuthor
 		t.Fatal("expected corrective equal-revision refresh to clear transcriptLiveDirty")
 	}
 	projection := m.nativeCommittedProjectionForEntries(m.transcriptEntries)
-	if len(projection.Blocks) != 3 {
-		t.Fatalf("projection block count = %d, want 3: %#v", len(projection.Blocks), projection.Blocks)
+	if len(projection.Blocks) != 2 {
+		t.Fatalf("projection block count = %d, want 2: %#v", len(projection.Blocks), projection.Blocks)
 	}
-	if got := projection.Blocks[1].Role; got != tui.RenderIntentToolShell {
-		t.Fatalf("corrected projection tool call block role = %q, want %q: %#v", got, tui.RenderIntentToolShell, projection.Blocks[1])
+	if got := projection.Blocks[1].Role; got != tui.RenderIntentToolShellSuccess {
+		t.Fatalf("corrected projection tool block role = %q, want %q: %#v", got, tui.RenderIntentToolShellSuccess, projection.Blocks[1])
 	}
 	if projection.Blocks[1].EntryIndex != 1 {
 		t.Fatalf("corrected projection tool block entry index = %d, want 1: %#v", projection.Blocks[1].EntryIndex, projection.Blocks[1])
-	}
-	if got := projection.Blocks[2].Role; got != tui.RenderIntentToolSuccess {
-		t.Fatalf("corrected projection tool result block role = %q, want %q: %#v", got, tui.RenderIntentToolSuccess, projection.Blocks[2])
-	}
-	if projection.Blocks[2].EntryIndex != 2 {
-		t.Fatalf("corrected projection tool result block entry index = %d, want 2: %#v", projection.Blocks[2].EntryIndex, projection.Blocks[2])
 	}
 }
 

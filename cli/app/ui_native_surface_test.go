@@ -39,7 +39,7 @@ func TestNativeOngoingViewWritesLiveAreaAndReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestNativeOngoingCommitsPendingToolCallToStableScrollback(t *testing.T) {
+func TestNativeOngoingLiveAreaRendersPendingToolSpinner(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
 	m.spinnerFrame = 2
@@ -62,45 +62,15 @@ func TestNativeOngoingCommitsPendingToolCallToStableScrollback(t *testing.T) {
 	}
 	plain := stripANSIAndTrimRight(out.String())
 	spinner := pendingToolSpinnerFrame(m.spinnerFrame)
-	if !strings.Contains(plain, "pwd") {
-		t.Fatalf("native stable scrollback did not include committed pending tool command, got %q", plain)
+	if !strings.Contains(plain, spinner) || !strings.Contains(plain, "pwd") {
+		t.Fatalf("native live area did not render pending tool spinner %q with command, got %q", spinner, plain)
 	}
-	if strings.Contains(plain, spinner) {
-		t.Fatalf("native live area rendered committed pending tool as redrawable spinner %q, got %q", spinner, plain)
-	}
-}
-
-func TestNativeOngoingCommitsPendingAskQuestionToStableScrollback(t *testing.T) {
-	var out bytes.Buffer
-	m := newNativeSurfaceTestModel(&out)
-	seedNativeSurfaceTranscript(m, []tui.TranscriptEntry{
-		{Role: tui.TranscriptRoleUser, Text: "I need input", Committed: true},
-		{
-			Role:       tui.TranscriptRoleToolCall,
-			Text:       "Which option should I use?",
-			ToolCallID: "call-ask",
-			ToolCall: &transcript.ToolCallMeta{
-				ToolName:               "ask_question",
-				Question:               "Which option should I use?",
-				Suggestions:            []string{"safe", "fast"},
-				RecommendedOptionIndex: 1,
-			},
-			Committed: true,
-		},
-	})
-
-	if rendered := m.View(); rendered != "" {
-		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
-	}
-	plain := stripANSIAndTrimRight(out.String())
-	for _, want := range []string{"I need input", "Which option should I use?"} {
-		if !strings.Contains(plain, want) {
-			t.Fatalf("native stable scrollback missing %q for committed ask_question, got %q", want, plain)
-		}
+	if strings.Contains(plain, "$ pwd") {
+		t.Fatalf("native live area rendered static shell symbol instead of pending spinner, got %q", plain)
 	}
 }
 
-func TestNativeOngoingLiveAreaDoesNotMirrorCommittedPendingToolDuringAssistantStream(t *testing.T) {
+func TestNativeOngoingLiveAreaRemovesPendingToolSpinnerWhenToolCompletesDuringAssistantStream(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceTestModel(&out)
 	if rendered := m.View(); rendered != "" {
@@ -136,11 +106,8 @@ func TestNativeOngoingLiveAreaDoesNotMirrorCommittedPendingToolDuringAssistantSt
 	}
 	spinner := pendingToolSpinnerFrame(m.spinnerFrame)
 	startPlain := stripANSIAndTrimRight(out.String())
-	if strings.Contains(startPlain, spinner) || strings.Contains(startPlain, "pwd") {
-		t.Fatalf("native live area mirrored committed pending tool %q with spinner %q, got %q", "pwd", spinner, startPlain)
-	}
-	if !strings.Contains(startPlain, "working") {
-		t.Fatalf("native live area did not keep assistant stream tail, got %q", startPlain)
+	if !strings.Contains(startPlain, spinner) || !strings.Contains(startPlain, "pwd") {
+		t.Fatalf("native live area did not render pending tool spinner %q with command, got %q", spinner, startPlain)
 	}
 
 	completed := applyNativeSurfaceRuntimeEventForTest(t, m, clientui.Event{
@@ -189,10 +156,6 @@ func TestNativeOngoingLiveAreaBoundsPendingToolsToTerminalHeight(t *testing.T) {
 
 	if rendered := m.View(); rendered != "" {
 		t.Fatalf("native ongoing View() returned %q, want empty renderer payload", rendered)
-	}
-	out.Reset()
-	if rendered := m.View(); rendered != "" {
-		t.Fatalf("native ongoing second View() returned %q, want empty renderer payload", rendered)
 	}
 	if m.nativeLiveAreaError != nil {
 		t.Fatalf("native live area render error = %v, want nil", m.nativeLiveAreaError)
@@ -432,9 +395,6 @@ func TestNativeSurfaceSteersWideCommittedPatchSummaryWithoutPanic(t *testing.T) 
 	}
 	for _, rawLine := range strings.Split(strings.ReplaceAll(out.String(), "\r\n", "\n"), "\n") {
 		if rawLine == "" {
-			continue
-		}
-		if !strings.Contains(xansi.Strip(rawLine), "workflow-editor/workflowEditorGraph") {
 			continue
 		}
 		if got := lipgloss.Width(rawLine); got > m.termWidth {
@@ -2472,24 +2432,6 @@ func TestNativeProjectionSourceKeyIncludesCommittedPosition(t *testing.T) {
 	secondKey := nativeProjectionBlockSourceKey(second, entries, 10)
 	if firstKey == secondKey {
 		t.Fatalf("duplicate committed rows produced identical source key %q", firstKey)
-	}
-}
-
-func TestNativeProjectionSourceKeyIgnoresToolCallIDCorrection(t *testing.T) {
-	block := tui.TranscriptProjectionBlock{EntryIndex: 1, EntryEnd: 1}
-	stale := []tui.TranscriptEntry{
-		{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true},
-		{Role: tui.TranscriptRoleToolCall, Text: "pwd", ToolCallID: "stale-call", ToolCall: &transcript.ToolCallMeta{ToolName: "shell", IsShell: true, Command: "pwd"}, Committed: true},
-	}
-	corrected := []tui.TranscriptEntry{
-		{Role: tui.TranscriptRoleUser, Text: "prompt", Committed: true},
-		{Role: tui.TranscriptRoleToolCall, Text: "pwd", ToolCallID: "call-1", ToolCall: &transcript.ToolCallMeta{ToolName: "shell", IsShell: true, Command: "pwd"}, Committed: true},
-	}
-
-	staleKey := nativeProjectionBlockSourceKey(block, stale, 0)
-	correctedKey := nativeProjectionBlockSourceKey(block, corrected, 0)
-	if staleKey != correctedKey {
-		t.Fatalf("source key changed across non-rendering tool call id correction:\nstale=%q\ncorrected=%q", staleKey, correctedKey)
 	}
 }
 

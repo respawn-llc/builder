@@ -466,10 +466,6 @@ func (m Model) PendingOngoingLinesWithPendingSpinnerFrame(spinner string) []Tran
 	return m.pendingLiveOngoingLines(uniformPendingSpinnerFrame(spinner)).lines
 }
 
-func (m Model) LiveStreamingOngoingLines() []TranscriptProjectionLine {
-	return m.streamingOngoingProjectionLines()
-}
-
 func (m Model) OngoingStreamingText() string {
 	return m.transcriptInput.Ongoing
 }
