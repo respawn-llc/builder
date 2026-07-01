@@ -2,7 +2,6 @@ package runtimeops
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -10,6 +9,7 @@ import (
 
 	"core/server/requestmemo"
 	"core/shared/clientui"
+	"core/shared/serverapi"
 )
 
 const (
@@ -17,7 +17,7 @@ const (
 	defaultCoordinatorTTL   = 15 * time.Minute
 )
 
-var ErrOperationCanceled = errors.New("runtime operation canceled before execution")
+var ErrOperationCanceled = serverapi.ErrRuntimeOperationCanceled
 
 type CancellationResult struct {
 	InterruptActive bool

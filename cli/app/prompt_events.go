@@ -202,7 +202,7 @@ func resubscribePromptActivity(ctx context.Context, subscribe promptActivitySubs
 		if err == nil {
 			return sub, true, nil
 		}
-		if errors.Is(err, serverapi.ErrStreamGap) && !isZeroPromptReadModelVersion(afterVersion) {
+		if errors.Is(err, serverapi.ErrStreamGap) && afterVersion != (clientui.ReadModelVersion{}) {
 			sub, err := subscribe(ctx, clientui.ReadModelVersion{})
 			if err == nil {
 				return sub, false, nil
@@ -215,17 +215,13 @@ func resubscribePromptActivity(ctx context.Context, subscribe promptActivitySubs
 }
 
 func newestPromptReadModelVersion(current clientui.ReadModelVersion, incoming clientui.ReadModelVersion) clientui.ReadModelVersion {
-	if isZeroPromptReadModelVersion(incoming) {
+	if incoming == (clientui.ReadModelVersion{}) {
 		return current
 	}
-	if isZeroPromptReadModelVersion(current) || incoming.NewerThan(current) {
+	if current == (clientui.ReadModelVersion{}) || incoming.NewerThan(current) {
 		return incoming
 	}
 	return current
-}
-
-func isZeroPromptReadModelVersion(version clientui.ReadModelVersion) bool {
-	return version.Epoch == "" && version.Generation == 0 && version.Sequence == 0
 }
 
 func waitPromptActivityRetry(ctx context.Context) bool {

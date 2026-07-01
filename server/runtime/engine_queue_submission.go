@@ -44,12 +44,16 @@ func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind
 // messages or background notices. This is used when a non-turn busy operation
 // (for example manual compaction) completes while queued steering is waiting.
 func (e *Engine) SubmitQueuedUserMessages(ctx context.Context) (assistant llm.Message, err error) {
-	assistant, err = e.submitQueuedUserMessages(ctx, nil)
+	assistant, err = e.SubmitQueuedUserMessagesWithActiveHook(ctx, nil)
 	e.surfaceRunError(err)
 	return assistant, err
 }
 
-func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[string]struct{}) (assistant llm.Message, err error) {
+func (e *Engine) SubmitQueuedUserMessagesWithActiveHook(ctx context.Context, onActive func()) (assistant llm.Message, err error) {
+	return e.submitQueuedUserMessages(ctx, nil, onActive)
+}
+
+func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[string]struct{}, onActive func()) (assistant llm.Message, err error) {
 	e.ensureOrchestrationCollaborators()
 	for {
 		if e.failQueuedUserWorkIfTerminal() {
@@ -61,6 +65,9 @@ func (e *Engine) submitQueuedUserMessages(ctx context.Context, queueItemIDs map[
 			}
 		}
 		err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
+			if onActive != nil {
+				onActive()
+			}
 			if e.failQueuedUserWorkIfTerminal() {
 				return nil
 			}
@@ -241,7 +248,7 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) {
 		return
 	}
 	ids := e.queuedUserAutoDrainIDSnapshot()
-	if _, err := e.submitQueuedUserMessages(ctx, ids); err != nil {
+	if _, err := e.submitQueuedUserMessages(ctx, ids, nil); err != nil {
 		e.surfaceRunError(err)
 		return
 	}

@@ -119,17 +119,6 @@ func TestGoalMutationsCoalesceAfterApplyingInFlightCompletion(t *testing.T) {
 	}
 }
 
-func TestGoalCompleteCommandCompletesGoal(t *testing.T) {
-	client := &runtimeControlFakeClient{goal: &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusActive}}
-	m := newProjectedClosedUIModel(client)
-	m.input = "/goal complete"
-
-	updated := updateGoalForTest(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if updated.goal.goal == nil || updated.goal.goal.Status != clientui.RuntimeGoalStatusComplete {
-		t.Fatalf("goal = %+v, want complete", updated.goal.goal)
-	}
-}
-
 func TestActiveSuspendedGoalClearStillRequiresConfirmation(t *testing.T) {
 	if !goalRequiresClearConfirmation(&clientui.RuntimeGoal{ID: "goal-1", Objective: "ship", Status: clientui.RuntimeGoalStatusActive, Suspended: true}) {
 		t.Fatal("active suspended goal must require destructive clear confirmation")

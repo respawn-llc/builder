@@ -648,7 +648,9 @@ func (s *Service) SubmitQueuedUserMessages(ctx context.Context, req serverapi.Ru
 		defer stopRunCtx()
 		var resp serverapi.RuntimeSubmitQueuedUserMessagesResponse
 		err = s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
-			msg, err := engine.SubmitQueuedUserMessages(runCtx)
+			msg, err := engine.SubmitQueuedUserMessagesWithActiveHook(runCtx, func() {
+				s.operations.MarkOperationActive(memoReq.SessionID, req.OperationRef)
+			})
 			resp = serverapi.RuntimeSubmitQueuedUserMessagesResponse{Message: msg.Content}
 			return err
 		})
@@ -763,18 +765,18 @@ func (s *Service) QueueUserMessage(ctx context.Context, req serverapi.RuntimeQue
 		runCtx, stopRunCtx := mergeOperationContexts(ctx, attempt.Context())
 		defer stopRunCtx()
 		err := s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
-			text := memoReq.Text
-			if s != nil && s.promptStore != nil {
-				record, _, err := s.recordPromptHistory(runCtx, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
-				if err != nil {
-					return err
-				}
-				text = record.Text
-			}
 			if err := attempt.Context().Err(); err != nil {
 				return err
 			}
 			committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, memoReq.OperationRef, func() error {
+				text := memoReq.Text
+				if s != nil && s.promptStore != nil {
+					record, _, err := s.recordPromptHistory(runCtx, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
+					if err != nil {
+						return err
+					}
+					text = record.Text
+				}
 				item := engine.QueueUserMessageWithClientRequestID(text, strings.TrimSpace(req.ClientRequestID))
 				resp = serverapi.RuntimeQueueUserMessageResponse{QueueItemID: item.ID, Text: item.Text, ClientRequestID: item.ClientRequestID}
 				return nil

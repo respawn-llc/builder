@@ -4,8 +4,6 @@ import (
 	"strings"
 
 	"core/shared/serverapi"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func (m *uiModel) sessionDraftRecoveryBuffers() []serverapi.SessionDraftRecoveryBuffer {
@@ -65,9 +63,6 @@ func (m *uiModel) restoreSessionDraftRecoveryBuffers(buffers []serverapi.Session
 	}
 	m.recoveredDraftBuffers = append([]serverapi.SessionDraftRecoveryBuffer(nil), recovered...)
 	m.restoreRecoveredDraftBuffersToVisibleInput(recovered)
-	if cmd := m.recoveredDraftStatusCmd(len(recovered)); cmd != nil {
-		m.startupCmds = append(m.startupCmds, cmd)
-	}
 }
 
 func (m *uiModel) restoreRecoveredDraftBuffersToVisibleInput(buffers []serverapi.SessionDraftRecoveryBuffer) {
@@ -85,17 +80,4 @@ func (m *uiModel) restoreRecoveredDraftBuffersToVisibleInput(buffers []serverapi
 		return
 	}
 	m.replaceMainInput(strings.Join(parts, "\n\n"), -1)
-}
-
-func (m *uiModel) recoveredDraftStatusCmd(count int) tea.Cmd {
-	if count <= 0 {
-		return nil
-	}
-	return m.sendTransientStatusWithNoticeID(
-		"Recovered unsent local input from the previous TUI exit; review before retrying.",
-		uiStatusNoticeNeutral,
-		transientStatusDuration,
-		uiStatusNoticeQueue,
-		"",
-	)
 }

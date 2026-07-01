@@ -1162,8 +1162,8 @@ func TestInitialRecoveryBuffersRestoreRetryAffordancesWithoutStartupSubmit(t *te
 	if len(model.recoveredDraftBuffers) != 3 {
 		t.Fatalf("recovered buffers = %+v, want non-operational recovery affordance", model.recoveredDraftBuffers)
 	}
-	if model.transientStatus == "" || model.transientStatusKind != uiStatusNoticeNeutral {
-		t.Fatalf("transient status = %q/%d, want recovery diagnostic", model.transientStatus, model.transientStatusKind)
+	if model.transientStatus != "" {
+		t.Fatalf("transient status = %q, want ordinary draft recovery to stay silent", model.transientStatus)
 	}
 }
 

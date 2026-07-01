@@ -26,7 +26,7 @@ func operationRequestID(ref clientui.RuntimeOperationRef) string {
 
 func operationCancellationInterruptsActive(ref clientui.RuntimeOperationRef) bool {
 	switch ref.Kind {
-	case clientui.RuntimeOperationKindSubmit, clientui.RuntimeOperationKindUserShell, clientui.RuntimeOperationKindCompact, clientui.RuntimeOperationKindPreSubmitCompact:
+	case clientui.RuntimeOperationKindSubmit, clientui.RuntimeOperationKindUserShell, clientui.RuntimeOperationKindCompact, clientui.RuntimeOperationKindPreSubmitCompact, clientui.RuntimeOperationKindSubmitQueued:
 		return true
 	default:
 		return false

@@ -174,6 +174,7 @@ func (c *RuntimeClaim) Fail(err error) {
 	}
 	d.mu.Unlock()
 	c.registry.publishUnavailableRuntimeActivityToEntry(c.id, c.entry)
+	c.registry.finishEntryTeardown(c.id, c.entry)
 }
 
 func (c *RuntimeClaim) IsCurrent() bool {

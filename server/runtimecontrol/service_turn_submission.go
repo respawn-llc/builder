@@ -91,6 +91,9 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 }
 
 func (s *Service) runPreSubmitCompaction(ctx context.Context, sessionID string, ref clientui.RuntimeOperationRef, engine *runtime.Engine) error {
+	if ref.Validate() != nil {
+		return engine.CompactContextForPreSubmit(ctx)
+	}
 	_, err := runtimeops.Do(s.operations, ctx, sessionID, ref, sessionOnlyMemoRequest{SessionID: strings.TrimSpace(sessionID)}, func(a sessionOnlyMemoRequest, b sessionOnlyMemoRequest) bool {
 		return a.SessionID == b.SessionID
 	}, func(ctx context.Context, attempt runtimeops.Attempt) (struct{}, error) {

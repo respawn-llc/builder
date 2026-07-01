@@ -34,12 +34,11 @@ const (
 type GoalMode string
 
 const (
-	GoalModeShow     GoalMode = "show"
-	GoalModeSet      GoalMode = "set"
-	GoalModePause    GoalMode = "pause"
-	GoalModeResume   GoalMode = "resume"
-	GoalModeComplete GoalMode = "complete"
-	GoalModeClear    GoalMode = "clear"
+	GoalModeShow   GoalMode = "show"
+	GoalModeSet    GoalMode = "set"
+	GoalModePause  GoalMode = "pause"
+	GoalModeResume GoalMode = "resume"
+	GoalModeClear  GoalMode = "clear"
 )
 
 type Result struct {
@@ -124,7 +123,7 @@ func NewDefaultRegistry() *Registry {
 	r.RegisterWithOptions("status", "Open a detailed status overlay for the current session/runtime", RegisterOptions{RunWhileBusy: true, PreservePromptHistoryDraft: true}, func(string) Result {
 		return Result{Handled: true, Action: ActionStatus}
 	})
-	r.RegisterWithOptions("goal", "Set or manage the current session goal (usage: /goal [show|pause|resume|complete|clear|<objective>])", RegisterOptions{RunWhileBusy: true, PreservePromptHistoryDraft: true}, func(args string) Result {
+	r.RegisterWithOptions("goal", "Set or manage the current session goal (usage: /goal [show|pause|resume|clear|<objective>])", RegisterOptions{RunWhileBusy: true, PreservePromptHistoryDraft: true}, func(args string) Result {
 		mode := GoalModeShow
 		objective := strings.TrimSpace(args)
 		switch strings.ToLower(objective) {
@@ -136,9 +135,6 @@ func NewDefaultRegistry() *Registry {
 			objective = ""
 		case string(GoalModeResume):
 			mode = GoalModeResume
-			objective = ""
-		case string(GoalModeComplete):
-			mode = GoalModeComplete
 			objective = ""
 		case string(GoalModeClear):
 			mode = GoalModeClear

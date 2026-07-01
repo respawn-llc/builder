@@ -115,9 +115,6 @@ func TestExecuteBuiltins(t *testing.T) {
 	if got := r.Execute("/goal resume"); got.Action != ActionGoal || got.GoalMode != GoalModeResume {
 		t.Fatalf("expected ActionGoal resume, got %+v", got)
 	}
-	if got := r.Execute("/goal complete"); got.Action != ActionGoal || got.GoalMode != GoalModeComplete {
-		t.Fatalf("expected ActionGoal complete, got %+v", got)
-	}
 	if got := r.Execute("/goal clear"); got.Action != ActionGoal || got.GoalMode != GoalModeClear {
 		t.Fatalf("expected ActionGoal clear, got %+v", got)
 	}

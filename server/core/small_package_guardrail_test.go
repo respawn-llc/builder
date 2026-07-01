@@ -122,7 +122,6 @@ var allowedSmallPackages = map[string]string{
 	"server/workflowsvc":                 "workflow mutation service owner with service tests",
 	"shared/apicontract":                 "shared API route/service contract owner after absorbing RPC and service contracts",
 	"shared/auth":                        "low-level shared auth contract required below server/auth and shared/serverapi",
-	"shared/invariant":                   "central structured invariant diagnostic helper shared by server read-model publication and TUI projection",
 	"shared/llmerrors":                   "shared provider-error contract surfaced by CLI and server",
 	"shared/modelcontract":               "shared model identifier contract needed by server/llm and shared clients",
 	"shared/rollbacktarget":              "shared session rollback target contract used by CLI and server session lifecycle",

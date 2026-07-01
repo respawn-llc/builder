@@ -240,6 +240,11 @@ func TestReduceRuntimeEvent_RunStateStartedDoesNotRequestTranscriptSync(t *testi
 }
 
 func TestReduceRuntimeEvent_RuntimeActivityChangedDrivesBusyState(t *testing.T) {
+	runningActivity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
+		ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop,
+		RunID:      "run-1",
+		StepID:     "step-1",
+	})
 	running := ReduceRuntimeEvent(
 		RuntimeRunState{Run: clientui.IdleRunLifecycle()},
 		RuntimeConversationState{},
@@ -247,18 +252,15 @@ func TestReduceRuntimeEvent_RuntimeActivityChangedDrivesBusyState(t *testing.T) 
 		RuntimeReasoningState{},
 		false,
 		clientui.Event{
-			Kind: clientui.EventRuntimeActivityChanged,
-			RuntimeActivity: runtimeActivityPtr(clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
-				ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop,
-				RunID:      "run-1",
-				StepID:     "step-1",
-			})),
+			Kind:            clientui.EventRuntimeActivityChanged,
+			RuntimeActivity: &runningActivity,
 		},
 	)
 	if !running.RunState.State.Run.IsGoalLoopRunning() || running.RunState.Activity != RuntimeActivityRunning {
 		t.Fatalf("running activity reduction = %+v, want goal loop running", running.RunState)
 	}
 
+	idleActivity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})
 	idle := ReduceRuntimeEvent(
 		running.RunState.State,
 		RuntimeConversationState{},
@@ -267,16 +269,12 @@ func TestReduceRuntimeEvent_RuntimeActivityChangedDrivesBusyState(t *testing.T) 
 		true,
 		clientui.Event{
 			Kind:            clientui.EventRuntimeActivityChanged,
-			RuntimeActivity: runtimeActivityPtr(clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})),
+			RuntimeActivity: &idleActivity,
 		},
 	)
 	if idle.RunState.State.Run.IsRunning() || idle.RunState.Activity != RuntimeActivityIdle {
 		t.Fatalf("idle activity reduction = %+v, want idle", idle.RunState)
 	}
-}
-
-func runtimeActivityPtr(activity clientui.RuntimeActivity) *clientui.RuntimeActivity {
-	return &activity
 }
 
 func TestReduceRuntimeEvent_RawGoalRunStateDoesNotDriveGoalLiveness(t *testing.T) {

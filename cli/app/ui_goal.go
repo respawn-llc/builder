@@ -26,12 +26,10 @@ func (c uiInputController) handleGoalCommand(mode commands.GoalMode, objective s
 		return m, m.goalRuntimeCommand(goalRuntimePause, "")
 	case commands.GoalModeResume:
 		return m, m.goalRuntimeCommand(goalRuntimeResume, "")
-	case commands.GoalModeComplete:
-		return m, m.goalRuntimeCommand(goalRuntimeComplete, "")
 	case commands.GoalModeClear:
 		return m, m.goalRuntimeCommand(goalRuntimeCheckClear, "")
 	default:
-		errText := "Usage: /goal [show|pause|resume|complete|clear|<objective>]"
+		errText := "Usage: /goal [show|pause|resume|clear|<objective>]"
 		return m, sequenceCmds(c.model.appendLocalEntryWithNoticeID("error", errText, ""), c.model.sendTransientStatusWithNoticeID(errText, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 	}
 }

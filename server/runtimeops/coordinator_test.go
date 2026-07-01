@@ -543,6 +543,39 @@ func TestCoordinatorCancelInFlightCancelsAttemptContext(t *testing.T) {
 	assertState(t, coord.Snapshot("session-1", mustVersion(t, 6), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCanceledNotCommitted)
 }
 
+func TestCoordinatorCancelActiveSubmitQueuedRequestsRuntimeInterrupt(t *testing.T) {
+	coord := NewCoordinator()
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "submit-queued-active-cancel"}
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(_ context.Context, attempt Attempt) (struct{}, error) {
+			coord.MarkOperationActive("session-1", ref)
+			close(started)
+			<-attempt.Context().Done()
+			return struct{}{}, attempt.Context().Err()
+		})
+		done <- err
+	}()
+	<-started
+	result, err := coord.CancelOperationTarget("session-1", ref)
+	if err != nil {
+		t.Fatalf("CancelOperationTarget: %v", err)
+	}
+	if !result.InterruptActive {
+		t.Fatal("active submit-queued operation must request runtime interrupt")
+	}
+	result.CancelOperationAttempt()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("in-flight error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for active submit-queued cancellation")
+	}
+}
+
 func TestCoordinatorTerminalTTLMarksEvictedButKeepsUnexpiredTombstones(t *testing.T) {
 	now := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
 	coord := NewCoordinator(WithLimit(1), WithTTL(time.Hour), WithNow(func() time.Time { return now }))
