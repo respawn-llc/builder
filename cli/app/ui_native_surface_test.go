@@ -437,6 +437,590 @@ func TestNativeRuntimeViewQueuedUserFlushAfterFinalAssistantKeepsCommittedFronti
 	}
 }
 
+func TestNativeRuntimeViewToolMessageBeforeLocalEntryKeepsCommittedFrontierContiguous(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	seed := []tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleUser,
+		Text:      "start",
+	}}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = seed
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.forwardToView(tui.SetConversationMsg{
+		BaseOffset:   0,
+		TotalEntries: 1,
+		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
+	})
+
+	toolEvent := projectRuntimeEvent(runtime.Event{
+		Kind:                       runtime.EventConversationUpdated,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        2,
+		Message: llm.Message{
+			Role:       llm.RoleTool,
+			ToolCallID: "orphan-call",
+			Name:       string(toolspec.ToolExecCommand),
+			Content:    `{"output":"done","exit_code":0,"truncated":false}`,
+		},
+	})
+	if got := len(toolEvent.TranscriptEntries); got != 1 {
+		t.Fatalf("runtimeview tool message event entries = %d, want 1: %+v", got, toolEvent.TranscriptEntries)
+	}
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(toolEvent)
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("tool message event result = %+v, want mutation without hydration/fatal", result)
+	}
+
+	localEvent := projectRuntimeEvent(runtime.Event{
+		Kind:                       runtime.EventLocalEntryAdded,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         3,
+		CommittedEntryStart:        2,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        3,
+		LocalEntry:                 &runtime.ChatEntry{Role: "system", Text: "local note"},
+	})
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(localEvent)
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("local entry after tool message event result = %+v, want mutation without hydration/fatal", result)
+	}
+	if got := len(m.transcriptEntries); got != 3 {
+		t.Fatalf("transcript entries after local entry = %d, want 3: %+v", got, m.transcriptEntries)
+	}
+}
+
+func TestNativeStaleUserFlushCoveredByAuthoritativeTailDoesNotPanicOrReplay(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	if err := m.emitNativeCommittedEntries([]tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleSystem,
+		Text:      "already emitted before authoritative tail",
+	}}, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+
+	entries := make([]tui.TranscriptEntry, 226)
+	for idx := range entries {
+		entries[idx] = tui.TranscriptEntry{
+			Committed: true,
+			Role:      tui.TranscriptRoleAssistant,
+			Text:      "authoritative tail " + strconv.Itoa(idx),
+		}
+	}
+	entries[len(entries)-1] = tui.TranscriptEntry{
+		Committed: true,
+		Role:      tui.TranscriptRoleUser,
+		Text:      "stale queued user",
+	}
+	m.transcriptBaseOffset = 681
+	m.transcriptEntries = entries
+	m.transcriptTotalEntries = 907
+	m.transcriptRevision = 9778
+	m.transcriptLiveDirty = false
+	m.forwardToView(tui.SetConversationMsg{
+		BaseOffset:   m.transcriptBaseOffset,
+		TotalEntries: m.transcriptTotalEntries,
+		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
+	})
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventUserMessageFlushed,
+		StepID:                     "4c4b3263-f50b-40a8-8eb1-1908c02da4a9",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         9779,
+		CommittedEntryStart:        906,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        907,
+		UserMessage:                "stale queued user",
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role: "user",
+			Text: "stale queued user",
+		}},
+	})
+	if result.fatal || result.awaitsHydration || result.transcriptMutated {
+		t.Fatalf("stale user flush result = %+v, want skip without hydration/fatal/mutation", result)
+	}
+	if got := len(m.transcriptEntries); got != 226 {
+		t.Fatalf("transcript entries = %d, want unchanged 226", got)
+	}
+	if got := m.transcriptRevision; got != 9779 {
+		t.Fatalf("transcript revision = %d, want stale event revision recorded", got)
+	}
+	if plain := stripANSIForNativeSpecTest(out.String()); strings.Contains(plain, "stale queued user") {
+		t.Fatalf("stale covered user flush replayed through native output: %q", plain)
+	}
+}
+
+func TestNativeOverlappingUserFlushFromLiveTailStillPanics(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
+	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
+	if err := m.emitNativeCommittedEntries([]tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleUser,
+		Text:      "already emitted",
+	}}, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = []tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleUser,
+		Text:      "live tail user",
+	}}
+	m.transcriptBaseOffset = 0
+	m.transcriptTotalEntries = 1
+	m.transcriptRevision = 10
+	m.transcriptLiveDirty = true
+
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+			Kind:                       clientui.EventUserMessageFlushed,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         11,
+			CommittedEntryStart:        0,
+			CommittedEntryStartSet:     true,
+			CommittedEntryCount:        1,
+			UserMessage:                "live tail user",
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role: "user",
+				Text: "live tail user",
+			}},
+		})
+	})
+}
+
+func TestNativeActiveAssistantFinalizerClearsStreamSourceBeforeSameStepToolLoop(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	seed := []tui.TranscriptEntry{{Committed: true, Role: tui.TranscriptRoleUser, Text: "start"}}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = seed
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: append([]tui.TranscriptEntry(nil), seed...)})
+
+	firstStream := "\n\nqa model turn 8 ok\n\n"
+	m.appendActiveAssistantStreamDelta("step-1", firstStream)
+	if _, err := m.streamNativeAssistantDelta(firstStream, clientui.MessagePhaseFinal); err != nil {
+		t.Fatalf("stream first assistant: %v", err)
+	}
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        3,
+		TranscriptEntries: []clientui.ChatEntry{
+			{Role: "assistant", Text: firstStream},
+			{Role: "tool_call", Text: "printf ok", ToolCallID: "call-1"},
+		},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("first assistant event result = %+v, want mutation without fatal/hydration", result)
+	}
+	if got := m.activeAssistantStreamText(); got != "" {
+		t.Fatalf("active assistant stream after committed tool-loop assistant = %q, want cleared", got)
+	}
+
+	finalStream := "\n\nqa edit tool 11 ok"
+	m.appendActiveAssistantStreamDelta("step-1", finalStream)
+	if _, err := m.streamNativeAssistantDelta(finalStream, clientui.MessagePhaseFinal); err != nil {
+		t.Fatalf("stream final assistant: %v", err)
+	}
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         3,
+		CommittedEntryStart:        3,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        4,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  finalStream,
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("final assistant event result = %+v, want mutation without fatal/hydration", result)
+	}
+}
+
+func TestNativeMissingPhaseAssistantToolCallCommitClearsStreamSourceBeforeSameStepFinal(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	seed := []tui.TranscriptEntry{{Committed: true, Role: tui.TranscriptRoleUser, Text: "start"}}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = seed
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: append([]tui.TranscriptEntry(nil), seed...)})
+
+	firstStream := "ok"
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:           clientui.EventAssistantDelta,
+		StepID:         "step-1",
+		AssistantDelta: firstStream,
+	})
+	if result.fatal {
+		t.Fatalf("first assistant delta result = %+v", result)
+	}
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        3,
+		TranscriptEntries: []clientui.ChatEntry{
+			{Role: "assistant", Text: firstStream},
+			{Role: "tool_call", Text: "printf ok", ToolCallID: "call-1"},
+		},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("first assistant event result = %+v, want mutation without fatal/hydration", result)
+	}
+	if got := m.activeAssistantStreamText(); got != "" {
+		t.Fatalf("active assistant stream after missing-phase assistant+tool commit = %q, want cleared", got)
+	}
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventToolCallCompleted,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         3,
+		CommittedEntryStart:        3,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        4,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:       "tool_result_ok",
+			Text:       "qa tool turn 7 ok",
+			ToolCallID: "call-1",
+		}},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("tool completion event result = %+v, want mutation without fatal/hydration", result)
+	}
+
+	finalStream := "qa real tui turn 7 ok"
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantDelta,
+		StepID:                     "step-1",
+		AssistantDelta:             finalStream,
+		AssistantDeltaPhase:        clientui.MessagePhaseFinal,
+		CommittedTranscriptChanged: false,
+	})
+	if result.fatal {
+		t.Fatalf("final assistant delta result = %+v", result)
+	}
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         4,
+		CommittedEntryStart:        4,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        5,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  finalStream,
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("final assistant event result = %+v, want mutation without fatal/hydration", result)
+	}
+}
+
+func TestNativeWhitespaceOnlyAssistantToolCallCommitDiscardsStreamBeforeSameStepFinal(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	seed := []tui.TranscriptEntry{{Committed: true, Role: tui.TranscriptRoleUser, Text: "start"}}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = seed
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: append([]tui.TranscriptEntry(nil), seed...)})
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:           clientui.EventAssistantDelta,
+		StepID:         "step-1",
+		AssistantDelta: "\n\n",
+	})
+	if result.fatal {
+		t.Fatalf("whitespace assistant delta result = %+v", result)
+	}
+	toolCallEvent := clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        2,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:       "tool_call",
+			Text:       "printf qa_tool_02",
+			ToolCallID: "call-1",
+		}},
+	}
+	preToolCallState := newProjectedTranscriptEventState(projectedTranscriptEventSnapshotFromModel(m))
+	preToolCallReduction := reduceProjectedTranscriptEvent(preToolCallState, toolCallEvent)
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(toolCallEvent)
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("whitespace assistant tool-call event result = %+v, state_live=%q state_step=%q reduction=%+v, want mutation without fatal/hydration", result, preToolCallState.liveAssistantText, preToolCallState.liveAssistantStepID, preToolCallReduction)
+	}
+	if got := m.activeAssistantStreamText(); got != "" {
+		t.Fatalf("active assistant stream after whitespace assistant tool-call commit = %q, want cleared", got)
+	}
+	if m.nativeSurface.AssistantStreaming() {
+		t.Fatal("native assistant stream still active after whitespace assistant tool-call commit")
+	}
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventToolCallCompleted,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         3,
+		CommittedEntryStart:        2,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        3,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:       "tool_result_ok",
+			Text:       "qa_tool_02",
+			ToolCallID: "call-1",
+		}},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("tool completion event result = %+v, want mutation without fatal/hydration", result)
+	}
+	if got := m.activeAssistantStreamText(); got != "" {
+		t.Fatalf("active assistant stream after whitespace assistant+tool commit = %q, want cleared", got)
+	}
+	if m.nativeSurface.AssistantStreaming() {
+		t.Fatal("native assistant stream still active after whitespace assistant+tool commit")
+	}
+
+	finalStream := "\n\nqa turn 02 tool ok"
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantDelta,
+		StepID:                     "step-1",
+		AssistantDelta:             finalStream,
+		AssistantDeltaPhase:        clientui.MessagePhaseFinal,
+		CommittedTranscriptChanged: false,
+	})
+	if result.fatal {
+		t.Fatalf("final assistant delta result = %+v", result)
+	}
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         4,
+		CommittedEntryStart:        3,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        4,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  finalStream,
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("final assistant event result = %+v, want mutation without fatal/hydration", result)
+	}
+}
+
+func TestNativeStaleAssistantFinalizerCoveredByAuthoritativeTailDoesNotPanicOrReplay(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	if err := m.emitNativeCommittedEntries([]tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleSystem,
+		Text:      "already emitted before authoritative assistant tail",
+	}}, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+
+	entries := make([]tui.TranscriptEntry, 358)
+	for idx := range entries {
+		entries[idx] = tui.TranscriptEntry{
+			Committed: true,
+			Role:      tui.TranscriptRoleSystem,
+			Text:      "authoritative assistant tail " + strconv.Itoa(idx),
+		}
+	}
+	streamPrefix := strings.Repeat("x", 120)
+	finalText := streamPrefix + strings.Repeat("y", 70)
+	entries[len(entries)-1] = tui.TranscriptEntry{
+		Committed: true,
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      finalText,
+		Phase:     clientui.MessagePhaseFinal,
+	}
+	m.transcriptBaseOffset = 942
+	m.transcriptEntries = entries
+	m.transcriptTotalEntries = 1302
+	m.transcriptRevision = 10400
+	m.transcriptLiveDirty = false
+	m.appendActiveAssistantStreamDelta("4c4b3263-f50b-40a8-8eb1-1908c02da4a9", streamPrefix)
+	if _, err := m.streamNativeAssistantDelta(streamPrefix, clientui.MessagePhaseFinal); err != nil {
+		t.Fatalf("stream assistant: %v", err)
+	}
+	m.forwardToView(tui.SetConversationMsg{
+		BaseOffset:   m.transcriptBaseOffset,
+		TotalEntries: m.transcriptTotalEntries,
+		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
+		Ongoing:      streamPrefix,
+	})
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "4c4b3263-f50b-40a8-8eb1-1908c02da4a9",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         10403,
+		CommittedEntryStart:        1299,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        1302,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  finalText,
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	})
+	if result.fatal || result.awaitsHydration || result.transcriptMutated {
+		t.Fatalf("stale assistant finalizer result = %+v, want skip without hydration/fatal/mutation", result)
+	}
+	if got := m.activeAssistantStreamText(); got != "" {
+		t.Fatalf("active assistant stream after stale finalizer = %q, want cleared", got)
+	}
+	if plain := stripANSIForNativeSpecTest(out.String()); !strings.Contains(plain, strings.Repeat("y", 70)) {
+		t.Fatalf("stale finalizer suffix was not emitted before finish: %q", plain)
+	}
+	if got := m.transcriptRevision; got != 10403 {
+		t.Fatalf("transcript revision = %d, want stale finalizer revision recorded", got)
+	}
+	if got := m.transcriptTotalEntries; got != 1302 {
+		t.Fatalf("transcript total entries = %d, want known authoritative total preserved", got)
+	}
+}
+
+func TestNativeStaleAssistantFinalizerCannotRevealUnknownLaterRows(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
+	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
+	if err := m.emitNativeCommittedEntries([]tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleSystem,
+		Text:      "already emitted",
+	}}, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	finalText := "final text"
+	m.transcriptBaseOffset = 9
+	m.transcriptEntries = []tui.TranscriptEntry{{Committed: true, Role: tui.TranscriptRoleAssistant, Text: finalText, Phase: clientui.MessagePhaseFinal}}
+	m.transcriptTotalEntries = 10
+	m.transcriptRevision = 20
+	m.transcriptLiveDirty = false
+	m.appendActiveAssistantStreamDelta("step-1", finalText)
+	if _, err := m.streamNativeAssistantDelta(finalText, clientui.MessagePhaseFinal); err != nil {
+		t.Fatalf("stream assistant: %v", err)
+	}
+
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     "step-1",
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         21,
+			CommittedEntryStart:        9,
+			CommittedEntryStartSet:     true,
+			CommittedEntryCount:        12,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  finalText,
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		})
+	})
+}
+
+func TestNativeCommittedToolResultIgnoresTrailingTransientMutableRows(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	if err := m.emitNativeCommittedEntries([]tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleSystem,
+		Text:      "already emitted",
+	}}, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+
+	entries := make([]tui.TranscriptEntry, 35)
+	for idx := 0; idx < 34; idx++ {
+		entries[idx] = tui.TranscriptEntry{
+			Committed: true,
+			Role:      tui.TranscriptRoleSystem,
+			Text:      "committed " + strconv.Itoa(idx),
+		}
+	}
+	entries[34] = tui.TranscriptEntry{
+		Transient: true,
+		Role:      tui.TranscriptRoleSystem,
+		Text:      "mutable background status",
+	}
+	m.transcriptEntries = entries
+	m.transcriptTotalEntries = 34
+	m.transcriptRevision = 49
+	m.transcriptLiveDirty = true
+	m.forwardToView(tui.SetConversationMsg{
+		BaseOffset:   0,
+		TotalEntries: m.transcriptTotalEntries,
+		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
+	})
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventToolCallCompleted,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         50,
+		CommittedEntryStart:        34,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        35,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:       "tool_result_ok",
+			Text:       "done",
+			ToolCallID: "call-1",
+		}},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("tool result event result = %+v, want committed mutation without fatal/hydration", result)
+	}
+	if got := len(m.transcriptEntries); got != 35 {
+		t.Fatalf("transcript entries = %d, want 35", got)
+	}
+	last := m.transcriptEntries[len(m.transcriptEntries)-1]
+	if last.Transient || !last.Committed || last.Role != tui.TranscriptRoleToolResultOK || last.ToolCallID != "call-1" {
+		t.Fatalf("last entry = %+v, want committed tool result replacing transient mutable row", last)
+	}
+}
+
 func TestNativeScratchPageAppendsAfterActiveStream(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceSpecTestModel(&out)
@@ -1190,6 +1774,227 @@ func TestRuntimeBatchStopsAtFirstHydrationBarrier(t *testing.T) {
 	}
 	if len(m.pendingRuntimeEvents) != 1 || m.pendingRuntimeEvents[0].TranscriptEntries[0].Text != "after" {
 		t.Fatalf("expected remaining event carried behind hydration, got %#v", m.pendingRuntimeEvents)
+	}
+}
+
+func TestNativeDeferredCommittedEventDoesNotDropTrailingTransientRows(t *testing.T) {
+	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, &runtimeControlFakeClient{})
+	m.transcriptBaseOffset = 0
+	m.transcriptEntries = []tui.TranscriptEntry{
+		{Committed: true, Role: tui.TranscriptRoleAssistant, Text: "committed"},
+		{Transient: true, Role: tui.TranscriptRoleToolResultOK, Text: "pending mutable status"},
+	}
+	m.forwardToView(tui.SetConversationMsg{Entries: append([]tui.TranscriptEntry(nil), m.transcriptEntries...)})
+	m.appendActiveAssistantStreamDelta("step-1", "streaming")
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventLocalEntryAdded,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        2,
+		TranscriptRevision:         2,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role: "system",
+			Text: "committed after stream",
+		}},
+	})
+
+	if result.fatal || result.transcriptMutated || result.awaitsHydration {
+		t.Fatalf("result = %+v, want deferred event without mutation", result)
+	}
+	if got := len(m.transcriptEntries); got != 2 {
+		t.Fatalf("transcript entry count = %d, want transient preserved", got)
+	}
+	if !m.transcriptEntries[1].Transient || m.transcriptEntries[1].Text != "pending mutable status" {
+		t.Fatalf("trailing transient entry = %+v, want preserved mutable row", m.transcriptEntries[1])
+	}
+	if len(m.deferredCommittedTail) != 1 {
+		t.Fatalf("deferred tail count = %d, want 1", len(m.deferredCommittedTail))
+	}
+}
+
+func TestNativeCountOnlyCommittedAdvanceBypassesBusyDeferralAndQueuesLaterCommittedRows(t *testing.T) {
+	client := &runtimeControlFakeClient{transcript: clientui.TranscriptPage{
+		SessionID: "session-1",
+		Revision:  10816,
+		Entries: []clientui.ChatEntry{
+			{Role: "assistant", Text: "missing assistant", Phase: string(clientui.MessagePhaseFinal)},
+			{Role: "reviewer_status", Text: "missing reviewer row"},
+			{Role: "system", Text: "after"},
+		},
+	}}
+	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, client)
+	m.transcriptBaseOffset = 1568
+	m.transcriptRevision = 10813
+	m.transcriptTotalEntries = 1577
+	m.transcriptEntries = make([]tui.TranscriptEntry, 9)
+	for idx := range m.transcriptEntries {
+		m.transcriptEntries[idx] = tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed " + strconv.Itoa(idx)}
+	}
+	m.setRuntimeActivityBusyForTest(true)
+	m.activity = uiActivityRunning
+	if err := m.emitNativeCommittedEntries([]tui.TranscriptEntry{{Committed: true, Role: tui.TranscriptRoleSystem, Text: "already written"}}, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+
+	countOnlyAdvance := clientui.Event{
+		Kind:                       clientui.EventConversationUpdated,
+		StepID:                     "4c4b3263-f50b-40a8-8eb1-1908c02da4a9",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         10815,
+		CommittedEntryCount:        1579,
+	}
+	laterLocalEntry := clientui.Event{
+		Kind:                       clientui.EventLocalEntryAdded,
+		StepID:                     "4c4b3263-f50b-40a8-8eb1-1908c02da4a9",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         10816,
+		CommittedEntryStart:        1579,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        1580,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role: "system",
+			Text: "after",
+		}},
+	}
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEventsBatch([]clientui.Event{countOnlyAdvance, laterLocalEntry})
+	if result.fatal || !result.awaitsHydration || result.transcriptMutated {
+		t.Fatalf("batch result = %+v, want hydration barrier without mutation/fatal", result)
+	}
+	if len(m.pendingRuntimeEvents) != 1 || m.pendingRuntimeEvents[0].Kind != clientui.EventLocalEntryAdded {
+		t.Fatalf("pending events = %#v, want later local entry queued", m.pendingRuntimeEvents)
+	}
+	msgs := collectCmdMessages(t, result.cmd)
+	var refresh runtimeTranscriptRefreshedMsg
+	found := false
+	for _, msg := range msgs {
+		if typed, ok := msg.(runtimeTranscriptRefreshedMsg); ok {
+			refresh = typed
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected runtime transcript refresh message, got %#v", msgs)
+	}
+	if refresh.syncCause != runtimeTranscriptSyncCauseCommittedGap {
+		t.Fatalf("sync cause = %s, want %s", refresh.syncCause, runtimeTranscriptSyncCauseCommittedGap)
+	}
+	if client.refreshTranscriptCalls != 1 {
+		t.Fatalf("refresh transcript calls = %d, want 1", client.refreshTranscriptCalls)
+	}
+}
+
+func TestNativeCountOnlyCommittedAdvanceUsesOwnedTailNotKnownTotal(t *testing.T) {
+	client := &runtimeControlFakeClient{transcript: clientui.TranscriptPage{
+		SessionID: "session-1",
+		Revision:  10968,
+		Entries: []clientui.ChatEntry{
+			{Role: "assistant", Text: "missing committed row"},
+			{Role: "system", Text: "after"},
+		},
+	}}
+	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, client)
+	m.transcriptBaseOffset = 1568
+	m.transcriptRevision = 10967
+	m.transcriptTotalEntries = 1677
+	m.transcriptEntries = make([]tui.TranscriptEntry, 107)
+	for idx := range m.transcriptEntries {
+		m.transcriptEntries[idx] = tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed " + strconv.Itoa(idx)}
+	}
+	if err := m.emitNativeCommittedEntries([]tui.TranscriptEntry{{Committed: true, Role: tui.TranscriptRoleSystem, Text: "already written"}}, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventConversationUpdated,
+		StepID:                     "4c4b3263-f50b-40a8-8eb1-1908c02da4a9",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         10967,
+		CommittedEntryCount:        1676,
+	})
+
+	if result.fatal || !result.awaitsHydration || result.transcriptMutated {
+		t.Fatalf("result = %+v, want hydration barrier without mutation/fatal", result)
+	}
+	if result.cmd == nil {
+		t.Fatal("expected hydration command")
+	}
+	msgs := collectCmdMessages(t, result.cmd)
+	var refresh runtimeTranscriptRefreshedMsg
+	found := false
+	for _, msg := range msgs {
+		if typed, ok := msg.(runtimeTranscriptRefreshedMsg); ok {
+			refresh = typed
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected runtime transcript refresh message, got %#v", msgs)
+	}
+	if refresh.syncCause != runtimeTranscriptSyncCauseCommittedGap {
+		t.Fatalf("sync cause = %s, want %s", refresh.syncCause, runtimeTranscriptSyncCauseCommittedGap)
+	}
+	if client.refreshTranscriptCalls != 1 {
+		t.Fatalf("refresh transcript calls = %d, want 1", client.refreshTranscriptCalls)
+	}
+}
+
+func TestNativeRecoveryConversationUpdateKeepsContinuityRecoverySync(t *testing.T) {
+	client := &runtimeControlFakeClient{transcript: clientui.TranscriptPage{
+		SessionID: "session-1",
+		Revision:  10968,
+		Entries: []clientui.ChatEntry{{
+			Role: "assistant",
+			Text: "recovered row",
+		}},
+	}}
+	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, client)
+	m.transcriptBaseOffset = 1568
+	m.transcriptRevision = 10967
+	m.transcriptTotalEntries = 1577
+	m.transcriptEntries = make([]tui.TranscriptEntry, 9)
+	for idx := range m.transcriptEntries {
+		m.transcriptEntries[idx] = tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed " + strconv.Itoa(idx)}
+	}
+	if err := m.emitNativeCommittedEntries([]tui.TranscriptEntry{{Committed: true, Role: tui.TranscriptRoleSystem, Text: "already written"}}, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventConversationUpdated,
+		StepID:                     "4c4b3263-f50b-40a8-8eb1-1908c02da4a9",
+		CommittedTranscriptChanged: true,
+		RecoveryCause:              clientui.TranscriptRecoveryCauseStreamGap,
+		TranscriptRevision:         10968,
+		CommittedEntryCount:        1578,
+	})
+
+	if result.fatal || !result.awaitsHydration || result.transcriptMutated {
+		t.Fatalf("result = %+v, want recovery hydration barrier without mutation/fatal", result)
+	}
+	msgs := collectCmdMessages(t, result.cmd)
+	var refresh runtimeTranscriptRefreshedMsg
+	found := false
+	for _, msg := range msgs {
+		if typed, ok := msg.(runtimeTranscriptRefreshedMsg); ok {
+			refresh = typed
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected runtime transcript refresh message, got %#v", msgs)
+	}
+	if refresh.syncCause != runtimeTranscriptSyncCauseContinuityRecovery {
+		t.Fatalf("sync cause = %s, want %s", refresh.syncCause, runtimeTranscriptSyncCauseContinuityRecovery)
+	}
+	if refresh.recoveryCause != clientui.TranscriptRecoveryCauseStreamGap {
+		t.Fatalf("recovery cause = %s, want %s", refresh.recoveryCause, clientui.TranscriptRecoveryCauseStreamGap)
 	}
 }
 

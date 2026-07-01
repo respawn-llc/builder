@@ -57,6 +57,36 @@ func TestOngoingScrollbackBufferSteerWaitsForStreamingAndFlushesFIFO(t *testing.
 	}
 }
 
+func TestOngoingScrollbackBufferDiscardAssistantStreamingDropsMutableStreamAndFlushesQueuedSteers(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil, WithAssistantStreamPromotion(false))
+	defer buffer.close()
+
+	if err := buffer.StreamMarkdownAssistantContent("mutable only"); err != nil {
+		t.Fatalf("stream returned error: %v", err)
+	}
+	queuedErr := make(chan error, 1)
+	go func() { queuedErr <- buffer.Steer("committed tool") }()
+	waitForQueuedSteers(t, buffer, 1)
+
+	if err := buffer.DiscardAssistantStreaming(); err != nil {
+		t.Fatalf("discard returned error: %v", err)
+	}
+	if err := <-queuedErr; err != nil {
+		t.Fatalf("queued steer returned error: %v", err)
+	}
+
+	if buffer.AssistantStreaming() {
+		t.Fatal("assistant stream still active after discard")
+	}
+	if got := buffer.AssistantStreamTailLines(); len(got) != 0 {
+		t.Fatalf("assistant tail after discard = %q, want empty", got)
+	}
+	if got, want := out.String(), "committed tool"+terminalLineBreak; got != want {
+		t.Fatalf("stable output = %q, want %q", got, want)
+	}
+}
+
 func nonEmptyAssistantTestRows(rows []string) []string {
 	filtered := make([]string, 0, len(rows))
 	for _, row := range rows {

@@ -367,6 +367,65 @@ func TestSubmitUserMessageCommentaryWithToolCallsPublishesCommittedEntryStartMet
 	}
 }
 
+func TestSubmitUserMessageMissingPhaseWithToolCallsPublishesContiguousAssistantEvent(t *testing.T) {
+	store := mustCreateTestSession(t)
+
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: "working without phase",
+			},
+			ToolCalls: []llm.ToolCall{{ID: "call_shell_missing_phase", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Content: "done",
+				Phase:   llm.MessagePhaseFinal,
+			},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+	}}
+
+	events := make([]Event, 0, 16)
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model:   "gpt-5",
+		OnEvent: func(evt Event) { events = append(events, evt) },
+	})
+
+	if _, err := eng.SubmitUserMessage(context.Background(), "do the task"); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	assistantIdx := -1
+	toolCompleteIdx := -1
+	for idx, evt := range events {
+		if evt.Kind == EventAssistantMessage && evt.Message.Content == "working without phase" {
+			assistantIdx = idx
+		}
+		if evt.Kind == EventToolCallCompleted && evt.ToolResult != nil && evt.ToolResult.CallID == "call_shell_missing_phase" {
+			toolCompleteIdx = idx
+		}
+	}
+	if assistantIdx < 0 {
+		t.Fatalf("expected missing-phase assistant event before tool completion, got %+v", events)
+	}
+	if toolCompleteIdx < 0 {
+		t.Fatalf("expected tool_call_completed event, got %+v", events)
+	}
+	if assistantIdx > toolCompleteIdx {
+		t.Fatalf("assistant event index %d must be before tool completion %d; events=%+v", assistantIdx, toolCompleteIdx, events)
+	}
+	assistantEntries := TranscriptEntriesFromEvent(events[assistantIdx])
+	if len(assistantEntries) < 2 || assistantEntries[0].Role != "assistant" || assistantEntries[1].Role != "tool_call" {
+		t.Fatalf("missing-phase assistant event must carry assistant + tool-call rows, got %+v", assistantEntries)
+	}
+	committedEvents := committedTranscriptEventsWithEntries(events)
+	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committedEvents)
+}
+
 func TestAutoCompactionStatusEventDoesNotPublishCommittedEntryStart(t *testing.T) {
 	store := mustCreateTestSession(t)
 

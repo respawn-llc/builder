@@ -710,6 +710,9 @@ func (e *Engine) SetWorktreeReminderState(state *session.WorktreeReminderState) 
 	if e == nil {
 		return ErrEngineClosed
 	}
+	if e.closed.Load() {
+		return ErrEngineClosed
+	}
 	return e.store.SetWorktreeReminderState(state)
 }
 

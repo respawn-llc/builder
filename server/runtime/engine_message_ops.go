@@ -173,16 +173,13 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 		}
 	}
 	currentCommittedCount := e.CommittedTranscriptEntryCount()
-	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedDeveloperMessageEvent(msg) {
+	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
 	}
 	return nil
 }
 
-func shouldEmitCommittedDeveloperMessageEvent(msg llm.Message) bool {
-	if msg.Role != llm.RoleDeveloper {
-		return false
-	}
+func shouldEmitCommittedMessageEvent(msg llm.Message) bool {
 	return len(VisibleChatEntriesFromMessage(msg)) > 0
 }
 

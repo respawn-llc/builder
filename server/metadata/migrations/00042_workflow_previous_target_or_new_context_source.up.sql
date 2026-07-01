@@ -1,6 +1,10 @@
 -- +goose Up
+-- +goose NO TRANSACTION
 
 PRAGMA legacy_alter_table = ON;
+PRAGMA foreign_keys = OFF;
+
+BEGIN IMMEDIATE;
 
 DROP TRIGGER IF EXISTS workflow_edges_target_workflow_insert;
 DROP TRIGGER IF EXISTS workflow_edges_target_workflow_update;
@@ -107,3 +111,7 @@ BEGIN
     SELECT RAISE(ABORT, 'workflow edge target node must belong to transition group workflow');
 END;
 -- +goose StatementEnd
+
+COMMIT;
+
+PRAGMA foreign_keys = ON;

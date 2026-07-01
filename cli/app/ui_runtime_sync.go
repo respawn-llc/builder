@@ -545,7 +545,7 @@ func (m *uiModel) handleRuntimeTranscriptRefreshed(msg runtimeTranscriptRefreshe
 	if recovered {
 		m.logf("ui.runtime.transcript.recovered token=%d", msg.token)
 	}
-	applyCmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithSyncCause(msg.req, msg.transcript, activeReq.syncCause, msg.recoveryCause)
+	applyCmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithSyncCause(msg.req, msg.transcript, activeReq.syncCause, activeReq.recoveryCause)
 	resumeCmd := m.resumeRuntimeEventsAfterHydrationIfUnowned()
 	drain := m.drainPendingRuntimeTranscriptSync()
 	if drain.started {

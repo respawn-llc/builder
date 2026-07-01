@@ -1,10 +1,6 @@
 package app
 
-import (
-	"strings"
-
-	"core/cli/tui"
-)
+import "core/cli/tui"
 
 func projectedTranscriptEventSnapshotFromModel(m *uiModel) projectedTranscriptEventSnapshot {
 	if m == nil {
@@ -15,6 +11,8 @@ func projectedTranscriptEventSnapshotFromModel(m *uiModel) projectedTranscriptEv
 		entries:              m.transcriptEntries,
 		baseOffset:           m.transcriptBaseOffset,
 		revision:             m.transcriptRevision,
+		totalEntries:         m.transcriptTotalEntries,
+		authoritativeTail:    !m.transcriptLiveDirty,
 		hasRuntimeClient:     m.hasRuntimeClient(),
 		busy:                 m.isBusy(),
 		liveAssistantPending: m.activeAssistantStreamPending(),
@@ -27,15 +25,7 @@ func projectedActiveAssistantStreamText(m *uiModel) string {
 	if m == nil {
 		return ""
 	}
-	values := []string{
-		m.activeAssistantStreamText(),
-	}
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
+	return m.activeAssistantStreamText()
 }
 
 func deferredCommittedTailSnapshotFromModel(m *uiModel) deferredCommittedTailSnapshot {

@@ -64,7 +64,7 @@ func TestCommittedTranscriptChangedMarksOnlyDurableTranscriptMutations(t *testin
 	if err := eng.steer("message-step", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: "persisted assistant", Phase: llm.MessagePhaseFinal}})); err != nil {
 		t.Fatalf("append persisted message: %v", err)
 	}
-	assertEventFlags(t, events[start:], nil)
+	assertEventFlags(t, events[start:], []eventFlagExpectation{{kind: EventConversationUpdated, stepID: "message-step", committedChanged: true}})
 
 	start = len(events)
 	if err := eng.steer("goal-step", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{normalizeMessageForTranscript(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeGoal, Content: "Goal paused.", CompactContent: "Goal paused"}, eng.transcriptWorkingDir())})); err != nil {
@@ -372,6 +372,85 @@ func TestToolResultMirrorMessageDoesNotEmitGenericCommittedAdvance(t *testing.T)
 	if got := events[start:]; len(got) != 0 {
 		t.Fatalf("expected no generic committed advance for tool mirror message, got %+v", got)
 	}
+}
+
+func TestVisibleToolMessageMutationPublishesCommittedEventBeforeLocalEntry(t *testing.T) {
+	store := mustCreateTestSession(t)
+	events := make([]Event, 0, 4)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:   "gpt-5",
+		OnEvent: func(evt Event) { events = append(events, evt) },
+	})
+
+	toolMessage := llm.Message{
+		Role:       llm.RoleTool,
+		ToolCallID: "orphan-call",
+		Name:       string(toolspec.ToolExecCommand),
+		Content:    string(mustJSON(map[string]any{"output": "done", "exit_code": 0, "truncated": false})),
+	}
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{toolMessage})); err != nil {
+		t.Fatalf("append visible tool message: %v", err)
+	}
+	if err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{Role: "system", Text: "local note"})); err != nil {
+		t.Fatalf("append local entry: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("event count = %d, want 2 events=%+v", len(events), events)
+	}
+	if events[0].Kind != EventConversationUpdated {
+		t.Fatalf("first event kind = %s, want %s; events=%+v", events[0].Kind, EventConversationUpdated, events)
+	}
+	if entries := TranscriptEntriesFromEvent(events[0]); len(entries) != 1 || entries[0].Role != "tool_result_ok" {
+		t.Fatalf("first event entries = %+v, want one tool result", entries)
+	}
+	if !events[0].CommittedEntryStartSet || events[0].CommittedEntryStart != 0 || events[0].CommittedEntryCount != 1 {
+		t.Fatalf("first event range = start_set:%t start:%d count:%d, want start 0 count 1", events[0].CommittedEntryStartSet, events[0].CommittedEntryStart, events[0].CommittedEntryCount)
+	}
+	if events[1].Kind != EventLocalEntryAdded {
+		t.Fatalf("second event kind = %s, want %s; events=%+v", events[1].Kind, EventLocalEntryAdded, events)
+	}
+	if !events[1].CommittedEntryStartSet || events[1].CommittedEntryStart != 1 || events[1].CommittedEntryCount != 2 {
+		t.Fatalf("second event range = start_set:%t start:%d count:%d, want start 1 count 2", events[1].CommittedEntryStartSet, events[1].CommittedEntryStart, events[1].CommittedEntryCount)
+	}
+	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, events)
+}
+
+func TestManualCompactionCarryoverPublishesCommittedEventBeforeLocalEntry(t *testing.T) {
+	store := mustCreateTestSession(t)
+	events := make([]Event, 0, 4)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		Model:   "gpt-5",
+		OnEvent: func(evt Event) { events = append(events, evt) },
+	})
+
+	messages := []postCompactionMessage{{message: manualCompactionCarryoverMessage("keep the active requirement")}}
+	if err := newCompactionCarryoverCoordinator(eng).appendPostCompactionMessages("compact-step", messages); err != nil {
+		t.Fatalf("append manual carryover: %v", err)
+	}
+	if err := eng.steer("compact-step", steerLocalEntryIntent(storedLocalEntry{Role: "compaction_summary", Text: "summary"})); err != nil {
+		t.Fatalf("append local entry: %v", err)
+	}
+
+	if len(events) != 2 {
+		t.Fatalf("event count = %d, want 2 events=%+v", len(events), events)
+	}
+	if events[0].Kind != EventConversationUpdated {
+		t.Fatalf("first event kind = %s, want %s; events=%+v", events[0].Kind, EventConversationUpdated, events)
+	}
+	if entries := TranscriptEntriesFromEvent(events[0]); len(entries) != 1 || entries[0].Role != string(transcript.EntryRoleManualCompactionCarryover) {
+		t.Fatalf("first event entries = %+v, want one manual compaction carryover", entries)
+	}
+	if !events[0].CommittedEntryStartSet || events[0].CommittedEntryStart != 0 || events[0].CommittedEntryCount != 1 {
+		t.Fatalf("first event range = start_set:%t start:%d count:%d, want start 0 count 1", events[0].CommittedEntryStartSet, events[0].CommittedEntryStart, events[0].CommittedEntryCount)
+	}
+	if events[1].Kind != EventLocalEntryAdded {
+		t.Fatalf("second event kind = %s, want %s; events=%+v", events[1].Kind, EventLocalEntryAdded, events)
+	}
+	if !events[1].CommittedEntryStartSet || events[1].CommittedEntryStart != 1 || events[1].CommittedEntryCount != 2 {
+		t.Fatalf("second event range = start_set:%t start:%d count:%d, want start 1 count 2", events[1].CommittedEntryStartSet, events[1].CommittedEntryStart, events[1].CommittedEntryCount)
+	}
+	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, events)
 }
 
 type eventFlagExpectation struct {

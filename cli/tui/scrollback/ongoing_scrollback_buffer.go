@@ -60,6 +60,7 @@ const (
 	stableHoldoffSteer stableHoldoffOperationKind = iota + 1
 	stableHoldoffAssistantStream
 	stableHoldoffFinishAssistantStream
+	stableHoldoffDiscardAssistantStream
 )
 
 type stableHoldoffOperation struct {
@@ -307,6 +308,51 @@ func (buffer *OngoingScrollbackBufferImpl) FinishAssistantStreaming() error {
 	return err
 }
 
+func (buffer *OngoingScrollbackBufferImpl) DiscardAssistantStreaming() error {
+	buffer.validateReadyBeforeLock("discardAssistantStreaming", "")
+
+	buffer.mu.Lock()
+	if buffer.closed {
+		buffer.mu.Unlock()
+		return buffer.closedError("discardAssistantStreaming")
+	}
+	if !buffer.isStreaming {
+		buffer.mu.Unlock()
+		panicScrollbackInvariant(
+			"discardAssistantStreaming",
+			"discardAssistantStreaming called without an active assistant stream",
+			"",
+			buffer.terminalWidth,
+			buffer.terminalHeight,
+			0,
+		)
+	}
+	buffer.isStreaming = false
+	buffer.turnEndedDuringActiveFlow.Store(false)
+	queuedSteers := append([]stableSteerRequest(nil), buffer.queuedSteers...)
+	buffer.queuedSteers = nil
+
+	if !buffer.normalBufferAvailableLocked() {
+		buffer.heldStableOps = append(buffer.heldStableOps, stableHoldoffOperation{kind: stableHoldoffDiscardAssistantStream, queuedSteers: queuedSteers})
+		buffer.clearAssistantStreamStateLocked()
+		buffer.mu.Unlock()
+		return nil
+	}
+	if err := buffer.prepareNormalBufferLocked(); err != nil {
+		buffer.mu.Unlock()
+		return err
+	}
+	delayedErr := error(nil)
+	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
+		delayedErr = err
+	}
+
+	err := buffer.discardAssistantStreamingLocked(queuedSteers)
+	buffer.mu.Unlock()
+	buffer.notifyDelayedWriteError(delayedErr)
+	return err
+}
+
 func (buffer *OngoingScrollbackBufferImpl) RenderLive(frame NativeLiveAreaFrame) error {
 	buffer.validateReadyBeforeLock("renderLive", "")
 
@@ -483,6 +529,8 @@ func (buffer *OngoingScrollbackBufferImpl) writeStableHoldoffOperationsLocked(op
 			err = buffer.writeAssistantStreamPayloadLocked(operation.payload)
 		case stableHoldoffFinishAssistantStream:
 			err = buffer.finishAssistantStreamingLocked(operation.queuedSteers)
+		case stableHoldoffDiscardAssistantStream:
+			err = buffer.discardAssistantStreamingLocked(operation.queuedSteers)
 		default:
 			panicScrollbackInvariant("flushHoldoff", "unknown stable holdoff operation kind", operation.payload, buffer.terminalWidth, buffer.terminalHeight, lipgloss.Width(operation.payload))
 		}
@@ -500,17 +548,13 @@ func (buffer *OngoingScrollbackBufferImpl) finishAssistantStreamingLocked(queued
 	rowsToPromote := append([]string(nil), rows[promotedCount:]...)
 	if len(queuedSteers) == 0 {
 		err := buffer.writeStableRowsWithLiveErasedLocked(stableOutputRows("finishAssistantStreaming", rowsToPromote), true, false)
-		if err == nil {
-			buffer.clearAssistantStreamStateLocked()
-		}
+		buffer.clearAssistantStreamStateLocked()
 		return err
 	}
 	firstErr := error(nil)
 	if len(rowsToPromote) > 0 {
 		firstErr = buffer.writeStableRowsWithLiveErasedLocked(stableOutputRows("finishAssistantStreaming", rowsToPromote), false, false)
-		if firstErr == nil {
-			buffer.clearAssistantStreamStateLocked()
-		}
+		buffer.clearAssistantStreamStateLocked()
 	} else {
 		buffer.clearAssistantStreamStateLocked()
 	}
@@ -522,6 +566,15 @@ func (buffer *OngoingScrollbackBufferImpl) finishAssistantStreamingLocked(queued
 		firstErr = err
 	}
 	return firstErr
+}
+
+func (buffer *OngoingScrollbackBufferImpl) discardAssistantStreamingLocked(queuedSteers []stableSteerRequest) error {
+	buffer.clearAssistantStreamStateLocked()
+	stableRows := make([]stableOutputRow, 0, len(queuedSteers))
+	for _, request := range queuedSteers {
+		stableRows = append(stableRows, stableOutputRow{operation: "steer", text: request.line})
+	}
+	return buffer.writeStableRowsWithLiveErasedLocked(stableRows, true, true)
 }
 
 func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(delta string) error {

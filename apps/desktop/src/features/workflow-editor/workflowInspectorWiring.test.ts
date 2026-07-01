@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import type { WorkflowDefinition, WorkflowEdge } from "../../api";
+import { appI18n, initializeI18n } from "../../i18n/setup";
 import {
   groupableWorkflowDefinition,
   workflowDefinition,
@@ -12,22 +13,15 @@ import {
   immediateContextSourceOption,
   previousTargetContextSourceOption,
   previousTargetOrNewContextSourceOption,
-  type Translate,
 } from "./workflowInspectorWiring";
 
-const translate = ((key: string) => {
-  const values: Record<string, string> = {
-    "workflowEditor.contextSourceImmediate": "Immediate source",
-    "workflowEditor.contextSourceNode": "Node",
-    "workflowEditor.contextSourcePreviousTarget": "Previous run of this target",
-    "workflowEditor.contextSourcePreviousTargetOrNew": "Previous run of this target, or new session",
-    "workflowEditor.contextSourceSelected": "Selected node",
-    "workflowEditor.contextSourceUnavailable": "N/A for current configuration",
-  };
-  return values[key] ?? key;
-}) as unknown as Translate;
+const translate = appI18n.t;
 
 describe("workflowInspectorWiring context sources", () => {
+  beforeAll(async () => {
+    await initializeI18n();
+  });
+
   it("keeps unavailable context-source options visible with disabled reasons", () => {
     const edge = edgeByID(groupableWorkflowDefinition, "edge-source-agent");
 

@@ -112,7 +112,7 @@ WHERE state = 'completed'
           WHERE transition.source_placement_id = task_node_placements.id
             AND transition.state IN ('pending_approval', 'approved', 'applied')
             AND (
-                transition.created_at_unix_ms > task_node_placements.created_at_unix_ms
+                transition.created_at_unix_ms >= task_node_placements.created_at_unix_ms
                 OR transition.applied_at_unix_ms > task_node_placements.created_at_unix_ms
             )
       )

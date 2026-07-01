@@ -692,46 +692,16 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 	ownerID := uuid.NewString()
 	var engine *runtime.Engine
 	build := func(_ context.Context) (sessionruntime.RuntimeBuildResult, error) {
-		var (
-			pendingRuntimeEvents  []runtime.Event
-			runtimeEventMu        sync.Mutex
-			runtimeEventsResolved bool
-		)
+		runtimeEvents := runtimewire.NewOrderedRuntimeEventPublisher(sessionID, s.runtimes)
 		publishRuntimeEvent := func(evt runtime.Event) {
-			if s.runtimes == nil {
-				return
-			}
-			runtimeEventMu.Lock()
-			currentEngine := engine
-			if currentEngine == nil || !runtimeEventsResolved {
-				pendingRuntimeEvents = append(pendingRuntimeEvents, evt)
-				runtimeEventMu.Unlock()
-				return
-			}
-			runtimeEventMu.Unlock()
-			s.runtimes.PublishRuntimeEventForEngine(sessionID, currentEngine, evt)
+			runtimeEvents.Publish(evt)
 		}
 		bindRuntimeEventEngine := func(bound *runtime.Engine) {
-			if s.runtimes == nil {
-				return
-			}
-			runtimeEventMu.Lock()
 			engine = bound
-			runtimeEventMu.Unlock()
+			runtimeEvents.BindEngine(bound)
 		}
 		flushRuntimeEventsAfterResolve := func() {
-			if s.runtimes == nil {
-				return
-			}
-			runtimeEventMu.Lock()
-			currentEngine := engine
-			runtimeEventsResolved = true
-			pending := append([]runtime.Event(nil), pendingRuntimeEvents...)
-			pendingRuntimeEvents = nil
-			runtimeEventMu.Unlock()
-			for _, evt := range pending {
-				s.runtimes.PublishRuntimeEventForEngine(sessionID, currentEngine, evt)
-			}
+			runtimeEvents.FlushAfterResolve()
 		}
 		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, workflowRuntimeEnabledTools(plan.EnabledTools), input.WorktreeRoot, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
 			Headless:        true,

@@ -57,11 +57,11 @@ func newRollingTUILogger(persistenceRoot string) (*rollingTUILogger, error) {
 		return nil, nil
 	}
 	dir := filepath.Join(root, tuiLogDirName)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create tui log dir: %w", err)
 	}
 	path := filepath.Join(dir, tuiLogFileName)
-	fp, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	fp, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open tui log: %w", err)
 	}

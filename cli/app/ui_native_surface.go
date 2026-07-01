@@ -127,6 +127,13 @@ func (s *uiNativeSurface) FinishAssistantStreaming() error {
 	return s.surface.FinishAssistantStreaming()
 }
 
+func (s *uiNativeSurface) DiscardAssistantStreaming() error {
+	if s == nil || s.surface == nil || !s.surface.AssistantStreaming() {
+		return nil
+	}
+	return s.surface.DiscardAssistantStreaming()
+}
+
 func (s *uiNativeSurface) FlushHoldoff() error {
 	if s == nil || s.surface == nil {
 		return nil

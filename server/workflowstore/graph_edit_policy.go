@@ -158,7 +158,7 @@ func workflowGraphTransitionChangePolicyImpact(ctx context.Context, q *sqlitegen
 	currentEdgesByGroupID := workflowGraphEdgesByTransitionGroupID(current.edges)
 	for _, currentGroup := range current.transitionGroups {
 		nextGroup, exists := nextGroups[currentGroup.ID]
-		if !exists || workflowTransitionGroupMetadataOnlyChange(currentGroup, nextGroup) {
+		if exists && workflowTransitionGroupMetadataOnlyChange(currentGroup, nextGroup) {
 			continue
 		}
 		refCount, err := countCurrentWorkflowEdgeReferences(ctx, q, currentEdgesByGroupID[currentGroup.ID])
@@ -179,6 +179,25 @@ func workflowGraphTransitionChangePolicyImpact(ctx context.Context, q *sqlitegen
 	for _, currentEdge := range current.edges {
 		nextEdge, exists := nextEdges[currentEdge.ID]
 		if !exists {
+			if _, groupExists := nextGroups[currentEdge.TransitionGroupID]; !groupExists {
+				continue
+			}
+			refCount, err := q.CountTaskEdgeReferences(ctx, sql.NullString{String: string(currentEdge.ID), Valid: true})
+			if err != nil {
+				return WorkflowGraphEditPolicyImpact{}, err
+			}
+			currentGroup, hasGroup := currentGroups[currentEdge.TransitionGroupID]
+			if hasGroup {
+				runCount, err := countUnresolvedTaskRunsAtWorkflowNode(ctx, q, currentEdge.WorkflowID, currentGroup.SourceNodeID)
+				if err != nil {
+					return WorkflowGraphEditPolicyImpact{}, err
+				}
+				refCount += runCount
+			}
+			if refCount > 0 {
+				impact.UnsafeTransitionChangeCount++
+				impact.UnsafeTransitionChangeRefCount += refCount
+			}
 			continue
 		}
 		if workflowEdgeHistoryReinterpretingChange(currentEdge, nextEdge) {

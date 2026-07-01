@@ -17,7 +17,11 @@ func TestProtocolVersionLoadsFromEmbeddedDefinition(t *testing.T) {
 	if Version != strings.TrimSpace(definition.Version) {
 		t.Fatalf("protocol version = %q, want embedded definition %q", Version, definition.Version)
 	}
-	if _, err := strconv.ParseUint(Version, 10, 64); err != nil {
+	parsed, err := strconv.ParseUint(Version, 10, 64)
+	if err != nil {
 		t.Fatalf("protocol version = %q, want positive integer string: %v", Version, err)
+	}
+	if parsed == 0 {
+		t.Fatalf("protocol version = %q, want positive integer string", Version)
 	}
 }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 
 	"core/server/auth"
 	"core/server/launch"
@@ -163,46 +162,16 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		if err != nil {
 			return sessionruntime.RuntimeBuildResult{}, err
 		}
-		var (
-			pendingRuntimeEvents  []runtime.Event
-			runtimeEventMu        sync.Mutex
-			runtimeEventsResolved bool
-		)
+		runtimeEvents := runtimewire.NewOrderedRuntimeEventPublisher(sessionID, l.boot.RuntimeRegistry)
 		publishRuntimeEvent := func(evt runtime.Event) {
-			if l.boot.RuntimeRegistry == nil {
-				return
-			}
-			runtimeEventMu.Lock()
-			engine := acquiredEngine
-			if engine == nil || !runtimeEventsResolved {
-				pendingRuntimeEvents = append(pendingRuntimeEvents, evt)
-				runtimeEventMu.Unlock()
-				return
-			}
-			runtimeEventMu.Unlock()
-			l.boot.RuntimeRegistry.PublishRuntimeEventForEngine(sessionID, engine, evt)
+			runtimeEvents.Publish(evt)
 		}
 		bindRuntimeEventEngine := func(engine *runtime.Engine) {
-			if l.boot.RuntimeRegistry == nil {
-				return
-			}
-			runtimeEventMu.Lock()
 			acquiredEngine = engine
-			runtimeEventMu.Unlock()
+			runtimeEvents.BindEngine(engine)
 		}
 		flushRuntimeEventsAfterResolve := func() {
-			if l.boot.RuntimeRegistry == nil {
-				return
-			}
-			runtimeEventMu.Lock()
-			engine := acquiredEngine
-			runtimeEventsResolved = true
-			pending := append([]runtime.Event(nil), pendingRuntimeEvents...)
-			pendingRuntimeEvents = nil
-			runtimeEventMu.Unlock()
-			for _, evt := range pending {
-				l.boot.RuntimeRegistry.PublishRuntimeEventForEngine(sessionID, engine, evt)
-			}
+			runtimeEvents.FlushAfterResolve()
 		}
 		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, plan.EnabledTools, workdir, l.boot.AuthManager, engineLogger, l.boot.Background, runtimewire.RuntimeWiringOptions{
 			Headless:        true,

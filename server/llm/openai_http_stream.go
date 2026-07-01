@@ -127,8 +127,13 @@ func (a *responseStreamAccumulator) emitReasoningSummaryDelta(key string) {
 func (a *responseStreamAccumulator) Response() OpenAIResponse {
 	usage := Usage{WindowTokens: a.windowTokens}
 	streamText, streamPhase, streamOutputIndex, hasResolvedStream := a.assistantMessages.Resolve()
-	finalText := a.assistantText.String()
-	if strings.TrimSpace(streamText) != "" {
+	rawDeltaText := a.assistantText.String()
+	streamedDeltaText := ""
+	if a.callbacks.OnAssistantDelta != nil {
+		streamedDeltaText = rawDeltaText
+	}
+	finalText := rawDeltaText
+	if assistantResponseTextExtendsStream(streamedDeltaText, streamText) {
 		finalText = streamText
 	}
 	finalPhase := streamPhase
@@ -153,7 +158,7 @@ func (a *responseStreamAccumulator) Response() OpenAIResponse {
 		usage = usageFromSDK(a.completed.Usage, a.windowTokens)
 	}
 	parsedItems, parsedText, parsedPhase, parsedCalls, parsedReasoning, parsedReasoningItems := parseOutputItems(a.completed.Output)
-	if strings.TrimSpace(parsedText) != "" {
+	if assistantResponseTextExtendsStream(streamedDeltaText, parsedText) {
 		finalText = parsedText
 	}
 	if parsedPhase != "" {
@@ -178,19 +183,28 @@ func (a *responseStreamAccumulator) Response() OpenAIResponse {
 	}
 }
 
+func assistantResponseTextExtendsStream(streamed string, candidate string) bool {
+	if candidate == "" {
+		return false
+	}
+	if streamed == "" {
+		return true
+	}
+	return strings.HasPrefix(candidate, streamed)
+}
+
 func repairAssistantOutputItems(items []ResponseItem, text string, phase MessagePhase, outputIndex int64, hasResolvedStream bool) []ResponseItem {
 	if len(items) == 0 {
 		return nil
 	}
 	repaired := CloneResponseItems(items)
-	lastAssistantIdx := -1
+	assistantIndexes := make([]int, 0, len(repaired))
 	for idx := len(repaired) - 1; idx >= 0; idx-- {
 		if repaired[idx].Type == ResponseItemTypeMessage && repaired[idx].Role == RoleAssistant {
-			lastAssistantIdx = idx
-			break
+			assistantIndexes = append(assistantIndexes, idx)
 		}
 	}
-	if lastAssistantIdx < 0 {
+	if len(assistantIndexes) == 0 {
 		if strings.TrimSpace(text) == "" {
 			return repaired
 		}
@@ -216,11 +230,20 @@ func repairAssistantOutputItems(items []ResponseItem, text string, phase Message
 		repaired[insertAt] = assistant
 		return repaired
 	}
-	if strings.TrimSpace(repaired[lastAssistantIdx].Content) == "" && strings.TrimSpace(text) != "" {
-		repaired[lastAssistantIdx].Content = text
+	targetAssistantIdx := assistantIndexes[0]
+	if hasResolvedStream {
+		for _, idx := range assistantIndexes {
+			if repaired[idx].OutputIndex == outputIndex {
+				targetAssistantIdx = idx
+				break
+			}
+		}
 	}
-	if repaired[lastAssistantIdx].Phase == "" && phase != "" {
-		repaired[lastAssistantIdx].Phase = phase
+	if len(assistantIndexes) == 1 && text != "" && repaired[targetAssistantIdx].Content != text {
+		repaired[targetAssistantIdx].Content = text
+	}
+	if repaired[targetAssistantIdx].Phase == "" && phase != "" {
+		repaired[targetAssistantIdx].Phase = phase
 	}
 	return repaired
 }

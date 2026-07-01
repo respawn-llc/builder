@@ -37,6 +37,8 @@ type projectedTranscriptEventState struct {
 	entries              []tui.TranscriptEntry
 	baseOffset           int
 	revision             int64
+	totalEntries         int
+	authoritativeTail    bool
 	hasRuntimeClient     bool
 	busy                 bool
 	liveAssistantPending bool
@@ -48,6 +50,8 @@ type projectedTranscriptEventSnapshot struct {
 	entries              []tui.TranscriptEntry
 	baseOffset           int
 	revision             int64
+	totalEntries         int
+	authoritativeTail    bool
 	hasRuntimeClient     bool
 	busy                 bool
 	liveAssistantPending bool
@@ -71,6 +75,8 @@ func newProjectedTranscriptEventState(snapshot projectedTranscriptEventSnapshot)
 		entries:              append([]tui.TranscriptEntry(nil), snapshot.entries...),
 		baseOffset:           snapshot.baseOffset,
 		revision:             snapshot.revision,
+		totalEntries:         snapshot.totalEntries,
+		authoritativeTail:    snapshot.authoritativeTail,
 		hasRuntimeClient:     snapshot.hasRuntimeClient,
 		busy:                 snapshot.busy,
 		liveAssistantPending: snapshot.liveAssistantPending,
@@ -79,7 +85,46 @@ func newProjectedTranscriptEventState(snapshot projectedTranscriptEventSnapshot)
 	}
 }
 
+func projectedStateAfterDroppingTrailingTransientForCommittedEvent(state projectedTranscriptEventState, evt clientui.Event) projectedTranscriptEventState {
+	if !evt.CommittedTranscriptChanged || len(evt.TranscriptEntries) == 0 {
+		return state
+	}
+	eventStart, _, ok := projectedTranscriptEventRange(evt, len(evt.TranscriptEntries))
+	if !ok {
+		return state
+	}
+	prefixLen, ok := trailingTransientTranscriptPrefixLen(state.entries)
+	if !ok || prefixLen == len(state.entries) {
+		return state
+	}
+	if eventStart != state.baseOffset+prefixLen {
+		return state
+	}
+	state.entries = append([]tui.TranscriptEntry(nil), state.entries[:prefixLen]...)
+	return state
+}
+
+func trailingTransientTranscriptPrefixLen(entries []tui.TranscriptEntry) (int, bool) {
+	firstTransient := -1
+	for idx, entry := range entries {
+		if entry.Transient && !entry.Committed {
+			if firstTransient < 0 {
+				firstTransient = idx
+			}
+			continue
+		}
+		if firstTransient >= 0 {
+			return 0, false
+		}
+	}
+	if firstTransient < 0 {
+		return len(entries), true
+	}
+	return firstTransient, true
+}
+
 func reduceProjectedTranscriptEvent(state projectedTranscriptEventState, evt clientui.Event) projectedTranscriptReduction {
+	state = projectedStateAfterDroppingTrailingTransientForCommittedEvent(state, evt)
 	incoming := cloneChatEntries(evt.TranscriptEntries)
 	if shouldSkipProjectedToolCallStart(state, evt) {
 		return projectedTranscriptReduction{
@@ -161,10 +206,39 @@ func planProjectedTranscriptEntries(state projectedTranscriptEventState, evt cli
 			entries:    entries,
 		}
 	}
+	if shouldSkipStaleAuthoritativeUserFlush(state, evt, eventEnd, currentEnd) {
+		return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanSkip}
+	}
+	if shouldSkipStaleAuthoritativeAssistantFinalizer(state, evt, eventEnd, currentEnd) {
+		return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanSkip}
+	}
 	if eventEnd <= currentEnd {
 		return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanHydrate, divergence: "partial_event_range"}
 	}
 	return projectedTranscriptEntryPlan{mode: projectedTranscriptEntryPlanHydrate, divergence: "partial_event_range"}
+}
+
+func shouldSkipStaleAuthoritativeUserFlush(state projectedTranscriptEventState, evt clientui.Event, eventEnd int, currentEnd int) bool {
+	// A recent-tail page is an authoritative server read model. A queued user
+	// flush can still arrive after that page through the live subscription; only
+	// that typed end-aligned stale event is skipped. Live-built overlapping tails
+	// continue through the native divergence path and panic in native mode.
+	return state.authoritativeTail &&
+		evt.Kind == clientui.EventUserMessageFlushed &&
+		evt.CommittedTranscriptChanged &&
+		eventEnd == currentEnd &&
+		evt.CommittedEntryCount > 0 &&
+		evt.CommittedEntryCount <= currentEnd
+}
+
+func shouldSkipStaleAuthoritativeAssistantFinalizer(state projectedTranscriptEventState, evt clientui.Event, eventEnd int, currentEnd int) bool {
+	knownEnd := max(currentEnd, state.totalEntries)
+	return state.authoritativeTail &&
+		evt.Kind == clientui.EventAssistantMessage &&
+		evt.CommittedTranscriptChanged &&
+		eventEnd == currentEnd &&
+		evt.CommittedEntryCount <= knownEnd &&
+		isAssistantStreamFinalizerEvent(state, evt)
 }
 
 func (mode projectedTranscriptEntryPlanMode) label() string {
@@ -217,6 +291,9 @@ func shouldDeferCommittedTranscriptEventWhileStreaming(state projectedTranscript
 	if !evt.CommittedTranscriptChanged || len(evt.TranscriptEntries) == 0 {
 		return false
 	}
+	if isWhitespaceOnlyAssistantStreamCommittedEvent(state, evt) {
+		return false
+	}
 	if isAssistantStreamFinalizerEvent(state, evt) {
 		return false
 	}
@@ -248,6 +325,23 @@ func isAssistantStreamFinalizerEvent(state projectedTranscriptEventState, evt cl
 		}
 	}
 	return false
+}
+
+func isWhitespaceOnlyAssistantStreamCommittedEvent(state projectedTranscriptEventState, evt clientui.Event) bool {
+	if !evt.CommittedTranscriptChanged || state.liveAssistantText == "" || strings.TrimSpace(state.liveAssistantText) != "" {
+		return false
+	}
+	if !activeAssistantStepMatchesEvent(state, evt) {
+		return false
+	}
+	hasCommittedNonAssistant := false
+	for _, entry := range evt.TranscriptEntries {
+		if tui.TranscriptRoleFromWire(entry.Role) == tui.TranscriptRoleAssistant {
+			return false
+		}
+		hasCommittedNonAssistant = true
+	}
+	return hasCommittedNonAssistant
 }
 
 func activeAssistantStepMatchesEvent(state projectedTranscriptEventState, evt clientui.Event) bool {

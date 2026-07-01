@@ -55,6 +55,32 @@ func (m *uiModel) invalidateTransientTranscriptState() {
 	})
 }
 
+func (m *uiModel) dropTrailingTransientTranscriptEntriesForCommittedEvent(evt clientui.Event) {
+	if m == nil || !evt.CommittedTranscriptChanged || len(evt.TranscriptEntries) == 0 {
+		return
+	}
+	eventStart, _, ok := projectedTranscriptEventRange(evt, len(evt.TranscriptEntries))
+	if !ok {
+		return
+	}
+	prefixLen, ok := trailingTransientTranscriptPrefixLen(m.transcriptEntries)
+	if !ok || prefixLen == len(m.transcriptEntries) {
+		return
+	}
+	if eventStart != m.transcriptBaseOffset+prefixLen {
+		return
+	}
+	m.transcriptEntries = append([]tui.TranscriptEntry(nil), m.transcriptEntries[:prefixLen]...)
+	m.refreshRollbackCandidates()
+	m.forwardToView(tui.SetConversationMsg{
+		BaseOffset:   m.transcriptBaseOffset,
+		TotalEntries: m.transcriptTotalEntries,
+		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
+		Ongoing:      m.activeAssistantStreamText(),
+		OngoingError: m.view.OngoingErrorText(),
+	})
+}
+
 func shouldReplaceLoadedTransientEntriesWithCommittedAppend(m *uiModel, entries []tui.TranscriptEntry) bool {
 	if m == nil || m.view.Mode() != tui.ModeOngoing || len(entries) == 0 {
 		return false
@@ -191,6 +217,26 @@ func shouldClearAssistantStreamForCommittedTranscriptEntries(entries []tui.Trans
 		}
 	}
 	return false
+}
+
+func shouldDiscardWhitespaceAssistantStreamForCommittedTranscriptEntries(state projectedTranscriptEventState, evt clientui.Event, entries []tui.TranscriptEntry) bool {
+	if !evt.CommittedTranscriptChanged || strings.TrimSpace(state.liveAssistantText) != "" || state.liveAssistantText == "" {
+		return false
+	}
+	if !activeAssistantStepMatchesEvent(state, evt) {
+		return false
+	}
+	hasCommittedNonAssistant := false
+	for _, entry := range entries {
+		if entry.Transient && !entry.Committed {
+			continue
+		}
+		if entry.Role == tui.TranscriptRoleAssistant {
+			return false
+		}
+		hasCommittedNonAssistant = true
+	}
+	return hasCommittedNonAssistant
 }
 
 func isFinalAssistantProjectedEntry(entry clientui.ChatEntry) bool {
@@ -335,6 +381,14 @@ func committedTranscriptStateIncludingDeferredTail(m *uiModel) (int64, int) {
 	if m == nil {
 		return 0, 0
 	}
+	revision, chainEnd := committedTranscriptOwnedTailIncludingDeferredTail(m)
+	return revision, max(m.transcriptTotalEntries, chainEnd)
+}
+
+func committedTranscriptOwnedTailIncludingDeferredTail(m *uiModel) (int64, int) {
+	if m == nil {
+		return 0, 0
+	}
 	revision := m.transcriptRevision
 	count := m.transcriptBaseOffset + len(committedTranscriptEntriesForApp(m.transcriptEntries))
 	chainEnd := count
@@ -347,5 +401,5 @@ func committedTranscriptStateIncludingDeferredTail(m *uiModel) (int64, int) {
 			revision = deferred.revision
 		}
 	}
-	return revision, max(m.transcriptTotalEntries, chainEnd)
+	return revision, chainEnd
 }

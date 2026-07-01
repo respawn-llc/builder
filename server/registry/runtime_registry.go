@@ -450,6 +450,16 @@ func (r *RuntimeRegistry) readModelSnapshot(sessionID string, build runtimeactiv
 	return r.readModels.WithSnapshot(sessionID, build)
 }
 
+func (r *RuntimeRegistry) unavailableRuntimeReadModelSnapshot(sessionID string) (runtimeactivity.ResponseSnapshot, error) {
+	id := strings.TrimSpace(sessionID)
+	return r.readModelSnapshot(id, func(version clientui.ReadModelVersion) (runtimeactivity.SnapshotInput, error) {
+		return runtimeactivity.SnapshotInput{
+			Resolver:            runtimeactivity.ResolverSnapshot{},
+			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
+		}, nil
+	})
+}
+
 func (r *RuntimeRegistry) pinRuntimeReadModel(sessionID string, entry *runtimeEntry) {
 	if r == nil || r.readModels == nil || entry == nil {
 		return
@@ -537,7 +547,7 @@ func (r *RuntimeRegistry) publishUnavailableRuntimeActivityToEntry(sessionID str
 		return
 	}
 	id := strings.TrimSpace(sessionID)
-	response, err := r.RuntimeReadModelSnapshot(context.Background(), id, nil)
+	response, err := r.unavailableRuntimeReadModelSnapshot(id)
 	if err != nil {
 		return
 	}
@@ -549,7 +559,7 @@ func (r *RuntimeRegistry) publishUnavailableRuntimeActivityToEntry(sessionID str
 		RuntimeActivity:     &activity,
 		InputReconciliation: &reconciliation,
 	})
-	r.updateAggregateRuntimeActivity(id, false)
+	r.updateAggregateRuntimeActivityForEntry(id, entry, false)
 }
 
 func (r *RuntimeRegistry) PublishRuntimeEventToAll(evt runtime.Event) {
@@ -630,8 +640,9 @@ func (r *RuntimeRegistry) PublishRuntimeActivitySnapshot(sessionID string, snaps
 		RuntimeActivity:     &activity,
 		InputReconciliation: &reconciliation,
 	})
-	r.updateAggregateRuntimeActivity(sessionID, activity.ActiveForControl())
-	r.notifyInterestChanged(sessionID, RuntimeInterestChanged)
+	if r.updateAggregateRuntimeActivityForEntry(sessionID, entry, activity.ActiveForControl()) {
+		r.notifyInterestChanged(sessionID, RuntimeInterestChanged)
+	}
 }
 
 func (r *RuntimeRegistry) SubscribeSessionActivity(_ context.Context, sessionID string) (serverapi.SessionActivitySubscription, error) {
@@ -822,12 +833,35 @@ func (r *RuntimeRegistry) updateAggregateRuntimeActivity(sessionID string, activ
 	if id == "" {
 		return
 	}
+	r.updateAggregateRuntimeActivityState(id, activeForControl)
+}
+
+func (r *RuntimeRegistry) updateAggregateRuntimeActivityForEntry(sessionID string, entry *runtimeEntry, activeForControl bool) bool {
+	if r == nil {
+		return false
+	}
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return false
+	}
+	r.directory.mu.RLock()
+	current := r.directory.entries[id]
+	if current != entry && (activeForControl || current != nil) {
+		r.directory.mu.RUnlock()
+		return false
+	}
+	r.updateAggregateRuntimeActivityState(id, activeForControl)
+	r.directory.mu.RUnlock()
+	return true
+}
+
+func (r *RuntimeRegistry) updateAggregateRuntimeActivityState(sessionID string, activeForControl bool) {
 	r.runStateMu.Lock()
 	wasActive := len(r.blockingActivitySessions) > 0
 	if activeForControl {
-		r.blockingActivitySessions[id] = true
+		r.blockingActivitySessions[sessionID] = true
 	} else {
-		delete(r.blockingActivitySessions, id)
+		delete(r.blockingActivitySessions, sessionID)
 	}
 	active := len(r.blockingActivitySessions) > 0
 	if wasActive == active {

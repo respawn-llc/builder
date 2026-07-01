@@ -409,47 +409,15 @@ func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivate
 			_ = logger.Close()
 			return RuntimeBuildResult{}, err
 		}
-		var (
-			activeEngine          *runtime.Engine
-			pendingRuntimeEvents  []runtime.Event
-			runtimeEventMu        sync.Mutex
-			runtimeEventsResolved bool
-		)
+		runtimeEvents := runtimewire.NewOrderedRuntimeEventPublisher(sessionID, s.runtimes)
 		publishRuntimeEvent := func(evt runtime.Event) {
-			if s.runtimes == nil {
-				return
-			}
-			runtimeEventMu.Lock()
-			engine := activeEngine
-			if engine == nil || !runtimeEventsResolved {
-				pendingRuntimeEvents = append(pendingRuntimeEvents, evt)
-				runtimeEventMu.Unlock()
-				return
-			}
-			runtimeEventMu.Unlock()
-			s.runtimes.PublishRuntimeEventForEngine(sessionID, engine, evt)
+			runtimeEvents.Publish(evt)
 		}
 		bindRuntimeEventEngine := func(engine *runtime.Engine) {
-			if s.runtimes == nil {
-				return
-			}
-			runtimeEventMu.Lock()
-			activeEngine = engine
-			runtimeEventMu.Unlock()
+			runtimeEvents.BindEngine(engine)
 		}
 		flushRuntimeEventsAfterResolve := func() {
-			if s.runtimes == nil {
-				return
-			}
-			runtimeEventMu.Lock()
-			engine := activeEngine
-			runtimeEventsResolved = true
-			pending := append([]runtime.Event(nil), pendingRuntimeEvents...)
-			pendingRuntimeEvents = nil
-			runtimeEventMu.Unlock()
-			for _, evt := range pending {
-				s.runtimes.PublishRuntimeEventForEngine(sessionID, engine, evt)
-			}
+			runtimeEvents.FlushAfterResolve()
 		}
 		wiring, err := runtimewire.NewRuntimeWiringWithBackground(store, req.ActiveSettings, enabledTools, target.EffectiveWorkdir, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
 			FastMode:        s.fastModeState,

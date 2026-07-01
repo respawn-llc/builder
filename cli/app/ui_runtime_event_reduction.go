@@ -246,6 +246,9 @@ func (a uiRuntimeAdapter) effectiveRuntimeTranscriptSync(evt clientui.Event, pro
 	if evt.Kind != clientui.EventConversationUpdated {
 		return proposed
 	}
+	if a.model.nativeCommittedAdvanceRequiresContinuityBarrier(evt) {
+		return runtimestate.RuntimeTranscriptSyncCommand{Reason: runtimestate.RuntimeTranscriptSyncCommittedAdvance}
+	}
 	if !shouldRecoverCommittedTranscriptFromConversationUpdate(a.model, evt) {
 		return runtimestate.RuntimeTranscriptSyncCommand{}
 	}

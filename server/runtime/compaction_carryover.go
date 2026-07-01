@@ -83,7 +83,7 @@ func (c compactionCarryoverCoordinator) appendPostCompactionMessages(stepID stri
 		message := item.message
 		switch message.MessageType {
 		case llm.MessageTypeManualCompactionCarryover:
-			if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{message})); err != nil {
+			if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
 				return err
 			}
 		default:

@@ -33,9 +33,26 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	m.logProjectedTranscriptPlanDiag(evt, plan, incomingCount)
 	switch reduction.decision {
 	case projectedTranscriptDecisionSkip:
+		staleAuthoritativeAssistantFinalizer := false
+		_, eventEnd, hasEventRange := projectedTranscriptEventRange(evt, len(evt.TranscriptEntries))
+		if hasEventRange && shouldSkipStaleAuthoritativeAssistantFinalizer(state, evt, eventEnd, m.transcriptBaseOffset+len(m.transcriptEntries)) {
+			staleAuthoritativeAssistantFinalizer = true
+			if m.nativeSurfaceConfigured() && m.nativeSurface.AssistantStreaming() && state.liveAssistantText != "" {
+				converted := make([]tui.TranscriptEntry, 0, len(evt.TranscriptEntries))
+				for _, entry := range evt.TranscriptEntries {
+					converted = append(converted, transcriptEntryFromProjectedEventEntry(evt, entry, reduction.projectedTransient, reduction.projectedCommitted))
+				}
+				if _, _, err := m.nativeCommittedEntriesAfterActiveAssistantFinalizer(converted, state.liveAssistantText); err != nil {
+					return m.nativeFatalSurfaceErrorCmd("finalize stale assistant finalizer stream", err), false, false, true
+				}
+			}
+			m.clearAssistantStreamForCommittedAppend()
+		}
 		if evt.CommittedTranscriptChanged {
 			m.transcriptRevision = max(m.transcriptRevision, evt.TranscriptRevision)
-			m.transcriptTotalEntries = max(m.transcriptTotalEntries, evt.CommittedEntryCount)
+			if !staleAuthoritativeAssistantFinalizer || evt.CommittedEntryCount <= m.transcriptBaseOffset+len(m.transcriptEntries) {
+				m.transcriptTotalEntries = max(m.transcriptTotalEntries, evt.CommittedEntryCount)
+			}
 		}
 		m.logTranscriptEventDiag("transcript.diag.client.append_entries", evt, map[string]string{
 			"path":           "live_event",
@@ -87,6 +104,9 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 		return nil, false, false, false
 	}
 	entries := plan.entries
+	if plan.mode == projectedTranscriptEntryPlanAppend {
+		m.dropTrailingTransientTranscriptEntriesForCommittedEvent(evt)
+	}
 	convertedEntries := make([]tui.TranscriptEntry, 0, len(entries))
 	for _, entry := range entries {
 		convertedEntries = append(convertedEntries, transcriptEntryFromProjectedEventEntry(evt, entry, reduction.projectedTransient, reduction.projectedCommitted))
@@ -94,6 +114,8 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	nativeSurfaceConfigured := m.nativeSurfaceConfigured()
 	nativeAssistantStreamText := m.activeAssistantStreamText()
 	committedAppendClearsAssistantStream := shouldClearAssistantStreamForCommittedTranscriptEntries(convertedEntries, nativeAssistantStreamText)
+	committedAppendDiscardsWhitespaceAssistantStream := plan.mode == projectedTranscriptEntryPlanAppend &&
+		shouldDiscardWhitespaceAssistantStreamForCommittedTranscriptEntries(state, evt, convertedEntries)
 	nativeAssistantStreamNeedsPrefixValidation := nativeSurfaceConfigured &&
 		nativeAssistantStreamText != "" &&
 		committedAppendClearsAssistantStream
@@ -111,9 +133,14 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	if nativeSurfaceConfigured && !m.nativeScratchHydrationPending && !m.nativeResizeRehydratePending() {
 		m.ensureNativeStableSurfaceForCurrentGeometry()
 	}
+	if committedAppendDiscardsWhitespaceAssistantStream && nativeSurfaceConfigured && m.nativeSurface.AssistantStreaming() {
+		if err := m.discardNativeAssistantStreaming(); err != nil {
+			return m.nativeSurfaceErrorCmd("discard assistant stream", err), true, false, false
+		}
+	}
 	m.transcriptLiveDirty = true
 	startOffset := m.transcriptBaseOffset + plan.rangeStart
-	if committedAppendClearsAssistantStream && !nativeAssistantStreamActive {
+	if committedAppendDiscardsWhitespaceAssistantStream || committedAppendClearsAssistantStream && !nativeAssistantStreamActive {
 		m.clearAssistantStreamForCommittedAppend()
 	}
 	showTransientInCurrentView := m.view.Mode() != tui.ModeDetail || !allTranscriptEntriesTransient(convertedEntries)
@@ -185,6 +212,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			if err != nil {
 				return m.nativeFatalSurfaceErrorCmd("finalize native assistant stream", err), true, false, true
 			}
+			m.clearAssistantStreamForCommittedAppend()
 			nativeRangeStart += skippedLeading
 		}
 		committedNativeEntries := committedTranscriptEntriesForApp(nativeEntries)

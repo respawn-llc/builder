@@ -149,6 +149,57 @@ func TestGenerateStream_EmitsUnknownPhaseWhenDeltaPrecedesAssistantItem(t *testi
 	}
 }
 
+func TestGenerateStream_PreservesDisplayedDeltasWhenCompletedMessageIsShorter(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"Hello"}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"\n\n"}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello"}]}}`,
+		`{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Hello"}]}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{
+		OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+
+	const streamed = "Hello\n\n"
+	if got := joinedAssistantDeltas(deltas); got != streamed {
+		t.Fatalf("streamed deltas = %q, want %q", got, streamed)
+	}
+	if resp.AssistantText != streamed {
+		t.Fatalf("assistant text = %q, want exact streamed text", resp.AssistantText)
+	}
+	if len(resp.OutputItems) != 1 || resp.OutputItems[0].Content != streamed {
+		t.Fatalf("output items = %+v, want assistant content repaired to streamed text", resp.OutputItems)
+	}
+}
+
+func TestGenerateStream_DoesNotRepairMultiMessageAssistantOutputWithAggregateText(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.completed","response":{"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"A"}]},{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"B"}]}]}}`,
+		`[DONE]`,
+	)
+
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+
+	if resp.AssistantText != "AB" {
+		t.Fatalf("assistant text = %q, want aggregate completed text", resp.AssistantText)
+	}
+	if len(resp.OutputItems) != 2 || resp.OutputItems[0].Content != "A" || resp.OutputItems[1].Content != "B" {
+		t.Fatalf("output items = %+v, want original assistant message segments", resp.OutputItems)
+	}
+}
+
 func TestGenerateStream_MapsStructuredStreamErrorToProviderAPIError(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t, `{"type":"error","error":{"type":"invalid_request_error","code":"context_length_exceeded","param":"input","message":"too many tokens"}}`)
 

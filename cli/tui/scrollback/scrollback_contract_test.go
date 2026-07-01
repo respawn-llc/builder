@@ -28,6 +28,7 @@ var nativeOngoingSurfaceMethods = map[string]struct{}{
 	"Steer":                          {},
 	"StreamMarkdownAssistantContent": {},
 	"FinishAssistantStreaming":       {},
+	"DiscardAssistantStreaming":      {},
 	"RenderLive":                     {},
 	"AssistantStreaming":             {},
 	"AssistantStreamTailLines":       {},

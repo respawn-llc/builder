@@ -602,10 +602,13 @@ func (s *defaultStepExecutor) prepareModelTurn(ctx context.Context, stepID strin
 }
 
 func liveCommittedAssistantEventMessage(msg llm.Message) (llm.Message, bool) {
-	if msg.Phase != llm.MessagePhaseCommentary {
+	if msg.Phase == llm.MessagePhaseFinal {
 		return llm.Message{}, false
 	}
-	if strings.TrimSpace(msg.Content) == "" {
+	if len(VisibleChatEntriesFromMessage(msg)) == 0 {
+		return llm.Message{}, false
+	}
+	if msg.Phase != llm.MessagePhaseCommentary && len(msg.ToolCalls) == 0 {
 		return llm.Message{}, false
 	}
 	return msg, true

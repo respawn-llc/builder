@@ -180,7 +180,7 @@ func TestWorkflowGraphSaveAllowsUnrelatedEditsWhileTasksExist(t *testing.T) {
 		}
 	})
 
-	t.Run("active task unrelated node removal", func(t *testing.T) {
+	t.Run("active task source transition removal", func(t *testing.T) {
 		ctx, store, binding := newTestStoreContext(t)
 		workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 		agentID := workflow.NodeID("node-agent-" + string(workflowID))
@@ -208,15 +208,15 @@ func TestWorkflowGraphSaveAllowsUnrelatedEditsWhileTasksExist(t *testing.T) {
 		req.Edges = removeWorkflowGraphSaveEdge(req.Edges, spareEdgeID)
 		preview, err := store.PreviewWorkflowGraphSave(ctx, req)
 		if err != nil {
-			t.Fatalf("PreviewWorkflowGraphSave active task unrelated node removal: %v", err)
+			t.Fatalf("PreviewWorkflowGraphSave active task source transition removal: %v", err)
 		}
 
 		result, err := store.SaveWorkflowGraph(ctx, confirmWorkflowGraphSaveRequest(req, preview.Impact))
 		if err != nil {
-			t.Fatalf("SaveWorkflowGraph active task unrelated node removal: %v", err)
+			t.Fatalf("SaveWorkflowGraph active task source transition removal: %v", err)
 		}
-		if !result.Saved || len(result.Blockers) != 0 {
-			t.Fatalf("active-task unrelated-node removal = %+v, want saved without broad active-work blockers", result)
+		if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
+			t.Fatalf("active-task source transition removal = %+v, want active_transition_contract_changed blocker", result)
 		}
 	})
 
