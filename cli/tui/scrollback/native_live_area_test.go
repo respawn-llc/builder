@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -20,7 +21,7 @@ func TestNativeLiveAreaRenderWritesPreSplitLines(t *testing.T) {
 		t.Fatalf("render returned error: %v", err)
 	}
 
-	if got, want := out.String(), "one"+terminalLineBreak+"two"+xansi.HideCursor; got != want {
+	if got, want := out.String(), nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("one", "two")); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
 }
@@ -38,7 +39,9 @@ func TestNativeLiveAreaRenderErasesPreviousFrameBeforeDrawingNext(t *testing.T) 
 		t.Fatalf("second render returned error: %v", err)
 	}
 
-	want := "one" + terminalLineBreak + "two" + xansi.HideCursor + liveAreaEraseSequence(2) + "three" + xansi.HideCursor
+	want := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("one", "two")) +
+		liveAreaErasePhysicalSequence(2, 24) +
+		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("three"))
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -77,7 +80,10 @@ func TestNativeLiveAreaRenderPlacesVisibleCursorFromFrame(t *testing.T) {
 		t.Fatalf("render returned error: %v", err)
 	}
 
-	want := "one" + terminalLineBreak + "two" + xansi.ShowCursor + "\r" + xansi.CursorUp(1) + xansi.CursorForward(2)
+	want := nativeLiveAreaRenderSequence(24, NativeLiveAreaFrame{
+		Lines:  []string{"one", "two"},
+		Cursor: NativeLiveAreaCursor{Visible: true, Row: 0, Col: 2},
+	})
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -199,9 +205,40 @@ func TestStableSteerErasesAndRestoresLiveAreaInOneFrame(t *testing.T) {
 		t.Fatalf("steer returned error: %v", err)
 	}
 
-	want := "live" + xansi.HideCursor + liveAreaEraseSequence(1) + "stable" + terminalLineBreak + "live" + xansi.HideCursor
+	want := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live")) +
+		liveAreaErasePhysicalSequence(1, 24) +
+		"stable" + terminalLineBreak +
+		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live"))
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
+	}
+}
+
+func TestStableSteerFromTopCursorScrollsThroughBottomBand(t *testing.T) {
+	terminal := newNativeLiveAreaTestTerminal(16, 4)
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 16, 4, terminal, nil)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 16, 4)
+
+	if err := liveArea.Render(nativeLiveAreaFrame("input")); err != nil {
+		t.Fatalf("render returned error: %v", err)
+	}
+	for index := 1; index <= 5; index++ {
+		if err := buffer.Steer(fmt.Sprintf("stable-%d", index)); err != nil {
+			t.Fatalf("steer %d returned error: %v", index, err)
+		}
+	}
+
+	if got := terminal.visibleLine(3); got != "input" {
+		t.Fatalf("live frame is not anchored at visible bottom, bottom line = %q", got)
+	}
+	for row, want := range []string{"stable-3", "stable-4", "stable-5"} {
+		if got := terminal.visibleLine(row); got != want {
+			t.Fatalf("visible stable row %d = %q, want %q", row, got, want)
+		}
+	}
+	if got, want := terminal.historyLines(), []string{"stable-1", "stable-2"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("scrollback history = %#v, want %#v", got, want)
 	}
 }
 
@@ -225,7 +262,11 @@ func TestNormalBufferPreparationPrecedesFirstNativeWrite(t *testing.T) {
 		t.Fatalf("steer returned error: %v", err)
 	}
 
-	want := normalBufferPreparationSequence() + "live" + xansi.HideCursor + liveAreaEraseSequence(1) + "stable" + terminalLineBreak + "live" + xansi.HideCursor
+	want := normalBufferPreparationSequence() +
+		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live")) +
+		liveAreaErasePhysicalSequence(1, 24) +
+		"stable" + terminalLineBreak +
+		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live"))
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -311,7 +352,7 @@ func TestStableStreamingKeepsPartialAssistantContentInLiveTailUntilFinish(t *tes
 		t.Fatalf("stream returned error: %v", err)
 	}
 
-	want := "live" + xansi.HideCursor
+	want := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live"))
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -334,7 +375,9 @@ func TestNativeLiveAreaRenderDuringAssistantStreamingKeepsChromeVisibleWithoutLi
 	if err := liveArea.Render(nativeLiveAreaFrame("latest live")); err != nil {
 		t.Fatalf("render during stream returned error: %v", err)
 	}
-	wantAfterRender := "old live" + xansi.HideCursor + liveAreaEraseSequence(1) + "latest live" + xansi.HideCursor
+	wantAfterRender := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("old live")) +
+		liveAreaErasePhysicalSequence(1, 24) +
+		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("latest live"))
 	if got := out.String(); got != wantAfterRender {
 		t.Fatalf("live render during stream output = %q, want %q", got, wantAfterRender)
 	}
@@ -342,7 +385,10 @@ func TestNativeLiveAreaRenderDuringAssistantStreamingKeepsChromeVisibleWithoutLi
 		t.Fatalf("finish returned error: %v", err)
 	}
 
-	want := wantAfterRender + liveAreaEraseSequence(1) + "stream" + terminalLineBreak + "latest live" + xansi.HideCursor
+	want := wantAfterRender +
+		liveAreaErasePhysicalSequence(1, 24) +
+		"stream" + terminalLineBreak +
+		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("latest live"))
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -366,9 +412,10 @@ func TestAssistantStreamAppendErasesStreamChromeWithoutAddingLinefeed(t *testing
 		t.Fatalf("second stream returned error: %v", err)
 	}
 
-	want := "old" + xansi.HideCursor +
-		liveAreaEraseSequence(1) + "input" + terminalLineBreak + "hello" + xansi.HideCursor +
-		liveAreaEraseSequence(2) + "hello " + terminalLineBreak + "world" + terminalLineBreak
+	want := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("old")) +
+		liveAreaErasePhysicalSequence(1, 24) +
+		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("input", "hello")) +
+		liveAreaErasePhysicalSequence(2, 24) + "hello " + terminalLineBreak + "world" + terminalLineBreak
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -378,7 +425,7 @@ func TestAssistantStreamAppendErasesStreamChromeWithoutAddingLinefeed(t *testing
 	if err := liveArea.Render(nativeLiveAreaFrame("input", "next")); err != nil {
 		t.Fatalf("render latest tail returned error: %v", err)
 	}
-	wantAfterRender := want + "input" + terminalLineBreak + "next" + xansi.HideCursor
+	wantAfterRender := want + nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("input", "next"))
 	if got := out.String(); got != wantAfterRender {
 		t.Fatalf("terminal output after live tail render = %q, want %q", got, wantAfterRender)
 	}
@@ -402,10 +449,10 @@ func TestAssistantStreamAppendErasesMultilineStreamChromeFromBottom(t *testing.T
 		t.Fatalf("second stream returned error: %v", err)
 	}
 
-	want := "old 1" + terminalLineBreak + "old 2" + terminalLineBreak + "old 3" + xansi.HideCursor +
-		liveAreaEraseSequence(3) +
-		"new 1" + terminalLineBreak + "new 2" + terminalLineBreak + "hello" + xansi.HideCursor +
-		liveAreaEraseSequence(3) + "hello " + terminalLineBreak + "world" + terminalLineBreak
+	want := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("old 1", "old 2", "old 3")) +
+		liveAreaErasePhysicalSequence(3, 24) +
+		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("new 1", "new 2", "hello")) +
+		liveAreaErasePhysicalSequence(3, 24) + "hello " + terminalLineBreak + "world" + terminalLineBreak
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -442,14 +489,17 @@ func TestNativeLiveAreaHoldoffFlushDuringAssistantStreamingDefersLiveRestore(t *
 	if err := buffer.flushHoldoff(); err != nil {
 		t.Fatalf("flush holdoff returned error: %v", err)
 	}
-	wantAfterFlush := "old live" + xansi.HideCursor
+	wantAfterFlush := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("old live"))
 	if got := out.String(); got != wantAfterFlush {
 		t.Fatalf("holdoff flush during stream output = %q, want %q", got, wantAfterFlush)
 	}
 	if err := buffer.FinishAssistantStreaming(); err != nil {
 		t.Fatalf("finish returned error: %v", err)
 	}
-	wantAfterFinish := wantAfterFlush + liveAreaEraseSequence(1) + "he" + terminalLineBreak + "latest live" + xansi.HideCursor
+	wantAfterFinish := wantAfterFlush +
+		liveAreaErasePhysicalSequence(1, 24) +
+		"he" + terminalLineBreak +
+		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("latest live"))
 	if got := out.String(); got != wantAfterFinish {
 		t.Fatalf("finish output = %q, want %q", got, wantAfterFinish)
 	}
@@ -483,9 +533,11 @@ func TestQueuedSteeringFlushErasesOnceAndRestoresOnce(t *testing.T) {
 		t.Fatalf("second steer returned error: %v", err)
 	}
 
-	want := "live" +
-		xansi.HideCursor + liveAreaEraseSequence(1) + "stream" + terminalLineBreak +
-		"first" + terminalLineBreak + "second" + terminalLineBreak + "live" + xansi.HideCursor
+	want := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live")) +
+		liveAreaErasePhysicalSequence(1, 24) +
+		"stream" + terminalLineBreak +
+		"first" + terminalLineBreak + "second" + terminalLineBreak +
+		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live"))
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -506,7 +558,7 @@ func TestStableWriteSkipsWhenLiveEraseFails(t *testing.T) {
 		t.Fatalf("steer error = %v, want %v", err, eraseErr)
 	}
 
-	if got, want := strings.Join(writer.Writes(), "|"), "live"+xansi.HideCursor; got != want {
+	if got, want := strings.Join(writer.Writes(), "|"), nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live")); got != want {
 		t.Fatalf("successful writes = %q, want %q", got, want)
 	}
 }
@@ -526,7 +578,7 @@ func TestStableWriteFailureStillAttemptsLiveRestore(t *testing.T) {
 		t.Fatalf("steer error = %v, want %v", err, stableErr)
 	}
 
-	if got, want := strings.Join(writer.Writes(), "|"), "live"+xansi.HideCursor+"|"+liveAreaEraseSequence(1)+"|live"+xansi.HideCursor; got != want {
+	if got, want := strings.Join(writer.Writes(), "|"), nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live"))+"|"+liveAreaErasePhysicalSequence(1, 24)+"|"+nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live")); got != want {
 		t.Fatalf("successful writes = %q, want %q", got, want)
 	}
 }
@@ -546,7 +598,7 @@ func TestLiveAreaRenderFailureStoresDesiredContentForLaterStableRestore(t *testi
 		t.Fatalf("steer returned error: %v", err)
 	}
 
-	if got, want := strings.Join(writer.Writes(), "|"), "stable"+terminalLineBreak+"|desired"+xansi.HideCursor; got != want {
+	if got, want := strings.Join(writer.Writes(), "|"), "stable"+terminalLineBreak+"|"+nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("desired")); got != want {
 		t.Fatalf("successful writes = %q, want %q", got, want)
 	}
 }
@@ -582,7 +634,10 @@ func TestNativeLiveAreaHoldoffStoresLatestFrameUntilFlush(t *testing.T) {
 	if err := buffer.flushHoldoff(); err != nil {
 		t.Fatalf("flush holdoff returned error: %v", err)
 	}
-	want := "new" + xansi.ShowCursor + "\r" + xansi.CursorForward(2)
+	want := nativeLiveAreaRenderSequence(24, NativeLiveAreaFrame{
+		Lines:  []string{"new"},
+		Cursor: NativeLiveAreaCursor{Visible: true, Row: 0, Col: 2},
+	})
 	if got := out.String(); got != want {
 		t.Fatalf("held live output = %q, want %q", got, want)
 	}
@@ -605,11 +660,10 @@ func TestStableWriteAfterCursorPlacementRestoresAnchorBeforeErasingLiveArea(t *t
 		t.Fatalf("steer returned error: %v", err)
 	}
 
-	placeCursor := xansi.ShowCursor + "\r" + xansi.CursorUp(1) + xansi.CursorForward(2)
-	restoreAnchor := xansi.CursorDown(1) + "\r"
-	want := "one" + terminalLineBreak + "two" + placeCursor +
-		restoreAnchor + liveAreaEraseSequence(2) + "stable" + terminalLineBreak +
-		"one" + terminalLineBreak + "two" + placeCursor
+	want := nativeLiveAreaRenderSequence(24, frame) +
+		liveAreaErasePhysicalSequence(2, 24) +
+		"stable" + terminalLineBreak +
+		nativeLiveAreaRenderSequence(24, frame)
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -629,10 +683,8 @@ func TestCloseErasesRenderedLiveFrameBeforeReleasingOwnership(t *testing.T) {
 
 	buffer.close()
 
-	placeCursor := xansi.ShowCursor + "\r" + xansi.CursorUp(1) + xansi.CursorForward(4)
-	restoreAnchor := xansi.CursorDown(1) + "\r"
-	want := "old top" + terminalLineBreak + "old input" + terminalLineBreak + "old bottom" + placeCursor +
-		restoreAnchor + liveAreaEraseSequence(3)
+	want := nativeLiveAreaRenderSequence(24, frame) +
+		liveAreaErasePhysicalSequence(3, 24)
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -640,4 +692,161 @@ func TestCloseErasesRenderedLiveFrameBeforeReleasingOwnership(t *testing.T) {
 
 func nativeLiveAreaFrame(lines ...string) NativeLiveAreaFrame {
 	return NativeLiveAreaFrame{Lines: lines}
+}
+
+func nativeLiveAreaRenderSequence(terminalHeight int, frame NativeLiveAreaFrame) string {
+	return liveAreaBottomAnchorSequence(len(frame.Lines), terminalHeight) +
+		strings.Join(frame.Lines, terminalLineBreak) +
+		liveAreaCursorPlacementSequence(frame.Cursor, len(frame.Lines))
+}
+
+type nativeLiveAreaTestTerminal struct {
+	width   int
+	height  int
+	row     int
+	col     int
+	screen  []string
+	history []string
+}
+
+func newNativeLiveAreaTestTerminal(width int, height int) *nativeLiveAreaTestTerminal {
+	screen := make([]string, height)
+	return &nativeLiveAreaTestTerminal{width: width, height: height, screen: screen}
+}
+
+func (t *nativeLiveAreaTestTerminal) Write(payload []byte) (int, error) {
+	for index := 0; index < len(payload); index++ {
+		if payload[index] == '\x1b' {
+			next := t.applyEscape(payload, index)
+			if next > index {
+				index = next
+			}
+			continue
+		}
+		switch payload[index] {
+		case '\r':
+			t.col = 0
+		case '\n':
+			t.lineFeed()
+		default:
+			t.putByte(payload[index])
+		}
+	}
+	return len(payload), nil
+}
+
+func (t *nativeLiveAreaTestTerminal) visibleLine(row int) string {
+	if row < 0 || row >= len(t.screen) {
+		return ""
+	}
+	return strings.TrimRight(t.screen[row], " ")
+}
+
+func (t *nativeLiveAreaTestTerminal) historyLines() []string {
+	out := make([]string, 0, len(t.history))
+	for _, line := range t.history {
+		if trimmed := strings.TrimRight(line, " "); strings.TrimSpace(trimmed) != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func (t *nativeLiveAreaTestTerminal) applyEscape(payload []byte, start int) int {
+	if start+1 >= len(payload) {
+		return start
+	}
+	switch payload[start+1] {
+	case '7', '8':
+		return start + 1
+	case '[':
+	default:
+		return start
+	}
+	end := start + 2
+	for end < len(payload) && !isNativeLiveAreaTestFinalByte(payload[end]) {
+		end++
+	}
+	if end >= len(payload) {
+		return start
+	}
+	body := string(payload[start+2 : end])
+	final := payload[end]
+	switch final {
+	case 'A':
+		t.row -= nativeLiveAreaTestCSIParam(body, 1)
+		if t.row < 0 {
+			t.row = 0
+		}
+	case 'B':
+		t.row += nativeLiveAreaTestCSIParam(body, 1)
+		if t.row >= t.height {
+			t.row = t.height - 1
+		}
+	case 'H', 'f':
+		col, row := nativeLiveAreaTestCursorPosition(body)
+		t.col = col
+		t.row = row
+	case 'K':
+		if nativeLiveAreaTestCSIParam(body, 0) == 2 && t.row >= 0 && t.row < len(t.screen) {
+			t.screen[t.row] = ""
+		}
+	case 'h', 'l', 'r':
+	}
+	return end
+}
+
+func (t *nativeLiveAreaTestTerminal) putByte(value byte) {
+	if t.row < 0 || t.row >= t.height || t.col < 0 || t.col >= t.width {
+		return
+	}
+	line := t.screen[t.row]
+	if len(line) < t.col {
+		line += strings.Repeat(" ", t.col-len(line))
+	}
+	if len(line) == t.col {
+		line += string(value)
+	} else {
+		line = line[:t.col] + string(value) + line[t.col+1:]
+	}
+	t.screen[t.row] = line
+	t.col++
+	if t.col >= t.width {
+		t.col = t.width - 1
+	}
+}
+
+func (t *nativeLiveAreaTestTerminal) lineFeed() {
+	if t.row < t.height-1 {
+		t.row++
+		return
+	}
+	t.history = append(t.history, t.screen[0])
+	copy(t.screen, t.screen[1:])
+	t.screen[t.height-1] = ""
+}
+
+func isNativeLiveAreaTestFinalByte(value byte) bool {
+	return value >= 0x40 && value <= 0x7e
+}
+
+func nativeLiveAreaTestCSIParam(body string, fallback int) int {
+	body = strings.TrimPrefix(body, "?")
+	if body == "" {
+		return fallback
+	}
+	var value int
+	if _, err := fmt.Sscanf(body, "%d", &value); err != nil {
+		return fallback
+	}
+	return value
+}
+
+func nativeLiveAreaTestCursorPosition(body string) (int, int) {
+	var row int
+	var col int
+	if _, err := fmt.Sscanf(body, "%d;%d", &row, &col); err != nil {
+		return 0, 0
+	}
+	return max(col-1, 0), max(row-1, 0)
 }

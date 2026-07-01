@@ -105,7 +105,7 @@ func (area *nativeLiveAreaImpl) erasePhysicalLocked() error {
 	if area == nil || area.renderedLines == 0 {
 		return nil
 	}
-	sequence := liveAreaCursorRestoreAnchorSequence(area.cursorPlaced, area.placedCursor, area.renderedLines) + liveAreaEraseSequence(area.renderedLines)
+	sequence := liveAreaErasePhysicalSequence(area.renderedLines, area.terminalHeight)
 	written, err := io.WriteString(area.buffer.stableWriter, sequence)
 	if err != nil {
 		return fmt.Errorf("erase live area failed: %s: %w", liveAreaWriteDiagnostics(sequence, area.terminalWidth, area.terminalHeight, written), err)
@@ -123,7 +123,9 @@ func (area *nativeLiveAreaImpl) renderPhysicalLocked() error {
 	if area == nil || len(area.frame.Lines) == 0 {
 		return nil
 	}
-	payload := strings.Join(area.frame.Lines, terminalLineBreak) + liveAreaCursorPlacementSequence(area.frame.Cursor, len(area.frame.Lines))
+	payload := liveAreaBottomAnchorSequence(len(area.frame.Lines), area.terminalHeight) +
+		strings.Join(area.frame.Lines, terminalLineBreak) +
+		liveAreaCursorPlacementSequence(area.frame.Cursor, len(area.frame.Lines))
 	written, err := io.WriteString(area.buffer.stableWriter, payload)
 	if err != nil {
 		return fmt.Errorf("render live area failed: %s: %w", liveAreaWriteDiagnostics(payload, area.terminalWidth, area.terminalHeight, written), err)
@@ -216,6 +218,28 @@ func liveAreaEraseSequence(renderedLines int) string {
 		out.WriteString(xansi.CursorUp(renderedLines - 1))
 	}
 	out.WriteString("\r")
+	return out.String()
+}
+
+func liveAreaErasePhysicalSequence(renderedLines int, terminalHeight int) string {
+	if renderedLines <= 0 {
+		return ""
+	}
+	return liveAreaBottomAnchorSequence(renderedLines, terminalHeight) + liveAreaEraseSequence(renderedLines)
+}
+
+func liveAreaBottomAnchorSequence(renderedLines int, terminalHeight int) string {
+	if renderedLines <= 0 || terminalHeight <= 0 {
+		return ""
+	}
+	var out strings.Builder
+	out.WriteString("\x1b[?6l")
+	out.WriteString("\x1b[r")
+	out.WriteString(xansi.CursorPosition(1, terminalHeight))
+	if renderedLines > 1 {
+		out.WriteString(xansi.CursorUp(renderedLines - 1))
+		out.WriteString("\r")
+	}
 	return out.String()
 }
 

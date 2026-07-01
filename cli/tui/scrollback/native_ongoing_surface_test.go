@@ -5,8 +5,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestNativeOngoingSurfaceStreamsThroughSourceBackedStablePromotionAndLiveTail(t *testing.T) {
@@ -20,7 +18,7 @@ func TestNativeOngoingSurfaceStreamsThroughSourceBackedStablePromotionAndLiveTai
 	if err := surface.StreamMarkdownAssistantContent("hello"); err != nil {
 		t.Fatalf("stream partial returned error: %v", err)
 	}
-	if got := out.String(); got != "input"+xansi.HideCursor {
+	if got := out.String(); got != nativeLiveAreaRenderSequence(4, nativeLiveAreaFrame("input")) {
 		t.Fatalf("partial stream wrote stable bytes, output = %q", got)
 	}
 	if got, want := surface.AssistantStreamTailLines(), []string{"hello"}; strings.Join(got, "|") != strings.Join(want, "|") {

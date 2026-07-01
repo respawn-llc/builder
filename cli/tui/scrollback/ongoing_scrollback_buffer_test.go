@@ -766,11 +766,11 @@ func TestOngoingScrollbackBufferHeldStreamFlushDoesNotInterleaveLiveFrameBeforeT
 		t.Fatalf("flush holdoff returned error: %v", err)
 	}
 
-	want := "input" + xansi.HideCursor +
-		liveAreaEraseSequence(1) +
+	want := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("input")) +
+		liveAreaErasePhysicalSequence(1, 24) +
 		"hello " + terminalLineBreak +
 		"world" + terminalLineBreak +
-		"input" + xansi.HideCursor
+		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("input"))
 	if got := out.String(); got != want {
 		t.Fatalf("held stream output = %q, want %q", got, want)
 	}
@@ -846,7 +846,7 @@ func TestOngoingScrollbackBufferHoldoffFlushRendersLatestPendingLiveFrame(t *tes
 		t.Fatalf("flush holdoff returned error: %v", err)
 	}
 
-	if got, want := out.String(), "held stable"+terminalLineBreak+"latest live"+xansi.HideCursor; got != want {
+	if got, want := out.String(), "held stable"+terminalLineBreak+nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("latest live")); got != want {
 		t.Fatalf("held stable/latest live output = %q, want %q", got, want)
 	}
 }
