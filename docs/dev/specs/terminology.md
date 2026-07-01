@@ -118,7 +118,7 @@ Per-transition-branch policy for the next node's execution context:
 
 ### Context Source
 
-Per-transition-branch policy deciding which earlier run supplies the source session for continuation modes. `immediate_source` uses the run that produced the selected transition. `node:<node_key>` selects the latest completed run for a guaranteed-prior agent node. `previous_target` selects the latest completed run of the transition branch target.
+Per-transition-branch policy deciding which earlier run supplies the source session for continuation modes. `immediate_source` uses the run that produced the selected transition. `node:<node_key>` selects the latest completed run for a guaranteed-prior agent node. `previous_target` selects the latest completed run of the transition branch target and requires that a matching run exists. `previous_target_or_new` selects the latest completed target run when one exists and otherwise starts the target with an effective new session.
 
 ### Run
 

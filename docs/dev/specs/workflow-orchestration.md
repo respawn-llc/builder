@@ -106,7 +106,7 @@
 - If pending ask cannot rehydrate, workflow run becomes interrupted with actionable resume path.
 - Edge approval is a boolean edge property.
 - When any edge in a selected transition group requires approval, the whole group waits for one approval before any target placement/run starts.
-- Pending approvals store resolved transition group, edge set, workflow version, source node snapshot, transition display snapshot, target node snapshots, and effective edge config snapshots.
+- Pending approvals store resolved transition group, edge set, workflow version, source node snapshot, transition display snapshot, target node snapshots, effective edge config snapshots, and frozen context-source resolution.
 - Later graph edits do not change what a user approves.
 - Every applied transition stores transition-edge snapshot rows, not only pending approvals.
 - A task awaiting approval has no active placement; its live position is the pending transition's source node, surfaced as a synthesized `waiting_approval` placement.
@@ -115,7 +115,10 @@
 ## Context Preservation And Bindings
 
 - Per-edge context preservation supports `new_session`, `continue_session`, and `compact_and_continue_session`.
-- Continuation modes may select `immediate_source` or `node:<node_key>` as context source.
+- Continuation modes may select `immediate_source`, `node:<node_key>`, `previous_target`, or `previous_target_or_new` as context source.
+- `previous_target` resolves the latest completed run of the target node before the transition event and fails when none exists.
+- `previous_target_or_new` resolves the latest completed run of the target node before the transition event when one exists; otherwise the target run starts with effective `new_session` and no source run/session.
+- Pending approvals freeze context-source resolution before approval. A fallback-to-new result remains effective `new_session` even if another target run completes before approval, and a resolved prior-target source remains fixed even if a newer target run completes before approval.
 - Continuation modes apply the target node's subagent role context. A reused session remains authoritative for immutable contract fields already snapshotted by prior model dispatch.
 - `new_session` uses current role config at its fresh context boundary.
 - Consuming agent nodes own required inputs as named top-level string fields with descriptions.

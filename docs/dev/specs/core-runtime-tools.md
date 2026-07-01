@@ -220,8 +220,6 @@
 - Headless executes a single non-interactive prompt with normal runtime/session persistence.
 - It creates/resumes normal sessions and auto-names unnamed sessions `<session-id> subagent`.
 - Default timeout is infinite; `--timeout` can bind execution.
-- Output modes are explicit: `final-text` default and optional `json`.
-- JSON command mode for all TUI commands emits exactly one final object on stdout.
 - Progress is quiet by default and emits to stderr only with `--progress-mode=stderr`.
 - A headless or workflow run registers the session's single shared runtime and drives it. Interactive activation for the same active session resolves and attaches to that same shared engine as an equal full-control surface: live transcript/status, user steering and queued messages, prompt/approval answers, and every control operate against the shared runtime with no ownership, lease, or limited-control mode.
 - A running workflow task is steerable from any attached client as usual (chat, queued steering, goal control, settings, compaction, worktree, process view). The only workflow-specific limit is that the model cannot submit a structured-output final answer that is invalid for the node; that is a completion constraint, not a client restriction. Failures to reach an active runtime surface as the typed runtime-unavailable error.
@@ -230,5 +228,6 @@
 - Prompt and approval resolution uses server-acknowledged shared prompt state. Clients do not locally finalize a pending prompt before the server accepts the answer and publishes/returns the resolved state.
 - Worktree controls are available from any client. Worktree mutation runs in a between-steps idle slot of the shared engine (it waits for a gap rather than rejecting while a run is in progress) and is serialized by the workspace lock.
 - Resuming a session with persisted subagent role metadata reapplies that role best-effort when it exists. Missing roles do not block explicit continuation.
+- JSON command mode for all TUI commands emits exactly one final object on stdout.
 
 - LLM provider wiring uses a provider-factory seam so runtime/app constructs clients via provider selection.

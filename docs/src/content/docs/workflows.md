@@ -191,6 +191,7 @@ Continuation modes also have a context source:
 - Immediate source uses the session from the node that just completed.
 - Selected node uses a previous node that is guaranteed to have run before this transition.
 - Previous run of this target is for loops where the workflow returns to a node and should continue that node's prior session.
+- Previous run of this target, or new session is for re-review loops where the first pass starts fresh and later passes continue the target's prior session.
 
 Use `new_session` or `compact_and_continue_session` when changing subagent roles. Use `continue_session` when preserving the exact working context matters more than changing roles.
 
