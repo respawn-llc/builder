@@ -333,14 +333,18 @@ func (l uiViewLayout) renderNativeLiveChatPanel(width int, height int, style uiS
 	if width < 1 || height <= 0 {
 		return nil
 	}
-	lines := l.model.view.LiveStreamingOngoingLines()
+	spinner := pendingToolSpinnerFrame(l.model.spinnerFrame)
+	lines := l.model.view.LiveOngoingLinesWithPendingSpinnerFrame(spinner)
 	if l.model.nativeSurface.AssistantStreaming() {
 		if err := l.model.nativeSurface.FlushHoldoff(); err != nil {
 			l.model.nativeLiveAreaError = err
 			l.model.logf("native.surface.flush_holdoff err=%q", err.Error())
 		}
-		lines = nil
+		lines = l.model.view.PendingOngoingLinesWithPendingSpinnerFrame(spinner)
 		if tailLines := l.model.nativeSurface.AssistantStreamTailLines(); len(tailLines) > 0 {
+			if len(lines) > 0 {
+				lines = append(lines, tui.TranscriptProjectionLine{Kind: tui.VisibleLineDivider, Text: tui.TranscriptDivider})
+			}
 			for _, line := range tailLines {
 				lines = append(lines, tui.TranscriptProjectionLine{Kind: tui.VisibleLineContent, Text: line})
 			}
