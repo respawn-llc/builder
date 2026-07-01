@@ -254,7 +254,8 @@ func (m *uiModel) preflightNativeCommittedTranscriptEvent(state projectedTranscr
 		m.nativeImmutableTranscriptWritten &&
 		reduction.hydrationCause == clientui.TranscriptRecoveryCauseNone &&
 		!(m.view.Mode() == tui.ModeDetail && isAssistantStreamFinalizerEvent(state, evt)) {
-		return m.nativeFatalSurfaceErrorCmd("hydrate committed transcript", errNativeStableNonGapHydration), true
+		m.logNativeTranscriptInvariant("hydrate committed transcript", errNativeStableNonGapHydration, state, evt, reduction)
+		return m.nativeInvariantViolationCmd("hydrate committed transcript", errNativeStableNonGapHydration)
 	}
 	activeStream := state.liveAssistantText
 	if activeStream == "" || !evt.CommittedTranscriptChanged || reduction.plan.mode != projectedTranscriptEntryPlanAppend {
@@ -268,9 +269,37 @@ func (m *uiModel) preflightNativeCommittedTranscriptEvent(state projectedTranscr
 		return nil, false
 	}
 	if _, err := planNativeAssistantStreamFinalizerEmission(convertedEntries, activeStream); err != nil {
-		return m.nativeFatalSurfaceErrorCmd("finalize native assistant stream", err), true
+		m.logNativeTranscriptInvariant("finalize native assistant stream", err, state, evt, reduction)
+		return m.nativeInvariantViolationCmd("finalize native assistant stream", err)
 	}
 	return nil, false
+}
+
+func (m *uiModel) logNativeTranscriptInvariant(action string, err error, state projectedTranscriptEventState, evt clientui.Event, reduction projectedTranscriptReduction) {
+	if m == nil || err == nil {
+		return
+	}
+	m.logf(
+		"native.invariant.transcript action=%q err=%q event_kind=%s event_step_id=%q recovery_cause=%s decision=%d plan=%s divergence=%q event_start=%d event_count=%d committed_count=%d transcript_revision=%d state_base=%d state_entries=%d state_revision=%d live_step_id=%q live_chars=%d native_written=%t",
+		strings.TrimSpace(action),
+		err.Error(),
+		evt.Kind,
+		strings.TrimSpace(evt.StepID),
+		evt.RecoveryCause,
+		reduction.decision,
+		reduction.plan.mode.label(),
+		reduction.plan.divergence,
+		evt.CommittedEntryStart,
+		len(evt.TranscriptEntries),
+		evt.CommittedEntryCount,
+		evt.TranscriptRevision,
+		state.baseOffset,
+		len(state.entries),
+		state.revision,
+		strings.TrimSpace(state.liveAssistantStepID),
+		len(state.liveAssistantText),
+		m.nativeImmutableTranscriptWritten,
+	)
 }
 
 func (a uiRuntimeAdapter) flushDeferredCommittedTailAtNewTurnBoundary(state projectedTranscriptEventState, evt clientui.Event) (tea.Cmd, bool, bool, bool) {
@@ -326,7 +355,9 @@ func (m *uiModel) resetActiveAssistantStreamForNewStep(stepID string) (tea.Cmd, 
 	}
 	nativeStreaming := m.nativeSurfaceConfigured() && m.nativeSurface.AssistantStreaming()
 	if nativeStreaming {
-		return m.nativeFatalSurfaceErrorCmd("reset native assistant stream", errNativeAssistantStreamStepChanged), true
+		if cmd, fatal := m.nativeInvariantViolationCmd("reset native assistant stream", errNativeAssistantStreamStepChanged); fatal {
+			return cmd, true
+		}
 	}
 	m.sawAssistantDelta = false
 	m.nativeAssistantStreamIncomplete = false
@@ -476,6 +507,32 @@ func (m *uiModel) nativeFatalSurfaceErrorCmd(action string, err error) tea.Cmd {
 		return cmd
 	}
 	return sequenceCmds(cmd, tea.Quit)
+}
+
+func (m *uiModel) nativeInvariantViolationCmd(action string, err error) (tea.Cmd, bool) {
+	if err == nil {
+		return nil, false
+	}
+	if invariant.NewPolicy().Mode() == invariant.ModePanic {
+		return m.nativeFatalSurfaceErrorCmd(action, err), true
+	}
+	m.disableNativeOutputForInvariant(action, err)
+	return nil, false
+}
+
+func (m *uiModel) disableNativeOutputForInvariant(action string, err error) {
+	if m == nil || err == nil {
+		return
+	}
+	action = strings.TrimSpace(action)
+	if action == "" {
+		action = "native invariant"
+	}
+	m.logf("native.invariant action=%q err=%q disabling_native=true", action, err.Error())
+	m.nativeLiveAreaError = nil
+	if m.nativeSurface != nil {
+		m.dropNativeSurface()
+	}
 }
 
 func (m *uiModel) nativeSurfaceDropErrorCmd(action string, err error) tea.Cmd {

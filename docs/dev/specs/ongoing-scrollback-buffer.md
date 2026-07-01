@@ -78,7 +78,7 @@ Never triggers; these are ordinary appends or bugs to fix at the cause, never re
 - The cursor is not positioned where erasing emitted lines would be convenient.
 - A large paste filled the screen. The mutable area owns its own frame; emitted history is untouched.
 
-A bug is never resolved by re-emitting committed state. Delivery bugs surface as native errors and fail fast in debug.
+A bug is never resolved by re-emitting committed state. Delivery bugs disable native ongoing output in diagnostic mode and fail fast in panic invariant mode.
 
 Scratch rehydration runs the same in-process session navigation/open hydration path used when the TUI opens a session. It does not restart the TUI process, reinitialize unrelated application state, or erase normal-buffer scrollback.
 
@@ -130,9 +130,11 @@ Deltas received while normal-buffer ownership is unavailable keep their phase an
 
 Immediate normal-buffer terminal write failures surface synchronously to the caller. Delayed holdoff flush failures surface through the native surface's delayed-error reporting path.
 
-Contract and invariant violations fail fast with diagnostic detail. Diagnostics include the attempted operation, terminal geometry, calculated visual width when relevant, quoted payload or frame content, raw payload bytes when relevant, and stack trace.
+Contract and invariant violations fail fast with diagnostic detail in panic invariant mode. Diagnostics include the attempted operation, terminal geometry, calculated visual width when relevant, quoted payload or frame content, raw payload bytes when relevant, and stack trace.
 
-A terminal resize that leaves emitted transcript content visually broken under the previous geometry, connection/subscription loss with a real delivered-data gap, and navigation/event buffering overflow trigger scratch rehydration. Runtime transcript divergence, invalid ordering, overlap mismatch, active-stream mismatch, and client/server expectation mismatches caused by implementation bugs are not scratch-rehydration excuses; they surface as native errors in production and fail fast in debug. Production exits with a fatal error if scratch rehydration fails. No failure path may compare against, rewrite, delete, or replay already emitted immutable history.
+In diagnostic invariant mode, ambiguous native transcript invariants are logged to `<persistence-root>/logs/tui.log`, native ongoing output is disabled for that surface, and the typed transcript/read-model path continues without a status-line notice. This applies to runtime transcript divergence, invalid ordering, overlap mismatch, active-stream mismatch, and client/server expectation mismatches caused by implementation bugs. Immediate terminal write failures remain user-visible native errors.
+
+A terminal resize that leaves emitted transcript content visually broken under the previous geometry, connection/subscription loss with a real delivered-data gap, and navigation/event buffering overflow trigger scratch rehydration. Runtime transcript divergence, invalid ordering, overlap mismatch, active-stream mismatch, and client/server expectation mismatches caused by implementation bugs are not scratch-rehydration excuses. Production exits with a fatal error if scratch rehydration fails. No failure path may compare against, rewrite, delete, or replay already emitted immutable history.
 
 Runtime event batches stop at the first event whose application must await scratch rehydration. Unprocessed events from the same batch remain queued as typed emission events until hydration applies. Native must not deliver later live committed rows while an earlier scratch rehydration is outstanding, because that can move physical scrollback past committed rows that hydration is about to append.
 

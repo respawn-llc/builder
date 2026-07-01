@@ -15,6 +15,14 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 	terminalCursor := newUITerminalCursorState()
 	rendererOutputGate := newUIRendererOutputGateState()
 	options := mainUIProgramOptionsWithOutput(active, terminalCursor, rendererOutputGate, os.Stdout)
+	tuiLogger, err := newRollingTUILogger(statusConfig.PersistenceRoot)
+	if err != nil && logger != nil {
+		logger.Logf("tui_log.open err=%q", err.Error())
+	}
+	if tuiLogger != nil {
+		defer tuiLogger.Close()
+	}
+	uiLogger := newMultiUILogger(logger, tuiLogger)
 	runtimeClient := wiring.runtimeClient
 	if runtimeClient == nil {
 		return nil, errors.New("runtime client is required")
@@ -36,7 +44,7 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 		runtimeClient,
 		runtimeEvents,
 		askEvents,
-		WithUILogger(logger),
+		WithUILogger(uiLogger),
 		WithUIModelName(active.Model),
 		WithUIConfiguredModelName(configuredModelName),
 		WithUIThinkingLevel(active.ThinkingLevel),
@@ -70,10 +78,14 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 
 	finalModel, runErr := program.Run()
 	if runErr != nil {
-		logger.Logf("app.exit err=%q", runErr.Error())
+		if uiLogger != nil {
+			uiLogger.Logf("app.exit err=%q", runErr.Error())
+		}
 		return nil, runErr
 	}
-	logger.Logf("app.exit ok")
+	if uiLogger != nil {
+		uiLogger.Logf("app.exit ok")
+	}
 	return finalModel, nil
 }
 

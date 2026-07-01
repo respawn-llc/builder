@@ -496,10 +496,12 @@ func TestNativeAssistantFinalizerMismatchQuitsBeforeTranscriptMutation(t *testin
 	}
 }
 
-func TestNativeAssistantFinalizerMismatchDebugFalseDoesNotQuit(t *testing.T) {
+func TestNativeAssistantFinalizerMismatchDebugFalseDropsNativeAndLogs(t *testing.T) {
 	t.Setenv("KENT_DEBUG", "false")
 	t.Setenv("KENT_INVARIANT_MODE", "")
+	logger := &testUILogger{}
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
+	m.logger = logger
 	m.appendActiveAssistantStreamDelta("step-1", "hello")
 	if _, err := m.streamNativeAssistantDelta("hello", clientui.MessagePhaseFinal); err != nil {
 		t.Fatalf("stream assistant delta: %v", err)
@@ -518,17 +520,26 @@ func TestNativeAssistantFinalizerMismatchDebugFalseDoesNotQuit(t *testing.T) {
 			Phase: string(clientui.MessagePhaseFinal),
 		}},
 	})
-	if !fatal || mutated || needsHydration {
-		t.Fatalf("expected diagnostic mismatch to stop before transcript mutation, fatal=%t mutated=%t needsHydration=%t", fatal, mutated, needsHydration)
+	if fatal || mutated || needsHydration {
+		t.Fatalf("expected diagnostic mismatch to drop native without mutating, fatal=%t mutated=%t needsHydration=%t", fatal, mutated, needsHydration)
 	}
 	if len(m.transcriptEntries) != 0 {
-		t.Fatalf("expected transcript entries unchanged, got %d", len(m.transcriptEntries))
+		t.Fatalf("expected transcript entries unchanged after prefix mismatch, got %+v", m.transcriptEntries)
+	}
+	if m.nativeSurface != nil {
+		t.Fatal("expected native surface dropped after release-mode invariant")
+	}
+	if strings.TrimSpace(m.transientStatus) != "" || m.nativeLiveAreaError != nil {
+		t.Fatalf("expected no statusline/native error spam, status=%q native_err=%v", m.transientStatus, m.nativeLiveAreaError)
 	}
 	msgs := collectCmdMessages(t, cmd)
 	for _, msg := range msgs {
 		if _, ok := msg.(tea.QuitMsg); ok {
 			t.Fatalf("diagnostic native invariant must not quit, got %#v", msgs)
 		}
+	}
+	if len(logger.lines) == 0 {
+		t.Fatalf("expected native invariant diagnostics in TUI log, got %#v", logger.lines)
 	}
 }
 
@@ -644,6 +655,67 @@ func TestNativeNonGapCommittedDivergenceQuitsBeforeHydration(t *testing.T) {
 	}
 	if !quit {
 		t.Fatalf("expected non-gap native divergence to quit, got %#v", msgs)
+	}
+}
+
+func TestNativeNonGapCommittedDivergenceDebugFalseHydratesWithoutStatusSpam(t *testing.T) {
+	t.Setenv("KENT_DEBUG", "false")
+	t.Setenv("KENT_INVARIANT_MODE", "")
+	logger := &testUILogger{}
+	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, &runtimeControlFakeClient{})
+	m.logger = logger
+	m.nativeImmutableTranscriptWritten = true
+	m.transcriptEntries = []tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      "seed",
+	}}
+	m.transcriptRevision = 10
+	m.transcriptTotalEntries = 1
+	m.forwardToView(tui.SetConversationMsg{
+		BaseOffset:   0,
+		TotalEntries: 1,
+		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
+	})
+
+	cmd, mutated, needsHydration, fatal := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         11,
+		CommittedEntryStartSet:     true,
+		CommittedEntryStart:        2,
+		CommittedEntryCount:        3,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "after gap",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	})
+	if fatal || mutated || !needsHydration {
+		t.Fatalf("expected release divergence to request hydration after native drop, fatal=%t mutated=%t needsHydration=%t", fatal, mutated, needsHydration)
+	}
+	if m.nativeSurface != nil {
+		t.Fatal("expected native surface dropped after release-mode divergence")
+	}
+	if strings.TrimSpace(m.transientStatus) != "" || m.nativeLiveAreaError != nil {
+		t.Fatalf("expected no statusline/native error spam, status=%q native_err=%v", m.transientStatus, m.nativeLiveAreaError)
+	}
+	msgs := collectCmdMessages(t, cmd)
+	quit := false
+	refresh := false
+	for _, msg := range msgs {
+		if _, ok := msg.(tea.QuitMsg); ok {
+			quit = true
+		}
+		if _, ok := msg.(runtimeTranscriptRefreshedMsg); ok {
+			refresh = true
+		}
+	}
+	if quit || !refresh {
+		t.Fatalf("expected hydration refresh without quit, got %#v", msgs)
+	}
+	if len(logger.lines) == 0 {
+		t.Fatalf("expected native divergence diagnostics in TUI log, got %#v", logger.lines)
 	}
 }
 

@@ -56,7 +56,10 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			return cmd, true, false, false
 		}
 		if m.nativeSurfaceConfigured() && m.nativeImmutableTranscriptWritten && reduction.hydrationCause == clientui.TranscriptRecoveryCauseNone {
-			return m.nativeFatalSurfaceErrorCmd("hydrate committed transcript", errNativeStableNonGapHydration), false, false, true
+			m.logNativeTranscriptInvariant("hydrate committed transcript", errNativeStableNonGapHydration, state, evt, reduction)
+			if cmd, fatal := m.nativeInvariantViolationCmd("hydrate committed transcript", errNativeStableNonGapHydration); fatal {
+				return cmd, false, false, true
+			}
 		}
 		m.beginCommittedTranscriptContinuityRecovery()
 		m.logTranscriptEventDiag("transcript.diag.client.append_entries", evt, map[string]string{
@@ -99,7 +102,10 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 		committedAppendClearsAssistantStream
 	if plan.mode == projectedTranscriptEntryPlanAppend && nativeAssistantStreamNeedsPrefixValidation {
 		if _, err := planNativeAssistantStreamFinalizerEmission(convertedEntries, nativeAssistantStreamText); err != nil {
-			return m.nativeFatalSurfaceErrorCmd("finalize native assistant stream", err), false, false, true
+			m.logNativeTranscriptInvariant("finalize native assistant stream", err, state, evt, reduction)
+			if cmd, fatal := m.nativeInvariantViolationCmd("finalize native assistant stream", err); fatal {
+				return cmd, false, false, true
+			}
 		}
 	}
 	if nativeSurfaceConfigured && !m.nativeScratchHydrationPending && !m.nativeResizeRehydratePending() {
@@ -200,7 +206,10 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			return m.requestRuntimeNativeScratchTranscriptSync(), true, true, false
 		}
 		if err := errNativeStableNonAppend; err != nil {
-			return m.nativeSurfaceErrorCmd("steer committed transcript", err), true, false, false
+			m.logNativeTranscriptInvariant("steer committed transcript", err, state, evt, reduction)
+			if cmd, fatal := m.nativeInvariantViolationCmd("steer committed transcript", err); fatal {
+				return cmd, true, false, true
+			}
 		}
 	}
 	m.logProjectedTranscriptAppliedDiag(evt, plan, incomingCount, len(entries), startOffset, entries)
