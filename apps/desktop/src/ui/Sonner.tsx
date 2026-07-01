@@ -19,7 +19,6 @@ export function Toaster(props: ToasterProps) {
 
   return (
     <SonnerToaster
-      className="z-50"
       closeButton
       icons={{
         success: <CircleCheckIcon className="size-4 text-[var(--color-success)]" />,

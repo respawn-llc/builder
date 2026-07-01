@@ -1,8 +1,4 @@
-import {
-  createBrowserNativeBridge,
-  type NativeBridge,
-  type NativeNotificationActivation,
-} from "@app/native-bridge";
+import { createBrowserNativeBridge, type NativeBridge } from "@app/native-bridge";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { App } from "../../App";
@@ -325,74 +321,6 @@ describe("TaskDetailSurface", () => {
     expect(within(question).getByRole("radio", { name: /Pistachios/u })).toBeInTheDocument();
   });
 
-  it("focuses only the first unresolved matching question from a batched notification target", async () => {
-    window.history.pushState(null, "", "/");
-    const scrollTargets: HTMLElement[] = [];
-    const restoreScrollIntoView = installScrollIntoViewSpy(scrollTargets);
-    const native = nativeBridgeWithActivation();
-    const firstQuestionMessage = "First active batched question";
-    const secondQuestionMessage = "Second active batched question";
-    const detailWithQuestionBatch = {
-      task: {
-        ...taskDetailResponse.task,
-        attention: [
-          {
-            ...questionAttention,
-            id: "attention-ask-1",
-            ask_id: "ask-1",
-            message: firstQuestionMessage,
-          },
-          {
-            ...questionAttention,
-            id: "attention-ask-2",
-            ask_id: "ask-2",
-            message: secondQuestionMessage,
-          },
-        ],
-      },
-    };
-    const services = createTestServices(
-      [
-        ...startupRoutes,
-        { method: "workflow.task.get", result: detailWithQuestionBatch },
-        { method: "workflow.task.activity.list", result: activityResponse },
-        { method: "ask.listPendingBySession", result: { Asks: [] } },
-      ],
-      native.bridge,
-    );
-
-    try {
-      render(<App services={services} />);
-      await waitFor(() => {
-        expect(native.hasActivationHandler()).toBe(true);
-      });
-
-      act(() => {
-        native.triggerActivation({
-          id: "question_batch:run-1:batch-1",
-          target: {
-            kind: "task_detail",
-            taskID: "task-1",
-            focus: { kind: "question", askIDs: ["ask-1", "ask-2"] },
-          },
-        });
-      });
-
-      await screen.findByText(firstQuestionMessage);
-      expect(await screen.findByText(secondQuestionMessage)).toBeInTheDocument();
-      await waitFor(() => {
-        expect(scrollTargets).toHaveLength(1);
-      });
-      const focusedTarget = scrollTargets[0];
-      if (focusedTarget === undefined) {
-        throw new Error("Expected one task detail attention row to receive initial focus.");
-      }
-      expect(within(focusedTarget).getByText(firstQuestionMessage)).toBeInTheDocument();
-    } finally {
-      restoreScrollIntoView();
-    }
-  });
-
   it("renders approval snapshots as route, commentary, and copyable output values", async () => {
     window.history.pushState(null, "", "/tasks/task-1");
     const copied: string[] = [];
@@ -687,52 +615,6 @@ function nativeBridgeWithClipboard(copied: string[]): NativeBridge {
         copied.push(value);
       },
     },
-  };
-}
-
-function nativeBridgeWithActivation(): Readonly<{
-  bridge: NativeBridge;
-  hasActivationHandler(): boolean;
-  triggerActivation(activation: NativeNotificationActivation): void;
-}> {
-  const base = createBrowserNativeBridge();
-  let activationHandler: ((activation: NativeNotificationActivation) => void) | null = null;
-  return {
-    bridge: {
-      ...base,
-      notifications: {
-        ...base.notifications,
-        async onActivated(handler: (activation: NativeNotificationActivation) => void): Promise<() => void> {
-          activationHandler = handler;
-          return () => {
-            activationHandler = null;
-          };
-        },
-      },
-    },
-    hasActivationHandler(): boolean {
-      return activationHandler !== null;
-    },
-    triggerActivation(activation: NativeNotificationActivation): void {
-      activationHandler?.(activation);
-    },
-  };
-}
-
-function installScrollIntoViewSpy(targets: HTMLElement[]): () => void {
-  const originalDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
-  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-    configurable: true,
-    value(this: HTMLElement) {
-      targets.push(this);
-    },
-  });
-  return () => {
-    if (originalDescriptor === undefined) {
-      Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
-      return;
-    }
-    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalDescriptor);
   };
 }
 

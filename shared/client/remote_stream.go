@@ -31,26 +31,6 @@ func (c *Remote) SubscribePromptActivity(ctx context.Context, req serverapi.Prom
 	return newRemoteSubscription(conn, route, func(params protocol.PromptActivityEventParams) clientui.PendingPromptEvent { return params.Event }), nil
 }
 
-func (c *Remote) SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-	conn, route, err := c.subscribeRPC(ctx, protocol.MethodAttentionNotificationSubscribe, "subscribe-attention-notification", req, "", false)
-	if err != nil {
-		return nil, err
-	}
-	return newRemoteSubscription(conn, route, func(params protocol.AttentionNotificationEventParams) clientui.AttentionNotificationEvent {
-		return params.Event
-	}), nil
-}
-
-func (c *Remote) SubscribeSessionAttentionNotifications(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-	conn, route, err := c.subscribeRPC(ctx, protocol.MethodAttentionSessionNotificationSubscribe, "subscribe-session-attention-notification", req, req.SessionID, true)
-	if err != nil {
-		return nil, err
-	}
-	return newRemoteSubscription(conn, route, func(params protocol.AttentionNotificationEventParams) clientui.AttentionNotificationEvent {
-		return params.Event
-	}), nil
-}
-
 func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
 	route := mustRemoteRoute(protocol.MethodRunPrompt)
 	conn, cleanup, err := c.openRPCConn(ctx)

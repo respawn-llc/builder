@@ -20,11 +20,7 @@ export function StatusProvider({ children }: StatusProviderProps) {
   }, [testMode]);
   const dismiss = useCallback((id: string) => {
     if (testMode) {
-      setTestNotices((current) => {
-        const dismissed = current.find((item) => item.id === id);
-        dismissed?.onDismiss?.();
-        return current.filter((item) => item.id !== id);
-      });
+      setTestNotices((current) => current.filter((item) => item.id !== id));
       return;
     }
     dismissStatusToast(id);
@@ -54,24 +50,12 @@ function TestStatusToasts({
   return (
     <div aria-live="polite" data-testid="sonner-test-surface">
       {notices.map((notice) => (
-        <article key={notice.id} onClick={notice.onClick}>
+        <article key={notice.id}>
           <strong>{notice.title}</strong>
           {notice.body === undefined || notice.body.length === 0 ? null : <p>{notice.body}</p>}
-          {notice.actionLabel !== undefined && notice.onAction !== undefined ? (
-            <button
-              onClick={(event) => {
-                event.stopPropagation();
-                notice.onAction?.();
-              }}
-              type="button"
-            >
-              {notice.actionLabel}
-            </button>
-          ) : null}
           {notice.dismissible === false ? null : (
             <button
-              onClick={(event) => {
-                event.stopPropagation();
+              onClick={() => {
                 onDismiss(notice.id);
               }}
               type="button"

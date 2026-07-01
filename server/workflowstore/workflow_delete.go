@@ -33,11 +33,9 @@ type WorkflowDeleteRequest struct {
 }
 
 type WorkflowDeleteResult struct {
-	Deleted                               bool
-	Impact                                WorkflowDeleteImpact
-	Blockers                              []WorkflowDeleteBlocker
-	ResolvedApprovalTransitionIDs         []workflow.TransitionID
-	ResolvedApprovalTransitionProjections []ApprovalTransitionProjection
+	Deleted  bool
+	Impact   WorkflowDeleteImpact
+	Blockers []WorkflowDeleteBlocker
 }
 
 type WorkflowDeleteBlocker struct {
@@ -85,14 +83,6 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	}
 
 	now := s.now().UnixMilli()
-	pendingApprovals, err := q.ListPendingApprovalTransitionIDsByWorkflow(ctx, string(req.WorkflowID))
-	if err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("list workflow pending approvals: %w", err)
-	}
-	pendingApprovalProjections, err := workflowDeleteApprovalTransitionProjections(ctx, q, pendingApprovals)
-	if err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("project workflow pending approvals: %w", err)
-	}
 	if _, err := q.DeleteWorkflowTasksByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow tasks: %w", err)
 	}
@@ -112,63 +102,7 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	if err := tx.Commit(); err != nil {
 		return WorkflowDeleteResult{}, err
 	}
-	return WorkflowDeleteResult{
-		Deleted:                               true,
-		Impact:                                impact,
-		ResolvedApprovalTransitionIDs:         workflowDeleteApprovalTransitionIDs(pendingApprovals),
-		ResolvedApprovalTransitionProjections: pendingApprovalProjections,
-	}, nil
-}
-
-func workflowDeleteApprovalTransitionIDs(ids []string) []workflow.TransitionID {
-	out := make([]workflow.TransitionID, 0, len(ids))
-	for _, id := range ids {
-		if strings.TrimSpace(id) != "" {
-			out = append(out, workflow.TransitionID(id))
-		}
-	}
-	return out
-}
-
-func workflowDeleteApprovalTransitionProjections(ctx context.Context, q *sqlitegen.Queries, ids []string) ([]ApprovalTransitionProjection, error) {
-	out := make([]ApprovalTransitionProjection, 0, len(ids))
-	for _, id := range ids {
-		if strings.TrimSpace(id) == "" {
-			continue
-		}
-		transition, err := q.GetTransitionApprovalState(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		task, err := q.GetTask(ctx, transition.TaskID)
-		if err != nil {
-			return nil, err
-		}
-		runID := workflow.RunID("")
-		sessionID := ""
-		if transition.SourceRunID.Valid && strings.TrimSpace(transition.SourceRunID.String) != "" {
-			runID = workflow.RunID(transition.SourceRunID.String)
-			run, err := q.GetTaskRun(ctx, transition.SourceRunID.String)
-			if err != nil {
-				return nil, err
-			}
-			if run.SessionID.Valid {
-				sessionID = run.SessionID.String
-			}
-		}
-		out = append(out, ApprovalTransitionProjection{
-			TransitionID:     workflow.TransitionID(id),
-			ProjectID:        task.ProjectID,
-			WorkflowID:       task.WorkflowID,
-			TaskID:           workflow.TaskID(task.ID),
-			TaskShortID:      task.ShortID,
-			TaskTitle:        task.Title,
-			SourceRunID:      runID,
-			SessionID:        sessionID,
-			OccurredAtUnixMs: transition.CreatedAtUnixMs,
-		})
-	}
-	return out, nil
+	return WorkflowDeleteResult{Deleted: true, Impact: impact}, nil
 }
 
 func workflowDeleteImpactFromRow(row sqlitegen.GetWorkflowDeleteImpactRow) WorkflowDeleteImpact {

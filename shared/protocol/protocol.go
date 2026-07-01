@@ -35,7 +35,6 @@ type CapabilityFlags struct {
 	PromptActivity          bool `json:"prompt_activity"`
 	SessionActivity         bool `json:"session_activity"`
 	ProcessOutput           bool `json:"process_output"`
-	AttentionNotifications  bool `json:"attention_notifications"`
 }
 
 type ServerIdentity struct {

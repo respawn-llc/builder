@@ -63,11 +63,6 @@ type PromptActivityService interface {
 	SubscribePromptActivity(ctx context.Context, req serverapi.PromptActivitySubscribeRequest) (serverapi.PromptActivitySubscription, error)
 }
 
-type AttentionNotificationService interface {
-	SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
-	SubscribeSessionAttentionNotifications(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
-}
-
 type PromptControlService interface {
 	AnswerAsk(ctx context.Context, req serverapi.AskAnswerRequest) error
 	AnswerApproval(ctx context.Context, req serverapi.ApprovalAnswerRequest) error

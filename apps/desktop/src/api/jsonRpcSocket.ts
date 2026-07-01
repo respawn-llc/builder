@@ -235,8 +235,6 @@ export function subscriptionCompleteMethod(subscriptionMethod: string): string |
       return "workflow.complete";
     case "workflow.subscribeProject":
       return "workflow.project.complete";
-    case "attention.notification.subscribe":
-      return "attention.notification.complete";
     default:
       return null;
   }

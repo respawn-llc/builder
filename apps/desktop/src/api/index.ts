@@ -1,15 +1,5 @@
 export { ApiClient } from "./client";
-export type { QuestionAnswerInput, TaskEditInput, TaskMutationInput, WorkflowDeleteInput } from "./clientInputs";
-export type {
-  AttentionNotification,
-  AttentionNotificationEvent,
-  AttentionNotificationEventHandler,
-  AttentionNotificationPresentation,
-  AttentionNotificationQuestionState,
-  AttentionNotificationTarget,
-  AttentionNotificationTaskDetailFocus,
-  AttentionNotificationTaskDetailTarget,
-} from "./attentionNotifications";
+export type { QuestionAnswerInput, TaskEditInput, TaskMutationInput, WorkflowDeleteInput } from "./client";
 export { emptyWorkflowDerivedWiring } from "./models";
 export { createJsonRpcTransport } from "./jsonRpc";
 export type {

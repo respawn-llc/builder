@@ -237,7 +237,7 @@ func TestEmbeddedAppServerPromptActivityStreamsAndHydratesPendingResources(t *te
 	waitForPendingApprovalResources(t, runtimeClients.ApprovalViews, plan.SessionID, 0)
 }
 
-func TestEmbeddedAppServerPendingPromptsKeepPromptActivityForAnsweringOnly(t *testing.T) {
+func TestEmbeddedAppServerPendingPromptsNotifyUIAskHook(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 
 	server, err := startEmbeddedServer(context.Background(), Options{WorkspaceRoot: workspace}, readyMemoryAuthHandler(), false)
@@ -249,7 +249,9 @@ func TestEmbeddedAppServerPendingPromptsKeepPromptActivityForAnsweringOnly(t *te
 	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded ask notification")
 	defer runtimePlan.Close()
 
-	model := newProjectedTestUIModel(runtimePlan.Wiring.runtimeClient, closedProjectedRuntimeEvents(), runtimePlan.Wiring.askEvents)
+	ringer := &countRinger{}
+	hooks := newUnfocusedBellHooks(ringer)
+	model := newProjectedTestUIModel(runtimePlan.Wiring.runtimeClient, closedProjectedRuntimeEvents(), runtimePlan.Wiring.askEvents, WithUIAskNotificationHook(hooks))
 
 	firstDone := make(chan error, 1)
 	go func() {
@@ -268,6 +270,14 @@ func TestEmbeddedAppServerPendingPromptsKeepPromptActivityForAnsweringOnly(t *te
 	model = next.(*uiModel)
 	next, _ = model.Update(askEventMsg{event: second})
 	_ = next.(*uiModel)
+
+	if got := ringer.Count(); got != 2 {
+		t.Fatalf("ask notification count = %d, want 2", got)
+	}
+	wantLast := "kent: Question: " + second.req.Question
+	if got := ringer.Last(); got != wantLast {
+		t.Fatalf("last ask notification = %q, want %q", got, wantLast)
+	}
 
 	for _, evt := range []askEvent{first, second} {
 		evt.reply <- askReply{response: clientui.PromptAnswer{PromptID: evt.req.PromptID, Answer: "ok"}}

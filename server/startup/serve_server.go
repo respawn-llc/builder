@@ -162,7 +162,6 @@ func newServerIdentity(cfg config.App) protocol.ServerIdentity {
 			PromptActivity:          true,
 			SessionActivity:         true,
 			ProcessOutput:           true,
-			AttentionNotifications:  true,
 		},
 	}
 }

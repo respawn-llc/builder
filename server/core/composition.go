@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"core/prompts"
-	"core/server/attentionnotify"
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
@@ -27,7 +26,6 @@ import (
 	"core/server/sleepguard"
 
 	"core/server/workflow"
-	"core/server/workflowattention"
 	"core/server/workflowrunner"
 	"core/server/workflowstore"
 	"core/server/workflowsvc"
@@ -74,8 +72,7 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 		return nil, err
 	}
 	storeOptions := metadataStore.AuthoritativeSessionStoreOptions()
-	attentionBroker := attentionnotify.NewBroker()
-	runtimeRegistry := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
+	runtimeRegistry := registry.NewRuntimeRegistry()
 	sleepManager, sleepErr := sleepguard.NewManager(cfg.Settings.PreventSleep, func(err error) {
 		runtimeRegistry.PublishRuntimeEventToAll(runtime.Event{
 			Kind:  runtime.EventSleepGuardFailed,
@@ -154,8 +151,7 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: view: %w", err)
 	}
-	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore, view: workflowViewService, roleResolver: workflowRoleResolver}, attentionBroker)
-	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{Worktrees: taskWorktreeEnsurer{service: worktreeService}, SessionRuntime: sessionRuntimeService, AttentionFinalizer: workflowAttentionFinalizer})
+	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{Worktrees: taskWorktreeEnsurer{service: worktreeService}, SessionRuntime: sessionRuntimeService})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
@@ -166,7 +162,7 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 		return nil, fmt.Errorf("workflow bundle: scheduler: %w", err)
 	}
 	workflowRuntimeStarter.SetRuntimeFinished(workflowScheduler.RuntimeFinished)
-	workflowService, err := workflowsvc.New(workflowStore, workflowViewService, workflowRoleResolver, workflowsvc.WithTaskWorktreeEnsurer(taskWorktreeEnsurer{service: worktreeService}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(runtimeRegistry), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer))
+	workflowService, err := workflowsvc.New(workflowStore, workflowViewService, workflowRoleResolver, workflowsvc.WithTaskWorktreeEnsurer(taskWorktreeEnsurer{service: worktreeService}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithTaskRuntimeCanceler(workflowRuntimeStarter), workflowsvc.WithSchedulerNotifier(workflowScheduler), workflowsvc.WithPromptResponder(runtimeRegistry))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
@@ -189,7 +185,6 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 		processOutputService:    processOutputService,
 		promptControlService:    promptControlService,
 		promptActivityService:   promptActivityService,
-		attentionService:        client.NewLoopbackAttentionNotificationClient(runtimeRegistry),
 		runtimeControlService:   runtimeControlService,
 		serverStatusService:     serverStatusService,
 		sessionRuntimeService:   sessionRuntimeService,
@@ -246,62 +241,6 @@ func (e taskWorktreeEnsurer) EnsureTaskWorktree(ctx context.Context, taskID stri
 	}
 	_, err := e.service.EnsureTaskWorktree(ctx, worktree.EnsureTaskWorktreeRequest{TaskID: taskID})
 	return err
-}
-
-type workflowApprovalProjection struct {
-	store        *workflowstore.Store
-	view         *workflowview.Service
-	roleResolver workflow.RoleResolver
-}
-
-func (p workflowApprovalProjection) ApprovalProjection(ctx context.Context, transitionID workflow.TransitionID) (workflowattention.ApprovalProjection, bool, error) {
-	if p.store == nil || p.view == nil {
-		return workflowattention.ApprovalProjection{}, false, nil
-	}
-	taskID, _, _, err := p.store.TaskIdentityForTransition(ctx, transitionID)
-	if err != nil {
-		return workflowattention.ApprovalProjection{}, false, err
-	}
-	attention, err := p.view.ListTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: taskID}, p.roleResolver)
-	if err != nil {
-		return workflowattention.ApprovalProjection{}, false, err
-	}
-	for _, item := range attention.Items {
-		if item.Kind != "approval" || item.TaskTransitionID != string(transitionID) {
-			continue
-		}
-		if strings.TrimSpace(item.RunID) == "" || strings.TrimSpace(item.SessionID) == "" {
-			break
-		}
-		return workflowattention.ApprovalProjection{
-			TransitionID:     transitionID,
-			ProjectID:        item.ProjectID,
-			WorkflowID:       item.WorkflowID,
-			TaskID:           workflow.TaskID(item.TaskID),
-			TaskShortID:      item.TaskShortID,
-			TaskTitle:        item.TaskTitle,
-			RunID:            item.RunID,
-			SessionID:        item.SessionID,
-			Message:          item.Message,
-			OccurredAtUnixMs: item.OccurredAtUnixMs,
-		}, true, nil
-	}
-	transition, err := p.store.ApprovalTransitionProjection(ctx, transitionID)
-	if err != nil {
-		return workflowattention.ApprovalProjection{}, false, err
-	}
-	return workflowattention.ApprovalProjection{
-		TransitionID:     transition.TransitionID,
-		ProjectID:        transition.ProjectID,
-		WorkflowID:       transition.WorkflowID,
-		TaskID:           transition.TaskID,
-		TaskShortID:      transition.TaskShortID,
-		TaskTitle:        transition.TaskTitle,
-		RunID:            string(transition.SourceRunID),
-		SessionID:        transition.SessionID,
-		Message:          "action required",
-		OccurredAtUnixMs: transition.OccurredAtUnixMs,
-	}, true, nil
 }
 
 type taskWorktreeDeleter struct {

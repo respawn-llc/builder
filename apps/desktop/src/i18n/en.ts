@@ -43,15 +43,6 @@ export const englishResources = {
       connected: "Connected",
       reconnecting: "Reconnecting",
       readOnly: "Read-only until connection returns.",
-      attention: {
-        open: "Open",
-        questionTitle: "Question",
-        approvalTitle: "Action required",
-        questionFallback: "question from agent",
-        approvalFallback: "action required",
-        permissionDeniedTitle: "Native notifications are disabled",
-        permissionDeniedBody: "Kent will keep attention notifications inside the app.",
-      },
     },
     startup: {
       loadingTitle: "Connecting to Kent service",
