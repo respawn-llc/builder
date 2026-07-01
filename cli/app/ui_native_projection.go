@@ -15,10 +15,9 @@ func (m *uiModel) nativeCommittedProjectionForEntries(entries []tui.TranscriptEn
 	if m == nil {
 		return tui.TranscriptProjection{}
 	}
-	committedEntries := committedTranscriptEntriesForApp(entries)
+	committedEntries := nativeCommittedTranscriptEntriesForApp(entries)
 	state := m.view.TranscriptProjectionViewState()
-	var projector tui.CommittedOngoingProjector
-	projection := projector.Project(committedEntries, tui.CommittedOngoingProjectionKey{
+	projection := tui.ProjectAppendOnlyCommittedOngoingTranscript(committedEntries, tui.CommittedOngoingProjectionKey{
 		Revision:              m.transcriptRevision,
 		Width:                 state.ViewportWidth,
 		Theme:                 state.Theme,
@@ -30,6 +29,22 @@ func (m *uiModel) nativeCommittedProjectionForEntries(entries []tui.TranscriptEn
 	})
 	m.attachNativeProjectionSourceKeys(&projection, committedEntries)
 	return projection
+}
+
+func nativeCommittedTranscriptEntriesForApp(entries []tui.TranscriptEntry) []tui.TranscriptEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	normalized := make([]tui.TranscriptEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Transient && !entry.Committed {
+			continue
+		}
+		copyEntry := entry
+		copyEntry.Transient = false
+		normalized = append(normalized, copyEntry)
+	}
+	return normalized
 }
 
 func (m *uiModel) attachNativeProjectionSourceKeys(projection *tui.TranscriptProjection, entries []tui.TranscriptEntry) {
@@ -85,7 +100,6 @@ type nativeProjectionEntrySourceKey struct {
 	SourcePath        string                   `json:"source_path,omitempty"`
 	CompactLabel      string                   `json:"compact_label,omitempty"`
 	ToolResultSummary string                   `json:"tool_result_summary,omitempty"`
-	ToolCallID        string                   `json:"tool_call_id,omitempty"`
 	NoticeID          string                   `json:"notice_id,omitempty"`
 	ToolCall          any                      `json:"tool_call,omitempty"`
 }
@@ -104,7 +118,6 @@ func nativeProjectionEntrySourceKeys(entries []tui.TranscriptEntry) []nativeProj
 			SourcePath:        entry.SourcePath,
 			CompactLabel:      entry.CompactLabel,
 			ToolResultSummary: entry.ToolResultSummary,
-			ToolCallID:        entry.ToolCallID,
 			NoticeID:          entry.NoticeID,
 			ToolCall:          entry.ToolCall,
 		})
