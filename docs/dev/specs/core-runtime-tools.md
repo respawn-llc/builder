@@ -130,30 +130,24 @@
 - Developer-role meta context messages are transcript entries, not lazy-refreshed lock snapshots. Tool declarations for locked tool IDs, default (embedded) system prompt are code-defined (hardcoded in the binary) and are not persisted as session snapshots.
 - Transcript message order is immutable for cache stability. Under no circumstance without exclusion may the order of items in the persisted transcript change.
 - Committed transcript is durable on disk (asynchronous persistence on commit). Both active and dormant sessions project user-visible transcript by streaming the persisted event log through a windowed projector that retains only the requested page/recent-tail window; live reads overlay only the in-flight streaming delta. The in-memory transcript storage retains the bounded model working set (compaction checkpoint plus post-cutoff tail), not the full transcript: compaction trims pre-cutoff provider items, local entries, and tool completions; only an `O(1)` committed-entry counter survives for hot-path delta detection.
-- Crash-loss tolerance allows losing up to one in-flight tool call. No session event compression.
+- Crash-loss tolerance allows losing up to one model step.
 
 ## Auth
 
-- OpenAI auth supports API key and subscription OAuth.
+- The infrastructure must support using and storing multiple auth providers/auth credentials at the same time.
 - Auth is global server-level, not per-session.
-- Startup blocks on auth only when the resolved provider path requires Kent-managed OpenAI auth.
-- Explicit OpenAI-compatible base URLs and other non-OpenAI provider paths may continue without Kent-managed auth.
+- Startup blocks on auth only when the resolved provider path requires Kent-managed provider auth, such as a combination of `OpenAI subscription` provider and a missing OAuth token. Custom providers do not validate auth in Kent, only parse 401 auth errors and advertise them.
 - Startup auth failures and 401s surface as normal actionable UX.
-- Startup auth picker uses themed startup picker style and friendly titles with one-line explanations.
 - Picker exposes browser OAuth, device-code OAuth, `No auth`, and env-key adoption when available.
-- Choosing `No auth` persists the no-auth sentinel, clears active server auth, and disables env-key fallback. The sentinel does not satisfy raw startup auth readiness.
-- Interactive remote clients may acknowledge a persisted `No auth` choice per JSON-RPC connection to pass startup-owned `AuthServer` route checks while the sentinel remains selected.
-- Recurring no-auth acknowledgements are non-mutating. They must not clear real API-key or OAuth auth, and successful real-auth configuration revokes any client-side no-auth acknowledgement policy.
+- Choosing `No auth` persists the marker that the user chose no auth option, clears active server auth, and disables env-key fallback. Kent then does not send any auth credentials until the user re-executes the auth path and picks another option explicitly.
 - Remote client rebinding preserves and re-acknowledges the no-auth connection policy before the rebound client uses startup-owned server routes.
 - Headless clients, fresh external clients, and remote connections that have not explicitly acknowledged no-auth remain blocked when Kent-managed OpenAI auth is required and no real auth is configured.
 - Browser OAuth uses a hybrid callback flow accepting local callback or pasted callback URL/code.
-- OAuth issuer routing is not configurable in production. `KENT_OAUTH_ISSUER` is intentionally unsupported.
-- Interactive startup treats `OPENAI_API_KEY` as chooser-backed auth source, not unconditional override.
-- Saved subscription auth plus env key with no preference asks the user which source should win.
+- Interactive startup treats `OPENAI_API_KEY` as chooser-backed auth source when user has confirmed it, not unconditional override.
 - `/login` and `/logout` reopen auth selection without clearing credentials first. Only choosing `No auth` option explicitly clears active auth method and env-vs-saved preference.
 - OAuth failure does not auto-fallback to API key.
 - OAuth refresh is silent except refresh failures are surfaced.
-- Global auth method can be switched only while idle.
+- Global auth method can be switched only when no active agent runs are present.
 
 ## Configuration
 
@@ -162,9 +156,9 @@
 - Precedence is CLI overrides > environment > settings file > built-in defaults.
 - After first successful auth, missing `config.toml` triggers first-time setup before session selection.
 - Headless runs refuse to start if onboarding has not been completed (config.toml does not exist and no interactive GUI startup was ever performed)
-- `theme=light` and `theme=dark` select fixed Kent palettes. `theme=auto` or omitted theme uses terminal background detection.
-- Global debug mode is configured by `debug = true` or `KENT_DEBUG=1` and enables developer-oriented strictness.
-- Thinking level passes configured values to the API unchanged.
+- `theme=light` and `theme=dark` select fixed Kent palettes. `theme=auto` or omitted theme uses terminal background detection or system theme detection.
+- Global debug mode is configured by config file's `debug = true` or `KENT_DEBUG=1` and enables developer-oriented strictness and fail-fast checks. when debug is false, the runtime never crashes due to developer errors and instead executes best-effort recovery path where possible or exits with clear message. Debug builds fail-fast with a panic and collect+print diagnostic info needed for manual QA and fast developer iteration. Exact cases and recovery mechanisms for this dichotomy must be confirmed on a case-by-case basis with a human.
+- Thinking level passes configured values to the API unchanged. Predefined thinking levels exist, inventoried statically per known model, for example `low`, `medium`, `high`, `xhigh`, `max`. Thinking level defaults only are used in GUI when model or provider is recognized as supporting them, and fall back to user-provided value otherwise.
 - Context window setting is `model_context_window` and varies per model and can be overridden by user.
 - Effective reviewer and subagent context windows must be at least `40000` or the server crashes with config validation failure.
 - `context_compaction_threshold_tokens < model_context_window` is required or the server crashes with config validation failure.
@@ -176,46 +170,41 @@
 
 - Compaction starts a new active conversation list from compacting output seed items. Full persisted session events remain in the durable session log.
 - Runtime context needed after compaction, including workflow prompts and reminders, is steered into the new active list after replacement.
-- Kent may compact before submitting a queued user prompt when current context usage is within the runway reserve.
-- Pre-submit compaction uses `context_compaction_threshold_tokens - pre_submit_compaction_lead_tokens`, with default lead `35000`.
+- Kent may compact before submitting a queued user prompt when current context usage is high enough that the next user task likely causes compaction. this threshold uses defaults and is configurable. When pre-submit compaction happens, the runtime detects it, session compaction begins first, and then user message is steered using regular mechanisms to arrive as compaction finishes.
+- Pre-submit compaction uses `context_compaction_threshold_tokens - pre_submit_compaction_lead_tokens`, with default lead value.
 - Startup rejects compaction settings that begin normal or pre-submit compaction below 50% of `model_context_window`; this is separate from the `40000` minimum context window.
 - `compaction_mode=none` disables manual and automatic compaction and accepts provider API errors on context overflow.
-- Manual `/compact` is available while the agent is idle.
-- Human-facing UX says `compact`; agent-facing prompt/tool language says `handoff`.
+- Manual `/compact` is available while the agent is both idle and running, submitting /compact during an agent run steers it to occur before the next model step.
+- Human-facing UX always says `compact`; agent-facing prompt/tool language says `handoff`.
 - Successful manual `/compact` steers a hidden developer carryover message containing the last visible user prompt.
-- Agent-triggered handoff uses its own internal compaction mode and may steer a detail-only future-agent developer message; it does not reuse manual carryover semantics.
-- Main-agent OpenAI `session_id` is the persisted Kent session ID for the conversation lifetime.
+- Agent-triggered handoff uses its own internal compaction mode and may steer a detail-only future-agent developer message.
+- Main-agent OpenAI `session_id` is the persisted Kent session ID for the conversation lifetime, including all compactions.
 - Prompt-cache lineage rotates by compaction generation: base `<session_id>`, then `<session_id>/compact-N`.
 - Supervisor/reviewer cache keys use `<session_id>/supervisor` with the same compaction generation counter.
-- After successful history replacement, Kent clears stale system/reviewer prompt snapshots from the locked contract. The next model request lazily reloads effective config, preserves locked model/provider/generation fields and active enabled tool IDs, refreshes system/reviewer prompt snapshots, then persists the refreshed lock for the new generation. The no-marker design accepts the existing file-store crash window where `history_replaced` can be durable before prompt snapshot clearing is durable.
-- The compaction request itself uses the stored pre-compaction contract when one exists. Refreshed system/reviewer prompt snapshots apply only to ordinary requests sent after successful history replacement. A repeat compaction before lazy refresh starts from the cleared prompt snapshot state and uses a non-mutating prompt resolver rather than preserving or persisting the previous prompt.
-- Local compaction instructions are final `developer` messages. Runtime rejects any tool calls returned by the agent during local compaction.
-- Local compaction summary generation reuses the normal main-agent request envelope and changes only request items by appending compaction instructions.
-- If native or local compaction exceeds provider context length, Kent retries by collapsing supported historical tool payloads in the compaction request only. The four total attempts are the original request, then cumulative collapse targets of 10%, 20%, and 40% of the model context window. Shell outputs, including `exec_command` and `write_stdin` outputs, and patch inputs collapse to exact text `<collapsed>`; tool calls and call/output relationships remain present. Reasoning items and unsupported tool payloads are not removed or collapsed. Successful repaired compaction persists an operator-visible diagnostic with collapse counts and estimated omitted tokens.
+- After successful history replacement, Kent clears stale system/reviewer prompt snapshots from the locked contract. The next model request lazily reloads effective config, reloads and snapshots model/provider/generation fields and active enabled tool IDs, refreshes system/reviewer prompt snapshots, then persists the refreshed lock for the new generation. The no-marker design accepts the existing file-store crash window where `history_replaced` can be durable before prompt snapshot clearing is durable.
+- The compaction request itself always uses the stored pre-compaction contract when one exists. Refreshed system/reviewer prompt snapshots apply only to requests sent **after** successful history replacement to prevent cache invalidation before cache key is rotated due to compaction. A repeat compaction before lazy refresh starts from the cleared prompt snapshot state and uses a non-mutating prompt resolver rather than preserving or persisting the previous prompt.
+- Local compaction instructions are final `developer` messages. Runtime rejects any tool calls returned by the agent during local compaction, submits a developer-only error message instructing the model not to call tools, and retries the compaction requests up to 3 times before failing the compaction attempt and stopping the model loop. Each failed attempt emits a user-visible, model-visible, persisted developer error transcript message stating that the model attempted tool calls during compaction. Model-visible text is an instruction not to call tools and retry; user-visible message is a regular notice wording.
+- Local compaction summary generation reuses the normal main-agent request envelope and logic and only appends the developer message, then capturing model output, to reuse existing model turn paths and cache continuity.
+- If native or local compaction exceeds provider context length and triggers an API failure (both must be true), Kent retries by collapsing supported historical tool payloads in the compaction request only. The four total attempts are the original request, then cumulative collapse targets of 10%, 20%, and 40% of the model context window. Shell outputs, including `exec_command` and `write_stdin` outputs, and patch inputs collapse to exact text `<collapsed>`; tool calls and call/output relationships remain present. Reasoning items and unsupported tool payloads are not removed or collapsed. Successful repaired compaction persists an operator-visible diagnostic with collapse counts and estimated omitted tokens.
 - Compaction lifecycle status is emitted through runtime output mutation.
 - Completed compaction creates no UI-only transcript row. Transcript-visible compaction summaries come from server-owned transcript items.
-
-## Model Defaults
-
-- Model seed is unset by default.
-- Temperature is fixed to `1`.
-- Max output tokens are unlimited by default.
 
 ## Goals
 
 - Models may use normal shell commands `kent goal show`, `kent goal complete`, and first-time `kent goal set <objective>` for the current session, but other goal commands detect invocation by the agent and refuse it.
 -  `goal set` by agents is allowed only when no active or paused goal exists. Completed goals do not block the next agent-set goal.
 - Successful goal mutations emit typed runtime status updates carrying the projected goal status state so frontends can update from goal SSOT instead of inferring status from transcript feedback or run lifecycle. Set, pause, resume, complete, and clear emit updates; show/read-only operations do not.
-- `/goal <objective>` immediately sets/replaces the session goal and starts a model turn. It must be allowed even while the model turn is running, and the new notice is steered as usual.
+- `/goal <objective>` (TUI slash command or GUI path) immediately sets/replaces the session goal and starts a model turn. It must be allowed even while the model turn is running, and the new notice is steered as usual.
 - `/goal resume` on a completed goal reopens it as active.
+- `/goal resume` on an already-active goal is no-op and does not emit any model-facing messages.
 - Goal completion is explicit CLI state mutation, not natural-language inference.
 - Goal mode requires `ask_question` in the locked tool surface for active model loops. Validate parity at model-work startup and surface a normal runtime error if violated. This parity is enforced inside workflow runs too, so a goal set inside a workflow requires `ask_question` visibility as well.
 - Lock: `ask_question` visibility and `/questions` state are separate contracts. Missing `ask_question` from the locked tool surface blocks goal model loops; `/questions off` only makes `ask_question` calls return the questions-disabled tool result and must not stop, suspend, or block active goal execution.
 - Goal control is available inside a workflow run (set/show/pause/resume/complete/clear). While an active workflow run drives the session, the goal is a passive objective: no separate goal continuation loop runs (the workflow turn loop is the single driver), and the active goal's reminder is folded into the workflow's invalid-completion nudge.
 - A valid terminal workflow completion soft-cascades an active goal to complete (actor=system) in the same step, across every completion source (structured, unstructured, tool, observed-durable). A valid completion is never blocked by a still-active goal; paused goals are left intact. The cascade is conditional on the same goal still being active when it commits, and for tool-mode completion it is emitted after the terminal tool result is persisted so it never interleaves a non-tool item between a tool call and its result.
-- Goal mutations apply directly through the shared engine when no model step is in flight, with no shell token and no lease. Agent-origin set/complete from the model's shell tool runs inside the step that spawned the shell, so it is steered: the engine self-determines the active step (by `actor=agent`, not a shell token) and queues the mutation against that step, then drains it after the tool result is persisted so the goal developer message never interleaves between a tool call and its result. User-origin mutations and any mutation with no active step apply directly. The deterministic agent-overwrite denial (an agent may not overwrite an active or paused goal) still applies.
+- Goal mutations apply directly using the regular steering path. Goal in-memory state applies immediately and atomically, UI updates deterministically, while persistence, model-awareness (developer message injection), and other ops that require idle runtime apply via steering at the next model step. The deterministic agent-overwrite denial (an agent may not overwrite an active or paused goal) still applies immediately.
 - Goal CLI never mutates session DB directly. It crosses live server/runtime RPC.
-- Any `kent service` commands that affect the server state (restart, stop, start it) detect invocation by kent itself and refuse to run, remaining human-only.
+- Any `kent service` commands that affect the server state (restart, stop, start it) detect invocation by kent itself and refuse to run, being human-only.
 - Ctrl+C during active goal work keeps persisted status `active` and creates runtime-local suspension only. The next user message auto-resumes the suspended goal loop after its turn completes (no `/goal resume` needed); an explicit `/goal pause` is still the hard pause. A user turn that is itself interrupted leaves the loop suspended.
 - The goal status-line indicator in TUI shows the animated spinner only while a goal run is executing; when the goal is `active` but idle (e.g. after Ctrl+C), it shows the idle status dot.
 
@@ -223,27 +212,23 @@
 
 - `kent run "prompt"` is the supported headless/subagent interface.
 - `kent run` is a pure client: it attaches to an already-running server (configured remote or discovered local daemon) and never starts a server of its own. When no server is reachable it fails fast with a typed error directing the operator to `kent serve` or `kent service install`.
-- Headless roles use `kent run --agent <role> "prompt"`; `--fast` selects the built-in fast role.
+- Headless roles use `kent run --agent <role> "prompt"`; `--fast` selects the built-in fast role. `--fast` and `--agent` cannot be combined.
 - Subagent roles are file-only `[subagents.<role>]` config tables and inherit main config unless overridden.
 - Subagent role `model_context_window` and `reviewer.model_context_window` overrides must resolve to at least `40000` or config validation crashes the server.
-- Subagent roles may set `agent_callable=false`; such roles are hidden from agent-facing role context and rejected for Kent-session subagent calls, while humans may still run them from ordinary shells.
-- The built-in `fast` role exists without config and may switch to a smaller/faster profile on exact provider first-party setups.
+- Subagent roles may set `agent_callable=false`; such roles are hidden from agent-facing role context and rejected for Kent-session subagent calls, while humans may still run them from ordinary shells as headless, or use them in workflows.
+- The built-in `fast` role exists without config and may switch to a smaller/faster profile on exact provider first-party setups, or be configured by the user.
 - Headless executes a single non-interactive prompt with normal runtime/session persistence.
 - It creates/resumes normal sessions and auto-names unnamed sessions `<session-id> subagent`.
-- Default timeout is infinite; `--timeout` can bound execution.
+- Default timeout is infinite; `--timeout` can bind execution.
 - Output modes are explicit: `final-text` default and optional `json`.
-- JSON mode emits exactly one final object on stdout.
+- JSON command mode for all TUI commands emits exactly one final object on stdout.
 - Progress is quiet by default and emits to stderr only with `--progress-mode=stderr`.
 - A headless or workflow run registers the session's single shared runtime and drives it. Interactive activation for the same active session resolves and attaches to that same shared engine as an equal full-control surface: live transcript/status, user steering and queued messages, prompt/approval answers, and every control operate against the shared runtime with no ownership, lease, or limited-control mode.
 - A running workflow task is steerable from any attached client as usual (chat, queued steering, goal control, settings, compaction, worktree, process view). The only workflow-specific limit is that the model cannot submit a structured-output final answer that is invalid for the node; that is a completion constraint, not a client restriction. Failures to reach an active runtime surface as the typed runtime-unavailable error.
 - A submission to a busy runtime is steered into the in-flight step via the shared engine's queue boundary and auto-drains when the step finishes, unless terminal workflow completion wins first; in that case the client receives a visible failure instead of a silent drop. Queue requests made while the runtime is closing are rejected so the client can restore the input.
 - Clients report the active runtime phase from shared runtime state and use an active/busy fallback while a run is executing, draining, or closing, including periods with no active engine-step snapshot. Registered-idle runtimes accept idle operations.
 - Prompt and approval resolution uses server-acknowledged shared prompt state. Clients do not locally finalize a pending prompt before the server accepts the answer and publishes/returns the resolved state.
-- Worktree controls are available from any client. Worktree mutation runs in a between-steps idle slot of the shared engine (it waits for a gap rather than rejecting while a run is in progress) and remains serialized by the workspace lock.
+- Worktree controls are available from any client. Worktree mutation runs in a between-steps idle slot of the shared engine (it waits for a gap rather than rejecting while a run is in progress) and is serialized by the workspace lock.
 - Resuming a session with persisted subagent role metadata reapplies that role best-effort when it exists. Missing roles do not block explicit continuation.
 
-## Provider Wiring
-
-- OpenAI requests always set `originator` and `User-Agent`.
-- `session_id` header is sent whenever a session ID exists, for both OAuth and API-key auth.
 - LLM provider wiring uses a provider-factory seam so runtime/app constructs clients via provider selection.
