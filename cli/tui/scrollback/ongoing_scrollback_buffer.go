@@ -327,12 +327,11 @@ func (buffer *OngoingScrollbackBufferImpl) DiscardAssistantStreaming() error {
 			0,
 		)
 	}
-	buffer.isStreaming = false
-	buffer.turnEndedDuringActiveFlow.Store(false)
-	queuedSteers := append([]stableSteerRequest(nil), buffer.queuedSteers...)
-	buffer.queuedSteers = nil
-
 	if !buffer.normalBufferAvailableLocked() {
+		buffer.isStreaming = false
+		buffer.turnEndedDuringActiveFlow.Store(false)
+		queuedSteers := append([]stableSteerRequest(nil), buffer.queuedSteers...)
+		buffer.queuedSteers = nil
 		buffer.heldStableOps = append(buffer.heldStableOps, stableHoldoffOperation{kind: stableHoldoffDiscardAssistantStream, queuedSteers: queuedSteers})
 		buffer.clearAssistantStreamStateLocked()
 		buffer.mu.Unlock()
@@ -342,6 +341,10 @@ func (buffer *OngoingScrollbackBufferImpl) DiscardAssistantStreaming() error {
 		buffer.mu.Unlock()
 		return err
 	}
+	buffer.isStreaming = false
+	buffer.turnEndedDuringActiveFlow.Store(false)
+	queuedSteers := append([]stableSteerRequest(nil), buffer.queuedSteers...)
+	buffer.queuedSteers = nil
 	delayedErr := error(nil)
 	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
 		delayedErr = err

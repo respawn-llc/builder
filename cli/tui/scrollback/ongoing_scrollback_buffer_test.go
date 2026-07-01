@@ -72,8 +72,13 @@ func TestOngoingScrollbackBufferDiscardAssistantStreamingDropsMutableStreamAndFl
 	if err := buffer.DiscardAssistantStreaming(); err != nil {
 		t.Fatalf("discard returned error: %v", err)
 	}
-	if err := <-queuedErr; err != nil {
-		t.Fatalf("queued steer returned error: %v", err)
+	select {
+	case err := <-queuedErr:
+		if err != nil {
+			t.Fatalf("queued steer returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued steer did not finish after discard")
 	}
 
 	if buffer.AssistantStreaming() {

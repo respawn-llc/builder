@@ -237,6 +237,7 @@ func shouldSkipStaleAuthoritativeAssistantFinalizer(state projectedTranscriptEve
 		evt.Kind == clientui.EventAssistantMessage &&
 		evt.CommittedTranscriptChanged &&
 		eventEnd == currentEnd &&
+		evt.CommittedEntryCount > 0 &&
 		evt.CommittedEntryCount <= knownEnd &&
 		isAssistantStreamFinalizerEvent(state, evt)
 }
