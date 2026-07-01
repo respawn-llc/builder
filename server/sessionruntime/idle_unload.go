@@ -126,7 +126,7 @@ func (s *Service) runScheduledIdleUnload(sessionID string, generation uint64) {
 	if s.runtimeHasSubscribers(trimmedSessionID) {
 		return
 	}
-	if active, err := s.runtimeHasActiveRun(context.Background(), trimmedSessionID); err != nil || active {
+	if active, err := s.runtimeHasBlockingActivity(context.Background(), trimmedSessionID); err != nil || active {
 		return
 	}
 	closed, err := claim.CloseIfIdle(context.Background(), 0, s.drainBeforeClose(claim))

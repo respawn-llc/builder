@@ -5,6 +5,8 @@ import (
 
 	"core/cli/tui"
 	"core/shared/clientui"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type statusLinePhase uint8
@@ -16,9 +18,17 @@ const (
 	statusLinePhaseError
 )
 
-func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) {
+func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) tea.Cmd {
 	if m == nil {
-		return
+		return nil
+	}
+	if view.Version.Validate() == nil {
+		if m.acceptRuntimeReadModelVersion(view.Version, true) == runtimeReadModelVersionIgnore {
+			if view.Activity.State != "" && runtimeActivityConflictsWithProjection(view.Activity, m) {
+				_ = m.sendTransientStatusWithNoticeID("conflicting runtime activity read-model update ignored", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+			}
+			return nil
+		}
 	}
 	status := view.Status
 	m.reviewerMode = status.ReviewerFrequency
@@ -29,47 +39,20 @@ func (m *uiModel) applyRuntimeMainViewState(view clientui.RuntimeMainView) {
 	m.fastModeEnabled = status.FastModeEnabled
 	m.conversationFreshness = status.ConversationFreshness
 	m.setRuntimeContextUsage(view.Session.SessionID, status.ContextUsage)
-	m.setExternalRuntimeStatus(view.ExternalRuntime)
-	activeRun := view.ActiveRun != nil && view.ActiveRun.Status == clientui.RunStatusRunning
-	active := activeRun || m.externalRuntimeBusy()
-	m.setBusy(active)
-	m.setGoalRun(activeRun && view.ActiveRun.Lifecycle.IsGoalLoopRunning())
-	if active {
-		m.activity = uiActivityRunning
-		return
+	if view.Activity.State != "" {
+		if err := m.applyRuntimeActivityProjection(view.Activity); err != nil {
+			m.activity = uiActivityError
+			_ = m.sendTransientStatusWithNoticeID("invalid runtime activity: "+err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+			return nil
+		}
 	}
-	m.activity = uiActivityIdle
-}
-
-func externalRuntimeBusy(status *clientui.ExternalRuntimeStatus) bool {
-	if status == nil {
-		return false
+	if view.Activity.State != "" && !view.Activity.ActiveForControl() && m.hasPendingInterrupt() {
+		if m.pendingInterruptMissingInputReconciliation(view) {
+			return nil
+		}
+		return m.acknowledgePendingInterrupt()
 	}
-	switch status.State {
-	case clientui.ExternalRuntimeStateOwnerRunning, clientui.ExternalRuntimeStateDraining, clientui.ExternalRuntimeStateClosing:
-		return true
-	default:
-		return false
-	}
-}
-
-func (m *uiModel) setExternalRuntimeStatus(status *clientui.ExternalRuntimeStatus) {
-	if m == nil {
-		return
-	}
-	if status == nil || status.State == "" {
-		m.externalRuntimeStatus = nil
-		return
-	}
-	next := *status
-	m.externalRuntimeStatus = &next
-}
-
-func (m *uiModel) externalRuntimeBusy() bool {
-	if m == nil {
-		return false
-	}
-	return externalRuntimeBusy(m.externalRuntimeStatus)
+	return nil
 }
 
 func (m *uiModel) runtimeMainView() clientui.RuntimeMainView {
@@ -86,7 +69,15 @@ func (m *uiModel) runtimeMainView() clientui.RuntimeMainView {
 func (m *uiModel) refreshRuntimeMainView() clientui.RuntimeMainView {
 	m.checkTUIBlockingOperation("runtime main-view refresh", "RefreshMainView")
 	if client := m.runtimeClient(); client != nil {
-		view, err := client.RefreshMainView()
+		var (
+			view clientui.RuntimeMainView
+			err  error
+		)
+		if requestClient, ok := client.(runtimeMainViewReconciliationClient); ok {
+			view, err = requestClient.RefreshMainViewWithPendingRefs(m.pendingRuntimeOperationRefs())
+		} else {
+			view, err = client.RefreshMainView()
+		}
 		if err == nil {
 			m.observeRuntimeRequestResult(nil)
 			return view
@@ -176,7 +167,7 @@ func (m *uiModel) statusLineSpinning() bool {
 	if m == nil {
 		return false
 	}
-	return (m.runtimeLifecycle.Run.IsRunning() && m.activity != uiActivityQuestion) ||
+	return (m.runtimeActivityBusy() && m.activity != uiActivityQuestion) ||
 		m.runtimeLifecycle.Compaction.IsRunning() ||
 		m.runtimeLifecycle.Reviewer.IsRunning()
 }
@@ -192,7 +183,7 @@ func (m *uiModel) refreshRuntimeStatus() clientui.RuntimeStatus {
 }
 
 func (m *uiModel) applyRuntimeEventStatus(evt clientui.Event) {
-	if m == nil || (evt.ContextUsage == nil && evt.GoalStatus == nil) {
+	if m == nil || (evt.ContextUsage == nil && evt.GoalStatus == nil && evt.Kind != clientui.EventRuntimeActivityChanged) {
 		return
 	}
 	if evt.ContextUsage != nil {

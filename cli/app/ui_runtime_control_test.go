@@ -37,12 +37,17 @@ type runtimeControlFakeClient struct {
 	appendedRole           string
 	appendedText           string
 	submitText             string
+	submitOperationRef     clientui.RuntimeOperationRef
+	preSubmitOperationRef  clientui.RuntimeOperationRef
 	submitResult           string
 	hasQueuedUserWork      bool
 	hasQueuedUserWorkCalls int
 	submitQueuedResult     string
 	submitQueuedCalls      int
+	submitQueuedOperation  clientui.RuntimeOperationRef
 	interruptCalls         int
+	interruptPendingRefs   []clientui.RuntimeOperationRef
+	interruptTargetRef     *clientui.RuntimeOperationRef
 	queuedText             string
 	queuedClientRequestID  string
 	queueUserMessageCalls  int
@@ -70,7 +75,7 @@ func (timeoutNetError) Timeout() bool   { return true }
 func (timeoutNetError) Temporary() bool { return false }
 
 func (f *runtimeControlFakeClient) MainView() clientui.RuntimeMainView {
-	if f.mainView.Session.SessionID != "" || f.mainView.Status.ThinkingLevel != "" || f.mainView.ActiveRun != nil || f.mainView.ExternalRuntime != nil || f.mainView.Status.WorkflowSession != nil || f.mainView.Status.WorkflowActive {
+	if f.mainView.Session.SessionID != "" || f.mainView.Status.ThinkingLevel != "" || f.mainView.Activity.State != "" || f.mainView.Status.WorkflowSession != nil || f.mainView.Status.WorkflowActive {
 		return f.mainView
 	}
 	return clientui.RuntimeMainView{Status: f.status, Session: f.sessionView}
@@ -158,6 +163,13 @@ func (f *runtimeControlFakeClient) ResumeGoal() (*clientui.RuntimeGoal, error) {
 	f.goal.Status = "active"
 	return cloneRuntimeGoal(f.goal), f.err
 }
+func (f *runtimeControlFakeClient) CompleteGoal() (*clientui.RuntimeGoal, error) {
+	if f.goal == nil {
+		f.goal = &clientui.RuntimeGoal{ID: "goal-1", Objective: "objective"}
+	}
+	f.goal.Status = "complete"
+	return cloneRuntimeGoal(f.goal), f.err
+}
 func (f *runtimeControlFakeClient) ClearGoal() (*clientui.RuntimeGoal, error) {
 	f.clearGoalCalls++
 	f.goal = nil
@@ -174,7 +186,7 @@ func (f *runtimeControlFakeClient) AppendCommittedEntryWithNoticeID(role, text, 
 	}
 	return f.err
 }
-func (f *runtimeControlFakeClient) SubmitUserMessage(_ context.Context, text string) (clientui.UserTurnSubmission, error) {
+func (f *runtimeControlFakeClient) submitUserMessage(_ context.Context, text string) (clientui.UserTurnSubmission, error) {
 	f.submitText = text
 	result := clientui.UserTurnSubmission{Message: f.submitResult}
 	if f.submitErr != nil {
@@ -182,12 +194,23 @@ func (f *runtimeControlFakeClient) SubmitUserMessage(_ context.Context, text str
 	}
 	return result, f.err
 }
-func (f *runtimeControlFakeClient) SubmitUserShellCommand(_ context.Context, command string) error {
+func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req clientui.RuntimeSubmitRequest) (clientui.UserTurnSubmission, error) {
+	f.submitOperationRef = req.OperationRef
+	f.preSubmitOperationRef = req.PreSubmitCompactionOperationRef
+	return f.submitUserMessage(ctx, req.Text)
+}
+func (f *runtimeControlFakeClient) submitUserShellCommand(_ context.Context, command string) error {
 	return f.err
 }
-func (f *runtimeControlFakeClient) CompactContext(_ context.Context, args string) error {
+func (f *runtimeControlFakeClient) RunUserShell(ctx context.Context, req clientui.RuntimeShellRequest) error {
+	return f.submitUserShellCommand(ctx, req.Command)
+}
+func (f *runtimeControlFakeClient) compactContext(_ context.Context, args string) error {
 	_ = args
 	return f.err
+}
+func (f *runtimeControlFakeClient) CompactRuntime(ctx context.Context, req clientui.RuntimeCompactRequest) error {
+	return f.compactContext(ctx, req.Args)
 }
 func (f *runtimeControlFakeClient) HasQueuedUserWork() (bool, error) {
 	f.hasQueuedUserWorkCalls++
@@ -196,9 +219,13 @@ func (f *runtimeControlFakeClient) HasQueuedUserWork() (bool, error) {
 	}
 	return f.hasQueuedUserWork, f.err
 }
-func (f *runtimeControlFakeClient) SubmitQueuedUserMessages(context.Context) (string, error) {
+func (f *runtimeControlFakeClient) submitQueuedUserMessages(context.Context) (string, error) {
 	f.submitQueuedCalls++
 	return f.submitQueuedResult, f.err
+}
+func (f *runtimeControlFakeClient) SubmitRuntimeQueued(ctx context.Context, req clientui.RuntimeSubmitQueuedRequest) (string, error) {
+	f.submitQueuedOperation = req.OperationRef
+	return f.submitQueuedUserMessages(ctx)
 }
 func (f *runtimeControlFakeClient) Interrupt() error {
 	f.interruptCalls++
@@ -207,14 +234,31 @@ func (f *runtimeControlFakeClient) Interrupt() error {
 	}
 	return f.err
 }
-func (f *runtimeControlFakeClient) QueueUserMessage(text string) (clientui.QueuedUserMessage, error) {
-	return f.QueueUserMessageWithClientRequestID(text, "")
+func (f *runtimeControlFakeClient) InterruptWithPendingRefs(refs []clientui.RuntimeOperationRef) error {
+	f.interruptCalls++
+	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
+	f.interruptTargetRef = nil
+	if f.interruptErr != nil {
+		return f.interruptErr
+	}
+	return f.err
 }
-
-func (f *runtimeControlFakeClient) QueueUserMessageWithClientRequestID(text string, clientRequestID string) (clientui.QueuedUserMessage, error) {
+func (f *runtimeControlFakeClient) InterruptWithTarget(target clientui.RuntimeOperationRef, refs []clientui.RuntimeOperationRef) error {
+	f.interruptCalls++
+	f.interruptPendingRefs = append([]clientui.RuntimeOperationRef(nil), refs...)
+	f.interruptTargetRef = &target
+	if f.interruptErr != nil {
+		return f.interruptErr
+	}
+	return f.err
+}
+func (f *runtimeControlFakeClient) QueueRuntimeUserMessage(req clientui.RuntimeQueueUserMessageRequest) (clientui.QueuedUserMessage, error) {
+	if err := req.Validate(); err != nil {
+		return clientui.QueuedUserMessage{}, err
+	}
 	f.queueUserMessageCalls++
-	f.queuedText = text
-	f.queuedClientRequestID = strings.TrimSpace(clientRequestID)
+	f.queuedText = req.Text
+	f.queuedClientRequestID = strings.TrimSpace(req.OperationRef.ClientRequestID)
 	if f.queueUserMessageErr != nil {
 		return clientui.QueuedUserMessage{}, f.queueUserMessageErr
 	}
@@ -222,7 +266,7 @@ func (f *runtimeControlFakeClient) QueueUserMessageWithClientRequestID(text stri
 	if id == "" {
 		id = "queue-1"
 	}
-	return clientui.QueuedUserMessage{ID: id, Text: text, ClientRequestID: f.queuedClientRequestID}, nil
+	return clientui.QueuedUserMessage{ID: id, Text: req.Text, ClientRequestID: f.queuedClientRequestID}, nil
 }
 func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) bool {
 	f.discardQueuedCalls++
@@ -486,7 +530,7 @@ func TestSubmitErrorShowsTransientStatusWithoutPersisting(t *testing.T) {
 	client := &runtimeControlFakeClient{}
 	m := newProjectedStaticUIModel()
 	m.engine = client
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activeSubmit = activeSubmitState{token: 1, text: "prompt", stepID: "step-1"}
 
 	next, cmd := m.Update(submitDoneMsg{token: 1, submittedText: "prompt", err: errors.New("submit failed")})
@@ -581,60 +625,5 @@ func TestRuntimeControlOpTimeoutDoesNotMarkDisconnect(t *testing.T) {
 	}
 	if m.runtimeDisconnectStatusVisible() {
 		t.Fatal("did not expect op timeout to mark disconnect")
-	}
-}
-func TestRuntimeMainViewExternalOwnerStateDrivesBusyFallback(t *testing.T) {
-	tests := []struct {
-		name string
-		view clientui.RuntimeMainView
-		busy bool
-	}{
-		{
-			name: "owner running",
-			view: clientui.RuntimeMainView{ExternalRuntime: &clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateOwnerRunning, QueueAccepting: true}},
-			busy: true,
-		},
-		{
-			name: "closing",
-			view: clientui.RuntimeMainView{ExternalRuntime: &clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateClosing}},
-			busy: true,
-		},
-		{
-			name: "draining",
-			view: clientui.RuntimeMainView{ExternalRuntime: &clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateDraining}},
-			busy: true,
-		},
-		{
-			name: "registered idle",
-			view: clientui.RuntimeMainView{ExternalRuntime: &clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateRegisteredIdle, QueueAccepting: true}},
-			busy: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := newProjectedStaticUIModel()
-			m.applyRuntimeMainViewState(tt.view)
-			if m.isBusy() != tt.busy {
-				t.Fatalf("busy = %v, want %v", m.isBusy(), tt.busy)
-			}
-		})
-	}
-}
-
-func TestExternalOwnerStatusEventKeepsIdleRunStateBusy(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	adapter := uiRuntimeAdapter{model: m}
-	adapter.applyProjectedRuntimeEvent(clientui.Event{
-		Kind:                  clientui.EventExternalRuntimeStatus,
-		ExternalRuntimeStatus: &clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateDraining},
-	})
-
-	adapter.applyProjectedRuntimeEvent(clientui.Event{
-		Kind:     clientui.EventRunStateChanged,
-		RunState: &clientui.RunState{Lifecycle: clientui.IdleRunLifecycle()},
-	})
-
-	if !m.isBusy() || m.activity != uiActivityRunning {
-		t.Fatalf("busy=%t activity=%v, want busy running while external owner drains", m.isBusy(), m.activity)
 	}
 }

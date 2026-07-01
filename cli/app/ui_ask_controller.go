@@ -153,9 +153,8 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlC:
 		hasNext := c.answer(clientui.PromptAnswer{}, errors.New("interrupted"))
 		interruptCmd := tea.Cmd(nil)
-		if m.isBusy() {
-			interruptCmd = m.inputController().interruptBusyRuntime()
-			m.setBusy(false)
+		if m.blocksRuntimeInput() {
+			_, interruptCmd = m.inputController().handleRuntimeCtrlC(nil)
 		}
 		if hasNext {
 			m.activity = uiActivityQuestion

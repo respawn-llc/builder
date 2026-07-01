@@ -63,8 +63,8 @@ func (transcriptDiagTestRuntimeControlClient) HasQueuedUserWork(context.Context,
 func (transcriptDiagTestRuntimeControlClient) SubmitQueuedUserMessages(context.Context, serverapi.RuntimeSubmitQueuedUserMessagesRequest) (serverapi.RuntimeSubmitQueuedUserMessagesResponse, error) {
 	return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, nil
 }
-func (transcriptDiagTestRuntimeControlClient) Interrupt(context.Context, serverapi.RuntimeInterruptRequest) error {
-	return nil
+func (transcriptDiagTestRuntimeControlClient) Interrupt(context.Context, serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
+	return serverapi.RuntimeInterruptResponse{}, nil
 }
 func (transcriptDiagTestRuntimeControlClient) QueueUserMessage(context.Context, serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {
 	return serverapi.RuntimeQueueUserMessageResponse{}, nil

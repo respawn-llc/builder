@@ -22,7 +22,7 @@ import (
 
 func TestReviewerProgressKeepsInputEditable(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "keep this draft"
 
@@ -57,7 +57,7 @@ func TestReviewerProgressKeepsInputEditable(t *testing.T) {
 
 func TestBusyEnterDuringReviewerUsesSteeringInjection(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "steer after review"
 

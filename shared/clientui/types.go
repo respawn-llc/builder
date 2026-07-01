@@ -37,7 +37,7 @@ const (
 	EventPromptHistoryPersistFailed EventKind = "prompt_history_persist_failed"
 	EventGoalStatusUpdated          EventKind = "goal_status_updated"
 	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
-	EventExternalRuntimeStatus      EventKind = "external_runtime_status"
+	EventRuntimeActivityChanged     EventKind = "runtime_activity_changed"
 
 	TranscriptRecoveryCauseNone         TranscriptRecoveryCause = ""
 	TranscriptRecoveryCauseStreamGap    TranscriptRecoveryCause = "stream_gap"
@@ -70,7 +70,9 @@ type Event struct {
 	Background                   *BackgroundShellEvent
 	GoalStatus                   *RuntimeGoalStatusUpdate
 	QueuedUserMessageStatus      *QueuedUserMessageStatusEvent
-	ExternalRuntimeStatus        *ExternalRuntimeStatus
+	ReadModelVersion             ReadModelVersion
+	RuntimeActivity              *RuntimeActivity
+	InputReconciliation          *RuntimeInputReconciliationSnapshot
 }
 
 type RuntimeGoalStatusUpdate struct {
@@ -121,6 +123,7 @@ type ReasoningDelta struct {
 type RunState struct {
 	Lifecycle  RunLifecycle
 	RunID      string
+	ActiveKind RuntimeActivityActiveKind
 	Status     RunStatus
 	StartedAt  time.Time
 	FinishedAt time.Time

@@ -19,6 +19,7 @@ import (
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
+	"core/server/runtimeops"
 	"core/server/serverstatus"
 	"core/server/sessionruntime"
 	"core/server/sessionservice"
@@ -111,17 +112,20 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 			}
 			return warning, true, nil
 		})
+	projectService.WithRuntimeActivitySources(runtimeRegistry, sessionRuntimeService)
 	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, storeOptions...)
 	promptControlService := promptcontrol.NewPromptControlService(runtimeRegistry)
 	promptActivityService := promptcontrol.NewPromptActivityService(runtimeRegistry)
-	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).WithPromptHistoryStore(metadataStore).WithWorkflowSessionResolver(sessionStoreResolver)
+	runtimeOperations := runtimeops.NewCoordinator()
+	runtimeRegistry.WithOperationCoordinator(runtimeOperations)
+	runtimeControlService := runtimecontrol.NewService(runtimeRegistry).WithOperationCoordinator(runtimeOperations).WithPromptHistoryStore(metadataStore).WithWorkflowSessionResolver(sessionStoreResolver)
 	worktreeService := worktree.NewService(metadataStore, nil, runtimeRegistry, sessionRuntimeService, runtimeSupport.Background, runtimeControlService, worktree.ServiceOptions{BaseDir: cfg.Settings.Worktrees.BaseDir, SetupScript: cfg.Settings.Worktrees.SetupScript})
 	projectViews := client.NewLoopbackProjectViewClient(projectService)
 	authBootstrapService := authservice.NewBootstrapService(authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings, rpccontract.AllowedPreAuthMethods())
 	authStatusService := authservice.NewStatusService(authSupport.AuthManager, cfg.Settings)
 	serverStatusService := serverstatus.NewServerStatusService(authSupport.AuthManager, cfg)
 	updateStatusService := serverstatus.NewUpdateStatusService(config.Version)
-	sessionViewService := sessionview.NewService(sessionStoreResolver, runtimeRegistry, metadataStore).WithCacheWarningMode(cfg.Settings.CacheWarningMode).WithUpdateStatusProvider(updateStatusService)
+	sessionViewService := sessionview.NewService(sessionStoreResolver, runtimeRegistry, metadataStore).WithOperationCoordinator(runtimeOperations).WithCacheWarningMode(cfg.Settings.CacheWarningMode).WithUpdateStatusProvider(updateStatusService)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, sessionStoreRegistry, authSupport.AuthManager, storeOptions...)
 	sessionActivityService := sessionservice.NewSessionActivityService(runtimeRegistry)
 	var workflowRuntimeStarter *workflowrunner.Starter

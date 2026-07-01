@@ -8,6 +8,7 @@ import (
 	"core/cli/tui"
 	"core/shared/client"
 	"core/shared/clientui"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -41,6 +42,8 @@ type uiRuntimeFeatureState struct {
 	runtimeReconnectWarning    <-chan runtimeReconnectWarningMsg
 	runtimeContextUsage        clientui.RuntimeContextUsage
 	runtimeContextUsageSession string
+	runtimeReadModelVersion    clientui.ReadModelVersion
+	runtimeActivityProjection  clientui.RuntimeActivity
 	logger                     uiLogger
 }
 
@@ -55,7 +58,6 @@ type uiInputFeatureState struct {
 	promptHistoryDraftCursor int
 	activity                 uiActivity
 	runtimeLifecycle         runtimestate.RuntimeRunState
-	externalRuntimeStatus    *clientui.ExternalRuntimeStatus
 	reviewerEnabled          bool
 	reviewerMode             string
 	autoCompactionEnabled    bool
@@ -72,8 +74,10 @@ type uiInputFeatureState struct {
 	queued                                 []queuedInputItem
 	compactionOrigin                       uiCompactionOrigin
 	queuedRuntimeWorkCheckCompactionOrigin uiCompactionOrigin
+	pendingRuntimeOperations               []clientui.RuntimeOperationRef
 	submitToken                            uint64
 	activeSubmit                           activeSubmitState
+	recoveredDraftBuffers                  []serverapi.SessionDraftRecoveryBuffer
 
 	pendingInjected    []clientui.QueuedUserMessage
 	injectedQueue      []injectedRuntimeQueueItem
@@ -82,6 +86,13 @@ type uiInputFeatureState struct {
 	lockedInjectID     string
 	inputSubmission    runtimestate.InputSubmissionLifecycle
 	interruptLifecycle uiInterruptLifecycle
+	currentRunID       string
+	currentStepID      string
+	interruptRunID     string
+	interruptStepID    string
+	interruptPreActive bool
+	completedRunID     string
+	completedStepID    string
 
 	modelName             string
 	configuredModelName   string
@@ -152,6 +163,7 @@ type uiSessionTransitionFeatureState struct {
 	nextParentSessionID                     string
 	sessionName                             string
 	sessionID                               string
+	forcedLocalExit                         bool
 }
 
 type uiStatusFeatureState struct {

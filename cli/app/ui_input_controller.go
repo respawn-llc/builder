@@ -129,7 +129,9 @@ func (m *uiModel) scheduleSpinnerTick(token uint64, now time.Time) tea.Cmd {
 
 func (c uiInputController) interruptBusyRuntime() tea.Cmd {
 	m := c.model
+	preActive := !m.runtimeActivityBusy() && m.hasLocalDispatchPending()
 	m.setPendingInterrupt(true)
+	m.interruptPreActive = preActive
 	return m.runtimeControlCommand(runtimeControlInterrupt, "", false, "")
 }
 

@@ -148,7 +148,7 @@ func TestRemoteNoAuthUnregisteredWorkspaceBindingCanPrepareRuntime(t *testing.T)
 		t.Fatalf("ensureInteractiveProjectBinding: %v", err)
 	}
 	_, runtimePlan := prepareAppRuntimePlanWithOpenAIBaseURL(t, bound, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, fakeResponses.URL, io.Discard, "test remote no-auth rebound runtime")
-	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after rebound no auth")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after rebound no auth")
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestStartSessionServerRejectsIncompatibleDiscoveredDaemonAndFallsBack(t *te
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
 	defer runtimePlan.Close()
 
-	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through embedded fallback")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through embedded fallback")
 	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -246,7 +246,7 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutProcessOutputCapability
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
 	defer runtimePlan.Close()
 
-	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after capability fallback")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after capability fallback")
 	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -299,7 +299,7 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutAuthBootstrapCapability
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
 	defer runtimePlan.Close()
 
-	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after auth bootstrap fallback")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after auth bootstrap fallback")
 	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -352,7 +352,7 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutProjectAttachCapability
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test project attach fallback runtime")
 	defer runtimePlan.Close()
 
-	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after project attach fallback")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after project attach fallback")
 	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -404,7 +404,7 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutTranscriptPagingCapabil
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
 	defer runtimePlan.Close()
 
-	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello after transcript paging fallback")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after transcript paging fallback")
 	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -698,7 +698,7 @@ func TestStartSessionServerUsesInvocationOverridesWhenAttachingToDiscoveredDaemo
 	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test remote interactive runtime override")
 	defer runtimePlan.Close()
 
-	submission, err := runtimePlan.Wiring.runtimeClient.SubmitUserMessage(context.Background(), "hello through interactive override")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive override")
 	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)

@@ -57,6 +57,9 @@ func renderWorktreeDeleteButtons(width int, theme string, dialog uiWorktreeDelet
 func (c uiInputController) handleWorktreeDeleteDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m := c.model
 	dialog := &m.worktrees.deleteConfirm
+	if strings.ToLower(msg.String()) == "ctrl+c" {
+		return c.handleRuntimeCtrlC(c.closeTranscriptSurfaceForRuntimeCtrlC(m.closeWorktreeOverlay))
+	}
 	if dialog.submitting {
 		return m, nil
 	}

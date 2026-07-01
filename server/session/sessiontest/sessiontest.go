@@ -27,12 +27,10 @@ func CollectEvents(store *session.Store) ([]session.Event, error) {
 }
 
 // Snapshot mirrors the durable session state a test commonly asserts against:
-// metadata, the full event history, derived run records, and conversation
-// freshness.
+// metadata, the full event history, and conversation freshness.
 type Snapshot struct {
 	Meta                  session.Meta
 	Events                []session.Event
-	Runs                  []session.RunRecord
 	ConversationFreshness session.ConversationFreshness
 }
 
@@ -51,7 +49,6 @@ func SnapshotFromDir(dir string) (Snapshot, error) {
 	return Snapshot{
 		Meta:                  store.Meta(),
 		Events:                events,
-		Runs:                  session.ProjectRuns(events),
 		ConversationFreshness: store.ConversationFreshness(),
 	}, nil
 }

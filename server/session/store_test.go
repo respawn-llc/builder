@@ -122,6 +122,39 @@ func TestSetInputDraftClearsPersistedValue(t *testing.T) {
 	}
 }
 
+func TestSetInputDraftRecoveryPersistsAcrossReopenAndClearsWithDraft(t *testing.T) {
+	store := newSessionTestLazyStore(t)
+	if err := store.SetInputDraftRecovery("visible", []InputDraftRecoveryBuffer{{
+		Kind:                     "active_submit",
+		ID:                       "queued-1",
+		Text:                     "submitted before forced exit",
+		OperationKind:            "submit",
+		OperationClientRequestID: "submit-1",
+	}}); err != nil {
+		t.Fatalf("set input draft recovery: %v", err)
+	}
+	reopened, err := Open(store.Dir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if reopened.Meta().InputDraft != "visible" || len(reopened.Meta().InputDraftRecoveryBuffers) != 1 {
+		t.Fatalf("reopened draft metadata = %+v", reopened.Meta())
+	}
+	if reopened.Meta().InputDraftRecoveryBuffers[0].OperationClientRequestID != "submit-1" {
+		t.Fatalf("recovery buffer = %+v, want operation client request id", reopened.Meta().InputDraftRecoveryBuffers[0])
+	}
+	if err := reopened.SetInputDraft(""); err != nil {
+		t.Fatalf("clear input draft: %v", err)
+	}
+	cleared, err := Open(store.Dir())
+	if err != nil {
+		t.Fatalf("open cleared store: %v", err)
+	}
+	if cleared.Meta().InputDraft != "" || len(cleared.Meta().InputDraftRecoveryBuffers) != 0 {
+		t.Fatalf("cleared draft metadata = %+v, want no draft recovery", cleared.Meta())
+	}
+}
+
 func TestSetUsageStatePersistsAcrossReopen(t *testing.T) {
 	store := newSessionTestLazyStore(t)
 	if err := store.SetUsageState(&UsageState{
@@ -576,6 +609,56 @@ func TestOpenRecoversLastSequenceFromTailWhenMetaStale(t *testing.T) {
 	}
 }
 
+func TestOpenLegacyInFlightStepDoesNotSerializePendingModelRecovery(t *testing.T) {
+	store := newSessionTestStore(t)
+	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "user", "content": "hello"}); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+	metaPath := filepath.Join(store.Dir(), sessionFile)
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read session file: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal meta: %v", err)
+	}
+	raw["in_flight_step"] = true
+	delete(raw, "pending_model_recovery")
+	rewritten, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal legacy meta: %v", err)
+	}
+	if err := os.WriteFile(metaPath, rewritten, 0o644); err != nil {
+		t.Fatalf("write legacy meta: %v", err)
+	}
+
+	opened, err := Open(store.Dir())
+	if err != nil {
+		t.Fatalf("open legacy store: %v", err)
+	}
+	if opened.Meta().PendingModelRecovery != nil {
+		t.Fatalf("legacy in_flight_step materialized serializable recovery on open: %+v", opened.Meta().PendingModelRecovery)
+	}
+	if !opened.Meta().LegacyInFlightStepRecovery {
+		t.Fatal("expected in-memory legacy recovery candidate")
+	}
+	if err := opened.SetName("renamed"); err != nil {
+		t.Fatalf("SetName: %v", err)
+	}
+	persisted, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read persisted meta: %v", err)
+	}
+	var persistedRaw map[string]json.RawMessage
+	if err := json.Unmarshal(persisted, &persistedRaw); err != nil {
+		t.Fatalf("unmarshal persisted meta: %v", err)
+	}
+	if _, exists := persistedRaw["pending_model_recovery"]; exists {
+		t.Fatalf("unrelated metadata persistence wrote pending_model_recovery: %s", string(persisted))
+	}
+}
+
 func TestFirstPromptPreviewSkipsCompactionSummaryMessages(t *testing.T) {
 	store := newSessionTestStore(t)
 	if _, _, err := store.AppendEvent("s1", "message", map[string]any{"role": "developer", "message_type": "compaction_summary", "content": "summary"}); err != nil {
@@ -1008,6 +1091,38 @@ func TestSetContinuationContextStaysLazyUntilFirstWrite(t *testing.T) {
 	}
 	if opened.Meta().Continuation == nil || opened.Meta().Continuation.OpenAIBaseURL != "http://example.local/v1" {
 		t.Fatalf("expected persisted continuation context, got %+v", opened.Meta().Continuation)
+	}
+}
+
+func TestPendingModelRecoveryPersistsMetadataAndEvents(t *testing.T) {
+	store := newSessionTestStore(t)
+	recovery := PendingModelRecovery{
+		RecoveryID:             "recovery-1",
+		StepID:                 "step-1",
+		Reason:                 "interrupted_or_crashed_step",
+		OutstandingToolCallIDs: []string{"call-1"},
+	}
+	if err := store.SetPendingModelRecovery(recovery); err != nil {
+		t.Fatalf("SetPendingModelRecovery: %v", err)
+	}
+	if got := store.Meta().PendingModelRecovery; got == nil || got.RecoveryID != recovery.RecoveryID || got.StepID != recovery.StepID {
+		t.Fatalf("pending model recovery metadata = %+v", got)
+	}
+	if err := store.ClearPendingModelRecovery(); err != nil {
+		t.Fatalf("ClearPendingModelRecovery: %v", err)
+	}
+	if got := store.Meta().PendingModelRecovery; got != nil {
+		t.Fatalf("pending model recovery after clear = %+v, want nil", got)
+	}
+	events, err := collectEvents(store)
+	if err != nil {
+		t.Fatalf("collect events: %v", err)
+	}
+	if len(events) != 2 || events[0].Kind != eventModelRecoveryPending || events[1].Kind != eventModelRecoveryConsumed {
+		t.Fatalf("recovery event sequence = %+v", events)
+	}
+	if events[0].StepID != recovery.StepID || events[1].StepID != recovery.StepID {
+		t.Fatalf("recovery events should carry step ID, got %+v", events)
 	}
 }
 
