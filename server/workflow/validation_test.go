@@ -520,6 +520,15 @@ func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 		assertNoCode(t, result, workflow.CodeInvalidTemplatePlaceholder)
 	})
 
+	t.Run("valid commentary placeholder passes without declared parameter", func(t *testing.T) {
+		def := validWorkflow()
+		edgeByIDForValidationTest(t, &def, "edge_start").PromptTemplate = "Start after {{.Params.commentary}}."
+
+		result := validateForTask(def)
+
+		assertNoCode(t, result, workflow.CodeInvalidTemplatePlaceholder)
+	})
+
 	t.Run("unknown current parameter placeholder exposes structured details", func(t *testing.T) {
 		def := reviewAcceptanceWorkflow()
 		edgeByIDForValidationTest(t, &def, "edge_implementation_review").PromptTemplate = "Use {{.Params.missing}}."

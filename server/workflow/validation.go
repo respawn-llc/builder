@@ -696,6 +696,9 @@ func (s *validationState) validatePromptPlaceholders() {
 			paramRef := ref
 			paramRef.InputName = name
 			paramRef.Placeholder = param.Placeholder
+			if name == RuntimePromptParameterCommentary {
+				continue
+			}
 			if name == "" || !workflowkey.Valid(name) || !currentParams[name] {
 				s.addHard(CodeInvalidTemplatePlaceholder, "prompt template references an unknown transition parameter", paramRef)
 			}

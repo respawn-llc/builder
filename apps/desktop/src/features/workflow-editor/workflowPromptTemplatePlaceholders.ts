@@ -31,6 +31,13 @@ export const builtInPromptTemplatePlaceholderNames = [
   "NodeDisplayName",
 ] as const;
 
+export const commentaryPromptTemplatePlaceholder = {
+  kind: "insert" as const,
+  label: ".Params.commentary",
+  tone: "muted" as const,
+  value: "{{.Params.commentary}}",
+};
+
 export function workflowPromptTemplatePlaceholders(
   parameters: readonly Pick<WorkflowParameter, "key">[],
 ): readonly PromptTemplatePlaceholder[] {
@@ -60,5 +67,6 @@ export function workflowPromptTemplatePlaceholders(
       tone: "muted" as const,
       value: `{{.${name}}}`,
     })),
+    commentaryPromptTemplatePlaceholder,
   ];
 }

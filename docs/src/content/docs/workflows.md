@@ -147,6 +147,15 @@ Use the approved plan:
 {{.Params.planning.plan_file_path}}
 ```
 
+A prompt can reference the previous transition commentary:
+
+```md
+Source transition notes:
+{{.Params.commentary}}
+```
+
+If the previous transition has no commentary, the placeholder renders as an empty string.
+
 A previous-transition parameter is valid only when every path to the prompt passes through that transition. If a value might not exist because of branching, declare a local parameter on the transition that needs it.
 
 ![Kent Desktop workflow transition inspector showing a prompt with task and parameter placeholders.](/desktop/desktop-workflow-prompt-editor.webp)

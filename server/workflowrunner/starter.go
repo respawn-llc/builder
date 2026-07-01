@@ -976,6 +976,7 @@ func renderTransitionPrompt(templateText string, input workflowstore.RunStartCon
 
 func promptParameterData(current map[string]string, prior map[string]map[string]string) map[string]promptParameterNamespace {
 	out := map[string]promptParameterNamespace{}
+	out[workflow.RuntimePromptParameterCommentary] = promptParameterNamespace{currentParameterValueKey: ""}
 	for transitionKey, values := range prior {
 		key := strings.TrimSpace(transitionKey)
 		if key == "" {

@@ -727,6 +727,55 @@ func TestBuildWorkflowTaskInstructionsRendersTransitionParameters(t *testing.T) 
 	}
 }
 
+func TestBuildWorkflowTaskInstructionsRendersTransitionCommentaryParameter(t *testing.T) {
+	instructions, err := BuildWorkflowTaskInstructions(workflowstore.RunStartContext{
+		Task: workflowstore.TaskRecord{
+			ID:         "task-1",
+			WorkflowID: "workflow-1",
+			ShortID:    "RUN-1",
+			Title:      "Task title",
+			Body:       "Task body",
+		},
+		Workflow: workflowstore.WorkflowRecord{ID: "workflow-1"},
+		Node: workflowstore.NodeRecord{
+			ID:          "node-review",
+			Key:         "review",
+			DisplayName: "Review",
+		},
+		PromptTemplate: "Use {{.Params.commentary}}.",
+	})
+	if err != nil {
+		t.Fatalf("BuildWorkflowTaskInstructions without commentary: %v", err)
+	}
+	if instructions.NodePrompt != "Use ." {
+		t.Fatalf("node prompt without commentary = %q", instructions.NodePrompt)
+	}
+
+	instructions, err = BuildWorkflowTaskInstructions(workflowstore.RunStartContext{
+		Task: workflowstore.TaskRecord{
+			ID:         "task-1",
+			WorkflowID: "workflow-1",
+			ShortID:    "RUN-1",
+			Title:      "Task title",
+			Body:       "Task body",
+		},
+		Workflow: workflowstore.WorkflowRecord{ID: "workflow-1"},
+		Node: workflowstore.NodeRecord{
+			ID:          "node-review",
+			Key:         "review",
+			DisplayName: "Review",
+		},
+		PromptTemplate:  "Use {{.Params.commentary}}.",
+		ParameterValues: map[string]string{"commentary": "ready for review"},
+	})
+	if err != nil {
+		t.Fatalf("BuildWorkflowTaskInstructions with commentary: %v", err)
+	}
+	if instructions.NodePrompt != "Use ready for review." {
+		t.Fatalf("node prompt with commentary = %q", instructions.NodePrompt)
+	}
+}
+
 func TestWorkflowRuntimeContinueSessionReusesSourceRunSession(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
 	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeContinueSession, "coder")

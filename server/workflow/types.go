@@ -80,6 +80,8 @@ const (
 	MaxTaskCommentBytes            = 256 * 1024
 )
 
+const RuntimePromptParameterCommentary = "commentary"
+
 type Definition struct {
 	ID               WorkflowID
 	DisplayName      string

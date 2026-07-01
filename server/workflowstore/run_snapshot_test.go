@@ -119,6 +119,50 @@ func TestCompleteRunBuildsChildSnapshotFromParentRevision(t *testing.T) {
 	}
 }
 
+func TestRunStartContextProjectsTransitionCommentaryParameter(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createPromptNodeReferenceWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+
+	completed := completeRun(t, ctx, store, CompleteRunRequest{
+		RunID:        started.RunID,
+		TransitionID: "next",
+		Commentary:   "ready for review",
+		OutputValues: map[string]string{"summary": "plan summary"},
+	})
+	if len(completed.RunIDs) != 1 {
+		t.Fatalf("target run ids = %+v, want one", completed.RunIDs)
+	}
+	input, err := store.GetRunStartContext(ctx, completed.RunIDs[0])
+	if err != nil {
+		t.Fatalf("GetRunStartContext: %v", err)
+	}
+	if input.ParameterValues[workflow.RuntimePromptParameterCommentary] != "ready for review" {
+		t.Fatalf("parameter values = %+v, want commentary", input.ParameterValues)
+	}
+	if _, exists := input.InputValues[workflow.RuntimePromptParameterCommentary]; exists {
+		t.Fatalf("input values = %+v, did not expect synthetic commentary input", input.InputValues)
+	}
+}
+
+func TestExplicitCommentaryInputBindingShadowsRuntimeCommentary(t *testing.T) {
+	values, err := resolveInputBindingValues(TaskRecord{}, "runtime commentary", map[string]string{
+		"explicit": "explicit commentary",
+	}, []workflow.InputBinding{{
+		Name:   workflow.RuntimePromptParameterCommentary,
+		Source: workflow.BindingSourceTransitionOutput,
+		Field:  "explicit",
+	}})
+	if err != nil {
+		t.Fatalf("resolveInputBindingValues: %v", err)
+	}
+	if values[workflow.RuntimePromptParameterCommentary] != "explicit commentary" {
+		t.Fatalf("input values = %+v, want explicit commentary binding", values)
+	}
+}
+
 func TestStartTaskRejectsCanceledAndAlreadyStartedTasks(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)

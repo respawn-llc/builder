@@ -22,6 +22,7 @@ describe("workflowPromptTemplatePlaceholders", () => {
       { kind: "insert", label: ".NodeId", tone: "muted", value: "{{.NodeId}}" },
       { kind: "insert", label: ".NodeKey", tone: "muted", value: "{{.NodeKey}}" },
       { kind: "insert", label: ".NodeDisplayName", tone: "muted", value: "{{.NodeDisplayName}}" },
+      { kind: "insert", label: ".Params.commentary", tone: "muted", value: "{{.Params.commentary}}" },
     ]);
   });
 });

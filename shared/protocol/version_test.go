@@ -2,8 +2,8 @@ package protocol
 
 import "testing"
 
-func TestProtocolVersionIncludesTargetedRuntimeInterrupts(t *testing.T) {
-	if Version != "28" {
-		t.Fatalf("protocol version = %q, want 28 for targeted runtime interrupt operation refs", Version)
+func TestProtocolVersionIncludesWorkflowPromptCommentaryParameter(t *testing.T) {
+	if Version != "29" {
+		t.Fatalf("protocol version = %q, want 29 for workflow prompt commentary parameter", Version)
 	}
 }

@@ -267,10 +267,11 @@ func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (R
 	if err := workflow.UnmarshalString(run.RunStartSnapshotJson, &snapshot); err != nil {
 		return RunStartContext{}, err
 	}
-	inputValues, err := s.resolveRunInputValues(ctx, run.PlacementID, taskRecordFromTask(task))
+	inputResolution, err := s.resolveRunInputContext(ctx, run.PlacementID, taskRecordFromTask(task))
 	if err != nil {
 		return RunStartContext{}, err
 	}
+	inputValues := inputResolution.Values
 	transitionContext, err := s.resolveRunTransitionContext(ctx, run.PlacementID, run.MetadataJson)
 	if err != nil {
 		return RunStartContext{}, err
@@ -288,6 +289,9 @@ func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (R
 	parameterValues := map[string]string{}
 	for key, value := range inputValues {
 		parameterValues[key] = value
+	}
+	if _, exists := parameterValues[workflow.RuntimePromptParameterCommentary]; !exists {
+		parameterValues[workflow.RuntimePromptParameterCommentary] = inputResolution.Commentary
 	}
 	priorParameterValues := clonePriorParameterValues(runMetadata.PriorParameterValues)
 	parameters := append([]workflow.Parameter(nil), runMetadata.Parameters...)
@@ -427,29 +431,35 @@ func (s *Store) resolveRunTransitionContext(ctx context.Context, placementID str
 	return resolved, nil
 }
 
-func (s *Store) resolveRunInputValues(ctx context.Context, placementID string, task TaskRecord) (map[string]string, error) {
+type runInputContext struct {
+	Values     map[string]string
+	Commentary string
+}
+
+func (s *Store) resolveRunInputContext(ctx context.Context, placementID string, task TaskRecord) (runInputContext, error) {
 	row, err := s.queries.GetRunInputValues(ctx, placementID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return map[string]string{}, nil
+		return runInputContext{Values: map[string]string{}}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("resolve workflow run input values: %w", err)
+		return runInputContext{}, fmt.Errorf("resolve workflow run input values: %w", err)
 	}
 	outputValues := map[string]string{}
 	if err := workflow.UnmarshalString(row.OutputValuesJson, &outputValues); err != nil {
-		return nil, err
+		return runInputContext{}, err
 	}
 	bindings := []workflow.InputBinding{}
 	if err := workflow.UnmarshalString(row.InputBindingsJson, &bindings); err != nil {
-		return nil, err
+		return runInputContext{}, err
 	}
-	return resolveInputBindingValues(task, row.Commentary, outputValues, bindings)
+	values, err := resolveInputBindingValues(task, row.Commentary, outputValues, bindings)
+	if err != nil {
+		return runInputContext{}, err
+	}
+	return runInputContext{Values: values, Commentary: row.Commentary}, nil
 }
 
 func resolveInputBindingValues(task TaskRecord, commentary string, outputValues map[string]string, bindings []workflow.InputBinding) (map[string]string, error) {
-	if len(bindings) == 0 {
-		return map[string]string{}, nil
-	}
 	values := make(map[string]string, len(bindings))
 	for _, binding := range bindings {
 		name := strings.TrimSpace(binding.Name)
