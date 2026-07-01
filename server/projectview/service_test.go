@@ -2,7 +2,6 @@ package projectview
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,32 +15,6 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 )
-
-func metadataColumnExists(t *testing.T, db *sql.DB, table string, column string) bool {
-	t.Helper()
-	rows, err := db.QueryContext(context.Background(), `PRAGMA table_info(`+table+`)`)
-	if err != nil {
-		t.Fatalf("inspect %s schema: %v", table, err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notNull int
-		var defaultValue any
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			t.Fatalf("scan %s schema: %v", table, err)
-		}
-		if name == column {
-			return true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate %s schema: %v", table, err)
-	}
-	return false
-}
 
 func TestServiceListsSingleProjectAndSessions(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
@@ -185,9 +158,10 @@ func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	if err := created.SetName("active"); err != nil {
 		t.Fatalf("persist session: %v", err)
 	}
-	runtimeState := &projectViewRuntimeState{active: map[string]bool{created.Meta().SessionID: true}}
+	if _, err := store.DB().ExecContext(context.Background(), `UPDATE sessions SET in_flight_step = 1 WHERE id = ?`, created.Meta().SessionID); err != nil {
+		t.Fatalf("mark session active: %v", err)
+	}
 	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
 
 	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
 	if err != nil {
@@ -198,30 +172,6 @@ func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	}
 	if _, err := os.Stat(created.Dir()); err != nil {
 		t.Fatalf("session dir should remain: %v", err)
-	}
-}
-
-func TestServiceDeleteProjectDoesNotDependOnSessionInFlightMetadata(t *testing.T) {
-	store, cfg, binding := newProjectViewMetadataStore(t)
-	sessionDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
-	created, err := session.Create(sessionDir, filepath.Base(sessionDir), cfg.WorkspaceRoot, store.AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	if err := created.SetName("stale"); err != nil {
-		t.Fatalf("persist session: %v", err)
-	}
-	if metadataColumnExists(t, store.DB(), "sessions", "in_flight_step") {
-		t.Fatal("sessions.in_flight_step should not exist after Slice 13 migration")
-	}
-	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-
-	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
-	if err != nil {
-		t.Fatalf("DeleteProject: %v", err)
-	}
-	if !deleted.Deleted || len(deleted.Blockers) != 0 {
-		t.Fatalf("delete response = %+v, want no DB in-flight metadata dependency", deleted)
 	}
 }
 
@@ -562,47 +512,6 @@ func TestMetadataServiceUnlinksWorkspaceForEditPage(t *testing.T) {
 	}
 }
 
-func TestMetadataServiceUnlinkWorkspaceBlocksActiveRuntimeSession(t *testing.T) {
-	store, cfg, binding := newProjectViewMetadataStore(t)
-	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
-	created := createProjectViewSession(t, store, cfg, binding.ProjectID, attached.CanonicalRoot, "active-workspace")
-	runtimeState := &projectViewRuntimeState{active: map[string]bool{created.Meta().SessionID: true}}
-	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
-
-	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
-		ProjectID:   binding.ProjectID,
-		WorkspaceID: attached.WorkspaceID,
-	})
-	if err != nil {
-		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
-	}
-	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
-		t.Fatalf("unlink response = %+v, want active_sessions blocker", unlinked)
-	}
-}
-
-func TestMetadataServiceUnlinkWorkspaceDoesNotDependOnSessionInFlightMetadata(t *testing.T) {
-	store, cfg, binding := newProjectViewMetadataStore(t)
-	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
-	_ = createProjectViewSession(t, store, cfg, binding.ProjectID, attached.CanonicalRoot, "stale-workspace")
-	if metadataColumnExists(t, store.DB(), "sessions", "in_flight_step") {
-		t.Fatal("sessions.in_flight_step should not exist after Slice 13 migration")
-	}
-	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
-
-	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
-		ProjectID:   binding.ProjectID,
-		WorkspaceID: attached.WorkspaceID,
-	})
-	if err != nil {
-		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
-	}
-	if !unlinked.Unlinked || len(unlinked.Blockers) != 0 {
-		t.Fatalf("unlink response = %+v, want no DB in-flight metadata dependency", unlinked)
-	}
-}
-
 func TestMetadataServiceGetsProjectEditForGUI(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	attachProjectViewWorkspace(t, store, binding.ProjectID)
@@ -857,36 +766,6 @@ func newProjectViewMetadataService(t testing.TB, store *metadata.Store, projectI
 		t.Fatalf("NewMetadataService: %v", err)
 	}
 	return svc
-}
-
-func createProjectViewSession(t testing.TB, store *metadata.Store, cfg config.App, projectID string, workspaceRoot string, name string) *session.Store {
-	t.Helper()
-	sessionDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), projectID, "sessions")
-	created, err := session.Create(sessionDir, filepath.Base(sessionDir), workspaceRoot, store.AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	if err := created.SetName(name); err != nil {
-		t.Fatalf("persist session: %v", err)
-	}
-	return created
-}
-
-type projectViewRuntimeState struct {
-	active  map[string]bool
-	blocked []string
-}
-
-func (s *projectViewRuntimeState) BlockSessionRuns(sessionIDs []string) func() {
-	s.blocked = append(s.blocked, sessionIDs...)
-	return func() {}
-}
-
-func (s *projectViewRuntimeState) HasBlockingRuntimeActivity(_ context.Context, sessionID string) (bool, error) {
-	if s == nil {
-		return false, nil
-	}
-	return s.active[strings.TrimSpace(sessionID)], nil
 }
 
 func newProjectViewMetadataStore(t testing.TB) (*metadata.Store, config.App, metadata.Binding) {

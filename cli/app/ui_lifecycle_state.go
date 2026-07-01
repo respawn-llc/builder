@@ -1,8 +1,6 @@
 package app
 
 import (
-	"strings"
-
 	"core/cli/app/internal/runtimestate"
 	"core/shared/clientui"
 )
@@ -15,57 +13,50 @@ const (
 )
 
 func (m *uiModel) isBusy() bool {
-	return m != nil && (m.runtimeLifecycle.Run.IsRunning() || m.hasLocalDispatchPending() || len(m.pendingRuntimeOperations) > 0)
-}
-
-func (m *uiModel) runtimeActivityBusy() bool {
 	return m != nil && m.runtimeLifecycle.Run.IsRunning()
 }
 
-func (m *uiModel) runtimeActivityBlocksControl() bool {
-	return m != nil && m.runtimeActivityProjection.ActiveForControl()
-}
-
-func (m *uiModel) applyRuntimeActivityProjection(activity clientui.RuntimeActivity) error {
+func (m *uiModel) setBusy(busy bool) {
 	if m == nil {
-		return nil
+		return
 	}
-	if err := activity.Validate(); err != nil {
-		return err
-	}
-	m.runtimeActivityProjection = activity
-	if !activity.ActiveForControl() {
+	if !busy {
 		m.runtimeLifecycle.Run = clientui.IdleRunLifecycle()
-		m.activity = uiActivityIdle
-		m.currentRunID = ""
-		m.currentStepID = ""
-		return nil
+		return
 	}
-	if activity.State == clientui.RuntimeActivityRunning || activity.State == clientui.RuntimeActivityAwaitingPrompt {
-		m.runtimeLifecycle.Run = clientui.MustRunLifecycle(clientui.RunLifecycleRunning, runtimeRunModeFromActivityKind(activity.ActiveKind))
-	} else {
-		m.runtimeLifecycle.Run = clientui.IdleRunLifecycle()
+	mode := clientui.RunModeTurn
+	if m.isGoalRun() {
+		mode = clientui.RunModeGoalLoop
 	}
-	if activity.State == clientui.RuntimeActivityAwaitingPrompt {
-		m.activity = uiActivityQuestion
-	} else {
-		m.activity = uiActivityRunning
-	}
-	m.currentRunID = strings.TrimSpace(activity.RunID)
-	m.currentStepID = strings.TrimSpace(activity.StepID)
-	m.bindPreActiveInterruptToken()
-	return nil
+	m.runtimeLifecycle.Run = clientui.MustRunLifecycle(clientui.RunLifecycleRunning, mode)
 }
 
 func (m *uiModel) isGoalRun() bool {
 	return m != nil && m.runtimeLifecycle.Run.IsGoalLoopRunning()
 }
 
-func runtimeRunModeFromActivityKind(kind clientui.RuntimeActivityActiveKind) clientui.RunMode {
-	if kind == clientui.RuntimeActivityActiveKindGoalLoop {
-		return clientui.RunModeGoalLoop
+func (m *uiModel) setGoalRun(goalRun bool) {
+	if m == nil {
+		return
 	}
-	return clientui.RunModeTurn
+	if !goalRun {
+		if m.isBusy() {
+			m.runtimeLifecycle.Run = clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeTurn)
+		}
+		return
+	}
+	m.runtimeLifecycle.Run = clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeGoalLoop)
+}
+
+func (m *uiModel) setRunLifecycle(lifecycle clientui.RunLifecycle) error {
+	if m == nil {
+		return nil
+	}
+	if err := lifecycle.Validate(); err != nil {
+		return err
+	}
+	m.runtimeLifecycle.Run = lifecycle
+	return nil
 }
 
 func (m *uiModel) isCompacting() bool {
@@ -130,66 +121,13 @@ func (m *uiModel) hasPendingInterrupt() bool {
 	return m != nil && m.interruptLifecycle == uiInterruptPending
 }
 
-func (m *uiModel) hasLocalDispatchPending() bool {
-	return m != nil && m.activeSubmit.token != 0
-}
-
-func (m *uiModel) blocksRuntimeInput() bool {
-	return m != nil && (m.isBusy() || m.runtimeActivityBlocksControl() || m.hasLocalDispatchPending() || m.isInputSubmitLocked())
-}
-
 func (m *uiModel) setPendingInterrupt(pending bool) {
 	if m == nil {
 		return
 	}
 	if pending {
 		m.interruptLifecycle = uiInterruptPending
-		m.interruptRunID = strings.TrimSpace(m.currentRunID)
-		m.interruptStepID = strings.TrimSpace(m.currentStepID)
-		m.interruptPreActive = false
-		m.completedRunID = ""
-		m.completedStepID = ""
 		return
-	}
-	if strings.TrimSpace(m.interruptRunID) != "" && strings.TrimSpace(m.interruptStepID) != "" {
-		m.completedRunID = strings.TrimSpace(m.interruptRunID)
-		m.completedStepID = strings.TrimSpace(m.interruptStepID)
 	}
 	m.interruptLifecycle = uiInterruptIdle
-	m.interruptRunID = ""
-	m.interruptStepID = ""
-	m.interruptPreActive = false
-}
-
-func (m *uiModel) trackRuntimeActivityToken(evt clientui.Event) {
-	if m == nil {
-		return
-	}
-	switch evt.Kind {
-	case clientui.EventRuntimeActivityChanged:
-		if evt.RuntimeActivity == nil || !evt.RuntimeActivity.ActiveForControl() {
-			m.currentRunID = ""
-			m.currentStepID = ""
-			return
-		}
-		m.currentRunID = strings.TrimSpace(evt.RuntimeActivity.RunID)
-		m.currentStepID = strings.TrimSpace(evt.RuntimeActivity.StepID)
-		m.bindPreActiveInterruptToken()
-	}
-}
-
-func (m *uiModel) bindPreActiveInterruptToken() {
-	if m == nil || !m.hasPendingInterrupt() || !m.interruptPreActive {
-		return
-	}
-	if strings.TrimSpace(m.interruptRunID) != "" || strings.TrimSpace(m.interruptStepID) != "" {
-		m.interruptPreActive = false
-		return
-	}
-	if strings.TrimSpace(m.currentRunID) == "" || strings.TrimSpace(m.currentStepID) == "" {
-		return
-	}
-	m.interruptRunID = strings.TrimSpace(m.currentRunID)
-	m.interruptStepID = strings.TrimSpace(m.currentStepID)
-	m.interruptPreActive = false
 }

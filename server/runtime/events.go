@@ -103,7 +103,6 @@ type GoalStatusUpdate struct {
 type RunState struct {
 	Lifecycle  RunLifecycle
 	RunID      string
-	ActiveKind ActiveKind
 	Status     RunStatus
 	StartedAt  time.Time
 	FinishedAt time.Time

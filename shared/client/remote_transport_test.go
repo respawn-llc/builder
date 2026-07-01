@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -46,70 +45,6 @@ func TestDialConfiguredRemotePrefersLocalUnixSocket(t *testing.T) {
 
 	if _, err := remote.ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
 		t.Fatalf("ListProjects: %v", err)
-	}
-	requireNoHandlerError(t, handlerErrs)
-}
-
-func TestRemoteReleaseSessionRuntimePropagatesClosePolicy(t *testing.T) {
-	handlerErrs := make(chan error, 8)
-	releaseRequests := make(chan serverapi.SessionRuntimeReleaseRequest, 1)
-	server := httptest.NewServer(rpcwire.NewWebSocketTransport().Handler(func(ctx context.Context, conn rpcwire.Conn) {
-		for event := range conn.Events() {
-			if event.Err != nil {
-				return
-			}
-			req := event.Frame.Request()
-			switch req.Method {
-			case protocol.MethodHandshake:
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"}}))); err != nil {
-					reportHandlerError(handlerErrs, "send handshake response: %w", err)
-					return
-				}
-			case protocol.MethodSessionRuntimeRelease:
-				var params serverapi.SessionRuntimeReleaseRequest
-				if err := json.Unmarshal(req.Params, &params); err != nil {
-					reportHandlerError(handlerErrs, "decode release request: %w", err)
-					return
-				}
-				releaseRequests <- params
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, serverapi.SessionRuntimeReleaseResponse{Released: true}))); err != nil {
-					reportHandlerError(handlerErrs, "send release response: %w", err)
-					return
-				}
-				return
-			default:
-				reportHandlerError(handlerErrs, "unexpected method %q", req.Method)
-				return
-			}
-		}
-	}))
-	defer server.Close()
-
-	remote, err := DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
-	if err != nil {
-		t.Fatalf("DialRemoteURL: %v", err)
-	}
-	defer func() { _ = remote.Close() }()
-
-	resp, err := remote.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "release-1",
-		SessionID:       "session-1",
-		DropOwner:       true,
-		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
-	})
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !resp.Released {
-		t.Fatalf("release response = %+v, want released", resp)
-	}
-	select {
-	case req := <-releaseRequests:
-		if !req.DropOwner || req.ClosePolicy != serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
-			t.Fatalf("release request = %+v, want detach-only drop owner", req)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for release request")
 	}
 	requireNoHandlerError(t, handlerErrs)
 }
@@ -479,17 +414,7 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 				case interruptSeen <- struct{}{}:
 				default:
 				}
-				version, versionErr := clientui.NewReadModelVersion("epoch-1", 1, 1)
-				if versionErr != nil {
-					reportHandlerError(handlerErrs, "build interrupt version: %w", versionErr)
-					return
-				}
-				response := serverapi.RuntimeInterruptResponse{
-					Version:             version,
-					Activity:            clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{}),
-					InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
-				}
-				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, response))); err != nil {
+				if err := conn.Send(ctx, rpcwire.FrameFromResponse(protocol.NewSuccessResponse(req.ID, struct{}{}))); err != nil {
 					reportHandlerError(handlerErrs, "send interrupt response: %w", err)
 				}
 				return
@@ -523,7 +448,7 @@ func TestRemoteInterruptUsesDedicatedConnWhileSubmitIsInFlight(t *testing.T) {
 
 	interruptCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	if _, err := remote.Interrupt(interruptCtx, serverapi.RuntimeInterruptRequest{ClientRequestID: "interrupt-1", SessionID: "session-1"}); err != nil {
+	if err := remote.Interrupt(interruptCtx, serverapi.RuntimeInterruptRequest{ClientRequestID: "interrupt-1", SessionID: "session-1"}); err != nil {
 		t.Fatalf("Interrupt: %v", err)
 	}
 	select {

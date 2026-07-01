@@ -3,6 +3,7 @@ package clientui
 import (
 	"context"
 	"strings"
+	"time"
 )
 
 type ConversationFreshness uint8
@@ -80,12 +81,35 @@ const (
 	RunStatusFailed      RunStatus = "failed"
 )
 
+type RunView struct {
+	RunID      string
+	SessionID  string
+	StepID     string
+	Status     RunStatus
+	Lifecycle  RunLifecycle
+	StartedAt  time.Time
+	FinishedAt time.Time
+}
+
+type ExternalRuntimeState string
+
+const (
+	ExternalRuntimeStateRegisteredIdle ExternalRuntimeState = "registered_idle"
+	ExternalRuntimeStateOwnerRunning   ExternalRuntimeState = "owner_running"
+	ExternalRuntimeStateDraining       ExternalRuntimeState = "draining"
+	ExternalRuntimeStateClosing        ExternalRuntimeState = "closing"
+)
+
+type ExternalRuntimeStatus struct {
+	State          ExternalRuntimeState
+	QueueAccepting bool
+}
+
 type RuntimeMainView struct {
-	Version             ReadModelVersion
-	Status              RuntimeStatus
-	Session             RuntimeSessionView
-	Activity            RuntimeActivity
-	InputReconciliation RuntimeInputReconciliationSnapshot
+	Status          RuntimeStatus
+	Session         RuntimeSessionView
+	ActiveRun       *RunView
+	ExternalRuntime *ExternalRuntimeStatus
 }
 
 type QueuedUserMessage struct {
@@ -168,17 +192,16 @@ type RuntimeClient interface {
 	SetGoal(objective string) (*RuntimeGoal, error)
 	PauseGoal() (*RuntimeGoal, error)
 	ResumeGoal() (*RuntimeGoal, error)
-	CompleteGoal() (*RuntimeGoal, error)
 	ClearGoal() (*RuntimeGoal, error)
 	AppendCommittedEntry(role, text string) error
 	AppendCommittedEntryWithNoticeID(role, text, noticeID string) error
-	SubmitRuntimeInput(ctx context.Context, req RuntimeSubmitRequest) (UserTurnSubmission, error)
-	RunUserShell(ctx context.Context, req RuntimeShellRequest) error
-	CompactRuntime(ctx context.Context, req RuntimeCompactRequest) error
+	SubmitUserMessage(ctx context.Context, text string) (UserTurnSubmission, error)
+	SubmitUserShellCommand(ctx context.Context, command string) error
+	CompactContext(ctx context.Context, args string) error
 	HasQueuedUserWork() (bool, error)
-	SubmitRuntimeQueued(ctx context.Context, req RuntimeSubmitQueuedRequest) (string, error)
+	SubmitQueuedUserMessages(ctx context.Context) (string, error)
 	Interrupt() error
-	QueueRuntimeUserMessage(req RuntimeQueueUserMessageRequest) (QueuedUserMessage, error)
+	QueueUserMessage(text string) (QueuedUserMessage, error)
 	DiscardQueuedUserMessage(queueItemID string) bool
 	RecordPromptHistory(text string) error
 }

@@ -1062,7 +1062,7 @@ func TestReviewerRunStillAllowsEditingWithoutTranscriptScroll(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		m.forwardToView(tui.AppendTranscriptMsg{Role: "assistant", Text: fmt.Sprintf("line %d", i)})
 	}
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.input = "keep this draft"
 

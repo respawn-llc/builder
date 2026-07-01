@@ -72,8 +72,8 @@ func (c *loopbackRuntimeControlClient) SubmitQueuedUserMessages(ctx context.Cont
 	return callLoopbackClient(c, "runtime control service is required", ctx, req, servicecontract.RuntimeControlService.SubmitQueuedUserMessages)
 }
 
-func (c *loopbackRuntimeControlClient) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
-	return callLoopbackClient(c, "runtime control service is required", ctx, req, servicecontract.RuntimeControlService.Interrupt)
+func (c *loopbackRuntimeControlClient) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) error {
+	return callLoopbackClientNoResponse(c, "runtime control service is required", ctx, req, servicecontract.RuntimeControlService.Interrupt)
 }
 
 func (c *loopbackRuntimeControlClient) QueueUserMessage(ctx context.Context, req serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {

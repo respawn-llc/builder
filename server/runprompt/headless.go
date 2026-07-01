@@ -13,7 +13,6 @@ import (
 	"core/server/requestmemo"
 	"core/server/runlog"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/runtimeview"
 	"core/server/runtimewire"
 	"core/server/sessionlaunch"
@@ -48,7 +47,6 @@ type HeadlessBootstrap struct {
 	Background      *shelltool.Manager
 	RuntimeRegistry interface {
 		PublishRuntimeEvent(sessionID string, evt runtime.Event)
-		PublishRuntimeActivitySnapshot(sessionID string, snapshot runtimeactivity.ResponseSnapshot)
 	}
 	PromptHistory  promptHistoryStore
 	SessionRuntime *sessionruntime.Service
@@ -78,14 +76,8 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 	if l.boot.SessionLaunch == nil {
 		return nil, errors.New("headless session launch service is required")
 	}
-	if selected := strings.TrimSpace(req.SelectedSessionID); selected != "" && l.boot.SessionRuntime != nil {
-		active, err := l.boot.SessionRuntime.HasBlockingRuntimeActivity(ctx, selected)
-		if err != nil {
-			return nil, err
-		}
-		if active {
-			return nil, ErrSessionRunning
-		}
+	if selected := strings.TrimSpace(req.SelectedSessionID); selected != "" && l.boot.SessionRuntime != nil && l.boot.SessionRuntime.SessionRunActive(selected) {
+		return nil, ErrSessionRunning
 	}
 	launchReq := serverapi.SessionPlanRequest{
 		ClientRequestID:   req.ClientRequestID,
@@ -166,7 +158,6 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 			FastMode:        l.boot.FastModeState,
 			Sources:         plan.Source.Sources,
 			GlobalConfigDir: l.boot.PersistenceRoot,
-			StepLifecycle:   runtimewire.NewStepLifecycleSink(sessionID, l.boot.RuntimeRegistry),
 			OnEvent: func(evt runtime.Event) {
 				engineLogger.Logf("%s", runlog.FormatRuntimeEvent(evt))
 				if transcriptdiag.Enabled(plan.ActiveSettings.Debug, os.Getenv) {

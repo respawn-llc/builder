@@ -55,7 +55,6 @@ const (
 	goalRuntimeSet        goalRuntimeOperation = "set"
 	goalRuntimePause      goalRuntimeOperation = "pause"
 	goalRuntimeResume     goalRuntimeOperation = "resume"
-	goalRuntimeComplete   goalRuntimeOperation = "complete"
 	goalRuntimeClear      goalRuntimeOperation = "clear"
 )
 
@@ -133,7 +132,6 @@ type activeSubmitState struct {
 	stepID             string
 	text               string
 	queuedID           string
-	operationRef       clientui.RuntimeOperationRef
 	restoreOnInterrupt bool
 	flushed            bool
 }

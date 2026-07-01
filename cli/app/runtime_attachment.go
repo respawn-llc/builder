@@ -6,11 +6,9 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/client"
-	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/transcriptdiag"
 )
@@ -59,27 +57,13 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 	_ = diagnosticWriter
 	logger.Logf("%s", startLogLine)
 	wiring, stopRuntimeEvents, stopAskEvents := prepareSharedRuntimeWiring(ctx, clients, plan, activities, reactivator, logger)
-	var stopStreamsOnce sync.Once
-	stopStreams := func() {
-		stopStreamsOnce.Do(func() {
-			stopAskEvents()
-			stopRuntimeEvents()
-		})
-	}
 	return &runtimeLaunchPlan{
 		Logger: logger,
 		Wiring: wiring,
 		close: func() {
-			stopStreams()
-			if err := runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID); err != nil {
-				logger.Logf("runtime.release err=%q close_policy=%q session_id=%s", err.Error(), serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle, plan.SessionID)
-			}
-		},
-		detachClose: func() {
-			stopStreams()
-			if err := runtimeattach.ReleaseWithClosePolicy(clients.SessionRuntime, plan.SessionID, ownerID, serverapi.SessionRuntimeReleaseClosePolicyDetachOnly); err != nil {
-				logger.Logf("runtime.release err=%q close_policy=%q session_id=%s", err.Error(), serverapi.SessionRuntimeReleaseClosePolicyDetachOnly, plan.SessionID)
-			}
+			stopAskEvents()
+			stopRuntimeEvents()
+			runtimeattach.Release(clients.SessionRuntime, plan.SessionID, ownerID)
 		},
 	}, nil
 }
@@ -121,8 +105,8 @@ func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentCl
 	}, terminalFocus.FocusedForAttention)
 	askEvents, stopAskEvents := newClosedAskEventStream()
 	if activities.Prompt != nil {
-		askEvents, stopAskEvents = startPendingPromptEvents(ctx, activities.Prompt, func(ctx context.Context, afterVersion clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
-			return clients.PromptActivity.SubscribePromptActivity(ctx, serverapi.PromptActivitySubscribeRequest{SessionID: plan.SessionID, AfterReadModelVersion: afterVersion})
+		askEvents, stopAskEvents = startPendingPromptEvents(ctx, activities.Prompt, func(ctx context.Context, afterSequence uint64) (serverapi.PromptActivitySubscription, error) {
+			return clients.PromptActivity.SubscribePromptActivity(ctx, serverapi.PromptActivitySubscribeRequest{SessionID: plan.SessionID, AfterSequence: afterSequence})
 		}, clients.PromptControl)
 	}
 	wiring := &runtimeWiring{

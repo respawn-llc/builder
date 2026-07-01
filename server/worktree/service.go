@@ -31,7 +31,7 @@ const rollbackSessionTargetTimeout = 5 * time.Second
 type runtimeController interface {
 	SyncExecutionTarget(ctx context.Context, sessionID string, target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error
 	ClearWorktreeReminder(ctx context.Context, sessionID string) error
-	HasBlockingRuntimeActivity(ctx context.Context, sessionID string) (bool, error)
+	HasActiveRun(ctx context.Context, sessionID string) (bool, error)
 }
 
 type activeRuntimeSource interface {
@@ -941,7 +941,7 @@ func (s *Service) ensureDeletionSessionAndProcessUnblocked(ctx context.Context, 
 		if !s.active.IsSessionRuntimeActive(sessionID) {
 			continue
 		}
-		active, err := s.runtime.HasBlockingRuntimeActivity(ctx, sessionID)
+		active, err := s.runtime.HasActiveRun(ctx, sessionID)
 		if err != nil {
 			release()
 			return func() {}, err

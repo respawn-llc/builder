@@ -48,12 +48,6 @@ func (r *RuntimeRegistry) AcquireRuntimeClaim(sessionID string, ownerID string) 
 	if !reused && !closing {
 		entry.addOwner(ownerID)
 	}
-	if !closing {
-		r.pinRuntimeReadModel(id, entry)
-	}
-	if !closing {
-		r.publishCurrentRuntimeActivity(id)
-	}
 	return &RuntimeClaim{registry: r, id: id, entry: entry}, reused, closing
 }
 
@@ -66,8 +60,6 @@ func (r *RuntimeRegistry) ClaimFreshRuntime(ctx context.Context, sessionID strin
 		entry, existing := r.directory.installBuildingIfAbsent(id)
 		if entry != nil {
 			entry.addOwner(ownerID)
-			r.pinRuntimeReadModel(id, entry)
-			r.publishCurrentRuntimeActivity(id)
 			return &RuntimeClaim{registry: r, id: id, entry: entry}, nil
 		}
 		if _, err := existing.awaitReady(ctx); err != nil {
@@ -158,7 +150,6 @@ func (c *RuntimeClaim) Resolve(engine *runtime.Engine, rebind func(string) error
 	if !c.entry.resolveBuildIfOpen(engine, rebind, teardown, nil) {
 		return false
 	}
-	c.registry.publishCurrentRuntimeActivity(c.id)
 	return true
 }
 
@@ -173,8 +164,6 @@ func (c *RuntimeClaim) Fail(err error) {
 		delete(d.entries, c.id)
 	}
 	d.mu.Unlock()
-	c.registry.publishUnavailableRuntimeActivityToEntry(c.id, c.entry)
-	c.registry.finishEntryTeardown(c.id, c.entry)
 }
 
 func (c *RuntimeClaim) IsCurrent() bool {
@@ -325,7 +314,6 @@ func (c *RuntimeClaim) Close(ctx context.Context, drain func(context.Context) er
 	if !ok {
 		return false, nil
 	}
-	c.registry.publishCurrentRuntimeActivity(c.id)
 	return c.registry.finishClose(ctx, c.id, c.entry.engineRef(), c.entry, drainRef, drain)
 }
 
@@ -337,7 +325,6 @@ func (c *RuntimeClaim) CloseIfIdle(ctx context.Context, expectedRefs int, drain 
 	if !ok {
 		return false, nil
 	}
-	c.registry.publishCurrentRuntimeActivity(c.id)
 	return c.registry.finishClose(ctx, c.id, c.entry.engineRef(), c.entry, drainRef, drain)
 }
 

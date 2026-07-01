@@ -113,6 +113,7 @@ var allowedSmallPackages = map[string]string{
 	"server/projectview":                 "cohesive project read-model service owner with substantial service tests",
 	"server/runlog":                      "shared run-logging and runtime-event formatting helpers extracted from runprompt so sessionruntime and workflowrunner consume them without the runprompt import cycle",
 	"server/requestmemo":                 "cross-service infrastructure used by runtime, prompt, session, process, and workflow services",
+	"server/runtimecontrol":              "cohesive runtime mutation service owner with focused service tests",
 	"server/runtimeview":                 "cohesive runtime projection owner with focused service tests",
 	"server/serverstatus":                "server status/update-status service owner after status consolidation",
 	"server/sessionlaunch":               "session launch service seam kept separate from session runtime to avoid runprompt/runtime cycles",

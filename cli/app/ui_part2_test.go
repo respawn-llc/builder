@@ -347,7 +347,7 @@ func absInt(v int) int {
 func TestApprovalAskTabAllowsWithCommentary(t *testing.T) {
 	_, eng := newAppRuntimeEngine(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
 	m := newProjectedEngineUIModel(eng)
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	reply := make(chan askReply, 1)
 	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionAllowSession, Label: "Allow for this session"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
 
@@ -400,7 +400,7 @@ func TestApprovalAskAnswersWhenCommentaryQueueFails(t *testing.T) {
 	client := &runtimeControlFakeClient{queueUserMessageErr: errors.New("queue create failed")}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	reply := make(chan askReply, 1)
 	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
 
@@ -447,7 +447,7 @@ func TestApprovalAskIgnoresRepeatSubmitWhileCommentaryQueuePending(t *testing.T)
 	client := &runtimeControlFakeClient{queueUserMessageID: "server-commentary-1"}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	reply := make(chan askReply, 1)
 	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
 
@@ -493,7 +493,7 @@ func TestApprovalAskAnswersWhenQueuedCommentarySubmitsBeforeCreateAck(t *testing
 	client := &runtimeControlFakeClient{queueUserMessageID: "server-commentary-1"}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	reply := make(chan askReply, 2)
 	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
 
@@ -615,7 +615,7 @@ func TestAskResolutionEventDismissesCurrentAndPromotesQueuedAsk(t *testing.T) {
 
 func TestAskResolutionEventRestoresRunningActivityWhenRuntimeIsBusy(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	first := askEvent{req: clientui.PendingPromptEvent{PromptID: "ask-1", Question: "First", Suggestions: []string{"one"}}, reply: make(chan askReply, 1)}
 
 	next, _ := m.Update(askEventMsg{event: first})

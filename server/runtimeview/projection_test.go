@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/runtime"
@@ -13,7 +14,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/clientui"
-	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 )
@@ -25,33 +25,6 @@ func (projectionFastClient) Generate(context.Context, llm.Request) (llm.Response
 }
 
 func (projectionFastClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
-}
-
-type projectionBlockingClient struct {
-	started chan struct{}
-	release chan struct{}
-}
-
-func newProjectionBlockingClient() *projectionBlockingClient {
-	return &projectionBlockingClient{started: make(chan struct{}), release: make(chan struct{})}
-}
-
-func (c *projectionBlockingClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
-	select {
-	case <-c.started:
-	default:
-		close(c.started)
-	}
-	select {
-	case <-ctx.Done():
-		return llm.Response{}, ctx.Err()
-	case <-c.release:
-		return llm.Response{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal}}, nil
-	}
-}
-
-func (c *projectionBlockingClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
 	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
 }
 
@@ -162,39 +135,6 @@ func TestEventFromRuntimeProjectsReasoningAndBackground(t *testing.T) {
 	}
 }
 
-func TestActivityFromRuntimeSnapshotCopiesRuntimeOwnedActiveKinds(t *testing.T) {
-	tests := []struct {
-		name string
-		kind runtime.ActiveKind
-		want clientui.RuntimeActivityActiveKind
-	}{
-		{name: "user turn", kind: runtime.ActiveKindUserTurn, want: clientui.RuntimeActivityActiveKindUserTurn},
-		{name: "workflow turn", kind: runtime.ActiveKindWorkflowTurn, want: clientui.RuntimeActivityActiveKindWorkflowTurn},
-		{name: "goal loop", kind: runtime.ActiveKindGoalLoop, want: clientui.RuntimeActivityActiveKindGoalLoop},
-		{name: "compaction", kind: runtime.ActiveKindCompaction, want: clientui.RuntimeActivityActiveKindCompaction},
-		{name: "pre-submit compaction", kind: runtime.ActiveKindPreSubmitCompaction, want: clientui.RuntimeActivityActiveKindPreSubmitCompaction},
-		{name: "user shell", kind: runtime.ActiveKindUserShell, want: clientui.RuntimeActivityActiveKindUserShell},
-		{name: "background", kind: runtime.ActiveKindBackground, want: clientui.RuntimeActivityActiveKindBackground},
-		{name: "runtime maintenance", kind: runtime.ActiveKindRuntimeMaintenance, want: clientui.RuntimeActivityActiveKindRuntimeMaintenance},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			activity := ActivityFromRuntimeSnapshot(&runtime.RunSnapshot{
-				RunID:      "run-1",
-				StepID:     "step-1",
-				Status:     runtime.RunStatusRunning,
-				ActiveKind: tt.kind,
-			}, true)
-			if activity.State != clientui.RuntimeActivityRunning || activity.ActiveKind != tt.want {
-				t.Fatalf("activity = %+v, want running %q", activity, tt.want)
-			}
-			if !activity.QueueAccepting {
-				t.Fatalf("queue accepting was not preserved in activity: %+v", activity)
-			}
-		})
-	}
-}
-
 func TestEventFromRuntimeProjectsGoalStatusUpdated(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -261,19 +201,13 @@ func TestEventFromRuntimeProjectsGoalStatusUpdated(t *testing.T) {
 }
 
 func TestStatusFromRuntimeIncludesSuspendedGoal(t *testing.T) {
-	client := newProjectionBlockingClient()
-	engine := newRuntimeViewEngine(t, newRuntimeViewStore(t), client, runtime.Config{Model: "gpt-5", EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	engine := newRuntimeViewEngine(t, newRuntimeViewStore(t), projectionFastClient{})
 	if _, err := engine.SetGoal("ship feature", session.GoalActorUser); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
-	if err := engine.StartGoalLoop(); err != nil {
-		t.Fatalf("start goal loop: %v", err)
-	}
-	<-client.started
 	if err := engine.Interrupt(); err != nil {
 		t.Fatalf("interrupt: %v", err)
 	}
-	close(client.release)
 
 	status := StatusFromRuntime(engine)
 	if status.Goal == nil || !status.Goal.Suspended {
@@ -366,6 +300,27 @@ func TestEventFromRuntimeLeavesCompactionStatusWithoutTranscriptEntriesUntilPers
 	}
 }
 
+func TestRunViewFromRuntimeCopiesSnapshot(t *testing.T) {
+	startedAt := time.Now().UTC().Add(-time.Minute)
+	finishedAt := time.Now().UTC()
+	view := RunViewFromRuntime("session-1", &runtime.RunSnapshot{
+		RunID:      "run-1",
+		StepID:     "step-1",
+		Status:     runtime.RunStatusCompleted,
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+	})
+	if view == nil {
+		t.Fatal("expected run view")
+	}
+	if view.RunID != "run-1" || view.SessionID != "session-1" || view.StepID != "step-1" {
+		t.Fatalf("unexpected run view ids: %+v", view)
+	}
+	if view.Status != "completed" || !view.StartedAt.Equal(startedAt) || !view.FinishedAt.Equal(finishedAt) {
+		t.Fatalf("unexpected run view timing/status: %+v", view)
+	}
+}
+
 func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	store := newRuntimeViewStore(t)
 	if err := store.SetName("Session Name"); err != nil {
@@ -390,7 +345,7 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 		t.Fatalf("expected auto-compaction disabled, changed=%v enabled=%v", changed, enabled)
 	}
 
-	view := mainViewFromRuntimeForTest(t, eng)
+	view := MainViewFromRuntime(eng)
 	if view.Session.SessionID != store.Meta().SessionID || view.Session.SessionName != "Session Name" {
 		t.Fatalf("unexpected session hydration: %+v", view.Session)
 	}
@@ -406,16 +361,9 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	if view.Status.ContextUsage.WindowTokens != 400_000 {
 		t.Fatalf("context window tokens = %d, want 400000", view.Status.ContextUsage.WindowTokens)
 	}
-	if view.Activity.ActiveForControl() {
-		t.Fatalf("expected idle activity in idle main view, got %+v", view.Activity)
+	if view.ActiveRun != nil {
+		t.Fatalf("expected no active run in idle main view, got %+v", view.ActiveRun)
 	}
-}
-
-func mainViewFromRuntimeForTest(t *testing.T, eng *runtime.Engine) clientui.RuntimeMainView {
-	t.Helper()
-	version := clientui.ReadModelVersion{Epoch: "runtimeview-test", Generation: 1, Sequence: 1}
-	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})
-	return MainViewFromRuntimeActivity(eng, version, activity)
 }
 
 func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
@@ -430,7 +378,7 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 			},
 		},
 	})
-	view := mainViewFromRuntimeForTest(t, eng)
+	view := MainViewFromRuntime(eng)
 	if !view.Status.WorkflowActive || view.Status.WorkflowSession == nil {
 		t.Fatalf("workflow status = %+v, want active workflow session", view.Status)
 	}
@@ -445,7 +393,7 @@ func TestMainViewFromReopenedWorkflowSessionIncludesDurableWorkflowStatus(t *tes
 		t.Fatalf("SetWorkflowSessionState: %v", err)
 	}
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{Model: "gpt-5"})
-	view := mainViewFromRuntimeForTest(t, eng)
+	view := MainViewFromRuntime(eng)
 	if view.Status.WorkflowActive {
 		t.Fatalf("workflow active = true, want false for reopened non-workflow runtime")
 	}

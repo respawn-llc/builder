@@ -51,7 +51,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.forwardToView(tea.KeyMsg{Type: msg.Type})
 			return m, nil
 		case tea.KeyEsc:
-			if m.blocksRuntimeInput() ||
+			if m.isBusy() ||
 				m.isInputSubmitLocked() ||
 				strings.TrimSpace(m.input) != "" {
 				return m, nil
@@ -148,7 +148,11 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		return c.handleRuntimeCtrlC(nil)
+		if m.isBusy() {
+			return m, c.interruptBusyRuntime()
+		}
+		m.exitAction = UIActionExit
+		return m, tea.Quit
 	case tea.KeyShiftTab, tea.KeyCtrlT:
 		return m, m.toggleTranscriptMode()
 	case tea.KeyEsc:
@@ -158,7 +162,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.view.Mode() != tui.ModeOngoing {
 			return m, nil
 		}
-		if m.blocksRuntimeInput() ||
+		if m.isBusy() ||
 			m.isInputSubmitLocked() ||
 			strings.TrimSpace(m.input) != "" {
 			return m, nil
@@ -168,7 +172,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		c.normalizePendingCSIShiftEnterOnEnter()
 		text := strings.TrimSpace(m.input)
 		if text == "" {
-			if !m.blocksRuntimeInput() && len(m.queued) > 0 {
+			if !m.isBusy() && len(m.queued) > 0 {
 				return c.flushQueuedInputs(queueDrainOne)
 			}
 			return m, nil
@@ -179,7 +183,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if inputState.Mode == uiInputModeRollbackEdit && !inputState.Busy {
 			return c.startRollbackFork(text)
 		}
-		if m.blocksRuntimeInput() {
+		if m.isBusy() {
 			if handled, next, cmd := c.handleEnteredSlashCommandInput(text); handled {
 				return next, cmd
 			}
@@ -189,7 +193,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		_, isUserShell := parseUserShellCommand(text)
 		draftText, draftCursor, restoreDraft := m.capturePromptHistoryDraftForReuse()
-		if m.blocksRuntimeInput() {
+		if m.isBusy() {
 			if isUserShell {
 				m.queueInput(text)
 				m.restoreCapturedPromptHistoryDraft(draftText, draftCursor, restoreDraft)
@@ -336,14 +340,12 @@ func (c uiInputController) handleRollbackSelectionKey(msg tea.KeyMsg) (tea.Model
 	m := c.model
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		return c.handleRuntimeCtrlC(func() tea.Cmd {
-			if overlayCmd := m.popRollbackOverlay(); overlayCmd != nil {
-				m.stopRollbackSelectionMode()
-				return overlayCmd
-			}
+		m.exitAction = UIActionExit
+		if overlayCmd := m.popRollbackOverlay(); overlayCmd != nil {
 			m.stopRollbackSelectionMode()
-			return nil
-		})
+			return m, tea.Sequence(overlayCmd, tea.Quit)
+		}
+		return m, tea.Quit
 	case tea.KeyEsc:
 		return m, c.stopRollbackSelectionFlowCmd()
 	case tea.KeyUp:

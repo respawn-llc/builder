@@ -75,7 +75,7 @@ func TestTUIStrictIOBusyEnterQueuesInjectedInputAsCommand(t *testing.T) {
 	client := &runtimeControlFakeClient{queueUserMessageID: "server-queue-1"}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUIDebug(true))
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "queued steering"
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -102,7 +102,7 @@ func TestTUIStrictIOCompactDoneChecksQueuedRuntimeWorkAsCommand(t *testing.T) {
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUIDebug(true))
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 

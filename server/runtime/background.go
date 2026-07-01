@@ -200,7 +200,7 @@ func (b *defaultBackgroundNoticeScheduler) runQueuedNotices(ctx context.Context)
 		b.clearScheduled()
 		return llm.Message{}, nil
 	}
-	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindBackground}, func(stepCtx context.Context, stepID string) error {
+	err = b.steps.Run(ctx, exclusiveStepOptions{EmitRunState: true}, func(stepCtx context.Context, stepID string) error {
 		pending := b.DrainPendingNotices()
 		if len(pending) == 0 {
 			return nil

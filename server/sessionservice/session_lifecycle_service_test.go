@@ -182,56 +182,6 @@ func TestServicePersistInputDraftWritesBySessionID(t *testing.T) {
 	}
 }
 
-func TestServicePersistInputDraftRoundTripsStructuredRecoveryBuffers(t *testing.T) {
-	_, containerDir, store := createPersistedSession(t)
-	if err := store.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable: %v", err)
-	}
-	service := newTestSessionLifecycleService(containerDir, nil)
-	recovery := []serverapi.SessionDraftRecoveryBuffer{{
-		Kind:            serverapi.SessionDraftRecoveryBufferPendingInjectedInput,
-		ID:              "local-queue-1",
-		ServerID:        "server-queue-1",
-		ClientRequestID: "queue-create-1",
-		Text:            "queued steering before forced exit",
-	}}
-	if _, err := service.PersistInputDraft(context.Background(), serverapi.SessionPersistInputDraftRequest{
-		ClientRequestID: "draft-recovery-1",
-		SessionID:       store.Meta().SessionID,
-		Input:           "visible draft",
-		RecoveryBuffers: recovery,
-	}); err != nil {
-		t.Fatalf("PersistInputDraft: %v", err)
-	}
-
-	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("GetInitialInput: %v", err)
-	}
-	if resp.Input != "visible draft" || len(resp.RecoveryBuffers) != 1 {
-		t.Fatalf("initial input response = %+v, want visible draft and one recovery buffer", resp)
-	}
-	got := resp.RecoveryBuffers[0]
-	if got.Kind != recovery[0].Kind || got.ServerID != "server-queue-1" || got.ClientRequestID != "queue-create-1" || got.Text != recovery[0].Text {
-		t.Fatalf("recovery buffer = %+v, want %+v", got, recovery[0])
-	}
-}
-
-func TestServiceGetInitialInputLegacyDraftHasNoRecoveryBuffers(t *testing.T) {
-	_, containerDir, store := createPersistedSession(t)
-	if err := store.SetInputDraft("legacy visible draft"); err != nil {
-		t.Fatalf("set input draft: %v", err)
-	}
-	service := newTestSessionLifecycleService(containerDir, nil)
-	resp, err := service.GetInitialInput(context.Background(), serverapi.SessionInitialInputRequest{SessionID: store.Meta().SessionID})
-	if err != nil {
-		t.Fatalf("GetInitialInput: %v", err)
-	}
-	if resp.Input != "legacy visible draft" || len(resp.RecoveryBuffers) != 0 {
-		t.Fatalf("initial input response = %+v, want legacy draft only", resp)
-	}
-}
-
 func TestServiceRetargetSessionWorkspaceUpdatesBindingAndSession(t *testing.T) {
 	oldWorkspace := t.TempDir()
 	newWorkspace := t.TempDir()

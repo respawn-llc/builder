@@ -61,7 +61,7 @@ func TestArrowNavigationDoesNotMutateInput(t *testing.T) {
 
 func TestBusyEnterQueuesSteeringUntilFlushed(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "please continue with tests"
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -96,7 +96,7 @@ func TestBusyEnterQueuesSteeringUntilFlushed(t *testing.T) {
 
 func TestBusyEnterCanQueueMultipleSteeringMessages(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "first steering message"
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -128,7 +128,7 @@ func TestBusyEnterQueuesInjectedInputWithoutRuntimeCreateDuringUpdate(t *testing
 	client := &runtimeControlFakeClient{queueUserMessageID: "server-queue-1"}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "please continue with tests"
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -171,7 +171,7 @@ func TestQueuedInjectedInputEarlyFailureStatusClearsProvisionalQueue(t *testing.
 	client := &runtimeControlFakeClient{queueUserMessageID: "server-queue-1"}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "please continue with tests"
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -231,7 +231,7 @@ func TestQueuedRuntimeWorkCheckDoesNotSubmitWhenRuntimeBecameBusy(t *testing.T) 
 	if cmd == nil {
 		t.Fatal("expected queued runtime work check command")
 	}
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	raw := cmd()
 	msg, ok := raw.(queuedRuntimeWorkCheckDoneMsg)
 	if !ok {
@@ -283,7 +283,7 @@ func TestPendingInjectedCreateCanceledBeforeCompletionDiscardsLateServerItem(t *
 	client := &runtimeControlFakeClient{queueUserMessageID: "server-queue-1", discardQueuedResult: true}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "restore this steering"
 
 	next, createCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -388,7 +388,7 @@ func TestPendingInjectedCreateFailureRestoresInputAndSurfacesError(t *testing.T)
 	client := &runtimeControlFakeClient{queueUserMessageErr: boom}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "restore failed create"
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -424,7 +424,7 @@ func TestCompactionCompletionWaitsForPendingInjectedCreateBeforeResumingQueuedRu
 	client := &runtimeControlFakeClient{hasQueuedUserWork: true, queueUserMessageID: "server-queue-1", submitQueuedResult: "done"}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 	m.input = "late steering"
@@ -440,7 +440,6 @@ func TestCompactionCompletionWaitsForPendingInjectedCreateBeforeResumingQueuedRu
 		t.Fatalf("runtime queue checked/submitted before create completion: check=%d submit=%d", client.hasQueuedUserWorkCalls, client.submitQueuedCalls)
 	}
 
-	updated.setRuntimeActivityBusyForTest(false)
 	msgs := collectCmdMessages(t, createCmd)
 	var createDone injectedQueueCreateDoneMsg
 	for _, msg := range msgs {
@@ -470,7 +469,7 @@ func TestLateCreateDiscardFailureBlocksDrainUntilRetrySucceeds(t *testing.T) {
 	client := &runtimeControlFakeClient{hasQueuedUserWork: true, queueUserMessageID: "server-queue-1"}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "restore late create"
 
 	next, createCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -523,7 +522,7 @@ func TestLateCreateDiscardFailureBlocksDrainUntilRetrySucceeds(t *testing.T) {
 
 func TestBusySteeringBatchFlushPreservesPostTurnQueueOrder(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "first steering message"
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -670,18 +669,6 @@ func TestRuntimeClientDirectSubmitInterruptRestoresInputWithoutQueueing(t *testi
 	if updated.activeSubmit.text != "direct submit" {
 		t.Fatalf("active submit text = %q, want direct submit", updated.activeSubmit.text)
 	}
-	version := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1}
-	client.hasCachedMainView = true
-	client.cachedMainView = clientui.RuntimeMainView{
-		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{
-			Version: version,
-			Operations: []clientui.RuntimeInputReconciliation{{
-				Version:      version,
-				OperationRef: updated.activeSubmit.operationRef,
-				State:        clientui.RuntimeInputReconciliationCanceledNotCommitted,
-			}},
-		},
-	}
 	next, cmd := updated.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	updated = next.(*uiModel)
 	updated = applyInterruptedRunStateForTest(t, updated)
@@ -705,7 +692,7 @@ func TestRuntimeIdleEventResumesVisibleQueuedMessagesWithoutBlankEnter(t *testin
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("first queued", "second queued")
 	client.transcript = clientui.TranscriptPage{
@@ -714,11 +701,9 @@ func TestRuntimeIdleEventResumesVisibleQueuedMessagesWithoutBlankEnter(t *testin
 		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "done"}},
 	}
 
-	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})
 	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:             clientui.EventRuntimeActivityChanged,
-		ReadModelVersion: nextRuntimeReadModelVersionForTest(m),
-		RuntimeActivity:  &activity,
+		Kind:     clientui.EventRunStateChanged,
+		RunState: &clientui.RunState{Lifecycle: clientui.IdleRunLifecycle()},
 	}})
 	updated := next.(*uiModel)
 	if cmd == nil {
@@ -758,17 +743,15 @@ func TestRuntimeIdleEventDoesNotDuplicatePendingQueuedDrainHydration(t *testing.
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("first queued", "second queued")
 	m.pendingQueuedDrainAfterHydration = true
 	m.queuedDrainReadyAfterHydration = false
 
-	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})
 	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:             clientui.EventRuntimeActivityChanged,
-		ReadModelVersion: nextRuntimeReadModelVersionForTest(m),
-		RuntimeActivity:  &activity,
+		Kind:     clientui.EventRunStateChanged,
+		RunState: &clientui.RunState{Lifecycle: clientui.IdleRunLifecycle()},
 	}})
 	updated := next.(*uiModel)
 	if !updated.pendingQueuedDrainAfterHydration {
@@ -801,7 +784,7 @@ func TestRuntimeIdleQueuedDrainNotifiesTurnQueueHookOnce(t *testing.T) {
 	hook := &countingTurnQueueHook{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUITurnQueueHook(hook))
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("follow up")
 	client.transcript = clientui.TranscriptPage{
@@ -810,11 +793,9 @@ func TestRuntimeIdleQueuedDrainNotifiesTurnQueueHookOnce(t *testing.T) {
 		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "done"}},
 	}
 
-	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})
 	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:             clientui.EventRuntimeActivityChanged,
-		ReadModelVersion: nextRuntimeReadModelVersionForTest(m),
-		RuntimeActivity:  &activity,
+		Kind:     clientui.EventRunStateChanged,
+		RunState: &clientui.RunState{Lifecycle: clientui.IdleRunLifecycle()},
 	}})
 	updated := next.(*uiModel)
 	msgs := collectCmdMessages(t, cmd)
@@ -863,7 +844,7 @@ func TestRuntimeIdleQueuedDrainNotifiesTurnQueueHookOnce(t *testing.T) {
 
 func TestBusyEnterWithUserShellPrefixQueuesInsteadOfInjecting(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "$ pwd"
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -884,7 +865,7 @@ func TestBusyEnterWithUserShellPrefixQueuesInsteadOfInjecting(t *testing.T) {
 
 func TestSubmitErrorRestoresQueuedSteeringInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "please continue with tests"
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -927,7 +908,7 @@ func TestSubmitErrorRestoresQueuedSteeringAndDiscardsEngineQueue(t *testing.T) {
 	_, eng := newAppRuntimeEngine(t, client, runtime.Config{})
 
 	m := newProjectedEngineUIModel(eng)
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "restored steering"
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -962,7 +943,7 @@ func TestSubmitErrorRestoresQueuedSteeringAndDiscardsEngineQueue(t *testing.T) {
 
 func TestBusyTabQueuesPostTurnSubmissionAndKeepsInputUnlocked(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "queue this"
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
@@ -1004,7 +985,7 @@ func TestQueueInjectedInputIgnoresBlankTextWithoutClearingInput(t *testing.T) {
 
 func TestCtrlCWhileBusyRestoresQueuedMessagesIntoInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.queued = queuedInputsForTest("first queued", "second queued", "third queued")
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -1033,7 +1014,7 @@ func TestCtrlCWhileBusyRestoresQueuedMessagesIntoInput(t *testing.T) {
 
 func TestCtrlCWhileBusyRestoresQueuedSlashCommandsIntoInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.queued = queuedInputsForTest("/name queued title")
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -1059,7 +1040,7 @@ func TestCtrlCWhileBusyRestoresQueuedSlashCommandsIntoInput(t *testing.T) {
 
 func TestCtrlCWhileBusyRestoresMixedQueuedInputsIntoInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.queued = queuedInputsForTest("draft one", "draft two", "/name queued title", "later draft")
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -1079,7 +1060,7 @@ func TestCtrlCWhileBusyRestoresMixedQueuedInputsIntoInput(t *testing.T) {
 
 func TestCtrlCWhileBusyUnlocksSubmitLockedInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setInputSubmitLocked(true)
 	m.lockedInjectText = "keep this message"
 	m.lockedInjectID = "queue-test-0"
@@ -1114,7 +1095,7 @@ func TestCtrlCRestoresQueuedSteeringAndDiscardsEngineQueue(t *testing.T) {
 	_, eng := newAppRuntimeEngine(t, client, runtime.Config{})
 
 	m := newProjectedEngineUIModel(eng)
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "restored steering"
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1153,7 +1134,7 @@ func TestCtrlCRestoresQueuedSteeringAndDiscardsEngineQueue(t *testing.T) {
 
 func TestInterruptedSubmitDoneRestoresQueueIntoInputAndDoesNotAutoDrain(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.queued = queuedInputsForTest("first", "second")
 
 	next, cmd := m.Update(submitDoneMsg{err: runtimeattach.ErrSubmissionInterrupted})
@@ -1183,7 +1164,7 @@ func TestInterruptedSubmitDoneRestoresQueueIntoInputAndDoesNotAutoDrain(t *testi
 func TestInterruptedSubmitDoneRunsQueuedRuntimeDiscardCleanup(t *testing.T) {
 	client := &runtimeControlFakeClient{discardQueuedResult: true}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setInputSubmitLocked(true)
 	m.lockedInjectID = "server-queue-1"
 	m.pendingInjected = []clientui.QueuedUserMessage{{ID: "server-queue-1", Text: "restore me"}}
@@ -1205,9 +1186,9 @@ func TestInterruptedSubmitDoneRunsQueuedRuntimeDiscardCleanup(t *testing.T) {
 	}
 }
 
-func TestInterruptedSubmitDonePreservesTextUntilTypedReconciliation(t *testing.T) {
+func TestInterruptedSubmitDoneDoesNotRestoreFlushedSubmittedText(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.activeSubmit = activeSubmitState{token: 7, text: "already flushed"}
 
@@ -1233,8 +1214,8 @@ func TestInterruptedSubmitDonePreservesTextUntilTypedReconciliation(t *testing.T
 	next, _ = updated.Update(submitDoneMsg{token: 7, submittedText: "already flushed", err: runtimeattach.ErrSubmissionInterrupted})
 	updated = next.(*uiModel)
 
-	if updated.input != "already flushed" {
-		t.Fatalf("expected interrupted submit text preserved without typed reconciliation, got %q", updated.input)
+	if updated.input != "" {
+		t.Fatalf("did not expect already-flushed submitted text restored into input, got %q", updated.input)
 	}
 	if got := len(updated.transcriptEntries); got != 1 {
 		t.Fatalf("expected one committed transcript entry, got %d", got)
@@ -1261,7 +1242,7 @@ func TestDelayedMatchingUserFlushFromOldStepDoesNotMarkActiveSubmitFlushed(t *te
 
 func TestStaleSubmitDoneAfterInterruptDoesNotRestoreSubmittedText(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.activeSubmit = activeSubmitState{token: 9, text: "previous"}
 
@@ -1282,151 +1263,12 @@ func TestStaleSubmitDoneAfterInterruptDoesNotRestoreSubmittedText(t *testing.T) 
 	}
 }
 
-func TestStaleInterruptedRawTerminalAfterSuccessorDoesNotRestoreInputOrRegressActivity(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.engine = &runtimeControlFakeClient{}
-	m.queued = queuedInputsForTest("queued while first run is interrupted")
-
-	updated := applyRunningRuntimeActivityForTest(t, m, "run-1", "step-1")
-	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	updated = next.(*uiModel)
-	if !updated.hasPendingInterrupt() {
-		t.Fatal("expected interrupt to be pending")
-	}
-
-	updated = applyRunningRuntimeActivityForTest(t, updated, "run-2", "step-2")
-	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:   clientui.EventRunStateChanged,
-		StepID: "step-1",
-		RunState: &clientui.RunState{
-			RunID:     "run-1",
-			Status:    clientui.RunStatusInterrupted,
-			Lifecycle: clientui.IdleRunLifecycle(),
-		},
-	}})
-	updated = next.(*uiModel)
-	if !updated.isBusy() {
-		t.Fatal("stale terminal event regressed successor running activity")
-	}
-	if updated.input != "" || len(updated.queued) != 1 {
-		t.Fatalf("stale terminal event restored input, input=%q queue=%+v", updated.input, updated.queued)
-	}
-}
-
-func TestInterruptedRawTerminalAfterAuthoritativeIdleCleanupIsDiagnosticOnly(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.engine = &runtimeControlFakeClient{}
-	m.queued = queuedInputsForTest("queued while interrupted")
-
-	updated := applyRunningRuntimeActivityForTest(t, m, "run-1", "step-1")
-	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	updated = next.(*uiModel)
-	updated = applyIdleRuntimeActivityForTest(t, updated)
-	if updated.hasPendingInterrupt() || updated.input != "queued while interrupted" {
-		t.Fatalf("authoritative idle cleanup failed, pending=%t input=%q", updated.hasPendingInterrupt(), updated.input)
-	}
-	updated.input = ""
-
-	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:   clientui.EventRunStateChanged,
-		StepID: "step-1",
-		RunState: &clientui.RunState{
-			RunID:     "run-1",
-			Status:    clientui.RunStatusInterrupted,
-			Lifecycle: clientui.IdleRunLifecycle(),
-		},
-	}})
-	updated = next.(*uiModel)
-	if updated.input != "" {
-		t.Fatalf("late raw terminal restored input after authoritative cleanup: %q", updated.input)
-	}
-}
-
-func TestInterruptedRawTerminalAfterIdleMainViewHydrationIsDiagnosticOnly(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.engine = &runtimeControlFakeClient{}
-	m.queued = queuedInputsForTest("queued before hydration")
-
-	updated := applyRunningRuntimeActivityForTest(t, m, "run-1", "step-1")
-	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	updated = next.(*uiModel)
-	version, err := clientui.NewReadModelVersion("epoch-main-view", 1, 2)
-	if err != nil {
-		t.Fatalf("version: %v", err)
-	}
-	updated.applyRuntimeMainViewState(clientui.RuntimeMainView{
-		Version: version,
-		Activity: clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{
-			QueueAccepting: true,
-		}),
-	})
-	if updated.hasPendingInterrupt() || updated.input != "queued before hydration" {
-		t.Fatalf("main-view hydration cleanup failed, pending=%t input=%q", updated.hasPendingInterrupt(), updated.input)
-	}
-	updated.input = ""
-
-	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:   clientui.EventRunStateChanged,
-		StepID: "step-1",
-		RunState: &clientui.RunState{
-			RunID:     "run-1",
-			Status:    clientui.RunStatusInterrupted,
-			Lifecycle: clientui.IdleRunLifecycle(),
-		},
-	}})
-	updated = next.(*uiModel)
-	if updated.input != "" {
-		t.Fatalf("late raw terminal restored input after main-view hydration: %q", updated.input)
-	}
-}
-
-func TestRawTerminalAfterForcedLocalExitDoesNotRestoreInput(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.engine = &runtimeControlFakeClient{}
-	m.queued = queuedInputsForTest("queued while exiting")
-
-	updated := applyRunningRuntimeActivityForTest(t, m, "run-1", "step-1")
-	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	updated = next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	updated = next.(*uiModel)
-	if !updated.forcedLocalExit {
-		t.Fatal("expected forced local exit")
-	}
-
-	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:   clientui.EventRunStateChanged,
-		StepID: "step-1",
-		RunState: &clientui.RunState{
-			RunID:     "run-1",
-			Status:    clientui.RunStatusInterrupted,
-			Lifecycle: clientui.IdleRunLifecycle(),
-		},
-	}})
-	updated = next.(*uiModel)
-	if updated.input != "" || len(updated.queued) != 1 {
-		t.Fatalf("raw terminal after forced exit restored input, input=%q queue=%+v", updated.input, updated.queued)
-	}
-}
-
 func TestVerboseReviewerSuggestionsStaySingleAfterInterruptAndNextSubmit(t *testing.T) {
 	suggestions := "Supervisor suggested:\n1. Add final verification notes."
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
-	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "suggestions-submit"}
-	version := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1}
-	m.engine = cachedMainViewRuntimeClient{view: clientui.RuntimeMainView{
-		InputReconciliation: clientui.RuntimeInputReconciliationSnapshot{
-			Version: version,
-			Operations: []clientui.RuntimeInputReconciliation{{
-				Version:      version,
-				OperationRef: ref,
-				State:        clientui.RuntimeInputReconciliationCommitted,
-			}},
-		},
-	}}
-	m.activeSubmit = activeSubmitState{token: 21, text: suggestions, operationRef: ref, restoreOnInterrupt: true}
+	m.activeSubmit = activeSubmitState{token: 21, text: suggestions}
 
 	events := []clientui.Event{
 		{Kind: clientui.EventRunStateChanged, StepID: "step-1", RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeTurn)}},
@@ -1500,7 +1342,7 @@ func TestVerboseReviewerSuggestionsStaySingleAfterInterruptAndNextSubmit(t *test
 
 func TestSubmitErrorRestoresPendingInjectedSubmittedAndQueuedInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.pendingInjected = queuedUserMessagesForTest("steer")
 	m.queued = queuedInputsForTest("queued")
 
@@ -1532,7 +1374,7 @@ func TestSubmitErrorRestoresPendingInjectedSubmittedAndQueuedInput(t *testing.T)
 
 func TestSubmitErrorRestoresQueuedDraftsIntoInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.queued = queuedInputsForTest("submitted", "queued later")
 	m.activeSubmit = activeSubmitState{token: 1, text: "submitted", queuedID: m.queued[0].ID}
 
@@ -1549,7 +1391,7 @@ func TestSubmitErrorRestoresQueuedDraftsIntoInput(t *testing.T) {
 
 func TestSubmitCancellationRestoresQueuedDraftsWithoutErrorEntry(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("submitted", "queued later")
 	m.activeSubmit = activeSubmitState{token: 1, text: "submitted", queuedID: m.queued[0].ID}
@@ -1573,7 +1415,7 @@ func TestSubmitCancellationRestoresQueuedDraftsWithoutErrorEntry(t *testing.T) {
 
 func TestCompactFailureRestoresQueuedDraftsIntoInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setCompacting(true)
 	m.queued = queuedInputsForTest("queued later")
 
@@ -1590,7 +1432,7 @@ func TestCompactFailureRestoresQueuedDraftsIntoInput(t *testing.T) {
 
 func TestCompactCancellationRestoresQueuedDraftsWithoutErrorEntry(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("queued later")
@@ -1614,7 +1456,7 @@ func TestCompactCancellationRestoresQueuedDraftsWithoutErrorEntry(t *testing.T) 
 
 func TestCompactDoneKeepsQueuedSteeringPending(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "please continue with tests"
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1640,11 +1482,10 @@ func TestCompactDoneSurfacesQueuedRuntimeWorkProbeFailure(t *testing.T) {
 	client := &runtimeControlFakeClient{err: errors.New("daemon stalled")}
 	m := newProjectedStaticUIModel()
 	m.engine = client
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 
-	m.setRuntimeActivityBusyForTest(false)
 	next, cmd := m.Update(compactDoneMsg{})
 	updated := next.(*uiModel)
 	updated, cmd = applyQueuedRuntimeWorkCheckForTest(t, updated, cmd)
@@ -1684,11 +1525,10 @@ func TestIdleCompactDoneRefreshesCommittedSteeringOutput(t *testing.T) {
 	_, startupCmd := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
 	_ = collectCmdMessages(t, startupCmd)
 	m.compactionOrigin = uiCompactionOriginManual
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 
-	m.setRuntimeActivityBusyForTest(false)
 	next, checkCmd := m.Update(compactDoneMsg{})
 	updated := next.(*uiModel)
 	client.transcript = clientui.TranscriptPage{
@@ -1727,7 +1567,7 @@ func TestCompactDoneSuppressesQueuedRuntimeWorkProbeCancellation(t *testing.T) {
 	client := &runtimeControlFakeClient{hasQueuedUserWorkErr: context.Canceled}
 	m := newProjectedStaticUIModel()
 	m.engine = client
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 
@@ -1787,7 +1627,7 @@ func TestCalcChatLinesRemainsViewportBasedDuringActiveWork(t *testing.T) {
 	m := newProjectedEngineUIModel(eng)
 	m.termWidth = 100
 	m.termHeight = 24
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.sawAssistantDelta = true
 
 	if got := m.layout().calcChatLines(); got <= 1 {

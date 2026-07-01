@@ -3,8 +3,6 @@ package serverapi
 import (
 	"errors"
 	"strings"
-
-	"core/shared/clientui"
 )
 
 // ErrClientRequestIDRequired is returned when a lifecycle request omits its
@@ -38,37 +36,16 @@ type SessionInitialInputRequest struct {
 }
 
 type SessionInitialInputResponse struct {
-	Input           string                       `json:"input"`
-	RecoveryBuffers []SessionDraftRecoveryBuffer `json:"recovery_buffers,omitempty"`
+	Input string `json:"input"`
 }
 
 type SessionPersistInputDraftRequest struct {
-	ClientRequestID string                       `json:"client_request_id"`
-	SessionID       string                       `json:"session_id"`
-	Input           string                       `json:"input,omitempty"`
-	RecoveryBuffers []SessionDraftRecoveryBuffer `json:"recovery_buffers,omitempty"`
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Input           string `json:"input,omitempty"`
 }
 
 type SessionPersistInputDraftResponse struct{}
-
-type SessionDraftRecoveryBufferKind string
-
-const (
-	SessionDraftRecoveryBufferActiveSubmit         SessionDraftRecoveryBufferKind = "active_submit"
-	SessionDraftRecoveryBufferLockedInjectedInput  SessionDraftRecoveryBufferKind = "locked_injected_input"
-	SessionDraftRecoveryBufferPendingInjectedInput SessionDraftRecoveryBufferKind = "pending_injected_input"
-	SessionDraftRecoveryBufferQueuedInput          SessionDraftRecoveryBufferKind = "queued_input"
-	SessionDraftRecoveryBufferReviewerBuffer       SessionDraftRecoveryBufferKind = "reviewer_buffer"
-)
-
-type SessionDraftRecoveryBuffer struct {
-	Kind            SessionDraftRecoveryBufferKind `json:"kind"`
-	ID              string                         `json:"id,omitempty"`
-	ServerID        string                         `json:"server_id,omitempty"`
-	ClientRequestID string                         `json:"client_request_id,omitempty"`
-	Text            string                         `json:"text,omitempty"`
-	OperationRef    clientui.RuntimeOperationRef   `json:"operation_ref,omitempty"`
-}
 
 type SessionRetargetWorkspaceRequest struct {
 	ClientRequestID string `json:"client_request_id"`
@@ -101,31 +78,7 @@ func (r SessionPersistInputDraftRequest) Validate() error {
 	if strings.TrimSpace(r.ClientRequestID) == "" {
 		return ErrClientRequestIDRequired
 	}
-	if err := validateScopedSessionID(r.SessionID); err != nil {
-		return err
-	}
-	for _, buffer := range r.RecoveryBuffers {
-		if err := buffer.Validate(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (b SessionDraftRecoveryBuffer) Validate() error {
-	switch b.Kind {
-	case SessionDraftRecoveryBufferActiveSubmit,
-		SessionDraftRecoveryBufferLockedInjectedInput,
-		SessionDraftRecoveryBufferPendingInjectedInput,
-		SessionDraftRecoveryBufferQueuedInput,
-		SessionDraftRecoveryBufferReviewerBuffer:
-	default:
-		return errors.New("invalid session draft recovery buffer kind")
-	}
-	if strings.TrimSpace(b.Text) == "" {
-		return errors.New("session draft recovery buffer text is required")
-	}
-	return nil
+	return validateScopedSessionID(r.SessionID)
 }
 
 func (r SessionInitialInputRequest) Validate() error {

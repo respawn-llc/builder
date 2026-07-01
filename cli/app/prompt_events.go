@@ -16,7 +16,7 @@ import (
 
 var promptActivityResubscribeDelay = 250 * time.Millisecond
 
-type promptActivitySubscriber func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error)
+type promptActivitySubscriber func(context.Context, uint64) (serverapi.PromptActivitySubscription, error)
 
 type promptEventEmitter struct {
 	mu     sync.RWMutex
@@ -68,7 +68,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 	pollCtx, cancel := context.WithCancel(ctx)
 	var pendingMu sync.Mutex
 	pendingPromptIDs := make(map[string]struct{})
-	var lastReadModelVersion clientui.ReadModelVersion
+	var lastSequence uint64
 	var snapshotMode bool
 	snapshotPromptIDs := make(map[string]struct{})
 	snapshotPendingEvents := make([]clientui.PendingPromptEvent, 0)
@@ -99,7 +99,7 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 					return
 				}
 				for {
-					nextSub, replayed, err := resubscribePromptActivity(pollCtx, subscribe, lastReadModelVersion)
+					nextSub, replayed, err := resubscribePromptActivity(pollCtx, subscribe, lastSequence)
 					if err != nil {
 						return
 					}
@@ -149,10 +149,14 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 				continue
 			}
 			if strings.TrimSpace(evt.PromptID) == "" {
-				lastReadModelVersion = newestPromptReadModelVersion(lastReadModelVersion, evt.ReadModelVersion)
+				if evt.Sequence > lastSequence {
+					lastSequence = evt.Sequence
+				}
 				continue
 			}
-			lastReadModelVersion = newestPromptReadModelVersion(lastReadModelVersion, evt.ReadModelVersion)
+			if evt.Sequence > lastSequence {
+				lastSequence = evt.Sequence
+			}
 			switch evt.Type {
 			case clientui.PendingPromptEventResolved:
 				pendingMu.Lock()
@@ -165,8 +169,8 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 				continue
 			case clientui.PendingPromptEventPending:
 				pendingMu.Lock()
-				isSnapshotPending := snapshotMode
-				if snapshotMode {
+				isSnapshotPending := snapshotMode && evt.Sequence == 0
+				if snapshotMode && evt.Sequence == 0 {
 					snapshotPromptIDs[evt.PromptID] = struct{}{}
 				}
 				if _, exists := pendingPromptIDs[evt.PromptID]; exists {
@@ -193,17 +197,17 @@ func startPendingPromptEvents(ctx context.Context, sub serverapi.PromptActivityS
 	return out, cancel
 }
 
-func resubscribePromptActivity(ctx context.Context, subscribe promptActivitySubscriber, afterVersion clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, bool, error) {
+func resubscribePromptActivity(ctx context.Context, subscribe promptActivitySubscriber, afterSequence uint64) (serverapi.PromptActivitySubscription, bool, error) {
 	for {
 		if !waitPromptActivityRetry(ctx) {
 			return nil, false, ctx.Err()
 		}
-		sub, err := subscribe(ctx, afterVersion)
+		sub, err := subscribe(ctx, afterSequence)
 		if err == nil {
 			return sub, true, nil
 		}
-		if errors.Is(err, serverapi.ErrStreamGap) && afterVersion != (clientui.ReadModelVersion{}) {
-			sub, err := subscribe(ctx, clientui.ReadModelVersion{})
+		if errors.Is(err, serverapi.ErrStreamGap) && afterSequence > 0 {
+			sub, err := subscribe(ctx, 0)
 			if err == nil {
 				return sub, false, nil
 			}
@@ -212,16 +216,6 @@ func resubscribePromptActivity(ctx context.Context, subscribe promptActivitySubs
 			return nil, false, err
 		}
 	}
-}
-
-func newestPromptReadModelVersion(current clientui.ReadModelVersion, incoming clientui.ReadModelVersion) clientui.ReadModelVersion {
-	if incoming == (clientui.ReadModelVersion{}) {
-		return current
-	}
-	if current == (clientui.ReadModelVersion{}) || incoming.NewerThan(current) {
-		return incoming
-	}
-	return current
 }
 
 func waitPromptActivityRetry(ctx context.Context) bool {

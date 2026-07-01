@@ -113,9 +113,6 @@ func (m *uiModel) worktreeCreateTargetResolveCmd(query string, token uint64) tea
 func (c uiInputController) handleWorktreeCreateDialogKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m := c.model
 	dialog := &m.worktrees.create
-	if strings.ToLower(msg.String()) == "ctrl+c" {
-		return c.handleRuntimeCtrlC(c.closeTranscriptSurfaceForRuntimeCtrlC(m.closeWorktreeOverlay))
-	}
 	if dialog.submitting {
 		return m, nil
 	}

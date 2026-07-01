@@ -287,11 +287,7 @@ func (s *Service) RecreateRuntime(ctx context.Context, sessionID string, ownerID
 
 func (s *Service) RecreateRuntimeRejectingActiveRun(ctx context.Context, sessionID string, ownerID string, build RuntimeBuilder) (AcquiredRuntimeRelease, error) {
 	return s.recreateRuntime(ctx, sessionID, ownerID, build, func(engine *runtime.Engine) error {
-		active, err := s.engineHasBlockingRuntimeActivity(sessionID, engine)
-		if err != nil {
-			return err
-		}
-		if engine != nil && (active || engine.HasQueuedUserWork()) {
+		if engine != nil && (engine.ActiveRun() != nil || engine.HasQueuedUserWork()) {
 			return ErrSessionRunActive
 		}
 		return nil
@@ -409,7 +405,6 @@ func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivate
 			FastMode:        s.fastModeState,
 			Sources:         req.Source.Sources,
 			GlobalConfigDir: s.persistenceRoot,
-			StepLifecycle:   runtimewire.NewStepLifecycleSink(sessionID, s.runtimes),
 			OnEvent: func(evt runtime.Event) {
 				logger.Logf("%s", runlog.FormatRuntimeEvent(evt))
 				if transcriptdiag.Enabled(req.ActiveSettings.Debug, os.Getenv) {
@@ -450,38 +445,11 @@ func activationResponse() serverapi.SessionRuntimeActivateResponse {
 	return serverapi.SessionRuntimeActivateResponse{}
 }
 
-func (s *Service) runtimeBlockingActivity(ctx context.Context, sessionID string) (clientui.RuntimeActivity, error) {
+func (s *Service) SessionRunActive(sessionID string) bool {
 	if s == nil || s.runtimes == nil {
-		return clientui.NewRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{})
+		return false
 	}
-	id := strings.TrimSpace(sessionID)
-	if id == "" {
-		return clientui.NewRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{})
-	}
-	engine, err := s.runtimes.ResolveRuntime(ctx, id)
-	if err != nil {
-		return clientui.RuntimeActivity{}, err
-	}
-	return s.resolveBlockingRuntimeActivity(id, engine)
-}
-
-func (s *Service) engineHasBlockingRuntimeActivity(sessionID string, engine *runtime.Engine) (bool, error) {
-	activity, err := s.resolveBlockingRuntimeActivity(sessionID, engine)
-	if err != nil {
-		return false, err
-	}
-	return activity.ActiveForControl(), nil
-}
-
-func (s *Service) resolveBlockingRuntimeActivity(sessionID string, engine *runtime.Engine) (clientui.RuntimeActivity, error) {
-	if s == nil || s.runtimes == nil {
-		return clientui.NewRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{})
-	}
-	snapshot, err := s.runtimes.RuntimeReadModelSnapshot(context.Background(), strings.TrimSpace(sessionID), nil)
-	if err != nil {
-		return clientui.RuntimeActivity{}, err
-	}
-	return snapshot.Activity, nil
+	return s.runtimes.ExternalRuntimeStatus(sessionID).State == clientui.ExternalRuntimeStateOwnerRunning
 }
 
 func (s *Service) WithRuntimeEngine(ctx context.Context, sessionID string, fn func(*runtime.Engine) error) error {
@@ -536,19 +504,14 @@ func (s *Service) ReleaseSessionRuntime(ctx context.Context, req serverapi.Sessi
 		_, _ = claim.Close(ctx, nil)
 		return serverapi.SessionRuntimeReleaseResponse{}, err
 	}
-	if req.EffectiveClosePolicy() == serverapi.SessionRuntimeReleaseClosePolicyDetachOnly {
-		s.markClaimOrphaned(sessionID, claim, req.OwnerID)
-		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
-	}
-	closeIfIdle := req.EffectiveClosePolicy() == serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle
-	decision, expectedRefs := claim.BeginRelease(req.OwnerID, req.DropOwner, closeIfIdle)
+	decision, expectedRefs := claim.BeginRelease(req.OwnerID, req.DropOwner, req.OnlyIfIdle)
 	switch decision {
 	case registry.RuntimeReleaseStale, registry.RuntimeReleaseDroppedRef:
 		return serverapi.SessionRuntimeReleaseResponse{}, nil
 	case registry.RuntimeReleaseClosing, registry.RuntimeReleaseNotOwner:
 		return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
 	case registry.RuntimeReleaseIdleCheck:
-		active, err := s.runtimeHasBlockingActivity(ctx, sessionID)
+		active, err := s.runtimeHasActiveRun(ctx, sessionID)
 		if err != nil {
 			return serverapi.SessionRuntimeReleaseResponse{}, err
 		}
@@ -592,12 +555,15 @@ func (s *Service) drainBeforeClose(claim *registry.RuntimeClaim) func(context.Co
 	}
 }
 
-func (s *Service) runtimeHasBlockingActivity(ctx context.Context, sessionID string) (bool, error) {
-	activity, err := s.runtimeBlockingActivity(ctx, sessionID)
-	if err != nil {
+func (s *Service) runtimeHasActiveRun(ctx context.Context, sessionID string) (bool, error) {
+	if s == nil || s.runtimes == nil {
+		return false, nil
+	}
+	engine, err := s.runtimes.ResolveRuntime(ctx, strings.TrimSpace(sessionID))
+	if err != nil || engine == nil {
 		return false, err
 	}
-	return activity.ActiveForControl(), nil
+	return engine.ActiveRun() != nil, nil
 }
 
 func (s *Service) markClaimOrphaned(sessionID string, claim *registry.RuntimeClaim, ownerID string) {
@@ -608,8 +574,8 @@ func (s *Service) markClaimOrphaned(sessionID string, claim *registry.RuntimeCla
 	s.scheduleIdleUnload(strings.TrimSpace(sessionID), s.defaultIdleUnloadDelay())
 }
 
-func (s *Service) HasBlockingRuntimeActivity(ctx context.Context, sessionID string) (bool, error) {
-	return s.runtimeHasBlockingActivity(ctx, sessionID)
+func (s *Service) HasActiveRun(ctx context.Context, sessionID string) (bool, error) {
+	return s.runtimeHasActiveRun(ctx, sessionID)
 }
 
 // errUnknownToolID is returned when an enabled-tool id cannot be parsed into a known tool.

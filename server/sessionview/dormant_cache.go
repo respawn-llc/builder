@@ -28,6 +28,7 @@ type dormantTranscriptCacheEntry struct {
 	revision                     int64
 	lastCommittedAssistantAnswer string
 	newestSegment                runtime.TranscriptSegmentPage
+	activeRun                    *clientui.RunView
 	lastUsed                     uint64
 }
 
@@ -125,12 +126,21 @@ func buildDormantTranscriptCacheEntryWithMode(_ context.Context, store *session.
 	if err != nil {
 		return dormantTranscriptCacheEntry{}, err
 	}
+	var activeRun *clientui.RunView
+	latestRun, err := store.LatestRun()
+	if err != nil {
+		return dormantTranscriptCacheEntry{}, err
+	}
+	if latestRun != nil && latestRun.Status == session.RunStatusRunning {
+		activeRun = runtimeview.RunViewFromSessionRecord(meta.SessionID, latestRun)
+	}
 	return dormantTranscriptCacheEntry{
 		sessionDir:                   store.Dir(),
 		sessionID:                    meta.SessionID,
 		revision:                     meta.LastSequence,
 		lastCommittedAssistantAnswer: segment.LastCommittedAssistantFinalAnswer,
 		newestSegment:                segment,
+		activeRun:                    activeRun,
 	}, nil
 }
 
@@ -148,10 +158,9 @@ func (e dormantTranscriptCacheEntry) mainView(meta session.Meta, freshness clien
 			WorkflowID: strings.TrimSpace(meta.WorkflowSession.WorkflowID),
 		}
 	}
-	return runtimeview.RuntimeMainViewFromActivity(
-		clientui.MustRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{}),
-		status,
-		clientui.RuntimeSessionView{
+	return clientui.RuntimeMainView{
+		Status: status,
+		Session: clientui.RuntimeSessionView{
 			SessionID:             meta.SessionID,
 			SessionName:           meta.Name,
 			ConversationFreshness: freshness,
@@ -159,7 +168,8 @@ func (e dormantTranscriptCacheEntry) mainView(meta session.Meta, freshness clien
 				Revision: meta.LastSequence,
 			},
 		},
-	)
+		ActiveRun: e.activeRun,
+	}
 }
 
 func (e dormantTranscriptCacheEntry) newestSegmentPage(meta session.Meta, freshness clientui.ConversationFreshness) clientui.TranscriptPage {

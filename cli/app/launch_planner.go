@@ -60,10 +60,9 @@ type resolvedSessionPlanRequest struct {
 }
 
 type runtimeLaunchPlan struct {
-	Logger      *runLogger
-	Wiring      *runtimeWiring
-	close       func()
-	detachClose func()
+	Logger *runLogger
+	Wiring *runtimeWiring
+	close  func()
 }
 
 func (p *runtimeLaunchPlan) Close() {
@@ -71,17 +70,6 @@ func (p *runtimeLaunchPlan) Close() {
 		return
 	}
 	p.close()
-}
-
-func (p *runtimeLaunchPlan) DetachOnlyClose() {
-	if p == nil {
-		return
-	}
-	if p.detachClose != nil {
-		p.detachClose()
-		return
-	}
-	p.Close()
 }
 
 type sessionPickerRunner func([]clientui.SessionSummary, string, sessionPickerHeaderInfo) (sessionPickerResult, error)

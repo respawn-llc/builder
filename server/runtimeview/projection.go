@@ -5,7 +5,6 @@ import (
 
 	"core/server/llm"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/transcript"
@@ -14,34 +13,15 @@ import (
 
 const runtimeNoopFinalToken = "NO_OP"
 
-func MainViewFromRuntimeActivity(engine *runtime.Engine, version clientui.ReadModelVersion, activity clientui.RuntimeActivity) clientui.RuntimeMainView {
+func MainViewFromRuntime(engine *runtime.Engine) clientui.RuntimeMainView {
 	if engine == nil {
 		return clientui.RuntimeMainView{}
 	}
 	sessionView := SessionViewFromRuntime(engine)
-	if err := activity.Validate(); err != nil {
-		activity = clientui.MustRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{DiagnosticRecovery: true})
-	}
 	return clientui.RuntimeMainView{
-		Version:             version,
-		Status:              StatusFromRuntime(engine),
-		Session:             sessionView,
-		Activity:            activity,
-		InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
-	}
-}
-
-func RuntimeMainViewFromActivity(activity clientui.RuntimeActivity, status clientui.RuntimeStatus, sessionView clientui.RuntimeSessionView) clientui.RuntimeMainView {
-	version := runtimeactivity.NextReadModelVersion(sessionView.SessionID)
-	if err := activity.Validate(); err != nil {
-		activity = clientui.MustRuntimeActivity(clientui.RuntimeActivityUnavailable, clientui.RuntimeActivityOptions{DiagnosticRecovery: true})
-	}
-	return clientui.RuntimeMainView{
-		Version:             version,
-		Status:              status,
-		Session:             sessionView,
-		Activity:            activity,
-		InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
+		Status:    StatusFromRuntime(engine),
+		Session:   sessionView,
+		ActiveRun: RunViewFromRuntime(sessionView.SessionID, engine.ActiveRun()),
 	}
 }
 
@@ -152,17 +132,12 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 	}
 	view.CacheWarningVisibility = clientui.EntryVisibility(evt.CacheWarningVisibility)
 	if evt.RunState != nil {
-		activeKind := clientui.RuntimeActivityActiveKind("")
-		if evt.RunState.ActiveKind.Valid() {
-			activeKind = ClientActiveKindFromRuntime(evt.RunState.ActiveKind)
-		}
 		view.RunState = &clientui.RunState{
 			Lifecycle: clientui.MustRunLifecycle(
 				clientui.RunLifecyclePhase(evt.RunState.Lifecycle.Phase),
 				clientui.RunMode(evt.RunState.Lifecycle.Mode),
 			),
 			RunID:      evt.RunState.RunID,
-			ActiveKind: activeKind,
 			Status:     clientui.RunStatus(evt.RunState.Status),
 			StartedAt:  evt.RunState.StartedAt,
 			FinishedAt: evt.RunState.FinishedAt,
@@ -259,23 +234,42 @@ func chatEntriesFromRuntime(entries []runtime.ChatEntry) []clientui.ChatEntry {
 	return out
 }
 
-func ActivityFromRuntimeSnapshot(snapshot *runtime.RunSnapshot, queueAccepting bool) clientui.RuntimeActivity {
-	var active *runtimeactivity.ActiveStepSnapshot
-	if snapshot != nil {
-		active = runtimeactivity.ActiveStepFromRuntimeSnapshot(snapshot)
+func RunViewFromRuntime(sessionID string, snapshot *runtime.RunSnapshot) *clientui.RunView {
+	if snapshot == nil {
+		return nil
 	}
-	activity, err := runtimeactivity.ResolveRuntimeActivity(runtimeactivity.ResolverSnapshot{
-		Registry: runtimeactivity.RegistrySnapshot{Registered: true, QueueAccepting: queueAccepting},
-		Active:   active,
-	})
-	if err != nil {
-		panic(err)
+	mode := clientui.RunModeTurn
+	if snapshot.GoalLoop {
+		mode = clientui.RunModeGoalLoop
 	}
-	return activity
+	return &clientui.RunView{
+		RunID:      snapshot.RunID,
+		SessionID:  sessionID,
+		StepID:     snapshot.StepID,
+		Status:     clientui.RunStatus(snapshot.Status),
+		Lifecycle:  clientui.MustRunLifecycle(clientui.RunLifecycleRunning, mode),
+		StartedAt:  snapshot.StartedAt,
+		FinishedAt: snapshot.FinishedAt,
+	}
 }
 
-func ClientActiveKindFromRuntime(kind runtime.ActiveKind) clientui.RuntimeActivityActiveKind {
-	return runtimeactivity.MustClientActiveKindFromRuntime(kind)
+func RunViewFromSessionRecord(sessionID string, record *session.RunRecord) *clientui.RunView {
+	if record == nil {
+		return nil
+	}
+	lifecycle := clientui.MustRunLifecycle(clientui.RunLifecycleFinished, clientui.RunModeTurn)
+	if record.Status == session.RunStatusRunning {
+		lifecycle = clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeTurn)
+	}
+	return &clientui.RunView{
+		RunID:      record.RunID,
+		SessionID:  sessionID,
+		StepID:     record.StepID,
+		Status:     clientui.RunStatus(record.Status),
+		Lifecycle:  lifecycle,
+		StartedAt:  record.StartedAt,
+		FinishedAt: record.FinishedAt,
+	}
 }
 
 func ChatSnapshotFromRuntime(snapshot runtime.ChatSnapshot) clientui.ChatSnapshot {

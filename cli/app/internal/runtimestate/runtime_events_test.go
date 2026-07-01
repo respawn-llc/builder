@@ -194,7 +194,7 @@ func TestReduceRuntimeEvent_QueuedStatusFailedWithoutLocalPendingInputDoesNotRes
 	}
 }
 
-func TestReduceRuntimeEvent_RunStateStoppedClearsReasoningWithoutChangingLiveness(t *testing.T) {
+func TestReduceRuntimeEvent_RunStateStoppedClearsReasoningAndReturnsToIdle(t *testing.T) {
 	update := ReduceRuntimeEvent(
 		RuntimeRunState{Run: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeTurn)},
 		RuntimeConversationState{},
@@ -204,11 +204,11 @@ func TestReduceRuntimeEvent_RunStateStoppedClearsReasoningWithoutChangingLivenes
 		clientui.Event{Kind: clientui.EventRunStateChanged, RunState: &clientui.RunState{Lifecycle: clientui.IdleRunLifecycle()}},
 	)
 
-	if !update.RunState.State.Run.IsRunning() {
-		t.Fatal("expected raw stopped run not to clear liveness")
+	if update.RunState.State.Run.IsRunning() {
+		t.Fatal("expected busy cleared")
 	}
-	if update.RunState.Activity != RuntimeActivityUnchanged {
-		t.Fatal("expected raw stopped run to leave runtime activity unchanged")
+	if update.RunState.Activity != RuntimeActivityIdle {
+		t.Fatal("expected stopped run to return running activity to idle")
 	}
 	if update.Reasoning.State.StatusHeader != "" {
 		t.Fatalf("expected reasoning status header cleared, got %q", update.Reasoning.State.StatusHeader)
@@ -228,23 +228,18 @@ func TestReduceRuntimeEvent_RunStateStartedDoesNotRequestTranscriptSync(t *testi
 		clientui.Event{Kind: clientui.EventRunStateChanged, RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeTurn)}},
 	)
 
-	if update.RunState.State.Run.IsRunning() {
-		t.Fatal("expected raw started run not to set liveness")
+	if !update.RunState.State.Run.IsRunning() {
+		t.Fatal("expected busy set")
 	}
-	if update.RunState.Activity != RuntimeActivityUnchanged {
-		t.Fatal("expected raw started run to leave runtime activity unchanged")
+	if update.RunState.Activity != RuntimeActivityRunning {
+		t.Fatal("expected started run to set running activity")
 	}
 	if update.Transcript.Sync.Reason != RuntimeTranscriptSyncNone {
 		t.Fatal("did not expect started run to request transcript sync")
 	}
 }
 
-func TestReduceRuntimeEvent_RuntimeActivityChangedDrivesBusyState(t *testing.T) {
-	runningActivity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
-		ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop,
-		RunID:      "run-1",
-		StepID:     "step-1",
-	})
+func TestReduceRuntimeEvent_ExternalRuntimeStatusDrivesActivity(t *testing.T) {
 	running := ReduceRuntimeEvent(
 		RuntimeRunState{Run: clientui.IdleRunLifecycle()},
 		RuntimeConversationState{},
@@ -252,32 +247,34 @@ func TestReduceRuntimeEvent_RuntimeActivityChangedDrivesBusyState(t *testing.T) 
 		RuntimeReasoningState{},
 		false,
 		clientui.Event{
-			Kind:            clientui.EventRuntimeActivityChanged,
-			RuntimeActivity: &runningActivity,
+			Kind:                  clientui.EventExternalRuntimeStatus,
+			ExternalRuntimeStatus: &clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateDraining},
 		},
 	)
-	if !running.RunState.State.Run.IsGoalLoopRunning() || running.RunState.Activity != RuntimeActivityRunning {
-		t.Fatalf("running activity reduction = %+v, want goal loop running", running.RunState)
+	if running.RunState.Activity != RuntimeActivityRunning {
+		t.Fatalf("draining external activity = %v, want running", running.RunState.Activity)
+	}
+	if running.RunState.ExternalRuntime == nil || running.RunState.ExternalRuntime.State != clientui.ExternalRuntimeStateDraining {
+		t.Fatalf("external runtime reduction = %+v, want draining", running.RunState.ExternalRuntime)
 	}
 
-	idleActivity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})
 	idle := ReduceRuntimeEvent(
-		running.RunState.State,
+		RuntimeRunState{Run: clientui.IdleRunLifecycle()},
 		RuntimeConversationState{},
 		PendingInputState{},
 		RuntimeReasoningState{},
 		true,
 		clientui.Event{
-			Kind:            clientui.EventRuntimeActivityChanged,
-			RuntimeActivity: &idleActivity,
+			Kind:                  clientui.EventExternalRuntimeStatus,
+			ExternalRuntimeStatus: &clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateRegisteredIdle, QueueAccepting: true},
 		},
 	)
-	if idle.RunState.State.Run.IsRunning() || idle.RunState.Activity != RuntimeActivityIdle {
-		t.Fatalf("idle activity reduction = %+v, want idle", idle.RunState)
+	if idle.RunState.Activity != RuntimeActivityIdle {
+		t.Fatalf("registered-idle external activity = %v, want idle", idle.RunState.Activity)
 	}
 }
 
-func TestReduceRuntimeEvent_RawGoalRunStateDoesNotDriveGoalLiveness(t *testing.T) {
+func TestReduceRuntimeEvent_GoalRunStateTracksOnlyBusyGoalTurns(t *testing.T) {
 	started := ReduceRuntimeEvent(
 		RuntimeRunState{},
 		RuntimeConversationState{},
@@ -286,20 +283,20 @@ func TestReduceRuntimeEvent_RawGoalRunStateDoesNotDriveGoalLiveness(t *testing.T
 		false,
 		clientui.Event{Kind: clientui.EventRunStateChanged, RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeGoalLoop)}},
 	)
-	if started.RunState.State.Run.IsGoalLoopRunning() {
-		t.Fatalf("raw goal loop start changed run state: %+v", started.RunState.State)
+	if !started.RunState.State.Run.IsGoalLoopRunning() {
+		t.Fatalf("expected goal loop run state after start, got %+v", started.RunState.State)
 	}
 
 	stopped := ReduceRuntimeEvent(
-		RuntimeRunState{Run: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeGoalLoop)},
+		started.RunState.State,
 		RuntimeConversationState{},
 		PendingInputState{},
 		RuntimeReasoningState{},
 		true,
 		clientui.Event{Kind: clientui.EventRunStateChanged, RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleFinished, clientui.RunModeGoalLoop)}},
 	)
-	if !stopped.RunState.State.Run.IsGoalLoopRunning() {
-		t.Fatalf("raw goal loop stop changed run state: %+v", stopped.RunState.State)
+	if stopped.RunState.State.Run.IsGoalLoopRunning() {
+		t.Fatalf("expected goal loop run state cleared after stop, got %+v", stopped.RunState.State)
 	}
 }
 

@@ -67,19 +67,9 @@ func (e *Engine) CompactContext(ctx context.Context, args string) error {
 	return e.compactionFlow.CompactContext(ctx, args)
 }
 
-func (e *Engine) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) error {
-	e.ensureOrchestrationCollaborators()
-	return e.compactionFlow.CompactContextWithActiveHook(ctx, args, onActive)
-}
-
 func (e *Engine) CompactContextForPreSubmit(ctx context.Context) error {
 	e.ensureOrchestrationCollaborators()
 	return e.compactionFlow.CompactContextForPreSubmit(ctx)
-}
-
-func (e *Engine) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) error {
-	e.ensureOrchestrationCollaborators()
-	return e.compactionFlow.CompactContextForPreSubmitWithActiveHook(ctx, onActive)
 }
 
 func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error) {
@@ -88,19 +78,11 @@ func (e *Engine) TriggerHandoff(ctx context.Context, stepID string, activeCall l
 }
 
 func (c *defaultContextCompactor) CompactContext(ctx context.Context, args string) error {
-	return c.CompactContextWithActiveHook(ctx, args, nil)
-}
-
-func (c *defaultContextCompactor) CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) error {
-	return c.compactContext(ctx, compactionModeManual, args, true, onActive)
+	return c.compactContext(ctx, compactionModeManual, args, true)
 }
 
 func (c *defaultContextCompactor) CompactContextForPreSubmit(ctx context.Context) error {
-	return c.CompactContextForPreSubmitWithActiveHook(ctx, nil)
-}
-
-func (c *defaultContextCompactor) CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) error {
-	return c.compactContext(ctx, compactionModeManual, "", false, onActive)
+	return c.compactContext(ctx, compactionModeManual, "", false)
 }
 
 func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error) {
@@ -126,16 +108,9 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	return summary, appended, nil
 }
 
-func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, args string, includeManualCarryover bool, onActive func()) error {
+func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compactionMode, args string, includeManualCarryover bool) error {
 	e := c.engine
-	activeKind := ActiveKindPreSubmitCompaction
-	if includeManualCarryover {
-		activeKind = ActiveKindCompaction
-	}
-	return c.steps.Run(ctx, exclusiveStepOptions{ActiveKind: activeKind}, func(stepCtx context.Context, stepID string) error {
-		if onActive != nil {
-			onActive()
-		}
+	return c.steps.Run(ctx, exclusiveStepOptions{}, func(stepCtx context.Context, stepID string) error {
 		if err := e.ensureMetaContextForCompaction(stepCtx, stepID); err != nil {
 			return err
 		}

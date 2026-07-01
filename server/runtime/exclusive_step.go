@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/session"
 
 	"github.com/google/uuid"
 )
@@ -16,30 +17,26 @@ var ErrAgentBusy = errors.New("agent is busy")
 
 var ErrEngineClosed = errors.New("runtime engine is closed")
 
-// errPendingModelRecoveryClear wraps failures to clear the recovery marker at
-// step end after terminal transcript state has already been published.
-var errPendingModelRecoveryClear = errors.New("clear pending model recovery")
+// errMarkInFlightFalse wraps failures to clear the in-flight marker at step end.
+var errMarkInFlightFalse = errors.New("mark in-flight false")
 
 type defaultExclusiveStepLifecycle struct {
 	engine     *Engine
 	background backgroundNoticeScheduler
 
-	mu                 sync.Mutex
-	active             *exclusiveRunState
-	runSeq             uint64
-	terminalPublishing bool
+	mu     sync.Mutex
+	active *exclusiveRunState
+	runSeq uint64
 }
 
 type exclusiveRunState struct {
-	sequence    uint64
-	mode        RunMode
-	activeKind  ActiveKind
-	cancel      context.CancelFunc
-	runID       string
-	stepID      string
-	startedAt   time.Time
-	closing     bool
-	interrupted bool
+	sequence  uint64
+	mode      RunMode
+	cancel    context.CancelFunc
+	runID     string
+	stepID    string
+	startedAt time.Time
+	closing   bool
 }
 
 func (s *defaultExclusiveStepLifecycle) Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) (err error) {
@@ -49,13 +46,29 @@ func (s *defaultExclusiveStepLifecycle) Run(ctx context.Context, options exclusi
 	}
 	if options.EmitRunState {
 		if snapshot := s.Snapshot(); snapshot != nil {
-			mode := runModeFromActiveKind(snapshot.ActiveKind)
+			if options.PersistRunLifecycle {
+				if _, persistErr := s.engine.store.AppendRunStarted(session.RunRecord{
+					RunID:     snapshot.RunID,
+					StepID:    snapshot.StepID,
+					Status:    session.RunStatusRunning,
+					StartedAt: snapshot.StartedAt,
+				}); persistErr != nil {
+					s.end()
+					if clearErr := s.engine.store.MarkInFlight(false); clearErr != nil {
+						persistErr = errors.Join(persistErr, fmt.Errorf("%w: %w", errMarkInFlightFalse, clearErr))
+					}
+					return persistErr
+				}
+			}
+			mode := RunModeTurn
+			if snapshot.GoalLoop {
+				mode = RunModeGoalLoop
+			}
 			_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: &RunState{
-				Lifecycle:  RunningRunLifecycle(mode),
-				RunID:      snapshot.RunID,
-				ActiveKind: snapshot.ActiveKind,
-				Status:     snapshot.Status,
-				StartedAt:  snapshot.StartedAt,
+				Lifecycle: RunningRunLifecycle(mode),
+				RunID:     snapshot.RunID,
+				Status:    snapshot.Status,
+				StartedAt: snapshot.StartedAt,
 			}}))
 
 		}
@@ -75,34 +88,38 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 	if status != RunStatusCompleted {
 		_ = s.engine.steer(stepID, steerClearStreamingStateIntent())
 	}
-	s.beginTerminalPublication()
+	s.end()
 	if options.EmitRunState {
 		state := &RunState{Lifecycle: IdleRunLifecycle()}
 		if snapshot != nil {
-			mode := runModeFromActiveKind(snapshot.ActiveKind)
+			mode := RunModeTurn
+			if snapshot.GoalLoop {
+				mode = RunModeGoalLoop
+			}
 			state.Lifecycle = FinishedRunLifecycle(mode)
 			state.RunID = snapshot.RunID
-			state.ActiveKind = snapshot.ActiveKind
 			state.Status = snapshot.Status
 			state.StartedAt = snapshot.StartedAt
 			state.FinishedAt = snapshot.FinishedAt
 		}
 		_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: state}))
 	}
-	if snapshot != nil && s.engine.cfg.StepLifecycle != nil {
-		if publishErr := s.engine.cfg.StepLifecycle.StepEnded(context.Background(), stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *snapshot)); publishErr != nil {
-			err = errors.Join(err, fmt.Errorf("publish step ended: %w", publishErr))
+	if options.PersistRunLifecycle && snapshot != nil {
+		if _, persistErr := s.engine.store.AppendRunFinished(session.RunRecord{
+			RunID:      snapshot.RunID,
+			StepID:     snapshot.StepID,
+			Status:     session.RunStatus(snapshot.Status),
+			StartedAt:  snapshot.StartedAt,
+			FinishedAt: snapshot.FinishedAt,
+		}); persistErr != nil {
+			err = errors.Join(err, fmt.Errorf("append run finished: %w", persistErr))
 		}
 	}
-	s.finishTerminalPublication()
-	if clearErr := s.engine.store.ClearPendingModelRecovery(); clearErr != nil {
-		wrapped := fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr)
+	if clearErr := s.engine.store.MarkInFlight(false); clearErr != nil {
+		wrapped := fmt.Errorf("%w: %w", errMarkInFlightFalse, clearErr)
 		_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventInFlightClearFailed, StepID: stepID, Error: wrapped.Error()}))
 		err = errors.Join(err, wrapped)
 	} else {
-		if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
-			s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
-		}
 		if status != RunStatusFailed {
 			if !s.engine.scheduleQueuedUserInjectionsIfIdle() && s.background != nil {
 				s.background.ScheduleIfIdle()
@@ -118,46 +135,33 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 }
 
 func (s *defaultExclusiveStepLifecycle) Interrupt() error {
-	_, err := s.InterruptCurrent()
-	return err
-}
-
-func (s *defaultExclusiveStepLifecycle) InterruptCurrent() (*RunSnapshot, error) {
 	s.mu.Lock()
 	active := s.active
 	s.mu.Unlock()
 
 	if active == nil || active.cancel == nil {
-		return nil, nil
+		return nil
 	}
 	active.cancel()
 	s.mu.Lock()
 	if s.active == nil || s.active.sequence != active.sequence {
 		s.mu.Unlock()
-		return nil, nil
+		return nil
 	}
-	if s.active.interrupted {
-		s.mu.Unlock()
-		return nil, nil
-	}
-	s.active.interrupted = true
-	snapshot := cloneRunSnapshot(s.snapshotLocked())
 	s.mu.Unlock()
 	if err := s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeInterruption, Content: interruptMessage}})); err != nil {
-		s.mu.Lock()
-		if s.active != nil && s.active.sequence == active.sequence {
-			s.active.interrupted = false
-		}
-		s.mu.Unlock()
-		return nil, err
+		return err
 	}
-	return snapshot, nil
+	if err := s.engine.store.MarkInFlight(false); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *defaultExclusiveStepLifecycle) IsBusy() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.active != nil || s.terminalPublishing
+	return s.active != nil
 }
 
 func (s *defaultExclusiveStepLifecycle) Snapshot() *RunSnapshot {
@@ -191,73 +195,33 @@ func (s *defaultExclusiveStepLifecycle) closeActiveStepQueue(stepID string) {
 }
 
 func (s *defaultExclusiveStepLifecycle) begin(ctx context.Context, options exclusiveStepOptions) (context.Context, string, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	select {
-	case <-ctx.Done():
-		return nil, "", ctx.Err()
-	default:
-	}
 	s.mu.Lock()
-	if s.active != nil || s.terminalPublishing {
+	if s.active != nil {
 		s.mu.Unlock()
 		return nil, "", ErrAgentBusy
-	}
-	if !options.ActiveKind.Valid() {
-		s.mu.Unlock()
-		return nil, "", fmt.Errorf("exclusive step active kind is required")
-	}
-	select {
-	case <-ctx.Done():
-		s.mu.Unlock()
-		return nil, "", ctx.Err()
-	default:
 	}
 	stepCtx, cancel := context.WithCancel(ctx)
 	s.runSeq++
 	runID := uuid.NewString()
 	stepID := uuid.NewString()
 	startedAt := time.Now().UTC()
+	mode := RunModeTurn
+	if options.GoalLoop {
+		mode = RunModeGoalLoop
+	}
 	s.active = &exclusiveRunState{
-		sequence:   s.runSeq,
-		mode:       runModeFromActiveKind(options.ActiveKind),
-		activeKind: options.ActiveKind,
-		cancel:     cancel,
-		runID:      runID,
-		stepID:     stepID,
-		startedAt:  startedAt,
+		sequence:  s.runSeq,
+		mode:      mode,
+		cancel:    cancel,
+		runID:     runID,
+		stepID:    stepID,
+		startedAt: startedAt,
 	}
 	s.mu.Unlock()
 
-	if snapshot := s.Snapshot(); snapshot != nil && s.engine.cfg.StepLifecycle != nil {
-		if err := s.engine.cfg.StepLifecycle.StepBegan(context.Background(), stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionBegan, *snapshot)); err != nil {
-			finished := s.snapshotWithFinishedAt(time.Now().UTC(), RunStatusFailed)
-			s.beginTerminalPublication()
-			if options.EmitRunState {
-				state := &RunState{Lifecycle: IdleRunLifecycle()}
-				if finished != nil {
-					mode := runModeFromActiveKind(finished.ActiveKind)
-					state.Lifecycle = FinishedRunLifecycle(mode)
-					state.RunID = finished.RunID
-					state.ActiveKind = finished.ActiveKind
-					state.Status = finished.Status
-					state.StartedAt = finished.StartedAt
-					state.FinishedAt = finished.FinishedAt
-				}
-				_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: state}))
-			}
-			if finished != nil {
-				if endErr := s.engine.cfg.StepLifecycle.StepEnded(context.Background(), stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *finished)); endErr != nil {
-					err = errors.Join(err, fmt.Errorf("publish start-failed step ended: %w", endErr))
-				}
-			}
-			s.finishTerminalPublication()
-			if clearErr := s.engine.store.ClearPendingModelRecovery(); clearErr != nil {
-				err = errors.Join(err, fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr))
-			}
-			return nil, "", err
-		}
+	if err := s.engine.store.MarkInFlight(true); err != nil {
+		s.end()
+		return nil, "", err
 	}
 	return stepCtx, stepID, nil
 }
@@ -268,30 +232,16 @@ func (s *defaultExclusiveStepLifecycle) end() {
 	s.mu.Unlock()
 }
 
-func (s *defaultExclusiveStepLifecycle) beginTerminalPublication() {
-	s.mu.Lock()
-	s.active = nil
-	s.terminalPublishing = true
-	s.mu.Unlock()
-}
-
-func (s *defaultExclusiveStepLifecycle) finishTerminalPublication() {
-	s.mu.Lock()
-	s.terminalPublishing = false
-	s.mu.Unlock()
-}
-
 func (s *defaultExclusiveStepLifecycle) snapshotLocked() *RunSnapshot {
 	if s.active == nil || s.active.runID == "" {
 		return nil
 	}
 	return &RunSnapshot{
-		RunID:      s.active.runID,
-		StepID:     s.active.stepID,
-		Status:     RunStatusRunning,
-		ActiveKind: s.active.activeKind,
-		GoalLoop:   s.active.activeKind == ActiveKindGoalLoop,
-		StartedAt:  s.active.startedAt,
+		RunID:     s.active.runID,
+		StepID:    s.active.stepID,
+		Status:    RunStatusRunning,
+		GoalLoop:  s.active.mode == RunModeGoalLoop,
+		StartedAt: s.active.startedAt,
 	}
 }
 
@@ -305,32 +255,10 @@ func (s *defaultExclusiveStepLifecycle) snapshotWithFinishedAt(finishedAt time.T
 		RunID:      s.active.runID,
 		StepID:     s.active.stepID,
 		Status:     status,
-		ActiveKind: s.active.activeKind,
-		GoalLoop:   s.active.activeKind == ActiveKindGoalLoop,
+		GoalLoop:   s.active.mode == RunModeGoalLoop,
 		StartedAt:  s.active.startedAt,
 		FinishedAt: finishedAt,
 	}
-}
-
-func stepLifecycleSnapshot(sessionID string, transition StepLifecycleTransition, snapshot RunSnapshot) StepLifecycleSnapshot {
-	return StepLifecycleSnapshot{
-		SessionID:   sessionID,
-		RunID:       snapshot.RunID,
-		StepID:      snapshot.StepID,
-		ActiveKind:  snapshot.ActiveKind,
-		Transition:  transition,
-		Status:      snapshot.Status,
-		StartedAt:   snapshot.StartedAt,
-		FinishedAt:  snapshot.FinishedAt,
-		PublishedAt: time.Now().UTC(),
-	}
-}
-
-func runModeFromActiveKind(kind ActiveKind) RunMode {
-	if kind == ActiveKindGoalLoop {
-		return RunModeGoalLoop
-	}
-	return RunModeTurn
 }
 
 func cloneRunSnapshot(snapshot *RunSnapshot) *RunSnapshot {

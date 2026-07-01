@@ -443,7 +443,7 @@ func persistedMainViewComparable(t *testing.T, store *session.Store, scan *Persi
 		CommittedEntryCount:            scan.TotalEntries(),
 		ParentSessionID:                meta.ParentSessionID,
 		LastCommittedAssistantResponse: scan.LastCommittedAssistantFinalAnswer(),
-		ActiveRun:                      nil,
+		ActiveRun:                      comparablePersistedRunView(t, store),
 	}
 }
 
@@ -460,6 +460,28 @@ func mustScanPersistedTranscript(t *testing.T, store *session.Store) *PersistedT
 
 func comparableRuntimeRunView(run *RunSnapshot) *promptCacheComparableRunView {
 	if run == nil {
+		return nil
+	}
+	finishedAt := ""
+	if !run.FinishedAt.IsZero() {
+		finishedAt = run.FinishedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return &promptCacheComparableRunView{
+		RunID:      run.RunID,
+		StepID:     run.StepID,
+		Status:     string(run.Status),
+		StartedAt:  run.StartedAt.UTC().Format(time.RFC3339Nano),
+		FinishedAt: finishedAt,
+	}
+}
+
+func comparablePersistedRunView(t *testing.T, store *session.Store) *promptCacheComparableRunView {
+	t.Helper()
+	run, err := store.LatestRun()
+	if err != nil {
+		t.Fatalf("latest run: %v", err)
+	}
+	if run == nil || run.Status != session.RunStatusRunning {
 		return nil
 	}
 	finishedAt := ""

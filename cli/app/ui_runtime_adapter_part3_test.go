@@ -346,7 +346,7 @@ func TestApplyRuntimeTranscriptPageRejectsStaleAuthoritativePageWhileDeferredCom
 	client := &runtimeControlFakeClient{}
 	m := newProjectedClosedUIModel(client)
 	m.sessionID = "session-1"
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.sawAssistantDelta = true
 	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 0, Entries: nil, Ongoing: "done"})
 

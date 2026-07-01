@@ -101,11 +101,15 @@ func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *cl
 	}
 }
 
+type runtimeQueueUserMessageWithClientRequestID interface {
+	QueueUserMessageWithClientRequestID(text string, clientRequestID string) (clientui.QueuedUserMessage, error)
+}
+
 func queueRuntimeUserMessage(client clientui.RuntimeClient, text string, clientRequestID string) (clientui.QueuedUserMessage, error) {
-	return client.QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest{
-		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: clientRequestID},
-		Text:         text,
-	})
+	if queueClient, ok := client.(runtimeQueueUserMessageWithClientRequestID); ok {
+		return queueClient.QueueUserMessageWithClientRequestID(text, clientRequestID)
+	}
+	return client.QueueUserMessage(text)
 }
 
 func (m *uiModel) queueInjectedInput(text string) tea.Cmd {
@@ -135,7 +139,7 @@ func (c uiInputController) queueOrStartSubmission(text string) (tea.Model, tea.C
 	} else {
 		m.resetPromptHistoryNavigation()
 	}
-	if m.blocksRuntimeInput() {
+	if m.isBusy() {
 		return m, nil
 	}
 	return c.flushQueuedInputs(queueDrainOne)
@@ -283,7 +287,7 @@ func (c uiInputController) flushQueuedInputs(mode queueDrainMode) (tea.Model, te
 
 func (c uiInputController) resumeQueuedInputsAfterIdleRuntime() tea.Cmd {
 	m := c.model
-	if m == nil || m.blocksRuntimeInput() || m.ask.hasCurrent() ||
+	if m == nil || m.isBusy() || m.ask.hasCurrent() ||
 		m.isInputSubmitLocked() ||
 		m.pendingQueuedDrainAfterHydration || m.processList.actionInFlight {
 		return nil
@@ -325,7 +329,7 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 }
 
 func (m *uiModel) shouldContinueQueuedInputAutoDrain() bool {
-	if len(m.queued) == 0 || m.blocksRuntimeInput() ||
+	if len(m.queued) == 0 || m.isBusy() ||
 		m.isInputSubmitLocked() ||
 		m.exitAction != UIActionNone || m.ask.hasCurrent() || m.processList.actionInFlight {
 		return false
@@ -524,7 +528,7 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 		if approvalCommentaryAnswer != nil {
 			return m, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer)
 		}
-		if !m.blocksRuntimeInput() && !m.isInputSubmitLocked() &&
+		if !m.isBusy() && !m.isInputSubmitLocked() &&
 			!m.injectedQueueBlocksDrain() {
 			return m, c.startQueuedInjectionSubmission()
 		}
@@ -558,7 +562,7 @@ func (c uiInputController) handleInjectedQueueDiscardDone(msg injectedQueueDisca
 		m.removePendingInjectedByID(item.LocalID)
 		m.removePendingInjectedByID(item.ServerID)
 		m.removeInjectedQueueItemAt(index)
-		if !m.blocksRuntimeInput() && !m.isInputSubmitLocked() &&
+		if !m.isBusy() && !m.isInputSubmitLocked() &&
 			!m.injectedQueueBlocksDrain() {
 			return m, c.startQueuedInjectionSubmission()
 		}
