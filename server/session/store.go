@@ -334,6 +334,17 @@ func (s *Store) ClearPendingModelRecovery() error {
 	})
 }
 
+func (s *Store) ClearPendingModelRecoveryForStep(stepID string) error {
+	current := s.Meta().PendingModelRecovery
+	if current == nil || strings.TrimSpace(current.StepID) != strings.TrimSpace(stepID) {
+		return nil
+	}
+	consumed := clonePendingModelRecovery(current)
+	return s.persistPendingModelRecoveryEvent(eventModelRecoveryConsumed, consumed.StepID, consumed, func() {
+		s.meta.PendingModelRecovery = nil
+	})
+}
+
 func (s *Store) DiscardPendingModelRecoveryCandidate() error {
 	current := s.Meta().PendingModelRecovery
 	if current == nil {

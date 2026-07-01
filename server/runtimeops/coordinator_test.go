@@ -435,6 +435,110 @@ func TestCoordinatorCommittedRuntimeAcceptanceWinsLateCancel(t *testing.T) {
 	assertState(t, coord.Snapshot("session-1", mustVersion(t, 12), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
 }
 
+func TestCoordinatorCommittedAttemptErrorIsNotRerun(t *testing.T) {
+	coord := NewCoordinator()
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-committed-error"}
+	var calls atomic.Int32
+	run := func(context.Context, Attempt) (string, error) {
+		calls.Add(1)
+		coord.RecordUserMessageFlushed("session-1", ref)
+		return "accepted", errRecorderTest
+	}
+
+	resp, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, run)
+	if !errors.Is(err, errRecorderTest) || resp != "accepted" {
+		t.Fatalf("first committed error = (%q, %v), want accepted recorder error", resp, err)
+	}
+	resp, err = Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, run)
+	if !errors.Is(err, errRecorderTest) || resp != "accepted" {
+		t.Fatalf("retry committed error = (%q, %v), want cached accepted recorder error", resp, err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("committed error calls = %d, want 1", got)
+	}
+	assertState(t, coord.Snapshot("session-1", mustVersion(t, 13), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationCommitted)
+}
+
+func TestCoordinatorSubmittedAttemptErrorIsNotRerun(t *testing.T) {
+	coord := NewCoordinator()
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: "queue-submitted-error"}
+	var calls atomic.Int32
+	run := func(context.Context, Attempt) (string, error) {
+		calls.Add(1)
+		coord.RecordQueuedMessageSubmitted("session-1", ref)
+		return "submitted", errRecorderTest
+	}
+
+	resp, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, run)
+	if !errors.Is(err, errRecorderTest) || resp != "submitted" {
+		t.Fatalf("first submitted error = (%q, %v), want submitted recorder error", resp, err)
+	}
+	resp, err = Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, run)
+	if !errors.Is(err, errRecorderTest) || resp != "submitted" {
+		t.Fatalf("retry submitted error = (%q, %v), want cached submitted recorder error", resp, err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("submitted error calls = %d, want 1", got)
+	}
+	assertState(t, coord.Snapshot("session-1", mustVersion(t, 14), []clientui.RuntimeOperationRef{ref}), ref, clientui.RuntimeInputReconciliationSubmitted)
+}
+
+func TestCoordinatorPrunesCommittedAttemptErrorAfterTTL(t *testing.T) {
+	now := time.Date(2026, 6, 30, 16, 0, 0, 0, time.UTC)
+	coord := NewCoordinator(WithTTL(time.Minute), WithNow(func() time.Time { return now }))
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-committed-error-ttl"}
+	var calls atomic.Int32
+	run := func(context.Context, Attempt) (string, error) {
+		calls.Add(1)
+		coord.RecordUserMessageFlushed("session-1", ref)
+		return "accepted", errRecorderTest
+	}
+
+	resp, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, run)
+	if !errors.Is(err, errRecorderTest) || resp != "accepted" {
+		t.Fatalf("first committed error = (%q, %v), want accepted recorder error", resp, err)
+	}
+	now = now.Add(2 * time.Minute)
+	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "trigger-ttl-prune"})
+	resp, err = Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
+		calls.Add(1)
+		return "fresh", nil
+	})
+	if err != nil || resp != "fresh" {
+		t.Fatalf("post-ttl committed error retry = (%q, %v), want fresh nil", resp, err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("committed error calls = %d, want cache evicted and rerun", got)
+	}
+}
+
+func TestCoordinatorPrunesSubmittedAttemptErrorByCapacity(t *testing.T) {
+	coord := NewCoordinator(WithLimit(1), WithTTL(time.Hour))
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, QueueItemID: "queue-submitted-error-capacity"}
+	var calls atomic.Int32
+	run := func(context.Context, Attempt) (string, error) {
+		calls.Add(1)
+		coord.RecordQueuedMessageSubmitted("session-1", ref)
+		return "submitted", errRecorderTest
+	}
+
+	resp, err := Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, run)
+	if !errors.Is(err, errRecorderTest) || resp != "submitted" {
+		t.Fatalf("first submitted error = (%q, %v), want submitted recorder error", resp, err)
+	}
+	coord.RecordCommitted("session-1", clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "trigger-capacity-prune"})
+	resp, err = Do(coord, context.Background(), "session-1", ref, "same", func(a string, b string) bool { return a == b }, func(context.Context, Attempt) (string, error) {
+		calls.Add(1)
+		return "fresh", nil
+	})
+	if err != nil || resp != "fresh" {
+		t.Fatalf("post-capacity submitted error retry = (%q, %v), want fresh nil", resp, err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("submitted error calls = %d, want cache evicted and rerun", got)
+	}
+}
+
 func TestCoordinatorPrunesExpiredTombstonesBeforeCapacityCheck(t *testing.T) {
 	now := time.Date(2026, 6, 30, 15, 0, 0, 0, time.UTC)
 	coord := NewCoordinator(WithLimit(1), WithTTL(time.Minute), WithNow(func() time.Time { return now }))

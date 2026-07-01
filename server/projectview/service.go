@@ -339,7 +339,19 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 			return serverapi.ProjectWorkspaceUnlinkResponse{}, err
 		}
 	}
-	blockers, err := s.metadata.UnlinkProjectWorkspaceWithPreflightBlockers(ctx, req.ProjectID, req.WorkspaceID, preflightBlockers)
+	var runtimeBlocker metadata.WorkspaceUnlinkRuntimeBlocker
+	if len(preflightBlockers) == 0 {
+		runtimeBlocker = func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+			release := s.blockSessionRuns(sessionIDs)
+			blockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
+			if err != nil {
+				release()
+				return nil, nil, err
+			}
+			return blockers, release, nil
+		}
+	}
+	blockers, err := s.metadata.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, req.ProjectID, req.WorkspaceID, preflightBlockers, runtimeBlocker)
 	if err != nil {
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
 	}
@@ -395,7 +407,19 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 			return serverapi.ProjectDeleteResponse{}, err
 		}
 	}
-	blockers, err := s.metadata.DeleteProjectWithPreflightBlockers(ctx, projectID, preflightBlockers, func(artifact metadata.ProjectSessionArtifact, remove bool) error {
+	var runtimeBlocker metadata.ProjectDeleteRuntimeBlocker
+	if len(preflightBlockers) == 0 {
+		runtimeBlocker = func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error) {
+			release := s.blockSessionRuns(sessionIDs)
+			blockers, err := s.projectActiveSessionBlockers(ctx, sessionIDs)
+			if err != nil {
+				release()
+				return nil, nil, err
+			}
+			return blockers, release, nil
+		}
+	}
+	blockers, err := s.metadata.DeleteProjectWithRuntimeBlockers(ctx, projectID, preflightBlockers, runtimeBlocker, func(artifact metadata.ProjectSessionArtifact, remove bool) error {
 		return deleteSessionArtifact(s.metadata.PersistenceRoot(), projectID, artifact.ArtifactRelpath, remove)
 	})
 	if err != nil {

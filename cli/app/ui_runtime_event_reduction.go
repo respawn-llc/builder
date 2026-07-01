@@ -176,8 +176,14 @@ func (m *uiModel) shouldRestoreActiveSubmitAfterInterrupt() (bool, bool) {
 		case clientui.RuntimeInputReconciliationCanceledNotCommitted, clientui.RuntimeInputReconciliationFailedWithRestore:
 			return true, false
 		case clientui.RuntimeInputReconciliationUnknown, clientui.RuntimeInputReconciliationEvicted:
+			if m.activeSubmit.flushed {
+				return false, false
+			}
 			return true, true
 		}
+	}
+	if m.activeSubmit.flushed {
+		return false, false
 	}
 	return true, true
 }

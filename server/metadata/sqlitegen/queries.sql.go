@@ -39,6 +39,26 @@ func (q *Queries) AcquireWorkspaceRegistrationLock(ctx context.Context) (int64, 
 	return result.RowsAffected()
 }
 
+const acquireWorkspaceUnlinkWriteLock = `-- name: AcquireWorkspaceUnlinkWriteLock :execrows
+UPDATE workspaces
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE project_id = ?1
+  AND id = ?2
+`
+
+type AcquireWorkspaceUnlinkWriteLockParams struct {
+	ProjectID   string
+	WorkspaceID string
+}
+
+func (q *Queries) AcquireWorkspaceUnlinkWriteLock(ctx context.Context, arg AcquireWorkspaceUnlinkWriteLockParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, acquireWorkspaceUnlinkWriteLock, arg.ProjectID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const allocateProjectTaskSequence = `-- name: AllocateProjectTaskSequence :one
 UPDATE projects
 SET

@@ -94,12 +94,13 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 			err = errors.Join(err, fmt.Errorf("publish step ended: %w", publishErr))
 		}
 	}
-	s.finishTerminalPublication()
-	if clearErr := s.engine.store.ClearPendingModelRecovery(); clearErr != nil {
+	if clearErr := s.engine.store.ClearPendingModelRecoveryForStep(stepID); clearErr != nil {
 		wrapped := fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr)
 		_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventInFlightClearFailed, StepID: stepID, Error: wrapped.Error()}))
 		err = errors.Join(err, wrapped)
-	} else {
+	}
+	s.finishTerminalPublication()
+	if !errors.Is(err, errPendingModelRecoveryClear) {
 		if status == RunStatusCompleted && snapshot != nil && snapshot.ActiveKind == ActiveKindUserTurn {
 			s.engine.resumeSuspendedGoalAfterSuccessfulUserTurn()
 		}
@@ -252,10 +253,10 @@ func (s *defaultExclusiveStepLifecycle) begin(ctx context.Context, options exclu
 					err = errors.Join(err, fmt.Errorf("publish start-failed step ended: %w", endErr))
 				}
 			}
-			s.finishTerminalPublication()
-			if clearErr := s.engine.store.ClearPendingModelRecovery(); clearErr != nil {
+			if clearErr := s.engine.store.ClearPendingModelRecoveryForStep(stepID); clearErr != nil {
 				err = errors.Join(err, fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr))
 			}
+			s.finishTerminalPublication()
 			return nil, "", err
 		}
 	}

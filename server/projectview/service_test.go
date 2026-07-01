@@ -229,6 +229,32 @@ func TestServiceDeleteProjectRechecksActiveSessionAfterRunBlocker(t *testing.T) 
 	}
 }
 
+func TestServiceDeleteProjectBlocksSessionCreatedAfterPreflightList(t *testing.T) {
+	store, cfg, binding := newProjectViewMetadataStore(t)
+	var created *session.Store
+	runtimeState := &projectViewRuntimeState{active: map[string]bool{}}
+	runtimeState.beforeFirstBlock = func() {
+		created = createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "late-active")
+		runtimeState.active[created.Meta().SessionID] = true
+	}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
+
+	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+	if err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if deleted.Deleted || len(deleted.Blockers) != 1 || deleted.Blockers[0].Code != "active_sessions" {
+		t.Fatalf("delete response = %+v, want active_sessions blocker from transaction-current session list", deleted)
+	}
+	if created == nil {
+		t.Fatal("late session was not created by test hook")
+	}
+	if len(runtimeState.blocked) == 0 || runtimeState.blocked[len(runtimeState.blocked)-1] != created.Meta().SessionID {
+		t.Fatalf("blocked sessions = %+v, want late session %q blocked inside delete transaction", runtimeState.blocked, created.Meta().SessionID)
+	}
+}
+
 func TestServiceDeleteProjectDoesNotDependOnSessionInFlightMetadata(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
 	sessionDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
@@ -639,6 +665,36 @@ func TestMetadataServiceUnlinkWorkspaceRechecksActiveSessionAfterRunBlocker(t *t
 	}
 }
 
+func TestMetadataServiceUnlinkWorkspaceBlocksSessionAttachedAfterPreflightList(t *testing.T) {
+	store, cfg, binding := newProjectViewMetadataStore(t)
+	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
+	var created *session.Store
+	runtimeState := &projectViewRuntimeState{active: map[string]bool{}}
+	runtimeState.beforeFirstBlock = func() {
+		created = createProjectViewSession(t, store, cfg, binding.ProjectID, attached.CanonicalRoot, "late-workspace-active")
+		runtimeState.active[created.Meta().SessionID] = true
+	}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
+
+	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
+		ProjectID:   binding.ProjectID,
+		WorkspaceID: attached.WorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
+	}
+	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
+		t.Fatalf("unlink response = %+v, want active_sessions blocker from transaction-current session list", unlinked)
+	}
+	if created == nil {
+		t.Fatal("late workspace session was not created by test hook")
+	}
+	if len(runtimeState.blocked) == 0 || runtimeState.blocked[len(runtimeState.blocked)-1] != created.Meta().SessionID {
+		t.Fatalf("blocked sessions = %+v, want late session %q blocked inside unlink transaction", runtimeState.blocked, created.Meta().SessionID)
+	}
+}
+
 func TestMetadataServiceUnlinkWorkspaceDoesNotDependOnSessionInFlightMetadata(t *testing.T) {
 	store, cfg, binding := newProjectViewMetadataStore(t)
 	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
@@ -930,12 +986,18 @@ func createProjectViewSession(t testing.TB, store *metadata.Store, cfg config.Ap
 }
 
 type projectViewRuntimeState struct {
-	active          map[string]bool
-	blocked         []string
-	activateOnBlock bool
+	active             map[string]bool
+	blocked            []string
+	activateOnBlock    bool
+	beforeFirstBlock   func()
+	beforeFirstBlocked bool
 }
 
 func (s *projectViewRuntimeState) BlockSessionRuns(sessionIDs []string) func() {
+	if s.beforeFirstBlock != nil && !s.beforeFirstBlocked {
+		s.beforeFirstBlocked = true
+		s.beforeFirstBlock()
+	}
 	s.blocked = append(s.blocked, sessionIDs...)
 	if s.activateOnBlock {
 		if s.active == nil {

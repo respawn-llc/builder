@@ -92,6 +92,7 @@ type operationEntry struct {
 	cancel      context.CancelFunc
 	completed   bool
 	successful  bool
+	committed   bool
 	active      bool
 	completedAt time.Time
 	createdAt   time.Time
@@ -212,12 +213,12 @@ func Do[Req any, Resp any](
 			coord.mu.Unlock()
 			select {
 			case <-done:
-				if existing.successful {
+				if existing.successful || existing.committed {
 					resp, ok := existing.resp.(Resp)
 					if !ok {
 						return zero, fmt.Errorf("runtime operation response type mismatch for %s", key)
 					}
-					return resp, nil
+					return resp, existing.err
 				}
 				continue
 			case <-ctx.Done():
@@ -239,7 +240,8 @@ func Do[Req any, Resp any](
 
 		coord.mu.Lock()
 		_, tombstoned := ledger.tombstones[key]
-		if tombstoned && err == nil {
+		committedSideEffect := ledger.operationHasCommittedSideEffectLocked(key)
+		if tombstoned && err == nil && !committedSideEffect {
 			resp = zero
 			err = ErrOperationCanceled
 		}
@@ -247,12 +249,16 @@ func Do[Req any, Resp any](
 		entry.err = err
 		entry.completed = true
 		entry.successful = err == nil
+		entry.committed = committedSideEffect
 		entry.completedAt = coord.now()
 		if err != nil {
-			delete(ledger.operations, key)
-			if tombstoned {
+			if committedSideEffect {
+				delete(ledger.failedReqs, key)
+			} else if tombstoned {
+				delete(ledger.operations, key)
 				delete(ledger.failedReqs, key)
 			} else {
+				delete(ledger.operations, key)
 				ledger.failedReqs[key] = req
 			}
 		} else {
@@ -500,7 +506,7 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 			record := l.records[key]
 			delete(l.records, key)
 			delete(l.terminal, key)
-			if entry := l.operations[key]; entry != nil && entry.successful && entry.completed {
+			if entry := l.operations[key]; entry != nil && entry.completed && (entry.successful || entry.committed) {
 				delete(l.operations, key)
 			}
 			delete(l.failedReqs, key)
@@ -516,7 +522,7 @@ func (l *sessionLedger) pruneLocked(limit int, ttl time.Duration, now time.Time)
 		record := l.records[key]
 		delete(l.records, key)
 		delete(l.terminal, key)
-		if entry := l.operations[key]; entry != nil && entry.successful && entry.completed {
+		if entry := l.operations[key]; entry != nil && entry.completed && (entry.successful || entry.committed) {
 			delete(l.operations, key)
 		}
 		delete(l.failedReqs, key)
@@ -547,6 +553,22 @@ func (l *sessionLedger) nonEvictableLocked(key string) bool {
 		return true
 	}
 	return false
+}
+
+func (l *sessionLedger) operationHasCommittedSideEffectLocked(key string) bool {
+	if l == nil {
+		return false
+	}
+	record, ok := l.records[key]
+	if !ok {
+		return false
+	}
+	switch record.State {
+	case clientui.RuntimeInputReconciliationCommitted, clientui.RuntimeInputReconciliationSubmitted:
+		return true
+	default:
+		return false
+	}
 }
 
 func (l *sessionLedger) markTerminalEvictableLocked(key string, now time.Time) {

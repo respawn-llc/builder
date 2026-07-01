@@ -2505,6 +2505,12 @@ DELETE FROM workspaces
 WHERE project_id = sqlc.arg(project_id)
   AND id = sqlc.arg(workspace_id);
 
+-- name: AcquireWorkspaceUnlinkWriteLock :execrows
+UPDATE workspaces
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE project_id = sqlc.arg(project_id)
+  AND id = sqlc.arg(workspace_id);
+
 -- name: ListWorkspaceSessionIDs :many
 SELECT id
 FROM sessions

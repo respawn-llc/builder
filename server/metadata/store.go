@@ -421,6 +421,9 @@ type ProjectSessionArtifact struct {
 	ArtifactRelpath string
 }
 
+type ProjectDeleteRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectDeleteBlocker, func(), error)
+type WorkspaceUnlinkRuntimeBlocker func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error)
+
 func projectDeleteBlockersFromCounts(counts sqlitegen.GetProjectDeleteBlockerCountsRow) []serverapi.ProjectDeleteBlocker {
 	blockers := []serverapi.ProjectDeleteBlocker{}
 	add := func(code string, message string, count int64) {
@@ -439,6 +442,10 @@ func (s *Store) DeleteProject(ctx context.Context, projectID string, deleteArtif
 }
 
 func (s *Store) DeleteProjectWithPreflightBlockers(ctx context.Context, projectID string, preflightBlockers []serverapi.ProjectDeleteBlocker, deleteArtifact func(ProjectSessionArtifact, bool) error) ([]serverapi.ProjectDeleteBlocker, error) {
+	return s.DeleteProjectWithRuntimeBlockers(ctx, projectID, preflightBlockers, nil, deleteArtifact)
+}
+
+func (s *Store) DeleteProjectWithRuntimeBlockers(ctx context.Context, projectID string, preflightBlockers []serverapi.ProjectDeleteBlocker, runtimeBlocker ProjectDeleteRuntimeBlocker, deleteArtifact func(ProjectSessionArtifact, bool) error) ([]serverapi.ProjectDeleteBlocker, error) {
 	if s == nil || s.db == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -458,6 +465,22 @@ func (s *Store) DeleteProjectWithPreflightBlockers(ctx context.Context, projectI
 	}
 	if locked == 0 {
 		return nil, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
+	}
+	releaseRuntimeBlocker := func() {}
+	if runtimeBlocker != nil {
+		sessionIDs, err := q.ListProjectSessionIDs(ctx, trimmedProjectID)
+		if err != nil {
+			return nil, fmt.Errorf("list project sessions for runtime blockers: %w", err)
+		}
+		runtimeBlockers, release, err := runtimeBlocker(ctx, sessionIDs)
+		if release != nil {
+			releaseRuntimeBlocker = release
+			defer releaseRuntimeBlocker()
+		}
+		if err != nil {
+			return nil, err
+		}
+		preflightBlockers = append(append([]serverapi.ProjectDeleteBlocker{}, preflightBlockers...), runtimeBlockers...)
 	}
 	counts, err := q.GetProjectDeleteBlockerCounts(ctx, trimmedProjectID)
 	if err != nil {
@@ -718,6 +741,10 @@ func (s *Store) UnlinkProjectWorkspace(ctx context.Context, projectID string, wo
 }
 
 func (s *Store) UnlinkProjectWorkspaceWithPreflightBlockers(ctx context.Context, projectID string, workspaceID string, preflightBlockers []serverapi.ProjectWorkspaceUnlinkBlocker) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
+	return s.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, projectID, workspaceID, preflightBlockers, nil)
+}
+
+func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, projectID string, workspaceID string, preflightBlockers []serverapi.ProjectWorkspaceUnlinkBlocker, runtimeBlocker WorkspaceUnlinkRuntimeBlocker) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -754,6 +781,16 @@ func (s *Store) UnlinkProjectWorkspaceWithPreflightBlockers(ctx context.Context,
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	locked, err := q.AcquireWorkspaceUnlinkWriteLock(ctx, sqlitegen.AcquireWorkspaceUnlinkWriteLockParams{
+		ProjectID:   trimmedProjectID,
+		WorkspaceID: trimmedWorkspaceID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("lock workspace unlink: %w", err)
+	}
+	if locked == 0 {
+		return nil, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+	}
 	workspace, err = q.GetWorkspaceByID(ctx, trimmedWorkspaceID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -763,6 +800,22 @@ func (s *Store) UnlinkProjectWorkspaceWithPreflightBlockers(ctx context.Context,
 	}
 	if strings.TrimSpace(workspace.ProjectID) != trimmedProjectID {
 		return nil, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+	}
+	releaseRuntimeBlocker := func() {}
+	if runtimeBlocker != nil {
+		sessionIDs, err := q.ListWorkspaceSessionIDs(ctx, sql.NullString{String: trimmedWorkspaceID, Valid: true})
+		if err != nil {
+			return nil, fmt.Errorf("list workspace sessions for runtime blockers: %w", err)
+		}
+		runtimeBlockers, release, err := runtimeBlocker(ctx, sessionIDs)
+		if release != nil {
+			releaseRuntimeBlocker = release
+			defer releaseRuntimeBlocker()
+		}
+		if err != nil {
+			return nil, err
+		}
+		preflightBlockers = append(append([]serverapi.ProjectWorkspaceUnlinkBlocker{}, preflightBlockers...), runtimeBlockers...)
 	}
 	blockers, err = workspaceUnlinkBlockersWithQueries(ctx, q, trimmedProjectID, workspace)
 	if err != nil {

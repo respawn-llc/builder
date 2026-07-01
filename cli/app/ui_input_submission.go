@@ -133,6 +133,14 @@ func (m *uiModel) markActiveSubmitFlushed(evt clientui.Event) {
 			return
 		}
 		m.activeSubmit.stepID = strings.TrimSpace(evt.StepID)
+	case clientui.EventUserMessageFlushed:
+		if strings.TrimSpace(m.activeSubmit.stepID) != "" && strings.TrimSpace(evt.StepID) != strings.TrimSpace(m.activeSubmit.stepID) {
+			return
+		}
+		if strings.TrimSpace(evt.UserMessage) != "" && strings.TrimSpace(evt.UserMessage) != strings.TrimSpace(m.activeSubmit.text) {
+			return
+		}
+		m.activeSubmit.flushed = true
 	}
 }
 

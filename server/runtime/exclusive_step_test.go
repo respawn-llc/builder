@@ -711,6 +711,30 @@ func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t
 	}
 }
 
+func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
+
+	if err := lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(_ context.Context, stepID string) error {
+		if err := eng.markProviderVisibleModelRecovery(stepID); err != nil {
+			return err
+		}
+		if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "successor", StepID: "successor-step", Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if store.Meta().PendingModelRecovery == nil {
+		t.Fatal("successor pending recovery was cleared by previous step")
+	}
+	if got := store.Meta().PendingModelRecovery.StepID; got != "successor-step" {
+		t.Fatalf("pending recovery step = %q, want successor-step", got)
+	}
+}
+
 func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{{

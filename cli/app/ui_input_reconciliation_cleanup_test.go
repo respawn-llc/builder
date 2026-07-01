@@ -41,14 +41,33 @@ func TestInterruptCleanupIgnoresTranscriptTextFlushWithoutReconciliation(t *test
 	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-1"}
 	m := modelWithActiveSubmitReconciliation(ref, clientui.RuntimeInputReconciliationUnknown)
 	m.activeSubmit.text = "same visible text"
+	m.activeSubmit.stepID = "step-1"
 	m.markActiveSubmitFlushed(clientui.Event{
 		Kind:        clientui.EventUserMessageFlushed,
+		StepID:      "step-2",
 		UserMessage: "same visible text",
 	})
 
 	restore, ambiguous := m.shouldRestoreActiveSubmitAfterInterrupt()
 	if !restore || !ambiguous {
-		t.Fatalf("restore=%t ambiguous=%t, want text flush ignored and typed reconciliation to preserve ambiguous input", restore, ambiguous)
+		t.Fatalf("restore=%t ambiguous=%t, want mismatched-step flush ignored and typed reconciliation to preserve ambiguous input", restore, ambiguous)
+	}
+}
+
+func TestInterruptCleanupDoesNotRestoreObservedFlushedSubmitWithoutReconciliation(t *testing.T) {
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-1"}
+	m := modelWithActiveSubmitReconciliation(ref, clientui.RuntimeInputReconciliationUnknown)
+	m.activeSubmit.text = "same visible text"
+	m.activeSubmit.stepID = "step-1"
+	m.markActiveSubmitFlushed(clientui.Event{
+		Kind:        clientui.EventUserMessageFlushed,
+		StepID:      "step-1",
+		UserMessage: "same visible text",
+	})
+
+	restore, ambiguous := m.shouldRestoreActiveSubmitAfterInterrupt()
+	if restore || ambiguous {
+		t.Fatalf("restore=%t ambiguous=%t, want observed flushed submit left unrestored", restore, ambiguous)
 	}
 }
 
