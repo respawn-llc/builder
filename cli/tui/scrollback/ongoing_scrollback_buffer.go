@@ -687,12 +687,29 @@ func (buffer *OngoingScrollbackBufferImpl) clearAssistantStreamStateLocked() {
 func (buffer *OngoingScrollbackBufferImpl) withLiveErasedForStableLocked(writeStable func() error) error {
 	err := error(nil)
 	liveErased := false
+	liveRows := 0
+	stableAnchored := false
+	var liveArea *nativeLiveAreaImpl
 	if liveArea := buffer.liveArea; liveArea != nil {
+		liveRows = liveArea.renderedLines
 		err = liveArea.erasePhysicalLocked()
 		liveErased = err == nil
 	}
+	liveArea = buffer.liveArea
+	if err == nil && writeStable != nil && liveArea != nil {
+		if anchorErr := liveArea.anchorStableOutputLocked(liveRows); anchorErr != nil {
+			err = anchorErr
+		} else if liveRows > 0 {
+			stableAnchored = true
+		}
+	}
 	if err == nil && writeStable != nil {
 		err = writeStable()
+	}
+	if stableAnchored {
+		if releaseErr := liveArea.releaseStableOutputAnchorLocked(); err == nil {
+			err = releaseErr
+		}
 	}
 	if liveArea := buffer.liveArea; liveArea != nil && liveErased {
 		if restoreErr := liveArea.renderPhysicalLocked(); err == nil {
@@ -704,14 +721,31 @@ func (buffer *OngoingScrollbackBufferImpl) withLiveErasedForStableLocked(writeSt
 
 func (buffer *OngoingScrollbackBufferImpl) withLiveErasedForAssistantStreamLocked(writeStable func() error) error {
 	err := error(nil)
+	liveRows := 0
+	stableAnchored := false
+	var liveArea *nativeLiveAreaImpl
 	if liveArea := buffer.liveArea; liveArea != nil {
+		liveRows = liveArea.renderedLines
 		err = liveArea.erasePhysicalLocked()
 		if err == nil {
 			liveArea.pendingPhysicalRender = true
 		}
 	}
+	liveArea = buffer.liveArea
+	if err == nil && writeStable != nil && liveArea != nil {
+		if anchorErr := liveArea.anchorStableOutputLocked(liveRows); anchorErr != nil {
+			err = anchorErr
+		} else if liveRows > 0 {
+			stableAnchored = true
+		}
+	}
 	if err == nil && writeStable != nil {
 		err = writeStable()
+	}
+	if stableAnchored {
+		if releaseErr := liveArea.releaseStableOutputAnchorLocked(); err == nil {
+			err = releaseErr
+		}
 	}
 	return err
 }

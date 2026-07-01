@@ -96,6 +96,7 @@ This repository contains a coding agent focused on output quality, built for pro
 - Do not add request-time sanitizers over persisted conversation/tool items. ANSI stripping and command-output cleanup belong in shell post-processing before tool results are persisted, not in model request assembly.
 - Do not add provider-adapter history shapers in model request serialization. Provider-specific input payload shape must be materialized at transcript/persistence projection boundaries; provider adapters serialize prepared items and fail invalid unprepared items instead of silently dropping, promoting, prefixing, stringifying, or normalizing historical items.
 - Runtime output mutations belong behind the `server/runtime` steer/queue boundary. Do not add ad-hoc appenders, prompt injectors, direct runtime event emitters, or bespoke queue flush paths for model-visible context, transcript rows, tool completions, local diagnostics, or runtime status events. Build typed steering calls; queues store those calls; compaction starts a new active list from compacting output and then steers runtime context into it.
+- When you make server changes that make its contract or api incompatible with existing GUI/TUI clients', don't forget to raise the protocol version in ./shared/protocol/version.json
 
 ## Commit guidelines
 Format: `<type>[!]: [description]`, `!` = breaking change (requiring migration from users of Kent).

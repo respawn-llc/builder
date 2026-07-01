@@ -768,8 +768,10 @@ func TestOngoingScrollbackBufferHeldStreamFlushDoesNotInterleaveLiveFrameBeforeT
 
 	want := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("input")) +
 		liveAreaErasePhysicalSequence(1, 24) +
+		stableOutputAnchorSequence(1, 24) +
 		"hello " + terminalLineBreak +
 		"world" + terminalLineBreak +
+		stableOutputReleaseSequence() +
 		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("input"))
 	if got := out.String(); got != want {
 		t.Fatalf("held stream output = %q, want %q", got, want)
