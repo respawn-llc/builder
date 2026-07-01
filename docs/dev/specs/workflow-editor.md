@@ -144,6 +144,9 @@
 - Save runs server-side impact check for pending graph diff.
 - If a graph diff would remove a node, transition, or edge currently anchoring an active task, pending approval, or unresolved parallel branch, Save is blocked.
 - If a graph diff would change the kind of a node referenced by any task history, Save is blocked. Delete-and-confirm detaches historical node references; kind changes keep the node id and would reinterpret existing placements.
+- Transition invocation metadata may be edited while tasks, pending approvals, or runs exist when the change only affects future work. This includes transition group display name/description and edge approval, context mode/source, and valid prompt template settings.
+- Transition contract changes are blocked while unresolved work references the affected transition branch or can still emit it from the source node. This includes transition source/key changes and edge branch key, target node, parameters, input bindings, and output requirements.
+- Moving an existing edge to a different transition group is blocked when any task history references that edge, because group membership is part of historical branch interpretation.
 - If only backlog/done tasks would lose graph references due to removed nodes or transitions, show confirmation with affected reference counts before applying.
 - Manual task moves are blocked for selected prior-node and `Previous run of this target` continuation context sources.
 - Requested destructive wording pattern: `XXX task references will be detached from the removed graph entity. Proceed?`

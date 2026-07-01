@@ -946,6 +946,48 @@ FROM (
       AND n.kind != 'terminal'
 );
 
+-- name: CountUnresolvedTaskRunsAtWorkflowNode :one
+SELECT CAST(COUNT(DISTINCT r.id) AS INTEGER) AS run_count
+FROM task_run_records r
+JOIN task_records t ON t.id = r.task_id
+JOIN task_node_placements p ON p.id = r.placement_id
+JOIN workflow_nodes n ON n.id = r.node_id
+WHERE t.workflow_id = sqlc.arg(workflow_id)
+  AND r.node_id = sqlc.arg(node_id)
+  AND t.canceled_at_unix_ms = 0
+  AND p.state = 'active'
+  AND n.kind = 'agent'
+  AND (
+      (
+          r.started_at_unix_ms > 0
+          AND r.completed_at_unix_ms = 0
+          AND r.interrupted_at_unix_ms = 0
+      )
+      OR (
+          r.completed_at_unix_ms = 0
+          AND r.interrupted_at_unix_ms > 0
+      )
+      OR (
+          r.automation_requested_at_unix_ms > 0
+          AND r.started_at_unix_ms = 0
+          AND r.completed_at_unix_ms = 0
+          AND r.interrupted_at_unix_ms = 0
+          AND r.waiting_ask_id = ''
+      )
+  );
+
+-- name: CountAllTaskEdgeReferences :one
+SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
+FROM (
+    SELECT te.id
+    FROM task_transition_edges te
+    WHERE te.workflow_edge_id = sqlc.arg(edge_id)
+    UNION ALL
+    SELECT p.id
+    FROM task_node_placements p
+    WHERE p.parallel_branch_edge_id = sqlc.arg(edge_id)
+);
+
 -- name: GetWorkflowGraphActiveWorkPolicyImpact :one
 SELECT
     (

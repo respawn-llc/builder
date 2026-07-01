@@ -320,6 +320,182 @@ func TestWorkflowGraphSaveEditPolicyBlocksTaskReferencedNodeKindChange(t *testin
 	}
 }
 
+func TestWorkflowGraphSaveAllowsTransitionInvocationMetadataWhilePendingApprovalExists(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createApprovalWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	pending := completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
+	if pending.State != "pending_approval" {
+		t.Fatalf("setup transition state = %q, want pending_approval", pending.State)
+	}
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	doneEdge := edgeByKey(t, def, "done")
+	doneGroupID := doneEdge.TransitionGroupID
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+	req.TransitionGroups = mutateWorkflowGraphSaveTransitionGroup(req.TransitionGroups, doneGroupID, func(group *TransitionGroupRecord) {
+		group.DisplayName = "Done when approved"
+		group.Description = "Updated approval copy."
+	})
+	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
+		edge.RequiresApproval = false
+		edge.ContextMode = workflow.ContextModeNewSession
+		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+	})
+
+	result, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph metadata update with pending approval: %v", err)
+	}
+	if !result.Saved || len(result.Blockers) != 0 {
+		t.Fatalf("metadata update with pending approval = %+v, want saved without blockers", result)
+	}
+	approval, err := store.ApproveTransition(ctx, pending.TransitionID)
+	if err != nil {
+		t.Fatalf("ApproveTransition after metadata update: %v", err)
+	}
+	if approval.State != "approved" {
+		t.Fatalf("approval after metadata update = %+v, want original pending snapshot to approve", approval)
+	}
+}
+
+func TestWorkflowGraphSaveAllowsTransitionPromptMetadataWhileRunActive(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	startEdge := edgeByKey(t, def, "start")
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, startEdge.ID, func(edge *EdgeRecord) {
+		edge.PromptTemplate = "Updated prompt for future runs."
+	})
+
+	result, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph prompt update with active run: %v", err)
+	}
+	if !result.Saved || len(result.Blockers) != 0 {
+		t.Fatalf("prompt update with active run = %+v, want saved without blockers", result)
+	}
+}
+
+func TestWorkflowGraphSaveBlocksTransitionContractChangeWhileSourceRunUnresolved(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	doneEdge := edgeByKey(t, def, "done")
+	agentID := workflow.NodeID("node-agent-" + string(workflowID))
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
+		edge.TargetNodeID = agentID
+	})
+
+	result, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph source-run transition contract update: %v", err)
+	}
+	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
+		t.Fatalf("source-run transition contract update = %+v, want active_transition_contract_changed blocker", result)
+	}
+}
+
+func TestWorkflowGraphSaveBlocksTransitionContractChangeWhileSourceRunInterrupted(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
+		t.Fatalf("InterruptRun: %v", err)
+	}
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	doneEdge := edgeByKey(t, def, "done")
+	agentID := workflow.NodeID("node-agent-" + string(workflowID))
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
+		edge.TargetNodeID = agentID
+	})
+
+	result, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph interrupted source-run transition contract update: %v", err)
+	}
+	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
+		t.Fatalf("interrupted source-run transition contract update = %+v, want active_transition_contract_changed blocker", result)
+	}
+}
+
+func TestWorkflowGraphSaveBlocksUnsafeTransitionContractChangeWithPendingApproval(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createApprovalWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	pending := completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
+	if pending.State != "pending_approval" {
+		t.Fatalf("setup transition state = %q, want pending_approval", pending.State)
+	}
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	doneEdge := edgeByKey(t, def, "done")
+	agentID := workflow.NodeID("node-agent-" + string(workflowID))
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
+		edge.TargetNodeID = agentID
+	})
+
+	result, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph unsafe transition contract update: %v", err)
+	}
+	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
+		t.Fatalf("unsafe transition contract update = %+v, want active_transition_contract_changed blocker", result)
+	}
+}
+
+func TestWorkflowGraphSaveBlocksEdgeGroupChangeWithHistoricalReference(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	doneEdge := edgeByKey(t, def, "done")
+	startGroupID := workflow.TransitionGroupID("group-start-" + string(workflowID))
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
+		edge.TransitionGroupID = startGroupID
+	})
+
+	result, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph edge group update: %v", err)
+	}
+	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "task_referenced_edge_group_changed") == 0 {
+		t.Fatalf("edge group update = %+v, want task_referenced_edge_group_changed blocker", result)
+	}
+}
+
 func TestWorkflowPerEntityMutationsUseGraphEditPolicy(t *testing.T) {
 	ctx := context.Background()
 

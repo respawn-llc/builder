@@ -481,6 +481,26 @@ func (q *Queries) CountActiveTaskRunsByWorkspace(ctx context.Context, workspaceI
 	return run_count, err
 }
 
+const countAllTaskEdgeReferences = `-- name: CountAllTaskEdgeReferences :one
+SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
+FROM (
+    SELECT te.id
+    FROM task_transition_edges te
+    WHERE te.workflow_edge_id = ?1
+    UNION ALL
+    SELECT p.id
+    FROM task_node_placements p
+    WHERE p.parallel_branch_edge_id = ?1
+)
+`
+
+func (q *Queries) CountAllTaskEdgeReferences(ctx context.Context, edgeID sql.NullString) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAllTaskEdgeReferences, edgeID)
+	var ref_count int64
+	err := row.Scan(&ref_count)
+	return ref_count, err
+}
+
 const countCurrentTaskNodeAnchorReferences = `-- name: CountCurrentTaskNodeAnchorReferences :one
 SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
@@ -780,6 +800,49 @@ func (q *Queries) CountTasksMissingSourceWorkspaceSnapshot(ctx context.Context, 
 	var task_count int64
 	err := row.Scan(&task_count)
 	return task_count, err
+}
+
+const countUnresolvedTaskRunsAtWorkflowNode = `-- name: CountUnresolvedTaskRunsAtWorkflowNode :one
+SELECT CAST(COUNT(DISTINCT r.id) AS INTEGER) AS run_count
+FROM task_run_records r
+JOIN task_records t ON t.id = r.task_id
+JOIN task_node_placements p ON p.id = r.placement_id
+JOIN workflow_nodes n ON n.id = r.node_id
+WHERE t.workflow_id = ?1
+  AND r.node_id = ?2
+  AND t.canceled_at_unix_ms = 0
+  AND p.state = 'active'
+  AND n.kind = 'agent'
+  AND (
+      (
+          r.started_at_unix_ms > 0
+          AND r.completed_at_unix_ms = 0
+          AND r.interrupted_at_unix_ms = 0
+      )
+      OR (
+          r.completed_at_unix_ms = 0
+          AND r.interrupted_at_unix_ms > 0
+      )
+      OR (
+          r.automation_requested_at_unix_ms > 0
+          AND r.started_at_unix_ms = 0
+          AND r.completed_at_unix_ms = 0
+          AND r.interrupted_at_unix_ms = 0
+          AND r.waiting_ask_id = ''
+      )
+  )
+`
+
+type CountUnresolvedTaskRunsAtWorkflowNodeParams struct {
+	WorkflowID string
+	NodeID     sql.NullString
+}
+
+func (q *Queries) CountUnresolvedTaskRunsAtWorkflowNode(ctx context.Context, arg CountUnresolvedTaskRunsAtWorkflowNodeParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countUnresolvedTaskRunsAtWorkflowNode, arg.WorkflowID, arg.NodeID)
+	var run_count int64
+	err := row.Scan(&run_count)
+	return run_count, err
 }
 
 const countWorkflowNodesByGroup = `-- name: CountWorkflowNodesByGroup :one

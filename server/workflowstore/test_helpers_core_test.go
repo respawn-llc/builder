@@ -211,3 +211,25 @@ func removeWorkflowGraphSaveEdge(edges []EdgeRecord, edgeID workflow.EdgeID) []E
 	}
 	return filtered
 }
+
+func mutateWorkflowGraphSaveEdge(edges []EdgeRecord, edgeID workflow.EdgeID, mutate func(*EdgeRecord)) []EdgeRecord {
+	changed := make([]EdgeRecord, 0, len(edges))
+	for _, edge := range edges {
+		if edge.ID == edgeID {
+			mutate(&edge)
+		}
+		changed = append(changed, edge)
+	}
+	return changed
+}
+
+func mutateWorkflowGraphSaveTransitionGroup(groups []TransitionGroupRecord, groupID workflow.TransitionGroupID, mutate func(*TransitionGroupRecord)) []TransitionGroupRecord {
+	changed := make([]TransitionGroupRecord, 0, len(groups))
+	for _, group := range groups {
+		if group.ID == groupID {
+			mutate(&group)
+		}
+		changed = append(changed, group)
+	}
+	return changed
+}
