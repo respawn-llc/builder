@@ -953,7 +953,7 @@ func (s *Store) DeleteNode(ctx context.Context, nodeID workflow.NodeID) error {
 	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, withoutWorkflowGraphNode(currentGraph, nodeID)); err != nil {
 		return err
 	}
-	refs, err := q.CountTaskNodeReferences(ctx, string(nodeID))
+	refs, err := q.CountCurrentTaskNodeAnchorReferences(ctx, nullableString(string(nodeID)))
 	if err != nil {
 		return err
 	}

@@ -362,6 +362,37 @@ VALUES ('node-a', 'workflow-a', 'start', 'start', 'Start A', '[]'),
 	}
 }
 
+func TestOpenMigratesHistoricalTerminalPlacementsToSuperseded(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 39)
+	if err != nil {
+		t.Fatalf("open test database at version 39: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json) VALUES ('project-terminal-history', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-terminal-history", now)
+	execSeed(t, db, "workflow task", workflowSeedTaskSQL, "task-terminal-history", "link-1", 1, "TRM-1", now, now)
+	execSeed(t, db, "legacy terminal placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms) VALUES ('placement-terminal-history', 'task-terminal-history', 'node-done', 'completed', ?, ?)`, now+1, now+1)
+	execSeed(t, db, "same-timestamp active placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms) VALUES ('placement-active-after-terminal', 'task-terminal-history', 'node-start', 'active', ?, ?)`, now+1, now+1)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 39 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	var terminalState string
+	if err := store.db.QueryRowContext(t.Context(), `SELECT state FROM task_node_placements WHERE id = 'placement-terminal-history'`).Scan(&terminalState); err != nil {
+		t.Fatalf("query migrated terminal placement: %v", err)
+	}
+	if terminalState != "superseded" {
+		t.Fatalf("terminal placement state = %q, want superseded", terminalState)
+	}
+}
+
 func TestOpenMigratesWorkspaceHistorySnapshots(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")

@@ -123,15 +123,28 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 			return ManualMoveResult{}, err
 		}
 	} else {
-		updated, err := q.CompleteActiveManualMoveSourcePlacement(ctx, sqlitegen.CompleteActiveManualMoveSourcePlacementParams{
-			UpdatedAtUnixMs: now,
-			PlacementID:     string(sourcePlacement),
-		})
-		if err != nil {
-			return ManualMoveResult{}, err
-		}
-		if updated != 1 {
-			return ManualMoveResult{}, sql.ErrNoRows
+		if sourceNode.Kind == workflow.NodeKindTerminal {
+			updated, err := q.SupersedeCompletedTerminalManualMoveSourcePlacement(ctx, sqlitegen.SupersedeCompletedTerminalManualMoveSourcePlacementParams{
+				UpdatedAtUnixMs: now,
+				PlacementID:     string(sourcePlacement),
+			})
+			if err != nil {
+				return ManualMoveResult{}, err
+			}
+			if updated != 1 {
+				return ManualMoveResult{}, sql.ErrNoRows
+			}
+		} else {
+			updated, err := q.CompleteActiveManualMoveSourcePlacement(ctx, sqlitegen.CompleteActiveManualMoveSourcePlacementParams{
+				UpdatedAtUnixMs: now,
+				PlacementID:     string(sourcePlacement),
+			})
+			if err != nil {
+				return ManualMoveResult{}, err
+			}
+			if updated != 1 {
+				return ManualMoveResult{}, sql.ErrNoRows
+			}
 		}
 	}
 	if err := touchTaskUpdatedAt(ctx, q, string(req.TaskID), now); err != nil {
@@ -148,7 +161,7 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	targetPlacementID := ""
 	if transitionState == "applied" {
 		targetPlacementID = prefixedID("placement")
-		if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: string(req.TaskID), NodeID: string(targetNode.ID), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+		if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: string(req.TaskID), NodeID: nullableString(string(targetNode.ID)), State: placementStateForWorkflowNode(targetNode), CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
 			return ManualMoveResult{}, err
 		}
 		result.PlacementIDs = append(result.PlacementIDs, workflow.PlacementID(targetPlacementID))
@@ -270,7 +283,7 @@ func (s *Store) latestRunForPlacement(ctx context.Context, placementID workflow.
 func (s *Store) backwardManualMoveEdge(ctx context.Context, sourcePlacement workflow.PlacementID, targetNode workflow.Node) (workflow.TransitionGroup, workflow.Edge, map[string]string, workflow.RunID, string, bool, error) {
 	row, err := s.queries.GetManualMovePreviousTransition(ctx, sqlitegen.GetManualMovePreviousTransitionParams{
 		SourcePlacementID: sql.NullString{String: string(sourcePlacement), Valid: true},
-		TargetNodeID:      string(targetNode.ID),
+		TargetNodeID:      nullableString(string(targetNode.ID)),
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return workflow.TransitionGroup{}, workflow.Edge{}, nil, "", "", false, nil
@@ -336,7 +349,7 @@ func (s *Store) pendingApprovalManualMoveSource(ctx context.Context, taskID work
 	if len(sources) != 1 {
 		return "", "", "", ErrManualMoveMultiplePendingApprovals
 	}
-	return workflow.PlacementID(sources[0].SourcePlacementID.String), workflow.NodeID(sources[0].NodeID), sources[0].ID, nil
+	return workflow.PlacementID(sources[0].SourcePlacementID.String), workflow.NodeID(sources[0].NodeID.String), sources[0].ID, nil
 }
 
 func rejectPendingApprovalTransition(ctx context.Context, q *sqlitegen.Queries, transitionID string) error {
@@ -366,7 +379,7 @@ func (s *Store) activeManualMoveSource(ctx context.Context, taskID workflow.Task
 	if len(placements) != 1 {
 		return "", "", errors.New("manual move with multiple active placements is not supported")
 	}
-	return workflow.PlacementID(placements[0].ID), workflow.NodeID(placements[0].NodeID), nil
+	return workflow.PlacementID(placements[0].ID), workflow.NodeID(placements[0].NodeID.String), nil
 }
 
 func definitionNode(def workflow.Definition, nodeID workflow.NodeID) (workflow.Node, bool) {

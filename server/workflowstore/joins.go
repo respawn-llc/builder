@@ -26,7 +26,7 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 	if !batchID.Valid || strings.TrimSpace(batchID.String) == "" {
 		return CompleteRunResult{}, nil
 	}
-	_, err = q.GetExistingJoinPlacement(ctx, sqlitegen.GetExistingJoinPlacementParams{TaskID: taskID, NodeID: string(joinEdge.TargetNode.ID), BatchID: sql.NullString{String: batchID.String, Valid: true}})
+	_, err = q.GetExistingJoinPlacement(ctx, sqlitegen.GetExistingJoinPlacementParams{TaskID: taskID, NodeID: nullableString(string(joinEdge.TargetNode.ID)), BatchID: sql.NullString{String: batchID.String, Valid: true}})
 	if err == nil {
 		return CompleteRunResult{}, nil
 	}
@@ -77,7 +77,7 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		return CompleteRunResult{}, err
 	}
 	joinPlacementID := prefixedID("placement")
-	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: joinPlacementID, TaskID: taskID, NodeID: string(joinEdge.TargetNode.ID), State: "completed", ParallelBatchTransitionID: sql.NullString{String: batchID.String, Valid: true}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: joinPlacementID, TaskID: taskID, NodeID: nullableString(string(joinEdge.TargetNode.ID)), State: "completed", ParallelBatchTransitionID: sql.NullString{String: batchID.String, Valid: true}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
 		return CompleteRunResult{}, err
 	}
 	joinTransitionID := prefixedID("transition")
@@ -87,7 +87,7 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 	result := CompleteRunResult{TransitionID: workflow.TransitionID(joinTransitionID), State: "applied"}
 	outEdge := group.Edges[0]
 	targetPlacementID := prefixedID("placement")
-	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: taskID, NodeID: string(outEdge.TargetNode.ID), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: taskID, NodeID: nullableString(string(outEdge.TargetNode.ID)), State: placementStateForNode(outEdge.TargetNode), CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
 		return CompleteRunResult{}, err
 	}
 	result.PlacementIDs = append(result.PlacementIDs, workflow.PlacementID(targetPlacementID))

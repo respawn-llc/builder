@@ -300,7 +300,7 @@ func insertCompletedRunForNodeAfterTransition(t *testing.T, ctx context.Context,
 	placementID := prefixedID("placement")
 	runID := prefixedID("run")
 	completedAt := transitionCreatedAt + 1
-	if err := store.queries.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: placementID, TaskID: string(taskID), NodeID: string(nodeID), State: "completed", CreatedAtUnixMs: completedAt, UpdatedAtUnixMs: completedAt}); err != nil {
+	if err := store.queries.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: placementID, TaskID: string(taskID), NodeID: nullableString(string(nodeID)), State: "completed", CreatedAtUnixMs: completedAt, UpdatedAtUnixMs: completedAt}); err != nil {
 		t.Fatalf("InsertTaskNodePlacement competing run: %v", err)
 	}
 	if err := store.queries.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{
@@ -332,7 +332,7 @@ func insertCompletedRunForNodeInBatch(t *testing.T, ctx context.Context, store *
 	}
 	placementID := prefixedID("placement")
 	runID := prefixedID("run")
-	if err := store.queries.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: placementID, TaskID: string(taskID), NodeID: string(nodeID), State: "completed", ParallelBatchTransitionID: sql.NullString{String: batchID, Valid: strings.TrimSpace(batchID) != ""}, CreatedAtUnixMs: completedAt, UpdatedAtUnixMs: completedAt}); err != nil {
+	if err := store.queries.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: placementID, TaskID: string(taskID), NodeID: nullableString(string(nodeID)), State: "completed", ParallelBatchTransitionID: sql.NullString{String: batchID, Valid: strings.TrimSpace(batchID) != ""}, CreatedAtUnixMs: completedAt, UpdatedAtUnixMs: completedAt}); err != nil {
 		t.Fatalf("InsertTaskNodePlacement competing batch run: %v", err)
 	}
 	if err := store.queries.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{

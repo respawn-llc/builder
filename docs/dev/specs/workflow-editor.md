@@ -130,8 +130,8 @@
 ## Editing Constraints
 
 - GUI remains a remote-control surface. Server remains authoritative for definitions, validation, persistence, project links, events, task-impact analysis, workflow version, and destructive cleanup.
-- Editing a linked workflow is disallowed while it has active tasks.
-- Editing is allowed only when existing tasks are all backlog or done.
+- Editing a linked workflow is allowed while tasks exist on the board.
+- Save validation blocks graph edits that would detach a task from the graph entity that anchors its current visible workflow state.
 - Active means any task whose active/waiting placement is not start/backlog or terminal/done, any pending approval, any non-completed/non-interrupted run needing runtime ownership, or any other non-terminal automation state.
 - Backlog/start deletion is out of scope. Blocked graph deletes surface as toast feedback. Hide `start` from add/kind-change controls. Existing Backlog can be renamed where safe, but kind stays fixed.
 - Start node outgoing transitions may be edited in drafts, but execution validation requires exactly one start transition with exactly one branch targeting an agent node.
@@ -142,8 +142,9 @@
 - Node group drag/drop is validated as a membership operation. If the editor cannot safely infer the source node or fan-out transition needed for fan-out wiring, the membership is preserved and validation explains the incomplete wiring before save.
 - Destructive delete impact is evaluated on Save, not at draft edit time.
 - Save runs server-side impact check for pending graph diff.
-- If active tasks would be affected, Save is blocked.
-- If only backlog/done tasks would lose graph references due to removed nodes or transitions, show confirmation listing affected nodes/tasks before applying.
+- If a graph diff would remove a node, transition, or edge currently anchoring an active task, pending approval, or unresolved parallel branch, Save is blocked.
+- If a graph diff would change the kind of a node referenced by any task history, Save is blocked. Delete-and-confirm detaches historical node references; kind changes keep the node id and would reinterpret existing placements.
+- If only backlog/done tasks would lose graph references due to removed nodes or transitions, show confirmation with affected reference counts before applying.
 - Manual task moves are blocked for selected prior-node and `Previous run of this target` continuation context sources.
 - Requested destructive wording pattern: `XXX task references will be detached from the removed graph entity. Proceed?`
 - Workflow graph saves never delete or move tasks; whole-workflow deletion is the task-deleting path.

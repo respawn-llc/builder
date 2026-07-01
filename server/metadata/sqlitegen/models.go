@@ -99,7 +99,7 @@ type TaskComment struct {
 type TaskNodePlacement struct {
 	ID                        string
 	TaskID                    string
-	NodeID                    string
+	NodeID                    sql.NullString
 	State                     string
 	ParallelBatchTransitionID sql.NullString
 	ParallelBranchEdgeID      sql.NullString
@@ -110,7 +110,7 @@ type TaskNodePlacement struct {
 type TaskNodePlacementRecord struct {
 	ID                        string
 	TaskID                    string
-	NodeID                    string
+	NodeID                    sql.NullString
 	State                     string
 	CreatedByTransitionID     string
 	ParallelBatchTransitionID sql.NullString
@@ -164,7 +164,7 @@ type TaskRunRecord struct {
 	ID                          string
 	TaskID                      string
 	PlacementID                 string
-	NodeID                      string
+	NodeID                      sql.NullString
 	SessionID                   sql.NullString
 	RunGeneration               int64
 	WorkflowRevisionSeen        int64

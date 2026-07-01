@@ -248,7 +248,7 @@ type ClaimWorkflowRunRow struct {
 	ID                          string
 	TaskID                      string
 	PlacementID                 string
-	NodeID                      string
+	NodeID                      sql.NullString
 	SessionID                   sql.NullString
 	RunGeneration               int64
 	WorkflowRevisionSeen        int64
@@ -379,7 +379,7 @@ const completeActiveManualMoveSourcePlacement = `-- name: CompleteActiveManualMo
 UPDATE task_node_placements
 SET state = 'completed',
     updated_at_unix_ms = ?1
-WHERE id = ?2
+WHERE task_node_placements.id = ?2
   AND state = 'active'
 `
 
@@ -473,6 +473,45 @@ func (q *Queries) CountActiveTaskRunsByWorkspace(ctx context.Context, workspaceI
 	var run_count int64
 	err := row.Scan(&run_count)
 	return run_count, err
+}
+
+const countCurrentTaskNodeAnchorReferences = `-- name: CountCurrentTaskNodeAnchorReferences :one
+SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
+FROM (
+    SELECT p.id
+    FROM task_node_placements p
+    JOIN task_records t ON t.id = p.task_id
+    JOIN workflow_nodes n ON n.id = p.node_id
+    WHERE p.node_id = ?1
+      AND (
+          p.state IN ('active', 'waiting_approval')
+          OR (p.state = 'completed' AND n.kind = 'terminal')
+      )
+      AND t.canceled_at_unix_ms = 0
+    UNION ALL
+    SELECT tt.id
+    FROM task_transition_records tt
+    JOIN task_records t ON t.id = tt.task_id
+    WHERE tt.source_node_id = ?1
+      AND tt.state = 'pending_approval'
+      AND t.canceled_at_unix_ms = 0
+    UNION ALL
+    SELECT te.id
+    FROM task_transition_edges te
+    JOIN task_transition_records tt ON tt.id = te.task_transition_id
+    JOIN task_records t ON t.id = tt.task_id
+    WHERE te.target_node_id = ?1
+      AND tt.state = 'pending_approval'
+      AND te.state = 'pending'
+      AND t.canceled_at_unix_ms = 0
+)
+`
+
+func (q *Queries) CountCurrentTaskNodeAnchorReferences(ctx context.Context, nodeID sql.NullString) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countCurrentTaskNodeAnchorReferences, nodeID)
+	var ref_count int64
+	err := row.Scan(&ref_count)
+	return ref_count, err
 }
 
 const countManagedOwnedWorktreesByWorkspace = `-- name: CountManagedOwnedWorktreesByWorkspace :one
@@ -686,7 +725,7 @@ FROM (
 )
 `
 
-func (q *Queries) CountTaskNodeReferences(ctx context.Context, nodeID string) (int64, error) {
+func (q *Queries) CountTaskNodeReferences(ctx context.Context, nodeID sql.NullString) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTaskNodeReferences, nodeID)
 	var ref_count int64
 	err := row.Scan(&ref_count)
@@ -1097,7 +1136,7 @@ func (q *Queries) GetActiveStartPlacementForTask(ctx context.Context, taskID str
 const getContextSourceBatchScope = `-- name: GetContextSourceBatchScope :one
 SELECT parallel_batch_transition_id
 FROM task_node_placements
-WHERE id = ?1
+WHERE task_node_placements.id = ?1
 LIMIT 1
 `
 
@@ -1147,7 +1186,7 @@ LIMIT 1
 
 type GetExistingJoinPlacementParams struct {
 	TaskID  string
-	NodeID  string
+	NodeID  sql.NullString
 	BatchID sql.NullString
 }
 
@@ -1172,7 +1211,7 @@ LIMIT 1
 
 type GetLatestCompletedContextSourceRunParams struct {
 	TaskID       string
-	NodeID       string
+	NodeID       sql.NullString
 	BeforeUnixMs int64
 }
 
@@ -1198,7 +1237,7 @@ LIMIT 1
 
 type GetLatestCompletedContextSourceRunInBatchParams struct {
 	TaskID       string
-	NodeID       string
+	NodeID       sql.NullString
 	BatchID      sql.NullString
 	BeforeUnixMs int64
 }
@@ -1319,7 +1358,7 @@ LIMIT 1
 
 type GetManualMovePreviousTransitionParams struct {
 	SourcePlacementID sql.NullString
-	TargetNodeID      string
+	TargetNodeID      sql.NullString
 }
 
 type GetManualMovePreviousTransitionRow struct {
@@ -2875,7 +2914,7 @@ INSERT INTO task_node_placements (
 type InsertTaskNodePlacementParams struct {
 	ID                        string
 	TaskID                    string
-	NodeID                    string
+	NodeID                    sql.NullString
 	State                     string
 	ParallelBatchTransitionID sql.NullString
 	ParallelBranchEdgeID      sql.NullString
@@ -3567,16 +3606,20 @@ func (q *Queries) InterruptWorkflowRun(ctx context.Context, arg InterruptWorkflo
 }
 
 const listActiveManualMoveSources = `-- name: ListActiveManualMoveSources :many
-SELECT id, node_id, parallel_batch_transition_id
+SELECT task_node_placements.id, node_id, parallel_batch_transition_id
 FROM task_node_placements
-WHERE task_id = ?1
-  AND state = 'active'
-ORDER BY created_at_unix_ms DESC, rowid DESC
+LEFT JOIN workflow_nodes n ON n.id = task_node_placements.node_id
+WHERE task_node_placements.task_id = ?1
+  AND (
+      task_node_placements.state = 'active'
+      OR (task_node_placements.state = 'completed' AND n.kind = 'terminal')
+  )
+ORDER BY task_node_placements.created_at_unix_ms DESC, task_node_placements.rowid DESC
 `
 
 type ListActiveManualMoveSourcesRow struct {
 	ID                        string
-	NodeID                    string
+	NodeID                    sql.NullString
 	ParallelBatchTransitionID sql.NullString
 }
 
@@ -3611,7 +3654,10 @@ WITH effective_board_placements AS (
     FROM task_node_placements p
     JOIN task_records t ON t.id = p.task_id
     JOIN workflow_nodes n ON n.id = p.node_id
-    WHERE p.state IN ('active', 'waiting_approval')
+    WHERE (
+          (p.state IN ('active', 'waiting_approval') AND n.kind != 'terminal')
+          OR (p.state = 'completed' AND n.kind = 'terminal')
+      )
       AND t.project_id = ?1
       AND t.workflow_id = ?2
       AND (
@@ -3633,7 +3679,7 @@ WITH effective_board_placements AS (
           FROM task_node_placements p
           JOIN workflow_nodes n ON n.id = p.node_id
           WHERE p.task_id = t.id
-            AND p.state IN ('active', 'waiting_approval')
+            AND p.state = 'completed'
             AND n.kind = 'terminal'
       )
     UNION
@@ -3666,7 +3712,7 @@ type ListBoardColumnTaskCountsParams struct {
 }
 
 type ListBoardColumnTaskCountsRow struct {
-	NodeID    string
+	NodeID    sql.NullString
 	TaskCount int64
 }
 
@@ -3721,7 +3767,7 @@ WHERE t.project_id = ?1
           FROM task_node_placements p
           JOIN workflow_nodes n ON n.id = p.node_id
           WHERE p.task_id = t.id
-            AND p.state IN ('active', 'waiting_approval')
+            AND p.state = 'completed'
             AND n.kind = 'terminal'
       )
       OR (
@@ -3794,7 +3840,10 @@ WITH board_node_task_ids AS (
     JOIN task_records t ON t.id = p.task_id
     JOIN workflow_nodes n ON n.id = p.node_id
     WHERE p.node_id = ?5
-      AND p.state IN ('active', 'waiting_approval')
+      AND (
+        (p.state IN ('active', 'waiting_approval') AND n.kind != 'terminal')
+        OR (p.state = 'completed' AND n.kind = 'terminal')
+      )
       AND t.project_id = ?6
       AND t.workflow_id = ?7
       AND (
@@ -3830,7 +3879,7 @@ WITH board_node_task_ids AS (
         FROM task_node_placements p
         JOIN workflow_nodes n ON n.id = p.node_id
         WHERE p.task_id = t.id
-          AND p.state IN ('active', 'waiting_approval')
+          AND p.state = 'completed'
           AND n.kind = 'terminal'
       )
 )
@@ -3871,7 +3920,7 @@ type ListBoardNodeTasksParams struct {
 	CursorUpdatedAtUnixMs  int64
 	CursorTaskID           string
 	LimitRows              int64
-	NodeID                 string
+	NodeID                 sql.NullString
 	ProjectID              string
 	WorkflowID             string
 	CanceledTerminalNodeID interface{}
@@ -3982,7 +4031,7 @@ WHERE t.id IN (SELECT id FROM board_open_task_ids)
       FROM task_node_placements terminal_placement
       JOIN workflow_nodes terminal_node ON terminal_node.id = terminal_placement.node_id
       WHERE terminal_placement.task_id = t.id
-        AND terminal_placement.state IN ('active', 'waiting_approval')
+        AND terminal_placement.state = 'completed'
         AND terminal_node.kind = 'terminal'
   )
   AND (
@@ -4246,7 +4295,7 @@ ORDER BY tt.created_at_unix_ms DESC, tt.rowid DESC
 type ListPendingApprovalManualMoveSourcesRow struct {
 	ID                string
 	SourcePlacementID sql.NullString
-	NodeID            string
+	NodeID            sql.NullString
 }
 
 func (q *Queries) ListPendingApprovalManualMoveSources(ctx context.Context, taskID string) ([]ListPendingApprovalManualMoveSourcesRow, error) {
@@ -4276,7 +4325,7 @@ const listPendingApprovalSourcePlacementsByTasks = `-- name: ListPendingApproval
 SELECT
     CAST(COALESCE('pending-approval:' || id, '') AS TEXT) AS id,
     task_id,
-    COALESCE(source_node_id, '') AS node_id,
+    source_node_id AS node_id,
     'waiting_approval' AS state,
     '' AS created_by_transition_id,
     CAST(NULL AS TEXT) AS parallel_batch_transition_id,
@@ -4286,6 +4335,7 @@ SELECT
 FROM task_transition_records
 WHERE task_id IN (/*SLICE:task_ids*/?)
   AND state = 'pending_approval'
+  AND source_node_id IS NOT NULL
   AND trim(source_node_id) != ''
 ORDER BY task_id ASC, created_at_unix_ms ASC, id ASC
 `
@@ -4293,7 +4343,7 @@ ORDER BY task_id ASC, created_at_unix_ms ASC, id ASC
 type ListPendingApprovalSourcePlacementsByTasksRow struct {
 	ID                        string
 	TaskID                    string
-	NodeID                    string
+	NodeID                    sql.NullString
 	State                     string
 	CreatedByTransitionID     string
 	ParallelBatchTransitionID sql.NullString
@@ -7114,7 +7164,10 @@ effective_placements AS (
     CROSS JOIN args
     JOIN task_node_placements p ON p.task_id = t.id
     JOIN visible_columns vc ON vc.node_id = p.node_id
-    WHERE p.state IN ('active', 'waiting_approval')
+    WHERE (
+          (p.state IN ('active', 'waiting_approval') AND vc.node_kind != 'terminal')
+          OR (p.state = 'completed' AND vc.node_kind = 'terminal')
+      )
       AND (t.canceled_at_unix_ms = 0 OR vc.node_kind = 'terminal' OR trim(args.canceled_terminal_node_id) = '')
     UNION
     SELECT t.id AS task_id, '' AS placement_id, vc.node_id AS node_id, 'active' AS state, vc.status_order AS status_order, vc.node_key AS node_key, vc.node_kind AS node_kind
@@ -7128,7 +7181,7 @@ effective_placements AS (
           FROM task_node_placements p
           JOIN workflow_nodes n ON n.id = p.node_id
           WHERE p.task_id = t.id
-            AND p.state IN ('active', 'waiting_approval')
+            AND p.state = 'completed'
             AND n.kind = 'terminal'
       )
     UNION
@@ -8422,6 +8475,33 @@ func (q *Queries) StartTaskCompleteStartPlacement(ctx context.Context, arg Start
 		arg.PlacementID,
 		arg.TaskID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const supersedeCompletedTerminalManualMoveSourcePlacement = `-- name: SupersedeCompletedTerminalManualMoveSourcePlacement :execrows
+UPDATE task_node_placements
+SET state = 'superseded',
+    updated_at_unix_ms = ?1
+WHERE task_node_placements.id = ?2
+  AND state = 'completed'
+  AND EXISTS (
+      SELECT 1
+      FROM workflow_nodes n
+      WHERE n.id = task_node_placements.node_id
+        AND n.kind = 'terminal'
+  )
+`
+
+type SupersedeCompletedTerminalManualMoveSourcePlacementParams struct {
+	UpdatedAtUnixMs int64
+	PlacementID     string
+}
+
+func (q *Queries) SupersedeCompletedTerminalManualMoveSourcePlacement(ctx context.Context, arg SupersedeCompletedTerminalManualMoveSourcePlacementParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, supersedeCompletedTerminalManualMoveSourcePlacement, arg.UpdatedAtUnixMs, arg.PlacementID)
 	if err != nil {
 		return 0, err
 	}

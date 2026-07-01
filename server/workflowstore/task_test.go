@@ -104,20 +104,63 @@ func TestTaskCreateStartCancelAndComments(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	activeDone := false
+	completedDone := false
 	activeNonTerminal := false
 	for _, placement := range placements {
-		if placement.State != "active" {
-			continue
-		}
 		if placement.NodeID == done.ID {
-			activeDone = true
+			if placement.State == "completed" {
+				completedDone = true
+			}
 			continue
 		}
-		activeNonTerminal = true
+		if placement.State == "active" {
+			activeNonTerminal = true
+		}
 	}
-	if !activeDone || activeNonTerminal {
-		t.Fatalf("placements after cancel = %+v, want only active Done placement", placements)
+	if !completedDone || activeNonTerminal {
+		t.Fatalf("placements after cancel = %+v, want completed Done placement and no active non-terminal placement", placements)
+	}
+}
+
+func TestCancelTaskAfterMovingOutOfDoneWritesCurrentTerminalPlacement(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	start := nodeByKind(t, def, workflow.NodeKindStart)
+	done := nodeByKind(t, def, workflow.NodeKindTerminal)
+	if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: start.ID}); err != nil {
+		t.Fatalf("ManualMoveTask reset: %v", err)
+	}
+
+	if err := store.CancelTask(ctx, task.ID, "stop"); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+
+	placements, err := store.ListPlacements(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPlacements: %v", err)
+	}
+	completedTerminalCount := 0
+	supersededTerminalCount := 0
+	for _, placement := range placements {
+		if placement.NodeID != done.ID {
+			continue
+		}
+		switch placement.State {
+		case "completed":
+			completedTerminalCount++
+		case "superseded":
+			supersededTerminalCount++
+		}
+	}
+	if completedTerminalCount != 1 || supersededTerminalCount != 1 {
+		t.Fatalf("terminal placements after cancel = %+v, want one superseded history row and one current completed Done row", placements)
 	}
 }
 

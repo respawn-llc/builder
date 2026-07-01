@@ -923,7 +923,7 @@ func TestManualMoveTargetsExcludeEdgesWithDerivedRequiredProvisionFields(t *test
 
 	targets := manualMoveTargetNodeIDs(
 		def,
-		[]sqlitegen.TaskNodePlacementRecord{{NodeID: "node-agent", State: "active"}},
+		[]sqlitegen.TaskNodePlacementRecord{{NodeID: sql.NullString{String: "node-agent", Valid: true}, State: "active"}},
 		map[string]workflow.NodeKind{
 			"node-agent":  workflow.NodeKindAgent,
 			"node-review": workflow.NodeKindAgent,
@@ -966,7 +966,7 @@ func TestManualMoveTargetsExcludePriorRunContextSources(t *testing.T) {
 
 	targets := manualMoveTargetNodeIDs(
 		def,
-		[]sqlitegen.TaskNodePlacementRecord{{NodeID: "node-agent", State: "active"}},
+		[]sqlitegen.TaskNodePlacementRecord{{NodeID: sql.NullString{String: "node-agent", Valid: true}, State: "active"}},
 		map[string]workflow.NodeKind{
 			"node-agent":    workflow.NodeKindAgent,
 			"node-selected": workflow.NodeKindAgent,
@@ -977,6 +977,36 @@ func TestManualMoveTargetsExcludePriorRunContextSources(t *testing.T) {
 
 	if len(targets) != 1 || targets[0] != "node-done" {
 		t.Fatalf("manual move targets = %+v, want only terminal target", targets)
+	}
+}
+
+func TestManualMoveTargetsUseCompletedTerminalSource(t *testing.T) {
+	def := serverapi.WorkflowDefinition{
+		Workflow: serverapi.WorkflowRecord{ID: "workflow-1", Name: "Workflow"},
+		Nodes: []serverapi.WorkflowNode{
+			{ID: "node-start", WorkflowID: "workflow-1", Key: "backlog", Kind: string(workflow.NodeKindStart), DisplayName: "Backlog"},
+			{ID: "node-done", WorkflowID: "workflow-1", Key: "done", Kind: string(workflow.NodeKindTerminal), DisplayName: "Done"},
+		},
+		TransitionGroups: []serverapi.WorkflowTransitionGroup{
+			{ID: "group-reset", WorkflowID: "workflow-1", SourceNodeID: "node-done", TransitionID: "manual_start", DisplayName: "Move to Backlog"},
+		},
+		Edges: []serverapi.WorkflowEdge{
+			{ID: "edge-reset", WorkflowID: "workflow-1", TransitionGroupID: "group-reset", Key: "manual_start", TargetNodeID: "node-start"},
+		},
+		DerivedWiring: serverapi.WorkflowDerivedWiring{Edges: []serverapi.WorkflowDerivedEdgeWiring{{EdgeID: "edge-reset"}}},
+	}
+
+	targets := manualMoveTargetNodeIDs(
+		def,
+		[]sqlitegen.TaskNodePlacementRecord{{NodeID: sql.NullString{String: "node-done", Valid: true}, State: "completed"}},
+		map[string]workflow.NodeKind{
+			"node-start": workflow.NodeKindStart,
+			"node-done":  workflow.NodeKindTerminal,
+		},
+	)
+
+	if len(targets) != 1 || targets[0] != "node-start" {
+		t.Fatalf("manual move targets = %+v, want reset target", targets)
 	}
 }
 
@@ -1690,7 +1720,7 @@ WHERE workflow_id = ?
 	if err := store.Queries().InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{
 		ID:              "placement-canceled-backlog-" + string(taskID),
 		TaskID:          string(taskID),
-		NodeID:          startNodeID,
+		NodeID:          sql.NullString{String: startNodeID, Valid: strings.TrimSpace(startNodeID) != ""},
 		State:           "active",
 		CreatedAtUnixMs: 1,
 		UpdatedAtUnixMs: 1,

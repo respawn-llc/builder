@@ -152,7 +152,7 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 	if err := q.InsertTask(ctx, sqlitegen.InsertTaskParams{ID: taskID, ProjectWorkflowLinkID: link.ID, WorkflowRevisionSeen: wf.Version, TaskSeq: seq, ShortID: shortID, Title: title, Body: body, SourceUrl: strings.TrimSpace(req.SourceURL), SourceWorkspaceID: sql.NullString{String: sourceWorkspaceID, Valid: sourceWorkspaceID != ""}, ManagedWorktreeID: sql.NullString{}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, MetadataJson: metadataJSON}); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert task: %w", err)
 	}
-	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: placementID, TaskID: taskID, NodeID: string(startNode.ID), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: placementID, TaskID: taskID, NodeID: nullableString(string(startNode.ID)), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert start placement: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -419,7 +419,7 @@ func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTas
 	if err := q.InsertTaskTransition(ctx, sqlitegen.InsertTaskTransitionParams{ID: transitionID, TaskID: string(taskID), SourcePlacementID: sql.NullString{String: prepared.startPlacement.ID, Valid: true}, SourceNodeKey: string(prepared.start.Key), SourceNodeDisplayName: prepared.start.DisplayName, TransitionID: string(prepared.group.TransitionID), TransitionDisplayName: prepared.group.DisplayName, WorkflowRevisionSeen: prepared.workflow.Version, Actor: "system", State: "applied", OutputValuesJson: "{}", CreatedAtUnixMs: now, AppliedAtUnixMs: now}); err != nil {
 		return StartTaskResult{}, err
 	}
-	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: string(taskID), NodeID: string(prepared.target.ID), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+	if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: string(taskID), NodeID: nullableString(string(prepared.target.ID)), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
 		return StartTaskResult{}, err
 	}
 	runSnapshot, err := newRunStartSnapshot(prepared.definition, prepared.workflow, prepared.target.ID)
@@ -661,7 +661,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 		}
 		targetPlacementID := prefixedID("placement")
 		isFanoutBranch := len(group.Edges) > 1
-		if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: run.TaskID, NodeID: string(edge.TargetNode.ID), State: "active", ParallelBatchTransitionID: sql.NullString{String: transitionID, Valid: isFanoutBranch}, ParallelBranchEdgeID: sql.NullString{String: string(edge.ID), Valid: isFanoutBranch}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+		if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: targetPlacementID, TaskID: run.TaskID, NodeID: nullableString(string(edge.TargetNode.ID)), State: placementStateForNode(edge.TargetNode), ParallelBatchTransitionID: sql.NullString{String: transitionID, Valid: isFanoutBranch}, ParallelBranchEdgeID: sql.NullString{String: string(edge.ID), Valid: isFanoutBranch}, CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
 			return CompleteRunResult{}, fmt.Errorf("insert target placement: %w", err)
 		}
 		result.PlacementIDs = append(result.PlacementIDs, workflow.PlacementID(targetPlacementID))
@@ -788,21 +788,20 @@ func (s *Store) CancelTask(ctx context.Context, taskID workflow.TaskID, reason s
 	if err != nil {
 		return err
 	}
-	hasActiveTerminal := false
+	hasTerminalPlacement := false
 	for _, placement := range placements {
-		if placement.State != "active" && placement.State != "waiting_approval" {
-			continue
+		if placement.NodeID.Valid && placement.NodeID.String == string(terminal.ID) && placement.State == "completed" {
+			hasTerminalPlacement = true
 		}
-		if placement.NodeID == string(terminal.ID) && placement.State == "active" {
-			hasActiveTerminal = true
+		if placement.State != "active" && placement.State != "waiting_approval" {
 			continue
 		}
 		if _, err := q.UpdateTaskNodePlacementState(ctx, sqlitegen.UpdateTaskNodePlacementStateParams{ID: placement.ID, State: "completed", UpdatedAtUnixMs: now}); err != nil {
 			return err
 		}
 	}
-	if !hasActiveTerminal {
-		if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: prefixedID("placement"), TaskID: string(taskID), NodeID: string(terminal.ID), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+	if !hasTerminalPlacement {
+		if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: prefixedID("placement"), TaskID: string(taskID), NodeID: nullableString(string(terminal.ID)), State: "completed", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
 			return err
 		}
 	}
@@ -816,7 +815,7 @@ func (s *Store) ListPlacements(ctx context.Context, taskID workflow.TaskID) ([]P
 	}
 	out := make([]PlacementRecord, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, PlacementRecord{ID: workflow.PlacementID(row.ID), TaskID: workflow.TaskID(row.TaskID), NodeID: workflow.NodeID(row.NodeID), State: row.State})
+		out = append(out, PlacementRecord{ID: workflow.PlacementID(row.ID), TaskID: workflow.TaskID(row.TaskID), NodeID: workflow.NodeID(row.NodeID.String), State: row.State})
 	}
 	return out, nil
 }
@@ -859,6 +858,20 @@ func terminalNode(def workflow.Definition) (workflow.Node, error) {
 		return fallback, nil
 	}
 	return workflow.Node{}, errors.New("workflow has no terminal node")
+}
+
+func placementStateForNode(node nodeContractSnapshot) string {
+	if node.Kind == workflow.NodeKindTerminal {
+		return "completed"
+	}
+	return "active"
+}
+
+func placementStateForWorkflowNode(node workflow.Node) string {
+	if node.Kind == workflow.NodeKindTerminal {
+		return "completed"
+	}
+	return "active"
 }
 
 func startTransition(def workflow.Definition, startNodeID workflow.NodeID) (workflow.TransitionGroup, workflow.Edge, workflow.Node, error) {

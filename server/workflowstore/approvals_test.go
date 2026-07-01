@@ -82,8 +82,8 @@ func TestApprovePendingTransitionStartsStoredTargetEdgeSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements: %v", err)
 	}
-	if len(placements) != 3 || placements[2].ID != approved.PlacementIDs[0] || placements[2].State != "active" {
-		t.Fatalf("placements after approval = %+v", placements)
+	if len(placements) != 3 || placements[2].ID != approved.PlacementIDs[0] || placements[2].State != "completed" {
+		t.Fatalf("placements after approval = %+v, want completed terminal placement", placements)
 	}
 }
 

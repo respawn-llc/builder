@@ -117,7 +117,7 @@ func workflowGraphStructuralPolicyImpact(ctx context.Context, q *sqlitegen.Queri
 			currentTerminalCount++
 		}
 		if exists && currentKind != next.Kind {
-			refCount, err := q.CountTaskNodeReferences(ctx, current.ID)
+			refCount, err := q.CountTaskNodeReferences(ctx, nullableString(current.ID))
 			if err != nil {
 				return WorkflowGraphEditPolicyImpact{}, err
 			}
@@ -135,18 +135,6 @@ func workflowGraphStructuralPolicyImpact(ctx context.Context, q *sqlitegen.Queri
 
 func workflowGraphEditPolicyBlockers(impact WorkflowGraphEditPolicyImpact) []WorkflowGraphEditPolicyBlocker {
 	blockers := []WorkflowGraphEditPolicyBlocker{}
-	if impact.ActiveNodePlacementCount > 0 {
-		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "active_node_placements", Message: "Workflow graph changes are blocked while tasks are active outside backlog or terminal nodes.", Count: impact.ActiveNodePlacementCount})
-	}
-	if impact.PendingApprovalCount > 0 {
-		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "pending_approvals", Message: "Workflow graph changes are blocked while workflow transitions are pending approval.", Count: impact.PendingApprovalCount})
-	}
-	if impact.ActiveRunCount > 0 {
-		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "active_runs", Message: "Workflow graph changes are blocked while workflow runs are active.", Count: impact.ActiveRunCount})
-	}
-	if impact.RunnableRunCount > 0 {
-		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "runnable_runs", Message: "Workflow graph changes are blocked while workflow runs are runnable.", Count: impact.RunnableRunCount})
-	}
 	if impact.StartNodeChangeCount > 0 {
 		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "start_node_changed", Message: "The workflow start node cannot be removed, replaced, or changed to another kind.", Count: impact.StartNodeChangeCount})
 	}

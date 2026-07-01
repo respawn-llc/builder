@@ -420,6 +420,12 @@ func TestWorkflowRuntimeSchemaRejectsCrossWorkflowPlacementsAndRuns(t *testing.T
 	assertSQLiteConstraint(t, store.db, `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('placement-cross-workflow', 'task-1', 'node-agent-2', 'active', ?, ?)`, now, now)
 	assertSQLiteConstraint(t, store.db, `UPDATE task_node_placements SET node_id = 'node-agent-2' WHERE id = 'placement-start'`)
+	execSeed(t, store.db, "canceled active agent placement", `UPDATE tasks SET canceled_at_unix_ms = ? WHERE id = 'task-2'`, now)
+	execSeed(t, store.db, "active agent placement on canceled task", `UPDATE task_node_placements SET node_id = 'node-agent' WHERE id = 'placement-start-2'`)
+	assertSQLiteConstraint(t, store.db, `UPDATE workflow_nodes SET kind = 'terminal' WHERE id = 'node-agent'`)
+	execSeed(t, store.db, "historical node", `INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, output_fields_json) VALUES ('node-history', 'workflow-1', 'history', 'agent', 'History', '[]')`)
+	execSeed(t, store.db, "completed historical placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms) VALUES ('placement-history', 'task-1', 'node-history', 'completed', ?, ?)`, now, now)
+	assertSQLiteConstraint(t, store.db, `UPDATE workflow_nodes SET kind = 'terminal' WHERE id = 'node-history'`)
 	execSeed(t, store.db, "derived task run", `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('run-derived', 'placement-start', 1, ?, ?)`, now, now)
 	var taskID string

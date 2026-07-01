@@ -891,6 +891,37 @@ FROM (
     SELECT te.id FROM task_transition_edges te WHERE te.target_node_id = sqlc.arg(node_id)
 );
 
+-- name: CountCurrentTaskNodeAnchorReferences :one
+SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
+FROM (
+    SELECT p.id
+    FROM task_node_placements p
+    JOIN task_records t ON t.id = p.task_id
+    JOIN workflow_nodes n ON n.id = p.node_id
+    WHERE p.node_id = sqlc.arg(node_id)
+      AND (
+          p.state IN ('active', 'waiting_approval')
+          OR (p.state = 'completed' AND n.kind = 'terminal')
+      )
+      AND t.canceled_at_unix_ms = 0
+    UNION ALL
+    SELECT tt.id
+    FROM task_transition_records tt
+    JOIN task_records t ON t.id = tt.task_id
+    WHERE tt.source_node_id = sqlc.arg(node_id)
+      AND tt.state = 'pending_approval'
+      AND t.canceled_at_unix_ms = 0
+    UNION ALL
+    SELECT te.id
+    FROM task_transition_edges te
+    JOIN task_transition_records tt ON tt.id = te.task_transition_id
+    JOIN task_records t ON t.id = tt.task_id
+    WHERE te.target_node_id = sqlc.arg(node_id)
+      AND tt.state = 'pending_approval'
+      AND te.state = 'pending'
+      AND t.canceled_at_unix_ms = 0
+);
+
 -- name: CountTaskEdgeReferences :one
 SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
@@ -1191,7 +1222,10 @@ WITH effective_board_placements AS (
     FROM task_node_placements p
     JOIN task_records t ON t.id = p.task_id
     JOIN workflow_nodes n ON n.id = p.node_id
-    WHERE p.state IN ('active', 'waiting_approval')
+    WHERE (
+          (p.state IN ('active', 'waiting_approval') AND n.kind != 'terminal')
+          OR (p.state = 'completed' AND n.kind = 'terminal')
+      )
       AND t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
       AND (
@@ -1213,7 +1247,7 @@ WITH effective_board_placements AS (
           FROM task_node_placements p
           JOIN workflow_nodes n ON n.id = p.node_id
           WHERE p.task_id = t.id
-            AND p.state IN ('active', 'waiting_approval')
+            AND p.state = 'completed'
             AND n.kind = 'terminal'
       )
     UNION
@@ -1289,7 +1323,10 @@ effective_placements AS (
     CROSS JOIN args
     JOIN task_node_placements p ON p.task_id = t.id
     JOIN visible_columns vc ON vc.node_id = p.node_id
-    WHERE p.state IN ('active', 'waiting_approval')
+    WHERE (
+          (p.state IN ('active', 'waiting_approval') AND vc.node_kind != 'terminal')
+          OR (p.state = 'completed' AND vc.node_kind = 'terminal')
+      )
       AND (t.canceled_at_unix_ms = 0 OR vc.node_kind = 'terminal' OR trim(args.canceled_terminal_node_id) = '')
     UNION
     SELECT t.id AS task_id, '' AS placement_id, vc.node_id AS node_id, 'active' AS state, vc.status_order AS status_order, vc.node_key AS node_key, vc.node_kind AS node_kind
@@ -1303,7 +1340,7 @@ effective_placements AS (
           FROM task_node_placements p
           JOIN workflow_nodes n ON n.id = p.node_id
           WHERE p.task_id = t.id
-            AND p.state IN ('active', 'waiting_approval')
+            AND p.state = 'completed'
             AND n.kind = 'terminal'
       )
     UNION
@@ -1446,7 +1483,7 @@ WHERE t.id IN (SELECT id FROM board_open_task_ids)
       FROM task_node_placements terminal_placement
       JOIN workflow_nodes terminal_node ON terminal_node.id = terminal_placement.node_id
       WHERE terminal_placement.task_id = t.id
-        AND terminal_placement.state IN ('active', 'waiting_approval')
+        AND terminal_placement.state = 'completed'
         AND terminal_node.kind = 'terminal'
   )
   AND (
@@ -1488,7 +1525,7 @@ WHERE t.project_id = sqlc.arg(project_id)
           FROM task_node_placements p
           JOIN workflow_nodes n ON n.id = p.node_id
           WHERE p.task_id = t.id
-            AND p.state IN ('active', 'waiting_approval')
+            AND p.state = 'completed'
             AND n.kind = 'terminal'
       )
       OR (
@@ -1507,7 +1544,10 @@ WITH board_node_task_ids AS (
     JOIN task_records t ON t.id = p.task_id
     JOIN workflow_nodes n ON n.id = p.node_id
     WHERE p.node_id = sqlc.arg(node_id)
-      AND p.state IN ('active', 'waiting_approval')
+      AND (
+        (p.state IN ('active', 'waiting_approval') AND n.kind != 'terminal')
+        OR (p.state = 'completed' AND n.kind = 'terminal')
+      )
       AND t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
       AND (
@@ -1543,7 +1583,7 @@ WITH board_node_task_ids AS (
         FROM task_node_placements p
         JOIN workflow_nodes n ON n.id = p.node_id
         WHERE p.task_id = t.id
-          AND p.state IN ('active', 'waiting_approval')
+          AND p.state = 'completed'
           AND n.kind = 'terminal'
       )
 )
@@ -1718,7 +1758,7 @@ ORDER BY task_id ASC, created_at_unix_ms ASC, (
 SELECT
     CAST(COALESCE('pending-approval:' || id, '') AS TEXT) AS id,
     task_id,
-    COALESCE(source_node_id, '') AS node_id,
+    source_node_id AS node_id,
     'waiting_approval' AS state,
     '' AS created_by_transition_id,
     CAST(NULL AS TEXT) AS parallel_batch_transition_id,
@@ -1728,6 +1768,7 @@ SELECT
 FROM task_transition_records
 WHERE task_id IN (sqlc.slice('task_ids'))
   AND state = 'pending_approval'
+  AND source_node_id IS NOT NULL
   AND trim(source_node_id) != ''
 ORDER BY task_id ASC, created_at_unix_ms ASC, id ASC;
 
@@ -2211,7 +2252,7 @@ ORDER BY created_at_unix_ms ASC, rowid ASC;
 -- name: GetContextSourceBatchScope :one
 SELECT parallel_batch_transition_id
 FROM task_node_placements
-WHERE id = sqlc.arg(placement_id)
+WHERE task_node_placements.id = sqlc.arg(placement_id)
 LIMIT 1;
 
 -- name: GetLatestCompletedContextSourceRun :one
@@ -2340,15 +2381,32 @@ WHERE id = sqlc.arg(transition_id)
 UPDATE task_node_placements
 SET state = 'completed',
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
-WHERE id = sqlc.arg(placement_id)
+WHERE task_node_placements.id = sqlc.arg(placement_id)
   AND state = 'active';
 
+-- name: SupersedeCompletedTerminalManualMoveSourcePlacement :execrows
+UPDATE task_node_placements
+SET state = 'superseded',
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE task_node_placements.id = sqlc.arg(placement_id)
+  AND state = 'completed'
+  AND EXISTS (
+      SELECT 1
+      FROM workflow_nodes n
+      WHERE n.id = task_node_placements.node_id
+        AND n.kind = 'terminal'
+  );
+
 -- name: ListActiveManualMoveSources :many
-SELECT id, node_id, parallel_batch_transition_id
+SELECT task_node_placements.id, node_id, parallel_batch_transition_id
 FROM task_node_placements
-WHERE task_id = sqlc.arg(task_id)
-  AND state = 'active'
-ORDER BY created_at_unix_ms DESC, rowid DESC;
+LEFT JOIN workflow_nodes n ON n.id = task_node_placements.node_id
+WHERE task_node_placements.task_id = sqlc.arg(task_id)
+  AND (
+      task_node_placements.state = 'active'
+      OR (task_node_placements.state = 'completed' AND n.kind = 'terminal')
+  )
+ORDER BY task_node_placements.created_at_unix_ms DESC, task_node_placements.rowid DESC;
 
 -- name: InsertTaskComment :exec
 INSERT INTO task_comments (

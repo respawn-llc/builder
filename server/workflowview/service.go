@@ -476,7 +476,7 @@ func (s *Service) ListBoardNodeCards(ctx context.Context, req serverapi.Workflow
 		CursorSet:              cursorSet,
 		CursorUpdatedAtUnixMs:  cursor.updatedAtUnixMs,
 		CursorTaskID:           cursor.taskID,
-		NodeID:                 nodeID,
+		NodeID:                 sql.NullString{String: nodeID, Valid: strings.TrimSpace(nodeID) != ""},
 		CanceledTerminalNodeID: canceledBoardTerminalNodeID(def),
 		LimitRows:              int64(pageSize + 1),
 	})
@@ -563,6 +563,18 @@ func pendingApprovalSourcePlacement(row sqlitegen.ListPendingApprovalSourcePlace
 		CreatedAtUnixMs:           row.CreatedAtUnixMs,
 		UpdatedAtUnixMs:           row.UpdatedAtUnixMs,
 	}
+}
+
+func taskNodePlacementNodeID(placement sqlitegen.TaskNodePlacementRecord) (string, bool) {
+	nodeID := nullableWorkflowViewNodeID(placement.NodeID)
+	return nodeID, nodeID != ""
+}
+
+func nullableWorkflowViewNodeID(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return strings.TrimSpace(value.String)
 }
 
 func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.WorkflowTaskDetail, error) {
@@ -1057,23 +1069,31 @@ func taskSummary(task sqlitegen.TaskRecord, placements []sqlitegen.TaskNodePlace
 	summary := serverapi.WorkflowTaskSummary{ID: task.ID, ProjectID: task.ProjectID, WorkflowID: task.WorkflowID, ShortID: task.ShortID, Title: task.Title, BodyPreview: bodyPreview(task.Body), SourceWorkspaceID: strings.TrimSpace(task.SourceWorkspaceID.String), CanceledAt: task.CanceledAtUnixMs, CancelReason: task.CancellationReason, CreatedAtUnixMs: task.CreatedAtUnixMs, UpdatedAtUnixMs: task.UpdatedAtUnixMs}
 	seenActive := map[string]bool{}
 	for _, placement := range placements {
+		nodeID, ok := taskNodePlacementNodeID(placement)
+		if !ok {
+			continue
+		}
+		if nodeKinds[nodeID] == workflow.NodeKindTerminal {
+			if placement.State == "completed" {
+				summary.Done = true
+			}
+			continue
+		}
 		if placement.State != "active" && placement.State != "waiting_approval" {
 			continue
 		}
-		if nodeKinds[placement.NodeID] == workflow.NodeKindTerminal {
-			summary.Done = true
-		}
-		if !seenActive[placement.NodeID] {
-			summary.ActiveNodeIDs = append(summary.ActiveNodeIDs, placement.NodeID)
-			seenActive[placement.NodeID] = true
+		if !seenActive[nodeID] {
+			summary.ActiveNodeIDs = append(summary.ActiveNodeIDs, nodeID)
+			seenActive[nodeID] = true
 		}
 	}
 	return summary
 }
 
 func placementDTO(placement sqlitegen.TaskNodePlacementRecord, nodes map[string]serverapi.WorkflowNode) serverapi.WorkflowPlacement {
-	dto := serverapi.WorkflowPlacement{ID: placement.ID, TaskID: placement.TaskID, NodeID: placement.NodeID, State: placement.State, ParallelBatchTransitionID: strings.TrimSpace(placement.ParallelBatchTransitionID.String), ParallelBranchEdgeID: strings.TrimSpace(placement.ParallelBranchEdgeID.String)}
-	if node, ok := nodes[placement.NodeID]; ok {
+	nodeID, _ := taskNodePlacementNodeID(placement)
+	dto := serverapi.WorkflowPlacement{ID: placement.ID, TaskID: placement.TaskID, NodeID: nodeID, State: placement.State, ParallelBatchTransitionID: strings.TrimSpace(placement.ParallelBatchTransitionID.String), ParallelBranchEdgeID: strings.TrimSpace(placement.ParallelBranchEdgeID.String)}
+	if node, ok := nodes[nodeID]; ok {
 		dto.NodeKey = node.Key
 		dto.NodeDisplayName = node.DisplayName
 		dto.NodeKind = node.Kind
@@ -1230,8 +1250,9 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 }
 
 func runDTO(run sqlitegen.TaskRunRecord, nodes map[string]serverapi.WorkflowNode, sessionNames map[string]string) serverapi.WorkflowRun {
-	dto := serverapi.WorkflowRun{ID: run.ID, TaskID: run.TaskID, PlacementID: run.PlacementID, NodeID: run.NodeID, SessionID: run.SessionID.String, Generation: run.RunGeneration, StartedAtUnixMs: run.StartedAtUnixMs, CompletedAtUnixMs: run.CompletedAtUnixMs, InterruptedAtUnixMs: run.InterruptedAtUnixMs, InterruptionReason: run.InterruptionReason, WaitingAskID: run.WaitingAskID, Status: runStatus(run)}
-	if node, ok := nodes[run.NodeID]; ok {
+	nodeID := nullableWorkflowViewNodeID(run.NodeID)
+	dto := serverapi.WorkflowRun{ID: run.ID, TaskID: run.TaskID, PlacementID: run.PlacementID, NodeID: nodeID, SessionID: run.SessionID.String, Generation: run.RunGeneration, StartedAtUnixMs: run.StartedAtUnixMs, CompletedAtUnixMs: run.CompletedAtUnixMs, InterruptedAtUnixMs: run.InterruptedAtUnixMs, InterruptionReason: run.InterruptionReason, WaitingAskID: run.WaitingAskID, Status: runStatus(run)}
+	if node, ok := nodes[nodeID]; ok {
 		dto.Role = node.SubagentRole
 	}
 	if name, ok := sessionNames[strings.TrimSpace(run.SessionID.String)]; ok {
@@ -1265,7 +1286,7 @@ func transitionDTO(transition sqlitegen.TaskTransitionRecord, edges []sqlitegen.
 		TaskID:                transition.TaskID,
 		SourceRunID:           strings.TrimSpace(transition.SourceRunID.String),
 		SourcePlacementID:     strings.TrimSpace(transition.SourcePlacementID.String),
-		SourceNodeID:          strings.TrimSpace(transition.SourceNodeID.String),
+		SourceNodeID:          nullableWorkflowViewNodeID(transition.SourceNodeID),
 		SourceNodeKey:         transition.SourceNodeKey,
 		SourceNodeDisplayName: transition.SourceNodeDisplayName,
 		TransitionGroupID:     strings.TrimSpace(transition.TransitionGroupID.String),
@@ -1862,7 +1883,8 @@ func taskStatusAndActions(task sqlitegen.TaskRecord, summary serverapi.WorkflowT
 		if placement.State == "waiting_approval" {
 			waitingApproval = true
 		}
-		if placement.State == "active" && nodeKinds[placement.NodeID] == workflow.NodeKindStart {
+		nodeID, ok := taskNodePlacementNodeID(placement)
+		if ok && placement.State == "active" && nodeKinds[nodeID] == workflow.NodeKindStart {
 			backlog = true
 		}
 	}
@@ -1946,25 +1968,31 @@ func currentTaskPlacementIDs(placements []sqlitegen.TaskNodePlacementRecord) map
 }
 
 func manualMoveTargetNodeIDs(def serverapi.WorkflowDefinition, placements []sqlitegen.TaskNodePlacementRecord, nodeKinds map[string]workflow.NodeKind) []string {
-	activeNodeID := ""
+	sourceNodeID := ""
 	for _, placement := range placements {
-		if placement.State != "active" {
+		nodeID, ok := taskNodePlacementNodeID(placement)
+		if !ok {
 			continue
 		}
-		if activeNodeID != "" {
+		nodeKind := nodeKinds[nodeID]
+		isCurrentSource := placement.State == "active" || placement.State == "waiting_approval" || (placement.State == "completed" && nodeKind == workflow.NodeKindTerminal)
+		if !isCurrentSource {
+			continue
+		}
+		if sourceNodeID != "" {
 			return []string{}
 		}
-		if nodeKinds[placement.NodeID] == workflow.NodeKindTerminal {
+		if nodeKind == workflow.NodeKindTerminal && placement.State != "completed" {
 			return []string{}
 		}
-		activeNodeID = placement.NodeID
+		sourceNodeID = nodeID
 	}
-	if activeNodeID == "" {
+	if sourceNodeID == "" {
 		return []string{}
 	}
 	groupIDs := map[string]bool{}
 	for _, group := range def.TransitionGroups {
-		if group.SourceNodeID == activeNodeID {
+		if group.SourceNodeID == sourceNodeID {
 			groupIDs[group.ID] = true
 		}
 	}
@@ -1973,6 +2001,9 @@ func manualMoveTargetNodeIDs(def serverapi.WorkflowDefinition, placements []sqli
 	seen := map[string]bool{}
 	for _, node := range def.Nodes {
 		if workflow.NodeKind(node.Kind) == workflow.NodeKindTerminal {
+			if node.ID == sourceNodeID {
+				continue
+			}
 			seen[node.ID] = true
 			targets = append(targets, node.ID)
 		}
@@ -2012,26 +2043,40 @@ func (s *Service) applyBoardColumnTaskCounts(ctx context.Context, columns []serv
 		indexByNodeID[column.Node.NodeID] = index
 	}
 	for _, row := range rows {
-		if index, ok := indexByNodeID[row.NodeID]; ok {
+		nodeID := strings.TrimSpace(row.NodeID.String)
+		if !row.NodeID.Valid || nodeID == "" {
+			continue
+		}
+		if index, ok := indexByNodeID[nodeID]; ok {
 			columns[index].TaskCount = int(row.TaskCount)
 		}
 	}
 	return nil
 }
 
-func activeBoardPlacements(placements []sqlitegen.TaskNodePlacementRecord) []sqlitegen.TaskNodePlacementRecord {
-	active := make([]sqlitegen.TaskNodePlacementRecord, 0, len(placements))
+func effectiveBoardPlacements(placements []sqlitegen.TaskNodePlacementRecord, nodeKinds map[string]workflow.NodeKind) []sqlitegen.TaskNodePlacementRecord {
+	effective := make([]sqlitegen.TaskNodePlacementRecord, 0, len(placements))
 	for _, placement := range placements {
-		if placement.State != "active" && placement.State != "waiting_approval" {
+		nodeID, ok := taskNodePlacementNodeID(placement)
+		if !ok {
 			continue
 		}
-		active = append(active, placement)
+		nodeKind := nodeKinds[nodeID]
+		if nodeKind == workflow.NodeKindTerminal {
+			if placement.State == "completed" {
+				effective = append(effective, placement)
+			}
+			continue
+		}
+		if placement.State == "active" || placement.State == "waiting_approval" {
+			effective = append(effective, placement)
+		}
 	}
-	return active
+	return effective
 }
 
 func effectiveBoardPlacementsForTask(task sqlitegen.TaskRecord, placements []sqlitegen.TaskNodePlacementRecord, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind) []sqlitegen.TaskNodePlacementRecord {
-	active := activeBoardPlacements(placements)
+	active := effectiveBoardPlacements(placements, nodeKinds)
 	if task.CanceledAtUnixMs == 0 {
 		return active
 	}
@@ -2041,7 +2086,8 @@ func effectiveBoardPlacementsForTask(task sqlitegen.TaskRecord, placements []sql
 	}
 	terminalPlacements := make([]sqlitegen.TaskNodePlacementRecord, 0, len(active))
 	for _, placement := range active {
-		if nodeKinds[placement.NodeID] == workflow.NodeKindTerminal {
+		nodeID, ok := taskNodePlacementNodeID(placement)
+		if ok && nodeKinds[nodeID] == workflow.NodeKindTerminal {
 			terminalPlacements = append(terminalPlacements, placement)
 		}
 	}
@@ -2051,8 +2097,8 @@ func effectiveBoardPlacementsForTask(task sqlitegen.TaskRecord, placements []sql
 	return []sqlitegen.TaskNodePlacementRecord{{
 		ID:              "",
 		TaskID:          task.ID,
-		NodeID:          terminalNodeID,
-		State:           "active",
+		NodeID:          sql.NullString{String: terminalNodeID, Valid: true},
+		State:           "completed",
 		CreatedAtUnixMs: task.UpdatedAtUnixMs,
 		UpdatedAtUnixMs: task.UpdatedAtUnixMs,
 	}}
@@ -2066,7 +2112,8 @@ func effectiveVisibleBoardStatusPlacementsForTask(task sqlitegen.TaskRecord, pla
 	}
 	visible := make([]sqlitegen.TaskNodePlacementRecord, 0, len(effective))
 	for _, placement := range effective {
-		if visibleNodeIDs[placement.NodeID] {
+		nodeID, ok := taskNodePlacementNodeID(placement)
+		if ok && visibleNodeIDs[nodeID] {
 			visible = append(visible, placement)
 		}
 	}
@@ -2076,7 +2123,9 @@ func effectiveVisibleBoardStatusPlacementsForTask(task sqlitegen.TaskRecord, pla
 func workflowTaskStatusKeysAndOrder(placements []sqlitegen.TaskNodePlacementRecord, columns []serverapi.WorkflowBoardColumn) ([]string, int) {
 	nodeIDs := map[string]bool{}
 	for _, placement := range placements {
-		nodeIDs[placement.NodeID] = true
+		if nodeID, ok := taskNodePlacementNodeID(placement); ok {
+			nodeIDs[nodeID] = true
+		}
 	}
 	keys := []string{}
 	statusOrder := len(columns)

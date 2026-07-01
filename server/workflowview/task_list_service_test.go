@@ -284,8 +284,8 @@ func TestEffectiveVisibleBoardStatusPlacementsForCanceledTaskWithoutTerminalFall
 	nodeKinds := map[string]workflow.NodeKind{"node-backlog": workflow.NodeKindStart, "node-join": workflow.NodeKindJoin}
 	task := sqlitegen.TaskRecord{ID: "task-1", CanceledAtUnixMs: 10, UpdatedAtUnixMs: 10}
 	placements := []sqlitegen.TaskNodePlacementRecord{
-		{ID: "placement-join", TaskID: task.ID, NodeID: "node-join", State: "active", ParallelBatchTransitionID: sql.NullString{}, ParallelBranchEdgeID: sql.NullString{}},
-		{ID: "placement-backlog", TaskID: task.ID, NodeID: "node-backlog", State: "active", ParallelBatchTransitionID: sql.NullString{}, ParallelBranchEdgeID: sql.NullString{}},
+		{ID: "placement-join", TaskID: task.ID, NodeID: sql.NullString{String: "node-join", Valid: true}, State: "active", ParallelBatchTransitionID: sql.NullString{}, ParallelBranchEdgeID: sql.NullString{}},
+		{ID: "placement-backlog", TaskID: task.ID, NodeID: sql.NullString{String: "node-backlog", Valid: true}, State: "active", ParallelBatchTransitionID: sql.NullString{}, ParallelBranchEdgeID: sql.NullString{}},
 	}
 
 	visible := effectiveVisibleBoardStatusPlacementsForTask(task, placements, def, nodeKinds)

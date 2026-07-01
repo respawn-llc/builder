@@ -351,16 +351,13 @@ func TestGuardedGraphDeletesRespectTaskHistory(t *testing.T) {
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
 	agentID := workflow.NodeID("node-agent-" + string(workflowID))
-	if err := store.DeleteNode(ctx, agentID); !workflowGraphEditPolicyErrorHasBlocker(err, "active_node_placements") {
-		t.Fatalf("expected active node delete policy guard, got %v", err)
+	if err := store.DeleteNode(ctx, agentID); !errors.Is(err, ErrNodeHasTaskHistory) {
+		t.Fatalf("expected active node task-history guard, got %v", err)
 	}
-	if err := store.DeleteEdge(ctx, workflow.EdgeID("edge-start-"+string(workflowID))); !workflowGraphEditPolicyErrorHasBlocker(err, "active_node_placements") {
-		t.Fatalf("expected active edge delete policy guard, got %v", err)
+	if err := store.DeleteEdge(ctx, workflow.EdgeID("edge-start-"+string(workflowID))); err != nil {
+		t.Fatalf("DeleteEdge unrelated to current active node: %v", err)
 	}
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
-	if err := store.DeleteNode(ctx, agentID); !errors.Is(err, ErrNodeHasTaskHistory) {
-		t.Fatalf("expected node history delete guard, got %v", err)
-	}
 	if err := store.DeleteEdge(ctx, workflow.EdgeID("edge-done-"+string(workflowID))); err != nil {
 		t.Fatalf("DeleteEdge completed history edge: %v", err)
 	}
@@ -373,24 +370,9 @@ func TestGuardedGraphDeletesRespectTaskHistory(t *testing.T) {
 		t.Fatalf("AddNode unused: %v", err)
 	}
 	if err := store.DeleteNode(ctx, done.ID); !errors.Is(err, ErrNodeHasTaskHistory) {
-		t.Fatalf("expected terminal physical delete guard, got %v", err)
+		t.Fatalf("expected terminal current-anchor guard, got %v", err)
 	}
-	if err := store.DeleteNode(ctx, "node-unused"); err != nil {
-		t.Fatalf("DeleteNode unused: %v", err)
-	}
-	if _, err := store.queries.GetWorkflowNode(ctx, "node-unused"); err == nil {
-		t.Fatalf("unused node still exists after guarded delete")
-	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-unused", WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "unused", DisplayName: "Unused"}); err != nil {
-		t.Fatalf("AddTransitionGroup unused: %v", err)
-	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-unused", WorkflowID: workflowID, TransitionGroupID: "group-unused", Key: "unused", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession}); err != nil {
-		t.Fatalf("AddEdge unused: %v", err)
-	}
-	if err := store.DeleteEdge(ctx, "edge-unused"); err != nil {
-		t.Fatalf("DeleteEdge unused: %v", err)
-	}
-	if _, err := store.queries.GetWorkflowEdge(ctx, "edge-unused"); err == nil {
-		t.Fatalf("unused edge still exists after guarded delete")
+	if err := store.DeleteNode(ctx, agentID); err != nil {
+		t.Fatalf("DeleteNode historical agent reference: %v", err)
 	}
 }

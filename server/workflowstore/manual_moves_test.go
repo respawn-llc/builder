@@ -36,7 +36,7 @@ func TestManualMoveToTerminalArchivesWithoutOutputValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements: %v", err)
 	}
-	if len(placements) != 3 || placements[1].State != "completed" || placements[2].NodeID != done.ID || placements[2].State != "active" {
+	if len(placements) != 3 || placements[1].State != "completed" || placements[2].NodeID != done.ID || placements[2].State != "completed" {
 		t.Fatalf("manual terminal placements = %+v", placements)
 	}
 }
@@ -64,8 +64,8 @@ func TestManualMoveFromTerminalToStartResetsTaskToBacklog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements: %v", err)
 	}
-	if len(placements) != 4 || placements[2].State != "completed" || placements[3].NodeID != start.ID || placements[3].State != "active" {
-		t.Fatalf("reset placements = %+v, want active start placement after completed terminal", placements)
+	if len(placements) != 4 || placements[2].State != "superseded" || placements[3].NodeID != start.ID || placements[3].State != "active" {
+		t.Fatalf("reset placements = %+v, want active start placement after superseded terminal", placements)
 	}
 	runs, err := store.ListRuns(ctx, task.ID)
 	if err != nil {

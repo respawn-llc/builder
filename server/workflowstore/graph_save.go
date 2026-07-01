@@ -35,11 +35,12 @@ type WorkflowGraphSaveMetadata struct {
 }
 
 type WorkflowGraphSaveImpact struct {
-	RemovedNodeCount            int64
-	RemovedTransitionGroupCount int64
-	RemovedEdgeCount            int64
-	NodeTaskReferenceCount      int64
-	EdgeTaskReferenceCount      int64
+	RemovedNodeCount              int64
+	RemovedTransitionGroupCount   int64
+	RemovedEdgeCount              int64
+	NodeTaskReferenceCount        int64
+	CurrentNodeTaskReferenceCount int64
+	EdgeTaskReferenceCount        int64
 }
 
 type WorkflowGraphSaveBlocker struct {
@@ -393,11 +394,16 @@ func workflowGraphSaveImpact(ctx context.Context, q *sqlitegen.Queries, workflow
 		RemovedEdgeCount:            int64(len(removed.edges)),
 	}
 	for _, nodeID := range removed.nodes {
-		count, err := q.CountTaskNodeReferences(ctx, string(nodeID))
+		count, err := q.CountTaskNodeReferences(ctx, nullableString(string(nodeID)))
 		if err != nil {
 			return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
 		}
 		impact.NodeTaskReferenceCount += count
+		currentCount, err := q.CountCurrentTaskNodeAnchorReferences(ctx, nullableString(string(nodeID)))
+		if err != nil {
+			return WorkflowGraphSaveImpact{}, removedWorkflowGraphRows{}, err
+		}
+		impact.CurrentNodeTaskReferenceCount += currentCount
 	}
 	for _, edgeID := range removed.edges {
 		count, err := q.CountTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
@@ -411,8 +417,8 @@ func workflowGraphSaveImpact(ctx context.Context, q *sqlitegen.Queries, workflow
 
 func workflowGraphSaveBlockers(req WorkflowGraphSaveRequest, impact WorkflowGraphSaveImpact) []WorkflowGraphSaveBlocker {
 	blockers := []WorkflowGraphSaveBlocker{}
-	if impact.NodeTaskReferenceCount > 0 {
-		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "node_task_references", Message: "Removed workflow nodes are referenced by existing tasks.", Count: impact.NodeTaskReferenceCount})
+	if impact.CurrentNodeTaskReferenceCount > 0 {
+		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "node_task_references", Message: "Removed workflow nodes are referenced by current task state.", Count: impact.CurrentNodeTaskReferenceCount})
 	}
 	if impact.EdgeTaskReferenceCount > 0 {
 		blockers = append(blockers, WorkflowGraphSaveBlocker{Code: "edge_task_references", Message: "Removed workflow edges are referenced by existing tasks.", Count: impact.EdgeTaskReferenceCount})
