@@ -134,12 +134,6 @@ const (
 	MethodPromptSubscribeActivity               = "prompt.subscribeActivity"
 	MethodPromptActivityEvent                   = "prompt.activity"
 	MethodPromptActivityComplete                = "prompt.activity.complete"
-	MethodAttentionNotificationSubscribe        = "attention.notification.subscribe"
-	MethodAttentionNotificationEvent            = "attention.notification"
-	MethodAttentionNotificationComplete         = "attention.notification.complete"
-	MethodAttentionSessionNotificationSubscribe = "attention.sessionNotification.subscribe"
-	MethodAttentionSessionNotificationEvent     = "attention.sessionNotification"
-	MethodAttentionSessionNotificationComplete  = "attention.sessionNotification.complete"
 	MethodRunPrompt                             = "run.prompt"
 	MethodRunPromptProgress                     = "run.prompt.progress"
 	MethodSessionSubscribeActivity              = "session.subscribeActivity"
@@ -190,10 +184,6 @@ type ProcessOutputEventParams struct {
 
 type PromptActivityEventParams struct {
 	Event clientui.PendingPromptEvent `json:"event"`
-}
-
-type AttentionNotificationEventParams struct {
-	Event clientui.AttentionNotificationEvent `json:"event"`
 }
 
 type WorkflowProjectEventParams struct {

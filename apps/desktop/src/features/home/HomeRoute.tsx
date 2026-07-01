@@ -7,7 +7,7 @@ import { errorMessage } from "../../api/errors";
 import { basename, formatRelativeTime, projectKeyFromName } from "../../app/formatters";
 import { useAppNavigation } from "../../app/navigation";
 import { queryKeys } from "../../app/queryKeys";
-import { useSidebar, type TaskDetailInitialFocus } from "../../app/sidebarContext";
+import { useSidebar } from "../../app/sidebarContext";
 import { useAppServices } from "../../app/useAppServices";
 import { useNativeDialogFallback } from "../../app/useNativeDialogFallback";
 import { useStatusController } from "../../app/useStatusController";
@@ -253,7 +253,7 @@ const AttentionRow = memo(function AttentionRow({
         if (item.taskID.length > 0) {
           void openSidebar({
             kind: "taskDetail",
-            initialFocus: attentionItemInitialFocus(item),
+            initialFocus: item.kind === "question" ? "firstQuestion" : undefined,
             inboxNav: true,
             mode: "overlay",
             onMutated: undefined,
@@ -302,16 +302,6 @@ function attentionRowPropsEqual(
   return previous.openSidebar === next.openSidebar && previous.navigation === next.navigation && attentionItemsEqual(previous.item, next.item);
 }
 
-function attentionItemInitialFocus(item: AttentionItem): TaskDetailInitialFocus | undefined {
-  if (item.kind === "question" && item.askID.length > 0) {
-    return { kind: "question", askIDs: [item.askID] };
-  }
-  if (item.kind === "approval" && item.taskTransitionID.length > 0) {
-    return { kind: "approval", taskTransitionID: item.taskTransitionID };
-  }
-  return undefined;
-}
-
 function attentionItemsEqual(previous: AttentionItem, next: AttentionItem): boolean {
   return (
     previous.id === next.id &&
@@ -319,8 +309,6 @@ function attentionItemsEqual(previous: AttentionItem, next: AttentionItem): bool
     previous.projectID === next.projectID &&
     previous.workflowID === next.workflowID &&
     previous.taskID === next.taskID &&
-    previous.askID === next.askID &&
-    previous.taskTransitionID === next.taskTransitionID &&
     previous.taskShortID === next.taskShortID &&
     previous.taskTitle === next.taskTitle &&
     previous.message === next.message &&

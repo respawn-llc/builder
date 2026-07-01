@@ -236,28 +236,15 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       await sendSocketRequest(socket, method, params, rpcRequestTimeoutMs);
       handler.onOpen?.();
       await waitForSubscriptionEnd(socket, signal);
-      this.#throwNonZeroComplete(method, terminalCompleteRef.current);
     } catch (error) {
       if (terminalCompleteRef.current?.code === 0) {
         return;
       }
-      this.#throwNonZeroComplete(method, terminalCompleteRef.current);
       throw error;
     } finally {
       socket.removeEventListener("message", subscriptionListener);
       socket.close();
     }
-  }
-
-  #throwNonZeroComplete(
-    method: string,
-    complete: Readonly<{ code: number; message: string }> | null,
-  ): void {
-    if (complete === null || complete.code === 0) {
-      return;
-    }
-    const suffix = complete.message.length === 0 ? "" : `: ${complete.message}`;
-    throw new TransportError(`${method} subscription completed with code ${complete.code.toString()}${suffix}`);
   }
 }
 

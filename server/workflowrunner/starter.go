@@ -2,11 +2,9 @@ package workflowrunner
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,10 +26,8 @@ import (
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
-	"core/server/workflowattention"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -70,25 +66,18 @@ type RuntimeEventRegistry interface {
 	AwaitPromptResponse(ctx context.Context, sessionID string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error)
 }
 
-type RuntimeTaskQuestionAttentionRegistry interface {
-	PrepareTaskQuestionBatch(batch askquestion.AskQuestionBatchMetadata, sessionID string, target *clientui.AttentionNotificationTarget, presentation *clientui.AttentionNotificationPresentation, occurredAt time.Time) error
-	MarkTaskQuestionCleared(batch askquestion.AskQuestionBatchMetadata, askID string)
-	MarkTaskQuestionSkipped(batch askquestion.AskQuestionBatchMetadata)
-}
-
 type Starter struct {
-	cfg                config.App
-	metadata           *metadata.Store
-	store              RuntimeStore
-	authManager        *auth.Manager
-	background         *shelltool.Manager
-	runtimes           RuntimeEventRegistry
-	sessionRuntime     *sessionruntime.Service
-	storeOptions       []session.StoreOption
-	clientFactory      func(SchedulerStartRunRequest) llm.Client
-	worktrees          TaskWorktreeEnsurer
-	attentionFinalizer workflowAttentionFinalizer
-	finished           func(workflow.RunID, int64)
+	cfg            config.App
+	metadata       *metadata.Store
+	store          RuntimeStore
+	authManager    *auth.Manager
+	background     *shelltool.Manager
+	runtimes       RuntimeEventRegistry
+	sessionRuntime *sessionruntime.Service
+	storeOptions   []session.StoreOption
+	clientFactory  func(SchedulerStartRunRequest) llm.Client
+	worktrees      TaskWorktreeEnsurer
+	finished       func(workflow.RunID, int64)
 
 	mu     sync.Mutex
 	cancel map[workflow.RunID]context.CancelFunc
@@ -99,14 +88,9 @@ type Starter struct {
 }
 
 type StarterOptions struct {
-	ClientFactory      func(SchedulerStartRunRequest) llm.Client
-	Worktrees          TaskWorktreeEnsurer
-	SessionRuntime     *sessionruntime.Service
-	AttentionFinalizer workflowAttentionFinalizer
-}
-
-type workflowAttentionFinalizer interface {
-	FinalizeTransition(context.Context, workflowattention.TransitionResult)
+	ClientFactory  func(SchedulerStartRunRequest) llm.Client
+	Worktrees      TaskWorktreeEnsurer
+	SessionRuntime *sessionruntime.Service
 }
 
 func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, background *shelltool.Manager, runtimes RuntimeEventRegistry, opts StarterOptions) (*Starter, error) {
@@ -123,20 +107,19 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		return nil, errors.New("workflow runtime session-runtime service is required")
 	}
 	return &Starter{
-		cfg:                cfg,
-		metadata:           metadataStore,
-		store:              store,
-		authManager:        authManager,
-		background:         background,
-		runtimes:           runtimes,
-		sessionRuntime:     opts.SessionRuntime,
-		storeOptions:       metadataStore.AuthoritativeSessionStoreOptions(),
-		clientFactory:      opts.ClientFactory,
-		worktrees:          opts.Worktrees,
-		attentionFinalizer: opts.AttentionFinalizer,
-		cancel:             map[workflow.RunID]context.CancelFunc{},
-		task:               map[workflow.RunID]workflow.TaskID{},
-		done:               map[workflow.RunID]chan struct{}{},
+		cfg:            cfg,
+		metadata:       metadataStore,
+		store:          store,
+		authManager:    authManager,
+		background:     background,
+		runtimes:       runtimes,
+		sessionRuntime: opts.SessionRuntime,
+		storeOptions:   metadataStore.AuthoritativeSessionStoreOptions(),
+		clientFactory:  opts.ClientFactory,
+		worktrees:      opts.Worktrees,
+		cancel:         map[workflow.RunID]context.CancelFunc{},
+		task:           map[workflow.RunID]workflow.TaskID{},
+		done:           map[workflow.RunID]chan struct{}{},
 	}, nil
 }
 
@@ -717,19 +700,9 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 				Contract:                     workflowCompletionContract(req, input),
 				CompletionMode:               effectiveMode,
 				MaxInvalidCompletionAttempts: s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
-				Controller:                   workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer},
+				Controller:                   workflowruntime.StoreController{Store: s.store},
 				TaskCommentCounter:           s.store,
 				Instructions:                 instructions,
-			},
-			AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
-				if attention, ok := s.runtimes.(RuntimeTaskQuestionAttentionRegistry); ok {
-					target := workflowTaskQuestionAttentionTarget(input, sessionID, req.RunID, batch)
-					presentation := workflowTaskQuestionAttentionPresentation(input, askquestion.AskQuestionRequest{ID: batch.PromptID, QuestionBatch: &batch})
-					if err := attention.PrepareTaskQuestionBatch(batch, sessionID, target, presentation, time.Now().UTC()); err != nil {
-						logger.Logf("workflow.attention.question_batch_prepare_failed run_id=%s task_id=%s batch_id=%s prompt_id=%s error=%s", req.RunID, req.TaskID, batch.BatchID, batch.PromptID, err)
-					}
-					markWorkflowTaskQuestionBatchSkipped(attention, batch, "")
-				}
 			},
 			OnEvent: func(evt runtime.Event) {
 				logger.Logf("%s", runlog.FormatRuntimeEvent(evt))
@@ -748,7 +721,14 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		}
 		if wiring.AskBroker != nil && s.runtimes != nil {
 			wiring.AskBroker.SetAskHandler(func(askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-				return s.handleWorkflowAsk(ctx, sessionID, req, input, askReq)
+				if err := s.store.SetRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID); err != nil {
+					return askquestion.AskQuestionResponse{}, err
+				}
+				resp, askErr := s.runtimes.AwaitPromptResponse(ctx, sessionID, askReq)
+				if clearErr := s.store.ClearRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID); clearErr != nil && askErr == nil {
+					return askquestion.AskQuestionResponse{}, clearErr
+				}
+				return resp, askErr
 			})
 		} else if wiring.AskBroker != nil {
 			wiring.AskBroker.SetAskHandler(func(askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
@@ -812,77 +792,6 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 	}
 }
 
-func (s *Starter) handleWorkflowAsk(ctx context.Context, sessionID string, req SchedulerStartRunRequest, input workflowstore.RunStartContext, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-	if askReq.Approval {
-		return s.runtimes.AwaitPromptResponse(ctx, sessionID, askReq)
-	}
-	if askReq.Origin != askquestion.AskQuestionOriginModelTool || askReq.QuestionBatch == nil {
-		return askquestion.AskQuestionResponse{}, fmt.Errorf("workflow task question missing batch metadata: operation=ask_question task_id=%s run_id=%s step_id=%s call_id=%s ask_id=%s approval=%t", input.Task.ID, req.RunID, askReq.StepID, askReq.ToolCallID, askReq.ID, askReq.Approval)
-	}
-	askReq.AttentionTarget = workflowTaskQuestionAttentionTarget(input, sessionID, req.RunID, *askReq.QuestionBatch)
-	askReq.AttentionPresentation = workflowTaskQuestionAttentionPresentation(input, askReq)
-	if err := s.store.SetRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID); err != nil {
-		if attention, ok := s.runtimes.(RuntimeTaskQuestionAttentionRegistry); ok {
-			if prepareErr := attention.PrepareTaskQuestionBatch(*askReq.QuestionBatch, sessionID, askReq.AttentionTarget, askReq.AttentionPresentation, time.Now().UTC()); prepareErr == nil {
-				markWorkflowTaskQuestionBatchSkipped(attention, *askReq.QuestionBatch, "")
-			}
-		}
-		return askquestion.AskQuestionResponse{}, err
-	}
-	resp, askErr := s.runtimes.AwaitPromptResponse(ctx, sessionID, askReq)
-	clearErr := s.store.ClearRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID)
-	if clearErr != nil {
-		if s.taskQuestionAlreadyDurablyCleared(context.Background(), req.RunID, askReq.ID, clearErr, askErr, ctx.Err()) {
-			if attention, ok := s.runtimes.(RuntimeTaskQuestionAttentionRegistry); ok {
-				attention.MarkTaskQuestionCleared(*askReq.QuestionBatch, askReq.ID)
-				markWorkflowTaskQuestionBatchSkipped(attention, *askReq.QuestionBatch, askReq.ID)
-			}
-			return resp, askErr
-		}
-		if askErr == nil {
-			return askquestion.AskQuestionResponse{}, clearErr
-		}
-		return resp, errors.Join(askErr, clearErr)
-	}
-	if attention, ok := s.runtimes.(RuntimeTaskQuestionAttentionRegistry); ok {
-		attention.MarkTaskQuestionCleared(*askReq.QuestionBatch, askReq.ID)
-		if shouldSkipRemainingWorkflowTaskQuestions(askErr, ctx.Err()) {
-			markWorkflowTaskQuestionBatchSkipped(attention, *askReq.QuestionBatch, askReq.ID)
-		}
-	}
-	return resp, askErr
-}
-
-func (s *Starter) taskQuestionAlreadyDurablyCleared(ctx context.Context, runID workflow.RunID, askID string, clearErr error, askErr error, ctxErr error) bool {
-	if !errors.Is(clearErr, sql.ErrNoRows) {
-		return false
-	}
-	if !shouldSkipRemainingWorkflowTaskQuestions(askErr, ctxErr) {
-		return false
-	}
-	run, err := s.store.GetRun(ctx, runID)
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(run.WaitingAskID) != strings.TrimSpace(askID)
-}
-
-func shouldSkipRemainingWorkflowTaskQuestions(askErr error, ctxErr error) bool {
-	return ctxErr != nil || errors.Is(askErr, context.Canceled) || errors.Is(askErr, io.EOF)
-}
-
-func markWorkflowTaskQuestionBatchSkipped(attention RuntimeTaskQuestionAttentionRegistry, batch askquestion.AskQuestionBatchMetadata, materializedAskID string) {
-	for _, askID := range batch.BatchPromptIDs {
-		if askID == "" || askID == materializedAskID {
-			continue
-		}
-		skipped := batch
-		skipped.BatchPromptIDs = append([]string(nil), batch.BatchPromptIDs...)
-		skipped.PromptID = askID
-		attention.MarkTaskQuestionSkipped(skipped)
-	}
-}
-
 func (s *Starter) finish(runID workflow.RunID, generation int64) {
 	s.mu.Lock()
 	done := s.done[runID]
@@ -916,49 +825,6 @@ func (s *Starter) interrupt(ctx context.Context, runID workflow.RunID, generatio
 	}
 	if err := s.store.InterruptRunGeneration(ctx, runID, generation, reason, detail); err != nil {
 		return
-	}
-}
-
-func workflowTaskQuestionAttentionTarget(input workflowstore.RunStartContext, sessionID string, runID workflow.RunID, batch askquestion.AskQuestionBatchMetadata) *clientui.AttentionNotificationTarget {
-	return &clientui.AttentionNotificationTarget{
-		Kind:        clientui.AttentionNotificationTargetTaskDetail,
-		ProjectID:   strings.TrimSpace(input.Task.ProjectID),
-		WorkflowID:  strings.TrimSpace(string(input.Task.WorkflowID)),
-		TaskID:      strings.TrimSpace(string(input.Task.ID)),
-		TaskShortID: strings.TrimSpace(input.Task.ShortID),
-		TaskTitle:   strings.TrimSpace(input.Task.Title),
-		SessionID:   strings.TrimSpace(sessionID),
-		RunID:       strings.TrimSpace(string(runID)),
-		Focus: &clientui.AttentionNotificationTaskDetailFocus{
-			Kind:   clientui.AttentionNotificationFocusQuestion,
-			AskIDs: append([]string(nil), batch.BatchPromptIDs...),
-		},
-	}
-}
-
-func workflowTaskQuestionAttentionPresentation(input workflowstore.RunStartContext, askReq askquestion.AskQuestionRequest) *clientui.AttentionNotificationPresentation {
-	taskShortID := strings.TrimSpace(input.Task.ShortID)
-	if taskShortID == "" {
-		taskShortID = strings.TrimSpace(string(input.Task.ID))
-	}
-	count := 1
-	if askReq.QuestionBatch != nil && askReq.QuestionBatch.PreparedPromptCount > 0 {
-		count = askReq.QuestionBatch.PreparedPromptCount
-	}
-	title := taskShortID + ": Question"
-	if count > 1 {
-		title = fmt.Sprintf("%s: %d questions", taskShortID, count)
-	}
-	body := strings.TrimSpace(askReq.Question)
-	if body == "" {
-		body = "question from agent"
-	}
-	return &clientui.AttentionNotificationPresentation{
-		Title:        title,
-		Body:         body,
-		Preview:      strings.TrimSpace(askReq.Question),
-		FallbackBody: "question from agent",
-		Count:        count,
 	}
 }
 

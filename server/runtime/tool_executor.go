@@ -2,8 +2,6 @@ package runtime
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,14 +28,20 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 	workflowActive := e.workflowRunActive()
 	serialGate := newSerialToolGate()
 	nextSerialOrdinal := 0
-	preparedCalls := prepareExecutorToolCalls(e, stepID, runID, workflowActive, calls)
 
-	for i := range preparedCalls {
-		prepared := preparedCalls[i]
-		call := prepared.call
-		toolID := prepared.toolID
-		knownTool := prepared.knownTool
-		executableCall := prepared.call
+	for i := range calls {
+		call := calls[i]
+		if call.ID == "" {
+			call.ID = uuid.NewString()
+		}
+		toolID, knownTool := toolspec.ParseID(call.Name)
+		executableCall := call
+		if knownTool {
+			executableCall.Name = string(toolID)
+		}
+		if call.Custom && knownTool {
+			executableCall.Input = executorInputForCustomTool(toolID, call.CustomInput)
+		}
 		transcriptCall := normalizeToolCallForTranscript(executableCall, e.transcriptWorkingDir())
 		started := Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
 		if start, ok := e.pendingToolCallStart(call.ID); ok {
@@ -55,7 +59,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 			nextSerialOrdinal++
 		}
 		wg.Add(1)
-		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata) {
+		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int) {
 			defer wg.Done()
 			defer e.forgetPendingToolCallStart(tc.ID)
 			var callErr error
@@ -95,7 +99,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				}
 				return
 			}
-			res, err := h.Call(ctx, tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID, AskQuestionBatch: askBatch, OnAskQuestionBatchSkipped: e.cfg.AskQuestionBatchSkipped})
+			res, err := h.Call(ctx, tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID})
 			if err != nil {
 				callErr = err
 				res = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: err.Error()}
@@ -110,7 +114,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				return
 			}
 			callErrs[idx] = callErr
-		}(executableCall, toolID, knownTool, serialOrdinal, prepared.askQuestionBatch)
+		}(executableCall, toolID, knownTool, serialOrdinal)
 	}
 
 	wg.Wait()
@@ -123,85 +127,6 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 		return results, joined
 	}
 	return results, nil
-}
-
-type executorToolCall struct {
-	call             llm.ToolCall
-	toolID           toolspec.ID
-	knownTool        bool
-	askQuestionBatch *tools.AskQuestionBatchMetadata
-}
-
-func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workflowActive bool, calls []llm.ToolCall) []executorToolCall {
-	prepared := make([]executorToolCall, 0, len(calls))
-	askCandidateIndexes := make([]int, 0)
-	askCandidatePromptIDs := make([]string, 0)
-	for i := range calls {
-		call := calls[i]
-		if call.ID == "" {
-			call.ID = uuid.NewString()
-		}
-		toolID, knownTool := toolspec.ParseID(call.Name)
-		executableCall := call
-		if knownTool {
-			executableCall.Name = string(toolID)
-		}
-		if call.Custom && knownTool {
-			executableCall.Input = executorInputForCustomTool(toolID, call.CustomInput)
-		}
-		prepared = append(prepared, executorToolCall{call: executableCall, toolID: toolID, knownTool: knownTool})
-		if !knownTool || toolID != toolspec.ToolAskQuestion || !workflowActive || !askQuestionMaterializable(engine) {
-			continue
-		}
-		if _, err := tools.PrepareAskQuestionToolRequest(executableCall.ID, executableCall.Input); err != nil {
-			continue
-		}
-		askCandidateIndexes = append(askCandidateIndexes, len(prepared)-1)
-		askCandidatePromptIDs = append(askCandidatePromptIDs, executableCall.ID)
-	}
-	if len(askCandidateIndexes) == 0 {
-		return prepared
-	}
-	batchID := stableAskQuestionBatchID(runID, stepID, askCandidatePromptIDs)
-	for ordinal, index := range askCandidateIndexes {
-		promptIDs := append([]string(nil), askCandidatePromptIDs...)
-		call := prepared[index].call
-		prepared[index].askQuestionBatch = &tools.AskQuestionBatchMetadata{
-			Origin:              tools.AskQuestionOriginModelTool,
-			RunID:               runID,
-			StepID:              stepID,
-			BatchID:             batchID,
-			PromptID:            call.ID,
-			BatchPromptIDs:      promptIDs,
-			CandidateOrdinal:    ordinal,
-			PreparedPromptCount: len(promptIDs),
-		}
-	}
-	return prepared
-}
-
-func askQuestionMaterializable(engine *Engine) bool {
-	if engine == nil || engine.registry == nil {
-		return false
-	}
-	handler, ok := engine.registry.Get(toolspec.ToolAskQuestion)
-	if !ok {
-		return false
-	}
-	questions, ok := handler.(interface{ QuestionsEnabled() bool })
-	return !ok || questions.QuestionsEnabled()
-}
-
-func stableAskQuestionBatchID(runID string, stepID string, promptIDs []string) string {
-	hash := sha256.New()
-	_, _ = hash.Write([]byte(runID))
-	_, _ = hash.Write([]byte{0})
-	_, _ = hash.Write([]byte(stepID))
-	for _, promptID := range promptIDs {
-		_, _ = hash.Write([]byte{0})
-		_, _ = hash.Write([]byte(promptID))
-	}
-	return hex.EncodeToString(hash.Sum(nil))[:24]
 }
 
 type serialToolGate struct {

@@ -5,21 +5,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"core/server/attentionnotify"
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/registry"
-	"core/server/runtime"
 	"core/server/session"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
@@ -27,7 +23,6 @@ import (
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/server/workflowview"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -271,243 +266,6 @@ func TestWorkflowRuntimeMultipleAskQuestionsInOneToolBatchResumeSequentially(t *
 	}
 	if !seenAskResults["call-ask-1"] || !seenAskResults["call-ask-2"] {
 		t.Fatalf("ask_question tool result call IDs = %+v, want both asks", askResults)
-	}
-}
-
-func TestWorkflowRuntimeTaskQuestionBatchPublishesOneTaskDetailAttention(t *testing.T) {
-	completeInput := json.RawMessage(`{"commentary":"answered both and finished"}`)
-	fixture := newStarterFixture(t, config.WorkflowCompletionModeTool,
-		ScriptedToolBatch("questions",
-			llm.ToolCall{ID: "call-ask-1", Name: "ask_question", Input: json.RawMessage(`{"question":"First direction?","suggestions":["ship","stop"],"recommended_option_index":1}`)},
-			llm.ToolCall{ID: "call-ask-2", Name: "ask_question", Input: json.RawMessage(`{"question":"Second direction?","suggestions":["fast","safe"],"recommended_option_index":2}`)},
-		),
-		ScriptedToolBatch("complete", llm.ToolCall{ID: "call-complete", Name: "complete_node", Input: completeInput}),
-	)
-	enableAskQuestionTool(t, &fixture)
-	fixture.rebuildStarter(t)
-	desktopSub, err := fixture.attentionBroker.SubscribeDesktop()
-	if err != nil {
-		t.Fatalf("SubscribeDesktop: %v", err)
-	}
-	task := fixture.createStartedTask(t)
-	scheduler := fixture.scheduler(t)
-
-	if err := scheduler.Process(context.Background()); err != nil {
-		t.Fatalf("Process: %v", err)
-	}
-	first := fixture.waitForWaitingAsk(t, task.ID, "call-ask-1")
-	prompts := fixture.runtimes.ListPendingPrompts(first.SessionID)
-	if len(prompts) != 1 || prompts[0].Request.AttentionTarget == nil || prompts[0].Request.QuestionBatch == nil {
-		t.Fatalf("pending prompt lacks task-detail attention enrichment: %+v", prompts)
-	}
-	pending := nextWorkflowAttentionEvent(t, desktopSub)
-	assertTaskQuestionBatchPending(t, pending, fixture, task, first.SessionID, "call-ask-1")
-	if err := fixture.runtimes.SubmitPromptResponse(first.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-1", Answer: "Ship it"}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse first: %v", err)
-	}
-	second := fixture.waitForWaitingAsk(t, task.ID, "call-ask-2")
-	pendingUpdate := nextWorkflowAttentionEvent(t, desktopSub)
-	assertTaskQuestionBatchPending(t, pendingUpdate, fixture, task, second.SessionID, "call-ask-2")
-	if pendingUpdate.Pending.Revision <= pending.Pending.Revision {
-		t.Fatalf("pending update revision = %d, want > %d", pendingUpdate.Pending.Revision, pending.Pending.Revision)
-	}
-	if err := fixture.runtimes.SubmitPromptResponse(second.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-2", Answer: "Keep it safe"}, nil); err != nil {
-		t.Fatalf("SubmitPromptResponse second: %v", err)
-	}
-	resolved := nextWorkflowAttentionEvent(t, desktopSub)
-	if resolved.Type != clientui.AttentionNotificationEventResolved || resolved.ID != pending.Pending.ID || resolved.Kind != clientui.AttentionNotificationKindQuestion {
-		t.Fatalf("resolved event = %+v, want question batch resolved for %q", resolved, pending.Pending.ID)
-	}
-	fixture.waitForCompletedRun(t, task.ID)
-}
-
-func TestWorkflowAskHandlerRejectsTaskQuestionWithoutBatchMetadata(t *testing.T) {
-	starter := &Starter{}
-	req := SchedulerStartRunRequest{RunID: "run-1", Generation: 7}
-	input := workflowstore.RunStartContext{Task: workflowstore.TaskRecord{ID: "task-1"}}
-	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", req, input, askquestion.AskQuestionRequest{
-		ID:         "ask-1",
-		Question:   "Missing metadata?",
-		StepID:     "step-1",
-		ToolCallID: "call-1",
-	})
-
-	if err == nil {
-		t.Fatal("handleWorkflowAsk returned nil error, want missing metadata invariant error")
-	}
-	for _, want := range []string{"task_id=task-1", "run_id=run-1", "step_id=step-1", "call_id=call-1", "ask_id=ask-1", "approval=false"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("missing metadata error = %q, want diagnostic field %q", err.Error(), want)
-		}
-	}
-}
-
-func TestWorkflowAskHandlerApprovalBypassesDurableTaskQuestionState(t *testing.T) {
-	runtimes := &workflowAskHandlerRuntime{
-		response: askquestion.AskQuestionResponse{
-			RequestID: "approval-1",
-			Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce},
-		},
-	}
-	starter := &Starter{store: &panicRuntimeStore{t: t}, runtimes: runtimes}
-	resp, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowstore.RunStartContext{}, askquestion.AskQuestionRequest{
-		ID:       "approval-1",
-		Question: "Approve?",
-		Approval: true,
-		ApprovalOptions: []askquestion.AskQuestionApprovalOption{{
-			Decision: askquestion.AskQuestionApprovalDecisionAllowOnce,
-			Label:    "Allow once",
-		}},
-	})
-
-	if err != nil {
-		t.Fatalf("handleWorkflowAsk approval: %v", err)
-	}
-	if resp.Approval == nil || resp.Approval.Decision != askquestion.AskQuestionApprovalDecisionAllowOnce {
-		t.Fatalf("approval response = %+v", resp)
-	}
-	if len(runtimes.awaited) != 1 || runtimes.awaited[0].AttentionTarget != nil {
-		t.Fatalf("awaited approval requests = %+v, want generic prompt without task-detail target", runtimes.awaited)
-	}
-	if runtimes.cleared != nil || runtimes.skipped != nil {
-		t.Fatalf("approval touched task question attention cleared=%+v skipped=%+v", runtimes.cleared, runtimes.skipped)
-	}
-}
-
-func TestWorkflowAskHandlerClearFailureLeavesTaskQuestionAttentionUnresolved(t *testing.T) {
-	clearErr := errors.New("clear failed")
-	batch := workflowTestAskBatch("ask-1", "ask-1")
-	runtimes := &workflowAskHandlerRuntime{response: askquestion.AskQuestionResponse{RequestID: "ask-1", Answer: "done"}}
-	store := &recordingRuntimeStore{clearErr: clearErr}
-	starter := &Starter{store: store, runtimes: runtimes}
-	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
-		ID:            "ask-1",
-		Question:      "Proceed?",
-		Origin:        askquestion.AskQuestionOriginModelTool,
-		QuestionBatch: &batch,
-	})
-
-	if !errors.Is(err, clearErr) {
-		t.Fatalf("handleWorkflowAsk error = %v, want clear error", err)
-	}
-	if store.waitingAskID != "ask-1" || store.clearedAskID != "ask-1" {
-		t.Fatalf("store calls waiting=%q cleared=%q", store.waitingAskID, store.clearedAskID)
-	}
-	if len(runtimes.cleared) != 0 {
-		t.Fatalf("task question attention cleared despite durable clear failure: %+v", runtimes.cleared)
-	}
-}
-
-func TestWorkflowAskHandlerSetWaitingAskFailureSkipsUnmaterializedBatchQuestions(t *testing.T) {
-	setErr := errors.New("set waiting ask failed")
-	batch := workflowTestAskBatch("ask-2", "ask-1", "ask-2", "ask-3")
-	runtimes := &workflowAskHandlerRuntime{}
-	store := &recordingRuntimeStore{setErr: setErr}
-	starter := &Starter{store: store, runtimes: runtimes}
-	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
-		ID:            "ask-2",
-		Question:      "Proceed?",
-		Origin:        askquestion.AskQuestionOriginModelTool,
-		QuestionBatch: &batch,
-	})
-
-	if !errors.Is(err, setErr) {
-		t.Fatalf("handleWorkflowAsk error = %v, want set waiting ask error", err)
-	}
-	if len(runtimes.awaited) != 0 {
-		t.Fatalf("runtime awaited prompt despite durable waiting ask failure: %+v", runtimes.awaited)
-	}
-	if len(runtimes.prepared) != 1 || runtimes.prepared[0] != "ask-2" {
-		t.Fatalf("prepared batches = %+v, want current prompt preparation", runtimes.prepared)
-	}
-	if got, want := runtimes.skipped, []string{"ask-1", "ask-2", "ask-3"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("skipped attention ids = %+v, want %+v", got, want)
-	}
-}
-
-func TestWorkflowAskHandlerCancellationClearsAndSkipsRemainingBatch(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	batch := workflowTestAskBatch("ask-1", "ask-1", "ask-2")
-	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
-	store := &recordingRuntimeStore{}
-	starter := &Starter{store: store, runtimes: runtimes}
-	_, err := starter.handleWorkflowAsk(ctx, "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
-		ID:            "ask-1",
-		Question:      "Proceed?",
-		Origin:        askquestion.AskQuestionOriginModelTool,
-		QuestionBatch: &batch,
-	})
-
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("handleWorkflowAsk error = %v, want context.Canceled", err)
-	}
-	if store.clearedAskID != "ask-1" {
-		t.Fatalf("cleared ask id = %q, want ask-1", store.clearedAskID)
-	}
-	if len(runtimes.cleared) != 1 || runtimes.cleared[0] != "ask-1" {
-		t.Fatalf("cleared attention ids = %+v", runtimes.cleared)
-	}
-	if len(runtimes.skipped) != 1 || runtimes.skipped[0] != "ask-2" {
-		t.Fatalf("skipped attention ids = %+v, want ask-2", runtimes.skipped)
-	}
-}
-
-func TestWorkflowAskHandlerTerminalPromptCloseClearsAndSkipsRemainingBatch(t *testing.T) {
-	batch := workflowTestAskBatch("ask-1", "ask-1", "ask-2")
-	runtimes := &workflowAskHandlerRuntime{err: io.EOF}
-	store := &recordingRuntimeStore{}
-	starter := &Starter{store: store, runtimes: runtimes}
-	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
-		ID:            "ask-1",
-		Question:      "Proceed?",
-		Origin:        askquestion.AskQuestionOriginModelTool,
-		QuestionBatch: &batch,
-	})
-
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("handleWorkflowAsk error = %v, want io.EOF", err)
-	}
-	if got, want := runtimes.cleared, []string{"ask-1"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("cleared attention ids = %+v, want %+v", got, want)
-	}
-	if got, want := runtimes.skipped, []string{"ask-2"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("skipped attention ids = %+v, want %+v", got, want)
-	}
-}
-
-func TestWorkflowAskHandlerCancellationAfterDurableClearResolvesBatch(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	batch := workflowTestAskBatch("ask-1", "ask-1", "ask-2")
-	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
-	store := &recordingRuntimeStore{
-		clearErr: sql.ErrNoRows,
-		getRun: workflowstore.RunRecord{
-			ID:            "run-1",
-			Generation:    7,
-			InterruptedAt: 123,
-		},
-	}
-	starter := &Starter{store: store, runtimes: runtimes}
-	_, err := starter.handleWorkflowAsk(ctx, "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
-		ID:            "ask-1",
-		Question:      "Proceed?",
-		Origin:        askquestion.AskQuestionOriginModelTool,
-		QuestionBatch: &batch,
-	})
-
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("handleWorkflowAsk error = %v, want context.Canceled", err)
-	}
-	if store.clearedAskID != "ask-1" {
-		t.Fatalf("cleared ask id = %q, want ask-1", store.clearedAskID)
-	}
-	if got, want := runtimes.cleared, []string{"ask-1"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("cleared attention ids = %+v, want %+v", got, want)
-	}
-	if got, want := runtimes.skipped, []string{"ask-2"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("skipped attention ids = %+v, want %+v", got, want)
 	}
 }
 
@@ -1479,14 +1237,13 @@ type starterFixture struct {
 	view     interface {
 		GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error)
 	}
-	worktrees       *metadataTaskWorktrees
-	client          *ScriptedClient
-	clientFactory   func(SchedulerStartRunRequest) llm.Client
-	runtimes        starterRuntimeRegistry
-	starter         *Starter
-	workflowID      workflow.WorkflowID
-	projectID       string
-	attentionBroker *attentionnotify.Broker
+	worktrees     *metadataTaskWorktrees
+	client        *ScriptedClient
+	clientFactory func(SchedulerStartRunRequest) llm.Client
+	runtimes      starterRuntimeRegistry
+	starter       *Starter
+	workflowID    workflow.WorkflowID
+	projectID     string
 }
 
 type starterRuntimeRegistry interface {
@@ -1500,7 +1257,6 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, "kent-root"))
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
@@ -1532,8 +1288,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	worktrees := &metadataTaskWorktrees{t: t, metadata: metadataStore, workspaceID: binding.WorkspaceID, root: filepath.Join(home, "task-worktrees")}
 	client := NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: mode == config.WorkflowCompletionModeStructuredOutput}, steps...)
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
-	attentionBroker := attentionnotify.NewBroker()
-	runtimes := registry.NewRuntimeRegistry().WithAttentionNotifications(attentionBroker)
+	runtimes := registry.NewRuntimeRegistry()
 	sessionRuntime := sessionruntime.NewService(cfg.PersistenceRoot, metadataStore, nil, nil, nil, nil, runtimes, nil)
 	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, runtimes, StarterOptions{
 		ClientFactory:  clientFactory,
@@ -1548,7 +1303,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if _, err := store.LinkWorkflow(context.Background(), binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, worktrees: worktrees, client: client, clientFactory: clientFactory, runtimes: runtimes, starter: starter, workflowID: workflowID, projectID: binding.ProjectID, attentionBroker: attentionBroker}
+	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, worktrees: worktrees, client: client, clientFactory: clientFactory, runtimes: runtimes, starter: starter, workflowID: workflowID, projectID: binding.ProjectID}
 }
 
 func newChainedStarterFixture(t *testing.T) starterFixture {
@@ -1640,206 +1395,6 @@ func disableCoderShell(t *testing.T, fixture *starterFixture) {
 	}
 	role.Sources["tools."+toolspec.ConfigName(toolspec.ToolExecCommand)] = "test"
 	fixture.cfg.Settings.Subagents["coder"] = role
-}
-
-func enableAskQuestionTool(t *testing.T, fixture *starterFixture) {
-	t.Helper()
-	role := fixture.cfg.Settings.Subagents["coder"]
-	role.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
-	if role.Sources == nil {
-		role.Sources = map[string]string{}
-	}
-	role.Sources["tools."+toolspec.ConfigName(toolspec.ToolAskQuestion)] = "test"
-	fixture.cfg.Settings.Subagents["coder"] = role
-}
-
-func nextWorkflowAttentionEvent(t *testing.T, sub serverapi.AttentionNotificationSubscription) clientui.AttentionNotificationEvent {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	event, err := sub.Next(ctx)
-	if err != nil {
-		t.Fatalf("Next attention event: %v", err)
-	}
-	return event
-}
-
-func workflowAttentionEventWithin(t *testing.T, sub serverapi.AttentionNotificationSubscription, timeout time.Duration) (clientui.AttentionNotificationEvent, bool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	event, err := sub.Next(ctx)
-	if err != nil {
-		return clientui.AttentionNotificationEvent{}, false
-	}
-	return event, true
-}
-
-func assertTaskQuestionBatchPending(t *testing.T, event clientui.AttentionNotificationEvent, fixture starterFixture, task workflowstore.TaskRecord, sessionID string, currentAskID string) {
-	t.Helper()
-	if event.Type != clientui.AttentionNotificationEventPending || event.Pending == nil {
-		t.Fatalf("attention event = %+v, want pending", event)
-	}
-	pending := event.Pending
-	if pending.Kind != clientui.AttentionNotificationKindQuestion || !strings.HasPrefix(pending.ID, "question_batch:") {
-		t.Fatalf("pending id/kind = %q/%q", pending.ID, pending.Kind)
-	}
-	target := pending.Target
-	if target.Kind != clientui.AttentionNotificationTargetTaskDetail ||
-		target.ProjectID != fixture.projectID ||
-		target.WorkflowID != string(fixture.workflowID) ||
-		target.TaskID != string(task.ID) ||
-		target.TaskShortID != task.ShortID ||
-		target.SessionID != sessionID {
-		t.Fatalf("target = %+v, want task detail for task/session", target)
-	}
-	if target.RunID == "" {
-		t.Fatalf("target run id missing: %+v", target)
-	}
-	if target.Focus == nil || target.Focus.Kind != clientui.AttentionNotificationFocusQuestion {
-		t.Fatalf("target focus = %+v, want question focus", target.Focus)
-	}
-	if got := target.Focus.AskIDs; len(got) != 2 || got[0] != "call-ask-1" || got[1] != "call-ask-2" {
-		t.Fatalf("focus ask ids = %+v, want ordered prepared asks", got)
-	}
-	if pending.Question == nil || pending.Question.DisplayCount != 2 || pending.Presentation.Count != 2 {
-		t.Fatalf("question state/presentation = %+v / %+v, want count 2", pending.Question, pending.Presentation)
-	}
-	if got := pending.Question.PreparedAskIDs; len(got) != 2 || got[0] != "call-ask-1" || got[1] != "call-ask-2" {
-		t.Fatalf("prepared ask ids = %+v, want ordered prepared asks", got)
-	}
-	foundCurrent := false
-	for _, askID := range pending.Question.CurrentUnresolvedAskIDs {
-		if askID == currentAskID {
-			foundCurrent = true
-		}
-	}
-	if !foundCurrent {
-		t.Fatalf("current unresolved asks = %+v, want %q", pending.Question.CurrentUnresolvedAskIDs, currentAskID)
-	}
-}
-
-func workflowTestRunStartContext() workflowstore.RunStartContext {
-	return workflowstore.RunStartContext{
-		Task: workflowstore.TaskRecord{
-			ID:         "task-1",
-			ProjectID:  "project-1",
-			WorkflowID: "workflow-1",
-			ShortID:    "RUN-1",
-			Title:      "Task title",
-		},
-	}
-}
-
-func workflowTestAskBatch(promptID string, askIDs ...string) askquestion.AskQuestionBatchMetadata {
-	return askquestion.AskQuestionBatchMetadata{
-		Origin:              askquestion.AskQuestionOriginModelTool,
-		RunID:               "run-1",
-		StepID:              "step-1",
-		BatchID:             "batch-1",
-		PromptID:            promptID,
-		BatchPromptIDs:      append([]string(nil), askIDs...),
-		PreparedPromptCount: len(askIDs),
-	}
-}
-
-type workflowAskHandlerRuntime struct {
-	response askquestion.AskQuestionResponse
-	err      error
-	awaited  []askquestion.AskQuestionRequest
-	prepared []string
-	cleared  []string
-	skipped  []string
-}
-
-func (r *workflowAskHandlerRuntime) PublishRuntimeEvent(string, runtime.Event) {}
-
-func (r *workflowAskHandlerRuntime) AwaitPromptResponse(_ context.Context, _ string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-	r.awaited = append(r.awaited, req)
-	return r.response, r.err
-}
-
-func (r *workflowAskHandlerRuntime) MarkTaskQuestionCleared(_ askquestion.AskQuestionBatchMetadata, askID string) {
-	r.cleared = append(r.cleared, askID)
-}
-
-func (r *workflowAskHandlerRuntime) PrepareTaskQuestionBatch(batch askquestion.AskQuestionBatchMetadata, _ string, _ *clientui.AttentionNotificationTarget, _ *clientui.AttentionNotificationPresentation, _ time.Time) error {
-	r.prepared = append(r.prepared, batch.PromptID)
-	return nil
-}
-
-func (r *workflowAskHandlerRuntime) MarkTaskQuestionSkipped(batch askquestion.AskQuestionBatchMetadata) {
-	r.skipped = append(r.skipped, batch.PromptID)
-}
-
-type recordingRuntimeStore struct {
-	waitingAskID string
-	clearedAskID string
-	setErr       error
-	clearErr     error
-	getRun       workflowstore.RunRecord
-	getRunErr    error
-}
-
-func (s *recordingRuntimeStore) GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error) {
-	return s.getRun, s.getRunErr
-}
-
-func (s *recordingRuntimeStore) GetRunStartContext(context.Context, workflow.RunID) (workflowstore.RunStartContext, error) {
-	panic("GetRunStartContext not expected")
-}
-
-func (s *recordingRuntimeStore) AttachRunSession(context.Context, workflow.RunID, int64, string) error {
-	panic("AttachRunSession not expected")
-}
-
-func (s *recordingRuntimeStore) SetRunEffectiveCompletionMode(context.Context, workflow.RunID, int64, string) error {
-	panic("SetRunEffectiveCompletionMode not expected")
-}
-
-func (s *recordingRuntimeStore) SetRunWaitingAsk(_ context.Context, _ workflow.RunID, _ int64, askID string) error {
-	s.waitingAskID = askID
-	return s.setErr
-}
-
-func (s *recordingRuntimeStore) ClearRunWaitingAsk(_ context.Context, _ workflow.RunID, _ int64, askID string) error {
-	s.clearedAskID = askID
-	return s.clearErr
-}
-
-func (s *recordingRuntimeStore) CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error) {
-	panic("CompleteRun not expected")
-}
-
-func (s *recordingRuntimeStore) RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error) {
-	panic("RecordProtocolViolation not expected")
-}
-
-func (s *recordingRuntimeStore) CountTaskComments(context.Context, workflow.TaskID) (int64, error) {
-	panic("CountTaskComments not expected")
-}
-
-func (s *recordingRuntimeStore) InterruptRun(context.Context, workflow.RunID, string, string) error {
-	panic("InterruptRun not expected")
-}
-
-func (s *recordingRuntimeStore) InterruptRunGeneration(context.Context, workflow.RunID, int64, string, string) error {
-	panic("InterruptRunGeneration not expected")
-}
-
-type panicRuntimeStore struct {
-	recordingRuntimeStore
-	t *testing.T
-}
-
-func (s panicRuntimeStore) SetRunWaitingAsk(context.Context, workflow.RunID, int64, string) error {
-	s.t.Fatal("approval prompt must not set durable workflow waiting ask")
-	return nil
-}
-
-func (s panicRuntimeStore) ClearRunWaitingAsk(context.Context, workflow.RunID, int64, string) error {
-	s.t.Fatal("approval prompt must not clear durable workflow waiting ask")
-	return nil
 }
 
 func (f starterFixture) waitForCompletedRun(t *testing.T, taskID workflow.TaskID) {

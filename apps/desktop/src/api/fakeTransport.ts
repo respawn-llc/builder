@@ -14,7 +14,7 @@ export class FakeRpcTransport implements RpcTransport {
   readonly calls: Readonly<{ method: string; params: JsonValue }>[] = [];
   #routes = new Map<string, FakeRoute>();
   #callCounts = new Map<string, number>();
-  #subscribers: Readonly<{ method: string; params: JsonValue; handler: RpcEventHandler }>[] = [];
+  #subscribers: Readonly<{ method: string; handler: RpcEventHandler }>[] = [];
 
   constructor(routes: readonly FakeRoute[]) {
     for (const route of routes) {
@@ -40,15 +40,8 @@ export class FakeRpcTransport implements RpcTransport {
     return route.result;
   }
 
-  get subscriptions(): Readonly<{ method: string; params: JsonValue }>[] {
-    return this.#subscribers.map((subscriber) => ({
-      method: subscriber.method,
-      params: subscriber.params,
-    }));
-  }
-
-  subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription {
-    const entry = { method, params, handler };
+  subscribe(method: string, _params: JsonValue, handler: RpcEventHandler): RpcSubscription {
+    const entry = { method, handler };
     this.#subscribers.push(entry);
     return {
       close: () => {

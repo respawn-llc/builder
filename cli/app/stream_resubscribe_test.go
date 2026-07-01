@@ -292,7 +292,7 @@ func TestStartPendingPromptEventsResubscribesWithoutDuplicatingPendingPrompt(t *
 		next := remaining[0]
 		remaining = remaining[1:]
 		return next, nil
-	}, stubPromptControlClient{}, nil)
+	}, stubPromptControlClient{})
 	defer stop()
 
 	first := waitPromptEventWithin(t, events, time.Second)
@@ -327,7 +327,7 @@ func TestStartPendingPromptEventsResubscribeEmitsResolutionForPromptMissingFromS
 			return nil, serverapi.ErrStreamGap
 		}
 		return resubscribed, nil
-	}, stubPromptControlClient{}, nil)
+	}, stubPromptControlClient{})
 	defer stop()
 
 	first := waitPromptEventWithin(t, events, time.Second)
@@ -365,7 +365,7 @@ func TestStartPendingPromptEventsRetriesResubscribeWhenSnapshotStreamFails(t *te
 			return nil, errors.New("snapshot stream unavailable")
 		}
 		return secondResubscribe, nil
-	}, stubPromptControlClient{}, nil)
+	}, stubPromptControlClient{})
 	defer stop()
 
 	first := waitPromptEventWithin(t, events, time.Second)
@@ -389,12 +389,12 @@ func TestPendingPromptEventRequeuesWhenAnswerRPCFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Sequence: 1, Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}}}
+	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}}}
 	control := &retryingPromptControlClient{askErr: errors.New("transport down")}
 
 	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
 		return nil, context.Canceled
-	}, control, nil)
+	}, control)
 	defer stop()
 
 	first := waitPromptEventWithin(t, events, time.Second)
@@ -437,7 +437,7 @@ func TestPendingPromptEventRetryAfterStopDoesNotPanic(t *testing.T) {
 
 	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
 		return nil, context.Canceled
-	}, control, nil)
+	}, control)
 
 	first := waitPromptEventWithin(t, events, time.Second)
 	stop()
@@ -463,7 +463,7 @@ func TestStartPendingPromptEventsEmitsResolutionEvent(t *testing.T) {
 
 	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
 		return nil, context.Canceled
-	}, stubPromptControlClient{}, nil)
+	}, stubPromptControlClient{})
 	defer stop()
 
 	first := waitPromptEventWithin(t, events, time.Second)
@@ -476,33 +476,6 @@ func TestStartPendingPromptEventsEmitsResolutionEvent(t *testing.T) {
 	}
 }
 
-func TestStartPendingPromptEventsFallbackNotifiesFromPromptActivity(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}}}
-	hook := newRecordingAttentionNotificationHook()
-	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
-		return nil, context.Canceled
-	}, stubPromptControlClient{}, hook)
-	defer stop()
-
-	first := waitPromptEventWithin(t, events, time.Second)
-	if first.req.PromptID != "ask-1" {
-		t.Fatalf("unexpected first prompt event: %+v", first.req)
-	}
-	notification := hook.wait(t, time.Second)
-	if notification.Type != clientui.AttentionNotificationEventPending || notification.Pending == nil {
-		t.Fatalf("unexpected fallback notification: %+v", notification)
-	}
-	if notification.Source != clientui.AttentionNotificationSourceLive {
-		t.Fatalf("fallback notification source = %q, want live", notification.Source)
-	}
-	if notification.Pending.ID != "prompt:session-1:ask-1" || notification.Pending.Target.Kind != clientui.AttentionNotificationTargetSessionPrompt {
-		t.Fatalf("unexpected fallback pending notification: %+v", notification.Pending)
-	}
-}
-
 func TestPendingPromptEventDoesNotRequeueOnTerminalAnswerError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -512,7 +485,7 @@ func TestPendingPromptEventDoesNotRequeueOnTerminalAnswerError(t *testing.T) {
 
 	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
 		return nil, context.Canceled
-	}, control, nil)
+	}, control)
 	defer stop()
 
 	first := waitPromptEventWithin(t, events, time.Second)
@@ -540,7 +513,7 @@ func TestPendingPromptEventDoesNotRequeueAfterPromptAlreadyResolvedLocally(t *te
 
 	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
 		return nil, context.Canceled
-	}, control, nil)
+	}, control)
 	defer stop()
 
 	first := waitPromptEventWithin(t, events, time.Second)
@@ -628,29 +601,6 @@ func (stubPromptControlClient) AnswerAsk(context.Context, serverapi.AskAnswerReq
 
 func (stubPromptControlClient) AnswerApproval(context.Context, serverapi.ApprovalAnswerRequest) error {
 	return nil
-}
-
-type recordingAttentionNotificationHook struct {
-	events chan clientui.AttentionNotificationEvent
-}
-
-func newRecordingAttentionNotificationHook() *recordingAttentionNotificationHook {
-	return &recordingAttentionNotificationHook{events: make(chan clientui.AttentionNotificationEvent, 8)}
-}
-
-func (h *recordingAttentionNotificationHook) OnAttentionNotification(evt clientui.AttentionNotificationEvent) {
-	h.events <- evt
-}
-
-func (h *recordingAttentionNotificationHook) wait(t *testing.T, timeout time.Duration) clientui.AttentionNotificationEvent {
-	t.Helper()
-	select {
-	case evt := <-h.events:
-		return evt
-	case <-time.After(timeout):
-		t.Fatal("timed out waiting for attention notification fallback")
-		return clientui.AttentionNotificationEvent{}
-	}
 }
 
 type retryingPromptControlClient struct {

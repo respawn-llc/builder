@@ -88,7 +88,6 @@ type GatewayPromptDependencies interface {
 	ApprovalViewClient() client.ApprovalViewClient
 	PromptControlClient() client.PromptControlClient
 	PromptActivityClient() client.PromptActivityClient
-	AttentionNotificationClient() client.AttentionNotificationClient
 }
 
 type GatewayProcessDependencies interface {
@@ -138,13 +137,11 @@ type connectionState struct {
 type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request)
 
 var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
-	protocol.MethodSessionSubscribeActivity:              (*Gateway).serveSessionActivitySubscription,
-	protocol.MethodProcessSubscribeOutput:                (*Gateway).serveProcessOutputSubscription,
-	protocol.MethodPromptSubscribeActivity:               (*Gateway).servePromptActivitySubscription,
-	protocol.MethodAttentionNotificationSubscribe:        (*Gateway).serveAttentionNotificationSubscription,
-	protocol.MethodAttentionSessionNotificationSubscribe: (*Gateway).serveSessionAttentionNotificationSubscription,
-	protocol.MethodWorkflowSubscribe:                     (*Gateway).serveWorkflowSubscription,
-	protocol.MethodWorkflowSubscribeProject:              (*Gateway).serveWorkflowProjectSubscription,
+	protocol.MethodSessionSubscribeActivity: (*Gateway).serveSessionActivitySubscription,
+	protocol.MethodProcessSubscribeOutput:   (*Gateway).serveProcessOutputSubscription,
+	protocol.MethodPromptSubscribeActivity:  (*Gateway).servePromptActivitySubscription,
+	protocol.MethodWorkflowSubscribe:        (*Gateway).serveWorkflowSubscription,
+	protocol.MethodWorkflowSubscribeProject: (*Gateway).serveWorkflowProjectSubscription,
 }
 
 var gatewaySubscriptionHandlers = routeHandlersForKind(rpccontract.KindSubscription, gatewaySubscriptionHandlerEntries)

@@ -94,20 +94,18 @@ func (s *remoteAppServer) RuntimeAttachmentClients() runtimeAttachmentClients {
 		return runtimeAttachmentClients{}
 	}
 	return runtimeAttachmentClients{
-		ApprovalViews:                   s.remote,
-		AskViews:                        s.remote,
-		Attention:                       s.remote,
-		AttentionNotificationsSupported: s.remote.Identity().Capabilities.AttentionNotifications,
-		ProcessControls:                 s.remote,
-		ProcessOutput:                   s.remote,
-		ProcessViews:                    s.remote,
-		PromptActivity:                  s.remote,
-		PromptControl:                   s.remote,
-		RuntimeControls:                 s.remote,
-		SessionActivity:                 s.remote,
-		SessionRuntime:                  s.remote,
-		SessionViews:                    s.remote,
-		Worktrees:                       s.remote,
+		ApprovalViews:   s.remote,
+		AskViews:        s.remote,
+		ProcessControls: s.remote,
+		ProcessOutput:   s.remote,
+		ProcessViews:    s.remote,
+		PromptActivity:  s.remote,
+		PromptControl:   s.remote,
+		RuntimeControls: s.remote,
+		SessionActivity: s.remote,
+		SessionRuntime:  s.remote,
+		SessionViews:    s.remote,
+		Worktrees:       s.remote,
 	}
 }
 

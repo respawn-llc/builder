@@ -117,7 +117,6 @@ type Config struct {
 	HeadlessMode                  bool
 	ToolPreambles                 bool
 	WorkflowRun                   *workflowruntime.Config
-	AskQuestionBatchSkipped       func(tools.AskQuestionBatchMetadata)
 	TranscriptWorkingDir          string
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (global AGENTS.md, system prompt file, skills, generated

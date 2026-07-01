@@ -18,15 +18,11 @@ serde = { version = "1", features = ["derive"] }
 # Required at the crate root by tauri::generate_context! once the updater plugin
 # is configured (the generated context references serde_json).
 serde_json = "1"
-# `preview-macos-un` makes macOS `show()` submit through UNUserNotificationCenter
-# before returning, so JS can fall back to Sonner if native delivery is rejected.
-notify-rust = { version = "4.18.0", features = ["preview-macos-un"] }
 sha2 = "0.10"
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
-tauri-plugin-notification = "2.3.3"
 tauri-plugin-process = "2"
 tauri-plugin-store = "2"
 tauri-plugin-updater = "2"
@@ -34,13 +30,9 @@ tokio = { version = "1", features = ["sync"] }
 toml = "0.9"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-mac-usernotifications = "0.3.1"
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", features = ["NSColor", "NSGlassEffectView", "NSResponder", "NSView", "NSVisualEffectView", "NSWindow"] }
 objc2-foundation = { version = "0.3.2", features = ["NSProcessInfo"] }
-
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.61.3", features = ["UI_Notifications"] }
 
 [profile.release]
 codegen-units = 1

@@ -175,53 +175,28 @@ func newBellHooks(notifier terminalNotifier, title func() string, focused ...fun
 	return &bellHooks{notifier: notifier, title: title, focused: focusedProvider}
 }
 
-func (h *bellHooks) OnAttentionNotification(evt clientui.AttentionNotificationEvent) {
+func (h *bellHooks) OnAsk(req clientui.PendingPromptEvent) {
 	if h == nil {
 		return
 	}
-	if evt.Type != clientui.AttentionNotificationEventPending || evt.Pending == nil {
-		return
+	question := formatAssistantPreview(req.Question, terminalNotificationPreviewLimit)
+	if question == "" {
+		if req.Approval {
+			question = "action required"
+		} else {
+			question = "question from agent"
+		}
 	}
-	notification := evt.Pending
-	body := formatAssistantPreview(attentionNotificationBody(*notification), terminalNotificationPreviewLimit)
-	if body == "" {
-		body = attentionNotificationFallbackBody(*notification)
+	label := "Question"
+	if req.Approval {
+		label = "Action required"
 	}
-	message := h.formatMessage(attentionNotificationTitle(*notification) + ": " + body)
+	message := h.formatMessage(label + ": " + question)
 	if h.focusedForAttention() {
 		h.notifier.Bell()
 		return
 	}
 	h.notifier.Notify(message)
-}
-
-func attentionNotificationTitle(notification clientui.AttentionNotification) string {
-	if title := strings.TrimSpace(notification.Presentation.Title); title != "" {
-		return title
-	}
-	if notification.Kind == clientui.AttentionNotificationKindApproval {
-		return "Action required"
-	}
-	return "Question"
-}
-
-func attentionNotificationBody(notification clientui.AttentionNotification) string {
-	for _, candidate := range []string{notification.Presentation.Preview, notification.Presentation.Body, notification.Presentation.FallbackBody} {
-		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
-func attentionNotificationFallbackBody(notification clientui.AttentionNotification) string {
-	if fallback := strings.TrimSpace(notification.Presentation.FallbackBody); fallback != "" {
-		return fallback
-	}
-	if notification.Kind == clientui.AttentionNotificationKindApproval {
-		return "action required"
-	}
-	return "question from agent"
 }
 
 func (h *bellHooks) OnProjectedRuntimeEvent(evt clientui.Event) {

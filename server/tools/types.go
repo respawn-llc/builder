@@ -10,30 +10,11 @@ import (
 )
 
 type Call struct {
-	ID                        string
-	Name                      toolspec.ID
-	Input                     json.RawMessage
-	RunID                     string
-	StepID                    string
-	AskQuestionBatch          *AskQuestionBatchMetadata
-	OnAskQuestionBatchSkipped func(AskQuestionBatchMetadata)
-}
-
-type AskQuestionOrigin string
-
-const (
-	AskQuestionOriginModelTool AskQuestionOrigin = "model_tool"
-)
-
-type AskQuestionBatchMetadata struct {
-	Origin              AskQuestionOrigin
-	RunID               string
-	StepID              string
-	BatchID             string
-	PromptID            string
-	BatchPromptIDs      []string
-	CandidateOrdinal    int
-	PreparedPromptCount int
+	ID     string
+	Name   toolspec.ID
+	Input  json.RawMessage
+	RunID  string
+	StepID string
 }
 
 type Result struct {

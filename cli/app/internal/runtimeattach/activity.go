@@ -9,19 +9,16 @@ import (
 )
 
 type ActivityRequest struct {
-	SessionID                       string
-	OwnerID                         string
-	Runtime                         servicecontract.SessionRuntimeService
-	SessionActivity                 servicecontract.SessionActivityService
-	Attention                       servicecontract.AttentionNotificationService
-	AttentionNotificationsSupported bool
-	PromptActivity                  servicecontract.PromptActivityService
+	SessionID       string
+	OwnerID         string
+	Runtime         servicecontract.SessionRuntimeService
+	SessionActivity servicecontract.SessionActivityService
+	PromptActivity  servicecontract.PromptActivityService
 }
 
 type Activities struct {
-	Session   serverapi.SessionActivitySubscription
-	Prompt    serverapi.PromptActivitySubscription
-	Attention serverapi.AttentionNotificationSubscription
+	Session serverapi.SessionActivitySubscription
+	Prompt  serverapi.PromptActivitySubscription
 }
 
 func SubscribeActivities(ctx context.Context, req ActivityRequest) (Activities, error) {
@@ -44,19 +41,5 @@ func SubscribeActivities(ctx context.Context, req ActivityRequest) (Activities, 
 		Release(req.Runtime, req.SessionID, req.OwnerID)
 		return Activities{}, err
 	}
-	if !req.AttentionNotificationsSupported {
-		return Activities{Session: sessionSub, Prompt: promptSub}, nil
-	}
-	if req.Attention == nil {
-		_ = promptSub.Close()
-		_ = sessionSub.Close()
-		Release(req.Runtime, req.SessionID, req.OwnerID)
-		return Activities{}, errors.New("attention notification service is required")
-	}
-	attentionSub, err := req.Attention.SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: req.SessionID, IncludePendingPromptSnapshot: true})
-	if err != nil {
-		//nolint:nilerr // Attention notifications are best-effort; keep prompt fallback alive when this stream is unavailable.
-		return Activities{Session: sessionSub, Prompt: promptSub}, nil
-	}
-	return Activities{Session: sessionSub, Prompt: promptSub, Attention: attentionSub}, nil
+	return Activities{Session: sessionSub, Prompt: promptSub}, nil
 }
