@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,8 +11,11 @@ import (
 	"testing"
 
 	"core/cli/tui"
+	"core/server/llm"
+	"core/server/runtime"
 	"core/shared/clientui"
 	"core/shared/invariant"
+	"core/shared/toolspec"
 
 	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -302,6 +306,75 @@ func TestNativeOwnerAbsentAfterImmutableOutputStillPanicsOnCommittedDivergence(t
 	}
 	if diagnostic.Fields[invariant.FieldEventKind] == "" || diagnostic.Fields[invariant.FieldTranscriptState] == "" {
 		t.Fatalf("owner-absent panic diagnostic missing event/state fields: %+v", diagnostic)
+	}
+}
+
+func TestNativeRuntimeViewCommentaryToolCallEventKeepsCommittedFrontierContiguous(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	seed := []tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleUser,
+		Text:      "prompt",
+	}}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = seed
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.forwardToView(tui.SetConversationMsg{
+		BaseOffset:   0,
+		TotalEntries: 1,
+		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
+	})
+
+	assistantEvent := projectRuntimeEvent(runtime.Event{
+		Kind:                       runtime.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        3,
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "working",
+			Phase:   llm.MessagePhaseCommentary,
+			ToolCalls: []llm.ToolCall{{
+				ID:    "call-1",
+				Name:  string(toolspec.ToolExecCommand),
+				Input: json.RawMessage(`{"command":"pwd"}`),
+			}},
+		},
+	})
+	if got := len(assistantEvent.TranscriptEntries); got != 2 {
+		t.Fatalf("runtimeview assistant event entries = %d, want assistant plus tool call: %+v", got, assistantEvent.TranscriptEntries)
+	}
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(assistantEvent)
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("assistant tool-call event result = %+v, want mutation without hydration/fatal", result)
+	}
+	if got := len(m.transcriptEntries); got != 3 {
+		t.Fatalf("transcript entries after assistant event = %d, want 3: %+v", got, m.transcriptEntries)
+	}
+
+	localEvent := projectRuntimeEvent(runtime.Event{
+		Kind:                       runtime.EventLocalEntryAdded,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         3,
+		CommittedEntryStart:        3,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        4,
+		LocalEntry:                 &runtime.ChatEntry{Role: "system", Text: "local note"},
+	})
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(localEvent)
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("local entry after assistant tool-call event result = %+v, want mutation without hydration/fatal", result)
+	}
+	if got := len(m.transcriptEntries); got != 4 {
+		t.Fatalf("transcript entries after local entry = %d, want 4: %+v", got, m.transcriptEntries)
 	}
 }
 
