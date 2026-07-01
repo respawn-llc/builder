@@ -71,18 +71,9 @@ func (m *uiModel) startRuntimeMainViewRefreshRequest(request runtimeMainViewRefr
 	client := m.runtimeClient()
 	m.runtimeMainViewBusy = true
 	m.runtimeMainViewActiveRequest = request
-	refs := m.pendingRuntimeOperationRefs()
 	m.logf("ui.runtime.main_view.start token=%d cause=%s", token, request.cause)
 	cmd := func() tea.Msg {
-		var (
-			view clientui.RuntimeMainView
-			err  error
-		)
-		if requestClient, ok := client.(runtimeMainViewReconciliationClient); ok {
-			view, err = requestClient.RefreshMainViewWithPendingRefs(refs)
-		} else {
-			view, err = client.RefreshMainView()
-		}
+		view, err := client.RefreshMainView()
 		return runtimeMainViewRefreshedMsg{token: token, req: request, view: view, err: err}
 	}
 	return runtimeMainViewRefreshDecision{cmd: cmd, started: true}
@@ -286,7 +277,7 @@ func (m *uiModel) runtimeSyncBlockedByStreaming() bool {
 	}
 	return strings.TrimSpace(m.view.OngoingStreamingText()) != "" ||
 		m.sawAssistantDelta ||
-		m.runtimeActivityBusy() ||
+		m.isBusy() ||
 		m.isCompacting() ||
 		m.isReviewerRunning()
 }
@@ -457,9 +448,9 @@ func (m *uiModel) handleRuntimeMainViewRefreshed(msg runtimeMainViewRefreshedMsg
 		return m.drainPendingRuntimeMainViewRefresh().cmd
 	}
 	m.observeRuntimeRequestResult(nil)
-	applyCmd := m.applyRuntimeMainViewState(msg.view)
+	m.applyRuntimeMainViewState(msg.view)
 	noticeCmd := runtimeMainViewStartupUpdateNoticeCmd(req, msg.view)
-	return sequenceCmds(applyCmd, m.runtimeAdapter().applyProjectedSessionMetadata(msg.view.Session), noticeCmd, m.drainPendingRuntimeMainViewRefresh().cmd)
+	return sequenceCmds(m.runtimeAdapter().applyProjectedSessionMetadata(msg.view.Session), noticeCmd, m.drainPendingRuntimeMainViewRefresh().cmd)
 }
 
 func runtimeMainViewStartupUpdateNoticeCmd(req runtimeMainViewRefreshRequest, view clientui.RuntimeMainView) tea.Cmd {

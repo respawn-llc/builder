@@ -212,9 +212,6 @@ func isAllowedServerAPIInterfaceName(name string) bool {
 }
 
 func isServerOwnedExecutionTypeName(name string) bool {
-	if name == "SessionRuntimeReleaseClosePolicy" {
-		return false
-	}
 	for _, term := range []string{
 		"Broker",
 		"Controller",

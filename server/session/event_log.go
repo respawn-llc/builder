@@ -82,6 +82,16 @@ func (s *Store) bootstrapEventLogStateLocked() error {
 		s.meta.ConversationEstablished = true
 		metaChanged = true
 	}
+	if runs := ProjectRuns(window.Events); len(runs) > 0 {
+		latest := runs[len(runs)-1]
+		current := s.meta.LatestRun
+		if current == nil || current.RunID != latest.RunID || current.Status != latest.Status ||
+			!current.StartedAt.Equal(latest.StartedAt) || !current.FinishedAt.Equal(latest.FinishedAt) {
+			runCopy := latest
+			s.meta.LatestRun = &runCopy
+			metaChanged = true
+		}
+	}
 	if metaChanged {
 		s.meta.UpdatedAt = time.Now().UTC()
 		if _, err := s.persistMetaLocked(); err != nil {

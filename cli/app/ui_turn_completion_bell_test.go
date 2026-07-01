@@ -15,7 +15,7 @@ func TestSubmitDoneDefersTurnCompletionBellUntilQueuedTurnsFinish(t *testing.T) 
 	ringer := &countRinger{}
 	bells := newUnfocusedBellHooks(ringer)
 	m := newProjectedStaticUIModel(WithUITurnQueueHook(bells))
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.queued = queuedInputsForTest("follow up")
 
 	next, _ := m.Update(runtimeEventMsg{event: clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"}})
@@ -91,7 +91,7 @@ func TestNoopFinalAbortsPendingTurnCompletionBell(t *testing.T) {
 	ringer := &countRinger{}
 	bells := newUnfocusedBellHooks(ringer)
 	m := newProjectedStaticUIModel(WithUITurnQueueHook(bells))
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 
 	next, _ := m.Update(runtimeEventMsg{event: clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"}})
 	updated := next.(*uiModel)
@@ -118,7 +118,7 @@ func TestQueuedFollowUpAfterNoopFinalDoesNotLeakTurnCompletionBell(t *testing.T)
 	ringer := &countRinger{}
 	bells := newUnfocusedBellHooks(ringer)
 	m := newProjectedStaticUIModel(WithUITurnQueueHook(bells))
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.queued = queuedInputsForTest("follow up")
 
 	next, _ := m.Update(runtimeEventMsg{event: clientui.Event{Kind: clientui.EventToolCallStarted, StepID: "step-1"}})
@@ -194,7 +194,7 @@ func TestQueuedCompactRingsAfterCompactionWhenQueueIsDrained(t *testing.T) {
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUITurnQueueHook(bells))
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.input = "/compact queued"
 
@@ -241,7 +241,7 @@ func TestQueuedCompactDefersBellUntilFollowingQueuedMessageDrains(t *testing.T) 
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUITurnQueueHook(bells))
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.input = "/compact queued"
 
@@ -326,7 +326,7 @@ func TestManualCompactWithQueuedSteeringDoesNotRing(t *testing.T) {
 	client := &runtimeControlFakeClient{hasQueuedUserWork: true, submitQueuedResult: "resumed"}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUITurnQueueHook(bells))
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 	m.compactionOrigin = uiCompactionOriginManual
@@ -338,7 +338,6 @@ func TestManualCompactWithQueuedSteeringDoesNotRing(t *testing.T) {
 	if len(updated.pendingInjected) != 1 {
 		t.Fatalf("expected queued steering, got %+v", updated.pendingInjected)
 	}
-	updated.setRuntimeActivityBusyForTest(false)
 	next, cmd := updated.Update(compactDoneMsg{})
 	updated = next.(*uiModel)
 	updated, cmd = applyQueuedRuntimeWorkCheckForTest(t, updated, cmd)
@@ -374,13 +373,12 @@ func TestManualCompactRingsAfterQueuedLocalCommandDrains(t *testing.T) {
 	ringer := &countRinger{}
 	bells := newUnfocusedBellHooks(ringer)
 	m := newProjectedStaticUIModel(WithUITurnQueueHook(bells))
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 	m.compactionOrigin = uiCompactionOriginManual
 	m.queued = queuedInputsForTest("/status")
 
-	m.setRuntimeActivityBusyForTest(false)
 	next, cmd := m.Update(compactDoneMsg{})
 	updated := next.(*uiModel)
 	if cmd == nil {
@@ -410,7 +408,7 @@ func TestFailedManualCompactClearsCompactionBell(t *testing.T) {
 			ringer := &countRinger{}
 			bells := newUnfocusedBellHooks(ringer)
 			m := newProjectedStaticUIModel(WithUITurnQueueHook(bells))
-			m.setRuntimeActivityBusyForTest(true)
+			m.setBusy(true)
 			m.setCompacting(true)
 			m.activity = uiActivityRunning
 			m.compactionOrigin = uiCompactionOriginManual
@@ -436,13 +434,12 @@ func TestManualCompactWithPendingQueuedDrainHydrationDoesNotRing(t *testing.T) {
 	ringer := &countRinger{}
 	bells := newUnfocusedBellHooks(ringer)
 	m := newProjectedStaticUIModel(WithUITurnQueueHook(bells))
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 	m.compactionOrigin = uiCompactionOriginManual
 	m.pendingQueuedDrainAfterHydration = true
 
-	m.setRuntimeActivityBusyForTest(false)
 	next, _ := m.Update(compactDoneMsg{})
 	updated := next.(*uiModel)
 	if updated.compactionOrigin != uiCompactionOriginNone {

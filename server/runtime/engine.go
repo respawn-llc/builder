@@ -2,13 +2,11 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -125,7 +123,6 @@ type Config struct {
 	// assets). Empty falls back to ~/.kent so default-root behavior is preserved.
 	GlobalConfigDir string
 	OnEvent         func(Event)
-	StepLifecycle   StepLifecycleSink
 }
 
 type ReviewerConfig struct {
@@ -345,117 +342,15 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 		return nil, err
 	}
 	eng.restorePersistedUsageState(meta.UsageState)
-	var recoveryCandidate *session.PendingModelRecovery
-	legacyRecoveryCandidate := false
-	if meta.PendingModelRecovery != nil {
-		recovery := cloneSessionPendingModelRecovery(meta.PendingModelRecovery)
-		recoveryCandidate = &recovery
-	} else if meta.LegacyInFlightStepRecovery {
-		legacyRecoveryCandidate = true
-		recoveryCandidate = &session.PendingModelRecovery{
-			RecoveryID: "legacy-in-flight",
-			Reason:     "legacy_in_flight_step",
-			CreatedAt:  time.Now().UTC(),
-		}
-	}
-	if recoveryCandidate != nil {
-		recovery := cloneSessionPendingModelRecovery(recoveryCandidate)
-		if strings.TrimSpace(recovery.StepID) == "" {
-			inferred, ok, err := eng.inferLegacyPendingModelRecovery(recovery)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				recovery = inferred
-				if err := store.SetPendingModelRecovery(recovery); err != nil {
-					return nil, err
-				}
-			}
-		}
-		if strings.TrimSpace(recovery.StepID) == "" {
-			if legacyRecoveryCandidate {
-				if err := store.DiscardLegacyPendingModelRecoveryCandidate(recovery); err != nil {
-					return nil, err
-				}
-			} else {
-				if err := store.DiscardPendingModelRecoveryCandidate(); err != nil {
-					return nil, err
-				}
-			}
-			return eng, nil
-		}
-		needsMarker, err := eng.pendingModelRecoveryNeedsInterruptionMarker(&recovery)
-		if err != nil {
+	if meta.InFlightStep {
+		if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeInterruption, Content: interruptMessage}})); err != nil {
 			return nil, err
 		}
-		if needsMarker {
-			if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeInterruption, Content: interruptMessage}})); err != nil {
-				return nil, err
-			}
-		}
-		if err := store.ClearPendingModelRecovery(); err != nil {
+		if err := store.MarkInFlight(false); err != nil {
 			return nil, err
 		}
 	}
 	return eng, nil
-}
-
-func (e *Engine) pendingModelRecoveryNeedsInterruptionMarker(recovery *session.PendingModelRecovery) (bool, error) {
-	if recovery == nil || strings.TrimSpace(recovery.StepID) == "" {
-		return false, nil
-	}
-	dangling := e.pendingRecoveryDanglingToolCallIDs()
-	if len(recovery.OutstandingToolCallIDs) > 0 {
-		for _, id := range recovery.OutstandingToolCallIDs {
-			if _, ok := dangling[strings.TrimSpace(id)]; ok {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-	if len(dangling) > 0 {
-		return true, nil
-	}
-	terminal, err := e.pendingRecoveryStepHasTerminalAssistant(strings.TrimSpace(recovery.StepID))
-	if err != nil || terminal {
-		return false, err
-	}
-	return true, nil
-}
-
-func (e *Engine) pendingRecoveryDanglingToolCallIDs() map[string]struct{} {
-	out := map[string]struct{}{}
-	chat := e.transcriptRuntimeState().chatProjection()
-	if chat == nil {
-		return out
-	}
-	for _, call := range chat.danglingToolCalls() {
-		callID := strings.TrimSpace(call.callID)
-		if callID != "" {
-			out[callID] = struct{}{}
-		}
-	}
-	return out
-}
-
-func (e *Engine) pendingRecoveryStepHasTerminalAssistant(stepID string) (bool, error) {
-	events, err := e.store.ReadEventsBackwardUntil(isCompactionSegmentBoundary)
-	if err != nil {
-		return false, err
-	}
-	for _, evt := range events {
-		if strings.TrimSpace(evt.StepID) != stepID || evt.Kind != "message" {
-			continue
-		}
-		var msg llm.Message
-		if err := json.Unmarshal(evt.Payload, &msg); err != nil {
-			continue
-		}
-		if msg.Role == llm.RoleAssistant && msg.Phase == llm.MessagePhaseFinal && len(msg.ToolCalls) == 0 {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func (e *Engine) Close() error {
@@ -543,29 +438,13 @@ func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
 
 func (e *Engine) Interrupt() error {
 	e.ensureOrchestrationCollaborators()
-	interrupted, err := e.stepLifecycle.InterruptCurrent()
-	if err != nil {
-		return err
-	}
-	if e.goalActive() && interrupted != nil && interrupted.ActiveKind == ActiveKindGoalLoop {
+	if e.goalActive() {
 		e.goalLoopState().Suspend()
 	}
-	return nil
+	return e.stepLifecycle.Interrupt()
 }
 
 func (e *Engine) SubmitUserMessage(ctx context.Context, text string) (assistant llm.Message, err error) {
-	return e.submitUserMessage(ctx, text, nil, nil)
-}
-
-func (e *Engine) SubmitUserMessageWithFlushHook(ctx context.Context, text string, onFlushed func()) (assistant llm.Message, err error) {
-	return e.submitUserMessage(ctx, text, nil, onFlushed)
-}
-
-func (e *Engine) SubmitUserMessageWithHooks(ctx context.Context, text string, onActive func(), onFlushed func()) (assistant llm.Message, err error) {
-	return e.submitUserMessage(ctx, text, onActive, onFlushed)
-}
-
-func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive func(), onFlushed func()) (assistant llm.Message, err error) {
 	if text == "" {
 		return llm.Message{}, errors.New("empty message")
 	}
@@ -574,10 +453,8 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 	}
 
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
-		if onActive != nil {
-			onActive()
-		}
+	e.goalLoopState().Resume()
+	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, PersistRunLifecycle: true}, func(stepCtx context.Context, stepID string) error {
 		hasQueuedInjected := e.messageFlow.HasPendingUserInjections()
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
@@ -591,13 +468,8 @@ func (e *Engine) submitUserMessage(ctx context.Context, text string, onActive fu
 			if err := e.steer(stepID, intents...); err != nil {
 				return err
 			}
-			if onFlushed != nil {
-				onFlushed()
-			}
 		} else if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{userMessage})); err != nil {
 			return err
-		} else if onFlushed != nil {
-			onFlushed()
 		}
 		msg, runErr := e.runStepLoop(stepCtx, stepID)
 		assistant = msg
@@ -616,7 +488,7 @@ func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message,
 	}
 
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindWorkflowTurn}, func(stepCtx context.Context, stepID string) error {
+	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, PersistRunLifecycle: true}, func(stepCtx context.Context, stepID string) error {
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
@@ -629,24 +501,13 @@ func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message,
 }
 
 func (e *Engine) SubmitUserShellCommand(ctx context.Context, command string) (result tools.Result, err error) {
-	return e.submitUserShellCommand(ctx, command, nil)
-}
-
-func (e *Engine) SubmitUserShellCommandWithActiveHook(ctx context.Context, command string, onActive func()) (result tools.Result, err error) {
-	return e.submitUserShellCommand(ctx, command, onActive)
-}
-
-func (e *Engine) submitUserShellCommand(ctx context.Context, command string, onActive func()) (result tools.Result, err error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return tools.Result{}, errors.New("empty command")
 	}
 
 	e.ensureOrchestrationCollaborators()
-	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserShell}, func(stepCtx context.Context, stepID string) error {
-		if onActive != nil {
-			onActive()
-		}
+	err = e.stepLifecycle.Run(ctx, exclusiveStepOptions{EmitRunState: true, PersistRunLifecycle: true}, func(stepCtx context.Context, stepID string) error {
 		if err := e.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}

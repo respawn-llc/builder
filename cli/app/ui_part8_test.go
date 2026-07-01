@@ -45,7 +45,7 @@ func TestBusySlashSupervisorOnAppliesToInFlightRunCompletion(t *testing.T) {
 	}, tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: busyTogglePatchTool{delay: 80 * time.Millisecond}})
 
 	m := newProjectedEngineUIModel(eng)
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 
 	submitDone := make(chan error, 1)
@@ -168,7 +168,7 @@ func TestSlashAutoCompactionTogglesAndShowsStatus(t *testing.T) {
 
 func TestBusySlashAutoCompactionExecutesImmediatelyWithoutQueueing(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.input = "/autocompaction off"
 
@@ -297,7 +297,7 @@ func TestWorkflowSessionAutoCompactionOffBlockedBeforeRuntimeCall(t *testing.T) 
 
 func TestBusyUnsupportedSlashCommandShowsTransientErrorAndDoesNotQueue(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.input = "/compact keep details"
 
@@ -385,7 +385,7 @@ func TestInitialTranscriptVisibleImmediately(t *testing.T) {
 
 func TestSubmitDoneNoopFinalStaysInvisibleWithoutRuntimeClient(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 
 	next, _ := m.Update(newSubmitDoneMsg(0, uiNoopFinalToken, "", nil))
 	updated := next.(*uiModel)

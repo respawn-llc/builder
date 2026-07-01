@@ -274,25 +274,25 @@ func TestRuntimeRebindDoesNotAdvanceTranscriptWorkdirWhenLocalRebindFails(t *tes
 	}
 }
 
-func TestHasBlockingRuntimeActivity(t *testing.T) {
+func TestHasActiveRun(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	reg := registry.NewRuntimeRegistry()
 	fixture.service.runtimes = reg
-	if active, err := fixture.service.HasBlockingRuntimeActivity(context.Background(), fixture.store.Meta().SessionID); err != nil || active {
-		t.Fatalf("HasBlockingRuntimeActivity before run = (%v, %v), want (false, nil)", active, err)
+	if active, err := fixture.service.HasActiveRun(context.Background(), fixture.store.Meta().SessionID); err != nil || active {
+		t.Fatalf("HasActiveRun before run = (%v, %v), want (false, nil)", active, err)
 	}
 	release := startRegisteredActiveRun(t, fixture, reg)
 	defer release()
-	active, err := fixture.service.HasBlockingRuntimeActivity(context.Background(), fixture.store.Meta().SessionID)
+	active, err := fixture.service.HasActiveRun(context.Background(), fixture.store.Meta().SessionID)
 	if err != nil {
-		t.Fatalf("HasBlockingRuntimeActivity: %v", err)
+		t.Fatalf("HasActiveRun: %v", err)
 	}
 	if !active {
-		t.Fatal("HasBlockingRuntimeActivity = false, want true while run active")
+		t.Fatal("HasActiveRun = false, want true while run active")
 	}
 	release()
-	if active, err := fixture.service.HasBlockingRuntimeActivity(context.Background(), fixture.store.Meta().SessionID); err != nil || active {
-		t.Fatalf("HasBlockingRuntimeActivity after run = (%v, %v), want (false, nil)", active, err)
+	if active, err := fixture.service.HasActiveRun(context.Background(), fixture.store.Meta().SessionID); err != nil || active {
+		t.Fatalf("HasActiveRun after run = (%v, %v), want (false, nil)", active, err)
 	}
 }
 

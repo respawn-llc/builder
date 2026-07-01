@@ -112,7 +112,15 @@ func (c uiInputController) handleWorktreeOverlayKey(msg tea.KeyMsg) (tea.Model, 
 	}
 	switch strings.ToLower(msg.String()) {
 	case "ctrl+c":
-		return c.handleRuntimeCtrlC(c.closeTranscriptSurfaceForRuntimeCtrlC(m.closeWorktreeOverlay))
+		if m.isBusy() {
+			return m, c.interruptBusyRuntime()
+		}
+		m.exitAction = UIActionExit
+		if overlayCmd := m.restoreTranscriptSurface(); overlayCmd != nil {
+			m.closeWorktreeOverlay()
+			return m, tea.Sequence(overlayCmd, tea.Quit)
+		}
+		return m, tea.Quit
 	case "esc", "q":
 		return m, c.stopWorktreeOverlayCmd()
 	case "up", "k":

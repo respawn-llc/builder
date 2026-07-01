@@ -43,22 +43,6 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEventsBatch(events []clientui.Eve
 
 func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtimeEventApplyResult {
 	m := a.model
-	if runtimeEventHasReadModelPayload(evt) && evt.ReadModelVersion.Validate() != nil {
-		decision := m.startRuntimeMainViewRefreshRequest(runtimeReadModelResetMainViewRefreshRequest())
-		return runtimeEventApplyResult{
-			cmd:             tea.Batch(decision.cmd, m.sendTransientStatusWithNoticeID("invalid runtime read-model update ignored; refreshing session view", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")),
-			awaitsHydration: decision.started,
-		}
-	}
-	if runtimeEventHasReadModelPayload(evt) {
-		switch m.acceptRuntimeReadModelVersion(evt.ReadModelVersion, false) {
-		case runtimeReadModelVersionIgnore:
-			return runtimeEventApplyResult{cmd: m.runtimeReadModelConflictDiagnosticCmd(evt)}
-		case runtimeReadModelVersionRefresh:
-			decision := m.startRuntimeMainViewRefreshRequest(runtimeReadModelResetMainViewRefreshRequest())
-			return runtimeEventApplyResult{cmd: decision.cmd, awaitsHydration: decision.started}
-		}
-	}
 	projectedState := newProjectedTranscriptEventState(projectedTranscriptEventSnapshotFromModel(m))
 	skipDeferredTailMerge := projectedEventIsLiveOnlyUnresolvedToolStart(projectedState, evt) ||
 		m.deferredCommittedTailBypassesMergeAtNewTurnBoundary(projectedState, evt)
@@ -94,7 +78,6 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 		"consumed_queued_messages": strconv.Itoa(len(reduction.PendingInput.ConsumedQueueItemIDs)),
 	})
 	m.markActiveSubmitFlushed(evt)
-	m.trackRuntimeActivityToken(evt)
 	m.applyRuntimeEventStatus(evt)
 	if !m.processList.open {
 		m.applyBackgroundProcessEventToCache(evt.Background)
@@ -109,7 +92,6 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 	cmds = append(cmds, turnBoundaryResetCmd)
 	cmds = append(cmds, a.applyRuntimeEventReduction(reduction))
 	cmds = append(cmds, a.reconcileInterruptFromRunState(evt))
-	cmds = append(cmds, a.reconcileInterruptFromRuntimeActivity(evt))
 	transcriptMutated := turnBoundaryMutated
 	awaitsHydration := turnBoundaryAwaitsHydration
 	if len(evt.TranscriptEntries) > 0 {

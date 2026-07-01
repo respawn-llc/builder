@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -98,11 +97,7 @@ func newUIRuntimeClientFromEngine(engine *runtime.Engine) clientui.RuntimeClient
 	registerUIRuntime(controlRegistry, engine.SessionID(), engine)
 	controls := client.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(controlRegistry))
 	runtimeClient := newUIRuntimeClientWithReads(engine.SessionID(), reads, controls).(*sessionRuntimeClient)
-	snapshot, err := controlRegistry.RuntimeReadModelSnapshot(context.Background(), engine.SessionID(), nil)
-	if err != nil {
-		panic(err)
-	}
-	runtimeClient.storeMainView(runtimeview.MainViewFromRuntimeActivity(engine, snapshot.Version, snapshot.Activity))
+	runtimeClient.storeMainView(runtimeview.MainViewFromRuntime(engine))
 	return runtimeClient
 }
 

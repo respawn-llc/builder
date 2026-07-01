@@ -8,14 +8,14 @@ import (
 )
 
 type exclusiveStepOptions struct {
-	EmitRunState bool
-	ActiveKind   ActiveKind
+	EmitRunState        bool
+	PersistRunLifecycle bool
+	GoalLoop            bool
 }
 
 type exclusiveStepLifecycle interface {
 	Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
 	Interrupt() error
-	InterruptCurrent() (*RunSnapshot, error)
 	IsBusy() bool
 	Snapshot() *RunSnapshot
 	WithActiveStep(fn func(stepID string) error) (bool, error)
@@ -32,9 +32,7 @@ type backgroundNoticeScheduler interface {
 
 type contextCompactor interface {
 	CompactContext(ctx context.Context, args string) error
-	CompactContextWithActiveHook(ctx context.Context, args string, onActive func()) error
 	CompactContextForPreSubmit(ctx context.Context) error
-	CompactContextForPreSubmitWithActiveHook(ctx context.Context, onActive func()) error
 	TriggerHandoff(ctx context.Context, stepID string, activeCall llm.ToolCall, summarizerPrompt string, futureAgentMessage string) (string, bool, error)
 	AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error
 	ShouldCompactBeforeUserMessage(ctx context.Context, text string) (bool, error)

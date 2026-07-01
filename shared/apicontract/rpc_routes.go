@@ -272,7 +272,7 @@ var routeContracts = []Route{
 	dedicatedUnary[serverapi.RuntimeCompactContextForPreSubmitRequest, struct{}](protocol.MethodRuntimeCompactContextForPreSubmit, "runtime-compact-context-pre-submit", ScopeSessionActiveProject, DependencyRuntimeControl),
 	unary[serverapi.RuntimeHasQueuedUserWorkRequest, serverapi.RuntimeHasQueuedUserWorkResponse](protocol.MethodRuntimeHasQueuedUserWork, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	dedicatedUnary[serverapi.RuntimeSubmitQueuedUserMessagesRequest, serverapi.RuntimeSubmitQueuedUserMessagesResponse](protocol.MethodRuntimeSubmitQueuedUserMessages, "runtime-submit-queued-user-messages", ScopeSessionActiveProject, DependencyRuntimeControl),
-	dedicatedUnary[serverapi.RuntimeInterruptRequest, serverapi.RuntimeInterruptResponse](protocol.MethodRuntimeInterrupt, "runtime-interrupt", ScopeSessionActiveProject, DependencyRuntimeControl),
+	dedicatedUnary[serverapi.RuntimeInterruptRequest, struct{}](protocol.MethodRuntimeInterrupt, "runtime-interrupt", ScopeSessionActiveProject, DependencyRuntimeControl),
 	unary[serverapi.RuntimeQueueUserMessageRequest, serverapi.RuntimeQueueUserMessageResponse](protocol.MethodRuntimeQueueUserMessage, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	unary[serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](protocol.MethodRuntimeDiscardQueuedUserMessage, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	unary[serverapi.RuntimeRecordPromptHistoryRequest, struct{}](protocol.MethodRuntimeRecordPromptHistory, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),

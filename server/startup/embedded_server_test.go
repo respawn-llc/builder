@@ -407,6 +407,9 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
+	if _, err := store.AppendRunStarted(session.RunRecord{RunID: "run-1", StepID: "step-1", StartedAt: time.Now().UTC().Add(-time.Minute)}); err != nil {
+		t.Fatalf("append run start: %v", err)
+	}
 
 	sessionPath := filepath.Join(store.Dir(), "session.json")
 	eventsPath := filepath.Join(store.Dir(), "events.jsonl")
@@ -422,7 +425,7 @@ func TestSessionViewClientReadsDormantSessionByIDWithoutMutatingFiles(t *testing
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
-	if resp.MainView.Session.SessionName != "incident triage" || resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
+	if resp.MainView.Session.SessionName != "incident triage" || resp.MainView.ActiveRun == nil || resp.MainView.ActiveRun.RunID != "run-1" {
 		t.Fatalf("unexpected main view: %+v", resp.MainView)
 	}
 

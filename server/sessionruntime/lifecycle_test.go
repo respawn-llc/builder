@@ -137,26 +137,6 @@ func TestReleaseOnlyIfIdleKeepsActiveRun(t *testing.T) {
 	}
 }
 
-func TestReleaseCloseIfIdlePolicyKeepsActiveRunWithoutLegacyOnlyIfIdle(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	release := startRegisteredActiveRun(t, fixture, reg)
-	defer release()
-
-	req := releaseRequest(sessionID, "test-owner", false, false)
-	req.ClosePolicy = serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle
-	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !resp.Active || resp.Released {
-		t.Fatalf("release response = %+v, want active not released", resp)
-	}
-	if !reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("close_if_idle policy must keep active runtime registered")
-	}
-}
-
 func TestReleaseOnlyIfIdleKeepsSubscriberRuntime(t *testing.T) {
 	fixture, reg := newRuntimeServiceFixture(t)
 	sessionID := fixture.store.Meta().SessionID
@@ -201,36 +181,6 @@ func TestReleaseOnlyIfIdleClosesIdleRuntime(t *testing.T) {
 	}
 	if state.closeCount.Load() != 1 {
 		t.Fatalf("runtime closed %d times, want 1", state.closeCount.Load())
-	}
-}
-
-func TestReleaseDetachOnlyDropsOwnerWithoutClosingIdleRuntime(t *testing.T) {
-	fixture, reg := newRuntimeServiceFixture(t)
-	sessionID := fixture.store.Meta().SessionID
-	state, build := newLifecycleBuilder(t, fixture)
-	if err := fixture.service.AcquireRuntime(context.Background(), sessionID, "owner-a", build); err != nil {
-		t.Fatalf("AcquireRuntime: %v", err)
-	}
-	t.Cleanup(func() {
-		if claim := reg.RuntimeClaimFor(sessionID); claim != nil {
-			_, _ = claim.Close(context.Background(), nil)
-		}
-	})
-
-	req := releaseRequest(sessionID, "owner-a", true, true)
-	req.ClosePolicy = serverapi.SessionRuntimeReleaseClosePolicyDetachOnly
-	resp, err := fixture.service.ReleaseSessionRuntime(context.Background(), req)
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !resp.Released || resp.Active {
-		t.Fatalf("detach-only release response = %+v, want released without active close", resp)
-	}
-	if !reg.IsSessionRuntimeActive(sessionID) {
-		t.Fatal("detach-only release must keep the runtime registered")
-	}
-	if state.closeCount.Load() != 0 {
-		t.Fatalf("detach-only release closed runtime %d times, want 0", state.closeCount.Load())
 	}
 }
 

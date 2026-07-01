@@ -11,7 +11,6 @@ import (
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
-	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
@@ -23,9 +22,6 @@ func TestSecondClientSteersDuringActiveRun(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{})
 	var startOnce sync.Once
-	var releaseOnce sync.Once
-	releaseRun := func() { releaseOnce.Do(func() { close(release) }) }
-	defer releaseRun()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if handleTestOpenAIInputTokenCount(w, r, 1) {
 			return
@@ -109,7 +105,6 @@ func TestSecondClientSteersDuringActiveRun(t *testing.T) {
 	steerResp, err := appCore.RuntimeControlClient().QueueUserMessage(context.Background(), serverapi.RuntimeQueueUserMessageRequest{
 		ClientRequestID: "steer-1",
 		SessionID:       sessionID,
-		OperationRef:    clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "steer-1"},
 		Text:            "steer me",
 	})
 	if err != nil {
@@ -119,7 +114,7 @@ func TestSecondClientSteersDuringActiveRun(t *testing.T) {
 		t.Fatal("QueueUserMessage during active run returned no queue item id")
 	}
 
-	releaseRun()
+	close(release)
 	select {
 	case runErr := <-runDone:
 		if runErr != nil {

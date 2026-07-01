@@ -79,7 +79,7 @@ func (r *serviceTestRuntime) ClearWorktreeReminder(_ context.Context, sessionID 
 	return nil
 }
 
-func (r *serviceTestRuntime) HasBlockingRuntimeActivity(_ context.Context, sessionID string) (bool, error) {
+func (r *serviceTestRuntime) HasActiveRun(_ context.Context, sessionID string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.runningSessions[strings.TrimSpace(sessionID)], nil

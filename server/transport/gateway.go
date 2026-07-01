@@ -251,7 +251,6 @@ func (g *Gateway) cleanupConnectionRuntimes(state *connectionState) {
 			SessionID:       sessionID,
 			OnlyIfIdle:      true,
 			DropOwner:       true,
-			ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle,
 			OwnerID:         ownerID,
 		})
 		cancel()
@@ -330,7 +329,7 @@ func protocolError(err error) (int, string) {
 		return protocol.ErrCodeInternalError, "internal error"
 	}
 	message := strings.TrimSpace(err.Error())
-	if errors.Is(err, context.Canceled) || errors.Is(err, serverapi.ErrRuntimeOperationCanceled) {
+	if errors.Is(err, context.Canceled) {
 		if message == "" || message == context.Canceled.Error() {
 			message = canceledByClientMessage
 		}

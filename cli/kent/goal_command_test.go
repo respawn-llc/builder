@@ -16,7 +16,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/shared/client"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
@@ -367,10 +366,6 @@ func TestGoalCommandSubprocessTargetsLiveSessionFromUnboundWorktree(t *testing.T
 		ClientRequestID: "shell-goal-complete-e2e",
 		SessionID:       store.Meta().SessionID,
 		Command:         shellQuote(kentPath) + " goal complete --confirm",
-		OperationRef: clientui.RuntimeOperationRef{
-			Kind:            clientui.RuntimeOperationKindUserShell,
-			ClientRequestID: "shell-goal-complete-e2e",
-		},
 	}); err != nil {
 		t.Fatalf("shell goal complete: %v", err)
 	}

@@ -197,13 +197,13 @@ func TestRuntimeStatusLineShapeUsesOnlyActiveWork(t *testing.T) {
 		},
 		{
 			name:     "agent turn",
-			prepare:  func(m *uiModel) { m.setRuntimeActivityBusyForTest(true) },
+			prepare:  func(m *uiModel) { m.setBusy(true) },
 			spinning: true,
 		},
 		{
 			name: "waiting on question",
 			prepare: func(m *uiModel) {
-				m.setRuntimeActivityBusyForTest(true)
+				m.setBusy(true)
 				m.activity = uiActivityQuestion
 			},
 		},
@@ -543,6 +543,23 @@ func TestRuntimeStatusUsesLoopbackRuntimeSnapshot(t *testing.T) {
 	}
 }
 
+func TestRuntimeMainViewActiveRunSeedsBusyGoalState(t *testing.T) {
+	client := &runtimeControlFakeClient{mainView: clientui.RuntimeMainView{
+		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
+		ActiveRun: &clientui.RunView{
+			RunID:     "run-1",
+			SessionID: "session-1",
+			StepID:    "step-1",
+			Status:    clientui.RunStatusRunning,
+			Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeGoalLoop),
+		},
+	}}
+	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUISessionID("session-1"))
+	if !m.isBusy() || !m.isGoalRun() || m.activity != uiActivityRunning {
+		t.Fatalf("startup run state = busy:%t goal:%t activity:%v, want active goal run", m.isBusy(), m.isGoalRun(), m.activity)
+	}
+}
+
 func TestRuntimeStatusUsesLiveContextUsageFromRuntimeEvents(t *testing.T) {
 	client := &runtimeControlFakeClient{status: clientui.RuntimeStatus{
 		ContextUsage: clientui.RuntimeContextUsage{UsedTokens: 100, WindowTokens: 1_000},
@@ -572,11 +589,10 @@ func TestRuntimeGoalStatusEventUpdatesCachedGoal(t *testing.T) {
 	runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}})
 	m := newProjectedTestUIModel(runtimeClient, closedProjectedRuntimeEvents(), closedAskEvents(), WithUISessionID("session-1"))
 	m.activity = uiActivityRunning
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 
 	next, _ := m.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:             clientui.EventGoalStatusUpdated,
-		ReadModelVersion: nextRuntimeReadModelVersionForTest(m),
+		Kind: clientui.EventGoalStatusUpdated,
 		GoalStatus: &clientui.RuntimeGoalStatusUpdate{
 			ID:        "goal-1",
 			Objective: "ship feature",
@@ -590,8 +606,7 @@ func TestRuntimeGoalStatusEventUpdatesCachedGoal(t *testing.T) {
 	}
 
 	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:             clientui.EventGoalStatusUpdated,
-		ReadModelVersion: nextRuntimeReadModelVersionForTest(updated),
+		Kind: clientui.EventGoalStatusUpdated,
 		GoalStatus: &clientui.RuntimeGoalStatusUpdate{
 			ID:        "goal-1",
 			Objective: "ship feature",
@@ -602,8 +617,7 @@ func TestRuntimeGoalStatusEventUpdatesCachedGoal(t *testing.T) {
 	assertCachedRuntimeGoal(t, runtimeClient, &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusPaused})
 
 	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:             clientui.EventGoalStatusUpdated,
-		ReadModelVersion: nextRuntimeReadModelVersionForTest(updated),
+		Kind: clientui.EventGoalStatusUpdated,
 		GoalStatus: &clientui.RuntimeGoalStatusUpdate{
 			ID:        "goal-1",
 			Objective: "ship feature",
@@ -614,9 +628,8 @@ func TestRuntimeGoalStatusEventUpdatesCachedGoal(t *testing.T) {
 	assertCachedRuntimeGoal(t, runtimeClient, &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusComplete})
 
 	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:             clientui.EventGoalStatusUpdated,
-		ReadModelVersion: nextRuntimeReadModelVersionForTest(updated),
-		GoalStatus:       &clientui.RuntimeGoalStatusUpdate{Cleared: true},
+		Kind:       clientui.EventGoalStatusUpdated,
+		GoalStatus: &clientui.RuntimeGoalStatusUpdate{Cleared: true},
 	}})
 	updated = next.(*uiModel)
 	assertCachedRuntimeGoal(t, runtimeClient, nil)

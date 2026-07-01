@@ -26,7 +26,7 @@ func TestViewDuringActiveWorkKeepsCommittedTranscriptVisible(t *testing.T) {
 	m.termWidth = 100
 	m.termHeight = 24
 	m.windowSizeKnown = true
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.sawAssistantDelta = true
 	m.layout().syncViewport()
 	m.forwardToView(tui.SetConversationMsg{
@@ -181,7 +181,7 @@ func TestPSOverlaySpinnerTickAnimatesRunningEntriesWhileIdle(t *testing.T) {
 	m.termHeight = 14
 	m.windowSizeKnown = true
 	m.input = "/ps"
-	m.setRuntimeActivityBusyForTest(false)
+	m.setBusy(false)
 	m.spinnerFrame = 0
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})

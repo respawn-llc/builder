@@ -53,135 +53,96 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	clientUIRoot := filepath.Join(repoRoot, "shared", "clientui")
 	allowedTypes := map[string]struct{}{
-		"ApprovalDecision":                   {},
-		"ApprovalOption":                     {},
-		"ApprovalPromptAnswer":               {},
-		"BackgroundProcess":                  {},
-		"BackgroundShellEvent":               {},
-		"ChatEntry":                          {},
-		"ChatSnapshot":                       {},
-		"CommittedTranscriptSuffix":          {},
-		"CommittedTranscriptSuffixRequest":   {},
-		"CompactionLifecycle":                {},
-		"CompactionStatus":                   {},
-		"ConversationFreshness":              {},
-		"EntryVisibility":                    {},
-		"Event":                              {},
-		"EventKind":                          {},
-		"MessagePhase":                       {},
-		"MessageType":                        {},
-		"PendingApproval":                    {},
-		"PendingAsk":                         {},
-		"PendingPromptEvent":                 {},
-		"PendingPromptEventType":             {},
-		"ProcessClient":                      {},
-		"ProcessOutputChunk":                 {},
-		"ProjectAvailability":                {},
-		"ProjectOverview":                    {},
-		"ProjectSummary":                     {},
-		"ProjectWorkspaceSummary":            {},
-		"PromptAnswer":                       {},
-		"QueuedUserMessage":                  {},
-		"QueuedUserMessageFailureReason":     {},
-		"QueuedUserMessageStatus":            {},
-		"QueuedUserMessageStatusEvent":       {},
-		"ReasoningDelta":                     {},
-		"ReviewerLifecycle":                  {},
-		"RunLifecycle":                       {},
-		"RunLifecyclePhase":                  {},
-		"RunMode":                            {},
-		"RunState":                           {},
-		"RunStatus":                          {},
-		"RuntimeClient":                      {},
-		"RuntimeConnectionLifecycle":         {},
-		"RuntimeContextUsage":                {},
-		"RuntimeGoal":                        {},
-		"RuntimeGoalStatusUpdate":            {},
-		"RuntimeGoalStatus":                  {},
-		"RuntimeActivity":                    {},
-		"RuntimeActivityActiveKind":          {},
-		"RuntimeActivityOptions":             {},
-		"RuntimeActivityState":               {},
-		"RuntimeInputReconciliation":         {},
-		"RuntimeInputReconciliationSnapshot": {},
-		"RuntimeInputReconciliationState":    {},
-		"RuntimeMainView":                    {},
-		"RuntimeOperationKind":               {},
-		"RuntimeOperationRef":                {},
-		"RuntimeQueueUserMessageRequest":     {},
-		"RuntimeCompactRequest":              {},
-		"RuntimePreSubmitCompactRequest":     {},
-		"RuntimeShellRequest":                {},
-		"RuntimeSubmitQueuedRequest":         {},
-		"RuntimeSubmitRequest":               {},
-		"RuntimeSessionView":                 {},
-		"RuntimeStatus":                      {},
-		"ReadModelVersion":                   {},
-		"SessionExecutionTarget":             {},
-		"SessionSummary":                     {},
-		"ToolCallMeta":                       {},
-		"ToolCallRenderBehavior":             {},
-		"ToolPresentationKind":               {},
-		"ToolRenderHint":                     {},
-		"ToolRenderKind":                     {},
-		"ToolShellDialect":                   {},
-		"TranscriptMetadata":                 {},
-		"TranscriptPage":                     {},
-		"TranscriptPageRequest":              {},
-		"TranscriptRecoveryCause":            {},
-		"UpdateStatus":                       {},
-		"UserTurnSubmission":                 {},
-		"WorkflowSessionStatus":              {},
+		"ApprovalDecision":                 {},
+		"ApprovalOption":                   {},
+		"ApprovalPromptAnswer":             {},
+		"BackgroundProcess":                {},
+		"BackgroundShellEvent":             {},
+		"ChatEntry":                        {},
+		"ChatSnapshot":                     {},
+		"CommittedTranscriptSuffix":        {},
+		"CommittedTranscriptSuffixRequest": {},
+		"CompactionLifecycle":              {},
+		"CompactionStatus":                 {},
+		"ConversationFreshness":            {},
+		"EntryVisibility":                  {},
+		"Event":                            {},
+		"EventKind":                        {},
+		"ExternalRuntimeState":             {},
+		"ExternalRuntimeStatus":            {},
+		"MessagePhase":                     {},
+		"MessageType":                      {},
+		"PendingApproval":                  {},
+		"PendingAsk":                       {},
+		"PendingPromptEvent":               {},
+		"PendingPromptEventType":           {},
+		"ProcessClient":                    {},
+		"ProcessOutputChunk":               {},
+		"ProjectAvailability":              {},
+		"ProjectOverview":                  {},
+		"ProjectSummary":                   {},
+		"ProjectWorkspaceSummary":          {},
+		"PromptAnswer":                     {},
+		"QueuedUserMessage":                {},
+		"QueuedUserMessageFailureReason":   {},
+		"QueuedUserMessageStatus":          {},
+		"QueuedUserMessageStatusEvent":     {},
+		"ReasoningDelta":                   {},
+		"ReviewerLifecycle":                {},
+		"RunLifecycle":                     {},
+		"RunLifecyclePhase":                {},
+		"RunMode":                          {},
+		"RunState":                         {},
+		"RunStatus":                        {},
+		"RunView":                          {},
+		"RuntimeClient":                    {},
+		"RuntimeConnectionLifecycle":       {},
+		"RuntimeContextUsage":              {},
+		"RuntimeGoal":                      {},
+		"RuntimeGoalStatusUpdate":          {},
+		"RuntimeGoalStatus":                {},
+		"RuntimeMainView":                  {},
+		"RuntimeSessionView":               {},
+		"RuntimeStatus":                    {},
+		"SessionExecutionTarget":           {},
+		"SessionSummary":                   {},
+		"ToolCallMeta":                     {},
+		"ToolCallRenderBehavior":           {},
+		"ToolPresentationKind":             {},
+		"ToolRenderHint":                   {},
+		"ToolRenderKind":                   {},
+		"ToolShellDialect":                 {},
+		"TranscriptMetadata":               {},
+		"TranscriptPage":                   {},
+		"TranscriptPageRequest":            {},
+		"TranscriptRecoveryCause":          {},
+		"UpdateStatus":                     {},
+		"UserTurnSubmission":               {},
+		"WorkflowSessionStatus":            {},
 	}
 	allowedFuncs := map[string]struct{}{
-		"CompactionLifecycle.IsRunning":                 {},
-		"ConversationFreshness.IsFresh":                 {},
-		"IdleRunLifecycle":                              {},
-		"MustRunLifecycle":                              {},
-		"NewCompactionLifecycle":                        {},
-		"NewReviewerLifecycle":                          {},
-		"NewRunLifecycle":                               {},
-		"NewRuntimeConnectionLifecycle":                 {},
-		"NormalizeMessagePhase":                         {},
-		"NormalizeSessionExecutionTarget":               {},
-		"NormalizeThinkingLevel":                        {},
-		"PendingPromptEvent.IsZero":                     {},
-		"ReviewerLifecycle.IsBlocking":                  {},
-		"ReviewerLifecycle.IsRunning":                   {},
-		"ReviewerLifecycle.Validate":                    {},
-		"RunLifecycle.IsFinished":                       {},
-		"RunLifecycle.IsGoalLoopRunning":                {},
-		"RunLifecycle.IsRunning":                        {},
-		"RunLifecycle.Validate":                         {},
-		"RuntimeConnectionLifecycle.IsDisconnected":     {},
-		"MustRuntimeActivity":                           {},
-		"NewEmptyRuntimeInputReconciliationSnapshot":    {},
-		"NewReadModelVersion":                           {},
-		"NewRuntimeActivity":                            {},
-		"NewUnknownRuntimeInputReconciliationSnapshot":  {},
-		"ReadModelVersion.NewerThan":                    {},
-		"ReadModelVersion.Validate":                     {},
-		"RuntimeActivity.ActiveForControl":              {},
-		"RuntimeActivity.Validate":                      {},
-		"RuntimeActivityActiveKind.Validate":            {},
-		"RuntimeCompactRequest.Validate":                {},
-		"RuntimeInputReconciliation.Ambiguous":          {},
-		"RuntimeInputReconciliation.RestoreRecommended": {},
-		"RuntimeInputReconciliation.Validate":           {},
-		"RuntimeInputReconciliationState.Validate":      {},
-		"RuntimeOperationKind.Validate":                 {},
-		"RuntimeOperationRef.Key":                       {},
-		"RuntimeOperationRef.Validate":                  {},
-		"RuntimeQueueUserMessageRequest.Validate":       {},
-		"RuntimePreSubmitCompactRequest.Validate":       {},
-		"RuntimeShellRequest.Validate":                  {},
-		"RuntimeSubmitQueuedRequest.Validate":           {},
-		"RuntimeSubmitRequest.Validate":                 {},
-		"SessionExecutionTargetIsZero":                  {},
-		"SessionExecutionTargetsEqual":                  {},
-		"isZeroRuntimeOperationRef":                     {},
-		"validateOperationRefKind":                      {},
-		"validateNoActiveStep":                          {},
+		"CompactionLifecycle.IsRunning":             {},
+		"ConversationFreshness.IsFresh":             {},
+		"IdleRunLifecycle":                          {},
+		"MustRunLifecycle":                          {},
+		"NewCompactionLifecycle":                    {},
+		"NewReviewerLifecycle":                      {},
+		"NewRunLifecycle":                           {},
+		"NewRuntimeConnectionLifecycle":             {},
+		"NormalizeMessagePhase":                     {},
+		"NormalizeSessionExecutionTarget":           {},
+		"NormalizeThinkingLevel":                    {},
+		"PendingPromptEvent.IsZero":                 {},
+		"ReviewerLifecycle.IsBlocking":              {},
+		"ReviewerLifecycle.IsRunning":               {},
+		"ReviewerLifecycle.Validate":                {},
+		"RunLifecycle.IsFinished":                   {},
+		"RunLifecycle.IsGoalLoopRunning":            {},
+		"RunLifecycle.IsRunning":                    {},
+		"RunLifecycle.Validate":                     {},
+		"RuntimeConnectionLifecycle.IsDisconnected": {},
+		"SessionExecutionTargetIsZero":              {},
+		"SessionExecutionTargetsEqual":              {},
 	}
 	violations := make([]string, 0)
 	if err := filepath.WalkDir(clientUIRoot, func(path string, d os.DirEntry, err error) error {
@@ -237,55 +198,6 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 	}
 	if len(violations) > 0 {
 		t.Fatalf("shared/clientui DTO boundary violations:\n%s", strings.Join(violations, "\n"))
-	}
-}
-
-func TestSharedClientUIHasNoOldRuntimeLivenessDTOs(t *testing.T) {
-	repoRoot := findRepoRoot(t)
-	clientUIRoot := filepath.Join(repoRoot, "shared", "clientui")
-	forbidden := map[string]struct{}{
-		"ActiveRun":                  {},
-		"ExternalRuntime":            {},
-		"ExternalRuntimeState":       {},
-		"ExternalRuntimeStatus":      {},
-		"EventExternalRuntimeStatus": {},
-		"RunView":                    {},
-	}
-	var violations []string
-	if err := filepath.WalkDir(clientUIRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		relPath, relErr := filepath.Rel(repoRoot, path)
-		if relErr != nil {
-			relPath = path
-		}
-		fileSet := token.NewFileSet()
-		file, parseErr := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-		if parseErr != nil {
-			return parseErr
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			ident, ok := node.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			if _, found := forbidden[ident.Name]; !found {
-				return true
-			}
-			position := fileSet.Position(ident.Pos())
-			violations = append(violations, relPath+":"+position.String()+": old client-facing runtime liveness DTO "+ident.Name+" must stay deleted")
-			return true
-		})
-		return nil
-	}); err != nil {
-		t.Fatalf("scan shared/clientui liveness DTOs: %v", err)
-	}
-	if len(violations) > 0 {
-		t.Fatalf("old client-facing runtime liveness DTOs restored:\n%s", strings.Join(violations, "\n"))
 	}
 }
 

@@ -112,8 +112,8 @@ func TestServiceGetSessionMainViewUsesLiveRuntimeWhenAttached(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
-	if resp.MainView.Activity.State != clientui.RuntimeActivityRunning {
-		t.Fatalf("expected live running activity, got %+v", resp.MainView.Activity)
+	if resp.MainView.ActiveRun == nil || resp.MainView.ActiveRun.Status != "running" {
+		t.Fatalf("expected live active run, got %+v", resp.MainView.ActiveRun)
 	}
 	close(release)
 	if err := <-done; err != nil {
@@ -161,6 +161,11 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "final answer", Phase: llm.MessagePhaseFinal}); err != nil {
 		t.Fatalf("append assistant message: %v", err)
 	}
+	startedAt := time.Now().UTC().Add(-time.Minute)
+	if _, err := store.AppendRunStarted(session.RunRecord{RunID: "run-1", StepID: "step-1", StartedAt: startedAt}); err != nil {
+		t.Fatalf("append run start: %v", err)
+	}
+
 	svc := NewService(NewStaticSessionResolver(store), nil, nil)
 	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
@@ -178,8 +183,8 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if resp.MainView.Status.Goal == nil || resp.MainView.Status.Goal.Status != clientui.RuntimeGoalStatusActive || resp.MainView.Status.Goal.Objective != "ship dormant goal" {
 		t.Fatalf("unexpected dormant goal status: %+v", resp.MainView.Status.Goal)
 	}
-	if resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
-		t.Fatalf("dormant activity = %+v, want unavailable", resp.MainView.Activity)
+	if resp.MainView.ActiveRun == nil || resp.MainView.ActiveRun.RunID != "run-1" || resp.MainView.ActiveRun.Status != "running" {
+		t.Fatalf("expected durable running active run, got %+v", resp.MainView.ActiveRun)
 	}
 	if resp.MainView.Session.Transcript.Revision != store.Meta().LastSequence {
 		t.Fatalf("transcript revision = %d, want %d", resp.MainView.Session.Transcript.Revision, store.Meta().LastSequence)
@@ -780,8 +785,12 @@ func TestServiceGetSessionMainViewDoesNotMutatePersistedSessionFiles(t *testing.
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery-1", StepID: "step-1", Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("set pending recovery: %v", err)
+	startedAt := time.Now().UTC().Add(-time.Minute)
+	if _, err := store.AppendRunStarted(session.RunRecord{RunID: "run-1", StepID: "step-1", StartedAt: startedAt}); err != nil {
+		t.Fatalf("append run start: %v", err)
+	}
+	if err := store.MarkInFlight(true); err != nil {
+		t.Fatalf("mark in-flight: %v", err)
 	}
 
 	sessionPath := filepath.Join(store.Dir(), "session.json")
@@ -800,8 +809,8 @@ func TestServiceGetSessionMainViewDoesNotMutatePersistedSessionFiles(t *testing.
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
 	}
-	if resp.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
-		t.Fatalf("dormant activity = %+v, want unavailable", resp.MainView.Activity)
+	if resp.MainView.ActiveRun == nil || resp.MainView.ActiveRun.RunID != "run-1" {
+		t.Fatalf("expected durable running active run, got %+v", resp.MainView.ActiveRun)
 	}
 
 	afterSession, err := os.ReadFile(sessionPath)

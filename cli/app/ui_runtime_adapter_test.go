@@ -284,7 +284,7 @@ func TestProjectRuntimeEventIncludesBackgroundSystemTranscriptEntry(t *testing.T
 	}
 }
 
-func TestRuntimeAdapterRunStartDoesNotDriveActivity(t *testing.T) {
+func TestRuntimeAdapterRunStartAppliesPendingInputBeforeActivityEffect(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.activity = uiActivityIdle
 
@@ -294,11 +294,11 @@ func TestRuntimeAdapterRunStartDoesNotDriveActivity(t *testing.T) {
 	}).
 		cmd
 
-	if m.activity != uiActivityIdle {
-		t.Fatalf("activity = %v, want raw run start ignored", m.activity)
+	if m.activity != uiActivityRunning {
+		t.Fatalf("activity = %v, want running", m.activity)
 	}
-	if m.isBusy() {
-		t.Fatal("expected raw run start not to set busy state")
+	if !m.isBusy() {
+		t.Fatal("expected busy state set")
 	}
 }
 

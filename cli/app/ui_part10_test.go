@@ -16,7 +16,7 @@ func TestLockedInputEditKeysDismissHelpAndStillNoOp(t *testing.T) {
 	m.termHeight = 24
 	m.windowSizeKnown = true
 	m.setInputSubmitLocked(true)
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "locked"
 	m.layout().syncViewport()
 

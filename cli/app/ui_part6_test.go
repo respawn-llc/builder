@@ -106,7 +106,7 @@ func TestPSOverlayInlineUnlocksLockedInputBeforeAppending(t *testing.T) {
 	m.termWidth = 100
 	m.termHeight = 14
 	m.windowSizeKnown = true
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.input = "queued draft"
 	m.setInputSubmitLocked(true)
 	m.lockedInjectText = "queued draft"
@@ -617,7 +617,7 @@ func TestSlashCommandEnterExecutesSelectedPartialMatch(t *testing.T) {
 
 func TestBusyTabQueuesSlashCommandAndFlushesAfterTurn(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.input = "/name queued title"
 
@@ -645,7 +645,7 @@ func TestBusyTabQueuesSlashCommandAndFlushesAfterTurn(t *testing.T) {
 
 func TestBusyQueuedSlashCommandDrainContinuesIntoQueuedPrompt(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.input = "/name queued title"
 
@@ -680,7 +680,7 @@ func TestSubmitDoneWithRuntimeClientDoesNotRequestTranscriptCatchUpWithoutQueued
 	client := &refreshingRuntimeClient{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 
 	next, cmd := m.Update(submitDoneMsg{message: "ignored by runtime-backed flow"})
@@ -705,7 +705,7 @@ func TestSubmitDoneWithQueuedWorkWaitsForInFlightTranscriptCatchUp(t *testing.T)
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("follow up")
 	m.runtimeTranscriptBusy = true
@@ -780,7 +780,7 @@ func TestStaleHydrateKeepsQueuedDrainReadyAfterCommittedGapUserFlush(t *testing.
 	m.termWidth = 100
 	m.termHeight = 20
 	m.windowSizeKnown = true
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.pendingInjected = queuedUserMessagesForTest("steered message")
 	m.input = "steered message"
@@ -807,7 +807,7 @@ func TestStaleHydrateKeepsQueuedDrainReadyAfterCommittedGapUserFlush(t *testing.
 		t.Fatalf("expected queued user flush to use deferred committed tail while assistant stream is live, got %d", got)
 	}
 
-	m.setRuntimeActivityBusyForTest(false)
+	m.setBusy(false)
 	m.activity = uiActivityIdle
 	m.queued = queuedInputsForTest("follow up")
 	m.pendingQueuedDrainAfterHydration = true
@@ -848,7 +848,7 @@ func TestHydrationCompletionDoesNotRedrainQueuedTurnAfterManualDrainStarts(t *te
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("follow up")
 	m.runtimeTranscriptBusy = true

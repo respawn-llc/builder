@@ -89,8 +89,6 @@ func (s stubRuntimeClient) PauseGoal() (*clientui.RuntimeGoal, error) { return n
 
 func (s stubRuntimeClient) ResumeGoal() (*clientui.RuntimeGoal, error) { return nil, nil }
 
-func (s stubRuntimeClient) CompleteGoal() (*clientui.RuntimeGoal, error) { return nil, nil }
-
 func (s stubRuntimeClient) ClearGoal() (*clientui.RuntimeGoal, error) { return nil, nil }
 
 func (s stubRuntimeClient) AppendCommittedEntry(string, string) error { return nil }
@@ -98,27 +96,23 @@ func (s stubRuntimeClient) AppendCommittedEntryWithNoticeID(string, string, stri
 	return nil
 }
 
-func (s stubRuntimeClient) SubmitRuntimeInput(context.Context, clientui.RuntimeSubmitRequest) (clientui.UserTurnSubmission, error) {
+func (s stubRuntimeClient) SubmitUserMessage(context.Context, string) (clientui.UserTurnSubmission, error) {
 	return clientui.UserTurnSubmission{}, nil
 }
 
-func (s stubRuntimeClient) RunUserShell(context.Context, clientui.RuntimeShellRequest) error {
-	return nil
-}
+func (s stubRuntimeClient) SubmitUserShellCommand(context.Context, string) error { return nil }
 
-func (s stubRuntimeClient) CompactRuntime(context.Context, clientui.RuntimeCompactRequest) error {
-	return nil
-}
+func (s stubRuntimeClient) CompactContext(context.Context, string) error { return nil }
 
 func (s stubRuntimeClient) HasQueuedUserWork() (bool, error) { return false, nil }
 
-func (s stubRuntimeClient) SubmitRuntimeQueued(context.Context, clientui.RuntimeSubmitQueuedRequest) (string, error) {
+func (s stubRuntimeClient) SubmitQueuedUserMessages(context.Context) (string, error) {
 	return "", nil
 }
 
 func (s stubRuntimeClient) Interrupt() error { return nil }
 
-func (s stubRuntimeClient) QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest) (clientui.QueuedUserMessage, error) {
+func (s stubRuntimeClient) QueueUserMessage(string) (clientui.QueuedUserMessage, error) {
 	return clientui.QueuedUserMessage{}, nil
 }
 

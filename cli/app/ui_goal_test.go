@@ -66,7 +66,7 @@ func TestGoalCommandOpensGoalOverlay(t *testing.T) {
 func TestGoalCommandOpensGoalOverlayWhileBusy(t *testing.T) {
 	client := &runtimeControlFakeClient{goal: &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: "active"}}
 	m := newSizedProjectedClosedUIModel(client, 100, 20)
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.input = "/goal"
 
@@ -116,12 +116,6 @@ func TestGoalMutationsCoalesceAfterApplyingInFlightCompletion(t *testing.T) {
 	_ = collectCmdMessages(t, followUpCmd)
 	if client.resumeGoalCalls != 1 {
 		t.Fatalf("expected serialized resume call after pause completion, got %d", client.resumeGoalCalls)
-	}
-}
-
-func TestActiveSuspendedGoalClearStillRequiresConfirmation(t *testing.T) {
-	if !goalRequiresClearConfirmation(&clientui.RuntimeGoal{ID: "goal-1", Objective: "ship", Status: clientui.RuntimeGoalStatusActive, Suspended: true}) {
-		t.Fatal("active suspended goal must require destructive clear confirmation")
 	}
 }
 
@@ -414,17 +408,17 @@ func TestGoalClearActiveGoalRequiresConfirmation(t *testing.T) {
 	}
 }
 
-func TestGoalClearSuspendedActiveGoalRequiresConfirmation(t *testing.T) {
+func TestGoalClearSuspendedActiveGoalSkipsConfirmation(t *testing.T) {
 	client := &runtimeControlFakeClient{goal: &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: "active", Suspended: true}}
 	m := newSizedProjectedClosedUIModel(client, 100, 20)
 	m.input = "/goal clear"
 
 	updated := updateGoalForTest(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if !updated.goal.open || updated.goal.confirmMode != "clear" {
-		t.Fatalf("expected suspended active clear confirmation, got %+v", updated.goal)
+	if updated.goal.open {
+		t.Fatalf("expected suspended active clear to skip confirmation, got %+v", updated.goal)
 	}
-	if client.clearGoalCalls != 0 {
-		t.Fatalf("clear calls before confirm = %d, want 0", client.clearGoalCalls)
+	if client.clearGoalCalls != 1 {
+		t.Fatalf("clear calls = %d, want 1", client.clearGoalCalls)
 	}
 }
 
@@ -458,7 +452,7 @@ func TestGoalConfirmationEnterUsesSelectedAction(t *testing.T) {
 func TestGoalSetWhileBusyCanReplaceActiveGoalWithConfirmation(t *testing.T) {
 	client := &runtimeControlFakeClient{goal: &clientui.RuntimeGoal{ID: "goal-1", Objective: "old goal", Status: "active"}}
 	m := newSizedProjectedClosedUIModel(client, 100, 20)
-	m.setRuntimeActivityBusyForTest(true)
+	m.setBusy(true)
 	m.activity = uiActivityRunning
 	m.input = "/goal new goal"
 

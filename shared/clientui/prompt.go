@@ -12,7 +12,6 @@ const (
 
 type PendingPromptEvent struct {
 	Sequence               uint64
-	ReadModelVersion       ReadModelVersion
 	Type                   PendingPromptEventType
 	PromptID               string
 	SessionID              string

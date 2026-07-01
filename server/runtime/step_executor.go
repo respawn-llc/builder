@@ -144,11 +144,6 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			}))
 
 		}
-		if !noopFinalAnswer {
-			if err := e.markProviderVisibleModelRecovery(stepID); err != nil {
-				return stepLoopResult{}, err
-			}
-		}
 		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistantMsg})); err != nil {
 			return stepLoopResult{}, err
 		}

@@ -43,7 +43,6 @@ type RuntimeWiringOptions struct {
 	WorkflowRun                         *workflowruntime.Config
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
 	SkipContinuationAgentRoleValidation bool
-	StepLifecycle                       runtime.StepLifecycleSink
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
 	// global context (AGENTS.md, system prompt, skills). Empty falls back to
 	// ~/.kent inside the runtime resolvers.
@@ -193,7 +192,6 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 			}
 			eventBridge.Publish(evt)
 		},
-		StepLifecycle: opts.StepLifecycle,
 	})
 	if err != nil {
 		return nil, err

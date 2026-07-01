@@ -30,7 +30,6 @@ type countingSessionViewClient struct {
 	mainViewCount     atomic.Int32
 	pageCount         atomic.Int32
 	suffixCount       atomic.Int32
-	lastMainViewReq   serverapi.SessionMainViewRequest
 	lastTranscriptReq serverapi.SessionTranscriptPageRequest
 	lastSuffixReq     serverapi.SessionCommittedTranscriptSuffixRequest
 }
@@ -58,8 +57,7 @@ func (c *runtimeClientWithoutCachedMainView) RefreshCommittedTranscriptSuffix(re
 	}, nil
 }
 
-func (c *countingSessionViewClient) GetSessionMainView(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-	c.lastMainViewReq = req
+func (c *countingSessionViewClient) GetSessionMainView(context.Context, serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	c.count.Add(1)
 	c.mainViewCount.Add(1)
 	return serverapi.SessionMainViewResponse{MainView: c.view}, nil
@@ -142,10 +140,6 @@ func (r *mutableRuntimeResolver) WithGuardedRuntime(_ context.Context, _ string,
 }
 
 func (r *mutableRuntimeResolver) BeginSessionRun(string) (func(), bool) { return func() {}, true }
-
-func (r *mutableRuntimeResolver) BeginCancellableSessionRun(string) (context.Context, func(), bool) {
-	return context.Background(), func() {}, true
-}
 
 func (r *mutableRuntimeResolver) SessionRunsBlocked(string) bool { return false }
 
@@ -619,7 +613,7 @@ func TestRuntimeClientFromEngineDoesNotSeedTranscriptAccessor(t *testing.T) {
 	}
 }
 
-func TestRuntimeClientMainViewIncludesRuntimeActivityFromRealEngine(t *testing.T) {
+func TestRuntimeClientMainViewIncludesActiveRunFromRealEngine(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	fakeLLM := &runtimeClientFakeLLM{responses: []llm.Response{
@@ -658,11 +652,17 @@ func TestRuntimeClientMainViewIncludesRuntimeActivityFromRealEngine(t *testing.T
 	if view.Session.SessionID != store.Meta().SessionID {
 		t.Fatalf("session id = %q, want %q", view.Session.SessionID, store.Meta().SessionID)
 	}
-	if view.Activity.State != clientui.RuntimeActivityRunning {
-		t.Fatalf("expected running activity in main view, got %+v", view.Activity)
+	if view.ActiveRun == nil {
+		t.Fatal("expected active run in main view")
 	}
-	if view.Activity.RunID == "" || view.Activity.StepID == "" {
-		t.Fatalf("expected activity identifiers, got %+v", view.Activity)
+	if view.ActiveRun.RunID == "" || view.ActiveRun.StepID == "" {
+		t.Fatalf("expected run identifiers, got %+v", view.ActiveRun)
+	}
+	if view.ActiveRun.SessionID != store.Meta().SessionID {
+		t.Fatalf("run session id = %q, want %q", view.ActiveRun.SessionID, store.Meta().SessionID)
+	}
+	if view.ActiveRun.Status != "running" || view.ActiveRun.StartedAt.IsZero() || !view.ActiveRun.FinishedAt.IsZero() {
+		t.Fatalf("unexpected active run payload: %+v", view.ActiveRun)
 	}
 
 	close(release)
@@ -968,10 +968,7 @@ func TestRuntimeClientQueueUserMessageNotifiesConnectionObserverOnFailure(t *tes
 	var observedErr error
 	concrete.SetConnectionStateObserver(func(err error) { observedErr = err })
 
-	_, _ = concrete.QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest{
-		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "queue-loopback-missing"},
-		Text:         "queued input",
-	})
+	concrete.QueueUserMessage("queued input")
 
 	if observedErr == nil || !errors.Is(observedErr, sharedclient.ErrLoopbackServiceUnavailable) {
 		t.Fatalf("observed connection state error = %v, want runtime control service unavailable", observedErr)
