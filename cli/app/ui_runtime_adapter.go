@@ -440,6 +440,11 @@ func (m *uiModel) streamNativeAssistantDelta(delta string, phase clientui.Messag
 	if m == nil || !m.nativeSurfaceConfigured() {
 		return false, nil
 	}
+	m.dropNativeSurfaceIfGeometryUnsupported()
+	if !m.nativeSurfaceGeometrySupported() {
+		m.nativeAssistantStreamIncomplete = true
+		return false, nil
+	}
 	if m.nativeResizeRehydratePending() {
 		m.nativeAssistantStreamIncomplete = true
 		return false, nil
@@ -476,6 +481,10 @@ func (m *uiModel) finishNativeAssistantStreaming() error {
 	defer func() {
 		m.nativeAssistantStreamIncomplete = false
 	}()
+	m.dropNativeSurfaceIfGeometryUnsupported()
+	if !m.nativeSurfaceGeometrySupported() {
+		return nil
+	}
 	if !m.nativeSurface.initialized() {
 		return nil
 	}

@@ -642,6 +642,38 @@ func TestOngoingScrollbackBufferQueuedFlushKeepsAttemptingAfterWriteFailure(t *t
 	}
 }
 
+func TestOngoingScrollbackBufferQueuedWriteFailureDoesNotPoisonNextStream(t *testing.T) {
+	writeErr := errors.New("queued write failed")
+	writer := &scriptedWriter{errors: []error{nil, writeErr, nil}}
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, writer, nil)
+	defer buffer.close()
+
+	if err := buffer.StreamMarkdownAssistantContent("done"); err != nil {
+		t.Fatalf("stream returned error: %v", err)
+	}
+	firstQueuedErr := make(chan error, 1)
+	go func() { firstQueuedErr <- buffer.Steer(" queued") }()
+	waitForQueuedSteers(t, buffer, 1)
+	if err := <-firstQueuedErr; err != nil {
+		t.Fatalf("queued steer returned error before flush: %v", err)
+	}
+
+	err := buffer.FinishAssistantStreaming()
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("finish error = %v, want %v", err, writeErr)
+	}
+	if err := buffer.StreamMarkdownAssistantContent("next"); err != nil {
+		t.Fatalf("second stream returned error: %v", err)
+	}
+	if err := buffer.FinishAssistantStreaming(); err != nil {
+		t.Fatalf("second finish returned error: %v", err)
+	}
+
+	if got, want := strings.Join(writer.Writes(), "|"), "done"+terminalLineBreak+"|next"+terminalLineBreak; got != want {
+		t.Fatalf("successful writes = %q, want %q", got, want)
+	}
+}
+
 func TestOngoingScrollbackBufferShortWritesReturnErrors(t *testing.T) {
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, shortWriter{}, nil)
 	defer buffer.close()
@@ -768,10 +800,7 @@ func TestOngoingScrollbackBufferHeldStreamFlushDoesNotInterleaveLiveFrameBeforeT
 
 	want := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("input")) +
 		liveAreaErasePhysicalSequence(1, 24) +
-		stableOutputAnchorSequence(1, 24) +
-		"hello " + terminalLineBreak +
-		"world" + terminalLineBreak +
-		stableOutputReleaseSequence() +
+		stableOutputInsertRowsSequence(1, 24, "hello ", "world") +
 		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("input"))
 	if got := out.String(); got != want {
 		t.Fatalf("held stream output = %q, want %q", got, want)

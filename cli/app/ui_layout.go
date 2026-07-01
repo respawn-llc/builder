@@ -40,6 +40,7 @@ func (m *uiModel) syncRendererOutputGate() {
 	if m == nil || m.rendererOutputGate == nil {
 		return
 	}
+	m.dropNativeSurfaceIfGeometryUnsupported()
 	m.rendererOutputGate.SetSuppressRendererWrites(m.surface() == uiSurfaceOngoingTranscript && m.nativeSurfaceEnabled())
 }
 

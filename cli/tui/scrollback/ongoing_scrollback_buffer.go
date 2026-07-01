@@ -68,6 +68,11 @@ type stableHoldoffOperation struct {
 	queuedSteers []stableSteerRequest
 }
 
+type stableOutputRow struct {
+	operation string
+	text      string
+}
+
 var errOngoingScrollbackBufferClosed = errors.New("native scrollback buffer is closed")
 
 func WithNormalBufferAvailability(available func() bool) OngoingScrollbackBufferOption {
@@ -192,11 +197,7 @@ func (buffer *OngoingScrollbackBufferImpl) Steer(line string) error {
 	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
 		delayedErr = err
 	}
-	err := buffer.withLiveErasedForStableLocked(func() error {
-		payload := line + terminalLineBreak
-		written, writeErr := io.WriteString(buffer.stableWriter, payload)
-		return buffer.stableWriteResult("steer", payload, written, writeErr)
-	})
+	err := buffer.writeStableRowsWithLiveErasedLocked([]stableOutputRow{{operation: "steer", text: line}}, true, false)
 	buffer.mu.Unlock()
 	buffer.notifyDelayedWriteError(delayedErr)
 	return err
@@ -468,12 +469,7 @@ func (buffer *OngoingScrollbackBufferImpl) flushHeldStableOpsLocked() (bool, err
 	}
 	operations := append([]stableHoldoffOperation(nil), buffer.heldStableOps...)
 	buffer.heldStableOps = nil
-	if buffer.isStreaming {
-		return true, buffer.writeStableHoldoffOperationsLocked(operations)
-	}
-	return true, buffer.withLiveErasedForStableLocked(func() error {
-		return buffer.writeStableHoldoffOperationsLocked(operations)
-	})
+	return true, buffer.writeStableHoldoffOperationsLocked(operations)
 }
 
 func (buffer *OngoingScrollbackBufferImpl) writeStableHoldoffOperationsLocked(operations []stableHoldoffOperation) error {
@@ -482,11 +478,11 @@ func (buffer *OngoingScrollbackBufferImpl) writeStableHoldoffOperationsLocked(op
 		err := error(nil)
 		switch operation.kind {
 		case stableHoldoffSteer:
-			err = buffer.writeSteerPayloadLocked(operation.payload)
+			err = buffer.writeStableRowsWithLiveErasedLocked([]stableOutputRow{{operation: "steer", text: operation.payload}}, true, false)
 		case stableHoldoffAssistantStream:
 			err = buffer.writeAssistantStreamPayloadLocked(operation.payload)
 		case stableHoldoffFinishAssistantStream:
-			err = buffer.writeAssistantStreamTerminatorAndQueuedSteersLocked(operation.queuedSteers)
+			err = buffer.finishAssistantStreamingLocked(operation.queuedSteers)
 		default:
 			panicScrollbackInvariant("flushHoldoff", "unknown stable holdoff operation kind", operation.payload, buffer.terminalWidth, buffer.terminalHeight, lipgloss.Width(operation.payload))
 		}
@@ -498,50 +494,34 @@ func (buffer *OngoingScrollbackBufferImpl) writeStableHoldoffOperationsLocked(op
 }
 
 func (buffer *OngoingScrollbackBufferImpl) finishAssistantStreamingLocked(queuedSteers []stableSteerRequest) error {
-	return buffer.withLiveErasedForStableLocked(func() error {
-		return buffer.writeAssistantStreamTerminatorAndQueuedSteersLocked(queuedSteers)
-	})
-}
-
-func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamTerminatorAndQueuedSteersLocked(queuedSteers []stableSteerRequest) error {
-	firstErr := buffer.writeAssistantStreamTerminatorLocked()
-	if err := buffer.writeQueuedSteersLocked(queuedSteers); firstErr == nil {
-		firstErr = err
-	}
-	return firstErr
-}
-
-func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamTerminatorLocked() error {
 	rows := buffer.renderAssistantStreamRowsLocked(buffer.assistantStreamSource)
 	buffer.updateAssistantStreamProjectionLocked(rows, len(rows))
 	promotedCount := len(buffer.assistantStreamPromoted)
-	if promotedCount >= len(rows) {
-		buffer.clearAssistantStreamStateLocked()
-		return nil
-	}
 	rowsToPromote := append([]string(nil), rows[promotedCount:]...)
-	firstErr := buffer.writeAssistantStreamRowsLocked("finishAssistantStreaming", rowsToPromote)
-	if firstErr == nil {
-		buffer.appendAssistantStreamPromotedRowsLocked(rowsToPromote)
+	if len(queuedSteers) == 0 {
+		err := buffer.writeStableRowsWithLiveErasedLocked(stableOutputRows("finishAssistantStreaming", rowsToPromote), true, false)
+		if err == nil {
+			buffer.clearAssistantStreamStateLocked()
+		}
+		return err
+	}
+	firstErr := error(nil)
+	if len(rowsToPromote) > 0 {
+		firstErr = buffer.writeStableRowsWithLiveErasedLocked(stableOutputRows("finishAssistantStreaming", rowsToPromote), false, false)
+		if firstErr == nil {
+			buffer.clearAssistantStreamStateLocked()
+		}
+	} else {
 		buffer.clearAssistantStreamStateLocked()
 	}
-	return firstErr
-}
-
-func (buffer *OngoingScrollbackBufferImpl) writeQueuedSteersLocked(queuedSteers []stableSteerRequest) error {
-	var firstErr error
+	stableRows := make([]stableOutputRow, 0, len(queuedSteers))
 	for _, request := range queuedSteers {
-		if err := buffer.writeSteerPayloadLocked(request.line); firstErr == nil && err != nil {
-			firstErr = err
-		}
+		stableRows = append(stableRows, stableOutputRow{operation: "steer", text: request.line})
+	}
+	if err := buffer.writeStableRowsWithLiveErasedLocked(stableRows, true, true); firstErr == nil {
+		firstErr = err
 	}
 	return firstErr
-}
-
-func (buffer *OngoingScrollbackBufferImpl) writeSteerPayloadLocked(line string) error {
-	payload := line + terminalLineBreak
-	written, writeErr := io.WriteString(buffer.stableWriter, payload)
-	return buffer.stableWriteResult("steer", payload, written, writeErr)
 }
 
 func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(delta string) error {
@@ -564,13 +544,11 @@ func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(del
 	if len(rows) == 0 {
 		return nil
 	}
-	return buffer.withLiveErasedForAssistantStreamLocked(func() error {
-		firstErr := buffer.writeAssistantStreamRowsLocked("streamMarkdownAssistantContent", rows)
-		if firstErr == nil {
-			buffer.appendAssistantStreamPromotedRowsLocked(rows)
-		}
-		return firstErr
-	})
+	firstErr := buffer.writeStableRowsWithLiveErasedLocked(stableOutputRows("streamMarkdownAssistantContent", rows), false, false)
+	if firstErr == nil {
+		buffer.appendAssistantStreamPromotedRowsLocked(rows)
+	}
+	return firstErr
 }
 
 func (buffer *OngoingScrollbackBufferImpl) renderAssistantStreamRowsLocked(source string) []string {
@@ -648,18 +626,6 @@ func (buffer *OngoingScrollbackBufferImpl) updateAssistantStreamProjectionLocked
 	buffer.assistantStreamTail = visibleAssistantStreamRows(rows[tailStart:])
 }
 
-func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamRowsLocked(operation string, rows []string) error {
-	for _, row := range rows {
-		stablePayload := row + terminalLineBreak
-		written, writeErr := io.WriteString(buffer.stableWriter, stablePayload)
-		err := buffer.stableWriteResult(operation, stablePayload, written, writeErr)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (buffer *OngoingScrollbackBufferImpl) validateAssistantRenderedRowLocked(row string) {
 	visualWidth := xansi.StringWidth(row)
 	if strings.ContainsAny(row, "\r\n") {
@@ -684,34 +650,38 @@ func (buffer *OngoingScrollbackBufferImpl) clearAssistantStreamStateLocked() {
 	buffer.assistantStreamTail = nil
 }
 
-func (buffer *OngoingScrollbackBufferImpl) withLiveErasedForStableLocked(writeStable func() error) error {
+func (buffer *OngoingScrollbackBufferImpl) writeStableRowsWithLiveErasedLocked(rows []stableOutputRow, restoreLive bool, continueAfterError bool) error {
 	err := error(nil)
-	liveErased := false
+	liveFramePending := false
+	shouldRestoreLive := false
 	liveRows := 0
-	stableAnchored := false
 	var liveArea *nativeLiveAreaImpl
 	if liveArea := buffer.liveArea; liveArea != nil {
 		liveRows = liveArea.renderedLines
-		err = liveArea.erasePhysicalLocked()
-		liveErased = err == nil
+		if liveRows > 0 {
+			err = liveArea.erasePhysicalLocked()
+			liveFramePending = err == nil
+			shouldRestoreLive = err == nil
+		} else if liveArea.pendingPhysicalRender && liveArea.erasedLiveRows > 0 {
+			liveRows = liveArea.erasedLiveRows
+			liveFramePending = true
+			shouldRestoreLive = true
+		} else if liveArea.pendingPhysicalRender && len(liveArea.frame.Lines) > 0 {
+			shouldRestoreLive = true
+		}
+	}
+	if liveArea := buffer.liveArea; liveArea != nil && liveFramePending {
+		liveArea.pendingPhysicalRender = true
 	}
 	liveArea = buffer.liveArea
-	if err == nil && writeStable != nil && liveArea != nil {
-		if anchorErr := liveArea.anchorStableOutputLocked(liveRows); anchorErr != nil {
-			err = anchorErr
-		} else if liveRows > 0 {
-			stableAnchored = true
+	if err == nil && len(rows) > 0 {
+		if liveArea != nil && liveRows > 0 {
+			err = liveArea.insertStableRowsLocked(liveRows, rows, continueAfterError)
+		} else {
+			err = buffer.writeStableRowsDirectLocked(rows, continueAfterError)
 		}
 	}
-	if err == nil && writeStable != nil {
-		err = writeStable()
-	}
-	if stableAnchored {
-		if releaseErr := liveArea.releaseStableOutputAnchorLocked(); err == nil {
-			err = releaseErr
-		}
-	}
-	if liveArea := buffer.liveArea; liveArea != nil && liveErased {
+	if liveArea := buffer.liveArea; liveArea != nil && shouldRestoreLive && restoreLive {
 		if restoreErr := liveArea.renderPhysicalLocked(); err == nil {
 			err = restoreErr
 		}
@@ -719,35 +689,27 @@ func (buffer *OngoingScrollbackBufferImpl) withLiveErasedForStableLocked(writeSt
 	return err
 }
 
-func (buffer *OngoingScrollbackBufferImpl) withLiveErasedForAssistantStreamLocked(writeStable func() error) error {
-	err := error(nil)
-	liveRows := 0
-	stableAnchored := false
-	var liveArea *nativeLiveAreaImpl
-	if liveArea := buffer.liveArea; liveArea != nil {
-		liveRows = liveArea.renderedLines
-		err = liveArea.erasePhysicalLocked()
-		if err == nil {
-			liveArea.pendingPhysicalRender = true
+func (buffer *OngoingScrollbackBufferImpl) writeStableRowsDirectLocked(rows []stableOutputRow, continueAfterError bool) error {
+	var firstErr error
+	for _, row := range rows {
+		stablePayload := row.text + terminalLineBreak
+		written, writeErr := io.WriteString(buffer.stableWriter, stablePayload)
+		if err := buffer.stableWriteResult(row.operation, stablePayload, written, writeErr); firstErr == nil && err != nil {
+			firstErr = err
+			if !continueAfterError {
+				break
+			}
 		}
 	}
-	liveArea = buffer.liveArea
-	if err == nil && writeStable != nil && liveArea != nil {
-		if anchorErr := liveArea.anchorStableOutputLocked(liveRows); anchorErr != nil {
-			err = anchorErr
-		} else if liveRows > 0 {
-			stableAnchored = true
-		}
+	return firstErr
+}
+
+func stableOutputRows(operation string, rows []string) []stableOutputRow {
+	out := make([]stableOutputRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, stableOutputRow{operation: operation, text: row})
 	}
-	if err == nil && writeStable != nil {
-		err = writeStable()
-	}
-	if stableAnchored {
-		if releaseErr := liveArea.releaseStableOutputAnchorLocked(); err == nil {
-			err = releaseErr
-		}
-	}
-	return err
+	return out
 }
 
 func (buffer *OngoingScrollbackBufferImpl) notifyDelayedWriteError(err error) {

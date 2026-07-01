@@ -377,6 +377,104 @@ func TestNativeLiveFrameRenderUsesBottomAnchorFromAppLayout(t *testing.T) {
 	}
 }
 
+func TestNativeLiveFrameReservesTranscriptRowWhenFrameWouldFillTerminal(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	m.termWidth = 20
+	m.termHeight = 3
+	m.windowSizeKnown = true
+
+	rendered := m.layout().renderNativeLiveAreaFrame(uiRenderFrame{
+		width:      20,
+		height:     3,
+		chatPanel:  []string{"chat"},
+		inputPane:  []string{"input"},
+		statusLine: "status",
+		tailOnly:   true,
+	})
+
+	if strings.TrimSpace(rendered) != "" {
+		t.Fatalf("native live frame should write directly to terminal, got fallback render %q", rendered)
+	}
+	if m.nativeSurface == nil || !m.nativeSurface.lastFrameSet {
+		t.Fatal("expected native live frame to render")
+	}
+	plainFrame := stripANSIForNativeSpecTest(strings.Join(m.nativeSurface.lastFrame.Lines, "\n"))
+	if got, want := len(m.nativeSurface.lastFrame.Lines), 2; got != want {
+		t.Fatalf("native live frame rows = %d, want %d: %q", got, want, plainFrame)
+	}
+	if strings.Contains(plainFrame, "chat") || !strings.Contains(plainFrame, "input") || !strings.Contains(plainFrame, "status") {
+		t.Fatalf("native live frame did not keep bottom-priority rows while reserving transcript space: %q", plainFrame)
+	}
+	if err := m.nativeSurface.surface.Steer("stable"); err != nil {
+		t.Fatalf("stable steer with reserved transcript row returned error: %v", err)
+	}
+	if plain := stripANSIForNativeSpecTest(out.String()); !strings.Contains(plain, "stable") {
+		t.Fatalf("stable steer was not appended after reserved-row live frame: %q", plain)
+	}
+}
+
+func TestNativeOneRowGeometryUsesRendererFallback(t *testing.T) {
+	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
+	m.termWidth = 20
+	m.termHeight = 1
+	m.windowSizeKnown = true
+	m.forwardToView(tui.SetViewportSizeMsg{Width: 20, Lines: 1})
+
+	if m.nativeSurfaceEnabled() {
+		t.Fatal("native surface should not own one-row geometry")
+	}
+	m.syncRendererOutputGate()
+	if m.rendererOutputGate != nil && m.rendererOutputGate.shouldDrop([]byte("fallback")) {
+		t.Fatal("renderer output gate suppressed fallback rendering for one-row geometry")
+	}
+	if rendered := m.View(); strings.TrimSpace(rendered) == "" {
+		t.Fatal("expected one-row geometry to return normal renderer fallback output")
+	}
+}
+
+func TestNativeOneRowResizeDropsInitializedSurfaceBeforeAssistantStream(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	m.termWidth = 20
+	m.termHeight = 6
+	m.windowSizeKnown = true
+
+	rendered := m.layout().renderNativeLiveAreaFrame(uiRenderFrame{
+		width:      20,
+		height:     6,
+		inputPane:  []string{"input"},
+		statusLine: "status",
+		tailOnly:   true,
+	})
+	if strings.TrimSpace(rendered) != "" {
+		t.Fatalf("native live frame should write directly to terminal, got fallback render %q", rendered)
+	}
+	if m.nativeSurface == nil || !m.nativeSurface.initialized() {
+		t.Fatal("expected native surface initialized before resize")
+	}
+
+	out.Reset()
+	m.termHeight = 1
+	m.forwardToView(tui.SetViewportSizeMsg{Width: 20, Lines: 1})
+	handled, err := m.streamNativeAssistantDelta("partial", clientui.MessagePhaseFinal)
+	if err != nil {
+		t.Fatalf("stream native assistant delta returned error: %v", err)
+	}
+	if handled {
+		t.Fatal("one-row geometry should not handle assistant delta with native direct writes")
+	}
+	if m.nativeSurface == nil {
+		t.Fatal("native surface wrapper should remain configured for later valid geometry")
+	}
+	if m.nativeSurface.initialized() {
+		t.Fatal("one-row geometry should drop the initialized native surface")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("one-row geometry wrote native bytes after fallback took ownership: %q", out.String())
+	}
+}
+
 func TestNativeAssistantFinalizerEmitsSuffixOnly(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceSpecTestModel(&out)

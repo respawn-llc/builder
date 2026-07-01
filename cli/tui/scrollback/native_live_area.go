@@ -27,6 +27,7 @@ type nativeLiveAreaImpl struct {
 	terminalHeight        int
 	frame                 NativeLiveAreaFrame
 	renderedLines         int
+	erasedLiveRows        int
 	cursorPlaced          bool
 	placedCursor          NativeLiveAreaCursor
 	pendingPhysicalRender bool
@@ -113,6 +114,7 @@ func (area *nativeLiveAreaImpl) erasePhysicalLocked() error {
 	if written != len(sequence) {
 		return fmt.Errorf("erase live area short write: %s: %w", liveAreaWriteDiagnostics(sequence, area.terminalWidth, area.terminalHeight, written), io.ErrShortWrite)
 	}
+	area.erasedLiveRows = area.renderedLines
 	area.renderedLines = 0
 	area.cursorPlaced = false
 	area.placedCursor = NativeLiveAreaCursor{}
@@ -134,6 +136,7 @@ func (area *nativeLiveAreaImpl) renderPhysicalLocked() error {
 		return fmt.Errorf("render live area short write: %s: %w", liveAreaWriteDiagnostics(payload, area.terminalWidth, area.terminalHeight, written), io.ErrShortWrite)
 	}
 	area.renderedLines = len(area.frame.Lines)
+	area.erasedLiveRows = 0
 	area.pendingPhysicalRender = false
 	area.cursorPlaced = area.frame.Cursor.Visible
 	if area.cursorPlaced {
@@ -144,34 +147,25 @@ func (area *nativeLiveAreaImpl) renderPhysicalLocked() error {
 	return nil
 }
 
-func (area *nativeLiveAreaImpl) anchorStableOutputLocked(liveRows int) error {
-	if area == nil || liveRows <= 0 {
+func (area *nativeLiveAreaImpl) insertStableRowsLocked(liveRows int, rows []stableOutputRow, continueAfterError bool) error {
+	if area == nil || liveRows <= 0 || len(rows) == 0 {
 		return nil
 	}
-	sequence := stableOutputAnchorSequence(liveRows, area.terminalHeight)
-	written, err := io.WriteString(area.buffer.stableWriter, sequence)
-	if err != nil {
-		return fmt.Errorf("anchor stable output failed: %s: %w", liveAreaWriteDiagnostics(sequence, area.terminalWidth, area.terminalHeight, written), err)
+	if liveRows >= area.terminalHeight {
+		return fmt.Errorf("insert stable rows requires at least one transcript row above live area: live_rows=%d terminal_height=%d", liveRows, area.terminalHeight)
 	}
-	if written != len(sequence) {
-		return fmt.Errorf("anchor stable output short write: %s: %w", liveAreaWriteDiagnostics(sequence, area.terminalWidth, area.terminalHeight, written), io.ErrShortWrite)
+	var firstErr error
+	for _, row := range rows {
+		sequence := stableOutputInsertRowSequence(row.text, liveRows, area.terminalHeight)
+		written, err := io.WriteString(area.buffer.stableWriter, sequence)
+		if writeErr := area.buffer.stableWriteResult(row.operation, sequence, written, err); firstErr == nil && writeErr != nil {
+			firstErr = writeErr
+			if !continueAfterError {
+				break
+			}
+		}
 	}
-	return nil
-}
-
-func (area *nativeLiveAreaImpl) releaseStableOutputAnchorLocked() error {
-	if area == nil {
-		return nil
-	}
-	sequence := stableOutputReleaseSequence()
-	written, err := io.WriteString(area.buffer.stableWriter, sequence)
-	if err != nil {
-		return fmt.Errorf("release stable output anchor failed: %s: %w", liveAreaWriteDiagnostics(sequence, area.terminalWidth, area.terminalHeight, written), err)
-	}
-	if written != len(sequence) {
-		return fmt.Errorf("release stable output anchor short write: %s: %w", liveAreaWriteDiagnostics(sequence, area.terminalWidth, area.terminalHeight, written), io.ErrShortWrite)
-	}
-	return nil
+	return firstErr
 }
 
 func (area *nativeLiveAreaImpl) validateFrameBeforeLock(operation string, frame NativeLiveAreaFrame) {
@@ -189,6 +183,9 @@ func (area *nativeLiveAreaImpl) validateFrameBeforeLock(operation string, frame 
 	}
 	if len(frame.Lines) > area.terminalHeight {
 		panicLiveAreaInvariant(operation, "live area content exceeds terminal height", frame, area.terminalWidth, area.terminalHeight)
+	}
+	if len(frame.Lines) == area.terminalHeight {
+		panicLiveAreaInvariant(operation, "live area content must leave at least one transcript row", frame, area.terminalWidth, area.terminalHeight)
 	}
 	for index, line := range frame.Lines {
 		if strings.ContainsAny(line, "\r\n") {
@@ -258,19 +255,15 @@ func liveAreaErasePhysicalSequence(renderedLines int, terminalHeight int) string
 	return liveAreaBottomRowAnchorSequence(terminalHeight) + liveAreaEraseSequence(renderedLines)
 }
 
-func stableOutputAnchorSequence(liveRows int, terminalHeight int) string {
+func stableOutputInsertRowSequence(row string, liveRows int, terminalHeight int) string {
 	if terminalHeight <= 0 {
 		return ""
 	}
-	transcriptBottom := terminalHeight - liveRows + 1
+	transcriptBottom := terminalHeight - liveRows
 	if transcriptBottom < 1 {
 		transcriptBottom = 1
 	}
-	return "\x1b[?6l" + xansi.SetTopBottomMargins(1, transcriptBottom) + xansi.CursorPosition(1, transcriptBottom)
-}
-
-func stableOutputReleaseSequence() string {
-	return "\x1b[?6l" + "\x1b[r"
+	return liveAreaBottomRowAnchorSequence(terminalHeight) + "\n" + xansi.CursorPosition(1, transcriptBottom) + xansi.EraseEntireLine + row
 }
 
 func liveAreaBottomAnchorSequence(renderedLines int, terminalHeight int) string {

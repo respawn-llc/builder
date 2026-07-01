@@ -370,13 +370,13 @@ type mainSurfaceGuardFunctionContext struct {
 func mainSurfaceGuardAllowsTerminalWrite(context mainSurfaceGuardFunctionContext) bool {
 	if context.receiver == "OngoingScrollbackBufferImpl" {
 		switch context.name {
-		case "Steer", "StreamMarkdownAssistantContent", "FinishAssistantStreaming", "prepareNormalBufferLocked", "writeSteerPayloadLocked", "writeAssistantStreamPayloadLocked", "writeAssistantStreamTerminatorLocked", "writeAssistantStreamRowsLocked":
+		case "prepareNormalBufferLocked", "writeStableRowsDirectLocked":
 			return true
 		}
 	}
 	if context.receiver == "nativeLiveAreaImpl" {
 		switch context.name {
-		case "erasePhysicalLocked", "renderPhysicalLocked", "anchorStableOutputLocked", "releaseStableOutputAnchorLocked":
+		case "erasePhysicalLocked", "renderPhysicalLocked", "insertStableRowsLocked":
 			return true
 		}
 	}

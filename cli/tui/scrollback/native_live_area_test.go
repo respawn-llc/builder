@@ -144,6 +144,19 @@ func TestNativeLiveAreaRenderPanicsWhenContentExceedsTerminalHeight(t *testing.T
 	assertPanicContains(t, panicText, "line_count=3")
 }
 
+func TestNativeLiveAreaRenderPanicsWhenContentLeavesNoTranscriptRow(t *testing.T) {
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 2, &out, nil)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 80, 2)
+
+	panicText := capturePanicText(t, func() {
+		_ = liveArea.Render(nativeLiveAreaFrame("one", "two"))
+	})
+	assertPanicContains(t, panicText, "live area content must leave at least one transcript row")
+	assertPanicContains(t, panicText, "line_count=2")
+}
+
 func TestNativeLiveAreaRenderPanicsWhenLineExceedsTerminalWidth(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 3, 24, &out, nil)
@@ -207,9 +220,7 @@ func TestStableSteerErasesAndRestoresLiveAreaInOneFrame(t *testing.T) {
 
 	want := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live")) +
 		liveAreaErasePhysicalSequence(1, 24) +
-		stableOutputAnchorSequence(1, 24) +
-		"stable" + terminalLineBreak +
-		stableOutputReleaseSequence() +
+		stableOutputInsertRowsSequence(1, 24, "stable") +
 		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live"))
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
@@ -240,6 +251,31 @@ func TestStableSteerFromTopCursorScrollsThroughBottomBand(t *testing.T) {
 		}
 	}
 	if got, want := terminal.historyLines(), []string{"stable-1", "stable-2"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("scrollback history = %#v, want %#v", got, want)
+	}
+}
+
+func TestStableSteerFullScreenScrollPreservesOldViewportTopLine(t *testing.T) {
+	terminal := newNativeLiveAreaTestTerminal(16, 6)
+	terminal.history = []string{"c", "d"}
+	terminal.screen = []string{"e", "f", "g", "h", "", ""}
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 16, 6, terminal, nil)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 16, 6)
+
+	if err := liveArea.Render(nativeLiveAreaFrame("input", "status")); err != nil {
+		t.Fatalf("render returned error: %v", err)
+	}
+	if err := buffer.Steer("stable"); err != nil {
+		t.Fatalf("steer returned error: %v", err)
+	}
+
+	for row, want := range []string{"f", "g", "h", "stable", "input", "status"} {
+		if got := terminal.visibleLine(row); got != want {
+			t.Fatalf("visible row %d = %q, want %q; screen=%#v history=%#v", row, got, want, terminal.screen, terminal.historyLines())
+		}
+	}
+	if got, want := terminal.historyLines(), []string{"c", "d", "e"}; strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("scrollback history = %#v, want %#v", got, want)
 	}
 }
@@ -292,9 +328,7 @@ func TestNormalBufferPreparationPrecedesFirstNativeWrite(t *testing.T) {
 	want := normalBufferPreparationSequence() +
 		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live")) +
 		liveAreaErasePhysicalSequence(1, 24) +
-		stableOutputAnchorSequence(1, 24) +
-		"stable" + terminalLineBreak +
-		stableOutputReleaseSequence() +
+		stableOutputInsertRowsSequence(1, 24, "stable") +
 		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live"))
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
@@ -416,9 +450,7 @@ func TestNativeLiveAreaRenderDuringAssistantStreamingKeepsChromeVisibleWithoutLi
 
 	want := wantAfterRender +
 		liveAreaErasePhysicalSequence(1, 24) +
-		stableOutputAnchorSequence(1, 24) +
-		"stream" + terminalLineBreak +
-		stableOutputReleaseSequence() +
+		stableOutputInsertRowsSequence(1, 24, "stream") +
 		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("latest live"))
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
@@ -447,9 +479,7 @@ func TestAssistantStreamAppendErasesStreamChromeWithoutAddingLinefeed(t *testing
 		liveAreaErasePhysicalSequence(1, 24) +
 		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("input", "hello")) +
 		liveAreaErasePhysicalSequence(2, 24) +
-		stableOutputAnchorSequence(2, 24) +
-		"hello " + terminalLineBreak + "world" + terminalLineBreak +
-		stableOutputReleaseSequence()
+		stableOutputInsertRowsSequence(2, 24, "hello ", "world")
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -487,9 +517,7 @@ func TestAssistantStreamAppendErasesMultilineStreamChromeFromBottom(t *testing.T
 		liveAreaErasePhysicalSequence(3, 24) +
 		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("new 1", "new 2", "hello")) +
 		liveAreaErasePhysicalSequence(3, 24) +
-		stableOutputAnchorSequence(3, 24) +
-		"hello " + terminalLineBreak + "world" + terminalLineBreak +
-		stableOutputReleaseSequence()
+		stableOutputInsertRowsSequence(3, 24, "hello ", "world")
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
 	}
@@ -535,9 +563,7 @@ func TestNativeLiveAreaHoldoffFlushDuringAssistantStreamingDefersLiveRestore(t *
 	}
 	wantAfterFinish := wantAfterFlush +
 		liveAreaErasePhysicalSequence(1, 24) +
-		stableOutputAnchorSequence(1, 24) +
-		"he" + terminalLineBreak +
-		stableOutputReleaseSequence() +
+		stableOutputInsertRowsSequence(1, 24, "he") +
 		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("latest live"))
 	if got := out.String(); got != wantAfterFinish {
 		t.Fatalf("finish output = %q, want %q", got, wantAfterFinish)
@@ -574,10 +600,7 @@ func TestQueuedSteeringFlushErasesOnceAndRestoresOnce(t *testing.T) {
 
 	want := nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live")) +
 		liveAreaErasePhysicalSequence(1, 24) +
-		stableOutputAnchorSequence(1, 24) +
-		"stream" + terminalLineBreak +
-		"first" + terminalLineBreak + "second" + terminalLineBreak +
-		stableOutputReleaseSequence() +
+		stableOutputInsertRowsSequence(1, 24, "stream", "first", "second") +
 		nativeLiveAreaRenderSequence(24, nativeLiveAreaFrame("live"))
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
@@ -703,9 +726,7 @@ func TestStableWriteAfterCursorPlacementRestoresAnchorBeforeErasingLiveArea(t *t
 
 	want := nativeLiveAreaRenderSequence(24, frame) +
 		liveAreaErasePhysicalSequence(2, 24) +
-		stableOutputAnchorSequence(2, 24) +
-		"stable" + terminalLineBreak +
-		stableOutputReleaseSequence() +
+		stableOutputInsertRowsSequence(2, 24, "stable") +
 		nativeLiveAreaRenderSequence(24, frame)
 	if got := out.String(); got != want {
 		t.Fatalf("terminal output = %q, want %q", got, want)
@@ -741,6 +762,14 @@ func nativeLiveAreaRenderSequence(terminalHeight int, frame NativeLiveAreaFrame)
 	return liveAreaBottomAnchorSequence(len(frame.Lines), terminalHeight) +
 		strings.Join(frame.Lines, terminalLineBreak) +
 		liveAreaCursorPlacementSequence(frame.Cursor, len(frame.Lines))
+}
+
+func stableOutputInsertRowsSequence(liveRows int, terminalHeight int, rows ...string) string {
+	var out strings.Builder
+	for _, row := range rows {
+		out.WriteString(stableOutputInsertRowSequence(row, liveRows, terminalHeight))
+	}
+	return out.String()
 }
 
 type nativeLiveAreaTestTerminal struct {
@@ -879,7 +908,7 @@ func (t *nativeLiveAreaTestTerminal) scrollUp() {
 	if t.topMargin < 0 || t.bottomMargin >= t.height || t.topMargin > t.bottomMargin {
 		return
 	}
-	if t.topMargin == 0 {
+	if t.topMargin == 0 && t.bottomMargin == t.height-1 {
 		t.history = append(t.history, t.screen[0])
 	}
 	for row := t.topMargin; row < t.bottomMargin; row++ {

@@ -187,7 +187,21 @@ func copyNativeLiveAreaFrameForApp(frame scrollback.NativeLiveAreaFrame) scrollb
 }
 
 func (m *uiModel) nativeSurfaceEnabled() bool {
-	return m != nil && m.nativeSurface != nil && m.surface() == uiSurfaceOngoingTranscript
+	return m != nil &&
+		m.nativeSurface != nil &&
+		m.surface() == uiSurfaceOngoingTranscript &&
+		m.nativeSurfaceGeometrySupported()
+}
+
+func (m *uiModel) nativeSurfaceGeometrySupported() bool {
+	return m != nil && (!m.windowSizeKnown || m.termHeight > 1)
+}
+
+func (m *uiModel) dropNativeSurfaceIfGeometryUnsupported() {
+	if m == nil || m.nativeSurface == nil || m.nativeSurfaceGeometrySupported() {
+		return
+	}
+	m.nativeSurface.Drop()
 }
 
 func (m *uiModel) nativeSurfaceConfigured() bool {
@@ -205,6 +219,10 @@ func (m *uiModel) nativeNormalBufferAvailable() bool {
 
 func (m *uiModel) ensureNativeSurface(width int, height int) bool {
 	if m == nil || m.nativeSurface == nil {
+		return false
+	}
+	if height <= 1 {
+		m.nativeSurface.Drop()
 		return false
 	}
 	m.nativeSurface.assistantMarkdownRenderer = m.nativeAssistantMarkdownRenderer()
@@ -398,10 +416,7 @@ func (l uiViewLayout) renderNativeLiveAreaFrame(frame uiRenderFrame) string {
 	if !m.ensureNativeSurface(frame.width, frame.height) {
 		return frame.renderWithCursorVisibility(!l.shouldShowRealTerminalCursor(frame))
 	}
-	lines := frame.renderLines()
-	if len(lines) == 0 {
-		lines = []string{""}
-	}
+	lines := nativeLiveAreaFrameLines(frame)
 	nativeFrame := scrollback.NativeLiveAreaFrame{
 		Lines:  lines,
 		Cursor: l.nativeLiveAreaCursor(frame, lines),
@@ -418,6 +433,21 @@ func (l uiViewLayout) renderNativeLiveAreaFrame(frame uiRenderFrame) string {
 	}
 	m.nativeLiveAreaError = nil
 	return ""
+}
+
+func nativeLiveAreaFrameLines(frame uiRenderFrame) []string {
+	lines := frame.renderLines()
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	maxRows := frame.height - 1
+	if maxRows < 1 {
+		maxRows = 1
+	}
+	if len(lines) > maxRows {
+		lines = lines[len(lines)-maxRows:]
+	}
+	return lines
 }
 
 func (l uiViewLayout) nativeLiveAreaCursor(frame uiRenderFrame, lines []string) scrollback.NativeLiveAreaCursor {
