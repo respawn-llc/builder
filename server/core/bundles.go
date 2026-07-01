@@ -70,10 +70,11 @@ type ProjectBundle struct {
 }
 
 type PromptBundle struct {
-	askViews       client.AskViewClient
-	approvalViews  client.ApprovalViewClient
-	promptControl  client.PromptControlClient
-	promptActivity client.PromptActivityClient
+	askViews               client.AskViewClient
+	approvalViews          client.ApprovalViewClient
+	promptControl          client.PromptControlClient
+	promptActivity         client.PromptActivityClient
+	attentionNotifications client.AttentionNotificationClient
 }
 
 type RuntimeBundle struct {
@@ -140,6 +141,9 @@ func (b *Bundles) withDefaults() *Bundles {
 	if withDefaults.Prompts == nil {
 		withDefaults.Prompts = &PromptBundle{}
 	}
+	if withDefaults.Prompts.attentionNotifications == nil {
+		withDefaults.Prompts.attentionNotifications = unavailableAttentionNotificationClient{}
+	}
 	if withDefaults.Runtime == nil {
 		withDefaults.Runtime = &RuntimeBundle{}
 	}
@@ -184,6 +188,7 @@ type bundleCompositionInput struct {
 	processOutputService    *processview.ProcessOutputService
 	promptControlService    *promptcontrol.PromptControlService
 	promptActivityService   *promptcontrol.PromptActivityService
+	attentionService        client.AttentionNotificationClient
 	runtimeControlService   *runtimecontrol.Service
 	serverStatusService     *serverstatus.ServerStatusService
 	sessionRuntimeService   *sessionruntime.Service
@@ -227,7 +232,7 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 		Persistence: newPersistenceBundle(in.rootLease, in.metadataStore, in.sessionStoreRegistry),
 		Processes:   newProcessBundle(in.processService, in.processOutputService),
 		Projects:    newProjectBundle(in.cfg, in.containerDir, in.projectViews),
-		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.promptActivityService),
+		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.promptActivityService, in.attentionService),
 		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeControlService, in.sessionRuntimeService, in.sessionActivityService),
 		Sessions:    newSessionBundle(in.sessionViewService, in.sessionLifecycleService),
 		Updates:     &UpdateBundle{updateStatus: in.updateStatusService},
@@ -270,12 +275,16 @@ func newProjectBundle(cfg config.App, containerDir string, projectViews client.P
 	}
 }
 
-func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *promptcontrol.ApprovalViewService, promptControlService *promptcontrol.PromptControlService, promptActivityService *promptcontrol.PromptActivityService) *PromptBundle {
+func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *promptcontrol.ApprovalViewService, promptControlService *promptcontrol.PromptControlService, promptActivityService *promptcontrol.PromptActivityService, attentionService client.AttentionNotificationClient) *PromptBundle {
+	if attentionService == nil {
+		attentionService = unavailableAttentionNotificationClient{}
+	}
 	return &PromptBundle{
-		askViews:       client.NewLoopbackAskViewClient(askService),
-		approvalViews:  client.NewLoopbackApprovalViewClient(approvalService),
-		promptControl:  client.NewLoopbackPromptControlClient(promptControlService),
-		promptActivity: client.NewLoopbackPromptActivityClient(promptActivityService),
+		askViews:               client.NewLoopbackAskViewClient(askService),
+		approvalViews:          client.NewLoopbackApprovalViewClient(approvalService),
+		promptControl:          client.NewLoopbackPromptControlClient(promptControlService),
+		promptActivity:         client.NewLoopbackPromptActivityClient(promptActivityService),
+		attentionNotifications: attentionService,
 	}
 }
 

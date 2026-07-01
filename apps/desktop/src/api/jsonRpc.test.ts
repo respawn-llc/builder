@@ -1,6 +1,6 @@
 import { createJsonRpcTransport } from "./jsonRpc";
 import { ProtocolMismatchError, ServerRootMismatchError } from "./errors";
-import { protocolVersionMismatchErrorCode } from "./jsonRpcSocket";
+import { protocolVersionMismatchErrorCode, subscriptionCompleteMethod } from "./jsonRpcSocket";
 
 type SentFrame = Readonly<{
   id: string;
@@ -260,8 +260,8 @@ describe("JsonRpcWebSocketTransport", () => {
 
   it("reopens subscription socket after server complete notification", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
-    const completions: string[] = [];
-    const errors: string[] = [];
+    const completions: number[] = [];
+    const errors: Error[] = [];
     const subscription = transport.subscribe(
       "workflow.subscribeProject",
       { project_id: "project-1" },
@@ -269,11 +269,11 @@ describe("JsonRpcWebSocketTransport", () => {
         onEvent() {
           return;
         },
-        onComplete(code, message) {
-          completions.push(`${code.toString()}:${message}`);
+        onComplete(code) {
+          completions.push(code);
         },
         onError(error) {
-          errors.push(error.message);
+          errors.push(error);
         },
       },
     );
@@ -304,8 +304,59 @@ describe("JsonRpcWebSocketTransport", () => {
     await waitForSent(secondSocket, 2);
 
     expect(frame(secondSocket, 1)).toMatchObject({ method: "workflow.subscribeProject" });
-    expect(completions).toEqual(["409:stream gap"]);
-    expect(errors).toEqual(["Subscription socket closed."]);
+    expect(completions).toEqual([409]);
+    expect(errors).toHaveLength(1);
+    subscription.close();
+  });
+
+  it("reopens attention notification subscriptions after non-zero complete frames", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const completions: number[] = [];
+    const errors: Error[] = [];
+    const subscription = transport.subscribe(
+      "attention.notification.subscribe",
+      {},
+      {
+        onEvent() {
+          return;
+        },
+        onComplete(code) {
+          completions.push(code);
+        },
+        onError(error) {
+          errors.push(error);
+        },
+      },
+    );
+
+    const firstSocket = sockets[0] ?? failTest("attention subscription socket missing");
+    firstSocket.open();
+    await waitForSent(firstSocket, 1);
+    ack(firstSocket, 0);
+    await waitForSent(firstSocket, 2);
+    ack(firstSocket, 1);
+    await flushPromises();
+
+    firstSocket.receive(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "attention.notification.complete",
+        params: { code: 409, message: "stream gap" },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(sockets.length).toBeGreaterThanOrEqual(2);
+    });
+    const secondSocket = sockets[1] ?? failTest("attention resubscription socket missing");
+    secondSocket.open();
+    await waitForSent(secondSocket, 1);
+    ack(secondSocket, 0);
+    await waitForSent(secondSocket, 2);
+
+    expect(frame(secondSocket, 1)).toMatchObject({ method: "attention.notification.subscribe" });
+    expect(completions).toEqual([409]);
+    expect(errors).toHaveLength(1);
     subscription.close();
   });
 
@@ -393,6 +444,10 @@ describe("JsonRpcWebSocketTransport", () => {
     expect(completions).toEqual([]);
     expect(sockets).toHaveLength(1);
     subscription.close();
+  });
+
+  it("maps attention notification subscriptions to their complete method", () => {
+    expect(subscriptionCompleteMethod("attention.notification.subscribe")).toBe("attention.notification.complete");
   });
 });
 

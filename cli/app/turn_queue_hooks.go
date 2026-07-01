@@ -11,6 +11,6 @@ type turnQueueHook interface {
 	OnUserCompactionCompleted(queueDrained bool)
 }
 
-type askNotificationHook interface {
-	OnAsk(req clientui.PendingPromptEvent)
+type attentionNotificationHook interface {
+	OnAttentionNotification(evt clientui.AttentionNotificationEvent)
 }

@@ -65,6 +65,53 @@ func TestBrokerFIFOQueue(t *testing.T) {
 	}
 }
 
+func TestAskQuestionToolSkipsPreparedBatchWhenBrokerReturnsBeforeHandler(t *testing.T) {
+	b := NewAskQuestionBroker()
+	handlerCalled := false
+	b.SetAskHandler(func(AskQuestionRequest) (AskQuestionResponse, error) {
+		handlerCalled = true
+		return AskQuestionResponse{}, nil
+	})
+	tool := NewAskQuestionTool(b, func() bool { return true })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	skipped := make([]AskQuestionBatchMetadata, 0, 1)
+
+	result, err := tool.Call(ctx, Call{
+		ID:    "ask-2",
+		Name:  toolspec.ToolAskQuestion,
+		Input: mustAskQuestionInput(t, "two?"),
+		AskQuestionBatch: &AskQuestionBatchMetadata{
+			Origin:              AskQuestionOriginModelTool,
+			RunID:               "run-1",
+			StepID:              "step-1",
+			BatchID:             "batch-1",
+			PromptID:            "ask-2",
+			BatchPromptIDs:      []string{"ask-1", "ask-2"},
+			CandidateOrdinal:    1,
+			PreparedPromptCount: 2,
+		},
+		OnAskQuestionBatchSkipped: func(batch AskQuestionBatchMetadata) {
+			skipped = append(skipped, batch)
+		},
+	})
+	if err != nil {
+		t.Fatalf("Call returned unexpected handler error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("result = %+v, want error result", result)
+	}
+	if handlerCalled {
+		t.Fatal("ask handler was called after context cancellation")
+	}
+	if len(skipped) != 1 {
+		t.Fatalf("skipped batches = %+v, want one skip", skipped)
+	}
+	if skipped[0].PromptID != "ask-2" || len(skipped[0].BatchPromptIDs) != 2 || skipped[0].BatchPromptIDs[0] != "ask-1" || skipped[0].BatchPromptIDs[1] != "ask-2" {
+		t.Fatalf("skipped batch = %+v", skipped[0])
+	}
+}
+
 func TestSubmitApprovalResponse(t *testing.T) {
 	b := NewAskQuestionBroker()
 	ctx := context.Background()
@@ -471,6 +518,75 @@ func TestToolCallBlocksUntilQueuedAnswerSubmitted(t *testing.T) {
 	}
 }
 
+func TestToolCallPassesPreparedBatchMetadataToAskBroker(t *testing.T) {
+	b := NewAskQuestionBroker()
+	var got *AskQuestionBatchMetadata
+	b.SetAskHandler(func(req AskQuestionRequest) (AskQuestionResponse, error) {
+		got = req.QuestionBatch
+		return AskQuestionResponse{RequestID: req.ID, Answer: "answer"}, nil
+	})
+	tool := NewAskQuestionTool(b, func() bool { return true })
+	meta := &AskQuestionBatchMetadata{
+		Origin:              AskQuestionOriginModelTool,
+		RunID:               "run-1",
+		StepID:              "step-1",
+		BatchID:             "batch-1",
+		PromptID:            "ask-1",
+		BatchPromptIDs:      []string{"ask-1", "ask-2"},
+		CandidateOrdinal:    0,
+		PreparedPromptCount: 2,
+	}
+	_, err := tool.Call(context.Background(), Call{
+		ID:               "ask-1",
+		Name:             toolspec.ToolAskQuestion,
+		Input:            json.RawMessage(`{"question":"one?"}`),
+		RunID:            "run-1",
+		StepID:           "step-1",
+		AskQuestionBatch: meta,
+	})
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if got == nil || got.BatchID != "batch-1" || got.PreparedPromptCount != 2 {
+		t.Fatalf("broker metadata = %+v", got)
+	}
+}
+
+func TestToolCallReportsPreparedBatchSkippedWhenQuestionsBecomeDisabled(t *testing.T) {
+	tool := NewAskQuestionTool(NewAskQuestionBroker(), func() bool { return false })
+	meta := &AskQuestionBatchMetadata{
+		Origin:              AskQuestionOriginModelTool,
+		RunID:               "run-1",
+		StepID:              "step-1",
+		BatchID:             "batch-1",
+		PromptID:            "ask-1",
+		BatchPromptIDs:      []string{"ask-1"},
+		CandidateOrdinal:    0,
+		PreparedPromptCount: 1,
+	}
+	var skipped *AskQuestionBatchMetadata
+	res, err := tool.Call(context.Background(), Call{
+		ID:               "ask-1",
+		Name:             toolspec.ToolAskQuestion,
+		Input:            json.RawMessage(`{"question":"one?"}`),
+		RunID:            "run-1",
+		StepID:           "step-1",
+		AskQuestionBatch: meta,
+		OnAskQuestionBatchSkipped: func(metadata AskQuestionBatchMetadata) {
+			skipped = &metadata
+		},
+	})
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("result = %+v, want error result", res)
+	}
+	if skipped == nil || skipped.BatchID != "batch-1" || skipped.PromptID != "ask-1" {
+		t.Fatalf("skipped metadata = %+v", skipped)
+	}
+}
+
 func TestAskHandlerModeHonorsCanceledContextBeforeInvocation(t *testing.T) {
 	b := NewAskQuestionBroker()
 	called := false
@@ -822,4 +938,13 @@ func TestBuildToolOutputSummaryRejectsEmptyNonApprovalResponse(t *testing.T) {
 	if !errors.Is(err, ErrAskQuestionNonApprovalRequiresAnswer) {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func mustAskQuestionInput(t *testing.T, question string) json.RawMessage {
+	t.Helper()
+	encoded, err := json.Marshal(map[string]string{"question": question})
+	if err != nil {
+		t.Fatalf("marshal ask question input: %v", err)
+	}
+	return encoded
 }

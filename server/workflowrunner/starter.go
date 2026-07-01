@@ -27,6 +27,7 @@ import (
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
+	"core/server/workflowattention"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/config"
@@ -70,17 +71,18 @@ type RuntimeEventRegistry interface {
 }
 
 type Starter struct {
-	cfg            config.App
-	metadata       *metadata.Store
-	store          RuntimeStore
-	authManager    *auth.Manager
-	background     *shelltool.Manager
-	runtimes       RuntimeEventRegistry
-	sessionRuntime *sessionruntime.Service
-	storeOptions   []session.StoreOption
-	clientFactory  func(SchedulerStartRunRequest) llm.Client
-	worktrees      TaskWorktreeEnsurer
-	finished       func(workflow.RunID, int64)
+	cfg                config.App
+	metadata           *metadata.Store
+	store              RuntimeStore
+	authManager        *auth.Manager
+	background         *shelltool.Manager
+	runtimes           RuntimeEventRegistry
+	sessionRuntime     *sessionruntime.Service
+	storeOptions       []session.StoreOption
+	clientFactory      func(SchedulerStartRunRequest) llm.Client
+	worktrees          TaskWorktreeEnsurer
+	attentionFinalizer workflowAttentionFinalizer
+	finished           func(workflow.RunID, int64)
 
 	mu     sync.Mutex
 	cancel map[workflow.RunID]context.CancelFunc
@@ -91,9 +93,18 @@ type Starter struct {
 }
 
 type StarterOptions struct {
-	ClientFactory  func(SchedulerStartRunRequest) llm.Client
-	Worktrees      TaskWorktreeEnsurer
-	SessionRuntime *sessionruntime.Service
+	ClientFactory      func(SchedulerStartRunRequest) llm.Client
+	Worktrees          TaskWorktreeEnsurer
+	SessionRuntime     *sessionruntime.Service
+	AttentionFinalizer workflowAttentionFinalizer
+}
+
+type workflowAttentionFinalizer interface {
+	FinalizeTransition(context.Context, workflowattention.TransitionResult)
+}
+
+type workflowInterruptedRunFinalizer interface {
+	FinalizeInterruptedRun(context.Context, workflow.RunID)
 }
 
 func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, background *shelltool.Manager, runtimes RuntimeEventRegistry, opts StarterOptions) (*Starter, error) {
@@ -110,19 +121,20 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		return nil, errors.New("workflow runtime session-runtime service is required")
 	}
 	return &Starter{
-		cfg:            cfg,
-		metadata:       metadataStore,
-		store:          store,
-		authManager:    authManager,
-		background:     background,
-		runtimes:       runtimes,
-		sessionRuntime: opts.SessionRuntime,
-		storeOptions:   metadataStore.AuthoritativeSessionStoreOptions(),
-		clientFactory:  opts.ClientFactory,
-		worktrees:      opts.Worktrees,
-		cancel:         map[workflow.RunID]context.CancelFunc{},
-		task:           map[workflow.RunID]workflow.TaskID{},
-		done:           map[workflow.RunID]chan struct{}{},
+		cfg:                cfg,
+		metadata:           metadataStore,
+		store:              store,
+		authManager:        authManager,
+		background:         background,
+		runtimes:           runtimes,
+		sessionRuntime:     opts.SessionRuntime,
+		storeOptions:       metadataStore.AuthoritativeSessionStoreOptions(),
+		clientFactory:      opts.ClientFactory,
+		worktrees:          opts.Worktrees,
+		attentionFinalizer: opts.AttentionFinalizer,
+		cancel:             map[workflow.RunID]context.CancelFunc{},
+		task:               map[workflow.RunID]workflow.TaskID{},
+		done:               map[workflow.RunID]chan struct{}{},
 	}, nil
 }
 
@@ -715,9 +727,16 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 				Contract:                     workflowCompletionContract(req, input),
 				CompletionMode:               effectiveMode,
 				MaxInvalidCompletionAttempts: s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
-				Controller:                   workflowruntime.StoreController{Store: s.store},
+				Controller:                   workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer},
 				TaskCommentCounter:           s.store,
 				Instructions:                 instructions,
+			},
+			AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
+				if attention, ok := s.runtimes.(workflowattention.QuestionAttentionRegistry); ok {
+					if err := workflowattention.PrepareSkippedTaskQuestionBatch(attention, input, sessionID, req.RunID, batch, time.Now().UTC()); err != nil {
+						logger.Logf("workflow.attention.question_batch_prepare_failed run_id=%s task_id=%s batch_id=%s prompt_id=%s error=%s", req.RunID, req.TaskID, batch.BatchID, batch.PromptID, err)
+					}
+				}
 			},
 			OnEvent: func(evt runtime.Event) {
 				logger.Logf("%s", runlog.FormatRuntimeEvent(evt))
@@ -735,14 +754,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		bindRuntimeEventEngine(wiring.Engine)
 		if wiring.AskBroker != nil && s.runtimes != nil {
 			wiring.AskBroker.SetAskHandler(func(askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
-				if err := s.store.SetRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID); err != nil {
-					return askquestion.AskQuestionResponse{}, err
-				}
-				resp, askErr := s.runtimes.AwaitPromptResponse(ctx, sessionID, askReq)
-				if clearErr := s.store.ClearRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID); clearErr != nil && askErr == nil {
-					return askquestion.AskQuestionResponse{}, clearErr
-				}
-				return resp, askErr
+				return s.handleWorkflowAsk(ctx, sessionID, req, input, askReq)
 			})
 		} else if wiring.AskBroker != nil {
 			wiring.AskBroker.SetAskHandler(func(askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
@@ -807,6 +819,23 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 	}
 }
 
+func (s *Starter) handleWorkflowAsk(ctx context.Context, sessionID string, req SchedulerStartRunRequest, input workflowstore.RunStartContext, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	if askReq.Approval {
+		return s.runtimes.AwaitPromptResponse(ctx, sessionID, askReq)
+	}
+	var attention workflowattention.QuestionAttentionRegistry
+	if registry, ok := s.runtimes.(workflowattention.QuestionAttentionRegistry); ok {
+		attention = registry
+	}
+	return workflowattention.HandleTaskQuestion(ctx, s.store, s.runtimes, attention, workflowattention.TaskQuestionRequest{
+		SessionID:  sessionID,
+		RunID:      req.RunID,
+		Generation: req.Generation,
+		Input:      input,
+		Question:   askReq,
+	})
+}
+
 func (s *Starter) finish(runID workflow.RunID, generation int64) {
 	s.mu.Lock()
 	done := s.done[runID]
@@ -840,6 +869,12 @@ func (s *Starter) interrupt(ctx context.Context, runID workflow.RunID, generatio
 	}
 	if err := s.store.InterruptRunGeneration(ctx, runID, generation, reason, detail); err != nil {
 		return
+	}
+	if !workflowattention.ShouldNotifyInterruptedRun(reason) {
+		return
+	}
+	if finalizer, ok := s.attentionFinalizer.(workflowInterruptedRunFinalizer); ok {
+		finalizer.FinalizeInterruptedRun(ctx, runID)
 	}
 }
 

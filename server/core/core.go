@@ -42,6 +42,16 @@ func (unregisteredRunPromptClient) RunPrompt(context.Context, serverapi.RunPromp
 	return serverapi.RunPromptResponse{}, serverapi.ErrWorkspaceNotRegistered
 }
 
+type unavailableAttentionNotificationClient struct{}
+
+func (unavailableAttentionNotificationClient) SubscribeAttentionNotifications(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	return nil, serverapi.ErrStreamUnavailable
+}
+
+func (unavailableAttentionNotificationClient) SubscribeSessionAttentionNotifications(context.Context, serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	return nil, serverapi.ErrStreamUnavailable
+}
+
 type projectContext struct {
 	config         config.App
 	projectID      string
@@ -455,6 +465,13 @@ func (s *Core) PromptActivityClient() client.PromptActivityClient {
 		return nil
 	}
 	return s.safeBundles().Prompts.promptActivity
+}
+
+func (s *Core) AttentionNotificationClient() client.AttentionNotificationClient {
+	if s == nil {
+		return unavailableAttentionNotificationClient{}
+	}
+	return s.safeBundles().Prompts.attentionNotifications
 }
 
 func (s *Core) ProcessControlClient() client.ProcessControlClient {

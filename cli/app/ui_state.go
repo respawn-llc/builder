@@ -171,7 +171,6 @@ type uiStatusFeatureState struct {
 	processList                 uiProcessListState
 	reasoningStatusHeader       string
 	turnQueueHook               turnQueueHook
-	askNotificationHook         askNotificationHook
 	statusConfig                uiStatusConfig
 	statusCollector             uiStatusCollector
 	statusRepository            uiStatusRepository

@@ -14,6 +14,7 @@ import (
 	"core/server/auth"
 	"core/server/core"
 	"core/server/transport"
+	rpccontract "core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/protocol"
 )
@@ -145,24 +146,43 @@ func newServerIdentity(cfg config.App) protocol.ServerIdentity {
 		ServerID:          fmt.Sprintf(config.Command+":%d", os.Getpid()),
 		PID:               os.Getpid(),
 		PersistenceRootID: config.PersistenceRootHash(cfg.PersistenceRoot),
-		Capabilities: protocol.CapabilityFlags{
-			JSONRPCWebSocket:        true,
-			AuthBootstrap:           true,
-			ProjectAttach:           true,
-			SessionAttach:           true,
-			HealthEndpoint:          true,
-			ReadinessEndpoint:       true,
-			RunPrompt:               true,
-			SessionPlan:             true,
-			SessionLifecycle:        true,
-			SessionTranscriptPaging: true,
-			SessionRuntime:          true,
-			RuntimeControl:          true,
-			PromptControl:           true,
-			PromptActivity:          true,
-			SessionActivity:         true,
-			ProcessOutput:           true,
-		},
+		Capabilities:      serverCapabilityFlags(rpccontract.Routes()),
+	}
+}
+
+func serverCapabilityFlags(routes []rpccontract.Route) protocol.CapabilityFlags {
+	methods := make(map[string]struct{}, len(routes))
+	dependencies := make(map[rpccontract.Dependency]struct{}, len(routes))
+	for _, route := range routes {
+		methods[route.Method] = struct{}{}
+		dependencies[route.Dependency] = struct{}{}
+	}
+	hasMethod := func(method string) bool {
+		_, ok := methods[method]
+		return ok
+	}
+	hasDependency := func(dependency rpccontract.Dependency) bool {
+		_, ok := dependencies[dependency]
+		return ok
+	}
+	return protocol.CapabilityFlags{
+		JSONRPCWebSocket:        hasMethod(protocol.MethodHandshake),
+		AuthBootstrap:           hasDependency(rpccontract.DependencyAuthBootstrap),
+		ProjectAttach:           hasMethod(protocol.MethodAttachProject),
+		SessionAttach:           hasMethod(protocol.MethodAttachSession),
+		HealthEndpoint:          true,
+		ReadinessEndpoint:       true,
+		RunPrompt:               hasDependency(rpccontract.DependencyRunPrompt),
+		SessionPlan:             hasMethod(protocol.MethodSessionPlan),
+		SessionLifecycle:        hasDependency(rpccontract.DependencySessionLifecycle),
+		SessionTranscriptPaging: hasMethod(protocol.MethodSessionGetTranscriptPage) && hasMethod(protocol.MethodSessionGetCommittedTranscriptSuffix),
+		SessionRuntime:          hasDependency(rpccontract.DependencySessionRuntime),
+		RuntimeControl:          hasDependency(rpccontract.DependencyRuntimeControl),
+		PromptControl:           hasDependency(rpccontract.DependencyPromptControl),
+		PromptActivity:          hasDependency(rpccontract.DependencyPromptActivity),
+		SessionActivity:         hasDependency(rpccontract.DependencySessionActivity),
+		ProcessOutput:           hasDependency(rpccontract.DependencyProcessOutput),
+		AttentionNotifications:  hasDependency(rpccontract.DependencyAttentionNotification),
 	}
 }
 

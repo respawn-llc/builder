@@ -183,6 +183,20 @@
 - Interrupt acts immediately with no confirmation.
 - Standalone task detail opened from Home attention stays open after resolution; feed/status update and Home row is removed or resorted in background.
 
+## Desktop Attention Notifications
+
+- The server owns one attention-notification publisher and emits live attention events for workflow questions, workflow approvals, and workflow runs interrupted because of errors. User-interrupted runs are not notification-worthy desktop attention.
+- The notification stream is live-only. Home Inbox and task detail remain backed by durable attention read models and are not rebuilt from notification events.
+- Desktop clients filter out unsupported notification kinds and targets. The server still enforces route authorization and subscription scope so clients cannot receive unauthorized task or session data.
+- Generic runtime/session prompts without a desktop answer surface remain non-desktop attention.
+- Notification batching is backend-owned. Questions emitted by one assistant turn/tool-call batch in the same task run produce one desktop surface; clients must not infer notification batches with debounce or time-window grouping.
+- A focused desktop window shows a persistent in-app Sonner above all app content, including the sidebar. Clicking the Sonner opens the task detail sidebar focused on the relevant attention item.
+- An unfocused desktop window attempts a native or browser system notification when the local notification backend can deliver one and activation can focus Kent task detail. macOS, Windows, Linux, and browser backends may advertise support; unknown Tauri platforms do not.
+- Native notification activation carries Kent's structured task-detail target. Clicking the delivered notification focuses the main Kent window and opens the matching task detail focus target in the overlay sidebar, not a native child task-detail window.
+- Question notifications focus the first unresolved question in the batch. Approval notifications focus the matching approval item. Error-interrupted-run notifications focus the matching interrupted-run attention item in task detail.
+- Resolved or cleared notification events dismiss matching persistent in-app Sonners.
+- Notification delivery is best-effort and must not affect workflow state. Desktop debug builds fail fast with diagnostic information on notification delivery failures; release builds ignore delivery failures and log when logging is wired.
+
 ## Connection Loss
 
 - Mutating actions are disabled while disconnected.

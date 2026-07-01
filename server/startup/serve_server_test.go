@@ -17,6 +17,7 @@ import (
 	"core/server/authservice"
 	corepkg "core/server/core"
 	"core/server/metadata"
+	rpccontract "core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
@@ -181,6 +182,51 @@ func TestStartBuildsStandaloneServerFromCoreStartup(t *testing.T) {
 	}
 	if coreProjects.Projects[0].ProjectID != serverProjects.Projects[0].ProjectID {
 		t.Fatalf("project listing mismatch core=%+v server=%+v", coreProjects.Projects[0], serverProjects.Projects[0])
+	}
+}
+
+func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
+	capabilities := newServerIdentity(config.App{}).Capabilities
+	if !capabilities.JSONRPCWebSocket ||
+		!capabilities.AuthBootstrap ||
+		!capabilities.ProjectAttach ||
+		!capabilities.SessionAttach ||
+		!capabilities.HealthEndpoint ||
+		!capabilities.ReadinessEndpoint ||
+		!capabilities.RunPrompt ||
+		!capabilities.SessionPlan ||
+		!capabilities.SessionLifecycle ||
+		!capabilities.SessionTranscriptPaging ||
+		!capabilities.SessionRuntime ||
+		!capabilities.RuntimeControl ||
+		!capabilities.PromptControl ||
+		!capabilities.PromptActivity ||
+		!capabilities.SessionActivity ||
+		!capabilities.ProcessOutput ||
+		!capabilities.AttentionNotifications {
+		t.Fatalf("current route contracts produced incomplete server capabilities: %+v", capabilities)
+	}
+}
+
+func TestServerCapabilityFlagsReflectMissingRoutes(t *testing.T) {
+	capabilities := serverCapabilityFlags([]rpccontract.Route{
+		{Method: protocol.MethodHandshake, Dependency: rpccontract.DependencyProtocol},
+		{Method: protocol.MethodAttachProject, Dependency: rpccontract.DependencyProtocol},
+		{Method: protocol.MethodSessionGetTranscriptPage, Dependency: rpccontract.DependencySessionView},
+		{Dependency: rpccontract.DependencyRunPrompt},
+	})
+
+	if !capabilities.JSONRPCWebSocket || !capabilities.ProjectAttach || !capabilities.RunPrompt {
+		t.Fatalf("expected supplied routes to enable matching capabilities: %+v", capabilities)
+	}
+	if !capabilities.HealthEndpoint || !capabilities.ReadinessEndpoint {
+		t.Fatalf("health/readiness endpoints are mux capabilities, got %+v", capabilities)
+	}
+	if capabilities.AuthBootstrap ||
+		capabilities.SessionAttach ||
+		capabilities.SessionTranscriptPaging ||
+		capabilities.AttentionNotifications {
+		t.Fatalf("capabilities must not be true without their routes/dependencies: %+v", capabilities)
 	}
 }
 

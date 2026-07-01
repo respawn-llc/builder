@@ -950,7 +950,7 @@ func (s *Service) attentionItemFromCandidate(ctx context.Context, row attentionC
 		}
 		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "question", ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, AskID: row.askID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case attentionKindInterruptedRun:
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, Message: interruptedRunAttentionMessage, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, Message: interruptedRunMessage(row.interruptionReason, row.interruptionDetailJSON), OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "validation_blocker":
 		def, _, err := s.definition(ctx, row.workflowID)
 		if err != nil {
@@ -1616,7 +1616,7 @@ func (s *Service) interruptedRunAttentionItems(ctx context.Context, projectID st
 	}
 	items := make([]serverapi.WorkflowAttentionItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.TaskID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, Message: interruptedRunAttentionMessage, OccurredAtUnixMs: row.InterruptedAtUnixMs})
+		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(row.InterruptionReason, row.InterruptionDetailJson), OccurredAtUnixMs: row.InterruptedAtUnixMs})
 	}
 	return items, nil
 }

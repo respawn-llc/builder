@@ -9,16 +9,19 @@ import (
 )
 
 type ActivityRequest struct {
-	SessionID       string
-	OwnerID         string
-	Runtime         servicecontract.SessionRuntimeService
-	SessionActivity servicecontract.SessionActivityService
-	PromptActivity  servicecontract.PromptActivityService
+	SessionID                       string
+	OwnerID                         string
+	Runtime                         servicecontract.SessionRuntimeService
+	SessionActivity                 servicecontract.SessionActivityService
+	Attention                       servicecontract.AttentionNotificationService
+	AttentionNotificationsSupported bool
+	PromptActivity                  servicecontract.PromptActivityService
 }
 
 type Activities struct {
-	Session serverapi.SessionActivitySubscription
-	Prompt  serverapi.PromptActivitySubscription
+	Session   serverapi.SessionActivitySubscription
+	Prompt    serverapi.PromptActivitySubscription
+	Attention serverapi.AttentionNotificationSubscription
 }
 
 func SubscribeActivities(ctx context.Context, req ActivityRequest) (Activities, error) {
@@ -37,9 +40,18 @@ func SubscribeActivities(ctx context.Context, req ActivityRequest) (Activities, 
 	}
 	promptSub, err := req.PromptActivity.SubscribePromptActivity(ctx, serverapi.PromptActivitySubscribeRequest{SessionID: req.SessionID})
 	if err != nil {
-		_ = sessionSub.Close()
-		Release(req.Runtime, req.SessionID, req.OwnerID)
-		return Activities{}, err
+		return Activities{}, errors.Join(err, sessionSub.Close(), Release(req.Runtime, req.SessionID, req.OwnerID))
 	}
-	return Activities{Session: sessionSub, Prompt: promptSub}, nil
+	if !req.AttentionNotificationsSupported {
+		return Activities{Session: sessionSub, Prompt: promptSub}, nil
+	}
+	if req.Attention == nil {
+		err := errors.New("attention notification service is required")
+		return Activities{}, errors.Join(err, promptSub.Close(), sessionSub.Close(), Release(req.Runtime, req.SessionID, req.OwnerID))
+	}
+	attentionSub, err := req.Attention.SubscribeSessionAttentionNotifications(ctx, serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: req.SessionID, IncludePendingPromptSnapshot: true})
+	if err != nil {
+		return Activities{}, errors.Join(err, promptSub.Close(), sessionSub.Close(), Release(req.Runtime, req.SessionID, req.OwnerID))
+	}
+	return Activities{Session: sessionSub, Prompt: promptSub, Attention: attentionSub}, nil
 }

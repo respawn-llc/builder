@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import type { TaskDetail } from "../../api";
+import type { TaskDetailInitialFocus } from "../../app/sidebarContext";
 import { useConnectionSnapshot } from "../../app/useConnectionSnapshot";
 import { useUpdateTask } from "../tasks/useTaskMutations";
 import { TaskDetailList } from "./TaskDetailList";
@@ -31,7 +32,7 @@ export function TaskDetailContent({
   activity: ReturnType<typeof useTaskActivity>;
   comments: ReturnType<typeof useTaskComments>;
   detail: TaskDetail;
-  initialFocus?: "firstQuestion" | undefined;
+  initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
   openLink: (url: string) => void;
 }>) {

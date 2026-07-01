@@ -163,9 +163,41 @@ func (s *Store) InterruptTaskRuns(ctx context.Context, taskID workflow.TaskID, s
 	return interrupted, nil
 }
 
-func (s *Store) ReconcileStartedRuns(ctx context.Context, reason string) (int64, error) {
+func (s *Store) ReconcileStartedRuns(ctx context.Context, reason string) ([]RunRecord, error) {
 	now := s.now().UnixMilli()
-	return s.queries.InterruptStartedWorkflowRunsForRecovery(ctx, sqlitegen.InterruptStartedWorkflowRunsForRecoveryParams{UpdatedAtUnixMs: now, InterruptedAtUnixMs: now, InterruptionReason: strings.TrimSpace(reason), InterruptionDetailJson: "{}"})
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	rows, err := q.ListStartedWorkflowRunRecoveryCandidates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]RunRecord, 0, len(rows))
+	for _, row := range rows {
+		candidates = append(candidates, runRecordFromStartedRecoveryCandidate(row))
+	}
+	interrupted := make([]RunRecord, 0, len(candidates))
+	for _, candidate := range candidates {
+		updated, err := q.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{ID: string(candidate.ID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: now, InterruptionReason: strings.TrimSpace(reason), InterruptionDetailJson: "{}"})
+		if err != nil {
+			return nil, err
+		}
+		if updated != 1 {
+			return nil, sql.ErrNoRows
+		}
+		run, err := q.GetTaskRun(ctx, string(candidate.ID))
+		if err != nil {
+			return nil, err
+		}
+		interrupted = append(interrupted, runRecordFromTaskRun(run))
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return interrupted, nil
 }
 
 func (s *Store) ListWaitingAskRuns(ctx context.Context) ([]RunRecord, error) {

@@ -3,6 +3,7 @@ package workflowrunner
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -200,7 +201,8 @@ func TestSchedulerActiveOwnershipIsMemoryOnly(t *testing.T) {
 	if scheduler.ActiveCount() != 1 {
 		t.Fatalf("active count = %d, want in-memory ownership", scheduler.ActiveCount())
 	}
-	restarted := newSchedulerTestService(t, store, nil, SchedulerConfig{Concurrency: 1})
+	finalizer := &recordingInterruptedRunFinalizer{}
+	restarted := newSchedulerTestService(t, store, nil, SchedulerConfig{Concurrency: 1}, WithSchedulerAttentionFinalizer(finalizer))
 	if restarted.ActiveCount() != 0 {
 		t.Fatalf("restarted active count = %d, want no durable ownership", restarted.ActiveCount())
 	}
@@ -213,6 +215,9 @@ func TestSchedulerActiveOwnershipIsMemoryOnly(t *testing.T) {
 	}
 	if runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != ReasonSchedulerStartupOrphanedRun {
 		t.Fatalf("restarted scheduler did not treat prior active owner as orphaned: %+v", runs[0])
+	}
+	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != startedRun.RunID {
+		t.Fatalf("interrupted run finalizations = %+v, want %s", finalizer.interruptedRuns, startedRun.RunID)
 	}
 }
 
@@ -385,6 +390,7 @@ func newSchedulerTestStore(t *testing.T) (*workflowstore.Store, metadata.Binding
 	home := t.TempDir()
 	workspaceRoot := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, "kent-root"))
 	cfg, err := config.Load(workspaceRoot, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)

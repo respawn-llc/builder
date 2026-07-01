@@ -1,12 +1,42 @@
-import { createBrowserNativeBridge, type NativeBridge } from "@app/native-bridge";
+import {
+  createBrowserNativeBridge,
+  type NativeBridge,
+  type NativeNotificationActivation,
+} from "@app/native-bridge";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { vi } from "vitest";
 
 import { App } from "../../App";
 import { guiTaskCommentAuthor } from "../../api/client";
 import type { JsonObject, JsonValue } from "../../api/json";
 import { createTestServices, startupRoutes } from "../../testSupport/appServices";
+import { showStatusToast, type StatusNotice } from "../../ui";
+import type * as uiModule from "../../ui";
+
+const statusToastHarness = vi.hoisted(() => ({
+  notices: new Map<string, StatusNotice>(),
+}));
+
+vi.mock("../../ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof uiModule>();
+  return {
+    ...actual,
+    dismissStatusToast: vi.fn((id: string) => {
+      statusToastHarness.notices.delete(id);
+    }),
+    showStatusToast: vi.fn((notice: StatusNotice) => {
+      statusToastHarness.notices.set(notice.id, notice);
+    }),
+    Toaster: () => null,
+  };
+});
 
 describe("TaskDetailSurface", () => {
+  beforeEach(() => {
+    statusToastHarness.notices.clear();
+    vi.mocked(showStatusToast).mockClear();
+  });
+
   it("renders direct task route inline with inbox, comments, approvals, questions, and CLI actions", async () => {
     window.history.pushState(null, "", "/tasks/task-1");
     const copied: string[] = [];
@@ -321,6 +351,76 @@ describe("TaskDetailSurface", () => {
     expect(within(question).getByRole("radio", { name: /Pistachios/u })).toBeInTheDocument();
   });
 
+  it("focuses only the first unresolved matching question from a batched notification target", async () => {
+    window.history.pushState(null, "", "/");
+    const scrollTargets: HTMLElement[] = [];
+    const restoreScrollIntoView = installScrollIntoViewSpy(scrollTargets);
+    const native = nativeBridgeWithActivation();
+    const detailWithQuestionBatch = {
+      task: {
+        ...taskDetailResponse.task,
+        attention: [
+          {
+            ...questionAttention,
+            id: "attention-ask-1",
+            ask_id: "ask-1",
+          },
+          {
+            ...questionAttention,
+            id: "attention-ask-2",
+            ask_id: "ask-2",
+          },
+        ],
+      },
+    };
+    const services = createTestServices(
+      [
+        ...startupRoutes,
+        { method: "workflow.task.get", result: detailWithQuestionBatch },
+        { method: "workflow.task.activity.list", result: activityResponse },
+        { method: "ask.listPendingBySession", result: { Asks: [] } },
+        { method: "workflow.task.question.answer", result: {} },
+      ],
+      native.bridge,
+    );
+
+    try {
+      render(<App services={services} />);
+      await waitFor(() => {
+        expect(native.hasActivationHandler()).toBe(true);
+      });
+
+      act(() => {
+        native.triggerActivation({
+          id: "question_batch:run-1:batch-1",
+          target: {
+            kind: "task_detail",
+            taskID: "task-1",
+            focus: { kind: "question", askIDs: ["ask-1", "ask-2"] },
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(scrollTargets).toHaveLength(1);
+      });
+      const focusedTarget = scrollTargets[0];
+      if (focusedTarget === undefined) {
+        throw new Error("Expected one task detail attention row to receive initial focus.");
+      }
+      const focusedAnswer = within(focusedTarget).getByRole("textbox");
+      const focusedSubmit = within(focusedTarget).getByRole("button");
+      fireEvent.change(focusedAnswer, { target: { value: "operator answer" } });
+      fireEvent.click(focusedSubmit);
+      await waitFor(() => {
+        const params = callParams(services.transport.calls, "workflow.task.question.answer");
+        expect(params.ask_id).toBe("ask-1");
+      });
+    } finally {
+      restoreScrollIntoView();
+    }
+  });
+
   it("renders approval snapshots as route, commentary, and copyable output values", async () => {
     window.history.pushState(null, "", "/tasks/task-1");
     const copied: string[] = [];
@@ -615,6 +715,52 @@ function nativeBridgeWithClipboard(copied: string[]): NativeBridge {
         copied.push(value);
       },
     },
+  };
+}
+
+function nativeBridgeWithActivation(): Readonly<{
+  bridge: NativeBridge;
+  hasActivationHandler(): boolean;
+  triggerActivation(activation: NativeNotificationActivation): void;
+}> {
+  const base = createBrowserNativeBridge();
+  let activationHandler: ((activation: NativeNotificationActivation) => void) | null = null;
+  return {
+    bridge: {
+      ...base,
+      notifications: {
+        ...base.notifications,
+        async onActivated(handler: (activation: NativeNotificationActivation) => void): Promise<() => void> {
+          activationHandler = handler;
+          return () => {
+            activationHandler = null;
+          };
+        },
+      },
+    },
+    hasActivationHandler(): boolean {
+      return activationHandler !== null;
+    },
+    triggerActivation(activation: NativeNotificationActivation): void {
+      activationHandler?.(activation);
+    },
+  };
+}
+
+function installScrollIntoViewSpy(targets: HTMLElement[]): () => void {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value(this: HTMLElement) {
+      targets.push(this);
+    },
+  });
+  return () => {
+    if (originalDescriptor === undefined) {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+      return;
+    }
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalDescriptor);
   };
 }
 
@@ -918,5 +1064,5 @@ function isJsonObject(value: JsonValue | undefined): value is JsonObject {
 }
 
 function toastCount(): number {
-  return screen.getByTestId("sonner-test-surface").querySelectorAll("article").length;
+  return statusToastHarness.notices.size;
 }

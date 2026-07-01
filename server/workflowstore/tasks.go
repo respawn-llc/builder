@@ -90,11 +90,12 @@ type RecordProtocolViolationResult struct {
 }
 
 type CompleteRunResult struct {
-	TransitionID     workflow.TransitionID
-	State            string
-	PlacementIDs     []workflow.PlacementID
-	RunIDs           []workflow.RunID
-	RequiresApproval bool
+	TransitionID                  workflow.TransitionID
+	State                         string
+	PlacementIDs                  []workflow.PlacementID
+	RunIDs                        []workflow.RunID
+	RequiresApproval              bool
+	ResolvedApprovalTransitionIDs []workflow.TransitionID
 }
 
 type ManualMoveRequest struct {
@@ -252,23 +253,7 @@ func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (TaskRec
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	// Remove task-scoped children explicitly before the task row itself. Several
-	// runtime cross-link columns (placement<->transition, transition->run,
-	// transition_edge->placement) use ON DELETE SET NULL, and the runtime
-	// validation triggers re-check that each remaining row still resolves to its
-	// task's workflow. Letting `DELETE FROM tasks` cascade would fire those SET
-	// NULL updates after the task row is already gone, so the triggers abort with
-	// "references must stay within one task workflow". Deleting the children while
-	// the task still exists keeps every trigger's task lookup satisfied; the
-	// SET-NULL'd columns simply become NULL. Order matters: transitions first
-	// (cascades transition_edges), then placements (cascades runs), then comments.
-	if _, err := q.DeleteTaskTransitionsByTask(ctx, trimmedTaskID); err != nil {
-		return TaskRecord{}, err
-	}
-	if _, err := q.DeleteTaskNodePlacementsByTask(ctx, trimmedTaskID); err != nil {
-		return TaskRecord{}, err
-	}
-	if _, err := q.DeleteTaskCommentsByTask(ctx, trimmedTaskID); err != nil {
+	if err := deleteTaskScopedChildren(ctx, q, trimmedTaskID); err != nil {
 		return TaskRecord{}, err
 	}
 	deleted, err := q.DeleteTask(ctx, trimmedTaskID)
@@ -282,6 +267,29 @@ func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (TaskRec
 		return TaskRecord{}, err
 	}
 	return taskRecordFromTask(task), nil
+}
+
+func deleteTaskScopedChildren(ctx context.Context, q *sqlitegen.Queries, taskID string) error {
+	// Remove task-scoped children explicitly before the task row itself. Several
+	// runtime cross-link columns (placement<->transition, transition->run,
+	// transition_edge->placement) use ON DELETE SET NULL, and the runtime
+	// validation triggers re-check that each remaining row still resolves to its
+	// task's workflow. Letting `DELETE FROM tasks` cascade would fire those SET
+	// NULL updates after the task row is already gone, so the triggers abort with
+	// "references must stay within one task workflow". Deleting the children while
+	// the task still exists keeps every trigger's task lookup satisfied; the
+	// SET-NULL'd columns simply become NULL. Order matters: transitions first
+	// (cascades transition_edges), then placements (cascades runs), then comments.
+	if _, err := q.DeleteTaskTransitionsByTask(ctx, taskID); err != nil {
+		return err
+	}
+	if _, err := q.DeleteTaskNodePlacementsByTask(ctx, taskID); err != nil {
+		return err
+	}
+	if _, err := q.DeleteTaskCommentsByTask(ctx, taskID); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) resolveTaskSourceWorkspace(ctx context.Context, projectID string, workspaceID string) (string, error) {

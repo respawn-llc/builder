@@ -8,16 +8,19 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"core/server/llm"
 	"core/server/workflow"
+	"core/server/workflowattention"
 	"core/server/workflowstore"
 	"core/shared/config"
 )
 
 const (
-	CompleteNodeToolName = "complete_node"
-	structuredOutputName = "workflow_completion"
+	CompleteNodeToolName         = "complete_node"
+	structuredOutputName         = "workflow_completion"
+	attentionFinalizationTimeout = 5 * time.Second
 )
 
 // ErrStructuredOutputUnsupported is returned when structured-output completion
@@ -146,6 +149,13 @@ type StoreController struct {
 		RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error)
 		GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error)
 	}
+	AttentionFinalizer interface {
+		FinalizeTransition(context.Context, workflowattention.TransitionResult)
+	}
+}
+
+type interruptedRunAttentionFinalizer interface {
+	FinalizeInterruptedRun(context.Context, workflow.RunID)
 }
 
 func (c StoreController) CompleteWorkflowRun(ctx context.Context, req CompletionRequest) (CompletionResult, error) {
@@ -163,6 +173,15 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 	})
 	if err != nil {
 		return CompletionResult{}, normalizeStoreCompletionError(err)
+	}
+	if c.AttentionFinalizer != nil {
+		finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
+		defer cancel()
+		c.AttentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
+			TransitionID:                  result.TransitionID,
+			State:                         result.State,
+			ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
+		})
 	}
 	return CompletionResult{TransitionID: result.TransitionID, State: result.State}, nil
 }
@@ -195,6 +214,13 @@ func (c StoreController) RecordWorkflowProtocolViolation(ctx context.Context, re
 	})
 	if err != nil {
 		return ViolationResult{}, err
+	}
+	if result.Interrupted {
+		if finalizer, ok := c.AttentionFinalizer.(interruptedRunAttentionFinalizer); ok {
+			finalizeCtx, cancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
+			defer cancel()
+			finalizer.FinalizeInterruptedRun(finalizeCtx, req.RunID)
+		}
 	}
 	return ViolationResult{Count: result.Count, Interrupted: result.Interrupted}, nil
 }

@@ -44,6 +44,7 @@ type testEmbeddedServer struct {
 	boundWorkspaceID     string
 	askViewClient        client.AskViewClient
 	approvalViewClient   client.ApprovalViewClient
+	attentionClient      client.AttentionNotificationClient
 	promptControlClient  client.PromptControlClient
 	promptActivityClient client.PromptActivityClient
 	projectViewClient    client.ProjectViewClient
@@ -156,6 +157,7 @@ func (s *testEmbeddedServer) BindProjectWorkspace(_ context.Context, projectID s
 		boundWorkspaceID:     s.boundWorkspaceID,
 		askViewClient:        s.askViewClient,
 		approvalViewClient:   s.approvalViewClient,
+		attentionClient:      s.attentionClient,
 		promptControlClient:  s.promptControlClient,
 		promptActivityClient: s.promptActivityClient,
 		projectViewClient:    s.projectViewClient,
@@ -370,19 +372,26 @@ func (s *testEmbeddedServer) WorktreeClient() client.WorktreeClient {
 }
 
 func (s *testEmbeddedServer) RuntimeAttachmentClients() runtimeAttachmentClients {
+	attention := s.attentionClient
+	supported := attention != nil
+	if attention == nil {
+		attention = &recordingAttentionNotificationClient{}
+	}
 	return runtimeAttachmentClients{
-		ApprovalViews:   s.approvalViewClient,
-		AskViews:        s.askViewClient,
-		ProcessControls: s.processControlClient,
-		ProcessOutput:   s.processOutputClient,
-		ProcessViews:    s.processViewClient,
-		PromptActivity:  s.promptActivityClient,
-		PromptControl:   s.promptControlClient,
-		RuntimeControls: s.RuntimeControlClient(),
-		SessionActivity: s.sessionActivity,
-		SessionRuntime:  s.sessionRuntime,
-		SessionViews:    s.sessionViewClient,
-		Worktrees:       s.WorktreeClient(),
+		ApprovalViews:                   s.approvalViewClient,
+		AskViews:                        s.askViewClient,
+		Attention:                       attention,
+		AttentionNotificationsSupported: supported,
+		ProcessControls:                 s.processControlClient,
+		ProcessOutput:                   s.processOutputClient,
+		ProcessViews:                    s.processViewClient,
+		PromptActivity:                  s.promptActivityClient,
+		PromptControl:                   s.promptControlClient,
+		RuntimeControls:                 s.RuntimeControlClient(),
+		SessionActivity:                 s.sessionActivity,
+		SessionRuntime:                  s.sessionRuntime,
+		SessionViews:                    s.sessionViewClient,
+		Worktrees:                       s.WorktreeClient(),
 	}
 }
 
