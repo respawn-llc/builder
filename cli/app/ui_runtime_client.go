@@ -35,6 +35,7 @@ type sessionRuntimeClient struct {
 	mu                   sync.RWMutex
 	mainView             clientui.RuntimeMainView
 	hasMainView          bool
+	readModelStale       bool
 	suffixRPCUnsupported bool
 }
 
@@ -129,9 +130,7 @@ func runtimeControlCall[T any](c *sessionRuntimeClient, appendWarning bool, call
 
 func runtimeRequestCall[T any](ctx context.Context, c *sessionRuntimeClient, appendWarning bool, call func(ctx context.Context, requestID string) (T, error)) (T, error) {
 	requestID := uuid.NewString()
-	return retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionWithWarning, appendWarning, func() (T, error) {
-		return call(ctx, requestID)
-	})
+	return runtimeRequestCallWithID(ctx, c, appendWarning, requestID, call)
 }
 
 func runtimeControlCallNoResult(c *sessionRuntimeClient, call func(ctx context.Context, requestID string) error) error {
@@ -202,7 +201,7 @@ func (c *sessionRuntimeClient) SetRuntimeReconnectWarningObserver(observer func(
 func (c *sessionRuntimeClient) MainView() clientui.RuntimeMainView {
 	view, hasView := c.cachedMainView()
 	if !hasView {
-		refreshed, err := c.refreshMainViewSync(uiRuntimeReadTimeout)
+		refreshed, err := c.refreshMainViewSync(uiRuntimeReadTimeout, nil)
 		if err == nil {
 			return refreshed
 		}
@@ -212,7 +211,11 @@ func (c *sessionRuntimeClient) MainView() clientui.RuntimeMainView {
 }
 
 func (c *sessionRuntimeClient) RefreshMainView() (clientui.RuntimeMainView, error) {
-	return c.refreshMainViewSync(uiRuntimeHydrationReadTimeout)
+	return c.RefreshMainViewWithPendingRefs(nil)
+}
+
+func (c *sessionRuntimeClient) RefreshMainViewWithPendingRefs(refs []clientui.RuntimeOperationRef) (clientui.RuntimeMainView, error) {
+	return c.refreshMainViewSync(uiRuntimeHydrationReadTimeout, refs)
 }
 
 func (c *sessionRuntimeClient) Transcript() clientui.TranscriptPage {
@@ -250,46 +253,18 @@ func (c *sessionRuntimeClient) readContext(timeout time.Duration) (context.Conte
 	return context.WithTimeout(context.Background(), timeout)
 }
 
-func (c *sessionRuntimeClient) cachedMainView() (clientui.RuntimeMainView, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	view := c.mainView
-	if !c.hasMainView {
-		return view, false
-	}
-	return view, true
-}
-
-func (c *sessionRuntimeClient) CachedMainView() (clientui.RuntimeMainView, bool) {
-	if c == nil {
-		return clientui.RuntimeMainView{}, false
-	}
-	return c.cachedMainView()
-}
-
-func (c *sessionRuntimeClient) storeMainView(view clientui.RuntimeMainView) clientui.RuntimeMainView {
-	if view.Session.SessionID == "" {
-		view.Session.SessionID = c.sessionID
-	}
-	c.mu.Lock()
-	c.mainView = view
-	c.hasMainView = true
-	c.mu.Unlock()
-	return view
-}
-
-func (c *sessionRuntimeClient) patchMainView(apply func(view *clientui.RuntimeMainView)) {
-	c.mu.Lock()
-	apply(&c.mainView)
-	if c.mainView.Session.SessionID == "" {
-		c.mainView.Session.SessionID = c.sessionID
-	}
-	c.hasMainView = true
-	c.mu.Unlock()
-}
-
 func (c *sessionRuntimeClient) observeRuntimeEventStatus(evt clientui.Event) {
-	if c == nil || (evt.ContextUsage == nil && evt.GoalStatus == nil) {
+	if c == nil {
+		return
+	}
+	if evt.Kind == clientui.EventRuntimeActivityChanged && evt.RuntimeActivity != nil && evt.InputReconciliation != nil {
+		c.patchVersionedRuntimeActivity(runtimeActivitySnapshotPatch{
+			Version:             evt.ReadModelVersion,
+			Activity:            *evt.RuntimeActivity,
+			InputReconciliation: *evt.InputReconciliation,
+		})
+	}
+	if evt.ContextUsage == nil && evt.GoalStatus == nil {
 		return
 	}
 	c.patchMainView(func(view *clientui.RuntimeMainView) {
@@ -320,11 +295,11 @@ func runtimeGoalFromStatusUpdate(existing *clientui.RuntimeGoal, update clientui
 	return goal
 }
 
-func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration) (clientui.RuntimeMainView, error) {
+func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration, refs []clientui.RuntimeOperationRef) (clientui.RuntimeMainView, error) {
 	ctx, cancel := c.readContext(timeout)
 	defer cancel()
 	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionPreservingContext, false, func() (serverapi.SessionMainViewResponse, error) {
-		return c.reads.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: c.sessionID})
+		return c.reads.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: c.sessionID, PendingOperationRefs: refs})
 	})
 	c.notifyConnectionState(err)
 	if err != nil {

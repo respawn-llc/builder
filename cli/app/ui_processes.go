@@ -355,12 +355,7 @@ func (c uiInputController) handleProcessListKey(msg tea.KeyMsg) (tea.Model, tea.
 	m := c.model
 	switch strings.ToLower(msg.String()) {
 	case "ctrl+c":
-		m.exitAction = UIActionExit
-		if overlayCmd := m.restoreTranscriptSurface(); overlayCmd != nil {
-			m.closeProcessList()
-			return m, tea.Sequence(overlayCmd, tea.Quit)
-		}
-		return m, tea.Quit
+		return c.handleRuntimeCtrlC(c.closeTranscriptSurfaceForRuntimeCtrlC(m.closeProcessList))
 	case "esc", "q":
 		return m, c.stopProcessListFlowCmd()
 	case "up":

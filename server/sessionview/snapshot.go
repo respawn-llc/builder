@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/runtimeview"
 	"core/server/session"
 	"core/shared/clientui"
@@ -13,13 +14,50 @@ import (
 )
 
 type SessionSnapshotSource interface {
-	ResolveSessionSnapshot(ctx context.Context, sessionID string) (SessionSnapshot, error)
+	ResolveSessionSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error)
 }
 
 type SessionSnapshot interface {
 	MainView(ctx context.Context) (clientui.RuntimeMainView, error)
 	TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error)
 	CommittedTranscriptSuffix(ctx context.Context, req clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error)
+}
+
+type runtimeReadModelSnapshotProvider interface {
+	RuntimeReadModelSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error)
+}
+
+type sessionRuntimeActivityResolver interface {
+	Snapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error)
+}
+
+type defaultSessionRuntimeActivityResolver struct {
+	runtimes RuntimeResolver
+}
+
+func newDefaultSessionRuntimeActivityResolver(runtimes RuntimeResolver) sessionRuntimeActivityResolver {
+	return defaultSessionRuntimeActivityResolver{runtimes: runtimes}
+}
+
+func (r defaultSessionRuntimeActivityResolver) Snapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
+	if provider, ok := r.runtimes.(runtimeReadModelSnapshotProvider); ok {
+		return provider.RuntimeReadModelSnapshot(ctx, sessionID, refs)
+	}
+	var engine *runtime.Engine
+	var err error
+	if r.runtimes != nil {
+		engine, err = r.runtimes.ResolveRuntime(ctx, sessionID)
+	}
+	if err != nil {
+		return runtimeactivity.ResponseSnapshot{}, err
+	}
+	registry := runtimeactivity.RegistrySnapshot{Registered: engine != nil, QueueAccepting: true}
+	return runtimeactivity.BuildSnapshot(sessionID, func(version clientui.ReadModelVersion) (runtimeactivity.SnapshotInput, error) {
+		return runtimeactivity.SnapshotInput{
+			Resolver:            runtimeactivity.ResolverSnapshot{Registry: registry, Active: runtimeactivity.ActiveStepFromProvider(engine)},
+			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(version),
+		}, nil
+	})
 }
 
 type enrichedSessionSnapshotSource struct {
@@ -37,11 +75,11 @@ func newEnrichedSessionSnapshotSource(base SessionSnapshotSource, targets Execut
 	return source
 }
 
-func (s *enrichedSessionSnapshotSource) ResolveSessionSnapshot(ctx context.Context, sessionID string) (SessionSnapshot, error) {
+func (s *enrichedSessionSnapshotSource) ResolveSessionSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error) {
 	if s == nil || s.base == nil {
 		return nil, errSessionStoreResolverRequired
 	}
-	snapshot, err := s.base.ResolveSessionSnapshot(ctx, sessionID)
+	snapshot, err := s.base.ResolveSessionSnapshot(ctx, sessionID, refs)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +132,7 @@ func (s enrichedSessionSnapshot) CommittedTranscriptSuffix(ctx context.Context, 
 type resolvedSessionSnapshotSource struct {
 	sessions SessionStoreResolver
 	runtimes RuntimeResolver
+	activity sessionRuntimeActivityResolver
 	dormant  *dormantSessionSnapshotSource
 }
 
@@ -101,11 +140,12 @@ func newResolvedSessionSnapshotSource(sessions SessionStoreResolver, runtimes Ru
 	return &resolvedSessionSnapshotSource{
 		sessions: sessions,
 		runtimes: runtimes,
+		activity: newDefaultSessionRuntimeActivityResolver(runtimes),
 		dormant:  newDormantSessionSnapshotSource(cacheWarningMode),
 	}
 }
 
-func (s *resolvedSessionSnapshotSource) ResolveSessionSnapshot(ctx context.Context, sessionID string) (SessionSnapshot, error) {
+func (s *resolvedSessionSnapshotSource) ResolveSessionSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error) {
 	if s == nil {
 		return nil, errSessionStoreResolverRequired
 	}
@@ -115,11 +155,11 @@ func (s *resolvedSessionSnapshotSource) ResolveSessionSnapshot(ctx context.Conte
 			return nil, err
 		}
 		if engine != nil {
-			var external clientui.ExternalRuntimeStatus
-			if resolver, ok := s.runtimes.(ExternalRuntimeStatusResolver); ok {
-				external = resolver.ExternalRuntimeStatus(sessionID)
+			snapshot, err := s.activityResolver().Snapshot(ctx, sessionID, refs)
+			if err != nil {
+				return nil, err
 			}
-			return liveRuntimeSessionSnapshot{engine: engine, sessions: s.sessions, external: external}, nil
+			return liveRuntimeSessionSnapshot{engine: engine, sessions: s.sessions, snapshot: snapshot}, nil
 		}
 	}
 	if s.sessions == nil {
@@ -132,7 +172,22 @@ func (s *resolvedSessionSnapshotSource) ResolveSessionSnapshot(ctx context.Conte
 	if store == nil {
 		return nil, errSessionStoreResolverRequired
 	}
-	return s.dormant.snapshot(store), nil
+	snapshot := s.dormant.snapshot(store)
+	readModelSnapshot, err := s.activityResolver().Snapshot(ctx, sessionID, refs)
+	if err != nil {
+		return nil, err
+	}
+	return activityOverrideSnapshot{base: snapshot, snapshot: readModelSnapshot}, nil
+}
+
+func (s *resolvedSessionSnapshotSource) activityResolver() sessionRuntimeActivityResolver {
+	if s != nil && s.activity != nil {
+		return s.activity
+	}
+	if s == nil {
+		return newDefaultSessionRuntimeActivityResolver(nil)
+	}
+	return newDefaultSessionRuntimeActivityResolver(s.runtimes)
 }
 
 func (s *resolvedSessionSnapshotSource) ClearCaches() {
@@ -144,17 +199,12 @@ func (s *resolvedSessionSnapshotSource) ClearCaches() {
 type liveRuntimeSessionSnapshot struct {
 	engine   *runtime.Engine
 	sessions SessionStoreResolver
-	external clientui.ExternalRuntimeStatus
+	snapshot runtimeactivity.ResponseSnapshot
 }
 
 func (s liveRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
-	view := runtimeview.MainViewFromRuntime(s.engine)
-	if s.external.State != "" {
-		view.ExternalRuntime = &clientui.ExternalRuntimeStatus{
-			State:          s.external.State,
-			QueueAccepting: s.external.QueueAccepting,
-		}
-	}
+	view := runtimeview.MainViewFromRuntimeActivity(s.engine, s.snapshot.Version, s.snapshot.Activity)
+	view.InputReconciliation = s.snapshot.InputReconciliation
 	if s.sessions != nil && view.Status.WorkflowSession == nil {
 		store, err := s.sessions.ResolveSessionStore(ctx, s.engine.SessionID())
 		if err == nil && store != nil {
@@ -168,6 +218,30 @@ func (s liveRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.Runt
 		}
 	}
 	return view, nil
+}
+
+type activityOverrideSnapshot struct {
+	base     SessionSnapshot
+	snapshot runtimeactivity.ResponseSnapshot
+}
+
+func (s activityOverrideSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
+	view, err := s.base.MainView(ctx)
+	if err != nil {
+		return clientui.RuntimeMainView{}, err
+	}
+	view.Version = s.snapshot.Version
+	view.Activity = s.snapshot.Activity
+	view.InputReconciliation = s.snapshot.InputReconciliation
+	return view, nil
+}
+
+func (s activityOverrideSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
+	return s.base.TranscriptPage(ctx, req)
+}
+
+func (s activityOverrideSnapshot) CommittedTranscriptSuffix(ctx context.Context, req clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error) {
+	return s.base.CommittedTranscriptSuffix(ctx, req)
 }
 
 func (s liveRuntimeSessionSnapshot) TranscriptPage(_ context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {

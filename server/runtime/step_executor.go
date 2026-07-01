@@ -116,6 +116,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			strings.TrimSpace(assistantMsg.Content) != "" &&
 			(len(localToolCalls) > 0 || len(hostedToolExecutions) > 0)
 		if finalAnswerWithToolCalls {
+			if err := e.markProviderVisibleModelRecovery(stepID); err != nil {
+				return stepLoopResult{}, err
+			}
 			applied, terminal, err := s.materializeFinalAnswerToolCalls(ctx, stepID, localToolCalls, hostedToolExecutions)
 			if err != nil {
 				return stepLoopResult{}, err
@@ -143,6 +146,11 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				},
 			}))
 
+		}
+		if !noopFinalAnswer && !finalAnswerWithToolCalls {
+			if err := e.markProviderVisibleModelRecovery(stepID); err != nil {
+				return stepLoopResult{}, err
+			}
 		}
 		if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{assistantMsg})); err != nil {
 			return stepLoopResult{}, err

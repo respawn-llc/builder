@@ -43,30 +43,34 @@ func TestRuntimeClientMainViewDoesNotRefreshCachedSnapshotBehindUIBack(t *testin
 }
 
 type reconnectRetryRuntimeControlClient struct {
-	mu              sync.Mutex
-	firstSubmitErr  error
-	firstQueueErr   error
-	firstRecordErr  error
-	appendErr       error
-	compactErr      error
-	compactCalls    int
-	showGoalErr     error
-	showGoalCalls   int
-	queuedWorkErr   error
-	queuedWork      bool
-	queuedWorkCalls int
-	submitCalls     int
-	queueCalls      int
-	recordCalls     int
-	submitRequestID []string
-	queueRequestID  []string
-	recordRequestID []string
-	localEntries    []serverapi.RuntimeAppendCommittedEntryRequest
-	showGoalResp    serverapi.RuntimeGoalShowResponse
-	setGoalResp     serverapi.RuntimeGoalShowResponse
-	pauseGoalResp   serverapi.RuntimeGoalShowResponse
-	resumeGoalResp  serverapi.RuntimeGoalShowResponse
-	clearGoalResp   serverapi.RuntimeGoalShowResponse
+	mu               sync.Mutex
+	firstSubmitErr   error
+	firstQueueErr    error
+	firstRecordErr   error
+	appendErr        error
+	compactErr       error
+	compactCalls     int
+	showGoalErr      error
+	showGoalCalls    int
+	queuedWorkErr    error
+	queuedWork       bool
+	queuedWorkCalls  int
+	submitCalls      int
+	queueCalls       int
+	recordCalls      int
+	submitRequestID  []string
+	submitRefs       []clientui.RuntimeOperationRef
+	queueRequestID   []string
+	recordRequestID  []string
+	localEntries     []serverapi.RuntimeAppendCommittedEntryRequest
+	showGoalResp     serverapi.RuntimeGoalShowResponse
+	setGoalResp      serverapi.RuntimeGoalShowResponse
+	pauseGoalResp    serverapi.RuntimeGoalShowResponse
+	resumeGoalResp   serverapi.RuntimeGoalShowResponse
+	completeGoalResp serverapi.RuntimeGoalShowResponse
+	clearGoalResp    serverapi.RuntimeGoalShowResponse
+	interruptResp    serverapi.RuntimeInterruptResponse
+	interruptReq     serverapi.RuntimeInterruptRequest
 }
 
 func (c *reconnectRetryRuntimeControlClient) submitRequestIDs() []string {
@@ -139,6 +143,7 @@ func (c *reconnectRetryRuntimeControlClient) SubmitUserTurn(_ context.Context, r
 	defer c.mu.Unlock()
 	c.submitCalls++
 	c.submitRequestID = append(c.submitRequestID, req.ClientRequestID)
+	c.submitRefs = append(c.submitRefs, req.OperationRef)
 	if c.submitCalls == 1 && c.firstSubmitErr != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, c.firstSubmitErr
 	}
@@ -171,8 +176,11 @@ func (c *reconnectRetryRuntimeControlClient) SubmitQueuedUserMessages(context.Co
 	return serverapi.RuntimeSubmitQueuedUserMessagesResponse{}, nil
 }
 
-func (c *reconnectRetryRuntimeControlClient) Interrupt(context.Context, serverapi.RuntimeInterruptRequest) error {
-	return nil
+func (c *reconnectRetryRuntimeControlClient) Interrupt(_ context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
+	c.mu.Lock()
+	c.interruptReq = req
+	c.mu.Unlock()
+	return c.interruptResp, nil
 }
 
 func (c *reconnectRetryRuntimeControlClient) QueueUserMessage(_ context.Context, req serverapi.RuntimeQueueUserMessageRequest) (serverapi.RuntimeQueueUserMessageResponse, error) {
@@ -224,7 +232,7 @@ func (c *reconnectRetryRuntimeControlClient) ResumeGoal(context.Context, servera
 }
 
 func (c *reconnectRetryRuntimeControlClient) CompleteGoal(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return serverapi.RuntimeGoalShowResponse{}, nil
+	return c.completeGoalResp, nil
 }
 
 func (c *reconnectRetryRuntimeControlClient) ClearGoal(context.Context, serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalShowResponse, error) {
@@ -236,12 +244,14 @@ func TestRuntimeClientGoalMethodsPatchCachedMainView(t *testing.T) {
 	setGoal := &serverapi.RuntimeGoal{ID: "goal-set", Objective: "set goal", Status: "active", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	pauseGoal := &serverapi.RuntimeGoal{ID: "goal-pause", Objective: "pause goal", Status: "paused", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	resumeGoal := &serverapi.RuntimeGoal{ID: "goal-resume", Objective: "resume goal", Status: "active", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	completeGoal := &serverapi.RuntimeGoal{ID: "goal-complete", Objective: "complete goal", Status: "complete", CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	controls := &reconnectRetryRuntimeControlClient{
-		showGoalResp:   serverapi.RuntimeGoalShowResponse{Goal: showGoal},
-		setGoalResp:    serverapi.RuntimeGoalShowResponse{Goal: setGoal},
-		pauseGoalResp:  serverapi.RuntimeGoalShowResponse{Goal: pauseGoal},
-		resumeGoalResp: serverapi.RuntimeGoalShowResponse{Goal: resumeGoal},
-		clearGoalResp:  serverapi.RuntimeGoalShowResponse{},
+		showGoalResp:     serverapi.RuntimeGoalShowResponse{Goal: showGoal},
+		setGoalResp:      serverapi.RuntimeGoalShowResponse{Goal: setGoal},
+		pauseGoalResp:    serverapi.RuntimeGoalShowResponse{Goal: pauseGoal},
+		resumeGoalResp:   serverapi.RuntimeGoalShowResponse{Goal: resumeGoal},
+		completeGoalResp: serverapi.RuntimeGoalShowResponse{Goal: completeGoal},
+		clearGoalResp:    serverapi.RuntimeGoalShowResponse{},
 	}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
 	reactivator := newRuntimeReactivator()
@@ -263,6 +273,7 @@ func TestRuntimeClientGoalMethodsPatchCachedMainView(t *testing.T) {
 		{name: "set", call: func() (*clientui.RuntimeGoal, error) { return runtimeClient.SetGoal("set goal") }, want: setGoal},
 		{name: "pause", call: runtimeClient.PauseGoal, want: pauseGoal},
 		{name: "resume", call: runtimeClient.ResumeGoal, want: resumeGoal},
+		{name: "complete", call: runtimeClient.CompleteGoal, want: completeGoal},
 		{name: "clear", call: runtimeClient.ClearGoal, want: nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -415,7 +426,10 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailableAndReusesReques
 	})
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
-	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
+		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-reconnect"},
+		Text:         "hello",
+	})
 	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -438,7 +452,10 @@ func TestRuntimeClientQueueUserMessageReusesRequestIDAcrossReconnect(t *testing.
 	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
-	item, err := runtimeClient.QueueUserMessage("queued")
+	item, err := runtimeClient.QueueRuntimeUserMessage(clientui.RuntimeQueueUserMessageRequest{
+		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindQueuedMessage, ClientRequestID: "queue-reconnect"},
+		Text:         "queued",
+	})
 	if err != nil {
 		t.Fatalf("QueueUserMessage: %v", err)
 	}
@@ -478,7 +495,10 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) 
 	})
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
-	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
+		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-warning-fallback"},
+		Text:         "hello",
+	})
 	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -629,7 +649,7 @@ func TestRuntimeClientMainViewRecoveryPreservesReadDeadline(t *testing.T) {
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
 	start := time.Now()
-	if _, err := runtimeClient.refreshMainViewSync(uiRuntimeReadTimeout); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := runtimeClient.refreshMainViewSync(uiRuntimeReadTimeout, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("refreshMainViewSync error = %v, want reactivation deadline error", err)
 	}
 	if elapsed := time.Since(start); elapsed > uiRuntimeReadTimeout+500*time.Millisecond {
@@ -781,7 +801,10 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
 	runtimeClient.SetRuntimeReactivator(reactivator)
 
-	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello")
+	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
+		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-warning-does-not-block"},
+		Text:         "hello",
+	})
 	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -827,7 +850,10 @@ func TestRuntimeClientServerRestartFirstPromptRecoversAndWarnsOngoing(t *testing
 	sized, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	model = sized.(*uiModel)
 
-	submission, err := runtimeClient.SubmitUserMessage(context.Background(), "hello after restart")
+	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
+		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-after-restart"},
+		Text:         "hello after restart",
+	})
 	message := submission.Message
 	if err != nil {
 		t.Fatalf("submitRuntimeUserMessage: %v", err)

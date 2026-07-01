@@ -113,7 +113,7 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 			runtimePlan.Close()
 			return err
 		}
-		initialInput := sessionLaunchInitialInputFromServer(ctx, server, plan.SessionID, nextSessionInitialInput)
+		initialState := sessionLaunchInitialStateFromServer(ctx, server, plan.SessionID, nextSessionInitialInput)
 
 		finalModel, runErr := runUILoopWithInitialPrompt(
 			runtimePlan.Wiring,
@@ -122,7 +122,8 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 			commandRegistry,
 			nextSessionInitialPrompt,
 			nextSessionInitialPromptHistoryRecorded,
-			initialInput,
+			initialState.Input,
+			initialState.RecoveryBuffers,
 			plan.SessionName,
 			plan.ModelContractLocked,
 			plan.ConfiguredModelName,
@@ -144,7 +145,7 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 
 		transition := extractUITransition(finalModel)
 		if transition.Exit {
-			runtimePlan.Close()
+			closeRuntimePlanAfterUIExit(runtimePlan, finalModel)
 			return nil
 		}
 		resolved, err := resolveSessionAction(ctx, server, interactor, plan.SessionID, transition)
@@ -162,6 +163,14 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 		nextSessionParentID = resolved.ParentSessionID
 		forceNewSession = resolved.ForceNewSession
 	}
+}
+
+func closeRuntimePlanAfterUIExit(runtimePlan *runtimeLaunchPlan, finalModel any) {
+	if ui, ok := finalModel.(*uiModel); ok && ui != nil && ui.forcedLocalExit {
+		runtimePlan.DetachOnlyClose()
+		return
+	}
+	runtimePlan.Close()
 }
 
 func shouldRetryStartupUpdateNotice(model any, enabled bool) bool {
@@ -185,17 +194,26 @@ func shouldCloseReboundServer(original appServerCore, rebound appServerCore) boo
 }
 
 func sessionLaunchInitialInputFromServer(ctx context.Context, server sessionInitialInputServer, sessionID string, transitionInput string) string {
+	return sessionLaunchInitialStateFromServer(ctx, server, sessionID, transitionInput).Input
+}
+
+type sessionLaunchInitialState struct {
+	Input           string
+	RecoveryBuffers []serverapi.SessionDraftRecoveryBuffer
+}
+
+func sessionLaunchInitialStateFromServer(ctx context.Context, server sessionInitialInputServer, sessionID string, transitionInput string) sessionLaunchInitialState {
 	if server == nil || server.SessionLifecycleClient() == nil {
-		return transitionInput
+		return sessionLaunchInitialState{Input: transitionInput}
 	}
 	resp, err := server.SessionLifecycleClient().GetInitialInput(ctx, serverapi.SessionInitialInputRequest{
 		SessionID:       strings.TrimSpace(sessionID),
 		TransitionInput: transitionInput,
 	})
 	if err != nil {
-		return transitionInput
+		return sessionLaunchInitialState{Input: transitionInput}
 	}
-	return resp.Input
+	return sessionLaunchInitialState{Input: resp.Input, RecoveryBuffers: resp.RecoveryBuffers}
 }
 
 func persistSessionDraftToServer(ctx context.Context, server sessionDraftPersistenceServer, sessionID string, model any) error {
@@ -209,7 +227,12 @@ func persistSessionDraftToServer(ctx context.Context, server sessionDraftPersist
 	if server == nil || server.SessionLifecycleClient() == nil {
 		return nil
 	}
-	_, err := server.SessionLifecycleClient().PersistInputDraft(ctx, serverapi.SessionPersistInputDraftRequest{ClientRequestID: uuid.NewString(), SessionID: strings.TrimSpace(sessionID), Input: ui.input})
+	_, err := server.SessionLifecycleClient().PersistInputDraft(ctx, serverapi.SessionPersistInputDraftRequest{
+		ClientRequestID: uuid.NewString(),
+		SessionID:       strings.TrimSpace(sessionID),
+		Input:           ui.input,
+		RecoveryBuffers: ui.sessionDraftRecoveryBuffers(),
+	})
 	return err
 }
 

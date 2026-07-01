@@ -140,7 +140,7 @@ func TestBusyEnterCommandBehavior(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newProjectedStaticUIModel()
-			m.setBusy(true)
+			m.setRuntimeActivityBusyForTest(true)
 			m.activity = uiActivityRunning
 			m.input = tt.input
 			if tt.setup != nil {
@@ -256,7 +256,7 @@ func TestBusyQueueSubmissionCommandBehavior(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := newProjectedStaticUIModel()
-			m.setBusy(true)
+			m.setRuntimeActivityBusyForTest(true)
 			m.activity = uiActivityRunning
 			m.input = tt.input
 			if tt.setup != nil {
@@ -309,7 +309,7 @@ func TestBusyQueueSubmissionCommandBehavior(t *testing.T) {
 
 func TestBusyQueuedCompactStartsCompactionAfterTurnDrains(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "/compact tighten summary"
 
@@ -339,7 +339,7 @@ func TestBusyQueuedCopyCopiesFinalAnswerAfterTurnDrains(t *testing.T) {
 	copier := &stubClipboardTextCopier{}
 	m := newProjectedStaticUIModel(WithUIClipboardTextCopier(copier))
 	m.transcriptEntries = []tui.TranscriptEntry{{Role: "assistant", Text: "copied from queue", Phase: llm.MessagePhaseFinal}}
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "/copy"
 
@@ -388,7 +388,7 @@ func TestBusyQueuedFastAppliesToNextRuntimeRequestAfterTurnDrains(t *testing.T) 
 	_, eng := newAppRuntimeEngine(t, client, runtime.Config{Model: "gpt-5.3-codex"})
 
 	m := newProjectedEngineUIModel(eng)
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.promptHistoryDraft = "previous prompt"
 	m.promptHistoryDraftCursor = -1

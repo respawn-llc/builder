@@ -238,6 +238,38 @@ Terminal-owned history of normal-buffer output. Kent does not replay, clear, or 
 
 The single shared live runtime (engine) a session registers while active. There is exactly one engine per session; every interactive client and any headless or workflow run resolves and drives that same shared engine through its queue/steer/exclusive-step boundary. It exists independently of any particular client and may be registered but idle between activations.
 
+### RuntimeActivity
+
+The server-owned live read model for whether a session runtime is unavailable, starting/reserved, registered idle, running, awaiting prompt/approval, draining, or closing, including the active kind for exclusive work such as a user turn, goal loop, compaction, shell, or background step. Clients use `RuntimeActivity` as the active/idle authority; session database run rows, transcript rows, goal status, and client-local booleans are not liveness sources.
+
+### ReadModelVersion
+
+The single per-session epoch/generation/sequence for server-produced runtime UI facts. Runtime activity, input reconciliation, main-view snapshots, interrupt responses, versioned runtime activity/reconciliation events carried on `SessionActivity`, and migrated prompt read-model stream events all use this version so clients can ignore stale payloads with one ordering rule. It is not the raw `SessionActivity` replay cursor, and response-only versions are ordering points rather than replayable session-stream positions.
+
+### RuntimeOperationRef
+
+A client-created typed identity for an input-bearing runtime operation before dispatch. It names the operation kind and the matching request, queue item, shell, or compact identifier so runtime-control, interrupt, and reconciliation paths never infer input ownership from transcript text.
+
+### RuntimeInputReconciliation
+
+The server-owned read model that tells a client whether a `RuntimeOperationRef` was accepted, committed/submitted, canceled/not committed, failed with restore, or is unknown/evicted. It is delivered under `ReadModelVersion`; input recovery can change while runtime activity does not, but both facts share one runtime UI ordering clock.
+
+### PendingModelRecovery
+
+A non-liveness session recovery marker used to repair model context after an interrupted or crashed provider-visible step. It may describe the step and outstanding tool-call IDs needed for reopen recovery, but it never marks the runtime active, blocks release, or drives UI busy state.
+
+### DraftRecoveryBuffer
+
+Structured persisted local input that should be recoverable after an early TUI exit, including active submitted text, queued messages, pending injected input, reviewer buffers, and related operation refs. It is a retry/recovery payload, not an instruction to auto-submit.
+
+### DraftInputBuffer
+
+A typed hidden/recoverable buffer entry inside `DraftRecoveryBuffer`, such as active submitted text, queued message, pending injected input, locked injected input, or reviewer buffer. The visible prompt text is the `VisibleInput` field on `DraftRecoveryBuffer`, not a `DraftInputBuffer`.
+
+### Forced Local Detach
+
+The second-Ctrl+C exit path for a TUI client while interrupt is pending. The client exits locally and detaches its runtime owner reference without releasing or force-closing a shared daemon runtime; embedded process exit still cleans up local owner state before shutdown.
+
 ### Step
 
 One model request/response iteration in the runtime loop, including any tool calls it triggers. Steps run back-to-back to form a turn.

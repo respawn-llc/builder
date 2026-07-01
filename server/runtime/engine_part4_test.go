@@ -708,10 +708,15 @@ func TestSubmitUserMessageFinalAnswerWithToolCallsExecutesToolCallsBeforeFinal(t
 	toolCompleted := false
 	toolCallBeforeFinal := false
 	toolResultBeforeFinal := false
+	recoveryBeforeToolCall := false
+	recoverySeen := false
 	finalSeen := false
 	developerWarningFound := false
 	persistedFinalHasToolCalls := false
 	for _, evt := range events {
+		if evt.Kind == "model_recovery_pending" {
+			recoverySeen = true
+		}
 		if evt.Kind == "tool_completed" {
 			toolCompleted = true
 		}
@@ -729,6 +734,7 @@ func TestSubmitUserMessageFinalAnswerWithToolCallsExecutesToolCallsBeforeFinal(t
 			if finalSeen {
 				t.Fatalf("tool call persisted after final response")
 			}
+			recoveryBeforeToolCall = recoverySeen
 			toolCallBeforeFinal = true
 		}
 		if persisted.Role == llm.RoleTool && persisted.ToolCallID == "call_shell_1" {
@@ -749,6 +755,9 @@ func TestSubmitUserMessageFinalAnswerWithToolCallsExecutesToolCallsBeforeFinal(t
 	}
 	if !toolCallBeforeFinal {
 		t.Fatalf("expected tool call message before final response")
+	}
+	if !recoveryBeforeToolCall {
+		t.Fatalf("expected model recovery marker before final-answer tool call message, events=%+v", events)
 	}
 	if !toolResultBeforeFinal {
 		t.Fatalf("expected tool result message before final response")

@@ -6,6 +6,7 @@ import (
 
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -238,8 +239,8 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	if msg.Content != "done" {
 		t.Fatalf("assistant content = %q, want done", msg.Content)
 	}
-	if !errors.Is(err, errMarkInFlightFalse) {
-		t.Fatalf("expected errMarkInFlightFalse, got %v", err)
+	if !errors.Is(err, errPendingModelRecoveryClear) {
+		t.Fatalf("expected errPendingModelRecoveryClear, got %v", err)
 	}
 
 	mu.Lock()
@@ -247,7 +248,7 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	gotChmodErr := chmodError
 	seenClearFailureEvent := false
 	for _, evt := range events {
-		if evt.Kind == EventInFlightClearFailed && strings.Contains(evt.Error, "mark in-flight false") {
+		if evt.Kind == EventInFlightClearFailed && strings.Contains(evt.Error, "clear pending model recovery") {
 			seenClearFailureEvent = true
 			break
 		}
@@ -271,28 +272,18 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 	if openErr != nil {
 		t.Fatalf("re-open session store: %v", openErr)
 	}
-	if !reopened.Meta().InFlightStep {
-		t.Fatalf("expected persisted in-flight flag to remain true after clear failure")
-	}
-	latest, err := reopened.LatestRun()
-	if err != nil {
-		t.Fatalf("read durable run after reopen: %v", err)
-	}
-	if latest == nil {
-		t.Fatalf("expected durable run lifecycle to persist despite clear failure")
-	}
-	if latest.Status != session.RunStatusCompleted || latest.FinishedAt.IsZero() {
-		t.Fatalf("expected terminal durable run after clear failure, got %+v", latest)
+	if reopened.Meta().PendingModelRecovery == nil {
+		t.Fatalf("expected pending model recovery to remain after clear failure")
 	}
 }
 
-func TestNewNormalizesPersistedInFlightStepOnReopen(t *testing.T) {
+func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 	store := mustCreateTestSession(t)
 	if _, _, err := store.AppendEvent("legacy-step", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
-	if err := store.MarkInFlight(true); err != nil {
-		t.Fatalf("mark in-flight true: %v", err)
+	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery-1", StepID: "legacy-step", Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("set pending recovery: %v", err)
 	}
 
 	reopenedStore, err := session.Open(store.Dir())
@@ -300,8 +291,8 @@ func TestNewNormalizesPersistedInFlightStepOnReopen(t *testing.T) {
 		t.Fatalf("re-open store: %v", err)
 	}
 	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
-	if reopenedStore.Meta().InFlightStep {
-		t.Fatal("expected reopen path to clear persisted in-flight flag")
+	if reopenedStore.Meta().PendingModelRecovery != nil {
+		t.Fatal("expected reopen path to clear pending model recovery")
 	}
 	messages := restored.transcriptRuntimeState().SnapshotMessages()
 	if len(messages) != 2 {
@@ -315,8 +306,164 @@ func TestNewNormalizesPersistedInFlightStepOnReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read reopened events: %v", err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("expected persisted interruption event appended on reopen, got %+v", events)
+	seenInterruptionEvent := false
+	seenConsumedEvent := false
+	for _, evt := range events {
+		switch evt.Kind {
+		case "message":
+			var msg llm.Message
+			if err := json.Unmarshal(evt.Payload, &msg); err == nil && msg.MessageType == llm.MessageTypeInterruption {
+				seenInterruptionEvent = true
+			}
+		case "model_recovery_consumed":
+			seenConsumedEvent = true
+		}
+	}
+	if !seenInterruptionEvent || !seenConsumedEvent {
+		t.Fatalf("expected persisted interruption and recovery-consumed events on reopen, got %+v", events)
+	}
+}
+
+func TestNewConsumesPendingModelRecoveryWithoutMarkerWhenStepCompleted(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if _, _, err := store.AppendEvent("completed-step", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
+		t.Fatalf("append user message: %v", err)
+	}
+	if _, _, err := store.AppendEvent("completed-step", "message", llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal}); err != nil {
+		t.Fatalf("append terminal assistant message: %v", err)
+	}
+	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery-completed", StepID: "completed-step", Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("set pending recovery: %v", err)
+	}
+
+	reopenedStore, err := session.Open(store.Dir())
+	if err != nil {
+		t.Fatalf("re-open store: %v", err)
+	}
+	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if reopenedStore.Meta().PendingModelRecovery != nil {
+		t.Fatal("expected reopen path to clear pending model recovery")
+	}
+	for _, msg := range restored.transcriptRuntimeState().SnapshotMessages() {
+		if msg.MessageType == llm.MessageTypeInterruption {
+			t.Fatalf("did not expect interruption marker for completed step, messages=%+v", restored.transcriptRuntimeState().SnapshotMessages())
+		}
+	}
+}
+
+func TestNewInfersLegacyPendingModelRecoveryFromBoundedActiveTail(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if _, _, err := store.AppendEvent("legacy-step", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
+		t.Fatalf("append user message: %v", err)
+	}
+	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "legacy", Reason: "legacy_in_flight_step", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("set pending recovery: %v", err)
+	}
+
+	reopenedStore, err := session.Open(store.Dir())
+	if err != nil {
+		t.Fatalf("re-open store: %v", err)
+	}
+	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if reopenedStore.Meta().PendingModelRecovery != nil {
+		t.Fatal("expected reopen path to clear pending model recovery")
+	}
+	messages := restored.transcriptRuntimeState().SnapshotMessages()
+	if len(messages) != 2 {
+		t.Fatalf("expected inferred legacy recovery to append interruption marker, got %+v", messages)
+	}
+	last := messages[len(messages)-1]
+	if last.Role != llm.RoleDeveloper || last.MessageType != llm.MessageTypeInterruption {
+		t.Fatalf("expected interruption developer message, got %+v", last)
+	}
+	events, err := sessiontest.CollectEvents(reopenedStore)
+	if err != nil {
+		t.Fatalf("read reopened events: %v", err)
+	}
+	seenMaterialized := false
+	for _, evt := range events {
+		if evt.Kind == "model_recovery_pending" && evt.StepID == "legacy-step" {
+			seenMaterialized = true
+		}
+	}
+	if !seenMaterialized {
+		t.Fatalf("expected materialized model recovery event with inferred step, got %+v", events)
+	}
+}
+
+func TestNewMaterializesLegacyInFlightStepFromSessionJSONOnlyOnRuntimeOpen(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if _, _, err := store.AppendEvent("legacy-json-step", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
+		t.Fatalf("append user message: %v", err)
+	}
+	metaPath := filepath.Join(store.Dir(), "session.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal meta: %v", err)
+	}
+	raw["in_flight_step"] = true
+	delete(raw, "pending_model_recovery")
+	rewritten, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal legacy meta: %v", err)
+	}
+	if err := os.WriteFile(metaPath, rewritten, 0o644); err != nil {
+		t.Fatalf("write legacy meta: %v", err)
+	}
+
+	reopenedStore, err := session.Open(store.Dir())
+	if err != nil {
+		t.Fatalf("re-open store: %v", err)
+	}
+	if reopenedStore.Meta().PendingModelRecovery != nil {
+		t.Fatalf("legacy JSON candidate serialized on metadata open: %+v", reopenedStore.Meta().PendingModelRecovery)
+	}
+	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	messages := restored.transcriptRuntimeState().SnapshotMessages()
+	if len(messages) != 2 {
+		t.Fatalf("expected materialized legacy JSON recovery to append interruption marker, got %+v", messages)
+	}
+	last := messages[len(messages)-1]
+	if last.Role != llm.RoleDeveloper || last.MessageType != llm.MessageTypeInterruption {
+		t.Fatalf("expected interruption developer message, got %+v", last)
+	}
+}
+
+func TestNewDiscardsLegacyPendingModelRecoveryWithoutConcreteStep(t *testing.T) {
+	store := mustCreateTestSession(t)
+	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "legacy", Reason: "legacy_in_flight_step", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("set pending recovery: %v", err)
+	}
+
+	reopenedStore, err := session.Open(store.Dir())
+	if err != nil {
+		t.Fatalf("re-open store: %v", err)
+	}
+	restored := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if reopenedStore.Meta().PendingModelRecovery != nil {
+		t.Fatal("expected reopen path to clear pending model recovery")
+	}
+	for _, msg := range restored.transcriptRuntimeState().SnapshotMessages() {
+		if msg.MessageType == llm.MessageTypeInterruption {
+			t.Fatalf("did not expect interruption marker without concrete step, messages=%+v", restored.transcriptRuntimeState().SnapshotMessages())
+		}
+	}
+	events, err := sessiontest.CollectEvents(reopenedStore)
+	if err != nil {
+		t.Fatalf("read reopened events: %v", err)
+	}
+	seenDiscard := false
+	for _, evt := range events {
+		if evt.Kind == "model_recovery_discarded" {
+			seenDiscard = true
+		}
+	}
+	if !seenDiscard {
+		t.Fatalf("expected observable recovery discard event, got %+v", events)
 	}
 }
 
@@ -372,8 +519,8 @@ func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t *testing.T, c
 	if _, _, err := store.AppendEvent("legacy-step", "message", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}); err != nil {
 		t.Fatalf("append assistant tool call message: %v", err)
 	}
-	if err := store.MarkInFlight(true); err != nil {
-		t.Fatalf("mark in-flight true: %v", err)
+	if err := store.SetPendingModelRecovery(session.PendingModelRecovery{RecoveryID: "recovery-tool", StepID: "legacy-step", Reason: "test", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("set pending recovery: %v", err)
 	}
 
 	reopenedStore, err := session.Open(store.Dir())
@@ -385,8 +532,8 @@ func testReopenCarriesInterruptedToolAttemptIntoNextModelRequest(t *testing.T, c
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	restored := mustNewTestEngine(t, reopenedStore, client, tools.NewRegistry(), Config{Model: "gpt-5"})
-	if reopenedStore.Meta().InFlightStep {
-		t.Fatal("expected reopen path to clear persisted in-flight flag")
+	if reopenedStore.Meta().PendingModelRecovery != nil {
+		t.Fatal("expected reopen path to clear pending model recovery")
 	}
 
 	msg, err := restored.SubmitUserMessage(context.Background(), "continue")

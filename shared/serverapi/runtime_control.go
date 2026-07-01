@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"core/shared/clientui"
 	"core/shared/transcript"
 )
 
@@ -82,9 +83,11 @@ type RuntimeShouldCompactBeforeUserMessageResponse struct {
 }
 
 type RuntimeSubmitUserTurnRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Text            string `json:"text"`
+	ClientRequestID                 string                       `json:"client_request_id"`
+	SessionID                       string                       `json:"session_id"`
+	Text                            string                       `json:"text"`
+	OperationRef                    clientui.RuntimeOperationRef `json:"operation_ref"`
+	PreSubmitCompactionOperationRef clientui.RuntimeOperationRef `json:"pre_submit_compaction_operation_ref,omitempty"`
 }
 
 type RuntimeSubmitUserTurnResponse struct {
@@ -95,20 +98,23 @@ type RuntimeSubmitUserTurnResponse struct {
 }
 
 type RuntimeSubmitUserShellCommandRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Command         string `json:"command"`
+	ClientRequestID string                       `json:"client_request_id"`
+	SessionID       string                       `json:"session_id"`
+	Command         string                       `json:"command"`
+	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
 }
 
 type RuntimeCompactContextRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Args            string `json:"args"`
+	ClientRequestID string                       `json:"client_request_id"`
+	SessionID       string                       `json:"session_id"`
+	Args            string                       `json:"args"`
+	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
 }
 
 type RuntimeCompactContextForPreSubmitRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
+	ClientRequestID string                       `json:"client_request_id"`
+	SessionID       string                       `json:"session_id"`
+	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
 }
 
 type RuntimeHasQueuedUserWorkRequest struct {
@@ -120,8 +126,9 @@ type RuntimeHasQueuedUserWorkResponse struct {
 }
 
 type RuntimeSubmitQueuedUserMessagesRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
+	ClientRequestID string                       `json:"client_request_id"`
+	SessionID       string                       `json:"session_id"`
+	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
 }
 
 type RuntimeSubmitQueuedUserMessagesResponse struct {
@@ -129,14 +136,23 @@ type RuntimeSubmitQueuedUserMessagesResponse struct {
 }
 
 type RuntimeInterruptRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
+	ClientRequestID      string                         `json:"client_request_id"`
+	SessionID            string                         `json:"session_id"`
+	TargetOperationRef   *clientui.RuntimeOperationRef  `json:"target_operation_ref,omitempty"`
+	PendingOperationRefs []clientui.RuntimeOperationRef `json:"pending_operation_refs,omitempty"`
+}
+
+type RuntimeInterruptResponse struct {
+	Version             clientui.ReadModelVersion                   `json:"version"`
+	Activity            clientui.RuntimeActivity                    `json:"activity"`
+	InputReconciliation clientui.RuntimeInputReconciliationSnapshot `json:"input_reconciliation"`
 }
 
 type RuntimeQueueUserMessageRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Text            string `json:"text"`
+	ClientRequestID string                       `json:"client_request_id"`
+	SessionID       string                       `json:"session_id"`
+	OperationRef    clientui.RuntimeOperationRef `json:"operation_ref"`
+	Text            string                       `json:"text"`
 }
 
 type RuntimeQueueUserMessageResponse struct {
@@ -224,6 +240,23 @@ func validateRuntimeControlRequest(clientRequestID string, sessionID string) err
 	return validateRequiredSessionID(sessionID)
 }
 
+func validateRuntimeOperationRef(ref clientui.RuntimeOperationRef, kind clientui.RuntimeOperationKind, clientRequestID string) error {
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	if ref.Kind != kind {
+		return errors.New("operation_ref kind does not match request")
+	}
+	if strings.TrimSpace(ref.ClientRequestID) != strings.TrimSpace(clientRequestID) {
+		return errors.New("operation_ref client_request_id must match request client_request_id")
+	}
+	return nil
+}
+
+func isZeroServerAPIRuntimeOperationRef(ref clientui.RuntimeOperationRef) bool {
+	return ref.Kind == "" && strings.TrimSpace(ref.ClientRequestID) == "" && strings.TrimSpace(ref.QueueItemID) == ""
+}
+
 func validateRuntimeGoalActionRequest(clientRequestID string, sessionID string, actor string) error {
 	if err := validateClientRequestID(clientRequestID); err != nil {
 		return err
@@ -265,28 +298,74 @@ func (r RuntimeShouldCompactBeforeUserMessageRequest) Validate() error {
 	return validateRequiredSessionID(r.SessionID)
 }
 func (r RuntimeSubmitUserTurnRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+		return err
+	}
+	if err := validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindSubmit, r.ClientRequestID); err != nil {
+		return err
+	}
+	if isZeroServerAPIRuntimeOperationRef(r.PreSubmitCompactionOperationRef) {
+		return nil
+	}
+	return validateRuntimeOperationRef(r.PreSubmitCompactionOperationRef, clientui.RuntimeOperationKindPreSubmitCompact, r.PreSubmitCompactionOperationRef.ClientRequestID)
 }
 func (r RuntimeSubmitUserShellCommandRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+		return err
+	}
+	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindUserShell, r.ClientRequestID)
 }
 func (r RuntimeCompactContextRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+		return err
+	}
+	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindCompact, r.ClientRequestID)
 }
 func (r RuntimeCompactContextForPreSubmitRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+		return err
+	}
+	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindPreSubmitCompact, r.ClientRequestID)
 }
 func (r RuntimeHasQueuedUserWorkRequest) Validate() error {
 	return validateRequiredSessionID(r.SessionID)
 }
 func (r RuntimeSubmitQueuedUserMessagesRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+		return err
+	}
+	return validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindSubmitQueued, r.ClientRequestID)
 }
 func (r RuntimeInterruptRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+		return err
+	}
+	if r.TargetOperationRef != nil {
+		if err := r.TargetOperationRef.Validate(); err != nil {
+			return err
+		}
+	}
+	for _, ref := range r.PendingOperationRefs {
+		if err := ref.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (r RuntimeQueueUserMessageRequest) Validate() error {
-	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
+	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+		return err
+	}
+	if err := validateRuntimeOperationRef(r.OperationRef, clientui.RuntimeOperationKindQueuedMessage, r.ClientRequestID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.OperationRef.QueueItemID) != "" {
+		return errors.New("queued-message create operation_ref must not carry queue item id")
+	}
+	if strings.TrimSpace(r.Text) == "" {
+		return errors.New("text is required")
+	}
+	return nil
 }
 func (r RuntimeDiscardQueuedUserMessageRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {

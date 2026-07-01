@@ -51,7 +51,6 @@ type Session struct {
 	UpdatedAtUnixMs    int64
 	LastSequence       int64
 	ModelRequestCount  int64
-	InFlightStep       int64
 	LaunchVisible      int64
 	CwdRelpath         string
 	ContinuationJson   string

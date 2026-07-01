@@ -2563,11 +2563,17 @@ DELETE FROM workspaces
 WHERE project_id = sqlc.arg(project_id)
   AND id = sqlc.arg(workspace_id);
 
--- name: CountActiveSessionsByWorkspace :one
-SELECT CAST(COUNT(*) AS INTEGER) AS session_count
+-- name: AcquireWorkspaceUnlinkWriteLock :execrows
+UPDATE workspaces
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE project_id = sqlc.arg(project_id)
+  AND id = sqlc.arg(workspace_id);
+
+-- name: ListWorkspaceSessionIDs :many
+SELECT id
 FROM sessions
 WHERE workspace_id = sqlc.arg(workspace_id)
-  AND in_flight_step <> 0;
+ORDER BY rowid ASC;
 
 -- name: CountActiveTaskRunsByWorkspace :one
 SELECT CAST(COUNT(DISTINCT r.id) AS INTEGER) AS run_count
@@ -2705,7 +2711,6 @@ INSERT INTO sessions (
     updated_at_unix_ms,
     last_sequence,
     model_request_count,
-    in_flight_step,
     launch_visible,
     cwd_relpath,
     continuation_json,
@@ -2726,7 +2731,6 @@ INSERT INTO sessions (
     sqlc.arg(updated_at_unix_ms),
     sqlc.arg(last_sequence),
     sqlc.arg(model_request_count),
-    sqlc.arg(in_flight_step),
     sqlc.arg(launch_visible),
     sqlc.arg(cwd_relpath),
     sqlc.arg(continuation_json),
@@ -2746,7 +2750,6 @@ ON CONFLICT(id) DO UPDATE SET
     updated_at_unix_ms = excluded.updated_at_unix_ms,
     last_sequence = excluded.last_sequence,
     model_request_count = excluded.model_request_count,
-    in_flight_step = excluded.in_flight_step,
     launch_visible = CASE
         WHEN sessions.launch_visible <> 0 OR excluded.launch_visible <> 0 THEN 1
         ELSE 0
@@ -2947,6 +2950,12 @@ WHERE project_id = sqlc.arg(project_id)
   AND launch_visible <> 0
 ORDER BY updated_at_unix_ms DESC, rowid DESC;
 
+-- name: ListProjectSessionIDs :many
+SELECT id
+FROM sessions
+WHERE project_id = sqlc.arg(project_id)
+ORDER BY rowid ASC;
+
 -- name: ListProjectSessionArtifacts :many
 SELECT
     id,
@@ -2958,7 +2967,6 @@ ORDER BY rowid ASC;
 
 -- name: GetProjectDeleteBlockerCounts :one
 SELECT
-    CAST((SELECT COUNT(*) FROM sessions s WHERE s.project_id = sqlc.arg(delete_project_id) AND s.in_flight_step <> 0) AS INTEGER) AS active_sessions,
     CAST((
         SELECT COUNT(DISTINCT id)
         FROM (
@@ -3036,7 +3044,6 @@ SELECT
     s.updated_at_unix_ms,
     s.last_sequence,
     s.model_request_count,
-    s.in_flight_step,
     s.continuation_json,
     s.locked_json,
     s.usage_state_json,

@@ -44,19 +44,25 @@ func Activate(ctx context.Context, service servicecontract.SessionRuntimeService
 	}, nil
 }
 
-func Release(service servicecontract.SessionRuntimeService, sessionID string, ownerID string) {
+func Release(service servicecontract.SessionRuntimeService, sessionID string, ownerID string) error {
+	return ReleaseWithClosePolicy(service, sessionID, ownerID, serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle)
+}
+
+func ReleaseWithClosePolicy(service servicecontract.SessionRuntimeService, sessionID string, ownerID string, closePolicy serverapi.SessionRuntimeReleaseClosePolicy) error {
 	if service == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), ReleaseTimeout)
 	defer cancel()
-	_, _ = service.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
+	_, err := service.ReleaseSessionRuntime(ctx, serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: uuid.NewString(),
 		SessionID:       sessionID,
 		OnlyIfIdle:      true,
 		DropOwner:       true,
+		ClosePolicy:     closePolicy,
 		OwnerID:         ownerID,
 	})
+	return err
 }
 
 func activateRequest(req Request, ownerID string) serverapi.SessionRuntimeActivateRequest {

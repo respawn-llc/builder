@@ -92,7 +92,7 @@ const (
 type RuntimeRunStateReduction struct {
 	State           RuntimeRunState
 	Activity        RuntimeActivityCommand
-	ExternalRuntime *clientui.ExternalRuntimeStatus
+	RuntimeActivity *clientui.RuntimeActivity
 	Err             error
 }
 
@@ -229,24 +229,17 @@ func ReduceRuntimeRunStateEvent(state RuntimeRunState, activityRunning bool, evt
 			reduction.Err = err
 			return reduction
 		}
-		reduction.State.Run = evt.RunState.Lifecycle
-		if evt.RunState.Lifecycle.IsRunning() {
+	case clientui.EventRuntimeActivityChanged:
+		if evt.RuntimeActivity == nil {
+			return reduction
+		}
+		reduction.RuntimeActivity = evt.RuntimeActivity
+		if evt.RuntimeActivity.ActiveForControl() {
+			reduction.State.Run = clientui.MustRunLifecycle(clientui.RunLifecycleRunning, runModeFromRuntimeActivityKind(evt.RuntimeActivity.ActiveKind))
 			reduction.Activity = RuntimeActivityRunning
 			return reduction
 		}
-		if activityRunning {
-			reduction.Activity = RuntimeActivityIdle
-		}
-	case clientui.EventExternalRuntimeStatus:
-		reduction.ExternalRuntime = cloneExternalRuntimeStatus(evt.ExternalRuntimeStatus)
-		if externalRuntimeBusy(evt.ExternalRuntimeStatus) {
-			reduction.Activity = RuntimeActivityRunning
-			return reduction
-		}
-		if reduction.State.Run.IsRunning() {
-			reduction.Activity = RuntimeActivityRunning
-			return reduction
-		}
+		reduction.State.Run = clientui.IdleRunLifecycle()
 		if activityRunning {
 			reduction.Activity = RuntimeActivityIdle
 		}
@@ -254,24 +247,11 @@ func ReduceRuntimeRunStateEvent(state RuntimeRunState, activityRunning bool, evt
 	return reduction
 }
 
-func cloneExternalRuntimeStatus(status *clientui.ExternalRuntimeStatus) *clientui.ExternalRuntimeStatus {
-	if status == nil {
-		return nil
+func runModeFromRuntimeActivityKind(kind clientui.RuntimeActivityActiveKind) clientui.RunMode {
+	if kind == clientui.RuntimeActivityActiveKindGoalLoop {
+		return clientui.RunModeGoalLoop
 	}
-	next := *status
-	return &next
-}
-
-func externalRuntimeBusy(status *clientui.ExternalRuntimeStatus) bool {
-	if status == nil {
-		return false
-	}
-	switch status.State {
-	case clientui.ExternalRuntimeStateOwnerRunning, clientui.ExternalRuntimeStateDraining, clientui.ExternalRuntimeStateClosing:
-		return true
-	default:
-		return false
-	}
+	return clientui.RunModeTurn
 }
 
 func ReduceRuntimePendingInputEvent(input PendingInputState, evt clientui.Event) RuntimePendingInputReduction {

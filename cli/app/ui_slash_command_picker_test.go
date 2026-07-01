@@ -226,7 +226,7 @@ func TestBusyEnterRunsExactFastCommandEvenWhenPickerHidesIt(t *testing.T) {
 	client := &runtimeControlFakeClient{status: clientui.RuntimeStatus{FastModeAvailable: true, FastModeEnabled: true}}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.fastModeAvailable = false
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "/fa"
 	if picker := m.slashCommandPicker(); !picker.visible || len(picker.matches) != 0 {
@@ -269,7 +269,7 @@ func TestBusyEnterRunsExactFastCommandEvenWhenPickerHidesIt(t *testing.T) {
 
 func TestBusyTabBackWithoutParentShowsLocalErrorAndDoesNotQueue(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "/back"
 

@@ -655,7 +655,7 @@ func TestAssistantDeltaSuppressesLateMatchingDeltaFromCommittedStep(t *testing.T
 
 func TestProjectedAssistantMessageClearsStreamingTextOnCommit(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	_ = m.runtimeAdapter().handleRuntimeEvent(runtime.Event{Kind: runtime.EventAssistantDelta, AssistantDelta: "partial"})
 	if got := m.view.OngoingStreamingText(); got != "partial" {
 		t.Fatalf("expected assistant delta in live stream, got %q", got)
@@ -684,7 +684,7 @@ func TestProjectedAssistantMessageClearsStreamingTextOnCommit(t *testing.T) {
 
 func TestProjectedAssistantCommentaryDoesNotClearStreamingFinal(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	_ = m.runtimeAdapter().handleRuntimeEvent(runtime.Event{Kind: runtime.EventAssistantDelta, AssistantDelta: "final still streaming"})
 
 	_ = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
@@ -708,7 +708,7 @@ func TestProjectedAssistantCommentaryDoesNotClearStreamingFinal(t *testing.T) {
 
 func TestProjectedAssistantMessageDoesNotClearStreamingTextWhenCommitIsSkipped(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.transcriptEntries = []tui.TranscriptEntry{{Role: "assistant", Text: "older"}}
 	m.transcriptRevision = 5
 	m.transcriptTotalEntries = len(m.transcriptEntries)
@@ -735,7 +735,7 @@ func TestProjectedAssistantMessageDoesNotClearStreamingTextWhenCommitIsSkipped(t
 
 func TestProjectedAssistantMessageClearsStreamingTextWhenSkippedCommitMatchesLiveStream(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.transcriptEntries = []tui.TranscriptEntry{{Role: "assistant", Text: "final"}}
 	m.transcriptRevision = 5
 	m.transcriptTotalEntries = len(m.transcriptEntries)

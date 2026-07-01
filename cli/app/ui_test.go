@@ -103,7 +103,7 @@ func TestCustomKeyCtrlEnterXtermVariantQueuesAndStartsSubmission(t *testing.T) {
 
 func TestCustomKeyCtrlEnterQueuesPostTurnWhenBusy(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.input = "echo hi"
 
 	next, _ := m.Update(customKeyMsg{Kind: customKeyCtrlEnter})
@@ -554,7 +554,7 @@ func TestAskFreeformCtrlUEditingMatchesMainInput(t *testing.T) {
 func TestApprovalAskUsesSingleDenyOptionAndTabCommentary(t *testing.T) {
 	_, eng := newAppRuntimeEngine(t, statusLineFakeClient{}, runtime.Config{ContextWindowTokens: 400_000})
 	m := newProjectedEngineUIModel(eng)
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	reply := make(chan askReply, 1)
 	event := askEvent{req: clientui.PendingPromptEvent{Question: "Approve?", Approval: true, ApprovalOptions: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: clientui.ApprovalDecisionAllowSession, Label: "Allow for this session"}, {Decision: clientui.ApprovalDecisionDeny, Label: "Deny"}}}, reply: reply}
 

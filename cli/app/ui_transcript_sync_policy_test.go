@@ -22,7 +22,7 @@ func TestRuntimeSyncPolicyDefersRoutineCommittedUpdateWhileStreaming(t *testing.
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.sawAssistantDelta = true
 	m.forwardToView(tui.StreamAssistantMsg{Delta: "live assistant"})
 
@@ -95,7 +95,7 @@ func TestRuntimeSyncPolicyAllowsRecoveryWhileStreaming(t *testing.T) {
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.sawAssistantDelta = true
 	m.forwardToView(tui.StreamAssistantMsg{Delta: "live assistant"})
 
@@ -132,7 +132,7 @@ func TestRuntimeSyncPolicyDropsRoutineTranscriptResponseWhenBlockerAppears(t *te
 	}
 	msg := cmd().(runtimeTranscriptRefreshedMsg)
 
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	if !m.shouldDeferRuntimeTranscriptSync(m.runtimeTranscriptActiveRequest) {
 		t.Fatalf("test fixture did not block active transcript request: busy=%t class=%d req=%+v", m.isBusy(), m.runtimeTranscriptActiveRequest.class, m.runtimeTranscriptActiveRequest)
 	}
@@ -160,10 +160,10 @@ func TestRuntimeSyncPolicyRunsWorktreeMutationRefreshWhileBusy(t *testing.T) {
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
 	client.mainView = clientui.RuntimeMainView{
-		Session:         clientui.RuntimeSessionView{SessionID: "session-1", SessionName: "server-name"},
-		ExternalRuntime: &clientui.ExternalRuntimeStatus{State: clientui.ExternalRuntimeStateRegisteredIdle, QueueAccepting: true},
+		Session:  clientui.RuntimeSessionView{SessionID: "session-1", SessionName: "server-name"},
+		Activity: clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true}),
 	}
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 
 	cmd := m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd
 	if cmd == nil {
@@ -187,7 +187,7 @@ func TestRuntimeSyncPolicyDefersAndReleasesMainViewRefresh(t *testing.T) {
 	client.mainView = clientui.RuntimeMainView{
 		Session: clientui.RuntimeSessionView{SessionID: "session-1", SessionName: "server-name"},
 	}
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 
 	if cmd := m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseManual)).cmd; cmd != nil {
 		t.Fatalf("expected main-view refresh deferred while streaming/busy, got %T", cmd)
@@ -199,7 +199,7 @@ func TestRuntimeSyncPolicyDefersAndReleasesMainViewRefresh(t *testing.T) {
 		t.Fatal("expected pending main-view refresh")
 	}
 
-	m.setBusy(false)
+	m.setRuntimeActivityBusyForTest(false)
 	msgs := collectCmdMessages(t, m.releaseDeferredRuntimeSyncs())
 	refresh, ok := findRuntimeMainViewRefreshMsg(msgs)
 	if !ok {
@@ -228,7 +228,7 @@ func TestRuntimeSyncPolicyDropsRoutineMainViewResponseWhenBlockerAppears(t *test
 	}
 	msg := cmd().(runtimeMainViewRefreshedMsg)
 
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	if !m.shouldDeferRuntimeMainViewRefresh(m.runtimeMainViewActiveRequest) {
 		t.Fatalf("test fixture did not block active main-view request: busy=%t class=%d req=%+v", m.isBusy(), m.runtimeMainViewActiveRequest.class, m.runtimeMainViewActiveRequest)
 	}
@@ -338,7 +338,7 @@ func TestStartupUpdateNoticeDefersMainViewRefreshWhenBlocked(t *testing.T) {
 		},
 		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
 	}
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 
 	if cmd := m.startupUpdateNoticeCmd(clientui.UpdateStatus{}); cmd != nil {
 		t.Fatalf("expected blocked startup update refresh to defer, got %T", cmd)
@@ -350,7 +350,7 @@ func TestStartupUpdateNoticeDefersMainViewRefreshWhenBlocked(t *testing.T) {
 		t.Fatal("expected pending startup update main-view refresh while blocked")
 	}
 
-	m.setBusy(false)
+	m.setRuntimeActivityBusyForTest(false)
 	msgs := collectCmdMessages(t, m.releaseDeferredRuntimeSyncs())
 	refresh, ok := findRuntimeMainViewRefreshMsg(msgs)
 	if !ok {
@@ -372,7 +372,7 @@ func TestStartupUpdateNoticePendingRefreshSurvivesWorktreeRefreshCoalescing(t *t
 		},
 		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
 	}
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 
 	if cmd := m.startupUpdateNoticeCmd(clientui.UpdateStatus{}); cmd != nil {
 		t.Fatalf("expected blocked startup update refresh to defer, got %T", cmd)
@@ -387,7 +387,7 @@ func TestStartupUpdateNoticePendingRefreshSurvivesWorktreeRefreshCoalescing(t *t
 		t.Fatalf("coalesced pending main-view cause = %q, want startup_update", m.runtimeMainViewPending.cause)
 	}
 
-	m.setBusy(false)
+	m.setRuntimeActivityBusyForTest(false)
 	msgs := collectCmdMessages(t, m.releaseDeferredRuntimeSyncs())
 	refresh, ok := findRuntimeMainViewRefreshMsg(msgs)
 	if !ok {

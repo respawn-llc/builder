@@ -451,15 +451,7 @@ func (c uiInputController) handleStatusOverlayKey(msg tea.KeyMsg) (tea.Model, te
 	m := c.model
 	switch strings.ToLower(msg.String()) {
 	case "ctrl+c":
-		if m.isBusy() {
-			return m, c.interruptBusyRuntime()
-		}
-		m.exitAction = UIActionExit
-		if overlayCmd := m.restoreTranscriptSurface(); overlayCmd != nil {
-			m.closeStatusOverlay()
-			return m, tea.Sequence(overlayCmd, tea.Quit)
-		}
-		return m, tea.Quit
+		return c.handleRuntimeCtrlC(c.closeTranscriptSurfaceForRuntimeCtrlC(m.closeStatusOverlay))
 	case "esc", "q":
 		return m, c.stopStatusFlowCmd()
 	case "up":

@@ -27,8 +27,9 @@ type SessionLifecycleService struct {
 }
 
 type sessionDraftMemoRequest struct {
-	SessionID string
-	Input     string
+	SessionID       string
+	Input           string
+	RecoveryBuffers []serverapi.SessionDraftRecoveryBuffer
 }
 
 type sessionTransitionMemoRequest struct {
@@ -125,20 +126,27 @@ func (s *SessionLifecycleService) GetInitialInput(_ context.Context, req servera
 	if err != nil {
 		return serverapi.SessionInitialInputResponse{}, err
 	}
-	return serverapi.SessionInitialInputResponse{Input: initialSessionInput(store, req.TransitionInput)}, nil
+	if store == nil {
+		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
+	}
+	meta := store.Meta()
+	return serverapi.SessionInitialInputResponse{
+		Input:           initialSessionInput(store, req.TransitionInput),
+		RecoveryBuffers: sessionRecoveryBuffersToAPI(meta.InputDraftRecoveryBuffers),
+	}, nil
 }
 
 func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionPersistInputDraftResponse{}, err
 	}
-	memoReq := sessionDraftMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Input: req.Input}
+	memoReq := sessionDraftMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Input: req.Input, RecoveryBuffers: req.RecoveryBuffers}
 	return s.drafts.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionDraftMemoRequest, func(context.Context) (serverapi.SessionPersistInputDraftResponse, error) {
 		store, err := s.openStore(req.SessionID)
 		if err != nil {
 			return serverapi.SessionPersistInputDraftResponse{}, err
 		}
-		if err := persistSessionInputDraft(store, req.Input); err != nil {
+		if err := persistSessionInputDraftRecovery(store, req.Input, req.RecoveryBuffers); err != nil {
 			return serverapi.SessionPersistInputDraftResponse{}, err
 		}
 		return serverapi.SessionPersistInputDraftResponse{}, nil
@@ -196,7 +204,15 @@ func sameSessionTransitionMemoRequest(a sessionTransitionMemoRequest, b sessionT
 }
 
 func sameSessionDraftMemoRequest(a sessionDraftMemoRequest, b sessionDraftMemoRequest) bool {
-	return a.SessionID == b.SessionID && a.Input == b.Input
+	if a.SessionID != b.SessionID || a.Input != b.Input || len(a.RecoveryBuffers) != len(b.RecoveryBuffers) {
+		return false
+	}
+	for i := range a.RecoveryBuffers {
+		if a.RecoveryBuffers[i] != b.RecoveryBuffers[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {

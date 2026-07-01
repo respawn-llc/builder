@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"core/server/runtime"
+	"core/server/runtimeops"
 	"core/server/session"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
@@ -23,10 +24,6 @@ type RuntimeResolver interface {
 	ResolveRuntime(ctx context.Context, sessionID string) (*runtime.Engine, error)
 }
 
-type ExternalRuntimeStatusResolver interface {
-	ExternalRuntimeStatus(sessionID string) clientui.ExternalRuntimeStatus
-}
-
 type ExecutionTargetResolver interface {
 	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
 }
@@ -38,6 +35,7 @@ type UpdateStatusProvider interface {
 type Service struct {
 	snapshots        SessionSnapshotSource
 	updates          UpdateStatusProvider
+	operations       *runtimeops.Coordinator
 	cacheWarningMu   sync.RWMutex
 	cacheWarningMode config.CacheWarningMode
 }
@@ -45,6 +43,7 @@ type Service struct {
 func NewService(sessions SessionStoreResolver, runtimes RuntimeResolver, targets ExecutionTargetResolver) *Service {
 	svc := &Service{
 		cacheWarningMode: config.CacheWarningModeDefault,
+		operations:       runtimeops.NewCoordinator(),
 	}
 	baseSnapshots := newResolvedSessionSnapshotSource(sessions, runtimes, svc.cacheWarningModeValue)
 	svc.snapshots = newEnrichedSessionSnapshotSource(baseSnapshots, targets, func() UpdateStatusProvider {
@@ -54,6 +53,17 @@ func NewService(sessions SessionStoreResolver, runtimes RuntimeResolver, targets
 		return svc.updates
 	})
 	return svc
+}
+
+func (s *Service) WithOperationCoordinator(coordinator *runtimeops.Coordinator) *Service {
+	if s == nil {
+		return nil
+	}
+	if coordinator == nil {
+		coordinator = runtimeops.NewCoordinator()
+	}
+	s.operations = coordinator
+	return s
 }
 
 func (s *Service) WithCacheWarningMode(mode config.CacheWarningMode) *Service {
@@ -162,13 +172,16 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionMainViewResponse{}, err
 	}
-	snapshot, err := s.resolveSnapshot(ctx, req.SessionID)
+	snapshot, err := s.resolveSnapshot(ctx, req.SessionID, req.PendingOperationRefs)
 	if err != nil {
 		return serverapi.SessionMainViewResponse{}, err
 	}
 	view, err := snapshot.MainView(ctx)
 	if err != nil {
 		return serverapi.SessionMainViewResponse{}, err
+	}
+	if len(view.InputReconciliation.Operations) == 0 && len(req.PendingOperationRefs) > 0 {
+		view.InputReconciliation = s.operations.Snapshot(strings.TrimSpace(req.SessionID), view.Version, req.PendingOperationRefs)
 	}
 	return serverapi.SessionMainViewResponse{MainView: view}, nil
 }
@@ -178,7 +191,7 @@ func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.Se
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
 	pageReq := clientui.TranscriptPageRequest{Cursor: req.Cursor, NewerCursor: req.NewerCursor}
-	snapshot, err := s.resolveSnapshot(ctx, req.SessionID)
+	snapshot, err := s.resolveSnapshot(ctx, req.SessionID, nil)
 	if err != nil {
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
@@ -193,7 +206,7 @@ func (s *Service) GetSessionCommittedTranscriptSuffix(ctx context.Context, req s
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionCommittedTranscriptSuffixResponse{}, err
 	}
-	snapshot, err := s.resolveSnapshot(ctx, req.SessionID)
+	snapshot, err := s.resolveSnapshot(ctx, req.SessionID, nil)
 	if err != nil {
 		return serverapi.SessionCommittedTranscriptSuffixResponse{}, err
 	}
@@ -204,11 +217,11 @@ func (s *Service) GetSessionCommittedTranscriptSuffix(ctx context.Context, req s
 	return serverapi.SessionCommittedTranscriptSuffixResponse{Suffix: suffix}, nil
 }
 
-func (s *Service) resolveSnapshot(ctx context.Context, sessionID string) (SessionSnapshot, error) {
+func (s *Service) resolveSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error) {
 	if s == nil || s.snapshots == nil {
 		return nil, errSessionStoreResolverRequired
 	}
-	return s.snapshots.ResolveSessionSnapshot(ctx, sessionID)
+	return s.snapshots.ResolveSessionSnapshot(ctx, sessionID, refs)
 }
 
 var _ servicecontract.SessionViewService = (*Service)(nil)
