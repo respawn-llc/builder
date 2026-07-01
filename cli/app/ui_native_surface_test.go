@@ -11,6 +11,7 @@ import (
 
 	"core/cli/tui"
 	"core/shared/clientui"
+	"core/shared/invariant"
 
 	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -207,6 +208,100 @@ func TestNativeScratchPageAppendsDuplicateLookingActiveSegment(t *testing.T) {
 	}
 	if !strings.Contains(plain, "fresh") {
 		t.Fatalf("scratch append missing fresh row, got %q", plain)
+	}
+}
+
+func TestNativeInvariantPanicKeepsOngoingRendererFromReplayingTranscript(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	m.rendererOutputGate = newUIRendererOutputGateState()
+	m.syncRendererOutputGate()
+
+	entries := []tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleUser,
+		Text:      "already emitted",
+	}}
+	if err := m.emitNativeCommittedEntries(entries, false); err != nil {
+		t.Fatalf("emit native entries: %v", err)
+	}
+	m.transcriptEntries = entries
+
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.nativeInvariantViolationCmd("hydrate committed transcript", errors.New("committed transcript divergence"))
+	})
+	if !m.rendererOutputGate.shouldDrop([]byte("ongoing renderer frame")) {
+		t.Fatal("fatal native invariant must keep ongoing normal-buffer renderer output suppressed")
+	}
+	if rendered := stripANSIForNativeSpecTest(m.View()); strings.Contains(rendered, "already emitted") {
+		t.Fatalf("fatal native invariant replayed emitted transcript through renderer: %q", rendered)
+	}
+}
+
+func TestNativeOwnerAbsentAfterImmutableOutputSuppressesOngoingRendererReplay(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	m.rendererOutputGate = newUIRendererOutputGateState()
+	m.syncRendererOutputGate()
+
+	entries := []tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleUser,
+		Text:      "already emitted",
+	}}
+	if err := m.emitNativeCommittedEntries(entries, false); err != nil {
+		t.Fatalf("emit native entries: %v", err)
+	}
+	m.transcriptEntries = entries
+	m.dropNativeSurface()
+	if m.nativeSurfaceEnabled() {
+		t.Fatal("expected native owner absent after drop")
+	}
+	if !m.rendererOutputGate.shouldDrop([]byte("ongoing renderer frame")) {
+		t.Fatal("renderer gate must remain suppressed after immutable native output loses its owner")
+	}
+	if rendered := stripANSIForNativeSpecTest(m.View()); strings.Contains(rendered, "already emitted") || strings.TrimSpace(rendered) != "" {
+		t.Fatalf("absent native owner replayed emitted transcript through renderer: %q", rendered)
+	}
+}
+
+func TestNativeOwnerAbsentAfterImmutableOutputStillPanicsOnCommittedDivergence(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModelWithClient(&out, &runtimeControlFakeClient{})
+	entries := []tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleUser,
+		Text:      "already emitted",
+	}}
+	if err := m.emitNativeCommittedEntries(entries, false); err != nil {
+		t.Fatalf("emit native entries: %v", err)
+	}
+	m.transcriptEntries = entries
+	m.dropNativeSurface()
+	if m.nativeSurfaceConfigured() {
+		t.Fatal("expected native owner absent after drop")
+	}
+
+	diagnostic := assertNativeTranscriptInvariantPanic(t, func() {
+		m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+			Kind:                       clientui.EventAssistantMessage,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         11,
+			CommittedEntryStartSet:     true,
+			CommittedEntryStart:        2,
+			CommittedEntryCount:        3,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  "after gap",
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		})
+	})
+	if got := len(m.transcriptEntries); got != 1 {
+		t.Fatalf("expected transcript entries unchanged, got %d", got)
+	}
+	if diagnostic.Fields[invariant.FieldEventKind] == "" || diagnostic.Fields[invariant.FieldTranscriptState] == "" {
+		t.Fatalf("owner-absent panic diagnostic missing event/state fields: %+v", diagnostic)
 	}
 }
 
@@ -584,7 +679,7 @@ func TestNativeAssistantFinalizerMismatchFailsFast(t *testing.T) {
 	}
 }
 
-func TestNativeAssistantFinalizerMismatchQuitsBeforeTranscriptMutation(t *testing.T) {
+func TestNativeAssistantFinalizerMismatchPanicsBeforeTranscriptMutation(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
 	m.appendActiveAssistantStreamDelta("step-1", "hello")
@@ -592,38 +687,27 @@ func TestNativeAssistantFinalizerMismatchQuitsBeforeTranscriptMutation(t *testin
 		t.Fatalf("stream assistant delta: %v", err)
 	}
 
-	cmd, mutated, needsHydration, fatal := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
-		Kind:                       clientui.EventAssistantMessage,
-		StepID:                     "step-1",
-		CommittedTranscriptChanged: true,
-		CommittedEntryStartSet:     true,
-		CommittedEntryStart:        0,
-		CommittedEntryCount:        1,
-		TranscriptEntries: []clientui.ChatEntry{{
-			Role:  "assistant",
-			Text:  "goodbye",
-			Phase: string(clientui.MessagePhaseFinal),
-		}},
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     "step-1",
+			CommittedTranscriptChanged: true,
+			CommittedEntryStartSet:     true,
+			CommittedEntryStart:        0,
+			CommittedEntryCount:        1,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  "goodbye",
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		})
 	})
-	if !fatal || mutated || needsHydration {
-		t.Fatalf("expected mismatch to stop before transcript mutation, fatal=%t mutated=%t needsHydration=%t", fatal, mutated, needsHydration)
-	}
 	if len(m.transcriptEntries) != 0 {
 		t.Fatalf("expected transcript entries unchanged, got %d", len(m.transcriptEntries))
 	}
-	msgs := collectCmdMessages(t, cmd)
-	quit := false
-	for _, msg := range msgs {
-		if _, ok := msg.(tea.QuitMsg); ok {
-			quit = true
-		}
-	}
-	if !quit {
-		t.Fatalf("expected finalizer mismatch to quit, got %#v", msgs)
-	}
 }
 
-func TestNativeAssistantFinalizerMismatchDebugFalseDropsNativeAndLogs(t *testing.T) {
+func TestNativeAssistantFinalizerMismatchDiagnosticModePanicsBeforeTranscriptMutation(t *testing.T) {
 	t.Setenv("KENT_DEBUG", "false")
 	t.Setenv("KENT_INVARIANT_MODE", "")
 	logger := &testUILogger{}
@@ -634,43 +718,30 @@ func TestNativeAssistantFinalizerMismatchDebugFalseDropsNativeAndLogs(t *testing
 		t.Fatalf("stream assistant delta: %v", err)
 	}
 
-	cmd, mutated, needsHydration, fatal := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
-		Kind:                       clientui.EventAssistantMessage,
-		StepID:                     "step-1",
-		CommittedTranscriptChanged: true,
-		CommittedEntryStartSet:     true,
-		CommittedEntryStart:        0,
-		CommittedEntryCount:        1,
-		TranscriptEntries: []clientui.ChatEntry{{
-			Role:  "assistant",
-			Text:  "goodbye",
-			Phase: string(clientui.MessagePhaseFinal),
-		}},
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     "step-1",
+			CommittedTranscriptChanged: true,
+			CommittedEntryStartSet:     true,
+			CommittedEntryStart:        0,
+			CommittedEntryCount:        1,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  "goodbye",
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		})
 	})
-	if fatal || mutated || needsHydration {
-		t.Fatalf("expected diagnostic mismatch to drop native without mutating, fatal=%t mutated=%t needsHydration=%t", fatal, mutated, needsHydration)
-	}
 	if len(m.transcriptEntries) != 0 {
 		t.Fatalf("expected transcript entries unchanged after prefix mismatch, got %+v", m.transcriptEntries)
-	}
-	if m.nativeSurface != nil {
-		t.Fatal("expected native surface dropped after release-mode invariant")
-	}
-	if strings.TrimSpace(m.transientStatus) != "" || m.nativeLiveAreaError != nil {
-		t.Fatalf("expected no statusline/native error spam, status=%q native_err=%v", m.transientStatus, m.nativeLiveAreaError)
-	}
-	msgs := collectCmdMessages(t, cmd)
-	for _, msg := range msgs {
-		if _, ok := msg.(tea.QuitMsg); ok {
-			t.Fatalf("diagnostic native invariant must not quit, got %#v", msgs)
-		}
 	}
 	if len(logger.lines) == 0 {
 		t.Fatalf("expected native invariant diagnostics in TUI log, got %#v", logger.lines)
 	}
 }
 
-func TestNativeNewAssistantStepDuringActiveStreamQuitsBeforeStreamMutation(t *testing.T) {
+func TestNativeNewAssistantStepDuringActiveStreamPanicsBeforeStreamMutation(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
 	m.appendActiveAssistantStreamDelta("step-1", "hello")
@@ -678,22 +749,14 @@ func TestNativeNewAssistantStepDuringActiveStreamQuitsBeforeStreamMutation(t *te
 		t.Fatalf("stream assistant delta: %v", err)
 	}
 
-	_, cmd := m.handleRuntimeEventBatch([]clientui.Event{{
-		Kind:                clientui.EventAssistantDelta,
-		StepID:              "step-2",
-		AssistantDelta:      "new step",
-		AssistantDeltaPhase: clientui.MessagePhaseFinal,
-	}})
-	msgs := collectCmdMessages(t, cmd)
-	quit := false
-	for _, msg := range msgs {
-		if _, ok := msg.(tea.QuitMsg); ok {
-			quit = true
-		}
-	}
-	if !quit {
-		t.Fatalf("expected new-step active stream violation to quit, got %#v", msgs)
-	}
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.handleRuntimeEventBatch([]clientui.Event{{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              "step-2",
+			AssistantDelta:      "new step",
+			AssistantDeltaPhase: clientui.MessagePhaseFinal,
+		}})
+	})
 	if got := m.activeAssistantStreamText(); got != "hello" {
 		t.Fatalf("expected active stream source unchanged after fatal new-step violation, got %q", got)
 	}
@@ -702,7 +765,7 @@ func TestNativeNewAssistantStepDuringActiveStreamQuitsBeforeStreamMutation(t *te
 	}
 }
 
-func TestNativeNewAssistantStepWithUnknownActiveStepQuitsBeforeStreamMutation(t *testing.T) {
+func TestNativeNewAssistantStepWithUnknownActiveStepPanicsBeforeStreamMutation(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
 	m.appendActiveAssistantStreamDelta("", "hello")
@@ -710,22 +773,14 @@ func TestNativeNewAssistantStepWithUnknownActiveStepQuitsBeforeStreamMutation(t 
 		t.Fatalf("stream assistant delta: %v", err)
 	}
 
-	_, cmd := m.handleRuntimeEventBatch([]clientui.Event{{
-		Kind:                clientui.EventAssistantDelta,
-		StepID:              "step-2",
-		AssistantDelta:      "new step",
-		AssistantDeltaPhase: clientui.MessagePhaseFinal,
-	}})
-	msgs := collectCmdMessages(t, cmd)
-	quit := false
-	for _, msg := range msgs {
-		if _, ok := msg.(tea.QuitMsg); ok {
-			quit = true
-		}
-	}
-	if !quit {
-		t.Fatalf("expected unknown-step active stream violation to quit, got %#v", msgs)
-	}
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.handleRuntimeEventBatch([]clientui.Event{{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              "step-2",
+			AssistantDelta:      "new step",
+			AssistantDeltaPhase: clientui.MessagePhaseFinal,
+		}})
+	})
 	if got := m.activeAssistantStreamText(); got != "hello" {
 		t.Fatalf("expected unknown-step stream source unchanged after fatal violation, got %q", got)
 	}
@@ -734,7 +789,7 @@ func TestNativeNewAssistantStepWithUnknownActiveStepQuitsBeforeStreamMutation(t 
 	}
 }
 
-func TestNativeNonGapCommittedDivergenceQuitsBeforeHydration(t *testing.T) {
+func TestNativeNonGapCommittedDivergencePanicsBeforeHydration(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, &runtimeControlFakeClient{})
 	m.nativeImmutableTranscriptWritten = true
@@ -751,41 +806,27 @@ func TestNativeNonGapCommittedDivergenceQuitsBeforeHydration(t *testing.T) {
 		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
 	})
 
-	cmd, mutated, needsHydration, fatal := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
-		Kind:                       clientui.EventAssistantMessage,
-		CommittedTranscriptChanged: true,
-		TranscriptRevision:         11,
-		CommittedEntryStartSet:     true,
-		CommittedEntryStart:        2,
-		CommittedEntryCount:        3,
-		TranscriptEntries: []clientui.ChatEntry{{
-			Role:  "assistant",
-			Text:  "after gap",
-			Phase: string(clientui.MessagePhaseFinal),
-		}},
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+			Kind:                       clientui.EventAssistantMessage,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         11,
+			CommittedEntryStartSet:     true,
+			CommittedEntryStart:        2,
+			CommittedEntryCount:        3,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  "after gap",
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		})
 	})
-	if !fatal || mutated || needsHydration {
-		t.Fatalf("expected non-gap divergence to stop before mutation/hydration, fatal=%t mutated=%t needsHydration=%t", fatal, mutated, needsHydration)
-	}
 	if got := len(m.transcriptEntries); got != 1 {
 		t.Fatalf("expected transcript entries unchanged, got %d", got)
 	}
-	msgs := collectCmdMessages(t, cmd)
-	quit := false
-	for _, msg := range msgs {
-		if _, ok := msg.(tea.QuitMsg); ok {
-			quit = true
-		}
-		if _, ok := msg.(runtimeTranscriptRefreshedMsg); ok {
-			t.Fatalf("non-gap native divergence requested hydration instead of failing fast: %#v", msgs)
-		}
-	}
-	if !quit {
-		t.Fatalf("expected non-gap native divergence to quit, got %#v", msgs)
-	}
 }
 
-func TestNativeNonGapCommittedDivergenceDebugFalseHydratesWithoutStatusSpam(t *testing.T) {
+func TestNativeNonGapCommittedDivergenceDiagnosticModePanicsWithoutHydration(t *testing.T) {
 	t.Setenv("KENT_DEBUG", "false")
 	t.Setenv("KENT_INVARIANT_MODE", "")
 	logger := &testUILogger{}
@@ -805,44 +846,68 @@ func TestNativeNonGapCommittedDivergenceDebugFalseHydratesWithoutStatusSpam(t *t
 		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
 	})
 
-	cmd, mutated, needsHydration, fatal := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
-		Kind:                       clientui.EventAssistantMessage,
-		CommittedTranscriptChanged: true,
-		TranscriptRevision:         11,
-		CommittedEntryStartSet:     true,
-		CommittedEntryStart:        2,
-		CommittedEntryCount:        3,
-		TranscriptEntries: []clientui.ChatEntry{{
-			Role:  "assistant",
-			Text:  "after gap",
-			Phase: string(clientui.MessagePhaseFinal),
-		}},
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+			Kind:                       clientui.EventAssistantMessage,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         11,
+			CommittedEntryStartSet:     true,
+			CommittedEntryStart:        2,
+			CommittedEntryCount:        3,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  "after gap",
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		})
 	})
-	if fatal || mutated || !needsHydration {
-		t.Fatalf("expected release divergence to request hydration after native drop, fatal=%t mutated=%t needsHydration=%t", fatal, mutated, needsHydration)
-	}
-	if m.nativeSurface != nil {
-		t.Fatal("expected native surface dropped after release-mode divergence")
-	}
-	if strings.TrimSpace(m.transientStatus) != "" || m.nativeLiveAreaError != nil {
-		t.Fatalf("expected no statusline/native error spam, status=%q native_err=%v", m.transientStatus, m.nativeLiveAreaError)
-	}
-	msgs := collectCmdMessages(t, cmd)
-	quit := false
-	refresh := false
-	for _, msg := range msgs {
-		if _, ok := msg.(tea.QuitMsg); ok {
-			quit = true
-		}
-		if _, ok := msg.(runtimeTranscriptRefreshedMsg); ok {
-			refresh = true
-		}
-	}
-	if quit || !refresh {
-		t.Fatalf("expected hydration refresh without quit, got %#v", msgs)
+	if got := len(m.transcriptEntries); got != 1 {
+		t.Fatalf("expected transcript entries unchanged, got %d", got)
 	}
 	if len(logger.lines) == 0 {
 		t.Fatalf("expected native divergence diagnostics in TUI log, got %#v", logger.lines)
+	}
+}
+
+func TestNativeNonAppendReplacePanicsBeforeTranscriptMutation(t *testing.T) {
+	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, &runtimeControlFakeClient{})
+	m.nativeImmutableTranscriptWritten = true
+	m.transcriptEntries = []tui.TranscriptEntry{{
+		Committed: true,
+		Role:      tui.TranscriptRoleAssistant,
+		Text:      "seed",
+	}}
+	m.transcriptRevision = 10
+	m.transcriptTotalEntries = 1
+	m.forwardToView(tui.SetConversationMsg{
+		BaseOffset:   0,
+		TotalEntries: 1,
+		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
+	})
+
+	diagnostic := assertNativeTranscriptInvariantPanic(t, func() {
+		m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+			Kind:                       clientui.EventAssistantMessage,
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         11,
+			CommittedEntryStartSet:     true,
+			CommittedEntryStart:        0,
+			CommittedEntryCount:        1,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  "replacement",
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		})
+	})
+	if got := len(m.transcriptEntries); got != 1 {
+		t.Fatalf("expected transcript entries unchanged, got %d", got)
+	}
+	if got := m.transcriptEntries[0].Text; got != "seed" {
+		t.Fatalf("native replace invariant mutated transcript before panic, got %q", got)
+	}
+	if diagnostic.Fields[invariant.FieldEventKind] == "" || diagnostic.Fields[invariant.FieldTranscriptState] == "" {
+		t.Fatalf("native replace panic diagnostic missing event/state fields: %+v", diagnostic)
 	}
 }
 
@@ -863,30 +928,29 @@ func TestNativeNonGapCommittedDivergenceStopsRuntimeBatch(t *testing.T) {
 		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
 	})
 
-	result := m.runtimeAdapter().applyProjectedRuntimeEventsBatch([]clientui.Event{
-		{
-			Kind:                       clientui.EventAssistantMessage,
-			CommittedTranscriptChanged: true,
-			TranscriptRevision:         11,
-			CommittedEntryStartSet:     true,
-			CommittedEntryStart:        2,
-			CommittedEntryCount:        3,
-			TranscriptEntries: []clientui.ChatEntry{{
-				Role:  "assistant",
-				Text:  "after gap",
-				Phase: string(clientui.MessagePhaseFinal),
-			}},
-		},
-		{
-			Kind:                clientui.EventAssistantDelta,
-			StepID:              "later-step",
-			AssistantDelta:      "must not apply",
-			AssistantDeltaPhase: clientui.MessagePhaseFinal,
-		},
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.runtimeAdapter().applyProjectedRuntimeEventsBatch([]clientui.Event{
+			{
+				Kind:                       clientui.EventAssistantMessage,
+				CommittedTranscriptChanged: true,
+				TranscriptRevision:         11,
+				CommittedEntryStartSet:     true,
+				CommittedEntryStart:        2,
+				CommittedEntryCount:        3,
+				TranscriptEntries: []clientui.ChatEntry{{
+					Role:  "assistant",
+					Text:  "after gap",
+					Phase: string(clientui.MessagePhaseFinal),
+				}},
+			},
+			{
+				Kind:                clientui.EventAssistantDelta,
+				StepID:              "later-step",
+				AssistantDelta:      "must not apply",
+				AssistantDeltaPhase: clientui.MessagePhaseFinal,
+			},
+		})
 	})
-	if !result.fatal || result.transcriptMutated || result.awaitsHydration {
-		t.Fatalf("expected fatal batch stop without mutation/hydration, got %+v", result)
-	}
 	if got := len(m.transcriptEntries); got != 1 {
 		t.Fatalf("expected transcript entries unchanged, got %d", got)
 	}
@@ -896,56 +960,35 @@ func TestNativeNonGapCommittedDivergenceStopsRuntimeBatch(t *testing.T) {
 	if len(m.pendingRuntimeEvents) != 0 {
 		t.Fatalf("fatal native invariant must not enqueue hydration backlog, got %#v", m.pendingRuntimeEvents)
 	}
-	msgs := collectCmdMessages(t, result.cmd)
-	quit := false
-	for _, msg := range msgs {
-		if _, ok := msg.(tea.QuitMsg); ok {
-			quit = true
-		}
-	}
-	if !quit {
-		t.Fatalf("expected fatal batch stop to quit, got %#v", msgs)
-	}
 }
 
-func TestNativeAssistantFinalizerMismatchWithoutPhysicalStreamQuitsBeforeMutation(t *testing.T) {
+func TestNativeAssistantFinalizerMismatchWithoutPhysicalStreamPanicsBeforeMutation(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
 	m.appendActiveAssistantStreamDelta("step-1", "hello")
 	m.nativeAssistantStreamIncomplete = true
 
-	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
-		Kind:                       clientui.EventAssistantMessage,
-		StepID:                     "step-1",
-		CommittedTranscriptChanged: true,
-		TranscriptRevision:         1,
-		CommittedEntryStartSet:     true,
-		CommittedEntryStart:        0,
-		CommittedEntryCount:        1,
-		TranscriptEntries: []clientui.ChatEntry{{
-			Role:  "assistant",
-			Text:  "goodbye",
-			Phase: string(clientui.MessagePhaseFinal),
-		}},
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     "step-1",
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         1,
+			CommittedEntryStartSet:     true,
+			CommittedEntryStart:        0,
+			CommittedEntryCount:        1,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  "goodbye",
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		})
 	})
-	if !result.fatal || result.transcriptMutated || result.awaitsHydration {
-		t.Fatalf("expected non-physical stream finalizer mismatch to stop before mutation, got %+v", result)
-	}
 	if len(m.transcriptEntries) != 0 {
 		t.Fatalf("expected transcript entries unchanged, got %d", len(m.transcriptEntries))
 	}
 	if got := m.activeAssistantStreamText(); got != "hello" {
 		t.Fatalf("expected active assistant source preserved after fatal mismatch, got %q", got)
-	}
-	msgs := collectCmdMessages(t, result.cmd)
-	quit := false
-	for _, msg := range msgs {
-		if _, ok := msg.(tea.QuitMsg); ok {
-			quit = true
-		}
-	}
-	if !quit {
-		t.Fatalf("expected non-physical stream mismatch to quit, got %#v", msgs)
 	}
 }
 
@@ -1034,6 +1077,43 @@ func newNativeSurfaceSpecTestModelWithClient(out *bytes.Buffer, client clientui.
 		panic("failed to initialize native surface")
 	}
 	return m
+}
+
+func assertNativeTranscriptInvariantPanic(t *testing.T, run func()) invariant.Diagnostic {
+	t.Helper()
+	var diagnostic invariant.Diagnostic
+	panicked := false
+	func() {
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				return
+			}
+			panicked = true
+			var ok bool
+			diagnostic, ok = recovered.(invariant.Diagnostic)
+			if !ok {
+				t.Fatalf("panic payload = %T, want invariant.Diagnostic", recovered)
+			}
+			if diagnostic.Scope != invariant.ScopeNativeTranscript {
+				t.Fatalf("panic diagnostic scope = %q, want %q", diagnostic.Scope, invariant.ScopeNativeTranscript)
+			}
+			if diagnostic.Fields[invariant.FieldOperation] == "" {
+				t.Fatalf("panic diagnostic missing operation: %+v", diagnostic)
+			}
+			if diagnostic.Fields[invariant.FieldInvariantError] == "" {
+				t.Fatalf("panic diagnostic missing invariant error: %+v", diagnostic)
+			}
+			if diagnostic.Stack == "" {
+				t.Fatal("panic diagnostic missing stack")
+			}
+		}()
+		run()
+	}()
+	if !panicked {
+		t.Fatal("expected native transcript invariant panic")
+	}
+	return diagnostic
 }
 
 func stripANSIForNativeSpecTest(raw string) string {

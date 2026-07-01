@@ -205,12 +205,6 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 		if evt.RecoveryCause == clientui.TranscriptRecoveryCauseStreamGap {
 			return m.requestRuntimeNativeScratchTranscriptSync(), true, true, false
 		}
-		if err := errNativeStableNonAppend; err != nil {
-			m.logNativeTranscriptInvariant("steer committed transcript", err, state, evt, reduction)
-			if cmd, fatal := m.nativeInvariantViolationCmd("steer committed transcript", err); fatal {
-				return cmd, true, false, true
-			}
-		}
 	}
 	m.logProjectedTranscriptAppliedDiag(evt, plan, incomingCount, len(entries), startOffset, entries)
 	return nil, true, false, false

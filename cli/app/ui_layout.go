@@ -41,7 +41,15 @@ func (m *uiModel) syncRendererOutputGate() {
 		return
 	}
 	m.dropNativeSurfaceIfGeometryUnsupported()
-	m.rendererOutputGate.SetSuppressRendererWrites(m.surface() == uiSurfaceOngoingTranscript && m.nativeSurfaceEnabled())
+	m.rendererOutputGate.SetSuppressRendererWrites(m.nativeOngoingRendererOutputSuppressed())
+}
+
+func (m *uiModel) nativeOngoingRendererOutputSuppressed() bool {
+	if m == nil || m.surface() != uiSurfaceOngoingTranscript {
+		return false
+	}
+	return m.nativeSurfaceEnabled() ||
+		(m.nativeImmutableTranscriptWritten && !m.nativeSurfaceEnabled())
 }
 
 func (l uiViewLayout) render() string {
@@ -62,6 +70,9 @@ func (l uiViewLayout) composeStandardFrame(style uiStyles) (uiRenderFrame, bool)
 	}
 	if m.surface() == uiSurfaceOngoingTranscript && m.nativeSurfaceEnabled() {
 		return l.composeNativeLiveFrame(style, width, height), true
+	}
+	if m.nativeOngoingRendererOutputSuppressed() {
+		return uiRenderFrame{}, false
 	}
 	frame := uiRenderFrame{width: width, height: height, statusLine: l.renderStatusLine(width, style), padToHeight: true, tailOnly: true}
 	if m.surface() == uiSurfaceOngoingTranscript {
