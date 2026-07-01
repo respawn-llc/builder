@@ -8,6 +8,7 @@ import (
 	"core/cli/app/internal/runtimestate"
 	"core/cli/tui"
 	"core/shared/clientui"
+	"core/shared/invariant"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -470,7 +471,11 @@ func (m *uiModel) nativeFatalSurfaceErrorCmd(action string, err error) tea.Cmd {
 	if err == nil {
 		return nil
 	}
-	return sequenceCmds(m.nativeSurfaceErrorCmd(action, err), tea.Quit)
+	cmd := m.nativeSurfaceErrorCmd(action, err)
+	if invariant.NewPolicy().Mode() != invariant.ModePanic {
+		return cmd
+	}
+	return sequenceCmds(cmd, tea.Quit)
 }
 
 func (m *uiModel) nativeSurfaceDropErrorCmd(action string, err error) tea.Cmd {

@@ -458,6 +458,7 @@ func TestNativeAssistantFinalizerMismatchFailsFast(t *testing.T) {
 }
 
 func TestNativeAssistantFinalizerMismatchQuitsBeforeTranscriptMutation(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
 	m.appendActiveAssistantStreamDelta("step-1", "hello")
 	if _, err := m.streamNativeAssistantDelta("hello", clientui.MessagePhaseFinal); err != nil {
@@ -495,7 +496,44 @@ func TestNativeAssistantFinalizerMismatchQuitsBeforeTranscriptMutation(t *testin
 	}
 }
 
+func TestNativeAssistantFinalizerMismatchDebugFalseDoesNotQuit(t *testing.T) {
+	t.Setenv("KENT_DEBUG", "false")
+	t.Setenv("KENT_INVARIANT_MODE", "")
+	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
+	m.appendActiveAssistantStreamDelta("step-1", "hello")
+	if _, err := m.streamNativeAssistantDelta("hello", clientui.MessagePhaseFinal); err != nil {
+		t.Fatalf("stream assistant delta: %v", err)
+	}
+
+	cmd, mutated, needsHydration, fatal := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStartSet:     true,
+		CommittedEntryStart:        0,
+		CommittedEntryCount:        1,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "goodbye",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
+	})
+	if !fatal || mutated || needsHydration {
+		t.Fatalf("expected diagnostic mismatch to stop before transcript mutation, fatal=%t mutated=%t needsHydration=%t", fatal, mutated, needsHydration)
+	}
+	if len(m.transcriptEntries) != 0 {
+		t.Fatalf("expected transcript entries unchanged, got %d", len(m.transcriptEntries))
+	}
+	msgs := collectCmdMessages(t, cmd)
+	for _, msg := range msgs {
+		if _, ok := msg.(tea.QuitMsg); ok {
+			t.Fatalf("diagnostic native invariant must not quit, got %#v", msgs)
+		}
+	}
+}
+
 func TestNativeNewAssistantStepDuringActiveStreamQuitsBeforeStreamMutation(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
 	m.appendActiveAssistantStreamDelta("step-1", "hello")
 	if _, err := m.streamNativeAssistantDelta("hello", clientui.MessagePhaseFinal); err != nil {
@@ -527,6 +565,7 @@ func TestNativeNewAssistantStepDuringActiveStreamQuitsBeforeStreamMutation(t *te
 }
 
 func TestNativeNewAssistantStepWithUnknownActiveStepQuitsBeforeStreamMutation(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
 	m.appendActiveAssistantStreamDelta("", "hello")
 	if _, err := m.streamNativeAssistantDelta("hello", clientui.MessagePhaseFinal); err != nil {
@@ -558,6 +597,7 @@ func TestNativeNewAssistantStepWithUnknownActiveStepQuitsBeforeStreamMutation(t 
 }
 
 func TestNativeNonGapCommittedDivergenceQuitsBeforeHydration(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, &runtimeControlFakeClient{})
 	m.nativeImmutableTranscriptWritten = true
 	m.transcriptEntries = []tui.TranscriptEntry{{
@@ -608,6 +648,7 @@ func TestNativeNonGapCommittedDivergenceQuitsBeforeHydration(t *testing.T) {
 }
 
 func TestNativeNonGapCommittedDivergenceStopsRuntimeBatch(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, &runtimeControlFakeClient{})
 	m.nativeImmutableTranscriptWritten = true
 	m.transcriptEntries = []tui.TranscriptEntry{{
@@ -669,6 +710,7 @@ func TestNativeNonGapCommittedDivergenceStopsRuntimeBatch(t *testing.T) {
 }
 
 func TestNativeAssistantFinalizerMismatchWithoutPhysicalStreamQuitsBeforeMutation(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
 	m.appendActiveAssistantStreamDelta("step-1", "hello")
 	m.nativeAssistantStreamIncomplete = true
