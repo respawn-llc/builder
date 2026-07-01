@@ -926,6 +926,15 @@ func ProjectCommittedOngoingTranscript(entries []TranscriptEntry, theme string, 
 	})
 }
 
+// ProjectAppendOnlyCommittedOngoingTranscript renders committed rows for native
+// scrollback. Unlike the normal ongoing projection, it never withholds pending
+// tool calls or merges later tool results back into an earlier block.
+func ProjectAppendOnlyCommittedOngoingTranscript(entries []TranscriptEntry, key CommittedOngoingProjectionKey) TranscriptProjection {
+	key = normalizeCommittedOngoingProjectionKey(key, len(entries))
+	renderer := transcriptProjectionRenderer(key.Theme, key.Width, key.BaseOffset)
+	return projectAppendOnlyCommittedOngoingTranscriptWithRenderer(renderer, entries)
+}
+
 // Project returns the committed ongoing projection for entries, reusing a cached
 // projection when the key still matches.
 func (p *CommittedOngoingProjector) Project(entries []TranscriptEntry, key CommittedOngoingProjectionKey) TranscriptProjection {
@@ -992,6 +1001,22 @@ func projectCommittedOngoingTranscriptWithRenderer(renderer Model, entries []Tra
 		mode:             transcriptBlockModeOngoing,
 		includeStreaming: false,
 		applySelection:   true,
+	}))
+}
+
+func projectAppendOnlyCommittedOngoingTranscriptWithRenderer(renderer Model, entries []TranscriptEntry) TranscriptProjection {
+	committed := nonEmptyTranscriptEntries(entries)
+	if len(committed) == 0 {
+		return TranscriptProjection{}
+	}
+	renderer.transcriptInput.Entries = append([]TranscriptEntry(nil), committed...)
+	renderer.transcriptInput.Ongoing = ""
+	renderer.transcriptInput.StreamingReasoning = nil
+	return projectionFromOngoingBlocks(renderer.buildTranscriptBlocks(transcriptBlockOptions{
+		mode:             transcriptBlockModeOngoing,
+		includeStreaming: false,
+		applySelection:   true,
+		appendOnly:       true,
 	}))
 }
 
