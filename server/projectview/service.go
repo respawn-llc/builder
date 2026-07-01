@@ -327,11 +327,17 @@ func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.
 	if err != nil {
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
 	}
-	release := s.blockSessionRuns(sessionIDs)
-	defer release()
 	preflightBlockers, err := s.workspaceActiveSessionBlockers(ctx, sessionIDs)
 	if err != nil {
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+	}
+	if len(preflightBlockers) == 0 {
+		release := s.blockSessionRuns(sessionIDs)
+		defer release()
+		preflightBlockers, err = s.workspaceActiveSessionBlockers(ctx, sessionIDs)
+		if err != nil {
+			return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+		}
 	}
 	blockers, err := s.metadata.UnlinkProjectWorkspaceWithPreflightBlockers(ctx, req.ProjectID, req.WorkspaceID, preflightBlockers)
 	if err != nil {
@@ -377,11 +383,17 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 	if err != nil {
 		return serverapi.ProjectDeleteResponse{}, err
 	}
-	release := s.blockSessionRuns(sessionIDs)
-	defer release()
 	preflightBlockers, err := s.projectActiveSessionBlockers(ctx, sessionIDs)
 	if err != nil {
 		return serverapi.ProjectDeleteResponse{}, err
+	}
+	if len(preflightBlockers) == 0 {
+		release := s.blockSessionRuns(sessionIDs)
+		defer release()
+		preflightBlockers, err = s.projectActiveSessionBlockers(ctx, sessionIDs)
+		if err != nil {
+			return serverapi.ProjectDeleteResponse{}, err
+		}
 	}
 	blockers, err := s.metadata.DeleteProjectWithPreflightBlockers(ctx, projectID, preflightBlockers, func(artifact metadata.ProjectSessionArtifact, remove bool) error {
 		return deleteSessionArtifact(s.metadata.PersistenceRoot(), projectID, artifact.ArtifactRelpath, remove)

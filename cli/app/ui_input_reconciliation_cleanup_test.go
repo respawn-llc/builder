@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/serverapi"
 )
 
 type cachedMainViewRuntimeClient struct {
@@ -260,6 +261,31 @@ func TestInterruptCleanupPreservesEvictedCompactionWithDiagnostic(t *testing.T) 
 	restore, ambiguous := m.shouldRestoreActiveSubmitAfterInterrupt()
 	if !restore || !ambiguous {
 		t.Fatalf("restore=%t ambiguous=%t, want conservative evicted preservation with diagnostic", restore, ambiguous)
+	}
+}
+
+func TestRuntimeOperationCanceledIsInterrupted(t *testing.T) {
+	if !isRuntimeOperationInterrupted(serverapi.ErrRuntimeOperationCanceled) {
+		t.Fatal("runtime operation cancellation sentinel must be handled as an interrupt")
+	}
+}
+
+func TestSubmittedTextNotRestoredAfterFlushedNonInterruptFailure(t *testing.T) {
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-1"}
+	m := modelWithActiveSubmitReconciliation(ref, clientui.RuntimeInputReconciliationCommitted)
+	m.activeSubmit.stepID = ""
+
+	if m.shouldRestoreSubmittedTextOnSubmitError(errors.New("provider failed after flush")) {
+		t.Fatal("non-interrupt error after runtime step flush restored already-committed text")
+	}
+}
+
+func TestSubmittedTextRestoredAfterExplicitFailedRestoreReconciliation(t *testing.T) {
+	ref := clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-1"}
+	m := modelWithActiveSubmitReconciliation(ref, clientui.RuntimeInputReconciliationFailedWithRestore)
+
+	if !m.shouldRestoreSubmittedTextOnSubmitError(errors.New("pre-submit compaction failed")) {
+		t.Fatal("non-interrupt error with failed-with-restore reconciliation did not restore text")
 	}
 }
 

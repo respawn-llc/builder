@@ -163,11 +163,15 @@ func (e *Engine) QueueAgentShellCompleteGoal(actor session.GoalActor) (session.G
 }
 
 func (e *Engine) QueueAgentShellCompleteGoalForStep(stepID string, actor session.GoalActor) (session.GoalState, bool, error) {
-	return e.queueGoalStatusForStep(strings.TrimSpace(stepID), session.GoalStatusComplete, actor)
+	return e.QueueGoalStatusForStep(stepID, session.GoalStatusComplete, actor)
 }
 
 func (e *Engine) QueueGoalStatusForActiveStep(status session.GoalStatus, actor session.GoalActor) (session.GoalState, bool, error) {
 	return e.queueGoalStatusForStep("", status, actor)
+}
+
+func (e *Engine) QueueGoalStatusForStep(stepID string, status session.GoalStatus, actor session.GoalActor) (session.GoalState, bool, error) {
+	return e.queueGoalStatusForStep(strings.TrimSpace(stepID), status, actor)
 }
 
 func (e *Engine) queueGoalStatusForStep(stepID string, status session.GoalStatus, actor session.GoalActor) (session.GoalState, bool, error) {

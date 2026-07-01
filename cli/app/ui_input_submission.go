@@ -102,7 +102,7 @@ func (c uiInputController) submitUserShellCmd(originalText, command string) tea.
 		}
 		err := m.submitRuntimeShell(context.Background(), clientui.RuntimeShellRequest{OperationRef: operationRef, Command: command})
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
+			if isRuntimeOperationInterrupted(err) {
 				return newSubmitDoneMsg(token, "", originalText, runtimeattach.ErrSubmissionInterrupted)
 			}
 			return newSubmitDoneMsg(token, "", originalText, err)
@@ -211,8 +211,8 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		return m, nil
 	}
 	m.observeRuntimeRequestResult(msg.err)
-	restoreSubmittedText := true
-	if msg.token != 0 && m.activeSubmit.restoreOnInterrupt {
+	restoreSubmittedText := msg.err != nil && (msg.token == 0 || m.shouldRestoreSubmittedTextOnSubmitError(msg.err))
+	if msg.token != 0 && msg.err != nil && isRuntimeOperationInterrupted(msg.err) && m.activeSubmit.restoreOnInterrupt {
 		restore, _ := m.shouldRestoreActiveSubmitAfterInterrupt()
 		restoreSubmittedText = restore
 	}
@@ -234,7 +234,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 			c.restoreSubmittedTextIntoInput(msg.submittedText)
 		}
 		c.restoreQueuedMessagesIntoInput()
-		if errors.Is(msg.err, runtimeattach.ErrSubmissionInterrupted) || errors.Is(msg.err, context.Canceled) {
+		if isRuntimeOperationInterrupted(msg.err) {
 			m.activity = uiActivityInterrupted
 			m.logf("step.interrupted")
 			m.layout().syncViewport()
@@ -347,7 +347,7 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 	if msg.err != nil {
 		restoreInjectedCmd := c.restorePendingInjectedIntoInput()
 		c.restoreQueuedMessagesIntoInput()
-		if errors.Is(msg.err, runtimeattach.ErrSubmissionInterrupted) || errors.Is(msg.err, context.Canceled) {
+		if isRuntimeOperationInterrupted(msg.err) {
 			m.activity = uiActivityInterrupted
 			m.logf("step.interrupted")
 			m.layout().syncViewport()
@@ -396,4 +396,42 @@ func (c uiInputController) notifyUserCompactionCompleted(origin uiCompactionOrig
 	case uiCompactionOriginManual, uiCompactionOriginQueued:
 		m.turnQueueHook.OnUserCompactionCompleted(queueDrained)
 	}
+}
+
+func (m *uiModel) shouldRestoreSubmittedTextOnSubmitError(err error) bool {
+	if m == nil || err == nil {
+		return false
+	}
+	if isRuntimeOperationInterrupted(err) {
+		return true
+	}
+	if !m.hasRuntimeClient() {
+		return true
+	}
+	ref := m.activeSubmit.operationRef
+	if ref.Validate() != nil {
+		return false
+	}
+	view := m.cachedRuntimeMainView()
+	for _, record := range view.InputReconciliation.Operations {
+		if record.OperationRef != ref {
+			continue
+		}
+		switch record.State {
+		case clientui.RuntimeInputReconciliationCanceledNotCommitted, clientui.RuntimeInputReconciliationFailedWithRestore:
+			return true
+		case clientui.RuntimeInputReconciliationCommitted,
+			clientui.RuntimeInputReconciliationSubmitted,
+			clientui.RuntimeInputReconciliationUnknown,
+			clientui.RuntimeInputReconciliationEvicted:
+			return false
+		}
+	}
+	return false
+}
+
+func isRuntimeOperationInterrupted(err error) bool {
+	return errors.Is(err, runtimeattach.ErrSubmissionInterrupted) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, serverapi.ErrRuntimeOperationCanceled)
 }

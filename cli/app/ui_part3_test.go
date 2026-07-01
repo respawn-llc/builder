@@ -921,7 +921,7 @@ func TestCtrlCInterruptControlErrorKeepsPendingCleanupForLaterRunState(t *testin
 	}
 }
 
-func TestActiveSubmitErrorRestoresQueuedSteeringInput(t *testing.T) {
+func TestRuntimeActiveSubmitErrorKeepsQueuedSteeringWithoutUnprovenSubmittedRestore(t *testing.T) {
 	_, eng := newAppRuntimeEngine(t, &runtimeAdapterFakeClient{}, runtime.Config{})
 
 	m := newProjectedEngineUIModel(eng)
@@ -951,12 +951,12 @@ func TestActiveSubmitErrorRestoresQueuedSteeringInput(t *testing.T) {
 	if len(updated.pendingInjected) != 0 {
 		t.Fatalf("expected pending injected follow-up cleared, got %+v", updated.pendingInjected)
 	}
-	if updated.input != "later\n\ncontinue" {
-		t.Fatalf("expected restored prompt and unlocked follow-up draft, got %q", updated.input)
+	if updated.input != "later" {
+		t.Fatalf("expected queued steering without unproven submitted-text restore, got %q", updated.input)
 	}
 }
 
-func TestActiveSubmitErrorRestoresQueuedSteeringAndDiscardsEngineQueue(t *testing.T) {
+func TestRuntimeActiveSubmitErrorRestoresQueuedSteeringAndDiscardsEngineQueue(t *testing.T) {
 	client := &requestCaptureFakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok"},
 		Usage:     llm.Usage{WindowTokens: 200000},
@@ -974,8 +974,8 @@ func TestActiveSubmitErrorRestoresQueuedSteeringAndDiscardsEngineQueue(t *testin
 	next, _ = updated.Update(submitDoneMsg{token: updated.activeSubmit.token, submittedText: "continue", err: errors.New("submit failed")})
 	updated = next.(*uiModel)
 
-	if updated.input != "later\n\ncontinue" {
-		t.Fatalf("expected restored steering and submit text in input, got %q", updated.input)
+	if updated.input != "later" {
+		t.Fatalf("expected queued steering without unproven submitted-text restore, got %q", updated.input)
 	}
 	if len(updated.pendingInjected) != 0 {
 		t.Fatalf("expected UI pending steering cleared after restore, got %+v", updated.pendingInjected)

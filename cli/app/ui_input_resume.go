@@ -47,7 +47,7 @@ func (c uiInputController) handleQueuedRuntimeWorkCheckDone(msg queuedRuntimeWor
 	m.observeRuntimeRequestResult(msg.err)
 	if msg.err != nil {
 		restoreCmd := c.restorePendingInjectedIntoInput()
-		if errors.Is(msg.err, runtimeattach.ErrSubmissionInterrupted) || errors.Is(msg.err, context.Canceled) {
+		if isRuntimeOperationInterrupted(msg.err) {
 			m.activity = uiActivityInterrupted
 			m.logf("step.interrupted")
 			m.layout().syncViewport()
@@ -98,7 +98,7 @@ func (c uiInputController) submitQueuedUserMessagesCmd() tea.Cmd {
 		}
 		msg, err := submitQueuedRuntimeUserMessages(context.Background(), client, operationRef)
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
+			if isRuntimeOperationInterrupted(err) {
 				return newSubmitDoneMsg(token, "", "", runtimeattach.ErrSubmissionInterrupted)
 			}
 			return newSubmitDoneMsg(token, "", "", err)

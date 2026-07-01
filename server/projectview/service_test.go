@@ -196,6 +196,34 @@ func TestServiceDeleteProjectBlocksActiveSession(t *testing.T) {
 	if deleted.Deleted || len(deleted.Blockers) != 1 || deleted.Blockers[0].Code != "active_sessions" {
 		t.Fatalf("delete response = %+v, want active_sessions blocker", deleted)
 	}
+	if len(runtimeState.blocked) != 0 {
+		t.Fatalf("active session delete blocked runtime starts before returning active blocker: %+v", runtimeState.blocked)
+	}
+	if _, err := os.Stat(created.Dir()); err != nil {
+		t.Fatalf("session dir should remain: %v", err)
+	}
+}
+
+func TestServiceDeleteProjectRechecksActiveSessionAfterRunBlocker(t *testing.T) {
+	store, cfg, binding := newProjectViewMetadataStore(t)
+	created := createProjectViewSession(t, store, cfg, binding.ProjectID, cfg.WorkspaceRoot, "starting")
+	runtimeState := &projectViewRuntimeState{
+		active:          map[string]bool{},
+		activateOnBlock: true,
+	}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
+
+	deleted, err := svc.DeleteProject(context.Background(), serverapi.ProjectDeleteRequest{ProjectID: binding.ProjectID})
+	if err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if deleted.Deleted || len(deleted.Blockers) != 1 || deleted.Blockers[0].Code != "active_sessions" {
+		t.Fatalf("delete response = %+v, want active_sessions blocker from post-block recheck", deleted)
+	}
+	if len(runtimeState.blocked) != 1 || runtimeState.blocked[0] != created.Meta().SessionID {
+		t.Fatalf("blocked sessions = %+v, want %q", runtimeState.blocked, created.Meta().SessionID)
+	}
 	if _, err := os.Stat(created.Dir()); err != nil {
 		t.Fatalf("session dir should remain: %v", err)
 	}
@@ -580,6 +608,35 @@ func TestMetadataServiceUnlinkWorkspaceBlocksActiveRuntimeSession(t *testing.T) 
 	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
 		t.Fatalf("unlink response = %+v, want active_sessions blocker", unlinked)
 	}
+	if len(runtimeState.blocked) != 0 {
+		t.Fatalf("active workspace unlink blocked runtime starts before returning active blocker: %+v", runtimeState.blocked)
+	}
+}
+
+func TestMetadataServiceUnlinkWorkspaceRechecksActiveSessionAfterRunBlocker(t *testing.T) {
+	store, cfg, binding := newProjectViewMetadataStore(t)
+	attached := attachProjectViewWorkspace(t, store, binding.ProjectID)
+	created := createProjectViewSession(t, store, cfg, binding.ProjectID, attached.CanonicalRoot, "starting-workspace")
+	runtimeState := &projectViewRuntimeState{
+		active:          map[string]bool{},
+		activateOnBlock: true,
+	}
+	svc := newProjectViewMetadataService(t, store, binding.ProjectID)
+	svc.WithRuntimeActivitySources(runtimeState, runtimeState)
+
+	unlinked, err := svc.UnlinkWorkspaceFromProject(context.Background(), serverapi.ProjectWorkspaceUnlinkRequest{
+		ProjectID:   binding.ProjectID,
+		WorkspaceID: attached.WorkspaceID,
+	})
+	if err != nil {
+		t.Fatalf("UnlinkWorkspaceFromProject: %v", err)
+	}
+	if unlinked.Unlinked || len(unlinked.Blockers) != 1 || unlinked.Blockers[0].Code != "active_sessions" {
+		t.Fatalf("unlink response = %+v, want active_sessions blocker from post-block recheck", unlinked)
+	}
+	if len(runtimeState.blocked) != 1 || runtimeState.blocked[0] != created.Meta().SessionID {
+		t.Fatalf("blocked sessions = %+v, want %q", runtimeState.blocked, created.Meta().SessionID)
+	}
 }
 
 func TestMetadataServiceUnlinkWorkspaceDoesNotDependOnSessionInFlightMetadata(t *testing.T) {
@@ -873,12 +930,21 @@ func createProjectViewSession(t testing.TB, store *metadata.Store, cfg config.Ap
 }
 
 type projectViewRuntimeState struct {
-	active  map[string]bool
-	blocked []string
+	active          map[string]bool
+	blocked         []string
+	activateOnBlock bool
 }
 
 func (s *projectViewRuntimeState) BlockSessionRuns(sessionIDs []string) func() {
 	s.blocked = append(s.blocked, sessionIDs...)
+	if s.activateOnBlock {
+		if s.active == nil {
+			s.active = map[string]bool{}
+		}
+		for _, sessionID := range sessionIDs {
+			s.active[strings.TrimSpace(sessionID)] = true
+		}
+	}
 	return func() {}
 }
 

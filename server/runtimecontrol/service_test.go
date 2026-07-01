@@ -471,6 +471,29 @@ func TestServiceWorkflowRuntimeAllowsGoalControl(t *testing.T) {
 	}
 }
 
+func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
+		WorkflowRun: &workflowruntime.Config{
+			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
+		},
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+
+	_, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "req-agent-step-goal",
+		SessionID:       store.Meta().SessionID,
+		Objective:       "queued by shell",
+		Actor:           string(session.GoalActorAgent),
+		StepID:          "step-from-shell",
+	})
+	if err == nil {
+		t.Fatal("agent step-scoped workflow goal set mutated directly without an active step")
+	}
+	if goal := engine.Goal(); goal != nil {
+		t.Fatalf("agent step-scoped workflow goal set bypassed queue and mutated goal: %+v", goal)
+	}
+}
+
 func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 	store, engine := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{
 		WorkflowRun: &workflowruntime.Config{
@@ -491,6 +514,32 @@ func TestServiceWorkflowSessionGoalMutationAllowed(t *testing.T) {
 	}
 	if resp.Goal == nil || resp.Goal.Status != string(session.GoalStatusActive) {
 		t.Fatalf("goal response = %+v, want active goal", resp.Goal)
+	}
+}
+
+func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
+		WorkflowRun: &workflowruntime.Config{
+			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
+		},
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	sessionID := store.Meta().SessionID
+	if _, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{ClientRequestID: "set-user-goal", SessionID: sessionID, Objective: "workflow goal", Actor: "user"}); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+
+	_, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
+		ClientRequestID: "complete-agent-step-goal",
+		SessionID:       sessionID,
+		Actor:           string(session.GoalActorAgent),
+		StepID:          "step-from-shell",
+	})
+	if err == nil {
+		t.Fatal("agent step-scoped workflow goal complete mutated directly without an active step")
+	}
+	if goal := engine.Goal(); goal == nil || goal.Status != session.GoalStatusActive {
+		t.Fatalf("agent step-scoped workflow goal complete bypassed queue; goal = %+v, want active", goal)
 	}
 }
 

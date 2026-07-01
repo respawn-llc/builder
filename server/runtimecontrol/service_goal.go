@@ -42,7 +42,7 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 	return s.goals.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameGoalSetMemoRequest, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
 		var response serverapi.RuntimeGoalShowResponse
 		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			if engine.WorkflowRunConfigured() {
+			if engine.WorkflowRunConfigured() && !requestOriginatesFromAgentStep(req.Actor, req.StepID) {
 				goal, err := engine.SetGoal(trimmedObjective, session.GoalActor(req.Actor))
 				if err != nil {
 					var blocked session.GoalAgentOverwriteBlockedError
@@ -126,7 +126,7 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 	return s.goalStatuses.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameGoalStatusMemoRequest, func(ctx context.Context) (serverapi.RuntimeGoalShowResponse, error) {
 		var response serverapi.RuntimeGoalShowResponse
 		err := s.withGoalMutationAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			if engine.WorkflowRunConfigured() {
+			if engine.WorkflowRunConfigured() && !requestOriginatesFromAgentStep(req.Actor, req.StepID) {
 				current := engine.Goal()
 				if status == session.GoalStatusActive && current != nil && current.Status == session.GoalStatusActive {
 					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current, false)}
@@ -221,10 +221,14 @@ func queueGoalSetForRequest(engine *runtime.Engine, req serverapi.RuntimeGoalSet
 
 func queueGoalStatusForRequest(engine *runtime.Engine, req serverapi.RuntimeGoalStatusRequest, status session.GoalStatus) (session.GoalState, bool, error) {
 	actor := session.GoalActor(req.Actor)
-	if strings.TrimSpace(req.Actor) == string(session.GoalActorAgent) && strings.TrimSpace(req.StepID) != "" && status == session.GoalStatusComplete {
-		return engine.QueueAgentShellCompleteGoalForStep(req.StepID, actor)
+	if requestOriginatesFromAgentStep(req.Actor, req.StepID) {
+		return engine.QueueGoalStatusForStep(req.StepID, status, actor)
 	}
 	return engine.QueueGoalStatusForActiveStep(status, actor)
+}
+
+func requestOriginatesFromAgentStep(actor string, stepID string) bool {
+	return strings.TrimSpace(actor) == string(session.GoalActorAgent) && strings.TrimSpace(stepID) != ""
 }
 
 func runtimeGoalFromSessionGoal(goal session.GoalState, suspended bool) *serverapi.RuntimeGoal {
