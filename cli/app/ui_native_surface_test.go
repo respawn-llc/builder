@@ -13,6 +13,7 @@ import (
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestNativeEmissionDoesNotRecordDeliveredProjection(t *testing.T) {
@@ -345,6 +346,34 @@ func TestNativeLiveFrameBoundsOngoingStreamTailWhileQuestionIsActive(t *testing.
 	}
 	if !strings.Contains(joined, "stream line 19") || !strings.Contains(joined, "Choose one") {
 		t.Fatalf("native live frame missing stream tail or active question:\n%s", joined)
+	}
+}
+
+func TestNativeLiveFrameRenderUsesBottomAnchorFromAppLayout(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	m.termWidth = 20
+	m.termHeight = 6
+	m.windowSizeKnown = true
+
+	rendered := m.layout().renderNativeLiveAreaFrame(uiRenderFrame{
+		width:      20,
+		height:     6,
+		inputPane:  []string{"input"},
+		statusLine: "status",
+		tailOnly:   true,
+	})
+
+	if strings.TrimSpace(rendered) != "" {
+		t.Fatalf("native live frame should write directly to terminal, got fallback render %q", rendered)
+	}
+	raw := out.String()
+	anchor := xansi.CursorPosition(1, 6)
+	anchorIndex := strings.Index(raw, anchor)
+	inputIndex := strings.Index(raw, "input")
+	statusIndex := strings.Index(raw, "status")
+	if anchorIndex < 0 || inputIndex < 0 || statusIndex < 0 || !(anchorIndex < inputIndex && inputIndex < statusIndex) {
+		t.Fatalf("native app render did not anchor to terminal bottom before frame content: %q", raw)
 	}
 }
 
