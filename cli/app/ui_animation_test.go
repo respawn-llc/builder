@@ -37,7 +37,7 @@ func TestHandleSpinnerTickJumpsFromElapsedTimeAndKeepsBoundaryAlignedDelay(t *te
 
 	anchor := time.Unix(1_700_000_100, 0)
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.spinnerTickToken = 1
 	m.spinnerGeneration = 1
 	m.spinnerClock.Start(anchor)
@@ -66,9 +66,15 @@ func TestRuntimeBusyEventStartsSpinnerTicking(t *testing.T) {
 	t.Cleanup(func() { uiAnimationNow = oldNow })
 
 	m := newProjectedStaticUIModel()
+	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
+		ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+		RunID:      "run-1",
+		StepID:     "step-1",
+	})
 	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:     clientui.EventRunStateChanged,
-		RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeTurn)},
+		Kind:             clientui.EventRuntimeActivityChanged,
+		ReadModelVersion: nextRuntimeReadModelVersionForTest(m),
+		RuntimeActivity:  &activity,
 	}})
 	updated := next.(*uiModel)
 	if !updated.isBusy() {
@@ -101,7 +107,7 @@ func TestRuntimeEventRearmsExpiredSpinnerTick(t *testing.T) {
 	})
 
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.spinnerGeneration = 1
 	m.spinnerTickToken = 1
 	m.spinnerClock.Start(anchor)
@@ -144,7 +150,7 @@ func TestRuntimeEventRearmsActiveSpinnerTickBeforeGrace(t *testing.T) {
 	})
 
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.spinnerGeneration = 1
 	m.spinnerTickToken = 1
 	m.spinnerClock.Start(anchor)

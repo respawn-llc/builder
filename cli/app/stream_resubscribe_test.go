@@ -285,7 +285,7 @@ func TestStartPendingPromptEventsResubscribesWithoutDuplicatingPendingPrompt(t *
 	resubscribed := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}, {evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventPending, PromptID: "ask-2", SessionID: "session-1", Question: "Second?"}}}}
 	remaining := []serverapi.PromptActivitySubscription{resubscribed}
 
-	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
+	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
 		if len(remaining) == 0 {
 			return nil, context.Canceled
 		}
@@ -317,13 +317,14 @@ func TestStartPendingPromptEventsResubscribeEmitsResolutionForPromptMissingFromS
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Sequence: 1, Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}, {err: serverapi.ErrStreamGap}}}
+	initialVersion := mustPromptReadModelVersionForTest(t, 1)
+	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{ReadModelVersion: initialVersion, Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}, {err: serverapi.ErrStreamGap}}}
 	resubscribed := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{
 		{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventPending, PromptID: "ask-2", SessionID: "session-1", Question: "Second?"}},
 		{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventSnapshot, SessionID: "session-1"}},
 	}}
-	events, stop := startPendingPromptEvents(ctx, initial, func(_ context.Context, afterSequence uint64) (serverapi.PromptActivitySubscription, error) {
-		if afterSequence > 0 {
+	events, stop := startPendingPromptEvents(ctx, initial, func(_ context.Context, afterVersion clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
+		if afterVersion != (clientui.ReadModelVersion{}) {
 			return nil, serverapi.ErrStreamGap
 		}
 		return resubscribed, nil
@@ -349,15 +350,16 @@ func TestStartPendingPromptEventsRetriesResubscribeWhenSnapshotStreamFails(t *te
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Sequence: 1, Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}, {err: serverapi.ErrStreamGap}}}
+	initialVersion := mustPromptReadModelVersionForTest(t, 1)
+	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{ReadModelVersion: initialVersion, Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}, {err: serverapi.ErrStreamGap}}}
 	secondResubscribe := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{
 		{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventPending, PromptID: "ask-2", SessionID: "session-1", Question: "Second?"}},
 		{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventSnapshot, SessionID: "session-1"}},
 	}}
 	snapshotCalls := 0
 
-	events, stop := startPendingPromptEvents(ctx, initial, func(_ context.Context, afterSequence uint64) (serverapi.PromptActivitySubscription, error) {
-		if afterSequence > 0 {
+	events, stop := startPendingPromptEvents(ctx, initial, func(_ context.Context, afterVersion clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
+		if afterVersion != (clientui.ReadModelVersion{}) {
 			return nil, serverapi.ErrStreamGap
 		}
 		snapshotCalls++
@@ -392,7 +394,7 @@ func TestPendingPromptEventRequeuesWhenAnswerRPCFails(t *testing.T) {
 	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}}}
 	control := &retryingPromptControlClient{askErr: errors.New("transport down")}
 
-	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
+	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
 		return nil, context.Canceled
 	}, control)
 	defer stop()
@@ -435,7 +437,7 @@ func TestPendingPromptEventRetryAfterStopDoesNotPanic(t *testing.T) {
 	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}}}
 	control := &retryingPromptControlClient{askErr: errors.New("transport down")}
 
-	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
+	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
 		return nil, context.Canceled
 	}, control)
 
@@ -461,7 +463,7 @@ func TestStartPendingPromptEventsEmitsResolutionEvent(t *testing.T) {
 		{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventResolved, PromptID: "ask-1", SessionID: "session-1"}},
 	}}
 
-	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
+	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
 		return nil, context.Canceled
 	}, stubPromptControlClient{})
 	defer stop()
@@ -483,7 +485,7 @@ func TestPendingPromptEventDoesNotRequeueOnTerminalAnswerError(t *testing.T) {
 	initial := &stubPromptActivitySubscription{steps: []stubPromptActivityStep{{evt: clientui.PendingPromptEvent{Type: clientui.PendingPromptEventPending, PromptID: "ask-1", SessionID: "session-1", Question: "First?"}}}}
 	control := &retryingPromptControlClient{askErr: serverapi.ErrPromptAlreadyResolved}
 
-	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
+	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
 		return nil, context.Canceled
 	}, control)
 	defer stop()
@@ -511,7 +513,7 @@ func TestPendingPromptEventDoesNotRequeueAfterPromptAlreadyResolvedLocally(t *te
 	}}
 	control := &retryingPromptControlClient{askErr: errors.New("transport down")}
 
-	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, uint64) (serverapi.PromptActivitySubscription, error) {
+	events, stop := startPendingPromptEvents(ctx, initial, func(context.Context, clientui.ReadModelVersion) (serverapi.PromptActivitySubscription, error) {
 		return nil, context.Canceled
 	}, control)
 	defer stop()
@@ -660,6 +662,15 @@ func waitPromptEventWithin(t *testing.T, events <-chan askEvent, timeout time.Du
 		t.Fatal("timed out waiting for prompt event")
 		return askEvent{}
 	}
+}
+
+func mustPromptReadModelVersionForTest(t *testing.T, sequence uint64) clientui.ReadModelVersion {
+	t.Helper()
+	version, err := clientui.NewReadModelVersion("prompt-test", 1, sequence)
+	if err != nil {
+		t.Fatalf("NewReadModelVersion: %v", err)
+	}
+	return version
 }
 
 func waitForPromptAskCallCount(t *testing.T, control *retryingPromptControlClient, want int) {

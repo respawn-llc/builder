@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"core/server/metadata/sqlitegen"
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -257,8 +258,8 @@ VALUES (?, ?, ?, '{}', ?, ?)`, worktreeID, attached.WorkspaceID, filepath.Join(a
 VALUES ('task-terminal-workspace', 'link-1', 1, 1, 'BLD-1', 'Terminal', '', ?, ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', ?, 'root_path', ?)))`, attached.WorkspaceID, worktreeID, now, now, attached.WorkspaceID, attached.WorkspaceName, attached.CanonicalRoot)
 	execSeed(t, store.db, "terminal source placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
 VALUES ('placement-terminal-workspace', 'task-terminal-workspace', 'node-done', 'active', ?, ?)`, now, now)
-	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, in_flight_step, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
-VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', '', ?, ?, 0, 1, 0, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, worktreeID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
+	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
+VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', '', ?, ?, 0, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, worktreeID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
 
 	blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
 	if err != nil {
@@ -294,6 +295,69 @@ VALUES ('session-terminal-workspace', ?, ?, ?, ?, 'Historical', '', '', '', ?, ?
 	}
 	if record.Meta.WorkspaceRoot != attached.CanonicalRoot || record.Meta.WorkspaceContainer != "sessions" {
 		t.Fatalf("session workspace snapshot = %q/%q, want %q/%q", record.Meta.WorkspaceRoot, record.Meta.WorkspaceContainer, attached.CanonicalRoot, "sessions")
+	}
+}
+
+func TestUnlinkProjectWorkspaceWriteBarrierBlocksSessionCreatedAfterTransactionalList(t *testing.T) {
+	ctx := context.Background()
+	storeA, cfg, binding := newMetadataTestStore(t)
+	storeB, err := Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("Open storeB: %v", err)
+	}
+	t.Cleanup(func() { _ = storeB.Close() })
+	if _, err := storeB.db.ExecContext(ctx, `PRAGMA busy_timeout = 1`); err != nil {
+		t.Fatalf("set storeB busy timeout: %v", err)
+	}
+	attached, err := storeA.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir())
+	if err != nil {
+		t.Fatalf("AttachWorkspaceToProject: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	attemptedLateAdmission := false
+
+	blockers, err := storeA.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, binding.ProjectID, attached.WorkspaceID, nil, func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+		if len(sessionIDs) != 0 {
+			t.Fatalf("transactional session list = %+v, want empty before late admission attempt", sessionIDs)
+		}
+		attemptedLateAdmission = true
+		err := storeB.queries.UpsertSession(ctx, sqlitegen.UpsertSessionParams{
+			ID:                 "session-late-after-transactional-list",
+			ProjectID:          binding.ProjectID,
+			WorkspaceID:        sql.NullString{String: attached.WorkspaceID, Valid: true},
+			WorktreeID:         sql.NullString{},
+			ArtifactRelpath:    filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-late-after-transactional-list")),
+			Name:               "late-after-transactional-list",
+			FirstPromptPreview: "",
+			InputDraft:         "",
+			ParentSessionID:    "",
+			CreatedAtUnixMs:    now,
+			UpdatedAtUnixMs:    now,
+			LastSequence:       0,
+			ModelRequestCount:  0,
+			LaunchVisible:      1,
+			CwdRelpath:         ".",
+			ContinuationJson:   "{}",
+			LockedJson:         "{}",
+			UsageStateJson:     "{}",
+			MetadataJson:       "{}",
+		})
+		if err == nil {
+			return nil, nil, errors.New("late session admission after transactional list unexpectedly succeeded")
+		}
+		return nil, nil, nil
+	})
+	if err != nil {
+		t.Fatalf("UnlinkProjectWorkspaceWithRuntimeBlockers: %v", err)
+	}
+	if len(blockers) != 0 {
+		t.Fatalf("unlink blockers = %+v, want none", blockers)
+	}
+	if !attemptedLateAdmission {
+		t.Fatal("runtime blocker did not attempt late session admission")
+	}
+	if _, err := storeA.GetWorkspaceByID(ctx, attached.WorkspaceID); err == nil {
+		t.Fatalf("workspace %q still exists after unlink", attached.WorkspaceID)
 	}
 }
 

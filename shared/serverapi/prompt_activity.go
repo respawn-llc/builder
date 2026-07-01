@@ -7,8 +7,8 @@ import (
 )
 
 type PromptActivitySubscribeRequest struct {
-	SessionID     string
-	AfterSequence uint64
+	SessionID             string
+	AfterReadModelVersion clientui.ReadModelVersion
 }
 
 type PromptActivitySubscription interface {
@@ -17,5 +17,11 @@ type PromptActivitySubscription interface {
 }
 
 func (r PromptActivitySubscribeRequest) Validate() error {
-	return validateRequiredSessionID(r.SessionID)
+	if err := validateRequiredSessionID(r.SessionID); err != nil {
+		return err
+	}
+	if r.AfterReadModelVersion == (clientui.ReadModelVersion{}) {
+		return nil
+	}
+	return r.AfterReadModelVersion.Validate()
 }

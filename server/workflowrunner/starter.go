@@ -19,6 +19,7 @@ import (
 	"core/server/metadata"
 	"core/server/runlog"
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/runtimeview"
 	"core/server/runtimewire"
 	"core/server/session"
@@ -63,6 +64,7 @@ type TaskWorktreeEnsurer interface {
 
 type RuntimeEventRegistry interface {
 	PublishRuntimeEvent(sessionID string, evt runtime.Event)
+	PublishRuntimeActivitySnapshot(sessionID string, snapshot runtimeactivity.ResponseSnapshot)
 	AwaitPromptResponse(ctx context.Context, sessionID string, req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error)
 }
 
@@ -695,6 +697,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 			Sources:         plan.Source.Sources,
 			Client:          client,
 			GlobalConfigDir: s.cfg.PersistenceRoot,
+			StepLifecycle:   runtimewire.NewStepLifecycleSink(sessionID, s.runtimes),
 			WorkflowRun: &workflowruntime.Config{
 				RunID:                        req.RunID,
 				Contract:                     workflowCompletionContract(req, input),

@@ -26,7 +26,7 @@ func TestHydrationCompletionKeepsDeferredQueuedDrainArmedUntilUnrelatedBusyState
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("follow up")
 	m.runtimeTranscriptBusy = true
@@ -38,8 +38,7 @@ func TestHydrationCompletionKeepsDeferredQueuedDrainArmedUntilUnrelatedBusyState
 		t.Fatal("expected queued drain deferred until hydration completes")
 	}
 
-	next, _ = updated.Update(runtimeEventMsg{event: clientui.Event{Kind: clientui.EventRunStateChanged, RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeTurn)}}})
-	updated = next.(*uiModel)
+	updated = applyRunningRuntimeActivityForTest(t, updated, "run-1", "step-1")
 	if !updated.isBusy() {
 		t.Fatal("expected unrelated runtime activity to mark UI busy before hydration completes")
 	}
@@ -72,7 +71,8 @@ func TestHydrationCompletionKeepsDeferredQueuedDrainArmedUntilUnrelatedBusyState
 		t.Fatalf("expected queued follow-up preserved while unrelated busy state blocks auto-drain, got %+v", updated.queued)
 	}
 
-	next, idleCmd := updated.Update(runtimeEventMsg{event: clientui.Event{Kind: clientui.EventRunStateChanged, RunState: &clientui.RunState{Lifecycle: clientui.IdleRunLifecycle()}}})
+	idleActivity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{QueueAccepting: true})
+	next, idleCmd := updated.Update(runtimeEventMsg{event: clientui.Event{Kind: clientui.EventRuntimeActivityChanged, ReadModelVersion: nextRuntimeReadModelVersionForTest(updated), RuntimeActivity: &idleActivity}})
 	updated = next.(*uiModel)
 	if !updated.isBusy() {
 		t.Fatal("expected queued follow-up to start once unrelated busy state clears")
@@ -97,7 +97,7 @@ func TestHydrationCompletionKeepsDeferredQueuedDrainArmedUntilUnrelatedBusyState
 
 func TestBusyQueuedUnknownSlashDrainsAsPromptSubmission(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "/nope queued"
 
@@ -148,7 +148,7 @@ func TestAutoDrainStopsAfterQueuedPSInlineAppendsToInput(t *testing.T) {
 	}
 
 	m := newProjectedStaticUIModel(withUIBackgroundManagerForTest(manager))
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("/ps inline "+res.SessionID, "summarize this")
 
@@ -202,7 +202,7 @@ func TestAutoDrainResumesAfterQueuedPSNonMutatingActions(t *testing.T) {
 			defer func() { openDefault = originalOpenDefault }()
 
 			m := newProjectedStaticUIModel(withUIBackgroundManagerForTest(manager))
-			m.setBusy(true)
+			m.setRuntimeActivityBusyForTest(true)
 			m.activity = uiActivityRunning
 			m.queued = queuedInputsForTest("/ps "+action+" "+res.SessionID, "summarize this")
 
@@ -247,7 +247,7 @@ func (c failingQueuedProcessClient) InlineOutput(context.Context, string, int) (
 
 func TestAutoDrainResumesAfterQueuedPSNonMutatingActionError(t *testing.T) {
 	m := newProjectedStaticUIModel(WithUIProcessClient(failingQueuedProcessClient{err: errors.New("kill failed")}))
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("/ps kill proc-1", "summarize this")
 
@@ -277,7 +277,7 @@ func TestAutoDrainResumesAfterQueuedPSNonMutatingActionError(t *testing.T) {
 
 func TestAutoDrainResumesAfterQueuedPSInlineActionError(t *testing.T) {
 	m := newProjectedStaticUIModel(WithUIProcessClient(failingQueuedProcessClient{err: errors.New("inline failed")}))
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.queued = queuedInputsForTest("/ps inline proc-1", "summarize this")
 
@@ -381,7 +381,7 @@ func TestBusyQueuedReviewSlashCommandStartsFreshSessionAfterTurn(t *testing.T) {
 	m := newProjectedStaticUIModel(
 		WithUIConversationFreshness(clientui.ConversationFreshnessEstablished),
 	)
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "/review cli/app"
 
@@ -419,7 +419,7 @@ func TestBusyQueuedReviewSlashCommandWaitsForHydrationBeforePromptSubmission(t *
 	}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.startupCmds = nil
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "/review cli/app"
 
@@ -489,7 +489,7 @@ func TestQueuedReviewUsesEngineConversationFreshnessWhenUIDidNotReceiveRuntimeUp
 	store, eng := newAppRuntimeEngine(t, &runtimeAdapterFakeClient{}, runtime.Config{})
 
 	m := newProjectedEngineUIModel(eng)
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "/review cli/app"
 
@@ -792,7 +792,7 @@ func TestStartupSubmitUsesRecordedPromptHistoryFlag(t *testing.T) {
 
 func TestBusySlashNameExecutesImmediatelyWithoutQueueing(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "/name incident triage"
 
@@ -820,7 +820,7 @@ func TestBusySlashNameExecutesImmediatelyWithoutQueueing(t *testing.T) {
 
 func TestBusySlashThinkingExecutesImmediatelyWithoutQueueing(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.thinkingLevel = "high"
 	m.input = "/thinking low"
@@ -1078,7 +1078,7 @@ func TestSlashSupervisorTogglesReviewerInvocationAndShowsStatus(t *testing.T) {
 
 func TestBusySlashSupervisorExecutesImmediatelyWithoutQueueing(t *testing.T) {
 	m := newProjectedStaticUIModel()
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.input = "/supervisor on"
 
@@ -1127,7 +1127,7 @@ func TestBusySlashSupervisorOffAppliesToInFlightRunCompletion(t *testing.T) {
 	})
 
 	m := newProjectedEngineUIModel(eng)
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 
 	submitDone := make(chan error, 1)

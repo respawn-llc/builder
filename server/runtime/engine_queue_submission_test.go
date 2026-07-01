@@ -170,7 +170,7 @@ func TestRunWhenIdleRunsImmediatelyWhenIdle(t *testing.T) {
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
 	ran := false
-	if err := eng.RunWhenIdle(context.Background(), func() error {
+	if err := eng.RunWhenIdle(context.Background(), ActiveKindRuntimeMaintenance, func() error {
 		ran = true
 		return nil
 	}); err != nil {
@@ -194,7 +194,7 @@ func TestRunWhenIdleRetriesUntilBetweenSteps(t *testing.T) {
 	}}
 
 	ran := false
-	if err := eng.RunWhenIdle(context.Background(), func() error {
+	if err := eng.RunWhenIdle(context.Background(), ActiveKindRuntimeMaintenance, func() error {
 		ran = true
 		return nil
 	}); err != nil {
@@ -561,6 +561,44 @@ func TestIdleQueueUserMessageDoesNotAutoSubmit(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if got := fakeClientCallCount(client); got != 0 {
 		t.Fatalf("idle QueueUserMessage auto-submitted; model calls = %d, want 0", got)
+	}
+}
+
+func TestQueueUserMessageDuringTerminalPublicationAutoDrainsAfterIdlePublication(t *testing.T) {
+	store := mustCreateTestSession(t)
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "first done", Phase: llm.MessagePhaseFinal},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+		{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: "queued done", Phase: llm.MessagePhaseFinal},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		},
+	}}
+	sink := newBlockingStepLifecycleSink()
+	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5", StepLifecycle: sink})
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := eng.SubmitUserMessage(context.Background(), "first")
+		firstDone <- err
+	}()
+	select {
+	case <-sink.endedStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for terminal publication")
+	}
+
+	eng.QueueUserMessage("queued during terminal publication")
+	close(sink.releaseEnded)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first submit: %v", err)
+	}
+	waitFakeClientCallCount(t, client, 2)
+	waitEngineLifecycleTasks(t, eng)
+	if eng.HasQueuedUserWork() {
+		t.Fatal("queued user work remained after terminal publication auto drain")
 	}
 }
 

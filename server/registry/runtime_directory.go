@@ -9,6 +9,7 @@ import (
 
 	"core/server/runtime"
 	askquestion "core/server/tools"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
@@ -19,25 +20,27 @@ type runtimeDirectory struct {
 }
 
 type runtimeEntry struct {
-	mu              sync.Mutex
-	cond            *sync.Cond
-	generation      uint64
-	built           bool
-	buildErr        error
-	ready           chan struct{}
-	closed          chan struct{}
-	closedOnce      sync.Once
-	ownerRefs       int
-	ownerIDs        map[string]struct{}
-	closing         bool
-	closeDraining   bool
-	inFlight        int
-	engine          *runtime.Engine
-	rebind          func(string) error
-	teardown        func()
-	sessionActivity *sessionActivityBroker
-	promptActivity  *promptActivityBroker
-	pendingPrompts  *pendingPromptStore
+	mu               sync.Mutex
+	cond             *sync.Cond
+	generation       uint64
+	built            bool
+	buildErr         error
+	ready            chan struct{}
+	closed           chan struct{}
+	closedOnce       sync.Once
+	ownerRefs        int
+	ownerIDs         map[string]struct{}
+	closing          bool
+	closeDraining    bool
+	inFlight         int
+	engine           *runtime.Engine
+	rebind           func(string) error
+	teardown         func()
+	sessionActivity  *sessionActivityBroker
+	promptActivity   *promptActivityBroker
+	pendingPrompts   *pendingPromptStore
+	readModelUnpin   func()
+	readModelVersion func(string) clientui.ReadModelVersion
 }
 
 func newRuntimeDirectory() *runtimeDirectory {
@@ -173,6 +176,15 @@ func (e *runtimeEntry) engineRef() *runtime.Engine {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.engine
+}
+
+func (e *runtimeEntry) buildInProgress() bool {
+	if e == nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return !e.built && e.buildErr == nil && !e.closing && !e.closeDraining
 }
 
 func (e *runtimeEntry) rebindWorkdir(workdir string) error {
@@ -538,8 +550,15 @@ func (g *runtimeGuard) SubmitPromptResponse(resp askquestion.AskQuestionResponse
 		return fmt.Errorf("runtime guard is unavailable")
 	}
 	return g.entry.pendingPrompts.Submit(resp, err, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
-		g.entry.PublishPendingPrompt(g.sessionID, snapshot, eventType)
+		g.entry.PublishPendingPrompt(g.sessionID, snapshot, eventType, g.entry.nextReadModelVersion(g.sessionID))
 	})
+}
+
+func (e *runtimeEntry) nextReadModelVersion(sessionID string) clientui.ReadModelVersion {
+	if e == nil || e.readModelVersion == nil {
+		return clientui.ReadModelVersion{}
+	}
+	return e.readModelVersion(sessionID)
 }
 
 func (g *runtimeGuard) Release() {

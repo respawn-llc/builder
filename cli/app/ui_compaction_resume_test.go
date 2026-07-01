@@ -27,7 +27,7 @@ func TestCompactDoneResumesQueuedSteeringAsNewTurn(t *testing.T) {
 	})
 
 	m := NewProjectedUIModel(newUIRuntimeClient(eng), projectedEvents, make(chan askEvent)).(*uiModel)
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 	m.input = "steered message"
@@ -39,6 +39,7 @@ func TestCompactDoneResumesQueuedSteeringAsNewTurn(t *testing.T) {
 		t.Fatalf("expected pending injected steering before compaction completes, got %+v", updated.pendingInjected)
 	}
 
+	updated.setRuntimeActivityBusyForTest(false)
 	next, cmd := updated.Update(compactDoneMsg{})
 	updated = next.(*uiModel)
 	updated, cmd = applyQueuedRuntimeWorkCheckForTest(t, updated, cmd)
@@ -117,7 +118,7 @@ func TestInterruptedResumedQueuedSteeringRestoresInput(t *testing.T) {
 	_, eng := newAppRuntimeEngine(t, &requestCaptureFakeClient{}, runtime.Config{})
 
 	m := newProjectedEngineUIModel(eng)
-	m.setBusy(true)
+	m.setRuntimeActivityBusyForTest(true)
 	m.setCompacting(true)
 	m.activity = uiActivityRunning
 	m.input = "steered message"
@@ -125,6 +126,7 @@ func TestInterruptedResumedQueuedSteeringRestoresInput(t *testing.T) {
 	next, createCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
 	updated = applyFirstInjectedQueueCreateDoneForTest(t, updated, createCmd)
+	updated.setRuntimeActivityBusyForTest(false)
 	next, cmd := updated.Update(compactDoneMsg{})
 	updated = next.(*uiModel)
 	updated, cmd = applyQueuedRuntimeWorkCheckForTest(t, updated, cmd)

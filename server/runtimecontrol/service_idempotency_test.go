@@ -6,9 +6,11 @@ import (
 
 	"core/server/llm"
 	"core/server/runtime"
+	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/transcript"
 )
@@ -40,6 +42,63 @@ func TestServiceSetThinkingLevelDedupesSuccessfulRetry(t *testing.T) {
 	}
 	if got := engine.ThinkingLevel(); got != "high" {
 		t.Fatalf("thinking level = %q, want high", got)
+	}
+}
+
+type sequenceRuntimeActivityResolver struct {
+	snapshots []runtimeactivity.ResponseSnapshot
+	calls     int
+}
+
+func (r *sequenceRuntimeActivityResolver) Snapshot(context.Context, string, []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error) {
+	if r.calls >= len(r.snapshots) {
+		return r.snapshots[len(r.snapshots)-1], nil
+	}
+	snapshot := r.snapshots[r.calls]
+	r.calls++
+	return snapshot, nil
+}
+
+func TestServiceInterruptRetryReturnsFreshActivitySnapshot(t *testing.T) {
+	runningVersion := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 1}
+	idleVersion := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 2}
+	resolver := &sequenceRuntimeActivityResolver{snapshots: []runtimeactivity.ResponseSnapshot{
+		{
+			Version: runningVersion,
+			Activity: clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
+				ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop,
+				RunID:      "run-1",
+				StepID:     "step-1",
+			}),
+			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(runningVersion),
+		},
+		{
+			Version: idleVersion,
+			Activity: clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{
+				QueueAccepting: true,
+			}),
+			InputReconciliation: clientui.NewEmptyRuntimeInputReconciliationSnapshot(idleVersion),
+		},
+	}}
+	service := NewService(stubRuntimeResolver{}).WithRuntimeActivityResolver(resolver)
+	req := serverapi.RuntimeInterruptRequest{ClientRequestID: "interrupt-retry", SessionID: "session-1"}
+
+	first, err := service.Interrupt(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Interrupt first: %v", err)
+	}
+	second, err := service.Interrupt(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Interrupt retry: %v", err)
+	}
+	if !first.Activity.ActiveForControl() {
+		t.Fatalf("first activity = %+v, want active", first.Activity)
+	}
+	if second.Activity.ActiveForControl() || second.Version != idleVersion {
+		t.Fatalf("retry activity/version = %+v/%+v, want fresh idle %+v", second.Activity, second.Version, idleVersion)
+	}
+	if resolver.calls != 2 {
+		t.Fatalf("snapshot calls = %d, want fresh composition on retry", resolver.calls)
 	}
 }
 
@@ -130,7 +189,7 @@ func TestServiceSetAutoCompactionEnabledDedupesSuccessfulRetry(t *testing.T) {
 func TestServiceCompactContextDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, client := newRuntimeControlCompactionFixture(t)
 	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeCompactContextRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Args: "compact now"}
+	req := serverapi.RuntimeCompactContextRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Args: "compact now", OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindCompact, ClientRequestID: "req-1"}}
 
 	if err := service.CompactContext(context.Background(), req); err != nil {
 		t.Fatalf("CompactContext first: %v", err)
@@ -149,7 +208,7 @@ func TestServiceCompactContextDedupesSuccessfulRetry(t *testing.T) {
 func TestServiceCompactContextForPreSubmitDedupesSuccessfulRetry(t *testing.T) {
 	store, engine, client := newRuntimeControlCompactionFixture(t)
 	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeCompactContextForPreSubmitRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID}
+	req := serverapi.RuntimeCompactContextForPreSubmitRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindPreSubmitCompact, ClientRequestID: "req-1"}}
 
 	if err := service.CompactContextForPreSubmit(context.Background(), req); err != nil {
 		t.Fatalf("CompactContextForPreSubmit first: %v", err)
@@ -177,10 +236,10 @@ func TestServiceInterruptDedupesSuccessfulRetry(t *testing.T) {
 	service := NewService(stubRuntimeResolver{engine: engine})
 	req := serverapi.RuntimeInterruptRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID}
 
-	if err := service.Interrupt(context.Background(), req); err != nil {
+	if _, err := service.Interrupt(context.Background(), req); err != nil {
 		t.Fatalf("Interrupt first: %v", err)
 	}
-	if err := service.Interrupt(context.Background(), req); err != nil {
+	if _, err := service.Interrupt(context.Background(), req); err != nil {
 		t.Fatalf("Interrupt replay: %v", err)
 	}
 }
@@ -306,7 +365,7 @@ func TestServiceSubmitQueuedUserMessagesDedupesSuccessfulRetry(t *testing.T) {
 	}
 	engine.QueueUserMessage("hello")
 	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID}
+	req := serverapi.RuntimeSubmitQueuedUserMessagesRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmitQueued, ClientRequestID: "req-1"}}
 
 	first, err := service.SubmitQueuedUserMessages(context.Background(), req)
 	if err != nil {

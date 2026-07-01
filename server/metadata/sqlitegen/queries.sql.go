@@ -39,6 +39,26 @@ func (q *Queries) AcquireWorkspaceRegistrationLock(ctx context.Context) (int64, 
 	return result.RowsAffected()
 }
 
+const acquireWorkspaceUnlinkWriteLock = `-- name: AcquireWorkspaceUnlinkWriteLock :execrows
+UPDATE workspaces
+SET updated_at_unix_ms = updated_at_unix_ms
+WHERE project_id = ?1
+  AND id = ?2
+`
+
+type AcquireWorkspaceUnlinkWriteLockParams struct {
+	ProjectID   string
+	WorkspaceID string
+}
+
+func (q *Queries) AcquireWorkspaceUnlinkWriteLock(ctx context.Context, arg AcquireWorkspaceUnlinkWriteLockParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, acquireWorkspaceUnlinkWriteLock, arg.ProjectID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const allocateProjectTaskSequence = `-- name: AllocateProjectTaskSequence :one
 UPDATE projects
 SET
@@ -439,20 +459,6 @@ func (q *Queries) CountActiveProjectWorkflowLinks(ctx context.Context, projectID
 	var active_link_count int64
 	err := row.Scan(&active_link_count)
 	return active_link_count, err
-}
-
-const countActiveSessionsByWorkspace = `-- name: CountActiveSessionsByWorkspace :one
-SELECT CAST(COUNT(*) AS INTEGER) AS session_count
-FROM sessions
-WHERE workspace_id = ?1
-  AND in_flight_step <> 0
-`
-
-func (q *Queries) CountActiveSessionsByWorkspace(ctx context.Context, workspaceID sql.NullString) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countActiveSessionsByWorkspace, workspaceID)
-	var session_count int64
-	err := row.Scan(&session_count)
-	return session_count, err
 }
 
 const countActiveTaskRunsByWorkspace = `-- name: CountActiveTaskRunsByWorkspace :one
@@ -1359,7 +1365,6 @@ func (q *Queries) GetManualMovePreviousTransition(ctx context.Context, arg GetMa
 
 const getProjectDeleteBlockerCounts = `-- name: GetProjectDeleteBlockerCounts :one
 SELECT
-    CAST((SELECT COUNT(*) FROM sessions s WHERE s.project_id = ?1 AND s.in_flight_step <> 0) AS INTEGER) AS active_sessions,
     CAST((
         SELECT COUNT(DISTINCT id)
         FROM (
@@ -1412,7 +1417,6 @@ SELECT
 `
 
 type GetProjectDeleteBlockerCountsRow struct {
-	ActiveSessions   int64
 	NonTerminalTasks int64
 	ActiveRuns       int64
 	RunnableRuns     int64
@@ -1421,12 +1425,7 @@ type GetProjectDeleteBlockerCountsRow struct {
 func (q *Queries) GetProjectDeleteBlockerCounts(ctx context.Context, deleteProjectID string) (GetProjectDeleteBlockerCountsRow, error) {
 	row := q.db.QueryRowContext(ctx, getProjectDeleteBlockerCounts, deleteProjectID)
 	var i GetProjectDeleteBlockerCountsRow
-	err := row.Scan(
-		&i.ActiveSessions,
-		&i.NonTerminalTasks,
-		&i.ActiveRuns,
-		&i.RunnableRuns,
-	)
+	err := row.Scan(&i.NonTerminalTasks, &i.ActiveRuns, &i.RunnableRuns)
 	return i, err
 }
 
@@ -1746,7 +1745,6 @@ SELECT
     s.updated_at_unix_ms,
     s.last_sequence,
     s.model_request_count,
-    s.in_flight_step,
     s.continuation_json,
     s.locked_json,
     s.usage_state_json,
@@ -1769,7 +1767,6 @@ type GetSessionRecordByIDRow struct {
 	UpdatedAtUnixMs    int64
 	LastSequence       int64
 	ModelRequestCount  int64
-	InFlightStep       int64
 	ContinuationJson   string
 	LockedJson         string
 	UsageStateJson     string
@@ -1791,7 +1788,6 @@ func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (G
 		&i.UpdatedAtUnixMs,
 		&i.LastSequence,
 		&i.ModelRequestCount,
-		&i.InFlightStep,
 		&i.ContinuationJson,
 		&i.LockedJson,
 		&i.UsageStateJson,
@@ -4560,6 +4556,36 @@ func (q *Queries) ListProjectSessionArtifacts(ctx context.Context, projectID str
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectSessionIDs = `-- name: ListProjectSessionIDs :many
+SELECT id
+FROM sessions
+WHERE project_id = ?1
+ORDER BY rowid ASC
+`
+
+func (q *Queries) ListProjectSessionIDs(ctx context.Context, projectID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectSessionIDs, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -7526,6 +7552,36 @@ func (q *Queries) ListWorkspaceBindingsByCanonicalRoot(ctx context.Context, cano
 	return items, nil
 }
 
+const listWorkspaceSessionIDs = `-- name: ListWorkspaceSessionIDs :many
+SELECT id
+FROM sessions
+WHERE workspace_id = ?1
+ORDER BY rowid ASC
+`
+
+func (q *Queries) ListWorkspaceSessionIDs(ctx context.Context, workspaceID sql.NullString) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listWorkspaceSessionIDs, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspacesByCanonicalRoot = `-- name: ListWorkspacesByCanonicalRoot :many
 SELECT
     id,
@@ -8980,7 +9036,6 @@ INSERT INTO sessions (
     updated_at_unix_ms,
     last_sequence,
     model_request_count,
-    in_flight_step,
     launch_visible,
     cwd_relpath,
     continuation_json,
@@ -9006,8 +9061,7 @@ INSERT INTO sessions (
     ?16,
     ?17,
     ?18,
-    ?19,
-    ?20
+    ?19
 )
 ON CONFLICT(id) DO UPDATE SET
     project_id = excluded.project_id,
@@ -9021,7 +9075,6 @@ ON CONFLICT(id) DO UPDATE SET
     updated_at_unix_ms = excluded.updated_at_unix_ms,
     last_sequence = excluded.last_sequence,
     model_request_count = excluded.model_request_count,
-    in_flight_step = excluded.in_flight_step,
     launch_visible = CASE
         WHEN sessions.launch_visible <> 0 OR excluded.launch_visible <> 0 THEN 1
         ELSE 0
@@ -9047,7 +9100,6 @@ type UpsertSessionParams struct {
 	UpdatedAtUnixMs    int64
 	LastSequence       int64
 	ModelRequestCount  int64
-	InFlightStep       int64
 	LaunchVisible      int64
 	CwdRelpath         string
 	ContinuationJson   string
@@ -9071,7 +9123,6 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.UpdatedAtUnixMs,
 		arg.LastSequence,
 		arg.ModelRequestCount,
-		arg.InFlightStep,
 		arg.LaunchVisible,
 		arg.CwdRelpath,
 		arg.ContinuationJson,

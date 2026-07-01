@@ -32,7 +32,8 @@ func TestSessionSnapshotSourcesParityForMainView(t *testing.T) {
 	assertEqual(t, "parent session id", live.Status.ParentSessionID, dormant.Status.ParentSessionID)
 	assertEqual(t, "last committed final", live.Status.LastCommittedAssistantFinalAnswer, dormant.Status.LastCommittedAssistantFinalAnswer)
 	assertEqual(t, "update status", live.Status.Update, dormant.Status.Update)
-	assertEqual(t, "active run", normalizedRunView(live.ActiveRun), normalizedRunView(dormant.ActiveRun))
+	assertEqual(t, "activity available", live.Activity.State != "", true)
+	assertEqual(t, "dormant activity", dormant.Activity.State, clientui.RuntimeActivityUnavailable)
 }
 
 func TestSessionSnapshotSourcesParityForTranscriptQueries(t *testing.T) {
@@ -112,9 +113,11 @@ func TestSessionSnapshotSourcesParityForActiveRunStatus(t *testing.T) {
 
 	liveMain := mustMainView(t, live, store.Meta().SessionID)
 	dormantMain := mustMainView(t, dormant, store.Meta().SessionID)
-	assertEqual(t, "active main run", normalizedRunView(liveMain.ActiveRun), normalizedRunView(dormantMain.ActiveRun))
-	if liveMain.ActiveRun == nil {
-		t.Fatal("expected active run")
+	if liveMain.Activity.State != clientui.RuntimeActivityRunning {
+		t.Fatalf("live activity = %+v, want running", liveMain.Activity)
+	}
+	if dormantMain.Activity.State != clientui.RuntimeActivityUnavailable {
+		t.Fatalf("dormant activity = %+v, want unavailable", dormantMain.Activity)
 	}
 
 	close(release)
@@ -127,8 +130,8 @@ func TestLiveRuntimeSnapshotReturnsActiveRunWithoutSessionStore(t *testing.T) {
 	store, engine, release, done := startBlockingRuntimeRun(t)
 	live := NewService(nil, NewStaticRuntimeResolver(engine), nil)
 	liveMain := mustMainView(t, live, store.Meta().SessionID)
-	if liveMain.ActiveRun == nil {
-		t.Fatal("expected active run")
+	if liveMain.Activity.State != clientui.RuntimeActivityRunning {
+		t.Fatalf("expected running activity, got %+v", liveMain.Activity)
 	}
 
 	close(release)
@@ -174,15 +177,6 @@ func newSessionSnapshotParityFixture(t *testing.T, cacheWarningMode config.Cache
 	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a2", Phase: llm.MessagePhaseFinal}); err != nil {
 		t.Fatalf("append a2: %v", err)
 	}
-	startedAt := time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC)
-	finishedAt := startedAt.Add(10 * time.Second)
-	if _, err := store.AppendRunStarted(session.RunRecord{RunID: "run-completed", StepID: "step-1", StartedAt: startedAt}); err != nil {
-		t.Fatalf("append run start: %v", err)
-	}
-	if _, err := store.AppendRunFinished(session.RunRecord{RunID: "run-completed", StepID: "step-1", Status: session.RunStatusCompleted, StartedAt: startedAt, FinishedAt: finishedAt}); err != nil {
-		t.Fatalf("append run finish: %v", err)
-	}
-
 	engine, err := runtime.New(store, &serviceFakeLLM{}, tools.NewRegistry(), runtime.Config{Model: "gpt-5", CacheWarningMode: cacheWarningMode})
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -337,14 +331,6 @@ func normalizedChatEntries(entries []clientui.ChatEntry) []comparableChatEntry {
 		})
 	}
 	return out
-}
-
-func normalizedRunView(run *clientui.RunView) *clientui.RunView {
-	if run == nil {
-		return nil
-	}
-	copyRun := *run
-	return &copyRun
 }
 
 func assertEqual(t *testing.T, label string, got, want any) {
