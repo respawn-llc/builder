@@ -35,11 +35,32 @@ var nativeOngoingSurfaceMethods = map[string]struct{}{
 	"FlushHoldoff":                   {},
 }
 
+var allowedOngoingScrollbackBufferOptions = map[string]struct{}{
+	"WithAssistantMarkdownRenderer": {},
+	"WithDelayedWriteErrorListener": {},
+	"WithNormalBufferAvailability":  {},
+	"WithNormalBufferPreparation":   {},
+}
+
 func TestNativeOngoingSurfaceInterfaceShape(t *testing.T) {
 	repoRoot := repositoryRoot(t)
 	methodNames := nativeOngoingSurfaceMethodNames(t, repoRoot)
 
 	assertExactMethodNameSet(t, methodNames)
+}
+
+func TestOngoingScrollbackBufferOptionsExposeNoFeatureDisableSwitches(t *testing.T) {
+	repoRoot := repositoryRoot(t)
+	optionNames := ongoingScrollbackBufferOptionNames(t, repoRoot)
+
+	if len(optionNames) != len(allowedOngoingScrollbackBufferOptions) {
+		t.Fatalf("expected exactly %d %s options, got %d: %s", len(allowedOngoingScrollbackBufferOptions), ongoingScrollbackBufferImplName, len(optionNames), strings.Join(optionNames, ", "))
+	}
+	for _, optionName := range optionNames {
+		if _, ok := allowedOngoingScrollbackBufferOptions[optionName]; !ok {
+			t.Fatalf("unexpected %s option %q; expected exactly: %s", ongoingScrollbackBufferImplName, optionName, expectedOngoingScrollbackBufferOptionNames())
+		}
+	}
 }
 
 func TestOngoingScrollbackBufferImplExportsOnlyNativeOngoingSurfaceMethods(t *testing.T) {
@@ -120,6 +141,54 @@ func nativeOngoingSurfaceMethodNames(t *testing.T, repoRoot string) []string {
 	return nil
 }
 
+func ongoingScrollbackBufferOptionNames(t *testing.T, repoRoot string) []string {
+	t.Helper()
+
+	fileSet := token.NewFileSet()
+	scrollbackDir := filepath.Join(repoRoot, "cli", "tui", "scrollback")
+	pattern := filepath.Join(scrollbackDir, "*.go")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		t.Fatalf("glob %s: %v", pattern, err)
+	}
+
+	var optionNames []string
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		parsedFile, err := parser.ParseFile(fileSet, file, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		for _, decl := range parsedFile.Decls {
+			funcDecl, ok := decl.(*ast.FuncDecl)
+			if !ok || funcDecl.Recv != nil || !funcDecl.Name.IsExported() || funcDecl.Type.Results == nil {
+				continue
+			}
+			if !funcReturnsOngoingScrollbackBufferOption(funcDecl) {
+				continue
+			}
+			optionNames = append(optionNames, funcDecl.Name.Name)
+		}
+	}
+	sort.Strings(optionNames)
+	return optionNames
+}
+
+func funcReturnsOngoingScrollbackBufferOption(funcDecl *ast.FuncDecl) bool {
+	if funcDecl.Type.Results == nil {
+		return false
+	}
+	for _, result := range funcDecl.Type.Results.List {
+		ident, ok := result.Type.(*ast.Ident)
+		if ok && ident.Name == "OngoingScrollbackBufferOption" {
+			return true
+		}
+	}
+	return false
+}
+
 func assertExactMethodNameSet(t *testing.T, methodNames []string) {
 	t.Helper()
 
@@ -152,6 +221,15 @@ func expectedMethodNames() string {
 	}
 	sort.Strings(methodNames)
 	return strings.Join(methodNames, ", ")
+}
+
+func expectedOngoingScrollbackBufferOptionNames() string {
+	optionNames := make([]string, 0, len(allowedOngoingScrollbackBufferOptions))
+	for optionName := range allowedOngoingScrollbackBufferOptions {
+		optionNames = append(optionNames, optionName)
+	}
+	sort.Strings(optionNames)
+	return strings.Join(optionNames, ", ")
 }
 
 func loadRepositoryPackages(t *testing.T, repoRoot string) []*packages.Package {

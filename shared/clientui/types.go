@@ -57,6 +57,7 @@ type Event struct {
 	Error                        string
 	AssistantDelta               string
 	AssistantDeltaPhase          MessagePhase
+	AssistantStreamMetadata      *AssistantStreamMetadata
 	ReasoningDelta               *ReasoningDelta
 	UserMessage                  string
 	UserMessageBatch             []string
@@ -164,9 +165,16 @@ type ChatEntry struct {
 const ChatEntryPhaseFinalAnswer = string(MessagePhaseFinal)
 
 type ChatSnapshot struct {
-	Entries        []ChatEntry
-	Streaming      string
-	StreamingError string
+	Entries           []ChatEntry
+	Streaming         string
+	StreamingMetadata *AssistantStreamMetadata
+	StreamingError    string
+}
+
+type AssistantStreamMetadata struct {
+	StepID                  string
+	BaseRevision            int64
+	BaseCommittedEntryCount int
 }
 
 type TranscriptPageRequest struct {
@@ -185,6 +193,7 @@ type TranscriptPage struct {
 	HasMoreBelow          bool
 	Entries               []ChatEntry
 	Streaming             string
+	StreamingMetadata     *AssistantStreamMetadata
 	StreamingError        string
 }
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"core/prompts"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/registry"
@@ -263,6 +264,61 @@ func (c *cancelObservingRuntimeControlClient) Generate(ctx context.Context, req 
 
 func (c *cancelObservingRuntimeControlClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
 	return llm.ProviderCapabilities{}, nil
+}
+
+type restartableRuntimeControlClient struct {
+	call1Started chan struct{}
+	call2Started chan struct{}
+	release1     chan struct{}
+	release2     chan struct{}
+	release1Once sync.Once
+	release2Once sync.Once
+	mu           sync.Mutex
+	calls        int
+}
+
+func newRestartableRuntimeControlClient() *restartableRuntimeControlClient {
+	return &restartableRuntimeControlClient{
+		call1Started: make(chan struct{}),
+		call2Started: make(chan struct{}),
+		release1:     make(chan struct{}),
+		release2:     make(chan struct{}),
+	}
+}
+
+func (c *restartableRuntimeControlClient) Generate(ctx context.Context, req llm.Request) (llm.Response, error) {
+	_ = req
+	c.mu.Lock()
+	c.calls++
+	call := c.calls
+	c.mu.Unlock()
+	switch call {
+	case 1:
+		close(c.call1Started)
+		<-c.release1
+	case 2:
+		close(c.call2Started)
+		<-c.release2
+	}
+	if err := ctx.Err(); err != nil {
+		return llm.Response{}, err
+	}
+	return llm.Response{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}, nil
+}
+
+func (c *restartableRuntimeControlClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{}, nil
+}
+
+func (c *restartableRuntimeControlClient) releaseFirst() {
+	c.release1Once.Do(func() { close(c.release1) })
+}
+
+func (c *restartableRuntimeControlClient) releaseSecond() {
+	c.release2Once.Do(func() { close(c.release2) })
 }
 
 type fakeShellHandler struct{}
@@ -964,12 +1020,25 @@ func TestServiceCompleteGoalAlreadyCompleteDoesNotDuplicateAudit(t *testing.T) {
 	}
 }
 
-func TestServiceResumeActiveUnsuspendedGoalIsNoOp(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+func TestServiceResumeActiveRunningGoalIsNoOp(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
+	if err := engine.StartGoalLoop(); err != nil {
+		t.Fatalf("StartGoalLoop: %v", err)
+	}
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for running goal loop")
+	}
+	defer func() {
+		_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorSystem)
+		close(client.release)
+	}()
 	before, err := sessiontest.CollectEvents(store)
 	if err != nil {
 		t.Fatalf("CollectEvents before: %v", err)
@@ -992,6 +1061,98 @@ func TestServiceResumeActiveUnsuspendedGoalIsNoOp(t *testing.T) {
 	if len(after) != len(before) {
 		t.Fatalf("resume active appended %d events, want no duplicate goal status event", len(after)-len(before))
 	}
+}
+
+func TestServiceResumeOwnerlessActiveGoalRestartsLoopWithReminder(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	before := runtimeControlGoalDeveloperMessages(t, store)
+	if len(before) != 1 {
+		t.Fatalf("goal developer messages before resume = %d, want set only", len(before))
+	}
+
+	resp, err := service.ResumeGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
+		ClientRequestID: "resume-ownerless-active-1",
+		SessionID:       store.Meta().SessionID,
+		Actor:           "user",
+	})
+	if err != nil {
+		t.Fatalf("ResumeGoal: %v", err)
+	}
+	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != string(session.GoalStatusActive) {
+		t.Fatalf("resume ownerless active response = %+v, want existing active goal", resp.Goal)
+	}
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ownerless active goal loop restart")
+	}
+	defer func() {
+		_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorSystem)
+		close(client.release)
+	}()
+	messages := runtimeControlGoalDeveloperMessages(t, store)
+	if len(messages) != 2 {
+		t.Fatalf("goal developer messages after resume = %d, want set+resume", len(messages))
+	}
+	if messages[1].Content != prompts.RenderGoalResumePrompt("ship goal mode") {
+		t.Fatalf("resume reminder content = %q", messages[1].Content)
+	}
+}
+
+func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing.T) {
+	client := newRestartableRuntimeControlClient()
+	defer func() {
+		client.releaseFirst()
+		client.releaseSecond()
+	}()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	goal, err := engine.SetGoal("ship goal mode", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if err := engine.StartGoalLoop(); err != nil {
+		t.Fatalf("StartGoalLoop: %v", err)
+	}
+	select {
+	case <-client.call1Started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for initial goal loop call")
+	}
+	if err := engine.Interrupt(); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+
+	resp, err := service.ResumeGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
+		ClientRequestID: "resume-suspending-active-1",
+		SessionID:       store.Meta().SessionID,
+		Actor:           "user",
+	})
+	if err != nil {
+		t.Fatalf("ResumeGoal: %v", err)
+	}
+	if resp.Goal == nil || resp.Goal.ID != goal.ID || resp.Goal.Status != string(session.GoalStatusActive) {
+		t.Fatalf("resume suspending active response = %+v, want existing active goal", resp.Goal)
+	}
+	client.releaseFirst()
+	select {
+	case <-client.call2Started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for resumed goal loop call after interrupted turn finished")
+	}
+	messages := runtimeControlGoalDeveloperMessages(t, store)
+	if len(messages) != 2 {
+		t.Fatalf("goal developer messages after interrupted turn drain = %d, want set+resume", len(messages))
+	}
+	if messages[1].Content != prompts.RenderGoalResumePrompt("ship goal mode") {
+		t.Fatalf("resume reminder content = %q", messages[1].Content)
+	}
+	_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorSystem)
+	client.releaseSecond()
 }
 
 func TestServiceCompleteGoalFeedbackIncludesCookDuration(t *testing.T) {

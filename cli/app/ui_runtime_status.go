@@ -368,5 +368,6 @@ func (m *uiModel) localRuntimeTranscript() clientui.TranscriptPage {
 		Revision:              m.transcriptRevision,
 		Entries:               entries,
 		Streaming:             m.view.OngoingStreamingText(),
+		StreamingMetadata:     cloneClientAssistantStreamMetadata(m.activeAssistantStreamMetadata()),
 	}
 }

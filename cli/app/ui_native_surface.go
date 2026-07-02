@@ -56,7 +56,6 @@ func (s *uiNativeSurface) ensure(width int, height int) bool {
 		scrollback.WithNormalBufferAvailability(s.normalBufferAvailableForBuffer),
 		scrollback.WithDelayedWriteErrorListener(s.delayedWriteErrorListener),
 		scrollback.WithAssistantMarkdownRenderer(s.assistantMarkdownRenderer),
-		scrollback.WithAssistantStreamPromotion(false),
 		scrollback.WithNormalBufferPreparation(),
 	)
 	s.surface = s.buffer
@@ -337,6 +336,7 @@ func (l uiViewLayout) renderNativeLiveChatPanel(width int, height int, style uiS
 	if width < 1 || height <= 0 {
 		return nil
 	}
+	l.model.forwardToView(tui.SetViewportSizeMsg{Lines: height, Width: width})
 	spinner := pendingToolSpinnerFrame(l.model.spinnerFrame)
 	lines := l.model.view.PendingOngoingLinesWithPendingSpinnerFrame(spinner)
 	streamLines := l.model.view.StreamingOngoingLines()

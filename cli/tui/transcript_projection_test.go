@@ -164,6 +164,27 @@ func TestCommittedOngoingProjectionPreservesSuccessStateForEmptyToolResult(t *te
 	}
 }
 
+func TestNativeCommittedOngoingProjectionDoesNotTruncateAtUnresolvedToolCall(t *testing.T) {
+	entries := []TranscriptEntry{
+		{Role: "user", Text: "before tool"},
+		{Role: "tool_call", Text: "pwd", ToolCallID: "call-1", ToolCall: &transcript.ToolCallMeta{ToolName: "shell", IsShell: true, Command: "pwd"}},
+		{Role: "system", Text: "notice after unresolved tool"},
+		{Role: "user", Text: "user after unresolved tool"},
+		{Role: "assistant", Text: "assistant after unresolved tool"},
+	}
+
+	liveProjection := ProjectCommittedOngoingTranscript(entries, "dark", 80, 0, false, 0, false)
+	if rendered := liveProjection.Render(TranscriptDivider); strings.Contains(rendered, "notice after unresolved tool") {
+		t.Fatalf("live committed ongoing projection should keep unresolved tool tail pending, got %q", rendered)
+	}
+
+	nativeProjection := ProjectNativeCommittedOngoingTranscript(entries, "dark", 80, 0, false, 0, false)
+	rendered := xansi.Strip(nativeProjection.Render(TranscriptDivider))
+	if !containsInOrder(rendered, "before tool", "pwd", "notice after unresolved tool", "user after unresolved tool", "assistant after unresolved tool") {
+		t.Fatalf("native committed projection omitted committed tail after unresolved tool call, got %q", rendered)
+	}
+}
+
 func TestCommittedOngoingPrefixEndExcludesToolCallWhenMatchingResultIsTransient(t *testing.T) {
 	entries := []TranscriptEntry{
 		{Role: "user", Text: "prompt"},

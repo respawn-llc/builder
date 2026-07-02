@@ -59,7 +59,7 @@ func TestOngoingScrollbackBufferSteerWaitsForStreamingAndFlushesFIFO(t *testing.
 
 func TestOngoingScrollbackBufferDiscardAssistantStreamingDropsMutableStreamAndFlushesQueuedSteers(t *testing.T) {
 	var out bytes.Buffer
-	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil, WithAssistantStreamPromotion(false))
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
 	defer buffer.close()
 
 	if err := buffer.StreamMarkdownAssistantContent("mutable only"); err != nil {

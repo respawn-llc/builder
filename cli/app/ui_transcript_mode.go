@@ -59,6 +59,7 @@ func (m *uiModel) primeDetailTranscriptFromCurrentTail() {
 		if m.shouldPreserveLoadedDetailWindowOnPrime(page) {
 			m.detailTranscript.totalEntries = max(m.detailTranscript.totalEntries, m.transcriptTotalEntries)
 			m.detailTranscript.ongoing = page.Streaming
+			m.detailTranscript.ongoingMetadata = cloneClientAssistantStreamMetadata(page.StreamingMetadata)
 			m.detailTranscript.ongoingError = page.StreamingError
 			return
 		}
@@ -74,9 +75,10 @@ func (m *uiModel) shouldPreserveLoadedDetailWindowOnPrime(page clientui.Transcri
 
 func (m *uiModel) currentDetailTailPage() clientui.TranscriptPage {
 	page := clientui.TranscriptPage{
-		Streaming:      m.view.OngoingStreamingText(),
-		StreamingError: m.view.OngoingErrorText(),
-		HasMoreAbove:   m.transcriptBaseOffset > 0,
+		Streaming:         m.view.OngoingStreamingText(),
+		StreamingMetadata: cloneClientAssistantStreamMetadata(m.activeAssistantStreamMetadata()),
+		StreamingError:    m.view.OngoingErrorText(),
+		HasMoreAbove:      m.transcriptBaseOffset > 0,
 	}
 	for _, entry := range committedTranscriptEntriesForApp(m.transcriptEntries) {
 		page.Entries = append(page.Entries, clientui.ChatEntry{

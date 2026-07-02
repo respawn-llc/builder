@@ -74,11 +74,11 @@ func (s *transcriptRuntimeState) CommittedEntryCount() int {
 	return 0
 }
 
-func (s *transcriptRuntimeState) StreamingSnapshot() (string, string) {
+func (s *transcriptRuntimeState) StreamingSnapshot() (string, string, *AssistantStreamMetadata) {
 	if chat := s.chatProjection(); chat != nil {
 		return chat.streamingSnapshot()
 	}
-	return "", ""
+	return "", "", nil
 }
 
 func (s *transcriptRuntimeState) LastCommittedAssistantFinalAnswer() string {

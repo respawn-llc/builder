@@ -28,6 +28,7 @@ type uiDetailTranscriptWindow struct {
 	totalEntries      int
 	entries           []tui.TranscriptEntry
 	ongoing           string
+	ongoingMetadata   *clientui.AssistantStreamMetadata
 	ongoingError      string
 	loaded            bool
 	olderCursor       int64
@@ -59,14 +60,15 @@ func (w uiDetailTranscriptWindow) page() clientui.TranscriptPage {
 		})
 	}
 	return clientui.TranscriptPage{
-		SessionID:      w.sessionID,
-		OlderCursor:    w.olderCursor,
-		HasMoreAbove:   w.hasMoreAbove,
-		NewerCursor:    w.newerCursor,
-		HasMoreBelow:   w.hasMoreBelow,
-		Entries:        entries,
-		Streaming:      w.ongoing,
-		StreamingError: w.ongoingError,
+		SessionID:         w.sessionID,
+		OlderCursor:       w.olderCursor,
+		HasMoreAbove:      w.hasMoreAbove,
+		NewerCursor:       w.newerCursor,
+		HasMoreBelow:      w.hasMoreBelow,
+		Entries:           entries,
+		Streaming:         w.ongoing,
+		StreamingMetadata: cloneClientAssistantStreamMetadata(w.ongoingMetadata),
+		StreamingError:    w.ongoingError,
 	}
 }
 
@@ -177,6 +179,7 @@ func (w *uiDetailTranscriptWindow) syncTail(page clientui.TranscriptPage) {
 	pageEnd := pageStart + len(page.Entries)
 	w.totalEntries = w.inferredPageTotal(page, pageStart)
 	w.ongoing = page.Streaming
+	w.ongoingMetadata = cloneClientAssistantStreamMetadata(page.StreamingMetadata)
 	w.ongoingError = page.StreamingError
 	if pageStart >= end || pageEnd <= w.offset {
 		if pageEnd >= w.totalEntries {
@@ -215,7 +218,7 @@ func (w uiDetailTranscriptWindow) matchesPage(page clientui.TranscriptPage) bool
 	if w.offset != pageStart || w.totalEntries != totalEntries {
 		return false
 	}
-	if w.ongoing != page.Streaming || w.ongoingError != page.StreamingError {
+	if w.ongoing != page.Streaming || !clientAssistantStreamMetadataEqual(w.ongoingMetadata, page.StreamingMetadata) || w.ongoingError != page.StreamingError {
 		return false
 	}
 	if len(w.entries) != len(page.Entries) {
@@ -239,6 +242,7 @@ func (w *uiDetailTranscriptWindow) replace(page clientui.TranscriptPage) {
 	w.totalEntries = w.inferredPageTotal(page, w.offset)
 	w.entries = transcriptEntriesFromPage(page)
 	w.ongoing = page.Streaming
+	w.ongoingMetadata = cloneClientAssistantStreamMetadata(page.StreamingMetadata)
 	w.ongoingError = page.StreamingError
 	w.loaded = true
 	w.segments = []residentSegmentMeta{segmentMetaFromPage(0, page)}
@@ -304,6 +308,7 @@ func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage
 		}
 		w.refreshBounds()
 		w.ongoing = page.Streaming
+		w.ongoingMetadata = cloneClientAssistantStreamMetadata(page.StreamingMetadata)
 		w.ongoingError = page.StreamingError
 		w.loaded = true
 		return
@@ -315,6 +320,7 @@ func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage
 	w.refreshBounds()
 	w.trimToSegments(w.offset + len(w.entries))
 	w.ongoing = page.Streaming
+	w.ongoingMetadata = cloneClientAssistantStreamMetadata(page.StreamingMetadata)
 	w.ongoingError = page.StreamingError
 	w.loaded = true
 }
@@ -331,6 +337,7 @@ func (w *uiDetailTranscriptWindow) merge(page clientui.TranscriptPage) {
 	if len(page.Entries) == 0 {
 		w.totalEntries = max(w.totalEntries, len(w.entries))
 		w.ongoing = page.Streaming
+		w.ongoingMetadata = cloneClientAssistantStreamMetadata(page.StreamingMetadata)
 		w.ongoingError = page.StreamingError
 		return
 	}
@@ -353,6 +360,7 @@ func (w *uiDetailTranscriptWindow) merge(page clientui.TranscriptPage) {
 	w.entries = merged
 	w.totalEntries = max(w.inferredPageTotal(page, pageStart), mergedEnd)
 	w.ongoing = page.Streaming
+	w.ongoingMetadata = cloneClientAssistantStreamMetadata(page.StreamingMetadata)
 	w.ongoingError = page.StreamingError
 	w.loaded = true
 	if frontGrowth > 0 {
@@ -418,6 +426,23 @@ func (w *uiDetailTranscriptWindow) trimToSegments(anchorOffset int) {
 	}
 	w.totalEntries = max(w.totalEntries, w.offset+len(w.entries))
 	w.refreshBounds()
+}
+
+func cloneClientAssistantStreamMetadata(metadata *clientui.AssistantStreamMetadata) *clientui.AssistantStreamMetadata {
+	if metadata == nil {
+		return nil
+	}
+	copyMetadata := *metadata
+	return &copyMetadata
+}
+
+func clientAssistantStreamMetadataEqual(left *clientui.AssistantStreamMetadata, right *clientui.AssistantStreamMetadata) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.StepID == right.StepID &&
+		left.BaseRevision == right.BaseRevision &&
+		left.BaseCommittedEntryCount == right.BaseCommittedEntryCount
 }
 
 func (w uiDetailTranscriptWindow) requestedPageForDetailEntry() clientui.TranscriptPageRequest {

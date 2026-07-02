@@ -39,6 +39,7 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 	var (
 		eventsMu                   sync.Mutex
 		assistantEvent             *Event
+		assistantEventCount        int
 		reviewerCompletedEvent     *Event
 		snapshotAtReviewerComplete ChatSnapshot
 		eng                        *Engine
@@ -50,6 +51,7 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 				eventsMu.Lock()
 				captured := evt
 				assistantEvent = &captured
+				assistantEventCount++
 				eventsMu.Unlock()
 				return
 			}
@@ -81,11 +83,15 @@ func TestReviewerCompletedEventReflectsPersistedReviewerStatusStateWithoutTransc
 
 	eventsMu.Lock()
 	assistant := assistantEvent
+	assistantCount := assistantEventCount
 	completed := reviewerCompletedEvent
 	snapshotAtCompletion := snapshotAtReviewerComplete
 	eventsMu.Unlock()
 	if assistant == nil {
 		t.Fatal("expected follow-up assistant event")
+	}
+	if assistantCount != 1 {
+		t.Fatalf("follow-up assistant event count = %d, want 1", assistantCount)
 	}
 	if completed == nil {
 		t.Fatal("expected reviewer completed event")

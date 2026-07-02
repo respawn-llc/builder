@@ -338,12 +338,18 @@ func TestReduceRuntimeEvent_AssistantDeltaStreamsAppendAndReset(t *testing.T) {
 		PendingInputState{},
 		RuntimeReasoningState{},
 		false,
-		clientui.Event{Kind: clientui.EventAssistantDelta, AssistantDelta: "hello", AssistantDeltaPhase: clientui.MessagePhaseFinal, StepID: "step-1"},
+		clientui.Event{
+			Kind:                    clientui.EventAssistantDelta,
+			AssistantDelta:          "hello",
+			AssistantDeltaPhase:     clientui.MessagePhaseFinal,
+			StepID:                  "step-1",
+			AssistantStreamMetadata: &clientui.AssistantStreamMetadata{StepID: "step-1", BaseRevision: 7, BaseCommittedEntryCount: 3},
+		},
 	)
 	if len(appended.Transcript.AssistantStream) != 1 {
 		t.Fatalf("expected assistant append command, got %+v", appended.Transcript.AssistantStream)
 	}
-	if appended.Transcript.AssistantStream[0] != (RuntimeAssistantStreamCommand{Kind: RuntimeAssistantStreamAppend, Delta: "hello", Phase: clientui.MessagePhaseFinal, StepID: "step-1"}) {
+	if got := appended.Transcript.AssistantStream[0]; got.Kind != RuntimeAssistantStreamAppend || got.Delta != "hello" || got.Phase != clientui.MessagePhaseFinal || got.StepID != "step-1" || got.AssistantStreamMetadata == nil || got.AssistantStreamMetadata.BaseRevision != 7 || got.AssistantStreamMetadata.BaseCommittedEntryCount != 3 {
 		t.Fatalf("assistant append command = %+v", appended.Transcript.AssistantStream[0])
 	}
 
@@ -353,12 +359,12 @@ func TestReduceRuntimeEvent_AssistantDeltaStreamsAppendAndReset(t *testing.T) {
 		PendingInputState{},
 		RuntimeReasoningState{},
 		false,
-		clientui.Event{Kind: clientui.EventAssistantDeltaReset, StepID: "step-1"},
+		clientui.Event{Kind: clientui.EventAssistantDeltaReset, StepID: "step-1", AssistantStreamMetadata: &clientui.AssistantStreamMetadata{StepID: "step-1", BaseRevision: 7, BaseCommittedEntryCount: 3}},
 	)
 	if len(reset.Transcript.AssistantStream) != 1 {
 		t.Fatalf("expected assistant clear command, got %+v", reset.Transcript.AssistantStream)
 	}
-	if reset.Transcript.AssistantStream[0] != (RuntimeAssistantStreamCommand{Kind: RuntimeAssistantStreamClear, StepID: "step-1"}) {
+	if got := reset.Transcript.AssistantStream[0]; got.Kind != RuntimeAssistantStreamClear || got.StepID != "step-1" || got.AssistantStreamMetadata == nil || got.AssistantStreamMetadata.BaseRevision != 7 || got.AssistantStreamMetadata.BaseCommittedEntryCount != 3 {
 		t.Fatalf("assistant clear command = %+v", reset.Transcript.AssistantStream[0])
 	}
 }

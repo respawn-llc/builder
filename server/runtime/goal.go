@@ -51,6 +51,20 @@ func (e *Engine) GoalLoopSuspended() bool {
 	return e.goalLoopState().Suspended() && e.goalActive()
 }
 
+func (e *Engine) GoalLoopContinuationEnforced() bool {
+	if e == nil {
+		return false
+	}
+	return e.goalLoopState().ContinuationEnforced() && e.goalActive()
+}
+
+func (e *Engine) goalLoopRestartNeeded() bool {
+	if e == nil {
+		return false
+	}
+	return e.goalLoopState().RestartNeeded() && e.goalActive()
+}
+
 func (e *Engine) SetGoal(objective string, actor session.GoalActor) (session.GoalState, error) {
 	return e.setGoalForStep("", objective, actor)
 }
@@ -287,7 +301,7 @@ func (e *Engine) enqueueActiveStepGoalMutationForStep(expectedStepID string, mut
 		}
 		accepted = next
 		if mutation.kind == activeStepGoalMutationStatus && current != nil && current.Status == mutation.status {
-			if mutation.status != session.GoalStatusActive || !e.GoalLoopSuspended() {
+			if mutation.status != session.GoalStatusActive || !e.goalLoopRestartNeeded() {
 				return nil
 			}
 			mutation.kind = activeStepGoalMutationRestartGoalLoop
@@ -367,6 +381,9 @@ func (e *Engine) applyActiveStepGoalMutation(stepID string, mutation activeStepG
 		_, err := e.clearGoalForStep(stepID, mutation.actor)
 		return err
 	case activeStepGoalMutationRestartGoalLoop:
+		if _, err := e.setGoalStatusForStepWithGoalLoopAdmission(stepID, session.GoalStatusActive, mutation.actor, !e.workflowRunActive()); err != nil {
+			return err
+		}
 		e.deferGoalLoopStart()
 		return nil
 	default:

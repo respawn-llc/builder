@@ -18,8 +18,9 @@ func (e *Engine) overlayLiveStreaming(snapshot *ChatSnapshot) {
 	if e == nil || snapshot == nil {
 		return
 	}
-	streaming, streamingErr := e.transcriptRuntimeState().StreamingSnapshot()
+	streaming, streamingErr, streamingMetadata := e.transcriptRuntimeState().StreamingSnapshot()
 	snapshot.Streaming = streaming
+	snapshot.StreamingMetadata = streamingMetadata
 	snapshot.StreamingError = streamingErr
 }
 
@@ -757,6 +758,7 @@ type historyReplacementPayload struct {
 	// event so a workflow run never recompacts a continuation it already committed.
 	WorkflowRunID                     string             `json:"workflow_run_id,omitempty"`
 	CompactionNumber                  int                `json:"compaction_number,omitempty"`
+	CommittedEntryStart               *int               `json:"committed_entry_start,omitempty"`
 	PendingHandoffFutureMessage       string             `json:"pending_handoff_future_message,omitempty"`
 	LastCommittedAssistantFinalAnswer string             `json:"last_committed_assistant_final_answer,omitempty"`
 	Items                             []llm.ResponseItem `json:"items"`

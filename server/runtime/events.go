@@ -75,6 +75,7 @@ type Event struct {
 	Error                        string
 	AssistantDelta               string
 	AssistantDeltaPhase          llm.MessagePhase
+	AssistantStreamMetadata      *AssistantStreamMetadata
 	ReasoningDelta               *llm.ReasoningSummaryDelta
 	UserMessage                  string
 	UserMessageBatch             []string

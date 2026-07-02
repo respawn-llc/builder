@@ -423,7 +423,7 @@ func (p *TranscriptViewProjector) CommittedOngoingLines(input TranscriptProjecti
 	renderer.compactDetail = key.CompactDetail
 	renderer.selectedTranscriptEntry = key.SelectedEntry
 	renderer.selectedTranscriptActive = key.SelectedEntryIsActive
-	projection := projectCommittedOngoingTranscriptWithRenderer(renderer, input.Entries)
+	projection := projectOngoingTranscriptWithRenderer(renderer, CommittedOngoingEntries(input.Entries))
 	lines := projection.Lines(TranscriptDivider)
 	lastGroup := ""
 	if blockCount := len(projection.Blocks); blockCount > 0 {
@@ -732,6 +732,18 @@ func transcriptViewProjectionKeysEqual(left TranscriptViewProjectionKey, right T
 // ProjectCommittedOngoingTranscript renders committed ongoing transcript entries
 // without requiring callers to construct a throwaway tui.Model.
 func ProjectCommittedOngoingTranscript(entries []TranscriptEntry, theme string, width int, baseOffset int, compactDetail bool, selectedEntry int, selectedEntryActive bool) TranscriptProjection {
+	return projectOngoingTranscriptWithSelector(entries, theme, width, baseOffset, compactDetail, selectedEntry, selectedEntryActive, CommittedOngoingEntries)
+}
+
+// ProjectNativeCommittedOngoingTranscript renders an already-owned committed
+// transcript range for append-only native scrollback output. Unlike the live
+// ongoing projection, it must not truncate at unresolved tool calls because
+// later committed rows are immutable history too.
+func ProjectNativeCommittedOngoingTranscript(entries []TranscriptEntry, theme string, width int, baseOffset int, compactDetail bool, selectedEntry int, selectedEntryActive bool) TranscriptProjection {
+	return projectOngoingTranscriptWithSelector(entries, theme, width, baseOffset, compactDetail, selectedEntry, selectedEntryActive, nonEmptyTranscriptEntries)
+}
+
+func projectOngoingTranscriptWithSelector(entries []TranscriptEntry, theme string, width int, baseOffset int, compactDetail bool, selectedEntry int, selectedEntryActive bool, selectEntries func([]TranscriptEntry) []TranscriptEntry) TranscriptProjection {
 	key := normalizeCommittedOngoingProjectionCacheKey(committedOngoingProjectionCacheKey{
 		Theme:                 theme,
 		Width:                 width,
@@ -745,7 +757,10 @@ func ProjectCommittedOngoingTranscript(entries []TranscriptEntry, theme string, 
 	renderer.compactDetail = key.CompactDetail
 	renderer.selectedTranscriptEntry = key.SelectedEntry
 	renderer.selectedTranscriptActive = key.SelectedEntryIsActive
-	return projectCommittedOngoingTranscriptWithRenderer(renderer, entries)
+	if selectEntries == nil {
+		return TranscriptProjection{}
+	}
+	return projectOngoingTranscriptWithRenderer(renderer, selectEntries(entries))
 }
 
 func normalizeCommittedOngoingProjectionCacheKey(key committedOngoingProjectionCacheKey, entryCount int) committedOngoingProjectionCacheKey {
@@ -766,12 +781,11 @@ func transcriptProjectionRenderer(theme string, width int, baseOffset int) Model
 	return model
 }
 
-func projectCommittedOngoingTranscriptWithRenderer(renderer Model, entries []TranscriptEntry) TranscriptProjection {
-	committed := CommittedOngoingEntries(entries)
-	if len(committed) == 0 {
+func projectOngoingTranscriptWithRenderer(renderer Model, entries []TranscriptEntry) TranscriptProjection {
+	if len(entries) == 0 {
 		return TranscriptProjection{}
 	}
-	renderer.transcriptInput.Entries = append([]TranscriptEntry(nil), committed...)
+	renderer.transcriptInput.Entries = append([]TranscriptEntry(nil), entries...)
 	renderer.transcriptInput.Ongoing = ""
 	renderer.transcriptInput.StreamingReasoning = nil
 	return projectionFromOngoingBlocks(renderer.buildTranscriptBlocks(transcriptBlockOptions{

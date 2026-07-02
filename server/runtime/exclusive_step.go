@@ -119,21 +119,14 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 }
 
 func (s *defaultExclusiveStepLifecycle) Interrupt() error {
-	_, err := s.InterruptCurrent()
+	_, err := s.InterruptCurrent(nil)
 	return err
 }
 
-func (s *defaultExclusiveStepLifecycle) InterruptCurrent() (*RunSnapshot, error) {
+func (s *defaultExclusiveStepLifecycle) InterruptCurrent(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error) {
 	s.mu.Lock()
 	active := s.active
-	s.mu.Unlock()
-
 	if active == nil || active.cancel == nil {
-		return nil, nil
-	}
-	active.cancel()
-	s.mu.Lock()
-	if s.active == nil || s.active.sequence != active.sequence {
 		s.mu.Unlock()
 		return nil, nil
 	}
@@ -141,8 +134,18 @@ func (s *defaultExclusiveStepLifecycle) InterruptCurrent() (*RunSnapshot, error)
 		s.mu.Unlock()
 		return nil, nil
 	}
-	s.active.interrupted = true
 	snapshot := cloneRunSnapshot(s.snapshotLocked())
+	if beforeCancel != nil {
+		beforeCancel(cloneRunSnapshot(snapshot))
+	}
+	s.active.interrupted = true
+	s.mu.Unlock()
+	active.cancel()
+	s.mu.Lock()
+	if s.active == nil || s.active.sequence != active.sequence {
+		s.mu.Unlock()
+		return nil, nil
+	}
 	s.mu.Unlock()
 	if err := s.engine.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeInterruption, Content: interruptMessage}})); err != nil {
 		s.mu.Lock()

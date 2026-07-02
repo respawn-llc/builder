@@ -34,29 +34,31 @@ const (
 )
 
 type projectedTranscriptEventState struct {
-	entries              []tui.TranscriptEntry
-	baseOffset           int
-	revision             int64
-	totalEntries         int
-	authoritativeTail    bool
-	hasRuntimeClient     bool
-	busy                 bool
-	liveAssistantPending bool
-	liveAssistantText    string
-	liveAssistantStepID  string
+	entries               []tui.TranscriptEntry
+	baseOffset            int
+	revision              int64
+	totalEntries          int
+	authoritativeTail     bool
+	hasRuntimeClient      bool
+	busy                  bool
+	liveAssistantPending  bool
+	liveAssistantText     string
+	liveAssistantStepID   string
+	liveAssistantIdentity uiAssistantStreamIdentity
 }
 
 type projectedTranscriptEventSnapshot struct {
-	entries              []tui.TranscriptEntry
-	baseOffset           int
-	revision             int64
-	totalEntries         int
-	authoritativeTail    bool
-	hasRuntimeClient     bool
-	busy                 bool
-	liveAssistantPending bool
-	liveAssistantText    string
-	liveAssistantStepID  string
+	entries               []tui.TranscriptEntry
+	baseOffset            int
+	revision              int64
+	totalEntries          int
+	authoritativeTail     bool
+	hasRuntimeClient      bool
+	busy                  bool
+	liveAssistantPending  bool
+	liveAssistantText     string
+	liveAssistantStepID   string
+	liveAssistantIdentity uiAssistantStreamIdentity
 }
 
 type projectedTranscriptReduction struct {
@@ -72,16 +74,17 @@ type projectedTranscriptReduction struct {
 
 func newProjectedTranscriptEventState(snapshot projectedTranscriptEventSnapshot) projectedTranscriptEventState {
 	return projectedTranscriptEventState{
-		entries:              append([]tui.TranscriptEntry(nil), snapshot.entries...),
-		baseOffset:           snapshot.baseOffset,
-		revision:             snapshot.revision,
-		totalEntries:         snapshot.totalEntries,
-		authoritativeTail:    snapshot.authoritativeTail,
-		hasRuntimeClient:     snapshot.hasRuntimeClient,
-		busy:                 snapshot.busy,
-		liveAssistantPending: snapshot.liveAssistantPending,
-		liveAssistantText:    snapshot.liveAssistantText,
-		liveAssistantStepID:  snapshot.liveAssistantStepID,
+		entries:               append([]tui.TranscriptEntry(nil), snapshot.entries...),
+		baseOffset:            snapshot.baseOffset,
+		revision:              snapshot.revision,
+		totalEntries:          snapshot.totalEntries,
+		authoritativeTail:     snapshot.authoritativeTail,
+		hasRuntimeClient:      snapshot.hasRuntimeClient,
+		busy:                  snapshot.busy,
+		liveAssistantPending:  snapshot.liveAssistantPending,
+		liveAssistantText:     snapshot.liveAssistantText,
+		liveAssistantStepID:   snapshot.liveAssistantStepID,
+		liveAssistantIdentity: snapshot.liveAssistantIdentity,
 	}
 }
 
@@ -146,6 +149,12 @@ func reduceProjectedTranscriptEvent(state projectedTranscriptEventState, evt cli
 		hydrationCause:     evt.RecoveryCause,
 	}
 	reduction.projectedTransient = state.hasRuntimeClient && evt.Kind != clientui.EventConversationUpdated && !reduction.projectedCommitted
+	if decision, cause, reason, ok := activeAssistantStreamFrontierBacklogDecision(state, evt); ok {
+		reduction.decision = decision
+		reduction.hydrationCause = cause
+		reduction.skipReason = reason
+		return reduction
+	}
 	if plan.mode != projectedTranscriptEntryPlanSkip && shouldDeferCommittedTranscriptEventWhileStreaming(state, evt) && !projectedEventResolvesExistingToolCall(state, evt) {
 		reduction.decision = projectedTranscriptDecisionDefer
 		reduction.shouldDeferTail = true
@@ -221,12 +230,12 @@ func planProjectedTranscriptEntries(state projectedTranscriptEventState, evt cli
 func shouldSkipStaleAuthoritativeUserFlush(state projectedTranscriptEventState, evt clientui.Event, eventEnd int, currentEnd int) bool {
 	// A recent-tail page is an authoritative server read model. A queued user
 	// flush can still arrive after that page through the live subscription; only
-	// that typed end-aligned stale event is skipped. Live-built overlapping tails
+	// that typed fully-owned stale event is skipped. Live-built overlapping tails
 	// continue through the native divergence path and panic in native mode.
 	return state.authoritativeTail &&
 		evt.Kind == clientui.EventUserMessageFlushed &&
 		evt.CommittedTranscriptChanged &&
-		eventEnd == currentEnd &&
+		eventEnd <= currentEnd &&
 		evt.CommittedEntryCount > 0 &&
 		evt.CommittedEntryCount <= currentEnd
 }
@@ -308,6 +317,9 @@ func isAssistantStreamFinalizerEvent(state projectedTranscriptEventState, evt cl
 	if evt.Kind != clientui.EventAssistantMessage || !evt.CommittedTranscriptChanged {
 		return false
 	}
+	if !activeAssistantStreamFrontierCanFinalizeEvent(state, evt) {
+		return false
+	}
 	if strings.TrimSpace(state.liveAssistantStepID) != "" && strings.TrimSpace(evt.StepID) != "" {
 		if !activeAssistantStepMatchesEvent(state, evt) {
 			return false
@@ -326,6 +338,44 @@ func isAssistantStreamFinalizerEvent(state projectedTranscriptEventState, evt cl
 		}
 	}
 	return false
+}
+
+func activeAssistantStreamFrontierBacklogDecision(state projectedTranscriptEventState, evt clientui.Event) (projectedTranscriptDecisionKind, clientui.TranscriptRecoveryCause, string, bool) {
+	if !state.liveAssistantPending || !evt.CommittedTranscriptChanged || len(evt.TranscriptEntries) == 0 {
+		return 0, clientui.TranscriptRecoveryCauseNone, "", false
+	}
+	if state.liveAssistantIdentity.frontier == nil {
+		return 0, clientui.TranscriptRecoveryCauseNone, "", false
+	}
+	_, eventEnd, ok := projectedTranscriptEventRange(evt, len(evt.TranscriptEntries))
+	if !ok {
+		return 0, clientui.TranscriptRecoveryCauseNone, "", false
+	}
+	if eventEnd > state.liveAssistantIdentity.frontier.baseCommittedEntryCount {
+		return 0, clientui.TranscriptRecoveryCauseNone, "", false
+	}
+	currentEnd := state.baseOffset + len(state.entries)
+	if eventEnd <= currentEnd && evt.CommittedEntryCount > 0 && evt.CommittedEntryCount <= currentEnd {
+		return projectedTranscriptDecisionSkip, clientui.TranscriptRecoveryCauseNone, "active_stream_frontier_stale", true
+	}
+	if state.liveAssistantIdentity.hydrated || evt.RecoveryCause == clientui.TranscriptRecoveryCauseStreamGap {
+		return projectedTranscriptDecisionHydrate, clientui.TranscriptRecoveryCauseStreamGap, "active_stream_frontier_ahead", true
+	}
+	return projectedTranscriptDecisionHydrate, evt.RecoveryCause, "active_stream_frontier_missing_without_gap", true
+}
+
+func activeAssistantStreamFrontierCanFinalizeEvent(state projectedTranscriptEventState, evt clientui.Event) bool {
+	if state.liveAssistantIdentity.frontier == nil {
+		return true
+	}
+	eventStart, _, ok := projectedTranscriptEventRange(evt, len(evt.TranscriptEntries))
+	if !ok {
+		return false
+	}
+	if eventStart != state.liveAssistantIdentity.frontier.baseCommittedEntryCount {
+		return false
+	}
+	return evt.TranscriptRevision > state.liveAssistantIdentity.frontier.baseRevision
 }
 
 func isWhitespaceOnlyAssistantStreamCommittedEvent(state projectedTranscriptEventState, evt clientui.Event) bool {

@@ -59,10 +59,11 @@ const (
 )
 
 type RuntimeAssistantStreamCommand struct {
-	Kind   RuntimeAssistantStreamCommandKind
-	Delta  string
-	Phase  clientui.MessagePhase
-	StepID string
+	Kind                    RuntimeAssistantStreamCommandKind
+	Delta                   string
+	Phase                   clientui.MessagePhase
+	StepID                  string
+	AssistantStreamMetadata *clientui.AssistantStreamMetadata
 }
 
 type RuntimeTranscriptReduction struct {
@@ -180,11 +181,19 @@ func ReduceRuntimeTranscriptEvent(evt clientui.Event) RuntimeTranscriptReduction
 	case clientui.EventStreamingErrorUpdated:
 		return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncStreamingErrorUpdated}}
 	case clientui.EventAssistantDelta:
-		return RuntimeTranscriptReduction{AssistantStream: []RuntimeAssistantStreamCommand{{Kind: RuntimeAssistantStreamAppend, Delta: evt.AssistantDelta, Phase: evt.AssistantDeltaPhase, StepID: evt.StepID}}}
+		return RuntimeTranscriptReduction{AssistantStream: []RuntimeAssistantStreamCommand{{Kind: RuntimeAssistantStreamAppend, Delta: evt.AssistantDelta, Phase: evt.AssistantDeltaPhase, StepID: evt.StepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(evt.AssistantStreamMetadata)}}}
 	case clientui.EventAssistantDeltaReset:
-		return RuntimeTranscriptReduction{AssistantStream: []RuntimeAssistantStreamCommand{{Kind: RuntimeAssistantStreamClear, StepID: evt.StepID}}}
+		return RuntimeTranscriptReduction{AssistantStream: []RuntimeAssistantStreamCommand{{Kind: RuntimeAssistantStreamClear, StepID: evt.StepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(evt.AssistantStreamMetadata)}}}
 	}
 	return RuntimeTranscriptReduction{}
+}
+
+func cloneAssistantStreamMetadata(metadata *clientui.AssistantStreamMetadata) *clientui.AssistantStreamMetadata {
+	if metadata == nil {
+		return nil
+	}
+	copyMetadata := *metadata
+	return &copyMetadata
 }
 
 func ReduceRuntimeRunStateEvent(state RuntimeRunState, activityRunning bool, evt clientui.Event) RuntimeRunStateReduction {

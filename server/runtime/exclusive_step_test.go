@@ -107,7 +107,7 @@ func (s *stubExclusiveStepLifecycle) Interrupt() error {
 	return nil
 }
 
-func (s *stubExclusiveStepLifecycle) InterruptCurrent() (*RunSnapshot, error) {
+func (s *stubExclusiveStepLifecycle) InterruptCurrent(func(*RunSnapshot)) (*RunSnapshot, error) {
 	return nil, nil
 }
 

@@ -39,7 +39,7 @@ func TestRuntimeTranscriptPageRefreshesActiveAssistantStreamSourceFromStreaming(
 	m.termWidth = 100
 	m.termHeight = 20
 	m.activeAssistantStreamSource = "stale partial"
-	m.activeAssistantStreamStepID = "step-stale"
+	m.activeAssistantStreamIdentity = assistantStreamIdentityFromMetadata("step-stale", nil)
 	m.forwardToView(tui.SetConversationMsg{Ongoing: "stale partial"})
 
 	cmd := m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
@@ -52,7 +52,7 @@ func TestRuntimeTranscriptPageRefreshesActiveAssistantStreamSourceFromStreaming(
 	if got := m.activeAssistantStreamText(); got != "hydrated full stream" {
 		t.Fatalf("active stream text = %q, want hydrated streaming text", got)
 	}
-	if got := m.activeAssistantStreamStepID; got != "" {
+	if got := m.activeAssistantStreamStepID(); got != "" {
 		t.Fatalf("active stream step ID = %q, want unknown after page streaming hydration", got)
 	}
 	if got := m.view.OngoingStreamingText(); got != "hydrated full stream" {

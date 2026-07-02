@@ -61,7 +61,7 @@ func TestActiveAssistantFinalizerGapRejectsSameStepNonPrefix(t *testing.T) {
 	m.termWidth = 100
 	m.termHeight = 20
 	m.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail, SkipDetailWarmup: true})
-	m.appendActiveAssistantStreamDelta("step-1", "hello")
+	m.appendActiveAssistantStreamDelta("step-1", "hello", nil)
 
 	_, handled := uiRuntimeAdapter{model: m}.applyActiveAssistantFinalizerGapAsRecentTail(clientui.Event{
 		Kind:                       clientui.EventAssistantMessage,
@@ -292,6 +292,140 @@ func TestReduceProjectedTranscriptEventHydratesCommittedGap(t *testing.T) {
 	}
 	if reduction.plan.divergence != "gap_after_tail" {
 		t.Fatalf("divergence = %q", reduction.plan.divergence)
+	}
+}
+
+func TestReduceProjectedTranscriptEventSkipsFullyOwnedInteriorCommittedRange(t *testing.T) {
+	entries := make([]tui.TranscriptEntry, 511)
+	for idx := range entries {
+		entries[idx] = tui.TranscriptEntry{Role: tui.TranscriptRoleAssistant, Text: "existing", Committed: true}
+	}
+	state := projectedTranscriptEventState{
+		baseOffset:        0,
+		entries:           entries,
+		revision:          15842,
+		totalEntries:      511,
+		authoritativeTail: true,
+	}
+	reduction := reduceProjectedTranscriptEvent(state, clientui.Event{
+		Kind:                       clientui.EventUserMessageFlushed,
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        64,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        65,
+		TranscriptRevision:         15843,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "user", Text: "done"}},
+	})
+
+	if reduction.decision != projectedTranscriptDecisionSkip || reduction.plan.mode != projectedTranscriptEntryPlanSkip {
+		t.Fatalf("decision = %+v, want fully owned stale committed range skip", reduction)
+	}
+}
+
+func TestReduceProjectedTranscriptEventHydratesMissingInteriorCommittedRange(t *testing.T) {
+	entries := make([]tui.TranscriptEntry, 64)
+	for idx := range entries {
+		entries[idx] = tui.TranscriptEntry{Role: tui.TranscriptRoleAssistant, Text: "existing", Committed: true}
+	}
+	state := projectedTranscriptEventState{
+		baseOffset:   0,
+		entries:      entries,
+		revision:     15842,
+		totalEntries: 511,
+	}
+	reduction := reduceProjectedTranscriptEvent(state, clientui.Event{
+		Kind:                       clientui.EventUserMessageFlushed,
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        63,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        65,
+		TranscriptRevision:         15843,
+		TranscriptEntries: []clientui.ChatEntry{
+			{Role: "user", Text: "old"},
+			{Role: "user", Text: "missing"},
+		},
+	})
+
+	if reduction.decision != projectedTranscriptDecisionHydrate || reduction.plan.divergence != "partial_event_range" {
+		t.Fatalf("decision = %+v, want missing overlap hydration", reduction)
+	}
+}
+
+func TestReduceProjectedTranscriptEventSkipsCoveredEventOlderThanActiveStreamFrontier(t *testing.T) {
+	entries := make([]tui.TranscriptEntry, 7)
+	for idx := range entries {
+		entries[idx] = tui.TranscriptEntry{Role: tui.TranscriptRoleAssistant, Text: "existing", Committed: true}
+	}
+	state := projectedTranscriptEventState{
+		baseOffset:           0,
+		entries:              entries,
+		revision:             12,
+		totalEntries:         7,
+		liveAssistantPending: true,
+		liveAssistantText:    "newer stream",
+		liveAssistantStepID:  "step-1",
+		liveAssistantIdentity: uiAssistantStreamIdentity{
+			stepID: "step-1",
+			frontier: &uiAssistantStreamFrontier{
+				baseRevision:            12,
+				baseCommittedEntryCount: 7,
+			},
+			hydrated: true,
+		},
+	}
+	reduction := reduceProjectedTranscriptEvent(state, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        5,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        6,
+		TranscriptRevision:         13,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "covered older segment"}},
+	})
+
+	if reduction.decision != projectedTranscriptDecisionSkip || reduction.skipReason != "active_stream_frontier_stale" {
+		t.Fatalf("decision = %+v, want covered stale frontier event skip", reduction)
+	}
+}
+
+func TestReduceProjectedTranscriptEventDoesNotDeclareStreamGapWithoutHydratedActiveStream(t *testing.T) {
+	entries := make([]tui.TranscriptEntry, 5)
+	for idx := range entries {
+		entries[idx] = tui.TranscriptEntry{Role: tui.TranscriptRoleAssistant, Text: "existing", Committed: true}
+	}
+	state := projectedTranscriptEventState{
+		baseOffset:           0,
+		entries:              entries,
+		revision:             12,
+		totalEntries:         7,
+		liveAssistantPending: true,
+		liveAssistantText:    "live stream",
+		liveAssistantStepID:  "step-1",
+		liveAssistantIdentity: uiAssistantStreamIdentity{
+			stepID: "step-1",
+			frontier: &uiAssistantStreamFrontier{
+				baseRevision:            12,
+				baseCommittedEntryCount: 7,
+			},
+		},
+	}
+	reduction := reduceProjectedTranscriptEvent(state, clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        5,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        6,
+		TranscriptRevision:         13,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "assistant", Text: "missing older segment"}},
+	})
+
+	if reduction.decision != projectedTranscriptDecisionHydrate || reduction.hydrationCause == clientui.TranscriptRecoveryCauseStreamGap {
+		t.Fatalf("decision = %+v, want non-gap hydration so native preflight fails fast", reduction)
+	}
+	if reduction.skipReason != "active_stream_frontier_missing_without_gap" {
+		t.Fatalf("skip reason = %q, want active_stream_frontier_missing_without_gap", reduction.skipReason)
 	}
 }
 

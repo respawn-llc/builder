@@ -845,9 +845,9 @@ func (m Model) ongoingLineParts() ongoingLineParts {
 	if m.viewProjector != nil {
 		base, lastGroup = m.viewProjector.CommittedOngoingLines(input, state)
 	} else {
-		projection := projectCommittedOngoingTranscriptWithRenderer(
+		projection := projectOngoingTranscriptWithRenderer(
 			transcriptProjectionRenderer(state.Theme, state.ViewportWidth, input.BaseOffset),
-			input.Entries,
+			CommittedOngoingEntries(input.Entries),
 		)
 		base = projection.Lines(TranscriptDivider)
 		if blockCount := len(projection.Blocks); blockCount > 0 {
@@ -887,9 +887,9 @@ func (m Model) pendingLiveOngoingLines(spinnerForEntry PendingSpinnerFrameFunc) 
 	if m.viewProjector != nil {
 		_, lastGroup = m.viewProjector.CommittedOngoingLines(input, state)
 	} else {
-		projection := projectCommittedOngoingTranscriptWithRenderer(
+		projection := projectOngoingTranscriptWithRenderer(
 			transcriptProjectionRenderer(state.Theme, state.ViewportWidth, input.BaseOffset),
-			input.Entries,
+			CommittedOngoingEntries(input.Entries),
 		)
 		if blockCount := len(projection.Blocks); blockCount > 0 {
 			lastGroup = projection.Blocks[blockCount-1].DividerGroup

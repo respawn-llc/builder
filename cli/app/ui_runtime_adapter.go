@@ -19,6 +19,8 @@ type uiRuntimeAdapter struct {
 }
 
 var errNativeAssistantStreamStepChanged = errors.New("native assistant stream step changed before the previous stream finalized")
+var errNativeAssistantStreamSegmentChanged = errors.New("native assistant stream segment changed before the previous stream finalized")
+var errNativeAssistantStreamMetadataMissing = errors.New("native assistant stream delta missing stream identity metadata")
 
 type runtimeEventApplyResult struct {
 	cmd               tea.Cmd
@@ -185,19 +187,56 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 		switch streamCommand.Kind {
 		case runtimestate.RuntimeAssistantStreamAppend:
 			delta := streamCommand.Delta
-			if shouldIgnoreStaleAssistantDelta(m, evt, delta) {
-				continue
-			}
 			if isNoopFinalText(delta) {
 				continue
 			}
+			if m.shouldFailBeforeAssistantStreamDeltaWithoutMetadata(streamCommand.StepID, streamCommand.AssistantStreamMetadata) {
+				if cmd, fatal := m.nativeInvariantViolationCmd("stream assistant content", errNativeAssistantStreamMetadataMissing, map[invariant.Field]string{
+					invariant.FieldLiveState:      fmt.Sprintf("step_id=%q chars=%d", strings.TrimSpace(m.activeAssistantStreamStepID()), len(m.activeAssistantStreamText())),
+					invariant.FieldProposedStepID: strings.TrimSpace(streamCommand.StepID),
+				}); fatal {
+					return runtimeEventApplyResult{
+						cmd:               batchCmds(append(cmds, cmd)...),
+						transcriptMutated: transcriptMutated,
+						awaitsHydration:   awaitsHydration,
+						fatal:             true,
+					}
+				}
+			}
+			if m.shouldRecoverBeforeAssistantStreamDelta(streamCommand.StepID, streamCommand.AssistantStreamMetadata) {
+				recoveryCmd := m.requestRuntimeTranscriptSyncForContinuityLoss(clientui.TranscriptRecoveryCauseStreamGap)
+				return runtimeEventApplyResult{
+					cmd:               batchCmds(append(cmds, recoveryCmd)...),
+					transcriptMutated: transcriptMutated,
+					awaitsHydration:   true,
+				}
+			}
+			if m.shouldFailBeforeAssistantStreamDelta(streamCommand.StepID, streamCommand.AssistantStreamMetadata) {
+				if cmd, fatal := m.nativeInvariantViolationCmd("stream assistant content", errNativeAssistantStreamSegmentChanged, map[invariant.Field]string{
+					invariant.FieldLiveState:      fmt.Sprintf("step_id=%q chars=%d", strings.TrimSpace(m.activeAssistantStreamStepID()), len(m.activeAssistantStreamText())),
+					invariant.FieldProposedStepID: strings.TrimSpace(streamCommand.StepID),
+				}); fatal {
+					return runtimeEventApplyResult{
+						cmd:               batchCmds(append(cmds, cmd)...),
+						transcriptMutated: transcriptMutated,
+						awaitsHydration:   awaitsHydration,
+						fatal:             true,
+					}
+				}
+			}
+			if shouldIgnoreStaleAssistantDelta(m, evt, delta) {
+				continue
+			}
 			m.sawAssistantDelta = true
-			m.appendActiveAssistantStreamDelta(streamCommand.StepID, delta)
+			m.appendActiveAssistantStreamDelta(streamCommand.StepID, delta, streamCommand.AssistantStreamMetadata)
 			if handled, err := m.streamNativeAssistantDelta(delta, streamCommand.Phase); handled && err != nil {
 				cmds = append(cmds, m.nativeSurfaceErrorCmd("stream assistant content", err))
 			}
 			m.forwardToView(tui.StreamAssistantMsg{Delta: delta})
 		case runtimestate.RuntimeAssistantStreamClear:
+			if !m.shouldApplyAssistantStreamReset(streamCommand.StepID, streamCommand.AssistantStreamMetadata) {
+				continue
+			}
 			if stepID := strings.TrimSpace(streamCommand.StepID); stepID != "" {
 				m.lastCommittedAssistantStepID = stepID
 			}
@@ -303,13 +342,13 @@ func (m *uiModel) resetActiveAssistantStreamForNewStep(stepID string) (tea.Cmd, 
 		return nil, false
 	}
 	trimmedStepID := strings.TrimSpace(stepID)
-	if trimmedStepID == "" || strings.TrimSpace(m.activeAssistantStreamText()) == "" || strings.TrimSpace(m.activeAssistantStreamStepID) == trimmedStepID {
+	if trimmedStepID == "" || strings.TrimSpace(m.activeAssistantStreamText()) == "" || strings.TrimSpace(m.activeAssistantStreamStepID()) == trimmedStepID {
 		return nil, false
 	}
 	nativeStreaming := m.nativeSurfaceConfigured() && m.nativeSurface.AssistantStreaming()
 	if nativeStreaming {
 		if cmd, fatal := m.nativeInvariantViolationCmd("reset native assistant stream", errNativeAssistantStreamStepChanged, map[invariant.Field]string{
-			invariant.FieldLiveState:      fmt.Sprintf("step_id=%q chars=%d", strings.TrimSpace(m.activeAssistantStreamStepID), len(m.activeAssistantStreamText())),
+			invariant.FieldLiveState:      fmt.Sprintf("step_id=%q chars=%d", strings.TrimSpace(m.activeAssistantStreamStepID()), len(m.activeAssistantStreamText())),
 			invariant.FieldProposedStepID: trimmedStepID,
 		}); fatal {
 			return cmd, true

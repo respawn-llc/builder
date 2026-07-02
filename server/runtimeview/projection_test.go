@@ -115,8 +115,13 @@ func TestEventFromRuntimeProjectsReasoningAndBackground(t *testing.T) {
 		CommittedTranscriptChanged: true,
 		AssistantDelta:             "delta",
 		AssistantDeltaPhase:        llm.MessagePhaseFinal,
-		ReasoningDelta:             &llm.ReasoningSummaryDelta{Key: "k", Role: "reasoning", Text: "thinking"},
-		RunState:                   &runtime.RunState{Lifecycle: runtime.RunningRunLifecycle(runtime.RunModeTurn), RunID: "run-1", Status: runtime.RunStatusRunning},
+		AssistantStreamMetadata: &runtime.AssistantStreamMetadata{
+			StepID:                  "step-1",
+			BaseRevision:            7,
+			BaseCommittedEntryCount: 3,
+		},
+		ReasoningDelta: &llm.ReasoningSummaryDelta{Key: "k", Role: "reasoning", Text: "thinking"},
+		RunState:       &runtime.RunState{Lifecycle: runtime.RunningRunLifecycle(runtime.RunModeTurn), RunID: "run-1", Status: runtime.RunStatusRunning},
 		Background: &runtime.BackgroundShellEvent{
 			Type:              "completed",
 			ID:                "123",
@@ -144,6 +149,9 @@ func TestEventFromRuntimeProjectsReasoningAndBackground(t *testing.T) {
 	}
 	if view.AssistantDeltaPhase != clientui.MessagePhaseFinal {
 		t.Fatalf("expected assistant delta phase projection, got %q", view.AssistantDeltaPhase)
+	}
+	if view.AssistantStreamMetadata == nil || view.AssistantStreamMetadata.StepID != "step-1" || view.AssistantStreamMetadata.BaseRevision != 7 || view.AssistantStreamMetadata.BaseCommittedEntryCount != 3 {
+		t.Fatalf("expected assistant stream metadata projection, got %+v", view.AssistantStreamMetadata)
 	}
 	if view.RunState == nil || !view.RunState.Lifecycle.IsRunning() {
 		t.Fatalf("expected busy run state, got %+v", view.RunState)
@@ -588,7 +596,12 @@ func TestChatSnapshotFromRuntimeCopiesEntries(t *testing.T) {
 			ToolCallID:        "call-1",
 			ToolCall:          toolCall,
 		}},
-		Streaming:      "ongoing",
+		Streaming: "ongoing",
+		StreamingMetadata: &runtime.AssistantStreamMetadata{
+			StepID:                  "step-1",
+			BaseRevision:            7,
+			BaseCommittedEntryCount: 3,
+		},
 		StreamingError: "warn",
 	})
 	if len(snapshot.Entries) != 1 {
@@ -614,6 +627,9 @@ func TestChatSnapshotFromRuntimeCopiesEntries(t *testing.T) {
 	if snapshot.Streaming != "ongoing" || snapshot.StreamingError != "warn" {
 		t.Fatalf("unexpected snapshot projection: %+v", snapshot)
 	}
+	if snapshot.StreamingMetadata == nil || snapshot.StreamingMetadata.StepID != "step-1" || snapshot.StreamingMetadata.BaseRevision != 7 || snapshot.StreamingMetadata.BaseCommittedEntryCount != 3 {
+		t.Fatalf("expected streaming metadata projection, got %+v", snapshot.StreamingMetadata)
+	}
 }
 
 func TestChatSnapshotFromRuntimeSuppressesNoopFinalAssistantState(t *testing.T) {
@@ -623,7 +639,12 @@ func TestChatSnapshotFromRuntimeSuppressesNoopFinalAssistantState(t *testing.T) 
 			Text:  "NO_OP",
 			Phase: llm.MessagePhaseFinal,
 		}},
-		Streaming:      "NO_OP",
+		Streaming: "NO_OP",
+		StreamingMetadata: &runtime.AssistantStreamMetadata{
+			StepID:                  "step-1",
+			BaseRevision:            7,
+			BaseCommittedEntryCount: 3,
+		},
 		StreamingError: "warn",
 	})
 	if got := len(snapshot.Entries); got != 0 {
@@ -631,6 +652,9 @@ func TestChatSnapshotFromRuntimeSuppressesNoopFinalAssistantState(t *testing.T) 
 	}
 	if got := snapshot.Streaming; got != "" {
 		t.Fatalf("noop ongoing text = %q, want empty", got)
+	}
+	if snapshot.StreamingMetadata != nil {
+		t.Fatalf("noop ongoing metadata = %+v, want nil", snapshot.StreamingMetadata)
 	}
 	if got := snapshot.StreamingError; got != "warn" {
 		t.Fatalf("ongoing error = %q, want warn", got)

@@ -544,12 +544,25 @@ func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
 
 func (e *Engine) Interrupt() error {
 	e.ensureOrchestrationCollaborators()
-	interrupted, err := e.stepLifecycle.InterruptCurrent()
+	goalLoopInterruptPending := false
+	interrupted, err := e.stepLifecycle.InterruptCurrent(func(snapshot *RunSnapshot) {
+		if e.goalActive() && snapshot != nil && snapshot.ActiveKind == ActiveKindGoalLoop {
+			e.goalLoopState().MarkInterruptPending()
+			goalLoopInterruptPending = true
+		}
+	})
 	if err != nil {
+		if goalLoopInterruptPending {
+			e.goalLoopState().ClearInterruptPending()
+		}
 		return err
 	}
-	if e.goalActive() && interrupted != nil && interrupted.ActiveKind == ActiveKindGoalLoop {
-		e.goalLoopState().Suspend()
+	if goalLoopInterruptPending {
+		if e.goalActive() && interrupted != nil && interrupted.ActiveKind == ActiveKindGoalLoop {
+			e.goalLoopState().CommitInterrupt()
+		} else {
+			e.goalLoopState().ClearInterruptPending()
+		}
 	}
 	return nil
 }
@@ -691,7 +704,7 @@ func (e *Engine) runStepLoopWithPendingUserInjectionIDs(ctx context.Context, ste
 	defer restore()
 	reviewerFrequency := e.ReviewerFrequency()
 	reviewerClient := e.reviewerRuntimeState().Client()
-	result, err := e.runStepLoopWithOptions(ctx, stepID, reviewerFrequency, reviewerClient, true, true)
+	result, err := e.runStepLoopWithOptions(ctx, stepID, reviewerFrequency, reviewerClient, true)
 	if result.NoopFinalAnswer {
 		return llm.Message{}, err
 	}
@@ -703,12 +716,11 @@ func (e *Engine) runStepLoopWithPendingUserInjectionIDs(ctx context.Context, ste
 // this run. When refreshReviewerConfigOnResolve is true, the final assistant
 // resolution re-reads current runtime reviewer config so busy-time toggles (for
 // example from /supervisor) affect the currently running step at completion.
-func (e *Engine) runStepLoopWithOptions(ctx context.Context, stepID string, reviewerFrequency string, reviewerClient llm.Client, emitAssistantEvent bool, refreshReviewerConfigOnResolve bool) (stepLoopResult, error) {
+func (e *Engine) runStepLoopWithOptions(ctx context.Context, stepID string, reviewerFrequency string, reviewerClient llm.Client, refreshReviewerConfigOnResolve bool) (stepLoopResult, error) {
 	e.ensureOrchestrationCollaborators()
 	return e.stepFlow.RunStepLoopWithOptions(ctx, stepID, stepLoopOptions{
 		ReviewerFrequency:              reviewerFrequency,
 		ReviewerClient:                 reviewerClient,
-		EmitAssistantEvent:             emitAssistantEvent,
 		RefreshReviewerConfigOnResolve: refreshReviewerConfigOnResolve,
 	})
 }

@@ -140,7 +140,7 @@ When an authoritative committed projection arrives from live runtime-event deliv
 
 The matching assistant finalizer must be the first authoritative appended committed block while native assistant streaming is active. If other committed blocks precede the matching finalizer and no real connection/subscription gap occurred, native fails fast instead of rehydrating because it cannot write those earlier blocks before a stream that already exists physically without rewriting scrollback.
 
-Committed non-assistant rows may arrive while an assistant stream is still active. Those rows are stable transcript history, not stream finalizers. Native queues them behind the active stream through the same stable append path and keeps the assistant stream mutable until a matching assistant finalizer, explicit stream finish, or scratch rehydration.
+Committed non-assistant rows may arrive while an assistant stream is still active. Those rows are stable transcript history, not stream finalizers. Native queues them behind the active stream through the same stable append path and keeps the assistant stream mutable until a matching assistant finalizer, explicit stream finish, or scratch rehydration, but not beyond at most ONE model step. Failure of commentary or final_answer mutable, unstable stream to close and finalize beyond one step boundary is a developer error and must fail fast.
 
 If a new assistant step starts while native still has an unfinalized active assistant stream from another step and no real connection/subscription gap occurred, native output fails fast before the new step's delta is rendered. The app and standard renderer reset to the new step source; native must not append a new step's delta into a previous physical stream.
 

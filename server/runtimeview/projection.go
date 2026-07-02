@@ -128,6 +128,7 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 		Error:                        evt.Error,
 		AssistantDelta:               evt.AssistantDelta,
 		AssistantDeltaPhase:          clientui.MessagePhase(evt.AssistantDeltaPhase),
+		AssistantStreamMetadata:      assistantStreamMetadataFromRuntime(evt.AssistantStreamMetadata),
 		UserMessage:                  evt.UserMessage,
 		UserMessageBatch:             append([]string(nil), evt.UserMessageBatch...),
 		UserMessageBatchQueueItemIDs: append([]string(nil), evt.UserMessageBatchQueueItemIDs...),
@@ -301,13 +302,27 @@ func ChatSnapshotFromRuntime(snapshot runtime.ChatSnapshot) clientui.ChatSnapsho
 		})
 	}
 	streaming := snapshot.Streaming
+	streamingMetadata := assistantStreamMetadataFromRuntime(snapshot.StreamingMetadata)
 	if strings.TrimSpace(streaming) == runtimeNoopFinalToken {
 		streaming = ""
+		streamingMetadata = nil
 	}
 	return clientui.ChatSnapshot{
-		Entries:        entries,
-		Streaming:      streaming,
-		StreamingError: snapshot.StreamingError,
+		Entries:           entries,
+		Streaming:         streaming,
+		StreamingMetadata: streamingMetadata,
+		StreamingError:    snapshot.StreamingError,
+	}
+}
+
+func assistantStreamMetadataFromRuntime(metadata *runtime.AssistantStreamMetadata) *clientui.AssistantStreamMetadata {
+	if metadata == nil {
+		return nil
+	}
+	return &clientui.AssistantStreamMetadata{
+		StepID:                  metadata.StepID,
+		BaseRevision:            metadata.BaseRevision,
+		BaseCommittedEntryCount: metadata.BaseCommittedEntryCount,
 	}
 }
 

@@ -1032,6 +1032,84 @@ func TestGoalLoopResumeDuringInterruptedTurnDoesNotLaunchDuplicateLoop(t *testin
 	}
 }
 
+func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	client := newScriptedGoalLoopClient()
+	client.ignoreCancelUntilRelease = true
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	client.beforeReturn = func(call int) {
+		if call == 2 {
+			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+		}
+	}
+	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if err := engine.StartGoalLoop(); err != nil {
+		t.Fatalf("StartGoalLoop: %v", err)
+	}
+	client.waitStarted(t, 1)
+
+	engine.outputMutationMu.Lock()
+	outputLocked := true
+	defer func() {
+		if outputLocked {
+			engine.outputMutationMu.Unlock()
+		}
+	}()
+	released := map[int]bool{}
+	releaseCall := func(call int) {
+		if released[call] {
+			return
+		}
+		released[call] = true
+		client.releaseCall(call)
+	}
+	defer releaseCall(2)
+	defer releaseCall(1)
+
+	interruptDone := make(chan error, 1)
+	go func() {
+		interruptDone <- engine.Interrupt()
+	}()
+	waitGoalLoopContinuationEnforced(t, engine, false)
+
+	accepted, queued, err := engine.QueueGoalStatusForActiveStep(session.GoalStatusActive, session.GoalActorUser)
+	if err != nil || !queued {
+		t.Fatalf("QueueGoalStatusForActiveStep queued=%t err=%v, want queued resume during in-flight interrupt", queued, err)
+	}
+	if accepted.Status != session.GoalStatusActive {
+		t.Fatalf("accepted status = %q, want active", accepted.Status)
+	}
+
+	engine.outputMutationMu.Unlock()
+	outputLocked = false
+	select {
+	case err := <-interruptDone:
+		if err != nil {
+			t.Fatalf("Interrupt: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for interrupt publication")
+	}
+
+	releaseCall(1)
+	client.waitStarted(t, 2)
+	events, err := sessiontest.CollectEvents(store)
+	if err != nil {
+		t.Fatalf("ReadEvents: %v", err)
+	}
+	messages := goalDeveloperMessages(t, events)
+	if len(messages) != 2 {
+		t.Fatalf("goal developer messages after interrupt race resume = %d, want set+resume", len(messages))
+	}
+	if got := messages[1].Content; got != prompts.RenderGoalResumePrompt("ship goal mode") {
+		t.Fatalf("resume reminder content = %q", got)
+	}
+	releaseCall(2)
+	waitGoalLoopRunning(t, engine, false)
+}
+
 func TestGoalLoopRetriesWhenExclusiveStepIsBusy(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
@@ -1177,6 +1255,9 @@ func (c *scriptedGoalLoopClient) Generate(ctx context.Context, _ llm.Request) (l
 
 	if c.ignoreCancelUntilRelease {
 		<-release
+		if err := ctx.Err(); err != nil {
+			return llm.Response{}, err
+		}
 	} else {
 		select {
 		case <-ctx.Done():
@@ -1257,6 +1338,42 @@ func waitGoalLoopRunning(t *testing.T, engine *Engine, want bool) {
 		select {
 		case <-deadline:
 			t.Fatalf("goalLoopRunning = %t, want %t", running, want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitGoalLoopSuspended(t *testing.T, engine *Engine, want bool) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		suspended := engine.GoalLoopSuspended()
+		if suspended == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("goalLoopSuspended = %t, want %t", suspended, want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitGoalLoopContinuationEnforced(t *testing.T, engine *Engine, want bool) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		enforced := engine.GoalLoopContinuationEnforced()
+		if enforced == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("goalLoopContinuationEnforced = %t, want %t", enforced, want)
 		case <-ticker.C:
 		}
 	}

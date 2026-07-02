@@ -194,7 +194,7 @@ func (state runtimeTranscriptPageState) effectiveCommittedState() (int64, int) {
 	}
 	count := state.effectiveCommittedCount
 	if count == 0 {
-		count = state.baseOffset + len(committedTranscriptEntriesForApp(state.entries))
+		count = state.baseOffset + len(ownedCommittedTranscriptEntriesForApp(state.entries))
 	}
 	return revision, max(state.totalEntries, count)
 }

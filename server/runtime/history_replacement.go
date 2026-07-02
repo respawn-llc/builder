@@ -19,6 +19,7 @@ type historyReplacementEnvelope struct {
 	Mode                              string          `json:"mode"`
 	WorkflowRunID                     string          `json:"workflow_run_id"`
 	CompactionNumber                  int             `json:"compaction_number"`
+	CommittedEntryStart               *int            `json:"committed_entry_start"`
 	PendingHandoffFutureMessage       string          `json:"pending_handoff_future_message"`
 	LastCommittedAssistantFinalAnswer string          `json:"last_committed_assistant_final_answer"`
 	Items                             json.RawMessage `json:"items"`
@@ -46,6 +47,7 @@ func decodePersistedHistoryReplacementPayload(payload []byte) (historyReplacemen
 		Mode:                              strings.TrimSpace(envelope.Mode),
 		WorkflowRunID:                     strings.TrimSpace(envelope.WorkflowRunID),
 		CompactionNumber:                  envelope.CompactionNumber,
+		CommittedEntryStart:               cloneIntPtr(envelope.CommittedEntryStart),
 		PendingHandoffFutureMessage:       strings.TrimSpace(envelope.PendingHandoffFutureMessage),
 		LastCommittedAssistantFinalAnswer: envelope.LastCommittedAssistantFinalAnswer,
 	}
@@ -57,6 +59,14 @@ func decodePersistedHistoryReplacementPayload(payload []byte) (historyReplacemen
 		return historyReplacementPayload{}, false, err
 	}
 	return decoded, false, nil
+}
+
+func cloneIntPtr(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
 }
 
 func transcriptEntriesFromHistoryReplacement(items []llm.ResponseItem) []ChatEntry {

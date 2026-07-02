@@ -44,6 +44,7 @@ func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui
 		HasMoreBelow:          page.HasMoreBelow,
 		Entries:               cloneChatEntries(snapshot.Entries),
 		Streaming:             snapshot.Streaming,
+		StreamingMetadata:     cloneAssistantStreamMetadata(snapshot.StreamingMetadata),
 		StreamingError:        snapshot.StreamingError,
 	}
 }
@@ -120,4 +121,12 @@ func cloneClientToolCallMeta(meta *clientui.ToolCallMeta) *clientui.ToolCallMeta
 		copyMeta.PatchRender = cloneRenderedPatch(meta.PatchRender)
 	}
 	return &copyMeta
+}
+
+func cloneAssistantStreamMetadata(metadata *clientui.AssistantStreamMetadata) *clientui.AssistantStreamMetadata {
+	if metadata == nil {
+		return nil
+	}
+	copyMetadata := *metadata
+	return &copyMetadata
 }

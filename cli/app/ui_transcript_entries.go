@@ -37,6 +37,17 @@ func transcriptEntriesFromPage(page clientui.TranscriptPage) []tui.TranscriptEnt
 }
 
 func committedTranscriptEntriesForApp(entries []tui.TranscriptEntry) []tui.TranscriptEntry {
+	return tui.CommittedOngoingEntries(normalizedCommittedTranscriptEntriesForApp(entries))
+}
+
+func ownedCommittedTranscriptEntriesForApp(entries []tui.TranscriptEntry) []tui.TranscriptEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	return normalizedCommittedTranscriptEntriesForApp(entries)
+}
+
+func normalizedCommittedTranscriptEntriesForApp(entries []tui.TranscriptEntry) []tui.TranscriptEntry {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -49,7 +60,7 @@ func committedTranscriptEntriesForApp(entries []tui.TranscriptEntry) []tui.Trans
 		copyEntry.Transient = false
 		normalized = append(normalized, copyEntry)
 	}
-	return tui.CommittedOngoingEntries(normalized)
+	return normalized
 }
 
 func transcriptEntryFromProjectedChatEntry(entry clientui.ChatEntry, transient bool, committed bool) tui.TranscriptEntry {

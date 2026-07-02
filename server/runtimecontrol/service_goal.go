@@ -153,7 +153,7 @@ func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalSt
 			}
 			if status == session.GoalStatusActive {
 				current := engine.Goal()
-				if current != nil && current.Status == session.GoalStatusActive && !engine.GoalLoopSuspended() {
+				if current != nil && current.Status == session.GoalStatusActive && engine.GoalLoopContinuationEnforced() {
 					response = serverapi.RuntimeGoalShowResponse{Goal: runtimeGoalFromSessionGoal(*current, false)}
 					return nil
 				}

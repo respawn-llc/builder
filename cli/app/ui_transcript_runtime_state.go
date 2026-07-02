@@ -8,6 +8,17 @@ import (
 	"core/shared/transcript"
 )
 
+type uiAssistantStreamIdentity struct {
+	stepID   string
+	frontier *uiAssistantStreamFrontier
+	hydrated bool
+}
+
+type uiAssistantStreamFrontier struct {
+	baseRevision            int64
+	baseCommittedEntryCount int
+}
+
 func (m *uiModel) invalidateTransientTranscriptState() {
 	if m == nil {
 		return
@@ -135,15 +146,19 @@ func (m *uiModel) beginCommittedTranscriptContinuityRecovery() {
 	m.invalidateTransientTranscriptState()
 }
 
-func (m *uiModel) appendActiveAssistantStreamDelta(stepID string, delta string) {
+func (m *uiModel) appendActiveAssistantStreamDelta(stepID string, delta string, metadata *clientui.AssistantStreamMetadata) {
 	if m == nil {
 		return
 	}
-	if trimmedStepID := strings.TrimSpace(stepID); trimmedStepID != "" {
-		if m.activeAssistantStreamStepID != "" && m.activeAssistantStreamStepID != trimmedStepID {
+	nextIdentity := assistantStreamIdentityFromMetadata(stepID, metadata)
+	if nextIdentity.stepID != "" {
+		if m.activeAssistantStreamIdentity.stepID != "" && m.activeAssistantStreamIdentity.stepID != nextIdentity.stepID {
 			m.activeAssistantStreamSource = ""
 		}
-		m.activeAssistantStreamStepID = trimmedStepID
+		if m.activeAssistantStreamIdentity.sameStepDifferentFrontier(nextIdentity) {
+			m.activeAssistantStreamSource = ""
+		}
+		m.activeAssistantStreamIdentity = m.activeAssistantStreamIdentity.merge(nextIdentity)
 	}
 	m.activeAssistantStreamSource += delta
 }
@@ -153,10 +168,10 @@ func (m *uiModel) clearActiveAssistantStreamSource() {
 		return
 	}
 	m.activeAssistantStreamSource = ""
-	m.activeAssistantStreamStepID = ""
+	m.activeAssistantStreamIdentity = uiAssistantStreamIdentity{}
 }
 
-func (m *uiModel) refreshActiveAssistantStreamFromAuthoritativePageStreaming(streaming string) {
+func (m *uiModel) refreshActiveAssistantStreamFromAuthoritativePageStreaming(streaming string, metadata *clientui.AssistantStreamMetadata) {
 	if m == nil {
 		return
 	}
@@ -164,7 +179,8 @@ func (m *uiModel) refreshActiveAssistantStreamFromAuthoritativePageStreaming(str
 		return
 	}
 	m.activeAssistantStreamSource = streaming
-	m.activeAssistantStreamStepID = ""
+	m.activeAssistantStreamIdentity = assistantStreamIdentityFromMetadata("", metadata)
+	m.activeAssistantStreamIdentity.hydrated = true
 }
 
 func (m *uiModel) activeAssistantStreamText() string {
@@ -185,6 +201,157 @@ func (m *uiModel) activeAssistantStreamPending() bool {
 		return true
 	}
 	return m.nativeSurfaceConfigured() && m.nativeSurface.AssistantStreaming()
+}
+
+func (m *uiModel) activeAssistantStreamStepID() string {
+	if m == nil {
+		return ""
+	}
+	return m.activeAssistantStreamIdentity.stepID
+}
+
+func (m *uiModel) activeAssistantStreamMetadata() *clientui.AssistantStreamMetadata {
+	if m == nil {
+		return nil
+	}
+	return m.activeAssistantStreamIdentity.metadata()
+}
+
+func (m *uiModel) shouldApplyAssistantStreamReset(stepID string, metadata *clientui.AssistantStreamMetadata) bool {
+	if m == nil {
+		return false
+	}
+	active := m.activeAssistantStreamIdentity
+	if active.stepID == "" && active.frontier == nil {
+		return true
+	}
+	incoming := assistantStreamIdentityFromMetadata(stepID, metadata)
+	if incoming.stepID != "" && active.stepID != "" && incoming.stepID != active.stepID {
+		return false
+	}
+	if active.frontier == nil {
+		return true
+	}
+	if incoming.frontier == nil {
+		return false
+	}
+	return active.stepID == incoming.stepID &&
+		active.frontier.baseRevision == incoming.frontier.baseRevision &&
+		active.frontier.baseCommittedEntryCount == incoming.frontier.baseCommittedEntryCount
+}
+
+func (m *uiModel) shouldFailBeforeAssistantStreamDeltaWithoutMetadata(stepID string, metadata *clientui.AssistantStreamMetadata) bool {
+	if m == nil || !m.nativeSurfaceConfigured() {
+		return false
+	}
+	if strings.TrimSpace(stepID) == "" {
+		return false
+	}
+	incoming := assistantStreamIdentityFromMetadata(stepID, metadata)
+	return incoming.frontier == nil
+}
+
+func (m *uiModel) shouldRecoverBeforeAssistantStreamDelta(stepID string, metadata *clientui.AssistantStreamMetadata) bool {
+	if m == nil || metadata == nil {
+		return false
+	}
+	incoming := assistantStreamIdentityFromMetadata(stepID, metadata)
+	if incoming.frontier == nil {
+		return false
+	}
+	_, ownedEnd := committedTranscriptOwnedTailIncludingDeferredTail(m)
+	if incoming.frontier.baseCommittedEntryCount > ownedEnd {
+		return true
+	}
+	active := m.activeAssistantStreamIdentity
+	if active.frontier == nil || active.stepID == "" || incoming.stepID == "" {
+		return false
+	}
+	if active.stepID != incoming.stepID || !assistantStreamFrontiersEqual(active.frontier, incoming.frontier) {
+		return m.nativeSurfaceConfigured() && m.nativeSurface.AssistantStreaming() && active.hydrated
+	}
+	return false
+}
+
+func (m *uiModel) shouldFailBeforeAssistantStreamDelta(stepID string, metadata *clientui.AssistantStreamMetadata) bool {
+	if m == nil || metadata == nil || !m.nativeSurfaceConfigured() || !m.nativeSurface.AssistantStreaming() {
+		return false
+	}
+	incoming := assistantStreamIdentityFromMetadata(stepID, metadata)
+	active := m.activeAssistantStreamIdentity
+	if active.frontier == nil || incoming.frontier == nil || active.stepID == "" || incoming.stepID == "" {
+		return false
+	}
+	if active.hydrated {
+		return false
+	}
+	if active.stepID != incoming.stepID {
+		return false
+	}
+	return !assistantStreamFrontiersEqual(active.frontier, incoming.frontier)
+}
+
+func assistantStreamIdentityFromMetadata(stepID string, metadata *clientui.AssistantStreamMetadata) uiAssistantStreamIdentity {
+	identity := uiAssistantStreamIdentity{stepID: strings.TrimSpace(stepID)}
+	if metadata == nil {
+		return identity
+	}
+	metadataStepID := strings.TrimSpace(metadata.StepID)
+	if metadataStepID != "" {
+		identity.stepID = metadataStepID
+	}
+	if identity.stepID == "" {
+		return identity
+	}
+	identity.frontier = &uiAssistantStreamFrontier{
+		baseRevision:            metadata.BaseRevision,
+		baseCommittedEntryCount: metadata.BaseCommittedEntryCount,
+	}
+	return identity
+}
+
+func (identity uiAssistantStreamIdentity) merge(next uiAssistantStreamIdentity) uiAssistantStreamIdentity {
+	if next.stepID == "" {
+		return identity
+	}
+	merged := next
+	if next.frontier == nil {
+		merged.frontier = identity.frontier
+	}
+	if identity.hydrated && identity.stepID == merged.stepID && assistantStreamFrontiersEqual(identity.frontier, merged.frontier) {
+		merged.hydrated = true
+	}
+	return merged
+}
+
+func (identity uiAssistantStreamIdentity) sameStepDifferentFrontier(next uiAssistantStreamIdentity) bool {
+	if identity.stepID == "" || next.stepID == "" || identity.stepID != next.stepID {
+		return false
+	}
+	if identity.frontier == nil || next.frontier == nil {
+		return false
+	}
+	return identity.frontier.baseRevision != next.frontier.baseRevision ||
+		identity.frontier.baseCommittedEntryCount != next.frontier.baseCommittedEntryCount
+}
+
+func (identity uiAssistantStreamIdentity) metadata() *clientui.AssistantStreamMetadata {
+	if identity.stepID == "" || identity.frontier == nil {
+		return nil
+	}
+	return &clientui.AssistantStreamMetadata{
+		StepID:                  identity.stepID,
+		BaseRevision:            identity.frontier.baseRevision,
+		BaseCommittedEntryCount: identity.frontier.baseCommittedEntryCount,
+	}
+}
+
+func assistantStreamFrontiersEqual(left, right *uiAssistantStreamFrontier) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.baseRevision == right.baseRevision &&
+		left.baseCommittedEntryCount == right.baseCommittedEntryCount
 }
 
 func shouldClearAssistantStreamForCommittedAssistantEvent(evt clientui.Event, activeStream string) bool {
@@ -390,7 +557,7 @@ func committedTranscriptOwnedTailIncludingDeferredTail(m *uiModel) (int64, int) 
 		return 0, 0
 	}
 	revision := m.transcriptRevision
-	count := m.transcriptBaseOffset + len(committedTranscriptEntriesForApp(m.transcriptEntries))
+	count := m.transcriptBaseOffset + len(ownedCommittedTranscriptEntriesForApp(m.transcriptEntries))
 	chainEnd := count
 	for _, deferred := range m.deferredCommittedTail {
 		if deferred.rangeStart != chainEnd {

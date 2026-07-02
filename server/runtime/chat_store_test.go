@@ -49,7 +49,7 @@ func TestChatStoreSnapshotProjectsConversation(t *testing.T) {
 	})
 	s.appendMessage(llm.Message{Role: llm.RoleAssistant, Content: "done"})
 
-	s.appendStreamingDelta("stream")
+	s.appendStreamingDelta("step-1", 12, 6, "stream")
 	s.setStreamingError("failed")
 	s.appendLocalEntryRecord(ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "system", Text: "note"})
 

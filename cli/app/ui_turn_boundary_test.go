@@ -173,7 +173,7 @@ func TestNewAssistantTurnFlushesStepLessDeferredFinalizerByText(t *testing.T) {
 	if committedAssistantCount != 1 {
 		t.Fatal("step-less deferred finalizer was not committed into the working set")
 	}
-	if got := m.view.OngoingStreamingText(); strings.TrimSpace(got) == "" || m.activeAssistantStreamStepID != "step-2" {
+	if got := m.view.OngoingStreamingText(); strings.TrimSpace(got) == "" || m.activeAssistantStreamStepID() != "step-2" {
 		t.Fatalf("live area carried step-less finalizer into the new turn: %q", got)
 	}
 }
@@ -198,7 +198,7 @@ func TestCommittedUserFlushStartsNewTurnForDeferredFinalizer(t *testing.T) {
 		}},
 	}}
 	m.activeAssistantStreamSource = "Prior answer."
-	m.activeAssistantStreamStepID = "step-1"
+	m.activeAssistantStreamIdentity = assistantStreamIdentityFromMetadata("step-1", nil)
 	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: m.transcriptEntries})
 
 	_, cmd := m.handleRuntimeEventBatch([]clientui.Event{{
@@ -244,7 +244,7 @@ func TestCommittedAssistantMessageStartsNewTurnForDeferredFinalizer(t *testing.T
 		}},
 	}}
 	m.activeAssistantStreamSource = "Prior answer."
-	m.activeAssistantStreamStepID = "step-1"
+	m.activeAssistantStreamIdentity = assistantStreamIdentityFromMetadata("step-1", nil)
 	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: m.transcriptEntries})
 
 	_, cmd := m.handleRuntimeEventBatch([]clientui.Event{{
@@ -291,7 +291,7 @@ func TestCommittedUserFlushDoesNotMergeKnownMismatchedDeferredFinalizer(t *testi
 		}},
 	}}
 	m.activeAssistantStreamSource = "Done"
-	m.activeAssistantStreamStepID = "step-a"
+	m.activeAssistantStreamIdentity = assistantStreamIdentityFromMetadata("step-a", nil)
 	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: m.transcriptEntries})
 
 	_, cmd := m.handleRuntimeEventBatch([]clientui.Event{{
@@ -329,7 +329,7 @@ func TestCommittedAssistantMessageClearsStaleKnownStepStreamAfterDeferredUserFlu
 	m.transcriptTotalEntries = 1
 	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: m.transcriptEntries})
 	m.activeAssistantStreamSource = "stale partial"
-	m.activeAssistantStreamStepID = "step-a"
+	m.activeAssistantStreamIdentity = assistantStreamIdentityFromMetadata("step-a", nil)
 
 	_, userCmd := m.handleRuntimeEventBatch([]clientui.Event{{
 		Kind:                       clientui.EventUserMessageFlushed,

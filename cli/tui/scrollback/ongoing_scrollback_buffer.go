@@ -29,7 +29,6 @@ type OngoingScrollbackBufferImpl struct {
 	isStreaming               bool
 	assistantMarkdownRenderer AssistantMarkdownRenderer
 	assistantStablePrefix     assistantStreamStablePrefixFunc
-	assistantStreamPromotion  bool
 	assistantStreamSource     string
 	assistantStreamPromoted   []assistantStreamPromotedRow
 	assistantStreamTail       []string
@@ -97,12 +96,6 @@ func WithAssistantMarkdownRenderer(renderer AssistantMarkdownRenderer) OngoingSc
 	}
 }
 
-func WithAssistantStreamPromotion(enabled bool) OngoingScrollbackBufferOption {
-	return func(buffer *OngoingScrollbackBufferImpl) {
-		buffer.assistantStreamPromotion = enabled
-	}
-}
-
 func WithNormalBufferPreparation() OngoingScrollbackBufferOption {
 	return func(buffer *OngoingScrollbackBufferImpl) {
 		buffer.prepareNormalBuffer = true
@@ -121,11 +114,10 @@ func NewOngoingScrollbackBufferImpl(ctx context.Context, terminalWidth int, term
 	}
 	watcherCtx, cancelWatcher := context.WithCancel(ctx)
 	buffer := &OngoingScrollbackBufferImpl{
-		cancelWatcher:            cancelWatcher,
-		stableWriter:             stableWriter,
-		terminalWidth:            terminalWidth,
-		terminalHeight:           terminalHeight,
-		assistantStreamPromotion: true,
+		cancelWatcher:  cancelWatcher,
+		stableWriter:   stableWriter,
+		terminalWidth:  terminalWidth,
+		terminalHeight: terminalHeight,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -624,9 +616,6 @@ func (buffer *OngoingScrollbackBufferImpl) assistantStreamPromoteLimitLocked(row
 		return 0
 	}
 	promotedCount := len(buffer.assistantStreamPromoted)
-	if !buffer.assistantStreamPromotion {
-		return promotedCount
-	}
 	promoteLimit := 0
 	if prefix, ok := unstableAssistantMarkdownBlockStablePrefix(buffer.assistantStreamSource); ok {
 		if assistantMarkdownStablePrefixCanPromote(prefix) {

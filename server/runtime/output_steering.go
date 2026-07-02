@@ -26,15 +26,16 @@ type steeringIntent struct {
 }
 
 type steeringItem struct {
-	message          *steeringMessage
-	localEntry       *steeringLocalEntry
-	historyReplace   *steeringHistoryReplacement
-	toolCompletion   *tools.Result
-	queuedFlush      *steeringQueuedUserMessageFlush
-	event            *Event
-	streaming        *steeringStreamingOutput
-	cacheWarning     *steeringCacheWarning
-	cacheObservation *steeringCacheObservation
+	message            *steeringMessage
+	committedAssistant *steeringCommittedAssistantMessage
+	localEntry         *steeringLocalEntry
+	historyReplace     *steeringHistoryReplacement
+	toolCompletion     *tools.Result
+	queuedFlush        *steeringQueuedUserMessageFlush
+	event              *Event
+	streaming          *steeringStreamingOutput
+	cacheWarning       *steeringCacheWarning
+	cacheObservation   *steeringCacheObservation
 }
 
 type steeringMessage struct {
@@ -47,6 +48,12 @@ type steeringLocalEntry struct {
 	entry storedLocalEntry
 }
 
+type steeringCommittedAssistantMessage struct {
+	message           llm.Message
+	committedStart    int
+	committedStartSet bool
+}
+
 type steeringHistoryReplacement struct {
 	payload          historyReplacementPayload
 	projectedEntries []ChatEntry
@@ -56,7 +63,8 @@ type steeringHistoryReplacement struct {
 type steeringStreamingOutput struct {
 	assistantDelta *llm.AssistantDelta
 	reasoningDelta *llm.ReasoningSummaryDelta
-	clear          bool
+	clearState     bool
+	resetEvents    bool
 }
 
 type steeringCacheWarning struct {
@@ -156,6 +164,17 @@ func steerEventIntent(evt Event) steeringIntent {
 	}
 }
 
+func steerCommittedAssistantMessageIntent(msg llm.Message, committedStart int, committedStartSet bool) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items: []steeringItem{{committedAssistant: &steeringCommittedAssistantMessage{
+			message:           msg,
+			committedStart:    committedStart,
+			committedStartSet: committedStartSet,
+		}}},
+	}
+}
+
 func steerAssistantDeltaIntent(delta llm.AssistantDelta) steeringIntent {
 	copyDelta := delta
 	return steeringIntent{
@@ -175,7 +194,21 @@ func steerReasoningDeltaIntent(delta llm.ReasoningSummaryDelta) steeringIntent {
 func steerClearStreamingStateIntent() steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{clear: true}}},
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true}}},
+	}
+}
+
+func steerClearStreamingStateStoreIntent() steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true}}},
+	}
+}
+
+func steerStreamingResetEventsIntent() steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{resetEvents: true}}},
 	}
 }
 
@@ -239,6 +272,9 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.message != nil {
 		return e.appendMessageRaw(stepID, item.message.message, item.message.eventPolicy, item.message.persist)
 	}
+	if item.committedAssistant != nil {
+		return e.emitCommittedAssistantMessageRaw(stepID, *item.committedAssistant)
+	}
 	if item.localEntry != nil {
 		return e.appendPersistedLocalEntryRecordRaw(stepID, item.localEntry.entry)
 	}
@@ -297,8 +333,8 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.streaming != nil {
 		if item.streaming.assistantDelta != nil {
 			delta := *item.streaming.assistantDelta
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendStreamingDelta(delta.Text)
-			e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase})
+			metadata := newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendStreamingDelta(stepID, e.TranscriptRevision(), e.CommittedTranscriptEntryCount(), delta.Text)
+			e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata})
 			return nil
 		}
 		if item.streaming.reasoningDelta != nil {
@@ -306,10 +342,14 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			e.emitRaw(Event{Kind: EventReasoningDelta, StepID: stepID, ReasoningDelta: &delta})
 			return nil
 		}
-		if item.streaming.clear {
-			e.clearStreamingAssistantStateRaw(stepID)
-			return nil
+		var clearedMetadata *AssistantStreamMetadata
+		if item.streaming.clearState {
+			clearedMetadata = e.clearStreamingAssistantStateRaw()
 		}
+		if item.streaming.resetEvents {
+			e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata)
+		}
+		return nil
 	}
 	return nil
 }
@@ -317,6 +357,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryReplacement) error {
 	reminderIssued := false
 	projectedStart := e.CommittedTranscriptEntryCount()
+	replacement.payload.CommittedEntryStart = &projectedStart
 	preparedItems := llm.CloneResponseItems(replacement.payload.Items)
 	// Compaction reinjects base meta into the same replacement payload, so a
 	// non-empty replacement active list is born already carrying it. Mirror the

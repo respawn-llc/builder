@@ -173,11 +173,12 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 	if m.detailTranscript.loaded && !allTranscriptEntriesTransient(convertedEntries) {
 		m.detailTranscript.setKnownBounds(startOffset, m.transcriptTotalEntries)
 		page := clientui.TranscriptPage{
-			Revision:       m.transcriptRevision,
-			HasMoreAbove:   startOffset > 0,
-			Entries:        cloneChatEntries(entries),
-			Streaming:      m.activeAssistantStreamText(),
-			StreamingError: m.view.OngoingErrorText(),
+			Revision:          m.transcriptRevision,
+			HasMoreAbove:      startOffset > 0,
+			Entries:           cloneChatEntries(entries),
+			Streaming:         m.activeAssistantStreamText(),
+			StreamingMetadata: cloneClientAssistantStreamMetadata(m.activeAssistantStreamMetadata()),
+			StreamingError:    m.view.OngoingErrorText(),
 		}
 		m.detailTranscript.apply(page)
 	}
@@ -215,7 +216,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			m.clearAssistantStreamForCommittedAppend()
 			nativeRangeStart += skippedLeading
 		}
-		committedNativeEntries := committedTranscriptEntriesForApp(nativeEntries)
+		committedNativeEntries := ownedCommittedTranscriptEntriesForApp(nativeEntries)
 		if len(committedNativeEntries) > 0 {
 			prependDivider := m.nativePrependDividerBeforeRange(nativeRangeStart, committedNativeEntries)
 			if m.nativeStableOutputReady() {
@@ -264,11 +265,12 @@ func (a uiRuntimeAdapter) applyActiveAssistantFinalizerGapAsRecentTail(evt clien
 	totalEntries := max(evt.CommittedEntryCount, start+len(evt.TranscriptEntries))
 	m.transcriptTotalEntries = max(m.transcriptTotalEntries, totalEntries)
 	page := clientui.TranscriptPage{
-		Revision:       evt.TranscriptRevision,
-		HasMoreAbove:   start > 0,
-		Entries:        cloneChatEntries(evt.TranscriptEntries),
-		Streaming:      m.activeAssistantStreamText(),
-		StreamingError: m.view.OngoingErrorText(),
+		Revision:          evt.TranscriptRevision,
+		HasMoreAbove:      start > 0,
+		Entries:           cloneChatEntries(evt.TranscriptEntries),
+		Streaming:         m.activeAssistantStreamText(),
+		StreamingMetadata: cloneClientAssistantStreamMetadata(m.activeAssistantStreamMetadata()),
+		StreamingError:    m.view.OngoingErrorText(),
 	}
 	detailPinnedAwayFromTail := m.detailTranscript.loaded && m.detailTranscript.hasMoreBelow
 	if detailPinnedAwayFromTail {

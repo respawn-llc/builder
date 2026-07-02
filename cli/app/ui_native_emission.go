@@ -104,15 +104,23 @@ func planNativeAssistantStreamFinalizerEmission(entries []tui.TranscriptEntry, s
 	emittedCommittedBeforeFinalizer := false
 	finalized := false
 	for _, entry := range entries {
-		if finalized || entry.Role != tui.TranscriptRoleAssistant || entry.Transient && !entry.Committed || !isFinalAssistantTranscriptEntry(entry) {
-			if !finalized && !(entry.Transient && !entry.Committed) {
-				return nativeAssistantStreamFinalizerEmission{}, errNativeAssistantStreamFinalizerMismatch
-			}
+		if finalized {
 			planned.entries = append(planned.entries, entry)
 			if !(entry.Transient && !entry.Committed) {
 				emittedCommittedBeforeFinalizer = true
 			}
 			continue
+		}
+		if entry.Transient && !entry.Committed {
+			continue
+		}
+		if entry.Role != tui.TranscriptRoleAssistant {
+			planned.entries = append(planned.entries, entry)
+			emittedCommittedBeforeFinalizer = true
+			continue
+		}
+		if !isFinalAssistantTranscriptEntry(entry) {
+			return nativeAssistantStreamFinalizerEmission{}, errNativeAssistantStreamFinalizerMismatch
 		}
 		suffix, ok := assistantFinalTextExtendsStream(streamText, entry.Text)
 		if !ok {

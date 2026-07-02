@@ -719,8 +719,10 @@ func TestChatSnapshotOngoingTracksStreamingAndClearsOnCommit(t *testing.T) {
 	store := mustCreateTestSession(t)
 
 	var (
-		mu             sync.Mutex
-		deltaSnapshots []string
+		mu               sync.Mutex
+		deltaSnapshots   []string
+		snapshotMetadata []AssistantStreamMetadata
+		eventMetadata    []AssistantStreamMetadata
 	)
 	var eng *Engine
 	eng = mustNewTestEngine(t, store, fakeSimpleStreamClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
@@ -729,8 +731,15 @@ func TestChatSnapshotOngoingTracksStreamingAndClearsOnCommit(t *testing.T) {
 			if evt.Kind != EventAssistantDelta || eng == nil {
 				return
 			}
+			snapshot := eng.ChatSnapshot()
 			mu.Lock()
-			deltaSnapshots = append(deltaSnapshots, eng.ChatSnapshot().Streaming)
+			deltaSnapshots = append(deltaSnapshots, snapshot.Streaming)
+			if snapshot.StreamingMetadata != nil {
+				snapshotMetadata = append(snapshotMetadata, *snapshot.StreamingMetadata)
+			}
+			if evt.AssistantStreamMetadata != nil {
+				eventMetadata = append(eventMetadata, *evt.AssistantStreamMetadata)
+			}
 			mu.Unlock()
 		},
 	})
@@ -749,10 +758,26 @@ func TestChatSnapshotOngoingTracksStreamingAndClearsOnCommit(t *testing.T) {
 		mu.Unlock()
 		t.Fatalf("unexpected ongoing snapshots during streaming: %+v", deltaSnapshots)
 	}
+	if len(snapshotMetadata) != 2 || len(eventMetadata) != 2 {
+		mu.Unlock()
+		t.Fatalf("expected streaming metadata on snapshots and events, snapshots=%+v events=%+v", snapshotMetadata, eventMetadata)
+	}
+	if snapshotMetadata[0] != snapshotMetadata[1] || eventMetadata[0] != eventMetadata[1] || snapshotMetadata[0] != eventMetadata[0] {
+		mu.Unlock()
+		t.Fatalf("streaming metadata changed within one stream segment, snapshots=%+v events=%+v", snapshotMetadata, eventMetadata)
+	}
+	if snapshotMetadata[0].StepID == "" || snapshotMetadata[0].BaseRevision <= 0 || snapshotMetadata[0].BaseCommittedEntryCount <= 0 {
+		mu.Unlock()
+		t.Fatalf("unexpected streaming metadata: %+v", snapshotMetadata[0])
+	}
 	mu.Unlock()
 
-	if ongoing := strings.TrimSpace(eng.ChatSnapshot().Streaming); ongoing != "" {
+	finalSnapshot := eng.ChatSnapshot()
+	if ongoing := strings.TrimSpace(finalSnapshot.Streaming); ongoing != "" {
 		t.Fatalf("expected ongoing cleared after commit, got %q", ongoing)
+	}
+	if finalSnapshot.StreamingMetadata != nil {
+		t.Fatalf("expected ongoing metadata cleared after commit, got %+v", finalSnapshot.StreamingMetadata)
 	}
 }
 

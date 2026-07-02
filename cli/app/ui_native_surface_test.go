@@ -16,6 +16,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/invariant"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -212,6 +213,38 @@ func TestNativeScratchPageAppendsDuplicateLookingActiveSegment(t *testing.T) {
 	}
 	if !strings.Contains(plain, "fresh") {
 		t.Fatalf("scratch append missing fresh row, got %q", plain)
+	}
+}
+
+func TestNativeScratchPageEmitsCommittedEntriesAfterUnresolvedToolCall(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+
+	pageEntries := []tui.TranscriptEntry{
+		{Committed: true, Role: tui.TranscriptRoleUser, Text: "before tool"},
+		{
+			Committed:  true,
+			Role:       tui.TranscriptRoleToolCall,
+			Text:       "pwd",
+			ToolCallID: "call-1",
+			ToolCall:   &transcript.ToolCallMeta{ToolName: "shell", IsShell: true, Command: "pwd"},
+		},
+		{Committed: true, Role: tui.TranscriptRoleSystem, Text: "notice after unresolved tool"},
+		{Committed: true, Role: tui.TranscriptRoleUser, Text: "user after unresolved tool"},
+		{Committed: true, Role: tui.TranscriptRoleAssistant, Text: "assistant after unresolved tool"},
+	}
+	m.transcriptEntries = pageEntries
+	m.transcriptTotalEntries = len(pageEntries)
+	m.transcriptRevision = 5
+	m.nativeScratchHydrationPending = true
+
+	if err := m.appendNativeScratchTranscript(pageEntries); err != nil {
+		t.Fatalf("append scratch transcript: %v", err)
+	}
+
+	plain := stripANSIForNativeSpecTest(out.String())
+	if !containsInOrder(plain, "before tool", "pwd", "notice after unresolved tool", "user after unresolved tool", "assistant after unresolved tool") {
+		t.Fatalf("native scratch transcript omitted committed entries after unresolved tool call, got %q", plain)
 	}
 }
 
@@ -612,7 +645,11 @@ func TestNativeActiveAssistantFinalizerClearsStreamSourceBeforeSameStepToolLoop(
 	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: append([]tui.TranscriptEntry(nil), seed...)})
 
 	firstStream := "\n\nqa model turn 8 ok\n\n"
-	m.appendActiveAssistantStreamDelta("step-1", firstStream)
+	m.appendActiveAssistantStreamDelta("step-1", firstStream, &clientui.AssistantStreamMetadata{
+		StepID:                  "step-1",
+		BaseRevision:            1,
+		BaseCommittedEntryCount: 1,
+	})
 	if _, err := m.streamNativeAssistantDelta(firstStream, clientui.MessagePhaseFinal); err != nil {
 		t.Fatalf("stream first assistant: %v", err)
 	}
@@ -637,7 +674,11 @@ func TestNativeActiveAssistantFinalizerClearsStreamSourceBeforeSameStepToolLoop(
 	}
 
 	finalStream := "\n\nqa edit tool 11 ok"
-	m.appendActiveAssistantStreamDelta("step-1", finalStream)
+	m.appendActiveAssistantStreamDelta("step-1", finalStream, &clientui.AssistantStreamMetadata{
+		StepID:                  "step-1",
+		BaseRevision:            2,
+		BaseCommittedEntryCount: 3,
+	})
 	if _, err := m.streamNativeAssistantDelta(finalStream, clientui.MessagePhaseFinal); err != nil {
 		t.Fatalf("stream final assistant: %v", err)
 	}
@@ -677,6 +718,11 @@ func TestNativeMissingPhaseAssistantToolCallCommitClearsStreamSourceBeforeSameSt
 		Kind:           clientui.EventAssistantDelta,
 		StepID:         "step-1",
 		AssistantDelta: firstStream,
+		AssistantStreamMetadata: &clientui.AssistantStreamMetadata{
+			StepID:                  "step-1",
+			BaseRevision:            1,
+			BaseCommittedEntryCount: 1,
+		},
 	})
 	if result.fatal {
 		t.Fatalf("first assistant delta result = %+v", result)
@@ -725,6 +771,11 @@ func TestNativeMissingPhaseAssistantToolCallCommitClearsStreamSourceBeforeSameSt
 		AssistantDelta:             finalStream,
 		AssistantDeltaPhase:        clientui.MessagePhaseFinal,
 		CommittedTranscriptChanged: false,
+		AssistantStreamMetadata: &clientui.AssistantStreamMetadata{
+			StepID:                  "step-1",
+			BaseRevision:            3,
+			BaseCommittedEntryCount: 4,
+		},
 	})
 	if result.fatal {
 		t.Fatalf("final assistant delta result = %+v", result)
@@ -748,6 +799,54 @@ func TestNativeMissingPhaseAssistantToolCallCommitClearsStreamSourceBeforeSameSt
 	}
 }
 
+func TestNativeCommittedRowsAfterUnresolvedToolCallAreEmitted(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	seed := []tui.TranscriptEntry{{Committed: true, Role: tui.TranscriptRoleUser, Text: "start"}}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = seed
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: append([]tui.TranscriptEntry(nil), seed...)})
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        4,
+		TranscriptEntries: []clientui.ChatEntry{
+			{
+				Role: "tool_call",
+				Text: "printf still-running",
+				ToolCall: &clientui.ToolCallMeta{
+					ToolName:       "exec_command",
+					Presentation:   "shell",
+					RenderBehavior: "shell",
+					IsShell:        true,
+					Command:        "printf still-running",
+				},
+				ToolCallID: "call-1",
+			},
+			{Role: "user", Text: "queued user message"},
+			{Role: "system", Text: "committed notice"},
+		},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("event result = %+v, want committed rows emitted without hydration/fatal", result)
+	}
+	rendered := xansi.Strip(out.String())
+	for _, want := range []string{"printf still-running", "queued user message", "committed notice"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("native output missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestNativeWhitespaceOnlyAssistantToolCallCommitDiscardsStreamBeforeSameStepFinal(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceSpecTestModel(&out)
@@ -764,6 +863,11 @@ func TestNativeWhitespaceOnlyAssistantToolCallCommitDiscardsStreamBeforeSameStep
 		Kind:           clientui.EventAssistantDelta,
 		StepID:         "step-1",
 		AssistantDelta: "\n\n",
+		AssistantStreamMetadata: &clientui.AssistantStreamMetadata{
+			StepID:                  "step-1",
+			BaseRevision:            1,
+			BaseCommittedEntryCount: 1,
+		},
 	})
 	if result.fatal {
 		t.Fatalf("whitespace assistant delta result = %+v", result)
@@ -825,6 +929,11 @@ func TestNativeWhitespaceOnlyAssistantToolCallCommitDiscardsStreamBeforeSameStep
 		AssistantDelta:             finalStream,
 		AssistantDeltaPhase:        clientui.MessagePhaseFinal,
 		CommittedTranscriptChanged: false,
+		AssistantStreamMetadata: &clientui.AssistantStreamMetadata{
+			StepID:                  "step-1",
+			BaseRevision:            3,
+			BaseCommittedEntryCount: 3,
+		},
 	})
 	if result.fatal {
 		t.Fatalf("final assistant delta result = %+v", result)
@@ -845,6 +954,250 @@ func TestNativeWhitespaceOnlyAssistantToolCallCommitDiscardsStreamBeforeSameStep
 	})
 	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
 		t.Fatalf("final assistant event result = %+v, want mutation without fatal/hydration", result)
+	}
+}
+
+func TestNativeAssistantCommentaryWithToolCallsKeepsCommittedTailContiguousBeforeLocalEntry(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModelWithClient(&out, &runtimeControlFakeClient{})
+	seed := make([]tui.TranscriptEntry, 677)
+	for idx := range seed {
+		seed[idx] = tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed " + strconv.Itoa(idx)}
+	}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = append([]tui.TranscriptEntry(nil), seed...)
+	m.transcriptRevision = 13038
+	m.transcriptTotalEntries = len(seed)
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: len(seed), Entries: append([]tui.TranscriptEntry(nil), seed...)})
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         13039,
+		CommittedEntryStart:        677,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        679,
+		TranscriptEntries: []clientui.ChatEntry{
+			{
+				Role:  "assistant",
+				Text:  "The prod tmux TUI is attached and actively rendering this current session.",
+				Phase: string(clientui.MessagePhaseCommentary),
+			},
+			{Role: "tool_call", Text: "tmux list-panes", ToolCallID: "call-1"},
+		},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("assistant commentary tool-call event result = %+v, want mutation without fatal/hydration", result)
+	}
+	if got := len(m.transcriptEntries); got != 679 {
+		t.Fatalf("transcript entries after assistant event = %d, want 679", got)
+	}
+
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventLocalEntryAdded,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         13040,
+		CommittedEntryStart:        679,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        680,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role: "reasoning",
+			Text: "**Monitoring tmux session status**",
+		}},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("local entry after assistant tool-call event result = %+v, want mutation without fatal/hydration", result)
+	}
+	if got := len(m.transcriptEntries); got != 680 {
+		t.Fatalf("transcript entries after local entry = %d, want 680", got)
+	}
+}
+
+func TestNativeActiveAssistantCommentaryFinalizerOwnsSameEventToolCallRowsBeforeLocalEntry(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModelWithClient(&out, &runtimeControlFakeClient{})
+	seed := make([]tui.TranscriptEntry, 676)
+	for idx := range seed {
+		seed[idx] = tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed " + strconv.Itoa(idx)}
+	}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = append([]tui.TranscriptEntry(nil), seed...)
+	m.transcriptRevision = 13038
+	m.transcriptTotalEntries = len(seed)
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: len(seed), Entries: append([]tui.TranscriptEntry(nil), seed...)})
+
+	commentary := "The prod tmux TUI is attached and actively rendering this current session."
+	m.appendActiveAssistantStreamDelta("step-1", commentary, &clientui.AssistantStreamMetadata{
+		StepID:                  "step-1",
+		BaseRevision:            13038,
+		BaseCommittedEntryCount: 676,
+	})
+	if _, err := m.streamNativeAssistantDelta(commentary, clientui.MessagePhaseCommentary); err != nil {
+		t.Fatalf("stream native commentary: %v", err)
+	}
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         13039,
+		CommittedEntryStart:        676,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        679,
+		TranscriptEntries: []clientui.ChatEntry{
+			{Role: "assistant", Text: commentary, Phase: string(clientui.MessagePhaseCommentary)},
+			{Role: "tool_call", Text: "tmux list-panes", ToolCallID: "call-1"},
+			{Role: "tool_call", Text: "tail tui.log", ToolCallID: "call-2"},
+		},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("assistant commentary tool-call event result = %+v, want mutation without fatal/hydration", result)
+	}
+	if got := len(m.transcriptEntries); got != 679 {
+		t.Fatalf("transcript entries after assistant event = %d, want 679", got)
+	}
+	if got := m.activeAssistantStreamText(); got != "" {
+		t.Fatalf("active stream after assistant finalizer = %q, want cleared", got)
+	}
+
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventLocalEntryAdded,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         13040,
+		CommittedEntryStart:        679,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        680,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role: "reasoning",
+			Text: "**Monitoring tmux session status**",
+		}},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("local entry after active finalizer tool-call event result = %+v, want mutation without fatal/hydration", result)
+	}
+	if got := len(m.transcriptEntries); got != 680 {
+		t.Fatalf("transcript entries after local entry = %d, want 680", got)
+	}
+}
+
+func TestNativeActiveAssistantCommentaryWithThreeToolCallsOwnsRowsBeforeFirstToolResult(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModelWithClient(&out, &runtimeControlFakeClient{})
+	m.setRuntimeActivityBusyForTest(true)
+	seed := make([]tui.TranscriptEntry, 656)
+	for idx := range seed {
+		seed[idx] = tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed " + strconv.Itoa(idx)}
+	}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = append([]tui.TranscriptEntry(nil), seed...)
+	m.transcriptRevision = 14203
+	m.transcriptTotalEntries = len(seed)
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: len(seed), Entries: append([]tui.TranscriptEntry(nil), seed...)})
+
+	commentary := "I’m addressing the supervisor findings before continuing proof."
+	m.appendActiveAssistantStreamDelta("step-1", commentary, &clientui.AssistantStreamMetadata{
+		StepID:                  "step-1",
+		BaseRevision:            14203,
+		BaseCommittedEntryCount: 656,
+	})
+	if _, err := m.streamNativeAssistantDelta(commentary, clientui.MessagePhaseCommentary); err != nil {
+		t.Fatalf("stream native commentary: %v", err)
+	}
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         14204,
+		CommittedEntryStart:        656,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        660,
+		TranscriptEntries: []clientui.ChatEntry{
+			{Role: "assistant", Text: commentary, Phase: string(clientui.MessagePhaseCommentary)},
+			{Role: "tool_call", Text: "driver status", ToolCallID: "call-1"},
+			{Role: "tool_call", Text: "diff status", ToolCallID: "call-2"},
+			{Role: "tool_call", Text: "git status", ToolCallID: "call-3"},
+		},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("assistant commentary tool-call event result = %+v, want mutation without fatal/hydration", result)
+	}
+	if got := len(m.transcriptEntries); got != 660 {
+		t.Fatalf("transcript entries after assistant event = %d, want 660", got)
+	}
+
+	for idx, text := range []string{"**Handling supervisor wake and code review**", "**Assessing driver process and script updates**"} {
+		result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+			Kind:                       clientui.EventLocalEntryAdded,
+			StepID:                     "step-1",
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         int64(14205 + idx),
+			CommittedEntryStart:        660 + idx,
+			CommittedEntryStartSet:     true,
+			CommittedEntryCount:        661 + idx,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role: "reasoning",
+				Text: text,
+			}},
+		})
+		if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+			t.Fatalf("local entry %d result = %+v, want mutation without fatal/hydration", idx, result)
+		}
+	}
+	if got := len(m.transcriptEntries); got != 662 {
+		t.Fatalf("transcript entries after local entries = %d, want 662", got)
+	}
+
+	result = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventToolCallCompleted,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         14207,
+		CommittedEntryStart:        662,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        663,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:       "tool_result_ok",
+			Text:       "driver pid: 81062",
+			ToolCallID: "call-1",
+		}},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("first tool result after commentary tool calls = %+v, want mutation without fatal/hydration", result)
+	}
+	if got := len(m.transcriptEntries); got != 663 {
+		t.Fatalf("transcript entries after first tool result = %d, want 663", got)
+	}
+}
+
+func TestNativeCommittedTailCountsPendingToolCallRowsAsOwned(t *testing.T) {
+	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, &runtimeControlFakeClient{})
+	m.transcriptBaseOffset = 0
+	m.transcriptRevision = 13039
+	m.transcriptTotalEntries = 679
+	m.transcriptEntries = make([]tui.TranscriptEntry, 679)
+	for idx := range 677 {
+		m.transcriptEntries[idx] = tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed " + strconv.Itoa(idx)}
+	}
+	m.transcriptEntries[677] = tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleAssistant, Text: "commentary", Phase: clientui.MessagePhaseCommentary}
+	m.transcriptEntries[678] = tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleToolCall, Text: "tmux list-panes", ToolCallID: "call-1"}
+
+	revision, ownedTail := committedTranscriptOwnedTailIncludingDeferredTail(m)
+	if revision != 13039 {
+		t.Fatalf("owned revision = %d, want 13039", revision)
+	}
+	if ownedTail != 679 {
+		t.Fatalf("owned tail = %d, want 679 pending tool-call row counted as server-owned", ownedTail)
 	}
 }
 
@@ -880,7 +1233,7 @@ func TestNativeStaleAssistantFinalizerCoveredByAuthoritativeTailDoesNotPanicOrRe
 	m.transcriptTotalEntries = 1302
 	m.transcriptRevision = 10400
 	m.transcriptLiveDirty = false
-	m.appendActiveAssistantStreamDelta("4c4b3263-f50b-40a8-8eb1-1908c02da4a9", streamPrefix)
+	m.appendActiveAssistantStreamDelta("4c4b3263-f50b-40a8-8eb1-1908c02da4a9", streamPrefix, nil)
 	if _, err := m.streamNativeAssistantDelta(streamPrefix, clientui.MessagePhaseFinal); err != nil {
 		t.Fatalf("stream assistant: %v", err)
 	}
@@ -938,7 +1291,7 @@ func TestNativeStaleAssistantFinalizerCannotRevealUnknownLaterRows(t *testing.T)
 	m.transcriptTotalEntries = 10
 	m.transcriptRevision = 20
 	m.transcriptLiveDirty = false
-	m.appendActiveAssistantStreamDelta("step-1", finalText)
+	m.appendActiveAssistantStreamDelta("step-1", finalText, nil)
 	if _, err := m.streamNativeAssistantDelta(finalText, clientui.MessagePhaseFinal); err != nil {
 		t.Fatalf("stream assistant: %v", err)
 	}
@@ -1225,6 +1578,52 @@ func TestNativeLiveFrameReservesTranscriptRowWhenFrameWouldFillTerminal(t *testi
 	}
 }
 
+func TestNativeLiveChatPanelProjectsPendingRowsAtFrameWidth(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	m.termWidth = 77
+	m.termHeight = 34
+	m.windowSizeKnown = true
+	m.forwardToView(tui.SetViewportSizeMsg{Width: 100, Lines: 30})
+	m.forwardToView(tui.AppendTranscriptMsg{
+		Role:       tui.TranscriptRoleToolCall,
+		Text:       "./apps/desktop/src/features/workflow-editor/WorkflowDraftInspector.test.tsx -5",
+		ToolCallID: "call-1",
+		ToolCall: &transcript.ToolCallMeta{
+			ToolName: "shell",
+			IsShell:  true,
+			Command:  "./apps/desktop/src/features/workflow-editor/WorkflowDraftInspector.test.tsx -5",
+		},
+	})
+
+	rendered := m.layout().renderNativeLiveAreaFrame(uiRenderFrame{
+		width:      77,
+		height:     34,
+		chatPanel:  m.layout().renderNativeLiveChatPanel(77, 4, uiThemeStyles(m.theme)),
+		inputPane:  []string{"› " + strings.Repeat(" ", 75)},
+		statusLine: "\x1b[38;2;48;133;252m ⡱ goal\x1b[0m \x1b[2;38;2;143;151;161mgpt-5.5 medium\x1b[0m \x1b[1;38;2;48;133;252mHandling patch confli…\x1b[0m",
+		tailOnly:   true,
+	})
+
+	if strings.TrimSpace(rendered) != "" {
+		t.Fatalf("native live frame should write directly to terminal, got fallback render %q", rendered)
+	}
+	if m.nativeLiveAreaError != nil {
+		t.Fatalf("native live frame returned error: %v", m.nativeLiveAreaError)
+	}
+	if m.nativeSurface == nil || !m.nativeSurface.lastFrameSet {
+		t.Fatal("expected native live frame to render")
+	}
+	for idx, line := range m.nativeSurface.lastFrame.Lines {
+		if got := xansi.StringWidth(line); got > 77 {
+			t.Fatalf("native live frame line %d width = %d, want <= 77: %q", idx, got, line)
+		}
+	}
+	if len(m.nativeSurface.lastFrame.Lines) < 2 {
+		t.Fatalf("native live frame lines = %q, want wrapped pending row plus input/status", m.nativeSurface.lastFrame.Lines)
+	}
+}
+
 func TestNativeOneRowGeometryUsesRendererFallback(t *testing.T) {
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
 	m.termWidth = 20
@@ -1283,6 +1682,36 @@ func TestNativeOneRowResizeDropsInitializedSurfaceBeforeAssistantStream(t *testi
 	}
 	if out.Len() != 0 {
 		t.Fatalf("one-row geometry wrote native bytes after fallback took ownership: %q", out.String())
+	}
+}
+
+func TestNativeAssistantStreamPromotesStableMarkdownRowsBeforeFinalizer(t *testing.T) {
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	if handled, err := m.streamNativeAssistantDelta("**stable**\n\n", clientui.MessagePhaseCommentary); err != nil {
+		t.Fatalf("stream stable assistant block: %v", err)
+	} else if !handled {
+		t.Fatal("expected native surface to handle stable assistant block")
+	}
+	if plain := stripANSIForNativeSpecTest(out.String()); strings.Contains(plain, "stable") {
+		t.Fatalf("assistant block promoted before following block made it stable: %q", plain)
+	}
+
+	if handled, err := m.streamNativeAssistantDelta("mutable tail\n", clientui.MessagePhaseCommentary); err != nil {
+		t.Fatalf("stream mutable assistant tail: %v", err)
+	} else if !handled {
+		t.Fatal("expected native surface to handle mutable assistant tail")
+	}
+	plain := stripANSIForNativeSpecTest(out.String())
+	if !strings.Contains(plain, "stable") {
+		t.Fatalf("expected stable assistant block promoted before finalizer, got %q", plain)
+	}
+	if strings.Contains(plain, "**") {
+		t.Fatalf("stable assistant block promoted raw markdown markers: %q", plain)
+	}
+	tail := stripANSIForNativeSpecTest(strings.Join(m.nativeSurface.AssistantStreamTailLines(), "\n"))
+	if strings.Contains(tail, "stable") || !strings.Contains(tail, "mutable tail") {
+		t.Fatalf("expected only mutable assistant tail after promotion, got %q", tail)
 	}
 }
 
@@ -1352,6 +1781,93 @@ func TestNativeAssistantFinalizerDrainsQueuedCommittedRows(t *testing.T) {
 	}
 }
 
+func TestNativeAssistantFinalizerAllowsLeadingDeferredCommittedRows(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
+	var out bytes.Buffer
+	m := newNativeSurfaceSpecTestModel(&out)
+	seed := []tui.TranscriptEntry{{Committed: true, Role: tui.TranscriptRoleUser, Text: "done"}}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = append([]tui.TranscriptEntry(nil), seed...)
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.forwardToView(tui.SetConversationMsg{BaseOffset: 0, TotalEntries: 1, Entries: append([]tui.TranscriptEntry(nil), seed...)})
+
+	commentary := "Restart confirmed. I’m verifying the daemon and then I’ll relaunch the tmux watcher from fresh offsets."
+	m.appendActiveAssistantStreamDelta("step-1", commentary, &clientui.AssistantStreamMetadata{
+		StepID:                  "step-1",
+		BaseRevision:            1,
+		BaseCommittedEntryCount: 1,
+	})
+	if _, err := m.streamNativeAssistantDelta(commentary, clientui.MessagePhaseCommentary); err != nil {
+		t.Fatalf("stream assistant commentary: %v", err)
+	}
+
+	cacheResult := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventCacheWarning,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         2,
+		CommittedEntryStart:        1,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        2,
+		TranscriptEntries:          []clientui.ChatEntry{{Role: "system", Text: "conversation cache warning"}},
+	})
+	if cacheResult.fatal || cacheResult.awaitsHydration || cacheResult.transcriptMutated {
+		t.Fatalf("cache warning result = %+v, want deferred while native stream is active", cacheResult)
+	}
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         3,
+		CommittedEntryStart:        2,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        5,
+		TranscriptEntries: []clientui.ChatEntry{
+			{Role: "assistant", Text: commentary, Phase: string(clientui.MessagePhaseCommentary)},
+			{Role: "tool_call", Text: "service status", ToolCallID: "call-1"},
+			{Role: "tool_call", Text: "ps kent", ToolCallID: "call-2"},
+		},
+	})
+	if result.fatal || result.awaitsHydration || !result.transcriptMutated {
+		t.Fatalf("event result = %+v, want leading committed row queued behind finalizer without fatal/hydration", result)
+	}
+	if got := m.activeAssistantStreamText(); got != "" {
+		t.Fatalf("active stream after finalizer = %q, want cleared", got)
+	}
+	rendered := stripANSIForNativeSpecTest(out.String())
+	for _, want := range []string{"Restart confirmed", "watcher from fresh", "offsets.", "conversation cache warning", "service status", "ps kent"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("native output missing %q:\n%s", want, rendered)
+		}
+	}
+	assistantIndex := strings.Index(rendered, "Restart confirmed")
+	cacheIndex := strings.Index(rendered, "conversation cache warning")
+	firstToolIndex := strings.Index(rendered, "service status")
+	secondToolIndex := strings.Index(rendered, "ps kent")
+	if !(assistantIndex >= 0 && assistantIndex < cacheIndex && cacheIndex < firstToolIndex && firstToolIndex < secondToolIndex) {
+		t.Fatalf("native output order = assistant:%d cache:%d tool1:%d tool2:%d\n%s", assistantIndex, cacheIndex, firstToolIndex, secondToolIndex, rendered)
+	}
+	if got := len(m.transcriptEntries); got != 5 {
+		t.Fatalf("transcript entries = %d, want 5", got)
+	}
+	if m.transcriptEntries[1].Role != tui.TranscriptRoleSystem || m.transcriptEntries[1].Text != "conversation cache warning" {
+		t.Fatalf("transcript entry 1 = %+v, want leading committed system row", m.transcriptEntries[1])
+	}
+	if m.transcriptEntries[2].Role != tui.TranscriptRoleAssistant || m.transcriptEntries[2].Text != commentary {
+		t.Fatalf("transcript entry 2 = %+v, want assistant finalizer row", m.transcriptEntries[2])
+	}
+	if m.transcriptEntries[3].Role != tui.TranscriptRoleToolCall || m.transcriptEntries[3].ToolCallID != "call-1" {
+		t.Fatalf("transcript entry 3 = %+v, want first tool call row", m.transcriptEntries[3])
+	}
+	if m.transcriptEntries[4].Role != tui.TranscriptRoleToolCall || m.transcriptEntries[4].ToolCallID != "call-2" {
+		t.Fatalf("transcript entry 4 = %+v, want second tool call row", m.transcriptEntries[4])
+	}
+}
+
 func TestNativeAssistantCommentaryFinalizerEmitsSuffixOnly(t *testing.T) {
 	var out bytes.Buffer
 	m := newNativeSurfaceSpecTestModel(&out)
@@ -1398,7 +1914,7 @@ func TestNativeAssistantFinalizerMismatchFailsFast(t *testing.T) {
 func TestNativeAssistantFinalizerMismatchPanicsBeforeTranscriptMutation(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
-	m.appendActiveAssistantStreamDelta("step-1", "hello")
+	m.appendActiveAssistantStreamDelta("step-1", "hello", nil)
 	if _, err := m.streamNativeAssistantDelta("hello", clientui.MessagePhaseFinal); err != nil {
 		t.Fatalf("stream assistant delta: %v", err)
 	}
@@ -1429,7 +1945,7 @@ func TestNativeAssistantFinalizerMismatchDiagnosticModePanicsBeforeTranscriptMut
 	logger := &testUILogger{}
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
 	m.logger = logger
-	m.appendActiveAssistantStreamDelta("step-1", "hello")
+	m.appendActiveAssistantStreamDelta("step-1", "hello", nil)
 	if _, err := m.streamNativeAssistantDelta("hello", clientui.MessagePhaseFinal); err != nil {
 		t.Fatalf("stream assistant delta: %v", err)
 	}
@@ -1460,7 +1976,7 @@ func TestNativeAssistantFinalizerMismatchDiagnosticModePanicsBeforeTranscriptMut
 func TestNativeNewAssistantStepDuringActiveStreamPanicsBeforeStreamMutation(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
-	m.appendActiveAssistantStreamDelta("step-1", "hello")
+	m.appendActiveAssistantStreamDelta("step-1", "hello", nil)
 	if _, err := m.streamNativeAssistantDelta("hello", clientui.MessagePhaseFinal); err != nil {
 		t.Fatalf("stream assistant delta: %v", err)
 	}
@@ -1484,7 +2000,7 @@ func TestNativeNewAssistantStepDuringActiveStreamPanicsBeforeStreamMutation(t *t
 func TestNativeNewAssistantStepWithUnknownActiveStepPanicsBeforeStreamMutation(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
-	m.appendActiveAssistantStreamDelta("", "hello")
+	m.appendActiveAssistantStreamDelta("", "hello", nil)
 	if _, err := m.streamNativeAssistantDelta("hello", clientui.MessagePhaseFinal); err != nil {
 		t.Fatalf("stream assistant delta: %v", err)
 	}
@@ -1502,6 +2018,262 @@ func TestNativeNewAssistantStepWithUnknownActiveStepPanicsBeforeStreamMutation(t
 	}
 	if m.sawAssistantDelta {
 		t.Fatal("new step delta mutated unknown-step assistant stream state after fatal native violation")
+	}
+}
+
+func TestNativeSameStepDifferentStreamFrontierPanicsBeforeStreamMutation(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
+	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
+	for idx := 0; idx < 7; idx++ {
+		m.transcriptEntries = append(m.transcriptEntries, tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed " + strconv.Itoa(idx)})
+	}
+	m.transcriptTotalEntries = 7
+	m.transcriptRevision = 12
+	m.appendActiveAssistantStreamDelta("step-1", "hello", &clientui.AssistantStreamMetadata{
+		StepID:                  "step-1",
+		BaseRevision:            10,
+		BaseCommittedEntryCount: 5,
+	})
+	if _, err := m.streamNativeAssistantDelta("hello", clientui.MessagePhaseCommentary); err != nil {
+		t.Fatalf("stream assistant delta: %v", err)
+	}
+
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.handleRuntimeEventBatch([]clientui.Event{{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              "step-1",
+			AssistantDelta:      "new segment",
+			AssistantDeltaPhase: clientui.MessagePhaseCommentary,
+			AssistantStreamMetadata: &clientui.AssistantStreamMetadata{
+				StepID:                  "step-1",
+				BaseRevision:            12,
+				BaseCommittedEntryCount: 7,
+			},
+		}})
+	})
+	if got := m.activeAssistantStreamText(); got != "hello" {
+		t.Fatalf("expected active stream source unchanged after fatal same-step segment violation, got %q", got)
+	}
+	if m.sawAssistantDelta {
+		t.Fatal("same-step segment delta mutated assistant stream state after fatal native violation")
+	}
+}
+
+func TestNativeAssistantDeltaWithoutStreamMetadataPanicsBeforeStreamMutation(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
+	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
+
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.handleRuntimeEventBatch([]clientui.Event{{
+			Kind:                clientui.EventAssistantDelta,
+			StepID:              "step-1",
+			AssistantDelta:      "missing metadata",
+			AssistantDeltaPhase: clientui.MessagePhaseCommentary,
+		}})
+	})
+	if got := m.activeAssistantStreamText(); got != "" {
+		t.Fatalf("active stream source = %q, want no mutation after missing metadata", got)
+	}
+	if m.sawAssistantDelta {
+		t.Fatal("missing-metadata delta mutated assistant stream state after fatal native violation")
+	}
+	if m.nativeSurface.AssistantStreaming() {
+		t.Fatal("missing-metadata delta started native assistant streaming")
+	}
+}
+
+func TestNativeAssistantFinalizerWithUnknownStreamFrontierPanicsBeforePrefixMatch(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
+	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
+	seed := []tui.TranscriptEntry{{Committed: true, Role: tui.TranscriptRoleUser, Text: "start"}}
+	if err := m.emitNativeCommittedEntries(seed, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.transcriptEntries = seed
+	m.transcriptRevision = 1
+	m.transcriptTotalEntries = 1
+	m.appendActiveAssistantStreamDelta("step-1", "same text", nil)
+	if _, err := m.streamNativeAssistantDelta("same text", clientui.MessagePhaseFinal); err != nil {
+		t.Fatalf("stream assistant delta: %v", err)
+	}
+
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.handleRuntimeEventBatch([]clientui.Event{{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     "step-1",
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         2,
+			CommittedEntryStart:        1,
+			CommittedEntryStartSet:     true,
+			CommittedEntryCount:        2,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  "same text",
+				Phase: string(clientui.MessagePhaseFinal),
+			}},
+		}})
+	})
+	if got := m.activeAssistantStreamText(); got != "same text" {
+		t.Fatalf("active stream source = %q, want preserved after unknown-frontier finalizer", got)
+	}
+}
+
+func TestNativeHydratedSameStepDifferentStreamFrontierRequestsRecovery(t *testing.T) {
+	client := &runtimeControlFakeClient{transcript: clientui.TranscriptPage{
+		SessionID: "session-1",
+		Revision:  20,
+		Entries: []clientui.ChatEntry{{
+			Role: "assistant",
+			Text: "authoritative recovered tail",
+		}},
+	}}
+	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, client)
+	for idx := 0; idx < 7; idx++ {
+		m.transcriptEntries = append(m.transcriptEntries, tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed " + strconv.Itoa(idx)})
+	}
+	m.transcriptTotalEntries = 7
+	m.transcriptRevision = 12
+	m.refreshActiveAssistantStreamFromAuthoritativePageStreaming("newer segment", &clientui.AssistantStreamMetadata{
+		StepID:                  "step-1",
+		BaseRevision:            12,
+		BaseCommittedEntryCount: 7,
+	})
+	if _, err := m.streamNativeAssistantDelta("newer segment", clientui.MessagePhaseCommentary); err != nil {
+		t.Fatalf("stream hydrated assistant segment: %v", err)
+	}
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                clientui.EventAssistantDelta,
+		StepID:              "step-1",
+		AssistantDelta:      "older segment",
+		AssistantDeltaPhase: clientui.MessagePhaseCommentary,
+		AssistantStreamMetadata: &clientui.AssistantStreamMetadata{
+			StepID:                  "step-1",
+			BaseRevision:            10,
+			BaseCommittedEntryCount: 5,
+		},
+	})
+
+	if result.fatal || !result.awaitsHydration || result.transcriptMutated {
+		t.Fatalf("result = %+v, want stream-gap hydration barrier without mutation/fatal", result)
+	}
+	if got := m.activeAssistantStreamText(); got != "newer segment" {
+		t.Fatalf("active stream source = %q, want hydrated newer segment preserved", got)
+	}
+}
+
+func TestNativeCoveredCommittedBacklogOlderThanActiveStreamFrontierSkips(t *testing.T) {
+	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
+	for idx := 0; idx < 7; idx++ {
+		m.transcriptEntries = append(m.transcriptEntries, tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed " + strconv.Itoa(idx)})
+	}
+	m.transcriptTotalEntries = 7
+	m.transcriptRevision = 12
+	m.refreshActiveAssistantStreamFromAuthoritativePageStreaming("newer segment", &clientui.AssistantStreamMetadata{
+		StepID:                  "step-1",
+		BaseRevision:            12,
+		BaseCommittedEntryCount: 7,
+	})
+	if _, err := m.streamNativeAssistantDelta("newer segment", clientui.MessagePhaseCommentary); err != nil {
+		t.Fatalf("stream hydrated assistant segment: %v", err)
+	}
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         13,
+		CommittedEntryStart:        5,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        6,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "covered older segment",
+			Phase: string(clientui.MessagePhaseCommentary),
+		}},
+	})
+
+	if result.fatal || result.awaitsHydration || result.transcriptMutated {
+		t.Fatalf("result = %+v, want covered stale backlog skip without hydration/fatal", result)
+	}
+	if got := len(m.transcriptEntries); got != 7 {
+		t.Fatalf("transcript entry count = %d, want no duplicate append", got)
+	}
+	if got := m.activeAssistantStreamText(); got != "newer segment" {
+		t.Fatalf("active stream source = %q, want hydrated newer segment preserved", got)
+	}
+}
+
+func TestNativeMissingCommittedBacklogOlderThanLiveStreamFrontierPanics(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
+	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
+	for idx := 0; idx < 5; idx++ {
+		m.transcriptEntries = append(m.transcriptEntries, tui.TranscriptEntry{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed " + strconv.Itoa(idx)})
+	}
+	m.transcriptTotalEntries = 7
+	m.transcriptRevision = 12
+	m.appendActiveAssistantStreamDelta("step-1", "live segment", &clientui.AssistantStreamMetadata{
+		StepID:                  "step-1",
+		BaseRevision:            12,
+		BaseCommittedEntryCount: 7,
+	})
+	if _, err := m.streamNativeAssistantDelta("live segment", clientui.MessagePhaseCommentary); err != nil {
+		t.Fatalf("stream live assistant segment: %v", err)
+	}
+
+	assertNativeTranscriptInvariantPanic(t, func() {
+		m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+			Kind:                       clientui.EventAssistantMessage,
+			StepID:                     "step-1",
+			CommittedTranscriptChanged: true,
+			TranscriptRevision:         13,
+			CommittedEntryStart:        5,
+			CommittedEntryStartSet:     true,
+			CommittedEntryCount:        6,
+			TranscriptEntries: []clientui.ChatEntry{{
+				Role:  "assistant",
+				Text:  "missing older segment",
+				Phase: string(clientui.MessagePhaseCommentary),
+			}},
+		})
+	})
+	if got := len(m.transcriptEntries); got != 5 {
+		t.Fatalf("transcript entry count = %d, want no mutation after fatal stale backlog", got)
+	}
+	if got := m.activeAssistantStreamText(); got != "live segment" {
+		t.Fatalf("active stream source = %q, want live segment preserved", got)
+	}
+}
+
+func TestNativeStaleResetMismatchedStreamFrontierDoesNotClearHydratedStream(t *testing.T) {
+	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
+	m.refreshActiveAssistantStreamFromAuthoritativePageStreaming("newer segment", &clientui.AssistantStreamMetadata{
+		StepID:                  "step-1",
+		BaseRevision:            12,
+		BaseCommittedEntryCount: 7,
+	})
+	if _, err := m.streamNativeAssistantDelta("newer segment", clientui.MessagePhaseCommentary); err != nil {
+		t.Fatalf("stream hydrated assistant segment: %v", err)
+	}
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:   clientui.EventAssistantDeltaReset,
+		StepID: "step-1",
+		AssistantStreamMetadata: &clientui.AssistantStreamMetadata{
+			StepID:                  "step-1",
+			BaseRevision:            10,
+			BaseCommittedEntryCount: 5,
+		},
+	})
+
+	if result.fatal || result.awaitsHydration || result.transcriptMutated {
+		t.Fatalf("result = %+v, want stale reset ignored without mutation/fatal", result)
+	}
+	if got := m.activeAssistantStreamText(); got != "newer segment" {
+		t.Fatalf("active stream source = %q, want hydrated newer segment preserved", got)
+	}
+	if !m.nativeSurface.AssistantStreaming() {
+		t.Fatal("stale reset cleared native assistant streaming")
 	}
 }
 
@@ -1681,7 +2453,7 @@ func TestNativeNonGapCommittedDivergenceStopsRuntimeBatch(t *testing.T) {
 func TestNativeAssistantFinalizerMismatchWithoutPhysicalStreamPanicsBeforeMutation(t *testing.T) {
 	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
-	m.appendActiveAssistantStreamDelta("step-1", "hello")
+	m.appendActiveAssistantStreamDelta("step-1", "hello", nil)
 	m.nativeAssistantStreamIncomplete = true
 
 	assertNativeTranscriptInvariantPanic(t, func() {
@@ -1708,7 +2480,7 @@ func TestNativeAssistantFinalizerMismatchWithoutPhysicalStreamPanicsBeforeMutati
 	}
 }
 
-func TestNativeAssistantFinalizerFailsWhenCommittedRowsPrecedeFinalizer(t *testing.T) {
+func TestNativeAssistantFinalizerReturnsCommittedRowsPrecedingFinalizer(t *testing.T) {
 	m := newNativeSurfaceSpecTestModel(&bytes.Buffer{})
 	if _, err := m.streamNativeAssistantDelta("hello", clientui.MessagePhaseFinal); err != nil {
 		t.Fatalf("stream assistant delta: %v", err)
@@ -1718,8 +2490,15 @@ func TestNativeAssistantFinalizerFailsWhenCommittedRowsPrecedeFinalizer(t *testi
 		{Committed: true, Role: tui.TranscriptRoleSystem, Text: "cannot precede finalizer"},
 		{Committed: true, Role: tui.TranscriptRoleAssistant, Text: "hello", Phase: clientui.MessagePhaseFinal},
 	}
-	if _, _, err := m.nativeCommittedEntriesAfterActiveAssistantFinalizer(entries, "hello"); err == nil {
-		t.Fatal("expected pre-finalizer committed row to fail")
+	remaining, skippedLeading, err := m.nativeCommittedEntriesAfterActiveAssistantFinalizer(entries, "hello")
+	if err != nil {
+		t.Fatalf("finalize assistant stream with leading committed row: %v", err)
+	}
+	if skippedLeading != 0 {
+		t.Fatalf("skipped leading = %d, want 0 when a committed row precedes the finalizer", skippedLeading)
+	}
+	if len(remaining) != 1 || remaining[0].Text != "cannot precede finalizer" {
+		t.Fatalf("remaining entries = %+v, want leading committed row returned for stable append", remaining)
 	}
 }
 
@@ -1785,7 +2564,7 @@ func TestNativeDeferredCommittedEventDoesNotDropTrailingTransientRows(t *testing
 		{Transient: true, Role: tui.TranscriptRoleToolResultOK, Text: "pending mutable status"},
 	}
 	m.forwardToView(tui.SetConversationMsg{Entries: append([]tui.TranscriptEntry(nil), m.transcriptEntries...)})
-	m.appendActiveAssistantStreamDelta("step-1", "streaming")
+	m.appendActiveAssistantStreamDelta("step-1", "streaming", nil)
 
 	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
 		Kind:                       clientui.EventLocalEntryAdded,
@@ -1976,6 +2755,73 @@ func TestNativeRecoveryConversationUpdateKeepsContinuityRecoverySync(t *testing.
 
 	if result.fatal || !result.awaitsHydration || result.transcriptMutated {
 		t.Fatalf("result = %+v, want recovery hydration barrier without mutation/fatal", result)
+	}
+	msgs := collectCmdMessages(t, result.cmd)
+	var refresh runtimeTranscriptRefreshedMsg
+	found := false
+	for _, msg := range msgs {
+		if typed, ok := msg.(runtimeTranscriptRefreshedMsg); ok {
+			refresh = typed
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected runtime transcript refresh message, got %#v", msgs)
+	}
+	if refresh.syncCause != runtimeTranscriptSyncCauseContinuityRecovery {
+		t.Fatalf("sync cause = %s, want %s", refresh.syncCause, runtimeTranscriptSyncCauseContinuityRecovery)
+	}
+	if refresh.recoveryCause != clientui.TranscriptRecoveryCauseStreamGap {
+		t.Fatalf("recovery cause = %s, want %s", refresh.recoveryCause, clientui.TranscriptRecoveryCauseStreamGap)
+	}
+}
+
+func TestNativeCommittedBacklogOlderThanActiveStreamFrontierRequestsStreamGapRecovery(t *testing.T) {
+	const stepID = "6093a4a2-16d6-401a-9358-a5dd848f3ac7"
+	client := &runtimeControlFakeClient{transcript: clientui.TranscriptPage{
+		SessionID: "session-1",
+		Revision:  18,
+		Entries: []clientui.ChatEntry{{
+			Role: "assistant",
+			Text: "authoritative recovered tail",
+		}},
+	}}
+	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, client)
+	m.transcriptBaseOffset = 1
+	m.transcriptRevision = 12
+	m.transcriptEntries = []tui.TranscriptEntry{
+		{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed 1"},
+		{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed 2"},
+		{Committed: true, Role: tui.TranscriptRoleSystem, Text: "seed 3"},
+	}
+	m.transcriptTotalEntries = 6
+	if err := m.emitNativeCommittedEntries([]tui.TranscriptEntry{{Committed: true, Role: tui.TranscriptRoleSystem, Text: "already written"}}, false); err != nil {
+		t.Fatalf("emit native seed: %v", err)
+	}
+	m.refreshActiveAssistantStreamFromAuthoritativePageStreaming("newer same-step segment", &clientui.AssistantStreamMetadata{
+		StepID:                  stepID,
+		BaseRevision:            15,
+		BaseCommittedEntryCount: 6,
+	})
+
+	result := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     stepID,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         13,
+		CommittedEntryStart:        4,
+		CommittedEntryStartSet:     true,
+		CommittedEntryCount:        5,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "older committed segment",
+			Phase: string(clientui.MessagePhaseCommentary),
+		}},
+	})
+
+	if result.fatal || !result.awaitsHydration || result.transcriptMutated {
+		t.Fatalf("result = %+v, want stream-gap hydration barrier without mutation/fatal", result)
 	}
 	msgs := collectCmdMessages(t, result.cmd)
 	var refresh runtimeTranscriptRefreshedMsg

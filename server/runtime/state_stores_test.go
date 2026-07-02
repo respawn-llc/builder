@@ -131,6 +131,65 @@ func TestGoalLoopStateStartSuspendResumeFinish(t *testing.T) {
 	}
 }
 
+func TestGoalLoopStatePendingInterruptRequiresRestart(t *testing.T) {
+	state := newGoalLoopState()
+	if !state.Start() {
+		t.Fatal("Start should acquire running state")
+	}
+	state.MarkInterruptPending()
+
+	if state.ContinuationEnforced() {
+		t.Fatal("pending interrupt must make continuation unenforced")
+	}
+	if !state.RestartNeeded() {
+		t.Fatal("pending interrupt must require restart")
+	}
+	if state.Start() {
+		t.Fatal("Start during pending interrupt should not launch a duplicate loop")
+	}
+	if !state.ContinuationEnforced() {
+		t.Fatal("Start during pending interrupt should mark restart pending")
+	}
+	if !state.Finish(true) {
+		t.Fatal("Finish after restart pending should request relaunch")
+	}
+}
+
+func TestGoalLoopStateCommitInterruptPreservesQueuedRestart(t *testing.T) {
+	state := newGoalLoopState()
+	if !state.Start() {
+		t.Fatal("Start should acquire running state")
+	}
+	state.MarkInterruptPending()
+	if state.Start() {
+		t.Fatal("Start during pending interrupt should not launch immediately")
+	}
+	state.CommitInterrupt()
+
+	if !state.ContinuationEnforced() {
+		t.Fatal("committed interrupt with queued restart should remain enforced by restart pending")
+	}
+	if !state.Finish(true) {
+		t.Fatal("Finish should relaunch queued restart after committed interrupt")
+	}
+}
+
+func TestGoalLoopStateCommitInterruptWithoutRestartSuspends(t *testing.T) {
+	state := newGoalLoopState()
+	if !state.Start() {
+		t.Fatal("Start should acquire running state")
+	}
+	state.MarkInterruptPending()
+	state.CommitInterrupt()
+
+	if !state.Suspended() {
+		t.Fatal("committed interrupt without queued restart should suspend")
+	}
+	if state.ContinuationEnforced() {
+		t.Fatal("suspended loop must not report continuation enforced")
+	}
+}
+
 func TestCompactionRuntimeStateTracksCountAndReminder(t *testing.T) {
 	state := newCompactionRuntimeState()
 	if got := state.IncrementCount(); got != 1 {

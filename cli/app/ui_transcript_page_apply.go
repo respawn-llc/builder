@@ -16,6 +16,7 @@ func (a uiRuntimeAdapter) applyProjectedChatSnapshot(snapshot clientui.ChatSnaps
 	page.Entries = cloneTranscriptEntries(snapshot.Entries)
 	page.HasMoreAbove = false
 	page.Streaming = snapshot.Streaming
+	page.StreamingMetadata = cloneClientAssistantStreamMetadata(snapshot.StreamingMetadata)
 	page.StreamingError = snapshot.StreamingError
 	return a.applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, page, clientui.TranscriptRecoveryCauseNone)
 }
@@ -134,7 +135,7 @@ func (a uiRuntimeAdapter) applyRuntimeTranscriptPageWithSyncCause(req clientui.T
 		m.clearDeferredCommittedTail("authoritative_hydrate")
 		a.applyAuthoritativeRecentTailPage(page, entries, reduction.preserveLiveReasoning)
 	}
-	m.refreshActiveAssistantStreamFromAuthoritativePageStreaming(page.Streaming)
+	m.refreshActiveAssistantStreamFromAuthoritativePageStreaming(page.Streaming, page.StreamingMetadata)
 	m.detailTranscript.lastRequest = pageReq
 	if isRecentTailTranscriptRequest(pageReq) && m.view.Mode() != tui.ModeDetail {
 		m.detailTranscript.setKnownBounds(m.transcriptBaseOffset, m.transcriptTotalEntries)

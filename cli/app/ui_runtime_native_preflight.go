@@ -29,12 +29,16 @@ func (m *uiModel) preflightNativeCommittedTranscriptEvent(state projectedTranscr
 		}
 		return out
 	}
+	nativeAssistantStreaming := m.nativeSurfaceConfigured() && m.nativeSurface.AssistantStreaming()
 	if reduction.decision == projectedTranscriptDecisionHydrate &&
-		m.nativeImmutableTranscriptWritten &&
+		(m.nativeImmutableTranscriptWritten || nativeAssistantStreaming) &&
 		reduction.hydrationCause == clientui.TranscriptRecoveryCauseNone &&
 		!(m.view.Mode() == tui.ModeDetail && isAssistantStreamFinalizerEvent(state, evt)) {
 		m.logNativeTranscriptInvariant("hydrate committed transcript", errNativeStableNonGapHydration, state, evt, reduction)
 		return m.nativeInvariantViolationCmd("hydrate committed transcript", errNativeStableNonGapHydration, m.nativeTranscriptInvariantFields(state, evt, reduction))
+	}
+	if reduction.decision == projectedTranscriptDecisionHydrate {
+		return nil, false
 	}
 	if reduction.plan.mode == projectedTranscriptEntryPlanReplace &&
 		m.nativeImmutableTranscriptWritten &&
@@ -52,6 +56,10 @@ func (m *uiModel) preflightNativeCommittedTranscriptEvent(state projectedTranscr
 	converted := convertedEntries()
 	if !shouldClearAssistantStreamForCommittedTranscriptEntries(converted, activeStream) {
 		return nil, false
+	}
+	if nativeAssistantStreaming && state.liveAssistantIdentity.frontier == nil {
+		m.logNativeTranscriptInvariant("finalize native assistant stream", errNativeAssistantStreamMetadataMissing, state, evt, reduction)
+		return m.nativeInvariantViolationCmd("finalize native assistant stream", errNativeAssistantStreamMetadataMissing, m.nativeTranscriptInvariantFields(state, evt, reduction))
 	}
 	if _, err := planNativeAssistantStreamFinalizerEmission(converted, activeStream); err != nil {
 		m.logNativeTranscriptInvariant("finalize native assistant stream", err, state, evt, reduction)

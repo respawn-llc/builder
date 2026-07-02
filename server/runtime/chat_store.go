@@ -29,9 +29,16 @@ type ChatEntry struct {
 }
 
 type ChatSnapshot struct {
-	Entries        []ChatEntry
-	Streaming      string
-	StreamingError string
+	Entries           []ChatEntry
+	Streaming         string
+	StreamingMetadata *AssistantStreamMetadata
+	StreamingError    string
+}
+
+type AssistantStreamMetadata struct {
+	StepID                  string
+	BaseRevision            int64
+	BaseCommittedEntryCount int
 }
 
 type TranscriptWindowSnapshot struct {
@@ -63,7 +70,7 @@ type chatStore struct {
 	assistantToolCalls                map[string]struct{}
 	materializedToolResults           map[string]struct{}
 	synthesizedToolResults            map[string]struct{}
-	streaming                         string
+	streaming                         *assistantStreamingState
 	streamingError                    string
 	cwd                               string
 	lastCommittedAssistantFinalAnswer string
@@ -78,6 +85,11 @@ type localChatEntry struct {
 	Entry             ChatEntry
 	AfterMessageCount int
 	MarksBoundary     bool
+}
+
+type assistantStreamingState struct {
+	text     string
+	metadata *AssistantStreamMetadata
 }
 
 type compactionCheckpoint struct {
@@ -108,17 +120,20 @@ func (s *chatStore) appendMessage(msg llm.Message) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	msg = normalizeMessageForTranscript(msg, s.cwd)
-	if msg.Role == llm.RoleAssistant && strings.TrimSpace(msg.Content) != "" {
-		s.streaming = ""
-		s.streamingError = ""
-	}
 	s.items = append(s.items, llm.ItemsFromMessages([]llm.Message{msg})...)
 	s.applyMessageStatsLocked(msg)
 	s.providerTokenEstimateDirty = true
 }
 func (s *chatStore) replaceHistory(items []llm.ResponseItem) {
+	s.replaceHistoryAtCommittedEntryStart(items, nil)
+}
+
+func (s *chatStore) replaceHistoryAtCommittedEntryStart(items []llm.ResponseItem, committedEntryStart *int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if committedEntryStart != nil && *committedEntryStart > s.transcriptEntryCount {
+		s.transcriptEntryCount = *committedEntryStart
+	}
 	preparedItems := llm.PrepareOpenAIInputItems(items)
 	// Non-reviewer compaction keeps user-visible transcript history append-only by
 	// materializing replacement items as synthetic local entries at the compaction
@@ -235,25 +250,33 @@ func (s *chatStore) recordToolCompletionWithProviderItems(res tools.Result, prov
 	}
 }
 
-func (s *chatStore) appendStreamingDelta(delta string) {
+func (s *chatStore) appendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string) *AssistantStreamMetadata {
 	if delta == "" {
-		return
+		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.streaming += delta
+	nextMetadata := newAssistantStreamMetadata(stepID, baseRevision, baseCommittedEntryCount)
+	if s.streaming == nil || assistantStreamingSegmentChanged(s.streaming.metadata, nextMetadata) {
+		s.streaming = &assistantStreamingState{metadata: nextMetadata}
+	}
+	s.streaming.text += delta
+	return cloneAssistantStreamMetadata(s.streaming.metadata)
 }
 
-func (s *chatStore) streamingSnapshot() (string, string) {
+func (s *chatStore) streamingSnapshot() (string, string, *AssistantStreamMetadata) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.streaming, s.streamingError
+	streaming, metadata := s.streamingSnapshotLocked()
+	return streaming, s.streamingError, metadata
 }
 
-func (s *chatStore) discardStreaming() {
+func (s *chatStore) discardStreaming() *AssistantStreamMetadata {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.streaming = ""
+	metadata := cloneAssistantStreamMetadata(s.streamingMetadataLocked())
+	s.streaming = nil
+	return metadata
 }
 
 func (s *chatStore) setStreamingError(text string) {
@@ -266,6 +289,52 @@ func (s *chatStore) clearStreamingError() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.streamingError = ""
+}
+
+func newAssistantStreamMetadata(stepID string, baseRevision int64, baseCommittedEntryCount int) *AssistantStreamMetadata {
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return nil
+	}
+	if baseRevision < 0 || baseCommittedEntryCount < 0 {
+		return nil
+	}
+	return &AssistantStreamMetadata{
+		StepID:                  stepID,
+		BaseRevision:            baseRevision,
+		BaseCommittedEntryCount: baseCommittedEntryCount,
+	}
+}
+
+func assistantStreamingSegmentChanged(current *AssistantStreamMetadata, next *AssistantStreamMetadata) bool {
+	if current == nil || next == nil {
+		return current != next
+	}
+	return current.StepID != next.StepID ||
+		current.BaseRevision != next.BaseRevision ||
+		current.BaseCommittedEntryCount != next.BaseCommittedEntryCount
+}
+
+func (s *chatStore) streamingSnapshotLocked() (string, *AssistantStreamMetadata) {
+	if s.streaming == nil {
+		return "", nil
+	}
+	return s.streaming.text, cloneAssistantStreamMetadata(s.streaming.metadata)
+}
+
+func (s *chatStore) streamingMetadataLocked() *AssistantStreamMetadata {
+	if s.streaming == nil {
+		return nil
+	}
+	return s.streaming.metadata
+}
+
+func cloneAssistantStreamMetadata(metadata *AssistantStreamMetadata) *AssistantStreamMetadata {
+	if metadata == nil {
+		return nil
+	}
+	copyMetadata := *metadata
+	return &copyMetadata
 }
 
 func (s *chatStore) appendLocalEntryRecord(entry ChatEntry) {
@@ -558,7 +627,7 @@ func (s *chatStore) recentTailSnapshot(maxEntries int) TranscriptWindowSnapshot 
 	walker.Flush()
 	appendLocalEntries(processedMessages)
 	window := scan.RecentTailSnapshot()
-	window.Snapshot.Streaming = s.streaming
+	window.Snapshot.Streaming, window.Snapshot.StreamingMetadata = s.streamingSnapshotLocked()
 	window.Snapshot.StreamingError = s.streamingError
 	return window
 }
@@ -593,7 +662,7 @@ func (s *chatStore) transcriptPageSnapshot(offset, limit int) transcriptPageSnap
 	walker.Flush()
 	appendLocalEntries(processedMessages)
 	page := scan.PageSnapshot()
-	page.Snapshot.Streaming = s.streaming
+	page.Snapshot.Streaming, page.Snapshot.StreamingMetadata = s.streamingSnapshotLocked()
 	page.Snapshot.StreamingError = s.streamingError
 	return page
 }
@@ -633,7 +702,7 @@ func (s *chatStore) snapshotWithMetadata() materializedChatSnapshot {
 	walker.Flush()
 	appendLocalEntries(processedMessages)
 	snapshot := scan.PageSnapshot().Snapshot
-	snapshot.Streaming = s.streaming
+	snapshot.Streaming, snapshot.StreamingMetadata = s.streamingSnapshotLocked()
 	snapshot.StreamingError = s.streamingError
 	return materializedChatSnapshot{
 		Snapshot:             snapshot,

@@ -15,7 +15,7 @@ type exclusiveStepOptions struct {
 type exclusiveStepLifecycle interface {
 	Run(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
 	Interrupt() error
-	InterruptCurrent() (*RunSnapshot, error)
+	InterruptCurrent(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error)
 	IsBusy() bool
 	Snapshot() *RunSnapshot
 	WithActiveStep(fn func(stepID string) error) (bool, error)
@@ -43,7 +43,6 @@ type contextCompactor interface {
 type stepLoopOptions struct {
 	ReviewerFrequency              string
 	ReviewerClient                 llm.Client
-	EmitAssistantEvent             bool
 	RefreshReviewerConfigOnResolve bool
 	PendingUserInjectionIDs        map[string]struct{}
 }
@@ -88,6 +87,7 @@ type reviewerFollowUpResult struct {
 	Completion                 *ReviewerStatus
 	AssistantCommittedStart    int
 	AssistantCommittedStartSet bool
+	AssistantEventEmitted      bool
 }
 
 type phaseProtocolTurn struct {

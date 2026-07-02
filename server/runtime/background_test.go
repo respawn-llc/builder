@@ -31,7 +31,7 @@ func (s *blockingBackgroundStepLifecycle) Run(ctx context.Context, _ exclusiveSt
 }
 
 func (s *blockingBackgroundStepLifecycle) Interrupt() error { return nil }
-func (s *blockingBackgroundStepLifecycle) InterruptCurrent() (*RunSnapshot, error) {
+func (s *blockingBackgroundStepLifecycle) InterruptCurrent(func(*RunSnapshot)) (*RunSnapshot, error) {
 	return nil, nil
 }
 func (s *blockingBackgroundStepLifecycle) IsBusy() bool { return false }

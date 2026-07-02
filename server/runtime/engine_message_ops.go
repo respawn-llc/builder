@@ -281,11 +281,34 @@ func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) [
 	return messages
 }
 
-func (e *Engine) clearStreamingAssistantStateRaw(stepID string) {
-	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ClearStreamingAssistantState()
+func (e *Engine) clearStreamingAssistantStateRaw() *AssistantStreamMetadata {
+	return newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ClearStreamingAssistantState()
+}
+
+func (e *Engine) emitStreamingAssistantResetEventsRaw(stepID string, metadata *AssistantStreamMetadata) {
 	e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID})
-	e.emitRaw(Event{Kind: EventAssistantDeltaReset, StepID: stepID})
+	e.emitRaw(Event{Kind: EventAssistantDeltaReset, StepID: stepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(metadata)})
 	e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID})
+}
+
+func (e *Engine) emitCommittedAssistantMessageRaw(stepID string, committed steeringCommittedAssistantMessage) error {
+	finalizesStreaming := committedAssistantMessageFinalizesStreaming(committed.message)
+	var clearedMetadata *AssistantStreamMetadata
+	if finalizesStreaming {
+		clearedMetadata = e.clearStreamingAssistantStateRaw()
+	}
+	e.emitRaw(Event{
+		Kind:                       EventAssistantMessage,
+		StepID:                     stepID,
+		Message:                    committed.message,
+		CommittedTranscriptChanged: true,
+		CommittedEntryStart:        committed.committedStart,
+		CommittedEntryStartSet:     committed.committedStartSet,
+	})
+	if finalizesStreaming {
+		e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata)
+	}
+	return nil
 }
 
 func flushedUserMessageEvent(msg llm.Message, stepID string) *Event {
