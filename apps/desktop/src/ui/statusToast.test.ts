@@ -1,3 +1,4 @@
+import { isValidElement } from "react";
 import { toast } from "sonner";
 import { vi } from "vitest";
 
@@ -5,7 +6,6 @@ import { showStatusToast } from "./statusToast";
 
 vi.mock("sonner", () => ({
   toast: Object.assign(vi.fn(), {
-    custom: vi.fn(),
     dismiss: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
@@ -42,7 +42,7 @@ describe("showStatusToast", () => {
     });
   });
 
-  it("uses one custom clickable toast body when the notice has a click handler", () => {
+  it("keeps clickable notices on Sonner styled toasts", () => {
     const onClick = vi.fn();
     showStatusToast({
       body: "Open task detail",
@@ -52,12 +52,34 @@ describe("showStatusToast", () => {
       tone: "warning",
     });
 
-    const customToastRenderer = vi.mocked(toast.custom).mock.calls[0]?.[0];
-    expect(typeof customToastRenderer).toBe("function");
-    expect(toast.custom).toHaveBeenCalledWith(customToastRenderer, {
-      closeButton: false,
+    expect(toast.warning).toHaveBeenCalledOnce();
+    const title: unknown = vi.mocked(toast.warning).mock.calls[0]?.[0];
+    expect(isValidElement<{ type?: string }>(title)).toBe(true);
+    if (!isValidElement<{ type?: string }>(title)) {
+      throw new Error("Expected clickable toast title element.");
+    }
+    expect(title.type).toBe("button");
+    expect(title.props.type).toBe("button");
+    expect(vi.mocked(toast.warning).mock.calls[0]?.[1]).toEqual({
+      closeButton: true,
       id: "attention-1",
     });
-    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it("does not render a separate Sonner action for clickable notices", () => {
+    showStatusToast({
+      actionLabel: "Open",
+      body: "Open task detail",
+      id: "attention-1",
+      onAction: vi.fn(),
+      onClick: vi.fn(),
+      title: "Attention required",
+      tone: "warning",
+    });
+
+    expect(vi.mocked(toast.warning).mock.calls[0]?.[1]).toEqual({
+      closeButton: true,
+      id: "attention-1",
+    });
   });
 });

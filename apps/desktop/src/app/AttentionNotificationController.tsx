@@ -111,8 +111,6 @@ export function AttentionNotificationController() {
         tone: "info",
         title: notificationTitle(notification, t),
         body: notificationBody(notification, t),
-        actionLabel: t("app.attention.open"),
-        onAction: activate,
         onClick: activate,
         onDismiss: markDismissed,
         durationMs: Infinity,

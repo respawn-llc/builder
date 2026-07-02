@@ -248,6 +248,7 @@ describe("AttentionNotificationController", () => {
     });
 
     await waitForSonnerArticleCount(1);
+    expect(singleSonnerArticle().onAction).toBeUndefined();
     clickFirstSonnerButton();
     await waitFor(() => {
       expect(native.focusMain).toHaveBeenCalledOnce();
@@ -539,10 +540,10 @@ function singleSonnerArticle(): StatusNotice {
 
 function clickFirstSonnerButton(): void {
   const notice = singleSonnerArticle();
-  if (notice.onAction === undefined) {
-    throw new Error("Expected a status toast action.");
+  if (notice.onClick === undefined) {
+    throw new Error("Expected a clickable status toast.");
   }
-  notice.onAction();
+  notice.onClick();
 }
 
 function clickLastSonnerButton(): void {
