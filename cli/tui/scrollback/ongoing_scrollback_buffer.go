@@ -24,6 +24,7 @@ type OngoingScrollbackBufferImpl struct {
 	terminalWidth             int
 	terminalHeight            int
 	isStreaming               bool
+	assistantMarkdownRenderer AssistantMarkdownRenderer
 	assistantStreamSource     string
 	prepareNormalBuffer       bool
 	normalBufferPrepared      bool
@@ -37,8 +38,10 @@ type OngoingScrollbackBufferOption func(*OngoingScrollbackBufferImpl)
 
 type AssistantMarkdownRenderer func(source string, width int) []string
 
-func WithAssistantMarkdownRenderer(_ AssistantMarkdownRenderer) OngoingScrollbackBufferOption {
-	return func(*OngoingScrollbackBufferImpl) {}
+func WithAssistantMarkdownRenderer(renderer AssistantMarkdownRenderer) OngoingScrollbackBufferOption {
+	return func(buffer *OngoingScrollbackBufferImpl) {
+		buffer.assistantMarkdownRenderer = renderer
+	}
 }
 
 type stableSteerRequest struct {
@@ -516,7 +519,7 @@ func (buffer *OngoingScrollbackBufferImpl) discardAssistantStreamingLocked(queue
 
 func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(delta string) error {
 	buffer.assistantStreamSource += delta
-	payload := nativeAssistantStreamTerminalPayload(delta)
+	payload := buffer.assistantStreamTerminalPayload(delta)
 	if payload == "" {
 		return nil
 	}
@@ -524,6 +527,17 @@ func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(del
 		operation: "streamMarkdownAssistantContent",
 		text:      payload,
 	}}, false, false)
+}
+
+func (buffer *OngoingScrollbackBufferImpl) assistantStreamTerminalPayload(delta string) string {
+	if buffer == nil || buffer.assistantMarkdownRenderer == nil {
+		return nativeAssistantStreamTerminalPayload(delta)
+	}
+	rows := buffer.assistantMarkdownRenderer(delta, buffer.terminalWidth)
+	if len(rows) == 0 {
+		return ""
+	}
+	return nativeAssistantStreamTerminalPayload(strings.Join(rows, "\n"))
 }
 
 func (buffer *OngoingScrollbackBufferImpl) clearAssistantStreamStateLocked() {

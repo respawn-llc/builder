@@ -14,6 +14,7 @@ type uiNativeSurface struct {
 	writer                     io.Writer
 	normalBufferAvailable      func() bool
 	delayedWriteErrorListener  func(error)
+	assistantMarkdownRenderer  scrollback.AssistantMarkdownRenderer
 	forceNormalBufferAvailable bool
 	width                      int
 	height                     int
@@ -54,6 +55,7 @@ func (s *uiNativeSurface) ensure(width int, height int) bool {
 		nil,
 		scrollback.WithNormalBufferAvailability(s.normalBufferAvailableForBuffer),
 		scrollback.WithDelayedWriteErrorListener(s.delayedWriteErrorListener),
+		scrollback.WithAssistantMarkdownRenderer(s.assistantMarkdownRenderer),
 		scrollback.WithNormalBufferPreparation(),
 	)
 	s.surface = s.buffer
@@ -229,10 +231,29 @@ func (m *uiModel) ensureNativeSurface(width int, height int) bool {
 		m.nativeSurface.Drop()
 		return false
 	}
+	m.nativeSurface.assistantMarkdownRenderer = m.nativeAssistantMarkdownRenderer()
 	if !m.nativeSurface.ensure(width, height) {
 		return false
 	}
 	return true
+}
+
+func (m *uiModel) nativeAssistantMarkdownRenderer() scrollback.AssistantMarkdownRenderer {
+	theme := ""
+	if m != nil {
+		theme = m.theme
+	}
+	return func(source string, width int) []string {
+		rendered := tui.RenderAssistantMarkdownStreamingProjection(source, theme, width)
+		if len(rendered) == 0 {
+			return nil
+		}
+		lines := make([]string, 0, len(rendered))
+		for _, line := range rendered {
+			lines = append(lines, line.Text)
+		}
+		return lines
+	}
 }
 
 func (m *uiModel) nativeResizeRehydrateScheduled() bool {
