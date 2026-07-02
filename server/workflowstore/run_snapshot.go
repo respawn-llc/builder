@@ -135,7 +135,7 @@ func newRunStartSnapshot(def workflow.Definition, record WorkflowRecord, nodeID 
 	derived := workflow.DeriveWiring(def)
 	nodes := make(map[workflow.NodeID]workflow.Node, len(def.Nodes))
 	for _, node := range def.Nodes {
-		nodes[node.ID] = node
+		nodes[workflow.NodeIDOf(node)] = node
 	}
 	node, ok := nodes[nodeID]
 	if !ok {
@@ -170,22 +170,22 @@ func newRunStartSnapshot(def workflow.Definition, record WorkflowRecord, nodeID 
 
 func nodeSnapshotWithDerivedWiring(node workflow.Node, derived workflow.DerivedWiring) nodeContractSnapshot {
 	snapshot := nodeSnapshot(node)
-	snapshot.OutputFields = derived.PossibleProvisionFieldsForNode(node.ID)
+	snapshot.OutputFields = derived.PossibleProvisionFieldsForNode(workflow.NodeIDOf(node))
 	return snapshot
 }
 
 func nodeSnapshot(node workflow.Node) nodeContractSnapshot {
 	return nodeContractSnapshot{
-		ID:                 node.ID,
-		Key:                node.Key,
-		DisplayName:        node.DisplayName,
-		Kind:               node.Kind,
-		SubagentRole:       node.SubagentRole,
-		PromptTemplate:     node.PromptTemplate,
-		CompletionMode:     node.CompletionMode,
-		InputFields:        node.InputFields,
-		JoinInputProviders: node.JoinInputProviders,
-		OutputFields:       node.OutputFields,
+		ID:                 workflow.NodeIDOf(node),
+		Key:                workflow.NodeKey(node),
+		DisplayName:        workflow.NodeDisplayName(node),
+		Kind:               node.Kind(),
+		SubagentRole:       workflow.NodeSubagentRole(node),
+		PromptTemplate:     workflow.NodePromptTemplate(node),
+		CompletionMode:     workflow.NodeCompletionMode(node),
+		InputFields:        workflow.NodeInputFields(node),
+		JoinInputProviders: workflow.NodeJoinInputProviders(node),
+		OutputFields:       workflow.NodeOutputFields(node),
 	}
 }
 
@@ -205,8 +205,8 @@ func edgeSnapshotWithDerivedWiring(edge workflow.Edge, source workflow.Node, tar
 }
 
 func edgeParametersSnapshot(edge workflow.Edge, source workflow.Node, derived workflow.DerivedWiring) []workflow.Parameter {
-	if source.Kind == workflow.NodeKindJoin {
-		return parametersFromOutputFields(derived.JoinOutputFieldsForNode(source.ID))
+	if source.Kind() == workflow.NodeKindJoin {
+		return parametersFromOutputFields(derived.JoinOutputFieldsForNode(workflow.NodeIDOf(source)))
 	}
 	return append([]workflow.Parameter(nil), edge.Parameters...)
 }
@@ -223,8 +223,8 @@ func parametersFromOutputFields(fields []workflow.OutputField) []workflow.Parame
 }
 
 func edgeInputBindingsSnapshot(edge workflow.Edge, source workflow.Node, derived workflow.DerivedWiring) []workflow.InputBinding {
-	if source.Kind == workflow.NodeKindJoin {
-		return inputBindingsForOutputFields(derived.JoinOutputFieldsForNode(source.ID))
+	if source.Kind() == workflow.NodeKindJoin {
+		return inputBindingsForOutputFields(derived.JoinOutputFieldsForNode(workflow.NodeIDOf(source)))
 	}
 	return derived.InputBindingsForEdge(edge.ID)
 }
@@ -242,7 +242,7 @@ func inputBindingsForOutputFields(fields []workflow.OutputField) []workflow.Inpu
 
 func edgeOutputRequirementsSnapshot(edge workflow.Edge, source workflow.Node, target workflow.Node, derived workflow.DerivedWiring) []workflow.OutputRequirement {
 	fields := derived.TransitionOutputFieldsForEdge(edge, source)
-	if target.Kind == workflow.NodeKindJoin {
+	if target.Kind() == workflow.NodeKindJoin {
 		fields = derived.RequiredProviderFieldsForJoinEdge(edge.ID)
 	}
 	requirements := make([]workflow.OutputRequirement, 0, len(fields))

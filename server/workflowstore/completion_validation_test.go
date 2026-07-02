@@ -64,10 +64,10 @@ func TestCompleteRunRejectsMissingTransitionIDWhenAmbiguous(t *testing.T) {
 	}
 	agent := nodeByKey(t, def, "agent")
 	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: workflow.TransitionGroupID("group-blocked-" + string(workflowID)), WorkflowID: workflowID, SourceNodeID: agent.ID, TransitionID: "blocked", DisplayName: "Blocked"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: workflow.TransitionGroupID("group-blocked-" + string(workflowID)), WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "blocked", DisplayName: "Blocked"}); err != nil {
 		t.Fatalf("AddTransitionGroup blocked: %v", err)
 	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-blocked-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID("group-blocked-" + string(workflowID)), Key: "blocked", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession}); err != nil {
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-blocked-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID("group-blocked-" + string(workflowID)), Key: "blocked", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
 		t.Fatalf("AddEdge blocked: %v", err)
 	}
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
@@ -98,7 +98,7 @@ func TestCompleteRunRejectsParameterDeclaredOnlyByAnotherTransition(t *testing.T
 	agent := nodeByKey(t, def, "agent")
 	done := nodeByKind(t, def, workflow.NodeKindTerminal)
 	blockedGroup := workflow.TransitionGroupID("group-blocked-" + string(workflowID))
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: blockedGroup, WorkflowID: workflowID, SourceNodeID: agent.ID, TransitionID: "blocked", DisplayName: "Blocked"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: blockedGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "blocked", DisplayName: "Blocked"}); err != nil {
 		t.Fatalf("AddTransitionGroup blocked: %v", err)
 	}
 	if _, err := store.AddEdge(ctx, EdgeRecord{
@@ -106,7 +106,7 @@ func TestCompleteRunRejectsParameterDeclaredOnlyByAnotherTransition(t *testing.T
 		WorkflowID:        workflowID,
 		TransitionGroupID: blockedGroup,
 		Key:               "blocked",
-		TargetNodeID:      done.ID,
+		TargetNodeID:      workflow.NodeIDOf(done),
 		ContextMode:       workflow.ContextModeNewSession,
 		Parameters:        []workflow.Parameter{{Key: "blocked_reason", Description: "Why the task is blocked."}},
 	}); err != nil {

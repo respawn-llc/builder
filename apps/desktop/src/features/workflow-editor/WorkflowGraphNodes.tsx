@@ -82,7 +82,7 @@ function WorkflowNodeContextMenuShell({
         </Tooltip>
       )}
       <ContextMenuContent level={3}>
-        {data.kind === "agent" && data.groupID.length === 0 ? (
+        {workflowBranchNodeKind(data.kind) && data.groupID.length === 0 ? (
           <ContextMenuItem
             onSelect={() => {
               onCreateNodeGroup?.(data.entityID);
@@ -91,7 +91,7 @@ function WorkflowNodeContextMenuShell({
             {t("workflowEditor.createNodeGroup")}
           </ContextMenuItem>
         ) : null}
-        {data.kind === "agent" && data.groupID.length > 0 ? (
+        {workflowBranchNodeKind(data.kind) && data.groupID.length > 0 ? (
           <ContextMenuItem
             onSelect={() => {
               onRemoveNodeFromGroup?.(data.entityID);
@@ -137,7 +137,7 @@ export const WorkflowNode = memo(function WorkflowNode({
       as="div"
       className={cx(
         "workflow-editor-node nopan relative grid h-full min-w-0 grid-rows-[minmax(0,1fr)_auto] rounded-[var(--radius-l)] p-[var(--space-3)]",
-        data.kind === "agent" ? "cursor-grab" : undefined,
+        workflowBranchNodeKind(data.kind) ? "cursor-grab" : undefined,
         dragging ? "cursor-grabbing" : undefined,
         data.hasError ? "workflow-editor-node-error" : undefined,
         selected ? "workflow-editor-node-selected" : undefined,
@@ -146,7 +146,7 @@ export const WorkflowNode = memo(function WorkflowNode({
       data-testid={`workflow-graph-node-${data.entityID}`}
       level={1}
       style={workflowNodeOutlineStyle(data.kind, data.hasError)}
-      title={data.kind === "agent" ? t("workflowEditor.dragNodeToGroup") : undefined}
+      title={workflowBranchNodeKind(data.kind) ? t("workflowEditor.dragNodeToGroup") : undefined}
     >
       <WorkflowTargetConnectionHandle data={data} />
       <WorkflowEndpointHandles endpointPorts={data.endpointPorts ?? []} />
@@ -345,6 +345,10 @@ function WorkflowEndpointHandles({
 
 function workflowEndpointHandleStyle(port: WorkflowGraphEndpointPort): CSSProperties {
   return { top: port.y };
+}
+
+function workflowBranchNodeKind(kind: string): boolean {
+  return kind === "agent" || kind === "script";
 }
 
 type WorkflowNodeOutlineStyle = CSSProperties & Readonly<Record<"--workflow-editor-node-outline-color", string>>;

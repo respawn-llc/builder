@@ -237,6 +237,40 @@ func TestWorkflowNodeCompletionModeAddAndPreserve(t *testing.T) {
 	}
 }
 
+func TestWorkflowNodeScriptPathAddUpdateAndInspect(t *testing.T) {
+	cfg, _, remote := newWorkflowCommandLoopback(t)
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+
+	workflowID := workflowCreateForTest(t, "Script Path").ID
+	added := workflowNodeAddForTest(t, workflowID, "--key", "script", "--kind", "script", "--display-name", "Script", "--script-path", "scripts/complete")
+	if added.ScriptPath == nil || *added.ScriptPath != "scripts/complete" {
+		t.Fatalf("added script path = %+v, want scripts/complete", added.ScriptPath)
+	}
+	node := workflowNodeByIDForTest(t, workflowInspectDefinitionForTest(t, workflowID), added.NodeID)
+	if node.ScriptPath == nil || *node.ScriptPath != "scripts/complete" {
+		t.Fatalf("stored script node = %+v, want script path", node)
+	}
+
+	runWorkflowRootCommandOK(t, "workflow", "node", "update", workflowID, "script", "--json", "--display-name", "Renamed Script")
+	node = workflowNodeByIDForTest(t, workflowInspectDefinitionForTest(t, workflowID), added.NodeID)
+	if node.ScriptPath == nil || *node.ScriptPath != "scripts/complete" {
+		t.Fatalf("script path after display update = %+v, want preserved", node.ScriptPath)
+	}
+
+	runWorkflowRootCommandOK(t, "workflow", "node", "update", workflowID, "script", "--json", "--script-path=")
+	node = workflowNodeByIDForTest(t, workflowInspectDefinitionForTest(t, workflowID), added.NodeID)
+	if node.ScriptPath != nil {
+		t.Fatalf("script path after clear = %+v, want nil", node.ScriptPath)
+	}
+
+	runWorkflowRootCommandOK(t, "workflow", "node", "update", workflowID, "script", "--json", "--script-path", "scripts/fixed")
+	inspectOut, _ := runWorkflowRootCommandOK(t, "workflow", "inspect", workflowID)
+	if !strings.Contains(inspectOut, "- script (script): Renamed Script  [script: scripts/fixed]") {
+		t.Fatalf("workflow inspect output = %q, want script path node line", inspectOut)
+	}
+}
+
 func TestWorkflowNodeUpdatePreservesCanonicalWiringFields(t *testing.T) {
 	cfg := config.App{WorkspaceRoot: t.TempDir()}
 	remote := &preservingNodeUpdateRemote{}
@@ -583,6 +617,7 @@ func newWorkflowCommandLoopback(t *testing.T) (config.App, metadata.Binding, *wo
 	home := t.TempDir()
 	workspaceRoot := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("KENT_PERSISTENCE_ROOT", filepath.Join(home, ".kent"))
 	cfg, err := config.Load(workspaceRoot, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)

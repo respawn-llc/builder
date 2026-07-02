@@ -15,6 +15,7 @@ import (
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowattention"
+	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/shared/serverapi"
@@ -68,6 +69,7 @@ type pendingPromptResponder interface {
 
 type workflowAttentionFinalizer interface {
 	FinalizeTransition(context.Context, workflowattention.TransitionResult)
+	FinalizeInterruptedRun(context.Context, workflow.RunID)
 }
 
 type workflowInterruptedRunFinalizer interface {
@@ -234,7 +236,7 @@ func (s *Service) AddWorkflowNode(ctx context.Context, req serverapi.WorkflowNod
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowNodeAddResponse{}, err
 	}
-	revision, err := s.store.AddNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
+	revision, err := s.store.AddNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
 	if err != nil {
 		return serverapi.WorkflowNodeAddResponse{}, err
 	}
@@ -246,7 +248,7 @@ func (s *Service) UpdateWorkflowNode(ctx context.Context, req serverapi.Workflow
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowNodeUpdateResponse{}, err
 	}
-	revision, err := s.store.UpdateNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
+	revision, err := s.store.UpdateNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: workflow.WorkflowID(req.WorkflowID), Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, PromptTemplate: req.PromptTemplate, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), InputFields: inputFields(req.InputFields), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
 	if err != nil {
 		return serverapi.WorkflowNodeUpdateResponse{}, err
 	}
@@ -458,7 +460,12 @@ func (s *Service) ValidateWorkflow(ctx context.Context, req serverapi.WorkflowVa
 		mode = workflow.ValidationContextDraft
 	}
 	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: mode, RoleResolver: s.roleResolver})
-	return workflowValidationResponse(def.ID, result), nil
+	resp := workflowValidationResponse(def.ID, result)
+	if mode == workflow.ValidationContextExecution {
+		resp.Errors = append(resp.Errors, scriptPathValidationErrors(def, "")...)
+		resp.Valid = workflowValidationErrorsValid(resp.Errors)
+	}
+	return resp, nil
 }
 
 func (s *Service) ValidateWorkflowGraphDraft(ctx context.Context, req serverapi.WorkflowGraphValidateDraftRequest) (serverapi.WorkflowGraphValidateDraftResponse, error) {
@@ -783,6 +790,14 @@ func (s *Service) finalizeWorkflowAttention(ctx context.Context, result workflow
 		State:                         result.State,
 		ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
 	})
+	for _, runID := range result.InterruptedRunIDs {
+		if runID == "" {
+			continue
+		}
+		runFinalizeCtx, runCancel := workflowAttentionContext(ctx)
+		s.attentionFinalizer.FinalizeInterruptedRun(runFinalizeCtx, runID)
+		runCancel()
+	}
 }
 
 func workflowCompletionTargetSelector(req serverapi.WorkflowTaskCompleteRequest) workflowstore.ActiveRunCompletionTargetSelector {
@@ -1308,10 +1323,48 @@ func (s *Service) workflowGraphValidationResults(ctx context.Context, workflowID
 func (s *Service) workflowGraphValidationResultsForDefinition(def workflow.Definition, modes []serverapi.WorkflowValidationMode) map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse {
 	out := make(map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse, len(modes))
 	for _, mode := range modes {
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: workflow.ValidationContext(mode), RoleResolver: s.roleResolver})
-		out[mode] = workflowValidationResponse(def.ID, result)
+		context := workflow.ValidationContext(mode)
+		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{Context: context, RoleResolver: s.roleResolver})
+		resp := workflowValidationResponse(def.ID, result)
+		if context == workflow.ValidationContextExecution {
+			resp.Errors = append(resp.Errors, scriptPathValidationErrors(def, "")...)
+			resp.Valid = workflowValidationErrorsValid(resp.Errors)
+		}
+		out[mode] = resp
 	}
 	return out
+}
+
+func scriptPathValidationErrors(def workflow.Definition, worktreeRoot string) []serverapi.WorkflowValidationError {
+	out := []serverapi.WorkflowValidationError{}
+	for _, node := range def.Nodes {
+		if node.Kind() != workflow.NodeKindScript {
+			continue
+		}
+		diagnostics := workflowscript.Validate(workflowscript.ValidationRequest{
+			RawPath:      workflow.NodeScriptPath(node).String(),
+			WorktreeRoot: worktreeRoot,
+		})
+		for _, diagnostic := range diagnostics {
+			out = append(out, serverapi.WorkflowValidationError{
+				Code:          diagnostic.Code,
+				Message:       diagnostic.Message,
+				WorkflowID:    string(def.ID),
+				NodeID:        string(workflow.NodeIDOf(node)),
+				BlocksContext: diagnostic.Blocking,
+			})
+		}
+	}
+	return out
+}
+
+func workflowValidationErrorsValid(errors []serverapi.WorkflowValidationError) bool {
+	for _, err := range errors {
+		if err.BlocksContext {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID string, metadata *serverapi.WorkflowGraphMetadata, graph serverapi.WorkflowGraphDraft) (workflow.Definition, error) {
@@ -1337,19 +1390,33 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID s
 		if strings.TrimSpace(node.GroupID) != "" {
 			groupMemberIDs[node.GroupID] = append(groupMemberIDs[node.GroupID], workflow.NodeID(node.ID))
 		}
-		def.Nodes = append(def.Nodes, workflow.Node{
-			WorkflowID:         workflow.WorkflowID(workflowID),
-			ID:                 workflow.NodeID(node.ID),
-			Key:                workflow.ModelKey(node.Key),
-			Kind:               workflow.NodeKind(node.Kind),
-			DisplayName:        node.DisplayName,
-			GroupID:            node.GroupID,
-			SubagentRole:       node.SubagentRole,
-			PromptTemplate:     node.PromptTemplate,
-			CompletionMode:     node.CompletionMode,
-			InputFields:        inputFields(node.InputFields),
-			JoinInputProviders: joinInputProviders(node.JoinInputProviders),
-		})
+		workflowNode, err := workflow.NewNode(
+			workflow.NodeIdentity{
+				WorkflowID:  workflow.WorkflowID(workflowID),
+				ID:          workflow.NodeID(node.ID),
+				Key:         workflow.ModelKey(node.Key),
+				DisplayName: node.DisplayName,
+				GroupID:     node.GroupID,
+			},
+			workflow.NodeKind(node.Kind),
+			workflow.NodeFields{
+				SubagentRole:   node.SubagentRole,
+				PromptTemplate: node.PromptTemplate,
+				CompletionMode: node.CompletionMode,
+				ScriptPath: func() workflow.OptionalScriptPath {
+					if scriptPath, ok := workflow.PresentScriptPath(optionalStringValue(node.ScriptPath)); ok {
+						return scriptPath
+					}
+					return workflow.AbsentScriptPath()
+				}(),
+				InputFields:        inputFields(node.InputFields),
+				JoinInputProviders: joinInputProviders(node.JoinInputProviders),
+			},
+		)
+		if err != nil {
+			return workflow.Definition{}, err
+		}
+		def.Nodes = append(def.Nodes, workflowNode)
 	}
 	for index := range def.NodeGroups {
 		def.NodeGroups[index].MemberNodeIDs = groupMemberIDs[def.NodeGroups[index].ID]
@@ -1408,7 +1475,7 @@ func workflowGraphStoreSaveRequest(workflowID string, expectedVersion int64, met
 		req.NodeGroups = append(req.NodeGroups, workflowstore.NodeGroupRecord{ID: group.ID, WorkflowID: workflow.WorkflowID(workflowID), Key: workflow.ModelKey(group.Key), DisplayName: group.DisplayName})
 	}
 	for _, node := range graph.Nodes {
-		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflow.WorkflowID(workflowID), Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, InputFields: inputFields(node.InputFields), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
+		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflow.WorkflowID(workflowID), Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), InputFields: inputFields(node.InputFields), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
 	}
 	for _, group := range graph.TransitionGroups {
 		req.TransitionGroups = append(req.TransitionGroups, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflow.WorkflowID(workflowID), SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description})
@@ -1477,6 +1544,13 @@ func inputFields(in []serverapi.WorkflowInputField) []workflow.InputField {
 		out = append(out, workflow.InputField{Name: field.Name, Description: field.Description})
 	}
 	return out
+}
+
+func optionalStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func joinInputProviders(in []serverapi.WorkflowJoinInputProvider) []workflow.JoinInputProvider {

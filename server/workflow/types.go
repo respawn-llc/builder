@@ -1,9 +1,8 @@
 package workflow
 
 import (
+	"fmt"
 	"strings"
-
-	"core/shared/config"
 )
 
 type WorkflowID string
@@ -21,6 +20,7 @@ type NodeKind string
 const (
 	NodeKindStart    NodeKind = "start"
 	NodeKindAgent    NodeKind = "agent"
+	NodeKindScript   NodeKind = "script"
 	NodeKindJoin     NodeKind = "join"
 	NodeKindTerminal NodeKind = "terminal"
 )
@@ -100,19 +100,294 @@ type NodeGroup struct {
 	MemberNodeIDs []NodeID
 }
 
-type Node struct {
-	WorkflowID         WorkflowID
-	ID                 NodeID
-	Key                ModelKey
-	DisplayName        string
-	Kind               NodeKind
-	GroupID            string
+type Node interface {
+	sealedWorkflowNode()
+	Identity() NodeIdentity
+	Kind() NodeKind
+}
+
+type NodeIdentity struct {
+	WorkflowID  WorkflowID
+	ID          NodeID
+	Key         ModelKey
+	DisplayName string
+	GroupID     string
+}
+
+type OptionalScriptPath struct {
+	value string
+	set   bool
+}
+
+func AbsentScriptPath() OptionalScriptPath {
+	return OptionalScriptPath{}
+}
+
+func PresentScriptPath(path string) (OptionalScriptPath, bool) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return OptionalScriptPath{}, false
+	}
+	return OptionalScriptPath{value: trimmed, set: true}, true
+}
+
+func MustPresentScriptPath(path string) OptionalScriptPath {
+	value, ok := PresentScriptPath(path)
+	if !ok {
+		panic("workflow: script path must be non-empty when present")
+	}
+	return value
+}
+
+func (p OptionalScriptPath) IsPresent() bool {
+	return p.set
+}
+
+func (p OptionalScriptPath) Value() (string, bool) {
+	return p.value, p.set
+}
+
+func (p OptionalScriptPath) String() string {
+	if !p.set {
+		return ""
+	}
+	return p.value
+}
+
+type StartNode struct {
+	NodeIdentity
+}
+
+func (StartNode) sealedWorkflowNode() {}
+func (n StartNode) Identity() NodeIdentity {
+	return n.NodeIdentity
+}
+func (StartNode) Kind() NodeKind {
+	return NodeKindStart
+}
+
+type AgentNode struct {
+	NodeIdentity
+	SubagentRole   string
+	PromptTemplate string
+	CompletionMode string
+	InputFields    []InputField
+	OutputFields   []OutputField
+}
+
+func (AgentNode) sealedWorkflowNode() {}
+func (n AgentNode) Identity() NodeIdentity {
+	return n.NodeIdentity
+}
+func (AgentNode) Kind() NodeKind {
+	return NodeKindAgent
+}
+
+type ScriptNode struct {
+	NodeIdentity
+	ScriptPath   OptionalScriptPath
+	OutputFields []OutputField
+}
+
+func (ScriptNode) sealedWorkflowNode() {}
+func (n ScriptNode) Identity() NodeIdentity {
+	return n.NodeIdentity
+}
+func (ScriptNode) Kind() NodeKind {
+	return NodeKindScript
+}
+
+type JoinNode struct {
+	NodeIdentity
+	JoinInputProviders []JoinInputProvider
+}
+
+func (JoinNode) sealedWorkflowNode() {}
+func (n JoinNode) Identity() NodeIdentity {
+	return n.NodeIdentity
+}
+func (JoinNode) Kind() NodeKind {
+	return NodeKindJoin
+}
+
+type TerminalNode struct {
+	NodeIdentity
+}
+
+func (TerminalNode) sealedWorkflowNode() {}
+func (n TerminalNode) Identity() NodeIdentity {
+	return n.NodeIdentity
+}
+func (TerminalNode) Kind() NodeKind {
+	return NodeKindTerminal
+}
+
+func NodeWorkflowID(node Node) WorkflowID {
+	if node == nil {
+		return ""
+	}
+	return node.Identity().WorkflowID
+}
+
+func NodeIDOf(node Node) NodeID {
+	if node == nil {
+		return ""
+	}
+	return node.Identity().ID
+}
+
+func NodeKey(node Node) ModelKey {
+	if node == nil {
+		return ""
+	}
+	return node.Identity().Key
+}
+
+func NodeDisplayName(node Node) string {
+	if node == nil {
+		return ""
+	}
+	return node.Identity().DisplayName
+}
+
+func NodeGroupID(node Node) string {
+	if node == nil {
+		return ""
+	}
+	return node.Identity().GroupID
+}
+
+func IsExecutableNode(node Node) bool {
+	if node == nil {
+		return false
+	}
+	switch node.Kind() {
+	case NodeKindAgent, NodeKindScript:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsSessionNode(node Node) bool {
+	if node == nil {
+		return false
+	}
+	return node.Kind() == NodeKindAgent
+}
+
+func IsBoardVisibleNode(node Node) bool {
+	return IsExecutableNode(node)
+}
+
+func CanSourceParameters(node Node) bool {
+	if node == nil {
+		return false
+	}
+	switch node.Kind() {
+	case NodeKindAgent, NodeKindScript:
+		return true
+	default:
+		return false
+	}
+}
+
+func CanOwnCompletionContract(node Node) bool {
+	return CanSourceParameters(node)
+}
+
+func NodeSubagentRole(node Node) string {
+	if agent, ok := node.(AgentNode); ok {
+		return agent.SubagentRole
+	}
+	return ""
+}
+
+func NodePromptTemplate(node Node) string {
+	if agent, ok := node.(AgentNode); ok {
+		return agent.PromptTemplate
+	}
+	return ""
+}
+
+func NodeCompletionMode(node Node) string {
+	if agent, ok := node.(AgentNode); ok {
+		return agent.CompletionMode
+	}
+	return ""
+}
+
+func NodeInputFields(node Node) []InputField {
+	if agent, ok := node.(AgentNode); ok {
+		return append([]InputField(nil), agent.InputFields...)
+	}
+	return nil
+}
+
+func NodeJoinInputProviders(node Node) []JoinInputProvider {
+	if join, ok := node.(JoinNode); ok {
+		return append([]JoinInputProvider(nil), join.JoinInputProviders...)
+	}
+	return nil
+}
+
+func NodeOutputFields(node Node) []OutputField {
+	switch typed := node.(type) {
+	case AgentNode:
+		return append([]OutputField(nil), typed.OutputFields...)
+	case ScriptNode:
+		return append([]OutputField(nil), typed.OutputFields...)
+	default:
+		return nil
+	}
+}
+
+func NodeScriptPath(node Node) OptionalScriptPath {
+	if script, ok := node.(ScriptNode); ok {
+		return script.ScriptPath
+	}
+	return AbsentScriptPath()
+}
+
+type NodeFields struct {
 	SubagentRole       string
 	PromptTemplate     string
 	CompletionMode     string
 	InputFields        []InputField
 	JoinInputProviders []JoinInputProvider
 	OutputFields       []OutputField
+	ScriptPath         OptionalScriptPath
+}
+
+func NewNode(identity NodeIdentity, kind NodeKind, fields NodeFields) (Node, error) {
+	switch kind {
+	case NodeKindStart:
+		return StartNode{NodeIdentity: identity}, nil
+	case NodeKindAgent:
+		return AgentNode{
+			NodeIdentity:   identity,
+			SubagentRole:   fields.SubagentRole,
+			PromptTemplate: fields.PromptTemplate,
+			CompletionMode: fields.CompletionMode,
+			InputFields:    append([]InputField(nil), fields.InputFields...),
+			OutputFields:   append([]OutputField(nil), fields.OutputFields...),
+		}, nil
+	case NodeKindScript:
+		return ScriptNode{
+			NodeIdentity: identity,
+			ScriptPath:   fields.ScriptPath,
+			OutputFields: append([]OutputField(nil), fields.OutputFields...),
+		}, nil
+	case NodeKindJoin:
+		return JoinNode{
+			NodeIdentity:       identity,
+			JoinInputProviders: append([]JoinInputProvider(nil), fields.JoinInputProviders...),
+		}, nil
+	case NodeKindTerminal:
+		return TerminalNode{NodeIdentity: identity}, nil
+	default:
+		return nil, fmt.Errorf("workflow node kind %q is invalid", kind)
+	}
 }
 
 type TransitionGroup struct {
@@ -169,174 +444,4 @@ type InputBinding struct {
 	Name   string        `json:"name"`
 	Source BindingSource `json:"source"`
 	Field  string        `json:"field"`
-}
-
-type ValidationContext string
-
-const (
-	ValidationContextDraft        ValidationContext = "draft"
-	ValidationContextTaskCreation ValidationContext = "task_creation"
-	ValidationContextExecution    ValidationContext = "execution"
-)
-
-type RoleResolver interface {
-	RoleExists(role string) bool
-}
-
-const DefaultAgentRole = config.DefaultSubagentRole
-
-func IsDefaultAgentRole(role string) bool {
-	return strings.TrimSpace(role) == DefaultAgentRole
-}
-
-type StaticRoleResolver map[string]bool
-
-func (r StaticRoleResolver) RoleExists(role string) bool {
-	if IsDefaultAgentRole(role) {
-		return true
-	}
-	return r[role]
-}
-
-type ValidationOptions struct {
-	Context      ValidationContext
-	RoleResolver RoleResolver
-}
-
-type ValidationErrorCode string
-
-const (
-	CodeMissingWorkflowID              ValidationErrorCode = "workflow.validation.missing_workflow_id"
-	CodeMissingNodeID                  ValidationErrorCode = "workflow.validation.missing_node_id"
-	CodeDuplicateNodeID                ValidationErrorCode = "workflow.validation.duplicate_node_id"
-	CodeMissingNodeKey                 ValidationErrorCode = "workflow.validation.missing_node_key"
-	CodeInvalidNodeKey                 ValidationErrorCode = "workflow.validation.invalid_node_key"
-	CodeDuplicateNodeKey               ValidationErrorCode = "workflow.validation.duplicate_node_key"
-	CodeMissingStartNode               ValidationErrorCode = "workflow.validation.missing_start_node"
-	CodeMultipleStartNodes             ValidationErrorCode = "workflow.validation.multiple_start_nodes"
-	CodeInvalidStartNode               ValidationErrorCode = "workflow.validation.invalid_start_node"
-	CodeInvalidStartOutgoingShape      ValidationErrorCode = "workflow.validation.invalid_start_outgoing_shape"
-	CodeTerminalHasOutgoingEdge        ValidationErrorCode = "workflow.validation.terminal_has_outgoing_edge"
-	CodeTerminalIsExecutable           ValidationErrorCode = "workflow.validation.terminal_is_executable"
-	CodeJoinIsExecutable               ValidationErrorCode = "workflow.validation.join_is_executable"
-	CodeInvalidJoinNode                ValidationErrorCode = "workflow.validation.invalid_join_node"
-	CodeInvalidJoinOutgoingShape       ValidationErrorCode = "workflow.validation.invalid_join_outgoing_shape"
-	CodeNodeUnreachableFromStart       ValidationErrorCode = "workflow.validation.node_unreachable_from_start"
-	CodeNonTerminalCannotReachTerminal ValidationErrorCode = "workflow.validation.non_terminal_cannot_reach_terminal"
-	CodeMissingTransitionGroupID       ValidationErrorCode = "workflow.validation.missing_transition_group_id"
-	CodeDuplicateTransitionGroupID     ValidationErrorCode = "workflow.validation.duplicate_transition_group_id"
-	CodeEmptyTransitionGroup           ValidationErrorCode = "workflow.validation.empty_transition_group"
-	CodeMissingTransitionID            ValidationErrorCode = "workflow.validation.missing_transition_id"
-	CodeInvalidTransitionID            ValidationErrorCode = "workflow.validation.invalid_transition_id"
-	CodeDuplicateTransitionID          ValidationErrorCode = "workflow.validation.duplicate_transition_id"
-	CodeEdgeTransitionGroupMissing     ValidationErrorCode = "workflow.validation.edge_transition_group_missing"
-	CodeMissingEdgeID                  ValidationErrorCode = "workflow.validation.missing_edge_id"
-	CodeDuplicateEdgeID                ValidationErrorCode = "workflow.validation.duplicate_edge_id"
-	CodeMissingEdgeKey                 ValidationErrorCode = "workflow.validation.missing_edge_key"
-	CodeInvalidEdgeKey                 ValidationErrorCode = "workflow.validation.invalid_edge_key"
-	CodeDuplicateEdgeKey               ValidationErrorCode = "workflow.validation.duplicate_edge_key"
-	CodeEdgeTargetMissing              ValidationErrorCode = "workflow.validation.edge_target_missing"
-	CodeCrossWorkflowReference         ValidationErrorCode = "workflow.validation.cross_workflow_reference"
-	CodeInvalidOutputField             ValidationErrorCode = "workflow.validation.invalid_output_field"
-	CodeDuplicateOutputField           ValidationErrorCode = "workflow.validation.duplicate_output_field"
-	CodeOutputFieldDescriptionRequired ValidationErrorCode = "workflow.validation.output_field_description_required"
-	CodeOutputSchemaTooLarge           ValidationErrorCode = "workflow.validation.output_schema_too_large"
-	CodeInvalidInputField              ValidationErrorCode = "workflow.validation.invalid_input_field"
-	CodeDuplicateInputField            ValidationErrorCode = "workflow.validation.duplicate_input_field"
-	CodeInputFieldDescriptionRequired  ValidationErrorCode = "workflow.validation.input_field_description_required"
-	CodeInputSchemaTooLarge            ValidationErrorCode = "workflow.validation.input_schema_too_large"
-	CodeInvalidParameter               ValidationErrorCode = "workflow.validation.invalid_parameter"
-	CodeDuplicateParameter             ValidationErrorCode = "workflow.validation.duplicate_parameter"
-	CodeParameterDescriptionRequired   ValidationErrorCode = "workflow.validation.parameter_description_required"
-	CodeParameterSchemaTooLarge        ValidationErrorCode = "workflow.validation.parameter_schema_too_large"
-	CodeTransitionPromptRequired       ValidationErrorCode = "workflow.validation.transition_prompt_required"
-	CodeTransitionPromptForbidden      ValidationErrorCode = "workflow.validation.transition_prompt_forbidden"
-	CodeUnknownOutputRequirement       ValidationErrorCode = "workflow.validation.unknown_output_requirement"
-	CodeInvalidInputBinding            ValidationErrorCode = "workflow.validation.invalid_input_binding"
-	CodeInvalidTemplatePlaceholder     ValidationErrorCode = "workflow.validation.invalid_template_placeholder"
-	CodeProvisionFieldOverlap          ValidationErrorCode = "workflow.validation.provision_field_overlap"
-	CodeMissingJoinInputProvider       ValidationErrorCode = "workflow.validation.missing_join_input_provider"
-	CodeDuplicateJoinInputProvider     ValidationErrorCode = "workflow.validation.duplicate_join_input_provider"
-	CodeInvalidJoinInputProvider       ValidationErrorCode = "workflow.validation.invalid_join_input_provider"
-	CodeInvalidFirstNodeInput          ValidationErrorCode = "workflow.validation.invalid_first_node_input"
-	CodeInvalidContextMode             ValidationErrorCode = "workflow.validation.invalid_context_mode"
-	CodeInvalidContextSource           ValidationErrorCode = "workflow.validation.invalid_context_source"
-	CodeInvalidFanoutJoinTopology      ValidationErrorCode = "workflow.validation.invalid_fanout_join_topology"
-	CodeInvalidNodeGroup               ValidationErrorCode = "workflow.validation.invalid_node_group"
-	CodeUnsupportedContextMode         ValidationErrorCode = "workflow.validation.unsupported_context_mode"
-	CodeUnsupportedApprovalExecution   ValidationErrorCode = "workflow.validation.unsupported_approval_execution"
-	CodeUnsupportedJoinExecution       ValidationErrorCode = "workflow.validation.unsupported_join_execution"
-	CodeUnsupportedJoinBinding         ValidationErrorCode = "workflow.validation.unsupported_join_binding"
-	CodeAgentRoleRequired              ValidationErrorCode = "workflow.validation.agent_role_required"
-	CodeAgentRoleMissing               ValidationErrorCode = "workflow.validation.agent_role_missing"
-	CodeInvalidNodeKind                ValidationErrorCode = "workflow.validation.invalid_node_kind"
-	CodeInvalidDisplayName             ValidationErrorCode = "workflow.validation.invalid_display_name"
-)
-
-type ValidationError struct {
-	Code              ValidationErrorCode
-	Message           string
-	WorkflowID        WorkflowID
-	NodeID            NodeID
-	TransitionGroupID TransitionGroupID
-	EdgeID            EdgeID
-	FieldName         string
-	InputName         string
-	Placeholder       string
-	ProviderEdgeID    EdgeID
-	RelatedIDs        []string
-	BlocksContext     bool
-}
-
-type RuntimeSupportEdge struct {
-	ContextMode      ContextMode
-	RequiresApproval bool
-	TargetKind       NodeKind
-	InputBindings    []InputBinding
-}
-
-type RuntimeSupportIssue struct {
-	Code    ValidationErrorCode
-	Message string
-}
-
-func UnsupportedRuntimeFeatures(edge RuntimeSupportEdge) []RuntimeSupportIssue {
-	issues := []RuntimeSupportIssue{}
-	return issues
-}
-
-type ValidationResult struct {
-	Context ValidationContext
-	Errors  []ValidationError
-}
-
-func (r ValidationResult) HasErrors() bool {
-	return len(r.Errors) > 0
-}
-
-func (r ValidationResult) HasBlockingErrors() bool {
-	for _, err := range r.Errors {
-		if err.BlocksContext {
-			return true
-		}
-	}
-	return false
-}
-
-func (r ValidationResult) BlockingErrors() []ValidationError {
-	out := make([]ValidationError, 0, len(r.Errors))
-	for _, err := range r.Errors {
-		if err.BlocksContext {
-			out = append(out, err)
-		}
-	}
-	return out
-}
-
-func (r ValidationResult) Codes() []ValidationErrorCode {
-	out := make([]ValidationErrorCode, 0, len(r.Errors))
-	for _, err := range r.Errors {
-		out = append(out, err.Code)
-	}
-	return out
 }

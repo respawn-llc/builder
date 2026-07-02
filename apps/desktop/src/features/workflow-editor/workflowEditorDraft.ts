@@ -95,6 +95,11 @@ export type WorkflowEditorDraftAction =
       nodeID: string;
       patch: Partial<Pick<WorkflowNode, "key" | "name" | "subagentRole" | "promptTemplate" | "completionMode">>;
     }>
+  | Readonly<{
+      type: "editScriptNode";
+      nodeID: string;
+      patch: Partial<Pick<WorkflowNode, "key" | "name" | "scriptPath">>;
+    }>
   | Readonly<{ type: "addInputField"; nodeID: string }>
   | Readonly<{
       type: "updateInputField";
@@ -156,6 +161,7 @@ type NodeFieldAction = Extract<
     type:
       | "editNodeIdentity"
       | "editAgentNode"
+      | "editScriptNode"
       | "addInputField"
       | "updateInputField"
       | "deleteInputField"
@@ -207,6 +213,7 @@ const lifecycleActionTypes: ReadonlySet<DraftActionType> = new Set<LifecycleActi
 const nodeFieldActionTypes: ReadonlySet<DraftActionType> = new Set<NodeFieldAction["type"]>([
   "editNodeIdentity",
   "editAgentNode",
+  "editScriptNode",
   "addInputField",
   "updateInputField",
   "deleteInputField",
@@ -286,7 +293,12 @@ function reduceNodeFieldAction(
   switch (action.type) {
     case "editNodeIdentity":
       return editDraftNode(state, action.nodeID, false, (node) => {
-        if (node.kind !== "start" && node.kind !== "terminal" && node.kind !== "agent") {
+        if (
+          node.kind !== "start" &&
+          node.kind !== "terminal" &&
+          node.kind !== "agent" &&
+          node.kind !== "script"
+        ) {
           return node;
         }
         return { ...node, ...action.patch };
@@ -297,6 +309,17 @@ function reduceNodeFieldAction(
           return node;
         }
         return { ...node, ...action.patch, completionMode: action.patch.completionMode ?? node.completionMode };
+      });
+    case "editScriptNode":
+      return editDraftNode(state, action.nodeID, false, (node) => {
+        if (node.kind !== "script") {
+          return node;
+        }
+        return {
+          ...node,
+          ...action.patch,
+          scriptPath: action.patch.scriptPath === undefined ? node.scriptPath : action.patch.scriptPath,
+        };
       });
     case "addInputField":
       return editDraftNode(state, action.nodeID, false, (node) => ({
@@ -472,6 +495,7 @@ export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): Workf
       kind: node.kind,
       name: node.name,
       completionMode: node.completionMode,
+      scriptPath: node.scriptPath,
       inputFields: node.inputFields,
       joinInputProviders: node.joinInputProviders,
       promptTemplate: node.promptTemplate,

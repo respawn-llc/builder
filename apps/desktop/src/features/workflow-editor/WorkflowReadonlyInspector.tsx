@@ -111,8 +111,16 @@ export function NodeDetails({
             value={fallbackLabel(t("workflowEditor.none"), node.subagentRole)}
           />
         ) : null}
+        {node.kind === "script" ? (
+          <DetailRow
+            help={t("workflowEditor.scriptPathHelp")}
+            label={t("workflowEditor.scriptPath")}
+            mono
+            value={fallbackLabel(t("workflowEditor.none"), node.scriptPath ?? "")}
+          />
+        ) : null}
       </DetailSection>
-      {node.kind === "agent" ? (
+      {node.kind === "agent" || node.kind === "script" ? (
         <FieldSummary fields={derivedNode.possibleProvisionFields} title={t("workflowEditor.outputs")} />
       ) : null}
       {node.kind === "join" ? (

@@ -23,13 +23,18 @@ import {
 } from "./workflowEditorGraphMutations";
 
 describe("workflowEditorGraphMutations", () => {
-  it("adds agent and terminal nodes", () => {
+  it("adds executable and terminal nodes", () => {
     const agent = addWorkflowNode(draftDefinitionFromSource(workflowDefinition), {
       id: "workflow-node-agent",
       kind: "agent",
       name: "Review",
     });
-    const terminal = addWorkflowNode(agent.draft, {
+    const script = addWorkflowNode(agent.draft, {
+      id: "workflow-node-script",
+      kind: "script",
+      name: "Generate",
+    });
+    const terminal = addWorkflowNode(script.draft, {
       id: "workflow-node-terminal",
       kind: "terminal",
       name: "Archived",
@@ -39,6 +44,12 @@ describe("workflowEditorGraphMutations", () => {
       key: "review",
       kind: "agent",
       subagentRole: "default",
+    });
+    expect(script.draft.nodes.find((node) => node.id === "workflow-node-script")).toMatchObject({
+      key: "generate",
+      kind: "script",
+      scriptPath: null,
+      subagentRole: "",
     });
     expect(terminal.draft.nodes.find((node) => node.id === "workflow-node-terminal")).toMatchObject({
       key: "archived",
@@ -71,6 +82,23 @@ describe("workflowEditorGraphMutations", () => {
 
   it("reuses a source fan-out transition group when dragging into another branch of the same node group", () => {
     const draft = draftDefinitionFromSource(parallelBranchWorkflowDefinition());
+
+    const connected = connectWorkflowNodes(draft, {
+      edgeID: "workflow-edge-review",
+      sourceNodeID: "node-source",
+      targetNodeID: "node-review",
+      transitionGroupID: "workflow-transition-group-review",
+    });
+
+    expect(connected.draft.transitionGroups.some((group) => group.id === "workflow-transition-group-review")).toBe(false);
+    expect(edgesForTransition(connected.draft, "group-source-agent")).toMatchObject([
+      { id: "edge-source-agent", targetNodeID: "node-agent" },
+      { id: "workflow-edge-review", key: "review", targetNodeID: "node-review" },
+    ]);
+  });
+
+  it("reuses a source fan-out transition group when dragging into a script branch of the same node group", () => {
+    const draft = withScriptBranch(draftDefinitionFromSource(parallelBranchWorkflowDefinition()), "node-review");
 
     const connected = connectWorkflowNodes(draft, {
       edgeID: "workflow-edge-review",
@@ -740,6 +768,22 @@ describe("workflowEditorGraphMutations", () => {
     ]);
   });
 
+  it("deletes inferred node groups with script branches in the fan-out set", () => {
+    const expanded = withScriptBranch(inferredTwoBranchGroupDraft(), "node-review");
+
+    const deleted = deleteWorkflowNodeGroup(expanded, "workflow-node-group-parallel");
+
+    expect(edgesForTransition(deleted.draft, "group-source-agent")).toMatchObject([
+      { targetNodeID: "node-agent" },
+    ]);
+    expect(deleted.draft.edges.some((edge) => edge.id === "edge-start-review")).toBe(false);
+    expect([...deleted.summary.removedEdgeIDs].sort()).toEqual([
+      "edge-implement-join",
+      "edge-review-join",
+      "edge-start-review",
+    ]);
+  });
+
   it("dissolves node groups instead of leaving a single remaining branch", () => {
     const withBranch = addWorkflowNode(draftDefinitionFromSource(groupableWorkflowDefinition), {
       id: "node-review",
@@ -934,6 +978,15 @@ function withDuplicateMissingBranchFanout(draft: ReturnType<typeof draftDefiniti
     ...draft,
     edges: draft.edges.map((edge) =>
       edge.id === "edge-start-audit" ? { ...edge, targetNodeID: "node-review" } : edge,
+    ),
+  };
+}
+
+function withScriptBranch(draft: ReturnType<typeof draftDefinitionFromSource>, nodeID: string) {
+  return {
+    ...draft,
+    nodes: draft.nodes.map((node) =>
+      node.id === nodeID ? { ...node, kind: "script" as const, scriptPath: "scripts/run" } : node,
     ),
   };
 }

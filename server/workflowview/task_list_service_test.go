@@ -450,7 +450,7 @@ func TestListTasksRunStatusAndRunCountUseCurrentPlacements(t *testing.T) {
 			t.Fatalf("GetDefinition: %v", err)
 		}
 		start := workflowViewNodeByKind(t, def, workflow.NodeKindStart)
-		if _, err := workflowStore.ManualMoveTask(ctx, workflowstore.ManualMoveRequest{TaskID: task.ID, TargetNodeID: start.ID, AllowMissingEdge: true}); err != nil {
+		if _, err := workflowStore.ManualMoveTask(ctx, workflowstore.ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start), AllowMissingEdge: true}); err != nil {
 			t.Fatalf("ManualMoveTask reset: %v", err)
 		}
 

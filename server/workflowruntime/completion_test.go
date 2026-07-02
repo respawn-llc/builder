@@ -58,7 +58,7 @@ func TestSelectCompletionMode(t *testing.T) {
 }
 
 func TestStoreControllerFinalizesWorkflowAttentionAfterCompleteRun(t *testing.T) {
-	store := &recordingCompletionStore{result: workflowstore.CompleteRunResult{TransitionID: "transition-1", State: "pending_approval"}}
+	store := &recordingCompletionStore{result: workflowstore.CompleteRunResult{TransitionID: "transition-1", State: "pending_approval", InterruptedRunIDs: []workflow.RunID{"run-script"}}}
 	finalizer := &recordingCompletionAttentionFinalizer{}
 	controller := StoreController{Store: store, AttentionFinalizer: finalizer}
 
@@ -71,6 +71,9 @@ func TestStoreControllerFinalizesWorkflowAttentionAfterCompleteRun(t *testing.T)
 	}
 	if len(finalizer.results) != 1 || finalizer.results[0].TransitionID != "transition-1" || finalizer.results[0].State != "pending_approval" {
 		t.Fatalf("attention finalizer results = %+v", finalizer.results)
+	}
+	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != "run-script" {
+		t.Fatalf("interrupted run finalizations = %+v, want run-script", finalizer.interruptedRuns)
 	}
 }
 

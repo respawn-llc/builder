@@ -271,6 +271,7 @@ func TestGoalCommandSubprocessTargetsLiveSessionFromUnboundWorktree(t *testing.T
 	workspace := t.TempDir()
 	unboundWorktree := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("KENT_PERSISTENCE_ROOT", filepath.Join(home, ".kent"))
 	configureBindingCommandTestServerPort(t)
 
 	cfg, err := config.Load(workspace, config.LoadOptions{})

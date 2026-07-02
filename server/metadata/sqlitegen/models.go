@@ -296,6 +296,7 @@ type WorkflowNode struct {
 	InputFieldsJson        string
 	JoinInputProvidersJson string
 	CompletionMode         string
+	ScriptPath             sql.NullString
 }
 
 type WorkflowNodeGroup struct {

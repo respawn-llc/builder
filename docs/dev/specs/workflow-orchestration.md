@@ -37,18 +37,18 @@
 - Workflows carry a monotonic `version` over persisted definition changes. This is traceability/stale-warning data, not immutable graph versioning.
 - Metadata-only changes and graph changes each increment workflow `version` once; combined metadata+graph saves also increment it once; no-op saves increment neither.
 - Tasks, runs, transitions, approvals, and edge snapshots store observed workflow version where historical traceability is required.
-- Run-start snapshots and transition/approval/fan-out edge snapshots keep using their snapshot. Anything not snapshotted uses current workflow graph/config at execution time.
+- Run-start snapshots and transition/approval/fan-out edge snapshots keep using their snapshot unless a node-specific runtime contract says otherwise. Script nodes live-load their current `script_path` and completion contract from the workflow graph when the run executes/completes.
 
 ## Nodes, Edges, And Validation
 
-- Nodes configure agent runs: subagent role, prompt/template, output schema, limits, stop conditions, and worktree/session execution policy.
+- Nodes configure workflow states and executable behavior. Agent nodes configure subagent role, completion mode, and worktree/session execution policy. Script nodes configure an executable script path.
 - Edges configure transitions: target node, approval/manual interaction, context preservation, context source, input bindings, output requirements, routing, and join/aggregation behavior.
 - Subagent role is the executable node assignee. There is no separate assignee field.
 - Workflow nodes select existing subagent roles only. There are no per-node model/provider/tool/auth overrides.
 - Visible executable/terminal node identity is Kanban column/status identity. Join nodes are internal merge plumbing omitted from board read models.
-- Workflows can contain start, agent, join, and terminal nodes. Approval is an edge property, not a manual-node requirement.
+- Workflows can contain start, agent, script, join, and terminal nodes. Approval is an edge property, not a manual-node requirement.
 - V1 has exactly one start node. The start node is non-executable and has no inputs.
-- For task creation/automation, the start node must have exactly one outgoing transition group containing exactly one edge targeting an agent node.
+- For task creation/automation, the start node must have exactly one outgoing transition group containing exactly one edge targeting an executable node.
 - Terminal nodes are strict sinks. Manual reopen/rework is a user override execution, not a durable graph transition.
 - Draft validation reports semantic errors but does not block save/link/default selection.
 - Task creation and execution validation accumulate all safe actionable errors and reject invalid graph/role/input configurations.
@@ -82,6 +82,18 @@
 - Runtime observes durable external completion before each model turn, immediately after a model response returns and before assistant/tool persistence, and after local tool results are persisted.
 - Runtime enforces one protocol cap. Repeated final answers in invalid modes or invalid completion attempts interrupt the run after `[workflow].max_invalid_completion_attempts = 5`.
 - No wall-clock runtime cap is required for v1.
+
+## Script Nodes
+
+- Script nodes are first-class executable workflow nodes. They can be Start targets, fan-out branches, join predecessors/successors, manual automation targets, and board columns anywhere agent nodes are accepted by graph semantics.
+- Script nodes store nullable `script_path`. Missing, nonexistent, directory, and non-executable paths do not block graph save or node add/update; they block execution validation, task start, or target run execution as appropriate.
+- Relative script paths resolve against the task managed worktree root. Absolute paths resolve on the Kent server host.
+- Script execution directly `exec`s the resolved file with the task managed worktree as cwd. It does not use a shell wrapper, retries, or a timeout.
+- Script stdin is one JSON object. Incoming workflow parameter values are top-level properties. `_kent` is reserved for minimal runtime identifiers, including `run_id` and `placement_id`.
+- Script stdout is parsed as the workflow completion JSON using the same completion contract as agent nodes. Stderr is diagnostics only and is not mixed into completion parsing.
+- Script run failures, invalid stdout, invalid script path, cancellation, and execution errors interrupt the run with bounded structured details.
+- Script completion persists transition actor `script`.
+- Resuming an interrupted script run reruns the same task run generation with cached incoming parameter values, the current workflow DB script path, and the current script outgoing transition/output contract.
 
 ## Workflow Prompting
 
@@ -171,7 +183,7 @@
 ## Worktrees
 
 - A task owns one managed worktree by default.
-- All executable agent nodes require and reuse the task managed worktree.
+- All executable nodes require and reuse the task managed worktree.
 - Kent creates the managed worktree on task start before first executable run is scheduled.
 - Task worktree branch name is the task short ID.
 - Worktree creation reuses existing worktree branch/root collision handling.

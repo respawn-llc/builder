@@ -82,7 +82,7 @@ CREATE TABLE workflow_nodes_new (
     id TEXT PRIMARY KEY,
     workflow_id TEXT NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
     node_key TEXT NOT NULL CHECK (length(node_key) BETWEEN 1 AND 64),
-    kind TEXT NOT NULL CHECK (kind IN ('start', 'agent', 'join', 'terminal')),
+    kind TEXT NOT NULL CHECK (kind IN ('start', 'agent', 'script', 'join', 'terminal')),
     display_name TEXT NOT NULL CHECK (length(trim(display_name)) BETWEEN 1 AND 120),
     subagent_role TEXT NOT NULL DEFAULT '',
     prompt_template TEXT NOT NULL DEFAULT '',

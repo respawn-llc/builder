@@ -22,7 +22,7 @@ func TestCompleteRunUsesRunStartSnapshotAfterGraphChanges(t *testing.T) {
 	agent := nodeByKey(t, def, "agent")
 	forceWorkflowGraphRowsForSnapshotTest(t, ctx, store, workflowID,
 		[]NodeRecord{{ID: "node-extra-terminal", WorkflowID: workflowID, Key: "archived", Kind: workflow.NodeKindTerminal, DisplayName: "Archived"}},
-		[]TransitionGroupRecord{{ID: "group-archive", WorkflowID: workflowID, SourceNodeID: agent.ID, TransitionID: "archive", DisplayName: "Archive"}},
+		[]TransitionGroupRecord{{ID: "group-archive", WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "archive", DisplayName: "Archive"}},
 		[]EdgeRecord{{ID: "edge-archive", WorkflowID: workflowID, TransitionGroupID: "group-archive", Key: "archive", TargetNodeID: "node-extra-terminal", ContextMode: workflow.ContextModeNewSession}},
 	)
 	if _, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: started.RunID, TransitionID: "archive", OutputValues: map[string]string{"summary": "done"}}); !completionHasCode(err, CompletionCodeInvalidTransitionID) {
@@ -85,7 +85,7 @@ func TestCompleteRunBuildsChildSnapshotFromParentRevision(t *testing.T) {
 	if _, err := store.AddNode(ctx, NodeRecord{ID: reviewerID, WorkflowID: workflowID, Key: "reviewer", Kind: workflow.NodeKindAgent, DisplayName: "Reviewer", SubagentRole: "coder", PromptTemplate: "Review work.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}}); err != nil {
 		t.Fatalf("AddNode reviewer: %v", err)
 	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: workflow.TransitionGroupID("group-review-" + string(workflowID)), WorkflowID: workflowID, SourceNodeID: agent.ID, TransitionID: "review", DisplayName: "Review"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: workflow.TransitionGroupID("group-review-" + string(workflowID)), WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(agent), TransitionID: "review", DisplayName: "Review"}); err != nil {
 		t.Fatalf("AddTransitionGroup review: %v", err)
 	}
 	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-review-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID("group-review-" + string(workflowID)), Key: "review", TargetNodeID: reviewerID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review work."}); err != nil {
@@ -94,7 +94,7 @@ func TestCompleteRunBuildsChildSnapshotFromParentRevision(t *testing.T) {
 	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: workflow.TransitionGroupID("group-review-done-" + string(workflowID)), WorkflowID: workflowID, SourceNodeID: reviewerID, TransitionID: "review_done", DisplayName: "Review Done"}); err != nil {
 		t.Fatalf("AddTransitionGroup review done: %v", err)
 	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-review-done-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID("group-review-done-" + string(workflowID)), Key: "review_done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}}); err != nil {
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-review-done-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID("group-review-done-" + string(workflowID)), Key: "review_done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession, OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}}}); err != nil {
 		t.Fatalf("AddEdge review done: %v", err)
 	}
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)

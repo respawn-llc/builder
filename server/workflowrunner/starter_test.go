@@ -1377,7 +1377,7 @@ func TestWorkflowRuntimeFanoutCompactAndContinueClonesUseBranchTransitionMetadat
 	}
 	nodeKeyByID := map[workflow.NodeID]workflow.ModelKey{}
 	for _, node := range def.Nodes {
-		nodeKeyByID[workflow.NodeID(node.ID)] = node.Key
+		nodeKeyByID[workflow.NodeIDOf(node)] = workflow.NodeKey(node)
 	}
 	task := fixture.createStartedTask(t)
 
@@ -1982,6 +1982,10 @@ func (s *recordingRuntimeStore) GetRunStartContext(context.Context, workflow.Run
 	panic("GetRunStartContext not expected")
 }
 
+func (s *recordingRuntimeStore) GetRunCompletionContext(context.Context, workflow.RunID) (workflowstore.RunCompletionContext, error) {
+	panic("GetRunCompletionContext not expected")
+}
+
 func (s *recordingRuntimeStore) AttachRunSession(context.Context, workflow.RunID, int64, string) error {
 	panic("AttachRunSession not expected")
 }
@@ -2036,6 +2040,32 @@ func (f *recordingInterruptedRunFinalizer) FinalizeTransition(_ context.Context,
 
 func (f *recordingInterruptedRunFinalizer) FinalizeInterruptedRun(_ context.Context, runID workflow.RunID) {
 	f.interruptedRuns = append(f.interruptedRuns, runID)
+}
+
+func TestScriptCompletionAttentionFinalizesTransitionAndInterruptedRuns(t *testing.T) {
+	finalizer := &recordingInterruptedRunFinalizer{}
+	starter := &Starter{attentionFinalizer: finalizer}
+
+	starter.finalizeScriptCompletionAttention(context.Background(), workflowstore.CompleteRunResult{
+		TransitionID:                  "transition-script",
+		State:                         "pending_approval",
+		ResolvedApprovalTransitionIDs: []workflow.TransitionID{"transition-resolved"},
+		InterruptedRunIDs:             []workflow.RunID{"run-interrupted"},
+	})
+
+	if len(finalizer.transitions) != 1 {
+		t.Fatalf("finalized transitions = %+v, want one", finalizer.transitions)
+	}
+	transition := finalizer.transitions[0]
+	if transition.TransitionID != "transition-script" || transition.State != "pending_approval" {
+		t.Fatalf("finalized transition = %+v", transition)
+	}
+	if len(transition.ResolvedApprovalTransitionIDs) != 1 || transition.ResolvedApprovalTransitionIDs[0] != "transition-resolved" {
+		t.Fatalf("resolved approvals = %+v", transition.ResolvedApprovalTransitionIDs)
+	}
+	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != "run-interrupted" {
+		t.Fatalf("finalized interrupted runs = %+v", finalizer.interruptedRuns)
+	}
 }
 
 func (s panicRuntimeStore) SetRunWaitingAsk(context.Context, workflow.RunID, int64, string) error {
@@ -2372,7 +2402,7 @@ func createStarterWorkflow(t *testing.T, store *workflowstore.Store) workflow.Wo
 	if _, err := store.AddNode(ctx, workflowstore.NodeRecord{ID: agentID, WorkflowID: created.ID, Key: "agent", Kind: workflow.NodeKindAgent, DisplayName: "Agent", SubagentRole: "coder", PromptTemplate: "Implement the task.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}}); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-start-" + string(created.ID)), WorkflowID: created.ID, SourceNodeID: start.ID, TransitionID: "start", DisplayName: "Start"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-start-" + string(created.ID)), WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
 		t.Fatalf("AddTransitionGroup start: %v", err)
 	}
 	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-start-" + string(created.ID)), Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement the task."}); err != nil {
@@ -2381,7 +2411,7 @@ func createStarterWorkflow(t *testing.T, store *workflowstore.Store) workflow.Wo
 	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID("group-done-" + string(created.ID)), WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddTransitionGroup done: %v", err)
 	}
-	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-done-" + string(created.ID)), Key: "done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession}); err != nil {
+	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: workflow.TransitionGroupID("group-done-" + string(created.ID)), Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
 		t.Fatalf("AddEdge done: %v", err)
 	}
 	return created.ID
@@ -2424,7 +2454,7 @@ func createChainedStarterWorkflowWithContextModeAndSource(t *testing.T, store *w
 	nextGroup := workflow.TransitionGroupID("group-next-" + string(created.ID))
 	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
 	for _, group := range []workflowstore.TransitionGroupRecord{
-		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: start.ID, TransitionID: "start", DisplayName: "Start"},
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
 		{ID: nextGroup, WorkflowID: created.ID, SourceNodeID: planID, TransitionID: "next", DisplayName: "Next"},
 		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: implID, TransitionID: "done", DisplayName: "Done"},
 	} {
@@ -2435,7 +2465,7 @@ func createChainedStarterWorkflowWithContextModeAndSource(t *testing.T, store *w
 	for _, edge := range []workflowstore.EdgeRecord{
 		{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan the task."},
 		{ID: workflow.EdgeID("edge-next-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: implID, ContextMode: contextMode, ContextSource: contextSource, PromptTemplate: "Use {{.TaskTitle}} and {{.Params.prior_summary}}.", Parameters: []workflow.Parameter{{Key: "prior_summary", Description: "Prior summary."}}},
-		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("AddEdge %s: %v", edge.Key, err)
@@ -2472,7 +2502,7 @@ func createPreviousTargetOrNewLoopStarterWorkflow(t *testing.T, store *workflows
 	reworkGroup := workflow.TransitionGroupID("group-rework-" + string(created.ID))
 	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
 	for _, group := range []workflowstore.TransitionGroupRecord{
-		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: start.ID, TransitionID: "start", DisplayName: "Start"},
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
 		{ID: reviewGroup, WorkflowID: created.ID, SourceNodeID: planID, TransitionID: "review", DisplayName: "Review"},
 		{ID: reworkGroup, WorkflowID: created.ID, SourceNodeID: reviewID, TransitionID: "rework", DisplayName: "Rework"},
 		{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: reviewID, TransitionID: "done", DisplayName: "Done"},
@@ -2485,7 +2515,7 @@ func createPreviousTargetOrNewLoopStarterWorkflow(t *testing.T, store *workflows
 		{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan the task."},
 		{ID: workflow.EdgeID("edge-review-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: reviewGroup, Key: "review", TargetNodeID: reviewID, ContextMode: contextMode, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: "Review {{.Params.prior_summary}}.", Parameters: []workflow.Parameter{{Key: "prior_summary", Description: "Prior summary."}}},
 		{ID: workflow.EdgeID("edge-rework-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: planID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Revise the plan."},
-		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("AddEdge %s: %v", edge.Key, err)
@@ -2532,7 +2562,7 @@ func createFanoutCompactStarterWorkflow(t *testing.T, store *workflowstore.Store
 	synthGroup := workflow.TransitionGroupID("group-synth-" + string(created.ID))
 	doneGroup := workflow.TransitionGroupID("group-done-" + string(created.ID))
 	for _, group := range []workflowstore.TransitionGroupRecord{
-		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: start.ID, TransitionID: "start", DisplayName: "Start"},
+		{ID: startGroup, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
 		{ID: splitGroup, WorkflowID: created.ID, SourceNodeID: planID, TransitionID: "split", DisplayName: "Split"},
 		{ID: joinAGroup, WorkflowID: created.ID, SourceNodeID: implAID, TransitionID: "join", DisplayName: "Join"},
 		{ID: joinBGroup, WorkflowID: created.ID, SourceNodeID: implBID, TransitionID: "join", DisplayName: "Join"},
@@ -2550,7 +2580,7 @@ func createFanoutCompactStarterWorkflow(t *testing.T, store *workflowstore.Store
 		{ID: joinAEdgeID, WorkflowID: created.ID, TransitionGroupID: joinAGroup, Key: "join_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "joined", Description: "Joined branch summary."}}},
 		{ID: joinBEdgeID, WorkflowID: created.ID, TransitionGroupID: joinBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
 		{ID: workflow.EdgeID("edge-synth-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: synthGroup, Key: "synth", TargetNodeID: synthID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Synthesize {{.Params.joined}}."},
-		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("AddEdge %s: %v", edge.Key, err)
@@ -2575,12 +2605,12 @@ func updateChainedStarterWorkflowNextEdgeContextMode(t *testing.T, metadataStore
 func starterNodeByKind(t *testing.T, def workflow.Definition, kind workflow.NodeKind) workflow.Node {
 	t.Helper()
 	for _, node := range def.Nodes {
-		if node.Kind == kind {
+		if node.Kind() == kind {
 			return node
 		}
 	}
 	t.Fatalf("node kind %s missing", kind)
-	return workflow.Node{}
+	return nil
 }
 
 func starterEdgeByKey(t *testing.T, def workflow.Definition, key workflow.ModelKey) workflow.Edge {

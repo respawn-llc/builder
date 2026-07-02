@@ -322,6 +322,7 @@ export function InterruptedRunBox({
   mutations: ReturnType<typeof useTaskMutations>;
 }>) {
   const { t } = useTranslation();
+  const { nativeBridge } = useAppServices();
   return (
     <Island
       aria-label={t("task.interrupted")}
@@ -333,6 +334,32 @@ export function InterruptedRunBox({
       <strong>{t("task.interrupted")}</strong>
       {attention.message.length > 0 ? (
         <p className="m-0 text-sm text-[var(--color-muted)]">{attention.message}</p>
+      ) : null}
+      {attention.detailJSON.trim().length > 0 ? (
+        <Button
+          disabled={disabled}
+          onClick={() => {
+            void copyText(attention.detailJSON, nativeBridge)
+              .then(() => {
+                showStatusToast({
+                  id: "task-interruption-detail-copied",
+                  title: t("task.interruptionDetailCopied"),
+                  tone: "success",
+                });
+              })
+              .catch((cause: unknown) => {
+                showStatusToast({
+                  id: "task-interruption-detail-copy-failed",
+                  title: t("task.interruptionDetailCopyFailed"),
+                  body: errorMessage(cause),
+                  tone: "danger",
+                });
+              });
+          }}
+          variant="secondary"
+        >
+          {t("task.copyInterruptionDetail")}
+        </Button>
       ) : null}
       <Button
         disabled={disabled || mutations.resume.isPending}

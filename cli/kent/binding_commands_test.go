@@ -193,7 +193,7 @@ func releaseBindingCommandTestPortForConfig(cfg config.App) {
 
 func registerBindingCommandWorkspace(t *testing.T, workspace string) metadata.Binding {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setBindingCommandTestHome(t)
 	configureBindingCommandTestServerPort(t)
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
@@ -208,7 +208,7 @@ func registerBindingCommandWorkspace(t *testing.T, workspace string) metadata.Bi
 
 func newBindingCommandSession(t *testing.T, workspace string) (*metadata.Store, metadata.Binding, *session.Store) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setBindingCommandTestHome(t)
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load oldWorkspace: %v", err)
@@ -244,7 +244,15 @@ func resetBindingCommandRetargetHooks(t *testing.T) {
 		bindingCommandSessionRetargeter = originalRetargeter
 		bindingCommandLocalSessionLifecycleClient = originalLocalClient
 	})
-	t.Setenv("HOME", t.TempDir())
+	setBindingCommandTestHome(t)
+}
+
+func setBindingCommandTestHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KENT_PERSISTENCE_ROOT", filepath.Join(home, ".kent"))
+	return home
 }
 
 func newBindingCommandWorkspaceConfig(t *testing.T) (string, config.App) {
@@ -449,10 +457,9 @@ func TestAttachSubcommandExplicitProjectOverridesCurrentWorkspace(t *testing.T) 
 }
 
 func TestAttachSubcommandWithoutProjectGuidanceFailsWhenCurrentWorkspaceUnregistered(t *testing.T) {
-	home := t.TempDir()
+	setBindingCommandTestHome(t)
 	working := t.TempDir()
 	target := t.TempDir()
-	t.Setenv("HOME", home)
 	configureBindingCommandTestServerPort(t)
 	cleanup := startBindingCommandServer(t, working)
 	defer cleanup()
@@ -480,9 +487,8 @@ func TestAttachSubcommandWithoutProjectGuidanceFailsWhenCurrentWorkspaceUnregist
 }
 
 func TestAttachSubcommandRejectsUnknownExplicitProjectIDCleanly(t *testing.T) {
-	home := t.TempDir()
+	setBindingCommandTestHome(t)
 	target := t.TempDir()
-	t.Setenv("HOME", home)
 	configureBindingCommandTestServerPort(t)
 	cleanup := startBindingCommandServer(t, target)
 	defer cleanup()

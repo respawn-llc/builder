@@ -107,7 +107,7 @@ func workflowGraphSaveRequestFromDefinition(workflowID workflow.WorkflowID, revi
 		req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{ID: group.ID, WorkflowID: workflowID, Key: group.Key, DisplayName: group.DisplayName})
 	}
 	for _, node := range def.Nodes {
-		req.Nodes = append(req.Nodes, NodeRecord{ID: node.ID, WorkflowID: workflowID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: node.GroupID, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, InputFields: node.InputFields, JoinInputProviders: node.JoinInputProviders, OutputFields: node.OutputFields})
+		req.Nodes = append(req.Nodes, NodeRecord{ID: workflow.NodeIDOf(node), WorkflowID: workflowID, Key: workflow.NodeKey(node), Kind: node.Kind(), DisplayName: workflow.NodeDisplayName(node), GroupID: workflow.NodeGroupID(node), SubagentRole: workflow.NodeSubagentRole(node), PromptTemplate: workflow.NodePromptTemplate(node), CompletionMode: workflow.NodeCompletionMode(node), ScriptPath: workflow.NodeScriptPath(node).String(), InputFields: workflow.NodeInputFields(node), JoinInputProviders: workflow.NodeJoinInputProviders(node), OutputFields: workflow.NodeOutputFields(node)})
 	}
 	for _, group := range def.TransitionGroups {
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{ID: group.ID, WorkflowID: workflowID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName})

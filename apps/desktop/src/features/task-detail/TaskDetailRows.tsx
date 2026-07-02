@@ -21,6 +21,7 @@ import { cx } from "../../ui/classes";
 import { fieldIslandInputClassName } from "../../ui/fieldInputStyles";
 import { taskStatusTone } from "./taskStatusTone";
 import type { useTaskMutations } from "./useTaskDetailData";
+import { useScriptOpenAvailability } from "./useScriptOpenAvailability";
 
 export type TaskDraft = Readonly<{
   title: string;
@@ -171,40 +172,7 @@ export function PropertiesIsland({
   mutations: ReturnType<typeof useTaskMutations>;
 }>) {
   const { t } = useTranslation();
-  const { nativeBridge } = useAppServices();
   const openExternalLink = useOpenExternalLink();
-  const [openCliError, setOpenCliError] = useState("");
-  const cliSessionExists = useMemo(
-    () => detail.runs.some((run) => run.sessionID.trim().length > 0),
-    [detail.runs],
-  );
-  const cliCommand = useMemo(() => sessionCommand(detail.runs), [detail.runs]);
-  const activeRuns = useMemo(
-    () => detail.runs.filter((run) => run.completedAt === 0 && run.interruptedAt === 0),
-    [detail.runs],
-  );
-  const interruptableRuns = useMemo(
-    () => activeRuns.filter((run) => run.sessionID.trim().length > 0),
-    [activeRuns],
-  );
-  const hasTaskWideInterrupt = useMemo(
-    () => activeRuns.some((run) => run.sessionID.trim().length === 0),
-    [activeRuns],
-  );
-
-  async function openInCli(): Promise<void> {
-    if (cliCommand.length === 0) {
-      setOpenCliError(t("task.cliCommandUnavailable"));
-      return;
-    }
-    await copyText(cliCommand, nativeBridge);
-    showStatusToast({
-      id: "task-cli-command-copied",
-      title: t("task.cliCommandCopied"),
-      tone: "success",
-    });
-  }
-
   return (
     <Island
       aria-label={t("task.properties")}
@@ -223,21 +191,37 @@ export function PropertiesIsland({
       <PropertyLine label={t("task.workflow")} value={detail.workflowName} />
       <SourceLine label={t("task.source")} onOpen={openExternalLink} value={detail.sourceURL} />
       <PropertyLine label={t("task.sessions")} value={detail.runs.length.toString()} />
+      <TaskActionPanel detail={detail} disabled={disabled} mutations={mutations} />
+    </Island>
+  );
+}
+
+function TaskActionPanel({
+  detail,
+  disabled,
+  mutations,
+}: Readonly<{
+  detail: TaskDetail;
+  disabled: boolean;
+  mutations: ReturnType<typeof useTaskMutations>;
+}>) {
+  const { t } = useTranslation();
+  const activeRuns = useMemo(
+    () => detail.runs.filter((run) => run.completedAt === 0 && run.interruptedAt === 0),
+    [detail.runs],
+  );
+  const interruptableRuns = useMemo(
+    () => activeRuns.filter((run) => run.sessionID.trim().length > 0),
+    [activeRuns],
+  );
+  const hasTaskWideInterrupt = useMemo(
+    () => activeRuns.some((run) => run.sessionID.trim().length === 0),
+    [activeRuns],
+  );
+  return (
+    <>
       <div className="grid gap-[var(--space-2)] pt-[var(--space-1)]">
-        {cliSessionExists ? (
-          <Button
-            disabled={disabled || cliCommand.length === 0}
-            onClick={() => {
-              setOpenCliError("");
-              void openInCli().catch((cause: unknown) => {
-                setOpenCliError(errorMessage(cause));
-              });
-            }}
-            variant="secondary"
-          >
-            {t("task.openInCli")}
-          </Button>
-        ) : null}
+        <TaskOpenButtons detail={detail} disabled={disabled} />
         {detail.actions.canResume ? (
           <Button
             disabled={disabled}
@@ -296,10 +280,82 @@ export function PropertiesIsland({
           </Popover>
         ) : null}
       </div>
-      {openCliError.length > 0 ? (
-        <p className="m-0 text-sm text-[var(--color-error)]">{openCliError}</p>
+    </>
+  );
+}
+
+function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; disabled: boolean }>) {
+  const { t } = useTranslation();
+  const { nativeBridge } = useAppServices();
+  const [openCliError, setOpenCliError] = useState("");
+  const [openScriptError, setOpenScriptError] = useState("");
+  const cliSessionExists = useMemo(
+    () => detail.runs.some((run) => run.sessionID.trim().length > 0),
+    [detail.runs],
+  );
+  const scriptRun = useMemo(() => preferredScriptRun(detail.runs), [detail.runs]);
+  const scriptOpenAvailable = useScriptOpenAvailability({
+    scriptPath: scriptRun?.scriptPath ?? "",
+    worktreePath: detail.worktreePath,
+  });
+  const cliCommand = useMemo(() => sessionCommand(detail.runs), [detail.runs]);
+
+  async function openInCli(): Promise<void> {
+    if (cliCommand.length === 0) {
+      setOpenCliError(t("task.cliCommandUnavailable"));
+      return;
+    }
+    await copyText(cliCommand, nativeBridge);
+    showStatusToast({
+      id: "task-cli-command-copied",
+      title: t("task.cliCommandCopied"),
+      tone: "success",
+    });
+  }
+
+  async function openScript(): Promise<void> {
+    if (scriptRun === null || scriptRun.scriptPath.trim().length === 0) {
+      setOpenScriptError(t("task.scriptPathUnavailable"));
+      return;
+    }
+    await nativeBridge.files.openFile({ basePath: detail.worktreePath, path: scriptRun.scriptPath });
+  }
+
+  return (
+    <>
+      {cliSessionExists ? (
+        <Button
+          disabled={disabled || cliCommand.length === 0}
+          onClick={() => {
+            setOpenCliError("");
+            void openInCli().catch((cause: unknown) => {
+              setOpenCliError(errorMessage(cause));
+            });
+          }}
+          variant="secondary"
+        >
+          {t("task.openInCli")}
+        </Button>
       ) : null}
-    </Island>
+      {scriptOpenAvailable ? (
+        <Button
+          disabled={disabled || scriptRun === null}
+          onClick={() => {
+            setOpenScriptError("");
+            void openScript().catch((cause: unknown) => {
+              setOpenScriptError(errorMessage(cause));
+            });
+          }}
+          variant="secondary"
+        >
+          {t("task.openScript")}
+        </Button>
+      ) : null}
+      {openCliError.length > 0 ? <p className="m-0 text-sm text-[var(--color-error)]">{openCliError}</p> : null}
+      {openScriptError.length > 0 ? (
+        <p className="m-0 text-sm text-[var(--color-error)]">{openScriptError}</p>
+      ) : null}
+    </>
   );
 }
 
@@ -388,6 +444,15 @@ function preferredSessionRun(runs: readonly TaskRun[]): TaskRun | null {
   return (
     [...sessionRuns].reverse().find((run) => run.completedAt === 0 && run.interruptedAt === 0) ??
     sessionRuns.at(-1) ??
+    null
+  );
+}
+
+function preferredScriptRun(runs: readonly TaskRun[]): TaskRun | null {
+  const scriptRuns = runs.filter((run) => run.nodeKind === "script" && run.scriptPath.trim().length > 0);
+  return (
+    [...scriptRuns].reverse().find((run) => run.completedAt === 0 && run.interruptedAt === 0) ??
+    scriptRuns.at(-1) ??
     null
   );
 }
