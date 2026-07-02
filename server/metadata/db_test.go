@@ -393,6 +393,45 @@ func TestOpenMigratesHistoricalTerminalPlacementsToSuperseded(t *testing.T) {
 	}
 }
 
+func TestOpenMigratesWorkflowScriptNodesWithRuntimeReferences(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 42)
+	if err != nil {
+		t.Fatalf("open test database at version 42: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json) VALUES ('project-script-migration', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-script-migration", now)
+	execSeed(t, db, "workflow task", workflowSeedTaskSQL, "task-script-migration", "link-1", 1, "SCR-1", now, now)
+	execSeed(t, db, "workflow placement", workflowSeedPlacementSQL, "placement-script-migration", "task-script-migration", "node-start", now, now)
+	execSeed(t, db, "workflow run", `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('run-script-migration', 'placement-script-migration', 1, ?, ?)`, now, now)
+	execSeed(t, db, "workflow transition", `INSERT INTO task_transitions (id, task_id, source_run_id, source_placement_id, transition_id, workflow_revision_seen, actor, state, output_values_json, created_at_unix_ms)
+VALUES ('transition-script-migration', 'task-script-migration', 'run-script-migration', 'placement-script-migration', 'start', 1, 'system', 'applied', '{}', ?)`, now)
+	execSeed(t, db, "workflow transition edge", `INSERT INTO task_transition_edges (id, task_transition_id, workflow_edge_id, edge_key, target_node_id, state, input_bindings_json, output_requirements_json)
+VALUES ('transition-edge-script-migration', 'transition-script-migration', 'edge-start-1', 'start', 'node-agent', 'applied', '[]', '[]')`)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 42 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	if !columnExists(t, store.db, "workflow_nodes", "script_path") {
+		t.Fatal("workflow_nodes.script_path should exist after migration")
+	}
+	var violations int
+	if err := store.db.QueryRow(`SELECT count(*) FROM pragma_foreign_key_check`).Scan(&violations); err != nil {
+		t.Fatalf("query foreign key check: %v", err)
+	}
+	if violations != 0 {
+		t.Fatalf("foreign key violations after workflow script node migration = %d, want 0", violations)
+	}
+}
+
 func TestOpenMigratesWorkspaceHistorySnapshots(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")

@@ -1,6 +1,7 @@
 -- +goose Up
 -- +goose NO TRANSACTION
 
+PRAGMA legacy_alter_table = ON;
 PRAGMA foreign_keys = OFF;
 
 BEGIN IMMEDIATE;
@@ -636,3 +637,4 @@ DROP TABLE migration_workflow_script_nodes_fk_check_zero;
 COMMIT;
 
 PRAGMA foreign_keys = ON;
+PRAGMA legacy_alter_table = OFF;
