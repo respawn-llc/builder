@@ -72,6 +72,10 @@ type SessionPlan struct {
 	BaseSource          config.SourceReport
 }
 
+type RunPromptOverrideOptions struct {
+	AllowLockedAgentRoleChange bool
+}
+
 type PromptFacingSnapshotResolution struct {
 	Settings      config.Settings
 	Source        config.SourceReport
@@ -250,12 +254,16 @@ func persistedRoleProviderID(settings config.Settings) string {
 }
 
 func ApplyRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State) (SessionPlan, []string, error) {
-	return applyRunPromptOverridesWithBudgetApplier(plan, overrides, authState, applyDerivedModelContextBudgetOverrides)
+	return ApplyRunPromptOverridesWithOptions(plan, overrides, authState, RunPromptOverrideOptions{})
+}
+
+func ApplyRunPromptOverridesWithOptions(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions) (SessionPlan, []string, error) {
+	return applyRunPromptOverridesWithBudgetApplier(plan, overrides, authState, options, applyDerivedModelContextBudgetOverrides)
 }
 
 type modelContextBudgetApplier func(settings *config.Settings, explicitSources map[string]string, originalModel string, allowModelOverride bool)
 
-func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
+func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
 	if !overrides.HasAny() {
 		return plan, nil, nil
 	}
@@ -284,7 +292,7 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 	if err != nil {
 		return SessionPlan{}, nil, fmt.Errorf("%w: %v", errInvalidAgentRole, err)
 	}
-	if roleOverride.Present && plan.ModelContractLocked && continuationAgentRole != roleOverride.Role {
+	if roleOverride.Present && plan.ModelContractLocked && continuationAgentRole != roleOverride.Role && !options.AllowLockedAgentRoleChange {
 		return SessionPlan{}, nil, fmt.Errorf("%w: current=%q requested=%q", ErrLockedAgentRoleChange, continuationAgentRole, roleOverride.Role)
 	}
 	if roleOverride.Present {

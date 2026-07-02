@@ -628,6 +628,45 @@ func TestApplyRunPromptOverridesAllowsSameAgentRoleForLockedSession(t *testing.T
 	}
 }
 
+func TestApplyRunPromptOverridesOptionAllowsAgentRoleChangeForLockedSession(t *testing.T) {
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace,
+		"[subagents.worker]",
+		"model = \"gpt-5.4-mini\"",
+	)
+	store := createTestSession(t, workspace)
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "old_role"}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-model", EnabledTools: []string{"shell"}}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	plan := SessionPlan{
+		Store:               store,
+		ActiveSettings:      EffectiveSettings(loaded.Settings, store.Meta().Locked),
+		BaseSettings:        EffectiveSettings(loaded.Settings, store.Meta().Locked),
+		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
+		ConfiguredModelName: "locked-model",
+		WorkspaceRoot:       workspace,
+		Source:              loaded.Source,
+		BaseSource:          loaded.Source,
+		ModelContractLocked: true,
+	}
+
+	updated, _, err := ApplyRunPromptOverridesWithOptions(plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState(), RunPromptOverrideOptions{
+		AllowLockedAgentRoleChange: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyRunPromptOverridesWithOptions: %v", err)
+	}
+	if got := updated.Store.Meta().Continuation; got == nil || got.AgentRole != "worker" {
+		t.Fatalf("continuation = %+v, want worker", got)
+	}
+	if updated.ActiveSettings.Model != "locked-model" {
+		t.Fatalf("model = %q, want locked-model", updated.ActiveSettings.Model)
+	}
+}
+
 func TestApplyRunPromptOverridesLockedModelDoesNotMarkModelSourceAsSubagent(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)
