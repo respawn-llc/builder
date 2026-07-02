@@ -587,7 +587,7 @@ func TestApplyRunPromptOverridesRejectsDifferentAgentRoleForLockedSession(t *tes
 			}
 
 			_, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: tt.override}, auth.EmptyState())
-			if !errors.Is(err, errLockedAgentRoleChange) {
+			if !errors.Is(err, ErrLockedAgentRoleChange) {
 				t.Fatalf("ApplyRunPromptOverrides error = %v, want locked role change", err)
 			}
 		})

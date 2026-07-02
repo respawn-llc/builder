@@ -34,6 +34,7 @@ kent --agent research
 ```
 
 To apply a role while reopening a specific session, combine it with `--session` or `--continue`.
+If that session has a locked model request shape, the role must match the session's persisted role; `--agent default` cannot clear a locked role.
 
 ```toml
 [subagents.research]

@@ -3,9 +3,12 @@ package app
 import (
 	"context"
 	"core/cli/app/internal/projectbinding"
+	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
+	"core/server/registry"
 	"core/server/session"
+	"core/server/sessionlaunch"
 	shelltool "core/server/tools/shell"
 	"core/shared/client"
 	"core/shared/clientui"
@@ -114,6 +117,65 @@ func TestRunSessionLifecycleAppliesInitialAgentOverride(t *testing.T) {
 	}
 	if got.Overrides.AgentRole != "worker" {
 		t.Fatalf("agent override = %q, want worker", got.Overrides.AgentRole)
+	}
+}
+
+func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	workspaceRoot := t.TempDir()
+	cfg, err := config.Load(workspaceRoot, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	reviewerSettings := cfg.Settings
+	reviewerSettings.Model = "gpt-5.5"
+	workerSettings := cfg.Settings
+	workerSettings.Model = "gpt-5.4-mini"
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"reviewer": {Settings: reviewerSettings},
+		"worker":   {Settings: workerSettings},
+	}
+	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = metadataStore.Close() })
+	binding, err := metadataStore.RegisterWorkspaceBinding(ctx, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
+	store, err := session.Create(containerDir, filepath.Base(filepath.Clean(cfg.WorkspaceRoot)), cfg.WorkspaceRoot, metadataStore.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "reviewer"}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	service := sessionlaunch.NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+		StoreOptions: metadataStore.AuthoritativeSessionStoreOptions(),
+	}, registry.NewSessionStoreRegistry())
+	server := &testEmbeddedServer{
+		cfg:               cfg,
+		projectID:         binding.ProjectID,
+		projectViewClient: sessionLifecycleProjectViewClient(binding, cfg.WorkspaceRoot, nil),
+		sessionLaunch:     client.NewLoopbackSessionLaunchClient(service),
+	}
+
+	err = runSessionLifecycleWithOptions(ctx, server, nil, store.Meta().SessionID, sessionLifecycleOptions{
+		Overrides: serverapi.RunPromptOverrides{AgentRole: "worker"},
+	})
+	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
+		t.Fatalf("runSessionLifecycle error = %v, want locked role change", err)
 	}
 }
 

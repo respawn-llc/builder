@@ -19,6 +19,7 @@ Session Selection:
 Subagents:
   `--agent <role>` selects a named role from `[subagents.<role>]` in `~/.kent/config.toml`.
   `--agent default` clears a resumed role and uses the base/default settings.
+  On locked sessions, `--agent` may only repeat the session's persisted role.
   `--fast` is shorthand for the built-in `fast` role.
   `none` and `self` are not valid run-agent selectors.
 
