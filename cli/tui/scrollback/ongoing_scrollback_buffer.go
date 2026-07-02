@@ -175,7 +175,7 @@ func (buffer *OngoingScrollbackBufferImpl) Steer(line string) error {
 	if _, err := buffer.flushHeldStableOpsLocked(); err != nil {
 		delayedErr = err
 	}
-	err := buffer.writeStableRowsWithLiveErasedLocked([]stableOutputRow{{operation: "steer", text: line}}, true, false)
+	err := buffer.writeStableRowsWithLiveErasedLocked(stableOutputRows("steer", []string{line}), true, false)
 	buffer.mu.Unlock()
 	buffer.notifyDelayedWriteError(delayedErr)
 	return err
@@ -504,7 +504,7 @@ func (buffer *OngoingScrollbackBufferImpl) finishAssistantStreamingLocked(queued
 	}
 	stableRows := make([]stableOutputRow, 0, len(queuedSteers))
 	for _, request := range queuedSteers {
-		stableRows = append(stableRows, stableOutputRow{operation: "steer", text: request.line})
+		stableRows = append(stableRows, stableOutputRow{operation: "steer", text: request.line, appendTerminalBreak: true})
 	}
 	return buffer.writeStableRowsWithLiveErasedLocked(stableRows, true, true)
 }
@@ -513,7 +513,7 @@ func (buffer *OngoingScrollbackBufferImpl) discardAssistantStreamingLocked(queue
 	buffer.clearAssistantStreamStateLocked()
 	stableRows := make([]stableOutputRow, 0, len(queuedSteers))
 	for _, request := range queuedSteers {
-		stableRows = append(stableRows, stableOutputRow{operation: "steer", text: request.line})
+		stableRows = append(stableRows, stableOutputRow{operation: "steer", text: request.line, appendTerminalBreak: true})
 	}
 	return buffer.writeStableRowsWithLiveErasedLocked(stableRows, true, true)
 }
