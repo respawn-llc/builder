@@ -452,10 +452,6 @@ func TestProjectedUserMessageFlushedAdvancesQueuedInputWithoutTranscriptRefresh(
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.pendingInjected = queuedUserMessagesForTest("steered message", "follow-up")
-	m.input = "steered message"
-	m.lockedInjectText = "steered message"
-	m.lockedInjectID = "queue-test-0"
-	m.setInputSubmitLocked(true)
 
 	cmd := m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
 		Kind:                         clientui.EventUserMessageFlushed,
@@ -481,10 +477,7 @@ func TestProjectedUserMessageFlushedAdvancesQueuedInputWithoutTranscriptRefresh(
 		t.Fatalf("expected pending injected queue advanced, got %+v", m.pendingInjected)
 	}
 	if m.input != "" {
-		t.Fatalf("expected locked input cleared, got %q", m.input)
-	}
-	if m.isInputSubmitLocked() {
-		t.Fatal("expected input submit lock cleared")
+		t.Fatalf("expected flushed input cleared, got %q", m.input)
 	}
 }
 
@@ -933,10 +926,6 @@ func TestProjectedUserMessageFlushedDefersCommittedGapWhileAssistantStreamIsLive
 	m.windowSizeKnown = true
 	m.setRuntimeActivityBusyForTest(true)
 	m.pendingInjected = queuedUserMessagesForTest("steered message")
-	m.input = "steered message"
-	m.lockedInjectText = "steered message"
-	m.lockedInjectID = "queue-test-0"
-	m.setInputSubmitLocked(true)
 	client.transcript = clientui.TranscriptPage{
 		SessionID: "session-1",
 		Revision:  7,
@@ -983,9 +972,6 @@ func TestProjectedUserMessageFlushedDefersCommittedGapWhileAssistantStreamIsLive
 	queuedPane := strings.TrimSpace(stripANSIAndTrimRight(strings.Join(m.layout().renderQueuedMessagesPane(80), "\n")))
 	if !strings.Contains(queuedPane, "next: steered message") {
 		t.Fatalf("expected flushed user message to stay visible as next pending item, got %q", queuedPane)
-	}
-	if m.isInputSubmitLocked() {
-		t.Fatal("expected input submit lock cleared")
 	}
 	if m.input != "" {
 		t.Fatalf("expected cleared input after deferred flushed user message, got %q", m.input)

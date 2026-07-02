@@ -35,13 +35,7 @@ func TestApplyRuntimeEventReductionInvalidLifecycleKeepsSideEffectsAndReturnsSta
 			Err: errors.New("bad lifecycle"),
 		},
 		Conversation: runtimestate.RuntimeConversationReduction{State: runtimestate.RuntimeConversationState{Freshness: clientui.ConversationFreshnessEstablished}},
-		PendingInput: runtimestate.RuntimePendingInputReduction{
-			State: runtimestate.PendingInputState{
-				Input:      "draft",
-				Submission: runtimestate.InputSubmissionLocked,
-			},
-		},
-		Reasoning: runtimestate.RuntimeReasoningReduction{State: runtimestate.RuntimeReasoningState{StatusHeader: "thinking"}},
+		Reasoning:    runtimestate.RuntimeReasoningReduction{State: runtimestate.RuntimeReasoningState{StatusHeader: "thinking"}},
 	})
 
 	if cmd == nil {
@@ -61,9 +55,6 @@ func TestApplyRuntimeEventReductionInvalidLifecycleKeepsSideEffectsAndReturnsSta
 	}
 	if m.conversationFreshness != clientui.ConversationFreshnessEstablished {
 		t.Fatalf("conversation freshness = %v, want established", m.conversationFreshness)
-	}
-	if !m.isInputSubmitLocked() {
-		t.Fatal("expected pending input submission side effect to apply")
 	}
 	if m.reasoningStatusHeader != "thinking" {
 		t.Fatalf("reasoning header = %q, want thinking", m.reasoningStatusHeader)
@@ -305,11 +296,7 @@ func TestRuntimeAdapterRunStartDoesNotDriveActivity(t *testing.T) {
 func TestRuntimeAdapterUserMessageFlushClearsDraft(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.conversationFreshness = clientui.ConversationFreshnessFresh
-	m.input = "steered message"
 	m.pendingInjected = queuedUserMessagesForTest("steered message", "follow-up")
-	m.lockedInjectText = "steered message"
-	m.lockedInjectID = "queue-test-0"
-	m.setInputSubmitLocked(true)
 
 	_ = m.runtimeAdapter().applyProjectedRuntimeEvent(clientui.Event{
 		Kind:                         clientui.EventUserMessageFlushed,
@@ -320,12 +307,6 @@ func TestRuntimeAdapterUserMessageFlushClearsDraft(t *testing.T) {
 
 	if m.input != "" {
 		t.Fatalf("input = %q, want cleared", m.input)
-	}
-	if m.isInputSubmitLocked() {
-		t.Fatal("expected input submit lock cleared")
-	}
-	if m.lockedInjectText != "" {
-		t.Fatalf("locked inject text = %q, want cleared", m.lockedInjectText)
 	}
 	if len(m.pendingInjected) != 1 || m.pendingInjected[0].Text != "follow-up" {
 		t.Fatalf("pending injected = %+v, want follow-up only", m.pendingInjected)

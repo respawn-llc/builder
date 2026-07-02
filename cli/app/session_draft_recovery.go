@@ -11,13 +11,6 @@ func (m *uiModel) sessionDraftRecoveryBuffers() []serverapi.SessionDraftRecovery
 		return nil
 	}
 	buffers := make([]serverapi.SessionDraftRecoveryBuffer, 0, len(m.pendingInjected)+len(m.queued))
-	if text := strings.TrimSpace(m.lockedInjectText); text != "" {
-		buffers = append(buffers, serverapi.SessionDraftRecoveryBuffer{
-			Kind: serverapi.SessionDraftRecoveryBufferLockedInjectedInput,
-			ID:   strings.TrimSpace(m.lockedInjectID),
-			Text: m.lockedInjectText,
-		})
-	}
 	for _, pending := range m.pendingInjected {
 		text := strings.TrimSpace(pending.Text)
 		if text == "" {

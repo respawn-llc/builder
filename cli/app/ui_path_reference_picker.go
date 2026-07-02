@@ -143,7 +143,6 @@ func (m *uiModel) shouldTrackPathReferenceQuery() bool {
 		return false
 	}
 	if m.rollback.isSelecting() ||
-		m.isInputSubmitLocked() ||
 		m.ask.hasCurrent() {
 		return false
 	}

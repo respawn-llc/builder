@@ -1119,8 +1119,6 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 			ClientRequestID: "submit-1",
 		},
 	}
-	model.lockedInjectText = "locked injected"
-	model.lockedInjectID = "locked-1"
 	model.pendingInjected = queuedUserMessagesForTest("pending injected")
 	model.queued = queuedInputsForTest("queued later")
 
@@ -1130,11 +1128,11 @@ func TestPersistSessionDraftIncludesStructuredRecoveryBuffers(t *testing.T) {
 	if captured.Input != "visible draft" || captured.SessionID != "session-1" {
 		t.Fatalf("captured draft request = %+v", captured)
 	}
-	if len(captured.RecoveryBuffers) != 3 {
-		t.Fatalf("recovery buffers = %+v, want locked injected, pending injected, queued", captured.RecoveryBuffers)
+	if len(captured.RecoveryBuffers) != 2 {
+		t.Fatalf("recovery buffers = %+v, want pending injected and queued", captured.RecoveryBuffers)
 	}
-	if captured.RecoveryBuffers[0].Kind != serverapi.SessionDraftRecoveryBufferLockedInjectedInput {
-		t.Fatalf("first recovery buffer = %+v, want locked injected input", captured.RecoveryBuffers[0])
+	if captured.RecoveryBuffers[0].Kind != serverapi.SessionDraftRecoveryBufferPendingInjectedInput {
+		t.Fatalf("first recovery buffer = %+v, want pending injected input", captured.RecoveryBuffers[0])
 	}
 }
 
@@ -1143,23 +1141,22 @@ func TestInitialRecoveryBuffersRestoreRetryAffordancesWithoutStartupSubmit(t *te
 		WithUIInitialInput("visible draft"),
 		WithUIInitialRecoveryBuffers([]serverapi.SessionDraftRecoveryBuffer{
 			{Kind: serverapi.SessionDraftRecoveryBufferActiveSubmit, Text: "submitted before forced exit"},
-			{Kind: serverapi.SessionDraftRecoveryBufferLockedInjectedInput, ID: "locked-1", Text: "locked steering"},
 			{Kind: serverapi.SessionDraftRecoveryBufferPendingInjectedInput, ID: "server-1", ClientRequestID: "queue-1", Text: "pending steering"},
 			{Kind: serverapi.SessionDraftRecoveryBufferQueuedInput, ID: "queued-1", Text: "queued later"},
 		}),
 	).(*uiModel)
 
-	wantInput := "visible draft\n\nlocked steering\n\npending steering\n\nqueued later"
+	wantInput := "visible draft\n\npending steering\n\nqueued later"
 	if model.input != wantInput {
 		t.Fatalf("input = %q, want recovered visible retry input", model.input)
 	}
 	if model.startupSubmit != "" || model.activeSubmit.text != "" {
 		t.Fatalf("recovery must not auto-submit: startup=%q active=%+v", model.startupSubmit, model.activeSubmit)
 	}
-	if model.lockedInjectText != "" || len(model.pendingInjected) != 0 || len(model.queued) != 0 {
-		t.Fatalf("recovery must not restore into operational queues: locked=%q pending=%+v queued=%+v", model.lockedInjectText, model.pendingInjected, model.queued)
+	if len(model.pendingInjected) != 0 || len(model.queued) != 0 {
+		t.Fatalf("recovery must not restore into operational queues: pending=%+v queued=%+v", model.pendingInjected, model.queued)
 	}
-	if len(model.recoveredDraftBuffers) != 3 {
+	if len(model.recoveredDraftBuffers) != 2 {
 		t.Fatalf("recovered buffers = %+v, want non-operational recovery affordance", model.recoveredDraftBuffers)
 	}
 	if model.transientStatus != "" {

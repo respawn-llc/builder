@@ -55,7 +55,6 @@ type SessionDraftRecoveryBufferKind string
 
 const (
 	SessionDraftRecoveryBufferActiveSubmit         SessionDraftRecoveryBufferKind = "active_submit"
-	SessionDraftRecoveryBufferLockedInjectedInput  SessionDraftRecoveryBufferKind = "locked_injected_input"
 	SessionDraftRecoveryBufferPendingInjectedInput SessionDraftRecoveryBufferKind = "pending_injected_input"
 	SessionDraftRecoveryBufferQueuedInput          SessionDraftRecoveryBufferKind = "queued_input"
 	SessionDraftRecoveryBufferReviewerBuffer       SessionDraftRecoveryBufferKind = "reviewer_buffer"
@@ -115,7 +114,6 @@ func (r SessionPersistInputDraftRequest) Validate() error {
 func (b SessionDraftRecoveryBuffer) Validate() error {
 	switch b.Kind {
 	case SessionDraftRecoveryBufferActiveSubmit,
-		SessionDraftRecoveryBufferLockedInjectedInput,
 		SessionDraftRecoveryBufferPendingInjectedInput,
 		SessionDraftRecoveryBufferQueuedInput,
 		SessionDraftRecoveryBufferReviewerBuffer:

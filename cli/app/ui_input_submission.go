@@ -177,9 +177,6 @@ func (c uiInputController) compactCmd(args string) tea.Cmd {
 func (c uiInputController) startRuntimeOperationAffordance(compacting bool) {
 	m := c.model
 	m.clearReviewerState()
-	if compacting {
-		m.setInputSubmitLocked(true)
-	}
 	m.sawAssistantDelta = false
 	m.clearActiveAssistantStreamSource()
 	if compacting {
@@ -189,9 +186,6 @@ func (c uiInputController) startRuntimeOperationAffordance(compacting bool) {
 
 func (c uiInputController) finishRuntimeOperationAffordance(compacting bool) {
 	m := c.model
-	if compacting {
-		m.setInputSubmitLocked(false)
-	}
 	m.clearReviewerState()
 	m.spinnerFrame = 0
 	if !m.shouldAnimateSpinner() {
@@ -236,7 +230,6 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 		if m.turnQueueHook != nil {
 			m.turnQueueHook.OnTurnQueueAborted()
 		}
-		unlockCmd := c.releaseLockedInjectedInput(true)
 		restoreInjectedCmd := c.restorePendingInjectedIntoInput()
 		if restoreSubmittedText {
 			c.restoreSubmittedTextIntoInput(msg.submittedText)
@@ -246,14 +239,14 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 			m.activity = uiActivityInterrupted
 			m.logf("step.interrupted")
 			m.layout().syncViewport()
-			return m, batchCmds(unlockCmd, restoreInjectedCmd)
+			return m, restoreInjectedCmd
 		}
 		detailErr := runtimeattach.FormatSubmissionError(msg.err)
 		m.activity = uiActivityError
 		m.logf("step.error err=%q", detailErr)
 		m.layout().syncViewport()
 		statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-		return m, tea.Batch(unlockCmd, restoreInjectedCmd, statusCmd)
+		return m, tea.Batch(restoreInjectedCmd, statusCmd)
 	}
 
 	if !m.runtimeActivityBusy() {
@@ -351,7 +344,6 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 	m.compactionOrigin = uiCompactionOriginNone
 	m.observeRuntimeRequestResult(msg.err)
 	c.finishRuntimeOperationAffordance(true)
-	releaseCmd := c.releaseLockedInjectedInput(true)
 	if msg.err != nil {
 		restoreInjectedCmd := c.restorePendingInjectedIntoInput()
 		c.restoreQueuedMessagesIntoInput()
@@ -359,14 +351,14 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 			m.activity = uiActivityInterrupted
 			m.logf("step.interrupted")
 			m.layout().syncViewport()
-			return m, tea.Batch(releaseCmd, restoreInjectedCmd)
+			return m, restoreInjectedCmd
 		}
 		detailErr := runtimeattach.FormatSubmissionError(msg.err)
 		m.activity = uiActivityError
 		appendCmd := m.appendLocalEntryWithNoticeID(operatorErrorFeedbackRole, detailErr, "")
 		m.logf("compaction.error err=%q", detailErr)
 		m.layout().syncViewport()
-		return m, tea.Batch(releaseCmd, restoreInjectedCmd, appendCmd)
+		return m, tea.Batch(restoreInjectedCmd, appendCmd)
 	}
 
 	if !serverActiveBeforeCompletion {
@@ -377,22 +369,22 @@ func (c uiInputController) handleCompactDone(msg compactDoneMsg) (tea.Model, tea
 		c.notifyUserCompactionCompleted(compactionOrigin, false)
 		next, cmd := c.flushQueuedInputs(queueDrainAuto)
 		c.notifyTurnQueueDrainedIfIdle()
-		return next, tea.Batch(releaseCmd, cmd)
+		return next, cmd
 	}
 	if m.injectedQueueBlocksDrain() {
 		c.notifyUserCompactionCompleted(compactionOrigin, false)
 		m.queuedRuntimeWorkCheckCompactionOrigin = compactionOrigin
 		m.layout().syncViewport()
-		return m, releaseCmd
+		return m, nil
 	}
 	if !m.hasRuntimeClient() {
 		c.notifyUserCompactionCompleted(compactionOrigin, !m.pendingQueuedDrainAfterHydration)
 		m.layout().syncViewport()
-		return m, releaseCmd
+		return m, nil
 	}
 	m.queuedRuntimeWorkCheckCompactionOrigin = compactionOrigin
 	m.layout().syncViewport()
-	return m, tea.Batch(releaseCmd, c.startQueuedInjectionSubmission())
+	return m, c.startQueuedInjectionSubmission()
 }
 
 func (c uiInputController) notifyUserCompactionCompleted(origin uiCompactionOrigin, queueDrained bool) {

@@ -315,9 +315,6 @@ func TestBusyUnsupportedSlashCommandShowsTransientErrorAndDoesNotQueue(t *testin
 	if len(updated.pendingInjected) != 0 {
 		t.Fatalf("expected no pending injected messages, got %d", len(updated.pendingInjected))
 	}
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect input submit lock for blocked slash command")
-	}
 	if updated.input != "" {
 		t.Fatalf("expected input cleared for blocked slash command, got %q", updated.input)
 	}

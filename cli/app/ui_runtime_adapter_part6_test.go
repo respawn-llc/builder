@@ -18,10 +18,6 @@ func TestProjectedConversationUpdatedSkipsHydrationAfterDeferredUserFlush(t *tes
 	m.windowSizeKnown = true
 	m.setRuntimeActivityBusyForTest(true)
 	m.pendingInjected = queuedUserMessagesForTest("steered message")
-	m.input = "steered message"
-	m.lockedInjectText = "steered message"
-	m.lockedInjectID = "queue-test-0"
-	m.setInputSubmitLocked(true)
 	m.transcriptEntries = []tui.TranscriptEntry{{Role: "user", Text: "seed"}}
 	m.transcriptRevision = 6
 	m.transcriptTotalEntries = 1
@@ -71,10 +67,6 @@ func TestProjectedAssistantMessageMergesDeferredCommittedUserFlushWithoutHydrati
 	m.windowSizeKnown = true
 	m.setRuntimeActivityBusyForTest(true)
 	m.pendingInjected = queuedUserMessagesForTest("steered message")
-	m.input = "steered message"
-	m.lockedInjectText = "steered message"
-	m.lockedInjectID = "queue-test-0"
-	m.setInputSubmitLocked(true)
 	m.transcriptEntries = []tui.TranscriptEntry{{Role: "assistant", Text: "seed"}}
 	m.transcriptRevision = 6
 	m.transcriptTotalEntries = 1

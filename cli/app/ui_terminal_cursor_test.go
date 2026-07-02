@@ -452,23 +452,6 @@ func TestAskInputCursorUsesSharedFieldDisplayWidth(t *testing.T) {
 	}
 }
 
-func TestTerminalCursorHiddenWhenInputLocked(t *testing.T) {
-	state := newUITerminalCursorState()
-	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))
-	m.termWidth = 24
-	m.termHeight = 10
-	m.windowSizeKnown = true
-	m.setInputSubmitLocked(true)
-	m.input = "locked"
-	m.layout().syncViewport()
-
-	view := m.View()
-	assertRenderedLinesFitWidth(t, view, m.termWidth)
-	if _, ok := state.Snapshot(); ok {
-		t.Fatal("did not expect real terminal cursor placement while input is locked")
-	}
-}
-
 func TestViewDoesNotAppendHideCursorWhenRealTerminalCursorVisible(t *testing.T) {
 	state := newUITerminalCursorState()
 	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))

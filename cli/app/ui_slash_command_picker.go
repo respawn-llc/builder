@@ -248,7 +248,6 @@ func (m *uiModel) slashCommandPicker() slashCommandPickerState {
 	}
 	parsed := parseSlashCommandInput(m.input)
 	if !parsed.active || parsed.argumentMode ||
-		m.isInputSubmitLocked() ||
 		m.ask.hasCurrent() {
 		return slashCommandPickerState{}
 	}

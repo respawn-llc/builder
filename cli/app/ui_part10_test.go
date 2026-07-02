@@ -4,34 +4,9 @@ import (
 	"core/shared/theme"
 	"fmt"
 	"strings"
-	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
-
-func TestLockedInputEditKeysDismissHelpAndStillNoOp(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
-	m.setInputSubmitLocked(true)
-	m.setRuntimeActivityBusyForTest(true)
-	m.input = "locked"
-	m.layout().syncViewport()
-
-	next, _ := m.Update(customKeyMsg{Kind: customKeyHelp})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyBackspace})
-	updated = next.(*uiModel)
-
-	if updated.helpVisible {
-		t.Fatal("expected any keypress to dismiss help")
-	}
-	if updated.input != "locked" {
-		t.Fatalf("expected locked input unchanged, got %q", updated.input)
-	}
-}
 
 func slashPickerContainsCommand(state slashCommandPickerState, name string) bool {
 	for _, command := range state.matches {

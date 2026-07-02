@@ -66,9 +66,6 @@ func TestBusyEnterQueuesSteeringUntilFlushed(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect input submit lock after enter while busy")
-	}
 	if updated.input != "" {
 		t.Fatalf("expected input cleared after queueing steering, got %q", updated.input)
 	}
@@ -83,9 +80,6 @@ func TestBusyEnterQueuesSteeringUntilFlushed(t *testing.T) {
 		UserMessageBatchQueueItemIDs: queuedUserMessageIDsForTest(updated.pendingInjected),
 	}))
 	updated = next.(*uiModel)
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect input lock after flush")
-	}
 	if updated.input != "" {
 		t.Fatalf("expected input cleared after flush, got %q", updated.input)
 	}
@@ -868,9 +862,6 @@ func TestBusyEnterWithUserShellPrefixQueuesInsteadOfInjecting(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect submit lock for queued user shell command")
-	}
 	if len(updated.pendingInjected) != 0 {
 		t.Fatalf("did not expect pending injected messages, got %d", len(updated.pendingInjected))
 	}
@@ -889,9 +880,6 @@ func TestSubmitErrorRestoresQueuedSteeringInput(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect input submit lock after enter while busy")
-	}
 	if len(updated.pendingInjected) != 1 {
 		t.Fatalf("expected one pending injected message, got %d", len(updated.pendingInjected))
 	}
@@ -904,9 +892,6 @@ func TestSubmitErrorRestoresQueuedSteeringInput(t *testing.T) {
 	}
 	if updated.isBusy() {
 		t.Fatal("did not expect busy after submission error")
-	}
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect submit lock after submission error")
 	}
 	if updated.input != "please continue with tests\n\nfollow-up" {
 		t.Fatalf("expected queued steering and queued drafts restored into input, got %q", updated.input)
@@ -978,9 +963,6 @@ func TestBusyTabQueuesPostTurnSubmissionAndKeepsInputUnlocked(t *testing.T) {
 	}
 	if updated.input != "" {
 		t.Fatalf("expected input cleared after tab while busy, got %q", updated.input)
-	}
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect submit lock for tab queue")
 	}
 }
 
@@ -1077,12 +1059,9 @@ func TestCtrlCWhileBusyRestoresMixedQueuedInputsIntoInput(t *testing.T) {
 	}
 }
 
-func TestCtrlCWhileBusyUnlocksSubmitLockedInput(t *testing.T) {
+func TestCtrlCWhileBusyRestoresPendingInjectedInput(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.setRuntimeActivityBusyForTest(true)
-	m.setInputSubmitLocked(true)
-	m.lockedInjectText = "keep this message"
-	m.lockedInjectID = "queue-test-0"
 	m.pendingInjected = queuedUserMessagesForTest("keep this message", "another")
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -1092,17 +1071,11 @@ func TestCtrlCWhileBusyUnlocksSubmitLockedInput(t *testing.T) {
 	}
 	updated = applyInterruptedRunStateForTest(t, updated)
 
-	if updated.isInputSubmitLocked() {
-		t.Fatal("expected ctrl+c to unlock input")
-	}
-	if updated.lockedInjectText != "" {
-		t.Fatalf("expected lockedInjectText cleared, got %q", updated.lockedInjectText)
-	}
 	if len(updated.pendingInjected) != 0 {
 		t.Fatalf("expected pending injected queue restored into input and cleared, got %+v", updated.pendingInjected)
 	}
-	if updated.input != "another" {
-		t.Fatalf("expected remaining queued steering restored into input, got %q", updated.input)
+	if updated.input != "keep this message\n\nanother" {
+		t.Fatalf("expected pending steering restored into input, got %q", updated.input)
 	}
 }
 
@@ -1180,12 +1153,10 @@ func TestInterruptedSubmitDoneRestoresQueueIntoInputAndDoesNotAutoDrain(t *testi
 	}
 }
 
-func TestInterruptedSubmitDoneRunsQueuedRuntimeDiscardCleanup(t *testing.T) {
+func TestInterruptedSubmitDoneRestoresPendingInjectedInputAndDiscardsRuntimeQueue(t *testing.T) {
 	client := &runtimeControlFakeClient{discardQueuedResult: true}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
 	m.setRuntimeActivityBusyForTest(true)
-	m.setInputSubmitLocked(true)
-	m.lockedInjectID = "server-queue-1"
 	m.pendingInjected = []clientui.QueuedUserMessage{{ID: "server-queue-1", Text: "restore me"}}
 
 	next, cmd := m.Update(submitDoneMsg{err: runtimeattach.ErrSubmissionInterrupted})
@@ -1193,11 +1164,8 @@ func TestInterruptedSubmitDoneRunsQueuedRuntimeDiscardCleanup(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected queued runtime discard cleanup command")
 	}
-	if updated.isInputSubmitLocked() {
-		t.Fatal("expected submit lock released after interrupted completion")
-	}
-	if updated.input != "" {
-		t.Fatalf("did not expect locked submitted input restored, got %q", updated.input)
+	if updated.input != "restore me" {
+		t.Fatalf("expected pending injected input restored, got %q", updated.input)
 	}
 	_ = collectCmdMessages(t, cmd)
 	if client.discardQueuedCalls != 1 || client.discardQueuedID != "server-queue-1" {
@@ -1619,18 +1587,12 @@ func TestCompactDoneKeepsQueuedSteeringPending(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect input submit lock after enter while busy")
-	}
 	if len(updated.pendingInjected) != 1 {
 		t.Fatalf("expected one pending injected message, got %d", len(updated.pendingInjected))
 	}
 
 	next, _ = updated.Update(compactDoneMsg{})
 	updated = next.(*uiModel)
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect submit lock after compaction completion")
-	}
 	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "please continue with tests" {
 		t.Fatalf("expected queued steering preserved across compaction completion, got %+v", updated.pendingInjected)
 	}

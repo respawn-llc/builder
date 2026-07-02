@@ -933,9 +933,6 @@ func TestRuntimeActiveSubmitErrorKeepsQueuedSteeringWithoutUnprovenSubmittedRest
 
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect follow-up enter during submit to lock input")
-	}
 	if updated.input != "" {
 		t.Fatalf("expected queued steering input cleared immediately, got %q", updated.input)
 	}
@@ -945,9 +942,6 @@ func TestRuntimeActiveSubmitErrorKeepsQueuedSteeringWithoutUnprovenSubmittedRest
 
 	next, _ = updated.Update(submitDoneMsg{token: updated.activeSubmit.token, submittedText: "continue", err: errors.New("submit failed")})
 	updated = next.(*uiModel)
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect submit error to leave input locked")
-	}
 	if len(updated.pendingInjected) != 0 {
 		t.Fatalf("expected pending injected follow-up cleared, got %+v", updated.pendingInjected)
 	}
@@ -1134,9 +1128,6 @@ func TestBusyInputRemainsEditableUntilSubmitLock(t *testing.T) {
 	if updated.input != "seedx" {
 		t.Fatalf("expected input to remain editable while busy, got %q", updated.input)
 	}
-	if strings.Contains(updated.View(), "input locked while agent is running") {
-		t.Fatalf("did not expect legacy locked hint in view: %q", updated.View())
-	}
 }
 
 func TestViewRendersOverlayCursorWithoutShiftingText(t *testing.T) {
@@ -1169,24 +1160,5 @@ func TestViewCursorMovementDoesNotDropCharacters(t *testing.T) {
 	plain := stripANSIAndTrimRight(m.View())
 	if !strings.Contains(plain, "› hello") {
 		t.Fatalf("expected all characters preserved while moving cursor, got %q", plain)
-	}
-}
-
-func TestViewHidesCursorWhenInputLocked(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.termWidth = 40
-	m.termHeight = 16
-	m.windowSizeKnown = true
-	m.setInputSubmitLocked(true)
-	m.input = "hello world"
-	m.layout().syncViewport()
-
-	view := m.View()
-	if !strings.Contains(view, ansiHideCursor) {
-		t.Fatalf("expected terminal cursor hide sequence in view: %q", view)
-	}
-	plain := stripANSIAndTrimRight(view)
-	if !strings.Contains(plain, "⨯ hello world") {
-		t.Fatalf("expected locked input text preserved, got %q", plain)
 	}
 }

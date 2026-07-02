@@ -11,11 +11,7 @@ func TestReduceRuntimeEvent_UserMessageFlushedProducesPendingInputAndConversatio
 		RuntimeRunState{},
 		RuntimeConversationState{Freshness: clientui.ConversationFreshnessFresh},
 		PendingInputState{
-			Input:            "steered message",
-			PendingInjected:  []clientui.QueuedUserMessage{{ID: "queue-1", Text: "steered message"}, {ID: "queue-2", Text: "follow-up"}},
-			LockedInjectText: "steered message",
-			LockedInjectID:   "queue-1",
-			Submission:       InputSubmissionLocked,
+			PendingInjected: []clientui.QueuedUserMessage{{ID: "queue-1", Text: "steered message"}, {ID: "queue-2", Text: "follow-up"}},
 		},
 		RuntimeReasoningState{},
 		false,
@@ -27,15 +23,6 @@ func TestReduceRuntimeEvent_UserMessageFlushedProducesPendingInputAndConversatio
 	}
 	if len(update.PendingInput.ConsumedQueueItemIDs) != 1 || update.PendingInput.ConsumedQueueItemIDs[0] != "queue-1" {
 		t.Fatalf("consumed queue item ids = %+v, want queue-1", update.PendingInput.ConsumedQueueItemIDs)
-	}
-	if update.PendingInput.DraftCommand != RuntimePendingInputClearDraft {
-		t.Fatal("expected locked injected input to clear the draft input")
-	}
-	if update.PendingInput.State.Submission != InputSubmissionUnlocked {
-		t.Fatalf("expected input submit lock cleared to %q, got %q", InputSubmissionUnlocked, update.PendingInput.State.Submission)
-	}
-	if update.PendingInput.State.LockedInjectText != "" {
-		t.Fatalf("expected locked inject text cleared, got %q", update.PendingInput.State.LockedInjectText)
 	}
 	if len(update.PendingInput.State.PendingInjected) != 1 || update.PendingInput.State.PendingInjected[0].Text != "follow-up" {
 		t.Fatalf("expected first injected item consumed, got %+v", update.PendingInput.State.PendingInjected)
@@ -79,10 +66,7 @@ func TestReduceRuntimeEvent_QueuedStatusFailedRemovesPendingInputAndRestoresText
 		RuntimeRunState{},
 		RuntimeConversationState{},
 		PendingInputState{
-			PendingInjected:  []clientui.QueuedUserMessage{{ID: "queue-1", Text: "steered message", ClientRequestID: "req-local"}},
-			LockedInjectText: "steered message",
-			LockedInjectID:   "queue-1",
-			Submission:       InputSubmissionLocked,
+			PendingInjected: []clientui.QueuedUserMessage{{ID: "queue-1", Text: "steered message", ClientRequestID: "req-local"}},
 		},
 		RuntimeReasoningState{},
 		false,
@@ -100,9 +84,6 @@ func TestReduceRuntimeEvent_QueuedStatusFailedRemovesPendingInputAndRestoresText
 
 	if len(update.PendingInput.State.PendingInjected) != 0 {
 		t.Fatalf("pending injected = %+v, want empty", update.PendingInput.State.PendingInjected)
-	}
-	if update.PendingInput.State.Submission != InputSubmissionUnlocked {
-		t.Fatalf("submission = %q, want unlocked", update.PendingInput.State.Submission)
 	}
 	if update.PendingInput.RestoredText != "steered message" {
 		t.Fatalf("restored text = %q, want queued text", update.PendingInput.RestoredText)

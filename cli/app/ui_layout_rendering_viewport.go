@@ -55,7 +55,7 @@ func (l uiViewLayout) syncViewport() {
 
 func (l uiViewLayout) shouldRenderSoftCursor() bool {
 	inputState := l.model.inputModeState()
-	return !l.shouldUseRealTerminalCursor() && !inputState.InputLocked && inputState.ShowsMainInput
+	return !l.shouldUseRealTerminalCursor() && inputState.ShowsMainInput
 }
 
 func (l uiViewLayout) shouldUseRealTerminalCursor() bool {

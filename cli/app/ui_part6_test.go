@@ -85,18 +85,18 @@ func TestPSOverlayInlineAppendsOutputToInputAndReturnsToOngoing(t *testing.T) {
 	}
 }
 
-func TestPSOverlayInlineUnlocksLockedInputBeforeAppending(t *testing.T) {
+func TestPSOverlayInlinePasteAppendsToEditableInput(t *testing.T) {
 	manager := newFastBackgroundTestManager(t)
 
 	workdir := t.TempDir()
 	res, err := manager.Start(context.Background(), shelltool.ExecRequest{
-		Command:        []string{"sh", "-c", "printf 'locked-job\n'; sleep 1"},
-		DisplayCommand: "locked-job",
+		Command:        []string{"sh", "-c", "printf 'inline-job\n'; sleep 1"},
+		DisplayCommand: "inline-job",
 		Workdir:        workdir,
 		YieldTime:      fastBackgroundTestYield,
 	})
 	if err != nil {
-		t.Fatalf("start locked-job: %v", err)
+		t.Fatalf("start inline-job: %v", err)
 	}
 	if !res.Backgrounded {
 		t.Fatal("expected background process")
@@ -108,9 +108,6 @@ func TestPSOverlayInlineUnlocksLockedInputBeforeAppending(t *testing.T) {
 	m.windowSizeKnown = true
 	m.setRuntimeActivityBusyForTest(true)
 	m.input = "queued draft"
-	m.setInputSubmitLocked(true)
-	m.lockedInjectText = "queued draft"
-	m.lockedInjectID = "queue-test-0"
 	m.pendingInjected = queuedUserMessagesForTest("queued draft")
 	controller := uiInputController{model: m}
 	_ = controller.startProcessListFlowCmd()
@@ -121,20 +118,14 @@ func TestPSOverlayInlineUnlocksLockedInputBeforeAppending(t *testing.T) {
 	updated = next.(*uiModel)
 	updated = applyProcessActionCommandForTest(t, updated, cmd)
 
-	if updated.isInputSubmitLocked() {
-		t.Fatal("expected inline paste to unlock the input box")
-	}
-	if updated.lockedInjectText != "" {
-		t.Fatalf("expected lockedInjectText cleared, got %q", updated.lockedInjectText)
-	}
-	if len(updated.pendingInjected) != 0 {
-		t.Fatalf("expected pending injected messages cleared, got %d", len(updated.pendingInjected))
+	if len(updated.pendingInjected) != 1 {
+		t.Fatalf("expected pending injected messages preserved, got %d", len(updated.pendingInjected))
 	}
 	if !strings.Contains(updated.input, "Output of bg shell "+res.SessionID+":") {
-		t.Fatalf("expected pasted shell output in unlocked draft, got %q", updated.input)
+		t.Fatalf("expected pasted shell output in editable draft, got %q", updated.input)
 	}
-	if !strings.Contains(updated.input, "locked-job") {
-		t.Fatalf("expected shell preview content in unlocked draft, got %q", updated.input)
+	if !strings.Contains(updated.input, "inline-job") {
+		t.Fatalf("expected shell preview content in editable draft, got %q", updated.input)
 	}
 	if updated.view.Mode() != tui.ModeOngoing {
 		t.Fatalf("expected inline paste to end in ongoing mode, got %q", updated.view.Mode())
@@ -783,10 +774,6 @@ func TestStaleHydrateKeepsQueuedDrainReadyAfterCommittedGapUserFlush(t *testing.
 	m.setRuntimeActivityBusyForTest(true)
 	m.activity = uiActivityRunning
 	m.pendingInjected = queuedUserMessagesForTest("steered message")
-	m.input = "steered message"
-	m.lockedInjectText = "steered message"
-	m.lockedInjectID = "queue-test-0"
-	m.setInputSubmitLocked(true)
 	m.transcriptEntries = []tui.TranscriptEntry{{Role: "user", Text: "seed"}}
 	m.transcriptRevision = 6
 	m.transcriptTotalEntries = 1

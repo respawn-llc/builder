@@ -249,9 +249,6 @@ func TestBusyEnterRunsExactFastCommandEvenWhenPickerHidesIt(t *testing.T) {
 	if len(updated.pendingInjected) != 0 {
 		t.Fatalf("expected no pending injected messages, got %+v", updated.pendingInjected)
 	}
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect locked input for busy /fast")
-	}
 	if updated.input != "" {
 		t.Fatalf("expected input cleared for busy /fast, got %q", updated.input)
 	}

@@ -323,14 +323,12 @@ func TestDetailModeReviewerSuggestionsCollapseAndExpandThroughUIModel(t *testing
 	}
 }
 
-func TestDetailModeEnterRoutesThroughInputControllerWhenInputLocked(t *testing.T) {
+func TestDetailModeEnterRoutesThroughInputControllerWithDraft(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.termWidth = 80
 	m.termHeight = 12
 	m.layout().syncViewport()
-	m.input = "locked draft"
-	m.setInputSubmitLocked(true)
-	m.lockedInjectText = "locked draft"
+	m.input = "visible draft"
 	m.forwardToView(tui.AppendTranscriptMsg{
 		Role:       "tool_call",
 		Text:       "cat large.txt",
@@ -348,10 +346,10 @@ func TestDetailModeEnterRoutesThroughInputControllerWhenInputLocked(t *testing.T
 	updated := next.(*uiModel)
 	expanded := stripANSIAndTrimRight(updated.view.View())
 	if !strings.Contains(expanded, "▼ cat large.txt") || !strings.Contains(expanded, "│ line 1") || !strings.Contains(expanded, "└ line 2") {
-		t.Fatalf("expected input-controller enter to expand detail even while input locked, got %q", expanded)
+		t.Fatalf("expected input-controller enter to expand detail while preserving draft, got %q", expanded)
 	}
-	if updated.input != "locked draft" || !updated.isInputSubmitLocked() || updated.lockedInjectText != "locked draft" {
-		t.Fatalf("expected locked input state preserved, input=%q locked=%t inject=%q", updated.input, updated.isInputSubmitLocked(), updated.lockedInjectText)
+	if updated.input != "visible draft" {
+		t.Fatalf("expected draft preserved, got %q", updated.input)
 	}
 }
 
@@ -1075,9 +1073,6 @@ func TestReviewerRunStillAllowsEditingWithoutTranscriptScroll(t *testing.T) {
 	locked := next.(*uiModel)
 	if !locked.isReviewerBlocking() {
 		t.Fatal("expected reviewer running state")
-	}
-	if locked.isInputSubmitLocked() {
-		t.Fatal("did not expect reviewer to lock input")
 	}
 
 	next, _ = locked.Update(tea.KeyMsg{Type: tea.KeyUp})

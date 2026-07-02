@@ -335,6 +335,48 @@ func TestBusyQueuedCompactStartsCompactionAfterTurnDrains(t *testing.T) {
 	}
 }
 
+func TestCompactionKeepsInputEditableAndQueuesSteering(t *testing.T) {
+	client := &runtimeControlFakeClient{queueUserMessageID: "server-queue-1"}
+	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	m.startupCmds = nil
+
+	cmd := m.inputController().startCompactionWithOrigin("", uiCompactionOriginManual)
+	if cmd == nil {
+		t.Fatal("expected compaction command")
+	}
+	if !m.isCompacting() {
+		t.Fatal("expected compaction lifecycle to be running")
+	}
+	if !m.blocksRuntimeInput() {
+		t.Fatal("expected compaction to keep runtime input delivery blocked")
+	}
+	prefix := m.layout().mainInputPrefix()
+	if prefix != "› " {
+		t.Fatalf("main input prefix = %q, want editable prompt", prefix)
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("steer during compaction")})
+	updated := next.(*uiModel)
+	if updated.input != "steer during compaction" {
+		t.Fatalf("input = %q, want steering draft", updated.input)
+	}
+
+	next, queueCmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = next.(*uiModel)
+	if queueCmd == nil {
+		t.Fatal("expected async queue create command")
+	}
+	if updated.input != "" {
+		t.Fatalf("input = %q, want cleared after queueing", updated.input)
+	}
+	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "steer during compaction" {
+		t.Fatalf("pending injected = %+v, want queued steering", updated.pendingInjected)
+	}
+	if !updated.isCompacting() {
+		t.Fatal("queueing steering must not clear compaction lifecycle")
+	}
+}
+
 func TestBusyQueuedCopyCopiesFinalAnswerAfterTurnDrains(t *testing.T) {
 	copier := &stubClipboardTextCopier{}
 	m := newProjectedStaticUIModel(WithUIClipboardTextCopier(copier))

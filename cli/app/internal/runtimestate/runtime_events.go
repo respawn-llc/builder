@@ -21,19 +21,8 @@ type RuntimeReasoningState struct {
 }
 
 type PendingInputState struct {
-	Input            string
-	PendingInjected  []clientui.QueuedUserMessage
-	LockedInjectText string
-	LockedInjectID   string
-	Submission       InputSubmissionLifecycle
+	PendingInjected []clientui.QueuedUserMessage
 }
-
-type InputSubmissionLifecycle string
-
-const (
-	InputSubmissionUnlocked InputSubmissionLifecycle = "unlocked"
-	InputSubmissionLocked   InputSubmissionLifecycle = "locked"
-)
 
 type BackgroundNoticeKind uint8
 
@@ -96,16 +85,8 @@ type RuntimeRunStateReduction struct {
 	Err             error
 }
 
-type RuntimeDraftInputCommandKind uint8
-
-const (
-	RuntimePendingInputKeepDraft RuntimeDraftInputCommandKind = iota
-	RuntimePendingInputClearDraft
-)
-
 type RuntimePendingInputReduction struct {
 	State                PendingInputState
-	DraftCommand         RuntimeDraftInputCommandKind
 	ConsumedQueueItemIDs []string
 	RestoredText         string
 }
@@ -256,24 +237,13 @@ func runModeFromRuntimeActivityKind(kind clientui.RuntimeActivityActiveKind) cli
 
 func ReduceRuntimePendingInputEvent(input PendingInputState, evt clientui.Event) RuntimePendingInputReduction {
 	next := clonePendingInputState(input)
-	reduction := RuntimePendingInputReduction{
-		State:        next,
-		DraftCommand: RuntimePendingInputKeepDraft,
-	}
+	reduction := RuntimePendingInputReduction{State: next}
 	switch evt.Kind {
 	case clientui.EventUserMessageFlushed:
 		consumed := consumedQueuedUserMessages(reduction.State.PendingInjected, evt.UserMessageBatchQueueItemIDs)
 		if len(consumed) > 0 {
 			reduction.State.PendingInjected = append([]clientui.QueuedUserMessage(nil), reduction.State.PendingInjected[len(consumed):]...)
 			reduction.ConsumedQueueItemIDs = append([]string(nil), evt.UserMessageBatchQueueItemIDs[:len(consumed)]...)
-		}
-		if reduction.State.Submission == InputSubmissionLocked && containsQueuedUserMessageID(consumed, reduction.State.LockedInjectID) {
-			if reduction.State.Input == reduction.State.LockedInjectText {
-				reduction.DraftCommand = RuntimePendingInputClearDraft
-			}
-			reduction.State.LockedInjectText = ""
-			reduction.State.LockedInjectID = ""
-			reduction.State.Submission = InputSubmissionUnlocked
 		}
 	case clientui.EventQueuedUserMessageStatus:
 		status := evt.QueuedUserMessageStatus
@@ -284,12 +254,10 @@ func ReduceRuntimePendingInputEvent(input PendingInputState, evt clientui.Event)
 		case clientui.QueuedUserMessageSubmitted, clientui.QueuedUserMessageDiscarded:
 			if _, removed := removePendingQueuedUserMessageByStatus(&reduction.State.PendingInjected, status); removed {
 				reduction.consumeQueuedStatusIDs(status)
-				reduction.unlockSubmittedPendingInput(status.QueueItemID)
 			}
 		case clientui.QueuedUserMessageFailed:
 			if _, removed := removePendingQueuedUserMessageByStatus(&reduction.State.PendingInjected, status); removed {
 				reduction.consumeQueuedStatusIDs(status)
-				reduction.unlockSubmittedPendingInput(status.QueueItemID)
 				reduction.RestoredText = strings.TrimSpace(status.RestoreText)
 			}
 		}
@@ -307,15 +275,6 @@ func (reduction *RuntimePendingInputReduction) consumeQueuedStatusIDs(status *cl
 	if id := strings.TrimSpace(status.ClientRequestID); id != "" {
 		reduction.ConsumedQueueItemIDs = append(reduction.ConsumedQueueItemIDs, id)
 	}
-}
-
-func (reduction *RuntimePendingInputReduction) unlockSubmittedPendingInput(queueItemID string) {
-	if reduction.State.Submission != InputSubmissionLocked || !queuedUserMessageIDMatches(reduction.State.LockedInjectID, queueItemID) {
-		return
-	}
-	reduction.State.LockedInjectText = ""
-	reduction.State.LockedInjectID = ""
-	reduction.State.Submission = InputSubmissionUnlocked
 }
 
 func ReduceRuntimeReasoningEvent(state RuntimeReasoningState, evt clientui.Event) RuntimeReasoningReduction {
@@ -412,18 +371,6 @@ func consumedQueuedUserMessages(pending []clientui.QueuedUserMessage, ids []stri
 		consumed = append(consumed, pending[index])
 	}
 	return consumed
-}
-
-func containsQueuedUserMessageID(messages []clientui.QueuedUserMessage, id string) bool {
-	if id == "" {
-		return false
-	}
-	for _, message := range messages {
-		if message.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 func removePendingQueuedUserMessageByStatus(messages *[]clientui.QueuedUserMessage, status *clientui.QueuedUserMessageStatusEvent) (clientui.QueuedUserMessage, bool) {

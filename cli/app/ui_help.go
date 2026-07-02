@@ -21,7 +21,6 @@ type uiHelpSection struct {
 
 func (m *uiModel) canToggleHelpWithQuestionMark() bool {
 	if m == nil ||
-		m.isInputSubmitLocked() ||
 		m.input != "" {
 		return false
 	}
@@ -139,9 +138,6 @@ func uiHelpInPromptInput(m *uiModel) bool {
 }
 
 func uiHelpInTextEditing(m *uiModel) bool {
-	if m.isInputSubmitLocked() {
-		return false
-	}
 	switch m.inputMode() {
 	case uiInputModeMain, uiInputModeRollbackEdit:
 		return true

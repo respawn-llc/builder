@@ -82,9 +82,6 @@ type uiInputFeatureState struct {
 	pendingInjected    []clientui.QueuedUserMessage
 	injectedQueue      []injectedRuntimeQueueItem
 	injectedQueueToken uint64
-	lockedInjectText   string
-	lockedInjectID     string
-	inputSubmission    runtimestate.InputSubmissionLifecycle
 	interruptLifecycle uiInterruptLifecycle
 	currentRunID       string
 	currentStepID      string

@@ -3,7 +3,6 @@ package app
 import (
 	"strings"
 
-	"core/cli/app/internal/runtimestate"
 	"core/shared/clientui"
 )
 
@@ -111,21 +110,6 @@ func (m *uiModel) setReviewerBlocking(blocking bool) {
 	m.runtimeLifecycle.Reviewer = reviewer
 }
 
-func (m *uiModel) isInputSubmitLocked() bool {
-	return m != nil && m.inputSubmission == runtimestate.InputSubmissionLocked
-}
-
-func (m *uiModel) setInputSubmitLocked(locked bool) {
-	if m == nil {
-		return
-	}
-	if locked {
-		m.inputSubmission = runtimestate.InputSubmissionLocked
-		return
-	}
-	m.inputSubmission = runtimestate.InputSubmissionUnlocked
-}
-
 func (m *uiModel) hasPendingInterrupt() bool {
 	return m != nil && m.interruptLifecycle == uiInterruptPending
 }
@@ -135,7 +119,7 @@ func (m *uiModel) hasLocalDispatchPending() bool {
 }
 
 func (m *uiModel) blocksRuntimeInput() bool {
-	return m != nil && (m.isBusy() || m.runtimeActivityBlocksControl() || m.hasLocalDispatchPending() || m.isInputSubmitLocked())
+	return m != nil && (m.isBusy() || m.runtimeActivityBlocksControl() || m.hasLocalDispatchPending())
 }
 
 func (m *uiModel) setPendingInterrupt(pending bool) {

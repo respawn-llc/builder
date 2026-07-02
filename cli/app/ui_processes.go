@@ -325,12 +325,11 @@ func (m *uiModel) applyProcessActionDone(msg processActionDoneMsg) tea.Cmd {
 		if preview == "" {
 			preview = "<no output yet>"
 		}
-		releaseCmd := c.releaseLockedInjectedInput(true)
 		m.appendProcessOutputToInput(msg.id, preview)
 		if m.processList.open && msg.surfaceGeneration == m.processList.surfaceGeneration {
-			return tea.Batch(releaseCmd, c.stopProcessListFlowCmd(), c.model.sendTransientStatusWithNoticeID("Pasted shell transcript", uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, ""))
+			return tea.Batch(c.stopProcessListFlowCmd(), c.model.sendTransientStatusWithNoticeID("Pasted shell transcript", uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, ""))
 		}
-		return tea.Batch(releaseCmd, c.model.sendTransientStatusWithNoticeID("Pasted shell transcript", uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, ""))
+		return c.model.sendTransientStatusWithNoticeID("Pasted shell transcript", uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, "")
 	case "logs":
 		statusCmd := c.model.sendTransientStatusWithNoticeID("Opened logs", uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, "")
 		if msg.editorCmd != nil {

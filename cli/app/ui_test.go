@@ -115,9 +115,6 @@ func TestCustomKeyCtrlEnterQueuesPostTurnWhenBusy(t *testing.T) {
 	if len(updated.pendingInjected) != 0 {
 		t.Fatalf("did not expect injected steering messages, got %d", len(updated.pendingInjected))
 	}
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect submit lock for ctrl+enter queue")
-	}
 }
 
 func TestCustomKeyShiftEnterInsertsNewline(t *testing.T) {

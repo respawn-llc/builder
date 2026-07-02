@@ -42,16 +42,8 @@ func (a uiRuntimeAdapter) runtimeReasoningState() runtimestate.RuntimeReasoningS
 
 func (a uiRuntimeAdapter) pendingInputState() runtimestate.PendingInputState {
 	m := a.model
-	submission := runtimestate.InputSubmissionUnlocked
-	if m.isInputSubmitLocked() {
-		submission = runtimestate.InputSubmissionLocked
-	}
 	return runtimestate.PendingInputState{
-		Input:            m.input,
-		PendingInjected:  m.pendingInjected,
-		LockedInjectText: m.lockedInjectText,
-		LockedInjectID:   m.lockedInjectID,
-		Submission:       submission,
+		PendingInjected: m.pendingInjected,
 	}
 }
 
@@ -78,16 +70,9 @@ func (a uiRuntimeAdapter) applyRuntimeEventReduction(reduction runtimestate.Runt
 	for _, answer := range m.removeInjectedQueueItemsByIDs(reduction.PendingInput.ConsumedQueueItemIDs) {
 		cmd = tea.Batch(cmd, m.answerQueuedApprovalCommentary(answer))
 	}
-	m.lockedInjectText = reduction.PendingInput.State.LockedInjectText
-	m.lockedInjectID = reduction.PendingInput.State.LockedInjectID
-	m.setInputSubmitLocked(reduction.PendingInput.State.Submission == runtimestate.InputSubmissionLocked)
 	if reduction.PendingInput.RestoredText != "" {
 		m.inputController().restoreInjectedTextIntoInput(reduction.PendingInput.RestoredText)
 		cmd = tea.Batch(cmd, m.sendTransientStatusWithNoticeID("queued message was not submitted; restored to input", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
-	}
-	switch reduction.PendingInput.DraftCommand {
-	case runtimestate.RuntimePendingInputClearDraft:
-		m.clearInput()
 	}
 	switch reduction.RunState.Activity {
 	case runtimestate.RuntimeActivityRunning:
@@ -146,7 +131,7 @@ func (m *uiModel) acknowledgePendingInterrupt() tea.Cmd {
 		clientui.RuntimeOperationKindSubmitQueued,
 	)
 	c := uiInputController{model: m}
-	cmd = tea.Batch(c.releaseLockedInjectedInput(true), c.restorePendingInjectedIntoInput())
+	cmd = c.restorePendingInjectedIntoInput()
 	c.restoreQueuedMessagesIntoInput()
 	m.setPendingInterrupt(false)
 	m.activity = uiActivityInterrupted

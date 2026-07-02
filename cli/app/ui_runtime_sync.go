@@ -567,8 +567,7 @@ func (m *uiModel) flushQueuedInputsAfterHydration() tea.Cmd {
 	if !m.queuedDrainReadyAfterHydration {
 		return nil
 	}
-	if m.isBusy() ||
-		m.isInputSubmitLocked() {
+	if m.isBusy() {
 		if len(m.queued) == 0 || strings.TrimSpace(m.activeSubmit.text) != "" {
 			m.pendingQueuedDrainAfterHydration = false
 			m.queuedDrainReadyAfterHydration = false

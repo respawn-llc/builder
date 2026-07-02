@@ -66,9 +66,6 @@ func TestBusyEnterDuringReviewerUsesSteeringInjection(t *testing.T) {
 	if !started.isReviewerRunning() {
 		t.Fatal("expected reviewer to be running")
 	}
-	if started.isInputSubmitLocked() {
-		t.Fatal("did not expect input lock while reviewer is running")
-	}
 
 	next, _ = started.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
@@ -77,9 +74,6 @@ func TestBusyEnterDuringReviewerUsesSteeringInjection(t *testing.T) {
 	}
 	if len(updated.pendingInjected) != 1 || updated.pendingInjected[0].Text != "steer after review" {
 		t.Fatalf("expected reviewer steering injected for earliest flush, got %+v", updated.pendingInjected)
-	}
-	if updated.isInputSubmitLocked() {
-		t.Fatal("did not expect submit lock while waiting for reviewer steering flush")
 	}
 	if updated.input != "" {
 		t.Fatalf("expected input cleared immediately after queueing reviewer steering, got %q", updated.input)
