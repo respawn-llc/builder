@@ -402,7 +402,7 @@ func createCoreValidWorkflow(t *testing.T, ctx context.Context, store *workflows
 		t.Fatalf("AddNode: %v", err)
 	}
 	startGroupID := workflow.TransitionGroupID("group-start-" + string(created.ID))
-	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: startGroupID, WorkflowID: created.ID, SourceNodeID: start.ID, TransitionID: "start", DisplayName: "Start"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: startGroupID, WorkflowID: created.ID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
 		t.Fatalf("AddTransitionGroup start: %v", err)
 	}
 	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."}); err != nil {
@@ -412,7 +412,7 @@ func createCoreValidWorkflow(t *testing.T, ctx context.Context, store *workflows
 	if _, err := store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: doneGroupID, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddTransitionGroup done: %v", err)
 	}
-	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession}); err != nil {
+	if _, err := store.AddEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + string(created.ID)), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
 		t.Fatalf("AddEdge done: %v", err)
 	}
 	return created.ID
@@ -421,10 +421,10 @@ func createCoreValidWorkflow(t *testing.T, ctx context.Context, store *workflows
 func coreWorkflowNodeByKind(t *testing.T, def workflow.Definition, kind workflow.NodeKind) workflow.Node {
 	t.Helper()
 	for _, node := range def.Nodes {
-		if node.Kind == kind {
+		if node.Kind() == kind {
 			return node
 		}
 	}
 	t.Fatalf("missing workflow node kind %q in %+v", kind, def.Nodes)
-	return workflow.Node{}
+	return nil
 }

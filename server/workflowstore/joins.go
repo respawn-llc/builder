@@ -94,7 +94,15 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 	if err := insertTransitionEdgeSnapshotWithMetadata(ctx, q, joinTransitionID, outEdge, targetPlacementID, "applied", workflowRunMetadata{ContextSource: workflow.CanonicalContextSource(outEdge.ContextSource)}); err != nil {
 		return CompleteRunResult{}, err
 	}
-	if outEdge.TargetNode.Kind == workflow.NodeKindAgent {
+	if executableNodeKind(outEdge.TargetNode.Kind) {
+		task, err := q.GetTask(ctx, taskID)
+		if err != nil {
+			return CompleteRunResult{}, err
+		}
+		worktreeRoot, err := taskManagedWorktreeRoot(ctx, q, task)
+		if err != nil {
+			return CompleteRunResult{}, err
+		}
 		targetRunID := prefixedID("run")
 		targetSnapshot, foundSnapshot, err := joinSnapshot.forNode(outEdge.TargetNode)
 		if err != nil {
@@ -123,10 +131,22 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptionDetailJson: "{}", RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
+		interruptionReason, interruptionDetail, invalidScript, err := s.scriptNodeInterruption(ctx, q, outEdge.TargetNode.ID, worktreeRoot)
+		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		result.RunIDs = append(result.RunIDs, workflow.RunID(targetRunID))
+		interruptedAt := int64(0)
+		if invalidScript {
+			interruptedAt = now
+		}
+		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: interruptionReason, InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
+			return CompleteRunResult{}, err
+		}
+		targetRun := workflow.RunID(targetRunID)
+		result.RunIDs = append(result.RunIDs, targetRun)
+		if invalidScript {
+			result.InterruptedRunIDs = append(result.InterruptedRunIDs, targetRun)
+		}
 	}
 	return result, nil
 }

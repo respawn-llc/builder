@@ -9,6 +9,11 @@ export type NativeCapabilityState = Readonly<{
   directories: Readonly<{
     select: boolean;
   }>;
+  files: Readonly<{
+    select: boolean;
+    open: boolean;
+    stat: boolean;
+  }>;
   notifications: Readonly<{
     basic: boolean;
   }>;
@@ -37,6 +42,11 @@ const unavailableCapabilities: NativeCapabilityState = {
   },
   directories: {
     select: false,
+  },
+  files: {
+    select: false,
+    open: false,
+    stat: false,
   },
   notifications: {
     basic: true,
@@ -71,6 +81,11 @@ export function createTauriCapabilities(platform: NativePlatform): NativeCapabil
     },
     directories: {
       select: true,
+    },
+    files: {
+      select: true,
+      open: true,
+      stat: true,
     },
     notifications: {
       basic: tauriPlatformSupportsNativeNotifications(platform),

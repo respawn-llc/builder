@@ -182,6 +182,16 @@ func (c StoreController) CompleteWorkflowRun(ctx context.Context, req Completion
 			State:                         result.State,
 			ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
 		})
+		if finalizer, ok := c.AttentionFinalizer.(interruptedRunAttentionFinalizer); ok {
+			for _, runID := range result.InterruptedRunIDs {
+				if runID == "" {
+					continue
+				}
+				runFinalizeCtx, runCancel := context.WithTimeout(context.Background(), attentionFinalizationTimeout)
+				finalizer.FinalizeInterruptedRun(runFinalizeCtx, runID)
+				runCancel()
+			}
+		}
 	}
 	return CompletionResult{TransitionID: result.TransitionID, State: result.State}, nil
 }

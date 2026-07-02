@@ -94,6 +94,66 @@ func TestWorkflowGraphSaveSupportsMetadataAndNoopRevisions(t *testing.T) {
 	}
 }
 
+func TestWorkflowGraphSavePersistsScriptPathOnlyEdit(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Script Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	workflowID := created.ID
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	start := nodeByKind(t, def, workflow.NodeKindStart)
+	done := nodeByKind(t, def, workflow.NodeKindTerminal)
+	scriptID := workflow.NodeID("node-script")
+	if _, err := store.AddNode(ctx, NodeRecord{ID: scriptID, WorkflowID: workflowID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script", ScriptPath: "scripts/old"}); err != nil {
+		t.Fatalf("AddNode script: %v", err)
+	}
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-start", WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
+		t.Fatalf("AddTransitionGroup start: %v", err)
+	}
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-start", WorkflowID: workflowID, TransitionGroupID: "group-start", Key: "start", TargetNodeID: scriptID, ContextMode: workflow.ContextModeNewSession}); err != nil {
+		t.Fatalf("AddEdge start: %v", err)
+	}
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: "group-done", WorkflowID: workflowID, SourceNodeID: scriptID, TransitionID: "done", DisplayName: "Done"}); err != nil {
+		t.Fatalf("AddTransitionGroup done: %v", err)
+	}
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: "edge-done", WorkflowID: workflowID, TransitionGroupID: "group-done", Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession}); err != nil {
+		t.Fatalf("AddEdge done: %v", err)
+	}
+	def, record, err = store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition script: %v", err)
+	}
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	for index := range req.Nodes {
+		if req.Nodes[index].ID == scriptID {
+			req.Nodes[index].ScriptPath = "scripts/new"
+		}
+	}
+
+	saved, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph script path: %v", err)
+	}
+	if !saved.Saved || !saved.Changed || saved.Version != record.Version+1 {
+		t.Fatalf("save result = %+v, want script-path graph change with version bump", saved)
+	}
+	updatedDef, updatedRecord, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition updated script: %v", err)
+	}
+	if updatedRecord.Version != record.Version+1 {
+		t.Fatalf("updated version = %d, want %d", updatedRecord.Version, record.Version+1)
+	}
+	path, ok := workflow.NodeScriptPath(nodeByID(t, updatedDef, scriptID)).Value()
+	if !ok || path != "scripts/new" {
+		t.Fatalf("script path = %q/%t, want scripts/new", path, ok)
+	}
+}
+
 func TestWorkflowGraphSaveRoundTripsTransitionInvocationContract(t *testing.T) {
 	ctx, store, _ := newTestStoreContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)
@@ -187,7 +247,7 @@ func TestWorkflowGraphSaveAcceptsClientGeneratedTopologyIDsAndRejectsCollisions(
 	if err != nil {
 		t.Fatalf("GetDefinition after client ids: %v", err)
 	}
-	if nodeByID(t, updated, "workflow-node-00000000-0000-4000-8000-000000000001").Key != "client_generated" {
+	if workflow.NodeKey(nodeByID(t, updated, "workflow-node-00000000-0000-4000-8000-000000000001")) != "client_generated" {
 		t.Fatalf("client-generated node id was not persisted")
 	}
 
@@ -225,7 +285,7 @@ func TestWorkflowGraphSaveMetadataAndGraphAreAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDefinition after combined: %v", err)
 	}
-	if updatedRecord.Name != "Combined save" || nodeByID(t, updatedDef, agentID).DisplayName != "Edited Agent" {
+	if updatedRecord.Name != "Combined save" || workflow.NodeDisplayName(nodeByID(t, updatedDef, agentID)) != "Edited Agent" {
 		t.Fatalf("combined save persisted record=%+v node=%+v", updatedRecord, nodeByID(t, updatedDef, agentID))
 	}
 
@@ -279,7 +339,7 @@ func TestWorkflowGraphSaveValidatesAndPersistsV1NodeGroups(t *testing.T) {
 	if len(savedDef.NodeGroups) != 1 || len(savedDef.NodeGroups[0].MemberNodeIDs) != 3 {
 		t.Fatalf("saved node groups = %+v, want one group with three members", savedDef.NodeGroups)
 	}
-	if nodeByID(t, savedDef, workflow.NodeID("node-join-"+string(workflowID))).GroupID != groupID {
+	if workflow.NodeGroupID(nodeByID(t, savedDef, workflow.NodeID("node-join-"+string(workflowID)))) != groupID {
 		t.Fatalf("saved join group id not persisted: %+v", nodeByID(t, savedDef, workflow.NodeID("node-join-"+string(workflowID))))
 	}
 
@@ -352,7 +412,7 @@ func TestPreviewWorkflowGraphSaveDoesNotMutateWithoutBlockers(t *testing.T) {
 	if unchangedRecord.Version != record.Version {
 		t.Fatalf("workflow version after preview = %d, want %d", unchangedRecord.Version, record.Version)
 	}
-	if nodeByID(t, unchangedDef, agentID).DisplayName == "Preview Agent" {
+	if workflow.NodeDisplayName(nodeByID(t, unchangedDef, agentID)) == "Preview Agent" {
 		t.Fatalf("preview mutated node display name")
 	}
 }

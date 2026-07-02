@@ -17,6 +17,7 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/server/workflowscript"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -415,7 +416,7 @@ func (s *Service) workflowSelectionInputs(ctx context.Context, projectID string,
 		definitions[workflowID] = def
 		nodeKindsByWorkflowID[workflowID] = nodeKinds
 		link := linkByWorkflowID[workflowID]
-		validation := workflow.ValidateDefinition(definitionForValidation(def), workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: roleResolver})
+		validation := definitionExecutionValidation(def, roleResolver)
 		picker = append(picker, serverapi.WorkflowPickerItem{
 			WorkflowID:           workflowID,
 			DisplayName:          def.Workflow.Name,
@@ -950,13 +951,13 @@ func (s *Service) attentionItemFromCandidate(ctx context.Context, row attentionC
 		}
 		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "question", ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, AskID: row.askID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case attentionKindInterruptedRun:
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, Message: interruptedRunMessage(row.interruptionReason, row.interruptionDetailJSON), OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, Message: interruptedRunMessage(row.interruptionReason, row.interruptionDetailJSON), DetailJSON: row.interruptionDetailJSON, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "validation_blocker":
 		def, _, err := s.definition(ctx, row.workflowID)
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, false, err
 		}
-		validation := workflow.ValidateDefinition(definitionForValidation(def), workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: roleResolver})
+		validation := definitionExecutionValidation(def, roleResolver)
 		if !validation.HasBlockingErrors() {
 			return serverapi.WorkflowAttentionItem{}, false, nil
 		}
@@ -1040,7 +1041,12 @@ func (s *Service) definition(ctx context.Context, workflowID string) (serverapi.
 		if group, ok := groupByID[groupID]; ok {
 			groupKey = group.GroupKey
 		}
-		def.Nodes = append(def.Nodes, serverapi.WorkflowNode{ID: node.ID, WorkflowID: node.WorkflowID, Key: node.NodeKey, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: groupID, GroupKey: groupKey, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, InputFields: inputFields, JoinInputProviders: joinProviders, OutputFields: fields})
+		var scriptPath *string
+		if node.ScriptPath.Valid {
+			value := node.ScriptPath.String
+			scriptPath = &value
+		}
+		def.Nodes = append(def.Nodes, serverapi.WorkflowNode{ID: node.ID, WorkflowID: node.WorkflowID, Key: node.NodeKey, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: groupID, GroupKey: groupKey, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, ScriptPath: scriptPath, InputFields: inputFields, JoinInputProviders: joinProviders, OutputFields: fields})
 		nodeKinds[node.ID] = workflow.NodeKind(node.Kind)
 	}
 	for _, group := range groups {
@@ -1236,7 +1242,7 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 				item.Summary = "Run completed"
 			case "run_interrupted":
 				item.Summary = interruptedRunMessage(run.InterruptionReason, run.InterruptionDetailJson)
-				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: task.WorkflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, OccurredAtUnixMs: run.InterruptedAtUnixMs}
+				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: task.WorkflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, DetailJSON: run.InterruptionDetailJson, OccurredAtUnixMs: run.InterruptedAtUnixMs}
 				item.Attention = &attention
 			}
 		case "task_canceled":
@@ -1251,8 +1257,12 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 
 func runDTO(run sqlitegen.TaskRunRecord, nodes map[string]serverapi.WorkflowNode, sessionNames map[string]string) serverapi.WorkflowRun {
 	nodeID := nullableWorkflowViewNodeID(run.NodeID)
-	dto := serverapi.WorkflowRun{ID: run.ID, TaskID: run.TaskID, PlacementID: run.PlacementID, NodeID: nodeID, SessionID: run.SessionID.String, Generation: run.RunGeneration, StartedAtUnixMs: run.StartedAtUnixMs, CompletedAtUnixMs: run.CompletedAtUnixMs, InterruptedAtUnixMs: run.InterruptedAtUnixMs, InterruptionReason: run.InterruptionReason, WaitingAskID: run.WaitingAskID, Status: runStatus(run)}
+	dto := serverapi.WorkflowRun{ID: run.ID, TaskID: run.TaskID, PlacementID: run.PlacementID, NodeID: nodeID, SessionID: run.SessionID.String, Generation: run.RunGeneration, StartedAtUnixMs: run.StartedAtUnixMs, CompletedAtUnixMs: run.CompletedAtUnixMs, InterruptedAtUnixMs: run.InterruptedAtUnixMs, InterruptionReason: run.InterruptionReason, InterruptionDetail: run.InterruptionDetailJson, WaitingAskID: run.WaitingAskID, Status: runStatus(run)}
 	if node, ok := nodes[nodeID]; ok {
+		dto.NodeKind = node.Kind
+		if node.ScriptPath != nil {
+			dto.ScriptPath = strings.TrimSpace(*node.ScriptPath)
+		}
 		dto.Role = node.SubagentRole
 	}
 	if name, ok := sessionNames[strings.TrimSpace(run.SessionID.String)]; ok {
@@ -1616,7 +1626,7 @@ func (s *Service) interruptedRunAttentionItems(ctx context.Context, projectID st
 	}
 	items := make([]serverapi.WorkflowAttentionItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(row.InterruptionReason, row.InterruptionDetailJson), OccurredAtUnixMs: row.InterruptedAtUnixMs})
+		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(row.InterruptionReason, row.InterruptionDetailJson), DetailJSON: row.InterruptionDetailJson, OccurredAtUnixMs: row.InterruptedAtUnixMs})
 	}
 	return items, nil
 }
@@ -1767,7 +1777,37 @@ func definitionForValidation(def serverapi.WorkflowDefinition) workflow.Definiti
 		if strings.TrimSpace(node.GroupID) != "" {
 			groupMemberIDs[node.GroupID] = append(groupMemberIDs[node.GroupID], workflow.NodeID(node.ID))
 		}
-		out.Nodes = append(out.Nodes, workflow.Node{WorkflowID: workflow.WorkflowID(node.WorkflowID), ID: workflow.NodeID(node.ID), Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: node.GroupID, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, InputFields: inputs, JoinInputProviders: joinProviders, OutputFields: fields})
+		workflowNode, err := workflow.NewNode(
+			workflow.NodeIdentity{
+				WorkflowID:  workflow.WorkflowID(node.WorkflowID),
+				ID:          workflow.NodeID(node.ID),
+				Key:         workflow.ModelKey(node.Key),
+				DisplayName: node.DisplayName,
+				GroupID:     node.GroupID,
+			},
+			workflow.NodeKind(node.Kind),
+			workflow.NodeFields{
+				SubagentRole:   node.SubagentRole,
+				PromptTemplate: node.PromptTemplate,
+				CompletionMode: node.CompletionMode,
+				ScriptPath: func() workflow.OptionalScriptPath {
+					if node.ScriptPath == nil {
+						return workflow.AbsentScriptPath()
+					}
+					if scriptPath, ok := workflow.PresentScriptPath(*node.ScriptPath); ok {
+						return scriptPath
+					}
+					return workflow.AbsentScriptPath()
+				}(),
+				InputFields:        inputs,
+				JoinInputProviders: joinProviders,
+				OutputFields:       fields,
+			},
+		)
+		if err != nil {
+			panic(err)
+		}
+		out.Nodes = append(out.Nodes, workflowNode)
 	}
 	for index := range out.NodeGroups {
 		out.NodeGroups[index].MemberNodeIDs = groupMemberIDs[out.NodeGroups[index].ID]
@@ -1789,6 +1829,36 @@ func definitionForValidation(def serverapi.WorkflowDefinition) workflow.Definiti
 			requirements = append(requirements, workflow.OutputRequirement{FieldName: requirement.FieldName})
 		}
 		out.Edges = append(out.Edges, workflow.Edge{WorkflowID: workflow.WorkflowID(edge.WorkflowID), ID: workflow.EdgeID(edge.ID), Key: workflow.ModelKey(edge.Key), TransitionGroupID: workflow.TransitionGroupID(edge.TransitionGroupID), TargetNodeID: workflow.NodeID(edge.TargetNodeID), RequiresApproval: edge.RequiresApproval, ContextMode: workflow.ContextMode(edge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(edge.ContextSource.Kind), NodeKey: workflow.ModelKey(edge.ContextSource.NodeKey)}), PromptTemplate: edge.PromptTemplate, Parameters: parameters, InputBindings: inputs, OutputRequirements: requirements})
+	}
+	return out
+}
+
+func definitionExecutionValidation(def serverapi.WorkflowDefinition, roleResolver workflow.RoleResolver) *workflow.ValidationResult {
+	domain := definitionForValidation(def)
+	result := workflow.ValidateDefinition(domain, workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: roleResolver})
+	result.Errors = append(result.Errors, scriptPathDefinitionValidationErrors(domain, "")...)
+	return &result
+}
+
+func scriptPathDefinitionValidationErrors(def workflow.Definition, worktreeRoot string) []workflow.ValidationError {
+	out := []workflow.ValidationError{}
+	for _, node := range def.Nodes {
+		if node.Kind() != workflow.NodeKindScript {
+			continue
+		}
+		diagnostics := workflowscript.Validate(workflowscript.ValidationRequest{
+			RawPath:      workflow.NodeScriptPath(node).String(),
+			WorktreeRoot: worktreeRoot,
+		})
+		for _, diagnostic := range diagnostics {
+			out = append(out, workflow.ValidationError{
+				Code:          workflow.ValidationErrorCode(diagnostic.Code),
+				Message:       diagnostic.Message,
+				WorkflowID:    def.ID,
+				NodeID:        workflow.NodeIDOf(node),
+				BlocksContext: diagnostic.Blocking,
+			})
+		}
 	}
 	return out
 }

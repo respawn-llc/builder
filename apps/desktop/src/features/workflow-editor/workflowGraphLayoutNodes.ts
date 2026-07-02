@@ -264,21 +264,29 @@ function workflowNode(
     position: { x: (layoutNode.x ?? 0) - offset.x, y: (layoutNode.y ?? 0) - offset.y },
     sourcePosition: Position.Right,
     targetPosition: Position.Left,
-    draggable: node.kind === "agent",
+    draggable: node.kind === "agent" || node.kind === "script",
     data: {
       kind: node.kind,
       key: node.key,
       entityID: node.id,
       entityKind: "node",
       endpointPorts: options.endpointPorts,
-      creationHandleID: node.kind === "terminal" ? undefined : workflowGraphCreationHandleID(node.id),
+      creationHandleID: workflowGraphCreationHandleIDForNode(node),
       groupID: node.groupID,
       label: node.name,
-      role: node.subagentRole,
+      role: workflowGraphNodeRole(node),
       hasError: options.errorMarkers.nodeIDs.has(node.id) || options.errorMarkers.relatedIDs.has(node.id),
     },
     style: { width: layoutNode.width ?? workflowNodeWidth, height: layoutNode.height ?? workflowNodeHeight },
   };
+}
+
+function workflowGraphCreationHandleIDForNode(node: WorkflowDefinition["nodes"][number]): string | undefined {
+  return node.kind === "terminal" ? undefined : workflowGraphCreationHandleID(node.id);
+}
+
+function workflowGraphNodeRole(node: WorkflowDefinition["nodes"][number]): string {
+  return node.kind === "script" ? node.scriptPath ?? "" : node.subagentRole;
 }
 
 function parentNodeOptions(parentId: string): Pick<WorkflowGraphNode, "extent" | "parentId"> {

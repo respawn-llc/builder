@@ -23,7 +23,7 @@ CREATE TABLE task_transitions_new (
     transition_id TEXT NOT NULL,
     transition_display_name TEXT NOT NULL DEFAULT '',
     workflow_revision_seen INTEGER NOT NULL CHECK (workflow_revision_seen >= 1),
-    actor TEXT NOT NULL CHECK (actor IN ('agent', 'user', 'system')),
+    actor TEXT NOT NULL CHECK (actor IN ('agent', 'script', 'user', 'system')),
     state TEXT NOT NULL CHECK (state IN ('pending_approval', 'approved', 'applied', 'rejected', 'invalid')),
     commentary TEXT NOT NULL DEFAULT '' CHECK (length(commentary) <= 65536),
     output_values_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(output_values_json)),

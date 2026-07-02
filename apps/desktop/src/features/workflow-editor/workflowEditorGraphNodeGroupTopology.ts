@@ -75,13 +75,17 @@ function inferNodeGroupMembers(
   join: DraftWorkflowNode;
 }> | null {
   const members = draft.nodes.filter((node) => node.groupID === addedBranch.groupID);
-  const branches = members.filter((node) => node.kind === "agent");
+  const branches = members.filter((node) => workflowBranchNodeKind(node.kind));
   const joins = members.filter((node) => node.kind === "join");
   const existingBranches = branches.filter((node) => node.id !== addedBranch.id);
   const join = joins[0];
   return branches.length >= 2 && joins.length === 1 && existingBranches.length > 0 && join !== undefined
     ? { addedBranch, existingBranches, join }
     : null;
+}
+
+function workflowBranchNodeKind(kind: DraftWorkflowNode["kind"]): boolean {
+  return kind === "agent" || kind === "script";
 }
 
 function inferInitialFanoutTopology(

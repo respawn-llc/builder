@@ -265,6 +265,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z
     ask_id: emptyString,
     task_transition_id: emptyString,
     message: z.string(),
+    detail_json: emptyString,
     suggestions: stringList,
     recommended_option_index: z.number().optional().default(0),
     occurred_at_unix_ms: z.number(),
@@ -282,6 +283,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z
     askID: value.ask_id,
     taskTransitionID: value.task_transition_id,
     message: value.message,
+    detailJSON: value.detail_json,
     suggestions: value.suggestions,
     recommendedOptionIndex: value.recommended_option_index,
     occurredAt: value.occurred_at_unix_ms,
@@ -311,6 +313,8 @@ export const runSchema: z.ZodType<TaskRun> = z
     task_id: z.string(),
     placement_id: z.string(),
     node_id: z.string(),
+    node_kind: emptyString,
+    script_path: emptyString,
     session_id: emptyString,
     session_name: emptyString,
     role: emptyString,
@@ -320,12 +324,16 @@ export const runSchema: z.ZodType<TaskRun> = z
     started_at_unix_ms: numberValue,
     completed_at_unix_ms: numberValue,
     interrupted_at_unix_ms: numberValue,
+    interruption_reason: emptyString,
+    interruption_detail_json: emptyString,
   })
   .transform((value) => ({
     id: value.id,
     taskID: value.task_id,
     placementID: value.placement_id,
     nodeID: value.node_id,
+    nodeKind: value.node_kind,
+    scriptPath: value.script_path,
     sessionID: value.session_id,
     sessionName: value.session_name,
     role: value.role,
@@ -335,6 +343,8 @@ export const runSchema: z.ZodType<TaskRun> = z
     startedAt: value.started_at_unix_ms,
     completedAt: value.completed_at_unix_ms,
     interruptedAt: value.interrupted_at_unix_ms,
+    interruptionReason: value.interruption_reason,
+    interruptionDetail: value.interruption_detail_json,
   }));
 
 export const transitionEdgeSchema: z.ZodType<TransitionEdge> = z

@@ -488,6 +488,15 @@ func TestWorkflowGraphDraftRequestValidation(t *testing.T) {
 	if err := invalidMode.Validate(); !isWorkflowFieldError(err, "graph.nodes.completion_mode", WorkflowRequestErrorInvalidValue) {
 		t.Fatalf("invalid graph node completion mode error = %#v, want invalid_value on graph.nodes.completion_mode", err)
 	}
+	scriptPath := "scripts/run"
+	nonScriptPathGraph := WorkflowGraphSavePreviewRequest{
+		WorkflowID:      "workflow-1",
+		ExpectedVersion: 1,
+		Graph:           WorkflowGraphDraft{Nodes: []WorkflowGraphDraftNode{{ID: "node-1", Kind: "agent", ScriptPath: &scriptPath}}},
+	}
+	if err := nonScriptPathGraph.Validate(); !isWorkflowFieldError(err, "graph.nodes.script_path", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("non-script script_path error = %#v, want invalid_value on graph.nodes.script_path", err)
+	}
 	validPreviousTargetOrNewGraph := WorkflowGraphDraft{
 		Edges: []WorkflowGraphDraftEdge{{ID: "edge-1", ContextSource: WorkflowContextSource{Kind: "previous_target_or_new"}}},
 	}

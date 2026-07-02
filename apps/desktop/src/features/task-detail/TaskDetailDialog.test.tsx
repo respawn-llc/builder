@@ -1,6 +1,7 @@
 import {
   createBrowserNativeBridge,
   type NativeBridge,
+  type NativeFileTarget,
   type NativeNotificationActivation,
 } from "@app/native-bridge";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -122,6 +123,82 @@ describe("TaskDetailSurface", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open in CLI" }));
     await waitFor(() => {
       expect(copied).toEqual(["kent --session=session-2"]);
+    });
+  });
+
+  it("opens script files through native file capabilities without exposing CLI sessions", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    const opened: NativeFileTarget[] = [];
+    const checked: NativeFileTarget[] = [];
+    const services = createTestServices(
+      [
+        ...startupRoutes,
+        { method: "workflow.task.get", result: taskDetailResponseWithScriptRun },
+        { method: "workflow.task.comment.list", result: commentListResponse },
+        { method: "workflow.task.activity.list", result: activityResponse },
+      ],
+      nativeBridgeWithFiles({ available: true, checked, opened }),
+    );
+
+    render(<App services={services} />);
+
+    expect(await screen.findByRole("textbox", { name: "Description" })).toBeInTheDocument();
+    const openScript = await screen.findByRole("button", { name: "Open script" });
+    expect(screen.queryByRole("button", { name: "Open in CLI" })).not.toBeInTheDocument();
+
+    fireEvent.click(openScript);
+
+    await waitFor(() => {
+      expect(checked).toContainEqual({ basePath: "/tmp/worktree", path: "scripts/run" });
+      expect(opened).toEqual([{ basePath: "/tmp/worktree", path: "scripts/run" }]);
+    });
+  });
+
+  it("hides script file opening when the native client cannot access the file", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    const checked: NativeFileTarget[] = [];
+    const services = createTestServices(
+      [
+        ...startupRoutes,
+        { method: "workflow.task.get", result: taskDetailResponseWithScriptRun },
+        { method: "workflow.task.comment.list", result: commentListResponse },
+        { method: "workflow.task.activity.list", result: activityResponse },
+      ],
+      nativeBridgeWithFiles({ available: false, checked, opened: [] }),
+    );
+
+    render(<App services={services} />);
+
+    expect(await screen.findByRole("textbox", { name: "Description" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(checked).toContainEqual({ basePath: "/tmp/worktree", path: "scripts/run" });
+      expect(screen.queryByRole("button", { name: "Open script" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("copies interrupted run structured details without rendering them inline", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    const copied: string[] = [];
+    const services = createTestServices(
+      [
+        ...startupRoutes,
+        { method: "workflow.task.get", result: taskDetailResponseWithInterruptedScriptRun },
+        { method: "workflow.task.comment.list", result: commentListResponse },
+        { method: "workflow.task.activity.list", result: activityResponse },
+      ],
+      nativeBridgeWithClipboard(copied),
+    );
+
+    render(<App services={services} />);
+
+    const interrupted = await screen.findByRole("region", { name: "Interrupted" });
+    expect(within(interrupted).getByText("Script failed")).toBeInTheDocument();
+    expect(within(interrupted).queryByText(/permission denied/u)).not.toBeInTheDocument();
+
+    fireEvent.click(within(interrupted).getByRole("button", { name: "Copy interruption details" }));
+
+    await waitFor(() => {
+      expect(copied).toEqual(['{"kind":"script_failure","stderr":"permission denied"}']);
     });
   });
 
@@ -764,6 +841,35 @@ function installScrollIntoViewSpy(targets: HTMLElement[]): () => void {
   };
 }
 
+function nativeBridgeWithFiles({
+  available,
+  checked,
+  opened,
+}: Readonly<{
+  available: boolean;
+  checked: NativeFileTarget[];
+  opened: NativeFileTarget[];
+}>): NativeBridge {
+  const base = createBrowserNativeBridge();
+  return {
+    ...base,
+    capabilities: {
+      ...base.capabilities,
+      files: { ...base.capabilities.files, open: true, stat: true },
+    },
+    files: {
+      ...base.files,
+      async fileAvailable(target) {
+        checked.push(target);
+        return available;
+      },
+      async openFile(target) {
+        opened.push(target);
+      },
+    },
+  };
+}
+
 const workflow = {
   workflow_id: "workflow-1",
   display_name: "Delivery",
@@ -922,6 +1028,54 @@ const taskDetailNoInboxResponse = {
     ...taskDetailResponse.task,
     attention: [],
     transitions: [],
+  },
+};
+
+const taskDetailResponseWithScriptRun = {
+  task: {
+    ...taskDetailNoInboxResponse.task,
+    actions: { ...taskActions, can_interrupt: false },
+    runs: [
+      {
+        id: "run-script",
+        task_id: "task-1",
+        placement_id: "placement-script",
+        node_id: "node-script",
+        node_kind: "script",
+        script_path: "scripts/run",
+        session_id: "",
+        session_name: "",
+        role: "script",
+        status: "interrupted",
+        generation: 1,
+        waiting_ask_id: "",
+        started_at_unix_ms: 1,
+        completed_at_unix_ms: 0,
+        interrupted_at_unix_ms: 2,
+        interruption_reason: "script failed",
+        interruption_detail_json: '{"kind":"script_failure"}',
+      },
+    ],
+  },
+};
+
+const taskDetailResponseWithInterruptedScriptRun = {
+  task: {
+    ...taskDetailResponseWithScriptRun.task,
+    actions: { ...taskActions, can_interrupt: false, can_resume: true },
+    attention: [
+      {
+        ...attentionBase,
+        id: "attention-interrupted",
+        kind: "interrupted_run",
+        run_id: "run-script",
+        session_id: "",
+        ask_id: "",
+        task_transition_id: "",
+        message: "Script failed",
+        detail_json: '{"kind":"script_failure","stderr":"permission denied"}',
+      },
+    ],
   },
 };
 

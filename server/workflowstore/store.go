@@ -113,9 +113,37 @@ type NodeRecord struct {
 	SubagentRole       string
 	PromptTemplate     string
 	CompletionMode     string
+	ScriptPath         string
 	InputFields        []workflow.InputField
 	JoinInputProviders []workflow.JoinInputProvider
 	OutputFields       []workflow.OutputField
+}
+
+func workflowNodeFromRecord(node NodeRecord) (workflow.Node, error) {
+	return workflow.NewNode(
+		workflow.NodeIdentity{
+			WorkflowID:  node.WorkflowID,
+			ID:          node.ID,
+			Key:         node.Key,
+			DisplayName: node.DisplayName,
+			GroupID:     node.GroupID,
+		},
+		node.Kind,
+		workflow.NodeFields{
+			SubagentRole:       node.SubagentRole,
+			PromptTemplate:     node.PromptTemplate,
+			CompletionMode:     node.CompletionMode,
+			InputFields:        node.InputFields,
+			JoinInputProviders: node.JoinInputProviders,
+			OutputFields:       node.OutputFields,
+			ScriptPath: func() workflow.OptionalScriptPath {
+				if scriptPath, ok := workflow.PresentScriptPath(node.ScriptPath); ok {
+					return scriptPath
+				}
+				return workflow.AbsentScriptPath()
+			}(),
+		},
+	)
 }
 
 type NodeGroupRecord struct {
@@ -554,6 +582,7 @@ func (s *Store) AddNode(ctx context.Context, node NodeRecord) (int64, error) {
 		SubagentRole:           strings.TrimSpace(node.SubagentRole),
 		PromptTemplate:         strings.TrimSpace(node.PromptTemplate),
 		CompletionMode:         nodeCompletionMode(node),
+		ScriptPath:             nullableString(node.ScriptPath),
 		InputFieldsJson:        inputFields,
 		JoinInputProvidersJson: joinProviders,
 		OutputFieldsJson:       outputFields,
@@ -618,6 +647,7 @@ func (s *Store) UpdateNode(ctx context.Context, node NodeRecord) (int64, error) 
 		SubagentRole:           strings.TrimSpace(node.SubagentRole),
 		PromptTemplate:         strings.TrimSpace(node.PromptTemplate),
 		CompletionMode:         nodeCompletionMode(node),
+		ScriptPath:             nullableString(node.ScriptPath),
 		InputFieldsJson:        inputFields,
 		JoinInputProvidersJson: joinProviders,
 		OutputFieldsJson:       outputFields,
@@ -663,6 +693,15 @@ func nodeCompletionMode(node NodeRecord) string {
 		return ""
 	}
 	return mode
+}
+
+func executableNodeKind(kind workflow.NodeKind) bool {
+	switch kind {
+	case workflow.NodeKindAgent, workflow.NodeKindScript:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Store) AddNodeGroup(ctx context.Context, group NodeGroupRecord) (NodeGroupRecord, int64, error) {
@@ -1055,7 +1094,29 @@ func (s *Store) GetDefinition(ctx context.Context, workflowID workflow.WorkflowI
 			groupID = node.GroupID.String
 			groupMemberIDs[groupID] = append(groupMemberIDs[groupID], workflow.NodeID(node.ID))
 		}
-		def.Nodes = append(def.Nodes, workflow.Node{WorkflowID: workflow.WorkflowID(node.WorkflowID), ID: workflow.NodeID(node.ID), Key: workflow.ModelKey(node.NodeKey), DisplayName: node.DisplayName, Kind: workflow.NodeKind(node.Kind), GroupID: groupID, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, InputFields: inputFields, JoinInputProviders: joinProviders, OutputFields: outputFields})
+		scriptPath := ""
+		if node.ScriptPath.Valid {
+			scriptPath = node.ScriptPath.String
+		}
+		workflowNode, err := workflowNodeFromRecord(NodeRecord{
+			ID:                 workflow.NodeID(node.ID),
+			WorkflowID:         workflow.WorkflowID(node.WorkflowID),
+			Key:                workflow.ModelKey(node.NodeKey),
+			Kind:               workflow.NodeKind(node.Kind),
+			DisplayName:        node.DisplayName,
+			GroupID:            groupID,
+			SubagentRole:       node.SubagentRole,
+			PromptTemplate:     node.PromptTemplate,
+			CompletionMode:     node.CompletionMode,
+			ScriptPath:         scriptPath,
+			InputFields:        inputFields,
+			JoinInputProviders: joinProviders,
+			OutputFields:       outputFields,
+		})
+		if err != nil {
+			return workflow.Definition{}, WorkflowRecord{}, err
+		}
+		def.Nodes = append(def.Nodes, workflowNode)
 	}
 	for index := range def.NodeGroups {
 		def.NodeGroups[index].MemberNodeIDs = groupMemberIDs[def.NodeGroups[index].ID]

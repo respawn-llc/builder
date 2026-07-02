@@ -116,7 +116,7 @@ func TestJoinWaitsForAllBranchesAndRoutesSelectedProvider(t *testing.T) {
 	implA := nodeByKey(t, def, "impl_a")
 	implB := nodeByKey(t, def, "impl_b")
 
-	first, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRunsByNode[implB.ID], TransitionID: "join"})
+	first, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(implB)], TransitionID: "join"})
 	if err != nil {
 		t.Fatalf("CompleteRun branch b: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestJoinWaitsForAllBranchesAndRoutesSelectedProvider(t *testing.T) {
 		t.Fatalf("first branch result = %+v, want join waiting for missing branch", first)
 	}
 	selectedProviderValue := "  branch a\n"
-	second, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRunsByNode[implA.ID], TransitionID: "join", OutputValues: map[string]string{"joined": selectedProviderValue}})
+	second, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": selectedProviderValue}})
 	if err != nil {
 		t.Fatalf("CompleteRun branch a: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestJoinArrivalsKeepMultipleJoinEdgesForOneBranchPlacement(t *testing.T) {
 		ID:                     string(alternateProviderEdgeID),
 		TransitionGroupID:      "group-join-a-" + string(workflowID),
 		EdgeKey:                "join_a_alt",
-		TargetNodeID:           string(join.ID),
+		TargetNodeID:           string(workflow.NodeIDOf(join)),
 		ContextMode:            string(workflow.ContextModeNewSession),
 		ContextSourceKind:      string(workflow.ContextSourceImmediateSource),
 		PromptTemplate:         "",
@@ -180,7 +180,7 @@ func TestJoinArrivalsKeepMultipleJoinEdgesForOneBranchPlacement(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert alternate workflow edge: %v", err)
 	}
-	first, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRunsByNode[implA.ID], TransitionID: "join", OutputValues: map[string]string{"joined": "from alternate edge"}})
+	first, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "from alternate edge"}})
 	if err != nil {
 		t.Fatalf("CompleteRun branch a: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestJoinArrivalsKeepMultipleJoinEdgesForOneBranchPlacement(t *testing.T) {
 SELECT p.parallel_batch_transition_id
 FROM task_runs r
 JOIN task_node_placements p ON p.id = r.placement_id
-WHERE r.id = ?`, string(branchRunsByNode[implA.ID])).Scan(&batchID); err != nil {
+WHERE r.id = ?`, string(branchRunsByNode[workflow.NodeIDOf(implA)])).Scan(&batchID); err != nil {
 		t.Fatalf("query branch batch id: %v", err)
 	}
 	tx, err := store.db.BeginTx(ctx, nil)
@@ -207,7 +207,7 @@ WHERE r.id = ?`, string(branchRunsByNode[implA.ID])).Scan(&batchID); err != nil 
 		t.Fatalf("BeginTx: %v", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	arrivals, err := joinArrivals(ctx, store.queries.WithTx(tx), batchID, join.ID)
+	arrivals, err := joinArrivals(ctx, store.queries.WithTx(tx), batchID, workflow.NodeIDOf(join))
 	if err != nil {
 		t.Fatalf("joinArrivals: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestJoinDownstreamCanUseSelectedPriorContextSource(t *testing.T) {
 		WorkflowID:        workflowID,
 		TransitionGroupID: workflow.TransitionGroupID("group-join-synth-" + string(workflowID)),
 		Key:               "synth",
-		TargetNodeID:      synthNode.ID,
+		TargetNodeID:      workflow.NodeIDOf(synthNode),
 		ContextMode:       workflow.ContextModeContinueSession,
 		ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "plan"},
 		PromptTemplate:    "Synthesize {{.Params.joined}}.",
@@ -261,14 +261,14 @@ func TestJoinDownstreamCanUseSelectedPriorContextSource(t *testing.T) {
 	}
 	branchRuns := map[workflow.NodeID]workflow.RunID{}
 	for _, run := range runs {
-		if run.NodeID != planNode.ID {
+		if run.NodeID != workflow.NodeIDOf(planNode) {
 			branchRuns[run.NodeID] = run.ID
 		}
 	}
 	implA := nodeByKey(t, def, "impl_a")
 	implB := nodeByKey(t, def, "impl_b")
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRuns[implA.ID], TransitionID: "join", OutputValues: map[string]string{"joined": "a"}})
-	joined := completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRuns[implB.ID], TransitionID: "join"})
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "a"}})
+	joined := completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implB)], TransitionID: "join"})
 	if len(joined.RunIDs) != 1 {
 		t.Fatalf("joined result = %+v, want synth run", joined)
 	}
@@ -307,11 +307,11 @@ func TestDuplicateBranchArrivalIsRejectedAndDoesNotDuplicateJoin(t *testing.T) {
 			branchRunsByNode[run.NodeID] = run.ID
 		}
 	}
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRunsByNode[implA.ID], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a"}})
-	if _, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRunsByNode[implA.ID], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a again"}}); !errors.Is(err, ErrRunAlreadyCompleted) {
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a"}})
+	if _, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a again"}}); !errors.Is(err, ErrRunAlreadyCompleted) {
 		t.Fatalf("duplicate branch completion error = %v, want run already completed", err)
 	}
-	joined := completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRunsByNode[implB.ID], TransitionID: "join"})
+	joined := completeRun(t, ctx, store, CompleteRunRequest{RunID: branchRunsByNode[workflow.NodeIDOf(implB)], TransitionID: "join"})
 	if len(joined.PlacementIDs) != 1 || len(joined.RunIDs) != 1 {
 		t.Fatalf("join result = %+v, want one downstream placement/run", joined)
 	}
@@ -342,12 +342,12 @@ func TestUnrelatedFanoutBatchDoesNotSatisfyWaitingJoin(t *testing.T) {
 	}
 	implA := nodeByKey(t, def, "impl_a")
 	implB := nodeByKey(t, def, "impl_b")
-	waitingFirst := completeRun(t, ctx, store, CompleteRunRequest{RunID: waitingRuns[implA.ID], TransitionID: "join", OutputValues: map[string]string{"joined": "waiting a"}})
+	waitingFirst := completeRun(t, ctx, store, CompleteRunRequest{RunID: waitingRuns[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "waiting a"}})
 	if len(waitingFirst.PlacementIDs) != 0 || len(waitingFirst.RunIDs) != 0 {
 		t.Fatalf("waiting branch result = %+v, want no join yet", waitingFirst)
 	}
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: otherRuns[implA.ID], TransitionID: "join", OutputValues: map[string]string{"joined": "other a"}})
-	completeRun(t, ctx, store, CompleteRunRequest{RunID: otherRuns[implB.ID], TransitionID: "join"})
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: otherRuns[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "other a"}})
+	completeRun(t, ctx, store, CompleteRunRequest{RunID: otherRuns[workflow.NodeIDOf(implB)], TransitionID: "join"})
 	transitions, err := store.ListTransitions(ctx, waitingTask.ID)
 	if err != nil {
 		t.Fatalf("ListTransitions waiting task: %v", err)
@@ -357,7 +357,7 @@ func TestUnrelatedFanoutBatchDoesNotSatisfyWaitingJoin(t *testing.T) {
 			t.Fatalf("waiting task transitions = %+v, unrelated batch satisfied join", transitions)
 		}
 	}
-	joined := completeRun(t, ctx, store, CompleteRunRequest{RunID: waitingRuns[implB.ID], TransitionID: "join"})
+	joined := completeRun(t, ctx, store, CompleteRunRequest{RunID: waitingRuns[workflow.NodeIDOf(implB)], TransitionID: "join"})
 	if len(joined.PlacementIDs) != 1 || len(joined.RunIDs) != 1 {
 		t.Fatalf("waiting final join = %+v, want downstream run after own missing branch", joined)
 	}

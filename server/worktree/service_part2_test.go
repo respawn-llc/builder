@@ -305,6 +305,7 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, ".kent-test"))
 	initGitRepo(t, workspace)
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {

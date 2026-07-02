@@ -54,7 +54,7 @@ export type WorkflowGraphCanvasProps = Readonly<{
   keyboardScope?: "focused" | "global" | undefined;
   toolbarPositionStrategy?: "absolute" | "fixed" | undefined;
   onCopyText?: ((value: string) => Promise<void> | void) | undefined;
-  onAddNode?: ((kind: "agent" | "terminal") => void) | undefined;
+  onAddNode?: ((kind: "agent" | "script" | "terminal") => void) | undefined;
   onAddNodeToGroup?: ((nodeID: string, groupID: string) => void) | undefined;
   onConnectNodes?: ((sourceNodeID: string, targetNodeID: string) => void) | undefined;
   onCreateNodeGroup?: ((nodeID: string) => void) | undefined;
@@ -144,7 +144,7 @@ function WorkflowGraphCanvasInner({
 }: Readonly<{
   edges: readonly WorkflowGraphEdge[];
   keyboardScope: "focused" | "global";
-  onAddNode: ((kind: "agent" | "terminal") => void) | undefined;
+  onAddNode: ((kind: "agent" | "script" | "terminal") => void) | undefined;
   onAddNodeToGroup: ((nodeID: string, groupID: string) => void) | undefined;
   onConnectNodes: ((sourceNodeID: string, targetNodeID: string) => void) | undefined;
   onCopyText: CopyText;
@@ -429,7 +429,7 @@ function shouldHandleWorkflowGraphShortcut(
 }
 
 function isWorkflowAgentGraphNode(node: Node): node is WorkflowGraphWorkflowNode {
-  return node.data.entityKind === "node" && node.data.kind === "agent";
+  return node.data.entityKind === "node" && (node.data.kind === "agent" || node.data.kind === "script");
 }
 
 function relaxActiveGroupedNodeClamp(nodes: Node[], activeNodeID: string | null): Node[] {

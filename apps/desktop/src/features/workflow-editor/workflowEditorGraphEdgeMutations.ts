@@ -92,7 +92,7 @@ function nodeGroupFanoutConnection(
   targetNodeID: string,
 ): NodeGroupFanoutConnection | null {
   const target = draft.nodes.find((node) => node.id === targetNodeID);
-  if (target?.kind !== "agent" || target.groupID.trim() === "") {
+  if (target === undefined || !workflowBranchNodeKind(target.kind) || target.groupID.trim() === "") {
     return null;
   }
   const groupedBranchIDs = groupedSiblingBranchIDs(draft, target.groupID, targetNodeID);
@@ -132,9 +132,13 @@ function groupedSiblingBranchIDs(
 ): ReadonlySet<string> {
   return new Set(
     draft.nodes
-      .filter((node) => node.kind === "agent" && node.groupID === groupID && node.id !== targetNodeID)
+      .filter((node) => workflowBranchNodeKind(node.kind) && node.groupID === groupID && node.id !== targetNodeID)
       .map((node) => node.id),
   );
+}
+
+function workflowBranchNodeKind(kind: DraftWorkflowDefinition["nodes"][number]["kind"]): boolean {
+  return kind === "agent" || kind === "script";
 }
 
 function transitionGroupIDsForSourceNode(

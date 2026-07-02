@@ -761,6 +761,7 @@ func TestRebindWorkspaceNormalizesUniqueConflictRace(t *testing.T) {
 		t.Fatalf("MkdirAll newWorkspace: %v", err)
 	}
 	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, ".kent-test"))
 
 	cfg, err := config.Load(oldWorkspace, config.LoadOptions{})
 	if err != nil {
@@ -890,6 +891,7 @@ func TestRegisterWorkspaceBindingConvergesUnderConcurrentFirstRegistration(t *te
 	home := t.TempDir()
 	workspace := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, ".kent-test"))
 
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {

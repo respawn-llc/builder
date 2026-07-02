@@ -30,7 +30,7 @@ export function WorkflowGraphToolbar({
   onWorkflowInspect,
   positionStrategy = "fixed",
 }: Readonly<{
-  onAddNode: ((kind: "agent" | "terminal") => void) | undefined;
+  onAddNode: ((kind: "agent" | "script" | "terminal") => void) | undefined;
   onWorkflowInspect: () => void;
   positionStrategy?: "absolute" | "fixed" | undefined;
 }>) {
@@ -94,7 +94,7 @@ export function WorkflowGraphToolbar({
 function AddNodeTool({
   disabled,
   onAddNode,
-}: Readonly<{ disabled: boolean; onAddNode: ((kind: "agent" | "terminal") => void) | undefined }>) {
+}: Readonly<{ disabled: boolean; onAddNode: ((kind: "agent" | "script" | "terminal") => void) | undefined }>) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -266,6 +266,13 @@ function AddNodeTool({
           onClick={() => {
             closeMenu();
             onAddNode?.("agent");
+          }}
+        />
+        <CanvasMenuButton
+          label={t("workflowEditor.addScriptNode")}
+          onClick={() => {
+            closeMenu();
+            onAddNode?.("script");
           }}
         />
         <CanvasMenuButton

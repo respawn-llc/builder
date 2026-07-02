@@ -185,7 +185,7 @@ func TestApprovePendingJoinEdgesProgressesJoin(t *testing.T) {
 	}
 	implA := nodeByKey(t, def, "impl_a")
 	implB := nodeByKey(t, def, "impl_b")
-	first, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRuns[implA.ID], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a"}})
+	first, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a"}})
 	if err != nil {
 		t.Fatalf("CompleteRun branch a: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestApprovePendingJoinEdgesProgressesJoin(t *testing.T) {
 	if len(firstApproved.PlacementIDs) != 0 || len(firstApproved.RunIDs) != 0 {
 		t.Fatalf("first approval result = %+v, want join still waiting", firstApproved)
 	}
-	second, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRuns[implB.ID], TransitionID: "join"})
+	second, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implB)], TransitionID: "join"})
 	if err != nil {
 		t.Fatalf("CompleteRun branch b: %v", err)
 	}
@@ -232,11 +232,11 @@ func TestApprovePendingJoinWaitsForAllBranchApprovals(t *testing.T) {
 	}
 	implA := nodeByKey(t, def, "impl_a")
 	implB := nodeByKey(t, def, "impl_b")
-	first, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRuns[implA.ID], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a"}})
+	first, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implA)], TransitionID: "join", OutputValues: map[string]string{"joined": "branch a"}})
 	if err != nil {
 		t.Fatalf("CompleteRun branch a: %v", err)
 	}
-	second, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRuns[implB.ID], TransitionID: "join"})
+	second, err := store.CompleteRun(ctx, CompleteRunRequest{RunID: branchRuns[workflow.NodeIDOf(implB)], TransitionID: "join"})
 	if err != nil {
 		t.Fatalf("CompleteRun branch b: %v", err)
 	}
@@ -335,7 +335,7 @@ WHERE edge_key = 'done'
 	if err != nil {
 		t.Fatalf("ListPlacements: %v", err)
 	}
-	if len(placements) != 3 || placements[2].ID != approved.PlacementIDs[0] || placements[2].NodeID != originalDone.ID {
-		t.Fatalf("placements after graph edit approval = %+v, want snapshotted original target %s", placements, originalDone.ID)
+	if len(placements) != 3 || placements[2].ID != approved.PlacementIDs[0] || placements[2].NodeID != workflow.NodeIDOf(originalDone) {
+		t.Fatalf("placements after graph edit approval = %+v, want snapshotted original target %s", placements, workflow.NodeIDOf(originalDone))
 	}
 }

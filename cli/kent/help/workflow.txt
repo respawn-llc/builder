@@ -1,8 +1,8 @@
 Usage of kent workflow:
   kent workflow create [--description <text>] [--json] <name>
   kent workflow list [--page-size <n>] [--page-token <token>] [--json]
-  kent workflow node add <workflow> --key <node-key> --kind start|agent|join|terminal [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--json]
-  kent workflow node update <workflow> <node-key> [--key <node-key>] [--kind start|agent|join|terminal] [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--json]
+  kent workflow node add <workflow> --key <node-key> --kind start|agent|script|join|terminal [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
+  kent workflow node update <workflow> <node-key> [--key <node-key>] [--kind start|agent|script|join|terminal] [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
   kent workflow edge add <workflow> --from <source-node-key> --transition <transition-id> --edge-key <edge-key> --to <target-node-key> --context <mode> [--requires-approval] [--context-source immediate_source|node:<node-key>] [--prompt <text>] [--transition-description <text>] [--param <key>=<description> ...] [--json]
   kent workflow edge update <workflow> <edge-id> [--transition <transition-id>] [--transition-display-name <name>] [--transition-description <text>] [--edge-key <edge-key>] [--to <target-node-key>] [--context <mode>] [--requires-approval] [--context-source immediate_source|node:<node-key>] [--prompt <text>] [--param <key>=<description> ...] [--clear-params] [--json]
   kent workflow link <project> <workflow> [--default] [--json]
@@ -13,7 +13,7 @@ Usage of kent workflow:
 
 What This Does:
   Manage workflow definitions, graph nodes/edges, and project workflow links through the Kent server API.
-  Workflows describe durable agent pipelines: tasks start at a start node, agent nodes execute Kent runs, and terminal nodes mark completion.
+  Workflows describe durable automation pipelines: tasks start at a start node, agent nodes execute Kent runs, script nodes execute local server-side executables, and terminal nodes mark completion.
   Use `workflow create`, add nodes/edges, link a workflow to a project, then create/start tasks with `kent task`.
   Workflow references may be exact workflow ids or exact workflow names.
   Default output is readable plaintext; pass --json for machine-readable output suited to scripting.

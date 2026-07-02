@@ -52,7 +52,11 @@ func currentWorkflowGraphSavePrepared(ctx context.Context, q *sqlitegen.Queries,
 		if node.GroupID.Valid {
 			groupID = node.GroupID.String
 		}
-		prepared.nodes = append(prepared.nodes, NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflow.WorkflowID(node.WorkflowID), Key: workflow.ModelKey(node.NodeKey), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: groupID, GroupKey: groupKeyByID[groupID], SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, InputFields: inputFields, JoinInputProviders: joinProviders, OutputFields: outputFields})
+		scriptPath := ""
+		if node.ScriptPath.Valid {
+			scriptPath = node.ScriptPath.String
+		}
+		prepared.nodes = append(prepared.nodes, NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflow.WorkflowID(node.WorkflowID), Key: workflow.ModelKey(node.NodeKey), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: groupID, GroupKey: groupKeyByID[groupID], SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, ScriptPath: scriptPath, InputFields: inputFields, JoinInputProviders: joinProviders, OutputFields: outputFields})
 	}
 	for _, group := range transitionGroups {
 		prepared.transitionGroups = append(prepared.transitionGroups, TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflow.WorkflowID(group.WorkflowID), SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description})

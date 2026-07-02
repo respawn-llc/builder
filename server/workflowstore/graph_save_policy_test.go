@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"core/server/workflow"
@@ -220,6 +222,30 @@ func TestWorkflowGraphSaveAllowsUnrelatedEditsWhileTasksExist(t *testing.T) {
 		}
 	})
 
+	t.Run("interrupted task", func(t *testing.T) {
+		ctx, store, binding := newTestStoreContext(t)
+		workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+		task := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Interrupted", Body: "Body"})
+		started := startTask(t, ctx, store, task.ID)
+		if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
+			t.Fatalf("InterruptRun: %v", err)
+		}
+		def, record, err := store.GetDefinition(ctx, workflowID)
+		if err != nil {
+			t.Fatalf("GetDefinition: %v", err)
+		}
+		req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+		req.Nodes = renameWorkflowGraphSaveNode(req.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Agent Renamed")
+
+		result, err := store.SaveWorkflowGraph(ctx, req)
+		if err != nil {
+			t.Fatalf("SaveWorkflowGraph interrupted task: %v", err)
+		}
+		if !result.Saved || len(result.Blockers) != 0 {
+			t.Fatalf("interrupted-task graph save = %+v, want saved without active-work blockers", result)
+		}
+	})
+
 	t.Run("terminal only task", func(t *testing.T) {
 		ctx, store, binding := newTestStoreContext(t)
 		workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
@@ -252,7 +278,7 @@ func TestWorkflowGraphSaveEditPolicyBlocksStartNodeChanges(t *testing.T) {
 	}
 	start := nodeByKind(t, def, workflow.NodeKindStart)
 	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-	req.Nodes = changeWorkflowGraphSaveNodeKind(req.Nodes, start.ID, workflow.NodeKindAgent)
+	req.Nodes = changeWorkflowGraphSaveNodeKind(req.Nodes, workflow.NodeIDOf(start), workflow.NodeKindAgent)
 
 	result, err := store.SaveWorkflowGraph(ctx, req)
 	if err != nil {
@@ -277,7 +303,7 @@ func TestWorkflowGraphSaveEditPolicyBlocksLastTerminalRemovalOrKindChange(t *tes
 	}
 	done := nodeByKind(t, def, workflow.NodeKindTerminal)
 	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
-	req.Nodes = changeWorkflowGraphSaveNodeKind(req.Nodes, done.ID, workflow.NodeKindAgent)
+	req.Nodes = changeWorkflowGraphSaveNodeKind(req.Nodes, workflow.NodeIDOf(done), workflow.NodeKindAgent)
 
 	result, err := store.SaveWorkflowGraph(ctx, req)
 	if err != nil {
@@ -440,6 +466,40 @@ func TestWorkflowGraphSaveBlocksTransitionContractChangeWhileSourceRunInterrupte
 	}
 }
 
+func TestWorkflowGraphSaveBlocksTransitionContractChangeWhileScriptRunActive(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
+	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		t.Fatalf("create script dir: %v", err)
+	}
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
+	startTask(t, ctx, store, task.ID)
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	doneEdge := edgeByKey(t, def, "done")
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
+		edge.Parameters = []workflow.Parameter{{Key: "summary", Description: "Summary."}}
+	})
+
+	result, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph active script transition contract update: %v", err)
+	}
+	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
+		t.Fatalf("active script transition contract update = %+v, want active_transition_contract_changed blocker", result)
+	}
+}
+
 func TestWorkflowGraphSaveBlocksUnsafeTransitionContractChangeWithPendingApproval(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createApprovalWorkflow(t, ctx, store)
@@ -529,11 +589,11 @@ func TestWorkflowPerEntityMutationsUseGraphEditPolicy(t *testing.T) {
 			t.Fatalf("GetDefinition: %v", err)
 		}
 		start := nodeByKind(t, def, workflow.NodeKindStart)
-		_, err = store.UpdateNode(ctx, NodeRecord{ID: start.ID, WorkflowID: workflowID, Key: start.Key, Kind: workflow.NodeKindAgent, DisplayName: start.DisplayName})
+		_, err = store.UpdateNode(ctx, NodeRecord{ID: workflow.NodeIDOf(start), WorkflowID: workflowID, Key: workflow.NodeKey(start), Kind: workflow.NodeKindAgent, DisplayName: workflow.NodeDisplayName(start)})
 		if !workflowGraphEditPolicyErrorHasBlocker(err, "start_node_changed") {
 			t.Fatalf("UpdateNode start error = %v, want start_node_changed policy blocker", err)
 		}
-		if err := store.DeleteNode(ctx, start.ID); !workflowGraphEditPolicyErrorHasBlocker(err, "start_node_changed") {
+		if err := store.DeleteNode(ctx, workflow.NodeIDOf(start)); !workflowGraphEditPolicyErrorHasBlocker(err, "start_node_changed") {
 			t.Fatalf("DeleteNode start error = %v, want start_node_changed policy blocker", err)
 		}
 	})
@@ -546,11 +606,11 @@ func TestWorkflowPerEntityMutationsUseGraphEditPolicy(t *testing.T) {
 			t.Fatalf("GetDefinition: %v", err)
 		}
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
-		_, err = store.UpdateNode(ctx, NodeRecord{ID: done.ID, WorkflowID: workflowID, Key: done.Key, Kind: workflow.NodeKindAgent, DisplayName: done.DisplayName})
+		_, err = store.UpdateNode(ctx, NodeRecord{ID: workflow.NodeIDOf(done), WorkflowID: workflowID, Key: workflow.NodeKey(done), Kind: workflow.NodeKindAgent, DisplayName: workflow.NodeDisplayName(done)})
 		if !workflowGraphEditPolicyErrorHasBlocker(err, "last_terminal_changed") {
 			t.Fatalf("UpdateNode terminal error = %v, want last_terminal_changed policy blocker", err)
 		}
-		if err := store.DeleteNode(ctx, done.ID); !workflowGraphEditPolicyErrorHasBlocker(err, "last_terminal_changed") {
+		if err := store.DeleteNode(ctx, workflow.NodeIDOf(done)); !workflowGraphEditPolicyErrorHasBlocker(err, "last_terminal_changed") {
 			t.Fatalf("DeleteNode terminal error = %v, want last_terminal_changed policy blocker", err)
 		}
 	})
@@ -656,7 +716,7 @@ func TestWorkflowGraphSaveDetachesRemovedHistoricalNodeReferences(t *testing.T) 
 		t.Fatalf("GetDefinition after historical node removal: %v", err)
 	}
 	for _, node := range updated.Nodes {
-		if node.ID == agentID {
+		if workflow.NodeIDOf(node) == agentID {
 			t.Fatalf("removed historical node %q still appears in workflow definition", agentID)
 		}
 	}
