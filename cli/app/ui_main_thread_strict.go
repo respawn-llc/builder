@@ -42,6 +42,7 @@ func (m *uiModel) checkTUIBlockingOperation(kind, detail string) {
 		message += " (" + detail + ")"
 	}
 	m.logf("tui.main_thread_violation err=%q", message)
+	panic(message)
 }
 
 func (m *uiModel) assertUITerminalMainThread(kind string) {

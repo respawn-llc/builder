@@ -35,6 +35,12 @@ type OngoingScrollbackBufferImpl struct {
 
 type OngoingScrollbackBufferOption func(*OngoingScrollbackBufferImpl)
 
+type AssistantMarkdownRenderer func(source string, width int) []string
+
+func WithAssistantMarkdownRenderer(_ AssistantMarkdownRenderer) OngoingScrollbackBufferOption {
+	return func(*OngoingScrollbackBufferImpl) {}
+}
+
 type stableSteerRequest struct {
 	line string
 }
@@ -55,8 +61,9 @@ type stableHoldoffOperation struct {
 }
 
 type stableOutputRow struct {
-	operation string
-	text      string
+	operation           string
+	text                string
+	appendTerminalBreak bool
 }
 
 var errOngoingScrollbackBufferClosed = errors.New("native scrollback buffer is closed")
@@ -513,7 +520,10 @@ func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(del
 	if payload == "" {
 		return nil
 	}
-	return buffer.writeStablePayloadWithLiveErasedLocked("streamMarkdownAssistantContent", payload)
+	return buffer.writeStableRowsWithLiveErasedLocked([]stableOutputRow{{
+		operation: "streamMarkdownAssistantContent",
+		text:      payload,
+	}}, false, false)
 }
 
 func (buffer *OngoingScrollbackBufferImpl) clearAssistantStreamStateLocked() {
@@ -545,31 +555,13 @@ func (buffer *OngoingScrollbackBufferImpl) writeStableRowsWithLiveErasedLocked(r
 	return err
 }
 
-func (buffer *OngoingScrollbackBufferImpl) writeStablePayloadWithLiveErasedLocked(operation string, payload string) error {
-	err := error(nil)
-	shouldRestoreLive := false
-	if liveArea := buffer.liveArea; liveArea != nil {
-		if liveArea.renderedLines > 0 {
-			err = liveArea.erasePhysicalLocked()
-			shouldRestoreLive = err == nil
-		} else if liveArea.pendingPhysicalRender && len(liveArea.frame.Lines) > 0 {
-			shouldRestoreLive = true
-		}
-	}
-	if liveArea := buffer.liveArea; liveArea != nil && shouldRestoreLive {
-		liveArea.pendingPhysicalRender = true
-	}
-	if err == nil {
-		written, writeErr := io.WriteString(buffer.stableWriter, payload)
-		err = buffer.stableWriteResult(operation, payload, written, writeErr)
-	}
-	return err
-}
-
 func (buffer *OngoingScrollbackBufferImpl) writeStableRowsDirectLocked(rows []stableOutputRow, continueAfterError bool) error {
 	var firstErr error
 	for _, row := range rows {
-		stablePayload := row.text + terminalLineBreak
+		stablePayload := row.text
+		if row.appendTerminalBreak {
+			stablePayload += terminalLineBreak
+		}
 		written, writeErr := io.WriteString(buffer.stableWriter, stablePayload)
 		if err := buffer.stableWriteResult(row.operation, stablePayload, written, writeErr); firstErr == nil && err != nil {
 			firstErr = err
@@ -584,7 +576,7 @@ func (buffer *OngoingScrollbackBufferImpl) writeStableRowsDirectLocked(rows []st
 func stableOutputRows(operation string, rows []string) []stableOutputRow {
 	out := make([]stableOutputRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, stableOutputRow{operation: operation, text: row})
+		out = append(out, stableOutputRow{operation: operation, text: row, appendTerminalBreak: true})
 	}
 	return out
 }
