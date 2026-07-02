@@ -1982,6 +1982,10 @@ func (s *recordingRuntimeStore) GetRunStartContext(context.Context, workflow.Run
 	panic("GetRunStartContext not expected")
 }
 
+func (s *recordingRuntimeStore) GetRunCompletionContext(context.Context, workflow.RunID) (workflowstore.RunCompletionContext, error) {
+	panic("GetRunCompletionContext not expected")
+}
+
 func (s *recordingRuntimeStore) AttachRunSession(context.Context, workflow.RunID, int64, string) error {
 	panic("AttachRunSession not expected")
 }
