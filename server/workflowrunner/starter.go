@@ -465,7 +465,9 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 		}
 	}
 	warnings := []string{}
-	plan, warnings, err = launch.ApplyRunPromptOverrides(plan, overrides, auth.EmptyState())
+	plan, warnings, err = launch.ApplyRunPromptOverridesWithPolicy(plan, overrides, auth.EmptyState(), launch.RunPromptOverridePolicy{
+		AllowLockedSessionRoleOverride: true,
+	})
 	if err != nil {
 		return launch.SessionPlan{}, nil, err
 	}

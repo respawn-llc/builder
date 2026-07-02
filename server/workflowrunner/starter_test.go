@@ -1487,6 +1487,45 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	}
 }
 
+func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer("{}"))
+	containerDir := filepath.Join(filepath.Join(fixture.cfg.PersistenceRoot, "projects"), fixture.projectID, "sessions")
+	source, err := session.Create(containerDir, filepath.Base(containerDir), fixture.cfg.WorkspaceRoot, fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("create source session: %v", err)
+	}
+	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+
+	plan, _, err := fixture.starter.planSession(context.Background(), workflowstore.RunStartContext{
+		ContextMode:     workflow.ContextModeContinueSession,
+		SourceSessionID: source.Meta().SessionID,
+		Task: workflowstore.TaskRecord{
+			ID:        "task-1",
+			ProjectID: fixture.projectID,
+			ShortID:   "RUN-1",
+			Title:     "Task title",
+		},
+		Workflow:       workflowstore.WorkflowRecord{ID: "workflow-1"},
+		Node:           workflowstore.NodeRecord{ID: "node-1", Key: "plan", SubagentRole: "coder"},
+		PromptTemplate: "Continue.",
+	})
+	if err != nil {
+		t.Fatalf("planSession: %v", err)
+	}
+	if plan.ActiveSettings.Model != "gpt-5.5" {
+		t.Fatalf("model = %q, want locked model", plan.ActiveSettings.Model)
+	}
+	reopened, err := session.Open(source.Dir(), fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("open source session: %v", err)
+	}
+	if got := reopened.Meta().Continuation; got == nil || got.AgentRole != "coder" {
+		t.Fatalf("continuation = %+v, want coder role persisted", got)
+	}
+}
+
 func TestWorkflowRuntimeStartFailsWhenRoleDisappearedAfterTaskStart(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer("{}"))
 	delete(fixture.cfg.Settings.Subagents, "coder")

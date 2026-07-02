@@ -51,7 +51,7 @@ func TestApplyRunPromptOverridesRejectsDerivedContextWindowBelowMinimum(t *testi
 		settings.PreSubmitCompactionLeadTokens = 1_000
 	}
 
-	_, _, err := applyRunPromptOverridesWithBudgetApplier(plan, serverapi.RunPromptOverrides{Model: "local-model"}, auth.EmptyState(), applier)
+	_, _, err := applyRunPromptOverridesWithBudgetApplier(plan, serverapi.RunPromptOverrides{Model: "local-model"}, auth.EmptyState(), RunPromptOverridePolicy{}, applier)
 	if err == nil {
 		t.Fatal("expected derived context window below minimum to fail")
 	}

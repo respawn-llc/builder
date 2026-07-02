@@ -250,12 +250,20 @@ func persistedRoleProviderID(settings config.Settings) string {
 }
 
 func ApplyRunPromptOverrides(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State) (SessionPlan, []string, error) {
-	return applyRunPromptOverridesWithBudgetApplier(plan, overrides, authState, applyDerivedModelContextBudgetOverrides)
+	return applyRunPromptOverridesWithBudgetApplier(plan, overrides, authState, RunPromptOverridePolicy{}, applyDerivedModelContextBudgetOverrides)
+}
+
+type RunPromptOverridePolicy struct {
+	AllowLockedSessionRoleOverride bool
+}
+
+func ApplyRunPromptOverridesWithPolicy(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, policy RunPromptOverridePolicy) (SessionPlan, []string, error) {
+	return applyRunPromptOverridesWithBudgetApplier(plan, overrides, authState, policy, applyDerivedModelContextBudgetOverrides)
 }
 
 type modelContextBudgetApplier func(settings *config.Settings, explicitSources map[string]string, originalModel string, allowModelOverride bool)
 
-func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
+func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides serverapi.RunPromptOverrides, authState auth.State, policy RunPromptOverridePolicy, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
 	if !overrides.HasAny() {
 		return plan, nil, nil
 	}
@@ -284,7 +292,7 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 	if err != nil {
 		return SessionPlan{}, nil, fmt.Errorf("%w: %v", errInvalidAgentRole, err)
 	}
-	if roleOverride.Present && plan.ModelContractLocked && continuationAgentRole != roleOverride.Role {
+	if roleOverride.Present && plan.ModelContractLocked && continuationAgentRole != roleOverride.Role && !policy.AllowLockedSessionRoleOverride {
 		return SessionPlan{}, nil, fmt.Errorf("%w: current=%q requested=%q", ErrLockedAgentRoleChange, continuationAgentRole, roleOverride.Role)
 	}
 	if roleOverride.Present {
