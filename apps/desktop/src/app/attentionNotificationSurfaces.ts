@@ -79,6 +79,13 @@ export async function deliverPendingSurface({
   surfaced: Map<string, SurfaceRecord>;
   t: Translate;
 }>): Promise<SurfaceOutcome> {
+  await logger.append("info", "Resolving attention notification surface.", {
+    focused: String(focused),
+    hasNativeNotifications: String(hasNativeNotifications),
+    notificationID: attentionNotificationIDKey(notification.id),
+    notificationKind: notification.kind,
+    notificationRevision: String(notification.revision),
+  });
   if (focused || !hasNativeNotifications) {
     removeActiveNotification(notifications, logger, attentionNotificationIDKey(notification.id));
     showToast(notification);
@@ -235,13 +242,23 @@ async function deliverNativePendingSurface({
   surfaced: Map<string, SurfaceRecord>;
   t: Translate;
 }>): Promise<SurfaceOutcome> {
+  const id = attentionNotificationIDKey(notification.id);
+  await logger.append("info", "Sending native attention notification.", {
+    notificationID: id,
+    notificationKind: notification.kind,
+    notificationRevision: String(notification.revision),
+  });
   try {
     await notifications.notify(nativeNotification(notification, t));
   } catch (error) {
     await handleNativeDeliveryError({ error, logger, notification, surfaced });
     return { status: "done" };
   }
-  const id = attentionNotificationIDKey(notification.id);
+  await logger.append("info", "Native attention notification accepted.", {
+    notificationID: id,
+    notificationKind: notification.kind,
+    notificationRevision: String(notification.revision),
+  });
   const latest = surfaced.get(id);
   if (latest?.state !== "surfacing") {
     removeActiveNotification(notifications, logger, id);

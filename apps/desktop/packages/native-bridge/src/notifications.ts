@@ -1,9 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import {
-  isPermissionGranted as tauriIsPermissionGranted,
-  requestPermission as tauriRequestPermission,
-} from "@tauri-apps/plugin-notification";
+import { z } from "zod";
 
 import { tauriPlatformSupportsNativeNotifications, type NativePlatform } from "./capabilities";
 import { NativeNotificationIDMapper } from "./notificationIds";
@@ -84,14 +81,15 @@ type TauriNotificationRequest = Readonly<{
 }>;
 
 type TauriNotificationBackend = Readonly<{
-  isPermissionGranted(): Promise<boolean>;
-  requestPermission(): Promise<NotificationPermission>;
+  permissionState(): Promise<NativeNotificationPermission>;
+  requestPermission(): Promise<NativeNotificationPermission>;
   send(notification: TauriNotificationRequest): Promise<void>;
   onActivated(handler: (activation: NativeNotificationActivation) => void): Promise<NativeNotificationUnlisten>;
   removeActive(backendID: number): Promise<void>;
 }>;
 
 const tauriActivationEvent = "app://attention-notification-activated";
+const unknownRecordSchema = z.record(z.string(), z.unknown());
 
 export function createUnavailableNativeNotifications(): NativeNotificationBridge {
   return {
@@ -206,15 +204,16 @@ function createTauriDesktopNativeNotifications(backend: TauriNotificationBackend
   const mapper = new NativeNotificationIDMapper();
   return {
     async permissionState(): Promise<NativeNotificationPermission> {
-      return (await backend.isPermissionGranted()) ? "granted" : "prompt";
+      return backend.permissionState();
     },
     async requestPermission(): Promise<NativeNotificationPermission> {
-      return webPermission(await backend.requestPermission());
+      return backend.requestPermission();
     },
     async notify(message: NativeNotification): Promise<void> {
       validateNativeNotification(message);
-      if (!(await backend.isPermissionGranted())) {
-        throw new Error("Native notification permission is not granted.");
+      const permission = await backend.permissionState();
+      if (permission !== "granted") {
+        throw new Error(`Native notification permission is ${permission}.`);
       }
       await backend.send({
         backendId: mapper.resolveBackendID(message.id),
@@ -233,20 +232,32 @@ function createTauriDesktopNativeNotifications(backend: TauriNotificationBackend
 
 function defaultTauriNotificationBackend(): TauriNotificationBackend {
   return {
-    isPermissionGranted: tauriIsPermissionGranted,
     async onActivated(handler: (activation: NativeNotificationActivation) => void): Promise<NativeNotificationUnlisten> {
       return listen<unknown>(tauriActivationEvent, (event) => {
         handler(nativeNotificationActivation(event.payload));
       });
     },
+    async permissionState(): Promise<NativeNotificationPermission> {
+      return nativeNotificationPermission(await invoke("attention_notification_permission_state"));
+    },
     async removeActive(backendID: number): Promise<void> {
       await invoke("remove_attention_notification", { backendId: backendID });
     },
-    requestPermission: tauriRequestPermission,
+    async requestPermission(): Promise<NativeNotificationPermission> {
+      return nativeNotificationPermission(await invoke("request_attention_notification_permission"));
+    },
     async send(notification: TauriNotificationRequest): Promise<void> {
       await invoke("send_attention_notification", { notification });
     },
   };
+}
+
+function nativeNotificationPermission(value: unknown): NativeNotificationPermission {
+  const permission = stringValue(value);
+  if (permission === "denied" || permission === "granted" || permission === "prompt" || permission === "unsupported") {
+    return permission;
+  }
+  throw new Error("Native notification permission value is unsupported.");
 }
 
 function nativeNotificationActivation(value: unknown): NativeNotificationActivation {
@@ -305,7 +316,7 @@ function nativeNotificationFocus(
 
 function stringProperty(value: unknown, property: string): string | null {
   const propertyValue = unknownProperty(value, property);
-  return typeof propertyValue === "string" ? propertyValue : null;
+  return stringValue(propertyValue);
 }
 
 function stringArrayProperty(value: unknown, property: string): string[] {
@@ -313,12 +324,17 @@ function stringArrayProperty(value: unknown, property: string): string[] {
   if (!Array.isArray(propertyValue)) {
     return [];
   }
-  const strings = propertyValue.filter((item): item is string => typeof item === "string" && item.length > 0);
+  const strings = propertyValue.map(stringValue).filter((item): item is string => item !== null && item.length > 0);
   return strings.length === propertyValue.length ? strings : [];
 }
 
 function unknownProperty(value: unknown, property: string): unknown {
-  return typeof value === "object" && value !== null ? Reflect.get(value, property) : undefined;
+  const parsed = unknownRecordSchema.safeParse(value);
+  return parsed.success ? parsed.data[property] : undefined;
+}
+
+function stringValue(value: unknown): string | null {
+  return Object.prototype.toString.call(value) === "[object String]" ? String(value) : null;
 }
 
 function readWebPermission(

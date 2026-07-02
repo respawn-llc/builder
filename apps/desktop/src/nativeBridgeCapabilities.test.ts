@@ -7,6 +7,7 @@ import {
   createTauriNativeBridge,
   createTauriCapabilities,
   normalizeNativePlatform,
+  type NativeNotificationPermission,
 } from "@app/native-bridge";
 import { vi } from "vitest";
 
@@ -72,10 +73,10 @@ function tauriNotificationBackend(permissionGranted: boolean) {
   const sent: SentNotification[] = [];
   const removed: number[] = [];
   const backend = {
-    async isPermissionGranted(): Promise<boolean> {
-      return permissionGranted;
+    async permissionState(): Promise<NativeNotificationPermission> {
+      return permissionGranted ? "granted" : "denied";
     },
-    async requestPermission(): Promise<NotificationPermission> {
+    async requestPermission(): Promise<NativeNotificationPermission> {
       return permissionGranted ? "granted" : "denied";
     },
     async send(options: SentNotification): Promise<void> {
@@ -241,7 +242,7 @@ describe("native bridge capabilities", () => {
     const tauri = tauriNotificationBackend(false);
     const bridge = createTauriNativeNotifications({ platform: "macos", backend: tauri.backend });
 
-    await expect(bridge.permissionState()).resolves.toBe("prompt");
+    await expect(bridge.permissionState()).resolves.toBe("denied");
     await expect(
       bridge.notify({
         body: "Body",

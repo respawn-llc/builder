@@ -249,11 +249,26 @@ export function AttentionNotificationController() {
     void bridge.notifications
       .permissionState()
       .then(async (permission) => {
-        const resolvedPermission =
-          permission === "prompt" ? await bridge.notifications.requestPermission() : permission;
-        if (resolvedPermission === "denied") {
+        let resolvedPermission = permission;
+        await logger.append("info", "Native notification permission state resolved.", {
+          permission,
+        });
+        if (permission === "prompt") {
+          try {
+            resolvedPermission = await bridge.notifications.requestPermission();
+            await logger.append("info", "Native notification permission request completed.", {
+              permission: resolvedPermission,
+            });
+          } catch (error) {
+            await logger.append("warn", "Requesting native notification permission failed.", {
+              error: errorMessage(error),
+            });
+            return;
+          }
+        }
+        if (resolvedPermission === "denied" || resolvedPermission === "unsupported") {
           status.push({
-            id: "attention-native-permission-denied",
+            id: `attention-native-permission-${resolvedPermission}`,
             tone: "warning",
             title: t("app.attention.permissionDeniedTitle"),
             body: t("app.attention.permissionDeniedBody"),

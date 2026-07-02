@@ -88,7 +88,7 @@ cmd_build() {
 	mkdir -p "$dist_dir"
 	local dist_abs; dist_abs="$(cd "$dist_dir" && pwd)"
 
-	bash "$repo_root/scripts/build-desktop.sh" --version "$version" ${skip_install:+$skip_install}
+	bash "$repo_root/scripts/build-desktop.sh" --version "$version" --require-updater-key ${skip_install:+$skip_install}
 
 	local bundle="$repo_root/apps/desktop/src-tauri/target/release/bundle"
 	case "$(uname -s)" in

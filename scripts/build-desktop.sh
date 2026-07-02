@@ -8,7 +8,7 @@ cd "$repo_root"
 
 usage() {
 	cat <<'USAGE'
-Usage: scripts/build-desktop.sh [--version vX.Y.Z|X.Y.Z] [--skip-install] [-- <tauri build args>]
+Usage: scripts/build-desktop.sh [--version vX.Y.Z|X.Y.Z] [--skip-install] [--require-updater-key] [-- <tauri build args>]
 
 Builds the Kent desktop (Tauri) app bundle. The bundle version is stamped from
 VERSION (or KENT_VERSION / --version) at build time via a `tauri build --config`
@@ -18,6 +18,10 @@ stay at their 0.0.0 placeholder and are never hand-edited per release.
 Options:
   --version       Override the bundle version. Defaults to KENT_VERSION or VERSION.
   --skip-install  Skip the workspace dependency install step.
+  --require-updater-key
+                  Fail when updater artifact signing is unavailable. Release
+                  packaging uses this; local bundle QA disables updater artifacts
+                  instead of requiring a private key.
   -h, --help      Show this help.
 
 Arguments after `--` are forwarded to `tauri build`, e.g.:
@@ -31,6 +35,17 @@ read_version() {
 		version="$(tr -d '[:space:]' <VERSION)"
 	fi
 	printf '%s' "${version#v}"
+}
+
+tauri_args_select_bundles() {
+	for arg in "$@"; do
+		case "$arg" in
+		--bundles | -b | --bundles=*)
+			return 0
+			;;
+		esac
+	done
+	return 1
 }
 
 # Compile the Icon Composer .icon (the macOS 26 liquid-glass app icon source)
@@ -85,6 +100,7 @@ compile_app_icon() {
 
 version=""
 skip_install=0
+require_updater_key=0
 tauri_args=()
 
 while [[ $# -gt 0 ]]; do
@@ -95,6 +111,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--skip-install)
 		skip_install=1
+		shift
+		;;
+	--require-updater-key)
+		require_updater_key=1
 		shift
 		;;
 	--)
@@ -129,6 +149,11 @@ if ! command -v pnpm >/dev/null 2>&1; then
 	exit 2
 fi
 
+case "${CI:-}" in
+1) export CI=true ;;
+0) export CI=false ;;
+esac
+
 if [ "$skip_install" != "1" ]; then
 	pnpm --dir apps install --frozen-lockfile
 fi
@@ -137,41 +162,68 @@ echo "Building Kent desktop bundle version ${version}" >&2
 
 compile_app_icon
 
+if [ "$(uname -s)" = "Darwin" ] && [ "$require_updater_key" != "1" ] && ! tauri_args_select_bundles "${tauri_args[@]}"; then
+	tauri_args=(--bundles app "${tauri_args[@]}")
+	echo "Local macOS build defaults to the standalone .app bundle; release packaging builds installers." >&2
+fi
+
+# Updater artifact signing. tauri.conf.json sets bundle.createUpdaterArtifacts, so
+# `tauri build` signs the updater artifacts and fails without the updater private
+# key. Prefer an already-exported TAURI_SIGNING_PRIVATE_KEY (CI secret); otherwise
+# fall back to the gitignored local key. Local bundle QA does not need updater
+# artifacts, so when neither key exists we disable updater artifact generation via
+# the Tauri config merge. Release packaging opts into a hard failure.
+updater_key="$repo_root/.tauri/kent-desktop-updater.key"
+create_updater_artifacts=true
+if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+	if [ -f "$updater_key" ]; then
+		TAURI_SIGNING_PRIVATE_KEY="$(cat "$updater_key")"
+		export TAURI_SIGNING_PRIVATE_KEY
+		export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+	elif [ "$require_updater_key" = "1" ]; then
+		echo "Updater signing key missing. Set TAURI_SIGNING_PRIVATE_KEY (CI secret) or place the private key at .tauri/kent-desktop-updater.key." >&2
+		exit 2
+	else
+		create_updater_artifacts=false
+		echo "Updater signing key missing; building local desktop bundle without updater artifacts." >&2
+	fi
+fi
+
 # Inject the macOS liquid-glass Assets.car into bundle.icon when it was generated
 # above. It is intentionally absent from the committed bundle.icon so Linux/Windows
 # builds — which neither generate nor consume the gitignored .car — don't choke on
 # a missing/non-image icon path.
 icon_car="apps/desktop/src-tauri/icons/Assets.car"
 conf="apps/desktop/src-tauri/tauri.conf.json"
+if ! command -v jq >/dev/null 2>&1; then
+	echo "jq is required to build the desktop app." >&2
+	exit 2
+fi
 if [ -f "$icon_car" ]; then
-	if ! command -v jq >/dev/null 2>&1; then
-		echo "jq is required to inject the macOS app icon into the build config." >&2
-		exit 2
-	fi
-	build_config="$(jq -cn \
-		--arg v "$version" \
-		--argjson icon "$(jq -c '.bundle.icon + ["icons/Assets.car"]' "$conf")" \
-		'{version: $v, bundle: {icon: $icon}}')"
+	icon_config="$(jq -c '.bundle.icon + ["icons/Assets.car"]' "$conf")"
 else
-	build_config="{\"version\":\"${version}\"}"
+	icon_config="$(jq -c '.bundle.icon' "$conf")"
 fi
-
-# Updater artifact signing. tauri.conf.json sets bundle.createUpdaterArtifacts, so
-# `tauri build` signs the updater artifacts and fails without the updater private
-# key. Prefer an already-exported TAURI_SIGNING_PRIVATE_KEY (CI secret); otherwise
-# fall back to the gitignored local key. Fail clearly when neither is available.
-updater_key="$repo_root/.tauri/kent-desktop-updater.key"
-if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-	if [ -f "$updater_key" ]; then
-		TAURI_SIGNING_PRIVATE_KEY="$(cat "$updater_key")"
-		export TAURI_SIGNING_PRIVATE_KEY
-		export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
-	else
-		echo "Updater signing key missing. Set TAURI_SIGNING_PRIVATE_KEY (CI secret) or place the private key at .tauri/kent-desktop-updater.key." >&2
-		exit 2
-	fi
-fi
+build_config="$(jq -cn \
+	--arg v "$version" \
+	--argjson icon "$icon_config" \
+	--argjson createUpdaterArtifacts "$create_updater_artifacts" \
+	'{version: $v, bundle: {icon: $icon, createUpdaterArtifacts: $createUpdaterArtifacts}}')"
 
 pnpm --dir apps/desktop exec tauri build \
 	--config "$build_config" \
 	${tauri_args[@]+"${tauri_args[@]}"}
+
+if [ "$(uname -s)" = "Darwin" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+	build_profile="release"
+	for arg in "${tauri_args[@]}"; do
+		if [ "$arg" = "--debug" ] || [ "$arg" = "-d" ]; then
+			build_profile="debug"
+		fi
+	done
+	app_bundle="apps/desktop/src-tauri/target/${build_profile}/bundle/macos/Kent.app"
+	if [ -d "$app_bundle" ]; then
+		codesign --force --sign - --entitlements apps/desktop/src-tauri/entitlements.plist "$app_bundle"
+		echo "Signed local macOS app bundle with ad-hoc identity sh.kent." >&2
+	fi
+fi

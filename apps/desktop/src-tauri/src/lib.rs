@@ -56,6 +56,15 @@ struct AttentionNotificationRequest {
     target: serde_json::Value,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AttentionNotificationPermission {
+    Denied,
+    Granted,
+    Prompt,
+    Unsupported,
+}
+
 #[derive(Default)]
 struct AttentionNotificationState {
     active: Arc<Mutex<HashMap<u32, AttentionNotificationRecord>>>,
@@ -227,21 +236,87 @@ fn remove_attention_notification(
     remove_attention_notification_backend(&state, backend_id)
 }
 
+#[tauri::command]
+fn attention_notification_permission_state() -> Result<AttentionNotificationPermission, String> {
+    attention_native_notification_permission_state()
+}
+
+#[tauri::command]
+fn request_attention_notification_permission() -> Result<AttentionNotificationPermission, String> {
+    request_attention_native_notification_permission()
+}
+
+#[cfg(target_os = "macos")]
+fn attention_native_notification_permission_state(
+) -> Result<AttentionNotificationPermission, String> {
+    use mac_usernotifications::{blocking, AuthorizationStatus};
+
+    let settings = blocking::get_notification_settings()
+        .map_err(|error| format!("Read native notification permission failed: {error}"))?;
+    Ok(match settings.authorization_status {
+        AuthorizationStatus::Authorized
+        | AuthorizationStatus::Ephemeral
+        | AuthorizationStatus::Provisional => AttentionNotificationPermission::Granted,
+        AuthorizationStatus::Denied => AttentionNotificationPermission::Denied,
+        AuthorizationStatus::NotDetermined => AttentionNotificationPermission::Prompt,
+        AuthorizationStatus::Unknown => AttentionNotificationPermission::Unsupported,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn request_attention_native_notification_permission(
+) -> Result<AttentionNotificationPermission, String> {
+    let granted = mac_usernotifications::blocking::request_auth()
+        .map_err(|error| format!("Request native notification permission failed: {error}"))?;
+    if granted {
+        Ok(AttentionNotificationPermission::Granted)
+    } else {
+        Ok(AttentionNotificationPermission::Denied)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn attention_native_notification_permission_state(
+) -> Result<AttentionNotificationPermission, String> {
+    Ok(AttentionNotificationPermission::Granted)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn request_attention_native_notification_permission(
+) -> Result<AttentionNotificationPermission, String> {
+    Ok(AttentionNotificationPermission::Granted)
+}
+
 fn attention_native_notification(
     backend_id: u32,
     title: &str,
     body: &str,
 ) -> notify_rust::Notification {
     let mut notification = notify_rust::Notification::new();
-    notification
-        .appname("Kent")
-        .summary(title)
-        .body(body)
-        .action("default", "Open")
-        .action("open", "Open");
+    notification.appname("Kent").summary(title).body(body);
     configure_attention_notification_identity(&mut notification, backend_id);
+    configure_attention_notification_actions(&mut notification);
+    configure_attention_notification_sound(&mut notification);
     notification
 }
+
+#[cfg(target_os = "macos")]
+fn configure_attention_notification_actions(_notification: &mut notify_rust::Notification) {}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_attention_notification_actions(notification: &mut notify_rust::Notification) {
+    notification
+        .action("default", "Open")
+        .action("open", "Open");
+}
+
+#[cfg(target_os = "macos")]
+fn configure_attention_notification_sound(notification: &mut notify_rust::Notification) {
+    notification.sound_name("");
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_attention_notification_sound(_notification: &mut notify_rust::Notification) {}
 
 #[cfg(target_os = "macos")]
 fn show_attention_notification(
@@ -547,6 +622,8 @@ pub fn run() {
             append_gui_log,
             send_attention_notification,
             remove_attention_notification,
+            attention_notification_permission_state,
+            request_attention_notification_permission,
             apply_native_window_glass,
             set_native_window_glass_tint,
         ])
