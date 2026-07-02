@@ -7,7 +7,6 @@ import (
 
 type runtimeWiring struct {
 	turnQueueHook         turnQueueHook
-	askNotificationHook   askNotificationHook
 	terminalFocus         *terminalFocusState
 	runtimeEvents         <-chan clientui.Event
 	askEvents             <-chan askEvent

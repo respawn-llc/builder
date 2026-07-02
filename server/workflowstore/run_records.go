@@ -26,6 +26,24 @@ func runRecordFromTaskRun(row sqlitegen.TaskRunRecord) RunRecord {
 	}
 }
 
+func runRecordFromStartedRecoveryCandidate(row sqlitegen.ListStartedWorkflowRunRecoveryCandidatesRow) RunRecord {
+	return RunRecord{
+		ID:                      workflow.RunID(row.ID),
+		TaskID:                  workflow.TaskID(row.TaskID),
+		PlacementID:             workflow.PlacementID(row.PlacementID),
+		NodeID:                  workflow.NodeID(row.NodeID.String),
+		SessionID:               row.SessionID.String,
+		Generation:              row.RunGeneration,
+		StartedAt:               row.StartedAtUnixMs,
+		CompletedAt:             row.CompletedAtUnixMs,
+		InterruptedAt:           row.InterruptedAtUnixMs,
+		InterruptionReason:      row.InterruptionReason,
+		WaitingAskID:            row.WaitingAskID,
+		EffectiveCompletionMode: strings.TrimSpace(row.EffectiveCompletionMode),
+		InvalidCompletions:      row.InvalidCompletionCount,
+	}
+}
+
 func runRecordFromClaimedTaskRun(row sqlitegen.ClaimWorkflowRunRow) RunRecord {
 	return RunRecord{
 		ID:                      workflow.RunID(row.ID),

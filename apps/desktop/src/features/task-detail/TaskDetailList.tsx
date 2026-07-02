@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 
 import type { ActivityItem, TaskComment, TaskDetail } from "../../api";
 import { errorMessage } from "../../api/errors";
+import type { TaskDetailInitialFocus } from "../../app/sidebarContext";
+import { taskDetailInitialFocusRequestKey } from "../../app/taskDetailInitialFocus";
 import { useSidebarHeaderOffset } from "../../app/sidebarHeaderOffset";
 import { ErrorState, LoadingState, VirtualizedInfiniteList } from "../../ui";
 import { ActivityRow, CommentComposer, CommentRow } from "./TaskDetailActivity";
@@ -55,7 +57,7 @@ export function TaskDetailList({
   disabled: boolean;
   draft: TaskDraft;
   editingComment: Readonly<{ id: string; body: string }> | null;
-  initialFocus?: "firstQuestion" | undefined;
+  initialFocus?: TaskDetailInitialFocus | undefined;
   mutations: ReturnType<typeof useTaskMutations>;
   newCommentBody: string;
   onDraftChange: (draft: TaskDraft) => void;
@@ -106,8 +108,12 @@ export function TaskDetailList({
       estimateSize={() => 160}
       getItemKey={taskDetailListItemKey}
       hasNextPage={paging.hasNextPage}
-      initialScrollKey={initialFocus === "firstQuestion" ? "inbox" : undefined}
-      initialScrollRequestKey={initialFocus === "firstQuestion" ? detail.id : undefined}
+      initialScrollKey={initialFocus !== undefined ? "inbox" : undefined}
+      initialScrollRequestKey={
+        initialFocus !== undefined
+          ? taskDetailInitialFocusRequestKey(detail.id, initialFocus)
+          : undefined
+      }
       isFetchingNextPage={paging.isFetchingNextPage}
       items={listItems}
       loadingLabel={t("app.loadingMore")}
@@ -157,7 +163,7 @@ type TaskDetailListRowProps = Readonly<{
   draft: TaskDraft;
   editingComment: Readonly<{ id: string; body: string }> | null;
   errorTitle: string;
-  initialFocus?: "firstQuestion" | undefined;
+  initialFocus?: TaskDetailInitialFocus | undefined;
   item: TaskDetailListItem;
   loadingTitle: string;
   mutations: ReturnType<typeof useTaskMutations>;
@@ -266,7 +272,7 @@ function InboxRow({
       currentVersion={detail.workflowVersion}
       detail={detail}
       disabled={disabled}
-      focusFirstQuestion={initialFocus === "firstQuestion"}
+      initialFocus={initialFocus}
       mutations={mutations}
       onQuestionSelectionChange={onQuestionSelectionChange}
       questionSelections={questionSelections}

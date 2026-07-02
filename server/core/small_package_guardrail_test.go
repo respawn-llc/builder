@@ -108,6 +108,7 @@ var allowedSmallPackages = map[string]string{
 	"cli/app/internal/runtimestate":      "DTO-only reducer boundary; package-level tests enforce stdlib plus shared/clientui imports only",
 	"cli/app/internal/startupconfig":     "narrow CLI startup config-resolution seam after absorbing serve-command env construction",
 	"server/bootstrap":                   "composition support boundary shared by core and startup; merging into startup creates a cycle",
+	"server/attentionnotify":             "transient attention notification broker and batch tracker owner kept separate from registry/workflow packages to avoid making them notification state owners",
 	"server/metadata/lifecyclegen":       "repo-owned generator command for the narrow SQLite lifecycle generated seam",
 	"server/metadata/sqlitelifecyclegen": "generated SQLite lifecycle seam isolated from sqlc output because sqlc does not emit transaction-scoped PRAGMA statements",
 	"server/projectview":                 "cohesive project read-model service owner with substantial service tests",

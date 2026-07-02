@@ -1,10 +1,28 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { vi } from "vitest";
 
+import { dismissStatusToast, showStatusToast } from "../ui";
+import type * as uiModule from "../ui";
 import { StatusProvider } from "./statusStore";
 import { useStatusController } from "./useStatusController";
 
-describe("StatusProvider test surface", () => {
-  it("renders title-only notices without body text", async () => {
+vi.mock("../ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof uiModule>();
+  return {
+    ...actual,
+    dismissStatusToast: vi.fn(),
+    showStatusToast: vi.fn(),
+    Toaster: () => null,
+  };
+});
+
+describe("StatusProvider", () => {
+  beforeEach(() => {
+    vi.mocked(dismissStatusToast).mockClear();
+    vi.mocked(showStatusToast).mockClear();
+  });
+
+  it("delegates pushed notices to the status toast adapter", () => {
     render(
       <StatusProvider>
         <TitleOnlyNoticeButton />
@@ -13,23 +31,23 @@ describe("StatusProvider test surface", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Show" }));
 
-    const surface = screen.getByTestId("sonner-test-surface");
-    expect(await within(surface).findByText("Copied", { selector: "strong" })).toBeInTheDocument();
-    expect(within(surface).queryByText("Copied", { selector: "p" })).not.toBeInTheDocument();
+    expect(showStatusToast).toHaveBeenCalledWith({
+      id: "title-only",
+      title: "Copied",
+      tone: "success",
+    });
   });
 
-  it("renders empty-body notices without body text", async () => {
+  it("delegates dismissals to the status toast adapter", () => {
     render(
       <StatusProvider>
-        <EmptyBodyNoticeButton />
+        <DismissNoticeButton />
       </StatusProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Show" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
-    const surface = screen.getByTestId("sonner-test-surface");
-    expect(await within(surface).findByText("Copied", { selector: "strong" })).toBeInTheDocument();
-    expect(within(surface).queryByText("Copied", { selector: "p" })).not.toBeInTheDocument();
+    expect(dismissStatusToast).toHaveBeenCalledWith("title-only");
   });
 });
 
@@ -51,21 +69,16 @@ function TitleOnlyNoticeButton() {
   );
 }
 
-function EmptyBodyNoticeButton() {
-  const { push } = useStatusController();
+function DismissNoticeButton() {
+  const { dismiss } = useStatusController();
   return (
     <button
       onClick={() => {
-        push({
-          body: "",
-          id: "empty-body",
-          title: "Copied",
-          tone: "success",
-        });
+        dismiss("title-only");
       }}
       type="button"
     >
-      Show
+      Dismiss
     </button>
   );
 }

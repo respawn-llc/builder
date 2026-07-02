@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "../../api/errors";
 import { useOpenExternalLink } from "../../app/nativeHooks";
+import type { TaskDetailInitialFocus } from "../../app/sidebarContext";
 import { ErrorState, LoadingState } from "../../ui";
 import { TaskDetailContent } from "./TaskDetailContent";
 import { useTaskActivity, useTaskComments, useTaskDetail } from "./useTaskDetailData";
@@ -9,7 +10,7 @@ import { useTaskActivity, useTaskComments, useTaskDetail } from "./useTaskDetail
 export type TaskDetailSurfaceProps = Readonly<{
   taskId: string;
   enabled: boolean;
-  initialFocus?: "firstQuestion" | undefined;
+  initialFocus?: TaskDetailInitialFocus | undefined;
   onMutated?: (() => void) | undefined;
 }>;
 

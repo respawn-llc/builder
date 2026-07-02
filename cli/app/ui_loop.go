@@ -54,7 +54,6 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 		WithUICommandRegistry(commandRegistry),
 		WithUIHasOtherSessions(wiring.hasOtherSessionsKnown, wiring.hasOtherSessions),
 		WithUITurnQueueHook(wiring.turnQueueHook),
-		WithUIAskNotificationHook(wiring.askNotificationHook),
 		WithUIProcessClient(newUIProcessClientWithReads(wiring.processViews, wiring.processControls)),
 		WithUIWorktreeClient(wiring.worktrees),
 		WithUIPromptHistory(wiring.promptHistory),

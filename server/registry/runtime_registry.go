@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"core/server/attentionnotify"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/runtimeops"
@@ -36,6 +37,8 @@ type RuntimeRegistry struct {
 	nextStartID              uint64
 	operations               *runtimeops.Coordinator
 	readModels               *runtimeactivity.CoordinatorCache
+	attentionBroker          *attentionnotify.Broker
+	questionBatches          *attentionnotify.QuestionBatchTracker
 }
 
 type runStartReservation struct {
@@ -713,11 +716,15 @@ func (r *RuntimeRegistry) BeginPendingPrompt(sessionID string, req askquestion.A
 	if entry == nil {
 		return
 	}
-	snapshot, ok := entry.pendingPrompts.Begin(req)
+	_, ok := entry.pendingPrompts.Begin(req, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
+		entry.PublishPendingPrompt(id, snapshot, eventType, r.nextReadModelVersion(id))
+		if eventType == pendingPromptEventPending {
+			r.publishAttentionPending(id, snapshot)
+		}
+	})
 	if !ok {
 		return
 	}
-	entry.PublishPendingPrompt(id, snapshot, pendingPromptEventPending, r.nextReadModelVersion(id))
 	r.publishCurrentRuntimeActivity(id)
 }
 
@@ -734,6 +741,7 @@ func (r *RuntimeRegistry) CompletePendingPrompt(sessionID string, requestID stri
 	if ok {
 		entry.PublishPendingPrompt(id, snapshot, pendingPromptEventResolved, r.nextReadModelVersion(id))
 		r.publishCurrentRuntimeActivity(id)
+		r.publishAttentionResolved(id, snapshot)
 	}
 }
 
@@ -759,7 +767,11 @@ func (r *RuntimeRegistry) AwaitPromptResponse(ctx context.Context, sessionID str
 	}
 	return entry.pendingPrompts.Await(ctx, req, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
 		entry.PublishPendingPrompt(id, snapshot, eventType, r.nextReadModelVersion(id))
-		r.publishCurrentRuntimeActivity(id)
+		if eventType == pendingPromptEventPending {
+			r.publishAttentionPending(id, snapshot)
+		} else if eventType == pendingPromptEventResolved {
+			r.publishAttentionResolved(id, snapshot)
+		}
 	})
 }
 
@@ -773,7 +785,15 @@ func (r *RuntimeRegistry) SubmitPromptResponse(sessionID string, resp askquestio
 		return guardErr
 	}
 	defer guard.Release()
-	submitErr := guard.SubmitPromptResponse(resp, err)
+	submitErr := guard.entry.pendingPrompts.Submit(resp, err, func(snapshot PendingPromptSnapshot, eventType pendingPromptEventType) {
+		guard.entry.PublishPendingPrompt(id, snapshot, eventType, r.nextReadModelVersion(id))
+		r.publishCurrentRuntimeActivity(id)
+		if eventType == pendingPromptEventPending {
+			r.publishAttentionPending(id, snapshot)
+		} else if eventType == pendingPromptEventResolved {
+			r.publishAttentionResolved(id, snapshot)
+		}
+	})
 	if submitErr == nil {
 		r.publishCurrentRuntimeActivity(id)
 	}

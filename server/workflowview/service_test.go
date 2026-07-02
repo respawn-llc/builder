@@ -1087,7 +1087,7 @@ func TestInterruptedTaskStatusUsesAttentionKind(t *testing.T) {
 	if detail.Status.Kind != "interrupted" || len(detail.Status.AttentionTypes) != 1 || detail.Status.AttentionTypes[0] != attentionKindInterruptedRun {
 		t.Fatalf("detail status = %+v", detail.Status)
 	}
-	if len(detail.Attention) != 1 || detail.Attention[0].Kind != attentionKindInterruptedRun || detail.Attention[0].TaskID != string(task.ID) || detail.Attention[0].RunID != "" {
+	if len(detail.Attention) != 1 || detail.Attention[0].Kind != attentionKindInterruptedRun || detail.Attention[0].TaskID != string(task.ID) || detail.Attention[0].RunID != string(started.RunID) {
 		t.Fatalf("detail attention = %+v", detail.Attention)
 	}
 }
@@ -1514,7 +1514,7 @@ func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 	for _, item := range resp.Items {
 		kinds[item.Kind] = item
 	}
-	if kinds["approval"].TaskTransitionID != string(pendingApproval.TransitionID) || kinds["question"].AskID != "ask-attention" || kinds["interrupted_run"].TaskID != string(interruptedTask.ID) || kinds["interrupted_run"].RunID != "" {
+	if kinds["approval"].TaskTransitionID != string(pendingApproval.TransitionID) || kinds["question"].AskID != "ask-attention" || kinds["interrupted_run"].TaskID != string(interruptedTask.ID) || kinds["interrupted_run"].RunID != string(interruptedStarted.RunID) || kinds["interrupted_run"].Message != "Run interrupted: manual: role missing" {
 		t.Fatalf("attention items = %+v", resp.Items)
 	}
 	firstPage, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID, PageSize: 1}, workflow.StaticRoleResolver{"coder": true})
@@ -1592,6 +1592,79 @@ func TestAttentionListFillsPagePastDroppedCandidatesAndScopesTokenToProject(t *t
 	// A token minted for this project must be rejected for a different project.
 	if _, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: "project-other", PageSize: 1, PageToken: page.NextPageToken}, workflow.StaticRoleResolver{"coder": true}); err == nil {
 		t.Fatal("expected attention page token to be rejected for a different project")
+	}
+}
+
+func TestAttentionListExcludesUserInterruptedRuns(t *testing.T) {
+	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
+	view, err := New(store)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Interrupted by user", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if _, err := workflowStore.ClaimRun(ctx, started.RunID, 0); err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if _, err := workflowStore.InterruptTaskRuns(ctx, task.ID, "", ""); err != nil {
+		t.Fatalf("InterruptTaskRuns: %v", err)
+	}
+
+	resp, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("ListAttention: %v", err)
+	}
+	for _, item := range resp.Items {
+		if item.Kind == "interrupted_run" {
+			t.Fatalf("user-interrupted run surfaced as attention: %+v", resp.Items)
+		}
+	}
+}
+
+func TestAttentionListExcludesRuntimeCanceledRuns(t *testing.T) {
+	ctx, store, workflowStore, binding, _ := newWorkflowViewTestContextService(t)
+	view, err := New(store)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Runtime canceled", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if err := workflowStore.InterruptRunGeneration(ctx, started.RunID, claimed.Generation, "workflow_runtime_canceled", "{}"); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+
+	resp, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("ListAttention: %v", err)
+	}
+	for _, item := range resp.Items {
+		if item.Kind == "interrupted_run" {
+			t.Fatalf("runtime-canceled run surfaced as attention: %+v", resp.Items)
+		}
 	}
 }
 

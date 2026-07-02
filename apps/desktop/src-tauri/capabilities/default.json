@@ -5,6 +5,7 @@
   "windows": ["main", "native-dialog-*"],
   "permissions": [
     "opener:default",
+    "notification:default",
     "updater:default",
     "process:allow-restart",
     "store:default",
@@ -17,6 +18,7 @@
     "core:webview:allow-create-webview-window",
     "core:window:allow-close",
     "core:window:allow-get-all-windows",
+    "core:window:allow-is-focused",
     "core:window:allow-outer-position",
     "core:window:allow-outer-size",
     "core:window:allow-scale-factor",
