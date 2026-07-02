@@ -949,6 +949,44 @@ func TestBoardProjectsManualMoveTargetsFromServerPermissions(t *testing.T) {
 	}
 }
 
+func TestBoardHidesManualMoveTargetsForStartedRun(t *testing.T) {
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if _, err := workflowStore.ClaimRun(ctx, started.RunID, 0); err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+
+	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	activeColumn := workflowViewColumnByKey(t, board, "agent")
+	activePage, err := view.ListBoardNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: activeColumn.Node.NodeID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("ListBoardNodeCards active: %v", err)
+	}
+	if len(activePage.Cards) != 1 {
+		t.Fatalf("node cards = %+v, want one active card", activePage.Cards)
+	}
+	if activePage.Cards[0].Status.Kind != "running" || !activePage.Cards[0].Actions.CanInterrupt {
+		t.Fatalf("running card status/actions = %+v/%+v", activePage.Cards[0].Status, activePage.Cards[0].Actions)
+	}
+	if got := activePage.Cards[0].Actions.ManualMoveTargetNodeIDs; len(got) != 0 {
+		t.Fatalf("manual move targets = %+v, want none while run is started", got)
+	}
+}
+
 func TestManualMoveTargetsExcludeEdgesWithDerivedRequiredProvisionFields(t *testing.T) {
 	def := serverapi.WorkflowDefinition{
 		Workflow: serverapi.WorkflowRecord{ID: "workflow-1", Name: "Workflow"},

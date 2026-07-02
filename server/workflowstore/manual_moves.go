@@ -26,6 +26,9 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
+	if err := s.rejectManualMoveDuringActiveRun(ctx, req.TaskID); err != nil {
+		return ManualMoveResult{}, err
+	}
 	def, workflowRecord, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
 	if err != nil {
 		return ManualMoveResult{}, err
@@ -60,6 +63,9 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 			group, edge, ok = startResetManualMoveContract(sourceNode, targetNode)
 		}
 		if !ok && req.AllowMissingEdge {
+			if executableNodeKind(targetNode.Kind()) {
+				return ManualMoveResult{}, ErrManualMoveExecutableTargetNeedsEdge
+			}
 			group, edge, ok = missingEdgeManualMoveContract(sourceNode, targetNode)
 		}
 		if !ok {
@@ -189,6 +195,20 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 		return ManualMoveResult{}, err
 	}
 	return result, nil
+}
+
+func (s *Store) rejectManualMoveDuringActiveRun(ctx context.Context, taskID workflow.TaskID) error {
+	runs, err := s.queries.ListInterruptTaskRunCandidates(ctx, sqlitegen.ListInterruptTaskRunCandidatesParams{
+		TaskID:    string(taskID),
+		SessionID: "",
+	})
+	if err != nil {
+		return err
+	}
+	if len(runs) > 0 {
+		return ErrManualMoveDuringActiveRun
+	}
+	return nil
 }
 
 func terminalArchiveManualMoveContract(sourceNode workflow.Node, targetNode workflow.Node) (workflow.TransitionGroup, workflow.Edge, bool) {

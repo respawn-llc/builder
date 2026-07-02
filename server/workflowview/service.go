@@ -1978,7 +1978,7 @@ func taskStatusAndActions(task sqlitegen.TaskRecord, summary serverapi.WorkflowT
 	}
 	actions.CanStart = task.CanceledAtUnixMs == 0 && backlog && !waitingApproval && len(runningRunIDs) == 0 && len(waitingAskRunIDs) == 0
 	taskActive := task.CanceledAtUnixMs == 0
-	if taskActive {
+	if taskActive && len(runningRunIDs) == 0 {
 		actions.ManualMoveTargetNodeIDs = manualMoveTargetNodeIDs(def, placements, nodeKinds)
 	}
 	actions.CanInterrupt = taskActive && len(runningRunIDs) >= 1

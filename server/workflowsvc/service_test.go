@@ -579,7 +579,7 @@ func TestServiceStartTaskAutomationNotifiesScheduler(t *testing.T) {
 	}
 }
 
-func TestServiceMoveTaskAutoApprovesMissingEdgeOverrideAndStartsAgent(t *testing.T) {
+func TestServiceMoveTaskRejectsMissingEdgeExecutableOverride(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
@@ -589,30 +589,17 @@ func TestServiceMoveTaskAutoApprovesMissingEdgeOverrideAndStartsAgent(t *testing
 		t.Fatalf("GetWorkflow: %v", err)
 	}
 	implementID := workflowServiceNodeIDByKey(t, def.Definition, "implement")
-	notifier := &recordingSchedulerNotifier{}
-	finalizer := &recordingWorkflowAttentionFinalizer{}
-	service.schedulerWake = notifier
-	service.attentionFinalizer = finalizer
 
-	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: implementID, AllowMissingEdge: true, AutoApprove: true, OutputValues: map[string]string{"prior_summary": "replacement"}})
-	if err != nil {
-		t.Fatalf("MoveWorkflowTask: %v", err)
-	}
-	if moved.State != "approved" || len(moved.PlacementIDs) != 1 || len(moved.RunIDs) != 1 {
-		t.Fatalf("auto-approved override = %+v, want approved placement and run", moved)
-	}
-	if notifier.count != 1 {
-		t.Fatalf("scheduler notifications = %d, want 1", notifier.count)
-	}
-	if len(finalizer.results) != 1 || finalizer.results[0].TransitionID != workflow.TransitionID(moved.TransitionID) || finalizer.results[0].State != "approved" {
-		t.Fatalf("attention finalizer results = %+v", finalizer.results)
+	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: implementID, AllowMissingEdge: true, AutoApprove: true, OutputValues: map[string]string{"prior_summary": "replacement"}})
+	if !errors.Is(err, workflowstore.ErrManualMoveExecutableTargetNeedsEdge) {
+		t.Fatalf("MoveWorkflowTask error = %v, want executable edge requirement", err)
 	}
 	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || string(runs[0].NodeID) != implementID || runs[0].AutomationRequestedAt == 0 {
-		t.Fatalf("runs after auto-approved override = %+v, want requested implement automation", runs)
+	if len(runs) != 0 {
+		t.Fatalf("runs after rejected override = %+v, want none", runs)
 	}
 }
 
@@ -877,14 +864,14 @@ func TestServiceMoveTaskAutoApproveSurfacesCommittedPendingMoveWhenApprovalFails
 	if err != nil {
 		t.Fatalf("GetWorkflow: %v", err)
 	}
-	implementID := workflowServiceNodeIDByKey(t, def.Definition, "implement")
+	planID := workflowServiceNodeIDByKey(t, def.Definition, "plan")
 	finalizer := &recordingWorkflowAttentionFinalizer{}
 	service.attentionFinalizer = finalizer
 	service.approve = func(context.Context, workflow.TransitionID) (workflowstore.CompleteRunResult, error) {
 		return workflowstore.CompleteRunResult{}, errors.New("approval failed")
 	}
 
-	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: implementID, AllowMissingEdge: true, AutoApprove: true, OutputValues: map[string]string{"prior_summary": "replacement"}})
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true, AutoApprove: true})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
 	}
@@ -912,10 +899,10 @@ func TestServiceMoveTaskAutoApprovedReplacementResolvesOldPendingApproval(t *tes
 	if err != nil {
 		t.Fatalf("GetWorkflow: %v", err)
 	}
-	implementID := workflowServiceNodeIDByKey(t, def.Definition, "implement")
+	planID := workflowServiceNodeIDByKey(t, def.Definition, "plan")
 	finalizer := &recordingWorkflowAttentionFinalizer{}
 	service.attentionFinalizer = finalizer
-	oldMove, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: implementID, AllowMissingEdge: true, OutputValues: map[string]string{"prior_summary": "old"}})
+	oldMove, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
 	if err != nil {
 		t.Fatalf("initial MoveWorkflowTask: %v", err)
 	}
@@ -923,7 +910,7 @@ func TestServiceMoveTaskAutoApprovedReplacementResolvesOldPendingApproval(t *tes
 		t.Fatalf("initial move = %+v, want pending approval", oldMove)
 	}
 
-	replacement, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: implementID, AllowMissingEdge: true, AutoApprove: true, OutputValues: map[string]string{"prior_summary": "replacement"}})
+	replacement, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true, AutoApprove: true})
 	if err != nil {
 		t.Fatalf("replacement MoveWorkflowTask: %v", err)
 	}
@@ -1095,10 +1082,10 @@ func TestServiceCancelTaskResolvesPendingApprovalAttention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkflow: %v", err)
 	}
-	implementID := workflowServiceNodeIDByKey(t, def.Definition, "implement")
+	planID := workflowServiceNodeIDByKey(t, def.Definition, "plan")
 	finalizer := &recordingWorkflowAttentionFinalizer{}
 	service.attentionFinalizer = finalizer
-	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: implementID, AllowMissingEdge: true})
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
 	}
@@ -1159,10 +1146,10 @@ func TestServiceDeleteTaskResolvesPendingApprovalAttention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkflow: %v", err)
 	}
-	implementID := workflowServiceNodeIDByKey(t, def.Definition, "implement")
+	planID := workflowServiceNodeIDByKey(t, def.Definition, "plan")
 	finalizer := &recordingWorkflowAttentionFinalizer{}
 	service.attentionFinalizer = finalizer
-	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: implementID, AllowMissingEdge: true})
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
 	}
@@ -1187,10 +1174,10 @@ func TestServiceDeleteWorkflowResolvesPendingApprovalAttention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkflow: %v", err)
 	}
-	implementID := workflowServiceNodeIDByKey(t, def.Definition, "implement")
+	planID := workflowServiceNodeIDByKey(t, def.Definition, "plan")
 	finalizer := &recordingWorkflowAttentionFinalizer{}
 	service.attentionFinalizer = finalizer
-	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: implementID, AllowMissingEdge: true})
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
 	}
