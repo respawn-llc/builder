@@ -132,26 +132,25 @@ func validateRunPromptAgentRole(settings config.Settings, rawRole string, kentSe
 		return nil
 	}
 	roleName := override.Role
-	role, exists := settings.Subagents[roleName]
-	if !exists && roleName != config.BuiltInSubagentRoleFast {
+	lookup := config.LookupSubagentRole(settings, roleName)
+	if lookup.Status != config.SubagentRoleLookupPresent {
 		return fmt.Errorf("%w: %s. It may have been removed by the user during the session. Available roles: [%s]", errUnrecognizedSubagentRole, strconv.Quote(roleName), strings.Join(config.AvailableSubagentRoleNames(settings, kentSessionCaller), ", "))
 	}
-	if kentSessionCaller && !config.SubagentRoleCallable(role) {
+	if kentSessionCaller && !config.SubagentRoleCallable(lookup.Role) {
 		return errNonCallableSubagentRole
 	}
 	return nil
 }
 
 func validateContextAgentRoleCallable(settings config.Settings, rawRole string) error {
-	roleName := config.NormalizeSubagentSelector(rawRole)
-	if roleName == "" {
+	lookup := config.LookupSubagentRole(settings, rawRole)
+	if lookup.Status == config.SubagentRoleLookupInvalid {
 		return nil
 	}
-	role, exists := settings.Subagents[roleName]
-	if !exists && roleName != config.BuiltInSubagentRoleFast {
-		return fmt.Errorf("%w: %s. It may have been removed by the user during the session. Available roles: [%s]", errUnrecognizedSubagentRole, strconv.Quote(roleName), strings.Join(config.AvailableSubagentRoleNames(settings, true), ", "))
+	if lookup.Status == config.SubagentRoleLookupMissing {
+		return fmt.Errorf("%w: %s. It may have been removed by the user during the session. Available roles: [%s]", errUnrecognizedSubagentRole, strconv.Quote(*lookup.NormalizedSelector), strings.Join(config.AvailableSubagentRoleNames(settings, true), ", "))
 	}
-	if !config.SubagentRoleCallable(role) {
+	if !config.SubagentRoleCallable(lookup.Role) {
 		return errNonCallableSubagentRole
 	}
 	return nil

@@ -201,17 +201,16 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 }
 
 func applyPersistedSubagentRoleSettings(base config.Settings, source config.SourceReport, roleName string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, error) {
-	normalizedRole := config.NormalizeSubagentSelector(roleName)
-	if normalizedRole == "" {
+	lookup := config.LookupSubagentRole(base, roleName)
+	if lookup.Status == config.SubagentRoleLookupInvalid {
 		return base, source, nil
 	}
-	role, hasRole := base.Subagents[normalizedRole]
-	if !hasRole && normalizedRole != config.BuiltInSubagentRoleFast {
+	if lookup.Status == config.SubagentRoleLookupMissing {
 		return base, source, nil
 	}
 	providerSettings := cloneSettings(base)
-	applySubagentProviderOverrides(&providerSettings, role)
-	resolved, effectiveSource, _, err := resolveSubagentSettingsWithProviderID(base, source, normalizedRole, persistedRoleProviderID(providerSettings), allowModelOverride, validate)
+	applySubagentProviderOverrides(&providerSettings, lookup.Role)
+	resolved, effectiveSource, _, err := resolveSubagentSettingsWithProviderID(base, source, *lookup.NormalizedSelector, persistedRoleProviderID(providerSettings), allowModelOverride, validate)
 	if err != nil {
 		return config.Settings{}, config.SourceReport{}, err
 	}
@@ -219,15 +218,14 @@ func applyPersistedSubagentRoleSettings(base config.Settings, source config.Sour
 }
 
 func shouldApplyPersistedContinuationBaseURL(base config.Settings, roleName string) bool {
-	normalizedRole := config.NormalizeSubagentSelector(roleName)
-	if normalizedRole == "" {
+	lookup := config.LookupSubagentRole(base, roleName)
+	if lookup.Status == config.SubagentRoleLookupInvalid {
 		return true
 	}
-	role, hasRole := base.Subagents[normalizedRole]
-	if !hasRole && normalizedRole != config.BuiltInSubagentRoleFast {
+	if lookup.Status == config.SubagentRoleLookupMissing {
 		return false
 	}
-	_, hasRoleBaseURL := role.Sources["openai_base_url"]
+	_, hasRoleBaseURL := lookup.Role.Sources["openai_base_url"]
 	return !hasRoleBaseURL
 }
 
@@ -437,12 +435,8 @@ func mergeOverrideSources(base config.SourceReport, override config.SourceReport
 }
 
 func sourceReportWithSubagentRoleSources(base config.SourceReport, settings config.Settings, roleName string, allowModelOverride bool) config.SourceReport {
-	normalizedRole := config.NormalizeSubagentRole(roleName)
-	if normalizedRole == "" {
-		return base
-	}
-	role, ok := settings.Subagents[normalizedRole]
-	if !ok || len(role.Sources) == 0 {
+	lookup := config.LookupSubagentRole(settings, roleName)
+	if lookup.Status != config.SubagentRoleLookupPresent || len(lookup.Role.Sources) == 0 {
 		return base
 	}
 	next := base
@@ -450,7 +444,7 @@ func sourceReportWithSubagentRoleSources(base config.SourceReport, settings conf
 	if !allowModelOverride && strings.TrimSpace(next.Sources["model"]) == "default" {
 		next.Sources["model"] = "session"
 	}
-	for key := range role.Sources {
+	for key := range lookup.Role.Sources {
 		if key == "model" && !allowModelOverride {
 			continue
 		}

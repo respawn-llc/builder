@@ -19,10 +19,5 @@ func (r configRoleResolver) RoleExists(role string) bool {
 	if workflow.IsDefaultAgentRole(trimmed) {
 		return true
 	}
-	for _, available := range config.AvailableSubagentRoleNames(r.settings, false) {
-		if available == trimmed {
-			return true
-		}
-	}
-	return false
+	return config.LookupSubagentRole(r.settings, trimmed).Status == config.SubagentRoleLookupPresent
 }

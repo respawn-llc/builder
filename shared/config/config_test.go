@@ -587,6 +587,89 @@ func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t
 	}
 }
 
+func TestLookupSubagentRoleUsesConfiguredIdentity(t *testing.T) {
+	settings := Settings{
+		ThinkingLevel: "medium",
+		Subagents: map[string]SubagentRole{
+			"planner": {
+				Settings: Settings{ThinkingLevel: "medium"},
+				Sources:  map[string]string{"thinking_level": "file"},
+			},
+			"blocked": {
+				AgentCallable:    false,
+				AgentCallableSet: true,
+				Sources:          map[string]string{"agent_callable": "file"},
+			},
+		},
+	}
+
+	tests := []struct {
+		name           string
+		rawSelector    string
+		wantNormalized string
+		wantSelector   bool
+		wantStatus     SubagentRoleLookupStatus
+	}{
+		{name: "configured no-op role", rawSelector: " Planner ", wantNormalized: "planner", wantSelector: true, wantStatus: SubagentRoleLookupPresent},
+		{name: "configured non-callable role", rawSelector: "blocked", wantNormalized: "blocked", wantSelector: true, wantStatus: SubagentRoleLookupPresent},
+		{name: "built-in fast", rawSelector: BuiltInSubagentRoleFast, wantNormalized: BuiltInSubagentRoleFast, wantSelector: true, wantStatus: SubagentRoleLookupPresent},
+		{name: "missing valid role", rawSelector: "missing", wantNormalized: "missing", wantSelector: true, wantStatus: SubagentRoleLookupMissing},
+		{name: "reserved default", rawSelector: "default", wantStatus: SubagentRoleLookupInvalid},
+		{name: "reserved none", rawSelector: "none", wantStatus: SubagentRoleLookupInvalid},
+		{name: "reserved self", rawSelector: "self", wantStatus: SubagentRoleLookupInvalid},
+		{name: "empty after trim", rawSelector: " \t ", wantStatus: SubagentRoleLookupInvalid},
+		{name: "internal space", rawSelector: "plan ner", wantStatus: SubagentRoleLookupInvalid},
+		{name: "slash", rawSelector: "plan/ner", wantStatus: SubagentRoleLookupInvalid},
+		{name: "punctuation", rawSelector: "planner!", wantStatus: SubagentRoleLookupInvalid},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lookup := LookupSubagentRole(settings, tt.rawSelector)
+			if lookup.Status != tt.wantStatus {
+				t.Fatalf("status = %q, want %q", lookup.Status, tt.wantStatus)
+			}
+			if got := lookup.NormalizedSelector != nil; got != tt.wantSelector {
+				t.Fatalf("normalized selector presence = %v, want %v", got, tt.wantSelector)
+			}
+			if tt.wantSelector && *lookup.NormalizedSelector != tt.wantNormalized {
+				t.Fatalf("normalized selector = %q, want %q", *lookup.NormalizedSelector, tt.wantNormalized)
+			}
+		})
+	}
+}
+
+func TestAvailableSubagentRoleNamesRemainsPresentationOnly(t *testing.T) {
+	settings := Settings{
+		ThinkingLevel: "medium",
+		Subagents: map[string]SubagentRole{
+			"planner": {
+				Settings: Settings{ThinkingLevel: "medium"},
+				Sources:  map[string]string{"thinking_level": "file"},
+			},
+			"callable": {
+				Settings: Settings{Model: "gpt-5.4-mini"},
+				Sources:  map[string]string{"model": "file"},
+			},
+			"blocked": {
+				Settings:         Settings{Model: "gpt-5.4-mini"},
+				Sources:          map[string]string{"model": "file"},
+				AgentCallable:    false,
+				AgentCallableSet: true,
+			},
+		},
+	}
+
+	all := strings.Join(AvailableSubagentRoleNames(settings, false), ",")
+	if all != "fast,blocked,callable" {
+		t.Fatalf("available presentation roles = %q, want no no-op role and all meaningful roles", all)
+	}
+	callable := strings.Join(AvailableSubagentRoleNames(settings, true), ",")
+	if callable != "fast,callable" {
+		t.Fatalf("callable presentation roles = %q, want no no-op or non-callable roles", callable)
+	}
+}
+
 func TestAppendSystemPromptFileFromConfigResolvesConfigRelativePath(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), ConfigDirName, "config.toml")
 	state := configRegistry.defaultState()

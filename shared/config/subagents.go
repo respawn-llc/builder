@@ -80,6 +80,56 @@ func SubagentRoleCallable(role SubagentRole) bool {
 	return !role.AgentCallableSet || role.AgentCallable
 }
 
+type SubagentRoleLookupStatus string
+
+const (
+	SubagentRoleLookupInvalid SubagentRoleLookupStatus = "invalid"
+	SubagentRoleLookupMissing SubagentRoleLookupStatus = "missing"
+	SubagentRoleLookupPresent SubagentRoleLookupStatus = "present"
+)
+
+type SubagentRoleLookup struct {
+	Role               SubagentRole
+	NormalizedSelector *string
+	Status             SubagentRoleLookupStatus
+}
+
+// LookupSubagentRole resolves a subagent selector to configured role identity.
+// It treats built-in roles as present and does not apply presentation filters
+// such as meaningful-diff or callability checks.
+func LookupSubagentRole(settings Settings, rawSelector string) SubagentRoleLookup {
+	normalized := NormalizeSubagentSelector(rawSelector)
+	if normalized == "" {
+		return SubagentRoleLookup{Status: SubagentRoleLookupInvalid}
+	}
+	if normalized == BuiltInSubagentRoleFast {
+		return SubagentRoleLookup{
+			Role:               settings.Subagents[normalized],
+			NormalizedSelector: subagentRoleLookupSelector(normalized),
+			Status:             SubagentRoleLookupPresent,
+		}
+	}
+	role, ok := settings.Subagents[normalized]
+	if !ok {
+		return SubagentRoleLookup{
+			NormalizedSelector: subagentRoleLookupSelector(normalized),
+			Status:             SubagentRoleLookupMissing,
+		}
+	}
+	return SubagentRoleLookup{
+		Role:               role,
+		NormalizedSelector: subagentRoleLookupSelector(normalized),
+		Status:             SubagentRoleLookupPresent,
+	}
+}
+
+func subagentRoleLookupSelector(selector string) *string {
+	return &selector
+}
+
+// AvailableSubagentRoleNames returns presentation-ready role names. It filters
+// out configured roles that have no runtime diff from the base settings and can
+// optionally filter non-callable roles. Use LookupSubagentRole for existence.
 func AvailableSubagentRoleNames(settings Settings, agentCallableOnly bool) []string {
 	names := []string{}
 	if !agentCallableOnly || SubagentRoleCallable(settings.Subagents[BuiltInSubagentRoleFast]) {
