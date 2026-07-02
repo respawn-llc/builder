@@ -19,4 +19,8 @@ var (
 	// errInvalidAgentRole is returned when an agent-role override does not
 	// resolve to a usable subagent role.
 	errInvalidAgentRole = errors.New("invalid agent role")
+
+	// errLockedAgentRoleChange is returned when a resumed session with a locked
+	// model request shape is explicitly reopened with a different agent role.
+	errLockedAgentRoleChange = errors.New("locked session agent role cannot be changed")
 )

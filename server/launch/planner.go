@@ -286,6 +286,9 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 	if err != nil {
 		return SessionPlan{}, nil, fmt.Errorf("%w: %v", errInvalidAgentRole, err)
 	}
+	if roleOverride.Present && plan.ModelContractLocked && continuationAgentRole != roleOverride.Role {
+		return SessionPlan{}, nil, fmt.Errorf("%w: current=%q requested=%q", errLockedAgentRoleChange, continuationAgentRole, roleOverride.Role)
+	}
 	if roleOverride.Present {
 		shouldPersistContinuation = true
 		continuationAgentRole = roleOverride.Role
