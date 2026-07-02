@@ -126,7 +126,7 @@ func (area *nativeLiveAreaImpl) renderPhysicalLocked() error {
 	if area == nil || len(area.frame.Lines) == 0 {
 		return nil
 	}
-	payload := strings.Join(area.frame.Lines, terminalLineBreak) + liveAreaCursorPlacementSequence(area.frame.Cursor, len(area.frame.Lines))
+	payload := nativeLiveAreaPayload(area.frame.Lines) + liveAreaCursorPlacementSequence(area.frame.Cursor, len(area.frame.Lines))
 	written, err := io.WriteString(area.buffer.stableWriter, payload)
 	if err != nil {
 		return fmt.Errorf("render live area failed: %s: %w", liveAreaWriteDiagnostics(payload, area.terminalWidth, area.terminalHeight, written), err)
@@ -144,6 +144,62 @@ func (area *nativeLiveAreaImpl) renderPhysicalLocked() error {
 		area.placedCursor = NativeLiveAreaCursor{}
 	}
 	return nil
+}
+
+func nativeLiveAreaPayload(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	closed := make([]string, 0, len(lines))
+	for _, line := range lines {
+		closed = append(closed, trimANSIRightNativeLiveChrome(line)+terminalStyleResetSequence)
+	}
+	return strings.Join(closed, terminalLineBreak)
+}
+
+func trimANSIRightNativeLiveChrome(line string) string {
+	if line == "" {
+		return ""
+	}
+	parser := xansi.GetParser()
+	defer xansi.PutParser(parser)
+
+	state := byte(0)
+	input := line
+	var out strings.Builder
+	lastContentEnd := 0
+	for len(input) > 0 {
+		seq, seqWidth, n, newState := xansi.GraphemeWidth.DecodeSequenceInString(input, state, parser)
+		if n <= 0 {
+			break
+		}
+		state = newState
+		out.WriteString(seq)
+		if seqWidth > 0 && nativeLivePayloadKeepsTrailingCell(seq) {
+			lastContentEnd = out.Len()
+		}
+		input = input[n:]
+	}
+	if lastContentEnd == 0 {
+		return ""
+	}
+	return out.String()[:lastContentEnd]
+}
+
+func nativeLivePayloadKeepsTrailingCell(cell string) bool {
+	trimmed := strings.TrimSpace(cell)
+	if trimmed == "" {
+		return false
+	}
+	for _, char := range trimmed {
+		switch char {
+		case '─', '━', '═':
+			continue
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 func (area *nativeLiveAreaImpl) validateFrameBeforeLock(operation string, frame NativeLiveAreaFrame) error {
