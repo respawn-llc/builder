@@ -552,6 +552,25 @@ func TestOngoingScrollbackBufferSteerWidthPanicIncludesDiagnostics(t *testing.T)
 	assertPanicContains(t, panicText, "stack:")
 }
 
+func TestOngoingScrollbackBufferSteerWidthReturnsDiagnosticErrorOutsideDebugMode(t *testing.T) {
+	t.Setenv("KENT_DEBUG", "false")
+	t.Setenv("KENT_INVARIANT_MODE", "")
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 3, 24, &out, nil)
+	defer buffer.close()
+
+	err := buffer.Steer("abcd")
+
+	assertErrorContains(t, err, "NativeOngoingSurface invariant violation")
+	assertErrorContains(t, err, "operation=steer")
+	assertErrorContains(t, err, "line exceeds one visual terminal line")
+	assertErrorContains(t, err, "terminal_width=3")
+	assertErrorContains(t, err, "visual_width=4")
+	if got := out.String(); got != "" {
+		t.Fatalf("invalid production stable line wrote terminal output: %q", got)
+	}
+}
+
 func TestOngoingScrollbackBufferSteerNewlinePanics(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)
@@ -1008,6 +1027,7 @@ func waitForTurnEnded(t *testing.T, buffer *OngoingScrollbackBufferImpl) {
 
 func capturePanicText(t *testing.T, fn func()) (panicText string) {
 	t.Helper()
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
@@ -1023,6 +1043,16 @@ func assertPanicContains(t *testing.T, panicText string, want string) {
 	t.Helper()
 	if !strings.Contains(panicText, want) {
 		t.Fatalf("panic text missing %q:\n%s", want, panicText)
+	}
+}
+
+func assertErrorContains(t *testing.T, err error, want string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected error containing %q, got nil", want)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error text missing %q:\n%s", want, err.Error())
 	}
 }
 

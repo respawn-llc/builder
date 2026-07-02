@@ -249,6 +249,7 @@ func TestNativeScratchPageEmitsCommittedEntriesAfterUnresolvedToolCall(t *testin
 }
 
 func TestNativeInvariantPanicKeepsOngoingRendererFromReplayingTranscript(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	var out bytes.Buffer
 	m := newNativeSurfaceSpecTestModel(&out)
 	m.rendererOutputGate = newUIRendererOutputGateState()
@@ -303,6 +304,7 @@ func TestNativeOwnerAbsentAfterImmutableOutputSuppressesOngoingRendererReplay(t 
 }
 
 func TestNativeOwnerAbsentAfterImmutableOutputStillPanicsOnCommittedDivergence(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	var out bytes.Buffer
 	m := newNativeSurfaceSpecTestModelWithClient(&out, &runtimeControlFakeClient{})
 	entries := []tui.TranscriptEntry{{
@@ -1939,7 +1941,7 @@ func TestNativeAssistantFinalizerMismatchPanicsBeforeTranscriptMutation(t *testi
 	}
 }
 
-func TestNativeAssistantFinalizerMismatchDiagnosticModePanicsBeforeTranscriptMutation(t *testing.T) {
+func TestNativeAssistantFinalizerMismatchDiagnosticModeReturnsBeforeTranscriptMutation(t *testing.T) {
 	t.Setenv("KENT_DEBUG", "false")
 	t.Setenv("KENT_INVARIANT_MODE", "")
 	logger := &testUILogger{}
@@ -1950,21 +1952,25 @@ func TestNativeAssistantFinalizerMismatchDiagnosticModePanicsBeforeTranscriptMut
 		t.Fatalf("stream assistant delta: %v", err)
 	}
 
-	assertNativeTranscriptInvariantPanic(t, func() {
-		m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
-			Kind:                       clientui.EventAssistantMessage,
-			StepID:                     "step-1",
-			CommittedTranscriptChanged: true,
-			CommittedEntryStartSet:     true,
-			CommittedEntryStart:        0,
-			CommittedEntryCount:        1,
-			TranscriptEntries: []clientui.ChatEntry{{
-				Role:  "assistant",
-				Text:  "goodbye",
-				Phase: string(clientui.MessagePhaseFinal),
-			}},
-		})
+	_, mutated, awaitsHydration, fatal := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		StepID:                     "step-1",
+		CommittedTranscriptChanged: true,
+		CommittedEntryStartSet:     true,
+		CommittedEntryStart:        0,
+		CommittedEntryCount:        1,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "goodbye",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
 	})
+	if !fatal {
+		t.Fatal("expected diagnostic-mode native invariant to stop event application")
+	}
+	if mutated || awaitsHydration {
+		t.Fatalf("diagnostic-mode native invariant mutated=%t awaitsHydration=%t, want both false", mutated, awaitsHydration)
+	}
 	if len(m.transcriptEntries) != 0 {
 		t.Fatalf("expected transcript entries unchanged after prefix mismatch, got %+v", m.transcriptEntries)
 	}
@@ -2314,7 +2320,7 @@ func TestNativeNonGapCommittedDivergencePanicsBeforeHydration(t *testing.T) {
 	}
 }
 
-func TestNativeNonGapCommittedDivergenceDiagnosticModePanicsWithoutHydration(t *testing.T) {
+func TestNativeNonGapCommittedDivergenceDiagnosticModeReturnsWithoutHydration(t *testing.T) {
 	t.Setenv("KENT_DEBUG", "false")
 	t.Setenv("KENT_INVARIANT_MODE", "")
 	logger := &testUILogger{}
@@ -2334,21 +2340,25 @@ func TestNativeNonGapCommittedDivergenceDiagnosticModePanicsWithoutHydration(t *
 		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
 	})
 
-	assertNativeTranscriptInvariantPanic(t, func() {
-		m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
-			Kind:                       clientui.EventAssistantMessage,
-			CommittedTranscriptChanged: true,
-			TranscriptRevision:         11,
-			CommittedEntryStartSet:     true,
-			CommittedEntryStart:        2,
-			CommittedEntryCount:        3,
-			TranscriptEntries: []clientui.ChatEntry{{
-				Role:  "assistant",
-				Text:  "after gap",
-				Phase: string(clientui.MessagePhaseFinal),
-			}},
-		})
+	_, mutated, awaitsHydration, fatal := m.runtimeAdapter().applyProjectedTranscriptEntries(clientui.Event{
+		Kind:                       clientui.EventAssistantMessage,
+		CommittedTranscriptChanged: true,
+		TranscriptRevision:         11,
+		CommittedEntryStartSet:     true,
+		CommittedEntryStart:        2,
+		CommittedEntryCount:        3,
+		TranscriptEntries: []clientui.ChatEntry{{
+			Role:  "assistant",
+			Text:  "after gap",
+			Phase: string(clientui.MessagePhaseFinal),
+		}},
 	})
+	if !fatal {
+		t.Fatal("expected diagnostic-mode native invariant to stop event application")
+	}
+	if mutated || awaitsHydration {
+		t.Fatalf("diagnostic-mode native divergence mutated=%t awaitsHydration=%t, want both false", mutated, awaitsHydration)
+	}
 	if got := len(m.transcriptEntries); got != 1 {
 		t.Fatalf("expected transcript entries unchanged, got %d", got)
 	}
@@ -2358,6 +2368,7 @@ func TestNativeNonGapCommittedDivergenceDiagnosticModePanicsWithoutHydration(t *
 }
 
 func TestNativeNonAppendReplacePanicsBeforeTranscriptMutation(t *testing.T) {
+	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	m := newNativeSurfaceSpecTestModelWithClient(&bytes.Buffer{}, &runtimeControlFakeClient{})
 	m.nativeImmutableTranscriptWritten = true
 	m.transcriptEntries = []tui.TranscriptEntry{{

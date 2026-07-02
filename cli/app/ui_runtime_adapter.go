@@ -538,8 +538,13 @@ func (m *uiModel) nativeInvariantViolationCmd(action string, err error, fields .
 	if action == "" {
 		action = "native transcript invariant"
 	}
+	policy := invariant.NewPolicy(invariant.WithSink(invariant.SinkFunc(func(d invariant.Diagnostic) {
+		if m != nil {
+			m.logf("native.invariant.diagnostic scope=%q fields=%v stack=%q", d.Scope, d.Fields, d.Stack)
+		}
+	})))
 	if m != nil {
-		m.logf("native.invariant action=%q err=%q panic=true", action, err.Error())
+		m.logf("native.invariant action=%q err=%q panic=%t", action, err.Error(), policy.Mode() == invariant.ModePanic)
 	}
 	diagnosticFields := map[invariant.Field]string{
 		invariant.FieldTerminalGeometry: m.nativeTranscriptTerminalGeometry(),
@@ -549,12 +554,12 @@ func (m *uiModel) nativeInvariantViolationCmd(action string, err error, fields .
 			diagnosticFields[key] = value
 		}
 	}
-	invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)).Check(false, invariant.NativeTranscriptDiagnostic(invariant.NativeTranscriptDiagnosticInput{
+	policy.Check(false, invariant.NativeTranscriptDiagnostic(invariant.NativeTranscriptDiagnosticInput{
 		Operation: action,
 		Error:     err.Error(),
 		Fields:    diagnosticFields,
 	}))
-	panic("unreachable native transcript invariant")
+	return m.nativeSurfaceErrorCmd(action, err), true
 }
 
 func (m *uiModel) nativeSurfaceDropErrorCmd(action string, err error) tea.Cmd {

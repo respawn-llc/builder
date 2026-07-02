@@ -119,6 +119,24 @@ func TestNativeLiveAreaRenderPanicsWhenCursorColumnIsOutsideTerminalWidth(t *tes
 	assertPanicContains(t, panicText, "live area cursor column is outside terminal width")
 }
 
+func TestNativeLiveAreaRenderReturnsDiagnosticErrorOutsideDebugMode(t *testing.T) {
+	t.Setenv("KENT_DEBUG", "false")
+	t.Setenv("KENT_INVARIANT_MODE", "")
+	var out bytes.Buffer
+	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 3, 24, &out, nil)
+	defer buffer.close()
+	liveArea := newNativeLiveAreaImpl(buffer, 3, 24)
+
+	err := liveArea.Render(nativeLiveAreaFrame("abcd"))
+
+	assertErrorContains(t, err, "NativeLiveArea invariant violation")
+	assertErrorContains(t, err, "live area line 0 exceeds terminal width")
+	assertErrorContains(t, err, "terminal_width=3")
+	if got := out.String(); got != "" {
+		t.Fatalf("invalid production frame wrote terminal output: %q", got)
+	}
+}
+
 func TestNativeLiveAreaRenderPanicsForEmptyContent(t *testing.T) {
 	var out bytes.Buffer
 	buffer := NewOngoingScrollbackBufferImpl(context.Background(), 80, 24, &out, nil)

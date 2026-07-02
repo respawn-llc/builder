@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"unicode/utf8"
 
+	"core/shared/invariant"
+
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/cellbuf"
@@ -161,7 +163,9 @@ func (buffer *OngoingScrollbackBufferImpl) close() {
 }
 
 func (buffer *OngoingScrollbackBufferImpl) Steer(line string) error {
-	buffer.validateSteerLineBeforeLock(line)
+	if err := buffer.validateSteerLineBeforeLock(line); err != nil {
+		return err
+	}
 
 	buffer.mu.Lock()
 	if buffer.closed {
@@ -197,9 +201,11 @@ func (buffer *OngoingScrollbackBufferImpl) Steer(line string) error {
 }
 
 func (buffer *OngoingScrollbackBufferImpl) StreamMarkdownAssistantContent(ansi string) error {
-	buffer.validateReadyBeforeLock("streamMarkdownAssistantContent", ansi)
+	if err := buffer.validateReadyBeforeLock("streamMarkdownAssistantContent", ansi); err != nil {
+		return err
+	}
 	if buffer.turnEndedDuringActiveFlow.Load() {
-		panicScrollbackInvariant(
+		return scrollbackInvariantError(
 			"streamMarkdownAssistantContent",
 			"assistant stream continued after model turn ended before finishAssistantStreaming",
 			ansi,
@@ -216,7 +222,7 @@ func (buffer *OngoingScrollbackBufferImpl) StreamMarkdownAssistantContent(ansi s
 	}
 	if buffer.turnEndedDuringActiveFlow.Load() {
 		buffer.mu.Unlock()
-		panicScrollbackInvariant(
+		return scrollbackInvariantError(
 			"streamMarkdownAssistantContent",
 			"assistant stream continued after model turn ended before finishAssistantStreaming",
 			ansi,
@@ -257,7 +263,9 @@ func (buffer *OngoingScrollbackBufferImpl) StreamMarkdownAssistantContent(ansi s
 }
 
 func (buffer *OngoingScrollbackBufferImpl) FinishAssistantStreaming() error {
-	buffer.validateReadyBeforeLock("finishAssistantStreaming", "")
+	if err := buffer.validateReadyBeforeLock("finishAssistantStreaming", ""); err != nil {
+		return err
+	}
 
 	buffer.mu.Lock()
 	if buffer.closed {
@@ -266,7 +274,7 @@ func (buffer *OngoingScrollbackBufferImpl) FinishAssistantStreaming() error {
 	}
 	if !buffer.isStreaming {
 		buffer.mu.Unlock()
-		panicScrollbackInvariant(
+		return scrollbackInvariantError(
 			"finishAssistantStreaming",
 			"finishAssistantStreaming called without an active assistant stream",
 			"",
@@ -301,7 +309,9 @@ func (buffer *OngoingScrollbackBufferImpl) FinishAssistantStreaming() error {
 }
 
 func (buffer *OngoingScrollbackBufferImpl) DiscardAssistantStreaming() error {
-	buffer.validateReadyBeforeLock("discardAssistantStreaming", "")
+	if err := buffer.validateReadyBeforeLock("discardAssistantStreaming", ""); err != nil {
+		return err
+	}
 
 	buffer.mu.Lock()
 	if buffer.closed {
@@ -310,7 +320,7 @@ func (buffer *OngoingScrollbackBufferImpl) DiscardAssistantStreaming() error {
 	}
 	if !buffer.isStreaming {
 		buffer.mu.Unlock()
-		panicScrollbackInvariant(
+		return scrollbackInvariantError(
 			"discardAssistantStreaming",
 			"discardAssistantStreaming called without an active assistant stream",
 			"",
@@ -349,7 +359,9 @@ func (buffer *OngoingScrollbackBufferImpl) DiscardAssistantStreaming() error {
 }
 
 func (buffer *OngoingScrollbackBufferImpl) RenderLive(frame NativeLiveAreaFrame) error {
-	buffer.validateReadyBeforeLock("renderLive", "")
+	if err := buffer.validateReadyBeforeLock("renderLive", ""); err != nil {
+		return err
+	}
 
 	buffer.mu.Lock()
 	if buffer.closed {
@@ -394,7 +406,9 @@ func (buffer *OngoingScrollbackBufferImpl) FlushHoldoff() error {
 }
 
 func (buffer *OngoingScrollbackBufferImpl) flushHoldoff() error {
-	buffer.validateReadyBeforeLock("flushHoldoff", "")
+	if err := buffer.validateReadyBeforeLock("flushHoldoff", ""); err != nil {
+		return err
+	}
 
 	buffer.mu.Lock()
 	if buffer.closed {
@@ -436,7 +450,9 @@ func (buffer *OngoingScrollbackBufferImpl) markTurnEnded() {
 }
 
 func (buffer *OngoingScrollbackBufferImpl) attachLiveArea(liveArea *nativeLiveAreaImpl) {
-	buffer.validateReadyBeforeLock("attachLiveArea", "")
+	if err := buffer.validateReadyBeforeLock("attachLiveArea", ""); err != nil {
+		panic(err.Error())
+	}
 	if liveArea == nil {
 		panicScrollbackInvariant("attachLiveArea", "live area is required", "", buffer.terminalWidth, buffer.terminalHeight, 0)
 	}
@@ -527,7 +543,7 @@ func (buffer *OngoingScrollbackBufferImpl) writeStableHoldoffOperationsLocked(op
 		case stableHoldoffDiscardAssistantStream:
 			err = buffer.discardAssistantStreamingLocked(operation.queuedSteers)
 		default:
-			panicScrollbackInvariant("flushHoldoff", "unknown stable holdoff operation kind", operation.payload, buffer.terminalWidth, buffer.terminalHeight, lipgloss.Width(operation.payload))
+			err = scrollbackInvariantError("flushHoldoff", "unknown stable holdoff operation kind", operation.payload, buffer.terminalWidth, buffer.terminalHeight, lipgloss.Width(operation.payload))
 		}
 		if firstErr == nil && err != nil {
 			firstErr = err
@@ -537,8 +553,13 @@ func (buffer *OngoingScrollbackBufferImpl) writeStableHoldoffOperationsLocked(op
 }
 
 func (buffer *OngoingScrollbackBufferImpl) finishAssistantStreamingLocked(queuedSteers []stableSteerRequest) error {
-	rows := buffer.renderAssistantStreamRowsLocked(buffer.assistantStreamSource)
-	buffer.updateAssistantStreamProjectionLocked(rows, len(rows))
+	rows, err := buffer.renderAssistantStreamRowsLocked(buffer.assistantStreamSource)
+	if err != nil {
+		return err
+	}
+	if err := buffer.updateAssistantStreamProjectionLocked(rows, len(rows)); err != nil {
+		return err
+	}
 	promotedCount := len(buffer.assistantStreamPromoted)
 	rowsToPromote := append([]string(nil), rows[promotedCount:]...)
 	if len(queuedSteers) == 0 {
@@ -574,12 +595,20 @@ func (buffer *OngoingScrollbackBufferImpl) discardAssistantStreamingLocked(queue
 
 func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(delta string) error {
 	buffer.assistantStreamSource += delta
-	rows := buffer.renderAssistantStreamRowsLocked(buffer.assistantStreamSource)
-	promoteLimit := buffer.assistantStreamPromoteLimitLocked(rows)
-	buffer.updateAssistantStreamProjectionLocked(rows, promoteLimit)
+	rows, err := buffer.renderAssistantStreamRowsLocked(buffer.assistantStreamSource)
+	if err != nil {
+		return err
+	}
+	promoteLimit, err := buffer.assistantStreamPromoteLimitLocked(rows)
+	if err != nil {
+		return err
+	}
+	if err := buffer.updateAssistantStreamProjectionLocked(rows, promoteLimit); err != nil {
+		return err
+	}
 	promotedCount := len(buffer.assistantStreamPromoted)
 	if promoteLimit < promotedCount {
-		panicScrollbackInvariant(
+		return scrollbackInvariantError(
 			"streamMarkdownAssistantContent",
 			"assistant renderer produced fewer rows than already promoted rows",
 			buffer.assistantStreamSource,
@@ -599,51 +628,64 @@ func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(del
 	return firstErr
 }
 
-func (buffer *OngoingScrollbackBufferImpl) renderAssistantStreamRowsLocked(source string) []string {
+func (buffer *OngoingScrollbackBufferImpl) renderAssistantStreamRowsLocked(source string) ([]string, error) {
 	rows := buffer.assistantMarkdownRenderer(source, buffer.terminalWidth)
 	filtered := make([]string, 0, len(rows))
 	for _, row := range rows {
-		buffer.validateAssistantRenderedRowLocked(row)
+		if err := buffer.validateAssistantRenderedRowLocked(row); err != nil {
+			return nil, err
+		}
 		if assistantStreamRowHasStableContent(row) {
 			filtered = append(filtered, row)
 		}
 	}
-	return filtered
+	return filtered, nil
 }
 
-func (buffer *OngoingScrollbackBufferImpl) assistantStreamPromoteLimitLocked(rows []string) int {
+func (buffer *OngoingScrollbackBufferImpl) assistantStreamPromoteLimitLocked(rows []string) (int, error) {
 	if len(rows) == 0 {
-		return 0
+		return 0, nil
 	}
 	promotedCount := len(buffer.assistantStreamPromoted)
 	promoteLimit := 0
 	if prefix, ok := unstableAssistantMarkdownBlockStablePrefix(buffer.assistantStreamSource); ok {
 		if assistantMarkdownStablePrefixCanPromote(prefix) {
-			promoteLimit = buffer.assistantStreamRenderedPrefixLimitLocked(prefix, rows)
+			limit, err := buffer.assistantStreamRenderedPrefixLimitLocked(prefix, rows)
+			if err != nil {
+				return 0, err
+			}
+			promoteLimit = limit
 		}
 	} else if stableLinePrefix := buffer.assistantStablePrefix(buffer.assistantStreamSource); stableLinePrefix != "" {
-		promoteLimit = buffer.assistantStreamRenderedPrefixLimitLocked(stableLinePrefix, rows)
+		limit, err := buffer.assistantStreamRenderedPrefixLimitLocked(stableLinePrefix, rows)
+		if err != nil {
+			return 0, err
+		}
+		promoteLimit = limit
 	}
 	if promoteLimit < promotedCount && promotedCount <= len(rows) {
-		return promotedCount
+		return promotedCount, nil
 	}
-	return promoteLimit
+	return promoteLimit, nil
 }
 
-func (buffer *OngoingScrollbackBufferImpl) assistantStreamRenderedPrefixLimitLocked(sourcePrefix string, rows []string) int {
+func (buffer *OngoingScrollbackBufferImpl) assistantStreamRenderedPrefixLimitLocked(sourcePrefix string, rows []string) (int, error) {
 	if sourcePrefix == "" {
-		return 0
+		return 0, nil
 	}
-	prefixRows := buffer.renderAssistantStreamRowsLocked(sourcePrefix)
+	prefixRows, err := buffer.renderAssistantStreamRowsLocked(sourcePrefix)
+	if err != nil {
+		return 0, err
+	}
 	if len(prefixRows) > len(rows) {
-		return len(rows)
+		return len(rows), nil
 	}
-	return len(prefixRows)
+	return len(prefixRows), nil
 }
 
-func (buffer *OngoingScrollbackBufferImpl) updateAssistantStreamProjectionLocked(rows []string, promoteLimit int) {
+func (buffer *OngoingScrollbackBufferImpl) updateAssistantStreamProjectionLocked(rows []string, promoteLimit int) error {
 	if promoteLimit < 0 || promoteLimit > len(rows) {
-		panicScrollbackInvariant(
+		return scrollbackInvariantError(
 			"streamMarkdownAssistantContent",
 			"assistant stream promotion limit is outside rendered row bounds",
 			buffer.assistantStreamSource,
@@ -654,7 +696,7 @@ func (buffer *OngoingScrollbackBufferImpl) updateAssistantStreamProjectionLocked
 	}
 	for index, promoted := range buffer.assistantStreamPromoted {
 		if index >= len(rows) || assistantRenderedRowStableKey(rows[index]) != promoted.stableKey {
-			panicScrollbackInvariant(
+			return scrollbackInvariantError(
 				"streamMarkdownAssistantContent",
 				"assistant renderer changed an already-promoted stable row",
 				buffer.assistantStreamSource,
@@ -669,16 +711,18 @@ func (buffer *OngoingScrollbackBufferImpl) updateAssistantStreamProjectionLocked
 		tailStart = len(buffer.assistantStreamPromoted)
 	}
 	buffer.assistantStreamTail = visibleAssistantStreamRows(rows[tailStart:])
+	return nil
 }
 
-func (buffer *OngoingScrollbackBufferImpl) validateAssistantRenderedRowLocked(row string) {
+func (buffer *OngoingScrollbackBufferImpl) validateAssistantRenderedRowLocked(row string) error {
 	visualWidth := xansi.StringWidth(row)
 	if strings.ContainsAny(row, "\r\n") {
-		panicScrollbackInvariant("renderAssistantStream", "assistant renderer returned a row containing CR or LF", row, buffer.terminalWidth, buffer.terminalHeight, visualWidth)
+		return scrollbackInvariantError("renderAssistantStream", "assistant renderer returned a row containing CR or LF", row, buffer.terminalWidth, buffer.terminalHeight, visualWidth)
 	}
 	if visualWidth > buffer.terminalWidth {
-		panicScrollbackInvariant("renderAssistantStream", "assistant renderer returned a row wider than the terminal", row, buffer.terminalWidth, buffer.terminalHeight, visualWidth)
+		return scrollbackInvariantError("renderAssistantStream", "assistant renderer returned a row wider than the terminal", row, buffer.terminalWidth, buffer.terminalHeight, visualWidth)
 	}
+	return nil
 }
 
 func (buffer *OngoingScrollbackBufferImpl) appendAssistantStreamPromotedRowsLocked(rows []string) {
@@ -764,27 +808,31 @@ func (buffer *OngoingScrollbackBufferImpl) notifyDelayedWriteError(err error) {
 	buffer.delayedWriteErrorListener(err)
 }
 
-func (buffer *OngoingScrollbackBufferImpl) validateSteerLineBeforeLock(line string) {
-	buffer.validateReadyBeforeLock("steer", line)
+func (buffer *OngoingScrollbackBufferImpl) validateSteerLineBeforeLock(line string) error {
+	if err := buffer.validateReadyBeforeLock("steer", line); err != nil {
+		return err
+	}
 	visualWidth := lipgloss.Width(line)
 	if strings.ContainsAny(line, "\r\n") {
-		panicScrollbackInvariant("steer", "line contains CR or LF and is not exactly one terminal line", line, buffer.terminalWidth, buffer.terminalHeight, visualWidth)
+		return scrollbackInvariantError("steer", "line contains CR or LF and is not exactly one terminal line", line, buffer.terminalWidth, buffer.terminalHeight, visualWidth)
 	}
 	if visualWidth > buffer.terminalWidth {
-		panicScrollbackInvariant("steer", "line exceeds one visual terminal line", line, buffer.terminalWidth, buffer.terminalHeight, visualWidth)
+		return scrollbackInvariantError("steer", "line exceeds one visual terminal line", line, buffer.terminalWidth, buffer.terminalHeight, visualWidth)
 	}
+	return nil
 }
 
-func (buffer *OngoingScrollbackBufferImpl) validateReadyBeforeLock(operation string, payload string) {
+func (buffer *OngoingScrollbackBufferImpl) validateReadyBeforeLock(operation string, payload string) error {
 	if buffer == nil {
-		panicScrollbackInvariant(operation, "nil OngoingScrollbackBufferImpl receiver", payload, 0, 0, lipgloss.Width(payload))
+		return scrollbackInvariantError(operation, "nil OngoingScrollbackBufferImpl receiver", payload, 0, 0, lipgloss.Width(payload))
 	}
 	if buffer.terminalWidth <= 0 || buffer.terminalHeight <= 0 {
-		panicScrollbackInvariant(operation, "terminal dimensions must be positive", payload, buffer.terminalWidth, buffer.terminalHeight, lipgloss.Width(payload))
+		return scrollbackInvariantError(operation, "terminal dimensions must be positive", payload, buffer.terminalWidth, buffer.terminalHeight, lipgloss.Width(payload))
 	}
 	if buffer.stableWriter == nil {
-		panicScrollbackInvariant(operation, "stable writer is required", payload, buffer.terminalWidth, buffer.terminalHeight, lipgloss.Width(payload))
+		return scrollbackInvariantError(operation, "stable writer is required", payload, buffer.terminalWidth, buffer.terminalHeight, lipgloss.Width(payload))
 	}
+	return nil
 }
 
 func (buffer *OngoingScrollbackBufferImpl) stableWriteResult(operation string, payload string, written int, err error) error {
@@ -1389,7 +1437,11 @@ func csiSGRParamSeparator(r rune) bool {
 }
 
 func panicScrollbackInvariant(operation string, reason string, payload string, terminalWidth int, terminalHeight int, visualWidth int) {
-	panic(fmt.Sprintf(
+	_ = scrollbackInvariantError(operation, reason, payload, terminalWidth, terminalHeight, visualWidth)
+}
+
+func scrollbackInvariantError(operation string, reason string, payload string, terminalWidth int, terminalHeight int, visualWidth int) error {
+	message := fmt.Sprintf(
 		"NativeOngoingSurface invariant violation\noperation=%s\nreason=%s\nterminal_width=%d\nterminal_height=%d\nvisual_width=%d\nbyte_len=%d\npayload_quoted=%q\npayload_raw_hex=% x\nstack:\n%s",
 		operation,
 		reason,
@@ -1400,5 +1452,9 @@ func panicScrollbackInvariant(operation string, reason string, payload string, t
 		payload,
 		[]byte(payload),
 		debug.Stack(),
-	))
+	)
+	if invariant.NewPolicy().Mode() == invariant.ModePanic {
+		panic(message)
+	}
+	return errors.New(message)
 }
