@@ -5,6 +5,9 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"core/shared/config"
+	"core/shared/serverapi"
 )
 
 type Options struct {
@@ -31,7 +34,13 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer func() { _ = server.Close() }()
-	return runSessionLifecycle(ctx, server, interactor, strings.TrimSpace(opts.SessionID))
+	agentRole := strings.TrimSpace(opts.AgentRole)
+	return runSessionLifecycleWithOptions(ctx, server, interactor, strings.TrimSpace(opts.SessionID), sessionLifecycleOptions{
+		ForceNewSession: agentRole != "" && agentRole != config.DefaultSubagentRole && strings.TrimSpace(opts.SessionID) == "",
+		Overrides: serverapi.RunPromptOverrides{
+			AgentRole: agentRole,
+		},
+	})
 }
 
 func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Duration, progress io.Writer) (RunPromptResult, error) {

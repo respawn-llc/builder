@@ -81,6 +81,42 @@ func TestRunSessionLifecycleMissingWorkspacePrepareRuntimeSuggestsRebind(t *test
 	}
 }
 
+func TestRunSessionLifecycleAppliesInitialAgentOverride(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	stopErr := errors.New("stop after launch plan")
+	var got serverapi.SessionPlanRequest
+	server := &testEmbeddedServer{
+		cfg: config.App{
+			WorkspaceRoot:   workspaceRoot,
+			PersistenceRoot: t.TempDir(),
+			Settings:        config.Settings{Theme: "dark"},
+		},
+		projectID: "project-1",
+		projectViewClient: sessionLifecycleProjectViewClient(metadata.Binding{
+			ProjectID:   "project-1",
+			WorkspaceID: "workspace-1",
+		}, workspaceRoot, nil),
+		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
+			got = req
+			return serverapi.SessionPlanResponse{}, stopErr
+		}},
+	}
+
+	err := runSessionLifecycleWithOptions(context.Background(), server, nil, "", sessionLifecycleOptions{
+		ForceNewSession: true,
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: "worker"},
+	})
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("runSessionLifecycle error = %v, want %v", err, stopErr)
+	}
+	if got.Mode != serverapi.SessionLaunchModeInteractive || !got.ForceNewSession || got.SelectedSessionID != "" {
+		t.Fatalf("launch request = %+v, want forced new interactive session", got)
+	}
+	if got.Overrides.AgentRole != "worker" {
+		t.Fatalf("agent override = %q, want worker", got.Overrides.AgentRole)
+	}
+}
+
 func TestMaybeHandlePickedSessionWorkspaceChangeSkipsPromptWhenWorkspaceUnchanged(t *testing.T) {
 	originalPrompt := runWorkspaceChangePromptFlow
 	defer func() { runWorkspaceChangePromptFlow = originalPrompt }()

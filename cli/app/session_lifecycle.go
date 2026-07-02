@@ -61,7 +61,16 @@ type interactiveSessionServer interface {
 	sessionAuthReadinessServer
 }
 
+type sessionLifecycleOptions struct {
+	ForceNewSession bool
+	Overrides       serverapi.RunPromptOverrides
+}
+
 func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string) error {
+	return runSessionLifecycleWithOptions(ctx, server, interactor, initialSessionID, sessionLifecycleOptions{})
+}
+
+func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string, opts sessionLifecycleOptions) error {
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
 	if err != nil {
@@ -77,7 +86,8 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 	nextSessionInitialPromptHistoryRecorded := false
 	nextSessionInitialInput := ""
 	nextSessionParentID := ""
-	forceNewSession := false
+	forceNewSession := opts.ForceNewSession
+	nextSessionOverrides := opts.Overrides
 	showStartupUpdateNotice := true
 	for {
 		plan, err := planner.PlanSession(ctx, sessionLaunchRequest{
@@ -85,12 +95,14 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 			SelectedSessionID: currentSessionID,
 			ForceNewSession:   forceNewSession,
 			ParentSessionID:   nextSessionParentID,
+			Overrides:         nextSessionOverrides,
 		})
 		if err != nil {
 			return err
 		}
 		forceNewSession = false
 		nextSessionParentID = ""
+		nextSessionOverrides = serverapi.RunPromptOverrides{}
 		workspaceChangeAction, err := maybeHandlePickedSessionWorkspaceChange(ctx, server, plan)
 		if err != nil {
 			return err

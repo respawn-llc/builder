@@ -133,6 +133,7 @@ func rootCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 	rootFS := newCommandFlagSet(config.Command, stderr, rootUsage)
 	showVersion := rootFS.Bool("version", false, "print version and exit")
 	forceInteractive := rootFS.Bool("force-interactive", false, "run interactive UI even when stdin/stdout are not terminals")
+	agentRoleRaw := rootFS.String("agent", "", "subagent role override for the interactive session")
 	persistenceRoot := rootFS.String("persistence-root", "", "config and data root directory (overrides KENT_PERSISTENCE_ROOT and the default ~/.kent)")
 	flags := registerSessionFlags(rootFS)
 	if ok, exitCode := parseCommandFlags(rootFS, args); !ok {
@@ -157,6 +158,15 @@ func rootCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	if flagExplicit(rootFS, "agent") && strings.TrimSpace(*agentRoleRaw) == "" {
+		fmt.Fprintf(stderr, "invalid --agent value %q\n", *agentRoleRaw)
+		return 2
+	}
+	agentRole, err := effectiveRunAgentRole(*agentRoleRaw, false)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -165,6 +175,7 @@ func rootCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 	opts := app.Options{
 		WorkspaceRoot: ".",
 		SessionID:     sessionID,
+		AgentRole:     agentRole,
 		ConfigRoot:    strings.TrimSpace(*persistenceRoot),
 	}
 

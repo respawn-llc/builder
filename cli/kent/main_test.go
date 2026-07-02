@@ -151,6 +151,49 @@ func TestRootCommandMapsSessionFlagsToInteractiveApp(t *testing.T) {
 	}
 }
 
+func TestRootCommandMapsAgentFlagToInteractiveApp(t *testing.T) {
+	original := runInteractiveApp
+	t.Cleanup(func() {
+		runInteractiveApp = original
+	})
+	var got app.Options
+	runInteractiveApp = func(ctx context.Context, opts app.Options) error {
+		got = opts
+		return nil
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	args := []string{
+		"--force-interactive",
+		"--agent", "reviewer",
+		"--session", "session-123",
+	}
+	if code := rootCommand(args, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if got.AgentRole != "reviewer" || got.SessionID != "session-123" {
+		t.Fatalf("unexpected interactive option mapping: %+v", got)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRootCommandRejectsInvalidAgentFlag(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := rootCommand([]string{"--force-interactive", "--agent", "none"}, strings.NewReader(""), &stdout, &stderr); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if got := stderr.String(); !strings.Contains(got, `invalid --agent value "none"`) {
+		t.Fatalf("stderr = %q, want invalid agent error", got)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+}
+
 func TestRootCommandIgnoresKentSessionEnvByDefault(t *testing.T) {
 	original := runInteractiveApp
 	t.Cleanup(func() {

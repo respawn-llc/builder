@@ -31,6 +31,7 @@ type sessionLaunchRequest struct {
 	SelectedSessionID string
 	ForceNewSession   bool
 	ParentSessionID   string
+	Overrides         serverapi.RunPromptOverrides
 }
 
 type sessionLaunchPlan struct {
@@ -224,13 +225,15 @@ func (p *launchPlanner) PrepareRuntime(ctx context.Context, plan sessionLaunchPl
 }
 
 func (p *launchPlanner) resolvePlanRequest(ctx context.Context, req sessionLaunchRequest) (resolvedSessionPlanRequest, error) {
+	overrides := sessionPlanOverridesFromConfig(p.server.Config())
+	overrides = mergeSessionPlanOverrides(overrides, req.Overrides)
 	resolved := resolvedSessionPlanRequest{request: serverapi.SessionPlanRequest{
 		ClientRequestID:   uuid.NewString(),
 		Mode:              serverapi.SessionLaunchMode(req.Mode),
 		SelectedSessionID: strings.TrimSpace(req.SelectedSessionID),
 		ForceNewSession:   req.ForceNewSession,
 		ParentSessionID:   strings.TrimSpace(req.ParentSessionID),
-		Overrides:         sessionPlanOverridesFromConfig(p.server.Config()),
+		Overrides:         overrides,
 	}}
 	if resolved.request.Mode == serverapi.SessionLaunchModeHeadless && resolved.request.SelectedSessionID == "" {
 		resolved.request.ForceNewSession = true
@@ -360,6 +363,35 @@ func sessionPlanOverridesFromConfig(cfg config.App) serverapi.RunPromptOverrides
 		overrides.Tools = enabledToolsCSV(cfg.Settings.EnabledTools)
 	}
 	return overrides
+}
+
+func mergeSessionPlanOverrides(base serverapi.RunPromptOverrides, override serverapi.RunPromptOverrides) serverapi.RunPromptOverrides {
+	merged := base
+	if value := strings.TrimSpace(override.AgentRole); value != "" {
+		merged.AgentRole = value
+	}
+	if value := strings.TrimSpace(override.Model); value != "" {
+		merged.Model = value
+	}
+	if value := strings.TrimSpace(override.ProviderOverride); value != "" {
+		merged.ProviderOverride = value
+	}
+	if value := strings.TrimSpace(override.ThinkingLevel); value != "" {
+		merged.ThinkingLevel = value
+	}
+	if value := strings.TrimSpace(override.Theme); value != "" {
+		merged.Theme = value
+	}
+	if override.ModelTimeoutSeconds > 0 {
+		merged.ModelTimeoutSeconds = override.ModelTimeoutSeconds
+	}
+	if value := strings.TrimSpace(override.Tools); value != "" {
+		merged.Tools = value
+	}
+	if value := strings.TrimSpace(override.OpenAIBaseURL); value != "" {
+		merged.OpenAIBaseURL = value
+	}
+	return merged
 }
 
 func sourceIsCLI(sources map[string]string, key string) bool {

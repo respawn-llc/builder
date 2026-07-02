@@ -27,6 +27,14 @@ Roles are needed to create specialized subagent types for different tasks. Treat
 
 `--agent <role>` selects a named subagent role from `[subagents.<role>]` in the local or global config file. `--agent default` clears a resumed role and uses the base settings; `none` and `self` are not run-agent selectors. To define a new role, edit the config:
 
+To open an interactive session with a role, run:
+
+```bash
+kent --agent research
+```
+
+To apply a role while reopening a specific session, combine it with `--session` or `--continue`.
+
 ```toml
 [subagents.research]
 model = "gpt-5.5"
