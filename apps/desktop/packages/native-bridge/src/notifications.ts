@@ -4,6 +4,7 @@ import {
   isPermissionGranted as tauriIsPermissionGranted,
   requestPermission as tauriRequestPermission,
 } from "@tauri-apps/plugin-notification";
+import { z } from "zod";
 
 import { tauriPlatformSupportsNativeNotifications, type NativePlatform } from "./capabilities";
 import { NativeNotificationIDMapper } from "./notificationIds";
@@ -249,76 +250,36 @@ function defaultTauriNotificationBackend(): TauriNotificationBackend {
   };
 }
 
+const nonEmptyID = z.string().min(1);
+
+const nativeNotificationActivationSchema = z.object({
+  id: nonEmptyID,
+  target: z.object({
+    kind: z.literal("task_detail"),
+    taskID: nonEmptyID,
+    focus: z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("question"),
+        askIDs: z.tuple([nonEmptyID]).rest(nonEmptyID),
+      }),
+      z.object({
+        kind: z.literal("approval"),
+        taskTransitionID: nonEmptyID,
+      }),
+      z.object({
+        kind: z.literal("interrupted_run"),
+        runID: nonEmptyID,
+      }),
+    ]),
+  }),
+});
+
 function nativeNotificationActivation(value: unknown): NativeNotificationActivation {
-  const id = stringProperty(value, "id");
-  if (id === null || id.length === 0) {
-    throw new Error("Native notification activation id must be a non-empty string.");
+  const parsed = nativeNotificationActivationSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(`Native notification activation payload is invalid: ${parsed.error.message}`);
   }
-  const target = nativeNotificationTarget(unknownProperty(value, "target"));
-  return { id, target };
-}
-
-function nativeNotificationTarget(value: unknown): NativeNotificationTarget {
-  const kind = stringProperty(value, "kind");
-  if (kind !== "task_detail") {
-    throw new Error("Native notification activation target kind must be task_detail.");
-  }
-  const taskID = stringProperty(value, "taskID");
-  if (taskID === null || taskID.length === 0) {
-    throw new Error("Native notification activation taskID must be a non-empty string.");
-  }
-  return {
-    kind: "task_detail",
-    taskID,
-    focus: nativeNotificationFocus(unknownProperty(value, "focus")),
-  };
-}
-
-function nativeNotificationFocus(
-  value: unknown,
-): NativeNotificationTarget["focus"] {
-  const kind = stringProperty(value, "kind");
-  if (kind === "question") {
-    const askIDs = stringArrayProperty(value, "askIDs");
-    const [firstAskID, ...remainingAskIDs] = askIDs;
-    if (firstAskID === undefined) {
-      throw new Error("Native notification question focus askIDs must contain at least one id.");
-    }
-    return { kind, askIDs: [firstAskID, ...remainingAskIDs] };
-  }
-  if (kind === "approval") {
-    const taskTransitionID = stringProperty(value, "taskTransitionID");
-    if (taskTransitionID === null || taskTransitionID.length === 0) {
-      throw new Error("Native notification approval focus taskTransitionID must be a non-empty string.");
-    }
-    return { kind, taskTransitionID };
-  }
-  if (kind === "interrupted_run") {
-    const runID = stringProperty(value, "runID");
-    if (runID === null || runID.length === 0) {
-      throw new Error("Native notification interrupted-run focus runID must be a non-empty string.");
-    }
-    return { kind, runID };
-  }
-  throw new Error("Native notification activation focus kind is unsupported.");
-}
-
-function stringProperty(value: unknown, property: string): string | null {
-  const propertyValue = unknownProperty(value, property);
-  return typeof propertyValue === "string" ? propertyValue : null;
-}
-
-function stringArrayProperty(value: unknown, property: string): string[] {
-  const propertyValue = unknownProperty(value, property);
-  if (!Array.isArray(propertyValue)) {
-    return [];
-  }
-  const strings = propertyValue.filter((item): item is string => typeof item === "string" && item.length > 0);
-  return strings.length === propertyValue.length ? strings : [];
-}
-
-function unknownProperty(value: unknown, property: string): unknown {
-  return typeof value === "object" && value !== null ? Reflect.get(value, property) : undefined;
+  return parsed.data;
 }
 
 function readWebPermission(
