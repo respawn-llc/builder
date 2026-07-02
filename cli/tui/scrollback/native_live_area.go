@@ -3,7 +3,6 @@ package scrollback
 import (
 	"fmt"
 	"io"
-	"runtime/debug"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -35,13 +34,13 @@ type nativeLiveAreaImpl struct {
 
 func newNativeLiveAreaImpl(buffer *OngoingScrollbackBufferImpl, terminalWidth int, terminalHeight int) *nativeLiveAreaImpl {
 	if buffer == nil {
-		panicLiveAreaInvariant("newNativeLiveAreaImpl", "stable buffer is required", NativeLiveAreaFrame{}, terminalWidth, terminalHeight)
+		return nil
 	}
 	if terminalWidth <= 0 || terminalHeight <= 0 {
-		panicLiveAreaInvariant("newNativeLiveAreaImpl", "terminal dimensions must be positive", NativeLiveAreaFrame{}, terminalWidth, terminalHeight)
+		return nil
 	}
 	if terminalWidth != buffer.terminalWidth || terminalHeight != buffer.terminalHeight {
-		panicLiveAreaInvariant("newNativeLiveAreaImpl", "live area terminal dimensions must match stable buffer dimensions", NativeLiveAreaFrame{}, terminalWidth, terminalHeight)
+		return nil
 	}
 	liveArea := &nativeLiveAreaImpl{
 		buffer:         buffer,
@@ -53,7 +52,9 @@ func newNativeLiveAreaImpl(buffer *OngoingScrollbackBufferImpl, terminalWidth in
 }
 
 func (area *nativeLiveAreaImpl) Render(frame NativeLiveAreaFrame) error {
-	area.validateFrameBeforeLock("render", frame)
+	if err := area.validateFrameBeforeLock("render", frame); err != nil {
+		return err
+	}
 	nextFrame := copyNativeLiveAreaFrame(frame)
 
 	area.buffer.mu.Lock()
@@ -168,42 +169,43 @@ func (area *nativeLiveAreaImpl) insertStableRowsLocked(liveRows int, rows []stab
 	return firstErr
 }
 
-func (area *nativeLiveAreaImpl) validateFrameBeforeLock(operation string, frame NativeLiveAreaFrame) {
+func (area *nativeLiveAreaImpl) validateFrameBeforeLock(operation string, frame NativeLiveAreaFrame) error {
 	if area == nil {
-		panicLiveAreaInvariant(operation, "nil nativeLiveAreaImpl receiver", frame, 0, 0)
+		return liveAreaInvariantError(operation, "nil nativeLiveAreaImpl receiver", frame, 0, 0)
 	}
 	if area.buffer == nil {
-		panicLiveAreaInvariant(operation, "stable buffer is required", frame, area.terminalWidth, area.terminalHeight)
+		return liveAreaInvariantError(operation, "stable buffer is required", frame, area.terminalWidth, area.terminalHeight)
 	}
 	if area.terminalWidth <= 0 || area.terminalHeight <= 0 {
-		panicLiveAreaInvariant(operation, "terminal dimensions must be positive", frame, area.terminalWidth, area.terminalHeight)
+		return liveAreaInvariantError(operation, "terminal dimensions must be positive", frame, area.terminalWidth, area.terminalHeight)
 	}
 	if len(frame.Lines) == 0 {
-		panicLiveAreaInvariant(operation, "live area content must not be empty", frame, area.terminalWidth, area.terminalHeight)
+		return liveAreaInvariantError(operation, "live area content must not be empty", frame, area.terminalWidth, area.terminalHeight)
 	}
 	if len(frame.Lines) > area.terminalHeight {
-		panicLiveAreaInvariant(operation, "live area content exceeds terminal height", frame, area.terminalWidth, area.terminalHeight)
+		return liveAreaInvariantError(operation, "live area content exceeds terminal height", frame, area.terminalWidth, area.terminalHeight)
 	}
 	if len(frame.Lines) == area.terminalHeight {
-		panicLiveAreaInvariant(operation, "live area content must leave at least one transcript row", frame, area.terminalWidth, area.terminalHeight)
+		return liveAreaInvariantError(operation, "live area content must leave at least one transcript row", frame, area.terminalWidth, area.terminalHeight)
 	}
 	for index, line := range frame.Lines {
 		if strings.ContainsAny(line, "\r\n") {
-			panicLiveAreaInvariant(operation, fmt.Sprintf("live area line %d contains CR or LF", index), frame, area.terminalWidth, area.terminalHeight)
+			return liveAreaInvariantError(operation, fmt.Sprintf("live area line %d contains CR or LF", index), frame, area.terminalWidth, area.terminalHeight)
 		}
 		if lipgloss.Width(line) > area.terminalWidth {
-			panicLiveAreaInvariant(operation, fmt.Sprintf("live area line %d exceeds terminal width", index), frame, area.terminalWidth, area.terminalHeight)
+			return liveAreaInvariantError(operation, fmt.Sprintf("live area line %d exceeds terminal width", index), frame, area.terminalWidth, area.terminalHeight)
 		}
 	}
 	if !frame.Cursor.Visible {
-		return
+		return nil
 	}
 	if frame.Cursor.Row < 0 || frame.Cursor.Row >= len(frame.Lines) {
-		panicLiveAreaInvariant(operation, "live area cursor row is outside submitted frame", frame, area.terminalWidth, area.terminalHeight)
+		return liveAreaInvariantError(operation, "live area cursor row is outside submitted frame", frame, area.terminalWidth, area.terminalHeight)
 	}
 	if frame.Cursor.Col < 0 || frame.Cursor.Col >= area.terminalWidth {
-		panicLiveAreaInvariant(operation, "live area cursor column is outside terminal width", frame, area.terminalWidth, area.terminalHeight)
+		return liveAreaInvariantError(operation, "live area cursor column is outside terminal width", frame, area.terminalWidth, area.terminalHeight)
 	}
+	return nil
 }
 
 func copyNativeLiveAreaFrame(frame NativeLiveAreaFrame) NativeLiveAreaFrame {
@@ -332,9 +334,9 @@ func liveAreaWriteDiagnostics(payload string, terminalWidth int, terminalHeight 
 	)
 }
 
-func panicLiveAreaInvariant(operation string, reason string, frame NativeLiveAreaFrame, terminalWidth int, terminalHeight int) {
-	panic(fmt.Sprintf(
-		"NativeLiveArea invariant violation\noperation=%s\nreason=%s\nterminal_width=%d\nterminal_height=%d\nline_count=%d\ncursor_visible=%t\ncursor_row=%d\ncursor_col=%d\nlines_quoted=%q\nlines_raw_hex=% x\nstack:\n%s",
+func liveAreaInvariantError(operation string, reason string, frame NativeLiveAreaFrame, terminalWidth int, terminalHeight int) error {
+	return fmt.Errorf(
+		"NativeLiveArea invalid frame: operation=%s reason=%s terminal_width=%d terminal_height=%d line_count=%d cursor_visible=%t cursor_row=%d cursor_col=%d lines_quoted=%q lines_raw_hex=% x",
 		operation,
 		reason,
 		terminalWidth,
@@ -345,6 +347,5 @@ func panicLiveAreaInvariant(operation string, reason string, frame NativeLiveAre
 		frame.Cursor.Col,
 		frame.Lines,
 		[]byte(strings.Join(frame.Lines, "\n")),
-		debug.Stack(),
-	))
+	)
 }

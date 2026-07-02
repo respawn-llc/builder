@@ -523,11 +523,7 @@ func (m *uiModel) nativeFatalSurfaceErrorCmd(action string, err error) tea.Cmd {
 	if err == nil {
 		return nil
 	}
-	cmd := m.nativeSurfaceErrorCmd(action, err)
-	if invariant.NewPolicy().Mode() != invariant.ModePanic {
-		return cmd
-	}
-	return sequenceCmds(cmd, tea.Quit)
+	return m.nativeSurfaceErrorCmd(action, err)
 }
 
 func (m *uiModel) nativeInvariantViolationCmd(action string, err error, fields ...map[invariant.Field]string) (tea.Cmd, bool) {
@@ -539,7 +535,7 @@ func (m *uiModel) nativeInvariantViolationCmd(action string, err error, fields .
 		action = "native transcript invariant"
 	}
 	if m != nil {
-		m.logf("native.invariant action=%q err=%q panic=true", action, err.Error())
+		m.logf("native.invariant action=%q err=%q panic=false", action, err.Error())
 	}
 	diagnosticFields := map[invariant.Field]string{
 		invariant.FieldTerminalGeometry: m.nativeTranscriptTerminalGeometry(),
@@ -549,12 +545,13 @@ func (m *uiModel) nativeInvariantViolationCmd(action string, err error, fields .
 			diagnosticFields[key] = value
 		}
 	}
-	invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)).Check(false, invariant.NativeTranscriptDiagnostic(invariant.NativeTranscriptDiagnosticInput{
+	diagnostic := invariant.NativeTranscriptDiagnostic(invariant.NativeTranscriptDiagnosticInput{
 		Operation: action,
 		Error:     err.Error(),
 		Fields:    diagnosticFields,
-	}))
-	panic("unreachable native transcript invariant")
+	})
+	invariant.NewPolicy(invariant.WithMode(invariant.ModeDiagnostic)).Check(false, diagnostic)
+	return m.sendTransientStatusWithNoticeID(action+": "+err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""), false
 }
 
 func (m *uiModel) nativeSurfaceDropErrorCmd(action string, err error) tea.Cmd {

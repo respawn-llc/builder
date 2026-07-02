@@ -216,7 +216,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			m.clearAssistantStreamForCommittedAppend()
 			nativeRangeStart += skippedLeading
 		}
-		committedNativeEntries := ownedCommittedTranscriptEntriesForApp(nativeEntries)
+		committedNativeEntries := committedTranscriptEntriesForApp(nativeEntries)
 		if len(committedNativeEntries) > 0 {
 			prependDivider := m.nativePrependDividerBeforeRange(nativeRangeStart, committedNativeEntries)
 			if m.nativeStableOutputReady() {
