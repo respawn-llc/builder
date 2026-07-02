@@ -1,4 +1,5 @@
 import { load as loadTauriStore } from "@tauri-apps/plugin-store";
+import { z } from "zod";
 
 // Desktop-local client settings: device/install-scoped preferences only (never
 // server-authoritative state, never synced). Persisted by the native bridge to a
@@ -25,27 +26,25 @@ export const defaultDesktopSettings: DesktopSettings = {
   selfUpdate: "enabled",
 };
 
+const desktopSettingsSchema = z.object({
+  selfUpdate: z.unknown().optional(),
+});
+
 // parseDesktopSettings validates untyped persisted JSON into typed settings,
 // filling defaults for missing/invalid fields and normalizing the schema version.
 // It never throws: unknown or corrupt shapes degrade to defaults so a hand-edited
 // or partially-written file can't brick startup. Unknown extra fields are ignored,
 // so a newer on-disk file stays forward-readable by an older build.
 export function parseDesktopSettings(raw: unknown): DesktopSettings {
+  const parsed = desktopSettingsSchema.safeParse(raw);
   return {
     version: desktopSettingsVersion,
-    selfUpdate: parseSelfUpdate(readField(raw, "selfUpdate")),
+    selfUpdate: parseSelfUpdate(parsed.success ? parsed.data.selfUpdate : undefined),
   };
 }
 
 function parseSelfUpdate(value: unknown): DesktopSelfUpdate {
   return value === "disabled" ? "disabled" : "enabled";
-}
-
-function readField(raw: unknown, key: string): unknown {
-  if (typeof raw !== "object" || raw === null) {
-    return undefined;
-  }
-  return key in raw ? Reflect.get(raw, key) : undefined;
 }
 
 // plugin-store file in the Tauri app data dir; fields are stored flat (not

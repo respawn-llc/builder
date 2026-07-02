@@ -104,7 +104,7 @@ async function animateElement(
   keyframes: Keyframe[] | PropertyIndexedKeyframes,
   options: KeyframeAnimationOptions,
 ): Promise<void> {
-  if (typeof element.animate !== "function") {
+  if (!(element.animate instanceof Function)) {
     return;
   }
   await element.animate(keyframes, options).finished;
@@ -152,7 +152,7 @@ function motionDurationMs(tokenName: string, fallbackMs: number): number {
 
 function prefersReducedMotion(): boolean {
   return (
-    typeof globalThis.matchMedia === "function" &&
+    globalThis.matchMedia instanceof Function &&
     globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches
   );
 }

@@ -1,11 +1,17 @@
 import { createJsonRpcTransport } from "./jsonRpc";
 import { ProtocolMismatchError, ServerRootMismatchError } from "./errors";
 import { protocolVersionMismatchErrorCode, subscriptionCompleteMethod } from "./jsonRpcSocket";
+import { z } from "zod";
 
 type SentFrame = Readonly<{
   id: string;
   method: string;
 }>;
+
+const sentFrameSchema = z.object({
+  id: z.string(),
+  method: z.string(),
+});
 
 class MockWebSocket extends EventTarget {
   static readonly CONNECTING = 0;
@@ -447,7 +453,9 @@ describe("JsonRpcWebSocketTransport", () => {
   });
 
   it("maps attention notification subscriptions to their complete method", () => {
-    expect(subscriptionCompleteMethod("attention.notification.subscribe")).toBe("attention.notification.complete");
+    expect(subscriptionCompleteMethod("attention.notification.subscribe")).toBe(
+      "attention.notification.complete",
+    );
   });
 });
 
@@ -482,14 +490,7 @@ function frame(socket: MockWebSocket, sentIndex: number): SentFrame {
 }
 
 function isSentFrame(value: unknown): value is SentFrame {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "id" in value &&
-    "method" in value &&
-    typeof value.id === "string" &&
-    typeof value.method === "string"
-  );
+  return sentFrameSchema.safeParse(value).success;
 }
 
 async function flushPromises(): Promise<void> {

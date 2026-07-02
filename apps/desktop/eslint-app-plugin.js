@@ -138,6 +138,37 @@ export const appArchitecture = {
         };
       },
     },
+    "no-typeof-type-guards": {
+      meta: {
+        type: "problem",
+        docs: {
+          description:
+            "Disallow runtime typeof type guards except undefined checks for undeclared host globals.",
+        },
+        messages: {
+          typeGuard:
+            'Do not use runtime typeof type guards. Decode unknown values at typed boundaries; only typeof comparisons to "undefined" are allowed for undeclared host globals.',
+        },
+        schema: [],
+      },
+      create(context) {
+        return {
+          BinaryExpression(node) {
+            if (!isEqualityOperator(node.operator)) {
+              return;
+            }
+
+            if (isAllowedUndefinedTypeofComparison(node.left, node.right)) {
+              return;
+            }
+
+            if (isTypeofExpression(node.left) || isTypeofExpression(node.right)) {
+              context.report({ node, messageId: "typeGuard" });
+            }
+          },
+        };
+      },
+    },
     "no-useeffect-data-loading": {
       meta: {
         type: "problem",
@@ -342,6 +373,25 @@ function isUseEffectCall(node, reactEffectNames, reactNamespaces) {
     reactNamespaces.has(node.callee.object.name) &&
     getMemberPropertyName(node.callee) === "useEffect"
   );
+}
+
+function isEqualityOperator(operator) {
+  return operator === "===" || operator === "!==" || operator === "==" || operator === "!=";
+}
+
+function isAllowedUndefinedTypeofComparison(left, right) {
+  return (
+    (isTypeofExpression(left) && isUndefinedLiteral(right)) ||
+    (isUndefinedLiteral(left) && isTypeofExpression(right))
+  );
+}
+
+function isTypeofExpression(node) {
+  return node.type === "UnaryExpression" && node.operator === "typeof";
+}
+
+function isUndefinedLiteral(node) {
+  return node.type === "Literal" && node.value === "undefined";
 }
 
 function containsDisallowedEffectCall(node, bridgeIdentifiers) {

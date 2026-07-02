@@ -1,5 +1,6 @@
 import { CircleQuestionMark, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { z } from "zod";
 
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 import { cx } from "./classes";
@@ -32,6 +33,7 @@ export type HelpHintProps =
 
 /** Diameter of the rendered question/help glyph, per design spec. */
 const ICON_SIZE = 14;
+const accessibleLabelSchema = z.string();
 
 /**
  * Faint circled help icon whose layout footprint is just the glyph. A
@@ -49,7 +51,8 @@ export function HelpHint({
   level = 0,
   side = "top",
 }: HelpHintProps) {
-  const accessibleName = ariaLabel ?? (typeof label === "string" ? label : undefined);
+  const parsedLabel = accessibleLabelSchema.safeParse(label);
+  const accessibleName = ariaLabel ?? (parsedLabel.success ? parsedLabel.data : undefined);
 
   return (
     <TooltipProvider delayDuration={0}>

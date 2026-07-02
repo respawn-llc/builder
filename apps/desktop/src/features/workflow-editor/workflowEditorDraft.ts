@@ -7,6 +7,7 @@ import type {
   WorkflowNode,
   WorkflowParameter,
 } from "../../api";
+import { z } from "zod";
 import {
   addWorkflowNode,
   addWorkflowNodeToGroup,
@@ -31,6 +32,8 @@ import {
   type WorkflowEditorSelection,
 } from "./workflowEditorGraphMutations";
 import { workflowGraphsEqual } from "./workflowDraftEquality";
+
+const workflowParameterRowIDSchema = z.string();
 
 export type DraftInputField = Readonly<{
   rowID: string;
@@ -574,7 +577,11 @@ function draftEdgeWithParameterRowIDs(edge: WorkflowEdge): DraftWorkflowEdge {
 }
 
 function draftParameterRowID(parameter: WorkflowParameter): string | undefined {
-  return "rowID" in parameter && typeof parameter.rowID === "string" ? parameter.rowID : undefined;
+  if (!("rowID" in parameter)) {
+    return undefined;
+  }
+  const rowID = workflowParameterRowIDSchema.safeParse(parameter.rowID);
+  return rowID.success ? rowID.data : undefined;
 }
 
 type SelectedNodeCascadeRequest = Readonly<{

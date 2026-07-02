@@ -194,7 +194,7 @@ function InboxItem({
 }
 
 function scheduleScroll(callback: () => void): () => void {
-  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+  if (typeof window !== "undefined" && window.requestAnimationFrame instanceof Function) {
     const frame = window.requestAnimationFrame(() => {
       callback();
     });

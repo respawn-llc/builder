@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type WorkflowProjectEvent = Readonly<{
   action: string;
   changedIDs: readonly string[];
@@ -6,21 +8,39 @@ export type WorkflowProjectEvent = Readonly<{
   workflowID: string;
 }>;
 
+const stringSchema = z.string();
+
+const workflowProjectEventParamsSchema = z.object({
+  event: z.object({
+    action: z.string().catch(""),
+    changed_ids: z
+      .array(z.unknown())
+      .transform((items) => items.flatMap(stringArrayItem))
+      .catch([]),
+    project_id: z.string().catch(""),
+    resource: z.string().catch(""),
+    workflow_id: z.string().catch(""),
+  }),
+});
+
 export function workflowProjectEvent(params: unknown): WorkflowProjectEvent | null {
-  if (!isRecord(params) || !("event" in params)) {
+  const parsed = workflowProjectEventParamsSchema.safeParse(params);
+  if (!parsed.success) {
     return null;
   }
-  const rawEvent = params.event;
-  if (!isRecord(rawEvent)) {
-    return null;
-  }
+  const rawEvent = parsed.data.event;
   return {
-    action: stringField(rawEvent, "action"),
-    changedIDs: stringArrayField(rawEvent, "changed_ids"),
-    projectID: stringField(rawEvent, "project_id"),
-    resource: stringField(rawEvent, "resource"),
-    workflowID: stringField(rawEvent, "workflow_id"),
+    action: rawEvent.action,
+    changedIDs: rawEvent.changed_ids,
+    projectID: rawEvent.project_id,
+    resource: rawEvent.resource,
+    workflowID: rawEvent.workflow_id,
   };
+}
+
+function stringArrayItem(item: unknown): readonly string[] {
+  const parsed = stringSchema.safeParse(item);
+  return parsed.success ? [parsed.data] : [];
 }
 
 export function workflowProjectEventCanChangeAttention(params: unknown): boolean {
@@ -54,17 +74,3 @@ export function workflowProjectEventAffectsTask(params: unknown, taskID: string)
 
 const attentionResources = new Set(["task", "workflow", "workflow_link"]);
 const questionActions = new Set(["question_waiting", "question_cleared", "question_answered"]);
-
-function stringField(value: Readonly<Record<string, unknown>>, key: string): string {
-  const raw = value[key];
-  return typeof raw === "string" ? raw : "";
-}
-
-function stringArrayField(value: Readonly<Record<string, unknown>>, key: string): readonly string[] {
-  const raw = value[key];
-  return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === "string") : [];
-}
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}

@@ -1,4 +1,5 @@
 import { forwardRef, useId, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
+import { z } from "zod";
 
 import { cx } from "./classes";
 import { fieldInputClassName } from "./fieldInputStyles";
@@ -6,6 +7,8 @@ import { fieldLabelClassName } from "./fieldStyles";
 import { HelpHint } from "./HelpHint";
 
 export type FieldError = string | readonly string[];
+const fieldErrorListSchema = z.array(z.string());
+const fieldErrorMessageSchema = z.string();
 
 type FieldShellProps = Readonly<{
   label: string;
@@ -140,8 +143,14 @@ function normalizeErrors(error: FieldError | undefined): readonly string[] {
   if (error === undefined) {
     return [];
   }
-  if (typeof error === "string") {
-    return error.length > 0 ? [error] : [];
+  const messages = fieldErrorListSchema.safeParse(error);
+  if (messages.success) {
+    return messages.data.filter(nonEmptyString);
   }
-  return error.filter((message) => message.length > 0);
+  const message = fieldErrorMessageSchema.safeParse(error);
+  return message.success && message.data.length > 0 ? [message.data] : [];
+}
+
+function nonEmptyString(value: string): boolean {
+  return value.length > 0;
 }

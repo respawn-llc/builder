@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export const boardCardDragPayloadType = "application/x-board-card+json";
 
 export type BoardCardDragPayload = Readonly<{
@@ -9,6 +11,14 @@ export type BoardCardDragPayload = Readonly<{
 }>;
 
 export type BoardColumnDropState = "idle" | "allowed" | "blocked";
+
+const boardCardDragPayloadSchema = z.object({
+  taskID: z.string().min(1),
+  canStart: z.boolean(),
+  activeNodeIDs: z.array(z.string().min(1)),
+  statusKind: z.string().min(1),
+  manualMoveTargetNodeIDs: z.array(z.string().min(1)),
+});
 
 export function encodeBoardCardDragPayload(payload: BoardCardDragPayload): string {
   return JSON.stringify({
@@ -30,52 +40,15 @@ export function decodeBoardCardDragPayload(serialized: string): BoardCardDragPay
   } catch {
     return null;
   }
-  if (
-    !isDragPayloadObject(parsed) ||
-    !isStringArray(parsed.activeNodeIDs) ||
-    !isStringArray(parsed.manualMoveTargetNodeIDs)
-  ) {
-    return null;
-  }
-  if (
-    parsed.taskID.length === 0 ||
-    parsed.statusKind.length === 0 ||
-    parsed.activeNodeIDs.some((nodeID) => nodeID.length === 0) ||
-    parsed.manualMoveTargetNodeIDs.some((nodeID) => nodeID.length === 0)
-  ) {
+  const payload = boardCardDragPayloadSchema.safeParse(parsed);
+  if (!payload.success) {
     return null;
   }
   return {
-    taskID: parsed.taskID,
-    canStart: parsed.canStart,
-    activeNodeIDs: parsed.activeNodeIDs,
-    statusKind: parsed.statusKind,
-    manualMoveTargetNodeIDs: parsed.manualMoveTargetNodeIDs,
+    taskID: payload.data.taskID,
+    canStart: payload.data.canStart,
+    activeNodeIDs: payload.data.activeNodeIDs,
+    statusKind: payload.data.statusKind,
+    manualMoveTargetNodeIDs: payload.data.manualMoveTargetNodeIDs,
   };
-}
-
-function isDragPayloadObject(value: unknown): value is Readonly<{
-  taskID: string;
-  canStart: boolean;
-  activeNodeIDs: unknown;
-  statusKind: string;
-  manualMoveTargetNodeIDs: unknown;
-}> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    "taskID" in value &&
-    "canStart" in value &&
-    "activeNodeIDs" in value &&
-    "statusKind" in value &&
-    "manualMoveTargetNodeIDs" in value &&
-    typeof value.taskID === "string" &&
-    typeof value.canStart === "boolean" &&
-    typeof value.statusKind === "string"
-  );
-}
-
-function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }

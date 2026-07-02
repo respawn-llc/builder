@@ -16,10 +16,7 @@ import {
 } from "./workflowDeleteConfirmRoute";
 import { createWorkflowDeleteWindowRoute } from "./workflowDeleteRoute";
 
-const optionalSearchString = z.preprocess(
-  (value: unknown) => (typeof value === "string" ? value : ""),
-  z.string(),
-);
+const optionalSearchString = z.string().catch("");
 
 const projectSearchSchema = z.object({
   workflowId: optionalSearchString,

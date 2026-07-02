@@ -1,4 +1,5 @@
 import type { WorkflowGraphNode, WorkflowGraphPoint } from "../../features/workflow-editor/workflowGraphLayout";
+import { z } from "zod";
 
 type WorkflowGraphEndpointSide = "source" | "target";
 
@@ -14,6 +15,13 @@ type WorkflowGraphNodeAbsoluteRect = Readonly<{
   x: number;
   y: number;
 }>;
+
+const endpointHandleIDSchema = z.string();
+const endpointPortSchema = z.object({
+  id: z.string(),
+  side: z.union([z.literal("source"), z.literal("target")]),
+  y: z.number(),
+});
 
 export function workflowGraphEndpointPoint(
   node: WorkflowGraphNode,
@@ -48,16 +56,19 @@ function workflowGraphEndpointPort(
   handleID: string | null | undefined,
   side: WorkflowGraphEndpointSide,
 ): WorkflowGraphEndpointPort {
-  if (typeof handleID !== "string" || node.data.entityKind !== "node") {
+  const endpointHandleID = endpointHandleIDSchema.safeParse(handleID);
+  if (!endpointHandleID.success || node.data.entityKind !== "node") {
     throw new Error(`Endpoint port ${handleID ?? ""} not found for ${node.id}`);
   }
   const ports: unknown = node.data.endpointPorts;
   if (!Array.isArray(ports)) {
-    throw new Error(`Endpoint port ${handleID} not found for ${node.id}`);
+    throw new Error(`Endpoint port ${endpointHandleID.data} not found for ${node.id}`);
   }
-  const port = ports.filter(isWorkflowGraphEndpointPort).find((item) => item.id === handleID && item.side === side);
+  const port = ports
+    .filter(isWorkflowGraphEndpointPort)
+    .find((item) => item.id === endpointHandleID.data && item.side === side);
   if (port === undefined) {
-    throw new Error(`Endpoint port ${handleID} not found for ${node.id}`);
+    throw new Error(`Endpoint port ${endpointHandleID.data} not found for ${node.id}`);
   }
   return port;
 }
@@ -71,16 +82,5 @@ function workflowGraphNodeByID(nodes: readonly WorkflowGraphNode[], id: string):
 }
 
 function isWorkflowGraphEndpointPort(value: unknown): value is WorkflowGraphEndpointPort {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.id === "string" &&
-    (value.side === "source" || value.side === "target") &&
-    typeof value.y === "number"
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return endpointPortSchema.safeParse(value).success;
 }

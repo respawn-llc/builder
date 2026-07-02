@@ -148,7 +148,7 @@ describe("applyConfiguredTheme", () => {
     const listener = registration?.[1];
     expect(listener).toBeTypeOf("function");
     const event = new MouseEvent("contextmenu", { cancelable: true });
-    if (typeof listener !== "function") {
+    if (!(listener instanceof Function)) {
       throw new Error("contextmenu listener was not registered as a function");
     }
     listener(event);

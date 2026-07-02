@@ -80,6 +80,7 @@ export default tseslint.config(
       "app/no-eslint-disable": "error",
       "app/no-mutable-exports": "error",
       "app/no-raw-dto-in-components": "error",
+      "app/no-typeof-type-guards": "error",
       "app/no-useeffect-data-loading": "error",
       complexity: ["error", { max: 12 }],
       "max-depth": ["error", 4],

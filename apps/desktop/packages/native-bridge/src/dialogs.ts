@@ -177,7 +177,7 @@ function readEffectiveParentTheme(): NativeDialogTheme {
   if (configured === "light" || configured === "dark") {
     return configured;
   }
-  if (typeof window.matchMedia !== "function") {
+  if (!(window.matchMedia instanceof Function)) {
     return "dark";
   }
   return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";

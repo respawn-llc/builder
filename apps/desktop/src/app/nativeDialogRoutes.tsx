@@ -16,10 +16,7 @@ export const projectDeleteNativeDialogPath = "/native-dialog/project-delete";
 export const workspaceUnlinkNativeDialogPath = "/native-dialog/workspace-unlink";
 export { taskDeleteNativeDialogPath };
 
-const optionalSearchString = z.preprocess(
-  (value: unknown) => (typeof value === "string" ? value : ""),
-  z.string(),
-);
+const optionalSearchString = z.string().catch("");
 
 const projectCreateSearchSchema = z.object({
   key: optionalSearchString,

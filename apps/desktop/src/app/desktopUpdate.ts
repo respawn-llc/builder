@@ -1,4 +1,5 @@
 import type { NativeBridge, NativeUpdateDownloadProgress } from "@app/native-bridge";
+import { z } from "zod";
 
 import type { GuiLogger } from "./logging";
 
@@ -77,8 +78,9 @@ function errorText(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
-  if (typeof error === "string") {
-    return error;
+  const message = z.string().safeParse(error);
+  if (message.success) {
+    return message.data;
   }
   return "Unknown desktop update error.";
 }

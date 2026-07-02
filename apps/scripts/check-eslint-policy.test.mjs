@@ -55,6 +55,7 @@ test("desktop ESLint config explicitly enforces GUI architecture rules", () => {
   assert.equal(findRule("app/no-eslint-disable"), "error");
   assert.equal(findRule("app/no-mutable-exports"), "error");
   assert.equal(findRule("app/no-raw-dto-in-components"), "error");
+  assert.equal(findRule("app/no-typeof-type-guards"), "error");
   assert.equal(findRule("app/no-useeffect-data-loading"), "error");
 });
 
@@ -214,6 +215,7 @@ async function lintWithAppArchitectureRules(source) {
           "app/no-eslint-disable": "error",
           "app/no-mutable-exports": "error",
           "app/no-raw-dto-in-components": "error",
+          "app/no-typeof-type-guards": "error",
           "app/no-useeffect-data-loading": "error",
         },
       },

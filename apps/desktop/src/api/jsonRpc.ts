@@ -1,6 +1,7 @@
 import { ConnectionStore } from "./connectionStore";
 import { TransportError } from "./errors";
 import type { JsonValue } from "./json";
+import { z } from "zod";
 import {
   assertHandshakeRoot,
   delay,
@@ -23,6 +24,7 @@ const socketOpenTimeoutMs = 10_000;
 const rpcRequestTimeoutMs = 30_000;
 const subscriptionReconnectBaseMs = 500;
 const subscriptionReconnectMaxMs = 5_000;
+const textFrameSchema = z.string();
 
 type PendingRequest = Readonly<{
   method: string;
@@ -129,11 +131,12 @@ class JsonRpcWebSocketTransport implements RpcTransport {
   }
 
   #handleControlMessage(event: MessageEvent<unknown>): void {
-    if (typeof event.data !== "string") {
+    const textFrame = textFrameSchema.safeParse(event.data);
+    if (!textFrame.success) {
       this.#rejectAll(new TransportError("Unsupported WebSocket frame type."));
       return;
     }
-    const parsed = parseFrame(event.data);
+    const parsed = parseFrame(textFrame.data);
     const response = responseSchema.safeParse(parsed);
     if (!response.success || response.data.id === undefined) {
       return;

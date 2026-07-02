@@ -75,7 +75,8 @@
         "@tauri-apps/plugin-notification",
         "@tauri-apps/plugin-process",
         "@tauri-apps/plugin-store",
-        "@tauri-apps/plugin-updater"
+        "@tauri-apps/plugin-updater",
+        "zod"
       ],
       "devDependencies": ["typescript", "typescript7", "vitest"]
     }

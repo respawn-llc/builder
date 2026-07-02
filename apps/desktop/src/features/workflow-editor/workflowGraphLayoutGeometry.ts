@@ -1,6 +1,8 @@
 import type { WorkflowGraphNode } from "./workflowGraphLayout";
+import { z } from "zod";
 
 export type NodeLayoutOffset = Readonly<{ x: number; y: number }>;
+const layoutNumberSchema = z.union([z.number(), z.string().transform((value) => Number.parseFloat(value))]);
 
 export type WorkflowGraphNodeRect = Readonly<{
   groupID: string;
@@ -76,11 +78,8 @@ export function workflowGraphEndpointPortY(index: number, count: number, height:
 }
 
 function positiveFiniteNumber(value: unknown, fallback: number): number {
-  if (typeof value !== "number" && typeof value !== "string") {
-    return fallback;
-  }
-  const parsed = typeof value === "number" ? value : Number.parseFloat(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  const parsed = layoutNumberSchema.safeParse(value);
+  return parsed.success && Number.isFinite(parsed.data) && parsed.data > 0 ? parsed.data : fallback;
 }
 
 function distributedSlotY(minY: number, maxY: number, index: number, count: number): number {

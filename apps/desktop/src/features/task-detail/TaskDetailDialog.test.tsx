@@ -5,6 +5,7 @@ import {
 } from "@app/native-bridge";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { vi } from "vitest";
+import { z } from "zod";
 
 import { App } from "../../App";
 import { guiTaskCommentAuthor } from "../../api/client";
@@ -30,6 +31,14 @@ vi.mock("../../ui", async (importOriginal) => {
     Toaster: () => null,
   };
 });
+
+const jsonObjectSchema = z.record(z.string(), z.unknown());
+const taskUpdateParamsSchema = jsonObjectSchema.and(
+  z.object({
+    body: z.string().optional(),
+    title: z.string().optional(),
+  }),
+);
 
 describe("TaskDetailSurface", () => {
   beforeEach(() => {
@@ -502,9 +511,10 @@ describe("TaskDetailSurface", () => {
       {
         method: "workflow.task.update",
         handler: (params: JsonValue) => {
-          if (isJsonObject(params)) {
-            currentTitle = typeof params.title === "string" ? params.title : currentTitle;
-            currentBody = typeof params.body === "string" ? params.body : currentBody;
+          const update = taskUpdateParamsSchema.safeParse(params);
+          if (update.success) {
+            currentTitle = update.data.title ?? currentTitle;
+            currentBody = update.data.body ?? currentBody;
           }
           return taskUpdateResponse;
         },
@@ -643,7 +653,9 @@ describe("TaskDetailSurface", () => {
 
     const description = await screen.findByRole("textbox", { name: "Description" });
     fireEvent.focus(description);
-    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), { target: { value: "Half-written notes" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
+      target: { value: "Half-written notes" },
+    });
     expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
 
     // The task advances on the server and an event fires; the in-progress edit
@@ -698,7 +710,6 @@ describe("TaskDetailSurface", () => {
     });
     expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
   });
-
 });
 
 function nativeBridgeWithClipboard(copied: string[]): NativeBridge {
@@ -1060,7 +1071,7 @@ function getCallCount(
 }
 
 function isJsonObject(value: JsonValue | undefined): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return jsonObjectSchema.safeParse(value).success && !Array.isArray(value);
 }
 
 function toastCount(): number {
