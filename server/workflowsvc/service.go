@@ -69,6 +69,7 @@ type pendingPromptResponder interface {
 
 type workflowAttentionFinalizer interface {
 	FinalizeTransition(context.Context, workflowattention.TransitionResult)
+	FinalizeInterruptedRun(context.Context, workflow.RunID)
 }
 
 type workflowInterruptedRunFinalizer interface {
@@ -789,6 +790,14 @@ func (s *Service) finalizeWorkflowAttention(ctx context.Context, result workflow
 		State:                         result.State,
 		ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
 	})
+	for _, runID := range result.InterruptedRunIDs {
+		if runID == "" {
+			continue
+		}
+		runFinalizeCtx, runCancel := workflowAttentionContext(ctx)
+		s.attentionFinalizer.FinalizeInterruptedRun(runFinalizeCtx, runID)
+		runCancel()
+	}
 }
 
 func workflowCompletionTargetSelector(req serverapi.WorkflowTaskCompleteRequest) workflowstore.ActiveRunCompletionTargetSelector {

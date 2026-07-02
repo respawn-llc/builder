@@ -94,6 +94,7 @@ type CompleteRunResult struct {
 	State                         string
 	PlacementIDs                  []workflow.PlacementID
 	RunIDs                        []workflow.RunID
+	InterruptedRunIDs             []workflow.RunID
 	RequiresApproval              bool
 	ResolvedApprovalTransitionIDs []workflow.TransitionID
 }
@@ -685,6 +686,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 			}
 			result.PlacementIDs = append(result.PlacementIDs, joined.PlacementIDs...)
 			result.RunIDs = append(result.RunIDs, joined.RunIDs...)
+			result.InterruptedRunIDs = append(result.InterruptedRunIDs, joined.InterruptedRunIDs...)
 			continue
 		}
 		targetPlacementID := prefixedID("placement")
@@ -738,7 +740,11 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: interruptionReason, InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
 			return CompleteRunResult{}, fmt.Errorf("insert target run: %w", err)
 		}
-		result.RunIDs = append(result.RunIDs, workflow.RunID(targetRunID))
+		targetRun := workflow.RunID(targetRunID)
+		result.RunIDs = append(result.RunIDs, targetRun)
+		if invalidScript {
+			result.InterruptedRunIDs = append(result.InterruptedRunIDs, targetRun)
+		}
 	}
 	event, err := runCompletedWorkflowEvent(ctx, q, run.TaskID, transitionID, run.ID, now)
 	if err != nil {

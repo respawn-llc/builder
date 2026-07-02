@@ -120,16 +120,19 @@ async fn select_directory(app: tauri::AppHandle, title: String) -> Result<Option
 #[tauri::command]
 async fn select_file(app: tauri::AppHandle, title: String) -> Result<Option<String>, String> {
     let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog().file().set_title(title).pick_file(move |selection| {
-        let result = selection
-            .map(|path| {
-                path.into_path()
-                    .map(|path| path.to_string_lossy().to_string())
-                    .map_err(|error| format!("File picker returned invalid path: {error}"))
-            })
-            .transpose();
-        let _ = sender.send(result);
-    });
+    app.dialog()
+        .file()
+        .set_title(title)
+        .pick_file(move |selection| {
+            let result = selection
+                .map(|path| {
+                    path.into_path()
+                        .map(|path| path.to_string_lossy().to_string())
+                        .map_err(|error| format!("File picker returned invalid path: {error}"))
+                })
+                .transpose();
+            let _ = sender.send(result);
+        });
     receiver
         .await
         .map_err(|_| "File picker closed before returning a result.".to_string())?
@@ -148,12 +151,13 @@ fn file_available(path: String, base_path: String) -> Result<bool, String> {
 #[tauri::command]
 fn open_file_path(path: String, base_path: String) -> Result<(), String> {
     let resolved = resolve_user_file_path(&path, &base_path)?;
-    let metadata = fs::metadata(&resolved).map_err(|error| format!("Read file metadata failed: {error}"))?;
+    let metadata =
+        fs::metadata(&resolved).map_err(|error| format!("Read file metadata failed: {error}"))?;
     if !metadata.is_file() {
         return Err("Path is not a file.".to_string());
     }
-    tauri_plugin_opener::open_path(resolved.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|error| format!("Open file failed: {error}"))
+    tauri_plugin_opener::reveal_item_in_dir(&resolved)
+        .map_err(|error| format!("Reveal file failed: {error}"))
 }
 
 #[tauri::command]

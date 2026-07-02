@@ -142,7 +142,11 @@ func (s *Store) applyJoinIfReady(ctx context.Context, tx *sql.Tx, q *sqlitegen.Q
 		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: interruptionReason, InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
 			return CompleteRunResult{}, err
 		}
-		result.RunIDs = append(result.RunIDs, workflow.RunID(targetRunID))
+		targetRun := workflow.RunID(targetRunID)
+		result.RunIDs = append(result.RunIDs, targetRun)
+		if invalidScript {
+			result.InterruptedRunIDs = append(result.InterruptedRunIDs, targetRun)
+		}
 	}
 	return result, nil
 }

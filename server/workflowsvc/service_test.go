@@ -1099,6 +1099,24 @@ func TestServiceWorkflowAttentionFinalizationIgnoresRequestCancellation(t *testi
 	}
 }
 
+func TestServiceWorkflowAttentionFinalizationPublishesInterruptedRuns(t *testing.T) {
+	finalizer := &recordingWorkflowAttentionFinalizer{}
+	service := &Service{attentionFinalizer: finalizer}
+
+	service.finalizeWorkflowAttention(context.Background(), workflowstore.CompleteRunResult{
+		TransitionID:      "transition-1",
+		State:             "applied",
+		InterruptedRunIDs: []workflow.RunID{"run-script-1", "run-script-2"},
+	})
+
+	if len(finalizer.results) != 1 || finalizer.results[0].TransitionID != "transition-1" {
+		t.Fatalf("finalized transitions = %+v, want transition-1", finalizer.results)
+	}
+	if len(finalizer.interruptedRuns) != 2 || finalizer.interruptedRuns[0] != "run-script-1" || finalizer.interruptedRuns[1] != "run-script-2" {
+		t.Fatalf("finalized interrupted runs = %+v", finalizer.interruptedRuns)
+	}
+}
+
 func TestServiceDeleteTaskPreflightBlockedDoesNotCancelRuns(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -1173,6 +1191,7 @@ func (n *recordingSchedulerNotifier) Notify() {
 
 type recordingWorkflowAttentionFinalizer struct {
 	results               []workflowattention.TransitionResult
+	interruptedRuns       []workflow.RunID
 	resolvedRuns          []workflow.RunID
 	transitionContextErrs []error
 }
@@ -1180,6 +1199,10 @@ type recordingWorkflowAttentionFinalizer struct {
 func (f *recordingWorkflowAttentionFinalizer) FinalizeTransition(ctx context.Context, result workflowattention.TransitionResult) {
 	f.results = append(f.results, result)
 	f.transitionContextErrs = append(f.transitionContextErrs, ctx.Err())
+}
+
+func (f *recordingWorkflowAttentionFinalizer) FinalizeInterruptedRun(_ context.Context, runID workflow.RunID) {
+	f.interruptedRuns = append(f.interruptedRuns, runID)
 }
 
 func (f *recordingWorkflowAttentionFinalizer) ResolveInterruptedRun(_ context.Context, runID workflow.RunID) {

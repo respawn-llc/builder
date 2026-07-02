@@ -2042,6 +2042,32 @@ func (f *recordingInterruptedRunFinalizer) FinalizeInterruptedRun(_ context.Cont
 	f.interruptedRuns = append(f.interruptedRuns, runID)
 }
 
+func TestScriptCompletionAttentionFinalizesTransitionAndInterruptedRuns(t *testing.T) {
+	finalizer := &recordingInterruptedRunFinalizer{}
+	starter := &Starter{attentionFinalizer: finalizer}
+
+	starter.finalizeScriptCompletionAttention(context.Background(), workflowstore.CompleteRunResult{
+		TransitionID:                  "transition-script",
+		State:                         "pending_approval",
+		ResolvedApprovalTransitionIDs: []workflow.TransitionID{"transition-resolved"},
+		InterruptedRunIDs:             []workflow.RunID{"run-interrupted"},
+	})
+
+	if len(finalizer.transitions) != 1 {
+		t.Fatalf("finalized transitions = %+v, want one", finalizer.transitions)
+	}
+	transition := finalizer.transitions[0]
+	if transition.TransitionID != "transition-script" || transition.State != "pending_approval" {
+		t.Fatalf("finalized transition = %+v", transition)
+	}
+	if len(transition.ResolvedApprovalTransitionIDs) != 1 || transition.ResolvedApprovalTransitionIDs[0] != "transition-resolved" {
+		t.Fatalf("resolved approvals = %+v", transition.ResolvedApprovalTransitionIDs)
+	}
+	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != "run-interrupted" {
+		t.Fatalf("finalized interrupted runs = %+v", finalizer.interruptedRuns)
+	}
+}
+
 func (s panicRuntimeStore) SetRunWaitingAsk(context.Context, workflow.RunID, int64, string) error {
 	s.t.Fatal("approval prompt must not set durable workflow waiting ask")
 	return nil

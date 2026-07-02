@@ -212,6 +212,7 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 			}
 			result.PlacementIDs = append(result.PlacementIDs, joined.PlacementIDs...)
 			result.RunIDs = append(result.RunIDs, joined.RunIDs...)
+			result.InterruptedRunIDs = append(result.InterruptedRunIDs, joined.InterruptedRunIDs...)
 			continue
 		}
 		targetPlacementID := prefixedID("placement")
@@ -284,7 +285,11 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: interruptionReason, InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
 			return CompleteRunResult{}, fmt.Errorf("insert approved target run: %w", err)
 		}
-		result.RunIDs = append(result.RunIDs, workflow.RunID(targetRunID))
+		targetRun := workflow.RunID(targetRunID)
+		result.RunIDs = append(result.RunIDs, targetRun)
+		if invalidScript {
+			result.InterruptedRunIDs = append(result.InterruptedRunIDs, targetRun)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return CompleteRunResult{}, err

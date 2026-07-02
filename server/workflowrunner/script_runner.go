@@ -14,6 +14,8 @@ import (
 	"time"
 
 	tools "core/server/tools"
+	"core/server/workflow"
+	"core/server/workflowattention"
 	"core/server/workflowruntime"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
@@ -25,6 +27,7 @@ const (
 	ReasonScriptCompletionFailed = "workflow_script_completion_failed"
 	scriptOutputLimitBytes       = 256 * 1024
 	scriptCancellationGrace      = 750 * time.Millisecond
+	scriptAttentionFinalizeLimit = 5 * time.Second
 )
 
 func (s *Starter) startScriptWorkflowRun(req SchedulerStartRunRequest, input workflowstore.RunStartContext) error {
@@ -55,7 +58,7 @@ func (s *Starter) runScript(ctx context.Context, req SchedulerStartRunRequest, i
 		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
 		return
 	}
-	if _, err := s.store.CompleteRun(context.Background(), workflowstore.CompleteRunRequest{
+	completed, err := s.store.CompleteRun(context.Background(), workflowstore.CompleteRunRequest{
 		RunID:              req.RunID,
 		TransitionID:       string(parsed.TransitionID),
 		OutputValues:       parsed.OutputValues,
@@ -63,10 +66,12 @@ func (s *Starter) runScript(ctx context.Context, req SchedulerStartRunRequest, i
 		Actor:              "script",
 		ExpectedGeneration: req.Generation,
 		RequireGeneration:  true,
-	}); err != nil {
+	})
+	if err != nil {
 		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
 		return
 	}
+	s.finalizeScriptCompletionAttention(context.Background(), completed)
 }
 
 func (s *Starter) scriptCompletionContract(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext) (workflowruntime.CompletionContract, error) {
@@ -77,6 +82,32 @@ func (s *Starter) scriptCompletionContract(ctx context.Context, req SchedulerSta
 	}
 	contract.Transitions = workflowCompletionTransitions(live.TransitionOptions, live.TransitionIDs)
 	return contract, nil
+}
+
+func (s *Starter) finalizeScriptCompletionAttention(ctx context.Context, result workflowstore.CompleteRunResult) {
+	if s == nil || s.attentionFinalizer == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), scriptAttentionFinalizeLimit)
+	defer cancel()
+	s.attentionFinalizer.FinalizeTransition(finalizeCtx, workflowattention.TransitionResult{
+		TransitionID:                  result.TransitionID,
+		State:                         result.State,
+		ResolvedApprovalTransitionIDs: append([]workflow.TransitionID(nil), result.ResolvedApprovalTransitionIDs...),
+	})
+	if finalizer, ok := s.attentionFinalizer.(workflowInterruptedRunFinalizer); ok {
+		for _, runID := range result.InterruptedRunIDs {
+			if runID == "" {
+				continue
+			}
+			runFinalizeCtx, runCancel := context.WithTimeout(context.WithoutCancel(ctx), scriptAttentionFinalizeLimit)
+			finalizer.FinalizeInterruptedRun(runFinalizeCtx, runID)
+			runCancel()
+		}
+	}
 }
 
 type scriptInterruptionError struct {

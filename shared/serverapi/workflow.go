@@ -1614,6 +1614,9 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 		if err := validateWorkflowNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.completion_mode", err.Error())
 		}
+		if node.ScriptPath != nil && strings.TrimSpace(node.Kind) != "script" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.script_path", "script_path is only valid on script nodes")
+		}
 		if len(node.InputFields) > WorkflowGraphDraftMaxFieldsPerEntity {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.nodes.input_fields", fmt.Sprintf("input_fields must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
 		}
