@@ -465,14 +465,30 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 		}
 	}
 	warnings := []string{}
+	allowLockedRoleChange := allowLockedCompactContinuationRoleChange(plan, input, overrides)
 	plan, warnings, err = launch.ApplyRunPromptOverridesWithOptions(plan, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
-		AllowLockedAgentRoleChange: input.ContextMode == workflow.ContextModeCompactAndContinueSession,
+		AllowLockedAgentRoleChange: allowLockedRoleChange,
 	})
 	if err != nil {
 		return launch.SessionPlan{}, nil, err
 	}
 	planSucceeded = true
 	return plan, warnings, nil
+}
+
+func allowLockedCompactContinuationRoleChange(plan launch.SessionPlan, input workflowstore.RunStartContext, overrides serverapi.RunPromptOverrides) bool {
+	if !plan.ModelContractLocked || input.ContextMode != workflow.ContextModeCompactAndContinueSession {
+		return false
+	}
+	roleOverride, err := overrides.AgentRoleOverride()
+	if err != nil || !roleOverride.Present {
+		return false
+	}
+	currentRole := ""
+	if plan.Store != nil && plan.Store.Meta().Continuation != nil {
+		currentRole = strings.TrimSpace(plan.Store.Meta().Continuation.AgentRole)
+	}
+	return currentRole != roleOverride.Role
 }
 
 type sessionListingMetadata struct {

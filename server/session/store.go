@@ -277,17 +277,26 @@ func (s *Store) mutateLockedContractWithCommitStatus(mutator func(*LockedContrac
 	if mutator == nil {
 		return LockedContractMutationResult{}, nil
 	}
+	return s.mutateMetaAndLockedContractWithCommitStatus(nil, mutator, true)
+}
+
+func (s *Store) mutateMetaAndLockedContractWithCommitStatus(metaMutator func(*Meta), lockedMutator func(*LockedContract), requireLocked bool) (LockedContractMutationResult, error) {
 	s.mu.Lock()
-	if s.meta.Locked == nil {
+	if requireLocked && s.meta.Locked == nil {
 		s.mu.Unlock()
 		return LockedContractMutationResult{}, nil
 	}
 	previousMeta := s.meta
 	previousMetadataVersion := s.metadataVersion
 	previousPersistedMetaVersion := s.persistedMetaVersion
-	next := *s.meta.Locked
-	mutator(&next)
-	s.meta.Locked = &next
+	if metaMutator != nil {
+		metaMutator(&s.meta)
+	}
+	if lockedMutator != nil && s.meta.Locked != nil {
+		next := *s.meta.Locked
+		lockedMutator(&next)
+		s.meta.Locked = &next
+	}
 	s.meta.UpdatedAt = time.Now().UTC()
 	observation, persistErr := s.persistMetaLocked()
 	if persistErr != nil {
@@ -739,6 +748,12 @@ func (s *Store) SetContinuationContext(ctx ContinuationContext) error {
 	return s.unlockAndObservePersistence(s.persistMetaLocked())
 }
 
+func (s *Store) SetContinuationContextAndMarkLockedPromptFacingContractStale(ctx ContinuationContext) (LockedContractMutationResult, error) {
+	return s.mutateMetaAndLockedContractWithCommitStatus(func(meta *Meta) {
+		meta.Continuation = normalizeContinuationContext(ctx)
+	}, markLockedPromptFacingContractStale, false)
+}
+
 func (s *Store) MarkGeneratedRecoveredWarningIssued() error {
 	return s.mutateAndPersist(func() error {
 		s.meta.GeneratedRecoveredWarningIssued = true
@@ -854,6 +869,21 @@ func (s *Store) MarkLockedPromptFacingSnapshotsStale() (LockedContractMutationRe
 		locked.ReviewerPrompt = ""
 		locked.HasReviewerPrompt = false
 	})
+}
+
+func (s *Store) MarkLockedPromptFacingContractStale() (LockedContractMutationResult, error) {
+	return s.mutateLockedContractWithCommitStatus(markLockedPromptFacingContractStale)
+}
+
+func markLockedPromptFacingContractStale(locked *LockedContract) {
+	locked.SystemPrompt = ""
+	locked.HasSystemPrompt = false
+	locked.ReviewerPrompt = ""
+	locked.HasReviewerPrompt = false
+	locked.EnabledTools = nil
+	locked.HasEnabledTools = false
+	locked.WebSearchMode = ""
+	locked.ToolPreambles = nil
 }
 
 func (s *Store) RefreshLockedMainPromptSnapshot(snapshot LockedMainPromptSnapshot) (LockedContractMutationResult, error) {

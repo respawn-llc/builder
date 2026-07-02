@@ -346,6 +346,75 @@ func TestLockedRequestShapeBackfillPersistsTogether(t *testing.T) {
 	}
 }
 
+func TestLockedPromptFacingContractStaleClearsRequestShape(t *testing.T) {
+	store := newSessionTestStore(t)
+	toolPreambles := true
+	if err := store.MarkModelDispatchLocked(LockedContract{
+		Model:             "gpt-5",
+		SystemPrompt:      "prompt",
+		HasSystemPrompt:   true,
+		ReviewerPrompt:    "reviewer",
+		HasReviewerPrompt: true,
+		EnabledTools:      []string{"shell"},
+		HasEnabledTools:   true,
+		WebSearchMode:     "native",
+		ToolPreambles:     &toolPreambles,
+	}); err != nil {
+		t.Fatalf("mark model dispatch locked: %v", err)
+	}
+
+	result, err := store.MarkLockedPromptFacingContractStale()
+	if err != nil {
+		t.Fatalf("mark contract stale: %v", err)
+	}
+	if !result.Committed || result.Locked == nil {
+		t.Fatalf("stale contract result = %+v, want committed lock", result)
+	}
+	locked := result.Locked
+	if locked.SystemPrompt != "" || locked.HasSystemPrompt || locked.ReviewerPrompt != "" || locked.HasReviewerPrompt {
+		t.Fatalf("stale contract prompts = %+v, want cleared", locked)
+	}
+	if len(locked.EnabledTools) != 0 || locked.HasEnabledTools || locked.WebSearchMode != "" || locked.ToolPreambles != nil {
+		t.Fatalf("stale contract request shape = %+v, want cleared", locked)
+	}
+	if locked.Model != "gpt-5" {
+		t.Fatalf("stale contract model = %q, want preserved", locked.Model)
+	}
+}
+
+func TestSetContinuationContextAndLockedPromptFacingContractStalePersistsTogether(t *testing.T) {
+	store := newSessionTestStore(t)
+	if err := store.MarkModelDispatchLocked(LockedContract{
+		Model:           "gpt-5",
+		SystemPrompt:    "prompt",
+		HasSystemPrompt: true,
+		EnabledTools:    []string{"shell"},
+		HasEnabledTools: true,
+		WebSearchMode:   "native",
+	}); err != nil {
+		t.Fatalf("mark model dispatch locked: %v", err)
+	}
+
+	result, err := store.SetContinuationContextAndMarkLockedPromptFacingContractStale(ContinuationContext{AgentRole: "reviewer"})
+	if err != nil {
+		t.Fatalf("set continuation and stale contract: %v", err)
+	}
+	if !result.Committed || result.Locked == nil {
+		t.Fatalf("mutation result = %+v, want committed lock", result)
+	}
+	opened, err := Open(store.Dir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	meta := opened.Meta()
+	if meta.Continuation == nil || meta.Continuation.AgentRole != "reviewer" {
+		t.Fatalf("continuation = %+v, want reviewer", meta.Continuation)
+	}
+	if locked := meta.Locked; locked == nil || locked.HasSystemPrompt || locked.HasEnabledTools || len(locked.EnabledTools) != 0 || locked.WebSearchMode != "" {
+		t.Fatalf("locked contract = %+v, want prompt-facing fields cleared", locked)
+	}
+}
+
 func TestLockedContractMutationObserverCommitSemantics(t *testing.T) {
 	fileObserver := &recordingPersistenceObserver{err: os.ErrPermission}
 	fileStore, err := Create(t.TempDir(), "ws", t.TempDir(), WithPersistenceObserver(fileObserver))

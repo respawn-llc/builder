@@ -40,6 +40,15 @@ type PathDenyPolicy struct {
 	rules []compiledPathDenyRule
 }
 
+// PathDenyCheck describes one structured tool target for deny-policy
+// evaluation. ResolvedPath is the symlink-resolved write target; RequestedPath
+// is also checked lexically relative to WorkspaceRootReal.
+type PathDenyCheck struct {
+	RequestedPath     string
+	ResolvedPath      string
+	WorkspaceRootReal string
+}
+
 type compiledPathDenyRule struct {
 	label   *string
 	message string
@@ -87,11 +96,51 @@ func CompilePathDenyPolicy(rules []PathDenyRuleConfig) (PathDenyPolicy, error) {
 	return PathDenyPolicy{rules: compiled}, nil
 }
 
-func (p PathDenyPolicy) Match(candidate string) (PathDenyMatch, bool, error) {
+// CompileLiteralTreePathDenyPolicy builds the common policy shape that denies a
+// root path and every descendant below it.
+func CompileLiteralTreePathDenyPolicy(root string, message string) (PathDenyPolicy, error) {
+	return CompilePathDenyPolicy([]PathDenyRuleConfig{{
+		Message: message,
+		Matcher: PathMatcherConfig{Kind: PathMatcherLiteral, Pattern: root, LiteralTree: true},
+	}})
+}
+
+// Check evaluates both resolved and lexical identities for a tool target.
+func (p PathDenyPolicy) Check(request PathDenyCheck) (PathDenyMatch, bool, error) {
 	if len(p.rules) == 0 {
 		return PathDenyMatch{}, false, nil
 	}
-	identity, err := config.CanonicalPathIdentity(candidate)
+	match, denied, err := p.Match(request.ResolvedPath)
+	if err != nil {
+		return PathDenyMatch{}, false, fmt.Errorf("path deny policy check for %q: %w", request.RequestedPath, err)
+	}
+	if denied {
+		return match, true, nil
+	}
+	lexicalPath, lexicalErr := LexicalPathForDenyPolicy(request.WorkspaceRootReal, request.RequestedPath)
+	if lexicalErr != nil {
+		return PathDenyMatch{}, false, fmt.Errorf("path deny policy lexical check for %q: %w", request.RequestedPath, lexicalErr)
+	}
+	match, denied, err = p.MatchLexical(lexicalPath)
+	if err != nil {
+		return PathDenyMatch{}, false, fmt.Errorf("path deny policy lexical check for %q: %w", request.RequestedPath, err)
+	}
+	return match, denied, nil
+}
+
+func (p PathDenyPolicy) Match(candidate string) (PathDenyMatch, bool, error) {
+	return p.matchWithIdentity(candidate, config.CanonicalPathIdentity)
+}
+
+func (p PathDenyPolicy) MatchLexical(candidate string) (PathDenyMatch, bool, error) {
+	return p.matchWithIdentity(candidate, config.CanonicalLexicalPathIdentity)
+}
+
+func (p PathDenyPolicy) matchWithIdentity(candidate string, identityFor func(string) (string, error)) (PathDenyMatch, bool, error) {
+	if len(p.rules) == 0 {
+		return PathDenyMatch{}, false, nil
+	}
+	identity, err := identityFor(candidate)
 	if err != nil {
 		return PathDenyMatch{}, false, err
 	}

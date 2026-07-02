@@ -326,7 +326,10 @@ func TestPathDenyPolicyBlocksCreateReplaceAndRealSymlinkTargets(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(deniedRoot, "existing.txt"), []byte("old\n"), 0o644); err != nil {
 		t.Fatalf("seed denied existing file: %v", err)
 	}
-	policy := compileEditDenyPolicyForTest(t, deniedRoot, "synthetic deny")
+	policy, err := tools.CompileLiteralTreePathDenyPolicy(deniedRoot, "synthetic deny")
+	if err != nil {
+		t.Fatalf("compile path deny policy: %v", err)
+	}
 	prompts := 0
 	tool := newTestTool(t, workspace,
 		WithPathDenyPolicy(policy),
@@ -385,18 +388,6 @@ func newNonTemporaryOutsideDir(t *testing.T) string {
 		t.Skip("test outside dir is under temporary editable root")
 	}
 	return outside
-}
-
-func compileEditDenyPolicyForTest(t *testing.T, root string, message string) tools.PathDenyPolicy {
-	t.Helper()
-	policy, err := tools.CompilePathDenyPolicy([]tools.PathDenyRuleConfig{{
-		Message: message,
-		Matcher: tools.PathMatcherConfig{Kind: tools.PathMatcherLiteral, Pattern: root, LiteralTree: true},
-	}})
-	if err != nil {
-		t.Fatalf("compile path deny policy: %v", err)
-	}
-	return policy
 }
 
 func newTestTool(t *testing.T, dir string, opts ...Option) *Tool {

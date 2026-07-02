@@ -103,9 +103,13 @@ func (g FSGuard) Allow(ctx context.Context, requestedPath string, resolvedPath s
 		ResolvedPath:  resolvedPath,
 		WorkspaceRoot: g.workspaceRoot,
 	}
-	match, denied, denyErr := g.pathDenyPolicy.Match(resolvedPath)
+	match, denied, denyErr := g.pathDenyPolicy.Check(PathDenyCheck{
+		RequestedPath:     requestedPath,
+		ResolvedPath:      resolvedPath,
+		WorkspaceRootReal: g.workspaceRootReal,
+	})
 	if denyErr != nil {
-		return "", fmt.Errorf("path deny policy check for %q: %w", requestedPath, denyErr)
+		return "", denyErr
 	}
 	if denied {
 		return "", g.noPermission(requestedPath, match.Message)
@@ -169,6 +173,19 @@ func (g FSGuard) Allow(ctx context.Context, requestedPath string, resolvedPath s
 		}
 		return "", g.userDenied(requestedPath, approval.Commentary, g.rejectionInstruction)
 	}
+}
+
+// LexicalPathForDenyPolicy resolves a requested tool path for deny-policy
+// matching without following symlinks below the workspace root.
+func LexicalPathForDenyPolicy(workspaceRootReal string, requestedPath string) (string, error) {
+	if strings.TrimSpace(requestedPath) == "" {
+		return "", errors.New("path is required")
+	}
+	path := requestedPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workspaceRootReal, path)
+	}
+	return filepath.Clean(path), nil
 }
 
 func (g FSGuard) isWithinWorkspace(real string) (bool, error) {

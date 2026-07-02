@@ -1148,6 +1148,44 @@ func TestCanonicalPathIdentityUsesPersistenceRootCasePolicy(t *testing.T) {
 	}
 }
 
+func TestCanonicalPathIdentityPreservesSignificantFilenameSpaces(t *testing.T) {
+	root := t.TempDir()
+	withSpace := filepath.Join(root, "notes ")
+	withoutSpace := filepath.Join(root, "notes")
+
+	spaceIdentity, err := CanonicalPathIdentity(withSpace)
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity with trailing filename space: %v", err)
+	}
+	plainIdentity, err := CanonicalPathIdentity(withoutSpace)
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity without trailing filename space: %v", err)
+	}
+	if spaceIdentity == plainIdentity {
+		t.Fatalf("path identity collapsed significant filename space: %q", spaceIdentity)
+	}
+}
+
+func TestCanonicalLexicalPathIdentityDoesNotFollowSymlinkAncestors(t *testing.T) {
+	realRoot := t.TempDir()
+	linkRoot := filepath.Join(t.TempDir(), "link-root")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	lexical, err := CanonicalLexicalPathIdentity(filepath.Join(linkRoot, "child.txt"))
+	if err != nil {
+		t.Fatalf("CanonicalLexicalPathIdentity: %v", err)
+	}
+	real, err := CanonicalPathIdentity(filepath.Join(linkRoot, "child.txt"))
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity: %v", err)
+	}
+	if lexical == real {
+		t.Fatalf("lexical identity followed symlink ancestor: lexical=%q real=%q", lexical, real)
+	}
+}
+
 func TestResolveExistingAncestorRealPathUsesNearestExistingRealAncestor(t *testing.T) {
 	parentReal := t.TempDir()
 	linkParent := filepath.Join(t.TempDir(), "alias")

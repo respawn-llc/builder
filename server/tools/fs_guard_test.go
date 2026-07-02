@@ -176,6 +176,56 @@ func TestFSGuardPathDenyWinsBeforeAllowAndApprovalPaths(t *testing.T) {
 	}
 }
 
+func TestFSGuardPathDenyChecksLexicalRequestedPathBeforeSymlinkResolution(t *testing.T) {
+	workspace := t.TempDir()
+	real, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		t.Fatalf("resolve workspace: %v", err)
+	}
+	info, err := os.Stat(real)
+	if err != nil {
+		t.Fatalf("stat workspace: %v", err)
+	}
+	deniedRoot := filepath.Join(workspace, ".generated")
+	if err := os.MkdirAll(deniedRoot, 0o755); err != nil {
+		t.Fatalf("create denied root: %v", err)
+	}
+	outsideRoot := t.TempDir()
+	if err := os.Symlink(outsideRoot, filepath.Join(deniedRoot, "link")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	policy, err := CompilePathDenyPolicy([]PathDenyRuleConfig{{
+		Message: "deny generated",
+		Matcher: PathMatcherConfig{Kind: PathMatcherLiteral, Pattern: deniedRoot, LiteralTree: true},
+	}})
+	if err != nil {
+		t.Fatalf("compile policy: %v", err)
+	}
+	requested := filepath.Join(".generated", "link", "file.txt")
+	resolved := filepath.Join(outsideRoot, "file.txt")
+	approverCalls := 0
+	guard := NewFSGuard(FSGuardConfig{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootReal:     real,
+		WorkspaceRootInfo:     info,
+		WorkspaceOnly:         false,
+		AllowOutsideWorkspace: true,
+		Approver: func(context.Context, FSGuardRequest) (FSGuardApproval, error) {
+			approverCalls++
+			return FSGuardApproval{Decision: FSGuardDecisionAllowOnce}, nil
+		},
+		PathDenyPolicy: policy,
+	})
+
+	_, err = guard.Allow(context.Background(), requested, resolved, nil)
+	if err == nil || !strings.Contains(err.Error(), "deny generated") {
+		t.Fatalf("guard denial error = %v, want lexical generated denial", err)
+	}
+	if approverCalls != 0 {
+		t.Fatalf("approver calls = %d, want 0", approverCalls)
+	}
+}
+
 func TestFSGuardPathDenyIdentityErrorIsSurfacedBeforeApproval(t *testing.T) {
 	workspace := t.TempDir()
 	real, err := filepath.EvalSymlinks(workspace)

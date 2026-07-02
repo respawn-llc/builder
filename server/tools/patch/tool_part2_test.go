@@ -122,7 +122,7 @@ func TestPathDenyPolicyBlocksPatchOperationsBeforeMutation(t *testing.T) {
 	approvals := 0
 	tool := newPatchTestTool(t, workspace,
 		WithAllowOutsideWorkspace(true),
-		WithPathDenyPolicy(compilePatchDenyPolicyForTest(t, deniedRoot, "synthetic deny")),
+		WithPathDenyPolicy(compileLiteralTreeDenyPolicy(t, deniedRoot, "synthetic deny")),
 		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
 			approvals++
 			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
@@ -183,7 +183,7 @@ func TestPathDenyPolicyPreflightsWholePatchBeforeOutsideApproval(t *testing.T) {
 	}
 	approvals := 0
 	tool := newPatchTestTool(t, workspace,
-		WithPathDenyPolicy(compilePatchDenyPolicyForTest(t, deniedRoot, "synthetic deny")),
+		WithPathDenyPolicy(compileLiteralTreeDenyPolicy(t, deniedRoot, "synthetic deny")),
 		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
 			approvals++
 			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowSession}, nil
@@ -205,6 +205,36 @@ func TestPathDenyPolicyPreflightsWholePatchBeforeOutsideApproval(t *testing.T) {
 	allowedBySession := callPatch(t, tool, "session-check", "*** Begin Patch\n*** Update File: "+normalTarget+"\n-normal\n+changed\n*** End Patch\n")
 	if !allowedBySession.IsError {
 		t.Fatal("outside-workspace session approval was mutated before deny preflight")
+	}
+}
+
+func TestPathDenyPolicyPreflightsLexicalSymlinkTargetBeforeOutsideApproval(t *testing.T) {
+	workspace := t.TempDir()
+	deniedRoot := outsideNonTempDir(t)
+	normalRoot := outsideNonTempDir(t)
+	link := filepath.Join(deniedRoot, "link")
+	if err := os.Symlink(normalRoot, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	approvals := 0
+	tool := newPatchTestTool(t, workspace,
+		WithPathDenyPolicy(compileLiteralTreeDenyPolicy(t, deniedRoot, "synthetic deny")),
+		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+			approvals++
+			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
+		}),
+	)
+
+	target := filepath.Join(link, "via-link.txt")
+	result := callPatch(t, tool, "lexical-symlink-deny", "*** Begin Patch\n*** Add File: "+target+"\n+denied\n*** End Patch\n")
+	if !result.IsError || !strings.Contains(toolError(t, result), "synthetic deny") {
+		t.Fatalf("expected synthetic deny patch error, got error=%t output=%s", result.IsError, string(result.Output))
+	}
+	if approvals != 0 {
+		t.Fatalf("outside approvals = %d, want 0", approvals)
+	}
+	if _, err := os.Stat(filepath.Join(normalRoot, "via-link.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("symlink target created, stat err=%v", err)
 	}
 }
 
@@ -420,12 +450,9 @@ func newPatchTestTool(t *testing.T, workspace string, opts ...Option) *Tool {
 	return tool
 }
 
-func compilePatchDenyPolicyForTest(t *testing.T, root string, message string) tools.PathDenyPolicy {
+func compileLiteralTreeDenyPolicy(t *testing.T, root string, message string) tools.PathDenyPolicy {
 	t.Helper()
-	policy, err := tools.CompilePathDenyPolicy([]tools.PathDenyRuleConfig{{
-		Message: message,
-		Matcher: tools.PathMatcherConfig{Kind: tools.PathMatcherLiteral, Pattern: root, LiteralTree: true},
-	}})
+	policy, err := tools.CompileLiteralTreePathDenyPolicy(root, message)
 	if err != nil {
 		t.Fatalf("compile path deny policy: %v", err)
 	}

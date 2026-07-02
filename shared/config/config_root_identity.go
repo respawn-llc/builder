@@ -41,6 +41,16 @@ func CanonicalPathIdentity(path string) (string, error) {
 	return canonicalRootForIdentity(real), nil
 }
 
+// CanonicalLexicalPathIdentity returns a stable comparison key for the caller's
+// spelling of a path without following symlinks in existing ancestors.
+func CanonicalLexicalPathIdentity(path string) (string, error) {
+	absolute, err := absoluteCleanPath(path)
+	if err != nil {
+		return "", err
+	}
+	return canonicalRootForIdentity(absolute), nil
+}
+
 // ResolveExistingPathRealPath resolves a path that must already exist to its
 // symlink-evaluated, cleaned, absolute filesystem path.
 func ResolveExistingPathRealPath(path string) (string, error) {
@@ -98,11 +108,10 @@ func isMissingPathForAncestorResolution(err error) bool {
 }
 
 func absoluteCleanPath(path string) (string, error) {
-	trimmed := strings.TrimSpace(path)
-	if trimmed == "" {
+	if strings.TrimSpace(path) == "" {
 		return "", errors.New("path is required")
 	}
-	absolute, err := filepath.Abs(trimmed)
+	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return "", fmt.Errorf("resolve absolute path for %q: %w", path, err)
 	}
