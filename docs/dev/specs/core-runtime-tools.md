@@ -11,6 +11,7 @@
 - Server owns all tool calling, data persistence, agentic loop, network (API/provider) communication logic. 
 - Server-owned service interfaces, concrete service implementations, runtime handles, headless launchers, logging/timeout policy, lifecycle orchestration, and close/drop semantics must not live outside server-scoped code. CLI/GUI packages must not import `server/*` directly.
 - User-visible lifecycle side effects trigger at one client-facing accepted-event boundary, not inside only one transport/runtime path.
+- Transcript delivery to clients is exactly-once and ordered per subscription: every transcript-affecting event carries a per-subscription monotonic sequence number; opening a subscription delivers hydration state as the first ordered message(s) on the same channel; every event is content-complete (no change notifications requiring a follow-up read); tool completions are emitted in committed order; committed assistant entries carry the stream/step identity of their deltas. Clients do not receive absolute transcript counts, offsets, or revisions.
 - Any migration paths should be removed instead of preserved as compatibility shims. Breaking API/protocol changes are acceptable after confirming with the human.
 
 ## Skills And Generated Assets
