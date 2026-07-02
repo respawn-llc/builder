@@ -681,10 +681,8 @@ func (s *Starter) validateRole(role string) error {
 	if workflow.IsDefaultAgentRole(trimmed) {
 		return nil
 	}
-	for _, available := range config.AvailableSubagentRoleNames(s.cfg.Settings, false) {
-		if available == trimmed {
-			return nil
-		}
+	if config.LookupSubagentRole(s.cfg.Settings, trimmed).Status == config.SubagentRoleLookupPresent {
+		return nil
 	}
 	return fmt.Errorf("workflow validation failed: [%s]", workflow.CodeAgentRoleMissing)
 }

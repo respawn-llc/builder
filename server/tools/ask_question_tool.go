@@ -18,18 +18,18 @@ import (
 // model-facing tool payload shape because internal approval workflows carry
 // fields that must never be exposed through the ask_question tool contract.
 type AskQuestionRequest struct {
-	ID                     string                                      `json:"-"`
-	Question               string                                      `json:"-"`
-	Suggestions            []string                                    `json:"-"`
-	RecommendedOptionIndex int                                         `json:"-"`
-	Approval               bool                                        `json:"-"`
-	ApprovalOptions        []AskQuestionApprovalOption                 `json:"-"`
-	Origin                 AskQuestionOrigin                           `json:"-"`
-	RunID                  string                                      `json:"-"`
-	StepID                 string                                      `json:"-"`
-	ToolCallID             string                                      `json:"-"`
-	QuestionBatch          *AskQuestionBatchMetadata                   `json:"-"`
-	AttentionTarget        *clientui.AttentionNotificationTarget       `json:"-"`
+	ID                     string                                `json:"-"`
+	Question               string                                `json:"-"`
+	Suggestions            []string                              `json:"-"`
+	RecommendedOptionIndex int                                   `json:"-"`
+	Approval               bool                                  `json:"-"`
+	ApprovalOptions        []AskQuestionApprovalOption           `json:"-"`
+	Origin                 AskQuestionOrigin                     `json:"-"`
+	RunID                  string                                `json:"-"`
+	StepID                 string                                `json:"-"`
+	ToolCallID             string                                `json:"-"`
+	QuestionBatch          *AskQuestionBatchMetadata             `json:"-"`
+	AttentionTarget        *clientui.AttentionNotificationTarget `json:"-"`
 }
 
 // AskQuestionToolRequest is the model-facing ask_question payload. Keep this limited to
