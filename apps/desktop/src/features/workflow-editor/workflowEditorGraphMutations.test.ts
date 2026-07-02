@@ -97,6 +97,23 @@ describe("workflowEditorGraphMutations", () => {
     ]);
   });
 
+  it("reuses a source fan-out transition group when dragging into a script branch of the same node group", () => {
+    const draft = withScriptBranch(draftDefinitionFromSource(parallelBranchWorkflowDefinition()), "node-review");
+
+    const connected = connectWorkflowNodes(draft, {
+      edgeID: "workflow-edge-review",
+      sourceNodeID: "node-source",
+      targetNodeID: "node-review",
+      transitionGroupID: "workflow-transition-group-review",
+    });
+
+    expect(connected.draft.transitionGroups.some((group) => group.id === "workflow-transition-group-review")).toBe(false);
+    expect(edgesForTransition(connected.draft, "group-source-agent")).toMatchObject([
+      { id: "edge-source-agent", targetNodeID: "node-agent" },
+      { id: "workflow-edge-review", key: "review", targetNodeID: "node-review" },
+    ]);
+  });
+
   it("moves an existing single-branch transition into the source fan-out group when redragging the branch edge", () => {
     const draft = draftDefinitionFromSource(
       parallelBranchWorkflowDefinition({ separateReviewTransition: true }),
