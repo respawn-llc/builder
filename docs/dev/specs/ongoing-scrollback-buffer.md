@@ -29,7 +29,7 @@
 - Ongoing consumes the exactly-once ordered transcript subscription defined in `core-runtime-tools.md`: per-subscription monotonic event seq, hydration delivered as the first ordered message(s) on the same channel, content-complete events, committed assistant entries carrying the stream/step identity of their deltas.
 - Exactly one code path leads from a received subscription event to terminal output. For every received event, the outcome is exactly one of: rendered now through that path; held in the arrival-order queue because the surface does not own the normal buffer; scratch rehydration because its seq is discontiguous; a developer error.
 - No other outcome exists. A received event must never be skipped, dropped, deduplicated, merged with another event, reordered relative to arrival order, partially applied, or held back to await a matching or confirming event.
-- Committed tool lines append in server emission order. There is no client-side ordering, grouping, or frontier between parallel tool calls.
+- Committed tool lines join the open group in server emission order. There is no client-side reordering or frontier between parallel tool calls. Visual grouping follows the Grouping And Dividers section and never changes arrival order.
 - During live operation the client must not issue transcript reads of any kind: no page requests, tail requests, gap fills, refreshes, recovery reads, or committed-advance re-reads. The ongoing surface reads from the server through exactly one mechanism: opening the subscription, which is also the scratch-rehydration mechanism. Detail-mode history paging is a separate surface and is not available to ongoing rendering.
 
 ## Client State
@@ -40,6 +40,7 @@
   - Mutable-band frame state: pending tool-call rows, spinner/animation state, input field, status line.
   - The arrival-order queue of received-but-unrendered typed events, used only while the surface does not own the normal buffer.
   - Operator-owned UI-local state: input draft, editor cursor state, and prompt history capped at the 100 most recent entries. Prompt history must never grow unbounded; entries beyond the cap are discarded oldest-first.
+  - The divider register: the group kind of the most recently promoted row. One enum value.
 - Everything else is banned. Banned state includes, without being limited to: any collection of committed transcript entries retained after rendering; any committed-entry count, total, base offset, index range, or revision; any ledger, cache, hash, digest, flag set, dedupe key, or "delivered/seen/emitted" record of output or entries; any before/after snapshot kept for diffing; any placeholder, optimistic, or transient row awaiting replacement by a committed counterpart; any rendered-output cache for the immutable area.
 - No transcript row is ever rendered before the server commits it. A committed-append failure on the server surfaces as an error; the client has no local fallback row path.
 
@@ -55,6 +56,15 @@
 - Promotion is monotonic. The promotion boundary never moves backward past rows already appended to the immutable area. If re-rendering the source would change an already-promoted row, that is a developer error, not a trigger to rewrite, restyle, or re-emit.
 - Raw deltas are never written into the immutable area. Only rendered markdown projection rows are promoted.
 - Finalization matches the committed assistant entry to the active stream by carried stream/step identity, then applies exactly one of three outcomes: committed text equals the streamed source, finalize with no additional writes; committed text extends the streamed source, emit only the missing suffix through the stream path, then finalize; anything else is a developer error. There is no fourth outcome. Finding a finalizer by scanning entries, matching by text similarity, or matching across different stream identities is banned reconciliation.
+
+## Grouping And Dividers
+
+- Every committed row maps to exactly one group kind: user input, assistant output, tool activity, or notice. The mapping is total, owned by the transcript projection, and never inferred from row text.
+- Consecutive promoted rows of the same kind form one group. A row of a different kind closes the open group and opens a new one. Group close has exactly one trigger: arrival of a row of a different kind. Nothing detects, waits for, or confirms a group end.
+- A divider is a rendered line emitted into the immutable area immediately before the first row of a new group. The divider below a group and the divider above the next group are the same single divider. Dividers are never emitted retroactively, never inserted above existing content, and never emitted between rows of the same kind.
+- Divider emission reads exactly one piece of state: the divider register. Incoming kind differs from the register: emit one divider, then the row. Incoming kind equals the register: append the row with no divider. The register updates on every promotion. Deciding divider placement by scanning, retaining, or re-reading promoted content is banned reconciliation.
+- An open tool-activity group renders in the mutable band and repaints freely there as calls complete; squished or single-line chain rendering is a mutable-band concern. The group's rows promote into the immutable area when the group closes. Promoted group rows are immutable like all other immutable-area content.
+- Assistant output groups promote progressively through stream promotion; the divider for the group is emitted before its first promoted row.
 
 ## Queueing While Not Owning The Normal Buffer
 
