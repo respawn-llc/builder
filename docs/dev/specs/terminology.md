@@ -122,7 +122,11 @@ Per-transition-branch policy deciding which earlier run supplies the source sess
 
 ### Run
 
-One durable execution attempt for a node on a task. A run may create or continue a Kent session, call tools, ask questions, produce a transition result, and terminate with a structured outcome.
+One durable execution attempt for an executable node on a task. Agent runs create or continue a Kent session. Script runs execute a local server-side executable. A run may call tools, ask questions, produce a transition result, and terminate with a structured outcome.
+
+### Script Node
+
+A workflow executable node that runs a local executable on the Kent server instead of starting an agent session. It reads incoming workflow parameter values from JSON stdin, writes workflow completion JSON to stdout, and uses stderr only for diagnostics.
 
 ### Interrupted Run
 

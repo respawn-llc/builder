@@ -118,6 +118,45 @@ async fn select_directory(app: tauri::AppHandle, title: String) -> Result<Option
 }
 
 #[tauri::command]
+async fn select_file(app: tauri::AppHandle, title: String) -> Result<Option<String>, String> {
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog().file().set_title(title).pick_file(move |selection| {
+        let result = selection
+            .map(|path| {
+                path.into_path()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .map_err(|error| format!("File picker returned invalid path: {error}"))
+            })
+            .transpose();
+        let _ = sender.send(result);
+    });
+    receiver
+        .await
+        .map_err(|_| "File picker closed before returning a result.".to_string())?
+}
+
+#[tauri::command]
+fn file_available(path: String, base_path: String) -> Result<bool, String> {
+    let resolved = resolve_user_file_path(&path, &base_path)?;
+    match fs::metadata(&resolved) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("Read file metadata failed: {error}")),
+    }
+}
+
+#[tauri::command]
+fn open_file_path(path: String, base_path: String) -> Result<(), String> {
+    let resolved = resolve_user_file_path(&path, &base_path)?;
+    let metadata = fs::metadata(&resolved).map_err(|error| format!("Read file metadata failed: {error}"))?;
+    if !metadata.is_file() {
+        return Err("Path is not a file.".to_string());
+    }
+    tauri_plugin_opener::open_path(resolved.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|error| format!("Open file failed: {error}"))
+}
+
+#[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     validate_external_url(&url)?;
     tauri_plugin_opener::open_url(url, None::<&str>)
@@ -497,6 +536,9 @@ pub fn run() {
             resolve_native_platform,
             self_update_supported,
             select_directory,
+            select_file,
+            file_available,
+            open_file_path,
             open_external_url,
             append_gui_log,
             send_attention_notification,
@@ -736,6 +778,26 @@ fn resolve_configured_path(value: &str) -> Result<PathBuf, String> {
     Err(format!(
         "KENT_PERSISTENCE_ROOT must be an absolute path (or start with ~); got relative path {trimmed:?}."
     ))
+}
+
+fn resolve_user_file_path(path: &str, base_path: &str) -> Result<PathBuf, String> {
+    let trimmed_path = path.trim();
+    if trimmed_path.is_empty() {
+        return Err("File path is required.".to_string());
+    }
+    let path = PathBuf::from(trimmed_path);
+    if path.is_absolute() {
+        return Ok(clean_path(&path));
+    }
+    let trimmed_base = base_path.trim();
+    if trimmed_base.is_empty() {
+        return Err("Base path is required for relative file paths.".to_string());
+    }
+    let base = PathBuf::from(trimmed_base);
+    if !base.is_absolute() {
+        return Err("Base path must be absolute.".to_string());
+    }
+    Ok(clean_path(&base.join(path)))
 }
 
 fn home_dir() -> Result<PathBuf, String> {

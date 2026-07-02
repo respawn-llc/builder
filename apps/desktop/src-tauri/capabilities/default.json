@@ -11,6 +11,7 @@
     "store:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
+    "dialog:allow-open",
     "core:event:allow-emit",
     "core:event:allow-emit-to",
     "core:event:allow-listen",

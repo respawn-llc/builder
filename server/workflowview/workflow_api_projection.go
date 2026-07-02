@@ -11,10 +11,11 @@ func DerivedWiring(def workflow.Definition) serverapi.WorkflowDerivedWiring {
 		Diagnostics: ValidationErrors(string(def.ID), derived.Diagnostics),
 	}
 	for _, node := range def.Nodes {
+		nodeID := workflow.NodeIDOf(node)
 		resp.Nodes = append(resp.Nodes, serverapi.WorkflowDerivedNodeWiring{
-			NodeID:                  string(node.ID),
-			PossibleProvisionFields: OutputFields(derived.PossibleProvisionFieldsForNode(node.ID)),
-			JoinOutputFields:        OutputFields(derived.JoinOutputFieldsForNode(node.ID)),
+			NodeID:                  string(nodeID),
+			PossibleProvisionFields: OutputFields(derived.PossibleProvisionFieldsForNode(nodeID)),
+			JoinOutputFields:        OutputFields(derived.JoinOutputFieldsForNode(nodeID)),
 		})
 	}
 	for _, group := range def.TransitionGroups {

@@ -441,7 +441,9 @@ func newMetadataTestStoreWithoutBinding(t *testing.T) (*Store, config.App) {
 
 func newMetadataTestStoreForWorkspace(t *testing.T, workspace string) (*Store, config.App) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(config.PersistenceRootEnvName, filepath.Join(home, ".kent-test"))
 	cfg, err := config.Load(workspace, config.LoadOptions{})
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)

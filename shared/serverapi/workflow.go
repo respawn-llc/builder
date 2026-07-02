@@ -76,6 +76,7 @@ type WorkflowNode struct {
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
+	ScriptPath         *string                     `json:"script_path,omitempty"`
 	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
 	OutputFields       []WorkflowOutputField       `json:"output_fields,omitempty"`
@@ -212,6 +213,7 @@ type WorkflowGraphDraftNode struct {
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
+	ScriptPath         *string                     `json:"script_path,omitempty"`
 	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
 }
@@ -387,6 +389,7 @@ type WorkflowNodeAddRequest struct {
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
+	ScriptPath         *string                     `json:"script_path,omitempty"`
 	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
 }
@@ -405,6 +408,7 @@ type WorkflowNodeUpdateRequest struct {
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	PromptTemplate     string                      `json:"prompt_template,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
+	ScriptPath         *string                     `json:"script_path,omitempty"`
 	InputFields        []WorkflowInputField        `json:"input_fields,omitempty"`
 	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
 }
@@ -807,6 +811,7 @@ type WorkflowAttentionItem struct {
 	AskID                  string   `json:"ask_id,omitempty"`
 	TaskTransitionID       string   `json:"task_transition_id,omitempty"`
 	Message                string   `json:"message"`
+	DetailJSON             string   `json:"detail_json,omitempty"`
 	Suggestions            []string `json:"suggestions,omitempty"`
 	RecommendedOptionIndex int      `json:"recommended_option_index,omitempty"`
 	OccurredAtUnixMs       int64    `json:"occurred_at_unix_ms"`
@@ -1132,6 +1137,8 @@ type WorkflowRun struct {
 	TaskID              string `json:"task_id"`
 	PlacementID         string `json:"placement_id"`
 	NodeID              string `json:"node_id"`
+	NodeKind            string `json:"node_kind,omitempty"`
+	ScriptPath          string `json:"script_path,omitempty"`
 	SessionID           string `json:"session_id,omitempty"`
 	SessionName         string `json:"session_name,omitempty"`
 	Role                string `json:"role,omitempty"`
@@ -1141,6 +1148,7 @@ type WorkflowRun struct {
 	CompletedAtUnixMs   int64  `json:"completed_at_unix_ms"`
 	InterruptedAtUnixMs int64  `json:"interrupted_at_unix_ms"`
 	InterruptionReason  string `json:"interruption_reason,omitempty"`
+	InterruptionDetail  string `json:"interruption_detail_json,omitempty"`
 	WaitingAskID        string `json:"waiting_ask_id,omitempty"`
 }
 
@@ -1243,17 +1251,17 @@ func (r WorkflowGetRequest) Validate() error {
 }
 
 func (r WorkflowNodeAddRequest) Validate() error {
-	return validateWorkflowNodeFields(r.WorkflowID, "", r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.InputFields, r.JoinInputProviders)
+	return validateWorkflowNodeFields(r.WorkflowID, "", r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.InputFields, r.JoinInputProviders)
 }
 
 func (r WorkflowNodeUpdateRequest) Validate() error {
 	if err := validateRequired("node_id", r.NodeID); err != nil {
 		return err
 	}
-	return validateWorkflowNodeFields(r.WorkflowID, r.NodeID, r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.InputFields, r.JoinInputProviders)
+	return validateWorkflowNodeFields(r.WorkflowID, r.NodeID, r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.InputFields, r.JoinInputProviders)
 }
 
-func validateWorkflowNodeFields(workflowID string, nodeID string, key string, kind string, displayName string, groupKey string, completionMode string, inputFields []WorkflowInputField, joinInputProviders []WorkflowJoinInputProvider) error {
+func validateWorkflowNodeFields(workflowID string, nodeID string, key string, kind string, displayName string, groupKey string, completionMode string, scriptPath *string, inputFields []WorkflowInputField, joinInputProviders []WorkflowJoinInputProvider) error {
 	if err := validateRequired("workflow_id", workflowID); err != nil {
 		return err
 	}
@@ -1268,6 +1276,12 @@ func validateWorkflowNodeFields(workflowID string, nodeID string, key string, ki
 	}
 	if err := validateWorkflowNodeCompletionMode(kind, completionMode); err != nil {
 		return err
+	}
+	if scriptPath != nil && strings.TrimSpace(*scriptPath) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "script_path", "script_path must be null or a non-empty path")
+	}
+	if scriptPath != nil && strings.TrimSpace(kind) != "script" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "script_path", "script_path is only valid for script nodes")
 	}
 	if strings.TrimSpace(groupKey) != "" {
 		if err := validateModelKey("group_key", groupKey); err != nil {

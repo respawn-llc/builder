@@ -194,6 +194,7 @@ export type WorkflowNode = Readonly<{
   subagentRole: string;
   promptTemplate: string;
   completionMode?: string | undefined;
+  scriptPath?: string | null | undefined;
   inputFields: readonly WorkflowInputField[];
   joinInputProviders: readonly WorkflowJoinInputProvider[];
   outputFields: readonly WorkflowOutputField[];
@@ -302,6 +303,7 @@ export type WorkflowGraphDraftNode = Readonly<{
   subagentRole: string;
   promptTemplate: string;
   completionMode?: string | undefined;
+  scriptPath?: string | null | undefined;
   inputFields: readonly WorkflowInputField[];
   joinInputProviders: readonly WorkflowJoinInputProvider[];
 }>;
@@ -526,6 +528,7 @@ export type AttentionItem = Readonly<{
   askID: string;
   taskTransitionID: string;
   message: string;
+  detailJSON: string;
   suggestions: readonly string[];
   recommendedOptionIndex: number;
   occurredAt: number;
@@ -556,6 +559,8 @@ export type TaskRun = Readonly<{
   taskID: string;
   placementID: string;
   nodeID: string;
+  nodeKind: string;
+  scriptPath: string;
   sessionID: string;
   sessionName: string;
   role: string;
@@ -565,6 +570,8 @@ export type TaskRun = Readonly<{
   startedAt: number;
   completedAt: number;
   interruptedAt: number;
+  interruptionReason: string;
+  interruptionDetail: string;
 }>;
 
 export type TaskTransition = Readonly<{

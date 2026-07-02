@@ -16,6 +16,7 @@ export const workflowEditorEnglish = {
   zoomActualSizeTooltip: "Actual size",
   addNode: "Add node",
   addAgentNode: "Agent node",
+  addScriptNode: "Script node",
   addTerminalNode: "Terminal node",
   createNodeGroup: "Create node group",
   ungroupNode: "Ungroup",
@@ -53,6 +54,8 @@ export const workflowEditorEnglish = {
   legendAgentNode: "Agent node",
   legendAgentNodeHelp:
     "Execute an agentic loop using a specified subagent, with the prompt provided by the transition.",
+  legendScriptNode: "Script node",
+  legendScriptNodeHelp: "Execute a local server-side script and parse stdout as workflow completion JSON.",
   inspectorTitle: "Inspect workflow",
   inspectorUnavailable: "Inspector unavailable",
   entityMissing: "The selected graph item no longer exists in the latest workflow definition.",
@@ -87,6 +90,11 @@ export const workflowEditorEnglish = {
   completionModeShellCommand: "Shell command",
   completionModeUnstructuredOutput: "Unstructured output",
   displayName: "Display name",
+  scriptPath: "Script path",
+  scriptPathHelp:
+    "Executable path on the Kent server. Relative paths resolve against the task managed worktree when the script runs.",
+  selectScriptPath: "Select script",
+  selectScriptPathFailed: "Script picker failed",
   prompt: "Prompt",
   promptHelp: "The task that the target agent node receives when this transition is executed.",
   promptPlaceholders: "Prompt placeholders",

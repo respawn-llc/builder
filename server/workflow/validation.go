@@ -105,20 +105,20 @@ func (s *validationState) indexNodeGroups() {
 
 func (s *validationState) indexNodes() {
 	for _, node := range s.def.Nodes {
-		ref := ValidationError{WorkflowID: s.def.ID, NodeID: node.ID}
-		if strings.TrimSpace(string(node.WorkflowID)) != "" && node.WorkflowID != s.def.ID {
+		ref := ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(node)}
+		if strings.TrimSpace(string(NodeWorkflowID(node))) != "" && NodeWorkflowID(node) != s.def.ID {
 			s.addHard(CodeCrossWorkflowReference, "node references another workflow", ref)
 		}
-		if strings.TrimSpace(string(node.ID)) == "" {
+		if strings.TrimSpace(string(NodeIDOf(node))) == "" {
 			s.addHard(CodeMissingNodeID, "node id is required", ref)
 			continue
 		}
-		if _, exists := s.nodesByID[node.ID]; exists {
+		if _, exists := s.nodesByID[NodeIDOf(node)]; exists {
 			s.addHard(CodeDuplicateNodeID, "node id must be unique", ref)
 			continue
 		}
-		s.nodesByID[node.ID] = node
-		if node.Kind == NodeKindStart {
+		s.nodesByID[NodeIDOf(node)] = node
+		if node.Kind() == NodeKindStart {
 			s.startNodes = append(s.startNodes, node)
 		}
 	}
@@ -189,26 +189,26 @@ func (s *validationState) indexEdges() {
 
 func (s *validationState) validateNodes() {
 	for _, node := range s.def.Nodes {
-		ref := ValidationError{WorkflowID: s.def.ID, NodeID: node.ID}
-		if strings.TrimSpace(string(node.Key)) == "" {
+		ref := ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(node)}
+		if strings.TrimSpace(string(NodeKey(node))) == "" {
 			s.addHard(CodeMissingNodeKey, "node key is required", ref)
-		} else if !workflowkey.Valid(string(node.Key)) {
+		} else if !workflowkey.Valid(string(NodeKey(node))) {
 			s.addHard(CodeInvalidNodeKey, "node key must "+workflowkey.Description, ref)
-		} else if previousNodeID, exists := s.nodeKeys[node.Key]; exists && previousNodeID != node.ID {
+		} else if previousNodeID, exists := s.nodeKeys[NodeKey(node)]; exists && previousNodeID != NodeIDOf(node) {
 			s.addHard(CodeDuplicateNodeKey, "node key must be unique", ref)
 		} else {
-			s.nodeKeys[node.Key] = node.ID
+			s.nodeKeys[NodeKey(node)] = NodeIDOf(node)
 		}
-		if !validDisplayName(node.DisplayName) {
+		if !validDisplayName(NodeDisplayName(node)) {
 			s.addHard(CodeInvalidDisplayName, "node display name must be non-empty and at most 120 characters", ref)
 		}
-		switch node.Kind {
-		case NodeKindStart, NodeKindAgent, NodeKindJoin, NodeKindTerminal:
+		switch node.Kind() {
+		case NodeKindStart, NodeKindAgent, NodeKindScript, NodeKindJoin, NodeKindTerminal:
 		default:
 			s.addHard(CodeInvalidNodeKind, "node kind is invalid", ref)
 		}
-		if strings.TrimSpace(node.GroupID) != "" {
-			if _, exists := s.nodeGroupsByID[strings.TrimSpace(node.GroupID)]; !exists {
+		if strings.TrimSpace(NodeGroupID(node)) != "" {
+			if _, exists := s.nodeGroupsByID[strings.TrimSpace(NodeGroupID(node))]; !exists {
 				s.addHard(CodeInvalidNodeGroup, "node references a missing node group", ref)
 			}
 		}
@@ -228,11 +228,11 @@ func (s *validationState) validateNodeGroups() {
 		branchIDs := map[NodeID]bool{}
 		joinIDs := []NodeID{}
 		for _, node := range members {
-			switch node.Kind {
-			case NodeKindAgent:
-				branchIDs[node.ID] = true
+			switch node.Kind() {
+			case NodeKindAgent, NodeKindScript:
+				branchIDs[NodeIDOf(node)] = true
 			case NodeKindJoin:
-				joinIDs = append(joinIDs, node.ID)
+				joinIDs = append(joinIDs, NodeIDOf(node))
 			default:
 				s.addHard(CodeInvalidNodeGroup, "node group members must be agent branches plus one join", ref)
 			}
@@ -259,8 +259,8 @@ func (s *validationState) nodeGroupMembers(group NodeGroup) []Node {
 		memberIDs[nodeID] = true
 	}
 	for _, node := range s.def.Nodes {
-		if strings.TrimSpace(node.GroupID) == group.ID {
-			memberIDs[node.ID] = true
+		if strings.TrimSpace(NodeGroupID(node)) == group.ID {
+			memberIDs[NodeIDOf(node)] = true
 		}
 	}
 	members := make([]Node, 0, len(memberIDs))
@@ -293,7 +293,7 @@ func (s *validationState) nodeGroupV1FanoutTopologyError(branchIDs map[NodeID]bo
 		return "node group must be represented by one fan-out transition group and branch edges into its join"
 	}
 	source, exists := s.nodesByID[fanoutGroups[0].SourceNodeID]
-	if exists && source.Kind == NodeKindStart {
+	if exists && source.Kind() == NodeKindStart {
 		return fmt.Sprintf("%s cannot directly fan out into a node group yet; insert one split agent after it, fan out from that agent into the group, then join the branches", fmt.Sprintf("Node %s", nodeDisplayName(source)))
 	}
 	if s.nodeGroupBranchesHaveStartIncoming(branchIDs) {
@@ -325,7 +325,7 @@ func (s *validationState) nodeGroupBranchesHaveStartIncoming(branchIDs map[NodeI
 	if len(s.startNodes) != 1 {
 		return false
 	}
-	startID := s.startNodes[0].ID
+	startID := NodeIDOf(s.startNodes[0])
 	for branchID := range branchIDs {
 		hasStartIncoming := false
 		for _, edge := range s.incomingByNode[branchID] {
@@ -370,7 +370,7 @@ func (s *validationState) nodeGroupSeparateFanoutMessage(branchIDs map[NodeID]bo
 		if !exists {
 			continue
 		}
-		return fmt.Sprintf("%s uses separate transitions into the node group branches; use one transition from %s with one edge to each branch, then connect every branch to the join", fmt.Sprintf("Node %s", nodeDisplayName(source)), source.DisplayName)
+		return fmt.Sprintf("%s uses separate transitions into the node group branches; use one transition from %s with one edge to each branch, then connect every branch to the join", fmt.Sprintf("Node %s", nodeDisplayName(source)), NodeDisplayName(source))
 	}
 	return ""
 }
@@ -447,7 +447,7 @@ func (s *validationState) validateEdgeInvocationContract(edge Edge, ref Validati
 	target, targetExists := s.nodesByID[edge.TargetNodeID]
 	source, sourceExists := s.edgeSource(edge)
 	prompt := strings.TrimSpace(edge.PromptTemplate)
-	if targetExists && target.Kind == NodeKindAgent {
+	if targetExists && target.Kind() == NodeKindAgent {
 		if prompt == "" && s.context != ValidationContextDraft {
 			s.addHard(CodeTransitionPromptRequired, "transition into an agent node requires a prompt", ref)
 		}
@@ -455,7 +455,7 @@ func (s *validationState) validateEdgeInvocationContract(edge Edge, ref Validati
 		s.addHard(CodeTransitionPromptForbidden, "transition into a non-agent node cannot have a prompt", ref)
 	}
 	if sourceExists {
-		switch source.Kind {
+		switch source.Kind() {
 		case NodeKindStart:
 			if len(edge.Parameters) > 0 {
 				s.addHard(CodeInvalidParameter, "start transitions cannot declare parameters", ref)
@@ -472,7 +472,7 @@ func (s *validationState) validateEdgeInvocationContract(edge Edge, ref Validati
 func (s *validationState) edgeSource(edge Edge) (Node, bool) {
 	group, groupExists := s.groupsByID[edge.TransitionGroupID]
 	if !groupExists {
-		return Node{}, false
+		return nil, false
 	}
 	source, sourceExists := s.nodesByID[group.SourceNodeID]
 	return source, sourceExists
@@ -508,13 +508,13 @@ func (s *validationState) validateGraph() {
 		return
 	}
 	s.validateStartOutgoingShape()
-	reachable := s.reachableFrom(s.startNodes[0].ID)
+	reachable := s.reachableFrom(NodeIDOf(s.startNodes[0]))
 	for nodeID, node := range s.nodesByID {
 		if !reachable[nodeID] {
-			s.addSemantic(CodeNodeUnreachableFromStart, fmt.Sprintf("%s not reachable", fmt.Sprintf("Node %s", nodeDisplayName(node))), ValidationError{WorkflowID: s.def.ID, NodeID: node.ID})
+			s.addSemantic(CodeNodeUnreachableFromStart, fmt.Sprintf("%s not reachable", fmt.Sprintf("Node %s", nodeDisplayName(node))), ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(node)})
 		}
-		if node.Kind != NodeKindTerminal && !s.canReachTerminal(nodeID) {
-			s.addSemantic(CodeNonTerminalCannotReachTerminal, fmt.Sprintf("%s cannot reach a terminal", fmt.Sprintf("Node %s", nodeDisplayName(node))), ValidationError{WorkflowID: s.def.ID, NodeID: node.ID})
+		if node.Kind() != NodeKindTerminal && !s.canReachTerminal(nodeID) {
+			s.addSemantic(CodeNonTerminalCannotReachTerminal, fmt.Sprintf("%s cannot reach a terminal", fmt.Sprintf("Node %s", nodeDisplayName(node))), ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(node)})
 		}
 	}
 	s.validatePromptPlaceholders()
@@ -522,22 +522,22 @@ func (s *validationState) validateGraph() {
 
 func (s *validationState) validateKindConstraints() {
 	for _, node := range s.def.Nodes {
-		ref := ValidationError{WorkflowID: s.def.ID, NodeID: node.ID}
-		incoming := len(s.incomingByNode[node.ID])
-		outgoingGroups := s.groupsBySource[node.ID]
-		switch node.Kind {
+		ref := ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(node)}
+		incoming := len(s.incomingByNode[NodeIDOf(node)])
+		outgoingGroups := s.groupsBySource[NodeIDOf(node)]
+		switch node.Kind() {
 		case NodeKindStart:
-			if strings.TrimSpace(node.SubagentRole) != "" || incoming > 0 {
+			if strings.TrimSpace(NodeSubagentRole(node)) != "" || incoming > 0 {
 				s.addHard(CodeInvalidStartNode, "start node must be non-executable and have no inputs", ref)
 			}
 		case NodeKindAgent:
-			if strings.TrimSpace(node.SubagentRole) == "" {
+			if strings.TrimSpace(NodeSubagentRole(node)) == "" {
 				s.addSemantic(CodeAgentRoleRequired, "agent node requires a subagent role", ref)
-			} else if !IsDefaultAgentRole(node.SubagentRole) && (s.opts.RoleResolver == nil || !s.opts.RoleResolver.RoleExists(strings.TrimSpace(node.SubagentRole))) {
+			} else if !IsDefaultAgentRole(NodeSubagentRole(node)) && (s.opts.RoleResolver == nil || !s.opts.RoleResolver.RoleExists(strings.TrimSpace(NodeSubagentRole(node)))) {
 				s.addSemantic(CodeAgentRoleMissing, "agent node references a missing subagent role", ref)
 			}
 		case NodeKindJoin:
-			if strings.TrimSpace(node.SubagentRole) != "" {
+			if strings.TrimSpace(NodeSubagentRole(node)) != "" {
 				s.addHard(CodeJoinIsExecutable, "join node must be non-executable", ref)
 			}
 			if incoming < 2 {
@@ -547,7 +547,7 @@ func (s *validationState) validateKindConstraints() {
 				s.addSemantic(CodeInvalidJoinOutgoingShape, "join node must have exactly one outgoing transition group", ref)
 			}
 		case NodeKindTerminal:
-			if strings.TrimSpace(node.SubagentRole) != "" {
+			if strings.TrimSpace(NodeSubagentRole(node)) != "" {
 				s.addHard(CodeTerminalIsExecutable, "terminal node must be non-executable", ref)
 			}
 			if len(outgoingGroups) > 0 {
@@ -561,14 +561,14 @@ func (s *validationState) validateRuntimeSupport() {
 	for _, edge := range s.def.Edges {
 		ref := ValidationError{WorkflowID: s.def.ID, EdgeID: edge.ID, TransitionGroupID: edge.TransitionGroupID}
 		targetKind := NodeKind("")
-		target := Node{}
+		var target Node
 		targetExists := false
 		if resolvedTarget, exists := s.nodesByID[edge.TargetNodeID]; exists {
 			target = resolvedTarget
-			targetKind = target.Kind
+			targetKind = target.Kind()
 			targetExists = true
 		}
-		source := Node{}
+		var source Node
 		sourceExists := false
 		if group, groupExists := s.groupsByID[edge.TransitionGroupID]; groupExists {
 			source, sourceExists = s.nodesByID[group.SourceNodeID]
@@ -582,13 +582,13 @@ func (s *validationState) validateRuntimeSupport() {
 
 func (s *validationState) validateContextSource(edge Edge, source Node, sourceExists bool, target Node, targetExists bool, ref ValidationError) (ContextSource, bool) {
 	contextSource := CanonicalContextSource(edge.ContextSource)
-	if contextSource.Kind != ContextSourceImmediateSource && sourceExists && source.Kind == NodeKindStart {
+	if contextSource.Kind != ContextSourceImmediateSource && sourceExists && source.Kind() == NodeKindStart {
 		s.addSemantic(CodeInvalidContextSource, "start transitions require immediate context source", ref)
 		return contextSource, false
 	}
 	switch contextSource.Kind {
 	case ContextSourceImmediateSource:
-		if edge.ContextMode != ContextModeNewSession && sourceExists && source.Kind != NodeKindAgent {
+		if edge.ContextMode != ContextModeNewSession && sourceExists && source.Kind() != NodeKindAgent {
 			s.addSemantic(CodeInvalidContextSource, "immediate context source for continuation must be an agent node", ref)
 			return contextSource, false
 		}
@@ -609,18 +609,18 @@ func (s *validationState) validateContextSource(edge Edge, source Node, sourceEx
 			return contextSource, false
 		}
 		selected := s.nodesByID[selectedID]
-		if selected.Kind != NodeKindAgent {
+		if selected.Kind() != NodeKindAgent {
 			s.addSemantic(CodeInvalidContextSource, "selected context source must be an agent node", ref)
 			return contextSource, false
 		}
-		if targetExists && selected.ID == target.ID {
+		if targetExists && NodeIDOf(selected) == NodeIDOf(target) {
 			s.addSemantic(CodeInvalidContextSource, "selected context source cannot be the edge target node", ref)
 			return contextSource, false
 		}
 		if !sourceExists || len(s.startNodes) != 1 {
 			return contextSource, true
 		}
-		if selected.ID != source.ID && !s.nodeDominates(selected.ID, source.ID) {
+		if NodeIDOf(selected) != NodeIDOf(source) && !s.nodeDominates(NodeIDOf(selected), NodeIDOf(source)) {
 			s.addSemantic(CodeInvalidContextSource, "selected context source must be guaranteed before the edge source", ref)
 			return contextSource, false
 		}
@@ -633,14 +633,14 @@ func (s *validationState) validateContextSource(edge Edge, source Node, sourceEx
 		if !targetExists {
 			return contextSource, true
 		}
-		if target.Kind != NodeKindAgent {
+		if target.Kind() != NodeKindAgent {
 			s.addSemantic(CodeInvalidContextSource, "previous target context source requires an agent target node", ref)
 			return contextSource, false
 		}
 		if !sourceExists || len(s.startNodes) != 1 {
 			return contextSource, true
 		}
-		if target.ID != source.ID && !s.nodeDominates(target.ID, source.ID) {
+		if NodeIDOf(target) != NodeIDOf(source) && !s.nodeDominates(NodeIDOf(target), NodeIDOf(source)) {
 			s.addSemantic(CodeInvalidContextSource, "previous target context source requires the target node to be guaranteed before the edge source", ref)
 			return contextSource, false
 		}
@@ -653,7 +653,7 @@ func (s *validationState) validateContextSource(edge Edge, source Node, sourceEx
 		if !targetExists {
 			return contextSource, true
 		}
-		if target.Kind != NodeKindAgent {
+		if target.Kind() != NodeKindAgent {
 			s.addSemantic(CodeInvalidContextSource, "previous target or new context source requires an agent target node", ref)
 			return contextSource, false
 		}
@@ -666,22 +666,22 @@ func (s *validationState) validateContextSource(edge Edge, source Node, sourceEx
 
 func (s *validationState) validateStartOutgoingShape() {
 	start := s.startNodes[0]
-	groups := s.groupsBySource[start.ID]
+	groups := s.groupsBySource[NodeIDOf(start)]
 	if s.context == ValidationContextDraft {
 		return
 	}
 	if len(groups) != 1 {
-		s.addSemantic(CodeInvalidStartOutgoingShape, "task start requires exactly one outgoing transition group", ValidationError{WorkflowID: s.def.ID, NodeID: start.ID})
+		s.addSemantic(CodeInvalidStartOutgoingShape, "task start requires exactly one outgoing transition group", ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(start)})
 		return
 	}
 	edges := s.edgesByGroup[groups[0].ID]
 	if len(edges) != 1 {
-		s.addSemantic(CodeInvalidStartOutgoingShape, "task start transition group requires exactly one edge", ValidationError{WorkflowID: s.def.ID, NodeID: start.ID, TransitionGroupID: groups[0].ID})
+		s.addSemantic(CodeInvalidStartOutgoingShape, "task start transition group requires exactly one edge", ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(start), TransitionGroupID: groups[0].ID})
 		return
 	}
 	target, exists := s.nodesByID[edges[0].TargetNodeID]
-	if !exists || target.Kind != NodeKindAgent {
-		s.addSemantic(CodeInvalidStartOutgoingShape, "task start edge must target an agent node", ValidationError{WorkflowID: s.def.ID, NodeID: start.ID, EdgeID: edges[0].ID})
+	if !exists || !IsExecutableNode(target) {
+		s.addSemantic(CodeInvalidStartOutgoingShape, "task start edge must target an executable node", ValidationError{WorkflowID: s.def.ID, NodeID: NodeIDOf(start), EdgeID: edges[0].ID})
 	}
 }
 
@@ -705,8 +705,8 @@ func (s *validationState) validatePromptPlaceholders() {
 		}
 		currentParams := edgeParameterNameSet(edge)
 		source, sourceExists := s.edgeSource(edge)
-		if sourceExists && source.Kind == NodeKindJoin {
-			currentParams = outputFieldNameSet(derived.JoinOutputFieldsForNode(source.ID))
+		if sourceExists && source.Kind() == NodeKindJoin {
+			currentParams = outputFieldNameSet(derived.JoinOutputFieldsForNode(NodeIDOf(source)))
 		}
 		for _, param := range refs.Params {
 			name := strings.TrimSpace(param.Name)
@@ -772,7 +772,7 @@ func (s *validationState) validatePriorParameterReference(edge Edge, param Promp
 			continue
 		}
 		matchedAny = true
-		if s.transitionGroupDominates(group.ID, source.ID) {
+		if s.transitionGroupDominates(group.ID, NodeIDOf(source)) {
 			guaranteed = append(guaranteed, group)
 		}
 	}
@@ -812,8 +812,8 @@ func (s *validationState) transitionGroupParameterSet(groupID TransitionGroupID,
 	// effective parameters are the join's aggregated output fields, so resolve
 	// those when the group's source is a join.
 	if group, exists := s.groupsByID[groupID]; exists {
-		if source, sourceExists := s.nodesByID[group.SourceNodeID]; sourceExists && source.Kind == NodeKindJoin {
-			for _, field := range derived.JoinOutputFieldsForNode(source.ID) {
+		if source, sourceExists := s.nodesByID[group.SourceNodeID]; sourceExists && source.Kind() == NodeKindJoin {
+			for _, field := range derived.JoinOutputFieldsForNode(NodeIDOf(source)) {
 				name := strings.TrimSpace(field.Name)
 				if name != "" {
 					out[name] = true
@@ -836,11 +836,11 @@ func (s *validationState) transitionGroupDominates(groupID TransitionGroupID, ta
 	if len(s.startNodes) != 1 {
 		return false
 	}
-	if !s.reachableFrom(s.startNodes[0].ID)[target] {
+	if !s.reachableFrom(NodeIDOf(s.startNodes[0]))[target] {
 		return false
 	}
 	visited := map[NodeID]bool{}
-	stack := []NodeID{s.startNodes[0].ID}
+	stack := []NodeID{NodeIDOf(s.startNodes[0])}
 	for len(stack) > 0 {
 		nodeID := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -870,7 +870,7 @@ func (s *validationState) nodeDominates(candidate NodeID, target NodeID) bool {
 	if len(s.startNodes) != 1 {
 		return false
 	}
-	reachableWithoutCandidate := s.reachableFromSkipping(s.startNodes[0].ID, candidate)
+	reachableWithoutCandidate := s.reachableFromSkipping(NodeIDOf(s.startNodes[0]), candidate)
 	return !reachableWithoutCandidate[target]
 }
 
@@ -925,7 +925,7 @@ func (s *validationState) canReachTerminal(start NodeID) bool {
 			continue
 		}
 		visited[nodeID] = true
-		if s.nodesByID[nodeID].Kind == NodeKindTerminal {
+		if s.nodesByID[nodeID].Kind() == NodeKindTerminal {
 			return true
 		}
 		for _, edge := range s.outgoingByNode[nodeID] {
@@ -1020,14 +1020,14 @@ func (s *validationState) branchJoinDistances(start NodeID) (map[NodeID]int, boo
 		if !exists {
 			return nil, false
 		}
-		if node.Kind == NodeKindJoin {
+		if node.Kind() == NodeKindJoin {
 			previous, exists := distances[current.nodeID]
 			if !exists || current.distance < previous {
 				distances[current.nodeID] = current.distance
 			}
 			continue
 		}
-		if node.Kind == NodeKindTerminal {
+		if node.Kind() == NodeKindTerminal {
 			return nil, false
 		}
 		groups := s.groupsBySource[current.nodeID]
@@ -1070,13 +1070,13 @@ func edgeMessageSubject(edge Edge) string {
 }
 
 func nodeDisplayName(node Node) string {
-	if name := strings.TrimSpace(node.DisplayName); name != "" {
+	if name := strings.TrimSpace(NodeDisplayName(node)); name != "" {
 		return name
 	}
-	if key := strings.TrimSpace(string(node.Key)); key != "" {
+	if key := strings.TrimSpace(string(NodeKey(node))); key != "" {
 		return key
 	}
-	if id := strings.TrimSpace(string(node.ID)); id != "" {
+	if id := strings.TrimSpace(string(NodeIDOf(node))); id != "" {
 		return id
 	}
 	return "unknown"

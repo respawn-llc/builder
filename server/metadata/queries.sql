@@ -225,6 +225,7 @@ INSERT INTO workflow_nodes (
     subagent_role,
     prompt_template,
     completion_mode,
+    script_path,
     input_fields_json,
     join_input_providers_json,
     output_fields_json,
@@ -239,6 +240,7 @@ INSERT INTO workflow_nodes (
     sqlc.arg(subagent_role),
     sqlc.arg(prompt_template),
     sqlc.arg(completion_mode),
+    sqlc.narg(script_path),
     sqlc.arg(input_fields_json),
     sqlc.arg(join_input_providers_json),
     sqlc.arg(output_fields_json),
@@ -295,7 +297,7 @@ ON CONFLICT(id) DO UPDATE SET
 WHERE workflow_node_groups.workflow_id = excluded.workflow_id;
 
 -- name: UpsertWorkflowNode :execrows
-INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, prompt_template, completion_mode, input_fields_json, join_input_providers_json, output_fields_json, group_id, sort_order)
+INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, prompt_template, completion_mode, script_path, input_fields_json, join_input_providers_json, output_fields_json, group_id, sort_order)
 VALUES (
     sqlc.arg(id),
     sqlc.arg(workflow_id),
@@ -305,6 +307,7 @@ VALUES (
     sqlc.arg(subagent_role),
     sqlc.arg(prompt_template),
     sqlc.arg(completion_mode),
+    sqlc.narg(script_path),
     sqlc.arg(input_fields_json),
     sqlc.arg(join_input_providers_json),
     sqlc.arg(output_fields_json),
@@ -318,6 +321,7 @@ ON CONFLICT(id) DO UPDATE SET
     subagent_role = excluded.subagent_role,
     prompt_template = excluded.prompt_template,
     completion_mode = excluded.completion_mode,
+    script_path = excluded.script_path,
     input_fields_json = excluded.input_fields_json,
     join_input_providers_json = excluded.join_input_providers_json,
     output_fields_json = excluded.output_fields_json,
@@ -452,6 +456,7 @@ SELECT
     subagent_role,
     prompt_template,
     completion_mode,
+    script_path,
     input_fields_json,
     join_input_providers_json,
     output_fields_json,
@@ -471,6 +476,7 @@ SELECT
     subagent_role,
     prompt_template,
     completion_mode,
+    script_path,
     input_fields_json,
     join_input_providers_json,
     output_fields_json,
@@ -608,6 +614,7 @@ SET
     subagent_role = sqlc.arg(subagent_role),
     prompt_template = sqlc.arg(prompt_template),
     completion_mode = sqlc.arg(completion_mode),
+    script_path = sqlc.narg(script_path),
     input_fields_json = sqlc.arg(input_fields_json),
     join_input_providers_json = sqlc.arg(join_input_providers_json),
     output_fields_json = sqlc.arg(output_fields_json),
@@ -1003,6 +1010,13 @@ SELECT
         WHERE t.workflow_id = sqlc.arg(workflow_id)
           AND t.canceled_at_unix_ms = 0
           AND n.kind NOT IN ('start', 'terminal')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM task_run_records interrupted
+              WHERE interrupted.placement_id = p.id
+                AND interrupted.completed_at_unix_ms = 0
+                AND interrupted.interrupted_at_unix_ms > 0
+          )
     ) AS active_node_placement_count,
     (
         SELECT CAST(COUNT(DISTINCT tt.id) AS INTEGER)
@@ -1024,7 +1038,7 @@ SELECT
           AND r.completed_at_unix_ms = 0
           AND r.interrupted_at_unix_ms = 0
           AND p.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
     ) AS active_run_count,
     (
         SELECT CAST(COUNT(DISTINCT r.id) AS INTEGER)
@@ -1040,7 +1054,7 @@ SELECT
           AND r.interrupted_at_unix_ms = 0
           AND r.waiting_ask_id = ''
           AND p.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
     ) AS runnable_run_count;
 
 -- name: GetWorkflowDeleteImpact :one
@@ -1065,7 +1079,7 @@ SELECT
           AND r.completed_at_unix_ms = 0
           AND r.interrupted_at_unix_ms = 0
           AND placement.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
         THEN r.id
     END) AS INTEGER) AS active_run_count,
     CAST(COUNT(DISTINCT CASE
@@ -1076,7 +1090,7 @@ SELECT
           AND r.waiting_ask_id = ''
           AND t.canceled_at_unix_ms = 0
           AND placement.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
         THEN r.id
     END) AS INTEGER) AS runnable_run_count,
     CAST(COUNT(DISTINCT CASE
@@ -1085,7 +1099,7 @@ SELECT
             AND r.completed_at_unix_ms = 0
             AND r.interrupted_at_unix_ms = 0
             AND placement.state = 'active'
-            AND n.kind = 'agent'
+            AND n.kind IN ('agent', 'script')
         )
         OR (
             r.automation_requested_at_unix_ms > 0
@@ -1095,7 +1109,7 @@ SELECT
             AND r.waiting_ask_id = ''
             AND t.canceled_at_unix_ms = 0
             AND placement.state = 'active'
-            AND n.kind = 'agent'
+            AND n.kind IN ('agent', 'script')
         )
         THEN t.id
     END) AS INTEGER) AS blocked_task_count
@@ -1977,7 +1991,7 @@ WHERE r.automation_requested_at_unix_ms > 0
   AND r.waiting_ask_id = ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
 ORDER BY r.automation_requested_at_unix_ms ASC, r.id ASC
 LIMIT sqlc.arg(limit);
 
@@ -2002,7 +2016,7 @@ WHERE task_runs.id = sqlc.arg(id)
       WHERE t.id = p.task_id
         AND t.canceled_at_unix_ms = 0
         AND p.state = 'active'
-        AND n.kind = 'agent'
+        AND n.kind IN ('agent', 'script')
   )
 RETURNING
     id,
@@ -3090,7 +3104,7 @@ SELECT
           AND r.completed_at_unix_ms = 0
           AND r.interrupted_at_unix_ms = 0
           AND p.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
     ) AS INTEGER) AS active_runs,
     CAST((
         SELECT COUNT(DISTINCT r.id)
@@ -3106,7 +3120,7 @@ SELECT
           AND r.interrupted_at_unix_ms = 0
           AND r.waiting_ask_id = ''
           AND p.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
     ) AS INTEGER) AS runnable_runs;
 
 -- name: AcquireProjectDeleteWriteLock :execrows
@@ -3666,7 +3680,7 @@ WHERE r.task_id = sqlc.arg(task_id)
   AND r.completed_at_unix_ms = 0
   AND r.interrupted_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
 ORDER BY r.started_at_unix_ms DESC, (
     SELECT storage.rowid
     FROM task_runs storage
@@ -3684,7 +3698,7 @@ WHERE r.task_id = sqlc.arg(task_id)
   AND r.completed_at_unix_ms = 0
   AND r.interrupted_at_unix_ms > 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
 ORDER BY r.interrupted_at_unix_ms DESC, (
     SELECT storage.rowid
     FROM task_runs storage
@@ -3894,7 +3908,7 @@ WHERE r.started_at_unix_ms > 0
   AND trim(COALESCE(r.session_id, '')) != ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
   AND r.id = sqlc.arg(run_id)
 ORDER BY r.started_at_unix_ms DESC, (
     SELECT storage.rowid
@@ -3934,7 +3948,7 @@ WHERE r.started_at_unix_ms > 0
   AND trim(COALESCE(r.session_id, '')) != ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
   AND r.session_id = sqlc.arg(session_id)
 ORDER BY r.started_at_unix_ms DESC, (
     SELECT storage.rowid
@@ -3974,7 +3988,7 @@ WHERE r.started_at_unix_ms > 0
   AND trim(COALESCE(r.session_id, '')) != ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
   AND t.id = sqlc.arg(task_id)
 ORDER BY r.started_at_unix_ms DESC, (
     SELECT storage.rowid
@@ -4014,7 +4028,7 @@ WHERE r.started_at_unix_ms > 0
   AND trim(COALESCE(r.session_id, '')) != ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
   AND t.short_id = sqlc.arg(short_id)
   AND t.project_id = sqlc.arg(project_id)
 ORDER BY r.started_at_unix_ms DESC, (
@@ -4055,7 +4069,7 @@ WHERE r.started_at_unix_ms > 0
   AND trim(COALESCE(r.session_id, '')) != ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
   AND t.short_id = sqlc.arg(short_id)
 ORDER BY r.started_at_unix_ms DESC, (
     SELECT storage.rowid

@@ -23,13 +23,18 @@ import {
 } from "./workflowEditorGraphMutations";
 
 describe("workflowEditorGraphMutations", () => {
-  it("adds agent and terminal nodes", () => {
+  it("adds executable and terminal nodes", () => {
     const agent = addWorkflowNode(draftDefinitionFromSource(workflowDefinition), {
       id: "workflow-node-agent",
       kind: "agent",
       name: "Review",
     });
-    const terminal = addWorkflowNode(agent.draft, {
+    const script = addWorkflowNode(agent.draft, {
+      id: "workflow-node-script",
+      kind: "script",
+      name: "Generate",
+    });
+    const terminal = addWorkflowNode(script.draft, {
       id: "workflow-node-terminal",
       kind: "terminal",
       name: "Archived",
@@ -39,6 +44,12 @@ describe("workflowEditorGraphMutations", () => {
       key: "review",
       kind: "agent",
       subagentRole: "default",
+    });
+    expect(script.draft.nodes.find((node) => node.id === "workflow-node-script")).toMatchObject({
+      key: "generate",
+      kind: "script",
+      scriptPath: null,
+      subagentRole: "",
     });
     expect(terminal.draft.nodes.find((node) => node.id === "workflow-node-terminal")).toMatchObject({
       key: "archived",

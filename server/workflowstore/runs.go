@@ -318,6 +318,10 @@ func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (R
 			return RunStartContext{}, fmt.Errorf("resolve workflow run metadata: %w", err)
 		}
 	}
+	nodeRecord, err := s.runStartNodeRecord(ctx, snapshot)
+	if err != nil {
+		return RunStartContext{}, err
+	}
 	parameterValues := map[string]string{}
 	for key, value := range inputValues {
 		parameterValues[key] = value
@@ -333,7 +337,7 @@ func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (R
 			Run:                            runRecordFromTaskRun(run),
 			Task:                           taskRecordFromTask(task),
 			Workflow:                       workflowRecord,
-			Node:                           nodeRecordFromSnapshot(snapshot.Node, snapshot.WorkflowID),
+			Node:                           nodeRecord,
 			ContextMode:                    transitionContext.ContextMode,
 			WorkflowHasContinueSessionEdge: snapshot.hasContinueSessionEdge(),
 			SourceRunID:                    transitionContext.SourceRunID,
@@ -363,7 +367,7 @@ func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (R
 		Run:                            runRecordFromTaskRun(run),
 		Task:                           taskRecordFromTask(task),
 		Workflow:                       workflowRecord,
-		Node:                           nodeRecordFromSnapshot(snapshot.Node, snapshot.WorkflowID),
+		Node:                           nodeRecord,
 		ContextMode:                    transitionContext.ContextMode,
 		WorkflowHasContinueSessionEdge: snapshot.hasContinueSessionEdge(),
 		SourceRunID:                    transitionContext.SourceRunID,
@@ -384,6 +388,28 @@ func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (R
 		WorktreeID:                     worktree.ID,
 		WorktreeRoot:                   worktree.CanonicalRoot,
 	}, nil
+}
+
+func (s *Store) runStartNodeRecord(ctx context.Context, snapshot runStartSnapshot) (NodeRecord, error) {
+	node := nodeRecordFromSnapshot(snapshot.Node, snapshot.WorkflowID)
+	if node.Kind != workflow.NodeKindScript {
+		return node, nil
+	}
+	live, err := s.queries.GetWorkflowNode(ctx, string(node.ID))
+	if err != nil {
+		return NodeRecord{}, fmt.Errorf("load live script node %q: %w", node.ID, err)
+	}
+	if live.WorkflowID != string(snapshot.WorkflowID) {
+		return NodeRecord{}, fmt.Errorf("live script node %q belongs to workflow %q, want %q", node.ID, live.WorkflowID, snapshot.WorkflowID)
+	}
+	if workflow.NodeKind(live.Kind) != workflow.NodeKindScript {
+		return NodeRecord{}, fmt.Errorf("live node %q is %q, want script", node.ID, live.Kind)
+	}
+	node.ScriptPath = ""
+	if live.ScriptPath.Valid {
+		node.ScriptPath = live.ScriptPath.String
+	}
+	return node, nil
 }
 
 // placementIsFanoutBranch reports whether the run's placement was created as a

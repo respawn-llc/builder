@@ -107,7 +107,7 @@ func TestTaskCreateStartCancelAndComments(t *testing.T) {
 	completedDone := false
 	activeNonTerminal := false
 	for _, placement := range placements {
-		if placement.NodeID == done.ID {
+		if placement.NodeID == workflow.NodeIDOf(done) {
 			if placement.State == "completed" {
 				completedDone = true
 			}
@@ -134,7 +134,7 @@ func TestCancelTaskAfterMovingOutOfDoneWritesCurrentTerminalPlacement(t *testing
 	}
 	start := nodeByKind(t, def, workflow.NodeKindStart)
 	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: start.ID}); err != nil {
+	if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)}); err != nil {
 		t.Fatalf("ManualMoveTask reset: %v", err)
 	}
 
@@ -149,7 +149,7 @@ func TestCancelTaskAfterMovingOutOfDoneWritesCurrentTerminalPlacement(t *testing
 	completedTerminalCount := 0
 	supersededTerminalCount := 0
 	for _, placement := range placements {
-		if placement.NodeID != done.ID {
+		if placement.NodeID != workflow.NodeIDOf(done) {
 			continue
 		}
 		switch placement.State {

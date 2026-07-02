@@ -224,7 +224,7 @@ WHERE task_runs.id = ?3
       WHERE t.id = p.task_id
         AND t.canceled_at_unix_ms = 0
         AND p.state = 'active'
-        AND n.kind = 'agent'
+        AND n.kind IN ('agent', 'script')
   )
 RETURNING
     id,
@@ -1498,7 +1498,7 @@ SELECT
           AND r.completed_at_unix_ms = 0
           AND r.interrupted_at_unix_ms = 0
           AND p.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
     ) AS INTEGER) AS active_runs,
     CAST((
         SELECT COUNT(DISTINCT r.id)
@@ -1514,7 +1514,7 @@ SELECT
           AND r.interrupted_at_unix_ms = 0
           AND r.waiting_ask_id = ''
           AND p.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
     ) AS INTEGER) AS runnable_runs
 `
 
@@ -2210,7 +2210,7 @@ SELECT
           AND r.completed_at_unix_ms = 0
           AND r.interrupted_at_unix_ms = 0
           AND placement.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
         THEN r.id
     END) AS INTEGER) AS active_run_count,
     CAST(COUNT(DISTINCT CASE
@@ -2221,7 +2221,7 @@ SELECT
           AND r.waiting_ask_id = ''
           AND t.canceled_at_unix_ms = 0
           AND placement.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
         THEN r.id
     END) AS INTEGER) AS runnable_run_count,
     CAST(COUNT(DISTINCT CASE
@@ -2230,7 +2230,7 @@ SELECT
             AND r.completed_at_unix_ms = 0
             AND r.interrupted_at_unix_ms = 0
             AND placement.state = 'active'
-            AND n.kind = 'agent'
+            AND n.kind IN ('agent', 'script')
         )
         OR (
             r.automation_requested_at_unix_ms > 0
@@ -2240,7 +2240,7 @@ SELECT
             AND r.waiting_ask_id = ''
             AND t.canceled_at_unix_ms = 0
             AND placement.state = 'active'
-            AND n.kind = 'agent'
+            AND n.kind IN ('agent', 'script')
         )
         THEN t.id
     END) AS INTEGER) AS blocked_task_count
@@ -2356,6 +2356,13 @@ SELECT
         WHERE t.workflow_id = ?1
           AND t.canceled_at_unix_ms = 0
           AND n.kind NOT IN ('start', 'terminal')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM task_run_records interrupted
+              WHERE interrupted.placement_id = p.id
+                AND interrupted.completed_at_unix_ms = 0
+                AND interrupted.interrupted_at_unix_ms > 0
+          )
     ) AS active_node_placement_count,
     (
         SELECT CAST(COUNT(DISTINCT tt.id) AS INTEGER)
@@ -2377,7 +2384,7 @@ SELECT
           AND r.completed_at_unix_ms = 0
           AND r.interrupted_at_unix_ms = 0
           AND p.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
     ) AS active_run_count,
     (
         SELECT CAST(COUNT(DISTINCT r.id) AS INTEGER)
@@ -2393,7 +2400,7 @@ SELECT
           AND r.interrupted_at_unix_ms = 0
           AND r.waiting_ask_id = ''
           AND p.state = 'active'
-          AND n.kind = 'agent'
+          AND n.kind IN ('agent', 'script')
     ) AS runnable_run_count
 `
 
@@ -2426,6 +2433,7 @@ SELECT
     subagent_role,
     prompt_template,
     completion_mode,
+    script_path,
     input_fields_json,
     join_input_providers_json,
     output_fields_json,
@@ -2445,6 +2453,7 @@ type GetWorkflowNodeRow struct {
 	SubagentRole           string
 	PromptTemplate         string
 	CompletionMode         string
+	ScriptPath             sql.NullString
 	InputFieldsJson        string
 	JoinInputProvidersJson string
 	OutputFieldsJson       string
@@ -2464,6 +2473,7 @@ func (q *Queries) GetWorkflowNode(ctx context.Context, id string) (GetWorkflowNo
 		&i.SubagentRole,
 		&i.PromptTemplate,
 		&i.CompletionMode,
+		&i.ScriptPath,
 		&i.InputFieldsJson,
 		&i.JoinInputProvidersJson,
 		&i.OutputFieldsJson,
@@ -3344,6 +3354,7 @@ INSERT INTO workflow_nodes (
     subagent_role,
     prompt_template,
     completion_mode,
+    script_path,
     input_fields_json,
     join_input_providers_json,
     output_fields_json,
@@ -3362,7 +3373,8 @@ INSERT INTO workflow_nodes (
     ?10,
     ?11,
     ?12,
-    ?13
+    ?13,
+    ?14
 )
 `
 
@@ -3375,6 +3387,7 @@ type InsertWorkflowNodeParams struct {
 	SubagentRole           string
 	PromptTemplate         string
 	CompletionMode         string
+	ScriptPath             sql.NullString
 	InputFieldsJson        string
 	JoinInputProvidersJson string
 	OutputFieldsJson       string
@@ -3392,6 +3405,7 @@ func (q *Queries) InsertWorkflowNode(ctx context.Context, arg InsertWorkflowNode
 		arg.SubagentRole,
 		arg.PromptTemplate,
 		arg.CompletionMode,
+		arg.ScriptPath,
 		arg.InputFieldsJson,
 		arg.JoinInputProvidersJson,
 		arg.OutputFieldsJson,
@@ -4195,7 +4209,7 @@ WHERE r.task_id = ?1
   AND r.completed_at_unix_ms = 0
   AND r.interrupted_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
 ORDER BY r.started_at_unix_ms DESC, (
     SELECT storage.rowid
     FROM task_runs storage
@@ -5076,7 +5090,7 @@ WHERE r.task_id = ?1
   AND r.completed_at_unix_ms = 0
   AND r.interrupted_at_unix_ms > 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
 ORDER BY r.interrupted_at_unix_ms DESC, (
     SELECT storage.rowid
     FROM task_runs storage
@@ -5145,7 +5159,7 @@ WHERE r.automation_requested_at_unix_ms > 0
   AND r.waiting_ask_id = ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
 ORDER BY r.automation_requested_at_unix_ms ASC, r.id ASC
 LIMIT ?1
 `
@@ -6893,6 +6907,7 @@ SELECT
     subagent_role,
     prompt_template,
     completion_mode,
+    script_path,
     input_fields_json,
     join_input_providers_json,
     output_fields_json,
@@ -6912,6 +6927,7 @@ type ListWorkflowNodesRow struct {
 	SubagentRole           string
 	PromptTemplate         string
 	CompletionMode         string
+	ScriptPath             sql.NullString
 	InputFieldsJson        string
 	JoinInputProvidersJson string
 	OutputFieldsJson       string
@@ -6937,6 +6953,7 @@ func (q *Queries) ListWorkflowNodes(ctx context.Context, workflowID string) ([]L
 			&i.SubagentRole,
 			&i.PromptTemplate,
 			&i.CompletionMode,
+			&i.ScriptPath,
 			&i.InputFieldsJson,
 			&i.JoinInputProvidersJson,
 			&i.OutputFieldsJson,
@@ -8088,7 +8105,7 @@ WHERE r.started_at_unix_ms > 0
   AND trim(COALESCE(r.session_id, '')) != ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
   AND t.short_id = ?1
   AND t.project_id = ?2
 ORDER BY r.started_at_unix_ms DESC, (
@@ -8179,7 +8196,7 @@ WHERE r.started_at_unix_ms > 0
   AND trim(COALESCE(r.session_id, '')) != ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
   AND r.id = ?1
 ORDER BY r.started_at_unix_ms DESC, (
     SELECT storage.rowid
@@ -8264,7 +8281,7 @@ WHERE r.started_at_unix_ms > 0
   AND trim(COALESCE(r.session_id, '')) != ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
   AND r.session_id = ?1
 ORDER BY r.started_at_unix_ms DESC, (
     SELECT storage.rowid
@@ -8349,7 +8366,7 @@ WHERE r.started_at_unix_ms > 0
   AND trim(COALESCE(r.session_id, '')) != ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
   AND t.short_id = ?1
 ORDER BY r.started_at_unix_ms DESC, (
     SELECT storage.rowid
@@ -8434,7 +8451,7 @@ WHERE r.started_at_unix_ms > 0
   AND trim(COALESCE(r.session_id, '')) != ''
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
   AND t.id = ?1
 ORDER BY r.started_at_unix_ms DESC, (
     SELECT storage.rowid
@@ -9149,12 +9166,13 @@ SET
     subagent_role = ?4,
     prompt_template = ?5,
     completion_mode = ?6,
-    input_fields_json = ?7,
-    join_input_providers_json = ?8,
-    output_fields_json = ?9,
-    group_id = ?10
-WHERE id = ?11
-  AND workflow_id = ?12
+    script_path = ?7,
+    input_fields_json = ?8,
+    join_input_providers_json = ?9,
+    output_fields_json = ?10,
+    group_id = ?11
+WHERE id = ?12
+  AND workflow_id = ?13
 `
 
 type UpdateWorkflowNodeParams struct {
@@ -9164,6 +9182,7 @@ type UpdateWorkflowNodeParams struct {
 	SubagentRole           string
 	PromptTemplate         string
 	CompletionMode         string
+	ScriptPath             sql.NullString
 	InputFieldsJson        string
 	JoinInputProvidersJson string
 	OutputFieldsJson       string
@@ -9180,6 +9199,7 @@ func (q *Queries) UpdateWorkflowNode(ctx context.Context, arg UpdateWorkflowNode
 		arg.SubagentRole,
 		arg.PromptTemplate,
 		arg.CompletionMode,
+		arg.ScriptPath,
 		arg.InputFieldsJson,
 		arg.JoinInputProvidersJson,
 		arg.OutputFieldsJson,
@@ -9559,7 +9579,7 @@ func (q *Queries) UpsertWorkflowEdge(ctx context.Context, arg UpsertWorkflowEdge
 }
 
 const upsertWorkflowNode = `-- name: UpsertWorkflowNode :execrows
-INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, prompt_template, completion_mode, input_fields_json, join_input_providers_json, output_fields_json, group_id, sort_order)
+INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, prompt_template, completion_mode, script_path, input_fields_json, join_input_providers_json, output_fields_json, group_id, sort_order)
 VALUES (
     ?1,
     ?2,
@@ -9573,7 +9593,8 @@ VALUES (
     ?10,
     ?11,
     ?12,
-    ?13
+    ?13,
+    ?14
 )
 ON CONFLICT(id) DO UPDATE SET
     node_key = excluded.node_key,
@@ -9582,6 +9603,7 @@ ON CONFLICT(id) DO UPDATE SET
     subagent_role = excluded.subagent_role,
     prompt_template = excluded.prompt_template,
     completion_mode = excluded.completion_mode,
+    script_path = excluded.script_path,
     input_fields_json = excluded.input_fields_json,
     join_input_providers_json = excluded.join_input_providers_json,
     output_fields_json = excluded.output_fields_json,
@@ -9599,6 +9621,7 @@ type UpsertWorkflowNodeParams struct {
 	SubagentRole           string
 	PromptTemplate         string
 	CompletionMode         string
+	ScriptPath             sql.NullString
 	InputFieldsJson        string
 	JoinInputProvidersJson string
 	OutputFieldsJson       string
@@ -9616,6 +9639,7 @@ func (q *Queries) UpsertWorkflowNode(ctx context.Context, arg UpsertWorkflowNode
 		arg.SubagentRole,
 		arg.PromptTemplate,
 		arg.CompletionMode,
+		arg.ScriptPath,
 		arg.InputFieldsJson,
 		arg.JoinInputProvidersJson,
 		arg.OutputFieldsJson,

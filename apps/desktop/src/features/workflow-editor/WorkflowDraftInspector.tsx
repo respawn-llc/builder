@@ -1,11 +1,15 @@
 import { useTranslation } from "react-i18next";
 
 import type { WorkflowDefinition, WorkflowValidation } from "../../api";
+import { errorMessage } from "../../api/errors";
 import type { WorkflowInspectorSelection } from "../../app/sidebarContext";
+import { useAppServices } from "../../app/useAppServices";
 import {
+  Button,
   DisabledInteractionGuard,
   identifierInputAttributes,
   SelectField,
+  showStatusToast,
   TextArea,
   TextInput,
   TooltipProvider,
@@ -109,6 +113,16 @@ function WorkflowDraftNodeDetails({
   if (node.kind === "agent") {
     return (
       <AgentNodeDraftDetails
+        controller={controller}
+        definition={definition}
+        node={node}
+        validation={validation}
+      />
+    );
+  }
+  if (node.kind === "script") {
+    return (
+      <ScriptNodeDraftDetails
         controller={controller}
         definition={definition}
         node={node}
@@ -312,7 +326,9 @@ function EdgeInvocationSections({
           promptTemplate={edge.promptTemplate}
         />
       ) : null}
-      {sourceKind === "agent" ? <EditableEdgeParameters controller={controller} edge={edge} /> : null}
+      {sourceKind === "agent" || sourceKind === "script" ? (
+        <EditableEdgeParameters controller={controller} edge={edge} />
+      ) : null}
       {sourceKind === "join" && targetKind === "agent" ? (
         <FieldSummary
           fields={parameterSummaryFields(promptParameters)}
@@ -507,6 +523,101 @@ function FixedNodeDraftDetails({
           value={node.key}
         />
       </DetailSection>
+      <ValidationDetails errors={errors} />
+    </InspectorStack>
+  );
+}
+
+function ScriptNodeDraftDetails({
+  controller,
+  definition,
+  node,
+  validation,
+}: Readonly<{
+  controller: WorkflowEditorDraftController;
+  definition: WorkflowDefinition;
+  node: DraftWorkflowNode;
+  validation: WorkflowValidation;
+}>) {
+  const { t } = useTranslation();
+  const { nativeBridge } = useAppServices();
+  const errors = validation.errors.filter(
+    (error) => error.nodeID === node.id || error.relatedIDs.includes(node.id),
+  );
+  const canPickScript = nativeBridge.capabilities.files.select;
+  async function pickScriptPath(): Promise<void> {
+    const selection = await nativeBridge.files.selectFile({ title: t("workflowEditor.selectScriptPath") });
+    if (selection === null) {
+      return;
+    }
+    controller.dispatch({
+      nodeID: node.id,
+      patch: { scriptPath: selection.path },
+      type: "editScriptNode",
+    });
+  }
+  return (
+    <InspectorStack>
+      <DetailSection>
+        <TextInput
+          label={t("workflowEditor.displayName")}
+          onChange={(event) => {
+            controller.dispatch({
+              nodeID: node.id,
+              patch: { name: event.target.value },
+              type: "editScriptNode",
+            });
+          }}
+          value={node.name}
+        />
+        <TextInput
+          {...identifierInputAttributes}
+          label={t("workflowEditor.key")}
+          onChange={(event) => {
+            controller.dispatch({
+              nodeID: node.id,
+              patch: { key: event.target.value },
+              type: "editScriptNode",
+            });
+          }}
+          value={node.key}
+        />
+        <TextInput
+          label={t("workflowEditor.scriptPath")}
+          labelHelp={t("workflowEditor.scriptPathHelp")}
+          onChange={(event) => {
+            const value = event.target.value;
+            controller.dispatch({
+              nodeID: node.id,
+              patch: { scriptPath: value.length === 0 ? null : value },
+              type: "editScriptNode",
+            });
+          }}
+          value={node.scriptPath ?? ""}
+        />
+        {canPickScript ? (
+          <Button
+            onClick={() => {
+              void pickScriptPath().catch((cause: unknown) => {
+                showStatusToast({
+                  id: "workflow-script-path-picker-failed",
+                  title: t("workflowEditor.selectScriptPathFailed"),
+                  body: errorMessage(cause),
+                  tone: "danger",
+                });
+              });
+            }}
+            type="button"
+            variant="secondary"
+          >
+            {t("workflowEditor.selectScriptPath")}
+          </Button>
+        ) : null}
+      </DetailSection>
+      <FieldSummary
+        fields={derivedNodeWiring(definition, node.id).possibleProvisionFields}
+        title={t("workflowEditor.outputs")}
+      />
       <ValidationDetails errors={errors} />
     </InspectorStack>
   );

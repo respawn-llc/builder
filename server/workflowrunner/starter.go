@@ -169,6 +169,12 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 	if input.Run.Generation != req.Generation {
 		return fmt.Errorf("stale workflow run generation: got %d want %d", req.Generation, input.Run.Generation)
 	}
+	if input.Node.Kind == workflow.NodeKindScript {
+		return s.startScriptWorkflowRun(req, input)
+	}
+	if input.Node.Kind != workflow.NodeKindAgent {
+		return fmt.Errorf("workflow node %q is %q, want executable agent or script", input.Node.ID, input.Node.Kind)
+	}
 	if err := s.validateRole(input.Node.SubagentRole); err != nil {
 		return err
 	}
@@ -863,7 +869,9 @@ func workflowRuntimeEnabledTools(enabled []toolspec.ID) []toolspec.ID {
 func (s *Starter) interrupt(ctx context.Context, runID workflow.RunID, generation int64, reason string, cause error) {
 	detail := "{}"
 	if cause != nil {
-		if raw, err := json.Marshal(map[string]string{"error": cause.Error()}); err == nil {
+		if detailed, ok := cause.(interface{ InterruptionDetailJSON() string }); ok && strings.TrimSpace(detailed.InterruptionDetailJSON()) != "" {
+			detail = detailed.InterruptionDetailJSON()
+		} else if raw, err := json.Marshal(map[string]string{"error": cause.Error()}); err == nil {
 			detail = string(raw)
 		}
 	}

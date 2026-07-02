@@ -121,6 +121,7 @@ describe("native bridge capabilities", () => {
     expect(bridge.capabilities.platform).toBe("browser");
     expect(bridge.capabilities.clipboard).toEqual({ readText: false, writeText: false });
     expect(bridge.capabilities.directories.select).toBe(false);
+    expect(bridge.capabilities.files).toEqual({ open: false, select: false, stat: false });
     expect(bridge.capabilities.links.openExternal).toBe(false);
     expect(bridge.capabilities.notifications.basic).toBe(true);
     expect(bridge.capabilities.settings).toBe(true);
@@ -139,6 +140,7 @@ describe("native bridge capabilities", () => {
     expect(bridge.capabilities.platform).toBe("macos");
     expect(bridge.capabilities.clipboard).toEqual({ readText: true, writeText: true });
     expect(bridge.capabilities.directories.select).toBe(true);
+    expect(bridge.capabilities.files).toEqual({ open: true, select: true, stat: true });
     expect(bridge.capabilities.links.openExternal).toBe(true);
     expect(bridge.capabilities.logging.localFile).toBe(true);
     expect(bridge.capabilities.windowDrag).toBe(true);
@@ -280,6 +282,7 @@ describe("native bridge capabilities", () => {
       "store:default",
       "clipboard-manager:allow-read-text",
       "clipboard-manager:allow-write-text",
+      "dialog:allow-open",
       "core:event:allow-emit",
       "notification:default",
       "core:event:allow-emit-to",

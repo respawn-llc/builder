@@ -250,8 +250,8 @@ func createTaskWorktreeTestTaskWithSource(t *testing.T, env *serviceTestEnv, sou
 func taskWorktreeNodeIDByKind(t *testing.T, def workflow.Definition, kind workflow.NodeKind) workflow.NodeID {
 	t.Helper()
 	for _, node := range def.Nodes {
-		if node.Kind == kind {
-			return node.ID
+		if node.Kind() == kind {
+			return workflow.NodeIDOf(node)
 		}
 	}
 	t.Fatalf("node kind %q not found", kind)

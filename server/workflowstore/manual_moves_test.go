@@ -18,7 +18,7 @@ func TestManualMoveToTerminalArchivesWithoutOutputValues(t *testing.T) {
 	}
 	done := nodeByKind(t, def, workflow.NodeKindTerminal)
 
-	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: done.ID})
+	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(done)})
 	if err != nil {
 		t.Fatalf("ManualMoveTask: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestManualMoveToTerminalArchivesWithoutOutputValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements: %v", err)
 	}
-	if len(placements) != 3 || placements[1].State != "completed" || placements[2].NodeID != done.ID || placements[2].State != "completed" {
+	if len(placements) != 3 || placements[1].State != "completed" || placements[2].NodeID != workflow.NodeIDOf(done) || placements[2].State != "completed" {
 		t.Fatalf("manual terminal placements = %+v", placements)
 	}
 }
@@ -53,7 +53,7 @@ func TestManualMoveFromTerminalToStartResetsTaskToBacklog(t *testing.T) {
 	}
 	start := nodeByKind(t, def, workflow.NodeKindStart)
 
-	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: start.ID})
+	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
 	if err != nil {
 		t.Fatalf("ManualMoveTask reset: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestManualMoveFromTerminalToStartResetsTaskToBacklog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements: %v", err)
 	}
-	if len(placements) != 4 || placements[2].State != "superseded" || placements[3].NodeID != start.ID || placements[3].State != "active" {
+	if len(placements) != 4 || placements[2].State != "superseded" || placements[3].NodeID != workflow.NodeIDOf(start) || placements[3].State != "active" {
 		t.Fatalf("reset placements = %+v, want active start placement after superseded terminal", placements)
 	}
 	runs, err := store.ListRuns(ctx, task.ID)
@@ -103,7 +103,7 @@ func TestManualMoveBackwardReusesStoredOutputValues(t *testing.T) {
 	}
 	plan := nodeByKey(t, def, "plan")
 
-	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: plan.ID})
+	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(plan)})
 	if err != nil {
 		t.Fatalf("ManualMoveTask backward: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestManualMoveFromPendingApprovalToBacklogDiscardsApproval(t *testing.T) {
 
 	// A backward move onto an agent node parks the task in pending approval
 	// with no active placement: its source placement is already completed.
-	approval, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: plan.ID})
+	approval, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(plan)})
 	if err != nil {
 		t.Fatalf("ManualMoveTask to approval: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestManualMoveFromPendingApprovalToBacklogDiscardsApproval(t *testing.T) {
 
 	// Moving the awaiting-approval task back to Backlog must succeed, discard
 	// the pending approval, and land a single active placement at the start node.
-	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: start.ID, AllowMissingEdge: true})
+	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start), AllowMissingEdge: true})
 	if err != nil {
 		t.Fatalf("ManualMoveTask from approval to backlog: %v", err)
 	}
@@ -181,8 +181,8 @@ func TestManualMoveFromPendingApprovalToBacklogDiscardsApproval(t *testing.T) {
 	for _, placement := range placements {
 		if placement.State == "active" {
 			active++
-			if placement.NodeID != start.ID {
-				t.Fatalf("active placement node = %q, want start node %q", placement.NodeID, start.ID)
+			if placement.NodeID != workflow.NodeIDOf(start) {
+				t.Fatalf("active placement node = %q, want start node %q", placement.NodeID, workflow.NodeIDOf(start))
 			}
 		}
 	}
@@ -203,7 +203,7 @@ func TestManualMoveContinueSessionRequiresSourceSession(t *testing.T) {
 	}
 	impl := nodeByKey(t, def, "implement")
 
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: impl.ID, OutputValues: map[string]string{"prior_summary": "done"}})
+	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(impl), OutputValues: map[string]string{"prior_summary": "done"}})
 	if !errors.Is(err, ErrManualMoveContinueSessionNeedsSource) {
 		t.Fatalf("ManualMoveTask continue_session error = %v, want source session requirement", err)
 	}
@@ -228,12 +228,12 @@ func TestManualMoveRejectsSelectedContextSourceV1(t *testing.T) {
 	openPRNode := nodeByKey(t, def, "open_pr")
 	var implementationRun RunRecord
 	for _, run := range runs {
-		if run.NodeID == implementationNode.ID {
+		if run.NodeID == workflow.NodeIDOf(implementationNode) {
 			implementationRun = run
 		}
 	}
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: openPRNode.ID, OutputValues: map[string]string{"acceptance_decision": "approved"}})
+	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(openPRNode), OutputValues: map[string]string{"acceptance_decision": "approved"}})
 	if !errors.Is(err, ErrManualMoveSelectedContextSource) {
 		t.Fatalf("ManualMoveTask selected context source error = %v, want unsupported selected context source", err)
 	}
@@ -252,12 +252,12 @@ func TestBackwardManualMoveRejectsHistoricalSelectedContextSourceV1(t *testing.T
 	}
 	implementationNode := nodeByKey(t, def, "implementation")
 	acceptanceNode := nodeByKey(t, def, "acceptance")
-	implementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	implementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
-	acceptanceRun := runForNode(t, ctx, store, task.ID, acceptanceNode.ID)
+	acceptanceRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode))
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: acceptanceRun.ID, TransitionID: "open_pr", OutputValues: map[string]string{"acceptance_decision": "approved"}})
 
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: acceptanceNode.ID, OutputValues: map[string]string{"summary": "needs recheck"}})
+	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(acceptanceNode), OutputValues: map[string]string{"summary": "needs recheck"}})
 	if !errors.Is(err, ErrManualMoveSelectedContextSource) {
 		t.Fatalf("backward ManualMoveTask selected context source error = %v, want unsupported selected context source", err)
 	}
@@ -273,15 +273,15 @@ func TestManualMoveRejectsPreviousTargetContextSourceV1(t *testing.T) {
 	implementationNode := nodeByKey(t, def, "implementation")
 	acceptanceNode := nodeByKey(t, def, "acceptance")
 	addOutputFieldToNode(t, ctx, store, workflowID, acceptanceNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
-	addPreviousTargetReworkEdge(t, ctx, store, workflowID, acceptanceNode.ID, implementationNode.ID, false)
+	addPreviousTargetReworkEdge(t, ctx, store, workflowID, workflow.NodeIDOf(acceptanceNode), workflow.NodeIDOf(implementationNode), false)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	implementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	implementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
 
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: implementationNode.ID, OutputValues: map[string]string{"summary": "needs changes"}})
+	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(implementationNode), OutputValues: map[string]string{"summary": "needs changes"}})
 	if !errors.Is(err, ErrManualMovePreviousTargetContext) {
 		t.Fatalf("ManualMoveTask previous target context source error = %v, want unsupported previous target context source", err)
 	}
@@ -297,20 +297,20 @@ func TestManualMoveRejectsPreviousTargetOrNewContextSourceV1(t *testing.T) {
 	implementationNode := nodeByKey(t, def, "implementation")
 	acceptanceNode := nodeByKey(t, def, "acceptance")
 	reworkGroup := workflow.TransitionGroupID("group-previous-target-or-new-manual-rework-" + string(workflowID))
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: acceptanceNode.ID, TransitionID: "rework", DisplayName: "Rework"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"}); err != nil {
 		t.Fatalf("AddTransitionGroup rework: %v", err)
 	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-manual-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: implementationNode.ID, ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: "Rework."}); err != nil {
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-manual-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, PromptTemplate: "Rework."}); err != nil {
 		t.Fatalf("AddEdge rework: %v", err)
 	}
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	implementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	implementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
 
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: implementationNode.ID})
+	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(implementationNode)})
 	if !errors.Is(err, ErrManualMovePreviousTargetContext) {
 		t.Fatalf("ManualMoveTask previous target or new context source error = %v, want unsupported previous target context source", err)
 	}
@@ -327,19 +327,19 @@ func TestBackwardManualMoveRejectsHistoricalPreviousTargetContextSourceV1(t *tes
 	acceptanceNode := nodeByKey(t, def, "acceptance")
 	openPRNode := nodeByKey(t, def, "open_pr")
 	addOutputFieldToNode(t, ctx, store, workflowID, openPRNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
-	addPreviousTargetReworkEdge(t, ctx, store, workflowID, openPRNode.ID, implementationNode.ID, false)
+	addPreviousTargetReworkEdge(t, ctx, store, workflowID, workflow.NodeIDOf(openPRNode), workflow.NodeIDOf(implementationNode), false)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	implementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	implementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
-	acceptanceRun := runForNode(t, ctx, store, task.ID, acceptanceNode.ID)
+	acceptanceRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode))
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: acceptanceRun.ID, TransitionID: "open_pr", OutputValues: map[string]string{"acceptance_decision": "approved"}})
-	openPRRun := runForNode(t, ctx, store, task.ID, openPRNode.ID)
+	openPRRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(openPRNode))
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: openPRRun.ID, TransitionID: "rework", OutputValues: map[string]string{"summary": "needs changes"}})
 
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: openPRNode.ID, OutputValues: map[string]string{"summary": "needs recheck"}})
+	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(openPRNode), OutputValues: map[string]string{"summary": "needs recheck"}})
 	if !errors.Is(err, ErrManualMovePreviousTargetContext) {
 		t.Fatalf("backward ManualMoveTask previous target context source error = %v, want unsupported previous target context source", err)
 	}
@@ -355,7 +355,7 @@ func TestManualMovePendingApprovalRequiresSourceRun(t *testing.T) {
 	}
 	agent := nodeByKey(t, def, "agent")
 
-	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: agent.ID})
+	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(agent)})
 	if !errors.Is(err, ErrManualMoveApprovalNeedsSourceRun) {
 		t.Fatalf("ManualMoveTask missing source run error = %v, want source run requirement", err)
 	}
@@ -380,7 +380,7 @@ func TestManualMoveExecutableTargetRequiresApprovalBeforeAutomation(t *testing.T
 	}
 	impl := nodeByKey(t, def, "implement")
 
-	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: impl.ID, OutputValues: map[string]string{"prior_summary": "done"}})
+	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(impl), OutputValues: map[string]string{"prior_summary": "done"}})
 	if err != nil {
 		t.Fatalf("ManualMoveTask executable: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestManualMoveRejectsActiveParallelBatch(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	join := nodeByKey(t, def, "join")
-	if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: join.ID, OutputValues: map[string]string{"summary": "manual"}}); !errors.Is(err, ErrManualMoveDuringParallelBatch) {
+	if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(join), OutputValues: map[string]string{"summary": "manual"}}); !errors.Is(err, ErrManualMoveDuringParallelBatch) {
 		t.Fatalf("ManualMoveTask active parallel error = %v, want active parallel rejection", err)
 	}
 	if len(branchRuns) != 2 {

@@ -27,7 +27,7 @@ func TestRunStartContextUsesSelectedPriorNodeSession(t *testing.T) {
 	}
 	var implementationRun RunRecord
 	for _, run := range runs {
-		if run.NodeID == implementationNode.ID {
+		if run.NodeID == workflow.NodeIDOf(implementationNode) {
 			implementationRun = run
 		}
 	}
@@ -49,7 +49,7 @@ func TestRunStartContextUsesSelectedPriorNodeSession(t *testing.T) {
 	}
 	var acceptanceRun RunRecord
 	for _, run := range runs {
-		if run.NodeID == acceptanceNode.ID {
+		if run.NodeID == workflow.NodeIDOf(acceptanceNode) {
 			acceptanceRun = run
 		}
 	}
@@ -93,17 +93,17 @@ func TestSelectedContextSourceUsesLatestCompletedPriorNodeRun(t *testing.T) {
 	implementationNode := nodeByKey(t, def, "implementation")
 	acceptanceNode := nodeByKey(t, def, "acceptance")
 	reworkGroup := workflow.TransitionGroupID("group-rework-" + string(workflowID))
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: acceptanceNode.ID, TransitionID: "rework", DisplayName: "Rework"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"}); err != nil {
 		t.Fatalf("AddTransitionGroup rework: %v", err)
 	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: implementationNode.ID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Rework summary."}}}); err != nil {
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement {{.Params.summary}}.", Parameters: []workflow.Parameter{{Key: "summary", Description: "Rework summary."}}}); err != nil {
 		t.Fatalf("AddEdge rework: %v", err)
 	}
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	firstImplementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	firstImplementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	firstClaim, err := store.ClaimRun(ctx, firstImplementationRun.ID, firstImplementationRun.Generation)
 	if err != nil {
 		t.Fatalf("ClaimRun first implementation: %v", err)
@@ -113,9 +113,9 @@ func TestSelectedContextSourceUsesLatestCompletedPriorNodeRun(t *testing.T) {
 		t.Fatalf("AttachRunSession first implementation: %v", err)
 	}
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: firstImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "first implementation"}})
-	firstAcceptanceRun := runForNode(t, ctx, store, task.ID, acceptanceNode.ID)
+	firstAcceptanceRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode))
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: firstAcceptanceRun.ID, TransitionID: "rework", OutputValues: map[string]string{"summary": "needs changes"}})
-	secondImplementationRun := latestRunForNode(t, ctx, store, task.ID, implementationNode.ID)
+	secondImplementationRun := latestRunForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	if secondImplementationRun.ID == firstImplementationRun.ID {
 		t.Fatalf("second implementation run = first run %q", secondImplementationRun.ID)
 	}
@@ -128,7 +128,7 @@ func TestSelectedContextSourceUsesLatestCompletedPriorNodeRun(t *testing.T) {
 		t.Fatalf("AttachRunSession second implementation: %v", err)
 	}
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: secondImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "second implementation"}})
-	secondAcceptanceRun := latestRunForNode(t, ctx, store, task.ID, acceptanceNode.ID)
+	secondAcceptanceRun := latestRunForNode(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode))
 	completed := completeRun(t, ctx, store, CompleteRunRequest{RunID: secondAcceptanceRun.ID, TransitionID: "open_pr", OutputValues: map[string]string{"acceptance_decision": "approved"}})
 	input, err := store.GetRunStartContext(ctx, completed.RunIDs[0])
 	if err != nil {
@@ -149,12 +149,12 @@ func TestPreviousTargetContextSourceUsesLatestCompletedTargetRun(t *testing.T) {
 	implementationNode := nodeByKey(t, def, "implementation")
 	acceptanceNode := nodeByKey(t, def, "acceptance")
 	addOutputFieldToNode(t, ctx, store, workflowID, acceptanceNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
-	addPreviousTargetReworkEdge(t, ctx, store, workflowID, acceptanceNode.ID, implementationNode.ID, false)
+	addPreviousTargetReworkEdge(t, ctx, store, workflowID, workflow.NodeIDOf(acceptanceNode), workflow.NodeIDOf(implementationNode), false)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	firstImplementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	firstImplementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	firstClaim, err := store.ClaimRun(ctx, firstImplementationRun.ID, firstImplementationRun.Generation)
 	if err != nil {
 		t.Fatalf("ClaimRun first implementation: %v", err)
@@ -164,7 +164,7 @@ func TestPreviousTargetContextSourceUsesLatestCompletedTargetRun(t *testing.T) {
 		t.Fatalf("AttachRunSession first implementation: %v", err)
 	}
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: firstImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "first implementation"}})
-	firstAcceptanceRun := runForNode(t, ctx, store, task.ID, acceptanceNode.ID)
+	firstAcceptanceRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode))
 	firstRework := completeRun(t, ctx, store, CompleteRunRequest{RunID: firstAcceptanceRun.ID, TransitionID: "rework", OutputValues: map[string]string{"summary": "needs changes"}})
 	if len(firstRework.RunIDs) != 1 {
 		t.Fatalf("first rework result = %+v, want one implementation run", firstRework)
@@ -176,7 +176,7 @@ func TestPreviousTargetContextSourceUsesLatestCompletedTargetRun(t *testing.T) {
 	if firstReworkInput.SourceRunID != firstImplementationRun.ID || firstReworkInput.SourceSessionID != firstSessionID || firstReworkInput.SourceNode.Key != "implementation" {
 		t.Fatalf("first rework source = run %q session %q node %q, want first implementation %q/%q", firstReworkInput.SourceRunID, firstReworkInput.SourceSessionID, firstReworkInput.SourceNode.Key, firstImplementationRun.ID, firstSessionID)
 	}
-	secondImplementationRun := latestRunForNode(t, ctx, store, task.ID, implementationNode.ID)
+	secondImplementationRun := latestRunForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	secondClaim, err := store.ClaimRun(ctx, secondImplementationRun.ID, secondImplementationRun.Generation)
 	if err != nil {
 		t.Fatalf("ClaimRun second implementation: %v", err)
@@ -186,7 +186,7 @@ func TestPreviousTargetContextSourceUsesLatestCompletedTargetRun(t *testing.T) {
 		t.Fatalf("AttachRunSession second implementation: %v", err)
 	}
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: secondImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "second implementation"}})
-	secondAcceptanceRun := latestRunForNode(t, ctx, store, task.ID, acceptanceNode.ID)
+	secondAcceptanceRun := latestRunForNode(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode))
 	secondRework := completeRun(t, ctx, store, CompleteRunRequest{RunID: secondAcceptanceRun.ID, TransitionID: "rework", OutputValues: map[string]string{"summary": "still needs changes"}})
 	if len(secondRework.RunIDs) != 1 {
 		t.Fatalf("second rework result = %+v, want one implementation run", secondRework)
@@ -214,19 +214,19 @@ func TestPreviousTargetOrNewContextSourceFallsBackThenContinuesTargetRun(t *test
 		t.Fatalf("UpdateEdge accept context source: %v", err)
 	}
 	reworkGroup := workflow.TransitionGroupID("group-previous-target-or-new-rework-" + string(workflowID))
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: acceptanceNode.ID, TransitionID: "rework", DisplayName: "Rework"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"}); err != nil {
 		t.Fatalf("AddTransitionGroup rework: %v", err)
 	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: implementationNode.ID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Rework."}); err != nil {
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Rework."}); err != nil {
 		t.Fatalf("AddEdge rework: %v", err)
 	}
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	firstImplementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	firstImplementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: firstImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "first implementation"}})
-	firstAcceptanceRun := runForNode(t, ctx, store, task.ID, acceptanceNode.ID)
+	firstAcceptanceRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode))
 	firstAcceptanceInput, err := store.GetRunStartContext(ctx, firstAcceptanceRun.ID)
 	if err != nil {
 		t.Fatalf("GetRunStartContext first acceptance: %v", err)
@@ -243,9 +243,9 @@ func TestPreviousTargetOrNewContextSourceFallsBackThenContinuesTargetRun(t *test
 		t.Fatalf("AttachRunSession first acceptance: %v", err)
 	}
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: firstAcceptanceRun.ID, TransitionID: "rework"})
-	secondImplementationRun := latestRunForNode(t, ctx, store, task.ID, implementationNode.ID)
+	secondImplementationRun := latestRunForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: secondImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "second implementation"}})
-	secondAcceptanceRun := latestRunForNode(t, ctx, store, task.ID, acceptanceNode.ID)
+	secondAcceptanceRun := latestRunForNode(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode))
 	if secondAcceptanceRun.ID == firstAcceptanceRun.ID {
 		t.Fatalf("second acceptance run = first run %q", secondAcceptanceRun.ID)
 	}
@@ -275,13 +275,13 @@ func TestPendingApprovalFreezesPreviousTargetOrNewFallbackToNew(t *testing.T) {
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	implementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	implementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	pending := completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "first implementation"}})
 	if pending.State != "pending_approval" {
 		t.Fatalf("accept completion = %+v, want pending approval", pending)
 	}
 	competingSessionID := createTestSession(t, ctx, store, binding, cfg)
-	insertCompletedRunForNodeAfterTransition(t, ctx, store, task.ID, acceptanceNode.ID, implementationRun.ID, competingSessionID, pending.TransitionID)
+	insertCompletedRunForNodeAfterTransition(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode), implementationRun.ID, competingSessionID, pending.TransitionID)
 	approved, err := store.ApproveTransition(ctx, pending.TransitionID)
 	if err != nil {
 		t.Fatalf("ApproveTransition: %v", err)
@@ -312,17 +312,17 @@ func TestPendingApprovalFreezesPreviousTargetOrNewPriorTargetRun(t *testing.T) {
 		t.Fatalf("UpdateEdge accept context source: %v", err)
 	}
 	reworkGroup := workflow.TransitionGroupID("group-previous-target-or-new-approval-rework-" + string(workflowID))
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: acceptanceNode.ID, TransitionID: "rework", DisplayName: "Rework"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: reworkGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(acceptanceNode), TransitionID: "rework", DisplayName: "Rework"}); err != nil {
 		t.Fatalf("AddTransitionGroup rework: %v", err)
 	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-approval-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: implementationNode.ID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Rework."}); err != nil {
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-previous-target-or-new-approval-rework-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: workflow.NodeIDOf(implementationNode), ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Rework."}); err != nil {
 		t.Fatalf("AddEdge rework: %v", err)
 	}
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	firstImplementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	firstImplementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	firstPending := completeRun(t, ctx, store, CompleteRunRequest{RunID: firstImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "first implementation"}})
 	firstApproved, err := store.ApproveTransition(ctx, firstPending.TransitionID)
 	if err != nil {
@@ -342,10 +342,10 @@ func TestPendingApprovalFreezesPreviousTargetOrNewPriorTargetRun(t *testing.T) {
 		t.Fatalf("AttachRunSession first acceptance: %v", err)
 	}
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: firstAcceptanceRunID, TransitionID: "rework"})
-	secondImplementationRun := latestRunForNode(t, ctx, store, task.ID, implementationNode.ID)
+	secondImplementationRun := latestRunForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	secondPending := completeRun(t, ctx, store, CompleteRunRequest{RunID: secondImplementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "second implementation"}})
 	competingSessionID := createTestSession(t, ctx, store, binding, cfg)
-	insertCompletedRunForNodeAfterTransition(t, ctx, store, task.ID, acceptanceNode.ID, firstAcceptanceRunID, competingSessionID, secondPending.TransitionID)
+	insertCompletedRunForNodeAfterTransition(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode), firstAcceptanceRunID, competingSessionID, secondPending.TransitionID)
 	secondApproved, err := store.ApproveTransition(ctx, secondPending.TransitionID)
 	if err != nil {
 		t.Fatalf("ApproveTransition second acceptance: %v", err)
@@ -369,12 +369,12 @@ func TestPendingApprovalResolvesPreviousTargetContextSourceOnCompletion(t *testi
 	implementationNode := nodeByKey(t, def, "implementation")
 	acceptanceNode := nodeByKey(t, def, "acceptance")
 	addOutputFieldToNode(t, ctx, store, workflowID, acceptanceNode, workflow.OutputField{Name: "summary", Description: "Rework summary."})
-	addPreviousTargetReworkEdge(t, ctx, store, workflowID, acceptanceNode.ID, implementationNode.ID, true)
+	addPreviousTargetReworkEdge(t, ctx, store, workflowID, workflow.NodeIDOf(acceptanceNode), workflow.NodeIDOf(implementationNode), true)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "implement", OutputValues: map[string]string{"summary": "plan done"}})
-	implementationRun := runForNode(t, ctx, store, task.ID, implementationNode.ID)
+	implementationRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode))
 	claimedImplementation, err := store.ClaimRun(ctx, implementationRun.ID, implementationRun.Generation)
 	if err != nil {
 		t.Fatalf("ClaimRun implementation: %v", err)
@@ -384,13 +384,13 @@ func TestPendingApprovalResolvesPreviousTargetContextSourceOnCompletion(t *testi
 		t.Fatalf("AttachRunSession implementation: %v", err)
 	}
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: implementationRun.ID, TransitionID: "accept", OutputValues: map[string]string{"summary": "implemented"}})
-	acceptanceRun := runForNode(t, ctx, store, task.ID, acceptanceNode.ID)
+	acceptanceRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(acceptanceNode))
 	pending := completeRun(t, ctx, store, CompleteRunRequest{RunID: acceptanceRun.ID, TransitionID: "rework", OutputValues: map[string]string{"summary": "needs changes"}})
 	if pending.State != "pending_approval" {
 		t.Fatalf("rework completion = %+v, want pending approval", pending)
 	}
 	competingSessionID := createTestSession(t, ctx, store, binding, cfg)
-	insertCompletedRunForNodeAfterTransition(t, ctx, store, task.ID, implementationNode.ID, implementationRun.ID, competingSessionID, pending.TransitionID)
+	insertCompletedRunForNodeAfterTransition(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode), implementationRun.ID, competingSessionID, pending.TransitionID)
 	approved, err := store.ApproveTransition(ctx, pending.TransitionID)
 	if err != nil {
 		t.Fatalf("ApproveTransition: %v", err)
@@ -422,19 +422,19 @@ func TestPreviousTargetContextSourceStaysInParallelBatch(t *testing.T) {
 	implA := nodeByKey(t, def, "impl_a")
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task, _ := startFanoutTask(t, ctx, store, binding.ProjectID, workflowID)
-	currentRun := runForNode(t, ctx, store, task.ID, implA.ID)
+	currentRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implA))
 	mutateRunStartSnapshot(t, ctx, store, currentRun.ID, func(t *testing.T, snapshot *runStartSnapshot) {
-		target := nodeSnapshotByID(t, *snapshot, implA.ID)
+		target := nodeSnapshotByID(t, *snapshot, workflow.NodeIDOf(implA))
 		target.OutputFields = append(target.OutputFields, workflow.OutputField{Name: "summary", Description: "Summary."})
 		snapshot.Node = target
 		for index := range snapshot.Nodes {
-			if snapshot.Nodes[index].ID == implA.ID {
+			if snapshot.Nodes[index].ID == workflow.NodeIDOf(implA) {
 				snapshot.Nodes[index] = target
 			}
 		}
 		snapshot.TransitionGroups = append(snapshot.TransitionGroups, transitionContractSnapshot{
 			ID:           workflow.TransitionGroupID("snapshot-group-redo-a"),
-			SourceNodeID: implA.ID,
+			SourceNodeID: workflow.NodeIDOf(implA),
 			TransitionID: "redo",
 			DisplayName:  "Redo A",
 			Edges: []edgeContractSnapshot{{
@@ -458,7 +458,7 @@ func TestPreviousTargetContextSourceStaysInParallelBatch(t *testing.T) {
 	competingSessionID := createTestSession(t, ctx, store, binding, cfg)
 	currentBatchID, _ := placementParallelIDs(t, ctx, store, currentRun.PlacementID)
 	competingBatchID := taskTransitionIDOtherThan(t, ctx, store, task.ID, currentBatchID)
-	competingRunID := insertCompletedRunForNodeInBatch(t, ctx, store, task.ID, implA.ID, currentRun.ID, competingSessionID, string(competingBatchID), fixedNow.UnixMilli())
+	competingRunID := insertCompletedRunForNodeInBatch(t, ctx, store, task.ID, workflow.NodeIDOf(implA), currentRun.ID, competingSessionID, string(competingBatchID), fixedNow.UnixMilli())
 
 	redo := completeRun(t, ctx, store, CompleteRunRequest{RunID: currentRun.ID, TransitionID: "redo", OutputValues: map[string]string{"summary": "redo current branch"}})
 	if len(redo.RunIDs) != 1 {
@@ -500,7 +500,7 @@ func TestPendingApprovalResolvesSelectedContextSourceOnApproval(t *testing.T) {
 	}
 	var implementationRun RunRecord
 	for _, run := range runs {
-		if run.NodeID == implementationNode.ID {
+		if run.NodeID == workflow.NodeIDOf(implementationNode) {
 			implementationRun = run
 		}
 	}
@@ -519,7 +519,7 @@ func TestPendingApprovalResolvesSelectedContextSourceOnApproval(t *testing.T) {
 	}
 	var acceptanceRun RunRecord
 	for _, run := range runs {
-		if run.NodeID == acceptanceNode.ID {
+		if run.NodeID == workflow.NodeIDOf(acceptanceNode) {
 			acceptanceRun = run
 		}
 	}
@@ -528,7 +528,7 @@ func TestPendingApprovalResolvesSelectedContextSourceOnApproval(t *testing.T) {
 		t.Fatalf("acceptance completion = %+v, want pending approval", completed)
 	}
 	competingSessionID := createTestSession(t, ctx, store, binding, cfg)
-	insertCompletedRunForNodeAfterTransition(t, ctx, store, task.ID, implementationNode.ID, implementationRun.ID, competingSessionID, completed.TransitionID)
+	insertCompletedRunForNodeAfterTransition(t, ctx, store, task.ID, workflow.NodeIDOf(implementationNode), implementationRun.ID, competingSessionID, completed.TransitionID)
 	approved, err := store.ApproveTransition(ctx, completed.TransitionID)
 	if err != nil {
 		t.Fatalf("ApproveTransition: %v", err)

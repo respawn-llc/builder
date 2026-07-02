@@ -39,6 +39,7 @@ export function addWorkflowNode(
     completionMode: "",
     outputFields: [],
     promptTemplate: input.kind === "agent" ? input.promptTemplate ?? "" : "",
+    scriptPath: null,
     subagentRole: input.kind === "agent" ? input.subagentRole ?? "default" : "",
     workflowID: draft.workflow.id,
   };
@@ -66,12 +67,12 @@ export function deleteWorkflowNode(
   }
   if (node.groupID.length > 0) {
     const groupedBranchesAfterDelete = draft.nodes.filter(
-      (item) => item.groupID === node.groupID && item.kind === "agent" && item.id !== nodeID,
+      (item) => item.groupID === node.groupID && workflowBranchNodeKind(item.kind) && item.id !== nodeID,
     );
     if (node.kind === "join") {
       return dissolveWorkflowNodeGroup(draft, node.groupID, workflowSelection);
     }
-    if (node.kind === "agent" && groupedBranchesAfterDelete.length < 2) {
+    if (workflowBranchNodeKind(node.kind) && groupedBranchesAfterDelete.length < 2) {
       const afterNodeDelete = deleteNodeIDsInternal(draft, new Set([nodeID]));
       const dissolved = dissolveWorkflowNodeGroup(
         afterNodeDelete,
@@ -111,7 +112,7 @@ export function createWorkflowNodeGroupFromNode(
   if (node === undefined) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeNotFound);
   }
-  if (node.kind !== "agent") {
+  if (!workflowBranchNodeKind(node.kind)) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupRequiresAgent);
   }
   if (node.groupID.length > 0) {
@@ -140,6 +141,7 @@ export function createWorkflowNodeGroupFromNode(
     completionMode: "",
     outputFields: [],
     promptTemplate: "",
+    scriptPath: null,
     subagentRole: "",
     workflowID: draft.workflow.id,
   };
@@ -166,7 +168,7 @@ export function addWorkflowNodeToGroup(
   if (group === undefined) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupNotFound);
   }
-  if (node.kind !== "agent") {
+  if (!workflowBranchNodeKind(node.kind)) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupRequiresAgentMembership);
   }
   if (node.groupID.length > 0 && node.groupID !== group.id) {
@@ -205,7 +207,7 @@ export function removeWorkflowNodeFromGroup(
   if (node.groupID.length === 0) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupNotFound);
   }
-  if (node.kind !== "agent") {
+  if (!workflowBranchNodeKind(node.kind)) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupRequiresAgentMembership);
   }
   const groupID = node.groupID;
@@ -213,7 +215,7 @@ export function removeWorkflowNodeFromGroup(
     item.id === nodeID ? { ...item, groupID: "", groupKey: "" } : item,
   );
   const remainingBranches = ungroupedNodes.filter(
-    (item) => item.groupID === groupID && item.kind === "agent",
+    (item) => item.groupID === groupID && workflowBranchNodeKind(item.kind),
   );
   if (remainingBranches.length > 1) {
     return {
@@ -241,7 +243,7 @@ export function extractWorkflowNodeFromGroup(
   if (node.groupID.length === 0) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupNotFound);
   }
-  if (node.kind !== "agent") {
+  if (!workflowBranchNodeKind(node.kind)) {
     return unchanged(draft, workflowEditorGraphMutationWarnings.nodeGroupRequiresAgentMembership);
   }
   const groupID = node.groupID;
@@ -270,7 +272,7 @@ export function extractWorkflowNodeFromGroup(
     item.id === node.id ? { ...item, groupID: "", groupKey: "" } : item,
   );
   const remainingBranches = ungroupedNodes.filter(
-    (item) => item.groupID === groupID && item.kind === "agent",
+    (item) => item.groupID === groupID && workflowBranchNodeKind(item.kind),
   );
   const membershipDraft = {
     ...afterJoinEdges,
@@ -455,5 +457,15 @@ function removedGraphRows(
 }
 
 function defaultNodeName(kind: WorkflowNode["kind"]): string {
-  return kind === "terminal" ? "New terminal" : "New agent";
+  if (kind === "terminal") {
+    return "New terminal";
+  }
+  if (kind === "script") {
+    return "New script";
+  }
+  return "New agent";
+}
+
+function workflowBranchNodeKind(kind: WorkflowNode["kind"]): boolean {
+  return kind === "agent" || kind === "script";
 }

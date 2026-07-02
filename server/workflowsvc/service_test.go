@@ -15,6 +15,7 @@ import (
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowattention"
+	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/shared/config"
@@ -106,6 +107,46 @@ func TestServiceCreatesValidatesLinksAndStartsDefaultWorkflowTask(t *testing.T) 
 	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
 	if started.RunID == "" || started.PlacementID == "" {
 		t.Fatalf("start response = %+v", started)
+	}
+}
+
+func TestServiceValidateWorkflowReportsScriptPathDiagnostics(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	created, err := service.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: "Script Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: created.Workflow.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	startID := workflowServiceNodeIDByKind(t, def.Definition, "start")
+	doneID := workflowServiceNodeIDByKind(t, def.Definition, "terminal")
+	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: created.Workflow.ID, NodeID: "node-script", Key: "script", Kind: "script", DisplayName: "Script", ScriptPath: stringPtr("scripts/run")}); err != nil {
+		t.Fatalf("AddWorkflowNode script: %v", err)
+	}
+	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-start", SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
+		t.Fatalf("AddWorkflowTransitionGroup start: %v", err)
+	}
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start", TransitionGroupID: "group-start", Key: "start", TargetNodeID: "node-script", ContextMode: "new_session"}); err != nil {
+		t.Fatalf("AddWorkflowEdge start: %v", err)
+	}
+	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-done", SourceNodeID: "node-script", TransitionID: "done", DisplayName: "Done"}); err != nil {
+		t.Fatalf("AddWorkflowTransitionGroup done: %v", err)
+	}
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done", TransitionGroupID: "group-done", Key: "done", TargetNodeID: doneID, ContextMode: "new_session"}); err != nil {
+		t.Fatalf("AddWorkflowEdge done: %v", err)
+	}
+
+	validated, err := service.ValidateWorkflow(ctx, serverapi.WorkflowValidateRequest{WorkflowID: created.Workflow.ID, Mode: serverapi.WorkflowValidationModeExecution})
+	if err != nil {
+		t.Fatalf("ValidateWorkflow: %v", err)
+	}
+	if !validated.Valid {
+		t.Fatalf("validation = %+v, want valid with skipped diagnostic", validated)
+	}
+	if len(validated.Errors) != 1 || validated.Errors[0].Code != workflowscript.CodeRelativePathSkipped || validated.Errors[0].BlocksContext {
+		t.Fatalf("validation errors = %+v, want nonblocking relative-path skipped diagnostic", validated.Errors)
 	}
 }
 
@@ -1916,6 +1957,10 @@ func newWorkflowServiceTestServiceWithMetadata(t *testing.T) (*Service, metadata
 		t.Fatalf("workflowsvc.New: %v", err)
 	}
 	return service, binding, metadataStore
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func linkWorkflowServiceProject(t *testing.T, ctx context.Context, service *Service, req serverapi.WorkflowLinkProjectRequest) serverapi.WorkflowLinkProjectResponse {

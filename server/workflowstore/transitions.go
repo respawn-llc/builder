@@ -142,6 +142,14 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 	if len(edges) == 0 {
 		return CompleteRunResult{}, errors.New("pending approval has no edge snapshots")
 	}
+	task, err := s.queries.GetTask(ctx, transition.TaskID)
+	if err != nil {
+		return CompleteRunResult{}, err
+	}
+	worktreeRoot, err := taskManagedWorktreeRoot(ctx, s.queries, task)
+	if err != nil {
+		return CompleteRunResult{}, err
+	}
 	hasSourceRun := transition.SourceRunID.Valid && strings.TrimSpace(transition.SourceRunID.String) != ""
 	sourceRun := sqlitegen.TaskRunRecord{}
 	sourceSnapshot := runStartSnapshot{}
@@ -221,7 +229,7 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 		}); err != nil {
 			return CompleteRunResult{}, fmt.Errorf("update approved edge snapshot: %w", err)
 		}
-		if workflow.NodeKind(edge.TargetNodeKind) != workflow.NodeKindAgent {
+		if !executableNodeKind(workflow.NodeKind(edge.TargetNodeKind)) {
 			continue
 		}
 		targetRunID := prefixedID("run")
@@ -265,7 +273,15 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptionDetailJson: "{}", RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
+		interruptionReason, interruptionDetail, invalidScript, err := s.scriptNodeInterruption(ctx, q, targetEdge.TargetNode.ID, worktreeRoot)
+		if err != nil {
+			return CompleteRunResult{}, err
+		}
+		interruptedAt := int64(0)
+		if invalidScript {
+			interruptedAt = now
+		}
+		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: interruptionReason, InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
 			return CompleteRunResult{}, fmt.Errorf("insert approved target run: %w", err)
 		}
 		result.RunIDs = append(result.RunIDs, workflow.RunID(targetRunID))

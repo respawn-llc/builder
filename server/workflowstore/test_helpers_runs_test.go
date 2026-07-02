@@ -34,22 +34,22 @@ func addPreviousTargetReworkEdge(t *testing.T, ctx context.Context, store *Store
 
 func addOutputFieldToNode(t *testing.T, ctx context.Context, store *Store, workflowID workflow.WorkflowID, node workflow.Node, field workflow.OutputField) {
 	t.Helper()
-	outputFields := append([]workflow.OutputField(nil), node.OutputFields...)
+	outputFields := workflow.NodeOutputFields(node)
 	outputFields = append(outputFields, field)
 	if _, err := store.UpdateNode(ctx, NodeRecord{
-		ID:                 node.ID,
+		ID:                 workflow.NodeIDOf(node),
 		WorkflowID:         workflowID,
-		Key:                node.Key,
-		Kind:               node.Kind,
-		DisplayName:        node.DisplayName,
-		GroupID:            node.GroupID,
-		SubagentRole:       node.SubagentRole,
-		PromptTemplate:     node.PromptTemplate,
-		InputFields:        node.InputFields,
-		JoinInputProviders: node.JoinInputProviders,
+		Key:                workflow.NodeKey(node),
+		Kind:               node.Kind(),
+		DisplayName:        workflow.NodeDisplayName(node),
+		GroupID:            workflow.NodeGroupID(node),
+		SubagentRole:       workflow.NodeSubagentRole(node),
+		PromptTemplate:     workflow.NodePromptTemplate(node),
+		InputFields:        workflow.NodeInputFields(node),
+		JoinInputProviders: workflow.NodeJoinInputProviders(node),
 		OutputFields:       outputFields,
 	}); err != nil {
-		t.Fatalf("UpdateNode %s outputs: %v", node.Key, err)
+		t.Fatalf("UpdateNode %s outputs: %v", workflow.NodeKey(node), err)
 	}
 }
 
@@ -70,7 +70,7 @@ func createApprovalWorkflow(t *testing.T, ctx context.Context, store *Store) wor
 	if _, err := store.AddNode(ctx, NodeRecord{ID: agentID, WorkflowID: workflowID, Key: "agent", Kind: workflow.NodeKindAgent, DisplayName: "Agent", SubagentRole: "coder", PromptTemplate: "Do work.", OutputFields: []workflow.OutputField{{Name: "summary", Description: "Summary."}}}); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}
-	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: workflow.TransitionGroupID("group-start-" + string(workflowID)), WorkflowID: workflowID, SourceNodeID: start.ID, TransitionID: "start", DisplayName: "Start"}); err != nil {
+	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: workflow.TransitionGroupID("group-start-" + string(workflowID)), WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"}); err != nil {
 		t.Fatalf("AddTransitionGroup start: %v", err)
 	}
 	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-start-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID("group-start-" + string(workflowID)), Key: "start", TargetNodeID: agentID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work."}); err != nil {
@@ -79,7 +79,7 @@ func createApprovalWorkflow(t *testing.T, ctx context.Context, store *Store) wor
 	if _, err := store.AddTransitionGroup(ctx, TransitionGroupRecord{ID: workflow.TransitionGroupID("group-done-" + string(workflowID)), WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"}); err != nil {
 		t.Fatalf("AddTransitionGroup done: %v", err)
 	}
-	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-done-approval-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID("group-done-" + string(workflowID)), Key: "done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession, RequiresApproval: true}); err != nil {
+	if _, err := store.AddEdge(ctx, EdgeRecord{ID: workflow.EdgeID("edge-done-approval-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID("group-done-" + string(workflowID)), Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession, RequiresApproval: true}); err != nil {
 		t.Fatalf("AddEdge approval done: %v", err)
 	}
 	return workflowID
@@ -123,7 +123,7 @@ func createFanoutJoinWorkflow(t *testing.T, ctx context.Context, store *Store) w
 	synthGroup := workflow.TransitionGroupID("group-join-synth-" + string(workflowID))
 	doneGroup := workflow.TransitionGroupID("group-synth-done-" + string(workflowID))
 	for _, group := range []TransitionGroupRecord{
-		{ID: startGroup, WorkflowID: workflowID, SourceNodeID: start.ID, TransitionID: "start", DisplayName: "Start"},
+		{ID: startGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
 		{ID: splitGroup, WorkflowID: workflowID, SourceNodeID: planID, TransitionID: "split", DisplayName: "Split"},
 		{ID: joinAGroup, WorkflowID: workflowID, SourceNodeID: implAID, TransitionID: "join", DisplayName: "Join"},
 		{ID: joinBGroup, WorkflowID: workflowID, SourceNodeID: implBID, TransitionID: "join", DisplayName: "Join"},
@@ -141,7 +141,7 @@ func createFanoutJoinWorkflow(t *testing.T, ctx context.Context, store *Store) w
 		{ID: joinAEdgeID, WorkflowID: workflowID, TransitionGroupID: joinAGroup, Key: "join_a", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "joined", Description: "Joined branch summary."}}},
 		{ID: joinBEdgeID, WorkflowID: workflowID, TransitionGroupID: joinBGroup, Key: "join_b", TargetNodeID: joinID, ContextMode: workflow.ContextModeNewSession},
 		{ID: workflow.EdgeID("edge-join-synth-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: synthGroup, Key: "synth", TargetNodeID: synthID, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Synthesize {{.Params.joined}}."},
-		{ID: workflow.EdgeID("edge-synth-done-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: done.ID, ContextMode: workflow.ContextModeNewSession},
+		{ID: workflow.EdgeID("edge-synth-done-" + string(workflowID)), WorkflowID: workflowID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), ContextMode: workflow.ContextModeNewSession},
 	} {
 		if _, err := store.AddEdge(ctx, edge); err != nil {
 			t.Fatalf("AddEdge %s: %v", edge.Key, err)
@@ -225,7 +225,7 @@ func currentWorkflowRevision(t *testing.T, ctx context.Context, store *Store, wo
 
 func hasNode(def workflow.Definition, key string, kind workflow.NodeKind) bool {
 	for _, node := range def.Nodes {
-		if string(node.Key) == key && node.Kind == kind {
+		if string(workflow.NodeKey(node)) == key && node.Kind() == kind {
 			return true
 		}
 	}
@@ -235,12 +235,12 @@ func hasNode(def workflow.Definition, key string, kind workflow.NodeKind) bool {
 func nodeByKey(t *testing.T, def workflow.Definition, key string) workflow.Node {
 	t.Helper()
 	for _, node := range def.Nodes {
-		if string(node.Key) == key {
+		if string(workflow.NodeKey(node)) == key {
 			return node
 		}
 	}
 	t.Fatalf("missing node key %q in %+v", key, def.Nodes)
-	return workflow.Node{}
+	return nil
 }
 
 func edgeByKey(t *testing.T, def workflow.Definition, key string) workflow.Edge {
@@ -392,10 +392,10 @@ LIMIT 1`, string(taskID), excludedID).Scan(&transitionID); err != nil {
 func nodeByKind(t *testing.T, def workflow.Definition, kind workflow.NodeKind) workflow.Node {
 	t.Helper()
 	for _, node := range def.Nodes {
-		if node.Kind == kind {
+		if node.Kind() == kind {
 			return node
 		}
 	}
 	t.Fatalf("missing node kind %q in %+v", kind, def.Nodes)
-	return workflow.Node{}
+	return nil
 }

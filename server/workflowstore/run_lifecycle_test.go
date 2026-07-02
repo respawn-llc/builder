@@ -78,7 +78,7 @@ func TestWorkflowNodeCompletionModePersistsThroughGraphAndRunSnapshot(t *testing
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	agent := nodeByKey(t, def, "agent")
-	if _, err := store.UpdateNode(ctx, NodeRecord{ID: agent.ID, WorkflowID: workflowID, Key: agent.Key, Kind: agent.Kind, DisplayName: agent.DisplayName, SubagentRole: agent.SubagentRole, PromptTemplate: agent.PromptTemplate, CompletionMode: "tool", OutputFields: agent.OutputFields}); err != nil {
+	if _, err := store.UpdateNode(ctx, NodeRecord{ID: workflow.NodeIDOf(agent), WorkflowID: workflowID, Key: workflow.NodeKey(agent), Kind: agent.Kind(), DisplayName: workflow.NodeDisplayName(agent), SubagentRole: workflow.NodeSubagentRole(agent), PromptTemplate: workflow.NodePromptTemplate(agent), CompletionMode: "tool", OutputFields: workflow.NodeOutputFields(agent)}); err != nil {
 		t.Fatalf("UpdateNode completion mode: %v", err)
 	}
 	updated, updatedRecord, err := store.GetDefinition(ctx, workflowID)
@@ -86,8 +86,8 @@ func TestWorkflowNodeCompletionModePersistsThroughGraphAndRunSnapshot(t *testing
 		t.Fatalf("GetDefinition updated: %v", err)
 	}
 	updatedAgent := nodeByKey(t, updated, "agent")
-	if updatedAgent.CompletionMode != "tool" || updatedRecord.Version != record.Version+1 {
-		t.Fatalf("updated agent mode=%q version=%d, want tool version %d", updatedAgent.CompletionMode, updatedRecord.Version, record.Version+1)
+	if workflow.NodeCompletionMode(updatedAgent) != "tool" || updatedRecord.Version != record.Version+1 {
+		t.Fatalf("updated agent mode=%q version=%d, want tool version %d", workflow.NodeCompletionMode(updatedAgent), updatedRecord.Version, record.Version+1)
 	}
 	if _, err := store.UpdateNode(ctx, NodeRecord{ID: "node-terminal-invalid", WorkflowID: workflowID, Key: "invalid", Kind: workflow.NodeKindTerminal, DisplayName: "Invalid", CompletionMode: "tool"}); err == nil {
 		t.Fatal("UpdateNode accepted completion mode override on terminal node")
@@ -402,7 +402,7 @@ func TestResumeTaskRunAllowsDefaultAgentRoleWithoutResolver(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	agent := nodeByKey(t, def, "agent")
-	if _, err := store.UpdateNode(ctx, NodeRecord{ID: agent.ID, WorkflowID: workflowID, Key: agent.Key, Kind: agent.Kind, DisplayName: agent.DisplayName, SubagentRole: workflow.DefaultAgentRole, PromptTemplate: agent.PromptTemplate, OutputFields: agent.OutputFields}); err != nil {
+	if _, err := store.UpdateNode(ctx, NodeRecord{ID: workflow.NodeIDOf(agent), WorkflowID: workflowID, Key: workflow.NodeKey(agent), Kind: agent.Kind(), DisplayName: workflow.NodeDisplayName(agent), SubagentRole: workflow.DefaultAgentRole, PromptTemplate: workflow.NodePromptTemplate(agent), OutputFields: workflow.NodeOutputFields(agent)}); err != nil {
 		t.Fatalf("UpdateNode default role: %v", err)
 	}
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)

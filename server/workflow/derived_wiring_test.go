@@ -152,10 +152,10 @@ func parameterWorkflow() workflow.Definition {
 		ID:          "workflow_parameters",
 		DisplayName: "Parameter Workflow",
 		Nodes: []workflow.Node{
-			{WorkflowID: "workflow_parameters", ID: "node_start", Key: "backlog", DisplayName: "Backlog", Kind: workflow.NodeKindStart},
-			{WorkflowID: "workflow_parameters", ID: "node_plan", Key: "plan", DisplayName: "Plan", Kind: workflow.NodeKindAgent, SubagentRole: "coder", PromptTemplate: "Legacy plan prompt."},
-			{WorkflowID: "workflow_parameters", ID: "node_implement", Key: "implement", DisplayName: "Implement", Kind: workflow.NodeKindAgent, SubagentRole: "coder", PromptTemplate: "Legacy implement prompt.", InputFields: []workflow.InputField{{Name: "legacy", Description: "Legacy input."}}},
-			{WorkflowID: "workflow_parameters", ID: "node_done", Key: "done", DisplayName: "Done", Kind: workflow.NodeKindTerminal},
+			testStartNode("workflow_parameters", "node_start", "backlog", "Backlog"),
+			testAgentNode("workflow_parameters", "node_plan", "plan", "Plan", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy plan prompt."}),
+			testAgentNode("workflow_parameters", "node_implement", "implement", "Implement", workflow.NodeFields{SubagentRole: "coder", PromptTemplate: "Legacy implement prompt.", InputFields: []workflow.InputField{{Name: "legacy", Description: "Legacy input."}}}),
+			testTerminalNode("workflow_parameters", "node_done", "done", "Done"),
 		},
 		TransitionGroups: []workflow.TransitionGroup{
 			{WorkflowID: "workflow_parameters", ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},
@@ -192,14 +192,7 @@ func parameterWorkflow() workflow.Definition {
 
 func fanoutParameterWorkflow() workflow.Definition {
 	def := parameterWorkflow()
-	def.Nodes = append(def.Nodes, workflow.Node{
-		WorkflowID:   "workflow_parameters",
-		ID:           "node_review",
-		Key:          "review",
-		DisplayName:  "Review",
-		Kind:         workflow.NodeKindAgent,
-		SubagentRole: "coder",
-	})
+	def.Nodes = append(def.Nodes, testAgentNode("workflow_parameters", "node_review", "review", "Review", workflow.NodeFields{SubagentRole: "coder"}))
 	def.TransitionGroups[1] = workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_plan_split", SourceNodeID: "node_plan", TransitionID: "split", DisplayName: "Split"}
 	def.Edges[1] = workflow.Edge{
 		WorkflowID:        def.ID,
@@ -229,13 +222,13 @@ func joinParameterWorkflow() workflow.Definition {
 		ID:          "workflow_join_parameters",
 		DisplayName: "Join Parameter Workflow",
 		Nodes: []workflow.Node{
-			{WorkflowID: "workflow_join_parameters", ID: "node_start", Key: "backlog", DisplayName: "Backlog", Kind: workflow.NodeKindStart},
-			{WorkflowID: "workflow_join_parameters", ID: "node_split", Key: "split", DisplayName: "Split", Kind: workflow.NodeKindAgent, SubagentRole: "coder"},
-			{WorkflowID: "workflow_join_parameters", ID: "node_branch_a", Key: "branch_a", DisplayName: "Branch A", Kind: workflow.NodeKindAgent, SubagentRole: "coder"},
-			{WorkflowID: "workflow_join_parameters", ID: "node_branch_b", Key: "branch_b", DisplayName: "Branch B", Kind: workflow.NodeKindAgent, SubagentRole: "coder"},
-			{WorkflowID: "workflow_join_parameters", ID: "node_join", Key: "join", DisplayName: "Join", Kind: workflow.NodeKindJoin},
-			{WorkflowID: "workflow_join_parameters", ID: "node_consume", Key: "consume", DisplayName: "Consume", Kind: workflow.NodeKindAgent, SubagentRole: "coder"},
-			{WorkflowID: "workflow_join_parameters", ID: "node_done", Key: "done", DisplayName: "Done", Kind: workflow.NodeKindTerminal},
+			testStartNode("workflow_join_parameters", "node_start", "backlog", "Backlog"),
+			testAgentNode("workflow_join_parameters", "node_split", "split", "Split", workflow.NodeFields{SubagentRole: "coder"}),
+			testAgentNode("workflow_join_parameters", "node_branch_a", "branch_a", "Branch A", workflow.NodeFields{SubagentRole: "coder"}),
+			testAgentNode("workflow_join_parameters", "node_branch_b", "branch_b", "Branch B", workflow.NodeFields{SubagentRole: "coder"}),
+			testJoinNode("workflow_join_parameters", "node_join", "join", "Join"),
+			testAgentNode("workflow_join_parameters", "node_consume", "consume", "Consume", workflow.NodeFields{SubagentRole: "coder"}),
+			testTerminalNode("workflow_join_parameters", "node_done", "done", "Done"),
 		},
 		TransitionGroups: []workflow.TransitionGroup{
 			{WorkflowID: "workflow_join_parameters", ID: "group_start", SourceNodeID: "node_start", TransitionID: "start", DisplayName: "Start"},

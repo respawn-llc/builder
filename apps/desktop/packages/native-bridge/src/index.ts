@@ -17,6 +17,14 @@ import {
   type DesktopSettings,
 } from "./desktopSettings";
 import {
+  createBrowserDirectoryBridge,
+  createBrowserFileBridge,
+  createTauriDirectoryBridge,
+  createTauriFileBridge,
+  type NativeDirectoryBridge,
+  type NativeFileBridge,
+} from "./fileSystem";
+import {
   createBrowserCapabilities,
   createTauriCapabilities,
   normalizeNativePlatform,
@@ -39,6 +47,13 @@ import {
 } from "./updates";
 
 export type { NativeDialogContentSize, NativeDialogTheme, NativeDialogWindowOptions } from "./dialogs";
+export type {
+  NativeDirectoryPickerOptions,
+  NativeDirectorySelection,
+  NativeFilePickerOptions,
+  NativeFileSelection,
+  NativeFileTarget,
+} from "./fileSystem";
 export {
   defaultDesktopSettings,
   desktopSettingsVersion,
@@ -92,9 +107,8 @@ export type NativeBridge = Readonly<{
     writeText(value: string): Promise<void>;
     readText(): Promise<string>;
   }>;
-  directories: Readonly<{
-    selectDirectory(options: NativeDirectoryPickerOptions): Promise<NativeDirectorySelection>;
-  }>;
+  directories: NativeDirectoryBridge;
+  files: NativeFileBridge;
   notifications: NativeNotificationBridge;
   links: Readonly<{
     openExternal(url: string): Promise<void>;
@@ -158,14 +172,6 @@ export type NativeWindowGlassTint = Readonly<{
 }>;
 
 const nativeWindowGlassTintChannels = ["red", "green", "blue", "alpha"] as const;
-
-export type NativeDirectoryPickerOptions = Readonly<{
-  title: string;
-}>;
-
-export type NativeDirectorySelection = Readonly<{
-  path: string;
-}> | null;
 
 export type NativeLogEntry = Readonly<{
   level: "debug" | "info" | "warn" | "error";
@@ -258,11 +264,8 @@ export function createBrowserNativeBridge(options: BrowserNativeBridgeOptions = 
         throw new Error("Native clipboard is unavailable in this shell.");
       },
     },
-    directories: {
-      async selectDirectory(): Promise<NativeDirectorySelection> {
-        throw new Error("Directory selection is unavailable in this shell.");
-      },
-    },
+    directories: createBrowserDirectoryBridge(),
+    files: createBrowserFileBridge(),
     notifications: createBrowserNativeNotifications(),
     links: {
       async openExternal(url: string): Promise<void> {
@@ -398,12 +401,8 @@ export function createTauriNativeBridge(platform: NativePlatform = "unknown"): N
         return readText();
       },
     },
-    directories: {
-      async selectDirectory(options: NativeDirectoryPickerOptions): Promise<NativeDirectorySelection> {
-        const path = await invoke<string | null>("select_directory", { title: options.title });
-        return path === null ? null : { path };
-      },
-    },
+    directories: createTauriDirectoryBridge(),
+    files: createTauriFileBridge(),
     notifications: createTauriNativeNotifications({ platform }),
     links: {
       async openExternal(url: string): Promise<void> {
