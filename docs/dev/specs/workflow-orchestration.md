@@ -102,7 +102,7 @@
 - Workflow runtime builds on reusable headless/session infrastructure for session launch, runtime wiring, logging, progress, subagent role handling, and mode prompts.
 - `RunPromptService.RunPrompt` final text is not workflow completion authority.
 - Existing user goal state is not reused as workflow autonomy state.
-- Workflow task sessions reject `/goal`; the workflow node/run is the task objective driver.
+- Workflow task sessions reject user `/goal` control; the workflow node/run is the task objective driver. Agents may still set themselves goals and complete them, per the agent goal rules in core-runtime-tools.
 - If terminal workflow completion commits before accepted client steering is drained, the queued steering resolves with a visible failure and is not applied to the completed run.
 - Task comment bodies are not automatically injected into agent context. When a task has visible comments, workflow-mode instructions include the visible comment count and a `kent task comment list <task>` pull command. Kent re-queries the visible comment count each time the workflow instructions are appended without mutating previously persisted model-visible prompt items.
 
