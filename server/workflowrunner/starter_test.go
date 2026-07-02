@@ -1511,6 +1511,33 @@ func TestWorkflowRuntimeStartFailsWhenRoleDisappearedAfterTaskStart(t *testing.T
 	}
 }
 
+func TestWorkflowRuntimeStartsConfiguredNoOpRole(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput,
+		ScriptedFinalAnswer(`{"commentary":"first comments","prior_summary":"first summary"}`),
+		ScriptedFinalAnswer(`{"commentary":"second done"}`),
+	)
+	fixture.cfg.Settings.Subagents["planner"] = config.SubagentRole{
+		Settings: config.Settings{ThinkingLevel: fixture.cfg.Settings.ThinkingLevel},
+		Sources:  map[string]string{"thinking_level": "test"},
+	}
+	fixture.rebuildStarter(t)
+	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeNewSession, "planner")
+	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow chained: %v", err)
+	}
+	task := fixture.createStartedTask(t)
+	scheduler := fixture.scheduler(t)
+
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("first Process: %v", err)
+	}
+	fixture.waitForRunCount(t, task.ID, 2)
+	if err := scheduler.Process(context.Background()); err != nil {
+		t.Fatalf("second Process: %v", err)
+	}
+	fixture.waitForCompletedRunCount(t, task.ID, 2)
+}
+
 func TestWorkflowRuntimeStartFailsWhenTransitionPromptPreviewCannotRender(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"should not run"}`))
 	finalizer := &recordingInterruptedRunFinalizer{}
@@ -1697,7 +1724,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if err := metadataStore.SetProjectKey(context.Background(), binding.ProjectID, "RUN"); err != nil {
 		t.Fatalf("SetProjectKey: %v", err)
 	}
-	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(workflow.StaticRoleResolver{"coder": true, "reviewer": true}))
+	store, err := workflowstore.New(metadataStore, workflowstore.WithRoleResolver(workflow.StaticRoleResolver{"coder": true, "reviewer": true, "planner": true}))
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
