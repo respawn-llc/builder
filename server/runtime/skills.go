@@ -195,11 +195,6 @@ func formatSkillDiscoveryWarning(issue skillDiscoveryIssue) string {
 }
 
 func skillDiscoveryRoots(workspaceRoot, globalConfigDir string) ([]skillRoot, error) {
-	globalDir, err := resolveGlobalConfigDir(globalConfigDir)
-	if err != nil {
-		return nil, err
-	}
-
 	roots := make([]skillRoot, 0, 3)
 	seen := map[string]bool{}
 	addPath := func(path string, kind skillSourceKind) {
@@ -211,15 +206,16 @@ func skillDiscoveryRoots(workspaceRoot, globalConfigDir string) ([]skillRoot, er
 		roots = append(roots, skillRoot{Path: cleaned, Kind: kind})
 	}
 
-	addPath(filepath.Join(globalDir, skillsDirName), skillSourceGlobal)
-	if strings.TrimSpace(workspaceRoot) != "" {
-		addPath(filepath.Join(workspaceRoot, agentsGlobalDirName, skillsDirName), skillSourceWorkspace)
-	}
-	generatedRoot, err := generatedassets.GeneratedSkillsRootFor(globalConfigDir)
+	layout, err := generatedassets.GeneratedLayoutFor(globalConfigDir)
 	if err != nil {
 		return nil, err
 	}
-	addPath(generatedRoot, skillSourceGenerated)
+
+	addPath(layout.UserSkillsRoot, skillSourceGlobal)
+	if strings.TrimSpace(workspaceRoot) != "" {
+		addPath(filepath.Join(workspaceRoot, agentsGlobalDirName, skillsDirName), skillSourceWorkspace)
+	}
+	addPath(layout.GeneratedSkillsRoot, skillSourceGenerated)
 	return roots, nil
 }
 

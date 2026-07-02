@@ -15,3 +15,9 @@ func WithOutsideWorkspaceApprover(approver tools.FSGuardApprover) Option {
 		t.outsideWorkspaceApprover = approver
 	}
 }
+
+func WithPathDenyPolicy(policy tools.PathDenyPolicy) Option {
+	return func(t *Tool) {
+		t.pathDenyPolicy = policy
+	}
+}

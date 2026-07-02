@@ -100,6 +100,114 @@ func TestOutsideWorkspaceAddFileRequestsApprovalBeforeMissingPathChecks(t *testi
 	}
 }
 
+func TestPathDenyPolicyBlocksPatchOperationsBeforeMutation(t *testing.T) {
+	workspace := t.TempDir()
+	deniedRoot := outsideNonTempDir(t)
+	normalRoot := outsideNonTempDir(t)
+	if err := os.MkdirAll(filepath.Join(deniedRoot, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir denied root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deniedRoot, "update.txt"), []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("seed denied update: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deniedRoot, "delete.txt"), []byte("delete\n"), 0o644); err != nil {
+		t.Fatalf("seed denied delete: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deniedRoot, "move-src.txt"), []byte("move\n"), 0o644); err != nil {
+		t.Fatalf("seed denied move source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(normalRoot, "normal-src.txt"), []byte("normal\n"), 0o644); err != nil {
+		t.Fatalf("seed normal source: %v", err)
+	}
+	approvals := 0
+	tool := newPatchTestTool(t, workspace,
+		WithAllowOutsideWorkspace(true),
+		WithPathDenyPolicy(compilePatchDenyPolicyForTest(t, deniedRoot, "synthetic deny")),
+		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+			approvals++
+			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowOnce}, nil
+		}),
+	)
+
+	tests := []struct {
+		name   string
+		patch  string
+		assert func(*testing.T)
+	}{
+		{"add", "*** Begin Patch\n*** Add File: " + filepath.Join(deniedRoot, "nested", "added.txt") + "\n+new\n*** End Patch\n", func(t *testing.T) {
+			if _, err := os.Stat(filepath.Join(deniedRoot, "nested", "added.txt")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("denied add created file, stat err=%v", err)
+			}
+		}},
+		{"update", "*** Begin Patch\n*** Update File: " + filepath.Join(deniedRoot, "update.txt") + "\n-old\n+new\n*** End Patch\n", func(t *testing.T) {
+			assertPatchFileContent(t, filepath.Join(deniedRoot, "update.txt"), "old\n")
+		}},
+		{"delete", "*** Begin Patch\n*** Delete File: " + filepath.Join(deniedRoot, "delete.txt") + "\n*** End Patch\n", func(t *testing.T) {
+			assertPatchFileContent(t, filepath.Join(deniedRoot, "delete.txt"), "delete\n")
+		}},
+		{"move-source", "*** Begin Patch\n*** Update File: " + filepath.Join(deniedRoot, "move-src.txt") + "\n*** Move to: " + filepath.Join(normalRoot, "moved.txt") + "\n-move\n+moved\n*** End Patch\n", func(t *testing.T) {
+			assertPatchFileContent(t, filepath.Join(deniedRoot, "move-src.txt"), "move\n")
+			if _, err := os.Stat(filepath.Join(normalRoot, "moved.txt")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("denied move created destination, stat err=%v", err)
+			}
+		}},
+		{"move-destination", "*** Begin Patch\n*** Update File: " + filepath.Join(normalRoot, "normal-src.txt") + "\n*** Move to: " + filepath.Join(deniedRoot, "moved-in.txt") + "\n-normal\n+moved\n*** End Patch\n", func(t *testing.T) {
+			assertPatchFileContent(t, filepath.Join(normalRoot, "normal-src.txt"), "normal\n")
+			if _, err := os.Stat(filepath.Join(deniedRoot, "moved-in.txt")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("denied move created destination, stat err=%v", err)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := callPatch(t, tool, "deny-"+tc.name, tc.patch)
+			if !result.IsError || !strings.Contains(toolError(t, result), "synthetic deny") {
+				t.Fatalf("expected synthetic deny patch error, got error=%t output=%s", result.IsError, string(result.Output))
+			}
+			tc.assert(t)
+		})
+	}
+	if approvals != 0 {
+		t.Fatalf("outside approvals = %d, want 0", approvals)
+	}
+}
+
+func TestPathDenyPolicyPreflightsWholePatchBeforeOutsideApproval(t *testing.T) {
+	workspace := t.TempDir()
+	normalRoot := outsideNonTempDir(t)
+	deniedRoot := outsideNonTempDir(t)
+	normalTarget := filepath.Join(normalRoot, "normal.txt")
+	deniedTarget := filepath.Join(deniedRoot, "denied.txt")
+	if err := os.WriteFile(normalTarget, []byte("normal\n"), 0o644); err != nil {
+		t.Fatalf("seed normal target: %v", err)
+	}
+	approvals := 0
+	tool := newPatchTestTool(t, workspace,
+		WithPathDenyPolicy(compilePatchDenyPolicyForTest(t, deniedRoot, "synthetic deny")),
+		WithOutsideWorkspaceApprover(func(context.Context, OutsideWorkspaceRequest) (OutsideWorkspaceApproval, error) {
+			approvals++
+			return OutsideWorkspaceApproval{Decision: OutsideWorkspaceDecisionAllowSession}, nil
+		}),
+	)
+
+	result := callPatch(t, tool, "mixed-deny", "*** Begin Patch\n*** Update File: "+normalTarget+"\n-normal\n+changed\n*** Add File: "+deniedTarget+"\n+denied\n*** End Patch\n")
+	if !result.IsError || !strings.Contains(toolError(t, result), "synthetic deny") {
+		t.Fatalf("expected synthetic deny patch error, got error=%t output=%s", result.IsError, string(result.Output))
+	}
+	if approvals != 0 {
+		t.Fatalf("outside approvals = %d, want 0", approvals)
+	}
+	assertPatchFileContent(t, normalTarget, "normal\n")
+	if _, err := os.Stat(deniedTarget); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("denied target created, stat err=%v", err)
+	}
+	tool.outsideWorkspaceApprover = nil
+	allowedBySession := callPatch(t, tool, "session-check", "*** Begin Patch\n*** Update File: "+normalTarget+"\n-normal\n+changed\n*** End Patch\n")
+	if !allowedBySession.IsError {
+		t.Fatal("outside-workspace session approval was mutated before deny preflight")
+	}
+}
+
 func TestOutsideWorkspaceQueuesApprovalPerFileInSinglePatch(t *testing.T) {
 	workspace := t.TempDir()
 	outsideRoot := outsideNonTempDir(t)
@@ -310,6 +418,29 @@ func newPatchTestTool(t *testing.T, workspace string, opts ...Option) *Tool {
 		t.Fatalf("new patch tool: %v", err)
 	}
 	return tool
+}
+
+func compilePatchDenyPolicyForTest(t *testing.T, root string, message string) tools.PathDenyPolicy {
+	t.Helper()
+	policy, err := tools.CompilePathDenyPolicy([]tools.PathDenyRuleConfig{{
+		Message: message,
+		Matcher: tools.PathMatcherConfig{Kind: tools.PathMatcherLiteral, Pattern: root, LiteralTree: true},
+	}})
+	if err != nil {
+		t.Fatalf("compile path deny policy: %v", err)
+	}
+	return policy
+}
+
+func assertPatchFileContent(t *testing.T, path string, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if string(got) != want {
+		t.Fatalf("%s content = %q, want %q", path, string(got), want)
+	}
 }
 
 func toolError(t *testing.T, result tools.Result) string {

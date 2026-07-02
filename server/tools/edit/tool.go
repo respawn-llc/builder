@@ -14,6 +14,7 @@ import (
 
 	"core/server/tools"
 	patchtool "core/server/tools/patch"
+	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
@@ -33,6 +34,7 @@ type Tool struct {
 	outsideWorkspaceApprover     tools.FSGuardApprover
 	outsideWorkspaceSessionMu    sync.RWMutex
 	outsideWorkspaceSessionAllow bool
+	pathDenyPolicy               tools.PathDenyPolicy
 }
 
 type resolvedPath struct {
@@ -384,54 +386,28 @@ func (t *Tool) isUserSymlink(cleaned string, real string) bool {
 }
 
 func resolveRealTarget(cleaned string) (string, error) {
-	if real, err := filepath.EvalSymlinks(cleaned); err == nil {
-		return filepath.Clean(real), nil
-	} else if !errors.Is(err, os.ErrNotExist) {
+	real, err := config.ResolveExistingAncestorRealPath(cleaned)
+	if err != nil {
 		return "", failf("resolve path %q: %v", cleaned, err)
 	}
-	parent := filepath.Dir(cleaned)
-	for {
-		info, err := os.Stat(parent)
-		if err == nil {
-			if !info.IsDir() {
-				return "", failf("parent path is not a directory: %s.", parent)
-			}
-			parentReal, evalErr := filepath.EvalSymlinks(parent)
-			if evalErr != nil {
-				return "", failf("resolve parent path for %q: %v", cleaned, evalErr)
-			}
-			rel, relErr := filepath.Rel(parent, cleaned)
-			if relErr != nil {
-				return "", failf("resolve path %q: %v", cleaned, relErr)
-			}
-			return filepath.Clean(filepath.Join(parentReal, rel)), nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return "", failf("stat parent path for %q: %v", cleaned, err)
-		}
-		next := filepath.Dir(parent)
-		if next == parent {
-			return "", failf("resolve parent path for %q: no existing ancestor", cleaned)
-		}
-		parent = next
-	}
+	return real, nil
 }
 
 func (t *Tool) outsideGuard() tools.FSGuard {
-	return tools.NewFSGuard(
-		t.workspaceRoot,
-		t.workspaceRootReal,
-		t.workspaceRootInfo,
-		t.workspaceOnly,
-		t.allowOutsideWorkspace,
-		t.outsideWorkspaceApprover,
-		t.outsideWorkspaceSessionAllowed,
-		t.setOutsideWorkspaceSessionAllowed,
-		"If it's essential to the task, ask the user to make the edit manually at the end of the task.",
-		tools.FSGuardErrorLabels{
+	return tools.NewFSGuard(tools.FSGuardConfig{
+		WorkspaceRoot:         t.workspaceRoot,
+		WorkspaceRootReal:     t.workspaceRootReal,
+		WorkspaceRootInfo:     t.workspaceRootInfo,
+		WorkspaceOnly:         t.workspaceOnly,
+		AllowOutsideWorkspace: t.allowOutsideWorkspace,
+		Approver:              t.outsideWorkspaceApprover,
+		SessionAllowed:        t.outsideWorkspaceSessionAllowed,
+		SetSessionAllowed:     t.setOutsideWorkspaceSessionAllowed,
+		RejectionInstruction:  "If it's essential to the task, ask the user to make the edit manually at the end of the task.",
+		ErrorLabels: tools.FSGuardErrorLabels{
 			OutsidePath: "edit target outside workspace",
 		},
-		tools.FSGuardFailureFactory{
+		Failures: tools.FSGuardFailureFactory{
 			NoPermission: func(path string, reason string) error {
 				return failf("no file edit permission for %s. %s", path, reason)
 			},
@@ -445,9 +421,9 @@ func (t *Tool) outsideGuard() tools.FSGuard {
 				return failf("user denied the edit for %s.\nUser said: %s", path, commentary)
 			},
 		},
-		patchtool.IsPathInTemporaryDir,
-		nil,
-	)
+		TemporaryPathAllowed: patchtool.IsPathInTemporaryDir,
+		PathDenyPolicy:       t.pathDenyPolicy,
+	})
 }
 
 func renderEditDiff(path string, oldText string, newText string) *patchformat.RenderedPatch {

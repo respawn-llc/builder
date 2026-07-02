@@ -278,6 +278,29 @@ func TestCall_SymlinkEscapeOutsideWorkspaceRejectedByDefault(t *testing.T) {
 	}
 }
 
+func TestCall_GeneratedPathReadUsesNormalOutsideWorkspaceApproval(t *testing.T) {
+	workspace := t.TempDir()
+	generatedRoot := filepath.Join(outsideNonTempDir(t), ".generated")
+	if err := os.MkdirAll(generatedRoot, 0o755); err != nil {
+		t.Fatalf("mkdir generated root: %v", err)
+	}
+	generatedImage := filepath.Join(generatedRoot, "img.png")
+	writeReadImageTestPath(t, generatedImage, tinyPNG)
+	approvals := 0
+	tool := newReadImageTestTool(t, workspace, true, WithOutsideWorkspaceApprover(func(context.Context, patchtool.OutsideWorkspaceRequest) (patchtool.OutsideWorkspaceApproval, error) {
+		approvals++
+		return patchtool.OutsideWorkspaceApproval{Decision: patchtool.OutsideWorkspaceDecisionAllowOnce}, nil
+	}))
+
+	result := callReadImageTool(t, tool, "generated-read", readImagePathInput(generatedImage))
+	if result.IsError {
+		t.Fatalf("expected generated read to follow normal approval, got %s", string(result.Output))
+	}
+	if approvals != 1 {
+		t.Fatalf("outside read approvals = %d, want 1", approvals)
+	}
+}
+
 func TestCall_OutsideWorkspaceTempDirAllowedWithoutApproval(t *testing.T) {
 	workspace := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.png")

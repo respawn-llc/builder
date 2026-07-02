@@ -1121,6 +1121,62 @@ func TestPersistenceRootHashFoldsCaseOnCaseInsensitivePlatforms(t *testing.T) {
 	}
 }
 
+func TestCanonicalPathIdentityUsesPersistenceRootCasePolicy(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "KentRoot", "Nested")
+	withTrailing := root + string(filepath.Separator)
+	first, err := CanonicalPathIdentity(root)
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity: %v", err)
+	}
+	second, err := CanonicalPathIdentity(withTrailing)
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity trailing: %v", err)
+	}
+	if first != second {
+		t.Fatalf("path identity should ignore trailing separator: %q != %q", first, second)
+	}
+	caseVariant, err := CanonicalPathIdentity(strings.ToLower(root))
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity case variant: %v", err)
+	}
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		if first != caseVariant {
+			t.Fatalf("path identity should fold case on %s: %q != %q", runtime.GOOS, first, caseVariant)
+		}
+	} else if first == caseVariant && root != strings.ToLower(root) {
+		t.Fatalf("path identity should preserve case on %s", runtime.GOOS)
+	}
+}
+
+func TestResolveExistingAncestorRealPathUsesNearestExistingRealAncestor(t *testing.T) {
+	parentReal := t.TempDir()
+	linkParent := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(parentReal, linkParent); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	got, err := ResolveExistingAncestorRealPath(filepath.Join(linkParent, "missing", "child.txt"))
+	if err != nil {
+		t.Fatalf("ResolveExistingAncestorRealPath: %v", err)
+	}
+	parentRealCanonical, err := filepath.EvalSymlinks(parentReal)
+	if err != nil {
+		t.Fatalf("resolve temp real path: %v", err)
+	}
+	want := filepath.Join(parentRealCanonical, "missing", "child.txt")
+	if got != want {
+		t.Fatalf("resolved path = %q, want %q", got, want)
+	}
+
+	loop := filepath.Join(parentReal, "loop")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Skipf("symlink loop unavailable: %v", err)
+	}
+	if _, err := ResolveExistingAncestorRealPath(loop); err == nil {
+		t.Fatal("expected symlink loop error")
+	}
+}
+
 func TestExplicitPersistenceRootID(t *testing.T) {
 	home := t.TempDir()
 	isoRoot := filepath.Join(string(filepath.Separator), "tmp", "iso-root-id-explicit")

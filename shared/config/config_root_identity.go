@@ -3,9 +3,13 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 )
 
 // canonicalRootForIdentity returns the stable comparison/hash key for a
@@ -25,6 +29,84 @@ func canonicalRootForIdentity(root string) string {
 	default:
 		return cleaned
 	}
+}
+
+// CanonicalPathIdentity returns the stable comparison key used for path
+// identity checks that must follow persistence-root case-folding semantics.
+func CanonicalPathIdentity(path string) (string, error) {
+	real, err := ResolveExistingAncestorRealPath(path)
+	if err != nil {
+		return "", err
+	}
+	return canonicalRootForIdentity(real), nil
+}
+
+// ResolveExistingPathRealPath resolves a path that must already exist to its
+// symlink-evaluated, cleaned, absolute filesystem path.
+func ResolveExistingPathRealPath(path string) (string, error) {
+	absolute, err := absoluteCleanPath(path)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(absolute); err == nil {
+		return filepath.Clean(real), nil
+	} else {
+		return "", fmt.Errorf("resolve real path for %q: %w", absolute, err)
+	}
+}
+
+// ResolveExistingAncestorRealPath resolves a path to the same identity as the
+// existing filesystem object at that path, or to the nearest existing
+// symlink-evaluated ancestor plus the missing tail. This is the shared write
+// target identity used by tool path guards and path deny policies.
+func ResolveExistingAncestorRealPath(path string) (string, error) {
+	absolute, err := absoluteCleanPath(path)
+	if err != nil {
+		return "", err
+	}
+	if real, err := filepath.EvalSymlinks(absolute); err == nil {
+		return filepath.Clean(real), nil
+	} else if !isMissingPathForAncestorResolution(err) {
+		return "", fmt.Errorf("resolve real path for %q: %w", absolute, err)
+	}
+
+	parent := filepath.Dir(absolute)
+	for {
+		if _, err := os.Stat(parent); err == nil {
+			parentReal, evalErr := filepath.EvalSymlinks(parent)
+			if evalErr != nil {
+				return "", fmt.Errorf("resolve real path ancestor for %q: %w", absolute, evalErr)
+			}
+			rel, relErr := filepath.Rel(parent, absolute)
+			if relErr != nil {
+				return "", fmt.Errorf("resolve real path tail for %q: %w", absolute, relErr)
+			}
+			return filepath.Clean(filepath.Join(parentReal, rel)), nil
+		} else if !isMissingPathForAncestorResolution(err) {
+			return "", fmt.Errorf("stat real path ancestor for %q: %w", absolute, err)
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return "", fmt.Errorf("resolve real path for %q: no existing ancestor", absolute)
+		}
+		parent = next
+	}
+}
+
+func isMissingPathForAncestorResolution(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+func absoluteCleanPath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", errors.New("path is required")
+	}
+	absolute, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute path for %q: %w", path, err)
+	}
+	return filepath.Clean(absolute), nil
 }
 
 // PersistenceRootHash returns a short, stable identifier for a persistence

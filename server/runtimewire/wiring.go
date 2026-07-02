@@ -57,24 +57,25 @@ func NewRuntimeWiring(store *session.Store, active config.Settings, enabledTools
 
 func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings, enabledTools []toolspec.ID, workspaceRoot string, mgr *auth.Manager, logger Logger, background *shelltool.Manager, opts RuntimeWiringOptions) (*RuntimeWiring, error) {
 	var eng *runtime.Engine
-	localTools, askBroker, background, err := NewLocalToolRegistryBinding(
-		workspaceRoot,
-		store.Meta().SessionID,
-		enabledTools,
-		time.Duration(active.MinimumExecToBgSeconds)*time.Second,
-		active.ShellOutputMaxChars,
-		active.AllowNonCwdEdits,
-		llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
-		logger,
-		background,
-		func() triggerhandofftool.TriggerHandoffController { return eng },
-		func() bool {
+	localTools, askBroker, background, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		WorkspaceRoot:            workspaceRoot,
+		OwnerSessionID:           store.Meta().SessionID,
+		Enabled:                  enabledTools,
+		MinimumExecToBgTime:      time.Duration(active.MinimumExecToBgSeconds) * time.Second,
+		ShellOutputMaxChars:      active.ShellOutputMaxChars,
+		AllowNonCwdEdits:         active.AllowNonCwdEdits,
+		SupportsVision:           llm.LockedContractSupportsVisionInputs(store.Meta().Locked, active.Model),
+		Logger:                   logger,
+		Background:               background,
+		GlobalConfigDir:          opts.GlobalConfigDir,
+		TriggerHandoffController: func() triggerhandofftool.TriggerHandoffController { return eng },
+		QuestionsEnabledGetter: func() bool {
 			if eng == nil {
 				return true
 			}
 			return eng.QuestionsEnabled()
 		},
-	)
+	})
 	if err != nil {
 		return nil, err
 	}
