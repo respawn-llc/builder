@@ -26,6 +26,7 @@ type OngoingScrollbackBufferImpl struct {
 	isStreaming               bool
 	assistantMarkdownRenderer AssistantMarkdownRenderer
 	assistantStreamSource     string
+	assistantStreamRendered   string
 	prepareNormalBuffer       bool
 	normalBufferPrepared      bool
 	closed                    bool
@@ -519,7 +520,10 @@ func (buffer *OngoingScrollbackBufferImpl) discardAssistantStreamingLocked(queue
 
 func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(delta string) error {
 	buffer.assistantStreamSource += delta
-	payload := buffer.assistantStreamTerminalPayload(delta)
+	payload, err := buffer.assistantStreamTerminalPayload(delta)
+	if err != nil {
+		return err
+	}
 	if payload == "" {
 		return nil
 	}
@@ -529,19 +533,33 @@ func (buffer *OngoingScrollbackBufferImpl) writeAssistantStreamPayloadLocked(del
 	}}, false, false)
 }
 
-func (buffer *OngoingScrollbackBufferImpl) assistantStreamTerminalPayload(delta string) string {
+func (buffer *OngoingScrollbackBufferImpl) assistantStreamTerminalPayload(delta string) (string, error) {
 	if buffer == nil || buffer.assistantMarkdownRenderer == nil {
-		return nativeAssistantStreamTerminalPayload(delta)
+		return nativeAssistantStreamTerminalPayload(delta), nil
 	}
-	rows := buffer.assistantMarkdownRenderer(delta, buffer.terminalWidth)
+	rows := buffer.assistantMarkdownRenderer(buffer.assistantStreamSource, buffer.terminalWidth)
 	if len(rows) == 0 {
-		return ""
+		return "", nil
 	}
-	return nativeAssistantStreamTerminalPayload(strings.Join(rows, "\n"))
+	rendered := nativeAssistantStreamTerminalPayload(strings.Join(rows, "\n"))
+	if !strings.HasPrefix(rendered, buffer.assistantStreamRendered) {
+		return "", scrollbackInvariantError(
+			"streamMarkdownAssistantContent",
+			"assistant renderer changed already emitted stream prefix",
+			buffer.assistantStreamSource,
+			buffer.terminalWidth,
+			buffer.terminalHeight,
+			lipgloss.Width(buffer.assistantStreamSource),
+		)
+	}
+	payload := strings.TrimPrefix(rendered, buffer.assistantStreamRendered)
+	buffer.assistantStreamRendered = rendered
+	return payload, nil
 }
 
 func (buffer *OngoingScrollbackBufferImpl) clearAssistantStreamStateLocked() {
 	buffer.assistantStreamSource = ""
+	buffer.assistantStreamRendered = ""
 }
 
 func (buffer *OngoingScrollbackBufferImpl) writeStableRowsWithLiveErasedLocked(rows []stableOutputRow, restoreLive bool, continueAfterError bool) error {
@@ -572,7 +590,7 @@ func (buffer *OngoingScrollbackBufferImpl) writeStableRowsWithLiveErasedLocked(r
 func (buffer *OngoingScrollbackBufferImpl) writeStableRowsDirectLocked(rows []stableOutputRow, continueAfterError bool) error {
 	var firstErr error
 	for _, row := range rows {
-		stablePayload := row.text
+		stablePayload := row.text + terminalStyleResetSequence
 		if row.appendTerminalBreak {
 			stablePayload += terminalLineBreak
 		}
@@ -677,6 +695,8 @@ func stableWriteDiagnostics(payload string, terminalWidth int, terminalHeight in
 }
 
 const terminalLineBreak = "\r\n"
+
+var terminalStyleResetSequence = xansi.ResetHyperlink() + xansi.ResetStyle
 
 func nativeAssistantStreamTerminalPayload(payload string) string {
 	stripped := xansi.Strip(payload)

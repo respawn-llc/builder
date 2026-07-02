@@ -162,8 +162,8 @@ echo "Building Kent desktop bundle version ${version}" >&2
 
 compile_app_icon
 
-if [ "$(uname -s)" = "Darwin" ] && [ "$require_updater_key" != "1" ] && ! tauri_args_select_bundles "${tauri_args[@]}"; then
-	tauri_args=(--bundles app "${tauri_args[@]}")
+if [ "$(uname -s)" = "Darwin" ] && [ "$require_updater_key" != "1" ] && ! tauri_args_select_bundles ${tauri_args[@]+"${tauri_args[@]}"}; then
+	tauri_args=(--bundles app ${tauri_args[@]+"${tauri_args[@]}"})
 	echo "Local macOS build defaults to the standalone .app bundle; release packaging builds installers." >&2
 fi
 
@@ -216,7 +216,7 @@ pnpm --dir apps/desktop exec tauri build \
 
 if [ "$(uname -s)" = "Darwin" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
 	build_profile="release"
-	for arg in "${tauri_args[@]}"; do
+	for arg in ${tauri_args[@]+"${tauri_args[@]}"}; do
 		if [ "$arg" = "--debug" ] || [ "$arg" = "-d" ]; then
 			build_profile="debug"
 		fi

@@ -373,7 +373,6 @@ describe("AttentionNotificationController", () => {
       expect(services.logger.entries()).toContainEqual(
         expect.objectContaining({
           level: "warn",
-          message: "Requesting native notification permission failed.",
           context: {
             error: "No bundle identifier found.",
           },

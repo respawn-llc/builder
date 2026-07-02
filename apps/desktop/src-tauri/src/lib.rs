@@ -237,52 +237,62 @@ fn remove_attention_notification(
 }
 
 #[tauri::command]
-fn attention_notification_permission_state() -> Result<AttentionNotificationPermission, String> {
-    attention_native_notification_permission_state()
+async fn attention_notification_permission_state() -> Result<AttentionNotificationPermission, String>
+{
+    attention_native_notification_permission_state().await
 }
 
 #[tauri::command]
-fn request_attention_notification_permission() -> Result<AttentionNotificationPermission, String> {
-    request_attention_native_notification_permission()
+async fn request_attention_notification_permission(
+) -> Result<AttentionNotificationPermission, String> {
+    request_attention_native_notification_permission().await
 }
 
 #[cfg(target_os = "macos")]
-fn attention_native_notification_permission_state(
+async fn attention_native_notification_permission_state(
 ) -> Result<AttentionNotificationPermission, String> {
-    use mac_usernotifications::{blocking, AuthorizationStatus};
+    tauri::async_runtime::spawn_blocking(|| {
+        use mac_usernotifications::{blocking, AuthorizationStatus};
 
-    let settings = blocking::get_notification_settings()
-        .map_err(|error| format!("Read native notification permission failed: {error}"))?;
-    Ok(match settings.authorization_status {
-        AuthorizationStatus::Authorized
-        | AuthorizationStatus::Ephemeral
-        | AuthorizationStatus::Provisional => AttentionNotificationPermission::Granted,
-        AuthorizationStatus::Denied => AttentionNotificationPermission::Denied,
-        AuthorizationStatus::NotDetermined => AttentionNotificationPermission::Prompt,
-        AuthorizationStatus::Unknown => AttentionNotificationPermission::Unsupported,
+        let settings = blocking::get_notification_settings()
+            .map_err(|error| format!("Read native notification permission failed: {error}"))?;
+        Ok(match settings.authorization_status {
+            AuthorizationStatus::Authorized
+            | AuthorizationStatus::Ephemeral
+            | AuthorizationStatus::Provisional => AttentionNotificationPermission::Granted,
+            AuthorizationStatus::Denied => AttentionNotificationPermission::Denied,
+            AuthorizationStatus::NotDetermined => AttentionNotificationPermission::Prompt,
+            AuthorizationStatus::Unknown => AttentionNotificationPermission::Unsupported,
+        })
     })
+    .await
+    .map_err(|error| format!("Read native notification permission task failed: {error}"))?
 }
 
 #[cfg(target_os = "macos")]
-fn request_attention_native_notification_permission(
+async fn request_attention_native_notification_permission(
 ) -> Result<AttentionNotificationPermission, String> {
-    let granted = mac_usernotifications::blocking::request_auth()
-        .map_err(|error| format!("Request native notification permission failed: {error}"))?;
-    if granted {
-        Ok(AttentionNotificationPermission::Granted)
-    } else {
-        Ok(AttentionNotificationPermission::Denied)
-    }
+    tauri::async_runtime::spawn_blocking(|| {
+        let granted = mac_usernotifications::blocking::request_auth()
+            .map_err(|error| format!("Request native notification permission failed: {error}"))?;
+        if granted {
+            Ok(AttentionNotificationPermission::Granted)
+        } else {
+            Ok(AttentionNotificationPermission::Denied)
+        }
+    })
+    .await
+    .map_err(|error| format!("Request native notification permission task failed: {error}"))?
 }
 
 #[cfg(not(target_os = "macos"))]
-fn attention_native_notification_permission_state(
+async fn attention_native_notification_permission_state(
 ) -> Result<AttentionNotificationPermission, String> {
     Ok(AttentionNotificationPermission::Granted)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn request_attention_native_notification_permission(
+async fn request_attention_native_notification_permission(
 ) -> Result<AttentionNotificationPermission, String> {
     Ok(AttentionNotificationPermission::Granted)
 }
