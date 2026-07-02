@@ -108,7 +108,7 @@ func Validate(req ValidationRequest) []Diagnostic {
 			Blocking:     true,
 		}}
 	}
-	if info.Mode().Perm()&0o111 == 0 {
+	if !scriptFileRunnable(info) {
 		return []Diagnostic{{
 			Code:         CodePathNotExecutable,
 			Message:      fmt.Sprintf("script_path %q is not executable", resolved),

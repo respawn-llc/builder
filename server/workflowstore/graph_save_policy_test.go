@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"core/server/workflow"
@@ -461,6 +463,40 @@ func TestWorkflowGraphSaveBlocksTransitionContractChangeWhileSourceRunInterrupte
 	}
 	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
 		t.Fatalf("interrupted source-run transition contract update = %+v, want active_transition_contract_changed blocker", result)
+	}
+}
+
+func TestWorkflowGraphSaveBlocksTransitionContractChangeWhileScriptRunActive(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
+	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		t.Fatalf("create script dir: %v", err)
+	}
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
+	startTask(t, ctx, store, task.ID)
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	doneEdge := edgeByKey(t, def, "done")
+	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, true, def)
+	req.Edges = mutateWorkflowGraphSaveEdge(req.Edges, doneEdge.ID, func(edge *EdgeRecord) {
+		edge.Parameters = []workflow.Parameter{{Key: "summary", Description: "Summary."}}
+	})
+
+	result, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph active script transition contract update: %v", err)
+	}
+	if result.Saved || workflowGraphSaveBlockerCount(result.Blockers, "active_transition_contract_changed") == 0 {
+		t.Fatalf("active script transition contract update = %+v, want active_transition_contract_changed blocker", result)
 	}
 }
 

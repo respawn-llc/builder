@@ -968,7 +968,7 @@ WHERE t.workflow_id = sqlc.arg(workflow_id)
   AND r.node_id = sqlc.arg(node_id)
   AND t.canceled_at_unix_ms = 0
   AND p.state = 'active'
-  AND n.kind = 'agent'
+  AND n.kind IN ('agent', 'script')
   AND (
       (
           r.started_at_unix_ms > 0

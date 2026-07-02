@@ -48,6 +48,7 @@ var errWorkflowShellCompletionRequiresShell = errors.New("workflow shell_command
 type RuntimeStore interface {
 	GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error)
 	GetRunStartContext(context.Context, workflow.RunID) (workflowstore.RunStartContext, error)
+	GetRunCompletionContext(context.Context, workflow.RunID) (workflowstore.RunCompletionContext, error)
 	AttachRunSession(context.Context, workflow.RunID, int64, string) error
 	SetRunEffectiveCompletionMode(context.Context, workflow.RunID, int64, string) error
 	SetRunWaitingAsk(context.Context, workflow.RunID, int64, string) error

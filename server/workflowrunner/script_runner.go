@@ -45,7 +45,12 @@ func (s *Starter) runScript(ctx context.Context, req SchedulerStartRunRequest, i
 		s.interrupt(context.Background(), req.RunID, req.Generation, scriptFailureReason(err), scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
 		return
 	}
-	parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), workflowCompletionContract(req, input))
+	contract, err := s.scriptCompletionContract(context.Background(), req, input)
+	if err != nil {
+		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
+		return
+	}
+	parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), contract)
 	if err != nil {
 		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
 		return
@@ -62,6 +67,16 @@ func (s *Starter) runScript(ctx context.Context, req SchedulerStartRunRequest, i
 		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonScriptCompletionFailed, scriptInterruptionError{err: err, detail: scriptFailureDetailJSON(err, result)})
 		return
 	}
+}
+
+func (s *Starter) scriptCompletionContract(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext) (workflowruntime.CompletionContract, error) {
+	contract := workflowCompletionContract(req, input)
+	live, err := s.store.GetRunCompletionContext(ctx, req.RunID)
+	if err != nil {
+		return workflowruntime.CompletionContract{}, err
+	}
+	contract.Transitions = workflowCompletionTransitions(live.TransitionOptions, live.TransitionIDs)
+	return contract, nil
 }
 
 type scriptInterruptionError struct {

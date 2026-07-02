@@ -308,6 +308,67 @@ func TestScriptCompletionUsesLiveOutputContract(t *testing.T) {
 	}
 }
 
+func TestRunCompletionContextUsesLiveScriptContract(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
+	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		t.Fatalf("create script dir: %v", err)
+	}
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
+	started := startTask(t, ctx, store, task.ID)
+	parameters, err := marshalJSONArray([]workflow.Parameter{{Key: "summary", Description: "Live summary."}})
+	if err != nil {
+		t.Fatalf("marshal parameters: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE workflow_edges SET parameters_json = ? WHERE id = ?`, parameters, "edge-done-"+string(workflowID)); err != nil {
+		t.Fatalf("force live script output contract: %v", err)
+	}
+
+	contract, err := store.GetRunCompletionContext(ctx, started.RunID)
+	if err != nil {
+		t.Fatalf("GetRunCompletionContext: %v", err)
+	}
+	if len(contract.TransitionOptions) != 1 || contract.TransitionOptions[0].ID != "done" || len(contract.TransitionOptions[0].Parameters) != 1 || contract.TransitionOptions[0].Parameters[0].Key != "summary" {
+		t.Fatalf("completion context = %+v, want live done transition requiring summary", contract)
+	}
+}
+
+func TestResumeTaskRunsSkipsAgentRoleValidationForScriptRun(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createScriptStartWorkflow(t, ctx, store, "scripts/complete")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
+	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		t.Fatalf("create script dir: %v", err)
+	}
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	attachManagedWorktree(t, ctx, store, binding.WorkspaceID, task.ID, worktreeRoot)
+	started := startTask(t, ctx, store, task.ID)
+	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
+		t.Fatalf("InterruptRun: %v", err)
+	}
+	store.roleResolver = workflow.StaticRoleResolver{}
+
+	resumed, err := store.ResumeTaskRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ResumeTaskRuns: %v", err)
+	}
+	if len(resumed) != 1 || resumed[0].ID != started.RunID || resumed[0].InterruptedAt != 0 {
+		t.Fatalf("resumed = %+v, want script run requeued", resumed)
+	}
+}
+
 func TestStartTaskBlocksInvalidScriptFirstTarget(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Missing Script Start Workflow"})

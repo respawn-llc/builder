@@ -235,6 +235,9 @@ func (s *Store) ResumeTaskRuns(ctx context.Context, taskID workflow.TaskID) ([]R
 		if err := workflow.UnmarshalString(candidate.RunStartSnapshotJson, &snapshot); err != nil {
 			return nil, err
 		}
+		if snapshot.Node.Kind != workflow.NodeKindAgent {
+			continue
+		}
 		if err := s.validateRunnableRole(snapshot.Node.SubagentRole); err != nil {
 			return nil, err
 		}
@@ -279,6 +282,37 @@ func (s *Store) validateRunnableRole(role string) error {
 		return WorkflowValidationError{Codes: []workflow.ValidationErrorCode{workflow.CodeAgentRoleMissing}}
 	}
 	return nil
+}
+
+type RunCompletionContext struct {
+	TransitionIDs     []string
+	TransitionOptions []TransitionOption
+}
+
+func (s *Store) GetRunCompletionContext(ctx context.Context, runID workflow.RunID) (RunCompletionContext, error) {
+	run, err := s.queries.GetTaskRun(ctx, string(runID))
+	if err != nil {
+		return RunCompletionContext{}, err
+	}
+	task, err := s.queries.GetTask(ctx, run.TaskID)
+	if err != nil {
+		return RunCompletionContext{}, err
+	}
+	snapshot := runStartSnapshot{}
+	if err := workflow.UnmarshalString(run.RunStartSnapshotJson, &snapshot); err != nil {
+		return RunCompletionContext{}, err
+	}
+	if snapshot.Node.Kind == workflow.NodeKindScript {
+		refreshed, err := s.liveScriptRunStartSnapshot(ctx, task, snapshot.Node.ID)
+		if err != nil {
+			return RunCompletionContext{}, err
+		}
+		snapshot = refreshed
+	}
+	return RunCompletionContext{
+		TransitionIDs:     transitionIDsFromSnapshot(snapshot),
+		TransitionOptions: transitionOptionsFromSnapshot(snapshot),
+	}, nil
 }
 
 func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (RunStartContext, error) {

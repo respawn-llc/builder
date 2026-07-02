@@ -358,7 +358,7 @@ function dissolveWorkflowNodeGroup(
 function orderedNodeGroupBranchIDs(draft: DraftWorkflowDefinition, groupID: string): readonly string[] {
   const group = draft.nodeGroups.find((item) => item.id === groupID);
   const branchIDs = new Set(
-    draft.nodes.filter((node) => node.groupID === groupID && node.kind === "agent").map((node) => node.id),
+    draft.nodes.filter((node) => node.groupID === groupID && workflowBranchNodeKind(node.kind)).map((node) => node.id),
   );
   const ordered = group?.nodeIDs.filter((nodeID) => branchIDs.has(nodeID)) ?? [];
   return ordered.length > 0 ? ordered : [...branchIDs];

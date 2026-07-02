@@ -150,6 +150,60 @@ func TestServiceValidateWorkflowReportsScriptPathDiagnostics(t *testing.T) {
 	}
 }
 
+func TestServiceWorkflowGraphSavePreservesScriptPath(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	created, err := service.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: "Script Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: created.Workflow.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflow initial: %v", err)
+	}
+	startID := workflowServiceNodeIDByKind(t, def.Definition, "start")
+	doneID := workflowServiceNodeIDByKind(t, def.Definition, "terminal")
+	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: created.Workflow.ID, NodeID: "node-script", Key: "script", Kind: "script", DisplayName: "Script", ScriptPath: stringPtr("scripts/run")}); err != nil {
+		t.Fatalf("AddWorkflowNode script: %v", err)
+	}
+	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-start", SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
+		t.Fatalf("AddWorkflowTransitionGroup start: %v", err)
+	}
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start", TransitionGroupID: "group-start", Key: "start", TargetNodeID: "node-script", ContextMode: "new_session"}); err != nil {
+		t.Fatalf("AddWorkflowEdge start: %v", err)
+	}
+	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: "group-done", SourceNodeID: "node-script", TransitionID: "done", DisplayName: "Done"}); err != nil {
+		t.Fatalf("AddWorkflowTransitionGroup done: %v", err)
+	}
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done", TransitionGroupID: "group-done", Key: "done", TargetNodeID: doneID, ContextMode: "new_session"}); err != nil {
+		t.Fatalf("AddWorkflowEdge done: %v", err)
+	}
+	source, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: created.Workflow.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflow source: %v", err)
+	}
+	graph := renameWorkflowGraphDraftNode(workflowGraphDraftFromDefinition(source.Definition), "node-script", "Script Renamed")
+
+	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      created.Workflow.ID,
+		ExpectedVersion: source.Definition.Workflow.Version,
+		Graph:           graph,
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if !saved.Saved {
+		t.Fatalf("save result = %+v, want saved graph", saved)
+	}
+	updated, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: created.Workflow.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflow updated: %v", err)
+	}
+	node := workflowServiceNodeByID(t, updated.Definition, "node-script")
+	if node.ScriptPath == nil || *node.ScriptPath != "scripts/run" {
+		t.Fatalf("script path = %#v, want scripts/run", node.ScriptPath)
+	}
+}
+
 func TestServiceListWorkflowTasksValidatesAndDelegates(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -2149,7 +2203,7 @@ func workflowGraphDraftFromDefinition(def serverapi.WorkflowDefinition) serverap
 		graph.NodeGroups = append(graph.NodeGroups, serverapi.WorkflowGraphDraftNodeGroup{ID: group.GroupID, Key: group.GroupKey, DisplayName: group.DisplayName})
 	}
 	for _, node := range def.Nodes {
-		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, InputFields: node.InputFields, JoinInputProviders: node.JoinInputProviders})
+		graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName, GroupID: node.GroupID, GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, PromptTemplate: node.PromptTemplate, CompletionMode: node.CompletionMode, ScriptPath: node.ScriptPath, InputFields: node.InputFields, JoinInputProviders: node.JoinInputProviders})
 	}
 	for _, group := range def.TransitionGroups {
 		graph.TransitionGroups = append(graph.TransitionGroups, serverapi.WorkflowGraphDraftTransitionGroup{ID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID, DisplayName: group.DisplayName, Description: group.Description})

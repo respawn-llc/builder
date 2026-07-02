@@ -751,6 +751,22 @@ describe("workflowEditorGraphMutations", () => {
     ]);
   });
 
+  it("deletes inferred node groups with script branches in the fan-out set", () => {
+    const expanded = withScriptBranch(inferredTwoBranchGroupDraft(), "node-review");
+
+    const deleted = deleteWorkflowNodeGroup(expanded, "workflow-node-group-parallel");
+
+    expect(edgesForTransition(deleted.draft, "group-source-agent")).toMatchObject([
+      { targetNodeID: "node-agent" },
+    ]);
+    expect(deleted.draft.edges.some((edge) => edge.id === "edge-start-review")).toBe(false);
+    expect([...deleted.summary.removedEdgeIDs].sort()).toEqual([
+      "edge-implement-join",
+      "edge-review-join",
+      "edge-start-review",
+    ]);
+  });
+
   it("dissolves node groups instead of leaving a single remaining branch", () => {
     const withBranch = addWorkflowNode(draftDefinitionFromSource(groupableWorkflowDefinition), {
       id: "node-review",
@@ -945,6 +961,15 @@ function withDuplicateMissingBranchFanout(draft: ReturnType<typeof draftDefiniti
     ...draft,
     edges: draft.edges.map((edge) =>
       edge.id === "edge-start-audit" ? { ...edge, targetNodeID: "node-review" } : edge,
+    ),
+  };
+}
+
+function withScriptBranch(draft: ReturnType<typeof draftDefinitionFromSource>, nodeID: string) {
+  return {
+    ...draft,
+    nodes: draft.nodes.map((node) =>
+      node.id === nodeID ? { ...node, kind: "script" as const, scriptPath: "scripts/run" } : node,
     ),
   };
 }

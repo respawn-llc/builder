@@ -5,6 +5,7 @@ package workflowrunner
 import (
 	"os"
 	"os/exec"
+	"strconv"
 )
 
 func prepareScriptCommand(*exec.Cmd) {}
@@ -13,14 +14,25 @@ func terminateScriptProcess(process *os.Process) error {
 	if process == nil {
 		return nil
 	}
-	return process.Kill()
+	return taskkillProcessTree(process.Pid, false)
 }
 
 func killScriptProcess(process *os.Process) error {
 	if process == nil {
 		return nil
 	}
-	return process.Kill()
+	if err := taskkillProcessTree(process.Pid, true); err != nil {
+		return process.Kill()
+	}
+	return nil
+}
+
+func taskkillProcessTree(pid int, force bool) error {
+	args := []string{"/PID", strconv.Itoa(pid), "/T"}
+	if force {
+		args = append(args, "/F")
+	}
+	return exec.Command("taskkill", args...).Run()
 }
 
 func processExitCode(err error) int {

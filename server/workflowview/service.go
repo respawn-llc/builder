@@ -17,6 +17,7 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/server/workflowscript"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -415,7 +416,7 @@ func (s *Service) workflowSelectionInputs(ctx context.Context, projectID string,
 		definitions[workflowID] = def
 		nodeKindsByWorkflowID[workflowID] = nodeKinds
 		link := linkByWorkflowID[workflowID]
-		validation := workflow.ValidateDefinition(definitionForValidation(def), workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: roleResolver})
+		validation := definitionExecutionValidation(def, roleResolver)
 		picker = append(picker, serverapi.WorkflowPickerItem{
 			WorkflowID:           workflowID,
 			DisplayName:          def.Workflow.Name,
@@ -956,7 +957,7 @@ func (s *Service) attentionItemFromCandidate(ctx context.Context, row attentionC
 		if err != nil {
 			return serverapi.WorkflowAttentionItem{}, false, err
 		}
-		validation := workflow.ValidateDefinition(definitionForValidation(def), workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: roleResolver})
+		validation := definitionExecutionValidation(def, roleResolver)
 		if !validation.HasBlockingErrors() {
 			return serverapi.WorkflowAttentionItem{}, false, nil
 		}
@@ -1828,6 +1829,36 @@ func definitionForValidation(def serverapi.WorkflowDefinition) workflow.Definiti
 			requirements = append(requirements, workflow.OutputRequirement{FieldName: requirement.FieldName})
 		}
 		out.Edges = append(out.Edges, workflow.Edge{WorkflowID: workflow.WorkflowID(edge.WorkflowID), ID: workflow.EdgeID(edge.ID), Key: workflow.ModelKey(edge.Key), TransitionGroupID: workflow.TransitionGroupID(edge.TransitionGroupID), TargetNodeID: workflow.NodeID(edge.TargetNodeID), RequiresApproval: edge.RequiresApproval, ContextMode: workflow.ContextMode(edge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(edge.ContextSource.Kind), NodeKey: workflow.ModelKey(edge.ContextSource.NodeKey)}), PromptTemplate: edge.PromptTemplate, Parameters: parameters, InputBindings: inputs, OutputRequirements: requirements})
+	}
+	return out
+}
+
+func definitionExecutionValidation(def serverapi.WorkflowDefinition, roleResolver workflow.RoleResolver) *workflow.ValidationResult {
+	domain := definitionForValidation(def)
+	result := workflow.ValidateDefinition(domain, workflow.ValidationOptions{Context: workflow.ValidationContextExecution, RoleResolver: roleResolver})
+	result.Errors = append(result.Errors, scriptPathDefinitionValidationErrors(domain, "")...)
+	return &result
+}
+
+func scriptPathDefinitionValidationErrors(def workflow.Definition, worktreeRoot string) []workflow.ValidationError {
+	out := []workflow.ValidationError{}
+	for _, node := range def.Nodes {
+		if node.Kind() != workflow.NodeKindScript {
+			continue
+		}
+		diagnostics := workflowscript.Validate(workflowscript.ValidationRequest{
+			RawPath:      workflow.NodeScriptPath(node).String(),
+			WorktreeRoot: worktreeRoot,
+		})
+		for _, diagnostic := range diagnostics {
+			out = append(out, workflow.ValidationError{
+				Code:          workflow.ValidationErrorCode(diagnostic.Code),
+				Message:       diagnostic.Message,
+				WorkflowID:    def.ID,
+				NodeID:        workflow.NodeIDOf(node),
+				BlocksContext: diagnostic.Blocking,
+			})
+		}
 	}
 	return out
 }
