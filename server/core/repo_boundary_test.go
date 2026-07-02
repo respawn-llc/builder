@@ -69,6 +69,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"AttentionNotificationTaskDetailFocus":     {},
 		"ApprovalOption":                           {},
 		"ApprovalPromptAnswer":                     {},
+		"AssistantStreamMetadata":                  {},
 		"BackgroundProcess":                        {},
 		"BackgroundShellEvent":                     {},
 		"ChatEntry":                                {},

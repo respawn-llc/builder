@@ -320,6 +320,59 @@ func TestOutsideWorkspaceFinalSymlinkRequiresRealPathApproval(t *testing.T) {
 	}
 }
 
+func TestPathDenyPolicyBlocksCreateReplaceAndRealSymlinkTargets(t *testing.T) {
+	workspace := t.TempDir()
+	deniedRoot := newNonTemporaryOutsideDir(t)
+	if err := os.WriteFile(filepath.Join(deniedRoot, "existing.txt"), []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("seed denied existing file: %v", err)
+	}
+	policy, err := tools.CompileLiteralTreePathDenyPolicy(deniedRoot, "synthetic deny")
+	if err != nil {
+		t.Fatalf("compile path deny policy: %v", err)
+	}
+	prompts := 0
+	tool := newTestTool(t, workspace,
+		WithPathDenyPolicy(policy),
+		WithOutsideWorkspaceApprover(func(context.Context, tools.FSGuardRequest) (tools.FSGuardApproval, error) {
+			prompts++
+			return tools.FSGuardApproval{Decision: tools.FSGuardDecisionAllowOnce}, nil
+		}),
+	)
+
+	createTarget := filepath.Join(deniedRoot, "created.txt")
+	created := callEdit(t, tool, map[string]any{"path": createTarget, "old_string": "", "new_string": "new\n"})
+	if !created.IsError || !strings.Contains(toolResultText(t, created), "synthetic deny") {
+		t.Fatalf("expected synthetic deny create error, got %q", toolResultText(t, created))
+	}
+	if _, err := os.Stat(createTarget); !os.IsNotExist(err) {
+		t.Fatalf("denied create wrote file, stat err=%v", err)
+	}
+
+	replaced := callEdit(t, tool, map[string]any{"path": filepath.Join(deniedRoot, "existing.txt"), "old_string": "old", "new_string": "new"})
+	if !replaced.IsError || !strings.Contains(toolResultText(t, replaced), "synthetic deny") {
+		t.Fatalf("expected synthetic deny replace error, got %q", toolResultText(t, replaced))
+	}
+	got, err := os.ReadFile(filepath.Join(deniedRoot, "existing.txt"))
+	if err != nil {
+		t.Fatalf("read denied existing file: %v", err)
+	}
+	if string(got) != "old\n" {
+		t.Fatalf("denied replace changed file to %q", string(got))
+	}
+
+	alias := filepath.Join(workspace, "alias")
+	if err := os.Symlink(deniedRoot, alias); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	symlinked := callEdit(t, tool, map[string]any{"path": filepath.Join(alias, "existing.txt"), "old_string": "old", "new_string": "new"})
+	if !symlinked.IsError || !strings.Contains(toolResultText(t, symlinked), "synthetic deny") {
+		t.Fatalf("expected synthetic deny symlink error, got %q", toolResultText(t, symlinked))
+	}
+	if prompts != 0 {
+		t.Fatalf("outside approval prompts = %d, want 0", prompts)
+	}
+}
+
 func newNonTemporaryOutsideDir(t *testing.T) string {
 	t.Helper()
 	outside, err := os.MkdirTemp(".", "edit-outside-approval-")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"core/prompts"
 	"core/server/tools"
 	askquestion "core/server/tools"
 	triggerhandofftool "core/server/tools"
@@ -11,6 +12,7 @@ import (
 	patchtool "core/server/tools/patch"
 	readimagetool "core/server/tools/readimage"
 	shelltool "core/server/tools/shell"
+	"core/shared/config"
 	"core/shared/toolspec"
 	"errors"
 	"fmt"
@@ -41,6 +43,7 @@ type LocalToolRuntimeContext struct {
 	OutsideWorkspaceEditApprover    patchtool.OutsideWorkspaceApprover
 	OutsideWorkspaceReadApprover    patchtool.OutsideWorkspaceApprover
 	ViewImageOutsideWorkspaceLogger readimagetool.OutsideWorkspaceAuditLogger
+	EditPathDenyPolicy              tools.PathDenyPolicy
 }
 
 type LocalToolRegistryBinding struct {
@@ -70,6 +73,7 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 			true,
 			patchtool.WithAllowOutsideWorkspace(ctx.AllowNonCwdEdits),
 			patchtool.WithOutsideWorkspaceApprover(ctx.OutsideWorkspaceEditApprover),
+			patchtool.WithPathDenyPolicy(ctx.EditPathDenyPolicy),
 		)
 	case tools.LocalRuntimeBuilderEdit:
 		if ctx.OutsideWorkspaceEditApprover == nil {
@@ -80,6 +84,7 @@ func BuildLocalRuntimeHandler(def tools.Definition, ctx LocalToolRuntimeContext)
 			true,
 			edittool.WithAllowOutsideWorkspace(ctx.AllowNonCwdEdits),
 			edittool.WithOutsideWorkspaceApprover(ctx.OutsideWorkspaceEditApprover),
+			edittool.WithPathDenyPolicy(ctx.EditPathDenyPolicy),
 		)
 	case tools.LocalRuntimeBuilderAskQuestion:
 		if ctx.AskQuestionBroker == nil {
@@ -172,40 +177,65 @@ func (b *LocalToolRegistryBinding) rebuild() error {
 	return nil
 }
 
-func NewLocalToolRegistryBinding(workspaceRoot string, ownerSessionID string, enabled []toolspec.ID, minimumExecToBgTime time.Duration, shellOutputMaxChars int, allowNonCwdEdits bool, supportsVision bool, logger Logger, background *shelltool.Manager, triggerHandoffController func() triggerhandofftool.TriggerHandoffController, questionsEnabledGetter func() bool) (*LocalToolRegistryBinding, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
-	trimmedRoot := strings.TrimSpace(workspaceRoot)
+type LocalToolRegistryOptions struct {
+	WorkspaceRoot            string
+	OwnerSessionID           string
+	Enabled                  []toolspec.ID
+	MinimumExecToBgTime      time.Duration
+	ShellOutputMaxChars      int
+	AllowNonCwdEdits         bool
+	SupportsVision           bool
+	Logger                   Logger
+	Background               *shelltool.Manager
+	TriggerHandoffController func() triggerhandofftool.TriggerHandoffController
+	QuestionsEnabledGetter   func() bool
+	GlobalConfigDir          string
+}
+
+func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegistryBinding, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
+	trimmedRoot := strings.TrimSpace(opts.WorkspaceRoot)
 	if trimmedRoot == "" {
 		return nil, nil, nil, errWorkspaceRootRequired
 	}
 	broker := askquestion.NewAskQuestionBroker()
+	background := opts.Background
 	if background == nil {
 		var err error
-		background, err = shelltool.NewManager(shelltool.WithMinimumExecToBgTime(minimumExecToBgTime))
+		background, err = shelltool.NewManager(shelltool.WithMinimumExecToBgTime(opts.MinimumExecToBgTime))
 		if err != nil {
 			return nil, nil, nil, err
 		}
 	}
-	background.SetMinimumExecToBgTime(minimumExecToBgTime)
+	background.SetMinimumExecToBgTime(opts.MinimumExecToBgTime)
 	patchOutsideWorkspaceApprover := NewOutsideWorkspaceApprover(broker, "editing")
 	readOutsideWorkspaceApprover := NewOutsideWorkspaceApprover(broker, "reading")
+	var editPathDenyPolicy tools.PathDenyPolicy
+	if enabledToolsNeedEditDenyPolicy(opts.Enabled) {
+		var err error
+		editPathDenyPolicy, err = generatedAssetsEditDenyPolicy(opts.GlobalConfigDir)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
 	registry := tools.NewRegistry()
 	ctx := LocalToolRuntimeContext{
 		WorkspaceRoot:                trimmedRoot,
-		OwnerSessionID:               ownerSessionID,
-		ShellOutputMaxChars:          shellOutputMaxChars,
-		AllowNonCwdEdits:             allowNonCwdEdits,
-		SupportsVision:               supportsVision,
+		OwnerSessionID:               opts.OwnerSessionID,
+		ShellOutputMaxChars:          opts.ShellOutputMaxChars,
+		AllowNonCwdEdits:             opts.AllowNonCwdEdits,
+		SupportsVision:               opts.SupportsVision,
 		AskQuestionBroker:            broker,
-		QuestionsEnabledGetter:       questionsEnabledGetter,
+		QuestionsEnabledGetter:       opts.QuestionsEnabledGetter,
 		BackgroundShellManager:       background,
-		TriggerHandoffController:     triggerHandoffController,
+		TriggerHandoffController:     opts.TriggerHandoffController,
 		OutsideWorkspaceEditApprover: patchtool.OutsideWorkspaceApprover(patchOutsideWorkspaceApprover.Approve),
 		OutsideWorkspaceReadApprover: patchtool.OutsideWorkspaceApprover(readOutsideWorkspaceApprover.Approve),
+		EditPathDenyPolicy:           editPathDenyPolicy,
 		ViewImageOutsideWorkspaceLogger: readimagetool.OutsideWorkspaceAuditLogger(func(entry readimagetool.OutsideWorkspaceAudit) {
-			if logger == nil {
+			if opts.Logger == nil {
 				return
 			}
-			logger.Logf(
+			opts.Logger.Logf(
 				"tool.view_image.outside_workspace.approved requested=%q resolved=%q reason=%s",
 				entry.RequestedPath,
 				entry.ResolvedPath,
@@ -216,7 +246,7 @@ func NewLocalToolRegistryBinding(workspaceRoot string, ownerSessionID string, en
 	binding := &LocalToolRegistryBinding{
 		registry: registry,
 		ctx:      ctx,
-		enabled:  append([]toolspec.ID(nil), enabled...),
+		enabled:  append([]toolspec.ID(nil), opts.Enabled...),
 	}
 	if err := binding.rebuild(); err != nil {
 		return nil, nil, nil, err
@@ -224,24 +254,46 @@ func NewLocalToolRegistryBinding(workspaceRoot string, ownerSessionID string, en
 	return binding, broker, background, nil
 }
 
-func BuildToolRegistry(workspaceRoot string, ownerSessionID string, enabled []toolspec.ID, minimumExecToBgTime time.Duration, shellOutputMaxChars int, allowNonCwdEdits bool, supportsVision bool, logger Logger, background *shelltool.Manager, triggerHandoffController func() triggerhandofftool.TriggerHandoffController, questionsEnabledGetter func() bool) (*tools.Registry, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
-	binding, broker, background, err := NewLocalToolRegistryBinding(
-		workspaceRoot,
-		ownerSessionID,
-		enabled,
-		minimumExecToBgTime,
-		shellOutputMaxChars,
-		allowNonCwdEdits,
-		supportsVision,
-		logger,
-		background,
-		triggerHandoffController,
-		questionsEnabledGetter,
-	)
+func BuildToolRegistry(opts LocalToolRegistryOptions) (*tools.Registry, *askquestion.AskQuestionBroker, *shelltool.Manager, error) {
+	binding, broker, background, err := NewLocalToolRegistryBinding(opts)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	return binding.Registry(), broker, background, nil
+}
+
+func enabledToolsNeedEditDenyPolicy(enabled []toolspec.ID) bool {
+	for _, id := range enabled {
+		if id == toolspec.ToolPatch || id == toolspec.ToolEdit {
+			return true
+		}
+	}
+	return false
+}
+
+func generatedAssetsEditDenyPolicy(configRoot string) (tools.PathDenyPolicy, error) {
+	layout, err := prompts.GeneratedLayoutFor(configRoot)
+	if err != nil {
+		return tools.PathDenyPolicy{}, err
+	}
+	label := "kent generated assets"
+	return tools.CompilePathDenyPolicy([]tools.PathDenyRuleConfig{{
+		Label:   &label,
+		Message: generatedAssetsEditDenyMessage(configRoot, layout.UserSkillsRoot),
+		Matcher: tools.PathMatcherConfig{
+			Kind:        tools.PathMatcherLiteral,
+			Pattern:     layout.GeneratedRoot,
+			LiteralTree: true,
+		},
+	}})
+}
+
+func generatedAssetsEditDenyMessage(configRoot string, userSkillsRoot string) string {
+	skillsPath := filepath.Clean(userSkillsRoot) + string(filepath.Separator)
+	if isDefault, err := config.IsDefaultPersistenceRoot(configRoot); err == nil && isDefault {
+		skillsPath = config.PersistenceRoot + "/skills/"
+	}
+	return "Do NOT attempt to edit Kent's generated files; they are overwritten every session. You cannot edit generated skills. Consider instead copying them as " + skillsPath + " and exactly matching name/id/directory structure so that the new file automatically shadows the generated skill by Kent runtime."
 }
 
 func wrapSessionWorkspaceRetargetHint(sessionID string, workspaceRoot string, err error) error {

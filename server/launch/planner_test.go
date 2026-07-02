@@ -628,6 +628,57 @@ func TestApplyRunPromptOverridesAllowsSameAgentRoleForLockedSession(t *testing.T
 	}
 }
 
+func TestApplyRunPromptOverridesOptionAllowsAgentRoleChangeForLockedSession(t *testing.T) {
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace,
+		"[subagents.worker]",
+		"model = \"gpt-5.4-mini\"",
+	)
+	workerRole := loaded.Settings.Subagents["worker"]
+	workerRole.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolEdit: true}
+	workerRole.Sources = map[string]string{
+		"model":       "file",
+		"tools.shell": "file",
+		"tools.patch": "file",
+		"tools.edit":  "file",
+	}
+	loaded.Settings.Subagents["worker"] = workerRole
+	store := createTestSession(t, workspace)
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "old_role"}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-model", EnabledTools: []string{"shell"}, HasEnabledTools: true}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	plan := SessionPlan{
+		Store:               store,
+		ActiveSettings:      EffectiveSettings(loaded.Settings, store.Meta().Locked),
+		BaseSettings:        EffectiveSettings(loaded.Settings, store.Meta().Locked),
+		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
+		ConfiguredModelName: "locked-model",
+		WorkspaceRoot:       workspace,
+		Source:              loaded.Source,
+		BaseSource:          loaded.Source,
+		ModelContractLocked: true,
+	}
+
+	updated, _, err := ApplyRunPromptOverridesWithOptions(plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState(), RunPromptOverrideOptions{
+		AllowLockedAgentRoleChange: true,
+	})
+	if err != nil {
+		t.Fatalf("ApplyRunPromptOverridesWithOptions: %v", err)
+	}
+	if got := updated.Store.Meta().Continuation; got == nil || got.AgentRole != "worker" {
+		t.Fatalf("continuation = %+v, want worker", got)
+	}
+	if updated.ActiveSettings.Model != "locked-model" {
+		t.Fatalf("model = %q, want locked-model", updated.ActiveSettings.Model)
+	}
+	if containsTool(updated.EnabledTools, toolspec.ToolExecCommand) || !containsTool(updated.EnabledTools, toolspec.ToolEdit) {
+		t.Fatalf("enabled tools = %+v, want recomputed role tools without old locked shell", updated.EnabledTools)
+	}
+}
+
 func TestApplyRunPromptOverridesLockedModelDoesNotMarkModelSourceAsSubagent(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)
