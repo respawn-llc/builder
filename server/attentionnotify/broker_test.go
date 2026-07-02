@@ -257,9 +257,8 @@ func TestQuestionBatchTrackerPublishesAggregateDisplayCountAndResolvesAfterClear
 	if err := tracker.MarkMaterialized(batch.ID, "ask-2"); err != nil {
 		t.Fatalf("MarkMaterialized ask-2: %v", err)
 	}
-	update := nextAttentionEvent(t, sub)
-	if update.Pending.Question.Preview != "question from agent" {
-		t.Fatalf("updated preview = %q", update.Pending.Question.Preview)
+	if event, err := sub.Next(shortContext(t)); err == nil {
+		t.Fatalf("second materialized ask published duplicate pending attention: %+v", event)
 	}
 	if err := tracker.MarkDurablyCleared(batch.ID, "ask-1"); err != nil {
 		t.Fatalf("MarkDurablyCleared ask-1: %v", err)
@@ -276,7 +275,7 @@ func TestQuestionBatchTrackerPublishesAggregateDisplayCountAndResolvesAfterClear
 	}
 }
 
-func TestQuestionBatchTrackerUpdatesDisplayCountWhenAskSkipped(t *testing.T) {
+func TestQuestionBatchTrackerResolvesWithoutRepublishingWhenAskSkipped(t *testing.T) {
 	broker := NewBroker()
 	sub, err := broker.SubscribeDesktop()
 	if err != nil {
@@ -301,9 +300,15 @@ func TestQuestionBatchTrackerUpdatesDisplayCountWhenAskSkipped(t *testing.T) {
 	if err := tracker.MarkSkipped(batch.ID, "ask-2"); err != nil {
 		t.Fatalf("MarkSkipped ask-2: %v", err)
 	}
-	update := nextAttentionEvent(t, sub)
-	if update.Pending.Question.DisplayCount != 1 {
-		t.Fatalf("skip update question count = %+v", update.Pending.Question)
+	if event, err := sub.Next(shortContext(t)); err == nil {
+		t.Fatalf("skipped ask published duplicate pending attention: %+v", event)
+	}
+	if err := tracker.MarkDurablyCleared(batch.ID, "ask-1"); err != nil {
+		t.Fatalf("MarkDurablyCleared ask-1: %v", err)
+	}
+	resolved := nextAttentionEvent(t, sub)
+	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, batch.ID)) {
+		t.Fatalf("resolved event = %+v", resolved)
 	}
 }
 
