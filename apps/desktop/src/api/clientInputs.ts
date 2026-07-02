@@ -51,6 +51,12 @@ export type WorkflowGraphValidateDraftInput = Readonly<{
   modes: readonly WorkflowValidationMode[];
 }>;
 
+export type WorkflowScriptPathValidateInput = Readonly<{
+  workflowID: string;
+  nodeID: string;
+  scriptPath: string;
+}>;
+
 export type WorkflowGraphDeriveWiringInput = Readonly<{
   workflowID: string;
   graph: WorkflowGraphDraft;

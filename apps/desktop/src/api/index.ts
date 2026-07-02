@@ -1,5 +1,11 @@
 export { ApiClient } from "./client";
-export type { QuestionAnswerInput, TaskEditInput, TaskMutationInput, WorkflowDeleteInput } from "./clientInputs";
+export type {
+  QuestionAnswerInput,
+  TaskEditInput,
+  TaskMutationInput,
+  WorkflowDeleteInput,
+  WorkflowScriptPathValidateInput,
+} from "./clientInputs";
 export type {
   AttentionNotification,
   AttentionNotificationEvent,

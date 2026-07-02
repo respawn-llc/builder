@@ -39,21 +39,21 @@
 
 .workflow-editor-node[data-kind="script"]::before,
 .workflow-editor-node[data-kind="script"]::after {
-  background: color-mix(in srgb, var(--workflow-editor-node-outline-color) 42%, transparent);
+  background: var(--color-primary);
   border-radius: var(--radius-s);
-  bottom: var(--space-2);
+  bottom: 4.57px;
   content: "";
   position: absolute;
-  top: var(--space-2);
-  width: 3px;
+  top: 4.57px;
+  width: 2px;
 }
 
 .workflow-editor-node[data-kind="script"]::before {
-  left: var(--space-2);
+  left: 4.57px;
 }
 
 .workflow-editor-node[data-kind="script"]::after {
-  right: var(--space-2);
+  right: 4.57px;
 }
 
 .workflow-editor-handle {

@@ -6,6 +6,7 @@ description: How to use the Kent CLI to author and edit workflow graphs — node
 For creating, inspecting, and managing tasks, comments, and task automation against an authored workflow, use the `kent-tasks` skill.
 
 ## Workflow Concepts
+
 - A workflow is a graph of node states connected by transition branches.
 - A task is the durable user-facing unit of work moving through one workflow.
 - A node is a visible workflow state. `start` is where tasks are created, `agent` node runs Kent sessions, `join` waits for parallel branches of a group, and `terminal` is a sink where automation stops.
@@ -20,6 +21,7 @@ kent workflow --help
 ```
 
 ## Build A Workflow
+
 The CLI authoring path is: create a workflow, add or update nodes, add or update edges, link it to a project, then validate it.
 
 ```bash
@@ -48,12 +50,45 @@ Important CLI behavior:
 - `workflow node add` returns the generated node id. Edges are authored with node keys via `--from` and `--to`.
 - `workflow edge add` creates or reuses the transition group for the given source node and transition ID, then adds an edge to that group.
 - Agent-targeting edges require `--prompt <text>`. Omit `--prompt` for edges targeting `start`, `join`, or `terminal` nodes.
+- Script nodes use `--kind script --script-path <path>` and can appear anywhere an agent node can appear. Absolute paths resolve on the Kent server; relative paths resolve against the task managed worktree when the script runs.
 - Link, unlink, and set project defaults with `kent workflow link`, `kent workflow unlink`, and `kent workflow default`. This sets up bindings between a project (repo, workspace) and a workflow, and enables sharing of workflows.
 - `--transition-description <text>` sets the model-facing transition description on the edge's transition group. The agent will see it when it completes the task. Use it to tell the agent when to pick this transition over its siblings.
 - `--param <key>=<description>` (repeatable on `edge add` and `edge update`) declares a transition parameter the source agent must produce when taking the transition. On `edge update`, passing `--param` replaces the full parameter set; `--clear-params` removes all parameters. Omitting both preserves existing parameters.
 - Draft workflows can be saved and linked while semantic validation fails. Validate before task creation as a best practice; workflow automation requires execution validation before it starts.
 
+## Script Nodes
+
+Use a script node when a workflow step should run a deterministic executable on the Kent server instead of starting an agent session.
+
+```bash
+kent workflow node add "Implementation Review" --key release_notes --kind script --script-path scripts/release-notes
+kent workflow edge add "Implementation Review" --from implement --transition release_notes --edge-key release_notes --to release_notes --context new_session
+```
+
+Kent executes the script directly, without a shell wrapper. Stdin is one JSON object: incoming workflow parameter values are top-level properties, and `_kent` contains runtime identifiers such as `run_id` and `placement_id`.
+
+Stdout must be workflow completion JSON. Stderr is diagnostics only. A typical stdout payload is:
+
+```json
+{
+  "transition": "done",
+  "commentary": "Generated release notes.",
+  "release_notes_path": "docs/release-notes.md"
+}
+```
+
+If there is only one outgoing transition, `transition` can be omitted. Include declared transition parameters as top-level string fields. For multiple outgoing transitions, fields for unselected transitions should be `null`.
+
+Validate script workflows in execution mode before using them:
+
+```bash
+kent workflow validate "Implementation Review" --mode execution
+```
+
+Execution validation and task start require the selected script path to exist on the Kent server, be a file, and be executable. Relative script paths cannot be fully checked until the task managed worktree exists.
+
 ## Edit Existing Workflows
+
 Use the edge/node CRUD commands to manage the workflow:
 
 ```
@@ -74,6 +109,7 @@ kent workflow validate <workflow> --mode execution
 Use `draft` while authoring, `task_creation` before creating tasks, and `execution` for final handoff to the user.
 
 ## Context And Approval
+
 Each edge requires a context mode:
 
 - `new_session`: start a fresh Kent session and inject task metadata plus outputs from the previous node. This is a double-edged sword: The new session starts with the lowest token count, giving the agent the most memory space for their task, keeps it free from bias, and does not invalidate caches, keeping costs low, but the agent must receive **all** the necessary context to effectively complete their task in the node prompt and input parameters, and they will have to gather context from the workspace **from scratch** to orient themselves (possibly negating token and cost benefits gained). This means `new_session` is a good fit for isolated tasks, verification, self-contained units of work, e.g. code review, QA runs, requirement verification; and a poor fit for continuation of existing work, next-phase of a plan, or highly contextual tasks that need carry-over of information.
@@ -115,6 +151,7 @@ Context source constraints:
 Use `--requires-approval` when a transition must stop for human review before the target node starts. Pending approvals freeze the selected target branches and their context-source resolution, so later workflow edits or later completed runs do not change what approval starts. This can happen asynchronously thus causing cache invalidation, so approvals across `continue_session` are suboptimal.
 
 ## Completion modes
+
 The completion mode controls the technicality of how an agent node signals task completion.
 
 Set it per node with `--completion-mode <mode>` on `node add` or `node update`. Omit the flag to default to user-configured default or resolve automatically based on surrounding configuration.
@@ -123,9 +160,10 @@ Set it per node with `--completion-mode <mode>` on `node add` or `node update`. 
 - `structured_output`: provider-native structured output. Lowest-friction on capable providers, but fails run start when the provider does not support it, and **causes full cache invalidation** when applied to continued sessions.
 - `tool`: completion via the dynamic `complete_node` tool. Use it for tool-driven completion on providers without structured-output support. Also causes **full cache invalidation** for continued sessions.
 - `shell_command`: the agent runs `kent task complete` from its shell. Requires a runtime `shell` tool to be enabled in the subagent role config, but the shell tool gives the agent full access to the host system. Prefer this when the workflow contains `continue_session` transitions, because this mode does not cause cache invalidation.
-- `unstructured_output`: the agent tries a best-effort JSON submission as its answer. This is the most fragile configuration, use it only if you must use `continue_session` for the node chain and the agents there do not have the `shell` tool that'd have enabled the `shell_command` mode. 
+- `unstructured_output`: the agent tries a best-effort JSON submission as its answer. This is the most fragile configuration, use it only if you must use `continue_session` for the node chain and the agents there do not have the `shell` tool that'd have enabled the `shell_command` mode.
 
 ## Transition Prompts And Parameters
+
 The transition prompt is the task the target agent runs; parameters are the typed outputs the source agent must produce to carry context across the edge.
 
 ```bash
@@ -148,6 +186,7 @@ Use parameters together with prompt placeholders to build dynamic task prompts, 
 - Declare a parameter on the transition whose source agent can produce it. Prefer referencing a guaranteed-prior transition over re-threading the same value, but re-declare locally where the graph converges or loops and no single upstream transition dominates.
 
 ## Practical Authoring
+
 For workflow authoring requests:
 
 1. Inspect existing workflows and project links with `kent workflow list`, `kent workflow inspect`, and the current project context.

@@ -6,8 +6,9 @@ import { errorMessage } from "../../api/errors";
 import { useAppServices } from "../../app/useAppServices";
 import { useOpenExternalLink } from "../../app/nativeHooks";
 import { Button, Island, MarkdownText, RadioGroup, RadioGroupItem, showStatusToast } from "../../ui";
-import { fieldInputClassName } from "../../ui/fieldInputStyles";
+import { writeClipboardText } from "../../ui/clipboard";
 import { cx } from "../../ui/classes";
+import { fieldInputClassName } from "../../ui/fieldInputStyles";
 import { WorkflowEdgeRouteGraphic } from "../workflow-editor/WorkflowEdgeRouteGraphic";
 import { emptyQuestionSelection, type QuestionSelectionState } from "./TaskDetailQuestionState";
 import { usePendingAsks } from "./useTaskDetailData";
@@ -34,9 +35,12 @@ export function QuestionBox({
   const asks = usePendingAsks(attention.sessionID);
   const pendingAsk = asks.data?.find((ask) => ask.askID === attention.askID);
   const question = attention.message.length > 0 ? attention.message : pendingAsk?.question;
-  const suggestions = attention.suggestions.length > 0 ? attention.suggestions : pendingAsk?.suggestions ?? emptySuggestions;
+  const suggestions =
+    attention.suggestions.length > 0 ? attention.suggestions : (pendingAsk?.suggestions ?? emptySuggestions);
   const recommendedOptionSource =
-    attention.suggestions.length > 0 ? attention.recommendedOptionIndex : pendingAsk?.recommendedOptionIndex ?? 0;
+    attention.suggestions.length > 0
+      ? attention.recommendedOptionIndex
+      : (pendingAsk?.recommendedOptionIndex ?? 0);
   const recommendedOption = recommendedOptionNumber(suggestions, recommendedOptionSource);
 
   return (
@@ -101,7 +105,13 @@ function QuestionForm({
       selectedOptionNumber,
       freeformAnswer: answer,
     });
-    onSelectionStateChange({ answer: "", askID: attention.askID, selectedOption: null, submitted: true, userSelected: true });
+    onSelectionStateChange({
+      answer: "",
+      askID: attention.askID,
+      selectedOption: null,
+      submitted: true,
+      userSelected: true,
+    });
   }
 
   return (
@@ -204,18 +214,28 @@ function QuestionOption({
     >
       <RadioGroupItem className="mt-1" disabled={disabled} id={id} value={value} />
       <label
-        className={cx("min-w-0 flex-1 cursor-pointer", recommended && "font-bold text-[var(--color-primary)]")}
+        className={cx(
+          "min-w-0 flex-1 cursor-pointer",
+          recommended && "font-bold text-[var(--color-primary)]",
+        )}
         htmlFor={id}
       >
         <MarkdownText inline onOpenLink={onOpenLink} value={text} />
-        {recommended ? <span className="ml-[var(--space-2)] text-xs font-bold">({t("task.recommended")})</span> : null}
+        {recommended ? (
+          <span className="ml-[var(--space-2)] text-xs font-bold">({t("task.recommended")})</span>
+        ) : null}
       </label>
     </div>
   );
 }
 
-function recommendedOptionNumber(suggestions: readonly string[], recommendedOptionIndex: number): number | null {
-  return recommendedOptionIndex >= 1 && recommendedOptionIndex <= suggestions.length ? recommendedOptionIndex : null;
+function recommendedOptionNumber(
+  suggestions: readonly string[],
+  recommendedOptionIndex: number,
+): number | null {
+  return recommendedOptionIndex >= 1 && recommendedOptionIndex <= suggestions.length
+    ? recommendedOptionIndex
+    : null;
 }
 
 function selectionForAsk(selection: QuestionSelectionState, askID: string): QuestionSelectionState {
@@ -249,7 +269,10 @@ export function ApprovalBox({
     >
       {transition !== undefined ? (
         <div className="grid gap-[var(--space-2)]">
-          <div className="flex min-w-0 items-center gap-[var(--space-2)]" data-testid="task-approval-route-action-row">
+          <div
+            className="flex min-w-0 items-center gap-[var(--space-2)]"
+            data-testid="task-approval-route-action-row"
+          >
             <WorkflowEdgeRouteGraphic
               className="-ml-[var(--space-2)]"
               contextMode=""
@@ -269,7 +292,9 @@ export function ApprovalBox({
             </Button>
           </div>
           {transition.commentary.length > 0 ? (
-            <p className="m-0 whitespace-pre-wrap text-sm text-[var(--color-muted)]">{transition.commentary}</p>
+            <p className="m-0 whitespace-pre-wrap text-sm text-[var(--color-muted)]">
+              {transition.commentary}
+            </p>
           ) : null}
           <ApprovalOutputValues
             nativeBridge={nativeBridge}
@@ -339,7 +364,7 @@ export function InterruptedRunBox({
         <Button
           disabled={disabled}
           onClick={() => {
-            void copyText(attention.detailJSON, nativeBridge)
+            void writeClipboardText(attention.detailJSON, nativeBridge)
               .then(() => {
                 showStatusToast({
                   id: "task-interruption-detail-copied",
@@ -397,7 +422,7 @@ function ApprovalOutputValues({
             <button
               className="-mx-[var(--space-1)] min-w-0 whitespace-pre-wrap rounded-[var(--radius-m)] px-[var(--space-1)] py-[var(--space-1)] text-left text-sm text-[var(--color-muted)] transition-colors hover:bg-[var(--color-island-2)] hover:text-[var(--color-on-island)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
               onClick={() => {
-                void copyText(value, nativeBridge)
+                void writeClipboardText(value, nativeBridge)
                   .then(() => {
                     onCopied(name);
                   })
@@ -421,18 +446,12 @@ function ApprovalOutputValues({
   );
 }
 
-function transitionTargetLabel(transition: TaskTransition, fallback: ReturnType<typeof useTranslation>["t"]): string {
-  const labels = transition.edges.map((edge) => edge.targetNodeName.trim()).filter((label) => label.length > 0);
+function transitionTargetLabel(
+  transition: TaskTransition,
+  fallback: ReturnType<typeof useTranslation>["t"],
+): string {
+  const labels = transition.edges
+    .map((edge) => edge.targetNodeName.trim())
+    .filter((label) => label.length > 0);
   return labels.join(", ") || fallback("task.targetUnavailable");
-}
-
-async function copyText(
-  value: string,
-  nativeBridge: ReturnType<typeof useAppServices>["nativeBridge"],
-): Promise<void> {
-  if (nativeBridge.capabilities.clipboard.writeText) {
-    await nativeBridge.clipboard.writeText(value);
-    return;
-  }
-  await navigator.clipboard.writeText(value);
 }

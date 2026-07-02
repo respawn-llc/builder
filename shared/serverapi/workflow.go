@@ -608,6 +608,12 @@ type WorkflowValidateRequest struct {
 	Mode       WorkflowValidationMode `json:"mode"`
 }
 
+type WorkflowScriptPathValidateRequest struct {
+	WorkflowID string `json:"workflow_id"`
+	NodeID     string `json:"node_id"`
+	ScriptPath string `json:"script_path"`
+}
+
 type WorkflowValidateResponse struct {
 	Valid  bool                      `json:"valid"`
 	Errors []WorkflowValidationError `json:"errors"`
@@ -1502,6 +1508,13 @@ func (r WorkflowValidateRequest) Validate() error {
 	default:
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "mode", "mode must be draft, task_creation, or execution")
 	}
+}
+
+func (r WorkflowScriptPathValidateRequest) Validate() error {
+	return validateRequiredFields(
+		requiredField("workflow_id", r.WorkflowID),
+		requiredField("node_id", r.NodeID),
+	)
 }
 
 func (r WorkflowGraphValidateDraftRequest) Validate() error {

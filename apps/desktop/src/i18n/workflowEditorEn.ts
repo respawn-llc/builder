@@ -93,6 +93,16 @@ export const workflowEditorEnglish = {
   scriptPath: "Script path",
   scriptPathHelp:
     "Executable path on the Kent server. Relative paths resolve against the task managed worktree when the script runs.",
+  scriptPathValidation: "Script path validation",
+  scriptPathDiagnostics: "Script path diagnostics",
+  scriptStdoutExample: "Stdout completion JSON",
+  scriptStdoutExampleHelp:
+    "Example JSON this script should print to stdout to complete the workflow node. Kent parses stdout as the completion payload.",
+  scriptStdoutExampleCommentary: "Completed the script step.",
+  scriptStdoutExampleParameterValue: "{{parameter}} value",
+  copyScriptStdoutExample: "Copy stdout example",
+  scriptStdoutExampleCopied: "Copied stdout example to clipboard",
+  scriptStdoutExampleCopyFailed: "Stdout example copy failed",
   selectScriptPath: "Select script",
   selectScriptPathFailed: "Script picker failed",
   prompt: "Prompt",

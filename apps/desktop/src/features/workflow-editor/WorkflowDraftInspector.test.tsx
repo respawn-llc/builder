@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "../../api";
 import { AppServicesProvider } from "../../app/servicesContext";
 import { initializeI18n } from "../../i18n/setup";
-import { createTestServices } from "../../testSupport/appServices";
+import { createTestServices, type TestAppServices } from "../../testSupport/appServices";
 import type { WorkflowEditorDraftController } from "./workflowEditorDraftBridgeCore";
 import { initializeWorkflowEditorDraft, workflowEditorDirtyState } from "./workflowEditorDraft";
 import { workflowDefinition } from "../../test-support/workflow-editor/workflowEditorGraphMutationFixtures";
@@ -19,7 +19,7 @@ describe("WorkflowDraftInspectorContent", () => {
   it("shows completion mode only for editable agent nodes", () => {
     const controller = workflowDraftController(withAgentCompletionMode(workflowDefinition, "tool"));
 
-    renderInspector(controller, { kind: "node", nodeID: "node-agent" });
+    mountInspector(controller, { kind: "node", nodeID: "node-agent" });
 
     expect(screen.getByLabelText("Completion mode")).toHaveTextContent("Tool call");
   });
@@ -27,7 +27,7 @@ describe("WorkflowDraftInspectorContent", () => {
   it("does not show completion mode for non-agent nodes", () => {
     const controller = workflowDraftController(workflowDefinition);
 
-    renderInspector(controller, { kind: "node", nodeID: "node-done" });
+    mountInspector(controller, { kind: "node", nodeID: "node-done" });
 
     expect(screen.queryByText("Completion mode")).not.toBeInTheDocument();
   });
@@ -35,7 +35,7 @@ describe("WorkflowDraftInspectorContent", () => {
     const user = userEvent.setup();
     const controller = workflowDraftController(workflowDefinition);
 
-    renderInspector(controller, { edgeID: "edge-start", kind: "edge" });
+    mountInspector(controller, { edgeID: "edge-start", kind: "edge" });
 
     await user.click(screen.getByRole("button", { name: "Context source" }));
     const fallbackOption = await screen.findByRole("menuitemradio", {
@@ -50,7 +50,7 @@ describe("WorkflowDraftInspectorContent", () => {
   it("edits script node path without showing agent controls", () => {
     const controller = workflowDraftController(withScriptNode(workflowDefinition));
 
-    renderInspector(controller, { kind: "node", nodeID: "node-script" });
+    mountInspector(controller, { kind: "node", nodeID: "node-script" });
 
     expect(screen.queryByText("Completion mode")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Script path"), { target: { value: "scripts/run" } });
@@ -66,9 +66,12 @@ describe("WorkflowDraftInspectorContent", () => {
     const bridge = nativeBridgeWithFileSelection("/tmp/worktree/scripts/run");
     const controller = workflowDraftController(withScriptNode(workflowDefinition));
 
-    renderInspector(controller, { kind: "node", nodeID: "node-script" }, bridge);
+    mountInspector(controller, { kind: "node", nodeID: "node-script" }, bridge);
 
-    fireEvent.click(screen.getByRole("button", { name: "Select script" }));
+    const selectScriptButton = screen.getByRole("button", { name: "Select script" });
+    expect(screen.getByTestId("text-input-trailing-control")).toContainElement(selectScriptButton);
+
+    fireEvent.click(selectScriptButton);
 
     await waitFor(() => {
       expect(controller.dispatch).toHaveBeenCalledWith({
@@ -78,14 +81,64 @@ describe("WorkflowDraftInspectorContent", () => {
       });
     });
   });
+
+  it("validates the current script path through the server API", async () => {
+    const controller = workflowDraftController(withScriptNode(workflowDefinition, "scripts/run"));
+
+    const appServices = mountInspector(controller, { kind: "node", nodeID: "node-script" }, undefined, [
+      {
+        method: "workflow.scriptPath.validate",
+        result: {
+          valid: false,
+          errors: [
+            {
+              code: "workflow.validation.script_path_relative_check_skipped",
+              message: "relative script_path was not checked because no task worktree root is available",
+              workflow_id: "workflow-1",
+              node_id: "node-script",
+              blocks_context: false,
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(
+      await screen.findByText(
+        "relative script_path was not checked because no task worktree root is available",
+      ),
+    ).toBeInTheDocument();
+    expect(appServices.transport.calls).toContainEqual({
+      method: "workflow.scriptPath.validate",
+      params: { workflow_id: "workflow-1", node_id: "node-script", script_path: "scripts/run" },
+    });
+  });
+
+  it("copies a script stdout completion example from the current outgoing contract", async () => {
+    const copied: string[] = [];
+    const controller = workflowDraftController(withScriptNodeCompletionContract(workflowDefinition));
+
+    mountInspector(controller, { kind: "node", nodeID: "node-script" }, nativeBridgeWithClipboard(copied));
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy stdout example" }));
+
+    await waitFor(() => {
+      expect(copied).toHaveLength(1);
+    });
+    expect(JSON.parse(copied[0] ?? "{}")).toEqual({
+      commentary: "Completed the script step.",
+      summary: "summary value",
+    });
+  });
 });
 
-function renderInspector(
+function mountInspector(
   controller: WorkflowEditorDraftController,
   selection: Parameters<typeof WorkflowDraftInspectorContent>[0]["selection"],
   nativeBridge: NativeBridge = createBrowserNativeBridge(),
-): void {
-  const services = createTestServices([], nativeBridge);
+  routes: Parameters<typeof createTestServices>[0] = defaultInspectorRoutes(),
+): TestAppServices {
+  const services = createTestServices(routes, nativeBridge);
   render(
     <QueryClientProvider client={new QueryClient()}>
       <AppServicesProvider services={services}>
@@ -93,6 +146,16 @@ function renderInspector(
       </AppServicesProvider>
     </QueryClientProvider>,
   );
+  return services;
+}
+
+function defaultInspectorRoutes(): Parameters<typeof createTestServices>[0] {
+  return [
+    {
+      method: "workflow.scriptPath.validate",
+      result: { valid: true, errors: [] },
+    },
+  ];
 }
 
 function nativeBridgeWithFileSelection(path: string): NativeBridge {
@@ -107,6 +170,23 @@ function nativeBridgeWithFileSelection(path: string): NativeBridge {
       ...base.files,
       async selectFile() {
         return { path };
+      },
+    },
+  };
+}
+
+function nativeBridgeWithClipboard(copied: string[]): NativeBridge {
+  const base = createBrowserNativeBridge();
+  return {
+    ...base,
+    capabilities: {
+      ...base.capabilities,
+      clipboard: { ...base.capabilities.clipboard, writeText: true },
+    },
+    clipboard: {
+      ...base.clipboard,
+      async writeText(value): Promise<void> {
+        copied.push(value);
       },
     },
   };
@@ -138,7 +218,7 @@ function withAgentCompletionMode(source: WorkflowDefinition, completionMode: str
   };
 }
 
-function withScriptNode(source: WorkflowDefinition): WorkflowDefinition {
+function withScriptNode(source: WorkflowDefinition, scriptPath: string | null = null): WorkflowDefinition {
   return {
     ...source,
     nodes: [
@@ -155,8 +235,43 @@ function withScriptNode(source: WorkflowDefinition): WorkflowDefinition {
         name: "Script",
         outputFields: [],
         promptTemplate: "",
-        scriptPath: null,
+        scriptPath,
         subagentRole: "",
+        workflowID: source.workflow.id,
+      },
+    ],
+  };
+}
+
+function withScriptNodeCompletionContract(source: WorkflowDefinition): WorkflowDefinition {
+  const withScript = withScriptNode(source, "scripts/run");
+  return {
+    ...withScript,
+    edges: [
+      ...withScript.edges,
+      {
+        contextMode: "new_session",
+        contextSource: { kind: "immediate_source", nodeKey: "" },
+        id: "edge-script-done",
+        inputBindings: [],
+        key: "done",
+        outputRequirements: [],
+        parameters: [{ description: "Summary", key: "summary" }],
+        promptTemplate: "",
+        requiresApproval: false,
+        targetNodeID: "node-done",
+        transitionGroupID: "group-script-done",
+        workflowID: source.workflow.id,
+      },
+    ],
+    transitionGroups: [
+      ...withScript.transitionGroups,
+      {
+        description: "Script completed.",
+        id: "group-script-done",
+        sourceNodeID: "node-script",
+        transitionID: "done",
+        name: "Done",
         workflowID: source.workflow.id,
       },
     ],

@@ -63,6 +63,12 @@ export function WorkflowEditorLegendIsland({
           <NodeLegendSwatch tone="neutral" />
         </LegendRow>
         <LegendRow
+          help={t("workflowEditor.legendScriptNodeHelp")}
+          label={t("workflowEditor.legendScriptNode")}
+        >
+          <NodeLegendSwatch shape="script" tone="neutral" />
+        </LegendRow>
+        <LegendRow
           help={t("workflowEditor.legendTerminalStateHelp")}
           label={t("workflowEditor.legendTerminalState")}
         >
@@ -130,16 +136,33 @@ function EdgeLegendSwatch({ tone }: Readonly<{ tone: "neutral" | "primary" | "se
 function NodeLegendSwatch({
   shape = "box",
   tone,
-}: Readonly<{ shape?: "box" | "diamond"; tone: "neutral" | "primary" | "secondary" | "success" }>) {
-  const shapeClassName =
-    shape === "diamond" ? "h-[10px] w-[10px] rotate-45 rounded-[2px]" : "h-[9px] w-[14px] rounded-[2px]";
+}: Readonly<{ shape?: "box" | "diamond" | "script"; tone: "neutral" | "primary" | "secondary" | "success" }>) {
+  const shapeClassName = nodeLegendShapeClassName(shape);
   return (
     <span
       aria-hidden="true"
-      className={cx("block border bg-[var(--color-island-1)]", shapeClassName, nodeLegendToneClassName(tone))}
+      className={cx(
+        "relative block border bg-[var(--color-island-1)]",
+        shapeClassName,
+        nodeLegendToneClassName(tone),
+      )}
       data-testid="workflow-legend-node-swatch"
-    />
+    >
+      {shape === "script" ? (
+        <>
+          <span className="absolute top-[1.14px] bottom-[1.14px] left-[1.71px] w-[2px] rounded-[var(--radius-s)] bg-[var(--color-primary)]" />
+          <span className="absolute top-[1.14px] right-[1.71px] bottom-[1.14px] w-[2px] rounded-[var(--radius-s)] bg-[var(--color-primary)]" />
+        </>
+      ) : null}
+    </span>
   );
+}
+
+function nodeLegendShapeClassName(shape: "box" | "diamond" | "script"): string {
+  if (shape === "diamond") {
+    return "h-[10px] w-[10px] rotate-45 rounded-[2px]";
+  }
+  return "h-[9px] w-[14px] rounded-[2px]";
 }
 
 function edgeLegendToneClassName(tone: "neutral" | "primary" | "secondary"): string {
@@ -154,13 +177,13 @@ function edgeLegendToneClassName(tone: "neutral" | "primary" | "secondary"): str
 
 function nodeLegendToneClassName(tone: "neutral" | "primary" | "secondary" | "success"): string {
   if (tone === "primary") {
-    return "border-[var(--color-primary)]";
+    return "border-[var(--color-primary)] text-[var(--color-primary)]";
   }
   if (tone === "secondary") {
-    return "border-[var(--color-secondary)]";
+    return "border-[var(--color-secondary)] text-[var(--color-secondary)]";
   }
   if (tone === "success") {
-    return "border-[var(--color-success)]";
+    return "border-[var(--color-success)] text-[var(--color-success)]";
   }
-  return "border-[var(--color-outline)]";
+  return "border-[var(--color-outline)] text-[var(--color-outline)]";
 }

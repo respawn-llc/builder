@@ -100,6 +100,10 @@ func (c *loopbackWorkflowClient) ValidateWorkflow(ctx context.Context, req serve
 	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.ValidateWorkflow)
 }
 
+func (c *loopbackWorkflowClient) ValidateWorkflowScriptPath(ctx context.Context, req serverapi.WorkflowScriptPathValidateRequest) (serverapi.WorkflowValidateResponse, error) {
+	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.ValidateWorkflowScriptPath)
+}
+
 func (c *loopbackWorkflowClient) ValidateWorkflowGraphDraft(ctx context.Context, req serverapi.WorkflowGraphValidateDraftRequest) (serverapi.WorkflowGraphValidateDraftResponse, error) {
 	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.ValidateWorkflowGraphDraft)
 }

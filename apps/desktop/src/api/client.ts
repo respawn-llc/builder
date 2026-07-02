@@ -18,6 +18,7 @@ import type {
   WorkflowGraphSaveInput,
   WorkflowGraphSavePreviewInput,
   WorkflowGraphValidateDraftInput,
+  WorkflowScriptPathValidateInput,
   WorkflowListInput,
   WorkflowProjectLinkInput,
 } from "./clientInputs";
@@ -321,6 +322,21 @@ export class ApiClient {
       "workflow.validate",
       workflowValidationSchema,
       await this.transport.call("workflow.validate", { workflow_id: workflowID, mode }),
+    );
+  }
+
+  async validateWorkflowScriptPath(input: WorkflowScriptPathValidateInput): Promise<WorkflowValidation> {
+    return parse(
+      "workflow.scriptPath.validate",
+      workflowValidationSchema,
+      await this.transport.call(
+        "workflow.scriptPath.validate",
+        compactJsonObject({
+          workflow_id: input.workflowID,
+          node_id: input.nodeID,
+          script_path: input.scriptPath,
+        }),
+      ),
     );
   }
 
@@ -636,12 +652,16 @@ export class ApiClient {
           return;
         }
         try {
-          handler.onEvent(parse("attention.notification", attentionNotificationEventParamsSchema, params).event);
+          handler.onEvent(
+            parse("attention.notification", attentionNotificationEventParamsSchema, params).event,
+          );
         } catch (cause) {
           if (isUnsupportedAttentionNotificationEventParams(params)) {
             return;
           }
-          handler.onError(cause instanceof Error ? cause : new Error("Invalid attention notification event."));
+          handler.onError(
+            cause instanceof Error ? cause : new Error("Invalid attention notification event."),
+          );
         }
       },
     } satisfies RpcEventHandler;

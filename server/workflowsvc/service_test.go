@@ -2,7 +2,9 @@ package workflowsvc
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -11,6 +13,7 @@ import (
 
 	"core/prompts"
 	"core/server/metadata"
+	"core/server/metadata/sqlitegen"
 	"core/server/requestmemo"
 	askquestion "core/server/tools"
 	"core/server/workflow"
@@ -147,6 +150,85 @@ func TestServiceValidateWorkflowReportsScriptPathDiagnostics(t *testing.T) {
 	}
 	if len(validated.Errors) != 1 || validated.Errors[0].Code != workflowscript.CodeRelativePathSkipped || validated.Errors[0].BlocksContext {
 		t.Fatalf("validation errors = %+v, want nonblocking relative-path skipped diagnostic", validated.Errors)
+	}
+}
+
+func TestServiceValidateWorkflowScriptPathReportsMissingPath(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceWorkflowWithScriptNode(t, ctx, service, "node-script", "scripts/run")
+
+	validated, err := service.ValidateWorkflowScriptPath(ctx, serverapi.WorkflowScriptPathValidateRequest{
+		WorkflowID: workflowID,
+		NodeID:     "node-script",
+		ScriptPath: "",
+	})
+	if err != nil {
+		t.Fatalf("ValidateWorkflowScriptPath: %v", err)
+	}
+	if validated.Valid || len(validated.Errors) != 1 {
+		t.Fatalf("validation = %+v, want one blocking missing-path diagnostic", validated)
+	}
+	got := validated.Errors[0]
+	if got.Code != workflowscript.CodeMissingPath || got.WorkflowID != workflowID || got.NodeID != "node-script" || !got.BlocksContext {
+		t.Fatalf("validation error = %+v, want blocking missing-path diagnostic scoped to script node", got)
+	}
+}
+
+func TestServiceValidateWorkflowScriptPathReportsRelativeCheckSkippedWithoutWorktree(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceWorkflowWithScriptNode(t, ctx, service, "node-script", "scripts/run")
+
+	validated, err := service.ValidateWorkflowScriptPath(ctx, serverapi.WorkflowScriptPathValidateRequest{
+		WorkflowID: workflowID,
+		NodeID:     "node-script",
+		ScriptPath: "scripts/run",
+	})
+	if err != nil {
+		t.Fatalf("ValidateWorkflowScriptPath: %v", err)
+	}
+	if !validated.Valid || len(validated.Errors) != 1 {
+		t.Fatalf("validation = %+v, want valid response with one skipped diagnostic", validated)
+	}
+	if got := validated.Errors[0]; got.Code != workflowscript.CodeRelativePathSkipped || got.BlocksContext {
+		t.Fatalf("validation error = %+v, want nonblocking relative-path skipped diagnostic", got)
+	}
+}
+
+func TestServiceValidateWorkflowScriptPathAcceptsExecutableAbsolutePath(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceWorkflowWithScriptNode(t, ctx, service, "node-script", "scripts/run")
+	scriptPath := filepath.Join(t.TempDir(), "run")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write executable script: %v", err)
+	}
+
+	validated, err := service.ValidateWorkflowScriptPath(ctx, serverapi.WorkflowScriptPathValidateRequest{
+		WorkflowID: workflowID,
+		NodeID:     "node-script",
+		ScriptPath: scriptPath,
+	})
+	if err != nil {
+		t.Fatalf("ValidateWorkflowScriptPath: %v", err)
+	}
+	if !validated.Valid || len(validated.Errors) != 0 {
+		t.Fatalf("validation = %+v, want valid absolute executable path", validated)
+	}
+}
+
+func TestServiceValidateWorkflowScriptPathSupportsDraftOnlyNodeID(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+
+	validated, err := service.ValidateWorkflowScriptPath(ctx, serverapi.WorkflowScriptPathValidateRequest{
+		WorkflowID: workflowID,
+		NodeID:     "draft-script-node",
+		ScriptPath: "scripts/run",
+	})
+	if err != nil {
+		t.Fatalf("ValidateWorkflowScriptPath: %v", err)
+	}
+	if len(validated.Errors) != 1 || validated.Errors[0].NodeID != "draft-script-node" {
+		t.Fatalf("validation = %+v, want diagnostics scoped to draft node id", validated)
 	}
 }
 
@@ -534,6 +616,65 @@ func TestServiceMoveTaskAutoApprovesMissingEdgeOverrideAndStartsAgent(t *testing
 	}
 }
 
+func TestServiceMoveTaskAutoApproveEnsuresWorktreeBeforeApprovingScript(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceScriptWorkflow(t, ctx, service, "scripts/complete")
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	scriptID := workflowServiceNodeIDByKey(t, def.Definition, "script")
+	worktreeRoot := filepath.Join(t.TempDir(), "script-worktree")
+	scriptPath := filepath.Join(worktreeRoot, "scripts", "complete")
+	if err := os.MkdirAll(filepath.Dir(scriptPath), 0o755); err != nil {
+		t.Fatalf("create script dir: %v", err)
+	}
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nprintf '{}'\n"), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	ensurer := &recordingTaskWorktreeEnsurer{hook: func(taskID string) {
+		runs, err := service.store.ListRuns(ctx, workflow.TaskID(taskID))
+		if err != nil {
+			t.Fatalf("ListRuns during ensure: %v", err)
+		}
+		if len(runs) != 0 {
+			t.Fatalf("worktree ensure happened after script run creation: %+v", runs)
+		}
+		worktreeID := "worktree-" + taskID
+		if err := metadataStore.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{ID: worktreeID, WorkspaceID: binding.WorkspaceID, CanonicalRoot: worktreeRoot, Managed: true, CreatedBranch: true}); err != nil {
+			t.Fatalf("UpsertWorktreeRecord: %v", err)
+		}
+		updated, err := metadataStore.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{ID: taskID, ManagedWorktreeID: sql.NullString{String: worktreeID, Valid: true}, UpdatedAtUnixMs: time.Now().UTC().UnixMilli()})
+		if err != nil {
+			t.Fatalf("UpdateTaskManagedWorktree: %v", err)
+		}
+		if updated != 1 {
+			t.Fatalf("UpdateTaskManagedWorktree updated %d rows, want 1", updated)
+		}
+	}}
+	service.taskWorktrees = ensurer
+
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: scriptID, AllowMissingEdge: true, AutoApprove: true})
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask: %v", err)
+	}
+	if ensurer.taskID != task.Task.ID {
+		t.Fatalf("ensured task id = %q, want %q", ensurer.taskID, task.Task.ID)
+	}
+	if moved.State != "approved" || len(moved.PlacementIDs) != 1 || len(moved.RunIDs) != 1 || moved.ApprovalError != "" {
+		t.Fatalf("auto-approved script move = %+v, want approved placement and run", moved)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].InterruptedAt != 0 {
+		t.Fatalf("script runs = %+v, want one non-interrupted run", runs)
+	}
+}
+
 func TestServiceCompleteWorkflowTaskFromAgentSessionCompletesWithoutSchedulerWake(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -828,6 +969,49 @@ func TestServiceMoveTaskAutoApproveDoesNotBypassApprovalGatedEdge(t *testing.T) 
 	}
 	if moved.State != "pending_approval" || len(moved.PlacementIDs) != 0 || len(moved.RunIDs) != 0 || moved.ApprovalError != "" {
 		t.Fatalf("approval-gated move = %+v, want pending approval without automation", moved)
+	}
+}
+
+func TestServiceApproveTerminalTransitionDoesNotEnsureWorktree(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	var doneEdge serverapi.WorkflowEdge
+	for _, edge := range def.Definition.Edges {
+		if edge.Key == "done" {
+			doneEdge = edge
+			break
+		}
+	}
+	if doneEdge.ID == "" {
+		t.Fatalf("missing done edge in %+v", def.Definition.Edges)
+	}
+	if _, err := service.store.UpdateEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID(doneEdge.ID), WorkflowID: workflow.WorkflowID(workflowID), TransitionGroupID: workflow.TransitionGroupID(doneEdge.TransitionGroupID), Key: workflow.ModelKey(doneEdge.Key), TargetNodeID: workflow.NodeID(doneEdge.TargetNodeID), RequiresApproval: true, ContextMode: workflow.ContextMode(doneEdge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(doneEdge.ContextSource.Kind), NodeKey: workflow.ModelKey(doneEdge.ContextSource.NodeKey)}), PromptTemplate: doneEdge.PromptTemplate, Parameters: domainParameters(doneEdge.Parameters)}); err != nil {
+		t.Fatalf("enable done edge approval: %v", err)
+	}
+	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+	completed, err := service.store.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: workflow.RunID(started.RunID), TransitionID: "done", Actor: "agent"})
+	if err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+	if completed.State != "pending_approval" {
+		t.Fatalf("completion = %+v, want pending approval", completed)
+	}
+	service.taskWorktrees = &recordingTaskWorktreeEnsurer{hook: func(taskID string) {
+		t.Fatalf("unexpected worktree ensure for terminal approval of task %s", taskID)
+	}}
+
+	approved, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{TaskTransitionID: string(completed.TransitionID)})
+	if err != nil {
+		t.Fatalf("ApproveWorkflowTask: %v", err)
+	}
+	if approved.State != "approved" || len(approved.RunIDs) != 0 {
+		t.Fatalf("terminal approval = %+v, want approved without run", approved)
 	}
 }
 
@@ -2127,6 +2311,25 @@ func createWorkflowServiceValidWorkflow(t *testing.T, ctx context.Context, servi
 	return created.Workflow.ID
 }
 
+func createWorkflowServiceWorkflowWithScriptNode(t *testing.T, ctx context.Context, service *Service, nodeID string, scriptPath string) string {
+	t.Helper()
+	created, err := service.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: "Script Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
+		WorkflowID:  created.Workflow.ID,
+		NodeID:      nodeID,
+		Key:         "script",
+		Kind:        "script",
+		DisplayName: "Script",
+		ScriptPath:  stringPtr(scriptPath),
+	}); err != nil {
+		t.Fatalf("AddWorkflowNode script: %v", err)
+	}
+	return created.Workflow.ID
+}
+
 func createWorkflowServiceChainedWorkflow(t *testing.T, ctx context.Context, service *Service) string {
 	t.Helper()
 	created, err := service.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: "Chained Workflow"})
@@ -2164,6 +2367,39 @@ func createWorkflowServiceChainedWorkflow(t *testing.T, ctx context.Context, ser
 	}
 	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-next-" + created.Workflow.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: implementID, ContextMode: "new_session", PromptTemplate: "Implement {{.Params.prior_summary}}.", Parameters: []serverapi.WorkflowParameter{{Key: "prior_summary", Description: "Prior summary."}}}); err != nil {
 		t.Fatalf("AddWorkflowEdge next: %v", err)
+	}
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: "new_session"}); err != nil {
+		t.Fatalf("AddWorkflowEdge done: %v", err)
+	}
+	return created.Workflow.ID
+}
+
+func createWorkflowServiceScriptWorkflow(t *testing.T, ctx context.Context, service *Service, scriptPath string) string {
+	t.Helper()
+	created, err := service.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: "Script Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: created.Workflow.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	startID := workflowServiceNodeIDByKind(t, def.Definition, "start")
+	doneID := workflowServiceNodeIDByKind(t, def.Definition, "terminal")
+	scriptID := "node-script-" + created.Workflow.ID
+	if _, err := service.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{WorkflowID: created.Workflow.ID, NodeID: scriptID, Key: "script", Kind: "script", DisplayName: "Script", ScriptPath: &scriptPath}); err != nil {
+		t.Fatalf("AddWorkflowNode script: %v", err)
+	}
+	startGroup := "group-start-" + created.Workflow.ID
+	doneGroup := "group-done-" + created.Workflow.ID
+	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: startGroup, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"}); err != nil {
+		t.Fatalf("AddWorkflowTransitionGroup start: %v", err)
+	}
+	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: created.Workflow.ID, GroupID: doneGroup, SourceNodeID: scriptID, TransitionID: "done", DisplayName: "Done"}); err != nil {
+		t.Fatalf("AddWorkflowTransitionGroup done: %v", err)
+	}
+	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: scriptID, ContextMode: "new_session"}); err != nil {
+		t.Fatalf("AddWorkflowEdge start: %v", err)
 	}
 	if _, err := service.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{WorkflowID: created.Workflow.ID, EdgeID: "edge-done-" + created.Workflow.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: "new_session"}); err != nil {
 		t.Fatalf("AddWorkflowEdge done: %v", err)

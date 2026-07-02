@@ -361,6 +361,10 @@ func (c *Remote) ValidateWorkflow(ctx context.Context, req serverapi.WorkflowVal
 	return callUnscopedRPC[serverapi.WorkflowValidateRequest, serverapi.WorkflowValidateResponse](c, ctx, protocol.MethodWorkflowValidate, req)
 }
 
+func (c *Remote) ValidateWorkflowScriptPath(ctx context.Context, req serverapi.WorkflowScriptPathValidateRequest) (serverapi.WorkflowValidateResponse, error) {
+	return callUnscopedRPC[serverapi.WorkflowScriptPathValidateRequest, serverapi.WorkflowValidateResponse](c, ctx, protocol.MethodWorkflowScriptPathValidate, req)
+}
+
 func (c *Remote) ValidateWorkflowGraphDraft(ctx context.Context, req serverapi.WorkflowGraphValidateDraftRequest) (serverapi.WorkflowGraphValidateDraftResponse, error) {
 	return callUnscopedRPC[serverapi.WorkflowGraphValidateDraftRequest, serverapi.WorkflowGraphValidateDraftResponse](c, ctx, protocol.MethodWorkflowGraphValidateDraft, req)
 }

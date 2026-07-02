@@ -74,6 +74,23 @@ func (s *Store) TaskIdentityForTransition(ctx context.Context, transitionID work
 	return row.ID, row.ProjectID, row.WorkflowID, nil
 }
 
+func (s *Store) PendingTransitionTargetsExecutableNode(ctx context.Context, transitionID workflow.TransitionID) (bool, error) {
+	id := strings.TrimSpace(string(transitionID))
+	if id == "" {
+		return false, ErrTransitionIDRequired
+	}
+	edges, err := s.queries.ListTaskTransitionEdges(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	for _, edge := range edges {
+		if edge.State == "pending" && executableNodeKind(workflow.NodeKind(edge.TargetNodeKind)) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 type ApprovalTransitionProjection struct {
 	TransitionID     workflow.TransitionID
 	ProjectID        string

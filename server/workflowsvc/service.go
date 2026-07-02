@@ -468,6 +468,25 @@ func (s *Service) ValidateWorkflow(ctx context.Context, req serverapi.WorkflowVa
 	return resp, nil
 }
 
+func (s *Service) ValidateWorkflowScriptPath(ctx context.Context, req serverapi.WorkflowScriptPathValidateRequest) (serverapi.WorkflowValidateResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowValidateResponse{}, err
+	}
+	def, _, err := s.store.GetDefinition(ctx, workflow.WorkflowID(req.WorkflowID))
+	if err != nil {
+		return serverapi.WorkflowValidateResponse{}, err
+	}
+	diagnostics := workflowscript.Validate(workflowscript.ValidationRequest{RawPath: req.ScriptPath})
+	errors := make([]serverapi.WorkflowValidationError, 0, len(diagnostics))
+	for _, diagnostic := range diagnostics {
+		errors = append(errors, scriptPathValidationError(def.ID, workflow.NodeID(req.NodeID), diagnostic))
+	}
+	return serverapi.WorkflowValidateResponse{
+		Valid:  workflowValidationErrorsValid(errors),
+		Errors: errors,
+	}, nil
+}
+
 func (s *Service) ValidateWorkflowGraphDraft(ctx context.Context, req serverapi.WorkflowGraphValidateDraftRequest) (serverapi.WorkflowGraphValidateDraftResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGraphValidateDraftResponse{}, err
@@ -681,7 +700,7 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
-	approved, err := s.approve(ctx, workflow.TransitionID(transitionID))
+	approved, err := s.approveTransition(ctx, workflow.TransitionID(transitionID), taskID)
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
@@ -704,7 +723,7 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	approvalError := ""
 	resolvedApprovals := append([]workflow.TransitionID(nil), moved.ResolvedApprovalTransitionIDs...)
 	if req.AutoApprove && moved.State == "pending_approval" && !moved.RequiresApproval {
-		approved, approveErr := s.approve(ctx, moved.TransitionID)
+		approved, approveErr := s.approveTransition(ctx, moved.TransitionID, req.TaskID)
 		if approveErr != nil {
 			approvalError = approveErr.Error()
 		} else {
@@ -720,6 +739,28 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "moved", req.TaskID, string(moved.TransitionID))
 	}
 	return serverapi.WorkflowTaskMoveResponse{TransitionID: string(moved.TransitionID), State: moved.State, PlacementIDs: placementIDs(moved.PlacementIDs), RunIDs: runIDs(moved.RunIDs), ApprovalError: approvalError}, nil
+}
+
+func (s *Service) approveTransition(ctx context.Context, transitionID workflow.TransitionID, taskID string) (workflowstore.CompleteRunResult, error) {
+	if s.taskWorktrees != nil {
+		requiresWorktree, err := s.store.PendingTransitionTargetsExecutableNode(ctx, transitionID)
+		if err != nil {
+			return workflowstore.CompleteRunResult{}, err
+		}
+		if requiresWorktree {
+			resolvedTaskID := strings.TrimSpace(taskID)
+			if resolvedTaskID == "" {
+				resolvedTaskID, _, _, err = s.store.TaskIdentityForTransition(ctx, transitionID)
+				if err != nil {
+					return workflowstore.CompleteRunResult{}, err
+				}
+			}
+			if err := s.taskWorktrees.EnsureTaskWorktree(ctx, resolvedTaskID); err != nil {
+				return workflowstore.CompleteRunResult{}, err
+			}
+		}
+	}
+	return s.approve(ctx, transitionID)
 }
 
 func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
@@ -1346,16 +1387,20 @@ func scriptPathValidationErrors(def workflow.Definition, worktreeRoot string) []
 			WorktreeRoot: worktreeRoot,
 		})
 		for _, diagnostic := range diagnostics {
-			out = append(out, serverapi.WorkflowValidationError{
-				Code:          diagnostic.Code,
-				Message:       diagnostic.Message,
-				WorkflowID:    string(def.ID),
-				NodeID:        string(workflow.NodeIDOf(node)),
-				BlocksContext: diagnostic.Blocking,
-			})
+			out = append(out, scriptPathValidationError(def.ID, workflow.NodeIDOf(node), diagnostic))
 		}
 	}
 	return out
+}
+
+func scriptPathValidationError(workflowID workflow.WorkflowID, nodeID workflow.NodeID, diagnostic workflowscript.Diagnostic) serverapi.WorkflowValidationError {
+	return serverapi.WorkflowValidationError{
+		Code:          diagnostic.Code,
+		Message:       diagnostic.Message,
+		WorkflowID:    string(workflowID),
+		NodeID:        string(nodeID),
+		BlocksContext: diagnostic.Blocking,
+	}
 }
 
 func workflowValidationErrorsValid(errors []serverapi.WorkflowValidationError) bool {

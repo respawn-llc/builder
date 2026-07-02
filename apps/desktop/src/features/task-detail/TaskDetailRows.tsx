@@ -17,6 +17,7 @@ import {
   safeExternalUrl,
   showStatusToast,
 } from "../../ui";
+import { writeClipboardText } from "../../ui/clipboard";
 import { cx } from "../../ui/classes";
 import { fieldIslandInputClassName } from "../../ui/fieldInputStyles";
 import { taskStatusTone } from "./taskStatusTone";
@@ -181,7 +182,10 @@ export function PropertiesIsland({
       radius="l"
       unpadded
     >
-      <PropertyLine label={t("task.identifier", { defaultValue: "ID" })} value={<span className="font-mono">{detail.shortID}</span>} />
+      <PropertyLine
+        label={t("task.identifier", { defaultValue: "ID" })}
+        value={<span className="font-mono">{detail.shortID}</span>}
+      />
       <PropertyLine label={t("task.project")} value={detail.projectName} />
       <PropertyLine
         label={t("task.status")}
@@ -305,7 +309,7 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
       setOpenCliError(t("task.cliCommandUnavailable"));
       return;
     }
-    await copyText(cliCommand, nativeBridge);
+    await writeClipboardText(cliCommand, nativeBridge);
     showStatusToast({
       id: "task-cli-command-copied",
       title: t("task.cliCommandCopied"),
@@ -351,7 +355,9 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
           {t("task.openScript")}
         </Button>
       ) : null}
-      {openCliError.length > 0 ? <p className="m-0 text-sm text-[var(--color-error)]">{openCliError}</p> : null}
+      {openCliError.length > 0 ? (
+        <p className="m-0 text-sm text-[var(--color-error)]">{openCliError}</p>
+      ) : null}
       {openScriptError.length > 0 ? (
         <p className="m-0 text-sm text-[var(--color-error)]">{openScriptError}</p>
       ) : null}
@@ -359,7 +365,10 @@ function TaskOpenButtons({ detail, disabled }: Readonly<{ detail: TaskDetail; di
   );
 }
 
-function TaskStatusText({ label, tone }: Readonly<{ label: string; tone: ReturnType<typeof taskStatusTone> }>) {
+function TaskStatusText({
+  label,
+  tone,
+}: Readonly<{ label: string; tone: ReturnType<typeof taskStatusTone> }>) {
   return <span className={cx("font-bold", taskStatusTextClassName(tone))}>{label}</span>;
 }
 
@@ -421,17 +430,6 @@ function PropertyLine({ label, value }: Readonly<{ label: string; value: ReactNo
       {label}: <span className="text-[var(--color-muted)]">{value}</span>
     </p>
   );
-}
-
-async function copyText(
-  value: string,
-  nativeBridge: ReturnType<typeof useAppServices>["nativeBridge"],
-): Promise<void> {
-  if (nativeBridge.capabilities.clipboard.writeText) {
-    await nativeBridge.clipboard.writeText(value);
-    return;
-  }
-  await navigator.clipboard.writeText(value);
 }
 
 function sessionCommand(runs: readonly TaskRun[]): string {

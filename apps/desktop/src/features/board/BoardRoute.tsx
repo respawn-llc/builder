@@ -27,6 +27,7 @@ import {
 } from "./BoardDragTypes";
 import {
   classifyDrop,
+  isExecutableAutomationColumn,
   missingInputValues,
   type PendingDrop,
   type PendingMissingInputDrop,
@@ -411,7 +412,7 @@ function BoardContent({
         targetNodeID: drop.targetColumn.id,
         outputValues: drop.values,
         allowMissingEdge: true,
-        autoApprove: drop.targetColumn.kind === "agent",
+        autoApprove: isExecutableAutomationColumn(drop.targetColumn),
       })
       .then(moveRunFeedback.trackMoveRunIDs)
       .catch(reportMoveError)

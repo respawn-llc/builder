@@ -450,6 +450,19 @@ func TestWorkflowValidateRequestValidation(t *testing.T) {
 	}
 }
 
+func TestWorkflowScriptPathValidateRequestValidation(t *testing.T) {
+	valid := WorkflowScriptPathValidateRequest{WorkflowID: "workflow-1", NodeID: "node-script", ScriptPath: ""}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("empty script path should be accepted for diagnostic validation: %v", err)
+	}
+	if err := (WorkflowScriptPathValidateRequest{NodeID: "node-script"}).Validate(); !isWorkflowFieldError(err, "workflow_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("missing workflow_id error = %#v, want required workflow_id", err)
+	}
+	if err := (WorkflowScriptPathValidateRequest{WorkflowID: "workflow-1"}).Validate(); !isWorkflowFieldError(err, "node_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("missing node_id error = %#v, want required node_id", err)
+	}
+}
+
 func TestWorkflowGraphDraftRequestValidation(t *testing.T) {
 	graphWithInvalidShape := WorkflowGraphDraft{
 		Nodes: []WorkflowGraphDraftNode{{ID: "node-1", Key: "Bad-Key", Kind: "unknown"}},

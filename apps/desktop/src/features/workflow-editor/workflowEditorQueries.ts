@@ -1,10 +1,6 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
-import type {
-  WorkflowDefinition,
-  WorkflowGraphSavePreview,
-  WorkflowValidation,
-} from "../../api";
+import type { WorkflowDefinition, WorkflowGraphSavePreview, WorkflowValidation } from "../../api";
 import { queryKeys } from "../../app/queryKeys";
 import { useAppServices } from "../../app/useAppServices";
 import {
@@ -14,10 +10,7 @@ import {
   workflowEditorDraftReducer,
   type WorkflowEditorDraftState,
 } from "./workflowEditorDraft";
-import {
-  layoutWorkflowGraph,
-  type WorkflowGraphLayout,
-} from "./workflowGraphLayout";
+import { layoutWorkflowGraph, type WorkflowGraphLayout } from "./workflowGraphLayout";
 
 export type WorkflowSaveConfirmationPreviewEntry = Readonly<{
   key: string;
@@ -25,11 +18,9 @@ export type WorkflowSaveConfirmationPreviewEntry = Readonly<{
 }>;
 
 export function workflowSaveConfirmationPreviewKey(state: WorkflowEditorDraftState): string {
-  return [
-    state.source.workflow.id,
-    state.source.workflow.version.toString(),
-    state.version.toString(),
-  ].join(":");
+  return [state.source.workflow.id, state.source.workflow.version.toString(), state.version.toString()].join(
+    ":",
+  );
 }
 
 export function workflowEditorDraftStateReducer(
@@ -110,6 +101,25 @@ export function useWorkflowDraftDerivedWiringQuery(
   });
 }
 
+export function useWorkflowScriptPathValidationQuery(workflowID: string, nodeID: string, scriptPath: string) {
+  const { api } = useAppServices();
+  return useQuery({
+    queryKey: queryKeys.workflowScriptPathValidation(workflowID, nodeID, scriptPath),
+    queryFn: async () =>
+      api.validateWorkflowScriptPath({
+        nodeID,
+        scriptPath,
+        workflowID,
+      }),
+    enabled: workflowID.length > 0 && nodeID.length > 0,
+    refetchInterval: scriptPathValidationRefreshMs,
+    staleTime: scriptPathValidationStaleMs,
+  });
+}
+
+const scriptPathValidationStaleMs = 5_000;
+const scriptPathValidationRefreshMs = 5_000;
+
 export function useWorkflowGraphLayoutQuery(
   workflowID: string,
   definition: WorkflowDefinition | undefined,
@@ -125,9 +135,7 @@ export function useWorkflowGraphLayoutQuery(
     ),
     queryFn: async () => {
       if (definition === undefined || validation === null) {
-        throw new Error(
-          "Workflow graph layout requested before workflow definition and validation loaded.",
-        );
+        throw new Error("Workflow graph layout requested before workflow definition and validation loaded.");
       }
       return layoutWorkflowGraph(definition, validation);
     },

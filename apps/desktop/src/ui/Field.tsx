@@ -70,10 +70,11 @@ export type TextInputProps = Readonly<{
   labelHelp?: string | undefined;
   error?: FieldError | undefined;
   hint?: ReactNode | undefined;
+  trailingControl?: ReactNode | undefined;
 }> &
   InputHTMLAttributes<HTMLInputElement>;
 
-export function TextInput({ label, labelHelp, error, hint, className, ...props }: TextInputProps) {
+export function TextInput({ label, labelHelp, error, hint, className, trailingControl, ...props }: TextInputProps) {
   const generatedId = useId();
   const inputId = props.id ?? generatedId;
   const hintId = `${inputId}-hint`;
@@ -89,13 +90,23 @@ export function TextInput({ label, labelHelp, error, hint, className, ...props }
       label={label}
       labelHelp={labelHelp}
     >
-      <input
-        aria-describedby={`${hintId} ${errorId}`}
-        aria-invalid={error === undefined ? undefined : true}
-        className={cx(fieldInputClassName, className)}
-        {...props}
-        id={inputId}
-      />
+      <span className="relative block">
+        <input
+          aria-describedby={`${hintId} ${errorId}`}
+          aria-invalid={error === undefined ? undefined : true}
+          className={cx(fieldInputClassName, trailingControl === undefined ? undefined : "pr-12", className)}
+          {...props}
+          id={inputId}
+        />
+        {trailingControl === undefined ? null : (
+          <span
+            className="absolute top-1/2 right-[6px] -translate-y-1/2"
+            data-testid="text-input-trailing-control"
+          >
+            {trailingControl}
+          </span>
+        )}
+      </span>
     </FieldShell>
   );
 }
