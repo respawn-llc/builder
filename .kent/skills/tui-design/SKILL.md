@@ -25,6 +25,13 @@ description: How to design TUI frontends. Use when requests involve TUI layout, 
 - Render placeholders only for genuinely missing parts.
 - Refresh slow sections asynchronously.
 
+5. Meet the visual bar before shipping, not after feedback.
+- A polished, styled surface is the requirement, not a follow-up. "Make it work, leave it ugly" is a defect.
+- Build every bounded surface to this standard in the same change that introduces it. Do not ship an unstyled text-block surface intending to style it later, and do not wait for the operator to complain before meeting the bar.
+- Reactive styling is banned: never bolt color/spacing/borders onto an already-shipped raw-text surface after the fact. Layout and emphasis are designed into the surface from the start.
+- Compose surfaces through the render framework's layout/style/widget primitives. Do not hand-assemble screens by concatenating strings, splicing ANSI escapes, or computing cursor row/column by manual line arithmetic — that path is what produces unstyled-then-hacked surfaces.
+- Run the screen-review checklist (bottom of this skill) before the surface is considered done.
+
 ## Surface choice
 
 ### Use native scrollback for ongoing/log-style surfaces
@@ -166,7 +173,7 @@ Guidelines:
 - Keep bars on a single line with label and summary when possible.
 - Use semantic fill color based on health, if applicable.
 - Clamp for narrow widths; if space is tight, reduce bar width before dropping the summary.
-- Use Bubble components when they make rendering easier and remain visually stable.
+- Use the render framework's drawing primitives (gauge/progress, styled rows) when they simplify rendering and remain visually stable; keep interactive behavior (input, cursor, selection, navigation) in the app model rather than in behavior-owning widgets.
 
 ## Information design
 

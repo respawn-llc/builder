@@ -24,6 +24,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tui-rs
+
+      - name: Run Rust lints
+        working-directory: tui-rs
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Verify formatting
         run: ./scripts/ci-check.sh format
 
@@ -54,6 +68,16 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/pnpm-lock.yaml
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tui-rs
+
       - name: Build
         run: ./scripts/ci-check.sh build
 
@@ -81,6 +105,19 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: apps/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tui-rs
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
 
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
@@ -116,6 +153,16 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: apps/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tui-rs
 
       - name: Build mocked Windows release asset
         env:

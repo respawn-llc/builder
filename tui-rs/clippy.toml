@@ -1,0 +1,5 @@
+disallowed-methods = [
+    { path = "tokio::spawn", reason = "detached tasks are not allowed; use structured concurrency via join!/try_join!/select!, JoinSet, or a tracked std::thread/std::thread::scope. Main-thread I/O architecture is tracked in issue #341." },
+    { path = "tokio::task::spawn", reason = "detached tasks are not allowed; use structured concurrency via join!/try_join!/select!, JoinSet, or a tracked std::thread/std::thread::scope. Main-thread I/O architecture is tracked in issue #341." },
+    { path = "tokio::task::spawn_blocking", reason = "blocking detached tasks are not allowed; use structured concurrency via join!/try_join!/select!, JoinSet, or a tracked std::thread/std::thread::scope. Main-thread I/O architecture is tracked in issue #341." },
+]

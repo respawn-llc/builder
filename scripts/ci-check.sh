@@ -23,6 +23,9 @@ run_format() {
 		echo "$unformatted"
 		exit 1
 	fi
+	if [ -f tui-rs/Cargo.toml ]; then
+		cargo fmt --manifest-path tui-rs/Cargo.toml --all -- --check
+	fi
 }
 
 run_frontend_deps_policy() {
@@ -55,7 +58,15 @@ run_build() {
 
 run_test() {
 	echo "==> test"
-	./scripts/test.sh
+	./scripts/test.sh "$@"
+}
+
+run_rust_policy() {
+	if [ ! -f tui-rs/Cargo.toml ]; then
+		return
+	fi
+	echo "==> rust policy"
+	cargo run --manifest-path tui-rs/Cargo.toml --locked -p manifest-check -- check --repo-root "$repo_root"
 }
 
 mode="${1:-all}"
@@ -64,6 +75,7 @@ case "$mode" in
 all)
 	run_frontend_deps_policy
 	run_format
+	run_rust_policy
 	run_vet
 	run_build
 	run_test
@@ -74,6 +86,9 @@ deps)
 format)
 	run_format
 	;;
+rust-policy)
+	run_rust_policy
+	;;
 vet)
 	run_vet
 	;;
@@ -81,11 +96,12 @@ build)
 	run_build
 	;;
 test)
-	run_test
+	shift
+	run_test "$@"
 	;;
 *)
 	echo "Unknown mode: $mode" >&2
-	echo "Usage: $0 [all|deps|format|vet|build|test]" >&2
+	echo "Usage: $0 [all|deps|format|rust-policy|vet|build|test [test target/options...]]" >&2
 	exit 1
 	;;
 esac
