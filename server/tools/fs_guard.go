@@ -58,27 +58,62 @@ type FSGuard struct {
 	failures              FSGuardFailureFactory
 	temporaryPathAllowed  func(string) bool
 	onApproved            func(FSGuardRequest, string)
+	pathDenyPolicy        PathDenyPolicy
 }
 
-func NewFSGuard(workspaceRoot string, workspaceRootReal string, workspaceRootInfo os.FileInfo, workspaceOnly bool, allowOutsideWorkspace bool, approver FSGuardApprover, sessionAllowed func() bool, setSessionAllowed func(bool), rejectionInstruction string, errorLabels FSGuardErrorLabels, failures FSGuardFailureFactory, temporaryPathAllowed func(string) bool, onApproved func(FSGuardRequest, string)) FSGuard {
+type FSGuardConfig struct {
+	WorkspaceRoot         string
+	WorkspaceRootReal     string
+	WorkspaceRootInfo     os.FileInfo
+	WorkspaceOnly         bool
+	AllowOutsideWorkspace bool
+	Approver              FSGuardApprover
+	SessionAllowed        func() bool
+	SetSessionAllowed     func(bool)
+	RejectionInstruction  string
+	ErrorLabels           FSGuardErrorLabels
+	Failures              FSGuardFailureFactory
+	TemporaryPathAllowed  func(string) bool
+	OnApproved            func(FSGuardRequest, string)
+	PathDenyPolicy        PathDenyPolicy
+}
+
+func NewFSGuard(config FSGuardConfig) FSGuard {
 	return FSGuard{
-		workspaceRoot:         workspaceRoot,
-		workspaceRootReal:     workspaceRootReal,
-		workspaceRootInfo:     workspaceRootInfo,
-		workspaceOnly:         workspaceOnly,
-		allowOutsideWorkspace: allowOutsideWorkspace,
-		approver:              approver,
-		sessionAllowed:        sessionAllowed,
-		setSessionAllowed:     setSessionAllowed,
-		rejectionInstruction:  rejectionInstruction,
-		errorLabels:           errorLabels,
-		failures:              failures,
-		temporaryPathAllowed:  temporaryPathAllowed,
-		onApproved:            onApproved,
+		workspaceRoot:         config.WorkspaceRoot,
+		workspaceRootReal:     config.WorkspaceRootReal,
+		workspaceRootInfo:     config.WorkspaceRootInfo,
+		workspaceOnly:         config.WorkspaceOnly,
+		allowOutsideWorkspace: config.AllowOutsideWorkspace,
+		approver:              config.Approver,
+		sessionAllowed:        config.SessionAllowed,
+		setSessionAllowed:     config.SetSessionAllowed,
+		rejectionInstruction:  config.RejectionInstruction,
+		errorLabels:           config.ErrorLabels,
+		failures:              config.Failures,
+		temporaryPathAllowed:  config.TemporaryPathAllowed,
+		onApproved:            config.OnApproved,
+		pathDenyPolicy:        config.PathDenyPolicy,
 	}
 }
 
 func (g FSGuard) Allow(ctx context.Context, requestedPath string, resolvedPath string, approvedOutside map[string]bool) (string, error) {
+	req := FSGuardRequest{
+		RequestedPath: requestedPath,
+		ResolvedPath:  resolvedPath,
+		WorkspaceRoot: g.workspaceRoot,
+	}
+	match, denied, denyErr := g.pathDenyPolicy.Check(PathDenyCheck{
+		RequestedPath:     requestedPath,
+		ResolvedPath:      resolvedPath,
+		WorkspaceRootReal: g.workspaceRootReal,
+	})
+	if denyErr != nil {
+		return "", denyErr
+	}
+	if denied {
+		return "", g.noPermission(requestedPath, match.Message)
+	}
 	if !g.workspaceOnly {
 		return resolvedPath, nil
 	}
@@ -90,11 +125,6 @@ func (g FSGuard) Allow(ctx context.Context, requestedPath string, resolvedPath s
 		return resolvedPath, nil
 	}
 
-	req := FSGuardRequest{
-		RequestedPath: requestedPath,
-		ResolvedPath:  resolvedPath,
-		WorkspaceRoot: g.workspaceRoot,
-	}
 	if g.temporaryPathAllowed != nil && g.temporaryPathAllowed(resolvedPath) {
 		g.logApproved(req, "temporary_allow")
 		return resolvedPath, nil
@@ -143,6 +173,19 @@ func (g FSGuard) Allow(ctx context.Context, requestedPath string, resolvedPath s
 		}
 		return "", g.userDenied(requestedPath, approval.Commentary, g.rejectionInstruction)
 	}
+}
+
+// LexicalPathForDenyPolicy resolves a requested tool path for deny-policy
+// matching without following symlinks below the workspace root.
+func LexicalPathForDenyPolicy(workspaceRootReal string, requestedPath string) (string, error) {
+	if strings.TrimSpace(requestedPath) == "" {
+		return "", errors.New("path is required")
+	}
+	path := requestedPath
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workspaceRootReal, path)
+	}
+	return filepath.Clean(path), nil
 }
 
 func (g FSGuard) isWithinWorkspace(real string) (bool, error) {

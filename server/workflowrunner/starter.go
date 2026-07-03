@@ -465,14 +465,30 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 		}
 	}
 	warnings := []string{}
-	plan, warnings, err = launch.ApplyRunPromptOverridesWithPolicy(plan, overrides, auth.EmptyState(), launch.RunPromptOverridePolicy{
-		AllowLockedSessionRoleOverride: true,
+	allowLockedRoleChange := allowLockedWorkflowContinuationRoleChange(plan, overrides)
+	plan, warnings, err = launch.ApplyRunPromptOverridesWithOptions(plan, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
+		AllowLockedAgentRoleChange: allowLockedRoleChange,
 	})
 	if err != nil {
 		return launch.SessionPlan{}, nil, err
 	}
 	planSucceeded = true
 	return plan, warnings, nil
+}
+
+func allowLockedWorkflowContinuationRoleChange(plan launch.SessionPlan, overrides serverapi.RunPromptOverrides) bool {
+	if !plan.ModelContractLocked {
+		return false
+	}
+	roleOverride, err := overrides.AgentRoleOverride()
+	if err != nil || !roleOverride.Present {
+		return false
+	}
+	currentRole := ""
+	if plan.Store != nil && plan.Store.Meta().Continuation != nil {
+		currentRole = strings.TrimSpace(plan.Store.Meta().Continuation.AgentRole)
+	}
+	return currentRole != roleOverride.Role
 }
 
 type sessionListingMetadata struct {

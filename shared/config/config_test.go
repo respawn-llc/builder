@@ -1121,6 +1121,100 @@ func TestPersistenceRootHashFoldsCaseOnCaseInsensitivePlatforms(t *testing.T) {
 	}
 }
 
+func TestCanonicalPathIdentityUsesPersistenceRootCasePolicy(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "KentRoot", "Nested")
+	withTrailing := root + string(filepath.Separator)
+	first, err := CanonicalPathIdentity(root)
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity: %v", err)
+	}
+	second, err := CanonicalPathIdentity(withTrailing)
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity trailing: %v", err)
+	}
+	if first != second {
+		t.Fatalf("path identity should ignore trailing separator: %q != %q", first, second)
+	}
+	caseVariant, err := CanonicalPathIdentity(strings.ToLower(root))
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity case variant: %v", err)
+	}
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		if first != caseVariant {
+			t.Fatalf("path identity should fold case on %s: %q != %q", runtime.GOOS, first, caseVariant)
+		}
+	} else if first == caseVariant && root != strings.ToLower(root) {
+		t.Fatalf("path identity should preserve case on %s", runtime.GOOS)
+	}
+}
+
+func TestCanonicalPathIdentityPreservesSignificantFilenameSpaces(t *testing.T) {
+	root := t.TempDir()
+	withSpace := filepath.Join(root, "notes ")
+	withoutSpace := filepath.Join(root, "notes")
+
+	spaceIdentity, err := CanonicalPathIdentity(withSpace)
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity with trailing filename space: %v", err)
+	}
+	plainIdentity, err := CanonicalPathIdentity(withoutSpace)
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity without trailing filename space: %v", err)
+	}
+	if spaceIdentity == plainIdentity {
+		t.Fatalf("path identity collapsed significant filename space: %q", spaceIdentity)
+	}
+}
+
+func TestCanonicalLexicalPathIdentityDoesNotFollowSymlinkAncestors(t *testing.T) {
+	realRoot := t.TempDir()
+	linkRoot := filepath.Join(t.TempDir(), "link-root")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	lexical, err := CanonicalLexicalPathIdentity(filepath.Join(linkRoot, "child.txt"))
+	if err != nil {
+		t.Fatalf("CanonicalLexicalPathIdentity: %v", err)
+	}
+	real, err := CanonicalPathIdentity(filepath.Join(linkRoot, "child.txt"))
+	if err != nil {
+		t.Fatalf("CanonicalPathIdentity: %v", err)
+	}
+	if lexical == real {
+		t.Fatalf("lexical identity followed symlink ancestor: lexical=%q real=%q", lexical, real)
+	}
+}
+
+func TestResolveExistingAncestorRealPathUsesNearestExistingRealAncestor(t *testing.T) {
+	parentReal := t.TempDir()
+	linkParent := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(parentReal, linkParent); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	got, err := ResolveExistingAncestorRealPath(filepath.Join(linkParent, "missing", "child.txt"))
+	if err != nil {
+		t.Fatalf("ResolveExistingAncestorRealPath: %v", err)
+	}
+	parentRealCanonical, err := filepath.EvalSymlinks(parentReal)
+	if err != nil {
+		t.Fatalf("resolve temp real path: %v", err)
+	}
+	want := filepath.Join(parentRealCanonical, "missing", "child.txt")
+	if got != want {
+		t.Fatalf("resolved path = %q, want %q", got, want)
+	}
+
+	loop := filepath.Join(parentReal, "loop")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Skipf("symlink loop unavailable: %v", err)
+	}
+	if _, err := ResolveExistingAncestorRealPath(loop); err == nil {
+		t.Fatal("expected symlink loop error")
+	}
+}
+
 func TestExplicitPersistenceRootID(t *testing.T) {
 	home := t.TempDir()
 	isoRoot := filepath.Join(string(filepath.Separator), "tmp", "iso-root-id-explicit")

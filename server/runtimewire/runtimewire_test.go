@@ -125,6 +125,183 @@ func TestBuildToolRegistryViewImageApprovedOutsidePathIsLogged(t *testing.T) {
 	}
 }
 
+func TestRuntimewireGeneratedWritePolicyUsesActivePersistenceRoot(t *testing.T) {
+	workspace := t.TempDir()
+	configRoot := t.TempDir()
+	generatedRoot := filepath.Join(configRoot, ".generated")
+	if err := os.MkdirAll(generatedRoot, 0o755); err != nil {
+		t.Fatalf("mkdir generated root: %v", err)
+	}
+	registry, _ := newRuntimeWireToolRegistryWithConfig(t, workspace, configRoot, false, toolspec.ToolPatch, toolspec.ToolEdit)
+
+	patchHandler, ok := registry.Get(toolspec.ToolPatch)
+	if !ok {
+		t.Fatal("expected patch handler")
+	}
+	patchInput, _ := json.Marshal(map[string]any{"patch": "*** Begin Patch\n*** Add File: " + filepath.Join(generatedRoot, "skill.txt") + "\n+generated\n*** End Patch\n"})
+	patchResult, err := patchHandler.Call(context.Background(), tools.Call{ID: "patch-generated", Name: toolspec.ToolPatch, Input: patchInput})
+	if err != nil {
+		t.Fatalf("patch call: %v", err)
+	}
+	if !patchResult.IsError || !strings.Contains(string(patchResult.Output), filepath.Join(configRoot, "skills")+string(filepath.Separator)) {
+		t.Fatalf("expected generated patch denial with active skills path, got error=%t output=%s", patchResult.IsError, string(patchResult.Output))
+	}
+	if _, err := os.Stat(filepath.Join(generatedRoot, "skill.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("generated patch created file, stat err=%v", err)
+	}
+	missingAncestorInput, _ := json.Marshal(map[string]any{"patch": "*** Begin Patch\n*** Add File: " + filepath.Join(generatedRoot, "missing", "deep.txt") + "\n+generated\n*** End Patch\n"})
+	missingAncestorResult, err := patchHandler.Call(context.Background(), tools.Call{ID: "patch-generated-missing-ancestor", Name: toolspec.ToolPatch, Input: missingAncestorInput})
+	if err != nil {
+		t.Fatalf("patch missing ancestor call: %v", err)
+	}
+	if !missingAncestorResult.IsError || !strings.Contains(string(missingAncestorResult.Output), filepath.Join(configRoot, "skills")+string(filepath.Separator)) {
+		t.Fatalf("expected generated missing-ancestor denial, got error=%t output=%s", missingAncestorResult.IsError, string(missingAncestorResult.Output))
+	}
+
+	editHandler, ok := registry.Get(toolspec.ToolEdit)
+	if !ok {
+		t.Fatal("expected edit handler")
+	}
+	editInput, _ := json.Marshal(map[string]any{"path": filepath.Join(generatedRoot, "edit.txt"), "old_string": "", "new_string": "generated\n"})
+	editResult, err := editHandler.Call(context.Background(), tools.Call{ID: "edit-generated", Name: toolspec.ToolEdit, Input: editInput})
+	if err != nil {
+		t.Fatalf("edit call: %v", err)
+	}
+	if !editResult.IsError || !strings.Contains(string(editResult.Output), filepath.Join(configRoot, "skills")+string(filepath.Separator)) {
+		t.Fatalf("expected generated edit denial with active skills path, got error=%t output=%s", editResult.IsError, string(editResult.Output))
+	}
+	rootEditInput, _ := json.Marshal(map[string]any{"path": generatedRoot, "old_string": "old", "new_string": "new"})
+	rootEditResult, err := editHandler.Call(context.Background(), tools.Call{ID: "edit-generated-root", Name: toolspec.ToolEdit, Input: rootEditInput})
+	if err != nil {
+		t.Fatalf("edit root call: %v", err)
+	}
+	if !rootEditResult.IsError || !strings.Contains(string(rootEditResult.Output), filepath.Join(configRoot, "skills")+string(filepath.Separator)) {
+		t.Fatalf("expected generated root denial, got error=%t output=%s", rootEditResult.IsError, string(rootEditResult.Output))
+	}
+}
+
+func TestRuntimewireGeneratedWritePolicyDefaultGuidanceAndSiblingFallthrough(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	defaultRoot := filepath.Join(home, config.ConfigDirName)
+	generatedRoot := filepath.Join(defaultRoot, ".generated")
+	siblingRoot := filepath.Join(defaultRoot, ".generated-backup")
+	if err := os.MkdirAll(generatedRoot, 0o755); err != nil {
+		t.Fatalf("mkdir generated root: %v", err)
+	}
+	if err := os.MkdirAll(siblingRoot, 0o755); err != nil {
+		t.Fatalf("mkdir sibling root: %v", err)
+	}
+	registry, _ := newRuntimeWireToolRegistryWithConfig(t, workspace, "", true, toolspec.ToolPatch)
+	patchHandler, ok := registry.Get(toolspec.ToolPatch)
+	if !ok {
+		t.Fatal("expected patch handler")
+	}
+
+	deniedInput, _ := json.Marshal(map[string]any{"patch": "*** Begin Patch\n*** Add File: " + filepath.Join(generatedRoot, "root-denied.txt") + "\n+generated\n*** End Patch\n"})
+	denied, err := patchHandler.Call(context.Background(), tools.Call{ID: "patch-default-generated", Name: toolspec.ToolPatch, Input: deniedInput})
+	if err != nil {
+		t.Fatalf("patch generated call: %v", err)
+	}
+	if !denied.IsError || !strings.Contains(string(denied.Output), "~/.kent/skills/") {
+		t.Fatalf("expected default generated guidance, got error=%t output=%s", denied.IsError, string(denied.Output))
+	}
+
+	siblingTarget := filepath.Join(siblingRoot, "allowed.txt")
+	allowedInput, _ := json.Marshal(map[string]any{"patch": "*** Begin Patch\n*** Add File: " + siblingTarget + "\n+allowed\n*** End Patch\n"})
+	allowed, err := patchHandler.Call(context.Background(), tools.Call{ID: "patch-generated-sibling", Name: toolspec.ToolPatch, Input: allowedInput})
+	if err != nil {
+		t.Fatalf("patch sibling call: %v", err)
+	}
+	if allowed.IsError {
+		t.Fatalf("expected sibling path to follow configured outside-workspace allow, got %s", string(allowed.Output))
+	}
+	if data, err := os.ReadFile(siblingTarget); err != nil || string(data) != "allowed\n" {
+		t.Fatalf("sibling target content = %q err=%v", string(data), err)
+	}
+}
+
+func TestRuntimewireGeneratedPolicyPreservedAcrossWorkspaceRebind(t *testing.T) {
+	configRoot := t.TempDir()
+	generatedRoot := filepath.Join(configRoot, ".generated")
+	if err := os.MkdirAll(generatedRoot, 0o755); err != nil {
+		t.Fatalf("mkdir generated root: %v", err)
+	}
+	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		WorkspaceRoot:       t.TempDir(),
+		Enabled:             []toolspec.ID{toolspec.ToolPatch},
+		MinimumExecToBgTime: 15 * time.Second,
+		ShellOutputMaxChars: 16_000,
+		SupportsVision:      true,
+		GlobalConfigDir:     configRoot,
+	})
+	if err != nil {
+		t.Fatalf("new local tool registry binding: %v", err)
+	}
+	if err := binding.Rebind(t.TempDir()); err != nil {
+		t.Fatalf("rebind: %v", err)
+	}
+	patchHandler, ok := binding.Registry().Get(toolspec.ToolPatch)
+	if !ok {
+		t.Fatal("expected patch handler")
+	}
+	input, _ := json.Marshal(map[string]any{"patch": "*** Begin Patch\n*** Add File: " + filepath.Join(generatedRoot, "after-rebind.txt") + "\n+generated\n*** End Patch\n"})
+	result, err := patchHandler.Call(context.Background(), tools.Call{ID: "patch-after-rebind", Name: toolspec.ToolPatch, Input: input})
+	if err != nil {
+		t.Fatalf("patch call: %v", err)
+	}
+	if !result.IsError || !strings.Contains(string(result.Output), filepath.Join(configRoot, "skills")+string(filepath.Separator)) {
+		t.Fatalf("expected generated denial after rebind, got error=%t output=%s", result.IsError, string(result.Output))
+	}
+}
+
+func TestRuntimewireViewImageReadsGeneratedFileWithNormalApproval(t *testing.T) {
+	workspace := t.TempDir()
+	configRoot := t.TempDir()
+	generatedRoot := filepath.Join(configRoot, ".generated")
+	if err := os.MkdirAll(generatedRoot, 0o755); err != nil {
+		t.Fatalf("mkdir generated root: %v", err)
+	}
+	generatedPDF := filepath.Join(generatedRoot, "doc.pdf")
+	if err := os.WriteFile(generatedPDF, []byte("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"), 0o644); err != nil {
+		t.Fatalf("write generated pdf: %v", err)
+	}
+	registry, broker := newRuntimeWireToolRegistryWithConfig(t, workspace, configRoot, false, toolspec.ToolPatch, toolspec.ToolViewImage)
+	broker.SetAskHandler(func(req askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+		if !strings.Contains(req.Question, "Allow reading") {
+			t.Fatalf("expected read-focused approval question, got %q", req.Question)
+		}
+		return askquestion.AskQuestionResponse{Approval: &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce}}, nil
+	})
+
+	viewImageHandler, ok := registry.Get(toolspec.ToolViewImage)
+	if !ok {
+		t.Fatal("expected view_image handler")
+	}
+	viewInput, _ := json.Marshal(map[string]any{"path": generatedPDF})
+	viewResult, err := viewImageHandler.Call(context.Background(), tools.Call{ID: "view-generated", Name: toolspec.ToolViewImage, Input: viewInput})
+	if err != nil {
+		t.Fatalf("view_image call: %v", err)
+	}
+	if viewResult.IsError {
+		t.Fatalf("expected generated read success after normal approval, got %s", string(viewResult.Output))
+	}
+
+	patchHandler, ok := registry.Get(toolspec.ToolPatch)
+	if !ok {
+		t.Fatal("expected patch handler")
+	}
+	patchInput, _ := json.Marshal(map[string]any{"patch": "*** Begin Patch\n*** Add File: " + filepath.Join(generatedRoot, "write.txt") + "\n+generated\n*** End Patch\n"})
+	patchResult, err := patchHandler.Call(context.Background(), tools.Call{ID: "patch-generated-read-regression", Name: toolspec.ToolPatch, Input: patchInput})
+	if err != nil {
+		t.Fatalf("patch call: %v", err)
+	}
+	if !patchResult.IsError {
+		t.Fatal("expected generated write denial while read remains allowed")
+	}
+}
+
 func TestBuildToolRegistryMissingWorkspaceRootSuggestsRebind(t *testing.T) {
 	tests := []struct {
 		name string
@@ -141,19 +318,14 @@ func TestBuildToolRegistryMissingWorkspaceRootSuggestsRebind(t *testing.T) {
 			t.Chdir(newWorkspace)
 			sessionID := "session-1"
 
-			_, _, _, err := BuildToolRegistry(
-				missingWorkspace,
-				sessionID,
-				[]toolspec.ID{tt.tool},
-				15*time.Second,
-				16_000,
-				false,
-				true,
-				nil,
-				nil,
-				nil,
-				nil,
-			)
+			_, _, _, err := BuildToolRegistry(LocalToolRegistryOptions{
+				WorkspaceRoot:       missingWorkspace,
+				OwnerSessionID:      sessionID,
+				Enabled:             []toolspec.ID{tt.tool},
+				MinimumExecToBgTime: 15 * time.Second,
+				ShellOutputMaxChars: 16_000,
+				SupportsVision:      true,
+			})
 			if err == nil {
 				t.Fatal("expected build tool registry error for missing workspace root")
 			}
@@ -199,19 +371,13 @@ func TestLocalToolRegistryBindingRebindUpdatesExecCommandRoot(t *testing.T) {
 }
 
 func TestNewLocalToolRegistryBindingRejectsEmptyWorkspaceRoot(t *testing.T) {
-	_, _, _, err := NewLocalToolRegistryBinding(
-		"   ",
-		"",
-		[]toolspec.ID{toolspec.ToolExecCommand},
-		15*time.Second,
-		16_000,
-		false,
-		true,
-		nil,
-		nil,
-		nil,
-		nil,
-	)
+	_, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		WorkspaceRoot:       "   ",
+		Enabled:             []toolspec.ID{toolspec.ToolExecCommand},
+		MinimumExecToBgTime: 15 * time.Second,
+		ShellOutputMaxChars: 16_000,
+		SupportsVision:      true,
+	})
 	if !errors.Is(err, errWorkspaceRootRequired) {
 		t.Fatalf("new local tool registry binding error = %v, want errWorkspaceRootRequired", err)
 	}
@@ -651,7 +817,31 @@ func newRuntimeWireToolRegistry(t *testing.T, workspace string, enabled ...tools
 
 func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Logger, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
 	t.Helper()
-	registry, broker, _, err := BuildToolRegistry(workspace, "", enabled, 15*time.Second, 16_000, false, true, logger, nil, nil, nil)
+	registry, broker, _, err := BuildToolRegistry(LocalToolRegistryOptions{
+		WorkspaceRoot:       workspace,
+		Enabled:             enabled,
+		MinimumExecToBgTime: 15 * time.Second,
+		ShellOutputMaxChars: 16_000,
+		SupportsVision:      true,
+		Logger:              logger,
+	})
+	if err != nil {
+		t.Fatalf("build tool registry: %v", err)
+	}
+	return registry, broker
+}
+
+func newRuntimeWireToolRegistryWithConfig(t *testing.T, workspace string, configRoot string, allowNonCwdEdits bool, enabled ...toolspec.ID) (*tools.Registry, *askquestion.AskQuestionBroker) {
+	t.Helper()
+	registry, broker, _, err := BuildToolRegistry(LocalToolRegistryOptions{
+		WorkspaceRoot:       workspace,
+		Enabled:             enabled,
+		MinimumExecToBgTime: 15 * time.Second,
+		ShellOutputMaxChars: 16_000,
+		AllowNonCwdEdits:    allowNonCwdEdits,
+		SupportsVision:      true,
+		GlobalConfigDir:     configRoot,
+	})
 	if err != nil {
 		t.Fatalf("build tool registry: %v", err)
 	}
@@ -660,7 +850,13 @@ func newRuntimeWireLoggedToolRegistry(t *testing.T, workspace string, logger Log
 
 func newRuntimeWireBinding(t *testing.T, workspace string, enabled ...toolspec.ID) *LocalToolRegistryBinding {
 	t.Helper()
-	binding, _, _, err := NewLocalToolRegistryBinding(workspace, "", enabled, 15*time.Second, 16_000, false, true, nil, nil, nil, nil)
+	binding, _, _, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
+		WorkspaceRoot:       workspace,
+		Enabled:             enabled,
+		MinimumExecToBgTime: 15 * time.Second,
+		ShellOutputMaxChars: 16_000,
+		SupportsVision:      true,
+	})
 	if err != nil {
 		t.Fatalf("new local tool registry binding: %v", err)
 	}

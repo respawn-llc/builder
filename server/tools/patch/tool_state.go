@@ -44,16 +44,20 @@ func (s *applyState) hasDeletedAncestor(path string) bool {
 }
 
 func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error) {
-	paths := make([]string, 0, len(doc.Hunks))
+	type documentPath struct {
+		raw      string
+		resolved string
+	}
+	targets := make([]documentPath, 0, len(doc.Hunks))
 	addPath := func(raw string, mustExist bool) error {
 		if strings.TrimSpace(raw) == "" {
 			return nil
 		}
-		resolved, err := s.tool.resolvePath(s.ctx, raw, mustExist, s.approvedOutside)
+		resolved, err := s.tool.resolvePathTarget(raw, mustExist)
 		if err != nil {
 			return err
 		}
-		paths = append(paths, resolved)
+		targets = append(targets, documentPath{raw: raw, resolved: resolved})
 		return nil
 	}
 	for _, hunk := range doc.Hunks {
@@ -76,6 +80,27 @@ func (s *applyState) lockDocumentPaths(doc patchformat.Document) (func(), error)
 				}
 			}
 		}
+	}
+	for _, target := range targets {
+		match, denied, denyErr := s.tool.pathDenyPolicy.Check(tools.PathDenyCheck{
+			RequestedPath:     target.raw,
+			ResolvedPath:      target.resolved,
+			WorkspaceRootReal: s.tool.workspaceRootReal,
+		})
+		if denyErr != nil {
+			return nil, denyErr
+		}
+		if denied {
+			return nil, noPermissionFailure(target.raw, match.Message)
+		}
+	}
+	paths := make([]string, 0, len(targets))
+	for _, target := range targets {
+		resolved, err := s.tool.guardResolvedPath(s.ctx, target.raw, target.resolved, s.approvedOutside)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, resolved)
 	}
 	return tools.LockFSGuardPaths(paths), nil
 }

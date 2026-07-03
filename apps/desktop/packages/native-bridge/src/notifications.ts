@@ -1,5 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import {
+  isPermissionGranted as tauriIsPermissionGranted,
+  requestPermission as tauriRequestPermission,
+} from "@tauri-apps/plugin-notification";
 import { z } from "zod";
 
 import { tauriPlatformSupportsNativeNotifications, type NativePlatform } from "./capabilities";
@@ -81,15 +85,14 @@ type TauriNotificationRequest = Readonly<{
 }>;
 
 type TauriNotificationBackend = Readonly<{
-  permissionState(): Promise<NativeNotificationPermission>;
-  requestPermission(): Promise<NativeNotificationPermission>;
+  isPermissionGranted(): Promise<boolean>;
+  requestPermission(): Promise<NotificationPermission>;
   send(notification: TauriNotificationRequest): Promise<void>;
   onActivated(handler: (activation: NativeNotificationActivation) => void): Promise<NativeNotificationUnlisten>;
   removeActive(backendID: number): Promise<void>;
 }>;
 
 const tauriActivationEvent = "app://attention-notification-activated";
-const unknownRecordSchema = z.record(z.string(), z.unknown());
 
 export function createUnavailableNativeNotifications(): NativeNotificationBridge {
   return {
@@ -204,16 +207,15 @@ function createTauriDesktopNativeNotifications(backend: TauriNotificationBackend
   const mapper = new NativeNotificationIDMapper();
   return {
     async permissionState(): Promise<NativeNotificationPermission> {
-      return backend.permissionState();
+      return (await backend.isPermissionGranted()) ? "granted" : "prompt";
     },
     async requestPermission(): Promise<NativeNotificationPermission> {
-      return backend.requestPermission();
+      return webPermission(await backend.requestPermission());
     },
     async notify(message: NativeNotification): Promise<void> {
       validateNativeNotification(message);
-      const permission = await backend.permissionState();
-      if (permission !== "granted") {
-        throw new Error(`Native notification permission is ${permission}.`);
+      if (!(await backend.isPermissionGranted())) {
+        throw new Error("Native notification permission is not granted.");
       }
       await backend.send({
         backendId: mapper.resolveBackendID(message.id),
@@ -232,109 +234,52 @@ function createTauriDesktopNativeNotifications(backend: TauriNotificationBackend
 
 function defaultTauriNotificationBackend(): TauriNotificationBackend {
   return {
+    isPermissionGranted: tauriIsPermissionGranted,
     async onActivated(handler: (activation: NativeNotificationActivation) => void): Promise<NativeNotificationUnlisten> {
       return listen<unknown>(tauriActivationEvent, (event) => {
         handler(nativeNotificationActivation(event.payload));
       });
     },
-    async permissionState(): Promise<NativeNotificationPermission> {
-      return nativeNotificationPermission(await invoke("attention_notification_permission_state"));
-    },
     async removeActive(backendID: number): Promise<void> {
       await invoke("remove_attention_notification", { backendId: backendID });
     },
-    async requestPermission(): Promise<NativeNotificationPermission> {
-      return nativeNotificationPermission(await invoke("request_attention_notification_permission"));
-    },
+    requestPermission: tauriRequestPermission,
     async send(notification: TauriNotificationRequest): Promise<void> {
       await invoke("send_attention_notification", { notification });
     },
   };
 }
 
-function nativeNotificationPermission(value: unknown): NativeNotificationPermission {
-  const permission = stringValue(value);
-  if (permission === "denied" || permission === "granted" || permission === "prompt" || permission === "unsupported") {
-    return permission;
-  }
-  throw new Error("Native notification permission value is unsupported.");
-}
+const nonEmptyID = z.string().min(1);
+
+const nativeNotificationActivationSchema = z.object({
+  id: nonEmptyID,
+  target: z.object({
+    kind: z.literal("task_detail"),
+    taskID: nonEmptyID,
+    focus: z.discriminatedUnion("kind", [
+      z.object({
+        kind: z.literal("question"),
+        askIDs: z.tuple([nonEmptyID]).rest(nonEmptyID),
+      }),
+      z.object({
+        kind: z.literal("approval"),
+        taskTransitionID: nonEmptyID,
+      }),
+      z.object({
+        kind: z.literal("interrupted_run"),
+        runID: nonEmptyID,
+      }),
+    ]),
+  }),
+});
 
 function nativeNotificationActivation(value: unknown): NativeNotificationActivation {
-  const id = stringProperty(value, "id");
-  if (id === null || id.length === 0) {
-    throw new Error("Native notification activation id must be a non-empty string.");
+  const parsed = nativeNotificationActivationSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(`Native notification activation payload is invalid: ${parsed.error.message}`);
   }
-  const target = nativeNotificationTarget(unknownProperty(value, "target"));
-  return { id, target };
-}
-
-function nativeNotificationTarget(value: unknown): NativeNotificationTarget {
-  const kind = stringProperty(value, "kind");
-  if (kind !== "task_detail") {
-    throw new Error("Native notification activation target kind must be task_detail.");
-  }
-  const taskID = stringProperty(value, "taskID");
-  if (taskID === null || taskID.length === 0) {
-    throw new Error("Native notification activation taskID must be a non-empty string.");
-  }
-  return {
-    kind: "task_detail",
-    taskID,
-    focus: nativeNotificationFocus(unknownProperty(value, "focus")),
-  };
-}
-
-function nativeNotificationFocus(
-  value: unknown,
-): NativeNotificationTarget["focus"] {
-  const kind = stringProperty(value, "kind");
-  if (kind === "question") {
-    const askIDs = stringArrayProperty(value, "askIDs");
-    const [firstAskID, ...remainingAskIDs] = askIDs;
-    if (firstAskID === undefined) {
-      throw new Error("Native notification question focus askIDs must contain at least one id.");
-    }
-    return { kind, askIDs: [firstAskID, ...remainingAskIDs] };
-  }
-  if (kind === "approval") {
-    const taskTransitionID = stringProperty(value, "taskTransitionID");
-    if (taskTransitionID === null || taskTransitionID.length === 0) {
-      throw new Error("Native notification approval focus taskTransitionID must be a non-empty string.");
-    }
-    return { kind, taskTransitionID };
-  }
-  if (kind === "interrupted_run") {
-    const runID = stringProperty(value, "runID");
-    if (runID === null || runID.length === 0) {
-      throw new Error("Native notification interrupted-run focus runID must be a non-empty string.");
-    }
-    return { kind, runID };
-  }
-  throw new Error("Native notification activation focus kind is unsupported.");
-}
-
-function stringProperty(value: unknown, property: string): string | null {
-  const propertyValue = unknownProperty(value, property);
-  return stringValue(propertyValue);
-}
-
-function stringArrayProperty(value: unknown, property: string): string[] {
-  const propertyValue = unknownProperty(value, property);
-  if (!Array.isArray(propertyValue)) {
-    return [];
-  }
-  const strings = propertyValue.map(stringValue).filter((item): item is string => item !== null && item.length > 0);
-  return strings.length === propertyValue.length ? strings : [];
-}
-
-function unknownProperty(value: unknown, property: string): unknown {
-  const parsed = unknownRecordSchema.safeParse(value);
-  return parsed.success ? parsed.data[property] : undefined;
-}
-
-function stringValue(value: unknown): string | null {
-  return Object.prototype.toString.call(value) === "[object String]" ? String(value) : null;
+  return parsed.data;
 }
 
 function readWebPermission(

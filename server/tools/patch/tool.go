@@ -26,6 +26,7 @@ type Tool struct {
 	outsideWorkspaceApprover     OutsideWorkspaceApprover
 	outsideWorkspaceSessionMu    sync.RWMutex
 	outsideWorkspaceSessionAllow bool
+	pathDenyPolicy               tools.PathDenyPolicy
 }
 
 func New(workspaceRoot string, workspaceOnly bool, opts ...Option) (*Tool, error) {

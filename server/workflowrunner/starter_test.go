@@ -1322,6 +1322,16 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 		ScriptedFinalAnswer(`{"commentary":"compaction summary"}`),
 		ScriptedFinalAnswer(`{"commentary":"second done"}`),
 	)
+	reviewerRole := fixture.cfg.Settings.Subagents["reviewer"]
+	reviewerRole.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolEdit: true}
+	reviewerRole.Sources = map[string]string{
+		"model":       "test",
+		"tools.shell": "test",
+		"tools.patch": "test",
+		"tools.edit":  "test",
+	}
+	fixture.cfg.Settings.Subagents["reviewer"] = reviewerRole
+	fixture.rebuildStarter(t)
 	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeCompactAndContinueSession, "reviewer")
 	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow chained: %v", err)
@@ -1355,6 +1365,11 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	}
 	if got := sourceStore.Meta().Continuation; got == nil || got.AgentRole != "reviewer" {
 		t.Fatalf("continuation role = %+v, want reviewer", got)
+	}
+	if locked := sourceStore.Meta().Locked; locked == nil || !locked.HasSystemPrompt || !locked.HasEnabledTools {
+		t.Fatalf("locked prompt-facing contract = %+v, want refreshed prompt and request shape", locked)
+	} else if !lockedContractHasTool(locked, toolspec.ToolEdit) || lockedContractHasTool(locked, toolspec.ToolExecCommand) {
+		t.Fatalf("locked enabled tools = %+v, want refreshed reviewer role tools", locked.EnabledTools)
 	}
 }
 
@@ -2776,6 +2791,18 @@ func assertNoUserPrompt(t *testing.T, req llm.Request) {
 func requestHasTool(req llm.Request, name string) bool {
 	for _, tool := range req.Tools {
 		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func lockedContractHasTool(locked *session.LockedContract, target toolspec.ID) bool {
+	if locked == nil {
+		return false
+	}
+	for _, raw := range locked.EnabledTools {
+		if raw == string(target) {
 			return true
 		}
 	}
