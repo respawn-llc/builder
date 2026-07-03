@@ -58,6 +58,32 @@ func (s *EmbeddedServer) Config() config.App {
 	return s.cfg
 }
 
+func (s *EmbeddedServer) AuthManager() *auth.Manager {
+	if s == nil {
+		return nil
+	}
+	if s.Core != nil {
+		return s.Core.AuthManager()
+	}
+	if s.deps != nil {
+		return s.deps.AuthManager()
+	}
+	return nil
+}
+
+func (s *EmbeddedServer) OAuthOptions() auth.OpenAIOAuthOptions {
+	if s == nil {
+		return auth.OpenAIOAuthOptions{}
+	}
+	if s.Core != nil {
+		return s.Core.OAuthOptions()
+	}
+	if s.deps != nil {
+		return s.deps.authSupport.OAuthOptions
+	}
+	return auth.OpenAIOAuthOptions{}
+}
+
 // ServeBackground binds the loopback control endpoints (configured TCP plus the
 // derived same-machine Unix socket) and serves the embedded Core in the
 // background so external clients — notably `kent run` subagents launched from an

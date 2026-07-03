@@ -33,6 +33,16 @@ type ServeServer struct {
 	cfg  config.App
 }
 
+func (s *ServeServer) Config() config.App {
+	if s == nil {
+		return config.App{}
+	}
+	if s.Core != nil {
+		return s.Core.Config()
+	}
+	return s.cfg
+}
+
 var localSocketListener = listenLocalSocket
 var errStartupControlSurfaceNotRequired = errors.New("startup control surface is not required")
 
@@ -53,6 +63,19 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 		}
 		return &ServeServer{Core: appCore, cfg: appCore.Config()}, nil
 	}
+	if onboardingHandler != nil {
+		onboardingCfg, completed, err := runStartupOnboardingHandler(ctx, cfg, bootstrapReq, authHandler, onboardingHandler)
+		if err != nil {
+			return nil, err
+		}
+		if completed && onboardingCfg.Source.SettingsFileExists {
+			appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, nil, Options{})
+			if err != nil {
+				return nil, err
+			}
+			return &ServeServer{Core: appCore, cfg: appCore.Config()}, nil
+		}
+	}
 	cfg, deps, err := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler)
 	if err != nil {
 		if errors.Is(err, errStartupControlSurfaceNotRequired) {
@@ -65,6 +88,33 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 		return nil, err
 	}
 	return &ServeServer{deps: deps, cfg: cfg}, nil
+}
+
+func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, authHandler startupAuthHandler, onboardingHandler OnboardingHandler) (config.App, bool, error) {
+	store := authHandler.WrapStore(auth.NewFileStore(config.GlobalAuthConfigPath(cfg)))
+	authSupport, err := serverbootstrap.BuildAuthSupport(store, bootstrapReq.LookupEnv, bootstrapReq.Now)
+	if err != nil {
+		return config.App{}, false, err
+	}
+	reloadConfig := func() (config.App, error) {
+		refreshed, err := serverbootstrap.ResolveConfig(bootstrapReq)
+		if err != nil {
+			return config.App{}, err
+		}
+		return refreshed.Config, nil
+	}
+	onboardingCfg, err := onboardingHandler(ctx, OnboardingRequest{
+		Config:       cfg,
+		AuthManager:  authSupport.AuthManager,
+		ReloadConfig: reloadConfig,
+	})
+	if errors.Is(err, ErrOnboardingRequired) {
+		return cfg, false, nil
+	}
+	if err != nil {
+		return config.App{}, false, err
+	}
+	return onboardingCfg, onboardingCfg.Source.SettingsFileExists, nil
 }
 
 func buildStartupControlSurface(_ context.Context, bootstrapReq serverbootstrap.Request, _ bool, authHandler startupAuthHandler) (config.App, *startupGatewayDependencies, error) {

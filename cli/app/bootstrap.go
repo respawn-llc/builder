@@ -31,6 +31,24 @@ func startEmbeddedServer(ctx context.Context, opts Options, interactor authInter
 		},
 		StartupOptions: opts.startupOptions,
 	}, interactor, func(ctx context.Context, req embeddedattach.OnboardingRequest) (config.App, error) {
+		if !interactive && !req.Config.Source.SettingsFileExists {
+			// Legacy frozen Go CLI/TUI bootstrap path. Server-owned onboarding
+			// finalize in server/onboarding is authoritative for thin clients;
+			// this compatibility branch preserves existing embedded CLI tests and
+			// flows until the frozen client onboarding is migrated explicitly.
+			path, created, err := config.WriteDefaultSettingsFileAt(req.Config.Source.HomeSettingsPath)
+			if err != nil {
+				return config.App{}, err
+			}
+			reloaded, err := req.ReloadConfig()
+			if err != nil {
+				return config.App{}, err
+			}
+			reloaded.Source.CreatedDefaultConfig = created
+			reloaded.Source.SettingsPath = path
+			reloaded.Source.SettingsFileExists = true
+			return reloaded, nil
+		}
 		cfg, _, err := onboarding.Ensure(ctx, onboarding.Request{
 			Config:       req.Config,
 			AuthManager:  req.AuthManager,
