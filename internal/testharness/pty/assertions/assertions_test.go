@@ -148,6 +148,27 @@ func TestNoAlternateScroll1007CanBeWindowScoped(t *testing.T) {
 	}
 }
 
+func TestNoAlternateScroll1007ChecksEveryProvidedWindow(t *testing.T) {
+	t.Parallel()
+
+	analysis := pty.Analysis{
+		Operations: []pty.Operation{
+			writeOp(0, pty.Region{Top: 0, Bottom: 1, Left: 0, Right: 1}, "a"),
+			{
+				Sequence:    1,
+				Kind:        pty.OperationModeChange,
+				ChunkIndex:  1,
+				ByteRange:   pty.ByteRange{Start: 2, End: 8},
+				PrivateMode: &pty.PrivateModeChange{Mode: 1007, Enabled: true, ChunkIndex: 1, ByteRange: pty.ByteRange{Start: 2, End: 8}},
+			},
+		},
+	}
+
+	if err := assertions.NoAlternateScroll1007(analysis, pty.OperationWindow{Start: 0, End: 1}, pty.OperationWindow{Start: 1, End: 2}); err == nil {
+		t.Fatalf("NoAlternateScroll1007 succeeded when second provided window enabled ?1007")
+	}
+}
+
 func analysisWithOps(ops ...pty.Operation) pty.Analysis {
 	return pty.Analysis{
 		Dimensions: pty.MustDimensions(2, 4),

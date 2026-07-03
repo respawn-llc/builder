@@ -6,13 +6,11 @@ import (
 	"testing"
 
 	"core/server/auth"
-	"core/server/runtimewire"
 	serverstartup "core/server/startup"
 	"core/shared/config"
 )
 
 func TestBuildStartupRequestMapsOptions(t *testing.T) {
-	factory := runtimewire.RuntimeClientFactoryFunc(nil)
 	req := buildStartupRequest(StartupRequest{
 		WorkspaceRoot:         "/tmp/workspace",
 		WorkspaceRootExplicit: true,
@@ -44,11 +42,6 @@ func TestBuildStartupRequestMapsOptions(t *testing.T) {
 	}
 	if req.LoadOptions.Theme != "dark" || req.LoadOptions.ModelTimeoutSeconds != 42 || req.LoadOptions.Tools != "shell,patch" {
 		t.Fatalf("unexpected load options: %+v", req.LoadOptions)
-	}
-	startReq := StartupRequest{StartupOptions: serverstartup.Options{Core: serverstartup.Options{}.Core}}
-	startReq.StartupOptions.Core.RuntimeClientFactory = factory
-	if startReq.StartupOptions.Core.RuntimeClientFactory == nil {
-		t.Fatal("expected startup options to carry runtime client factory")
 	}
 }
 

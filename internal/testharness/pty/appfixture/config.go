@@ -14,7 +14,7 @@ func PrepareConfigAndBinding(ctx context.Context, persistenceRoot string, worksp
 	if err := os.MkdirAll(persistenceRoot, 0o755); err != nil {
 		return fmt.Errorf("create persistence root: %w", err)
 	}
-	port, err := freeTCPPort()
+	port, err := freeTCPPort(ctx)
 	if err != nil {
 		return err
 	}
@@ -29,8 +29,9 @@ func PrepareConfigAndBinding(ctx context.Context, persistenceRoot string, worksp
 	return nil
 }
 
-func freeTCPPort() (int, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+func freeTCPPort(ctx context.Context) (int, error) {
+	var lc net.ListenConfig
+	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, fmt.Errorf("allocate fixture server port: %w", err)
 	}

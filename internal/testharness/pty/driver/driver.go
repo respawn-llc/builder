@@ -26,7 +26,7 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	if _, err := analyzer.NewDimensions(spec.Dimensions.Rows, spec.Dimensions.Cols); err != nil {
 		return analyzer.Capture{}, err
 	}
-	cmd := exec.Command(spec.Path, spec.Args...)
+	cmd := exec.CommandContext(ctx, spec.Path, spec.Args...)
 	cmd.Env = append(os.Environ(), spec.Env...)
 	cmd.Dir = spec.Dir
 

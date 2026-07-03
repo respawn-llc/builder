@@ -46,4 +46,7 @@ func TestProductionKentBinaryPTYSmoke(t *testing.T) {
 	if capture.ProcessExit == nil {
 		t.Fatal("expected process exit state")
 	}
+	if capture.ProcessExit.Code != 0 && !capture.ProcessExit.Signaled {
+		t.Fatalf("process exit = %#v, want zero exit or interrupt signal", capture.ProcessExit)
+	}
 }

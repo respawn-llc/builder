@@ -69,6 +69,47 @@ func TestRuntimeClientFactoryRejectsDirectClientOverride(t *testing.T) {
 	}
 }
 
+func TestReviewerRuntimeClientFactoryCanPairWithDirectMainClient(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newRuntimeWireSession(t, root, "reviewer-factory")
+	reviewerCalls := 0
+	factory := RuntimeClientFactoryFunc(func(_ context.Context, req RuntimeClientRequest) (llm.Client, error) {
+		reviewerCalls++
+		if req.Purpose != RuntimeClientPurposeReviewer {
+			t.Fatalf("factory purpose = %v, want reviewer", req.Purpose)
+		}
+		return &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "review", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
+	})
+
+	wiring, err := NewRuntimeWiringWithBackground(
+		store,
+		config.Settings{
+			Model:              "gpt-5",
+			ModelContextWindow: 200000,
+			Reviewer:           config.ReviewerSettings{Frequency: "all", Model: "gpt-5"},
+			Timeouts:           config.Timeouts{ModelRequestSeconds: 1},
+		},
+		nil,
+		root,
+		nil,
+		nil,
+		nil,
+		RuntimeWiringOptions{
+			Client:                &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}}},
+			ReviewerClientFactory: factory,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
+	}
+	t.Cleanup(func() { _ = wiring.Close() })
+	if reviewerCalls != 1 {
+		t.Fatalf("reviewer factory calls = %d, want 1", reviewerCalls)
+	}
+}
+
 func TestRuntimeClientFactoryReceivesActivationContext(t *testing.T) {
 	t.Parallel()
 

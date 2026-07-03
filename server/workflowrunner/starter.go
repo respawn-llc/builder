@@ -635,7 +635,7 @@ func (s *Starter) workflowProviderCapabilities(ctx context.Context, plan launch.
 func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.SessionPlan) (llm.Client, error) {
 	active := plan.ActiveSettings
 	if s.runtimeClientFactory != nil {
-		return s.runtimeClientFactory.NewRuntimeClient(ctx, runtimewire.RuntimeClientRequest{
+		client, err := s.runtimeClientFactory.NewRuntimeClient(ctx, runtimewire.RuntimeClientRequest{
 			Purpose:        runtimewire.RuntimeClientPurposeWorkflow,
 			SessionID:      plan.Store.Meta().SessionID,
 			ActiveSettings: plan.ActiveSettings,
@@ -653,6 +653,13 @@ func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.Ses
 				ProviderCapabilitiesOverride: workflowProviderCapabilitiesOverridePtr(active.ProviderCapabilities),
 			},
 		})
+		if err != nil {
+			return nil, err
+		}
+		if client == nil {
+			return nil, fmt.Errorf("runtime client factory returned nil client for workflow purpose")
+		}
+		return client, nil
 	}
 	var authProvider llm.AuthHeaderProvider
 	if s.authManager != nil {
@@ -795,6 +802,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 			FastMode:                            nil,
 			Sources:                             plan.Source.Sources,
 			Client:                              client,
+			ReviewerClientFactory:               s.runtimeClientFactory,
 			GlobalConfigDir:                     s.cfg.PersistenceRoot,
 			SkipContinuationAgentRoleValidation: workflowRunPromptOverrides(input.Node.SubagentRole).HasAny(),
 			StepLifecycle:                       runtimewire.NewStepLifecycleSink(sessionID, s.runtimes),

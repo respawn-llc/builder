@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -53,7 +54,7 @@ func run(ctx context.Context, args []string) error {
 		OpenAIBaseURLExplicit: true,
 	})
 	if err := appfixture.WriteObservation(flags.ObservationPath, runtime.Observation(runErr)); err != nil {
-		return err
+		return errors.Join(runErr, fmt.Errorf("write observation: %w", err))
 	}
 	return runErr
 }

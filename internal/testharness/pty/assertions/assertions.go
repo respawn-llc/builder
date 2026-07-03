@@ -73,22 +73,21 @@ func ContentAppendedExactlyOnce(appends []analyzer.AppendOperation, content stri
 }
 
 func NoAlternateScroll1007(analysis analyzer.Analysis, windows ...analyzer.OperationWindow) error {
-	start := 0
-	end := len(analysis.Operations)
+	ranges := []analyzer.OperationWindow{{Start: 0, End: len(analysis.Operations)}}
 	if len(windows) > 0 {
-		window := windows[0]
+		ranges = windows
+	}
+	for _, window := range ranges {
 		if err := validateWindow(analysis, window); err != nil {
 			return err
 		}
-		start = window.Start
-		end = window.End
-	}
-	for _, operation := range analysis.Operations[start:end] {
-		if operation.Kind != analyzer.OperationModeChange || operation.PrivateMode == nil {
-			continue
-		}
-		if operation.PrivateMode.Mode == 1007 && operation.PrivateMode.Enabled {
-			return fmt.Errorf("forbidden private mode ?1007 enabled at chunk=%d byte_range=%+v", operation.ChunkIndex, operation.ByteRange)
+		for _, operation := range analysis.Operations[window.Start:window.End] {
+			if operation.Kind != analyzer.OperationModeChange || operation.PrivateMode == nil {
+				continue
+			}
+			if operation.PrivateMode.Mode == 1007 && operation.PrivateMode.Enabled {
+				return fmt.Errorf("forbidden private mode ?1007 enabled at chunk=%d byte_range=%+v", operation.ChunkIndex, operation.ByteRange)
+			}
 		}
 	}
 	return nil

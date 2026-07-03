@@ -64,6 +64,23 @@ func TestWorkflowRuntimeClientFactoryErrorDoesNotFallbackToProvider(t *testing.T
 	}
 }
 
+func TestWorkflowRuntimeClientFactoryRejectsNilClient(t *testing.T) {
+	t.Parallel()
+
+	store := newWorkflowFactorySession(t)
+	starter := &Starter{runtimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+		return nil, nil
+	})}
+
+	_, _, err := starter.workflowProviderCapabilities(context.Background(), launch.SessionPlan{
+		Store:          store,
+		ActiveSettings: config.Settings{Model: "gpt-5"},
+	}, nil)
+	if err == nil {
+		t.Fatal("workflowProviderCapabilities succeeded with nil factory client")
+	}
+}
+
 func TestNewStarterRejectsLegacyAndRuntimeClientFactoriesTogether(t *testing.T) {
 	t.Parallel()
 

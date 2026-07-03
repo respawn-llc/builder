@@ -42,6 +42,7 @@ type RuntimeWiringOptions struct {
 	Sources                             map[string]string
 	Client                              llm.Client
 	ClientFactory                       RuntimeClientFactory
+	ReviewerClientFactory               RuntimeClientFactory
 	WorkflowRun                         *workflowruntime.Config
 	AskQuestionBatchSkipped             func(askquestion.AskQuestionBatchMetadata)
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
@@ -124,6 +125,9 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 	newReviewerClient := func() (llm.Client, error) {
 		if opts.ClientFactory != nil {
 			return newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, reviewerProvider)
+		}
+		if opts.ReviewerClientFactory != nil {
+			return newRuntimeClientFromFactory(factoryContext, opts.ReviewerClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, reviewerProvider)
 		}
 		var reviewerAuth llm.AuthHeaderProvider
 		if mgr != nil && !strings.EqualFold(strings.TrimSpace(reviewerProvider.Auth), "none") {
