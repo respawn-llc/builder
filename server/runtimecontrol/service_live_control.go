@@ -40,11 +40,14 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 				memoReq.Text = record.Text
 				return nil
 			})
-			if errors.Is(err, runtime.ErrNoActiveLiveRun) || !accepted {
+			if errors.Is(err, runtime.ErrNoActiveLiveRun) {
 				return serverapi.ErrRuntimeNoActiveRun
 			}
 			if err != nil {
 				return err
+			}
+			if !accepted {
+				return serverapi.ErrRuntimeNoActiveRun
 			}
 			resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: item.Text, ClientRequestID: item.ClientRequestID}
 			return nil

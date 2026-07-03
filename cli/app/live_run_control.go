@@ -64,19 +64,28 @@ func RunLiveWait(ctx context.Context, opts Options, targetSessionID runtimeids.S
 	}
 	defer func() { _ = closeFn() }()
 	resp, err := liveClient.LiveWait(ctx, serverapi.RuntimeLiveWaitRequest{SessionID: targetSessionID.String()})
+	result := runtimeLiveWaitResult(targetSessionID, resp)
+	if err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func runtimeLiveWaitResult(targetSessionID runtimeids.SessionID, resp serverapi.RuntimeLiveWaitResponse) RunPromptResult {
 	resultText := ""
 	if resp.Result != nil {
 		resultText = *resp.Result
 	}
+	sessionID := targetSessionID.String()
+	if strings.TrimSpace(resp.SessionID) != "" {
+		sessionID = resp.SessionID
+	}
 	result := RunPromptResult{
-		SessionID:   resp.SessionID,
+		SessionID:   sessionID,
 		SessionName: resp.SessionName,
 		Result:      resultText,
 		Duration:    time.Duration(resp.DurationMillis) * time.Millisecond,
 		Warnings:    nil,
 	}
-	if err != nil {
-		return result, err
-	}
-	return result, nil
+	return result
 }

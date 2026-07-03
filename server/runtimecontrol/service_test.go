@@ -517,6 +517,40 @@ func TestServiceLiveSteerRecordsHistoryAfterActiveAdmission(t *testing.T) {
 	<-submitDone
 }
 
+func TestServiceLiveSteerPreservesAdmittedPromptHistoryError(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "keep running")
+		submitDone <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active runtime")
+	}
+	historyErr := errors.New("prompt history failed")
+	runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID).SetRecordError(historyErr)
+	_, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       store.Meta().SessionID,
+		Text:            "steer live",
+	})
+	if !errors.Is(err, historyErr) {
+		t.Fatalf("LiveSteer error = %v, want prompt history failure", err)
+	}
+	if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		t.Fatalf("LiveSteer mapped prompt history failure to no-active: %v", err)
+	}
+	_, _ = service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
+		ClientRequestID: "6859fdfa-6808-4109-a031-de3d432e88dd",
+		SessionID:       store.Meta().SessionID,
+	})
+	close(client.release)
+	<-submitDone
+}
+
 func TestServiceLiveStopIdleReturnsIdle(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
 	resp, err := service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
