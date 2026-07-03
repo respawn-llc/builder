@@ -8,6 +8,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeops"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -19,6 +20,22 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 	return runtimeops.Do(s.operations, ctx, memoReq.SessionID, req.OperationRef, memoReq, sameTurnSubmitMemoRequest, func(ctx context.Context, attempt runtimeops.Attempt) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 		start, err := s.beginRunStart(req.SessionID)
 		if err != nil {
+			if errors.Is(err, serverapi.ErrSessionRunStarting) {
+				resp, recordEngine, steered, steerErr := s.trySubmitUserTurnAsActiveLiveSteer(ctx, attempt, memoReq, req)
+				if steerErr != nil {
+					if errors.Is(steerErr, runtime.ErrNoActiveLiveRun) {
+						s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
+						return serverapi.RuntimeSubmitUserTurnResponse{}, err
+					}
+					s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, steerErr, attempt)
+					return serverapi.RuntimeSubmitUserTurnResponse{}, steerErr
+				}
+				if steered {
+					s.operations.RecordQueuedMessageSubmitted(memoReq.SessionID, req.OperationRef)
+					s.recordPromptHistoryAsync(recordEngine, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
+					return resp, nil
+				}
+			}
 			s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
 			return serverapi.RuntimeSubmitUserTurnResponse{}, err
 		}
@@ -88,6 +105,41 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 		}
 		return resp, err
 	})
+}
+
+func (s *Service) trySubmitUserTurnAsActiveLiveSteer(ctx context.Context, attempt runtimeops.Attempt, memoReq turnSubmitMemoRequest, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, *runtime.Engine, bool, error) {
+	var resp serverapi.RuntimeSubmitUserTurnResponse
+	var recordEngine *runtime.Engine
+	steered := false
+	runCtx, stopRunCtx := mergeOperationContexts(ctx, attempt.Context())
+	defer stopRunCtx()
+	liveClientRequestID := runtimeids.NewRuntimeClientRequestID()
+	err := s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
+		recordEngine = engine
+		committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, req.OperationRef, func() error {
+			item, accepted, err := engine.QueueUserMessageForActiveRun(runCtx, memoReq.Text, liveClientRequestID, nil)
+			if err != nil {
+				return err
+			}
+			if !accepted {
+				return runtime.ErrNoActiveLiveRun
+			}
+			resp = serverapi.RuntimeSubmitUserTurnResponse{Steered: true, QueueItemID: item.ID}
+			steered = true
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if !committed {
+			return runtimeops.ErrOperationCanceled
+		}
+		return nil
+	})
+	if err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, recordEngine, steered, err
+	}
+	return resp, recordEngine, steered, nil
 }
 
 func (s *Service) runPreSubmitCompaction(ctx context.Context, sessionID string, ref clientui.RuntimeOperationRef, engine *runtime.Engine) error {

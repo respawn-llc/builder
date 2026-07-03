@@ -71,7 +71,9 @@ type messageLifecycle interface {
 	RestoreMessages() error
 	FlushPendingUserInjections(stepID string, queueItemIDs map[string]struct{}) (int, error)
 	DrainPendingUserInjections() []QueuedUserMessage
+	DrainPendingUserInjectionsByID(ids map[string]struct{}) []QueuedUserMessage
 	QueueUserMessage(text string, clientRequestID string) QueuedUserMessage
+	QueueUserMessageWithID(item QueuedUserMessage) QueuedUserMessage
 	DiscardQueuedUserMessage(queueItemID string) (QueuedUserMessage, bool)
 	HasPendingUserInjections() bool
 }
@@ -105,6 +107,9 @@ type phaseProtocolEnforcer interface {
 
 func (e *Engine) ensureOrchestrationCollaborators() {
 	e.collaboratorsOnce.Do(func() {
+		if e.liveRun == nil {
+			e.liveRun = newLiveRunCoordinator()
+		}
 		if e.stepLifecycle == nil {
 			e.stepLifecycle = &defaultExclusiveStepLifecycle{engine: e}
 		}

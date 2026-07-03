@@ -224,6 +224,7 @@ func (e *Engine) appendQueuedUserMessageFlush(stepID string, text string, batch 
 			},
 		})
 	}
+	e.completeLiveRunQueueItems(queuedUserMessageIDSet(normalizedItems))
 	return nil
 }
 
@@ -247,6 +248,20 @@ func queuedUserMessageStatusItemIDs(items []QueuedUserMessage) []string {
 	for _, item := range items {
 		if strings.TrimSpace(item.ID) != "" {
 			ids = append(ids, strings.TrimSpace(item.ID))
+		}
+	}
+	return ids
+}
+
+func queuedUserMessageIDSet(items []QueuedUserMessage) map[string]struct{} {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if id != "" {
+			ids[id] = struct{}{}
 		}
 	}
 	return ids
@@ -278,6 +293,7 @@ func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) [
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
 	}
+	e.completeLiveRunQueueItems(queuedUserMessageIDSet(messages))
 	return messages
 }
 

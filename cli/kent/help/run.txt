@@ -1,5 +1,8 @@
-Usage of kent run:
+Usage:
   kent run [flags] <prompt>
+  kent run steer [--persistence-root <root>] <session-id> <message...>
+  kent run stop [--persistence-root <root>] <session-id>
+  kent run wait [--persistence-root <root>] [--output-mode=json] <session-id>
 
 What This Does:
   Execute one headless prompt against a workspace without starting the TUI.
@@ -16,6 +19,19 @@ Session Selection:
   `--continue <id>` is the same concept, optimized for chaining follow-up runs.
   `--session` and `--continue` may both be provided only when they match.
 
+Live Controls:
+  `kent run steer <session-id> <message...>` queues a non-empty message into
+  an already-active run and prints `ok`. If the run is idle, use the suggested
+  `kent run --continue <session-id> <message>` command instead.
+  `kent run stop <session-id>` interrupts an active shared runtime and prints
+  `Stopped`; idle and nonexistent sessions print `No active run`.
+  `kent run wait <session-id>` waits for the active run's final answer and
+  prints the same final-text shape as `kent run`. `--output-mode=json` uses
+  the ordinary `kent run` JSON result object.
+  Live controls always require an explicit target session id, never read one
+  from KENT_SESSION_ID, and reject targeting their own KENT_SESSION_ID. Standard
+  input is not a live steering channel.
+
 Subagents:
   `--agent <role>` selects a named role from `[subagents.<role>]` in `~/.kent/config.toml`.
   `--agent default` clears a resumed role and uses the base/default settings.
@@ -26,6 +42,9 @@ Subagents:
 Examples:
   kent run "summarize the unstaged changes"
   kent run --continue <session-id> "follow-up"
+  kent run steer <session-id> "use the safer migration path"
+  kent run stop <session-id>
+  kent run wait --output-mode=json <session-id>
   kent run --fast --output-mode=json "scan the repo and return JSON"
   kent run --model gpt-5.4-mini "review this module"
 

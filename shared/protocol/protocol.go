@@ -31,6 +31,7 @@ type CapabilityFlags struct {
 	SessionTranscriptPaging bool `json:"session_transcript_paging"`
 	SessionRuntime          bool `json:"session_runtime"`
 	RuntimeControl          bool `json:"runtime_control"`
+	RuntimeLiveControl      bool `json:"runtime_live_control"`
 	PromptControl           bool `json:"prompt_control"`
 	PromptActivity          bool `json:"prompt_activity"`
 	SessionActivity         bool `json:"session_activity"`

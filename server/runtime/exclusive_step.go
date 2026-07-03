@@ -49,6 +49,11 @@ func (s *defaultExclusiveStepLifecycle) Run(ctx context.Context, options exclusi
 	}
 	if options.EmitRunState {
 		if snapshot := s.Snapshot(); snapshot != nil {
+			s.engine.beginLiveRunStep(snapshot)
+		}
+	}
+	if options.EmitRunState {
+		if snapshot := s.Snapshot(); snapshot != nil {
 			mode := runModeFromActiveKind(snapshot.ActiveKind)
 			_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: &RunState{
 				Lifecycle:  RunningRunLifecycle(mode),
@@ -98,6 +103,9 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		wrapped := fmt.Errorf("%w: %w", errPendingModelRecoveryClear, clearErr)
 		_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventInFlightClearFailed, StepID: stepID, Error: wrapped.Error()}))
 		err = errors.Join(err, wrapped)
+	}
+	if options.EmitRunState {
+		s.engine.finishLiveRunStep(snapshot, status, err)
 	}
 	s.finishTerminalPublication()
 	if !errors.Is(err, errPendingModelRecoveryClear) {

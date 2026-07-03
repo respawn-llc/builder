@@ -21,6 +21,7 @@ var dialConfiguredRemote = client.DialConfiguredRemoteForProjectWorkspaceID
 var dialConfiguredProjectViewRemote = func(ctx context.Context, cfg config.App) (remoteattach.ProjectViewRemote, error) {
 	return client.DialConfiguredRemote(ctx, cfg)
 }
+var dialConfiguredRuntimeLiveControlRemote = client.DialConfiguredRemote
 
 var configuredRemoteAttachTimeout = 500 * time.Millisecond
 var configuredRemoteWorkspaceDiscoveryTimeout = 5 * time.Second
@@ -92,6 +93,32 @@ func startRunPromptClient(ctx context.Context, opts Options) (client.RunPromptCl
 		return nil, nil, err
 	}
 	return target.Value.Client, target.Close, nil
+}
+
+func startRuntimeLiveControlClient(ctx context.Context, opts Options) (client.RuntimeLiveControlClient, func() error, error) {
+	cfg, err := loadRemoteAttachConfig(opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	attachCtx, cancel := context.WithTimeout(ctx, configuredRemoteAttachTimeout)
+	defer cancel()
+	remote, err := dialConfiguredRuntimeLiveControlRemote(attachCtx, cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %v", errRunRequiresServer, err)
+	}
+	if err := remote.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
+		_ = remote.Close()
+		return nil, nil, errRunServerRootMismatch
+	}
+	if !remoteattach.SupportsRuntimeLiveControl(remote.Identity().Capabilities) {
+		_ = remote.Close()
+		return nil, nil, errRunServerIncompatible
+	}
+	if err := ensureRemoteAuthReady(ctx, remote, cfg.Settings, newHeadlessAuthInteractor(), false); err != nil {
+		_ = remote.Close()
+		return nil, nil, err
+	}
+	return remote, remote.Close, nil
 }
 
 // errRunRequiresServer is returned when no server is reachable for `kent run`.

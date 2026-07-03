@@ -81,6 +81,7 @@ type GatewaySessionDependencies interface {
 
 type GatewayRuntimeDependencies interface {
 	RuntimeControlClient() client.RuntimeControlClient
+	RuntimeLiveControlClient() client.RuntimeLiveControlClient
 }
 
 type GatewayPromptDependencies interface {
@@ -114,6 +115,19 @@ var gatewayProgressHandlerEntries = map[string]gatewayProgressHandler{
 type gatewayProgressHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) bool
 
 var gatewayProgressHandlers = routeHandlersForKind(rpccontract.KindProgress, gatewayProgressHandlerEntries)
+
+func RuntimeLiveControlRoutesExecutable() bool {
+	for _, method := range []string{
+		protocol.MethodRuntimeLiveSteer,
+		protocol.MethodRuntimeLiveStop,
+		protocol.MethodRuntimeLiveWait,
+	} {
+		if _, ok := gatewayUnaryHandlers[method]; !ok {
+			return false
+		}
+	}
+	return true
+}
 
 func protocolSubscriptionMethodSet() map[string]struct{} {
 	methods := rpccontract.SubscriptionMethods()
@@ -356,6 +370,12 @@ func protocolError(err error) (int, string) {
 	}
 	if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
 		return protocol.ErrCodeRuntimeUnavailable, message
+	}
+	if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		return protocol.ErrCodeRuntimeNoActiveRun, message
+	}
+	if errors.Is(err, serverapi.ErrRuntimeNoFinalAnswer) {
+		return protocol.ErrCodeRuntimeNoFinalAnswer, message
 	}
 	if errors.Is(err, serverapi.ErrStreamUnavailable) {
 		return protocol.ErrCodeStreamUnavailable, message

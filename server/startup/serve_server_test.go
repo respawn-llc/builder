@@ -199,6 +199,7 @@ func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
 		!capabilities.SessionTranscriptPaging ||
 		!capabilities.SessionRuntime ||
 		!capabilities.RuntimeControl ||
+		!capabilities.RuntimeLiveControl ||
 		!capabilities.PromptControl ||
 		!capabilities.PromptActivity ||
 		!capabilities.SessionActivity ||
@@ -225,8 +226,16 @@ func TestServerCapabilityFlagsReflectMissingRoutes(t *testing.T) {
 	if capabilities.AuthBootstrap ||
 		capabilities.SessionAttach ||
 		capabilities.SessionTranscriptPaging ||
+		capabilities.RuntimeLiveControl ||
 		capabilities.AttentionNotifications {
 		t.Fatalf("capabilities must not be true without their routes/dependencies: %+v", capabilities)
+	}
+}
+
+func TestServerCapabilityFlagsAdvertiseRuntimeLiveControlWhenHandlersAreExecutable(t *testing.T) {
+	capabilities := serverCapabilityFlags(rpccontract.Routes())
+	if !capabilities.RuntimeLiveControl {
+		t.Fatalf("RuntimeLiveControl not advertised after executable live handlers are wired: %+v", capabilities)
 	}
 }
 

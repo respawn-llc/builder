@@ -23,6 +23,7 @@ type ActiveStepSnapshot struct {
 type ResolverSnapshot struct {
 	Registry            RegistrySnapshot
 	Active              *ActiveStepSnapshot
+	LiveRunActive       bool
 	PromptWait          bool
 	PendingContinuation PendingContinuationSnapshot
 }
@@ -48,6 +49,9 @@ func ResolveRuntimeActivity(snapshot ResolverSnapshot) (clientui.RuntimeActivity
 			StepID:         snapshot.Active.StepID,
 			QueueAccepting: snapshot.Registry.QueueAccepting,
 		})
+	}
+	if snapshot.LiveRunActive {
+		return clientui.NewRuntimeActivity(clientui.RuntimeActivityDraining, clientui.RuntimeActivityOptions{})
 	}
 	if snapshot.Registry.Starting || snapshot.PendingContinuation.Promoted {
 		return clientui.NewRuntimeActivity(clientui.RuntimeActivityStarting, clientui.RuntimeActivityOptions{})

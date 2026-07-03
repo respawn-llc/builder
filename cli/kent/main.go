@@ -18,6 +18,8 @@ import (
 	"core/prompts"
 	"core/shared/config"
 	"core/shared/llmerrors"
+	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/sessionenv"
 	"golang.org/x/term"
 )
@@ -71,6 +73,9 @@ const (
 
 var runInteractiveApp = app.Run
 var runPromptApp = app.RunPrompt
+var runLiveSteerApp = app.RunLiveSteer
+var runLiveStopApp = app.RunLiveStop
+var runLiveWaitApp = app.RunLiveWait
 
 func main() {
 	redirectServiceLogs()
@@ -242,6 +247,14 @@ func publishPersistenceRootEnv(flagValue string) error {
 }
 
 func runSubcommand(args []string) int {
+	switch liveControlSubcommand(args) {
+	case "steer":
+		return runLiveSteerSubcommand(args[1:])
+	case "stop":
+		return runLiveStopSubcommand(args[1:])
+	case "wait":
+		return runLiveWaitSubcommand(args[1:])
+	}
 	runFS := flag.NewFlagSet(config.Command+" run", flag.ContinueOnError)
 	runFS.SetOutput(os.Stderr)
 	runFS.Usage = func() { runUsage.write(runFS) }
@@ -385,6 +398,243 @@ func runSubcommand(args []string) int {
 		emitRunFinalText(os.Stdout, result.Warnings, result.Result, continueHint)
 	}
 	return 0
+}
+
+func liveControlSubcommand(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	verb := args[0]
+	switch verb {
+	case "steer", "stop", "wait":
+	default:
+		return ""
+	}
+	positionals, help := liveControlPositionals(verb, args[1:])
+	if help || len(args) == 1 || len(positionals) == 0 {
+		return verb
+	}
+	if _, err := runtimeids.ParseSessionID(positionals[0]); err != nil {
+		return ""
+	}
+	switch verb {
+	case "steer":
+		if len(positionals) >= 2 {
+			return verb
+		}
+	case "stop", "wait":
+		if len(positionals) == 1 {
+			return verb
+		}
+	}
+	return ""
+}
+
+func liveControlPositionals(verb string, args []string) ([]string, bool) {
+	positionals := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--":
+			positionals = append(positionals, args[i+1:]...)
+			return positionals, false
+		case arg == "-h" || arg == "--help":
+			return positionals, true
+		case arg == "--persistence-root":
+			i++
+		case strings.HasPrefix(arg, "--persistence-root="):
+		case verb == "wait" && arg == "--output-mode":
+			i++
+		case verb == "wait" && strings.HasPrefix(arg, "--output-mode="):
+		default:
+			positionals = append(positionals, arg)
+		}
+	}
+	return positionals, false
+}
+
+func runLiveSteerSubcommand(args []string) int {
+	fs := flag.NewFlagSet(config.Command+" run steer", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	persistenceRoot := fs.String("persistence-root", "", "config and data root directory")
+	if err := fs.Parse(args); err != nil {
+		return runLiveFlagError(err)
+	}
+	remaining := fs.Args()
+	if len(remaining) < 2 {
+		emitRunUsageError(runOutputModeFinalText, "usage: kent run steer <session-id> <message>")
+		return 2
+	}
+	sessionID, err := parseCLILiveSessionID(remaining[0])
+	if err != nil {
+		emitRunUsageError(runOutputModeFinalText, err.Error())
+		return 2
+	}
+	message := strings.TrimSpace(strings.Join(remaining[1:], " "))
+	if message == "" {
+		emitRunUsageError(runOutputModeFinalText, "message is required")
+		return 2
+	}
+	if err := rejectSelfTarget(sessionID, "kent run steer "+strings.Join(args, " ")); err != nil {
+		emitRunUsageError(runOutputModeFinalText, err.Error())
+		return 2
+	}
+	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
+		emitRunUsageError(runOutputModeFinalText, err.Error())
+		return 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if _, err := runLiveSteerApp(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID, message); err != nil {
+		fmt.Fprintln(os.Stderr, runErrorMessage(err))
+		if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+			fmt.Fprintln(os.Stderr)
+			fmt.Fprintf(os.Stderr, "To continue this session instead, execute `%s`.\n", buildRunSteerContinueCommand(sessionID.String(), continueCommandPersistenceRoot(*persistenceRoot), message))
+		}
+		return 1
+	}
+	fmt.Fprintln(os.Stdout, "ok")
+	return 0
+}
+
+func runLiveStopSubcommand(args []string) int {
+	fs := flag.NewFlagSet(config.Command+" run stop", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	persistenceRoot := fs.String("persistence-root", "", "config and data root directory")
+	if err := fs.Parse(args); err != nil {
+		return runLiveFlagError(err)
+	}
+	remaining := fs.Args()
+	if len(remaining) != 1 {
+		emitRunUsageError(runOutputModeFinalText, "usage: kent run stop <session-id>")
+		return 2
+	}
+	sessionID, err := parseCLILiveSessionID(remaining[0])
+	if err != nil {
+		emitRunUsageError(runOutputModeFinalText, err.Error())
+		return 2
+	}
+	if err := rejectSelfTarget(sessionID, "kent run stop "+strings.Join(args, " ")); err != nil {
+		emitRunUsageError(runOutputModeFinalText, err.Error())
+		return 2
+	}
+	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
+		emitRunUsageError(runOutputModeFinalText, err.Error())
+		return 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	result, err := runLiveStopApp(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, runErrorMessage(err))
+		return 1
+	}
+	if result.Status == serverapi.RuntimeLiveStopStatusStopped {
+		fmt.Fprintln(os.Stdout, "Stopped")
+	} else {
+		fmt.Fprintln(os.Stdout, "No active run")
+	}
+	return 0
+}
+
+func runLiveWaitSubcommand(args []string) int {
+	fs := flag.NewFlagSet(config.Command+" run wait", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	persistenceRoot := fs.String("persistence-root", "", "config and data root directory")
+	outputModeRaw := fs.String("output-mode", string(runOutputModeFinalText), "output mode: final-text|json")
+	usageOutputMode := inferRunOutputMode(args)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		emitRunUsageError(usageOutputMode, err.Error())
+		return 2
+	}
+	outputMode, err := parseRunOutputMode(*outputModeRaw)
+	if err != nil {
+		emitRunUsageError(usageOutputMode, err.Error())
+		return 2
+	}
+	remaining := fs.Args()
+	if len(remaining) != 1 {
+		emitRunUsageError(outputMode, "usage: kent run wait <session-id>")
+		return 2
+	}
+	sessionID, err := parseCLILiveSessionID(remaining[0])
+	if err != nil {
+		emitRunUsageError(outputMode, err.Error())
+		return 2
+	}
+	if err := rejectSelfTarget(sessionID, "kent run wait "+strings.Join(args, " ")); err != nil {
+		emitRunUsageError(outputMode, err.Error())
+		return 2
+	}
+	if err := publishPersistenceRootEnv(*persistenceRoot); err != nil {
+		emitRunUsageError(outputMode, err.Error())
+		return 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	result, runErr := runLiveWaitApp(ctx, app.Options{ConfigRoot: strings.TrimSpace(*persistenceRoot)}, sessionID)
+	continueRoot := continueCommandPersistenceRoot(*persistenceRoot)
+	continueHint := buildRunContinueHint(result.SessionID, continueRoot)
+	continueCmd := prompts.ContinueRunCommandWithRoot(result.SessionID, continueRoot)
+	if runErr != nil {
+		if outputMode == runOutputModeJSON {
+			emitRunJSON(runJSONResult{Status: "error", SessionID: result.SessionID, SessionName: result.SessionName, ContinueID: result.SessionID, ContinueCmd: continueCmd, DurationMS: result.Duration.Milliseconds(), Error: &runJSONError{Code: runErrorCode(runErr), Message: runErrorMessage(runErr)}})
+		} else {
+			fmt.Fprintln(os.Stderr, runErrorMessage(runErr))
+			if continueHint != "" {
+				fmt.Fprintln(os.Stderr)
+				fmt.Fprintln(os.Stderr, continueHint)
+			}
+		}
+		if runErrorCode(runErr) == "interrupted" {
+			return 130
+		}
+		return 1
+	}
+	if outputMode == runOutputModeJSON {
+		emitRunJSON(runJSONResult{Status: "ok", Result: result.Result, SessionID: result.SessionID, SessionName: result.SessionName, ContinueID: result.SessionID, ContinueCmd: continueCmd, DurationMS: result.Duration.Milliseconds()})
+		return 0
+	}
+	emitRunFinalText(os.Stdout, result.Warnings, result.Result, continueHint)
+	return 0
+}
+
+func runLiveFlagError(err error) int {
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
+	emitRunUsageError(runOutputModeFinalText, err.Error())
+	return 2
+}
+
+func parseCLILiveSessionID(raw string) (runtimeids.SessionID, error) {
+	return runtimeids.ParseSessionID(raw)
+}
+
+func rejectSelfTarget(targetSessionID runtimeids.SessionID, commandText string) error {
+	currentID, ok := currentSessionIDForSelfTarget()
+	if !ok {
+		return nil
+	}
+	if currentID == targetSessionID {
+		return errors.New(prompts.RenderLiveControlSelfTargetDeniedPrompt(strings.TrimSpace(commandText)))
+	}
+	return nil
+}
+
+func currentSessionIDForSelfTarget() (runtimeids.SessionID, bool) {
+	current, ok := sessionenv.LookupSessionID(os.LookupEnv)
+	if !ok {
+		return runtimeids.SessionID{}, false
+	}
+	currentID, err := parseCLILiveSessionID(current)
+	if err != nil {
+		return runtimeids.SessionID{}, false
+	}
+	return currentID, true
 }
 
 func registerCommonFlags(fs *flag.FlagSet, includeSession bool) *commonFlags {
@@ -612,6 +862,24 @@ func buildRunContinueHint(sessionID, persistenceRoot string) string {
 		return ""
 	}
 	return fmt.Sprintf("To continue this run, execute `%s`.", command)
+}
+
+func buildRunSteerContinueCommand(sessionID, persistenceRoot, message string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	message = strings.TrimSpace(message)
+	if sessionID == "" || message == "" {
+		return ""
+	}
+	tokens := []string{"kent", "run"}
+	if root := strings.TrimSpace(persistenceRoot); root != "" {
+		tokens = append(tokens, "--persistence-root", root)
+	}
+	tokens = append(tokens, "--continue", sessionID, message)
+	quoted := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		quoted = append(quoted, shellQuote(token))
+	}
+	return strings.Join(quoted, " ")
 }
 
 // continueCommandPersistenceRoot returns the absolute root to embed in a

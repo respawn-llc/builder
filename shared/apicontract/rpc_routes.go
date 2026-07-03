@@ -28,19 +28,21 @@ const (
 type ScopePolicy string
 
 const (
-	ScopeNone                      ScopePolicy = "none"
-	ScopeAttachProject             ScopePolicy = "attach_project"
-	ScopeAttachSession             ScopePolicy = "attach_session"
-	ScopeProjectView               ScopePolicy = "project_view"
-	ScopeProjectWorkspace          ScopePolicy = "project_workspace"
-	ScopeSessionActiveProject      ScopePolicy = "session_active_project"
-	ScopeSessionActiveProjectIfSet ScopePolicy = "session_active_project_if_set"
-	ScopeSessionAttachedProject    ScopePolicy = "session_attached_project"
-	ScopeAttachedSession           ScopePolicy = "attached_session"
-	ScopeGoalSession               ScopePolicy = "goal_session"
-	ScopeProcessActiveProject      ScopePolicy = "process_active_project"
-	ScopeProcessListActiveProject  ScopePolicy = "process_list_active_project"
-	ScopeNotification              ScopePolicy = "notification"
+	ScopeNone                       ScopePolicy = "none"
+	ScopeAttachProject              ScopePolicy = "attach_project"
+	ScopeAttachSession              ScopePolicy = "attach_session"
+	ScopeProjectView                ScopePolicy = "project_view"
+	ScopeProjectWorkspace           ScopePolicy = "project_workspace"
+	ScopeSessionActiveProject       ScopePolicy = "session_active_project"
+	ScopeSessionActiveProjectIfSet  ScopePolicy = "session_active_project_if_set"
+	ScopeSessionAttachedProject     ScopePolicy = "session_attached_project"
+	ScopeAttachedSession            ScopePolicy = "attached_session"
+	ScopeGoalSession                ScopePolicy = "goal_session"
+	ScopeRuntimeLiveSessionRequired ScopePolicy = "runtime_live_session_required"
+	ScopeRuntimeLiveSessionOptional ScopePolicy = "runtime_live_session_optional"
+	ScopeProcessActiveProject       ScopePolicy = "process_active_project"
+	ScopeProcessListActiveProject   ScopePolicy = "process_list_active_project"
+	ScopeNotification               ScopePolicy = "notification"
 )
 
 type ConnectionStrategy string
@@ -276,6 +278,9 @@ var routeContracts = []Route{
 	dedicatedUnary[serverapi.RuntimeSubmitQueuedUserMessagesRequest, serverapi.RuntimeSubmitQueuedUserMessagesResponse](protocol.MethodRuntimeSubmitQueuedUserMessages, "runtime-submit-queued-user-messages", ScopeSessionActiveProject, DependencyRuntimeControl),
 	dedicatedUnary[serverapi.RuntimeInterruptRequest, serverapi.RuntimeInterruptResponse](protocol.MethodRuntimeInterrupt, "runtime-interrupt", ScopeSessionActiveProject, DependencyRuntimeControl),
 	unary[serverapi.RuntimeQueueUserMessageRequest, serverapi.RuntimeQueueUserMessageResponse](protocol.MethodRuntimeQueueUserMessage, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
+	unary[serverapi.RuntimeLiveSteerRequest, serverapi.RuntimeLiveSteerResponse](protocol.MethodRuntimeLiveSteer, AuthServer, ScopeRuntimeLiveSessionRequired, ConnectionControl, DependencyRuntimeControl),
+	dedicatedUnary[serverapi.RuntimeLiveStopRequest, serverapi.RuntimeLiveStopResponse](protocol.MethodRuntimeLiveStop, "runtime-live-stop", ScopeRuntimeLiveSessionOptional, DependencyRuntimeControl),
+	dedicatedUnary[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](protocol.MethodRuntimeLiveWait, "runtime-live-wait", ScopeRuntimeLiveSessionRequired, DependencyRuntimeControl),
 	unary[serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](protocol.MethodRuntimeDiscardQueuedUserMessage, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	unary[serverapi.RuntimeRecordPromptHistoryRequest, struct{}](protocol.MethodRuntimeRecordPromptHistory, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	unary[serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](protocol.MethodRuntimeGoalShow, AuthServer, ScopeGoalSession, ConnectionControl, DependencyRuntimeControl),

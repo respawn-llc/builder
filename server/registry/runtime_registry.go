@@ -504,6 +504,9 @@ func (r *RuntimeRegistry) runtimeActivityResolverSnapshot(ctx context.Context, s
 	}
 	snapshot := runtimeactivity.ResolverSnapshot{Registry: r.RuntimeActivityRegistrySnapshot(id)}
 	snapshot.Active = runtimeactivity.ActiveStepFromProvider(engine)
+	if engine != nil {
+		snapshot.LiveRunActive = engine.HasActiveLiveRunGroup()
+	}
 	if entry != nil && len(entry.pendingPrompts.List()) > 0 {
 		snapshot.PromptWait = true
 	}

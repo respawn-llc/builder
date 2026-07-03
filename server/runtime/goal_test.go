@@ -872,10 +872,53 @@ func TestGoalLoopStopsAfterPauseOrClearDuringActiveTurn(t *testing.T) {
 			}
 			client.releaseCall(1)
 			waitGoalLoopRunning(t, engine, false)
+			waitActiveLiveRunGroup(t, engine, false)
 			if got := client.callCount(); got != 1 {
 				t.Fatalf("model calls = %d, want 1", got)
 			}
 		})
+	}
+}
+
+func TestGoalLoopKeepsLiveRunActiveAcrossAutoContinuingTurns(t *testing.T) {
+	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
+	client := newScriptedGoalLoopClient()
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	client.beforeReturn = func(call int) {
+		if call == 2 {
+			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
+		}
+	}
+	if _, err := engine.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if err := engine.StartGoalLoop(); err != nil {
+		t.Fatalf("StartGoalLoop: %v", err)
+	}
+	client.waitStarted(t, 1)
+	waitActiveLiveRunGroup(t, engine, true)
+
+	waitDone := make(chan error, 1)
+	go func() {
+		_, err := engine.WaitForActiveRunResult(context.Background())
+		waitDone <- err
+	}()
+
+	client.releaseCall(1)
+	client.waitStarted(t, 2)
+	assertWaitStillBlocked(t, waitDone)
+	waitActiveLiveRunGroup(t, engine, true)
+
+	client.releaseCall(2)
+	waitGoalLoopRunning(t, engine, false)
+	waitActiveLiveRunGroup(t, engine, false)
+	select {
+	case err := <-waitDone:
+		if !errors.Is(err, ErrLiveRunNoFinalAnswer) {
+			t.Fatalf("WaitForActiveRunResult error = %v, want %v", err, ErrLiveRunNoFinalAnswer)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for live run result")
 	}
 }
 
@@ -1376,5 +1419,32 @@ func waitGoalLoopContinuationEnforced(t *testing.T, engine *Engine, want bool) {
 			t.Fatalf("goalLoopContinuationEnforced = %t, want %t", enforced, want)
 		case <-ticker.C:
 		}
+	}
+}
+
+func waitActiveLiveRunGroup(t *testing.T, engine *Engine, want bool) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		active := engine.HasActiveLiveRunGroup()
+		if active == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("HasActiveLiveRunGroup = %t, want %t", active, want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func assertWaitStillBlocked(t *testing.T, waitDone <-chan error) {
+	t.Helper()
+	select {
+	case err := <-waitDone:
+		t.Fatalf("live wait completed before auto-continuing goal turn finished: %v", err)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
