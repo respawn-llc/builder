@@ -36,9 +36,6 @@ func waitRuntimeEvent(ch <-chan clientui.Event) tea.Cmd {
 }
 
 func runtimeEventBatchFence(evt clientui.Event) bool {
-	if len(evt.TranscriptEntries) > 0 {
-		return true
-	}
 	switch evt.Kind {
 	case clientui.EventStreamGap,
 		clientui.EventConversationUpdated,

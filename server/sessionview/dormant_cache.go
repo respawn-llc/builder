@@ -159,6 +159,6 @@ func (e dormantTranscriptCacheEntry) mainView(meta session.Meta, freshness clien
 	)
 }
 
-func (e dormantTranscriptCacheEntry) newestSegmentTailEntries() []clientui.ChatEntry {
-	return runtimeview.ChatSnapshotFromRuntime(e.newestSegment.Snapshot).Entries
+func (e dormantTranscriptCacheEntry) newestSegmentTailEntries() []runtime.ChatEntry {
+	return append([]runtime.ChatEntry(nil), e.newestSegment.Snapshot.Entries...)
 }

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"core/cli/app/internal/runtimeattach"
-	"core/cli/tui"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -36,13 +35,8 @@ func (c uiInputController) startSubmissionWithPreSubmitQueuePosition(text string
 	} else {
 		m.logf("step.start user_chars=%d", len(text))
 	}
-	if !m.hasRuntimeClient() {
-		if isUserShell {
-			m.forwardToView(tui.AppendTranscriptMsg{Role: "tool_call", Text: command})
-		} else {
-			m.conversationFreshness = clientui.ConversationFreshnessEstablished
-			m.forwardToView(tui.AppendTranscriptMsg{Role: "user", Text: text})
-		}
+	if !m.hasRuntimeClient() && !isUserShell {
+		m.conversationFreshness = clientui.ConversationFreshnessEstablished
 	}
 	m.layout().syncViewport()
 	if isUserShell {
@@ -177,7 +171,6 @@ func (c uiInputController) compactCmd(args string) tea.Cmd {
 func (c uiInputController) startRuntimeOperationAffordance(compacting bool) {
 	m := c.model
 	m.clearReviewerState()
-	m.sawAssistantDelta = false
 	m.clearActiveAssistantStreamSource()
 	if compacting {
 		m.setCompacting(true)
@@ -258,16 +251,9 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	if msg.silentFinal && m.turnQueueHook != nil {
 		m.turnQueueHook.OnTurnQueueAborted()
 	}
-	if !m.hasRuntimeClient() && !msg.silentFinal {
-		if !m.sawAssistantDelta && msg.message != "" {
-			m.forwardToView(tui.StreamAssistantMsg{Delta: msg.message})
-		}
-		m.forwardToView(tui.CommitAssistantMsg{})
-	}
 	m.conversationFreshness = clientui.ConversationFreshnessEstablished
 	m.localConversationTurn = true
 	m.logf("step.done assistant_chars=%d", len(msg.message))
-	m.sawAssistantDelta = false
 	m.clearActiveAssistantStreamSource()
 	if len(m.queued) > 0 {
 		if m.hasRuntimeClient() && c.queuedDrainRequiresHydration() {

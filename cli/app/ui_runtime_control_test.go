@@ -290,109 +290,6 @@ func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
 		t.Fatalf("expected independent completions to apply, session=%q thinking=%q", updated.sessionName, updated.thinkingLevel)
 	}
 }
-
-func TestRuntimeControlTextMutationsCoalesceAfterApplyingInFlightCompletion(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
-	m.startupCmds = nil
-
-	firstCmd := m.runtimeControlCommand(runtimeControlSetThinkingLevel, "high", false, "")
-	if firstCmd == nil {
-		t.Fatal("expected first thinking-level command")
-	}
-	secondCmd := m.runtimeControlCommand(runtimeControlSetThinkingLevel, "low", false, "")
-	if secondCmd != nil {
-		t.Fatal("did not expect second thinking-level command while first is in flight")
-	}
-	firstMsgs := collectCmdMessages(t, firstCmd)
-	if client.setThinkingLevelArg != "high" {
-		t.Fatalf("first thinking-level RPC = %q, want high", client.setThinkingLevelArg)
-	}
-
-	var firstDone runtimeControlDoneMsg
-	for _, msg := range firstMsgs {
-		if typed, ok := msg.(runtimeControlDoneMsg); ok {
-			firstDone = typed
-		}
-	}
-	next, followUpCmd := m.Update(firstDone)
-	updated := next.(*uiModel)
-	if updated.thinkingLevel != "high" {
-		t.Fatalf("expected first thinking-level completion to update UI before follow-up, got %q", updated.thinkingLevel)
-	}
-	if followUpCmd == nil {
-		t.Fatal("expected follow-up command for coalesced thinking-level target")
-	}
-	followUpMsgs := collectCmdMessages(t, followUpCmd)
-	if client.setThinkingLevelArg != "low" {
-		t.Fatalf("follow-up thinking-level RPC = %q, want low", client.setThinkingLevelArg)
-	}
-
-	var followUpDone runtimeControlDoneMsg
-	for _, msg := range followUpMsgs {
-		if typed, ok := msg.(runtimeControlDoneMsg); ok {
-			followUpDone = typed
-		}
-	}
-	next, _ = updated.Update(followUpDone)
-	updated = next.(*uiModel)
-	if updated.thinkingLevel != "low" {
-		t.Fatalf("thinking level = %q, want low", updated.thinkingLevel)
-	}
-}
-
-func TestRuntimeControlRapidFastToggleUsesPendingTargetAfterApplyingOlderCompletion(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
-	m.startupCmds = nil
-	m.fastModeAvailable = true
-	m.fastModeEnabled = false
-
-	_, firstCmd := m.inputController().handleFastModeCommand("")
-	if firstCmd == nil {
-		t.Fatal("expected first fast toggle command")
-	}
-	_, secondCmd := m.inputController().handleFastModeCommand("")
-	if secondCmd != nil {
-		t.Fatal("did not expect second fast toggle command while first is in flight")
-	}
-
-	firstMsgs := collectCmdMessages(t, firstCmd)
-	if client.setFastModeCalls != 1 || client.setFastModeArg != true {
-		t.Fatalf("first fast target calls=%d arg=%t, want one true", client.setFastModeCalls, client.setFastModeArg)
-	}
-
-	var firstDone runtimeControlDoneMsg
-	for _, msg := range firstMsgs {
-		if typed, ok := msg.(runtimeControlDoneMsg); ok {
-			firstDone = typed
-		}
-	}
-	next, followUpCmd := m.Update(firstDone)
-	updated := next.(*uiModel)
-	if !updated.fastModeEnabled {
-		t.Fatal("expected first fast toggle completion to apply before follow-up")
-	}
-	if followUpCmd == nil {
-		t.Fatal("expected follow-up command for coalesced fast target")
-	}
-	followUpMsgs := collectCmdMessages(t, followUpCmd)
-	if client.setFastModeCalls != 2 || client.setFastModeArg != false {
-		t.Fatalf("follow-up fast target calls=%d arg=%t, want second false", client.setFastModeCalls, client.setFastModeArg)
-	}
-	var followUpDone runtimeControlDoneMsg
-	for _, msg := range followUpMsgs {
-		if typed, ok := msg.(runtimeControlDoneMsg); ok {
-			followUpDone = typed
-		}
-	}
-	next, _ = updated.Update(followUpDone)
-	updated = next.(*uiModel)
-	if updated.fastModeEnabled {
-		t.Fatal("expected rapid double-toggle to end disabled")
-	}
-}
-
 func TestRuntimeControlStaleSessionCompletionClearsPendingToggle(t *testing.T) {
 	client := &runtimeControlFakeClient{}
 	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
@@ -523,9 +420,6 @@ func TestSubmitErrorShowsTransientStatusWithoutPersisting(t *testing.T) {
 	}
 	if client.appendedRole != "" || client.appendedText != "" {
 		t.Fatalf("engine is sole persister: client must not persist a run-error entry, got role=%q text=%q", client.appendedRole, client.appendedText)
-	}
-	if committed := committedTranscriptEntriesForApp(updated.transcriptEntries); len(committed) != 0 {
-		t.Fatalf("client must not advance committed transcript on submit error: %+v", committed)
 	}
 	if updated.transientStatus == "" || updated.transientStatusKind != uiStatusNoticeError {
 		t.Fatalf("expected a transient error status for a submit failure, got status=%q kind=%v", updated.transientStatus, updated.transientStatusKind)

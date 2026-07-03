@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"core/cli/tui"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -77,16 +76,6 @@ func withTrueColor(t *testing.T) {
 	previousProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
-}
-
-func committedTranscriptEntriesForApp(entries []tui.TranscriptEntry) []tui.TranscriptEntry {
-	out := make([]tui.TranscriptEntry, 0, len(entries))
-	for _, entry := range entries {
-		if entry.Committed {
-			out = append(out, entry)
-		}
-	}
-	return out
 }
 
 type stubProgressiveStatusCollector struct {

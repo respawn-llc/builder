@@ -14,7 +14,18 @@ import (
 	"core/shared/clientui"
 	"core/shared/toolspec"
 	"core/shared/transcript"
-	patchformat "core/shared/transcript/patchformat"
+)
+
+const (
+	projectionWorkspaceID  = "10000000-0000-4000-8000-000000000001"
+	projectionRunID        = "10000000-0000-4000-8000-000000000002"
+	projectionStepID       = "10000000-0000-4000-8000-000000000003"
+	projectionBackgroundID = "10000000-0000-4000-8000-000000000004"
+	projectionGoalID       = "10000000-0000-4000-8000-000000000005"
+	projectionParentID     = "10000000-0000-4000-8000-000000000006"
+	projectionWorkflowRun  = "10000000-0000-4000-8000-000000000007"
+	projectionWorkflowTask = "10000000-0000-4000-8000-000000000008"
+	projectionWorkflowID   = "10000000-0000-4000-8000-000000000009"
 )
 
 type projectionFastClient struct{}
@@ -76,7 +87,7 @@ func (c projectionPreciseClient) ProviderCapabilities(context.Context) (llm.Prov
 func newRuntimeViewStore(t *testing.T) *session.Store {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := session.Create(dir, "ws", dir)
+	store, err := session.Create(dir, projectionWorkspaceID, dir)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
@@ -97,22 +108,19 @@ func newRuntimeViewEngine(t *testing.T, store *session.Store, client llm.Client,
 	return engine
 }
 
-func TestEventFromRuntimeProjectsReasoningAndBackground(t *testing.T) {
+func TestEventFromRuntimeProjectsReasoningBackgroundAndRunState(t *testing.T) {
 	exitCode := 17
 	view := EventFromRuntime(runtime.Event{
 		Kind:                       runtime.EventBackgroundUpdated,
-		StepID:                     "step-1",
+		StepID:                     projectionStepID,
 		CommittedTranscriptChanged: true,
 		AssistantDelta:             "delta",
 		AssistantDeltaPhase:        llm.MessagePhaseFinal,
-		AssistantStreamMetadata: &runtime.AssistantStreamMetadata{
-			StepID: "step-1",
-		},
-		ReasoningDelta: &llm.ReasoningSummaryDelta{Key: "k", Role: "reasoning", Text: "thinking"},
-		RunState:       &runtime.RunState{Lifecycle: runtime.RunningRunLifecycle(runtime.RunModeTurn), RunID: "run-1", Status: runtime.RunStatusRunning},
+		ReasoningDelta:             &llm.ReasoningSummaryDelta{Key: "k", Role: "reasoning", Text: "thinking"},
+		RunState:                   &runtime.RunState{Lifecycle: runtime.RunningRunLifecycle(runtime.RunModeTurn), RunID: projectionRunID, ActiveKind: runtime.ActiveKindUserTurn, Status: runtime.RunStatusRunning},
 		Background: &runtime.BackgroundShellEvent{
 			Type:              "completed",
-			ID:                "123",
+			ID:                projectionBackgroundID,
 			State:             "completed",
 			Command:           "echo hi",
 			Workdir:           "/tmp/work",
@@ -126,7 +134,7 @@ func TestEventFromRuntimeProjectsReasoningAndBackground(t *testing.T) {
 			NoticeSuppressed:  true,
 		},
 	})
-	if view.Kind != "background_updated" || view.StepID != "step-1" || view.AssistantDelta != "delta" {
+	if view.Kind != clientui.EventBackgroundUpdated || view.StepID != projectionStepID || view.AssistantDelta != "delta" {
 		t.Fatalf("unexpected projected event: %+v", view)
 	}
 	if !view.CommittedTranscriptChanged {
@@ -138,19 +146,19 @@ func TestEventFromRuntimeProjectsReasoningAndBackground(t *testing.T) {
 	if view.AssistantDeltaPhase != clientui.MessagePhaseFinal {
 		t.Fatalf("expected assistant delta phase projection, got %q", view.AssistantDeltaPhase)
 	}
-	if view.AssistantStreamMetadata == nil || view.AssistantStreamMetadata.StepID != "step-1" {
-		t.Fatalf("expected assistant stream metadata projection, got %+v", view.AssistantStreamMetadata)
-	}
 	if view.RunState == nil || !view.RunState.Lifecycle.IsRunning() {
 		t.Fatalf("expected busy run state, got %+v", view.RunState)
 	}
-	if view.RunState.RunID != "run-1" || view.RunState.Status != "running" {
+	if view.RunState.RunID != projectionRunID || view.RunState.Status != clientui.RunStatusRunning {
 		t.Fatalf("expected run identity in projected run state, got %+v", view.RunState)
+	}
+	if view.RunState.ActiveKind != clientui.RuntimeActivityActiveKindUserTurn {
+		t.Fatalf("expected active kind projection, got %+v", view.RunState)
 	}
 	if view.RunState.Lifecycle.Phase != clientui.RunLifecycleRunning || view.RunState.Lifecycle.Mode != clientui.RunModeTurn {
 		t.Fatalf("server/client run lifecycle projection mismatch: %+v", view.RunState.Lifecycle)
 	}
-	if view.Background == nil || view.Background.ID != "123" {
+	if view.Background == nil || view.Background.ID != projectionBackgroundID {
 		t.Fatalf("expected background projection, got %+v", view.Background)
 	}
 	if view.Background.ExitCode == nil || *view.Background.ExitCode != 17 {
@@ -176,8 +184,8 @@ func TestActivityFromRuntimeSnapshotCopiesRuntimeOwnedActiveKinds(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			activity := ActivityFromRuntimeSnapshot(&runtime.RunSnapshot{
-				RunID:      "run-1",
-				StepID:     "step-1",
+				RunID:      projectionRunID,
+				StepID:     projectionStepID,
 				Status:     runtime.RunStatusRunning,
 				ActiveKind: tt.kind,
 			}, true)
@@ -202,36 +210,36 @@ func TestEventFromRuntimeProjectsGoalStatusUpdated(t *testing.T) {
 			evt: runtime.Event{
 				Kind: runtime.EventGoalStatusUpdated,
 				GoalStatus: &runtime.GoalStatusUpdate{State: session.GoalState{
-					ID:        " goal-1 ",
+					ID:        " " + projectionGoalID + " ",
 					Objective: "ship feature",
 					Status:    session.GoalStatusActive,
 				}},
 			},
-			want: &clientui.RuntimeGoalStatusUpdate{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusActive},
+			want: &clientui.RuntimeGoalStatusUpdate{ID: projectionGoalID, Objective: "ship feature", Status: clientui.RuntimeGoalStatusActive},
 		},
 		{
 			name: "paused",
 			evt: runtime.Event{
 				Kind: runtime.EventGoalStatusUpdated,
 				GoalStatus: &runtime.GoalStatusUpdate{State: session.GoalState{
-					ID:        "goal-1",
+					ID:        projectionGoalID,
 					Objective: "ship feature",
 					Status:    session.GoalStatusPaused,
 				}},
 			},
-			want: &clientui.RuntimeGoalStatusUpdate{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusPaused},
+			want: &clientui.RuntimeGoalStatusUpdate{ID: projectionGoalID, Objective: "ship feature", Status: clientui.RuntimeGoalStatusPaused},
 		},
 		{
 			name: "complete",
 			evt: runtime.Event{
 				Kind: runtime.EventGoalStatusUpdated,
 				GoalStatus: &runtime.GoalStatusUpdate{State: session.GoalState{
-					ID:        "goal-1",
+					ID:        projectionGoalID,
 					Objective: "ship feature",
 					Status:    session.GoalStatusComplete,
 				}},
 			},
-			want: &clientui.RuntimeGoalStatusUpdate{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusComplete},
+			want: &clientui.RuntimeGoalStatusUpdate{ID: projectionGoalID, Objective: "ship feature", Status: clientui.RuntimeGoalStatusComplete},
 		},
 		{
 			name: "clear",
@@ -277,100 +285,15 @@ func TestStatusFromRuntimeIncludesSuspendedGoal(t *testing.T) {
 	}
 }
 
-func TestEventFromRuntimeProjectsLocalEntry(t *testing.T) {
-	view := EventFromRuntime(runtime.Event{
-		Kind:   runtime.EventLocalEntryAdded,
-		StepID: "step-1",
-		LocalEntry: &runtime.ChatEntry{
-			Visibility:    transcript.EntryVisibilityAll,
-			Role:          "reviewer_suggestions",
-			Text:          "Supervisor suggested:\n1. Add verification notes.",
-			CondensedText: "Supervisor made 1 suggestion.",
-		},
-	})
-
-	if view.Kind != clientui.EventLocalEntryAdded || view.StepID != "step-1" {
-		t.Fatalf("unexpected projected local entry event: %+v", view)
-	}
-	if len(view.TranscriptEntries) != 1 {
-		t.Fatalf("expected one projected local entry, got %+v", view.TranscriptEntries)
-	}
-	entry := view.TranscriptEntries[0]
-	if entry.Role != "reviewer_suggestions" || entry.Text != "Supervisor suggested:\n1. Add verification notes." || entry.CondensedText != "Supervisor made 1 suggestion." {
-		t.Fatalf("unexpected projected local entry transcript: %+v", entry)
-	}
-	if entry.Visibility != clientui.EntryVisibilityAll {
-		t.Fatalf("local entry visibility = %q, want all", entry.Visibility)
-	}
-}
-
-func TestEventFromRuntimeLeavesCompactionStatusWithoutTranscriptEntriesUntilPersistedLocalEntry(t *testing.T) {
-	testCases := []struct {
-		name string
-		evt  runtime.Event
-	}{
-		{
-			name: "compaction completed",
-			evt: runtime.Event{
-				Kind:   runtime.EventCompactionCompleted,
-				StepID: "step-1",
-				Compaction: &runtime.CompactionStatus{
-					Mode:  "auto",
-					Count: 1,
-				},
-			},
-		},
-		{
-			name: "compaction failed",
-			evt: runtime.Event{
-				Kind:   runtime.EventCompactionFailed,
-				StepID: "step-1",
-				Compaction: &runtime.CompactionStatus{
-					Mode:  "manual",
-					Error: "quota exceeded",
-				},
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			view := EventFromRuntime(tc.evt)
-			if tc.evt.Compaction == nil || view.Compaction == nil {
-				t.Fatalf("expected compaction status projection, got %+v", view.Compaction)
-			}
-			if view.Compaction.Mode != tc.evt.Compaction.Mode || view.Compaction.Count != tc.evt.Compaction.Count || view.Compaction.Error != tc.evt.Compaction.Error {
-				t.Fatalf("projected compaction = %+v, want %+v", view.Compaction, tc.evt.Compaction)
-			}
-			if len(view.TranscriptEntries) != 0 {
-				t.Fatalf("expected no projected transcript entries before persisted local entry, got %+v", view.TranscriptEntries)
-			}
-		})
-	}
-
-	local := EventFromRuntime(runtime.Event{
-		Kind:                       runtime.EventLocalEntryAdded,
-		StepID:                     "step-1",
-		CommittedTranscriptChanged: true,
-		LocalEntry:                 &runtime.ChatEntry{Role: "compaction_notice", Text: "context compacted for the 1st time"},
-	})
-	if len(local.TranscriptEntries) != 1 {
-		t.Fatalf("expected persisted local entry to remain the transcript source, got %+v", local.TranscriptEntries)
-	}
-	if got := local.TranscriptEntries[0].Role; got != "compaction_notice" {
-		t.Fatalf("projected local entry role = %q, want compaction_notice", got)
-	}
-}
-
 func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	store := newRuntimeViewStore(t)
 	if err := store.SetName("Session Name"); err != nil {
 		t.Fatalf("set name: %v", err)
 	}
-	if err := store.SetParentSessionID("parent-123"); err != nil {
+	if err := store.SetParentSessionID(projectionParentID); err != nil {
 		t.Fatalf("set parent session id: %v", err)
 	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: "final answer", Phase: llm.MessagePhaseFinal}); err != nil {
+	if _, _, err := store.AppendEvent(projectionStepID, "message", llm.Message{Role: llm.RoleAssistant, Content: "final answer", Phase: llm.MessagePhaseFinal}); err != nil {
 		t.Fatalf("append assistant message: %v", err)
 	}
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{Model: "gpt-5", ContextWindowTokens: 400_000})
@@ -390,10 +313,7 @@ func TestMainViewFromRuntimeBundlesStatusAndSession(t *testing.T) {
 	if view.Session.SessionID != store.Meta().SessionID || view.Session.SessionName != "Session Name" {
 		t.Fatalf("unexpected session hydration: %+v", view.Session)
 	}
-	if got := len(view.Session.Chat.Entries); got != 0 {
-		t.Fatalf("expected main view to omit transcript payload, got %d entries", got)
-	}
-	if view.Status.ParentSessionID != "parent-123" || view.Status.LastCommittedAssistantFinalAnswer != "final answer" {
+	if view.Status.ParentSessionID != projectionParentID || view.Status.LastCommittedAssistantFinalAnswer != "final answer" {
 		t.Fatalf("unexpected status hydration: %+v", view.Status)
 	}
 	if view.Status.ThinkingLevel != "high" || !view.Status.FastModeEnabled || view.Status.AutoCompactionEnabled {
@@ -419,10 +339,10 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{
 		Model: "gpt-5",
 		WorkflowRun: &workflowruntime.Config{
-			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID("run-1")},
+			Contract: workflowruntime.CompletionContract{RunID: workflow.RunID(projectionWorkflowRun)},
 			Instructions: workflowruntime.TaskInstructions{
-				TaskID:     "task-1",
-				WorkflowID: "workflow-1",
+				TaskID:     projectionWorkflowTask,
+				WorkflowID: projectionWorkflowID,
 			},
 		},
 	})
@@ -430,14 +350,14 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	if !view.Status.WorkflowActive || view.Status.WorkflowSession == nil {
 		t.Fatalf("workflow status = %+v, want active workflow session", view.Status)
 	}
-	if view.Status.WorkflowSession.RunID != "run-1" || view.Status.WorkflowSession.TaskID != "task-1" || view.Status.WorkflowSession.WorkflowID != "workflow-1" {
+	if view.Status.WorkflowSession.RunID != projectionWorkflowRun || view.Status.WorkflowSession.TaskID != projectionWorkflowTask || view.Status.WorkflowSession.WorkflowID != projectionWorkflowID {
 		t.Fatalf("workflow session = %+v, want run/task/workflow ids", view.Status.WorkflowSession)
 	}
 }
 
 func TestMainViewFromReopenedWorkflowSessionIncludesDurableWorkflowStatus(t *testing.T) {
 	store := newRuntimeViewStore(t)
-	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
+	if err := store.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: projectionWorkflowRun, TaskID: projectionWorkflowTask, WorkflowID: projectionWorkflowID}); err != nil {
 		t.Fatalf("SetWorkflowSessionState: %v", err)
 	}
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{}, runtime.Config{Model: "gpt-5"})
@@ -448,26 +368,8 @@ func TestMainViewFromReopenedWorkflowSessionIncludesDurableWorkflowStatus(t *tes
 	if view.Status.WorkflowSession == nil {
 		t.Fatalf("workflow session = nil, status=%+v", view.Status)
 	}
-	if view.Status.WorkflowSession.RunID != "run-1" || view.Status.WorkflowSession.TaskID != "task-1" || view.Status.WorkflowSession.WorkflowID != "workflow-1" {
+	if view.Status.WorkflowSession.RunID != projectionWorkflowRun || view.Status.WorkflowSession.TaskID != projectionWorkflowTask || view.Status.WorkflowSession.WorkflowID != projectionWorkflowID {
 		t.Fatalf("workflow session = %+v, want run/task/workflow ids", view.Status.WorkflowSession)
-	}
-}
-
-func TestSessionViewFromRuntimeOmitsTranscriptPayload(t *testing.T) {
-	store := newRuntimeViewStore(t)
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleUser, Content: "hello"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "local_entry", map[string]any{"role": "system", "text": "local note", "condensed_text": ""}); err != nil {
-		t.Fatalf("append local entry: %v", err)
-	}
-	if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: "warn"}); err != nil {
-		t.Fatalf("append warning message: %v", err)
-	}
-	eng := newRuntimeViewEngine(t, store, projectionFastClient{})
-	view := SessionViewFromRuntime(eng)
-	if got := len(view.Chat.Entries); got != 0 {
-		t.Fatalf("session view chat entry count = %d, want 0", got)
 	}
 }
 
@@ -511,16 +413,17 @@ func TestEventFromRuntimeCopiesContextUsage(t *testing.T) {
 	}
 }
 
-func TestEventFromRuntimeCopiesCacheWarningLostInputTokens(t *testing.T) {
+func TestEventFromRuntimeCopiesCacheWarning(t *testing.T) {
+	source := &transcript.CacheWarning{
+		Scope:           transcript.CacheWarningScopeReviewer,
+		Reason:          transcript.CacheWarningReasonNonPostfix,
+		CacheKey:        "reviewer-cache-key",
+		LostInputTokens: 12_000,
+	}
 	event := EventFromRuntime(runtime.Event{
 		Kind:                   runtime.EventCacheWarning,
 		CacheWarningVisibility: transcript.EntryVisibilityAll,
-		CacheWarning: &transcript.CacheWarning{
-			Scope:           transcript.CacheWarningScopeReviewer,
-			Reason:          transcript.CacheWarningReasonNonPostfix,
-			CacheKey:        "reviewer-cache-key",
-			LostInputTokens: 12_000,
-		},
+		CacheWarning:           source,
 	})
 	if event.CacheWarning == nil {
 		t.Fatal("expected projected cache warning")
@@ -534,11 +437,9 @@ func TestEventFromRuntimeCopiesCacheWarningLostInputTokens(t *testing.T) {
 	if event.CacheWarningVisibility != clientui.EntryVisibilityAll {
 		t.Fatalf("cache warning visibility = %q, want %q", event.CacheWarningVisibility, clientui.EntryVisibilityAll)
 	}
-	if len(event.TranscriptEntries) != 1 {
-		t.Fatalf("expected one projected transcript entry, got %d", len(event.TranscriptEntries))
-	}
-	if entry := event.TranscriptEntries[0]; entry.Role != "cache_warning" || entry.Visibility != clientui.EntryVisibilityAll {
-		t.Fatalf("unexpected projected cache warning entry: %+v", entry)
+	source.LostInputTokens = 99
+	if event.CacheWarning.LostInputTokens != 12_000 {
+		t.Fatalf("cache warning projection aliased source: %+v", event.CacheWarning)
 	}
 }
 
@@ -554,110 +455,7 @@ func TestEventFromRuntimeProjectsDefaultCacheWarningAsVerbose(t *testing.T) {
 	if event.CacheWarningVisibility != clientui.EntryVisibilityVerbose {
 		t.Fatalf("cache warning visibility = %q, want %q", event.CacheWarningVisibility, clientui.EntryVisibilityVerbose)
 	}
-	if len(event.TranscriptEntries) != 1 {
-		t.Fatalf("expected one projected transcript entry, got %d", len(event.TranscriptEntries))
-	}
-	if entry := event.TranscriptEntries[0]; entry.Role != "cache_warning" || entry.Visibility != clientui.EntryVisibilityVerbose {
-		t.Fatalf("unexpected projected cache warning entry: %+v", entry)
-	}
-}
-
-func TestChatSnapshotFromRuntimeCopiesEntries(t *testing.T) {
-	toolCall := &transcript.ToolCallMeta{
-		ToolName:    "shell",
-		Suggestions: []string{"a", "b"},
-	}
-	snapshot := ChatSnapshotFromRuntime(runtime.ChatSnapshot{
-		Entries: []runtime.ChatEntry{{
-			Visibility:        transcript.EntryVisibilityVerbose,
-			Role:              "assistant",
-			Text:              "hello",
-			CondensedText:     "hel",
-			Phase:             llm.MessagePhaseFinal,
-			MessageType:       llm.MessageTypeEnvironment,
-			SourcePath:        "/tmp/source",
-			CompactLabel:      "compact",
-			ToolResultSummary: "summary",
-			ToolCallID:        "call-1",
-			ToolCall:          toolCall,
-		}},
-		Streaming: "ongoing",
-		StreamingMetadata: &runtime.AssistantStreamMetadata{
-			StepID: "step-1",
-		},
-		StreamingError: "warn",
-	})
-	if len(snapshot.Entries) != 1 {
-		t.Fatalf("expected one entry, got %d", len(snapshot.Entries))
-	}
-	entry := snapshot.Entries[0]
-	if entry.Phase != string(llm.MessagePhaseFinal) || entry.ToolCall == nil || entry.ToolCall.ToolName != "shell" {
-		t.Fatalf("unexpected projected entry: %+v", entry)
-	}
-	if entry.Visibility != clientui.EntryVisibilityVerbose {
-		t.Fatalf("entry visibility = %q, want %q", entry.Visibility, clientui.EntryVisibilityVerbose)
-	}
-	if entry.MessageType != string(llm.MessageTypeEnvironment) || entry.SourcePath != "/tmp/source" || entry.CompactLabel != "compact" || entry.ToolResultSummary != "summary" {
-		t.Fatalf("metadata was not projected: %+v", entry)
-	}
-	if len(entry.ToolCall.Suggestions) != 2 {
-		t.Fatalf("expected copied suggestions, got %+v", entry.ToolCall.Suggestions)
-	}
-	toolCall.Suggestions[0] = "changed"
-	if snapshot.Entries[0].ToolCall.Suggestions[0] != "a" {
-		t.Fatalf("expected projection to copy suggestions, got %+v", snapshot.Entries[0].ToolCall.Suggestions)
-	}
-	if snapshot.Streaming != "ongoing" || snapshot.StreamingError != "warn" {
-		t.Fatalf("unexpected snapshot projection: %+v", snapshot)
-	}
-	if snapshot.StreamingMetadata == nil || snapshot.StreamingMetadata.StepID != "step-1" {
-		t.Fatalf("expected streaming metadata projection, got %+v", snapshot.StreamingMetadata)
-	}
-}
-
-func TestChatSnapshotFromRuntimeSuppressesNoopFinalAssistantState(t *testing.T) {
-	snapshot := ChatSnapshotFromRuntime(runtime.ChatSnapshot{
-		Entries: []runtime.ChatEntry{{
-			Role:  "assistant",
-			Text:  "NO_OP",
-			Phase: llm.MessagePhaseFinal,
-		}},
-		Streaming: "NO_OP",
-		StreamingMetadata: &runtime.AssistantStreamMetadata{
-			StepID: "step-1",
-		},
-		StreamingError: "warn",
-	})
-	if got := len(snapshot.Entries); got != 0 {
-		t.Fatalf("noop final entry count = %d, want 0", got)
-	}
-	if got := snapshot.Streaming; got != "" {
-		t.Fatalf("noop ongoing text = %q, want empty", got)
-	}
-	if snapshot.StreamingMetadata != nil {
-		t.Fatalf("noop ongoing metadata = %+v, want nil", snapshot.StreamingMetadata)
-	}
-	if got := snapshot.StreamingError; got != "warn" {
-		t.Fatalf("ongoing error = %q, want warn", got)
-	}
-}
-
-func TestChatSnapshotFromRuntimeClonesPatchRender(t *testing.T) {
-	source := &transcript.ToolCallMeta{
-		PatchRender: &patchformat.RenderedPatch{
-			SummaryLines: []patchformat.RenderedLine{{Text: "before"}},
-		},
-	}
-	snapshot := ChatSnapshotFromRuntime(runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
-		Role:     "tool_call",
-		ToolCall: source,
-	}}})
-
-	if len(snapshot.Entries) != 1 || snapshot.Entries[0].ToolCall == nil || snapshot.Entries[0].ToolCall.PatchRender == nil {
-		t.Fatalf("expected patch render copied into projected entries, got %+v", snapshot.Entries)
-	}
-	source.PatchRender.SummaryLines[0].Text = "after"
-	if snapshot.Entries[0].ToolCall.PatchRender.SummaryLines[0].Text != "before" {
-		t.Fatalf("expected projected entries to deep copy patch render, got %+v", snapshot.Entries[0].ToolCall.PatchRender.SummaryLines)
+	if event.CacheWarning == nil || event.CacheWarning.Scope != transcript.CacheWarningScopeConversation {
+		t.Fatalf("unexpected projected cache warning: %+v", event.CacheWarning)
 	}
 }

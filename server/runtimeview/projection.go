@@ -3,7 +3,6 @@ package runtimeview
 import (
 	"strings"
 
-	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/session"
@@ -124,11 +123,9 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 		Error:                        evt.Error,
 		AssistantDelta:               evt.AssistantDelta,
 		AssistantDeltaPhase:          clientui.MessagePhase(evt.AssistantDeltaPhase),
-		AssistantStreamMetadata:      assistantStreamMetadataFromRuntime(evt.AssistantStreamMetadata),
 		UserMessage:                  evt.UserMessage,
 		UserMessageBatch:             append([]string(nil), evt.UserMessageBatch...),
 		UserMessageBatchQueueItemIDs: append([]string(nil), evt.UserMessageBatchQueueItemIDs...),
-		TranscriptEntries:            chatEntriesFromRuntime(runtime.TranscriptEntriesFromEvent(evt)),
 	}
 	if evt.ReasoningDelta != nil {
 		view.ReasoningDelta = &clientui.ReasoningDelta{
@@ -236,31 +233,6 @@ func copyCacheWarningView(in *transcript.CacheWarning) *transcript.CacheWarning 
 	return &copyWarning
 }
 
-func chatEntriesFromRuntime(entries []runtime.ChatEntry) []clientui.ChatEntry {
-	if len(entries) == 0 {
-		return nil
-	}
-	out := make([]clientui.ChatEntry, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, clientui.ChatEntry{
-			Visibility:        clientui.EntryVisibility(entry.Visibility),
-			RollbackTargetID:  entry.RollbackTargetID,
-			Role:              entry.Role,
-			Text:              entry.Text,
-			CondensedText:     entry.CondensedText,
-			Phase:             string(entry.Phase),
-			MessageType:       string(entry.MessageType),
-			SourcePath:        entry.SourcePath,
-			CompactLabel:      entry.CompactLabel,
-			ToolResultSummary: entry.ToolResultSummary,
-			ToolCallID:        entry.ToolCallID,
-			NoticeID:          entry.NoticeID,
-			ToolCall:          cloneToolCallMeta(entry.ToolCall),
-		})
-	}
-	return out
-}
-
 func ActivityFromRuntimeSnapshot(snapshot *runtime.RunSnapshot, queueAccepting bool) clientui.RuntimeActivity {
 	var active *runtimeactivity.ActiveStepSnapshot
 	if snapshot != nil {
@@ -278,55 +250,6 @@ func ActivityFromRuntimeSnapshot(snapshot *runtime.RunSnapshot, queueAccepting b
 
 func ClientActiveKindFromRuntime(kind runtime.ActiveKind) clientui.RuntimeActivityActiveKind {
 	return runtimeactivity.MustClientActiveKindFromRuntime(kind)
-}
-
-func ChatSnapshotFromRuntime(snapshot runtime.ChatSnapshot) clientui.ChatSnapshot {
-	entries := make([]clientui.ChatEntry, 0, len(snapshot.Entries))
-	for _, entry := range snapshot.Entries {
-		if isSuppressedNoopAssistantEntry(entry) {
-			continue
-		}
-		entries = append(entries, clientui.ChatEntry{
-			Visibility:        clientui.EntryVisibility(entry.Visibility),
-			RollbackTargetID:  entry.RollbackTargetID,
-			Role:              entry.Role,
-			Text:              entry.Text,
-			CondensedText:     entry.CondensedText,
-			Phase:             string(entry.Phase),
-			MessageType:       string(entry.MessageType),
-			SourcePath:        entry.SourcePath,
-			CompactLabel:      entry.CompactLabel,
-			ToolResultSummary: entry.ToolResultSummary,
-			ToolCallID:        entry.ToolCallID,
-			NoticeID:          entry.NoticeID,
-			ToolCall:          cloneToolCallMeta(entry.ToolCall),
-		})
-	}
-	streaming := snapshot.Streaming
-	streamingMetadata := assistantStreamMetadataFromRuntime(snapshot.StreamingMetadata)
-	if strings.TrimSpace(streaming) == runtimeNoopFinalToken {
-		streaming = ""
-		streamingMetadata = nil
-	}
-	return clientui.ChatSnapshot{
-		Entries:           entries,
-		Streaming:         streaming,
-		StreamingMetadata: streamingMetadata,
-		StreamingError:    snapshot.StreamingError,
-	}
-}
-
-func assistantStreamMetadataFromRuntime(metadata *runtime.AssistantStreamMetadata) *clientui.AssistantStreamMetadata {
-	if metadata == nil {
-		return nil
-	}
-	return &clientui.AssistantStreamMetadata{
-		StepID: metadata.StepID,
-	}
-}
-
-func isSuppressedNoopAssistantEntry(entry runtime.ChatEntry) bool {
-	return strings.TrimSpace(entry.Role) == "assistant" && entry.Phase == llm.MessagePhaseFinal && strings.TrimSpace(entry.Text) == runtimeNoopFinalToken
 }
 
 func cloneToolCallMeta(meta *transcript.ToolCallMeta) *clientui.ToolCallMeta {

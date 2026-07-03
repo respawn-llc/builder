@@ -168,9 +168,6 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	if resp.MainView.Session.SessionID != store.Meta().SessionID || resp.MainView.Session.SessionName != "incident triage" {
 		t.Fatalf("unexpected dormant session view: %+v", resp.MainView.Session)
 	}
-	if len(resp.MainView.Session.Chat.Entries) != 0 {
-		t.Fatalf("expected main view to omit transcript payload, got %+v", resp.MainView.Session.Chat)
-	}
 	if resp.MainView.Status.ParentSessionID != "parent-1" || resp.MainView.Status.LastCommittedAssistantFinalAnswer != "final answer" {
 		t.Fatalf("unexpected dormant status: %+v", resp.MainView.Status)
 	}

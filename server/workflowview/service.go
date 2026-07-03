@@ -16,6 +16,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/runtime"
 	"core/server/workflow"
 	"core/server/workflowscript"
 	"core/shared/clientui"
@@ -50,7 +51,7 @@ var (
 type Option func(*Service)
 
 type SessionTranscriptTailEntryProvider interface {
-	SessionTranscriptTailEntries(ctx context.Context, sessionID string) ([]clientui.ChatEntry, error)
+	SessionTranscriptTailEntries(ctx context.Context, sessionID string) ([]runtime.ChatEntry, error)
 }
 
 func WithSessionTranscriptProvider(provider SessionTranscriptTailEntryProvider) Option {
@@ -1596,7 +1597,7 @@ func (r *pendingQuestionResolver) Question(ctx context.Context, sessionID string
 	return question, nil
 }
 
-func askQuestionFromTranscriptEntries(entries []clientui.ChatEntry, askID string) pendingQuestion {
+func askQuestionFromTranscriptEntries(entries []runtime.ChatEntry, askID string) pendingQuestion {
 	for _, entry := range entries {
 		entryAskID := strings.TrimSpace(entry.ToolCallID)
 		if strings.TrimSpace(entry.Role) != "tool_call" || entryAskID != askID || entry.ToolCall == nil {

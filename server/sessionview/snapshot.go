@@ -19,7 +19,7 @@ type SessionSnapshotSource interface {
 
 type SessionSnapshot interface {
 	MainView(ctx context.Context) (clientui.RuntimeMainView, error)
-	TranscriptTailEntries(ctx context.Context) ([]clientui.ChatEntry, error)
+	TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error)
 }
 
 type runtimeReadModelSnapshotProvider interface {
@@ -120,7 +120,7 @@ func (s enrichedSessionSnapshot) MainView(ctx context.Context) (clientui.Runtime
 	return view, nil
 }
 
-func (s enrichedSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]clientui.ChatEntry, error) {
+func (s enrichedSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
 	return s.base.TranscriptTailEntries(ctx)
 }
 
@@ -215,12 +215,12 @@ func (s liveRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.Runt
 	return view, nil
 }
 
-func (s liveRuntimeSessionSnapshot) TranscriptTailEntries(_ context.Context) ([]clientui.ChatEntry, error) {
+func (s liveRuntimeSessionSnapshot) TranscriptTailEntries(_ context.Context) ([]runtime.ChatEntry, error) {
 	page, err := s.engine.TranscriptSegmentPage(0)
 	if err != nil {
 		return nil, err
 	}
-	return runtimeview.ChatSnapshotFromRuntime(page.Snapshot).Entries, nil
+	return append([]runtime.ChatEntry(nil), page.Snapshot.Entries...), nil
 }
 
 type activityOverrideSnapshot struct {
@@ -239,7 +239,7 @@ func (s activityOverrideSnapshot) MainView(ctx context.Context) (clientui.Runtim
 	return view, nil
 }
 
-func (s activityOverrideSnapshot) TranscriptTailEntries(ctx context.Context) ([]clientui.ChatEntry, error) {
+func (s activityOverrideSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
 	return s.base.TranscriptTailEntries(ctx)
 }
 
@@ -298,7 +298,7 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 	return entry.mainView(meta, freshness), nil
 }
 
-func (s dormantSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]clientui.ChatEntry, error) {
+func (s dormantSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
 	if s.store == nil {
 		return nil, errors.New("session store is required")
 	}

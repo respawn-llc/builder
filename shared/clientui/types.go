@@ -53,12 +53,10 @@ type Event struct {
 	Error                        string
 	AssistantDelta               string
 	AssistantDeltaPhase          MessagePhase
-	AssistantStreamMetadata      *AssistantStreamMetadata
 	ReasoningDelta               *ReasoningDelta
 	UserMessage                  string
 	UserMessageBatch             []string
 	UserMessageBatchQueueItemIDs []string
-	TranscriptEntries            []ChatEntry
 	Compaction                   *CompactionStatus
 	CacheWarning                 *transcript.CacheWarning
 	CacheWarningVisibility       EntryVisibility
@@ -140,35 +138,6 @@ type BackgroundShellEvent struct {
 	ExitCode          *int
 	UserRequestedKill bool
 	NoticeSuppressed  bool
-}
-
-type ChatEntry struct {
-	Visibility        EntryVisibility
-	RollbackTargetID  string
-	Role              string
-	Text              string
-	CondensedText     string
-	Phase             string
-	MessageType       string
-	SourcePath        string
-	CompactLabel      string
-	ToolResultSummary string
-	ToolCallID        string
-	NoticeID          string
-	ToolCall          *ToolCallMeta
-}
-
-const ChatEntryPhaseFinalAnswer = string(MessagePhaseFinal)
-
-type ChatSnapshot struct {
-	Entries           []ChatEntry
-	Streaming         string
-	StreamingMetadata *AssistantStreamMetadata
-	StreamingError    string
-}
-
-type AssistantStreamMetadata struct {
-	StepID string
 }
 
 type ToolPresentationKind string

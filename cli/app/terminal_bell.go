@@ -247,7 +247,7 @@ func (h *bellHooks) OnProjectedRuntimeEvent(evt clientui.Event) {
 	case clientui.EventToolCallStarted:
 		h.recordToolCall(evt.StepID)
 	case clientui.EventAssistantMessage:
-		h.recordTurnCompletion(evt.StepID, projectedAssistantMessageContent(evt.TranscriptEntries))
+		h.recordTurnCompletion(evt.StepID, "")
 	}
 }
 
@@ -354,16 +354,6 @@ func turnCompletionNotificationMessage(assistantContent string) string {
 		return preview
 	}
 	return "turn complete"
-}
-
-func projectedAssistantMessageContent(entries []clientui.ChatEntry) string {
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Role != "assistant" {
-			continue
-		}
-		return entries[i].Text
-	}
-	return ""
 }
 
 func (h *bellHooks) formatMessage(message string) string {

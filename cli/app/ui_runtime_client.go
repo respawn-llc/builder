@@ -342,26 +342,3 @@ func (c *sessionRuntimeClient) logTranscriptDiag(line string) {
 	}
 	logf(strings.TrimSpace(line))
 }
-
-func cloneTranscriptEntries(entries []clientui.ChatEntry) []clientui.ChatEntry {
-	if len(entries) == 0 {
-		return nil
-	}
-	cloned := make([]clientui.ChatEntry, 0, len(entries))
-	for _, entry := range entries {
-		copyEntry := entry
-		if entry.ToolCall != nil {
-			copyMeta := *entry.ToolCall
-			if len(entry.ToolCall.Suggestions) > 0 {
-				copyMeta.Suggestions = append([]string(nil), entry.ToolCall.Suggestions...)
-			}
-			if entry.ToolCall.RenderHint != nil {
-				renderHint := *entry.ToolCall.RenderHint
-				copyMeta.RenderHint = &renderHint
-			}
-			copyEntry.ToolCall = &copyMeta
-		}
-		cloned = append(cloned, copyEntry)
-	}
-	return cloned
-}

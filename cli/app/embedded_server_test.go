@@ -645,12 +645,6 @@ func TestEmbeddedAppServerPrepareRuntimeWiresSessionActivityForSharedClients(t *
 	if firstEvt.Kind != clientui.EventLocalEntryAdded || secondEvt.Kind != clientui.EventLocalEntryAdded {
 		t.Fatalf("unexpected activity events: first=%+v second=%+v", firstEvt, secondEvt)
 	}
-	if len(firstEvt.TranscriptEntries) != 1 || firstEvt.TranscriptEntries[0].Text != "hello from client one" {
-		t.Fatalf("unexpected first local entry event: %+v", firstEvt)
-	}
-	if len(secondEvt.TranscriptEntries) != 1 || secondEvt.TranscriptEntries[0].Text != "hello from client one" {
-		t.Fatalf("unexpected second local entry event: %+v", secondEvt)
-	}
 
 	if _, err := reads.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: plan.SessionID}); err != nil {
 		t.Fatalf("GetSessionMainView refreshed: %v", err)
@@ -698,9 +692,6 @@ func TestEmbeddedAppServerPrepareRuntimeIsolatesSessionActivityBetweenSessions(t
 	if evtA.Kind != clientui.EventLocalEntryAdded {
 		t.Fatalf("unexpected session A event: %+v", evtA)
 	}
-	if len(evtA.TranscriptEntries) != 1 || evtA.TranscriptEntries[0].Text != "session-a-only" {
-		t.Fatalf("unexpected session A local entry payload: %+v", evtA)
-	}
 	ctxB, cancelB := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancelB()
 	if evtB, err := subB.Next(ctxB); !errors.Is(err, context.DeadlineExceeded) {
@@ -717,9 +708,6 @@ func TestEmbeddedAppServerPrepareRuntimeIsolatesSessionActivityBetweenSessions(t
 	}
 	if evtB.Kind != clientui.EventLocalEntryAdded {
 		t.Fatalf("unexpected session B event: %+v", evtB)
-	}
-	if len(evtB.TranscriptEntries) != 1 || evtB.TranscriptEntries[0].Text != "session-b-only" {
-		t.Fatalf("unexpected session B local entry payload: %+v", evtB)
 	}
 	ctxA2, cancelA2 := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancelA2()

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"core/cli/tui"
 	"core/shared/clientui"
 )
 
@@ -205,10 +204,6 @@ const (
 )
 
 type detailTranscriptLoadMsg struct{}
-
-type renderDiagnosticMsg struct {
-	diagnostic tui.RenderDiagnostic
-}
 
 type runLoggerDiagnosticMsg struct {
 	diagnostic runLoggerDiagnostic

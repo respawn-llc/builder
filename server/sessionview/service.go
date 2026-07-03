@@ -186,7 +186,7 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 	return serverapi.SessionMainViewResponse{MainView: view}, nil
 }
 
-func (s *Service) SessionTranscriptTailEntries(ctx context.Context, sessionID string) ([]clientui.ChatEntry, error) {
+func (s *Service) SessionTranscriptTailEntries(ctx context.Context, sessionID string) ([]runtime.ChatEntry, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, serverapi.ErrSessionIDRequired
 	}

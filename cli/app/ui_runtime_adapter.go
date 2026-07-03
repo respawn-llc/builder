@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"core/cli/app/internal/runtimestate"
-	"core/cli/tui"
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,26 +14,23 @@ type uiRuntimeAdapter struct {
 }
 
 type runtimeEventApplyResult struct {
-	cmd               tea.Cmd
-	transcriptMutated bool
-	awaitsHydration   bool
-	fatal             bool
+	cmd             tea.Cmd
+	awaitsHydration bool
+	fatal           bool
 }
 
 func (a uiRuntimeAdapter) applyProjectedRuntimeEventsBatch(events []clientui.Event) runtimeEventApplyResult {
 	cmds := make([]tea.Cmd, 0, len(events))
-	transcriptMutated := false
 	fatal := false
 	for _, evt := range events {
 		result := a.applyProjectedRuntimeEvent(evt)
 		cmds = append(cmds, result.cmd)
-		transcriptMutated = transcriptMutated || result.transcriptMutated
 		if result.fatal {
 			fatal = true
 			break
 		}
 	}
-	return runtimeEventApplyResult{cmd: batchCmds(cmds...), transcriptMutated: transcriptMutated, fatal: fatal}
+	return runtimeEventApplyResult{cmd: batchCmds(cmds...), fatal: fatal}
 }
 
 func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtimeEventApplyResult {
@@ -77,44 +73,7 @@ func (a uiRuntimeAdapter) applyProjectedRuntimeEvent(evt clientui.Event) runtime
 		a.reconcileInterruptFromRunState(evt),
 		a.reconcileInterruptFromRuntimeActivity(evt),
 	}
-	transcriptMutated := false
-	if len(evt.TranscriptEntries) > 0 {
-		m.appendRuntimeTranscriptEntries(evt.TranscriptEntries)
-		transcriptMutated = true
-	}
-	for _, streamCommand := range reduction.Transcript.AssistantStream {
-		switch streamCommand.Kind {
-		case runtimestate.RuntimeAssistantStreamAppend:
-			delta := streamCommand.Delta
-			if delta == "" {
-				continue
-			}
-			m.sawAssistantDelta = true
-			m.activeAssistantStreamSource += delta
-			if streamCommand.AssistantStreamMetadata != nil {
-				m.activeAssistantStreamIdentity = uiAssistantStreamIdentity{StepID: streamCommand.AssistantStreamMetadata.StepID}
-			}
-			m.forwardToView(tui.StreamAssistantMsg{Delta: delta})
-			transcriptMutated = true
-		case runtimestate.RuntimeAssistantStreamClear:
-			m.sawAssistantDelta = false
-			m.activeAssistantStreamSource = ""
-			m.activeAssistantStreamIdentity = uiAssistantStreamIdentity{}
-			m.forwardToView(tui.ClearOngoingAssistantMsg{})
-			transcriptMutated = true
-		}
-	}
-	for _, streamCommand := range reduction.Reasoning.Stream {
-		switch streamCommand.Kind {
-		case runtimestate.RuntimeReasoningStreamUpsert:
-			if streamCommand.Delta != nil {
-				m.forwardToView(tui.UpsertStreamingReasoningMsg{Key: streamCommand.Delta.Key, Role: streamCommand.Delta.Role, Text: streamCommand.Delta.Text})
-			}
-		case runtimestate.RuntimeReasoningStreamClear:
-			m.forwardToView(tui.ClearStreamingReasoningMsg{})
-		}
-	}
-	return runtimeEventApplyResult{cmd: batchCmds(cmds...), transcriptMutated: transcriptMutated}
+	return runtimeEventApplyResult{cmd: batchCmds(cmds...)}
 }
 
 func (a uiRuntimeAdapter) applyProjectedSessionMetadata(session clientui.RuntimeSessionView) tea.Cmd {
@@ -129,71 +88,4 @@ func (a uiRuntimeAdapter) applyProjectedSessionMetadata(session clientui.Runtime
 	}
 	a.model.conversationFreshness = session.ConversationFreshness
 	return nil
-}
-
-func (m *uiModel) appendRuntimeTranscriptEntries(entries []clientui.ChatEntry) {
-	for _, entry := range entries {
-		transcriptEntry := tuiTranscriptEntryFromClientEntry(entry)
-		if transcriptEntryIsEmpty(transcriptEntry) {
-			transcriptEntry = tui.TranscriptEntry{
-				Role: tui.TranscriptRoleError,
-				Text: "invalid empty transcript entry from runtime",
-			}
-		}
-		m.transcriptEntries = append(m.transcriptEntries, transcriptEntry)
-		m.forwardToView(appendTranscriptMsgFromEntry(transcriptEntry))
-	}
-	m.transcriptBaseOffset = 0
-	m.transcriptTotalEntries = len(m.transcriptEntries)
-	m.refreshRollbackCandidates()
-}
-
-func tuiTranscriptEntryFromClientEntry(entry clientui.ChatEntry) tui.TranscriptEntry {
-	text := entry.Text
-	if strings.TrimSpace(text) == "" && entry.ToolCall != nil {
-		text = entry.ToolCall.Command
-	}
-	return tui.TranscriptEntry{
-		Visibility:        entry.Visibility,
-		RollbackTargetID:  entry.RollbackTargetID,
-		Role:              tui.TranscriptRoleFromWire(entry.Role),
-		Text:              text,
-		CondensedText:     entry.CondensedText,
-		Phase:             clientui.MessagePhase(entry.Phase),
-		MessageType:       clientui.MessageType(entry.MessageType),
-		SourcePath:        entry.SourcePath,
-		CompactLabel:      entry.CompactLabel,
-		ToolResultSummary: entry.ToolResultSummary,
-		ToolCallID:        entry.ToolCallID,
-		NoticeID:          entry.NoticeID,
-		ToolCall:          transcriptToolCallMetaFromClient(entry.ToolCall),
-	}
-}
-
-func transcriptEntryIsEmpty(entry tui.TranscriptEntry) bool {
-	return strings.TrimSpace(entry.Text) == "" &&
-		strings.TrimSpace(entry.CondensedText) == "" &&
-		strings.TrimSpace(entry.CompactLabel) == "" &&
-		strings.TrimSpace(entry.ToolResultSummary) == "" &&
-		strings.TrimSpace(entry.ToolCallID) == "" &&
-		strings.TrimSpace(entry.NoticeID) == "" &&
-		entry.ToolCall == nil
-}
-
-func appendTranscriptMsgFromEntry(entry tui.TranscriptEntry) tui.AppendTranscriptMsg {
-	return tui.AppendTranscriptMsg{
-		Visibility:        entry.Visibility,
-		Committed:         entry.Committed,
-		Role:              entry.Role,
-		Text:              entry.Text,
-		CondensedText:     entry.CondensedText,
-		Phase:             entry.Phase,
-		MessageType:       entry.MessageType,
-		SourcePath:        entry.SourcePath,
-		CompactLabel:      entry.CompactLabel,
-		ToolResultSummary: entry.ToolResultSummary,
-		ToolCallID:        entry.ToolCallID,
-		NoticeID:          entry.NoticeID,
-		ToolCall:          entry.ToolCall,
-	}
 }

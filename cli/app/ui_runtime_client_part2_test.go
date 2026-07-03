@@ -2,11 +2,8 @@ package app
 
 import (
 	"context"
-	"core/server/llm"
 	"core/server/registry"
-	"core/server/runtime"
 	"core/server/runtimecontrol"
-	"core/server/runtimeview"
 	sharedclient "core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -554,7 +551,7 @@ func TestRuntimeClientSubmitTurnRecoveryContinuesFirstPrompt(t *testing.T) {
 	if updated.activity == uiActivityError {
 		t.Fatal("did not expect pre-submit recovery to surface operator error")
 	}
-	plain := stripANSIAndTrimRight(updated.view.OngoingSnapshot())
+	plain := stripANSIAndTrimRight(updated.view.View())
 	if strings.Contains(plain, serverapi.ErrRuntimeUnavailable.Error()) || strings.Contains(plain, "runtime for session") {
 		t.Fatalf("did not expect recovery diagnostics in ongoing transcript, got %q", plain)
 	}
@@ -721,60 +718,5 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected warning fallback notification")
-	}
-}
-
-func TestRuntimeClientServerRestartFirstPromptRecoversAndWarnsOngoing(t *testing.T) {
-	runtimeEvents := make(chan clientui.Event, 128)
-	store := createAppRuntimeSessionAt(t, t.TempDir(), "workspace-x", t.TempDir())
-	client := &runtimeClientFakeLLM{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	engine := newAppRuntimeEngineWithStore(t, store, client, runtime.Config{
-		OnEvent: func(evt runtime.Event) {
-			runtimeEvents <- runtimeview.EventFromRuntime(evt)
-		},
-	})
-	resolver := &mutableRuntimeResolver{}
-	controls := sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(resolver))
-	runtimeClient := newUIRuntimeClientWithReads(store.Meta().SessionID, &countingSessionViewClient{}, controls).(*sessionRuntimeClient)
-	reactivator := newRuntimeReactivator()
-	reactivator.SetReactivateFunc(func(context.Context) error {
-		resolver.Set(engine)
-		return nil
-	})
-	runtimeClient.SetRuntimeReactivator(reactivator)
-	model := newProjectedClosedUIModel(nil)
-	sized, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
-	model = sized.(*uiModel)
-
-	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-after-restart"},
-		Text:         "hello after restart",
-	})
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("submitRuntimeUserMessage: %v", err)
-	}
-	if message != "done" {
-		t.Fatalf("submitRuntimeUserMessage message = %q, want done", message)
-	}
-
-	updated := model
-	eventCount := 0
-	for len(runtimeEvents) > 0 {
-		msg := <-runtimeEvents
-		eventCount++
-		next, cmd := updated.Update(runtimeEventMsg{event: msg})
-		updated = next.(*uiModel)
-		_ = collectCmdMessages(t, cmd)
-	}
-	view := stripANSIAndTrimRight(updated.view.OngoingSnapshot())
-	if !strings.Contains(view, runtimeReconnectWarningText) {
-		t.Fatalf("expected ongoing warning in view, events=%d entries=%+v view=%q", eventCount, updated.transcriptEntries, view)
-	}
-	if strings.Contains(view, "runtime for session") {
-		t.Fatalf("did not expect runtime unavailable error in ongoing view, got %q", view)
 	}
 }

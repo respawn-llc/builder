@@ -140,7 +140,6 @@ type RuntimeSessionView struct {
 	SessionName           string
 	ConversationFreshness ConversationFreshness
 	ExecutionTarget       SessionExecutionTarget
-	Chat                  ChatSnapshot
 }
 
 type RuntimeClient interface {

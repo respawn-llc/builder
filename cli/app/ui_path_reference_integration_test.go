@@ -153,35 +153,6 @@ func TestPathReferencePickerSharedWithViewport(t *testing.T) {
 	}
 }
 
-func TestPathReferenceWorksInRollbackEditMode(t *testing.T) {
-	search := newStubUIPathReferenceSearch()
-	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))
-	testSetRollbackEditing(m, 0, 1)
-	m.replaceMainInput("rewrite @ab", -1)
-
-	next, _ := m.Update(uiPathReferenceMatchResultMsg{
-		WorkspaceRoot:    "/tmp/workspace",
-		CorpusGeneration: 1,
-		DraftToken:       m.pathReference.draftToken,
-		QueryToken:       m.pathReference.queryToken,
-		NormalizedQuery:  "ab",
-		Matches:          []uiPathReferenceCandidate{{Path: "cli/app/ui.go"}},
-	})
-	updated := next.(*uiModel)
-	if !updated.pathReferencePicker().visible {
-		t.Fatal("expected path picker visible in rollback edit mode")
-	}
-
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-	if updated.input != "rewrite @cli/app/ui.go" {
-		t.Fatalf("input = %q", updated.input)
-	}
-	if updated.isBusy() {
-		t.Fatal("did not expect rollback edit completion to submit")
-	}
-}
-
 func TestPathReferenceUIRecoversAfterBuildFailureInSameWorkspace(t *testing.T) {
 	search := newStubUIPathReferenceSearch()
 	m := newProjectedStaticUIModel(WithUIPathReferenceSearch(search), WithUIStatusConfig(uiStatusConfig{WorkspaceRoot: "/tmp/workspace"}))

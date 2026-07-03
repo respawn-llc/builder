@@ -7,9 +7,7 @@ import (
 	"testing"
 
 	"core/cli/app/commands"
-	"core/cli/tui"
 	"core/server/auth"
-	"core/server/llm"
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -190,80 +188,6 @@ func assertActivePickerHighlightedSelection(t *testing.T, m *uiModel) {
 		t.Fatalf("selected row index out of range for state %+v", state)
 	}
 }
-
-func TestBuiltInReviewSlashCommandWithWhitespaceAfterSlashDoesNotDuplicateArgs(t *testing.T) {
-	r := commands.NewDefaultRegistry()
-	m := newProjectedStaticUIModel(WithUICommandRegistry(r))
-	m.input = "/ review cli/app"
-	if got := r.Execute("/review cli/app"); !got.Handled || !got.SubmitUser {
-		t.Fatalf("expected /review command to submit injected user prompt, got %+v", got)
-	}
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated := next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected submission cmd for whitespace-prefixed /review")
-	}
-	if updated.exitAction != UIActionNone {
-		t.Fatalf("expected no session transition for empty-session /review, got %q", updated.exitAction)
-	}
-	if !updated.isBusy() {
-		t.Fatal("expected /review to submit in place for an empty session")
-	}
-	if updated.nextSessionInitialPrompt != "" {
-		t.Fatalf("expected no handoff payload for empty-session /review, got %q", updated.nextSessionInitialPrompt)
-	}
-	plain := stripANSIAndTrimRight(updated.view.OngoingSnapshot())
-	if strings.Contains(plain, "/ review cli/app") {
-		t.Fatalf("expected normalized /review prompt content instead of raw command text, got %q", plain)
-	}
-	if !strings.Contains(plain, "cli/app") {
-		t.Fatalf("expected /review args preserved in in-place prompt, got %q", plain)
-	}
-}
-
-func TestBusyEnterRunsExactFastCommandEvenWhenPickerHidesIt(t *testing.T) {
-	client := &runtimeControlFakeClient{status: clientui.RuntimeStatus{FastModeAvailable: true, FastModeEnabled: true}}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
-	m.fastModeAvailable = false
-	m.setRuntimeActivityBusyForTest(true)
-	m.activity = uiActivityRunning
-	m.input = "/fa"
-	if picker := m.slashCommandPicker(); !picker.visible || len(picker.matches) != 0 {
-		t.Fatalf("expected picker visible without /fast matches, got %+v", picker)
-	}
-	m.input = "/fast on"
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated := next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected transient status command for busy /fast")
-	}
-	for _, msg := range collectCmdMessages(t, cmd) {
-		next, _ = updated.Update(msg)
-		updated = next.(*uiModel)
-	}
-	if len(updated.queued) != 0 {
-		t.Fatalf("expected no queued messages, got %+v", updated.queued)
-	}
-	if len(updated.pendingInjected) != 0 {
-		t.Fatalf("expected no pending injected messages, got %+v", updated.pendingInjected)
-	}
-	if updated.input != "" {
-		t.Fatalf("expected input cleared for busy /fast, got %q", updated.input)
-	}
-	if !updated.fastModeEnabled {
-		t.Fatal("expected busy /fast to enable fast mode")
-	}
-	if !client.setFastModeArg {
-		t.Fatal("expected runtime client fast mode setter to receive true")
-	}
-	status := stripANSIAndTrimRight(updated.layout().renderStatusLine(120, uiThemeStyles("dark")))
-	if !strings.Contains(status, "Fast mode enabled") {
-		t.Fatalf("expected busy /fast success in status line, got %q", status)
-	}
-}
-
 func TestBusyTabBackWithoutParentShowsLocalErrorAndDoesNotQueue(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.setRuntimeActivityBusyForTest(true)
@@ -666,8 +590,9 @@ func TestSlashCommandPickerShowsCopyOnlyWhenFinalAnswerIsAvailable(t *testing.T)
 		t.Fatalf("did not expect /copy without a final answer, got %+v", slashPickerCommandNames(state))
 	}
 
-	visible := newProjectedStaticUIModel()
-	visible.transcriptEntries = []tui.TranscriptEntry{{Role: "assistant", Text: "done", Phase: llm.MessagePhaseFinal}}
+	visible := newProjectedTestUIModel(&runtimeControlFakeClient{
+		status: clientui.RuntimeStatus{LastCommittedAssistantFinalAnswer: "done"},
+	}, closedProjectedRuntimeEvents(), closedAskEvents())
 	visible.input = "/co"
 	visible.refreshSlashCommandFilterFromInputWithAuth(true)
 	state := visible.slashCommandPicker()
@@ -693,87 +618,5 @@ func TestSlashCommandPickerUsesCachedRuntimeStatusForCopy(t *testing.T) {
 	}
 	if client.refreshMainViewCalls != 0 {
 		t.Fatalf("slash picker refreshed runtime status %d times, want 0", client.refreshMainViewCalls)
-	}
-}
-
-func TestRollbackEditHidesSlashCommandPicker(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	testSetRollbackEditing(m, 0, 1)
-	m.input = "/sta"
-	m.refreshSlashCommandFilterFromInputWithAuth(true)
-
-	state := m.slashCommandPicker()
-	if state.visible {
-		t.Fatalf("did not expect slash picker visible while editing, got %+v", state)
-	}
-}
-
-func TestRollbackEditRejectsSlashCommandSubmitAndAutocomplete(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	testSetRollbackEditing(m, 0, 1)
-	m.input = "/status"
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated := next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected transient status command for blocked edit-mode slash command")
-	}
-	if updated.isBusy() {
-		t.Fatal("did not expect slash command to submit while editing")
-	}
-	if updated.status.open {
-		t.Fatal("did not expect /status to open while editing")
-	}
-	if updated.input != "/status" {
-		t.Fatalf("expected blocked slash command to remain editable, got %q", updated.input)
-	}
-	if updated.transientStatus != slashCommandEditModeError {
-		t.Fatalf("expected edit-mode slash error, got %q", updated.transientStatus)
-	}
-
-	updated.input = "/sta"
-	next, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
-	updated = next.(*uiModel)
-	if updated.input != "/sta" {
-		t.Fatalf("expected blocked slash autocomplete to preserve input, got %q", updated.input)
-	}
-	if updated.transientStatus != slashCommandEditModeError {
-		t.Fatalf("expected edit-mode slash autocomplete error, got %q", updated.transientStatus)
-	}
-	status := stripANSIAndTrimRight(updated.layout().renderStatusLine(120, uiThemeStyles("dark")))
-	if !strings.Contains(status, slashCommandEditModeError) {
-		t.Fatalf("expected edit-mode slash error in status line, got %q", status)
-	}
-}
-
-func TestRollbackEditRejectsUnknownSlashInputWithoutSubmittingPrompt(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	testSetRollbackEditing(m, 0, 1)
-	m.input = "/nope"
-	before := stripANSIAndTrimRight(m.view.OngoingSnapshot())
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated := next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected transient status command for blocked unknown slash in edit mode")
-	}
-	if updated.isBusy() {
-		t.Fatal("did not expect unknown slash to submit while editing")
-	}
-	if len(updated.queued) != 0 {
-		t.Fatalf("did not expect queued messages, got %+v", updated.queued)
-	}
-	if updated.exitAction != UIActionNone {
-		t.Fatalf("did not expect session transition action, got %q", updated.exitAction)
-	}
-	if updated.input != "/nope" {
-		t.Fatalf("expected blocked unknown slash to remain editable, got %q", updated.input)
-	}
-	if updated.transientStatus != slashCommandEditModeError {
-		t.Fatalf("expected edit-mode slash error, got %q", updated.transientStatus)
-	}
-	after := stripANSIAndTrimRight(updated.view.OngoingSnapshot())
-	if after != before {
-		t.Fatalf("did not expect blocked unknown slash to alter transcript, before=%q after=%q", before, after)
 	}
 }

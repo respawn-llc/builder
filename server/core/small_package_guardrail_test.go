@@ -109,6 +109,7 @@ var allowedSmallPackages = map[string]string{
 	"cli/app/internal/remoteattach":      "narrow remote attachment seam after absorbing remote binding",
 	"cli/app/internal/runtimestate":      "DTO-only reducer boundary; package-level tests enforce stdlib plus shared/clientui imports only",
 	"cli/app/internal/startupconfig":     "narrow CLI startup config-resolution seam after absorbing serve-command env construction",
+	"cli/tui":                            "temporary blank ongoing-mode stub retained as the app-owned TUI mode boundary while the #487 replacement surface is not implemented",
 	"server/bootstrap":                   "composition support boundary shared by core and startup; merging into startup creates a cycle",
 	"server/attentionnotify":             "transient attention notification broker and batch tracker owner kept separate from registry/workflow packages to avoid making them notification state owners",
 	"server/metadata/lifecyclegen":       "repo-owned generator command for the narrow SQLite lifecycle generated seam",

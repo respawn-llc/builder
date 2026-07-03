@@ -6,20 +6,38 @@ import (
 	"core/shared/clientui"
 )
 
+const (
+	testQueueItemID       = "11111111-1111-4111-8111-111111111111"
+	testSecondQueueItemID = "22222222-2222-4222-8222-222222222222"
+	testServerQueueItemID = "33333333-3333-4333-8333-333333333333"
+	testClientRequestID   = "44444444-4444-4444-8444-444444444444"
+	testOtherRequestID    = "55555555-5555-4555-8555-555555555555"
+	testRunID             = "66666666-6666-4666-8666-666666666666"
+	testStepID            = "77777777-7777-4777-8777-777777777777"
+	testBackgroundID      = "88888888-8888-4888-8888-888888888888"
+)
+
 func TestReduceRuntimeEvent_UserMessageFlushedProducesPendingInputAndConversationUpdates(t *testing.T) {
 	update := ReduceRuntimeEvent(
 		RuntimeRunState{},
 		RuntimeConversationState{Freshness: clientui.ConversationFreshnessFresh},
 		PendingInputState{
-			PendingInjected: []clientui.QueuedUserMessage{{ID: "queue-1", Text: "steered message"}, {ID: "queue-2", Text: "follow-up"}},
+			PendingInjected: []clientui.QueuedUserMessage{
+				{ID: testQueueItemID, Text: "steered message"},
+				{ID: testSecondQueueItemID, Text: "follow-up"},
+			},
 		},
 		RuntimeReasoningState{},
 		false,
-		clientui.Event{Kind: clientui.EventUserMessageFlushed, UserMessage: "steered message", UserMessageBatchQueueItemIDs: []string{"queue-1"}},
+		clientui.Event{
+			Kind:                         clientui.EventUserMessageFlushed,
+			UserMessage:                  "steered message",
+			UserMessageBatchQueueItemIDs: []string{testQueueItemID},
+		},
 	)
 
-	if len(update.PendingInput.ConsumedQueueItemIDs) != 1 || update.PendingInput.ConsumedQueueItemIDs[0] != "queue-1" {
-		t.Fatalf("consumed queue item ids = %+v, want queue-1", update.PendingInput.ConsumedQueueItemIDs)
+	if len(update.PendingInput.ConsumedQueueItemIDs) != 1 || update.PendingInput.ConsumedQueueItemIDs[0] != testQueueItemID {
+		t.Fatalf("consumed queue item ids = %+v, want %s", update.PendingInput.ConsumedQueueItemIDs, testQueueItemID)
 	}
 	if len(update.PendingInput.State.PendingInjected) != 1 || update.PendingInput.State.PendingInjected[0].Text != "follow-up" {
 		t.Fatalf("expected first injected item consumed, got %+v", update.PendingInput.State.PendingInjected)
@@ -34,24 +52,27 @@ func TestReduceRuntimeEvent_QueuedStatusSubmittedRemovesPendingInputByID(t *test
 		RuntimeRunState{},
 		RuntimeConversationState{},
 		PendingInputState{
-			PendingInjected: []clientui.QueuedUserMessage{{ID: "queue-1", Text: "steered message"}, {ID: "queue-2", Text: "follow-up"}},
+			PendingInjected: []clientui.QueuedUserMessage{
+				{ID: testQueueItemID, Text: "steered message"},
+				{ID: testSecondQueueItemID, Text: "follow-up"},
+			},
 		},
 		RuntimeReasoningState{},
 		false,
 		clientui.Event{
 			Kind: clientui.EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &clientui.QueuedUserMessageStatusEvent{
-				QueueItemID: "queue-1",
+				QueueItemID: testQueueItemID,
 				Status:      clientui.QueuedUserMessageSubmitted,
 			},
 		},
 	)
 
-	if len(update.PendingInput.ConsumedQueueItemIDs) != 1 || update.PendingInput.ConsumedQueueItemIDs[0] != "queue-1" {
-		t.Fatalf("consumed queue item ids = %+v, want queue-1", update.PendingInput.ConsumedQueueItemIDs)
+	if len(update.PendingInput.ConsumedQueueItemIDs) != 1 || update.PendingInput.ConsumedQueueItemIDs[0] != testQueueItemID {
+		t.Fatalf("consumed queue item ids = %+v, want %s", update.PendingInput.ConsumedQueueItemIDs, testQueueItemID)
 	}
-	if len(update.PendingInput.State.PendingInjected) != 1 || update.PendingInput.State.PendingInjected[0].ID != "queue-2" {
-		t.Fatalf("pending injected = %+v, want only queue-2", update.PendingInput.State.PendingInjected)
+	if len(update.PendingInput.State.PendingInjected) != 1 || update.PendingInput.State.PendingInjected[0].ID != testSecondQueueItemID {
+		t.Fatalf("pending injected = %+v, want only %s", update.PendingInput.State.PendingInjected, testSecondQueueItemID)
 	}
 	if update.PendingInput.RestoredText != "" {
 		t.Fatalf("restored text = %q, want empty", update.PendingInput.RestoredText)
@@ -63,17 +84,17 @@ func TestReduceRuntimeEvent_QueuedStatusFailedRemovesPendingInputAndRestoresText
 		RuntimeRunState{},
 		RuntimeConversationState{},
 		PendingInputState{
-			PendingInjected: []clientui.QueuedUserMessage{{ID: "queue-1", Text: "steered message", ClientRequestID: "req-local"}},
+			PendingInjected: []clientui.QueuedUserMessage{{ID: testQueueItemID, Text: "steered message", ClientRequestID: testClientRequestID}},
 		},
 		RuntimeReasoningState{},
 		false,
 		clientui.Event{
 			Kind: clientui.EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &clientui.QueuedUserMessageStatusEvent{
-				QueueItemID:     "queue-1",
-				ClientRequestID: "req-local",
+				QueueItemID:     testQueueItemID,
+				ClientRequestID: testClientRequestID,
 				Status:          clientui.QueuedUserMessageFailed,
-				RestoreText:     "steered message",
+				RestoreText:     " steered message ",
 				FailureReason:   clientui.QueuedUserMessageFailureTerminalWorkflowCompletion,
 			},
 		},
@@ -92,15 +113,15 @@ func TestReduceRuntimeEvent_QueuedStatusFailedMatchesProvisionalPendingInputByCl
 		RuntimeRunState{},
 		RuntimeConversationState{},
 		PendingInputState{
-			PendingInjected: []clientui.QueuedUserMessage{{ID: "local-provisional", Text: "steered message", ClientRequestID: "req-local"}},
+			PendingInjected: []clientui.QueuedUserMessage{{ID: testQueueItemID, Text: "steered message", ClientRequestID: testClientRequestID}},
 		},
 		RuntimeReasoningState{},
 		false,
 		clientui.Event{
 			Kind: clientui.EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &clientui.QueuedUserMessageStatusEvent{
-				QueueItemID:     "server-queue-1",
-				ClientRequestID: "req-local",
+				QueueItemID:     testServerQueueItemID,
+				ClientRequestID: testClientRequestID,
 				Status:          clientui.QueuedUserMessageFailed,
 				RestoreText:     "steered message",
 				FailureReason:   clientui.QueuedUserMessageFailureClosing,
@@ -114,7 +135,9 @@ func TestReduceRuntimeEvent_QueuedStatusFailedMatchesProvisionalPendingInputByCl
 	if update.PendingInput.RestoredText != "steered message" {
 		t.Fatalf("restored text = %q, want queued text", update.PendingInput.RestoredText)
 	}
-	if len(update.PendingInput.ConsumedQueueItemIDs) != 2 || update.PendingInput.ConsumedQueueItemIDs[0] != "server-queue-1" || update.PendingInput.ConsumedQueueItemIDs[1] != "req-local" {
+	if len(update.PendingInput.ConsumedQueueItemIDs) != 2 ||
+		update.PendingInput.ConsumedQueueItemIDs[0] != testServerQueueItemID ||
+		update.PendingInput.ConsumedQueueItemIDs[1] != testClientRequestID {
 		t.Fatalf("consumed ids = %+v, want server queue id and client request id", update.PendingInput.ConsumedQueueItemIDs)
 	}
 }
@@ -124,15 +147,15 @@ func TestReduceRuntimeEvent_QueuedStatusFailedIgnoresOtherClientRestoreText(t *t
 		RuntimeRunState{},
 		RuntimeConversationState{},
 		PendingInputState{
-			PendingInjected: []clientui.QueuedUserMessage{{ID: "queue-1", Text: "local message", ClientRequestID: "req-local"}},
+			PendingInjected: []clientui.QueuedUserMessage{{ID: testQueueItemID, Text: "local message", ClientRequestID: testClientRequestID}},
 		},
 		RuntimeReasoningState{},
 		false,
 		clientui.Event{
 			Kind: clientui.EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &clientui.QueuedUserMessageStatusEvent{
-				QueueItemID:     "queue-1",
-				ClientRequestID: "req-other",
+				QueueItemID:     testQueueItemID,
+				ClientRequestID: testOtherRequestID,
 				Status:          clientui.QueuedUserMessageFailed,
 				RestoreText:     "other client message",
 				FailureReason:   clientui.QueuedUserMessageFailureTerminalWorkflowCompletion,
@@ -143,7 +166,7 @@ func TestReduceRuntimeEvent_QueuedStatusFailedIgnoresOtherClientRestoreText(t *t
 	if update.PendingInput.RestoredText != "" {
 		t.Fatalf("restored text = %q, want empty for other client failure", update.PendingInput.RestoredText)
 	}
-	if len(update.PendingInput.State.PendingInjected) != 1 || update.PendingInput.State.PendingInjected[0].ClientRequestID != "req-local" {
+	if len(update.PendingInput.State.PendingInjected) != 1 || update.PendingInput.State.PendingInjected[0].ClientRequestID != testClientRequestID {
 		t.Fatalf("pending injected = %+v, want local queued item preserved", update.PendingInput.State.PendingInjected)
 	}
 }
@@ -158,8 +181,8 @@ func TestReduceRuntimeEvent_QueuedStatusFailedWithoutLocalPendingInputDoesNotRes
 		clientui.Event{
 			Kind: clientui.EventQueuedUserMessageStatus,
 			QueuedUserMessageStatus: &clientui.QueuedUserMessageStatusEvent{
-				QueueItemID:     "queue-other",
-				ClientRequestID: "req-other",
+				QueueItemID:     testServerQueueItemID,
+				ClientRequestID: testOtherRequestID,
 				Status:          clientui.QueuedUserMessageFailed,
 				RestoreText:     "other client message",
 				FailureReason:   clientui.QueuedUserMessageFailureTerminalWorkflowCompletion,
@@ -203,7 +226,10 @@ func TestReduceRuntimeEvent_RunStateStartedDoesNotDriveLiveness(t *testing.T) {
 		PendingInputState{},
 		RuntimeReasoningState{},
 		false,
-		clientui.Event{Kind: clientui.EventRunStateChanged, RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeTurn)}},
+		clientui.Event{
+			Kind:     clientui.EventRunStateChanged,
+			RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeTurn)},
+		},
 	)
 
 	if update.RunState.State.Run.IsRunning() {
@@ -217,8 +243,8 @@ func TestReduceRuntimeEvent_RunStateStartedDoesNotDriveLiveness(t *testing.T) {
 func TestReduceRuntimeEvent_RuntimeActivityChangedDrivesBusyState(t *testing.T) {
 	runningActivity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
 		ActiveKind: clientui.RuntimeActivityActiveKindGoalLoop,
-		RunID:      "run-1",
-		StepID:     "step-1",
+		RunID:      testRunID,
+		StepID:     testStepID,
 	})
 	running := ReduceRuntimeEvent(
 		RuntimeRunState{Run: clientui.IdleRunLifecycle()},
@@ -259,7 +285,10 @@ func TestReduceRuntimeEvent_RawGoalRunStateDoesNotDriveGoalLiveness(t *testing.T
 		PendingInputState{},
 		RuntimeReasoningState{},
 		false,
-		clientui.Event{Kind: clientui.EventRunStateChanged, RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeGoalLoop)}},
+		clientui.Event{
+			Kind:     clientui.EventRunStateChanged,
+			RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleRunning, clientui.RunModeGoalLoop)},
+		},
 	)
 	if started.RunState.State.Run.IsGoalLoopRunning() {
 		t.Fatalf("raw goal loop start changed run state: %+v", started.RunState.State)
@@ -271,114 +300,18 @@ func TestReduceRuntimeEvent_RawGoalRunStateDoesNotDriveGoalLiveness(t *testing.T
 		PendingInputState{},
 		RuntimeReasoningState{},
 		true,
-		clientui.Event{Kind: clientui.EventRunStateChanged, RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleFinished, clientui.RunModeGoalLoop)}},
+		clientui.Event{
+			Kind:     clientui.EventRunStateChanged,
+			RunState: &clientui.RunState{Lifecycle: clientui.MustRunLifecycle(clientui.RunLifecycleFinished, clientui.RunModeGoalLoop)},
+		},
 	)
 	if !stopped.RunState.State.Run.IsGoalLoopRunning() {
 		t.Fatalf("raw goal loop stop changed run state: %+v", stopped.RunState.State)
 	}
 }
 
-func TestReduceRuntimeEvent_ConversationUpdatedDoesNotRebuildTranscript(t *testing.T) {
-	plain := ReduceRuntimeEvent(
-		RuntimeRunState{},
-		RuntimeConversationState{},
-		PendingInputState{},
-		RuntimeReasoningState{},
-		false,
-		clientui.Event{Kind: clientui.EventConversationUpdated},
-	)
-	if len(plain.Transcript.AssistantStream) != 0 {
-		t.Fatalf("plain conversation_updated changed transcript: %+v", plain.Transcript)
-	}
-	committed := ReduceRuntimeEvent(
-		RuntimeRunState{},
-		RuntimeConversationState{},
-		PendingInputState{},
-		RuntimeReasoningState{},
-		false,
-		clientui.Event{Kind: clientui.EventConversationUpdated, CommittedTranscriptChanged: true},
-	)
-	if len(committed.Transcript.AssistantStream) != 0 {
-		t.Fatalf("committed conversation_updated changed transcript: %+v", committed.Transcript)
-	}
-	recovery := ReduceRuntimeEvent(
-		RuntimeRunState{},
-		RuntimeConversationState{},
-		PendingInputState{},
-		RuntimeReasoningState{},
-		false,
-		clientui.Event{Kind: clientui.EventConversationUpdated, RecoveryCause: clientui.TranscriptRecoveryCauseStreamGap},
-	)
-	if len(recovery.Transcript.AssistantStream) != 0 {
-		t.Fatalf("recovery conversation_updated changed transcript: %+v", recovery.Transcript)
-	}
-	gap := ReduceRuntimeEvent(
-		RuntimeRunState{},
-		RuntimeConversationState{},
-		PendingInputState{},
-		RuntimeReasoningState{},
-		false,
-		clientui.Event{Kind: clientui.EventStreamGap, RecoveryCause: clientui.TranscriptRecoveryCauseStreamGap},
-	)
-	if len(gap.Transcript.AssistantStream) != 0 {
-		t.Fatalf("stream gap changed transcript: %+v", gap.Transcript)
-	}
-}
-
-func TestReduceRuntimeEvent_AssistantDeltaStreamsAppendAndReset(t *testing.T) {
-	appended := ReduceRuntimeEvent(
-		RuntimeRunState{},
-		RuntimeConversationState{},
-		PendingInputState{},
-		RuntimeReasoningState{},
-		false,
-		clientui.Event{
-			Kind:                    clientui.EventAssistantDelta,
-			AssistantDelta:          "hello",
-			AssistantDeltaPhase:     clientui.MessagePhaseFinal,
-			StepID:                  "step-1",
-			AssistantStreamMetadata: &clientui.AssistantStreamMetadata{StepID: "step-1"},
-		},
-	)
-	if len(appended.Transcript.AssistantStream) != 1 {
-		t.Fatalf("expected assistant append command, got %+v", appended.Transcript.AssistantStream)
-	}
-	if got := appended.Transcript.AssistantStream[0]; got.Kind != RuntimeAssistantStreamAppend || got.Delta != "hello" || got.Phase != clientui.MessagePhaseFinal || got.StepID != "step-1" || got.AssistantStreamMetadata == nil || got.AssistantStreamMetadata.StepID != "step-1" {
-		t.Fatalf("assistant append command = %+v", appended.Transcript.AssistantStream[0])
-	}
-
-	reset := ReduceRuntimeEvent(
-		RuntimeRunState{},
-		RuntimeConversationState{},
-		PendingInputState{},
-		RuntimeReasoningState{},
-		false,
-		clientui.Event{Kind: clientui.EventAssistantDeltaReset, StepID: "step-1", AssistantStreamMetadata: &clientui.AssistantStreamMetadata{StepID: "step-1"}},
-	)
-	if len(reset.Transcript.AssistantStream) != 1 {
-		t.Fatalf("expected assistant clear command, got %+v", reset.Transcript.AssistantStream)
-	}
-	if got := reset.Transcript.AssistantStream[0]; got.Kind != RuntimeAssistantStreamClear || got.StepID != "step-1" || got.AssistantStreamMetadata == nil || got.AssistantStreamMetadata.StepID != "step-1" {
-		t.Fatalf("assistant clear command = %+v", reset.Transcript.AssistantStream[0])
-	}
-}
-
-func TestReduceRuntimeEvent_StreamingErrorUpdatedDoesNotRebuildTranscript(t *testing.T) {
-	update := ReduceRuntimeEvent(
-		RuntimeRunState{},
-		RuntimeConversationState{},
-		PendingInputState{},
-		RuntimeReasoningState{},
-		false,
-		clientui.Event{Kind: clientui.EventStreamingErrorUpdated},
-	)
-	if len(update.Transcript.AssistantStream) != 0 {
-		t.Fatalf("streaming_error_updated changed transcript: %+v", update.Transcript)
-	}
-}
-
 func TestReduceRuntimeEvent_ReasoningDeltaTracksStatusAndResetClearsStream(t *testing.T) {
-	delta := &clientui.ReasoningDelta{Key: "reasoning-1", Role: "assistant", Text: "**Checking tests**\nmore"}
+	delta := &clientui.ReasoningDelta{Key: "reasoning", Role: "assistant", Text: "**Checking tests**\nmore"}
 	update := ReduceRuntimeEvent(
 		RuntimeRunState{},
 		RuntimeConversationState{},
@@ -423,7 +356,15 @@ func TestReduceRuntimeEvent_BackgroundCompletionProducesNotice(t *testing.T) {
 		PendingInputState{},
 		RuntimeReasoningState{},
 		false,
-		clientui.Event{Kind: clientui.EventBackgroundUpdated, Background: &clientui.BackgroundShellEvent{Type: "completed", ID: "1000", State: "completed", CompactText: "Background shell 1000 completed (exit 0)"}},
+		clientui.Event{
+			Kind: clientui.EventBackgroundUpdated,
+			Background: &clientui.BackgroundShellEvent{
+				Type:        "completed",
+				ID:          testBackgroundID,
+				State:       "completed",
+				CompactText: "Background shell completed",
+			},
+		},
 	)
 
 	if update.BackgroundProcesses.Command != RuntimeBackgroundProcessRefresh {
@@ -436,7 +377,7 @@ func TestReduceRuntimeEvent_BackgroundCompletionProducesNotice(t *testing.T) {
 	if notice.Kind != BackgroundNoticeSuccess {
 		t.Fatalf("notice kind = %v, want success", notice.Kind)
 	}
-	if notice.Message != "Background shell 1000 completed (exit 0)" {
+	if notice.Message != "Background shell completed" {
 		t.Fatalf("notice message = %q", notice.Message)
 	}
 }
@@ -448,20 +389,63 @@ func TestReduceRuntimeEvent_BackgroundCompletionFallsBackWithoutCompactText(t *t
 		PendingInputState{},
 		RuntimeReasoningState{},
 		false,
-		clientui.Event{Kind: clientui.EventBackgroundUpdated, Background: &clientui.BackgroundShellEvent{Type: "completed", ID: "1000", State: "completed"}},
+		clientui.Event{
+			Kind:       clientui.EventBackgroundUpdated,
+			Background: &clientui.BackgroundShellEvent{Type: "completed", ID: testBackgroundID, State: "completed"},
+		},
 	)
 
 	notice := update.Notices.BackgroundNotice
 	if notice == nil {
 		t.Fatal("expected completion notice")
 	}
-	if notice.Message != "background shell 1000 completed" {
-		t.Fatalf("notice message = %q", notice.Message)
+	want := "background shell " + testBackgroundID + " completed"
+	if notice.Message != want {
+		t.Fatalf("notice message = %q, want %q", notice.Message, want)
 	}
 }
 
-func TestReduceRuntimeEvent_CompactionCompletedClearsCompacting(t *testing.T) {
+func TestReduceRuntimeEvent_BackgroundKilledByRuntimeProducesErrorNotice(t *testing.T) {
 	update := ReduceRuntimeEvent(
+		RuntimeRunState{},
+		RuntimeConversationState{},
+		PendingInputState{},
+		RuntimeReasoningState{},
+		false,
+		clientui.Event{
+			Kind: clientui.EventBackgroundUpdated,
+			Background: &clientui.BackgroundShellEvent{
+				Type:        "killed",
+				ID:          testBackgroundID,
+				State:       "killed",
+				CompactText: "Background shell killed",
+			},
+		},
+	)
+
+	notice := update.Notices.BackgroundNotice
+	if notice == nil {
+		t.Fatal("expected killed notice")
+	}
+	if notice.Kind != BackgroundNoticeError {
+		t.Fatalf("notice kind = %v, want error", notice.Kind)
+	}
+}
+
+func TestReduceRuntimeEvent_CompactionLifecycle(t *testing.T) {
+	started := ReduceRuntimeEvent(
+		RuntimeRunState{},
+		RuntimeConversationState{},
+		PendingInputState{},
+		RuntimeReasoningState{},
+		false,
+		clientui.Event{Kind: clientui.EventCompactionStarted},
+	)
+	if !started.RunState.State.Compaction.IsRunning() {
+		t.Fatal("expected compaction started to set compacting state")
+	}
+
+	completed := ReduceRuntimeEvent(
 		RuntimeRunState{Compaction: clientui.NewCompactionLifecycle(true)},
 		RuntimeConversationState{},
 		PendingInputState{},
@@ -469,12 +453,46 @@ func TestReduceRuntimeEvent_CompactionCompletedClearsCompacting(t *testing.T) {
 		false,
 		clientui.Event{Kind: clientui.EventCompactionCompleted, Compaction: &clientui.CompactionStatus{Mode: "auto", Count: 2}},
 	)
-
-	if update.RunState.State.Compaction.IsRunning() {
+	if completed.RunState.State.Compaction.IsRunning() {
 		t.Fatal("expected compaction completed to clear compacting state")
 	}
-	if len(update.Transcript.AssistantStream) != 0 {
-		t.Fatalf("expected compaction completed to leave transcript unchanged, got %+v", update.Transcript)
+
+	failed := ReduceRuntimeEvent(
+		RuntimeRunState{Compaction: clientui.NewCompactionLifecycle(true)},
+		RuntimeConversationState{},
+		PendingInputState{},
+		RuntimeReasoningState{},
+		false,
+		clientui.Event{Kind: clientui.EventCompactionFailed, Compaction: &clientui.CompactionStatus{Mode: "auto", Count: 2, Error: "failed"}},
+	)
+	if failed.RunState.State.Compaction.IsRunning() {
+		t.Fatal("expected compaction failed to clear compacting state")
+	}
+}
+
+func TestReduceRuntimeEvent_ReviewerLifecycle(t *testing.T) {
+	started := ReduceRuntimeEvent(
+		RuntimeRunState{},
+		RuntimeConversationState{},
+		PendingInputState{},
+		RuntimeReasoningState{},
+		false,
+		clientui.Event{Kind: clientui.EventReviewerStarted},
+	)
+	if !started.RunState.State.Reviewer.IsRunning() || !started.RunState.State.Reviewer.IsBlocking() {
+		t.Fatalf("reviewer lifecycle = %v, want blocking running", started.RunState.State.Reviewer)
+	}
+
+	completed := ReduceRuntimeEvent(
+		RuntimeRunState{Reviewer: clientui.ReviewerLifecycleRunningBlocking},
+		RuntimeConversationState{},
+		PendingInputState{},
+		RuntimeReasoningState{},
+		false,
+		clientui.Event{Kind: clientui.EventReviewerCompleted},
+	)
+	if completed.RunState.State.Reviewer.IsRunning() {
+		t.Fatalf("reviewer lifecycle = %v, want idle", completed.RunState.State.Reviewer)
 	}
 }
 
@@ -483,7 +501,10 @@ func TestReduceRuntimeRunStateEventRejectsInvalidLifecycleAtReducerBoundary(t *t
 	reduction := ReduceRuntimeRunStateEvent(
 		initial,
 		true,
-		clientui.Event{Kind: clientui.EventRunStateChanged, RunState: &clientui.RunState{Lifecycle: clientui.RunLifecycle{Phase: clientui.RunLifecycleIdle, Mode: clientui.RunModeGoalLoop}}},
+		clientui.Event{
+			Kind:     clientui.EventRunStateChanged,
+			RunState: &clientui.RunState{Lifecycle: clientui.RunLifecycle{Phase: clientui.RunLifecycleIdle, Mode: clientui.RunModeGoalLoop}},
+		},
 	)
 	if reduction.State.Run != initial.Run {
 		t.Fatalf("invalid run transition changed state: %+v", reduction.State)
@@ -494,13 +515,16 @@ func TestReduceRuntimeRunStateEventRejectsInvalidLifecycleAtReducerBoundary(t *t
 }
 
 func TestDomainReducersIgnoreUnownedEventConcerns(t *testing.T) {
-	evt := clientui.Event{Kind: clientui.EventBackgroundUpdated, Background: &clientui.BackgroundShellEvent{Type: "completed", ID: "1000", State: "completed"}}
-
-	if transcript := ReduceRuntimeTranscriptEvent(evt); len(transcript.AssistantStream) != 0 {
-		t.Fatalf("transcript reducer handled background event: %+v", transcript)
+	evt := clientui.Event{
+		Kind:       clientui.EventBackgroundUpdated,
+		Background: &clientui.BackgroundShellEvent{Type: "completed", ID: testBackgroundID, State: "completed"},
 	}
+
 	if reasoning := ReduceRuntimeReasoningEvent(RuntimeReasoningState{StatusHeader: "thinking"}, evt); reasoning.State.StatusHeader != "thinking" || len(reasoning.Stream) != 0 {
 		t.Fatalf("reasoning reducer handled background event: %+v", reasoning)
+	}
+	if pending := ReduceRuntimePendingInputEvent(PendingInputState{PendingInjected: []clientui.QueuedUserMessage{{ID: testQueueItemID}}}, evt); len(pending.State.PendingInjected) != 1 || pending.State.PendingInjected[0].ID != testQueueItemID {
+		t.Fatalf("pending input reducer handled background event: %+v", pending)
 	}
 	background := ReduceRuntimeEvent(
 		RuntimeRunState{},
@@ -512,6 +536,18 @@ func TestDomainReducersIgnoreUnownedEventConcerns(t *testing.T) {
 	).BackgroundProcesses
 	if background.Command != RuntimeBackgroundProcessRefresh {
 		t.Fatalf("background process reducer did not own background refresh: %+v", background)
+	}
+}
+
+func TestReduceRuntimeNoticeEvent_DiagnosticFailuresProduceNotices(t *testing.T) {
+	sleepGuard := ReduceRuntimeNoticeEvent(clientui.Event{Kind: clientui.EventSleepGuardFailed, Error: "disabled by OS"})
+	if sleepGuard.DiagnosticNotice == nil || sleepGuard.DiagnosticNotice.Kind != BackgroundNoticeError {
+		t.Fatalf("sleep guard notice = %+v, want diagnostic error", sleepGuard.DiagnosticNotice)
+	}
+
+	promptHistory := ReduceRuntimeNoticeEvent(clientui.Event{Kind: clientui.EventPromptHistoryPersistFailed, Error: "disk full"})
+	if promptHistory.TransientDiagnostic == nil || promptHistory.TransientDiagnostic.Kind != BackgroundNoticeError {
+		t.Fatalf("prompt history notice = %+v, want transient diagnostic error", promptHistory.TransientDiagnostic)
 	}
 }
 

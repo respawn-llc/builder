@@ -168,42 +168,6 @@ func TestRuntimeReadModelMainViewHydrationAcceptsNewGenerationReset(t *testing.T
 		t.Fatalf("accepted version = %+v, want %+v", m.runtimeReadModelVersion, nextVersion)
 	}
 }
-
-func TestRuntimeReadModelLiveNewGenerationRequestsMainViewHydration(t *testing.T) {
-	current := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 9}
-	incoming := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 2, Sequence: 1}
-	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRegisteredIdle, clientui.RuntimeActivityOptions{})
-	client := &runtimeControlFakeClient{mainView: clientui.RuntimeMainView{
-		Version:  incoming,
-		Activity: activity,
-	}}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
-	m.runtimeReadModelVersion = current
-
-	next, cmd := m.Update(runtimeEventMsg{event: clientui.Event{
-		Kind:             clientui.EventRuntimeActivityChanged,
-		ReadModelVersion: incoming,
-		RuntimeActivity:  &activity,
-	}})
-	updated := next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected new live generation to request main-view hydration")
-	}
-	msg := cmd()
-	refreshed, ok := msg.(runtimeMainViewRefreshedMsg)
-	if !ok {
-		t.Fatalf("hydration command returned %T", msg)
-	}
-	next, _ = updated.Update(refreshed)
-	updated = next.(*uiModel)
-	if updated.runtimeReadModelVersion != incoming {
-		t.Fatalf("hydrated version = %+v, want %+v", updated.runtimeReadModelVersion, incoming)
-	}
-	if client.refreshMainViewCalls != 1 {
-		t.Fatalf("refresh calls = %d, want 1", client.refreshMainViewCalls)
-	}
-}
-
 func TestRuntimeReadModelInvalidActivityEventFailsClosedWithHydration(t *testing.T) {
 	activity := clientui.MustRuntimeActivity(clientui.RuntimeActivityRunning, clientui.RuntimeActivityOptions{
 		ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,

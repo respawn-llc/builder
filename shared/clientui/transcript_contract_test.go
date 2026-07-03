@@ -127,12 +127,9 @@ func TestTranscriptMessageHasExactlyOnePayloadForKind(t *testing.T) {
 
 func TestTranscriptDTOsDoNotReferenceLegacyShapes(t *testing.T) {
 	forbidden := map[reflect.Type]struct{}{
-		reflect.TypeOf(ChatEntry{}):                  {},
-		reflect.TypeOf(ChatSnapshot{}):               {},
 		reflect.TypeOf(RuntimeMainView{}):            {},
 		reflect.TypeOf(PendingPromptEvent{}):         {},
 		reflect.TypeOf(AttentionNotificationEvent{}): {},
-		reflect.TypeOf(AssistantStreamMetadata{}):    {},
 	}
 	for _, typ := range transcriptContractTypes() {
 		walkType(t, typ, map[reflect.Type]struct{}{}, func(current reflect.Type, path string) {

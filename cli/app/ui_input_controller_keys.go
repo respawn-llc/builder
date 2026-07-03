@@ -46,7 +46,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
 			m.forwardToView(tea.KeyMsg{Type: msg.Type})
-			return m, m.maybeRequestDetailTranscriptWindow()
+			return m, nil
 		case tea.KeyEnter:
 			m.forwardToView(tea.KeyMsg{Type: msg.Type})
 			return m, nil
@@ -307,10 +307,8 @@ func (c uiInputController) handleRollbackSelectionKey(msg tea.KeyMsg) (tea.Model
 		m.moveRollbackSelection(-1)
 		return m, nil
 	case tea.KeyDown:
-		if m.rollback.selection >= len(m.rollback.candidates)-1 {
-			if cmd := m.requestRollbackSelectionPage(1); cmd != nil {
-				return m, cmd
-			}
+		if cmd := m.requestRollbackSelectionPage(1); cmd != nil {
+			return m, cmd
 		}
 		m.moveRollbackSelection(1)
 		return m, nil

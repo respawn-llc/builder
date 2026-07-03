@@ -11,9 +11,4 @@ func (m *uiModel) requestRuntimeQueuedDrainAfterHydration() tea.Cmd {
 }
 
 func (m *uiModel) clearActiveAssistantStreamSource() {
-	if m == nil {
-		return
-	}
-	m.activeAssistantStreamSource = ""
-	m.activeAssistantStreamIdentity = uiAssistantStreamIdentity{}
 }

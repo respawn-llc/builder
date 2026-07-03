@@ -25,12 +25,6 @@ func (m *uiModel) clearReviewerState() {
 	m.setReviewerBlocking(false)
 }
 
-type rollbackCandidate struct {
-	TranscriptIndex  int
-	RollbackTargetID string
-	Text             string
-}
-
 func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-chan clientui.Event, askEvents <-chan askEvent, opts ...UIOption) tea.Model {
 	m := newUIModelDefaults(runtimeClient, runtimeEvents, askEvents)
 	for _, opt := range opts {
@@ -64,22 +58,6 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-c
 	if !m.hasRuntimeClient() {
 		m.reviewerEnabled = strings.TrimSpace(m.reviewerMode) != "" && strings.TrimSpace(m.reviewerMode) != "off"
 	}
-	if m.hasRuntimeClient() {
-		// Deprecated emergency path during tui-redesign demolition:
-		// runtime-backed transcript hydration was intentionally removed.
-	} else {
-		for _, entry := range m.initialTranscript {
-			if strings.TrimSpace(entry.Text) == "" {
-				continue
-			}
-			role := tui.TranscriptRoleFromWire(entry.Role)
-			m.transcriptEntries = append(m.transcriptEntries, tui.TranscriptEntry{Role: role, Text: entry.Text, RollbackTargetID: entry.RollbackTargetID})
-			m.forwardToView(tui.AppendTranscriptMsg{Role: role, Text: entry.Text})
-		}
-		m.transcriptBaseOffset = 0
-		m.transcriptTotalEntries = len(m.transcriptEntries)
-		m.refreshRollbackCandidates()
-	}
 	if gitStartupCmd := m.statusLineGitRefreshCmd(); gitStartupCmd != nil {
 		m.statusGitBackgroundInFlight = true
 		m.startupCmds = append(m.startupCmds, gitStartupCmd)
@@ -95,35 +73,6 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-c
 	}
 	m.layout().syncViewport()
 	return m
-}
-
-func (m *uiModel) handleRenderDiagnostic(diag tui.RenderDiagnostic) {
-	m.startupCmds = append(m.startupCmds, func() tea.Msg {
-		return renderDiagnosticMsg{diagnostic: diag}
-	})
-}
-
-func (m *uiModel) applyRenderDiagnostic(diag tui.RenderDiagnostic) tea.Cmd {
-	message := strings.TrimSpace(diag.Message)
-	if message == "" {
-		return nil
-	}
-	severity := strings.TrimSpace(string(diag.Severity))
-	if severity == "" {
-		severity = string(tui.RenderDiagnosticSeverityWarn)
-	}
-	m.logf("render.diagnostic severity=%s component=%s message=%q", severity, strings.TrimSpace(diag.Component), message)
-	if diag.Err != nil {
-		m.logf("render.diagnostic.err component=%s err=%q", strings.TrimSpace(diag.Component), diag.Err.Error())
-	}
-	kind := uiStatusNoticeNeutral
-	switch diag.Severity {
-	case tui.RenderDiagnosticSeverityError, tui.RenderDiagnosticSeverityFatal:
-		kind = uiStatusNoticeError
-	default:
-		kind = uiStatusNoticeNeutral
-	}
-	return m.sendTransientStatusWithNoticeID(message, kind, transientStatusDuration, uiStatusNoticeReplace, "")
 }
 
 func (m *uiModel) applyRunLoggerDiagnostic(diag runLoggerDiagnostic) tea.Cmd {
@@ -257,7 +206,7 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m.forwardToView(msg)
 	m.layout().syncViewport()
-	return m, m.maybeRequestDetailTranscriptWindow()
+	return m, nil
 }
 
 func (m *uiModel) setDebugKeyTransientStatus(raw tea.Msg, normalized tea.KeyMsg, source string) {
@@ -284,19 +233,6 @@ func (m *uiModel) forwardToView(msg tea.Msg) {
 	if prevMode != m.view.Mode() && m.surface().isTranscript() {
 		m.activeSurface = surfaceForTranscriptMode(m.view.Mode())
 		m.syncRendererOutputGate()
-	}
-	if prevMode != m.view.Mode() && m.view.Mode() == tui.ModeDetail && m.hasRuntimeClient() {
-		m.primeDetailTranscriptFromCurrentTail()
-		nextDetail, _ := m.view.Update(tui.SetConversationMsg{
-			BaseOffset:   m.detailTranscript.offset,
-			TotalEntries: m.detailTranscript.totalEntries,
-			Entries:      append([]tui.TranscriptEntry(nil), m.detailTranscript.entries...),
-			Ongoing:      m.detailTranscript.streaming,
-			OngoingError: m.detailTranscript.streamingErr,
-		})
-		if castedDetail, ok := nextDetail.(tui.Model); ok {
-			m.view = castedDetail
-		}
 	}
 }
 

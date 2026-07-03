@@ -84,7 +84,7 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	if evt.Kind != EventConversationUpdated || !evt.CommittedTranscriptChanged {
 		t.Fatalf("event = %+v, want committed conversation update", evt)
 	}
-	entries := TranscriptEntriesFromEvent(evt)
+	entries := VisibleChatEntriesFromMessage(evt.Message)
 	if len(entries) != 1 {
 		t.Fatalf("event transcript entries len = %d, want 1", len(entries))
 	}

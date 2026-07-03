@@ -548,10 +548,7 @@ func TestRealCursorFrameMarkerNotRenderedWithoutRealCursor(t *testing.T) {
 
 func TestRealCursorFrameMarkerNotRenderedInDetailMode(t *testing.T) {
 	state := newUITerminalCursorState()
-	m := newProjectedStaticUIModel(
-		WithUITerminalCursorState(state),
-		WithUIInitialTranscript([]UITranscriptEntry{{Role: "assistant", Text: "history"}}),
-	)
+	m := newProjectedStaticUIModel(WithUITerminalCursorState(state))
 	m.termWidth = 24
 	m.termHeight = 10
 	m.windowSizeKnown = true
@@ -678,48 +675,6 @@ func TestTerminalCursorProgramTracksWrappedInputAndResize(t *testing.T) {
 	}
 }
 
-func TestTerminalCursorProgramStartupReplayAfterClearScreenKeepsOngoingOutputVisible(t *testing.T) {
-	state := newUITerminalCursorState()
-	model := newProjectedStaticUIModel(
-		WithUITerminalCursorState(state),
-		WithUIInitialTranscript([]UITranscriptEntry{{Role: "assistant", Text: "startup replay marker"}}),
-	)
-
-	var out bytes.Buffer
-	program := tea.NewProgram(
-		model,
-		tea.WithInput(strings.NewReader("")),
-		tea.WithOutput(newUITerminalCursorWriter(&out, state)),
-		tea.WithoutSignals(),
-	)
-	done := make(chan error, 1)
-	go func() {
-		_, err := program.Run()
-		done <- err
-	}()
-	defer program.Quit()
-
-	program.Send(tea.WindowSizeMsg{Width: 80, Height: 20})
-	waitForTestCondition(t, 2*time.Second, "visible ongoing output after startup clear-screen replay", func() bool {
-		tail := terminalOutputAfterLastClearScreen(out.String())
-		plain := stripANSIAndTrimRight(tail)
-		return strings.Contains(plain, "startup replay marker")
-	})
-	program.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("program run failed: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("program did not terminate")
-	}
-
-	if plain := stripANSIAndTrimRight(terminalOutputAfterLastClearScreen(out.String())); strings.TrimSpace(plain) == "" {
-		t.Fatalf("expected nonblank ongoing output after final clear screen, got raw %q", out.String())
-	}
-}
-
 func terminalCursorOutputContains(state *uiTerminalCursorState, out *bytes.Buffer, want string) bool {
 	state.writeMu.Lock()
 	defer state.writeMu.Unlock()
@@ -736,10 +691,7 @@ func terminalOutputAfterLastClearScreen(output string) string {
 
 func TestTerminalCursorProgramSurvivesAltScreenTransitionAfterPlacement(t *testing.T) {
 	state := newUITerminalCursorState()
-	model := newProjectedStaticUIModel(
-		WithUITerminalCursorState(state),
-		WithUIInitialTranscript([]UITranscriptEntry{{Role: "assistant", Text: "history marker"}}),
-	)
+	model := newProjectedStaticUIModel(WithUITerminalCursorState(state))
 	model.input = "wrapped input before alt transition"
 	model.inputCursor = -1
 
@@ -783,9 +735,6 @@ func TestTerminalCursorProgramSurvivesAltScreenTransitionAfterPlacement(t *testi
 	raw := out.String()
 	if !strings.Contains(raw, "\x1b[?1049h") || !strings.Contains(raw, "\x1b[?1049l") {
 		t.Fatalf("expected alt-screen enter/exit in output, got %q", raw)
-	}
-	if !strings.Contains(strings.Join(strings.Fields(xansi.Strip(raw)), " "), "history marker") {
-		t.Fatalf("expected output to remain coherent across alt-screen transition, got %q", raw)
 	}
 }
 

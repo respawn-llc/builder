@@ -179,7 +179,7 @@ func mustMainView(t *testing.T, svc *Service, sessionID string) clientui.Runtime
 	return resp.MainView
 }
 
-func mustTranscriptTailEntries(t *testing.T, svc *Service, sessionID string) []clientui.ChatEntry {
+func mustTranscriptTailEntries(t *testing.T, svc *Service, sessionID string) []runtime.ChatEntry {
 	t.Helper()
 	entries, err := svc.SessionTranscriptTailEntries(context.Background(), sessionID)
 	if err != nil {
@@ -198,7 +198,7 @@ type comparableChatEntry struct {
 	CompactLabel  string
 }
 
-func normalizedChatEntries(entries []clientui.ChatEntry) []comparableChatEntry {
+func normalizedChatEntries(entries []runtime.ChatEntry) []comparableChatEntry {
 	out := make([]comparableChatEntry, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, comparableChatEntry{
@@ -206,8 +206,8 @@ func normalizedChatEntries(entries []clientui.ChatEntry) []comparableChatEntry {
 			Role:          entry.Role,
 			Text:          entry.Text,
 			CondensedText: entry.CondensedText,
-			Phase:         entry.Phase,
-			MessageType:   entry.MessageType,
+			Phase:         string(entry.Phase),
+			MessageType:   string(entry.MessageType),
 			CompactLabel:  entry.CompactLabel,
 		})
 	}

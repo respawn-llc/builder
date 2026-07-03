@@ -65,7 +65,7 @@ func TestStartSessionActivityEventsEmitsExplicitGapWhenCursorReplayUnavailable(t
 	defer cancel()
 
 	initial := &stubSessionActivitySubscription{steps: []stubSessionActivityStep{{evt: clientui.Event{Sequence: 41, Kind: clientui.EventAssistantDelta, AssistantDelta: "first"}}, {err: serverapi.ErrStreamGap}}}
-	recovered := &stubSessionActivitySubscription{steps: []stubSessionActivityStep{{evt: clientui.Event{Sequence: 1, Kind: clientui.EventAssistantMessage, TranscriptEntries: []clientui.ChatEntry{{Role: "assistant", Text: "after restart"}}}}}}
+	recovered := &stubSessionActivitySubscription{steps: []stubSessionActivityStep{{evt: clientui.Event{Sequence: 1, Kind: clientui.EventAssistantMessage}}}}
 	var requestedAfter []uint64
 	events, stop := startSessionActivityEvents(ctx, initial, func(_ context.Context, afterSequence uint64) (serverapi.SessionActivitySubscription, error) {
 		requestedAfter = append(requestedAfter, afterSequence)
@@ -88,7 +88,7 @@ func TestStartSessionActivityEventsEmitsExplicitGapWhenCursorReplayUnavailable(t
 		t.Fatalf("stream-gap recovery cause = %q, want %q", gap.RecoveryCause, clientui.TranscriptRecoveryCauseStreamGap)
 	}
 	live := waitSessionActivityEvent(t, events)
-	if live.Kind != clientui.EventAssistantMessage || len(live.TranscriptEntries) != 1 || live.TranscriptEntries[0].Text != "after restart" {
+	if live.Kind != clientui.EventAssistantMessage {
 		t.Fatalf("expected live event after cursor reset, got %+v", live)
 	}
 	if len(requestedAfter) != 2 || requestedAfter[0] != 41 || requestedAfter[1] != 0 {
@@ -102,7 +102,7 @@ func TestStartSessionActivityEventsKeepsRetryingFreshSubscribeAfterCursorReplayG
 	defer cancel()
 
 	initial := &stubSessionActivitySubscription{steps: []stubSessionActivityStep{{evt: clientui.Event{Sequence: 41, Kind: clientui.EventAssistantDelta, AssistantDelta: "first"}}, {err: io.EOF}}}
-	recovered := &stubSessionActivitySubscription{steps: []stubSessionActivityStep{{evt: clientui.Event{Sequence: 1, Kind: clientui.EventAssistantMessage, TranscriptEntries: []clientui.ChatEntry{{Role: "assistant", Text: "after transient restart"}}}}}}
+	recovered := &stubSessionActivitySubscription{steps: []stubSessionActivityStep{{evt: clientui.Event{Sequence: 1, Kind: clientui.EventAssistantMessage}}}}
 	var requestedAfter []uint64
 	freshAttempts := 0
 	events, stop := startSessionActivityEvents(ctx, initial, func(_ context.Context, afterSequence uint64) (serverapi.SessionActivitySubscription, error) {
@@ -130,7 +130,7 @@ func TestStartSessionActivityEventsKeepsRetryingFreshSubscribeAfterCursorReplayG
 		t.Fatalf("expected explicit stream-gap event, got %+v", gap)
 	}
 	live := waitSessionActivityEvent(t, events)
-	if live.Kind != clientui.EventAssistantMessage || len(live.TranscriptEntries) != 1 || live.TranscriptEntries[0].Text != "after transient restart" {
+	if live.Kind != clientui.EventAssistantMessage {
 		t.Fatalf("expected live event after fresh subscribe retry, got %+v", live)
 	}
 	if len(requestedAfter) != 4 || requestedAfter[0] != 41 || requestedAfter[1] != 0 || requestedAfter[2] != 0 || requestedAfter[3] != 0 {
@@ -174,7 +174,7 @@ func TestStartSessionActivityEventsKeepsResubscribingAfterTransientSubscribeTime
 	defer cancel()
 
 	initial := &stubSessionActivitySubscription{steps: []stubSessionActivityStep{{evt: clientui.Event{Sequence: 41, Kind: clientui.EventAssistantDelta, AssistantDelta: "before drop"}}, {err: io.EOF}}}
-	recovered := &stubSessionActivitySubscription{steps: []stubSessionActivityStep{{evt: clientui.Event{Sequence: 42, Kind: clientui.EventAssistantMessage, TranscriptEntries: []clientui.ChatEntry{{Role: "assistant", Text: "after reconnect"}}}}}}
+	recovered := &stubSessionActivitySubscription{steps: []stubSessionActivityStep{{evt: clientui.Event{Sequence: 42, Kind: clientui.EventAssistantMessage}}}}
 	subscribeCalls := 0
 	events, stop := startSessionActivityEvents(ctx, initial, func(context.Context, uint64) (serverapi.SessionActivitySubscription, error) {
 		subscribeCalls++
@@ -190,7 +190,7 @@ func TestStartSessionActivityEventsKeepsResubscribingAfterTransientSubscribeTime
 		t.Fatalf("unexpected initial event: %+v", first)
 	}
 	reconnected := waitSessionActivityEvent(t, events)
-	if reconnected.Kind != clientui.EventAssistantMessage || len(reconnected.TranscriptEntries) != 1 || reconnected.TranscriptEntries[0].Text != "after reconnect" {
+	if reconnected.Kind != clientui.EventAssistantMessage {
 		t.Fatalf("unexpected reconnected event: %+v", reconnected)
 	}
 	if subscribeCalls != 2 {

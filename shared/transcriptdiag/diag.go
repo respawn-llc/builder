@@ -33,28 +33,6 @@ func Enabled(debug bool, getenv func(string) string) bool {
 	return EnabledFromEnv(getenv)
 }
 
-func EntriesDigest(entries []clientui.ChatEntry) string {
-	if len(entries) == 0 {
-		return "-"
-	}
-	parts := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		toolName := ""
-		if entry.ToolCall != nil {
-			toolName = entry.ToolCall.ToolName
-		}
-		parts = append(parts, strings.Join([]string{
-			entry.Role,
-			entry.Phase,
-			entry.ToolCallID,
-			toolName,
-			entry.Text,
-			entry.CondensedText,
-		}, "\x1f"))
-	}
-	return digest(parts)
-}
-
 func EventDigest(evt clientui.Event) string {
 	parts := []string{
 		string(evt.Kind),
@@ -62,7 +40,6 @@ func EventDigest(evt clientui.Event) string {
 		evt.AssistantDelta,
 		evt.UserMessage,
 		strings.Join(evt.UserMessageBatch, "\x1e"),
-		EntriesDigest(evt.TranscriptEntries),
 	}
 	if evt.ReasoningDelta != nil {
 		parts = append(parts, evt.ReasoningDelta.Key, evt.ReasoningDelta.Role, evt.ReasoningDelta.Text)
@@ -80,15 +57,6 @@ func EventDigest(evt clientui.Event) string {
 		parts = append(parts, evt.Background.Type, evt.Background.ID, evt.Background.State, evt.Background.Command, evt.Background.Preview)
 	}
 	return digest(parts)
-}
-
-func AddEntriesFields(fields map[string]string, entries []clientui.ChatEntry) map[string]string {
-	if fields == nil {
-		fields = map[string]string{}
-	}
-	fields["entries_count"] = fmt.Sprint(len(entries))
-	fields["entries_digest"] = EntriesDigest(entries)
-	return fields
 }
 
 func FormatLine(name string, fields map[string]string) string {

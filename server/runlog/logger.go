@@ -88,7 +88,6 @@ func FormatTranscriptProjectionDiagnostic(sessionID string, evt clientui.Event) 
 		"event_digest":          transcriptdiag.EventDigest(evt),
 		"assistant_delta_chars": fmt.Sprintf("%d", len(evt.AssistantDelta)),
 	}
-	fields = transcriptdiag.AddEntriesFields(fields, evt.TranscriptEntries)
 	if evt.ReasoningDelta != nil {
 		fields["reasoning_key"] = strings.TrimSpace(evt.ReasoningDelta.Key)
 		fields["reasoning_chars"] = fmt.Sprintf("%d", len(evt.ReasoningDelta.Text))
@@ -104,7 +103,6 @@ func FormatTranscriptPublishDiagnostic(sessionID string, evt clientui.Event) str
 		"step_id":      strings.TrimSpace(evt.StepID),
 		"event_digest": transcriptdiag.EventDigest(evt),
 	}
-	fields = transcriptdiag.AddEntriesFields(fields, evt.TranscriptEntries)
 	return transcriptdiag.FormatLine("transcript.diag.server.publish_activity", fields)
 }
 

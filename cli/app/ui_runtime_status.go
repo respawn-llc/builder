@@ -3,7 +3,6 @@ package app
 import (
 	"strings"
 
-	"core/cli/tui"
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -241,40 +240,13 @@ func (m *uiModel) currentRuntimeSessionID() string {
 
 func (m *uiModel) localRuntimeStatus() clientui.RuntimeStatus {
 	return clientui.RuntimeStatus{
-		ReviewerFrequency:                 m.reviewerMode,
-		ReviewerEnabled:                   m.reviewerEnabled,
-		AutoCompactionEnabled:             m.autoCompactionEnabled,
-		QuestionsEnabled:                  m.questionsEnabled,
-		FastModeAvailable:                 m.fastModeAvailable,
-		FastModeEnabled:                   m.fastModeEnabled,
-		ConversationFreshness:             m.conversationFreshness,
-		LastCommittedAssistantFinalAnswer: localLastCommittedAssistantFinalAnswer(m.transcriptEntries),
-		ThinkingLevel:                     m.thinkingLevel,
-	}
-}
-
-func localLastCommittedAssistantFinalAnswer(entries []tui.TranscriptEntry) string {
-	answer := ""
-	for _, entry := range entries {
-		if !transcriptEntryAffectsCommittedAssistantFinalAnswer(entry) {
-			continue
-		}
-		if entry.Role == tui.TranscriptRoleAssistant && string(entry.Phase) == clientui.ChatEntryPhaseFinalAnswer && strings.TrimSpace(entry.Text) != "" {
-			answer = entry.Text
-			continue
-		}
-		answer = ""
-	}
-	return answer
-}
-
-func transcriptEntryAffectsCommittedAssistantFinalAnswer(entry tui.TranscriptEntry) bool {
-	switch entry.Role {
-	case "", tui.TranscriptRoleSystem, tui.TranscriptRoleError, tui.TranscriptRoleWarning, tui.TranscriptRoleCacheWarning, tui.TranscriptRoleReviewerStatus, tui.TranscriptRoleReviewerSuggestions, tui.TranscriptRoleDeveloperFeedback:
-		return false
-	case tui.TranscriptRoleDeveloperErrorFeedback:
-		return false
-	default:
-		return true
+		ReviewerFrequency:     m.reviewerMode,
+		ReviewerEnabled:       m.reviewerEnabled,
+		AutoCompactionEnabled: m.autoCompactionEnabled,
+		QuestionsEnabled:      m.questionsEnabled,
+		FastModeAvailable:     m.fastModeAvailable,
+		FastModeEnabled:       m.fastModeEnabled,
+		ConversationFreshness: m.conversationFreshness,
+		ThinkingLevel:         m.thinkingLevel,
 	}
 }

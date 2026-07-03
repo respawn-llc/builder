@@ -14,12 +14,6 @@ type UIOption func(*uiModel)
 
 type UIAction = serverapi.SessionTransitionAction
 
-type UITranscriptEntry struct {
-	Role             string
-	Text             string
-	RollbackTargetID string
-}
-
 type UITransition struct {
 	Action                       serverapi.SessionTransitionAction
 	Exit                         bool
@@ -126,17 +120,7 @@ func WithUIModelContractLocked(locked bool) UIOption {
 func WithUITheme(theme string) UIOption {
 	return func(m *uiModel) {
 		m.theme = strings.TrimSpace(theme)
-		m.view = tui.NewModel(
-			tui.WithTheme(theme),
-			tui.WithCompactDetail(),
-			tui.WithRenderDiagnosticHandler(m.handleRenderDiagnostic),
-		)
-	}
-}
-
-func WithUIInitialTranscript(entries []UITranscriptEntry) UIOption {
-	return func(m *uiModel) {
-		m.initialTranscript = append([]UITranscriptEntry(nil), entries...)
+		m.view = tui.NewModel(tui.WithTheme(theme))
 	}
 }
 

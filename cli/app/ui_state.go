@@ -140,7 +140,6 @@ type uiPresentationFeatureState struct {
 type uiConversationFeatureState struct {
 	interaction                        uiInteractionState
 	ask                                uiAskState
-	initialTranscript                  []UITranscriptEntry
 	startupSubmit                      string
 	startupSubmitPromptHistoryRecorded bool
 }
@@ -188,22 +187,12 @@ type uiStatusFeatureState struct {
 }
 
 type uiTranscriptFeatureState struct {
-	sawAssistantDelta             bool
-	activeAssistantStreamSource   string
-	activeAssistantStreamIdentity uiAssistantStreamIdentity
-	lastCommittedAssistantStepID  string
-	transcriptEntries             []tui.TranscriptEntry
-	transcriptBaseOffset          int
-	transcriptTotalEntries        int
-	runtimeConnection             clientui.RuntimeConnectionLifecycle
-	transcriptLiveDirty           bool
-	reasoningLiveDirty            bool
-	detailTranscript              uiDetailTranscriptWindow
-	runtimeMainViewToken          uint64
-	runtimeMainViewBusy           bool
-	runtimeMainViewActiveRequest  runtimeMainViewRefreshRequest
-	runtimeMainViewPendingSet     bool
-	runtimeMainViewPending        runtimeMainViewRefreshRequest
+	runtimeConnection            clientui.RuntimeConnectionLifecycle
+	runtimeMainViewToken         uint64
+	runtimeMainViewBusy          bool
+	runtimeMainViewActiveRequest runtimeMainViewRefreshRequest
+	runtimeMainViewPendingSet    bool
+	runtimeMainViewPending       runtimeMainViewRefreshRequest
 }
 
 type uiKeyboardFeatureState struct {

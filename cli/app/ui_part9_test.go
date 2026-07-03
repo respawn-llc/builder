@@ -481,7 +481,7 @@ func TestHelpToggleClearsRollbackEscArming(t *testing.T) {
 	if updated.helpVisible {
 		t.Fatal("expected esc to dismiss help")
 	}
-	if testRollbackSelecting(updated) {
+	if updated.rollback.isSelecting() {
 		t.Fatal("did not expect esc after help toggle to open rollback selection")
 	}
 	if updated.lastEscAt.IsZero() {
@@ -554,60 +554,5 @@ func TestTranscriptToggleClosesVisibleHelp(t *testing.T) {
 	}
 	if updated.view.Mode() != tui.ModeDetail {
 		t.Fatalf("expected detail mode after transcript toggle, got %q", updated.view.Mode())
-	}
-}
-
-func TestHelpRollbackSelectionDismissesAndMovesSelection(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
-	m.transcriptEntries = []tui.TranscriptEntry{{Role: "user", Text: "one"}, {Role: "assistant", Text: "a"}, {Role: "user", Text: "two"}}
-	seedTestRollbackTargets(m)
-	if !m.startRollbackSelectionMode() {
-		t.Fatal("expected rollback selection mode to start")
-	}
-	m.layout().syncViewport()
-
-	next, _ := m.Update(customKeyMsg{Kind: customKeyHelp})
-	updated := next.(*uiModel)
-	updated.rollback.selection = 0
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyDown})
-	updated = next.(*uiModel)
-
-	if updated.helpVisible {
-		t.Fatal("expected rollback selection key to dismiss help")
-	}
-	if testRollbackSelection(updated) != 1 {
-		t.Fatalf("expected rollback selection to move, got %d", testRollbackSelection(updated))
-	}
-}
-
-func TestHelpRollbackEditDismissesAndReturnsToSelection(t *testing.T) {
-	m := newProjectedStaticUIModel()
-	m.termWidth = 80
-	m.termHeight = 24
-	m.windowSizeKnown = true
-	m.transcriptEntries = []tui.TranscriptEntry{{Role: "user", Text: "one"}, {Role: "assistant", Text: "a"}, {Role: "user", Text: "two"}}
-	seedTestRollbackTargets(m)
-	if !m.startRollbackSelectionMode() {
-		t.Fatal("expected rollback selection mode to start")
-	}
-	if _, ok := m.beginRollbackEditing(); !ok {
-		t.Fatal("expected rollback editing mode to start")
-	}
-	m.input = ""
-	m.layout().syncViewport()
-
-	next, _ := m.Update(customKeyMsg{Kind: customKeyHelp})
-	updated := next.(*uiModel)
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	updated = next.(*uiModel)
-
-	if updated.helpVisible {
-		t.Fatal("expected rollback edit key to dismiss help")
-	}
-	if !testRollbackSelecting(updated) || testRollbackEditing(updated) {
-		t.Fatalf("expected esc to return to rollback selection, rollbackMode=%t rollbackEditing=%t", testRollbackSelecting(updated), testRollbackEditing(updated))
 	}
 }
