@@ -6,6 +6,7 @@ import (
 	serverauth "core/server/auth"
 	"core/server/authservice"
 	serverstartup "core/server/startup"
+	"core/shared/client"
 	"core/shared/config"
 )
 
@@ -31,9 +32,10 @@ type StartupRequest struct {
 }
 
 type OnboardingRequest struct {
-	Config       config.App
-	AuthManager  *AuthManager
-	ReloadConfig func() (config.App, error)
+	Config                config.App
+	AuthManager           *AuthManager
+	CapabilityFactsClient client.CapabilityFactsClient
+	ReloadConfig          func() (config.App, error)
 }
 
 type OnboardingHandler func(ctx context.Context, req OnboardingRequest) (config.App, error)
@@ -59,9 +61,10 @@ func adaptOnboardingHandler(handler OnboardingHandler) serverstartup.OnboardingH
 	}
 	return func(ctx context.Context, req serverstartup.OnboardingRequest) (config.App, error) {
 		return handler(ctx, OnboardingRequest{
-			Config:       req.Config,
-			AuthManager:  req.AuthManager,
-			ReloadConfig: req.ReloadConfig,
+			Config:                req.Config,
+			AuthManager:           req.AuthManager,
+			CapabilityFactsClient: req.CapabilityFactsClient,
+			ReloadConfig:          req.ReloadConfig,
 		})
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/server/llm"
 	"core/shared/config"
 	"core/shared/theme"
 	"core/shared/toolspec"
@@ -87,12 +86,12 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 		onboardingStepDefinition{
 			id: "context_window",
 			visible: func(state *onboardingFlowState) bool {
-				return llm.SupportsLargeContextWindowModel(state.settings.Model)
+				return modelSupportsLargeContextWindow(state, state.settings.Model)
 			},
 			build: func(state *onboardingFlowState) onboardingScreen {
-				meta, _ := llm.LookupModelMetadata(state.settings.Model)
+				modelFact := modelFactFor(state, state.settings.Model)
 				body := fmt.Sprintf("%s supports larger context windows. The larger window costs about 50%% more. Quality degrades as the model gets closer to its limit. If automatic compaction is off, Kent can still go above the limit anyway, so the smaller default is recommended.", state.settings.Model)
-				return onboardingScreen{ID: "context_window", Kind: onboardingScreenChoice, Title: "Choose a context window", Body: body, DefaultOptionID: "default", Options: []onboardingOption{{ID: "default", Title: fmt.Sprintf("Default window: %s", formatTokenWindow(meta.ContextWindowTokens))}, {ID: "large", Title: fmt.Sprintf("Higher window: %s", formatTokenWindow(meta.LargeContextWindowTokens))}}}
+				return onboardingScreen{ID: "context_window", Kind: onboardingScreenChoice, Title: "Choose a context window", Body: body, DefaultOptionID: "default", Options: []onboardingOption{{ID: "default", Title: fmt.Sprintf("Default window: %s", formatTokenWindow(*modelFact.ContextWindowTokens))}, {ID: "large", Title: fmt.Sprintf("Higher window: %s", formatTokenWindow(modelFact.LargeWindow.Tokens))}}}
 			},
 			apply: func(state *onboardingFlowState, choiceID string) error {
 				applyContextWindowChoice(state, choiceID)
@@ -102,10 +101,10 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 		onboardingStepDefinition{
 			id: "thinking",
 			visible: func(state *onboardingFlowState) bool {
-				return llm.SupportsReasoningEffortModel(state.settings.Model)
+				return modelSupportsThinking(state, state.settings.Model)
 			},
 			build: func(state *onboardingFlowState) onboardingScreen {
-				levels := llm.SupportedThinkingLevelsModel(state.settings.Model)
+				levels := modelThinkingLevels(state, state.settings.Model)
 				options := []onboardingOption{{ID: "disable", Title: "Disable", Description: thinkingLevelEstimate("disable")}}
 				for _, level := range levels {
 					options = append(options, onboardingOption{ID: level, Title: titleCaseThinking(level)})
@@ -161,10 +160,10 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 		onboardingStepDefinition{
 			id: "verbosity",
 			visible: func(state *onboardingFlowState) bool {
-				return llm.SupportsVerbosityModel(state.settings.Model)
+				return modelSupportsVerbosity(state, state.settings.Model)
 			},
 			build: func(state *onboardingFlowState) onboardingScreen {
-				levels := llm.SupportedVerbosityLevelsModel(state.settings.Model)
+				levels := modelVerbosityLevels(state, state.settings.Model)
 				options := make([]onboardingOption, 0, len(levels))
 				for _, level := range levels {
 					options = append(options, onboardingOption{ID: level, Title: titleCaseASCII(level)})
@@ -227,7 +226,7 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 				}
 				state.settings.Reviewer.Model = trimmed
 				state.reviewerCustomModel = trimmed != strings.TrimSpace(state.settings.Model)
-				if !llm.SupportsReasoningEffortModel(trimmed) {
+				if !modelSupportsThinking(state, trimmed) {
 					state.reviewerCustomThinking = false
 					state.settings.Reviewer.ThinkingLevel = ""
 					return nil
@@ -239,10 +238,10 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 		onboardingStepDefinition{
 			id: "reviewer_thinking",
 			visible: func(state *onboardingFlowState) bool {
-				return reviewerEnabled(state) && llm.SupportsReasoningEffortModel(state.settings.Reviewer.Model)
+				return reviewerEnabled(state) && modelSupportsThinking(state, state.settings.Reviewer.Model)
 			},
 			build: func(state *onboardingFlowState) onboardingScreen {
-				levels := llm.SupportedThinkingLevelsModel(state.settings.Reviewer.Model)
+				levels := modelThinkingLevels(state, state.settings.Reviewer.Model)
 				options := []onboardingOption{{ID: "disable", Title: "Disable", Description: thinkingLevelEstimate("disable")}}
 				for _, level := range levels {
 					options = append(options, onboardingOption{ID: level, Title: titleCaseThinking(level)})
@@ -280,7 +279,7 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 		onboardingStepDefinition{
 			id: "reviewer_thinking_custom",
 			visible: func(state *onboardingFlowState) bool {
-				return reviewerEnabled(state) && llm.SupportsReasoningEffortModel(state.settings.Reviewer.Model) && (state.reviewerCustomThinkingInput || (strings.TrimSpace(state.settings.Reviewer.ThinkingLevel) != "" && !isKnownThinkingLevel(state.settings.Reviewer.ThinkingLevel)))
+				return reviewerEnabled(state) && modelSupportsThinking(state, state.settings.Reviewer.Model) && (state.reviewerCustomThinkingInput || (strings.TrimSpace(state.settings.Reviewer.ThinkingLevel) != "" && !isKnownThinkingLevel(state.settings.Reviewer.ThinkingLevel)))
 			},
 			build: func(state *onboardingFlowState) onboardingScreen {
 				value := state.settings.Reviewer.ThinkingLevel
@@ -305,7 +304,7 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 			id: "compaction",
 			build: func(state *onboardingFlowState) onboardingScreen {
 				options := []onboardingOption{{ID: string(config.CompactionModeLocal), Title: "Local", Description: "Kent's high-quality, slow, costlier, proprietary compaction algorithm."}}
-				if state.providerCapabilities.SupportsResponsesCompact {
+				if state.facts.Providers.CurrentEffective != nil && state.facts.Providers.CurrentEffective.SupportsNativeCompaction {
 					options = append(options, onboardingOption{ID: string(config.CompactionModeNative), Title: "Native", Description: "Model provider compacts the context on their own with varying quality."})
 				}
 				options = append(options, onboardingOption{ID: string(config.CompactionModeNone), Title: "Manual compaction only", Description: "Model requests will fail if threshold is reached."})
@@ -319,11 +318,11 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 		onboardingStepDefinition{
 			id: "skills_import",
 			visible: func(state *onboardingFlowState) bool {
-				return state.imports.pending || state.imports.err != nil || (!state.imports.skipSkills && hasImportProviderItems(state.imports.skillSymlinkItems))
+				return state.imports.pending || state.imports.err != nil || (!state.imports.skipSkills && hasImportChoices(state.imports.skillChoices))
 			},
 			build: func(state *onboardingFlowState) onboardingScreen { return buildSkillImportScreen(state) },
 			apply: func(state *onboardingFlowState, choiceID string) error {
-				return applyImportChoice(&state.skillImport, choiceID)
+				return applyImportChoice(&state.skillImport, choiceID, state.imports.skillChoices)
 			},
 		},
 		onboardingStepDefinition{
@@ -339,13 +338,13 @@ func newOnboardingWorkflow(state *onboardingFlowState) onboardingWorkflow {
 		onboardingStepDefinition{
 			id: "commands_import",
 			visible: func(state *onboardingFlowState) bool {
-				return state.imports.pending || state.imports.err != nil || (!state.imports.skipCommands && hasImportProviderItems(state.imports.commandSymlinkItems))
+				return state.imports.pending || state.imports.err != nil || (!state.imports.skipCommands && hasImportChoices(state.imports.commandChoices))
 			},
 			build: func(state *onboardingFlowState) onboardingScreen {
 				return buildCommandImportScreen(state)
 			},
 			apply: func(state *onboardingFlowState, choiceID string) error {
-				return applyImportChoice(&state.commandImport, choiceID)
+				return applyImportChoice(&state.commandImport, choiceID, state.imports.commandChoices)
 			},
 		},
 		onboardingStepDefinition{

@@ -36,8 +36,8 @@ func startEmbeddedServer(ctx context.Context, opts Options, interactor authInter
 			AuthManager:  req.AuthManager,
 			Interactive:  interactive,
 			ReloadConfig: req.ReloadConfig,
-			Runner: func(ctx context.Context, cfg config.App, authState onboarding.AuthState) (onboarding.Result, error) {
-				result, err := runOnboardingFlow(cfg, authState)
+			Runner: func(ctx context.Context, cfg config.App, _ onboarding.AuthState) (onboarding.Result, error) {
+				result, err := runOnboardingFlow(ctx, cfg, req.CapabilityFactsClient)
 				if err != nil {
 					return onboarding.Result{}, err
 				}

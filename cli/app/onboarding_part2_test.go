@@ -2,9 +2,8 @@ package app
 
 import (
 	tuiinput "core/cli/tui/input"
-	"core/server/auth"
-	"core/server/llm"
 	"core/shared/config"
+	"core/shared/serverapi"
 	"core/shared/theme"
 	"os"
 	"path/filepath"
@@ -281,11 +280,8 @@ func TestOnboardingCustomPathRollsBackImportsWhenSettingsWriteFails(t *testing.T
 		t.Fatalf("write existing config: %v", err)
 	}
 	state := onboardingFlowState{
-		settings: cfg.Settings,
-		imports: onboardingImportDiscovery{skillSymlinkRoots: map[onboardingImportProviderID]string{
-			onboardingImportProviderClaudeCode: sourceDir,
-		}},
-		skillImport:   onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderClaudeCode},
+		settings:      cfg.Settings,
+		skillImport:   testImportSelection(onboardingImportProviderClaudeCode, sourceDir),
 		commandImport: onboardingImportSelection{Mode: onboardingImportModeNone},
 	}
 	model := newOnboardingModelForWorkspace(globalRoot, "", state)
@@ -326,16 +322,8 @@ func TestExecuteOnboardingImportsRollsBackSkillsWhenCommandImportFails(t *testin
 		t.Fatalf("write existing prompt: %v", err)
 	}
 	_, err := executeOnboardingImports(globalRoot, onboardingFlowState{
-		imports: onboardingImportDiscovery{
-			skillSymlinkRoots: map[onboardingImportProviderID]string{
-				onboardingImportProviderClaudeCode: skillSourceDir,
-			},
-			commandSymlinkRoots: map[onboardingImportProviderID]string{
-				onboardingImportProviderClaudeCode: commandSourceDir,
-			},
-		},
-		skillImport:   onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderClaudeCode},
-		commandImport: onboardingImportSelection{Mode: onboardingImportModeSymlinkSource, Provider: onboardingImportProviderClaudeCode},
+		skillImport:   testImportSelection(onboardingImportProviderClaudeCode, skillSourceDir),
+		commandImport: testImportSelection(onboardingImportProviderClaudeCode, commandSourceDir),
 	})
 	if err == nil {
 		t.Fatal("expected command import failure")
@@ -345,60 +333,9 @@ func TestExecuteOnboardingImportsRollsBackSkillsWhenCommandImportFails(t *testin
 	}
 }
 
-func TestOnboardingProviderCapabilitiesFromAuthMode(t *testing.T) {
-	oauthCaps, err := llm.ProviderCapabilitiesForSettings(auth.State{Method: auth.Method{Type: auth.MethodOAuth}}, config.Settings{})
-	if err != nil {
-		t.Fatalf("oauth provider capabilities: %v", err)
-	}
-	if oauthCaps.ProviderID != "chatgpt-codex" || !oauthCaps.SupportsResponsesCompact {
-		t.Fatalf("unexpected oauth provider capabilities: %+v", oauthCaps)
-	}
-	apiCaps, err := llm.ProviderCapabilitiesForSettings(auth.State{Method: auth.Method{Type: auth.MethodAPIKey}}, config.Settings{})
-	if err != nil {
-		t.Fatalf("api key provider capabilities: %v", err)
-	}
-	if apiCaps.ProviderID != "openai" || !apiCaps.SupportsResponsesCompact {
-		t.Fatalf("unexpected api key provider capabilities: %+v", apiCaps)
-	}
-	compatibleCaps, err := llm.ProviderCapabilitiesForSettings(auth.State{Method: auth.Method{Type: auth.MethodAPIKey}}, config.Settings{OpenAIBaseURL: "https://example.test/v1"})
-	if err != nil {
-		t.Fatalf("openai-compatible provider capabilities: %v", err)
-	}
-	if compatibleCaps.ProviderID != "openai-compatible" || compatibleCaps.SupportsResponsesCompact {
-		t.Fatalf("unexpected openai-compatible provider capabilities: %+v", compatibleCaps)
-	}
-	defaultOpenAICaps, err := llm.ProviderCapabilitiesForSettings(auth.State{Method: auth.Method{Type: auth.MethodAPIKey}}, config.Settings{OpenAIBaseURL: "https://api.openai.com"})
-	if err != nil {
-		t.Fatalf("default openai base url provider capabilities: %v", err)
-	}
-	if defaultOpenAICaps.ProviderID != "openai" || !defaultOpenAICaps.SupportsResponsesCompact {
-		t.Fatalf("expected explicit default OpenAI base url to preserve openai capabilities, got %+v", defaultOpenAICaps)
-	}
-	oauthCustomBaseCaps, err := llm.ProviderCapabilitiesForSettings(auth.State{Method: auth.Method{Type: auth.MethodOAuth}}, config.Settings{OpenAIBaseURL: "https://example.test/v1"})
-	if err != nil {
-		t.Fatalf("oauth custom base url capabilities: %v", err)
-	}
-	if oauthCustomBaseCaps.ProviderID != "chatgpt-codex" || !oauthCustomBaseCaps.SupportsResponsesCompact {
-		t.Fatalf("expected oauth auth mode to keep chatgpt-codex capabilities over custom base url, got %+v", oauthCustomBaseCaps)
-	}
-	noAuthCompatibleCaps, err := llm.ProviderCapabilitiesForSettings(auth.EmptyState(), config.Settings{OpenAIBaseURL: "https://example.test/v1"})
-	if err != nil {
-		t.Fatalf("no-auth openai-compatible provider capabilities: %v", err)
-	}
-	if noAuthCompatibleCaps.ProviderID != "openai-compatible" || noAuthCompatibleCaps.SupportsResponsesCompact {
-		t.Fatalf("unexpected no-auth openai-compatible provider capabilities: %+v", noAuthCompatibleCaps)
-	}
-	providerOverrideCaps, err := llm.ProviderCapabilitiesForSettings(auth.EmptyState(), config.Settings{ProviderOverride: "openai", OpenAIBaseURL: "https://example.test/v1"})
-	if err != nil {
-		t.Fatalf("provider override capabilities: %v", err)
-	}
-	if providerOverrideCaps.ProviderID != "openai" || !providerOverrideCaps.SupportsResponsesCompact {
-		t.Fatalf("expected explicit provider override to win over base url, got %+v", providerOverrideCaps)
-	}
-}
-
 func TestApplyOnboardingModelUpdatesKnownContextWindow(t *testing.T) {
 	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits"}}, baselineSettings: config.Settings{ModelContextWindow: 272_000, ContextCompactionThresholdTokens: 272_000 * 95 / 100}}
+	state.facts = testOnboardingCapabilityFacts()
 	if err := applyOnboardingModel(state, "gpt-5.5"); err != nil {
 		t.Fatalf("apply onboarding model: %v", err)
 	}
@@ -430,6 +367,7 @@ func TestApplyOnboardingModelResetsUnknownModelContextWindowToBaseline(t *testin
 			ContextCompactionThresholdTokens: 272_000 * 95 / 100,
 		},
 	}
+	state.facts = testOnboardingCapabilityFacts()
 	if err := applyOnboardingModel(state, "my-team-alias"); err != nil {
 		t.Fatalf("apply onboarding model: %v", err)
 	}
@@ -472,6 +410,7 @@ func TestMainThinkingChoicePreservesCustomReviewerThinking(t *testing.T) {
 		settings:               config.Settings{Model: "gpt-5.5", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.5", ThinkingLevel: "low"}},
 		reviewerCustomThinking: true,
 	}
+	state.facts = testOnboardingCapabilityFacts()
 	if err := findWorkflowStep(t, state, "thinking").apply(state, "high"); err != nil {
 		t.Fatalf("apply thinking choice: %v", err)
 	}
@@ -544,6 +483,7 @@ func TestApplyOnboardingModelPreservesCustomReviewerOverrides(t *testing.T) {
 		reviewerCustomModel:    true,
 		reviewerCustomThinking: true,
 	}
+	state.facts = testOnboardingCapabilityFacts()
 	if err := applyOnboardingModel(state, "gpt-5.3-codex"); err != nil {
 		t.Fatalf("apply onboarding model: %v", err)
 	}
@@ -557,6 +497,9 @@ func TestApplyOnboardingModelPreservesCustomReviewerOverrides(t *testing.T) {
 
 func findWorkflowStep(t *testing.T, state *onboardingFlowState, id string) onboardingStepDefinition {
 	t.Helper()
+	if len(state.facts.Models.KnownModels) == 0 && !state.facts.Models.UnknownFallback.SupportsThinking {
+		state.facts = testOnboardingCapabilityFacts()
+	}
 	for _, step := range newOnboardingWorkflow(state).visibleSteps(state) {
 		if step.id == id {
 			return step
@@ -564,6 +507,32 @@ func findWorkflowStep(t *testing.T, state *onboardingFlowState, id string) onboa
 	}
 	t.Fatalf("expected workflow step %q", id)
 	return onboardingStepDefinition{}
+}
+
+func testOnboardingCapabilityFacts() serverapi.CapabilityFactsResponse {
+	contextWindow := 272_000
+	largeWindow := 400_000
+	models := []serverapi.ModelCapabilityFact{
+		{ModelID: ptrString("gpt-5.5"), Known: true, ContextWindowTokens: &contextWindow, LargeWindow: &serverapi.ModelLargeWindowFact{Tokens: largeWindow}, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}}},
+		{ModelID: ptrString("gpt-5.3-codex"), Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}}},
+		{ModelID: ptrString("gpt-4.1"), Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}}},
+	}
+	return serverapi.CapabilityFactsResponse{
+		Models: serverapi.ModelCapabilityFacts{
+			KnownModels: models,
+			UnknownFallback: serverapi.ModelCapabilityFact{
+				Known:                   false,
+				SupportsThinking:        true,
+				SupportedThinkingLevels: []string{"low", "medium", "high"},
+				Verbosity:               serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}},
+			},
+		},
+		Providers: serverapi.ProviderCapabilityFacts{CurrentEffective: &serverapi.LLMProviderCapabilityFact{SupportsNativeCompaction: true}},
+	}
+}
+
+func ptrString(value string) *string {
+	return &value
 }
 
 func workflowIncludesStep(steps []onboardingStepDefinition, id string) bool {

@@ -204,6 +204,38 @@ func TestStartBuildsEmbeddedServerAndRunsOnboarding(t *testing.T) {
 	}
 }
 
+func TestStartEmbeddedOnboardingReceivesCapabilityFactsClient(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	registerEmbeddedWorkspace(t, workspace)
+
+	seenFacts := false
+	onboarding := EmbeddedOnboardingHandler(func(ctx context.Context, req EmbeddedOnboardingRequest) (config.App, error) {
+		if req.CapabilityFactsClient == nil {
+			t.Fatal("capability facts client was not threaded into embedded onboarding")
+		}
+		facts, err := req.CapabilityFactsClient.GetCapabilityFacts(ctx, serverapi.CapabilityFactsRequest{})
+		if err != nil {
+			t.Fatalf("GetCapabilityFacts: %v", err)
+		}
+		seenFacts = factsContainGeneratedSkillCandidate(facts)
+		return defaultEmbeddedOnboardingHandler(nil)(ctx, req)
+	})
+
+	server, err := StartEmbedded(context.Background(), serverbootstrap.Request{
+		WorkspaceRoot: workspace,
+		LookupEnv:     os.Getenv,
+	}, EmbeddedStartHooks{Auth: readyEmbeddedAuthHandler(), Onboarding: onboarding})
+	if err != nil {
+		t.Fatalf("start embedded server: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	if !seenFacts {
+		t.Fatal("expected embedded generated skill facts before core startup")
+	}
+}
+
 func TestRunPromptClientRunsLoopbackThroughEmbeddedServer(t *testing.T) {
 	workspace := newRegisteredEmbeddedWorkspace(t)
 

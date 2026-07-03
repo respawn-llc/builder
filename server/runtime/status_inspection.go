@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"core/server/skillcatalog"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,78 +28,28 @@ func (e *Engine) CompactionCount() int {
 }
 
 func InspectSkills(workspaceRoot, globalConfigDir string, disabledSkills map[string]bool) ([]SkillInspection, error) {
-	disabledSkills = normalizedDisabledSkills(disabledSkills)
-	roots, err := skillDiscoveryRoots(workspaceRoot, globalConfigDir)
+	result, err := skillcatalog.Discover(skillcatalog.Options{
+		WorkspaceRoot:  workspaceRoot,
+		ConfigRoot:     globalConfigDir,
+		DisabledSkills: disabledSkills,
+		ReadDir:        readSkillsDir,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	inspections := make([]SkillInspection, 0)
-	seenLoadedPaths := map[string]bool{}
-	userSkillNames := map[string]bool{}
-	for _, root := range roots {
-		entries, readErr := readSkillsDir(root.Path)
-		if readErr != nil {
-			if os.IsNotExist(readErr) {
-				continue
-			}
-			return nil, fmt.Errorf("read skills directory %q: %w", root.Path, readErr)
-		}
-		for _, entry := range entries {
-			resolution := resolveSkillDir(root.Path, entry)
-			if resolution.Issue != nil {
-				issueSkillPath := filepath.ToSlash(filepath.Join(strings.TrimSpace(resolution.Issue.Path), skillFileName))
-				inspections = append(inspections, SkillInspection{
-					Name:       resolution.Issue.Name,
-					Path:       issueSkillPath,
-					SourceKind: string(root.Kind),
-					Loaded:     false,
-					Reason:     resolution.Issue.Reason,
-				})
-			}
-			if !resolution.Discoverable {
-				continue
-			}
-			skillPath := filepath.Join(resolution.SkillDir, skillFileName)
-			inspection := inspectSkillAtPath(entry.Name(), skillPath)
-			inspection.SourceKind = string(root.Kind)
-			if inspection.Loaded {
-				if disabledSkills[strings.ToLower(sanitizeSkillSingleLine(inspection.Name))] {
-					inspection.Disabled = true
-				}
-				if seenLoadedPaths[inspection.Path] {
-					inspection.Loaded = false
-					inspection.Disabled = false
-					inspection.Reason = "duplicate resolved SKILL.md path"
-				} else {
-					seenLoadedPaths[inspection.Path] = true
-				}
-				if inspection.Loaded && root.Kind != skillSourceGenerated {
-					userSkillNames[strings.ToLower(sanitizeSkillSingleLine(inspection.Name))] = true
-				}
-			}
-			inspections = append(inspections, inspection)
-		}
+	inspections := make([]SkillInspection, 0, len(result.Inspections))
+	for _, inspection := range result.Inspections {
+		inspections = append(inspections, SkillInspection{
+			Name:        inspection.Name,
+			Description: inspection.Description,
+			Path:        inspection.Path,
+			SourceKind:  string(inspection.SourceKind),
+			Loaded:      inspection.Loaded,
+			Disabled:    inspection.Disabled,
+			Shadowed:    inspection.Shadowed,
+			Reason:      inspection.Reason,
+		})
 	}
-
-	for idx := range inspections {
-		if inspections[idx].Loaded && inspections[idx].SourceKind == string(skillSourceGenerated) && userSkillNames[strings.ToLower(sanitizeSkillSingleLine(inspections[idx].Name))] {
-			inspections[idx].Shadowed = true
-		}
-	}
-
-	sort.Slice(inspections, func(i, j int) bool {
-		if inspections[i].Shadowed != inspections[j].Shadowed {
-			return !inspections[i].Shadowed && inspections[j].Shadowed
-		}
-		if inspections[i].Disabled != inspections[j].Disabled {
-			return !inspections[i].Disabled && inspections[j].Disabled
-		}
-		if inspections[i].Loaded != inspections[j].Loaded {
-			return inspections[i].Loaded && !inspections[j].Loaded
-		}
-		return inspections[i].Path < inspections[j].Path
-	})
 	return inspections, nil
 }
 

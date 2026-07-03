@@ -101,6 +101,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			return statusClient.GetAuthStatus(ctx, params)
 		})
 	},
+	protocol.MethodCapabilityFactsGet: gatewayClientCall[client.CapabilityFactsClient, serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](GatewayDependencies.CapabilityFactsClient, client.CapabilityFactsClient.GetCapabilityFacts),
 	protocol.MethodAttachProject: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params protocol.AttachProjectRequest) (protocol.AttachResponse, error) {
 			if err := params.Validate(); err != nil {

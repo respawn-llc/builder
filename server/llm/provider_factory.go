@@ -66,6 +66,7 @@ type providerRegistry struct {
 	contractsByProvider  map[Provider]ProviderContract
 	providerVariantsByID map[string]providerVariantRegistration
 	modelContractsByName map[string]modelCapabilityRegistration
+	modelContracts       []ModelCapabilityContract
 	modelMatchers        []ProviderContract
 }
 
@@ -221,6 +222,7 @@ func mustBuildProviderRegistry(contracts []ProviderContract) providerRegistry {
 				panic(fmt.Sprintf("duplicate model contract registration for %q", normalizedModel))
 			}
 			registry.modelContractsByName[normalizedModel] = modelCapabilityRegistration{Provider: contract.Provider, Contract: modelContract}
+			registry.modelContracts = append(registry.modelContracts, modelContract)
 		}
 	}
 

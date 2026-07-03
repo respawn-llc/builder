@@ -47,6 +47,10 @@ func LookupModelCapabilityContract(model string) (ModelCapabilityContract, bool)
 	return registration.Contract, true
 }
 
+func KnownModelCapabilityContracts() []ModelCapabilityContract {
+	return append([]ModelCapabilityContract(nil), globalProviderRegistry.modelContracts...)
+}
+
 func LookupProviderCapabilityContract(providerID string) (ProviderCapabilities, bool) {
 	registration, ok := lookupProviderVariantContract(providerID)
 	if !ok {

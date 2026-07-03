@@ -167,7 +167,7 @@ func TestSupportsVerbosityModel(t *testing.T) {
 		{model: "gpt-5.4-nano", want: true},
 		{model: "gpt-5.3-codex", want: true},
 		{model: "gpt-5.3-codex-spark", want: true},
-		{model: " GPT-5-preview ", want: true},
+		{model: " GPT-5-preview ", want: false},
 		{model: "custom-alias", want: false},
 		{model: "", want: false},
 	}
@@ -175,6 +175,48 @@ func TestSupportsVerbosityModel(t *testing.T) {
 	for _, tc := range tests {
 		if got := SupportsVerbosityModel(tc.model); got != tc.want {
 			t.Fatalf("SupportsVerbosityModel(%q)=%v, want %v", tc.model, got, tc.want)
+		}
+	}
+}
+
+func TestVerbositySupportForModelAndProvider(t *testing.T) {
+	firstParty := ProviderCapabilities{ProviderID: "openai", IsOpenAIFirstParty: true}
+	compatible := ProviderCapabilities{ProviderID: "openai-compatible", IsOpenAIFirstParty: false}
+
+	if support := VerbositySupportForModelAndProvider("gpt-5-preview", firstParty); !support.Supported || support.Source != ModelVerbositySupportSourceProviderDefault {
+		t.Fatalf("unknown first-party support = %+v, want provider default support", support)
+	}
+	if support := VerbositySupportForModelAndProvider("gpt-5-preview", compatible); support.Supported || support.Source != ModelVerbositySupportSourceProviderDefault {
+		t.Fatalf("unknown compatible support = %+v, want provider default unsupported", support)
+	}
+	if support := VerbositySupportForModelAndProvider("gpt-4.1", firstParty); support.Supported || support.Source != ModelVerbositySupportSourceModelCatalog {
+		t.Fatalf("known unsupported support = %+v, want model catalog unsupported", support)
+	}
+	if support := VerbositySupportForModelAndProvider("gpt-5", compatible); !support.Supported || support.Source != ModelVerbositySupportSourceModelCatalog {
+		t.Fatalf("known supported support = %+v, want model catalog support", support)
+	}
+}
+
+func TestKnownModelCapabilityContractsDeterministic(t *testing.T) {
+	first := KnownModelCapabilityContracts()
+	second := KnownModelCapabilityContracts()
+	if len(first) == 0 {
+		t.Fatal("expected known model contracts")
+	}
+	if len(first) != len(second) {
+		t.Fatalf("catalog length changed across calls: %d vs %d", len(first), len(second))
+	}
+	seen := map[string]struct{}{}
+	for i := range first {
+		if first[i].Model != second[i].Model {
+			t.Fatalf("catalog order changed at %d: %q vs %q", i, first[i].Model, second[i].Model)
+		}
+		if _, ok := seen[first[i].Model]; ok {
+			t.Fatalf("duplicate model contract for %q", first[i].Model)
+		}
+		seen[first[i].Model] = struct{}{}
+		if _, ok := LookupModelCapabilityContract(first[i].Model); !ok {
+			t.Fatalf("catalog model %q missing lookup contract", first[i].Model)
 		}
 	}
 }

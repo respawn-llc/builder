@@ -38,6 +38,7 @@ const (
 	ErrCodeModelStreamStalled            = -32028
 	ErrCodeRuntimeNoActiveRun            = -32029
 	ErrCodeRuntimeNoFinalAnswer          = -32030
+	ErrCodeUnsupportedProvider           = -32031
 )
 
 type Request struct {

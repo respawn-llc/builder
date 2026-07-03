@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"core/server/auth"
@@ -14,6 +15,7 @@ import (
 	"core/server/metadata"
 	"core/shared/clientui"
 	brand "core/shared/config"
+	"core/shared/protocol"
 	"core/shared/serverapi"
 )
 
@@ -62,8 +64,24 @@ func TestNewBuildsReusableServerCore(t *testing.T) {
 	if appCore.ProjectViewClient() == nil || appCore.ProcessViewClient() == nil || appCore.ProcessOutputClient() == nil || appCore.SessionLaunchClient() == nil || appCore.SessionViewClient() == nil || appCore.SessionLifecycleClient() == nil || appCore.SessionActivityClient() == nil || appCore.SessionTranscriptClient() == nil || appCore.RunPromptClient() == nil {
 		t.Fatal("expected core clients to be wired")
 	}
+	if appCore.CapabilityFactsClient() == nil {
+		t.Fatal("expected capability facts client to be wired")
+	}
 	if _, err := appCore.ProjectViewClient().ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
 		t.Fatalf("ListProjects via core client: %v", err)
+	}
+	facts, err := appCore.CapabilityFactsClient().GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	if err != nil {
+		t.Fatalf("GetCapabilityFacts via core client: %v", err)
+	}
+	if facts.Defaults.PrimaryModelID == "" {
+		t.Fatalf("capability facts missing defaults: %+v", facts)
+	}
+}
+
+func TestProtocolIdentityHasNoCapabilityFactsFlag(t *testing.T) {
+	if _, ok := reflect.TypeOf(protocol.CapabilityFlags{}).FieldByName("CapabilityFacts"); ok {
+		t.Fatal("capability facts must be signaled by protocol version/route availability, not a handshake capability flag")
 	}
 }
 
