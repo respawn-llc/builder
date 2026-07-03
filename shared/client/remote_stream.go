@@ -107,6 +107,16 @@ func (c *Remote) SubscribeSessionActivity(ctx context.Context, req serverapi.Ses
 	return newRemoteSubscription(conn, route, func(params protocol.SessionActivityEventParams) clientui.Event { return params.Event }), nil
 }
 
+func (c *Remote) SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+	conn, route, err := c.subscribeRPC(ctx, protocol.MethodSessionSubscribeTranscript, "subscribe-session-transcript", req, req.SessionID, true)
+	if err != nil {
+		return nil, err
+	}
+	return newRemoteSubscription(conn, route, func(params protocol.SessionTranscriptEventParams) clientui.TranscriptMessage {
+		return params.Message
+	}), nil
+}
+
 func (c *Remote) SubscribeProcessOutput(ctx context.Context, req serverapi.ProcessOutputSubscribeRequest) (serverapi.ProcessOutputSubscription, error) {
 	conn, route, err := c.subscribeRPC(ctx, protocol.MethodProcessSubscribeOutput, "subscribe-process-output", req, "", false)
 	if err != nil {
@@ -192,7 +202,11 @@ func (s *remoteSubscription[Wire, Event]) Next(ctx context.Context) (Event, erro
 		if params.Code == 0 && strings.TrimSpace(params.Message) == "" {
 			return zero, io.EOF
 		}
-		return zero, protocolError(&protocol.ResponseError{Code: params.Code, Message: params.Message})
+		terminalErr := protocolError(&protocol.ResponseError{Code: params.Code, Message: params.Message})
+		if reason := strings.TrimSpace(params.TranscriptCloseReason); reason != "" {
+			return zero, serverapi.NewTranscriptStreamError(serverapi.TranscriptCloseReason(reason), terminalErr)
+		}
+		return zero, terminalErr
 	default:
 		var zero Event
 		return zero, errors.Join(serverapi.ErrStreamFailed, fmt.Errorf("unexpected notification method %q", frame.Method))

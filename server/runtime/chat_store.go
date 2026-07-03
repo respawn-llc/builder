@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 type ChatEntry struct {
@@ -88,8 +90,9 @@ type localChatEntry struct {
 }
 
 type assistantStreamingState struct {
-	text     string
-	metadata *AssistantStreamMetadata
+	text               string
+	metadata           *AssistantStreamMetadata
+	transcriptStreamID *uuid.UUID
 }
 
 type compactionCheckpoint struct {
@@ -250,18 +253,19 @@ func (s *chatStore) recordToolCompletionWithProviderItems(res tools.Result, prov
 	}
 }
 
-func (s *chatStore) appendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string) *AssistantStreamMetadata {
+func (s *chatStore) appendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string) (*AssistantStreamMetadata, *uuid.UUID) {
 	if delta == "" {
-		return nil
+		return nil, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	nextMetadata := newAssistantStreamMetadata(stepID, baseRevision, baseCommittedEntryCount)
 	if s.streaming == nil || assistantStreamingSegmentChanged(s.streaming.metadata, nextMetadata) {
-		s.streaming = &assistantStreamingState{metadata: nextMetadata}
+		streamID := uuid.New()
+		s.streaming = &assistantStreamingState{metadata: nextMetadata, transcriptStreamID: &streamID}
 	}
 	s.streaming.text += delta
-	return cloneAssistantStreamMetadata(s.streaming.metadata)
+	return cloneAssistantStreamMetadata(s.streaming.metadata), cloneTranscriptStreamID(s.streaming.transcriptStreamID)
 }
 
 func (s *chatStore) streamingSnapshot() (string, string, *AssistantStreamMetadata) {
@@ -271,12 +275,22 @@ func (s *chatStore) streamingSnapshot() (string, string, *AssistantStreamMetadat
 	return streaming, s.streamingError, metadata
 }
 
-func (s *chatStore) discardStreaming() *AssistantStreamMetadata {
+func (s *chatStore) transcriptStreamingSnapshot() (string, *uuid.UUID) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.streaming == nil {
+		return "", nil
+	}
+	return s.streaming.text, cloneTranscriptStreamID(s.streaming.transcriptStreamID)
+}
+
+func (s *chatStore) discardStreaming() (*AssistantStreamMetadata, *uuid.UUID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	metadata := cloneAssistantStreamMetadata(s.streamingMetadataLocked())
+	streamID := cloneTranscriptStreamID(s.streamingStreamIDLocked())
 	s.streaming = nil
-	return metadata
+	return metadata, streamID
 }
 
 func (s *chatStore) setStreamingError(text string) {
@@ -329,12 +343,27 @@ func (s *chatStore) streamingMetadataLocked() *AssistantStreamMetadata {
 	return s.streaming.metadata
 }
 
+func (s *chatStore) streamingStreamIDLocked() *uuid.UUID {
+	if s.streaming == nil {
+		return nil
+	}
+	return s.streaming.transcriptStreamID
+}
+
 func cloneAssistantStreamMetadata(metadata *AssistantStreamMetadata) *AssistantStreamMetadata {
 	if metadata == nil {
 		return nil
 	}
 	copyMetadata := *metadata
 	return &copyMetadata
+}
+
+func cloneTranscriptStreamID(streamID *uuid.UUID) *uuid.UUID {
+	if streamID == nil {
+		return nil
+	}
+	copied := *streamID
+	return &copied
 }
 
 func (s *chatStore) appendLocalEntryRecord(entry ChatEntry) {
@@ -630,6 +659,100 @@ func (s *chatStore) recentTailSnapshot(maxEntries int) TranscriptWindowSnapshot 
 	window.Snapshot.Streaming, window.Snapshot.StreamingMetadata = s.streamingSnapshotLocked()
 	window.Snapshot.StreamingError = s.streamingError
 	return window
+}
+
+type transcriptDeliverySnapshot struct {
+	Rows              []TranscriptCommittedRowFact
+	Streaming         string
+	StreamingMetadata *AssistantStreamMetadata
+	StreamingStreamID *uuid.UUID
+}
+
+type transcriptDeliveryFactScan struct {
+	rows                  []TranscriptCommittedRowFact
+	toolCompletions       map[string]tools.Result
+	materializedToolCalls map[string]struct{}
+}
+
+func newTranscriptDeliveryFactScan(completions map[string]tools.Result, materializedToolCalls map[string]struct{}) *transcriptDeliveryFactScan {
+	return &transcriptDeliveryFactScan{toolCompletions: completions, materializedToolCalls: materializedToolCalls}
+}
+
+func (s *transcriptDeliveryFactScan) ApplyMessage(msg llm.Message) {
+	if s == nil {
+		return
+	}
+	s.rows = append(s.rows, transcriptCommittedRowFactsFromMessage(msg, nil, s.toolCompletions, s.materializedToolCalls)...)
+}
+
+func (s *transcriptDeliveryFactScan) ApplyLegacyLocalEntry(entry ChatEntry) {
+	if s == nil {
+		return
+	}
+	s.rows = append(s.rows, legacyUntypedNoticeFactFromLocalEntry(entry))
+}
+
+func (s *transcriptDeliveryFactScan) MarkCompactionBoundary() {
+	if s == nil {
+		return
+	}
+	s.rows = nil
+}
+
+func (s *transcriptDeliveryFactScan) Snapshot() []TranscriptCommittedRowFact {
+	if s == nil || len(s.rows) == 0 {
+		return nil
+	}
+	out := make([]TranscriptCommittedRowFact, len(s.rows))
+	copy(out, s.rows)
+	return out
+}
+
+func (s *chatStore) deliverySnapshot() transcriptDeliverySnapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	items, localEntries := llm.CloneResponseItems(s.items), append([]localChatEntry(nil), s.local...)
+	materializedToolResults := collectMaterializedToolCalls(items)
+	scan := newTranscriptDeliveryFactScan(s.toolCompletions, materializedToolResults)
+	localIndex := 0
+	processedMessages := 0
+	appendLocalEntries := func(messageCount int) {
+		for localIndex < len(localEntries) {
+			if localEntries[localIndex].AfterMessageCount > messageCount {
+				break
+			}
+			if localEntries[localIndex].MarksBoundary {
+				scan.MarkCompactionBoundary()
+			}
+			scan.ApplyLegacyLocalEntry(localEntries[localIndex].Entry)
+			localIndex++
+		}
+	}
+	appendLocalEntries(0)
+	if s.compact != nil && s.compact.CutoffMessageCount == 0 {
+		scan.MarkCompactionBoundary()
+	}
+	walker := newResponseItemMessageWalker(func(msg llm.Message) {
+		scan.ApplyMessage(msg)
+		processedMessages++
+		if s.compact != nil && processedMessages == s.compact.CutoffMessageCount {
+			scan.MarkCompactionBoundary()
+		}
+		appendLocalEntries(processedMessages)
+	})
+	for _, item := range items {
+		walker.Apply(item)
+	}
+	walker.Flush()
+	appendLocalEntries(processedMessages)
+	streaming, metadata := s.streamingSnapshotLocked()
+	return transcriptDeliverySnapshot{
+		Rows:              scan.Snapshot(),
+		Streaming:         streaming,
+		StreamingMetadata: metadata,
+		StreamingStreamID: cloneTranscriptStreamID(s.streamingStreamIDLocked()),
+	}
 }
 
 func (s *chatStore) transcriptPageSnapshot(offset, limit int) transcriptPageSnapshot {

@@ -46,11 +46,15 @@ func RuntimeMainViewFromActivity(activity clientui.RuntimeActivity, status clien
 }
 
 func StatusFromRuntime(engine *runtime.Engine) clientui.RuntimeStatus {
+	return clientui.RuntimeStatus(TranscriptSessionStatusFromRuntime(engine))
+}
+
+func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) clientui.TranscriptSessionStatus {
 	if engine == nil {
-		return clientui.RuntimeStatus{}
+		return clientui.TranscriptSessionStatus{}
 	}
 	usage := engine.ContextUsage()
-	status := clientui.RuntimeStatus{
+	status := clientui.TranscriptSessionStatus{
 		ReviewerFrequency:                 engine.ReviewerFrequency(),
 		ReviewerEnabled:                   engine.ReviewerEnabled(),
 		AutoCompactionEnabled:             engine.AutoCompactionEnabled(),
@@ -153,21 +157,8 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 	}
 	view.CacheWarningVisibility = clientui.EntryVisibility(evt.CacheWarningVisibility)
 	if evt.RunState != nil {
-		activeKind := clientui.RuntimeActivityActiveKind("")
-		if evt.RunState.ActiveKind.Valid() {
-			activeKind = ClientActiveKindFromRuntime(evt.RunState.ActiveKind)
-		}
-		view.RunState = &clientui.RunState{
-			Lifecycle: clientui.MustRunLifecycle(
-				clientui.RunLifecyclePhase(evt.RunState.Lifecycle.Phase),
-				clientui.RunMode(evt.RunState.Lifecycle.Mode),
-			),
-			RunID:      evt.RunState.RunID,
-			ActiveKind: activeKind,
-			Status:     clientui.RunStatus(evt.RunState.Status),
-			StartedAt:  evt.RunState.StartedAt,
-			FinishedAt: evt.RunState.FinishedAt,
-		}
+		state := runtimeRunStateToClient(*evt.RunState)
+		view.RunState = &state
 	}
 	if evt.ContextUsage != nil {
 		view.ContextUsage = &clientui.RuntimeContextUsage{
@@ -211,6 +202,24 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 		}
 	}
 	return view
+}
+
+func runtimeRunStateToClient(state runtime.RunState) clientui.RunState {
+	activeKind := clientui.RuntimeActivityActiveKind("")
+	if state.ActiveKind.Valid() {
+		activeKind = ClientActiveKindFromRuntime(state.ActiveKind)
+	}
+	return clientui.RunState{
+		Lifecycle: clientui.MustRunLifecycle(
+			clientui.RunLifecyclePhase(state.Lifecycle.Phase),
+			clientui.RunMode(state.Lifecycle.Mode),
+		),
+		RunID:      state.RunID,
+		ActiveKind: activeKind,
+		Status:     clientui.RunStatus(state.Status),
+		StartedAt:  state.StartedAt,
+		FinishedAt: state.FinishedAt,
+	}
 }
 
 func goalStatusUpdateFromRuntime(update *runtime.GoalStatusUpdate) *clientui.RuntimeGoalStatusUpdate {

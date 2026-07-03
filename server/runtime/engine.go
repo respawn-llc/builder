@@ -345,6 +345,7 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 	if err := eng.restoreMessages(); err != nil {
 		return nil, err
 	}
+	eng.seedTranscriptLiveToolsFromDanglingToolCalls()
 	eng.restorePersistedUsageState(meta.UsageState)
 	var recoveryCandidate *session.PendingModelRecovery
 	legacyRecoveryCandidate := false
@@ -439,6 +440,28 @@ func (e *Engine) pendingRecoveryDanglingToolCallIDs() map[string]struct{} {
 	return out
 }
 
+func (e *Engine) seedTranscriptLiveToolsFromDanglingToolCalls() {
+	if e == nil {
+		return
+	}
+	chat := e.transcriptRuntimeState().chatProjection()
+	if chat == nil {
+		return
+	}
+	dangling := chat.danglingToolCalls()
+	if len(dangling) == 0 {
+		return
+	}
+	starts := make([]TranscriptLiveToolStart, 0, len(dangling))
+	for _, call := range dangling {
+		starts = append(starts, TranscriptLiveToolStart{
+			ToolCallID: strings.TrimSpace(call.callID),
+			ToolName:   strings.TrimSpace(call.name),
+		})
+	}
+	e.transcriptRuntimeState().SeedLiveTools(starts)
+}
+
 func (e *Engine) pendingRecoveryStepHasTerminalAssistant(stepID string) (bool, error) {
 	events, err := e.store.ReadEventsBackwardUntil(isCompactionSegmentBoundary)
 	if err != nil {
@@ -478,6 +501,7 @@ func (e *Engine) Close() error {
 		cancel()
 	}
 	e.lifecycleWG.Wait()
+	e.emitLiveToolAbortsRaw("runtime_close", "canceled")
 	return interruptErr
 }
 

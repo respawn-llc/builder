@@ -176,6 +176,7 @@ func serverCapabilityFlags(routes []rpccontract.Route) protocol.CapabilityFlags 
 		SessionPlan:             hasMethod(protocol.MethodSessionPlan),
 		SessionLifecycle:        hasDependency(rpccontract.DependencySessionLifecycle),
 		SessionTranscriptPaging: hasMethod(protocol.MethodSessionGetTranscriptPage) && hasMethod(protocol.MethodSessionGetCommittedTranscriptSuffix),
+		SessionTranscript:       hasDependency(rpccontract.DependencySessionTranscript),
 		SessionRuntime:          hasDependency(rpccontract.DependencySessionRuntime),
 		RuntimeControl:          hasDependency(rpccontract.DependencyRuntimeControl),
 		PromptControl:           hasDependency(rpccontract.DependencyPromptControl),

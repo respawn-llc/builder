@@ -36,6 +36,8 @@ type runtimeEntry struct {
 	rebind           func(string) error
 	teardown         func()
 	sessionActivity  *sessionActivityBroker
+	transcript       *transcriptSubscriptionBroker
+	sessionFeed      *sessionFeedSequencer
 	promptActivity   *promptActivityBroker
 	pendingPrompts   *pendingPromptStore
 	readModelUnpin   func()
@@ -53,9 +55,11 @@ func newBuildingRuntimeEntry(generation uint64) *runtimeEntry {
 		closed:          make(chan struct{}),
 		ownerIDs:        make(map[string]struct{}),
 		sessionActivity: newSessionActivityBroker(),
+		transcript:      newTranscriptSubscriptionBroker(),
 		promptActivity:  newPromptActivityBroker(),
 		pendingPrompts:  newPendingPromptStore(),
 	}
+	entry.sessionFeed = newSessionFeedSequencer(entry.transcript)
 	entry.cond = sync.NewCond(&entry.mu)
 	return entry
 }
@@ -530,4 +534,5 @@ func closeRuntimeEntry(entry *runtimeEntry, err error) {
 	entry.pendingPrompts.Close(err)
 	entry.promptActivity.Close(err)
 	entry.sessionActivity.Close(err)
+	entry.transcript.Close(err)
 }

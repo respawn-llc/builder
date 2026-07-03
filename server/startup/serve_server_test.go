@@ -197,6 +197,7 @@ func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
 		!capabilities.SessionPlan ||
 		!capabilities.SessionLifecycle ||
 		!capabilities.SessionTranscriptPaging ||
+		!capabilities.SessionTranscript ||
 		!capabilities.SessionRuntime ||
 		!capabilities.RuntimeControl ||
 		!capabilities.PromptControl ||

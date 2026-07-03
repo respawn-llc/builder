@@ -1,0 +1,58 @@
+package runtimeview
+
+import (
+	"testing"
+
+	"core/server/runtime"
+
+	"github.com/google/uuid"
+)
+
+func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testing.T) {
+	streamID := uuid.MustParse("f84c7d21-4c94-4a54-87fd-b41f5bd01d38")
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		ActiveAssistantText:     "hello",
+		ActiveAssistantStreamID: &streamID,
+	})
+	if hydration.ActiveAssistantStream == nil {
+		t.Fatal("expected active assistant stream in hydration")
+	}
+	if got := hydration.ActiveAssistantStream.StreamID; got != streamID {
+		t.Fatalf("active assistant stream id = %q, want %q", got, streamID)
+	}
+	if hydration.ActiveAssistantStream.Text != "hello" {
+		t.Fatalf("active assistant stream text = %q, want hello", hydration.ActiveAssistantStream.Text)
+	}
+}
+
+func TestTranscriptHydrationOmitsAssistantStreamWithoutRuntimeIdentity(t *testing.T) {
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		ActiveAssistantText:     "hello",
+		ActiveAssistantMetadata: &runtime.AssistantStreamMetadata{StepID: "step-1"},
+	})
+	if hydration.ActiveAssistantStream != nil {
+		t.Fatalf("active assistant stream = %+v, want nil without stream id", hydration.ActiveAssistantStream)
+	}
+}
+
+func TestTranscriptMessagesIgnoreEmptyAssistantDelta(t *testing.T) {
+	streamID := uuid.New()
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:                        runtime.EventAssistantDelta,
+		AssistantDelta:              "",
+		AssistantTranscriptStreamID: &streamID,
+	})
+	if len(messages) != 0 {
+		t.Fatalf("empty assistant delta messages = %+v, want none", messages)
+	}
+}
+
+func TestTranscriptMessagesIgnoreNoopAssistantResetWithoutStream(t *testing.T) {
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:                       runtime.EventAssistantDeltaReset,
+		AssistantStreamAbortReason: string(runtime.AssistantStreamAbortSuperseded),
+	})
+	if len(messages) != 0 {
+		t.Fatalf("noop assistant reset messages = %+v, want none", messages)
+	}
+}

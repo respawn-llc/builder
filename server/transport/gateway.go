@@ -73,6 +73,7 @@ type GatewaySessionDependencies interface {
 	SessionLifecycleClient() client.SessionLifecycleClient
 	SessionRuntimeClient() client.SessionRuntimeClient
 	SessionActivityClient() client.SessionActivityClient
+	SessionTranscriptClient() client.SessionTranscriptClient
 	SessionLaunchClientForProjectWorkspace(context.Context, string, string) (client.SessionLaunchClient, error)
 	SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (client.SessionLaunchClient, error)
 	RunPromptClientForProjectWorkspace(context.Context, string, string) (client.RunPromptClient, error)
@@ -139,6 +140,7 @@ type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.
 
 var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodSessionSubscribeActivity:              (*Gateway).serveSessionActivitySubscription,
+	protocol.MethodSessionSubscribeTranscript:            (*Gateway).serveSessionTranscriptSubscription,
 	protocol.MethodProcessSubscribeOutput:                (*Gateway).serveProcessOutputSubscription,
 	protocol.MethodPromptSubscribeActivity:               (*Gateway).servePromptActivitySubscription,
 	protocol.MethodAttentionNotificationSubscribe:        (*Gateway).serveAttentionNotificationSubscription,
@@ -392,7 +394,11 @@ func streamCompleteParams(err error) protocol.StreamCompleteParams {
 		return protocol.StreamCompleteParams{}
 	}
 	code, message := protocolError(err)
-	return protocol.StreamCompleteParams{Code: code, Message: message}
+	params := protocol.StreamCompleteParams{Code: code, Message: message}
+	if reason, ok := serverapi.TranscriptCloseReasonOf(err); ok {
+		params.TranscriptCloseReason = string(reason)
+	}
+	return params
 }
 
 func decodeParams[T any](raw json.RawMessage) (T, error) {

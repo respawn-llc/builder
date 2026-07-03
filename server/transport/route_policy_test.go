@@ -221,6 +221,13 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	if !errors.As(err, &routeErr) || routeErr.code != protocol.ErrCodeInvalidRequest {
 		t.Fatalf("attached session mismatch error = %v, want invalid request route error", err)
 	}
+	transcriptRoute := routeForTest(t, protocol.MethodSessionSubscribeTranscript)
+	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, transcriptRoute, serverapi.TranscriptSubscribeRequest{SessionID: fixture.ownSessionID}); err != nil {
+		t.Fatalf("attached transcript subscription: %v", err)
+	}
+	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, transcriptRoute, serverapi.TranscriptSubscribeRequest{SessionID: fixture.foreignSessionID}); err == nil {
+		t.Fatal("attached transcript subscription mismatch unexpectedly allowed")
+	}
 	promptAttachedRoute := routeForTest(t, protocol.MethodPromptSubscribeActivity)
 	if err := executor.authorizeScope(ctx, &connectionState{attachedSession: fixture.ownSessionID}, promptAttachedRoute, serverapi.PromptActivitySubscribeRequest{SessionID: fixture.ownSessionID}); err != nil {
 		t.Fatalf("attached prompt subscription: %v", err)

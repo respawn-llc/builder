@@ -9,6 +9,8 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/transcript"
+
+	"github.com/google/uuid"
 )
 
 type steeringPriority int
@@ -65,6 +67,7 @@ type steeringStreamingOutput struct {
 	reasoningDelta *llm.ReasoningSummaryDelta
 	clearState     bool
 	resetEvents    bool
+	abortReason    AssistantStreamAbortReason
 }
 
 type steeringCacheWarning struct {
@@ -194,7 +197,7 @@ func steerReasoningDeltaIntent(delta llm.ReasoningSummaryDelta) steeringIntent {
 func steerClearStreamingStateIntent() steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true}}},
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true, abortReason: AssistantStreamAbortSuperseded}}},
 	}
 }
 
@@ -286,6 +289,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			return err
 		}
 		result := cloneToolResult(*item.toolCompletion)
+		e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
 		e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true})
 		return nil
 	}
@@ -296,6 +300,11 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		evt := *item.event
 		if evt.StepID == "" {
 			evt.StepID = stepID
+		}
+		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil {
+			if err := e.transcriptRuntimeState().RecordLiveToolStart(*evt.ToolCall); err != nil {
+				return err
+			}
 		}
 		e.emitRaw(evt)
 	}
@@ -333,8 +342,11 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.streaming != nil {
 		if item.streaming.assistantDelta != nil {
 			delta := *item.streaming.assistantDelta
-			metadata := newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendStreamingDelta(stepID, e.TranscriptRevision(), e.CommittedTranscriptEntryCount(), delta.Text)
-			e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata})
+			if delta.Text == "" {
+				return nil
+			}
+			metadata, streamID := newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendStreamingDelta(stepID, e.TranscriptRevision(), e.CommittedTranscriptEntryCount(), delta.Text)
+			e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
 			return nil
 		}
 		if item.streaming.reasoningDelta != nil {
@@ -343,11 +355,12 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			return nil
 		}
 		var clearedMetadata *AssistantStreamMetadata
+		var clearedStreamID *uuid.UUID
 		if item.streaming.clearState {
-			clearedMetadata = e.clearStreamingAssistantStateRaw()
+			clearedMetadata, clearedStreamID = e.clearStreamingAssistantStateRaw()
 		}
 		if item.streaming.resetEvents {
-			e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata)
+			e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, item.streaming.abortReason)
 		}
 		return nil
 	}

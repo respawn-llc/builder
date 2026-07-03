@@ -39,6 +39,10 @@ type RuntimeActivityResolver interface {
 	Snapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error)
 }
 
+type sessionIdentityPublisher interface {
+	PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget)
+}
+
 type defaultRuntimeControlActivityResolver struct {
 	runtimes RuntimeResolver
 }
@@ -375,7 +379,13 @@ func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSe
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Name}
 	_, err := s.sessionNames.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			return engine.SetSessionName(req.Name)
+			if err := engine.SetSessionName(req.Name); err != nil {
+				return err
+			}
+			if publisher, ok := s.runtimes.(sessionIdentityPublisher); ok {
+				publisher.PublishSessionIdentity(req.SessionID, nil)
+			}
+			return nil
 		})
 	})
 	return err
