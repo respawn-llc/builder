@@ -407,27 +407,20 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for model")
 	}
-	waitDone := make(chan struct {
-		result LiveRunResult
-		err    error
-	}, 1)
-	go func() {
-		result, err := eng.WaitForActiveRunResult(context.Background())
-		waitDone <- struct {
-			result LiveRunResult
-			err    error
-		}{result: result, err: err}
-	}()
+	handle, err := eng.CaptureActiveRunResult(context.Background())
+	if err != nil {
+		t.Fatalf("CaptureActiveRunResult: %v", err)
+	}
 	close(releaseModel)
 	if err := <-submitDone; err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
 	}
-	waited := <-waitDone
-	if waited.err != nil {
-		t.Fatalf("WaitForActiveRunResult: %v", waited.err)
+	waited, err := handle.Wait()
+	if err != nil {
+		t.Fatalf("captured live run result: %v", err)
 	}
-	if waited.result.ResultKind != LiveRunResultAssistantFinalAnswer || waited.result.AssistantMessage.Content != "final answer" {
-		t.Fatalf("wait result = %+v", waited.result)
+	if waited.ResultKind != LiveRunResultAssistantFinalAnswer || waited.AssistantMessage.Content != "final answer" {
+		t.Fatalf("wait result = %+v", waited)
 	}
 }
 
