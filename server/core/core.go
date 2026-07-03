@@ -502,6 +502,13 @@ func (s *Core) SessionActivityClient() client.SessionActivityClient {
 	return s.safeBundles().Runtime.sessionActivity
 }
 
+func (s *Core) SessionTranscriptClient() client.SessionTranscriptClient {
+	if s == nil {
+		return nil
+	}
+	return s.safeBundles().Runtime.sessionTranscript
+}
+
 func (s *Core) SessionLaunchClient() client.SessionLaunchClient {
 	if s == nil {
 		return nil

@@ -10,10 +10,12 @@ import (
 	shelltool "core/server/tools/shell"
 	rpccontract "core/shared/apicontract"
 	remoteclient "core/shared/client"
+	"core/shared/clientui"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"golang.org/x/net/websocket"
@@ -100,6 +102,11 @@ func TestStreamCompleteParamsMapsTerminalErrors(t *testing.T) {
 	params := streamCompleteParams(serverapi.ErrStreamFailed)
 	if params.Code != protocol.ErrCodeStreamFailed || params.Message != serverapi.ErrStreamFailed.Error() {
 		t.Fatalf("streamCompleteParams(stream failed) = %+v, want stream-failed code/message", params)
+	}
+	transcriptErr := serverapi.NewTranscriptStreamError(serverapi.TranscriptCloseReasonSubscriberOverflow, serverapi.ErrStreamGap)
+	params = streamCompleteParams(transcriptErr)
+	if params.Code != protocol.ErrCodeStreamGap || params.TranscriptCloseReason != string(serverapi.TranscriptCloseReasonSubscriberOverflow) {
+		t.Fatalf("streamCompleteParams(transcript overflow) = %+v, want stream gap plus typed transcript reason", params)
 	}
 }
 
@@ -734,6 +741,56 @@ func TestGatewayRejectsSessionActivitySubscriptionBeforeServerAuthReady(t *testi
 	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Meta().SessionID}, nil)
 	if respErr := callGatewayExpectError(t, conn, "subscribe", protocol.MethodSessionSubscribeActivity, serverapi.SessionActivitySubscribeRequest{SessionID: store.Meta().SessionID}); respErr.Code != protocol.ErrCodeAuthRequired {
 		t.Fatalf("session activity subscribe error = %+v, want auth required", respErr)
+	}
+}
+
+func TestGatewayRejectsSessionTranscriptSubscriptionBeforeServerAuthReady(t *testing.T) {
+	appCore, server, _ := newGatewayTestServerWithAuth(t, false)
+	defer func() { _ = appCore.Close() }()
+	store := createGatewayAuthoritativeSession(t, appCore)
+	appCore.RegisterSessionStore(store)
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+
+	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Meta().SessionID}, nil)
+	if respErr := callGatewayExpectError(t, conn, "subscribe-transcript", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: store.Meta().SessionID}); respErr.Code != protocol.ErrCodeAuthRequired {
+		t.Fatalf("session transcript subscribe error = %+v, want auth required", respErr)
+	}
+}
+
+func TestGatewaySessionTranscriptSubscriptionReturnsHydrationOnDedicatedRoute(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	store := createGatewayAuthoritativeSession(t, appCore)
+	appCore.RegisterSessionStore(store)
+	activateGatewayController(t, appCore, store.Meta().SessionID)
+	defer releaseGatewayController(t, appCore, store.Meta().SessionID)
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+	callGateway(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}, nil)
+	callGateway(t, conn, "attach-session", protocol.MethodAttachSession, protocol.AttachSessionRequest{SessionID: store.Meta().SessionID}, nil)
+	callGateway(t, conn, "subscribe-transcript", protocol.MethodSessionSubscribeTranscript, serverapi.TranscriptSubscribeRequest{SessionID: store.Meta().SessionID}, nil)
+
+	var notification protocol.Request
+	if err := websocket.JSON.Receive(conn, &notification); err != nil {
+		t.Fatalf("receive transcript notification: %v", err)
+	}
+	if notification.Method != protocol.MethodSessionTranscriptEvent {
+		t.Fatalf("notification method = %q, want transcript event", notification.Method)
+	}
+	var params protocol.SessionTranscriptEventParams
+	if err := json.Unmarshal(notification.Params, &params); err != nil {
+		t.Fatalf("decode transcript event: %v", err)
+	}
+	if params.Message.Sequence != 1 || params.Message.Kind != clientui.TranscriptMessageHydration || params.Message.Hydration == nil {
+		t.Fatalf("transcript message = %+v, want seq=1 hydration", params.Message)
 	}
 }
 

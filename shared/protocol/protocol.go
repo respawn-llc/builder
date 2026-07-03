@@ -29,6 +29,7 @@ type CapabilityFlags struct {
 	SessionPlan             bool `json:"session_plan"`
 	SessionLifecycle        bool `json:"session_lifecycle"`
 	SessionTranscriptPaging bool `json:"session_transcript_paging"`
+	SessionTranscript       bool `json:"session_transcript"`
 	SessionRuntime          bool `json:"session_runtime"`
 	RuntimeControl          bool `json:"runtime_control"`
 	RuntimeLiveControl      bool `json:"runtime_live_control"`

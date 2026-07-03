@@ -39,6 +39,7 @@ type RuntimeRegistry struct {
 	readModels               *runtimeactivity.CoordinatorCache
 	attentionBroker          *attentionnotify.Broker
 	questionBatches          *attentionnotify.QuestionBatchTracker
+	executionTargetResolver  func(context.Context, string) (clientui.SessionExecutionTarget, error)
 }
 
 type runStartReservation struct {
@@ -264,6 +265,22 @@ func (r *RuntimeRegistry) WithOperationCoordinator(coordinator *runtimeops.Coord
 	if r.operations != nil {
 		r.operations.SetVersionAllocator(r.nextReadModelVersion)
 	}
+	return r
+}
+
+func (r *RuntimeRegistry) WithExecutionTargetResolver(resolver func(context.Context, string) (clientui.SessionExecutionTarget, error)) *RuntimeRegistry {
+	if r == nil {
+		return nil
+	}
+	r.executionTargetResolver = resolver
+	return r
+}
+
+func (r *RuntimeRegistry) WithTranscriptContractViolationPanic(enabled bool) *RuntimeRegistry {
+	if r == nil {
+		return nil
+	}
+	transcriptContractViolationsPanic = enabled
 	return r
 }
 
@@ -559,6 +576,12 @@ func (r *RuntimeRegistry) publishUnavailableRuntimeActivityToEntry(sessionID str
 	}
 	activity := response.Activity
 	reconciliation := response.InputReconciliation
+	if entry.sessionFeed != nil {
+		entry.sessionFeed.Publish([]clientui.TranscriptMessage{
+			{Kind: clientui.TranscriptMessageRuntimeActivity, RuntimeActivity: &activity},
+			{Kind: clientui.TranscriptMessageInputReconciliation, InputReconciliation: &reconciliation},
+		})
+	}
 	entry.sessionActivity.Publish(clientui.Event{
 		Kind:                clientui.EventRuntimeActivityChanged,
 		ReadModelVersion:    response.Version,
@@ -600,6 +623,15 @@ func (r *RuntimeRegistry) publishRuntimeEventToEntry(sessionID string, entry *ru
 	if entry == nil || entry.sessionActivity == nil {
 		return
 	}
+	if entry.sessionFeed != nil {
+		if !transcriptEventRequiresVisibleSubscriber(evt) || entry.sessionFeed.HasSubscribers() {
+			entry.sessionFeed.Publish(runtimeview.TranscriptMessagesFromRuntimeEvent(evt))
+		}
+		if engine := entry.engineRef(); engine != nil && runtimeEventShouldPublishSessionStatus(evt) {
+			status := runtimeview.TranscriptSessionStatusFromRuntime(engine)
+			entry.sessionFeed.Publish([]clientui.TranscriptMessage{{Kind: clientui.TranscriptMessageSessionStatus, SessionStatus: &status}})
+		}
+	}
 	entry.sessionActivity.Publish(runtimeview.EventFromRuntime(evt))
 	r.recordQueuedMessageOperationStatus(evt)
 	if evt.RunState != nil {
@@ -609,6 +641,63 @@ func (r *RuntimeRegistry) publishRuntimeEventToEntry(sessionID string, entry *ru
 		}
 		r.notifyInterestChanged(sessionID, reason)
 	}
+}
+
+func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget) {
+	if r == nil {
+		return
+	}
+	id := strings.TrimSpace(sessionID)
+	entry := r.directory.Entry(id)
+	if entry == nil || entry.sessionFeed == nil {
+		return
+	}
+	engine := entry.engineRef()
+	if engine == nil {
+		return
+	}
+	identity := runtimeview.TranscriptSessionIdentityFromRuntime(engine)
+	if target != nil {
+		identity.ExecutionTarget = clientui.NormalizeSessionExecutionTarget(*target)
+	} else if resolved, ok := r.resolveSessionExecutionTarget(context.Background(), id); ok {
+		identity.ExecutionTarget = resolved
+	}
+	entry.sessionFeed.Publish([]clientui.TranscriptMessage{{Kind: clientui.TranscriptMessageSessionIdentity, SessionIdentity: &identity}})
+}
+
+func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) {
+	if r == nil {
+		return
+	}
+	entry := r.directory.Entry(strings.TrimSpace(sessionID))
+	if entry == nil || entry.sessionFeed == nil {
+		return
+	}
+	engine := entry.engineRef()
+	if engine == nil {
+		return
+	}
+	status := runtimeview.TranscriptSessionStatusFromRuntime(engine)
+	entry.sessionFeed.Publish([]clientui.TranscriptMessage{{Kind: clientui.TranscriptMessageSessionStatus, SessionStatus: &status}})
+}
+
+func (r *RuntimeRegistry) resolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, bool) {
+	if r == nil || r.executionTargetResolver == nil {
+		return clientui.SessionExecutionTarget{}, false
+	}
+	target, err := r.executionTargetResolver(ctx, strings.TrimSpace(sessionID))
+	if err != nil {
+		return clientui.SessionExecutionTarget{}, false
+	}
+	return clientui.NormalizeSessionExecutionTarget(target), true
+}
+
+func runtimeEventShouldPublishSessionStatus(evt runtime.Event) bool {
+	return evt.ContextUsage != nil || evt.GoalStatus != nil || evt.Compaction != nil || evt.Kind == runtime.EventAssistantMessage
+}
+
+func transcriptEventRequiresVisibleSubscriber(evt runtime.Event) bool {
+	return evt.Kind == runtime.EventAssistantDelta || evt.Kind == runtime.EventAssistantDeltaReset
 }
 
 func (r *RuntimeRegistry) recordQueuedMessageOperationStatus(evt runtime.Event) {
@@ -640,6 +729,12 @@ func (r *RuntimeRegistry) PublishRuntimeActivitySnapshot(sessionID string, snaps
 	}
 	activity := snapshot.Activity
 	reconciliation := snapshot.InputReconciliation
+	if entry.sessionFeed != nil {
+		entry.sessionFeed.Publish([]clientui.TranscriptMessage{
+			{Kind: clientui.TranscriptMessageRuntimeActivity, RuntimeActivity: &activity},
+			{Kind: clientui.TranscriptMessageInputReconciliation, InputReconciliation: &reconciliation},
+		})
+	}
 	entry.sessionActivity.Publish(clientui.Event{
 		Kind:                clientui.EventRuntimeActivityChanged,
 		ReadModelVersion:    snapshot.Version,
@@ -670,6 +765,41 @@ func (r *RuntimeRegistry) SubscribeSessionActivityFrom(_ context.Context, req se
 	}
 	r.notifyInterestChanged(id, RuntimeInterestChanged)
 	return &notifyingSessionActivitySubscription{SessionActivitySubscription: sub, onClose: func() {
+		r.notifyInterestChanged(id, RuntimeInterestChanged)
+	}}, nil
+}
+
+func (r *RuntimeRegistry) SubscribeSessionTranscript(_ context.Context, req serverapi.SessionTranscriptSubscribeRequest) (serverapi.SessionTranscriptSubscription, error) {
+	if r == nil {
+		return nil, fmt.Errorf("runtime registry is required")
+	}
+	id := strings.TrimSpace(req.SessionID)
+	entry := r.directory.Entry(id)
+	if entry == nil || entry.sessionFeed == nil {
+		return nil, fmt.Errorf("session transcript stream for %q is unavailable: %w", id, serverapi.ErrStreamUnavailable)
+	}
+	engine := entry.engineRef()
+	if engine == nil {
+		return nil, fmt.Errorf("session transcript stream for %q is unavailable: %w", id, serverapi.ErrStreamUnavailable)
+	}
+	var sub *transcriptSubscription
+	err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {
+		var subscribeErr error
+		hydration := runtimeview.TranscriptHydrationFromSnapshot(snapshot)
+		hydration.InFlightTools = runtimeview.TranscriptToolStartsFromRuntime(engine.TranscriptLiveToolSnapshot())
+		hydration.SessionStatus = runtimeview.TranscriptSessionStatusFromRuntime(engine)
+		hydration.SessionIdentity = runtimeview.TranscriptSessionIdentityFromRuntime(engine)
+		if target, ok := r.resolveSessionExecutionTarget(context.Background(), id); ok {
+			hydration.SessionIdentity.ExecutionTarget = target
+		}
+		sub, subscribeErr = entry.sessionFeed.Subscribe(hydration)
+		return subscribeErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	r.notifyInterestChanged(id, RuntimeInterestChanged)
+	return &notifyingSessionTranscriptSubscription{SessionTranscriptSubscription: sub, onClose: func() {
 		r.notifyInterestChanged(id, RuntimeInterestChanged)
 	}}, nil
 }
@@ -829,7 +959,7 @@ func (r *RuntimeRegistry) HasRuntimeSubscribers(sessionID string) bool {
 	if entry == nil {
 		return false
 	}
-	return entry.sessionActivity.SubscriberCount() > 0 || entry.promptActivity.SubscriberCount() > 0
+	return entry.sessionActivity.SubscriberCount() > 0 || entry.promptActivity.SubscriberCount() > 0 || entry.sessionFeed.HasSubscribers()
 }
 
 func (r *RuntimeRegistry) notifyInterestChanged(sessionID string, reason RuntimeInterestReason) {
@@ -907,9 +1037,34 @@ type notifyingSessionActivitySubscription struct {
 }
 
 func (s *notifyingSessionActivitySubscription) Close() error {
+	if s == nil {
+		return nil
+	}
 	var err error
-	if s != nil && s.SessionActivitySubscription != nil {
+	if s.SessionActivitySubscription != nil {
 		err = s.SessionActivitySubscription.Close()
+	}
+	s.once.Do(func() {
+		if s.onClose != nil {
+			s.onClose()
+		}
+	})
+	return err
+}
+
+type notifyingSessionTranscriptSubscription struct {
+	serverapi.SessionTranscriptSubscription
+	once    sync.Once
+	onClose func()
+}
+
+func (s *notifyingSessionTranscriptSubscription) Close() error {
+	if s == nil {
+		return nil
+	}
+	var err error
+	if s.SessionTranscriptSubscription != nil {
+		err = s.SessionTranscriptSubscription.Close()
 	}
 	s.once.Do(func() {
 		if s.onClose != nil {
@@ -926,8 +1081,11 @@ type notifyingPromptActivitySubscription struct {
 }
 
 func (s *notifyingPromptActivitySubscription) Close() error {
+	if s == nil {
+		return nil
+	}
 	var err error
-	if s != nil && s.PromptActivitySubscription != nil {
+	if s.PromptActivitySubscription != nil {
 		err = s.PromptActivitySubscription.Close()
 	}
 	s.once.Do(func() {

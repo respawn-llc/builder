@@ -79,6 +79,7 @@ const (
 	DependencyPromptActivity        Dependency = "prompt_activity"
 	DependencyAttentionNotification Dependency = "attention_notification"
 	DependencySessionActivity       Dependency = "session_activity"
+	DependencySessionTranscript     Dependency = "session_transcript"
 	DependencyRunPrompt             Dependency = "run_prompt"
 	DependencyStreamNotification    Dependency = "stream_notification"
 	DependencyWorkflow              Dependency = "workflow"
@@ -299,6 +300,7 @@ var routeContracts = []Route{
 	unary[serverapi.ApprovalAnswerRequest, struct{}](protocol.MethodApprovalAnswer, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyPromptControl),
 	progress[serverapi.RunPromptRequest, serverapi.RunPromptResponse, serverapi.RunPromptProgress](protocol.MethodRunPrompt, ScopeProjectWorkspace, DependencyRunPrompt, protocol.MethodRunPromptProgress),
 	subscription[serverapi.SessionActivitySubscribeRequest, protocol.SessionActivityEventParams](protocol.MethodSessionSubscribeActivity, AuthServer, ScopeAttachedSession, DependencySessionActivity, protocol.MethodSessionActivityEvent, protocol.MethodSessionActivityComplete),
+	subscription[serverapi.TranscriptSubscribeRequest, protocol.SessionTranscriptEventParams](protocol.MethodSessionSubscribeTranscript, AuthServer, ScopeAttachedSession, DependencySessionTranscript, protocol.MethodSessionTranscriptEvent, protocol.MethodSessionTranscriptComplete),
 	subscription[serverapi.ProcessOutputSubscribeRequest, protocol.ProcessOutputEventParams](protocol.MethodProcessSubscribeOutput, AuthServer, ScopeProcessActiveProject, DependencyProcessOutput, protocol.MethodProcessOutputEvent, protocol.MethodProcessOutputComplete),
 	subscription[serverapi.PromptActivitySubscribeRequest, protocol.PromptActivityEventParams](protocol.MethodPromptSubscribeActivity, AuthServer, ScopeAttachedSession, DependencyPromptActivity, protocol.MethodPromptActivityEvent, protocol.MethodPromptActivityComplete),
 	subscription[serverapi.AttentionNotificationSubscribeRequest, protocol.AttentionNotificationEventParams](protocol.MethodAttentionNotificationSubscribe, AuthServer, ScopeNone, DependencyAttentionNotification, protocol.MethodAttentionNotificationEvent, protocol.MethodAttentionNotificationComplete),
@@ -308,6 +310,8 @@ var routeContracts = []Route{
 	notification[serverapi.RunPromptProgress](protocol.MethodRunPromptProgress),
 	notification[protocol.SessionActivityEventParams](protocol.MethodSessionActivityEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodSessionActivityComplete),
+	notification[protocol.SessionTranscriptEventParams](protocol.MethodSessionTranscriptEvent),
+	notification[protocol.StreamCompleteParams](protocol.MethodSessionTranscriptComplete),
 	notification[protocol.ProcessOutputEventParams](protocol.MethodProcessOutputEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodProcessOutputComplete),
 	notification[protocol.PromptActivityEventParams](protocol.MethodPromptActivityEvent),

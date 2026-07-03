@@ -16,6 +16,22 @@ type SessionActivitySubscription interface {
 	Close() error
 }
 
+type TranscriptSubscribeRequest struct {
+	SessionID string
+}
+
+type TranscriptSubscription interface {
+	Next(ctx context.Context) (clientui.TranscriptMessage, error)
+	Close() error
+}
+
 func (r SessionActivitySubscribeRequest) Validate() error {
 	return validateRequiredSessionID(r.SessionID)
 }
+
+func (r TranscriptSubscribeRequest) Validate() error {
+	return validateRequiredSessionID(r.SessionID)
+}
+
+type SessionTranscriptSubscribeRequest = TranscriptSubscribeRequest
+type SessionTranscriptSubscription = TranscriptSubscription

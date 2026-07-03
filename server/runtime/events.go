@@ -6,9 +6,13 @@ import (
 	"core/server/tools"
 	"core/shared/transcript"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type EventKind string
+
+type AssistantStreamAbortReason string
 
 const (
 	EventConversationUpdated        EventKind = "conversation_updated"
@@ -22,6 +26,7 @@ const (
 	EventUserMessageFlushed         EventKind = "user_message_flushed"
 	EventToolCallStarted            EventKind = "tool_call_started"
 	EventToolCallCompleted          EventKind = "tool_call_completed"
+	EventToolCallAborted            EventKind = "tool_call_aborted"
 	EventReviewerStarted            EventKind = "reviewer_started"
 	EventReviewerCompleted          EventKind = "reviewer_completed"
 	EventInFlightClearFailed        EventKind = "in_flight_clear_failed"
@@ -36,6 +41,8 @@ const (
 	EventPromptHistoryPersistFailed EventKind = "prompt_history_persist_failed"
 	EventGoalStatusUpdated          EventKind = "goal_status_updated"
 	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
+
+	AssistantStreamAbortSuperseded AssistantStreamAbortReason = "superseded"
 )
 
 type QueuedUserMessageStatus string
@@ -77,6 +84,8 @@ type Event struct {
 	AssistantDelta               string
 	AssistantDeltaPhase          llm.MessagePhase
 	AssistantStreamMetadata      *AssistantStreamMetadata
+	AssistantTranscriptStreamID  *uuid.UUID
+	AssistantStreamAbortReason   string
 	ReasoningDelta               *llm.ReasoningSummaryDelta
 	UserMessage                  string
 	UserMessageBatch             []string
@@ -85,6 +94,7 @@ type Event struct {
 	ModelResponse                *ModelResponseTrace
 	ToolCall                     *llm.ToolCall
 	ToolResult                   *tools.Result
+	ToolAbortReason              string
 	Reviewer                     *ReviewerStatus
 	Compaction                   *CompactionStatus
 	CacheWarning                 *transcript.CacheWarning

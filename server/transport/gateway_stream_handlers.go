@@ -100,6 +100,12 @@ func (g *Gateway) serveSessionActivitySubscription(conn rpcwire.Conn, ctx contex
 	})
 }
 
+func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
+	serveGatewaySubscription(conn, ctx, route, req, g.deps.SessionTranscriptClient().SubscribeSessionTranscript, func(message clientui.TranscriptSubscriptionMessage) protocol.SessionTranscriptEventParams {
+		return protocol.SessionTranscriptEventParams{Message: message}
+	})
+}
+
 func serveGatewaySubscription[Req interface{ Validate() error }, Event any, Wire any, Sub gatewaySubscription[Event]](
 	conn rpcwire.Conn,
 	ctx context.Context,

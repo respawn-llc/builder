@@ -309,8 +309,13 @@ func TestWorkflowRuntimeTaskQuestionBatchPublishesOneTaskDetailAttention(t *test
 		t.Fatalf("SubmitPromptResponse first: %v", err)
 	}
 	second := fixture.waitForWaitingAsk(t, task.ID, "call-ask-2")
-	if event, ok := workflowAttentionEventWithin(t, desktopSub, 250*time.Millisecond); ok {
-		t.Fatalf("second batch ask published duplicate pending attention: %+v", event)
+	update := nextWorkflowAttentionEvent(t, desktopSub)
+	assertTaskQuestionBatchPending(t, update, fixture, task, second.SessionID, "call-ask-2")
+	if update.Pending.ID != pending.Pending.ID {
+		t.Fatalf("second batch update id = %q, want same batch id %q", update.Pending.ID, pending.Pending.ID)
+	}
+	if update.Pending.Question == nil || update.Pending.Question.MaterializedCount != 2 {
+		t.Fatalf("second batch question state = %+v, want both asks materialized", update.Pending.Question)
 	}
 	if err := fixture.runtimes.SubmitPromptResponse(second.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-2", Answer: "Keep it safe"}, nil); err != nil {
 		t.Fatalf("SubmitPromptResponse second: %v", err)

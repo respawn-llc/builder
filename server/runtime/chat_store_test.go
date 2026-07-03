@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"fmt"
+
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
@@ -10,6 +12,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func toolCallWithPresentation(t *testing.T, s *chatStore, call llm.ToolCall) llm.ToolCall {
@@ -49,7 +53,7 @@ func TestChatStoreSnapshotProjectsConversation(t *testing.T) {
 	})
 	s.appendMessage(llm.Message{Role: llm.RoleAssistant, Content: "done"})
 
-	s.appendStreamingDelta("step-1", 12, 6, "stream")
+	s.appendStreamingDelta("step-1", 12, 6, "stream", llm.MessagePhaseFinal)
 	s.setStreamingError("failed")
 	s.appendLocalEntryRecord(ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "system", Text: "note"})
 
@@ -889,5 +893,169 @@ func TestChatStoreSnapshotShowsManualCompactionCarryoverAsVerboseMessage(t *test
 	}
 	if got := snap.Entries[0]; got.Role != string(transcript.EntryRoleManualCompactionCarryover) || got.Text != "# Last user message before manual compaction\n\nplease keep tests green" || got.Visibility != transcript.EntryVisibilityVerbose {
 		t.Fatalf("unexpected carryover transcript entry: %+v", got)
+	}
+}
+
+func TestTranscriptDeliverySnapshotIncludesCompleteActiveSegmentBeyondLegacyTailLimit(t *testing.T) {
+	s := newChatStore()
+	const count = 650
+	for i := 0; i < count; i++ {
+		s.appendMessage(llm.Message{Role: llm.RoleUser, Content: fmt.Sprintf("message-%03d", i)})
+	}
+
+	snapshot := s.deliverySnapshot()
+	if len(snapshot.Rows) != count {
+		t.Fatalf("delivery snapshot rows = %d, want complete active segment %d", len(snapshot.Rows), count)
+	}
+	if snapshot.Rows[0].User == nil || snapshot.Rows[0].User.Text != "message-000" {
+		t.Fatalf("first delivery row = %+v, want oldest active row", snapshot.Rows[0])
+	}
+	if last := snapshot.Rows[len(snapshot.Rows)-1]; last.User == nil || last.User.Text != "message-649" {
+		t.Fatalf("last delivery row = %+v, want newest active row", last)
+	}
+}
+
+func TestTranscriptDeliverySnapshotRetainsFinalizedAssistantStreamID(t *testing.T) {
+	s := newChatStore()
+	s.appendMessage(llm.Message{Role: llm.RoleAssistant, Content: "streamed", Phase: llm.MessagePhaseFinal})
+	streamID := uuid.New()
+	s.recordAssistantStreamFinalization(0, &streamID)
+
+	snapshot := s.deliverySnapshot()
+	if len(snapshot.Rows) != 1 || snapshot.Rows[0].Assistant == nil || snapshot.Rows[0].Assistant.StreamID == nil {
+		t.Fatalf("delivery rows = %+v, want assistant row with stream id", snapshot.Rows)
+	}
+	if *snapshot.Rows[0].Assistant.StreamID != streamID {
+		t.Fatalf("stream id = %v, want %v", *snapshot.Rows[0].Assistant.StreamID, streamID)
+	}
+}
+
+func TestTranscriptDeliverySnapshotRetainsFinalizedAssistantStreamIDAfterToolStart(t *testing.T) {
+	s := newChatStore()
+	s.appendMessage(llm.Message{
+		Role:    llm.RoleAssistant,
+		Content: "checking",
+		ToolCalls: []llm.ToolCall{{
+			ID:   "call-1",
+			Name: "shell",
+		}},
+	})
+	s.appendMessage(llm.Message{Role: llm.RoleAssistant, Content: "streamed", Phase: llm.MessagePhaseFinal})
+	streamID := uuid.New()
+	s.recordAssistantStreamFinalization(2, &streamID)
+
+	snapshot := s.deliverySnapshot()
+	if len(snapshot.Rows) != 2 || snapshot.Rows[1].Assistant == nil || snapshot.Rows[1].Assistant.StreamID == nil {
+		t.Fatalf("delivery rows = %+v, want second assistant row with stream id", snapshot.Rows)
+	}
+	if *snapshot.Rows[1].Assistant.StreamID != streamID {
+		t.Fatalf("stream id = %v, want %v", *snapshot.Rows[1].Assistant.StreamID, streamID)
+	}
+}
+
+func TestTranscriptDeliverySnapshotRetainsFinalizedAssistantStreamIDAfterCompactionBase(t *testing.T) {
+	s := newChatStore()
+	prunedStreamID := uuid.New()
+	s.recordAssistantStreamFinalization(4, &prunedStreamID)
+	activeSegmentStart := 5
+	s.replaceHistoryAtCommittedEntryStart(nil, &activeSegmentStart)
+	s.appendMessage(llm.Message{Role: llm.RoleAssistant, Content: "streamed", Phase: llm.MessagePhaseFinal})
+	streamID := uuid.New()
+	s.recordAssistantStreamFinalization(activeSegmentStart, &streamID)
+	if _, ok := s.assistantStreamIDsByEntry[4]; ok {
+		t.Fatalf("stream IDs below active segment start were retained: %+v", s.assistantStreamIDsByEntry)
+	}
+
+	snapshot := s.deliverySnapshot()
+	if len(snapshot.Rows) != 1 || snapshot.Rows[0].Assistant == nil || snapshot.Rows[0].Assistant.StreamID == nil {
+		t.Fatalf("delivery rows = %+v, want assistant row with stream id", snapshot.Rows)
+	}
+	if *snapshot.Rows[0].Assistant.StreamID != streamID {
+		t.Fatalf("stream id = %v, want %v", *snapshot.Rows[0].Assistant.StreamID, streamID)
+	}
+}
+
+func TestTranscriptDeliverySnapshotPreservesProjectedHistoryReplacementRows(t *testing.T) {
+	s := newChatStore()
+	s.appendMessage(llm.Message{Role: llm.RoleUser, Content: "before compaction"})
+	activeSegmentStart := 7
+	items := llm.ItemsFromMessages([]llm.Message{
+		{Role: llm.RoleUser, Content: "user text"},
+		{Role: llm.RoleAssistant, Content: "assistant text", Phase: llm.MessagePhaseFinal},
+		{Role: llm.RoleTool, ToolCallID: "call-1", Name: "shell", Content: `{"output":"done"}`},
+	})
+	s.replaceHistoryAtCommittedEntryStart(items, &activeSegmentStart)
+
+	snapshot := s.deliverySnapshot()
+	if len(snapshot.Rows) != 3 {
+		t.Fatalf("delivery rows = %+v, want user, assistant, tool rows", snapshot.Rows)
+	}
+	if snapshot.Rows[0].User == nil || snapshot.Rows[0].User.Text != "user text" {
+		t.Fatalf("first row = %+v, want projected user row", snapshot.Rows[0])
+	}
+	if snapshot.Rows[1].Assistant == nil || snapshot.Rows[1].Assistant.Text != "assistant text" {
+		t.Fatalf("second row = %+v, want projected assistant row", snapshot.Rows[1])
+	}
+	if snapshot.Rows[2].Tool == nil || snapshot.Rows[2].Tool.ToolCallID != "call-1" {
+		t.Fatalf("third row = %+v, want projected tool row", snapshot.Rows[2])
+	}
+}
+
+func TestTranscriptFactsPreserveNoticeContent(t *testing.T) {
+	facts := TranscriptCommittedRowFactsFromEvent(Event{
+		Kind: EventLocalEntryAdded,
+		LocalEntry: &ChatEntry{
+			Role:          "warning",
+			Text:          "cleanup warning",
+			CondensedText: "cleanup",
+			NoticeID:      "notice-1",
+		},
+	})
+	if len(facts) != 1 || facts[0].Notice == nil {
+		t.Fatalf("facts = %+v, want notice fact", facts)
+	}
+	notice := facts[0].Notice
+	if notice.DiagnosticDetail != "cleanup warning" || notice.CondensedText != "cleanup" || notice.NoticeID == nil || *notice.NoticeID != "notice-1" || notice.Severity != "warning" {
+		t.Fatalf("notice fact = %+v, want preserved local-entry content", notice)
+	}
+}
+
+func TestTranscriptFactsPreserveSpecialMessageContentAsNotice(t *testing.T) {
+	facts := TranscriptCommittedRowFactsFromEvent(Event{
+		Kind: EventConversationUpdated,
+		Message: llm.Message{
+			Role:           llm.RoleDeveloper,
+			MessageType:    llm.MessageTypeCompactionSummary,
+			Content:        "full compaction summary",
+			CompactContent: "compact summary",
+		},
+	})
+	if len(facts) != 1 || facts[0].Notice == nil {
+		t.Fatalf("facts = %+v, want notice fact", facts)
+	}
+	notice := facts[0].Notice
+	if notice.DiagnosticDetail != "full compaction summary" || notice.CondensedText != "compact summary" || notice.MessageType != llm.MessageTypeCompactionSummary {
+		t.Fatalf("notice fact = %+v, want preserved developer message content", notice)
+	}
+}
+
+func TestTranscriptFactsIncludeInFlightClearFailures(t *testing.T) {
+	facts := TranscriptCommittedRowFactsFromEvent(Event{Kind: EventInFlightClearFailed, Error: "cleanup failed"})
+	if len(facts) != 1 || facts[0].Notice == nil || facts[0].Notice.DiagnosticDetail != "cleanup failed" || facts[0].Notice.Severity != "error" {
+		t.Fatalf("facts = %+v, want in-flight clear failure notice", facts)
+	}
+}
+
+func TestTranscriptFactsPreserveCacheWarningVisibility(t *testing.T) {
+	facts := TranscriptCommittedRowFactsFromEvent(Event{
+		Kind:                   EventCacheWarning,
+		CacheWarning:           &transcript.CacheWarning{Scope: transcript.CacheWarningScopeConversation, Reason: transcript.CacheWarningReasonNonPostfix, LostInputTokens: 42},
+		CacheWarningVisibility: transcript.EntryVisibilityVerbose,
+	})
+	if len(facts) != 1 || facts[0].Notice == nil || facts[0].Notice.CacheWarning == nil {
+		t.Fatalf("facts = %+v, want cache warning notice", facts)
+	}
+	if facts[0].Notice.CacheWarning.Visibility != transcript.EntryVisibilityVerbose {
+		t.Fatalf("visibility = %q, want verbose", facts[0].Notice.CacheWarning.Visibility)
 	}
 }

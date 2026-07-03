@@ -222,7 +222,7 @@ func TestBrokerInitialEnqueueOverflowReturnsStreamGap(t *testing.T) {
 	}
 }
 
-func TestQuestionBatchTrackerPublishesAggregateDisplayCountAndResolvesAfterClears(t *testing.T) {
+func TestQuestionBatchTrackerPublishesMaterializedUpdatesAndResolvesAfterClears(t *testing.T) {
 	broker := NewBroker()
 	sub, err := broker.SubscribeDesktop()
 	if err != nil {
@@ -257,8 +257,12 @@ func TestQuestionBatchTrackerPublishesAggregateDisplayCountAndResolvesAfterClear
 	if err := tracker.MarkMaterialized(batch.ID, "ask-2"); err != nil {
 		t.Fatalf("MarkMaterialized ask-2: %v", err)
 	}
-	if event, err := sub.Next(shortContext(t)); err == nil {
-		t.Fatalf("second materialized ask published duplicate pending attention: %+v", event)
+	second := nextAttentionEvent(t, sub)
+	if second.Type != clientui.AttentionNotificationEventPending || second.Pending.Question.MaterializedCount != 2 || len(second.Pending.Question.CurrentUnresolvedAskIDs) != 2 {
+		t.Fatalf("second materialized update = %+v", second)
+	}
+	if second.Pending.Revision <= first.Pending.Revision {
+		t.Fatalf("second revision = %d, want > %d", second.Pending.Revision, first.Pending.Revision)
 	}
 	if err := tracker.MarkDurablyCleared(batch.ID, "ask-1"); err != nil {
 		t.Fatalf("MarkDurablyCleared ask-1: %v", err)

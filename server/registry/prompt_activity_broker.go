@@ -62,6 +62,10 @@ func (e *runtimeEntry) PublishPendingPrompt(sessionID string, snapshot PendingPr
 	if e == nil || e.promptActivity == nil || snapshot.Request.ID == "" {
 		return
 	}
+	if e.sessionFeed != nil {
+		prompt := transcriptPendingPromptFromSnapshot(sessionID, snapshot, eventType)
+		e.sessionFeed.Publish([]clientui.TranscriptMessage{{Kind: clientui.TranscriptMessagePendingSessionPrompt, PendingSessionPrompt: &prompt}})
+	}
 	e.promptActivity.Publish(pendingPromptEventFromSnapshot(sessionID, snapshot, eventType, version))
 }
 
@@ -304,6 +308,28 @@ func isZeroReadModelVersion(version clientui.ReadModelVersion) bool {
 
 func sameReadModelGeneration(left clientui.ReadModelVersion, right clientui.ReadModelVersion) bool {
 	return left.Epoch == right.Epoch && left.Generation == right.Generation
+}
+
+func transcriptPendingPromptFromSnapshot(sessionID string, snapshot PendingPromptSnapshot, eventType pendingPromptEventType) clientui.TranscriptPendingSessionPrompt {
+	state := clientui.TranscriptPromptPending
+	if eventType == pendingPromptEventResolved {
+		state = clientui.TranscriptPromptResolved
+	}
+	kind := clientui.TranscriptPromptQuestion
+	if snapshot.Request.Approval {
+		kind = clientui.TranscriptPromptApproval
+	}
+	return clientui.TranscriptPendingSessionPrompt{
+		ID:        snapshot.Request.ID,
+		Kind:      kind,
+		State:     state,
+		SessionID: sessionID,
+		Data: clientui.TranscriptPendingSessionPromptData{
+			ToolCallID: snapshot.Request.ToolCallID,
+			ToolName:   "ask_question",
+			Question:   snapshot.Request.Question,
+		},
+	}
 }
 
 var _ serverapi.PromptActivitySubscription = (*promptActivitySubscription)(nil)

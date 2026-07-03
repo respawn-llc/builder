@@ -40,6 +40,14 @@ type RuntimeActivityResolver interface {
 	Snapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (runtimeactivity.ResponseSnapshot, error)
 }
 
+type sessionIdentityPublisher interface {
+	PublishSessionIdentity(sessionID string, target *clientui.SessionExecutionTarget)
+}
+
+type sessionStatusPublisher interface {
+	PublishSessionStatus(sessionID string)
+}
+
 type defaultRuntimeControlActivityResolver struct {
 	runtimes RuntimeResolver
 }
@@ -389,7 +397,13 @@ func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSe
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Name}
 	_, err := s.sessionNames.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			return engine.SetSessionName(req.Name)
+			if err := engine.SetSessionName(req.Name); err != nil {
+				return err
+			}
+			if publisher, ok := s.runtimes.(sessionIdentityPublisher); ok {
+				publisher.PublishSessionIdentity(req.SessionID, nil)
+			}
+			return nil
 		})
 	})
 	return err
@@ -402,7 +416,11 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Level}
 	_, err := s.thinkingLevels.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, error) {
 		return struct{}{}, s.withRuntimeAccess(ctx, req.SessionID, func(engine *runtime.Engine) error {
-			return engine.SetThinkingLevel(req.Level)
+			if err := engine.SetThinkingLevel(req.Level); err != nil {
+				return err
+			}
+			s.publishSessionStatus(req.SessionID)
+			return nil
 		})
 	})
 	return err
@@ -420,6 +438,9 @@ func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeS
 				return serverapi.FastModeToggleStatusMessage(req.Enabled, changed)
 			})
 			resp = serverapi.RuntimeSetFastModeEnabledResponse{Changed: changed}
+			if err == nil {
+				s.publishSessionStatus(req.SessionID)
+			}
 			return err
 		})
 		return resp, err
@@ -441,6 +462,7 @@ func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeS
 				return err
 			}
 			resp = serverapi.RuntimeSetReviewerEnabledResponse{Changed: changed, Mode: mode}
+			s.publishSessionStatus(req.SessionID)
 			return nil
 		})
 		return resp, err
@@ -462,6 +484,7 @@ func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.Ru
 			}
 			changed, enabled := engine.SetAutoCompactionEnabled(req.Enabled)
 			resp = serverapi.RuntimeSetAutoCompactionEnabledResponse{Changed: changed, Enabled: enabled}
+			s.publishSessionStatus(req.SessionID)
 			return nil
 		})
 		return resp, err
@@ -480,10 +503,22 @@ func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.Runtime
 				return serverapi.QuestionsToggleStatusMessage(enabled, changed)
 			})
 			resp = serverapi.RuntimeSetQuestionsEnabledResponse{Changed: changed, Enabled: enabled}
+			if err == nil {
+				s.publishSessionStatus(req.SessionID)
+			}
 			return err
 		})
 		return resp, err
 	})
+}
+
+func (s *Service) publishSessionStatus(sessionID string) {
+	if s == nil || s.runtimes == nil {
+		return
+	}
+	if publisher, ok := s.runtimes.(sessionStatusPublisher); ok {
+		publisher.PublishSessionStatus(sessionID)
+	}
 }
 
 func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {
