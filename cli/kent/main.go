@@ -605,18 +605,26 @@ func parseCLILiveSessionID(raw string) (runtimeids.SessionID, error) {
 }
 
 func rejectSelfTarget(targetSessionID runtimeids.SessionID, commandText string) error {
-	current, ok := sessionenv.LookupSessionID(os.LookupEnv)
+	currentID, ok := currentSessionIDForSelfTarget()
 	if !ok {
-		return nil
-	}
-	currentID, err := parseCLILiveSessionID(current)
-	if err != nil {
 		return nil
 	}
 	if currentID == targetSessionID {
 		return errors.New(prompts.RenderLiveControlSelfTargetDeniedPrompt(strings.TrimSpace(commandText)))
 	}
 	return nil
+}
+
+func currentSessionIDForSelfTarget() (runtimeids.SessionID, bool) {
+	current, ok := sessionenv.LookupSessionID(os.LookupEnv)
+	if !ok {
+		return runtimeids.SessionID{}, false
+	}
+	currentID, err := parseCLILiveSessionID(current)
+	if err != nil {
+		return runtimeids.SessionID{}, false
+	}
+	return currentID, true
 }
 
 func registerCommonFlags(fs *flag.FlagSet, includeSession bool) *commonFlags {

@@ -128,25 +128,11 @@ func (e *Engine) TryInterruptActiveRun() (bool, error) {
 		if snapshot == nil || !activeKindInterruptibleByLiveStop(snapshot.ActiveKind) {
 			return false, nil
 		}
-		goalLoopInterruptPending := false
-		interruptedSnapshot, err := e.stepLifecycle.InterruptCurrent(func(snapshot *RunSnapshot) {
-			if e.goalActive() && snapshot != nil && snapshot.ActiveKind == ActiveKindGoalLoop {
-				e.goalLoopState().MarkInterruptPending()
-				goalLoopInterruptPending = true
-			}
-		})
+		tracker := goalLoopInterruptTracker{engine: e, match: true}
+		interruptedSnapshot, err := e.stepLifecycle.InterruptCurrent(tracker.onSnapshot)
+		tracker.resolve(err, interruptedSnapshot)
 		if err != nil {
-			if goalLoopInterruptPending {
-				e.goalLoopState().ClearInterruptPending()
-			}
 			return interruptedSnapshot != nil, err
-		}
-		if goalLoopInterruptPending {
-			if e.goalActive() && interruptedSnapshot != nil && interruptedSnapshot.ActiveKind == ActiveKindGoalLoop {
-				e.goalLoopState().CommitInterrupt()
-			} else {
-				e.goalLoopState().ClearInterruptPending()
-			}
 		}
 		return interruptedSnapshot != nil, err
 	}
@@ -154,30 +140,41 @@ func (e *Engine) TryInterruptActiveRun() (bool, error) {
 	if snapshot == nil || !activeKindInterruptibleByLiveStop(snapshot.ActiveKind) {
 		return true, nil
 	}
-	goalLoopInterruptPending := false
-	snapshot, err := e.stepLifecycle.InterruptCurrent(func(snapshot *RunSnapshot) {
-		if goalLoop && e.goalActive() && snapshot != nil && snapshot.ActiveKind == ActiveKindGoalLoop {
-			e.goalLoopState().MarkInterruptPending()
-			goalLoopInterruptPending = true
-		}
-	})
+	tracker := goalLoopInterruptTracker{engine: e, match: goalLoop}
+	interruptedSnapshot, err := e.stepLifecycle.InterruptCurrent(tracker.onSnapshot)
+	tracker.resolve(err, interruptedSnapshot)
 	if err != nil {
-		if goalLoopInterruptPending {
-			e.goalLoopState().ClearInterruptPending()
-		}
 		return true, err
 	}
-	if goalLoop {
-		switch {
-		case goalLoopInterruptPending && e.goalActive() && snapshot != nil && snapshot.ActiveKind == ActiveKindGoalLoop:
-			e.goalLoopState().CommitInterrupt()
-		case goalLoopInterruptPending:
-			e.goalLoopState().ClearInterruptPending()
-		case e.goalActive():
-			e.goalLoopState().Suspend()
-		}
+	if goalLoop && !tracker.pending && e.goalActive() {
+		e.goalLoopState().Suspend()
 	}
 	return true, nil
+}
+
+type goalLoopInterruptTracker struct {
+	engine  *Engine
+	match   bool
+	pending bool
+}
+
+func (t *goalLoopInterruptTracker) onSnapshot(snapshot *RunSnapshot) {
+	if t == nil || !t.match || t.engine == nil || !t.engine.goalActive() || snapshot == nil || snapshot.ActiveKind != ActiveKindGoalLoop {
+		return
+	}
+	t.engine.goalLoopState().MarkInterruptPending()
+	t.pending = true
+}
+
+func (t *goalLoopInterruptTracker) resolve(err error, snapshot *RunSnapshot) {
+	if t == nil || !t.pending || t.engine == nil {
+		return
+	}
+	if err == nil && t.engine.goalActive() && snapshot != nil && snapshot.ActiveKind == ActiveKindGoalLoop {
+		t.engine.goalLoopState().CommitInterrupt()
+		return
+	}
+	t.engine.goalLoopState().ClearInterruptPending()
 }
 
 func (e *Engine) QueueUserMessageForActiveRun(ctx context.Context, text string, clientRequestID runtimeids.RuntimeClientRequestID, beforeQueue func() error) (QueuedUserMessage, bool, error) {

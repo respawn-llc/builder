@@ -104,7 +104,7 @@ func startRuntimeLiveControlClient(ctx context.Context, opts Options) (client.Ru
 	defer cancel()
 	remote, err := dialConfiguredRuntimeLiveControlRemote(attachCtx, cfg)
 	if err != nil {
-		return nil, nil, errRunRequiresServer
+		return nil, nil, fmt.Errorf("%w: %v", errRunRequiresServer, err)
 	}
 	if err := remote.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
 		_ = remote.Close()
