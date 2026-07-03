@@ -1,20 +1,29 @@
 package app
 
 import (
-	"core/cli/app/commands"
-	"core/shared/config"
-	"core/shared/serverapi"
+	"context"
 	"errors"
 	"io"
 	"os"
 
+	"core/cli/app/commands"
+	"core/cli/app/internal/runner"
+	"core/shared/config"
+	"core/shared/serverapi"
+
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, logger *runLogger, commandRegistry *commands.Registry, initialPrompt string, initialPromptHistoryRecorded bool, initialInput string, recoveryBuffers []serverapi.SessionDraftRecoveryBuffer, sessionName string, modelContractLocked bool, configuredModelName string, statusConfig uiStatusConfig, startupUpdateNotice bool) (tea.Model, error) {
+func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, logger *runLogger, commandRegistry *commands.Registry, initialPrompt string, initialPromptHistoryRecorded bool, initialInput string, recoveryBuffers []serverapi.SessionDraftRecoveryBuffer, sessionName string, modelContractLocked bool, configuredModelName string, statusConfig uiStatusConfig, startupUpdateNotice bool, markerEncoder runner.TerminalPhaseMarkerEncoder, markerSinkObserver runner.TerminalPhaseMarkerSinkObserver) (tea.Model, error) {
 	terminalCursor := newUITerminalCursorState()
 	rendererOutputGate := newUIRendererOutputGateState()
-	options := mainUIProgramOptionsWithOutput(active, terminalCursor, rendererOutputGate, os.Stdout)
+	terminalOutput := newUITerminalOutput(os.Stdout, markerEncoder)
+	if markerSinkObserver != nil {
+		if err := markerSinkObserver.TerminalPhaseMarkerSinkReady(context.Background(), terminalOutput); err != nil {
+			return nil, err
+		}
+	}
+	options := mainUIProgramOptionsWithOutput(active, terminalCursor, rendererOutputGate, terminalOutput)
 	tuiLogger, err := newRollingTUILogger(statusConfig.PersistenceRoot)
 	if err != nil && logger != nil {
 		logger.Logf("tui_log.open err=%q", err.Error())
@@ -68,6 +77,7 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 		WithUITerminalCursorState(terminalCursor),
 		WithUIRendererOutputGateState(rendererOutputGate),
 		WithUITerminalFocusState(wiring.terminalFocus),
+		WithUINativeSurfaceWriter(terminalOutput),
 	)
 	if closable, ok := model.(interface{ Close() }); ok {
 		defer closable.Close()

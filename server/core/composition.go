@@ -21,6 +21,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimecontrol"
 	"core/server/runtimeops"
+	"core/server/runtimewire"
 	"core/server/serverstatus"
 	"core/server/sessionruntime"
 	"core/server/sessionservice"
@@ -45,6 +46,14 @@ func New(cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport
 }
 
 func NewWithContext(ctx context.Context, cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport) (*Core, error) {
+	return NewWithContextOptions(ctx, cfg, authSupport, runtimeSupport, Options{})
+}
+
+type Options struct {
+	RuntimeClientFactory runtimewire.RuntimeClientFactory
+}
+
+func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport, opts Options) (*Core, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -100,7 +109,7 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 	approvalService := promptcontrol.NewApprovalViewService(runtimeRegistry)
 	processService := processview.NewProcessViewService(runtimeSupport.Background)
 	processOutputService := processview.NewProcessOutputService(runtimeSupport.Background, runtimeSupport.Background)
-	sessionRuntimeService := sessionruntime.NewService(cfg.PersistenceRoot, metadataStore, authSupport.AuthManager, runtimeSupport.FastModeState, runtimeSupport.Background, runtimeSupport.BackgroundRouter, runtimeRegistry, sessionStoreRegistry, storeOptions...).
+	sessionRuntimeService := sessionruntime.NewServiceWithOptions(cfg.PersistenceRoot, metadataStore, authSupport.AuthManager, runtimeSupport.FastModeState, runtimeSupport.Background, runtimeSupport.BackgroundRouter, runtimeRegistry, sessionStoreRegistry, sessionruntime.ServiceOptions{RuntimeClientFactory: opts.RuntimeClientFactory}, storeOptions...).
 		WithGeneratedRecoveredWarningProvider(func() (string, bool, error) {
 			nonEmpty, err := prompts.RecoveredRootNonEmptyFor(cfg.PersistenceRoot)
 			if err != nil {
@@ -159,7 +168,7 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 		return nil, fmt.Errorf("workflow bundle: view: %w", err)
 	}
 	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore, view: workflowViewService, roleResolver: workflowRoleResolver}, attentionBroker)
-	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{Worktrees: taskWorktreeEnsurer{service: worktreeService}, SessionRuntime: sessionRuntimeService, AttentionFinalizer: workflowAttentionFinalizer})
+	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: taskWorktreeEnsurer{service: worktreeService}, SessionRuntime: sessionRuntimeService, AttentionFinalizer: workflowAttentionFinalizer})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)

@@ -15,6 +15,7 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	runtimepkg "core/server/runtime"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/clientui"
@@ -338,6 +339,52 @@ func TestActivateSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
 	}
 }
 
+func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
+	fixture := newSessionRuntimeFixtureWithRegistry(t)
+	calls := 0
+	factory := runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
+		calls++
+		if req.Purpose != runtimewire.RuntimeClientPurposeMain {
+			t.Fatalf("factory purpose = %v, want main", req.Purpose)
+		}
+		return &sessionRuntimeTestLLMClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: "ok", Phase: llm.MessagePhaseFinal}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
+	})
+	fixture.service = NewServiceWithOptions(
+		fixture.config.PersistenceRoot,
+		fixture.metadata,
+		nil,
+		nil,
+		nil,
+		nil,
+		registry.NewRuntimeRegistry(),
+		registry.NewSessionStoreRegistry(),
+		ServiceOptions{RuntimeClientFactory: factory},
+		fixture.metadata.AuthoritativeSessionStoreOptions()...,
+	)
+
+	_, err := fixture.service.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID: "activate-factory",
+		SessionID:       fixture.store.Meta().SessionID,
+		OwnerID:         "owner",
+		ActiveSettings:  config.Settings{Model: "gpt-5", ModelContextWindow: 200000, Reviewer: config.ReviewerSettings{Frequency: "off"}, Timeouts: config.Timeouts{ModelRequestSeconds: 1}},
+		EnabledToolIDs:  []string{string(toolspec.ToolExecCommand)},
+		Source:          config.SourceReport{Sources: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("factory calls = %d, want 1", calls)
+	}
+	_, _ = fixture.service.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+		ClientRequestID: "release-factory",
+		SessionID:       fixture.store.Meta().SessionID,
+		OwnerID:         "owner",
+		DropOwner:       true,
+		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+	})
+}
+
 func TestReleaseSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 	svc := &Service{}
 	_, err := svc.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
@@ -398,4 +445,11 @@ func newSessionRuntimeFixture(t *testing.T) sessionRuntimeFixture {
 	}
 	service := NewService(appCfg.PersistenceRoot, metadataStore, nil, nil, nil, nil, nil, registry.NewSessionStoreRegistry(), metadataStore.AuthoritativeSessionStoreOptions()...)
 	return sessionRuntimeFixture{config: appCfg, metadata: metadataStore, store: store, service: service}
+}
+
+func newSessionRuntimeFixtureWithRegistry(t *testing.T) sessionRuntimeFixture {
+	t.Helper()
+	fixture := newSessionRuntimeFixture(t)
+	fixture.service = NewService(fixture.config.PersistenceRoot, fixture.metadata, nil, nil, nil, nil, registry.NewRuntimeRegistry(), registry.NewSessionStoreRegistry(), fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	return fixture
 }

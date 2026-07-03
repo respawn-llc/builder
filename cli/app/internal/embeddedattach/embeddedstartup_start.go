@@ -11,6 +11,7 @@ import (
 
 type Server = serverstartup.EmbeddedServer
 type AuthManager = serverauth.Manager
+type StartupOptions = serverstartup.Options
 
 type AuthHandler interface {
 	WrapStore(base serverauth.Store) serverauth.Store
@@ -26,6 +27,7 @@ type StartupRequest struct {
 	OpenAIBaseURL         string
 	OpenAIBaseURLExplicit bool
 	LoadOptions           config.LoadOptions
+	StartupOptions        serverstartup.Options
 }
 
 type OnboardingRequest struct {
@@ -37,7 +39,7 @@ type OnboardingRequest struct {
 type OnboardingHandler func(ctx context.Context, req OnboardingRequest) (config.App, error)
 
 func Start(ctx context.Context, req StartupRequest, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*Server, error) {
-	return serverstartup.Start(ctx, buildStartupRequest(req), authHandler, adaptOnboardingHandler(onboardingHandler))
+	return serverstartup.StartWithOptions(ctx, buildStartupRequest(req), authHandler, adaptOnboardingHandler(onboardingHandler), req.StartupOptions)
 }
 
 func buildStartupRequest(req StartupRequest) serverstartup.Request {

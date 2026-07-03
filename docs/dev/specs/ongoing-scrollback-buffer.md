@@ -5,6 +5,7 @@
 - This spec owns ongoing mode's normal-buffer terminal surface. Alt-screen surfaces, alternate-scroll modes, BEL, and OSC notifications are out of scope.
 - Every ban in this spec applies to behavior, not naming. Renaming, wrapping, splitting, or relocating a banned mechanism does not make it allowed. A mechanism that performs a banned operation is banned regardless of what it is called, which package it lives in, or what problem it solves.
 - If implementing any requirement, fixing any bug, or satisfying any review comment appears to require a banned mechanism or state not on the allowed list, the implementation is wrong or the delivery contract is wrong. Stop and raise the conflict to the user as a question. Do not build the banned mechanism in the interim, temporarily, behind a flag, or in a reduced form.
+- Behavioral verification for this surface uses dedicated test harness entrypoints. Harness-only providers, startup shortcuts, scripted data sources, and fake authentication must not be reachable from ordinary production launches.
 
 ## Definitions
 

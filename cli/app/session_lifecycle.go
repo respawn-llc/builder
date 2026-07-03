@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
+	"core/cli/app/internal/runner"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -62,8 +63,10 @@ type interactiveSessionServer interface {
 }
 
 type sessionLifecycleOptions struct {
-	ForceNewSession bool
-	Overrides       serverapi.RunPromptOverrides
+	ForceNewSession                 bool
+	Overrides                       serverapi.RunPromptOverrides
+	TerminalPhaseMarkerEncoder      runner.TerminalPhaseMarkerEncoder
+	TerminalPhaseMarkerSinkObserver runner.TerminalPhaseMarkerSinkObserver
 }
 
 func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string) error {
@@ -141,6 +144,8 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			plan.ConfiguredModelName,
 			plan.StatusConfig,
 			showStartupUpdateNotice,
+			opts.TerminalPhaseMarkerEncoder,
+			opts.TerminalPhaseMarkerSinkObserver,
 		)
 		showStartupUpdateNotice = shouldRetryStartupUpdateNotice(finalModel, showStartupUpdateNotice)
 		nextSessionInitialPrompt = ""

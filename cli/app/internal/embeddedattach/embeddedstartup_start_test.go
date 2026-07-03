@@ -25,6 +25,7 @@ func TestBuildStartupRequestMapsOptions(t *testing.T) {
 			ModelTimeoutSeconds: 42,
 			Tools:               "shell,patch",
 		},
+		StartupOptions: serverstartup.Options{Core: serverstartup.Options{}.Core},
 	})
 
 	if req.WorkspaceRoot != "/tmp/workspace" || !req.WorkspaceRootExplicit {

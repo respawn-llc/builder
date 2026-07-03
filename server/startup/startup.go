@@ -28,6 +28,10 @@ type Request struct {
 	LoadOptions           config.LoadOptions
 }
 
+type Options struct {
+	Core core.Options
+}
+
 type AuthHandler interface {
 	WrapStore(base auth.Store) auth.Store
 	NeedsInteraction(req authservice.FlowInteractionRequest) bool
@@ -50,7 +54,11 @@ type OnboardingRequest struct {
 }
 
 func Start(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*EmbeddedServer, error) {
-	appCore, err := StartCore(ctx, req, authHandler, onboardingHandler)
+	return StartWithOptions(ctx, req, authHandler, onboardingHandler, Options{})
+}
+
+func StartWithOptions(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler, opts Options) (*EmbeddedServer, error) {
+	appCore, err := StartCoreWithOptions(ctx, req, authHandler, onboardingHandler, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -58,10 +66,24 @@ func Start(ctx context.Context, req Request, authHandler AuthHandler, onboarding
 }
 
 func StartCore(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*core.Core, error) {
+	return StartCoreWithOptions(ctx, req, authHandler, onboardingHandler, Options{})
+}
+
+func StartCoreWithOptions(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler, opts Options) (*core.Core, error) {
 	if authHandler == nil {
 		return nil, errors.New("auth handler is required")
 	}
 	bootstrapReq := buildRequest(req, authHandler)
+	return startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
+}
+
+type startupAuthHandler interface {
+	WrapStore(base auth.Store) auth.Store
+	NeedsInteraction(req authservice.FlowInteractionRequest) bool
+	Interact(ctx context.Context, req authservice.FlowInteractionRequest) (authservice.FlowInteractionOutcome, error)
+}
+
+func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Request, requireAuth bool, authHandler startupAuthHandler, onboardingHandler OnboardingHandler, opts Options) (*core.Core, error) {
 	resolved, err := serverbootstrap.ResolveConfig(bootstrapReq)
 	if err != nil {
 		return nil, err
@@ -72,7 +94,7 @@ func StartCore(ctx context.Context, req Request, authHandler AuthHandler, onboar
 	if err != nil {
 		return nil, err
 	}
-	if !req.AllowUnauthenticated {
+	if requireAuth {
 		if err := authservice.EnsureFlowReady(ctx, authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings.Theme, bootstrapReq.LookupEnv, authservice.StartupAuthRequired(cfg.Settings), false, authHandler); err != nil {
 			return nil, err
 		}
@@ -97,7 +119,7 @@ func StartCore(ctx context.Context, req Request, authHandler AuthHandler, onboar
 	if err != nil {
 		return nil, err
 	}
-	appCore, err := core.NewWithContext(ctx, cfg, authSupport, runtimeSupport)
+	appCore, err := core.NewWithContextOptions(ctx, cfg, authSupport, runtimeSupport, opts.Core)
 	if err != nil {
 		_ = runtimeSupport.Background.Close()
 		return nil, err

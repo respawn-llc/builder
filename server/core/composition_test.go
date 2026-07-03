@@ -12,6 +12,7 @@ import (
 	"core/server/llm"
 	"core/server/registry"
 	"core/server/runtime"
+	"core/server/runtimewire"
 	"core/server/session"
 	askquestion "core/server/tools"
 	"core/server/workflow"
@@ -87,6 +88,37 @@ func TestNewWithContextComposesRequiredBundles(t *testing.T) {
 	}
 	if !scheduler.Stopped() {
 		t.Fatal("expected workflow scheduler to stop during core close")
+	}
+}
+
+func TestNewWithContextOptionsAcceptsRuntimeClientFactory(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildAuthSupport: %v", err)
+	}
+	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
+	if err != nil {
+		t.Fatalf("BuildRuntimeSupport: %v", err)
+	}
+	appCore, err := NewWithContextOptions(t.Context(), resolved.Config, authSupport, runtimeSupport, Options{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return nil, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("NewWithContextOptions: %v", err)
+	}
+	t.Cleanup(func() { _ = appCore.Close() })
+	if appCore.bundles == nil || appCore.bundles.Runtime == nil || appCore.bundles.Runtime.sessionRuntimeService == nil {
+		t.Fatal("expected runtime bundle with session runtime service")
 	}
 }
 

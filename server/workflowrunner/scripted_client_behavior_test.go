@@ -39,7 +39,7 @@ func TestScriptedClientRecordsRequestsAndSteps(t *testing.T) {
 }
 
 func TestScriptedClientProviderCapabilitiesDefault(t *testing.T) {
-	client := NewScriptedClient(llm.ProviderCapabilities{})
+	client := NewDefaultScriptedClient()
 
 	caps, err := client.ProviderCapabilities(context.Background())
 	if err != nil {
