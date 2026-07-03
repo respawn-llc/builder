@@ -29,7 +29,7 @@ func (r *defaultReviewerPipeline) ShouldRunTurn(frequency string, reviewerClient
 	}
 }
 
-func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
+func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string, original llm.Message, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
 	e := r.engine
 	_ = e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}))
 	reviewerResult, err := r.RunSuggestions(ctx, stepID, reviewerClient)
@@ -38,12 +38,12 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 			Outcome: "failed",
 			Error:   strings.TrimSpace(err.Error()),
 		}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
+		return reviewerFollowUpResult{Message: original, Completion: &status}, nil
 	}
 	suggestions := reviewerResult.Suggestions
 	if len(suggestions) == 0 {
 		status := ReviewerStatus{Outcome: "no_suggestions"}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
+		return reviewerFollowUpResult{Message: original, Completion: &status}, nil
 	}
 	if e.cfg.Reviewer.VerboseOutput {
 		suggestionsText := reviewerSuggestionsText(suggestions)
@@ -59,7 +59,7 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 			HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
 			Error:                 strings.TrimSpace(err.Error()),
 		}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
+		return reviewerFollowUpResult{Message: original, Completion: &status}, nil
 	}
 	if r.stepRunner == nil {
 		status := ReviewerStatus{
@@ -67,7 +67,7 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 			SuggestionsCount: len(suggestions),
 			Error:            "reviewer step runner is not configured",
 		}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
+		return reviewerFollowUpResult{Message: original, Completion: &status}, nil
 	}
 
 	followUp, err := r.stepRunner.RunStepLoopWithOptions(ctx, stepID, stepLoopOptions{
@@ -83,7 +83,7 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 			HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
 			Error:                 strings.TrimSpace(err.Error()),
 		}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
+		return reviewerFollowUpResult{Message: original, Completion: &status}, nil
 	}
 	if followUp.NoopFinalAnswer || isNoopFinalAnswer(followUp.Message) {
 		status := ReviewerStatus{
@@ -92,7 +92,7 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 			CacheHitPercent:       reviewerResult.CacheHitPercent,
 			HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
 		}
-		return reviewerFollowUpResult{Message: original, Completion: &status, AssistantCommittedStart: originalCommittedStart, AssistantCommittedStartSet: originalCommittedStartSet}, nil
+		return reviewerFollowUpResult{Message: original, Completion: &status}, nil
 	}
 	status := ReviewerStatus{
 		Outcome:               "applied",
@@ -101,11 +101,9 @@ func (r *defaultReviewerPipeline) RunFollowUp(ctx context.Context, stepID string
 		HasCacheHitPercentage: reviewerResult.HasCacheHitPercentage,
 	}
 	return reviewerFollowUpResult{
-		Message:                    followUp.Message,
-		Completion:                 &status,
-		AssistantCommittedStart:    followUp.AssistantCommittedStart,
-		AssistantCommittedStartSet: followUp.AssistantCommittedStartSet,
-		AssistantEventEmitted:      !followUp.NoopFinalAnswer && !isNoopFinalAnswer(followUp.Message),
+		Message:               followUp.Message,
+		Completion:            &status,
+		AssistantEventEmitted: !followUp.NoopFinalAnswer && !isNoopFinalAnswer(followUp.Message),
 	}, nil
 }
 

@@ -186,35 +186,15 @@ func (s *Service) GetSessionMainView(ctx context.Context, req serverapi.SessionM
 	return serverapi.SessionMainViewResponse{MainView: view}, nil
 }
 
-func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionTranscriptPageResponse{}, err
+func (s *Service) SessionTranscriptTailEntries(ctx context.Context, sessionID string) ([]clientui.ChatEntry, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, serverapi.ErrSessionIDRequired
 	}
-	pageReq := clientui.TranscriptPageRequest{Cursor: req.Cursor, NewerCursor: req.NewerCursor}
-	snapshot, err := s.resolveSnapshot(ctx, req.SessionID, nil)
+	snapshot, err := s.resolveSnapshot(ctx, sessionID, nil)
 	if err != nil {
-		return serverapi.SessionTranscriptPageResponse{}, err
+		return nil, err
 	}
-	page, err := snapshot.TranscriptPage(ctx, pageReq)
-	if err != nil {
-		return serverapi.SessionTranscriptPageResponse{}, err
-	}
-	return serverapi.SessionTranscriptPageResponse{Transcript: page}, nil
-}
-
-func (s *Service) GetSessionCommittedTranscriptSuffix(ctx context.Context, req serverapi.SessionCommittedTranscriptSuffixRequest) (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionCommittedTranscriptSuffixResponse{}, err
-	}
-	snapshot, err := s.resolveSnapshot(ctx, req.SessionID, nil)
-	if err != nil {
-		return serverapi.SessionCommittedTranscriptSuffixResponse{}, err
-	}
-	suffix, err := snapshot.CommittedTranscriptSuffix(ctx, clientui.CommittedTranscriptSuffixRequest{})
-	if err != nil {
-		return serverapi.SessionCommittedTranscriptSuffixResponse{}, err
-	}
-	return serverapi.SessionCommittedTranscriptSuffixResponse{Suffix: suffix}, nil
+	return snapshot.TranscriptTailEntries(ctx)
 }
 
 func (s *Service) resolveSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error) {

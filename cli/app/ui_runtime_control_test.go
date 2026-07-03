@@ -22,7 +22,6 @@ type runtimeControlFakeClient struct {
 	mainView               clientui.RuntimeMainView
 	cachedMainView         clientui.RuntimeMainView
 	hasCachedMainView      bool
-	transcript             clientui.TranscriptPage
 	setSessionNameArg      string
 	setThinkingLevelArg    string
 	setFastModeArg         bool
@@ -58,8 +57,6 @@ type runtimeControlFakeClient struct {
 	discardQueuedResult    bool
 	recordedPromptHistory  string
 	refreshMainViewCalls   int
-	refreshTranscriptCalls int
-	loadTranscriptCalls    int
 	err                    error
 	appendErr              error
 	submitErr              error
@@ -90,25 +87,6 @@ func (f *runtimeControlFakeClient) CachedMainView() (clientui.RuntimeMainView, b
 func (f *runtimeControlFakeClient) RefreshMainView() (clientui.RuntimeMainView, error) {
 	f.refreshMainViewCalls++
 	return f.MainView(), f.err
-}
-func (f *runtimeControlFakeClient) Transcript() clientui.TranscriptPage {
-	if f.transcript.SessionID != "" || len(f.transcript.Entries) > 0 {
-		return f.transcript
-	}
-	view := f.SessionView()
-	return transcriptPageFromSessionView(view)
-}
-func (f *runtimeControlFakeClient) RefreshTranscript() (clientui.TranscriptPage, error) {
-	return f.Transcript(), f.err
-}
-func (f *runtimeControlFakeClient) RefreshTranscriptPage(req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	f.refreshTranscriptCalls++
-	return f.LoadTranscriptPage(req)
-}
-func (f *runtimeControlFakeClient) LoadTranscriptPage(req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	_ = req
-	f.loadTranscriptCalls++
-	return f.Transcript(), f.err
 }
 func (f *runtimeControlFakeClient) Status() clientui.RuntimeStatus { return f.status }
 func (f *runtimeControlFakeClient) SessionView() clientui.RuntimeSessionView {

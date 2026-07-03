@@ -44,10 +44,6 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 		executableCall := prepared.call
 		transcriptCall := normalizeToolCallForTranscript(executableCall, e.transcriptWorkingDir())
 		started := Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
-		if start, ok := e.pendingToolCallStart(call.ID); ok {
-			started.CommittedEntryStart = start
-			started.CommittedEntryStartSet = true
-		}
 		if err := e.steer(stepID, steerEventIntent(started)); err != nil {
 			callErrs[i] = fmt.Errorf("persist tool started (call_id=%s tool=%s): %w", call.ID, executableCall.Name, err)
 			continue
@@ -61,7 +57,6 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 		wg.Add(1)
 		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata) {
 			defer wg.Done()
-			defer e.forgetPendingToolCallStart(tc.ID)
 			var callErr error
 
 			if serialOrdinal >= 0 {

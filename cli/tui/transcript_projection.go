@@ -1,5 +1,9 @@
 package tui
 
+// Deprecated emergency path: this file survives the tui-redesign demolition
+// only to keep the branch's non-native transcript rendering symbols available
+// until the replacement surface lands. Do not extend this file.
+
 import (
 	"sort"
 	"strings"
@@ -735,14 +739,6 @@ func ProjectCommittedOngoingTranscript(entries []TranscriptEntry, theme string, 
 	return projectOngoingTranscriptWithSelector(entries, theme, width, baseOffset, compactDetail, selectedEntry, selectedEntryActive, CommittedOngoingEntries)
 }
 
-// ProjectNativeCommittedOngoingTranscript uses the same committed ongoing
-// prefix as the TUI model. Native scrollback is append-only, so unresolved
-// tool boundaries must stay live until the regular projection can append the
-// resolved prefix in transcript order.
-func ProjectNativeCommittedOngoingTranscript(entries []TranscriptEntry, theme string, width int, baseOffset int, compactDetail bool, selectedEntry int, selectedEntryActive bool) TranscriptProjection {
-	return ProjectCommittedOngoingTranscript(entries, theme, width, baseOffset, compactDetail, selectedEntry, selectedEntryActive)
-}
-
 func projectOngoingTranscriptWithSelector(entries []TranscriptEntry, theme string, width int, baseOffset int, compactDetail bool, selectedEntry int, selectedEntryActive bool, selectEntries func([]TranscriptEntry) []TranscriptEntry) TranscriptProjection {
 	key := normalizeCommittedOngoingProjectionCacheKey(committedOngoingProjectionCacheKey{
 		Theme:                 theme,
@@ -980,50 +976,5 @@ func nonEmptyTranscriptEntries(entries []TranscriptEntry) []TranscriptEntry {
 }
 
 func committedOngoingPrefixEnd(entries []TranscriptEntry) int {
-	consumedResults := make(map[int]struct{})
-	resultIndex := buildToolResultIndex(entries)
-	for idx, entry := range entries {
-		if entry.Transient {
-			return committedOngoingPrefixEndBefore(entries, idx, resultIndex)
-		}
-		if TranscriptRoleFromWire(string(entry.Role)) != TranscriptRoleToolCall {
-			continue
-		}
-		text := entry.Text
-		if strings.TrimSpace(entry.CondensedText) != "" {
-			text = entry.CondensedText
-		}
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
-		resultIdx := resultIndex.findMatchingToolResultIndex(entries, idx, consumedResults)
-		if resultIdx < 0 || entries[resultIdx].Transient {
-			return idx
-		}
-		consumedResults[resultIdx] = struct{}{}
-	}
 	return len(entries)
-}
-
-func committedOngoingPrefixEndBefore(entries []TranscriptEntry, boundary int, resultIndex toolResultIndex) int {
-	consumedResults := make(map[int]struct{})
-	for idx := boundary - 1; idx >= 0; idx-- {
-		entry := entries[idx]
-		if TranscriptRoleFromWire(string(entry.Role)) != TranscriptRoleToolCall {
-			continue
-		}
-		text := entry.Text
-		if strings.TrimSpace(entry.CondensedText) != "" {
-			text = entry.CondensedText
-		}
-		if strings.TrimSpace(text) == "" {
-			continue
-		}
-		resultIdx := resultIndex.findMatchingToolResultIndex(entries, idx, consumedResults)
-		if resultIdx < 0 || resultIdx >= boundary || entries[resultIdx].Transient {
-			return idx
-		}
-		consumedResults[resultIdx] = struct{}{}
-	}
-	return boundary
 }

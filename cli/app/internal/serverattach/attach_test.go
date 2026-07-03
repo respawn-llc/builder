@@ -88,18 +88,17 @@ func (*projectViewRemoteStub) ListSessionsByProject(context.Context, serverapi.S
 
 func allCapabilities() protocol.CapabilityFlags {
 	return protocol.CapabilityFlags{
-		AuthBootstrap:           true,
-		ProjectAttach:           true,
-		RunPrompt:               true,
-		SessionPlan:             true,
-		SessionLifecycle:        true,
-		SessionTranscriptPaging: true,
-		SessionRuntime:          true,
-		RuntimeControl:          true,
-		PromptControl:           true,
-		PromptActivity:          true,
-		SessionActivity:         true,
-		ProcessOutput:           true,
+		AuthBootstrap:    true,
+		ProjectAttach:    true,
+		RunPrompt:        true,
+		SessionPlan:      true,
+		SessionLifecycle: true,
+		SessionRuntime:   true,
+		RuntimeControl:   true,
+		PromptControl:    true,
+		PromptActivity:   true,
+		SessionActivity:  true,
+		ProcessOutput:    true,
 	}
 }
 

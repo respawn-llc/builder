@@ -1,5 +1,8 @@
 package tui
 
+// Deprecated emergency path: this file survives tui-redesign demolition only
+// as the temporary non-native transcript snapshot helper for this branch. Do not extend.
+
 import (
 	"strings"
 )

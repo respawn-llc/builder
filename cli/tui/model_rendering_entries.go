@@ -1,5 +1,8 @@
 package tui
 
+// Deprecated emergency path: this file survives tui-redesign demolition only
+// as the temporary non-native transcript entry renderer for this branch. Do not extend.
+
 import (
 	"core/shared/theme"
 	"core/shared/transcript"

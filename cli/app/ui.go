@@ -65,13 +65,8 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-c
 		m.reviewerEnabled = strings.TrimSpace(m.reviewerMode) != "" && strings.TrimSpace(m.reviewerMode) != "off"
 	}
 	if m.hasRuntimeClient() {
-		seedView := mainView.Session
-		_ = m.runtimeAdapter().applyProjectedSessionMetadata(seedView)
-		_ = m.runtimeAdapter().applyRuntimeTranscriptPageWithRecovery(clientui.TranscriptPageRequest{}, m.startupRuntimeTranscript(), clientui.TranscriptRecoveryCauseNone)
-		if startupCmd := m.requestRuntimeBootstrapTranscriptSync(); startupCmd != nil {
-			m.startupCmds = append(m.startupCmds, startupCmd)
-		}
-		m.runtimeTranscriptBusy = false
+		// Deprecated emergency path during tui-redesign demolition:
+		// runtime-backed transcript hydration was intentionally removed.
 	} else {
 		for _, entry := range m.initialTranscript {
 			if strings.TrimSpace(entry.Text) == "" {
@@ -262,7 +257,7 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m.forwardToView(msg)
 	m.layout().syncViewport()
-	return m, m.maybeRequestDetailTranscriptPage()
+	return m, m.maybeRequestDetailTranscriptWindow()
 }
 
 func (m *uiModel) setDebugKeyTransientStatus(raw tea.Msg, normalized tea.KeyMsg, source string) {
@@ -292,13 +287,12 @@ func (m *uiModel) forwardToView(msg tea.Msg) {
 	}
 	if prevMode != m.view.Mode() && m.view.Mode() == tui.ModeDetail && m.hasRuntimeClient() {
 		m.primeDetailTranscriptFromCurrentTail()
-		page := m.detailTranscript.page()
 		nextDetail, _ := m.view.Update(tui.SetConversationMsg{
 			BaseOffset:   m.detailTranscript.offset,
 			TotalEntries: m.detailTranscript.totalEntries,
-			Entries:      transcriptEntriesFromPage(page),
-			Ongoing:      page.Streaming,
-			OngoingError: page.StreamingError,
+			Entries:      append([]tui.TranscriptEntry(nil), m.detailTranscript.entries...),
+			Ongoing:      m.detailTranscript.streaming,
+			OngoingError: m.detailTranscript.streamingErr,
 		})
 		if castedDetail, ok := nextDetail.(tui.Model); ok {
 			m.view = castedDetail

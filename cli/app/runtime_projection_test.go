@@ -66,5 +66,10 @@ func (a uiRuntimeAdapter) handleRuntimeEvent(evt runtime.Event) tea.Cmd {
 }
 
 func (a uiRuntimeAdapter) applyChatSnapshot(snapshot runtime.ChatSnapshot) tea.Cmd {
-	return a.applyProjectedChatSnapshot(projectChatSnapshot(snapshot))
+	if a.model == nil {
+		return nil
+	}
+	projected := projectChatSnapshot(snapshot)
+	a.model.appendRuntimeTranscriptEntries(projected.Entries)
+	return nil
 }

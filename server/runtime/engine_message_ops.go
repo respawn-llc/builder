@@ -157,7 +157,6 @@ func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 
 func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy steeringMessageEventPolicy, persist bool) error {
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	previousCommittedCount := e.CommittedTranscriptEntryCount()
 	if e.beforePersistMessage != nil {
 		if err := e.beforePersistMessage(msg); err != nil {
 			return err
@@ -177,8 +176,7 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 			return err
 		}
 	}
-	currentCommittedCount := e.CommittedTranscriptEntryCount()
-	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
+	if eventPolicy != steeringMessageEventNone && shouldEmitCommittedMessageEvent(msg) {
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
 	}
 	return nil
@@ -345,8 +343,6 @@ func (e *Engine) emitCommittedAssistantMessageRaw(stepID string, committed steer
 		AssistantStreamMetadata:     cloneAssistantStreamMetadata(clearedMetadata),
 		AssistantTranscriptStreamID: cloneTranscriptStreamID(clearedStreamID),
 		CommittedTranscriptChanged:  true,
-		CommittedEntryStart:         committed.committedStart,
-		CommittedEntryStartSet:      committed.committedStartSet,
 	})
 	if finalizesStreaming {
 		e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, "")

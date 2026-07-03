@@ -52,26 +52,9 @@ func (r uiRuntimeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		cmd := m.handleRuntimeMainViewRefreshed(msg)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
-	case runtimeTranscriptRefreshedMsg:
-		cmd := m.handleRuntimeTranscriptRefreshed(msg)
-		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, cmd)
-	case runtimeTranscriptRetryMsg:
-		if msg.token != m.runtimeTranscriptRetry {
-			m.layout().syncViewport()
-			return handledUIFeatureUpdate(m, nil)
-		}
-		req := msg.req
-		if req == (runtimeTranscriptSyncRequest{}) {
-			req = runtimeTranscriptSyncRequestForPage(m.transcriptRequestForCurrentMode(), false, msg.syncCause, msg.recoveryCause)
-		}
-		cmd := m.startRuntimeTranscriptSyncRequest(req).cmd
-		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, cmd)
 	case detailTranscriptLoadMsg:
-		cmd := m.startRuntimeTranscriptSyncRequest(runtimeTranscriptSyncRequestForPage(m.transcriptRequestForCurrentMode(), true, runtimeTranscriptSyncCauseManualTranscriptRefresh, clientui.TranscriptRecoveryCauseNone)).cmd
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, cmd)
+		return handledUIFeatureUpdate(m, nil)
 	}
 	return uiFeatureUpdateResult{}
 }

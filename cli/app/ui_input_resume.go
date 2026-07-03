@@ -66,7 +66,7 @@ func (c uiInputController) handleQueuedRuntimeWorkCheckDone(msg queuedRuntimeWor
 		if blocked {
 			return m, nil
 		}
-		return m, c.requestIdleRuntimeControlCommittedTranscriptSync(compactionOrigin)
+		return m, c.requestIdleRuntimeControlCommittedRefresh(compactionOrigin)
 	}
 	if blocked {
 		c.notifyUserCompactionCompleted(compactionOrigin, false)
@@ -79,12 +79,12 @@ func (c uiInputController) handleQueuedRuntimeWorkCheckDone(msg queuedRuntimeWor
 	return m, tea.Batch(c.submitQueuedUserMessagesCmd(), c.model.reconcileSpinnerTicking(false))
 }
 
-func (c uiInputController) requestIdleRuntimeControlCommittedTranscriptSync(origin uiCompactionOrigin) tea.Cmd {
+func (c uiInputController) requestIdleRuntimeControlCommittedRefresh(origin uiCompactionOrigin) tea.Cmd {
 	m := c.model
 	if m == nil || origin == uiCompactionOriginNone || !m.hasRuntimeClient() {
 		return nil
 	}
-	return m.requestRuntimeCommittedConversationSync()
+	return nil
 }
 
 func (c uiInputController) submitQueuedUserMessagesCmd() tea.Cmd {

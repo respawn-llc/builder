@@ -274,7 +274,7 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 			m.pendingQueuedDrainAfterHydration = true
 			m.queuedDrainReadyAfterHydration = false
 			m.layout().syncViewport()
-			return m, m.requestRuntimeQueuedDrainTranscriptSync()
+			return m, m.requestRuntimeQueuedDrainAfterHydration()
 		}
 		next, drainCmd := c.flushQueuedInputs(queueDrainAuto)
 		c.notifyTurnQueueDrainedIfIdle()

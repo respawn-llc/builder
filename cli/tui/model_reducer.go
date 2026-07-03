@@ -1,5 +1,8 @@
 package tui
 
+// Deprecated emergency path: this file survives tui-redesign demolition only
+// as the temporary non-native transcript reducer for this branch. Do not extend.
+
 import (
 	"core/shared/transcript"
 	"strings"
@@ -165,7 +168,6 @@ func (m *Model) reduceAppendTranscriptMsg(msg AppendTranscriptMsg, result *model
 	role := TranscriptRoleFromWire(string(msg.Role))
 	m.transcriptInput.Entries = append(m.transcriptInput.Entries, TranscriptEntry{
 		Visibility:        transcript.NormalizeEntryVisibility(msg.Visibility),
-		Transient:         msg.Transient,
 		Committed:         msg.Committed,
 		Role:              role,
 		Text:              msg.Text,
@@ -277,7 +279,6 @@ func transcriptLocalIndex(baseOffset int, entryCount int, entryIndex int) (int, 
 func detailExpansionEntryMatches(left TranscriptEntry, right TranscriptEntry) bool {
 	return left.Visibility == right.Visibility &&
 		left.RollbackTargetID == right.RollbackTargetID &&
-		left.Transient == right.Transient &&
 		left.Committed == right.Committed &&
 		left.Role == right.Role &&
 		left.Text == right.Text &&

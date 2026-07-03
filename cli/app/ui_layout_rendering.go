@@ -199,17 +199,7 @@ func (l uiViewLayout) queuedMessages() []queuedPaneEntry {
 }
 
 func (m *uiModel) deferredPendingInjectedMessages() []string {
-	if m == nil || len(m.deferredCommittedTail) == 0 {
-		return nil
-	}
-	messages := make([]string, 0, len(m.deferredCommittedTail))
-	for _, deferred := range m.deferredCommittedTail {
-		messages = append(messages, deferred.pending...)
-	}
-	if len(messages) == 0 {
-		return nil
-	}
-	return messages
+	return nil
 }
 
 func (e queuedPaneEntry) displayText() string {

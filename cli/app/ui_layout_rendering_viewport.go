@@ -43,9 +43,6 @@ func (l uiViewLayout) syncViewport() {
 	if l.model == nil {
 		return
 	}
-	if l.model.nativeSurfaceConfigured() && (l.model.termWidth <= 0 || l.model.termHeight <= 0) {
-		return
-	}
 	width := l.effectiveWidth()
 	l.model.forwardToView(tui.SetViewportSizeMsg{
 		Lines: l.calcChatLines(),
@@ -59,5 +56,5 @@ func (l uiViewLayout) shouldRenderSoftCursor() bool {
 }
 
 func (l uiViewLayout) shouldUseRealTerminalCursor() bool {
-	return l.model.terminalCursor != nil || l.model.nativeSurfaceEnabled()
+	return l.model.terminalCursor != nil
 }

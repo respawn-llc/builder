@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"core/shared/clientui"
@@ -83,50 +82,13 @@ func EventDigest(evt clientui.Event) string {
 	return digest(parts)
 }
 
-func PageDigest(page clientui.TranscriptPage) string {
-	parts := []string{
-		page.SessionID,
-		strconv.FormatInt(page.Revision, 10),
-		strconv.FormatInt(page.OlderCursor, 10),
-		strconv.FormatBool(page.HasMoreAbove),
-		strconv.FormatInt(page.NewerCursor, 10),
-		strconv.FormatBool(page.HasMoreBelow),
-		EntriesDigest(page.Entries),
-		page.Streaming,
-		page.StreamingError,
-	}
-	return digest(parts)
-}
-
-func RequestFields(req clientui.TranscriptPageRequest) map[string]string {
-	fields := map[string]string{}
-	if req.Cursor != 0 {
-		fields["cursor"] = strconv.FormatInt(req.Cursor, 10)
-	}
-	return fields
-}
-
 func AddEntriesFields(fields map[string]string, entries []clientui.ChatEntry) map[string]string {
 	if fields == nil {
 		fields = map[string]string{}
 	}
-	fields["entries_count"] = strconv.Itoa(len(entries))
+	fields["entries_count"] = fmt.Sprint(len(entries))
 	fields["entries_digest"] = EntriesDigest(entries)
 	return fields
-}
-
-func AddPageFields(fields map[string]string, page clientui.TranscriptPage) map[string]string {
-	if fields == nil {
-		fields = map[string]string{}
-	}
-	fields["revision"] = strconv.FormatInt(page.Revision, 10)
-	fields["older_cursor"] = strconv.FormatInt(page.OlderCursor, 10)
-	fields["has_more_above"] = strconv.FormatBool(page.HasMoreAbove)
-	fields["newer_cursor"] = strconv.FormatInt(page.NewerCursor, 10)
-	fields["has_more_below"] = strconv.FormatBool(page.HasMoreBelow)
-	fields["streaming_chars"] = strconv.Itoa(len(page.Streaming))
-	fields["page_digest"] = PageDigest(page)
-	return AddEntriesFields(fields, page.Entries)
 }
 
 func FormatLine(name string, fields map[string]string) string {

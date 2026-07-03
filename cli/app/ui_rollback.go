@@ -2,7 +2,6 @@ package app
 
 import (
 	"core/cli/tui"
-	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -151,25 +150,7 @@ func (m *uiModel) moveRollbackSelection(delta int) {
 }
 
 func (m *uiModel) requestRollbackSelectionPage(delta int) tea.Cmd {
-	if m == nil || !m.hasRuntimeClient() || m.runtimeTranscriptBusy || !m.rollback.isSelecting() || len(m.rollback.candidates) == 0 {
-		return nil
-	}
-	var (
-		req clientui.TranscriptPageRequest
-		ok  bool
-	)
-	if delta < 0 {
-		req, ok = m.detailTranscript.pageBefore()
-	} else if delta > 0 {
-		req, ok = m.detailTranscript.pageAfter()
-	}
-	if !ok {
-		return nil
-	}
-	current := m.rollback.candidates[m.rollback.selection]
-	m.rollback.pendingSelectionAnchor = current.TranscriptIndex
-	m.rollback.pendingSelectionDelta = delta
-	return m.startRuntimeTranscriptSyncRequest(runtimeTranscriptSyncRequestForPage(req, true, runtimeTranscriptSyncCauseManualTranscriptRefresh, clientui.TranscriptRecoveryCauseNone)).cmd
+	return nil
 }
 
 func (m *uiModel) beginRollbackEditing() (int, bool) {

@@ -560,44 +560,6 @@ func TestRuntimeClientSubmitTurnRecoveryContinuesFirstPrompt(t *testing.T) {
 	}
 }
 
-func TestRuntimeClientHydrationRecoversRuntimeUnavailableSilently(t *testing.T) {
-	controls := &reconnectRetryRuntimeControlClient{}
-	authoritativePage := clientui.TranscriptPage{
-		SessionID: "session-1",
-		Revision:  4,
-		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "authoritative"}},
-	}
-	reads := &flakySessionViewClient{
-		errs:  []error{serverapi.ErrRuntimeUnavailable, nil},
-		pages: []serverapi.SessionTranscriptPageResponse{{}, {Transcript: authoritativePage}},
-	}
-	runtimeClient := newTestSessionRuntimeClient(reads, controls)
-	reactivator := newRuntimeReactivator()
-	recoveryCalls := 0
-	reactivator.SetReactivateFunc(func(context.Context) error {
-		recoveryCalls++
-		return nil
-	})
-	runtimeClient.SetRuntimeReactivator(reactivator)
-
-	page, err := runtimeClient.RefreshTranscriptPage(clientui.TranscriptPageRequest{})
-	if err != nil {
-		t.Fatalf("RefreshTranscriptPage: %v", err)
-	}
-	if recoveryCalls != 1 {
-		t.Fatalf("recovery call count = %d, want 1", recoveryCalls)
-	}
-	if reads.count != 2 {
-		t.Fatalf("transcript read count = %d, want 2", reads.count)
-	}
-	if page.Revision != authoritativePage.Revision || len(page.Entries) != 1 || page.Entries[0].Text != "authoritative" {
-		t.Fatalf("hydrated page = %+v, want %+v", page, authoritativePage)
-	}
-	if entries := controls.appendedLocalEntries(); len(entries) != 0 {
-		t.Fatalf("did not expect visible recovery warning during hydration, got %+v", entries)
-	}
-}
-
 func TestRuntimeClientMainViewRefreshRecoversRuntimeUnavailableSilently(t *testing.T) {
 	controls := &reconnectRetryRuntimeControlClient{}
 	authoritativeView := clientui.RuntimeMainView{
@@ -659,69 +621,6 @@ func TestRuntimeClientMainViewRecoveryPreservesReadDeadline(t *testing.T) {
 	case <-reactivationStarted:
 	case <-time.After(time.Second):
 		t.Fatal("reactivation did not start")
-	}
-}
-
-func TestRuntimeUnavailableHydrationRecoveryResumesOngoingEventFence(t *testing.T) {
-	controls := &reconnectRetryRuntimeControlClient{}
-	authoritativePage := clientui.TranscriptPage{
-		SessionID: "session-1",
-		Revision:  5,
-		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "hydrated"}},
-	}
-	reads := &flakySessionViewClient{
-		errs:  []error{serverapi.ErrRuntimeUnavailable, nil},
-		pages: []serverapi.SessionTranscriptPageResponse{{}, {Transcript: authoritativePage}},
-	}
-	runtimeClient := newTestSessionRuntimeClient(reads, controls)
-	reactivator := newRuntimeReactivator()
-	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
-	runtimeClient.SetRuntimeReactivator(reactivator)
-	runtimeEvents := make(chan clientui.Event, 1)
-	runtimeEvents <- clientui.Event{Kind: clientui.EventAssistantDelta, AssistantDelta: "after hydrate"}
-	model := newProjectedRuntimeEventsUIModel(runtimeClient, runtimeEvents)
-	model.startupCmds = nil
-	model.waitRuntimeEventAfterHydration = true
-
-	cmd := model.startRuntimeTranscriptSyncRequest(runtimeTranscriptSyncRequestForPage(clientui.TranscriptPageRequest{}, false, runtimeTranscriptSyncCauseContinuityRecovery, clientui.TranscriptRecoveryCauseStreamGap)).cmd
-	if cmd == nil {
-		t.Fatal("expected hydration command")
-	}
-	rawMsg := cmd()
-	msg, ok := rawMsg.(runtimeTranscriptRefreshedMsg)
-	if !ok {
-		t.Fatalf("expected runtimeTranscriptRefreshedMsg, got %T", rawMsg)
-	}
-	if msg.err != nil {
-		t.Fatalf("hydration err = %v, want recovered nil", msg.err)
-	}
-
-	next, resumeCmd := model.Update(msg)
-	updated := next.(*uiModel)
-	if updated.waitRuntimeEventAfterHydration {
-		t.Fatal("expected recovered hydration to release runtime event fence")
-	}
-	if updated.runtimeTranscriptBusy {
-		t.Fatal("expected recovered hydration to clear in-flight busy flag")
-	}
-	msgs := collectCmdMessages(t, resumeCmd)
-	resumed := false
-	for _, collected := range msgs {
-		if typed, ok := collected.(runtimeEventBatchMsg); ok && len(typed.events) == 1 && typed.events[0].AssistantDelta == "after hydrate" {
-			resumed = true
-		}
-		if _, ok := collected.(runtimeTranscriptRetryMsg); ok {
-			t.Fatalf("did not expect retry after successful runtime-unavailable recovery, got %+v", msgs)
-		}
-	}
-	if !resumed {
-		t.Fatalf("expected runtime event consumption to resume after recovered hydration, got %+v", msgs)
-	}
-	if len(runtimeEvents) != 0 {
-		t.Fatalf("expected resumed runtime wait to consume pending event, remaining=%d", len(runtimeEvents))
-	}
-	if entries := controls.appendedLocalEntries(); len(entries) != 0 {
-		t.Fatalf("did not expect visible recovery warning during UI hydration, got %+v", entries)
 	}
 }
 

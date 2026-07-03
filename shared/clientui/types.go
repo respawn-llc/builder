@@ -50,10 +50,6 @@ type Event struct {
 	StepID                       string
 	RecoveryCause                TranscriptRecoveryCause
 	CommittedTranscriptChanged   bool
-	TranscriptRevision           int64
-	CommittedEntryCount          int
-	CommittedEntryStart          int
-	CommittedEntryStartSet       bool
 	Error                        string
 	AssistantDelta               string
 	AssistantDeltaPhase          MessagePhase
@@ -172,43 +168,7 @@ type ChatSnapshot struct {
 }
 
 type AssistantStreamMetadata struct {
-	StepID                  string
-	BaseRevision            int64
-	BaseCommittedEntryCount int
-}
-
-type TranscriptPageRequest struct {
-	Cursor      int64
-	NewerCursor int64
-}
-
-type TranscriptPage struct {
-	SessionID             string
-	SessionName           string
-	ConversationFreshness ConversationFreshness
-	Revision              int64
-	OlderCursor           int64
-	HasMoreAbove          bool
-	NewerCursor           int64
-	HasMoreBelow          bool
-	Entries               []ChatEntry
-	Streaming             string
-	StreamingMetadata     *AssistantStreamMetadata
-	StreamingError        string
-}
-
-type CommittedTranscriptSuffixRequest struct{}
-
-type CommittedTranscriptSuffix struct {
-	SessionID               string
-	SessionName             string
-	ConversationFreshness   ConversationFreshness
-	Revision                int64
-	CommittedEntryCount     int
-	StartEntryCount         int
-	NextEntryCount          int
-	HasMoreCommittedEntries bool
-	Entries                 []ChatEntry
+	StepID string
 }
 
 type ToolPresentationKind string

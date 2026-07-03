@@ -38,9 +38,7 @@ type ChatSnapshot struct {
 }
 
 type AssistantStreamMetadata struct {
-	StepID                  string
-	BaseRevision            int64
-	BaseCommittedEntryCount int
+	StepID string
 }
 
 type TranscriptWindowSnapshot struct {
@@ -77,7 +75,6 @@ type chatStore struct {
 	cwd                               string
 	lastCommittedAssistantFinalAnswer string
 	messageCount                      int
-	transcriptEntryCount              int
 
 	providerTokenEstimate      int
 	providerTokenEstimateDirty bool
@@ -128,15 +125,8 @@ func (s *chatStore) appendMessage(msg llm.Message) {
 	s.providerTokenEstimateDirty = true
 }
 func (s *chatStore) replaceHistory(items []llm.ResponseItem) {
-	s.replaceHistoryAtCommittedEntryStart(items, nil)
-}
-
-func (s *chatStore) replaceHistoryAtCommittedEntryStart(items []llm.ResponseItem, committedEntryStart *int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if committedEntryStart != nil && *committedEntryStart > s.transcriptEntryCount {
-		s.transcriptEntryCount = *committedEntryStart
-	}
 	preparedItems := llm.PrepareOpenAIInputItems(items)
 	// Non-reviewer compaction keeps user-visible transcript history append-only by
 	// materializing replacement items as synthetic local entries at the compaction
@@ -247,19 +237,18 @@ func (s *chatStore) recordToolCompletionWithProviderItems(res tools.Result, prov
 		if _, materialized := s.materializedToolResults[callID]; !materialized {
 			if _, synthesized := s.synthesizedToolResults[callID]; !synthesized {
 				s.synthesizedToolResults[callID] = struct{}{}
-				s.transcriptEntryCount++
 			}
 		}
 	}
 }
 
-func (s *chatStore) appendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string) (*AssistantStreamMetadata, *uuid.UUID) {
+func (s *chatStore) appendStreamingDelta(stepID string, delta string) (*AssistantStreamMetadata, *uuid.UUID) {
 	if delta == "" {
 		return nil, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	nextMetadata := newAssistantStreamMetadata(stepID, baseRevision, baseCommittedEntryCount)
+	nextMetadata := newAssistantStreamMetadata(stepID)
 	if s.streaming == nil || assistantStreamingSegmentChanged(s.streaming.metadata, nextMetadata) {
 		streamID := uuid.New()
 		s.streaming = &assistantStreamingState{metadata: nextMetadata, transcriptStreamID: &streamID}
@@ -305,18 +294,13 @@ func (s *chatStore) clearStreamingError() {
 	s.streamingError = ""
 }
 
-func newAssistantStreamMetadata(stepID string, baseRevision int64, baseCommittedEntryCount int) *AssistantStreamMetadata {
+func newAssistantStreamMetadata(stepID string) *AssistantStreamMetadata {
 	stepID = strings.TrimSpace(stepID)
 	if stepID == "" {
 		return nil
 	}
-	if baseRevision < 0 || baseCommittedEntryCount < 0 {
-		return nil
-	}
 	return &AssistantStreamMetadata{
-		StepID:                  stepID,
-		BaseRevision:            baseRevision,
-		BaseCommittedEntryCount: baseCommittedEntryCount,
+		StepID: stepID,
 	}
 }
 
@@ -324,9 +308,7 @@ func assistantStreamingSegmentChanged(current *AssistantStreamMetadata, next *As
 	if current == nil || next == nil {
 		return current != next
 	}
-	return current.StepID != next.StepID ||
-		current.BaseRevision != next.BaseRevision ||
-		current.BaseCommittedEntryCount != next.BaseCommittedEntryCount
+	return current.StepID != next.StepID
 }
 
 func (s *chatStore) streamingSnapshotLocked() (string, *AssistantStreamMetadata) {
@@ -380,7 +362,6 @@ func (s *chatStore) appendLocalEntryRecord(entry ChatEntry) {
 		Entry:             entry,
 		AfterMessageCount: messageCount,
 	})
-	s.transcriptEntryCount++
 }
 
 func (s *chatStore) appendProjectedHistoryReplacementEntriesLocked(entries []ChatEntry) {
@@ -397,13 +378,6 @@ func (s *chatStore) appendProjectedEntryLocked(entry ChatEntry, marksBoundary bo
 		AfterMessageCount: s.messageCount,
 		MarksBoundary:     marksBoundary,
 	})
-	s.transcriptEntryCount++
-}
-
-func (s *chatStore) committedEntryCount() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.transcriptEntryCount
 }
 
 func (s *chatStore) cachedLastCommittedAssistantFinalAnswer() string {
@@ -561,7 +535,6 @@ func firstNonEmpty(values ...string) string {
 func (s *chatStore) applyMessageStatsLocked(msg llm.Message) {
 	s.messageCount++
 	s.applyLastCommittedAssistantFinalAnswerLocked(msg)
-	delta := len(VisibleChatEntriesFromMessage(msg))
 	switch msg.Role {
 	case llm.RoleAssistant:
 		for _, call := range msg.ToolCalls {
@@ -578,7 +551,6 @@ func (s *chatStore) applyMessageStatsLocked(msg llm.Message) {
 			}
 			if _, completed := s.toolCompletions[callID]; completed {
 				s.synthesizedToolResults[callID] = struct{}{}
-				delta++
 			}
 		}
 	case llm.RoleTool:
@@ -587,13 +559,8 @@ func (s *chatStore) applyMessageStatsLocked(msg llm.Message) {
 			s.materializedToolResults[callID] = struct{}{}
 			if _, synthesized := s.synthesizedToolResults[callID]; synthesized {
 				delete(s.synthesizedToolResults, callID)
-				delta--
 			}
 		}
-	}
-	s.transcriptEntryCount += delta
-	if s.transcriptEntryCount < 0 {
-		s.transcriptEntryCount = 0
 	}
 }
 

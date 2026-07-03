@@ -118,14 +118,6 @@ type compactDoneMsg struct {
 	err error
 }
 
-type nativeSurfaceResumeMsg struct{}
-
-type nativeSurfaceResizeRehydrateMsg struct {
-	token  uint64
-	width  int
-	height int
-}
-
 // Active submit is the in-flight turn only. uiModel.queued stores future work;
 // never mirror active submit there or it can run again after completion.
 type activeSubmitState struct {
@@ -204,36 +196,6 @@ type runtimeMainViewRefreshedMsg struct {
 	err   error
 }
 
-type runtimeTranscriptRefreshedMsg struct {
-	token         uint64
-	req           clientui.TranscriptPageRequest
-	syncRequest   runtimeTranscriptSyncRequest
-	syncCause     runtimeTranscriptSyncCause
-	transcript    clientui.TranscriptPage
-	recoveryCause clientui.TranscriptRecoveryCause
-	err           error
-}
-
-type runtimeTranscriptRetryMsg struct {
-	syncCause     runtimeTranscriptSyncCause
-	token         uint64
-	recoveryCause clientui.TranscriptRecoveryCause
-	req           runtimeTranscriptSyncRequest
-}
-
-type runtimeTranscriptSyncCause string
-
-const (
-	runtimeTranscriptSyncCauseBootstrap               runtimeTranscriptSyncCause = "bootstrap"
-	runtimeTranscriptSyncCauseCommittedConversation   runtimeTranscriptSyncCause = "committed_conversation_updated"
-	runtimeTranscriptSyncCauseCommittedGap            runtimeTranscriptSyncCause = "committed_gap"
-	runtimeTranscriptSyncCauseQueuedDrain             runtimeTranscriptSyncCause = "queued_drain"
-	runtimeTranscriptSyncCauseDirtyFollowUp           runtimeTranscriptSyncCause = "dirty_follow_up"
-	runtimeTranscriptSyncCauseContinuityRecovery      runtimeTranscriptSyncCause = "continuity_recovery"
-	runtimeTranscriptSyncCauseManualTranscriptRefresh runtimeTranscriptSyncCause = "manual_transcript_refresh"
-	runtimeTranscriptSyncCauseNativeScratch           runtimeTranscriptSyncCause = "native_scratch"
-)
-
 type runtimeMainViewRefreshCause string
 
 const (
@@ -246,15 +208,6 @@ type detailTranscriptLoadMsg struct{}
 
 type renderDiagnosticMsg struct {
 	diagnostic tui.RenderDiagnostic
-}
-
-type deferredProjectedTranscriptTail struct {
-	rangeStart int
-	rangeEnd   int
-	revision   int64
-	stepID     string
-	entries    []clientui.ChatEntry
-	pending    []string
 }
 
 type runLoggerDiagnosticMsg struct {

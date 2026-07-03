@@ -3,7 +3,6 @@ package runtimeview
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"core/server/llm"
@@ -98,15 +97,6 @@ func newRuntimeViewEngine(t *testing.T, store *session.Store, client llm.Client,
 	return engine
 }
 
-func appendRuntimeViewMessages(t *testing.T, store *session.Store, count int, text func(int) string) {
-	t.Helper()
-	for i := range count {
-		if _, _, err := store.AppendEvent("step-1", "message", llm.Message{Role: llm.RoleAssistant, Content: text(i), Phase: llm.MessagePhaseFinal}); err != nil {
-			t.Fatalf("append message %d: %v", i, err)
-		}
-	}
-}
-
 func TestEventFromRuntimeProjectsReasoningAndBackground(t *testing.T) {
 	exitCode := 17
 	view := EventFromRuntime(runtime.Event{
@@ -116,9 +106,7 @@ func TestEventFromRuntimeProjectsReasoningAndBackground(t *testing.T) {
 		AssistantDelta:             "delta",
 		AssistantDeltaPhase:        llm.MessagePhaseFinal,
 		AssistantStreamMetadata: &runtime.AssistantStreamMetadata{
-			StepID:                  "step-1",
-			BaseRevision:            7,
-			BaseCommittedEntryCount: 3,
+			StepID: "step-1",
 		},
 		ReasoningDelta: &llm.ReasoningSummaryDelta{Key: "k", Role: "reasoning", Text: "thinking"},
 		RunState:       &runtime.RunState{Lifecycle: runtime.RunningRunLifecycle(runtime.RunModeTurn), RunID: "run-1", Status: runtime.RunStatusRunning},
@@ -150,7 +138,7 @@ func TestEventFromRuntimeProjectsReasoningAndBackground(t *testing.T) {
 	if view.AssistantDeltaPhase != clientui.MessagePhaseFinal {
 		t.Fatalf("expected assistant delta phase projection, got %q", view.AssistantDeltaPhase)
 	}
-	if view.AssistantStreamMetadata == nil || view.AssistantStreamMetadata.StepID != "step-1" || view.AssistantStreamMetadata.BaseRevision != 7 || view.AssistantStreamMetadata.BaseCommittedEntryCount != 3 {
+	if view.AssistantStreamMetadata == nil || view.AssistantStreamMetadata.StepID != "step-1" {
 		t.Fatalf("expected assistant stream metadata projection, got %+v", view.AssistantStreamMetadata)
 	}
 	if view.RunState == nil || !view.RunState.Lifecycle.IsRunning() {
@@ -478,9 +466,6 @@ func TestSessionViewFromRuntimeOmitsTranscriptPayload(t *testing.T) {
 	}
 	eng := newRuntimeViewEngine(t, store, projectionFastClient{})
 	view := SessionViewFromRuntime(eng)
-	if view.Transcript.Revision != eng.TranscriptRevision() {
-		t.Fatalf("projected revision = %d, engine revision = %d", view.Transcript.Revision, eng.TranscriptRevision())
-	}
 	if got := len(view.Chat.Entries); got != 0 {
 		t.Fatalf("session view chat entry count = %d, want 0", got)
 	}
@@ -598,9 +583,7 @@ func TestChatSnapshotFromRuntimeCopiesEntries(t *testing.T) {
 		}},
 		Streaming: "ongoing",
 		StreamingMetadata: &runtime.AssistantStreamMetadata{
-			StepID:                  "step-1",
-			BaseRevision:            7,
-			BaseCommittedEntryCount: 3,
+			StepID: "step-1",
 		},
 		StreamingError: "warn",
 	})
@@ -627,7 +610,7 @@ func TestChatSnapshotFromRuntimeCopiesEntries(t *testing.T) {
 	if snapshot.Streaming != "ongoing" || snapshot.StreamingError != "warn" {
 		t.Fatalf("unexpected snapshot projection: %+v", snapshot)
 	}
-	if snapshot.StreamingMetadata == nil || snapshot.StreamingMetadata.StepID != "step-1" || snapshot.StreamingMetadata.BaseRevision != 7 || snapshot.StreamingMetadata.BaseCommittedEntryCount != 3 {
+	if snapshot.StreamingMetadata == nil || snapshot.StreamingMetadata.StepID != "step-1" {
 		t.Fatalf("expected streaming metadata projection, got %+v", snapshot.StreamingMetadata)
 	}
 }
@@ -641,9 +624,7 @@ func TestChatSnapshotFromRuntimeSuppressesNoopFinalAssistantState(t *testing.T) 
 		}},
 		Streaming: "NO_OP",
 		StreamingMetadata: &runtime.AssistantStreamMetadata{
-			StepID:                  "step-1",
-			BaseRevision:            7,
-			BaseCommittedEntryCount: 3,
+			StepID: "step-1",
 		},
 		StreamingError: "warn",
 	})
@@ -661,45 +642,22 @@ func TestChatSnapshotFromRuntimeSuppressesNoopFinalAssistantState(t *testing.T) 
 	}
 }
 
-func TestTranscriptPageFromChatClonesPatchRender(t *testing.T) {
-	snapshot := clientui.ChatSnapshot{Entries: []clientui.ChatEntry{{
-		Role: "tool_call",
-		ToolCall: &clientui.ToolCallMeta{
-			PatchRender: &patchformat.RenderedPatch{
-				SummaryLines: []patchformat.RenderedLine{{Text: "before"}},
-			},
+func TestChatSnapshotFromRuntimeClonesPatchRender(t *testing.T) {
+	source := &transcript.ToolCallMeta{
+		PatchRender: &patchformat.RenderedPatch{
+			SummaryLines: []patchformat.RenderedLine{{Text: "before"}},
 		},
-	}}}
+	}
+	snapshot := ChatSnapshotFromRuntime(runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
+		Role:     "tool_call",
+		ToolCall: source,
+	}}})
 
-	entries := cloneChatEntries(snapshot.Entries)
-	if len(entries) != 1 || entries[0].ToolCall == nil || entries[0].ToolCall.PatchRender == nil {
-		t.Fatalf("expected patch render copied into cloned entries, got %+v", entries)
+	if len(snapshot.Entries) != 1 || snapshot.Entries[0].ToolCall == nil || snapshot.Entries[0].ToolCall.PatchRender == nil {
+		t.Fatalf("expected patch render copied into projected entries, got %+v", snapshot.Entries)
 	}
-	snapshot.Entries[0].ToolCall.PatchRender.SummaryLines[0].Text = "after"
-	if entries[0].ToolCall.PatchRender.SummaryLines[0].Text != "before" {
-		t.Fatalf("expected cloned entries to deep copy patch render, got %+v", entries[0].ToolCall.PatchRender.SummaryLines)
-	}
-}
-
-func TestTranscriptPageFromRuntimeReturnsNewestSegment(t *testing.T) {
-	store := newRuntimeViewStore(t)
-	appendRuntimeViewMessages(t, store, 600, func(i int) string { return fmt.Sprintf("reply-%03d", i) })
-	eng := newRuntimeViewEngine(t, store, projectionFastClient{})
-
-	page, err := TranscriptPageFromRuntime(eng, clientui.TranscriptPageRequest{})
-	if err != nil {
-		t.Fatalf("transcript page from runtime: %v", err)
-	}
-	if page.HasMoreAbove {
-		t.Fatalf("never-compacted session must not report more above, got %+v", page)
-	}
-	if page.OlderCursor != 0 {
-		t.Fatalf("never-compacted older cursor = %d, want 0", page.OlderCursor)
-	}
-	if len(page.Entries) != 600 {
-		t.Fatalf("entries = %d, want 600 (whole segment)", len(page.Entries))
-	}
-	if page.Entries[0].Text != "reply-000" || page.Entries[599].Text != "reply-599" {
-		t.Fatalf("unexpected segment bounds: %q..%q", page.Entries[0].Text, page.Entries[599].Text)
+	source.PatchRender.SummaryLines[0].Text = "after"
+	if snapshot.Entries[0].ToolCall.PatchRender.SummaryLines[0].Text != "before" {
+		t.Fatalf("expected projected entries to deep copy patch render, got %+v", snapshot.Entries[0].ToolCall.PatchRender.SummaryLines)
 	}
 }

@@ -116,6 +116,7 @@ var allowedSmallPackages = map[string]string{
 	"server/projectview":                 "cohesive project read-model service owner with substantial service tests",
 	"server/runlog":                      "shared run-logging and runtime-event formatting helpers extracted from runprompt so sessionruntime and workflowrunner consume them without the runprompt import cycle",
 	"server/requestmemo":                 "cross-service infrastructure used by runtime, prompt, session, process, and workflow services",
+	"server/runtimeview":                 "server-owned DTO projection seam shared by legacy main-view projection and the backend transcript subscription feed without importing registry/runtime internals into clients",
 	"server/serverstatus":                "server status/update-status service owner after status consolidation",
 	"server/sessionlaunch":               "session launch service seam kept separate from session runtime to avoid runprompt/runtime cycles",
 	"server/session/sessiontest":         "test-only helper package exposing full event-history collectors kept out of the production session surface so production code cannot materialize whole histories",

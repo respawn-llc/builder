@@ -151,26 +151,6 @@ func TestRepairMissingToolOutputsByAppendingIsIdempotent(t *testing.T) {
 	}
 }
 
-// The resume path re-executes interrupted calls; the repair must defer while
-// pending tool-call starts remain so it never pre-empts a real output.
-func TestRepairMissingToolOutputsDefersToPendingToolCallStarts(t *testing.T) {
-	store := mustCreateTestSession(t)
-	appendRepairEvent(t, store, "message", llm.Message{
-		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec", Input: json.RawMessage(`{}`)}},
-	})
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
-	eng.rememberPendingToolCallStarts(map[string]int{"missing": 1})
-
-	repaired, err := eng.repairMissingToolOutputsByAppending("step")
-	if err != nil {
-		t.Fatalf("repair: %v", err)
-	}
-	if repaired != 0 {
-		t.Fatalf("repair count = %d, want 0 while a pending start exists", repaired)
-	}
-}
-
 func TestRepairMissingToolOutputsMarksResultAsError(t *testing.T) {
 	store := mustCreateTestSession(t)
 	appendRepairEvent(t, store, "message", llm.Message{

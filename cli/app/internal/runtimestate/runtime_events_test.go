@@ -18,9 +18,6 @@ func TestReduceRuntimeEvent_UserMessageFlushedProducesPendingInputAndConversatio
 		clientui.Event{Kind: clientui.EventUserMessageFlushed, UserMessage: "steered message", UserMessageBatchQueueItemIDs: []string{"queue-1"}},
 	)
 
-	if update.Transcript.Sync.Reason != RuntimeTranscriptSyncNone {
-		t.Fatal("did not expect flushed user message to request session sync")
-	}
 	if len(update.PendingInput.ConsumedQueueItemIDs) != 1 || update.PendingInput.ConsumedQueueItemIDs[0] != "queue-1" {
 		t.Fatalf("consumed queue item ids = %+v, want queue-1", update.PendingInput.ConsumedQueueItemIDs)
 	}
@@ -199,7 +196,7 @@ func TestReduceRuntimeEvent_RunStateStoppedClearsReasoningWithoutChangingLivenes
 	}
 }
 
-func TestReduceRuntimeEvent_RunStateStartedDoesNotRequestTranscriptSync(t *testing.T) {
+func TestReduceRuntimeEvent_RunStateStartedDoesNotDriveLiveness(t *testing.T) {
 	update := ReduceRuntimeEvent(
 		RuntimeRunState{Run: clientui.IdleRunLifecycle()},
 		RuntimeConversationState{},
@@ -214,9 +211,6 @@ func TestReduceRuntimeEvent_RunStateStartedDoesNotRequestTranscriptSync(t *testi
 	}
 	if update.RunState.Activity != RuntimeActivityUnchanged {
 		t.Fatal("expected raw started run to leave runtime activity unchanged")
-	}
-	if update.Transcript.Sync.Reason != RuntimeTranscriptSyncNone {
-		t.Fatal("did not expect started run to request transcript sync")
 	}
 }
 
@@ -284,7 +278,7 @@ func TestReduceRuntimeEvent_RawGoalRunStateDoesNotDriveGoalLiveness(t *testing.T
 	}
 }
 
-func TestReduceRuntimeEvent_ConversationUpdatedRequiresExplicitCommittedAdvanceOrRecovery(t *testing.T) {
+func TestReduceRuntimeEvent_ConversationUpdatedDoesNotRebuildTranscript(t *testing.T) {
 	plain := ReduceRuntimeEvent(
 		RuntimeRunState{},
 		RuntimeConversationState{},
@@ -293,8 +287,8 @@ func TestReduceRuntimeEvent_ConversationUpdatedRequiresExplicitCommittedAdvanceO
 		false,
 		clientui.Event{Kind: clientui.EventConversationUpdated},
 	)
-	if plain.Transcript.Sync.Reason != RuntimeTranscriptSyncNone {
-		t.Fatal("did not expect plain conversation_updated to request transcript sync")
+	if len(plain.Transcript.AssistantStream) != 0 {
+		t.Fatalf("plain conversation_updated changed transcript: %+v", plain.Transcript)
 	}
 	committed := ReduceRuntimeEvent(
 		RuntimeRunState{},
@@ -304,8 +298,8 @@ func TestReduceRuntimeEvent_ConversationUpdatedRequiresExplicitCommittedAdvanceO
 		false,
 		clientui.Event{Kind: clientui.EventConversationUpdated, CommittedTranscriptChanged: true},
 	)
-	if committed.Transcript.Sync.Reason != RuntimeTranscriptSyncCommittedAdvance {
-		t.Fatal("expected committed conversation_updated to request transcript sync")
+	if len(committed.Transcript.AssistantStream) != 0 {
+		t.Fatalf("committed conversation_updated changed transcript: %+v", committed.Transcript)
 	}
 	recovery := ReduceRuntimeEvent(
 		RuntimeRunState{},
@@ -315,8 +309,8 @@ func TestReduceRuntimeEvent_ConversationUpdatedRequiresExplicitCommittedAdvanceO
 		false,
 		clientui.Event{Kind: clientui.EventConversationUpdated, RecoveryCause: clientui.TranscriptRecoveryCauseStreamGap},
 	)
-	if recovery.Transcript.Sync.Reason != RuntimeTranscriptSyncRecovery {
-		t.Fatal("expected recovery conversation_updated to request transcript sync")
+	if len(recovery.Transcript.AssistantStream) != 0 {
+		t.Fatalf("recovery conversation_updated changed transcript: %+v", recovery.Transcript)
 	}
 	gap := ReduceRuntimeEvent(
 		RuntimeRunState{},
@@ -326,8 +320,8 @@ func TestReduceRuntimeEvent_ConversationUpdatedRequiresExplicitCommittedAdvanceO
 		false,
 		clientui.Event{Kind: clientui.EventStreamGap, RecoveryCause: clientui.TranscriptRecoveryCauseStreamGap},
 	)
-	if gap.Transcript.Sync.Reason != RuntimeTranscriptSyncStreamGap {
-		t.Fatal("expected explicit stream gap to request transcript sync")
+	if len(gap.Transcript.AssistantStream) != 0 {
+		t.Fatalf("stream gap changed transcript: %+v", gap.Transcript)
 	}
 }
 
@@ -343,13 +337,13 @@ func TestReduceRuntimeEvent_AssistantDeltaStreamsAppendAndReset(t *testing.T) {
 			AssistantDelta:          "hello",
 			AssistantDeltaPhase:     clientui.MessagePhaseFinal,
 			StepID:                  "step-1",
-			AssistantStreamMetadata: &clientui.AssistantStreamMetadata{StepID: "step-1", BaseRevision: 7, BaseCommittedEntryCount: 3},
+			AssistantStreamMetadata: &clientui.AssistantStreamMetadata{StepID: "step-1"},
 		},
 	)
 	if len(appended.Transcript.AssistantStream) != 1 {
 		t.Fatalf("expected assistant append command, got %+v", appended.Transcript.AssistantStream)
 	}
-	if got := appended.Transcript.AssistantStream[0]; got.Kind != RuntimeAssistantStreamAppend || got.Delta != "hello" || got.Phase != clientui.MessagePhaseFinal || got.StepID != "step-1" || got.AssistantStreamMetadata == nil || got.AssistantStreamMetadata.BaseRevision != 7 || got.AssistantStreamMetadata.BaseCommittedEntryCount != 3 {
+	if got := appended.Transcript.AssistantStream[0]; got.Kind != RuntimeAssistantStreamAppend || got.Delta != "hello" || got.Phase != clientui.MessagePhaseFinal || got.StepID != "step-1" || got.AssistantStreamMetadata == nil || got.AssistantStreamMetadata.StepID != "step-1" {
 		t.Fatalf("assistant append command = %+v", appended.Transcript.AssistantStream[0])
 	}
 
@@ -359,17 +353,17 @@ func TestReduceRuntimeEvent_AssistantDeltaStreamsAppendAndReset(t *testing.T) {
 		PendingInputState{},
 		RuntimeReasoningState{},
 		false,
-		clientui.Event{Kind: clientui.EventAssistantDeltaReset, StepID: "step-1", AssistantStreamMetadata: &clientui.AssistantStreamMetadata{StepID: "step-1", BaseRevision: 7, BaseCommittedEntryCount: 3}},
+		clientui.Event{Kind: clientui.EventAssistantDeltaReset, StepID: "step-1", AssistantStreamMetadata: &clientui.AssistantStreamMetadata{StepID: "step-1"}},
 	)
 	if len(reset.Transcript.AssistantStream) != 1 {
 		t.Fatalf("expected assistant clear command, got %+v", reset.Transcript.AssistantStream)
 	}
-	if got := reset.Transcript.AssistantStream[0]; got.Kind != RuntimeAssistantStreamClear || got.StepID != "step-1" || got.AssistantStreamMetadata == nil || got.AssistantStreamMetadata.BaseRevision != 7 || got.AssistantStreamMetadata.BaseCommittedEntryCount != 3 {
+	if got := reset.Transcript.AssistantStream[0]; got.Kind != RuntimeAssistantStreamClear || got.StepID != "step-1" || got.AssistantStreamMetadata == nil || got.AssistantStreamMetadata.StepID != "step-1" {
 		t.Fatalf("assistant clear command = %+v", reset.Transcript.AssistantStream[0])
 	}
 }
 
-func TestReduceRuntimeEvent_StreamingErrorUpdatedRequestsSessionSync(t *testing.T) {
+func TestReduceRuntimeEvent_StreamingErrorUpdatedDoesNotRebuildTranscript(t *testing.T) {
 	update := ReduceRuntimeEvent(
 		RuntimeRunState{},
 		RuntimeConversationState{},
@@ -378,8 +372,8 @@ func TestReduceRuntimeEvent_StreamingErrorUpdatedRequestsSessionSync(t *testing.
 		false,
 		clientui.Event{Kind: clientui.EventStreamingErrorUpdated},
 	)
-	if update.Transcript.Sync.Reason != RuntimeTranscriptSyncStreamingErrorUpdated {
-		t.Fatal("expected streaming_error_updated to request transcript sync")
+	if len(update.Transcript.AssistantStream) != 0 {
+		t.Fatalf("streaming_error_updated changed transcript: %+v", update.Transcript)
 	}
 }
 
@@ -479,7 +473,7 @@ func TestReduceRuntimeEvent_CompactionCompletedClearsCompacting(t *testing.T) {
 	if update.RunState.State.Compaction.IsRunning() {
 		t.Fatal("expected compaction completed to clear compacting state")
 	}
-	if update.Transcript.Sync.Reason != RuntimeTranscriptSyncNone || len(update.Transcript.AssistantStream) != 0 {
+	if len(update.Transcript.AssistantStream) != 0 {
 		t.Fatalf("expected compaction completed to leave transcript unchanged, got %+v", update.Transcript)
 	}
 }
@@ -502,7 +496,7 @@ func TestReduceRuntimeRunStateEventRejectsInvalidLifecycleAtReducerBoundary(t *t
 func TestDomainReducersIgnoreUnownedEventConcerns(t *testing.T) {
 	evt := clientui.Event{Kind: clientui.EventBackgroundUpdated, Background: &clientui.BackgroundShellEvent{Type: "completed", ID: "1000", State: "completed"}}
 
-	if transcript := ReduceRuntimeTranscriptEvent(evt); transcript.Sync.Reason != RuntimeTranscriptSyncNone || len(transcript.AssistantStream) != 0 {
+	if transcript := ReduceRuntimeTranscriptEvent(evt); len(transcript.AssistantStream) != 0 {
 		t.Fatalf("transcript reducer handled background event: %+v", transcript)
 	}
 	if reasoning := ReduceRuntimeReasoningEvent(RuntimeReasoningState{StatusHeader: "thinking"}, evt); reasoning.State.StatusHeader != "thinking" || len(reasoning.Stream) != 0 {

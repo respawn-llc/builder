@@ -85,8 +85,6 @@ func FormatTranscriptProjectionDiagnostic(sessionID string, evt clientui.Event) 
 		"path":                  "live_event",
 		"kind":                  string(evt.Kind),
 		"step_id":               strings.TrimSpace(evt.StepID),
-		"revision":              fmt.Sprintf("%d", evt.TranscriptRevision),
-		"committed_entry_count": fmt.Sprintf("%d", evt.CommittedEntryCount),
 		"event_digest":          transcriptdiag.EventDigest(evt),
 		"assistant_delta_chars": fmt.Sprintf("%d", len(evt.AssistantDelta)),
 	}
@@ -100,13 +98,11 @@ func FormatTranscriptProjectionDiagnostic(sessionID string, evt clientui.Event) 
 
 func FormatTranscriptPublishDiagnostic(sessionID string, evt clientui.Event) string {
 	fields := map[string]string{
-		"session_id":            strings.TrimSpace(sessionID),
-		"path":                  "live_event",
-		"kind":                  string(evt.Kind),
-		"step_id":               strings.TrimSpace(evt.StepID),
-		"revision":              fmt.Sprintf("%d", evt.TranscriptRevision),
-		"committed_entry_count": fmt.Sprintf("%d", evt.CommittedEntryCount),
-		"event_digest":          transcriptdiag.EventDigest(evt),
+		"session_id":   strings.TrimSpace(sessionID),
+		"path":         "live_event",
+		"kind":         string(evt.Kind),
+		"step_id":      strings.TrimSpace(evt.StepID),
+		"event_digest": transcriptdiag.EventDigest(evt),
 	}
 	fields = transcriptdiag.AddEntriesFields(fields, evt.TranscriptEntries)
 	return transcriptdiag.FormatLine("transcript.diag.server.publish_activity", fields)

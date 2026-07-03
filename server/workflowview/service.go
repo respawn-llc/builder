@@ -26,7 +26,7 @@ import (
 type Service struct {
 	metadata    *metadata.Store
 	queries     *sqlitegen.Queries
-	transcripts SessionTranscriptPageProvider
+	transcripts SessionTranscriptTailEntryProvider
 }
 
 const attentionKindInterruptedRun = "interrupted_run"
@@ -49,11 +49,11 @@ var (
 
 type Option func(*Service)
 
-type SessionTranscriptPageProvider interface {
-	GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error)
+type SessionTranscriptTailEntryProvider interface {
+	SessionTranscriptTailEntries(ctx context.Context, sessionID string) ([]clientui.ChatEntry, error)
 }
 
-func WithSessionTranscriptProvider(provider SessionTranscriptPageProvider) Option {
+func WithSessionTranscriptProvider(provider SessionTranscriptTailEntryProvider) Option {
 	return func(s *Service) {
 		s.transcripts = provider
 	}
@@ -1563,7 +1563,7 @@ func (s *Service) questionAttentionItems(ctx context.Context, projectID string, 
 const pendingQuestionFallbackMessage = "Question pending; open the task to answer."
 
 type pendingQuestionResolver struct {
-	transcripts SessionTranscriptPageProvider
+	transcripts SessionTranscriptTailEntryProvider
 }
 
 type pendingQuestion struct {
@@ -1572,7 +1572,7 @@ type pendingQuestion struct {
 	recommendedOptionIndex int
 }
 
-func newPendingQuestionResolver(transcripts SessionTranscriptPageProvider) *pendingQuestionResolver {
+func newPendingQuestionResolver(transcripts SessionTranscriptTailEntryProvider) *pendingQuestionResolver {
 	return &pendingQuestionResolver{transcripts: transcripts}
 }
 
@@ -1585,11 +1585,11 @@ func (r *pendingQuestionResolver) Question(ctx context.Context, sessionID string
 	if sessionID == "" || askID == "" {
 		return pendingQuestion{}, errors.New("session_id and ask_id are required to resolve pending question")
 	}
-	resp, err := r.transcripts.GetSessionTranscriptPage(ctx, serverapi.SessionTranscriptPageRequest{SessionID: sessionID})
+	entries, err := r.transcripts.SessionTranscriptTailEntries(ctx, sessionID)
 	if err != nil {
 		return pendingQuestion{}, fmt.Errorf("load session %q transcript tail for pending question %q: %w", sessionID, askID, err)
 	}
-	question := askQuestionFromTranscriptEntries(resp.Transcript.Entries, askID)
+	question := askQuestionFromTranscriptEntries(entries, askID)
 	if strings.TrimSpace(question.message) == "" {
 		return pendingQuestion{}, fmt.Errorf("pending question %q in session %q transcript: %w", askID, sessionID, ErrPendingQuestionNotFound)
 	}

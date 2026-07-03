@@ -239,64 +239,6 @@ func (m *uiModel) currentRuntimeSessionID() string {
 	return ""
 }
 
-func (m *uiModel) runtimeTranscript() clientui.TranscriptPage {
-	m.checkTUIBlockingOperation("runtime transcript read", "Transcript")
-	if client := m.runtimeClient(); client != nil {
-		return client.Transcript()
-	}
-	return m.localRuntimeTranscript()
-}
-
-func (m *uiModel) startupRuntimeTranscript() clientui.TranscriptPage {
-	if client := m.runtimeClient(); client != nil {
-		if suffixClient, ok := client.(interface {
-			RefreshCommittedTranscriptSuffix(clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error)
-		}); ok {
-			suffix, err := suffixClient.RefreshCommittedTranscriptSuffix(m.startupCommittedTranscriptSuffixRequest())
-			if err == nil {
-				m.observeRuntimeRequestResult(nil)
-				m.applyCommittedTranscriptSuffixBounds(suffix)
-				return transcriptPageFromCommittedTranscriptSuffix(suffix)
-			}
-			m.observeRuntimeRequestResult(err)
-			return m.localRuntimeTranscript()
-		}
-		if _, ok := client.(*sessionRuntimeClient); ok {
-			return m.refreshRuntimeTranscript()
-		}
-	}
-	return m.runtimeTranscript()
-}
-
-func (m *uiModel) startupCommittedTranscriptSuffixRequest() clientui.CommittedTranscriptSuffixRequest {
-	return clientui.CommittedTranscriptSuffixRequest{}
-}
-
-func (m *uiModel) applyCommittedTranscriptSuffixBounds(suffix clientui.CommittedTranscriptSuffix) {
-	if m == nil {
-		return
-	}
-	if suffix.CommittedEntryCount > 0 {
-		m.transcriptTotalEntries = max(m.transcriptTotalEntries, suffix.CommittedEntryCount)
-	}
-	if suffix.StartEntryCount > 0 {
-		m.transcriptBaseOffset = suffix.StartEntryCount
-	}
-}
-
-func (m *uiModel) refreshRuntimeTranscript() clientui.TranscriptPage {
-	if client := m.runtimeClient(); client != nil {
-		page, err := client.RefreshTranscript()
-		if err == nil {
-			m.observeRuntimeRequestResult(nil)
-			return page
-		}
-		m.observeRuntimeRequestResult(err)
-		return m.localRuntimeTranscript()
-	}
-	return m.localRuntimeTranscript()
-}
-
 func (m *uiModel) localRuntimeStatus() clientui.RuntimeStatus {
 	return clientui.RuntimeStatus{
 		ReviewerFrequency:                 m.reviewerMode,
@@ -314,9 +256,6 @@ func (m *uiModel) localRuntimeStatus() clientui.RuntimeStatus {
 func localLastCommittedAssistantFinalAnswer(entries []tui.TranscriptEntry) string {
 	answer := ""
 	for _, entry := range entries {
-		if entry.Transient && !entry.Committed {
-			break
-		}
 		if !transcriptEntryAffectsCommittedAssistantFinalAnswer(entry) {
 			continue
 		}
@@ -337,37 +276,5 @@ func transcriptEntryAffectsCommittedAssistantFinalAnswer(entry tui.TranscriptEnt
 		return false
 	default:
 		return true
-	}
-}
-
-func (m *uiModel) localRuntimeTranscript() clientui.TranscriptPage {
-	committedEntries := committedTranscriptEntriesForApp(m.transcriptEntries)
-	entries := make([]clientui.ChatEntry, 0, len(committedEntries))
-	for _, entry := range committedEntries {
-		entries = append(entries, clientui.ChatEntry{
-			Visibility:        entry.Visibility,
-			Role:              string(entry.Role),
-			Text:              entry.Text,
-			CondensedText:     entry.CondensedText,
-			Phase:             string(entry.Phase),
-			MessageType:       string(entry.MessageType),
-			SourcePath:        entry.SourcePath,
-			CompactLabel:      entry.CompactLabel,
-			ToolResultSummary: entry.ToolResultSummary,
-			ToolCallID:        entry.ToolCallID,
-		})
-	}
-	totalEntries := m.transcriptTotalEntries
-	if totalEntries < m.transcriptBaseOffset+len(entries) {
-		totalEntries = m.transcriptBaseOffset + len(entries)
-	}
-	return clientui.TranscriptPage{
-		SessionID:             m.sessionID,
-		SessionName:           m.sessionName,
-		ConversationFreshness: m.conversationFreshness,
-		Revision:              m.transcriptRevision,
-		Entries:               entries,
-		Streaming:             m.view.OngoingStreamingText(),
-		StreamingMetadata:     cloneClientAssistantStreamMetadata(m.activeAssistantStreamMetadata()),
 	}
 }

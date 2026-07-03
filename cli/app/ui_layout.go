@@ -40,16 +40,7 @@ func (m *uiModel) syncRendererOutputGate() {
 	if m == nil || m.rendererOutputGate == nil {
 		return
 	}
-	m.dropNativeSurfaceIfGeometryUnsupported()
-	m.rendererOutputGate.SetSuppressRendererWrites(m.nativeOngoingRendererOutputSuppressed())
-}
-
-func (m *uiModel) nativeOngoingRendererOutputSuppressed() bool {
-	if m == nil || m.surface() != uiSurfaceOngoingTranscript {
-		return false
-	}
-	return m.nativeSurfaceEnabled() ||
-		(m.nativeImmutableTranscriptWritten && !m.nativeSurfaceEnabled())
+	m.rendererOutputGate.SetSuppressRendererWrites(false)
 }
 
 func (l uiViewLayout) render() string {
@@ -66,12 +57,6 @@ func (l uiViewLayout) composeStandardFrame(style uiStyles) (uiRenderFrame, bool)
 	width := l.effectiveWidth()
 	height := l.effectiveHeight()
 	if width <= 0 || height <= 0 {
-		return uiRenderFrame{}, false
-	}
-	if m.surface() == uiSurfaceOngoingTranscript && m.nativeSurfaceEnabled() {
-		return l.composeNativeLiveFrame(style, width, height), true
-	}
-	if m.nativeOngoingRendererOutputSuppressed() {
 		return uiRenderFrame{}, false
 	}
 	frame := uiRenderFrame{width: width, height: height, statusLine: l.renderStatusLine(width, style), padToHeight: true, tailOnly: true}
@@ -93,29 +78,7 @@ func (l uiViewLayout) composeStandardFrame(style uiStyles) (uiRenderFrame, bool)
 	return frame, true
 }
 
-func (l uiViewLayout) composeNativeLiveFrame(style uiStyles, width int, height int) uiRenderFrame {
-	m := l.model
-	frame := uiRenderFrame{width: width, height: height, statusLine: l.renderStatusLine(width, style), tailOnly: true}
-	frame.inputPane = l.renderInputLines(width, style)
-	frame.inputCursor = l.inputPaneCursor(width)
-	frame.queuePane = l.renderQueuedMessagesPane(width)
-	frame.pickerPane = l.renderActivePicker(width)
-	frame.helpPane = l.renderHelpPane(width, helpPaneMaxLines(height, len(frame.inputPane), len(frame.queuePane), len(frame.pickerPane)), style)
-	chatLines := height - len(frame.inputPane) - len(frame.queuePane) - len(frame.pickerPane) - len(frame.helpPane) - 1
-	if chatLines < 0 {
-		chatLines = 0
-	}
-	frame.chatPanel = l.renderNativeLiveChatPanel(width, chatLines, style)
-	if m.worktrees.inputCursor.Visible {
-		frame.inputCursor = m.worktrees.inputCursor
-	}
-	return frame
-}
-
 func (l uiViewLayout) renderFrame(frame uiRenderFrame) string {
-	if l.model.surface() == uiSurfaceOngoingTranscript && l.model.nativeSurfaceEnabled() {
-		return l.renderNativeLiveAreaFrame(frame)
-	}
 	l.updateTerminalCursor(frame)
 	frame.cursorFrameCount = l.realCursorFrameCount(frame)
 	return frame.renderWithCursorVisibility(!l.shouldShowRealTerminalCursor(frame))
@@ -176,7 +139,7 @@ func (l uiViewLayout) realCursorFrameCount(frame uiRenderFrame) int {
 }
 
 func (l uiViewLayout) shouldShowRealTerminalCursor(frame uiRenderFrame) bool {
-	return (l.model.terminalCursor != nil || l.model.nativeSurfaceEnabled()) && frame.inputCursor.Visible
+	return l.model.terminalCursor != nil && frame.inputCursor.Visible
 }
 
 func (l uiViewLayout) updateTerminalCursor(frame uiRenderFrame) {

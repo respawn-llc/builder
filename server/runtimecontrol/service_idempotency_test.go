@@ -2,6 +2,7 @@ package runtimecontrol
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"core/server/llm"
@@ -289,6 +290,26 @@ func countEventsByKind(t *testing.T, store *session.Store, kind string) int {
 	return count
 }
 
+func localEntryEvents(t *testing.T, store *session.Store) []runtime.ChatEntry {
+	t.Helper()
+	events, err := sessiontest.CollectEvents(store)
+	if err != nil {
+		t.Fatalf("ReadEvents: %v", err)
+	}
+	entries := make([]runtime.ChatEntry, 0)
+	for _, evt := range events {
+		if evt.Kind != "local_entry" {
+			continue
+		}
+		var entry runtime.ChatEntry
+		if err := json.Unmarshal(evt.Payload, &entry); err != nil {
+			t.Fatalf("decode local_entry: %v", err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
 func TestServiceAppendCommittedEntryDedupesSuccessfulRetry(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
 	if err != nil {
@@ -308,7 +329,7 @@ func TestServiceAppendCommittedEntryDedupesSuccessfulRetry(t *testing.T) {
 		t.Fatalf("AppendCommittedEntry replay: %v", err)
 	}
 	count := 0
-	for _, entry := range engine.RecentTailTranscriptWindow(1 << 20).Snapshot.Entries {
+	for _, entry := range localEntryEvents(t, store) {
 		if entry.Role == "warning" && entry.Text == "be careful" {
 			count++
 		}
@@ -337,7 +358,7 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 		t.Fatalf("AppendCommittedEntry replay: %v", err)
 	}
 	count := 0
-	for _, entry := range engine.RecentTailTranscriptWindow(1 << 20).Snapshot.Entries {
+	for _, entry := range localEntryEvents(t, store) {
 		if entry.Role == "warning" && entry.Text == "visible warning" {
 			count++
 			if entry.Visibility != transcript.EntryVisibilityAll {

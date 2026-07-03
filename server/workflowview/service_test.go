@@ -1256,8 +1256,8 @@ func TestPendingApprovalTaskRemainsVisibleOnSourceBoardColumn(t *testing.T) {
 
 func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
-	view, err := New(store, WithSessionTranscriptProvider(staticTranscriptProvider{pages: map[string]clientui.TranscriptPage{
-		"session-view-waiting-ask": transcriptPageWithAskOptions("ask-view-1", "Waiting ask?", []string{"Trail mix", "Dark chocolate", "Pistachios"}, 2),
+	view, err := New(store, WithSessionTranscriptProvider(staticTranscriptProvider{entries: map[string][]clientui.ChatEntry{
+		"session-view-waiting-ask": transcriptEntriesWithAskOptions("ask-view-1", "Waiting ask?", []string{"Trail mix", "Dark chocolate", "Pistachios"}, 2),
 	}}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1341,8 +1341,8 @@ func TestTaskDetailPendingQuestionFallsBackWhenTranscriptLookupFails(t *testing.
 
 func TestTaskDetailProjectsGuiIdentityWorktreeStatusActionsAndAttention(t *testing.T) {
 	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
-	view, err := New(store, WithSessionTranscriptProvider(staticTranscriptProvider{pages: map[string]clientui.TranscriptPage{
-		"session-detail": transcriptPageWithAsk("ask-detail", "Which path should this task take?"),
+	view, err := New(store, WithSessionTranscriptProvider(staticTranscriptProvider{entries: map[string][]clientui.ChatEntry{
+		"session-detail": transcriptEntriesWithAsk("ask-detail", "Which path should this task take?"),
 	}}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1532,8 +1532,8 @@ func TestTaskActivityProjectsApprovalSnapshots(t *testing.T) {
 
 func TestAttentionListProjectsApprovalQuestionAndInterruptedRun(t *testing.T) {
 	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
-	view, err := New(store, WithSessionTranscriptProvider(staticTranscriptProvider{pages: map[string]clientui.TranscriptPage{
-		"session-attention-question": transcriptPageWithAsk("ask-attention", "Attention ask?"),
+	view, err := New(store, WithSessionTranscriptProvider(staticTranscriptProvider{entries: map[string][]clientui.ChatEntry{
+		"session-attention-question": transcriptEntriesWithAsk("ask-attention", "Attention ask?"),
 	}}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1764,8 +1764,8 @@ func TestPendingQuestionResolverFindsPendingAskAtTail(t *testing.T) {
 		entries = append(entries, clientui.ChatEntry{Role: "assistant", Text: "entry"})
 	}
 	entries = append(entries, askTranscriptEntry("ask-pending", "Question at tail?", nil, 0))
-	resolver := newPendingQuestionResolver(staticTranscriptProvider{pages: map[string]clientui.TranscriptPage{
-		"session-tail": {Entries: entries},
+	resolver := newPendingQuestionResolver(staticTranscriptProvider{entries: map[string][]clientui.ChatEntry{
+		"session-tail": entries,
 	}})
 
 	question, err := resolver.Question(context.Background(), "session-tail", "ask-pending")
@@ -1786,8 +1786,8 @@ func TestPendingQuestionResolverResolvesMultiplePendingAsksIntertwinedWithToolCa
 		{Role: "tool_call", ToolCallID: "shell-2", ToolCall: &clientui.ToolCallMeta{ToolName: "shell"}},
 		askTranscriptEntry("ask-2", "Second pending?", nil, 0),
 	}
-	resolver := newPendingQuestionResolver(staticTranscriptProvider{pages: map[string]clientui.TranscriptPage{
-		"session-multi": {Entries: entries},
+	resolver := newPendingQuestionResolver(staticTranscriptProvider{entries: map[string][]clientui.ChatEntry{
+		"session-multi": entries,
 	}})
 
 	first, err := resolver.Question(context.Background(), "session-multi", "ask-1")
@@ -1807,8 +1807,8 @@ func TestPendingQuestionResolverResolvesMultiplePendingAsksIntertwinedWithToolCa
 }
 
 func TestPendingQuestionResolverErrorsWhenQuestionMissingFromTranscript(t *testing.T) {
-	resolver := newPendingQuestionResolver(staticTranscriptProvider{pages: map[string]clientui.TranscriptPage{
-		"session-missing": transcriptPageWithAsk("other-ask", "Other?"),
+	resolver := newPendingQuestionResolver(staticTranscriptProvider{entries: map[string][]clientui.ChatEntry{
+		"session-missing": transcriptEntriesWithAsk("other-ask", "Other?"),
 	}})
 
 	_, err := resolver.Question(context.Background(), "session-missing", "missing-ask")
@@ -2067,21 +2067,19 @@ func isWorkflowRequestValidationField(err error, field string) bool {
 }
 
 type staticTranscriptProvider struct {
-	pages map[string]clientui.TranscriptPage
+	entries map[string][]clientui.ChatEntry
 }
 
-func (p staticTranscriptProvider) GetSessionTranscriptPage(_ context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
-	entries := append([]clientui.ChatEntry(nil), p.pages[strings.TrimSpace(req.SessionID)].Entries...)
-	page := clientui.TranscriptPage{Entries: entries}
-	return serverapi.SessionTranscriptPageResponse{Transcript: page}, nil
+func (p staticTranscriptProvider) SessionTranscriptTailEntries(_ context.Context, sessionID string) ([]clientui.ChatEntry, error) {
+	return append([]clientui.ChatEntry(nil), p.entries[strings.TrimSpace(sessionID)]...), nil
 }
 
-func transcriptPageWithAsk(askID string, question string) clientui.TranscriptPage {
-	return clientui.TranscriptPage{Entries: []clientui.ChatEntry{askTranscriptEntry(askID, question, nil, 0)}}
+func transcriptEntriesWithAsk(askID string, question string) []clientui.ChatEntry {
+	return []clientui.ChatEntry{askTranscriptEntry(askID, question, nil, 0)}
 }
 
-func transcriptPageWithAskOptions(askID string, question string, suggestions []string, recommended int) clientui.TranscriptPage {
-	return clientui.TranscriptPage{Entries: []clientui.ChatEntry{askTranscriptEntry(askID, question, suggestions, recommended)}}
+func transcriptEntriesWithAskOptions(askID string, question string, suggestions []string, recommended int) []clientui.ChatEntry {
+	return []clientui.ChatEntry{askTranscriptEntry(askID, question, suggestions, recommended)}
 }
 
 func askTranscriptEntry(askID string, question string, suggestions []string, recommended int) clientui.ChatEntry {

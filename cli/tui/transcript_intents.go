@@ -1,5 +1,9 @@
 package tui
 
+// Deprecated emergency path: this file survives the tui-redesign demolition
+// only to keep the branch's remaining transcript role mapping symbols
+// available until the replacement surface lands. Do not extend this file.
+
 import (
 	"strings"
 

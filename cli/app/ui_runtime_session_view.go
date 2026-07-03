@@ -8,20 +8,14 @@ func (m *uiModel) runtimeSessionView() clientui.RuntimeSessionView {
 }
 
 func (m *uiModel) localRuntimeSessionView() clientui.RuntimeSessionView {
-	transcript := m.localRuntimeTranscript()
-	committedEntryCount := max(m.transcriptTotalEntries, m.transcriptBaseOffset+len(transcript.Entries))
 	return clientui.RuntimeSessionView{
 		SessionID:             m.sessionID,
 		SessionName:           m.sessionName,
 		ConversationFreshness: m.conversationFreshness,
-		Transcript: clientui.TranscriptMetadata{
-			Revision:            transcript.Revision,
-			CommittedEntryCount: committedEntryCount,
-		},
 		Chat: clientui.ChatSnapshot{
-			Entries:           transcript.Entries,
-			Streaming:         transcript.Streaming,
-			StreamingMetadata: cloneClientAssistantStreamMetadata(transcript.StreamingMetadata),
+			Entries:           clientEntriesFromTranscriptEntries(m.transcriptEntries),
+			Streaming:         m.activeAssistantStreamSource,
+			StreamingMetadata: cloneClientAssistantStreamMetadata(&clientui.AssistantStreamMetadata{StepID: m.activeAssistantStreamIdentity.StepID}),
 		},
 	}
 }

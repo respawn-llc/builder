@@ -3,10 +3,7 @@ package app
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"go/types"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,73 +21,7 @@ func TestMainSurfaceTerminalWritesStayBehindApprovedInterfaces(t *testing.T) {
 		return
 	}
 	sort.Strings(violations)
-	t.Fatalf("main-surface terminal writes must go through the single NativeOngoingSurface owner or approved terminal notification paths:\n%s", strings.Join(violations, "\n"))
-}
-
-func TestNativeOngoingSurfaceAssistantStreamingCallSitesAreLocked(t *testing.T) {
-	repoRoot := mainSurfaceGuardRepositoryRoot(t)
-	callSites := collectNativeOngoingSurfaceAssistantStreamingCallSites(t, repoRoot)
-
-	actualContexts := make([]string, 0, len(callSites))
-	for _, callSite := range callSites {
-		actualContexts = append(actualContexts, callSite.context)
-	}
-	sort.Strings(actualContexts)
-
-	expectedContexts := []string{
-		"cli/app/ui_native_surface.go:StreamAssistantCommentaryContent",
-		"cli/app/ui_native_surface.go:StreamAssistantFinalAnswerContent",
-	}
-	if len(actualContexts) == len(expectedContexts) {
-		matches := true
-		for index := range expectedContexts {
-			if actualContexts[index] != expectedContexts[index] {
-				matches = false
-				break
-			}
-		}
-		if matches {
-			return
-		}
-	}
-
-	details := make([]string, 0, len(callSites))
-	for _, callSite := range callSites {
-		details = append(details, fmt.Sprintf("%s:%d:%d", callSite.context, callSite.line, callSite.column))
-	}
-	sort.Strings(details)
-	t.Fatalf("StreamMarkdownAssistantContent must have exactly two production selector call sites, one for commentary and one for final-answer streaming:\n%s", strings.Join(details, "\n"))
-}
-
-func TestUINativeSurfaceOwnsSingleNativeOngoingSurface(t *testing.T) {
-	repoRoot := mainSurfaceGuardRepositoryRoot(t)
-	uiNativeSurfacePath := filepath.Join(repoRoot, "cli", "app", "ui_native_surface.go")
-	fileSet := token.NewFileSet()
-	parsedFile, err := parser.ParseFile(fileSet, uiNativeSurfacePath, nil, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse ui_native_surface.go: %v", err)
-	}
-
-	fieldTypes := uiNativeSurfaceFieldTypes(parsedFile)
-	if _, ok := fieldTypes["stable"]; ok {
-		t.Fatal("uiNativeSurface must not hold a separate stable writer/owner field")
-	}
-	if _, ok := fieldTypes["live"]; ok {
-		t.Fatal("uiNativeSurface must not hold a separate live writer/owner field")
-	}
-	if got := fieldTypes["surface"]; got != "scrollback.NativeOngoingSurface" {
-		t.Fatalf("uiNativeSurface.surface = %q, want scrollback.NativeOngoingSurface", got)
-	}
-}
-
-func TestAppCodeDoesNotReferenceNativeLiveAreaImplementation(t *testing.T) {
-	repoRoot := mainSurfaceGuardRepositoryRoot(t)
-	violations := collectNativeLiveAreaImplementationReferences(t, repoRoot)
-	if len(violations) == 0 {
-		return
-	}
-	sort.Strings(violations)
-	t.Fatalf("app code must not construct or hold native live-area implementation details outside NativeOngoingSurface:\n%s", strings.Join(violations, "\n"))
+	t.Fatalf("main-surface terminal writes must go through approved terminal notification paths:\n%s", strings.Join(violations, "\n"))
 }
 
 func loadMainSurfaceGuardPackages(t *testing.T, repoRoot string) []*packages.Package {
@@ -108,194 +39,6 @@ func loadMainSurfaceGuardPackages(t *testing.T, repoRoot string) []*packages.Pac
 		t.Fatalf("TUI packages must type-check before scanning main-surface terminal writes:\n%s", strings.Join(errors, "\n"))
 	}
 	return pkgs
-}
-
-type nativeOngoingSurfaceAssistantStreamingCallSite struct {
-	context string
-	line    int
-	column  int
-}
-
-func collectNativeOngoingSurfaceAssistantStreamingCallSites(t *testing.T, repoRoot string) []nativeOngoingSurfaceAssistantStreamingCallSite {
-	t.Helper()
-
-	fileSet := token.NewFileSet()
-	callSites := []nativeOngoingSurfaceAssistantStreamingCallSite{}
-	err := filepath.WalkDir(repoRoot, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			if shouldSkipMainSurfaceGuardDir(entry.Name()) && path != repoRoot {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		relPath, ok := mainSurfaceGuardRelativePath(repoRoot, path)
-		if !ok {
-			return nil
-		}
-		parsedFile, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", relPath, err)
-		}
-		callSites = append(callSites, nativeOngoingSurfaceAssistantStreamingCallSitesInFile(fileSet, parsedFile, relPath)...)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("scan production Go files for StreamMarkdownAssistantContent call sites: %v", err)
-	}
-	return callSites
-}
-
-func shouldSkipMainSurfaceGuardDir(name string) bool {
-	switch name {
-	case ".git", ".kent", ".claude", "bin", "dist", "node_modules", "vendor":
-		return true
-	default:
-		return false
-	}
-}
-
-func nativeOngoingSurfaceAssistantStreamingCallSitesInFile(fileSet *token.FileSet, file *ast.File, relPath string) []nativeOngoingSurfaceAssistantStreamingCallSite {
-	callSites := []nativeOngoingSurfaceAssistantStreamingCallSite{}
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
-		}
-		context := relPath + ":" + fn.Name.Name
-		ast.Inspect(fn.Body, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || selector.Sel.Name != "StreamMarkdownAssistantContent" {
-				return true
-			}
-			position := fileSet.Position(call.Pos())
-			callSites = append(callSites, nativeOngoingSurfaceAssistantStreamingCallSite{
-				context: context,
-				line:    position.Line,
-				column:  position.Column,
-			})
-			return true
-		})
-	}
-	return callSites
-}
-
-func uiNativeSurfaceFieldTypes(file *ast.File) map[string]string {
-	for _, decl := range file.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.TYPE {
-			continue
-		}
-		for _, spec := range genDecl.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok || typeSpec.Name.Name != "uiNativeSurface" {
-				continue
-			}
-			structType, ok := typeSpec.Type.(*ast.StructType)
-			if !ok {
-				return nil
-			}
-			fields := map[string]string{}
-			for _, field := range structType.Fields.List {
-				fieldType := mainSurfaceGuardTypeString(field.Type)
-				for _, name := range field.Names {
-					fields[name.Name] = fieldType
-				}
-			}
-			return fields
-		}
-	}
-	return nil
-}
-
-func mainSurfaceGuardTypeString(expr ast.Expr) string {
-	switch typed := expr.(type) {
-	case *ast.Ident:
-		return typed.Name
-	case *ast.StarExpr:
-		return "*" + mainSurfaceGuardTypeString(typed.X)
-	case *ast.SelectorExpr:
-		return mainSurfaceGuardTypeString(typed.X) + "." + typed.Sel.Name
-	case *ast.ArrayType:
-		return "[]" + mainSurfaceGuardTypeString(typed.Elt)
-	case *ast.FuncType:
-		return "func"
-	default:
-		return fmt.Sprintf("%T", expr)
-	}
-}
-
-func collectNativeLiveAreaImplementationReferences(t *testing.T, repoRoot string) []string {
-	t.Helper()
-
-	fileSet := token.NewFileSet()
-	violations := []string{}
-	err := filepath.WalkDir(filepath.Join(repoRoot, "cli", "app"), func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			if shouldSkipMainSurfaceGuardDir(entry.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		relPath, ok := mainSurfaceGuardRelativePath(repoRoot, path)
-		if !ok {
-			return nil
-		}
-		parsedFile, err := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", relPath, err)
-		}
-		ast.Inspect(parsedFile, func(node ast.Node) bool {
-			if node == nil {
-				return true
-			}
-			if name := mainSurfaceGuardNodeName(node); forbiddenNativeLiveAreaImplementationName(name) {
-				position := fileSet.Position(node.Pos())
-				violations = append(violations, fmt.Sprintf("%s:%d:%d: %s", relPath, position.Line, position.Column, name))
-			}
-			return true
-		})
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("scan app production Go files for native live-area implementation references: %v", err)
-	}
-	return violations
-}
-
-func mainSurfaceGuardNodeName(node ast.Node) string {
-	switch typed := node.(type) {
-	case *ast.Ident:
-		return typed.Name
-	case *ast.SelectorExpr:
-		return typed.Sel.Name
-	default:
-		return ""
-	}
-}
-
-func forbiddenNativeLiveAreaImplementationName(name string) bool {
-	switch name {
-	case "NativeLiveArea", "NativeLiveAreaImpl", "newNativeLiveAreaImpl", "NewNativeLiveAreaImpl", "StableBuffer":
-		return true
-	default:
-		return false
-	}
 }
 
 func mainSurfaceGuardPackageErrors(pkgs []*packages.Package) []string {
@@ -368,18 +111,6 @@ type mainSurfaceGuardFunctionContext struct {
 }
 
 func mainSurfaceGuardAllowsTerminalWrite(context mainSurfaceGuardFunctionContext) bool {
-	if context.receiver == "OngoingScrollbackBufferImpl" {
-		switch context.name {
-		case "prepareNormalBufferLocked", "writeStableRowsDirectLocked":
-			return true
-		}
-	}
-	if context.receiver == "nativeLiveAreaImpl" {
-		switch context.name {
-		case "erasePhysicalLocked", "renderPhysicalLocked", "insertStableRowsLocked":
-			return true
-		}
-	}
 	if context.receiver == "uiTerminalCursorWriter" && context.name == "Write" {
 		return true
 	}

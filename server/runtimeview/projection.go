@@ -106,10 +106,6 @@ func SessionViewFromRuntime(engine *runtime.Engine) clientui.RuntimeSessionView 
 		SessionID:             engine.SessionID(),
 		SessionName:           engine.SessionName(),
 		ConversationFreshness: ConversationFreshnessFromSession(engine.ConversationFreshness()),
-		Transcript: clientui.TranscriptMetadata{
-			Revision:            engine.TranscriptRevision(),
-			CommittedEntryCount: engine.CommittedTranscriptEntryCount(),
-		},
 	}
 }
 
@@ -125,10 +121,6 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 		Kind:                         clientui.EventKind(evt.Kind),
 		StepID:                       evt.StepID,
 		CommittedTranscriptChanged:   evt.CommittedTranscriptChanged,
-		TranscriptRevision:           evt.TranscriptRevision,
-		CommittedEntryCount:          evt.CommittedEntryCount,
-		CommittedEntryStart:          evt.CommittedEntryStart,
-		CommittedEntryStartSet:       evt.CommittedEntryStartSet,
 		Error:                        evt.Error,
 		AssistantDelta:               evt.AssistantDelta,
 		AssistantDeltaPhase:          clientui.MessagePhase(evt.AssistantDeltaPhase),
@@ -329,9 +321,7 @@ func assistantStreamMetadataFromRuntime(metadata *runtime.AssistantStreamMetadat
 		return nil
 	}
 	return &clientui.AssistantStreamMetadata{
-		StepID:                  metadata.StepID,
-		BaseRevision:            metadata.BaseRevision,
-		BaseCommittedEntryCount: metadata.BaseCommittedEntryCount,
+		StepID: metadata.StepID,
 	}
 }
 

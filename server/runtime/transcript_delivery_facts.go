@@ -67,7 +67,12 @@ type TranscriptCacheWarningFact struct {
 
 func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFact {
 	switch evt.Kind {
-	case EventConversationUpdated, EventAssistantMessage:
+	case EventConversationUpdated:
+		if evt.Message.Role == llm.RoleTool {
+			return nil
+		}
+		return transcriptCommittedRowFactsFromMessage(evt.Message, evt.AssistantTranscriptStreamID, nil, nil)
+	case EventAssistantMessage:
 		return transcriptCommittedRowFactsFromMessage(evt.Message, evt.AssistantTranscriptStreamID, nil, nil)
 	case EventUserMessageFlushed:
 		if strings.TrimSpace(evt.UserMessage) == "" {

@@ -92,9 +92,6 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	if entry.Role != string(transcript.EntryRoleGoalFeedback) || entry.CondensedText != `Goal set: "ship goal mode"` {
 		t.Fatalf("event transcript entry = %+v, want goal feedback", entry)
 	}
-	if !evt.CommittedEntryStartSet || evt.CommittedEntryStart != 0 || evt.CommittedEntryCount != 1 {
-		t.Fatalf("event committed range start=%d set=%t count=%d, want start 0 count 1", evt.CommittedEntryStart, evt.CommittedEntryStartSet, evt.CommittedEntryCount)
-	}
 	statusEvt := events[1]
 	if statusEvt.Kind != EventGoalStatusUpdated || statusEvt.GoalStatus == nil {
 		t.Fatalf("status event = %+v, want goal status update", statusEvt)

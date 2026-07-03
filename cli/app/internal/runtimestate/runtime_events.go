@@ -36,21 +36,6 @@ type BackgroundNotice struct {
 	Kind    BackgroundNoticeKind
 }
 
-type RuntimeTranscriptSyncReason string
-
-const (
-	RuntimeTranscriptSyncNone                  RuntimeTranscriptSyncReason = ""
-	RuntimeTranscriptSyncStreamGap             RuntimeTranscriptSyncReason = "stream_gap"
-	RuntimeTranscriptSyncCommittedAdvance      RuntimeTranscriptSyncReason = "committed_advance"
-	RuntimeTranscriptSyncRecovery              RuntimeTranscriptSyncReason = "recovery"
-	RuntimeTranscriptSyncStreamingErrorUpdated RuntimeTranscriptSyncReason = "streaming_error_updated"
-)
-
-type RuntimeTranscriptSyncCommand struct {
-	Reason        RuntimeTranscriptSyncReason
-	RecoveryCause clientui.TranscriptRecoveryCause
-}
-
 type RuntimeAssistantStreamCommandKind uint8
 
 const (
@@ -67,7 +52,6 @@ type RuntimeAssistantStreamCommand struct {
 }
 
 type RuntimeTranscriptReduction struct {
-	Sync            RuntimeTranscriptSyncCommand
 	AssistantStream []RuntimeAssistantStreamCommand
 }
 
@@ -169,17 +153,6 @@ func ReduceRuntimeEvent(
 
 func ReduceRuntimeTranscriptEvent(evt clientui.Event) RuntimeTranscriptReduction {
 	switch evt.Kind {
-	case clientui.EventStreamGap:
-		return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncStreamGap, RecoveryCause: evt.RecoveryCause}}
-	case clientui.EventConversationUpdated:
-		if evt.RecoveryCause != clientui.TranscriptRecoveryCauseNone {
-			return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncRecovery, RecoveryCause: evt.RecoveryCause}}
-		}
-		if evt.CommittedTranscriptChanged {
-			return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncCommittedAdvance}}
-		}
-	case clientui.EventStreamingErrorUpdated:
-		return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncStreamingErrorUpdated}}
 	case clientui.EventAssistantDelta:
 		return RuntimeTranscriptReduction{AssistantStream: []RuntimeAssistantStreamCommand{{Kind: RuntimeAssistantStreamAppend, Delta: evt.AssistantDelta, Phase: evt.AssistantDeltaPhase, StepID: evt.StepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(evt.AssistantStreamMetadata)}}}
 	case clientui.EventAssistantDeltaReset:

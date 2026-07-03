@@ -129,7 +129,6 @@ func TestTranscriptDTOsDoNotReferenceLegacyShapes(t *testing.T) {
 	forbidden := map[reflect.Type]struct{}{
 		reflect.TypeOf(ChatEntry{}):                  {},
 		reflect.TypeOf(ChatSnapshot{}):               {},
-		reflect.TypeOf(TranscriptMetadata{}):         {},
 		reflect.TypeOf(RuntimeMainView{}):            {},
 		reflect.TypeOf(PendingPromptEvent{}):         {},
 		reflect.TypeOf(AttentionNotificationEvent{}): {},

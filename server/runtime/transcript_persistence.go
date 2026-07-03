@@ -45,9 +45,9 @@ func (p transcriptPersistenceCoordinator) AppendCommittedEntryWithVisibility(rol
 	}
 }
 
-func (p transcriptPersistenceCoordinator) AppendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string) (*AssistantStreamMetadata, *uuid.UUID) {
+func (p transcriptPersistenceCoordinator) AppendStreamingDelta(stepID string, delta string) (*AssistantStreamMetadata, *uuid.UUID) {
 	if chat := p.chatProjection(); chat != nil {
-		return chat.appendStreamingDelta(stepID, baseRevision, baseCommittedEntryCount, delta)
+		return chat.appendStreamingDelta(stepID, delta)
 	}
 	return nil, nil
 }
@@ -74,12 +74,8 @@ func (p transcriptPersistenceCoordinator) RestoreToolCompletionPayload(payload [
 }
 
 func (p transcriptPersistenceCoordinator) ReplaceHistory(items []llm.ResponseItem) {
-	p.ReplaceHistoryAtCommittedEntryStart(items, nil)
-}
-
-func (p transcriptPersistenceCoordinator) ReplaceHistoryAtCommittedEntryStart(items []llm.ResponseItem, committedEntryStart *int) {
 	if chat := p.chatProjection(); chat != nil {
-		chat.replaceHistoryAtCommittedEntryStart(items, committedEntryStart)
+		chat.replaceHistory(items)
 	}
 }
 

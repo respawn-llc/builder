@@ -1,5 +1,8 @@
 package tui
 
+// Deprecated emergency path: this file survives tui-redesign demolition only
+// as the temporary non-native transcript surface for this branch. Do not extend.
+
 import (
 	"core/shared/clientui"
 	"core/shared/theme"
@@ -24,7 +27,6 @@ const (
 type TranscriptEntry struct {
 	Visibility        transcript.EntryVisibility
 	RollbackTargetID  string
-	Transient         bool
 	Committed         bool
 	Role              TranscriptRole
 	Text              string
@@ -72,7 +74,6 @@ type SetViewportSizeMsg struct {
 
 type AppendTranscriptMsg struct {
 	Visibility        transcript.EntryVisibility
-	Transient         bool
 	Committed         bool
 	Role              TranscriptRole
 	Text              string
