@@ -120,6 +120,9 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	if err := rejectManualMoveDuringActiveRunWithQueries(ctx, q, req.TaskID); err != nil {
+		return ManualMoveResult{}, err
+	}
 	if pendingApprovalTransitionID != "" {
 		// The task is awaiting approval and has no active placement (its source
 		// placement is already completed). Manually moving it overrides the
@@ -198,7 +201,11 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 }
 
 func (s *Store) rejectManualMoveDuringActiveRun(ctx context.Context, taskID workflow.TaskID) error {
-	runs, err := s.queries.ListInterruptTaskRunCandidates(ctx, sqlitegen.ListInterruptTaskRunCandidatesParams{
+	return rejectManualMoveDuringActiveRunWithQueries(ctx, s.queries, taskID)
+}
+
+func rejectManualMoveDuringActiveRunWithQueries(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) error {
+	runs, err := q.ListInterruptTaskRunCandidates(ctx, sqlitegen.ListInterruptTaskRunCandidatesParams{
 		TaskID:    string(taskID),
 		SessionID: "",
 	})
