@@ -541,7 +541,9 @@ func (e *Engine) launchGoalLoopTask(firstTurnAlreadyPrompted bool) {
 func (e *Engine) finishGoalLoop() {
 	if e.goalLoopState().Finish(e.goalActive()) {
 		e.launchGoalLoopTask(true)
+		return
 	}
+	e.finishLiveRunGoalLoop()
 }
 
 func (e *Engine) runGoalLoop(ctx context.Context, firstTurnAlreadyPrompted bool) {
@@ -634,6 +636,13 @@ func (e *Engine) shouldContinueGoalLoop(ctx context.Context) bool {
 		return false
 	}
 	return !e.goalLoopState().Suspended() && e.goalActive()
+}
+
+func (e *Engine) shouldHoldLiveRunForGoalLoopContinuation(snapshot *RunSnapshot, status RunStatus) bool {
+	if e == nil || snapshot == nil || !snapshot.GoalLoop || status != RunStatusCompleted {
+		return false
+	}
+	return e.goalLoopState().ContinuationEnforced() && e.shouldContinueGoalLoop(context.Background())
 }
 
 func (e *Engine) goalActive() bool {

@@ -117,6 +117,40 @@ func TestRoutePolicyAuthorizesGoalExceptionWithoutWebSocket(t *testing.T) {
 	}
 }
 
+func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing.T) {
+	fixture := newRoutePolicyFixture(t)
+	executor := newRoutePolicyExecutor(fixture.gateway)
+	ctx := context.Background()
+	requiredRoute := routeForTest(t, protocol.MethodRuntimeLiveSteer)
+	waitRoute := routeForTest(t, protocol.MethodRuntimeLiveWait)
+	stopRoute := routeForTest(t, protocol.MethodRuntimeLiveStop)
+
+	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       fixture.ownSessionID,
+		Text:            "steer",
+	}); err != nil {
+		t.Fatalf("live steer root-scoped existing session: %v", err)
+	}
+	if err := executor.authorizeScope(ctx, &connectionState{}, waitRoute, serverapi.RuntimeLiveWaitRequest{SessionID: fixture.ownSessionID}); err != nil {
+		t.Fatalf("live wait root-scoped existing session: %v", err)
+	}
+	missing := "6ff7ace4-e08b-43fc-b425-73242f0b3d26"
+	if err := executor.authorizeScope(ctx, &connectionState{}, requiredRoute, serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       missing,
+		Text:            "steer",
+	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("missing required live session error = %v, want ErrRuntimeUnavailable", err)
+	}
+	if err := executor.authorizeScope(ctx, &connectionState{}, stopRoute, serverapi.RuntimeLiveStopRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       missing,
+	}); err != nil {
+		t.Fatalf("optional live stop missing session: %v", err)
+	}
+}
+
 func TestRoutePolicyAuthorizesProcessScopesWithoutWebSocket(t *testing.T) {
 	fixture := newRoutePolicyFixture(t)
 	fixture.appCore.Background().SetMinimumExecToBgTime(time.Millisecond)

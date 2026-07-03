@@ -19,7 +19,27 @@ Continue an existing headless session:
 kent run --continue <session-id> "<follow-up>"
 ```
 
+Control an active shared run from another shell or agent:
+
+```bash
+kent run steer <session-id> "adjust the next step"
+kent run stop <session-id>
+kent run wait <session-id>
+```
+
 `kent run` needs a server connection to keep long-running shells and agents properly orchestrated. If you want to script kent runs, make sure the [Server](../server/) is running.
+
+## Live Controls
+
+Live controls target an explicitly named active session. They do not use `KENT_SESSION_ID` as a default, and they reject targeting their own `KENT_SESSION_ID`.
+
+`kent run steer <session-id> <message...>` queues a non-empty message into an already-active run and prints `ok`. If the run is idle, Kent reports the equivalent `kent run --continue <session-id> <message>` command instead of starting a new turn.
+
+`kent run stop <session-id>` interrupts the active shared runtime. It prints `Stopped` when it interrupts work, and `No active run` when the session is idle or nonexistent.
+
+`kent run wait <session-id>` waits for the active run's final answer and prints the same final-text shape as `kent run`. `kent run wait --output-mode=json <session-id>` uses the same JSON result object as ordinary JSON headless runs.
+
+Live steering is command-based only; standard input is not interpreted as steering.
 
 ## Subagent Roles
 

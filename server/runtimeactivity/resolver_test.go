@@ -133,6 +133,19 @@ func TestResolveRuntimeActivityKeepsPassiveQueuedFactsIdle(t *testing.T) {
 	}
 }
 
+func TestResolveRuntimeActivityTreatsOpenLiveRunGroupAsBlocking(t *testing.T) {
+	activity, err := ResolveRuntimeActivity(ResolverSnapshot{
+		Registry:      RegistrySnapshot{Registered: true, QueueAccepting: true},
+		LiveRunActive: true,
+	})
+	if err != nil {
+		t.Fatalf("ResolveRuntimeActivity: %v", err)
+	}
+	if activity.State != clientui.RuntimeActivityDraining || !activity.ActiveForControl() {
+		t.Fatalf("activity = %+v, want blocking live-run group projection", activity)
+	}
+}
+
 func TestCoordinatorResponseSnapshotsUseOneVersionAndPermitResponseOnlyHoles(t *testing.T) {
 	cache := NewCoordinatorCache(4)
 	first, err := cache.Snapshot("session-1", ResolverSnapshot{Registry: RegistrySnapshot{Registered: true}})

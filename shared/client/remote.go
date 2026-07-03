@@ -607,6 +607,18 @@ func (c *Remote) QueueUserMessage(ctx context.Context, req serverapi.RuntimeQueu
 	return callControlRPC[serverapi.RuntimeQueueUserMessageRequest, serverapi.RuntimeQueueUserMessageResponse](c, ctx, protocol.MethodRuntimeQueueUserMessage, req)
 }
 
+func (c *Remote) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error) {
+	return callControlRPC[serverapi.RuntimeLiveSteerRequest, serverapi.RuntimeLiveSteerResponse](c, ctx, protocol.MethodRuntimeLiveSteer, req)
+}
+
+func (c *Remote) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequest) (serverapi.RuntimeLiveStopResponse, error) {
+	return callDedicatedRPC[serverapi.RuntimeLiveStopRequest, serverapi.RuntimeLiveStopResponse](c, ctx, "runtime-live-stop", protocol.MethodRuntimeLiveStop, req)
+}
+
+func (c *Remote) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error) {
+	return callDedicatedRPC[serverapi.RuntimeLiveWaitRequest, serverapi.RuntimeLiveWaitResponse](c, ctx, "runtime-live-wait", protocol.MethodRuntimeLiveWait, req)
+}
+
 func (c *Remote) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
 	return callControlRPC[serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](c, ctx, protocol.MethodRuntimeDiscardQueuedUserMessage, req)
 }
@@ -778,6 +790,7 @@ var _ SessionViewClient = (*Remote)(nil)
 var _ SessionLifecycleClient = (*Remote)(nil)
 var _ SessionRuntimeClient = (*Remote)(nil)
 var _ RuntimeControlClient = (*Remote)(nil)
+var _ RuntimeLiveControlClient = (*Remote)(nil)
 var _ ProcessViewClient = (*Remote)(nil)
 var _ ProcessControlClient = (*Remote)(nil)
 var _ ProcessOutputClient = (*Remote)(nil)

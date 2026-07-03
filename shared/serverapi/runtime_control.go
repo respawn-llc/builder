@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/transcript"
 )
 
@@ -161,6 +162,58 @@ type RuntimeQueueUserMessageResponse struct {
 	ClientRequestID string `json:"client_request_id"`
 }
 
+type RuntimeLiveSteerRequest struct {
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+	Text            string `json:"text"`
+}
+
+type RuntimeLiveSteerResponse struct {
+	QueueItemID     string `json:"queue_item_id"`
+	Text            string `json:"text"`
+	ClientRequestID string `json:"client_request_id"`
+}
+
+type RuntimeLiveStopRequest struct {
+	ClientRequestID string `json:"client_request_id"`
+	SessionID       string `json:"session_id"`
+}
+
+type RuntimeLiveStopStatus string
+
+const (
+	RuntimeLiveStopStatusStopped RuntimeLiveStopStatus = "stopped"
+	RuntimeLiveStopStatusIdle    RuntimeLiveStopStatus = "idle"
+)
+
+type RuntimeLiveStopResponse struct {
+	Status RuntimeLiveStopStatus `json:"status"`
+}
+
+type RuntimeLiveWaitRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type RuntimeLiveResultKind string
+
+const (
+	RuntimeLiveResultKindAssistantFinalAnswer RuntimeLiveResultKind = "assistant_final_answer"
+	RuntimeLiveResultKindNoFinalAnswer        RuntimeLiveResultKind = "no_final_answer"
+)
+
+type RuntimeLiveWaitResponse struct {
+	SessionID      string                `json:"session_id"`
+	SessionName    string                `json:"session_name"`
+	Result         *string               `json:"result"`
+	DurationMillis int64                 `json:"duration_ms"`
+	LiveRunGroupID string                `json:"live_run_group_id"`
+	TerminalRunID  string                `json:"terminal_run_id"`
+	TerminalStepID string                `json:"terminal_step_id"`
+	TerminalStatus string                `json:"terminal_status"`
+	ResultKind     RuntimeLiveResultKind `json:"result_kind"`
+	NoAnswerReason *string               `json:"no_answer_reason"`
+}
+
 type RuntimeDiscardQueuedUserMessageRequest struct {
 	ClientRequestID string `json:"client_request_id"`
 	SessionID       string `json:"session_id"`
@@ -222,6 +275,17 @@ func validateClientRequestID(clientRequestID string) error {
 		return errors.New("client_request_id is required")
 	}
 	return nil
+}
+
+func validateUUIDV4Field(name string, value string) error {
+	return runtimeids.ValidateUUIDv4(value, name)
+}
+
+func validateRuntimeLiveControlRequest(clientRequestID string, sessionID string) error {
+	if err := validateUUIDV4Field("client_request_id", clientRequestID); err != nil {
+		return err
+	}
+	return validateUUIDV4Field("session_id", sessionID)
 }
 
 func validateGoalActor(actor string) error {
@@ -364,6 +428,77 @@ func (r RuntimeQueueUserMessageRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.Text) == "" {
 		return errors.New("text is required")
+	}
+	return nil
+}
+func (r RuntimeLiveSteerRequest) Validate() error {
+	if err := validateRuntimeLiveControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.Text) == "" {
+		return errors.New("text is required")
+	}
+	return nil
+}
+func (r RuntimeLiveSteerResponse) Validate() error {
+	if err := validateUUIDV4Field("client_request_id", r.ClientRequestID); err != nil {
+		return err
+	}
+	if err := validateUUIDV4Field("queue_item_id", r.QueueItemID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.Text) == "" {
+		return errors.New("text is required")
+	}
+	return nil
+}
+func (r RuntimeLiveStopRequest) Validate() error {
+	return validateRuntimeLiveControlRequest(r.ClientRequestID, r.SessionID)
+}
+func (r RuntimeLiveStopResponse) Validate() error {
+	switch r.Status {
+	case RuntimeLiveStopStatusStopped, RuntimeLiveStopStatusIdle:
+		return nil
+	default:
+		return errors.New("status must be stopped or idle")
+	}
+}
+func (r RuntimeLiveWaitRequest) Validate() error {
+	return validateUUIDV4Field("session_id", r.SessionID)
+}
+func (r RuntimeLiveWaitResponse) Validate() error {
+	if err := validateUUIDV4Field("session_id", r.SessionID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(r.SessionName) == "" {
+		return errors.New("session_name is required")
+	}
+	for name, value := range map[string]string{
+		"live_run_group_id": r.LiveRunGroupID,
+		"terminal_run_id":   r.TerminalRunID,
+		"terminal_step_id":  r.TerminalStepID,
+	} {
+		if err := validateUUIDV4Field(name, value); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(r.TerminalStatus) == "" {
+		return errors.New("terminal_status is required")
+	}
+	if r.DurationMillis < 0 {
+		return errors.New("duration_ms must not be negative")
+	}
+	switch r.ResultKind {
+	case RuntimeLiveResultKindAssistantFinalAnswer:
+		if r.Result == nil || strings.TrimSpace(*r.Result) == "" {
+			return errors.New("result is required")
+		}
+	case RuntimeLiveResultKindNoFinalAnswer:
+		if r.NoAnswerReason == nil || strings.TrimSpace(*r.NoAnswerReason) == "" {
+			return errors.New("no_answer_reason is required")
+		}
+	default:
+		return errors.New("result_kind must be assistant_final_answer or no_final_answer")
 	}
 	return nil
 }

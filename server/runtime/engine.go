@@ -16,6 +16,7 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 
 	"github.com/google/uuid"
@@ -175,6 +176,7 @@ type Engine struct {
 	queuedUserWorkScheduled    bool
 	queuedUserWorkPauseCount   int
 	queuedUserWorkAutoDrainIDs map[string]struct{}
+	liveRun                    *liveRunCoordinator
 	activeStepGoalMutationsMu  sync.Mutex
 	activeStepGoalMutations    map[string][]activeStepGoalMutation
 	pendingGoalLoopStart       bool
@@ -521,15 +523,64 @@ func (e *Engine) QueueUserMessage(text string) QueuedUserMessage {
 }
 
 func (e *Engine) QueueUserMessageWithClientRequestID(text string, clientRequestID string) QueuedUserMessage {
+	return e.queueUserMessageWithClientRequestID(text, clientRequestID, false)
+}
+
+func (e *Engine) queueUserMessageWithClientRequestID(text string, clientRequestID string, forceAutoDrain bool) QueuedUserMessage {
 	e.ensureOrchestrationCollaborators()
-	wasBusy := e.stepLifecycle != nil && e.stepLifecycle.IsBusy()
+	liveItem := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Text: text, ClientRequestID: clientRequestID}
+	waitedForLiveRunStep := false
+	for {
+		if e.liveRun.beginQueueItemPublication(mustQueueItemID(liveItem.ID), func(queueItemID string) {
+			e.markQueuedUserInjectionForAutoDrain(queueItemID)
+		}) {
+			item := e.messageFlow.QueueUserMessageWithID(liveItem)
+			e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
+			queueItemID := mustQueueItemID(item.ID)
+			if e.liveRun.finishQueueItemPublication(queueItemID) {
+				e.failStoppedLiveRunQueueItems(map[runtimeids.QueueItemID]struct{}{queueItemID: {}})
+			} else {
+				e.scheduleQueuedUserInjectionsIfIdle()
+			}
+			return item
+		}
+		if !e.waitingForLiveRunStepStart() {
+			break
+		}
+		waitedForLiveRunStep = true
+		time.Sleep(time.Millisecond)
+	}
+	if waitedForLiveRunStep {
+		e.emitQueuedUserMessageStatus(liveItem, QueuedUserMessageFailed, QueuedUserMessageFailureStopped, true)
+		return liveItem
+	}
 	item := e.messageFlow.QueueUserMessage(text, clientRequestID)
 	e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
-	if wasBusy {
+	if forceAutoDrain || (!waitedForLiveRunStep && e.stepLifecycle != nil && e.stepLifecycle.IsBusy()) {
 		e.markQueuedUserInjectionForAutoDrain(item.ID)
 		e.scheduleQueuedUserInjectionsIfIdle()
 	}
 	return item
+}
+
+func (e *Engine) waitingForLiveRunStepStart() bool {
+	if e == nil || e.stepLifecycle == nil {
+		return false
+	}
+	snapshot := e.stepLifecycle.Snapshot()
+	if snapshot == nil {
+		return false
+	}
+	return activeKindUsesLiveRun(snapshot.ActiveKind)
+}
+
+func activeKindUsesLiveRun(kind ActiveKind) bool {
+	switch kind {
+	case ActiveKindCompaction, ActiveKindPreSubmitCompaction, ActiveKindRuntimeMaintenance:
+		return false
+	default:
+		return true
+	}
 }
 
 func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
@@ -537,6 +588,7 @@ func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
 	item, discarded := e.messageFlow.DiscardQueuedUserMessage(queueItemID)
 	if discarded {
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
+		e.completeLiveRunQueueItems(map[string]struct{}{item.ID: {}})
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageDiscarded, "", false)
 	}
 	return discarded
@@ -708,6 +760,7 @@ func (e *Engine) runStepLoopWithPendingUserInjectionIDs(ctx context.Context, ste
 	if result.NoopFinalAnswer {
 		return llm.Message{}, err
 	}
+	e.recordLiveRunAssistantFinalAnswer(stepID, result.Message)
 	return result.Message, err
 }
 

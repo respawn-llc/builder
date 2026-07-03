@@ -30,7 +30,7 @@ import (
 
 var ErrHeadlessGoalSession = errors.New("headless runs cannot continue sessions with goals; clear the goal first")
 
-var ErrSessionRunning = errors.New("the target session is not finished - it still has an active run. Communicate with the agent via --steer or stdin on the active `run` process, stop the run, or wait for it to finish first")
+var ErrSessionRunning = errors.New("selected session has an active run")
 
 // ErrHeadlessAskUnsupported is returned by the headless ask handler when the
 // model attempts to ask a question in headless/background mode, where no
@@ -277,9 +277,23 @@ func (r *headlessPromptRuntime) SubmitUserMessage(ctx context.Context, prompt st
 		err = errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("headless session %q has no acquired runtime", r.plan.sessionID))
 	} else {
 		err = r.plan.sessionRuntime.RunOnAcquiredRuntime(ctx, r.plan.sessionID, r.plan.engine, func(runCtx context.Context) error {
-			assistant, submitErr := r.plan.engine.SubmitUserMessage(runCtx, prompt)
+			var waitHandle *runtime.LiveRunWaitHandle
+			var waitStartErr error
+			assistant, submitErr := r.plan.engine.SubmitUserMessageWithHooks(runCtx, prompt, func() {
+				waitHandle, waitStartErr = r.plan.engine.CaptureActiveRunResult(runCtx)
+			}, nil)
 			content = assistant.Content
 			sessionName = r.plan.engine.SessionName()
+			if waitHandle != nil {
+				result, waitErr := waitHandle.Wait()
+				if waitErr == nil {
+					content = result.AssistantMessage.Content
+				} else if submitErr == nil {
+					submitErr = waitErr
+				}
+			} else if waitStartErr != nil && submitErr == nil {
+				submitErr = waitStartErr
+			}
 			return submitErr
 		})
 	}

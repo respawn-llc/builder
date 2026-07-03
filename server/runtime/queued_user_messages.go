@@ -27,7 +27,15 @@ func (s *queuedUserMessageStore) Queue(text string, clientRequestID ...string) Q
 	if len(clientRequestID) > 0 {
 		requestID = clientRequestID[0]
 	}
-	item := QueuedUserMessage{ID: uuid.NewString(), Text: text, ClientRequestID: strings.TrimSpace(requestID)}
+	return s.QueueItem(QueuedUserMessage{ID: uuid.NewString(), Text: text, ClientRequestID: strings.TrimSpace(requestID)})
+}
+
+func (s *queuedUserMessageStore) QueueItem(item QueuedUserMessage) QueuedUserMessage {
+	item.ID = strings.TrimSpace(item.ID)
+	if item.ID == "" {
+		item.ID = uuid.NewString()
+	}
+	item.ClientRequestID = strings.TrimSpace(item.ClientRequestID)
 	intent := steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleUser, Content: item.Text}})
 	s.mu.Lock()
 	s.pending = append(s.pending, queuedUserSteeringIntent{message: item, intent: intent})

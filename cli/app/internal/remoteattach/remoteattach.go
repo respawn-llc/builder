@@ -201,6 +201,10 @@ func SupportsRunPrompt(flags protocol.CapabilityFlags) bool {
 	return flags.RunPrompt && flags.AuthBootstrap && flags.ProjectAttach
 }
 
+func SupportsRuntimeLiveControl(flags protocol.CapabilityFlags) bool {
+	return flags.RuntimeLiveControl && flags.RuntimeControl && flags.AuthBootstrap
+}
+
 func SupportsInteractiveSession(flags protocol.CapabilityFlags) bool {
 	return flags.AuthBootstrap &&
 		flags.ProjectAttach &&

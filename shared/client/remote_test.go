@@ -706,6 +706,16 @@ func TestProtocolErrorMapsRuntimeUnavailableCode(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorAvoidsDuplicatingRuntimeSentinelMessage(t *testing.T) {
+	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeRuntimeNoActiveRun, Message: serverapi.ErrRuntimeNoActiveRun.Error()})
+	if !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		t.Fatalf("expected runtime no-active, got %v", err)
+	}
+	if err.Error() != serverapi.ErrRuntimeNoActiveRun.Error() {
+		t.Fatalf("runtime no-active error text = %q, want %q", err.Error(), serverapi.ErrRuntimeNoActiveRun.Error())
+	}
+}
+
 func TestProtocolErrorMapsRequestCanceledCodeToClearMessage(t *testing.T) {
 	err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeRequestCanceled, Message: "context canceled"})
 	if !errors.Is(err, context.Canceled) {

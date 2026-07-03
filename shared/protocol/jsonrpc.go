@@ -36,6 +36,8 @@ const (
 	ErrCodeWorkflowTaskCompleteAmbiguous = -32026
 	ErrCodeWorkflowTaskCompleteNotFound  = -32027
 	ErrCodeModelStreamStalled            = -32028
+	ErrCodeRuntimeNoActiveRun            = -32029
+	ErrCodeRuntimeNoFinalAnswer          = -32030
 )
 
 type Request struct {

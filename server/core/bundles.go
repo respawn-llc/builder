@@ -78,13 +78,14 @@ type PromptBundle struct {
 }
 
 type RuntimeBundle struct {
-	fastModeState    *runtime.FastModeState
-	background       *shelltool.Manager
-	backgroundRouter *runtimewire.BackgroundEventRouter
-	runtimeRegistry  *registry.RuntimeRegistry
-	runtimeControls  client.RuntimeControlClient
-	sessionRuntime   client.SessionRuntimeClient
-	sessionActivity  client.SessionActivityClient
+	fastModeState       *runtime.FastModeState
+	background          *shelltool.Manager
+	backgroundRouter    *runtimewire.BackgroundEventRouter
+	runtimeRegistry     *registry.RuntimeRegistry
+	runtimeControls     client.RuntimeControlClient
+	runtimeLiveControls client.RuntimeLiveControlClient
+	sessionRuntime      client.SessionRuntimeClient
+	sessionActivity     client.SessionActivityClient
 
 	sessionRuntimeService *sessionruntime.Service
 }
@@ -290,13 +291,14 @@ func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *
 
 func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegistry *registry.RuntimeRegistry, runtimeControlService *runtimecontrol.Service, sessionRuntimeService *sessionruntime.Service, sessionActivityService *sessionservice.SessionActivityService) *RuntimeBundle {
 	return &RuntimeBundle{
-		fastModeState:    runtimeSupport.FastModeState,
-		background:       runtimeSupport.Background,
-		backgroundRouter: runtimeSupport.BackgroundRouter,
-		runtimeRegistry:  runtimeRegistry,
-		runtimeControls:  client.NewLoopbackRuntimeControlClient(runtimeControlService),
-		sessionRuntime:   client.NewLoopbackSessionRuntimeClient(sessionRuntimeService),
-		sessionActivity:  client.NewLoopbackSessionActivityClient(sessionActivityService),
+		fastModeState:       runtimeSupport.FastModeState,
+		background:          runtimeSupport.Background,
+		backgroundRouter:    runtimeSupport.BackgroundRouter,
+		runtimeRegistry:     runtimeRegistry,
+		runtimeControls:     client.NewLoopbackRuntimeControlClient(runtimeControlService),
+		runtimeLiveControls: client.NewLoopbackRuntimeLiveControlClient(runtimeControlService),
+		sessionRuntime:      client.NewLoopbackSessionRuntimeClient(sessionRuntimeService),
+		sessionActivity:     client.NewLoopbackSessionActivityClient(sessionActivityService),
 
 		sessionRuntimeService: sessionRuntimeService,
 	}

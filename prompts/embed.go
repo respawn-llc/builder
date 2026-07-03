@@ -282,6 +282,7 @@ var (
 	WorkflowUnstructuredCompletionInstructionsPrompt = mustPrompt("workflow/unstructured_completion_instructions.md")
 	WorkflowFinalAnswerNudgePrompt                   = mustPrompt("workflow/final_answer_nudge.md")
 	WorkflowHumanOnlyTaskActionDeniedPrompt          = mustPrompt("workflow/human_only_task_action_denied.md")
+	WorkflowLiveControlSelfTargetDeniedPrompt        = mustPrompt("workflow/live_control_self_target_denied.md")
 	WorkflowTaskCompleteAgentOwnershipErrorPrompt    = strings.TrimSpace(mustPrompt("workflow/task_complete_agent_ownership_error.md"))
 	WorkflowTaskCompleteHumanSafetyWarningPrompt     = strings.TrimSpace(mustPrompt("workflow/task_complete_human_safety_warning.md"))
 	WorktreeModePrompt                               = mustPrompt("worktree_mode_prompt.md")
@@ -403,6 +404,12 @@ func RenderGoalAgentDuplicateSetDeniedPrompt(objective, status string) string {
 
 func RenderGoalCompleteConfirmRequiredPrompt(objective string) string {
 	return renderGoalPrompt("goal complete confirm required", GoalCompleteConfirmRequiredPrompt, objective, "")
+}
+
+func RenderLiveControlSelfTargetDeniedPrompt(commandText string) string {
+	return renderTemplatePlaceholders(WorkflowLiveControlSelfTargetDeniedPrompt, map[string]string{
+		"{{command}}": strings.TrimSpace(commandText),
+	})
 }
 
 func RenderWorktreeModePrompt(branch, cwd, worktreePath, workspaceRoot string) string {

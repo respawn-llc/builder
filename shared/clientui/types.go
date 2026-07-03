@@ -98,6 +98,7 @@ const (
 	QueuedUserMessageFailureClosing                    QueuedUserMessageFailureReason = "closing"
 	QueuedUserMessageFailureTerminalWorkflowCompletion QueuedUserMessageFailureReason = "terminal_workflow_completion"
 	QueuedUserMessageFailureRuntimeUnavailable         QueuedUserMessageFailureReason = "runtime_unavailable"
+	QueuedUserMessageFailureStopped                    QueuedUserMessageFailureReason = "stopped"
 )
 
 type QueuedUserMessageStatusEvent struct {

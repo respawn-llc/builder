@@ -793,7 +793,7 @@ func TestQueuedSubmitRetryFailsQueuedSteeringWhenWorkflowCompletesWhileBusy(t *t
 	}
 }
 
-func TestWorkflowAutoDrainTerminalCompletionFailsLaterIdleQueuedSteering(t *testing.T) {
+func TestWorkflowInterruptedAutoDrainLeavesLaterIdleQueuedSteeringPending(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := newBlockingThenQueuedResponseClient(structuredFinalResponse(`{"commentary":"complete","summary":"done"}`))
@@ -839,20 +839,14 @@ func TestWorkflowAutoDrainTerminalCompletionFailsLaterIdleQueuedSteering(t *test
 		t.Fatal("timed out waiting for queued steering call to return")
 	}
 	waitEngineLifecycleTasks(t, eng)
-	if got := client.callCount(); got != 2 {
-		t.Fatalf("model calls = %d, want interrupted run plus auto drain", got)
+	if got := client.callCount(); got != 1 {
+		t.Fatalf("model calls = %d, want interrupted run only", got)
 	}
-	if eng.HasQueuedUserWork() {
-		t.Fatal("queued user work remained after terminal auto drain")
+	if !eng.HasQueuedUserWork() {
+		t.Fatal("expected explicit idle queue to remain pending")
 	}
-	foundExplicitFailure := false
-	for _, status := range statuses {
-		if status.QueueItemID == explicit.ID && status.Status == QueuedUserMessageFailed && status.FailureReason == QueuedUserMessageFailureTerminalWorkflowCompletion {
-			foundExplicitFailure = true
-		}
-	}
-	if !foundExplicitFailure {
-		t.Fatalf("queued statuses = %+v, want terminal failure for explicit idle queue %q", statuses, explicit.ID)
+	if !eng.DiscardQueuedUserMessage(explicit.ID) {
+		t.Fatalf("expected explicit idle queue %q to remain discardable; statuses=%+v", explicit.ID, statuses)
 	}
 }
 

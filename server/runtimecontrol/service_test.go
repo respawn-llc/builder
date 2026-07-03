@@ -441,6 +441,109 @@ func TestServiceInterruptReturnsUnavailableActivityWithoutEngine(t *testing.T) {
 	}
 }
 
+func TestServiceLiveSteerRequiresActiveRun(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	_, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       store.Meta().SessionID,
+		Text:            "steer while idle",
+	})
+	if !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		t.Fatalf("LiveSteer idle error = %v, want ErrRuntimeNoActiveRun", err)
+	}
+	if countPromptHistoryEvents(t, store, "steer while idle") != 0 {
+		t.Fatal("idle LiveSteer recorded prompt history")
+	}
+}
+
+func TestServiceLiveSteerUnavailableRuntimeStaysUnavailable(t *testing.T) {
+	service := NewService(stubRuntimeResolver{})
+	_, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       "018fdd67-89ab-4cde-8123-456789abcdef",
+		Text:            "steer closed runtime",
+	})
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("LiveSteer unavailable runtime error = %v, want ErrRuntimeUnavailable", err)
+	}
+	if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		t.Fatalf("LiveSteer unavailable runtime also returned ErrRuntimeNoActiveRun: %v", err)
+	}
+}
+
+func TestServiceLiveWaitUnavailableRuntimeStaysUnavailable(t *testing.T) {
+	service := NewService(stubRuntimeResolver{})
+	_, err := service.LiveWait(context.Background(), serverapi.RuntimeLiveWaitRequest{
+		SessionID: "018fdd67-89ab-4cde-8123-456789abcdef",
+	})
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("LiveWait unavailable runtime error = %v, want ErrRuntimeUnavailable", err)
+	}
+	if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
+		t.Fatalf("LiveWait unavailable runtime also returned ErrRuntimeNoActiveRun: %v", err)
+	}
+}
+
+func TestServiceLiveSteerRecordsHistoryAfterActiveAdmission(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "keep running")
+		submitDone <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active runtime")
+	}
+	resp, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       store.Meta().SessionID,
+		Text:            " steer live ",
+	})
+	if err != nil {
+		t.Fatalf("LiveSteer: %v", err)
+	}
+	if resp.QueueItemID == "" || resp.Text != "steer live" || resp.ClientRequestID != "8b0364cc-5c6c-412e-a4e8-31380661d1e1" {
+		t.Fatalf("LiveSteer response = %+v", resp)
+	}
+	waitForRuntimeControlPromptHistoryCount(t, runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID), "steer live", 1)
+	_, _ = service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
+		ClientRequestID: "6859fdfa-6808-4109-a031-de3d432e88dd",
+		SessionID:       store.Meta().SessionID,
+	})
+	close(client.release)
+	<-submitDone
+}
+
+func TestServiceLiveStopIdleReturnsIdle(t *testing.T) {
+	store, _, service := newRuntimeControlTestService(t, finalResponseRuntimeControlClient(), nil, runtime.Config{})
+	resp, err := service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
+		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		SessionID:       store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("LiveStop idle: %v", err)
+	}
+	if resp.Status != serverapi.RuntimeLiveStopStatusIdle {
+		t.Fatalf("LiveStop idle status = %q", resp.Status)
+	}
+}
+
+func runtimeControlPromptHistoryStoresLoad(t *testing.T, sessionID string) *runtimeControlPromptHistoryStore {
+	t.Helper()
+	registered, ok := runtimeControlPromptHistoryStores.Load(sessionID)
+	if !ok {
+		t.Fatalf("prompt history store for %q not registered", sessionID)
+	}
+	store, ok := registered.(*runtimeControlPromptHistoryStore)
+	if !ok {
+		t.Fatalf("prompt history store type = %T", registered)
+	}
+	return store
+}
+
 func TestServiceInterruptReturnsCurrentActivitySnapshot(t *testing.T) {
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
 	if err != nil {

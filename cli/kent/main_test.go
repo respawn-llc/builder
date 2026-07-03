@@ -23,6 +23,7 @@ import (
 	serverstartup "core/server/startup"
 	"core/shared/config"
 	"core/shared/llmerrors"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
@@ -496,6 +497,44 @@ func TestHelperProcessRootCommand(t *testing.T) {
 	os.Exit(2)
 }
 
+func runRootCommandWithCapturedProcessOutput(t *testing.T, args []string) (string, string, int) {
+	t.Helper()
+	originalStdout := os.Stdout
+	originalStderr := os.Stderr
+	stdoutFile, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatalf("create stdout temp file: %v", err)
+	}
+	stderrFile, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatalf("create stderr temp file: %v", err)
+	}
+	os.Stdout = stdoutFile
+	os.Stderr = stderrFile
+	t.Cleanup(func() {
+		os.Stdout = originalStdout
+		os.Stderr = originalStderr
+		_ = stdoutFile.Close()
+		_ = stderrFile.Close()
+	})
+	code := rootCommand(args, strings.NewReader(""), io.Discard, io.Discard)
+	stdout := readCapturedFile(t, stdoutFile)
+	stderr := readCapturedFile(t, stderrFile)
+	return stdout, stderr, code
+}
+
+func readCapturedFile(t *testing.T, file *os.File) string {
+	t.Helper()
+	if _, err := file.Seek(0, 0); err != nil {
+		t.Fatalf("seek captured file: %v", err)
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatalf("read captured file: %v", err)
+	}
+	return string(data)
+}
+
 func TestRunSubcommandMapsFastFlagToAgentRole(t *testing.T) {
 	original := runPromptApp
 	t.Cleanup(func() {
@@ -523,6 +562,141 @@ func TestRunSubcommandMapsFastFlagToAgentRole(t *testing.T) {
 	}
 	if gotOpts.AgentRole != config.BuiltInSubagentRoleFast {
 		t.Fatalf("agent role = %q, want fast", gotOpts.AgentRole)
+	}
+}
+
+func TestRunSteerSubcommandQueuesLiveMessage(t *testing.T) {
+	original := runLiveSteerApp
+	t.Cleanup(func() { runLiveSteerApp = original })
+	var gotSession string
+	var gotMessage string
+	var gotRoot string
+	runLiveSteerApp = func(ctx context.Context, opts app.Options, targetSessionID runtimeids.SessionID, text string) (app.RunLiveSteerResult, error) {
+		gotSession = targetSessionID.String()
+		gotMessage = text
+		gotRoot = opts.ConfigRoot
+		return app.RunLiveSteerResult{}, nil
+	}
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "steer", "--persistence-root", "test-root", "018fdd67-89ab-4cde-8123-456789abcdef", "hello", "there"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if gotSession != "018fdd67-89ab-4cde-8123-456789abcdef" || gotMessage != "hello there" || gotRoot != "test-root" {
+		t.Fatalf("unexpected live steer mapping session=%q message=%q root=%q", gotSession, gotMessage, gotRoot)
+	}
+	if stdout != "ok\n" || stderr != "" {
+		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+func TestRunSteerNoActiveRunPrintsContinueCommand(t *testing.T) {
+	original := runLiveSteerApp
+	t.Cleanup(func() { runLiveSteerApp = original })
+	runLiveSteerApp = func(context.Context, app.Options, runtimeids.SessionID, string) (app.RunLiveSteerResult, error) {
+		return app.RunLiveSteerResult{}, errors.Join(serverapi.ErrRuntimeNoActiveRun, errors.New("inactive"))
+	}
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "steer", "--persistence-root", "root with space", "018fdd67-89ab-4cde-8123-456789abcdef", "say", "hi"})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if stderr == "" {
+		t.Fatal("stderr is empty; want no-active guidance")
+	}
+}
+
+func TestRunStopSubcommandPrintsIdleAsSuccess(t *testing.T) {
+	original := runLiveStopApp
+	t.Cleanup(func() { runLiveStopApp = original })
+	runLiveStopApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunLiveStopResult, error) {
+		return app.RunLiveStopResult{Status: serverapi.RuntimeLiveStopStatusIdle}, nil
+	}
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "stop", "018fdd67-89ab-4cde-8123-456789abcdef"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if stdout != "No active run\n" || stderr != "" {
+		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+func TestRunWaitSubcommandEmitsRunJSONShape(t *testing.T) {
+	original := runLiveWaitApp
+	t.Cleanup(func() { runLiveWaitApp = original })
+	runLiveWaitApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunPromptResult, error) {
+		return app.RunPromptResult{
+			SessionID:   "018fdd67-89ab-4cde-8123-456789abcdef",
+			SessionName: "live session",
+			Result:      "done",
+			Duration:    2 * time.Second,
+		}, nil
+	}
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "wait", "--output-mode=json", "018fdd67-89ab-4cde-8123-456789abcdef"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var decoded runJSONResult
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("decode wait json: %v; raw=%q", err, stdout)
+	}
+	if decoded.Status != "ok" || decoded.Result != "done" || decoded.SessionID != "018fdd67-89ab-4cde-8123-456789abcdef" || decoded.DurationMS != 2000 {
+		t.Fatalf("unexpected wait json: %+v", decoded)
+	}
+}
+
+func TestRunWaitNoActiveRunJSONHasCleanTypedError(t *testing.T) {
+	original := runLiveWaitApp
+	t.Cleanup(func() { runLiveWaitApp = original })
+	runLiveWaitApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunPromptResult, error) {
+		return app.RunPromptResult{SessionID: "018fdd67-89ab-4cde-8123-456789abcdef"}, serverapi.ErrRuntimeNoActiveRun
+	}
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "wait", "--output-mode=json", "018fdd67-89ab-4cde-8123-456789abcdef"})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	var decoded runJSONResult
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("decode wait error json: %v; raw=%q", err, stdout)
+	}
+	if decoded.Status != "error" || decoded.Error == nil || decoded.Error.Message != serverapi.ErrRuntimeNoActiveRun.Error() {
+		t.Fatalf("unexpected wait error json: %+v", decoded)
+	}
+}
+
+func TestRunLiveControlsRejectSelfTargetBeforeAppCall(t *testing.T) {
+	original := runLiveSteerApp
+	t.Cleanup(func() { runLiveSteerApp = original })
+	called := false
+	runLiveSteerApp = func(context.Context, app.Options, runtimeids.SessionID, string) (app.RunLiveSteerResult, error) {
+		called = true
+		return app.RunLiveSteerResult{}, nil
+	}
+	t.Setenv(sessionenv.SessionIDEnv, "018fdd67-89ab-4cde-8123-456789abcdef")
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "steer", "018fdd67-89ab-4cde-8123-456789abcdef", "nope"})
+	if code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	if called {
+		t.Fatal("live steer app was called for self-targeting command")
+	}
+	if stdout != "" || stderr == "" {
+		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+func TestRunSteerContinueCommandUsesShellSafeQuoting(t *testing.T) {
+	got := buildRunSteerContinueCommand("018fdd67-89ab-4cde-8123-456789abcdef", "/tmp/root $HOME", "say 'hi' and $(stay literal)")
+	want := "kent run --persistence-root '/tmp/root $HOME' --continue 018fdd67-89ab-4cde-8123-456789abcdef 'say '\\''hi'\\'' and $(stay literal)'"
+	if got != want {
+		t.Fatalf("continue command = %q, want %q", got, want)
 	}
 }
 

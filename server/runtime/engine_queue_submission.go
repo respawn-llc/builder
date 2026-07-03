@@ -156,10 +156,7 @@ func (e *Engine) SubmitUserMessageOrSteerWithHooks(ctx context.Context, text str
 }
 
 func (e *Engine) QueueUserMessageForAutoDrain(text string, clientRequestID string) QueuedUserMessage {
-	item := e.QueueUserMessageWithClientRequestID(text, clientRequestID)
-	e.markQueuedUserInjectionForAutoDrain(item.ID)
-	e.scheduleQueuedUserInjectionsIfIdle()
-	return item
+	return e.queueUserMessageWithClientRequestID(text, clientRequestID, true)
 }
 
 func (e *Engine) HasQueuedUserWork() bool {
@@ -252,6 +249,7 @@ func (e *Engine) processQueuedUserWork(ctx context.Context) {
 		e.surfaceRunError(err)
 		return
 	}
+	e.completeLiveRunQueueItems(ids)
 	completed = true
 }
 

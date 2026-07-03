@@ -15,6 +15,7 @@ import (
 	"core/server/session"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
 )
@@ -119,6 +120,8 @@ type Service struct {
 
 	localEntries   *requestmemo.Memo[localEntryMemoRequest, struct{}]
 	queuedDiscards *requestmemo.Memo[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse]
+	liveSteers     *requestmemo.Memo[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse]
+	liveStops      *requestmemo.Memo[liveStopMemoRequest, serverapi.RuntimeLiveStopResponse]
 	promptHistory  *requestmemo.Memo[sessionTextMemoRequest, struct{}]
 	goals          *requestmemo.Memo[goalSetMemoRequest, serverapi.RuntimeGoalShowResponse]
 	goalStatuses   *requestmemo.Memo[goalStatusMemoRequest, serverapi.RuntimeGoalShowResponse]
@@ -144,6 +147,15 @@ type runtimeQueuedMessageMemoRequest struct {
 	SessionID    string
 	Text         string
 	OperationRef clientui.RuntimeOperationRef
+}
+
+type liveSteerMemoRequest struct {
+	SessionID runtimeids.SessionID
+	Text      string
+}
+
+type liveStopMemoRequest struct {
+	SessionID runtimeids.SessionID
 }
 
 type turnSubmitMemoRequest struct {
@@ -214,6 +226,8 @@ func NewService(runtimes RuntimeResolver) *Service {
 
 		localEntries:   requestmemo.New[localEntryMemoRequest, struct{}](),
 		queuedDiscards: requestmemo.New[queuedUserMessageMemoRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](),
+		liveSteers:     requestmemo.New[liveSteerMemoRequest, serverapi.RuntimeLiveSteerResponse](),
+		liveStops:      requestmemo.New[liveStopMemoRequest, serverapi.RuntimeLiveStopResponse](),
 		promptHistory:  requestmemo.New[sessionTextMemoRequest, struct{}](),
 		goals:          requestmemo.New[goalSetMemoRequest, serverapi.RuntimeGoalShowResponse](),
 		goalStatuses:   requestmemo.New[goalStatusMemoRequest, serverapi.RuntimeGoalShowResponse](),
@@ -873,6 +887,14 @@ func sameSessionTextMemoRequest(a sessionTextMemoRequest, b sessionTextMemoReque
 
 func sameRuntimeQueuedMessageMemoRequest(a runtimeQueuedMessageMemoRequest, b runtimeQueuedMessageMemoRequest) bool {
 	return a.SessionID == b.SessionID && a.Text == b.Text && a.OperationRef == b.OperationRef
+}
+
+func sameLiveSteerMemoRequest(a liveSteerMemoRequest, b liveSteerMemoRequest) bool {
+	return a.SessionID == b.SessionID && a.Text == b.Text
+}
+
+func sameLiveStopMemoRequest(a liveStopMemoRequest, b liveStopMemoRequest) bool {
+	return a.SessionID == b.SessionID
 }
 
 func sameTurnSubmitMemoRequest(a turnSubmitMemoRequest, b turnSubmitMemoRequest) bool {
