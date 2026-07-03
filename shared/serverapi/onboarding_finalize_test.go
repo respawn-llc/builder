@@ -42,3 +42,22 @@ func TestOnboardingFinalizeRequestRejectsUnknownTopLevelConfigKeys(t *testing.T)
 		t.Fatalf("field errors = %+v", details.FieldErrors)
 	}
 }
+
+func TestOnboardingFinalizeRequestSortsUnknownTopLevelConfigKeys(t *testing.T) {
+	var req serverapi.OnboardingFinalizeRequest
+	if err := json.Unmarshal([]byte(`{"z_unknown":true,"a_unknown":true}`), &req); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	err := serverapi.ValidateOnboardingFinalizeRequest(req)
+	var finalizeErr *serverapi.OnboardingFinalizeError
+	if !errors.As(err, &finalizeErr) {
+		t.Fatalf("validation error = %T %v, want OnboardingFinalizeError", err, err)
+	}
+	details := finalizeErr.Details.(serverapi.OnboardingInvalidRequestDetails)
+	if len(details.FieldErrors) != 2 {
+		t.Fatalf("field errors = %+v, want 2", details.FieldErrors)
+	}
+	if details.FieldErrors[0].Field != "a_unknown" || details.FieldErrors[1].Field != "z_unknown" {
+		t.Fatalf("field errors = %+v, want sorted unknown fields", details.FieldErrors)
+	}
+}

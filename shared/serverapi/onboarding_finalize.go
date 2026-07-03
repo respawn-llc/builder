@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"core/shared/protocol"
@@ -149,6 +150,7 @@ func (r *OnboardingFinalizeRequest) UnmarshalJSON(data []byte) error {
 			decoded.unknownFields = append(decoded.unknownFields, key)
 		}
 	}
+	sort.Strings(decoded.unknownFields)
 	*r = OnboardingFinalizeRequest(decoded)
 	return nil
 }
