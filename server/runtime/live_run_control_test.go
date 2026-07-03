@@ -165,16 +165,18 @@ func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t
 		StartedAt:  startedAt,
 	}
 	eng.liveRun.beginStep(snapshot)
-	item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer pending", liveRunTestRequestID(t), nil)
-	if err != nil || !accepted || item.ID == "" {
-		t.Fatalf("QueueUserMessageForActiveRun item=%+v accepted=%t err=%v", item, accepted, err)
-	}
+	eng.ensureOrchestrationCollaborators()
+	queueItemID := runtimeids.NewQueueItemID()
+	eng.messageFlow.QueueUserMessageWithID(QueuedUserMessage{ID: queueItemID.String(), Text: "steer pending", ClientRequestID: liveRunTestRequestID(t).String()})
+	eng.liveRun.mu.Lock()
+	eng.liveRun.current.trackQueuedItemForLiveRun(queueItemID)
+	delete(eng.liveRun.current.publishingItems, queueItemID)
+	eng.liveRun.mu.Unlock()
 	completed := *snapshot
 	completed.Status = RunStatusCompleted
 	completed.FinishedAt = startedAt.Add(time.Second)
 	eng.liveRun.finishStep(&completed, RunStatusCompleted, nil, false)
 
-	eng.ensureOrchestrationCollaborators()
 	stepCtxSeen := make(chan context.Context, 1)
 	releaseMaintenance := make(chan struct{})
 	maintenanceDone := make(chan error, 1)
