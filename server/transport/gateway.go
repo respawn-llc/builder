@@ -41,12 +41,17 @@ type GatewayDependencies interface {
 	GatewayServerStatusDependencies
 	GatewayAuthDependencies
 	GatewayCapabilityFactsDependencies
+	GatewayOnboardingDependencies
 	GatewayProjectDependencies
 	GatewaySessionDependencies
 	GatewayRuntimeDependencies
 	GatewayPromptDependencies
 	GatewayProcessDependencies
 	GatewayWorktreeDependencies
+}
+
+type GatewayDependencyAvailability interface {
+	RouteDependencyAvailable(rpccontract.Dependency) error
 }
 
 type GatewayServerStatusDependencies interface {
@@ -62,6 +67,10 @@ type GatewayAuthDependencies interface {
 
 type GatewayCapabilityFactsDependencies interface {
 	CapabilityFactsClient() client.CapabilityFactsClient
+}
+
+type GatewayOnboardingDependencies interface {
+	OnboardingFinalizeClient() client.OnboardingFinalizeClient
 }
 
 type GatewayProjectDependencies interface {
@@ -289,14 +298,19 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if req.Method != protocol.MethodHandshake && !state.handshakeDone {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods")
 	}
+	route, ok := rpccontract.RouteByMethod(req.Method)
+	if !ok {
+		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
+	}
+	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
+		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
+			return responseForError(req.ID, err)
+		}
+	}
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return responseForError(req.ID, err)
 	}
 	handler, ok := gatewayUnaryHandlers[req.Method]
-	if !ok {
-		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
-	}
-	route, ok := rpccontract.RouteByMethod(req.Method)
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
@@ -345,6 +359,10 @@ func sendResponse(ctx context.Context, conn rpcwire.Conn, resp protocol.Response
 }
 
 func responseForError(id string, err error) protocol.Response {
+	var structured protocol.StructuredRPCError
+	if errors.As(err, &structured) {
+		return protocol.NewErrorResponseWithData(id, structured.RPCErrorCode(), err.Error(), structured.RPCErrorData())
+	}
 	code, message := protocolError(err)
 	return protocol.NewErrorResponse(id, code, message)
 }

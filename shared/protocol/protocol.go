@@ -37,6 +37,7 @@ type CapabilityFlags struct {
 	SessionActivity        bool `json:"session_activity"`
 	ProcessOutput          bool `json:"process_output"`
 	AttentionNotifications bool `json:"attention_notifications"`
+	OnboardingFinalize     bool `json:"onboarding_finalize"`
 }
 
 type ServerIdentity struct {

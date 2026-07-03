@@ -425,6 +425,35 @@ func (s *Core) CapabilityFactsClient() client.CapabilityFactsClient {
 	return s.safeBundles().Capability.facts
 }
 
+func (s *Core) OnboardingFinalizeClient() client.OnboardingFinalizeClient {
+	if s == nil {
+		return nil
+	}
+	return client.NewLoopbackOnboardingFinalizeClient(configuredCoreOnboardingFinalizeService{settingsPath: configuredCoreSettingsPath(s.Config())})
+}
+
+type configuredCoreOnboardingFinalizeService struct {
+	settingsPath string
+}
+
+func (s configuredCoreOnboardingFinalizeService) FinalizeOnboarding(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+	return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: s.settingsPath}, nil)
+}
+
+func configuredCoreSettingsPath(cfg config.App) string {
+	if path := strings.TrimSpace(cfg.Source.SettingsPath); path != "" {
+		return path
+	}
+	if path := strings.TrimSpace(cfg.Source.HomeSettingsPath); path != "" {
+		return path
+	}
+	path, err := config.ResolveSettingsFilePathInRoot(cfg.PersistenceRoot)
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
 func (s *Core) AskViewClient() client.AskViewClient {
 	if s == nil {
 		return nil

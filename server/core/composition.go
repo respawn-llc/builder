@@ -52,35 +52,46 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 
 type Options struct {
 	RuntimeClientFactory runtimewire.RuntimeClientFactory
+	RootLease            *RootLockLease
 }
 
 func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport, opts Options) (*Core, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	rootLease, err := AcquireRootLock(cfg.PersistenceRoot)
-	if err != nil {
-		return nil, fmt.Errorf("persistence bundle: root lock: %w", err)
+	rootLease := opts.RootLease
+	ownsIncomingRootLease := rootLease != nil
+	if rootLease == nil {
+		var err error
+		rootLease, err = AcquireRootLock(cfg.PersistenceRoot)
+		if err != nil {
+			return nil, fmt.Errorf("persistence bundle: root lock: %w", err)
+		}
+	}
+	closeRootLeaseOnFailure := func() {
+		if !ownsIncomingRootLease {
+			_ = rootLease.Close()
+		}
 	}
 	generatedSupport, err := serverbootstrap.BuildGeneratedSupport(ctx, cfg.PersistenceRoot)
 	if err != nil {
-		_ = rootLease.Close()
+		closeRootLeaseOnFailure()
 		return nil, fmt.Errorf("persistence bundle: generated support: %w", err)
 	}
 	runtimeSupport.Generated = generatedSupport
 	containerDir := ""
 	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
 	if err != nil {
-		_ = rootLease.Close()
+		closeRootLeaseOnFailure()
 		return nil, fmt.Errorf("persistence bundle: metadata store: %w", err)
 	}
 	if err := validateAuthBundleSupport(authSupport); err != nil {
-		_ = rootLease.Close()
+		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
 		return nil, err
 	}
 	if err := validateRuntimeBundleSupport(runtimeSupport); err != nil {
-		_ = rootLease.Close()
+		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
 		return nil, err
 	}
@@ -103,7 +114,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	sessionStoreRegistry := registry.NewSessionStoreRegistry()
 	projectService, err := projectview.NewMetadataService(metadataStore, "")
 	if err != nil {
-		_ = rootLease.Close()
+		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
 		return nil, fmt.Errorf("projects bundle: metadata service: %w", err)
 	}
@@ -154,7 +165,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		if workflowRuntimeStarter != nil {
 			_ = workflowRuntimeStarter.Close()
 		}
-		_ = rootLease.Close()
+		closeRootLeaseOnFailure()
 		_ = metadataStore.Close()
 		if runtimeSupport.Background != nil {
 			_ = runtimeSupport.Background.Close()

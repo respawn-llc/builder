@@ -41,9 +41,21 @@ type BackgroundRouter interface {
 
 type EmbeddedServer struct {
 	*core.Core
+	deps *startupGatewayDependencies
+	cfg  config.App
 
 	rpcMu sync.Mutex
 	rpc   *runningRPC
+}
+
+func (s *EmbeddedServer) Config() config.App {
+	if s == nil {
+		return config.App{}
+	}
+	if s.Core != nil {
+		return s.Core.Config()
+	}
+	return s.cfg
 }
 
 // ServeBackground binds the loopback control endpoints (configured TCP plus the
@@ -54,15 +66,25 @@ type EmbeddedServer struct {
 // servers therefore stop when the owning session exits, which is intended. It is
 // an error to call it more than once.
 func (s *EmbeddedServer) ServeBackground() error {
-	if s == nil || s.Core == nil {
-		return errors.New("server core is required")
+	if s == nil {
+		return errors.New("server is required")
 	}
 	s.rpcMu.Lock()
 	defer s.rpcMu.Unlock()
 	if s.rpc != nil {
 		return errors.New("embedded server is already serving")
 	}
-	rpc, err := startCoreRPC(s.Core)
+	var (
+		rpc *runningRPC
+		err error
+	)
+	if s.Core != nil {
+		rpc, err = startCoreRPC(s.Core)
+	} else if s.deps != nil {
+		rpc, err = startGatewayRPC(s.deps, s.cfg)
+	} else {
+		err = errors.New("startup dependencies are required")
+	}
 	if err != nil {
 		return err
 	}
@@ -85,6 +107,9 @@ func (s *EmbeddedServer) Close() error {
 		rpc.wait()
 	}
 	if s.Core == nil {
+		if s.deps != nil {
+			return s.deps.Close()
+		}
 		return nil
 	}
 	return s.Core.Close()
@@ -97,6 +122,20 @@ func StartEmbedded(ctx context.Context, req serverbootstrap.Request, hooks Embed
 func StartEmbeddedWithOptions(ctx context.Context, req serverbootstrap.Request, hooks EmbeddedStartHooks, opts Options) (*EmbeddedServer, error) {
 	if hooks.Auth == nil {
 		return nil, errors.New("auth handler is required")
+	}
+	resolved, err := serverbootstrap.ResolveConfig(req)
+	if err != nil {
+		return nil, err
+	}
+	if !resolved.Config.Source.SettingsFileExists && hooks.Onboarding == nil {
+		cfg, deps, err := buildStartupControlSurface(ctx, req, true, hooks.Auth)
+		if err != nil {
+			if errors.Is(err, errStartupControlSurfaceNotRequired) {
+				return startConfiguredEmbeddedServer(ctx, req, true, hooks.Auth, nil, opts)
+			}
+			return nil, err
+		}
+		return &EmbeddedServer{deps: deps, cfg: cfg}, nil
 	}
 	onboarding := func(ctx context.Context, onboardingReq OnboardingRequest) (config.App, error) {
 		if hooks.Onboarding == nil {

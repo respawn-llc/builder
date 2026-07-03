@@ -458,6 +458,12 @@ func protocolError(resp *protocol.ResponseError) error {
 		return nil
 	}
 	message := strings.TrimSpace(resp.Message)
+	if resp.Code == protocol.ErrCodeOnboardingFinalizeFailed && len(resp.Data) > 0 {
+		return serverapi.DecodeOnboardingFinalizeError(resp.Data, message)
+	}
+	if resp.Code == protocol.ErrCodeServerNotReady && len(resp.Data) > 0 {
+		return serverapi.DecodeServerNotReadyError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeRequestCanceled {
 		return requestCanceledError{message: message}
 	}

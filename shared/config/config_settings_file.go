@@ -60,20 +60,36 @@ func writeSettingsFileIfMissing(path string, contents string) (bool, error) {
 	if err := ensureSettingsDir(path); err != nil {
 		return false, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, ".config.toml.tmp-*")
 	if err != nil {
+		return false, fmt.Errorf("create settings temp file: %w", err)
+	}
+	tempPath := temp.Name()
+	cleanupTemp := true
+	defer func() {
+		if cleanupTemp {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if _, err := temp.WriteString(contents); err != nil {
+		_ = temp.Close()
+		return false, fmt.Errorf("write settings temp file: %w", err)
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return false, fmt.Errorf("sync settings temp file: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return false, fmt.Errorf("close settings temp file: %w", err)
+	}
+	if err := os.Link(tempPath, path); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return false, nil
 		}
-		return false, fmt.Errorf("create settings file: %w", err)
+		return false, fmt.Errorf("install settings file: %w", err)
 	}
-	defer func() { _ = file.Close() }()
-	if _, err := file.WriteString(contents); err != nil {
-		return false, fmt.Errorf("write settings file: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return false, fmt.Errorf("close settings file: %w", err)
-	}
+	cleanupTemp = true
 	return true, nil
 }
 
@@ -145,6 +161,22 @@ func WriteSettingsFileForOnboarding(settings Settings) (string, error) {
 
 type OnboardingWriteOptions struct {
 	PreservedDefaults map[string]bool
+}
+
+func DefaultOnboardingSettings() Settings {
+	return configRegistry.defaultState().Settings
+}
+
+func RenderSettingsTOMLForOnboarding(settings Settings, options OnboardingWriteOptions) (string, error) {
+	normalized, err := NormalizeSettingsForPersistenceWithSources(settings, nil)
+	if err != nil {
+		return "", err
+	}
+	return settingsTOMLForOnboarding(normalized, options.PreservedDefaults), nil
+}
+
+func ResolveSettingsFilePathInRoot(root string) (string, error) {
+	return resolveSettingsFilePathInRoot(root)
 }
 
 func WriteSettingsFileForOnboardingWithOptions(settings Settings, options OnboardingWriteOptions) (string, error) {

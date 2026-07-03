@@ -79,6 +79,10 @@ func IsModelContextWindowBelowMinimum(err error) bool {
 	return errors.Is(err, errModelContextWindowBelowMinimum)
 }
 
+func IsSettingsFileAlreadyExists(err error) bool {
+	return errors.Is(err, errSettingsFileAlreadyExists)
+}
+
 // UnknownSettingsKeysError reports settings keys that are not recognized. The
 // offending keys are exposed so callers can match structurally with errors.As.
 type UnknownSettingsKeysError struct {

@@ -15,6 +15,7 @@ const (
 	MethodAuthAcknowledgeNoAuth                 = "auth.acknowledgeNoAuth"
 	MethodAuthGetStatus                         = "auth.getStatus"
 	MethodCapabilityFactsGet                    = "capability.facts.get"
+	MethodOnboardingFinalize                    = "onboarding.finalize"
 	MethodAttachProject                         = "project.attach"
 	MethodAttachSession                         = "session.attach"
 	MethodProjectList                           = "project.list"

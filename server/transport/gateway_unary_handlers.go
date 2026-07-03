@@ -102,6 +102,21 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		})
 	},
 	protocol.MethodCapabilityFactsGet: gatewayClientCall[client.CapabilityFactsClient, serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](GatewayDependencies.CapabilityFactsClient, client.CapabilityFactsClient.GetCapabilityFacts),
+	protocol.MethodOnboardingFinalize: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		params, err := decodeParams[serverapi.OnboardingFinalizeRequest](req.Params)
+		if err != nil {
+			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+		}
+		finalizeClient := g.deps.OnboardingFinalizeClient()
+		if finalizeClient == nil {
+			return responseForError(req.ID, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil))
+		}
+		resp, err := finalizeClient.FinalizeOnboarding(ctx, params)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		return protocol.NewSuccessResponse(req.ID, resp)
+	},
 	protocol.MethodAttachProject: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params protocol.AttachProjectRequest) (protocol.AttachResponse, error) {
 			if err := params.Validate(); err != nil {
