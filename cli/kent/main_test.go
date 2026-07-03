@@ -594,6 +594,31 @@ func TestRunSubcommandPreservesPromptStartingWithLiveWaitVerb(t *testing.T) {
 	}
 }
 
+func TestRunSubcommandPreservesShortPromptStartingWithLiveStopVerb(t *testing.T) {
+	originalPrompt := runPromptApp
+	originalStop := runLiveStopApp
+	t.Cleanup(func() {
+		runPromptApp = originalPrompt
+		runLiveStopApp = originalStop
+	})
+	var gotPrompt string
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+		gotPrompt = prompt
+		return app.RunPromptResult{SessionID: "018fdd67-89ab-4cde-8123-456789abcdef", Result: "done"}, nil
+	}
+	runLiveStopApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunLiveStopResult, error) {
+		t.Fatal("live stop app should not be called for ordinary prompt")
+		return app.RunLiveStopResult{}, nil
+	}
+
+	if _, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "stop", "now"}); code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if gotPrompt != "stop now" {
+		t.Fatalf("prompt = %q, want joined prompt", gotPrompt)
+	}
+}
+
 func TestRunSteerSubcommandQueuesLiveMessage(t *testing.T) {
 	original := runLiveSteerApp
 	t.Cleanup(func() { runLiveSteerApp = original })

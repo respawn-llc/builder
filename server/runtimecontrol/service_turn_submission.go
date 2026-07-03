@@ -8,6 +8,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeops"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -108,13 +109,20 @@ func (s *Service) trySubmitUserTurnAsActiveLiveSteer(ctx context.Context, attemp
 	steered := false
 	runCtx, stopRunCtx := mergeOperationContexts(ctx, attempt.Context())
 	defer stopRunCtx()
-	err := s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
-		if !engine.HasActiveLiveRunGroup() {
-			return nil
-		}
+	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(strings.TrimSpace(req.ClientRequestID))
+	if err != nil {
+		return serverapi.RuntimeSubmitUserTurnResponse{}, nil, false, err
+	}
+	err = s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
 		recordEngine = engine
 		committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, req.OperationRef, func() error {
-			item := engine.QueueUserMessageForAutoDrain(memoReq.Text, strings.TrimSpace(req.ClientRequestID))
+			item, accepted, err := engine.QueueUserMessageForActiveRun(runCtx, memoReq.Text, clientRequestID, nil)
+			if err != nil {
+				return err
+			}
+			if !accepted {
+				return runtime.ErrNoActiveLiveRun
+			}
 			resp = serverapi.RuntimeSubmitUserTurnResponse{Steered: true, QueueItemID: item.ID}
 			steered = true
 			return nil

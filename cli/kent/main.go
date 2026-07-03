@@ -417,16 +417,6 @@ func liveControlSubcommand(args []string) string {
 	if _, err := runtimeids.ParseSessionID(positionals[0]); err == nil {
 		return verb
 	}
-	switch verb {
-	case "steer":
-		if len(positionals) <= 2 {
-			return verb
-		}
-	case "stop", "wait":
-		if len(positionals) <= 1 {
-			return verb
-		}
-	}
 	return ""
 }
 

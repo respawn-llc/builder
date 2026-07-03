@@ -153,6 +153,66 @@ func TestTryInterruptActiveRunCancelsCompactionStep(t *testing.T) {
 	}
 }
 
+func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	startedAt := time.Now().UTC()
+	snapshot := &RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  startedAt,
+	}
+	eng.liveRun.beginStep(snapshot)
+	item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer pending", liveRunTestRequestID(t), nil)
+	if err != nil || !accepted || item.ID == "" {
+		t.Fatalf("QueueUserMessageForActiveRun item=%+v accepted=%t err=%v", item, accepted, err)
+	}
+	completed := *snapshot
+	completed.Status = RunStatusCompleted
+	completed.FinishedAt = startedAt.Add(time.Second)
+	eng.liveRun.finishStep(&completed, RunStatusCompleted, nil, false)
+
+	eng.ensureOrchestrationCollaborators()
+	stepCtxSeen := make(chan context.Context, 1)
+	releaseMaintenance := make(chan struct{})
+	maintenanceDone := make(chan error, 1)
+	go func() {
+		maintenanceDone <- eng.stepLifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindRuntimeMaintenance}, func(ctx context.Context, stepID string) error {
+			stepCtxSeen <- ctx
+			<-releaseMaintenance
+			return nil
+		})
+	}()
+	var stepCtx context.Context
+	select {
+	case stepCtx = <-stepCtxSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for maintenance step")
+	}
+
+	stopped, err := eng.TryInterruptActiveRun()
+	if err != nil {
+		t.Fatalf("TryInterruptActiveRun: %v", err)
+	}
+	if !stopped {
+		t.Fatal("live stop with pending tagged items reported idle")
+	}
+	select {
+	case <-stepCtx.Done():
+		t.Fatal("live stop canceled maintenance step")
+	default:
+	}
+	close(releaseMaintenance)
+	if err := <-maintenanceDone; err != nil {
+		t.Fatalf("maintenance step: %v", err)
+	}
+	if eng.HasActiveLiveRunGroup() {
+		t.Fatal("live-run group stayed active after dropping tagged item")
+	}
+}
+
 func TestEmitRunStateStepOpensActiveLiveRunGroup(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})

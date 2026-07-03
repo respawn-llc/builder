@@ -151,6 +151,9 @@ func (e *Engine) TryInterruptActiveRun() (bool, error) {
 		return interruptedSnapshot != nil, err
 	}
 	e.failStoppedLiveRunQueueItems(taggedQueueItems)
+	if snapshot == nil || !activeKindInterruptibleByLiveStop(snapshot.ActiveKind) {
+		return true, nil
+	}
 	goalLoopInterruptPending := false
 	snapshot, err := e.stepLifecycle.InterruptCurrent(func(snapshot *RunSnapshot) {
 		if goalLoop && e.goalActive() && snapshot != nil && snapshot.ActiveKind == ActiveKindGoalLoop {
