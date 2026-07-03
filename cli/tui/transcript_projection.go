@@ -735,12 +735,12 @@ func ProjectCommittedOngoingTranscript(entries []TranscriptEntry, theme string, 
 	return projectOngoingTranscriptWithSelector(entries, theme, width, baseOffset, compactDetail, selectedEntry, selectedEntryActive, CommittedOngoingEntries)
 }
 
-// ProjectNativeCommittedOngoingTranscript renders an already-owned committed
-// transcript range for append-only native scrollback output. Unlike the live
-// ongoing projection, it must not truncate at unresolved tool calls because
-// later committed rows are immutable history too.
+// ProjectNativeCommittedOngoingTranscript uses the same committed ongoing
+// prefix as the TUI model. Native scrollback is append-only, so unresolved
+// tool boundaries must stay live until the regular projection can append the
+// resolved prefix in transcript order.
 func ProjectNativeCommittedOngoingTranscript(entries []TranscriptEntry, theme string, width int, baseOffset int, compactDetail bool, selectedEntry int, selectedEntryActive bool) TranscriptProjection {
-	return projectOngoingTranscriptWithSelector(entries, theme, width, baseOffset, compactDetail, selectedEntry, selectedEntryActive, nonEmptyTranscriptEntries)
+	return ProjectCommittedOngoingTranscript(entries, theme, width, baseOffset, compactDetail, selectedEntry, selectedEntryActive)
 }
 
 func projectOngoingTranscriptWithSelector(entries []TranscriptEntry, theme string, width int, baseOffset int, compactDetail bool, selectedEntry int, selectedEntryActive bool, selectEntries func([]TranscriptEntry) []TranscriptEntry) TranscriptProjection {

@@ -102,7 +102,7 @@
 - Workflow runtime builds on reusable headless/session infrastructure for session launch, runtime wiring, logging, progress, subagent role handling, and mode prompts.
 - `RunPromptService.RunPrompt` final text is not workflow completion authority.
 - Existing user goal state is not reused as workflow autonomy state.
-- Workflow task sessions reject `/goal`; the workflow node/run is the task objective driver.
+- Workflow task sessions reject user `/goal` control; the workflow node/run is the task objective driver. Agents may still set themselves goals and complete them, per the agent goal rules in core-runtime-tools.
 - If terminal workflow completion commits before accepted client steering is drained, the queued steering resolves with a visible failure and is not applied to the completed run.
 - Task comment bodies are not automatically injected into agent context. When a task has visible comments, workflow-mode instructions include the visible comment count and a `kent task comment list <task>` pull command. Kent re-queries the visible comment count each time the workflow instructions are appended without mutating previously persisted model-visible prompt items.
 
@@ -123,6 +123,7 @@
 - Every applied transition stores transition-edge snapshot rows, not only pending approvals.
 - A task awaiting approval has no active placement; its live position is the pending transition's source node, surfaced as a synthesized `waiting_approval` placement.
 - Manually moving a task that is awaiting approval overrides the proposed transition: the pending approval is marked `rejected` (auditable, not deleted) and the task moves from the approval's source node to the chosen target. This is the operator path to reject a proposed transition (e.g. sending an awaiting-approval plan back to Backlog).
+- Missing-edge manual overrides cannot target executable nodes. Manual movement into an agent or script node requires a concrete workflow edge so the target run has a real prompt/contract.
 
 ## Context Preservation And Bindings
 
@@ -175,6 +176,7 @@
 - Interrupted runs are never automatically retried.
 - Explicit resume is task-level: it continues every interrupted run of the task from current transcript/worktree state, with no run selection.
 - Explicit interrupt is task-level with an optional session-id selector: no session interrupts all running runs of the task; a specific session interrupts only that run. Run id is never an operator-facing selector — the public per-run identifier is the session id.
+- Manual moves are rejected while a task has any started active run that is not completed or interrupted, including runs waiting on a question. The operator must interrupt, wait for completion, or resume from an interrupted state before manually moving the task.
 - Completion/transition application uses a fence/generation or compare-and-swap so stale runtime callbacks cannot mutate superseded runs.
 - Run completion and transition application remain one SQLite transaction.
 - Runtime failures, cancellation, crashes, model/runtime interruptions, and fixable scheduling validation blockers converge on interrupted outcome with reason metadata.

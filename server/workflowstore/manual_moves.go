@@ -26,6 +26,9 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
+	if err := s.rejectManualMoveDuringActiveRun(ctx, req.TaskID); err != nil {
+		return ManualMoveResult{}, err
+	}
 	def, workflowRecord, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
 	if err != nil {
 		return ManualMoveResult{}, err
@@ -60,6 +63,9 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 			group, edge, ok = startResetManualMoveContract(sourceNode, targetNode)
 		}
 		if !ok && req.AllowMissingEdge {
+			if executableNodeKind(targetNode.Kind()) {
+				return ManualMoveResult{}, ErrManualMoveExecutableTargetNeedsEdge
+			}
 			group, edge, ok = missingEdgeManualMoveContract(sourceNode, targetNode)
 		}
 		if !ok {
@@ -114,6 +120,9 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	if err := rejectManualMoveDuringActiveRunWithQueries(ctx, q, req.TaskID); err != nil {
+		return ManualMoveResult{}, err
+	}
 	if pendingApprovalTransitionID != "" {
 		// The task is awaiting approval and has no active placement (its source
 		// placement is already completed). Manually moving it overrides the
@@ -189,6 +198,24 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 		return ManualMoveResult{}, err
 	}
 	return result, nil
+}
+
+func (s *Store) rejectManualMoveDuringActiveRun(ctx context.Context, taskID workflow.TaskID) error {
+	return rejectManualMoveDuringActiveRunWithQueries(ctx, s.queries, taskID)
+}
+
+func rejectManualMoveDuringActiveRunWithQueries(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) error {
+	runs, err := q.ListInterruptTaskRunCandidates(ctx, sqlitegen.ListInterruptTaskRunCandidatesParams{
+		TaskID:    string(taskID),
+		SessionID: "",
+	})
+	if err != nil {
+		return err
+	}
+	if len(runs) > 0 {
+		return ErrManualMoveDuringActiveRun
+	}
+	return nil
 }
 
 func terminalArchiveManualMoveContract(sourceNode workflow.Node, targetNode workflow.Node) (workflow.TransitionGroup, workflow.Edge, bool) {

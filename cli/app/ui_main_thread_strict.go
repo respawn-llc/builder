@@ -41,6 +41,7 @@ func (m *uiModel) checkTUIBlockingOperation(kind, detail string) {
 	if detail != "" {
 		message += " (" + detail + ")"
 	}
+	m.logf("tui.main_thread_violation err=%q", message)
 	panic(message)
 }
 
@@ -52,7 +53,7 @@ func (m *uiModel) assertUITerminalMainThread(kind string) {
 	if kind == "" {
 		kind = "terminal write"
 	}
-	panic("TUI terminal write outside main thread: " + kind)
+	m.logf("tui.main_thread_violation err=%q", "TUI terminal write outside main thread: "+kind)
 }
 
 type uiMainThreadTerminalWriter struct {

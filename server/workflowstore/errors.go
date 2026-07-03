@@ -77,6 +77,8 @@ var (
 	ErrManualMoveContinueSessionNeedsSource = errors.New("continue_session requires source session for manual move")
 	ErrManualMoveApprovalNeedsSourceRun     = errors.New("manual move requiring approval needs a source run")
 	ErrManualMoveDuringParallelBatch        = errors.New("manual move during active parallel batch is not supported")
+	ErrManualMoveDuringActiveRun            = errors.New("manual move during active workflow run is not supported")
+	ErrManualMoveExecutableTargetNeedsEdge  = errors.New("manual move to executable target requires a workflow edge")
 	ErrManualMoveNoSourcePosition           = errors.New("manual move has no active placement or pending approval to move from")
 	ErrManualMoveMultiplePendingApprovals   = errors.New("manual move with multiple pending approvals is not supported")
 	ErrManualMovePendingApprovalResolved    = errors.New("pending approval was resolved before the manual move could override it")

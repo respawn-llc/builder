@@ -392,6 +392,9 @@ func (m *uiModel) steerNativeProjectionLines(lines []tui.TranscriptProjectionLin
 		return nil
 	}
 	for _, line := range lines {
+		if line.Kind == tui.VisibleLineDivider || strings.TrimSpace(line.Text) == "" {
+			continue
+		}
 		if err := m.nativeSurface.surface.Steer(m.nativeStableProjectionLineText(line)); err != nil {
 			return err
 		}

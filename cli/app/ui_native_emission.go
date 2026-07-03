@@ -12,8 +12,6 @@ import (
 
 const nativeMaxPendingEmissions = 1000
 
-var errNativeStableNonAppend = errors.New("native stable output cannot apply non-append committed transcript change")
-var errNativeStableNonGapHydration = errors.New("native stable output cannot hydrate non-gap committed transcript divergence")
 var errNativeAssistantStreamFinalizerMismatch = errors.New("native active assistant stream finalizer does not extend streamed source")
 var errNativeAssistantStreamScratchAbort = errors.New("native scratch hydration could not abort active assistant stream")
 

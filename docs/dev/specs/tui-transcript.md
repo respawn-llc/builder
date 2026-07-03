@@ -49,6 +49,8 @@
 - Detail tool calls with error results stay collapsed by default but may show compact input plus structured error summary.
 - Detail scrolling is line-oriented.
 - `Up`/`Down` move by one rendered line when viewport can scroll.
+- `Enter` toggles the selected entry's expansion; `PgUp`/`PgDn` scroll by a viewport page; `Tab` inside detail returns to ongoing mode.
+- The detail transcript is a bounded window over the session transcript: scrolling at the loaded edge requests the adjacent page; no full-transcript load ever occurs.
 - After line, page, wheel, or alternate-scroll movement, compact detail selects the visible selectable item nearest viewport center.
 - Tall expanded entries remain selected while their body crosses the center anchor.
 - Detail rows do not use dedicated collapsed/expanded glyphs. First rendered line keeps normal role/tool symbol; continuations use faint tree guides.
@@ -109,7 +111,7 @@
 - Detail shell commands use full syntax color. Ongoing shell commands are subdued.
 - No timestamps are shown in UI.
 - Streaming paint cadence is 16ms with token coalescing per flush tick.
-- Main status line is compact and fixed: activity indicator, optional git branch, model label, process/server metadata, transient warning, and right-aligned context meter.
+- Main status line is compact and fixed: activity indicator, optional git branch, model label, process metadata, transient warning, and right-aligned context meter. Composition, priority, and notice semantics are owned by tui-status-line.md.
 - Goal mode does not add persistent goal text. The primary-blue `goal` progress word is visible when the runtime goal SSOT reports an active goal, including at startup, between goal-loop turns, or while runtime-local suspended. Paused, completed, and cleared goals do not show the indicator. Reviewer and compaction indicators keep precedence over goal because they describe immediate blocking activity.
 - Context meter is a 10-char bar plus `% ctx window`, green/yellow/red at `<50%`, `50-<80%`, `>=80%`.
 
@@ -122,7 +124,7 @@
 - In-turn user messaging queues typed steering intents for later safe-boundary delivery and supports queued post-turn send.
 - Queue/send hotkey is `Tab`; `Ctrl+Enter` is a compatibility alias.
 - Known `Ctrl+Enter` CSI encodings normalize to the same queue action.
-- Clipboard image paste hotkeys are `Ctrl+V` and `Ctrl+D`; they save clipboard images to temp PNG files and insert the path.
+- Clipboard image paste hotkeys are `Ctrl+V` and `Ctrl+D`; they save clipboard images to temp image files and insert the path. The on-disk image format is OS/tool-specific, not a contract.
 - Mid-run steering is soft-insert only at safe boundaries after current tool completion.
 - Steering submissions never lock the input box; each `Enter` while busy queues another steering message.
 - Pending steering and pending user messages are strict FIFO.
@@ -184,7 +186,7 @@
 - `Enter` runs the selected slash command, including default first match for partial input.
 - `Tab` on partial selected command autocompletes it and inserts trailing space.
 - Unknown slash commands are sent to the model as normal user prompts.
-- Built-ins: `/logout`, `/exit`, `/new`, `/resume`, `/compact`, `/name`, `/thinking`, `/fast`, `/review`, `/init`, `/supervisor`, `/autocompaction`, `/status`, `/ps`, `/copy`, `/back`.
+- Built-ins: `/logout`, `/login`, `/exit`, `/new`, `/resume`, `/compact`, `/name`, `/thinking`, `/fast`, `/review`, `/init`, `/supervisor`, `/autocompaction`, `/questions`, `/status`, `/goal`, `/ps`, `/worktree` (alias `/wt`), `/copy`, `/back`.
 - Exact known slash commands use the normal queued-input drain path when queued; they are never sent as plain user prompts.
 - Run-safe commands execute immediately while busy.
 - Non-run-safe known commands while busy are rejected with transient status-line error.

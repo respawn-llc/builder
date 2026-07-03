@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"core/server/attentionnotify"
+	"core/server/auth"
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
@@ -308,10 +309,8 @@ func TestWorkflowRuntimeTaskQuestionBatchPublishesOneTaskDetailAttention(t *test
 		t.Fatalf("SubmitPromptResponse first: %v", err)
 	}
 	second := fixture.waitForWaitingAsk(t, task.ID, "call-ask-2")
-	pendingUpdate := nextWorkflowAttentionEvent(t, desktopSub)
-	assertTaskQuestionBatchPending(t, pendingUpdate, fixture, task, second.SessionID, "call-ask-2")
-	if pendingUpdate.Pending.Revision <= pending.Pending.Revision {
-		t.Fatalf("pending update revision = %d, want > %d", pendingUpdate.Pending.Revision, pending.Pending.Revision)
+	if event, ok := workflowAttentionEventWithin(t, desktopSub, 250*time.Millisecond); ok {
+		t.Fatalf("second batch ask published duplicate pending attention: %+v", event)
 	}
 	if err := fixture.runtimes.SubmitPromptResponse(second.SessionID, askquestion.AskQuestionResponse{RequestID: "call-ask-2", Answer: "Keep it safe"}, nil); err != nil {
 		t.Fatalf("SubmitPromptResponse second: %v", err)
@@ -1499,6 +1498,96 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	}
 	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != "" {
 		t.Fatalf("continuation = %+v, want cleared role", got)
+	}
+}
+
+func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer("{}"))
+	containerDir := filepath.Join(filepath.Join(fixture.cfg.PersistenceRoot, "projects"), fixture.projectID, "sessions")
+	source, err := session.Create(containerDir, filepath.Base(containerDir), fixture.cfg.WorkspaceRoot, fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("create source session: %v", err)
+	}
+	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+
+	plan, _, err := fixture.starter.planSession(context.Background(), workflowstore.RunStartContext{
+		ContextMode:     workflow.ContextModeContinueSession,
+		SourceSessionID: source.Meta().SessionID,
+		Task: workflowstore.TaskRecord{
+			ID:        "task-1",
+			ProjectID: fixture.projectID,
+			ShortID:   "RUN-1",
+			Title:     "Task title",
+		},
+		Workflow:       workflowstore.WorkflowRecord{ID: "workflow-1"},
+		Node:           workflowstore.NodeRecord{ID: "node-1", Key: "plan", SubagentRole: "coder"},
+		PromptTemplate: "Continue.",
+	})
+	if err != nil {
+		t.Fatalf("planSession: %v", err)
+	}
+	if plan.ActiveSettings.Model != "gpt-5.5" {
+		t.Fatalf("model = %q, want locked model", plan.ActiveSettings.Model)
+	}
+	reopened, err := session.Open(source.Dir(), fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("open source session: %v", err)
+	}
+	if got := reopened.Meta().Continuation; got == nil || got.AgentRole != "coder" {
+		t.Fatalf("continuation = %+v, want coder role persisted", got)
+	}
+}
+
+func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T) {
+	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer("{}"))
+	containerDir := filepath.Join(filepath.Join(fixture.cfg.PersistenceRoot, "projects"), fixture.projectID, "sessions")
+	source, err := session.Create(containerDir, filepath.Base(containerDir), fixture.cfg.WorkspaceRoot, fixture.metadata.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("create source session: %v", err)
+	}
+	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: "reviewer"}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	planner := launch.Planner{
+		Config:       fixture.cfg,
+		ContainerDir: containerDir,
+		StoreOptions: fixture.metadata.AuthoritativeSessionStoreOptions(),
+	}
+	plan, err := planner.PlanSession(context.Background(), launch.SessionRequest{
+		Mode:              launch.ModeHeadless,
+		SelectedSessionID: source.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	_, _, err = launch.ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: "coder"}, auth.EmptyState())
+	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
+		t.Fatalf("ApplyRunPromptOverrides error = %v, want locked role change", err)
+	}
+
+	plan, _, err = fixture.starter.planSession(context.Background(), workflowstore.RunStartContext{
+		ContextMode:     workflow.ContextModeContinueSession,
+		SourceSessionID: source.Meta().SessionID,
+		Task: workflowstore.TaskRecord{
+			ID:        "task-1",
+			ProjectID: fixture.projectID,
+			ShortID:   "RUN-1",
+			Title:     "Task title",
+		},
+		Workflow:       workflowstore.WorkflowRecord{ID: "workflow-1"},
+		Node:           workflowstore.NodeRecord{ID: "node-1", Key: "plan", SubagentRole: "coder"},
+		PromptTemplate: "Continue.",
+	})
+	if err != nil {
+		t.Fatalf("workflow planSession: %v", err)
+	}
+	if got := plan.Store.Meta().Continuation; got == nil || got.AgentRole != "coder" {
+		t.Fatalf("workflow continuation = %+v, want coder role", got)
 	}
 }
 

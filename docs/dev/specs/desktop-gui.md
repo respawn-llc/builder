@@ -126,6 +126,8 @@
 - Board visual states include Backlog/idle, queued, running, interrupted, approval-gated, question-gated, done/completed, canceled, and validation-blocked.
 - Dragging Backlog task to first active node starts automation immediately with no confirmation.
 - Dragging to Done is a user archive/manual move, not normal edge completion.
+- Manual move and Done drag targets are unavailable while a task has a started active run that is not completed or interrupted, including runs waiting on a question.
+- Agent and script drag targets are available only when the server exposes a concrete workflow edge to that executable target.
 - Done permissions, pagination, and status handling are server-authoritative.
 - Invalid/default-node-only workflows remain visible and their tasks remain visible.
 - New Task stays available for invalid workflows and creates Backlog tasks.

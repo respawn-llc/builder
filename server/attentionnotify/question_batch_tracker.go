@@ -94,6 +94,9 @@ func (t *QuestionBatchTracker) MarkMaterialized(batchID string, askID string) er
 	if batch.status[askID] == questionAskPending {
 		batch.status[askID] = questionAskMaterialized
 	}
+	if batch.emitted {
+		return nil
+	}
 	return t.publishBatch(batch)
 }
 
@@ -141,11 +144,6 @@ func (t *QuestionBatchTracker) MarkSkipped(batchID string, askID string) error {
 	}
 	if batch.status[askID] == questionAskPending {
 		batch.status[askID] = questionAskSkipped
-		if batch.emitted {
-			if err := t.publishBatch(batch); err != nil {
-				return err
-			}
-		}
 	}
 	return t.resolveIfComplete(batch)
 }

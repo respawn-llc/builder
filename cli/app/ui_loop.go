@@ -68,7 +68,6 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 		WithUITerminalCursorState(terminalCursor),
 		WithUIRendererOutputGateState(rendererOutputGate),
 		WithUITerminalFocusState(wiring.terminalFocus),
-		WithUINativeSurfaceWriter(os.Stdout),
 	)
 	if closable, ok := model.(interface{ Close() }); ok {
 		defer closable.Close()

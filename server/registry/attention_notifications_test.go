@@ -94,9 +94,8 @@ func TestRuntimeRegistryPublishesTaskQuestionBatchWithoutGenericResolve(t *testi
 	skipped := *req.QuestionBatch
 	skipped.PromptID = "ask-2"
 	registry.MarkTaskQuestionSkipped(skipped)
-	update := nextRegistryAttentionEvent(t, desktopSub)
-	if update.Type != clientui.AttentionNotificationEventPending || update.Pending.Question.DisplayCount != 1 {
-		t.Fatalf("skip update event = %+v", update)
+	if event, err := desktopSub.Next(shortRegistryContext(t)); err == nil {
+		t.Fatalf("skip published duplicate pending attention: %+v", event)
 	}
 	registry.MarkTaskQuestionCleared(*req.QuestionBatch, "ask-1")
 	resolved := nextRegistryAttentionEvent(t, desktopSub)
@@ -222,7 +221,9 @@ func TestRuntimeRegistrySessionAttentionSnapshotPreservesTaskQuestionBatch(t *te
 	skipped := *req.QuestionBatch
 	skipped.PromptID = "ask-2"
 	registry.MarkTaskQuestionSkipped(skipped)
-	_ = nextRegistryAttentionEvent(t, sub)
+	if event, err := sub.Next(shortRegistryContext(t)); err == nil {
+		t.Fatalf("skip published duplicate pending snapshot attention: %+v", event)
+	}
 	registry.MarkTaskQuestionCleared(*req.QuestionBatch, "ask-1")
 	resolved := nextRegistryAttentionEvent(t, sub)
 	if resolved.Type != clientui.AttentionNotificationEventResolved || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, "batch-1")) {

@@ -15,9 +15,15 @@ import (
 	"time"
 
 	"core/cli/app"
+	"core/server/launch"
+	"core/server/metadata"
+	"core/server/registry"
+	"core/server/session"
+	"core/server/sessionlaunch"
 	serverstartup "core/server/startup"
 	"core/shared/config"
 	"core/shared/llmerrors"
+	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
 
@@ -177,6 +183,89 @@ func TestRootCommandMapsAgentFlagToInteractiveApp(t *testing.T) {
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRootCommandContinueAgentRejectsLockedRoleChange(t *testing.T) {
+	original := runInteractiveApp
+	t.Cleanup(func() {
+		runInteractiveApp = original
+	})
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	cfg, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	reviewerSettings := cfg.Settings
+	reviewerSettings.Model = "gpt-5.5"
+	workerSettings := cfg.Settings
+	workerSettings.Model = "gpt-5.4-mini"
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"reviewer": {Settings: reviewerSettings},
+		"worker":   {Settings: workerSettings},
+	}
+	meta, err := metadata.Open(cfg.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("metadata.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = meta.Close() })
+	binding, err := meta.RegisterWorkspaceBinding(ctx, cfg.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	containerDir := filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
+	store, err := session.Create(containerDir, filepath.Base(filepath.Clean(cfg.WorkspaceRoot)), cfg.WorkspaceRoot, meta.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "reviewer"}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	service := sessionlaunch.NewService(launch.Planner{
+		Config:       cfg,
+		ContainerDir: containerDir,
+		StoreOptions: meta.AuthoritativeSessionStoreOptions(),
+	}, registry.NewSessionStoreRegistry())
+	runInteractiveApp = func(ctx context.Context, opts app.Options) error {
+		if opts.SessionID != store.Meta().SessionID || opts.AgentRole != "worker" {
+			t.Fatalf("interactive options = %+v, want locked session and worker role", opts)
+		}
+		_, err := service.PlanSession(ctx, serverapi.SessionPlanRequest{
+			ClientRequestID:   "root-command-regression",
+			Mode:              serverapi.SessionLaunchModeInteractive,
+			SelectedSessionID: opts.SessionID,
+			Overrides:         serverapi.RunPromptOverrides{AgentRole: opts.AgentRole},
+		})
+		if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
+			t.Fatalf("PlanSession error = %v, want locked role change", err)
+		}
+		return err
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	args := []string{
+		"--force-interactive",
+		"--continue", store.Meta().SessionID,
+		"--agent", "worker",
+	}
+	if code := rootCommand(args, strings.NewReader(""), &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, launch.ErrLockedAgentRoleChange.Error()) {
+		t.Fatalf("stderr = %q, want locked role error", got)
 	}
 }
 

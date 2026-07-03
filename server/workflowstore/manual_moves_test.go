@@ -41,6 +41,41 @@ func TestManualMoveToTerminalArchivesWithoutOutputValues(t *testing.T) {
 	}
 }
 
+func TestManualMoveRejectsStartedRun(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	if _, err := store.ClaimRun(ctx, started.RunID, 0); err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	done := nodeByKind(t, def, workflow.NodeKindTerminal)
+
+	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(done)})
+	if !errors.Is(err, ErrManualMoveDuringActiveRun) {
+		t.Fatalf("ManualMoveTask started run error = %v, want active-run rejection", err)
+	}
+
+	runs, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 || runs[0].CompletedAt != 0 || runs[0].InterruptedAt != 0 {
+		t.Fatalf("runs after rejected manual move = %+v, want original active run", runs)
+	}
+	placements, err := store.ListPlacements(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPlacements: %v", err)
+	}
+	if len(placements) != 2 || placements[1].State != "active" {
+		t.Fatalf("placements after rejected manual move = %+v, want original active placement", placements)
+	}
+}
+
 func TestManualMoveFromTerminalToStartResetsTaskToBacklog(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
@@ -386,6 +421,30 @@ func TestManualMoveExecutableTargetRequiresApprovalBeforeAutomation(t *testing.T
 	}
 	if moved.State != "pending_approval" || len(moved.PlacementIDs) != 0 || len(moved.RunIDs) != 0 {
 		t.Fatalf("manual executable move = %+v, want pending approval without automation", moved)
+	}
+}
+
+func TestManualMoveRejectsMissingEdgeExecutableTarget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	impl := nodeByKey(t, def, "implement")
+
+	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(impl), AllowMissingEdge: true})
+	if !errors.Is(err, ErrManualMoveExecutableTargetNeedsEdge) {
+		t.Fatalf("ManualMoveTask missing executable edge error = %v, want executable edge requirement", err)
+	}
+	runs, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs after rejected missing-edge executable move = %+v, want none", runs)
 	}
 }
 

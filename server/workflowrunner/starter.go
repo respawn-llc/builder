@@ -465,7 +465,7 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 		}
 	}
 	warnings := []string{}
-	allowLockedRoleChange := allowLockedCompactContinuationRoleChange(plan, input, overrides)
+	allowLockedRoleChange := allowLockedWorkflowContinuationRoleChange(plan, overrides)
 	plan, warnings, err = launch.ApplyRunPromptOverridesWithOptions(plan, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
 		AllowLockedAgentRoleChange: allowLockedRoleChange,
 	})
@@ -476,8 +476,8 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 	return plan, warnings, nil
 }
 
-func allowLockedCompactContinuationRoleChange(plan launch.SessionPlan, input workflowstore.RunStartContext, overrides serverapi.RunPromptOverrides) bool {
-	if !plan.ModelContractLocked || input.ContextMode != workflow.ContextModeCompactAndContinueSession {
+func allowLockedWorkflowContinuationRoleChange(plan launch.SessionPlan, overrides serverapi.RunPromptOverrides) bool {
+	if !plan.ModelContractLocked {
 		return false
 	}
 	roleOverride, err := overrides.AgentRoleOverride()

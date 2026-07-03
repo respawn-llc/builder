@@ -248,6 +248,7 @@ describe("AttentionNotificationController", () => {
     });
 
     await waitForSonnerArticleCount(1);
+    expect(singleSonnerArticle().onAction).toBeUndefined();
     clickFirstSonnerButton();
     await waitFor(() => {
       expect(native.focusMain).toHaveBeenCalledOnce();
@@ -355,6 +356,29 @@ describe("AttentionNotificationController", () => {
     render(<App services={services} />);
 
     await waitForSonnerArticleCount(1);
+  });
+
+  it("logs native notification permission request failures", async () => {
+    const native = nativeBridgeHarness({
+      focused: true,
+      nativeAvailable: true,
+      permission: "prompt",
+      requestPermissionError: new Error("No bundle identifier found."),
+    });
+    const services = createTestServices(startupRoutes, native.bridge);
+
+    render(<App services={services} />);
+
+    await waitFor(() => {
+      expect(services.logger.entries()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          context: {
+            error: "No bundle identifier found.",
+          },
+        }),
+      );
+    });
   });
 
   it("reconciles surfaced attention after reconnect without notifying durable baseline attention", async () => {
@@ -539,10 +563,10 @@ function singleSonnerArticle(): StatusNotice {
 
 function clickFirstSonnerButton(): void {
   const notice = singleSonnerArticle();
-  if (notice.onAction === undefined) {
-    throw new Error("Expected a status toast action.");
+  if (notice.onClick === undefined) {
+    throw new Error("Expected a clickable status toast.");
   }
-  notice.onAction();
+  notice.onClick();
 }
 
 function clickLastSonnerButton(): void {
@@ -577,12 +601,14 @@ function nativeBridgeHarness({
   nativeAvailable,
   notifyError,
   permission = "granted",
+  requestPermissionError,
   requestedPermission,
 }: Readonly<{
   focused: boolean | Promise<boolean>;
   nativeAvailable: boolean;
   notifyError?: Error | undefined;
   permission?: NativeNotificationPermission | undefined;
+  requestPermissionError?: Error | undefined;
   requestedPermission?: NativeNotificationPermission | undefined;
 }>): NativeBridgeHarness {
   const base = createBrowserNativeBridge({ platform: "macos" });
@@ -609,6 +635,9 @@ function nativeBridgeHarness({
           return permission;
         },
         async requestPermission(): Promise<NativeNotificationPermission> {
+          if (requestPermissionError !== undefined) {
+            throw requestPermissionError;
+          }
           return requestedPermission ?? permission;
         },
         notify,

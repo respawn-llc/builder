@@ -72,12 +72,6 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			})
 			return cmd, true, false, false
 		}
-		if m.nativeSurfaceConfigured() && m.nativeImmutableTranscriptWritten && reduction.hydrationCause == clientui.TranscriptRecoveryCauseNone {
-			m.logNativeTranscriptInvariant("hydrate committed transcript", errNativeStableNonGapHydration, state, evt, reduction)
-			if cmd, fatal := m.nativeInvariantViolationCmd("hydrate committed transcript", errNativeStableNonGapHydration); fatal {
-				return cmd, false, false, true
-			}
-		}
 		m.beginCommittedTranscriptContinuityRecovery()
 		m.logTranscriptEventDiag("transcript.diag.client.append_entries", evt, map[string]string{
 			"path":           "live_event",
@@ -216,7 +210,7 @@ func (a uiRuntimeAdapter) applyProjectedTranscriptEntries(evt clientui.Event) (t
 			m.clearAssistantStreamForCommittedAppend()
 			nativeRangeStart += skippedLeading
 		}
-		committedNativeEntries := ownedCommittedTranscriptEntriesForApp(nativeEntries)
+		committedNativeEntries := committedTranscriptEntriesForApp(nativeEntries)
 		if len(committedNativeEntries) > 0 {
 			prependDivider := m.nativePrependDividerBeforeRange(nativeRangeStart, committedNativeEntries)
 			if m.nativeStableOutputReady() {

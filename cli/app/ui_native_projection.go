@@ -6,10 +6,9 @@ func (m *uiModel) nativeCommittedProjectionForEntries(entries []tui.TranscriptEn
 	if m == nil {
 		return tui.TranscriptProjection{}
 	}
-	committedEntries := ownedCommittedTranscriptEntriesForApp(entries)
 	state := m.view.TranscriptProjectionViewState()
-	return tui.ProjectNativeCommittedOngoingTranscript(
-		committedEntries,
+	return tui.ProjectCommittedOngoingTranscript(
+		entries,
 		state.Theme,
 		state.ViewportWidth,
 		m.transcriptBaseOffset,

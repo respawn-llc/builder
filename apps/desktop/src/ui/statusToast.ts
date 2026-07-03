@@ -1,4 +1,4 @@
-import { createElement, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { createElement, type MouseEvent, type ReactNode } from "react";
 import { toast, type ExternalToast } from "sonner";
 
 export type ToastTone = "neutral" | "info" | "success" | "warning" | "danger";
@@ -27,23 +27,19 @@ const toastByTone: Readonly<Record<ToastTone, ToastDispatcher>> = {
 };
 
 export function showStatusToast(notice: StatusNotice): void {
-  if (notice.onClick !== undefined) {
-    toast.custom((toastID) => clickableNoticeContent(notice, toastID), toastOptions(notice, "custom"));
-    return;
-  }
   toastByTone[notice.tone](toastTitle(notice), toastOptions(notice));
 }
 
-function toastOptions(notice: StatusNotice, mode: "custom" | "standard" = "standard"): ExternalToast {
+function toastOptions(notice: StatusNotice): ExternalToast {
   const duration = notice.dismissible === false ? Infinity : notice.durationMs;
   const action =
-    mode === "standard" && notice.actionLabel !== undefined && notice.onAction !== undefined
+    notice.onClick === undefined && notice.actionLabel !== undefined && notice.onAction !== undefined
       ? { action: { label: notice.actionLabel, onClick: notice.onAction } }
       : {};
   const durationOption = duration !== undefined ? { duration } : {};
   const dismissOption = notice.onDismiss !== undefined ? { onDismiss: notice.onDismiss } : {};
   const descriptionOption =
-    mode === "custom" || notice.body === undefined || notice.body.length === 0
+    notice.onClick !== undefined || notice.body === undefined || notice.body.length === 0
       ? {}
       : { description: notice.body };
   const options: ExternalToast = {
@@ -51,13 +47,16 @@ function toastOptions(notice: StatusNotice, mode: "custom" | "standard" = "stand
     ...descriptionOption,
     ...dismissOption,
     ...durationOption,
-    closeButton: mode === "standard" && notice.dismissible !== false,
+    closeButton: notice.dismissible !== false,
     id: notice.id,
   };
   return options;
 }
 
 function toastTitle(notice: StatusNotice): ReactNode {
+  if (notice.onClick !== undefined) {
+    return clickableNoticeTitle(notice);
+  }
   return notice.title;
 }
 
@@ -65,57 +64,25 @@ export function dismissStatusToast(id: string): void {
   toast.dismiss(id);
 }
 
-function clickableNoticeContent(notice: StatusNotice, toastID: string | number) {
+function clickableNoticeTitle(notice: StatusNotice): ReactNode {
   return createElement(
-    "article",
+    "button",
     {
-      className: "grid cursor-pointer gap-[var(--space-2)] text-left",
-      onKeyDown(event: KeyboardEvent<HTMLElement>) {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          notice.onClick?.();
-        }
+      className:
+        "grid w-full min-w-0 cursor-pointer gap-[var(--space-1)] rounded-[var(--radius-s)] border-0 bg-transparent p-0 text-left text-inherit outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]",
+      onClick(event: MouseEvent<HTMLButtonElement>) {
+        event.stopPropagation();
+        notice.onClick?.();
       },
-      onClick: notice.onClick,
-      role: "button",
-      tabIndex: 0,
+      type: "button",
     },
-    createElement(
-      "div",
-      { className: "grid gap-[var(--space-1)]" },
-      createElement("strong", { className: "font-extrabold" }, notice.title),
-      notice.body === undefined || notice.body.length === 0
-        ? null
-        : createElement("span", { className: "text-[var(--color-muted)]" }, notice.body),
-    ),
-    notice.actionLabel !== undefined && notice.onAction !== undefined
-      ? createElement(
-          "button",
-          {
-            className: "justify-self-start rounded-[var(--radius-s)] border border-[var(--color-outline)] px-[var(--space-2)] py-[var(--space-1)]",
-            onClick(event: MouseEvent<HTMLButtonElement>) {
-              event.stopPropagation();
-              notice.onAction?.();
-            },
-            type: "button",
-          },
-          notice.actionLabel,
-        )
-      : null,
-    notice.dismissible === false
+    createElement("span", { className: "min-w-0 truncate" }, notice.title),
+    notice.body === undefined || notice.body.length === 0
       ? null
       : createElement(
-          "button",
-          {
-            "aria-label": "Close",
-            className: "absolute right-[var(--space-2)] top-[var(--space-2)] rounded-[var(--radius-s)] px-[var(--space-1)]",
-            onClick(event: MouseEvent<HTMLButtonElement>) {
-              event.stopPropagation();
-              toast.dismiss(toastID);
-            },
-            type: "button",
-          },
-          "Close",
+          "span",
+          { className: "line-clamp-3 font-normal text-[var(--color-muted)]" },
+          notice.body,
         ),
   );
 }
