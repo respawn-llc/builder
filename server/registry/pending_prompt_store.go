@@ -47,8 +47,8 @@ func (s *pendingPromptStore) Begin(req askquestion.AskQuestionRequest, publish f
 	}
 	snapshot := PendingPromptSnapshot{Request: req, CreatedAt: time.Now()}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.pending[requestID] = &pendingPromptEntry{PendingPromptSnapshot: snapshot}
+	s.mu.Unlock()
 	if publish != nil {
 		publish(snapshot, pendingPromptEventPending)
 	}
@@ -116,12 +116,10 @@ func (s *pendingPromptStore) Await(ctx context.Context, req askquestion.AskQuest
 		return askquestion.AskQuestionResponse{}, fmt.Errorf("prompt %q is already pending", requestID)
 	}
 	s.pending[requestID] = pending
-	func() {
-		defer s.mu.Unlock()
-		if publish != nil {
-			publish(pending.PendingPromptSnapshot, pendingPromptEventPending)
-		}
-	}()
+	s.mu.Unlock()
+	if publish != nil {
+		publish(pending.PendingPromptSnapshot, pendingPromptEventPending)
+	}
 	defer func() {
 		var shouldPublishResolved bool
 		s.mu.Lock()

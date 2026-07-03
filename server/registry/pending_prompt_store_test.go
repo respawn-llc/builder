@@ -9,7 +9,7 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestPendingPromptStoreHoldsSnapshotLockThroughLivePendingPublish(t *testing.T) {
+func TestPendingPromptStoreSnapshotsDoNotWaitForLivePendingPublish(t *testing.T) {
 	store := newPendingPromptStore()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -51,8 +51,8 @@ func TestPendingPromptStoreHoldsSnapshotLockThroughLivePendingPublish(t *testing
 
 	select {
 	case <-snapshotEntered:
-		t.Fatal("snapshot entered while live pending publication was still in-flight")
-	case <-time.After(25 * time.Millisecond):
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for snapshot during live pending publication")
 	}
 
 	close(releasePublish)
@@ -75,7 +75,7 @@ func TestPendingPromptStoreHoldsSnapshotLockThroughLivePendingPublish(t *testing
 	}
 }
 
-func TestPendingPromptStoreBeginHoldsSnapshotLockThroughLivePendingPublish(t *testing.T) {
+func TestPendingPromptStoreBeginSnapshotsDoNotWaitForLivePendingPublish(t *testing.T) {
 	store := newPendingPromptStore()
 	publishStarted := make(chan struct{})
 	releasePublish := make(chan struct{})
@@ -113,8 +113,8 @@ func TestPendingPromptStoreBeginHoldsSnapshotLockThroughLivePendingPublish(t *te
 
 	select {
 	case <-snapshotEntered:
-		t.Fatal("snapshot entered while Begin live pending publication was still in-flight")
-	case <-time.After(25 * time.Millisecond):
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for snapshot during Begin live pending publication")
 	}
 
 	close(releasePublish)

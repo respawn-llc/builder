@@ -22,7 +22,7 @@ func runMode(mode string) error {
 		fmt.Printf("input:%s", string(b[:]))
 	case "hang":
 		fmt.Print("ready")
-		select {}
+		time.Sleep(24 * time.Hour)
 	case "resize-order":
 		fmt.Print("before")
 		time.Sleep(500 * time.Millisecond)
