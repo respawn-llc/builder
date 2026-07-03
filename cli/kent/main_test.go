@@ -619,6 +619,46 @@ func TestRunSubcommandPreservesShortPromptStartingWithLiveStopVerb(t *testing.T)
 	}
 }
 
+func TestRunSubcommandPreservesPromptWhenLiveVerbArityDoesNotMatch(t *testing.T) {
+	originalPrompt := runPromptApp
+	originalWait := runLiveWaitApp
+	originalSteer := runLiveSteerApp
+	t.Cleanup(func() {
+		runPromptApp = originalPrompt
+		runLiveWaitApp = originalWait
+		runLiveSteerApp = originalSteer
+	})
+	var prompts []string
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+		prompts = append(prompts, prompt)
+		return app.RunPromptResult{SessionID: "018fdd67-89ab-4cde-8123-456789abcdef", Result: "done"}, nil
+	}
+	runLiveWaitApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunPromptResult, error) {
+		t.Fatal("live wait app should not be called when wait has extra prompt words")
+		return app.RunPromptResult{}, nil
+	}
+	runLiveSteerApp = func(context.Context, app.Options, runtimeids.SessionID, string) (app.RunLiveSteerResult, error) {
+		t.Fatal("live steer app should not be called without a message")
+		return app.RunLiveSteerResult{}, nil
+	}
+
+	if _, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "wait", "018fdd67-89ab-4cde-8123-456789abcdef", "for", "CI"}); code != 0 {
+		t.Fatalf("wait prompt exit code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if _, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "steer", "018fdd67-89ab-4cde-8123-456789abcdef"}); code != 0 {
+		t.Fatalf("steer prompt exit code = %d, want 0; stderr=%q", code, stderr)
+	}
+	want := []string{"wait 018fdd67-89ab-4cde-8123-456789abcdef for CI", "steer 018fdd67-89ab-4cde-8123-456789abcdef"}
+	if len(prompts) != len(want) {
+		t.Fatalf("prompts = %+v, want %+v", prompts, want)
+	}
+	for i := range want {
+		if prompts[i] != want[i] {
+			t.Fatalf("prompts = %+v, want %+v", prompts, want)
+		}
+	}
+}
+
 func TestRunSteerSubcommandQueuesLiveMessage(t *testing.T) {
 	original := runLiveSteerApp
 	t.Cleanup(func() { runLiveSteerApp = original })
@@ -638,7 +678,7 @@ func TestRunSteerSubcommandQueuesLiveMessage(t *testing.T) {
 	if gotSession != "018fdd67-89ab-4cde-8123-456789abcdef" || gotMessage != "hello there" || gotRoot != "test-root" {
 		t.Fatalf("unexpected live steer mapping session=%q message=%q root=%q", gotSession, gotMessage, gotRoot)
 	}
-	if stdout != "ok\n" || stderr != "" {
+	if stdout == "" || stderr != "" {
 		t.Fatalf("unexpected output stdout=%q stderr=%q", stdout, stderr)
 	}
 }

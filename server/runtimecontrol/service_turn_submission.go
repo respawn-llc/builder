@@ -23,6 +23,10 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 			if errors.Is(err, serverapi.ErrSessionRunStarting) {
 				resp, recordEngine, steered, steerErr := s.trySubmitUserTurnAsActiveLiveSteer(ctx, attempt, memoReq, req)
 				if steerErr != nil {
+					if errors.Is(steerErr, runtime.ErrNoActiveLiveRun) {
+						s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, err, attempt)
+						return serverapi.RuntimeSubmitUserTurnResponse{}, err
+					}
 					s.recordRuntimeAccessFailureOrCancellation(memoReq.SessionID, req.OperationRef, steerErr, attempt)
 					return serverapi.RuntimeSubmitUserTurnResponse{}, steerErr
 				}
@@ -109,14 +113,11 @@ func (s *Service) trySubmitUserTurnAsActiveLiveSteer(ctx context.Context, attemp
 	steered := false
 	runCtx, stopRunCtx := mergeOperationContexts(ctx, attempt.Context())
 	defer stopRunCtx()
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(strings.TrimSpace(req.ClientRequestID))
-	if err != nil {
-		return serverapi.RuntimeSubmitUserTurnResponse{}, nil, false, err
-	}
-	err = s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
+	liveClientRequestID := runtimeids.NewRuntimeClientRequestID()
+	err := s.withRuntimeAccess(runCtx, req.SessionID, func(engine *runtime.Engine) error {
 		recordEngine = engine
 		committed, err := s.operations.TryCommitOperationMutation(memoReq.SessionID, req.OperationRef, func() error {
-			item, accepted, err := engine.QueueUserMessageForActiveRun(runCtx, memoReq.Text, clientRequestID, nil)
+			item, accepted, err := engine.QueueUserMessageForActiveRun(runCtx, memoReq.Text, liveClientRequestID, nil)
 			if err != nil {
 				return err
 			}
