@@ -72,7 +72,8 @@ func (e *Engine) failQueuedUserWorkIfTerminal() bool {
 	if e == nil || !e.WorkflowTerminalState().Completed {
 		return false
 	}
-	e.FailQueuedUserMessages(QueuedUserMessageFailureTerminalWorkflowCompletion)
+	failed := e.FailQueuedUserMessages(QueuedUserMessageFailureTerminalWorkflowCompletion)
+	e.completeLiveRunQueueItems(queuedUserMessageIDSet(failed))
 	return true
 }
 

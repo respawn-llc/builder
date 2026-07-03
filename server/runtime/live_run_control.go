@@ -119,9 +119,12 @@ func (e *Engine) TryInterruptActiveRun() (bool, error) {
 		return false, nil
 	}
 	e.ensureOrchestrationCollaborators()
+	snapshot := e.stepLifecycle.Snapshot()
+	if (snapshot == nil || !activeKindUsesLiveRun(snapshot.ActiveKind)) && !e.liveRun.hasPendingStopTarget() {
+		return false, nil
+	}
 	interrupted, taggedQueueItems, goalLoop := e.liveRun.interrupt()
 	if !interrupted {
-		snapshot := e.stepLifecycle.Snapshot()
 		if snapshot == nil || !activeKindUsesLiveRun(snapshot.ActiveKind) {
 			return false, nil
 		}
@@ -350,6 +353,16 @@ func (c *liveRunCoordinator) acceptsQueueItemPublication() bool {
 		return false
 	}
 	return c.current.status == RunStatusRunning || c.current.status == RunStatusCompleted
+}
+
+func (c *liveRunCoordinator) hasPendingStopTarget() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	group := c.current
+	return group != nil && (len(group.taggedQueueItems) > 0 || len(group.publishingItems) > 0 || group.reservations > 0 || group.goalLoopHolding)
 }
 
 func (c *liveRunCoordinator) beginStep(snapshot *RunSnapshot) {

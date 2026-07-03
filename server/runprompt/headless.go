@@ -288,7 +288,7 @@ func (r *headlessPromptRuntime) SubmitUserMessage(ctx context.Context, prompt st
 				result, waitErr := waitHandle.Wait()
 				if waitErr == nil {
 					content = result.AssistantMessage.Content
-				} else if submitErr == nil {
+				} else if submitErr == nil && !errors.Is(waitErr, runtime.ErrLiveRunNoFinalAnswer) {
 					submitErr = waitErr
 				}
 			} else if waitStartErr != nil && submitErr == nil {

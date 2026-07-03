@@ -565,6 +565,35 @@ func TestRunSubcommandMapsFastFlagToAgentRole(t *testing.T) {
 	}
 }
 
+func TestRunSubcommandPreservesPromptStartingWithLiveWaitVerb(t *testing.T) {
+	originalPrompt := runPromptApp
+	originalWait := runLiveWaitApp
+	t.Cleanup(func() {
+		runPromptApp = originalPrompt
+		runLiveWaitApp = originalWait
+	})
+	var gotPrompt string
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+		gotPrompt = prompt
+		return app.RunPromptResult{SessionID: "018fdd67-89ab-4cde-8123-456789abcdef", Result: "done"}, nil
+	}
+	runLiveWaitApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunPromptResult, error) {
+		t.Fatal("live wait app should not be called for ordinary prompt")
+		return app.RunPromptResult{}, nil
+	}
+
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "wait", "for", "CI", "to", "finish"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if gotPrompt != "wait for CI to finish" {
+		t.Fatalf("prompt = %q, want joined prompt", gotPrompt)
+	}
+	if stdout == "" {
+		t.Fatal("stdout is empty; want final run output")
+	}
+}
+
 func TestRunSteerSubcommandQueuesLiveMessage(t *testing.T) {
 	original := runLiveSteerApp
 	t.Cleanup(func() { runLiveSteerApp = original })
@@ -668,6 +697,24 @@ func TestRunWaitNoActiveRunJSONHasCleanTypedError(t *testing.T) {
 	}
 	if decoded.Status != "error" || decoded.Error == nil || decoded.Error.Message != serverapi.ErrRuntimeNoActiveRun.Error() {
 		t.Fatalf("unexpected wait error json: %+v", decoded)
+	}
+}
+
+func TestRunWaitNoActiveRunFinalTextIncludesContinueHint(t *testing.T) {
+	original := runLiveWaitApp
+	t.Cleanup(func() { runLiveWaitApp = original })
+	runLiveWaitApp = func(context.Context, app.Options, runtimeids.SessionID) (app.RunPromptResult, error) {
+		return app.RunPromptResult{SessionID: "018fdd67-89ab-4cde-8123-456789abcdef"}, serverapi.ErrRuntimeNoActiveRun
+	}
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "wait", "018fdd67-89ab-4cde-8123-456789abcdef"})
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(stderr, "run --continue \"018fdd67-89ab-4cde-8123-456789abcdef\"") {
+		t.Fatalf("stderr = %q, want continue hint", stderr)
 	}
 }
 

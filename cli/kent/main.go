@@ -247,15 +247,13 @@ func publishPersistenceRootEnv(flagValue string) error {
 }
 
 func runSubcommand(args []string) int {
-	if len(args) > 0 {
-		switch args[0] {
-		case "steer":
-			return runLiveSteerSubcommand(args[1:])
-		case "stop":
-			return runLiveStopSubcommand(args[1:])
-		case "wait":
-			return runLiveWaitSubcommand(args[1:])
-		}
+	switch liveControlSubcommand(args) {
+	case "steer":
+		return runLiveSteerSubcommand(args[1:])
+	case "stop":
+		return runLiveStopSubcommand(args[1:])
+	case "wait":
+		return runLiveWaitSubcommand(args[1:])
 	}
 	runFS := flag.NewFlagSet(config.Command+" run", flag.ContinueOnError)
 	runFS.SetOutput(os.Stderr)
@@ -402,6 +400,59 @@ func runSubcommand(args []string) int {
 	return 0
 }
 
+func liveControlSubcommand(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	verb := args[0]
+	switch verb {
+	case "steer", "stop", "wait":
+	default:
+		return ""
+	}
+	positionals, help := liveControlPositionals(verb, args[1:])
+	if help || len(args) == 1 || len(positionals) == 0 {
+		return verb
+	}
+	if _, err := runtimeids.ParseSessionID(positionals[0]); err == nil {
+		return verb
+	}
+	switch verb {
+	case "steer":
+		if len(positionals) <= 2 {
+			return verb
+		}
+	case "stop", "wait":
+		if len(positionals) <= 1 {
+			return verb
+		}
+	}
+	return ""
+}
+
+func liveControlPositionals(verb string, args []string) ([]string, bool) {
+	positionals := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--":
+			positionals = append(positionals, args[i+1:]...)
+			return positionals, false
+		case arg == "-h" || arg == "--help":
+			return positionals, true
+		case arg == "--persistence-root":
+			i++
+		case strings.HasPrefix(arg, "--persistence-root="):
+		case verb == "wait" && arg == "--output-mode":
+			i++
+		case verb == "wait" && strings.HasPrefix(arg, "--output-mode="):
+		default:
+			positionals = append(positionals, arg)
+		}
+	}
+	return positionals, false
+}
+
 func runLiveSteerSubcommand(args []string) int {
 	fs := flag.NewFlagSet(config.Command+" run steer", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -533,6 +584,10 @@ func runLiveWaitSubcommand(args []string) int {
 			emitRunJSON(runJSONResult{Status: "error", SessionID: result.SessionID, SessionName: result.SessionName, ContinueID: result.SessionID, ContinueCmd: continueCmd, DurationMS: result.Duration.Milliseconds(), Error: &runJSONError{Code: runErrorCode(runErr), Message: runErrorMessage(runErr)}})
 		} else {
 			fmt.Fprintln(os.Stderr, runErrorMessage(runErr))
+			if continueHint != "" {
+				fmt.Fprintln(os.Stderr)
+				fmt.Fprintln(os.Stderr, continueHint)
+			}
 		}
 		if runErrorCode(runErr) == "interrupted" {
 			return 130

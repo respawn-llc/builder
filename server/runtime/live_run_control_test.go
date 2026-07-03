@@ -51,6 +51,71 @@ func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 	}
 }
 
+func TestTerminalWorkflowQueueFailureCompletesTaggedLiveItems(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	startedAt := time.Now().UTC()
+	snapshot := &RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindWorkflowTurn,
+		StartedAt:  startedAt,
+	}
+	eng.liveRun.beginStep(snapshot)
+	item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer after workflow", liveRunTestRequestID(t), nil)
+	if err != nil || !accepted || item.ID == "" {
+		t.Fatalf("QueueUserMessageForActiveRun item=%+v accepted=%t err=%v", item, accepted, err)
+	}
+	completed := *snapshot
+	completed.Status = RunStatusCompleted
+	completed.FinishedAt = startedAt.Add(time.Second)
+	eng.liveRun.finishStep(&completed, RunStatusCompleted, nil, false)
+	handle, err := eng.CaptureActiveRunResult(context.Background())
+	if err != nil {
+		t.Fatalf("CaptureActiveRunResult: %v", err)
+	}
+	eng.mu.Lock()
+	eng.workflowTerminal = WorkflowTerminalState{
+		Completed:   true,
+		RunID:       "workflow-run",
+		Generation:  1,
+		Source:      WorkflowCompletionSourceTool,
+		CompletedAt: time.Now().UTC(),
+	}
+	eng.mu.Unlock()
+
+	if !eng.failQueuedUserWorkIfTerminal() {
+		t.Fatal("terminal workflow did not fail queued user work")
+	}
+	if _, err := handle.Wait(); !errors.Is(err, ErrLiveRunNoFinalAnswer) {
+		t.Fatalf("live wait error = %v, want no-final after terminal queue failure", err)
+	}
+	if eng.HasActiveLiveRunGroup() {
+		t.Fatal("live-run group stayed active after terminal queue failure")
+	}
+}
+
+func TestTryInterruptActiveRunNoopsAfterStepLeavesActiveState(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng.liveRun.beginStep(&RunSnapshot{
+		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
+		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
+		Status:     RunStatusRunning,
+		ActiveKind: ActiveKindUserTurn,
+		StartedAt:  time.Now().UTC(),
+	})
+
+	stopped, err := eng.TryInterruptActiveRun()
+	if err != nil {
+		t.Fatalf("TryInterruptActiveRun: %v", err)
+	}
+	if stopped {
+		t.Fatal("stop reported stopped after active step was already gone")
+	}
+}
+
 func TestEmitRunStateStepOpensActiveLiveRunGroup(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
