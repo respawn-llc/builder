@@ -583,6 +583,10 @@ func activeKindUsesLiveRun(kind ActiveKind) bool {
 	}
 }
 
+func activeKindInterruptibleByLiveStop(kind ActiveKind) bool {
+	return kind.Valid() && kind != ActiveKindRuntimeMaintenance
+}
+
 func (e *Engine) DiscardQueuedUserMessage(queueItemID string) bool {
 	e.ensureOrchestrationCollaborators()
 	item, discarded := e.messageFlow.DiscardQueuedUserMessage(queueItemID)

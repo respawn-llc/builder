@@ -120,12 +120,12 @@ func (e *Engine) TryInterruptActiveRun() (bool, error) {
 	}
 	e.ensureOrchestrationCollaborators()
 	snapshot := e.stepLifecycle.Snapshot()
-	if (snapshot == nil || !activeKindUsesLiveRun(snapshot.ActiveKind)) && !e.liveRun.hasPendingStopTarget() {
+	if (snapshot == nil || !activeKindInterruptibleByLiveStop(snapshot.ActiveKind)) && !e.liveRun.hasPendingStopTarget() {
 		return false, nil
 	}
 	interrupted, taggedQueueItems, goalLoop := e.liveRun.interrupt()
 	if !interrupted {
-		if snapshot == nil || !activeKindUsesLiveRun(snapshot.ActiveKind) {
+		if snapshot == nil || !activeKindInterruptibleByLiveStop(snapshot.ActiveKind) {
 			return false, nil
 		}
 		goalLoopInterruptPending := false

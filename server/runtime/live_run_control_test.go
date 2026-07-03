@@ -116,6 +116,43 @@ func TestTryInterruptActiveRunNoopsAfterStepLeavesActiveState(t *testing.T) {
 	}
 }
 
+func TestTryInterruptActiveRunCancelsCompactionStep(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	stepCtxSeen := make(chan context.Context, 1)
+	done := make(chan error, 1)
+	eng.ensureOrchestrationCollaborators()
+	go func() {
+		done <- eng.stepLifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindCompaction}, func(ctx context.Context, stepID string) error {
+			stepCtxSeen <- ctx
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	var stepCtx context.Context
+	select {
+	case stepCtx = <-stepCtxSeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for compaction step")
+	}
+
+	stopped, err := eng.TryInterruptActiveRun()
+	if err != nil {
+		t.Fatalf("TryInterruptActiveRun: %v", err)
+	}
+	if !stopped {
+		t.Fatal("compaction live stop reported idle")
+	}
+	select {
+	case <-stepCtx.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("compaction step context was not canceled")
+	}
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("compaction step error = %v, want context canceled", err)
+	}
+}
+
 func TestEmitRunStateStepOpensActiveLiveRunGroup(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})

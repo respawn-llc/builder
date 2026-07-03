@@ -293,6 +293,7 @@ func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) [
 		e.unmarkQueuedUserInjectionForAutoDrain(item.ID)
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageFailed, reason, true)
 	}
+	e.completeLiveRunQueueItems(queuedUserMessageIDSet(messages))
 	return messages
 }
 

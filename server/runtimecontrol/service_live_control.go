@@ -93,34 +93,44 @@ func (s *Service) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitReq
 		return serverapi.RuntimeLiveWaitResponse{}, err
 	}
 	var resp serverapi.RuntimeLiveWaitResponse
+	var waitHandle *runtime.LiveRunWaitHandle
+	var sessionName string
 	err = s.withRuntimeAccess(ctx, sessionID.String(), func(engine *runtime.Engine) error {
-		result, err := engine.WaitForActiveRunResult(ctx)
+		handle, err := engine.CaptureActiveRunResult(ctx)
 		if errors.Is(err, runtime.ErrNoActiveLiveRun) {
 			return serverapi.ErrRuntimeNoActiveRun
-		}
-		if errors.Is(err, runtime.ErrLiveRunNoFinalAnswer) {
-			return serverapi.ErrRuntimeNoFinalAnswer
 		}
 		if err != nil {
 			return err
 		}
-		sessionName := strings.TrimSpace(engine.SessionName())
-		if sessionName == "" {
-			sessionName = sessionID.String()
-		}
-		content := result.AssistantMessage.Content
-		resp = serverapi.RuntimeLiveWaitResponse{
-			SessionID:      sessionID.String(),
-			SessionName:    sessionName,
-			Result:         &content,
-			DurationMillis: result.FinishedAt.Sub(result.StartedAt).Milliseconds(),
-			LiveRunGroupID: result.GroupID.String(),
-			TerminalRunID:  result.RunID.String(),
-			TerminalStepID: result.StepID.String(),
-			TerminalStatus: string(result.Status),
-			ResultKind:     serverapi.RuntimeLiveResultKindAssistantFinalAnswer,
-		}
+		waitHandle = handle
+		sessionName = strings.TrimSpace(engine.SessionName())
 		return nil
 	})
+	if err != nil {
+		return resp, err
+	}
+	result, err := waitHandle.Wait()
+	if errors.Is(err, runtime.ErrLiveRunNoFinalAnswer) {
+		return resp, serverapi.ErrRuntimeNoFinalAnswer
+	}
+	if err != nil {
+		return resp, err
+	}
+	if sessionName == "" {
+		sessionName = sessionID.String()
+	}
+	content := result.AssistantMessage.Content
+	resp = serverapi.RuntimeLiveWaitResponse{
+		SessionID:      sessionID.String(),
+		SessionName:    sessionName,
+		Result:         &content,
+		DurationMillis: result.FinishedAt.Sub(result.StartedAt).Milliseconds(),
+		LiveRunGroupID: result.GroupID.String(),
+		TerminalRunID:  result.RunID.String(),
+		TerminalStepID: result.StepID.String(),
+		TerminalStatus: string(result.Status),
+		ResultKind:     serverapi.RuntimeLiveResultKindAssistantFinalAnswer,
+	}
 	return resp, err
 }
