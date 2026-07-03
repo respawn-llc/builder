@@ -46,9 +46,18 @@ type Service struct {
 	idleUnloadDelay        time.Duration
 	runFinishedUnloadDelay time.Duration
 	idleTimers             map[string]*runtimeIdleTimer
+	options                ServiceOptions
+}
+
+type ServiceOptions struct {
+	RuntimeClientFactory runtimewire.RuntimeClientFactory
 }
 
 func NewService(persistenceRoot string, metadataStore *metadata.Store, authManager *auth.Manager, fastModeState *runtime.FastModeState, background *shelltool.Manager, backgroundRouter *runtimewire.BackgroundEventRouter, runtimes *registry.RuntimeRegistry, sessionStores *registry.SessionStoreRegistry, storeOptions ...session.StoreOption) *Service {
+	return NewServiceWithOptions(persistenceRoot, metadataStore, authManager, fastModeState, background, backgroundRouter, runtimes, sessionStores, ServiceOptions{}, storeOptions...)
+}
+
+func NewServiceWithOptions(persistenceRoot string, metadataStore *metadata.Store, authManager *auth.Manager, fastModeState *runtime.FastModeState, background *shelltool.Manager, backgroundRouter *runtimewire.BackgroundEventRouter, runtimes *registry.RuntimeRegistry, sessionStores *registry.SessionStoreRegistry, options ServiceOptions, storeOptions ...session.StoreOption) *Service {
 	svc := &Service{
 		persistenceRoot:        strings.TrimSpace(persistenceRoot),
 		metadataStore:          metadataStore,
@@ -62,6 +71,7 @@ func NewService(persistenceRoot string, metadataStore *metadata.Store, authManag
 		idleUnloadDelay:        defaultRuntimeIdleUnloadDelay,
 		runFinishedUnloadDelay: defaultRunFinishedIdleUnloadDelay,
 		idleTimers:             make(map[string]*runtimeIdleTimer),
+		options:                options,
 	}
 	if runtimes != nil {
 		runtimes.SetInterestObserver(svc.runtimeInterestChanged)
@@ -420,8 +430,10 @@ func (s *Service) interactiveRuntimeBuilder(req serverapi.SessionRuntimeActivate
 			runtimeEvents.FlushAfterResolve()
 		}
 		wiring, err := runtimewire.NewRuntimeWiringWithBackground(store, req.ActiveSettings, enabledTools, target.EffectiveWorkdir, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
+			Context:         ctx,
 			FastMode:        s.fastModeState,
 			Sources:         req.Source.Sources,
+			ClientFactory:   s.options.RuntimeClientFactory,
 			GlobalConfigDir: s.persistenceRoot,
 			StepLifecycle:   runtimewire.NewStepLifecycleSink(sessionID, s.runtimes),
 			OnEvent: func(evt runtime.Event) {

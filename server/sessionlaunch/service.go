@@ -85,12 +85,16 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		Overrides:         req.Overrides,
 	}
 	return s.plans.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionPlanMemoRequest, func(ctx context.Context) (PlanResult, error) {
+		roleOverride, err := req.Overrides.AgentRoleOverride()
+		if err != nil {
+			return PlanResult{}, err
+		}
 		plan, err := s.planner.PlanSession(ctx, launch.SessionRequest{
 			Mode:                                launch.Mode(req.Mode),
 			SelectedSessionID:                   req.SelectedSessionID,
 			ForceNewSession:                     req.ForceNewSession,
 			ParentSessionID:                     req.ParentSessionID,
-			SkipContinuationAgentRoleValidation: req.Overrides.HasAgentRoleOverride(),
+			SkipContinuationAgentRoleValidation: roleOverride.Default,
 		})
 		if err != nil {
 			return PlanResult{}, err

@@ -89,45 +89,25 @@ func (s *EmbeddedServer) Close() error {
 }
 
 func StartEmbedded(ctx context.Context, req serverbootstrap.Request, hooks EmbeddedStartHooks) (*EmbeddedServer, error) {
+	return StartEmbeddedWithOptions(ctx, req, hooks, Options{})
+}
+
+func StartEmbeddedWithOptions(ctx context.Context, req serverbootstrap.Request, hooks EmbeddedStartHooks, opts Options) (*EmbeddedServer, error) {
 	if hooks.Auth == nil {
 		return nil, errors.New("auth handler is required")
 	}
-	resolved, err := serverbootstrap.ResolveConfig(req)
-	if err != nil {
-		return nil, err
-	}
-	cfg := resolved.Config
-	store := hooks.Auth.WrapStore(auth.NewFileStore(config.GlobalAuthConfigPath(cfg)))
-	authSupport, err := serverbootstrap.BuildAuthSupport(store, req.LookupEnv, req.Now)
-	if err != nil {
-		return nil, err
-	}
-	if err := authservice.EnsureFlowReady(ctx, authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings.Theme, req.LookupEnv, authservice.StartupAuthRequired(cfg.Settings), false, hooks.Auth); err != nil {
-		return nil, err
-	}
-	if hooks.Onboarding != nil {
-		cfg, err = hooks.Onboarding(ctx, EmbeddedOnboardingRequest{
-			Config:      cfg,
-			AuthManager: authSupport.AuthManager,
-			ReloadConfig: func() (config.App, error) {
-				refreshed, err := serverbootstrap.ResolveConfig(req)
-				if err != nil {
-					return config.App{}, err
-				}
-				return refreshed.Config, nil
-			},
-		})
-		if err != nil {
-			return nil, err
+	onboarding := func(ctx context.Context, onboardingReq OnboardingRequest) (config.App, error) {
+		if hooks.Onboarding == nil {
+			return onboardingReq.Config, nil
 		}
+		return hooks.Onboarding(ctx, EmbeddedOnboardingRequest{
+			Config:       onboardingReq.Config,
+			AuthManager:  onboardingReq.AuthManager,
+			ReloadConfig: onboardingReq.ReloadConfig,
+		})
 	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(cfg)
+	appCore, err := startCoreWithBootstrap(ctx, req, true, hooks.Auth, onboarding, opts)
 	if err != nil {
-		return nil, err
-	}
-	appCore, err := core.NewWithContext(ctx, cfg, authSupport, runtimeSupport)
-	if err != nil {
-		_ = runtimeSupport.Background.Close()
 		return nil, err
 	}
 	return &EmbeddedServer{Core: appCore}, nil

@@ -35,11 +35,13 @@ func (w *RuntimeWiring) Close() error {
 }
 
 type RuntimeWiringOptions struct {
+	Context                             context.Context
 	OnEvent                             func(evt runtime.Event)
 	Headless                            bool
 	FastMode                            *runtime.FastModeState
 	Sources                             map[string]string
 	Client                              llm.Client
+	ClientFactory                       RuntimeClientFactory
 	WorkflowRun                         *workflowruntime.Config
 	AskQuestionBatchSkipped             func(askquestion.AskQuestionBatchMetadata)
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
@@ -56,6 +58,9 @@ func NewRuntimeWiring(store *session.Store, active config.Settings, enabledTools
 }
 
 func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings, enabledTools []toolspec.ID, workspaceRoot string, mgr *auth.Manager, logger Logger, background *shelltool.Manager, opts RuntimeWiringOptions) (*RuntimeWiring, error) {
+	if opts.Client != nil && opts.ClientFactory != nil {
+		return nil, ErrRuntimeClientFactoryConflict
+	}
 	var eng *runtime.Engine
 	localTools, askBroker, background, err := NewLocalToolRegistryBinding(LocalToolRegistryOptions{
 		WorkspaceRoot:            workspaceRoot,
@@ -80,11 +85,20 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 		return nil, err
 	}
 	toolRegistry := localTools.Registry()
+	factoryContext := opts.Context
+	if factoryContext == nil {
+		factoryContext = context.Background()
+	}
 
 	mainProvider := mainProviderRuntimeSettings(active)
 	var client llm.Client
 	if opts.Client != nil {
 		client = opts.Client
+	} else if opts.ClientFactory != nil {
+		client, err = newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeMain, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, mainProvider)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		var mainAuth llm.AuthHeaderProvider
 		if mgr != nil && !strings.EqualFold(strings.TrimSpace(mainProvider.Auth), "none") {
@@ -108,6 +122,9 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 
 	reviewerProvider := reviewerProviderRuntimeSettings(active)
 	newReviewerClient := func() (llm.Client, error) {
+		if opts.ClientFactory != nil {
+			return newRuntimeClientFromFactory(factoryContext, opts.ClientFactory, RuntimeClientPurposeReviewer, store.Meta().SessionID, active, enabledTools, workspaceRoot, opts.Sources, reviewerProvider)
+		}
 		var reviewerAuth llm.AuthHeaderProvider
 		if mgr != nil && !strings.EqualFold(strings.TrimSpace(reviewerProvider.Auth), "none") {
 			reviewerAuth = mgr

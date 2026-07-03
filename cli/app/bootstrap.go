@@ -29,6 +29,7 @@ func startEmbeddedServer(ctx context.Context, opts Options, interactor authInter
 			Tools:               opts.Tools,
 			ConfigRoot:          opts.ConfigRoot,
 		},
+		StartupOptions: opts.startupOptions,
 	}, interactor, func(ctx context.Context, req embeddedattach.OnboardingRequest) (config.App, error) {
 		cfg, _, err := onboarding.Ensure(ctx, onboarding.Request{
 			Config:       req.Config,

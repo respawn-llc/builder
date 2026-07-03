@@ -1,0 +1,52 @@
+package analyzer
+
+import "strings"
+
+type Cell struct {
+	Content string
+}
+
+type ScreenSnapshot struct {
+	Dimensions Dimensions
+	Cells      [][]Cell
+	Cursor     Position
+}
+
+func NewScreenSnapshot(dimensions Dimensions) ScreenSnapshot {
+	cells := make([][]Cell, dimensions.Rows)
+	for row := range cells {
+		cells[row] = make([]Cell, dimensions.Cols)
+	}
+	return ScreenSnapshot{Dimensions: dimensions, Cells: cells}
+}
+
+func (s ScreenSnapshot) TextInRegion(region Region) string {
+	if err := region.ValidateWithin(s.Dimensions); err != nil {
+		panic(err)
+	}
+	var builder strings.Builder
+	for row := region.Top; row < region.Bottom; row++ {
+		if row > region.Top {
+			builder.WriteByte('\n')
+		}
+		for col := region.Left; col < region.Right; col++ {
+			builder.WriteString(s.Cells[row][col].Content)
+		}
+	}
+	return builder.String()
+}
+
+func (s ScreenSnapshot) RenderText() string {
+	return s.TextInRegion(Region{Top: 0, Bottom: s.Dimensions.Rows, Left: 0, Right: s.Dimensions.Cols})
+}
+
+func (s ScreenSnapshot) IsBlank() bool {
+	for row := 0; row < s.Dimensions.Rows; row++ {
+		for col := 0; col < s.Dimensions.Cols; col++ {
+			if s.Cells[row][col].Content != "" {
+				return false
+			}
+		}
+	}
+	return true
+}

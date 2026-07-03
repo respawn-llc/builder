@@ -72,18 +72,19 @@ type RuntimeEventRegistry interface {
 }
 
 type Starter struct {
-	cfg                config.App
-	metadata           *metadata.Store
-	store              RuntimeStore
-	authManager        *auth.Manager
-	background         *shelltool.Manager
-	runtimes           RuntimeEventRegistry
-	sessionRuntime     *sessionruntime.Service
-	storeOptions       []session.StoreOption
-	clientFactory      func(SchedulerStartRunRequest) llm.Client
-	worktrees          TaskWorktreeEnsurer
-	attentionFinalizer workflowAttentionFinalizer
-	finished           func(workflow.RunID, int64)
+	cfg                  config.App
+	metadata             *metadata.Store
+	store                RuntimeStore
+	authManager          *auth.Manager
+	background           *shelltool.Manager
+	runtimes             RuntimeEventRegistry
+	sessionRuntime       *sessionruntime.Service
+	storeOptions         []session.StoreOption
+	clientFactory        func(SchedulerStartRunRequest) llm.Client
+	runtimeClientFactory runtimewire.RuntimeClientFactory
+	worktrees            TaskWorktreeEnsurer
+	attentionFinalizer   workflowAttentionFinalizer
+	finished             func(workflow.RunID, int64)
 
 	mu     sync.Mutex
 	cancel map[workflow.RunID]context.CancelFunc
@@ -94,10 +95,11 @@ type Starter struct {
 }
 
 type StarterOptions struct {
-	ClientFactory      func(SchedulerStartRunRequest) llm.Client
-	Worktrees          TaskWorktreeEnsurer
-	SessionRuntime     *sessionruntime.Service
-	AttentionFinalizer workflowAttentionFinalizer
+	ClientFactory        func(SchedulerStartRunRequest) llm.Client
+	RuntimeClientFactory runtimewire.RuntimeClientFactory
+	Worktrees            TaskWorktreeEnsurer
+	SessionRuntime       *sessionruntime.Service
+	AttentionFinalizer   workflowAttentionFinalizer
 }
 
 type workflowAttentionFinalizer interface {
@@ -121,21 +123,25 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 	if opts.SessionRuntime == nil {
 		return nil, errors.New("workflow runtime session-runtime service is required")
 	}
+	if opts.ClientFactory != nil && opts.RuntimeClientFactory != nil {
+		return nil, runtimewire.ErrRuntimeClientFactoryConflict
+	}
 	return &Starter{
-		cfg:                cfg,
-		metadata:           metadataStore,
-		store:              store,
-		authManager:        authManager,
-		background:         background,
-		runtimes:           runtimes,
-		sessionRuntime:     opts.SessionRuntime,
-		storeOptions:       metadataStore.AuthoritativeSessionStoreOptions(),
-		clientFactory:      opts.ClientFactory,
-		worktrees:          opts.Worktrees,
-		attentionFinalizer: opts.AttentionFinalizer,
-		cancel:             map[workflow.RunID]context.CancelFunc{},
-		task:               map[workflow.RunID]workflow.TaskID{},
-		done:               map[workflow.RunID]chan struct{}{},
+		cfg:                  cfg,
+		metadata:             metadataStore,
+		store:                store,
+		authManager:          authManager,
+		background:           background,
+		runtimes:             runtimes,
+		sessionRuntime:       opts.SessionRuntime,
+		storeOptions:         metadataStore.AuthoritativeSessionStoreOptions(),
+		clientFactory:        opts.ClientFactory,
+		runtimeClientFactory: opts.RuntimeClientFactory,
+		worktrees:            opts.Worktrees,
+		attentionFinalizer:   opts.AttentionFinalizer,
+		cancel:               map[workflow.RunID]context.CancelFunc{},
+		task:                 map[workflow.RunID]workflow.TaskID{},
+		done:                 map[workflow.RunID]chan struct{}{},
 	}, nil
 }
 
@@ -212,6 +218,12 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 	client := llm.Client(nil)
 	if s.clientFactory != nil {
 		client = s.clientFactory(req)
+	}
+	if s.runtimeClientFactory != nil {
+		client, err = s.newWorkflowProviderClient(ctx, plan)
+		if err != nil {
+			return errors.Join(err, cleanupSession())
+		}
 	}
 	effectiveMode, client, err := s.resolveAndPersistWorkflowCompletionMode(ctx, req, input, plan, client)
 	if err != nil {
@@ -603,7 +615,7 @@ func (s *Starter) workflowProviderCapabilities(ctx context.Context, plan launch.
 		return caps, client, nil
 	}
 	if client == nil {
-		created, err := s.newWorkflowProviderClient(plan.ActiveSettings)
+		created, err := s.newWorkflowProviderClient(ctx, plan)
 		if err != nil {
 			return llm.ProviderCapabilities{}, nil, err
 		}
@@ -620,7 +632,28 @@ func (s *Starter) workflowProviderCapabilities(ctx context.Context, plan launch.
 	return caps, client, nil
 }
 
-func (s *Starter) newWorkflowProviderClient(active config.Settings) (llm.Client, error) {
+func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.SessionPlan) (llm.Client, error) {
+	active := plan.ActiveSettings
+	if s.runtimeClientFactory != nil {
+		return s.runtimeClientFactory.NewRuntimeClient(ctx, runtimewire.RuntimeClientRequest{
+			Purpose:        runtimewire.RuntimeClientPurposeWorkflow,
+			SessionID:      plan.Store.Meta().SessionID,
+			ActiveSettings: plan.ActiveSettings,
+			EnabledTools:   append([]toolspec.ID(nil), plan.EnabledTools...),
+			WorkspaceRoot:  plan.WorkspaceRoot,
+			Sources:        cloneStringMap(plan.Source.Sources),
+			ProviderSettings: runtimewire.RuntimeClientProviderSettings{
+				Model:                        active.Model,
+				ProviderOverride:             active.ProviderOverride,
+				OpenAIBaseURL:                active.OpenAIBaseURL,
+				ModelVerbosity:               active.ModelVerbosity,
+				Store:                        active.Store,
+				ContextWindowTokens:          active.ModelContextWindow,
+				Auth:                         "inherit",
+				ProviderCapabilitiesOverride: workflowProviderCapabilitiesOverridePtr(active.ProviderCapabilities),
+			},
+		})
+	}
 	var authProvider llm.AuthHeaderProvider
 	if s.authManager != nil {
 		authProvider = s.authManager
@@ -641,6 +674,25 @@ func (s *Starter) newWorkflowProviderClient(active config.Settings) (llm.Client,
 		ContextWindowTokens:          active.ModelContextWindow,
 		ProviderCapabilitiesOverride: overridePtr,
 	})
+}
+
+func workflowProviderCapabilitiesOverridePtr(override config.ProviderCapabilitiesOverride) *llm.ProviderCapabilities {
+	caps, ok := llm.ProviderCapabilitiesFromOverride(override)
+	if !ok {
+		return nil
+	}
+	return &caps
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func toolIDEnabled(enabled []toolspec.ID, want toolspec.ID) bool {
@@ -739,12 +791,13 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 			runtimeEvents.FlushAfterResolve()
 		}
 		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, workflowRuntimeEnabledTools(plan.EnabledTools), input.WorktreeRoot, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
-			Headless:        true,
-			FastMode:        nil,
-			Sources:         plan.Source.Sources,
-			Client:          client,
-			GlobalConfigDir: s.cfg.PersistenceRoot,
-			StepLifecycle:   runtimewire.NewStepLifecycleSink(sessionID, s.runtimes),
+			Headless:                            true,
+			FastMode:                            nil,
+			Sources:                             plan.Source.Sources,
+			Client:                              client,
+			GlobalConfigDir:                     s.cfg.PersistenceRoot,
+			SkipContinuationAgentRoleValidation: workflowRunPromptOverrides(input.Node.SubagentRole).HasAny(),
+			StepLifecycle:                       runtimewire.NewStepLifecycleSink(sessionID, s.runtimes),
 			WorkflowRun: &workflowruntime.Config{
 				RunID:                        req.RunID,
 				Contract:                     workflowCompletionContract(req, input),

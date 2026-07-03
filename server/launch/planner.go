@@ -59,17 +59,18 @@ type SessionRequest struct {
 }
 
 type SessionPlan struct {
-	Store               *session.Store
-	ActiveSettings      config.Settings
-	BaseSettings        config.Settings
-	EnabledTools        []toolspec.ID
-	ConfiguredModelName string
-	SessionName         string
-	PromptHistory       []string
-	ModelContractLocked bool
-	WorkspaceRoot       string
-	Source              config.SourceReport
-	BaseSource          config.SourceReport
+	Store                               *session.Store
+	ActiveSettings                      config.Settings
+	BaseSettings                        config.Settings
+	EnabledTools                        []toolspec.ID
+	ConfiguredModelName                 string
+	SessionName                         string
+	PromptHistory                       []string
+	ModelContractLocked                 bool
+	SkipContinuationAgentRoleValidation bool
+	WorkspaceRoot                       string
+	Source                              config.SourceReport
+	BaseSource                          config.SourceReport
 }
 
 type RunPromptOverrideOptions struct {
@@ -191,16 +192,17 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 		configuredModelName = active.Model
 	}
 	return SessionPlan{
-		Store:               store,
-		ActiveSettings:      active,
-		BaseSettings:        baseActive,
-		EnabledTools:        enabledTools,
-		ConfiguredModelName: configuredModelName,
-		SessionName:         meta.Name,
-		ModelContractLocked: meta.Locked != nil,
-		WorkspaceRoot:       p.Config.WorkspaceRoot,
-		Source:              source,
-		BaseSource:          baseSource,
+		Store:                               store,
+		ActiveSettings:                      active,
+		BaseSettings:                        baseActive,
+		EnabledTools:                        enabledTools,
+		ConfiguredModelName:                 configuredModelName,
+		SessionName:                         meta.Name,
+		ModelContractLocked:                 meta.Locked != nil,
+		SkipContinuationAgentRoleValidation: req.SkipContinuationAgentRoleValidation,
+		WorkspaceRoot:                       p.Config.WorkspaceRoot,
+		Source:                              source,
+		BaseSource:                          baseSource,
 	}, nil
 }
 
@@ -302,7 +304,7 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 	if err != nil {
 		return SessionPlan{}, nil, fmt.Errorf("%w: %v", errInvalidAgentRole, err)
 	}
-	if roleOverride.Present && plan.ModelContractLocked && continuationAgentRole != roleOverride.Role && !options.AllowLockedAgentRoleChange {
+	if roleOverride.Present && plan.ModelContractLocked && continuationAgentRole != roleOverride.Role && !options.AllowLockedAgentRoleChange && !plan.SkipContinuationAgentRoleValidation {
 		return SessionPlan{}, nil, fmt.Errorf("%w: current=%q requested=%q", ErrLockedAgentRoleChange, continuationAgentRole, roleOverride.Role)
 	}
 	if roleOverride.Present && plan.ModelContractLocked && continuationAgentRole != roleOverride.Role && options.AllowLockedAgentRoleChange {

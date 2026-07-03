@@ -1,0 +1,138 @@
+package appfixture
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"sync"
+
+	"core/internal/testharness/scriptedllm"
+	"core/server/core"
+	"core/server/llm"
+	"core/server/runtimewire"
+	serverstartup "core/server/startup"
+)
+
+type ScriptFile struct {
+	Prompt       string   `json:"prompt"`
+	StreamDeltas []string `json:"stream_deltas"`
+	Final        string   `json:"final"`
+}
+
+type Runtime struct {
+	ScriptFile ScriptFile
+	Client     *scriptedllm.Client
+	recorder   *FactoryRecorder
+}
+
+func NewRuntime(scriptPath string, afterResponse func(context.Context) error) (*Runtime, error) {
+	scriptFile, script, err := loadScript(scriptPath, afterResponse)
+	if err != nil {
+		return nil, err
+	}
+	return &Runtime{
+		ScriptFile: scriptFile,
+		Client:     scriptedllm.NewClient(script),
+		recorder:   &FactoryRecorder{},
+	}, nil
+}
+
+func (r *Runtime) StartupOptions() serverstartup.Options {
+	return serverstartup.Options{Core: core.Options{RuntimeClientFactory: r.RuntimeClientFactory()}}
+}
+
+func (r *Runtime) RuntimeClientFactory() runtimewire.RuntimeClientFactory {
+	return runtimewire.RuntimeClientFactoryFunc(func(ctx context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
+		r.recorder.Record(req.Purpose)
+		return r.Client, nil
+	})
+}
+
+func (r *Runtime) Observation(runErr error) Observation {
+	obs := Observation{
+		FactoryPurposes:          r.recorder.Purposes(),
+		ModelRequestCount:        len(r.Client.Requests()),
+		RemainingScriptSteps:     r.Client.RemainingSteps(),
+		StreamDeltaCount:         len(r.ScriptFile.StreamDeltas),
+		FinalResponseConsumed:    r.Client.RemainingSteps() == 0 && len(r.Client.Requests()) > 0,
+		DefaultProviderFallbacks: 0,
+	}
+	if runErr != nil {
+		obs.RunError = runErr.Error()
+	}
+	return obs
+}
+
+func loadScript(path string, afterResponse func(context.Context) error) (ScriptFile, scriptedllm.Script, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ScriptFile{}, scriptedllm.Script{}, fmt.Errorf("read script: %w", err)
+	}
+	var file ScriptFile
+	if err := json.Unmarshal(data, &file); err != nil {
+		return ScriptFile{}, scriptedllm.Script{}, fmt.Errorf("decode script: %w", err)
+	}
+	if file.Final == "" {
+		return ScriptFile{}, scriptedllm.Script{}, fmt.Errorf("script final response is required")
+	}
+	streamDeltas := make([]llm.AssistantDelta, 0, len(file.StreamDeltas))
+	for _, delta := range file.StreamDeltas {
+		streamDeltas = append(streamDeltas, llm.AssistantDelta{Text: delta, Phase: llm.MessagePhaseCommentary})
+	}
+	step := scriptedllm.FinalAnswer(file.Final)
+	step.StreamDeltas = streamDeltas
+	step.AfterResponse = afterResponse
+	return file, scriptedllm.Script{Steps: []scriptedllm.Step{step}}, nil
+}
+
+type Observation struct {
+	FactoryPurposes          []string `json:"factory_purposes"`
+	ModelRequestCount        int      `json:"model_request_count"`
+	RemainingScriptSteps     int      `json:"remaining_script_steps"`
+	StreamDeltaCount         int      `json:"stream_delta_count"`
+	FinalResponseConsumed    bool     `json:"final_response_consumed"`
+	DefaultProviderFallbacks int      `json:"default_provider_fallbacks"`
+	RunError                 string   `json:"run_error,omitempty"`
+}
+
+func WriteObservation(path string, obs Observation) error {
+	data, err := json.MarshalIndent(obs, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal observations: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write observations: %w", err)
+	}
+	return nil
+}
+
+type FactoryRecorder struct {
+	mu           sync.Mutex
+	purposeNames []string
+}
+
+func (r *FactoryRecorder) Record(purpose runtimewire.RuntimeClientPurpose) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.purposeNames = append(r.purposeNames, runtimeClientPurposeName(purpose))
+}
+
+func (r *FactoryRecorder) Purposes() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.purposeNames...)
+}
+
+func runtimeClientPurposeName(purpose runtimewire.RuntimeClientPurpose) string {
+	switch purpose {
+	case runtimewire.RuntimeClientPurposeMain:
+		return "main"
+	case runtimewire.RuntimeClientPurposeReviewer:
+		return "reviewer"
+	case runtimewire.RuntimeClientPurposeWorkflow:
+		return "workflow"
+	default:
+		return fmt.Sprintf("unknown-%d", purpose)
+	}
+}
