@@ -22,6 +22,16 @@ const WorkflowListMaxPageSize = 100
 const WorkflowTaskListMaxPageSize = 100
 const WorkflowTaskListMaxSortSelectors = 5
 
+type WorkflowNodeKind string
+
+const (
+	WorkflowNodeKindStart    WorkflowNodeKind = "start"
+	WorkflowNodeKindAgent    WorkflowNodeKind = "agent"
+	WorkflowNodeKindScript   WorkflowNodeKind = "script"
+	WorkflowNodeKindJoin     WorkflowNodeKind = "join"
+	WorkflowNodeKindTerminal WorkflowNodeKind = "terminal"
+)
+
 const (
 	WorkflowGraphDraftMaxNodeGroups       = 200
 	WorkflowGraphDraftMaxNodes            = 200
@@ -664,7 +674,8 @@ type WorkflowTaskUpdateResponse struct {
 }
 
 type WorkflowTaskStartRequest struct {
-	TaskID string `json:"task_id"`
+	TaskID           string                   `json:"task_id"`
+	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
 }
 
 type WorkflowTaskStartResponse struct {
@@ -689,8 +700,9 @@ type WorkflowTaskResumeResponse struct {
 }
 
 type WorkflowTaskApproveRequest struct {
-	TaskTransitionID string `json:"task_transition_id,omitempty"`
-	TransitionID     string `json:"transition_id,omitempty"`
+	TaskTransitionID string                   `json:"task_transition_id,omitempty"`
+	TransitionID     string                   `json:"transition_id,omitempty"`
+	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
 }
 
 type WorkflowTaskApproveResponse struct {
@@ -702,12 +714,13 @@ type WorkflowTaskApproveResponse struct {
 }
 
 type WorkflowTaskMoveRequest struct {
-	TaskID           string            `json:"task_id"`
-	TargetNodeID     string            `json:"target_node_id"`
-	OutputValues     map[string]string `json:"output_values,omitempty"`
-	Commentary       string            `json:"commentary,omitempty"`
-	AllowMissingEdge bool              `json:"allow_missing_edge,omitempty"`
-	AutoApprove      bool              `json:"auto_approve,omitempty"`
+	TaskID           string                   `json:"task_id"`
+	TargetNodeID     string                   `json:"target_node_id"`
+	OutputValues     map[string]string        `json:"output_values,omitempty"`
+	Commentary       string                   `json:"commentary,omitempty"`
+	AllowMissingEdge bool                     `json:"allow_missing_edge,omitempty"`
+	AutoApprove      bool                     `json:"auto_approve,omitempty"`
+	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
 }
 
 type WorkflowTaskMoveResponse struct {
@@ -1690,7 +1703,10 @@ func (r WorkflowTaskUpdateRequest) Validate() error {
 }
 
 func (r WorkflowTaskStartRequest) Validate() error {
-	return validateRequired("task_id", r.TaskID)
+	if err := validateRequired("task_id", r.TaskID); err != nil {
+		return err
+	}
+	return r.SetupOperationID.Validate()
 }
 
 func (r WorkflowTaskResumeRequest) Validate() error {
@@ -1699,13 +1715,19 @@ func (r WorkflowTaskResumeRequest) Validate() error {
 
 func (r WorkflowTaskApproveRequest) Validate() error {
 	if strings.TrimSpace(r.TaskTransitionID) != "" {
-		return nil
+		return r.SetupOperationID.Validate()
 	}
-	return validateRequired("transition_id", r.TransitionID)
+	if err := validateRequired("transition_id", r.TransitionID); err != nil {
+		return err
+	}
+	return r.SetupOperationID.Validate()
 }
 
 func (r WorkflowTaskMoveRequest) Validate() error {
-	return validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("target_node_id", r.TargetNodeID))
+	if err := validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("target_node_id", r.TargetNodeID)); err != nil {
+		return err
+	}
+	return r.SetupOperationID.Validate()
 }
 
 func (r WorkflowTaskCompleteRequest) Validate() error {

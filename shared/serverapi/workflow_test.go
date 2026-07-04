@@ -143,6 +143,7 @@ func TestWorkflowTransitionGroupDescriptionRequestValidation(t *testing.T) {
 }
 
 func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
+	setupOperationID := NewWorktreeSetupOperationID()
 	if err := (WorkflowTaskCreateRequest{ProjectID: "project-1", Title: "Task"}).Validate(); err != nil {
 		t.Fatalf("valid task create rejected: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
 	if err := (WorkflowTaskUpdateRequest{TaskID: "task-1", Title: &blankTitle}).Validate(); !isWorkflowFieldError(err, "title", WorkflowRequestErrorRequired) {
 		t.Fatalf("empty update title error = %#v, want required on title", err)
 	}
-	if err := (WorkflowTaskStartRequest{TaskID: "task-1"}).Validate(); err != nil {
+	if err := (WorkflowTaskStartRequest{TaskID: "task-1", SetupOperationID: setupOperationID}).Validate(); err != nil {
 		t.Fatalf("valid task start rejected: %v", err)
 	}
 	if err := (WorkflowTaskGetRequest{ProjectID: "project-1", ShortID: "BLD-1"}).Validate(); err != nil {
@@ -184,7 +185,7 @@ func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
 	if err := (WorkflowTaskInterruptRequest{TaskID: "task-1"}).Validate(); err != nil {
 		t.Fatalf("valid task interrupt rejected: %v", err)
 	}
-	if err := (WorkflowTaskApproveRequest{TaskTransitionID: "transition-1"}).Validate(); err != nil {
+	if err := (WorkflowTaskApproveRequest{TaskTransitionID: "transition-1", SetupOperationID: setupOperationID}).Validate(); err != nil {
 		t.Fatalf("valid task approval rejected: %v", err)
 	}
 	if err := (WorkflowTaskApproveRequest{}).Validate(); !isWorkflowFieldError(err, "transition_id", WorkflowRequestErrorRequired) {

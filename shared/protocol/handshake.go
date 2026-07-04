@@ -100,6 +100,9 @@ const (
 	MethodWorktreeCreate                        = "worktree.create"
 	MethodWorktreeSwitch                        = "worktree.switch"
 	MethodWorktreeDelete                        = "worktree.delete"
+	MethodWorktreeSetupSubscribe                = "worktree.setup.subscribe"
+	MethodWorktreeSetupEvent                    = "worktree.setup"
+	MethodWorktreeSetupComplete                 = "worktree.setup.complete"
 	MethodRuntimeSetSessionName                 = "runtime.setSessionName"
 	MethodRuntimeSetThinkingLevel               = "runtime.setThinkingLevel"
 	MethodRuntimeSetFastModeEnabled             = "runtime.setFastModeEnabled"
@@ -209,6 +212,24 @@ type AttentionNotificationEventParams struct {
 
 type WorkflowProjectEventParams struct {
 	Event WorkflowProjectEvent `json:"event"`
+}
+
+type WorktreeSetupEventParams struct {
+	Event WorktreeSetupEvent `json:"event"`
+}
+
+type WorktreeSetupEvent struct {
+	SetupOperationID    string `json:"setup_operation_id"`
+	SourceWorkspaceRoot string `json:"source_workspace_root"`
+	WorktreeRoot        string `json:"worktree_root"`
+	ScriptPath          string `json:"script_path"`
+	Phase               string `json:"phase"`
+	Timeout             bool   `json:"timeout,omitempty"`
+	Canceled            bool   `json:"canceled,omitempty"`
+	ExitCode            *int   `json:"exit_code,omitempty"`
+	Stdout              string `json:"stdout,omitempty"`
+	Stderr              string `json:"stderr,omitempty"`
+	Error               string `json:"error,omitempty"`
 }
 
 type WorkflowProjectEvent struct {

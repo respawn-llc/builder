@@ -3,6 +3,7 @@ package app
 import (
 	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
+	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -39,6 +40,10 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, nil)
 		}
+		if m.worktrees.create.setupProgress != nil && m.worktrees.create.setupProgress.cancel != nil {
+			m.worktrees.create.setupProgress.cancel()
+		}
+		m.worktrees.create.setupProgress = nil
 		m.worktrees.create.submitting = false
 		if msg.err != nil {
 			if !m.worktrees.open {
@@ -56,12 +61,26 @@ func (r uiWorktreeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			m.closeWorktreeOverlay()
 		}
 		status := "Created worktree " + worktreeui.DisplayName(msg.resp.Worktree)
-		if msg.resp.SetupScheduled {
-			status += " and started setup"
-		}
 		feedbackCmd := m.sendTransientStatusWithNoticeID(status, uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, tea.Batch(overlayCmd, feedbackCmd, m.startRuntimeMainViewRefreshRequest(runtimeMainViewRefreshRequestForCause(runtimeMainViewRefreshCauseWorktreeMutation)).cmd, m.reconcileSpinnerTicking(false)))
+	case worktreeSetupEventMsg:
+		if msg.token != m.worktrees.mutationToken {
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, nil)
+		}
+		if msg.err != nil {
+			m.worktrees.create.errorText = runtimeattach.FormatSubmissionError(msg.err)
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, m.reconcileSpinnerTicking(false))
+		}
+		event := msg.event
+		m.worktrees.create.setupEvent = &event
+		m.layout().syncViewport()
+		if event.Phase == serverapi.WorktreeSetupPhaseCompleted || event.Phase == serverapi.WorktreeSetupPhaseFailed {
+			return handledUIFeatureUpdate(m, nil)
+		}
+		return handledUIFeatureUpdate(m, worktreeSetupEventCmd(msg.events))
 	case worktreeSwitchDoneMsg:
 		if msg.token != m.worktrees.switchToken {
 			m.layout().syncViewport()

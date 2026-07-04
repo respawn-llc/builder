@@ -38,7 +38,24 @@ type Service struct {
 }
 
 type taskWorktreeEnsurer interface {
-	EnsureTaskWorktree(ctx context.Context, taskID string) error
+	EnsureTaskWorktree(ctx context.Context, req TaskWorktreeEnsureRequest) error
+}
+
+type TaskWorktreeEnsureRequest struct {
+	TaskID           workflow.TaskID
+	SetupOperationID serverapi.WorktreeSetupOperationID
+}
+
+type taskWorktreeEnsureError struct {
+	err error
+}
+
+func (e taskWorktreeEnsureError) Error() string {
+	return e.err.Error()
+}
+
+func (e taskWorktreeEnsureError) Unwrap() error {
+	return e.err
 }
 
 type taskWorktreeDeleter interface {
@@ -596,7 +613,7 @@ func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
-	started, err := s.StartTaskAutomation(ctx, req.TaskID)
+	started, err := s.startTaskAutomation(ctx, TaskAutomationStartRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
 	if err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
@@ -672,12 +689,26 @@ func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	return serverapi.WorkflowTaskResumeResponse{Runs: workflowTaskRunSummaries(resumed)}, nil
 }
 
+type TaskAutomationStartRequest struct {
+	TaskID           string
+	SetupOperationID serverapi.WorktreeSetupOperationID
+}
+
 func (s *Service) StartTaskAutomation(ctx context.Context, taskID string) (workflowstore.StartTaskResult, error) {
+	return s.startTaskAutomation(ctx, TaskAutomationStartRequest{TaskID: taskID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()})
+}
+
+func (s *Service) StartTaskAutomationWithSetup(ctx context.Context, req TaskAutomationStartRequest) (workflowstore.StartTaskResult, error) {
+	return s.startTaskAutomation(ctx, req)
+}
+
+func (s *Service) startTaskAutomation(ctx context.Context, req TaskAutomationStartRequest) (workflowstore.StartTaskResult, error) {
+	taskID := strings.TrimSpace(req.TaskID)
 	if s.taskWorktrees != nil {
 		if err := s.store.ValidateTaskStart(ctx, workflow.TaskID(taskID)); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
-		if err := s.taskWorktrees.EnsureTaskWorktree(ctx, taskID); err != nil {
+		if err := s.taskWorktrees.EnsureTaskWorktree(ctx, TaskWorktreeEnsureRequest{TaskID: workflow.TaskID(taskID), SetupOperationID: req.SetupOperationID}); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
 	}
@@ -703,7 +734,7 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
-	approved, err := s.approveTransition(ctx, workflow.TransitionID(transitionID), taskID)
+	approved, err := s.approveTransition(ctx, workflow.TransitionID(transitionID), taskID, req.SetupOperationID)
 	if err != nil {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
@@ -726,8 +757,12 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	approvalError := ""
 	resolvedApprovals := append([]workflow.TransitionID(nil), moved.ResolvedApprovalTransitionIDs...)
 	if req.AutoApprove && moved.State == "pending_approval" && !moved.RequiresApproval {
-		approved, approveErr := s.approveTransition(ctx, moved.TransitionID, req.TaskID)
+		approved, approveErr := s.approveTransition(ctx, moved.TransitionID, req.TaskID, req.SetupOperationID)
 		if approveErr != nil {
+			var ensureErr taskWorktreeEnsureError
+			if errors.As(approveErr, &ensureErr) {
+				return serverapi.WorkflowTaskMoveResponse{}, approveErr
+			}
 			approvalError = approveErr.Error()
 		} else {
 			approved.ResolvedApprovalTransitionIDs = append(resolvedApprovals, approved.ResolvedApprovalTransitionIDs...)
@@ -744,7 +779,7 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	return serverapi.WorkflowTaskMoveResponse{TransitionID: string(moved.TransitionID), State: moved.State, PlacementIDs: placementIDs(moved.PlacementIDs), RunIDs: runIDs(moved.RunIDs), ApprovalError: approvalError}, nil
 }
 
-func (s *Service) approveTransition(ctx context.Context, transitionID workflow.TransitionID, taskID string) (workflowstore.CompleteRunResult, error) {
+func (s *Service) approveTransition(ctx context.Context, transitionID workflow.TransitionID, taskID string, setupOperationID serverapi.WorktreeSetupOperationID) (workflowstore.CompleteRunResult, error) {
 	if s.taskWorktrees != nil {
 		requiresWorktree, err := s.store.PendingTransitionTargetsExecutableNode(ctx, transitionID)
 		if err != nil {
@@ -758,8 +793,8 @@ func (s *Service) approveTransition(ctx context.Context, transitionID workflow.T
 					return workflowstore.CompleteRunResult{}, err
 				}
 			}
-			if err := s.taskWorktrees.EnsureTaskWorktree(ctx, resolvedTaskID); err != nil {
-				return workflowstore.CompleteRunResult{}, err
+			if err := s.taskWorktrees.EnsureTaskWorktree(ctx, TaskWorktreeEnsureRequest{TaskID: workflow.TaskID(resolvedTaskID), SetupOperationID: setupOperationID}); err != nil {
+				return workflowstore.CompleteRunResult{}, taskWorktreeEnsureError{err: err}
 			}
 		}
 	}

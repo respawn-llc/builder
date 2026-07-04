@@ -105,9 +105,10 @@ describe("TaskDetailSurface", () => {
     expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     await waitFor(() => {
-      expect(services.transport.calls).toContainEqual({
-        method: "workflow.task.approve",
-        params: { task_transition_id: "transition-1" },
+      const params = callParams(services.transport.calls, "workflow.task.approve");
+      expect(params.task_transition_id).toBe("transition-1");
+      expect(services.transport.calls.find((call) => call.method === "workflow.task.approve")?.options).toEqual({
+        timeoutMs: null,
       });
     });
 

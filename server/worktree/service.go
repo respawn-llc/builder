@@ -18,13 +18,14 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/session"
 	shelltool "core/server/tools/shell"
+	"core/server/workflow"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"github.com/google/uuid"
 )
 
-const setupScriptTimeout = 20 * time.Second
+const setupDiagnosticLimitBytes = 16 * 1024
 
 const rollbackSessionTargetTimeout = 5 * time.Second
 
@@ -49,19 +50,22 @@ type localEntryAppender interface {
 }
 
 type ServiceOptions struct {
-	BaseDir     string
-	SetupScript string
+	BaseDir             string
+	SetupScript         string
+	SetupTimeoutSeconds int
 }
 
 type Service struct {
-	metadata    *metadata.Store
-	git         *GitInspector
-	runtime     runtimeController
-	active      activeRuntimeSource
-	processes   processSource
-	localNotes  localEntryAppender
-	baseDir     string
-	setupScript string
+	metadata            *metadata.Store
+	git                 *GitInspector
+	runtime             runtimeController
+	active              activeRuntimeSource
+	processes           processSource
+	localNotes          localEntryAppender
+	baseDir             string
+	setupScript         string
+	setupTimeoutSeconds int
+	setupBroker         *setupEventBroker
 
 	workspaceMu    sync.Mutex
 	workspaceLocks map[string]*workspaceMutationLock
@@ -107,7 +111,8 @@ type setupScriptPayload struct {
 }
 
 type EnsureTaskWorktreeRequest struct {
-	TaskID string
+	TaskID           workflow.TaskID
+	SetupOperationID serverapi.WorktreeSetupOperationID
 }
 
 type EnsureTaskWorktreeResponse struct {
@@ -136,15 +141,17 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, activ
 		}
 	}
 	return &Service{
-		metadata:       metadataStore,
-		git:            gitInspector,
-		runtime:        runtime,
-		active:         active,
-		processes:      processes,
-		localNotes:     localNotes,
-		baseDir:        strings.TrimSpace(opts.BaseDir),
-		setupScript:    strings.TrimSpace(opts.SetupScript),
-		workspaceLocks: make(map[string]*workspaceMutationLock),
+		metadata:            metadataStore,
+		git:                 gitInspector,
+		runtime:             runtime,
+		active:              active,
+		processes:           processes,
+		localNotes:          localNotes,
+		baseDir:             strings.TrimSpace(opts.BaseDir),
+		setupScript:         strings.TrimSpace(opts.SetupScript),
+		setupTimeoutSeconds: opts.SetupTimeoutSeconds,
+		setupBroker:         newSetupEventBroker(),
+		workspaceLocks:      make(map[string]*workspaceMutationLock),
 	}
 }
 
@@ -152,7 +159,7 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 	if s == nil || s.metadata == nil || s.git == nil {
 		return EnsureTaskWorktreeResponse{}, errors.New("worktree service dependencies are required")
 	}
-	taskID := strings.TrimSpace(req.TaskID)
+	taskID := strings.TrimSpace(string(req.TaskID))
 	if taskID == "" {
 		return EnsureTaskWorktreeResponse{}, errors.New("task_id is required")
 	}
@@ -162,10 +169,12 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 	}
 	if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
 		view, err := s.taskManagedWorktreeView(ctx, strings.TrimSpace(task.ManagedWorktreeID.String))
-		if err != nil {
+		if err == nil {
+			return EnsureTaskWorktreeResponse{Worktree: view}, nil
+		}
+		if !errors.Is(err, serverapi.ErrWorktreeNotFound) {
 			return EnsureTaskWorktreeResponse{}, err
 		}
-		return EnsureTaskWorktreeResponse{Worktree: view}, nil
 	}
 	workspace, err := s.taskSourceWorkspace(ctx, task.ProjectID, task.SourceWorkspaceID.String)
 	if err != nil {
@@ -179,10 +188,15 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 	}
 	if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
 		view, err := s.taskManagedWorktreeView(ctx, strings.TrimSpace(task.ManagedWorktreeID.String))
-		if err != nil {
+		if err == nil {
+			return EnsureTaskWorktreeResponse{Worktree: view}, nil
+		}
+		if !errors.Is(err, serverapi.ErrWorktreeNotFound) {
 			return EnsureTaskWorktreeResponse{}, err
 		}
-		return EnsureTaskWorktreeResponse{Worktree: view}, nil
+		if err := s.git.Prune(ctx, workspace.RootPath); err != nil {
+			return EnsureTaskWorktreeResponse{}, err
+		}
 	}
 	createSpec, err := normalizeCreateSpec(CreateSpec{BaseRef: "HEAD", CreateBranch: true, BranchName: task.ShortID})
 	if err != nil {
@@ -193,7 +207,14 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 		return EnsureTaskWorktreeResponse{}, err
 	}
 	if resolution.Kind != CreateTargetResolutionKindNewBranch {
-		return EnsureTaskWorktreeResponse{}, &TaskBranchCollisionError{BranchName: createSpec.BranchName, ResolvedRef: resolution.ResolvedRef}
+		if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "" && resolution.Kind == CreateTargetResolutionKindExistingBranch {
+			createSpec, err = normalizeCreateSpec(CreateSpec{BaseRef: createSpec.BranchName, CreateBranch: false})
+			if err != nil {
+				return EnsureTaskWorktreeResponse{}, err
+			}
+		} else {
+			return EnsureTaskWorktreeResponse{}, &TaskBranchCollisionError{BranchName: createSpec.BranchName, ResolvedRef: resolution.ResolvedRef}
+		}
 	}
 	worktreeRoot, err := s.resolveRequestedWorktreeRoot("", workspace.WorkspaceID, createSpec)
 	if err != nil {
@@ -205,7 +226,7 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 		workspaceRoot: workspace.RootPath,
 		worktreeRoot:  worktreeRoot,
 		branchName:    createSpec.BranchName,
-		createdBranch: true,
+		createdBranch: createSpec.CreateBranch,
 	}
 	defer func() {
 		if err == nil || !cleanup.active {
@@ -235,7 +256,7 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 		return EnsureTaskWorktreeResponse{}, fmt.Errorf("created task worktree %q was not discovered after git sync: %w", worktreeRoot, serverapi.ErrWorktreeNotFound)
 	}
 	created.record.Managed = true
-	created.record.CreatedBranch = createdBranch
+	created.record.CreatedBranch = createdBranch || (task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "")
 	created.record.UpdatedAt = time.Now().UTC()
 	cleanup.worktreeID = strings.TrimSpace(created.record.ID)
 	if err := s.metadata.UpsertWorktreeRecord(ctx, created.record); err != nil {
@@ -247,6 +268,20 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 		return EnsureTaskWorktreeResponse{}, sql.ErrNoRows
 	}
 	cleanup.active = false
+	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
+		SetupOperationID:    req.SetupOperationID,
+		SourceWorkspaceRoot: workspace.RootPath,
+		BranchName:          strings.TrimSpace(created.git.BranchName),
+		WorktreeRoot:        created.record.CanonicalRoot,
+		ScriptPayload: setupScriptPayload{
+			ProjectID:   task.ProjectID,
+			WorkspaceID: workspace.WorkspaceID,
+			WorktreeID:  created.record.ID,
+		},
+		CreatedBranch: createdBranch,
+	}); err != nil {
+		return EnsureTaskWorktreeResponse{}, err
+	}
 	worktreeView, err := worktreeViewFromSynced(created, clientui.SessionExecutionTarget{})
 	if err != nil {
 		return EnsureTaskWorktreeResponse{}, err
@@ -470,6 +505,15 @@ func (s *Service) taskManagedWorktreeView(ctx context.Context, worktreeID string
 	if err != nil {
 		return serverapi.WorktreeView{}, err
 	}
+	if strings.TrimSpace(record.CanonicalRoot) == "" {
+		return serverapi.WorktreeView{}, fmt.Errorf("managed worktree %q has no canonical root: %w", worktreeID, serverapi.ErrWorktreeNotFound)
+	}
+	if _, err := os.Stat(record.CanonicalRoot); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return serverapi.WorktreeView{}, fmt.Errorf("managed worktree %q root %q is missing: %w", worktreeID, record.CanonicalRoot, serverapi.ErrWorktreeNotFound)
+		}
+		return serverapi.WorktreeView{}, err
+	}
 	gitMetadata, err := worktreeGitMetadataFromRecord(record)
 	if err != nil {
 		return serverapi.WorktreeView{}, err
@@ -580,6 +624,22 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	if err := s.metadata.UpsertWorktreeRecord(ctx, created.record); err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
+	cleanup.active = false
+	if err := s.runSetupForWorktree(ctx, setupExecutionRequest{
+		SetupOperationID:    req.SetupOperationID,
+		SourceWorkspaceRoot: workspaceCtx.workspaceRoot,
+		BranchName:          strings.TrimSpace(created.git.BranchName),
+		WorktreeRoot:        created.record.CanonicalRoot,
+		ScriptPayload: setupScriptPayload{
+			SessionID:   workspaceCtx.sessionID,
+			ProjectID:   workspaceCtx.projectID,
+			WorkspaceID: workspaceCtx.workspaceID,
+			WorktreeID:  created.record.ID,
+		},
+		CreatedBranch: createdBranch,
+	}); err != nil {
+		return serverapi.WorktreeCreateResponse{}, err
+	}
 	previous, err := currentSyncedWorktree(synced, workspaceCtx.target)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
@@ -588,7 +648,6 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
-	setupScheduled := s.scheduleSetupScript(workspaceCtx, created, strings.TrimSpace(created.git.BranchName), createdBranch)
 	createdView, err := worktreeViewFromSynced(created, nextTarget)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
@@ -596,8 +655,7 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	createdView.Managed = true
 	createdView.CreatedBranch = createdBranch
 	createdView.OriginSessionID = workspaceCtx.sessionID
-	cleanup.active = false
-	return serverapi.WorktreeCreateResponse{Target: nextTarget, Worktree: createdView, CreatedBranch: createdBranch, SetupScheduled: setupScheduled}, nil
+	return serverapi.WorktreeCreateResponse{Target: nextTarget, Worktree: createdView, CreatedBranch: createdBranch}, nil
 }
 
 func (s *Service) cleanupFailedCreate(ctx context.Context, cleanup failedCreateCleanup) error {
@@ -1112,39 +1170,89 @@ func nextAvailableWorktreeRoot(baseRoot string) (string, error) {
 	return "", fmt.Errorf("no available worktree root under %q after %d attempts: %w", canonicalBase, maxCollisionSuffixAttempts, ErrWorktreeRootCollisionCap)
 }
 
-func (s *Service) scheduleSetupScript(workspaceCtx sessionWorkspaceContext, created syncedWorktree, branchName string, createdBranch bool) bool {
-	trimmedScript := strings.TrimSpace(s.setupScript)
-	if trimmedScript == "" {
-		return false
-	}
-	scriptPath, err := resolveSetupScriptPath(workspaceCtx.workspaceRoot, trimmedScript)
-	if err != nil {
-		s.appendLocalNote(context.Background(), workspaceCtx.sessionID, fmt.Sprintf("Worktree setup script skipped: %v", err))
-		return false
-	}
-	payload := setupScriptPayload{
-		SourceWorkspaceRoot: workspaceCtx.workspaceRoot,
-		BranchName:          strings.TrimSpace(branchName),
-		WorktreeRoot:        created.record.CanonicalRoot,
-		SessionID:           workspaceCtx.sessionID,
-		ProjectID:           workspaceCtx.projectID,
-		WorkspaceID:         workspaceCtx.workspaceID,
-		WorktreeID:          created.record.ID,
-		CreatedBranch:       createdBranch,
-	}
-	go s.runSetupScript(scriptPath, workspaceCtx.sessionID, payload)
-	return true
+type setupExecutionRequest struct {
+	SetupOperationID    serverapi.WorktreeSetupOperationID
+	SourceWorkspaceRoot string
+	BranchName          string
+	WorktreeRoot        string
+	ScriptPayload       setupScriptPayload
+	CreatedBranch       bool
 }
 
-func (s *Service) runSetupScript(scriptPath string, sessionID string, payload setupScriptPayload) {
-	ctx, cancel := context.WithTimeout(context.Background(), setupScriptTimeout)
-	defer cancel()
+func (s *Service) runSetupForWorktree(ctx context.Context, req setupExecutionRequest) error {
+	trimmedScript := strings.TrimSpace(s.setupScript)
+	if trimmedScript == "" {
+		return nil
+	}
+	operationID := req.SetupOperationID
+	if err := operationID.Validate(); err != nil {
+		operationID = serverapi.NewWorktreeSetupOperationID()
+	}
+	scriptPath, err := resolveSetupScriptPath(req.SourceWorkspaceRoot, trimmedScript)
+	if err != nil {
+		s.publishSetupEvent(serverapi.WorktreeSetupEvent{
+			SetupOperationID:    operationID,
+			SourceWorkspaceRoot: strings.TrimSpace(req.SourceWorkspaceRoot),
+			WorktreeRoot:        strings.TrimSpace(req.WorktreeRoot),
+			ScriptPath:          strings.TrimSpace(trimmedScript),
+			Phase:               serverapi.WorktreeSetupPhaseFailed,
+			Error:               err.Error(),
+		})
+		return fmt.Errorf("resolve worktree setup script: %w", err)
+	}
+	payload := setupScriptPayload{
+		SourceWorkspaceRoot: strings.TrimSpace(req.SourceWorkspaceRoot),
+		BranchName:          strings.TrimSpace(req.BranchName),
+		WorktreeRoot:        strings.TrimSpace(req.WorktreeRoot),
+		SessionID:           strings.TrimSpace(req.ScriptPayload.SessionID),
+		ProjectID:           strings.TrimSpace(req.ScriptPayload.ProjectID),
+		WorkspaceID:         strings.TrimSpace(req.ScriptPayload.WorkspaceID),
+		WorktreeID:          strings.TrimSpace(req.ScriptPayload.WorktreeID),
+		CreatedBranch:       req.CreatedBranch,
+	}
+	started := serverapi.WorktreeSetupEvent{
+		SetupOperationID:    operationID,
+		SourceWorkspaceRoot: payload.SourceWorkspaceRoot,
+		WorktreeRoot:        payload.WorktreeRoot,
+		ScriptPath:          scriptPath,
+		Phase:               serverapi.WorktreeSetupPhaseStarted,
+	}
+	s.publishSetupEvent(started)
+	if err := s.runSetupScript(ctx, scriptPath, payload); err != nil {
+		failure := started
+		failure.Phase = serverapi.WorktreeSetupPhaseFailed
+		var setupErr *setupScriptError
+		if errors.As(err, &setupErr) {
+			failure.Timeout = setupErr.Timeout
+			failure.Canceled = setupErr.Canceled
+			failure.ExitCode = setupErr.ExitCode
+			failure.Stdout = setupErr.Stdout
+			failure.Stderr = setupErr.Stderr
+			failure.Error = setupErr.Error()
+		} else {
+			failure.Error = err.Error()
+		}
+		s.publishSetupEvent(failure)
+		return err
+	}
+	completed := started
+	completed.Phase = serverapi.WorktreeSetupPhaseCompleted
+	s.publishSetupEvent(completed)
+	return nil
+}
+
+func (s *Service) runSetupScript(ctx context.Context, scriptPath string, payload setupScriptPayload) error {
+	setupCtx := ctx
+	var cancel context.CancelFunc
+	if s != nil && s.setupTimeoutSeconds > 0 {
+		setupCtx, cancel = context.WithTimeout(ctx, time.Duration(s.setupTimeoutSeconds)*time.Second)
+		defer cancel()
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		s.appendSessionNote(context.Background(), sessionID, fmt.Sprintf("Worktree setup script failed before start: %v", err))
-		return
+		return &setupScriptError{Message: fmt.Sprintf("marshal setup payload: %v", err)}
 	}
-	cmd := exec.CommandContext(ctx, scriptPath, payload.SourceWorkspaceRoot, payload.BranchName, payload.WorktreeRoot)
+	cmd := exec.CommandContext(setupCtx, scriptPath, payload.SourceWorkspaceRoot, payload.BranchName, payload.WorktreeRoot)
 	cmd.Dir = payload.WorktreeRoot
 	cmd.Stdin = strings.NewReader(string(body))
 	cmd.Env = append(os.Environ(),
@@ -1158,38 +1266,87 @@ func (s *Service) runSetupScript(scriptPath string, sessionID string, payload se
 		fmt.Sprintf("KENT_WORKTREE_CREATED_BRANCH=%t", payload.CreatedBranch),
 		"KENT_WORKTREE_PAYLOAD_JSON="+string(body),
 	)
-	output, err := cmd.CombinedOutput()
+	stdout := shelltool.NewBoundedOutput(setupDiagnosticLimitBytes)
+	stderr := shelltool.NewBoundedOutput(setupDiagnosticLimitBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	configureSetupCommand(cmd)
+	if err := cmd.Start(); err != nil {
+		return &setupScriptError{Message: err.Error(), ScriptPath: scriptPath, WorktreeRoot: payload.WorktreeRoot, Stdout: strings.TrimSpace(stdout.String()), Stderr: strings.TrimSpace(stderr.String())}
+	}
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+	select {
+	case err = <-waitCh:
+	case <-setupCtx.Done():
+		terminateSetupCommand(cmd)
+		err = <-waitCh
+	}
 	if err == nil {
-		return
+		return nil
 	}
-	detail := strings.TrimSpace(string(output))
-	if ctx.Err() != nil {
-		s.appendSessionNote(context.Background(), sessionID, fmt.Sprintf("Worktree setup timed out for %s", payload.WorktreeRoot))
-		return
+	setupErr := &setupScriptError{Message: err.Error(), ScriptPath: scriptPath, WorktreeRoot: payload.WorktreeRoot, Stdout: strings.TrimSpace(stdout.String()), Stderr: strings.TrimSpace(stderr.String())}
+	if setupCtx.Err() != nil {
+		setupErr.Timeout = errors.Is(setupCtx.Err(), context.DeadlineExceeded)
+		setupErr.Canceled = errors.Is(setupCtx.Err(), context.Canceled)
+		if setupErr.Timeout {
+			setupErr.TimeoutSeconds = s.setupTimeoutSeconds
+			setupErr.Message = fmt.Sprintf("timed out after %s", time.Duration(s.setupTimeoutSeconds)*time.Second)
+		} else {
+			setupErr.Message = setupCtx.Err().Error()
+		}
 	}
-	if detail == "" {
-		detail = err.Error()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		exitCode := exitErr.ExitCode()
+		setupErr.ExitCode = &exitCode
 	}
-	s.appendSessionNote(context.Background(), sessionID, fmt.Sprintf("Worktree setup failed for %s: %s", payload.WorktreeRoot, detail))
+	return setupErr
 }
 
-func (s *Service) appendLocalNote(ctx context.Context, sessionID string, text string) {
-	trimmedText := strings.TrimSpace(text)
-	if s == nil || s.localNotes == nil || trimmedText == "" {
+func (s *Service) publishSetupEvent(evt serverapi.WorktreeSetupEvent) {
+	if s == nil || s.setupBroker == nil {
 		return
 	}
-	_ = s.localNotes.AppendCommittedEntry(ctx, serverapi.RuntimeAppendCommittedEntryRequest{
-		ClientRequestID: uuid.NewString(),
-		SessionID:       strings.TrimSpace(sessionID),
-		Role:            "system",
-		Text:            trimmedText,
-	})
+	s.setupBroker.Publish(evt)
 }
 
-func (s *Service) appendSessionNote(ctx context.Context, sessionID string, text string) {
-	trimmedText := strings.TrimSpace(text)
-	if s == nil || s.localNotes == nil || trimmedText == "" {
-		return
+type setupScriptError struct {
+	Message        string
+	ScriptPath     string
+	WorktreeRoot   string
+	Timeout        bool
+	TimeoutSeconds int
+	Canceled       bool
+	ExitCode       *int
+	Stdout         string
+	Stderr         string
+}
+
+func (e *setupScriptError) Error() string {
+	if e == nil {
+		return ""
 	}
-	_ = s.localNotes.AppendSessionEntry(ctx, strings.TrimSpace(sessionID), "system", trimmedText)
+	parts := []string{"worktree setup script failed"}
+	if strings.TrimSpace(e.Message) != "" {
+		parts = append(parts, e.Message)
+	}
+	if e.Timeout && e.TimeoutSeconds > 0 {
+		parts = append(parts, fmt.Sprintf("configured timeout %s", time.Duration(e.TimeoutSeconds)*time.Second))
+	}
+	if strings.TrimSpace(e.ScriptPath) != "" {
+		parts = append(parts, "script "+strings.TrimSpace(e.ScriptPath))
+	}
+	if strings.TrimSpace(e.WorktreeRoot) != "" {
+		parts = append(parts, "worktree "+strings.TrimSpace(e.WorktreeRoot))
+	}
+	if strings.TrimSpace(e.Stderr) != "" {
+		parts = append(parts, strings.TrimSpace(e.Stderr))
+	}
+	if strings.TrimSpace(e.Stdout) != "" {
+		parts = append(parts, strings.TrimSpace(e.Stdout))
+	}
+	return strings.Join(parts, ": ")
 }

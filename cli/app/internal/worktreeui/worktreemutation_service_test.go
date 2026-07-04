@@ -2,6 +2,7 @@ package worktreeui
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -58,6 +59,21 @@ func (c *testWorktreeClient) DeleteWorktree(ctx context.Context, req serverapi.W
 	c.deleteRequests = append(c.deleteRequests, req)
 	return c.deleteResp, c.nextErr()
 }
+
+func (c *testWorktreeClient) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	return testNoopWorktreeSetupSubscription{}, nil
+}
+
+type testNoopWorktreeSetupSubscription struct{}
+
+func (testNoopWorktreeSetupSubscription) Next(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
+	return serverapi.WorktreeSetupEvent{}, io.EOF
+}
+
+func (testNoopWorktreeSetupSubscription) Close() error { return nil }
 
 func (c *testWorktreeClient) nextErr() error {
 	if len(c.errs) == 0 {
@@ -165,6 +181,24 @@ func TestMutationsUseDedicatedMutationContext(t *testing.T) {
 	remaining := time.Until(deadline)
 	if remaining <= 8*time.Second {
 		t.Fatalf("delete context remaining = %v, want dedicated mutation timeout", remaining)
+	}
+}
+
+func TestCreateDoesNotInstallFixedMutationDeadline(t *testing.T) {
+	client := &testWorktreeClient{}
+	service := newTestService(client)
+	service.Runtime.MutationContext = func() (context.Context, context.CancelFunc) {
+		return context.WithTimeout(context.Background(), 10*time.Millisecond)
+	}
+
+	if _, err := service.Create(serverapi.WorktreeCreateRequest{BaseRef: "HEAD", CreateBranch: true, BranchName: "feature/a"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if client.createCtx == nil {
+		t.Fatal("expected create context recorded")
+	}
+	if _, ok := client.createCtx.Deadline(); ok {
+		t.Fatal("create context has a deadline")
 	}
 }
 

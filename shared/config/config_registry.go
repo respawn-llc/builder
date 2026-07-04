@@ -368,6 +368,12 @@ func newSettingsRegistry() settingsRegistry {
 			nil,
 			nil,
 			settingDocOptions{}),
+		newIntSetting("worktrees.setup_timeout_seconds", defaultWorktreeSetupTimeoutSeconds,
+			func(state *settingsState, value int) { state.Settings.Worktrees.SetupTimeoutSeconds = value },
+			func(state settingsState) int { return state.Settings.Worktrees.SetupTimeoutSeconds },
+			"",
+			nil,
+			settingDocOptions{}),
 		newStringSetting("workflow.completion_mode", defaultWorkflowCompletionMode,
 			func(state *settingsState, value WorkflowCompletionMode) {
 				state.Settings.Workflow.CompletionMode = value

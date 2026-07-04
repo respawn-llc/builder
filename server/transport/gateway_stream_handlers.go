@@ -193,6 +193,26 @@ func (g *Gateway) serveWorkflowSubscription(conn rpcwire.Conn, ctx context.Conte
 	serveGatewaySubscription(conn, ctx, route, req, g.deps.WorkflowClient().SubscribeWorkflow, workflowProjectEventParams)
 }
 
+func (g *Gateway) serveWorktreeSetupSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
+	serveGatewaySubscription(conn, ctx, route, req, g.deps.WorktreeClient().SubscribeWorktreeSetup, worktreeSetupEventParams)
+}
+
 func workflowProjectEventParams(evt serverapi.WorkflowProjectEvent) protocol.WorkflowProjectEventParams {
 	return protocol.WorkflowProjectEventParams{Event: protocol.WorkflowProjectEvent{ProjectID: evt.ProjectID, WorkflowID: evt.WorkflowID, Resource: evt.Resource, Action: evt.Action, ChangedIDs: evt.ChangedIDs, OccurredAtUnixMs: evt.OccurredAtUnixMs}}
+}
+
+func worktreeSetupEventParams(evt serverapi.WorktreeSetupEvent) protocol.WorktreeSetupEventParams {
+	return protocol.WorktreeSetupEventParams{Event: protocol.WorktreeSetupEvent{
+		SetupOperationID:    evt.SetupOperationID.String(),
+		SourceWorkspaceRoot: evt.SourceWorkspaceRoot,
+		WorktreeRoot:        evt.WorktreeRoot,
+		ScriptPath:          evt.ScriptPath,
+		Phase:               string(evt.Phase),
+		Timeout:             evt.Timeout,
+		Canceled:            evt.Canceled,
+		ExitCode:            evt.ExitCode,
+		Stdout:              evt.Stdout,
+		Stderr:              evt.Stderr,
+		Error:               evt.Error,
+	}}
 }

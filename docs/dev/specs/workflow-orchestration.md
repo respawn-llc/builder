@@ -186,7 +186,9 @@
 
 - A task owns one managed worktree by default.
 - All executable nodes require and reuse the task managed worktree.
-- Kent creates the managed worktree on task start before first executable run is scheduled.
+- Kent creates and, when configured, runs setup for the managed worktree on task start before first executable run is scheduled. Blocking setup prevents runs from locking context before setup-provided local skills, docs, or other worktree files are present.
+- Managed worktree setup failure fails task start without scheduling an executable run. The created worktree stays available for inspection or manual repair.
+- Starting the task again trusts an existing managed worktree as manually repaired. If the managed worktree was removed, task start recreates it and runs setup again.
 - Task worktree branch name is the task short ID.
 - Worktree creation reuses existing worktree branch/root collision handling.
 - Worktree deletion/retargeting treats non-terminal tasks referencing a managed worktree as blockers.

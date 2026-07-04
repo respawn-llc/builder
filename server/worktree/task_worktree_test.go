@@ -2,10 +2,12 @@ package worktree
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"core/server/workflow"
 	"core/server/workflowstore"
@@ -16,7 +18,7 @@ func TestEnsureTaskWorktreeCreatesShortIDBranchWithoutControllerLease(t *testing
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
 
-	resp, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: string(task.ID)})
+	resp, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID})
 	if err != nil {
 		t.Fatalf("EnsureTaskWorktree: %v", err)
 	}
@@ -44,15 +46,77 @@ func TestEnsureTaskWorktreeCreatesShortIDBranchWithoutControllerLease(t *testing
 	}
 }
 
+func TestEnsureTaskWorktreeRunsSetupAndPublishesProgressBeforeReturning(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	startedPath := filepath.Join(t.TempDir(), "started")
+	releasePath := filepath.Join(t.TempDir(), "release")
+	markerPath := filepath.Join(t.TempDir(), "marker")
+	payloadPath := filepath.Join(t.TempDir(), "payload.json")
+	scriptRelpath := filepath.Join("scripts", "task-setup.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\nprintf started > %q\ncat > %q\nwhile [ ! -f %q ]; do sleep 0.02; done\nprintf marker > %q\n", startedPath, payloadPath, releasePath, markerPath))
+	env.service.setupScript = scriptRelpath
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	sub, err := env.service.SubscribeWorktreeSetup(env.ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupID})
+	if err != nil {
+		t.Fatalf("SubscribeWorktreeSetup: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+	type ensureResult struct {
+		resp EnsureTaskWorktreeResponse
+		err  error
+	}
+	resultCh := make(chan ensureResult, 1)
+	go func() {
+		resp, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID, SetupOperationID: setupID})
+		resultCh <- ensureResult{resp: resp, err: err}
+	}()
+
+	if got := waitForFileText(t, startedPath); got != "started" {
+		t.Fatalf("started marker = %q, want started", got)
+	}
+	evt, err := sub.Next(env.ctx)
+	if err != nil {
+		t.Fatalf("setup event: %v", err)
+	}
+	if evt.Phase != serverapi.WorktreeSetupPhaseStarted || evt.SetupOperationID != setupID || evt.ScriptPath == "" || evt.WorktreeRoot == "" {
+		t.Fatalf("started setup event = %+v", evt)
+	}
+	select {
+	case result := <-resultCh:
+		t.Fatalf("EnsureTaskWorktree returned before setup release: resp=%+v err=%v", result.resp, result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := os.WriteFile(releasePath, []byte("release"), 0o644); err != nil {
+		t.Fatalf("release setup: %v", err)
+	}
+	var result ensureResult
+	select {
+	case result = <-resultCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for EnsureTaskWorktree")
+	}
+	if result.err != nil {
+		t.Fatalf("EnsureTaskWorktree: %v", result.err)
+	}
+	if got := waitForFileText(t, markerPath); got != "marker" {
+		t.Fatalf("setup marker = %q, want marker", got)
+	}
+	payload := waitForSetupPayload(t, payloadPath)
+	if payload.SourceWorkspaceRoot != env.workspaceRoot || payload.WorktreeRoot != result.resp.Worktree.CanonicalRoot {
+		t.Fatalf("setup payload = %+v, want source %q worktree %q", payload, env.workspaceRoot, result.resp.Worktree.CanonicalRoot)
+	}
+}
+
 func TestEnsureTaskWorktreeReturnsExistingManagedWorktree(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
 
-	first, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: string(task.ID)})
+	first, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID})
 	if err != nil {
 		t.Fatalf("EnsureTaskWorktree first: %v", err)
 	}
-	second, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: string(task.ID)})
+	second, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID})
 	if err != nil {
 		t.Fatalf("EnsureTaskWorktree second: %v", err)
 	}
@@ -61,6 +125,62 @@ func TestEnsureTaskWorktreeReturnsExistingManagedWorktree(t *testing.T) {
 	}
 	if first.Worktree.WorktreeID != second.Worktree.WorktreeID {
 		t.Fatalf("second worktree id = %q, want %q", second.Worktree.WorktreeID, first.Worktree.WorktreeID)
+	}
+}
+
+func TestEnsureTaskWorktreeFailureRetryTrustsExistingWorktreeAndRecreatesRemovedRoot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, _ := createTaskWorktreeTestTask(t, env)
+	countPath := filepath.Join(t.TempDir(), "count")
+	scriptRelpath := filepath.Join("scripts", "retry-setup.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), fmt.Sprintf("#!/bin/sh\ncount=0\nif [ -f %q ]; then count=$(cat %q); fi\ncount=$((count + 1))\nprintf '%%s' \"$count\" > %q\nif [ \"$count\" = \"1\" ]; then exit 3; fi\n", countPath, countPath, countPath))
+	env.service.setupScript = scriptRelpath
+
+	_, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()})
+	if err == nil {
+		t.Fatal("first EnsureTaskWorktree succeeded, want setup failure")
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !row.ManagedWorktreeID.Valid || strings.TrimSpace(row.ManagedWorktreeID.String) == "" {
+		t.Fatalf("managed worktree not attached after setup failure: %+v", row.ManagedWorktreeID)
+	}
+	record, err := env.store.GetWorktreeRecordByID(env.ctx, row.ManagedWorktreeID.String)
+	if err != nil {
+		t.Fatalf("GetWorktreeRecordByID: %v", err)
+	}
+	if _, err := os.Stat(record.CanonicalRoot); err != nil {
+		t.Fatalf("failed setup worktree root unavailable: %v", err)
+	}
+	if got := waitForFileText(t, countPath); got != "1" {
+		t.Fatalf("setup run count after failure = %q, want 1", got)
+	}
+
+	second, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()})
+	if err != nil {
+		t.Fatalf("second EnsureTaskWorktree should trust existing root: %v", err)
+	}
+	if second.Created {
+		t.Fatalf("second ensure created worktree, want existing trusted: %+v", second)
+	}
+	if got := waitForFileText(t, countPath); got != "1" {
+		t.Fatalf("setup reran for existing worktree, count=%q", got)
+	}
+
+	if err := env.service.git.Remove(env.ctx, env.workspaceRoot, record.CanonicalRoot, true); err != nil {
+		t.Fatalf("remove stale worktree root: %v", err)
+	}
+	third, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()})
+	if err != nil {
+		t.Fatalf("third EnsureTaskWorktree should recreate removed root: %v", err)
+	}
+	if !third.Created {
+		t.Fatalf("third ensure did not recreate worktree: %+v", third)
+	}
+	if got := waitForFileText(t, countPath); got != "2" {
+		t.Fatalf("setup run count after recreate = %q, want 2", got)
 	}
 }
 
@@ -77,7 +197,7 @@ func TestEnsureTaskWorktreeUsesTaskSourceWorkspace(t *testing.T) {
 	}
 	task, _ := createTaskWorktreeTestTaskWithSource(t, env, source.WorkspaceID)
 
-	resp, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: string(task.ID)})
+	resp, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID})
 	if err != nil {
 		t.Fatalf("EnsureTaskWorktree: %v", err)
 	}
@@ -103,7 +223,7 @@ func TestEnsureTaskWorktreeHandlesRootCollisionAndReportsBranchCollision(t *test
 		t.Fatalf("MkdirAll collision root: %v", err)
 	}
 
-	resp, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: string(task.ID)})
+	resp, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID})
 	if err != nil {
 		t.Fatalf("EnsureTaskWorktree root collision: %v", err)
 	}
@@ -116,7 +236,7 @@ func TestEnsureTaskWorktreeHandlesRootCollisionAndReportsBranchCollision(t *test
 
 	otherTask, _ := createTaskWorktreeTestTask(t, env)
 	runGit(t, env.workspaceRoot, "branch", otherTask.ShortID)
-	_, err = env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: string(otherTask.ID)})
+	_, err = env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: otherTask.ID})
 	var branchCollision *TaskBranchCollisionError
 	if !errors.As(err, &branchCollision) || branchCollision.BranchName != otherTask.ShortID {
 		t.Fatalf("EnsureTaskWorktree branch collision error = %v, want task branch collision", err)
@@ -126,7 +246,7 @@ func TestEnsureTaskWorktreeHandlesRootCollisionAndReportsBranchCollision(t *test
 func TestDeleteWorktreeBlocksNonTerminalTaskManagedWorktree(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
-	created, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: string(task.ID)})
+	created, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID})
 	if err != nil {
 		t.Fatalf("EnsureTaskWorktree: %v", err)
 	}
@@ -144,7 +264,7 @@ func TestDeleteWorktreeBlocksNonTerminalTaskManagedWorktree(t *testing.T) {
 func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, workflowStore := createTaskWorktreeTestTask(t, env)
-	created, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: string(task.ID)})
+	created, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID})
 	if err != nil {
 		t.Fatalf("EnsureTaskWorktree: %v", err)
 	}
@@ -172,7 +292,7 @@ func TestDeleteWorktreeAllowsTerminalTaskManagedWorktree(t *testing.T) {
 func TestDeleteTaskWorktreeRemovesManagedWorktreeAndBranch(t *testing.T) {
 	env := newServiceTestEnv(t)
 	task, _ := createTaskWorktreeTestTask(t, env)
-	created, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: string(task.ID)})
+	created, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID})
 	if err != nil {
 		t.Fatalf("EnsureTaskWorktree: %v", err)
 	}

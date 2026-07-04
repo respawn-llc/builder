@@ -84,7 +84,7 @@ func (s *Store) PendingTransitionTargetsExecutableNode(ctx context.Context, tran
 		return false, err
 	}
 	for _, edge := range edges {
-		if edge.State == "pending" && executableNodeKind(workflow.NodeKind(edge.TargetNodeKind)) {
+		if executableNodeKind(workflow.NodeKind(edge.TargetNodeKind)) {
 			return true, nil
 		}
 	}

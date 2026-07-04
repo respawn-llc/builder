@@ -31,6 +31,7 @@ const (
 	defaultCompactionMode                = "local"
 	defaultServerHost                    = "127.0.0.1"
 	defaultServerPort                    = 53082
+	defaultWorktreeSetupTimeoutSeconds   = 60
 )
 
 func settingsTOMLForOnboarding(settings Settings, preservedDefaults map[string]bool) string {

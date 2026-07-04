@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,21 @@ func (c *worktreeCommandTestClient) DeleteWorktree(ctx context.Context, req serv
 	}
 	return c.deleteResp, c.deleteErr
 }
+
+func (c *worktreeCommandTestClient) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	return worktreeCommandNoopSetupSubscription{}, nil
+}
+
+type worktreeCommandNoopSetupSubscription struct{}
+
+func (worktreeCommandNoopSetupSubscription) Next(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
+	return serverapi.WorktreeSetupEvent{}, io.EOF
+}
+
+func (worktreeCommandNoopSetupSubscription) Close() error { return nil }
 
 func (c *worktreeCommandTestClient) consumeReconnectFailure(kind string) bool {
 	if c == nil || c.reconnectFailures == nil {

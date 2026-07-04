@@ -27,8 +27,9 @@ type WorkflowCompletionMode string
 type SleepPreventionMode string
 
 type WorktreeSettings struct {
-	BaseDir     string
-	SetupScript string
+	BaseDir             string
+	SetupScript         string
+	SetupTimeoutSeconds int
 }
 
 type WorkflowSettings struct {

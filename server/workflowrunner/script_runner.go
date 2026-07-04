@@ -1,7 +1,6 @@
 package workflowrunner
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	tools "core/server/tools"
+	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowattention"
 	"core/server/workflowruntime"
@@ -170,7 +170,7 @@ func executeWorkflowScript(ctx context.Context, req SchedulerStartRunRequest, in
 	cmd := exec.Command(resolvedPath)
 	cmd.Dir = input.WorktreeRoot
 	cmd.Env = workflowScriptEnv(req, input)
-	cmd.Stdin = bytes.NewReader(stdin)
+	cmd.Stdin = strings.NewReader(string(stdin))
 	prepareScriptCommand(cmd)
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -183,8 +183,8 @@ func executeWorkflowScript(ctx context.Context, req SchedulerStartRunRequest, in
 	if err := cmd.Start(); err != nil {
 		return workflowScriptResult{ResolvedPath: resolvedPath}, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
 	}
-	stdout := newBoundedOutput(scriptOutputLimitBytes)
-	stderr := newBoundedOutput(scriptOutputLimitBytes)
+	stdout := shelltool.NewBoundedOutput(scriptOutputLimitBytes)
+	stderr := shelltool.NewBoundedOutput(scriptOutputLimitBytes)
 	var copyWG sync.WaitGroup
 	copyWG.Add(2)
 	go func() {
@@ -270,44 +270,6 @@ func workflowScriptEnv(req SchedulerStartRunRequest, input workflowstore.RunStar
 		"KENT_WORKTREE_ROOT="+input.WorktreeRoot,
 	)
 	return env
-}
-
-type boundedOutput struct {
-	limit    int
-	buf      bytes.Buffer
-	total    int
-	overflow bool
-}
-
-func newBoundedOutput(limit int) *boundedOutput {
-	return &boundedOutput{limit: limit}
-}
-
-func (b *boundedOutput) Write(p []byte) (int, error) {
-	b.total += len(p)
-	remaining := b.limit - b.buf.Len()
-	if remaining > 0 {
-		if len(p) > remaining {
-			_, _ = b.buf.Write(p[:remaining])
-			b.overflow = true
-		} else {
-			_, _ = b.buf.Write(p)
-		}
-	} else if len(p) > 0 {
-		b.overflow = true
-	}
-	if b.total > b.limit {
-		b.overflow = true
-	}
-	return len(p), nil
-}
-
-func (b *boundedOutput) Bytes() []byte {
-	return append([]byte(nil), b.buf.Bytes()...)
-}
-
-func (b *boundedOutput) Overflow() bool {
-	return b.overflow
 }
 
 func scriptFailureDetailJSON(err error, result workflowScriptResult) string {

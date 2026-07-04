@@ -148,6 +148,9 @@ func TestLoadUsesDefaultsWithoutCreatingConfigOnFirstUse(t *testing.T) {
 	if cfg.Settings.Worktrees.SetupScript != "" {
 		t.Fatalf("expected default worktrees.setup_script empty, got %q", cfg.Settings.Worktrees.SetupScript)
 	}
+	if cfg.Settings.Worktrees.SetupTimeoutSeconds != defaultWorktreeSetupTimeoutSeconds {
+		t.Fatalf("default worktrees.setup_timeout_seconds mismatch: %d", cfg.Settings.Worktrees.SetupTimeoutSeconds)
+	}
 	if cfg.Settings.Reviewer.Frequency != defaultReviewerFrequency {
 		t.Fatalf("expected default reviewer.frequency=%s, got %q", defaultReviewerFrequency, cfg.Settings.Reviewer.Frequency)
 	}
@@ -770,6 +773,37 @@ func TestLoadResolvesWorktreeBaseDirRelativeToPersistenceRoot(t *testing.T) {
 	}
 	if got := cfg.Settings.Worktrees.SetupScript; got != "scripts/setup-worktree.sh" {
 		t.Fatalf("worktrees.setup_script = %q, want scripts/setup-worktree.sh", got)
+	}
+}
+
+func TestLoadWorktreeSetupTimeoutSeconds(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    int
+	}{
+		{name: "default", content: "", want: defaultWorktreeSetupTimeoutSeconds},
+		{name: "positive", content: "[worktrees]\nsetup_timeout_seconds = 120\n", want: 120},
+		{name: "zero", content: "[worktrees]\nsetup_timeout_seconds = 0\n", want: 0},
+		{name: "negative", content: "[worktrees]\nsetup_timeout_seconds = -1\n", want: -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			workspace := t.TempDir()
+			if strings.TrimSpace(tt.content) != "" {
+				if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(tt.content), 0o644); err != nil {
+					t.Fatalf("write config: %v", err)
+				}
+			}
+			cfg, err := Load(workspace, LoadOptions{ConfigRoot: root})
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if got := cfg.Settings.Worktrees.SetupTimeoutSeconds; got != tt.want {
+				t.Fatalf("worktrees.setup_timeout_seconds = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -34,6 +34,13 @@ type workflowCommandLoopbackRemote struct {
 
 func (r *workflowCommandLoopbackRemote) Close() error { return nil }
 
+func (r *workflowCommandLoopbackRemote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	return noopWorktreeSetupSubscription{}, nil
+}
+
 func (r *workflowCommandLoopbackRemote) ResolveProjectPath(ctx context.Context, req serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
 	if binding, ok := r.projectBindingsByRoot[req.Path]; ok {
 		return serverapi.ProjectResolvePathResponse{CanonicalRoot: req.Path, Binding: &binding}, nil

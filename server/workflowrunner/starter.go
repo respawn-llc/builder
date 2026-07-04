@@ -61,7 +61,13 @@ type RuntimeStore interface {
 }
 
 type TaskWorktreeEnsurer interface {
-	EnsureTaskWorktree(ctx context.Context, taskID string) error
+	EnsureTaskWorktree(ctx context.Context, req TaskWorktreeEnsureRequest) error
+}
+
+type TaskWorktreeEnsureRequest struct {
+	TaskID           workflow.TaskID
+	RunID            workflow.RunID
+	SetupOperationID serverapi.WorktreeSetupOperationID
 }
 
 type RuntimeEventRegistry interface {
@@ -162,7 +168,7 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 	}
 	s.mu.Unlock()
 	if s.worktrees != nil {
-		if err := s.worktrees.EnsureTaskWorktree(ctx, string(req.TaskID)); err != nil {
+		if err := s.worktrees.EnsureTaskWorktree(ctx, TaskWorktreeEnsureRequest{TaskID: req.TaskID, RunID: req.RunID, SetupOperationID: serverapi.NewWorktreeSetupOperationID()}); err != nil {
 			return err
 		}
 	}

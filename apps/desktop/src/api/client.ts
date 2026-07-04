@@ -1,6 +1,7 @@
-import { type z } from "zod";
-
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
+import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
+import { parseRpcResponse as parse } from "./clientParse";
+import * as taskLifecycle from "./clientTaskLifecycle";
 import {
   workflowGraphDraftPayload,
   workflowGraphMetadataPayload,
@@ -22,8 +23,12 @@ import type {
   WorkflowListInput,
   WorkflowProjectLinkInput,
 } from "./clientInputs";
-import { ContractError } from "./errors";
 import { compactJsonObject, emptyJsonObject } from "./json";
+import type { SetupOperationID } from "./setupOperationID";
+import {
+  worktreeSetupRpcHandler,
+  type WorktreeSetupEventHandler,
+} from "./worktreeSetup";
 import type {
   ActivityPage,
   AttentionPage,
@@ -67,10 +72,6 @@ import {
 } from "./schemas/project";
 import { readinessSchema } from "./schemas/status";
 import {
-  attentionNotificationEventParamsSchema,
-  isUnsupportedAttentionNotificationEventParams,
-} from "./schemas/attentionNotification";
-import {
   activityPageSchema,
   attentionPageSchema,
   boardNodeCardsPageSchema,
@@ -79,7 +80,6 @@ import {
   pendingAskListSchema,
   projectWorkflowLinksSchema,
   taskCreateResponseSchema,
-  taskMoveResponseSchema,
   taskDetailSchema,
   taskUpdateResponseSchema,
   workflowBoardSchema,
@@ -512,29 +512,12 @@ export class ApiClient {
     return response.task.id;
   }
 
-  async startTask(taskID: string): Promise<void> {
-    await this.transport.call("workflow.task.start", { task_id: taskID });
+  async startTask(taskID: string, setupOperationID?: SetupOperationID): Promise<void> {
+    await taskLifecycle.startTask(this.transport, taskID, setupOperationID);
   }
 
   async moveTask(input: TaskMoveInput): Promise<TaskMoveResponse> {
-    const response = parse(
-      "workflow.task.move",
-      taskMoveResponseSchema,
-      await this.transport.call(
-        "workflow.task.move",
-        compactJsonObject({
-          task_id: input.taskID,
-          target_node_id: input.targetNodeID,
-          output_values: input.outputValues ?? {},
-          allow_missing_edge: input.allowMissingEdge,
-          auto_approve: input.autoApprove,
-        }),
-      ),
-    );
-    if (response.approvalError.length > 0) {
-      throw new Error(response.approvalError);
-    }
-    return response;
+    return taskLifecycle.moveTask(this.transport, input);
   }
 
   async interruptTask(taskID: string, sessionID?: string): Promise<void> {
@@ -548,8 +531,11 @@ export class ApiClient {
     await this.transport.call("workflow.task.resume", compactJsonObject({ task_id: taskID }));
   }
 
-  async approveTransition(taskTransitionID: string): Promise<void> {
-    await this.transport.call("workflow.task.approve", { task_transition_id: taskTransitionID });
+  async approveTransition(
+    taskTransitionID: string,
+    setupOperationID?: SetupOperationID,
+  ): Promise<void> {
+    await taskLifecycle.approveTransition(this.transport, taskTransitionID, setupOperationID);
   }
 
   async cancelTask(taskID: string): Promise<void> {
@@ -654,36 +640,18 @@ export class ApiClient {
   }
 
   subscribeAttentionNotifications(handler: AttentionNotificationEventHandler): RpcSubscription {
-    const rpcHandler = {
-      ...(handler.onOpen !== undefined ? { onOpen: handler.onOpen } : {}),
-      onComplete: handler.onComplete,
-      onError: handler.onError,
-      onEvent(method, params) {
-        if (method !== "attention.notification") {
-          return;
-        }
-        try {
-          handler.onEvent(
-            parse("attention.notification", attentionNotificationEventParamsSchema, params).event,
-          );
-        } catch (cause) {
-          if (isUnsupportedAttentionNotificationEventParams(params)) {
-            return;
-          }
-          handler.onError(
-            cause instanceof Error ? cause : new Error("Invalid attention notification event."),
-          );
-        }
-      },
-    } satisfies RpcEventHandler;
-    return this.transport.subscribe("attention.notification.subscribe", emptyJsonObject, rpcHandler);
+    return this.transport.subscribe(
+      "attention.notification.subscribe",
+      emptyJsonObject,
+      attentionNotificationRpcHandler(handler),
+    );
   }
-}
 
-function parse<T>(method: string, schema: z.ZodType<T>, value: unknown): T {
-  const result = schema.safeParse(value);
-  if (!result.success) {
-    throw new ContractError(`${method} response did not match GUI contract.`);
+  subscribeWorktreeSetup(setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler): RpcSubscription {
+    return this.transport.subscribe(
+      "worktree.setup.subscribe",
+      { setup_operation_id: setupOperationID.toJSONValue() },
+      worktreeSetupRpcHandler(handler),
+    );
   }
-  return result.data;
 }
