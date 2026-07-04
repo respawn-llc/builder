@@ -1,0 +1,38 @@
+[package]
+name = "rpc-client"
+version = "0.0.0"
+build = "../../build-support/integration_harness.rs"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+autotests = false
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+client-contracts.workspace = true
+hickory-resolver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
+rustls-pki-types.workspace = true
+tokio.workspace = true
+tungstenite.workspace = true
+url.workspace = true
+
+[build-dependencies]
+serde_json.workspace = true
+
+[dev-dependencies]
+socket2.workspace = true
+test-support.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

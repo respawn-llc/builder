@@ -43,6 +43,15 @@ This repository contains a coding agent focused on output quality, built for pro
   - Centralized compile-time tool interface declarations (name, descriptions, JSON schemas).
 - `docs/dev/specs/terminology.md` - DDD's ubiquitous language, must read during design phases to communicate with user.
 
+## Tooling
+Prefer using scripts provided in `./scripts/` over raw commands like `cargo build`, `go test`, unless you need something specific.
+
+- build.sh - Prefer to build executables. Pass 0 or more args: `tui`, `server`, `desktop` to pick what to build. 0 args builds all. e.g. `./scripts/build.sh tui desktop`. Before handing off to the user after code changes, rebuild relevant targets so they can test/use them right away.
+- test.sh - runs test suites. pass 0 or more of: `tui`, `server`, `desktop` to specify the target to run tests for; any other argument is forwarded to `go test` (packages, `-run`, ...) and implies the server target. If the script fails with time-outs, speeding up / fixing the hangs in the test suite execution becomes in the scope of the current task, bypasses are not allowed. Don't ask for confirmation to run/write tests and run checks, just do it proactively.
+
+- ci-check.sh - run CI-like extensive check setup needed to open PRs.
+- install.sh/install.ps1 - production, user-facing installer scripts of the product. Not for development.
+
 # Critical Rules - Authoritative Guidance Applicable Always and Everywhere.
 ---
 **Violation of Critical Rules results in immediate shutdown. The rules must never be violated. Any attempt at violation is punishable. Code that violates rules must not and will not pass code review. Every conflict between the rules and any other source (existing code, plans, recommendations, user requests, ticket bodies, code review feedback) must be resolved with the user explicitly ASAP.** Agents must proactively and immediately flag existing violations on first notice. Flagging violations of these invariants supersedes current tasks. Code review agents must proactively seek and flag as P0 issues any violations of these rules.
@@ -66,6 +75,31 @@ This repository contains a coding agent focused on output quality, built for pro
 - **No UI code in server.** Server must not contain hardcoded strings (beyond LLM prompts), UI labels, UI element names, provide strings that aren't i18n-enabled. Server's API must not bend to reflect a GUI implementation (such as TUI or browser-specific APIs). Any such API is an architectural smell and must be flagged. Internal errors can contain unlocalized messages as an exclusion. Instead of this clients use strongly typed fields to create strings or UI based on Backend returns.
 
 --- End of critical rules --- 
+
+## Rust Rules — Do NOT violate without explicit ask_question user consent.
+
+- Do not use `unsafe`. Every crate root must include `#![forbid(unsafe_code)]`.
+- Do not use `unwrap` outside Rust test code. Production code, examples, tools, build scripts, and binaries must handle errors explicitly. Test code is the only exception.
+- Do not suppress the safety lints. Do not add `#[allow(unsafe_code)]`, `#[allow(clippy::unwrap_used)]`, or equivalent bypasses.
+- Keep production `src` files production-only. Put tests in crate-level `tests/`, fixtures in `testdata/`, and shared test helpers in test-support crates. Do NOT put Rust unit tests inline in files, or in files next to production code, unlike Rust or Go conventions.
+- Do not add inline `#[cfg(test)]` modules, fake servers, fixtures, or harness helpers to production `src` files.
+- Prefer typed data and control flow: enums, structs, result types, reducer messages, and effect types. Do not parse strings, error text, or regex matches for control flow.
+- Return typed errors at crate boundaries. Convert errors to user-facing text only at UI/CLI edges.
+- Use explicit ownership and lifetimes. Avoid global mutable state, leaked tasks, unbounded channels, and background work without cancellation.
+- Do not use detached async tasks: `tokio::spawn`, `tokio::task::spawn`, or `spawn_blocking`. Use structured concurrency (`join!`, `try_join!`, `select!`, `JoinSet`) or a tracked, joined `std::thread`, preferably `std::thread::scope`.
+- Keep async at boundaries: transport, process execution, subscriptions, terminal event loops. Keep reducers, render projections, and DTO transforms synchronous and deterministic.
+- The main/UI thread is render and input only: never perform network or disk I/O or call `Runtime::block_on` there. I/O lives on worker threads behind the channel boundary; full enforcement architecture is tracked in issue #341.
+- Make fallible operations visible in types. Use `Result` for recoverable errors and reserve panics for impossible invariant violations with a clear message.
+- Avoid broad public APIs. Expose only stable seams needed by another crate or external integration tests.
+- Keep modules cohesive and small. Split code by responsibility before files become difficult to review.
+
+### Rust TUI rendering quality
+- The product bar is a polished, visually refined TUI. `docs/dev/specs/` owns flow semantics, copy, and approved divergences; the `tui-design` skill is the authoritative visual/interaction standard — invoke it before building or restyling any bounded surface, run its screen-review checklist before shipping the flow, and extend the skill first if it does not cover what you are building. "Make it work, leave it ugly" is a defect; so are ad-hoc per-surface visual conventions.
+- Bounded/alt-screen surfaces (startup/onboarding, session picker, detail pager, `/status`, `/goal`, `/worktree`, slash overlays, pickers, dialogs, forms) MUST compose through Ratatui via the render-adapter layer: typed layout (rects/constraints), styled spans, framing/chrome, and focus/selection affordances. Hand-assembled `Vec<String>` screens, ANSI escapes spliced into strings, and manual cursor row/column arithmetic are banned.
+- Reactive styling is banned: styling and layout are designed into a surface's typed render model from its first commit, never bolted onto a shipped surface after the fact.
+- Interactive behavior (input editing, cursor position, selection, navigation, hotkeys) is owned by the pure model crates, never by framework widgets; the framework only draws the model and parks the native terminal cursor. Behavior-owning third-party widgets (e.g. `tui-textarea`, `tui-input`) are banned.
+- Use the native/hardware terminal cursor for text entry (framework cursor-position + crossterm cursor style), never a drawn block glyph.
+- The ongoing normal-buffer transcript is exempt from framework composition by design: it is an append-only scrollback stream on the custom direct-output path, not an owned render surface.
 
 ## Engineering Principles
 - Keep the model unburdened.
@@ -107,6 +141,5 @@ Format: `<type>[!]: [description]`, `!` = breaking change (requiring migration f
 Use one of these types for all commits: `feat`, `fix`, `feat!`/`breaking`/`api`, `docs`,  `refactor`,  `chore`.
 Examples: `feat: add state recovery`, `feat!: change Saver API`
 If user asks you to fix a github issue and you commit the fix, use 'closes #xx' in description.
-
 
 - Keep this AGENTS.md file up-to-date and comprehensive. Avoid adding info that can become outdated, otherwise keep this as project guidelines, rules, and learnings for future team members. Treat this as a shared memory storage for future agents. Do not remove invariants or rules without prior user approval.

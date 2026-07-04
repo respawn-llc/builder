@@ -87,11 +87,11 @@ build_archives() {
 		out="kent_${version}_${build_os}_${build_arch}"
 		if [ "$frontend_build_done" -eq 0 ]; then
 			env GOOS="$build_os" GOARCH="$build_arch" KENT_VERSION="$version" \
-				bash scripts/build.sh --output "$staging_dir/${out}${ext}"
+				bash scripts/build.sh desktop tui server --output "$staging_dir/${out}${ext}"
 			frontend_build_done=1
 		else
 			env GOOS="$build_os" GOARCH="$build_arch" KENT_VERSION="$version" KENT_SKIP_FRONTEND=1 \
-				bash scripts/build.sh --output "$staging_dir/${out}${ext}"
+				bash scripts/build.sh server --output "$staging_dir/${out}${ext}"
 		fi
 
 		if [ "$archive_ext" = "zip" ]; then
