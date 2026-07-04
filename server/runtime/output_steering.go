@@ -9,6 +9,8 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/transcript"
+
+	"github.com/google/uuid"
 )
 
 type steeringPriority int
@@ -49,9 +51,7 @@ type steeringLocalEntry struct {
 }
 
 type steeringCommittedAssistantMessage struct {
-	message           llm.Message
-	committedStart    int
-	committedStartSet bool
+	message llm.Message
 }
 
 type steeringHistoryReplacement struct {
@@ -65,6 +65,7 @@ type steeringStreamingOutput struct {
 	reasoningDelta *llm.ReasoningSummaryDelta
 	clearState     bool
 	resetEvents    bool
+	abortReason    AssistantStreamAbortReason
 }
 
 type steeringCacheWarning struct {
@@ -164,13 +165,11 @@ func steerEventIntent(evt Event) steeringIntent {
 	}
 }
 
-func steerCommittedAssistantMessageIntent(msg llm.Message, committedStart int, committedStartSet bool) steeringIntent {
+func steerCommittedAssistantMessageIntent(msg llm.Message) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items: []steeringItem{{committedAssistant: &steeringCommittedAssistantMessage{
-			message:           msg,
-			committedStart:    committedStart,
-			committedStartSet: committedStartSet,
+			message: msg,
 		}}},
 	}
 }
@@ -194,7 +193,7 @@ func steerReasoningDeltaIntent(delta llm.ReasoningSummaryDelta) steeringIntent {
 func steerClearStreamingStateIntent() steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
-		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true}}},
+		items:    []steeringItem{{streaming: &steeringStreamingOutput{clearState: true, resetEvents: true, abortReason: AssistantStreamAbortSuperseded}}},
 	}
 }
 
@@ -286,6 +285,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			return err
 		}
 		result := cloneToolResult(*item.toolCompletion)
+		e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
 		e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true})
 		return nil
 	}
@@ -296,6 +296,11 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		evt := *item.event
 		if evt.StepID == "" {
 			evt.StepID = stepID
+		}
+		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil {
+			if err := e.transcriptRuntimeState().RecordLiveToolStart(*evt.ToolCall); err != nil {
+				return err
+			}
 		}
 		e.emitRaw(evt)
 	}
@@ -333,8 +338,11 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.streaming != nil {
 		if item.streaming.assistantDelta != nil {
 			delta := *item.streaming.assistantDelta
-			metadata := newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendStreamingDelta(stepID, e.TranscriptRevision(), e.CommittedTranscriptEntryCount(), delta.Text)
-			e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata})
+			if delta.Text == "" {
+				return nil
+			}
+			metadata, streamID := newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendStreamingDelta(stepID, delta.Text)
+			e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
 			return nil
 		}
 		if item.streaming.reasoningDelta != nil {
@@ -343,11 +351,12 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			return nil
 		}
 		var clearedMetadata *AssistantStreamMetadata
+		var clearedStreamID *uuid.UUID
 		if item.streaming.clearState {
-			clearedMetadata = e.clearStreamingAssistantStateRaw()
+			clearedMetadata, clearedStreamID = e.clearStreamingAssistantStateRaw()
 		}
 		if item.streaming.resetEvents {
-			e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata)
+			e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, item.streaming.abortReason)
 		}
 		return nil
 	}
@@ -356,8 +365,6 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 
 func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryReplacement) error {
 	reminderIssued := false
-	projectedStart := e.CommittedTranscriptEntryCount()
-	replacement.payload.CommittedEntryStart = &projectedStart
 	preparedItems := llm.CloneResponseItems(replacement.payload.Items)
 	// Compaction reinjects base meta into the same replacement payload, so a
 	// non-empty replacement active list is born already carrying it. Mirror the
@@ -375,7 +382,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	e.resetLocalDiagnostics()
 	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistory(preparedItems)
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
-	e.emitProjectedHistoryReplacementEntriesRaw(stepID, projectedStart, replacement.projectedEntries)
+	e.emitProjectedHistoryReplacementEntriesRaw(stepID, replacement.projectedEntries)
 	e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID})
 	return errors.Join(
 		appendErr,
@@ -384,26 +391,17 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	)
 }
 
-func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(stepID string, start int, entries []ChatEntry) {
+func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(stepID string, entries []ChatEntry) {
 	if e == nil || len(entries) == 0 {
 		return
 	}
-	// Live subscribers must observe the same committed transcript progression that
-	// restart hydration reconstructs from history_replaced. Emit projected
-	// compaction rows before any later local entry.
-	if start < 0 {
-		start = 0
-	}
-	for idx, entry := range entries {
+	for _, entry := range entries {
 		copyEntry := clonePersistedChatEntry(entry)
 		e.emitRaw(Event{
 			Kind:                       EventLocalEntryAdded,
 			StepID:                     stepID,
 			LocalEntry:                 &copyEntry,
 			CommittedTranscriptChanged: true,
-			CommittedEntryStart:        start + idx,
-			CommittedEntryStartSet:     true,
-			CommittedEntryCount:        start + idx + 1,
 		})
 	}
 }

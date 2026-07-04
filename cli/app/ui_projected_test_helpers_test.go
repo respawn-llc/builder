@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"core/cli/tui"
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
@@ -48,9 +47,7 @@ func newProjectedTestUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents
 	if askEvents == nil {
 		askEvents = make(chan askEvent)
 	}
-	m := NewProjectedUIModel(runtimeClient, runtimeEvents, askEvents, opts...).(*uiModel)
-	seedTestRollbackTargets(m)
-	return m
+	return NewProjectedUIModel(runtimeClient, runtimeEvents, askEvents, opts...).(*uiModel)
 }
 
 func newProjectedClosedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption) *uiModel {
@@ -67,20 +64,6 @@ func newSizedProjectedClosedUIModel(runtimeClient clientui.RuntimeClient, width,
 
 func newSizedProjectedRuntimeEventsUIModel(runtimeClient clientui.RuntimeClient, runtimeEvents <-chan clientui.Event, width, height int, opts ...UIOption) *uiModel {
 	return sizedTestUIModel(newProjectedRuntimeEventsUIModel(runtimeClient, runtimeEvents, opts...), width, height)
-}
-
-func committedOngoingProjectionForTest(view tui.Model) tui.TranscriptProjection {
-	input := view.TranscriptProjectionInput()
-	state := view.TranscriptProjectionViewState()
-	return tui.ProjectCommittedOngoingTranscript(
-		input.Entries,
-		state.Theme,
-		state.ViewportWidth,
-		input.BaseOffset,
-		state.CompactDetail,
-		state.SelectedEntry,
-		state.SelectedEntryIsActive,
-	)
 }
 
 func setTestUITerminalSize(m *uiModel, width, height int) *uiModel {

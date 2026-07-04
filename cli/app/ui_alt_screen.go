@@ -3,7 +3,6 @@ package app
 import (
 	"core/cli/tui"
 	"os"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -34,16 +33,10 @@ func (m *uiModel) transitionTranscriptModeWithOptions(options transcriptModeTran
 	prevMode := m.view.Mode()
 	m.forwardToView(tui.SetModeMsg{Mode: options.target, SkipDetailWarmup: options.skipDetailWarmup})
 	nextMode := m.view.Mode()
-	if prevMode != nextMode && nextMode == tui.ModeDetail {
-		m.primeDetailTranscriptFromCurrentTail()
-	}
 	if nextMode != tui.ModeOngoing {
 		m.helpVisible = false
 	} else if prevMode != nextMode && m.inputMode() == uiInputModeMain {
 		m.restorePrimaryInputMode()
-	}
-	if prevMode != nextMode && nextMode == tui.ModeOngoing {
-		m.syncRecentTailViewFromRuntimeState()
 	}
 	if !options.preserveSurface && (nextMode == tui.ModeOngoing || nextMode == tui.ModeDetail) {
 		m.activeSurface = surfaceForTranscriptMode(nextMode)
@@ -61,23 +54,6 @@ func (m *uiModel) transitionTranscriptModeWithOptions(options transcriptModeTran
 	return sequenceCmds(clearCmd, transitionCmd, detailLoadCmd)
 }
 
-func (m *uiModel) syncRecentTailViewFromRuntimeState() {
-	if m == nil || !m.hasRuntimeClient() {
-		return
-	}
-	totalEntries := m.transcriptTotalEntries
-	if totalEntries < m.transcriptBaseOffset+len(m.transcriptEntries) {
-		totalEntries = m.transcriptBaseOffset + len(m.transcriptEntries)
-	}
-	m.forwardToView(tui.SetConversationMsg{
-		BaseOffset:   m.transcriptBaseOffset,
-		TotalEntries: totalEntries,
-		Entries:      append([]tui.TranscriptEntry(nil), m.transcriptEntries...),
-		Ongoing:      m.view.OngoingStreamingText(),
-		OngoingError: m.view.OngoingErrorText(),
-	})
-}
-
 func (m *uiModel) clearCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
 	if prev == next {
 		return nil
@@ -89,13 +65,7 @@ func (m *uiModel) clearCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
 }
 
 func (m *uiModel) detailLoadCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
-	if prev == next || next != tui.ModeDetail {
-		return nil
-	}
-	m.detailTranscript.totalEntries = max(m.detailTranscript.totalEntries, m.view.TranscriptTotalEntries())
-	return tea.Tick(time.Millisecond, func(time.Time) tea.Msg {
-		return detailTranscriptLoadMsg{}
-	})
+	return nil
 }
 
 func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {

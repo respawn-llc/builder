@@ -62,13 +62,7 @@ const (
 type uiRollbackState struct {
 	phase                     uiRollbackPhase
 	suppressedAlternateScroll bool
-	restoreTranscriptMode     tui.Mode
-	candidates                []rollbackCandidate
 	selection                 int
-	selectedTranscriptEntry   int
-	selectedTargetID          string
-	pendingSelectionAnchor    int
-	pendingSelectionDelta     int
 }
 
 type uiStatusOverlayState struct {

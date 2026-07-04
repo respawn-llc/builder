@@ -50,19 +50,13 @@ type Event struct {
 	StepID                       string
 	RecoveryCause                TranscriptRecoveryCause
 	CommittedTranscriptChanged   bool
-	TranscriptRevision           int64
-	CommittedEntryCount          int
-	CommittedEntryStart          int
-	CommittedEntryStartSet       bool
 	Error                        string
 	AssistantDelta               string
 	AssistantDeltaPhase          MessagePhase
-	AssistantStreamMetadata      *AssistantStreamMetadata
 	ReasoningDelta               *ReasoningDelta
 	UserMessage                  string
 	UserMessageBatch             []string
 	UserMessageBatchQueueItemIDs []string
-	TranscriptEntries            []ChatEntry
 	Compaction                   *CompactionStatus
 	CacheWarning                 *transcript.CacheWarning
 	CacheWarningVisibility       EntryVisibility
@@ -145,71 +139,6 @@ type BackgroundShellEvent struct {
 	ExitCode          *int
 	UserRequestedKill bool
 	NoticeSuppressed  bool
-}
-
-type ChatEntry struct {
-	Visibility        EntryVisibility
-	RollbackTargetID  string
-	Role              string
-	Text              string
-	CondensedText     string
-	Phase             string
-	MessageType       string
-	SourcePath        string
-	CompactLabel      string
-	ToolResultSummary string
-	ToolCallID        string
-	NoticeID          string
-	ToolCall          *ToolCallMeta
-}
-
-const ChatEntryPhaseFinalAnswer = string(MessagePhaseFinal)
-
-type ChatSnapshot struct {
-	Entries           []ChatEntry
-	Streaming         string
-	StreamingMetadata *AssistantStreamMetadata
-	StreamingError    string
-}
-
-type AssistantStreamMetadata struct {
-	StepID                  string
-	BaseRevision            int64
-	BaseCommittedEntryCount int
-}
-
-type TranscriptPageRequest struct {
-	Cursor      int64
-	NewerCursor int64
-}
-
-type TranscriptPage struct {
-	SessionID             string
-	SessionName           string
-	ConversationFreshness ConversationFreshness
-	Revision              int64
-	OlderCursor           int64
-	HasMoreAbove          bool
-	NewerCursor           int64
-	HasMoreBelow          bool
-	Entries               []ChatEntry
-	Streaming             string
-	StreamingMetadata     *AssistantStreamMetadata
-	StreamingError        string
-}
-
-type CommittedTranscriptSuffixRequest struct{}
-
-type CommittedTranscriptSuffix struct {
-	SessionID               string
-	SessionName             string
-	ConversationFreshness   ConversationFreshness
-	Revision                int64
-	CommittedEntryCount     int
-	StartEntryCount         int
-	NextEntryCount          int
-	HasMoreCommittedEntries bool
-	Entries                 []ChatEntry
 }
 
 type ToolPresentationKind string

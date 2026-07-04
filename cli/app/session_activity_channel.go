@@ -65,7 +65,6 @@ func startSessionActivityEvents(ctx context.Context, sub serverapi.SessionActivi
 					"step_id":      evt.StepID,
 					"event_digest": transcriptdiag.EventDigest(evt),
 				}
-				fields = transcriptdiag.AddEntriesFields(fields, evt.TranscriptEntries)
 				logDiag(transcriptdiag.FormatLine("transcript.diag.client.recv_activity", fields))
 			}
 			select {

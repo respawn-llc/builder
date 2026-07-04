@@ -9,6 +9,8 @@ import (
 	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
+
+	"github.com/google/uuid"
 )
 
 type transcriptPersistenceCoordinator struct {
@@ -43,11 +45,11 @@ func (p transcriptPersistenceCoordinator) AppendCommittedEntryWithVisibility(rol
 	}
 }
 
-func (p transcriptPersistenceCoordinator) AppendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string) *AssistantStreamMetadata {
+func (p transcriptPersistenceCoordinator) AppendStreamingDelta(stepID string, delta string) (*AssistantStreamMetadata, *uuid.UUID) {
 	if chat := p.chatProjection(); chat != nil {
-		return chat.appendStreamingDelta(stepID, baseRevision, baseCommittedEntryCount, delta)
+		return chat.appendStreamingDelta(stepID, delta)
 	}
-	return nil
+	return nil, nil
 }
 
 func (p transcriptPersistenceCoordinator) RecordStoredToolCompletion(completion storedToolCompletion) {
@@ -72,22 +74,18 @@ func (p transcriptPersistenceCoordinator) RestoreToolCompletionPayload(payload [
 }
 
 func (p transcriptPersistenceCoordinator) ReplaceHistory(items []llm.ResponseItem) {
-	p.ReplaceHistoryAtCommittedEntryStart(items, nil)
-}
-
-func (p transcriptPersistenceCoordinator) ReplaceHistoryAtCommittedEntryStart(items []llm.ResponseItem, committedEntryStart *int) {
 	if chat := p.chatProjection(); chat != nil {
-		chat.replaceHistoryAtCommittedEntryStart(items, committedEntryStart)
+		chat.replaceHistory(items)
 	}
 }
 
-func (p transcriptPersistenceCoordinator) ClearStreamingAssistantState() *AssistantStreamMetadata {
+func (p transcriptPersistenceCoordinator) ClearStreamingAssistantState() (*AssistantStreamMetadata, *uuid.UUID) {
 	if chat := p.chatProjection(); chat != nil {
-		metadata := chat.discardStreaming()
+		metadata, streamID := chat.discardStreaming()
 		chat.clearStreamingError()
-		return metadata
+		return metadata, streamID
 	}
-	return nil
+	return nil, nil
 }
 
 func (p transcriptPersistenceCoordinator) SetStreamingError(text string) {

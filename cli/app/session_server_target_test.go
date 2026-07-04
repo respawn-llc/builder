@@ -79,7 +79,7 @@ func TestStartSessionServerUsesConfiguredDaemonForInteractiveFlow(t *testing.T) 
 		t.Fatalf("expected remote app server, got %T", server)
 	}
 
-	plan, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test remote interactive runtime")
+	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test remote interactive runtime")
 	defer runtimePlan.Close()
 
 	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello through interactive daemon")
@@ -92,14 +92,6 @@ func TestStartSessionServerUsesConfiguredDaemonForInteractiveFlow(t *testing.T) 
 	}
 	if hits.Load() != 1 {
 		t.Fatalf("expected daemon-backed llm call once, got %d", hits.Load())
-	}
-
-	refreshed, err := server.SessionViewClient().GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: plan.SessionID})
-	if err != nil {
-		t.Fatalf("GetSessionMainView: %v", err)
-	}
-	if refreshed.MainView.Session.Transcript.CommittedEntryCount == 0 {
-		t.Fatalf("expected refreshed transcript metadata, got %+v", refreshed.MainView.Session.Transcript)
 	}
 
 }
@@ -330,72 +322,6 @@ func TestRemoteInteractiveRuntimeTwoClientsConvergeOnSameSessionAcrossWorkspaces
 		t.Fatalf("expected one daemon-backed llm call, got %d", hits.Load())
 	}
 
-	pageA := waitForRemoteTranscriptPage(t, fixture.serverA.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
-		return transcriptPageContainsAssistantText(page, "shared daemon reply")
-	})
-	pageB := waitForRemoteTranscriptPage(t, fixture.serverB.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
-		return transcriptPageContainsAssistantText(page, "shared daemon reply")
-	})
-
-	if pageA.Revision != pageB.Revision {
-		t.Fatalf("expected clients to converge on same transcript revision, a=%d b=%d", pageA.Revision, pageB.Revision)
-	}
-	if !transcriptPageContainsAssistantText(pageA, "shared daemon reply") || !transcriptPageContainsAssistantText(pageB, "shared daemon reply") {
-		t.Fatalf("expected both clients to hydrate assistant reply, pageA=%+v pageB=%+v", pageA, pageB)
-	}
-}
-
-func TestRemoteReadOnlyClientHydratesCommittedTranscriptAcrossWorkspaces(t *testing.T) {
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"reply while client B disconnected", "reply after client B reconnects"})
-	defer fakeResponses.Close()
-	fixture := startRemoteMultiClientRuntimeFixture(t, fakeResponses.URL)
-
-	firstSubmission, err := submitRuntimeClientForTest(t, fixture.runtimePlanA.Wiring.runtimeClient, "message while client B is disconnected")
-	firstMessage := firstSubmission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage before reconnect: %v", err)
-	}
-	if firstMessage != "reply while client B disconnected" {
-		t.Fatalf("assistant message before reconnect = %q, want %q", firstMessage, "reply while client B disconnected")
-	}
-	if hits.Load() != 1 {
-		t.Fatalf("expected one daemon-backed llm call before reconnect, got %d", hits.Load())
-	}
-	pageA1 := waitForRemoteTranscriptPage(t, fixture.serverA.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
-		return transcriptPageContainsAssistantText(page, "reply while client B disconnected")
-	})
-
-	hydratedB := waitForRemoteTranscriptPage(t, fixture.serverB.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
-		return transcriptPageContainsAssistantText(page, "reply while client B disconnected")
-	})
-	if !transcriptPageContainsAssistantText(hydratedB, "reply while client B disconnected") {
-		t.Fatalf("expected reconnecting client to hydrate missed committed reply, got %+v", hydratedB)
-	}
-	if hydratedB.Revision != pageA1.Revision {
-		t.Fatalf("expected reconnect hydrate to match authoritative transcript head, hydrated=%+v pageA=%+v", hydratedB, pageA1)
-	}
-
-	secondSubmission, err := submitRuntimeClientForTest(t, fixture.runtimePlanA.Wiring.runtimeClient, "message after client B reconnects")
-	secondMessage := secondSubmission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage after reconnect: %v", err)
-	}
-	if secondMessage != "reply after client B reconnects" {
-		t.Fatalf("assistant message after reconnect = %q, want %q", secondMessage, "reply after client B reconnects")
-	}
-	if hits.Load() != 2 {
-		t.Fatalf("expected two daemon-backed llm calls after reconnect flow, got %d", hits.Load())
-	}
-
-	pageA2 := waitForRemoteTranscriptPage(t, fixture.serverA.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
-		return transcriptPageContainsAssistantText(page, "reply after client B reconnects")
-	})
-	pageB2 := waitForRemoteTranscriptPage(t, fixture.serverB.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
-		return transcriptPageContainsAssistantText(page, "reply after client B reconnects")
-	})
-	if pageA2.Revision != pageB2.Revision {
-		t.Fatalf("expected both clients to converge after read-only hydrate, a=%+v b=%+v", pageA2, pageB2)
-	}
 }
 
 func TestRemoteInteractiveRuntimeAskAnswersFromAnyAttachedClientAcrossWorkspaces(t *testing.T) {
@@ -526,16 +452,6 @@ func TestRemoteSessionActivityLaggingSubscriberHydratesAndResubscribesAcrossWork
 		t.Fatalf("expected remote stale cursor to fail with stream gap, got %v", err)
 	}
 
-	pageA := waitForRemoteTranscriptPage(t, fixture.serverA.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
-		return transcriptPageContainsAssistantText(page, "reply before remote gap")
-	})
-	pageB := waitForRemoteTranscriptPage(t, fixture.serverB.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
-		return page.Revision == pageA.Revision
-	})
-	if pageA.Revision != pageB.Revision {
-		t.Fatalf("expected authoritative transcript hydrate to converge after stream gap, a=%+v b=%+v", pageA, pageB)
-	}
-
 	recoveredSub, err := runtimeClientsB.SessionActivity.SubscribeSessionActivity(context.Background(), serverapi.SessionActivitySubscribeRequest{SessionID: fixture.planA.SessionID})
 	if err != nil {
 		t.Fatalf("SubscribeSessionActivity recovered client: %v", err)
@@ -555,29 +471,12 @@ func TestRemoteSessionActivityLaggingSubscriberHydratesAndResubscribesAcrossWork
 	}
 
 	assistantEvt := waitForSessionActivitySubscriptionEvent(t, recoveredSub, "assistant message after gap recovery", func(evt clientui.Event) bool {
-		if evt.Kind != clientui.EventAssistantMessage {
-			return false
-		}
-		for _, entry := range evt.TranscriptEntries {
-			if entry.Role == "assistant" && entry.Text == "reply after gap recovery" {
-				return true
-			}
-		}
-		return false
+		return evt.Kind == clientui.EventAssistantMessage
 	})
 	if assistantEvt.StepID == "" {
 		t.Fatalf("expected assistant event step id after gap recovery, got %+v", assistantEvt)
 	}
 
-	pageA2 := waitForRemoteTranscriptPage(t, fixture.serverA.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
-		return transcriptPageContainsAssistantText(page, "reply after gap recovery")
-	})
-	pageB2 := waitForRemoteTranscriptPage(t, fixture.serverB.SessionViewClient(), fixture.planA.SessionID, func(page clientui.TranscriptPage) bool {
-		return transcriptPageContainsAssistantText(page, "reply after gap recovery")
-	})
-	if pageA2.Revision != pageB2.Revision {
-		t.Fatalf("expected both clients to converge after gap recovery, a=%+v b=%+v", pageA2, pageB2)
-	}
 }
 
 type remoteMultiClientRuntimeFixture struct {

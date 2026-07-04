@@ -7,16 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func shouldRefreshDeferredCommittedTailOnRunEnd(m *uiModel, evt clientui.Event) bool {
-	if m == nil || !m.hasRuntimeClient() || len(m.deferredCommittedTail) == 0 {
-		return false
-	}
-	if evt.Kind != clientui.EventRunStateChanged || evt.RunState == nil {
-		return false
-	}
-	return !evt.RunState.Lifecycle.IsRunning()
-}
-
 func (a uiRuntimeAdapter) runtimeRunState() runtimestate.RuntimeRunState {
 	m := a.model
 	if err := m.runtimeLifecycle.Run.Validate(); err != nil {
@@ -225,20 +215,4 @@ func (m *uiModel) requestInputReconciliationRefresh() tea.Cmd {
 		class:    runtimeSyncPolicyClassAllowed,
 		priority: 100,
 	}).cmd
-}
-
-func (a uiRuntimeAdapter) effectiveRuntimeTranscriptSync(evt clientui.Event, proposed runtimestate.RuntimeTranscriptSyncCommand) runtimestate.RuntimeTranscriptSyncCommand {
-	if evt.Kind != clientui.EventConversationUpdated {
-		return proposed
-	}
-	if a.model.nativeCommittedAdvanceRequiresContinuityBarrier(evt) {
-		return runtimestate.RuntimeTranscriptSyncCommand{Reason: runtimestate.RuntimeTranscriptSyncCommittedAdvance}
-	}
-	if !shouldRecoverCommittedTranscriptFromConversationUpdate(a.model, evt) {
-		return runtimestate.RuntimeTranscriptSyncCommand{}
-	}
-	if proposed.Reason != runtimestate.RuntimeTranscriptSyncNone {
-		return proposed
-	}
-	return runtimestate.RuntimeTranscriptSyncCommand{Reason: runtimestate.RuntimeTranscriptSyncCommittedAdvance}
 }

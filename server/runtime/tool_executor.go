@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"core/server/llm"
@@ -19,6 +20,8 @@ type defaultToolExecutor struct {
 	engine *Engine
 }
 
+var ErrMissingProviderToolCallID = errors.New("provider tool call id is required")
+
 func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID string, calls []llm.ToolCall) ([]tools.Result, error) {
 	e := t.engine
 	results := make([]tools.Result, len(calls))
@@ -28,7 +31,10 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 	workflowActive := e.workflowRunActive()
 	serialGate := newSerialToolGate()
 	nextSerialOrdinal := 0
-	preparedCalls := prepareExecutorToolCalls(e, stepID, runID, workflowActive, calls)
+	preparedCalls, err := prepareExecutorToolCalls(e, stepID, runID, workflowActive, calls)
+	if err != nil {
+		return results, err
+	}
 
 	for i := range preparedCalls {
 		prepared := preparedCalls[i]
@@ -38,10 +44,6 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 		executableCall := prepared.call
 		transcriptCall := normalizeToolCallForTranscript(executableCall, e.transcriptWorkingDir())
 		started := Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
-		if start, ok := e.pendingToolCallStart(call.ID); ok {
-			started.CommittedEntryStart = start
-			started.CommittedEntryStartSet = true
-		}
 		if err := e.steer(stepID, steerEventIntent(started)); err != nil {
 			callErrs[i] = fmt.Errorf("persist tool started (call_id=%s tool=%s): %w", call.ID, executableCall.Name, err)
 			continue
@@ -55,7 +57,6 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 		wg.Add(1)
 		go func(tc llm.ToolCall, toolID toolspec.ID, knownTool bool, serialOrdinal int, askBatch *tools.AskQuestionBatchMetadata) {
 			defer wg.Done()
-			defer e.forgetPendingToolCallStart(tc.ID)
 			var callErr error
 
 			if serialOrdinal >= 0 {
@@ -130,14 +131,14 @@ type executorToolCall struct {
 	askQuestionBatch *tools.AskQuestionBatchMetadata
 }
 
-func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workflowActive bool, calls []llm.ToolCall) []executorToolCall {
+func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workflowActive bool, calls []llm.ToolCall) ([]executorToolCall, error) {
 	prepared := make([]executorToolCall, 0, len(calls))
 	askCandidateIndexes := make([]int, 0)
 	askCandidatePromptIDs := make([]string, 0)
 	for i := range calls {
 		call := calls[i]
-		if call.ID == "" {
-			call.ID = uuid.NewString()
+		if strings.TrimSpace(call.ID) == "" {
+			return nil, fmt.Errorf("%w (tool=%s)", ErrMissingProviderToolCallID, call.Name)
 		}
 		toolID, knownTool := toolspec.ParseID(call.Name)
 		executableCall := call
@@ -158,7 +159,7 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 		askCandidatePromptIDs = append(askCandidatePromptIDs, executableCall.ID)
 	}
 	if len(askCandidateIndexes) == 0 {
-		return prepared
+		return prepared, nil
 	}
 	batchID := uuid.NewString()
 	for ordinal, index := range askCandidateIndexes {
@@ -175,7 +176,7 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 			PreparedPromptCount: len(promptIDs),
 		}
 	}
-	return prepared
+	return prepared, nil
 }
 
 func askQuestionMaterializable(engine *Engine) bool {

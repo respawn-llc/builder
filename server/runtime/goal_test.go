@@ -84,16 +84,13 @@ func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	if evt.Kind != EventConversationUpdated || !evt.CommittedTranscriptChanged {
 		t.Fatalf("event = %+v, want committed conversation update", evt)
 	}
-	entries := TranscriptEntriesFromEvent(evt)
+	entries := VisibleChatEntriesFromMessage(evt.Message)
 	if len(entries) != 1 {
 		t.Fatalf("event transcript entries len = %d, want 1", len(entries))
 	}
 	entry := entries[0]
 	if entry.Role != string(transcript.EntryRoleGoalFeedback) || entry.CondensedText != `Goal set: "ship goal mode"` {
 		t.Fatalf("event transcript entry = %+v, want goal feedback", entry)
-	}
-	if !evt.CommittedEntryStartSet || evt.CommittedEntryStart != 0 || evt.CommittedEntryCount != 1 {
-		t.Fatalf("event committed range start=%d set=%t count=%d, want start 0 count 1", evt.CommittedEntryStart, evt.CommittedEntryStartSet, evt.CommittedEntryCount)
 	}
 	statusEvt := events[1]
 	if statusEvt.Kind != EventGoalStatusUpdated || statusEvt.GoalStatus == nil {

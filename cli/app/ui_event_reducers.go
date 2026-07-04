@@ -19,10 +19,6 @@ func (m *uiModel) diagnosticsReducer() uiDiagnosticsFeatureReducer {
 func (r uiDiagnosticsFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	m := r.model
 	switch msg := msg.(type) {
-	case renderDiagnosticMsg:
-		cmd := m.applyRenderDiagnostic(msg.diagnostic)
-		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, cmd)
 	case runLoggerDiagnosticMsg:
 		cmd := m.applyRunLoggerDiagnostic(msg.diagnostic)
 		m.layout().syncViewport()

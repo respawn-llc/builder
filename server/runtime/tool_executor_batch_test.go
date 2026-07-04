@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"core/server/llm"
@@ -20,7 +21,10 @@ func TestPrepareExecutorToolCallsAssignsAskQuestionBatchMetadata(t *testing.T) {
 		{ID: "ask-2", Name: string(toolspec.ToolAskQuestion), Input: askQuestionInput(t, "two?")},
 	}
 
-	prepared := prepareExecutorToolCalls(engine, "step-1", "run-1", true, calls)
+	prepared, err := prepareExecutorToolCalls(engine, "step-1", "run-1", true, calls)
+	if err != nil {
+		t.Fatalf("prepare executor tool calls: %v", err)
+	}
 
 	first := prepared[0].askQuestionBatch
 	second := prepared[2].askQuestionBatch
@@ -56,7 +60,10 @@ func TestPrepareExecutorToolCallsExcludesInvalidAndDisabledAsks(t *testing.T) {
 		{ID: "valid-later", Name: string(toolspec.ToolAskQuestion), Input: askQuestionInput(t, "later?")},
 	}
 
-	prepared := prepareExecutorToolCalls(enabledEngine, "step-1", "run-1", true, calls)
+	prepared, err := prepareExecutorToolCalls(enabledEngine, "step-1", "run-1", true, calls)
+	if err != nil {
+		t.Fatalf("prepare enabled executor tool calls: %v", err)
+	}
 	if prepared[0].askQuestionBatch != nil || prepared[2].askQuestionBatch != nil {
 		t.Fatalf("invalid asks received metadata: first=%+v later=%+v", prepared[0].askQuestionBatch, prepared[2].askQuestionBatch)
 	}
@@ -68,11 +75,29 @@ func TestPrepareExecutorToolCallsExcludesInvalidAndDisabledAsks(t *testing.T) {
 		ID:      toolspec.ToolAskQuestion,
 		Handler: tools.NewAskQuestionTool(tools.NewAskQuestionBroker(), func() bool { return false }),
 	})}
-	disabled := prepareExecutorToolCalls(disabledEngine, "step-1", "run-1", true, calls)
+	disabled, err := prepareExecutorToolCalls(disabledEngine, "step-1", "run-1", true, calls)
+	if err != nil {
+		t.Fatalf("prepare disabled executor tool calls: %v", err)
+	}
 	for index, call := range disabled {
 		if call.askQuestionBatch != nil {
 			t.Fatalf("disabled ask %d received metadata: %+v", index, call.askQuestionBatch)
 		}
+	}
+}
+
+func TestPrepareExecutorToolCallsRejectsMissingProviderCallID(t *testing.T) {
+	prepared, err := prepareExecutorToolCalls(&Engine{}, "step-1", "run-1", true, []llm.ToolCall{{
+		Name: string(toolspec.ToolExecCommand),
+	}})
+	if err == nil {
+		t.Fatal("prepare executor tool calls accepted missing provider call id")
+	}
+	if !errors.Is(err, ErrMissingProviderToolCallID) {
+		t.Fatalf("error = %v, want ErrMissingProviderToolCallID", err)
+	}
+	if len(prepared) != 0 {
+		t.Fatalf("prepared calls = %+v, want none", prepared)
 	}
 }
 

@@ -187,8 +187,7 @@ type Engine struct {
 	userInjectionScopeMu     sync.Mutex
 	activeUserInjectionScope map[string]struct{}
 
-	diagnostics    *diagnosticDedupeStore
-	toolCallStarts *pendingToolCallStartStore
+	diagnostics *diagnosticDedupeStore
 
 	usageState         *usageTrackingState
 	goalLoop           *goalLoopState
@@ -201,8 +200,6 @@ type Engine struct {
 	modelRequestsState *modelRequestRuntimeState
 	compactionPlanner  *compactionPlanner
 	collaboratorsOnce  sync.Once
-
-	recentTailCache recentTailReadCache
 
 	phaseProtocol  phaseProtocolEnforcer
 	stepLifecycle  exclusiveStepLifecycle
@@ -296,7 +293,6 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 		registry:           registry,
 		cfg:                cfg,
 		diagnostics:        newDiagnosticDedupeStore(),
-		toolCallStarts:     newPendingToolCallStartStore(),
 		usageState:         newUsageTrackingState(),
 		goalLoop:           newGoalLoopState(),
 		compactionState:    newCompactionRuntimeState(),
@@ -347,6 +343,7 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 	if err := eng.restoreMessages(); err != nil {
 		return nil, err
 	}
+	eng.seedTranscriptLiveToolsFromDanglingToolCalls()
 	eng.restorePersistedUsageState(meta.UsageState)
 	var recoveryCandidate *session.PendingModelRecovery
 	legacyRecoveryCandidate := false
@@ -441,6 +438,28 @@ func (e *Engine) pendingRecoveryDanglingToolCallIDs() map[string]struct{} {
 	return out
 }
 
+func (e *Engine) seedTranscriptLiveToolsFromDanglingToolCalls() {
+	if e == nil {
+		return
+	}
+	chat := e.transcriptRuntimeState().chatProjection()
+	if chat == nil {
+		return
+	}
+	dangling := chat.danglingToolCalls()
+	if len(dangling) == 0 {
+		return
+	}
+	starts := make([]TranscriptLiveToolStart, 0, len(dangling))
+	for _, call := range dangling {
+		starts = append(starts, TranscriptLiveToolStart{
+			ToolCallID: strings.TrimSpace(call.callID),
+			ToolName:   strings.TrimSpace(call.name),
+		})
+	}
+	e.transcriptRuntimeState().SeedLiveTools(starts)
+}
+
 func (e *Engine) pendingRecoveryStepHasTerminalAssistant(stepID string) (bool, error) {
 	events, err := e.store.ReadEventsBackwardUntil(isCompactionSegmentBoundary)
 	if err != nil {
@@ -480,6 +499,7 @@ func (e *Engine) Close() error {
 		cancel()
 	}
 	e.lifecycleWG.Wait()
+	e.emitLiveToolAbortsRaw("runtime_close", "canceled")
 	return interruptErr
 }
 
@@ -782,9 +802,9 @@ func (e *Engine) runStepLoopWithOptions(ctx context.Context, stepID string, revi
 	})
 }
 
-func (e *Engine) runReviewerFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
+func (e *Engine) runReviewerFollowUp(ctx context.Context, stepID string, original llm.Message, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.reviewerFlow.RunFollowUp(ctx, stepID, original, originalCommittedStart, originalCommittedStartSet, reviewerClient)
+	return e.reviewerFlow.RunFollowUp(ctx, stepID, original, reviewerClient)
 }
 
 func (e *Engine) ensureLocked() (session.LockedContract, error) {

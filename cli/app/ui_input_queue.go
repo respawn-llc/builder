@@ -270,7 +270,7 @@ func (c uiInputController) resumeQueuedInputsAfterIdleRuntime() tea.Cmd {
 		m.pendingQueuedDrainAfterHydration = true
 		m.queuedDrainReadyAfterHydration = false
 		m.layout().syncViewport()
-		return m.requestRuntimeQueuedDrainTranscriptSync()
+		return m.requestRuntimeQueuedDrainAfterHydration()
 	}
 	_, cmd := c.flushQueuedInputs(queueDrainAuto)
 	c.notifyTurnQueueDrainedIfIdle()

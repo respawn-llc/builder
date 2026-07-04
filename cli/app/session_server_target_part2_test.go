@@ -266,18 +266,17 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutAuthBootstrapCapability
 	defer fakeResponses.Close()
 
 	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
-		JSONRPCWebSocket:        true,
-		ProjectAttach:           true,
-		SessionAttach:           true,
-		SessionPlan:             true,
-		SessionLifecycle:        true,
-		SessionTranscriptPaging: true,
-		SessionRuntime:          true,
-		RuntimeControl:          true,
-		PromptControl:           true,
-		PromptActivity:          true,
-		SessionActivity:         true,
-		ProcessOutput:           true,
+		JSONRPCWebSocket: true,
+		ProjectAttach:    true,
+		SessionAttach:    true,
+		SessionPlan:      true,
+		SessionLifecycle: true,
+		SessionRuntime:   true,
+		RuntimeControl:   true,
+		PromptControl:    true,
+		PromptActivity:   true,
+		SessionActivity:  true,
+		ProcessOutput:    true,
 	})
 	defer cleanup()
 
@@ -319,61 +318,8 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutProjectAttachCapability
 	defer fakeResponses.Close()
 
 	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
-		JSONRPCWebSocket:        true,
-		AuthBootstrap:           true,
-		SessionAttach:           true,
-		SessionPlan:             true,
-		SessionLifecycle:        true,
-		SessionTranscriptPaging: true,
-		SessionRuntime:          true,
-		RuntimeControl:          true,
-		PromptControl:           true,
-		PromptActivity:          true,
-		SessionActivity:         true,
-		ProcessOutput:           true,
-	})
-	defer cleanup()
-
-	server, err := startSessionServer(context.Background(), Options{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-		OpenAIBaseURL:         fakeResponses.URL,
-		OpenAIBaseURLExplicit: true,
-	}, readyMemoryAuthHandler(), false)
-	if err != nil {
-		t.Fatalf("startSessionServer: %v", err)
-	}
-	defer func() { _ = server.Close() }()
-	if _, ok := server.(*remoteAppServer); ok {
-		t.Fatal("expected configured daemon without project attach capability to be rejected")
-	}
-
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test project attach fallback runtime")
-	defer runtimePlan.Close()
-
-	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after project attach fallback")
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("SubmitUserMessage: %v", err)
-	}
-	if message != "embedded fallback reply" {
-		t.Fatalf("assistant message = %q, want %q", message, "embedded fallback reply")
-	}
-	if hits.Load() != 1 {
-		t.Fatalf("expected embedded fallback llm call once, got %d", hits.Load())
-	}
-}
-
-func TestStartSessionServerRejectsDiscoveredDaemonWithoutTranscriptPagingCapability(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-
-	fakeResponses, hits := newFakeResponsesServer(t, []string{"embedded fallback reply"})
-	defer fakeResponses.Close()
-
-	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
 		JSONRPCWebSocket: true,
-		ProjectAttach:    true,
+		AuthBootstrap:    true,
 		SessionAttach:    true,
 		SessionPlan:      true,
 		SessionLifecycle: true,
@@ -398,13 +344,13 @@ func TestStartSessionServerRejectsDiscoveredDaemonWithoutTranscriptPagingCapabil
 	}
 	defer func() { _ = server.Close() }()
 	if _, ok := server.(*remoteAppServer); ok {
-		t.Fatal("expected configured daemon without transcript paging capability to be rejected")
+		t.Fatal("expected configured daemon without project attach capability to be rejected")
 	}
 
-	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test embedded fallback runtime")
+	_, runtimePlan := prepareAppRuntimePlan(t, server, sessionLaunchRequest{Mode: launchModeInteractive, ForceNewSession: true}, io.Discard, "test project attach fallback runtime")
 	defer runtimePlan.Close()
 
-	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after transcript paging fallback")
+	submission, err := submitRuntimeClientForTest(t, runtimePlan.Wiring.runtimeClient, "hello after project attach fallback")
 	message := submission.Message
 	if err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)

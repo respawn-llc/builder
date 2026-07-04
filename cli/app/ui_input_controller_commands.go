@@ -131,7 +131,7 @@ func (m *uiModel) latestAssistantFinalAnswerFromStatus() string {
 		}
 		return ""
 	}
-	return localLastCommittedAssistantFinalAnswer(m.transcriptEntries)
+	return ""
 }
 
 func (m *uiModel) hasAssistantFinalAnswerToCopy() bool {

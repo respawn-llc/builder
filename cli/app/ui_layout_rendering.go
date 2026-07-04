@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/cli/tui"
-
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -36,11 +34,9 @@ func (l uiViewLayout) renderChatPanel(width, height int, style uiStyles) []strin
 		return []string{padRight("", width)}
 	}
 	contentLines := append([]string(nil), splitPlainLines(l.model.view.View())...)
-	lineKinds := l.model.view.VisibleLineKinds()
 	if len(contentLines) < height {
 		for len(contentLines) < height {
 			contentLines = append(contentLines, "")
-			lineKinds = append(lineKinds, tui.VisibleLineContent)
 		}
 	} else if len(contentLines) > height {
 		end := len(contentLines)
@@ -55,31 +51,17 @@ func (l uiViewLayout) renderChatPanel(width, height int, style uiStyles) []strin
 			start = 0
 		}
 		contentLines = contentLines[start:end]
-		if len(lineKinds) > start {
-			if end > len(lineKinds) {
-				end = len(lineKinds)
-			}
-			lineKinds = lineKinds[start:end]
-		}
 	}
-	return l.renderChatContentLines(contentLines, lineKinds, width, style)
+	return l.renderChatContentLines(contentLines, width, style)
 }
 
-func (l uiViewLayout) renderChatContentLines(rawLines []string, lineKinds []tui.VisibleLineKind, width int, style uiStyles) []string {
+func (l uiViewLayout) renderChatContentLines(rawLines []string, width int, style uiStyles) []string {
 	contentWidth := width
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
 	out := make([]string, 0, len(rawLines))
-	for idx, line := range rawLines {
-		kind := tui.VisibleLineContent
-		if idx < len(lineKinds) {
-			kind = lineKinds[idx]
-		}
-		if kind == tui.VisibleLineDivider {
-			out = append(out, style.meta.Render(strings.Repeat("─", contentWidth)))
-			continue
-		}
+	for _, line := range rawLines {
 		out = append(out, style.chat.Render(padANSIRight(line, contentWidth)))
 	}
 	return out
@@ -199,17 +181,7 @@ func (l uiViewLayout) queuedMessages() []queuedPaneEntry {
 }
 
 func (m *uiModel) deferredPendingInjectedMessages() []string {
-	if m == nil || len(m.deferredCommittedTail) == 0 {
-		return nil
-	}
-	messages := make([]string, 0, len(m.deferredCommittedTail))
-	for _, deferred := range m.deferredCommittedTail {
-		messages = append(messages, deferred.pending...)
-	}
-	if len(messages) == 0 {
-		return nil
-	}
-	return messages
+	return nil
 }
 
 func (e queuedPaneEntry) displayText() string {

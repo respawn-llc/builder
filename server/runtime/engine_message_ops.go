@@ -14,6 +14,8 @@ import (
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/transcript"
+
+	"github.com/google/uuid"
 )
 
 func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) error {
@@ -155,7 +157,6 @@ func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 
 func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy steeringMessageEventPolicy, persist bool) error {
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
-	previousCommittedCount := e.CommittedTranscriptEntryCount()
 	if e.beforePersistMessage != nil {
 		if err := e.beforePersistMessage(msg); err != nil {
 			return err
@@ -166,17 +167,54 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 	} else {
 		e.markCurrentRequestShapeDirty()
 	}
+	if err := e.applyTranscriptLiveToolMessageMutation(msg); err != nil {
+		return err
+	}
 	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendMessage(msg)
 	if persist {
 		if _, _, err := e.store.AppendEvent(stepID, "message", msg); err != nil {
 			return err
 		}
 	}
-	currentCommittedCount := e.CommittedTranscriptEntryCount()
-	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
+	if eventPolicy != steeringMessageEventNone && shouldEmitCommittedMessageEvent(msg) {
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
 	}
 	return nil
+}
+
+func (e *Engine) applyTranscriptLiveToolMessageMutation(msg llm.Message) error {
+	if e == nil {
+		return nil
+	}
+	state := e.transcriptRuntimeState()
+	switch msg.Role {
+	case llm.RoleAssistant:
+		for _, call := range msg.ToolCalls {
+			normalized := normalizeToolCallForTranscript(call, e.transcriptWorkingDir())
+			if err := state.RecordLiveToolStart(normalized); err != nil {
+				return err
+			}
+		}
+	case llm.RoleTool:
+		state.CompleteLiveTool(msg.ToolCallID)
+	}
+	return nil
+}
+
+func (e *Engine) emitLiveToolAbortsRaw(stepID string, reason string) {
+	if e == nil || e.store == nil {
+		return
+	}
+	starts := e.transcriptRuntimeState().AbortLiveTools()
+	for _, start := range starts {
+		call := llm.ToolCall{ID: start.ToolCallID, Name: start.ToolName}
+		e.emitRaw(Event{
+			Kind:            EventToolCallAborted,
+			StepID:          strings.TrimSpace(stepID),
+			ToolCall:        &call,
+			ToolAbortReason: strings.TrimSpace(reason),
+		})
+	}
 }
 
 func shouldEmitCommittedMessageEvent(msg llm.Message) bool {
@@ -297,32 +335,33 @@ func (e *Engine) FailQueuedUserMessages(reason QueuedUserMessageFailureReason) [
 	return messages
 }
 
-func (e *Engine) clearStreamingAssistantStateRaw() *AssistantStreamMetadata {
+func (e *Engine) clearStreamingAssistantStateRaw() (*AssistantStreamMetadata, *uuid.UUID) {
 	return newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ClearStreamingAssistantState()
 }
 
-func (e *Engine) emitStreamingAssistantResetEventsRaw(stepID string, metadata *AssistantStreamMetadata) {
+func (e *Engine) emitStreamingAssistantResetEventsRaw(stepID string, metadata *AssistantStreamMetadata, streamID *uuid.UUID, abortReason AssistantStreamAbortReason) {
 	e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID})
-	e.emitRaw(Event{Kind: EventAssistantDeltaReset, StepID: stepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(metadata)})
+	e.emitRaw(Event{Kind: EventAssistantDeltaReset, StepID: stepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(metadata), AssistantTranscriptStreamID: cloneTranscriptStreamID(streamID), AssistantStreamAbortReason: string(abortReason)})
 	e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID})
 }
 
 func (e *Engine) emitCommittedAssistantMessageRaw(stepID string, committed steeringCommittedAssistantMessage) error {
 	finalizesStreaming := committedAssistantMessageFinalizesStreaming(committed.message)
 	var clearedMetadata *AssistantStreamMetadata
+	var clearedStreamID *uuid.UUID
 	if finalizesStreaming {
-		clearedMetadata = e.clearStreamingAssistantStateRaw()
+		clearedMetadata, clearedStreamID = e.clearStreamingAssistantStateRaw()
 	}
 	e.emitRaw(Event{
-		Kind:                       EventAssistantMessage,
-		StepID:                     stepID,
-		Message:                    committed.message,
-		CommittedTranscriptChanged: true,
-		CommittedEntryStart:        committed.committedStart,
-		CommittedEntryStartSet:     committed.committedStartSet,
+		Kind:                        EventAssistantMessage,
+		StepID:                      stepID,
+		Message:                     committed.message,
+		AssistantStreamMetadata:     cloneAssistantStreamMetadata(clearedMetadata),
+		AssistantTranscriptStreamID: cloneTranscriptStreamID(clearedStreamID),
+		CommittedTranscriptChanged:  true,
 	})
 	if finalizesStreaming {
-		e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata)
+		e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, "")
 	}
 	return nil
 }

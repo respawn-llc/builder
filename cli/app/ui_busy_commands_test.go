@@ -5,9 +5,6 @@ import (
 	"testing"
 
 	"core/cli/app/commands"
-	"core/cli/tui"
-	"core/server/llm"
-	"core/server/runtime"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -374,117 +371,5 @@ func TestCompactionKeepsInputEditableAndQueuesSteering(t *testing.T) {
 	}
 	if !updated.isCompacting() {
 		t.Fatal("queueing steering must not clear compaction lifecycle")
-	}
-}
-
-func TestBusyQueuedCopyCopiesFinalAnswerAfterTurnDrains(t *testing.T) {
-	copier := &stubClipboardTextCopier{}
-	m := newProjectedStaticUIModel(WithUIClipboardTextCopier(copier))
-	m.transcriptEntries = []tui.TranscriptEntry{{Role: "assistant", Text: "copied from queue", Phase: llm.MessagePhaseFinal}}
-	m.setRuntimeActivityBusyForTest(true)
-	m.activity = uiActivityRunning
-	m.input = "/copy"
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	updated := next.(*uiModel)
-	if cmd != nil {
-		t.Fatal("did not expect immediate execution for queued /copy")
-	}
-	if len(updated.queued) != 1 || updated.queued[0].Text != "/copy" {
-		t.Fatalf("expected queued /copy command, got %+v", updated.queued)
-	}
-
-	next, cmd = updated.Update(submitDoneMsg{message: "done"})
-	updated = next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected clipboard copy command after queued /copy drains")
-	}
-	if len(updated.queued) != 0 {
-		t.Fatalf("expected queued /copy drained, got %+v", updated.queued)
-	}
-
-	next, followCmd := updated.Update(cmd())
-	updated = next.(*uiModel)
-	if copier.calls != 1 {
-		t.Fatalf("expected one clipboard copy, got %d", copier.calls)
-	}
-	if copier.text != "copied from queue" {
-		t.Fatalf("copied text = %q, want %q", copier.text, "copied from queue")
-	}
-	if updated.transientStatus != "Copied final answer to clipboard" {
-		t.Fatalf("unexpected transient status %q", updated.transientStatus)
-	}
-	if updated.transientStatusKind != uiStatusNoticeSuccess {
-		t.Fatalf("expected success status kind, got %d", updated.transientStatusKind)
-	}
-	if followCmd == nil {
-		t.Fatal("expected transient-status clear command after queued /copy success")
-	}
-}
-
-func TestBusyQueuedFastAppliesToNextRuntimeRequestAfterTurnDrains(t *testing.T) {
-	client := &requestCaptureFakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "next done", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	_, eng := newAppRuntimeEngine(t, client, runtime.Config{Model: "gpt-5.3-codex"})
-
-	m := newProjectedEngineUIModel(eng)
-	m.setRuntimeActivityBusyForTest(true)
-	m.activity = uiActivityRunning
-	m.promptHistoryDraft = "previous prompt"
-	m.promptHistoryDraftCursor = -1
-	m.input = "/fast on"
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	updated := next.(*uiModel)
-	if len(updated.queued) != 1 || updated.queued[0].Text != "/fast on" {
-		t.Fatalf("expected queued /fast command, got %+v", updated.queued)
-	}
-	if updated.input != "" || updated.promptHistoryDraft != "" || updated.promptHistoryDraftCursor != -1 {
-		t.Fatalf("expected queued /fast to discard prompt-history draft, input=%q draft=%q cursor=%d", updated.input, updated.promptHistoryDraft, updated.promptHistoryDraftCursor)
-	}
-
-	next, cmd := updated.Update(submitDoneMsg{message: "prior turn done"})
-	updated = next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected queued /fast feedback command")
-	}
-	for _, msg := range collectCmdMessages(t, cmd) {
-		next, _ = updated.Update(msg)
-		updated = next.(*uiModel)
-	}
-	if !eng.FastModeEnabled() {
-		t.Fatal("expected queued /fast to enable runtime fast mode")
-	}
-	if len(updated.queued) != 0 {
-		t.Fatalf("expected queued /fast to drain, got %+v", updated.queued)
-	}
-	if updated.isBusy() {
-		t.Fatal("did not expect queued /fast alone to start a new turn")
-	}
-
-	updated.input = "next prompt"
-	next, cmd = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated = next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected submit command for next prompt")
-	}
-
-	for _, msg := range collectCmdMessages(t, cmd) {
-		done, ok := msg.(submitDoneMsg)
-		if !ok {
-			continue
-		}
-		next, _ = updated.Update(done)
-		updated = next.(*uiModel)
-	}
-
-	requests := client.Requests()
-	if len(requests) != 1 {
-		t.Fatalf("captured requests = %d, want 1", len(requests))
-	}
-	if !requests[0].FastMode {
-		t.Fatal("expected next runtime request after queued /fast to use fast mode")
 	}
 }

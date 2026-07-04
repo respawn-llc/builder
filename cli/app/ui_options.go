@@ -1,7 +1,6 @@
 package app
 
 import (
-	"io"
 	"strings"
 
 	"core/cli/app/commands"
@@ -14,12 +13,6 @@ import (
 type UIOption func(*uiModel)
 
 type UIAction = serverapi.SessionTransitionAction
-
-type UITranscriptEntry struct {
-	Role             string
-	Text             string
-	RollbackTargetID string
-}
 
 type UITransition struct {
 	Action                       serverapi.SessionTransitionAction
@@ -82,18 +75,6 @@ func WithUIRendererOutputGateState(state *uiRendererOutputGateState) UIOption {
 	}
 }
 
-func WithUINativeSurfaceWriter(writer io.Writer) UIOption {
-	return func(m *uiModel) {
-		m.closeNativeSurface()
-		out := writer
-		if writer != nil {
-			out = uiMainThreadTerminalWriter{model: m, out: writer, kind: "native surface"}
-		}
-		m.nativeSurface = newUINativeSurface(out, m.nativeNormalBufferAvailable, m.handleNativeDelayedWriteError)
-		m.syncRendererOutputGate()
-	}
-}
-
 func WithUIModelName(model string) UIOption {
 	return func(m *uiModel) {
 		m.modelName = strings.TrimSpace(model)
@@ -139,17 +120,7 @@ func WithUIModelContractLocked(locked bool) UIOption {
 func WithUITheme(theme string) UIOption {
 	return func(m *uiModel) {
 		m.theme = strings.TrimSpace(theme)
-		m.view = tui.NewModel(
-			tui.WithTheme(theme),
-			tui.WithCompactDetail(),
-			tui.WithRenderDiagnosticHandler(m.handleRenderDiagnostic),
-		)
-	}
-}
-
-func WithUIInitialTranscript(entries []UITranscriptEntry) UIOption {
-	return func(m *uiModel) {
-		m.initialTranscript = append([]UITranscriptEntry(nil), entries...)
+		m.view = tui.NewModel(tui.WithTheme(theme))
 	}
 }
 

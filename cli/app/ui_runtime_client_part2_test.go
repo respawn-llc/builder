@@ -2,11 +2,8 @@ package app
 
 import (
 	"context"
-	"core/server/llm"
 	"core/server/registry"
-	"core/server/runtime"
 	"core/server/runtimecontrol"
-	"core/server/runtimeview"
 	sharedclient "core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -554,47 +551,9 @@ func TestRuntimeClientSubmitTurnRecoveryContinuesFirstPrompt(t *testing.T) {
 	if updated.activity == uiActivityError {
 		t.Fatal("did not expect pre-submit recovery to surface operator error")
 	}
-	plain := stripANSIAndTrimRight(updated.view.OngoingSnapshot())
+	plain := stripANSIAndTrimRight(updated.view.View())
 	if strings.Contains(plain, serverapi.ErrRuntimeUnavailable.Error()) || strings.Contains(plain, "runtime for session") {
 		t.Fatalf("did not expect recovery diagnostics in ongoing transcript, got %q", plain)
-	}
-}
-
-func TestRuntimeClientHydrationRecoversRuntimeUnavailableSilently(t *testing.T) {
-	controls := &reconnectRetryRuntimeControlClient{}
-	authoritativePage := clientui.TranscriptPage{
-		SessionID: "session-1",
-		Revision:  4,
-		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "authoritative"}},
-	}
-	reads := &flakySessionViewClient{
-		errs:  []error{serverapi.ErrRuntimeUnavailable, nil},
-		pages: []serverapi.SessionTranscriptPageResponse{{}, {Transcript: authoritativePage}},
-	}
-	runtimeClient := newTestSessionRuntimeClient(reads, controls)
-	reactivator := newRuntimeReactivator()
-	recoveryCalls := 0
-	reactivator.SetReactivateFunc(func(context.Context) error {
-		recoveryCalls++
-		return nil
-	})
-	runtimeClient.SetRuntimeReactivator(reactivator)
-
-	page, err := runtimeClient.RefreshTranscriptPage(clientui.TranscriptPageRequest{})
-	if err != nil {
-		t.Fatalf("RefreshTranscriptPage: %v", err)
-	}
-	if recoveryCalls != 1 {
-		t.Fatalf("recovery call count = %d, want 1", recoveryCalls)
-	}
-	if reads.count != 2 {
-		t.Fatalf("transcript read count = %d, want 2", reads.count)
-	}
-	if page.Revision != authoritativePage.Revision || len(page.Entries) != 1 || page.Entries[0].Text != "authoritative" {
-		t.Fatalf("hydrated page = %+v, want %+v", page, authoritativePage)
-	}
-	if entries := controls.appendedLocalEntries(); len(entries) != 0 {
-		t.Fatalf("did not expect visible recovery warning during hydration, got %+v", entries)
 	}
 }
 
@@ -659,69 +618,6 @@ func TestRuntimeClientMainViewRecoveryPreservesReadDeadline(t *testing.T) {
 	case <-reactivationStarted:
 	case <-time.After(time.Second):
 		t.Fatal("reactivation did not start")
-	}
-}
-
-func TestRuntimeUnavailableHydrationRecoveryResumesOngoingEventFence(t *testing.T) {
-	controls := &reconnectRetryRuntimeControlClient{}
-	authoritativePage := clientui.TranscriptPage{
-		SessionID: "session-1",
-		Revision:  5,
-		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "hydrated"}},
-	}
-	reads := &flakySessionViewClient{
-		errs:  []error{serverapi.ErrRuntimeUnavailable, nil},
-		pages: []serverapi.SessionTranscriptPageResponse{{}, {Transcript: authoritativePage}},
-	}
-	runtimeClient := newTestSessionRuntimeClient(reads, controls)
-	reactivator := newRuntimeReactivator()
-	reactivator.SetReactivateFunc(func(context.Context) error { return nil })
-	runtimeClient.SetRuntimeReactivator(reactivator)
-	runtimeEvents := make(chan clientui.Event, 1)
-	runtimeEvents <- clientui.Event{Kind: clientui.EventAssistantDelta, AssistantDelta: "after hydrate"}
-	model := newProjectedRuntimeEventsUIModel(runtimeClient, runtimeEvents)
-	model.startupCmds = nil
-	model.waitRuntimeEventAfterHydration = true
-
-	cmd := model.startRuntimeTranscriptSyncRequest(runtimeTranscriptSyncRequestForPage(clientui.TranscriptPageRequest{}, false, runtimeTranscriptSyncCauseContinuityRecovery, clientui.TranscriptRecoveryCauseStreamGap)).cmd
-	if cmd == nil {
-		t.Fatal("expected hydration command")
-	}
-	rawMsg := cmd()
-	msg, ok := rawMsg.(runtimeTranscriptRefreshedMsg)
-	if !ok {
-		t.Fatalf("expected runtimeTranscriptRefreshedMsg, got %T", rawMsg)
-	}
-	if msg.err != nil {
-		t.Fatalf("hydration err = %v, want recovered nil", msg.err)
-	}
-
-	next, resumeCmd := model.Update(msg)
-	updated := next.(*uiModel)
-	if updated.waitRuntimeEventAfterHydration {
-		t.Fatal("expected recovered hydration to release runtime event fence")
-	}
-	if updated.runtimeTranscriptBusy {
-		t.Fatal("expected recovered hydration to clear in-flight busy flag")
-	}
-	msgs := collectCmdMessages(t, resumeCmd)
-	resumed := false
-	for _, collected := range msgs {
-		if typed, ok := collected.(runtimeEventBatchMsg); ok && len(typed.events) == 1 && typed.events[0].AssistantDelta == "after hydrate" {
-			resumed = true
-		}
-		if _, ok := collected.(runtimeTranscriptRetryMsg); ok {
-			t.Fatalf("did not expect retry after successful runtime-unavailable recovery, got %+v", msgs)
-		}
-	}
-	if !resumed {
-		t.Fatalf("expected runtime event consumption to resume after recovered hydration, got %+v", msgs)
-	}
-	if len(runtimeEvents) != 0 {
-		t.Fatalf("expected resumed runtime wait to consume pending event, remaining=%d", len(runtimeEvents))
-	}
-	if entries := controls.appendedLocalEntries(); len(entries) != 0 {
-		t.Fatalf("did not expect visible recovery warning during UI hydration, got %+v", entries)
 	}
 }
 
@@ -822,60 +718,5 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected warning fallback notification")
-	}
-}
-
-func TestRuntimeClientServerRestartFirstPromptRecoversAndWarnsOngoing(t *testing.T) {
-	runtimeEvents := make(chan clientui.Event, 128)
-	store := createAppRuntimeSessionAt(t, t.TempDir(), "workspace-x", t.TempDir())
-	client := &runtimeClientFakeLLM{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: "done", Phase: llm.MessagePhaseFinal},
-		Usage:     llm.Usage{WindowTokens: 200000},
-	}}}
-	engine := newAppRuntimeEngineWithStore(t, store, client, runtime.Config{
-		OnEvent: func(evt runtime.Event) {
-			runtimeEvents <- runtimeview.EventFromRuntime(evt)
-		},
-	})
-	resolver := &mutableRuntimeResolver{}
-	controls := sharedclient.NewLoopbackRuntimeControlClient(runtimecontrol.NewService(resolver))
-	runtimeClient := newUIRuntimeClientWithReads(store.Meta().SessionID, &countingSessionViewClient{}, controls).(*sessionRuntimeClient)
-	reactivator := newRuntimeReactivator()
-	reactivator.SetReactivateFunc(func(context.Context) error {
-		resolver.Set(engine)
-		return nil
-	})
-	runtimeClient.SetRuntimeReactivator(reactivator)
-	model := newProjectedClosedUIModel(nil)
-	sized, _ := model.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
-	model = sized.(*uiModel)
-
-	submission, err := runtimeClient.SubmitRuntimeInput(context.Background(), clientui.RuntimeSubmitRequest{
-		OperationRef: clientui.RuntimeOperationRef{Kind: clientui.RuntimeOperationKindSubmit, ClientRequestID: "submit-after-restart"},
-		Text:         "hello after restart",
-	})
-	message := submission.Message
-	if err != nil {
-		t.Fatalf("submitRuntimeUserMessage: %v", err)
-	}
-	if message != "done" {
-		t.Fatalf("submitRuntimeUserMessage message = %q, want done", message)
-	}
-
-	updated := model
-	eventCount := 0
-	for len(runtimeEvents) > 0 {
-		msg := <-runtimeEvents
-		eventCount++
-		next, cmd := updated.Update(runtimeEventMsg{event: msg})
-		updated = next.(*uiModel)
-		_ = collectCmdMessages(t, cmd)
-	}
-	view := stripANSIAndTrimRight(updated.view.OngoingSnapshot())
-	if !strings.Contains(view, runtimeReconnectWarningText) {
-		t.Fatalf("expected ongoing warning in view, events=%d entries=%+v view=%q", eventCount, updated.transcriptEntries, view)
-	}
-	if strings.Contains(view, "runtime for session") {
-		t.Fatalf("did not expect runtime unavailable error in ongoing view, got %q", view)
 	}
 }

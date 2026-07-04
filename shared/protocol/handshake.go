@@ -87,8 +87,6 @@ const (
 	MethodWorkflowTaskGet                       = "workflow.task.get"
 	MethodSessionPlan                           = "session.plan"
 	MethodSessionGetMainView                    = "session.getMainView"
-	MethodSessionGetTranscriptPage              = "session.getTranscriptPage"
-	MethodSessionGetCommittedTranscriptSuffix   = "session.getCommittedTranscriptSuffix"
 	MethodSessionGetInitialInput                = "session.getInitialInput"
 	MethodSessionPersistInputDraft              = "session.persistInputDraft"
 	MethodSessionRetargetWorkspace              = "session.retargetWorkspace"
@@ -149,6 +147,9 @@ const (
 	MethodSessionSubscribeActivity              = "session.subscribeActivity"
 	MethodSessionActivityEvent                  = "session.activity"
 	MethodSessionActivityComplete               = "session.activity.complete"
+	MethodSessionSubscribeTranscript            = "session.subscribeTranscript"
+	MethodSessionTranscriptEvent                = "session.transcript"
+	MethodSessionTranscriptComplete             = "session.transcript.complete"
 	MethodProcessSubscribeOutput                = "process.subscribeOutput"
 	MethodProcessOutputEvent                    = "process.output"
 	MethodProcessOutputComplete                 = "process.output.complete"
@@ -188,6 +189,10 @@ type SessionActivityEventParams struct {
 	Event clientui.Event `json:"event"`
 }
 
+type SessionTranscriptEventParams struct {
+	Message clientui.TranscriptMessage `json:"message"`
+}
+
 type ProcessOutputEventParams struct {
 	Chunk clientui.ProcessOutputChunk `json:"chunk"`
 }
@@ -214,8 +219,9 @@ type WorkflowProjectEvent struct {
 }
 
 type StreamCompleteParams struct {
-	Code    int    `json:"code,omitempty"`
-	Message string `json:"message,omitempty"`
+	Code                  int    `json:"code,omitempty"`
+	Message               string `json:"message,omitempty"`
+	TranscriptCloseReason string `json:"transcript_close_reason,omitempty"`
 }
 
 func (r HandshakeRequest) Validate() error {

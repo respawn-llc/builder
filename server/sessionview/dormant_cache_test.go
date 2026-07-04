@@ -129,7 +129,7 @@ func TestDormantTranscriptCacheEvictsLeastRecentlyUsedEntry(t *testing.T) {
 	}
 }
 
-func TestServiceUsesDormantCacheForMainViewAndTailCoveredPages(t *testing.T) {
+func TestServiceUsesDormantCacheForMainViewAndTailEntries(t *testing.T) {
 	dir := t.TempDir()
 	store, err := session.Create(dir, "ws", dir)
 	if err != nil {
@@ -166,15 +166,15 @@ func TestServiceUsesDormantCacheForMainViewAndTailCoveredPages(t *testing.T) {
 		t.Fatalf("last committed assistant final answer = %q, want done", got)
 	}
 
-	pageResp, err := svc.GetSessionTranscriptPage(context.Background(), serverapi.SessionTranscriptPageRequest{SessionID: store.Meta().SessionID})
+	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
-		t.Fatalf("get default transcript page: %v", err)
+		t.Fatalf("get transcript tail entries: %v", err)
 	}
-	if got := len(pageResp.Transcript.Entries); got != 500 {
+	if got := len(entries); got != 500 {
 		t.Fatalf("default newest-segment entry count = %d, want 500", got)
 	}
-	if pageResp.Transcript.Entries[0].Text != "line 0" {
-		t.Fatalf("unexpected first entry: %q", pageResp.Transcript.Entries[0].Text)
+	if entries[0].Text != "line 0" {
+		t.Fatalf("unexpected first entry: %q", entries[0].Text)
 	}
 	if buildCalls != 1 {
 		t.Fatalf("build calls = %d, want 1", buildCalls)

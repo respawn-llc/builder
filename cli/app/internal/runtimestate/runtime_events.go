@@ -36,41 +36,6 @@ type BackgroundNotice struct {
 	Kind    BackgroundNoticeKind
 }
 
-type RuntimeTranscriptSyncReason string
-
-const (
-	RuntimeTranscriptSyncNone                  RuntimeTranscriptSyncReason = ""
-	RuntimeTranscriptSyncStreamGap             RuntimeTranscriptSyncReason = "stream_gap"
-	RuntimeTranscriptSyncCommittedAdvance      RuntimeTranscriptSyncReason = "committed_advance"
-	RuntimeTranscriptSyncRecovery              RuntimeTranscriptSyncReason = "recovery"
-	RuntimeTranscriptSyncStreamingErrorUpdated RuntimeTranscriptSyncReason = "streaming_error_updated"
-)
-
-type RuntimeTranscriptSyncCommand struct {
-	Reason        RuntimeTranscriptSyncReason
-	RecoveryCause clientui.TranscriptRecoveryCause
-}
-
-type RuntimeAssistantStreamCommandKind uint8
-
-const (
-	RuntimeAssistantStreamAppend RuntimeAssistantStreamCommandKind = iota + 1
-	RuntimeAssistantStreamClear
-)
-
-type RuntimeAssistantStreamCommand struct {
-	Kind                    RuntimeAssistantStreamCommandKind
-	Delta                   string
-	Phase                   clientui.MessagePhase
-	StepID                  string
-	AssistantStreamMetadata *clientui.AssistantStreamMetadata
-}
-
-type RuntimeTranscriptReduction struct {
-	Sync            RuntimeTranscriptSyncCommand
-	AssistantStream []RuntimeAssistantStreamCommand
-}
-
 type RuntimeActivityCommand uint8
 
 const (
@@ -131,7 +96,6 @@ type RuntimeConversationReduction struct {
 }
 
 type RuntimeEventReduction struct {
-	Transcript          RuntimeTranscriptReduction
 	RunState            RuntimeRunStateReduction
 	Conversation        RuntimeConversationReduction
 	PendingInput        RuntimePendingInputReduction
@@ -157,7 +121,6 @@ func ReduceRuntimeEvent(
 		backgroundProcessReduction = RuntimeBackgroundProcessReduction{Command: RuntimeBackgroundProcessRefresh}
 	}
 	return RuntimeEventReduction{
-		Transcript:          ReduceRuntimeTranscriptEvent(evt),
 		RunState:            ReduceRuntimeRunStateEvent(runState, activityRunning, evt),
 		Conversation:        conversationReduction,
 		PendingInput:        ReduceRuntimePendingInputEvent(input, evt),
@@ -165,35 +128,6 @@ func ReduceRuntimeEvent(
 		BackgroundProcesses: backgroundProcessReduction,
 		Notices:             ReduceRuntimeNoticeEvent(evt),
 	}
-}
-
-func ReduceRuntimeTranscriptEvent(evt clientui.Event) RuntimeTranscriptReduction {
-	switch evt.Kind {
-	case clientui.EventStreamGap:
-		return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncStreamGap, RecoveryCause: evt.RecoveryCause}}
-	case clientui.EventConversationUpdated:
-		if evt.RecoveryCause != clientui.TranscriptRecoveryCauseNone {
-			return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncRecovery, RecoveryCause: evt.RecoveryCause}}
-		}
-		if evt.CommittedTranscriptChanged {
-			return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncCommittedAdvance}}
-		}
-	case clientui.EventStreamingErrorUpdated:
-		return RuntimeTranscriptReduction{Sync: RuntimeTranscriptSyncCommand{Reason: RuntimeTranscriptSyncStreamingErrorUpdated}}
-	case clientui.EventAssistantDelta:
-		return RuntimeTranscriptReduction{AssistantStream: []RuntimeAssistantStreamCommand{{Kind: RuntimeAssistantStreamAppend, Delta: evt.AssistantDelta, Phase: evt.AssistantDeltaPhase, StepID: evt.StepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(evt.AssistantStreamMetadata)}}}
-	case clientui.EventAssistantDeltaReset:
-		return RuntimeTranscriptReduction{AssistantStream: []RuntimeAssistantStreamCommand{{Kind: RuntimeAssistantStreamClear, StepID: evt.StepID, AssistantStreamMetadata: cloneAssistantStreamMetadata(evt.AssistantStreamMetadata)}}}
-	}
-	return RuntimeTranscriptReduction{}
-}
-
-func cloneAssistantStreamMetadata(metadata *clientui.AssistantStreamMetadata) *clientui.AssistantStreamMetadata {
-	if metadata == nil {
-		return nil
-	}
-	copyMetadata := *metadata
-	return &copyMetadata
 }
 
 func ReduceRuntimeRunStateEvent(state RuntimeRunState, activityRunning bool, evt clientui.Event) RuntimeRunStateReduction {

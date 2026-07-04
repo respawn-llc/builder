@@ -120,27 +120,6 @@ func TestTUIStrictIOCompactDoneChecksQueuedRuntimeWorkAsCommand(t *testing.T) {
 	}
 }
 
-func TestTUIStrictIORuntimeControlSlashRunsAsCommand(t *testing.T) {
-	client := &runtimeControlFakeClient{}
-	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents(), WithUIDebug(true))
-	m.startupCmds = nil
-
-	handled, _, cmd := m.inputController().handleEnteredSlashCommandInput("/name New Name")
-	if !handled {
-		t.Fatal("expected /session slash command to be handled")
-	}
-	if cmd == nil {
-		t.Fatal("expected runtime-control command")
-	}
-	if client.setSessionNameArg != "" {
-		t.Fatalf("SetSessionName called during Update with %q", client.setSessionNameArg)
-	}
-	msgs := collectCmdMessages(t, cmd)
-	if client.setSessionNameArg != "New Name" {
-		t.Fatalf("SetSessionName after command = %q, want New Name; msgs=%+v", client.setSessionNameArg, msgs)
-	}
-}
-
 type strictCountingStatusCollector struct {
 	baseCalls int
 }

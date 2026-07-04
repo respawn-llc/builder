@@ -210,7 +210,6 @@ func SupportsInteractiveSession(flags protocol.CapabilityFlags) bool {
 		flags.ProjectAttach &&
 		flags.SessionPlan &&
 		flags.SessionLifecycle &&
-		flags.SessionTranscriptPaging &&
 		flags.SessionRuntime &&
 		flags.RuntimeControl &&
 		flags.PromptControl &&

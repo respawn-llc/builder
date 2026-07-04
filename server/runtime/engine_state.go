@@ -43,49 +43,6 @@ func (e *Engine) recentTranscriptEntries(limit int) []ChatEntry {
 	return entries
 }
 
-func (e *Engine) RecentTailTranscriptWindow(maxEntries int) TranscriptWindowSnapshot {
-	if e == nil {
-		return TranscriptWindowSnapshot{}
-	}
-	window := e.cachedRecentTailWindow(maxEntries)
-	total := e.CommittedTranscriptEntryCount()
-	window.TotalEntries = total
-	if offset := total - len(window.Snapshot.Entries); offset >= 0 {
-		window.Offset = offset
-	}
-	e.overlayLiveStreaming(&window.Snapshot)
-	return window
-}
-
-func (e *Engine) cachedRecentTailWindow(maxEntries int) TranscriptWindowSnapshot {
-	revision := e.TranscriptRevision()
-	if cached, ok := e.recentTailCache.get(revision, maxEntries); ok {
-		return cached
-	}
-	scan := NewPersistedTranscriptScan(PersistedTranscriptScanRequest{
-		TrackRecentTail:  true,
-		TailLimit:        maxEntries,
-		CacheWarningMode: e.cfg.CacheWarningMode,
-	})
-	for _, evt := range e.activeListEvents() {
-		_ = scan.ApplyPersistedEvent(evt)
-	}
-	window := scan.RecentTailSnapshot()
-	e.recentTailCache.store(revision, maxEntries, window)
-	return window
-}
-
-func (e *Engine) activeListEvents() []session.Event {
-	if e == nil || e.store == nil {
-		return nil
-	}
-	events, err := e.store.ReadEventsBackwardUntil(isCompactionSegmentBoundary)
-	if err != nil {
-		return nil
-	}
-	return events
-}
-
 type TranscriptSegmentPage struct {
 	Snapshot                          ChatSnapshot
 	OlderCursor                       int64
@@ -171,20 +128,6 @@ func (e *Engine) TranscriptSegmentPageForward(startOffset int64) (TranscriptSegm
 		e.overlayLiveStreaming(&page.Snapshot)
 	}
 	return page, nil
-}
-
-func (e *Engine) TranscriptRevision() int64 {
-	if e == nil || e.store == nil {
-		return 0
-	}
-	return e.store.Meta().LastSequence
-}
-
-func (e *Engine) CommittedTranscriptEntryCount() int {
-	if e == nil {
-		return 0
-	}
-	return e.transcriptRuntimeState().CommittedEntryCount()
 }
 
 func (e *Engine) ActiveRun() *RunSnapshot {
@@ -758,7 +701,6 @@ type historyReplacementPayload struct {
 	// event so a workflow run never recompacts a continuation it already committed.
 	WorkflowRunID                     string             `json:"workflow_run_id,omitempty"`
 	CompactionNumber                  int                `json:"compaction_number,omitempty"`
-	CommittedEntryStart               *int               `json:"committed_entry_start,omitempty"`
 	PendingHandoffFutureMessage       string             `json:"pending_handoff_future_message,omitempty"`
 	LastCommittedAssistantFinalAnswer string             `json:"last_committed_assistant_final_answer,omitempty"`
 	Items                             []llm.ResponseItem `json:"items"`
@@ -857,6 +799,13 @@ func (e *Engine) transcriptRuntimeState() *transcriptRuntimeState {
 	return e.transcriptState
 }
 
+func (e *Engine) TranscriptLiveToolSnapshot() []TranscriptLiveToolStart {
+	if e == nil {
+		return nil
+	}
+	return e.transcriptRuntimeState().LiveToolSnapshot()
+}
+
 func (e *Engine) lockedContractState() *lockedContractState {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -876,30 +825,9 @@ func (e *Engine) modelRequests() *modelRequestRuntimeState {
 }
 
 func (e *Engine) emitRaw(evt Event) {
-	evt.TranscriptRevision = e.TranscriptRevision()
-	carriesCommittedRange := eventShouldCarryCommittedEntryCount(evt)
-	if !carriesCommittedRange {
-		evt.CommittedEntryCount = 0
-		evt.CommittedEntryStart = 0
-		evt.CommittedEntryStartSet = false
-	}
-	if evt.CommittedEntryCount == 0 && carriesCommittedRange {
-		evt.CommittedEntryCount = e.CommittedTranscriptEntryCount()
-	}
 	if evt.ContextUsage == nil && eventShouldCarryContextUsage(evt) {
 		usage := e.ContextUsage()
 		evt.ContextUsage = &usage
-	}
-	if !evt.CommittedEntryStartSet && eventMayInferCommittedEntryStart(evt.Kind) {
-		entries := TranscriptEntriesFromEvent(evt)
-		if len(entries) > 0 {
-			start := evt.CommittedEntryCount - len(entries)
-			if start < 0 {
-				start = 0
-			}
-			evt.CommittedEntryStart = start
-			evt.CommittedEntryStartSet = true
-		}
 	}
 	if e.cfg.OnEvent != nil {
 		e.cfg.OnEvent(evt)
@@ -915,54 +843,6 @@ func eventShouldCarryContextUsage(evt Event) bool {
 	default:
 		return false
 	}
-}
-
-func eventShouldCarryCommittedEntryCount(evt Event) bool {
-	switch evt.Kind {
-	case EventBackgroundUpdated:
-		return false
-	default:
-		return true
-	}
-}
-
-func eventMayInferCommittedEntryStart(kind EventKind) bool {
-	switch kind {
-	case EventCompactionCompleted, EventCompactionFailed, EventBackgroundUpdated:
-		return false
-	default:
-		return true
-	}
-}
-
-func (e *Engine) rememberPendingToolCallStarts(starts map[string]int) {
-	if e == nil {
-		return
-	}
-	e.pendingToolCallStartStore().Remember(starts)
-}
-
-func (e *Engine) pendingToolCallStart(callID string) (int, bool) {
-	if e == nil {
-		return 0, false
-	}
-	return e.pendingToolCallStartStore().Lookup(callID)
-}
-
-func (e *Engine) forgetPendingToolCallStart(callID string) {
-	if e == nil {
-		return
-	}
-	e.pendingToolCallStartStore().Forget(callID)
-}
-
-func (e *Engine) pendingToolCallStartStore() *pendingToolCallStartStore {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.toolCallStarts == nil {
-		e.toolCallStarts = newPendingToolCallStartStore()
-	}
-	return e.toolCallStarts
 }
 
 // LastCompactionWorkflowRunID reports the workflow run that committed the most

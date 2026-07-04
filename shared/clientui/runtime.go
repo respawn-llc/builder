@@ -99,11 +99,6 @@ type UserTurnSubmission struct {
 	Queued  QueuedUserMessage
 }
 
-type TranscriptMetadata struct {
-	Revision            int64
-	CommittedEntryCount int
-}
-
 type SessionExecutionTarget struct {
 	WorkspaceID           string
 	WorkspaceName         string
@@ -145,17 +140,11 @@ type RuntimeSessionView struct {
 	SessionName           string
 	ConversationFreshness ConversationFreshness
 	ExecutionTarget       SessionExecutionTarget
-	Transcript            TranscriptMetadata
-	Chat                  ChatSnapshot
 }
 
 type RuntimeClient interface {
 	MainView() RuntimeMainView
 	RefreshMainView() (RuntimeMainView, error)
-	Transcript() TranscriptPage
-	RefreshTranscript() (TranscriptPage, error)
-	RefreshTranscriptPage(req TranscriptPageRequest) (TranscriptPage, error)
-	LoadTranscriptPage(req TranscriptPageRequest) (TranscriptPage, error)
 	Status() RuntimeStatus
 	SessionView() RuntimeSessionView
 	SetSessionName(name string) error

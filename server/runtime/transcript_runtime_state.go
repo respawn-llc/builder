@@ -9,13 +9,14 @@ import (
 )
 
 type transcriptRuntimeState struct {
-	mu   sync.Mutex
-	cwd  string
-	chat *chatStore
+	mu        sync.Mutex
+	cwd       string
+	chat      *chatStore
+	liveTools *transcriptLiveToolLedger
 }
 
 func newTranscriptRuntimeState(cwd string) *transcriptRuntimeState {
-	return &transcriptRuntimeState{cwd: strings.TrimSpace(cwd), chat: newChatStore()}
+	return &transcriptRuntimeState{cwd: strings.TrimSpace(cwd), chat: newChatStore(), liveTools: newTranscriptLiveToolLedger()}
 }
 
 func (s *transcriptRuntimeState) SetWorkingDir(workdir string) bool {
@@ -53,6 +54,51 @@ func (s *transcriptRuntimeState) chatProjection() *chatStore {
 	return s.chat
 }
 
+func (s *transcriptRuntimeState) liveToolLedger() *transcriptLiveToolLedger {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.liveTools == nil {
+		s.liveTools = newTranscriptLiveToolLedger()
+	}
+	return s.liveTools
+}
+
+func (s *transcriptRuntimeState) RecordLiveToolStart(call llm.ToolCall) error {
+	if ledger := s.liveToolLedger(); ledger != nil {
+		return ledger.RecordStart(transcriptLiveToolStartFromCall(call))
+	}
+	return nil
+}
+
+func (s *transcriptRuntimeState) CompleteLiveTool(callID string) {
+	if ledger := s.liveToolLedger(); ledger != nil {
+		ledger.Complete(callID)
+	}
+}
+
+func (s *transcriptRuntimeState) SeedLiveTools(starts []TranscriptLiveToolStart) {
+	if ledger := s.liveToolLedger(); ledger != nil {
+		ledger.Seed(starts)
+	}
+}
+
+func (s *transcriptRuntimeState) LiveToolSnapshot() []TranscriptLiveToolStart {
+	if ledger := s.liveToolLedger(); ledger != nil {
+		return ledger.Snapshot()
+	}
+	return nil
+}
+
+func (s *transcriptRuntimeState) AbortLiveTools() []TranscriptLiveToolStart {
+	if ledger := s.liveToolLedger(); ledger != nil {
+		return ledger.AbortAll()
+	}
+	return nil
+}
+
 func (s *transcriptRuntimeState) SnapshotMessages() []llm.Message {
 	if chat := s.chatProjection(); chat != nil {
 		return chat.snapshotMessages()
@@ -65,13 +111,6 @@ func (s *transcriptRuntimeState) SnapshotItems() []llm.ResponseItem {
 		return chat.snapshotItems()
 	}
 	return nil
-}
-
-func (s *transcriptRuntimeState) CommittedEntryCount() int {
-	if chat := s.chatProjection(); chat != nil {
-		return chat.committedEntryCount()
-	}
-	return 0
 }
 
 func (s *transcriptRuntimeState) StreamingSnapshot() (string, string, *AssistantStreamMetadata) {

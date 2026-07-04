@@ -10,7 +10,6 @@ type Scope string
 const (
 	ScopeTUIProjection        Scope = "tui_projection"
 	ScopeReadModelPublication Scope = "read_model_publication"
-	ScopeNativeTranscript     Scope = "native_transcript"
 )
 
 type Field string
@@ -41,7 +40,6 @@ const (
 	FieldEventStart               Field = "event_start"
 	FieldEventCount               Field = "event_count"
 	FieldCommittedCount           Field = "committed_count"
-	FieldTranscriptRevision       Field = "transcript_revision"
 	FieldTranscriptState          Field = "transcript_state"
 	FieldLiveState                Field = "live_state"
 	FieldProposedStepID           Field = "proposed_step_id"
@@ -104,25 +102,6 @@ func ReadModelPublicationDiagnostic(input ReadModelPublicationDiagnosticInput) D
 			FieldResolvedActivity:         input.ResolvedProposedActivity,
 			FieldProviderError:            input.ProviderError,
 		}),
-	}
-}
-
-type NativeTranscriptDiagnosticInput struct {
-	Operation string
-	Error     string
-	Fields    map[Field]string
-}
-
-func NativeTranscriptDiagnostic(input NativeTranscriptDiagnosticInput) Diagnostic {
-	values := make(map[Field]string, len(input.Fields)+2)
-	for key, value := range input.Fields {
-		values[key] = value
-	}
-	values[FieldOperation] = input.Operation
-	values[FieldInvariantError] = input.Error
-	return Diagnostic{
-		Scope:  ScopeNativeTranscript,
-		Fields: fields(values),
 	}
 }
 

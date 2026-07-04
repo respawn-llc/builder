@@ -19,8 +19,7 @@ type SessionSnapshotSource interface {
 
 type SessionSnapshot interface {
 	MainView(ctx context.Context) (clientui.RuntimeMainView, error)
-	TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error)
-	CommittedTranscriptSuffix(ctx context.Context, req clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error)
+	TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error)
 }
 
 type runtimeReadModelSnapshotProvider interface {
@@ -121,12 +120,8 @@ func (s enrichedSessionSnapshot) MainView(ctx context.Context) (clientui.Runtime
 	return view, nil
 }
 
-func (s enrichedSessionSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	return s.base.TranscriptPage(ctx, req)
-}
-
-func (s enrichedSessionSnapshot) CommittedTranscriptSuffix(ctx context.Context, req clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error) {
-	return s.base.CommittedTranscriptSuffix(ctx, req)
+func (s enrichedSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
+	return s.base.TranscriptTailEntries(ctx)
 }
 
 type resolvedSessionSnapshotSource struct {
@@ -220,6 +215,14 @@ func (s liveRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.Runt
 	return view, nil
 }
 
+func (s liveRuntimeSessionSnapshot) TranscriptTailEntries(_ context.Context) ([]runtime.ChatEntry, error) {
+	page, err := s.engine.TranscriptSegmentPage(0)
+	if err != nil {
+		return nil, err
+	}
+	return append([]runtime.ChatEntry(nil), page.Snapshot.Entries...), nil
+}
+
 type activityOverrideSnapshot struct {
 	base     SessionSnapshot
 	snapshot runtimeactivity.ResponseSnapshot
@@ -236,20 +239,8 @@ func (s activityOverrideSnapshot) MainView(ctx context.Context) (clientui.Runtim
 	return view, nil
 }
 
-func (s activityOverrideSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	return s.base.TranscriptPage(ctx, req)
-}
-
-func (s activityOverrideSnapshot) CommittedTranscriptSuffix(ctx context.Context, req clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error) {
-	return s.base.CommittedTranscriptSuffix(ctx, req)
-}
-
-func (s liveRuntimeSessionSnapshot) TranscriptPage(_ context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	return runtimeview.TranscriptPageFromRuntime(s.engine, req)
-}
-
-func (s liveRuntimeSessionSnapshot) CommittedTranscriptSuffix(_ context.Context, req clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error) {
-	return runtimeview.CommittedTranscriptSuffixFromRuntime(s.engine, req)
+func (s activityOverrideSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
+	return s.base.TranscriptTailEntries(ctx)
 }
 
 type dormantSessionSnapshotSource struct {
@@ -307,43 +298,13 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 	return entry.mainView(meta, freshness), nil
 }
 
-func (s dormantSessionSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
+func (s dormantSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
 	if s.store == nil {
-		return clientui.TranscriptPage{}, errors.New("session store is required")
+		return nil, errors.New("session store is required")
 	}
-	meta := s.store.Meta()
-	freshness := runtimeview.ConversationFreshnessFromSession(s.store.ConversationFreshness())
-	cacheWarningMode := s.source.cacheWarningModeOrDefault()
-	if req.NewerCursor > 0 {
-		segment, err := runtime.TranscriptSegmentPageForwardFromStore(s.store, req.NewerCursor, cacheWarningMode)
-		if err != nil {
-			return clientui.TranscriptPage{}, err
-		}
-		return runtimeview.TranscriptPageFromSegment(meta.SessionID, meta.Name, freshness, meta.LastSequence, segment), nil
-	}
-	if req.Cursor <= 0 {
-		entry, err := s.source.dormant.get(ctx, s.store)
-		if err != nil {
-			return clientui.TranscriptPage{}, err
-		}
-		return entry.newestSegmentPage(meta, freshness), nil
-	}
-	segment, err := runtime.TranscriptSegmentPageFromStore(s.store, req.Cursor, cacheWarningMode)
-	if err != nil {
-		return clientui.TranscriptPage{}, err
-	}
-	return runtimeview.TranscriptPageFromSegment(meta.SessionID, meta.Name, freshness, meta.LastSequence, segment), nil
-}
-
-func (s dormantSessionSnapshot) CommittedTranscriptSuffix(ctx context.Context, req clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error) {
-	if s.store == nil {
-		return clientui.CommittedTranscriptSuffix{}, errors.New("session store is required")
-	}
-	meta := s.store.Meta()
-	freshness := runtimeview.ConversationFreshnessFromSession(s.store.ConversationFreshness())
 	entry, err := s.source.dormant.get(ctx, s.store)
 	if err != nil {
-		return clientui.CommittedTranscriptSuffix{}, err
+		return nil, err
 	}
-	return runtimeview.CommittedTranscriptSuffixFromSegment(meta.SessionID, meta.Name, freshness, meta.LastSequence, entry.newestSegment), nil
+	return entry.newestSegmentTailEntries(), nil
 }

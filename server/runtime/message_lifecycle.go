@@ -81,7 +81,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				continue
 			}
 			e.resetLocalDiagnostics()
-			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistoryAtCommittedEntryStart(payload.Items, payload.CommittedEntryStart)
+			newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistory(payload.Items)
 			e.transcriptRuntimeState().SeedLastCommittedAssistantFinalAnswerIfEmpty(payload.LastCommittedAssistantFinalAnswer)
 			if payload.CompactionNumber > 0 {
 				e.compactionRuntimeState().SetCount(payload.CompactionNumber)

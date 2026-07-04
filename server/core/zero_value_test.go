@@ -52,6 +52,7 @@ func TestCoreZeroValueMethodsDoNotPanic(t *testing.T) {
 		{name: "ProcessControlClient", run: func(c *Core) { _ = c.ProcessControlClient() }},
 		{name: "ProcessOutputClient", run: func(c *Core) { _ = c.ProcessOutputClient() }},
 		{name: "SessionActivityClient", run: func(c *Core) { _ = c.SessionActivityClient() }},
+		{name: "SessionTranscriptClient", run: func(c *Core) { _ = c.SessionTranscriptClient() }},
 		{name: "SessionLaunchClient", run: func(c *Core) { _ = c.SessionLaunchClient() }},
 		{name: "SessionRuntimeClient", run: func(c *Core) { _ = c.SessionRuntimeClient() }},
 		{name: "SessionLifecycleClient", run: func(c *Core) { _ = c.SessionLifecycleClient() }},

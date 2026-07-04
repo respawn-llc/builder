@@ -4,8 +4,6 @@ import (
 	"strings"
 	"time"
 
-	"core/cli/tui"
-
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -36,11 +34,10 @@ func (c uiInputController) stopRollbackSelectionFlowCmd() tea.Cmd {
 
 func (c uiInputController) beginRollbackEditingFlowCmd() tea.Cmd {
 	m := c.model
-	targetEntry, ok := m.beginRollbackEditing()
+	_, ok := m.beginRollbackEditing()
 	if !ok {
 		return nil
 	}
-	m.forwardToView(tui.FocusTranscriptEntryMsg{EntryIndex: targetEntry, Bottom: true})
 	return nil
 }
 
@@ -60,7 +57,7 @@ func (c uiInputController) cancelRollbackEditingToSelectionFlowCmd() tea.Cmd {
 
 func (c uiInputController) startRollbackFork(text string) (tea.Model, tea.Cmd) {
 	m := c.model
-	m.nextForkRollbackTargetID = m.rollback.selectedTargetID
+	m.nextForkRollbackTargetID = ""
 	m.nextSessionInitialPrompt = text
 	m.clearInput()
 	m.exitAction = UIActionForkRollback

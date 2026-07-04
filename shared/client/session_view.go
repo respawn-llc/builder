@@ -9,11 +9,6 @@ import (
 
 type SessionViewClient interface {
 	GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
-	GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error)
-}
-
-type SessionCommittedTranscriptSuffixClient interface {
-	GetSessionCommittedTranscriptSuffix(ctx context.Context, req serverapi.SessionCommittedTranscriptSuffixRequest) (serverapi.SessionCommittedTranscriptSuffixResponse, error)
 }
 
 type loopbackSessionViewClient struct {
@@ -26,12 +21,4 @@ func NewLoopbackSessionViewClient(service servicecontract.SessionViewService) Se
 
 func (c *loopbackSessionViewClient) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	return callLoopbackClient(c, "session view service is required", ctx, req, servicecontract.SessionViewService.GetSessionMainView)
-}
-
-func (c *loopbackSessionViewClient) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
-	return callLoopbackClient(c, "session view service is required", ctx, req, servicecontract.SessionViewService.GetSessionTranscriptPage)
-}
-
-func (c *loopbackSessionViewClient) GetSessionCommittedTranscriptSuffix(ctx context.Context, req serverapi.SessionCommittedTranscriptSuffixRequest) (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
-	return callLoopbackClient(c, "session view service is required", ctx, req, servicecontract.SessionViewService.GetSessionCommittedTranscriptSuffix)
 }

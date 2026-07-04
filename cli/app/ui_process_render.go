@@ -71,7 +71,7 @@ func (l uiViewLayout) renderProcessList(width, height int, style uiStyles) []str
 	lines = append(lines, headerLines...)
 	lines = append(lines, content...)
 	lines = append(lines, footerLines...)
-	return l.renderChatContentLines(lines, nil, width, style)
+	return l.renderChatContentLines(lines, width, style)
 }
 
 func renderEmptyProcessListMessage(state uiProcessListState, style uiStyles) string {

@@ -73,7 +73,7 @@ func (l uiViewLayout) renderWorktreeList(width, height int, style uiStyles) []st
 	}
 	footer := []string{style.meta.Render(truncateQueuedMessageLine("Esc/q close | Enter switch | c create | d delete | x delete+branch | PgUp/PgDn/Home/End move | r refresh", width))}
 	lines := append(append(header, content...), footer...)
-	return l.renderChatContentLines(lines, nil, width, style)
+	return l.renderChatContentLines(lines, width, style)
 }
 
 func worktreeOverlaySummary(target clientui.SessionExecutionTarget) string {
@@ -447,5 +447,5 @@ func (l uiViewLayout) renderWorktreeDialogLines(lines []string, width int, heigh
 	} else if len(lines) > height {
 		lines = lines[:height]
 	}
-	return l.renderChatContentLines(lines, nil, width, style)
+	return l.renderChatContentLines(lines, width, style)
 }

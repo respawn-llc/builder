@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
-	"core/shared/transcriptdiag"
 
 	"github.com/google/uuid"
 )
@@ -19,6 +17,8 @@ import (
 const uiRuntimeControlTimeout = 3 * time.Second
 const uiRuntimeHydrationReadTimeout = 10 * time.Second
 const runtimeReconnectWarningText = "Lost connection to the session runtime; reconnected."
+
+var errRuntimeTranscriptRefreshUnsupported = errors.New("runtime transcript refresh is not available in the tui-redesign emergency path")
 
 var uiRuntimeReadTimeout = 300 * time.Millisecond
 
@@ -32,11 +32,10 @@ type sessionRuntimeClient struct {
 	connectionStateObserver  func(error)
 	reconnectWarningObserver func(string, clientui.EntryVisibility)
 
-	mu                   sync.RWMutex
-	mainView             clientui.RuntimeMainView
-	hasMainView          bool
-	readModelStale       bool
-	suffixRPCUnsupported bool
+	mu             sync.RWMutex
+	mainView       clientui.RuntimeMainView
+	hasMainView    bool
+	readModelStale bool
 }
 
 func newUIRuntimeClientWithReads(sessionID string, reads client.SessionViewClient, controls client.RuntimeControlClient) clientui.RuntimeClient {
@@ -218,24 +217,13 @@ func (c *sessionRuntimeClient) RefreshMainViewWithPendingRefs(refs []clientui.Ru
 	return c.refreshMainViewSync(uiRuntimeHydrationReadTimeout, refs)
 }
 
-func (c *sessionRuntimeClient) Transcript() clientui.TranscriptPage {
-	return clientui.TranscriptPage{SessionID: c.sessionID}
-}
-
-func (c *sessionRuntimeClient) RefreshTranscript() (clientui.TranscriptPage, error) {
-	return c.refreshTranscriptPageSync(clientui.TranscriptPageRequest{}, uiRuntimeHydrationReadTimeout)
-}
-
-func (c *sessionRuntimeClient) RefreshTranscriptPage(req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	return c.refreshTranscriptPageSync(req, uiRuntimeHydrationReadTimeout)
-}
-
-func (c *sessionRuntimeClient) LoadTranscriptPage(req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	return c.refreshTranscriptPageSync(req, uiRuntimeHydrationReadTimeout)
-}
-
-func (c *sessionRuntimeClient) RefreshCommittedTranscriptSuffix(req clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error) {
-	return c.refreshCommittedTranscriptSuffixSync(req, uiRuntimeHydrationReadTimeout)
+func (c *sessionRuntimeClient) transcriptDiagnosticsEnabled() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.transcriptDiagnostics
 }
 
 func (c *sessionRuntimeClient) Status() clientui.RuntimeStatus {
@@ -316,121 +304,6 @@ func (c *sessionRuntimeClient) refreshMainViewSync(timeout time.Duration, refs [
 	return c.storeMainView(resp.MainView), nil
 }
 
-func (c *sessionRuntimeClient) refreshTranscriptPageSync(req clientui.TranscriptPageRequest, timeout time.Duration) (clientui.TranscriptPage, error) {
-	ctx, cancel := c.readContext(timeout)
-	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionPreservingContext, false, func() (serverapi.SessionTranscriptPageResponse, error) {
-		return c.reads.GetSessionTranscriptPage(ctx, serverapi.SessionTranscriptPageRequest{
-			SessionID:   c.sessionID,
-			Cursor:      req.Cursor,
-			NewerCursor: req.NewerCursor,
-		})
-	})
-	c.notifyConnectionState(err)
-	if c.transcriptDiagnosticsEnabled() {
-		fields := map[string]string{"session_id": c.sessionID, "path": "hydrate"}
-		for key, value := range transcriptdiag.RequestFields(req) {
-			fields[key] = value
-		}
-		if err != nil {
-			fields["err"] = err.Error()
-			c.logTranscriptDiag(transcriptdiag.FormatLine("transcript.diag.client.hydrate_fetch", fields))
-		} else {
-			c.logTranscriptDiag(transcriptdiag.FormatLine("transcript.diag.client.hydrate_fetch", transcriptdiag.AddPageFields(fields, resp.Transcript)))
-		}
-	}
-	if err != nil {
-		return clientui.TranscriptPage{SessionID: c.sessionID}, err
-	}
-	page := resp.Transcript
-	if page.SessionID == "" {
-		page.SessionID = c.sessionID
-	}
-	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		view.Status.ConversationFreshness = page.ConversationFreshness
-		view.Session.ConversationFreshness = page.ConversationFreshness
-		view.Session.Transcript = clientui.TranscriptMetadata{
-			Revision:            page.Revision,
-			CommittedEntryCount: view.Session.Transcript.CommittedEntryCount,
-		}
-		if isRecentTailTranscriptRequest(req) {
-			view.Session.Chat = clientui.ChatSnapshot{
-				Entries:           cloneTranscriptEntries(page.Entries),
-				Streaming:         page.Streaming,
-				StreamingMetadata: cloneClientAssistantStreamMetadata(page.StreamingMetadata),
-				StreamingError:    page.StreamingError,
-			}
-		}
-	})
-	return page, nil
-}
-
-func (c *sessionRuntimeClient) refreshCommittedTranscriptSuffixSync(_ clientui.CommittedTranscriptSuffixRequest, timeout time.Duration) (clientui.CommittedTranscriptSuffix, error) {
-	fallbackToPage := func() (clientui.CommittedTranscriptSuffix, error) {
-		page, err := c.refreshTranscriptPageSync(clientui.TranscriptPageRequest{}, timeout)
-		if err != nil {
-			return clientui.CommittedTranscriptSuffix{SessionID: c.sessionID}, err
-		}
-		return c.committedTranscriptSuffixFromPage(page), nil
-	}
-	suffixClient, ok := c.reads.(client.SessionCommittedTranscriptSuffixClient)
-	if !ok {
-		return fallbackToPage()
-	}
-	if c.committedSuffixRPCUnsupported() {
-		return fallbackToPage()
-	}
-	ctx, cancel := c.readContext(timeout)
-	defer cancel()
-	resp, err := retryRuntimeUnavailableCall(ctx, c.recoverRuntimeConnectionPreservingContext, false, func() (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
-		return suffixClient.GetSessionCommittedTranscriptSuffix(ctx, serverapi.SessionCommittedTranscriptSuffixRequest{
-			SessionID: c.sessionID,
-		})
-	})
-	c.notifyConnectionState(err)
-	if err != nil {
-		if errors.Is(err, serverapi.ErrMethodNotFound) {
-			c.setCommittedSuffixRPCUnsupported()
-			return fallbackToPage()
-		}
-		return clientui.CommittedTranscriptSuffix{SessionID: c.sessionID}, err
-	}
-	suffix := resp.Suffix
-	if suffix.SessionID == "" {
-		suffix.SessionID = c.sessionID
-	}
-	c.patchMainView(func(view *clientui.RuntimeMainView) {
-		view.Status.ConversationFreshness = suffix.ConversationFreshness
-		view.Session.ConversationFreshness = suffix.ConversationFreshness
-		view.Session.Transcript = clientui.TranscriptMetadata{
-			Revision:            suffix.Revision,
-			CommittedEntryCount: suffix.CommittedEntryCount,
-		}
-	})
-	return suffix, nil
-}
-
-func (c *sessionRuntimeClient) committedSuffixRPCUnsupported() bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.suffixRPCUnsupported
-}
-
-func (c *sessionRuntimeClient) setCommittedSuffixRPCUnsupported() {
-	c.mu.Lock()
-	c.suffixRPCUnsupported = true
-	c.mu.Unlock()
-}
-
-func (c *sessionRuntimeClient) transcriptDiagnosticsEnabled() bool {
-	if c == nil {
-		return false
-	}
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.transcriptDiagnostics || transcriptdiag.Enabled(false, os.Getenv)
-}
-
 func (c *sessionRuntimeClient) notifyConnectionState(err error) {
 	if c == nil {
 		return
@@ -468,82 +341,4 @@ func (c *sessionRuntimeClient) logTranscriptDiag(line string) {
 		return
 	}
 	logf(strings.TrimSpace(line))
-}
-
-func isRecentTailTranscriptRequest(req clientui.TranscriptPageRequest) bool {
-	return req.Cursor <= 0 && req.NewerCursor <= 0
-}
-
-func transcriptPageFromSessionView(view clientui.RuntimeSessionView) clientui.TranscriptPage {
-	total := view.Transcript.CommittedEntryCount
-	if total == 0 {
-		total = len(view.Chat.Entries)
-	}
-	hasMore := total > len(view.Chat.Entries)
-	return clientui.TranscriptPage{
-		SessionID:             view.SessionID,
-		SessionName:           view.SessionName,
-		ConversationFreshness: view.ConversationFreshness,
-		Revision:              view.Transcript.Revision,
-		HasMoreAbove:          hasMore,
-		Entries:               cloneTranscriptEntries(view.Chat.Entries),
-	}
-}
-
-func transcriptPageFromCommittedTranscriptSuffix(suffix clientui.CommittedTranscriptSuffix) clientui.TranscriptPage {
-	return clientui.TranscriptPage{
-		SessionID:             suffix.SessionID,
-		SessionName:           suffix.SessionName,
-		ConversationFreshness: suffix.ConversationFreshness,
-		Revision:              suffix.Revision,
-		HasMoreAbove:          suffix.HasMoreCommittedEntries,
-		HasMoreBelow:          suffix.NextEntryCount < suffix.CommittedEntryCount,
-		Entries:               cloneTranscriptEntries(suffix.Entries),
-	}
-}
-
-func (c *sessionRuntimeClient) committedTranscriptSuffixFromPage(page clientui.TranscriptPage) clientui.CommittedTranscriptSuffix {
-	view := c.MainView()
-	committedCount := view.Session.Transcript.CommittedEntryCount
-	if committedCount == 0 {
-		committedCount = len(page.Entries)
-	}
-	start := committedCount - len(page.Entries)
-	if start < 0 {
-		start = 0
-	}
-	return clientui.CommittedTranscriptSuffix{
-		SessionID:               page.SessionID,
-		SessionName:             page.SessionName,
-		ConversationFreshness:   page.ConversationFreshness,
-		Revision:                page.Revision,
-		CommittedEntryCount:     committedCount,
-		StartEntryCount:         start,
-		NextEntryCount:          start + len(page.Entries),
-		HasMoreCommittedEntries: page.HasMoreAbove,
-		Entries:                 cloneTranscriptEntries(page.Entries),
-	}
-}
-
-func cloneTranscriptEntries(entries []clientui.ChatEntry) []clientui.ChatEntry {
-	if len(entries) == 0 {
-		return nil
-	}
-	cloned := make([]clientui.ChatEntry, 0, len(entries))
-	for _, entry := range entries {
-		copyEntry := entry
-		if entry.ToolCall != nil {
-			copyMeta := *entry.ToolCall
-			if len(entry.ToolCall.Suggestions) > 0 {
-				copyMeta.Suggestions = append([]string(nil), entry.ToolCall.Suggestions...)
-			}
-			if entry.ToolCall.RenderHint != nil {
-				renderHint := *entry.ToolCall.RenderHint
-				copyMeta.RenderHint = &renderHint
-			}
-			copyEntry.ToolCall = &copyMeta
-		}
-		cloned = append(cloned, copyEntry)
-	}
-	return cloned
 }

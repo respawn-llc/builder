@@ -86,6 +86,7 @@ type RuntimeBundle struct {
 	runtimeLiveControls client.RuntimeLiveControlClient
 	sessionRuntime      client.SessionRuntimeClient
 	sessionActivity     client.SessionActivityClient
+	sessionTranscript   client.SessionTranscriptClient
 
 	sessionRuntimeService *sessionruntime.Service
 }
@@ -299,6 +300,7 @@ func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegi
 		runtimeLiveControls: client.NewLoopbackRuntimeLiveControlClient(runtimeControlService),
 		sessionRuntime:      client.NewLoopbackSessionRuntimeClient(sessionRuntimeService),
 		sessionActivity:     client.NewLoopbackSessionActivityClient(sessionActivityService),
+		sessionTranscript:   client.NewLoopbackSessionTranscriptClient(runtimeRegistry),
 
 		sessionRuntimeService: sessionRuntimeService,
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"core/cli/app/internal/projectbinding"
 	"core/server/launch"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/registry"
 	"core/server/session"
@@ -13,7 +12,6 @@ import (
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/rollbacktarget"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"errors"
@@ -949,89 +947,6 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	}
 	if target.EffectiveWorkdir != filepath.Join(canonicalWorktreeRoot, "pkg") {
 		t.Fatalf("child effective workdir = %q, want %q", target.EffectiveWorkdir, filepath.Join(canonicalWorktreeRoot, "pkg"))
-	}
-}
-
-func TestResolveSessionActionForkRollbackTeleportsToForkWithPrompt(t *testing.T) {
-	root := t.TempDir()
-	store := createAppRuntimeSessionAt(t, root, "workspace-x", "/tmp/work")
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-
-	resolved, err := resolveSessionAction(
-		context.Background(),
-		&testEmbeddedServer{cfg: config.App{PersistenceRoot: root}, containerDir: root},
-		nil,
-		store.Meta().SessionID,
-		UITransition{Action: UIActionForkRollback, InitialPrompt: "edited user message", ForkRollbackTargetID: rollbacktarget.EncodeUserMessageSeq(userMessageSeqAt(t, store, 1))},
-	)
-	if err != nil {
-		t.Fatalf("resolve session action: %v", err)
-	}
-	if !resolved.ShouldContinue {
-		t.Fatal("expected lifecycle to continue for fork rollback action")
-	}
-	if resolved.ForceNewSession {
-		t.Fatal("did not expect force-new for fork rollback action")
-	}
-	if resolved.ParentSessionID != "" {
-		t.Fatalf("expected no deferred parent for pre-created fork session, got %q", resolved.ParentSessionID)
-	}
-	if resolved.NextSessionID == "" {
-		t.Fatal("expected target fork session id")
-	}
-	if resolved.NextSessionID == store.Meta().SessionID {
-		t.Fatalf("expected fork session id to differ from parent, got %q", resolved.NextSessionID)
-	}
-	if resolved.InitialPrompt != "edited user message" || resolved.InitialInput != "" {
-		t.Fatalf("expected initial prompt passthrough, got prompt=%q input=%q", resolved.InitialPrompt, resolved.InitialInput)
-	}
-}
-
-func TestForkRollbackLifecycleDoesNotPersistEditedPromptAsSourceDraft(t *testing.T) {
-	root := t.TempDir()
-	store := createAppRuntimeSessionAt(t, root, "workspace-x", "/tmp/work")
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleUser, Content: "u1"}); err != nil {
-		t.Fatalf("append user message: %v", err)
-	}
-	if _, _, err := store.AppendEvent("s1", "message", llm.Message{Role: llm.RoleAssistant, Content: "a1"}); err != nil {
-		t.Fatalf("append assistant message: %v", err)
-	}
-
-	m := newProjectedStaticUIModel()
-	testSetRollbackEditing(m, 0, 0)
-	m.input = "edited user message"
-	server := &testEmbeddedServer{cfg: config.App{PersistenceRoot: root}, containerDir: root}
-
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	updated := next.(*uiModel)
-	if cmd == nil {
-		t.Fatal("expected quit cmd for rollback fork")
-	}
-	if err := persistSessionDraftToServer(context.Background(), server, store.Meta().SessionID, updated); err != nil {
-		t.Fatalf("persist source draft: %v", err)
-	}
-	reopenedSource, err := session.Open(store.Dir())
-	if err != nil {
-		t.Fatalf("reopen source store: %v", err)
-	}
-	if reopenedSource.Meta().InputDraft != "" {
-		t.Fatalf("expected no persisted source draft after fork handoff, got %q", reopenedSource.Meta().InputDraft)
-	}
-
-	resolved, err := resolveSessionAction(context.Background(), server, nil, reopenedSource.Meta().SessionID, updated.Transition())
-	if err != nil {
-		t.Fatalf("resolve session action: %v", err)
-	}
-	if resolved.InitialPrompt != "edited user message" {
-		t.Fatalf("expected fork prompt passthrough, got %q", resolved.InitialPrompt)
-	}
-	if resolved.InitialInput != "" {
-		t.Fatalf("expected no fork input draft payload, got %q", resolved.InitialInput)
 	}
 }
 

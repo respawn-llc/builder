@@ -41,7 +41,13 @@ func (s *Service) SyncExecutionTarget(ctx context.Context, sessionID string, tar
 		if guard == nil {
 			return s.persistWorktreeReminderState(ctx, trimmedSessionID, normalizedReminder)
 		}
-		return s.syncActiveExecutionTarget(ctx, trimmedSessionID, trimmedWorkdir, guard, normalizedReminder)
+		if err := s.syncActiveExecutionTarget(ctx, trimmedSessionID, trimmedWorkdir, guard, normalizedReminder); err != nil {
+			return err
+		}
+		if s.runtimes != nil {
+			s.runtimes.PublishSessionIdentity(trimmedSessionID, &target)
+		}
+		return nil
 	}
 }
 

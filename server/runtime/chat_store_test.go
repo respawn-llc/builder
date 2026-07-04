@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"fmt"
+
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
@@ -49,7 +51,7 @@ func TestChatStoreSnapshotProjectsConversation(t *testing.T) {
 	})
 	s.appendMessage(llm.Message{Role: llm.RoleAssistant, Content: "done"})
 
-	s.appendStreamingDelta("step-1", 12, 6, "stream")
+	s.appendStreamingDelta("step-1", "stream")
 	s.setStreamingError("failed")
 	s.appendLocalEntryRecord(ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "system", Text: "note"})
 
@@ -889,5 +891,24 @@ func TestChatStoreSnapshotShowsManualCompactionCarryoverAsVerboseMessage(t *test
 	}
 	if got := snap.Entries[0]; got.Role != string(transcript.EntryRoleManualCompactionCarryover) || got.Text != "# Last user message before manual compaction\n\nplease keep tests green" || got.Visibility != transcript.EntryVisibilityVerbose {
 		t.Fatalf("unexpected carryover transcript entry: %+v", got)
+	}
+}
+
+func TestTranscriptDeliverySnapshotIncludesCompleteActiveSegmentBeyondLegacyTailLimit(t *testing.T) {
+	s := newChatStore()
+	const count = 650
+	for i := 0; i < count; i++ {
+		s.appendMessage(llm.Message{Role: llm.RoleUser, Content: fmt.Sprintf("message-%03d", i)})
+	}
+
+	snapshot := s.deliverySnapshot()
+	if len(snapshot.Rows) != count {
+		t.Fatalf("delivery snapshot rows = %d, want complete active segment %d", len(snapshot.Rows), count)
+	}
+	if snapshot.Rows[0].User == nil || snapshot.Rows[0].User.Text != "message-000" {
+		t.Fatalf("first delivery row = %+v, want oldest active row", snapshot.Rows[0])
+	}
+	if last := snapshot.Rows[len(snapshot.Rows)-1]; last.User == nil || last.User.Text != "message-649" {
+		t.Fatalf("last delivery row = %+v, want newest active row", last)
 	}
 }

@@ -34,17 +34,18 @@ type uiRuntimeFeatureState struct {
 	processClientExplicit bool
 	worktreeClient        client.WorktreeClient
 
-	runtimeEvents              <-chan clientui.Event
-	pendingRuntimeEvents       []clientui.Event
-	askEvents                  <-chan askEvent
-	pathReferenceEvents        <-chan uiPathReferenceSearchEvent
-	runtimeConnectionEvents    <-chan runtimeConnectionStateChangedMsg
-	runtimeReconnectWarning    <-chan runtimeReconnectWarningMsg
-	runtimeContextUsage        clientui.RuntimeContextUsage
-	runtimeContextUsageSession string
-	runtimeReadModelVersion    clientui.ReadModelVersion
-	runtimeActivityProjection  clientui.RuntimeActivity
-	logger                     uiLogger
+	runtimeEvents                  <-chan clientui.Event
+	pendingRuntimeEvents           []clientui.Event
+	waitRuntimeEventAfterHydration bool
+	askEvents                      <-chan askEvent
+	pathReferenceEvents            <-chan uiPathReferenceSearchEvent
+	runtimeConnectionEvents        <-chan runtimeConnectionStateChangedMsg
+	runtimeReconnectWarning        <-chan runtimeReconnectWarningMsg
+	runtimeContextUsage            clientui.RuntimeContextUsage
+	runtimeContextUsageSession     string
+	runtimeReadModelVersion        clientui.ReadModelVersion
+	runtimeActivityProjection      clientui.RuntimeActivity
+	logger                         uiLogger
 }
 
 type uiInputFeatureState struct {
@@ -75,6 +76,8 @@ type uiInputFeatureState struct {
 	compactionOrigin                       uiCompactionOrigin
 	queuedRuntimeWorkCheckCompactionOrigin uiCompactionOrigin
 	pendingRuntimeOperations               []clientui.RuntimeOperationRef
+	pendingQueuedDrainAfterHydration       bool
+	queuedDrainReadyAfterHydration         bool
 	submitToken                            uint64
 	activeSubmit                           activeSubmitState
 	recoveredDraftBuffers                  []serverapi.SessionDraftRecoveryBuffer
@@ -120,33 +123,23 @@ type uiInputFeatureState struct {
 }
 
 type uiPresentationFeatureState struct {
-	theme                            string
-	activeSurface                    uiSurface
-	altScreenActive                  bool
-	terminalFocus                    *terminalFocusState
-	terminalCursor                   *uiTerminalCursorState
-	rendererOutputGate               *uiRendererOutputGateState
-	nativeSurface                    *uiNativeSurface
-	nativeLiveAreaError              error
-	nativeImmutableTranscriptWritten bool
-	nativePendingEmissions           []nativePendingEmission
-	nativeScratchHydrationPending    bool
-	nativeAssistantStreamIncomplete  bool
-	nativeResizeRehydrateToken       uint64
-	nativeResizeRehydrateSettled     bool
-	nativeResizeRehydrateActive      bool
-	termWidth                        int
-	termHeight                       int
-	windowSizeKnown                  bool
-	helpVisible                      bool
-	startupCmds                      []tea.Cmd
-	uiMainThread                     uiMainThreadState
+	theme              string
+	activeSurface      uiSurface
+	altScreenActive    bool
+	terminalFocus      *terminalFocusState
+	terminalCursor     *uiTerminalCursorState
+	rendererOutputGate *uiRendererOutputGateState
+	termWidth          int
+	termHeight         int
+	windowSizeKnown    bool
+	helpVisible        bool
+	startupCmds        []tea.Cmd
+	uiMainThread       uiMainThreadState
 }
 
 type uiConversationFeatureState struct {
 	interaction                        uiInteractionState
 	ask                                uiAskState
-	initialTranscript                  []UITranscriptEntry
 	startupSubmit                      string
 	startupSubmitPromptHistoryRecorded bool
 }
@@ -194,33 +187,12 @@ type uiStatusFeatureState struct {
 }
 
 type uiTranscriptFeatureState struct {
-	sawAssistantDelta                bool
-	activeAssistantStreamSource      string
-	activeAssistantStreamIdentity    uiAssistantStreamIdentity
-	lastCommittedAssistantStepID     string
-	transcriptEntries                []tui.TranscriptEntry
-	transcriptBaseOffset             int
-	transcriptTotalEntries           int
-	transcriptRevision               int64
-	deferredCommittedTail            []deferredProjectedTranscriptTail
-	runtimeConnection                clientui.RuntimeConnectionLifecycle
-	transcriptLiveDirty              bool
-	reasoningLiveDirty               bool
-	detailTranscript                 uiDetailTranscriptWindow
-	runtimeMainViewToken             uint64
-	runtimeMainViewBusy              bool
-	runtimeMainViewActiveRequest     runtimeMainViewRefreshRequest
-	runtimeMainViewPendingSet        bool
-	runtimeMainViewPending           runtimeMainViewRefreshRequest
-	runtimeTranscriptToken           uint64
-	runtimeTranscriptRetry           uint64
-	runtimeTranscriptBusy            bool
-	runtimeTranscriptActiveRequest   runtimeTranscriptSyncRequest
-	runtimeTranscriptPendingSet      bool
-	runtimeTranscriptPending         runtimeTranscriptSyncRequest
-	pendingQueuedDrainAfterHydration bool
-	queuedDrainReadyAfterHydration   bool
-	waitRuntimeEventAfterHydration   bool
+	runtimeConnection            clientui.RuntimeConnectionLifecycle
+	runtimeMainViewToken         uint64
+	runtimeMainViewBusy          bool
+	runtimeMainViewActiveRequest runtimeMainViewRefreshRequest
+	runtimeMainViewPendingSet    bool
+	runtimeMainViewPending       runtimeMainViewRefreshRequest
 }
 
 type uiKeyboardFeatureState struct {

@@ -155,13 +155,10 @@ func (e dormantTranscriptCacheEntry) mainView(meta session.Meta, freshness clien
 			SessionID:             meta.SessionID,
 			SessionName:           meta.Name,
 			ConversationFreshness: freshness,
-			Transcript: clientui.TranscriptMetadata{
-				Revision: meta.LastSequence,
-			},
 		},
 	)
 }
 
-func (e dormantTranscriptCacheEntry) newestSegmentPage(meta session.Meta, freshness clientui.ConversationFreshness) clientui.TranscriptPage {
-	return runtimeview.TranscriptPageFromSegment(meta.SessionID, meta.Name, freshness, meta.LastSequence, e.newestSegment)
+func (e dormantTranscriptCacheEntry) newestSegmentTailEntries() []runtime.ChatEntry {
+	return append([]runtime.ChatEntry(nil), e.newestSegment.Snapshot.Entries...)
 }

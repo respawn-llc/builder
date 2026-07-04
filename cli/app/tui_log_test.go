@@ -1,10 +1,19 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+type testUILogger struct {
+	lines []string
+}
+
+func (l *testUILogger) Logf(format string, args ...any) {
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
 
 func TestRollingTUILoggerWritesUnderPersistenceRoot(t *testing.T) {
 	root := t.TempDir()

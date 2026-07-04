@@ -57,27 +57,6 @@ func TestDiagnosticDedupeStoreTracksLocalPersistedAndReset(t *testing.T) {
 	}
 }
 
-func TestPendingToolCallStartStoreRemembersLooksUpAndForgets(t *testing.T) {
-	store := newPendingToolCallStartStore()
-	store.Remember(map[string]int{"call-1": 4, "": 99})
-
-	start, ok := store.Lookup("call-1")
-	if !ok || start != 4 {
-		t.Fatalf("Lookup(call-1)=(%d,%v), want (4,true)", start, ok)
-	}
-	if _, ok := store.Lookup(""); ok {
-		t.Fatal("empty call id should not be present")
-	}
-	if got := store.Len(); got != 1 {
-		t.Fatalf("Len()=%d, want 1", got)
-	}
-
-	store.Forget("call-1")
-	if got := store.Len(); got != 0 {
-		t.Fatalf("Len() after forget=%d, want 0", got)
-	}
-}
-
 func TestUsageTrackingStateNormalizesAndTracksCacheHit(t *testing.T) {
 	state := newUsageTrackingState()
 	normalized, totalInput, totalCached := state.Next(llm.Usage{

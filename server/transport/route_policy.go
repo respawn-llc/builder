@@ -246,10 +246,6 @@ func routeSessionID(params any) (string, bool) {
 		return p.SessionID, true
 	case serverapi.SessionMainViewRequest:
 		return p.SessionID, true
-	case serverapi.SessionTranscriptPageRequest:
-		return p.SessionID, true
-	case serverapi.SessionCommittedTranscriptSuffixRequest:
-		return p.SessionID, true
 	case serverapi.SessionInitialInputRequest:
 		return p.SessionID, true
 	case serverapi.SessionPersistInputDraftRequest:
@@ -331,6 +327,8 @@ func routeSessionID(params any) (string, bool) {
 	case serverapi.ApprovalAnswerRequest:
 		return p.SessionID, true
 	case serverapi.SessionActivitySubscribeRequest:
+		return p.SessionID, true
+	case serverapi.TranscriptSubscribeRequest:
 		return p.SessionID, true
 	case serverapi.PromptActivitySubscribeRequest:
 		return p.SessionID, true
