@@ -23,8 +23,11 @@ import (
 )
 
 func TestStartEmbeddedServerUnknownWorkspaceCreateProjectFlowCanPlanSession(t *testing.T) {
-	newAppTestHome(t)
+	home := newAppTestHome(t)
 	workspace := t.TempDir()
+	if _, _, err := config.WriteDefaultSettingsFileAt(filepath.Join(home, config.ConfigDirName, "config.toml")); err != nil {
+		t.Fatalf("write test settings: %v", err)
+	}
 	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
 	store := auth.NewFileStore(config.GlobalAuthConfigPath(cfg))
 	if err := store.Save(context.Background(), auth.State{

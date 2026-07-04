@@ -267,6 +267,15 @@ func newBindingCommandWorkspaceConfig(t *testing.T) (string, config.App) {
 
 func startBindingCommandServer(t *testing.T, workspace string) func() {
 	t.Helper()
+	cfg, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load server workspace: %v", err)
+	}
+	if !cfg.Source.SettingsFileExists {
+		if _, _, err := config.WriteDefaultSettingsFileAt(cfg.Source.HomeSettingsPath); err != nil {
+			t.Fatalf("write test settings: %v", err)
+		}
+	}
 	srv, err := serverstartup.StartServeServer(context.Background(), serverstartup.Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, Model: "gpt-5"}, bindingCommandMemoryAuthHandler{state: auth.State{
 		Scope:     auth.ScopeGlobal,
 		Method:    auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},

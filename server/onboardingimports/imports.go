@@ -304,9 +304,6 @@ func discoverDirectSkills(providerID ProviderID, root string) ([]Item, error) {
 	}
 	items := make([]Item, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
 		skillPath := filepath.Join(root, entry.Name(), skillcatalog.SkillFileName)
 		skill, ok := skillcatalog.ParseSkillMetadata(skillPath)
 		if !ok {
@@ -603,7 +600,7 @@ func cloneBoolMap(values map[string]bool) map[string]bool {
 }
 
 func normalizeName(raw string) string {
-	return strings.ToLower(strings.Join(strings.Fields(raw), " "))
+	return brand.NormalizeSkillName(raw)
 }
 
 func unixMs(t time.Time) *int64 {

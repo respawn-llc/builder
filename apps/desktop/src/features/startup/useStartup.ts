@@ -99,7 +99,10 @@ function readinessCause(readiness: ServerReadiness, fallbackBody: string): strin
   if (cause === undefined) {
     return fallbackBody;
   }
-  return `${cause.summary} ${cause.nextAction}`.trim();
+  const body = [cause.summary, cause.nextAction]
+    .filter((part): part is string => part !== undefined && part.length > 0)
+    .join(" ");
+  return body.length > 0 ? body : fallbackBody;
 }
 
 function protocolMismatchBody(

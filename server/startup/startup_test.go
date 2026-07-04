@@ -22,6 +22,9 @@ func registerStartupWorkspace(t *testing.T, workspace string) {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
+	if _, _, err := config.WriteDefaultSettingsFileAt(cfg.Source.HomeSettingsPath); err != nil {
+		t.Fatalf("write test settings: %v", err)
+	}
 	if _, err := metadata.RegisterBinding(context.Background(), cfg.PersistenceRoot, cfg.WorkspaceRoot); err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
@@ -428,5 +431,66 @@ func TestHeadlessHandlersAllowExplicitOpenAIBaseURLWithoutCredentials(t *testing
 
 	if appCore.Config().Settings.OpenAIBaseURL != "http://127.0.0.1:8080/v1" {
 		t.Fatalf("openai base url = %q", appCore.Config().Settings.OpenAIBaseURL)
+	}
+}
+
+func TestStartupMissingConfigReturnsBootstrapServerWithoutConstructingCore(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+
+	server, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, startupEnvAuthHandler{}, nil, Options{})
+	if err != nil {
+		t.Fatalf("StartWithOptions: %v", err)
+	}
+	defer func() { _ = server.Close() }()
+	if server.Core != nil {
+		t.Fatal("expected missing-config startup to defer configured core construction")
+	}
+	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("settings file should remain absent, stat err=%v", statErr)
+	}
+}
+
+func TestStartupMissingConfigReturnsBootstrapServerBeforeAuthReady(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+
+	server, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, stubAuthHandler{
+		lookupEnv: func(string) string { return "" },
+		needs: func(req authservice.FlowInteractionRequest) bool {
+			return req.AuthRequired && !req.Gate.Ready
+		},
+		interact: func(context.Context, authservice.FlowInteractionRequest) error {
+			return auth.ErrAuthNotConfigured
+		},
+	}, nil, Options{})
+	if err != nil {
+		t.Fatalf("StartWithOptions: %v", err)
+	}
+	defer func() { _ = server.Close() }()
+	if server.Core != nil {
+		t.Fatal("expected missing-config startup to defer configured core construction")
+	}
+	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("settings file should remain absent, stat err=%v", statErr)
+	}
+}
+
+func TestStartWithOptionsPropagatesExplicitOnboardingRequired(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+
+	onboarding := OnboardingHandler(func(context.Context, OnboardingRequest) (config.App, error) {
+		return config.App{}, ErrOnboardingRequired
+	})
+	server, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, startupEnvAuthHandler{}, onboarding, Options{})
+	if !errors.Is(err, ErrOnboardingRequired) {
+		t.Fatalf("StartWithOptions error = %v, want ErrOnboardingRequired", err)
+	}
+	if server != nil {
+		t.Fatal("expected no embedded server when handler explicitly refuses onboarding")
 	}
 }

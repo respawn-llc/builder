@@ -107,6 +107,9 @@ func registerServeWorkspace(t *testing.T, workspace string) {
 	if err != nil {
 		t.Fatalf("config.Load: %v", err)
 	}
+	if _, _, err := config.WriteDefaultSettingsFileAt(cfg.Source.HomeSettingsPath); err != nil {
+		t.Fatalf("write test settings: %v", err)
+	}
 	if _, err := metadata.RegisterBinding(context.Background(), cfg.PersistenceRoot, cfg.WorkspaceRoot); err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
@@ -204,7 +207,8 @@ func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
 		!capabilities.PromptActivity ||
 		!capabilities.SessionActivity ||
 		!capabilities.ProcessOutput ||
-		!capabilities.AttentionNotifications {
+		!capabilities.AttentionNotifications ||
+		!capabilities.OnboardingFinalize {
 		t.Fatalf("current route contracts produced incomplete server capabilities: %+v", capabilities)
 	}
 }
@@ -212,8 +216,8 @@ func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
 func TestServerCapabilityFlagsReflectMissingRoutes(t *testing.T) {
 	capabilities := serverCapabilityFlags([]rpccontract.Route{
 		{Method: protocol.MethodHandshake, Dependency: rpccontract.DependencyProtocol},
-		{Method: protocol.MethodAttachProject, Dependency: rpccontract.DependencyProtocol},
-		{Method: protocol.MethodAttachSession, Dependency: rpccontract.DependencySessionView},
+		{Method: protocol.MethodAttachProject, Dependency: rpccontract.DependencyProtocolAttach},
+		{Method: protocol.MethodAttachSession, Dependency: rpccontract.DependencyProtocolAttach},
 		{Dependency: rpccontract.DependencyRunPrompt},
 	})
 
@@ -227,6 +231,21 @@ func TestServerCapabilityFlagsReflectMissingRoutes(t *testing.T) {
 		capabilities.RuntimeLiveControl ||
 		capabilities.AttentionNotifications {
 		t.Fatalf("capabilities must not be true without their routes/dependencies: %+v", capabilities)
+	}
+}
+
+func TestServerCapabilityFlagsRequireAttachRouteDependencyPerMethod(t *testing.T) {
+	capabilities := serverCapabilityFlags([]rpccontract.Route{
+		{Method: protocol.MethodHandshake, Dependency: rpccontract.DependencyProtocol},
+		{Method: protocol.MethodAttachProject, Dependency: rpccontract.DependencyProtocol},
+		{Method: protocol.MethodAttachSession, Dependency: rpccontract.DependencyProtocolAttach},
+	})
+
+	if capabilities.ProjectAttach {
+		t.Fatalf("ProjectAttach advertised without protocol_attach dependency: %+v", capabilities)
+	}
+	if !capabilities.SessionAttach {
+		t.Fatalf("SessionAttach not advertised with protocol_attach dependency: %+v", capabilities)
 	}
 }
 
@@ -600,6 +619,77 @@ func TestServeStartsUnauthenticatedAndReportsBootstrapReadiness(t *testing.T) {
 	}
 }
 
+func TestMissingConfigServeStartsBootstrapSurfaceBeforeAuthReady(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+	registerEmbeddedWorkspace(t, workspace)
+
+	server := startServeTestServer(t, Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{lookupEnv: func(string) string { return "" }}, nil)
+	if server.Core != nil || server.deps == nil {
+		t.Fatal("expected missing-config serve startup surface without configured core")
+	}
+	readiness, err := server.deps.ServerStatusClient().GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	if err != nil {
+		t.Fatalf("GetServerReadiness: %v", err)
+	}
+	if readiness.Ready || len(readiness.Causes) == 0 {
+		t.Fatalf("readiness = %+v, want not ready with onboarding cause", readiness)
+	}
+	cause := readiness.Causes[0]
+	if cause.Code != string(serverapi.ServerNotReadyOnboardingRequired) || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
+		t.Fatalf("unexpected onboarding readiness cause: %+v", cause)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("settings file should remain absent before finalize, stat err=%v", statErr)
+	}
+}
+
+func TestStartupControlSurfaceRejectsConfigThatAppearsBeforeRootLock(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+	loadCfg, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if _, _, err := config.WriteDefaultSettingsFileAt(loadCfg.Source.HomeSettingsPath); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	_, _, err = buildStartupControlSurface(context.Background(), buildRequest(Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}), true, envAuthHandler{}, Options{})
+	if !errors.Is(err, errStartupControlSurfaceNotRequired) {
+		t.Fatalf("buildStartupControlSurface error = %v, want not required", err)
+	}
+}
+
+func TestServeOnboardingHandlerReceivesCapabilityFactsClient(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+
+	receivedFacts := false
+	onboarding := OnboardingHandler(func(ctx context.Context, req OnboardingRequest) (config.App, error) {
+		if req.CapabilityFactsClient == nil {
+			t.Fatal("capability facts client was not threaded into serve onboarding")
+		}
+		if _, err := req.CapabilityFactsClient.GetCapabilityFacts(ctx, serverapi.CapabilityFactsRequest{}); err != nil {
+			t.Fatalf("GetCapabilityFacts: %v", err)
+		}
+		receivedFacts = true
+		return req.Config, ErrOnboardingRequired
+	})
+
+	server := startServeTestServer(t, Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}, onboarding)
+	defer func() { _ = server.Close() }()
+	if !receivedFacts {
+		t.Fatal("expected onboarding handler to receive capability facts")
+	}
+}
+
 func TestConfiguredRemoteGetsServerReadinessWhenAuthMissing(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -680,8 +770,82 @@ model = "blocked-model"
 	}
 	assertReadinessRoles(t, readiness.SubagentRoles, []string{"default", "fast", "blocked", "coder"})
 	cause := readiness.Causes[0]
-	if cause.Code != "server_not_ready" || cause.Severity != "error" || cause.Summary == "" || cause.NextAction == "" {
+	if cause.Code != "server_not_ready" || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
 		t.Fatalf("unexpected generic readiness cause: %+v", cause)
+	}
+}
+
+func TestMissingConfigFinalizeActivationFailureIsTypedAndRetryConflicts(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+
+	server := startServeTestServer(t, Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}, nil)
+	if server.Core != nil || server.deps == nil {
+		t.Fatal("expected missing-config serve startup surface")
+	}
+	metadataBlocker := filepath.Join(server.cfg.PersistenceRoot, "db")
+	if err := os.WriteFile(metadataBlocker, []byte("block metadata open"), 0o644); err != nil {
+		t.Fatalf("write metadata blocker: %v", err)
+	}
+
+	_, err := server.deps.OnboardingFinalizeClient().FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{})
+	if !errors.Is(err, serverapi.ErrServerNotReadyActivationFailed) {
+		t.Fatalf("finalize error = %v, want activation_failed", err)
+	}
+	var readyErr *serverapi.ServerNotReadyError
+	if !errors.As(err, &readyErr) {
+		t.Fatalf("finalize error = %T %v, want ServerNotReadyError", err, err)
+	}
+	details := readyErr.Details.(serverapi.ServerNotReadyDetails)
+	if !details.OnboardingCompleted || details.SettingsPath == nil || *details.SettingsPath == "" || details.Diagnostic == nil || *details.Diagnostic == "" {
+		t.Fatalf("activation details = %+v", details)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); statErr != nil {
+		t.Fatalf("config should remain written after activation failure: %v", statErr)
+	}
+	if state := server.deps.ServerReadinessState(); state.Ready || state.Reason == nil || *state.Reason != serverapi.ServerNotReadyActivationFailed || state.Diagnostic == nil || *state.Diagnostic == "" {
+		t.Fatalf("readiness = %+v, want activation_failed diagnostic", state)
+	}
+	readiness, statusErr := server.deps.ServerStatusClient().GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	if statusErr != nil {
+		t.Fatalf("GetServerReadiness after activation failure: %v", statusErr)
+	}
+	if readiness.Ready || len(readiness.Causes) == 0 || readiness.Causes[0].DiagnosticID == "" {
+		t.Fatalf("readiness response after activation failure = %+v", readiness)
+	}
+	_, retryErr := server.deps.OnboardingFinalizeClient().FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{})
+	if !errors.Is(retryErr, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
+		t.Fatalf("retry error = %v, want config_already_exists", retryErr)
+	}
+}
+
+type finalizeServiceFunc func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
+
+func (f finalizeServiceFunc) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+	return f(ctx, req)
+}
+
+func TestStartupFinalizeActivationUsesServerOwnedContext(t *testing.T) {
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	activationCtxCanceled := true
+	service := startupFinalizeService{
+		service: finalizeServiceFunc(func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+			return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
+		}),
+		activationContext: context.Background(),
+		activate: func(ctx context.Context, _ serverapi.OnboardingFinalizeResponse) error {
+			activationCtxCanceled = ctx.Err() != nil
+			return nil
+		},
+	}
+	if _, err := service.FinalizeOnboarding(requestCtx, serverapi.OnboardingFinalizeRequest{}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	if activationCtxCanceled {
+		t.Fatal("activation used canceled request context")
 	}
 }
 

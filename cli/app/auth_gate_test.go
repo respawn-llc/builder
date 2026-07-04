@@ -78,7 +78,7 @@ func TestBootstrapAppHeadlessUsesEnvAPIKeyWithoutPersistingAuthState(t *testing.
 		t.Fatalf("expected no persisted auth state at %q, got err=%v", authPath, err)
 	}
 	if _, err := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); err != nil {
-		t.Fatalf("expected config bootstrap artifacts to exist: %v", err)
+		t.Fatalf("expected test settings to remain available: %v", err)
 	}
 }
 

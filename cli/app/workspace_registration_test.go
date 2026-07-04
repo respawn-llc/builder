@@ -43,6 +43,17 @@ func newRegisteredAppWorkspace(t *testing.T) (home string, workspace string) {
 	home = newAppTestHome(t)
 	workspace = t.TempDir()
 	registerAppWorkspace(t, workspace)
+	if _, _, err := config.WriteDefaultSettingsFileAt(filepath.Join(home, config.ConfigDirName, "config.toml")); err != nil {
+		t.Fatalf("write test settings: %v", err)
+	}
+	return home, workspace
+}
+
+func newRegisteredAppWorkspaceWithoutSettings(t *testing.T) (home string, workspace string) {
+	t.Helper()
+	home = newAppTestHome(t)
+	workspace = t.TempDir()
+	registerAppWorkspace(t, workspace)
 	return home, workspace
 }
 

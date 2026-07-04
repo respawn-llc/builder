@@ -21,8 +21,10 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	shelltool "core/server/tools/shell"
+	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/protocol"
 	"core/shared/serverapi"
 )
 
@@ -233,6 +235,71 @@ func TestStartEmbeddedOnboardingReceivesCapabilityFactsClient(t *testing.T) {
 	t.Cleanup(func() { _ = server.Close() })
 	if !seenFacts {
 		t.Fatal("expected embedded generated skill facts before core startup")
+	}
+}
+
+func TestStartEmbeddedMissingConfigExposesBootstrapSurface(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+	workspace := t.TempDir()
+	registerEmbeddedWorkspace(t, workspace)
+
+	server, err := StartEmbeddedWithOptions(context.Background(), serverbootstrap.Request{
+		WorkspaceRoot:         workspace,
+		WorkspaceRootExplicit: true,
+		LookupEnv: func(key string) string {
+			if key == "OPENAI_API_KEY" {
+				return "in-memory-test-key"
+			}
+			return ""
+		},
+	}, EmbeddedStartHooks{
+		Auth: readyEmbeddedAuthHandler(),
+	}, Options{})
+	if err != nil {
+		t.Fatalf("StartEmbeddedWithOptions: %v", err)
+	}
+	t.Cleanup(func() { _ = server.Close() })
+	if server.Core != nil {
+		t.Fatal("expected missing-config embedded startup to defer configured core construction")
+	}
+	settingsPath := filepath.Join(home, config.ConfigDirName, "config.toml")
+	if _, statErr := os.Stat(settingsPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("settings file should remain absent before finalize, stat err=%v", statErr)
+	}
+	releaseServeTestPortForConfig(server.Config())
+	if err := server.ServeBackground(); err != nil {
+		t.Fatalf("ServeBackground: %v", err)
+	}
+
+	remote := dialEmbeddedRemote(t, server.Config())
+	defer func() { _ = remote.Close() }()
+	if identity := remote.Identity(); identity.ProtocolVersion != protocol.Version || !identity.Capabilities.OnboardingFinalize {
+		t.Fatalf("unexpected bootstrap identity: %+v", identity)
+	}
+	_, err = remote.ListProjects(context.Background(), serverapi.ProjectListRequest{})
+	if !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("ListProjects error = %v, want onboarding_required", err)
+	}
+}
+
+func dialEmbeddedRemote(t *testing.T, cfg config.App) *client.Remote {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var (
+		remote *client.Remote
+		err    error
+	)
+	for {
+		remote, err = client.DialConfiguredRemote(context.Background(), cfg)
+		if err == nil {
+			return remote
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("DialConfiguredRemote: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

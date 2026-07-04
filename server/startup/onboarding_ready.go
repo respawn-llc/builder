@@ -10,6 +10,7 @@ import (
 )
 
 var ErrOnboardingCanceled = errors.New("first-time setup canceled")
+var ErrOnboardingRequired = errors.New("first-time setup is required")
 
 func writeHeadlessDefaultSettings(settingsPath string) (string, bool, error) {
 	if settingsPath != "" {
@@ -42,22 +43,7 @@ func EnsureOnboardingReady(ctx context.Context, cfg config.App, mgr *auth.Manage
 		return cfg, false, errors.New("reload config is required")
 	}
 	if !interactive {
-		// Write first-run defaults into the resolved config+data root so
-		// --persistence-root / KENT_PERSISTENCE_ROOT instances seed their own
-		// root. Fall back to the default location when no root was resolved.
-		settingsPath := strings.TrimSpace(cfg.Source.HomeSettingsPath)
-		path, created, err := writeHeadlessDefaultSettings(settingsPath)
-		if err != nil {
-			return cfg, false, err
-		}
-		reloaded, err := reloadConfig()
-		if err != nil {
-			return cfg, false, err
-		}
-		reloaded.Source.CreatedDefaultConfig = created
-		reloaded.Source.SettingsPath = path
-		reloaded.Source.SettingsFileExists = true
-		return reloaded, true, nil
+		return cfg, false, ErrOnboardingRequired
 	}
 	if mgr == nil {
 		return cfg, false, ErrOnboardingAuthManagerRequired

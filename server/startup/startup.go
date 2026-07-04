@@ -61,7 +61,36 @@ func Start(ctx context.Context, req Request, authHandler AuthHandler, onboarding
 }
 
 func StartWithOptions(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler, opts Options) (*EmbeddedServer, error) {
-	appCore, err := StartCoreWithOptions(ctx, req, authHandler, onboardingHandler, opts)
+	if authHandler == nil {
+		return nil, errors.New("auth handler is required")
+	}
+	bootstrapReq := buildRequest(req, authHandler)
+	resolved, err := serverbootstrap.ResolveConfig(bootstrapReq)
+	if err != nil {
+		return nil, err
+	}
+	if !resolved.Config.Source.SettingsFileExists && onboardingHandler == nil {
+		cfg, deps, surfaceErr := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, opts)
+		if surfaceErr != nil {
+			if errors.Is(surfaceErr, errStartupControlSurfaceNotRequired) {
+				return startConfiguredEmbeddedServer(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
+			}
+			return nil, surfaceErr
+		}
+		return &EmbeddedServer{deps: deps, cfg: cfg}, nil
+	}
+	appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
+	if err != nil {
+		if errors.Is(err, ErrOnboardingRequired) {
+			return nil, err
+		}
+		return nil, err
+	}
+	return &EmbeddedServer{Core: appCore}, nil
+}
+
+func startConfiguredEmbeddedServer(ctx context.Context, bootstrapReq serverbootstrap.Request, requireAuth bool, authHandler startupAuthHandler, onboardingHandler OnboardingHandler, opts Options) (*EmbeddedServer, error) {
+	appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, requireAuth, authHandler, onboardingHandler, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -119,6 +148,9 @@ func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Re
 		if err != nil {
 			return nil, err
 		}
+	}
+	if !cfg.Source.SettingsFileExists {
+		return nil, ErrOnboardingRequired
 	}
 	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(cfg)
 	if err != nil {
