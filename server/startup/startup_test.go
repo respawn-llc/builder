@@ -477,3 +477,20 @@ func TestStartupMissingConfigReturnsBootstrapServerBeforeAuthReady(t *testing.T)
 		t.Fatalf("settings file should remain absent, stat err=%v", statErr)
 	}
 }
+
+func TestStartWithOptionsPropagatesExplicitOnboardingRequired(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+
+	onboarding := OnboardingHandler(func(context.Context, OnboardingRequest) (config.App, error) {
+		return config.App{}, ErrOnboardingRequired
+	})
+	server, err := StartWithOptions(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, startupEnvAuthHandler{}, onboarding, Options{})
+	if !errors.Is(err, ErrOnboardingRequired) {
+		t.Fatalf("StartWithOptions error = %v, want ErrOnboardingRequired", err)
+	}
+	if server != nil {
+		t.Fatal("expected no embedded server when handler explicitly refuses onboarding")
+	}
+}

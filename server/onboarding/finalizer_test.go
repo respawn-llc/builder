@@ -172,6 +172,24 @@ func TestFinalizerPreservesDisabledSupervisorThinking(t *testing.T) {
 	}
 }
 
+func TestFinalizerDefaultSupervisorThinkingInheritsPrimaryThinking(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		Thinking: &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingLevel, Level: "high"},
+		Supervisor: &serverapi.OnboardingSupervisorChoice{
+			Frequency: serverapi.OnboardingSupervisorAll,
+			Thinking:  &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDefault},
+		},
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	cfg := loadFinalizedConfig(t, root)
+	if cfg.Settings.ThinkingLevel != "high" || cfg.Settings.Reviewer.ThinkingLevel != "high" {
+		t.Fatalf("thinking/reviewer thinking = %q/%q, want high/high", cfg.Settings.ThinkingLevel, cfg.Settings.Reviewer.ThinkingLevel)
+	}
+}
+
 func TestFinalizerAcceptsKnownModelWithoutContextMetadata(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
@@ -513,6 +531,40 @@ func TestFinalizerSkipsImportDiscoveryWhenNoImportsRequested(t *testing.T) {
 	}
 }
 
+func TestFinalizerDoesNotRequireHomeWithoutImports(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", "")
+	finalizer, err := onboarding.NewFinalizer(onboarding.Options{PersistenceRoot: root, SettingsPath: filepath.Join(root, "config.toml")})
+	if err != nil {
+		t.Fatalf("NewFinalizer: %v", err)
+	}
+	if _, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "config.toml")); err != nil {
+		t.Fatalf("expected config file: %v", err)
+	}
+}
+
+func TestFinalizerMissingHomeMakesRequestedImportUnavailable(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOME", "")
+	finalizer, err := onboarding.NewFinalizer(onboarding.Options{PersistenceRoot: root, SettingsPath: filepath.Join(root, "config.toml")})
+	if err != nil {
+		t.Fatalf("NewFinalizer: %v", err)
+	}
+	providerUUID := providerUUIDForHomeEntry(t, ".claude")
+	_, err = finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
+	})
+	if !errors.Is(err, serverapi.ErrOnboardingFinalizeImportUnavailable) {
+		t.Fatalf("FinalizeOnboarding error = %v, want import_unavailable", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("config should remain absent, stat err=%v", statErr)
+	}
+}
+
 func ptr[T any](value T) *T {
 	return &value
 }
@@ -725,18 +777,21 @@ func TestFinalizerRejectsNativeCompactionForSelectedNonOpenAIModel(t *testing.T)
 	}
 }
 
-func TestFinalizerRejectsNativeCompactionForUnknownCustomModel(t *testing.T) {
+func TestFinalizerAcceptsNativeCompactionForDefaultOpenAICustomModel(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
 	finalizer := newTestFinalizer(t, root, home)
 	native := serverapi.OnboardingCompactionNative
 
-	_, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+	if _, err := finalizer.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
 		Model:      &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: "unknown-custom-model"},
 		Compaction: &native,
-	})
-	if !errors.Is(err, serverapi.ErrOnboardingFinalizeInvalidRequest) {
-		t.Fatalf("error = %v, want invalid_request", err)
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	cfg := loadFinalizedConfig(t, root)
+	if cfg.Settings.CompactionMode != config.CompactionModeNative {
+		t.Fatalf("compaction mode = %q, want native", cfg.Settings.CompactionMode)
 	}
 }
 

@@ -55,6 +55,9 @@ func (s *EmbeddedServer) Config() config.App {
 	if s.Core != nil {
 		return s.Core.Config()
 	}
+	if s.deps != nil {
+		return s.deps.snapshotConfig()
+	}
 	return s.cfg
 }
 
@@ -154,7 +157,7 @@ func StartEmbeddedWithOptions(ctx context.Context, req serverbootstrap.Request, 
 		return nil, err
 	}
 	if !resolved.Config.Source.SettingsFileExists && hooks.Onboarding == nil {
-		cfg, deps, err := buildStartupControlSurface(ctx, req, true, hooks.Auth)
+		cfg, deps, err := buildStartupControlSurface(ctx, req, true, hooks.Auth, opts)
 		if err != nil {
 			if errors.Is(err, errStartupControlSurfaceNotRequired) {
 				return startConfiguredEmbeddedServer(ctx, req, true, hooks.Auth, nil, opts)

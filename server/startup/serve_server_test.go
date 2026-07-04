@@ -659,9 +659,34 @@ func TestStartupControlSurfaceRejectsConfigThatAppearsBeforeRootLock(t *testing.
 		t.Fatalf("write settings: %v", err)
 	}
 
-	_, _, err = buildStartupControlSurface(context.Background(), buildRequest(Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}), true, envAuthHandler{})
+	_, _, err = buildStartupControlSurface(context.Background(), buildRequest(Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}), true, envAuthHandler{}, Options{})
 	if !errors.Is(err, errStartupControlSurfaceNotRequired) {
 		t.Fatalf("buildStartupControlSurface error = %v, want not required", err)
+	}
+}
+
+func TestServeOnboardingHandlerReceivesCapabilityFactsClient(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+
+	receivedFacts := false
+	onboarding := OnboardingHandler(func(ctx context.Context, req OnboardingRequest) (config.App, error) {
+		if req.CapabilityFactsClient == nil {
+			t.Fatal("capability facts client was not threaded into serve onboarding")
+		}
+		if _, err := req.CapabilityFactsClient.GetCapabilityFacts(ctx, serverapi.CapabilityFactsRequest{}); err != nil {
+			t.Fatalf("GetCapabilityFacts: %v", err)
+		}
+		receivedFacts = true
+		return req.Config, ErrOnboardingRequired
+	})
+
+	server := startServeTestServer(t, Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}, onboarding)
+	defer func() { _ = server.Close() }()
+	if !receivedFacts {
+		t.Fatal("expected onboarding handler to receive capability facts")
 	}
 }
 

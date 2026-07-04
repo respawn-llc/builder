@@ -41,6 +41,9 @@ func (s *ServeServer) Config() config.App {
 	if s.Core != nil {
 		return s.Core.Config()
 	}
+	if s.deps != nil {
+		return s.deps.snapshotConfig()
+	}
 	return s.cfg
 }
 
@@ -77,7 +80,7 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 			return &ServeServer{Core: appCore, cfg: appCore.Config()}, nil
 		}
 	}
-	cfg, deps, err := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler)
+	cfg, deps, err := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, Options{})
 	if err != nil {
 		if errors.Is(err, errStartupControlSurfaceNotRequired) {
 			appCore, coreErr := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, Options{})
@@ -97,6 +100,7 @@ func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapR
 	if err != nil {
 		return config.App{}, false, err
 	}
+	factsService := capabilityfacts.NewService(capabilityfacts.Options{Config: cfg, AuthManager: authSupport.AuthManager})
 	reloadConfig := func() (config.App, error) {
 		refreshed, err := serverbootstrap.ResolveConfig(bootstrapReq)
 		if err != nil {
@@ -105,9 +109,10 @@ func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapR
 		return refreshed.Config, nil
 	}
 	onboardingCfg, err := onboardingHandler(ctx, OnboardingRequest{
-		Config:       cfg,
-		AuthManager:  authSupport.AuthManager,
-		ReloadConfig: reloadConfig,
+		Config:                cfg,
+		AuthManager:           authSupport.AuthManager,
+		CapabilityFactsClient: client.NewLoopbackCapabilityFactsClient(factsService),
+		ReloadConfig:          reloadConfig,
 	})
 	if errors.Is(err, ErrOnboardingRequired) {
 		return cfg, false, nil
@@ -118,7 +123,7 @@ func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapR
 	return onboardingCfg, onboardingCfg.Source.SettingsFileExists, nil
 }
 
-func buildStartupControlSurface(ctx context.Context, bootstrapReq serverbootstrap.Request, _ bool, authHandler startupAuthHandler) (config.App, *startupGatewayDependencies, error) {
+func buildStartupControlSurface(ctx context.Context, bootstrapReq serverbootstrap.Request, _ bool, authHandler startupAuthHandler, opts Options) (config.App, *startupGatewayDependencies, error) {
 	resolved, err := serverbootstrap.ResolveConfig(bootstrapReq)
 	if err != nil {
 		return config.App{}, nil, err
@@ -153,7 +158,7 @@ func buildStartupControlSurface(ctx context.Context, bootstrapReq serverbootstra
 		_ = rootLease.Close()
 		return config.App{}, nil, err
 	}
-	return cfg, newStartupGatewayDependencies(ctx, cfg, bootstrapReq, authSupport, rootLease, finalizer), nil
+	return cfg, newStartupGatewayDependencies(ctx, cfg, bootstrapReq, authSupport, rootLease, finalizer, opts.Core), nil
 }
 
 func (s *ServeServer) Serve(ctx context.Context) error {
@@ -437,15 +442,16 @@ type startupGatewayDependencies struct {
 	authSupport serverbootstrap.AuthSupport
 	rootLease   *core.RootLockLease
 	finalizer   client.OnboardingFinalizeClient
+	coreOptions core.Options
 	core        *core.Core
 	activation  error
 }
 
-func newStartupGatewayDependencies(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, authSupport serverbootstrap.AuthSupport, rootLease *core.RootLockLease, finalizer *onboarding.Finalizer) *startupGatewayDependencies {
+func newStartupGatewayDependencies(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, authSupport serverbootstrap.AuthSupport, rootLease *core.RootLockLease, finalizer *onboarding.Finalizer, coreOptions core.Options) *startupGatewayDependencies {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	deps := &startupGatewayDependencies{cfg: cfg, bootstrap: bootstrapReq, authSupport: authSupport, rootLease: rootLease}
+	deps := &startupGatewayDependencies{cfg: cfg, bootstrap: bootstrapReq, authSupport: authSupport, rootLease: rootLease, coreOptions: coreOptions}
 	deps.finalizer = startupFinalizeService{service: finalizer, activate: deps.activate, activationContext: ctx}
 	return deps
 }
@@ -480,7 +486,9 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 		d.activation = err
 		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, activationFailureDetails(resp, err), err)
 	}
-	appCore, err := core.NewWithContextOptions(ctx, refreshed.Config, d.authSupport, runtimeSupport, core.Options{RootLease: d.rootLease})
+	coreOptions := d.coreOptions
+	coreOptions.RootLease = d.rootLease
+	appCore, err := core.NewWithContextOptions(ctx, refreshed.Config, d.authSupport, runtimeSupport, coreOptions)
 	if err != nil {
 		_ = runtimeSupport.Background.Close()
 		d.activation = err

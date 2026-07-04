@@ -70,7 +70,7 @@ func StartWithOptions(ctx context.Context, req Request, authHandler AuthHandler,
 		return nil, err
 	}
 	if !resolved.Config.Source.SettingsFileExists && onboardingHandler == nil {
-		cfg, deps, surfaceErr := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler)
+		cfg, deps, surfaceErr := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, opts)
 		if surfaceErr != nil {
 			if errors.Is(surfaceErr, errStartupControlSurfaceNotRequired) {
 				return startConfiguredEmbeddedServer(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
@@ -82,14 +82,7 @@ func StartWithOptions(ctx context.Context, req Request, authHandler AuthHandler,
 	appCore, err := startCoreWithBootstrap(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
 	if err != nil {
 		if errors.Is(err, ErrOnboardingRequired) {
-			cfg, deps, surfaceErr := buildStartupControlSurface(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler)
-			if surfaceErr != nil {
-				if errors.Is(surfaceErr, errStartupControlSurfaceNotRequired) {
-					return startConfiguredEmbeddedServer(ctx, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler, opts)
-				}
-				return nil, surfaceErr
-			}
-			return &EmbeddedServer{deps: deps, cfg: cfg}, nil
+			return nil, err
 		}
 		return nil, err
 	}

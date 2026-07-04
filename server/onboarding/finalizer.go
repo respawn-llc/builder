@@ -49,13 +49,6 @@ func NewFinalizer(options Options) (*Finalizer, error) {
 		}
 	}
 	homeDir := strings.TrimSpace(options.HomeDir)
-	if homeDir == "" {
-		var err error
-		homeDir, err = os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("resolve home dir: %w", err)
-		}
-	}
 	return &Finalizer{
 		persistenceRoot: root,
 		workspaceRoot:   strings.TrimSpace(options.WorkspaceRoot),
@@ -277,6 +270,9 @@ func applySupervisor(settings *config.Settings, preserved map[string]bool, choic
 		reviewerModel = settings.Model
 	}
 	if choice.Thinking != nil {
+		if choice.Thinking.Kind == serverapi.OnboardingThinkingDefault {
+			return nil
+		}
 		thinking, err := thinkingChoiceValue(*choice.Thinking, reviewerModel, "supervisor.thinking")
 		if err != nil {
 			return err
@@ -290,25 +286,11 @@ func applySupervisor(settings *config.Settings, preserved map[string]bool, choic
 }
 
 func supportsNativeCompaction(settings config.Settings, model string) bool {
-	if caps, ok := llm.ProviderCapabilitiesFromOverride(settings.ProviderCapabilities); ok {
-		return caps.SupportsResponsesCompact
+	caps, err := llm.ResolveRuntimeProviderCapabilities(auth.EmptyState(), settings)
+	if err != nil {
+		return false
 	}
-	providerID := strings.TrimSpace(settings.ProviderOverride)
-	if providerID == "" {
-		if strings.TrimSpace(settings.OpenAIBaseURL) != "" {
-			if llm.IsOpenAIFirstPartyBaseURL(settings.OpenAIBaseURL) {
-				providerID = "openai"
-			} else {
-				providerID = "openai-compatible"
-			}
-		} else if provider, err := llm.InferProviderFromModel(model); err == nil {
-			providerID = string(provider)
-		} else {
-			return false
-		}
-	}
-	caps, err := llm.InferProviderCapabilities(providerID)
-	return err == nil && caps.SupportsResponsesCompact
+	return caps.SupportsResponsesCompact
 }
 
 func supportsVerbosity(settings config.Settings, model string) bool {
