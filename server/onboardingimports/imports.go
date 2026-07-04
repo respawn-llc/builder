@@ -321,8 +321,8 @@ func discoverDirectSkills(providerID ProviderID, root string) ([]Item, error) {
 			}
 			return nil, err
 		}
-		sourceRoot, sourcePath, target, name, modified := root, filepath.Join(root, entry.Name()), entry.Name(), skill.Name, info.ModTime().UnixMilli()
-		items = append(items, Item{Ref: ItemRef{ItemKind: ItemKindSkill, SourceKind: SourceKindExternalProvider, ProviderID: &providerID, SourceRoot: &sourceRoot, SourcePath: &sourcePath, TargetName: target, Name: &name, ModifiedUnixMs: &modified}})
+		sourceRoot, sourcePath, target, name := root, filepath.Join(root, entry.Name()), entry.Name(), skill.Name
+		items = append(items, Item{Ref: ItemRef{ItemKind: ItemKindSkill, SourceKind: SourceKindExternalProvider, ProviderID: &providerID, SourceRoot: &sourceRoot, SourcePath: &sourcePath, TargetName: target, Name: &name, ModifiedUnixMs: unixMs(info.ModTime())}})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Ref.TargetName < items[j].Ref.TargetName })
 	return items, nil

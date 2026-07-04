@@ -221,7 +221,7 @@ func discoverRoot(root Root, readDir func(string) ([]os.DirEntry, error), includ
 func discoverEmbeddedGenerated(projectedRoot string) ([]Inspection, []Skill, []Issue, error) {
 	entries, err := fs.ReadDir(prompts.GeneratedSkillsFS, SkillsDirName)
 	if err != nil {
-		return nil, nil, []Issue{{SourceKind: SourceKindGenerated, Reason: err.Error()}}, nil
+		return nil, nil, nil, fmt.Errorf("%w embedded generated skills: %w", ErrReadSkillsDirectory, err)
 	}
 	inspections := make([]Inspection, 0, len(entries))
 	skills := make([]Skill, 0, len(entries))

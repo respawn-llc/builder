@@ -261,7 +261,8 @@ func modelFactFor(state *onboardingFlowState, model string) serverapi.ModelCapab
 }
 
 func modelSupportsLargeContextWindow(state *onboardingFlowState, model string) bool {
-	return modelFactFor(state, model).LargeWindow != nil
+	fact := modelFactFor(state, model)
+	return fact.ContextWindowTokens != nil && *fact.ContextWindowTokens > 0 && fact.LargeWindow != nil && fact.LargeWindow.Tokens > 0
 }
 
 func modelSupportsThinking(state *onboardingFlowState, model string) bool {

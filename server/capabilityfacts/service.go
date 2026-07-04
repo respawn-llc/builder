@@ -68,7 +68,10 @@ func (s *Service) GetCapabilityFacts(ctx context.Context, req serverapi.Capabili
 	if err != nil {
 		return serverapi.CapabilityFactsResponse{}, err
 	}
-	models := modelFacts(currentProvider)
+	models, err := modelFacts(currentProvider)
+	if err != nil {
+		return serverapi.CapabilityFactsResponse{}, err
+	}
 	return serverapi.CapabilityFactsResponse{
 		Models: models,
 		Providers: serverapi.ProviderCapabilityFacts{
@@ -107,22 +110,26 @@ func explicitProviderFacts(providerIDs []string) ([]serverapi.LLMProviderCapabil
 	return facts, nil
 }
 
-func modelFacts(providerCaps llm.ProviderCapabilities) serverapi.ModelCapabilityFacts {
+func modelFacts(providerCaps llm.ProviderCapabilities) (serverapi.ModelCapabilityFacts, error) {
 	contracts := llm.KnownModelCapabilityContracts()
 	known := make([]serverapi.ModelCapabilityFact, 0, len(contracts))
 	for _, contract := range contracts {
-		known = append(known, modelFact(contract, providerCaps))
+		fact, err := modelFact(contract, providerCaps)
+		if err != nil {
+			return serverapi.ModelCapabilityFacts{}, err
+		}
+		known = append(known, fact)
 	}
 	return serverapi.ModelCapabilityFacts{
 		KnownModels:     known,
 		UnknownFallback: unknownModelFallback(providerCaps),
-	}
+	}, nil
 }
 
-func modelFact(contract llm.ModelCapabilityContract, providerCaps llm.ProviderCapabilities) serverapi.ModelCapabilityFact {
+func modelFact(contract llm.ModelCapabilityContract, providerCaps llm.ProviderCapabilities) (serverapi.ModelCapabilityFact, error) {
 	modelID := strings.TrimSpace(contract.Model)
 	if modelID == "" {
-		panic("capability facts model catalog contains blank model id")
+		return serverapi.ModelCapabilityFact{}, errors.New("capability facts model catalog contains blank model id")
 	}
 	verbosity := llm.VerbositySupportForModelAndProvider(modelID, providerCaps)
 	fact := serverapi.ModelCapabilityFact{
@@ -139,7 +146,7 @@ func modelFact(contract llm.ModelCapabilityContract, providerCaps llm.ProviderCa
 		fact.LargeWindow = &serverapi.ModelLargeWindowFact{Tokens: contract.LargeContextWindowTokens}
 		fact.DefaultContextWindowMode = ptr(contextWindowModeStandard)
 	}
-	return fact
+	return fact, nil
 }
 
 func unknownModelFallback(providerCaps llm.ProviderCapabilities) serverapi.ModelCapabilityFact {

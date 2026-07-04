@@ -279,10 +279,16 @@ func configuredTextVerbosity(model, configured string, providerCaps ProviderCapa
 	default:
 		return ""
 	}
-	if !VerbositySupportForModelAndProvider(model, providerCaps).Supported {
+	support := VerbositySupportForModelAndProvider(model, providerCaps)
+	if !support.Supported {
 		return ""
 	}
-	return normalized
+	for _, level := range support.Levels {
+		if level == normalized {
+			return normalized
+		}
+	}
+	return ""
 }
 
 func normalizeSchemaNode(node any) {
