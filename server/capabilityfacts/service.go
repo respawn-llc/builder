@@ -83,9 +83,9 @@ func (s *Service) GetCapabilityFacts(ctx context.Context, req serverapi.Capabili
 func (s *Service) currentProviderFacts(ctx context.Context) (llm.ProviderCapabilities, error) {
 	authState := auth.EmptyState()
 	if s.authManager != nil {
-		loaded, err := s.authManager.CurrentState(ctx)
+		loaded, err := s.authManager.StoredState(ctx)
 		if err != nil {
-			return llm.ProviderCapabilities{}, fmt.Errorf("load current auth state for capability facts: %w", err)
+			return llm.ProviderCapabilities{}, fmt.Errorf("load stored auth state for capability facts: %w", err)
 		}
 		authState = loaded
 	}
@@ -184,9 +184,17 @@ func defaultFacts(settings config.Settings) (serverapi.CapabilityDefaultFacts, e
 	return serverapi.CapabilityDefaultFacts{
 		PrimaryModelID: modelID,
 		Thinking:       thinkingDefaultFact(settings.ThinkingLevel),
-		VerbosityLevel: strings.TrimSpace(string(settings.ModelVerbosity)),
+		Verbosity:      verbosityDefaultFact(settings.ModelVerbosity),
 		CompactionMode: strings.TrimSpace(string(settings.CompactionMode)),
 	}, nil
+}
+
+func verbosityDefaultFact(raw config.ModelVerbosity) *serverapi.VerbosityDefaultFact {
+	level := strings.TrimSpace(string(raw))
+	if level == "" {
+		return nil
+	}
+	return &serverapi.VerbosityDefaultFact{Level: level}
 }
 
 func thinkingDefaultFact(raw string) serverapi.ThinkingDefaultFact {

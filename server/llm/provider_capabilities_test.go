@@ -93,6 +93,12 @@ func TestResolveRuntimeProviderCapabilities(t *testing.T) {
 			settings: config.Settings{Model: "gpt-5.5"},
 			wantID:   "openai",
 		},
+		{
+			name:     "custom model alias with no override falls back to openai",
+			auth:     auth.State{Method: auth.Method{Type: auth.MethodNone}},
+			settings: config.Settings{Model: "operator-alias"},
+			wantID:   "openai",
+		},
 	}
 
 	for _, tt := range tests {

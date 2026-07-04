@@ -23,9 +23,10 @@ func ResolveRuntimeProviderCapabilities(authState auth.State, settings config.Se
 		} else {
 			inferredProvider, err := InferProviderFromModel(settings.Model)
 			if err != nil {
-				return ProviderCapabilities{}, &ProviderSelectionError{Model: strings.TrimSpace(settings.Model), Err: err}
+				provider = ProviderOpenAI
+			} else {
+				provider = inferredProvider
 			}
-			provider = inferredProvider
 		}
 	}
 	mode := runtimeOpenAIAuthMode(authState)

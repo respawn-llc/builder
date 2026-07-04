@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"core/server/auth"
 	"core/shared/config"
@@ -145,11 +146,27 @@ func TestServiceProjectsDefaults(t *testing.T) {
 	if resp.Defaults.Thinking.Mode != "custom" || resp.Defaults.Thinking.Value == nil || *resp.Defaults.Thinking.Value != "ultra" {
 		t.Fatalf("thinking default = %+v, want custom ultra", resp.Defaults.Thinking)
 	}
-	if resp.Defaults.VerbosityLevel != string(config.ModelVerbosityHigh) {
-		t.Fatalf("verbosity default = %q", resp.Defaults.VerbosityLevel)
+	if resp.Defaults.Verbosity == nil || resp.Defaults.Verbosity.Level != string(config.ModelVerbosityHigh) {
+		t.Fatalf("verbosity default = %+v", resp.Defaults.Verbosity)
 	}
 	if resp.Defaults.CompactionMode != string(config.CompactionModeNative) {
 		t.Fatalf("compaction default = %q", resp.Defaults.CompactionMode)
+	}
+}
+
+func TestServiceProjectsAbsentVerbosityDefaultAsNull(t *testing.T) {
+	service := NewService(Options{Config: testConfig(t, config.Settings{
+		Model:            "custom-model",
+		ProviderOverride: "openai",
+	})})
+
+	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	if err != nil {
+		t.Fatalf("GetCapabilityFacts: %v", err)
+	}
+
+	if resp.Defaults.Verbosity != nil {
+		t.Fatalf("verbosity default = %+v, want nil", resp.Defaults.Verbosity)
 	}
 }
 
@@ -237,6 +254,35 @@ func TestServiceUsesSavedAuthWhenAvailable(t *testing.T) {
 	service := NewService(Options{
 		Config:      testConfig(t, config.Settings{Model: "gpt-5.5"}),
 		AuthManager: auth.NewManager(auth.NewMemoryStore(state), nil, nil),
+	})
+
+	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	if err != nil {
+		t.Fatalf("GetCapabilityFacts: %v", err)
+	}
+
+	if resp.Providers.CurrentEffective == nil || resp.Providers.CurrentEffective.LLMProviderID != "chatgpt-codex" {
+		t.Fatalf("current provider = %+v, want chatgpt-codex", resp.Providers.CurrentEffective)
+	}
+}
+
+func TestServiceDoesNotRefreshAuthForPreAuthFacts(t *testing.T) {
+	state := auth.EmptyState()
+	state.Method.Type = auth.MethodOAuth
+	state.Method.OAuth = &auth.OAuthMethod{
+		AccessToken:  "stale-token",
+		RefreshToken: "refresh-token",
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(-time.Hour),
+		AccountID:    "account",
+	}
+	refresher := auth.NewOAuthRefresher(nil, time.Now, time.Second)
+	refresher.Refresh = func(context.Context, auth.Method) (auth.Method, error) {
+		return auth.Method{}, errors.New("refresh must not run for capability facts")
+	}
+	service := NewService(Options{
+		Config:      testConfig(t, config.Settings{Model: "gpt-5.5"}),
+		AuthManager: auth.NewManager(auth.NewMemoryStore(state), refresher, time.Now),
 	})
 
 	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})

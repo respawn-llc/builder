@@ -192,16 +192,20 @@ type ImportModeRecommendationFact struct {
 }
 
 type CapabilityDefaultFacts struct {
-	PrimaryModelID string              `json:"primary_model_id"`
-	Thinking       ThinkingDefaultFact `json:"thinking"`
-	VerbosityLevel string              `json:"verbosity_level"`
-	CompactionMode string              `json:"compaction_mode"`
+	PrimaryModelID string                `json:"primary_model_id"`
+	Thinking       ThinkingDefaultFact   `json:"thinking"`
+	Verbosity      *VerbosityDefaultFact `json:"verbosity,omitempty"`
+	CompactionMode string                `json:"compaction_mode"`
 }
 
 type ThinkingDefaultFact struct {
 	Mode  string  `json:"mode"`
 	Level *string `json:"level,omitempty"`
 	Value *string `json:"value,omitempty"`
+}
+
+type VerbosityDefaultFact struct {
+	Level string `json:"level"`
 }
 
 type CapabilityRecommendationFacts struct{}
