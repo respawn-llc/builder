@@ -112,7 +112,7 @@ func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T
 		t.Fatalf("MkdirAll worktreeSubdir: %v", err)
 	}
 	sess := createMetadataTestSession(t, store, cfg, binding)
-	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, WorkspaceID: binding.WorkspaceID, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-a"}, CwdRelpath: "pkg"}); err != nil {
+	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-a"}, CwdRelpath: "pkg"}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
 	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, store.AuthoritativeSessionStoreOptions()...)
@@ -164,10 +164,37 @@ func TestUpdateSessionExecutionTargetRejectsCrossWorkspaceWorktree(t *testing.T)
 	worktreeRoot := filepath.Join(cfgB.WorkspaceRoot, "wt-b")
 	createMetadataTestWorktree(t, ctx, store, bindingB.WorkspaceID, "worktree-b", worktreeRoot)
 
-	err = store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, WorkspaceID: bindingA.WorkspaceID, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-b"}, CwdRelpath: "."})
+	err = store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &SessionExecutionTargetUpdateWorkspace{ID: bindingA.WorkspaceID}, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-b"}, CwdRelpath: "."})
 	var mismatch *WorktreeWorkspaceMismatchError
 	if !errors.As(err, &mismatch) || mismatch.WorktreeID != "worktree-b" || mismatch.WorkspaceID != bindingA.WorkspaceID {
 		t.Fatalf("UpdateSessionExecutionTarget error = %v", err)
+	}
+}
+
+func TestUpdateSessionExecutionTargetAllowsNullableWorkspaceTargetFromReadModel(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	if _, err := store.db.ExecContext(ctx, "UPDATE sessions SET workspace_id = NULL, worktree_id = NULL, cwd_relpath = 'pkg' WHERE id = ?", sess.Meta().SessionID); err != nil {
+		t.Fatalf("clear session workspace target: %v", err)
+	}
+	target, err := store.ResolveSessionExecutionTarget(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if target.WorkspaceID != "" || target.Worktree != nil {
+		t.Fatalf("target = %+v, want nullable workspace root snapshot target", target)
+	}
+
+	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdateFromReadModel(sess.Meta().SessionID, target)); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget nullable workspace: %v", err)
+	}
+	var storedWorkspaceID sql.NullString
+	if err := store.db.QueryRowContext(ctx, "SELECT workspace_id FROM sessions WHERE id = ?", sess.Meta().SessionID).Scan(&storedWorkspaceID); err != nil {
+		t.Fatalf("scan workspace_id: %v", err)
+	}
+	if storedWorkspaceID.Valid {
+		t.Fatalf("stored workspace_id = %+v, want SQL NULL", storedWorkspaceID)
 	}
 }
 

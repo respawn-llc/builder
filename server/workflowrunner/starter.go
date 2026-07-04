@@ -243,10 +243,10 @@ func (s *Starter) StartWorkflowRun(ctx context.Context, req SchedulerStartRunReq
 		return errors.Join(errors.New("workflow runtime starter closed"), cleanupSession())
 	}
 	if err := s.metadata.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
-		SessionID:   plan.Store.Meta().SessionID,
-		WorkspaceID: input.WorkspaceID,
-		Worktree:    &metadata.SessionExecutionTargetUpdateWorktree{ID: input.WorktreeID},
-		CwdRelpath:  ".",
+		SessionID:  plan.Store.Meta().SessionID,
+		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: input.WorkspaceID},
+		Worktree:   &metadata.SessionExecutionTargetUpdateWorktree{ID: input.WorktreeID},
+		CwdRelpath: ".",
 	}); err != nil {
 		cancel()
 		s.releaseRegisteredRun(req.RunID)

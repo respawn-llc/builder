@@ -526,7 +526,7 @@ func TestRetargetSessionWorkspaceAttachesTargetAndUpdatesSession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, WorkspaceID: bindingA.WorkspaceID, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-a"}, CwdRelpath: "pkg"}); err != nil {
+	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, Workspace: &SessionExecutionTargetUpdateWorkspace{ID: bindingA.WorkspaceID}, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-a"}, CwdRelpath: "pkg"}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget before retarget: %v", err)
 	}
 	if err := sess.SetWorktreeReminderState(&session.WorktreeReminderState{
@@ -611,10 +611,10 @@ func TestRetargetSessionWorkspaceClearsSameWorkspaceStaleWorktreeTarget(t *testi
 	}
 	canonicalWorktreeRoot := createMetadataTestWorktree(t, ctx, store, binding.WorkspaceID, "worktree-stale", worktreeRoot)
 	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{
-		SessionID:   sess.Meta().SessionID,
-		WorkspaceID: binding.WorkspaceID,
-		Worktree:    &SessionExecutionTargetUpdateWorktree{ID: "worktree-stale"},
-		CwdRelpath:  "pkg",
+		SessionID:  sess.Meta().SessionID,
+		Workspace:  &SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
+		Worktree:   &SessionExecutionTargetUpdateWorktree{ID: "worktree-stale"},
+		CwdRelpath: "pkg",
 	}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget before retarget: %v", err)
 	}

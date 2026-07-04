@@ -97,10 +97,14 @@ func (e *WorktreeWorkspaceMismatchError) Error() string {
 }
 
 type SessionExecutionTargetUpdate struct {
-	SessionID   string
-	WorkspaceID string
-	Worktree    *SessionExecutionTargetUpdateWorktree
-	CwdRelpath  string
+	SessionID  string
+	Workspace  *SessionExecutionTargetUpdateWorkspace
+	Worktree   *SessionExecutionTargetUpdateWorktree
+	CwdRelpath string
+}
+
+type SessionExecutionTargetUpdateWorkspace struct {
+	ID string
 }
 
 type SessionExecutionTargetUpdateWorktree struct {
@@ -108,15 +112,19 @@ type SessionExecutionTargetUpdateWorktree struct {
 }
 
 func SessionExecutionTargetUpdateFromReadModel(sessionID string, target clientui.SessionExecutionTarget) SessionExecutionTargetUpdate {
+	var workspace *SessionExecutionTargetUpdateWorkspace
+	if strings.TrimSpace(target.WorkspaceID) != "" {
+		workspace = &SessionExecutionTargetUpdateWorkspace{ID: target.WorkspaceID}
+	}
 	var worktree *SessionExecutionTargetUpdateWorktree
 	if target.Worktree != nil {
 		worktree = &SessionExecutionTargetUpdateWorktree{ID: target.Worktree.ID}
 	}
 	return SessionExecutionTargetUpdate{
-		SessionID:   sessionID,
-		WorkspaceID: target.WorkspaceID,
-		Worktree:    worktree,
-		CwdRelpath:  target.CwdRelpath,
+		SessionID:  sessionID,
+		Workspace:  workspace,
+		Worktree:   worktree,
+		CwdRelpath: target.CwdRelpath,
 	}
 }
 
@@ -405,12 +413,19 @@ func (s *Store) UpdateSessionExecutionTarget(ctx context.Context, update Session
 	if trimmedSessionID == "" {
 		return errors.New("session id is required")
 	}
-	trimmedWorkspaceID := strings.TrimSpace(update.WorkspaceID)
-	if trimmedWorkspaceID == "" {
-		return errors.New("workspace id is required")
+	workspaceID := sql.NullString{}
+	if update.Workspace != nil {
+		trimmedWorkspaceID := strings.TrimSpace(update.Workspace.ID)
+		if trimmedWorkspaceID == "" {
+			return errors.New("workspace id is required")
+		}
+		workspaceID = sql.NullString{String: trimmedWorkspaceID, Valid: true}
 	}
 	worktreeID := sql.NullString{}
 	if update.Worktree != nil {
+		if !workspaceID.Valid {
+			return errors.New("workspace id is required when worktree is selected")
+		}
 		trimmedWorktreeID := strings.TrimSpace(update.Worktree.ID)
 		if trimmedWorktreeID == "" {
 			return ErrWorktreeIDRequired
@@ -419,13 +434,13 @@ func (s *Store) UpdateSessionExecutionTarget(ctx context.Context, update Session
 		if err != nil {
 			return err
 		}
-		if strings.TrimSpace(record.WorkspaceID) != trimmedWorkspaceID {
-			return &WorktreeWorkspaceMismatchError{WorktreeID: trimmedWorktreeID, WorkspaceID: trimmedWorkspaceID}
+		if strings.TrimSpace(record.WorkspaceID) != workspaceID.String {
+			return &WorktreeWorkspaceMismatchError{WorktreeID: trimmedWorktreeID, WorkspaceID: workspaceID.String}
 		}
 		worktreeID = sql.NullString{String: trimmedWorktreeID, Valid: true}
 	}
 	params := sqlitegen.UpdateSessionExecutionTargetByIDParams{
-		WorkspaceID:     sql.NullString{String: trimmedWorkspaceID, Valid: true},
+		WorkspaceID:     workspaceID,
 		WorktreeID:      worktreeID,
 		CwdRelpath:      normalizeSessionCwdRelpath(update.CwdRelpath),
 		UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
@@ -1119,10 +1134,10 @@ func (s *Store) RetargetSessionWorkspace(ctx context.Context, sessionID string, 
 		return Binding{}, err
 	}
 	if err := s.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{
-		SessionID:   trimmedSessionID,
-		WorkspaceID: binding.WorkspaceID,
-		Worktree:    nil,
-		CwdRelpath:  ".",
+		SessionID:  trimmedSessionID,
+		Workspace:  &SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
+		Worktree:   nil,
+		CwdRelpath: ".",
 	}); err != nil {
 		return Binding{}, err
 	}

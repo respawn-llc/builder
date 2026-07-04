@@ -92,10 +92,10 @@ func (s *Service) retargetSessionsFromWorktree(ctx context.Context, workspaceID 
 		}
 		cwdRelpath := clampCwdRelpath(previousTarget.CwdRelpath, trimmedWorkspaceRoot)
 		if err := s.metadata.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
-			SessionID:   blocker.SessionID,
-			WorkspaceID: trimmedWorkspaceID,
-			Worktree:    nil,
-			CwdRelpath:  cwdRelpath,
+			SessionID:  blocker.SessionID,
+			Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: trimmedWorkspaceID},
+			Worktree:   nil,
+			CwdRelpath: cwdRelpath,
 		}); err != nil {
 			appendErr(blocker.SessionID, err)
 			if options.rollbackOnError {
@@ -212,10 +212,10 @@ func (s *Service) switchSessionTarget(ctx context.Context, workspaceCtx sessionW
 	}
 	cwdRelpath := clampCwdRelpath(previousTarget.CwdRelpath, nextBaseRoot)
 	if err := s.metadata.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{
-		SessionID:   workspaceCtx.sessionID,
-		WorkspaceID: workspaceCtx.workspaceID,
-		Worktree:    nextWorktree,
-		CwdRelpath:  cwdRelpath,
+		SessionID:  workspaceCtx.sessionID,
+		Workspace:  &metadata.SessionExecutionTargetUpdateWorkspace{ID: workspaceCtx.workspaceID},
+		Worktree:   nextWorktree,
+		CwdRelpath: cwdRelpath,
 	}); err != nil {
 		return clientui.SessionExecutionTarget{}, err
 	}

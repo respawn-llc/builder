@@ -491,7 +491,7 @@ func updateServiceTestSessionTarget(t *testing.T, env *serviceTestEnv, sessionID
 	if strings.TrimSpace(worktreeID) != "" {
 		worktree = &metadata.SessionExecutionTargetUpdateWorktree{ID: worktreeID}
 	}
-	if err := env.store.UpdateSessionExecutionTarget(env.ctx, metadata.SessionExecutionTargetUpdate{SessionID: sessionID, WorkspaceID: workspaceID, Worktree: worktree, CwdRelpath: cwdRelpath}); err != nil {
+	if err := env.store.UpdateSessionExecutionTarget(env.ctx, metadata.SessionExecutionTargetUpdate{SessionID: sessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: workspaceID}, Worktree: worktree, CwdRelpath: cwdRelpath}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget %s: %v", sessionID, err)
 	}
 }
