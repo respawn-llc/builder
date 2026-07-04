@@ -208,7 +208,19 @@ func applyContextWindow(settings *config.Settings, model string, choice serverap
 		return invalidRequest("context_window.kind", "unsupported_value")
 	}
 	settings.ContextCompactionThresholdTokens = settings.ModelContextWindow * 95 / 100
+	settings.PreSubmitCompactionLeadTokens = clampedPreSubmitRunway(settings.ContextCompactionThresholdTokens, settings.ModelContextWindow, settings.PreSubmitCompactionLeadTokens)
 	return nil
+}
+
+func clampedPreSubmitRunway(thresholdTokens int, windowTokens int, configuredRunway int) int {
+	maxRunway := thresholdTokens - config.MinimumThresholdTokens(windowTokens)
+	if maxRunway < 1 {
+		return 1
+	}
+	if configuredRunway > maxRunway {
+		return maxRunway
+	}
+	return configuredRunway
 }
 
 func thinkingChoiceValue(choice serverapi.OnboardingThinkingChoice, model, field string) (string, error) {
@@ -251,7 +263,7 @@ func applySupervisor(settings *config.Settings, preserved map[string]bool, choic
 		if err != nil {
 			return err
 		}
-		if thinking != settings.ThinkingLevel {
+		if choice.Thinking.Kind == serverapi.OnboardingThinkingDisabled || thinking != settings.ThinkingLevel {
 			settings.Reviewer.ThinkingLevel = thinking
 			preserved["reviewer.thinking_level"] = true
 		}
@@ -299,11 +311,12 @@ func (f *Finalizer) executeImports(ctx context.Context, req serverapi.Onboarding
 		}
 	}
 	if commandsRequested {
-		target := filepath.Join(f.persistenceRoot, "prompts")
-		if blocked, err := targetUnavailableForImport(target); err != nil {
-			return serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeImportFailed, serverapi.OnboardingImportFailedDetails{ImportKind: serverapi.OnboardingImportKindCommands, Operation: serverapi.OnboardingImportOperationPrepareTarget, Cause: err.Error()}, err)
-		} else if blocked {
-			return importUnavailable(req.CommandsImport, serverapi.OnboardingImportKindCommands, serverapi.OnboardingImportReasonTargetExists)
+		for _, target := range []string{filepath.Join(f.persistenceRoot, "prompts"), filepath.Join(f.persistenceRoot, "commands")} {
+			if blocked, err := targetUnavailableForImport(target); err != nil {
+				return serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeImportFailed, serverapi.OnboardingImportFailedDetails{ImportKind: serverapi.OnboardingImportKindCommands, Operation: serverapi.OnboardingImportOperationPrepareTarget, Cause: err.Error()}, err)
+			} else if blocked {
+				return importUnavailable(req.CommandsImport, serverapi.OnboardingImportKindCommands, serverapi.OnboardingImportReasonTargetExists)
+			}
 		}
 	}
 	discovery, err := discover(f.persistenceRoot, f.workspaceRoot, f.homeDir)

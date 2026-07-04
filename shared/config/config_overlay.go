@@ -13,7 +13,7 @@ func inheritReviewerDefaultsWithSources(settings *Settings, sources map[string]s
 	if strings.TrimSpace(settings.Reviewer.Model) == "" {
 		settings.Reviewer.Model = settings.Model
 	}
-	if strings.TrimSpace(settings.Reviewer.ThinkingLevel) == "" {
+	if strings.TrimSpace(settings.Reviewer.ThinkingLevel) == "" && !hasConfiguredSource(sources, "reviewer.thinking_level") {
 		settings.Reviewer.ThinkingLevel = settings.ThinkingLevel
 	}
 	if strings.TrimSpace(string(settings.Reviewer.ModelVerbosity)) == "" {

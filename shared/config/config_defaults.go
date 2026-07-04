@@ -226,7 +226,11 @@ func writeReviewerInheritanceLines(builder *strings.Builder, raw Settings, effec
 	modelCommented := !(preserved != nil && preserved["reviewer.model"]) && strings.TrimSpace(raw.Reviewer.Model) == ""
 	writeCommentedAssignment(builder, "model", effective.Reviewer.Model, modelCommented, "# inherited from main model unless overridden")
 	thinkingCommented := !(preserved != nil && preserved["reviewer.thinking_level"]) && strings.TrimSpace(raw.Reviewer.ThinkingLevel) == ""
-	writeCommentedAssignment(builder, "thinking_level", effective.Reviewer.ThinkingLevel, thinkingCommented, "# inherited from main thinking_level unless overridden")
+	thinkingValue := any(effective.Reviewer.ThinkingLevel)
+	if preserved != nil && preserved["reviewer.thinking_level"] && strings.TrimSpace(raw.Reviewer.ThinkingLevel) == "" {
+		thinkingValue = raw.Reviewer.ThinkingLevel
+	}
+	writeCommentedAssignment(builder, "thinking_level", thinkingValue, thinkingCommented, "# inherited from main thinking_level unless overridden")
 	verbosityCommented := !(preserved != nil && preserved["reviewer.model_verbosity"]) && strings.TrimSpace(string(raw.Reviewer.ModelVerbosity)) == ""
 	writeCommentedAssignment(builder, "model_verbosity", effective.Reviewer.ModelVerbosity, verbosityCommented, "# inherited from main model_verbosity unless overridden")
 	providerCommented := !(preserved != nil && preserved["reviewer.provider_override"]) && strings.TrimSpace(raw.Reviewer.ProviderOverride) == ""

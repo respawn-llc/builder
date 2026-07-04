@@ -134,6 +134,44 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 	}
 }
 
+func TestFinalizerAcceptsMinimumCustomContextWindow(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		ContextWindow: &serverapi.OnboardingContextWindowChoice{Kind: serverapi.OnboardingContextWindowCustom, Tokens: 50_000},
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	cfg := loadFinalizedConfig(t, root)
+	if cfg.Settings.ModelContextWindow != 50_000 {
+		t.Fatalf("model context window = %d, want 50000", cfg.Settings.ModelContextWindow)
+	}
+	if effective := config.EffectivePreSubmitThresholdTokens(cfg.Settings.ContextCompactionThresholdTokens, cfg.Settings.PreSubmitCompactionLeadTokens); effective < config.MinimumThresholdTokens(cfg.Settings.ModelContextWindow) {
+		t.Fatalf("effective pre-submit threshold = %d below minimum", effective)
+	}
+}
+
+func TestFinalizerPreservesDisabledSupervisorThinking(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		Thinking: &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingLevel, Level: "high"},
+		Supervisor: &serverapi.OnboardingSupervisorChoice{
+			Frequency: serverapi.OnboardingSupervisorAll,
+			Thinking:  &serverapi.OnboardingThinkingChoice{Kind: serverapi.OnboardingThinkingDisabled},
+		},
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	cfg := loadFinalizedConfig(t, root)
+	if cfg.Settings.ThinkingLevel != "high" {
+		t.Fatalf("main thinking = %q, want high", cfg.Settings.ThinkingLevel)
+	}
+	if cfg.Settings.Reviewer.ThinkingLevel != "" {
+		t.Fatalf("reviewer thinking = %q, want disabled", cfg.Settings.Reviewer.ThinkingLevel)
+	}
+}
+
 func TestFinalizerRejectsUnsupportedVerbosityForSelectedModel(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
@@ -458,7 +496,7 @@ func TestFinalizerRejectsNativeCompactionForUnknownCustomModel(t *testing.T) {
 	}
 }
 
-func TestFinalizerCommandsImportIgnoresLegacyCommandsDirectory(t *testing.T) {
+func TestFinalizerCommandsImportBlocksLegacyCommandsDirectory(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
 	providerUUID := createProviderCommandSource(t, home, ".claude")
@@ -469,10 +507,12 @@ func TestFinalizerCommandsImportIgnoresLegacyCommandsDirectory(t *testing.T) {
 	_, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
 		CommandsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
 	})
-	if err != nil {
-		t.Fatalf("FinalizeOnboarding: %v", err)
+	if !errors.Is(err, serverapi.ErrOnboardingFinalizeImportUnavailable) {
+		t.Fatalf("FinalizeOnboarding error = %v, want import_unavailable", err)
 	}
-	assertSymlink(t, filepath.Join(root, "prompts"))
+	if _, statErr := os.Lstat(filepath.Join(root, "prompts")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("prompts import should not run when legacy commands exist, stat err=%v", statErr)
+	}
 }
 
 func TestProductionProviderCatalogUUIDsAreStableV4Values(t *testing.T) {

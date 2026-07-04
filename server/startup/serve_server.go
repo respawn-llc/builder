@@ -117,7 +117,7 @@ func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapR
 	return onboardingCfg, onboardingCfg.Source.SettingsFileExists, nil
 }
 
-func buildStartupControlSurface(_ context.Context, bootstrapReq serverbootstrap.Request, _ bool, authHandler startupAuthHandler) (config.App, *startupGatewayDependencies, error) {
+func buildStartupControlSurface(ctx context.Context, bootstrapReq serverbootstrap.Request, _ bool, authHandler startupAuthHandler) (config.App, *startupGatewayDependencies, error) {
 	resolved, err := serverbootstrap.ResolveConfig(bootstrapReq)
 	if err != nil {
 		return config.App{}, nil, err
@@ -152,7 +152,7 @@ func buildStartupControlSurface(_ context.Context, bootstrapReq serverbootstrap.
 		_ = rootLease.Close()
 		return config.App{}, nil, err
 	}
-	return cfg, newStartupGatewayDependencies(cfg, bootstrapReq, authSupport, rootLease, finalizer), nil
+	return cfg, newStartupGatewayDependencies(ctx, cfg, bootstrapReq, authSupport, rootLease, finalizer), nil
 }
 
 func (s *ServeServer) Serve(ctx context.Context) error {
@@ -432,9 +432,12 @@ type startupGatewayDependencies struct {
 	activation  error
 }
 
-func newStartupGatewayDependencies(cfg config.App, bootstrapReq serverbootstrap.Request, authSupport serverbootstrap.AuthSupport, rootLease *core.RootLockLease, finalizer *onboarding.Finalizer) *startupGatewayDependencies {
+func newStartupGatewayDependencies(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, authSupport serverbootstrap.AuthSupport, rootLease *core.RootLockLease, finalizer *onboarding.Finalizer) *startupGatewayDependencies {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	deps := &startupGatewayDependencies{cfg: cfg, bootstrap: bootstrapReq, authSupport: authSupport, rootLease: rootLease}
-	deps.finalizer = startupFinalizeService{service: finalizer, activate: deps.activate}
+	deps.finalizer = startupFinalizeService{service: finalizer, activate: deps.activate, activationContext: ctx}
 	return deps
 }
 
@@ -573,8 +576,9 @@ func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req 
 }
 
 type startupFinalizeService struct {
-	service  client.OnboardingFinalizeClient
-	activate func(context.Context, serverapi.OnboardingFinalizeResponse) error
+	service           client.OnboardingFinalizeClient
+	activate          func(context.Context, serverapi.OnboardingFinalizeResponse) error
+	activationContext context.Context
 }
 
 func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
@@ -583,7 +587,11 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 		return serverapi.OnboardingFinalizeResponse{}, err
 	}
 	if s.activate != nil {
-		if err := s.activate(ctx, resp); err != nil {
+		activationCtx := s.activationContext
+		if activationCtx == nil {
+			activationCtx = context.Background()
+		}
+		if err := s.activate(activationCtx, resp); err != nil {
 			return serverapi.OnboardingFinalizeResponse{}, err
 		}
 	}

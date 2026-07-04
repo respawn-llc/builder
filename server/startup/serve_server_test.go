@@ -777,6 +777,34 @@ func TestMissingConfigFinalizeActivationFailureIsTypedAndRetryConflicts(t *testi
 	}
 }
 
+type finalizeServiceFunc func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
+
+func (f finalizeServiceFunc) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+	return f(ctx, req)
+}
+
+func TestStartupFinalizeActivationUsesServerOwnedContext(t *testing.T) {
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	activationCtxCanceled := true
+	service := startupFinalizeService{
+		service: finalizeServiceFunc(func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+			return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
+		}),
+		activationContext: context.Background(),
+		activate: func(ctx context.Context, _ serverapi.OnboardingFinalizeResponse) error {
+			activationCtxCanceled = ctx.Err() != nil
+			return nil
+		},
+	}
+	if _, err := service.FinalizeOnboarding(requestCtx, serverapi.OnboardingFinalizeRequest{}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	if activationCtxCanceled {
+		t.Fatal("activation used canceled request context")
+	}
+}
+
 func writeServeSettings(t *testing.T, home string, contents string) {
 	t.Helper()
 	settingsDir := filepath.Join(home, config.ConfigDirName)

@@ -168,11 +168,24 @@ func DefaultOnboardingSettings() Settings {
 }
 
 func RenderSettingsTOMLForOnboarding(settings Settings, options OnboardingWriteOptions) (string, error) {
-	normalized, err := NormalizeSettingsForPersistenceWithSources(settings, nil)
+	normalized, err := NormalizeSettingsForPersistenceWithSources(settings, onboardingPreservedSources(options.PreservedDefaults))
 	if err != nil {
 		return "", err
 	}
 	return settingsTOMLForOnboarding(normalized, options.PreservedDefaults), nil
+}
+
+func onboardingPreservedSources(preserved map[string]bool) map[string]string {
+	if len(preserved) == 0 {
+		return nil
+	}
+	sources := map[string]string{}
+	for key, preserve := range preserved {
+		if preserve {
+			sources[key] = "file"
+		}
+	}
+	return sources
 }
 
 func ResolveSettingsFilePathInRoot(root string) (string, error) {
@@ -195,7 +208,7 @@ func WriteSettingsFileForOnboardingWithOptionsAt(path string, settings Settings,
 	if strings.TrimSpace(path) == "" {
 		return "", fmt.Errorf("settings path is required")
 	}
-	normalized, err := NormalizeSettingsForPersistenceWithSources(settings, nil)
+	normalized, err := NormalizeSettingsForPersistenceWithSources(settings, onboardingPreservedSources(options.PreservedDefaults))
 	if err != nil {
 		return "", err
 	}

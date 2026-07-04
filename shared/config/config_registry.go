@@ -66,6 +66,7 @@ type settingDocOptions struct {
 	omitInTOML                   bool
 	resolveRelativeToSettingsDir bool
 	defaultValue                 func(settingsState) any
+	allowEmptyString             bool
 }
 
 type scalarSetting[T any] struct {
@@ -416,7 +417,8 @@ func newSettingsRegistry() settingsRegistry {
 			nil,
 			nil,
 			settingDocOptions{
-				omitInTOML: true,
+				omitInTOML:       true,
+				allowEmptyString: true,
 				defaultValue: func(settingsState) any {
 					return "<inherits thinking_level when unset>"
 				},
@@ -735,7 +737,11 @@ func newStringSetting[T ~string](
 		get:                get,
 		transformFileValue: transformFileValue,
 		decodeFile: func(raw settingsFile, path []string) (T, bool, error) {
-			value, ok, err := lookupFileString(raw, path)
+			lookup := lookupFileString
+			if doc.allowEmptyString {
+				lookup = lookupFileStringAllowEmpty
+			}
+			value, ok, err := lookup(raw, path)
 			if err != nil || !ok {
 				return *new(T), ok, err
 			}
@@ -1300,6 +1306,18 @@ func lookupFileString(raw settingsFile, path []string) (string, bool, error) {
 		return "", false, nil
 	}
 	return trimmed, true, nil
+}
+
+func lookupFileStringAllowEmpty(raw settingsFile, path []string) (string, bool, error) {
+	value, ok, err := lookupFileValue(raw, path)
+	if err != nil || !ok {
+		return "", ok, err
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", false, &SettingsKeyTypeError{Key: strings.Join(path, "."), ExpectedType: "string"}
+	}
+	return strings.TrimSpace(text), true, nil
 }
 
 func lookupFileBool(raw settingsFile, path []string) (bool, bool, error) {

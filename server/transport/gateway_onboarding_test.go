@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"core/server/core"
+	rpccontract "core/shared/apicontract"
 	remoteclient "core/shared/client"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -19,6 +20,18 @@ type gatewayOnboardingOverride struct {
 
 func (d *gatewayOnboardingOverride) OnboardingFinalizeClient() remoteclient.OnboardingFinalizeClient {
 	return d.finalize
+}
+
+type gatewayOnboardingUnavailableOverride struct {
+	*core.Core
+	unavailable rpccontract.Dependency
+}
+
+func (d *gatewayOnboardingUnavailableOverride) RouteDependencyAvailable(dep rpccontract.Dependency) error {
+	if dep == d.unavailable {
+		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+	}
+	return nil
 }
 
 type gatewayOnboardingService struct {
@@ -81,6 +94,31 @@ func TestGatewayOnboardingFinalizeMalformedParamsRemainInvalidParams(t *testing.
 	errResp := callGatewayExpectError(t, conn, "bad-params", protocol.MethodOnboardingFinalize, "not an object")
 	if errResp.Code != protocol.ErrCodeInvalidParams || len(errResp.Data) != 0 {
 		t.Fatalf("malformed finalize response = %+v, want invalid params without structured data", errResp)
+	}
+}
+
+func TestGatewaySubscriptionChecksDependencyAvailabilityBeforeClientLookup(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	defer func() { _ = appCore.Close() }()
+	gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{
+		Core:        appCore,
+		unavailable: rpccontract.DependencyAttentionNotification,
+	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptestServerForGateway(t, gateway)
+	defer server.Close()
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+
+	errResp := callGatewayExpectError(t, conn, "attention-subscribe", protocol.MethodAttentionNotificationSubscribe, serverapi.AttentionNotificationSubscribeRequest{})
+	if errResp.Code != protocol.ErrCodeServerNotReady {
+		t.Fatalf("error code = %d, want server not ready", errResp.Code)
+	}
+	if decoded := serverapi.DecodeServerNotReadyError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("decoded error = %v, want onboarding_required", decoded)
 	}
 }
 
