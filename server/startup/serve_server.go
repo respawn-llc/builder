@@ -15,6 +15,7 @@ import (
 	"core/server/auth"
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
+	"core/server/capabilityfacts"
 	"core/server/core"
 	"core/server/metadata"
 	"core/server/onboarding"
@@ -614,6 +615,10 @@ func (d *startupGatewayDependencies) AuthStatusClient() client.AuthStatusClient 
 	cfg := d.snapshotConfig()
 	return client.NewLoopbackAuthStatusClient(authservice.NewStatusService(d.authSupport.AuthManager, cfg.Settings))
 }
+func (d *startupGatewayDependencies) CapabilityFactsClient() client.CapabilityFactsClient {
+	cfg := d.snapshotConfig()
+	return client.NewLoopbackCapabilityFactsClient(capabilityfacts.NewService(capabilityfacts.Options{Config: cfg, AuthManager: d.authSupport.AuthManager}))
+}
 func (d *startupGatewayDependencies) ServerStatusClient() client.ServerStatusClient {
 	cfg := d.snapshotConfig()
 	return client.NewLoopbackServerStatusClient(startupServerStatusService{base: serverstatus.NewServerStatusService(d.authSupport.AuthManager, cfg), readiness: d})
@@ -686,6 +691,12 @@ func (d *startupGatewayDependencies) SessionActivityClient() client.SessionActiv
 	}
 	return nil
 }
+func (d *startupGatewayDependencies) SessionTranscriptClient() client.SessionTranscriptClient {
+	if c := d.activeCore(); c != nil {
+		return c.SessionTranscriptClient()
+	}
+	return nil
+}
 func (d *startupGatewayDependencies) SessionLaunchClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (client.SessionLaunchClient, error) {
 	if c := d.activeCore(); c != nil {
 		return c.SessionLaunchClientForProjectWorkspace(ctx, projectID, workspaceRoot)
@@ -713,6 +724,12 @@ func (d *startupGatewayDependencies) RunPromptClientForProjectWorkspaceID(ctx co
 func (d *startupGatewayDependencies) RuntimeControlClient() client.RuntimeControlClient {
 	if c := d.activeCore(); c != nil {
 		return c.RuntimeControlClient()
+	}
+	return nil
+}
+func (d *startupGatewayDependencies) RuntimeLiveControlClient() client.RuntimeLiveControlClient {
+	if c := d.activeCore(); c != nil {
+		return c.RuntimeLiveControlClient()
 	}
 	return nil
 }
