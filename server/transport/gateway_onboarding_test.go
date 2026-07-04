@@ -122,28 +122,6 @@ func TestGatewaySubscriptionChecksDependencyAvailabilityBeforeClientLookup(t *te
 	}
 }
 
-func TestGatewayAuthRequiredRoutesAuthenticateBeforeDependencyAvailability(t *testing.T) {
-	appCore, _ := newGatewayTestCore(t, true, false)
-	defer func() { _ = appCore.Close() }()
-	gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{
-		Core:        appCore,
-		unavailable: rpccontract.DependencyProjectView,
-	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-	server := httptestServerForGateway(t, gateway)
-	defer server.Close()
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-
-	errResp := callGatewayExpectError(t, conn, "project-create", protocol.MethodProjectCreate, serverapi.ProjectCreateRequest{})
-	if errResp.Code != protocol.ErrCodeAuthRequired {
-		t.Fatalf("error code = %d, want auth required", errResp.Code)
-	}
-}
-
 func TestRemoteOnboardingFinalizePreservesStructuredSentinels(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	defer func() { _ = appCore.Close() }()

@@ -64,7 +64,7 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 		return &ServeServer{Core: appCore, cfg: appCore.Config()}, nil
 	}
 	if onboardingHandler != nil {
-		onboardingCfg, completed, err := runStartupOnboardingHandler(ctx, cfg, bootstrapReq, !req.AllowUnauthenticated, authHandler, onboardingHandler)
+		onboardingCfg, completed, err := runStartupOnboardingHandler(ctx, cfg, bootstrapReq, authHandler, onboardingHandler)
 		if err != nil {
 			return nil, err
 		}
@@ -90,16 +90,11 @@ func StartServeServer(ctx context.Context, req Request, authHandler AuthHandler,
 	return &ServeServer{deps: deps, cfg: cfg}, nil
 }
 
-func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, requireAuth bool, authHandler startupAuthHandler, onboardingHandler OnboardingHandler) (config.App, bool, error) {
+func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, authHandler startupAuthHandler, onboardingHandler OnboardingHandler) (config.App, bool, error) {
 	store := authHandler.WrapStore(auth.NewFileStore(config.GlobalAuthConfigPath(cfg)))
 	authSupport, err := serverbootstrap.BuildAuthSupport(store, bootstrapReq.LookupEnv, bootstrapReq.Now)
 	if err != nil {
 		return config.App{}, false, err
-	}
-	if requireAuth {
-		if err := authservice.EnsureFlowReady(ctx, authSupport.AuthManager, authSupport.OAuthOptions, cfg.Settings.Theme, bootstrapReq.LookupEnv, authservice.StartupAuthRequired(cfg.Settings), false, authHandler); err != nil {
-			return config.App{}, false, err
-		}
 	}
 	reloadConfig := func() (config.App, error) {
 		refreshed, err := serverbootstrap.ResolveConfig(bootstrapReq)
