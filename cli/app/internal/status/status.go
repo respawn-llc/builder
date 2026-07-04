@@ -335,8 +335,10 @@ func ExecutionTarget(req Request) clientui.SessionExecutionTarget {
 }
 
 func EnvironmentRoot(workspaceRoot string, target clientui.SessionExecutionTarget) string {
-	if worktreeRoot := strings.TrimSpace(target.WorktreeRoot); worktreeRoot != "" {
-		return worktreeRoot
+	if target.Worktree != nil {
+		if worktreeRoot := strings.TrimSpace(target.Worktree.Root); worktreeRoot != "" {
+			return worktreeRoot
+		}
 	}
 	if registeredWorkspaceRoot := strings.TrimSpace(target.WorkspaceRoot); registeredWorkspaceRoot != "" {
 		return registeredWorkspaceRoot
@@ -360,8 +362,11 @@ func Workdir(workspaceRoot string, target clientui.SessionExecutionTarget) strin
 
 func GitRoot(req Request) string {
 	target := ExecutionTarget(req)
-	if worktreeRoot := strings.TrimSpace(target.WorktreeRoot); worktreeRoot != "" {
-		return worktreeRoot
+	if target.Worktree != nil {
+		worktreeRoot := strings.TrimSpace(target.Worktree.Root)
+		if worktreeRoot != "" {
+			return worktreeRoot
+		}
 	}
 	if workspaceRoot := strings.TrimSpace(req.WorkspaceRoot); workspaceRoot != "" {
 		return workspaceRoot

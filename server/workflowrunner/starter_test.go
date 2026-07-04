@@ -2371,7 +2371,7 @@ func (f starterFixture) assertRunSessionUsesTaskWorktree(t *testing.T, sessionID
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if strings.TrimSpace(target.WorktreeID) == "" || !strings.HasSuffix(target.EffectiveWorkdir, string(filepath.Separator)+"RUN-1") {
+	if target.Worktree == nil || strings.TrimSpace(target.Worktree.ID) == "" || !strings.HasSuffix(target.EffectiveWorkdir, string(filepath.Separator)+"RUN-1") {
 		t.Fatalf("session target = %+v, want task worktree", target)
 	}
 	return target.EffectiveWorkdir

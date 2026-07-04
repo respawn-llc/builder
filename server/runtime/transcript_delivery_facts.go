@@ -255,7 +255,6 @@ func localEntryNoticeFact(entry ChatEntry) TranscriptCommittedRowFact {
 	return runtimeNoticeFactFromLocalEntry(entry)
 }
 
-
 func synthesizedTranscriptToolResultFact(call llm.ToolCall, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) (TranscriptCommittedRowFact, bool) {
 	callID := strings.TrimSpace(call.ID)
 	if callID == "" {

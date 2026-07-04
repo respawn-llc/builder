@@ -130,6 +130,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"RuntimeSubmitRequest":                     {},
 		"ReadModelVersion":                         {},
 		"SessionExecutionTarget":                   {},
+		"SessionExecutionWorktreeTarget":           {},
 		"SessionSummary":                           {},
 		"ToolCallMeta":                             {},
 		"ToolCallRenderBehavior":                   {},

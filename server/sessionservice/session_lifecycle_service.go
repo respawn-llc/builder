@@ -316,7 +316,7 @@ func (s *SessionLifecycleService) preserveForkExecutionTarget(ctx context.Contex
 		}
 		return err
 	}
-	return metadataStore.UpdateSessionExecutionTargetByID(ctx, trimmedChildID, target.WorkspaceID, target.WorktreeID, target.CwdRelpath)
+	return metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdateFromReadModel(trimmedChildID, target))
 }
 
 func (s *SessionLifecycleService) openStore(sessionID string) (*session.Store, error) {

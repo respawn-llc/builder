@@ -1768,7 +1768,7 @@ SELECT
     CAST(COALESCE(json_extract(s.metadata_json, '$.workspace_container'), '') AS TEXT) AS workspace_snapshot_name,
     COALESCE(w.canonical_root_path, json_extract(s.metadata_json, '$.workspace_root'), '') AS workspace_root,
     s.worktree_id,
-    COALESCE(wt.canonical_root_path, '') AS worktree_root,
+    wt.canonical_root_path AS worktree_root,
     s.cwd_relpath
 FROM sessions s
 LEFT JOIN workspaces w ON w.id = s.workspace_id
@@ -1784,7 +1784,7 @@ type GetSessionExecutionTargetByIDRow struct {
 	WorkspaceSnapshotName string
 	WorkspaceRoot         string
 	WorktreeID            sql.NullString
-	WorktreeRoot          string
+	WorktreeRoot          sql.NullString
 	CwdRelpath            string
 }
 

@@ -104,35 +104,67 @@ type SessionExecutionTarget struct {
 	WorkspaceName         string
 	WorkspaceRoot         string
 	WorkspaceAvailability string
-	WorktreeID            string
-	WorktreeName          string
-	WorktreeRoot          string
-	WorktreeAvailability  string
+	Worktree              *SessionExecutionWorktreeTarget
 	CwdRelpath            string
 	EffectiveWorkdir      string
 }
 
+type SessionExecutionWorktreeTarget struct {
+	ID           string
+	Name         string
+	Root         string
+	Availability string
+}
+
 func NormalizeSessionExecutionTarget(target SessionExecutionTarget) SessionExecutionTarget {
+	var worktree *SessionExecutionWorktreeTarget
+	if target.Worktree != nil {
+		worktree = &SessionExecutionWorktreeTarget{
+			ID:           strings.TrimSpace(target.Worktree.ID),
+			Name:         strings.TrimSpace(target.Worktree.Name),
+			Root:         strings.TrimSpace(target.Worktree.Root),
+			Availability: strings.TrimSpace(target.Worktree.Availability),
+		}
+	}
 	return SessionExecutionTarget{
 		WorkspaceID:           strings.TrimSpace(target.WorkspaceID),
 		WorkspaceName:         strings.TrimSpace(target.WorkspaceName),
 		WorkspaceRoot:         strings.TrimSpace(target.WorkspaceRoot),
 		WorkspaceAvailability: strings.TrimSpace(target.WorkspaceAvailability),
-		WorktreeID:            strings.TrimSpace(target.WorktreeID),
-		WorktreeName:          strings.TrimSpace(target.WorktreeName),
-		WorktreeRoot:          strings.TrimSpace(target.WorktreeRoot),
-		WorktreeAvailability:  strings.TrimSpace(target.WorktreeAvailability),
+		Worktree:              worktree,
 		CwdRelpath:            strings.TrimSpace(target.CwdRelpath),
 		EffectiveWorkdir:      strings.TrimSpace(target.EffectiveWorkdir),
 	}
 }
 
 func SessionExecutionTargetIsZero(target SessionExecutionTarget) bool {
-	return NormalizeSessionExecutionTarget(target) == SessionExecutionTarget{}
+	normalized := NormalizeSessionExecutionTarget(target)
+	return normalized.WorkspaceID == "" &&
+		normalized.WorkspaceName == "" &&
+		normalized.WorkspaceRoot == "" &&
+		normalized.WorkspaceAvailability == "" &&
+		normalized.Worktree == nil &&
+		normalized.CwdRelpath == "" &&
+		normalized.EffectiveWorkdir == ""
 }
 
 func SessionExecutionTargetsEqual(a SessionExecutionTarget, b SessionExecutionTarget) bool {
-	return NormalizeSessionExecutionTarget(a) == NormalizeSessionExecutionTarget(b)
+	normalizedA := NormalizeSessionExecutionTarget(a)
+	normalizedB := NormalizeSessionExecutionTarget(b)
+	worktreesEqual := normalizedA.Worktree == normalizedB.Worktree
+	if normalizedA.Worktree != nil && normalizedB.Worktree != nil {
+		worktreesEqual = normalizedA.Worktree.ID == normalizedB.Worktree.ID &&
+			normalizedA.Worktree.Name == normalizedB.Worktree.Name &&
+			normalizedA.Worktree.Root == normalizedB.Worktree.Root &&
+			normalizedA.Worktree.Availability == normalizedB.Worktree.Availability
+	}
+	return normalizedA.WorkspaceID == normalizedB.WorkspaceID &&
+		normalizedA.WorkspaceName == normalizedB.WorkspaceName &&
+		normalizedA.WorkspaceRoot == normalizedB.WorkspaceRoot &&
+		normalizedA.WorkspaceAvailability == normalizedB.WorkspaceAvailability &&
+		worktreesEqual &&
+		normalizedA.CwdRelpath == normalizedB.CwdRelpath &&
+		normalizedA.EffectiveWorkdir == normalizedB.EffectiveWorkdir
 }
 
 type RuntimeSessionView struct {

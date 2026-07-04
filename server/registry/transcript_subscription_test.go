@@ -231,7 +231,7 @@ func TestSessionTranscriptSessionIdentityHydratesAndPublishesExecutionTarget(t *
 		t.Fatalf("hydration execution target = %+v, want %+v", hydration.Hydration.SessionIdentity.ExecutionTarget, target)
 	}
 
-	nextTarget := clientui.SessionExecutionTarget{WorkspaceID: "workspace-1", WorkspaceRoot: "/workspace", WorktreeID: "worktree-1", WorktreeRoot: "/workspace/wt", EffectiveWorkdir: "/workspace/wt"}
+	nextTarget := clientui.SessionExecutionTarget{WorkspaceID: "workspace-1", WorkspaceRoot: "/workspace", Worktree: &clientui.SessionExecutionWorktreeTarget{ID: "worktree-1", Root: "/workspace/wt"}, EffectiveWorkdir: "/workspace/wt"}
 	registry.PublishSessionIdentity(engine.SessionID(), &nextTarget)
 	live := nextTranscriptMessage(t, sub)
 	if live.Sequence != 2 || live.Kind != clientui.TranscriptMessageSessionIdentity || live.SessionIdentity == nil {
