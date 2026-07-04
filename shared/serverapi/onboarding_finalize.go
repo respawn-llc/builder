@@ -124,10 +124,14 @@ type OnboardingSupervisorChoice struct {
 }
 
 type OnboardingImportSelection struct {
-	Mode         OnboardingImportMode `json:"mode"`
-	ProviderUUID *uuid.UUID           `json:"provider_uuid,omitempty"`
-	providerRaw  string
-	providerBad  bool
+	Mode              OnboardingImportMode `json:"mode"`
+	ProviderUUID      *uuid.UUID           `json:"provider_uuid,omitempty"`
+	ImportProviderID  *string              `json:"import_provider_id,omitempty"`
+	SourceRootPath    *string              `json:"source_root_path,omitempty"`
+	providerRaw       string
+	providerBad       bool
+	importProviderBad bool
+	sourceRootBad     bool
 }
 
 func (r *OnboardingFinalizeRequest) UnmarshalJSON(data []byte) error {
@@ -157,43 +161,78 @@ func (r *OnboardingFinalizeRequest) UnmarshalJSON(data []byte) error {
 
 func (s *OnboardingImportSelection) UnmarshalJSON(data []byte) error {
 	var raw struct {
-		Mode         OnboardingImportMode `json:"mode"`
-		ProviderUUID *json.RawMessage     `json:"provider_uuid"`
+		Mode             OnboardingImportMode `json:"mode"`
+		ProviderUUID     *json.RawMessage     `json:"provider_uuid"`
+		ImportProviderID *json.RawMessage     `json:"import_provider_id"`
+		SourceRootPath   *json.RawMessage     `json:"source_root_path"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	s.Mode = raw.Mode
 	s.ProviderUUID = nil
+	s.ImportProviderID = nil
+	s.SourceRootPath = nil
 	s.providerRaw = ""
 	s.providerBad = false
-	if raw.ProviderUUID == nil {
-		return nil
+	s.importProviderBad = false
+	s.sourceRootBad = false
+	if raw.ProviderUUID != nil {
+		var value *string
+		if err := json.Unmarshal(*raw.ProviderUUID, &value); err != nil {
+			s.providerBad = true
+		} else if value != nil {
+			s.providerRaw = strings.TrimSpace(*value)
+			parsed, err := uuid.Parse(s.providerRaw)
+			if err != nil {
+				s.providerBad = true
+			} else {
+				s.ProviderUUID = &parsed
+			}
+		}
 	}
+	if raw.ImportProviderID != nil {
+		value, ok := importSelectionString(raw.ImportProviderID)
+		if !ok {
+			s.importProviderBad = true
+		} else {
+			s.ImportProviderID = value
+		}
+	}
+	if raw.SourceRootPath != nil {
+		value, ok := importSelectionString(raw.SourceRootPath)
+		if !ok {
+			s.sourceRootBad = true
+		} else {
+			s.SourceRootPath = value
+		}
+	}
+	return nil
+}
+
+func importSelectionString(raw *json.RawMessage) (*string, bool) {
 	var value *string
-	if err := json.Unmarshal(*raw.ProviderUUID, &value); err != nil {
-		s.providerBad = true
-		return nil
+	if err := json.Unmarshal(*raw, &value); err != nil {
+		return nil, false
 	}
 	if value == nil {
-		return nil
+		return nil, true
 	}
-	s.providerRaw = strings.TrimSpace(*value)
-	parsed, err := uuid.Parse(s.providerRaw)
-	if err != nil {
-		s.providerBad = true
-		return nil
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, false
 	}
-	s.ProviderUUID = &parsed
-	return nil
+	return &trimmed, true
 }
 
 func (s OnboardingImportSelection) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		Mode         OnboardingImportMode `json:"mode"`
-		ProviderUUID *uuid.UUID           `json:"provider_uuid,omitempty"`
+		Mode             OnboardingImportMode `json:"mode"`
+		ProviderUUID     *uuid.UUID           `json:"provider_uuid,omitempty"`
+		ImportProviderID *string              `json:"import_provider_id,omitempty"`
+		SourceRootPath   *string              `json:"source_root_path,omitempty"`
 	}
-	return json.Marshal(wire{Mode: s.Mode, ProviderUUID: s.ProviderUUID})
+	return json.Marshal(wire{Mode: s.Mode, ProviderUUID: s.ProviderUUID, ImportProviderID: s.ImportProviderID, SourceRootPath: s.SourceRootPath})
 }
 
 type OnboardingFinalizeResponse struct {
@@ -221,17 +260,21 @@ type OnboardingConfigAlreadyExistsDetails struct {
 }
 
 type OnboardingImportUnavailableDetails struct {
-	ImportKind   OnboardingImportKind              `json:"import_kind"`
-	Mode         OnboardingImportMode              `json:"mode"`
-	ProviderUUID *uuid.UUID                        `json:"provider_uuid,omitempty"`
-	ReasonCode   OnboardingImportUnavailableReason `json:"reason_code"`
+	ImportKind       OnboardingImportKind              `json:"import_kind"`
+	Mode             OnboardingImportMode              `json:"mode"`
+	ProviderUUID     *uuid.UUID                        `json:"provider_uuid,omitempty"`
+	ImportProviderID *string                           `json:"import_provider_id,omitempty"`
+	SourceRootPath   *string                           `json:"source_root_path,omitempty"`
+	ReasonCode       OnboardingImportUnavailableReason `json:"reason_code"`
 }
 
 type OnboardingImportFailedDetails struct {
-	ImportKind   OnboardingImportKind      `json:"import_kind"`
-	ProviderUUID *uuid.UUID                `json:"provider_uuid,omitempty"`
-	Operation    OnboardingImportOperation `json:"operation"`
-	Cause        string                    `json:"cause"`
+	ImportKind       OnboardingImportKind      `json:"import_kind"`
+	ProviderUUID     *uuid.UUID                `json:"provider_uuid,omitempty"`
+	ImportProviderID *string                   `json:"import_provider_id,omitempty"`
+	SourceRootPath   *string                   `json:"source_root_path,omitempty"`
+	Operation        OnboardingImportOperation `json:"operation"`
+	Cause            string                    `json:"cause"`
 }
 
 type OnboardingConfigWriteFailedDetails struct {
@@ -545,13 +588,38 @@ func validateImportSelection(selection *OnboardingImportSelection, field string,
 		if selection.ProviderUUID != nil || selection.providerBad {
 			add(field+".provider_uuid", "forbidden")
 		}
+		if selection.ImportProviderID != nil || selection.importProviderBad {
+			add(field+".import_provider_id", "forbidden")
+		}
+		if selection.SourceRootPath != nil || selection.sourceRootBad {
+			add(field+".source_root_path", "forbidden")
+		}
 	case OnboardingImportModeSymlinkSource:
+		hasUUID := selection.ProviderUUID != nil || selection.providerBad
+		hasRef := selection.ImportProviderID != nil || selection.SourceRootPath != nil || selection.importProviderBad || selection.sourceRootBad
+		if hasUUID && hasRef {
+			add(field+".provider_uuid", "conflicts_with_choice_ref")
+			break
+		}
 		if selection.providerBad {
 			add(field+".provider_uuid", "uuid_v4_required")
-		} else if selection.ProviderUUID == nil {
+			break
+		}
+		if selection.ProviderUUID != nil {
+			if selection.ProviderUUID.Version() != 4 {
+				add(field+".provider_uuid", "uuid_v4_required")
+			}
+			break
+		}
+		if !hasRef {
 			add(field+".provider_uuid", "required")
-		} else if selection.ProviderUUID.Version() != 4 {
-			add(field+".provider_uuid", "uuid_v4_required")
+			break
+		}
+		if selection.importProviderBad || selection.ImportProviderID == nil {
+			add(field+".import_provider_id", "required")
+		}
+		if selection.sourceRootBad || selection.SourceRootPath == nil {
+			add(field+".source_root_path", "required")
 		}
 	default:
 		add(field+".mode", "unsupported_value")

@@ -304,9 +304,6 @@ func discoverDirectSkills(providerID ProviderID, root string) ([]Item, error) {
 	}
 	items := make([]Item, 0, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
 		skillPath := filepath.Join(root, entry.Name(), skillcatalog.SkillFileName)
 		skill, ok := skillcatalog.ParseSkillMetadata(skillPath)
 		if !ok {

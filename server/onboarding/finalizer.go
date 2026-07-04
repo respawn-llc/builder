@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
+	"core/server/auth"
 	"core/server/llm"
-	"core/server/runtime"
+	"core/server/onboardingimports"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/theme"
@@ -152,7 +154,7 @@ func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, 
 		}
 	}
 	if req.Verbosity != nil {
-		if !llm.SupportsVerbosityModel(effectiveModel) {
+		if !supportsVerbosity(settings, effectiveModel) {
 			return config.Settings{}, nil, invalidRequest("verbosity", "unsupported_for_model")
 		}
 		settings.ModelVerbosity = config.ModelVerbosity(*req.Verbosity)
@@ -309,6 +311,14 @@ func supportsNativeCompaction(settings config.Settings, model string) bool {
 	return err == nil && caps.SupportsResponsesCompact
 }
 
+func supportsVerbosity(settings config.Settings, model string) bool {
+	caps, err := llm.ResolveRuntimeProviderCapabilities(auth.EmptyState(), settings)
+	if err != nil {
+		return llm.SupportsVerbosityModel(model)
+	}
+	return llm.VerbositySupportForModelAndProvider(model, caps).Supported
+}
+
 func (f *Finalizer) executeImports(ctx context.Context, req serverapi.OnboardingFinalizeRequest, ledger *mutationLedger) error {
 	skillsRequested := importRequested(req.SkillsImport)
 	commandsRequested := importRequested(req.CommandsImport)
@@ -335,14 +345,19 @@ func (f *Finalizer) executeImports(ctx context.Context, req serverapi.Onboarding
 			}
 		}
 	}
-	discovery, err := discover(f.persistenceRoot, f.workspaceRoot, f.homeDir)
+	workspaceRoot := strings.TrimSpace(f.workspaceRoot)
+	var workspaceRootPtr *string
+	if workspaceRoot != "" {
+		workspaceRootPtr = &workspaceRoot
+	}
+	discovery, err := onboardingimports.Discover(onboardingimports.Options{ConfigRoot: f.persistenceRoot, WorkspaceRoot: workspaceRootPtr, HomeDir: f.homeDir})
 	if err != nil {
 		return serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeImportFailed, serverapi.OnboardingImportFailedDetails{Operation: serverapi.OnboardingImportOperationDiscover, Cause: err.Error()}, err)
 	}
-	if err := executeSelection(ctx, ledger, discovery.skills, req.SkillsImport, filepath.Join(f.persistenceRoot, "skills"), serverapi.OnboardingImportKindSkills); err != nil {
+	if err := executeSelection(ctx, ledger, discovery.Skills.Choices, discovery.Errors, req.SkillsImport, filepath.Join(f.persistenceRoot, "skills"), serverapi.OnboardingImportKindSkills); err != nil {
 		return rollbackAfterImportError(err, ledger)
 	}
-	if err := executeSelection(ctx, ledger, discovery.commands, req.CommandsImport, filepath.Join(f.persistenceRoot, "prompts"), serverapi.OnboardingImportKindCommands); err != nil {
+	if err := executeSelection(ctx, ledger, discovery.Commands.Choices, discovery.Errors, req.CommandsImport, filepath.Join(f.persistenceRoot, "prompts"), serverapi.OnboardingImportKindCommands); err != nil {
 		return rollbackAfterImportError(err, ledger)
 	}
 	return nil
@@ -358,60 +373,149 @@ func rollbackAfterImportError(primary error, ledger *mutationLedger) error {
 	return primary
 }
 
-type discoveryResult struct {
-	skills   map[uuid.UUID]string
-	commands map[uuid.UUID]string
-}
-
-func discover(persistenceRoot, workspaceRoot, homeDir string) (discoveryResult, error) {
-	result := discoveryResult{skills: map[uuid.UUID]string{}, commands: map[uuid.UUID]string{}}
-	_ = persistenceRoot
-	_ = workspaceRoot
-	for _, provider := range ProductionProviderCatalog() {
-		base := filepath.Join(homeDir, provider.HomeEntry)
-		if root, ok, err := discoverProviderSkills(provider, base); err != nil {
-			return discoveryResult{}, err
-		} else if ok {
-			result.skills[provider.UUID] = root
-		}
-		if provider.SupportsCommandImport {
-			if root, ok, err := discoverProviderCommands(provider, base); err != nil {
-				return discoveryResult{}, err
-			} else if ok {
-				result.commands[provider.UUID] = root
-			}
-		}
-	}
-	return result, nil
-}
-
 func importRequested(selection *serverapi.OnboardingImportSelection) bool {
 	return selection != nil && selection.Mode == serverapi.OnboardingImportModeSymlinkSource
 }
 
-func executeSelection(ctx context.Context, ledger *mutationLedger, available map[uuid.UUID]string, selection *serverapi.OnboardingImportSelection, target string, kind serverapi.OnboardingImportKind) error {
+func executeSelection(ctx context.Context, ledger *mutationLedger, choices []onboardingimports.Choice, discoveryErrors []onboardingimports.Error, selection *serverapi.OnboardingImportSelection, target string, kind serverapi.OnboardingImportKind) error {
 	if selection == nil || selection.Mode == "" || selection.Mode == serverapi.OnboardingImportModeNone {
 		return nil
 	}
 	if selection.Mode != serverapi.OnboardingImportModeSymlinkSource {
 		return invalidRequest(string(kind)+"_import.mode", "unsupported_value")
 	}
-	if selection.ProviderUUID == nil || selection.ProviderUUID.Version() != 4 {
-		return invalidRequest(string(kind)+"_import.provider_uuid", "uuid_v4_required")
+	choice, err := selectedImportChoice(choices, discoveryErrors, selection, kind)
+	if err != nil {
+		return err
 	}
-	source := strings.TrimSpace(available[*selection.ProviderUUID])
-	if source == "" {
+	sourceRoot := strings.TrimSpace(derefString(choice.Ref.SourceRoot))
+	if sourceRoot == "" {
 		return importUnavailable(selection, kind, serverapi.OnboardingImportReasonNotDiscovered)
 	}
 	if err := ctx.Err(); err != nil {
 		return serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelImporting)
 	}
-	if err := executeSymlink(ledger, target, source); err != nil {
+	if err := executeSymlink(ledger, target, sourceRoot); err != nil {
 		return serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeImportFailed, serverapi.OnboardingImportFailedDetails{
-			ImportKind: kind, ProviderUUID: selection.ProviderUUID, Operation: serverapi.OnboardingImportOperationCreateSymlink, Cause: err.Error(),
+			ImportKind: kind, ProviderUUID: selection.ProviderUUID, ImportProviderID: selection.ImportProviderID, SourceRootPath: selection.SourceRootPath, Operation: serverapi.OnboardingImportOperationCreateSymlink, Cause: err.Error(),
 		}, err)
 	}
 	return nil
+}
+
+func selectedImportChoice(choices []onboardingimports.Choice, discoveryErrors []onboardingimports.Error, selection *serverapi.OnboardingImportSelection, kind serverapi.OnboardingImportKind) (onboardingimports.Choice, error) {
+	if selection.ProviderUUID != nil {
+		if selection.ProviderUUID.Version() != 4 {
+			return onboardingimports.Choice{}, invalidRequest(string(kind)+"_import.provider_uuid", "uuid_v4_required")
+		}
+		providerID, ok := importProviderIDForUUID(*selection.ProviderUUID)
+		if !ok {
+			return onboardingimports.Choice{}, importUnavailable(selection, kind, serverapi.OnboardingImportReasonNotDiscovered)
+		}
+		for _, choice := range choices {
+			if symlinkChoiceForProvider(choice, providerID) {
+				return choice, nil
+			}
+		}
+		if err := providerDiscoveryError(discoveryErrors, providerID, kind); err != nil {
+			return onboardingimports.Choice{}, importDiscoveryFailed(selection, kind, err)
+		}
+		return onboardingimports.Choice{}, importUnavailable(selection, kind, serverapi.OnboardingImportReasonNotDiscovered)
+	}
+	providerID := onboardingimports.ProviderID(strings.TrimSpace(derefString(selection.ImportProviderID)))
+	root := filepath.Clean(strings.TrimSpace(derefString(selection.SourceRootPath)))
+	for _, choice := range choices {
+		if choiceMatchesRef(choice, providerID, root) {
+			return choice, nil
+		}
+	}
+	if err := rootDiscoveryError(discoveryErrors, providerID, root, kind); err != nil {
+		return onboardingimports.Choice{}, importDiscoveryFailed(selection, kind, err)
+	}
+	return onboardingimports.Choice{}, importUnavailable(selection, kind, serverapi.OnboardingImportReasonNotDiscovered)
+}
+
+func importProviderIDForUUID(providerUUID uuid.UUID) (onboardingimports.ProviderID, bool) {
+	for _, provider := range ProductionProviderCatalog() {
+		if provider.UUID == providerUUID {
+			return provider.ImportProviderID, true
+		}
+	}
+	return "", false
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func symlinkChoiceForProvider(choice onboardingimports.Choice, providerID onboardingimports.ProviderID) bool {
+	return choice.Ref.Mode == onboardingimports.ChoiceModeSymlinkSource &&
+		choice.Ref.ProviderID != nil &&
+		*choice.Ref.ProviderID == providerID &&
+		choice.Ref.SourceRoot != nil
+}
+
+func choiceMatchesRef(choice onboardingimports.Choice, providerID onboardingimports.ProviderID, root string) bool {
+	return symlinkChoiceForProvider(choice, providerID) && filepath.Clean(derefString(choice.Ref.SourceRoot)) == root
+}
+
+func rootDiscoveryError(discoveryErrors []onboardingimports.Error, providerID onboardingimports.ProviderID, root string, kind serverapi.OnboardingImportKind) error {
+	for _, discoveryErr := range sortedDiscoveryErrors(discoveryErrors) {
+		if discoveryErr.ProviderID == nil || *discoveryErr.ProviderID != providerID || discoveryErr.Path == nil || filepath.Clean(*discoveryErr.Path) != root || !discoveryErrorMatchesKind(discoveryErr, kind) {
+			continue
+		}
+		return discoveryError(discoveryErr)
+	}
+	return nil
+}
+
+func providerDiscoveryError(discoveryErrors []onboardingimports.Error, providerID onboardingimports.ProviderID, kind serverapi.OnboardingImportKind) error {
+	for _, discoveryErr := range sortedDiscoveryErrors(discoveryErrors) {
+		if discoveryErr.ProviderID == nil || *discoveryErr.ProviderID != providerID || !discoveryErrorMatchesKind(discoveryErr, kind) {
+			continue
+		}
+		return discoveryError(discoveryErr)
+	}
+	return nil
+}
+
+func sortedDiscoveryErrors(discoveryErrors []onboardingimports.Error) []onboardingimports.Error {
+	out := append([]onboardingimports.Error(nil), discoveryErrors...)
+	sort.Slice(out, func(i, j int) bool {
+		leftPath, rightPath := derefString(out[i].Path), derefString(out[j].Path)
+		if leftPath != rightPath {
+			return leftPath < rightPath
+		}
+		return out[i].Operation < out[j].Operation
+	})
+	return out
+}
+
+func discoveryErrorMatchesKind(discoveryErr onboardingimports.Error, kind serverapi.OnboardingImportKind) bool {
+	switch kind {
+	case serverapi.OnboardingImportKindSkills:
+		return discoveryErr.Operation == "inspect_skill_root" || discoveryErr.Operation == "discover_skills"
+	case serverapi.OnboardingImportKindCommands:
+		return discoveryErr.Operation == "inspect_command_root" || discoveryErr.Operation == "discover_commands"
+	default:
+		return false
+	}
+}
+
+func discoveryError(discoveryErr onboardingimports.Error) error {
+	if strings.TrimSpace(discoveryErr.Operation) == "" {
+		return errors.New(discoveryErr.Message)
+	}
+	return fmt.Errorf("%s: %s", discoveryErr.Operation, discoveryErr.Message)
+}
+
+func importDiscoveryFailed(selection *serverapi.OnboardingImportSelection, kind serverapi.OnboardingImportKind, err error) error {
+	return serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeImportFailed, serverapi.OnboardingImportFailedDetails{
+		ImportKind: kind, ProviderUUID: selection.ProviderUUID, ImportProviderID: selection.ImportProviderID, SourceRootPath: selection.SourceRootPath, Operation: serverapi.OnboardingImportOperationDiscover, Cause: err.Error(),
+	}, err)
 }
 
 func importUnavailable(selection *serverapi.OnboardingImportSelection, kind serverapi.OnboardingImportKind, reason serverapi.OnboardingImportUnavailableReason) error {
@@ -419,6 +523,8 @@ func importUnavailable(selection *serverapi.OnboardingImportSelection, kind serv
 	if selection != nil {
 		details.Mode = selection.Mode
 		details.ProviderUUID = selection.ProviderUUID
+		details.ImportProviderID = selection.ImportProviderID
+		details.SourceRootPath = selection.SourceRootPath
 	}
 	return serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeImportUnavailable, details, nil)
 }
@@ -595,53 +701,4 @@ func inspectImportTarget(path string) (importTargetState, error) {
 		return importTargetState{unavailable: true}, nil
 	}
 	return importTargetState{emptyDirectory: true}, nil
-}
-
-func discoverProviderSkills(provider Provider, base string) (string, bool, error) {
-	for _, candidate := range provider.SkillSourceCandidates {
-		root := filepath.Join(base, candidate)
-		entries, err := os.ReadDir(root)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return "", false, err
-		}
-		for _, entry := range entries {
-			if _, ok := parseSkillMetadata(filepath.Join(root, entry.Name(), "SKILL.md")); ok {
-				return root, true, nil
-			}
-		}
-	}
-	return "", false, nil
-}
-
-func discoverProviderCommands(provider Provider, base string) (string, bool, error) {
-	for _, root := range []string{filepath.Join(base, "commands"), filepath.Join(base, "prompts")} {
-		entries, err := os.ReadDir(root)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return "", false, err
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() && filepath.Ext(entry.Name()) == ".md" {
-				return root, true, nil
-			}
-		}
-	}
-	return "", false, nil
-}
-
-type skillMetadata struct {
-	Name string
-}
-
-func parseSkillMetadata(path string) (skillMetadata, bool) {
-	meta, ok := runtime.ParseSkillMetadata(path)
-	if !ok {
-		return skillMetadata{}, false
-	}
-	return skillMetadata{Name: strings.TrimSpace(meta.Name)}, true
 }

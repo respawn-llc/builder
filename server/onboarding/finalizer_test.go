@@ -201,6 +201,22 @@ func TestFinalizerRejectsUnsupportedVerbosityForSelectedModel(t *testing.T) {
 	}
 }
 
+func TestFinalizerAcceptsProviderDefaultVerbosityForCustomOpenAIModel(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	verbosity := serverapi.OnboardingVerbosityHigh
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		Model:     &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelCustom, Alias: "custom-openai-model"},
+		Verbosity: &verbosity,
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	cfg := loadFinalizedConfig(t, root)
+	if cfg.Settings.ModelVerbosity != config.ModelVerbosityHigh {
+		t.Fatalf("model verbosity = %q, want high", cfg.Settings.ModelVerbosity)
+	}
+}
+
 func TestFinalizerImportsSkillsAndCommandsBeforeConfigWrite(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
@@ -219,6 +235,103 @@ func TestFinalizerImportsSkillsAndCommandsBeforeConfigWrite(t *testing.T) {
 	}
 	assertSymlink(t, filepath.Join(root, "skills"))
 	assertSymlink(t, filepath.Join(root, "prompts"))
+}
+
+func TestFinalizerImportsSelectedCapabilityFactSkillRoot(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	regularRoot := filepath.Join(home, ".codex", "skills")
+	createSkillDirectory(t, filepath.Join(regularRoot, "regular-example"))
+	providerID := "codex"
+
+	resp, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		SkillsImport: &serverapi.OnboardingImportSelection{
+			Mode:             serverapi.OnboardingImportModeSymlinkSource,
+			ImportProviderID: &providerID,
+			SourceRootPath:   &regularRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	if !resp.Completed {
+		t.Fatal("expected finalize completion")
+	}
+	target, err := os.Readlink(filepath.Join(root, "skills"))
+	if err != nil {
+		t.Fatalf("read skills symlink: %v", err)
+	}
+	if target != regularRoot {
+		t.Fatalf("skills symlink target = %q, want selected root %q", target, regularRoot)
+	}
+}
+
+func TestFinalizerImportsSelectedSkillRootWhenEarlierSameProviderRootFails(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".codex", "skills"), 0o755); err != nil {
+		t.Fatalf("mkdir codex skills parent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "skills", "local"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write earlier root blocker: %v", err)
+	}
+	regularRoot := filepath.Join(home, ".codex", "skills")
+	createSkillDirectory(t, filepath.Join(regularRoot, "regular-example"))
+	providerID := "codex"
+
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		SkillsImport: &serverapi.OnboardingImportSelection{
+			Mode:             serverapi.OnboardingImportModeSymlinkSource,
+			ImportProviderID: &providerID,
+			SourceRootPath:   &regularRoot,
+		},
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	target, err := os.Readlink(filepath.Join(root, "skills"))
+	if err != nil {
+		t.Fatalf("read skills symlink: %v", err)
+	}
+	if target != regularRoot {
+		t.Fatalf("skills symlink target = %q, want selected root %q", target, regularRoot)
+	}
+}
+
+func TestFinalizerImportsSelectedCommandRootWhenEarlierSameProviderRootFails(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	commandsParent := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(commandsParent, 0o755); err != nil {
+		t.Fatalf("mkdir codex parent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(commandsParent, "commands"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write earlier command root blocker: %v", err)
+	}
+	promptsRoot := filepath.Join(commandsParent, "prompts")
+	if err := os.MkdirAll(promptsRoot, 0o755); err != nil {
+		t.Fatalf("mkdir prompts root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(promptsRoot, "example.md"), []byte("command"), 0o644); err != nil {
+		t.Fatalf("write prompt command: %v", err)
+	}
+	providerID := "codex"
+
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		CommandsImport: &serverapi.OnboardingImportSelection{
+			Mode:             serverapi.OnboardingImportModeSymlinkSource,
+			ImportProviderID: &providerID,
+			SourceRootPath:   &promptsRoot,
+		},
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	target, err := os.Readlink(filepath.Join(root, "prompts"))
+	if err != nil {
+		t.Fatalf("read prompts symlink: %v", err)
+	}
+	if target != promptsRoot {
+		t.Fatalf("prompts symlink target = %q, want selected root %q", target, promptsRoot)
+	}
 }
 
 func TestFinalizerDiscoversSymlinkedProviderSkillDirectories(t *testing.T) {
@@ -250,6 +363,52 @@ func TestFinalizerDiscoversSymlinkedProviderSkillDirectories(t *testing.T) {
 		t.Fatal("expected finalize completion")
 	}
 	assertSymlink(t, filepath.Join(root, "skills"))
+}
+
+func TestFinalizerIgnoresUnrelatedProviderDiscoveryErrors(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	providerUUID := createProviderSkillSource(t, home, ".claude")
+	if err := os.MkdirAll(filepath.Join(home, ".codex", "skills"), 0o755); err != nil {
+		t.Fatalf("mkdir codex skills parent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "skills", "local"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write unrelated provider blocker: %v", err)
+	}
+
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	assertSymlink(t, filepath.Join(root, "skills"))
+}
+
+func TestFinalizerReturnsSelectedProviderDiscoveryError(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	providerUUID := providerUUIDForHomeEntry(t, ".codex")
+	if err := os.MkdirAll(filepath.Join(home, ".codex", "skills"), 0o755); err != nil {
+		t.Fatalf("mkdir codex skills parent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "skills", "local"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("write selected provider blocker: %v", err)
+	}
+
+	_, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
+	})
+	var finalizeErr *serverapi.OnboardingFinalizeError
+	if !errors.As(err, &finalizeErr) {
+		t.Fatalf("error = %T %v, want OnboardingFinalizeError", err, err)
+	}
+	if finalizeErr.Code != serverapi.OnboardingFinalizeImportFailed {
+		t.Fatalf("code = %q, want import_failed", finalizeErr.Code)
+	}
+	details := finalizeErr.Details.(serverapi.OnboardingImportFailedDetails)
+	if details.Operation != serverapi.OnboardingImportOperationDiscover || details.ProviderUUID == nil || *details.ProviderUUID != providerUUID {
+		t.Fatalf("details = %+v, want selected provider discover failure", details)
+	}
 }
 
 func TestFinalizerRollsBackImportsWhenConfigWriteFails(t *testing.T) {
@@ -650,13 +809,18 @@ func createProviderSkillSource(t *testing.T, home string, entry string) uuid.UUI
 	t.Helper()
 	providerUUID := providerUUIDForHomeEntry(t, entry)
 	skillDir := filepath.Join(home, entry, "skills", "example")
+	createSkillDirectory(t, skillDir)
+	return providerUUID
+}
+
+func createSkillDirectory(t *testing.T, skillDir string) {
+	t.Helper()
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("mkdir skill source: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: Example\ndescription: Example skill\n---\nBody\n"), 0o644); err != nil {
 		t.Fatalf("write skill metadata: %v", err)
 	}
-	return providerUUID
 }
 
 func createProviderCommandSource(t *testing.T, home string, entry string) uuid.UUID {

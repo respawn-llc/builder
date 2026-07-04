@@ -1,7 +1,7 @@
 package onboarding
 
 import (
-	"path/filepath"
+	"core/server/onboardingimports"
 
 	"github.com/google/uuid"
 )
@@ -13,16 +13,21 @@ var (
 )
 
 type Provider struct {
-	UUID                  uuid.UUID `json:"uuid"`
-	HomeEntry             string
-	SkillSourceCandidates []string
-	SupportsCommandImport bool
+	UUID             uuid.UUID `json:"uuid"`
+	ImportProviderID onboardingimports.ProviderID
+	HomeEntry        string
 }
 
 func ProductionProviderCatalog() []Provider {
-	return []Provider{
-		{UUID: providerClaudeCodeUUID, HomeEntry: ".claude", SkillSourceCandidates: []string{"skills"}, SupportsCommandImport: true},
-		{UUID: providerCodexUUID, HomeEntry: ".codex", SkillSourceCandidates: []string{filepath.Join("skills", "local"), "skills"}, SupportsCommandImport: true},
-		{UUID: providerAgentsUUID, HomeEntry: ".agents", SkillSourceCandidates: []string{"skills"}, SupportsCommandImport: true},
+	providerUUIDs := map[onboardingimports.ProviderID]uuid.UUID{
+		onboardingimports.ProviderClaudeCode: providerClaudeCodeUUID,
+		onboardingimports.ProviderCodex:      providerCodexUUID,
+		onboardingimports.ProviderAgents:     providerAgentsUUID,
 	}
+	providers := onboardingimports.Providers()
+	out := make([]Provider, 0, len(providers))
+	for _, provider := range providers {
+		out = append(out, Provider{UUID: providerUUIDs[provider.ID], ImportProviderID: provider.ID, HomeEntry: provider.HomeEntry})
+	}
+	return out
 }
