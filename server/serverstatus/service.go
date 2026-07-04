@@ -53,13 +53,9 @@ func (s *ServerStatusService) GetServerReadiness(ctx context.Context, _ serverap
 		response.Endpoint = s.endpoint
 	}
 	if !ready {
-		summary := "Kent server is not ready."
-		nextAction := "Resolve the startup blocker and retry."
 		response.Causes = []serverapi.ServerReadinessCause{{
-			Code:       "server_not_ready",
-			Severity:   "error",
-			Summary:    &summary,
-			NextAction: &nextAction,
+			Code:     "server_not_ready",
+			Severity: "error",
 		}}
 	}
 	return response, nil

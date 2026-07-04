@@ -770,7 +770,7 @@ model = "blocked-model"
 	}
 	assertReadinessRoles(t, readiness.SubagentRoles, []string{"default", "fast", "blocked", "coder"})
 	cause := readiness.Causes[0]
-	if cause.Code != "server_not_ready" || cause.Severity != "error" || cause.Summary == nil || *cause.Summary == "" || cause.NextAction == nil || *cause.NextAction == "" {
+	if cause.Code != "server_not_ready" || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
 		t.Fatalf("unexpected generic readiness cause: %+v", cause)
 	}
 }

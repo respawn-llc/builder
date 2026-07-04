@@ -1,6 +1,8 @@
 package onboarding
 
 import (
+	"fmt"
+
 	"core/server/onboardingimports"
 
 	"github.com/google/uuid"
@@ -27,7 +29,11 @@ func ProductionProviderCatalog() []Provider {
 	providers := onboardingimports.Providers()
 	out := make([]Provider, 0, len(providers))
 	for _, provider := range providers {
-		out = append(out, Provider{UUID: providerUUIDs[provider.ID], ImportProviderID: provider.ID, HomeEntry: provider.HomeEntry})
+		providerUUID, ok := providerUUIDs[provider.ID]
+		if !ok || providerUUID == uuid.Nil {
+			panic(fmt.Sprintf("onboarding provider %q has no stable uuid mapping", provider.ID))
+		}
+		out = append(out, Provider{UUID: providerUUID, ImportProviderID: provider.ID, HomeEntry: provider.HomeEntry})
 	}
 	return out
 }
