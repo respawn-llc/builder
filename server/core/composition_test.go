@@ -127,6 +127,13 @@ func TestRuntimePendingAskResolverUsesPendingPromptSource(t *testing.T) {
 		"session-1": {
 			{Request: askquestion.AskQuestionRequest{ID: "ask-1", Question: "Need input?"}, CreatedAt: time.Unix(1, 0)},
 			{Request: askquestion.AskQuestionRequest{ID: "approval-1", Question: "Approve?", Approval: true}, CreatedAt: time.Unix(2, 0)},
+			{Request: askquestion.AskQuestionRequest{ID: "approval-2", Question: "Approve?", Approval: true, AttentionTarget: &clientui.AttentionNotificationTarget{
+				Kind: clientui.AttentionNotificationTargetWorkflowTask,
+				Focus: &clientui.AttentionNotificationTaskDetailFocus{
+					Kind:   clientui.AttentionNotificationFocusQuestion,
+					AskIDs: []string{"approval-2"},
+				},
+			}}, CreatedAt: time.Unix(3, 0)},
 		},
 	}}}
 
@@ -142,7 +149,14 @@ func TestRuntimePendingAskResolverUsesPendingPromptSource(t *testing.T) {
 		t.Fatalf("CanRehydrate approval: %v", err)
 	}
 	if ok {
-		t.Fatal("approval prompt must not satisfy workflow ask rehydration")
+		t.Fatal("generic approval prompt must not satisfy workflow ask rehydration")
+	}
+	ok, err = resolver.CanRehydrate(t.Context(), "session-1", workflow.RunID("run-1"), "approval-2")
+	if err != nil {
+		t.Fatalf("CanRehydrate task approval: %v", err)
+	}
+	if !ok {
+		t.Fatal("task-scoped approval prompt should satisfy workflow ask rehydration")
 	}
 	ok, err = resolver.CanRehydrate(t.Context(), "session-1", workflow.RunID("run-1"), "missing")
 	if err != nil {

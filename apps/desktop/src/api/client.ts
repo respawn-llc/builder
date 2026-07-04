@@ -613,6 +613,18 @@ export class ApiClient {
   }
 
   async answerQuestion(input: QuestionAnswerInput): Promise<void> {
+    const answer =
+      input.kind === "approval"
+        ? {
+            approval: {
+              decision: input.decision,
+              commentary: input.commentary,
+            },
+          }
+        : {
+            selected_option_number: input.selectedOptionNumber > 0 ? input.selectedOptionNumber : undefined,
+            freeform_answer: input.freeformAnswer,
+          };
     await this.transport.call(
       "workflow.task.question.answer",
       compactJsonObject({
@@ -620,8 +632,7 @@ export class ApiClient {
         task_id: input.taskID,
         run_id: input.runID,
         ask_id: input.askID,
-        selected_option_number: input.selectedOptionNumber > 0 ? input.selectedOptionNumber : undefined,
-        freeform_answer: input.freeformAnswer,
+        ...answer,
       }),
     );
   }

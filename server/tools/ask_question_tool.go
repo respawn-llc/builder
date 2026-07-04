@@ -47,6 +47,7 @@ var (
 	ErrAskQuestionApprovalForbidsSuggestions    = errors.New("approval questions must not set suggestions")
 	ErrAskQuestionApprovalForbidsRecommended    = errors.New("approval questions must not set recommended_option_index")
 	ErrAskQuestionApprovalRequiresResponse      = errors.New("approval questions require approval responses")
+	ErrAskQuestionApprovalForbidsOrdinaryAnswer = errors.New("approval questions must not return ordinary answer fields")
 	ErrAskQuestionNonApprovalForbidsApproval    = errors.New("non-approval questions must not return approval payloads")
 	ErrAskQuestionNonApprovalRequiresAnswer     = errors.New("non-approval questions require an answer")
 	ErrAskQuestionSelectedOptionRequiresSuggest = errors.New("selected option numbers require suggestions")
@@ -274,6 +275,10 @@ func normalizedRecommendedOptionIndex(index int, suggestionCount int) int {
 }
 
 func validateResponse(req AskQuestionRequest, resp AskQuestionResponse) error {
+	return ValidateAskQuestionResponse(req, resp)
+}
+
+func ValidateAskQuestionResponse(req AskQuestionRequest, resp AskQuestionResponse) error {
 	if !req.Approval {
 		if resp.Approval != nil {
 			return ErrAskQuestionNonApprovalForbidsApproval
@@ -295,7 +300,18 @@ func validateResponse(req AskQuestionRequest, resp AskQuestionResponse) error {
 	if resp.Approval == nil {
 		return ErrAskQuestionApprovalRequiresResponse
 	}
-	return validateApprovalDecision(resp.Approval.Decision)
+	if resp.SelectedOptionNumber != 0 || strings.TrimSpace(resp.Answer) != "" || strings.TrimSpace(resp.FreeformAnswer) != "" {
+		return ErrAskQuestionApprovalForbidsOrdinaryAnswer
+	}
+	if err := validateApprovalDecision(resp.Approval.Decision); err != nil {
+		return err
+	}
+	for _, option := range req.ApprovalOptions {
+		if option.Decision == resp.Approval.Decision {
+			return nil
+		}
+	}
+	return fmt.Errorf("approval decision %q was not offered", resp.Approval.Decision)
 }
 
 func normalizedFreeformAnswer(resp AskQuestionResponse) string {

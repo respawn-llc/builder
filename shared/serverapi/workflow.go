@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/clientui"
 	"core/shared/workflowkey"
 )
 
@@ -805,33 +806,54 @@ type WorkflowTaskAttentionListResponse struct {
 }
 
 type WorkflowAttentionItem struct {
-	ID                     string   `json:"id"`
-	Kind                   string   `json:"kind"`
-	ProjectID              string   `json:"project_id,omitempty"`
-	WorkflowID             string   `json:"workflow_id,omitempty"`
-	TaskID                 string   `json:"task_id,omitempty"`
-	TaskShortID            string   `json:"task_short_id,omitempty"`
-	TaskTitle              string   `json:"task_title,omitempty"`
-	RunID                  string   `json:"run_id,omitempty"`
-	SessionID              string   `json:"session_id,omitempty"`
-	AskID                  string   `json:"ask_id,omitempty"`
-	TaskTransitionID       string   `json:"task_transition_id,omitempty"`
-	Message                string   `json:"message"`
-	DetailJSON             string   `json:"detail_json,omitempty"`
-	Suggestions            []string `json:"suggestions,omitempty"`
-	RecommendedOptionIndex int      `json:"recommended_option_index,omitempty"`
-	OccurredAtUnixMs       int64    `json:"occurred_at_unix_ms"`
+	ID                     string                           `json:"id"`
+	Kind                   string                           `json:"kind"`
+	ProjectID              string                           `json:"project_id,omitempty"`
+	WorkflowID             string                           `json:"workflow_id,omitempty"`
+	TaskID                 string                           `json:"task_id,omitempty"`
+	TaskShortID            string                           `json:"task_short_id,omitempty"`
+	TaskTitle              string                           `json:"task_title,omitempty"`
+	RunID                  string                           `json:"run_id,omitempty"`
+	SessionID              string                           `json:"session_id,omitempty"`
+	AskID                  string                           `json:"ask_id,omitempty"`
+	TaskTransitionID       string                           `json:"task_transition_id,omitempty"`
+	Message                string                           `json:"message"`
+	DetailJSON             string                           `json:"detail_json,omitempty"`
+	Suggestions            []string                         `json:"suggestions,omitempty"`
+	RecommendedOptionIndex int                              `json:"recommended_option_index,omitempty"`
+	Question               *WorkflowAttentionQuestionPrompt `json:"question,omitempty"`
+	OccurredAtUnixMs       int64                            `json:"occurred_at_unix_ms"`
+}
+
+type WorkflowAttentionQuestionKind string
+
+const (
+	WorkflowAttentionQuestionKindOrdinary WorkflowAttentionQuestionKind = "ordinary"
+	WorkflowAttentionQuestionKindApproval WorkflowAttentionQuestionKind = "approval"
+)
+
+type WorkflowAttentionQuestionPrompt struct {
+	Kind                   WorkflowAttentionQuestionKind `json:"kind"`
+	Suggestions            []string                      `json:"suggestions,omitempty"`
+	RecommendedOptionIndex int                           `json:"recommended_option_index,omitempty"`
+	ApprovalDecisions      []clientui.ApprovalDecision   `json:"approval_decisions,omitempty"`
+}
+
+type WorkflowTaskQuestionApprovalAnswer struct {
+	Decision   clientui.ApprovalDecision `json:"decision"`
+	Commentary string                    `json:"commentary,omitempty"`
 }
 
 type WorkflowTaskQuestionAnswerRequest struct {
-	ClientRequestID      string `json:"client_request_id"`
-	TaskID               string `json:"task_id"`
-	RunID                string `json:"run_id,omitempty"`
-	AskID                string `json:"ask_id"`
-	ErrorMessage         string `json:"error_message,omitempty"`
-	Answer               string `json:"answer,omitempty"`
-	SelectedOptionNumber int    `json:"selected_option_number,omitempty"`
-	FreeformAnswer       string `json:"freeform_answer,omitempty"`
+	ClientRequestID      string                              `json:"client_request_id"`
+	TaskID               string                              `json:"task_id"`
+	RunID                string                              `json:"run_id,omitempty"`
+	AskID                string                              `json:"ask_id"`
+	ErrorMessage         string                              `json:"error_message,omitempty"`
+	Answer               string                              `json:"answer,omitempty"`
+	SelectedOptionNumber int                                 `json:"selected_option_number,omitempty"`
+	FreeformAnswer       string                              `json:"freeform_answer,omitempty"`
+	Approval             *WorkflowTaskQuestionApprovalAnswer `json:"approval,omitempty"`
 }
 
 type WorkflowTaskCommentAddRequest struct {
@@ -1782,14 +1804,23 @@ func (r WorkflowTaskQuestionAnswerRequest) Validate() error {
 	}
 	hasTextAnswer := strings.TrimSpace(r.Answer) != ""
 	hasFreeform := strings.TrimSpace(r.FreeformAnswer) != ""
+	hasApproval := r.Approval != nil
 	if r.SelectedOptionNumber < 0 {
 		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "selected_option_number", Message: "selected_option_number must be non-negative"}
 	}
 	hasSelected := r.SelectedOptionNumber > 0
-	hasAnswer := hasTextAnswer || hasFreeform || hasSelected
+	hasAnswer := hasTextAnswer || hasFreeform || hasSelected || hasApproval
 	hasError := strings.TrimSpace(r.ErrorMessage) != ""
 	if hasAnswer && hasError {
 		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "error_message", Message: "error_message cannot be combined with answer fields"}
+	}
+	if hasApproval {
+		if hasTextAnswer || hasFreeform || hasSelected {
+			return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "approval", Message: "approval cannot be combined with ordinary answer fields"}
+		}
+		if err := validateWorkflowApprovalDecision(r.Approval.Decision); err != nil {
+			return err
+		}
 	}
 	if hasTextAnswer && (hasFreeform || hasSelected) {
 		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "answer", Message: "answer cannot be combined with selected_option_number or freeform_answer"}
@@ -1798,6 +1829,15 @@ func (r WorkflowTaskQuestionAnswerRequest) Validate() error {
 		return WorkflowRequestValidationError{Code: WorkflowRequestErrorRequired, Field: "answer", Message: "answer is required"}
 	}
 	return nil
+}
+
+func validateWorkflowApprovalDecision(decision clientui.ApprovalDecision) error {
+	switch decision {
+	case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
+		return nil
+	default:
+		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidValue, Field: "approval.decision", Message: "approval.decision is invalid"}
+	}
 }
 
 func (r WorkflowTaskCommentAddRequest) Validate() error {

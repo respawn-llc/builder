@@ -444,6 +444,60 @@ describe("TaskDetailSurface", () => {
     expect(within(question).getByRole("radio", { name: /Pistachios/u })).toBeInTheDocument();
   });
 
+  it("renders and submits runtime approval prompts through the task question path", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    const detailWithRuntimeApprovalQuestion = {
+      task: {
+        ...taskDetailResponse.task,
+        attention: taskDetailResponse.task.attention.map((item) =>
+          item.kind === "question"
+            ? {
+                ...item,
+                message: "Approve protected path?",
+                question: {
+                  kind: "approval",
+                  approval_decisions: ["allow_once", "allow_session", "deny"],
+                },
+                recommended_option_index: 0,
+                suggestions: [],
+              }
+            : item,
+        ),
+      },
+    };
+    const services = createTestServices([
+      ...startupRoutes,
+      { method: "workflow.task.get", result: detailWithRuntimeApprovalQuestion },
+      { method: "workflow.task.activity.list", result: activityResponse },
+      { method: "workflow.task.question.answer", result: {} },
+    ]);
+
+    render(<App services={services} />);
+
+    const question = await screen.findByRole("region", { name: "Question" });
+    expect(await within(question).findByText("Approve protected path?")).toBeInTheDocument();
+    expect(within(question).getByRole("radio", { name: "Allow once" })).toBeChecked();
+    expect(within(question).getByRole("radio", { name: "Allow for this session" })).toBeInTheDocument();
+    expect(within(question).getByRole("radio", { name: "Deny" })).toBeInTheDocument();
+    expect(within(question).queryByRole("radio", { name: "Neither" })).not.toBeInTheDocument();
+    expect(within(question).getByRole("button", { name: "Submit answer" })).toBeEnabled();
+
+    fireEvent.click(within(question).getByRole("radio", { name: "Deny" }));
+    expect(within(question).getByRole("button", { name: "Submit answer" })).toBeDisabled();
+    fireEvent.change(within(question).getByRole("textbox", { name: "Commentary" }), {
+      target: { value: "Not safe." },
+    });
+    fireEvent.click(within(question).getByRole("button", { name: "Submit answer" }));
+
+    await waitFor(() => {
+      const params = callParams(services.transport.calls, "workflow.task.question.answer");
+      expect(params.ask_id).toBe("ask-1");
+      expect(params.approval).toEqual({ decision: "deny", commentary: "Not safe." });
+      expect(params.selected_option_number).toBeUndefined();
+      expect(params.freeform_answer).toBeUndefined();
+    });
+  });
+
   it("focuses only the first unresolved matching question from a batched notification target", async () => {
     window.history.pushState(null, "", "/");
     const scrollTargets: HTMLElement[] = [];

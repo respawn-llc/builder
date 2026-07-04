@@ -21,6 +21,7 @@ import (
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -416,24 +417,7 @@ func TestServiceCommentMutationsUpdateActivityAndPublishInvalidations(t *testing
 
 func TestServiceAnswersTaskQuestionWithoutControllerLease(t *testing.T) {
 	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
-	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
-	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
-	task := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{ProjectID: binding.ProjectID, Title: "Question", Body: "Body"})
-	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
-	claimed, err := service.store.ClaimRun(ctx, workflow.RunID(started.RunID), 0)
-	if err != nil {
-		t.Fatalf("ClaimRun: %v", err)
-	}
-	sessionID := "session-task-question"
-	if _, err := metadataStore.DB().ExecContext(ctx, `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json) VALUES (?, ?, ?, ?, '', '', '', '', 1, 1, 0, 0, 1, '.', '{}', '{}', '{}', '{}')`, sessionID, binding.ProjectID, binding.WorkspaceID, "sessions/"+sessionID); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
-	if err := service.store.AttachRunSession(ctx, workflow.RunID(started.RunID), claimed.Generation, sessionID); err != nil {
-		t.Fatalf("AttachRunSession: %v", err)
-	}
-	if err := service.store.SetRunWaitingAsk(ctx, workflow.RunID(started.RunID), claimed.Generation, "ask-task-question"); err != nil {
-		t.Fatalf("SetRunWaitingAsk: %v", err)
-	}
+	task, _, sessionID := createWorkflowServiceWaitingAsk(t, ctx, service, metadataStore, binding, "Question", "session-task-question", "ask-task-question")
 	responder := &recordingPromptResponder{}
 	service.prompts = responder
 
@@ -453,6 +437,34 @@ func TestServiceAnswersTaskQuestionWithoutControllerLease(t *testing.T) {
 	}
 	if err := service.AnswerWorkflowTaskQuestion(ctx, serverapi.WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-bad", TaskID: task.Task.ID, AskID: "missing", FreeformAnswer: "nope"}); !errors.Is(err, workflowstore.ErrTaskAskNotPending) {
 		t.Fatalf("AnswerWorkflowTaskQuestion missing ask error = %v", err)
+	}
+}
+
+func TestServiceAnswersTaskApprovalQuestionWithoutControllerLease(t *testing.T) {
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	sessionID := "session-task-question"
+	task, _, _ := createWorkflowServiceWaitingAsk(t, ctx, service, metadataStore, binding, "Approval question", sessionID, "ask-task-approval")
+	responder := &recordingPromptResponder{}
+	service.prompts = responder
+
+	req := serverapi.WorkflowTaskQuestionAnswerRequest{
+		ClientRequestID: "req-approval",
+		TaskID:          task.Task.ID,
+		AskID:           "ask-task-approval",
+		Approval:        &serverapi.WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecisionAllowSession, Commentary: "trusted"},
+	}
+	if err := service.AnswerWorkflowTaskQuestion(ctx, req); err != nil {
+		t.Fatalf("AnswerWorkflowTaskQuestion approval: %v", err)
+	}
+	if responder.sessionID != sessionID || responder.response.RequestID != "ask-task-approval" || responder.response.Approval == nil || responder.response.Approval.Decision != askquestion.AskQuestionApprovalDecisionAllowSession || responder.response.Approval.Commentary != "trusted" {
+		t.Fatalf("prompt response = session:%q response:%+v", responder.sessionID, responder.response)
+	}
+	if err := service.AnswerWorkflowTaskQuestion(ctx, req); err != nil {
+		t.Fatalf("AnswerWorkflowTaskQuestion approval replay: %v", err)
+	}
+	req.Approval.Commentary = "different"
+	if err := service.AnswerWorkflowTaskQuestion(ctx, req); !errors.Is(err, requestmemo.ErrClientRequestIDReused) {
+		t.Fatalf("AnswerWorkflowTaskQuestion approval mismatch error = %v", err)
 	}
 }
 
@@ -2265,6 +2277,19 @@ func claimAndAttachWorkflowServiceRun(t *testing.T, ctx context.Context, service
 		t.Fatalf("AttachRunSession: %v", err)
 	}
 	return claimed
+}
+
+func createWorkflowServiceWaitingAsk(t *testing.T, ctx context.Context, service *Service, metadataStore *metadata.Store, binding metadata.Binding, title string, sessionID string, askID string) (serverapi.WorkflowTaskCreateResponse, string, string) {
+	t.Helper()
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{ProjectID: binding.ProjectID, Title: title, Body: "Body"})
+	started := startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+	claimed := claimAndAttachWorkflowServiceRun(t, ctx, service, metadataStore, binding, started.RunID, sessionID)
+	if err := service.store.SetRunWaitingAsk(ctx, workflow.RunID(started.RunID), claimed.Generation, askID); err != nil {
+		t.Fatalf("SetRunWaitingAsk: %v", err)
+	}
+	return task, started.RunID, sessionID
 }
 
 func createWorkflowServiceValidWorkflow(t *testing.T, ctx context.Context, service *Service) string {

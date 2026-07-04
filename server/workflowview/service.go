@@ -17,6 +17,7 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/runtime"
+	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowscript"
 	"core/shared/clientui"
@@ -28,6 +29,7 @@ type Service struct {
 	metadata    *metadata.Store
 	queries     *sqlitegen.Queries
 	transcripts SessionTranscriptTailEntryProvider
+	prompts     PendingPromptSource
 }
 
 const attentionKindInterruptedRun = "interrupted_run"
@@ -54,9 +56,23 @@ type SessionTranscriptTailEntryProvider interface {
 	SessionTranscriptTailEntries(ctx context.Context, sessionID string) ([]runtime.ChatEntry, error)
 }
 
+type PendingPromptSnapshot struct {
+	Request askquestion.AskQuestionRequest
+}
+
+type PendingPromptSource interface {
+	ListPendingPrompts(sessionID string) []PendingPromptSnapshot
+}
+
 func WithSessionTranscriptProvider(provider SessionTranscriptTailEntryProvider) Option {
 	return func(s *Service) {
 		s.transcripts = provider
+	}
+}
+
+func WithPendingPromptSource(source PendingPromptSource) Option {
+	return func(s *Service) {
+		s.prompts = source
 	}
 }
 
@@ -857,7 +873,7 @@ type attentionCandidateRow struct {
 
 func (s *Service) attentionItemsPage(ctx context.Context, projectID string, pageSize int, cursor attentionPageCursor, roleResolver workflow.RoleResolver) ([]serverapi.WorkflowAttentionItem, string, error) {
 	items := make([]serverapi.WorkflowAttentionItem, 0, pageSize)
-	questions := newPendingQuestionResolver(s.transcripts)
+	questions := newPendingQuestionResolver(s.transcripts, s.prompts)
 	current := cursor
 	// attentionItemFromCandidate drops candidates that no longer warrant
 	// attention (e.g. a validation_blocker whose workflow now validates), so a
@@ -950,7 +966,7 @@ func (s *Service) attentionItemFromCandidate(ctx context.Context, row attentionC
 		if err != nil {
 			question = pendingQuestion{message: pendingQuestionFallbackMessage}
 		}
-		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: "question", ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, AskID: row.askID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
+		return workflowQuestionAttentionItem(row.id, row.projectID, row.workflowID, row.taskID, row.shortID, row.title, row.runID, row.sessionID, row.askID, question, row.occurredAtUnixMs), true, nil
 	case attentionKindInterruptedRun:
 		return serverapi.WorkflowAttentionItem{ID: row.id, Kind: attentionKindInterruptedRun, ProjectID: row.projectID, WorkflowID: row.workflowID, TaskID: row.taskID, TaskShortID: row.shortID, TaskTitle: row.title, RunID: row.runID, SessionID: row.sessionID, Message: interruptedRunMessage(row.interruptionReason, row.interruptionDetailJSON), DetailJSON: row.interruptionDetailJSON, OccurredAtUnixMs: row.occurredAtUnixMs}, true, nil
 	case "validation_blocker":
@@ -1550,36 +1566,45 @@ func (s *Service) questionAttentionItems(ctx context.Context, projectID string, 
 		return nil, err
 	}
 	items := []serverapi.WorkflowAttentionItem{}
-	questions := newPendingQuestionResolver(s.transcripts)
+	questions := newPendingQuestionResolver(s.transcripts, s.prompts)
 	for _, row := range rows {
 		question, err := questions.Question(ctx, row.SessionID, row.WaitingAskID)
 		if err != nil {
 			question = pendingQuestion{message: pendingQuestionFallbackMessage}
 		}
-		items = append(items, serverapi.WorkflowAttentionItem{ID: "question:" + row.RunID + ":" + row.WaitingAskID, Kind: "question", ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, AskID: row.WaitingAskID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, OccurredAtUnixMs: row.UpdatedAtUnixMs})
+		items = append(items, workflowQuestionAttentionItem("question:"+row.RunID+":"+row.WaitingAskID, row.ProjectID, row.WorkflowID, row.TaskID, row.ShortID, row.Title, row.RunID, row.SessionID, row.WaitingAskID, question, row.UpdatedAtUnixMs))
 	}
 	return items, nil
+}
+
+func workflowQuestionAttentionItem(id string, projectID string, workflowID string, taskID string, shortID string, title string, runID string, sessionID string, askID string, question pendingQuestion, occurredAtUnixMs int64) serverapi.WorkflowAttentionItem {
+	return serverapi.WorkflowAttentionItem{ID: id, Kind: "question", ProjectID: projectID, WorkflowID: workflowID, TaskID: taskID, TaskShortID: shortID, TaskTitle: title, RunID: runID, SessionID: sessionID, AskID: askID, Message: question.message, Suggestions: question.suggestions, RecommendedOptionIndex: question.recommendedOptionIndex, Question: question.prompt, OccurredAtUnixMs: occurredAtUnixMs}
 }
 
 const pendingQuestionFallbackMessage = "Question pending; open the task to answer."
 
 type pendingQuestionResolver struct {
 	transcripts SessionTranscriptTailEntryProvider
+	prompts     PendingPromptSource
 }
 
 type pendingQuestion struct {
 	message                string
 	suggestions            []string
 	recommendedOptionIndex int
+	prompt                 *serverapi.WorkflowAttentionQuestionPrompt
 }
 
-func newPendingQuestionResolver(transcripts SessionTranscriptTailEntryProvider) *pendingQuestionResolver {
-	return &pendingQuestionResolver{transcripts: transcripts}
+func newPendingQuestionResolver(transcripts SessionTranscriptTailEntryProvider, prompts PendingPromptSource) *pendingQuestionResolver {
+	return &pendingQuestionResolver{transcripts: transcripts, prompts: prompts}
 }
 
 func (r *pendingQuestionResolver) Question(ctx context.Context, sessionID string, askID string) (pendingQuestion, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	askID = strings.TrimSpace(askID)
+	if question, ok, err := r.questionFromPendingPrompt(sessionID, askID); ok || err != nil {
+		return question, err
+	}
 	if r == nil || r.transcripts == nil {
 		return pendingQuestion{}, errors.New("session transcript provider is required to resolve pending question")
 	}
@@ -1597,6 +1622,63 @@ func (r *pendingQuestionResolver) Question(ctx context.Context, sessionID string
 	return question, nil
 }
 
+func (r *pendingQuestionResolver) questionFromPendingPrompt(sessionID string, askID string) (pendingQuestion, bool, error) {
+	if r == nil || r.prompts == nil || sessionID == "" || askID == "" {
+		return pendingQuestion{}, false, nil
+	}
+	for _, snapshot := range r.prompts.ListPendingPrompts(sessionID) {
+		req := snapshot.Request
+		if strings.TrimSpace(req.ID) != askID {
+			continue
+		}
+		return pendingQuestionFromRequest(req)
+	}
+	return pendingQuestion{}, false, nil
+}
+
+func pendingQuestionFromRequest(req askquestion.AskQuestionRequest) (pendingQuestion, bool, error) {
+	if req.Approval {
+		decisions := make([]clientui.ApprovalDecision, 0, len(req.ApprovalOptions))
+		for _, option := range req.ApprovalOptions {
+			decision := clientui.ApprovalDecision(option.Decision)
+			switch decision {
+			case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
+				decisions = append(decisions, decision)
+			default:
+				return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has invalid decision %q", req.ID, option.Decision)
+			}
+		}
+		if len(decisions) == 0 {
+			return pendingQuestion{}, true, fmt.Errorf("pending approval question %q has no approval decisions", req.ID)
+		}
+		return pendingQuestion{
+			message: strings.TrimSpace(req.Question),
+			prompt: &serverapi.WorkflowAttentionQuestionPrompt{
+				Kind:              serverapi.WorkflowAttentionQuestionKindApproval,
+				ApprovalDecisions: decisions,
+			},
+		}, true, nil
+	}
+	suggestions := normalizedPendingQuestionSuggestions(req.Suggestions)
+	return pendingQuestion{
+		message:                strings.TrimSpace(req.Question),
+		suggestions:            suggestions,
+		recommendedOptionIndex: req.RecommendedOptionIndex,
+		prompt: &serverapi.WorkflowAttentionQuestionPrompt{
+			Kind:                   serverapi.WorkflowAttentionQuestionKindOrdinary,
+			Suggestions:            suggestions,
+			RecommendedOptionIndex: req.RecommendedOptionIndex,
+		},
+	}, true, nil
+}
+
+func normalizedPendingQuestionSuggestions(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	return append([]string(nil), in...)
+}
+
 func askQuestionFromTranscriptEntries(entries []runtime.ChatEntry, askID string) pendingQuestion {
 	for _, entry := range entries {
 		entryAskID := strings.TrimSpace(entry.ToolCallID)
@@ -1611,6 +1693,11 @@ func askQuestionFromTranscriptEntries(entries []runtime.ChatEntry, askID string)
 				message:                question,
 				suggestions:            append([]string(nil), entry.ToolCall.Suggestions...),
 				recommendedOptionIndex: entry.ToolCall.RecommendedOptionIndex,
+				prompt: &serverapi.WorkflowAttentionQuestionPrompt{
+					Kind:                   serverapi.WorkflowAttentionQuestionKindOrdinary,
+					Suggestions:            append([]string(nil), entry.ToolCall.Suggestions...),
+					RecommendedOptionIndex: entry.ToolCall.RecommendedOptionIndex,
+				},
 			}
 		}
 	}

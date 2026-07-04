@@ -123,6 +123,21 @@ export type PendingAsk = Readonly<{
   createdAt: string;
 }>;
 
+export type ApprovalDecision = "allow_once" | "allow_session" | "deny";
+
+export type OrdinaryQuestionPrompt = Readonly<{
+  kind: "ordinary";
+  suggestions: readonly string[];
+  recommendedOptionIndex: number;
+}>;
+
+export type ApprovalQuestionPrompt = Readonly<{
+  kind: "approval";
+  approvalDecisions: readonly ApprovalDecision[];
+}>;
+
+export type AttentionQuestionPrompt = OrdinaryQuestionPrompt | ApprovalQuestionPrompt;
+
 export type WorkflowValidationError = Readonly<{
   code: string;
   message: string;
@@ -531,6 +546,7 @@ export type AttentionItem = Readonly<{
   detailJSON: string;
   suggestions: readonly string[];
   recommendedOptionIndex: number;
+  question: AttentionQuestionPrompt | null;
   occurredAt: number;
 }>;
 

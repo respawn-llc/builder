@@ -21,6 +21,7 @@ export { createJsonRpcTransport } from "./jsonRpc";
 export type {
   ActivityItem,
   ActivityPage,
+  ApprovalDecision,
   AttentionItem,
   AttentionPage,
   BoardCard,

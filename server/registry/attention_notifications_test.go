@@ -104,6 +104,71 @@ func TestRuntimeRegistryPublishesTaskQuestionBatchWithoutGenericResolve(t *testi
 	}
 }
 
+func TestRuntimeRegistryPublishesTaskApprovalPromptAsDurablyClearedQuestionAttention(t *testing.T) {
+	broker := attentionnotify.NewBroker()
+	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
+	engine := &runtime.Engine{}
+	registerReady(t, registry, "session-1", engine)
+	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
+	desktopSub, err := registry.SubscribeAttentionNotifications(context.Background(), serverapi.AttentionNotificationSubscribeRequest{})
+	if err != nil {
+		t.Fatalf("SubscribeAttentionNotifications: %v", err)
+	}
+	target := clientui.AttentionNotificationTarget{
+		Kind:      clientui.AttentionNotificationTargetWorkflowTask,
+		ProjectID: "project-1",
+		TaskID:    "task-1",
+		SessionID: "session-1",
+		Focus: &clientui.AttentionNotificationTaskDetailFocus{
+			Kind:   clientui.AttentionNotificationFocusQuestion,
+			AskIDs: []string{"approval-1"},
+		},
+	}
+	req := askquestion.AskQuestionRequest{
+		ID:              "approval-1",
+		Question:        "Approve protected path?",
+		Approval:        true,
+		AttentionTarget: &target,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{
+			{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
+			{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", req)
+		done <- err
+	}()
+
+	pending := nextRegistryAttentionEvent(t, desktopSub)
+	if pending.Type != clientui.AttentionNotificationEventPending || pending.Pending.Kind != clientui.AttentionNotificationKindQuestion || pending.Pending.Target.Kind != clientui.AttentionNotificationTargetWorkflowTask {
+		t.Fatalf("pending approval question event = %+v", pending)
+	}
+	if pending.Pending.Question == nil || pending.Pending.Question.Preview != "Approve protected path?" || len(pending.Pending.Question.CurrentUnresolvedAskIDs) != 1 || pending.Pending.Question.CurrentUnresolvedAskIDs[0] != "approval-1" {
+		t.Fatalf("pending approval question state = %+v", pending.Pending.Question)
+	}
+	if pending.Pending.Approval != nil {
+		t.Fatalf("task-scoped approval prompt must not publish approval attention: %+v", pending.Pending.Approval)
+	}
+	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{
+		RequestID: "approval-1",
+		Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce},
+	}, nil); err != nil {
+		t.Fatalf("SubmitPromptResponse: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("AwaitPromptResponse: %v", err)
+	}
+	if event, err := desktopSub.Next(shortRegistryContext(t)); err == nil {
+		t.Fatalf("prompt response resolved task approval before durable clear: %+v", event)
+	}
+	registry.MarkTaskApprovalQuestionCleared(target, "approval-1")
+	resolved := nextRegistryAttentionEvent(t, desktopSub)
+	if resolved.Type != clientui.AttentionNotificationEventResolved || resolved.Kind != clientui.AttentionNotificationKindQuestion || !attentionNotificationEventIDMatches(resolved, attentionNotificationID(clientui.AttentionNotificationKindQuestion, "approval-1")) {
+		t.Fatalf("durable clear resolved event = %+v", resolved)
+	}
+}
+
 func TestRuntimeRegistrySkippedFirstTaskQuestionPreparesBatchBeforeMaterialization(t *testing.T) {
 	broker := attentionnotify.NewBroker()
 	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)

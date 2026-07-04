@@ -910,7 +910,17 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 
 func (s *Starter) handleWorkflowAsk(ctx context.Context, sessionID string, req SchedulerStartRunRequest, input workflowstore.RunStartContext, askReq askquestion.AskQuestionRequest) (askquestion.AskQuestionResponse, error) {
 	if askReq.Approval {
-		return s.runtimes.AwaitPromptResponse(ctx, sessionID, askReq)
+		var approvalAttention workflowattention.ApprovalQuestionAttentionRegistry
+		if registry, ok := s.runtimes.(workflowattention.ApprovalQuestionAttentionRegistry); ok {
+			approvalAttention = registry
+		}
+		return workflowattention.HandleTaskApprovalQuestion(ctx, s.store, s.runtimes, approvalAttention, workflowattention.TaskQuestionRequest{
+			SessionID:  sessionID,
+			RunID:      req.RunID,
+			Generation: req.Generation,
+			Input:      input,
+			Question:   askReq,
+		})
 	}
 	var attention workflowattention.QuestionAttentionRegistry
 	if registry, ok := s.runtimes.(workflowattention.QuestionAttentionRegistry); ok {
