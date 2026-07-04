@@ -441,6 +441,7 @@ func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(stepID string, start 
 			Kind:                       EventLocalEntryAdded,
 			StepID:                     stepID,
 			LocalEntry:                 &copyEntry,
+			LocalEntryProjected:        true,
 			CommittedTranscriptChanged: true,
 			CommittedEntryStart:        start + idx,
 			CommittedEntryStartSet:     true,

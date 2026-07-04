@@ -286,7 +286,9 @@ func TestServiceSessionTranscriptTailEntriesUsesLiveRuntimeWhenAttached(t *testi
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
-	eng.AppendCommittedEntry("assistant", "two")
+	if err := eng.AppendCommittedEntry("system", "two"); err != nil {
+		t.Fatalf("append committed entry: %v", err)
+	}
 	svc := NewService(NewStaticSessionResolver(store), NewStaticRuntimeResolver(eng), nil)
 
 	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
@@ -587,7 +589,9 @@ func TestServiceSessionTranscriptTailEntriesUsesNewestActiveSegment(t *testing.T
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}
-	eng.AppendCommittedEntry("assistant", "live local")
+	if err := eng.AppendCommittedEntry("system", "live local"); err != nil {
+		t.Fatalf("append committed entry: %v", err)
+	}
 	svc := NewService(NewStaticSessionResolver(store), NewStaticRuntimeResolver(eng), nil)
 
 	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
@@ -603,7 +607,7 @@ func TestServiceSessionTranscriptTailEntriesUsesNewestActiveSegment(t *testing.T
 	if entries[1].Role != "compaction_notice" || entries[1].Text != "after replace notice" {
 		t.Fatalf("expected legacy local entry preserved without special handling, got %+v", entries[1])
 	}
-	if entries[2].Role != "assistant" || entries[2].Text != "live local" {
+	if entries[2].Role != "system" || entries[2].Text != "live local" {
 		t.Fatalf("expected live local entry after compaction, got %+v", entries[2])
 	}
 }

@@ -93,7 +93,13 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 		if evt.LocalEntry == nil {
 			return nil
 		}
-		return []TranscriptCommittedRowFact{runtimeNoticeFactFromLocalEntry(*evt.LocalEntry)}
+		if evt.LocalEntryProjected {
+			if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry); ok {
+				return []TranscriptCommittedRowFact{fact}
+			}
+			return nil
+		}
+		return []TranscriptCommittedRowFact{localEntryNoticeFact(*evt.LocalEntry)}
 	case EventInFlightClearFailed:
 		if strings.TrimSpace(evt.Error) == "" {
 			return nil
@@ -206,7 +212,7 @@ func transcriptCommittedEntryCountFromMessage(msg llm.Message, completions map[s
 	return count
 }
 
-func transcriptCommittedRowFactFromProjectedEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
 	switch strings.TrimSpace(entry.Role) {
 	case "user":
 		if strings.TrimSpace(entry.Text) == "" {
@@ -219,6 +225,9 @@ func transcriptCommittedRowFactFromProjectedEntry(entry ChatEntry) (TranscriptCo
 		}
 		return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactAssistant, Assistant: &TranscriptAssistantRowFact{Text: entry.Text, Phase: entry.Phase}}, true
 	case "tool_result_ok", "tool_result_error":
+		if strings.TrimSpace(entry.ToolCallID) == "" {
+			return localEntryNoticeFact(entry), true
+		}
 		toolName := "tool"
 		if entry.ToolCall != nil && strings.TrimSpace(entry.ToolCall.ToolName) != "" {
 			toolName = strings.TrimSpace(entry.ToolCall.ToolName)
@@ -235,9 +244,17 @@ func transcriptCommittedRowFactFromProjectedEntry(entry ChatEntry) (TranscriptCo
 	case "tool_call":
 		return TranscriptCommittedRowFact{}, false
 	default:
-		return runtimeNoticeFactFromLocalEntry(entry), true
+		return localEntryNoticeFact(entry), true
 	}
 }
+
+func localEntryNoticeFact(entry ChatEntry) TranscriptCommittedRowFact {
+	if strings.TrimSpace(entry.Role) == "" {
+		return legacyUntypedNoticeFactFromLocalEntry(entry)
+	}
+	return runtimeNoticeFactFromLocalEntry(entry)
+}
+
 
 func synthesizedTranscriptToolResultFact(call llm.ToolCall, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) (TranscriptCommittedRowFact, bool) {
 	callID := strings.TrimSpace(call.ID)

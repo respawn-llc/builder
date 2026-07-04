@@ -116,7 +116,7 @@ func TestTranscriptSubscriptionBrokerPanicsOnContractViolationInTestMode(t *test
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
 			Kind: clientui.TranscriptRowTool,
-			Tool: &clientui.TranscriptToolRow{ToolCallID: "call-without-start"},
+			Tool: &clientui.TranscriptToolRow{ToolCallID: ""},
 		},
 	}})
 }
@@ -136,7 +136,7 @@ func TestTranscriptSubscriptionBrokerClosesOnContractViolationWhenPanicDisabled(
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
 			Kind: clientui.TranscriptRowTool,
-			Tool: &clientui.TranscriptToolRow{ToolCallID: "call-without-start"},
+			Tool: &clientui.TranscriptToolRow{ToolCallID: ""},
 		},
 	}})
 	_, err = sub.Next(context.Background())
@@ -180,7 +180,7 @@ func TestSessionTranscriptSubscriptionHydratesFirstAndSequencesPerSubscription(t
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
 
-	if err := engine.AppendCommittedEntry("user", "before subscribe"); err != nil {
+	if err := engine.AppendCommittedEntry("system", "before subscribe"); err != nil {
 		t.Fatalf("AppendCommittedEntry before subscribe: %v", err)
 	}
 
@@ -813,4 +813,59 @@ func publishToolStartForTest(registry *RuntimeRegistry, sessionID string, callID
 		},
 		CommittedTranscriptChanged: true,
 	})
+}
+
+func TestTranscriptSubscriptionBrokerDeliversToolTerminalsWithoutStart(t *testing.T) {
+	broker := newTranscriptSubscriptionBroker()
+	sub, err := broker.Subscribe(clientui.TranscriptMessage{Kind: clientui.TranscriptMessageHydration, Hydration: &clientui.TranscriptHydration{}})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	_ = nextTranscriptMessage(t, sub)
+
+	broker.Publish([]clientui.TranscriptMessage{{
+		Kind: clientui.TranscriptMessageCommittedRow,
+		CommittedRow: &clientui.TranscriptCommittedRow{
+			Kind: clientui.TranscriptRowTool,
+			Tool: &clientui.TranscriptToolRow{ToolCallID: "hosted-call", ToolName: "web_search"},
+		},
+	}})
+	row := nextTranscriptMessage(t, sub)
+	if row.Kind != clientui.TranscriptMessageCommittedRow || row.CommittedRow == nil || row.CommittedRow.Tool == nil || row.CommittedRow.Tool.ToolCallID != "hosted-call" {
+		t.Fatalf("message = %+v, want committed tool row without preceding start", row)
+	}
+
+	broker.Publish([]clientui.TranscriptMessage{{
+		Kind:      clientui.TranscriptMessageToolAbort,
+		ToolAbort: &clientui.TranscriptToolAbort{ToolCallID: "hosted-call-2", Reason: clientui.TranscriptToolAbortCanceled},
+	}})
+	abort := nextTranscriptMessage(t, sub)
+	if abort.Kind != clientui.TranscriptMessageToolAbort || abort.ToolAbort == nil || abort.ToolAbort.ToolCallID != "hosted-call-2" {
+		t.Fatalf("message = %+v, want tool abort without preceding start", abort)
+	}
+}
+
+func TestSessionTranscriptFeedPublishesStatusAfterUserMessageFlush(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
+
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = sub.Close() }()
+	_ = nextTranscriptMessage(t, sub)
+
+	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+		Kind:         runtime.EventUserMessageFlushed,
+		UserMessage:  "steer text",
+		ContextUsage: &runtime.ContextUsage{UsedTokens: 10, WindowTokens: 100},
+	})
+	row := nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageCommittedRow)
+	if row.CommittedRow == nil || row.CommittedRow.User == nil || row.CommittedRow.User.Text != "steer text" {
+		t.Fatalf("committed row = %+v, want flushed user text", row.CommittedRow)
+	}
+	status := nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageSessionStatus)
+	if status.SessionStatus == nil {
+		t.Fatalf("status = %+v, want session status after user flush", status)
+	}
 }

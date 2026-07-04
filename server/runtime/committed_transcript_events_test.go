@@ -27,7 +27,7 @@ func TestCommittedTranscriptChangedMarksOnlyDurableTranscriptMutations(t *testin
 	})
 
 	start := len(events)
-	if err := eng.AppendCommittedEntry("assistant", "committed local note"); err != nil {
+	if err := eng.AppendCommittedEntry("system", "committed local note"); err != nil {
 		t.Fatalf("append committed entry: %v", err)
 	}
 	assertEventFlags(t, events[start:], []eventFlagExpectation{{kind: EventLocalEntryAdded, stepID: "", committedChanged: true}})
