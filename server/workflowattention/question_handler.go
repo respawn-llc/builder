@@ -94,6 +94,12 @@ func HandleTaskApprovalQuestion(ctx context.Context, store QuestionStore, awaite
 	resp, askErr := awaiter.AwaitPromptResponse(ctx, req.SessionID, askReq)
 	clearErr := store.ClearRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID)
 	if clearErr != nil {
+		if taskQuestionAlreadyDurablyCleared(context.Background(), store, req.RunID, askReq.ID, clearErr, askErr, ctx.Err()) {
+			if attention != nil {
+				attention.MarkTaskApprovalQuestionCleared(*target, askReq.ID)
+			}
+			return resp, askErr
+		}
 		if askErr == nil {
 			return askquestion.AskQuestionResponse{}, clearErr
 		}

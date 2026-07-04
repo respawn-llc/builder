@@ -162,7 +162,7 @@ func (r *RuntimeRegistry) publishAttentionResolved(sessionID string, snapshot Pe
 	if req.QuestionBatch != nil && req.AttentionTarget != nil && req.AttentionTarget.Kind == clientui.AttentionNotificationTargetWorkflowTask {
 		return
 	}
-	if taskScopedApprovalQuestion(req) {
+	if req.IsTaskScopedApprovalQuestion() {
 		return
 	}
 	kind := promptNotificationKind(req)
@@ -242,7 +242,7 @@ func attentionPendingEventFromPrompt(sessionID string, snapshot PendingPromptSna
 		Kind:      clientui.AttentionNotificationTargetSessionPrompt,
 		SessionID: sessionID,
 	}
-	if taskScopedApprovalQuestion(snapshot.Request) && snapshot.Request.AttentionTarget != nil {
+	if snapshot.Request.IsTaskScopedApprovalQuestion() && snapshot.Request.AttentionTarget != nil {
 		target = *snapshot.Request.AttentionTarget
 	}
 	notification := clientui.AttentionNotification{
@@ -255,7 +255,7 @@ func attentionPendingEventFromPrompt(sessionID string, snapshot PendingPromptSna
 		Revision:   1,
 		Target:     target,
 	}
-	if snapshot.Request.Approval && !taskScopedApprovalQuestion(snapshot.Request) {
+	if snapshot.Request.Approval && !snapshot.Request.IsTaskScopedApprovalQuestion() {
 		notification.Approval = &clientui.AttentionNotificationApprovalState{
 			Message: strings.TrimSpace(snapshot.Request.Question),
 		}
@@ -284,20 +284,10 @@ func attentionScopeForRequest(sessionID string, req askquestion.AskQuestionReque
 }
 
 func promptNotificationKind(req askquestion.AskQuestionRequest) clientui.AttentionNotificationKind {
-	if req.Approval && !taskScopedApprovalQuestion(req) {
+	if req.Approval && !req.IsTaskScopedApprovalQuestion() {
 		return clientui.AttentionNotificationKindApproval
 	}
 	return clientui.AttentionNotificationKindQuestion
-}
-
-func taskScopedApprovalQuestion(req askquestion.AskQuestionRequest) bool {
-	if !req.Approval || req.AttentionTarget == nil {
-		return false
-	}
-	if req.AttentionTarget.Kind != clientui.AttentionNotificationTargetWorkflowTask || req.AttentionTarget.Focus == nil {
-		return false
-	}
-	return req.AttentionTarget.Focus.Kind == clientui.AttentionNotificationFocusQuestion
 }
 
 func questionBatchUUID(batch askquestion.AskQuestionBatchMetadata) string {
