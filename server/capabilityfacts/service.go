@@ -142,7 +142,7 @@ func modelFact(contract llm.ModelCapabilityContract, providerCaps llm.ProviderCa
 		SupportsVisionInputs:     contract.SupportsVisionInputs,
 		Verbosity:                verbosityFact(verbosity),
 	}
-	if contract.LargeContextWindowTokens > 0 {
+	if contract.LargeContextWindowTokens > contract.ContextWindowTokens {
 		fact.LargeWindow = &serverapi.ModelLargeWindowFact{Tokens: contract.LargeContextWindowTokens}
 		fact.DefaultContextWindowMode = ptr(contextWindowModeStandard)
 	}

@@ -44,11 +44,17 @@ func TestServiceProjectsModelCatalogAndUnknownFallback(t *testing.T) {
 			if fact.LargeWindow.Tokens <= 0 {
 				t.Fatalf("model %q has non-positive large window fact: %d", *fact.ModelID, fact.LargeWindow.Tokens)
 			}
+			if fact.ContextWindowTokens == nil || fact.LargeWindow.Tokens <= *fact.ContextWindowTokens {
+				t.Fatalf("model %q large window = %+v, context window = %+v; want strictly larger", *fact.ModelID, fact.LargeWindow, fact.ContextWindowTokens)
+			}
 			modelWithLargeWindow = &resp.Models.KnownModels[idx]
 		}
 	}
 	if !seen["gpt-5.5"] {
 		t.Fatalf("known model catalog missing gpt-5.5: %#v", seen)
+	}
+	if gpt55 := knownModelFact(resp.Models.KnownModels, "gpt-5.5"); gpt55 == nil || gpt55.LargeWindow != nil {
+		t.Fatalf("gpt-5.5 large-window fact = %+v, want absent because large window equals standard window", gpt55)
 	}
 	if modelWithLargeWindow == nil {
 		t.Fatal("expected at least one model with large-window facts")
@@ -298,6 +304,15 @@ func TestServiceDoesNotRefreshAuthForPreAuthFacts(t *testing.T) {
 func testConfig(t *testing.T, settings config.Settings) config.App {
 	t.Helper()
 	return testConfigAt(t.TempDir(), settings)
+}
+
+func knownModelFact(facts []serverapi.ModelCapabilityFact, modelID string) *serverapi.ModelCapabilityFact {
+	for idx := range facts {
+		if facts[idx].ModelID != nil && *facts[idx].ModelID == modelID {
+			return &facts[idx]
+		}
+	}
+	return nil
 }
 
 func testConfigAt(root string, settings config.Settings) config.App {
