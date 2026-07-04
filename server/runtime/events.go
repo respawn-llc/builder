@@ -76,6 +76,10 @@ type Event struct {
 	Kind                         EventKind
 	StepID                       string
 	CommittedTranscriptChanged   bool
+	TranscriptRevision           int64
+	CommittedEntryCount          int
+	CommittedEntryStart          int
+	CommittedEntryStartSet       bool
 	Error                        string
 	AssistantDelta               string
 	AssistantDeltaPhase          llm.MessagePhase

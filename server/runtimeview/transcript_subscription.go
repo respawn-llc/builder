@@ -21,7 +21,7 @@ func TranscriptHydrationFromSnapshot(runtimeSnapshot runtime.TranscriptHydration
 	hydration := clientui.TranscriptHydration{
 		CommittedRows: transcriptRowsFromFacts(runtimeSnapshot.CommittedRows),
 	}
-	if stream := transcriptAssistantStream(runtimeSnapshot.ActiveAssistantText, runtimeSnapshot.ActiveAssistantStreamID); stream != nil {
+	if stream := transcriptAssistantStream(runtimeSnapshot.ActiveAssistantText, runtimeSnapshot.ActiveAssistantStreamID, clientui.MessagePhase(runtimeSnapshot.ActiveAssistantPhase)); stream != nil {
 		hydration.ActiveAssistantStream = stream
 	}
 	return hydration
@@ -154,7 +154,7 @@ func transcriptFeedStateMessages(evt runtime.Event) []clientui.TranscriptMessage
 			Workdir:           evt.Background.Workdir,
 			LogPath:           evt.Background.LogPath,
 			Preview:           evt.Background.Preview,
-			Removed:           evt.Background.Removed,
+			Removed:           evt.Background.Removed > 0,
 			UserRequestedKill: evt.Background.UserRequestedKill,
 		}
 		if evt.Background.ExitCode != nil {
@@ -184,7 +184,6 @@ func transcriptCommittedRowMessages(evt runtime.Event) []clientui.TranscriptMess
 		return startMessages
 	}
 	out := make([]clientui.TranscriptMessage, 0, len(startMessages)+len(rowFacts))
-	out = append(out, startMessages...)
 	for _, fact := range rowFacts {
 		row := transcriptRowFromFact(fact)
 		out = append(out, clientui.TranscriptMessage{
@@ -192,6 +191,7 @@ func transcriptCommittedRowMessages(evt runtime.Event) []clientui.TranscriptMess
 			CommittedRow: &row,
 		})
 	}
+	out = append(out, startMessages...)
 	return out
 }
 
@@ -206,7 +206,7 @@ func transcriptRowsFromFacts(facts []runtime.TranscriptCommittedRowFact) []clien
 	return rows
 }
 
-func transcriptAssistantStream(text string, streamID *uuid.UUID) *clientui.TranscriptAssistantStream {
+func transcriptAssistantStream(text string, streamID *uuid.UUID, phase clientui.MessagePhase) *clientui.TranscriptAssistantStream {
 	if streamID == nil {
 		return nil
 	}
@@ -216,6 +216,7 @@ func transcriptAssistantStream(text string, streamID *uuid.UUID) *clientui.Trans
 	return &clientui.TranscriptAssistantStream{
 		StreamID: *streamID,
 		Text:     text,
+		Phase:    phase,
 	}
 }
 
@@ -275,8 +276,12 @@ func transcriptNoticeFromFact(fact *runtime.TranscriptNoticeRowFact) *clientui.T
 		Reason:   clientui.TranscriptNoticeReason(strings.TrimSpace(fact.Reason)),
 		Severity: clientui.TranscriptNoticeSeverity(strings.TrimSpace(fact.Severity)),
 		Data: clientui.TranscriptNoticeData{
-			LegacyText: fact.LegacyText,
-			NoticeID:   fact.NoticeID,
+			LegacyText:    fact.LegacyText,
+			NoticeID:      fact.NoticeID,
+			MessageType:   clientui.MessageType(strings.TrimSpace(string(fact.MessageType))),
+			SourcePath:    strings.TrimSpace(fact.SourcePath),
+			CondensedText: strings.TrimSpace(fact.CondensedText),
+			CompactLabel:  strings.TrimSpace(fact.CompactLabel),
 		},
 	}
 	if strings.TrimSpace(fact.DiagnosticCode) != "" || strings.TrimSpace(fact.DiagnosticDetail) != "" {
@@ -292,6 +297,7 @@ func transcriptNoticeFromFact(fact *runtime.TranscriptNoticeRowFact) *clientui.T
 			Scope:           strings.TrimSpace(fact.CacheWarning.Scope),
 			Reason:          strings.TrimSpace(fact.CacheWarning.Reason),
 			LostInputTokens: fact.CacheWarning.LostInputTokens,
+			Visibility:      clientui.EntryVisibility(fact.CacheWarning.Visibility),
 		}
 	}
 	if notice.Reason == "" {

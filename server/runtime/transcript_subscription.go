@@ -1,12 +1,17 @@
 package runtime
 
-import "github.com/google/uuid"
+import (
+	"core/server/llm"
+
+	"github.com/google/uuid"
+)
 
 type TranscriptHydrationSnapshot struct {
 	CommittedRows           []TranscriptCommittedRowFact
 	ActiveAssistantText     string
 	ActiveAssistantMetadata *AssistantStreamMetadata
 	ActiveAssistantStreamID *uuid.UUID
+	ActiveAssistantPhase    llm.MessagePhase
 }
 
 func (e *Engine) WithTranscriptHydrationSnapshot(fn func(TranscriptHydrationSnapshot) error) error {
@@ -38,5 +43,6 @@ func (e *Engine) transcriptHydrationSegmentLocked() TranscriptHydrationSnapshot 
 		ActiveAssistantText:     snapshot.Streaming,
 		ActiveAssistantMetadata: cloneAssistantStreamMetadata(snapshot.StreamingMetadata),
 		ActiveAssistantStreamID: cloneTranscriptStreamID(snapshot.StreamingStreamID),
+		ActiveAssistantPhase:    snapshot.StreamingPhase,
 	}
 }

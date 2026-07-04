@@ -205,12 +205,17 @@ type TranscriptNoticeData struct {
 	NoticeID          *string
 	CacheWarning      *TranscriptCacheWarningData
 	RuntimeDiagnostic *TranscriptDiagnosticData
+	MessageType       MessageType
+	SourcePath        string
+	CondensedText     string
+	CompactLabel      string
 }
 
 type TranscriptCacheWarningData struct {
 	Scope           string
 	Reason          string
 	LostInputTokens int
+	Visibility      EntryVisibility
 }
 
 type TranscriptDiagnosticData struct {
@@ -257,25 +262,7 @@ type TranscriptQueuedOrSteeredMessageState struct {
 	UserText        string
 }
 
-type TranscriptSessionStatus struct {
-	ReviewerFrequency                 string
-	ReviewerEnabled                   bool
-	AutoCompactionEnabled             bool
-	QuestionsEnabled                  bool
-	FastModeAvailable                 bool
-	FastModeEnabled                   bool
-	ConversationFreshness             ConversationFreshness
-	ParentSessionID                   string
-	LastCommittedAssistantFinalAnswer string
-	ThinkingLevel                     string
-	CompactionMode                    string
-	ContextUsage                      RuntimeContextUsage
-	CompactionCount                   int
-	Goal                              *RuntimeGoal
-	WorkflowActive                    bool
-	WorkflowSession                   *WorkflowSessionStatus
-	Update                            UpdateStatus
-}
+type TranscriptSessionStatus = RuntimeStatus
 
 type TranscriptSessionIdentity struct {
 	SessionID             string
@@ -304,7 +291,7 @@ type TranscriptBackgroundActivity struct {
 	Workdir           string
 	LogPath           string
 	Preview           string
-	Removed           int
+	Removed           bool
 	ExitCode          *int
 	UserRequestedKill bool
 }

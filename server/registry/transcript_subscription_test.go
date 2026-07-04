@@ -10,6 +10,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
+	"core/server/runtimecontrol"
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/clientui"
@@ -343,6 +344,9 @@ func TestSessionTranscriptFeedSequencerReceivesEngineQueueStatus(t *testing.T) {
 	if live.Sequence != 2 || live.Kind != clientui.TranscriptMessageQueuedOrSteeredMessageState || live.QueuedOrSteeredMessageState == nil || live.QueuedOrSteeredMessageState.QueueItemID != item.ID || live.QueuedOrSteeredMessageState.Status != clientui.QueuedUserMessageAccepted {
 		t.Fatalf("engine queue live state = %+v, want accepted queue item %q", live, item.ID)
 	}
+	if live.QueuedOrSteeredMessageState.UserText != "queued through engine" {
+		t.Fatalf("accepted queue text = %q, want queued through engine", live.QueuedOrSteeredMessageState.UserText)
+	}
 
 	if !engine.DiscardQueuedUserMessage(item.ID) {
 		t.Fatalf("DiscardQueuedUserMessage(%q) returned false", item.ID)
@@ -350,6 +354,102 @@ func TestSessionTranscriptFeedSequencerReceivesEngineQueueStatus(t *testing.T) {
 	discarded := nextTranscriptMessage(t, sub)
 	if discarded.Sequence != 3 || discarded.Kind != clientui.TranscriptMessageQueuedOrSteeredMessageState || discarded.QueuedOrSteeredMessageState == nil || discarded.QueuedOrSteeredMessageState.Status != clientui.QueuedUserMessageDiscarded {
 		t.Fatalf("engine discard live state = %+v, want seq=3 discarded", discarded)
+	}
+}
+
+func TestSessionTranscriptFeedSequencerHydratesEngineQueuedText(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	var engine *runtime.Engine
+	engine = newRegistryTestRuntime(t, func(evt runtime.Event) {
+		registry.PublishRuntimeEvent(engine.SessionID(), evt)
+	})
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
+
+	item := engine.QueueUserMessage("queued for hydration")
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = sub.Close() }()
+
+	hydration := nextTranscriptMessage(t, sub)
+	if hydration.Hydration == nil || len(hydration.Hydration.QueuedOrSteeredMessages) != 1 {
+		t.Fatalf("hydration = %+v, want one queued message", hydration)
+	}
+	queued := hydration.Hydration.QueuedOrSteeredMessages[0]
+	if queued.QueueItemID != item.ID || queued.UserText != "queued for hydration" {
+		t.Fatalf("hydrated queued message = %+v, want queued text for %q", queued, item.ID)
+	}
+}
+
+func TestSessionTranscriptFeedPublishesUpdatedToolStartMetadataByCallID(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
+
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = sub.Close() }()
+	_ = nextTranscriptMessage(t, sub)
+
+	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+		Kind: runtime.EventAssistantMessage,
+		Message: llm.Message{
+			Role: llm.RoleAssistant,
+			ToolCalls: []llm.ToolCall{{
+				ID:   "call-duplicate",
+				Name: "shell",
+			}},
+		},
+	})
+	start := nextTranscriptMessage(t, sub)
+	if start.Kind != clientui.TranscriptMessageToolStart || start.ToolStart == nil || start.ToolStart.ToolCallID != "call-duplicate" {
+		t.Fatalf("first start = %+v, want tool_start", start)
+	}
+	status := nextTranscriptMessage(t, sub)
+	if status.Kind != clientui.TranscriptMessageSessionStatus {
+		t.Fatalf("second message = %+v, want session status from assistant event", status)
+	}
+
+	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
+		Kind: runtime.EventToolCallStarted,
+		ToolCall: &llm.ToolCall{
+			ID:   "call-duplicate",
+			Name: "exec",
+		},
+	})
+	updated := nextTranscriptMessage(t, sub)
+	if updated.Kind != clientui.TranscriptMessageToolStart || updated.ToolStart == nil || updated.ToolStart.ToolCallID != "call-duplicate" || updated.ToolStart.ToolName != "exec" {
+		t.Fatalf("updated start = %+v, want normalized tool_start metadata", updated)
+	}
+
+	late := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = late.Close() }()
+	hydration := nextTranscriptMessage(t, late)
+	if hydration.Hydration == nil || len(hydration.Hydration.InFlightTools) != 1 {
+		t.Fatalf("late hydration = %+v, want one in-flight tool", hydration)
+	}
+	if got := hydration.Hydration.InFlightTools[0].ToolName; got != "exec" {
+		t.Fatalf("hydrated tool name = %q, want updated duplicate start metadata", got)
+	}
+}
+
+func TestSessionTranscriptSubscriberCountsAsRuntimeInterest(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
+
+	if registry.HasRuntimeSubscribers(engine.SessionID()) {
+		t.Fatal("runtime subscribers present before transcript subscribe")
+	}
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	if !registry.HasRuntimeSubscribers(engine.SessionID()) {
+		t.Fatal("transcript subscriber did not count as runtime interest")
+	}
+	if err := sub.Close(); err != nil {
+		t.Fatalf("close transcript subscription: %v", err)
+	}
+	if registry.HasRuntimeSubscribers(engine.SessionID()) {
+		t.Fatal("runtime subscribers present after transcript close")
 	}
 }
 
@@ -406,6 +506,32 @@ func TestSessionTranscriptFeedSequencerUsesRuntimeViewStatusProducer(t *testing.
 	live := nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageSessionStatus)
 	if live.Kind != clientui.TranscriptMessageSessionStatus || live.SessionStatus == nil {
 		t.Fatalf("live session status = %+v, want session_status", live)
+	}
+}
+
+func TestSessionTranscriptFeedPublishesStatusAfterRuntimeSettingChange(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
+
+	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
+	defer func() { _ = sub.Close() }()
+	_ = nextTranscriptMessage(t, sub)
+
+	service := runtimecontrol.NewService(registry)
+	_, err := service.SetQuestionsEnabled(context.Background(), serverapi.RuntimeSetQuestionsEnabledRequest{
+		SessionID:       engine.SessionID(),
+		ClientRequestID: "questions-disable-1",
+		Enabled:         false,
+	})
+	if err != nil {
+		t.Fatalf("SetQuestionsEnabled: %v", err)
+	}
+
+	live := nextTranscriptMessageOfKind(t, sub, clientui.TranscriptMessageSessionStatus)
+	if live.SessionStatus == nil || live.SessionStatus.QuestionsEnabled {
+		t.Fatalf("live session status = %+v, want questions disabled", live)
 	}
 }
 

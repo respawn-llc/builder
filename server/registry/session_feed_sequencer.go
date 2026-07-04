@@ -219,7 +219,7 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 		if s.backgrounds == nil {
 			s.backgrounds = make(map[string]clientui.TranscriptBackgroundActivity)
 		}
-		if message.BackgroundActivity.Removed > 0 {
+		if message.BackgroundActivity.Removed {
 			delete(s.backgrounds, message.BackgroundActivity.ID)
 			return
 		}

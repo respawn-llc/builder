@@ -665,6 +665,22 @@ func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string, target *clien
 	entry.sessionFeed.Publish([]clientui.TranscriptMessage{{Kind: clientui.TranscriptMessageSessionIdentity, SessionIdentity: &identity}})
 }
 
+func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) {
+	if r == nil {
+		return
+	}
+	entry := r.directory.Entry(strings.TrimSpace(sessionID))
+	if entry == nil || entry.sessionFeed == nil {
+		return
+	}
+	engine := entry.engineRef()
+	if engine == nil {
+		return
+	}
+	status := runtimeview.TranscriptSessionStatusFromRuntime(engine)
+	entry.sessionFeed.Publish([]clientui.TranscriptMessage{{Kind: clientui.TranscriptMessageSessionStatus, SessionStatus: &status}})
+}
+
 func (r *RuntimeRegistry) resolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, bool) {
 	if r == nil || r.executionTargetResolver == nil {
 		return clientui.SessionExecutionTarget{}, false
@@ -943,7 +959,7 @@ func (r *RuntimeRegistry) HasRuntimeSubscribers(sessionID string) bool {
 	if entry == nil {
 		return false
 	}
-	return entry.sessionActivity.SubscriberCount() > 0 || entry.promptActivity.SubscriberCount() > 0
+	return entry.sessionActivity.SubscriberCount() > 0 || entry.promptActivity.SubscriberCount() > 0 || entry.sessionFeed.HasSubscribers()
 }
 
 func (r *RuntimeRegistry) notifyInterestChanged(sessionID string, reason RuntimeInterestReason) {
@@ -1021,8 +1037,11 @@ type notifyingSessionActivitySubscription struct {
 }
 
 func (s *notifyingSessionActivitySubscription) Close() error {
+	if s == nil {
+		return nil
+	}
 	var err error
-	if s != nil && s.SessionActivitySubscription != nil {
+	if s.SessionActivitySubscription != nil {
 		err = s.SessionActivitySubscription.Close()
 	}
 	s.once.Do(func() {
@@ -1040,8 +1059,11 @@ type notifyingSessionTranscriptSubscription struct {
 }
 
 func (s *notifyingSessionTranscriptSubscription) Close() error {
+	if s == nil {
+		return nil
+	}
 	var err error
-	if s != nil && s.SessionTranscriptSubscription != nil {
+	if s.SessionTranscriptSubscription != nil {
 		err = s.SessionTranscriptSubscription.Close()
 	}
 	s.once.Do(func() {
@@ -1059,8 +1081,11 @@ type notifyingPromptActivitySubscription struct {
 }
 
 func (s *notifyingPromptActivitySubscription) Close() error {
+	if s == nil {
+		return nil
+	}
 	var err error
-	if s != nil && s.PromptActivitySubscription != nil {
+	if s.PromptActivitySubscription != nil {
 		err = s.PromptActivitySubscription.Close()
 	}
 	s.once.Do(func() {

@@ -113,6 +113,13 @@ func (s *transcriptRuntimeState) SnapshotItems() []llm.ResponseItem {
 	return nil
 }
 
+func (s *transcriptRuntimeState) CommittedEntryCount() int {
+	if chat := s.chatProjection(); chat != nil {
+		return chat.committedEntryCount()
+	}
+	return 0
+}
+
 func (s *transcriptRuntimeState) StreamingSnapshot() (string, string, *AssistantStreamMetadata) {
 	if chat := s.chatProjection(); chat != nil {
 		return chat.streamingSnapshot()

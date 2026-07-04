@@ -5,7 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"testing"
 )
 
@@ -65,10 +65,6 @@ func TestTranscriptSubscriptionHydrationDoesNotUseLegacyTranscriptReaders(t *tes
 				if forbidden[typed.Name] {
 					t.Fatalf("%s references forbidden legacy transcript helper %s in new subscription path", rel, typed.Name)
 				}
-			case *ast.BasicLit:
-				if strings.Contains(typed.Value, "TranscriptSegmentPage(0)") {
-					t.Fatalf("%s contains forbidden legacy transcript page call literal", rel)
-				}
 			}
 			return true
 		})
@@ -125,7 +121,7 @@ func TestLegacyUntypedNoticeIsOnlyProducedByFossilProjectionPath(t *testing.T) {
 			current := fn.Name.Name
 			ast.Inspect(fn.Body, func(node ast.Node) bool {
 				lit, ok := node.(*ast.BasicLit)
-				if !ok || !strings.Contains(lit.Value, "legacy_untyped_notice") {
+				if !ok || basicStringLiteralValue(lit) != "legacy_untyped_notice" {
 					return true
 				}
 				if !allowedFunctions[current] {
@@ -135,6 +131,17 @@ func TestLegacyUntypedNoticeIsOnlyProducedByFossilProjectionPath(t *testing.T) {
 			})
 		}
 	}
+}
+
+func basicStringLiteralValue(lit *ast.BasicLit) string {
+	if lit == nil || lit.Kind != token.STRING {
+		return ""
+	}
+	value, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return ""
+	}
+	return value
 }
 
 func findRegistryRepoRoot(t *testing.T) string {

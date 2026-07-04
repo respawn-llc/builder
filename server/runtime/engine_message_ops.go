@@ -157,6 +157,7 @@ func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 
 func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy steeringMessageEventPolicy, persist bool) error {
 	msg = normalizeMessageForTranscript(msg, e.transcriptWorkingDir())
+	previousCommittedCount := e.CommittedTranscriptEntryCount()
 	if e.beforePersistMessage != nil {
 		if err := e.beforePersistMessage(msg); err != nil {
 			return err
@@ -176,7 +177,8 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 			return err
 		}
 	}
-	if eventPolicy != steeringMessageEventNone && shouldEmitCommittedMessageEvent(msg) {
+	currentCommittedCount := e.CommittedTranscriptEntryCount()
+	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
 	}
 	return nil
@@ -319,6 +321,9 @@ func (e *Engine) emitQueuedUserMessageStatus(item QueuedUserMessage, status Queu
 	if restore {
 		event.RestoreText = item.Text
 	}
+	if status == QueuedUserMessageAccepted {
+		event.RestoreText = item.Text
+	}
 	e.emitRaw(Event{Kind: EventQueuedUserMessageStatus, QueuedUserMessageStatus: event})
 }
 
@@ -351,6 +356,7 @@ func (e *Engine) emitCommittedAssistantMessageRaw(stepID string, committed steer
 	var clearedStreamID *uuid.UUID
 	if finalizesStreaming {
 		clearedMetadata, clearedStreamID = e.clearStreamingAssistantStateRaw()
+		newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).RecordAssistantStreamFinalization(committed.committedStart, clearedStreamID)
 	}
 	e.emitRaw(Event{
 		Kind:                        EventAssistantMessage,
@@ -359,6 +365,8 @@ func (e *Engine) emitCommittedAssistantMessageRaw(stepID string, committed steer
 		AssistantStreamMetadata:     cloneAssistantStreamMetadata(clearedMetadata),
 		AssistantTranscriptStreamID: cloneTranscriptStreamID(clearedStreamID),
 		CommittedTranscriptChanged:  true,
+		CommittedEntryStart:         committed.committedStart,
+		CommittedEntryStartSet:      committed.committedStartSet,
 	})
 	if finalizesStreaming {
 		e.emitStreamingAssistantResetEventsRaw(stepID, clearedMetadata, clearedStreamID, "")

@@ -568,11 +568,19 @@ func TestExclusiveStepLifecycleDiscardsStreamingMessageOnInterrupt(t *testing.T)
 		t.Fatal("timed out waiting for streaming step")
 	}
 
+	if got := eng.RecentTailTranscriptWindow(1).Snapshot.Streaming; got == "" {
+		t.Fatal("expected streaming message populated before interrupt")
+	}
+
 	if err := lifecycle.Interrupt(); err != nil {
 		t.Fatalf("interrupt: %v", err)
 	}
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled run, got %v", err)
+	}
+
+	if got := eng.RecentTailTranscriptWindow(1).Snapshot.Streaming; got != "" {
+		t.Fatalf("expected streaming message discarded after interrupt, got %q", got)
 	}
 
 	mu.Lock()

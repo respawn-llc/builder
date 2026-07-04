@@ -3,7 +3,9 @@ package runtimeview
 import (
 	"testing"
 
+	"core/server/llm"
 	"core/server/runtime"
+	"core/shared/clientui"
 
 	"github.com/google/uuid"
 )
@@ -13,6 +15,7 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
 		ActiveAssistantText:     "hello",
 		ActiveAssistantStreamID: &streamID,
+		ActiveAssistantPhase:    "final_answer",
 	})
 	if hydration.ActiveAssistantStream == nil {
 		t.Fatal("expected active assistant stream in hydration")
@@ -22,6 +25,9 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 	}
 	if hydration.ActiveAssistantStream.Text != "hello" {
 		t.Fatalf("active assistant stream text = %q, want hello", hydration.ActiveAssistantStream.Text)
+	}
+	if hydration.ActiveAssistantStream.Phase != "final_answer" {
+		t.Fatalf("active assistant stream phase = %q, want final_answer", hydration.ActiveAssistantStream.Phase)
 	}
 }
 
@@ -54,5 +60,28 @@ func TestTranscriptMessagesIgnoreNoopAssistantResetWithoutStream(t *testing.T) {
 	})
 	if len(messages) != 0 {
 		t.Fatalf("noop assistant reset messages = %+v, want none", messages)
+	}
+}
+
+func TestTranscriptMessagesEmitAssistantRowBeforeToolStarts(t *testing.T) {
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind: runtime.EventAssistantMessage,
+		Message: llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: "checking the repo",
+			ToolCalls: []llm.ToolCall{{
+				ID:   "call-1",
+				Name: "shell",
+			}},
+		},
+	})
+	if len(messages) != 2 {
+		t.Fatalf("messages = %+v, want assistant row then tool start", messages)
+	}
+	if messages[0].Kind != clientui.TranscriptMessageCommittedRow || messages[0].CommittedRow == nil || messages[0].CommittedRow.Assistant == nil {
+		t.Fatalf("first message = %+v, want assistant committed row", messages[0])
+	}
+	if messages[1].Kind != clientui.TranscriptMessageToolStart || messages[1].ToolStart == nil {
+		t.Fatalf("second message = %+v, want tool start", messages[1])
 	}
 }

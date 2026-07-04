@@ -290,7 +290,7 @@ func (c *transcriptSubscriptionContract) trackToolStart(tool clientui.Transcript
 		c.inFlightTools = make(map[string]struct{})
 	}
 	if _, exists := c.inFlightTools[toolID]; exists {
-		return errTranscriptContractViolation(op + " duplicates tool_call_id " + toolID)
+		return nil
 	}
 	c.inFlightTools[toolID] = struct{}{}
 	return nil

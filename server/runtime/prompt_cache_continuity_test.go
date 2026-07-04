@@ -354,6 +354,8 @@ type promptCacheComparableMainView struct {
 	SessionID                      string                        `json:"session_id"`
 	SessionName                    string                        `json:"session_name,omitempty"`
 	ConversationFreshness          string                        `json:"conversation_freshness"`
+	Revision                       int64                         `json:"revision"`
+	CommittedEntryCount            int                           `json:"committed_entry_count"`
 	ParentSessionID                string                        `json:"parent_session_id,omitempty"`
 	LastCommittedAssistantResponse string                        `json:"last_committed_assistant_response,omitempty"`
 	ActiveRun                      *promptCacheComparableRunView `json:"active_run,omitempty"`
@@ -379,7 +381,7 @@ func captureRuntimeProjection(t *testing.T, engine *Engine) promptCacheProjectio
 	t.Helper()
 	return promptCacheProjection{
 		MainViewJSON:   mustMarshalCanonicalJSON(t, runtimeMainViewComparable(engine)),
-		TranscriptJSON: mustMarshalCanonicalJSON(t, mustRuntimeTranscriptSegmentPage(t, engine)),
+		TranscriptJSON: mustMarshalCanonicalJSON(t, engine.RecentTailTranscriptWindow(500)),
 	}
 }
 
@@ -390,7 +392,7 @@ func capturePersistedProjectionFromStore(t *testing.T, store *session.Store) pro
 	scan := mustScanPersistedTranscript(t, store)
 	return promptCacheProjection{
 		MainViewJSON:   mustMarshalCanonicalJSON(t, persistedMainViewComparable(t, store, scan)),
-		TranscriptJSON: mustMarshalCanonicalJSON(t, mustPersistedTranscriptSegmentPage(t, store)),
+		TranscriptJSON: mustMarshalCanonicalJSON(t, scan.RecentTailSnapshot()),
 	}
 }
 
@@ -422,6 +424,8 @@ func runtimeMainViewComparable(engine *Engine) promptCacheComparableMainView {
 		SessionID:                      engine.SessionID(),
 		SessionName:                    engine.SessionName(),
 		ConversationFreshness:          conversationFreshnessLabel(engine.ConversationFreshness()),
+		Revision:                       engine.TranscriptRevision(),
+		CommittedEntryCount:            engine.CommittedTranscriptEntryCount(),
 		ParentSessionID:                engine.ParentSessionID(),
 		LastCommittedAssistantResponse: engine.LastCommittedAssistantFinalAnswer(),
 		ActiveRun:                      comparableRuntimeRunView(engine.ActiveRun()),
@@ -435,28 +439,12 @@ func persistedMainViewComparable(t *testing.T, store *session.Store, scan *Persi
 		SessionID:                      meta.SessionID,
 		SessionName:                    meta.Name,
 		ConversationFreshness:          conversationFreshnessLabel(store.ConversationFreshness()),
+		Revision:                       meta.LastSequence,
+		CommittedEntryCount:            scan.TotalEntries(),
 		ParentSessionID:                meta.ParentSessionID,
 		LastCommittedAssistantResponse: scan.LastCommittedAssistantFinalAnswer(),
 		ActiveRun:                      nil,
 	}
-}
-
-func mustRuntimeTranscriptSegmentPage(t *testing.T, engine *Engine) TranscriptSegmentPage {
-	t.Helper()
-	page, err := engine.TranscriptSegmentPage(0)
-	if err != nil {
-		t.Fatalf("runtime transcript segment page: %v", err)
-	}
-	return page
-}
-
-func mustPersistedTranscriptSegmentPage(t *testing.T, store *session.Store) TranscriptSegmentPage {
-	t.Helper()
-	page, err := TranscriptSegmentPageFromStore(store, 0, brand.CacheWarningModeDefault)
-	if err != nil {
-		t.Fatalf("persisted transcript segment page: %v", err)
-	}
-	return page
 }
 
 func mustScanPersistedTranscript(t *testing.T, store *session.Store) *PersistedTranscriptScan {

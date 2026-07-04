@@ -48,9 +48,11 @@ type stepLoopOptions struct {
 }
 
 type stepLoopResult struct {
-	Message          llm.Message
-	ExecutedToolCall bool
-	NoopFinalAnswer  bool
+	Message                    llm.Message
+	ExecutedToolCall           bool
+	NoopFinalAnswer            bool
+	AssistantCommittedStart    int
+	AssistantCommittedStartSet bool
 }
 
 type stepExecutor interface {
@@ -78,14 +80,16 @@ type messageLifecycle interface {
 
 type reviewerPipeline interface {
 	ShouldRunTurn(frequency string, reviewerClient llm.Client, patchEditsApplied bool) bool
-	RunFollowUp(ctx context.Context, stepID string, original llm.Message, reviewerClient llm.Client) (reviewerFollowUpResult, error)
+	RunFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error)
 	RunSuggestions(ctx context.Context, stepID string, reviewerClient llm.Client) (reviewerSuggestionsResult, error)
 }
 
 type reviewerFollowUpResult struct {
-	Message               llm.Message
-	Completion            *ReviewerStatus
-	AssistantEventEmitted bool
+	Message                    llm.Message
+	Completion                 *ReviewerStatus
+	AssistantCommittedStart    int
+	AssistantCommittedStartSet bool
+	AssistantEventEmitted      bool
 }
 
 type phaseProtocolTurn struct {

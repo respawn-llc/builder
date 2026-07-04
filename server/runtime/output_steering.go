@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 
 	"core/server/llm"
 	"core/server/session"
@@ -38,6 +39,7 @@ type steeringItem struct {
 	streaming          *steeringStreamingOutput
 	cacheWarning       *steeringCacheWarning
 	cacheObservation   *steeringCacheObservation
+	liveToolAbort      *steeringLiveToolAbort
 }
 
 type steeringMessage struct {
@@ -51,7 +53,9 @@ type steeringLocalEntry struct {
 }
 
 type steeringCommittedAssistantMessage struct {
-	message llm.Message
+	message           llm.Message
+	committedStart    int
+	committedStartSet bool
 }
 
 type steeringHistoryReplacement struct {
@@ -79,6 +83,10 @@ type steeringCacheObservation struct {
 	warning    transcript.CacheWarning
 	visibility transcript.EntryVisibility
 	emit       bool
+}
+
+type steeringLiveToolAbort struct {
+	reason string
 }
 
 type steeringQueuedUserMessageFlush struct {
@@ -165,11 +173,20 @@ func steerEventIntent(evt Event) steeringIntent {
 	}
 }
 
-func steerCommittedAssistantMessageIntent(msg llm.Message) steeringIntent {
+func steerLiveToolAbortIntent(reason string) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items:    []steeringItem{{liveToolAbort: &steeringLiveToolAbort{reason: strings.TrimSpace(reason)}}},
+	}
+}
+
+func steerCommittedAssistantMessageIntent(msg llm.Message, committedStart int, committedStartSet bool) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items: []steeringItem{{committedAssistant: &steeringCommittedAssistantMessage{
-			message: msg,
+			message:           msg,
+			committedStart:    committedStart,
+			committedStartSet: committedStartSet,
 		}}},
 	}
 }
@@ -242,6 +259,17 @@ func (e *Engine) steer(stepID string, intents ...steeringIntent) error {
 	if e.closed.Load() {
 		return ErrEngineClosed
 	}
+	return e.steerOrdered(stepID, intents...)
+}
+
+func (e *Engine) steerRuntimeClose(stepID string, intents ...steeringIntent) error {
+	if e == nil {
+		return nil
+	}
+	return e.steerOrdered(stepID, intents...)
+}
+
+func (e *Engine) steerOrdered(stepID string, intents ...steeringIntent) error {
 	ordered := make([]steeringIntent, 0, len(intents))
 	for _, intent := range intents {
 		if len(intent.items) == 0 {
@@ -335,13 +363,17 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		}
 		return nil
 	}
+	if item.liveToolAbort != nil {
+		e.emitLiveToolAbortsRaw(stepID, item.liveToolAbort.reason)
+		return nil
+	}
 	if item.streaming != nil {
 		if item.streaming.assistantDelta != nil {
 			delta := *item.streaming.assistantDelta
 			if delta.Text == "" {
 				return nil
 			}
-			metadata, streamID := newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendStreamingDelta(stepID, delta.Text)
+			metadata, streamID := newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendStreamingDelta(stepID, e.TranscriptRevision(), e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
 			e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
 			return nil
 		}
@@ -365,6 +397,8 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 
 func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryReplacement) error {
 	reminderIssued := false
+	projectedStart := e.CommittedTranscriptEntryCount()
+	replacement.payload.CommittedEntryStart = &projectedStart
 	preparedItems := llm.CloneResponseItems(replacement.payload.Items)
 	// Compaction reinjects base meta into the same replacement payload, so a
 	// non-empty replacement active list is born already carrying it. Mirror the
@@ -380,9 +414,9 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	e.compactionRuntimeState().SetLastWorkflowRunID(replacement.workflowRunID)
 	e.resetCurrentPreciseInputTracking()
 	e.resetLocalDiagnostics()
-	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistory(preparedItems)
+	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).ReplaceHistoryAtCommittedEntryStart(preparedItems, &projectedStart)
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
-	e.emitProjectedHistoryReplacementEntriesRaw(stepID, replacement.projectedEntries)
+	e.emitProjectedHistoryReplacementEntriesRaw(stepID, projectedStart, replacement.projectedEntries)
 	e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID})
 	return errors.Join(
 		appendErr,
@@ -391,17 +425,26 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	)
 }
 
-func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(stepID string, entries []ChatEntry) {
+func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(stepID string, start int, entries []ChatEntry) {
 	if e == nil || len(entries) == 0 {
 		return
 	}
-	for _, entry := range entries {
+	// Live subscribers must observe the same committed transcript progression that
+	// restart hydration reconstructs from history_replaced. Emit projected
+	// compaction rows before any later local entry.
+	if start < 0 {
+		start = 0
+	}
+	for idx, entry := range entries {
 		copyEntry := clonePersistedChatEntry(entry)
 		e.emitRaw(Event{
 			Kind:                       EventLocalEntryAdded,
 			StepID:                     stepID,
 			LocalEntry:                 &copyEntry,
 			CommittedTranscriptChanged: true,
+			CommittedEntryStart:        start + idx,
+			CommittedEntryStartSet:     true,
+			CommittedEntryCount:        start + idx + 1,
 		})
 	}
 }

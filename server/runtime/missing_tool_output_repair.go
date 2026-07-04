@@ -53,6 +53,9 @@ func (e *Engine) repairMissingToolOutputsByAppending(stepID string) (int, error)
 	if e == nil || e.store == nil {
 		return 0, nil
 	}
+	if e.pendingToolCallStartStore().Len() > 0 {
+		return 0, nil
+	}
 	chat := e.transcriptRuntimeState().chatProjection()
 	if chat == nil {
 		return 0, nil

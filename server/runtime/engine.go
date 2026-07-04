@@ -187,7 +187,8 @@ type Engine struct {
 	userInjectionScopeMu     sync.Mutex
 	activeUserInjectionScope map[string]struct{}
 
-	diagnostics *diagnosticDedupeStore
+	diagnostics    *diagnosticDedupeStore
+	toolCallStarts *pendingToolCallStartStore
 
 	usageState         *usageTrackingState
 	goalLoop           *goalLoopState
@@ -200,6 +201,8 @@ type Engine struct {
 	modelRequestsState *modelRequestRuntimeState
 	compactionPlanner  *compactionPlanner
 	collaboratorsOnce  sync.Once
+
+	recentTailCache recentTailReadCache
 
 	phaseProtocol  phaseProtocolEnforcer
 	stepLifecycle  exclusiveStepLifecycle
@@ -293,6 +296,7 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 		registry:           registry,
 		cfg:                cfg,
 		diagnostics:        newDiagnosticDedupeStore(),
+		toolCallStarts:     newPendingToolCallStartStore(),
 		usageState:         newUsageTrackingState(),
 		goalLoop:           newGoalLoopState(),
 		compactionState:    newCompactionRuntimeState(),
@@ -499,7 +503,7 @@ func (e *Engine) Close() error {
 		cancel()
 	}
 	e.lifecycleWG.Wait()
-	e.emitLiveToolAbortsRaw("runtime_close", "canceled")
+	e.steerRuntimeClose("runtime_close", steerLiveToolAbortIntent("canceled"))
 	return interruptErr
 }
 
@@ -802,9 +806,9 @@ func (e *Engine) runStepLoopWithOptions(ctx context.Context, stepID string, revi
 	})
 }
 
-func (e *Engine) runReviewerFollowUp(ctx context.Context, stepID string, original llm.Message, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
+func (e *Engine) runReviewerFollowUp(ctx context.Context, stepID string, original llm.Message, originalCommittedStart int, originalCommittedStartSet bool, reviewerClient llm.Client) (reviewerFollowUpResult, error) {
 	e.ensureOrchestrationCollaborators()
-	return e.reviewerFlow.RunFollowUp(ctx, stepID, original, reviewerClient)
+	return e.reviewerFlow.RunFollowUp(ctx, stepID, original, originalCommittedStart, originalCommittedStartSet, reviewerClient)
 }
 
 func (e *Engine) ensureLocked() (session.LockedContract, error) {

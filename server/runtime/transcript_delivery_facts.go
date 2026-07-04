@@ -54,6 +54,10 @@ type TranscriptNoticeRowFact struct {
 	Severity         string
 	LegacyText       *string
 	NoticeID         *string
+	MessageType      llm.MessageType
+	SourcePath       string
+	CondensedText    string
+	CompactLabel     string
 	DiagnosticCode   string
 	DiagnosticDetail string
 	CacheWarning     *TranscriptCacheWarningFact
@@ -63,16 +67,12 @@ type TranscriptCacheWarningFact struct {
 	Scope           string
 	Reason          string
 	LostInputTokens int
+	Visibility      transcript.EntryVisibility
 }
 
 func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFact {
 	switch evt.Kind {
-	case EventConversationUpdated:
-		if evt.Message.Role == llm.RoleTool {
-			return nil
-		}
-		return transcriptCommittedRowFactsFromMessage(evt.Message, evt.AssistantTranscriptStreamID, nil, nil)
-	case EventAssistantMessage:
+	case EventConversationUpdated, EventAssistantMessage:
 		return transcriptCommittedRowFactsFromMessage(evt.Message, evt.AssistantTranscriptStreamID, nil, nil)
 	case EventUserMessageFlushed:
 		if strings.TrimSpace(evt.UserMessage) == "" {
@@ -88,12 +88,17 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 		if evt.CacheWarning == nil {
 			return nil
 		}
-		return []TranscriptCommittedRowFact{transcriptCacheWarningFact(*evt.CacheWarning)}
+		return []TranscriptCommittedRowFact{transcriptCacheWarningFact(*evt.CacheWarning, evt.CacheWarningVisibility)}
 	case EventLocalEntryAdded:
 		if evt.LocalEntry == nil {
 			return nil
 		}
-		return []TranscriptCommittedRowFact{runtimeDiagnosticNoticeFact(strings.TrimSpace(evt.LocalEntry.Role), "info")}
+		return []TranscriptCommittedRowFact{runtimeNoticeFactFromLocalEntry(*evt.LocalEntry)}
+	case EventInFlightClearFailed:
+		if strings.TrimSpace(evt.Error) == "" {
+			return nil
+		}
+		return []TranscriptCommittedRowFact{runtimeDiagnosticNoticeFact("in_flight_clear_failed", "error", evt.Error)}
 	case EventBackgroundUpdated:
 		return nil
 	default:
@@ -133,6 +138,9 @@ func TranscriptToolStartFactsFromEvent(evt Event) []TranscriptLiveToolStart {
 func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []TranscriptCommittedRowFact {
 	switch msg.Role {
 	case llm.RoleUser:
+		if msg.MessageType == llm.MessageTypeCompactionSummary {
+			return []TranscriptCommittedRowFact{runtimeNoticeFactFromMessage(msg, "info")}
+		}
 		if strings.TrimSpace(msg.Content) == "" {
 			return nil
 		}
@@ -176,12 +184,58 @@ func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID
 		}
 		return []TranscriptCommittedRowFact{transcriptToolRowFactFromResult(result)}
 	case llm.RoleDeveloper:
-		if strings.TrimSpace(msg.Content) == "" {
+		if strings.TrimSpace(msg.Content) == "" || msg.MessageType == llm.MessageTypeReviewerFeedback {
 			return nil
 		}
-		return []TranscriptCommittedRowFact{runtimeDiagnosticNoticeFact(string(msg.MessageType), "info")}
+		return []TranscriptCommittedRowFact{runtimeNoticeFactFromMessage(msg, "info")}
 	default:
 		return nil
+	}
+}
+
+func transcriptCommittedEntryCountFromMessage(msg llm.Message, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) int {
+	count := len(VisibleChatEntriesFromMessage(msg))
+	if msg.Role != llm.RoleAssistant {
+		return count
+	}
+	for _, call := range msg.ToolCalls {
+		if _, ok := synthesizedTranscriptToolResultFact(call, completions, materializedToolCalls); ok {
+			count++
+		}
+	}
+	return count
+}
+
+func transcriptCommittedRowFactFromProjectedEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+	switch strings.TrimSpace(entry.Role) {
+	case "user":
+		if strings.TrimSpace(entry.Text) == "" {
+			return TranscriptCommittedRowFact{}, false
+		}
+		return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactUser, User: &TranscriptUserRowFact{Text: entry.Text}}, true
+	case "assistant":
+		if strings.TrimSpace(entry.Text) == "" {
+			return TranscriptCommittedRowFact{}, false
+		}
+		return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactAssistant, Assistant: &TranscriptAssistantRowFact{Text: entry.Text, Phase: entry.Phase}}, true
+	case "tool_result_ok", "tool_result_error":
+		toolName := "tool"
+		if entry.ToolCall != nil && strings.TrimSpace(entry.ToolCall.ToolName) != "" {
+			toolName = strings.TrimSpace(entry.ToolCall.ToolName)
+		}
+		return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactTool, Tool: &TranscriptToolRowFact{
+			ToolCallID:    strings.TrimSpace(entry.ToolCallID),
+			ToolName:      toolName,
+			Text:          entry.Text,
+			IsError:       strings.TrimSpace(entry.Role) == "tool_result_error",
+			ResultSummary: strings.TrimSpace(entry.ToolResultSummary),
+			CondensedText: strings.TrimSpace(entry.CondensedText),
+			Presentation:  cloneTranscriptToolCallMeta(entry.ToolCall),
+		}}, true
+	case "tool_call":
+		return TranscriptCommittedRowFact{}, false
+	default:
+		return runtimeNoticeFactFromLocalEntry(entry), true
 	}
 }
 
@@ -212,7 +266,7 @@ func transcriptToolRowFactFromResult(result tools.Result) TranscriptCommittedRow
 	}}
 }
 
-func transcriptCacheWarningFact(warning transcript.CacheWarning) TranscriptCommittedRowFact {
+func transcriptCacheWarningFact(warning transcript.CacheWarning, visibility transcript.EntryVisibility) TranscriptCommittedRowFact {
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Notice: &TranscriptNoticeRowFact{
 		Reason:   "cache_warning",
 		Severity: "warning",
@@ -220,6 +274,7 @@ func transcriptCacheWarningFact(warning transcript.CacheWarning) TranscriptCommi
 			Scope:           string(warning.Scope),
 			Reason:          string(warning.Reason),
 			LostInputTokens: warning.LostInputTokens,
+			Visibility:      transcript.NormalizeEntryVisibility(visibility),
 		},
 	}}
 }
@@ -254,20 +309,62 @@ func legacyLocalEntrySeverity(entry ChatEntry) string {
 	}
 }
 
-func runtimeDiagnosticNoticeFact(code string, severity string) TranscriptCommittedRowFact {
+func runtimeNoticeFactFromMessage(msg llm.Message, severity string) TranscriptCommittedRowFact {
+	code := strings.TrimSpace(string(msg.MessageType))
+	if code == "" {
+		code = "runtime_notice"
+	}
+	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Notice: &TranscriptNoticeRowFact{
+		Reason:           "runtime_diagnostic",
+		Severity:         normalizeTranscriptNoticeSeverity(severity),
+		MessageType:      msg.MessageType,
+		SourcePath:       strings.TrimSpace(msg.SourcePath),
+		CondensedText:    strings.TrimSpace(msg.CompactContent),
+		CompactLabel:     compactLabelForMessage(msg),
+		DiagnosticCode:   code,
+		DiagnosticDetail: msg.Content,
+	}}
+}
+
+func runtimeNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedRowFact {
+	noticeID := strings.TrimSpace(entry.NoticeID)
+	var noticeIDPtr *string
+	if noticeID != "" {
+		noticeIDPtr = &noticeID
+	}
+	detail := firstNonEmpty(entry.Text, entry.CondensedText, entry.CompactLabel, entry.ToolResultSummary)
+	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Notice: &TranscriptNoticeRowFact{
+		Reason:           "runtime_diagnostic",
+		Severity:         legacyLocalEntrySeverity(entry),
+		NoticeID:         noticeIDPtr,
+		MessageType:      entry.MessageType,
+		SourcePath:       strings.TrimSpace(entry.SourcePath),
+		CondensedText:    strings.TrimSpace(entry.CondensedText),
+		CompactLabel:     strings.TrimSpace(entry.CompactLabel),
+		DiagnosticCode:   strings.TrimSpace(entry.Role),
+		DiagnosticDetail: detail,
+	}}
+}
+
+func runtimeDiagnosticNoticeFact(code string, severity string, detail string) TranscriptCommittedRowFact {
 	code = strings.TrimSpace(code)
 	if code == "" {
 		code = "runtime_notice"
 	}
+	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Notice: &TranscriptNoticeRowFact{
+		Reason:           "runtime_diagnostic",
+		Severity:         normalizeTranscriptNoticeSeverity(severity),
+		DiagnosticCode:   code,
+		DiagnosticDetail: detail,
+	}}
+}
+
+func normalizeTranscriptNoticeSeverity(severity string) string {
 	severity = strings.TrimSpace(severity)
 	if severity == "" {
-		severity = "info"
+		return "info"
 	}
-	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Notice: &TranscriptNoticeRowFact{
-		Reason:         "runtime_diagnostic",
-		Severity:       severity,
-		DiagnosticCode: code,
-	}}
+	return severity
 }
 
 func toolspecIDFromString(value string) toolspec.ID {
