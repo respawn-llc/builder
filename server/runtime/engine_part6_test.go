@@ -850,3 +850,16 @@ func TestAppendMissingReviewerMetaContextPrependsAgentsAndEnvironmentWhenMissing
 		t.Fatalf("expected original message at tail, got %+v", got[3])
 	}
 }
+
+func TestAppendCommittedEntryRejectsCommittedRowRoles(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	for _, role := range []string{"user", "assistant", "tool_call", "tool_result_ok", "tool_result_error"} {
+		if err := eng.AppendCommittedEntry(role, "note"); err == nil {
+			t.Fatalf("AppendCommittedEntry(%q) = nil error, want reserved-role rejection", role)
+		}
+	}
+	if err := eng.AppendCommittedEntry("system", "note"); err != nil {
+		t.Fatalf("AppendCommittedEntry(system) = %v, want success", err)
+	}
+}

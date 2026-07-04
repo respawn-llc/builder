@@ -180,7 +180,7 @@ func TestSessionTranscriptSubscriptionHydratesFirstAndSequencesPerSubscription(t
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
 
-	if err := engine.AppendCommittedEntry("user", "before subscribe"); err != nil {
+	if err := engine.AppendCommittedEntry("system", "before subscribe"); err != nil {
 		t.Fatalf("AppendCommittedEntry before subscribe: %v", err)
 	}
 

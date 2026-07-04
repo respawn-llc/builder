@@ -269,6 +269,9 @@ func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
 	if entry.Role == "" || entry.Text == "" {
 		return nil
 	}
+	if localEntryRoleReservedForCommittedRows(entry.Role) {
+		return fmt.Errorf("append committed entry: role %q is reserved for committed transcript rows", entry.Role)
+	}
 	return e.steer("", steerLocalEntryIntent(entry))
 }
 

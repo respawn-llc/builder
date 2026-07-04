@@ -676,10 +676,10 @@ func (s *chatStore) recentTailSnapshot(maxEntries int) TranscriptWindowSnapshot 
 			localIndex++
 		}
 	}
-	appendLocalEntries(0)
 	if s.compact != nil && s.compact.CutoffMessageCount == 0 {
 		scan.MarkCompactionBoundary()
 	}
+	appendLocalEntries(0)
 	walker := newResponseItemMessageWalker(func(msg llm.Message) {
 		scan.ApplyMessage(msg, 0)
 		processedMessages++

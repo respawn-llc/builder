@@ -222,6 +222,9 @@ func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommitt
 		}
 		return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactAssistant, Assistant: &TranscriptAssistantRowFact{Text: entry.Text, Phase: entry.Phase}}, true
 	case "tool_result_ok", "tool_result_error":
+		if strings.TrimSpace(entry.ToolCallID) == "" {
+			return localEntryNoticeFact(entry), true
+		}
 		toolName := "tool"
 		if entry.ToolCall != nil && strings.TrimSpace(entry.ToolCall.ToolName) != "" {
 			toolName = strings.TrimSpace(entry.ToolCall.ToolName)
@@ -247,6 +250,11 @@ func localEntryNoticeFact(entry ChatEntry) TranscriptCommittedRowFact {
 		return legacyUntypedNoticeFactFromLocalEntry(entry)
 	}
 	return runtimeNoticeFactFromLocalEntry(entry)
+}
+
+func localEntryRoleReservedForCommittedRows(role string) bool {
+	fact, ok := transcriptCommittedRowFactFromChatEntry(ChatEntry{Role: role, Text: "probe", ToolCallID: "probe"})
+	return !ok || fact.Kind != TranscriptCommittedRowFactNotice
 }
 
 func synthesizedTranscriptToolResultFact(call llm.ToolCall, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) (TranscriptCommittedRowFact, bool) {

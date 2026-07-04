@@ -1090,7 +1090,7 @@ func TestTranscriptDeliverySnapshotIncludesPostCompactionLocalEntries(t *testing
 
 func TestTranscriptDeliverySnapshotHydratesLocalEntriesAsLiveTypedFacts(t *testing.T) {
 	s := newChatStore()
-	entry := ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "reviewer_status", Text: "Supervisor ran: 1 suggestion.", CondensedText: "1 suggestion", NoticeID: "notice-7"}
+	entry := ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "reviewer_status", Text: "Supervisor ran: 1 suggestion.", CondensedText: "1 suggestion", NoticeID: "0d4ad314-f5f9-4b32-a13d-4b8c1d9a2e61"}
 	s.appendLocalEntryRecord(entry)
 
 	snapshot := s.deliverySnapshot()
@@ -1138,5 +1138,13 @@ func TestTranscriptDeliveryLiveAndHydrationAgreeOnProjectedCompactionEntries(t *
 	}
 	if len(hydrated) != 3 || hydrated[0].User == nil || hydrated[1].Assistant == nil || hydrated[2].Tool == nil {
 		t.Fatalf("rows = %+v, want typed user, assistant, tool rows", hydrated)
+	}
+}
+
+func TestTranscriptFactsMapToolResultEntriesWithoutCallIDToNotices(t *testing.T) {
+	entry := ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "tool_result_ok", Text: "orphan result"}
+	fact, ok := transcriptCommittedRowFactFromChatEntry(entry)
+	if !ok || fact.Notice == nil || fact.Notice.DiagnosticDetail != "orphan result" {
+		t.Fatalf("fact = %+v ok=%t, want notice preserving text", fact, ok)
 	}
 }
