@@ -11,6 +11,7 @@ import (
 
 	"core/prompts"
 	"core/server/skillcatalog"
+	"core/shared/config"
 
 	"gopkg.in/yaml.v3"
 )
@@ -249,7 +250,7 @@ func normalizedDisabledSkills(disabledSkills map[string]bool) map[string]bool {
 		if !disabled {
 			continue
 		}
-		key := strings.ToLower(sanitizeSkillSingleLine(name))
+		key := config.NormalizeSkillName(name)
 		if key == "" {
 			continue
 		}

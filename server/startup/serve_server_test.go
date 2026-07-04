@@ -216,8 +216,8 @@ func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
 func TestServerCapabilityFlagsReflectMissingRoutes(t *testing.T) {
 	capabilities := serverCapabilityFlags([]rpccontract.Route{
 		{Method: protocol.MethodHandshake, Dependency: rpccontract.DependencyProtocol},
-		{Method: protocol.MethodAttachProject, Dependency: rpccontract.DependencyProtocol},
-		{Method: protocol.MethodAttachSession, Dependency: rpccontract.DependencySessionView},
+		{Method: protocol.MethodAttachProject, Dependency: rpccontract.DependencyProtocolAttach},
+		{Method: protocol.MethodAttachSession, Dependency: rpccontract.DependencyProtocolAttach},
 		{Dependency: rpccontract.DependencyRunPrompt},
 	})
 
@@ -231,6 +231,21 @@ func TestServerCapabilityFlagsReflectMissingRoutes(t *testing.T) {
 		capabilities.RuntimeLiveControl ||
 		capabilities.AttentionNotifications {
 		t.Fatalf("capabilities must not be true without their routes/dependencies: %+v", capabilities)
+	}
+}
+
+func TestServerCapabilityFlagsRequireAttachRouteDependencyPerMethod(t *testing.T) {
+	capabilities := serverCapabilityFlags([]rpccontract.Route{
+		{Method: protocol.MethodHandshake, Dependency: rpccontract.DependencyProtocol},
+		{Method: protocol.MethodAttachProject, Dependency: rpccontract.DependencyProtocol},
+		{Method: protocol.MethodAttachSession, Dependency: rpccontract.DependencyProtocolAttach},
+	})
+
+	if capabilities.ProjectAttach {
+		t.Fatalf("ProjectAttach advertised without protocol_attach dependency: %+v", capabilities)
+	}
+	if !capabilities.SessionAttach {
+		t.Fatalf("SessionAttach not advertised with protocol_attach dependency: %+v", capabilities)
 	}
 }
 
@@ -622,6 +637,10 @@ func TestMissingConfigServeStartsBootstrapSurfaceBeforeAuthReady(t *testing.T) {
 	if readiness.Ready || len(readiness.Causes) == 0 {
 		t.Fatalf("readiness = %+v, want not ready with onboarding cause", readiness)
 	}
+	cause := readiness.Causes[0]
+	if cause.Code != string(serverapi.ServerNotReadyOnboardingRequired) || cause.Severity != "error" || cause.Summary != nil || cause.NextAction != nil {
+		t.Fatalf("unexpected onboarding readiness cause: %+v", cause)
+	}
 	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("settings file should remain absent before finalize, stat err=%v", statErr)
 	}
@@ -726,7 +745,7 @@ model = "blocked-model"
 	}
 	assertReadinessRoles(t, readiness.SubagentRoles, []string{"default", "fast", "blocked", "coder"})
 	cause := readiness.Causes[0]
-	if cause.Code != "server_not_ready" || cause.Severity != "error" || cause.Summary == "" || cause.NextAction == "" {
+	if cause.Code != "server_not_ready" || cause.Severity != "error" || cause.Summary == nil || *cause.Summary == "" || cause.NextAction == nil || *cause.NextAction == "" {
 		t.Fatalf("unexpected generic readiness cause: %+v", cause)
 	}
 }

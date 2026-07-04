@@ -99,6 +99,12 @@ func (f *Finalizer) FinalizeOnboarding(ctx context.Context, req serverapi.Onboar
 	if err := f.executeImports(ctx, req, ledger); err != nil {
 		return serverapi.OnboardingFinalizeResponse{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		if rollbackErr := ledger.rollback(); rollbackErr != nil {
+			return serverapi.OnboardingFinalizeResponse{}, rollbackFailed(serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelImporting), rollbackErr)
+		}
+		return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelImporting)
+	}
 	path, err := config.WriteSettingsFileForOnboardingWithOptionsAt(settingsPath, settings, config.OnboardingWriteOptions{PreservedDefaults: preserved})
 	if err != nil {
 		if rollbackErr := ledger.rollback(); rollbackErr != nil {
@@ -170,8 +176,15 @@ func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, 
 	}
 	if len(req.DisabledSkillNames) > 0 {
 		settings.SkillToggles = map[string]bool{}
-		for _, name := range req.DisabledSkillNames {
-			settings.SkillToggles[name] = false
+		for index, name := range req.DisabledSkillNames {
+			normalized := config.NormalizeSkillName(name)
+			if normalized == "" {
+				return config.Settings{}, nil, invalidRequest(fmt.Sprintf("disabled_skill_names.%d", index), "required")
+			}
+			if _, exists := settings.SkillToggles[normalized]; exists {
+				return config.Settings{}, nil, invalidRequest(fmt.Sprintf("disabled_skill_names.%d", index), "duplicate")
+			}
+			settings.SkillToggles[normalized] = false
 		}
 	}
 	if len(preserved) == 0 {
@@ -184,7 +197,7 @@ func modelChoiceValue(choice serverapi.OnboardingModelChoice) (string, error) {
 	switch choice.Kind {
 	case serverapi.OnboardingModelKnown:
 		model := strings.TrimSpace(choice.ModelID)
-		if _, ok := llm.LookupModelMetadata(model); !ok {
+		if _, ok := llm.LookupModelCapabilityContract(model); !ok {
 			return "", invalidRequest("model.model_id", "unknown_model")
 		}
 		return model, nil
@@ -595,9 +608,6 @@ func discoverProviderSkills(provider Provider, base string) (string, bool, error
 			return "", false, err
 		}
 		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
 			if _, ok := parseSkillMetadata(filepath.Join(root, entry.Name(), "SKILL.md")); ok {
 				return root, true, nil
 			}

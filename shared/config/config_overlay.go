@@ -264,7 +264,7 @@ func DisabledSkillToggles(settings Settings) map[string]bool {
 		if enabled {
 			continue
 		}
-		normalized := strings.ToLower(strings.Join(strings.Fields(name), " "))
+		normalized := NormalizeSkillName(name)
 		if normalized == "" {
 			continue
 		}

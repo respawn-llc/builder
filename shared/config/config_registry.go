@@ -1024,7 +1024,7 @@ func (skillsSetting) applyFile(raw settingsFile, settingsPath string, state *set
 	seenNormalized := make(map[string]string, len(keys))
 	for _, key := range keys {
 		rawValue := table[key]
-		normalized := strings.ToLower(strings.Join(strings.Fields(key), " "))
+		normalized := NormalizeSkillName(key)
 		if normalized == "" {
 			return fmt.Errorf("invalid skills key in %s: %q", settingsPath, key)
 		}
@@ -1042,9 +1042,15 @@ func (skillsSetting) applyFile(raw settingsFile, settingsPath string, state *set
 	return nil
 }
 
+// NormalizeSkillName returns the canonical key used for skill toggles and
+// runtime/catalog disabled-skill matching.
+func NormalizeSkillName(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(name), " "))
+}
+
 func (skillsSetting) registerFileKeys(tree *fileKeyTree) {
 	tree.allowDynamicChildren([]string{"skills"}, func(key string) bool {
-		return strings.ToLower(strings.Join(strings.Fields(key), " ")) != ""
+		return NormalizeSkillName(key) != ""
 	}, nil)
 }
 
@@ -1390,7 +1396,7 @@ func toolSourceKey(id toolspec.ID) string {
 }
 
 func skillSourceKey(name string) string {
-	return "skills." + strings.ToLower(strings.Join(strings.Fields(name), " "))
+	return "skills." + NormalizeSkillName(name)
 }
 
 func defaultEnabledToolMap() map[toolspec.ID]bool {

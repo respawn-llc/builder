@@ -323,11 +323,19 @@ func serverCapabilityFlags(routes []rpccontract.Route) protocol.CapabilityFlags 
 		_, ok := dependencies[dependency]
 		return ok
 	}
+	methodHasDependency := func(method string, dependency rpccontract.Dependency) bool {
+		for _, route := range routes {
+			if route.Method == method && route.Dependency == dependency {
+				return true
+			}
+		}
+		return false
+	}
 	return protocol.CapabilityFlags{
 		JSONRPCWebSocket:       hasMethod(protocol.MethodHandshake),
 		AuthBootstrap:          hasDependency(rpccontract.DependencyAuthBootstrap),
-		ProjectAttach:          hasMethod(protocol.MethodAttachProject),
-		SessionAttach:          hasMethod(protocol.MethodAttachSession),
+		ProjectAttach:          methodHasDependency(protocol.MethodAttachProject, rpccontract.DependencyProtocolAttach),
+		SessionAttach:          methodHasDependency(protocol.MethodAttachSession, rpccontract.DependencyProtocolAttach),
 		HealthEndpoint:         true,
 		ReadinessEndpoint:      true,
 		RunPrompt:              hasDependency(rpccontract.DependencyRunPrompt),
@@ -499,7 +507,7 @@ func (d *startupGatewayDependencies) activeCore() *core.Core {
 
 func (d *startupGatewayDependencies) RouteDependencyAvailable(dep rpccontract.Dependency) error {
 	switch dep {
-	case rpccontract.DependencyProtocol, rpccontract.DependencyServerStatus, rpccontract.DependencyAuthBootstrap, rpccontract.DependencyAuthStatus, rpccontract.DependencyOnboardingFinalize:
+	case rpccontract.DependencyProtocol, rpccontract.DependencyServerStatus, rpccontract.DependencyAuthBootstrap, rpccontract.DependencyAuthStatus, rpccontract.DependencyCapabilityFacts, rpccontract.DependencyOnboardingFinalize:
 		return nil
 	default:
 		d.mu.RLock()
@@ -566,16 +574,20 @@ func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req 
 		if state.Diagnostic != nil {
 			diagnosticID += ":" + *state.Diagnostic
 		}
+		code := "server_not_ready"
+		if state.Reason != nil {
+			code = string(*state.Reason)
+		}
 		cause := serverapi.ServerReadinessCause{
-			Code:       "server_not_ready",
-			Severity:   "error",
-			Summary:    "Kent server is not ready.",
-			NextAction: "Complete startup setup and retry.",
+			Code:     code,
+			Severity: "error",
 		}
 		if len(resp.Causes) > 0 {
 			cause = resp.Causes[0]
-			cause.Code = "server_not_ready"
+			cause.Code = code
 			cause.Severity = "error"
+			cause.Summary = nil
+			cause.NextAction = nil
 		}
 		cause.DiagnosticID = diagnosticID
 		resp.Causes = []serverapi.ServerReadinessCause{cause}

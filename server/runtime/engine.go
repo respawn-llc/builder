@@ -281,7 +281,7 @@ func New(store *session.Store, client llm.Client, registry *tools.Registry, cfg 
 			if !disabled {
 				continue
 			}
-			normalized := strings.ToLower(sanitizeSkillSingleLine(name))
+			normalized := config.NormalizeSkillName(name)
 			if normalized == "" {
 				continue
 			}

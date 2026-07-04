@@ -25,8 +25,8 @@ export const readinessSchema: z.ZodType<ServerReadiness> = z
         z.object({
           code: z.string(),
           severity: z.string(),
-          summary: z.string(),
-          next_action: z.string(),
+          summary: z.string().optional(),
+          next_action: z.string().optional(),
           diagnostic_id: z.string().optional().default(""),
         }),
       )
@@ -48,8 +48,8 @@ export const readinessSchema: z.ZodType<ServerReadiness> = z
     causes: value.causes.map((cause) => ({
       code: cause.code,
       severity: cause.severity,
-      summary: cause.summary,
-      nextAction: cause.next_action,
+      ...(cause.summary === undefined ? {} : { summary: cause.summary }),
+      ...(cause.next_action === undefined ? {} : { nextAction: cause.next_action }),
       diagnosticID: cause.diagnostic_id,
     })),
   }));

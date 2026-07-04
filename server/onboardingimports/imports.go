@@ -603,7 +603,7 @@ func cloneBoolMap(values map[string]bool) map[string]bool {
 }
 
 func normalizeName(raw string) string {
-	return strings.ToLower(strings.Join(strings.Fields(raw), " "))
+	return brand.NormalizeSkillName(raw)
 }
 
 func unixMs(t time.Time) *int64 {

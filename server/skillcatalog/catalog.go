@@ -387,7 +387,7 @@ func normalizedDisabledSkills(disabledSkills map[string]bool) map[string]bool {
 }
 
 func normalizedSkillName(raw string) string {
-	return strings.ToLower(sanitizeSkillSingleLine(raw))
+	return brand.NormalizeSkillName(raw)
 }
 
 func sanitizeSkillSingleLine(raw string) string {

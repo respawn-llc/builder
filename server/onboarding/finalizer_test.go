@@ -172,6 +172,23 @@ func TestFinalizerPreservesDisabledSupervisorThinking(t *testing.T) {
 	}
 }
 
+func TestFinalizerAcceptsKnownModelWithoutContextMetadata(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		Model: &serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: "gpt-5"},
+	}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	cfg := loadFinalizedConfig(t, root)
+	if cfg.Settings.Model != "gpt-5" {
+		t.Fatalf("model = %q, want gpt-5", cfg.Settings.Model)
+	}
+	if cfg.Settings.ModelContextWindow <= 0 || cfg.Settings.ContextCompactionThresholdTokens <= 0 {
+		t.Fatalf("context budget should fall back to defaults: %+v", cfg.Settings)
+	}
+}
+
 func TestFinalizerRejectsUnsupportedVerbosityForSelectedModel(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
@@ -202,6 +219,37 @@ func TestFinalizerImportsSkillsAndCommandsBeforeConfigWrite(t *testing.T) {
 	}
 	assertSymlink(t, filepath.Join(root, "skills"))
 	assertSymlink(t, filepath.Join(root, "prompts"))
+}
+
+func TestFinalizerDiscoversSymlinkedProviderSkillDirectories(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	providerUUID := providerUUIDForHomeEntry(t, ".claude")
+	realSkillDir := filepath.Join(t.TempDir(), "example")
+	if err := os.MkdirAll(realSkillDir, 0o755); err != nil {
+		t.Fatalf("mkdir real skill source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realSkillDir, "SKILL.md"), []byte("---\nname: Example\ndescription: Example skill\n---\nBody\n"), 0o644); err != nil {
+		t.Fatalf("write skill metadata: %v", err)
+	}
+	skillsRoot := filepath.Join(home, ".claude", "skills")
+	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
+		t.Fatalf("mkdir provider skills root: %v", err)
+	}
+	if err := os.Symlink(realSkillDir, filepath.Join(skillsRoot, "example")); err != nil {
+		t.Fatalf("symlink provider skill: %v", err)
+	}
+
+	resp, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		SkillsImport: &serverapi.OnboardingImportSelection{Mode: serverapi.OnboardingImportModeSymlinkSource, ProviderUUID: &providerUUID},
+	})
+	if err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	if !resp.Completed {
+		t.Fatal("expected finalize completion")
+	}
+	assertSymlink(t, filepath.Join(root, "skills"))
 }
 
 func TestFinalizerRollsBackImportsWhenConfigWriteFails(t *testing.T) {
@@ -455,6 +503,43 @@ func TestFinalizerWritesDisabledSkillNamesWithoutDiscovery(t *testing.T) {
 	enabled, ok := cfg.Settings.SkillToggles["apiresult"]
 	if !ok || enabled {
 		t.Fatalf("skill toggle should be disabled: %+v", cfg.Settings.SkillToggles)
+	}
+}
+
+func TestFinalizerNormalizesDisabledSkillNames(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+
+	if _, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{DisabledSkillNames: []string{" API   Result "}}); err != nil {
+		t.Fatalf("FinalizeOnboarding: %v", err)
+	}
+	cfg := loadFinalizedConfig(t, root)
+	enabled, ok := cfg.Settings.SkillToggles["api result"]
+	if !ok || enabled {
+		t.Fatalf("skill toggle should be normalized and disabled: %+v", cfg.Settings.SkillToggles)
+	}
+}
+
+func TestFinalizerRejectsDuplicateNormalizedDisabledSkillNames(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+
+	_, err := newTestFinalizer(t, root, home).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+		DisabledSkillNames: []string{"API Result", " api   result "},
+	})
+	if !errors.Is(err, serverapi.ErrOnboardingFinalizeInvalidRequest) {
+		t.Fatalf("error = %v, want invalid_request", err)
+	}
+	var finalizeErr *serverapi.OnboardingFinalizeError
+	if !errors.As(err, &finalizeErr) {
+		t.Fatalf("error = %T %v, want OnboardingFinalizeError", err, err)
+	}
+	details := finalizeErr.Details.(serverapi.OnboardingInvalidRequestDetails)
+	if len(details.FieldErrors) != 1 || details.FieldErrors[0].Field != "disabled_skill_names.1" || details.FieldErrors[0].Code != "duplicate" {
+		t.Fatalf("field errors = %+v, want duplicate second disabled skill", details.FieldErrors)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("config should remain absent, stat err=%v", statErr)
 	}
 }
 

@@ -1,8 +1,8 @@
 export type ServerCause = Readonly<{
   code: string;
   severity: string;
-  summary: string;
-  nextAction: string;
+  summary?: string;
+  nextAction?: string;
   diagnosticID: string;
 }>;
 

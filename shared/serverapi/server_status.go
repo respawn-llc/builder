@@ -20,9 +20,9 @@ type SubagentRoleSummary struct {
 }
 
 type ServerReadinessCause struct {
-	Code         string `json:"code"`
-	Severity     string `json:"severity"`
-	Summary      string `json:"summary"`
-	NextAction   string `json:"next_action"`
-	DiagnosticID string `json:"diagnostic_id,omitempty"`
+	Code         string  `json:"code"`
+	Severity     string  `json:"severity"`
+	Summary      *string `json:"summary,omitempty"`
+	NextAction   *string `json:"next_action,omitempty"`
+	DiagnosticID string  `json:"diagnostic_id,omitempty"`
 }

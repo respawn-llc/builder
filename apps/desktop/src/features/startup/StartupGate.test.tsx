@@ -97,6 +97,36 @@ describe("StartupGate", () => {
     expect(await screen.findByTestId("error-state")).toBeInTheDocument();
   });
 
+  it("renders localized readiness fallback for typed causes without server copy", async () => {
+    render(
+      <App
+        services={createTestServices([
+          {
+            method: "server.readiness.get",
+            result: {
+              ready: false,
+              server_id: "server-1",
+              server_version: "1.3.0",
+              protocol_version: protocolVersion,
+              auth_ready: false,
+              auth_required: true,
+              endpoint: "ws://127.0.0.1:53082/rpc",
+              causes: [
+                {
+                  code: "onboarding_required",
+                  severity: "error",
+                  diagnostic_id: "onboarding_required",
+                },
+              ],
+            },
+          },
+        ])}
+      />,
+    );
+
+    expect(await screen.findByText("Readiness check failed.")).toBeInTheDocument();
+  });
+
   it("surfaces native configuration errors without service-install guidance", async () => {
     render(
       <App

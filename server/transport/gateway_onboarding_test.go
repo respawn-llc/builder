@@ -122,6 +122,56 @@ func TestGatewaySubscriptionChecksDependencyAvailabilityBeforeClientLookup(t *te
 	}
 }
 
+func TestGatewayProgressChecksDependencyAvailabilityBeforeAuthAndPreflight(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, false)
+	defer func() { _ = appCore.Close() }()
+	gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{
+		Core:        appCore,
+		unavailable: rpccontract.DependencyRunPrompt,
+	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptestServerForGateway(t, gateway)
+	defer server.Close()
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+
+	errResp := callGatewayExpectError(t, conn, "run-prompt", protocol.MethodRunPrompt, serverapi.RunPromptRequest{})
+	if errResp.Code != protocol.ErrCodeServerNotReady {
+		t.Fatalf("error code = %d, want server not ready", errResp.Code)
+	}
+	if decoded := serverapi.DecodeServerNotReadyError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("decoded error = %v, want onboarding_required", decoded)
+	}
+}
+
+func TestGatewayAttachChecksDependencyAvailabilitySeparatelyFromHandshake(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, false)
+	defer func() { _ = appCore.Close() }()
+	gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{
+		Core:        appCore,
+		unavailable: rpccontract.DependencyProtocolAttach,
+	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	server := httptestServerForGateway(t, gateway)
+	defer server.Close()
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+
+	errResp := callGatewayExpectError(t, conn, "attach-project", protocol.MethodAttachProject, protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()})
+	if errResp.Code != protocol.ErrCodeServerNotReady {
+		t.Fatalf("error code = %d, want server not ready", errResp.Code)
+	}
+	if decoded := serverapi.DecodeServerNotReadyError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("decoded error = %v, want onboarding_required", decoded)
+	}
+}
+
 func TestRemoteOnboardingFinalizePreservesStructuredSentinels(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	defer func() { _ = appCore.Close() }()
