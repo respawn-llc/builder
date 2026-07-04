@@ -98,7 +98,7 @@ export function usePendingAsks(sessionID: string | null) {
       }
       return api.listPendingAsks(sessionID);
     },
-    enabled: sessionID !== null,
+    enabled: sessionID !== null && sessionID.length > 0,
   });
 }
 

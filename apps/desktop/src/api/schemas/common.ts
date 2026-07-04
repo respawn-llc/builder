@@ -36,32 +36,34 @@ export const approvalDecisionSchema: z.ZodType<ApprovalDecision> = z.enum([
   "deny",
 ]);
 
-export const questionPromptSchema: z.ZodType<AttentionQuestionPrompt> = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("ordinary"),
-      suggestions: stringList,
-      recommended_option_index: z.number().optional().default(0),
-    })
-    .transform(
-      (value): OrdinaryQuestionPrompt => ({
-        kind: "ordinary",
-        suggestions: value.suggestions,
-        recommendedOptionIndex: value.recommended_option_index,
-      }),
-    ),
-  z
-    .object({
-      kind: z.literal("approval"),
-      approval_decisions: z.array(approvalDecisionSchema).min(1),
-    })
-    .transform(
-      (value): ApprovalQuestionPrompt => ({
-        kind: "approval",
-        approvalDecisions: value.approval_decisions,
-      }),
-    ),
-]);
+const ordinaryQuestionPromptSchema = z.object({
+  kind: z.literal("ordinary"),
+  suggestions: stringList,
+  recommended_option_index: z.number().optional().default(0),
+});
+
+const approvalQuestionPromptSchema = z.object({
+  kind: z.literal("approval"),
+  approval_decisions: z.array(approvalDecisionSchema).min(1),
+});
+
+export const questionPromptSchema: z.ZodType<AttentionQuestionPrompt> = z
+  .discriminatedUnion("kind", [ordinaryQuestionPromptSchema, approvalQuestionPromptSchema])
+  .transform((value): AttentionQuestionPrompt => {
+    switch (value.kind) {
+      case "ordinary":
+        return {
+          kind: "ordinary",
+          suggestions: value.suggestions,
+          recommendedOptionIndex: value.recommended_option_index,
+        } satisfies OrdinaryQuestionPrompt;
+      case "approval":
+        return {
+          kind: "approval",
+          approvalDecisions: value.approval_decisions,
+        } satisfies ApprovalQuestionPrompt;
+    }
+  });
 
 export const workspaceSummarySchema: z.ZodType<WorkspaceSummary> = z
   .object({
