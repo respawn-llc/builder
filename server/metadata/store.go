@@ -96,6 +96,30 @@ func (e *WorktreeWorkspaceMismatchError) Error() string {
 	return fmt.Sprintf("worktree %q does not belong to workspace %q", e.WorktreeID, e.WorkspaceID)
 }
 
+type SessionExecutionTargetUpdate struct {
+	SessionID   string
+	WorkspaceID string
+	Worktree    *SessionExecutionTargetUpdateWorktree
+	CwdRelpath  string
+}
+
+type SessionExecutionTargetUpdateWorktree struct {
+	ID string
+}
+
+func SessionExecutionTargetUpdateFromReadModel(sessionID string, target clientui.SessionExecutionTarget) SessionExecutionTargetUpdate {
+	var worktree *SessionExecutionTargetUpdateWorktree
+	if target.Worktree != nil {
+		worktree = &SessionExecutionTargetUpdateWorktree{ID: target.Worktree.ID}
+	}
+	return SessionExecutionTargetUpdate{
+		SessionID:   sessionID,
+		WorkspaceID: target.WorkspaceID,
+		Worktree:    worktree,
+		CwdRelpath:  target.CwdRelpath,
+	}
+}
+
 func (s *Store) PersistenceRoot() string {
 	if s == nil {
 		return ""
@@ -373,13 +397,24 @@ func (s *Store) DeleteWorktreeRecordByID(ctx context.Context, worktreeID string)
 	return nil
 }
 
-func (s *Store) UpdateSessionExecutionTargetByID(ctx context.Context, sessionID string, workspaceID string, worktreeID string, cwdRelpath string) error {
+func (s *Store) UpdateSessionExecutionTarget(ctx context.Context, update SessionExecutionTargetUpdate) error {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
 	}
-	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
-	trimmedWorktreeID := strings.TrimSpace(worktreeID)
-	if trimmedWorktreeID != "" {
+	trimmedSessionID := strings.TrimSpace(update.SessionID)
+	if trimmedSessionID == "" {
+		return errors.New("session id is required")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(update.WorkspaceID)
+	if trimmedWorkspaceID == "" {
+		return errors.New("workspace id is required")
+	}
+	worktreeID := sql.NullString{}
+	if update.Worktree != nil {
+		trimmedWorktreeID := strings.TrimSpace(update.Worktree.ID)
+		if trimmedWorktreeID == "" {
+			return ErrWorktreeIDRequired
+		}
 		record, err := s.GetWorktreeRecordByID(ctx, trimmedWorktreeID)
 		if err != nil {
 			return err
@@ -387,13 +422,14 @@ func (s *Store) UpdateSessionExecutionTargetByID(ctx context.Context, sessionID 
 		if strings.TrimSpace(record.WorkspaceID) != trimmedWorkspaceID {
 			return &WorktreeWorkspaceMismatchError{WorktreeID: trimmedWorktreeID, WorkspaceID: trimmedWorkspaceID}
 		}
+		worktreeID = sql.NullString{String: trimmedWorktreeID, Valid: true}
 	}
 	params := sqlitegen.UpdateSessionExecutionTargetByIDParams{
-		WorkspaceID:     sql.NullString{String: trimmedWorkspaceID, Valid: trimmedWorkspaceID != ""},
-		WorktreeID:      sql.NullString{String: trimmedWorktreeID, Valid: trimmedWorktreeID != ""},
-		CwdRelpath:      normalizeSessionCwdRelpath(cwdRelpath),
+		WorkspaceID:     sql.NullString{String: trimmedWorkspaceID, Valid: true},
+		WorktreeID:      worktreeID,
+		CwdRelpath:      normalizeSessionCwdRelpath(update.CwdRelpath),
 		UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
-		SessionID:       strings.TrimSpace(sessionID),
+		SessionID:       trimmedSessionID,
 	}
 	rows, err := s.queries.UpdateSessionExecutionTargetByID(ctx, params)
 	if err != nil {
@@ -1077,6 +1113,17 @@ func (s *Store) RetargetSessionWorkspace(ctx context.Context, sessionID string, 
 		return Binding{}, err
 	}
 	if err := opened.SetWorkspaceRoot(binding.CanonicalRoot); err != nil {
+		return Binding{}, err
+	}
+	if err := opened.SetWorktreeReminderState(nil); err != nil {
+		return Binding{}, err
+	}
+	if err := s.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{
+		SessionID:   trimmedSessionID,
+		WorkspaceID: binding.WorkspaceID,
+		Worktree:    nil,
+		CwdRelpath:  ".",
+	}); err != nil {
 		return Binding{}, err
 	}
 	return binding, nil
@@ -2049,17 +2096,26 @@ func projectHomeSummaryFromRow(row sqlitegen.ListProjectHomeSummariesRow) server
 }
 
 func sessionExecutionTargetFromRow(row sqlitegen.GetSessionExecutionTargetByIDRow) clientui.SessionExecutionTarget {
-	worktreeID := ""
-	if row.WorktreeID.Valid {
-		worktreeID = row.WorktreeID.String
-	}
 	workspaceName := displayNameForPath(row.WorkspaceRoot)
 	if strings.TrimSpace(row.WorkspaceID) == "" && strings.TrimSpace(row.WorkspaceSnapshotName) != "" {
 		workspaceName = strings.TrimSpace(row.WorkspaceSnapshotName)
 	}
 	baseRoot := strings.TrimSpace(row.WorkspaceRoot)
-	if strings.TrimSpace(row.WorktreeRoot) != "" {
-		baseRoot = strings.TrimSpace(row.WorktreeRoot)
+	var worktree *clientui.SessionExecutionWorktreeTarget
+	if row.WorktreeID.Valid {
+		worktreeRoot := ""
+		if row.WorktreeRoot.Valid {
+			worktreeRoot = row.WorktreeRoot.String
+		}
+		worktree = &clientui.SessionExecutionWorktreeTarget{
+			ID:           row.WorktreeID.String,
+			Name:         displayNameForPath(worktreeRoot),
+			Root:         worktreeRoot,
+			Availability: availabilityForOptionalPath(worktreeRoot),
+		}
+		if strings.TrimSpace(worktreeRoot) != "" {
+			baseRoot = strings.TrimSpace(worktreeRoot)
+		}
 	}
 	cwdRelpath := normalizeSessionCwdRelpath(row.CwdRelpath)
 	effectiveWorkdir := effectiveWorkdirWithinRoot(baseRoot, cwdRelpath)
@@ -2068,10 +2124,7 @@ func sessionExecutionTargetFromRow(row sqlitegen.GetSessionExecutionTargetByIDRo
 		WorkspaceName:         workspaceName,
 		WorkspaceRoot:         row.WorkspaceRoot,
 		WorkspaceAvailability: availabilityForOptionalPath(row.WorkspaceRoot),
-		WorktreeID:            worktreeID,
-		WorktreeName:          displayNameForPath(row.WorktreeRoot),
-		WorktreeRoot:          row.WorktreeRoot,
-		WorktreeAvailability:  availabilityForOptionalPath(row.WorktreeRoot),
+		Worktree:              worktree,
 		CwdRelpath:            cwdRelpath,
 		EffectiveWorkdir:      effectiveWorkdir,
 	}

@@ -51,7 +51,6 @@ func TestSessionExecutionTargetClampsEscapingCwdRelpath(t *testing.T) {
 	target := sessionExecutionTargetFromRow(sqlitegen.GetSessionExecutionTargetByIDRow{
 		WorkspaceID:   "workspace-1",
 		WorkspaceRoot: "/tmp/workspace",
-		WorktreeRoot:  "",
 		CwdRelpath:    "../../other-project",
 	})
 	if target.CwdRelpath != "." {
@@ -64,7 +63,8 @@ func TestSessionExecutionTargetClampsEscapingCwdRelpath(t *testing.T) {
 	target = sessionExecutionTargetFromRow(sqlitegen.GetSessionExecutionTargetByIDRow{
 		WorkspaceID:   "workspace-1",
 		WorkspaceRoot: "/tmp/workspace",
-		WorktreeRoot:  "/tmp/workspace/worktree-a",
+		WorktreeID:    sql.NullString{String: "worktree-a", Valid: true},
+		WorktreeRoot:  sql.NullString{String: "/tmp/workspace/worktree-a", Valid: true},
 		CwdRelpath:    "/tmp/absolute",
 	})
 	if target.CwdRelpath != "." {
@@ -112,8 +112,8 @@ func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T
 		t.Fatalf("MkdirAll worktreeSubdir: %v", err)
 	}
 	sess := createMetadataTestSession(t, store, cfg, binding)
-	if err := store.UpdateSessionExecutionTargetByID(ctx, sess.Meta().SessionID, binding.WorkspaceID, "worktree-a", "pkg"); err != nil {
-		t.Fatalf("UpdateSessionExecutionTargetByID: %v", err)
+	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, WorkspaceID: binding.WorkspaceID, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-a"}, CwdRelpath: "pkg"}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
 	reopened, err := session.OpenByID(cfg.PersistenceRoot, sess.Meta().SessionID, store.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
@@ -126,11 +126,11 @@ func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if target.WorktreeID != "worktree-a" {
-		t.Fatalf("worktree id = %q, want worktree-a", target.WorktreeID)
+	if target.Worktree == nil || target.Worktree.ID != "worktree-a" {
+		t.Fatalf("worktree = %+v, want worktree-a", target.Worktree)
 	}
-	if target.WorktreeRoot != canonicalWorktreeRoot {
-		t.Fatalf("worktree root = %q, want %q", target.WorktreeRoot, canonicalWorktreeRoot)
+	if target.Worktree == nil || target.Worktree.Root != canonicalWorktreeRoot {
+		t.Fatalf("worktree root = %+v, want %q", target.Worktree, canonicalWorktreeRoot)
 	}
 	if target.CwdRelpath != "pkg" {
 		t.Fatalf("cwd relpath = %q, want pkg", target.CwdRelpath)
@@ -144,7 +144,7 @@ func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T
 	}
 }
 
-func TestUpdateSessionExecutionTargetByIDRejectsCrossWorkspaceWorktree(t *testing.T) {
+func TestUpdateSessionExecutionTargetRejectsCrossWorkspaceWorktree(t *testing.T) {
 	ctx := context.Background()
 	store, cfgA, bindingA := newMetadataTestStore(t)
 	workspaceB := t.TempDir()
@@ -164,10 +164,10 @@ func TestUpdateSessionExecutionTargetByIDRejectsCrossWorkspaceWorktree(t *testin
 	worktreeRoot := filepath.Join(cfgB.WorkspaceRoot, "wt-b")
 	createMetadataTestWorktree(t, ctx, store, bindingB.WorkspaceID, "worktree-b", worktreeRoot)
 
-	err = store.UpdateSessionExecutionTargetByID(ctx, sess.Meta().SessionID, bindingA.WorkspaceID, "worktree-b", ".")
+	err = store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, WorkspaceID: bindingA.WorkspaceID, Worktree: &SessionExecutionTargetUpdateWorktree{ID: "worktree-b"}, CwdRelpath: "."})
 	var mismatch *WorktreeWorkspaceMismatchError
 	if !errors.As(err, &mismatch) || mismatch.WorktreeID != "worktree-b" || mismatch.WorkspaceID != bindingA.WorkspaceID {
-		t.Fatalf("UpdateSessionExecutionTargetByID error = %v", err)
+		t.Fatalf("UpdateSessionExecutionTarget error = %v", err)
 	}
 }
 

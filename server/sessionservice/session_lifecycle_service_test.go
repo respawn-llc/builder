@@ -467,8 +467,8 @@ func TestServiceResolveTransitionForkRollbackPreservesExecutionTarget(t *testing
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTargetByID(context.Background(), sess.Meta().SessionID, binding.WorkspaceID, "wt-1", "pkg"); err != nil {
-		t.Fatalf("UpdateSessionExecutionTargetByID: %v", err)
+	if err := metadataStore.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, WorkspaceID: binding.WorkspaceID, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "wt-1"}, CwdRelpath: "pkg"}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
 
 	service := NewGlobalSessionLifecycleService(cfg.PersistenceRoot, nil, nil, metadataStore.AuthoritativeSessionStoreOptions()...)
@@ -493,11 +493,11 @@ func TestServiceResolveTransitionForkRollbackPreservesExecutionTarget(t *testing
 	if err != nil {
 		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
 	}
-	if target.WorktreeID != "wt-1" {
-		t.Fatalf("fork target worktree id = %q, want wt-1", target.WorktreeID)
+	if target.Worktree == nil || target.Worktree.ID != "wt-1" {
+		t.Fatalf("fork target worktree = %+v, want wt-1", target.Worktree)
 	}
-	if target.WorktreeRoot != canonicalWorktreeRoot {
-		t.Fatalf("fork target worktree root = %q, want %q", target.WorktreeRoot, canonicalWorktreeRoot)
+	if target.Worktree == nil || target.Worktree.Root != canonicalWorktreeRoot {
+		t.Fatalf("fork target worktree root = %+v, want %q", target.Worktree, canonicalWorktreeRoot)
 	}
 	if target.CwdRelpath != "pkg" {
 		t.Fatalf("fork target cwd_relpath = %q, want pkg", target.CwdRelpath)
@@ -537,8 +537,8 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTargetByID(context.Background(), sess.Meta().SessionID, binding.WorkspaceID, "wt-1", "pkg"); err != nil {
-		t.Fatalf("UpdateSessionExecutionTargetByID: %v", err)
+	if err := metadataStore.UpdateSessionExecutionTarget(context.Background(), metadata.SessionExecutionTargetUpdate{SessionID: sess.Meta().SessionID, WorkspaceID: binding.WorkspaceID, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "wt-1"}, CwdRelpath: "pkg"}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
 
 	lifecycle := NewGlobalSessionLifecycleService(cfg.PersistenceRoot, nil, nil, metadataStore.AuthoritativeSessionStoreOptions()...)

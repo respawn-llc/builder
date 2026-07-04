@@ -44,7 +44,7 @@ func TestStatusLineGitStartupUsesRuntimeWorktreeRootBranch(t *testing.T) {
 	runtimeClient := &runtimeControlFakeClient{sessionView: clientui.RuntimeSessionView{
 		ExecutionTarget: clientui.SessionExecutionTarget{
 			WorkspaceRoot:    workspaceRoot,
-			WorktreeRoot:     worktreeRoot,
+			Worktree:         &clientui.SessionExecutionWorktreeTarget{ID: "worktree-1", Root: worktreeRoot},
 			EffectiveWorkdir: processRoot,
 		},
 	}}

@@ -28,8 +28,8 @@ func (s *failingUpdateMetadataExecutionTargetStore) ResolveSessionExecutionTarge
 	return s.base.ResolveSessionExecutionTarget(ctx, sessionID)
 }
 
-func (s *failingUpdateMetadataExecutionTargetStore) UpdateSessionExecutionTargetByID(_ context.Context, sessionID string, _ string, _ string, _ string) error {
-	s.updatedSessionID = sessionID
+func (s *failingUpdateMetadataExecutionTargetStore) UpdateSessionExecutionTarget(_ context.Context, update metadata.SessionExecutionTargetUpdate) error {
+	s.updatedSessionID = update.SessionID
 	return s.updateErr
 }
 
@@ -780,8 +780,8 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTargetByID(ctx, parent.Meta().SessionID, binding.WorkspaceID, "worktree-review", "pkg"); err != nil {
-		t.Fatalf("UpdateSessionExecutionTargetByID parent: %v", err)
+	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: parent.Meta().SessionID, WorkspaceID: binding.WorkspaceID, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-review"}, CwdRelpath: "pkg"}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
 	}
 	if err := parent.SetWorktreeReminderState(&session.WorktreeReminderState{
 		Mode:                  session.WorktreeReminderModeEnter,
@@ -843,8 +843,8 @@ func TestPlannerNewChildSessionPreservesParentWorktreeContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget child: %v", err)
 	}
-	if target.WorktreeID != "worktree-review" {
-		t.Fatalf("child worktree id = %q, want worktree-review", target.WorktreeID)
+	if target.Worktree == nil || target.Worktree.ID != "worktree-review" {
+		t.Fatalf("child worktree = %+v, want worktree-review", target.Worktree)
 	}
 	if target.CwdRelpath != "pkg" {
 		t.Fatalf("child cwd relpath = %q, want pkg", target.CwdRelpath)
@@ -1051,8 +1051,8 @@ func TestPlannerNewChildSessionRollsBackDurableChildWhenExecutionTargetCopyFails
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTargetByID(ctx, parent.Meta().SessionID, binding.WorkspaceID, "worktree-review", "."); err != nil {
-		t.Fatalf("UpdateSessionExecutionTargetByID parent: %v", err)
+	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: parent.Meta().SessionID, WorkspaceID: binding.WorkspaceID, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-review"}, CwdRelpath: "."}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
 	}
 	beforeEntries, err := os.ReadDir(containerDir)
 	if err != nil {

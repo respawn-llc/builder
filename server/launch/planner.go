@@ -34,7 +34,7 @@ const (
 // session execution target into a newly created child session.
 type MetadataExecutionTargetStore interface {
 	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
-	UpdateSessionExecutionTargetByID(ctx context.Context, sessionID string, workspaceID string, worktreeID string, cwdRelpath string) error
+	UpdateSessionExecutionTarget(ctx context.Context, update metadata.SessionExecutionTargetUpdate) error
 	DeleteSessionRecordByID(ctx context.Context, sessionID string) error
 	Close() error
 }
@@ -618,7 +618,7 @@ func (p Planner) updateChildExecutionTarget(ctx context.Context, childSessionID 
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	return store.UpdateSessionExecutionTargetByID(ctx, childSessionID, target.WorkspaceID, target.WorktreeID, target.CwdRelpath)
+	return store.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdateFromReadModel(childSessionID, target))
 }
 
 func (p Planner) rollbackChildSession(child *session.Store) error {

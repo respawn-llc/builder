@@ -42,7 +42,7 @@ func TestDeleteWorktreeRebindsCurrentSessionToMainBeforeRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
-	if resp.Target.WorktreeID != "" || resp.Target.EffectiveWorkdir != env.workspaceRoot {
+	if sessionTargetWorktreeID(resp.Target) != "" || resp.Target.EffectiveWorkdir != env.workspaceRoot {
 		t.Fatalf("unexpected final delete target: %+v", resp.Target)
 	}
 	if len(env.runtime.rebindCalls) < 2 {
@@ -232,14 +232,14 @@ func TestRetargetSessionsFromMissingWorktreeRollsBackActiveSessionMetadataOnRunt
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget active after: %v", err)
 	}
-	if activeTargetAfter.WorktreeID != activeTargetBefore.WorktreeID || activeTargetAfter.EffectiveWorkdir != activeTargetBefore.EffectiveWorkdir {
+	if sessionTargetWorktreeID(activeTargetAfter) != sessionTargetWorktreeID(activeTargetBefore) || activeTargetAfter.EffectiveWorkdir != activeTargetBefore.EffectiveWorkdir {
 		t.Fatalf("expected active session target rolled back after runtime failure, before=%+v after=%+v", activeTargetBefore, activeTargetAfter)
 	}
 	otherTarget, err := env.store.ResolveSessionExecutionTarget(env.ctx, otherSession.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget other session: %v", err)
 	}
-	if otherTarget.WorktreeID != "" || otherTarget.EffectiveWorkdir != env.workspaceRoot {
+	if sessionTargetWorktreeID(otherTarget) != "" || otherTarget.EffectiveWorkdir != env.workspaceRoot {
 		t.Fatalf("expected inactive session retargeted to main workspace, got %+v", otherTarget)
 	}
 	if len(env.runtime.rebindCalls) != 1 {
@@ -487,8 +487,12 @@ func worktreeDeleteRequest(env *serviceTestEnv, clientRequestID string, worktree
 
 func updateServiceTestSessionTarget(t *testing.T, env *serviceTestEnv, sessionID, workspaceID, worktreeID, cwdRelpath string) {
 	t.Helper()
-	if err := env.store.UpdateSessionExecutionTargetByID(env.ctx, sessionID, workspaceID, worktreeID, cwdRelpath); err != nil {
-		t.Fatalf("UpdateSessionExecutionTargetByID %s: %v", sessionID, err)
+	var worktree *metadata.SessionExecutionTargetUpdateWorktree
+	if strings.TrimSpace(worktreeID) != "" {
+		worktree = &metadata.SessionExecutionTargetUpdateWorktree{ID: worktreeID}
+	}
+	if err := env.store.UpdateSessionExecutionTarget(env.ctx, metadata.SessionExecutionTargetUpdate{SessionID: sessionID, WorkspaceID: workspaceID, Worktree: worktree, CwdRelpath: cwdRelpath}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget %s: %v", sessionID, err)
 	}
 }
 
