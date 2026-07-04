@@ -348,15 +348,16 @@ func TestWorkflowAskHandlerRejectsTaskQuestionWithoutBatchMetadata(t *testing.T)
 	}
 }
 
-func TestWorkflowAskHandlerApprovalBypassesDurableTaskQuestionState(t *testing.T) {
+func TestWorkflowAskHandlerApprovalUsesDurableTaskQuestionState(t *testing.T) {
 	runtimes := &workflowAskHandlerRuntime{
 		response: askquestion.AskQuestionResponse{
 			RequestID: "approval-1",
 			Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce},
 		},
 	}
-	starter := &Starter{store: &panicRuntimeStore{t: t}, runtimes: runtimes}
-	resp, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowstore.RunStartContext{}, askquestion.AskQuestionRequest{
+	store := &recordingRuntimeStore{}
+	starter := &Starter{store: store, runtimes: runtimes}
+	resp, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
 		ID:       "approval-1",
 		Question: "Approve?",
 		Approval: true,
@@ -372,11 +373,21 @@ func TestWorkflowAskHandlerApprovalBypassesDurableTaskQuestionState(t *testing.T
 	if resp.Approval == nil || resp.Approval.Decision != askquestion.AskQuestionApprovalDecisionAllowOnce {
 		t.Fatalf("approval response = %+v", resp)
 	}
-	if len(runtimes.awaited) != 1 || runtimes.awaited[0].AttentionTarget != nil {
-		t.Fatalf("awaited approval requests = %+v, want generic prompt without task-detail target", runtimes.awaited)
+	if store.waitingAskID != "approval-1" || store.clearedAskID != "approval-1" {
+		t.Fatalf("waiting ask lifecycle set=%q cleared=%q, want approval-1", store.waitingAskID, store.clearedAskID)
+	}
+	if len(runtimes.awaited) != 1 {
+		t.Fatalf("awaited approval requests = %+v, want one", runtimes.awaited)
+	}
+	target := runtimes.awaited[0].AttentionTarget
+	if target == nil || target.Kind != clientui.AttentionNotificationTargetWorkflowTask || target.Focus == nil || target.Focus.Kind != clientui.AttentionNotificationFocusQuestion || len(target.Focus.AskIDs) != 1 || target.Focus.AskIDs[0] != "approval-1" {
+		t.Fatalf("awaited approval target = %+v, want task question focus for approval-1", target)
 	}
 	if runtimes.cleared != nil || runtimes.skipped != nil {
-		t.Fatalf("approval touched task question attention cleared=%+v skipped=%+v", runtimes.cleared, runtimes.skipped)
+		t.Fatalf("approval touched batch question attention cleared=%+v skipped=%+v", runtimes.cleared, runtimes.skipped)
+	}
+	if len(runtimes.approvalCleared) != 1 || runtimes.approvalCleared[0] != "approval-1" {
+		t.Fatalf("approval clear markers = %+v, want approval-1", runtimes.approvalCleared)
 	}
 }
 
@@ -401,6 +412,37 @@ func TestWorkflowAskHandlerClearFailureLeavesTaskQuestionAttentionUnresolved(t *
 	}
 	if len(runtimes.cleared) != 0 {
 		t.Fatalf("task question attention cleared despite durable clear failure: %+v", runtimes.cleared)
+	}
+}
+
+func TestWorkflowAskHandlerApprovalClearFailureLeavesQuestionAttentionUnresolved(t *testing.T) {
+	clearErr := errors.New("clear failed")
+	runtimes := &workflowAskHandlerRuntime{
+		response: askquestion.AskQuestionResponse{
+			RequestID: "approval-1",
+			Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce},
+		},
+	}
+	store := &recordingRuntimeStore{clearErr: clearErr}
+	starter := &Starter{store: store, runtimes: runtimes}
+	_, err := starter.handleWorkflowAsk(context.Background(), "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
+		ID:       "approval-1",
+		Question: "Approve?",
+		Approval: true,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{{
+			Decision: askquestion.AskQuestionApprovalDecisionAllowOnce,
+			Label:    "Allow once",
+		}},
+	})
+
+	if !errors.Is(err, clearErr) {
+		t.Fatalf("handleWorkflowAsk approval error = %v, want clear error", err)
+	}
+	if store.waitingAskID != "approval-1" || store.clearedAskID != "approval-1" {
+		t.Fatalf("approval waiting ask lifecycle set=%q cleared=%q", store.waitingAskID, store.clearedAskID)
+	}
+	if len(runtimes.approvalCleared) != 0 {
+		t.Fatalf("approval clear failure published durable clear marker: %+v", runtimes.approvalCleared)
 	}
 }
 
@@ -2067,12 +2109,13 @@ func workflowTestAskBatch(promptID string, askIDs ...string) askquestion.AskQues
 }
 
 type workflowAskHandlerRuntime struct {
-	response askquestion.AskQuestionResponse
-	err      error
-	awaited  []askquestion.AskQuestionRequest
-	prepared []string
-	cleared  []string
-	skipped  []string
+	response        askquestion.AskQuestionResponse
+	err             error
+	awaited         []askquestion.AskQuestionRequest
+	prepared        []string
+	cleared         []string
+	skipped         []string
+	approvalCleared []string
 }
 
 func (r *workflowAskHandlerRuntime) PublishRuntimeEvent(string, runtime.Event) {}
@@ -2099,6 +2142,10 @@ func (r *workflowAskHandlerRuntime) PrepareTaskQuestionBatch(batch askquestion.A
 
 func (r *workflowAskHandlerRuntime) MarkTaskQuestionSkipped(batch askquestion.AskQuestionBatchMetadata) {
 	r.skipped = append(r.skipped, batch.PromptID)
+}
+
+func (r *workflowAskHandlerRuntime) MarkTaskApprovalQuestionCleared(_ clientui.AttentionNotificationTarget, askID string) {
+	r.approvalCleared = append(r.approvalCleared, askID)
 }
 
 type recordingRuntimeStore struct {

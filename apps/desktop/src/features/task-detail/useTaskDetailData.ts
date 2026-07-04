@@ -85,12 +85,20 @@ export function useTaskComments(taskID: string, enabled: boolean) {
   });
 }
 
-export function usePendingAsks(sessionID: string) {
+export function usePendingAsks(sessionID: string | null) {
   const { api } = useAppServices();
   return useQuery({
     queryKey: queryKeys.pendingAsks(sessionID),
-    queryFn: async () => api.listPendingAsks(sessionID),
-    enabled: sessionID.length > 0,
+    queryFn: async () => {
+      if (sessionID === null) {
+        throw new Error("pending ask lookup requires an enabled session");
+      }
+      if (sessionID.length === 0) {
+        throw new Error("pending ask lookup requires a non-empty session id");
+      }
+      return api.listPendingAsks(sessionID);
+    },
+    enabled: sessionID !== null,
   });
 }
 

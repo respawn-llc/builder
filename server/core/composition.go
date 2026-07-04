@@ -28,6 +28,7 @@ import (
 	"core/server/sessionservice"
 	"core/server/sessionview"
 	"core/server/sleepguard"
+	askquestion "core/server/tools"
 
 	"core/server/workflow"
 	"core/server/workflowattention"
@@ -38,6 +39,7 @@ import (
 	"core/server/worktree"
 	rpccontract "core/shared/apicontract"
 	"core/shared/client"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -177,7 +179,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: store: %w", err)
 	}
-	workflowViewService, err := workflowview.New(metadataStore, workflowview.WithSessionTranscriptProvider(sessionViewService))
+	workflowViewService, err := workflowview.New(metadataStore, workflowview.WithSessionTranscriptProvider(sessionViewService), workflowview.WithPendingPromptSource(workflowViewPendingPromptSource{prompts: runtimeRegistry}))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: view: %w", err)
@@ -414,14 +416,56 @@ type runtimePendingAskResolver struct {
 	}
 }
 
+type workflowViewPendingPromptSource struct {
+	prompts interface {
+		ListPendingPrompts(sessionID string) []registry.PendingPromptSnapshot
+	}
+}
+
+func (s workflowViewPendingPromptSource) ListPendingPrompts(sessionID string) []workflowview.PendingPromptSnapshot {
+	if s.prompts == nil {
+		return nil
+	}
+	items := s.prompts.ListPendingPrompts(sessionID)
+	out := make([]workflowview.PendingPromptSnapshot, 0, len(items))
+	for _, item := range items {
+		out = append(out, workflowview.PendingPromptSnapshot{Request: item.Request})
+	}
+	return out
+}
+
 func (r runtimePendingAskResolver) CanRehydrate(_ context.Context, sessionID string, _ workflow.RunID, askID string) (bool, error) {
 	if r.prompts == nil || strings.TrimSpace(sessionID) == "" || strings.TrimSpace(askID) == "" {
 		return false, nil
 	}
 	for _, item := range r.prompts.ListPendingPrompts(sessionID) {
-		if item.Request.ID == askID && !item.Request.Approval {
+		if strings.TrimSpace(item.Request.ID) != strings.TrimSpace(askID) {
+			continue
+		}
+		if !item.Request.Approval {
+			return true, nil
+		}
+		if taskScopedApprovalPendingAsk(item.Request, askID) {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+func taskScopedApprovalPendingAsk(req askquestion.AskQuestionRequest, askID string) bool {
+	if !req.Approval || req.AttentionTarget == nil {
+		return false
+	}
+	if req.AttentionTarget.Kind != clientui.AttentionNotificationTargetWorkflowTask || req.AttentionTarget.Focus == nil {
+		return false
+	}
+	if req.AttentionTarget.Focus.Kind != clientui.AttentionNotificationFocusQuestion {
+		return false
+	}
+	for _, focusedAskID := range req.AttentionTarget.Focus.AskIDs {
+		if strings.TrimSpace(focusedAskID) == strings.TrimSpace(askID) {
+			return true
+		}
+	}
+	return false
 }

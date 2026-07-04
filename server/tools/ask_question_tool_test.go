@@ -154,6 +154,44 @@ func TestSubmitApprovalResponse(t *testing.T) {
 	}
 }
 
+func TestValidateAskQuestionResponseForApprovalPrompt(t *testing.T) {
+	req := AskQuestionRequest{
+		ID:       "approval",
+		Question: "approve?",
+		Approval: true,
+		ApprovalOptions: []AskQuestionApprovalOption{
+			{Decision: AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
+			{Decision: AskQuestionApprovalDecisionDeny, Label: "Deny"},
+		},
+	}
+	if err := ValidateAskQuestionResponse(req, AskQuestionResponse{Answer: "allow"}); !errors.Is(err, ErrAskQuestionApprovalRequiresResponse) {
+		t.Fatalf("ordinary answer to approval prompt error = %v, want approval response required", err)
+	}
+	if err := ValidateAskQuestionResponse(req, AskQuestionResponse{
+		Approval:             &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionDeny},
+		Answer:               "deny",
+		FreeformAnswer:       "mixed",
+		SelectedOptionNumber: 1,
+	}); !errors.Is(err, ErrAskQuestionApprovalForbidsOrdinaryAnswer) {
+		t.Fatalf("mixed approval response error = %v, want ordinary answer fields rejected", err)
+	}
+	if err := ValidateAskQuestionResponse(req, AskQuestionResponse{Approval: &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionAllowSession}}); err == nil {
+		t.Fatal("expected unoffered approval decision to be rejected")
+	}
+	if err := ValidateAskQuestionResponse(req, AskQuestionResponse{Approval: &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionDeny, Commentary: "no"}}); err != nil {
+		t.Fatalf("valid approval response rejected: %v", err)
+	}
+}
+
+func TestValidateAskQuestionResponseRejectsApprovalPayloadForOrdinaryQuestion(t *testing.T) {
+	err := ValidateAskQuestionResponse(AskQuestionRequest{ID: "ask-1", Question: "Proceed?"}, AskQuestionResponse{
+		Approval: &AskQuestionApprovalPayload{Decision: AskQuestionApprovalDecisionAllowOnce},
+	})
+	if !errors.Is(err, ErrAskQuestionNonApprovalForbidsApproval) {
+		t.Fatalf("approval payload to ordinary prompt error = %v, want forbidden approval payload", err)
+	}
+}
+
 func TestApprovalAskRequiresApprovalOptions(t *testing.T) {
 	b := NewAskQuestionBroker()
 	_, err := b.Ask(context.Background(), AskQuestionRequest{ID: "approval", Question: "approve?", Approval: true})

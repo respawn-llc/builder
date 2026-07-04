@@ -58,5 +58,5 @@ export const queryKeys = {
   task: (taskID: string) => ["task", taskID],
   activity: (taskID: string) => ["activity", taskID],
   comments: (taskID: string) => ["comments", taskID],
-  pendingAsks: (sessionID: string) => ["pending-asks", sessionID],
+  pendingAsks: (sessionID: string | null) => ["pending-asks", sessionID],
 };

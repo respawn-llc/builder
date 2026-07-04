@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"core/shared/clientui"
 )
 
 func TestWorkflowCreateUpdateRequestValidation(t *testing.T) {
@@ -227,6 +229,18 @@ func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
 	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Answer: "one", FreeformAnswer: "two"}).Validate(); !isWorkflowFieldError(err, "answer", WorkflowRequestErrorInvalidMode) {
 		t.Fatalf("multi-mode task question answer error = %#v, want invalid_mode on answer", err)
 	}
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Approval: &WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce, Commentary: "trusted"}}).Validate(); err != nil {
+		t.Fatalf("valid task approval question answer rejected: %v", err)
+	}
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Approval: &WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce}, FreeformAnswer: "also"}).Validate(); !isWorkflowFieldError(err, "approval", WorkflowRequestErrorInvalidMode) {
+		t.Fatalf("approval plus ordinary answer error = %#v, want invalid_mode on approval", err)
+	}
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Approval: &WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecisionAllowOnce}, ErrorMessage: "err"}).Validate(); !isWorkflowFieldError(err, "error_message", WorkflowRequestErrorInvalidMode) {
+		t.Fatalf("approval plus error error = %#v, want invalid_mode on error_message", err)
+	}
+	if err := (WorkflowTaskQuestionAnswerRequest{ClientRequestID: "req-1", TaskID: "task-1", AskID: "ask-1", Approval: &WorkflowTaskQuestionApprovalAnswer{Decision: clientui.ApprovalDecision("future")}}).Validate(); !isWorkflowFieldError(err, "approval.decision", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("invalid approval decision error = %#v, want invalid_value on approval.decision", err)
+	}
 	if err := (WorkflowTaskCommentAddRequest{TaskID: "task-1", Body: "comment", Author: "user"}).Validate(); err != nil {
 		t.Fatalf("valid comment add rejected: %v", err)
 	}
@@ -262,6 +276,152 @@ func isWorkflowFieldError(err error, field string, code string) bool {
 		return false
 	}
 	return validationErr.Field == field && validationErr.Code == code
+}
+
+func TestWorkflowTaskQuestionAnswerApprovalJSON(t *testing.T) {
+	req := WorkflowTaskQuestionAnswerRequest{
+		ClientRequestID: "req-1",
+		TaskID:          "task-1",
+		AskID:           "ask-1",
+		Approval: &WorkflowTaskQuestionApprovalAnswer{
+			Decision:   clientui.ApprovalDecisionAllowOnce,
+			Commentary: "trusted path",
+		},
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw request JSON: %v", err)
+	}
+	if _, ok := raw["Decision"]; ok {
+		t.Fatalf("marshaled JSON contains Go decision field: %#v", raw)
+	}
+	if _, ok := raw["Commentary"]; ok {
+		t.Fatalf("marshaled JSON contains Go commentary field: %#v", raw)
+	}
+	approval, ok := raw["approval"].(map[string]any)
+	if !ok {
+		t.Fatalf("marshaled JSON missing approval object: %#v", raw)
+	}
+	if approval["decision"] != string(clientui.ApprovalDecisionAllowOnce) || approval["commentary"] != "trusted path" {
+		t.Fatalf("approval JSON = %#v", approval)
+	}
+	if _, ok := approval["Decision"]; ok {
+		t.Fatalf("approval JSON contains Go decision field: %#v", approval)
+	}
+	if _, ok := approval["Commentary"]; ok {
+		t.Fatalf("approval JSON contains Go commentary field: %#v", approval)
+	}
+
+	var decoded WorkflowTaskQuestionAnswerRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Approval == nil || decoded.Approval.Decision != clientui.ApprovalDecisionAllowOnce || decoded.Approval.Commentary != "trusted path" {
+		t.Fatalf("decoded approval = %+v", decoded.Approval)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("decoded request rejected: %v", err)
+	}
+}
+
+func TestWorkflowAttentionQuestionPromptJSON(t *testing.T) {
+	item := WorkflowAttentionItem{
+		ID:                     "attention-1",
+		Kind:                   "question",
+		Message:                "Choose",
+		Suggestions:            []string{"A", "B"},
+		RecommendedOptionIndex: 1,
+		Question: &WorkflowAttentionQuestionPrompt{
+			Kind:                   WorkflowAttentionQuestionKindOrdinary,
+			Suggestions:            []string{"A", "B"},
+			RecommendedOptionIndex: 1,
+		},
+		OccurredAtUnixMs: 1,
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal ordinary question: %v", err)
+	}
+	var ordinaryRaw map[string]any
+	if err := json.Unmarshal(data, &ordinaryRaw); err != nil {
+		t.Fatalf("unmarshal ordinary question JSON: %v", err)
+	}
+	ordinaryQuestion, ok := ordinaryRaw["question"].(map[string]any)
+	if !ok {
+		t.Fatalf("ordinary question JSON missing question object: %#v", ordinaryRaw)
+	}
+	if ordinaryQuestion["kind"] != string(WorkflowAttentionQuestionKindOrdinary) {
+		t.Fatalf("ordinary question kind = %#v", ordinaryQuestion["kind"])
+	}
+	ordinarySuggestions, ok := ordinaryQuestion["suggestions"].([]any)
+	if !ok || len(ordinarySuggestions) != 2 || ordinarySuggestions[0] != "A" || ordinarySuggestions[1] != "B" {
+		t.Fatalf("ordinary question suggestions = %#v", ordinaryQuestion["suggestions"])
+	}
+	if ordinaryQuestion["recommended_option_index"] != float64(1) {
+		t.Fatalf("ordinary question recommended option = %#v", ordinaryQuestion["recommended_option_index"])
+	}
+
+	approval := WorkflowAttentionItem{
+		ID:      "attention-2",
+		Kind:    "question",
+		Message: "Approve?",
+		Question: &WorkflowAttentionQuestionPrompt{
+			Kind: WorkflowAttentionQuestionKindApproval,
+			ApprovalDecisions: []clientui.ApprovalDecision{
+				clientui.ApprovalDecisionAllowOnce,
+				clientui.ApprovalDecisionAllowSession,
+				clientui.ApprovalDecisionDeny,
+			},
+		},
+		OccurredAtUnixMs: 1,
+	}
+	data, err = json.Marshal(approval)
+	if err != nil {
+		t.Fatalf("marshal approval question: %v", err)
+	}
+	var approvalRaw map[string]any
+	if err := json.Unmarshal(data, &approvalRaw); err != nil {
+		t.Fatalf("unmarshal approval question JSON: %v", err)
+	}
+	approvalQuestion, ok := approvalRaw["question"].(map[string]any)
+	if !ok {
+		t.Fatalf("approval question JSON missing question object: %#v", approvalRaw)
+	}
+	if _, ok := approvalQuestion["label"]; ok {
+		t.Fatalf("approval prompt JSON must not carry label: %#v", approvalQuestion)
+	}
+	if _, ok := approvalQuestion["Label"]; ok {
+		t.Fatalf("approval prompt JSON must not carry Go label field: %#v", approvalQuestion)
+	}
+	if approvalQuestion["kind"] != string(WorkflowAttentionQuestionKindApproval) {
+		t.Fatalf("approval question kind = %#v", approvalQuestion["kind"])
+	}
+	decisions, ok := approvalQuestion["approval_decisions"].([]any)
+	wantDecisions := []any{
+		string(clientui.ApprovalDecisionAllowOnce),
+		string(clientui.ApprovalDecisionAllowSession),
+		string(clientui.ApprovalDecisionDeny),
+	}
+	if !ok || !equalJSONArrays(decisions, wantDecisions) {
+		t.Fatalf("approval decisions = %#v", approvalQuestion["approval_decisions"])
+	}
+}
+
+func equalJSONArrays(got []any, want []any) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestWorkflowTaskListRequestValidation(t *testing.T) {

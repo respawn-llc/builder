@@ -1,7 +1,10 @@
 import { z } from "zod";
 
 import type {
+  ApprovalDecision,
+  ApprovalQuestionPrompt,
   AttentionItem,
+  AttentionQuestionPrompt,
   BoardCard,
   BoardColumn,
   BoardGroup,
@@ -17,6 +20,7 @@ import type {
   WorkflowPickerItem,
   WorkflowValidationError,
   WorkspaceSummary,
+  OrdinaryQuestionPrompt,
 } from "../models";
 
 export const emptyString = z.string().optional().default("");
@@ -25,6 +29,39 @@ export const stringList = z
   .array(z.string())
   .nullish()
   .transform((value) => value ?? []);
+
+export const approvalDecisionSchema: z.ZodType<ApprovalDecision> = z.enum([
+  "allow_once",
+  "allow_session",
+  "deny",
+]);
+
+export const questionPromptSchema: z.ZodType<AttentionQuestionPrompt> = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("ordinary"),
+      suggestions: stringList,
+      recommended_option_index: z.number().optional().default(0),
+    })
+    .transform(
+      (value): OrdinaryQuestionPrompt => ({
+        kind: "ordinary",
+        suggestions: value.suggestions,
+        recommendedOptionIndex: value.recommended_option_index,
+      }),
+    ),
+  z
+    .object({
+      kind: z.literal("approval"),
+      approval_decisions: z.array(approvalDecisionSchema).min(1),
+    })
+    .transform(
+      (value): ApprovalQuestionPrompt => ({
+        kind: "approval",
+        approvalDecisions: value.approval_decisions,
+      }),
+    ),
+]);
 
 export const workspaceSummarySchema: z.ZodType<WorkspaceSummary> = z
   .object({
@@ -268,6 +305,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z
     detail_json: emptyString,
     suggestions: stringList,
     recommended_option_index: z.number().optional().default(0),
+    question: questionPromptSchema.nullish(),
     occurred_at_unix_ms: z.number(),
   })
   .transform((value) => ({
@@ -286,6 +324,7 @@ export const attentionItemSchema: z.ZodType<AttentionItem> = z
     detailJSON: value.detail_json,
     suggestions: value.suggestions,
     recommendedOptionIndex: value.recommended_option_index,
+    question: value.question ?? null,
     occurredAt: value.occurred_at_unix_ms,
   }));
 

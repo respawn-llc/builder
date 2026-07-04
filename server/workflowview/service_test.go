@@ -3,6 +3,7 @@ package workflowview
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -11,9 +12,11 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/runtime"
+	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -1302,6 +1305,63 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	}
 }
 
+func TestTaskDetailProjectsRuntimeApprovalWaitingAskPrompt(t *testing.T) {
+	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
+	sessionID := "session-runtime-approval"
+	askID := "ask-runtime-approval"
+	view, err := New(store, WithPendingPromptSource(staticPendingPromptSource{sessionID: {{
+		Request: askquestion.AskQuestionRequest{
+			ID:       askID,
+			Question: "Approve protected path?",
+			Approval: true,
+			ApprovalOptions: []askquestion.AskQuestionApprovalOption{
+				{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
+				{Decision: askquestion.AskQuestionApprovalDecisionAllowSession, Label: "Allow for this session"},
+				{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
+			},
+		},
+	}}}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Task", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if _, err := store.DB().ExecContext(ctx, `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, parent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json) VALUES (?, ?, ?, ?, '', '', '', '', 1, 1, 0, 0, 1, '.', '{}', '{}', '{}', '{}')`, sessionID, binding.ProjectID, binding.WorkspaceID, "sessions/"+sessionID); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	if err := workflowStore.AttachRunSession(ctx, started.RunID, claimed.Generation, sessionID); err != nil {
+		t.Fatalf("AttachRunSession: %v", err)
+	}
+	if err := workflowStore.SetRunWaitingAsk(ctx, started.RunID, claimed.Generation, askID); err != nil {
+		t.Fatalf("SetRunWaitingAsk: %v", err)
+	}
+
+	detail, err := view.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	assertRuntimeApprovalQuestionAttention(t, detail.Attention, string(task.ID), string(started.RunID), sessionID, askID)
+	list, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("ListAttention: %v", err)
+	}
+	assertRuntimeApprovalQuestionAttention(t, list.Items, string(task.ID), string(started.RunID), sessionID, askID)
+}
+
 func TestTaskDetailPendingQuestionFallsBackWhenTranscriptLookupFails(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
@@ -1337,6 +1397,45 @@ func TestTaskDetailPendingQuestionFallsBackWhenTranscriptLookupFails(t *testing.
 	}
 	if len(detail.Attention) != 1 || detail.Attention[0].Kind != "question" || detail.Attention[0].AskID != "ask-missing-transcript" || detail.Attention[0].Message != pendingQuestionFallbackMessage {
 		t.Fatalf("attention = %+v", detail.Attention)
+	}
+}
+
+func assertRuntimeApprovalQuestionAttention(t *testing.T, items []serverapi.WorkflowAttentionItem, taskID string, runID string, sessionID string, askID string) {
+	t.Helper()
+	var item serverapi.WorkflowAttentionItem
+	for _, candidate := range items {
+		if candidate.Kind == "question" && candidate.AskID == askID {
+			item = candidate
+			break
+		}
+	}
+	if item.AskID == "" {
+		t.Fatalf("runtime approval question not found in attention: %+v", items)
+	}
+	if item.TaskID != taskID || item.RunID != runID || item.SessionID != sessionID || item.Message != "Approve protected path?" {
+		t.Fatalf("runtime approval attention identity = %+v", item)
+	}
+	if len(item.Suggestions) != 0 || item.RecommendedOptionIndex != 0 {
+		t.Fatalf("runtime approval attention ordinary fields = suggestions:%+v recommended:%d", item.Suggestions, item.RecommendedOptionIndex)
+	}
+	if item.Question == nil || item.Question.Kind != serverapi.WorkflowAttentionQuestionKindApproval {
+		t.Fatalf("runtime approval question prompt = %+v", item.Question)
+	}
+	want := []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny}
+	if len(item.Question.ApprovalDecisions) != len(want) {
+		t.Fatalf("approval decisions = %+v, want %+v", item.Question.ApprovalDecisions, want)
+	}
+	for i := range want {
+		if item.Question.ApprovalDecisions[i] != want[i] {
+			t.Fatalf("approval decisions = %+v, want %+v", item.Question.ApprovalDecisions, want)
+		}
+	}
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal attention item: %v", err)
+	}
+	if strings.Contains(string(raw), "Allow once") || strings.Contains(string(raw), "label") {
+		t.Fatalf("runtime approval attention leaked server labels: %s", raw)
 	}
 }
 
@@ -1767,7 +1866,7 @@ func TestPendingQuestionResolverFindsPendingAskAtTail(t *testing.T) {
 	entries = append(entries, askTranscriptEntry("ask-pending", "Question at tail?", nil, 0))
 	resolver := newPendingQuestionResolver(staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
 		"session-tail": entries,
-	}})
+	}}, nil)
 
 	question, err := resolver.Question(context.Background(), "session-tail", "ask-pending")
 	if err != nil {
@@ -1789,7 +1888,7 @@ func TestPendingQuestionResolverResolvesMultiplePendingAsksIntertwinedWithToolCa
 	}
 	resolver := newPendingQuestionResolver(staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
 		"session-multi": entries,
-	}})
+	}}, nil)
 
 	first, err := resolver.Question(context.Background(), "session-multi", "ask-1")
 	if err != nil {
@@ -1810,7 +1909,7 @@ func TestPendingQuestionResolverResolvesMultiplePendingAsksIntertwinedWithToolCa
 func TestPendingQuestionResolverErrorsWhenQuestionMissingFromTranscript(t *testing.T) {
 	resolver := newPendingQuestionResolver(staticTranscriptProvider{entries: map[string][]runtime.ChatEntry{
 		"session-missing": transcriptEntriesWithAsk("other-ask", "Other?"),
-	}})
+	}}, nil)
 
 	_, err := resolver.Question(context.Background(), "session-missing", "missing-ask")
 	if !errors.Is(err, ErrPendingQuestionNotFound) {
@@ -2069,6 +2168,12 @@ func isWorkflowRequestValidationField(err error, field string) bool {
 
 type staticTranscriptProvider struct {
 	entries map[string][]runtime.ChatEntry
+}
+
+type staticPendingPromptSource map[string][]PendingPromptSnapshot
+
+func (s staticPendingPromptSource) ListPendingPrompts(sessionID string) []PendingPromptSnapshot {
+	return append([]PendingPromptSnapshot(nil), s[strings.TrimSpace(sessionID)]...)
 }
 
 func (p staticTranscriptProvider) SessionTranscriptTailEntries(_ context.Context, sessionID string) ([]runtime.ChatEntry, error) {

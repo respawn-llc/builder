@@ -1,4 +1,5 @@
 import type {
+  ApprovalDecision,
   WorkflowGraphDraft,
   WorkflowGraphMetadata,
   WorkflowGraphSaveConfirmation,
@@ -89,7 +90,8 @@ export type TaskMoveInput = Readonly<{
   autoApprove?: boolean;
 }>;
 
-export type QuestionAnswerInput = Readonly<{
+export type OrdinaryQuestionAnswerInput = Readonly<{
+  kind: "ordinary";
   clientRequestID: string;
   taskID: string;
   runID: string;
@@ -97,3 +99,15 @@ export type QuestionAnswerInput = Readonly<{
   selectedOptionNumber: number;
   freeformAnswer: string;
 }>;
+
+export type ApprovalQuestionAnswerInput = Readonly<{
+  kind: "approval";
+  clientRequestID: string;
+  taskID: string;
+  runID: string;
+  askID: string;
+  decision: ApprovalDecision;
+  commentary: string;
+}>;
+
+export type QuestionAnswerInput = OrdinaryQuestionAnswerInput | ApprovalQuestionAnswerInput;

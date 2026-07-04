@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"core/server/attentionnotify"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/runtimeactivity"
@@ -1068,6 +1069,71 @@ func TestRuntimeRegistrySubmitPromptResponseRemovesPendingPromptBeforeWaiterRetu
 	}
 	if items := registry.ListPendingPrompts("session-1"); len(items) != 0 {
 		t.Fatalf("expected pending prompt removed immediately, got %+v", items)
+	}
+	select {
+	case err := <-responseDone:
+		if err != nil {
+			t.Fatalf("AwaitPromptResponse error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for prompt response")
+	}
+}
+
+func TestRuntimeRegistrySubmitPromptResponseRejectsInvalidApprovalBeforeResolving(t *testing.T) {
+	broker := attentionnotify.NewBroker()
+	registry := NewRuntimeRegistry().WithAttentionNotifications(broker)
+	engine := &runtime.Engine{}
+	registerReady(t, registry, "session-1", engine)
+	t.Cleanup(func() { closeRuntime(registry, "session-1", engine) })
+	sessionSub, err := registry.SubscribeSessionAttentionNotifications(context.Background(), serverapi.AttentionSessionNotificationSubscribeRequest{SessionID: "session-1"})
+	if err != nil {
+		t.Fatalf("SubscribeSessionAttentionNotifications: %v", err)
+	}
+	defer func() { _ = sessionSub.Close() }()
+
+	responseDone := make(chan error, 1)
+	go func() {
+		_, err := registry.AwaitPromptResponse(context.Background(), "session-1", askquestion.AskQuestionRequest{
+			ID:       "approval-1",
+			Question: "Approve?",
+			Approval: true,
+			ApprovalOptions: []askquestion.AskQuestionApprovalOption{
+				{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"},
+				{Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"},
+			},
+		})
+		responseDone <- err
+	}()
+	pendingEvent := nextRegistryAttentionEvent(t, sessionSub)
+	if pendingEvent.Type != clientui.AttentionNotificationEventPending {
+		t.Fatalf("pending event = %+v", pendingEvent)
+	}
+
+	err = registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{
+		RequestID: "approval-1",
+		Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionAllowSession},
+	}, nil)
+	if err == nil {
+		t.Fatal("expected invalid approval response to be rejected")
+	}
+	items := registry.ListPendingPrompts("session-1")
+	if len(items) != 1 || items[0].Request.ID != "approval-1" {
+		t.Fatalf("pending prompts after invalid response = %+v, want approval-1 still pending", items)
+	}
+	if event, err := sessionSub.Next(shortRegistryContext(t)); err == nil {
+		t.Fatalf("invalid approval response published resolved event: %+v", event)
+	}
+
+	if err := registry.SubmitPromptResponse("session-1", askquestion.AskQuestionResponse{
+		RequestID: "approval-1",
+		Approval:  &askquestion.AskQuestionApprovalPayload{Decision: askquestion.AskQuestionApprovalDecisionDeny, Commentary: "no"},
+	}, nil); err != nil {
+		t.Fatalf("valid SubmitPromptResponse: %v", err)
+	}
+	resolvedEvent := nextRegistryAttentionEvent(t, sessionSub)
+	if resolvedEvent.Type != clientui.AttentionNotificationEventResolved {
+		t.Fatalf("resolved event after valid response = %+v", resolvedEvent)
 	}
 	select {
 	case err := <-responseDone:

@@ -31,6 +31,10 @@ type QuestionAttentionRegistry interface {
 	MarkTaskQuestionSkipped(batch askquestion.AskQuestionBatchMetadata)
 }
 
+type ApprovalQuestionAttentionRegistry interface {
+	MarkTaskApprovalQuestionCleared(target clientui.AttentionNotificationTarget, askID string)
+}
+
 type TaskQuestionRequest struct {
 	SessionID  string
 	RunID      workflow.RunID
@@ -77,6 +81,30 @@ func HandleTaskQuestion(ctx context.Context, store QuestionStore, awaiter Questi
 	return resp, askErr
 }
 
+func HandleTaskApprovalQuestion(ctx context.Context, store QuestionStore, awaiter QuestionAwaiter, attention ApprovalQuestionAttentionRegistry, req TaskQuestionRequest) (askquestion.AskQuestionResponse, error) {
+	askReq := req.Question
+	if !askReq.Approval {
+		return askquestion.AskQuestionResponse{}, fmt.Errorf("workflow task approval question requires approval prompt: task_id=%s run_id=%s ask_id=%s", req.Input.Task.ID, req.RunID, askReq.ID)
+	}
+	target := TaskApprovalQuestionAttentionTarget(req.Input, req.SessionID, req.RunID, askReq.ID)
+	askReq.AttentionTarget = target
+	if err := store.SetRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID); err != nil {
+		return askquestion.AskQuestionResponse{}, err
+	}
+	resp, askErr := awaiter.AwaitPromptResponse(ctx, req.SessionID, askReq)
+	clearErr := store.ClearRunWaitingAsk(context.Background(), req.RunID, req.Generation, askReq.ID)
+	if clearErr != nil {
+		if askErr == nil {
+			return askquestion.AskQuestionResponse{}, clearErr
+		}
+		return resp, errors.Join(askErr, clearErr)
+	}
+	if attention != nil {
+		attention.MarkTaskApprovalQuestionCleared(*target, askReq.ID)
+	}
+	return resp, askErr
+}
+
 func PrepareSkippedTaskQuestionBatch(attention QuestionAttentionRegistry, input workflowstore.RunStartContext, sessionID string, runID workflow.RunID, batch askquestion.AskQuestionBatchMetadata, occurredAt time.Time) error {
 	if attention == nil {
 		return nil
@@ -119,6 +147,23 @@ func TaskQuestionAttentionTarget(input workflowstore.RunStartContext, sessionID 
 		Focus: &clientui.AttentionNotificationTaskDetailFocus{
 			Kind:   clientui.AttentionNotificationFocusQuestion,
 			AskIDs: append([]string(nil), batch.BatchPromptIDs...),
+		},
+	}
+}
+
+func TaskApprovalQuestionAttentionTarget(input workflowstore.RunStartContext, sessionID string, runID workflow.RunID, askID string) *clientui.AttentionNotificationTarget {
+	return &clientui.AttentionNotificationTarget{
+		Kind:        clientui.AttentionNotificationTargetWorkflowTask,
+		ProjectID:   strings.TrimSpace(input.Task.ProjectID),
+		WorkflowID:  strings.TrimSpace(string(input.Task.WorkflowID)),
+		TaskID:      strings.TrimSpace(string(input.Task.ID)),
+		TaskShortID: strings.TrimSpace(input.Task.ShortID),
+		TaskTitle:   strings.TrimSpace(input.Task.Title),
+		SessionID:   strings.TrimSpace(sessionID),
+		RunID:       strings.TrimSpace(string(runID)),
+		Focus: &clientui.AttentionNotificationTaskDetailFocus{
+			Kind:   clientui.AttentionNotificationFocusQuestion,
+			AskIDs: []string{strings.TrimSpace(askID)},
 		},
 	}
 }

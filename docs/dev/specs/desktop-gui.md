@@ -179,8 +179,9 @@
 - Top detail action opens or focuses next/highest-priority unresolved attention item.
 - If multiple unresolved attention items exist, all get inline controls.
 - Question UI preserves ask functionality with options, blank commentary/freeform field, recommended marker, click or arrows plus Enter, and standard Tab focus. Do not show source-origin label.
-- Approval UI exposes Approve only.
-- Approval UI shows stored approval snapshot: source node, transition label/id, target nodes, required provision fields/values, commentary, workflow version, stale warning.
+- Runtime approval prompts are surfaced as question attention in Home Inbox, notifications, and task detail. They use the real prompt text, show approval-specific choices, may preselect the primary approval choice, and do not show a `Neither` freeform-answer option. Deny is the negative approval choice and requires commentary.
+- Workflow transition approval UI exposes Approve only.
+- Workflow transition approval UI shows stored approval snapshot: source node, transition label/id, target nodes, required provision fields/values, commentary, workflow version, stale warning.
 - Cancel requires confirmation and no reason.
 - Interrupt acts immediately with no confirmation.
 - Standalone task detail opened from Home attention stays open after resolution; feed/status update and Home row is removed or resorted in background.

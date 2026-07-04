@@ -164,8 +164,14 @@ func (s *pendingPromptStore) Submit(resp askquestion.AskQuestionResponse, err er
 		s.mu.Unlock()
 		return fmt.Errorf("prompt %q cannot be answered through the shared boundary: %w", requestID, serverapi.ErrPromptUnsupported)
 	}
-	pending.closed = true
 	snapshot := pending.PendingPromptSnapshot
+	if err == nil {
+		if validateErr := askquestion.ValidateAskQuestionResponse(snapshot.Request, resp); validateErr != nil {
+			s.mu.Unlock()
+			return validateErr
+		}
+	}
+	pending.closed = true
 	ch := pending.response
 	delete(s.pending, requestID)
 	s.mu.Unlock()

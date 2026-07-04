@@ -18,6 +18,7 @@ import (
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
@@ -87,6 +88,8 @@ type taskQuestionAnswerMemoRequest struct {
 	Answer               string
 	SelectedOptionNumber int
 	FreeformAnswer       string
+	ApprovalDecision     clientui.ApprovalDecision
+	ApprovalCommentary   string
 }
 
 type Option func(*Service)
@@ -1093,6 +1096,10 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 		return errors.New("prompt responder is required")
 	}
 	memoReq := taskQuestionAnswerMemoRequest{TaskID: req.TaskID, RunID: req.RunID, AskID: req.AskID, ErrorMessage: req.ErrorMessage, Answer: req.Answer, SelectedOptionNumber: req.SelectedOptionNumber, FreeformAnswer: req.FreeformAnswer}
+	if req.Approval != nil {
+		memoReq.ApprovalDecision = req.Approval.Decision
+		memoReq.ApprovalCommentary = req.Approval.Commentary
+	}
 	_, err := s.questionMemo.Do(ctx, req.ClientRequestID, memoReq, sameTaskQuestionAnswerMemoRequest, func(ctx context.Context) (struct{}, error) {
 		run, err := s.store.ResolveTaskWaitingAsk(ctx, workflow.TaskID(req.TaskID), workflow.RunID(req.RunID), req.AskID)
 		if err != nil {
@@ -1102,8 +1109,20 @@ func (s *Service) AnswerWorkflowTaskQuestion(ctx context.Context, req serverapi.
 			if err := s.prompts.SubmitPromptResponse(run.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID}, errors.New(req.ErrorMessage)); err != nil {
 				return struct{}{}, err
 			}
-		} else if err := s.prompts.SubmitPromptResponse(run.SessionID, askquestion.AskQuestionResponse{RequestID: req.AskID, Answer: req.Answer, SelectedOptionNumber: req.SelectedOptionNumber, FreeformAnswer: req.FreeformAnswer}, nil); err != nil {
-			return struct{}{}, err
+		} else {
+			response := askquestion.AskQuestionResponse{RequestID: req.AskID, Answer: req.Answer, SelectedOptionNumber: req.SelectedOptionNumber, FreeformAnswer: req.FreeformAnswer}
+			if req.Approval != nil {
+				response = askquestion.AskQuestionResponse{
+					RequestID: req.AskID,
+					Approval: &askquestion.AskQuestionApprovalPayload{
+						Decision:   askquestion.AskQuestionApprovalDecision(req.Approval.Decision),
+						Commentary: req.Approval.Commentary,
+					},
+				}
+			}
+			if err := s.prompts.SubmitPromptResponse(run.SessionID, response, nil); err != nil {
+				return struct{}{}, err
+			}
 		}
 		if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
 			s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "question_answered", req.TaskID, string(run.ID), req.AskID)
@@ -1120,7 +1139,9 @@ func sameTaskQuestionAnswerMemoRequest(a taskQuestionAnswerMemoRequest, b taskQu
 		a.ErrorMessage == b.ErrorMessage &&
 		a.Answer == b.Answer &&
 		a.SelectedOptionNumber == b.SelectedOptionNumber &&
-		a.FreeformAnswer == b.FreeformAnswer
+		a.FreeformAnswer == b.FreeformAnswer &&
+		a.ApprovalDecision == b.ApprovalDecision &&
+		a.ApprovalCommentary == b.ApprovalCommentary
 }
 
 func (s *Service) AddWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentAddRequest) (serverapi.WorkflowTaskCommentAddResponse, error) {
