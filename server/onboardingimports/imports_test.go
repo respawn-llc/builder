@@ -274,6 +274,32 @@ func TestGeneratedDisabledSkillRemainsCandidateWithDisabledDefault(t *testing.T)
 	}
 }
 
+func TestDiscoverKeepsGeneratedSkillsWhenUserSkillRootFails(t *testing.T) {
+	configRoot := t.TempDir()
+	home := t.TempDir()
+	target := filepath.Join(configRoot, skillcatalog.SkillsDirName)
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir user skill root: %v", err)
+	}
+	if err := os.Chmod(target, 0); err != nil {
+		t.Fatalf("chmod user skill root: %v", err)
+	}
+	defer func() {
+		_ = os.Chmod(target, 0o755)
+	}()
+
+	result, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if !hasErrorScope(result.Errors, ErrorScopeWorkspace) && !hasErrorScope(result.Errors, ErrorScopeTarget) {
+		t.Fatalf("expected structured user skill root error, got %+v", result.Errors)
+	}
+	if !hasSourceKindItem(result.Skills.Items, SourceKindGenerated) {
+		t.Fatalf("expected generated skill facts despite user skill root failure, items=%+v errors=%+v", result.Skills.Items, result.Errors)
+	}
+}
+
 func TestDiscoverRecomputesFilesystemState(t *testing.T) {
 	configRoot := t.TempDir()
 	home := t.TempDir()
@@ -338,6 +364,15 @@ func hasProviderItem(items []Item, provider ProviderID) bool {
 func hasProviderError(errors []Error, provider ProviderID) bool {
 	for _, err := range errors {
 		if err.ProviderID != nil && *err.ProviderID == provider {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSourceKindItem(items []Item, sourceKind SourceKind) bool {
+	for _, item := range items {
+		if item.Ref.SourceKind == sourceKind {
 			return true
 		}
 	}

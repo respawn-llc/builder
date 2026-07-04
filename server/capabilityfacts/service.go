@@ -129,7 +129,7 @@ func modelFacts(providerCaps llm.ProviderCapabilities) (serverapi.ModelCapabilit
 func modelFact(contract llm.ModelCapabilityContract, providerCaps llm.ProviderCapabilities) (serverapi.ModelCapabilityFact, error) {
 	modelID := strings.TrimSpace(contract.Model)
 	if modelID == "" {
-		return serverapi.ModelCapabilityFact{}, errors.New("capability facts model catalog contains blank model id")
+		return serverapi.ModelCapabilityFact{}, errBlankModelCatalogEntry
 	}
 	verbosity := llm.VerbositySupportForModelAndProvider(modelID, providerCaps)
 	fact := serverapi.ModelCapabilityFact{

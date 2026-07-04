@@ -20,8 +20,6 @@ const (
 	SkillFileName = "SKILL.md"
 )
 
-var ErrReadSkillsDirectory = errors.New("read skills directory")
-
 type SourceKind string
 
 const (
@@ -158,6 +156,34 @@ func Discover(opts Options) (Result, error) {
 		return inspections[i].Path < inspections[j].Path
 	})
 	return Result{Roots: roots, Skills: loaded, Issues: issues, Inspections: inspections}, nil
+}
+
+func DiscoverGenerated(configRoot string, disabledSkills map[string]bool) ([]Inspection, error) {
+	roots, err := Roots("", configRoot)
+	if err != nil {
+		return nil, err
+	}
+	var generatedRoot *Root
+	for idx := range roots {
+		if roots[idx].Kind == SourceKindGenerated {
+			generatedRoot = &roots[idx]
+			break
+		}
+	}
+	if generatedRoot == nil {
+		return nil, nil
+	}
+	inspections, _, _, err := discoverEmbeddedGenerated(generatedRoot.Path)
+	if err != nil {
+		return nil, err
+	}
+	disabled := normalizedDisabledSkills(disabledSkills)
+	for idx := range inspections {
+		if disabled[normalizedSkillName(inspections[idx].Name)] {
+			inspections[idx].Disabled = true
+		}
+	}
+	return inspections, nil
 }
 
 func Roots(workspaceRoot, configRoot string) ([]Root, error) {

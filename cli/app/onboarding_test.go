@@ -129,13 +129,15 @@ func TestOnboardingImportErrorsDoNotHideValidServerChoices(t *testing.T) {
 	state := &onboardingFlowState{imports: onboardingImportDiscoveryFromFacts(facts)}
 
 	screen := buildSkillImportScreen(state)
-	foundSymlink := false
+	foundChoice := false
 	for _, option := range screen.Options {
-		if strings.Contains(option.Title, "Symlink") {
-			foundSymlink = true
+		for _, choice := range state.imports.skillChoices {
+			if option.ID == choice.OptionID && choice.Mode == onboardingImportModeSymlinkSource && choice.Count == 1 {
+				foundChoice = true
+			}
 		}
 	}
-	if !foundSymlink {
+	if !foundChoice {
 		t.Fatalf("expected valid choices to remain visible despite scoped import error, got %+v", screen.Options)
 	}
 }

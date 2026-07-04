@@ -149,8 +149,6 @@ type ModeRecommendation struct {
 	SourcePaths []string
 }
 
-var ErrInvalidChoice = errors.New("invalid onboarding import choice")
-
 func Providers() []Provider {
 	return []Provider{
 		{ID: ProviderClaudeCode, HomeEntry: ".claude", SkillSourceCandidates: []string{"skills"}, SupportsCommandImport: true},
@@ -350,12 +348,12 @@ func discoverDirectCommands(providerID ProviderID, root string) ([]Item, error) 
 }
 
 func generatedSkillItems(configRoot string, disabled map[string]bool) ([]Item, error) {
-	result, err := skillcatalog.Discover(skillcatalog.Options{ConfigRoot: configRoot, DisabledSkills: disabled, IncludeEmbeddedGenerated: true})
+	inspections, err := skillcatalog.DiscoverGenerated(configRoot, disabled)
 	if err != nil {
 		return nil, err
 	}
 	items := make([]Item, 0)
-	for _, skill := range result.Inspections {
+	for _, skill := range inspections {
 		if skill.SourceKind != skillcatalog.SourceKindGenerated || !skill.Loaded {
 			continue
 		}
