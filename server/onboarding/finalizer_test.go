@@ -98,7 +98,7 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 				model:      "custom-openai-model",
 				window:     123_456,
 				threshold:  117_283,
-				thinking:   "medium",
+				thinking:   "",
 				verbosity:  config.ModelVerbosityMedium,
 				ask:        &falseValue,
 				supervisor: "off",

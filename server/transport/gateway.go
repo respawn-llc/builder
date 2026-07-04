@@ -302,13 +302,13 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
+	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
+		return responseForError(req.ID, err)
+	}
 	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
 		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
 			return responseForError(req.ID, err)
 		}
-	}
-	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
-		return responseForError(req.ID, err)
 	}
 	handler, ok := gatewayUnaryHandlers[req.Method]
 	if !ok {

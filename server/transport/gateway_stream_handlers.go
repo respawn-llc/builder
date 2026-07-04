@@ -78,15 +78,15 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
 		return
 	}
+	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
+		return
+	}
 	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
 		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
 			_ = sendResponse(ctx, conn, responseForError(req.ID, err))
 			return
 		}
-	}
-	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
-		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
-		return
 	}
 	handler, ok := gatewaySubscriptionHandlers[req.Method]
 	if !ok {

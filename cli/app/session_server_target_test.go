@@ -600,7 +600,7 @@ func startRemoteMultiClientRuntimeFixture(t *testing.T, openAIBaseURL string) *r
 }
 
 func TestShouldBypassRemoteStartupForInteractiveOnboardingOnFirstRun(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
+	_, workspace := newRegisteredAppWorkspaceWithoutSettings(t)
 
 	cfg, err := startupconfig.ResolveSessionConfig(startupConfigRequest(Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}))
 	if err != nil {
@@ -629,7 +629,7 @@ func TestShouldBypassRemoteStartupForInteractiveOnboardingSkipsWhenConfigExists(
 }
 
 func TestStartSessionServerBypassesRemoteAndDaemonOnFirstInteractiveRun(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
+	_, workspace := newRegisteredAppWorkspaceWithoutSettings(t)
 
 	originalDial := dialConfiguredProjectViewRemote
 	originalLaunch := launchSessionServerDaemon
@@ -676,9 +676,12 @@ func TestStartSessionServerBypassesRemoteAndDaemonOnFirstInteractiveRun(t *testi
 }
 
 func TestStartSessionServerUnregisteredWorkspaceStartsRegistrationCapableServer(t *testing.T) {
-	newAppTestHome(t)
+	home := newAppTestHome(t)
 	workspace := t.TempDir()
 	configureAppTestServerPort(t)
+	if _, _, err := config.WriteDefaultSettingsFileAt(filepath.Join(home, config.ConfigDirName, "config.toml")); err != nil {
+		t.Fatalf("write test settings: %v", err)
+	}
 
 	server, err := startSessionServer(context.Background(), Options{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, readyMemoryAuthHandler(), false)
 	if err != nil {

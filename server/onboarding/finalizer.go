@@ -141,6 +141,9 @@ func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, 
 			return config.Settings{}, nil, err
 		}
 		settings.ThinkingLevel = value
+		if req.Thinking.Kind == serverapi.OnboardingThinkingDisabled {
+			preserved["thinking_level"] = true
+		}
 	}
 	if req.Verbosity != nil {
 		if !llm.SupportsVerbosityModel(effectiveModel) {

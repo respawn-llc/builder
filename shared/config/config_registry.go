@@ -103,7 +103,7 @@ func newSettingsRegistry() settingsRegistry {
 			"KENT_THINKING_LEVEL",
 			func(opts LoadOptions) (string, bool, error) { return trimmedCLIString(opts.ThinkingLevel) },
 			nil,
-			settingDocOptions{}),
+			settingDocOptions{allowEmptyString: true}),
 		newStringSetting("model_verbosity", defaultModelVerbosity,
 			func(state *settingsState, value ModelVerbosity) { state.Settings.ModelVerbosity = value },
 			func(state settingsState) ModelVerbosity { return state.Settings.ModelVerbosity },
