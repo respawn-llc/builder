@@ -13,18 +13,26 @@ import (
 	"core/shared/serverapi"
 )
 
-func mapSyncedWorktrees(items []syncedWorktree, target clientui.SessionExecutionTarget) []serverapi.WorktreeView {
+func mapSyncedWorktrees(items []syncedWorktree, target clientui.SessionExecutionTarget) ([]serverapi.WorktreeView, error) {
 	out := make([]serverapi.WorktreeView, 0, len(items))
 	for _, item := range items {
-		out = append(out, worktreeViewFromSynced(item, target))
+		view, err := worktreeViewFromSynced(item, target)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, view)
 	}
-	return out
+	return out, nil
 }
 
-func worktreeViewFromSynced(item syncedWorktree, target clientui.SessionExecutionTarget) serverapi.WorktreeView {
-	isCurrent := strings.TrimSpace(target.WorktreeID) == strings.TrimSpace(item.record.ID)
-	if strings.TrimSpace(target.WorktreeID) == "" && item.git.IsMain {
-		isCurrent = true
+func worktreeViewFromSynced(item syncedWorktree, target clientui.SessionExecutionTarget) (serverapi.WorktreeView, error) {
+	if err := validatePresentExecutionTargetWorktreeID(target); err != nil {
+		return serverapi.WorktreeView{}, err
+	}
+	isCurrent := item.git.IsMain && target.Worktree == nil
+	if target.Worktree != nil {
+		targetWorktreeID := strings.TrimSpace(target.Worktree.ID)
+		isCurrent = targetWorktreeID == strings.TrimSpace(item.record.ID)
 	}
 	return serverapi.WorktreeView{
 		WorktreeID:      item.record.ID,
@@ -42,7 +50,7 @@ func worktreeViewFromSynced(item syncedWorktree, target clientui.SessionExecutio
 		Managed:         item.record.Managed,
 		CreatedBranch:   item.record.CreatedBranch,
 		OriginSessionID: item.record.OriginSessionID,
-	}
+	}, nil
 }
 
 func findSyncedWorktreeByID(items []syncedWorktree, worktreeID string) (syncedWorktree, bool) {
@@ -74,15 +82,28 @@ func findMainWorktree(items []syncedWorktree) (syncedWorktree, bool) {
 	return syncedWorktree{}, false
 }
 
-func currentSyncedWorktree(items []syncedWorktree, target clientui.SessionExecutionTarget) *syncedWorktree {
-	trimmedID := strings.TrimSpace(target.WorktreeID)
-	if trimmedID == "" {
-		return nil
+func currentSyncedWorktree(items []syncedWorktree, target clientui.SessionExecutionTarget) (*syncedWorktree, error) {
+	if err := validatePresentExecutionTargetWorktreeID(target); err != nil {
+		return nil, err
 	}
+	if target.Worktree == nil {
+		return nil, nil
+	}
+	trimmedID := strings.TrimSpace(target.Worktree.ID)
 	for idx := range items {
 		if strings.TrimSpace(items[idx].record.ID) == trimmedID {
-			return &items[idx]
+			return &items[idx], nil
 		}
+	}
+	return nil, nil
+}
+
+func validatePresentExecutionTargetWorktreeID(target clientui.SessionExecutionTarget) error {
+	if target.Worktree == nil {
+		return nil
+	}
+	if strings.TrimSpace(target.Worktree.ID) == "" {
+		return errors.New("session execution target worktree id is required")
 	}
 	return nil
 }

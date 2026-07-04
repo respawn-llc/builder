@@ -1,0 +1,11 @@
+# Cargo is intentionally quiet by default in this repo to keep successful local
+# runs low-noise. Use `--config term.quiet=false` or `-v` when progress output
+# is needed.
+[term]
+quiet = true
+color = "auto"
+progress.when = "auto"
+
+[net]
+retry = 3
+git-fetch-with-cli = true

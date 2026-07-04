@@ -166,8 +166,7 @@ func worktreeListResponseForRoots(mainRoot string, featureRoot string) serverapi
 		}},
 	}
 	if strings.TrimSpace(featureRoot) != "" {
-		resp.Target.WorktreeID = "wt-feature"
-		resp.Target.WorktreeRoot = featureRoot
+		resp.Target.Worktree = &clientui.SessionExecutionWorktreeTarget{ID: "wt-feature", Root: featureRoot}
 		resp.Target.EffectiveWorkdir = featureRoot
 		resp.Worktrees[0].IsCurrent = false
 		resp.Worktrees = append(resp.Worktrees, serverapi.WorktreeView{
@@ -189,8 +188,7 @@ func testLinkedWorktreeListResponse() serverapi.WorktreeListResponse {
 		Target: clientui.SessionExecutionTarget{
 			WorkspaceID:      "workspace-1",
 			WorkspaceRoot:    "/repo",
-			WorktreeID:       "wt-feature",
-			WorktreeRoot:     "/wt/feature-a",
+			Worktree:         &clientui.SessionExecutionWorktreeTarget{ID: "wt-feature", Root: "/wt/feature-a"},
 			EffectiveWorkdir: "/wt/feature-a/pkg",
 		},
 		Worktrees: []serverapi.WorktreeView{

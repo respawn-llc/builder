@@ -895,8 +895,8 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertWorktreeRecord: %v", err)
 	}
-	if err := metadataStore.UpdateSessionExecutionTargetByID(ctx, parent.Meta().SessionID, binding.WorkspaceID, "worktree-review-lifecycle", "pkg"); err != nil {
-		t.Fatalf("UpdateSessionExecutionTargetByID parent: %v", err)
+	if err := metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdate{SessionID: parent.Meta().SessionID, Workspace: &metadata.SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID}, Worktree: &metadata.SessionExecutionTargetUpdateWorktree{ID: "worktree-review-lifecycle"}, CwdRelpath: "pkg"}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget parent: %v", err)
 	}
 
 	model := newProjectedStaticUIModel(
@@ -942,7 +942,7 @@ func TestReviewTeleportLifecyclePreservesParentWorktreeContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget child: %v", err)
 	}
-	if target.WorktreeID != "worktree-review-lifecycle" || target.CwdRelpath != "pkg" {
+	if target.Worktree == nil || target.Worktree.ID != "worktree-review-lifecycle" || target.CwdRelpath != "pkg" {
 		t.Fatalf("child target = %+v, want parent worktree target", target)
 	}
 	if target.EffectiveWorkdir != filepath.Join(canonicalWorktreeRoot, "pkg") {

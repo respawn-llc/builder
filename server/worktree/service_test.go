@@ -33,6 +33,20 @@ type serviceTestRuntime struct {
 	rebindHook            func(context.Context, string, string, string)
 }
 
+func sessionTargetWorktreeID(target clientui.SessionExecutionTarget) string {
+	if target.Worktree == nil {
+		return ""
+	}
+	return strings.TrimSpace(target.Worktree.ID)
+}
+
+func sessionTargetWorktreeRoot(target clientui.SessionExecutionTarget) string {
+	if target.Worktree == nil {
+		return ""
+	}
+	return strings.TrimSpace(target.Worktree.Root)
+}
+
 func (r *serviceTestRuntime) blockedRunCount(sessionID string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -230,8 +244,8 @@ func TestCreateWorktreeMarksProvenanceAndRunsSetupScriptWithProjectID(t *testing
 	if !resp.Worktree.Managed {
 		t.Fatal("expected worktree managed=true")
 	}
-	if resp.Target.WorktreeID != resp.Worktree.WorktreeID {
-		t.Fatalf("create target worktree id = %q, want %q", resp.Target.WorktreeID, resp.Worktree.WorktreeID)
+	if sessionTargetWorktreeID(resp.Target) != resp.Worktree.WorktreeID {
+		t.Fatalf("create target worktree id = %q, want %q", sessionTargetWorktreeID(resp.Target), resp.Worktree.WorktreeID)
 	}
 	if resp.Target.EffectiveWorkdir != resp.Worktree.CanonicalRoot {
 		t.Fatalf("create effective workdir = %q, want %q", resp.Target.EffectiveWorkdir, resp.Worktree.CanonicalRoot)
@@ -494,8 +508,8 @@ func TestSwitchWorktreeClampsCwdAndRecordsPendingReminder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SwitchWorktree: %v", err)
 	}
-	if resp.Target.WorktreeID != "" {
-		t.Fatalf("target worktree id = %q, want main workspace", resp.Target.WorktreeID)
+	if sessionTargetWorktreeID(resp.Target) != "" {
+		t.Fatalf("target worktree id = %q, want main workspace", sessionTargetWorktreeID(resp.Target))
 	}
 	if resp.Target.CwdRelpath != "." {
 		t.Fatalf("target cwd_relpath = %q, want .", resp.Target.CwdRelpath)
@@ -520,7 +534,7 @@ func TestSwitchWorktreeClampsCwdAndRecordsPendingReminder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if finalTarget.WorktreeID != "" || finalTarget.CwdRelpath != "." {
+	if sessionTargetWorktreeID(finalTarget) != "" || finalTarget.CwdRelpath != "." {
 		t.Fatalf("unexpected final target after switch: %+v", finalTarget)
 	}
 }
@@ -542,8 +556,8 @@ func TestListWorktreesRetargetsMissingCurrentWorktreeBeforePruning(t *testing.T)
 	if err != nil {
 		t.Fatalf("ListWorktrees: %v", err)
 	}
-	if resp.Target.WorktreeID != "" {
-		t.Fatalf("response target worktree id = %q, want main workspace", resp.Target.WorktreeID)
+	if sessionTargetWorktreeID(resp.Target) != "" {
+		t.Fatalf("response target worktree id = %q, want main workspace", sessionTargetWorktreeID(resp.Target))
 	}
 	if resp.Target.CwdRelpath != "." {
 		t.Fatalf("response target cwd_relpath = %q, want .", resp.Target.CwdRelpath)
@@ -560,11 +574,11 @@ func TestListWorktreesRetargetsMissingCurrentWorktreeBeforePruning(t *testing.T)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if resolved.WorktreeID != "" {
-		t.Fatalf("stored target worktree id = %q, want main workspace", resolved.WorktreeID)
+	if sessionTargetWorktreeID(resolved) != "" {
+		t.Fatalf("stored target worktree id = %q, want main workspace", sessionTargetWorktreeID(resolved))
 	}
-	if resolved.WorktreeRoot != "" {
-		t.Fatalf("stored target worktree root = %q, want empty", resolved.WorktreeRoot)
+	if sessionTargetWorktreeRoot(resolved) != "" {
+		t.Fatalf("stored target worktree root = %q, want empty", sessionTargetWorktreeRoot(resolved))
 	}
 	if resolved.CwdRelpath != "." {
 		t.Fatalf("stored target cwd_relpath = %q, want .", resolved.CwdRelpath)
@@ -576,7 +590,7 @@ func TestListWorktreesRetargetsMissingCurrentWorktreeBeforePruning(t *testing.T)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget other session: %v", err)
 	}
-	if otherTarget.WorktreeID != "" || otherTarget.EffectiveWorkdir != env.workspaceRoot {
+	if sessionTargetWorktreeID(otherTarget) != "" || otherTarget.EffectiveWorkdir != env.workspaceRoot {
 		t.Fatalf("expected other session retargeted to main workspace, got %+v", otherTarget)
 	}
 	if len(env.runtime.rebindCalls) != 1 {
@@ -621,11 +635,48 @@ func TestSwitchWorktreeRollsBackExecutionTargetWhenRebindFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if finalTarget.WorktreeID != "" || finalTarget.EffectiveWorkdir != env.workspaceRoot {
+	if sessionTargetWorktreeID(finalTarget) != "" || finalTarget.EffectiveWorkdir != env.workspaceRoot {
 		t.Fatalf("expected execution target rollback to main workspace, got %+v", finalTarget)
 	}
 	if notes := env.localNotes.snapshot(); len(notes) != 0 {
 		t.Fatalf("expected no local notes on failed switch, got %+v", notes)
+	}
+}
+
+func TestSwitchSessionTargetRejectsInvalidPreviousTargetBeforeMetadataMutation(t *testing.T) {
+	env := newServiceTestEnv(t)
+	invalidPrevious := clientui.SessionExecutionTarget{
+		WorkspaceID:      env.binding.WorkspaceID,
+		WorkspaceRoot:    env.workspaceRoot,
+		Worktree:         &clientui.SessionExecutionWorktreeTarget{},
+		CwdRelpath:       ".",
+		EffectiveWorkdir: env.workspaceRoot,
+	}
+	workspaceCtx := sessionWorkspaceContext{
+		sessionID:     env.session.Meta().SessionID,
+		workspaceID:   env.binding.WorkspaceID,
+		workspaceRoot: env.workspaceRoot,
+		target:        invalidPrevious,
+		projectID:     env.binding.ProjectID,
+	}
+	next := syncedWorktree{
+		record: metadata.WorktreeRecord{
+			ID:            "worktree-next",
+			WorkspaceID:   env.binding.WorkspaceID,
+			CanonicalRoot: filepath.Join(env.workspaceRoot, "next"),
+		},
+		git: GitWorktree{},
+	}
+
+	if _, err := env.service.switchSessionTarget(env.ctx, workspaceCtx, nil, next); err == nil {
+		t.Fatal("expected switchSessionTarget to reject previous target with present empty worktree id")
+	}
+	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if sessionTargetWorktreeID(target) != "" || target.EffectiveWorkdir != env.workspaceRoot {
+		t.Fatalf("execution target mutated despite invalid previous target: %+v", target)
 	}
 }
 
@@ -659,7 +710,7 @@ func TestSwitchWorktreeRollsBackExecutionTargetWhenRequestContextCancelsDuringRe
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if finalTarget.WorktreeID != "" || finalTarget.EffectiveWorkdir != env.workspaceRoot {
+	if sessionTargetWorktreeID(finalTarget) != "" || finalTarget.EffectiveWorkdir != env.workspaceRoot {
 		t.Fatalf("expected execution target rollback to main workspace, got %+v", finalTarget)
 	}
 	if got := env.runtime.rebindCalls[len(env.runtime.rebindCalls)-1].root; got != env.workspaceRoot {
@@ -710,7 +761,7 @@ func TestCreateWorktreeCleansUpCreatedStateWhenPostCreateSwitchFails(t *testing.
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if finalTarget.WorktreeID != "" || finalTarget.EffectiveWorkdir != env.workspaceRoot {
+	if sessionTargetWorktreeID(finalTarget) != "" || finalTarget.EffectiveWorkdir != env.workspaceRoot {
 		t.Fatalf("expected session target unchanged after failed create, got %+v", finalTarget)
 	}
 }
@@ -746,14 +797,14 @@ func TestDeleteWorktreeRetargetsActiveIdleSessionsTargetingIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget other session: %v", err)
 	}
-	if target.WorktreeID != "" || target.EffectiveWorkdir != env.workspaceRoot {
+	if sessionTargetWorktreeID(target) != "" || target.EffectiveWorkdir != env.workspaceRoot {
 		t.Fatalf("expected active idle session retargeted to main workspace, got %+v", target)
 	}
 	dormantTarget, err := env.store.ResolveSessionExecutionTarget(env.ctx, dormantSession.Meta().SessionID)
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget dormant session: %v", err)
 	}
-	if dormantTarget.WorktreeID != "" || dormantTarget.EffectiveWorkdir != env.workspaceRoot {
+	if sessionTargetWorktreeID(dormantTarget) != "" || dormantTarget.EffectiveWorkdir != env.workspaceRoot {
 		t.Fatalf("expected dormant stale session retargeted by worktree deletion cleanup, got %+v", dormantTarget)
 	}
 	foundRebind := false
@@ -787,7 +838,7 @@ func TestDeleteWorktreeRollsBackActiveIdleSessionRetargetsOnRuntimeSyncError(t *
 		if err != nil {
 			t.Fatalf("ResolveSessionExecutionTarget %s: %v", sess.Meta().SessionID, err)
 		}
-		if target.WorktreeID != created.WorktreeID || target.EffectiveWorkdir != created.CanonicalRoot {
+		if sessionTargetWorktreeID(target) != created.WorktreeID || target.EffectiveWorkdir != created.CanonicalRoot {
 			t.Fatalf("expected %s target rolled back to worktree, got %+v", sess.Meta().SessionID, target)
 		}
 	}

@@ -8,24 +8,28 @@ cd "$repo_root"
 
 usage() {
 	cat <<'USAGE'
-Usage: scripts/update-deps.sh [--dry-run] [--skip-go] [--skip-docs]
+Usage: scripts/update-deps.sh [--dry-run] [--skip-go] [--skip-docs] [--skip-rust]
 
 Updates repository dependencies for the currently supported package managers:
   - root Go module (`go.mod` / `go.sum`)
   - docs pnpm workspace (`docs/package.json` / `docs/pnpm-lock.yaml`)
+  - Rust Cargo workspaces (`Cargo.toml` / `Cargo.lock`)
 
-GitHub Actions version pins are intentionally excluded from this script.
+GitHub Actions version pins are intentionally excluded from this script. Run this
+script on the same 7-day dependency update cadence as the other ecosystems.
 
 Options:
   --dry-run    Print planned update commands without executing them.
   --skip-go    Skip Go module dependency updates.
   --skip-docs  Skip docs pnpm dependency updates.
+  --skip-rust  Skip Rust Cargo dependency updates.
 USAGE
 }
 
 dry_run="false"
 skip_go="false"
 skip_docs="false"
+skip_rust="false"
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -39,6 +43,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--skip-docs)
 		skip_docs="true"
+		shift
+		;;
+	--skip-rust)
+		skip_rust="true"
 		shift
 		;;
 	-h | --help)
@@ -104,8 +112,38 @@ update_docs_deps() {
 	updated_any="true"
 }
 
+update_rust_deps() {
+	if [[ "$skip_rust" == "true" ]]; then
+		return
+	fi
+
+	local manifests=(
+		"$repo_root/tui-rs/Cargo.toml"
+		"$repo_root/apps/desktop/src-tauri/Cargo.toml"
+	)
+	local manifest
+	local updated_rust="false"
+
+	for manifest in "${manifests[@]}"; do
+		if [[ ! -f "$manifest" ]]; then
+			continue
+		fi
+		if [[ ! -f "$(dirname "$manifest")/Cargo.lock" ]]; then
+			continue
+		fi
+		if [[ "$updated_rust" != "true" ]]; then
+			require_cmd cargo
+			echo "==> Updating Rust Cargo dependencies"
+			updated_rust="true"
+		fi
+		run_cmd cargo update --manifest-path "$manifest"
+		updated_any="true"
+	done
+}
+
 update_go_deps
 update_docs_deps
+update_rust_deps
 
 if [[ "$updated_any" != "true" ]]; then
 	echo "No supported dependency manifests found to update."

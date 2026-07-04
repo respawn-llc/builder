@@ -247,7 +247,11 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 		return EnsureTaskWorktreeResponse{}, sql.ErrNoRows
 	}
 	cleanup.active = false
-	return EnsureTaskWorktreeResponse{Worktree: worktreeViewFromSynced(created, clientui.SessionExecutionTarget{}), Created: true, CreatedBranch: createdBranch}, nil
+	worktreeView, err := worktreeViewFromSynced(created, clientui.SessionExecutionTarget{})
+	if err != nil {
+		return EnsureTaskWorktreeResponse{}, err
+	}
+	return EnsureTaskWorktreeResponse{Worktree: worktreeView, Created: true, CreatedBranch: createdBranch}, nil
 }
 
 func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktreeRequest) (DeleteTaskWorktreeResponse, error) {
@@ -470,7 +474,7 @@ func (s *Service) taskManagedWorktreeView(ctx context.Context, worktreeID string
 	if err != nil {
 		return serverapi.WorktreeView{}, err
 	}
-	return worktreeViewFromSynced(syncedWorktree{record: record, git: gitMetadata}, clientui.SessionExecutionTarget{}), nil
+	return worktreeViewFromSynced(syncedWorktree{record: record, git: gitMetadata}, clientui.SessionExecutionTarget{})
 }
 
 func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
@@ -490,7 +494,11 @@ func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListR
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
 	}
-	return serverapi.WorktreeListResponse{Target: workspaceCtx.target, Worktrees: mapSyncedWorktrees(synced, workspaceCtx.target)}, nil
+	views, err := mapSyncedWorktrees(synced, workspaceCtx.target)
+	if err != nil {
+		return serverapi.WorktreeListResponse{}, err
+	}
+	return serverapi.WorktreeListResponse{Target: workspaceCtx.target, Worktrees: views}, nil
 }
 
 func (s *Service) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
@@ -572,13 +580,19 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 	if err := s.metadata.UpsertWorktreeRecord(ctx, created.record); err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
-	previous := currentSyncedWorktree(synced, workspaceCtx.target)
+	previous, err := currentSyncedWorktree(synced, workspaceCtx.target)
+	if err != nil {
+		return serverapi.WorktreeCreateResponse{}, err
+	}
 	nextTarget, err := s.switchSessionTarget(ctx, workspaceCtx, previous, created)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
 	setupScheduled := s.scheduleSetupScript(workspaceCtx, created, strings.TrimSpace(created.git.BranchName), createdBranch)
-	createdView := worktreeViewFromSynced(created, nextTarget)
+	createdView, err := worktreeViewFromSynced(created, nextTarget)
+	if err != nil {
+		return serverapi.WorktreeCreateResponse{}, err
+	}
 	createdView.Managed = true
 	createdView.CreatedBranch = createdBranch
 	createdView.OriginSessionID = workspaceCtx.sessionID
@@ -658,12 +672,19 @@ func (s *Service) SwitchWorktree(ctx context.Context, req serverapi.WorktreeSwit
 	if !ok {
 		return serverapi.WorktreeSwitchResponse{}, serverapi.ErrWorktreeNotFound
 	}
-	previous := currentSyncedWorktree(synced, workspaceCtx.target)
+	previous, err := currentSyncedWorktree(synced, workspaceCtx.target)
+	if err != nil {
+		return serverapi.WorktreeSwitchResponse{}, err
+	}
 	nextTarget, err := s.switchSessionTarget(ctx, workspaceCtx, previous, targetWorktree)
 	if err != nil {
 		return serverapi.WorktreeSwitchResponse{}, err
 	}
-	return serverapi.WorktreeSwitchResponse{Target: nextTarget, Worktree: worktreeViewFromSynced(targetWorktree, nextTarget)}, nil
+	view, err := worktreeViewFromSynced(targetWorktree, nextTarget)
+	if err != nil {
+		return serverapi.WorktreeSwitchResponse{}, err
+	}
+	return serverapi.WorktreeSwitchResponse{Target: nextTarget, Worktree: view}, nil
 }
 
 func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResponse, error) {
@@ -691,7 +712,7 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		return serverapi.WorktreeDeleteResponse{}, err
 	}
 	defer releaseDeletionSessionLeases()
-	if workspaceCtx.target.WorktreeID == targetWorktree.record.ID {
+	if workspaceCtx.target.Worktree != nil && workspaceCtx.target.Worktree.ID == targetWorktree.record.ID {
 		mainWorktree, mainFound := findMainWorktree(synced)
 		if !mainFound {
 			return serverapi.WorktreeDeleteResponse{}, fmt.Errorf("main worktree not found for workspace %q", workspaceCtx.workspaceID)
@@ -739,7 +760,11 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 	if err != nil {
 		return serverapi.WorktreeDeleteResponse{}, err
 	}
-	return serverapi.WorktreeDeleteResponse{Target: finalTarget, Worktree: worktreeViewFromSynced(targetWorktree, finalTarget), BranchDeleted: branchDeleted, BranchCleanupMessage: branchCleanupMessage}, nil
+	view, err := worktreeViewFromSynced(targetWorktree, finalTarget)
+	if err != nil {
+		return serverapi.WorktreeDeleteResponse{}, err
+	}
+	return serverapi.WorktreeDeleteResponse{Target: finalTarget, Worktree: view, BranchDeleted: branchDeleted, BranchCleanupMessage: branchCleanupMessage}, nil
 }
 
 func (s *Service) beginMutation(ctx context.Context, sessionID string) (func(), sessionWorkspaceContext, error) {

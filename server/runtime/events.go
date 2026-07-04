@@ -100,6 +100,7 @@ type Event struct {
 	CacheWarning                 *transcript.CacheWarning
 	CacheWarningVisibility       transcript.EntryVisibility
 	LocalEntry                   *ChatEntry
+	LocalEntryProjected          bool
 	RunState                     *RunState
 	ContextUsage                 *ContextUsage
 	Background                   *BackgroundShellEvent

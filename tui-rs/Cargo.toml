@@ -1,0 +1,54 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/client-contracts",
+    "crates/rpc-client",
+    "crates/test-support",
+    "tools/manifest-check",
+]
+
+# Build-profile tuning to curb target/ bloat while preserving panic/backtrace
+# file:line info. Disabling split debuginfo avoids macOS loose-object
+# split-debug output: `unpacked` creates one `.o` per codegen unit/test variant
+# and can grow target/debug/deps into a million-file directory after repeated
+# harness runs.
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "off"
+
+[profile.test]
+debug = "line-tables-only"
+split-debuginfo = "off"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+rust-version = "1.95"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+client-contracts = { path = "crates/client-contracts", version = "0.0.0" }
+rpc-client = { path = "crates/rpc-client", version = "0.0.0" }
+test-support = { path = "crates/test-support", version = "0.0.0" }
+
+crossterm = "0.29.0"
+ratatui = { version = "0.30.1", default-features = false, features = ["crossterm_0_29"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+socket2 = "0.6.4"
+syn = { version = "2.0.111", features = ["full", "visit"] }
+tempfile = "3.23.0"
+toml = "0.9.8"
+tungstenite = { version = "0.29.0", default-features = false, features = ["handshake", "rustls-tls-native-roots"] }
+rustls = { version = "0.23.35", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-pki-types = "1.13.0"
+rustls-native-certs = "0.8.4"
+rcgen = "0.14.8"
+hickory-proto = "0.26.1"
+hickory-resolver = "0.26.1"
+tokio = { version = "1.52.3", default-features = false, features = ["net", "rt", "time"] }
+url = "2.5.8"
+walkdir = "2.5.0"

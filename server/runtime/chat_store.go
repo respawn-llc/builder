@@ -161,6 +161,7 @@ func (s *chatStore) replaceHistoryAtCommittedEntryStart(items []llm.ResponseItem
 	s.activeSegmentEntryStart = activeSegmentEntryStart
 	s.pruneAssistantStreamIDsBeforeLocked(activeSegmentEntryStart)
 	s.items = nil
+	s.messageCount = 0
 	s.pruneToolCompletionsToWorkingSetLocked()
 	s.providerTokenEstimateDirty = true
 }
@@ -677,10 +678,10 @@ func (s *chatStore) recentTailSnapshot(maxEntries int) TranscriptWindowSnapshot 
 			localIndex++
 		}
 	}
-	appendLocalEntries(0)
 	if s.compact != nil && s.compact.CutoffMessageCount == 0 {
 		scan.MarkCompactionBoundary()
 	}
+	appendLocalEntries(0)
 	walker := newResponseItemMessageWalker(func(msg llm.Message) {
 		scan.ApplyMessage(msg, 0)
 		processedMessages++
@@ -733,20 +734,16 @@ func (s *transcriptDeliveryFactScan) ApplyMessage(msg llm.Message) {
 	s.currentEntryIndex += transcriptCommittedEntryCountFromMessage(msg, s.toolCompletions, s.materializedToolCalls)
 }
 
-func (s *transcriptDeliveryFactScan) ApplyLegacyLocalEntry(entry ChatEntry) {
+func (s *transcriptDeliveryFactScan) ApplyLocalEntry(entry ChatEntry, projected bool) {
 	if s == nil {
 		return
 	}
-	s.rows = append(s.rows, legacyUntypedNoticeFactFromLocalEntry(entry))
-	s.currentEntryIndex++
-}
-
-func (s *transcriptDeliveryFactScan) ApplyProjectedEntry(entry ChatEntry) {
-	if s == nil {
-		return
-	}
-	if fact, ok := transcriptCommittedRowFactFromProjectedEntry(entry); ok {
-		s.rows = append(s.rows, fact)
+	if projected {
+		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry); ok {
+			s.rows = append(s.rows, fact)
+		}
+	} else {
+		s.rows = append(s.rows, localEntryNoticeFact(entry))
 	}
 	s.currentEntryIndex++
 }
@@ -788,11 +785,7 @@ func (s *chatStore) deliverySnapshot() transcriptDeliverySnapshot {
 			if localEntries[localIndex].MarksBoundary {
 				scan.MarkCompactionBoundary()
 			}
-			if localEntries[localIndex].Projected {
-				scan.ApplyProjectedEntry(localEntries[localIndex].Entry)
-			} else {
-				scan.ApplyLegacyLocalEntry(localEntries[localIndex].Entry)
-			}
+			scan.ApplyLocalEntry(localEntries[localIndex].Entry, localEntries[localIndex].Projected)
 			localIndex++
 		}
 	}
