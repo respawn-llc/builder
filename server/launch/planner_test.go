@@ -600,6 +600,7 @@ func TestApplyRunPromptOverridesAllowsSameAgentRoleForLockedSession(t *testing.T
 		"[subagents.worker]",
 		"model = \"gpt-5.4-mini\"",
 	)
+	loaded.Settings.ProviderOverride = "openai"
 	store := createTestSession(t, workspace)
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
@@ -634,6 +635,7 @@ func TestApplyRunPromptOverridesOptionAllowsAgentRoleChangeForLockedSession(t *t
 		"[subagents.worker]",
 		"model = \"gpt-5.4-mini\"",
 	)
+	loaded.Settings.ProviderOverride = "openai"
 	workerRole := loaded.Settings.Subagents["worker"]
 	workerRole.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolEdit: true}
 	workerRole.Sources = map[string]string{
@@ -684,6 +686,7 @@ func TestApplyRunPromptOverridesLockedModelDoesNotMarkModelSourceAsSubagent(t *t
 	loaded := loadLaunchConfig(t, workspace)
 	baseSettings := loaded.Settings
 	baseSettings.Model = "locked-model"
+	baseSettings.ProviderOverride = "openai"
 	workerSettings := cloneSettings(baseSettings)
 	workerSettings.Model = "gpt-5.4-mini"
 	workerSettings.ThinkingLevel = "high"

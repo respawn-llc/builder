@@ -465,18 +465,6 @@ func allowedCLIServerImports() map[string]map[string]string {
 		filepath.Join("cli", "app", "remote_auth_bootstrap.go"): {
 			"core/server/auth": "remote auth bootstrap constructs server auth grants at the startup boundary",
 		},
-		filepath.Join("cli", "app", "onboarding_flow.go"): {
-			"core/server/llm": "onboarding displays server-owned model catalog labels after deleting the app bridge package",
-		},
-		filepath.Join("cli", "app", "onboarding_render.go"): {
-			"core/server/llm": "onboarding displays server-owned model catalog labels after deleting the app bridge package",
-		},
-		filepath.Join("cli", "app", "onboarding_run.go"): {
-			"core/server/llm": "onboarding resolves server-owned model metadata after deleting the app bridge package",
-		},
-		filepath.Join("cli", "app", "onboarding_workflow.go"): {
-			"core/server/llm": "onboarding workflow renders server-owned model labels after deleting the app bridge package",
-		},
 		filepath.Join("cli", "app", "ui_layout_rendering_status.go"): {
 			"core/server/llm": "status line uses the server-owned model display label after deleting the app bridge package",
 		},
@@ -488,9 +476,6 @@ func allowedCLIServerImports() map[string]map[string]string {
 		},
 		filepath.Join("cli", "app", "internal", "status", "statuscollect_environment.go"): {
 			"core/server/runtime": "status collection reads runtime memory status at the CLI status boundary",
-		},
-		filepath.Join("cli", "app", "internal", "onboarding", "onboardingimport_skill_metadata.go"): {
-			"core/server/runtime": "onboarding import reads server skill metadata at the import boundary",
 		},
 		filepath.Join("cli", "app", "internal", "authui", "authflowadapter_flow.go"): {
 			"core/server/auth":        "auth adapter intentionally translates server auth types for app startup",
@@ -803,6 +788,123 @@ func TestCLIAppSplitFilesDoNotImportServerPackages(t *testing.T) {
 	}
 	if len(violations) > 0 {
 		t.Fatalf("cli app split-file server import boundary violations:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+func TestCLIOnboardingDoesNotOwnCapabilityFactDomains(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	violations := make([]string, 0)
+	onboardingRoot := filepath.Join(repoRoot, "cli", "app")
+	if err := filepath.WalkDir(onboardingRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if path != onboardingRoot {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		base := filepath.Base(path)
+		if !strings.HasPrefix(base, "onboarding") || !strings.HasSuffix(base, ".go") || strings.HasSuffix(base, "_test.go") {
+			return nil
+		}
+		fileSet := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fileSet, path, nil, parser.ImportsOnly)
+		if parseErr != nil {
+			return parseErr
+		}
+		relPath, relErr := filepath.Rel(repoRoot, path)
+		if relErr != nil {
+			relPath = path
+		}
+		for _, spec := range file.Imports {
+			importPath := strings.Trim(spec.Path.Value, "\"")
+			switch importPath {
+			case "core/server/llm", "core/server/onboardingimports", "core/server/skillcatalog":
+				violations = append(violations, relPath+": onboarding capability facts must come from shared client/serverapi, not "+importPath)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan cli onboarding imports: %v", err)
+	}
+
+	bannedInternalFuncs := map[string]string{
+		"Supported":                   "provider catalog",
+		"SkillSupported":              "provider catalog",
+		"CommandSupported":            "provider catalog",
+		"ByID":                        "provider catalog lookup",
+		"Order":                       "provider ranking",
+		"OrderList":                   "provider ranking",
+		"SortedProviderIDs":           "provider ranking",
+		"RecommendedSymlinkChoiceID":  "import recommendation",
+		"ProviderWithMostItems":       "import recommendation",
+		"Discover":                    "generated skill discovery",
+		"DiscoverProviderSkills":      "provider source discovery",
+		"DiscoverDirectSkills":        "provider source discovery",
+		"DiscoverProviderCommands":    "provider source discovery",
+		"DiscoverDirectCommands":      "provider source discovery",
+		"ProviderSkillSourceAtBase":   "provider source discovery",
+		"ProviderCommandSourceAtBase": "provider source discovery",
+		"ShouldSkipTarget":            "duplicate/skip detection",
+		"ShouldSkipCommandImport":     "duplicate/skip detection",
+		"Candidates":                  "skill enablement projection",
+		"AnnotateDuplicateSources":    "duplicate/conflict projection",
+		"ParseSkillMetadata":          "skill metadata discovery",
+		"ParseName":                   "generated skill discovery",
+		"SplitFrontmatter":            "generated skill discovery",
+	}
+	bannedInternalTypes := map[string]string{
+		"Provider":      "provider catalog",
+		"Item":          "import item domain",
+		"CommandItem":   "import item domain",
+		"SkillMetadata": "skill metadata discovery",
+	}
+	internalRoot := filepath.Join(repoRoot, "cli", "app", "internal", "onboarding")
+	if err := filepath.WalkDir(internalRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fileSet := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fileSet, path, nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			return parseErr
+		}
+		relPath, relErr := filepath.Rel(repoRoot, path)
+		if relErr != nil {
+			relPath = path
+		}
+		for _, decl := range file.Decls {
+			switch typedDecl := decl.(type) {
+			case *ast.FuncDecl:
+				if reason, banned := bannedInternalFuncs[typedDecl.Name.Name]; banned {
+					violations = append(violations, relPath+": internal onboarding must not own "+reason+" function "+typedDecl.Name.Name)
+				}
+			case *ast.GenDecl:
+				if typedDecl.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range typedDecl.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					if reason, banned := bannedInternalTypes[typeSpec.Name.Name]; banned {
+						violations = append(violations, relPath+": internal onboarding must not own "+reason+" type "+typeSpec.Name.Name)
+					}
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("scan internal onboarding domain symbols: %v", err)
+	}
+	if len(violations) > 0 {
+		t.Fatalf("cli onboarding capability-domain boundary violations:\n%s", strings.Join(violations, "\n"))
 	}
 }
 

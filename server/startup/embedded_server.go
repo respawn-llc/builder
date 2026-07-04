@@ -10,6 +10,7 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
 	"core/server/runtime"
+	"core/shared/client"
 	"core/shared/config"
 )
 
@@ -22,9 +23,10 @@ type EmbeddedAuthHandler interface {
 type EmbeddedOnboardingHandler func(ctx context.Context, req EmbeddedOnboardingRequest) (config.App, error)
 
 type EmbeddedOnboardingRequest struct {
-	Config       config.App
-	AuthManager  *auth.Manager
-	ReloadConfig func() (config.App, error)
+	Config                config.App
+	AuthManager           *auth.Manager
+	CapabilityFactsClient client.CapabilityFactsClient
+	ReloadConfig          func() (config.App, error)
 }
 
 type EmbeddedStartHooks struct {
@@ -101,9 +103,10 @@ func StartEmbeddedWithOptions(ctx context.Context, req serverbootstrap.Request, 
 			return onboardingReq.Config, nil
 		}
 		return hooks.Onboarding(ctx, EmbeddedOnboardingRequest{
-			Config:       onboardingReq.Config,
-			AuthManager:  onboardingReq.AuthManager,
-			ReloadConfig: onboardingReq.ReloadConfig,
+			Config:                onboardingReq.Config,
+			AuthManager:           onboardingReq.AuthManager,
+			CapabilityFactsClient: onboardingReq.CapabilityFactsClient,
+			ReloadConfig:          onboardingReq.ReloadConfig,
 		})
 	}
 	appCore, err := startCoreWithBootstrap(ctx, req, true, hooks.Auth, onboarding, opts)

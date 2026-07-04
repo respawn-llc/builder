@@ -302,6 +302,52 @@ func TestStartWrapsCoreWithSameClientAssembly(t *testing.T) {
 	}
 }
 
+func TestStartCoreOnboardingReceivesPreCoreCapabilityFactsClient(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	registerStartupWorkspace(t, workspace)
+
+	onboardingCalled := false
+	onboarding := OnboardingHandler(func(ctx context.Context, req OnboardingRequest) (config.App, error) {
+		onboardingCalled = true
+		if req.CapabilityFactsClient == nil {
+			t.Fatal("capability facts client was not threaded into onboarding")
+		}
+		if _, err := os.Stat(filepath.Join(home, config.ConfigDirName, ".generated")); !os.IsNotExist(err) {
+			t.Fatalf("expected generated tree to be unseeded before Core startup, got err=%v", err)
+		}
+		facts, err := req.CapabilityFactsClient.GetCapabilityFacts(ctx, serverapi.CapabilityFactsRequest{})
+		if err != nil {
+			t.Fatalf("GetCapabilityFacts: %v", err)
+		}
+		if !factsContainGeneratedSkillCandidate(facts) {
+			t.Fatalf("expected embedded generated skill candidate in pre-Core facts: %+v", facts.Imports.SkillEnablement)
+		}
+		return startupNoopOnboarding(ctx, req)
+	})
+
+	appCore, err := StartCore(context.Background(), Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, startupEnvAuthHandler{}, onboarding)
+	if err != nil {
+		t.Fatalf("StartCore: %v", err)
+	}
+	t.Cleanup(func() { _ = appCore.Close() })
+	if !onboardingCalled {
+		t.Fatal("expected onboarding to run")
+	}
+}
+
+func factsContainGeneratedSkillCandidate(facts serverapi.CapabilityFactsResponse) bool {
+	for _, projection := range facts.Imports.SkillEnablement {
+		for _, candidate := range projection.Candidates {
+			if candidate.Ref.SourceKind == "generated" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestHeadlessHandlersStartCoreWithoutCLIFrontendDependencies(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()

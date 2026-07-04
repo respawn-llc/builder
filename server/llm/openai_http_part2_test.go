@@ -147,6 +147,38 @@ func TestBuildPayload_IgnoresConfiguredModelVerbosityForUnsupportedModels(t *tes
 	}
 }
 
+func TestBuildPayload_AppliesConfiguredModelVerbosityForUnknownFirstPartyModels(t *testing.T) {
+	transport := NewHTTPTransport(staticAuth{})
+	transport.ModelVerbosity = "high"
+	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5-preview"}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	if err != nil {
+		t.Fatalf("build payload: %v", err)
+	}
+
+	jsonPayload := mustMarshalObject(t, payload)
+	text, ok := jsonPayload["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected text config in payload, got %#v", jsonPayload["text"])
+	}
+	if got := text["verbosity"]; got != "high" {
+		t.Fatalf("expected text.verbosity=high, got %#v", got)
+	}
+}
+
+func TestBuildPayload_IgnoresConfiguredModelVerbosityForUnknownNonFirstPartyProviders(t *testing.T) {
+	transport := NewHTTPTransport(staticAuth{})
+	transport.ModelVerbosity = "high"
+	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5-preview"}, openAIAuthMode{}, ProviderCapabilities{ProviderID: "openai-compatible", IsOpenAIFirstParty: false})
+	if err != nil {
+		t.Fatalf("build payload: %v", err)
+	}
+
+	jsonPayload := mustMarshalObject(t, payload)
+	if _, ok := jsonPayload["text"]; ok {
+		t.Fatalf("expected text config to be omitted for unknown non-first-party provider, got %#v", jsonPayload["text"])
+	}
+}
+
 func TestBuildPayload_MergesConfiguredModelVerbosityWithStructuredOutput(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "low"

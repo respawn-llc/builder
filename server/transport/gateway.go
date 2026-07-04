@@ -40,6 +40,7 @@ type Gateway struct {
 type GatewayDependencies interface {
 	GatewayServerStatusDependencies
 	GatewayAuthDependencies
+	GatewayCapabilityFactsDependencies
 	GatewayProjectDependencies
 	GatewaySessionDependencies
 	GatewayRuntimeDependencies
@@ -57,6 +58,10 @@ type GatewayAuthDependencies interface {
 	AuthBootstrapClient() client.AuthBootstrapClient
 	AuthStatusClient() client.AuthStatusClient
 	ServerAuthRequired() bool
+}
+
+type GatewayCapabilityFactsDependencies interface {
+	CapabilityFactsClient() client.CapabilityFactsClient
 }
 
 type GatewayProjectDependencies interface {
@@ -402,6 +407,9 @@ func protocolError(err error) (int, string) {
 	}
 	if errors.Is(err, serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous) {
 		return protocol.ErrCodeWorkflowTaskCompleteAmbiguous, message
+	}
+	if errors.Is(err, serverapi.ErrUnsupportedProvider) {
+		return protocol.ErrCodeUnsupportedProvider, message
 	}
 	if errors.Is(err, serverapi.ErrServerAuthRequired) || errors.Is(err, auth.ErrAuthNotConfigured) {
 		return protocol.ErrCodeAuthRequired, message

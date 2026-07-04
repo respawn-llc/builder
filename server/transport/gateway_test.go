@@ -82,6 +82,13 @@ func TestProtocolErrorMapsModelStreamStalled(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorMapsUnsupportedProvider(t *testing.T) {
+	code, _ := protocolError(serverapi.ErrUnsupportedProvider)
+	if code != protocol.ErrCodeUnsupportedProvider {
+		t.Fatalf("protocol error code = %d, want %d", code, protocol.ErrCodeUnsupportedProvider)
+	}
+}
+
 func TestProtocolErrorMapsContextCanceled(t *testing.T) {
 	code, message := protocolError(context.Canceled)
 	if code != protocol.ErrCodeRequestCanceled {
@@ -531,6 +538,7 @@ func TestGatewayPreAuthMethodPolicy(t *testing.T) {
 		requiresAuth bool
 	}{
 		{name: "handshake", method: protocol.MethodHandshake, requiresAuth: false},
+		{name: "capability facts", method: protocol.MethodCapabilityFactsGet, requiresAuth: false},
 		{name: "bootstrap status", method: protocol.MethodAuthGetBootstrapStatus, requiresAuth: false},
 		{name: "bootstrap complete", method: protocol.MethodAuthCompleteBootstrap, requiresAuth: false},
 		{name: "project list", method: protocol.MethodProjectList, requiresAuth: false},
@@ -551,6 +559,63 @@ func TestGatewayPreAuthMethodPolicy(t *testing.T) {
 				t.Fatalf("requiresServerAuth(%q) = %t, want %t", tt.method, got, tt.requiresAuth)
 			}
 		})
+	}
+}
+
+func TestGatewayCapabilityFactsAllowedBeforeAuthAndAttach(t *testing.T) {
+	appCore, server, _ := newGatewayTestServerWithAuth(t, false)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+
+	var facts serverapi.CapabilityFactsResponse
+	callGateway(t, conn, "facts-1", protocol.MethodCapabilityFactsGet, serverapi.CapabilityFactsRequest{}, &facts)
+	if facts.Defaults.PrimaryModelID == "" || facts.Providers.CurrentEffective == nil {
+		t.Fatalf("capability facts response missing defaults/provider: %+v", facts)
+	}
+
+	badWorkspace := filepath.Join(t.TempDir(), "missing")
+	callGateway(t, conn, "facts-2", protocol.MethodCapabilityFactsGet, serverapi.CapabilityFactsRequest{WorkspaceRoot: &badWorkspace}, &facts)
+	if len(facts.Imports.Errors) == 0 {
+		t.Fatalf("expected invalid workspace as import fact, got %+v", facts.Imports)
+	}
+}
+
+func TestGatewayCapabilityFactsRemoteClient(t *testing.T) {
+	appCore, server, _ := newGatewayTestServerWithAuth(t, false)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	remote, err := remoteclient.DialRemoteURL(context.Background(), "ws"+server.URL[len("http"):])
+	if err != nil {
+		t.Fatalf("DialRemoteURL: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	facts, err := remote.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	if err != nil {
+		t.Fatalf("GetCapabilityFacts: %v", err)
+	}
+	if facts.Defaults.PrimaryModelID == "" || facts.Providers.CurrentEffective == nil {
+		t.Fatalf("capability facts response missing defaults/provider: %+v", facts)
+	}
+}
+
+func TestGatewayCapabilityFactsMapsUnsupportedProvider(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+
+	respErr := callGatewayExpectError(t, conn, "facts-unsupported", protocol.MethodCapabilityFactsGet, serverapi.CapabilityFactsRequest{ExplicitLLMProviderIDs: []string{"unknown-provider"}})
+	if respErr.Code != protocol.ErrCodeUnsupportedProvider {
+		t.Fatalf("capability facts error = %+v, want unsupported-provider code", respErr)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
+	"core/server/capabilityfacts"
 	"core/server/metadata"
 
 	"core/server/processview"
@@ -30,6 +31,7 @@ import (
 
 type Bundles struct {
 	Auth        *AuthBundle
+	Capability  *CapabilityBundle
 	cleanup     []lifecycleResource
 	Persistence *PersistenceBundle
 	Processes   *ProcessBundle
@@ -48,6 +50,10 @@ type AuthBundle struct {
 	authStatus    client.AuthStatusClient
 	serverStatus  client.ServerStatusClient
 	authRequired  bool
+}
+
+type CapabilityBundle struct {
+	facts client.CapabilityFactsClient
 }
 
 type PersistenceBundle struct {
@@ -131,6 +137,9 @@ func (b *Bundles) withDefaults() *Bundles {
 	if withDefaults.Auth == nil {
 		withDefaults.Auth = &AuthBundle{}
 	}
+	if withDefaults.Capability == nil {
+		withDefaults.Capability = &CapabilityBundle{}
+	}
 	if withDefaults.Persistence == nil {
 		withDefaults.Persistence = &PersistenceBundle{}
 	}
@@ -176,6 +185,7 @@ type bundleCompositionInput struct {
 	cfg                     config.App
 	containerDir            string
 	authSupport             serverbootstrap.AuthSupport
+	capabilityFactsService  *capabilityfacts.Service
 	runtimeSupport          serverbootstrap.RuntimeSupport
 	rootLease               *RootLockLease
 	metadataStore           *metadata.Store
@@ -207,7 +217,8 @@ type bundleCompositionInput struct {
 
 func composeBundles(in bundleCompositionInput) *Bundles {
 	return &Bundles{
-		Auth: newAuthBundle(in.authSupport, in.authBootstrapService, in.authStatusService, in.serverStatusService, authservice.StartupAuthRequired(in.cfg.Settings)),
+		Auth:       newAuthBundle(in.authSupport, in.authBootstrapService, in.authStatusService, in.serverStatusService, authservice.StartupAuthRequired(in.cfg.Settings)),
+		Capability: newCapabilityBundle(in.capabilityFactsService),
 		cleanup: []lifecycleResource{
 			{name: "persistence root lock", close: in.rootLease.Close},
 			{name: "metadata store", close: in.metadataStore.Close},
@@ -251,6 +262,10 @@ func newAuthBundle(authSupport serverbootstrap.AuthSupport, bootstrapService *au
 		serverStatus:  client.NewLoopbackServerStatusClient(serverStatusService),
 		authRequired:  authRequired,
 	}
+}
+
+func newCapabilityBundle(factsService *capabilityfacts.Service) *CapabilityBundle {
+	return &CapabilityBundle{facts: client.NewLoopbackCapabilityFactsClient(factsService)}
 }
 
 func newPersistenceBundle(rootLease *RootLockLease, metadataStore *metadata.Store, sessionStoreRegistry *registry.SessionStoreRegistry) *PersistenceBundle {

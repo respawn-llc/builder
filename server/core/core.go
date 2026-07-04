@@ -418,6 +418,13 @@ func (s *Core) AuthStatusClient() client.AuthStatusClient {
 	return s.safeBundles().Auth.authStatus
 }
 
+func (s *Core) CapabilityFactsClient() client.CapabilityFactsClient {
+	if s == nil {
+		return nil
+	}
+	return s.safeBundles().Capability.facts
+}
+
 func (s *Core) AskViewClient() client.AskViewClient {
 	if s == nil {
 		return nil

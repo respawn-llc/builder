@@ -40,7 +40,7 @@ func TestInferProviderCapabilities_UnknownProviderFailsExplicitly(t *testing.T) 
 	}
 }
 
-func TestProviderCapabilitiesForSettings(t *testing.T) {
+func TestResolveRuntimeProviderCapabilities(t *testing.T) {
 	tests := []struct {
 		name     string
 		auth     auth.State
@@ -53,15 +53,27 @@ func TestProviderCapabilitiesForSettings(t *testing.T) {
 			wantID:   "openai-compatible",
 		},
 		{
-			name:     "explicit provider override wins",
+			name:     "anthropic provider override uses catalog variant",
 			settings: config.Settings{ProviderOverride: "anthropic"},
 			wantID:   "anthropic",
 		},
 		{
+			name:     "openai provider override still resolves remote compatible transport variant",
+			auth:     auth.State{Method: auth.Method{Type: auth.MethodAPIKey}},
+			settings: config.Settings{ProviderOverride: "openai", OpenAIBaseURL: "https://example.test/v1"},
+			wantID:   "openai-compatible",
+		},
+		{
 			name:     "oauth defaults to chatgpt codex",
 			auth:     auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
-			settings: config.Settings{},
+			settings: config.Settings{Model: "gpt-5.5"},
 			wantID:   "chatgpt-codex",
+		},
+		{
+			name:     "default provider is inferred from non openai model",
+			auth:     auth.State{Method: auth.Method{Type: auth.MethodNone}},
+			settings: config.Settings{Model: "claude-3-7-sonnet"},
+			wantID:   "anthropic",
 		},
 		{
 			name:     "api key with first party base url stays openai",
@@ -78,16 +90,22 @@ func TestProviderCapabilitiesForSettings(t *testing.T) {
 		{
 			name:     "none auth with no override falls back to openai",
 			auth:     auth.State{Method: auth.Method{Type: auth.MethodNone}},
-			settings: config.Settings{},
+			settings: config.Settings{Model: "gpt-5.5"},
+			wantID:   "openai",
+		},
+		{
+			name:     "custom model alias with no override falls back to openai",
+			auth:     auth.State{Method: auth.Method{Type: auth.MethodNone}},
+			settings: config.Settings{Model: "operator-alias"},
 			wantID:   "openai",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ProviderCapabilitiesForSettings(tt.auth, tt.settings)
+			got, err := ResolveRuntimeProviderCapabilities(tt.auth, tt.settings)
 			if err != nil {
-				t.Fatalf("ProviderCapabilitiesForSettings: %v", err)
+				t.Fatalf("ResolveRuntimeProviderCapabilities: %v", err)
 			}
 			want, err := InferProviderCapabilities(tt.wantID)
 			if err != nil {

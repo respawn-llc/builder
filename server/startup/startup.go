@@ -8,7 +8,9 @@ import (
 	"core/server/auth"
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
+	"core/server/capabilityfacts"
 	"core/server/core"
+	"core/shared/client"
 	"core/shared/config"
 )
 
@@ -48,9 +50,10 @@ type AuthState interface {
 type OnboardingHandler func(ctx context.Context, req OnboardingRequest) (config.App, error)
 
 type OnboardingRequest struct {
-	Config       config.App
-	AuthManager  *auth.Manager
-	ReloadConfig func() (config.App, error)
+	Config                config.App
+	AuthManager           *auth.Manager
+	CapabilityFactsClient client.CapabilityFactsClient
+	ReloadConfig          func() (config.App, error)
 }
 
 func Start(ctx context.Context, req Request, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*EmbeddedServer, error) {
@@ -100,9 +103,11 @@ func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Re
 		}
 	}
 	if onboardingHandler != nil {
+		factsService := capabilityfacts.NewService(capabilityfacts.Options{Config: cfg, AuthManager: authSupport.AuthManager})
 		cfg, err = onboardingHandler(ctx, OnboardingRequest{
-			Config:      cfg,
-			AuthManager: authSupport.AuthManager,
+			Config:                cfg,
+			AuthManager:           authSupport.AuthManager,
+			CapabilityFactsClient: client.NewLoopbackCapabilityFactsClient(factsService),
 			ReloadConfig: func() (config.App, error) {
 				refreshed, err := serverbootstrap.ResolveConfig(bootstrapReq)
 				if err != nil {

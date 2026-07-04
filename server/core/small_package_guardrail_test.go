@@ -104,6 +104,7 @@ var allowedSmallPackages = map[string]string{
 	"cli/app/internal/daemonlaunch":      "narrow process helper that intentionally isolates daemon process ownership and termination behavior from attachment policy",
 	"cli/app/internal/apphooks":          "internal-only app runner hook context for fixture dependency injection without exporting cli/app harness APIs",
 	"cli/app/internal/embeddedattach":    "narrow embedded-server attachment seam after absorbing embedded binding/startup helpers",
+	"cli/app/internal/onboarding":        "narrow onboarding readiness and temporary symlink execution seam; capability fact discovery/domain rules are server-owned",
 	"cli/app/internal/projectbinding":    "interactive project binding workflow seam after absorbing project picker behavior",
 	"cli/app/internal/ptyfixture":        "test-only compile proof that app-owned PTY fixture packages can import internal runner seams without exporting cli/app harness APIs",
 	"cli/app/internal/remoteattach":      "narrow remote attachment seam after absorbing remote binding",

@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"core/cli/app/internal/onboarding"
-	"core/server/llm"
 	"core/shared/config"
+	"core/shared/serverapi"
 	"core/shared/theme"
 	"core/shared/toolspec"
 )
@@ -56,20 +55,33 @@ const (
 	onboardingPendingActionRestart       onboardingPendingAction = "restart"
 )
 
-type onboardingImportMode = onboarding.Mode
+type onboardingImportProviderID string
 
 const (
-	onboardingImportModeNone          = onboarding.ModeNone
-	onboardingImportModeSymlinkSource = onboarding.ModeSymlinkSource
+	onboardingImportProviderClaudeCode onboardingImportProviderID = "claude_code"
+	onboardingImportProviderCodex      onboardingImportProviderID = "codex"
+	onboardingImportProviderAgents     onboardingImportProviderID = "agents"
 )
 
-type onboardingImportSelection = onboarding.Selection
+type onboardingImportMode string
+
+const (
+	onboardingImportModeNone          onboardingImportMode = "none"
+	onboardingImportModeSymlinkSource onboardingImportMode = "symlink_source"
+)
+
+type onboardingImportSelection struct {
+	Mode       onboardingImportMode
+	Provider   *onboardingImportProviderID
+	SourceRoot *string
+	ChoiceRef  serverapi.ImportChoiceRef
+}
 
 type onboardingFlowState struct {
 	settings                    config.Settings
 	baselineSettings            config.Settings
 	theme                       string
-	providerCapabilities        llm.ProviderCapabilities
+	facts                       serverapi.CapabilityFactsResponse
 	pendingAction               onboardingPendingAction
 	customThinking              bool
 	reviewerCustomModel         bool
@@ -94,13 +106,13 @@ func applyOnboardingModel(state *onboardingFlowState, value string) error {
 		return fmt.Errorf("model must not be empty")
 	}
 	state.settings.Model = model
-	llm.ApplyDerivedModelContextBudget(&state.settings, model, state.baselineSettings.ModelContextWindow, state.baselineSettings.ContextCompactionThresholdTokens)
-	if !llm.SupportsVerbosityModel(model) {
+	applyDerivedModelContextBudgetFromFacts(state, model)
+	if !modelSupportsVerbosity(state, model) {
 		state.settings.ModelVerbosity = config.ModelVerbosity("")
 	} else if strings.TrimSpace(string(state.settings.ModelVerbosity)) == "" {
 		state.settings.ModelVerbosity = config.ModelVerbosityMedium
 	}
-	if !llm.SupportsReasoningEffortModel(model) {
+	if !modelSupportsThinking(state, model) {
 		state.customThinking = false
 		state.settings.ThinkingLevel = ""
 	}
@@ -122,7 +134,7 @@ func syncReviewerDefaultsFromPrimary(state *onboardingFlowState) {
 }
 
 func syncReviewerThinkingToPrimary(state *onboardingFlowState) {
-	if !llm.SupportsReasoningEffortModel(state.settings.Reviewer.Model) {
+	if !modelSupportsThinking(state, state.settings.Reviewer.Model) {
 		state.reviewerCustomThinking = false
 		state.reviewerCustomThinkingInput = false
 		state.settings.Reviewer.ThinkingLevel = ""
@@ -151,13 +163,13 @@ func applyOnboardingThemeChoice(state *onboardingFlowState, choiceID string) {
 }
 
 func applyContextWindowChoice(state *onboardingFlowState, choiceID string) {
-	meta, ok := llm.LookupModelMetadata(state.settings.Model)
-	if !ok || meta.ContextWindowTokens <= 0 {
+	modelFact := modelFactFor(state, state.settings.Model)
+	if modelFact.ContextWindowTokens == nil || *modelFact.ContextWindowTokens <= 0 {
 		return
 	}
-	window := meta.ContextWindowTokens
-	if choiceID == "large" && meta.LargeContextWindowTokens > 0 {
-		window = meta.LargeContextWindowTokens
+	window := *modelFact.ContextWindowTokens
+	if choiceID == "large" && modelFact.LargeWindow != nil && modelFact.LargeWindow.Tokens > 0 {
+		window = modelFact.LargeWindow.Tokens
 	}
 	state.settings.ModelContextWindow = window
 	state.settings.ContextCompactionThresholdTokens = window * 95 / 100
@@ -174,9 +186,10 @@ func reviewSummaryLines(state *onboardingFlowState) []string {
 		"- Theme: `" + themeSummary + "`",
 		"- Model: `" + state.settings.Model + "`",
 	}
-	if meta, ok := llm.LookupModelMetadata(state.settings.Model); ok && meta.ContextWindowTokens > 0 {
-		if state.settings.ModelContextWindow == meta.ContextWindowTokens {
-			lines = append(lines, "- Context window: `default ("+formatTokenWindow(meta.ContextWindowTokens)+")`")
+	modelFact := modelFactFor(state, state.settings.Model)
+	if modelFact.ContextWindowTokens != nil && *modelFact.ContextWindowTokens > 0 {
+		if state.settings.ModelContextWindow == *modelFact.ContextWindowTokens {
+			lines = append(lines, "- Context window: `default ("+formatTokenWindow(*modelFact.ContextWindowTokens)+")`")
 		} else {
 			lines = append(lines, "- Context window: `"+formatTokenWindow(state.settings.ModelContextWindow)+"`")
 		}
@@ -224,6 +237,48 @@ func reviewSummaryLines(state *onboardingFlowState) []string {
 		lines = append(lines, "- Slash commands: `"+summary+"`")
 	}
 	return lines
+}
+
+func applyDerivedModelContextBudgetFromFacts(state *onboardingFlowState, model string) {
+	modelFact := modelFactFor(state, model)
+	if modelFact.ContextWindowTokens != nil && *modelFact.ContextWindowTokens > 0 {
+		state.settings.ModelContextWindow = *modelFact.ContextWindowTokens
+		state.settings.ContextCompactionThresholdTokens = *modelFact.ContextWindowTokens * 95 / 100
+		return
+	}
+	state.settings.ModelContextWindow = state.baselineSettings.ModelContextWindow
+	state.settings.ContextCompactionThresholdTokens = state.baselineSettings.ContextCompactionThresholdTokens
+}
+
+func modelFactFor(state *onboardingFlowState, model string) serverapi.ModelCapabilityFact {
+	trimmed := strings.TrimSpace(model)
+	for _, fact := range state.facts.Models.KnownModels {
+		if fact.ModelID != nil && strings.EqualFold(strings.TrimSpace(*fact.ModelID), trimmed) {
+			return fact
+		}
+	}
+	return state.facts.Models.UnknownFallback
+}
+
+func modelSupportsLargeContextWindow(state *onboardingFlowState, model string) bool {
+	fact := modelFactFor(state, model)
+	return fact.ContextWindowTokens != nil && *fact.ContextWindowTokens > 0 && fact.LargeWindow != nil && fact.LargeWindow.Tokens > 0
+}
+
+func modelSupportsThinking(state *onboardingFlowState, model string) bool {
+	return modelFactFor(state, model).SupportsThinking
+}
+
+func modelThinkingLevels(state *onboardingFlowState, model string) []string {
+	return append([]string(nil), modelFactFor(state, model).SupportedThinkingLevels...)
+}
+
+func modelSupportsVerbosity(state *onboardingFlowState, model string) bool {
+	return modelFactFor(state, model).Verbosity.Supported
+}
+
+func modelVerbosityLevels(state *onboardingFlowState, model string) []string {
+	return append([]string(nil), modelFactFor(state, model).Verbosity.Levels...)
 }
 
 func titleCaseASCII(value string) string {
@@ -325,7 +380,7 @@ func effectiveSkillSelection(state *onboardingFlowState) map[string]bool {
 	}
 	for _, item := range items {
 		if _, ok := selection[item.ID]; !ok {
-			selection[item.ID] = true
+			selection[item.ID] = item.DefaultEnabled
 		}
 	}
 	return selection

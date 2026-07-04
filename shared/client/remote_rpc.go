@@ -474,6 +474,8 @@ func protocolError(resp *protocol.ResponseError) error {
 		return errors.Join(serverapi.ErrServerAuthRequired, errors.New(message))
 	case protocol.ErrCodeModelStreamStalled:
 		return errors.Join(llmerrors.ErrModelStreamStalled, errors.New(message))
+	case protocol.ErrCodeUnsupportedProvider:
+		return errors.Join(serverapi.ErrUnsupportedProvider, errors.New(message))
 	case protocol.ErrCodeStreamGap:
 		return errors.Join(serverapi.ErrStreamGap, errors.New(message))
 	case protocol.ErrCodeWorkspaceNotRegistered:

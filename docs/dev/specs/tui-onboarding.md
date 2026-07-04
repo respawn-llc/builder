@@ -43,6 +43,25 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 - The wizard collects choices and submits them to the server, which executes imports and writes `config.toml`; the client never touches the filesystem. (RATIFIED 2026-07-03 — server-owns-storage rule applied to onboarding; requires server API surface for finalize.)
 - Model metadata (context windows, thinking/verbosity capability) and provider capabilities (native compaction, importable skills/commands) are server-supplied facts, not client-side lookups.
+- The server supplies onboarding facts as one wizard-run snapshot. Model facts include Kent's full built-in known model list with each model's metadata and capabilities.
+- The model facts snapshot also includes one fallback fact for non-empty unknown model names, so thin clients do not duplicate runtime fallback rules.
+- Provider capability facts cover both the current effective provider and explicit provider choices.
+- Unknown explicit provider choices fail the facts request with an unsupported-provider RPC error; the server never falls back to the current provider for an explicit unsupported provider.
+- Importable skill and slash-command facts include server-host source paths when needed for identity, display, and finalize round-tripping. Generated Kent skill candidates are reported together with external provider candidates for the enablement multi-select.
+- Onboarding facts are available before auth completion and before project or session attachment.
+- The model list is Kent's built-in known model list; the onboarding facts flow does not perform live provider model discovery.
+- A wizard-run facts snapshot includes import scanning. Import scanning failures are reported as facts that let setup continue without importing, not as silent skips or a hard failure of the whole facts request.
+- A model's larger context window is represented as an optional large-window fact. If it is absent, the context-window choice is hidden.
+- Clients may provide a workspace root for import discovery; the server validates it before using it. The workspace root is optional, and the server does not fall back to its process working directory or startup directory when the client omits it.
+- If a provided workspace root cannot be validated, the facts response includes a structured workspace-scope import error, still reports global/server-user import facts, and omits workspace-local duplicate and skip checks.
+- Import facts include both provider source roots and item source paths when available.
+- Provider facts use stable provider identifiers; clients own provider display names.
+- Server-supplied recommendations are structured facts such as identifiers, modes, counts, and paths; clients own display wording.
+- When no workspace root is provided, import facts still include global/server-user external provider imports and generated Kent skill candidates, but omit workspace-local duplicate and skip checks.
+- Capability facts are recomputed for each request; there is no server-side memoization or cache contract.
+- This facts surface does not execute imports, finalize setup choices, or write configuration.
+- Provider and model facts expose domain capability fields from the server's runtime source of truth, including provider runtime capability booleans and registered model capabilities such as thinking, verbosity, vision input, reasoning summary, and context-window support.
+- Model-catalog verbosity support overrides fallback derivation for known models. Unknown models derive verbosity from provider facts: first-party OpenAI providers support verbosity and other providers do not. The server never derives verbosity from model-name prefix matching.
 
 ## Known Drift (Go TUI, frozen)
 

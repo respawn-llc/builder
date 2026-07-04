@@ -12,6 +12,7 @@ import (
 	"core/server/attentionnotify"
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
+	"core/server/capabilityfacts"
 	"core/server/metadata"
 
 	"core/server/processview"
@@ -106,6 +107,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		_ = metadataStore.Close()
 		return nil, fmt.Errorf("projects bundle: metadata service: %w", err)
 	}
+	capabilityFactsService := capabilityfacts.NewService(capabilityfacts.Options{Config: cfg, AuthManager: authSupport.AuthManager})
 	askService := promptcontrol.NewAskViewService(runtimeRegistry)
 	approvalService := promptcontrol.NewApprovalViewService(runtimeRegistry)
 	processService := processview.NewProcessViewService(runtimeSupport.Background)
@@ -190,6 +192,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cfg:                     cfg,
 		containerDir:            containerDir,
 		authSupport:             authSupport,
+		capabilityFactsService:  capabilityFactsService,
 		runtimeSupport:          runtimeSupport,
 		rootLease:               rootLease,
 		metadataStore:           metadataStore,
