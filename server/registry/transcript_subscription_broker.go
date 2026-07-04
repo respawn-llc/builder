@@ -301,12 +301,6 @@ func (c *transcriptSubscriptionContract) trackToolTerminal(toolCallID string, op
 	if toolID == "" {
 		return errTranscriptContractViolation(op + " has empty tool_call_id")
 	}
-	if c.inFlightTools == nil {
-		return errTranscriptContractViolation(op + " has no matching in-flight tool " + toolID)
-	}
-	if _, exists := c.inFlightTools[toolID]; !exists {
-		return errTranscriptContractViolation(op + " has no matching in-flight tool " + toolID)
-	}
 	delete(c.inFlightTools, toolID)
 	return nil
 }

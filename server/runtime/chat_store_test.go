@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"reflect"
 
 	"core/prompts"
 	"core/server/llm"
@@ -1057,5 +1058,85 @@ func TestTranscriptFactsPreserveCacheWarningVisibility(t *testing.T) {
 	}
 	if facts[0].Notice.CacheWarning.Visibility != transcript.EntryVisibilityVerbose {
 		t.Fatalf("visibility = %q, want verbose", facts[0].Notice.CacheWarning.Visibility)
+	}
+}
+
+func TestTranscriptDeliverySnapshotIncludesPostCompactionLocalEntries(t *testing.T) {
+	s := newChatStore()
+	s.appendMessage(llm.Message{Role: llm.RoleUser, Content: "one"})
+	s.appendMessage(llm.Message{Role: llm.RoleAssistant, Content: "two", Phase: llm.MessagePhaseFinal})
+	s.appendMessage(llm.Message{Role: llm.RoleUser, Content: "three"})
+	activeSegmentStart := 3
+	s.replaceHistoryAtCommittedEntryStart(nil, &activeSegmentStart)
+
+	s.appendLocalEntryRecord(ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "warning", Text: "post-compaction warning"})
+	s.appendMessage(llm.Message{Role: llm.RoleUser, Content: "after compaction"})
+	s.appendLocalEntryRecord(ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "system", Text: "after message"})
+
+	snapshot := s.deliverySnapshot()
+	if len(snapshot.Rows) != 3 {
+		t.Fatalf("delivery rows = %+v, want warning notice, user row, system notice", snapshot.Rows)
+	}
+	if snapshot.Rows[0].Notice == nil || snapshot.Rows[0].Notice.DiagnosticDetail != "post-compaction warning" {
+		t.Fatalf("first row = %+v, want post-compaction warning notice", snapshot.Rows[0])
+	}
+	if snapshot.Rows[1].User == nil || snapshot.Rows[1].User.Text != "after compaction" {
+		t.Fatalf("second row = %+v, want user row", snapshot.Rows[1])
+	}
+	if snapshot.Rows[2].Notice == nil || snapshot.Rows[2].Notice.DiagnosticDetail != "after message" {
+		t.Fatalf("third row = %+v, want system notice after user row", snapshot.Rows[2])
+	}
+}
+
+func TestTranscriptDeliverySnapshotHydratesLocalEntriesAsLiveTypedFacts(t *testing.T) {
+	s := newChatStore()
+	entry := ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "reviewer_status", Text: "Supervisor ran: 1 suggestion.", CondensedText: "1 suggestion", NoticeID: "notice-7"}
+	s.appendLocalEntryRecord(entry)
+
+	snapshot := s.deliverySnapshot()
+	live := TranscriptCommittedRowFactsFromEvent(Event{Kind: EventLocalEntryAdded, LocalEntry: &entry})
+	if !reflect.DeepEqual(snapshot.Rows, live) {
+		t.Fatalf("hydrated rows = %+v, live facts = %+v, want identical typed facts", snapshot.Rows, live)
+	}
+	if len(snapshot.Rows) != 1 || snapshot.Rows[0].Notice == nil || snapshot.Rows[0].Notice.Reason != "runtime_diagnostic" {
+		t.Fatalf("hydrated rows = %+v, want typed runtime diagnostic notice", snapshot.Rows)
+	}
+}
+
+func TestTranscriptDeliverySnapshotFossilizesOnlyUntypedLocalEntries(t *testing.T) {
+	s := newChatStore()
+	s.appendLocalEntryRecord(ChatEntry{Text: "ancient untyped row"})
+
+	snapshot := s.deliverySnapshot()
+	if len(snapshot.Rows) != 1 || snapshot.Rows[0].Notice == nil {
+		t.Fatalf("delivery rows = %+v, want one notice", snapshot.Rows)
+	}
+	notice := snapshot.Rows[0].Notice
+	if notice.Reason != "legacy_untyped_notice" || notice.LegacyText == nil || *notice.LegacyText != "ancient untyped row" {
+		t.Fatalf("notice = %+v, want legacy fossil with text", notice)
+	}
+}
+
+func TestTranscriptDeliveryLiveAndHydrationAgreeOnProjectedCompactionEntries(t *testing.T) {
+	s := newChatStore()
+	activeSegmentStart := 7
+	items := llm.ItemsFromMessages([]llm.Message{
+		{Role: llm.RoleUser, Content: "user text"},
+		{Role: llm.RoleAssistant, Content: "assistant text", Phase: llm.MessagePhaseFinal, ToolCalls: []llm.ToolCall{{ID: "call-1", Name: "shell"}}},
+		{Role: llm.RoleTool, ToolCallID: "call-1", Name: "shell", Content: `{"output":"done"}`},
+	})
+	s.replaceHistoryAtCommittedEntryStart(items, &activeSegmentStart)
+
+	hydrated := s.deliverySnapshot().Rows
+	live := make([]TranscriptCommittedRowFact, 0, len(hydrated))
+	for _, entry := range transcriptEntriesFromHistoryReplacement(llm.PrepareOpenAIInputItems(items)) {
+		copyEntry := entry
+		live = append(live, TranscriptCommittedRowFactsFromEvent(Event{Kind: EventLocalEntryAdded, LocalEntry: &copyEntry})...)
+	}
+	if !reflect.DeepEqual(hydrated, live) {
+		t.Fatalf("hydrated rows = %+v, live facts = %+v, want identical projections", hydrated, live)
+	}
+	if len(hydrated) != 3 || hydrated[0].User == nil || hydrated[1].Assistant == nil || hydrated[2].Tool == nil {
+		t.Fatalf("rows = %+v, want typed user, assistant, tool rows", hydrated)
 	}
 }

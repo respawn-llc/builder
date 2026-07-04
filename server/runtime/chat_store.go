@@ -89,7 +89,6 @@ type localChatEntry struct {
 	Entry             ChatEntry
 	AfterMessageCount int
 	MarksBoundary     bool
-	Projected         bool
 }
 
 type assistantStreamingState struct {
@@ -161,6 +160,7 @@ func (s *chatStore) replaceHistoryAtCommittedEntryStart(items []llm.ResponseItem
 	s.activeSegmentEntryStart = activeSegmentEntryStart
 	s.pruneAssistantStreamIDsBeforeLocked(activeSegmentEntryStart)
 	s.items = nil
+	s.messageCount = 0
 	s.pruneToolCompletionsToWorkingSetLocked()
 	s.providerTokenEstimateDirty = true
 }
@@ -434,7 +434,6 @@ func (s *chatStore) appendProjectedEntryLocked(entry ChatEntry, marksBoundary bo
 		Entry:             entry,
 		AfterMessageCount: 0,
 		MarksBoundary:     marksBoundary,
-		Projected:         true,
 	})
 	s.transcriptEntryCount++
 }
@@ -733,19 +732,11 @@ func (s *transcriptDeliveryFactScan) ApplyMessage(msg llm.Message) {
 	s.currentEntryIndex += transcriptCommittedEntryCountFromMessage(msg, s.toolCompletions, s.materializedToolCalls)
 }
 
-func (s *transcriptDeliveryFactScan) ApplyLegacyLocalEntry(entry ChatEntry) {
+func (s *transcriptDeliveryFactScan) ApplyLocalEntry(entry ChatEntry) {
 	if s == nil {
 		return
 	}
-	s.rows = append(s.rows, legacyUntypedNoticeFactFromLocalEntry(entry))
-	s.currentEntryIndex++
-}
-
-func (s *transcriptDeliveryFactScan) ApplyProjectedEntry(entry ChatEntry) {
-	if s == nil {
-		return
-	}
-	if fact, ok := transcriptCommittedRowFactFromProjectedEntry(entry); ok {
+	if fact, ok := transcriptCommittedRowFactFromChatEntry(entry); ok {
 		s.rows = append(s.rows, fact)
 	}
 	s.currentEntryIndex++
@@ -788,11 +779,7 @@ func (s *chatStore) deliverySnapshot() transcriptDeliverySnapshot {
 			if localEntries[localIndex].MarksBoundary {
 				scan.MarkCompactionBoundary()
 			}
-			if localEntries[localIndex].Projected {
-				scan.ApplyProjectedEntry(localEntries[localIndex].Entry)
-			} else {
-				scan.ApplyLegacyLocalEntry(localEntries[localIndex].Entry)
-			}
+			scan.ApplyLocalEntry(localEntries[localIndex].Entry)
 			localIndex++
 		}
 	}
