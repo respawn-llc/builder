@@ -32,6 +32,16 @@ type AskQuestionRequest struct {
 	AttentionTarget        *clientui.AttentionNotificationTarget `json:"-"`
 }
 
+func (r AskQuestionRequest) IsTaskScopedApprovalQuestion() bool {
+	if !r.Approval || r.AttentionTarget == nil || r.AttentionTarget.Focus == nil {
+		return false
+	}
+	if r.AttentionTarget.Kind != clientui.AttentionNotificationTargetWorkflowTask {
+		return false
+	}
+	return r.AttentionTarget.Focus.Kind == clientui.AttentionNotificationFocusQuestion
+}
+
 // AskQuestionToolRequest is the model-facing ask_question payload. Keep this limited to
 // ordinary question flows; internal approval uses AskQuestionRequest instead.
 type AskQuestionToolRequest struct {
