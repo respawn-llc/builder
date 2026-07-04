@@ -198,8 +198,8 @@ func Discover(opts Options) (Result, error) {
 	}
 	result.Skills.Choices = append(result.Skills.Choices, choicesForItems(result.Skills.Items, ItemKindSkill)...)
 	result.Commands.Choices = append(result.Commands.Choices, choicesForItems(result.Commands.Items, ItemKindCommand)...)
-	skillTarget, skillTargetErrors := targetState([]string{filepath.Join(opts.ConfigRoot, skillcatalog.SkillsDirName)}, workspaceTargetPaths(result.Workspace.Root, skillcatalog.SkillsDirName))
-	commandTarget, commandTargetErrors := targetState([]string{filepath.Join(opts.ConfigRoot, "commands"), filepath.Join(opts.ConfigRoot, "prompts")}, append(workspaceTargetPaths(result.Workspace.Root, "commands"), workspaceTargetPaths(result.Workspace.Root, "prompts")...))
+	skillTarget, skillTargetErrors := targetState([]string{filepath.Join(opts.ConfigRoot, skillcatalog.SkillsDirName)})
+	commandTarget, commandTargetErrors := targetState([]string{filepath.Join(opts.ConfigRoot, "commands"), filepath.Join(opts.ConfigRoot, "prompts")})
 	result.Skills.Target = skillTarget
 	result.Commands.Target = commandTarget
 	result.Errors = append(result.Errors, skillTargetErrors...)
@@ -511,41 +511,20 @@ func existingSkillNames(configRoot string, workspaceRoot *string) (map[string]bo
 	return names, errs
 }
 
-func targetState(globalPaths []string, workspacePaths []string) (Target, []Error) {
+func targetState(globalPaths []string) (Target, []Error) {
 	conflicts := make([]Conflict, 0)
 	errs := make([]Error, 0)
-	for _, path := range append(append([]string(nil), globalPaths...), workspacePaths...) {
+	for _, path := range globalPaths {
 		hasContent, probeErr := targetHasExistingContent(path)
 		cleaned := filepath.Clean(path)
-		sourceKind := SourceKindGlobal
-		if isWorkspaceTarget(path, workspacePaths) {
-			sourceKind = SourceKindWorkspace
-		}
 		if probeErr != nil {
 			errs = append(errs, *probeErr)
 		}
 		if hasContent {
-			conflicts = append(conflicts, Conflict{SourceKind: sourceKind, Path: &cleaned})
+			conflicts = append(conflicts, Conflict{SourceKind: SourceKindGlobal, Path: &cleaned})
 		}
 	}
 	return Target{Skip: len(conflicts) > 0, Conflicts: conflicts}, errs
-}
-
-func workspaceTargetPaths(workspaceRoot *string, child string) []string {
-	if workspaceRoot == nil {
-		return nil
-	}
-	return []string{filepath.Join(*workspaceRoot, brand.ConfigDirName, child)}
-}
-
-func isWorkspaceTarget(path string, workspacePaths []string) bool {
-	cleaned := filepath.Clean(path)
-	for _, workspacePath := range workspacePaths {
-		if cleaned == filepath.Clean(workspacePath) {
-			return true
-		}
-	}
-	return false
 }
 
 func targetHasExistingContent(path string) (bool, *Error) {

@@ -133,6 +133,40 @@ func TestDiscoverReportsTargetSkipState(t *testing.T) {
 	}
 }
 
+func TestDiscoverWorkspaceLocalTargetsDoNotSkipGlobalImports(t *testing.T) {
+	configRoot := t.TempDir()
+	workspaceRoot := t.TempDir()
+	home := t.TempDir()
+	writeProviderSkill(t, home, ProviderCodex, filepath.Join("skills", "local"), "review", "Review", "Review code")
+	writeProviderCommand(t, home, ProviderCodex, "prompts", "review.md")
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, brand.ConfigDirName, "skills", "existing"), 0o755); err != nil {
+		t.Fatalf("mkdir workspace skill target: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, brand.ConfigDirName, "prompts"), 0o755); err != nil {
+		t.Fatalf("mkdir workspace prompt target: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, brand.ConfigDirName, "prompts", "review.md"), []byte("existing"), 0o644); err != nil {
+		t.Fatalf("write workspace prompt target: %v", err)
+	}
+
+	result, err := Discover(Options{ConfigRoot: configRoot, HomeDir: home, WorkspaceRoot: &workspaceRoot})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if result.Skills.Target.Skip || len(result.Skills.Target.Conflicts) != 0 {
+		t.Fatalf("workspace skill target blocked global import: %+v", result.Skills.Target)
+	}
+	if result.Commands.Target.Skip || len(result.Commands.Target.Conflicts) != 0 {
+		t.Fatalf("workspace command target blocked global import: %+v", result.Commands.Target)
+	}
+	if result.Recommendations.Skills == nil || result.Recommendations.Skills.ChoiceRef.Mode == ChoiceModeNone {
+		t.Fatalf("expected skill import recommendation, got %+v", result.Recommendations.Skills)
+	}
+	if result.Recommendations.Commands == nil || result.Recommendations.Commands.ChoiceRef.Mode == ChoiceModeNone {
+		t.Fatalf("expected command import recommendation, got %+v", result.Recommendations.Commands)
+	}
+}
+
 func TestDiscoverReportsTargetProbeErrors(t *testing.T) {
 	configRoot := t.TempDir()
 	home := t.TempDir()
@@ -268,6 +302,18 @@ func writeProviderSkill(t *testing.T, home string, provider ProviderID, sourceCa
 	contents := "---\nname: " + name + "\ndescription: " + description + "\n---\n"
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatalf("write provider skill: %v", err)
+	}
+}
+
+func writeProviderCommand(t *testing.T, home string, provider ProviderID, sourceCandidate, fileName string) {
+	t.Helper()
+	providerHome := map[ProviderID]string{ProviderClaudeCode: ".claude", ProviderCodex: ".codex", ProviderAgents: ".agents"}[provider]
+	dir := filepath.Join(home, providerHome, sourceCandidate)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir provider command: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte("command"), 0o644); err != nil {
+		t.Fatalf("write provider command: %v", err)
 	}
 }
 
