@@ -1131,7 +1131,7 @@ func TestTranscriptDeliveryLiveAndHydrationAgreeOnProjectedCompactionEntries(t *
 	live := make([]TranscriptCommittedRowFact, 0, len(hydrated))
 	for _, entry := range transcriptEntriesFromHistoryReplacement(llm.PrepareOpenAIInputItems(items)) {
 		copyEntry := entry
-		live = append(live, TranscriptCommittedRowFactsFromEvent(Event{Kind: EventLocalEntryAdded, LocalEntry: &copyEntry})...)
+		live = append(live, TranscriptCommittedRowFactsFromEvent(Event{Kind: EventLocalEntryAdded, LocalEntry: &copyEntry, LocalEntryProjected: true})...)
 	}
 	if !reflect.DeepEqual(hydrated, live) {
 		t.Fatalf("hydrated rows = %+v, live facts = %+v, want identical projections", hydrated, live)

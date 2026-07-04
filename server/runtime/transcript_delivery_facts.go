@@ -93,10 +93,13 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 		if evt.LocalEntry == nil {
 			return nil
 		}
-		if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry); ok {
-			return []TranscriptCommittedRowFact{fact}
+		if evt.LocalEntryProjected {
+			if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry); ok {
+				return []TranscriptCommittedRowFact{fact}
+			}
+			return nil
 		}
-		return nil
+		return []TranscriptCommittedRowFact{localEntryNoticeFact(*evt.LocalEntry)}
 	case EventInFlightClearFailed:
 		if strings.TrimSpace(evt.Error) == "" {
 			return nil
@@ -252,10 +255,6 @@ func localEntryNoticeFact(entry ChatEntry) TranscriptCommittedRowFact {
 	return runtimeNoticeFactFromLocalEntry(entry)
 }
 
-func localEntryRoleReservedForCommittedRows(role string) bool {
-	fact, ok := transcriptCommittedRowFactFromChatEntry(ChatEntry{Role: role, Text: "probe", ToolCallID: "probe"})
-	return !ok || fact.Kind != TranscriptCommittedRowFactNotice
-}
 
 func synthesizedTranscriptToolResultFact(call llm.ToolCall, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) (TranscriptCommittedRowFact, bool) {
 	callID := strings.TrimSpace(call.ID)

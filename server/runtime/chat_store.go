@@ -89,6 +89,7 @@ type localChatEntry struct {
 	Entry             ChatEntry
 	AfterMessageCount int
 	MarksBoundary     bool
+	Projected         bool
 }
 
 type assistantStreamingState struct {
@@ -434,6 +435,7 @@ func (s *chatStore) appendProjectedEntryLocked(entry ChatEntry, marksBoundary bo
 		Entry:             entry,
 		AfterMessageCount: 0,
 		MarksBoundary:     marksBoundary,
+		Projected:         true,
 	})
 	s.transcriptEntryCount++
 }
@@ -732,12 +734,16 @@ func (s *transcriptDeliveryFactScan) ApplyMessage(msg llm.Message) {
 	s.currentEntryIndex += transcriptCommittedEntryCountFromMessage(msg, s.toolCompletions, s.materializedToolCalls)
 }
 
-func (s *transcriptDeliveryFactScan) ApplyLocalEntry(entry ChatEntry) {
+func (s *transcriptDeliveryFactScan) ApplyLocalEntry(entry ChatEntry, projected bool) {
 	if s == nil {
 		return
 	}
-	if fact, ok := transcriptCommittedRowFactFromChatEntry(entry); ok {
-		s.rows = append(s.rows, fact)
+	if projected {
+		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry); ok {
+			s.rows = append(s.rows, fact)
+		}
+	} else {
+		s.rows = append(s.rows, localEntryNoticeFact(entry))
 	}
 	s.currentEntryIndex++
 }
@@ -779,7 +785,7 @@ func (s *chatStore) deliverySnapshot() transcriptDeliverySnapshot {
 			if localEntries[localIndex].MarksBoundary {
 				scan.MarkCompactionBoundary()
 			}
-			scan.ApplyLocalEntry(localEntries[localIndex].Entry)
+			scan.ApplyLocalEntry(localEntries[localIndex].Entry, localEntries[localIndex].Projected)
 			localIndex++
 		}
 	}
