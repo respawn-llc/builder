@@ -266,6 +266,7 @@ var routeContracts = []Route{
 	unary[serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](protocol.MethodWorktreeCreate, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
 	unary[serverapi.WorktreeSwitchRequest, serverapi.WorktreeSwitchResponse](protocol.MethodWorktreeSwitch, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
 	unary[serverapi.WorktreeDeleteRequest, serverapi.WorktreeDeleteResponse](protocol.MethodWorktreeDelete, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyWorktree),
+	subscription[serverapi.WorktreeSetupSubscribeRequest, protocol.WorktreeSetupEventParams](protocol.MethodWorktreeSetupSubscribe, AuthServer, ScopeNone, DependencyWorktree, protocol.MethodWorktreeSetupEvent, protocol.MethodWorktreeSetupComplete),
 	unary[serverapi.RuntimeSetSessionNameRequest, struct{}](protocol.MethodRuntimeSetSessionName, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	unary[serverapi.RuntimeSetThinkingLevelRequest, struct{}](protocol.MethodRuntimeSetThinkingLevel, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
 	unary[serverapi.RuntimeSetFastModeEnabledRequest, serverapi.RuntimeSetFastModeEnabledResponse](protocol.MethodRuntimeSetFastModeEnabled, AuthServer, ScopeSessionActiveProject, ConnectionControl, DependencyRuntimeControl),
@@ -327,6 +328,8 @@ var routeContracts = []Route{
 	notification[protocol.StreamCompleteParams](protocol.MethodWorkflowComplete),
 	notification[protocol.WorkflowProjectEventParams](protocol.MethodWorkflowProjectEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodWorkflowProjectComplete),
+	notification[protocol.WorktreeSetupEventParams](protocol.MethodWorktreeSetupEvent),
+	notification[protocol.StreamCompleteParams](protocol.MethodWorktreeSetupComplete),
 }
 
 func Routes() []Route {

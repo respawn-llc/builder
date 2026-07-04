@@ -469,7 +469,7 @@ func TestServiceTaskStartValidatesCurrentGraph(t *testing.T) {
 	if _, err := service.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{WorkflowID: workflowID, GroupID: "group-invalid", SourceNodeID: doneID, TransitionID: "invalid", DisplayName: "Invalid"}); err != nil {
 		t.Fatalf("AddWorkflowTransitionGroup invalid: %v", err)
 	}
-	if _, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{TaskID: task.Task.ID}); err == nil {
+	if _, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID}); err == nil {
 		t.Fatalf("expected current graph validation error, got %v", err)
 	} else {
 		var validationErr workflowstore.WorkflowValidationError
@@ -494,9 +494,15 @@ func TestServiceTaskStartEnsuresTaskWorktreeBeforeRun(t *testing.T) {
 		}
 	}}
 	service.taskWorktrees = ensurer
-	startWorkflowServiceTask(t, ctx, service, task.Task.ID)
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	if _, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: setupID, TaskID: task.Task.ID}); err != nil {
+		t.Fatalf("StartWorkflowTask: %v", err)
+	}
 	if ensurer.taskID != task.Task.ID {
 		t.Fatalf("ensured task id = %q, want %q", ensurer.taskID, task.Task.ID)
+	}
+	if ensurer.setupOperationID != setupID {
+		t.Fatalf("ensured setup operation id = %s, want %s", ensurer.setupOperationID.String(), setupID.String())
 	}
 }
 
@@ -511,7 +517,7 @@ func TestServiceAllowsInvalidDefaultBacklogButRejectsUnlinkedWorkflow(t *testing
 	}
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, unlinked.Workflow.ID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-	if _, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{TaskID: task.Task.ID}); !errors.Is(err, workflowstore.ErrWorkflowValidationFailed) {
+	if _, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID}); !errors.Is(err, workflowstore.ErrWorkflowValidationFailed) {
 		t.Fatalf("expected invalid default workflow start error, got %v", err)
 	}
 }
@@ -590,7 +596,7 @@ func TestServiceMoveTaskRejectsMissingEdgeExecutableOverride(t *testing.T) {
 	}
 	implementID := workflowServiceNodeIDByKey(t, def.Definition, "implement")
 
-	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: implementID, AllowMissingEdge: true, AutoApprove: true, OutputValues: map[string]string{"prior_summary": "replacement"}})
+	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID, TargetNodeID: implementID, AllowMissingEdge: true, AutoApprove: true, OutputValues: map[string]string{"prior_summary": "replacement"}})
 	if !errors.Is(err, workflowstore.ErrManualMoveExecutableTargetNeedsEdge) {
 		t.Fatalf("MoveWorkflowTask error = %v, want executable edge requirement", err)
 	}
@@ -643,12 +649,16 @@ func TestServiceMoveTaskAutoApproveEnsuresWorktreeBeforeApprovingScript(t *testi
 	}}
 	service.taskWorktrees = ensurer
 
-	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: scriptID, AllowMissingEdge: true, AutoApprove: true})
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: setupID, TaskID: task.Task.ID, TargetNodeID: scriptID, AllowMissingEdge: true, AutoApprove: true})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
 	}
 	if ensurer.taskID != task.Task.ID {
 		t.Fatalf("ensured task id = %q, want %q", ensurer.taskID, task.Task.ID)
+	}
+	if ensurer.setupOperationID != setupID {
+		t.Fatalf("ensured setup operation id = %s, want %s", ensurer.setupOperationID.String(), setupID.String())
 	}
 	if moved.State != "approved" || len(moved.PlacementIDs) != 1 || len(moved.RunIDs) != 1 || moved.ApprovalError != "" {
 		t.Fatalf("auto-approved script move = %+v, want approved placement and run", moved)
@@ -871,7 +881,7 @@ func TestServiceMoveTaskAutoApproveSurfacesCommittedPendingMoveWhenApprovalFails
 		return workflowstore.CompleteRunResult{}, errors.New("approval failed")
 	}
 
-	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true, AutoApprove: true})
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true, AutoApprove: true})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
 	}
@@ -890,6 +900,39 @@ func TestServiceMoveTaskAutoApproveSurfacesCommittedPendingMoveWhenApprovalFails
 	}
 }
 
+func TestServiceMoveTaskAutoApproveReturnsEnsureFailureAsForegroundError(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	planID := workflowServiceNodeIDByKey(t, def.Definition, "plan")
+	setupErr := errors.New("setup failed")
+	service.taskWorktrees = &recordingTaskWorktreeEnsurer{err: setupErr}
+
+	_, err = service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true, AutoApprove: true})
+	if !errors.Is(err, setupErr) {
+		t.Fatalf("MoveWorkflowTask err = %v, want setup failure", err)
+	}
+	runs, listErr := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if listErr != nil {
+		t.Fatalf("ListRuns: %v", listErr)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %+v, want no scheduled runs after setup failure", runs)
+	}
+	transitions, err := service.store.ListTransitions(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListTransitions: %v", err)
+	}
+	if len(transitions) != 1 || transitions[0].State != "pending_approval" {
+		t.Fatalf("committed transition = %+v, want pending move kept for inspection", transitions)
+	}
+}
+
 func TestServiceMoveTaskAutoApprovedReplacementResolvesOldPendingApproval(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
@@ -902,7 +945,7 @@ func TestServiceMoveTaskAutoApprovedReplacementResolvesOldPendingApproval(t *tes
 	planID := workflowServiceNodeIDByKey(t, def.Definition, "plan")
 	finalizer := &recordingWorkflowAttentionFinalizer{}
 	service.attentionFinalizer = finalizer
-	oldMove, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
+	oldMove, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
 	if err != nil {
 		t.Fatalf("initial MoveWorkflowTask: %v", err)
 	}
@@ -910,7 +953,7 @@ func TestServiceMoveTaskAutoApprovedReplacementResolvesOldPendingApproval(t *tes
 		t.Fatalf("initial move = %+v, want pending approval", oldMove)
 	}
 
-	replacement, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true, AutoApprove: true})
+	replacement, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true, AutoApprove: true})
 	if err != nil {
 		t.Fatalf("replacement MoveWorkflowTask: %v", err)
 	}
@@ -950,7 +993,7 @@ func TestServiceMoveTaskAutoApproveDoesNotBypassApprovalGatedEdge(t *testing.T) 
 		t.Fatalf("enable start edge approval: %v", err)
 	}
 
-	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: agentID, AllowMissingEdge: true, AutoApprove: true})
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID, TargetNodeID: agentID, AllowMissingEdge: true, AutoApprove: true})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
 	}
@@ -993,12 +1036,53 @@ func TestServiceApproveTerminalTransitionDoesNotEnsureWorktree(t *testing.T) {
 		t.Fatalf("unexpected worktree ensure for terminal approval of task %s", taskID)
 	}}
 
-	approved, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{TaskTransitionID: string(completed.TransitionID)})
+	approved, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskTransitionID: string(completed.TransitionID)})
 	if err != nil {
 		t.Fatalf("ApproveWorkflowTask: %v", err)
 	}
 	if approved.State != "approved" || len(approved.RunIDs) != 0 {
 		t.Fatalf("terminal approval = %+v, want approved without run", approved)
+	}
+}
+
+func TestServiceApproveExecutableTransitionForwardsSetupOperationID(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	var startEdge serverapi.WorkflowEdge
+	for _, edge := range def.Definition.Edges {
+		if edge.Key == "start" {
+			startEdge = edge
+			break
+		}
+	}
+	if startEdge.ID == "" {
+		t.Fatalf("missing start edge in %+v", def.Definition.Edges)
+	}
+	if _, err := service.store.UpdateEdge(ctx, workflowstore.EdgeRecord{ID: workflow.EdgeID(startEdge.ID), WorkflowID: workflow.WorkflowID(workflowID), TransitionGroupID: workflow.TransitionGroupID(startEdge.TransitionGroupID), Key: workflow.ModelKey(startEdge.Key), TargetNodeID: workflow.NodeID(startEdge.TargetNodeID), RequiresApproval: true, ContextMode: workflow.ContextMode(startEdge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(startEdge.ContextSource.Kind), NodeKey: workflow.ModelKey(startEdge.ContextSource.NodeKey)}), PromptTemplate: startEdge.PromptTemplate, Parameters: domainParameters(startEdge.Parameters)}); err != nil {
+		t.Fatalf("enable start edge approval: %v", err)
+	}
+	started, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	ensurer := &recordingTaskWorktreeEnsurer{}
+	service.taskWorktrees = ensurer
+	setupID := serverapi.NewWorktreeSetupOperationID()
+	approved, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupID, TaskTransitionID: string(started.TransitionID)})
+	if err != nil {
+		t.Fatalf("ApproveWorkflowTask: %v", err)
+	}
+	if approved.State != "applied" {
+		t.Fatalf("approval = %+v, want applied", approved)
+	}
+	if ensurer.taskID != task.Task.ID || ensurer.setupOperationID != setupID {
+		t.Fatalf("ensurer = task %q setup %s, want task %q setup %s", ensurer.taskID, ensurer.setupOperationID.String(), task.Task.ID, setupID.String())
 	}
 }
 
@@ -1085,7 +1169,7 @@ func TestServiceCancelTaskResolvesPendingApprovalAttention(t *testing.T) {
 	planID := workflowServiceNodeIDByKey(t, def.Definition, "plan")
 	finalizer := &recordingWorkflowAttentionFinalizer{}
 	service.attentionFinalizer = finalizer
-	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
 	}
@@ -1149,7 +1233,7 @@ func TestServiceDeleteTaskResolvesPendingApprovalAttention(t *testing.T) {
 	planID := workflowServiceNodeIDByKey(t, def.Definition, "plan")
 	finalizer := &recordingWorkflowAttentionFinalizer{}
 	service.attentionFinalizer = finalizer
-	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
 	}
@@ -1177,7 +1261,7 @@ func TestServiceDeleteWorkflowResolvesPendingApprovalAttention(t *testing.T) {
 	planID := workflowServiceNodeIDByKey(t, def.Definition, "plan")
 	finalizer := &recordingWorkflowAttentionFinalizer{}
 	service.attentionFinalizer = finalizer
-	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID, TargetNodeID: planID, AllowMissingEdge: true})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
 	}
@@ -1408,8 +1492,10 @@ func (c *recordingTaskRuntimeRunCancelRequester) RequestCancelRun(runID workflow
 }
 
 type recordingTaskWorktreeEnsurer struct {
-	taskID string
-	hook   func(string)
+	taskID           string
+	setupOperationID serverapi.WorktreeSetupOperationID
+	hook             func(string)
+	err              error
 }
 
 type recordingTaskWorktreeDeleter struct {
@@ -1441,12 +1527,13 @@ func (r *recordingPromptResponder) SubmitPromptResponse(sessionID string, resp a
 	return nil
 }
 
-func (e *recordingTaskWorktreeEnsurer) EnsureTaskWorktree(ctx context.Context, taskID string) error {
-	e.taskID = taskID
+func (e *recordingTaskWorktreeEnsurer) EnsureTaskWorktree(ctx context.Context, req TaskWorktreeEnsureRequest) error {
+	e.taskID = string(req.TaskID)
+	e.setupOperationID = req.SetupOperationID
 	if e.hook != nil {
-		e.hook(taskID)
+		e.hook(string(req.TaskID))
 	}
-	return nil
+	return e.err
 }
 
 func TestServiceDefaultWorkflowResolvesWithinProjectOnly(t *testing.T) {
@@ -2130,7 +2217,7 @@ func TestServiceWorkflowGraphSaveAllowsEmptyPromptButTaskStartRejects(t *testing
 	}
 
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-	if _, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{TaskID: task.Task.ID}); err == nil {
+	if _, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: task.Task.ID}); err == nil {
 		t.Fatalf("StartWorkflowTask empty prompt error = %v, want transition prompt required", err)
 	} else {
 		var validationErr workflowstore.WorkflowValidationError
@@ -2245,7 +2332,7 @@ func createDefaultWorkflowServiceTask(t *testing.T, ctx context.Context, service
 
 func startWorkflowServiceTask(t *testing.T, ctx context.Context, service *Service, taskID string) serverapi.WorkflowTaskStartResponse {
 	t.Helper()
-	started, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{TaskID: taskID})
+	started, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: taskID})
 	if err != nil {
 		t.Fatalf("StartWorkflowTask: %v", err)
 	}

@@ -2,11 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strings"
 
 	"core/cli/app/internal/runtimeattach"
 	"core/cli/app/internal/worktreeui"
 	tuiinput "core/cli/tui/input"
+	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -61,6 +64,12 @@ type uiWorktreeCreateDialogState struct {
 	submitPending bool
 	resolveToken  uint64
 	resolution    serverapi.WorktreeCreateTargetResolution
+	setupProgress *uiWorktreeSetupProgressState
+	setupEvent    *serverapi.WorktreeSetupEvent
+}
+
+type uiWorktreeSetupProgressState struct {
+	cancel context.CancelFunc
 }
 
 type uiWorktreeDeleteAction = worktreeui.DeleteAction
@@ -114,6 +123,13 @@ type worktreeCreateDoneMsg struct {
 	token uint64
 	resp  serverapi.WorktreeCreateResponse
 	err   error
+}
+
+type worktreeSetupEventMsg struct {
+	token  uint64
+	event  serverapi.WorktreeSetupEvent
+	err    error
+	events <-chan worktreeSetupEventMsg
 }
 
 type worktreeSwitchDoneMsg struct {
@@ -177,6 +193,9 @@ func (m *uiModel) closeWorktreeOverlay() {
 	if m.worktrees.switchPending {
 		return
 	}
+	if m.worktrees.create.setupProgress != nil && m.worktrees.create.setupProgress.cancel != nil {
+		m.worktrees.create.setupProgress.cancel()
+	}
 	m.worktrees = uiWorktreeOverlayState{}
 	m.restorePrimaryInputMode()
 }
@@ -220,6 +239,9 @@ func (m *uiModel) openDeleteWorktreeDialog(target serverapi.WorktreeView, prefer
 func (m *uiModel) closeWorktreeDialog() {
 	if m == nil {
 		return
+	}
+	if m.worktrees.create.setupProgress != nil && m.worktrees.create.setupProgress.cancel != nil {
+		m.worktrees.create.setupProgress.cancel()
 	}
 	m.worktrees.phase = uiWorktreeOverlayPhaseList
 	m.worktrees.create = uiWorktreeCreateDialogState{}
@@ -297,12 +319,70 @@ func (m *uiModel) worktreeCreateCmd(req serverapi.WorktreeCreateRequest) tea.Cmd
 	}
 	m.worktrees.mutationToken++
 	token := m.worktrees.mutationToken
+	if err := req.SetupOperationID.Validate(); err != nil {
+		req.SetupOperationID = serverapi.NewWorktreeSetupOperationID()
+	}
 	m.worktrees.create.errorText = ""
 	m.worktrees.create.submitting = true
+	m.worktrees.create.setupEvent = nil
+	setupCtx, cancel := context.WithCancel(context.Background())
+	m.worktrees.create.setupProgress = &uiWorktreeSetupProgressState{cancel: cancel}
+	setupReady := make(chan error, 1)
+	setupEvents := make(chan worktreeSetupEventMsg, 8)
+	subscribeCmd := func() tea.Msg {
+		go subscribeWorktreeSetupEvents(setupCtx, m.worktreeClient, token, req.SetupOperationID, setupReady, setupEvents)
+		return nil
+	}
 	service := m.worktreeMutationService()
-	return func() tea.Msg {
+	createCmd := func() tea.Msg {
+		if err := <-setupReady; err != nil {
+			return worktreeCreateDoneMsg{token: token, err: err}
+		}
 		resp, err := service.Create(req)
 		return worktreeCreateDoneMsg{token: token, resp: resp, err: err}
+	}
+	return tea.Batch(subscribeCmd, createCmd, worktreeSetupEventCmd(setupEvents))
+}
+
+func subscribeWorktreeSetupEvents(ctx context.Context, worktreeClient client.WorktreeClient, token uint64, setupOperationID serverapi.WorktreeSetupOperationID, ready chan<- error, events chan worktreeSetupEventMsg) {
+	defer close(events)
+	if worktreeClient == nil {
+		ready <- worktreeui.ErrClientUnavailable
+		return
+	}
+	subscription, err := worktreeClient.SubscribeWorktreeSetup(ctx, serverapi.WorktreeSetupSubscribeRequest{SetupOperationID: setupOperationID})
+	if err != nil {
+		ready <- err
+		return
+	}
+	defer func() { _ = subscription.Close() }()
+	ready <- nil
+	for {
+		event, err := subscription.Next(ctx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
+				return
+			}
+			events <- worktreeSetupEventMsg{token: token, err: err, events: events}
+			return
+		}
+		events <- worktreeSetupEventMsg{token: token, event: event, events: events}
+		if event.Phase == serverapi.WorktreeSetupPhaseCompleted || event.Phase == serverapi.WorktreeSetupPhaseFailed {
+			return
+		}
+	}
+}
+
+func worktreeSetupEventCmd(events <-chan worktreeSetupEventMsg) tea.Cmd {
+	if events == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		msg, ok := <-events
+		if !ok {
+			return nil
+		}
+		return msg
 	}
 }
 

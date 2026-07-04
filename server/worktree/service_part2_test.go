@@ -454,14 +454,41 @@ func waitForFileLines(t *testing.T, path string) []string {
 	return strings.Split(text, "\n")
 }
 
+func nextSetupTerminalEvent(t *testing.T, sub serverapi.WorktreeSetupSubscription) serverapi.WorktreeSetupEvent {
+	t.Helper()
+	deadline, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		evt, err := sub.Next(deadline)
+		if err != nil {
+			t.Fatalf("setup event: %v", err)
+		}
+		if evt.Phase == serverapi.WorktreeSetupPhaseCompleted || evt.Phase == serverapi.WorktreeSetupPhaseFailed {
+			return evt
+		}
+	}
+}
+
+func assertServiceTestSessionTarget(t *testing.T, env *serviceTestEnv, worktreeID string, workdir string) {
+	t.Helper()
+	target, err := env.store.ResolveSessionExecutionTarget(env.ctx, env.session.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if sessionTargetWorktreeID(target) != worktreeID || target.EffectiveWorkdir != workdir {
+		t.Fatalf("session target = %+v, want worktree_id=%q workdir=%q", target, worktreeID, workdir)
+	}
+}
+
 func mustCreateWorktree(t *testing.T, env *serviceTestEnv, branchName string) serverapi.WorktreeView {
 	t.Helper()
 	resp, err := env.service.CreateWorktree(env.ctx, serverapi.WorktreeCreateRequest{
-		ClientRequestID: "req-create-" + strings.ReplaceAll(branchName, "/", "-"),
-		SessionID:       env.session.Meta().SessionID,
-		BaseRef:         "HEAD",
-		CreateBranch:    true,
-		BranchName:      branchName,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ClientRequestID:  "req-create-" + strings.ReplaceAll(branchName, "/", "-"),
+		SessionID:        env.session.Meta().SessionID,
+		BaseRef:          "HEAD",
+		CreateBranch:     true,
+		BranchName:       branchName,
 	})
 	if err != nil {
 		t.Fatalf("CreateWorktree(%s): %v", branchName, err)

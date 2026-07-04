@@ -380,7 +380,7 @@ func TestTaskCompleteAgentCrossSessionSelectorUsesServiceOwnershipError(t *testi
 	if err != nil {
 		t.Fatalf("CreateWorkflowTask: %v", err)
 	}
-	started, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{TaskID: created.Task.ID})
+	started, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: created.Task.ID})
 	if err != nil {
 		t.Fatalf("StartWorkflowTask: %v", err)
 	}

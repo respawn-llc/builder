@@ -60,7 +60,10 @@ func (s Service) ResolveCreateTarget(target string) (serverapi.WorktreeCreateTar
 
 func (s Service) Create(req serverapi.WorktreeCreateRequest) (serverapi.WorktreeCreateResponse, error) {
 	clientRequestID := s.clientRequestID()
-	return runMutation(s, func(ctx context.Context) (serverapi.WorktreeCreateResponse, error) {
+	if err := req.SetupOperationID.Validate(); err != nil {
+		req.SetupOperationID = serverapi.NewWorktreeSetupOperationID()
+	}
+	return runCreateMutation(s, func(ctx context.Context) (serverapi.WorktreeCreateResponse, error) {
 		req.ClientRequestID = clientRequestID
 		req.SessionID = s.SessionID
 		return s.Client.CreateWorktree(ctx, req)
@@ -96,6 +99,18 @@ func runMutation[T any](s Service, call func(context.Context) (T, error)) (T, er
 	if err != nil {
 		return zero, err
 	}
+	defer cancel()
+	return retryControlCall(ctx, s.Runtime.RecoverRuntimeConnection, s.Runtime.AppendRecoveryWarning, func() (T, error) {
+		return call(ctx)
+	})
+}
+
+func runCreateMutation[T any](s Service, call func(context.Context) (T, error)) (T, error) {
+	var zero T
+	if s.Client == nil {
+		return zero, ErrClientUnavailable
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	return retryControlCall(ctx, s.Runtime.RecoverRuntimeConnection, s.Runtime.AppendRecoveryWarning, func() (T, error) {
 		return call(ctx)

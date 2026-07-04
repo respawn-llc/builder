@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -248,6 +249,28 @@ func TestTaskStartSessionPollingTimeoutReportsStartedTask(t *testing.T) {
 	}
 }
 
+func TestTaskStartSessionPollingDoesNotWaitForScriptRunSession(t *testing.T) {
+	remote := &taskSessionPollingRemote{task: serverapi.WorkflowTaskDetail{
+		Summary:  serverapi.WorkflowTaskSummary{ID: "task-1", ShortID: "BLD-1", Title: "Task"},
+		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
+		Placements: []serverapi.WorkflowPlacement{
+			{ID: "placement-1", TaskID: "task-1", NodeID: "node-script", NodeKey: "script"},
+		},
+		Runs: []serverapi.WorkflowRun{
+			{ID: "run-1", TaskID: "task-1", PlacementID: "placement-1", NodeID: "node-script", NodeKind: "script"},
+		},
+	}}
+	detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, "task-1", "run-1", time.Second, time.Millisecond)
+	if err != nil {
+		t.Fatalf("waitForWorkflowTaskRunSession: %v", err)
+	}
+	var stdout bytes.Buffer
+	writeTaskStartResult(&stdout, detail, serverapi.WorkflowTaskStartResponse{RunID: "run-1", PlacementID: "placement-1", TransitionID: "transition-start"})
+	if got, want := stdout.String(), "Started task BLD-1 using workflow \"Workflow\" (workflow-1).\nFirst node: script\n"; got != want {
+		t.Fatalf("start output = %q, want %q", got, want)
+	}
+}
+
 func TestTaskStartCommandPollsForSessionAndPrintsReadableOutput(t *testing.T) {
 	restorePolling := replaceTaskStartSessionPolling(t, 50*time.Millisecond, time.Millisecond)
 	defer restorePolling()
@@ -280,6 +303,109 @@ func TestTaskStartCommandPollsForSessionAndPrintsReadableOutput(t *testing.T) {
 	}
 	if remote.taskIDDetailCalls < 2 {
 		t.Fatalf("task detail calls = %d, want polling before session assignment", remote.taskIDDetailCalls)
+	}
+}
+
+func TestTaskLifecycleCommandsConsumeWorktreeSetupProgressWithoutMutationDeadline(t *testing.T) {
+	restorePolling := replaceTaskStartSessionPolling(t, 50*time.Millisecond, time.Millisecond)
+	defer restorePolling()
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "start", args: []string{"task", "start", "--project", "project-1", "BLD-1"}, want: "Started task BLD-1"},
+		{name: "approve", args: []string{"task", "approve", "transition-1"}, want: "Approved transition of BLD-1"},
+		{name: "move", args: []string{"task", "move", "--project", "project-1", "BLD-1", "node-1"}, want: "Moved task BLD-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.App{WorkspaceRoot: t.TempDir()}
+			remote := newSetupProgressLifecycleRemote()
+			restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+			defer restoreRemote()
+
+			stdout, stderr, code := runWorkflowRootCommand(tc.args...)
+			if code != 0 {
+				t.Fatalf("command exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			if !strings.HasPrefix(stdout, tc.want) {
+				t.Fatalf("stdout = %q, want lifecycle result prefix %q", stdout, tc.want)
+			}
+			assertSetupProgressOutputHasPaths(t, stderr, remote.scriptPath, remote.worktreeRoot)
+			if !remote.mutationCalled {
+				t.Fatal("workflow mutation was not called")
+			}
+		})
+	}
+}
+
+func TestTaskLifecycleCommandsWarnAndContinueWhenSetupProgressUnavailable(t *testing.T) {
+	restorePolling := replaceTaskStartSessionPolling(t, 50*time.Millisecond, time.Millisecond)
+	defer restorePolling()
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "start", args: []string{"task", "start", "--project", "project-1", "BLD-1"}, want: "Started task BLD-1"},
+		{name: "approve", args: []string{"task", "approve", "transition-1"}, want: "Approved transition of BLD-1"},
+		{name: "move", args: []string{"task", "move", "--project", "project-1", "BLD-1", "node-1"}, want: "Moved task BLD-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.App{WorkspaceRoot: t.TempDir()}
+			remote := newSetupProgressLifecycleRemote()
+			remote.subscribeErr = errors.New("setup subscription unavailable")
+			restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+			defer restoreRemote()
+
+			stdout, stderr, code := runWorkflowRootCommand(tc.args...)
+			if code != 0 {
+				t.Fatalf("command exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			if !strings.HasPrefix(stdout, tc.want) {
+				t.Fatalf("stdout = %q, want lifecycle result prefix %q", stdout, tc.want)
+			}
+			if !strings.Contains(stderr, "warning: worktree setup progress subscription unavailable") {
+				t.Fatalf("stderr = %q, want setup subscription warning", stderr)
+			}
+			if !remote.mutationCalled {
+				t.Fatal("workflow mutation was not called")
+			}
+		})
+	}
+}
+
+func TestTaskLifecycleCommandsWarnAndContinueWhenSetupProgressStreamFailsAfterMutation(t *testing.T) {
+	restorePolling := replaceTaskStartSessionPolling(t, 50*time.Millisecond, time.Millisecond)
+	defer restorePolling()
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "start", args: []string{"task", "start", "--project", "project-1", "BLD-1"}, want: "Started task BLD-1"},
+		{name: "approve", args: []string{"task", "approve", "transition-1"}, want: "Approved transition of BLD-1"},
+		{name: "move", args: []string{"task", "move", "--project", "project-1", "BLD-1", "node-1"}, want: "Moved task BLD-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.App{WorkspaceRoot: t.TempDir()}
+			remote := newSetupProgressLifecycleRemote()
+			remote.streamErrAfterEvent = errors.New("setup stream disconnected")
+			restoreRemote := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+			defer restoreRemote()
+
+			stdout, stderr, code := runWorkflowRootCommand(tc.args...)
+			if code != 0 {
+				t.Fatalf("command exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			if !strings.HasPrefix(stdout, tc.want) {
+				t.Fatalf("stdout = %q, want lifecycle result prefix %q", stdout, tc.want)
+			}
+			assertSetupProgressOutputHasPaths(t, stderr, remote.scriptPath, remote.worktreeRoot)
+			if !strings.Contains(stderr, "warning: worktree setup progress stream ended unexpectedly") {
+				t.Fatalf("stderr = %q, want setup stream warning", stderr)
+			}
+		})
 	}
 }
 
@@ -327,6 +453,13 @@ type taskStartPollingRemote struct {
 
 func (r *taskStartPollingRemote) Close() error { return nil }
 
+func (r *taskStartPollingRemote) SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	return noopWorktreeSetupSubscription{}, nil
+}
+
 func (r *taskStartPollingRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
 	return serverapi.ProjectResolvePathResponse{Binding: &serverapi.ProjectBinding{ProjectID: r.projectID}}, nil
 }
@@ -359,5 +492,204 @@ func (r *taskStartPollingRemote) taskDetail(sessionID string) serverapi.Workflow
 		Runs: []serverapi.WorkflowRun{
 			{ID: r.runID, TaskID: r.taskID, PlacementID: r.placementID, NodeID: r.nodeID, SessionID: sessionID},
 		},
+	}
+}
+
+type setupProgressLifecycleRemote struct {
+	client.WorkflowClient
+	projectID           string
+	taskID              string
+	shortID             string
+	workflowID          string
+	workflow            string
+	placementID         string
+	runID               string
+	sessionID           string
+	nodeID              string
+	nodeKey             string
+	transitionID        string
+	scriptPath          string
+	worktreeRoot        string
+	events              chan serverapi.WorktreeSetupEvent
+	eventConsumed       chan struct{}
+	subscribedID        serverapi.WorktreeSetupOperationID
+	mutationCalled      bool
+	subscribeErr        error
+	streamErrAfterEvent error
+}
+
+func newSetupProgressLifecycleRemote() *setupProgressLifecycleRemote {
+	return &setupProgressLifecycleRemote{
+		projectID:     "project-1",
+		taskID:        "task-1",
+		shortID:       "BLD-1",
+		workflowID:    "workflow-1",
+		workflow:      "Workflow",
+		placementID:   "placement-1",
+		runID:         "run-1",
+		sessionID:     "session-1",
+		nodeID:        "node-1",
+		nodeKey:       "implement",
+		transitionID:  "transition-1",
+		scriptPath:    "/tmp/kent-setup.sh",
+		worktreeRoot:  "/tmp/kent-worktree",
+		events:        make(chan serverapi.WorktreeSetupEvent, 1),
+		eventConsumed: make(chan struct{}, 1),
+	}
+}
+
+func (r *setupProgressLifecycleRemote) Close() error { return nil }
+
+func (r *setupProgressLifecycleRemote) SubscribeWorktreeSetup(_ context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	if r.subscribeErr != nil {
+		return nil, r.subscribeErr
+	}
+	r.subscribedID = req.SetupOperationID
+	return &setupProgressSubscription{events: r.events, consumed: r.eventConsumed, errAfterEvent: r.streamErrAfterEvent}, nil
+}
+
+func (r *setupProgressLifecycleRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
+	return serverapi.ProjectResolvePathResponse{Binding: &serverapi.ProjectBinding{ProjectID: r.projectID}}, nil
+}
+
+func (r *setupProgressLifecycleRemote) GetWorkflowTask(_ context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
+	if req.ProjectID == r.projectID && req.ShortID == r.shortID {
+		return serverapi.WorkflowTaskGetResponse{Task: r.taskDetail("")}, nil
+	}
+	if req.TaskID == r.taskID {
+		return serverapi.WorkflowTaskGetResponse{Task: r.taskDetail(r.sessionID)}, nil
+	}
+	return serverapi.WorkflowTaskGetResponse{}, sql.ErrNoRows
+}
+
+func (r *setupProgressLifecycleRemote) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
+	if err := r.validateMutationContextAndSetupID(ctx, req.SetupOperationID); err != nil {
+		return serverapi.WorkflowTaskStartResponse{}, err
+	}
+	return serverapi.WorkflowTaskStartResponse{TransitionID: r.transitionID, PlacementID: r.placementID, RunID: r.runID}, nil
+}
+
+func (r *setupProgressLifecycleRemote) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
+	if err := r.validateMutationContextAndSetupID(ctx, req.SetupOperationID); err != nil {
+		return serverapi.WorkflowTaskApproveResponse{}, err
+	}
+	return serverapi.WorkflowTaskApproveResponse{TaskID: r.taskID, TransitionID: r.transitionID, RunIDs: []string{r.runID}}, nil
+}
+
+func (r *setupProgressLifecycleRemote) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
+	if err := r.validateMutationContextAndSetupID(ctx, req.SetupOperationID); err != nil {
+		return serverapi.WorkflowTaskMoveResponse{}, err
+	}
+	return serverapi.WorkflowTaskMoveResponse{TransitionID: r.transitionID, RunIDs: []string{r.runID}}, nil
+}
+
+func (r *setupProgressLifecycleRemote) validateMutationContextAndSetupID(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) error {
+	r.mutationCalled = true
+	if _, ok := ctx.Deadline(); ok {
+		return errors.New("workflow lifecycle mutation context has a deadline")
+	}
+	if err := setupOperationID.Validate(); err != nil {
+		return err
+	}
+	if r.subscribedID.Validate() != nil {
+		return nil
+	}
+	if setupOperationID != r.subscribedID {
+		return errors.New("workflow lifecycle mutation used a different setup operation id than the subscription")
+	}
+	r.events <- serverapi.WorktreeSetupEvent{
+		SetupOperationID:    setupOperationID,
+		SourceWorkspaceRoot: "/tmp/source",
+		WorktreeRoot:        r.worktreeRoot,
+		ScriptPath:          r.scriptPath,
+		Phase:               serverapi.WorktreeSetupPhaseStarted,
+	}
+	select {
+	case <-r.eventConsumed:
+		return nil
+	case <-time.After(3 * time.Second):
+		return errors.New("setup progress event was not consumed while mutation was in flight")
+	}
+}
+
+func (r *setupProgressLifecycleRemote) taskDetail(sessionID string) serverapi.WorkflowTaskDetail {
+	return serverapi.WorkflowTaskDetail{
+		Summary:  serverapi.WorkflowTaskSummary{ID: r.taskID, ShortID: r.shortID, WorkflowID: r.workflowID, ProjectID: r.projectID, Title: "Task"},
+		Workflow: serverapi.WorkflowPickerItem{WorkflowID: r.workflowID, DisplayName: r.workflow},
+		Placements: []serverapi.WorkflowPlacement{
+			{ID: r.placementID, TaskID: r.taskID, NodeID: r.nodeID, NodeKey: r.nodeKey},
+		},
+		Runs: []serverapi.WorkflowRun{
+			{ID: r.runID, TaskID: r.taskID, PlacementID: r.placementID, NodeID: r.nodeID, SessionID: sessionID},
+		},
+		Transitions: []serverapi.WorkflowTaskTransition{
+			{
+				ID:            r.transitionID,
+				SourceNodeKey: r.nodeKey,
+				TransitionID:  "done",
+				Edges: []serverapi.WorkflowTransitionEdge{
+					{EdgeKey: "done", TargetNodeKey: "done", State: "applied"},
+				},
+			},
+		},
+	}
+}
+
+type setupProgressSubscription struct {
+	events        <-chan serverapi.WorktreeSetupEvent
+	consumed      chan<- struct{}
+	errAfterEvent error
+	delivered     bool
+}
+
+func (s *setupProgressSubscription) Next(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
+	if s.delivered && s.errAfterEvent != nil {
+		return serverapi.WorktreeSetupEvent{}, s.errAfterEvent
+	}
+	select {
+	case event := <-s.events:
+		s.delivered = true
+		select {
+		case s.consumed <- struct{}{}:
+		default:
+		}
+		return event, nil
+	case <-ctx.Done():
+		return serverapi.WorktreeSetupEvent{}, ctx.Err()
+	}
+}
+
+func (s *setupProgressSubscription) Close() error { return nil }
+
+type noopWorktreeSetupSubscription struct{}
+
+func (noopWorktreeSetupSubscription) Next(ctx context.Context) (serverapi.WorktreeSetupEvent, error) {
+	<-ctx.Done()
+	return serverapi.WorktreeSetupEvent{}, ctx.Err()
+}
+
+func (noopWorktreeSetupSubscription) Close() error { return nil }
+
+func assertSetupProgressOutputHasPaths(t *testing.T, output string, scriptPath string, worktreeRoot string) {
+	t.Helper()
+	fields := strings.Fields(output)
+	if len(fields) < 8 {
+		t.Fatalf("setup progress output fields = %v", fields)
+	}
+	scriptFound := false
+	worktreeFound := false
+	for _, field := range fields {
+		if field == scriptPath {
+			scriptFound = true
+		}
+		if strings.TrimSuffix(field, ".") == worktreeRoot {
+			worktreeFound = true
+		}
+	}
+	if !scriptFound || !worktreeFound {
+		t.Fatalf("setup progress output = %q, want script %q and worktree %q", output, scriptPath, worktreeRoot)
 	}
 }

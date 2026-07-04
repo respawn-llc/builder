@@ -12,8 +12,12 @@ export type RpcSubscription = Readonly<{
   close(): void;
 }>;
 
+export type RpcCallOptions = Readonly<{
+  timeoutMs?: number | null;
+}>;
+
 export type RpcTransport = Readonly<{
   connection: ConnectionStore;
-  call(method: string, params: JsonValue): Promise<unknown>;
+  call(method: string, params: JsonValue, options?: RpcCallOptions): Promise<unknown>;
   subscribe(method: string, params: JsonValue, handler: RpcEventHandler): RpcSubscription;
 }>;

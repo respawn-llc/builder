@@ -55,6 +55,7 @@ describe("JsonRpcWebSocketTransport", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -140,6 +141,38 @@ describe("JsonRpcWebSocketTransport", () => {
     ack(socket, 1);
 
     await expect(readiness).resolves.toEqual({});
+  });
+
+  it("keeps no-timeout control calls pending past the generic request deadline", async () => {
+    vi.useFakeTimers();
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const mutation = transport.call(
+      "workflow.task.start",
+      { task_id: "task-1" },
+      { timeoutMs: null },
+    );
+    let settled = false;
+    mutation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const socket = sockets[0] ?? failTest("control socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+    expect(frame(socket, 1)).toMatchObject({ method: "workflow.task.start" });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(settled).toBe(false);
+    ack(socket, 1);
+
+    await expect(mutation).resolves.toEqual({});
   });
 
   it("installs subscription event listener before subscribe ack can race with first event", async () => {

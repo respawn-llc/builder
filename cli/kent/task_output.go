@@ -13,7 +13,11 @@ func writeTaskStartResult(stdout io.Writer, task serverapi.WorkflowTaskDetail, r
 	sessionID := strings.TrimSpace(run.SessionID)
 	placement, _ := workflowTaskPlacementByID(task, resp.PlacementID)
 	nodeKey := placementDisplayKey(placement, run.NodeID)
-	fmt.Fprintf(stdout, "Started task %s in session %s using workflow %q (%s).\n", taskDisplayID(task), sessionID, task.Workflow.DisplayName, task.Workflow.WorkflowID)
+	if sessionID == "" {
+		fmt.Fprintf(stdout, "Started task %s using workflow %q (%s).\n", taskDisplayID(task), task.Workflow.DisplayName, task.Workflow.WorkflowID)
+	} else {
+		fmt.Fprintf(stdout, "Started task %s in session %s using workflow %q (%s).\n", taskDisplayID(task), sessionID, task.Workflow.DisplayName, task.Workflow.WorkflowID)
+	}
 	fmt.Fprintf(stdout, "First node: %s\n", nodeKey)
 }
 

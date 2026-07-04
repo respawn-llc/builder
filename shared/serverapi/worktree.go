@@ -63,19 +63,19 @@ type WorktreeCreateTargetResolveResponse struct {
 }
 
 type WorktreeCreateRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	BaseRef         string `json:"base_ref,omitempty"`
-	CreateBranch    bool   `json:"create_branch,omitempty"`
-	BranchName      string `json:"branch_name,omitempty"`
-	RootPath        string `json:"root_path,omitempty"`
+	ClientRequestID  string                   `json:"client_request_id"`
+	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
+	SessionID        string                   `json:"session_id"`
+	BaseRef          string                   `json:"base_ref,omitempty"`
+	CreateBranch     bool                     `json:"create_branch,omitempty"`
+	BranchName       string                   `json:"branch_name,omitempty"`
+	RootPath         string                   `json:"root_path,omitempty"`
 }
 
 type WorktreeCreateResponse struct {
-	Target         clientui.SessionExecutionTarget `json:"target"`
-	Worktree       WorktreeView                    `json:"worktree"`
-	CreatedBranch  bool                            `json:"created_branch"`
-	SetupScheduled bool                            `json:"setup_scheduled"`
+	Target        clientui.SessionExecutionTarget `json:"target"`
+	Worktree      WorktreeView                    `json:"worktree"`
+	CreatedBranch bool                            `json:"created_branch"`
 }
 
 type WorktreeSwitchRequest struct {
@@ -122,6 +122,9 @@ func (r WorktreeCreateTargetResolveRequest) Validate() error {
 
 func (r WorktreeCreateRequest) Validate() error {
 	if err := validateClientRequestID(r.ClientRequestID); err != nil {
+		return err
+	}
+	if err := r.SetupOperationID.Validate(); err != nil {
 		return err
 	}
 	if err := validateRequiredSessionID(r.SessionID); err != nil {

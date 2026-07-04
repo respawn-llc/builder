@@ -75,7 +75,7 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	}
 	runWorkflowRootCommandOK(t, "task", "comment", "delete", commentID)
 
-	startResp, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{TaskID: taskID})
+	startResp, err := remote.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{SetupOperationID: serverapi.NewWorktreeSetupOperationID(), TaskID: taskID})
 	if err != nil {
 		t.Fatalf("StartWorkflowTask for resume command: %v", err)
 	}

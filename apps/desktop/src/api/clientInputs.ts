@@ -4,6 +4,7 @@ import type {
   WorkflowGraphSaveConfirmation,
   WorkflowValidationMode,
 } from "./models";
+import type { SetupOperationID } from "./setupOperationID";
 
 export type TaskMutationInput = Readonly<{
   projectID: string;
@@ -87,6 +88,7 @@ export type TaskMoveInput = Readonly<{
   outputValues?: Readonly<Record<string, string>>;
   allowMissingEdge?: boolean;
   autoApprove?: boolean;
+  setupOperationID?: SetupOperationID | undefined;
 }>;
 
 export type QuestionAnswerInput = Readonly<{

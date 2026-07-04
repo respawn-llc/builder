@@ -176,7 +176,10 @@
 - Branch cleanup is conservative/best-effort. Kent only auto-attempts branch deletion when provenance proves it created the branch. Force delete is not part of the first slice.
 - New worktrees default under `worktrees.base_dir`, rooted under Kent persistence state by default.
 - Live worktree retarget rebinds runtime-local tool handlers to the new effective root.
-- Optional post-create setup script is `worktrees.setup_script`, runs async only after new worktree creation, receives args/stdin JSON/env, and failures do not undo worktree/session switch.
+- Optional post-create setup script is `worktrees.setup_script`, runs as a blocking part of every new worktree creation path, and receives args/stdin JSON/env. Blocking setup prevents sessions and workflow runs from locking context before setup-provided local skills, docs, or other worktree files are present.
+- Worktree setup progress is live client operation state, not a model-visible transcript entry and not durable transcript history.
+- Manual worktree creation switches the current session to the new worktree only after setup succeeds. Setup failure leaves the session on its previous worktree, keeps the created worktree available for inspection or manual repair, and surfaces a foreground error.
+- Worktree setup timeout is configured by `worktrees.setup_timeout_seconds`. The default is 60 seconds. Unset timeout uses the default; a configured timeout of zero or less disables the timeout.
 
 ## Slash Commands
 
