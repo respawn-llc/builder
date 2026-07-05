@@ -169,6 +169,30 @@ func TestGenerateStream_MapsResponseIncompleteWithoutReasonToProviderContractErr
 	}
 }
 
+func TestGenerateStream_RejectsCompletedEventWithoutResponsePayload(t *testing.T) {
+	transport := newOpenAIRawStreamTestTransport(t, strings.Join([]string{
+		`event: response.completed`,
+		`data: {"type":"response.completed","sequence_number":1}`,
+		``,
+		``,
+	}, "\n"))
+
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	if err == nil {
+		t.Fatal("expected provider contract error")
+	}
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("expected ProviderAPIError, got %T", err)
+	}
+	if providerErr.Code != UnifiedErrorCodeProviderContract {
+		t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
+	}
+	if providerErr.StatusCode != http.StatusOK {
+		t.Fatalf("provider status = %d, want %d", providerErr.StatusCode, http.StatusOK)
+	}
+}
+
 func TestGenerateStream_RejectsPreTerminalMalformedResponsesStream(t *testing.T) {
 	cases := map[string]string{
 		"eof_without_terminal": strings.Join([]string{

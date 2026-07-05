@@ -25,7 +25,11 @@ type responseStreamAccumulator struct {
 
 type responseStreamError struct {
 	Raw              string
-	ProviderContract bool
+	ProviderContract *responseStreamProviderContract
+}
+
+type responseStreamProviderContract struct {
+	Message string
 }
 
 func newResponseStreamAccumulator(callbacks StreamCallbacks, windowTokens int) *responseStreamAccumulator {
@@ -82,7 +86,17 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 		a.reasoning.Set(reasoningRoleSummary, key, evt.Part.Text)
 		a.emitReasoningSummaryDelta(key)
 	case "response.completed":
-		completed := evt.AsResponseCompleted().Response
+		completedEvent := evt.AsResponseCompleted()
+		if !completedEvent.JSON.Response.Valid() {
+			a.responseError = &responseStreamError{
+				Raw: completedEvent.RawJSON(),
+				ProviderContract: &responseStreamProviderContract{
+					Message: "OpenAI-compatible Responses stream emitted response.completed without a valid response payload",
+				},
+			}
+			return
+		}
+		completed := completedEvent.Response
 		a.completed = &completed
 	case "response.failed":
 		failed := evt.AsResponseFailed()
@@ -91,7 +105,12 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 		incomplete := evt.AsResponseIncomplete()
 		raw := incomplete.RawJSON()
 		if strings.TrimSpace(incomplete.Response.IncompleteDetails.Reason) == "" {
-			a.responseError = &responseStreamError{Raw: raw, ProviderContract: true}
+			a.responseError = &responseStreamError{
+				Raw: raw,
+				ProviderContract: &responseStreamProviderContract{
+					Message: "OpenAI-compatible Responses stream emitted response.incomplete without incomplete_details.reason",
+				},
+			}
 			return
 		}
 		a.responseError = &responseStreamError{Raw: raw}
@@ -104,9 +123,8 @@ func (a *responseStreamAccumulator) Err(providerID string, statusCode int) error
 	if a == nil || a.responseError == nil {
 		return nil
 	}
-	if a.responseError.ProviderContract {
-		message := "OpenAI-compatible Responses stream emitted response.incomplete without incomplete_details.reason"
-		return llmerrors.NewProviderContractError(providerID, statusCode, errors.New(message))
+	if a.responseError.ProviderContract != nil {
+		return llmerrors.NewProviderContractError(providerID, statusCode, errors.New(a.responseError.ProviderContract.Message))
 	}
 	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil); ok {
 		return err
