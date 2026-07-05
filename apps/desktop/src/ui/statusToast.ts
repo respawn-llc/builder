@@ -12,7 +12,6 @@ export type StatusNotice = Readonly<{
   onAction?: () => void;
   onClick?: () => void;
   onDismiss?: () => void;
-  dismissible?: boolean;
   durationMs?: number;
 }>;
 
@@ -31,12 +30,11 @@ export function showStatusToast(notice: StatusNotice): void {
 }
 
 function toastOptions(notice: StatusNotice): ExternalToast {
-  const duration = notice.dismissible === false ? Infinity : notice.durationMs;
   const action =
     notice.onClick === undefined && notice.actionLabel !== undefined && notice.onAction !== undefined
       ? { action: { label: notice.actionLabel, onClick: notice.onAction } }
       : {};
-  const durationOption = duration !== undefined ? { duration } : {};
+  const durationOption = notice.durationMs !== undefined ? { duration: notice.durationMs } : {};
   const dismissOption = notice.onDismiss !== undefined ? { onDismiss: notice.onDismiss } : {};
   const descriptionOption =
     notice.onClick !== undefined || notice.body === undefined || notice.body.length === 0
@@ -47,7 +45,7 @@ function toastOptions(notice: StatusNotice): ExternalToast {
     ...descriptionOption,
     ...dismissOption,
     ...durationOption,
-    closeButton: notice.dismissible !== false,
+    closeButton: true,
     id: notice.id,
   };
   return options;

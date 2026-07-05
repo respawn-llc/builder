@@ -42,6 +42,21 @@ describe("showStatusToast", () => {
     });
   });
 
+  it("keeps persistent notices manually closeable", () => {
+    showStatusToast({
+      durationMs: Infinity,
+      id: "persistent-error",
+      title: "Task start failed",
+      tone: "danger",
+    });
+
+    expect(toast.error).toHaveBeenCalledWith("Task start failed", {
+      closeButton: true,
+      duration: Infinity,
+      id: "persistent-error",
+    });
+  });
+
   it("keeps clickable notices on Sonner styled toasts", () => {
     const onClick = vi.fn();
     showStatusToast({

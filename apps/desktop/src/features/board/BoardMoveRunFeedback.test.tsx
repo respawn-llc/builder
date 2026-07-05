@@ -55,7 +55,10 @@ describe("useBoardMoveRunFeedback", () => {
     fireEvent.click(screen.getByText("track"));
     fireEvent.click(screen.getByText("observe-tracked"));
     expect(push).toHaveBeenCalledTimes(1);
-    expect(push.mock.calls[0]?.[0]).toMatchObject({ id: "board-move-run-interrupted-run-1" });
+    expect(push.mock.calls[0]?.[0]).toMatchObject({
+      durationMs: Infinity,
+      id: "board-move-run-interrupted-run-1",
+    });
   });
 
   it("ignores interruptions for runs that were never tracked", () => {

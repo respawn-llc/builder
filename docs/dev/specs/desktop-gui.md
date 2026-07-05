@@ -194,6 +194,7 @@
 - Generic runtime/session prompts without a desktop answer surface remain non-desktop attention.
 - Notification batching is backend-owned. Questions emitted by one assistant turn/tool-call batch in the same task run produce one desktop surface; clients must not infer notification batches with debounce or time-window grouping.
 - A focused desktop window shows a persistent in-app Sonner above all app content, including the sidebar. Clicking the Sonner opens the task detail sidebar focused on the relevant attention item.
+- Every desktop in-app Sonner/status toast exposes the shared UI-kit close button. Toast lifetime and persistence are controlled separately from closeability; persistent Sonners remain manually closeable.
 - An unfocused desktop window attempts a native or browser system notification when the local notification backend can deliver one and activation can focus Kent task detail. macOS, Windows, Linux, and browser backends may advertise support; unknown Tauri platforms do not.
 - Native notification activation carries Kent's structured task-detail target. Clicking the delivered notification focuses the main Kent window and opens the matching task detail focus target in the overlay sidebar, not a native child task-detail window.
 - Question notifications focus the first unresolved question in the batch. Approval notifications focus the matching approval item. Error-interrupted-run notifications focus the matching interrupted-run attention item in task detail.
@@ -204,7 +205,7 @@
 
 - Mutating actions are disabled while disconnected.
 - Last cached state may remain visible.
-- Global disconnected status remains visible until reconnect.
+- Global disconnected status is persistent by default until reconnect, can be manually closed through the shared toast close button, and manual close does not change connection state.
 - Preserve unsent local text drafts in memory while the window remains open.
 - Preserve drafts for new task, comments, and editable task/project text.
 - No offline mutation queue.

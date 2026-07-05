@@ -40,7 +40,7 @@ export function useBoardMoveRunFeedback(): BoardMoveRunTracker {
         tone: "danger",
         title: t("board.moveRunInterrupted"),
         body: t("board.moveRunInterruptedBody", { taskID: input.taskID }),
-        dismissible: false,
+        durationMs: Infinity,
       });
     },
     [push, t],
