@@ -407,7 +407,7 @@ func TestAppendCommittedEntryRecordDoesNotMutateChatOnAppendFailure(t *testing.T
 	}
 
 	err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{
-		Visibility: transcript.EntryVisibilityAll,
+		Visibility: transcript.EntryVisibilityOngoing,
 		Role:       "reviewer_status",
 		Text:       "Supervisor ran, applied 1 suggestion.",
 	}))

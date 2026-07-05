@@ -28,18 +28,25 @@ func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithGroupDividers(
 		t.Fatalf("apply hydration: %v", err)
 	}
 
-	raw := out.String()
-	if !strings.Contains(raw, "\x1b[1;5r\x1b[5;1H") || !strings.Contains(raw, "\x1b[r\x1b[?6l\x1b[?25l") {
-		t.Fatalf("immutable append bytes = %q, want scroll-region transaction", raw)
-	}
-	stripped := ansi.Strip(raw)
-	for _, want := range []string{"❯ first user", "❯ second user", "assistant", "❮ assistant answer", "tool", "• tool result", "notice", "ℹ notice"} {
-		if !strings.Contains(stripped, want) {
-			t.Fatalf("immutable append text = %q, want %q", stripped, want)
-		}
-	}
-	if !strings.Contains(raw, "\x1b[") {
-		t.Fatalf("immutable append text = %q, want styled ANSI output", raw)
+	ops := parseTerminalOps(out.String())
+	assertTerminalPrefix(t, ops, []terminalOp{
+		{kind: terminalOpCSI, value: "\x1b[r"},
+		{kind: terminalOpCSI, value: "\x1b[?6l"},
+		{kind: terminalOpCSI, value: "\x1b[1;5r"},
+		{kind: terminalOpCSI, value: "\x1b[5;1H"},
+	})
+	assertVisibleTextOps(t, ops, []string{
+		"❯ first user",
+		"❯ second user",
+		"────────────── assistant ───────────────",
+		"❮ assistant answer",
+		"───────────────── tool ─────────────────",
+		"• tool result",
+		"──────────────── notice ────────────────",
+		"ℹ notice",
+	})
+	if out.String() == ansi.Strip(out.String()) {
+		t.Fatalf("immutable append text = %q, want styled ANSI output", out.String())
 	}
 }
 
@@ -54,18 +61,13 @@ func TestApplyTerminalMessageDoesNotEmitDividerForConsecutiveSameGroup(t *testin
 	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("second")), testFrame()); err != nil {
 		t.Fatalf("apply second row: %v", err)
 	}
-	stripped := ansi.Strip(out.String())
-	if strings.Contains(stripped, "user") || !strings.Contains(stripped, "❯ second") {
-		t.Fatalf("same-group append bytes = %q, want styled second user without divider", out.String())
-	}
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"❯ second"})
 	out.Reset()
 
 	if _, err := surface.ApplyTerminalMessage(committedMessage(assistantRow("answer")), testFrame()); err != nil {
 		t.Fatalf("apply assistant row: %v", err)
 	}
-	if got := ansi.Strip(out.String()); !strings.Contains(got, "assistant") || !strings.Contains(got, "❮ answer") {
-		t.Fatalf("group-change append bytes = %q, want assistant divider and answer", out.String())
-	}
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"────────────── assistant ───────────────", "❮ answer"})
 }
 
 func TestSurfaceDoesNotRetainCommittedRowContentAfterAppend(t *testing.T) {
@@ -104,18 +106,41 @@ func TestCommittedRowsNeutralizeTranscriptSourcedControlBytes(t *testing.T) {
 		t.Fatalf("apply malicious hydration: %v", err)
 	}
 
-	raw := out.String()
-	for _, forbidden := range []string{"\x1b[2J", "\x1b]0;spoof", "\x1b[3;1H", "\a"} {
-		if strings.Contains(raw, forbidden) {
-			t.Fatalf("committed output contains transcript control %q in %q", forbidden, raw)
-		}
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+		"❯ user[2J",
+		"└ next lineafter",
+		"────────────── assistant ───────────────",
+		"❮ assistant]0;spoof **answer**",
+		"───────────────── tool ─────────────────",
+		"• tool[3;1H result",
+		"──────────────── notice ────────────────",
+		"ℹ notice value",
+	})
+}
+
+func TestCommittedRowsFilterNonOngoingVisibility(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+
+	_, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
+		Kind: clientui.TranscriptMessageHydration,
+		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
+			visibleRow(userRow("ongoing"), clientui.EntryVisibilityOngoing),
+			visibleRow(userRow("collapsed ongoing"), clientui.EntryVisibilityOngoingCollapsed),
+			visibleRow(userRow("auto default"), clientui.EntryVisibilityAuto),
+			visibleRow(userRow("detail only"), clientui.EntryVisibilityDetail),
+			visibleRow(userRow("hidden"), clientui.EntryVisibilityHidden),
+		}},
+	}, testFrame())
+	if err != nil {
+		t.Fatalf("apply visibility hydration: %v", err)
 	}
-	stripped := ansi.Strip(raw)
-	for _, want := range []string{"user[2J", "assistant]0;spoof **answer**", "tool[3;1H result", "notice value"} {
-		if !strings.Contains(stripped, want) {
-			t.Fatalf("sanitized output = %q, want visible text %q", stripped, want)
-		}
-	}
+
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+		"❯ ongoing",
+		"❯ collapsed ongoing",
+		"❯ auto default",
+	})
 }
 
 func committedMessage(row clientui.TranscriptCommittedRow) clientui.TranscriptMessage {
@@ -127,6 +152,11 @@ func committedMessage(row clientui.TranscriptCommittedRow) clientui.TranscriptMe
 
 func userRow(text string) clientui.TranscriptCommittedRow {
 	return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: text}}
+}
+
+func visibleRow(row clientui.TranscriptCommittedRow, visibility clientui.EntryVisibility) clientui.TranscriptCommittedRow {
+	row.Visibility = visibility
+	return row
 }
 
 func assistantRow(text string) clientui.TranscriptCommittedRow {
@@ -153,4 +183,87 @@ func (discardWriter) Write(p []byte) (int, error) {
 
 func testFrame() FrameInput {
 	return FrameInput{Size: Size{Width: 40, Height: 5}}
+}
+
+type terminalOpKind string
+
+const (
+	terminalOpCSI  terminalOpKind = "csi"
+	terminalOpCRLF terminalOpKind = "crlf"
+	terminalOpText terminalOpKind = "text"
+)
+
+type terminalOp struct {
+	kind  terminalOpKind
+	value string
+}
+
+func parseTerminalOps(raw string) []terminalOp {
+	ops := make([]terminalOp, 0)
+	for i := 0; i < len(raw); {
+		if raw[i] == '\x1b' && i+1 < len(raw) && raw[i+1] == '[' {
+			end := i + 2
+			for end < len(raw) && (raw[end] < '@' || raw[end] > '~') {
+				end++
+			}
+			if end < len(raw) {
+				end++
+			}
+			ops = append(ops, terminalOp{kind: terminalOpCSI, value: raw[i:end]})
+			i = end
+			continue
+		}
+		if raw[i] == '\r' && i+1 < len(raw) && raw[i+1] == '\n' {
+			ops = append(ops, terminalOp{kind: terminalOpCRLF, value: raw[i : i+2]})
+			i += 2
+			continue
+		}
+		end := i + 1
+		for end < len(raw) {
+			if raw[end] == '\x1b' || (raw[end] == '\r' && end+1 < len(raw) && raw[end+1] == '\n') {
+				break
+			}
+			end++
+		}
+		ops = append(ops, terminalOp{kind: terminalOpText, value: raw[i:end]})
+		i = end
+	}
+	return ops
+}
+
+func assertTerminalPrefix(t *testing.T, got []terminalOp, want []terminalOp) {
+	t.Helper()
+	if len(got) < len(want) {
+		t.Fatalf("terminal ops = %#v, want prefix %#v", got, want)
+	}
+	for idx := range want {
+		if got[idx] != want[idx] {
+			t.Fatalf("terminal op %d = %#v, want %#v in prefix %#v", idx, got[idx], want[idx], want)
+		}
+	}
+}
+
+func assertVisibleTextOps(t *testing.T, ops []terminalOp, want []string) {
+	t.Helper()
+	got := make([]string, 0)
+	current := ""
+	for _, op := range ops {
+		switch op.kind {
+		case terminalOpCRLF:
+			if row := strings.TrimRight(current, " "); row != "" {
+				got = append(got, row)
+			}
+			current = ""
+		case terminalOpText:
+			current += ansi.Strip(op.value)
+		default:
+			continue
+		}
+	}
+	if row := strings.TrimRight(current, " "); row != "" {
+		got = append(got, row)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("visible terminal text ops = %#v, want %#v", got, want)
+	}
 }

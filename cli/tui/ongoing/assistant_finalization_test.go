@@ -2,7 +2,6 @@ package ongoing
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 
 	"core/shared/clientui"
@@ -22,9 +21,7 @@ func TestAssistantFinalizationEqualSourceFlushesUnpromotedTailAndClearsStream(t 
 		t.Fatalf("finalize equal source: %v", err)
 	}
 
-	if got := out.String(); !strings.Contains(got, "hello") {
-		t.Fatalf("finalization wrote %q, want flushed final tail", got)
-	}
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"hello"})
 	if surface.activeAssistant.streamID != nil {
 		t.Fatalf("active stream after finalization = %+v, want cleared", surface.activeAssistant)
 	}
@@ -43,9 +40,7 @@ func TestAssistantFinalizationExtensionEmitsOnlyMissingSuffix(t *testing.T) {
 		t.Fatalf("finalize extension: %v", err)
 	}
 
-	if got := out.String(); !strings.Contains(got, "more") {
-		t.Fatalf("extension finalization bytes = %q, want missing suffix", got)
-	}
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"more"})
 }
 
 func TestAssistantFinalizationMismatchPanics(t *testing.T) {
@@ -100,9 +95,12 @@ func TestAssistantAbortClearsVolatileTailWithoutImmutableAppend(t *testing.T) {
 		t.Fatalf("abort stream: %v", err)
 	}
 
-	if got := out.String(); !strings.Contains(got, "\x1b[3;1H\x1b[2K") {
-		t.Fatalf("abort repaint bytes = %q, want mutable erase", got)
-	}
+	assertTerminalPrefix(t, parseTerminalOps(out.String()), []terminalOp{
+		{kind: terminalOpCSI, value: "\x1b[r"},
+		{kind: terminalOpCSI, value: "\x1b[?6l"},
+		{kind: terminalOpCSI, value: "\x1b[2;1H"},
+		{kind: terminalOpCSI, value: "\x1b[2K"},
+	})
 }
 
 func assistantDeltaMessage(streamID uuid.UUID, delta string) clientui.TranscriptMessage {

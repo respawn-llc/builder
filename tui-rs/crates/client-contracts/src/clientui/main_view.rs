@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::config::null_to_default;
-
-use super::{ChatEntry, ConversationFreshness, RunLifecycle, RunStatus, RuntimeContextUsage};
+use super::{ConversationFreshness, RunLifecycle, RunStatus, RuntimeContextUsage};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RuntimeMainView {
@@ -106,10 +104,6 @@ pub struct RuntimeSessionView {
     pub conversation_freshness: ConversationFreshness,
     #[serde(rename = "ExecutionTarget")]
     pub execution_target: SessionExecutionTarget,
-    #[serde(rename = "Transcript")]
-    pub transcript: TranscriptMetadata,
-    #[serde(rename = "Chat")]
-    pub chat: ChatSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -134,24 +128,6 @@ pub struct SessionExecutionTarget {
     pub cwd_relpath: String,
     #[serde(rename = "EffectiveWorkdir")]
     pub effective_workdir: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct TranscriptMetadata {
-    #[serde(rename = "Revision")]
-    pub revision: i64,
-    #[serde(rename = "CommittedEntryCount")]
-    pub committed_entry_count: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ChatSnapshot {
-    #[serde(rename = "Entries", default, deserialize_with = "null_to_default")]
-    pub entries: Vec<ChatEntry>,
-    #[serde(rename = "Streaming")]
-    pub ongoing: String,
-    #[serde(rename = "StreamingError")]
-    pub ongoing_error: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

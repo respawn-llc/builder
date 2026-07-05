@@ -193,8 +193,6 @@ func isForbiddenOngoingTranscriptReadSelector(name string) bool {
 		"TranscriptSegmentPageForward",
 		"TranscriptSegmentPageFromStore",
 		"GetSessionTranscriptPage",
-		"GetSessionCommittedTranscriptSuffix",
-		"CommittedTranscriptSuffixFromRuntime",
 		"ReadSegmentBackward",
 		"ReadEventsBackwardUntil":
 		return true

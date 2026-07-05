@@ -422,7 +422,7 @@ func TestEventFromRuntimeCopiesCacheWarning(t *testing.T) {
 	}
 	event := EventFromRuntime(runtime.Event{
 		Kind:                   runtime.EventCacheWarning,
-		CacheWarningVisibility: transcript.EntryVisibilityAll,
+		CacheWarningVisibility: transcript.EntryVisibilityOngoing,
 		CacheWarning:           source,
 	})
 	if event.CacheWarning == nil {
@@ -434,8 +434,8 @@ func TestEventFromRuntimeCopiesCacheWarning(t *testing.T) {
 	if event.CacheWarning.Scope != transcript.CacheWarningScopeReviewer {
 		t.Fatalf("cache warning scope = %q, want %q", event.CacheWarning.Scope, transcript.CacheWarningScopeReviewer)
 	}
-	if event.CacheWarningVisibility != clientui.EntryVisibilityAll {
-		t.Fatalf("cache warning visibility = %q, want %q", event.CacheWarningVisibility, clientui.EntryVisibilityAll)
+	if event.CacheWarningVisibility != clientui.EntryVisibilityOngoing {
+		t.Fatalf("cache warning visibility = %q, want %q", event.CacheWarningVisibility, clientui.EntryVisibilityOngoing)
 	}
 	source.LostInputTokens = 99
 	if event.CacheWarning.LostInputTokens != 12_000 {
@@ -443,17 +443,17 @@ func TestEventFromRuntimeCopiesCacheWarning(t *testing.T) {
 	}
 }
 
-func TestEventFromRuntimeProjectsDefaultCacheWarningAsVerbose(t *testing.T) {
+func TestEventFromRuntimeProjectsDefaultCacheWarningAsDetail(t *testing.T) {
 	event := EventFromRuntime(runtime.Event{
 		Kind:                   runtime.EventCacheWarning,
-		CacheWarningVisibility: transcript.EntryVisibilityVerbose,
+		CacheWarningVisibility: transcript.EntryVisibilityDetail,
 		CacheWarning: &transcript.CacheWarning{
 			Scope:  transcript.CacheWarningScopeConversation,
 			Reason: transcript.CacheWarningReasonNonPostfix,
 		},
 	})
-	if event.CacheWarningVisibility != clientui.EntryVisibilityVerbose {
-		t.Fatalf("cache warning visibility = %q, want %q", event.CacheWarningVisibility, clientui.EntryVisibilityVerbose)
+	if event.CacheWarningVisibility != clientui.EntryVisibilityDetail {
+		t.Fatalf("cache warning visibility = %q, want %q", event.CacheWarningVisibility, clientui.EntryVisibilityDetail)
 	}
 	if event.CacheWarning == nil || event.CacheWarning.Scope != transcript.CacheWarningScopeConversation {
 		t.Fatalf("unexpected projected cache warning: %+v", event.CacheWarning)

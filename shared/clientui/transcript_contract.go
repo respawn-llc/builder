@@ -166,6 +166,7 @@ type TranscriptHydration struct {
 }
 
 type TranscriptCommittedRow struct {
+	Visibility EntryVisibility
 	Kind      TranscriptRowKind
 	User      *TranscriptUserRow
 	Assistant *TranscriptAssistantRow

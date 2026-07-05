@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::project::ProjectBinding;
 
-use crate::clientui::{CommittedTranscriptSuffix, RuntimeMainView, TranscriptPage};
+use crate::clientui::{RuntimeMainView, TranscriptPage};
 use crate::config::{Settings, SourceReport, null_to_default};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -234,17 +234,6 @@ pub struct SessionTranscriptPageRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SessionTranscriptPageResponse {
     pub transcript: TranscriptPage,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
-pub struct SessionCommittedTranscriptSuffixRequest {
-    #[serde(rename = "session_id", default)]
-    pub session_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct SessionCommittedTranscriptSuffixResponse {
-    pub suffix: CommittedTranscriptSuffix,
 }
 
 impl Serialize for SessionLaunchMode {

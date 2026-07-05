@@ -349,7 +349,7 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 		t.Fatalf("create runtime engine: %v", err)
 	}
 	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Role: "warning", Text: "visible warning", Visibility: string(transcript.EntryVisibilityAll)}
+	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Role: "warning", Text: "visible warning", Visibility: string(transcript.EntryVisibilityOngoing)}
 
 	if err := service.AppendCommittedEntry(context.Background(), req); err != nil {
 		t.Fatalf("AppendCommittedEntry first: %v", err)
@@ -361,8 +361,8 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 	for _, entry := range localEntryEvents(t, store) {
 		if entry.Role == "warning" && entry.Text == "visible warning" {
 			count++
-			if entry.Visibility != transcript.EntryVisibilityAll {
-				t.Fatalf("entry visibility = %q, want all", entry.Visibility)
+			if entry.Visibility != transcript.EntryVisibilityOngoing {
+				t.Fatalf("entry visibility = %q, want ongoing", entry.Visibility)
 			}
 		}
 	}

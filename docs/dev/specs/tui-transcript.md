@@ -58,9 +58,9 @@
 - Detail status line mirrors selected action as `Enter to expand` or `Enter to collapse`.
 - Detail items use blank-line role-group separators. Consecutive tool rows form dense chunks.
 - Detail selection uses full-width selected background/fill only and does not change foreground colors.
-- Detail is a live transcript view with UI-local expansion and selection. Transcript changes update content while scroll/anchor stays stable unless the user navigates.
-- Mid-step entries show latest completed snapshot only.
-- Snapshot scope is the full session transcript up to latest completed step.
+- Detail loads stale bounded cursor pages from the server. Scrolling at a loaded edge requests the adjacent page; loaded content does not self-update, append, reconcile, or refresh from live events.
+- Detail owns only UI-local expansion, selection, and scroll state.
+- Mid-step entries are absent until a loaded page contains their committed snapshot.
 - Detail rendering is a flat continuous stream with no grouped sections.
 - Step-end markers appear in detail only.
 - Detail transcript overlay always uses terminal alt-screen `?1049`.

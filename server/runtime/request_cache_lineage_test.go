@@ -67,8 +67,8 @@ func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 		mode config.CacheWarningMode
 		want transcript.EntryVisibility
 	}{
-		{name: "default", mode: config.CacheWarningModeDefault, want: transcript.EntryVisibilityVerbose},
-		{name: "verbose", mode: config.CacheWarningModeVerbose, want: transcript.EntryVisibilityAll},
+		{name: "default", mode: config.CacheWarningModeDefault, want: transcript.EntryVisibilityDetail},
+		{name: "verbose", mode: config.CacheWarningModeVerbose, want: transcript.EntryVisibilityOngoing},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

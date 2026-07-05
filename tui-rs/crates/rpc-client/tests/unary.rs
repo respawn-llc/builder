@@ -39,8 +39,7 @@ use client_contracts::runtime_control::{
     RuntimeSubmitUserTurnRequest, RuntimeSubmitUserTurnResponse,
 };
 use client_contracts::session::{
-    RunPromptOverrides, SessionCommittedTranscriptSuffixRequest,
-    SessionCommittedTranscriptSuffixResponse, SessionInitialInputRequest,
+    RunPromptOverrides, SessionInitialInputRequest,
     SessionInitialInputResponse, SessionLaunchMode, SessionMainViewRequest, SessionMainViewResponse,
     SessionPersistInputDraftRequest, SessionPersistInputDraftResponse, SessionPlanRequest,
     SessionResolveTransitionRequest, SessionResolveTransitionResponse,
@@ -915,84 +914,17 @@ fn remote_resolve_session_transition_uses_control_connection_and_typed_shape() {
 }
 
 #[test]
-fn committed_suffix_wrapper_uses_contract_dto_and_method_name() {
-    let response: SessionCommittedTranscriptSuffixResponse = serde_json::from_value(json!({
-        "suffix": {
-            "SessionID": "session-1",
-            "SessionName": "Demo Session",
-            "ConversationFreshness": 1,
-            "Revision": 12,
-            "CommittedEntryCount": 4,
-            "StartEntryCount": 2,
-            "NextEntryCount": 4,
-            "HasMoreCommittedEntries": true,
-            "Entries": contract_chat_entries_json()
-        }
-    }))
-    .unwrap();
-    let connection = ScriptedConnection::new(vec![success_response("rpc-1", response.clone())]);
-    let mut client = Client::new(connection);
-    let request = SessionCommittedTranscriptSuffixRequest {
-        session_id: "session-1".to_owned(),
-    };
-
-    let actual = client.get_committed_transcript_suffix(request).unwrap();
-    let connection = client.into_connection();
-
-    assert_eq!(actual, response);
-    assert_sent_methods(
-        &connection.sent,
-        &[("rpc-1", "session.getCommittedTranscriptSuffix")],
-    );
-    assert_eq!(
-        connection.sent[0].request().params.unwrap(),
-        json!({"session_id": "session-1"})
-    );
-}
-
-#[test]
-fn committed_suffix_wrapper_preserves_method_not_found_error() {
-    let connection = ScriptedConnection::new(vec![Frame::from_response(Response {
-        jsonrpc: JSONRPC_VERSION.to_owned(),
-        id: "rpc-1".to_owned(),
-        result: None,
-        error: Some(rpc_client::wire::ResponseError {
-            code: ErrorCode::MethodNotFound.code(),
-            message: "method not found".to_owned(),
-        }),
-    })]);
-    let mut client = Client::new(connection);
-    let request = SessionCommittedTranscriptSuffixRequest {
-        session_id: "session-1".to_owned(),
-    };
-
-    let error = client.get_committed_transcript_suffix(request).unwrap_err();
-
-    assert_eq!(
-        error,
-        RpcError::Protocol(rpc_client::error::ProtocolError {
-            code: ErrorCode::MethodNotFound,
-            raw_code: ErrorCode::MethodNotFound.code(),
-            message: "method not found".to_owned(),
-        })
-    );
-}
-
-#[test]
 fn transcript_page_wrapper_uses_contract_dto_and_method_name() {
     let response: SessionTranscriptPageResponse = serde_json::from_value(json!({
         "transcript": {
             "SessionID": "session-1",
             "SessionName": "Demo Session",
             "ConversationFreshness": 1,
-            "Revision": 12,
             "OlderCursor": 4096,
             "HasMoreAbove": true,
             "NewerCursor": 8192,
             "HasMoreBelow": true,
-            "Entries": contract_chat_entries_json(),
-            "Streaming": "streaming tail",
-            "StreamingError": "tail warning"
+            "Entries": contract_chat_entries_json()
         }
     }))
     .unwrap();
@@ -3335,8 +3267,6 @@ fn zero_main_view_json() -> serde_json::Value {
                     "CwdRelpath": "",
                     "EffectiveWorkdir": ""
                 },
-                "Transcript": {"Revision": 0, "CommittedEntryCount": 0},
-                "Chat": {"Entries": null, "Streaming": "", "StreamingError": ""}
             },
             "ActiveRun": null
         }

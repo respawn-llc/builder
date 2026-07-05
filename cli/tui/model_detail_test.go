@@ -34,6 +34,25 @@ func TestDetailModeRendersHydratedCommittedRows(t *testing.T) {
 	}
 }
 
+func TestDetailModeFiltersHiddenTranscriptEntries(t *testing.T) {
+	model := NewModel()
+	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
+		Entries: []clientui.ChatEntry{
+			{Visibility: clientui.EntryVisibilityOngoing, Role: "user", Text: "visible"},
+			{Visibility: clientui.EntryVisibilityHidden, Role: "assistant", Text: "hidden"},
+		},
+	}})
+	model = next.(Model)
+	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
+	model = next.(Model)
+
+	lines := trimmedDetailTestLines(model.View())
+	want := []string{"▶ visible"}
+	if !slices.Equal(lines, want) {
+		t.Fatalf("detail lines = %#v, want %#v", lines, want)
+	}
+}
+
 func TestDetailModeExpandsSelectedEntry(t *testing.T) {
 	model := NewModel()
 	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{

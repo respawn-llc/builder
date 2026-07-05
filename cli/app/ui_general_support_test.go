@@ -27,10 +27,6 @@ func (s stubSessionViewClient) GetSessionTranscriptPage(context.Context, servera
 	return serverapi.SessionTranscriptPageResponse{}, nil
 }
 
-func (s stubSessionViewClient) GetSessionCommittedTranscriptSuffix(context.Context, serverapi.SessionCommittedTranscriptSuffixRequest) (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
-	return serverapi.SessionCommittedTranscriptSuffixResponse{}, nil
-}
-
 func updateUIModel(t *testing.T, m *uiModel, msg tea.Msg) *uiModel {
 	t.Helper()
 	next, _ := m.Update(msg)

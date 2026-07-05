@@ -6,6 +6,7 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/theme"
+	"core/shared/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -488,21 +489,25 @@ func newDetailEntry(row clientui.TranscriptCommittedRow) detailEntry {
 }
 
 func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommittedRow, bool) {
+	visibility := transcript.NormalizeEntryVisibility(transcript.EntryVisibility(entry.Visibility))
+	if visibility == transcript.EntryVisibilityHidden {
+		return clientui.TranscriptCommittedRow{}, false
+	}
 	switch strings.TrimSpace(entry.Role) {
 	case "user":
 		if strings.TrimSpace(entry.Text) == "" {
 			return clientui.TranscriptCommittedRow{}, false
 		}
-		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: entry.Text}}, true
+		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: entry.Text}}, true
 	case "assistant":
 		if strings.TrimSpace(entry.Text) == "" {
 			return clientui.TranscriptCommittedRow{}, false
 		}
-		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: entry.Text, Phase: entry.Phase}}, true
+		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: entry.Text, Phase: entry.Phase}}, true
 	case "tool_call":
 		return clientui.TranscriptCommittedRow{}, false
 	case "tool_result_ok", "tool_result_error":
-		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
+		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
 			ToolCallID:       strings.TrimSpace(entry.ToolCallID),
 			ToolName:         detailToolName(entry),
 			Text:             entry.Text,
@@ -512,7 +517,7 @@ func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommit
 			ToolPresentation: entry.ToolCall,
 		}}, true
 	default:
-		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
+		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
 			Reason:   clientui.TranscriptNoticeLegacyUntypedNotice,
 			Severity: clientui.TranscriptNoticeInfo,
 			Data: clientui.TranscriptNoticeData{

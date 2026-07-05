@@ -194,7 +194,7 @@ func TestPersistedTranscriptScanProjectsUnknownDeveloperAndToolSummaryMetadata(t
 		t.Fatalf("len(page.Entries) = %d, want 3 (%+v)", got, page.Entries)
 	}
 	developer := page.Entries[0]
-	if developer.Role != string(transcript.EntryRoleDeveloperContext) || developer.Visibility != transcript.EntryVisibilityVerbose || developer.MessageType != llm.MessageType("custom_internal") || developer.CompactLabel != "Developer context: custom_internal" {
+	if developer.Role != string(transcript.EntryRoleDeveloperContext) || developer.Visibility != transcript.EntryVisibilityOngoing || developer.MessageType != llm.MessageType("custom_internal") || developer.CompactLabel != "Developer context: custom_internal" {
 		t.Fatalf("unexpected unknown developer projection: %+v", developer)
 	}
 	result := page.Entries[2]
@@ -345,8 +345,8 @@ func TestPersistedTranscriptScanProjectsCarryoverFromPersistedMessage(t *testing
 	if page.Entries[3].Role != "manual_compaction_carryover" || page.Entries[3].Text != "Last user message before handoff\n\ncarry this forward" {
 		t.Fatalf("expected manual compaction carryover entry, got %+v", page.Entries[3])
 	}
-	if page.Entries[3].Visibility != transcript.EntryVisibilityVerbose {
-		t.Fatalf("expected carryover entry to stay verbose, got %+v", page.Entries[3])
+	if page.Entries[3].Visibility != transcript.EntryVisibilityDetail {
+		t.Fatalf("expected carryover entry to stay detail-only, got %+v", page.Entries[3])
 	}
 }
 
@@ -412,8 +412,8 @@ func TestPersistedTranscriptScanUsesCacheWarningModeVisibility(t *testing.T) {
 		mode config.CacheWarningMode
 		want transcript.EntryVisibility
 	}{
-		{name: "default", mode: config.CacheWarningModeDefault, want: transcript.EntryVisibilityVerbose},
-		{name: "verbose", mode: config.CacheWarningModeVerbose, want: transcript.EntryVisibilityAll},
+		{name: "default", mode: config.CacheWarningModeDefault, want: transcript.EntryVisibilityDetail},
+		{name: "verbose", mode: config.CacheWarningModeVerbose, want: transcript.EntryVisibilityOngoing},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

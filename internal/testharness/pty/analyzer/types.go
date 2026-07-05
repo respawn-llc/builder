@@ -222,7 +222,9 @@ type Operation struct {
 }
 
 type WritePayload struct {
-	Text string
+	Text       string
+	Faint      bool
+	Foreground string
 }
 
 func NewWritePayload(text string) (WritePayload, error) {

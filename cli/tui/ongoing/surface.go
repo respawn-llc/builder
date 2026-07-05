@@ -7,6 +7,7 @@ import (
 
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+	"core/shared/transcript"
 	"github.com/google/uuid"
 )
 
@@ -277,6 +278,9 @@ func (s *Surface) immutableLines(message clientui.TranscriptMessage, width int, 
 		}
 		lines := make([]string, 0, len(message.Hydration.CommittedRows))
 		for _, row := range message.Hydration.CommittedRows {
+			if !committedRowVisibleInOngoing(row) {
+				continue
+			}
 			lines = append(lines, s.renderCommittedRow(row, width, themeName)...)
 		}
 		return lines
@@ -284,9 +288,21 @@ func (s *Surface) immutableLines(message clientui.TranscriptMessage, width int, 
 		if message.CommittedRow == nil {
 			return nil
 		}
+		if !committedRowVisibleInOngoing(*message.CommittedRow) {
+			return nil
+		}
 		return s.renderCommittedRow(*message.CommittedRow, width, themeName)
 	default:
 		return nil
+	}
+}
+
+func committedRowVisibleInOngoing(row clientui.TranscriptCommittedRow) bool {
+	switch transcript.NormalizeEntryVisibility(transcript.EntryVisibility(row.Visibility)) {
+	case transcript.EntryVisibilityDetail, transcript.EntryVisibilityHidden:
+		return false
+	default:
+		return true
 	}
 }
 

@@ -210,12 +210,6 @@ type detailTranscriptLoadMsg struct {
 	err       error
 }
 
-type detailTranscriptSuffixLoadMsg struct {
-	sessionID string
-	suffix    clientui.CommittedTranscriptSuffix
-	err       error
-}
-
 type runLoggerDiagnosticMsg struct {
 	diagnostic runLoggerDiagnostic
 }

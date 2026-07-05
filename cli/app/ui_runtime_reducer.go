@@ -57,10 +57,6 @@ func (r uiRuntimeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		cmd := m.handleDetailTranscriptLoad(msg)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
-	case detailTranscriptSuffixLoadMsg:
-		cmd := m.handleDetailTranscriptSuffixLoad(msg)
-		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, cmd)
 	case tui.RequestDetailTranscriptPageMsg:
 		cmd := m.loadDetailTranscriptPageCmd(msg.Request)
 		m.layout().syncViewport()
@@ -95,29 +91,7 @@ func (m *uiModel) handleDetailTranscriptLoad(msg detailTranscriptLoadMsg) tea.Cm
 	page.SessionID = msg.page.SessionID
 	page.SessionName = msg.page.SessionName
 	page.ConversationFreshness = msg.page.ConversationFreshness
-	page.Revision = msg.page.Revision
 	m.forwardToView(tui.SetDetailTranscriptPageMsg{Page: page, Anchor: anchor})
-	return nil
-}
-
-func (m *uiModel) handleDetailTranscriptSuffixLoad(msg detailTranscriptSuffixLoadMsg) tea.Cmd {
-	if msg.err != nil {
-		return m.sendTransientStatusWithNoticeID(msg.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
-	}
-	if !m.detailTranscriptResponseCurrent(msg.sessionID, msg.suffix.SessionID) {
-		return nil
-	}
-	if m.detailTranscript.needsNewestReloadForSuffix(msg.suffix) {
-		m.detailTranscript.reset()
-		return m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
-	}
-	m.detailTranscript.applySuffix(msg.suffix)
-	page := m.detailTranscript.page()
-	page.SessionID = msg.suffix.SessionID
-	page.SessionName = msg.suffix.SessionName
-	page.ConversationFreshness = msg.suffix.ConversationFreshness
-	page.Revision = msg.suffix.Revision
-	m.forwardToView(tui.SetDetailTranscriptPageMsg{Page: page, Anchor: tui.DetailTranscriptAnchorPreserve})
 	return nil
 }
 

@@ -738,7 +738,7 @@ func TestChatStoreSnapshotIncludesDeveloperErrorFeedbackAsOngoingVisibleRole(t *
 	}
 }
 
-func TestChatStoreSnapshotIncludesDeveloperContextAsVerboseRole(t *testing.T) {
+func TestChatStoreSnapshotIncludesDeveloperContextAsDetailRole(t *testing.T) {
 	s := newChatStore()
 	s.appendMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeAgentsMD, Content: "AGENTS context"})
 	s.appendMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment, Content: "Environment context"})
@@ -753,12 +753,12 @@ func TestChatStoreSnapshotIncludesDeveloperContextAsVerboseRole(t *testing.T) {
 	if snap.Entries[1].Role != string(transcript.EntryRoleDeveloperContext) || snap.Entries[1].Text != "Environment context" {
 		t.Fatalf("unexpected environment context entry: %+v", snap.Entries[1])
 	}
-	if snap.Entries[0].Visibility != transcript.EntryVisibilityVerbose || snap.Entries[1].Visibility != transcript.EntryVisibilityVerbose {
-		t.Fatalf("expected developer context visibility to be verbose, got %+v", snap.Entries)
+	if snap.Entries[0].Visibility != transcript.EntryVisibilityDetail || snap.Entries[1].Visibility != transcript.EntryVisibilityDetail {
+		t.Fatalf("expected developer context visibility to be detail-only, got %+v", snap.Entries)
 	}
 }
 
-func TestChatStoreSnapshotIncludesUnknownDeveloperMessagesAsVerboseContext(t *testing.T) {
+func TestChatStoreSnapshotIncludesUnknownDeveloperMessagesAsOngoingContext(t *testing.T) {
 	s := newChatStore()
 	s.appendMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageType("custom_internal"), Content: "Internal developer note"})
 
@@ -766,12 +766,12 @@ func TestChatStoreSnapshotIncludesUnknownDeveloperMessagesAsVerboseContext(t *te
 	if len(snap.Entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d (%+v)", len(snap.Entries), snap.Entries)
 	}
-	if got := snap.Entries[0]; got.Role != string(transcript.EntryRoleDeveloperContext) || got.Text != "Internal developer note" || got.Visibility != transcript.EntryVisibilityVerbose || got.MessageType != llm.MessageType("custom_internal") || got.CompactLabel != "Developer context: custom_internal" {
+	if got := snap.Entries[0]; got.Role != string(transcript.EntryRoleDeveloperContext) || got.Text != "Internal developer note" || got.Visibility != transcript.EntryVisibilityOngoing || got.MessageType != llm.MessageType("custom_internal") || got.CompactLabel != "Developer context: custom_internal" {
 		t.Fatalf("unexpected unknown developer context entry: %+v", got)
 	}
 }
 
-func TestChatStoreSnapshotIncludesInterruptionAsVerboseRole(t *testing.T) {
+func TestChatStoreSnapshotIncludesInterruptionAsOngoingRole(t *testing.T) {
 	s := newChatStore()
 	s.appendMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeInterruption, Content: "Interrupted by user."})
 
@@ -782,8 +782,8 @@ func TestChatStoreSnapshotIncludesInterruptionAsVerboseRole(t *testing.T) {
 	if snap.Entries[0].Role != string(transcript.EntryRoleInterruption) || snap.Entries[0].Text != "Interrupted by user." {
 		t.Fatalf("unexpected interruption entry: %+v", snap.Entries[0])
 	}
-	if snap.Entries[0].Visibility != transcript.EntryVisibilityVerbose {
-		t.Fatalf("expected interruption verbose visibility, got %+v", snap.Entries[0])
+	if snap.Entries[0].Visibility != transcript.EntryVisibilityOngoing {
+		t.Fatalf("expected interruption ongoing visibility, got %+v", snap.Entries[0])
 	}
 }
 
@@ -880,7 +880,7 @@ func TestChatStoreSnapshotIncludesCompactTextForBackgroundNotice(t *testing.T) {
 	}
 }
 
-func TestChatStoreSnapshotShowsManualCompactionCarryoverAsVerboseMessage(t *testing.T) {
+func TestChatStoreSnapshotShowsManualCompactionCarryoverAsDetailMessage(t *testing.T) {
 	s := newChatStore()
 	s.appendMessage(llm.Message{
 		Role:        llm.RoleDeveloper,
@@ -892,7 +892,7 @@ func TestChatStoreSnapshotShowsManualCompactionCarryoverAsVerboseMessage(t *test
 	if len(snap.Entries) != 1 {
 		t.Fatalf("expected carryover message to project once into transcript, got %+v", snap.Entries)
 	}
-	if got := snap.Entries[0]; got.Role != string(transcript.EntryRoleManualCompactionCarryover) || got.Text != "# Last user message before manual compaction\n\nplease keep tests green" || got.Visibility != transcript.EntryVisibilityVerbose {
+	if got := snap.Entries[0]; got.Role != string(transcript.EntryRoleManualCompactionCarryover) || got.Text != "# Last user message before manual compaction\n\nplease keep tests green" || got.Visibility != transcript.EntryVisibilityDetail {
 		t.Fatalf("unexpected carryover transcript entry: %+v", got)
 	}
 }
@@ -1051,13 +1051,34 @@ func TestTranscriptFactsPreserveCacheWarningVisibility(t *testing.T) {
 	facts := TranscriptCommittedRowFactsFromEvent(Event{
 		Kind:                   EventCacheWarning,
 		CacheWarning:           &transcript.CacheWarning{Scope: transcript.CacheWarningScopeConversation, Reason: transcript.CacheWarningReasonNonPostfix, LostInputTokens: 42},
-		CacheWarningVisibility: transcript.EntryVisibilityVerbose,
+		CacheWarningVisibility: transcript.EntryVisibilityDetail,
 	})
 	if len(facts) != 1 || facts[0].Notice == nil || facts[0].Notice.CacheWarning == nil {
 		t.Fatalf("facts = %+v, want cache warning notice", facts)
 	}
-	if facts[0].Notice.CacheWarning.Visibility != transcript.EntryVisibilityVerbose {
-		t.Fatalf("visibility = %q, want verbose", facts[0].Notice.CacheWarning.Visibility)
+	if facts[0].Notice.CacheWarning.Visibility != transcript.EntryVisibilityDetail {
+		t.Fatalf("visibility = %q, want detail", facts[0].Notice.CacheWarning.Visibility)
+	}
+	if facts[0].Visibility != transcript.EntryVisibilityDetail {
+		t.Fatalf("row visibility = %q, want detail", facts[0].Visibility)
+	}
+}
+
+func TestTranscriptFactsPreserveProjectedLocalEntryVisibility(t *testing.T) {
+	facts := TranscriptCommittedRowFactsFromEvent(Event{
+		Kind:                EventLocalEntryAdded,
+		LocalEntryProjected: true,
+		LocalEntry: &ChatEntry{
+			Visibility: transcript.EntryVisibilityHidden,
+			Role:       "assistant",
+			Text:       "hidden assistant",
+		},
+	})
+	if len(facts) != 1 || facts[0].Assistant == nil {
+		t.Fatalf("facts = %+v, want projected assistant fact", facts)
+	}
+	if facts[0].Visibility != transcript.EntryVisibilityHidden {
+		t.Fatalf("row visibility = %q, want hidden", facts[0].Visibility)
 	}
 }
 

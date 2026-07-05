@@ -5,20 +5,46 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"core/internal/testharness/scriptedllm"
 	"core/server/core"
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/runtimewire"
+	"core/server/session"
 	serverstartup "core/server/startup"
+	"core/server/tools"
+	"core/shared/transcript"
 )
 
 type ScriptFile struct {
-	Prompt       string     `json:"prompt"`
-	StreamDeltas []string   `json:"stream_deltas"`
-	Final        string     `json:"final"`
-	Steps        []StepFile `json:"steps"`
+	Prompt         string                    `json:"prompt"`
+	StreamDeltas   []string                  `json:"stream_deltas"`
+	Final          string                    `json:"final"`
+	Steps          []StepFile                `json:"steps"`
+	SeedTranscript []SeedTranscriptEntryFile `json:"seed_transcript"`
+}
+
+type SeedTranscriptEntryFile struct {
+	Kind           string          `json:"kind"`
+	Role           string          `json:"role"`
+	Text           string          `json:"text"`
+	CondensedText  string          `json:"condensed_text"`
+	Visibility     string          `json:"visibility"`
+	MessageType    string          `json:"message_type"`
+	SourcePath     string          `json:"source_path"`
+	ToolCallID     string          `json:"tool_call_id"`
+	ToolName       string          `json:"tool_name"`
+	ToolInput      json.RawMessage `json:"tool_input"`
+	ToolOutput     json.RawMessage `json:"tool_output"`
+	ToolSummary    string          `json:"tool_summary"`
+	ToolCondensed  string          `json:"tool_condensed"`
+	ToolIsError    bool            `json:"tool_is_error"`
+	ToolCustom     bool            `json:"tool_custom"`
+	ToolCustomText string          `json:"tool_custom_text"`
 }
 
 type StepFile struct {
@@ -63,6 +89,36 @@ func (r *Runtime) RuntimeClientFactory() runtimewire.RuntimeClientFactory {
 		r.recorder.Record(req.Purpose)
 		return r.Client, nil
 	})
+}
+
+func (r *Runtime) SeedSession(ctx context.Context, persistenceRoot string, workspaceRoot string) (string, error) {
+	if len(r.ScriptFile.SeedTranscript) == 0 {
+		return "", nil
+	}
+	store, err := metadata.Open(persistenceRoot)
+	if err != nil {
+		return "", fmt.Errorf("open metadata store for seed session: %w", err)
+	}
+	defer func() { _ = store.Close() }()
+	binding, err := store.EnsureWorkspaceBinding(ctx, workspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve seed workspace binding: %w", err)
+	}
+	sessionStore, err := session.Create(
+		filepath.Join(persistenceRoot, "projects", binding.ProjectID, "sessions"),
+		filepath.Base(workspaceRoot),
+		workspaceRoot,
+		store.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		return "", fmt.Errorf("create seed session: %w", err)
+	}
+	for idx, entry := range r.ScriptFile.SeedTranscript {
+		if err := appendSeedTranscriptEntry(sessionStore, workspaceRoot, idx, entry); err != nil {
+			return "", err
+		}
+	}
+	return sessionStore.Meta().SessionID, nil
 }
 
 func (r *Runtime) Observation(runErr error) Observation {
@@ -145,6 +201,112 @@ func assistantDeltas(values []string) []llm.AssistantDelta {
 		deltas = append(deltas, llm.AssistantDelta{Text: delta, Phase: llm.MessagePhaseCommentary})
 	}
 	return deltas
+}
+
+func appendSeedTranscriptEntry(store *session.Store, workspaceRoot string, idx int, entry SeedTranscriptEntryFile) error {
+	stepID := fmt.Sprintf("seed-%03d", idx+1)
+	switch strings.TrimSpace(entry.Kind) {
+	case "", "message":
+		msg := seedMessage(entry)
+		if _, _, err := store.AppendEvent(stepID, "message", msg); err != nil {
+			return fmt.Errorf("append seed message %d: %w", idx, err)
+		}
+	case "local_entry":
+		if _, _, err := store.AppendEvent(stepID, "local_entry", seedLocalEntry(entry)); err != nil {
+			return fmt.Errorf("append seed local entry %d: %w", idx, err)
+		}
+	case "tool_result":
+		result, message := seedToolResult(workspaceRoot, entry)
+		if _, _, err := store.AppendEvent(stepID, "tool_completed", result); err != nil {
+			return fmt.Errorf("append seed tool completion %d: %w", idx, err)
+		}
+		if _, _, err := store.AppendEvent(stepID, "message", message); err != nil {
+			return fmt.Errorf("append seed tool message %d: %w", idx, err)
+		}
+	default:
+		return fmt.Errorf("seed transcript entry %d has unknown kind %q", idx, entry.Kind)
+	}
+	return nil
+}
+
+func seedMessage(entry SeedTranscriptEntryFile) llm.Message {
+	role := llm.Role(strings.TrimSpace(entry.Role))
+	if role == "" {
+		role = llm.RoleDeveloper
+	}
+	return llm.Message{
+		Role:           role,
+		MessageType:    llm.MessageType(strings.TrimSpace(entry.MessageType)),
+		SourcePath:     strings.TrimSpace(entry.SourcePath),
+		Content:        entry.Text,
+		CompactContent: strings.TrimSpace(entry.CondensedText),
+	}
+}
+
+func seedLocalEntry(entry SeedTranscriptEntryFile) seedLocalEntryPayload {
+	return seedLocalEntryPayload{
+		Visibility:    transcript.NormalizeEntryVisibility(transcript.EntryVisibility(entry.Visibility)),
+		Role:          strings.TrimSpace(entry.Role),
+		Text:          entry.Text,
+		CondensedText: strings.TrimSpace(entry.CondensedText),
+	}
+}
+
+type seedLocalEntryPayload struct {
+	Visibility    transcript.EntryVisibility `json:"visibility,omitempty"`
+	Role          string                     `json:"role"`
+	Text          string                     `json:"text"`
+	CondensedText string                     `json:"condensed_text,omitempty"`
+	DiagnosticKey string                     `json:"diagnostic_key,omitempty"`
+	NoticeID      string                     `json:"notice_id,omitempty"`
+}
+
+func seedToolResult(workspaceRoot string, entry SeedTranscriptEntryFile) (seedToolCompletionPayload, llm.Message) {
+	toolName := strings.TrimSpace(entry.ToolName)
+	if toolName == "" {
+		toolName = strings.TrimSpace(entry.Role)
+	}
+	if toolName == "" {
+		toolName = "tool"
+	}
+	callID := strings.TrimSpace(entry.ToolCallID)
+	if callID == "" {
+		callID = "seed_" + toolName
+	}
+	input := append(json.RawMessage(nil), entry.ToolInput...)
+	meta := tools.BuildCallTranscriptMeta(toolName, tools.ToolCallContext{WorkingDir: workspaceRoot}, input)
+	output := append(json.RawMessage(nil), entry.ToolOutput...)
+	if len(output) == 0 {
+		output = json.RawMessage(`{}`)
+	}
+	completion := seedToolCompletionPayload{
+		CallID:        callID,
+		Name:          toolName,
+		IsError:       entry.ToolIsError,
+		Output:        output,
+		Summary:       strings.TrimSpace(entry.ToolSummary),
+		CondensedText: strings.TrimSpace(entry.ToolCondensed),
+		Presentation:  &meta,
+	}
+	return completion, llm.Message{
+		Role:           llm.RoleTool,
+		Name:           toolName,
+		ToolCallID:     callID,
+		Content:        string(output),
+		MessageType:    llm.ToolOutputMessageType(entry.ToolCustom),
+		CompactContent: strings.TrimSpace(entry.ToolCondensed),
+	}
+}
+
+type seedToolCompletionPayload struct {
+	CallID        string                   `json:"call_id"`
+	Name          string                   `json:"name"`
+	IsError       bool                     `json:"is_error"`
+	Output        json.RawMessage          `json:"output"`
+	Summary       string                   `json:"summary,omitempty"`
+	CondensedText string                   `json:"condensed_text,omitempty"`
+	Presentation  *transcript.ToolCallMeta `json:"presentation,omitempty"`
+	ProviderItems []llm.ResponseItem       `json:"provider_items,omitempty"`
 }
 
 type Observation struct {

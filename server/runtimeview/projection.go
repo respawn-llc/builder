@@ -105,10 +105,6 @@ func SessionViewFromRuntime(engine *runtime.Engine) clientui.RuntimeSessionView 
 		SessionID:             engine.SessionID(),
 		SessionName:           engine.SessionName(),
 		ConversationFreshness: ConversationFreshnessFromSession(engine.ConversationFreshness()),
-		Transcript: clientui.TranscriptMetadata{
-			Revision:            engine.TranscriptRevision(),
-			CommittedEntryCount: engine.CommittedTranscriptEntryCount(),
-		},
 	}
 }
 

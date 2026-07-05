@@ -49,7 +49,7 @@ func (e *Engine) steerBaseMetaContextIfNeeded(stepID string) error {
 	intents := make([]steeringIntent, 0, 2)
 	if combined := strings.TrimSpace(strings.Join(metaResult.SkillWarnings, "\n")); combined != "" {
 		intents = append(intents, steerLocalEntryIntent(storedLocalEntry{
-			Visibility: transcript.EntryVisibilityAll,
+			Visibility: transcript.EntryVisibilityOngoing,
 			Role:       "warning",
 			Text:       combined,
 		}))

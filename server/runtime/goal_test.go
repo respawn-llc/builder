@@ -757,8 +757,8 @@ func TestGoalDeveloperMessageVisibleInOngoingWithDetailPrompt(t *testing.T) {
 	if entry.Role != string(transcript.EntryRoleGoalFeedback) {
 		t.Fatalf("goal role = %q, want %q", entry.Role, transcript.EntryRoleGoalFeedback)
 	}
-	if entry.Visibility != "all" {
-		t.Fatalf("goal visibility = %q, want all", entry.Visibility)
+	if entry.Visibility != transcript.EntryVisibilityOngoing {
+		t.Fatalf("goal visibility = %q, want ongoing", entry.Visibility)
 	}
 	if entry.Text != msg.Content {
 		t.Fatalf("goal detail text = %q, want full prompt", entry.Text)

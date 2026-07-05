@@ -20,7 +20,7 @@ func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, _ string
 	case clientui.TranscriptRowTool:
 		return Row{Group: clientui.TranscriptRowTool, Lines: RenderToolRow(*row.Tool, width, mode)}
 	case clientui.TranscriptRowNotice:
-		role, text := noticeRoleAndText(row.Notice)
+		role, text := noticeRoleAndText(row.Notice, row.Visibility, mode)
 		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(role, text, width, mode)}
 	default:
 		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(StyleRoleNotice, "unknown transcript row", width, mode)}
@@ -308,12 +308,13 @@ func roleSymbol(role StyleRole) string {
 	return symbol
 }
 
-func noticeRoleAndText(row *clientui.TranscriptNoticeRow) (StyleRole, string) {
+func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.EntryVisibility, mode Mode) (StyleRole, string) {
 	if row == nil {
 		return StyleRoleNotice, "notice"
 	}
-	text := firstNonEmpty(row.Data.CompactLabel, row.Data.CondensedText, noticeLegacyText(row), row.Data.SourcePath, string(row.Reason), "notice")
-	if row.Diagnostic != nil {
+	compactText := firstNonEmpty(row.Data.CompactLabel, row.Data.CondensedText, noticeLegacyText(row), row.Data.SourcePath, string(row.Reason), "notice")
+	text := compactText
+	if row.Diagnostic != nil && (mode == ModeDetailExpanded || visibility != clientui.EntryVisibilityOngoingCollapsed || compactText == "") {
 		text = firstNonEmpty(row.Diagnostic.Detail, row.Diagnostic.Code, text)
 	}
 	switch row.Severity {

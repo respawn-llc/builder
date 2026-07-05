@@ -30,14 +30,6 @@ type SessionTranscriptPageResponse struct {
 	Transcript clientui.TranscriptPage `json:"transcript"`
 }
 
-type SessionCommittedTranscriptSuffixRequest struct {
-	SessionID string `json:"session_id"`
-}
-
-type SessionCommittedTranscriptSuffixResponse struct {
-	Suffix clientui.CommittedTranscriptSuffix `json:"suffix"`
-}
-
 func (r SessionMainViewRequest) Validate() error {
 	if err := validateRequiredSessionID(r.SessionID); err != nil {
 		return err
@@ -64,8 +56,4 @@ func (r SessionTranscriptPageRequest) Validate() error {
 		return ErrTranscriptCursorInvalid
 	}
 	return nil
-}
-
-func (r SessionCommittedTranscriptSuffixRequest) Validate() error {
-	return validateRequiredSessionID(r.SessionID)
 }

@@ -45,24 +45,20 @@ func TestDetailModeTransitionLoadsServerBackedTranscriptPage(t *testing.T) {
 func TestDetailTranscriptLoadMergesAdjacentCursorPages(t *testing.T) {
 	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
 	newest := clientui.TranscriptPage{
-		SessionID:      "session-1",
-		OlderCursor:    appInt64Ptr(40),
-		HasMoreAbove:   true,
-		NewerCursor:    appInt64Ptr(80),
-		HasMoreBelow:   false,
-		Entries:        []clientui.ChatEntry{{Role: "assistant", Text: "newer"}},
-		Streaming:      "",
-		StreamingError: "",
+		SessionID:    "session-1",
+		OlderCursor:  appInt64Ptr(40),
+		HasMoreAbove: true,
+		NewerCursor:  appInt64Ptr(80),
+		HasMoreBelow: false,
+		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "newer"}},
 	}
 	older := clientui.TranscriptPage{
-		SessionID:      "session-1",
-		OlderCursor:    appInt64Ptr(20),
-		HasMoreAbove:   false,
-		NewerCursor:    appInt64Ptr(40),
-		HasMoreBelow:   true,
-		Entries:        []clientui.ChatEntry{{Role: "user", Text: "older"}},
-		Streaming:      "",
-		StreamingError: "",
+		SessionID:    "session-1",
+		OlderCursor:  appInt64Ptr(20),
+		HasMoreAbove: false,
+		NewerCursor:  appInt64Ptr(40),
+		HasMoreBelow: true,
+		Entries:      []clientui.ChatEntry{{Role: "user", Text: "older"}},
 	}
 
 	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: newest})
@@ -141,110 +137,21 @@ func TestDetailTranscriptLoadIgnoresStaleSessionResponse(t *testing.T) {
 	}
 }
 
-func TestDetailTranscriptSuffixAppendsCommittedChangesWithoutOngoingMirror(t *testing.T) {
-	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{
-		request: clientui.TranscriptPageRequest{},
-		page: clientui.TranscriptPage{
-			SessionID: "session-1",
-			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "first"}},
-		},
-	})
-
-	model.handleDetailTranscriptSuffixLoad(detailTranscriptSuffixLoadMsg{suffix: clientui.CommittedTranscriptSuffix{
-		SessionID: "session-1",
-		Entries: []clientui.ChatEntry{
-			{Role: "assistant", Text: "first"},
-			{Role: "assistant", Text: "second"},
-		},
-	}})
-
-	got := model.detailTranscript.page().Entries
-	want := []clientui.ChatEntry{
-		{Role: "assistant", Text: "first"},
-		{Role: "assistant", Text: "second"},
-	}
-	if !sameChatEntries(got, want) {
-		t.Fatalf("suffix-updated detail entries = %#v, want %#v", got, want)
-	}
-}
-
-func TestDetailTranscriptSuffixClearsStreamingOnFullOverlap(t *testing.T) {
+func TestDetailTranscriptIgnoresRuntimeCommittedChangesUntilPageIsRequested(t *testing.T) {
 	model := newProjectedClosedUIModel(&runtimeControlFakeClient{}, WithUISessionID("session-1"))
 	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{
 		sessionID: "session-1",
 		request:   clientui.TranscriptPageRequest{},
 		page: clientui.TranscriptPage{
-			SessionID:   "session-1",
-			Entries:     []clientui.ChatEntry{{Role: "assistant", Text: "first"}},
-			Streaming:   "old live tail",
-			OlderCursor: nil,
-		},
-	})
-
-	model.handleDetailTranscriptSuffixLoad(detailTranscriptSuffixLoadMsg{
-		sessionID: "session-1",
-		suffix: clientui.CommittedTranscriptSuffix{
 			SessionID: "session-1",
-			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "first"}},
+			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "loaded page"}},
 		},
 	})
 
-	if streaming := model.detailTranscript.page().Streaming; streaming != "" {
-		t.Fatalf("streaming after overlapping suffix = %q, want empty", streaming)
-	}
-}
-
-func TestDetailTranscriptSuffixNoOverlapAtBottomReloadsNewestPage(t *testing.T) {
-	sessionViews := &countingSessionViewClient{page: clientui.TranscriptPage{
-		SessionID: "session-1",
-		Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "post compaction"}},
-	}}
-	model := newProjectedClosedUIModel(
-		&runtimeControlFakeClient{},
-		WithUISessionID("session-1"),
-		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
-	)
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{
-		sessionID: "session-1",
-		request:   clientui.TranscriptPageRequest{},
-		page: clientui.TranscriptPage{
-			SessionID:    "session-1",
-			HasMoreBelow: false,
-			Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "pre compaction"}},
-		},
-	})
-
-	cmd := model.handleDetailTranscriptSuffixLoad(detailTranscriptSuffixLoadMsg{
-		sessionID: "session-1",
-		suffix: clientui.CommittedTranscriptSuffix{
-			SessionID: "session-1",
-			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "post compaction"}},
-		},
-	})
-	if cmd == nil {
-		t.Fatal("expected no-overlap newest suffix at bottom edge to reload newest page")
-	}
-
-	var loaded bool
-	for _, msg := range collectCmdMessages(t, cmd) {
-		load, ok := msg.(detailTranscriptLoadMsg)
-		if !ok {
-			continue
-		}
-		loaded = true
-		if load.sessionID != "session-1" || load.request.Cursor != nil || load.request.NewerCursor != nil {
-			t.Fatalf("reload request = session:%q request:%#v, want newest session-1", load.sessionID, load.request)
-		}
-		model = updateUIModel(t, model, load)
-	}
-	if !loaded {
-		t.Fatal("newest reload command did not return a detail transcript load message")
-	}
 	got := model.detailTranscript.page().Entries
-	want := []clientui.ChatEntry{{Role: "assistant", Text: "post compaction"}}
+	want := []clientui.ChatEntry{{Role: "assistant", Text: "loaded page"}}
 	if !sameChatEntries(got, want) {
-		t.Fatalf("reloaded detail entries = %#v, want %#v", got, want)
+		t.Fatalf("detail entries after committed runtime event = %#v, want stale loaded page %#v", got, want)
 	}
 }
 

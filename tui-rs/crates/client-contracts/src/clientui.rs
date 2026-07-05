@@ -18,14 +18,6 @@ pub struct Event {
     pub recovery_cause: TranscriptRecoveryCause,
     #[serde(rename = "CommittedTranscriptChanged")]
     pub committed_transcript_changed: bool,
-    #[serde(rename = "TranscriptRevision")]
-    pub transcript_revision: i64,
-    #[serde(rename = "CommittedEntryCount")]
-    pub committed_entry_count: i32,
-    #[serde(rename = "CommittedEntryStart")]
-    pub committed_entry_start: i32,
-    #[serde(rename = "CommittedEntryStartSet")]
-    pub committed_entry_start_set: bool,
     #[serde(rename = "Error")]
     pub error: String,
     #[serde(rename = "AssistantDelta")]
@@ -364,8 +356,6 @@ pub struct TranscriptPage {
     pub session_name: String,
     #[serde(rename = "ConversationFreshness")]
     pub conversation_freshness: ConversationFreshness,
-    #[serde(rename = "Revision")]
-    pub revision: i64,
     #[serde(rename = "OlderCursor", default)]
     pub older_cursor: Option<i64>,
     #[serde(rename = "HasMoreAbove", default)]
@@ -376,43 +366,11 @@ pub struct TranscriptPage {
     pub has_more_below: bool,
     #[serde(rename = "Entries", default, deserialize_with = "null_to_default")]
     pub entries: Vec<ChatEntry>,
-    #[serde(rename = "Streaming")]
-    pub ongoing: String,
-    #[serde(rename = "StreamingError")]
-    pub ongoing_error: String,
 }
-
-pub const DEFAULT_COMMITTED_TRANSCRIPT_SUFFIX_LIMIT: i32 = 250;
-pub const MAX_COMMITTED_TRANSCRIPT_SUFFIX_LIMIT: i32 = 500;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-pub struct CommittedTranscriptSuffixRequest {}
 
 pub type ConversationFreshness = u8;
 pub const CONVERSATION_FRESHNESS_FRESH: ConversationFreshness = 0;
 pub const CONVERSATION_FRESHNESS_ESTABLISHED: ConversationFreshness = 1;
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct CommittedTranscriptSuffix {
-    #[serde(rename = "SessionID")]
-    pub session_id: String,
-    #[serde(rename = "SessionName")]
-    pub session_name: String,
-    #[serde(rename = "ConversationFreshness")]
-    pub conversation_freshness: ConversationFreshness,
-    #[serde(rename = "Revision")]
-    pub revision: i64,
-    #[serde(rename = "CommittedEntryCount")]
-    pub committed_entry_count: i32,
-    #[serde(rename = "StartEntryCount")]
-    pub start_entry_count: i32,
-    #[serde(rename = "NextEntryCount")]
-    pub next_entry_count: i32,
-    #[serde(rename = "HasMoreCommittedEntries")]
-    pub has_more_committed_entries: bool,
-    #[serde(rename = "Entries", default, deserialize_with = "null_to_default")]
-    pub entries: Vec<ChatEntry>,
-}
 
 pub type EntryVisibility = String;
 

@@ -42,6 +42,10 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	sessionID, err := runtime.SeedSession(ctx, flags.PersistenceRoot, flags.WorkspaceRoot)
+	if err != nil {
+		return err
+	}
 	ctx = apphooks.WithOptions(ctx, apphooks.Options{
 		StartupOptions:                  runtime.StartupOptions(),
 		TerminalPhaseMarkerEncoder:      &ptyfixture.PhaseMarkerEncoder{Raw: appfixture.RawPhaseMarkerEncoder{}},
@@ -49,6 +53,7 @@ func run(ctx context.Context, args []string) error {
 	})
 	runErr := app.Run(ctx, app.Options{
 		WorkspaceRoot:         flags.WorkspaceRoot,
+		SessionID:             sessionID,
 		ConfigRoot:            flags.PersistenceRoot,
 		OpenAIBaseURL:         "http://127.0.0.1:1/v1",
 		OpenAIBaseURLExplicit: true,

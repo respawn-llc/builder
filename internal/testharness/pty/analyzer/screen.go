@@ -3,7 +3,9 @@ package analyzer
 import "strings"
 
 type Cell struct {
-	Content string
+	Content    string
+	Faint      bool
+	Foreground string
 }
 
 type ScreenSnapshot struct {

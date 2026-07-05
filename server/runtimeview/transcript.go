@@ -29,26 +29,20 @@ func TranscriptPageFromRuntime(engine *runtime.Engine, req clientui.TranscriptPa
 		engine.SessionID(),
 		engine.SessionName(),
 		ConversationFreshnessFromSession(engine.ConversationFreshness()),
-		engine.TranscriptRevision(),
 		segment,
 	), nil
 }
 
-func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui.ConversationFreshness, revision int64, page runtime.TranscriptSegmentPage) clientui.TranscriptPage {
-	snapshot := ChatSnapshotFromRuntime(page.Snapshot)
+func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui.ConversationFreshness, page runtime.TranscriptSegmentPage) clientui.TranscriptPage {
 	return clientui.TranscriptPage{
 		SessionID:             sessionID,
 		SessionName:           sessionName,
 		ConversationFreshness: freshness,
-		Revision:              revision,
 		OlderCursor:           transcriptCursor(page.HasMoreAbove, page.OlderCursor),
 		HasMoreAbove:          page.HasMoreAbove,
 		NewerCursor:           transcriptCursor(page.HasMoreBelow, page.NewerCursor),
 		HasMoreBelow:          page.HasMoreBelow,
-		Entries:               cloneChatEntries(snapshot.Entries),
-		Streaming:             snapshot.Streaming,
-		StreamingMetadata:     snapshot.StreamingMetadata,
-		StreamingError:        snapshot.StreamingError,
+		Entries:               chatEntriesFromRuntimeSnapshot(page.Snapshot),
 	}
 }
 
@@ -59,40 +53,7 @@ func transcriptCursor(hasMore bool, cursor int64) *int64 {
 	return &cursor
 }
 
-func CommittedTranscriptSuffixFromRuntime(engine *runtime.Engine, _ clientui.CommittedTranscriptSuffixRequest) (clientui.CommittedTranscriptSuffix, error) {
-	if engine == nil {
-		return clientui.CommittedTranscriptSuffix{}, nil
-	}
-	segment, err := engine.TranscriptNewestSegmentPage()
-	if err != nil {
-		return clientui.CommittedTranscriptSuffix{}, err
-	}
-	return CommittedTranscriptSuffixFromSegment(
-		engine.SessionID(),
-		engine.SessionName(),
-		ConversationFreshnessFromSession(engine.ConversationFreshness()),
-		engine.TranscriptRevision(),
-		segment,
-	), nil
-}
-
-func CommittedTranscriptSuffixFromSegment(sessionID, sessionName string, freshness clientui.ConversationFreshness, revision int64, page runtime.TranscriptSegmentPage) clientui.CommittedTranscriptSuffix {
-	snapshot := ChatSnapshotFromRuntime(page.Snapshot)
-	entries := cloneChatEntries(snapshot.Entries)
-	return clientui.CommittedTranscriptSuffix{
-		SessionID:               sessionID,
-		SessionName:             sessionName,
-		ConversationFreshness:   freshness,
-		Revision:                revision,
-		CommittedEntryCount:     len(entries),
-		StartEntryCount:         0,
-		NextEntryCount:          len(entries),
-		HasMoreCommittedEntries: page.HasMoreAbove,
-		Entries:                 entries,
-	}
-}
-
-func ChatSnapshotFromRuntime(snapshot runtime.ChatSnapshot) clientui.ChatSnapshot {
+func chatEntriesFromRuntimeSnapshot(snapshot runtime.ChatSnapshot) []clientui.ChatEntry {
 	entries := make([]clientui.ChatEntry, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
 		if isSuppressedNoopAssistantEntry(entry) {
@@ -114,27 +75,7 @@ func ChatSnapshotFromRuntime(snapshot runtime.ChatSnapshot) clientui.ChatSnapsho
 			ToolCall:          cloneToolCallMeta(entry.ToolCall),
 		})
 	}
-	streaming := snapshot.Streaming
-	if strings.TrimSpace(streaming) == runtimeNoopFinalToken {
-		streaming = ""
-	}
-	return clientui.ChatSnapshot{
-		Entries:           entries,
-		Streaming:         streaming,
-		StreamingMetadata: assistantStreamMetadataFromRuntime(snapshot.StreamingMetadata),
-		StreamingError:    snapshot.StreamingError,
-	}
-}
-
-func assistantStreamMetadataFromRuntime(metadata *runtime.AssistantStreamMetadata) *clientui.AssistantStreamMetadata {
-	if metadata == nil {
-		return nil
-	}
-	return &clientui.AssistantStreamMetadata{
-		StepID:                  metadata.StepID,
-		BaseRevision:            metadata.BaseRevision,
-		BaseCommittedEntryCount: metadata.BaseCommittedEntryCount,
-	}
+	return entries
 }
 
 func isSuppressedNoopAssistantEntry(entry runtime.ChatEntry) bool {

@@ -110,20 +110,6 @@ func (m *uiModel) loadDetailTranscriptPageCmd(req clientui.TranscriptPageRequest
 	}
 }
 
-func (m *uiModel) loadDetailTranscriptSuffixCmd() tea.Cmd {
-	sessionID := strings.TrimSpace(m.currentRuntimeSessionID())
-	client := m.statusConfig.SessionViews
-	return func() tea.Msg {
-		if client == nil {
-			return detailTranscriptSuffixLoadMsg{sessionID: sessionID, err: errors.New("session view client is required")}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeHydrationReadTimeout)
-		defer cancel()
-		resp, err := client.GetSessionCommittedTranscriptSuffix(ctx, serverapi.SessionCommittedTranscriptSuffixRequest{SessionID: sessionID})
-		return detailTranscriptSuffixLoadMsg{sessionID: sessionID, suffix: resp.Suffix, err: err}
-	}
-}
-
 func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {
 	filtered := make([]tea.Cmd, 0, len(cmds))
 	for _, cmd := range cmds {

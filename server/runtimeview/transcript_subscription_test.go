@@ -6,6 +6,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/shared/clientui"
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -28,6 +29,38 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 	}
 	if hydration.ActiveAssistantStream.Phase != "final_answer" {
 		t.Fatalf("active assistant stream phase = %q, want final_answer", hydration.ActiveAssistantStream.Phase)
+	}
+}
+
+func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:                runtime.EventLocalEntryAdded,
+		LocalEntryProjected: true,
+		LocalEntry: &runtime.ChatEntry{
+			Visibility: transcript.EntryVisibilityDetail,
+			Role:       "user",
+			Text:       "detail-only row",
+		},
+	})
+	if len(messages) != 1 || messages[0].CommittedRow == nil {
+		t.Fatalf("messages = %+v, want one committed row", messages)
+	}
+	if got := messages[0].CommittedRow.Visibility; got != clientui.EntryVisibilityDetail {
+		t.Fatalf("committed row visibility = %q, want detail", got)
+	}
+
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		CommittedRows: []runtime.TranscriptCommittedRowFact{{
+			Visibility: transcript.EntryVisibilityHidden,
+			Kind:       runtime.TranscriptCommittedRowFactUser,
+			User:       &runtime.TranscriptUserRowFact{Text: "hidden row"},
+		}},
+	})
+	if len(hydration.CommittedRows) != 1 {
+		t.Fatalf("hydration rows = %+v, want one committed row", hydration.CommittedRows)
+	}
+	if got := hydration.CommittedRows[0].Visibility; got != clientui.EntryVisibilityHidden {
+		t.Fatalf("hydration visibility = %q, want hidden", got)
 	}
 }
 

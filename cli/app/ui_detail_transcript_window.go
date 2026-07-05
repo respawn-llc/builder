@@ -21,18 +21,15 @@ type residentSegmentMeta struct {
 }
 
 type uiDetailTranscriptWindow struct {
-	sessionID       string
-	entries         []clientui.ChatEntry
-	ongoing         string
-	ongoingMetadata *clientui.AssistantStreamMetadata
-	ongoingError    string
-	loaded          bool
-	olderCursor     *int64
-	hasMoreAbove    bool
-	newerCursor     *int64
-	hasMoreBelow    bool
-	segments        []residentSegmentMeta
-	lastRequest     clientui.TranscriptPageRequest
+	sessionID    string
+	entries      []clientui.ChatEntry
+	loaded       bool
+	olderCursor  *int64
+	hasMoreAbove bool
+	newerCursor  *int64
+	hasMoreBelow bool
+	segments     []residentSegmentMeta
+	lastRequest  clientui.TranscriptPageRequest
 }
 
 func (w uiDetailTranscriptWindow) page() clientui.TranscriptPage {
@@ -43,9 +40,6 @@ func (w uiDetailTranscriptWindow) page() clientui.TranscriptPage {
 		NewerCursor:       w.newerCursor,
 		HasMoreBelow:      w.hasMoreBelow,
 		Entries:           cloneDetailChatEntries(w.entries),
-		Streaming:         w.ongoing,
-		StreamingMetadata: cloneDetailAssistantStreamMetadata(w.ongoingMetadata),
-		StreamingError:    w.ongoingError,
 	}
 }
 
@@ -113,9 +107,6 @@ func (w uiDetailTranscriptWindow) matchesPage(page clientui.TranscriptPage) bool
 	if transcriptPageSessionChanged(w.sessionID, page.SessionID) {
 		return false
 	}
-	if w.ongoing != page.Streaming || !clientAssistantStreamMetadataEqual(w.ongoingMetadata, page.StreamingMetadata) || w.ongoingError != page.StreamingError {
-		return false
-	}
 	if len(w.entries) != len(page.Entries) {
 		return false
 	}
@@ -133,9 +124,6 @@ func (w *uiDetailTranscriptWindow) replace(page clientui.TranscriptPage) {
 	}
 	w.sessionID = strings.TrimSpace(page.SessionID)
 	w.entries = cloneDetailChatEntries(page.Entries)
-	w.ongoing = page.Streaming
-	w.ongoingMetadata = cloneDetailAssistantStreamMetadata(page.StreamingMetadata)
-	w.ongoingError = page.StreamingError
 	w.loaded = true
 	w.segments = []residentSegmentMeta{segmentMetaFromPage(0, page)}
 	w.refreshBounds()
@@ -188,9 +176,6 @@ func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage
 		return
 	}
 	if w.hasSegment(page) {
-		w.ongoing = page.Streaming
-		w.ongoingMetadata = cloneDetailAssistantStreamMetadata(page.StreamingMetadata)
-		w.ongoingError = page.StreamingError
 		return
 	}
 	pageEntries := cloneDetailChatEntries(page.Entries)
@@ -203,9 +188,6 @@ func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage
 			bottom.hasMoreBelow = page.HasMoreBelow
 		}
 		w.refreshBounds()
-		w.ongoing = page.Streaming
-		w.ongoingMetadata = cloneDetailAssistantStreamMetadata(page.StreamingMetadata)
-		w.ongoingError = page.StreamingError
 		w.loaded = true
 		return
 	}
@@ -214,9 +196,6 @@ func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage
 	w.segments = append(w.segments, segmentMetaFromPage(startLocal, page))
 	w.refreshBounds()
 	w.trimToSegments(len(w.entries))
-	w.ongoing = page.Streaming
-	w.ongoingMetadata = cloneDetailAssistantStreamMetadata(page.StreamingMetadata)
-	w.ongoingError = page.StreamingError
 	w.loaded = true
 }
 
@@ -228,81 +207,7 @@ func (w *uiDetailTranscriptWindow) merge(page clientui.TranscriptPage) {
 		w.replace(page)
 		return
 	}
-	if len(page.Entries) == 0 {
-		w.ongoing = page.Streaming
-		w.ongoingMetadata = cloneDetailAssistantStreamMetadata(page.StreamingMetadata)
-		w.ongoingError = page.StreamingError
-		return
-	}
 	w.replace(page)
-}
-
-func (w *uiDetailTranscriptWindow) applySuffix(suffix clientui.CommittedTranscriptSuffix) {
-	if w == nil {
-		return
-	}
-	page := clientui.TranscriptPage{
-		SessionID:             suffix.SessionID,
-		SessionName:           suffix.SessionName,
-		ConversationFreshness: suffix.ConversationFreshness,
-		Revision:              suffix.Revision,
-		Entries:               cloneDetailChatEntries(suffix.Entries),
-	}
-	if !w.loaded || transcriptPageSessionChanged(w.sessionID, suffix.SessionID) {
-		w.replace(page)
-		return
-	}
-	w.ongoing = ""
-	w.ongoingMetadata = nil
-	w.ongoingError = ""
-	if len(suffix.Entries) == 0 {
-		return
-	}
-	if len(w.entries) == 0 {
-		w.replace(page)
-		return
-	}
-	overlap := suffixOverlapLength(w.entries, suffix.Entries)
-	if overlap == 0 {
-		return
-	}
-	if overlap >= len(suffix.Entries) {
-		return
-	}
-	w.entries = append(w.entries, cloneDetailChatEntries(suffix.Entries[overlap:])...)
-	w.refreshBounds()
-	w.trimToSegments(len(w.entries))
-}
-
-func (w uiDetailTranscriptWindow) needsNewestReloadForSuffix(suffix clientui.CommittedTranscriptSuffix) bool {
-	if !w.loaded || transcriptPageSessionChanged(w.sessionID, suffix.SessionID) {
-		return false
-	}
-	if len(w.entries) == 0 || len(suffix.Entries) == 0 {
-		return false
-	}
-	if w.hasMoreBelow {
-		return false
-	}
-	return suffixOverlapLength(w.entries, suffix.Entries) == 0
-}
-
-func suffixOverlapLength(current []clientui.ChatEntry, suffix []clientui.ChatEntry) int {
-	maxOverlap := min(len(current), len(suffix))
-	for overlap := maxOverlap; overlap > 0; overlap-- {
-		matches := true
-		start := len(current) - overlap
-		for idx := 0; idx < overlap; idx++ {
-			if !clientChatEntryEqual(current[start+idx], suffix[idx]) {
-				matches = false
-				break
-			}
-		}
-		if matches {
-			return overlap
-		}
-	}
-	return 0
 }
 
 func (w uiDetailTranscriptWindow) hasSegment(page clientui.TranscriptPage) bool {
@@ -380,23 +285,6 @@ func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) {
 		}
 	}
 	w.refreshBounds()
-}
-
-func clientAssistantStreamMetadataEqual(left *clientui.AssistantStreamMetadata, right *clientui.AssistantStreamMetadata) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return left.StepID == right.StepID &&
-		left.BaseRevision == right.BaseRevision &&
-		left.BaseCommittedEntryCount == right.BaseCommittedEntryCount
-}
-
-func cloneDetailAssistantStreamMetadata(metadata *clientui.AssistantStreamMetadata) *clientui.AssistantStreamMetadata {
-	if metadata == nil {
-		return nil
-	}
-	copyMetadata := *metadata
-	return &copyMetadata
 }
 
 func (w uiDetailTranscriptWindow) requestedPageForDetailEntry() clientui.TranscriptPageRequest {

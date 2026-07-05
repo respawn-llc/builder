@@ -353,8 +353,14 @@ func (r RuntimeAppendCommittedEntryRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
-	if visibility := transcript.NormalizeEntryVisibility(transcript.EntryVisibility(r.Visibility)); visibility != "" && visibility != transcript.EntryVisibilityAll && visibility != transcript.EntryVisibilityVerbose {
-		return errors.New("visibility must be empty/auto, all, or verbose")
+	switch visibility := transcript.NormalizeEntryVisibility(transcript.EntryVisibility(r.Visibility)); visibility {
+	case transcript.EntryVisibilityAuto,
+		transcript.EntryVisibilityOngoing,
+		transcript.EntryVisibilityOngoingCollapsed,
+		transcript.EntryVisibilityDetail,
+		transcript.EntryVisibilityHidden:
+	default:
+		return errors.New("visibility must be empty/auto, o, oc, d, or x")
 	}
 	return nil
 }

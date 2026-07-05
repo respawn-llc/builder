@@ -159,19 +159,6 @@ type ChatEntry struct {
 
 const ChatEntryPhaseFinalAnswer = string(MessagePhaseFinal)
 
-type ChatSnapshot struct {
-	Entries           []ChatEntry
-	Streaming         string
-	StreamingMetadata *AssistantStreamMetadata
-	StreamingError    string
-}
-
-type AssistantStreamMetadata struct {
-	StepID                  string
-	BaseRevision            int64
-	BaseCommittedEntryCount int
-}
-
 type TranscriptPageRequest struct {
 	Cursor      *int64
 	NewerCursor *int64
@@ -181,29 +168,11 @@ type TranscriptPage struct {
 	SessionID             string
 	SessionName           string
 	ConversationFreshness ConversationFreshness
-	Revision              int64
 	OlderCursor           *int64
 	HasMoreAbove          bool
 	NewerCursor           *int64
 	HasMoreBelow          bool
 	Entries               []ChatEntry
-	Streaming             string
-	StreamingMetadata     *AssistantStreamMetadata
-	StreamingError        string
-}
-
-type CommittedTranscriptSuffixRequest struct{}
-
-type CommittedTranscriptSuffix struct {
-	SessionID               string
-	SessionName             string
-	ConversationFreshness   ConversationFreshness
-	Revision                int64
-	CommittedEntryCount     int
-	StartEntryCount         int
-	NextEntryCount          int
-	HasMoreCommittedEntries bool
-	Entries                 []ChatEntry
 }
 
 type ToolPresentationKind string

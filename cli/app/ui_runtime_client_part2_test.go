@@ -511,7 +511,7 @@ func TestRuntimeClientSubmitUserMessageRecoversRuntimeUnavailable(t *testing.T) 
 		t.Fatalf("warning entry count = %d, want 1", len(entries))
 	}
 	entry := entries[0]
-	if entry.Role != "warning" || entry.Visibility != string(clientui.EntryVisibilityAll) {
+	if entry.Role != "warning" || entry.Visibility != string(clientui.EntryVisibilityOngoing) {
 		t.Fatalf("warning entry = %+v, want recovery warning", entry)
 	}
 }
@@ -713,7 +713,7 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 	}
 	select {
 	case warning := <-warnings:
-		if warning.visibility != clientui.EntryVisibilityAll {
+		if warning.visibility != clientui.EntryVisibilityOngoing {
 			t.Fatalf("warning = %+v, want lease recovery warning", warning)
 		}
 	default:

@@ -10,8 +10,15 @@ import (
 	"testing"
 	"time"
 
+	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
 )
+
+type styledAppendExpectation struct {
+	Text       string
+	Foreground string
+	Faint      bool
+}
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -28,6 +35,10 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		inputs                []pty.InputEvent
 		resizes               []pty.DriverResizeEvent
 		expectedAppends       []string
+		expectedAnyAppends    []string
+		forbiddenAnyAppends   []string
+		expectedFaintAppends  []string
+		expectedStyledAppends []styledAppendExpectation
 		allowDuplicateAppends bool
 		allowsAltScroll       bool
 		allowsFullScreen      bool
@@ -35,13 +46,20 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		{
 			name: "visibility_o_real_app_path",
 			script: map[string]any{
+				"seed_transcript": []map[string]any{
+					{"kind": "message", "role": "user", "text": "PTY_SEED_O_USER"},
+				},
 				"final": "VISIBILITY_O_MODEL",
 			},
-			expectedAppends: []string{"❯ visibility_o_real_app_path", "❮ VISIBILITY_O_MODEL"},
+			expectedAppends:    []string{"❯ visibility_o_real_app_path", "❮ VISIBILITY_O_MODEL"},
+			expectedAnyAppends: []string{"❯ PTY_SEED_O_USER"},
 		},
 		{
 			name: "visibility_oc_tool_real_app_path",
 			script: map[string]any{
+				"seed_transcript": []map[string]any{
+					{"kind": "local_entry", "visibility": "oc", "role": "system", "text": "PTY_SEED_OC_FULL_DETAIL_TEXT", "condensed_text": "PTY_SEED_OC_COMPACT"},
+				},
 				"steps": []map[string]any{
 					{
 						"commentary": "calling shell tool",
@@ -55,21 +73,72 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					},
 				},
 			},
-			expectedAppends: []string{"❮ tool path complete"},
+			expectedAppends:     []string{"❮ tool path complete"},
+			expectedAnyAppends:  []string{"ℹ PTY_SEED_OC_COMPACT"},
+			forbiddenAnyAppends: []string{"ℹ PTY_SEED_OC_FULL_DETAIL_TEXT"},
 		},
 		{
 			name: "visibility_d_detail_only_real_app_path",
 			script: map[string]any{
+				"seed_transcript": []map[string]any{
+					{"kind": "message", "role": "developer", "message_type": "environment", "text": "PTY_SEED_D_DETAIL_ONLY", "condensed_text": "PTY_SEED_D_COMPACT"},
+				},
 				"final": "detail-only fixture completed",
 			},
-			expectedAppends: []string{"❯ visibility_d_detail_only_real_app_path", "❮ detail-only fixture completed"},
+			expectedAppends:     []string{"❯ visibility_d_detail_only_real_app_path", "❮ detail-only fixture completed"},
+			forbiddenAnyAppends: []string{"ℹ PTY_SEED_D_DETAIL_ONLY", "ℹ PTY_SEED_D_COMPACT"},
 		},
 		{
 			name: "visibility_x_hidden_real_app_path",
 			script: map[string]any{
+				"seed_transcript": []map[string]any{
+					{"kind": "local_entry", "visibility": "x", "role": "system", "text": "PTY_SEED_X_HIDDEN", "condensed_text": "PTY_SEED_X_COMPACT"},
+				},
 				"final": "hidden fixture completed",
 			},
-			expectedAppends: []string{"❯ visibility_x_hidden_real_app_path", "❮ hidden fixture completed"},
+			expectedAppends:     []string{"❯ visibility_x_hidden_real_app_path", "❮ hidden fixture completed"},
+			forbiddenAnyAppends: []string{"ℹ PTY_SEED_X_HIDDEN", "ℹ PTY_SEED_X_COMPACT"},
+		},
+		{
+			name: "seeded_tool_message_style_matrix_real_app_path",
+			script: map[string]any{
+				"seed_transcript": seededStyleMatrixTranscript(),
+				"final":           "style matrix complete",
+			},
+			expectedAppends: []string{"❮ style matrix complete"},
+			expectedAnyAppends: []string{
+				"❯ PTY_STYLE_USER",
+				"❮ PTY_STYLE_ASSISTANT",
+				"⚠ PTY_STYLE_WARNING",
+				"! PTY_STYLE_ERROR",
+				"ℹ PTY_STYLE_NOTICE",
+				"ℹ PTY_STYLE_TOGGLE_FAST_ON",
+				"$ PTY_TOOL_SHELL",
+				"⇄ ./pty_patch.txt +1",
+				"⇄ PTY_TOOL_EDIT",
+				"• PTY_TOOL_IMAGE",
+				"@ PTY_TOOL_WEB",
+				"• PTY_TOOL_CUSTOM",
+				"• PTY_TOOL_COMPLETE",
+				"? PTY_TOOL_QUESTION",
+				"• PTY_TOOL_HANDOFF",
+			},
+			expectedFaintAppends: []string{
+				"────────────────────────────────────────────────────── assistant ───────────────",
+				"──────────────────────────────────────────────────────── notice ────────────────",
+				"───────────────────────────────────────────────────────── tool ─────────────────",
+			},
+			expectedStyledAppends: []styledAppendExpectation{
+				{Text: "❯ PTY_STYLE_USER", Foreground: colorForStyle(transcriptrender.StyleRoleUser)},
+				{Text: "❮ PTY_STYLE_ASSISTANT", Foreground: colorForStyle(transcriptrender.StyleRoleAssistant)},
+				{Text: "⚠ PTY_STYLE_WARNING", Foreground: colorForStyle(transcriptrender.StyleRoleWarning)},
+				{Text: "! PTY_STYLE_ERROR", Foreground: colorForStyle(transcriptrender.StyleRoleError)},
+				{Text: "$ PTY_TOOL_SHELL", Foreground: colorForStyle(transcriptrender.StyleRoleToolShell)},
+				{Text: "⇄ ./pty_patch.txt ", Foreground: colorForStyle(transcriptrender.StyleRoleToolPatch)},
+				{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
+				{Text: "? PTY_TOOL_QUESTION", Foreground: colorForStyle(transcriptrender.StyleRoleToolQuestion)},
+				{Text: "@ PTY_TOOL_WEB", Foreground: colorForStyle(transcriptrender.StyleRoleToolWebSearch)},
+			},
 		},
 		{
 			name: "markdown_streaming_promotion_and_final_tail",
@@ -156,6 +225,10 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			if err != nil {
 				t.Fatalf("append boundary windows: %v", err)
 			}
+			allAppends, err := allScenarioAppendRows(analysis, tc.expectedAppends)
+			if err != nil {
+				t.Fatalf("all append rows: %v", err)
+			}
 			if !tc.allowsAltScroll {
 				if err := pty.NoAlternateScroll1007(analysis, window); err != nil {
 					t.Fatalf("forbidden alternate-scroll mode: %v", err)
@@ -177,6 +250,33 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					t.Fatalf("append cardinality: %v", err)
 				}
 			}
+			for _, content := range tc.expectedAnyAppends {
+				if err := contentAppendedAtLeastOnce(allAppends, content); err != nil {
+					t.Fatalf("expected full-window append: %v", err)
+				}
+			}
+			for _, content := range tc.forbiddenAnyAppends {
+				if err := contentNotAppended(allAppends, content); err != nil {
+					t.Fatalf("forbidden full-window append: %v", err)
+				}
+			}
+			for _, content := range tc.expectedFaintAppends {
+				if err := faintContentAppendedAtLeastOnce(allAppends, content); err != nil {
+					t.Fatalf("expected faint full-window append: %v", err)
+				}
+			}
+			if len(tc.expectedStyledAppends) > 0 {
+				rawAppends, err := allScenarioRawAppendRows(analysis, tc.expectedAppends)
+				if err != nil {
+					t.Fatalf("raw append rows: %v", err)
+				}
+				styledAppends := coalesceStyledAppendRuns(rawAppends)
+				for _, expected := range tc.expectedStyledAppends {
+					if err := styledContentAppendedAtLeastOnce(styledAppends, expected); err != nil {
+						t.Fatalf("expected styled full-window append: %v", err)
+					}
+				}
+			}
 			if analysis.Screen.IsBlank() {
 				t.Fatal("ongoing TUI screen is blank after scenario")
 			}
@@ -192,6 +292,42 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				t.Fatalf("script did not complete through fixture: %+v", obs)
 			}
 		})
+	}
+}
+
+func seededStyleMatrixTranscript() []map[string]any {
+	return []map[string]any{
+		{"kind": "message", "role": "user", "text": "PTY_STYLE_USER"},
+		{"kind": "message", "role": "assistant", "text": "PTY_STYLE_ASSISTANT"},
+		{"kind": "local_entry", "visibility": "o", "role": "warning", "text": "PTY_STYLE_WARNING"},
+		{"kind": "local_entry", "visibility": "o", "role": "error", "text": "PTY_STYLE_ERROR"},
+		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_NOTICE"},
+		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_TOGGLE_FAST_ON"},
+		toolSeed("exec_command", "call_shell", map[string]any{"cmd": "printf 'PTY_TOOL_SHELL\n'"}, "PTY_TOOL_SHELL", false),
+		toolSeed("patch", "call_patch", map[string]any{"patch": "*** Begin Patch\n*** Add File: pty_patch.txt\n+new\n*** End Patch\n"}, "", false),
+		toolSeed("edit", "call_edit", map[string]any{"file_path": "pty_edit.txt", "old_string": "old", "new_string": "new"}, "PTY_TOOL_EDIT", false),
+		toolSeed("view_image", "call_image", map[string]any{"path": "image.png"}, "PTY_TOOL_IMAGE", false),
+		toolSeed("web_search", "call_web", map[string]any{"query": "PTY_TOOL_WEB"}, "PTY_TOOL_WEB", false),
+		toolSeed("custom_tool", "call_custom", map[string]any{"input": "PTY_TOOL_CUSTOM"}, "PTY_TOOL_CUSTOM", true),
+		toolSeed("complete_node", "call_complete", map[string]any{"commentary": "PTY_TOOL_COMPLETE"}, "PTY_TOOL_COMPLETE", false),
+		toolSeed("ask_question", "call_question", map[string]any{"question": "PTY_TOOL_QUESTION", "suggestions": []string{"yes"}}, "PTY_TOOL_QUESTION", false),
+		toolSeed("trigger_handoff", "call_handoff", map[string]any{"future_agent_message": "PTY_TOOL_HANDOFF"}, "PTY_TOOL_HANDOFF", false),
+	}
+}
+
+func toolSeed(name string, callID string, input map[string]any, condensed string, custom bool) map[string]any {
+	rawInput, err := json.Marshal(input)
+	if err != nil {
+		panic(err)
+	}
+	return map[string]any{
+		"kind":           "tool_result",
+		"tool_name":      name,
+		"tool_call_id":   callID,
+		"tool_input":     json.RawMessage(rawInput),
+		"tool_output":    json.RawMessage(`{"summary":"ok"}`),
+		"tool_condensed": condensed,
+		"tool_custom":    custom,
 	}
 }
 
@@ -281,13 +417,143 @@ func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.Oper
 	return nil, fmt.Errorf("no non-zero append boundary classified expected content exactly once; candidates=%q", lastTexts)
 }
 
+func allScenarioAppendRows(analysis pty.Analysis, expected []string) ([]pty.AppendOperation, error) {
+	if len(expected) == 0 {
+		return nil, nil
+	}
+	window := pty.OperationWindow{Start: 0, End: len(analysis.Operations)}
+	var lastTexts []string
+	for boundary := analysis.Dimensions.Rows - 1; boundary > 0; boundary-- {
+		appends := pty.CoalesceAppendRows(pty.ClassifyAppends(analysis, window, boundary))
+		lastTexts = appendTexts(appends)
+		matched := true
+		for _, content := range expected {
+			if err := contentAppendedAtLeastOnce(appends, content); err != nil {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return appends, nil
+		}
+	}
+	return nil, fmt.Errorf("no append boundary classified full-window expected content; candidates=%q", lastTexts)
+}
+
+func allScenarioRawAppendRows(analysis pty.Analysis, expected []string) ([]pty.AppendOperation, error) {
+	if len(expected) == 0 {
+		return nil, nil
+	}
+	window := pty.OperationWindow{Start: 0, End: len(analysis.Operations)}
+	var lastTexts []string
+	for boundary := analysis.Dimensions.Rows - 1; boundary > 0; boundary-- {
+		rawAppends := pty.ClassifyAppends(analysis, window, boundary)
+		coalesced := pty.CoalesceAppendRows(rawAppends)
+		lastTexts = appendTexts(coalesced)
+		matched := true
+		for _, content := range expected {
+			if err := contentAppendedAtLeastOnce(coalesced, content); err != nil {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return rawAppends, nil
+		}
+	}
+	return nil, fmt.Errorf("no raw append boundary classified full-window expected content; candidates=%q", lastTexts)
+}
+
+func coalesceStyledAppendRuns(appends []pty.AppendOperation) []pty.AppendOperation {
+	out := make([]pty.AppendOperation, 0, len(appends))
+	for _, appendOperation := range appends {
+		current := appendOperation.Operation
+		if current.Write == nil {
+			out = append(out, appendOperation)
+			continue
+		}
+		if len(out) == 0 {
+			out = append(out, appendOperation)
+			continue
+		}
+		previous := &out[len(out)-1].Operation
+		if previous.Write == nil ||
+			previous.Region.Top != current.Region.Top ||
+			previous.Region.Bottom != current.Region.Bottom ||
+			previous.Region.Right != current.Region.Left ||
+			previous.Write.Faint != current.Write.Faint ||
+			previous.Write.Foreground != current.Write.Foreground {
+			out = append(out, appendOperation)
+			continue
+		}
+		previous.Region.Right = current.Region.Right
+		payload := pty.MustWritePayload(previous.Write.Text + current.Write.Text)
+		payload.Faint = previous.Write.Faint
+		payload.Foreground = previous.Write.Foreground
+		previous.Write = &payload
+	}
+	return out
+}
+
 func contentAppendedAtLeastOnce(appends []pty.AppendOperation, content string) error {
 	for _, appendOperation := range appends {
 		if appendOperation.Operation.Write != nil && appendOperation.Operation.Write.Text == content {
 			return nil
 		}
 	}
-	return fmt.Errorf("content append count for %q = 0, want at least 1", content)
+	return fmt.Errorf("content append count for %q = 0, want at least 1; appends=%q", content, appendTexts(appends))
+}
+
+func contentNotAppended(appends []pty.AppendOperation, content string) error {
+	for _, appendOperation := range appends {
+		if appendOperation.Operation.Write != nil && appendOperation.Operation.Write.Text == content {
+			return fmt.Errorf("content append for %q found", content)
+		}
+	}
+	return nil
+}
+
+func faintContentAppendedAtLeastOnce(appends []pty.AppendOperation, content string) error {
+	for _, appendOperation := range appends {
+		if appendOperation.Operation.Write != nil && appendOperation.Operation.Write.Text == content && appendOperation.Operation.Write.Faint {
+			return nil
+		}
+	}
+	return fmt.Errorf("faint content append count for %q = 0, want at least 1", content)
+}
+
+func styledContentAppendedAtLeastOnce(appends []pty.AppendOperation, expected styledAppendExpectation) error {
+	var candidates []styledAppendExpectation
+	for _, appendOperation := range appends {
+		write := appendOperation.Operation.Write
+		if write == nil || write.Text != expected.Text {
+			continue
+		}
+		candidates = append(candidates, styledAppendExpectation{Text: write.Text, Foreground: write.Foreground, Faint: write.Faint})
+		if write.Faint != expected.Faint {
+			continue
+		}
+		if write.Foreground != expected.Foreground {
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("styled append for %q with foreground=%q faint=%t not found; candidates=%+v raw=%+v", expected.Text, expected.Foreground, expected.Faint, candidates, firstStyledAppendSamples(appends, 80))
+}
+
+func firstStyledAppendSamples(appends []pty.AppendOperation, limit int) []styledAppendExpectation {
+	out := make([]styledAppendExpectation, 0, min(limit, len(appends)))
+	for _, appendOperation := range appends {
+		if len(out) >= limit {
+			return out
+		}
+		write := appendOperation.Operation.Write
+		if write == nil || write.Text == "" {
+			continue
+		}
+		out = append(out, styledAppendExpectation{Text: write.Text, Foreground: write.Foreground, Faint: write.Faint})
+	}
+	return out
 }
 
 func appendTexts(appends []pty.AppendOperation) []string {
@@ -297,9 +563,6 @@ func appendTexts(appends []pty.AppendOperation) []string {
 			out = append(out, appendOperation.Operation.Write.Text)
 		}
 	}
-	if len(out) > 40 {
-		return out[len(out)-40:]
-	}
 	return out
 }
 
@@ -308,6 +571,10 @@ func rightPad(value string, width int) string {
 		return value
 	}
 	return value + strings.Repeat(" ", width-len(value))
+}
+
+func colorForStyle(role transcriptrender.StyleRole) string {
+	return strings.ToLower(transcriptrender.ColorForRole(transcriptrender.ColorRoleForStyle(role), "").TrueColor)
 }
 
 func firstOperationAtOrAfterByte(operations []pty.Operation, offset int64) int {

@@ -132,6 +132,7 @@ func formatPersistedToolCall(call llm.ToolCall) ChatEntry {
 		text = "tool call"
 	}
 	return ChatEntry{
+		Visibility: transcript.EntryVisibilityOngoingCollapsed,
 		Role:       "tool_call",
 		Text:       text,
 		ToolCallID: strings.TrimSpace(call.ID),

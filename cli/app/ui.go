@@ -97,9 +97,6 @@ func (m *uiModel) handleRuntimeEventBatch(events []clientui.Event) (*uiModel, te
 	}))
 	result := m.runtimeAdapter().applyProjectedRuntimeEventsBatch(events)
 	cmd := result.cmd
-	if m.shouldRefreshOpenDetailFromCommittedEvents(events) {
-		cmd = tea.Batch(cmd, m.loadDetailTranscriptSuffixCmd())
-	}
 	cmd = tea.Batch(cmd, m.reconcileSpinnerTicking(true))
 	if !result.awaitsHydration {
 		cmd = sequenceCmds(cmd, m.flushQueuedInputsAfterHydration())
@@ -118,18 +115,6 @@ func (m *uiModel) handleRuntimeEventBatch(events []clientui.Event) (*uiModel, te
 		return m, cmd
 	}
 	return m, tea.Batch(m.waitRuntimeEventCmd(), cmd)
-}
-
-func (m *uiModel) shouldRefreshOpenDetailFromCommittedEvents(events []clientui.Event) bool {
-	if m == nil || m.view.Mode() != tui.ModeDetail || !m.detailTranscript.loaded {
-		return false
-	}
-	for _, event := range events {
-		if event.CommittedTranscriptChanged {
-			return true
-		}
-	}
-	return false
 }
 
 func (m *uiModel) waitRuntimeEventCmd() tea.Cmd {

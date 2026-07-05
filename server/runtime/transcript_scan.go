@@ -5,6 +5,7 @@ import (
 	"core/server/tools"
 	"core/shared/rollbacktarget"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 	"encoding/json"
 	"strings"
 )
@@ -123,7 +124,7 @@ func (s *inMemoryTranscriptScan) visibleEntriesFromMessage(msg llm.Message, seq 
 		}
 	case llm.RoleAssistant:
 		if strings.TrimSpace(msg.Content) != "" && !isNoopFinalAnswer(msg) {
-			entries = append(entries, ChatEntry{Role: "assistant", Text: msg.Content, Phase: msg.Phase})
+			entries = append(entries, ChatEntry{Visibility: transcript.EntryVisibilityOngoing, Role: "assistant", Text: msg.Content, Phase: msg.Phase})
 		}
 		for _, call := range msg.ToolCalls {
 			entries = append(entries, formatPersistedToolCall(call))

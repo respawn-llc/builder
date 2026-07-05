@@ -19,7 +19,7 @@ func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
 		}
 	case llm.RoleAssistant:
 		if strings.TrimSpace(msg.Content) != "" && !isNoopFinalAnswer(msg) {
-			entries = append(entries, ChatEntry{Role: "assistant", Text: msg.Content, Phase: msg.Phase})
+			entries = append(entries, ChatEntry{Visibility: transcript.EntryVisibilityOngoing, Role: "assistant", Text: msg.Content, Phase: msg.Phase})
 		}
 		for _, call := range msg.ToolCalls {
 			entries = append(entries, formatPersistedToolCall(call))
@@ -52,7 +52,7 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 		if text == "" {
 			return nil
 		}
-		return []ChatEntry{{Role: "user", Text: evt.UserMessage}}
+		return []ChatEntry{{Visibility: transcript.EntryVisibilityOngoing, Role: "user", Text: evt.UserMessage}}
 	case EventAssistantMessage:
 		return VisibleChatEntriesFromMessage(evt.Message)
 	case EventToolCallStarted:
@@ -100,6 +100,7 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 		compact := formatBackgroundShellCompact(*evt.Background)
 		return []ChatEntry{{
 			Role:          "system",
+			Visibility:    transcript.EntryVisibilityOngoingCollapsed,
 			Text:          formatBackgroundShellNotice(*evt.Background),
 			CondensedText: compact,
 			MessageType:   llm.MessageTypeBackgroundNotice,
@@ -121,6 +122,7 @@ func toolResultChatEntry(result tools.Result) ChatEntry {
 		presentation = &normalized
 	}
 	return ChatEntry{
+		Visibility:        transcript.EntryVisibilityOngoingCollapsed,
 		Role:              role,
 		Text:              tools.FormatToolResultByName(string(result.Name), result.Output, result.IsError),
 		CondensedText:     strings.TrimSpace(result.CondensedText),

@@ -1,8 +1,10 @@
 package analyzer
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/gdamore/tcell/v3/color"
 	"github.com/gdamore/tcell/v3/vt"
 )
 
@@ -104,11 +106,25 @@ func (b *tracingBackend) Put(coord vt.Coord, cell vt.Cell) {
 	if position.Row < 0 || position.Row >= b.dimensions.Rows || position.Col < 0 || position.Col >= b.dimensions.Cols {
 		return
 	}
-	b.cells[position.Row][position.Col] = Cell{Content: cell.C}
+	faint := cell.S != nil && cell.S.Attr()&vt.Dim != 0
+	foreground := styleForeground(cell.S)
+	b.cells[position.Row][position.Col] = Cell{Content: cell.C, Faint: faint, Foreground: foreground}
 	if cell.C == "" {
 		return
 	}
-	b.recordPut(position, cell.C)
+	b.recordPut(position, cell.C, faint, foreground)
+}
+
+func styleForeground(style vt.Style) string {
+	if style == nil {
+		return ""
+	}
+	fg := style.Fg()
+	if !fg.Valid() || fg == color.Default {
+		return ""
+	}
+	r, g, b := fg.TrueColor().RGB()
+	return fmt.Sprintf("#%02x%02x%02x", uint8(r), uint8(g), uint8(b))
 }
 
 func (b *tracingBackend) GetPosition() vt.Coord {
