@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"core/server/llm"
 )
@@ -177,9 +178,18 @@ func (c *Client) completeStep(ctx context.Context, req llm.Request, step Step, c
 		if callbacks.OnStreamActivity != nil {
 			callbacks.OnStreamActivity()
 		}
-		for _, delta := range step.StreamDeltas {
+		for idx, delta := range step.StreamDeltas {
 			if callbacks.OnAssistantDelta != nil {
 				callbacks.OnAssistantDelta(delta)
+			}
+			if step.StreamDeltaDelay != nil && idx < len(step.StreamDeltas)-1 {
+				timer := time.NewTimer(*step.StreamDeltaDelay)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return llm.Response{}, ctx.Err()
+				case <-timer.C:
+				}
 			}
 		}
 		for _, delta := range step.ReasoningDeltas {

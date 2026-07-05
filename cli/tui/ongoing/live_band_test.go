@@ -2,11 +2,9 @@ package ongoing
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 
 	"core/shared/clientui"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/google/uuid"
 )
 
@@ -84,10 +82,7 @@ func TestRenderAddsAssistantTailOnlyFromSurfaceState(t *testing.T) {
 		t.Fatalf("render assistant tail: %v", err)
 	}
 
-	got := ansi.Strip(out.String())
-	if !strings.Contains(got, "streaming commentary") || !strings.Contains(got, "status") {
-		t.Fatalf("assistant-tail live band bytes = %q, want markdown tail and status", out.String())
-	}
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"streaming commentary", "status"})
 }
 
 func TestHeightOnlyResizeRepaintsWithoutRehydration(t *testing.T) {

@@ -23,6 +23,7 @@ type styledAppendExpectation struct {
 type styledRowExpectation []styledAppendExpectation
 
 const defaultTerminalForeground = "#c0c0c0"
+const markdownTerminalForeground = "#d0d0d0"
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -43,10 +44,12 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		forbiddenAnyAppends   []string
 		expectedFaintAppends  []string
 		expectedStyledAppends []styledAppendExpectation
+		expectedStyledWrites  []styledAppendExpectation
 		expectedStyledRows    []styledRowExpectation
 		allowDuplicateAppends bool
 		allowsAltScroll       bool
 		allowsFullScreen      bool
+		interruptAfter        *time.Duration
 	}{
 		{
 			name: "visibility_o_real_app_path",
@@ -191,6 +194,36 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedAppends: []string{rightPad("Stable paragraph.", 80)},
 		},
 		{
+			name: "slash_input_status_live_area_during_stream",
+			script: map[string]any{
+				"prompt":          "stream slash command",
+				"stream_deltas":   []string{"stream slash live", "\n\nstream slash done"},
+				"stream_delay_ms": 8000,
+				"final":           "stream slash live\n\nstream slash done",
+			},
+			inputs: []pty.InputEvent{
+				{After: 4 * time.Second, Bytes: []byte("queued while streaming")},
+				{After: 5200 * time.Millisecond, Bytes: []byte{0x15}},
+				{After: 5500 * time.Millisecond, Bytes: []byte("/status")},
+				{After: 6200 * time.Millisecond, Bytes: []byte("\r")},
+				{After: 7200 * time.Millisecond, Bytes: []byte("\x1b")},
+			},
+			expectedAppends:       []string{rightPad("stream slash live", 80)},
+			allowDuplicateAppends: true,
+			allowsAltScroll:       true,
+			allowsFullScreen:      true,
+			interruptAfter:        durationPtr(12 * time.Second),
+			expectedStyledAppends: []styledAppendExpectation{
+				{Text: rightPad("stream slash live", 80), Foreground: markdownTerminalForeground},
+				{Text: "›                                                                               ", Foreground: defaultTerminalForeground},
+				{Text: "running · running · turn · user turn", Foreground: defaultTerminalForeground},
+				{Text: "medium · local", Foreground: defaultTerminalForeground},
+			},
+			expectedStyledWrites: []styledAppendExpectation{
+				{Text: rightPad("Server: owned by this CLI", 80), Foreground: defaultTerminalForeground},
+			},
+		},
+		{
 			name: "long_final_answer_with_resize",
 			script: map[string]any{
 				"prompt": "long final",
@@ -253,7 +286,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			capture, observationsPath := runPTYFixtureScenario(t, ctx, bin, tc.name, tc.script, tc.inputs, tc.resizes)
+			capture, observationsPath := runPTYFixtureScenario(t, ctx, bin, tc.name, tc.script, tc.inputs, tc.resizes, tc.interruptAfter)
 			analysis, err := pty.Analyze(capture)
 			if err != nil {
 				t.Fatalf("analyze capture: %v", err)
@@ -320,6 +353,15 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				for _, expected := range tc.expectedStyledRows {
 					if err := styledRowAppendedAtLeastOnce(styledAppends, expected); err != nil {
 						t.Fatalf("expected styled row append: %v", err)
+					}
+				}
+			}
+			if len(tc.expectedStyledWrites) > 0 {
+				rawWrites := allScenarioRawWrites(analysis, window)
+				styledWrites := coalesceStyledAppendRuns(rawWrites)
+				for _, expected := range tc.expectedStyledWrites {
+					if err := styledContentAppendedAtLeastOnce(styledWrites, expected); err != nil {
+						t.Fatalf("expected styled full-window write: %v", err)
 					}
 				}
 			}
@@ -390,8 +432,15 @@ func patchStyleFixture(path string) string {
 	return "*** Begin Patch\n*** Update File: " + path + "\n@@\n-old\n+new\n*** End Patch\n"
 }
 
-func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent) (pty.Capture, string) {
+func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent, interruptAfter *time.Duration) (pty.Capture, string) {
 	t.Helper()
+	resolvedInterruptAfter := 4 * time.Second
+	if interruptAfter != nil {
+		if *interruptAfter <= 0 {
+			t.Fatalf("interruptAfter must be greater than zero: %s", (*interruptAfter).String())
+		}
+		resolvedInterruptAfter = *interruptAfter
+	}
 	root := t.TempDir()
 	scriptPath := filepath.Join(root, "script.json")
 	data, err := json.Marshal(script)
@@ -414,7 +463,7 @@ func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name s
 		PhaseInputs: []pty.PhaseInputEvent{
 			{Phase: pty.PhaseScenarioStart, Bytes: []byte(name + "\r")},
 		},
-		Inputs:  append(append([]pty.InputEvent(nil), inputs...), pty.InputEvent{After: 4 * time.Second, Bytes: []byte{0x03, 0x03}}),
+		Inputs:  append(append([]pty.InputEvent(nil), inputs...), pty.InputEvent{After: resolvedInterruptAfter, Bytes: []byte{0x03, 0x03}}),
 		Resizes: resizes,
 		Timeout: 30 * time.Second,
 	})
@@ -521,6 +570,17 @@ func allScenarioRawAppendRows(analysis pty.Analysis, expected []string) ([]pty.A
 		}
 	}
 	return nil, fmt.Errorf("no raw append boundary classified full-window expected content; candidates=%q", lastTexts)
+}
+
+func allScenarioRawWrites(analysis pty.Analysis, window pty.OperationWindow) []pty.AppendOperation {
+	out := make([]pty.AppendOperation, 0)
+	for _, operation := range analysis.Operations[window.Start:window.End] {
+		if operation.Write == nil {
+			continue
+		}
+		out = append(out, pty.AppendOperation{Operation: operation})
+	}
+	return out
 }
 
 func coalesceStyledAppendRuns(appends []pty.AppendOperation) []pty.AppendOperation {
@@ -669,6 +729,10 @@ func rightPad(value string, width int) string {
 		return value
 	}
 	return value + strings.Repeat(" ", width-len(value))
+}
+
+func durationPtr(value time.Duration) *time.Duration {
+	return &value
 }
 
 func colorForStyle(role transcriptrender.StyleRole) string {

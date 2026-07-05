@@ -254,6 +254,16 @@ func assertVisibleTextOps(t *testing.T, ops []terminalOp, want []string) {
 				got = append(got, row)
 			}
 			current = ""
+		case terminalOpCSI:
+			if len(op.value) > 0 {
+				final := op.value[len(op.value)-1]
+				if final == 'H' || final == 'f' {
+					if row := strings.TrimRight(current, " "); row != "" {
+						got = append(got, row)
+					}
+					current = ""
+				}
+			}
 		case terminalOpText:
 			current += ansi.Strip(op.value)
 		default:

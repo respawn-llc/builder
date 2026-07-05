@@ -3,11 +3,9 @@ package ongoing
 import (
 	"bytes"
 	"reflect"
-	"strings"
 	"testing"
 
 	"core/shared/clientui"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/google/uuid"
 )
 
@@ -26,9 +24,7 @@ func TestAssistantDeltaPromotesClosedParagraphAndKeepsTailMutable(t *testing.T) 
 		t.Fatalf("apply assistant delta: %v", err)
 	}
 
-	if got := ansi.Strip(out.String()); !strings.Contains(got, "Stable paragraph.") || !strings.Contains(got, "open tail") {
-		t.Fatalf("assistant delta transaction = %q, want promoted row and volatile tail repaint", got)
-	}
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"Stable paragraph.", "open tail"})
 	if got, want := surface.activeAssistant.promotedSourceBoundary, len("Stable paragraph."); got != want {
 		t.Fatalf("promotion boundary = %d, want %d", got, want)
 	}
@@ -38,9 +34,7 @@ func TestAssistantDeltaPromotesClosedParagraphAndKeepsTailMutable(t *testing.T) 
 		t.Fatalf("render volatile assistant tail: %v", err)
 	}
 
-	if got := ansi.Strip(out.String()); !strings.Contains(got, "open tail") {
-		t.Fatalf("volatile tail bytes = %q, want open tail", got)
-	}
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"open tail"})
 }
 
 func TestMarkdownProjectionKeepsOpenBlocksMutableUntilBlankBoundary(t *testing.T) {

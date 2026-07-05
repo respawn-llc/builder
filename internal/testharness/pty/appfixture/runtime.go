@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"core/internal/testharness/scriptedllm"
 	"core/server/core"
@@ -24,6 +25,7 @@ import (
 type ScriptFile struct {
 	Prompt         string                    `json:"prompt"`
 	StreamDeltas   []string                  `json:"stream_deltas"`
+	StreamDelayMS  *int                      `json:"stream_delay_ms"`
 	Final          string                    `json:"final"`
 	Steps          []StepFile                `json:"steps"`
 	SeedTranscript []SeedTranscriptEntryFile `json:"seed_transcript"`
@@ -53,6 +55,7 @@ type StepFile struct {
 	Final               string                           `json:"final"`
 	Commentary          string                           `json:"commentary"`
 	StreamDeltas        []string                         `json:"stream_deltas"`
+	StreamDelayMS       *int                             `json:"stream_delay_ms"`
 	ToolCalls           []ToolCallFile                   `json:"tool_calls"`
 	ExpectedToolResults []scriptedllm.ExpectedToolResult `json:"expected_tool_results"`
 }
@@ -162,6 +165,11 @@ func scriptSteps(file ScriptFile) ([]scriptedllm.Step, error) {
 		}
 		step := scriptedllm.FinalAnswer(file.Final)
 		step.StreamDeltas = assistantDeltas(file.StreamDeltas)
+		delay, err := streamDeltaDelay(file.StreamDelayMS)
+		if err != nil {
+			return nil, err
+		}
+		step.StreamDeltaDelay = delay
 		return []scriptedllm.Step{step}, nil
 	}
 	steps := make([]scriptedllm.Step, 0, len(file.Steps))
@@ -193,8 +201,24 @@ func scriptStep(spec StepFile) (scriptedllm.Step, error) {
 		return scriptedllm.Step{}, fmt.Errorf("script step requires final response or tool calls")
 	}
 	step.StreamDeltas = assistantDeltas(spec.StreamDeltas)
+	delay, err := streamDeltaDelay(spec.StreamDelayMS)
+	if err != nil {
+		return scriptedllm.Step{}, err
+	}
+	step.StreamDeltaDelay = delay
 	step.ExpectedToolResults = append([]scriptedllm.ExpectedToolResult(nil), spec.ExpectedToolResults...)
 	return step, nil
+}
+
+func streamDeltaDelay(milliseconds *int) (*time.Duration, error) {
+	if milliseconds == nil {
+		return nil, nil
+	}
+	if *milliseconds <= 0 {
+		return nil, fmt.Errorf("stream_delay_ms must be greater than zero")
+	}
+	delay := time.Duration(*milliseconds) * time.Millisecond
+	return &delay, nil
 }
 
 func assistantDeltas(values []string) []llm.AssistantDelta {
