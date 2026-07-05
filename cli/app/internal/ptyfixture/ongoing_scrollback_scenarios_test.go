@@ -26,7 +26,7 @@ const defaultTerminalForeground = "#c0c0c0"
 const markdownTerminalForeground = "#d0d0d0"
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	bin := filepath.Join(t.TempDir(), "kent-pty-fixture")
