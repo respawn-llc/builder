@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"github.com/google/uuid"
 )
@@ -107,7 +108,7 @@ func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame
 	if isAssistantFinalization(message) {
 		return s.finalizeAssistantStream(*message.CommittedRow.Assistant.StreamID, message.CommittedRow.Assistant.Text, frame)
 	}
-	lines := s.immutableLines(message, frame.Size.Width)
+	lines := s.immutableLines(message, frame.Size.Width, "")
 	if len(lines) == 0 {
 		return Result{}, nil
 	}
@@ -196,8 +197,11 @@ func (s *Surface) finalizeAssistantStream(streamID uuid.UUID, text string, frame
 }
 
 func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame FrameInput) (Result, error) {
-	lines := newMarkdownProjector(nil).renderer.Render(text, frameWidthOrDefault(frame))
-	return s.writeFrameTransaction(frame, lines)
+	row := clientui.TranscriptCommittedRow{
+		Kind:      clientui.TranscriptRowAssistant,
+		Assistant: &clientui.TranscriptAssistantRow{Text: text, Phase: clientui.MessagePhaseFinal},
+	}
+	return s.writeFrameTransaction(frame, s.renderCommittedRow(row, frameWidthOrDefault(frame), ""))
 }
 
 func isAssistantFinalization(message clientui.TranscriptMessage) bool {
@@ -265,7 +269,7 @@ func (s *Surface) ResetForScratchHydration(reason RehydrateReason, frame FrameIn
 	return Result{Action: ResultRequestScratchRehydration, Reason: reason}, nil
 }
 
-func (s *Surface) immutableLines(message clientui.TranscriptMessage, width int) []string {
+func (s *Surface) immutableLines(message clientui.TranscriptMessage, width int, themeName string) []string {
 	switch message.Kind {
 	case clientui.TranscriptMessageHydration:
 		if message.Hydration == nil {
@@ -273,27 +277,27 @@ func (s *Surface) immutableLines(message clientui.TranscriptMessage, width int) 
 		}
 		lines := make([]string, 0, len(message.Hydration.CommittedRows))
 		for _, row := range message.Hydration.CommittedRows {
-			lines = append(lines, s.renderCommittedRow(row, width)...)
+			lines = append(lines, s.renderCommittedRow(row, width, themeName)...)
 		}
 		return lines
 	case clientui.TranscriptMessageCommittedRow:
 		if message.CommittedRow == nil {
 			return nil
 		}
-		return s.renderCommittedRow(*message.CommittedRow, width)
+		return s.renderCommittedRow(*message.CommittedRow, width, themeName)
 	default:
 		return nil
 	}
 }
 
-func (s *Surface) renderCommittedRow(row clientui.TranscriptCommittedRow, width int) []string {
-	group, lines := committedRowLines(row, width)
+func (s *Surface) renderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string) []string {
+	group, lines := committedRowLines(row, width, themeName)
 	if len(lines) == 0 {
 		return nil
 	}
 	var output []string
 	if s.dividerGroup != nil && *s.dividerGroup != group {
-		output = append(output, dividerLine(group))
+		output = append(output, dividerLine(group, width, themeName))
 	}
 	groupCopy := group
 	s.dividerGroup = &groupCopy
@@ -301,48 +305,18 @@ func (s *Surface) renderCommittedRow(row clientui.TranscriptCommittedRow, width 
 	return output
 }
 
-func committedRowLines(row clientui.TranscriptCommittedRow, width int) (clientui.TranscriptRowKind, []string) {
+func committedRowLines(row clientui.TranscriptCommittedRow, width int, themeName string) (clientui.TranscriptRowKind, []string) {
 	switch row.Kind {
-	case clientui.TranscriptRowUser:
-		if row.User == nil {
-			return row.Kind, nil
-		}
-		return row.Kind, terminalSafeTextLines(row.User.Text)
-	case clientui.TranscriptRowAssistant:
-		if row.Assistant == nil {
-			return row.Kind, nil
-		}
-		return row.Kind, terminalMarkdownRenderer{}.Render(row.Assistant.Text, width)
-	case clientui.TranscriptRowTool:
-		if row.Tool == nil {
-			return row.Kind, nil
-		}
-		return row.Kind, terminalSafeTextLines(row.Tool.Text)
-	case clientui.TranscriptRowNotice:
-		if row.Notice == nil {
-			return row.Kind, nil
-		}
-		return row.Kind, terminalSafeTextLines(noticeRowLine(row.Notice))
+	case clientui.TranscriptRowUser, clientui.TranscriptRowAssistant, clientui.TranscriptRowTool, clientui.TranscriptRowNotice:
+		rendered := transcriptrender.RenderCommittedRow(row, width, themeName, transcriptrender.ModeOngoing)
+		return rendered.Group, rendered.Lines
 	default:
 		panic(fmt.Sprintf("ongoing render unknown committed row kind %q", row.Kind))
 	}
 }
 
-func noticeRowLine(row *clientui.TranscriptNoticeRow) string {
-	if row.Data.LegacyText != nil {
-		return *row.Data.LegacyText
-	}
-	if row.Data.CondensedText != "" {
-		return row.Data.CondensedText
-	}
-	if row.Diagnostic != nil {
-		return row.Diagnostic.Detail
-	}
-	return string(row.Severity)
-}
-
-func dividerLine(group clientui.TranscriptRowKind) string {
-	return "--- " + string(group) + " ---"
+func dividerLine(group clientui.TranscriptRowKind, width int, themeName string) string {
+	return transcriptrender.RenderDivider(group, width, themeName)
 }
 
 func (s *Surface) validateRenderFrame(frame FrameInput, operation string) {

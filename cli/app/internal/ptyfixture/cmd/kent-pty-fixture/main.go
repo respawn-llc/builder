@@ -31,6 +31,13 @@ func run(ctx context.Context, args []string) error {
 	if err := appfixture.PrepareConfigAndBinding(ctx, flags.PersistenceRoot, flags.WorkspaceRoot); err != nil {
 		return err
 	}
+	directMatrix, err := scriptRequestsDirectMatrix(flags.ScriptPath)
+	if err != nil {
+		return err
+	}
+	if directMatrix {
+		return runDirectMatrixFixture(flags.ObservationPath)
+	}
 	observer := ptyfixture.NewTerminalPhaseMarkerObserver()
 	runtime, err := appfixture.NewRuntime(flags.ScriptPath, func(ctx context.Context) error {
 		sink, err := observer.Wait(ctx)

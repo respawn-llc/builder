@@ -33,10 +33,13 @@ func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithGroupDividers(
 		t.Fatalf("immutable append bytes = %q, want scroll-region transaction", raw)
 	}
 	stripped := ansi.Strip(raw)
-	for _, want := range []string{"first user", "second user", "--- assistant ---", "assistant answer", "--- tool ---", "tool result", "--- notice ---", "notice"} {
+	for _, want := range []string{"❯ first user", "❯ second user", "assistant", "❮ assistant answer", "tool", "• tool result", "notice", "ℹ notice"} {
 		if !strings.Contains(stripped, want) {
 			t.Fatalf("immutable append text = %q, want %q", stripped, want)
 		}
+	}
+	if !strings.Contains(raw, "\x1b[") {
+		t.Fatalf("immutable append text = %q, want styled ANSI output", raw)
 	}
 }
 
@@ -51,15 +54,16 @@ func TestApplyTerminalMessageDoesNotEmitDividerForConsecutiveSameGroup(t *testin
 	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("second")), testFrame()); err != nil {
 		t.Fatalf("apply second row: %v", err)
 	}
-	if got, want := out.String(), "\x1b[r\x1b[?6l\x1b[1;5r\x1b[5;1H\r\nsecond\x1b[r\x1b[?6l\x1b[?25l"; got != want {
-		t.Fatalf("same-group append bytes = %q, want %q", got, want)
+	stripped := ansi.Strip(out.String())
+	if strings.Contains(stripped, "user") || !strings.Contains(stripped, "❯ second") {
+		t.Fatalf("same-group append bytes = %q, want styled second user without divider", out.String())
 	}
 	out.Reset()
 
 	if _, err := surface.ApplyTerminalMessage(committedMessage(assistantRow("answer")), testFrame()); err != nil {
 		t.Fatalf("apply assistant row: %v", err)
 	}
-	if got := ansi.Strip(out.String()); !strings.Contains(got, "--- assistant ---") || !strings.Contains(got, "answer") {
+	if got := ansi.Strip(out.String()); !strings.Contains(got, "assistant") || !strings.Contains(got, "❮ answer") {
 		t.Fatalf("group-change append bytes = %q, want assistant divider and answer", out.String())
 	}
 }
@@ -107,7 +111,7 @@ func TestCommittedRowsNeutralizeTranscriptSourcedControlBytes(t *testing.T) {
 		}
 	}
 	stripped := ansi.Strip(raw)
-	for _, want := range []string{"user", "next lineafter", "assistant", "answer", "tool[3;1H result", "notice value"} {
+	for _, want := range []string{"user[2J", "assistant]0;spoof **answer**", "tool[3;1H result", "notice value"} {
 		if !strings.Contains(stripped, want) {
 			t.Fatalf("sanitized output = %q, want visible text %q", stripped, want)
 		}

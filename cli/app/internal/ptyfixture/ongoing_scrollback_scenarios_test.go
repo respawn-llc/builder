@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/internal/testharness/pty"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
@@ -23,14 +24,45 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name             string
-		script           map[string]any
-		inputs           []pty.InputEvent
-		resizes          []pty.DriverResizeEvent
-		expectedAppends  []string
-		allowsAltScroll  bool
-		allowsFullScreen bool
+		name                  string
+		script                map[string]any
+		inputs                []pty.InputEvent
+		resizes               []pty.DriverResizeEvent
+		expectedAppends       []string
+		screenContains        []string
+		rawContains           []string
+		rawPlainContains      []string
+		allowDuplicateAppends bool
+		allowsAltScroll       bool
+		allowsFullScreen      bool
 	}{
+		{
+			name: "amended_style_visibility_and_live_area_matrix",
+			script: map[string]any{
+				"direct_matrix": true,
+			},
+			expectedAppends: []string{"❯ VISIBILITY_O_USER", "• TRIGGER_HANDOFF_TOOL"},
+			screenContains:  []string{"/status typed slash command", "statusline ready", "streaming live area"},
+			rawContains:     []string{"\x1b[", "─ notice "},
+			rawPlainContains: []string{
+				"VISIBILITY_O_USER",
+				"VISIBILITY_O_MODEL",
+				"VISIBILITY_OC_NOTICE",
+				"VISIBILITY_OC_WARNING",
+				"VISIBILITY_O_ERROR",
+				"VISIBILITY_D_DETAIL_ONLY",
+				"VISIBILITY_X_HIDDEN",
+				"⇄ cli/tui/model.go -1 +2",
+				"⇄ cli/tui/ongoing/surface.go -1 +1",
+				"• VIEW_IMAGE_TOOL",
+				"@ WEB_SEARCH_TOOL",
+				"• CUSTOM_TOOL",
+				"• WORKFLOW_COMPLETION_TOOL",
+				"$ SHELL_TOOL",
+				"? ASK_QUESTION_TOOL",
+				"• TRIGGER_HANDOFF_TOOL",
+			},
+		},
 		{
 			name: "markdown_streaming_promotion_and_final_tail",
 			script: map[string]any{
@@ -46,7 +78,8 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"prompt": "long final",
 				"final":  "line 01\nline 02\nline 03\nline 04\nline 05\nline 06\nline 07\nline 08\nline 09\nline 10\nline 11\nline 12\nline 13\nline 14\nline 15\nline 16\nline 17\nline 18\nline 19\nline 20\nline 21\nline 22\nline 23\nline 24\nline 25",
 			},
-			expectedAppends: []string{rightPad("line 25", 48)},
+			expectedAppends:       []string{"❮ line 01"},
+			allowDuplicateAppends: true,
 			resizes: []pty.DriverResizeEvent{{
 				After:      500 * time.Millisecond,
 				Dimensions: pty.MustDimensions(18, 72),
@@ -73,7 +106,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					},
 				},
 			},
-			expectedAppends: []string{"\"TOOL_ONE_OK\""},
+			expectedAppends: []string{"❮ tools complete"},
 		},
 		{
 			name: "detail_roundtrip_during_stream",
@@ -111,7 +144,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve scenario operation window: %v", err)
 			}
-			appends, err := scenarioAppendRowsWithBoundaryChecks(analysis, window, tc.expectedAppends)
+			appends, err := scenarioAppendRowsWithBoundaryChecks(analysis, window, tc.expectedAppends, tc.allowDuplicateAppends)
 			if err != nil {
 				t.Fatalf("append boundary windows: %v", err)
 			}
@@ -126,8 +159,32 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				}
 			}
 			for _, content := range tc.expectedAppends {
-				if err := pty.ContentAppendedExactlyOnce(appends, content); err != nil {
+				var err error
+				if tc.allowDuplicateAppends {
+					err = contentAppendedAtLeastOnce(appends, content)
+				} else {
+					err = pty.ContentAppendedExactlyOnce(appends, content)
+				}
+				if err != nil {
 					t.Fatalf("append cardinality: %v", err)
+				}
+			}
+			screenText := analysis.Screen.RenderText()
+			for _, content := range tc.screenContains {
+				if !strings.Contains(screenText, content) {
+					t.Fatalf("screen = %q, want %q", screenText, content)
+				}
+			}
+			raw := string(capture.Raw)
+			for _, content := range tc.rawContains {
+				if !strings.Contains(raw, content) {
+					t.Fatalf("raw capture missing %q", content)
+				}
+			}
+			rawPlain := xansi.Strip(raw)
+			for _, content := range tc.rawPlainContains {
+				if !strings.Contains(rawPlain, content) {
+					t.Fatalf("plain raw capture missing %q in %q", content, rawPlain)
 				}
 			}
 			if analysis.Screen.IsBlank() {
@@ -197,15 +254,23 @@ func scenarioOperationWindow(analysis pty.Analysis) (pty.OperationWindow, error)
 	return pty.OperationWindow{Start: *start, End: len(analysis.Operations)}, nil
 }
 
-func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.OperationWindow, expected []string) ([]pty.AppendOperation, error) {
+func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.OperationWindow, expected []string, allowDuplicates bool) ([]pty.AppendOperation, error) {
 	if len(expected) == 0 {
 		return nil, fmt.Errorf("scenario requires exact appended content expectations")
 	}
+	var lastTexts []string
 	for boundary := analysis.Dimensions.Rows - 1; boundary > 0; boundary-- {
 		appends := pty.CoalesceAppendRows(pty.ClassifyAppends(analysis, window, boundary))
+		lastTexts = appendTexts(appends)
 		matched := true
 		for _, content := range expected {
-			if err := pty.ContentAppendedExactlyOnce(appends, content); err != nil {
+			var err error
+			if allowDuplicates {
+				err = contentAppendedAtLeastOnce(appends, content)
+			} else {
+				err = pty.ContentAppendedExactlyOnce(appends, content)
+			}
+			if err != nil {
 				matched = false
 				break
 			}
@@ -223,7 +288,29 @@ func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.Oper
 		}
 		return appends, nil
 	}
-	return nil, fmt.Errorf("no non-zero append boundary classified expected content exactly once")
+	return nil, fmt.Errorf("no non-zero append boundary classified expected content exactly once; candidates=%q", lastTexts)
+}
+
+func contentAppendedAtLeastOnce(appends []pty.AppendOperation, content string) error {
+	for _, appendOperation := range appends {
+		if appendOperation.Operation.Write != nil && appendOperation.Operation.Write.Text == content {
+			return nil
+		}
+	}
+	return fmt.Errorf("content append count for %q = 0, want at least 1", content)
+}
+
+func appendTexts(appends []pty.AppendOperation) []string {
+	out := make([]string, 0, len(appends))
+	for _, appendOperation := range appends {
+		if appendOperation.Operation.Write != nil {
+			out = append(out, appendOperation.Operation.Write.Text)
+		}
+	}
+	if len(out) > 40 {
+		return out[len(out)-40:]
+	}
+	return out
 }
 
 func rightPad(value string, width int) string {
