@@ -139,6 +139,9 @@ func TestGenerateStream_MapsResponseIncompleteEventToProviderAPIError(t *testing
 	if providerErr.ProviderParam != "response.incomplete_details.reason" {
 		t.Fatalf("provider param = %q, want response.incomplete_details.reason", providerErr.ProviderParam)
 	}
+	if !IsNonRetriableModelError(err) {
+		t.Fatalf("expected response.incomplete terminal error to be non-retriable: %v", err)
+	}
 }
 
 func TestGenerateStream_MapsResponseIncompleteWithoutReasonToProviderContractError(t *testing.T) {
@@ -173,6 +176,11 @@ func TestGenerateStream_RejectsPreTerminalMalformedResponsesStream(t *testing.T)
 		"malformed_json_before_terminal": strings.Join([]string{
 			`event: response.output_text.delta`,
 			`data: {"type":`,
+			``,
+			``,
+		}, "\n"),
+		"empty_data_before_terminal": strings.Join([]string{
+			`data: `,
 			``,
 			``,
 		}, "\n"),

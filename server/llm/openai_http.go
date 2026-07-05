@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/shared/llmerrors"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -28,6 +29,8 @@ const (
 	defaultUserAgent       = "kent/dev"
 	reasoningRoleSummary   = "reasoning"
 )
+
+const openAIResponsesStreamEndedBeforeTerminalMessage = "OpenAI-compatible Responses SSE stream ended before a terminal Responses event"
 
 type AuthHeaderProvider interface {
 	AuthorizationHeader(ctx context.Context) (string, error)
@@ -180,21 +183,19 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 			return accumulator.Response(), nil
 		}
 		if isOpenAIResponsesStreamFramingError(err) {
-			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", newOpenAIProviderContractError(
+			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
 				providerCaps.ProviderID,
-				rawResp,
-				"OpenAI-compatible Responses SSE stream ended before a terminal Responses event",
-				err,
+				openAIResponseStatusCode(rawResp),
+				fmt.Errorf("%s: %w", openAIResponsesStreamEndedBeforeTerminalMessage, err),
 			))
 		}
 		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 	}
 	if !accumulator.hasCompleted() {
-		return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", newOpenAIProviderContractError(
+		return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
 			providerCaps.ProviderID,
-			rawResp,
-			"OpenAI-compatible Responses SSE stream ended before a terminal Responses event",
-			nil,
+			openAIResponseStatusCode(rawResp),
+			errors.New(openAIResponsesStreamEndedBeforeTerminalMessage),
 		))
 	}
 	return accumulator.Response(), nil
@@ -208,7 +209,14 @@ func isOpenAIResponsesStreamFramingError(err error) bool {
 	if errors.As(err, &syntaxErr) {
 		return true
 	}
-	return errors.Is(err, io.ErrUnexpectedEOF)
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
+
+func openAIResponseStatusCode(rawResp *http.Response) int {
+	if rawResp == nil {
+		return 0
+	}
+	return rawResp.StatusCode
 }
 
 func callerCanceledStreamRead(ctx context.Context) bool {

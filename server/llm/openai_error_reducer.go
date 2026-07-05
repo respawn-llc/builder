@@ -79,6 +79,18 @@ func mapOpenAIStreamErrorPayload(providerID string, data []byte, cause error) (*
 	if !ok {
 		return nil, false
 	}
+	if payload.Type == "response.incomplete" {
+		return &ProviderAPIError{
+			ProviderID:    providerID,
+			Code:          UnifiedErrorCodeProviderContract,
+			ProviderCode:  payload.Code,
+			ProviderType:  payload.Type,
+			ProviderParam: payload.Param,
+			Message:       payload.Message,
+			Raw:           string(data),
+			Err:           cause,
+		}, true
+	}
 	return mapOpenAIProviderErrorContract(
 		providerID,
 		0,
