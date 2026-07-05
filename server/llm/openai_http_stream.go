@@ -87,7 +87,7 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 		a.emitReasoningSummaryDelta(key)
 	case "response.completed":
 		completedEvent := evt.AsResponseCompleted()
-		if !completedEvent.JSON.Response.Valid() {
+		if !completedEvent.JSON.Response.Valid() || !completedEvent.Response.JSON.Output.Valid() {
 			a.responseError = &responseStreamError{
 				Raw: completedEvent.RawJSON(),
 				ProviderContract: &responseStreamProviderContract{
