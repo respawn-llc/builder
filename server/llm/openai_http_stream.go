@@ -2,9 +2,11 @@ package llm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
+	"core/shared/llmerrors"
 	"core/shared/textutil"
 	"github.com/openai/openai-go/v3/responses"
 )
@@ -104,12 +106,7 @@ func (a *responseStreamAccumulator) Err(providerID string) error {
 	}
 	if a.responseError.ProviderContract {
 		message := "OpenAI-compatible Responses stream emitted response.incomplete without incomplete_details.reason"
-		return &ProviderAPIError{
-			ProviderID: providerID,
-			Code:       UnifiedErrorCodeProviderContract,
-			Message:    message,
-			Raw:        strings.TrimSpace(a.responseError.Raw),
-		}
+		return llmerrors.NewProviderContractError(providerID, 0, errors.New(message))
 	}
 	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil); ok {
 		return err

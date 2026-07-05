@@ -579,24 +579,28 @@ func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	delta := -1
-	reset := -1
+	var deltaIndex int
+	var hasDelta bool
+	var resetIndex int
+	var hasReset bool
 	for i, evt := range events {
-		if evt.Kind == EventAssistantDelta && evt.AssistantDelta == "partial" && delta == -1 {
-			delta = i
+		if evt.Kind == EventAssistantDelta && evt.AssistantDelta == "partial" && !hasDelta {
+			deltaIndex = i
+			hasDelta = true
 		}
-		if evt.Kind == EventAssistantDeltaReset && reset == -1 {
-			reset = i
+		if evt.Kind == EventAssistantDeltaReset && !hasReset {
+			resetIndex = i
+			hasReset = true
 		}
 	}
-	if delta == -1 {
+	if !hasDelta {
 		t.Fatalf("missing streamed delta before terminal error: %+v", events)
 	}
-	if reset == -1 {
+	if !hasReset {
 		t.Fatalf("missing reset after terminal error: %+v", events)
 	}
-	if delta > reset {
-		t.Fatalf("unexpected delta/reset ordering delta=%d reset=%d", delta, reset)
+	if deltaIndex > resetIndex {
+		t.Fatalf("unexpected delta/reset ordering delta=%d reset=%d", deltaIndex, resetIndex)
 	}
 }
 

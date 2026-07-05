@@ -987,7 +987,9 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 			}
 		}
 		if llm.IsNonRetriableModelError(attemptErr) || llm.IsContextLengthOverflowError(attemptErr) {
-			resetAttempt()
+			if !llm.HasHTTPStatus(attemptErr, 400) {
+				resetAttempt()
+			}
 			return llm.Response{}, attemptErr
 		}
 		resetAttempt()
