@@ -89,26 +89,8 @@ func cloneChatEntries(entries []clientui.ChatEntry) []clientui.ChatEntry {
 	cloned := make([]clientui.ChatEntry, 0, len(entries))
 	for _, entry := range entries {
 		copyEntry := entry
-		copyEntry.ToolCall = cloneClientToolCallMeta(entry.ToolCall)
+		copyEntry.ToolCall = clientui.CloneToolCallMeta(entry.ToolCall)
 		cloned = append(cloned, copyEntry)
 	}
 	return cloned
-}
-
-func cloneClientToolCallMeta(meta *clientui.ToolCallMeta) *clientui.ToolCallMeta {
-	if meta == nil {
-		return nil
-	}
-	copyMeta := *meta
-	if len(meta.Suggestions) > 0 {
-		copyMeta.Suggestions = append([]string(nil), meta.Suggestions...)
-	}
-	if meta.RenderHint != nil {
-		renderHint := *meta.RenderHint
-		copyMeta.RenderHint = &renderHint
-	}
-	if meta.PatchRender != nil {
-		copyMeta.PatchRender = cloneRenderedPatch(meta.PatchRender)
-	}
-	return &copyMeta
 }

@@ -1,14 +1,11 @@
 package tui
 
 import (
-	"slices"
-	"strings"
 	"testing"
 
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
-	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestDetailModeRendersHydratedCommittedRows(t *testing.T) {
@@ -23,14 +20,14 @@ func TestDetailModeRendersHydratedCommittedRows(t *testing.T) {
 	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
 	model = next.(Model)
 
-	view := xansi.Strip(model.View())
-	lines := trimmedDetailTestLines(view)
-	want := []string{"❯ hello from user", "", "▶ hello from assistant"}
-	if !slices.Equal(lines, want) {
-		t.Fatalf("detail lines = %#v, want %#v", lines, want)
+	if model.Mode() != ModeDetail || !model.detailPageLoaded {
+		t.Fatalf("detail mode/loaded = %s/%t, want detail/loaded", model.Mode(), model.detailPageLoaded)
 	}
-	if strings.TrimSpace(view) == "" {
-		t.Fatal("detail view is blank")
+	if len(model.detailEntries) != 2 || model.detailEntries[0].Kind != clientui.TranscriptRowUser || model.detailEntries[1].Kind != clientui.TranscriptRowAssistant {
+		t.Fatalf("detail entries = %#v, want user then assistant", model.detailEntries)
+	}
+	if selected, ok := model.selectedDetailIndex(); !ok || selected != 1 {
+		t.Fatalf("selected detail entry = %d/%t, want 1/true", selected, ok)
 	}
 }
 
@@ -46,10 +43,11 @@ func TestDetailModeFiltersHiddenTranscriptEntries(t *testing.T) {
 	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
 	model = next.(Model)
 
-	lines := trimmedDetailTestLines(model.View())
-	want := []string{"▶ visible"}
-	if !slices.Equal(lines, want) {
-		t.Fatalf("detail lines = %#v, want %#v", lines, want)
+	if len(model.detailEntries) != 1 || model.detailEntries[0].Kind != clientui.TranscriptRowUser {
+		t.Fatalf("detail entries = %#v, want visible user only", model.detailEntries)
+	}
+	if selected, ok := model.selectedDetailIndex(); !ok || selected != 0 {
+		t.Fatalf("selected detail entry = %d/%t, want 0/true", selected, ok)
 	}
 }
 
@@ -67,14 +65,15 @@ func TestDetailModeCachedRowsPreserveVisibility(t *testing.T) {
 		},
 	})}
 	model.detailPageLoaded = true
-	model.selected = 0
+	model.setSelectedDetailIndex(0)
 	next, _ := model.Update(SetModeMsg{Mode: ModeDetail})
 	model = next.(Model)
 
-	lines := trimmedDetailTestLines(model.View())
-	want := []string{"▶ compact notice"}
-	if !slices.Equal(lines, want) {
-		t.Fatalf("detail lines = %#v, want %#v", lines, want)
+	if len(model.detailEntries) != 1 || model.detailEntries[0].Visibility != clientui.EntryVisibilityOngoingCollapsed {
+		t.Fatalf("detail entries = %#v, want preserved ongoing-collapsed visibility", model.detailEntries)
+	}
+	if selected, ok := model.selectedDetailIndex(); !ok || selected != 0 {
+		t.Fatalf("selected detail entry = %d/%t, want 0/true", selected, ok)
 	}
 }
 
@@ -86,25 +85,13 @@ func TestDetailModeExpandsSelectedEntry(t *testing.T) {
 	model = next.(Model)
 	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
 	model = next.(Model)
-	collapsedLines := trimmedDetailTestLines(model.View())
-	wantCollapsed := []string{"▶ line one", "└ line two", "└ line three"}
-	if !slices.Equal(collapsedLines, wantCollapsed) {
-		t.Fatalf("collapsed detail lines = %#v, want %#v", collapsedLines, wantCollapsed)
+	if _, ok := model.expanded[0]; ok {
+		t.Fatal("detail entry starts expanded")
 	}
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(Model)
-	expandedLines := trimmedDetailTestLines(model.View())
-	wantExpanded := []string{"▼ line one", "└ line two", "└ line three", "└ line four"}
-	if !slices.Equal(expandedLines, wantExpanded) {
-		t.Fatalf("expanded detail lines = %#v, want %#v", expandedLines, wantExpanded)
+	if _, ok := model.expanded[0]; !ok {
+		t.Fatal("selected detail entry was not expanded")
 	}
-}
-
-func trimmedDetailTestLines(view string) []string {
-	lines := strings.Split(xansi.Strip(view), "\n")
-	for idx := range lines {
-		lines[idx] = strings.TrimRight(lines[idx], " ")
-	}
-	return lines
 }

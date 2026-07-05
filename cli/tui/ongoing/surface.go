@@ -484,6 +484,10 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 	} else {
 		liveLines = s.shrinkLiveBandLinesToFrame(frame, liveLines)
 	}
+	if len(immutableRows) > 0 && len(liveLines) >= frame.Size.Height {
+		liveLines = nil
+		frame.Cursor = Cursor{}
+	}
 	eraseHeight := min(max(s.previousBandHeight, len(liveLines)), frame.Size.Height)
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())

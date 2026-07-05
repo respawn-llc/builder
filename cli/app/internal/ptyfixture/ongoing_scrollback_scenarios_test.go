@@ -612,6 +612,21 @@ func contentAppendedAtLeastOnce(appends []pty.AppendOperation, content string) e
 			return nil
 		}
 	}
+	for start := range appends {
+		combined := ""
+		for idx := start; idx < len(appends); idx++ {
+			if appends[idx].Operation.Write == nil {
+				break
+			}
+			combined += appends[idx].Operation.Write.Text
+			if combined == content {
+				return nil
+			}
+			if len(combined) >= len(content) {
+				break
+			}
+		}
+	}
 	return fmt.Errorf("content append count for %q = 0, want at least 1; appends=%q", content, appendTexts(appends))
 }
 

@@ -207,7 +207,9 @@ func (w *uiDetailTranscriptWindow) merge(page clientui.TranscriptPage) {
 		w.replace(page)
 		return
 	}
-	w.replace(page)
+	if !w.loaded || len(w.segments) == 0 {
+		w.replace(page)
+	}
 }
 
 func (w uiDetailTranscriptWindow) hasSegment(page clientui.TranscriptPage) bool {
@@ -325,15 +327,7 @@ func cloneDetailChatEntries(entries []clientui.ChatEntry) []clientui.ChatEntry {
 	out := make([]clientui.ChatEntry, 0, len(entries))
 	for _, entry := range entries {
 		copyEntry := entry
-		if entry.ToolCall != nil {
-			copyTool := *entry.ToolCall
-			copyTool.Suggestions = append([]string(nil), entry.ToolCall.Suggestions...)
-			if entry.ToolCall.RenderHint != nil {
-				renderHint := *entry.ToolCall.RenderHint
-				copyTool.RenderHint = &renderHint
-			}
-			copyEntry.ToolCall = &copyTool
-		}
+		copyEntry.ToolCall = clientui.CloneToolCallMeta(entry.ToolCall)
 		out = append(out, copyEntry)
 	}
 	return out

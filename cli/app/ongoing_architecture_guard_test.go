@@ -26,23 +26,40 @@ func TestOngoingClientArchitectureGuards(t *testing.T) {
 }
 
 func TestOngoingClientArchitectureGuardsRejectNegativeFixture(t *testing.T) {
-	source := `package app
+	t.Run("committed row mirror", func(t *testing.T) {
+		source := `package app
 
 import "core/shared/clientui"
 
 type badMirror struct {
 	rows []clientui.TranscriptCommittedRow
 }
+`
+		pkgs, root := parseOngoingArchitectureFixture(t, "cli/app/ui.go", source)
+		violations := collectOngoingArchitectureViolations(pkgs, root)
+		assertOngoingArchitectureViolation(t, violations, "committed transcript rows may not be retained")
+	})
 
+	t.Run("page read in ongoing path", func(t *testing.T) {
+		source := `package app
 func badPageRead(client interface{ GetSessionTranscriptPage() }) {
 	client.GetSessionTranscriptPage()
 }
 `
-	pkgs, root := parseOngoingArchitectureFixture(t, "cli/app/ui.go", source)
-	violations := collectOngoingArchitectureViolations(pkgs, root)
-	if len(violations) != 2 {
-		t.Fatalf("negative fixture violations = %d, want 2: %v", len(violations), violations)
+		pkgs, root := parseOngoingArchitectureFixture(t, "cli/app/ongoing_bad.go", source)
+		violations := collectOngoingArchitectureViolations(pkgs, root)
+		assertOngoingArchitectureViolation(t, violations, "ongoing startup/rehydration must use transcript subscription hydration")
+	})
+}
+
+func assertOngoingArchitectureViolation(t *testing.T, violations []string, reason string) {
+	t.Helper()
+	for _, violation := range violations {
+		if strings.Contains(violation, reason) {
+			return
+		}
 	}
+	t.Fatalf("architecture violations = %v, want reason containing %q", violations, reason)
 }
 
 func loadOngoingArchitectureGuardPackages(t *testing.T, repoRoot string) []*packages.Package {

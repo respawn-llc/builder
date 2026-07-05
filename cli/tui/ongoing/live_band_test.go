@@ -106,6 +106,24 @@ func TestRenderShrinksLiveBandBeforeTerminalCoordinateWrites(t *testing.T) {
 	assertVisibleTextOps(t, ops, []string{"three", "four", "five"})
 }
 
+func TestCommittedRowsReserveTerminalSpaceBeforeLiveBand(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+
+	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("committed")), FrameInput{
+		Size: Size{Width: 40, Height: 3},
+		Sections: []FrameSection{
+			{Kind: FrameSectionPendingTools, Lines: []string{"tool"}},
+			{Kind: FrameSectionInput, Lines: []string{"> prompt"}},
+			{Kind: FrameSectionStatus, Lines: []string{"ready"}},
+		},
+	}); err != nil {
+		t.Fatalf("apply committed row: %v", err)
+	}
+
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"❯ committed"})
+}
+
 func assertCursorAddressRowsAtLeastOne(t *testing.T, ops []terminalOp) {
 	t.Helper()
 	for _, op := range ops {

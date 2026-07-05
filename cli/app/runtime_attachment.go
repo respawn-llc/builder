@@ -117,22 +117,16 @@ func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentCl
 	}, runtimeClient.transcriptDiagnosticsEnabled, func(line string) {
 		logger.Logf("%s", line)
 	})
-	var transcriptEvents <-chan ongoingTranscriptEvent
-	requestTranscriptOpen := func() {}
-	stopTranscriptEvents := func() {}
+	var subscribeTranscript sessionTranscriptSubscriber
 	if clients.SessionTranscript != nil {
-		stream := startSessionTranscriptEvents(ctx, plan.SessionID, func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+		subscribeTranscript = func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
 			return clients.SessionTranscript.SubscribeSessionTranscript(ctx, req)
-		})
-		transcriptEvents = stream.Events
-		requestTranscriptOpen = stream.RequestRehydration
-		stopTranscriptEvents = stream.Stop
-	} else {
-		stream := startSessionTranscriptEvents(ctx, plan.SessionID, nil)
-		transcriptEvents = stream.Events
-		requestTranscriptOpen = stream.RequestRehydration
-		stopTranscriptEvents = stream.Stop
+		}
 	}
+	transcriptStream := startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript)
+	transcriptEvents := transcriptStream.Events
+	requestTranscriptOpen := transcriptStream.RequestRehydration
+	stopTranscriptEvents := transcriptStream.Stop
 	terminalFocus := newTerminalFocusState()
 	turnQueueHook := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
 		if runtimeClient != nil {

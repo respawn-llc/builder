@@ -32,3 +32,20 @@ func TestDetailModeKeyForwardingReturnsPageRequestCommand(t *testing.T) {
 		t.Fatalf("page request = %#v, want older cursor 64", request.Request)
 	}
 }
+
+func TestDetailTabForwardingReturnsWarmupPageLoadCommand(t *testing.T) {
+	m := newProjectedStaticUIModel(WithUISessionID("session-1"))
+	m.activeSurface = uiSurfaceTranscriptDetail
+	m.statusConfig.SessionViews = &countingSessionViewClient{page: clientui.TranscriptPage{SessionID: "session-1"}}
+
+	cmd := m.forwardToView(tea.KeyMsg{Type: tea.KeyTab})
+	if cmd == nil {
+		t.Fatal("expected detail warmup command")
+	}
+	for _, msg := range collectCmdMessages(t, cmd) {
+		if _, ok := msg.(detailTranscriptLoadMsg); ok {
+			return
+		}
+	}
+	t.Fatal("detail warmup command did not emit detail transcript load")
+}

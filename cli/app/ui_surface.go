@@ -72,14 +72,17 @@ func (m *uiModel) restoreTranscriptSurface() tea.Cmd {
 }
 
 func (m *uiModel) activateSurface(surface uiSurface) tea.Cmd {
+	return m.activateSurfaceFrom(m.surface(), surface, false)
+}
+
+func (m *uiModel) activateSurfaceFrom(prev, surface uiSurface, suppressAltScreen bool) tea.Cmd {
 	if surface == "" {
 		surface = surfaceForTranscriptMode(m.view.Mode())
 	}
-	prev := m.surface()
 	m.updateOngoingOwnershipBeforeSurfaceTransition(prev, surface)
 	m.activeSurface = surface
 	m.syncRendererOutputGate()
-	if prev == surface {
+	if prev == surface || suppressAltScreen {
 		return nil
 	}
 	return sequenceCmds(

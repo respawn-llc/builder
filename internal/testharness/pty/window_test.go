@@ -136,8 +136,26 @@ func TestCoalesceAppendRowsMergesStyledAdjacentFragments(t *testing.T) {
 	}
 }
 
+func TestCoalesceAppendRowsKeepsDifferentForegroundFragmentsSeparate(t *testing.T) {
+	t.Parallel()
+
+	coalesced := pty.CoalesceAppendRows([]pty.AppendOperation{
+		{Operation: writeOperationWithForeground(pty.Region{Top: 1, Bottom: 2, Left: 0, Right: 2}, "he", "#ff0000")},
+		{Operation: writeOperationWithForeground(pty.Region{Top: 1, Bottom: 2, Left: 2, Right: 5}, "llo", "#00ff00")},
+	})
+	if len(coalesced) != 2 {
+		t.Fatalf("coalesced append count = %d, want 2", len(coalesced))
+	}
+}
+
 func writeOperation(region pty.Region, text string) pty.Operation {
 	payload := pty.MustWritePayload(text)
+	return pty.Operation{Kind: pty.OperationWrite, Region: region, Write: &payload}
+}
+
+func writeOperationWithForeground(region pty.Region, text string, foreground string) pty.Operation {
+	payload := pty.MustWritePayload(text)
+	payload.Foreground = foreground
 	return pty.Operation{Kind: pty.OperationWrite, Region: region, Write: &payload}
 }
 

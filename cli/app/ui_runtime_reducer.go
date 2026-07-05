@@ -105,6 +105,9 @@ func (m *uiModel) detailTranscriptResponseCurrent(requestSessionID, responseSess
 	if currentSessionID != "" && responseSessionID != "" && currentSessionID != responseSessionID {
 		return false
 	}
+	if requestSessionID != "" && responseSessionID != "" && requestSessionID != responseSessionID {
+		return false
+	}
 	return true
 }
 

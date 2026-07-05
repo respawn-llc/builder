@@ -5,14 +5,6 @@ import (
 	"unicode"
 )
 
-func terminalSafeTextLines(text string) []string {
-	text = terminalSafePlainText(text)
-	if text == "" {
-		return nil
-	}
-	return strings.Split(text, "\n")
-}
-
 func terminalSafePlainText(text string) string {
 	var builder strings.Builder
 	for _, r := range text {

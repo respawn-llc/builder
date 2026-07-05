@@ -76,6 +76,9 @@ func TestDetailPageAnchorKeepsLoadedOlderPageVisible(t *testing.T) {
 	if model.detailScroll != 0 {
 		t.Fatalf("detail scroll = %d, want top anchor", model.detailScroll)
 	}
+	if selected, ok := model.selectedDetailIndex(); !ok || selected != 0 {
+		t.Fatalf("selected entry = %d/%t, want top entry 0/true", selected, ok)
+	}
 }
 
 func TestDetailPageAnchorKeepsLoadedNewerPageVisible(t *testing.T) {
@@ -94,6 +97,9 @@ func TestDetailPageAnchorKeepsLoadedNewerPageVisible(t *testing.T) {
 	if model.detailScroll != model.maxDetailScroll() {
 		t.Fatalf("detail scroll = %d, want bottom anchor %d", model.detailScroll, model.maxDetailScroll())
 	}
+	if selected, ok := model.selectedDetailIndex(); !ok || selected != 1 {
+		t.Fatalf("selected entry = %d/%t, want bottom entry 1/true", selected, ok)
+	}
 }
 
 func TestDetailPagePreserveAnchorKeepsUILocalState(t *testing.T) {
@@ -108,7 +114,7 @@ func TestDetailPagePreserveAnchorKeepsUILocalState(t *testing.T) {
 		Anchor: DetailTranscriptAnchorTop,
 	})
 	model = next.(Model)
-	model.selected = 0
+	model.setSelectedDetailIndex(0)
 	model.expanded = map[int]struct{}{0: {}}
 	model.detailScroll = 1
 
@@ -122,8 +128,8 @@ func TestDetailPagePreserveAnchorKeepsUILocalState(t *testing.T) {
 	})
 	model = next.(Model)
 
-	if model.detailScroll != 1 || model.selected != 0 {
-		t.Fatalf("preserved scroll/selection = %d/%d, want 1/0", model.detailScroll, model.selected)
+	if selected, ok := model.selectedDetailIndex(); model.detailScroll != 1 || !ok || selected != 0 {
+		t.Fatalf("preserved scroll/selection = %d/%d/%t, want 1/0/true", model.detailScroll, selected, ok)
 	}
 	if _, ok := model.expanded[0]; !ok {
 		t.Fatal("expanded entry was not preserved")
@@ -150,9 +156,24 @@ func TestDetailLineMovementSelectsItemNearestViewportCenter(t *testing.T) {
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = next.(Model)
 
-	if model.selected != 2 {
-		t.Fatalf("selected entry after line movement = %d, want center entry 2", model.selected)
+	if selected, ok := model.selectedDetailIndex(); !ok || selected != 2 {
+		t.Fatalf("selected entry after line movement = %d/%t, want center entry 2/true", selected, ok)
 	}
+}
+
+func TestDetailPageInvalidAnchorPanics(t *testing.T) {
+	model := NewModel()
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected invalid anchor panic")
+		}
+	}()
+
+	_, _ = model.Update(SetDetailTranscriptPageMsg{
+		Page:   clientui.TranscriptPage{Entries: []clientui.ChatEntry{{Role: "assistant", Text: "entry"}}},
+		Anchor: DetailTranscriptPageAnchor(99),
+	})
 }
 
 func int64Ptr(value int64) *int64 {

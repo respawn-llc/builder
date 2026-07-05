@@ -49,16 +49,7 @@ func (m *uiModel) transitionTranscriptModeWithOptions(options transcriptModeTran
 	}
 	surfaceTransitionCmd := tea.Cmd(nil)
 	if !options.preserveSurface && (nextMode == tui.ModeOngoing || nextMode == tui.ModeDetail) {
-		nextSurface := surfaceForTranscriptMode(nextMode)
-		m.updateOngoingOwnershipBeforeSurfaceTransition(prevSurface, nextSurface)
-		m.activeSurface = nextSurface
-		m.syncRendererOutputGate()
-		if !options.suppressAltScreen {
-			surfaceTransitionCmd = sequenceCmds(
-				m.altScreenCmdForSurfaceTransition(prevSurface, nextSurface),
-				m.ongoingOwnershipAfterSurfaceTransitionCmd(prevSurface, nextSurface),
-			)
-		}
+		surfaceTransitionCmd = m.activateSurfaceFrom(prevSurface, surfaceForTranscriptMode(nextMode), options.suppressAltScreen)
 	}
 	clearCmd := m.clearCmdForModeTransition(prevMode, nextMode)
 	transitionCmd := tea.Cmd(nil)

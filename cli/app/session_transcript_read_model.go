@@ -1,6 +1,9 @@
 package app
 
 import (
+	"fmt"
+	"log"
+	"runtime/debug"
 	"strings"
 
 	"core/cli/tui/ongoing"
@@ -72,7 +75,9 @@ func (m *ongoingTranscriptReadModel) removeSection(kind ongoing.FrameSectionKind
 
 func (m *ongoingTranscriptReadModel) addPendingTool(tool clientui.TranscriptToolStart) {
 	if tool.ToolCallID == "" {
-		panic("ongoing pending tool start missing tool call id")
+		panicOngoingTranscriptReadModelDeveloperError("pending_tool_start", "missing tool call id", map[string]any{
+			"tool_name": tool.ToolName,
+		})
 	}
 	if index, exists := m.pendingToolIndex[tool.ToolCallID]; exists {
 		m.pendingTools[index].tool = tool
@@ -86,7 +91,7 @@ func (m *ongoingTranscriptReadModel) addPendingTool(tool clientui.TranscriptTool
 
 func (m *ongoingTranscriptReadModel) removePendingTool(toolCallID string) {
 	if toolCallID == "" {
-		panic("ongoing pending tool removal missing tool call id")
+		panicOngoingTranscriptReadModelDeveloperError("pending_tool_remove", "missing tool call id", nil)
 	}
 	index, exists := m.pendingToolIndex[toolCallID]
 	if !exists {
@@ -217,7 +222,15 @@ func (items keyedOngoingLiveItems[T]) values() []T {
 func parseOngoingLiveItemID(raw string, label string) ongoingLiveItemID {
 	id := strings.TrimSpace(raw)
 	if id == "" {
-		panic("ongoing " + label + " missing id")
+		panicOngoingTranscriptReadModelDeveloperError("live_item_id", "missing id", map[string]any{
+			"label": label,
+		})
 	}
 	return ongoingLiveItemID(id)
+}
+
+func panicOngoingTranscriptReadModelDeveloperError(operation, reason string, facts map[string]any) {
+	err := fmt.Errorf("ongoing transcript read model developer error: operation=%s reason=%s facts=%v\n%s", operation, reason, facts, debug.Stack())
+	log.Printf("%s", err.Error())
+	panic(err)
 }

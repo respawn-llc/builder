@@ -85,12 +85,6 @@ func (p markdownProjector) Project(input markdownProjectionInput) markdownProjec
 	}
 }
 
-type plainMarkdownRenderer struct{}
-
-func (plainMarkdownRenderer) Render(source string, width int) []string {
-	return renderPlainMarkdownRows(source, width)
-}
-
 type terminalMarkdownRenderer struct{}
 
 func (terminalMarkdownRenderer) Render(source string, width int) []string {

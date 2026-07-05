@@ -5,6 +5,7 @@ import (
 
 	"core/cli/tui"
 	"core/shared/clientui"
+	patchformat "core/shared/transcript/patchformat"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -107,6 +108,72 @@ func TestDetailTranscriptLoadIgnoresDuplicateAdjacentCursorResponse(t *testing.T
 	}
 	if !sameChatEntries(got, want) {
 		t.Fatalf("deduplicated detail entries = %#v, want %#v", got, want)
+	}
+}
+
+func TestDetailTranscriptDefaultRefreshDoesNotCollapseResidentWindow(t *testing.T) {
+	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	newest := clientui.TranscriptPage{
+		SessionID:    "session-1",
+		OlderCursor:  appInt64Ptr(40),
+		HasMoreAbove: true,
+		NewerCursor:  appInt64Ptr(80),
+		HasMoreBelow: false,
+		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "newer"}},
+	}
+	older := clientui.TranscriptPage{
+		SessionID:    "session-1",
+		OlderCursor:  appInt64Ptr(20),
+		HasMoreAbove: false,
+		NewerCursor:  appInt64Ptr(40),
+		HasMoreBelow: true,
+		Entries:      []clientui.ChatEntry{{Role: "user", Text: "older"}},
+	}
+	refreshedNewest := newest
+	refreshedNewest.Entries = []clientui.ChatEntry{{Role: "assistant", Text: "newer refreshed"}}
+
+	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: newest})
+	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}, page: older})
+	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: refreshedNewest})
+
+	got := model.detailTranscript.page().Entries
+	want := []clientui.ChatEntry{
+		{Role: "user", Text: "older"},
+		{Role: "assistant", Text: "newer"},
+	}
+	if !sameChatEntries(got, want) {
+		t.Fatalf("detail entries after default refresh = %#v, want stale resident window %#v", got, want)
+	}
+	if len(model.detailTranscript.segments) != 2 {
+		t.Fatalf("resident segment count = %d, want 2", len(model.detailTranscript.segments))
+	}
+}
+
+func TestDetailTranscriptPageDeepClonesPatchRender(t *testing.T) {
+	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	sourcePatch := &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
+		RelPath: "file.txt",
+		Diff:    []string{"old"},
+	}}}
+	page := clientui.TranscriptPage{
+		SessionID: "session-1",
+		Entries: []clientui.ChatEntry{{
+			Role:     "tool_result_ok",
+			ToolCall: &clientui.ToolCallMeta{PatchRender: sourcePatch},
+		}},
+	}
+
+	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: page})
+	sourcePatch.Files[0].Diff[0] = "source changed"
+	firstRead := model.detailTranscript.page()
+	if got := firstRead.Entries[0].ToolCall.PatchRender.Files[0].Diff[0]; got != "old" {
+		t.Fatalf("stored patch diff = %q, want source-isolated old diff", got)
+	}
+
+	firstRead.Entries[0].ToolCall.PatchRender.Files[0].Diff[0] = "read changed"
+	secondRead := model.detailTranscript.page()
+	if got := secondRead.Entries[0].ToolCall.PatchRender.Files[0].Diff[0]; got != "old" {
+		t.Fatalf("page patch diff = %q, want page-isolated old diff", got)
 	}
 }
 

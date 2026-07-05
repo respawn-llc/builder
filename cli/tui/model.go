@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"core/cli/tui/transcriptrender"
@@ -76,7 +77,7 @@ type Model struct {
 	detailHasMoreBelow bool
 	detailEntries      []detailEntry
 	expanded           map[int]struct{}
-	selected           int
+	selected           *int
 }
 
 func NewModel(opts ...Option) Model {
@@ -85,7 +86,6 @@ func NewModel(opts ...Option) Model {
 		viewportLines: 24,
 		viewportWidth: 80,
 		theme:         theme.Resolve(""),
-		selected:      -1,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -190,10 +190,10 @@ func (m Model) Mode() Mode {
 
 func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor DetailTranscriptPageAnchor) {
 	if !anchor.valid() {
-		panic("invalid detail transcript page anchor")
+		panic(fmt.Sprintf("invalid detail transcript page anchor: %d", anchor))
 	}
 	previousScroll := m.detailScroll
-	previousSelected := m.selected
+	previousSelected, previousSelectedOK := m.selectedDetailIndex()
 	previousExpanded := m.expanded
 	m.detailPageLoaded = true
 	m.detailOlderCursor = page.OlderCursor
@@ -212,14 +212,21 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 		m.expanded = nil
 	}
 	if len(m.detailEntries) == 0 {
-		m.selected = -1
+		m.clearSelectedDetailIndex()
 		m.detailScroll = 0
 		return
 	}
-	if anchor == DetailTranscriptAnchorPreserve && previousSelected >= 0 && previousSelected < len(m.detailEntries) {
-		m.selected = previousSelected
-	} else if m.selected < 0 || m.selected >= len(m.detailEntries) {
-		m.selected = len(m.detailEntries) - 1
+	switch {
+	case anchor == DetailTranscriptAnchorPreserve && previousSelectedOK && previousSelected < len(m.detailEntries):
+		m.setSelectedDetailIndex(previousSelected)
+	case anchor == DetailTranscriptAnchorTop:
+		m.setSelectedDetailIndex(0)
+	case anchor == DetailTranscriptAnchorBottom:
+		m.setSelectedDetailIndex(len(m.detailEntries) - 1)
+	case !page.HasMoreBelow || page.NewerCursor == nil:
+		m.setSelectedDetailIndex(len(m.detailEntries) - 1)
+	default:
+		m.setSelectedDetailIndex(0)
 	}
 	switch anchor {
 	case DetailTranscriptAnchorPreserve:
@@ -267,9 +274,10 @@ func (m Model) detailLines() []string {
 func (m Model) detailRenderedLines() []detailRenderedLine {
 	width := maxInt(1, m.viewportWidth)
 	out := make([]detailRenderedLine, 0, (len(m.detailEntries)+1)*2)
+	selected, hasSelection := m.selectedDetailIndex()
 	for idx, entry := range m.detailEntries {
 		if idx > 0 && !sameDetailGroup(m.detailEntries[idx-1], entry) {
-			out = append(out, detailRenderedLine{EntryIndex: -1})
+			out = append(out, detailRenderedLine{})
 		}
 		mode := transcriptrender.ModeDetailCollapsed
 		if _, ok := m.expanded[idx]; ok {
@@ -277,10 +285,10 @@ func (m Model) detailRenderedLines() []detailRenderedLine {
 		}
 		rendered := transcriptrender.RenderCommittedRow(entry.row(), width, m.theme, mode)
 		lines := rendered.Lines
-		if idx == m.selected {
+		if hasSelection && idx == selected {
 			lines = m.decorateSelectedDetailLines(lines, idx)
 		}
-		out = append(out, detailRenderLines(lines, m.theme, idx == m.selected, idx, width)...)
+		out = append(out, detailRenderLines(lines, m.theme, hasSelection && idx == selected, idx, width)...)
 	}
 	return out
 }
@@ -326,9 +334,10 @@ func replaceFirstVisibleSymbol(line transcriptrender.Line, symbol transcriptrend
 func detailRenderLines(lines []transcriptrender.Line, themeName string, selected bool, entryIndex int, width int) []detailRenderedLine {
 	out := make([]detailRenderedLine, 0, len(lines))
 	for _, line := range lines {
+		indexCopy := entryIndex
 		out = append(out, detailRenderedLine{
 			Text:       renderDetailLine(line, themeName, selected, width),
-			EntryIndex: entryIndex,
+			EntryIndex: &indexCopy,
 		})
 	}
 	return out
@@ -367,16 +376,17 @@ func (m Model) detailEmptyLine() string {
 }
 
 func (m *Model) toggleSelectedDetailEntry() {
-	if m.selected < 0 || m.selected >= len(m.detailEntries) {
+	selected, ok := m.selectedDetailIndex()
+	if !ok || selected >= len(m.detailEntries) {
 		return
 	}
 	if m.expanded == nil {
 		m.expanded = make(map[int]struct{})
 	}
-	if _, ok := m.expanded[m.selected]; ok {
-		delete(m.expanded, m.selected)
+	if _, ok := m.expanded[selected]; ok {
+		delete(m.expanded, selected)
 	} else {
-		m.expanded[m.selected] = struct{}{}
+		m.expanded[selected] = struct{}{}
 	}
 }
 
@@ -425,7 +435,7 @@ func sameDetailGroup(left, right detailEntry) bool {
 
 type detailRenderedLine struct {
 	Text       string
-	EntryIndex int
+	EntryIndex *int
 }
 
 func detailRenderedText(lines []detailRenderedLine) []string {
@@ -441,33 +451,50 @@ func detailRenderedText(lines []detailRenderedLine) []string {
 
 func (m *Model) selectDetailViewportCenter() {
 	if len(m.detailEntries) == 0 {
-		m.selected = -1
+		m.clearSelectedDetailIndex()
 		return
 	}
 	lines := m.detailRenderedLines()
 	if len(lines) == 0 {
-		m.selected = -1
+		m.clearSelectedDetailIndex()
 		return
 	}
 	center := clampInt(m.detailScroll+(maxInt(1, m.viewportLines)-1)/2, 0, len(lines)-1)
-	selected := -1
+	var selected *int
 	bestDistance := len(lines) + 1
 	for idx, line := range lines {
-		if line.EntryIndex < 0 {
+		if line.EntryIndex == nil {
 			continue
 		}
 		distance := absInt(idx - center)
 		if distance < bestDistance {
-			selected = line.EntryIndex
+			selectedCopy := *line.EntryIndex
+			selected = &selectedCopy
 			bestDistance = distance
 		}
 		if distance == 0 {
 			break
 		}
 	}
-	if selected >= 0 {
-		m.selected = selected
+	if selected != nil {
+		m.setSelectedDetailIndex(*selected)
 	}
+}
+
+func (m Model) selectedDetailIndex() (int, bool) {
+	if m.selected == nil {
+		return 0, false
+	}
+	return *m.selected, true
+}
+
+func (m *Model) setSelectedDetailIndex(index int) {
+	indexCopy := index
+	m.selected = &indexCopy
+}
+
+func (m *Model) clearSelectedDetailIndex() {
+	m.selected = nil
 }
 
 type detailEntry struct {
