@@ -18,6 +18,7 @@ import (
 	serverstartup "core/server/startup"
 	"core/server/tools"
 	"core/shared/transcript"
+	patchformat "core/shared/transcript/patchformat"
 )
 
 type ScriptFile struct {
@@ -40,6 +41,7 @@ type SeedTranscriptEntryFile struct {
 	ToolName       string          `json:"tool_name"`
 	ToolInput      json.RawMessage `json:"tool_input"`
 	ToolOutput     json.RawMessage `json:"tool_output"`
+	ToolPatch      string          `json:"tool_patch"`
 	ToolSummary    string          `json:"tool_summary"`
 	ToolCondensed  string          `json:"tool_condensed"`
 	ToolIsError    bool            `json:"tool_is_error"`
@@ -275,6 +277,16 @@ func seedToolResult(workspaceRoot string, entry SeedTranscriptEntryFile) (seedTo
 	}
 	input := append(json.RawMessage(nil), entry.ToolInput...)
 	meta := tools.BuildCallTranscriptMeta(toolName, tools.ToolCallContext{WorkingDir: workspaceRoot}, input)
+	if patchText := strings.TrimSpace(entry.ToolPatch); patchText != "" {
+		rendered := patchformat.Render(patchText, workspaceRoot)
+		meta.PatchRender = &rendered
+		meta.PatchSummary = strings.TrimSpace(rendered.SummaryText())
+		meta.PatchDetail = strings.TrimSpace(rendered.DetailText())
+		meta.CompactText = meta.PatchSummary
+		if meta.Command == "" {
+			meta.Command = meta.PatchDetail
+		}
+	}
 	output := append(json.RawMessage(nil), entry.ToolOutput...)
 	if len(output) == 0 {
 		output = json.RawMessage(`{}`)

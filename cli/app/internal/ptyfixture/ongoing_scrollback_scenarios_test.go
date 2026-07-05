@@ -20,6 +20,10 @@ type styledAppendExpectation struct {
 	Faint      bool
 }
 
+type styledRowExpectation []styledAppendExpectation
+
+const defaultTerminalForeground = "#c0c0c0"
+
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -39,6 +43,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		forbiddenAnyAppends   []string
 		expectedFaintAppends  []string
 		expectedStyledAppends []styledAppendExpectation
+		expectedStyledRows    []styledRowExpectation
 		allowDuplicateAppends bool
 		allowsAltScroll       bool
 		allowsFullScreen      bool
@@ -113,15 +118,23 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"! PTY_STYLE_ERROR",
 				"ℹ PTY_STYLE_NOTICE",
 				"ℹ PTY_STYLE_TOGGLE_FAST_ON",
+				"ℹ PTY_STYLE_TOGGLE_FAST_OFF",
+				"ℹ PTY_STYLE_TOGGLE_SUPERVISOR_ON",
+				"ℹ PTY_STYLE_TOGGLE_SUPERVISOR_OFF",
 				"$ PTY_TOOL_SHELL",
-				"⇄ ./pty_patch.txt +1",
-				"⇄ PTY_TOOL_EDIT",
+				"⇄ ./pty_patch.txt -1 +1",
+				"⇄ ./pty_edit.txt -1 +1",
 				"• PTY_TOOL_IMAGE",
 				"@ PTY_TOOL_WEB",
 				"• PTY_TOOL_CUSTOM",
 				"• PTY_TOOL_COMPLETE",
 				"? PTY_TOOL_QUESTION",
 				"• PTY_TOOL_HANDOFF",
+				"❯ seeded_tool_message_style_matrix_real_app_path",
+				"›                                                                               ",
+				"running · user turn",
+				"running · running · turn · user turn",
+				"medium · local",
 			},
 			expectedFaintAppends: []string{
 				"────────────────────────────────────────────────────── assistant ───────────────",
@@ -133,11 +146,39 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				{Text: "❮ PTY_STYLE_ASSISTANT", Foreground: colorForStyle(transcriptrender.StyleRoleAssistant)},
 				{Text: "⚠ PTY_STYLE_WARNING", Foreground: colorForStyle(transcriptrender.StyleRoleWarning)},
 				{Text: "! PTY_STYLE_ERROR", Foreground: colorForStyle(transcriptrender.StyleRoleError)},
+				{Text: "ℹ PTY_STYLE_NOTICE", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
+				{Text: "ℹ PTY_STYLE_TOGGLE_FAST_ON", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
+				{Text: "ℹ PTY_STYLE_TOGGLE_FAST_OFF", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
+				{Text: "ℹ PTY_STYLE_TOGGLE_SUPERVISOR_ON", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
+				{Text: "ℹ PTY_STYLE_TOGGLE_SUPERVISOR_OFF", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
 				{Text: "$ PTY_TOOL_SHELL", Foreground: colorForStyle(transcriptrender.StyleRoleToolShell)},
 				{Text: "⇄ ./pty_patch.txt ", Foreground: colorForStyle(transcriptrender.StyleRoleToolPatch)},
+				{Text: "⇄ ./pty_edit.txt ", Foreground: colorForStyle(transcriptrender.StyleRoleToolPatch)},
+				{Text: "-1", Foreground: colorForStyle(transcriptrender.StyleRoleToolError)},
 				{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
+				{Text: "• PTY_TOOL_IMAGE", Foreground: colorForStyle(transcriptrender.StyleRoleTool)},
 				{Text: "? PTY_TOOL_QUESTION", Foreground: colorForStyle(transcriptrender.StyleRoleToolQuestion)},
 				{Text: "@ PTY_TOOL_WEB", Foreground: colorForStyle(transcriptrender.StyleRoleToolWebSearch)},
+				{Text: "• PTY_TOOL_CUSTOM", Foreground: colorForStyle(transcriptrender.StyleRoleTool)},
+				{Text: "• PTY_TOOL_COMPLETE", Foreground: colorForStyle(transcriptrender.StyleRoleTool)},
+				{Text: "• PTY_TOOL_HANDOFF", Foreground: colorForStyle(transcriptrender.StyleRoleTool)},
+				{Text: "❯ seeded_tool_message_style_matrix_real_app_path", Foreground: colorForStyle(transcriptrender.StyleRoleUser)},
+				{Text: "›                                                                               ", Foreground: defaultTerminalForeground},
+				{Text: "running · user turn", Foreground: defaultTerminalForeground},
+				{Text: "running · running · turn · user turn", Foreground: defaultTerminalForeground},
+				{Text: "medium · local", Foreground: defaultTerminalForeground},
+			},
+			expectedStyledRows: []styledRowExpectation{
+				{
+					{Text: "⇄ ./pty_patch.txt ", Foreground: colorForStyle(transcriptrender.StyleRoleToolPatch)},
+					{Text: "-1", Foreground: colorForStyle(transcriptrender.StyleRoleToolError)},
+					{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
+				},
+				{
+					{Text: "⇄ ./pty_edit.txt ", Foreground: colorForStyle(transcriptrender.StyleRoleToolPatch)},
+					{Text: "-1", Foreground: colorForStyle(transcriptrender.StyleRoleToolError)},
+					{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
+				},
 			},
 		},
 		{
@@ -276,6 +317,11 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 						t.Fatalf("expected styled full-window append: %v", err)
 					}
 				}
+				for _, expected := range tc.expectedStyledRows {
+					if err := styledRowAppendedAtLeastOnce(styledAppends, expected); err != nil {
+						t.Fatalf("expected styled row append: %v", err)
+					}
+				}
 			}
 			if analysis.Screen.IsBlank() {
 				t.Fatal("ongoing TUI screen is blank after scenario")
@@ -303,9 +349,12 @@ func seededStyleMatrixTranscript() []map[string]any {
 		{"kind": "local_entry", "visibility": "o", "role": "error", "text": "PTY_STYLE_ERROR"},
 		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_NOTICE"},
 		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_TOGGLE_FAST_ON"},
+		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_TOGGLE_FAST_OFF"},
+		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_TOGGLE_SUPERVISOR_ON"},
+		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_TOGGLE_SUPERVISOR_OFF"},
 		toolSeed("exec_command", "call_shell", map[string]any{"cmd": "printf 'PTY_TOOL_SHELL\n'"}, "PTY_TOOL_SHELL", false),
-		toolSeed("patch", "call_patch", map[string]any{"patch": "*** Begin Patch\n*** Add File: pty_patch.txt\n+new\n*** End Patch\n"}, "", false),
-		toolSeed("edit", "call_edit", map[string]any{"file_path": "pty_edit.txt", "old_string": "old", "new_string": "new"}, "PTY_TOOL_EDIT", false),
+		toolSeedWithPatch("patch", "call_patch", map[string]any{"patch": patchStyleFixture("pty_patch.txt")}, patchStyleFixture("pty_patch.txt"), false),
+		toolSeedWithPatch("edit", "call_edit", map[string]any{"file_path": "pty_edit.txt", "old_string": "old", "new_string": "new"}, patchStyleFixture("pty_edit.txt"), false),
 		toolSeed("view_image", "call_image", map[string]any{"path": "image.png"}, "PTY_TOOL_IMAGE", false),
 		toolSeed("web_search", "call_web", map[string]any{"query": "PTY_TOOL_WEB"}, "PTY_TOOL_WEB", false),
 		toolSeed("custom_tool", "call_custom", map[string]any{"input": "PTY_TOOL_CUSTOM"}, "PTY_TOOL_CUSTOM", true),
@@ -329,6 +378,16 @@ func toolSeed(name string, callID string, input map[string]any, condensed string
 		"tool_condensed": condensed,
 		"tool_custom":    custom,
 	}
+}
+
+func toolSeedWithPatch(name string, callID string, input map[string]any, patchText string, custom bool) map[string]any {
+	seed := toolSeed(name, callID, input, "", custom)
+	seed["tool_patch"] = patchText
+	return seed
+}
+
+func patchStyleFixture(path string) string {
+	return "*** Begin Patch\n*** Update File: " + path + "\n@@\n-old\n+new\n*** End Patch\n"
 }
 
 func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent) (pty.Capture, string) {
@@ -539,6 +598,45 @@ func styledContentAppendedAtLeastOnce(appends []pty.AppendOperation, expected st
 		return nil
 	}
 	return fmt.Errorf("styled append for %q with foreground=%q faint=%t not found; candidates=%+v raw=%+v", expected.Text, expected.Foreground, expected.Faint, candidates, firstStyledAppendSamples(appends, 80))
+}
+
+func styledRowAppendedAtLeastOnce(appends []pty.AppendOperation, expected styledRowExpectation) error {
+	if len(expected) == 0 {
+		return nil
+	}
+	for idx := range appends {
+		write := appends[idx].Operation.Write
+		if write == nil || !styledWriteMatches(write, expected[0]) {
+			continue
+		}
+		row := appends[idx].Operation.Region.Top
+		nextCol := appends[idx].Operation.Region.Right
+		matched := 1
+		for cursor := idx + 1; cursor < len(appends) && matched < len(expected); cursor++ {
+			op := appends[cursor].Operation
+			if op.Region.Top != row {
+				break
+			}
+			if op.Region.Left < nextCol {
+				continue
+			}
+			if op.Write == nil {
+				continue
+			}
+			nextCol = op.Region.Right
+			if styledWriteMatches(op.Write, expected[matched]) {
+				matched++
+			}
+		}
+		if matched == len(expected) {
+			return nil
+		}
+	}
+	return fmt.Errorf("styled row sequence not found: %+v", expected)
+}
+
+func styledWriteMatches(write *pty.WritePayload, expected styledAppendExpectation) bool {
+	return write.Text == expected.Text && write.Foreground == expected.Foreground && write.Faint == expected.Faint
 }
 
 func firstStyledAppendSamples(appends []pty.AppendOperation, limit int) []styledAppendExpectation {

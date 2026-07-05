@@ -214,7 +214,7 @@ func transcriptCommittedEntryCountFromMessage(msg llm.Message, completions map[s
 }
 
 func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
-	visibility := transcript.NormalizeEntryVisibility(entry.Visibility)
+	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
 	switch strings.TrimSpace(entry.Role) {
 	case "user":
 		if strings.TrimSpace(entry.Text) == "" {
@@ -285,7 +285,7 @@ func transcriptToolRowFactFromResult(result tools.Result) TranscriptCommittedRow
 }
 
 func transcriptCacheWarningFact(warning transcript.CacheWarning, visibility transcript.EntryVisibility) TranscriptCommittedRowFact {
-	normalized := transcript.NormalizeEntryVisibility(visibility)
+	normalized := normalizeRuntimeEntryVisibility(visibility)
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: normalized, Notice: &TranscriptNoticeRowFact{
 		Reason:   "cache_warning",
 		Severity: "warning",
@@ -309,7 +309,7 @@ func legacyUntypedNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedR
 	if legacyText != "" {
 		legacyTextPtr = &legacyText
 	}
-	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: transcript.NormalizeEntryVisibility(entry.Visibility), Notice: &TranscriptNoticeRowFact{
+	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: normalizeRuntimeEntryVisibility(entry.Visibility), Notice: &TranscriptNoticeRowFact{
 		Reason:     "legacy_untyped_notice",
 		Severity:   legacyLocalEntrySeverity(entry),
 		LegacyText: legacyTextPtr,
@@ -352,7 +352,7 @@ func runtimeNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedRowFact
 		noticeIDPtr = &noticeID
 	}
 	detail := firstNonEmpty(entry.Text, entry.CondensedText, entry.CompactLabel, entry.ToolResultSummary)
-	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: transcript.NormalizeEntryVisibility(entry.Visibility), Notice: &TranscriptNoticeRowFact{
+	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: normalizeRuntimeEntryVisibility(entry.Visibility), Notice: &TranscriptNoticeRowFact{
 		Reason:           "runtime_diagnostic",
 		Severity:         legacyLocalEntrySeverity(entry),
 		NoticeID:         noticeIDPtr,

@@ -182,6 +182,7 @@ func (s *inMemoryTranscriptScan) synthesizedToolResult(call llm.ToolCall) (ChatE
 }
 
 func (s *inMemoryTranscriptScan) appendEntry(entry ChatEntry) {
+	entry.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)
 	entryIndex := s.totalEntries
 	if entryIndex >= s.request.Offset && (s.request.Limit == 0 || entryIndex < s.request.Offset+s.request.Limit) {
 		s.pageEntries = append(s.pageEntries, clonePersistedChatEntry(entry))

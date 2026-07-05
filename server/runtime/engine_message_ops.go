@@ -131,7 +131,7 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 
 func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
 	return &ChatEntry{
-		Visibility:    entry.Visibility,
+		Visibility:    normalizeRuntimeEntryVisibility(entry.Visibility),
 		Role:          strings.TrimSpace(entry.Role),
 		Text:          strings.TrimSpace(entry.Text),
 		CondensedText: strings.TrimSpace(entry.CondensedText),

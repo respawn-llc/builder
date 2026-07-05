@@ -409,7 +409,7 @@ func (s *chatStore) appendLocalEntryRecord(entry ChatEntry) {
 	if strings.TrimSpace(entry.Text) == "" {
 		return
 	}
-	entry.Visibility = transcript.NormalizeEntryVisibility(entry.Visibility)
+	entry.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)
 	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
 	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
 	s.mu.Lock()
@@ -429,7 +429,7 @@ func (s *chatStore) appendProjectedHistoryReplacementEntriesLocked(entries []Cha
 }
 
 func (s *chatStore) appendProjectedEntryLocked(entry ChatEntry, marksBoundary bool) {
-	entry.Visibility = transcript.NormalizeEntryVisibility(entry.Visibility)
+	entry.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)
 	entry.ToolCallID = strings.TrimSpace(entry.ToolCallID)
 	s.local = append(s.local, localChatEntry{
 		Entry:             entry,

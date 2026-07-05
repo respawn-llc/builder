@@ -234,7 +234,7 @@ func steerCacheWarningIntent(warning transcript.CacheWarning, visibility transcr
 		priority: steeringPriorityRuntimeEvent,
 		items: []steeringItem{{cacheWarning: &steeringCacheWarning{
 			warning:    copyWarning,
-			visibility: transcript.NormalizeEntryVisibility(visibility),
+			visibility: normalizeRuntimeEntryVisibility(visibility),
 			emit:       emit,
 		}}},
 	}
@@ -249,7 +249,7 @@ func steerCacheObservationIntent(events []session.EventInput, warning transcript
 		items: []steeringItem{{cacheObservation: &steeringCacheObservation{
 			events:     copyEvents,
 			warning:    copyWarning,
-			visibility: transcript.NormalizeEntryVisibility(visibility),
+			visibility: normalizeRuntimeEntryVisibility(visibility),
 			emit:       emit,
 		}}},
 	}
@@ -334,7 +334,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	}
 	if item.cacheWarning != nil {
 		warning := item.cacheWarning.warning
-		visibility := transcript.NormalizeEntryVisibility(item.cacheWarning.visibility)
+		visibility := normalizeRuntimeEntryVisibility(item.cacheWarning.visibility)
 		_, committed, appendErr := e.store.AppendEvent(stepID, sessionEventCacheWarning, warning)
 		if appendErr != nil && !committed {
 			return appendErr
@@ -356,7 +356,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			return err
 		}
 		warning := observation.warning
-		visibility := transcript.NormalizeEntryVisibility(observation.visibility)
+		visibility := normalizeRuntimeEntryVisibility(observation.visibility)
 		newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility)
 		if observation.emit {
 			e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true})

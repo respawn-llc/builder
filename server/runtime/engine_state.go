@@ -264,7 +264,7 @@ func (e *Engine) AppendCommittedEntry(role, text string) error {
 
 func (e *Engine) AppendCommittedEntryWithVisibility(role, text string, visibility transcript.EntryVisibility) error {
 	return e.appendCommittedEntry(storedLocalEntry{
-		Visibility: transcript.NormalizeEntryVisibility(visibility),
+		Visibility: normalizeRuntimeEntryVisibility(visibility),
 		Role:       strings.TrimSpace(role),
 		Text:       strings.TrimSpace(text),
 	})

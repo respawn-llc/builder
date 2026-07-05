@@ -1082,6 +1082,32 @@ func TestTranscriptFactsPreserveProjectedLocalEntryVisibility(t *testing.T) {
 	}
 }
 
+func TestTranscriptFactsNormalizeLegacyProjectedLocalEntryVisibility(t *testing.T) {
+	for _, tt := range []struct {
+		legacy transcript.EntryVisibility
+		want   transcript.EntryVisibility
+	}{
+		{legacy: transcript.EntryVisibility("all"), want: transcript.EntryVisibilityOngoing},
+		{legacy: transcript.EntryVisibility("verbose"), want: transcript.EntryVisibilityDetail},
+	} {
+		facts := TranscriptCommittedRowFactsFromEvent(Event{
+			Kind:                EventLocalEntryAdded,
+			LocalEntryProjected: true,
+			LocalEntry: &ChatEntry{
+				Visibility: tt.legacy,
+				Role:       "system",
+				Text:       "legacy visibility",
+			},
+		})
+		if len(facts) != 1 {
+			t.Fatalf("legacy %q facts = %+v, want one row", tt.legacy, facts)
+		}
+		if facts[0].Visibility != tt.want {
+			t.Fatalf("legacy %q row visibility = %q, want %q", tt.legacy, facts[0].Visibility, tt.want)
+		}
+	}
+}
+
 func TestTranscriptDeliverySnapshotIncludesPostCompactionLocalEntries(t *testing.T) {
 	s := newChatStore()
 	s.appendMessage(llm.Message{Role: llm.RoleUser, Content: "one"})
