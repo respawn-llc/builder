@@ -17,7 +17,7 @@ func TestOngoingTranscriptControllerSeedsHydrationAppOwnedFrameSections(t *testi
 		Kind:     clientui.TranscriptMessageHydration,
 		Hydration: &clientui.TranscriptHydration{
 			InFlightTools:           []clientui.TranscriptToolStart{{ToolCallID: "tool-1", ToolName: "shell"}},
-			QueuedOrSteeredMessages: []clientui.TranscriptQueuedOrSteeredMessageState{{QueueItemID: "queue-1", Status: clientui.QueuedUserMessageAccepted, UserText: "queued prompt"}},
+			QueuedOrSteeredMessages: []clientui.TranscriptQueuedOrSteeredMessageState{{QueueItemID: "11111111-1111-4111-8111-111111111111", Status: clientui.QueuedUserMessageAccepted, UserText: "queued prompt"}},
 			RunState:                &clientui.RunState{Status: clientui.RunStatusRunning, ActiveKind: clientui.RuntimeActivityActiveKindUserTurn},
 			RuntimeActivity:         &clientui.RuntimeActivity{State: clientui.RuntimeActivityRunning, ActiveKind: clientui.RuntimeActivityActiveKindUserTurn},
 			InputReconciliation: &clientui.RuntimeInputReconciliationSnapshot{Operations: []clientui.RuntimeInputReconciliation{{
@@ -36,12 +36,12 @@ func TestOngoingTranscriptControllerSeedsHydrationAppOwnedFrameSections(t *testi
 			ContextUsage:     &clientui.RuntimeContextUsage{UsedTokens: 1200, WindowTokens: 2000, CacheHitPercent: 75, HasCacheHitPercentage: true},
 			GoalStatus:       &clientui.TranscriptGoalStatus{ID: "goal-1", Objective: "finish review fixes", Status: clientui.RuntimeGoalStatusActive},
 			BackgroundActivities: []clientui.TranscriptBackgroundActivity{{
-				ID:      "background-1",
+				ID:      "22222222-2222-4222-8222-222222222222",
 				State:   "running",
 				Preview: "running tests",
 			}},
 			PendingSessionPrompts: []clientui.TranscriptPendingSessionPrompt{{
-				ID:    "prompt-1",
+				ID:    "33333333-3333-4333-8333-333333333333",
 				State: clientui.TranscriptPromptPending,
 				Data:  clientui.TranscriptPendingSessionPromptData{Question: "Approve command?"},
 			}},
@@ -56,14 +56,6 @@ func TestOngoingTranscriptControllerSeedsHydrationAppOwnedFrameSections(t *testi
 	wantSections := []ongoing.FrameSectionKind{
 		ongoing.FrameSectionPendingTools,
 		ongoing.FrameSectionQueuedOrSteered,
-		ongoing.FrameSectionRunState,
-		ongoing.FrameSectionRuntimeActivity,
-		ongoing.FrameSectionInputReconciliation,
-		ongoing.FrameSectionSessionStatus,
-		ongoing.FrameSectionSessionIdentity,
-		ongoing.FrameSectionCompaction,
-		ongoing.FrameSectionContextUsage,
-		ongoing.FrameSectionGoal,
 		ongoing.FrameSectionBackgroundActivity,
 		ongoing.FrameSectionPendingPrompt,
 	}
@@ -76,20 +68,20 @@ func TestOngoingTranscriptControllerLiveAppOwnedMessageKindsRenderFrameSections(
 	tests := []struct {
 		name    string
 		message clientui.TranscriptMessage
-		want    ongoing.FrameSectionKind
+		want    []ongoing.FrameSectionKind
 	}{
-		{name: "run state", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageRunState), want: ongoing.FrameSectionRunState},
-		{name: "runtime activity", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeActivity), want: ongoing.FrameSectionRuntimeActivity},
-		{name: "input reconciliation", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageInputReconciliation), want: ongoing.FrameSectionInputReconciliation},
-		{name: "queued", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageQueuedOrSteeredMessageState), want: ongoing.FrameSectionQueuedOrSteered},
-		{name: "session status", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageSessionStatus), want: ongoing.FrameSectionSessionStatus},
-		{name: "session identity", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageSessionIdentity), want: ongoing.FrameSectionSessionIdentity},
-		{name: "compaction", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageCompactionStatus), want: ongoing.FrameSectionCompaction},
-		{name: "context", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageContextUsage), want: ongoing.FrameSectionContextUsage},
-		{name: "goal", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageGoalStatus), want: ongoing.FrameSectionGoal},
-		{name: "background", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageBackgroundActivity), want: ongoing.FrameSectionBackgroundActivity},
-		{name: "pending prompt", message: ongoingTranscriptMessage(2, clientui.TranscriptMessagePendingSessionPrompt), want: ongoing.FrameSectionPendingPrompt},
-		{name: "tool start", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageToolStart), want: ongoing.FrameSectionPendingTools},
+		{name: "run state", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageRunState)},
+		{name: "runtime activity", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeActivity)},
+		{name: "input reconciliation", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageInputReconciliation)},
+		{name: "queued", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageQueuedOrSteeredMessageState), want: []ongoing.FrameSectionKind{ongoing.FrameSectionQueuedOrSteered}},
+		{name: "session status", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageSessionStatus)},
+		{name: "session identity", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageSessionIdentity)},
+		{name: "compaction", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageCompactionStatus)},
+		{name: "context", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageContextUsage)},
+		{name: "goal", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageGoalStatus)},
+		{name: "background", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageBackgroundActivity), want: []ongoing.FrameSectionKind{ongoing.FrameSectionBackgroundActivity}},
+		{name: "pending prompt", message: ongoingTranscriptMessage(2, clientui.TranscriptMessagePendingSessionPrompt), want: []ongoing.FrameSectionKind{ongoing.FrameSectionPendingPrompt}},
+		{name: "tool start", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageToolStart), want: []ongoing.FrameSectionKind{ongoing.FrameSectionPendingTools}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -107,8 +99,12 @@ func TestOngoingTranscriptControllerLiveAppOwnedMessageKindsRenderFrameSections(
 			if got, want := surface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("surface calls = %v, want %v", got, want)
 			}
-			if got, want := surface.lastFrameSectionKinds(), []ongoing.FrameSectionKind{tt.want}; !reflect.DeepEqual(got, want) {
-				t.Fatalf("frame sections = %v, want %v", got, want)
+			got := surface.lastFrameSectionKinds()
+			if len(got) == 0 && len(tt.want) == 0 {
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("frame sections = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -149,14 +145,16 @@ func TestOngoingTranscriptControllerSanitizesTranscriptFactsBeforeFrameInput(t *
 			Sequence: 2,
 			Kind:     clientui.TranscriptMessageQueuedOrSteeredMessageState,
 			QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{
-				Status:   clientui.QueuedUserMessageAccepted,
-				UserText: "queued\x1b[2J\nprompt\x07\r",
+				QueueItemID: "11111111-1111-4111-8111-111111111111",
+				Status:      clientui.QueuedUserMessageAccepted,
+				UserText:    "queued\x1b[2J\nprompt\x07\r",
 			},
 		},
 		{
 			Sequence: 3,
 			Kind:     clientui.TranscriptMessageBackgroundActivity,
 			BackgroundActivity: &clientui.TranscriptBackgroundActivity{
+				ID:      "22222222-2222-4222-8222-222222222222",
 				State:   "running\x1b[H",
 				Preview: "preview\x1b]2;title\x07",
 				Command: "cmd\r\nnext",
@@ -166,6 +164,7 @@ func TestOngoingTranscriptControllerSanitizesTranscriptFactsBeforeFrameInput(t *
 			Sequence: 4,
 			Kind:     clientui.TranscriptMessagePendingSessionPrompt,
 			PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{
+				ID:    "33333333-3333-4333-8333-333333333333",
 				State: clientui.TranscriptPromptPending,
 				Kind:  clientui.TranscriptPromptAsk,
 				Data:  clientui.TranscriptPendingSessionPromptData{Question: "question\x1b[3J", ToolName: "tool\x07name"},
@@ -207,5 +206,69 @@ func TestOngoingFrameInputExcludesRawTranscriptFactBucketsAndAssistantTail(t *te
 		if want, ok := allowed[field.Name]; !ok || field.Type != want {
 			t.Fatalf("FrameInput field %s has type %s, want allowed typed frame fields only", field.Name, field.Type)
 		}
+	}
+}
+
+func TestOngoingTranscriptControllerScratchResetClearsLiveReadModel(t *testing.T) {
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+	if _, err := controller.Accept(clientui.TranscriptMessage{
+		Sequence: 1,
+		Kind:     clientui.TranscriptMessageHydration,
+		Hydration: &clientui.TranscriptHydration{
+			InFlightTools:           []clientui.TranscriptToolStart{{ToolCallID: "tool-1", ToolName: "shell"}},
+			QueuedOrSteeredMessages: []clientui.TranscriptQueuedOrSteeredMessageState{{QueueItemID: "11111111-1111-4111-8111-111111111111", Status: clientui.QueuedUserMessageAccepted, UserText: "queued prompt"}},
+			BackgroundActivities:    []clientui.TranscriptBackgroundActivity{{ID: "22222222-2222-4222-8222-222222222222", State: "running", Preview: "tests"}},
+			PendingSessionPrompts:   []clientui.TranscriptPendingSessionPrompt{{ID: "33333333-3333-4333-8333-333333333333", State: clientui.TranscriptPromptPending, Data: clientui.TranscriptPendingSessionPromptData{Question: "Approve?"}}},
+		},
+	}); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	if got := surface.lastFrameSectionKinds(); len(got) == 0 {
+		t.Fatal("expected live frame sections before reset")
+	}
+
+	controller.ResetForScratchHydration()
+	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept post-reset hydration: %v", err)
+	}
+
+	if got := surface.lastFrameSectionKinds(); len(got) != 0 {
+		t.Fatalf("post-reset frame sections = %v, want none", got)
+	}
+}
+
+func TestOngoingTranscriptControllerTracksPluralLiveSectionsByID(t *testing.T) {
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+
+	messages := []clientui.TranscriptMessage{
+		{Sequence: 2, Kind: clientui.TranscriptMessageQueuedOrSteeredMessageState, QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{QueueItemID: "11111111-1111-4111-8111-111111111111", Status: clientui.QueuedUserMessageAccepted, UserText: "first queued"}},
+		{Sequence: 3, Kind: clientui.TranscriptMessageQueuedOrSteeredMessageState, QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{QueueItemID: "44444444-4444-4444-8444-444444444444", Status: clientui.QueuedUserMessageAccepted, UserText: "second queued"}},
+		{Sequence: 4, Kind: clientui.TranscriptMessagePendingSessionPrompt, PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{ID: "33333333-3333-4333-8333-333333333333", State: clientui.TranscriptPromptPending, Data: clientui.TranscriptPendingSessionPromptData{Question: "first prompt"}}},
+		{Sequence: 5, Kind: clientui.TranscriptMessagePendingSessionPrompt, PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{ID: "55555555-5555-4555-8555-555555555555", State: clientui.TranscriptPromptPending, Data: clientui.TranscriptPendingSessionPromptData{Question: "second prompt"}}},
+		{Sequence: 6, Kind: clientui.TranscriptMessageBackgroundActivity, BackgroundActivity: &clientui.TranscriptBackgroundActivity{ID: "22222222-2222-4222-8222-222222222222", State: "running", Preview: "first background"}},
+		{Sequence: 7, Kind: clientui.TranscriptMessageBackgroundActivity, BackgroundActivity: &clientui.TranscriptBackgroundActivity{ID: "66666666-6666-4666-8666-666666666666", State: "running", Preview: "second background"}},
+		{Sequence: 8, Kind: clientui.TranscriptMessageQueuedOrSteeredMessageState, QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{QueueItemID: "11111111-1111-4111-8111-111111111111", Status: clientui.QueuedUserMessageSubmitted}},
+		{Sequence: 9, Kind: clientui.TranscriptMessagePendingSessionPrompt, PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{ID: "33333333-3333-4333-8333-333333333333", State: clientui.TranscriptPromptResolved}},
+		{Sequence: 10, Kind: clientui.TranscriptMessageBackgroundActivity, BackgroundActivity: &clientui.TranscriptBackgroundActivity{ID: "22222222-2222-4222-8222-222222222222", Removed: true}},
+	}
+	for _, message := range messages {
+		if _, err := controller.Accept(message); err != nil {
+			t.Fatalf("accept %s sequence %d: %v", message.Kind, message.Sequence, err)
+		}
+	}
+
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionQueuedOrSteered), []string{"second queued"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("queued section lines = %v, want %v", got, want)
+	}
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingPrompt), []string{"second prompt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("prompt section lines = %v, want %v", got, want)
+	}
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionBackgroundActivity), []string{"second background · running"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("background section lines = %v, want %v", got, want)
 	}
 }

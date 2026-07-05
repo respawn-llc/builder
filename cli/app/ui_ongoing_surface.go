@@ -74,6 +74,17 @@ func (m *uiModel) handleOngoingSurfaceError(err error) tea.Cmd {
 	return nil
 }
 
+func (m *uiModel) renderNativeOngoingSurface() tea.Cmd {
+	if m == nil || m.ongoingSurface == nil || !m.nativeOngoingSurfaceActive() {
+		return nil
+	}
+	result, err := m.ongoingSurface.Render(m.ongoingFrameInput())
+	if err != nil {
+		return m.handleOngoingSurfaceError(err)
+	}
+	return m.handleOngoingResult(result)
+}
+
 func (m *uiModel) updateOngoingOwnershipBeforeSurfaceTransition(prev, next uiSurface) {
 	if m == nil || m.ongoingTranscript == nil || prev == next {
 		return
@@ -103,6 +114,11 @@ func (m *uiModel) setOngoingNormalBufferOwned(owned bool) tea.Cmd {
 	if m == nil || m.ongoingTranscript == nil {
 		return nil
 	}
+	if owned {
+		if cmd := m.applyPendingOngoingScratchReset(); cmd != nil {
+			return cmd
+		}
+	}
 	result, err := m.ongoingTranscript.SetNormalBufferOwned(owned)
 	if err != nil {
 		return m.handleOngoingSurfaceError(err)
@@ -130,10 +146,14 @@ func (m *uiModel) handleOngoingResult(result ongoing.Result) tea.Cmd {
 	case ongoing.ResultScheduleWidthRehydration:
 		return m.scheduleOngoingWidthRehydration()
 	case ongoing.ResultRequestScratchRehydration:
-		if m != nil && m.ongoingSurface != nil {
+		if m != nil && m.ongoingSurface != nil && m.nativeOngoingSurfaceActive() {
 			if _, err := m.ongoingSurface.ResetForScratchHydration(result.Reason, m.ongoingFrameInput()); err != nil {
 				return m.handleOngoingSurfaceError(err)
 			}
+			m.pendingOngoingScratchReset = nil
+		} else if m != nil {
+			reason := result.Reason
+			m.pendingOngoingScratchReset = &reason
 		}
 		if m != nil && m.ongoingTranscript != nil {
 			m.ongoingTranscript.ResetForScratchHydration()
@@ -148,6 +168,21 @@ func (m *uiModel) handleOngoingResult(result ongoing.Result) tea.Cmd {
 		}
 		return nil
 	}
+}
+
+func (m *uiModel) applyPendingOngoingScratchReset() tea.Cmd {
+	if m == nil || m.pendingOngoingScratchReset == nil {
+		return nil
+	}
+	reason := *m.pendingOngoingScratchReset
+	m.pendingOngoingScratchReset = nil
+	if m.ongoingSurface == nil {
+		return nil
+	}
+	if _, err := m.ongoingSurface.ResetForScratchHydration(reason, m.ongoingFrameInput()); err != nil {
+		return m.handleOngoingSurfaceError(err)
+	}
+	return nil
 }
 
 func (m *uiModel) ongoingFrameInput() ongoing.FrameInput {

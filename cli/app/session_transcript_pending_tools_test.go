@@ -102,7 +102,7 @@ func TestPendingToolsRenderInServerArrivalOrder(t *testing.T) {
 			t.Fatalf("accept tool start: %v", err)
 		}
 	}
-	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"alpha", "beta"}; !reflect.DeepEqual(got, want) {
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"• alpha", "• beta"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pending tool lines = %v, want %v", got, want)
 	}
 
@@ -115,7 +115,35 @@ func TestPendingToolsRenderInServerArrivalOrder(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("accept tool abort: %v", err)
 	}
-	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"beta"}; !reflect.DeepEqual(got, want) {
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"• beta"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pending tool lines after abort = %v, want %v", got, want)
+	}
+}
+
+func TestPendingToolStartUsesPresentationMetadata(t *testing.T) {
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+
+	if _, err := controller.Accept(clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageToolStart,
+		ToolStart: &clientui.TranscriptToolStart{
+			ToolCallID: "77777777-7777-4777-8777-777777777777",
+			ToolName:   "exec_command",
+			ToolPresentation: &clientui.ToolCallMeta{
+				ToolName:     "exec_command",
+				Presentation: clientui.ToolPresentationShell,
+				Command:      "go test ./cli/app",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("accept tool start: %v", err)
+	}
+
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"$ go test ./cli/app"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending tool lines = %v, want %v", got, want)
 	}
 }

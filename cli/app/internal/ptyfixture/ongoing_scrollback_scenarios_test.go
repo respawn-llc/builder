@@ -135,9 +135,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"• PTY_TOOL_HANDOFF",
 				"❯ seeded_tool_message_style_matrix_real_app_path",
 				"›                                                                               ",
-				"running · user turn",
-				"running · running · turn · user turn",
-				"medium · local",
 			},
 			expectedFaintAppends: []string{
 				"────────────────────────────────────────────────────── assistant ───────────────",
@@ -167,9 +164,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				{Text: "• PTY_TOOL_HANDOFF", Foreground: colorForStyle(transcriptrender.StyleRoleTool)},
 				{Text: "❯ seeded_tool_message_style_matrix_real_app_path", Foreground: colorForStyle(transcriptrender.StyleRoleUser)},
 				{Text: "›                                                                               ", Foreground: defaultTerminalForeground},
-				{Text: "running · user turn", Foreground: defaultTerminalForeground},
-				{Text: "running · running · turn · user turn", Foreground: defaultTerminalForeground},
-				{Text: "medium · local", Foreground: defaultTerminalForeground},
 			},
 			expectedStyledRows: []styledRowExpectation{
 				{
@@ -216,8 +210,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedStyledAppends: []styledAppendExpectation{
 				{Text: rightPad("stream slash live", 80), Foreground: markdownTerminalForeground},
 				{Text: "›                                                                               ", Foreground: defaultTerminalForeground},
-				{Text: "running · running · turn · user turn", Foreground: defaultTerminalForeground},
-				{Text: "medium · local", Foreground: defaultTerminalForeground},
 			},
 			expectedStyledWrites: []styledAppendExpectation{
 				{Text: rightPad("Server: owned by this CLI", 80), Foreground: defaultTerminalForeground},

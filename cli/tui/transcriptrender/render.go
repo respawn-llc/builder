@@ -396,27 +396,26 @@ func wrapLines(text string, width int) []string {
 	text = safeTranscriptText(text)
 	var out []string
 	for _, line := range strings.Split(text, "\n") {
-		words := strings.Fields(strings.TrimRight(line, " "))
-		if len(words) == 0 {
+		if line == "" {
 			out = append(out, "")
 			continue
 		}
-		current := ""
-		for _, word := range words {
-			if current == "" {
-				current = word
-				continue
+		var current strings.Builder
+		currentWidth := 0
+		graphemes := uniseg.NewGraphemes(line)
+		for graphemes.Next() {
+			cluster := graphemes.Str()
+			clusterWidth := uniseg.StringWidth(cluster)
+			if current.Len() > 0 && currentWidth+clusterWidth > width {
+				out = append(out, current.String())
+				current.Reset()
+				currentWidth = 0
 			}
-			candidate := current + " " + word
-			if lipgloss.Width(candidate) > width {
-				out = append(out, current)
-				current = word
-			} else {
-				current = candidate
-			}
+			current.WriteString(cluster)
+			currentWidth += clusterWidth
 		}
-		if current != "" {
-			out = append(out, current)
+		if current.Len() > 0 {
+			out = append(out, current.String())
 		}
 	}
 	if len(out) == 0 {

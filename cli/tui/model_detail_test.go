@@ -53,6 +53,31 @@ func TestDetailModeFiltersHiddenTranscriptEntries(t *testing.T) {
 	}
 }
 
+func TestDetailModeCachedRowsPreserveVisibility(t *testing.T) {
+	model := NewModel()
+	model.detailEntries = []detailEntry{newDetailEntry(clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityOngoingCollapsed,
+		Kind:       clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Severity: clientui.TranscriptNoticeInfo,
+			Data:     clientui.TranscriptNoticeData{CompactLabel: "compact notice"},
+			Diagnostic: &clientui.TranscriptDiagnosticData{
+				Detail: "diagnostic detail",
+			},
+		},
+	})}
+	model.detailPageLoaded = true
+	model.selected = 0
+	next, _ := model.Update(SetModeMsg{Mode: ModeDetail})
+	model = next.(Model)
+
+	lines := trimmedDetailTestLines(model.View())
+	want := []string{"▶ compact notice"}
+	if !slices.Equal(lines, want) {
+		t.Fatalf("detail lines = %#v, want %#v", lines, want)
+	}
+}
+
 func TestDetailModeExpandsSelectedEntry(t *testing.T) {
 	model := NewModel()
 	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{

@@ -11,7 +11,7 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestStartSessionTranscriptEventsDeliversHydrationAndReopensAfterLoss(t *testing.T) {
+func TestStartSessionTranscriptEventsWaitsForExplicitRehydrationAfterLoss(t *testing.T) {
 	originalDelay := sessionActivityResubscribeDelay
 	sessionActivityResubscribeDelay = time.Millisecond
 	defer func() { sessionActivityResubscribeDelay = originalDelay }()
@@ -36,6 +36,13 @@ func TestStartSessionTranscriptEventsDeliversHydrationAndReopensAfterLoss(t *tes
 	if loss.Kind != ongoingTranscriptEventLoss || !errors.Is(loss.Err, serverapi.ErrStreamGap) {
 		t.Fatalf("loss event = %+v, want stream gap loss", loss)
 	}
+	select {
+	case event, ok := <-stream.Events:
+		t.Fatalf("unexpected event before explicit rehydration request: ok=%v event=%+v", ok, event)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	stream.RequestRehydration()
 	second := nextTranscriptEvent(t, stream.Events)
 	if second.Kind != ongoingTranscriptEventMessage || second.Message.Kind != clientui.TranscriptMessageHydration {
 		t.Fatalf("second event = %+v, want reopened hydration message", second)

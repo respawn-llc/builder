@@ -68,7 +68,15 @@ type transcriptNextResult struct {
 }
 
 func pumpSessionTranscriptSubscription(ctx context.Context, sub serverapi.TranscriptSubscription, out chan<- ongoingTranscriptEvent, requests <-chan struct{}) (reopen bool, stop bool) {
-	defer sub.Close()
+	subClosed := false
+	closeSub := func() {
+		if subClosed {
+			return
+		}
+		_ = sub.Close()
+		subClosed = true
+	}
+	defer closeSub()
 	for {
 		nextCtx, cancel := context.WithCancel(ctx)
 		next := make(chan transcriptNextResult, 1)
@@ -89,8 +97,9 @@ func pumpSessionTranscriptSubscription(ctx context.Context, sub serverapi.Transc
 				if errors.Is(result.err, context.Canceled) && ctx.Err() != nil {
 					return false, true
 				}
+				closeSub()
 				emitSessionTranscriptLoss(ctx, out, result.err)
-				return true, false
+				return waitForTranscriptRehydrationRequest(ctx, requests)
 			}
 			select {
 			case <-ctx.Done():
@@ -98,6 +107,15 @@ func pumpSessionTranscriptSubscription(ctx context.Context, sub serverapi.Transc
 			case out <- ongoingTranscriptEvent{Kind: ongoingTranscriptEventMessage, Message: result.message}:
 			}
 		}
+	}
+}
+
+func waitForTranscriptRehydrationRequest(ctx context.Context, requests <-chan struct{}) (reopen bool, stop bool) {
+	select {
+	case <-ctx.Done():
+		return false, true
+	case <-requests:
+		return true, false
 	}
 }
 

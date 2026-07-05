@@ -45,11 +45,9 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.view.Mode() == tui.ModeDetail && inputState.Mode != uiInputModeRollbackEdit {
 		switch msg.Type {
 		case tea.KeyUp, tea.KeyDown, tea.KeyPgUp, tea.KeyPgDown:
-			m.forwardToView(tea.KeyMsg{Type: msg.Type})
-			return m, nil
+			return m, m.forwardToView(tea.KeyMsg{Type: msg.Type})
 		case tea.KeyEnter:
-			m.forwardToView(tea.KeyMsg{Type: msg.Type})
-			return m, nil
+			return m, m.forwardToView(tea.KeyMsg{Type: msg.Type})
 		case tea.KeyEsc:
 			if m.blocksRuntimeInput() ||
 				strings.TrimSpace(m.input) != "" {

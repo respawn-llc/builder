@@ -73,6 +73,24 @@ func TestRenderPatchToolStylesPathAndCounts(t *testing.T) {
 	}
 }
 
+func TestExpandedDetailWrapPreservesWhitespace(t *testing.T) {
+	rendered := RenderCommittedRow(clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowAssistant,
+		Assistant: &clientui.TranscriptAssistantRow{
+			Text: "  indented  value\n\n    code",
+		},
+	}, 80, "", ModeDetailExpanded)
+
+	got := make([]string, 0, len(rendered.Lines))
+	for _, line := range rendered.Lines {
+		got = append(got, line.Plain())
+	}
+	want := []string{"❮   indented  value", "└ ", "└     code"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("expanded detail lines = %#v, want %#v", got, want)
+	}
+}
+
 func toolRow(name string, presentation clientui.ToolPresentationKind, text string, isError bool) clientui.TranscriptCommittedRow {
 	return clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowTool,

@@ -233,7 +233,7 @@ func statusHasAuthData(snapshot uiStatusSnapshot) bool {
 
 func (m *uiModel) forwardToView(msg tea.Msg) tea.Cmd {
 	prevMode := m.view.Mode()
-	next, _ := m.view.Update(msg)
+	next, cmd := m.view.Update(msg)
 	casted, ok := next.(tui.Model)
 	if ok {
 		m.view = casted
@@ -245,11 +245,12 @@ func (m *uiModel) forwardToView(msg tea.Msg) tea.Cmd {
 		m.activeSurface = nextSurface
 		m.syncRendererOutputGate()
 		return sequenceCmds(
+			cmd,
 			m.altScreenCmdForSurfaceTransition(prevSurface, nextSurface),
 			m.ongoingOwnershipAfterSurfaceTransitionCmd(prevSurface, nextSurface),
 		)
 	}
-	return nil
+	return cmd
 }
 
 func (m *uiModel) Close() {

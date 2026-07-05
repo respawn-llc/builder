@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 
@@ -30,18 +29,6 @@ type ongoingTranscriptController struct {
 	liveReadModel   ongoingTranscriptReadModel
 }
 
-type ongoingTranscriptReadModel struct {
-	sectionOrder     []ongoing.FrameSectionKind
-	sections         map[ongoing.FrameSectionKind]ongoing.FrameSection
-	pendingTools     []ongoingPendingTool
-	pendingToolIndex map[string]int
-}
-
-type ongoingPendingTool struct {
-	id    string
-	label string
-}
-
 func newOngoingTranscriptController(surface ongoingTranscriptSurface, frameProvider ongoingFrameProvider) *ongoingTranscriptController {
 	if frameProvider == nil {
 		panic("ongoing transcript controller requires frame provider")
@@ -50,10 +37,7 @@ func newOngoingTranscriptController(surface ongoingTranscriptSurface, frameProvi
 		surface:       surface,
 		frameProvider: frameProvider,
 		normalOwned:   true,
-		liveReadModel: ongoingTranscriptReadModel{
-			sections:         map[ongoing.FrameSectionKind]ongoing.FrameSection{},
-			pendingToolIndex: map[string]int{},
-		},
+		liveReadModel: newOngoingTranscriptReadModel(),
 	}
 }
 
@@ -89,6 +73,7 @@ func (c *ongoingTranscriptController) ResetForScratchHydration() {
 	c.queueOverflowed = false
 	c.hydrated = false
 	c.lastSequence = 0
+	c.liveReadModel.reset()
 }
 
 func (c *ongoingTranscriptController) HandleSubscriptionLoss() ongoing.Result {
@@ -123,6 +108,7 @@ func (c *ongoingTranscriptController) requestScratchRehydration() {
 	c.queueOverflowed = true
 	c.hydrated = false
 	c.lastSequence = 0
+	c.liveReadModel.reset()
 }
 
 func (c *ongoingTranscriptController) enqueue(message clientui.TranscriptMessage) {
@@ -177,27 +163,27 @@ func (c *ongoingTranscriptController) applyNow(message clientui.TranscriptMessag
 func (c *ongoingTranscriptController) applyAppOwnedMessage(message clientui.TranscriptMessage) {
 	switch message.Kind {
 	case clientui.TranscriptMessageRunState:
-		c.liveReadModel.setSection(ongoing.FrameSectionRunState, runStateLines(message.RunState))
+		// Run state is already represented by the app status line.
 	case clientui.TranscriptMessageRuntimeActivity:
-		c.liveReadModel.setSection(ongoing.FrameSectionRuntimeActivity, runtimeActivityLines(message.RuntimeActivity))
+		// Runtime activity is already represented by the app status line/spinner.
 	case clientui.TranscriptMessageInputReconciliation:
-		c.liveReadModel.setSection(ongoing.FrameSectionInputReconciliation, inputReconciliationLines(message.InputReconciliation))
+		// Input reconciliation is operator metadata; do not add a separate live-band row.
 	case clientui.TranscriptMessageQueuedOrSteeredMessageState:
-		c.liveReadModel.setSection(ongoing.FrameSectionQueuedOrSteered, queuedOrSteeredLines(message.QueuedOrSteeredMessageState))
+		c.liveReadModel.applyQueuedOrSteered(message.QueuedOrSteeredMessageState)
 	case clientui.TranscriptMessageSessionStatus:
-		c.liveReadModel.setSection(ongoing.FrameSectionSessionStatus, sessionStatusLines(message.SessionStatus))
+		// Session status is already represented by the app status line.
 	case clientui.TranscriptMessageSessionIdentity:
-		c.liveReadModel.setSection(ongoing.FrameSectionSessionIdentity, sessionIdentityLines(message.SessionIdentity))
+		// Session identity is already represented by the app status line.
 	case clientui.TranscriptMessageCompactionStatus:
-		c.liveReadModel.setSection(ongoing.FrameSectionCompaction, compactionStatusLines(message.CompactionStatus))
+		// Compaction status is already represented by the app status line.
 	case clientui.TranscriptMessagePendingSessionPrompt:
-		c.liveReadModel.setSection(ongoing.FrameSectionPendingPrompt, pendingPromptLines(message.PendingSessionPrompt))
+		c.liveReadModel.applyPendingPrompt(message.PendingSessionPrompt)
 	case clientui.TranscriptMessageContextUsage:
-		c.liveReadModel.setSection(ongoing.FrameSectionContextUsage, contextUsageLines(message.ContextUsage))
+		// Context usage is already represented by the app status line.
 	case clientui.TranscriptMessageGoalStatus:
-		c.liveReadModel.setSection(ongoing.FrameSectionGoal, goalStatusLines(message.GoalStatus))
+		// Goal status is already represented by the app status line.
 	case clientui.TranscriptMessageBackgroundActivity:
-		c.liveReadModel.setSection(ongoing.FrameSectionBackgroundActivity, backgroundActivityLines(message.BackgroundActivity))
+		c.liveReadModel.applyBackgroundActivity(message.BackgroundActivity)
 	case clientui.TranscriptMessageToolStart:
 		if message.ToolStart != nil {
 			c.liveReadModel.addPendingTool(*message.ToolStart)
@@ -221,114 +207,25 @@ func (c *ongoingTranscriptController) applyHydrationAppOwnedFacts(hydration *cli
 		}
 	}
 	if len(hydration.QueuedOrSteeredMessages) > 0 {
-		c.liveReadModel.setSection(ongoing.FrameSectionQueuedOrSteered, queuedOrSteeredListLines(hydration.QueuedOrSteeredMessages))
-	}
-	if hydration.RunState != nil {
-		c.liveReadModel.setSection(ongoing.FrameSectionRunState, runStateLines(hydration.RunState))
-	}
-	if hydration.RuntimeActivity != nil {
-		c.liveReadModel.setSection(ongoing.FrameSectionRuntimeActivity, runtimeActivityLines(hydration.RuntimeActivity))
-	}
-	if hydration.InputReconciliation != nil {
-		c.liveReadModel.setSection(ongoing.FrameSectionInputReconciliation, inputReconciliationLines(hydration.InputReconciliation))
-	}
-	if !reflect.DeepEqual(hydration.SessionStatus, clientui.TranscriptSessionStatus{}) {
-		c.liveReadModel.setSection(ongoing.FrameSectionSessionStatus, sessionStatusLines(&hydration.SessionStatus))
-	}
-	if !reflect.DeepEqual(hydration.SessionIdentity, clientui.TranscriptSessionIdentity{}) {
-		c.liveReadModel.setSection(ongoing.FrameSectionSessionIdentity, sessionIdentityLines(&hydration.SessionIdentity))
-	}
-	if hydration.CompactionStatus != nil {
-		c.liveReadModel.setSection(ongoing.FrameSectionCompaction, compactionStatusLines(hydration.CompactionStatus))
-	}
-	if hydration.ContextUsage != nil {
-		c.liveReadModel.setSection(ongoing.FrameSectionContextUsage, contextUsageLines(hydration.ContextUsage))
-	}
-	if hydration.GoalStatus != nil {
-		c.liveReadModel.setSection(ongoing.FrameSectionGoal, goalStatusLines(hydration.GoalStatus))
-	}
-	if len(hydration.BackgroundActivities) > 0 {
-		c.liveReadModel.setSection(ongoing.FrameSectionBackgroundActivity, backgroundActivityListLines(hydration.BackgroundActivities))
-	}
-	if len(hydration.PendingSessionPrompts) > 0 {
-		c.liveReadModel.setSection(ongoing.FrameSectionPendingPrompt, pendingPromptListLines(hydration.PendingSessionPrompts))
-	}
-}
-
-func (m *ongoingTranscriptReadModel) setSection(kind ongoing.FrameSectionKind, lines []string) {
-	lines = terminalSafeFrameLines(lines)
-	if len(lines) == 0 {
-		m.removeSection(kind)
-		return
-	}
-	if _, exists := m.sections[kind]; !exists {
-		m.sectionOrder = append(m.sectionOrder, kind)
-	}
-	m.sections[kind] = ongoing.FrameSection{Kind: kind, Lines: append([]string(nil), lines...)}
-}
-
-func (m *ongoingTranscriptReadModel) removeSection(kind ongoing.FrameSectionKind) {
-	if _, exists := m.sections[kind]; !exists {
-		return
-	}
-	delete(m.sections, kind)
-	filtered := m.sectionOrder[:0]
-	for _, current := range m.sectionOrder {
-		if current != kind {
-			filtered = append(filtered, current)
+		for _, state := range hydration.QueuedOrSteeredMessages {
+			c.liveReadModel.applyQueuedOrSteered(&state)
 		}
 	}
-	m.sectionOrder = filtered
-}
-
-func (m *ongoingTranscriptReadModel) addPendingTool(tool clientui.TranscriptToolStart) {
-	if tool.ToolCallID == "" {
-		panic("ongoing pending tool start missing tool call id")
+	if len(hydration.BackgroundActivities) > 0 {
+		for _, activity := range hydration.BackgroundActivities {
+			c.liveReadModel.applyBackgroundActivity(&activity)
+		}
 	}
-	label := strings.TrimSpace(tool.ToolName)
-	if label == "" {
-		label = strings.TrimSpace(tool.ToolCallID)
+	if len(hydration.PendingSessionPrompts) > 0 {
+		for _, prompt := range hydration.PendingSessionPrompts {
+			c.liveReadModel.applyPendingPrompt(&prompt)
+		}
 	}
-	if index, exists := m.pendingToolIndex[tool.ToolCallID]; exists {
-		m.pendingTools[index].label = label
-		m.refreshPendingToolSection()
-		return
-	}
-	m.pendingToolIndex[tool.ToolCallID] = len(m.pendingTools)
-	m.pendingTools = append(m.pendingTools, ongoingPendingTool{id: tool.ToolCallID, label: label})
-	m.refreshPendingToolSection()
-}
-
-func (m *ongoingTranscriptReadModel) removePendingTool(toolCallID string) {
-	if toolCallID == "" {
-		panic("ongoing pending tool removal missing tool call id")
-	}
-	index, exists := m.pendingToolIndex[toolCallID]
-	if !exists {
-		return
-	}
-	delete(m.pendingToolIndex, toolCallID)
-	m.pendingTools = append(m.pendingTools[:index], m.pendingTools[index+1:]...)
-	for shifted := index; shifted < len(m.pendingTools); shifted++ {
-		m.pendingToolIndex[m.pendingTools[shifted].id] = shifted
-	}
-	m.refreshPendingToolSection()
-}
-
-func (m *ongoingTranscriptReadModel) refreshPendingToolSection() {
-	if len(m.pendingTools) == 0 {
-		m.removeSection(ongoing.FrameSectionPendingTools)
-		return
-	}
-	lines := make([]string, 0, len(m.pendingTools))
-	for _, tool := range m.pendingTools {
-		lines = append(lines, tool.label)
-	}
-	m.setSection(ongoing.FrameSectionPendingTools, lines)
 }
 
 func (c *ongoingTranscriptController) frameInput() ongoing.FrameInput {
 	frame := c.frameProvider()
+	c.liveReadModel.refreshPendingToolSection(frame.Size.Width)
 	sections := make([]ongoing.FrameSection, 0, len(c.liveReadModel.sectionOrder))
 	for _, kind := range c.liveReadModel.sectionOrder {
 		sections = append(sections, c.liveReadModel.sections[kind])

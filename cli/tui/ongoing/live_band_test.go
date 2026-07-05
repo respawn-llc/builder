@@ -2,6 +2,7 @@ package ongoing
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"core/shared/clientui"
@@ -83,6 +84,40 @@ func TestRenderAddsAssistantTailOnlyFromSurfaceState(t *testing.T) {
 	}
 
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"streaming commentary", "status"})
+}
+
+func TestRenderShrinksLiveBandBeforeTerminalCoordinateWrites(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+
+	_, err := surface.Render(FrameInput{
+		Size: Size{Width: 20, Height: 4},
+		Sections: []FrameSection{{
+			Kind:  FrameSectionInput,
+			Lines: []string{"one", "two", "three", "four", "five"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("render oversized live band: %v", err)
+	}
+
+	ops := parseTerminalOps(out.String())
+	assertCursorAddressRowsAtLeastOne(t, ops)
+	assertVisibleTextOps(t, ops, []string{"three", "four", "five"})
+}
+
+func assertCursorAddressRowsAtLeastOne(t *testing.T, ops []terminalOp) {
+	t.Helper()
+	for _, op := range ops {
+		if op.kind != terminalOpCSI {
+			continue
+		}
+		var row int
+		var column int
+		if _, err := fmt.Sscanf(op.value, "\x1b[%d;%dH", &row, &column); err == nil && row < 1 {
+			t.Fatalf("cursor address row = %d in op %q, want >= 1", row, op.value)
+		}
+	}
 }
 
 func TestHeightOnlyResizeRepaintsWithoutRehydration(t *testing.T) {

@@ -471,20 +471,22 @@ func (m *Model) selectDetailViewportCenter() {
 }
 
 type detailEntry struct {
-	Kind      clientui.TranscriptRowKind
-	User      *clientui.TranscriptUserRow
-	Assistant *clientui.TranscriptAssistantRow
-	Tool      *clientui.TranscriptToolRow
-	Notice    *clientui.TranscriptNoticeRow
+	Visibility clientui.EntryVisibility
+	Kind       clientui.TranscriptRowKind
+	User       *clientui.TranscriptUserRow
+	Assistant  *clientui.TranscriptAssistantRow
+	Tool       *clientui.TranscriptToolRow
+	Notice     *clientui.TranscriptNoticeRow
 }
 
 func newDetailEntry(row clientui.TranscriptCommittedRow) detailEntry {
 	return detailEntry{
-		Kind:      row.Kind,
-		User:      row.User,
-		Assistant: row.Assistant,
-		Tool:      row.Tool,
-		Notice:    row.Notice,
+		Visibility: row.Visibility,
+		Kind:       row.Kind,
+		User:       row.User,
+		Assistant:  row.Assistant,
+		Tool:       row.Tool,
+		Notice:     row.Notice,
 	}
 }
 
@@ -548,11 +550,12 @@ func stringPtr(value string) *string {
 
 func (entry detailEntry) row() clientui.TranscriptCommittedRow {
 	return clientui.TranscriptCommittedRow{
-		Kind:      entry.Kind,
-		User:      entry.User,
-		Assistant: entry.Assistant,
-		Tool:      entry.Tool,
-		Notice:    entry.Notice,
+		Visibility: entry.Visibility,
+		Kind:       entry.Kind,
+		User:       entry.User,
+		Assistant:  entry.Assistant,
+		Tool:       entry.Tool,
+		Notice:     entry.Notice,
 	}
 }
 

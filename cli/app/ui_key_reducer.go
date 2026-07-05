@@ -25,26 +25,28 @@ func (r uiKeyFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			if isHelpKey(keyMsg, m) && m.canShowHelp() {
 				m.lastEscAt = time.Time{}
 				m.layout().syncViewport()
-				return handledUIFeatureUpdate(m, nil)
+				return handledUIFeatureUpdate(m, m.renderNativeOngoingSurface())
 			}
 		}
 		if isHelpKey(keyMsg, m) && m.canShowHelp() {
 			m.lastEscAt = time.Time{}
 			m.helpVisible = !m.helpVisible
 			m.layout().syncViewport()
-			return handledUIFeatureUpdate(m, nil)
+			return handledUIFeatureUpdate(m, m.renderNativeOngoingSurface())
 		}
 		switch m.inputModeState().Mode {
 		case uiInputModeAsk:
 			next, cmd := m.askController().handleKey(keyMsg)
 			nextModel := next.(*uiModel)
 			nextModel.layout().syncViewport()
-			return handledUIFeatureUpdate(nextModel, cmd)
+			repaintCmd := nextModel.renderNativeOngoingSurface()
+			return handledUIFeatureUpdate(nextModel, tea.Batch(cmd, repaintCmd))
 		default:
 			next, cmd := m.inputController().handleKey(keyMsg)
 			nextModel := next.(*uiModel)
 			nextModel.layout().syncViewport()
-			return handledUIFeatureUpdate(nextModel, cmd)
+			repaintCmd := nextModel.renderNativeOngoingSurface()
+			return handledUIFeatureUpdate(nextModel, tea.Batch(cmd, repaintCmd))
 		}
 	}
 	if _, isKey := msg.(tea.KeyMsg); isKey {
@@ -53,7 +55,7 @@ func (r uiKeyFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		m.lastEscAt = time.Time{}
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, nil)
+		return handledUIFeatureUpdate(m, m.renderNativeOngoingSurface())
 	}
 	return uiFeatureUpdateResult{}
 }

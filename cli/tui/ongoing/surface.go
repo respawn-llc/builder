@@ -218,6 +218,8 @@ func (s *Surface) Render(frame FrameInput) (Result, error) {
 	if !s.minimumLiveBandFits(frame, lines) {
 		lines = nil
 		frame.Cursor = Cursor{}
+	} else {
+		lines = s.shrinkLiveBandLinesToFrame(frame, lines)
 	}
 	eraseHeight := min(max(s.previousBandHeight, len(lines)), frame.Size.Height)
 	var transaction strings.Builder
@@ -422,6 +424,8 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 	if !s.minimumLiveBandFits(frame, liveLines) {
 		liveLines = nil
 		frame.Cursor = Cursor{}
+	} else {
+		liveLines = s.shrinkLiveBandLinesToFrame(frame, liveLines)
 	}
 	eraseHeight := min(max(s.previousBandHeight, len(liveLines)), frame.Size.Height)
 	var transaction strings.Builder
@@ -445,6 +449,45 @@ func (s *Surface) minimumLiveBandFits(frame FrameInput, liveLines []string) bool
 func (s *Surface) liveBandLines(frame FrameInput) []string {
 	lines := activeAssistantLines(s.activeAssistant, frameWidthOrDefault(frame))
 	lines = append(lines, frameLines(frame)...)
+	return lines
+}
+
+func (s *Surface) shrinkLiveBandLinesToFrame(frame FrameInput, liveLines []string) []string {
+	if len(liveLines) <= frame.Size.Height {
+		return liveLines
+	}
+	lines := minimumLiveBandLines(frame, s.activeAssistant)
+	if len(lines) > frame.Size.Height {
+		return lines[len(lines)-frame.Size.Height:]
+	}
+	return lines
+}
+
+func minimumLiveBandLines(frame FrameInput, assistant activeAssistantState) []string {
+	var lines []string
+	if assistant.source != "" {
+		assistantLines := activeAssistantLines(assistant, frameWidthOrDefault(frame))
+		if len(assistantLines) > 0 {
+			lines = append(lines, assistantLines[len(assistantLines)-1])
+		}
+	}
+	for _, section := range frame.Sections {
+		if len(section.Lines) == 0 {
+			continue
+		}
+		limit := 1
+		switch section.Kind {
+		case FrameSectionQueuedOrSteered:
+			limit = min(2, len(section.Lines))
+		case FrameSectionInput:
+			limit = min(3, len(section.Lines))
+		}
+		if section.Kind == FrameSectionInput && len(section.Lines) > limit {
+			lines = append(lines, section.Lines[len(section.Lines)-limit:]...)
+			continue
+		}
+		lines = append(lines, section.Lines[:limit]...)
+	}
 	return lines
 }
 

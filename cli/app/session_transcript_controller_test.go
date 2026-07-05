@@ -145,11 +145,8 @@ func TestOngoingTranscriptControllerDrainsQueuedNonRowsInArrivalOrderWithOneRend
 		t.Fatalf("surface calls = %v, want %v", got, want)
 	}
 	wantSections := []ongoing.FrameSectionKind{
-		ongoing.FrameSectionRuntimeActivity,
 		ongoing.FrameSectionQueuedOrSteered,
 		ongoing.FrameSectionPendingPrompt,
-		ongoing.FrameSectionContextUsage,
-		ongoing.FrameSectionGoal,
 	}
 	if got := surface.lastFrameSectionKinds(); !reflect.DeepEqual(got, wantSections) {
 		t.Fatalf("frame sections = %v, want %v", got, wantSections)
@@ -270,7 +267,7 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 			State: clientui.RuntimeInputReconciliationUnknown,
 		}}}
 	case clientui.TranscriptMessageQueuedOrSteeredMessageState:
-		message.QueuedOrSteeredMessageState = &clientui.TranscriptQueuedOrSteeredMessageState{Status: clientui.QueuedUserMessageAccepted, UserText: "queued prompt"}
+		message.QueuedOrSteeredMessageState = &clientui.TranscriptQueuedOrSteeredMessageState{QueueItemID: "11111111-1111-4111-8111-111111111111", Status: clientui.QueuedUserMessageAccepted, UserText: "queued prompt"}
 	case clientui.TranscriptMessageSessionStatus:
 		message.SessionStatus = &clientui.TranscriptSessionStatus{ThinkingLevel: "high", CompactionMode: "auto"}
 	case clientui.TranscriptMessageSessionIdentity:
@@ -284,13 +281,13 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 	case clientui.TranscriptMessageCompactionStatus:
 		message.CompactionStatus = &clientui.TranscriptCompactionStatus{Mode: "auto", Count: 2, State: "ready"}
 	case clientui.TranscriptMessagePendingSessionPrompt:
-		message.PendingSessionPrompt = &clientui.TranscriptPendingSessionPrompt{State: clientui.TranscriptPromptPending, Data: clientui.TranscriptPendingSessionPromptData{Question: "Approve command?"}}
+		message.PendingSessionPrompt = &clientui.TranscriptPendingSessionPrompt{ID: "33333333-3333-4333-8333-333333333333", State: clientui.TranscriptPromptPending, Data: clientui.TranscriptPendingSessionPromptData{Question: "Approve command?"}}
 	case clientui.TranscriptMessageContextUsage:
 		message.ContextUsage = &clientui.RuntimeContextUsage{UsedTokens: 1200, WindowTokens: 2000}
 	case clientui.TranscriptMessageGoalStatus:
 		message.GoalStatus = &clientui.TranscriptGoalStatus{Objective: "finish review fixes", Status: clientui.RuntimeGoalStatusActive}
 	case clientui.TranscriptMessageBackgroundActivity:
-		message.BackgroundActivity = &clientui.TranscriptBackgroundActivity{State: "running", Preview: "running tests"}
+		message.BackgroundActivity = &clientui.TranscriptBackgroundActivity{ID: "22222222-2222-4222-8222-222222222222", State: "running", Preview: "running tests"}
 	case clientui.TranscriptMessageToolStart:
 		message.ToolStart = &clientui.TranscriptToolStart{ToolCallID: "tool-1", ToolName: "shell"}
 	case clientui.TranscriptMessageToolAbort:
