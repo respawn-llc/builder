@@ -24,12 +24,6 @@ func WithUIOngoingSurface(surface *ongoing.Surface) UIOption {
 	}
 }
 
-func WithUIOngoingTranscriptController(controller *ongoingTranscriptController) UIOption {
-	return func(m *uiModel) {
-		m.ongoingTranscript = controller
-	}
-}
-
 func WithUIOngoingTranscriptEvents(events <-chan ongoingTranscriptEvent) UIOption {
 	return func(m *uiModel) {
 		m.ongoingEvents = events

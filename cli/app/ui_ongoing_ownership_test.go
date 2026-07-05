@@ -17,7 +17,7 @@ func TestOngoingSurfaceTransitionQueuesTranscriptWhileDetailActive(t *testing.T)
 		t.Fatalf("accept hydration: %v", err)
 	}
 	surface.calls = nil
-	m := newProjectedStaticUIModel(WithUIOngoingTranscriptController(controller))
+	m := newProjectedStaticUIModel(withUIOngoingTranscriptController(controller))
 
 	if cmd := m.activateSurface(uiSurfaceTranscriptDetail); cmd == nil {
 		t.Fatal("expected detail activation command")
@@ -52,7 +52,7 @@ func TestTranscriptModeTransitionMarksOngoingUnowned(t *testing.T) {
 		t.Fatalf("accept hydration: %v", err)
 	}
 	surface.calls = nil
-	m := newProjectedStaticUIModel(WithUIOngoingTranscriptController(controller))
+	m := newProjectedStaticUIModel(withUIOngoingTranscriptController(controller))
 
 	cmd := m.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{target: tui.ModeDetail})
 	if cmd == nil {
@@ -73,7 +73,7 @@ func TestTranscriptModeReturnDrainsOngoingOnlyAfterPostExitMessage(t *testing.T)
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
-	m := newProjectedStaticUIModel(WithUIOngoingTranscriptController(controller))
+	m := newProjectedStaticUIModel(withUIOngoingTranscriptController(controller))
 	if cmd := m.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{target: tui.ModeDetail}); cmd == nil {
 		t.Fatal("transition to detail did not return alt-screen command")
 	}
@@ -111,7 +111,7 @@ func TestScratchResetWhileDetailActiveDefersRawSurfaceWriteUntilOngoingOwnsTermi
 	reopenCount := 0
 	m := newProjectedStaticUIModel(
 		WithUIOngoingSurface(nativeSurface),
-		WithUIOngoingTranscriptController(controller),
+		withUIOngoingTranscriptController(controller),
 		WithUIOngoingTranscriptReopen(func() { reopenCount++ }),
 	)
 

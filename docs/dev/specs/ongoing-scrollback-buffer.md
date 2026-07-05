@@ -29,9 +29,6 @@
 
 - The enforced minimum mutable band is: one in-progress tool call, one commentary line, one queued-or-steered message line plus its more-count line when needed, the input upper and lower dividers, one input text line, and one status line.
 - If the terminal height and current live content cannot fit the enforced minimum, ongoing hides the live area until the terminal is tall enough. This is the only case where input dividers and the status line are not shown. It must not drop committed content, switch to a transcript viewport, or partially remove unshrinkable pieces to make space.
-- When the enforced minimum can fit, overflow shrinks in this order: commentary down to one rolling line; queued-or-steered messages down to one line plus the more-count line; tool calls down to one visible call by hiding older calls first with no summary; unsubmitted input text down to one visible line with cursor-following input scrolling.
-- When the live area is shown, input dividers and the status line are not shrinkable.
-- File search and slash-command pickers are live-area overlays directly above the input upper divider. They may cover live content above them and shrink independently according to the free space above the current input area.
 
 ## Delivery Consumption
 

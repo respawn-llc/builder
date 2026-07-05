@@ -9,6 +9,12 @@ import (
 	"core/shared/clientui"
 )
 
+func withUIOngoingTranscriptController(controller *ongoingTranscriptController) UIOption {
+	return func(m *uiModel) {
+		m.ongoingTranscript = controller
+	}
+}
+
 func TestNativeOngoingViewSuppressesBubbleTeaNormalBufferFrame(t *testing.T) {
 	gate := newUIRendererOutputGateState()
 	m := sizedTestUIModel(newProjectedStaticUIModel(
@@ -101,7 +107,7 @@ func TestScratchRehydrationResultRequestsTranscriptReopen(t *testing.T) {
 	reopened := false
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIOngoingSurface(surface),
-		WithUIOngoingTranscriptController(controller),
+		withUIOngoingTranscriptController(controller),
 		WithUIOngoingTranscriptReopen(func() { reopened = true }),
 	), 40, 8)
 

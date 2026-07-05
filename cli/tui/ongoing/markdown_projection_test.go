@@ -24,7 +24,11 @@ func TestAssistantDeltaPromotesClosedParagraphAndKeepsTailMutable(t *testing.T) 
 		t.Fatalf("apply assistant delta: %v", err)
 	}
 
-	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"Stable paragraph.", "open tail"})
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+		"────────────── assistant ───────────────",
+		"Stable paragraph.",
+		"open tail",
+	})
 	if got, want := surface.activeAssistant.promotedSourceBoundary, len("Stable paragraph."); got != want {
 		t.Fatalf("promotion boundary = %d, want %d", got, want)
 	}
@@ -35,6 +39,35 @@ func TestAssistantDeltaPromotesClosedParagraphAndKeepsTailMutable(t *testing.T) 
 	}
 
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"open tail"})
+}
+
+func TestAssistantDeltaPromotionOpensAssistantGroupAfterPriorGroup(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	streamID := uuid.New()
+	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("previous user")), FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
+		t.Fatalf("apply previous row: %v", err)
+	}
+	out.Reset()
+
+	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
+		Kind: clientui.TranscriptMessageAssistantDelta,
+		AssistantDelta: &clientui.TranscriptAssistantDelta{
+			StreamID: streamID,
+			Delta:    "Stable paragraph.\n\nopen tail",
+		},
+	}, FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
+		t.Fatalf("apply assistant delta: %v", err)
+	}
+
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+		"────────────── assistant ───────────────",
+		"Stable paragraph.",
+		"open tail",
+	})
+	if surface.dividerGroup == nil || *surface.dividerGroup != clientui.TranscriptRowAssistant {
+		t.Fatalf("divider group = %v, want assistant", surface.dividerGroup)
+	}
 }
 
 func TestMarkdownProjectionKeepsOpenBlocksMutableUntilBlankBoundary(t *testing.T) {

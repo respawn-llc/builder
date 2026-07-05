@@ -91,6 +91,39 @@ func TestExpandedDetailWrapPreservesWhitespace(t *testing.T) {
 	}
 }
 
+func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing.T) {
+	rendered := RenderCommittedRow(clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityDetail,
+		Kind:       clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Severity: clientui.TranscriptNoticeInfo,
+			Data:     clientui.TranscriptNoticeData{CompactLabel: "AGENTS.md file content"},
+			Diagnostic: &clientui.TranscriptDiagnosticData{
+				Detail: "raw diagnostic body",
+			},
+		},
+	}, 80, "", ModeDetailCollapsed)
+
+	if got, want := rendered.Lines[0].Plain(), "ℹ AGENTS.md file content"; got != want {
+		t.Fatalf("collapsed diagnostic line = %q, want %q", got, want)
+	}
+
+	expanded := RenderCommittedRow(clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityDetail,
+		Kind:       clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Severity: clientui.TranscriptNoticeInfo,
+			Data:     clientui.TranscriptNoticeData{CompactLabel: "AGENTS.md file content"},
+			Diagnostic: &clientui.TranscriptDiagnosticData{
+				Detail: "raw diagnostic body",
+			},
+		},
+	}, 80, "", ModeDetailExpanded)
+	if got, want := expanded.Lines[0].Plain(), "ℹ raw diagnostic body"; got != want {
+		t.Fatalf("expanded diagnostic line = %q, want %q", got, want)
+	}
+}
+
 func toolRow(name string, presentation clientui.ToolPresentationKind, text string, isError bool) clientui.TranscriptCommittedRow {
 	return clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowTool,

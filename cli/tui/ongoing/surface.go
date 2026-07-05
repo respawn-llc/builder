@@ -100,6 +100,9 @@ func NewSurface(writers ...io.Writer) *Surface {
 
 func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame FrameInput) (Result, error) {
 	s.validateRenderFrame(frame, "apply_terminal_message")
+	if message.Kind == clientui.TranscriptMessageHydration {
+		return s.applyHydration(message, frame)
+	}
 	if message.Kind == clientui.TranscriptMessageAssistantDelta && message.AssistantDelta != nil {
 		return s.applyAssistantDelta(message.AssistantDelta.StreamID, message.AssistantDelta.Delta, frame)
 	}
@@ -114,6 +117,48 @@ func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame
 		return Result{}, nil
 	}
 	return s.writeFrameTransaction(frame, lines)
+}
+
+func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame FrameInput) (Result, error) {
+	if message.Hydration == nil {
+		return Result{}, nil
+	}
+	lines := s.hydrationImmutableLines(*message.Hydration, frame.Size.Width, "")
+	activeStreamHydrated := s.hydrateActiveAssistantStream(message.Hydration.ActiveAssistantStream)
+	if activeStreamHydrated {
+		projection := newMarkdownProjector(nil).Project(markdownProjectionInput{
+			Source:           s.activeAssistant.source,
+			Width:            frameWidthOrDefault(frame),
+			PromotedBoundary: s.activeAssistant.promotedSourceBoundary,
+		})
+		if projection.ProjectionFailure != nil {
+			panicOngoingDeveloperError("assistant_hydration", "markdown projection instability", map[string]any{
+				"source_boundary":    projection.ProjectionFailure.SourceBoundary,
+				"candidate_boundary": projection.ProjectionFailure.CandidateBoundary,
+				"row_index":          projection.ProjectionFailure.RowIndex,
+				"width":              projection.ProjectionFailure.Width,
+			})
+		}
+		s.activeAssistant.promotedSourceBoundary = projection.PromotedBoundary
+		lines = append(lines, s.renderAssistantPromotedRows(projection.PromotedRows, frameWidthOrDefault(frame), "")...)
+	}
+	if len(lines) == 0 && !activeStreamHydrated {
+		return Result{}, nil
+	}
+	return s.writeFrameTransaction(frame, lines)
+}
+
+func (s *Surface) hydrateActiveAssistantStream(stream *clientui.TranscriptAssistantStream) bool {
+	if stream == nil {
+		s.activeAssistant = activeAssistantState{}
+		return false
+	}
+	streamIDCopy := stream.StreamID
+	s.activeAssistant = activeAssistantState{
+		streamID: &streamIDCopy,
+		source:   stream.Text,
+	}
+	return stream.Text != ""
 }
 
 func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, frame FrameInput) (Result, error) {
@@ -146,7 +191,7 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, frame Fr
 	if len(projection.PromotedRows) == 0 {
 		return s.writeFrameTransaction(frame, nil)
 	}
-	return s.writeFrameTransaction(frame, projection.PromotedRows)
+	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(projection.PromotedRows, frameWidthOrDefault(frame), ""))
 }
 
 func (s *Surface) abortAssistantStream(streamID uuid.UUID, frame FrameInput) (Result, error) {
@@ -194,7 +239,7 @@ func (s *Surface) finalizeAssistantStream(streamID uuid.UUID, text string, frame
 		rows = newMarkdownProjector(nil).renderer.Render(unpromoted, frameWidthOrDefault(frame))
 	}
 	s.activeAssistant = activeAssistantState{}
-	return s.writeFrameTransaction(frame, rows)
+	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(rows, frameWidthOrDefault(frame), ""))
 }
 
 func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame FrameInput) (Result, error) {
@@ -278,14 +323,7 @@ func (s *Surface) immutableLines(message clientui.TranscriptMessage, width int, 
 		if message.Hydration == nil {
 			return nil
 		}
-		lines := make([]string, 0, len(message.Hydration.CommittedRows))
-		for _, row := range message.Hydration.CommittedRows {
-			if !committedRowVisibleInOngoing(row) {
-				continue
-			}
-			lines = append(lines, s.renderCommittedRow(row, width, themeName)...)
-		}
-		return lines
+		return s.hydrationImmutableLines(*message.Hydration, width, themeName)
 	case clientui.TranscriptMessageCommittedRow:
 		if message.CommittedRow == nil {
 			return nil
@@ -299,6 +337,17 @@ func (s *Surface) immutableLines(message clientui.TranscriptMessage, width int, 
 	}
 }
 
+func (s *Surface) hydrationImmutableLines(hydration clientui.TranscriptHydration, width int, themeName string) []string {
+	lines := make([]string, 0, len(hydration.CommittedRows))
+	for _, row := range hydration.CommittedRows {
+		if !committedRowVisibleInOngoing(row) {
+			continue
+		}
+		lines = append(lines, s.renderCommittedRow(row, width, themeName)...)
+	}
+	return lines
+}
+
 func committedRowVisibleInOngoing(row clientui.TranscriptCommittedRow) bool {
 	switch transcript.NormalizeEntryVisibility(transcript.EntryVisibility(row.Visibility)) {
 	case transcript.EntryVisibilityDetail, transcript.EntryVisibilityHidden:
@@ -310,16 +359,24 @@ func committedRowVisibleInOngoing(row clientui.TranscriptCommittedRow) bool {
 
 func (s *Surface) renderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string) []string {
 	group, lines := committedRowLines(row, width, themeName)
-	if len(lines) == 0 {
+	return s.renderGroupedRows(group, lines, width, themeName, false)
+}
+
+func (s *Surface) renderAssistantPromotedRows(rows []string, width int, themeName string) []string {
+	return s.renderGroupedRows(clientui.TranscriptRowAssistant, rows, width, themeName, true)
+}
+
+func (s *Surface) renderGroupedRows(group clientui.TranscriptRowKind, rows []string, width int, themeName string, dividerWhenRegisterUnset bool) []string {
+	if len(rows) == 0 {
 		return nil
 	}
 	var output []string
-	if s.dividerGroup != nil && *s.dividerGroup != group {
+	if (s.dividerGroup == nil && dividerWhenRegisterUnset) || (s.dividerGroup != nil && *s.dividerGroup != group) {
 		output = append(output, dividerLine(group, width, themeName))
 	}
 	groupCopy := group
 	s.dividerGroup = &groupCopy
-	output = append(output, lines...)
+	output = append(output, rows...)
 	return output
 }
 

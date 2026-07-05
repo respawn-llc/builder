@@ -152,7 +152,15 @@ func (c *ongoingTranscriptController) applyNow(message clientui.TranscriptMessag
 		return ongoing.Result{}, nil
 	}
 	if message.Kind == clientui.TranscriptMessageHydration {
-		c.applyHydrationAppOwnedFacts(message.Hydration)
+		liveFactsChanged := c.applyHydrationAppOwnedFacts(message.Hydration)
+		result, err := c.surface.ApplyTerminalMessage(message, c.frameInput())
+		if err != nil {
+			return ongoing.Result{}, err
+		}
+		if liveFactsChanged && hydrationHasNoTerminalRows(message.Hydration) {
+			return c.surface.Render(c.frameInput())
+		}
+		return result, nil
 	}
 	if message.Kind == clientui.TranscriptMessageCommittedRow && message.CommittedRow != nil && message.CommittedRow.Tool != nil {
 		c.liveReadModel.removePendingTool(message.CommittedRow.Tool.ToolCallID)
@@ -197,30 +205,40 @@ func (c *ongoingTranscriptController) applyAppOwnedMessage(message clientui.Tran
 	}
 }
 
-func (c *ongoingTranscriptController) applyHydrationAppOwnedFacts(hydration *clientui.TranscriptHydration) {
+func (c *ongoingTranscriptController) applyHydrationAppOwnedFacts(hydration *clientui.TranscriptHydration) bool {
 	if hydration == nil {
-		return
+		return false
 	}
+	changed := false
 	if len(hydration.InFlightTools) > 0 {
 		for _, tool := range hydration.InFlightTools {
 			c.liveReadModel.addPendingTool(tool)
 		}
+		changed = true
 	}
 	if len(hydration.QueuedOrSteeredMessages) > 0 {
 		for _, state := range hydration.QueuedOrSteeredMessages {
 			c.liveReadModel.applyQueuedOrSteered(&state)
 		}
+		changed = true
 	}
 	if len(hydration.BackgroundActivities) > 0 {
 		for _, activity := range hydration.BackgroundActivities {
 			c.liveReadModel.applyBackgroundActivity(&activity)
 		}
+		changed = true
 	}
 	if len(hydration.PendingSessionPrompts) > 0 {
 		for _, prompt := range hydration.PendingSessionPrompts {
 			c.liveReadModel.applyPendingPrompt(&prompt)
 		}
+		changed = true
 	}
+	return changed
+}
+
+func hydrationHasNoTerminalRows(hydration *clientui.TranscriptHydration) bool {
+	return hydration == nil || (len(hydration.CommittedRows) == 0 && hydration.ActiveAssistantStream == nil)
 }
 
 func (c *ongoingTranscriptController) frameInput() ongoing.FrameInput {

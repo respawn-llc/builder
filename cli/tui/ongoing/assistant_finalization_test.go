@@ -21,7 +21,10 @@ func TestAssistantFinalizationEqualSourceFlushesUnpromotedTailAndClearsStream(t 
 		t.Fatalf("finalize equal source: %v", err)
 	}
 
-	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"hello"})
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+		"────────────── assistant ───────────────",
+		"hello",
+	})
 	if surface.activeAssistant.streamID != nil {
 		t.Fatalf("active stream after finalization = %+v, want cleared", surface.activeAssistant)
 	}
@@ -72,6 +75,40 @@ func TestAssistantFinalizationOtherStreamPanics(t *testing.T) {
 	}()
 
 	_, _ = surface.ApplyTerminalMessage(committedAssistantMessage(uuid.New(), "hello"), FrameInput{Size: Size{Width: 40, Height: 5}})
+}
+
+func TestHydrationRestoresActiveAssistantStreamAndFinalizes(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	streamID := uuid.New()
+
+	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
+		Kind: clientui.TranscriptMessageHydration,
+		Hydration: &clientui.TranscriptHydration{
+			ActiveAssistantStream: &clientui.TranscriptAssistantStream{
+				StreamID: streamID,
+				Text:     "Stable paragraph.\n\nopen tail",
+			},
+		},
+	}, FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
+		t.Fatalf("apply hydration: %v", err)
+	}
+
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+		"────────────── assistant ───────────────",
+		"Stable paragraph.",
+		"open tail",
+	})
+	out.Reset()
+
+	if _, err := surface.ApplyTerminalMessage(committedAssistantMessage(streamID, "Stable paragraph.\n\nopen tail done"), FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
+		t.Fatalf("finalize hydrated stream: %v", err)
+	}
+
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"open tail done"})
+	if surface.activeAssistant.streamID != nil {
+		t.Fatalf("active stream after hydrated finalization = %+v, want cleared", surface.activeAssistant)
+	}
 }
 
 func TestAssistantAbortClearsVolatileTailWithoutImmutableAppend(t *testing.T) {

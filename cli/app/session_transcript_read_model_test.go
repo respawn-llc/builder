@@ -50,7 +50,7 @@ func TestOngoingTranscriptControllerSeedsHydrationAppOwnedFrameSections(t *testi
 		t.Fatalf("accept hydration: %v", err)
 	}
 
-	if got, want := surface.callKinds(), []string{"apply"}; !reflect.DeepEqual(got, want) {
+	if got, want := surface.callKinds(), []string{"apply", "render"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("surface calls = %v, want %v", got, want)
 	}
 	wantSections := []ongoing.FrameSectionKind{

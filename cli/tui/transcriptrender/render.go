@@ -312,9 +312,10 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row == nil {
 		return StyleRoleNotice, "notice"
 	}
-	compactText := firstNonEmpty(row.Data.CompactLabel, row.Data.CondensedText, noticeLegacyText(row), row.Data.SourcePath, string(row.Reason), "notice")
+	typedCompactText := firstNonEmpty(row.Data.CompactLabel, row.Data.CondensedText, noticeLegacyText(row), row.Data.SourcePath)
+	compactText := firstNonEmpty(typedCompactText, string(row.Reason), "notice")
 	text := compactText
-	if row.Diagnostic != nil && (mode == ModeDetailExpanded || visibility != clientui.EntryVisibilityOngoingCollapsed || compactText == "") {
+	if row.Diagnostic != nil && (mode == ModeDetailExpanded || typedCompactText == "") {
 		text = firstNonEmpty(row.Diagnostic.Detail, row.Diagnostic.Code, text)
 	}
 	switch row.Severity {

@@ -23,7 +23,7 @@ func TestOngoingWidthRehydrationDebounceTokenRestarts(t *testing.T) {
 func TestWindowResizeDoesNotWriteOngoingSurfaceWhileDetailOwnsTerminal(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
 	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
-	m := newProjectedStaticUIModel(WithUIOngoingTranscriptController(controller))
+	m := newProjectedStaticUIModel(withUIOngoingTranscriptController(controller))
 	m.activeSurface = uiSurfaceTranscriptDetail
 
 	result := m.windowReducer().Update(tea.WindowSizeMsg{Width: 100, Height: 40})
