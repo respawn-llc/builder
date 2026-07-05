@@ -57,7 +57,7 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
         tone: "danger",
         title: t("board.loadFailed"),
         body: errorMessage(error),
-        dismissible: false,
+        durationMs: Infinity,
       });
     },
     [push, t],
@@ -69,7 +69,7 @@ export function BoardRoute({ projectId, workflowId, selectedTaskId }: BoardRoute
         tone: "danger",
         title: t("board.navigationFailed"),
         body: errorMessage(error),
-        dismissible: false,
+        durationMs: Infinity,
       });
     },
     [push, t],
@@ -189,7 +189,7 @@ function BoardContent({
   const reportActionError = useCallback(
     (id: string, title: string, error: unknown) => {
       const body = errorMessage(error);
-      push({ id, tone: "danger", title, body, dismissible: false });
+      push({ id, tone: "danger", title, body, durationMs: Infinity });
     },
     [push],
   );

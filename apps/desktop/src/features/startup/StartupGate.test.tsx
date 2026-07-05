@@ -172,7 +172,7 @@ describe("StartupGate", () => {
     expect(services.transport.calls.map((call) => call.method)).not.toContain("server.capabilities.get");
   });
 
-  it("keeps disconnected status non-dismissible until reconnect", async () => {
+  it("refreshes readiness after reconnecting from a disconnected status", async () => {
     const services = createTestServices(startupRoutes);
 
     render(<App services={services} />);
@@ -185,8 +185,6 @@ describe("StartupGate", () => {
     act(() => {
       services.transport.connection.set("disconnected", "closed");
     });
-
-    expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
 
     act(() => {
       services.transport.connection.set("connected");

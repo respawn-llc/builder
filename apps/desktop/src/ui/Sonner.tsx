@@ -4,15 +4,12 @@ import {
   OctagonXIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import type { ComponentProps } from "react";
 import { Toaster as SonnerToaster } from "sonner";
 
 import { readEffectiveTheme } from "../appEnvironment";
 import { Spinner } from "./Spinner";
 
-type ToasterProps = ComponentProps<typeof SonnerToaster>;
-
-export function Toaster(props: ToasterProps) {
+export function Toaster() {
   if (import.meta.env.MODE === "test") {
     return null;
   }
@@ -20,7 +17,6 @@ export function Toaster(props: ToasterProps) {
   return (
     <SonnerToaster
       className="z-50"
-      closeButton
       icons={{
         success: <CircleCheckIcon className="size-4 text-[var(--color-success)]" />,
         info: <InfoIcon className="size-4 text-[var(--color-primary)]" />,
@@ -50,7 +46,7 @@ export function Toaster(props: ToasterProps) {
           warning: "border-[var(--color-warning)]",
         },
       }}
-      {...props}
+      closeButton
     />
   );
 }
