@@ -211,6 +211,9 @@ func decodeOpenAIStreamErrorPayload(data []byte) (openAIStreamErrorPayload, bool
 			Message string `json:"message"`
 		} `json:"error"`
 		Response struct {
+			IncompleteDetails struct {
+				Reason string `json:"reason"`
+			} `json:"incomplete_details"`
 			Error struct {
 				Type    string `json:"type"`
 				Code    string `json:"code"`
@@ -222,8 +225,9 @@ func decodeOpenAIStreamErrorPayload(data []byte) (openAIStreamErrorPayload, bool
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return openAIStreamErrorPayload{}, false
 	}
+	eventType := strings.TrimSpace(envelope.Type)
 	payload := openAIStreamErrorPayload{
-		Type:    strings.TrimSpace(envelope.Type),
+		Type:    eventType,
 		Code:    strings.TrimSpace(envelope.Code),
 		Param:   strings.TrimSpace(envelope.Param),
 		Message: strings.TrimSpace(envelope.Message),
@@ -242,6 +246,17 @@ func decodeOpenAIStreamErrorPayload(data []byte) (openAIStreamErrorPayload, bool
 			Code:    strings.TrimSpace(envelope.Response.Error.Code),
 			Param:   strings.TrimSpace(envelope.Response.Error.Param),
 			Message: strings.TrimSpace(envelope.Response.Error.Message),
+		}
+	}
+	if eventType == "response.incomplete" {
+		reason := strings.TrimSpace(envelope.Response.IncompleteDetails.Reason)
+		if reason != "" {
+			payload = openAIStreamErrorPayload{
+				Type:    eventType,
+				Code:    reason,
+				Param:   "response.incomplete_details.reason",
+				Message: "response incomplete: " + reason,
+			}
 		}
 	}
 	if payload.Code == "" && payload.Message == "" {

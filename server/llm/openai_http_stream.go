@@ -22,10 +22,8 @@ type responseStreamAccumulator struct {
 }
 
 type responseStreamError struct {
-	Code    string
-	Param   string
-	Message string
-	Raw     string
+	Raw              string
+	ProviderContract bool
 }
 
 func newResponseStreamAccumulator(callbacks StreamCallbacks, windowTokens int) *responseStreamAccumulator {
@@ -87,20 +85,31 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 	case "response.failed":
 		failed := evt.AsResponseFailed()
 		a.responseError = &responseStreamError{Raw: failed.RawJSON()}
-	case "error":
-		errorEvent := evt.AsError()
-		a.responseError = &responseStreamError{
-			Code:    errorEvent.Code,
-			Param:   errorEvent.Param,
-			Message: errorEvent.Message,
-			Raw:     evt.RawJSON(),
+	case "response.incomplete":
+		incomplete := evt.AsResponseIncomplete()
+		raw := incomplete.RawJSON()
+		if strings.TrimSpace(incomplete.Response.IncompleteDetails.Reason) == "" {
+			a.responseError = &responseStreamError{Raw: raw, ProviderContract: true}
+			return
 		}
+		a.responseError = &responseStreamError{Raw: raw}
+	case "error":
+		a.responseError = &responseStreamError{Raw: evt.RawJSON()}
 	}
 }
 
 func (a *responseStreamAccumulator) Err(providerID string) error {
 	if a == nil || a.responseError == nil {
 		return nil
+	}
+	if a.responseError.ProviderContract {
+		message := "OpenAI-compatible Responses stream emitted response.incomplete without incomplete_details.reason"
+		return &ProviderAPIError{
+			ProviderID: providerID,
+			Code:       UnifiedErrorCodeProviderContract,
+			Message:    message,
+			Raw:        strings.TrimSpace(a.responseError.Raw),
+		}
 	}
 	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil); ok {
 		return err

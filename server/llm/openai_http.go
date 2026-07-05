@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -178,9 +179,36 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 		if accumulator.hasCompleted() && !callerCanceledStreamRead(ctx) {
 			return accumulator.Response(), nil
 		}
+		if isOpenAIResponsesStreamFramingError(err) {
+			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", newOpenAIProviderContractError(
+				providerCaps.ProviderID,
+				rawResp,
+				"OpenAI-compatible Responses SSE stream ended before a terminal Responses event",
+				err,
+			))
+		}
 		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 	}
+	if !accumulator.hasCompleted() {
+		return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", newOpenAIProviderContractError(
+			providerCaps.ProviderID,
+			rawResp,
+			"OpenAI-compatible Responses SSE stream ended before a terminal Responses event",
+			nil,
+		))
+	}
 	return accumulator.Response(), nil
+}
+
+func isOpenAIResponsesStreamFramingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return true
+	}
+	return errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func callerCanceledStreamRead(ctx context.Context) bool {

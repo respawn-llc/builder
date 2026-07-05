@@ -239,3 +239,4 @@
 - JSON command mode for all TUI commands emits exactly one final object on stdout.
 
 - LLM provider wiring uses a provider-factory seam so runtime/app constructs clients via provider selection.
+- OpenAI-compatible Responses SSE streams accept either OpenAI's `data: [DONE]` sentinel or normal EOF after a valid `response.completed` event has been consumed. `response.failed`, `response.incomplete`, `error`, and caller cancellation are terminal failures. Streams that end before any terminal Responses event, including malformed SSE/JSON framing that prevents a terminal event from being consumed, surface provider-contract errors instead of partial model completion.
