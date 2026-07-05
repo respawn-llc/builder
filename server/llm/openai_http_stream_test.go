@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -205,6 +206,26 @@ func TestGenerateStream_RejectsPreTerminalMalformedResponsesStream(t *testing.T)
 				t.Fatalf("expected provider-contract stream error to be non-retriable: %v", err)
 			}
 		})
+	}
+}
+
+func TestGenerateStream_LeavesPreResponseEOFRetryable(t *testing.T) {
+	transport := NewHTTPTransport(staticAuthHeader{})
+	transport.BaseURL = "https://example.invalid"
+	transport.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, io.EOF
+	})}
+
+	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5"}, StreamCallbacks{})
+	if err == nil {
+		t.Fatal("expected pre-response EOF")
+	}
+	var providerErr *ProviderAPIError
+	if errors.As(err, &providerErr) {
+		t.Fatalf("expected pre-response EOF to stay outside provider-contract classification, got %+v", providerErr)
+	}
+	if IsNonRetriableModelError(err) {
+		t.Fatalf("expected pre-response EOF to remain retryable: %v", err)
 	}
 }
 

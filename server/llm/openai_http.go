@@ -182,7 +182,7 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 		if accumulator.hasCompleted() && !callerCanceledStreamRead(ctx) {
 			return accumulator.Response(), nil
 		}
-		if isOpenAIResponsesStreamFramingError(err) {
+		if rawResp != nil && isOpenAIResponsesStreamFramingError(err) {
 			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
 				providerCaps.ProviderID,
 				openAIResponseStatusCode(rawResp),
