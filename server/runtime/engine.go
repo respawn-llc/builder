@@ -981,12 +981,18 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 			}
 			return resp, nil
 		}
+		resetAttempt := func() {
+			if (attemptEmitted || reasoningEmitted) && onAttemptReset != nil {
+				onAttemptReset()
+			}
+		}
 		if llm.IsNonRetriableModelError(attemptErr) || llm.IsContextLengthOverflowError(attemptErr) {
+			if !llm.HasHTTPStatus(attemptErr, 400) {
+				resetAttempt()
+			}
 			return llm.Response{}, attemptErr
 		}
-		if (attemptEmitted || reasoningEmitted) && onAttemptReset != nil {
-			onAttemptReset()
-		}
+		resetAttempt()
 		lastErr = attemptErr
 		delays := generateRetryDelays
 		if errors.Is(attemptErr, llm.ErrModelStreamStalled) {

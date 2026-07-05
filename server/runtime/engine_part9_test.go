@@ -7,6 +7,7 @@ import (
 	"core/server/tools"
 	"core/shared/toolspec"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -534,6 +535,72 @@ func TestStreamingRetryResetsAttemptDeltas(t *testing.T) {
 	}
 	if !(firstDelta < reset && reset < secondDelta) {
 		t.Fatalf("unexpected delta/reset ordering first=%d reset=%d second=%d", firstDelta, reset, secondDelta)
+	}
+}
+
+type fakeNonRetriableStreamClient struct{}
+
+func (fakeNonRetriableStreamClient) Generate(_ context.Context, _ llm.Request) (llm.Response, error) {
+	return llm.Response{}, errors.New("not implemented")
+}
+
+func (fakeNonRetriableStreamClient) GenerateStream(_ context.Context, _ llm.Request, onDelta func(string)) (llm.Response, error) {
+	if onDelta != nil {
+		onDelta("partial")
+	}
+	return llm.Response{}, &llm.ProviderAPIError{
+		ProviderID: "openai-compatible",
+		Code:       llm.UnifiedErrorCodeProviderContract,
+		Message:    "stream ended before terminal event",
+	}
+}
+
+func TestStreamingNonRetriableErrorResetsAttemptDeltas(t *testing.T) {
+	store := mustCreateTestSession(t)
+
+	var (
+		mu     sync.Mutex
+		events []Event
+	)
+	eng := mustNewTestEngine(t, store, fakeNonRetriableStreamClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+		Model: "gpt-5",
+		OnEvent: func(evt Event) {
+			mu.Lock()
+			events = append(events, evt)
+			mu.Unlock()
+		},
+	})
+
+	_, err := eng.SubmitUserMessage(context.Background(), "non-retriable stream")
+	if err == nil {
+		t.Fatal("expected non-retriable stream error")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var deltaIndex int
+	var hasDelta bool
+	var resetIndex int
+	var hasReset bool
+	for i, evt := range events {
+		if evt.Kind == EventAssistantDelta && evt.AssistantDelta == "partial" && !hasDelta {
+			deltaIndex = i
+			hasDelta = true
+		}
+		if evt.Kind == EventAssistantDeltaReset && !hasReset {
+			resetIndex = i
+			hasReset = true
+		}
+	}
+	if !hasDelta {
+		t.Fatalf("missing streamed delta before terminal error: %+v", events)
+	}
+	if !hasReset {
+		t.Fatalf("missing reset after terminal error: %+v", events)
+	}
+	if deltaIndex > resetIndex {
+		t.Fatalf("unexpected delta/reset ordering delta=%d reset=%d", deltaIndex, resetIndex)
 	}
 }
 

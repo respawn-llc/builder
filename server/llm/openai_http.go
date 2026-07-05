@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/shared/llmerrors"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -27,6 +29,8 @@ const (
 	defaultUserAgent       = "kent/dev"
 	reasoningRoleSummary   = "reasoning"
 )
+
+const openAIResponsesStreamEndedBeforeTerminalMessage = "OpenAI-compatible Responses SSE stream ended before a terminal Responses event"
 
 type AuthHeaderProvider interface {
 	AuthorizationHeader(ctx context.Context) (string, error)
@@ -170,7 +174,7 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 			callbacks.OnStreamActivity()
 		}
 		accumulator.Consume(stream.Current())
-		if err := accumulator.Err(providerCaps.ProviderID); err != nil {
+		if err := accumulator.Err(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp)); err != nil {
 			return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 		}
 	}
@@ -178,9 +182,54 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 		if accumulator.hasCompleted() && !callerCanceledStreamRead(ctx) {
 			return accumulator.Response(), nil
 		}
+		responseStatus := newOpenAIResponseStatus(rawResp)
+		if responseStatus != nil && isOpenAIResponsesStreamFramingError(err) {
+			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
+				providerCaps.ProviderID,
+				responseStatus.Code,
+				fmt.Errorf("%s: %w", openAIResponsesStreamEndedBeforeTerminalMessage, err),
+			))
+		}
 		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 	}
+	if !accumulator.hasCompleted() {
+		responseStatus := newOpenAIResponseStatus(rawResp)
+		if responseStatus == nil {
+			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", errors.New(openAIResponsesStreamEndedBeforeTerminalMessage))
+		}
+		return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
+			providerCaps.ProviderID,
+			responseStatus.Code,
+			errors.New(openAIResponsesStreamEndedBeforeTerminalMessage),
+		))
+	}
 	return accumulator.Response(), nil
+}
+
+func isOpenAIResponsesStreamFramingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return true
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return true
+	}
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
+
+type openAIResponseStatus struct {
+	Code int
+}
+
+func newOpenAIResponseStatus(rawResp *http.Response) *openAIResponseStatus {
+	if rawResp == nil {
+		return nil
+	}
+	return &openAIResponseStatus{Code: rawResp.StatusCode}
 }
 
 func callerCanceledStreamRead(ctx context.Context) bool {
