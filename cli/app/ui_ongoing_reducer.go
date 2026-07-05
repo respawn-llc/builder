@@ -1,7 +1,6 @@
 package app
 
 import (
-	"core/cli/tui"
 	"core/cli/tui/ongoing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -54,9 +53,6 @@ func (m *uiModel) handleOngoingTranscriptEvent(event ongoingTranscriptEvent) tea
 	}
 	if err != nil {
 		return m.handleOngoingSurfaceError(err)
-	}
-	if event.Kind == ongoingTranscriptEventMessage && result.Action != ongoing.ResultRequestScratchRehydration {
-		m.forwardToView(tui.ApplyTranscriptMessageMsg{Message: event.Message})
 	}
 	return m.handleOngoingResult(result)
 }

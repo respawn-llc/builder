@@ -367,11 +367,11 @@ pub struct TranscriptPage {
     #[serde(rename = "Revision")]
     pub revision: i64,
     #[serde(rename = "OlderCursor", default)]
-    pub older_cursor: i64,
+    pub older_cursor: Option<i64>,
     #[serde(rename = "HasMoreAbove", default)]
     pub has_more_above: bool,
     #[serde(rename = "NewerCursor", default)]
-    pub newer_cursor: i64,
+    pub newer_cursor: Option<i64>,
     #[serde(rename = "HasMoreBelow", default)]
     pub has_more_below: bool,
     #[serde(rename = "Entries", default, deserialize_with = "null_to_default")]

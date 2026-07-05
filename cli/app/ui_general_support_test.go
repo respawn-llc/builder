@@ -23,6 +23,14 @@ func (s stubSessionViewClient) GetSessionMainView(ctx context.Context, req serve
 	return s.getSessionMainView(ctx, req)
 }
 
+func (s stubSessionViewClient) GetSessionTranscriptPage(context.Context, serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	return serverapi.SessionTranscriptPageResponse{}, nil
+}
+
+func (s stubSessionViewClient) GetSessionCommittedTranscriptSuffix(context.Context, serverapi.SessionCommittedTranscriptSuffixRequest) (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
+	return serverapi.SessionCommittedTranscriptSuffixResponse{}, nil
+}
+
 func updateUIModel(t *testing.T, m *uiModel, msg tea.Msg) *uiModel {
 	t.Helper()
 	next, _ := m.Update(msg)

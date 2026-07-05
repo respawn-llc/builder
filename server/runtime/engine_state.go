@@ -110,7 +110,21 @@ func TranscriptSegmentPageFromStore(store *session.Store, cursor int64, cacheWar
 	if store == nil {
 		return TranscriptSegmentPage{}, nil
 	}
+	if cursor <= 0 {
+		return TranscriptSegmentPage{}, fmt.Errorf("transcript segment cursor must be positive, got %d", cursor)
+	}
 	window, err := store.ReadSegmentBackward(cursor, isCompactionSegmentBoundary)
+	if err != nil {
+		return TranscriptSegmentPage{}, err
+	}
+	return segmentPageFromWindow(window, cacheWarningMode)
+}
+
+func TranscriptNewestSegmentPageFromStore(store *session.Store, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
+	if store == nil {
+		return TranscriptSegmentPage{}, nil
+	}
+	window, err := store.ReadNewestSegmentBackward(isCompactionSegmentBoundary)
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
@@ -153,9 +167,18 @@ func (e *Engine) TranscriptSegmentPage(cursor int64) (TranscriptSegmentPage, err
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
-	if cursor <= 0 {
-		e.overlayLiveStreaming(&page.Snapshot)
+	return page, nil
+}
+
+func (e *Engine) TranscriptNewestSegmentPage() (TranscriptSegmentPage, error) {
+	if e == nil || e.store == nil {
+		return TranscriptSegmentPage{}, nil
 	}
+	page, err := TranscriptNewestSegmentPageFromStore(e.store, e.cfg.CacheWarningMode)
+	if err != nil {
+		return TranscriptSegmentPage{}, err
+	}
+	e.overlayLiveStreaming(&page.Snapshot)
 	return page, nil
 }
 

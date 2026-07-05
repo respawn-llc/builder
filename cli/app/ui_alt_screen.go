@@ -1,8 +1,13 @@
 package app
 
 import (
+	"context"
 	"core/cli/tui"
+	"core/shared/clientui"
+	"core/shared/serverapi"
+	"errors"
 	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -78,7 +83,45 @@ func (m *uiModel) clearCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
 }
 
 func (m *uiModel) detailLoadCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
-	return nil
+	if prev == next || next != tui.ModeDetail {
+		return nil
+	}
+	return m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
+}
+
+func (m *uiModel) loadDetailTranscriptPageCmd(req clientui.TranscriptPageRequest) tea.Cmd {
+	sessionID := strings.TrimSpace(m.sessionID)
+	if sessionID == "" && m.engine != nil {
+		sessionID = strings.TrimSpace(m.engine.SessionView().SessionID)
+	}
+	client := m.statusConfig.SessionViews
+	return func() tea.Msg {
+		if client == nil {
+			return detailTranscriptLoadMsg{sessionID: sessionID, request: req, err: errors.New("session view client is required")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeHydrationReadTimeout)
+		defer cancel()
+		resp, err := client.GetSessionTranscriptPage(ctx, serverapi.SessionTranscriptPageRequest{
+			SessionID:   sessionID,
+			Cursor:      req.Cursor,
+			NewerCursor: req.NewerCursor,
+		})
+		return detailTranscriptLoadMsg{sessionID: sessionID, request: req, page: resp.Transcript, err: err}
+	}
+}
+
+func (m *uiModel) loadDetailTranscriptSuffixCmd() tea.Cmd {
+	sessionID := strings.TrimSpace(m.currentRuntimeSessionID())
+	client := m.statusConfig.SessionViews
+	return func() tea.Msg {
+		if client == nil {
+			return detailTranscriptSuffixLoadMsg{sessionID: sessionID, err: errors.New("session view client is required")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeHydrationReadTimeout)
+		defer cancel()
+		resp, err := client.GetSessionCommittedTranscriptSuffix(ctx, serverapi.SessionCommittedTranscriptSuffixRequest{SessionID: sessionID})
+		return detailTranscriptSuffixLoadMsg{sessionID: sessionID, suffix: resp.Suffix, err: err}
+	}
 }
 
 func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {

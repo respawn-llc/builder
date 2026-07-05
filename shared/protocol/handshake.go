@@ -89,6 +89,8 @@ const (
 	MethodWorkflowTaskGet                       = "workflow.task.get"
 	MethodSessionPlan                           = "session.plan"
 	MethodSessionGetMainView                    = "session.getMainView"
+	MethodSessionGetTranscriptPage              = "session.getTranscriptPage"
+	MethodSessionGetCommittedTranscriptSuffix   = "session.getCommittedTranscriptSuffix"
 	MethodSessionGetInitialInput                = "session.getInitialInput"
 	MethodSessionPersistInputDraft              = "session.persistInputDraft"
 	MethodSessionRetargetWorkspace              = "session.retargetWorkspace"

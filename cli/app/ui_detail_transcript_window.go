@@ -1,0 +1,524 @@
+package app
+
+import (
+	"strings"
+
+	"core/shared/clientui"
+	"core/shared/transcript"
+)
+
+const (
+	uiDetailTranscriptMaxEntries          = 1000
+	uiDetailTranscriptMinResidentSegments = 2
+)
+
+type residentSegmentMeta struct {
+	startLocal   int
+	olderCursor  *int64
+	hasMoreAbove bool
+	newerCursor  *int64
+	hasMoreBelow bool
+}
+
+type uiDetailTranscriptWindow struct {
+	sessionID       string
+	entries         []clientui.ChatEntry
+	ongoing         string
+	ongoingMetadata *clientui.AssistantStreamMetadata
+	ongoingError    string
+	loaded          bool
+	olderCursor     *int64
+	hasMoreAbove    bool
+	newerCursor     *int64
+	hasMoreBelow    bool
+	segments        []residentSegmentMeta
+	lastRequest     clientui.TranscriptPageRequest
+}
+
+func (w uiDetailTranscriptWindow) page() clientui.TranscriptPage {
+	return clientui.TranscriptPage{
+		SessionID:         w.sessionID,
+		OlderCursor:       w.olderCursor,
+		HasMoreAbove:      w.hasMoreAbove,
+		NewerCursor:       w.newerCursor,
+		HasMoreBelow:      w.hasMoreBelow,
+		Entries:           cloneDetailChatEntries(w.entries),
+		Streaming:         w.ongoing,
+		StreamingMetadata: cloneDetailAssistantStreamMetadata(w.ongoingMetadata),
+		StreamingError:    w.ongoingError,
+	}
+}
+
+func (w *uiDetailTranscriptWindow) reset() {
+	if w == nil {
+		return
+	}
+	*w = uiDetailTranscriptWindow{}
+}
+
+func (w *uiDetailTranscriptWindow) refreshBounds() {
+	if w == nil || len(w.segments) == 0 {
+		return
+	}
+	top := w.segments[0]
+	bottom := w.segments[len(w.segments)-1]
+	w.olderCursor = top.olderCursor
+	w.hasMoreAbove = top.hasMoreAbove
+	w.newerCursor = bottom.newerCursor
+	w.hasMoreBelow = bottom.hasMoreBelow
+}
+
+func (w *uiDetailTranscriptWindow) refreshEdgeCursors(page clientui.TranscriptPage) {
+	if w == nil || len(w.segments) == 0 {
+		return
+	}
+	top := &w.segments[0]
+	top.olderCursor = cloneInt64Pointer(page.OlderCursor)
+	top.hasMoreAbove = page.HasMoreAbove
+	bottom := &w.segments[len(w.segments)-1]
+	bottom.newerCursor = cloneInt64Pointer(page.NewerCursor)
+	bottom.hasMoreBelow = page.HasMoreBelow
+	w.refreshBounds()
+}
+
+func segmentMetaFromPage(startLocal int, page clientui.TranscriptPage) residentSegmentMeta {
+	return residentSegmentMeta{
+		startLocal:   startLocal,
+		olderCursor:  cloneInt64Pointer(page.OlderCursor),
+		hasMoreAbove: page.HasMoreAbove,
+		newerCursor:  cloneInt64Pointer(page.NewerCursor),
+		hasMoreBelow: page.HasMoreBelow,
+	}
+}
+
+func (w *uiDetailTranscriptWindow) apply(page clientui.TranscriptPage) {
+	if w == nil {
+		return
+	}
+	if w.loaded && transcriptPageSessionChanged(w.sessionID, page.SessionID) {
+		w.replace(page)
+		return
+	}
+	if !w.loaded {
+		w.replace(page)
+		return
+	}
+	w.merge(page)
+}
+
+func (w uiDetailTranscriptWindow) matchesPage(page clientui.TranscriptPage) bool {
+	if !w.loaded {
+		return false
+	}
+	if transcriptPageSessionChanged(w.sessionID, page.SessionID) {
+		return false
+	}
+	if w.ongoing != page.Streaming || !clientAssistantStreamMetadataEqual(w.ongoingMetadata, page.StreamingMetadata) || w.ongoingError != page.StreamingError {
+		return false
+	}
+	if len(w.entries) != len(page.Entries) {
+		return false
+	}
+	for i := range page.Entries {
+		if !clientChatEntryEqual(w.entries[i], page.Entries[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (w *uiDetailTranscriptWindow) replace(page clientui.TranscriptPage) {
+	if w == nil {
+		return
+	}
+	w.sessionID = strings.TrimSpace(page.SessionID)
+	w.entries = cloneDetailChatEntries(page.Entries)
+	w.ongoing = page.Streaming
+	w.ongoingMetadata = cloneDetailAssistantStreamMetadata(page.StreamingMetadata)
+	w.ongoingError = page.StreamingError
+	w.loaded = true
+	w.segments = []residentSegmentMeta{segmentMetaFromPage(0, page)}
+	w.refreshBounds()
+	w.trimToSegments(len(w.entries))
+}
+
+func (w *uiDetailTranscriptWindow) prependCursorPage(page clientui.TranscriptPage) {
+	if w == nil {
+		return
+	}
+	if !w.loaded || transcriptPageSessionChanged(w.sessionID, page.SessionID) {
+		w.replace(page)
+		return
+	}
+	if w.hasSegment(page) {
+		return
+	}
+	pageEntries := cloneDetailChatEntries(page.Entries)
+	if len(pageEntries) == 0 {
+		if len(w.segments) == 0 {
+			w.segments = []residentSegmentMeta{segmentMetaFromPage(0, page)}
+		} else {
+			top := &w.segments[0]
+			top.olderCursor = cloneInt64Pointer(page.OlderCursor)
+			top.hasMoreAbove = page.HasMoreAbove
+		}
+		w.refreshBounds()
+		w.loaded = true
+		return
+	}
+	merged := make([]clientui.ChatEntry, 0, len(pageEntries)+len(w.entries))
+	merged = append(merged, pageEntries...)
+	merged = append(merged, w.entries...)
+	w.entries = merged
+	for i := range w.segments {
+		w.segments[i].startLocal += len(pageEntries)
+	}
+	w.segments = append([]residentSegmentMeta{segmentMetaFromPage(0, page)}, w.segments...)
+	w.refreshBounds()
+	w.trimToSegments(0)
+	w.loaded = true
+}
+
+func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage) {
+	if w == nil {
+		return
+	}
+	if !w.loaded || transcriptPageSessionChanged(w.sessionID, page.SessionID) {
+		w.replace(page)
+		return
+	}
+	if w.hasSegment(page) {
+		w.ongoing = page.Streaming
+		w.ongoingMetadata = cloneDetailAssistantStreamMetadata(page.StreamingMetadata)
+		w.ongoingError = page.StreamingError
+		return
+	}
+	pageEntries := cloneDetailChatEntries(page.Entries)
+	if len(pageEntries) == 0 {
+		if len(w.segments) == 0 {
+			w.segments = []residentSegmentMeta{segmentMetaFromPage(len(w.entries), page)}
+		} else {
+			bottom := &w.segments[len(w.segments)-1]
+			bottom.newerCursor = cloneInt64Pointer(page.NewerCursor)
+			bottom.hasMoreBelow = page.HasMoreBelow
+		}
+		w.refreshBounds()
+		w.ongoing = page.Streaming
+		w.ongoingMetadata = cloneDetailAssistantStreamMetadata(page.StreamingMetadata)
+		w.ongoingError = page.StreamingError
+		w.loaded = true
+		return
+	}
+	startLocal := len(w.entries)
+	w.entries = append(w.entries, pageEntries...)
+	w.segments = append(w.segments, segmentMetaFromPage(startLocal, page))
+	w.refreshBounds()
+	w.trimToSegments(len(w.entries))
+	w.ongoing = page.Streaming
+	w.ongoingMetadata = cloneDetailAssistantStreamMetadata(page.StreamingMetadata)
+	w.ongoingError = page.StreamingError
+	w.loaded = true
+}
+
+func (w *uiDetailTranscriptWindow) merge(page clientui.TranscriptPage) {
+	if w == nil {
+		return
+	}
+	if transcriptPageSessionChanged(w.sessionID, page.SessionID) {
+		w.replace(page)
+		return
+	}
+	if len(page.Entries) == 0 {
+		w.ongoing = page.Streaming
+		w.ongoingMetadata = cloneDetailAssistantStreamMetadata(page.StreamingMetadata)
+		w.ongoingError = page.StreamingError
+		return
+	}
+	w.replace(page)
+}
+
+func (w *uiDetailTranscriptWindow) applySuffix(suffix clientui.CommittedTranscriptSuffix) {
+	if w == nil {
+		return
+	}
+	page := clientui.TranscriptPage{
+		SessionID:             suffix.SessionID,
+		SessionName:           suffix.SessionName,
+		ConversationFreshness: suffix.ConversationFreshness,
+		Revision:              suffix.Revision,
+		Entries:               cloneDetailChatEntries(suffix.Entries),
+	}
+	if !w.loaded || transcriptPageSessionChanged(w.sessionID, suffix.SessionID) {
+		w.replace(page)
+		return
+	}
+	w.ongoing = ""
+	w.ongoingMetadata = nil
+	w.ongoingError = ""
+	if len(suffix.Entries) == 0 {
+		return
+	}
+	if len(w.entries) == 0 {
+		w.replace(page)
+		return
+	}
+	overlap := suffixOverlapLength(w.entries, suffix.Entries)
+	if overlap == 0 {
+		return
+	}
+	if overlap >= len(suffix.Entries) {
+		return
+	}
+	w.entries = append(w.entries, cloneDetailChatEntries(suffix.Entries[overlap:])...)
+	w.refreshBounds()
+	w.trimToSegments(len(w.entries))
+}
+
+func (w uiDetailTranscriptWindow) needsNewestReloadForSuffix(suffix clientui.CommittedTranscriptSuffix) bool {
+	if !w.loaded || transcriptPageSessionChanged(w.sessionID, suffix.SessionID) {
+		return false
+	}
+	if len(w.entries) == 0 || len(suffix.Entries) == 0 {
+		return false
+	}
+	if w.hasMoreBelow {
+		return false
+	}
+	return suffixOverlapLength(w.entries, suffix.Entries) == 0
+}
+
+func suffixOverlapLength(current []clientui.ChatEntry, suffix []clientui.ChatEntry) int {
+	maxOverlap := min(len(current), len(suffix))
+	for overlap := maxOverlap; overlap > 0; overlap-- {
+		matches := true
+		start := len(current) - overlap
+		for idx := 0; idx < overlap; idx++ {
+			if !clientChatEntryEqual(current[start+idx], suffix[idx]) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return overlap
+		}
+	}
+	return 0
+}
+
+func (w uiDetailTranscriptWindow) hasSegment(page clientui.TranscriptPage) bool {
+	if len(w.segments) == 0 || len(page.Entries) == 0 {
+		return false
+	}
+	for idx, seg := range w.segments {
+		if !segmentBoundaryEqual(seg, page) {
+			continue
+		}
+		end := len(w.entries)
+		if idx+1 < len(w.segments) {
+			end = w.segments[idx+1].startLocal
+		}
+		if end-seg.startLocal != len(page.Entries) {
+			continue
+		}
+		matches := true
+		for entryIndex, entry := range page.Entries {
+			if !clientChatEntryEqual(w.entries[seg.startLocal+entryIndex], entry) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
+}
+
+func segmentBoundaryEqual(seg residentSegmentMeta, page clientui.TranscriptPage) bool {
+	return seg.hasMoreAbove == page.HasMoreAbove &&
+		seg.hasMoreBelow == page.HasMoreBelow &&
+		int64PointerEqual(seg.olderCursor, page.OlderCursor) &&
+		int64PointerEqual(seg.newerCursor, page.NewerCursor)
+}
+
+func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) {
+	if w == nil || len(w.segments) <= uiDetailTranscriptMinResidentSegments {
+		return
+	}
+	if anchorLocal < 0 {
+		anchorLocal = 0
+	}
+	if anchorLocal > len(w.entries) {
+		anchorLocal = len(w.entries)
+	}
+	anchorSeg := 0
+	for i, seg := range w.segments {
+		if seg.startLocal <= anchorLocal {
+			anchorSeg = i
+		} else {
+			break
+		}
+	}
+	for len(w.segments) > uiDetailTranscriptMinResidentSegments && len(w.entries) > uiDetailTranscriptMaxEntries {
+		last := len(w.segments) - 1
+		firstDist := anchorSeg
+		lastDist := last - anchorSeg
+		if lastDist >= firstDist && anchorSeg != last {
+			cut := w.segments[last].startLocal
+			w.entries = append([]clientui.ChatEntry(nil), w.entries[:cut]...)
+			w.segments = w.segments[:last]
+		} else if anchorSeg != 0 {
+			cut := w.segments[1].startLocal
+			w.entries = append([]clientui.ChatEntry(nil), w.entries[cut:]...)
+			w.segments = w.segments[1:]
+			for i := range w.segments {
+				w.segments[i].startLocal -= cut
+			}
+			anchorSeg--
+		} else {
+			break
+		}
+	}
+	w.refreshBounds()
+}
+
+func clientAssistantStreamMetadataEqual(left *clientui.AssistantStreamMetadata, right *clientui.AssistantStreamMetadata) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.StepID == right.StepID &&
+		left.BaseRevision == right.BaseRevision &&
+		left.BaseCommittedEntryCount == right.BaseCommittedEntryCount
+}
+
+func cloneDetailAssistantStreamMetadata(metadata *clientui.AssistantStreamMetadata) *clientui.AssistantStreamMetadata {
+	if metadata == nil {
+		return nil
+	}
+	copyMetadata := *metadata
+	return &copyMetadata
+}
+
+func (w uiDetailTranscriptWindow) requestedPageForDetailEntry() clientui.TranscriptPageRequest {
+	return clientui.TranscriptPageRequest{}
+}
+
+func (w uiDetailTranscriptWindow) pageBefore() (clientui.TranscriptPageRequest, bool) {
+	if !w.loaded || !w.hasMoreAbove || w.olderCursor == nil {
+		return clientui.TranscriptPageRequest{}, false
+	}
+	return clientui.TranscriptPageRequest{Cursor: cloneInt64Pointer(w.olderCursor)}, true
+}
+
+func (w uiDetailTranscriptWindow) pageAfter() (clientui.TranscriptPageRequest, bool) {
+	if !w.loaded || !w.hasMoreBelow || w.newerCursor == nil {
+		return clientui.TranscriptPageRequest{}, false
+	}
+	return clientui.TranscriptPageRequest{NewerCursor: cloneInt64Pointer(w.newerCursor)}, true
+}
+
+func pageRequestEqual(a, b clientui.TranscriptPageRequest) bool {
+	return int64PointerEqual(a.Cursor, b.Cursor) && int64PointerEqual(a.NewerCursor, b.NewerCursor)
+}
+
+func transcriptPageSessionChanged(currentSessionID, nextSessionID string) bool {
+	trimmedCurrent := strings.TrimSpace(currentSessionID)
+	trimmedNext := strings.TrimSpace(nextSessionID)
+	if trimmedCurrent == "" || trimmedNext == "" {
+		return false
+	}
+	return trimmedCurrent != trimmedNext
+}
+
+func cloneDetailChatEntries(entries []clientui.ChatEntry) []clientui.ChatEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]clientui.ChatEntry, 0, len(entries))
+	for _, entry := range entries {
+		copyEntry := entry
+		if entry.ToolCall != nil {
+			copyTool := *entry.ToolCall
+			copyTool.Suggestions = append([]string(nil), entry.ToolCall.Suggestions...)
+			if entry.ToolCall.RenderHint != nil {
+				renderHint := *entry.ToolCall.RenderHint
+				copyTool.RenderHint = &renderHint
+			}
+			copyEntry.ToolCall = &copyTool
+		}
+		out = append(out, copyEntry)
+	}
+	return out
+}
+
+func cloneInt64Pointer(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
+}
+
+func int64PointerEqual(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func clientChatEntryEqual(left, right clientui.ChatEntry) bool {
+	return transcript.EntryPayloadEqual(clientEntryPayload(left), clientEntryPayload(right))
+}
+
+func clientEntryPayload(entry clientui.ChatEntry) transcript.EntryPayload {
+	return transcript.EntryPayload{
+		Visibility:        transcript.EntryVisibility(entry.Visibility),
+		RollbackTargetID:  entry.RollbackTargetID,
+		Role:              entry.Role,
+		Text:              entry.Text,
+		CondensedText:     entry.CondensedText,
+		Phase:             string(entry.Phase),
+		MessageType:       string(entry.MessageType),
+		SourcePath:        entry.SourcePath,
+		CompactLabel:      entry.CompactLabel,
+		ToolResultSummary: entry.ToolResultSummary,
+		ToolCallID:        entry.ToolCallID,
+		NoticeID:          entry.NoticeID,
+		ToolCall:          transcriptToolCallMeta(entry.ToolCall),
+	}
+}
+
+func transcriptToolCallMeta(meta *clientui.ToolCallMeta) *transcript.ToolCallMeta {
+	if meta == nil {
+		return nil
+	}
+	out := transcript.ToolCallMeta{
+		ToolName:               meta.ToolName,
+		Presentation:           transcript.ToolPresentationKind(meta.Presentation),
+		RenderBehavior:         transcript.ToolCallRenderBehavior(meta.RenderBehavior),
+		IsShell:                meta.IsShell,
+		UserInitiated:          meta.UserInitiated,
+		Command:                meta.Command,
+		CompactText:            meta.CompactText,
+		InlineMeta:             meta.InlineMeta,
+		TimeoutLabel:           meta.TimeoutLabel,
+		PatchSummary:           meta.PatchSummary,
+		PatchDetail:            meta.PatchDetail,
+		PatchRender:            meta.PatchRender,
+		Question:               meta.Question,
+		Suggestions:            append([]string(nil), meta.Suggestions...),
+		RecommendedOptionIndex: meta.RecommendedOptionIndex,
+		OmitSuccessfulResult:   meta.OmitSuccessfulResult,
+		RawOutputRequested:     meta.RawOutputRequested,
+		OutputTruncated:        meta.OutputTruncated,
+	}
+	if meta.RenderHint != nil {
+		out.RenderHint = &transcript.ToolRenderHint{
+			Kind:         transcript.ToolRenderKind(meta.RenderHint.Kind),
+			Path:         meta.RenderHint.Path,
+			ResultOnly:   meta.RenderHint.ResultOnly,
+			ShellDialect: transcript.ToolShellDialect(meta.RenderHint.ShellDialect),
+		}
+	}
+	return &out
+}

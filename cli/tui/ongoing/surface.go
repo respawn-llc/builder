@@ -309,14 +309,77 @@ func committedRowLines(row clientui.TranscriptCommittedRow, width int, themeName
 	switch row.Kind {
 	case clientui.TranscriptRowUser, clientui.TranscriptRowAssistant, clientui.TranscriptRowTool, clientui.TranscriptRowNotice:
 		rendered := transcriptrender.RenderCommittedRow(row, width, themeName, transcriptrender.ModeOngoing)
-		return rendered.Group, rendered.Lines
+		return rendered.Group, encodeTranscriptLines(rendered.Lines, themeName)
 	default:
 		panic(fmt.Sprintf("ongoing render unknown committed row kind %q", row.Kind))
 	}
 }
 
 func dividerLine(group clientui.TranscriptRowKind, width int, themeName string) string {
-	return transcriptrender.RenderDivider(group, width, themeName)
+	return encodeTranscriptLine(transcriptrender.RenderDivider(group, width), themeName)
+}
+
+func encodeTranscriptLines(lines []transcriptrender.Line, themeName string) []string {
+	if len(lines) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, encodeTranscriptLine(line, themeName))
+	}
+	return out
+}
+
+func encodeTranscriptLine(line transcriptrender.Line, themeName string) string {
+	var out strings.Builder
+	for _, span := range line.Spans {
+		out.WriteString(encodeTranscriptSpan(span, themeName))
+	}
+	return out.String()
+}
+
+func encodeTranscriptSpan(span transcriptrender.Span, themeName string) string {
+	if span.Text == "" {
+		return ""
+	}
+	color := transcriptRoleColor(span.Role, themeName)
+	if color == "" && !span.Faint {
+		return span.Text
+	}
+	prefix := ansiTrueColorForeground(color)
+	if span.Faint {
+		prefix += "\x1b[2m"
+	}
+	return prefix + span.Text + "\x1b[0m"
+}
+
+func transcriptRoleColor(role transcriptrender.StyleRole, themeName string) string {
+	return transcriptrender.ColorForRole(transcriptrender.ColorRoleForStyle(role), themeName).TrueColor
+}
+
+func ansiTrueColorForeground(hex string) string {
+	r, g, b, ok := parseHexColor(hex)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
+}
+
+func parseHexColor(hex string) (int, int, int, bool) {
+	hex = strings.TrimPrefix(strings.TrimSpace(hex), "#")
+	if len(hex) != 6 {
+		return 0, 0, 0, false
+	}
+	var values [3]int
+	for idx := 0; idx < 3; idx++ {
+		part := hex[idx*2 : idx*2+2]
+		var value int
+		if _, err := fmt.Sscanf(part, "%02x", &value); err != nil {
+			return 0, 0, 0, false
+		}
+		values[idx] = value
+	}
+	return values[0], values[1], values[2], true
 }
 
 func (s *Surface) validateRenderFrame(frame FrameInput, operation string) {

@@ -13,6 +13,8 @@ import (
 
 type countingSessionViewClient struct {
 	view            clientui.RuntimeMainView
+	page            clientui.TranscriptPage
+	suffix          clientui.CommittedTranscriptSuffix
 	count           atomic.Int32
 	mainViewCount   atomic.Int32
 	lastMainViewReq serverapi.SessionMainViewRequest
@@ -25,11 +27,29 @@ func (c *countingSessionViewClient) GetSessionMainView(_ context.Context, req se
 	return serverapi.SessionMainViewResponse{MainView: c.view}, nil
 }
 
+func (c *countingSessionViewClient) GetSessionTranscriptPage(_ context.Context, _ serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	return serverapi.SessionTranscriptPageResponse{Transcript: c.page}, nil
+}
+
+func (c *countingSessionViewClient) GetSessionCommittedTranscriptSuffix(_ context.Context, _ serverapi.SessionCommittedTranscriptSuffixRequest) (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
+	return serverapi.SessionCommittedTranscriptSuffixResponse{Suffix: c.suffix}, nil
+}
+
 type blockingSessionViewClient struct{}
 
 func (blockingSessionViewClient) GetSessionMainView(ctx context.Context, _ serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	<-ctx.Done()
 	return serverapi.SessionMainViewResponse{}, ctx.Err()
+}
+
+func (blockingSessionViewClient) GetSessionTranscriptPage(ctx context.Context, _ serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	<-ctx.Done()
+	return serverapi.SessionTranscriptPageResponse{}, ctx.Err()
+}
+
+func (blockingSessionViewClient) GetSessionCommittedTranscriptSuffix(ctx context.Context, _ serverapi.SessionCommittedTranscriptSuffixRequest) (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
+	<-ctx.Done()
+	return serverapi.SessionCommittedTranscriptSuffixResponse{}, ctx.Err()
 }
 
 type flakySessionViewClient struct {
@@ -54,6 +74,14 @@ func (c *flakySessionViewClient) GetSessionMainView(context.Context, serverapi.S
 		return c.responses[len(c.responses)-1], nil
 	}
 	return serverapi.SessionMainViewResponse{}, nil
+}
+
+func (c *flakySessionViewClient) GetSessionTranscriptPage(context.Context, serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	return serverapi.SessionTranscriptPageResponse{}, nil
+}
+
+func (c *flakySessionViewClient) GetSessionCommittedTranscriptSuffix(context.Context, serverapi.SessionCommittedTranscriptSuffixRequest) (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
+	return serverapi.SessionCommittedTranscriptSuffixResponse{}, nil
 }
 
 type mutableRuntimeResolver struct {

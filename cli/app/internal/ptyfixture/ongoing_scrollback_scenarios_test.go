@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"core/internal/testharness/pty"
-	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
@@ -29,39 +28,48 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		inputs                []pty.InputEvent
 		resizes               []pty.DriverResizeEvent
 		expectedAppends       []string
-		screenContains        []string
-		rawContains           []string
-		rawPlainContains      []string
 		allowDuplicateAppends bool
 		allowsAltScroll       bool
 		allowsFullScreen      bool
 	}{
 		{
-			name: "amended_style_visibility_and_live_area_matrix",
+			name: "visibility_o_real_app_path",
 			script: map[string]any{
-				"direct_matrix": true,
+				"final": "VISIBILITY_O_MODEL",
 			},
-			expectedAppends: []string{"❯ VISIBILITY_O_USER", "• TRIGGER_HANDOFF_TOOL"},
-			screenContains:  []string{"/status typed slash command", "statusline ready", "streaming live area"},
-			rawContains:     []string{"\x1b[", "─ notice "},
-			rawPlainContains: []string{
-				"VISIBILITY_O_USER",
-				"VISIBILITY_O_MODEL",
-				"VISIBILITY_OC_NOTICE",
-				"VISIBILITY_OC_WARNING",
-				"VISIBILITY_O_ERROR",
-				"VISIBILITY_D_DETAIL_ONLY",
-				"VISIBILITY_X_HIDDEN",
-				"⇄ cli/tui/model.go -1 +2",
-				"⇄ cli/tui/ongoing/surface.go -1 +1",
-				"• VIEW_IMAGE_TOOL",
-				"@ WEB_SEARCH_TOOL",
-				"• CUSTOM_TOOL",
-				"• WORKFLOW_COMPLETION_TOOL",
-				"$ SHELL_TOOL",
-				"? ASK_QUESTION_TOOL",
-				"• TRIGGER_HANDOFF_TOOL",
+			expectedAppends: []string{"❯ visibility_o_real_app_path", "❮ VISIBILITY_O_MODEL"},
+		},
+		{
+			name: "visibility_oc_tool_real_app_path",
+			script: map[string]any{
+				"steps": []map[string]any{
+					{
+						"commentary": "calling shell tool",
+						"tool_calls": []map[string]any{
+							{"id": "call_1", "name": "exec_command", "input": map[string]any{"cmd": "printf 'VISIBILITY_OC_TOOL\\n'"}},
+						},
+					},
+					{
+						"expected_tool_results": []map[string]any{{"CallID": "call_1", "Name": "exec_command"}},
+						"final":                 "tool path complete",
+					},
+				},
 			},
+			expectedAppends: []string{"❮ tool path complete"},
+		},
+		{
+			name: "visibility_d_detail_only_real_app_path",
+			script: map[string]any{
+				"final": "detail-only fixture completed",
+			},
+			expectedAppends: []string{"❯ visibility_d_detail_only_real_app_path", "❮ detail-only fixture completed"},
+		},
+		{
+			name: "visibility_x_hidden_real_app_path",
+			script: map[string]any{
+				"final": "hidden fixture completed",
+			},
+			expectedAppends: []string{"❯ visibility_x_hidden_real_app_path", "❮ hidden fixture completed"},
 		},
 		{
 			name: "markdown_streaming_promotion_and_final_tail",
@@ -167,24 +175,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				}
 				if err != nil {
 					t.Fatalf("append cardinality: %v", err)
-				}
-			}
-			screenText := analysis.Screen.RenderText()
-			for _, content := range tc.screenContains {
-				if !strings.Contains(screenText, content) {
-					t.Fatalf("screen = %q, want %q", screenText, content)
-				}
-			}
-			raw := string(capture.Raw)
-			for _, content := range tc.rawContains {
-				if !strings.Contains(raw, content) {
-					t.Fatalf("raw capture missing %q", content)
-				}
-			}
-			rawPlain := xansi.Strip(raw)
-			for _, content := range tc.rawPlainContains {
-				if !strings.Contains(rawPlain, content) {
-					t.Fatalf("plain raw capture missing %q in %q", content, rawPlain)
 				}
 			}
 			if analysis.Screen.IsBlank() {

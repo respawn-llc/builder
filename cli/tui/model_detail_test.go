@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,22 +13,21 @@ import (
 
 func TestDetailModeRendersHydratedCommittedRows(t *testing.T) {
 	model := NewModel()
-	next, _ := model.Update(ApplyTranscriptMessageMsg{Message: clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageHydration,
-		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
-			{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "hello from user"}},
-			{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "hello from assistant"}},
-		}},
+	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
+		Entries: []clientui.ChatEntry{
+			{Role: "user", Text: "hello from user"},
+			{Role: "assistant", Text: "hello from assistant"},
+		},
 	}})
 	model = next.(Model)
 	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
 	model = next.(Model)
 
 	view := xansi.Strip(model.View())
-	for _, want := range []string{"hello from user", "hello from assistant"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("detail view = %q, want %q", view, want)
-		}
+	lines := trimmedDetailTestLines(view)
+	want := []string{"❯ hello from user", "", "▶ hello from assistant"}
+	if !slices.Equal(lines, want) {
+		t.Fatalf("detail lines = %#v, want %#v", lines, want)
 	}
 	if strings.TrimSpace(view) == "" {
 		t.Fatal("detail view is blank")
@@ -36,25 +36,31 @@ func TestDetailModeRendersHydratedCommittedRows(t *testing.T) {
 
 func TestDetailModeExpandsSelectedEntry(t *testing.T) {
 	model := NewModel()
-	next, _ := model.Update(ApplyTranscriptMessageMsg{Message: clientui.TranscriptMessage{
-		Kind: clientui.TranscriptMessageCommittedRow,
-		CommittedRow: &clientui.TranscriptCommittedRow{
-			Kind:      clientui.TranscriptRowAssistant,
-			Assistant: &clientui.TranscriptAssistantRow{Text: "line one\nline two\nline three\nline four"},
-		},
+	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
+		Entries: []clientui.ChatEntry{{Role: "assistant", Text: "line one\nline two\nline three\nline four"}},
 	}})
 	model = next.(Model)
 	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
 	model = next.(Model)
-	collapsed := xansi.Strip(model.View())
-	if strings.Contains(collapsed, "line four") {
-		t.Fatalf("collapsed detail view = %q, want three-line preview", collapsed)
+	collapsedLines := trimmedDetailTestLines(model.View())
+	wantCollapsed := []string{"▶ line one", "└ line two", "└ line three"}
+	if !slices.Equal(collapsedLines, wantCollapsed) {
+		t.Fatalf("collapsed detail lines = %#v, want %#v", collapsedLines, wantCollapsed)
 	}
 
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = next.(Model)
-	expanded := xansi.Strip(model.View())
-	if !strings.Contains(expanded, "line four") || !strings.Contains(expanded, "▼") {
-		t.Fatalf("expanded detail view = %q, want full selected entry", expanded)
+	expandedLines := trimmedDetailTestLines(model.View())
+	wantExpanded := []string{"▼ line one", "└ line two", "└ line three", "└ line four"}
+	if !slices.Equal(expandedLines, wantExpanded) {
+		t.Fatalf("expanded detail lines = %#v, want %#v", expandedLines, wantExpanded)
 	}
+}
+
+func trimmedDetailTestLines(view string) []string {
+	lines := strings.Split(xansi.Strip(view), "\n")
+	for idx := range lines {
+		lines[idx] = strings.TrimRight(lines[idx], " ")
+	}
+	return lines
 }

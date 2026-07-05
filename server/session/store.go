@@ -1039,11 +1039,20 @@ type EventInput struct {
 }
 
 func (s *Store) ReadEventsBackwardUntil(match func(Event) bool) ([]Event, error) {
-	window, err := s.ReadSegmentBackward(0, match)
+	window, err := s.ReadNewestSegmentBackward(match)
 	if err != nil {
 		return nil, err
 	}
 	return window.Events, nil
+}
+
+func (s *Store) ReadNewestSegmentBackward(match func(Event) bool) (SegmentWindow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.persisted {
+		return SegmentWindow{ReachedStart: true, ReachedEnd: true}, nil
+	}
+	return readNewestSegmentBackwardFile(s.eventsFP, activeTailReverseChunkBytes, match)
 }
 
 func (s *Store) ReadSegmentBackward(endOffset int64, match func(Event) bool) (SegmentWindow, error) {

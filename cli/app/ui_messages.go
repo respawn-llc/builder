@@ -203,7 +203,18 @@ const (
 	runtimeMainViewRefreshCauseStartupUpdate    runtimeMainViewRefreshCause = "startup_update"
 )
 
-type detailTranscriptLoadMsg struct{}
+type detailTranscriptLoadMsg struct {
+	sessionID string
+	request   clientui.TranscriptPageRequest
+	page      clientui.TranscriptPage
+	err       error
+}
+
+type detailTranscriptSuffixLoadMsg struct {
+	sessionID string
+	suffix    clientui.CommittedTranscriptSuffix
+	err       error
+}
 
 type runLoggerDiagnosticMsg struct {
 	diagnostic runLoggerDiagnostic

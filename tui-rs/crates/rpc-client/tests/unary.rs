@@ -1000,8 +1000,8 @@ fn transcript_page_wrapper_uses_contract_dto_and_method_name() {
     let mut client = Client::new(connection);
     let request = SessionTranscriptPageRequest {
         session_id: "session-1".to_owned(),
-        cursor: 42,
-        newer_cursor: 0,
+        cursor: Some(42),
+        newer_cursor: None,
     };
 
     let actual = client.get_transcript_page(request).unwrap();

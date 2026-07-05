@@ -199,6 +199,7 @@ type uiTranscriptFeatureState struct {
 	runtimeMainViewActiveRequest runtimeMainViewRefreshRequest
 	runtimeMainViewPendingSet    bool
 	runtimeMainViewPending       runtimeMainViewRefreshRequest
+	detailTranscript             uiDetailTranscriptWindow
 }
 
 type uiKeyboardFeatureState struct {

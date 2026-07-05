@@ -221,10 +221,14 @@ pub struct SessionActivitySubscribeRequest {
 pub struct SessionTranscriptPageRequest {
     #[serde(rename = "session_id", default)]
     pub session_id: String,
-    #[serde(rename = "cursor", default, skip_serializing_if = "is_zero_i64")]
-    pub cursor: i64,
-    #[serde(rename = "newer_cursor", default, skip_serializing_if = "is_zero_i64")]
-    pub newer_cursor: i64,
+    #[serde(rename = "cursor", default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<i64>,
+    #[serde(
+        rename = "newer_cursor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub newer_cursor: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -333,8 +337,4 @@ impl Default for SessionLaunchMode {
 
 fn is_false(value: &bool) -> bool {
     !*value
-}
-
-fn is_zero_i64(value: &i64) -> bool {
-    *value == 0
 }

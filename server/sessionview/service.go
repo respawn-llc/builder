@@ -197,6 +197,37 @@ func (s *Service) SessionTranscriptTailEntries(ctx context.Context, sessionID st
 	return snapshot.TranscriptTailEntries(ctx)
 }
 
+func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionTranscriptPageResponse{}, err
+	}
+	pageReq := clientui.TranscriptPageRequest{Cursor: req.Cursor, NewerCursor: req.NewerCursor}
+	snapshot, err := s.resolveSnapshot(ctx, req.SessionID, nil)
+	if err != nil {
+		return serverapi.SessionTranscriptPageResponse{}, err
+	}
+	page, err := snapshot.TranscriptPage(ctx, pageReq)
+	if err != nil {
+		return serverapi.SessionTranscriptPageResponse{}, err
+	}
+	return serverapi.SessionTranscriptPageResponse{Transcript: page}, nil
+}
+
+func (s *Service) GetSessionCommittedTranscriptSuffix(ctx context.Context, req serverapi.SessionCommittedTranscriptSuffixRequest) (serverapi.SessionCommittedTranscriptSuffixResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionCommittedTranscriptSuffixResponse{}, err
+	}
+	snapshot, err := s.resolveSnapshot(ctx, req.SessionID, nil)
+	if err != nil {
+		return serverapi.SessionCommittedTranscriptSuffixResponse{}, err
+	}
+	suffix, err := snapshot.CommittedTranscriptSuffix(ctx, clientui.CommittedTranscriptSuffixRequest{})
+	if err != nil {
+		return serverapi.SessionCommittedTranscriptSuffixResponse{}, err
+	}
+	return serverapi.SessionCommittedTranscriptSuffixResponse{Suffix: suffix}, nil
+}
+
 func (s *Service) resolveSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error) {
 	if s == nil || s.snapshots == nil {
 		return nil, errSessionStoreResolverRequired

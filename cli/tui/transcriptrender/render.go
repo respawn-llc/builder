@@ -5,50 +5,49 @@ import (
 	"strings"
 
 	"core/shared/clientui"
-	"core/shared/theme"
 	patchformat "core/shared/transcript/patchformat"
 
 	"github.com/charmbracelet/lipgloss"
-	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/rivo/uniseg"
 )
 
-func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string, mode Mode) Row {
+func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, _ string, mode Mode) Row {
 	switch row.Kind {
 	case clientui.TranscriptRowUser:
-		return Row{Group: clientui.TranscriptRowUser, Lines: renderTextBlock(StyleRoleUser, row.User.Text, width, themeName, mode)}
+		return Row{Group: clientui.TranscriptRowUser, Lines: renderTextBlock(StyleRoleUser, row.User.Text, width, mode)}
 	case clientui.TranscriptRowAssistant:
-		return Row{Group: clientui.TranscriptRowAssistant, Lines: renderTextBlock(StyleRoleAssistant, row.Assistant.Text, width, themeName, mode)}
+		return Row{Group: clientui.TranscriptRowAssistant, Lines: renderTextBlock(StyleRoleAssistant, row.Assistant.Text, width, mode)}
 	case clientui.TranscriptRowTool:
-		return Row{Group: clientui.TranscriptRowTool, Lines: RenderToolRow(*row.Tool, width, themeName, mode)}
+		return Row{Group: clientui.TranscriptRowTool, Lines: RenderToolRow(*row.Tool, width, mode)}
 	case clientui.TranscriptRowNotice:
 		role, text := noticeRoleAndText(row.Notice)
-		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(role, text, width, themeName, mode)}
+		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(role, text, width, mode)}
 	default:
-		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(StyleRoleNotice, "unknown transcript row", width, themeName, mode)}
+		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(StyleRoleNotice, "unknown transcript row", width, mode)}
 	}
 }
 
-func RenderToolRow(row clientui.TranscriptToolRow, width int, themeName string, mode Mode) []string {
+func RenderToolRow(row clientui.TranscriptToolRow, width int, mode Mode) []Line {
 	meta := normalizeToolMeta(row.ToolName, row.ToolPresentation)
 	role := toolRole(meta, row.IsError)
 	text := toolDisplayText(row, meta, mode)
 	if isPatchTool(meta) {
-		return renderPatchTool(role, text, meta.PatchRender, width, themeName, mode)
+		return renderPatchTool(role, text, meta.PatchRender, width, mode)
 	}
-	return renderTextBlock(role, text, width, themeName, mode)
+	return renderTextBlock(role, text, width, mode)
 }
 
-func RenderPendingTool(tool clientui.TranscriptToolStart, width int, themeName string) string {
+func RenderPendingTool(tool clientui.TranscriptToolStart, width int) Line {
 	meta := normalizeToolMeta(tool.ToolName, tool.ToolPresentation)
 	text := compactToolText(meta, tool.ToolName)
-	lines := renderTextBlock(toolRole(meta, false), text, width, themeName, ModeOngoing)
+	lines := renderTextBlock(toolRole(meta, false), text, width, ModeOngoing)
 	if len(lines) == 0 {
-		return ""
+		return Line{}
 	}
 	return lines[0]
 }
 
-func RenderDivider(group clientui.TranscriptRowKind, width int, themeName string) string {
+func RenderDivider(group clientui.TranscriptRowKind, width int) Line {
 	label := "notice"
 	switch group {
 	case clientui.TranscriptRowUser:
@@ -64,15 +63,7 @@ func RenderDivider(group clientui.TranscriptRowKind, width int, themeName string
 	}
 	left := strings.Repeat("─", max(1, (width-lipgloss.Width(text))/2))
 	right := strings.Repeat("─", max(1, width-lipgloss.Width(text)-lipgloss.Width(left)))
-	return applyColor(left+text+right, palette(themeName).mutedColor, true)
-}
-
-func RoleHasStyledANSI(line string) bool {
-	return strings.Contains(line, "\x1b[")
-}
-
-func StripANSI(line string) string {
-	return xansi.Strip(line)
+	return Line{Spans: []Span{{Text: left + text + right, Role: StyleRoleNotice, Faint: true}}}
 }
 
 type toolMeta struct {
@@ -191,104 +182,108 @@ func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) s
 
 func compactToolText(meta toolMeta, fallback string) string {
 	text := firstNonEmpty(meta.CompactText, meta.PatchSummary, meta.Command, fallback, meta.ToolName, "tool call")
-	if strings.Contains(text, "\n") {
-		for _, line := range strings.Split(text, "\n") {
-			if trimmed := strings.TrimSpace(line); trimmed != "" {
-				return patchformat.StripEditedLabel(trimmed)
-			}
+	for _, line := range strings.Split(text, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return patchformat.StripEditedLabel(trimmed)
 		}
 	}
 	return patchformat.StripEditedLabel(strings.TrimSpace(text))
 }
 
-func renderPatchTool(role StyleRole, text string, rendered *patchformat.RenderedPatch, width int, themeName string, mode Mode) []string {
+func renderPatchTool(role StyleRole, text string, rendered *patchformat.RenderedPatch, width int, mode Mode) []Line {
 	if rendered == nil || len(rendered.SummaryLines) == 0 || mode == ModeDetailExpanded {
-		return renderTextBlock(role, text, width, themeName, mode)
+		return renderTextBlock(role, text, width, mode)
 	}
-	p := palette(themeName)
-	lines := make([]string, 0, len(rendered.Files))
+	lines := make([]Line, 0, len(rendered.Files))
 	for _, file := range rendered.Files {
 		path := firstNonEmpty(file.RelPath, file.AbsPath)
 		if path == "" {
 			continue
 		}
-		parts := []string{path}
+		var spans []Span
+		spans = append(spans, Span{Text: path, Role: role})
 		if file.Removed > 0 {
-			parts = append(parts, applyColor(fmt.Sprintf("-%d", file.Removed), p.toolErrorColor, false))
+			spans = append(spans, Span{Text: " ", Role: role})
+			spans = append(spans, Span{Text: fmt.Sprintf("-%d", file.Removed), Role: StyleRoleToolError})
 		}
 		if file.Added > 0 {
-			parts = append(parts, applyColor(fmt.Sprintf("+%d", file.Added), p.toolSuccessColor, false))
+			spans = append(spans, Span{Text: " ", Role: role})
+			spans = append(spans, Span{Text: fmt.Sprintf("+%d", file.Added), Role: StyleRoleToolSuccess})
 		}
-		lines = append(lines, strings.Join(parts, " "))
+		lines = append(lines, Line{Spans: spans})
 	}
 	if len(lines) == 0 {
-		lines = []string{text}
+		lines = []Line{{Spans: []Span{{Text: text, Role: role}}}}
 	}
-	return attachPrefix(role, lines, width, themeName, true)
+	return attachPrefix(role, lines, width, false)
 }
 
-func renderTextBlock(role StyleRole, text string, width int, themeName string, mode Mode) []string {
+func renderTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
 	text = safeTranscriptText(text)
 	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	if text == "" {
 		text = labelForRole(role)
 	}
 	if mode == ModeOngoing && roleAllowsThreeLinePreview(role) {
-		return attachPrefix(role, wrapLines(text, contentWidth(role, width)), width, themeName, false)
+		return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width))), width, false)
 	}
 	if mode == ModeOngoing || mode == ModeDetailCollapsed {
 		first := firstDisplayLine(text)
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
-			return attachPrefix(role, firstNWrapped(text, contentWidth(role, width), 3), width, themeName, false)
+			return attachPrefix(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3)), width, false)
 		}
-		return attachPrefix(role, []string{first}, width, themeName, strings.Contains(text, "\n"))
+		return attachPrefix(role, textLines(role, []string{first}), width, len(strings.Split(text, "\n")) > 1)
 	}
-	return attachPrefix(role, wrapLines(text, contentWidth(role, width)), width, themeName, false)
+	return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width))), width, false)
 }
 
-func attachPrefix(role StyleRole, lines []string, width int, themeName string, forceEllipsis bool) []string {
+func textLines(role StyleRole, lines []string) []Line {
 	if len(lines) == 0 {
-		lines = []string{""}
+		return []Line{{Spans: []Span{{Role: role}}}}
 	}
-	prefix := roleSymbol(role, themeName) + " "
-	bodyWidth := max(1, width-lipgloss.Width(prefix))
-	p := palette(themeName)
-	out := make([]string, 0, len(lines))
-	for idx, line := range lines {
-		command, meta := splitInlineMeta(line)
-		styled := styleBody(role, command, p)
-		if meta != "" {
-			metaText := applyColor(meta, p.mutedColor, true)
-			gap := bodyWidth - lipgloss.Width(styled) - lipgloss.Width(metaText)
-			if gap < 1 {
-				gap = 1
-			}
-			styled += strings.Repeat(" ", gap) + metaText
-		}
-		if idx == 0 {
-			styled = prefix + styled
-		} else {
-			styled = applyColor("└", p.mutedColor, true) + strings.Repeat(" ", max(0, lipgloss.Width(prefix)-1)) + styled
-		}
-		if forceEllipsis || lipgloss.Width(styled) > max(1, width) {
-			styled = TruncateANSI(styled, max(1, width), forceEllipsis)
-		}
-		out = append(out, styled)
+	out := make([]Line, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, Line{Spans: []Span{{Text: line, Role: role}}})
 	}
 	return out
 }
 
-func styleBody(role StyleRole, text string, p renderPalette) string {
-	switch {
-	case strings.HasPrefix(text, "+") && !strings.HasPrefix(text, "+++"):
-		return applyColor("+", p.toolSuccessColor, false) + text[1:]
-	case strings.HasPrefix(text, "-") && !strings.HasPrefix(text, "---"):
-		return applyColor("-", p.toolErrorColor, false) + text[1:]
+func attachPrefix(role StyleRole, lines []Line, width int, forceEllipsis bool) []Line {
+	if len(lines) == 0 {
+		lines = []Line{{Spans: []Span{{Role: role}}}}
 	}
-	return applyColor(text, colorForRole(role, p), role == StyleRoleToolShell)
+	prefixWidth := lipgloss.Width(roleSymbol(role) + " ")
+	bodyWidth := max(1, width-prefixWidth)
+	out := make([]Line, 0, len(lines))
+	for idx, line := range lines {
+		command, meta := splitInlineMeta(line.Plain())
+		spans := line.Spans
+		if meta != "" {
+			spans = []Span{{Text: command, Role: role, Faint: role == StyleRoleToolShell}}
+		}
+		if meta != "" {
+			gap := bodyWidth - lipgloss.Width(command) - lipgloss.Width(meta)
+			if gap < 1 {
+				gap = 1
+			}
+			spans = append(spans, Span{Text: strings.Repeat(" ", gap), Role: role})
+			spans = append(spans, Span{Text: meta, Role: StyleRoleNotice, Faint: true})
+		}
+		if idx == 0 {
+			spans = append([]Span{{Text: roleSymbol(role), Role: role}, {Text: " ", Role: role}}, spans...)
+		} else {
+			spans = append([]Span{{Text: "└", Role: StyleRoleNotice, Faint: true}, {Text: strings.Repeat(" ", max(0, prefixWidth-1)), Role: StyleRoleNotice, Faint: true}}, spans...)
+		}
+		line = Line{Spans: spans}
+		if forceEllipsis || lipgloss.Width(line.Plain()) > max(1, width) {
+			line = TruncateLine(line, max(1, width), forceEllipsis)
+		}
+		out = append(out, line)
+	}
+	return out
 }
 
-func roleSymbol(role StyleRole, themeName string) string {
+func roleSymbol(role StyleRole) string {
 	symbol := "•"
 	switch role {
 	case StyleRoleUser:
@@ -310,8 +305,7 @@ func roleSymbol(role StyleRole, themeName string) string {
 	case StyleRoleError, StyleRoleToolError:
 		symbol = "!"
 	}
-	p := palette(themeName)
-	return applyColor(symbol, colorForRole(role, p), false)
+	return symbol
 }
 
 func noticeRoleAndText(row *clientui.TranscriptNoticeRow) (StyleRole, string) {
@@ -337,97 +331,6 @@ func noticeLegacyText(row *clientui.TranscriptNoticeRow) string {
 		return ""
 	}
 	return strings.TrimSpace(*row.Data.LegacyText)
-}
-
-func colorForRole(role StyleRole, p renderPalette) string {
-	switch role {
-	case StyleRoleUser:
-		return p.userColor
-	case StyleRoleAssistant:
-		return p.assistantColor
-	case StyleRoleToolSuccess:
-		return p.toolSuccessColor
-	case StyleRoleToolError:
-		return p.toolErrorColor
-	case StyleRoleToolShell:
-		return p.toolColor
-	case StyleRoleToolPatch:
-		return p.toolColor
-	case StyleRoleToolQuestion:
-		return p.userColor
-	case StyleRoleToolWebSearch:
-		return p.toolColor
-	case StyleRoleWarning:
-		return p.warningColor
-	case StyleRoleError:
-		return p.errorColor
-	case StyleRoleNotice:
-		return p.primaryColor
-	default:
-		return p.toolColor
-	}
-}
-
-type renderPalette struct {
-	primaryColor     string
-	mutedColor       string
-	userColor        string
-	assistantColor   string
-	toolColor        string
-	toolSuccessColor string
-	toolErrorColor   string
-	warningColor     string
-	errorColor       string
-}
-
-func palette(themeName string) renderPalette {
-	tokens := theme.ResolvePalette(themeName)
-	return renderPalette{
-		primaryColor:     tokens.App.Primary.TrueColor,
-		mutedColor:       tokens.Transcript.Subdued.TrueColor,
-		userColor:        tokens.Transcript.User.TrueColor,
-		assistantColor:   tokens.Transcript.Assistant.TrueColor,
-		toolColor:        tokens.Transcript.Tool.TrueColor,
-		toolSuccessColor: tokens.Transcript.ToolSuccess.TrueColor,
-		toolErrorColor:   tokens.Transcript.ToolError.TrueColor,
-		warningColor:     tokens.Transcript.Warning.TrueColor,
-		errorColor:       tokens.Transcript.Error.TrueColor,
-	}
-}
-
-func applyColor(text string, hex string, faint bool) string {
-	if text == "" {
-		return text
-	}
-	r, g, b, ok := parseHexColor(hex)
-	if !ok {
-		if faint {
-			return "\x1b[2m" + text + "\x1b[0m"
-		}
-		return text
-	}
-	prefix := fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
-	if faint {
-		prefix += "\x1b[2m"
-	}
-	return prefix + text + "\x1b[0m"
-}
-
-func parseHexColor(hex string) (int, int, int, bool) {
-	hex = strings.TrimPrefix(strings.TrimSpace(hex), "#")
-	if len(hex) != 6 {
-		return 0, 0, 0, false
-	}
-	var values [3]int
-	for idx := 0; idx < 3; idx++ {
-		part := hex[idx*2 : idx*2+2]
-		var value int
-		if _, err := fmt.Sscanf(part, "%02x", &value); err != nil {
-			return 0, 0, 0, false
-		}
-		values[idx] = value
-	}
-	return values[0], values[1], values[2], true
 }
 
 func isPatchTool(meta toolMeta) bool {
@@ -522,7 +425,7 @@ func wrapLines(text string, width int) []string {
 }
 
 func contentWidth(role StyleRole, width int) int {
-	return max(1, width-lipgloss.Width(roleSymbol(role, "")+" "))
+	return max(1, width-lipgloss.Width(roleSymbol(role)+" "))
 }
 
 func splitInlineMeta(line string) (string, string) {
@@ -559,58 +462,46 @@ func safeTranscriptText(text string) string {
 	return out.String()
 }
 
-func TruncateANSI(line string, width int, forceEllipsis bool) string {
+func TruncateLine(line Line, width int, forceEllipsis bool) Line {
 	if width <= 0 {
-		return ""
+		return Line{}
 	}
-	if line == "" {
+	plain := line.Plain()
+	if plain == "" {
 		if forceEllipsis {
-			return "…"
+			return Line{Spans: []Span{{Text: "…", Role: StyleRoleNotice}}}
 		}
-		return ""
+		return line
 	}
-	if !forceEllipsis && lipgloss.Width(line) <= width {
+	if !forceEllipsis && lipgloss.Width(plain) <= width {
 		return line
 	}
 	if width == 1 {
-		return "…"
+		return Line{Spans: []Span{{Text: "…", Role: StyleRoleNotice}}}
 	}
-	parser := xansi.GetParser()
-	defer xansi.PutParser(parser)
 	visibleLimit := width - 1
-	if forceEllipsis && lipgloss.Width(line) < width {
-		visibleLimit = lipgloss.Width(line)
+	if forceEllipsis && lipgloss.Width(plain) < width {
+		visibleLimit = lipgloss.Width(plain)
 	}
-	hasANSI := strings.Contains(line, "\x1b[")
-	state := byte(0)
-	input := line
 	consumed := 0
-	var out strings.Builder
-	for len(input) > 0 {
-		seq, seqWidth, n, newState := xansi.GraphemeWidth.DecodeSequenceInString(input, state, parser)
-		if n <= 0 {
-			break
+	out := Line{}
+	for _, span := range line.Spans {
+		graphemes := uniseg.NewGraphemes(span.Text)
+		for graphemes.Next() {
+			cluster := graphemes.Str()
+			w := lipgloss.Width(cluster)
+			if consumed+w > visibleLimit {
+				out.Spans = append(out.Spans, Span{Text: "…", Role: span.Role, Faint: span.Faint})
+				return out
+			}
+			out.Spans = append(out.Spans, Span{Text: cluster, Role: span.Role, Faint: span.Faint})
+			consumed += w
 		}
-		state = newState
-		if seqWidth == 0 {
-			out.WriteString(seq)
-			input = input[n:]
-			continue
-		}
-		if consumed+seqWidth > visibleLimit {
-			break
-		}
-		out.WriteString(seq)
-		consumed += seqWidth
-		input = input[n:]
 	}
-	if forceEllipsis || lipgloss.Width(line) > width {
-		out.WriteString("…")
+	if forceEllipsis || lipgloss.Width(plain) > width {
+		out.Spans = append(out.Spans, Span{Text: "…", Role: StyleRoleNotice})
 	}
-	if hasANSI {
-		out.WriteString("\x1b[0m")
-	}
-	return out.String()
+	return out
 }
 
 func max(left, right int) int {
