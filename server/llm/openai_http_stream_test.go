@@ -164,6 +164,9 @@ func TestGenerateStream_MapsResponseIncompleteWithoutReasonToProviderContractErr
 	if providerErr.Code != UnifiedErrorCodeProviderContract {
 		t.Fatalf("provider code = %q, want %q", providerErr.Code, UnifiedErrorCodeProviderContract)
 	}
+	if providerErr.StatusCode != http.StatusOK {
+		t.Fatalf("provider status = %d, want %d", providerErr.StatusCode, http.StatusOK)
+	}
 }
 
 func TestGenerateStream_RejectsPreTerminalMalformedResponsesStream(t *testing.T) {

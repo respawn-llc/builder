@@ -174,7 +174,7 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 			callbacks.OnStreamActivity()
 		}
 		accumulator.Consume(stream.Current())
-		if err := accumulator.Err(providerCaps.ProviderID); err != nil {
+		if err := accumulator.Err(providerCaps.ProviderID, openAIResponseStatusCode(rawResp)); err != nil {
 			return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 		}
 	}

@@ -100,13 +100,13 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 	}
 }
 
-func (a *responseStreamAccumulator) Err(providerID string) error {
+func (a *responseStreamAccumulator) Err(providerID string, statusCode int) error {
 	if a == nil || a.responseError == nil {
 		return nil
 	}
 	if a.responseError.ProviderContract {
 		message := "OpenAI-compatible Responses stream emitted response.incomplete without incomplete_details.reason"
-		return llmerrors.NewProviderContractError(providerID, 0, errors.New(message))
+		return llmerrors.NewProviderContractError(providerID, statusCode, errors.New(message))
 	}
 	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil); ok {
 		return err
