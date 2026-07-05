@@ -34,12 +34,12 @@ type uiDetailTranscriptWindow struct {
 
 func (w uiDetailTranscriptWindow) page() clientui.TranscriptPage {
 	return clientui.TranscriptPage{
-		SessionID:         w.sessionID,
-		OlderCursor:       w.olderCursor,
-		HasMoreAbove:      w.hasMoreAbove,
-		NewerCursor:       w.newerCursor,
-		HasMoreBelow:      w.hasMoreBelow,
-		Entries:           cloneDetailChatEntries(w.entries),
+		SessionID:    w.sessionID,
+		OlderCursor:  w.olderCursor,
+		HasMoreAbove: w.hasMoreAbove,
+		NewerCursor:  w.newerCursor,
+		HasMoreBelow: w.hasMoreBelow,
+		Entries:      cloneDetailChatEntries(w.entries),
 	}
 }
 

@@ -167,11 +167,11 @@ type TranscriptHydration struct {
 
 type TranscriptCommittedRow struct {
 	Visibility EntryVisibility
-	Kind      TranscriptRowKind
-	User      *TranscriptUserRow
-	Assistant *TranscriptAssistantRow
-	Tool      *TranscriptToolRow
-	Notice    *TranscriptNoticeRow
+	Kind       TranscriptRowKind
+	User       *TranscriptUserRow
+	Assistant  *TranscriptAssistantRow
+	Tool       *TranscriptToolRow
+	Notice     *TranscriptNoticeRow
 }
 
 type TranscriptUserRow struct {
