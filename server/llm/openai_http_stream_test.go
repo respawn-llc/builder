@@ -140,6 +140,9 @@ func TestGenerateStream_MapsResponseIncompleteEventToProviderAPIError(t *testing
 	if providerErr.ProviderParam != "response.incomplete_details.reason" {
 		t.Fatalf("provider param = %q, want response.incomplete_details.reason", providerErr.ProviderParam)
 	}
+	if providerErr.StatusCode != http.StatusOK {
+		t.Fatalf("provider status = %d, want %d", providerErr.StatusCode, http.StatusOK)
+	}
 	if !IsNonRetriableModelError(err) {
 		t.Fatalf("expected response.incomplete terminal error to be non-retriable: %v", err)
 	}

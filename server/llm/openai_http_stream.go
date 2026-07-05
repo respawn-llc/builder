@@ -126,7 +126,7 @@ func (a *responseStreamAccumulator) Err(providerID string, statusCode int) error
 	if a.responseError.ProviderContract != nil {
 		return llmerrors.NewProviderContractError(providerID, statusCode, errors.New(a.responseError.ProviderContract.Message))
 	}
-	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil); ok {
+	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil, statusCode); ok {
 		return err
 	}
 	message := strings.TrimSpace(a.responseError.Raw)

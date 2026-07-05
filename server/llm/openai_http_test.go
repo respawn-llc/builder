@@ -335,7 +335,7 @@ func TestMapOpenAIStreamErrorPayload_UsesSharedStructuredDecoder(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err, ok := mapOpenAIStreamErrorPayload("openai", []byte(tc.body), nil)
+			err, ok := mapOpenAIStreamErrorPayload("openai", []byte(tc.body), nil, http.StatusOK)
 			if !ok {
 				t.Fatal("expected stream error payload to map")
 			}

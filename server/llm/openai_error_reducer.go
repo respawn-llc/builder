@@ -29,7 +29,7 @@ func newOpaqueProviderErrorReducer(providerID string) ProviderErrorReducer {
 }
 
 func (r openAICompatibleErrorReducer) Reduce(err error, rawResp *http.Response) (*ProviderAPIError, bool) {
-	if reduced, ok := r.reduceFromStreamError(err); ok {
+	if reduced, ok := r.reduceFromStreamError(err, openAIResponseStatusCode(rawResp)); ok {
 		return reduced, true
 	}
 	if reduced, ok := r.reduceFromSDK(err); ok {
@@ -59,7 +59,7 @@ func (r opaqueProviderErrorReducer) Reduce(err error, rawResp *http.Response) (*
 	return nil, false
 }
 
-func (r openAICompatibleErrorReducer) reduceFromStreamError(err error) (*ProviderAPIError, bool) {
+func (r openAICompatibleErrorReducer) reduceFromStreamError(err error, statusCode int) (*ProviderAPIError, bool) {
 	if err == nil {
 		return nil, false
 	}
@@ -67,21 +67,21 @@ func (r openAICompatibleErrorReducer) reduceFromStreamError(err error) (*Provide
 	if !errors.As(err, &streamErr) {
 		return nil, false
 	}
-	reduced, ok := mapOpenAIStreamErrorPayload(r.providerID, streamErr.Event.Data, err)
+	reduced, ok := mapOpenAIStreamErrorPayload(r.providerID, streamErr.Event.Data, err, statusCode)
 	if !ok {
 		return nil, false
 	}
 	return reduced, true
 }
 
-func mapOpenAIStreamErrorPayload(providerID string, data []byte, cause error) (*ProviderAPIError, bool) {
+func mapOpenAIStreamErrorPayload(providerID string, data []byte, cause error, statusCode int) (*ProviderAPIError, bool) {
 	payload, ok := decodeOpenAIStreamErrorPayload(data)
 	if !ok {
 		return nil, false
 	}
 	return mapOpenAIProviderErrorContract(
 		providerID,
-		0,
+		statusCode,
 		payload.Code,
 		payload.Type,
 		payload.Param,
