@@ -76,13 +76,16 @@ func (m *uiModel) activateSurface(surface uiSurface) tea.Cmd {
 		surface = surfaceForTranscriptMode(m.view.Mode())
 	}
 	prev := m.surface()
+	m.updateOngoingOwnershipBeforeSurfaceTransition(prev, surface)
 	m.activeSurface = surface
 	m.syncRendererOutputGate()
 	if prev == surface {
 		return nil
 	}
-	transitionCmd := m.altScreenCmdForSurfaceTransition(prev, surface)
-	return transitionCmd
+	return sequenceCmds(
+		m.altScreenCmdForSurfaceTransition(prev, surface),
+		m.ongoingOwnershipAfterSurfaceTransitionCmd(prev, surface),
+	)
 }
 
 type uiPresentationFeatureReducer struct {

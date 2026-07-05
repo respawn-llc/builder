@@ -15,9 +15,25 @@ import (
 )
 
 type ScriptFile struct {
-	Prompt       string   `json:"prompt"`
-	StreamDeltas []string `json:"stream_deltas"`
-	Final        string   `json:"final"`
+	Prompt       string     `json:"prompt"`
+	StreamDeltas []string   `json:"stream_deltas"`
+	Final        string     `json:"final"`
+	Steps        []StepFile `json:"steps"`
+}
+
+type StepFile struct {
+	Final               string                           `json:"final"`
+	Commentary          string                           `json:"commentary"`
+	StreamDeltas        []string                         `json:"stream_deltas"`
+	ToolCalls           []ToolCallFile                   `json:"tool_calls"`
+	ExpectedToolResults []scriptedllm.ExpectedToolResult `json:"expected_tool_results"`
+}
+
+type ToolCallFile struct {
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Input  json.RawMessage `json:"input"`
+	Custom bool            `json:"custom"`
 }
 
 type Runtime struct {
@@ -73,17 +89,62 @@ func loadScript(path string, afterResponse func(context.Context) error) (ScriptF
 	if err := json.Unmarshal(data, &file); err != nil {
 		return ScriptFile{}, scriptedllm.Script{}, fmt.Errorf("decode script: %w", err)
 	}
-	if file.Final == "" {
-		return ScriptFile{}, scriptedllm.Script{}, fmt.Errorf("script final response is required")
+	steps, err := scriptSteps(file)
+	if err != nil {
+		return ScriptFile{}, scriptedllm.Script{}, err
 	}
-	streamDeltas := make([]llm.AssistantDelta, 0, len(file.StreamDeltas))
-	for _, delta := range file.StreamDeltas {
-		streamDeltas = append(streamDeltas, llm.AssistantDelta{Text: delta, Phase: llm.MessagePhaseCommentary})
+	steps[len(steps)-1].AfterResponse = afterResponse
+	return file, scriptedllm.Script{Steps: steps}, nil
+}
+
+func scriptSteps(file ScriptFile) ([]scriptedllm.Step, error) {
+	if len(file.Steps) == 0 {
+		if file.Final == "" {
+			return nil, fmt.Errorf("script final response is required")
+		}
+		step := scriptedllm.FinalAnswer(file.Final)
+		step.StreamDeltas = assistantDeltas(file.StreamDeltas)
+		return []scriptedllm.Step{step}, nil
 	}
-	step := scriptedllm.FinalAnswer(file.Final)
-	step.StreamDeltas = streamDeltas
-	step.AfterResponse = afterResponse
-	return file, scriptedllm.Script{Steps: []scriptedllm.Step{step}}, nil
+	steps := make([]scriptedllm.Step, 0, len(file.Steps))
+	for _, spec := range file.Steps {
+		step, err := scriptStep(spec)
+		if err != nil {
+			return nil, err
+		}
+		steps = append(steps, step)
+	}
+	return steps, nil
+}
+
+func scriptStep(spec StepFile) (scriptedllm.Step, error) {
+	var step scriptedllm.Step
+	switch {
+	case len(spec.ToolCalls) > 0:
+		calls := make([]llm.ToolCall, 0, len(spec.ToolCalls))
+		for _, call := range spec.ToolCalls {
+			if call.ID == "" || call.Name == "" || len(call.Input) == 0 {
+				return scriptedllm.Step{}, fmt.Errorf("tool step requires id, name, and input")
+			}
+			calls = append(calls, llm.ToolCall{ID: call.ID, Name: call.Name, Input: call.Input, Custom: call.Custom})
+		}
+		step = scriptedllm.ToolBatch(spec.Commentary, calls...)
+	case spec.Final != "":
+		step = scriptedllm.FinalAnswer(spec.Final)
+	default:
+		return scriptedllm.Step{}, fmt.Errorf("script step requires final response or tool calls")
+	}
+	step.StreamDeltas = assistantDeltas(spec.StreamDeltas)
+	step.ExpectedToolResults = append([]scriptedllm.ExpectedToolResult(nil), spec.ExpectedToolResults...)
+	return step, nil
+}
+
+func assistantDeltas(values []string) []llm.AssistantDelta {
+	deltas := make([]llm.AssistantDelta, 0, len(values))
+	for _, delta := range values {
+		deltas = append(deltas, llm.AssistantDelta{Text: delta, Phase: llm.MessagePhaseCommentary})
+	}
+	return deltas
 }
 
 type Observation struct {

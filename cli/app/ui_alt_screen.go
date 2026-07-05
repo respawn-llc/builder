@@ -31,27 +31,40 @@ type transcriptModeTransitionOptions struct {
 
 func (m *uiModel) transitionTranscriptModeWithOptions(options transcriptModeTransitionOptions) tea.Cmd {
 	prevMode := m.view.Mode()
-	m.forwardToView(tui.SetModeMsg{Mode: options.target, SkipDetailWarmup: options.skipDetailWarmup})
+	prevSurface := m.surface()
+	next, _ := m.view.Update(tui.SetModeMsg{Mode: options.target, SkipDetailWarmup: options.skipDetailWarmup})
+	if casted, ok := next.(tui.Model); ok {
+		m.view = casted
+	}
 	nextMode := m.view.Mode()
 	if nextMode != tui.ModeOngoing {
 		m.helpVisible = false
 	} else if prevMode != nextMode && m.inputMode() == uiInputModeMain {
 		m.restorePrimaryInputMode()
 	}
+	surfaceTransitionCmd := tea.Cmd(nil)
 	if !options.preserveSurface && (nextMode == tui.ModeOngoing || nextMode == tui.ModeDetail) {
-		m.activeSurface = surfaceForTranscriptMode(nextMode)
+		nextSurface := surfaceForTranscriptMode(nextMode)
+		m.updateOngoingOwnershipBeforeSurfaceTransition(prevSurface, nextSurface)
+		m.activeSurface = nextSurface
 		m.syncRendererOutputGate()
+		if !options.suppressAltScreen {
+			surfaceTransitionCmd = sequenceCmds(
+				m.altScreenCmdForSurfaceTransition(prevSurface, nextSurface),
+				m.ongoingOwnershipAfterSurfaceTransitionCmd(prevSurface, nextSurface),
+			)
+		}
 	}
 	clearCmd := m.clearCmdForModeTransition(prevMode, nextMode)
 	transitionCmd := tea.Cmd(nil)
-	if !options.suppressAltScreen {
+	if !options.suppressAltScreen && surfaceTransitionCmd == nil {
 		transitionCmd = m.altScreenCmdForModeTransition(prevMode, nextMode)
 	}
 	detailLoadCmd := m.detailLoadCmdForModeTransition(prevMode, nextMode)
-	if clearCmd == nil && transitionCmd == nil && detailLoadCmd == nil {
+	if clearCmd == nil && surfaceTransitionCmd == nil && transitionCmd == nil && detailLoadCmd == nil {
 		return nil
 	}
-	return sequenceCmds(clearCmd, transitionCmd, detailLoadCmd)
+	return sequenceCmds(clearCmd, surfaceTransitionCmd, transitionCmd, detailLoadCmd)
 }
 
 func (m *uiModel) clearCmdForModeTransition(prev, next tui.Mode) tea.Cmd {

@@ -57,6 +57,37 @@ func ClassifyAppends(analysis Analysis, window OperationWindow, immutableBoundar
 	return appends
 }
 
+func CoalesceAppendRows(appends []AppendOperation) []AppendOperation {
+	out := make([]AppendOperation, 0, len(appends))
+	for _, appendOperation := range appends {
+		current := appendOperation.Operation
+		if current.Kind != OperationWrite || current.Write == nil {
+			out = append(out, appendOperation)
+			continue
+		}
+		if len(out) == 0 {
+			out = append(out, appendOperation)
+			continue
+		}
+		previous := &out[len(out)-1].Operation
+		if previous.Kind != OperationWrite ||
+			previous.Write == nil ||
+			previous.Region.Top != current.Region.Top ||
+			previous.Region.Bottom != current.Region.Bottom ||
+			previous.Region.Right != current.Region.Left {
+			out = append(out, appendOperation)
+			continue
+		}
+		previous.Region.Right = current.Region.Right
+		previous.ByteRange.End = current.ByteRange.End
+		previous.After = current.After
+		previous.CapturedAt = current.CapturedAt
+		payload := MustWritePayload(previous.Write.Text + current.Write.Text)
+		previous.Write = &payload
+	}
+	return out
+}
+
 func isAppendWrite(dimensions Dimensions, operation Operation, immutableBoundary int) bool {
 	if operation.Kind != OperationWrite {
 		return false

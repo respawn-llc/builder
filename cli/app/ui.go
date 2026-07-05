@@ -150,6 +150,7 @@ func (m *uiModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.waitRuntimeEventCmd(),
 		waitAskEvent(m.askEvents),
+		waitOngoingTranscriptEvent(m.ongoingEvents),
 		waitPathReferenceSearchEvent(m.pathReferenceEvents),
 		tea.SetWindowTitle(sessionTitle(m.sessionName)),
 		tea.WindowSize(),
@@ -167,6 +168,13 @@ func (m *uiModel) Init() tea.Cmd {
 	if len(m.startupCmds) > 0 {
 		cmds = append(cmds, m.startupCmds...)
 		m.startupCmds = nil
+	}
+	if m.nativeOngoingSurfaceActive() {
+		if result, err := m.ongoingSurface.Render(m.ongoingFrameInput()); err != nil {
+			cmds = append(cmds, m.handleOngoingSurfaceError(err))
+		} else if cmd := m.handleOngoingResult(result); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -204,9 +212,9 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout().syncViewport()
 		return m, nil
 	}
-	m.forwardToView(msg)
+	cmd := m.forwardToView(msg)
 	m.layout().syncViewport()
-	return m, nil
+	return m, cmd
 }
 
 func (m *uiModel) setDebugKeyTransientStatus(raw tea.Msg, normalized tea.KeyMsg, source string) {
@@ -223,7 +231,7 @@ func statusHasAuthData(snapshot uiStatusSnapshot) bool {
 	return snapshot.Auth.Visible || snapshot.Subscription.Applicable || strings.TrimSpace(snapshot.Subscription.Summary) != "" || len(snapshot.Subscription.Windows) > 0
 }
 
-func (m *uiModel) forwardToView(msg tea.Msg) {
+func (m *uiModel) forwardToView(msg tea.Msg) tea.Cmd {
 	prevMode := m.view.Mode()
 	next, _ := m.view.Update(msg)
 	casted, ok := next.(tui.Model)
@@ -231,9 +239,17 @@ func (m *uiModel) forwardToView(msg tea.Msg) {
 		m.view = casted
 	}
 	if prevMode != m.view.Mode() && m.surface().isTranscript() {
-		m.activeSurface = surfaceForTranscriptMode(m.view.Mode())
+		prevSurface := m.surface()
+		nextSurface := surfaceForTranscriptMode(m.view.Mode())
+		m.updateOngoingOwnershipBeforeSurfaceTransition(prevSurface, nextSurface)
+		m.activeSurface = nextSurface
 		m.syncRendererOutputGate()
+		return sequenceCmds(
+			m.altScreenCmdForSurfaceTransition(prevSurface, nextSurface),
+			m.ongoingOwnershipAfterSurfaceTransitionCmd(prevSurface, nextSurface),
+		)
 	}
+	return nil
 }
 
 func (m *uiModel) Close() {

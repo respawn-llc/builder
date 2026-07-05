@@ -25,6 +25,14 @@
 - On each received event, streaming chunk, or status change, ongoing performs one frame transaction: erase the mutable band line by line at absolute coordinates, append newly stable rows to the immutable area, repaint the mutable band from fresh state. The erase never targets rows above the immutable boundary.
 - There is no clock-based repainting. Animations produce state changes and those changes schedule renders. When no state changes exist, the surface stops rendering.
 
+## Mutable Band Height
+
+- The enforced minimum mutable band is: one in-progress tool call, one commentary line, one queued-or-steered message line plus its more-count line when needed, the input upper and lower dividers, one input text line, and one status line.
+- If the terminal height and current live content cannot fit the enforced minimum, ongoing hides the live area until the terminal is tall enough. This is the only case where input dividers and the status line are not shown. It must not drop committed content, switch to a transcript viewport, or partially remove unshrinkable pieces to make space.
+- When the enforced minimum can fit, overflow shrinks in this order: commentary down to one rolling line; queued-or-steered messages down to one line plus the more-count line; tool calls down to one visible call by hiding older calls first with no summary; unsubmitted input text down to one visible line with cursor-following input scrolling.
+- When the live area is shown, input dividers and the status line are not shrinkable.
+- File search and slash-command pickers are live-area overlays directly above the input upper divider. They may cover live content above them and shrink independently according to the free space above the current input area.
+
 ## Delivery Consumption
 
 - Ongoing consumes the exactly-once ordered transcript subscription defined in `core-runtime-tools.md`: per-subscription monotonic event seq, hydration delivered as the first ordered message(s) on the same channel, content-complete events, committed assistant entries carrying the stream/step identity of their deltas.
@@ -39,7 +47,7 @@
   - The last received event sequence number: one integer.
   - The active assistant stream: source text, its stream/step identity, its rendered rows, and the promotion boundary within them.
   - Mutable-band frame state: pending tool-call rows, spinner/animation state, input field, status line.
-  - The arrival-order queue of received-but-unrendered typed events, used only while the surface does not own the normal buffer.
+  - The arrival-order queue of received-but-unrendered typed events, used only while the surface does not own the normal buffer, plus its rehydration-required marker after overflow.
   - Operator-owned UI-local state: input draft, editor cursor state, and prompt history capped at the 100 most recent entries. Prompt history must never grow unbounded; entries beyond the cap are discarded oldest-first.
   - The divider register: the group kind of the most recently promoted row. One enum value.
 - Everything else is banned. Banned state includes, without being limited to: any collection of committed transcript entries retained after rendering; any committed-entry count, total, base offset, index range, or revision; any ledger, cache, hash, digest, flag set, dedupe key, or "delivered/seen/emitted" record of output or entries; any before/after snapshot kept for diffing; any placeholder, optimistic, or transient row awaiting replacement by a committed counterpart; any rendered-output cache for the immutable area.
@@ -54,6 +62,7 @@
 ## Assistant Streaming
 
 - Streaming is source-backed. Deltas append to the in-memory stream source; the full source renders through the assistant markdown projection for the active theme and width; rows whose rendering is prefix-stable promote into the immutable area; the volatile tail stays in the mutable band.
+- Markdown promotion is aware of Markdown constructs that can restyle or reflow preceding rows. The current source line and any open construct whose visible rows can still change remain volatile until the renderer can prove they are stable; tables are one example where earlier rows may wait until the row-closing line is known.
 - Promotion is monotonic. The promotion boundary never moves backward past rows already appended to the immutable area. If re-rendering the source would change an already-promoted row, that is a developer error, not a trigger to rewrite, restyle, or re-emit.
 - Raw deltas are never written into the immutable area. Only rendered markdown projection rows are promoted.
 - Finalization matches the committed assistant entry to the active stream by carried stream/step identity, then applies exactly one of three outcomes: committed text equals the streamed source, finalize with no additional writes; committed text extends the streamed source, emit only the missing suffix through the stream path, then finalize; anything else is a developer error. There is no fourth outcome. Finding a finalizer by scanning entries, matching by text similarity, or matching across different stream identities is banned reconciliation.
@@ -64,7 +73,7 @@
 - Consecutive promoted rows of the same kind form one group. A row of a different kind closes the open group and opens a new one. Group close has exactly one trigger: arrival of a row of a different kind. Nothing detects, waits for, or confirms a group end.
 - A divider is a rendered line emitted into the immutable area immediately before the first row of a new group. The divider below a group and the divider above the next group are the same single divider. Dividers are never emitted retroactively, never inserted above existing content, and never emitted between rows of the same kind.
 - Divider emission reads exactly one piece of state: the divider register. Incoming kind differs from the register: emit one divider, then the row. Incoming kind equals the register: append the row with no divider. The register updates on every promotion. Deciding divider placement by scanning, retaining, or re-reading promoted content is banned reconciliation.
-- An open tool-activity group renders in the mutable band and repaints freely there as calls complete; squished or single-line chain rendering is a mutable-band concern. The group's rows promote into the immutable area when the group closes. Promoted group rows are immutable like all other immutable-area content.
+- Pending tool activity renders in the mutable band and repaints freely there until the server emits a committed tool row or abort for that call. A committed tool row appends to the immutable area immediately in server order and must not be retained for delayed group promotion, reordering, or batching.
 - Assistant output groups promote progressively through stream promotion; the divider for the group is emitted before its first promoted row.
 
 ## Queueing While Not Owning The Normal Buffer
@@ -72,13 +81,13 @@
 - While detail mode, alt-screen overlays, or other surfaces own the terminal, received events accumulate in the arrival-order queue.
 - The queue stores typed events only. It must not store rendered lines, ANSI bytes, page snapshots, diffs, or projections of emitted output.
 - Drain applies each queued event in order through the same single event path. Drain performs no filtering, merging, deduplication, or reordering.
-- If the queue exceeds 1000 events, the entire queue is dropped and scratch rehydration runs. Partial drains of an overflowed queue are banned.
+- If the queue exceeds 1000 events, the surface drops queued events beyond the cap to prevent unbounded memory growth and records that scratch rehydration is required. When ongoing regains the normal buffer, it clears the queued buffer and runs scratch rehydration. Partial drains of an overflowed queue are banned.
 
 ## Scratch Rehydration
 
 - Scratch rehydration is the only path that re-issues already-shown content. The trigger list is exhaustive:
   - The received event seq is discontiguous with the last received seq, or the connection/subscription was lost. The emitted history may misrepresent the conversation and appending cannot repair it.
-  - Terminal resize, debounced 1 second, left emitted content visually broken under the previous geometry. Resize events during the debounce restart the timer.
+  - Terminal width changes after immutable content was emitted. The resize is debounced 1 second; resize events during the debounce restart the timer. Height-only changes repaint the mutable band without scratch rehydration.
   - The arrival-order queue exceeded 1000 events.
 - Never triggers. Each of these is an ordinary append or a bug to fix at its cause, and re-emitting in response to any of them is banned:
   - New content arrived: a delta, a tool call, a notice, any addition.
@@ -96,11 +105,12 @@
 
 ## Errors
 
-- Developer errors in this surface (banned-outcome attempts, renderer prefix instability, geometry violations, invalid frames, finalization mismatches without a delivery gap) panic in debug mode with diagnostics: attempted operation, terminal geometry, quoted payload or frame content, and stack trace.
-- In release mode the same diagnostics are written to logs with no user-facing notice, and the surface continues best-effort.
+- Developer errors in this surface (banned-outcome attempts, renderer prefix instability, geometry violations, invalid frames, finalization mismatches without a delivery gap) are logged with diagnostics and then panic in every mode, including production. Diagnostics include attempted operation, terminal geometry, quoted payload or frame content, and stack trace.
+- When debug mode is enabled, unclear internal failures are logged with the same diagnostics and then panic. In release mode, unclear internal failures are logged and the surface continues best-effort.
 - No error or recovery path may: drop, skip, or defer rendering of received committed content; drop or disable the native surface; hand the ongoing transcript to an app-managed viewport; trigger scratch rehydration; store content for later comparison; or re-emit. An error path that cannot satisfy these constraints exits the TUI with a clear message instead.
-- Immediate terminal write failures surface synchronously to the caller.
+- Immediate terminal write failures surface synchronously to the caller and follow the same debug/release recovery rules.
 
 ## Size
 
 - The ongoing scrollback surface, including its raw-terminal package, streaming promotion, live-area rendering, and event application, stays under 10000 production lines total. This is a locked budget enforced in CI, not guidance.
+- Exceeding 8000 production lines requires explicit follow-up review before merge.

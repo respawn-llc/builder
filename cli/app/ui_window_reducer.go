@@ -1,6 +1,10 @@
 package app
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"core/cli/tui/ongoing"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 type uiWindowFeatureReducer struct {
 	model *uiModel
@@ -18,7 +22,14 @@ func (r uiWindowFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		m.termHeight = msg.Height
 		m.windowSizeKnown = true
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, nil)
+		if !m.nativeOngoingSurfaceActive() {
+			return handledUIFeatureUpdate(m, nil)
+		}
+		result, err := m.ongoingSurface.Resize(ongoing.Size{Width: msg.Width, Height: msg.Height}, m.ongoingFrameInput())
+		if err != nil {
+			return handledUIFeatureUpdate(m, m.handleOngoingSurfaceError(err))
+		}
+		return handledUIFeatureUpdate(m, m.handleOngoingResult(result))
 	}
 	return uiFeatureUpdateResult{}
 }

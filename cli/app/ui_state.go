@@ -6,6 +6,7 @@ import (
 	"core/cli/app/commands"
 	"core/cli/app/internal/runtimestate"
 	"core/cli/tui"
+	"core/cli/tui/ongoing"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -129,6 +130,11 @@ type uiPresentationFeatureState struct {
 	terminalFocus      *terminalFocusState
 	terminalCursor     *uiTerminalCursorState
 	rendererOutputGate *uiRendererOutputGateState
+	ongoingSurface     *ongoing.Surface
+	ongoingTranscript  *ongoingTranscriptController
+	ongoingEvents      <-chan ongoingTranscriptEvent
+	requestOngoingOpen func()
+	ongoingWidthToken  uint64
 	termWidth          int
 	termHeight         int
 	windowSizeKnown    bool

@@ -96,6 +96,8 @@ var ResolveOperationWindows = analyzer.ResolveOperationWindows
 
 var ClassifyAppends = analyzer.ClassifyAppends
 
+var CoalesceAppendRows = analyzer.CoalesceAppendRows
+
 type Cell = analyzer.Cell
 
 type ScreenSnapshot = analyzer.ScreenSnapshot

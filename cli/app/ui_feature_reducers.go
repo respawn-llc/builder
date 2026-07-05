@@ -24,6 +24,7 @@ func (m *uiModel) reduceFeatureMessage(msg tea.Msg) uiFeatureUpdateResult {
 	reducers := []uiFeatureReducer{
 		m.keyReducer(),
 		m.windowReducer(),
+		m.ongoingReducer(),
 		m.presentationReducer(),
 		m.runtimeReducer(),
 		m.statusReducer(),

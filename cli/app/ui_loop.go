@@ -8,6 +8,7 @@ import (
 
 	"core/cli/app/commands"
 	"core/cli/app/internal/runner"
+	"core/cli/tui/ongoing"
 	"core/shared/config"
 	"core/shared/serverapi"
 
@@ -18,6 +19,7 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 	terminalCursor := newUITerminalCursorState()
 	rendererOutputGate := newUIRendererOutputGateState()
 	terminalOutput := newUITerminalOutput(os.Stdout, markerEncoder)
+	ongoingSurface := ongoing.NewSurface(terminalOutput)
 	if markerSinkObserver != nil {
 		if err := markerSinkObserver.TerminalPhaseMarkerSinkReady(context.Background(), terminalOutput); err != nil {
 			return nil, err
@@ -76,8 +78,14 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 		WithUIStartupUpdateNotice(startupUpdateNotice),
 		WithUITerminalCursorState(terminalCursor),
 		WithUIRendererOutputGateState(rendererOutputGate),
+		WithUIOngoingSurface(ongoingSurface),
+		WithUIOngoingTranscriptEvents(wiring.transcriptEvents),
+		WithUIOngoingTranscriptReopen(wiring.requestTranscriptOpen),
 		WithUITerminalFocusState(wiring.terminalFocus),
 	)
+	if typed, ok := model.(*uiModel); ok {
+		typed.ongoingTranscript = newOngoingTranscriptController(ongoingSurface, typed.ongoingFrameInput)
+	}
 	if closable, ok := model.(interface{ Close() }); ok {
 		defer closable.Close()
 	}
