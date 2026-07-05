@@ -174,7 +174,7 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 			callbacks.OnStreamActivity()
 		}
 		accumulator.Consume(stream.Current())
-		if err := accumulator.Err(providerCaps.ProviderID, openAIResponseStatusCode(rawResp)); err != nil {
+		if err := accumulator.Err(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp)); err != nil {
 			return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 		}
 	}
@@ -182,19 +182,24 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 		if accumulator.hasCompleted() && !callerCanceledStreamRead(ctx) {
 			return accumulator.Response(), nil
 		}
-		if rawResp != nil && isOpenAIResponsesStreamFramingError(err) {
+		responseStatus := newOpenAIResponseStatus(rawResp)
+		if responseStatus != nil && isOpenAIResponsesStreamFramingError(err) {
 			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
 				providerCaps.ProviderID,
-				openAIResponseStatusCode(rawResp),
+				responseStatus.Code,
 				fmt.Errorf("%s: %w", openAIResponsesStreamEndedBeforeTerminalMessage, err),
 			))
 		}
 		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 	}
 	if !accumulator.hasCompleted() {
+		responseStatus := newOpenAIResponseStatus(rawResp)
+		if responseStatus == nil {
+			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", errors.New(openAIResponsesStreamEndedBeforeTerminalMessage))
+		}
 		return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
 			providerCaps.ProviderID,
-			openAIResponseStatusCode(rawResp),
+			responseStatus.Code,
 			errors.New(openAIResponsesStreamEndedBeforeTerminalMessage),
 		))
 	}
@@ -216,11 +221,15 @@ func isOpenAIResponsesStreamFramingError(err error) bool {
 	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
 }
 
-func openAIResponseStatusCode(rawResp *http.Response) int {
+type openAIResponseStatus struct {
+	Code int
+}
+
+func newOpenAIResponseStatus(rawResp *http.Response) *openAIResponseStatus {
 	if rawResp == nil {
-		return 0
+		return nil
 	}
-	return rawResp.StatusCode
+	return &openAIResponseStatus{Code: rawResp.StatusCode}
 }
 
 func callerCanceledStreamRead(ctx context.Context) bool {

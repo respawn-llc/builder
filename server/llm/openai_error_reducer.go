@@ -29,7 +29,7 @@ func newOpaqueProviderErrorReducer(providerID string) ProviderErrorReducer {
 }
 
 func (r openAICompatibleErrorReducer) Reduce(err error, rawResp *http.Response) (*ProviderAPIError, bool) {
-	if reduced, ok := r.reduceFromStreamError(err, openAIResponseStatusCode(rawResp)); ok {
+	if reduced, ok := r.reduceFromStreamError(err, newOpenAIResponseStatus(rawResp)); ok {
 		return reduced, true
 	}
 	if reduced, ok := r.reduceFromSDK(err); ok {
@@ -59,15 +59,18 @@ func (r opaqueProviderErrorReducer) Reduce(err error, rawResp *http.Response) (*
 	return nil, false
 }
 
-func (r openAICompatibleErrorReducer) reduceFromStreamError(err error, statusCode int) (*ProviderAPIError, bool) {
+func (r openAICompatibleErrorReducer) reduceFromStreamError(err error, responseStatus *openAIResponseStatus) (*ProviderAPIError, bool) {
 	if err == nil {
+		return nil, false
+	}
+	if responseStatus == nil {
 		return nil, false
 	}
 	var streamErr *ssestream.StreamError
 	if !errors.As(err, &streamErr) {
 		return nil, false
 	}
-	reduced, ok := mapOpenAIStreamErrorPayload(r.providerID, streamErr.Event.Data, err, statusCode)
+	reduced, ok := mapOpenAIStreamErrorPayload(r.providerID, streamErr.Event.Data, err, responseStatus.Code)
 	if !ok {
 		return nil, false
 	}

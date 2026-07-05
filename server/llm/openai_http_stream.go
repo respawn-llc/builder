@@ -119,14 +119,24 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 	}
 }
 
-func (a *responseStreamAccumulator) Err(providerID string, statusCode int) error {
+func (a *responseStreamAccumulator) Err(providerID string, responseStatus *openAIResponseStatus) error {
 	if a == nil || a.responseError == nil {
 		return nil
 	}
-	if a.responseError.ProviderContract != nil {
-		return llmerrors.NewProviderContractError(providerID, statusCode, errors.New(a.responseError.ProviderContract.Message))
+	if responseStatus == nil {
+		message := strings.TrimSpace(a.responseError.Raw)
+		if a.responseError.ProviderContract != nil {
+			message = a.responseError.ProviderContract.Message
+		}
+		if message == "" {
+			message = "unrecognized stream error"
+		}
+		return errors.New(message)
 	}
-	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil, statusCode); ok {
+	if a.responseError.ProviderContract != nil {
+		return llmerrors.NewProviderContractError(providerID, responseStatus.Code, errors.New(a.responseError.ProviderContract.Message))
+	}
+	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil, responseStatus.Code); ok {
 		return err
 	}
 	message := strings.TrimSpace(a.responseError.Raw)
@@ -135,6 +145,7 @@ func (a *responseStreamAccumulator) Err(providerID string, statusCode int) error
 	}
 	return &ProviderAPIError{
 		ProviderID: providerID,
+		StatusCode: responseStatus.Code,
 		Code:       UnifiedErrorCodeUnknown,
 		Message:    message,
 		Raw:        message,
