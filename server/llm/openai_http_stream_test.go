@@ -179,6 +179,7 @@ func TestGenerateStream_RejectsCompletedEventWithoutResponsePayload(t *testing.T
 	}{
 		{name: "missing_response", data: `{"type":"response.completed","sequence_number":1}`},
 		{name: "empty_response", data: `{"type":"response.completed","sequence_number":1,"response":{}}`},
+		{name: "null_output", data: `{"type":"response.completed","sequence_number":1,"response":{"output":null}}`},
 	}
 
 	for _, tc := range cases {

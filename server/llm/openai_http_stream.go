@@ -87,7 +87,7 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 		a.emitReasoningSummaryDelta(key)
 	case "response.completed":
 		completedEvent := evt.AsResponseCompleted()
-		if !completedEvent.JSON.Response.Valid() || !completedEvent.Response.JSON.Output.Valid() {
+		if !responseCompletedEventHasValidPayload(completedEvent) {
 			a.responseError = &responseStreamError{
 				Raw: completedEvent.RawJSON(),
 				ProviderContract: &responseStreamProviderContract{
@@ -117,6 +117,17 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 	case "error":
 		a.responseError = &responseStreamError{Raw: evt.RawJSON()}
 	}
+}
+
+func responseCompletedEventHasValidPayload(evt responses.ResponseCompletedEvent) bool {
+	if !evt.JSON.Response.Valid() || !evt.Response.JSON.Output.Valid() {
+		return false
+	}
+	var output []json.RawMessage
+	if err := json.Unmarshal([]byte(evt.Response.JSON.Output.Raw()), &output); err != nil {
+		return false
+	}
+	return output != nil
 }
 
 func (a *responseStreamAccumulator) Err(providerID string, responseStatus *openAIResponseStatus) error {
