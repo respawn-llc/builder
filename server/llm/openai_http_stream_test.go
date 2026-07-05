@@ -185,6 +185,11 @@ func TestGenerateStream_RejectsPreTerminalMalformedResponsesStream(t *testing.T)
 			``,
 			``,
 		}, "\n"),
+		"invalid_schema_before_terminal": strings.Join([]string{
+			`data: {"type":1}`,
+			``,
+			``,
+		}, "\n"),
 	}
 
 	for name, stream := range cases {

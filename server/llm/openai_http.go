@@ -209,6 +209,10 @@ func isOpenAIResponsesStreamFramingError(err error) bool {
 	if errors.As(err, &syntaxErr) {
 		return true
 	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return true
+	}
 	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
 }
 

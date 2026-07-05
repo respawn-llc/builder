@@ -41,6 +41,9 @@ func TestIsNonRetriableModelError(t *testing.T) {
 	if !IsNonRetriableModelError(&ProviderAPIError{ProviderID: "openai", StatusCode: 0, Code: UnifiedErrorCodeProviderContract, Message: "unknown provider contract"}) {
 		t.Fatal("expected provider contract error to be non-retriable")
 	}
+	if !IsNonRetriableModelError(&ProviderAPIError{ProviderID: "openai", StatusCode: 0, Code: UnifiedErrorCodeUnknown, ProviderType: "response.incomplete", ProviderCode: "max_output_tokens"}) {
+		t.Fatal("expected response.incomplete terminal error to be non-retriable")
+	}
 	if !IsNonRetriableModelError(&AuthError{Err: errors.New("token refresh failed")}) {
 		t.Fatal("expected AuthError to be non-retriable")
 	}
