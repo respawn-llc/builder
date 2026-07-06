@@ -36,16 +36,18 @@ func (r uiKeyFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		switch m.inputModeState().Mode {
 		case uiInputModeAsk:
+			prevSurface := m.surface()
 			next, cmd := m.askController().handleKey(keyMsg)
 			nextModel := next.(*uiModel)
 			nextModel.layout().syncViewport()
-			repaintCmd := nextModel.renderNativeOngoingSurface()
+			repaintCmd := nextModel.renderNativeOngoingSurfaceAfterKey(prevSurface)
 			return handledUIFeatureUpdate(nextModel, tea.Batch(cmd, repaintCmd))
 		default:
+			prevSurface := m.surface()
 			next, cmd := m.inputController().handleKey(keyMsg)
 			nextModel := next.(*uiModel)
 			nextModel.layout().syncViewport()
-			repaintCmd := nextModel.renderNativeOngoingSurface()
+			repaintCmd := nextModel.renderNativeOngoingSurfaceAfterKey(prevSurface)
 			return handledUIFeatureUpdate(nextModel, tea.Batch(cmd, repaintCmd))
 		}
 	}
@@ -58,4 +60,15 @@ func (r uiKeyFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		return handledUIFeatureUpdate(m, m.renderNativeOngoingSurface())
 	}
 	return uiFeatureUpdateResult{}
+}
+
+func (m *uiModel) renderNativeOngoingSurfaceAfterKey(prevSurface uiSurface) tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	nextSurface := m.surface()
+	if isOngoingNormalBufferRestoreTransition(prevSurface, nextSurface) {
+		return nil
+	}
+	return m.renderNativeOngoingSurface()
 }

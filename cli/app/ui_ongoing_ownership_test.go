@@ -8,6 +8,8 @@ import (
 	"core/cli/tui"
 	"core/cli/tui/ongoing"
 	"core/shared/clientui"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestOngoingSurfaceTransitionQueuesTranscriptWhileDetailActive(t *testing.T) {
@@ -84,6 +86,38 @@ func TestTranscriptModeReturnDrainsOngoingOnlyAfterPostExitMessage(t *testing.T)
 
 	if cmd := m.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{target: tui.ModeOngoing}); cmd == nil {
 		t.Fatal("transition to ongoing did not return exit-alt-screen command")
+	}
+	if len(surface.calls) != 0 {
+		t.Fatalf("surface calls before post-exit message = %v, want none", surface.calls)
+	}
+
+	if _, cmd := m.Update(ongoingNormalBufferOwnedMsg{owned: true}); cmd != nil {
+		t.Fatalf("post-exit ownership update returned command, want nil")
+	}
+	if got, want := surface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls after post-exit message = %v, want %v", got, want)
+	}
+}
+
+func TestDetailReturnKeyDoesNotRenderOngoingBeforePostExitMessage(t *testing.T) {
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	m := newProjectedStaticUIModel(withUIOngoingTranscriptController(controller))
+	if cmd := m.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{target: tui.ModeDetail}); cmd == nil {
+		t.Fatal("transition to detail did not return alt-screen command")
+	}
+	if _, err := controller.Accept(ongoingTranscriptMessage(2, clientui.TranscriptMessageRuntimeActivity)); err != nil {
+		t.Fatalf("accept queued message: %v", err)
+	}
+	surface.calls = nil
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m = next.(*uiModel)
+	if cmd == nil {
+		t.Fatal("detail return key did not return exit-alt-screen command")
 	}
 	if len(surface.calls) != 0 {
 		t.Fatalf("surface calls before post-exit message = %v, want none", surface.calls)

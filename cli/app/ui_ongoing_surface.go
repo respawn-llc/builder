@@ -96,7 +96,7 @@ func (m *uiModel) ongoingOwnershipAfterSurfaceTransitionCmd(prev, next uiSurface
 	if m == nil || m.ongoingTranscript == nil || prev == next {
 		return nil
 	}
-	if prev.wantsAltScreen() && next == uiSurfaceOngoingTranscript {
+	if isOngoingNormalBufferRestoreTransition(prev, next) {
 		return func() tea.Msg {
 			return ongoingNormalBufferOwnedMsg{owned: true}
 		}

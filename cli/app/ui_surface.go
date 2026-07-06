@@ -52,6 +52,10 @@ func (surface uiSurface) wantsAltScreen() bool {
 	}
 }
 
+func isOngoingNormalBufferRestoreTransition(prev, next uiSurface) bool {
+	return prev.wantsAltScreen() && next == uiSurfaceOngoingTranscript
+}
+
 // wantsAlternateScroll reports whether a surface enables terminal alternate-scroll
 // (`?1007`) while active. Per docs/dev/specs/tui-transcript.md, every alt-screen
 // surface enables it except ongoing (never) and the rollback/edit picker (which
