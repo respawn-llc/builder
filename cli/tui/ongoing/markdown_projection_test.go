@@ -3,6 +3,7 @@ package ongoing
 import (
 	"bytes"
 	"reflect"
+	"strings"
 	"testing"
 
 	"core/shared/clientui"
@@ -138,4 +139,34 @@ type countingMarkdownRenderer struct {
 func (r *countingMarkdownRenderer) Render(source string, width int) []string {
 	r.calls++
 	return renderPlainMarkdownRows(source, width)
+}
+
+func renderPlainMarkdownRows(source string, width int) []string {
+	source = strings.TrimRight(source, "\n")
+	if source == "" {
+		return nil
+	}
+	var rows []string
+	for _, line := range strings.Split(source, "\n") {
+		if line == "" {
+			continue
+		}
+		rows = append(rows, wrapPlainLine(line, width)...)
+	}
+	return rows
+}
+
+func wrapPlainLine(line string, width int) []string {
+	if width <= 0 || len(line) <= width {
+		return []string{line}
+	}
+	var rows []string
+	for len(line) > width {
+		rows = append(rows, line[:width])
+		line = line[width:]
+	}
+	if line != "" {
+		rows = append(rows, line)
+	}
+	return rows
 }

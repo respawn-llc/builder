@@ -66,6 +66,44 @@ func TestOngoingTranscriptControllerSeedsHydrationAppOwnedFrameSections(t *testi
 	}
 }
 
+func TestOngoingTranscriptControllerRendersHydrationLiveFactsWithOnlyNonOngoingRows(t *testing.T) {
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+
+	if _, err := controller.Accept(clientui.TranscriptMessage{
+		Sequence: 1,
+		Kind:     clientui.TranscriptMessageHydration,
+		Hydration: &clientui.TranscriptHydration{
+			CommittedRows: []clientui.TranscriptCommittedRow{
+				{
+					Visibility: clientui.EntryVisibilityDetail,
+					Kind:       clientui.TranscriptRowUser,
+					User:       &clientui.TranscriptUserRow{Text: "detail-only"},
+				},
+				{
+					Visibility: clientui.EntryVisibilityHidden,
+					Kind:       clientui.TranscriptRowUser,
+					User:       &clientui.TranscriptUserRow{Text: "hidden"},
+				},
+			},
+			PendingSessionPrompts: []clientui.TranscriptPendingSessionPrompt{{
+				ID:    "11111111-1111-4111-8111-111111111111",
+				State: clientui.TranscriptPromptPending,
+				Data:  clientui.TranscriptPendingSessionPromptData{Question: "Approve command?"},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+
+	if got, want := surface.callKinds(), []string{"apply", "render"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls = %v, want %v", got, want)
+	}
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingPrompt), []string{"Approve command?"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("prompt section lines = %v, want %v", got, want)
+	}
+}
+
 func TestOngoingTranscriptControllerLiveAppOwnedMessageKindsRenderFrameSections(t *testing.T) {
 	tests := []struct {
 		name    string

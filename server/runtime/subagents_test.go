@@ -11,6 +11,7 @@ import (
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 func TestSubagentsMetaMessageRendersCallableNonNoopRoles(t *testing.T) {
@@ -259,6 +260,21 @@ func TestSplitMetaContextMessagesTreatsSubagentsAsMeta(t *testing.T) {
 	}
 	if len(transcript) != 1 || transcript[0].Role != llm.RoleUser {
 		t.Fatalf("expected user transcript, got %+v", transcript)
+	}
+}
+
+func TestSubagentsMetaContextVisibilityIsDetailOnly(t *testing.T) {
+	entry, ok := visibleDeveloperChatEntry(llm.Message{
+		Role:        llm.RoleDeveloper,
+		MessageType: llm.MessageTypeSubagents,
+		Content:     "Available subagent roles:",
+	})
+
+	if !ok {
+		t.Fatal("subagents meta context did not project to transcript entry")
+	}
+	if entry.Visibility != transcript.EntryVisibilityDetail {
+		t.Fatalf("subagents visibility = %q, want %q", entry.Visibility, transcript.EntryVisibilityDetail)
 	}
 }
 

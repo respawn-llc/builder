@@ -121,14 +121,27 @@ func (m *uiModel) setOngoingNormalBufferOwned(owned bool) tea.Cmd {
 		}
 		if m.pendingOngoingWidthReset {
 			m.pendingOngoingWidthReset = false
+			m.pendingOngoingResizeRepaint = false
 			widthRehydrationCmd = m.scheduleOngoingWidthRehydration()
 		}
+	}
+	resizeRepaint := owned && m.pendingOngoingResizeRepaint && widthRehydrationCmd == nil
+	if resizeRepaint {
+		m.pendingOngoingResizeRepaint = false
 	}
 	result, err := m.ongoingTranscript.SetNormalBufferOwned(owned)
 	if err != nil {
 		return m.handleOngoingSurfaceError(err)
 	}
-	return tea.Batch(m.handleOngoingResult(result), widthRehydrationCmd)
+	resultCmd := m.handleOngoingResult(result)
+	if resizeRepaint && result.Action == ongoing.ResultNoop {
+		repaintResult, repaintErr := m.ongoingTranscript.Render()
+		if repaintErr != nil {
+			return m.handleOngoingSurfaceError(repaintErr)
+		}
+		return tea.Batch(resultCmd, widthRehydrationCmd, m.handleOngoingResult(repaintResult))
+	}
+	return tea.Batch(resultCmd, widthRehydrationCmd)
 }
 
 func waitOngoingTranscriptEvent(events <-chan ongoingTranscriptEvent) tea.Cmd {
@@ -181,6 +194,7 @@ func (m *uiModel) applyPendingOngoingScratchReset() tea.Cmd {
 	}
 	reason := *m.pendingOngoingScratchReset
 	m.pendingOngoingScratchReset = nil
+	m.pendingOngoingResizeRepaint = false
 	if m.ongoingSurface == nil {
 		return nil
 	}

@@ -75,6 +75,7 @@ func messageTypeTranscriptVisibility(messageType llm.MessageType) transcript.Ent
 	case llm.MessageTypeAgentsMD,
 		llm.MessageTypeSkills,
 		llm.MessageTypeEnvironment,
+		llm.MessageTypeSubagents,
 		llm.MessageTypeCompactionSoonReminder,
 		llm.MessageTypeHandoffFutureMessage,
 		llm.MessageTypeManualCompactionCarryover,

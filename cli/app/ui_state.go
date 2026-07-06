@@ -124,25 +124,26 @@ type uiInputFeatureState struct {
 }
 
 type uiPresentationFeatureState struct {
-	theme                      string
-	activeSurface              uiSurface
-	altScreenActive            bool
-	terminalFocus              *terminalFocusState
-	terminalCursor             *uiTerminalCursorState
-	rendererOutputGate         *uiRendererOutputGateState
-	ongoingSurface             *ongoing.Surface
-	ongoingTranscript          *ongoingTranscriptController
-	ongoingEvents              <-chan ongoingTranscriptEvent
-	requestOngoingOpen         func()
-	ongoingWidthToken          uint64
-	pendingOngoingScratchReset *ongoing.RehydrateReason
-	pendingOngoingWidthReset   bool
-	termWidth                  int
-	termHeight                 int
-	windowSizeKnown            bool
-	helpVisible                bool
-	startupCmds                []tea.Cmd
-	uiMainThread               uiMainThreadState
+	theme                       string
+	activeSurface               uiSurface
+	altScreenActive             bool
+	terminalFocus               *terminalFocusState
+	terminalCursor              *uiTerminalCursorState
+	rendererOutputGate          *uiRendererOutputGateState
+	ongoingSurface              *ongoing.Surface
+	ongoingTranscript           *ongoingTranscriptController
+	ongoingEvents               <-chan ongoingTranscriptEvent
+	requestOngoingOpen          func()
+	ongoingWidthToken           uint64
+	pendingOngoingScratchReset  *ongoing.RehydrateReason
+	pendingOngoingWidthReset    bool
+	pendingOngoingResizeRepaint bool
+	termWidth                   int
+	termHeight                  int
+	windowSizeKnown             bool
+	helpVisible                 bool
+	startupCmds                 []tea.Cmd
+	uiMainThread                uiMainThreadState
 }
 
 type uiConversationFeatureState struct {

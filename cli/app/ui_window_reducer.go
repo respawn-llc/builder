@@ -18,6 +18,9 @@ func (r uiWindowFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	m := r.model
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		previousWidth := m.termWidth
+		previousHeight := m.termHeight
+		previousKnown := m.windowSizeKnown
 		m.termWidth = msg.Width
 		m.termHeight = msg.Height
 		m.windowSizeKnown = true
@@ -27,6 +30,9 @@ func (r uiWindowFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 				result := m.ongoingSurface.ObserveResize(ongoing.Size{Width: msg.Width, Height: msg.Height})
 				if result.Action == ongoing.ResultScheduleWidthRehydration {
 					m.pendingOngoingWidthReset = true
+					m.pendingOngoingResizeRepaint = false
+				} else if !previousKnown || previousWidth != msg.Width || previousHeight != msg.Height {
+					m.pendingOngoingResizeRepaint = true
 				}
 			}
 			return handledUIFeatureUpdate(m, nil)

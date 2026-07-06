@@ -169,7 +169,7 @@ func (m *uiModel) Init() tea.Cmd {
 		cmds = append(cmds, m.startupCmds...)
 		m.startupCmds = nil
 	}
-	if m.nativeOngoingSurfaceActive() {
+	if m.windowSizeKnown && m.nativeOngoingSurfaceActive() {
 		if result, err := m.ongoingSurface.Render(m.ongoingFrameInput()); err != nil {
 			cmds = append(cmds, m.handleOngoingSurfaceError(err))
 		} else if cmd := m.handleOngoingResult(result); cmd != nil {

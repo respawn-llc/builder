@@ -3,8 +3,10 @@ package transcriptrender
 import (
 	"slices"
 	"testing"
+	"unicode"
 
 	"core/shared/clientui"
+	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
 	"github.com/charmbracelet/lipgloss"
@@ -106,6 +108,52 @@ func TestCollapsedToolResultSummarySanitizesMetadataBeforeInlineRender(t *testin
 	meta := spans[len(spans)-1]
 	if meta.Text != "passed[31m" || meta.Role != StyleRoleNotice || !meta.Faint {
 		t.Fatalf("sanitized result summary span = %+v, want sanitized faint notice metadata", meta)
+	}
+}
+
+func TestCommittedRowsStripUnicodeControlCharacters(t *testing.T) {
+	row := clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowUser,
+		User: &clientui.TranscriptUserRow{Text: "safe\u009b31m text\u009d"},
+	}
+
+	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
+
+	for _, r := range rendered.Lines[0].Plain() {
+		if unicode.IsControl(r) {
+			t.Fatalf("sanitized committed row still contains control rune %U", r)
+		}
+	}
+}
+
+func TestCacheWarningNoticeRendersStructuredPayload(t *testing.T) {
+	warning := transcript.CacheWarning{
+		Scope:           transcript.CacheWarningScopeReviewer,
+		Reason:          transcript.CacheWarningReasonNonPostfix,
+		LostInputTokens: 1500,
+	}
+	row := clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Reason:   clientui.TranscriptNoticeReason(transcript.NoticeReasonCacheWarning),
+			Severity: clientui.TranscriptNoticeWarning,
+			Data: clientui.TranscriptNoticeData{
+				CacheWarning: &clientui.TranscriptCacheWarningData{
+					Scope:           string(warning.Scope),
+					Reason:          string(warning.Reason),
+					LostInputTokens: warning.LostInputTokens,
+				},
+			},
+		},
+	}
+
+	role, text := noticeRoleAndText(row.Notice, row.Visibility, ModeOngoing)
+
+	if role != StyleRoleWarning {
+		t.Fatalf("cache warning role = %q, want warning role", role)
+	}
+	if got, want := text, transcript.CacheWarningText(warning); got != want {
+		t.Fatalf("cache warning notice text = %q, want shared formatter output %q", got, want)
 	}
 }
 

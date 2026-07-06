@@ -8,6 +8,8 @@ import (
 
 	"core/cli/tui/ongoing"
 	"core/shared/clientui"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func withUIOngoingTranscriptController(controller *ongoingTranscriptController) UIOption {
@@ -52,6 +54,23 @@ func TestNativeOngoingSurfaceWritesBypassRendererGate(t *testing.T) {
 
 	if got, want := out.String(), "\x1b[r\x1b[?6l\x1b[3;1H\x1b[2K\x1b[3;1Hready\x1b[?25l"; got != want {
 		t.Fatalf("ongoing surface bytes = %q, want %q", got, want)
+	}
+}
+
+func TestNativeOngoingInitDefersRenderUntilWindowSizeKnown(t *testing.T) {
+	var out bytes.Buffer
+	m := newProjectedStaticUIModel(WithUIOngoingSurface(ongoing.NewSurface(&out)))
+
+	_ = m.Init()
+
+	if out.Len() != 0 {
+		t.Fatalf("native ongoing init wrote before real window size: %q", out.String())
+	}
+
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 8})
+
+	if out.Len() == 0 {
+		t.Fatal("native ongoing surface did not render after first window size")
 	}
 }
 

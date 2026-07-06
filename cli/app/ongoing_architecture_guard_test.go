@@ -21,8 +21,14 @@ func TestOngoingClientArchitectureGuards(t *testing.T) {
 	if len(violations) == 0 {
 		return
 	}
-	sort.Strings(violations)
-	t.Fatalf("ongoing native scrollback architecture violations:\n%s", strings.Join(violations, "\n"))
+	sort.Slice(violations, func(i, j int) bool {
+		return violations[i].String() < violations[j].String()
+	})
+	formatted := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		formatted = append(formatted, violation.String())
+	}
+	t.Fatalf("ongoing native scrollback architecture violations:\n%s", strings.Join(formatted, "\n"))
 }
 
 func TestOngoingClientArchitectureGuardsRejectNegativeFixture(t *testing.T) {
@@ -37,7 +43,7 @@ type badMirror struct {
 `
 		pkgs, root := parseOngoingArchitectureFixture(t, "cli/app/ui.go", source)
 		violations := collectOngoingArchitectureViolations(pkgs, root)
-		assertOngoingArchitectureViolation(t, violations, "committed transcript rows may not be retained")
+		assertOngoingArchitectureViolation(t, violations, ongoingArchitectureViolationCommittedRowsRetained)
 	})
 
 	t.Run("page read in ongoing path", func(t *testing.T) {
@@ -48,18 +54,18 @@ func badPageRead(client interface{ GetSessionTranscriptPage() }) {
 `
 		pkgs, root := parseOngoingArchitectureFixture(t, "cli/app/ongoing_bad.go", source)
 		violations := collectOngoingArchitectureViolations(pkgs, root)
-		assertOngoingArchitectureViolation(t, violations, "ongoing startup/rehydration must use transcript subscription hydration")
+		assertOngoingArchitectureViolation(t, violations, ongoingArchitectureViolationPageRead)
 	})
 }
 
-func assertOngoingArchitectureViolation(t *testing.T, violations []string, reason string) {
+func assertOngoingArchitectureViolation(t *testing.T, violations []ongoingArchitectureViolation, reason ongoingArchitectureViolationReason) {
 	t.Helper()
 	for _, violation := range violations {
-		if strings.Contains(violation, reason) {
+		if violation.Reason == reason {
 			return
 		}
 	}
-	t.Fatalf("architecture violations = %v, want reason containing %q", violations, reason)
+	t.Fatalf("architecture violations = %v, want reason %q", violations, reason)
 }
 
 func loadOngoingArchitectureGuardPackages(t *testing.T, repoRoot string) []*packages.Package {
@@ -78,8 +84,8 @@ func loadOngoingArchitectureGuardPackages(t *testing.T, repoRoot string) []*pack
 	return pkgs
 }
 
-func collectOngoingArchitectureViolations(pkgs []*packages.Package, repoRoot string) []string {
-	var violations []string
+func collectOngoingArchitectureViolations(pkgs []*packages.Package, repoRoot string) []ongoingArchitectureViolation {
+	var violations []ongoingArchitectureViolation
 	for _, pkg := range pkgs {
 		if pkg.Fset == nil {
 			continue
@@ -96,27 +102,27 @@ func collectOngoingArchitectureViolations(pkgs []*packages.Package, repoRoot str
 	return violations
 }
 
-func ongoingArchitectureViolationsInFile(pkg *packages.Package, file *ast.File, relPath string) []string {
-	var violations []string
+func ongoingArchitectureViolationsInFile(pkg *packages.Package, file *ast.File, relPath string) []ongoingArchitectureViolation {
+	var violations []ongoingArchitectureViolation
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch typed := node.(type) {
 		case *ast.ArrayType:
 			if typeName(pkg.TypesInfo.TypeOf(typed.Elt)) == "core/shared/clientui.TranscriptCommittedRow" && !isSanctionedCommittedRowCollectionPath(relPath) {
-				violations = append(violations, ongoingArchitectureViolation(pkg, typed.Pos(), relPath, "committed transcript rows may not be retained in client production state outside the sanctioned ongoing render path"))
+				violations = append(violations, newOngoingArchitectureViolation(pkg, typed.Pos(), relPath, ongoingArchitectureViolationCommittedRowsRetained))
 			}
 		case *ast.SelectorExpr:
 			if isForbiddenOngoingTranscriptReadSelector(typed.Sel.Name) && isOngoingDeliveryOrSurfacePath(relPath) {
-				violations = append(violations, ongoingArchitectureViolation(pkg, typed.Pos(), relPath, "ongoing startup/rehydration must use transcript subscription hydration, not page/tail/gap reads"))
+				violations = append(violations, newOngoingArchitectureViolation(pkg, typed.Pos(), relPath, ongoingArchitectureViolationPageRead))
 			}
 			if isClientUITranscriptSymbol(pkg.TypesInfo.Uses[typed.Sel]) && isUncountedAppPath(relPath) {
-				violations = append(violations, ongoingArchitectureViolation(pkg, typed.Pos(), relPath, "app transcript-message handling for ongoing must live in counted session_transcript/ui_ongoing files"))
+				violations = append(violations, newOngoingArchitectureViolation(pkg, typed.Pos(), relPath, ongoingArchitectureViolationUncountedAppPath))
 			}
 			if isOngoingRawWriterSelector(typed.Sel.Name) && isAppPath(relPath) {
-				violations = append(violations, ongoingArchitectureViolation(pkg, typed.Pos(), relPath, "cli/app must call ongoing Surface methods, not raw ongoing writer helpers"))
+				violations = append(violations, newOngoingArchitectureViolation(pkg, typed.Pos(), relPath, ongoingArchitectureViolationRawWriter))
 			}
 		case *ast.Ident:
 			if isForbiddenOngoingTranscriptReadSelector(typed.Name) && isOngoingDeliveryOrSurfacePath(relPath) {
-				violations = append(violations, ongoingArchitectureViolation(pkg, typed.Pos(), relPath, "ongoing startup/rehydration must use transcript subscription hydration, not page/tail/gap reads"))
+				violations = append(violations, newOngoingArchitectureViolation(pkg, typed.Pos(), relPath, ongoingArchitectureViolationPageRead))
 			}
 		}
 		return true
@@ -157,9 +163,49 @@ func writeTestFile(t *testing.T, path, contents string) {
 	}
 }
 
-func ongoingArchitectureViolation(pkg *packages.Package, pos token.Pos, relPath, reason string) string {
+type ongoingArchitectureViolationReason string
+
+const (
+	ongoingArchitectureViolationCommittedRowsRetained ongoingArchitectureViolationReason = "committed_rows_retained"
+	ongoingArchitectureViolationPageRead              ongoingArchitectureViolationReason = "page_read"
+	ongoingArchitectureViolationUncountedAppPath      ongoingArchitectureViolationReason = "uncounted_app_path"
+	ongoingArchitectureViolationRawWriter             ongoingArchitectureViolationReason = "raw_writer"
+)
+
+type ongoingArchitectureViolation struct {
+	RelPath string
+	Line    int
+	Column  int
+	Reason  ongoingArchitectureViolationReason
+}
+
+func (v ongoingArchitectureViolation) String() string {
+	return fmt.Sprintf("%s:%d:%d: %s", v.RelPath, v.Line, v.Column, v.Reason.Message())
+}
+
+func (r ongoingArchitectureViolationReason) Message() string {
+	switch r {
+	case ongoingArchitectureViolationCommittedRowsRetained:
+		return "committed transcript rows may not be retained in client production state outside the sanctioned ongoing render path"
+	case ongoingArchitectureViolationPageRead:
+		return "ongoing startup/rehydration must use transcript subscription hydration, not page/tail/gap reads"
+	case ongoingArchitectureViolationUncountedAppPath:
+		return "app transcript-message handling for ongoing must live in counted session_transcript/ui_ongoing files"
+	case ongoingArchitectureViolationRawWriter:
+		return "cli/app must call ongoing Surface methods, not raw ongoing writer helpers"
+	default:
+		return string(r)
+	}
+}
+
+func newOngoingArchitectureViolation(pkg *packages.Package, pos token.Pos, relPath string, reason ongoingArchitectureViolationReason) ongoingArchitectureViolation {
 	position := pkg.Fset.Position(pos)
-	return fmt.Sprintf("%s:%d:%d: %s", relPath, position.Line, position.Column, reason)
+	return ongoingArchitectureViolation{
+		RelPath: relPath,
+		Line:    position.Line,
+		Column:  position.Column,
+		Reason:  reason,
+	}
 }
 
 func ongoingArchitectureRelativePath(repoRoot, path string) string {

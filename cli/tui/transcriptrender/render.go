@@ -3,8 +3,10 @@ package transcriptrender
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"core/shared/clientui"
+	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
 	"github.com/charmbracelet/lipgloss"
@@ -372,11 +374,12 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row == nil {
 		return StyleRoleNotice, "notice"
 	}
-	typedCompactText := firstNonEmpty(row.Data.CompactLabel, row.Data.CondensedText, noticeLegacyText(row), row.Data.SourcePath)
+	cacheWarningText := cacheWarningNoticeText(row.Data.CacheWarning)
+	typedCompactText := firstNonEmpty(row.Data.CompactLabel, row.Data.CondensedText, noticeLegacyText(row), cacheWarningText, row.Data.SourcePath)
 	compactText := firstNonEmpty(typedCompactText, string(row.Reason), "notice")
 	text := compactText
 	if mode == ModeDetailExpanded {
-		text = firstNonBlankPreservingWhitespace(noticeLegacyText(row), row.Data.CondensedText, row.Data.CompactLabel, row.Data.SourcePath)
+		text = firstNonBlankPreservingWhitespace(noticeLegacyText(row), row.Data.CondensedText, row.Data.CompactLabel, cacheWarningText, row.Data.SourcePath)
 		if strings.TrimSpace(text) == "" {
 			text = firstNonEmpty(string(row.Reason), "notice")
 		}
@@ -399,6 +402,17 @@ func noticeLegacyText(row *clientui.TranscriptNoticeRow) string {
 		return ""
 	}
 	return *row.Data.LegacyText
+}
+
+func cacheWarningNoticeText(data *clientui.TranscriptCacheWarningData) string {
+	if data == nil {
+		return ""
+	}
+	return transcript.CacheWarningText(transcript.CacheWarning{
+		Scope:           transcript.CacheWarningScope(strings.TrimSpace(data.Scope)),
+		Reason:          transcript.CacheWarningReason(strings.TrimSpace(data.Reason)),
+		LostInputTokens: data.LostInputTokens,
+	})
 }
 
 func isPatchTool(meta toolMeta) bool {
@@ -521,7 +535,7 @@ func safeTranscriptText(text string) string {
 			out.WriteRune('\n')
 		case r == '\t':
 			out.WriteRune(' ')
-		case r < 0x20 || r == 0x7f:
+		case unicode.IsControl(r):
 			continue
 		default:
 			out.WriteRune(r)

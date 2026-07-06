@@ -110,6 +110,57 @@ func TestWindowResizeWhileDetailOwnsTerminalRequestsWidthRehydrationOnReturn(t *
 	}
 }
 
+func TestHeightOnlyWindowResizeWhileDetailOwnsTerminalRepaintsOnReturn(t *testing.T) {
+	var raw bytes.Buffer
+	nativeSurface := ongoing.NewSurface(&raw)
+	surface := &ongoingSurfaceSpy{}
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUIOngoingSurface(nativeSurface),
+	), 80, 24)
+	controller := newOngoingTranscriptController(surface, m.ongoingFrameInput)
+	m.ongoingTranscript = controller
+	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+
+	if cmd := m.activateSurface(uiSurfaceTranscriptDetail); cmd == nil {
+		t.Fatal("expected detail activation command")
+	}
+	surface.calls = nil
+	raw.Reset()
+
+	result := m.windowReducer().Update(tea.WindowSizeMsg{Width: 80, Height: 30})
+	if !result.handled {
+		t.Fatal("window resize was not handled")
+	}
+	if raw.Len() != 0 {
+		t.Fatalf("ongoing surface wrote raw bytes while detail owned terminal: %q", raw.String())
+	}
+	if !m.pendingOngoingResizeRepaint {
+		t.Fatal("height-only off-surface resize did not mark pending ongoing repaint")
+	}
+
+	if cmd := m.activateSurface(uiSurfaceOngoingTranscript); cmd == nil {
+		t.Fatal("expected ongoing activation command")
+	}
+	if len(surface.calls) != 0 {
+		t.Fatalf("surface calls before ownership restore = %v, want none", surface.calls)
+	}
+
+	if _, cmd := m.Update(ongoingNormalBufferOwnedMsg{owned: true}); cmd != nil {
+		t.Fatalf("post-exit ownership update returned command, want nil")
+	}
+	if got, want := surface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls after ongoing restore = %v, want %v", got, want)
+	}
+	if got, want := surface.calls[len(surface.calls)-1].frame.Size.Height, 30; got != want {
+		t.Fatalf("repaint frame height = %d, want %d", got, want)
+	}
+	if m.pendingOngoingResizeRepaint {
+		t.Fatal("pending height repaint marker was not cleared")
+	}
+}
+
 func TestWindowResizeKeepsControllerLiveFrameSections(t *testing.T) {
 	var raw bytes.Buffer
 	nativeSurface := ongoing.NewSurface(&raw)

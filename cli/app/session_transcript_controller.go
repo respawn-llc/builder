@@ -8,6 +8,7 @@ import (
 	"core/cli/tui/ongoing"
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+	"core/shared/transcript"
 )
 
 const ongoingTranscriptQueueLimit = 1000
@@ -254,7 +255,19 @@ func (c *ongoingTranscriptController) applyHydrationAppOwnedFacts(hydration *cli
 }
 
 func hydrationHasNoTerminalRows(hydration *clientui.TranscriptHydration) bool {
-	return hydration == nil || (len(hydration.CommittedRows) == 0 && hydration.ActiveAssistantStream == nil)
+	if hydration == nil {
+		return true
+	}
+	if hydration.ActiveAssistantStream != nil {
+		return false
+	}
+	for _, row := range hydration.CommittedRows {
+		switch transcript.NormalizeEntryVisibility(transcript.EntryVisibility(row.Visibility)) {
+		case transcript.EntryVisibilityOngoing, transcript.EntryVisibilityOngoingCollapsed:
+			return false
+		}
+	}
+	return true
 }
 
 func (c *ongoingTranscriptController) frameInput() ongoing.FrameInput {
