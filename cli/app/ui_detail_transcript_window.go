@@ -33,6 +33,11 @@ type uiDetailTranscriptWindow struct {
 	lastRequest  clientui.TranscriptPageRequest
 }
 
+type uiDetailTranscriptMergeResult struct {
+	addedEntries        int
+	trimmedFrontEntries []clientui.ChatEntry
+}
+
 func (w uiDetailTranscriptWindow) page() clientui.TranscriptPage {
 	return clientui.TranscriptPage{
 		SessionID:    w.sessionID,
@@ -131,16 +136,16 @@ func (w *uiDetailTranscriptWindow) replace(page clientui.TranscriptPage) {
 	w.trimToSegments(len(w.entries))
 }
 
-func (w *uiDetailTranscriptWindow) prependCursorPage(page clientui.TranscriptPage) {
+func (w *uiDetailTranscriptWindow) prependCursorPage(page clientui.TranscriptPage) uiDetailTranscriptMergeResult {
 	if w == nil {
-		return
+		return uiDetailTranscriptMergeResult{}
 	}
 	if !w.loaded || transcriptPageSessionChanged(w.sessionID, page.SessionID) {
 		w.replace(page)
-		return
+		return uiDetailTranscriptMergeResult{}
 	}
 	if w.hasSegment(page) {
-		return
+		return uiDetailTranscriptMergeResult{}
 	}
 	pageEntries := cloneDetailChatEntries(page.Entries)
 	if len(pageEntries) == 0 {
@@ -153,7 +158,7 @@ func (w *uiDetailTranscriptWindow) prependCursorPage(page clientui.TranscriptPag
 		}
 		w.refreshBounds()
 		w.loaded = true
-		return
+		return uiDetailTranscriptMergeResult{}
 	}
 	merged := make([]clientui.ChatEntry, 0, len(pageEntries)+len(w.entries))
 	merged = append(merged, pageEntries...)
@@ -164,20 +169,24 @@ func (w *uiDetailTranscriptWindow) prependCursorPage(page clientui.TranscriptPag
 	}
 	w.segments = append([]residentSegmentMeta{segmentMetaFromPage(0, page)}, w.segments...)
 	w.refreshBounds()
-	w.trimToSegments(0)
+	trimmedFrontEntries := w.trimToSegments(0)
 	w.loaded = true
+	return uiDetailTranscriptMergeResult{
+		addedEntries:        len(pageEntries),
+		trimmedFrontEntries: trimmedFrontEntries,
+	}
 }
 
-func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage) {
+func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage) uiDetailTranscriptMergeResult {
 	if w == nil {
-		return
+		return uiDetailTranscriptMergeResult{}
 	}
 	if !w.loaded || transcriptPageSessionChanged(w.sessionID, page.SessionID) {
 		w.replace(page)
-		return
+		return uiDetailTranscriptMergeResult{}
 	}
 	if w.hasSegment(page) {
-		return
+		return uiDetailTranscriptMergeResult{}
 	}
 	pageEntries := cloneDetailChatEntries(page.Entries)
 	if len(pageEntries) == 0 {
@@ -190,14 +199,18 @@ func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage
 		}
 		w.refreshBounds()
 		w.loaded = true
-		return
+		return uiDetailTranscriptMergeResult{}
 	}
 	startLocal := len(w.entries)
 	w.entries = append(w.entries, pageEntries...)
 	w.segments = append(w.segments, segmentMetaFromPage(startLocal, page))
 	w.refreshBounds()
-	w.trimToSegments(len(w.entries))
+	trimmedFrontEntries := w.trimToSegments(len(w.entries))
 	w.loaded = true
+	return uiDetailTranscriptMergeResult{
+		addedEntries:        len(pageEntries),
+		trimmedFrontEntries: trimmedFrontEntries,
+	}
 }
 
 func (w *uiDetailTranscriptWindow) merge(page clientui.TranscriptPage) {
@@ -249,9 +262,9 @@ func segmentBoundaryEqual(seg residentSegmentMeta, page clientui.TranscriptPage)
 		int64PointerEqual(seg.newerCursor, page.NewerCursor)
 }
 
-func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) {
+func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) []clientui.ChatEntry {
 	if w == nil || len(w.segments) <= uiDetailTranscriptMinResidentSegments {
-		return
+		return nil
 	}
 	if anchorLocal < 0 {
 		anchorLocal = 0
@@ -267,6 +280,7 @@ func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) {
 			break
 		}
 	}
+	trimmedFrontEntries := []clientui.ChatEntry(nil)
 	for len(w.segments) > uiDetailTranscriptMinResidentSegments && len(w.entries) > uiDetailTranscriptMaxEntries {
 		last := len(w.segments) - 1
 		firstDist := anchorSeg
@@ -277,6 +291,7 @@ func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) {
 			w.segments = w.segments[:last]
 		} else if anchorSeg != 0 {
 			cut := w.segments[1].startLocal
+			trimmedFrontEntries = append(trimmedFrontEntries, cloneDetailChatEntries(w.entries[:cut])...)
 			w.entries = append([]clientui.ChatEntry(nil), w.entries[cut:]...)
 			w.segments = w.segments[1:]
 			for i := range w.segments {
@@ -288,6 +303,7 @@ func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) {
 		}
 	}
 	w.refreshBounds()
+	return trimmedFrontEntries
 }
 
 func (w uiDetailTranscriptWindow) requestedPageForDetailEntry() clientui.TranscriptPageRequest {

@@ -355,7 +355,7 @@ func (r RuntimeAppendCommittedEntryRequest) Validate() error {
 	switch strings.ToLower(strings.TrimSpace(r.Visibility)) {
 	case "", "auto", "o", "oc", "d", "x":
 	default:
-		return errors.New("visibility must be empty/auto, o, oc, d, or x")
+		return errors.New("visibility must be empty/auto, O, OC, D, or X")
 	}
 	return nil
 }

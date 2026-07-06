@@ -6,10 +6,10 @@ type EntryVisibility string
 
 const (
 	EntryVisibilityAuto             EntryVisibility = ""
-	EntryVisibilityOngoing          EntryVisibility = "o"
-	EntryVisibilityOngoingCollapsed EntryVisibility = "oc"
-	EntryVisibilityDetail           EntryVisibility = "d"
-	EntryVisibilityHidden           EntryVisibility = "x"
+	EntryVisibilityOngoing          EntryVisibility = "O"
+	EntryVisibilityOngoingCollapsed EntryVisibility = "OC"
+	EntryVisibilityDetail           EntryVisibility = "D"
+	EntryVisibilityHidden           EntryVisibility = "X"
 )
 
 func NormalizeEntryVisibility(visibility EntryVisibility) EntryVisibility {

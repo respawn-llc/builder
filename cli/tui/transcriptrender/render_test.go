@@ -161,9 +161,25 @@ func TestExpandedDetailWrapPreservesWhitespace(t *testing.T) {
 	for _, line := range rendered.Lines {
 		got = append(got, line.Plain())
 	}
-	want := []string{"❮   indented  value", "└ ", "└     code"}
+	want := []string{"❮   indented  value", "│ ", "│     code"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("expanded detail lines = %#v, want %#v", got, want)
+	}
+}
+
+func TestOngoingContinuationUsesIndentWithoutTreeMarker(t *testing.T) {
+	rendered := RenderCommittedRow(clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowUser,
+		User: &clientui.TranscriptUserRow{Text: "first\nsecond"},
+	}, 80, "", ModeOngoing)
+
+	got := make([]string, 0, len(rendered.Lines))
+	for _, line := range rendered.Lines {
+		got = append(got, line.Plain())
+	}
+	want := []string{"❯ first", "  second"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ongoing continuation lines = %#v, want %#v", got, want)
 	}
 }
 

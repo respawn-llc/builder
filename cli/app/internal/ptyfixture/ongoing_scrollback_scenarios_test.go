@@ -66,7 +66,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			name: "visibility_oc_tool_real_app_path",
 			script: map[string]any{
 				"seed_transcript": []map[string]any{
-					{"kind": "local_entry", "visibility": "oc", "role": "system", "text": "PTY_SEED_OC_FULL_DETAIL_TEXT", "condensed_text": "PTY_SEED_OC_COMPACT"},
+					{"kind": "local_entry", "visibility": "OC", "role": "system", "text": "PTY_SEED_OC_FULL_DETAIL_TEXT", "condensed_text": "PTY_SEED_OC_COMPACT"},
 				},
 				"steps": []map[string]any{
 					{
@@ -100,7 +100,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			name: "visibility_x_hidden_real_app_path",
 			script: map[string]any{
 				"seed_transcript": []map[string]any{
-					{"kind": "local_entry", "visibility": "x", "role": "system", "text": "PTY_SEED_X_HIDDEN", "condensed_text": "PTY_SEED_X_COMPACT"},
+					{"kind": "local_entry", "visibility": "X", "role": "system", "text": "PTY_SEED_X_HIDDEN", "condensed_text": "PTY_SEED_X_COMPACT"},
 				},
 				"final": "hidden fixture completed",
 			},
@@ -381,13 +381,13 @@ func seededStyleMatrixTranscript() []map[string]any {
 	return []map[string]any{
 		{"kind": "message", "role": "user", "text": "PTY_STYLE_USER"},
 		{"kind": "message", "role": "assistant", "text": "PTY_STYLE_ASSISTANT"},
-		{"kind": "local_entry", "visibility": "o", "role": "warning", "text": "PTY_STYLE_WARNING"},
-		{"kind": "local_entry", "visibility": "o", "role": "error", "text": "PTY_STYLE_ERROR"},
-		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_NOTICE"},
-		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_TOGGLE_FAST_ON"},
-		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_TOGGLE_FAST_OFF"},
-		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_TOGGLE_SUPERVISOR_ON"},
-		{"kind": "local_entry", "visibility": "o", "role": "system", "text": "PTY_STYLE_TOGGLE_SUPERVISOR_OFF"},
+		{"kind": "local_entry", "visibility": "O", "role": "warning", "text": "PTY_STYLE_WARNING"},
+		{"kind": "local_entry", "visibility": "O", "role": "error", "text": "PTY_STYLE_ERROR"},
+		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_NOTICE"},
+		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_TOGGLE_FAST_ON"},
+		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_TOGGLE_FAST_OFF"},
+		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_TOGGLE_SUPERVISOR_ON"},
+		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_TOGGLE_SUPERVISOR_OFF"},
 		toolSeed("exec_command", "call_shell", map[string]any{"cmd": "printf 'PTY_TOOL_SHELL\n'"}, "PTY_TOOL_SHELL", false),
 		toolSeedWithPatch("patch", "call_patch", map[string]any{"patch": patchStyleFixture("pty_patch.txt")}, patchStyleFixture("pty_patch.txt"), false),
 		toolSeedWithPatch("edit", "call_edit", map[string]any{"file_path": "pty_edit.txt", "old_string": "old", "new_string": "new"}, patchStyleFixture("pty_edit.txt"), false),

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strconv"
 	"testing"
 
 	"core/cli/tui"
@@ -149,6 +150,86 @@ func TestDetailTranscriptDefaultRefreshDoesNotCollapseResidentWindow(t *testing.
 	}
 }
 
+func TestDetailTranscriptDefaultRefreshDoesNotMutateViewLocalState(t *testing.T) {
+	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
+	model.view = tui.NewModel()
+	model.view = mustUpdateTUIModel(t, model.view, tui.SetViewportSizeMsg{Lines: 2, Width: 80})
+	model.view = mustUpdateTUIModel(t, model.view, tui.SetModeMsg{Mode: tui.ModeDetail})
+	newest := clientui.TranscriptPage{
+		SessionID:    "session-1",
+		OlderCursor:  appInt64Ptr(40),
+		HasMoreAbove: true,
+		NewerCursor:  appInt64Ptr(80),
+		HasMoreBelow: false,
+		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "newer"}},
+	}
+	older := clientui.TranscriptPage{
+		SessionID:    "session-1",
+		OlderCursor:  appInt64Ptr(20),
+		HasMoreAbove: false,
+		NewerCursor:  appInt64Ptr(40),
+		HasMoreBelow: true,
+		Entries:      []clientui.ChatEntry{{Role: "user", Text: "older"}},
+	}
+	refreshedNewest := newest
+	refreshedNewest.Entries = []clientui.ChatEntry{{Role: "assistant", Text: "newer refreshed"}}
+
+	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: newest})
+	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}, page: older})
+	model.view = mustUpdateTUIModel(t, model.view, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := model.view.DetailSelectionAction(); got != tui.DetailSelectionActionCollapse {
+		t.Fatalf("detail selection action after expand = %v, want collapse", got)
+	}
+
+	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: refreshedNewest})
+
+	if got := model.view.DetailSelectionAction(); got != tui.DetailSelectionActionCollapse {
+		t.Fatalf("detail selection action after default refresh = %v, want UI-local expansion preserved", got)
+	}
+	got := model.detailTranscript.page().Entries
+	want := []clientui.ChatEntry{
+		{Role: "user", Text: "older"},
+		{Role: "assistant", Text: "newer"},
+	}
+	if !sameChatEntries(got, want) {
+		t.Fatalf("detail entries after default refresh = %#v, want stale resident window %#v", got, want)
+	}
+}
+
+func TestDetailTranscriptWindowTrimsFarResidentSegmentsAfterAppend(t *testing.T) {
+	var window uiDetailTranscriptWindow
+	window.replace(detailTestPage("session-1", 0, 599, appInt64Ptr(600), nil))
+	window.appendCursorPage(detailTestPage("session-1", 600, 1199, appInt64Ptr(1200), appInt64Ptr(600)))
+	window.appendCursorPage(detailTestPage("session-1", 1200, 1799, nil, appInt64Ptr(1200)))
+
+	if len(window.segments) != uiDetailTranscriptMinResidentSegments {
+		t.Fatalf("resident segment count = %d, want %d", len(window.segments), uiDetailTranscriptMinResidentSegments)
+	}
+	if len(window.entries) != 1200 {
+		t.Fatalf("resident entry count = %d, want two retained 600-entry segments", len(window.entries))
+	}
+	if got := window.entries[0].Text; got != "entry-600" {
+		t.Fatalf("first retained entry = %q, want appended window to unload oldest segment", got)
+	}
+}
+
+func TestDetailTranscriptWindowTrimsFarResidentSegmentsAfterPrepend(t *testing.T) {
+	var window uiDetailTranscriptWindow
+	window.replace(detailTestPage("session-1", 1200, 1799, nil, appInt64Ptr(1200)))
+	window.prependCursorPage(detailTestPage("session-1", 600, 1199, appInt64Ptr(600), appInt64Ptr(1200)))
+	window.prependCursorPage(detailTestPage("session-1", 0, 599, appInt64Ptr(0), appInt64Ptr(600)))
+
+	if len(window.segments) != uiDetailTranscriptMinResidentSegments {
+		t.Fatalf("resident segment count = %d, want %d", len(window.segments), uiDetailTranscriptMinResidentSegments)
+	}
+	if len(window.entries) != 1200 {
+		t.Fatalf("resident entry count = %d, want two retained 600-entry segments", len(window.entries))
+	}
+	if got := window.entries[len(window.entries)-1].Text; got != "entry-1199" {
+		t.Fatalf("last retained entry = %q, want prepended window to unload newest far segment", got)
+	}
+}
+
 func TestDetailTranscriptPageDeepClonesPatchRender(t *testing.T) {
 	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
 	sourcePatch := &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{
@@ -175,6 +256,39 @@ func TestDetailTranscriptPageDeepClonesPatchRender(t *testing.T) {
 	if got := secondRead.Entries[0].ToolCall.PatchRender.Files[0].Diff[0]; got != "old" {
 		t.Fatalf("page patch diff = %q, want page-isolated old diff", got)
 	}
+}
+
+func mustUpdateTUIModel(t *testing.T, model tui.Model, msg tea.Msg) tui.Model {
+	t.Helper()
+	next, _ := model.Update(msg)
+	updated, ok := next.(tui.Model)
+	if !ok {
+		t.Fatalf("updated TUI model type = %T, want tui.Model", next)
+	}
+	return updated
+}
+
+func detailTestPage(sessionID string, first int, last int, olderCursor *int64, newerCursor *int64) clientui.TranscriptPage {
+	return clientui.TranscriptPage{
+		SessionID:    sessionID,
+		OlderCursor:  olderCursor,
+		HasMoreAbove: olderCursor != nil,
+		NewerCursor:  newerCursor,
+		HasMoreBelow: newerCursor != nil,
+		Entries:      detailTestEntries(first, last),
+		SessionName:  sessionID,
+	}
+}
+
+func detailTestEntries(first int, last int) []clientui.ChatEntry {
+	if last < first {
+		return nil
+	}
+	entries := make([]clientui.ChatEntry, 0, last-first+1)
+	for idx := first; idx <= last; idx++ {
+		entries = append(entries, clientui.ChatEntry{Role: "assistant", Text: "entry-" + strconv.Itoa(idx)})
+	}
+	return entries
 }
 
 func TestDetailTranscriptLoadIgnoresStaleSessionResponse(t *testing.T) {

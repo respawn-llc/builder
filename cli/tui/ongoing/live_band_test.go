@@ -150,6 +150,71 @@ func TestCommittedRowsReserveTerminalSpaceBeforeLiveBand(t *testing.T) {
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"❯ committed"})
 }
 
+func TestLiveBandGrowthScrollsImmutableRegionBeforeErase(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+
+	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("committed")), FrameInput{
+		Size:     Size{Width: 40, Height: 5},
+		Sections: []FrameSection{{Kind: FrameSectionStatus, Lines: []string{"ready"}}},
+	}); err != nil {
+		t.Fatalf("apply committed row: %v", err)
+	}
+	if !surface.immutableScrollbackProduced() {
+		t.Fatal("test setup did not produce immutable scrollback")
+	}
+	if got, want := surface.previousBandHeight, 1; got != want {
+		t.Fatalf("test setup previous band height = %d, want %d", got, want)
+	}
+	out.Reset()
+
+	if _, err := surface.Render(FrameInput{
+		Size: Size{Width: 40, Height: 5},
+		Sections: []FrameSection{
+			{Kind: FrameSectionPendingTools, Lines: []string{"tool"}},
+			{Kind: FrameSectionInput, Lines: []string{"> prompt"}},
+			{Kind: FrameSectionStatus, Lines: []string{"ready"}},
+		},
+	}); err != nil {
+		t.Fatalf("grow live band: %v", err)
+	}
+
+	wantPrefix := []terminalOp{
+		{kind: terminalOpCSI, value: "\x1b[r"},
+		{kind: terminalOpCSI, value: "\x1b[?6l"},
+		{kind: terminalOpCSI, value: "\x1b[1;4r"},
+		{kind: terminalOpCSI, value: "\x1b[4;1H"},
+		{kind: terminalOpCRLF, value: "\r\n"},
+		{kind: terminalOpCRLF, value: "\r\n"},
+		{kind: terminalOpCSI, value: "\x1b[r"},
+		{kind: terminalOpCSI, value: "\x1b[?6l"},
+	}
+	assertTerminalPrefix(t, parseTerminalOps(out.String()), wantPrefix)
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"tool", "> prompt", "ready"})
+}
+
+func TestInitialLiveBandRenderDoesNotScrollBlankScreen(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+
+	if _, err := surface.Render(FrameInput{
+		Size: Size{Width: 40, Height: 5},
+		Sections: []FrameSection{
+			{Kind: FrameSectionInput, Lines: []string{"> prompt"}},
+			{Kind: FrameSectionStatus, Lines: []string{"ready"}},
+		},
+	}); err != nil {
+		t.Fatalf("render initial live band: %v", err)
+	}
+
+	ops := parseTerminalOps(out.String())
+	for _, op := range ops {
+		if op.kind == terminalOpCRLF {
+			t.Fatalf("initial blank live render scrolled terminal: ops=%+v", ops)
+		}
+	}
+}
+
 func assertCursorAddress(t *testing.T, ops []terminalOp, wantRow int, wantColumn int) {
 	t.Helper()
 	for _, address := range cursorAddresses(ops) {

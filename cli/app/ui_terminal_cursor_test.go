@@ -416,8 +416,8 @@ func TestMainInputCursorUsesSharedFieldDisplayWidth(t *testing.T) {
 	if !cursor.Visible {
 		t.Fatal("expected main input cursor")
 	}
-	if cursor.Row != 1 || cursor.Col != 6 {
-		t.Fatalf("cursor = %+v, want row 1 col 6", cursor)
+	if cursor.Row != framedInputContentCursorRow(0) || cursor.Col != 6 {
+		t.Fatalf("cursor = %+v, want framed content row %d col 6", cursor, framedInputContentCursorRow(0))
 	}
 	view := m.View()
 	assertRenderedLinesFitWidth(t, view, m.termWidth)
@@ -442,8 +442,8 @@ func TestAskInputCursorUsesSharedFieldDisplayWidth(t *testing.T) {
 	if !cursor.Visible {
 		t.Fatal("expected ask input cursor")
 	}
-	if cursor.Row != 2 || cursor.Col != 6 {
-		t.Fatalf("cursor = %+v, want row 2 col 6", cursor)
+	if cursor.Row != framedInputContentCursorRow(1) || cursor.Col != 6 {
+		t.Fatalf("cursor = %+v, want framed content row %d col 6", cursor, framedInputContentCursorRow(1))
 	}
 	view := m.View()
 	assertRenderedLinesFitWidth(t, view, m.termWidth)

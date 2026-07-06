@@ -108,7 +108,7 @@ func TestCommittedRowsNeutralizeTranscriptSourcedControlBytes(t *testing.T) {
 
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
 		"❯ user[2J",
-		"└ next lineafter",
+		"  next lineafter",
 		"────────────── assistant ───────────────",
 		"❮ assistant]0;spoof **answer**",
 		"───────────────── tool ─────────────────",

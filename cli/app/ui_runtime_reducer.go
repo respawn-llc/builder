@@ -76,13 +76,22 @@ func (m *uiModel) handleDetailTranscriptLoad(msg detailTranscriptLoadMsg) tea.Cm
 		m.detailTranscript.refreshEdgeCursors(msg.page)
 		return nil
 	}
+	if msg.request.Cursor == nil && msg.request.NewerCursor == nil && m.detailTranscript.loaded && !transcriptPageSessionChanged(m.detailTranscript.sessionID, msg.page.SessionID) {
+		m.detailTranscript.lastRequest = msg.request
+		return nil
+	}
 	anchor := tui.DetailTranscriptAnchorDefault
+	prependedEntries := 0
+	var trimmedFrontEntries []clientui.ChatEntry
 	if msg.request.NewerCursor != nil {
-		m.detailTranscript.appendCursorPage(msg.page)
-		anchor = tui.DetailTranscriptAnchorBottom
+		result := m.detailTranscript.appendCursorPage(msg.page)
+		trimmedFrontEntries = result.trimmedFrontEntries
+		anchor = tui.DetailTranscriptAnchorPreserve
 	} else if msg.request.Cursor != nil {
-		m.detailTranscript.prependCursorPage(msg.page)
-		anchor = tui.DetailTranscriptAnchorTop
+		result := m.detailTranscript.prependCursorPage(msg.page)
+		prependedEntries = result.addedEntries
+		trimmedFrontEntries = result.trimmedFrontEntries
+		anchor = tui.DetailTranscriptAnchorPreserve
 	} else {
 		m.detailTranscript.apply(msg.page)
 	}
@@ -91,7 +100,12 @@ func (m *uiModel) handleDetailTranscriptLoad(msg detailTranscriptLoadMsg) tea.Cm
 	page.SessionID = msg.page.SessionID
 	page.SessionName = msg.page.SessionName
 	page.ConversationFreshness = msg.page.ConversationFreshness
-	m.forwardToView(tui.SetDetailTranscriptPageMsg{Page: page, Anchor: anchor})
+	m.forwardToView(tui.SetDetailTranscriptPageMsg{
+		Page:                  page,
+		Anchor:                anchor,
+		PrependedEntriesCount: prependedEntries,
+		TrimmedFrontEntries:   trimmedFrontEntries,
+	})
 	return nil
 }
 

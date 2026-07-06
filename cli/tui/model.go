@@ -39,8 +39,10 @@ type SetViewportSizeMsg struct {
 }
 
 type SetDetailTranscriptPageMsg struct {
-	Page   clientui.TranscriptPage
-	Anchor DetailTranscriptPageAnchor
+	Page                  clientui.TranscriptPage
+	Anchor                DetailTranscriptPageAnchor
+	PrependedEntriesCount int
+	TrimmedFrontEntries   []clientui.ChatEntry
 }
 
 type RequestDetailTranscriptPageMsg struct {
@@ -133,7 +135,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clampDetailScroll()
 	case SetDetailTranscriptPageMsg:
-		m.applyDetailTranscriptPage(msg.Page, msg.Anchor)
+		m.applyDetailTranscriptPage(msg.Page, msg.Anchor, msg.PrependedEntriesCount, msg.TrimmedFrontEntries)
 	case tea.KeyMsg:
 		if m.mode == ModeDetail {
 			switch msg.Type {
@@ -210,13 +212,18 @@ func (m Model) DetailSelectionAction() DetailSelectionAction {
 	return DetailSelectionActionExpand
 }
 
-func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor DetailTranscriptPageAnchor) {
+func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor DetailTranscriptPageAnchor, prependedEntries int, trimmedFrontEntries []clientui.ChatEntry) {
 	if !anchor.valid() {
 		panic(fmt.Sprintf("invalid detail transcript page anchor: %d", anchor))
 	}
 	previousScroll := m.detailScroll
 	previousSelected, previousSelectedOK := m.selectedDetailIndex()
 	previousExpanded := m.expanded
+	prependedEntries = maxInt(0, prependedEntries)
+	visiblePrependedEntries := visibleDetailEntryCount(page.Entries, prependedEntries)
+	visibleTrimmedFrontEntries := visibleDetailEntryCount(trimmedFrontEntries, len(trimmedFrontEntries))
+	trimmedFrontLineOffset := m.detailLineOffsetForEntryIndex(visibleTrimmedFrontEntries)
+	preservedEntryIndexShift := visiblePrependedEntries - visibleTrimmedFrontEntries
 	m.detailPageLoaded = true
 	m.detailOlderCursor = page.OlderCursor
 	m.detailHasMoreAbove = page.HasMoreAbove
@@ -229,7 +236,11 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 		}
 	}
 	if anchor == DetailTranscriptAnchorPreserve {
-		m.expanded = previousExpanded
+		if preservedEntryIndexShift != 0 {
+			m.expanded = shiftExpandedDetailEntries(previousExpanded, preservedEntryIndexShift)
+		} else {
+			m.expanded = previousExpanded
+		}
 	} else {
 		m.expanded = nil
 	}
@@ -239,8 +250,8 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 		return
 	}
 	switch {
-	case anchor == DetailTranscriptAnchorPreserve && previousSelectedOK && previousSelected < len(m.detailEntries):
-		m.setSelectedDetailIndex(previousSelected)
+	case anchor == DetailTranscriptAnchorPreserve && previousSelectedOK:
+		m.setSelectedDetailIndex(clampInt(previousSelected+preservedEntryIndexShift, 0, len(m.detailEntries)-1))
 	case anchor == DetailTranscriptAnchorTop:
 		m.setSelectedDetailIndex(0)
 	case anchor == DetailTranscriptAnchorBottom:
@@ -252,7 +263,7 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 	}
 	switch anchor {
 	case DetailTranscriptAnchorPreserve:
-		m.detailScroll = clampInt(previousScroll, 0, m.maxDetailScroll())
+		m.detailScroll = clampInt(previousScroll+m.detailLineOffsetForEntryIndex(visiblePrependedEntries)-trimmedFrontLineOffset, 0, m.maxDetailScroll())
 	case DetailTranscriptAnchorTop:
 		m.detailScroll = 0
 	case DetailTranscriptAnchorBottom:
@@ -264,6 +275,16 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 			m.detailScroll = 0
 		}
 	}
+}
+
+func visibleDetailEntryCount(entries []clientui.ChatEntry, limit int) int {
+	count := 0
+	for _, entry := range entries[:minInt(maxInt(0, limit), len(entries))] {
+		if _, ok := detailRowFromChatEntry(entry); ok {
+			count++
+		}
+	}
+	return count
 }
 
 func (anchor DetailTranscriptPageAnchor) valid() bool {
@@ -477,6 +498,33 @@ func detailRenderedText(lines []detailRenderedLine) []string {
 		out = append(out, line.Text)
 	}
 	return out
+}
+
+func (m Model) detailLineOffsetForEntryIndex(entryIndex int) int {
+	if entryIndex <= 0 {
+		return 0
+	}
+	for idx, line := range m.detailRenderedLines() {
+		if line.EntryIndex != nil && *line.EntryIndex >= entryIndex {
+			return idx
+		}
+	}
+	return len(m.detailRenderedLines())
+}
+
+func shiftExpandedDetailEntries(expanded map[int]struct{}, offset int) map[int]struct{} {
+	if len(expanded) == 0 || offset == 0 {
+		return expanded
+	}
+	shifted := make(map[int]struct{}, len(expanded))
+	for entryIndex := range expanded {
+		nextEntryIndex := entryIndex + offset
+		if nextEntryIndex < 0 {
+			continue
+		}
+		shifted[nextEntryIndex] = struct{}{}
+	}
+	return shifted
 }
 
 func (m *Model) selectDetailViewportCenter() {

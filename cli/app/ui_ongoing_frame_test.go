@@ -10,6 +10,7 @@ import (
 
 func TestOngoingFrameInputUsesOperatorLocalSectionsAndCursor(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUITerminalCursorState(newUITerminalCursorState()),
 		WithUIPromptHistory([]string{"older", "newer"}),
 	), 48, 10)
 	m.input = "hello"
@@ -39,6 +40,12 @@ func TestOngoingFrameInputUsesOperatorLocalSectionsAndCursor(t *testing.T) {
 	if frame.Cursor.Row >= statusStart {
 		t.Fatalf("frame cursor row = %d, want before status row %d", frame.Cursor.Row, statusStart)
 	}
+	if got, want := frame.Cursor.Target.Row, 2; got != want {
+		t.Fatalf("input cursor target row = %d, want framed content row %d", got, want)
+	}
+	if got, want := frame.Cursor.Row, inputStart+1; got != want {
+		t.Fatalf("terminal cursor row = %d, want first framed input content row %d", got, want)
+	}
 	wantKinds := []ongoing.FrameSectionKind{
 		ongoing.FrameSectionHelp,
 		ongoing.FrameSectionInput,
@@ -66,7 +73,9 @@ func TestOngoingFrameInputIgnoresRuntimeMainViewCopiesOfTranscriptOwnedFacts(t *
 }
 
 func TestOngoingTranscriptControllerPlacesCursorAfterPrependedLiveSections(t *testing.T) {
-	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUITerminalCursorState(newUITerminalCursorState()),
+	), 48, 10)
 	m.input = "hello"
 	m.inputCursor = 2
 	surface := &ongoingSurfaceSpy{}
@@ -94,6 +103,9 @@ func TestOngoingTranscriptControllerPlacesCursorAfterPrependedLiveSections(t *te
 	}
 	if !frame.Cursor.Visible || frame.Cursor.Row < inputStart || frame.Cursor.Row > inputEnd {
 		t.Fatalf("final frame cursor = %+v, want within input rows %d..%d", frame.Cursor, inputStart, inputEnd)
+	}
+	if got, want := frame.Cursor.Row, inputStart+1; got != want {
+		t.Fatalf("final frame cursor row = %d, want first framed input content row %d", got, want)
 	}
 }
 

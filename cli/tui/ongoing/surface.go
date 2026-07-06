@@ -270,29 +270,8 @@ func isAssistantFinalization(message clientui.TranscriptMessage) bool {
 }
 
 func (s *Surface) Render(frame FrameInput) (Result, error) {
-	liveLayout := s.liveBandLayout(frame)
-	lines := liveBandLineTexts(liveLayout)
 	s.validateRenderFrame(frame, "render")
-	if !s.minimumLiveBandFits(frame, lines) {
-		liveLayout = nil
-		frame.Cursor = Cursor{}
-	} else {
-		liveLayout = s.shrinkLiveBandLayoutToFrame(frame, liveLayout)
-	}
-	lines = liveBandLineTexts(liveLayout)
-	frame.Cursor = cursorForVisibleLiveBand(frame.Cursor, frame.Size.Height, liveLayout)
-	eraseHeight := min(max(s.previousBandHeight, len(lines)), frame.Size.Height)
-	var transaction strings.Builder
-	transaction.WriteString(resetScrollRegionAndOriginMode())
-	writeMutableBandErase(&transaction, frame.Size.Height, eraseHeight)
-	writeMutableBandLines(&transaction, frame.Size.Height, lines)
-	writeCursor(&transaction, frame.Cursor)
-	if _, err := io.WriteString(s.writer, transaction.String()); err != nil {
-		return Result{}, err
-	}
-	s.previousBandHeight = len(lines)
-	s.lastSize = frame.Size
-	return Result{}, nil
+	return s.writeFrameTransaction(frame, nil)
 }
 
 func (s *Surface) SetNormalBufferOwned(_ bool, _ FrameInput) (Result, error) {
@@ -521,6 +500,9 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 	eraseHeight := min(max(s.previousBandHeight, len(liveLines)), frame.Size.Height)
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
+	if len(liveLines) > s.previousBandHeight && s.immutableScrollbackProduced() {
+		writeImmutableRegionScrollForLiveBandGrowth(&transaction, frame.Size.Height, s.previousBandHeight, len(liveLines))
+	}
 	writeMutableBandErase(&transaction, frame.Size.Height, eraseHeight)
 	writeImmutableRowsAboveMutableBand(&transaction, frame.Size.Height, len(liveLines), immutableRows)
 	writeMutableBandLines(&transaction, frame.Size.Height, liveLines)
@@ -710,6 +692,25 @@ func writeMutableBandErase(builder *strings.Builder, terminalHeight, bandHeight 
 	for row := startRow; row <= terminalHeight; row++ {
 		fmt.Fprintf(builder, "\x1b[%d;1H\x1b[2K", row)
 	}
+}
+
+func writeImmutableRegionScrollForLiveBandGrowth(builder *strings.Builder, terminalHeight, previousBandHeight, nextBandHeight int) {
+	delta := nextBandHeight - previousBandHeight
+	if delta <= 0 {
+		return
+	}
+	oldImmutableBottom := terminalHeight - previousBandHeight
+	if oldImmutableBottom < 1 {
+		return
+	}
+	if delta > oldImmutableBottom {
+		delta = oldImmutableBottom
+	}
+	fmt.Fprintf(builder, "\x1b[1;%dr\x1b[%d;1H", oldImmutableBottom, oldImmutableBottom)
+	for range delta {
+		builder.WriteString("\r\n")
+	}
+	builder.WriteString(resetScrollRegionAndOriginMode())
 }
 
 func writeMutableBandLines(builder *strings.Builder, terminalHeight int, lines []string) {

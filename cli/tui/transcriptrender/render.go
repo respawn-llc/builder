@@ -240,7 +240,7 @@ func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *p
 	if len(lines) == 0 {
 		lines = []Line{{Spans: []Span{{Text: text, Role: role}}}}
 	}
-	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta)
+	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta, mode)
 }
 
 func renderTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
@@ -255,16 +255,16 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 		text = labelForRole(role)
 	}
 	if mode == ModeOngoing && roleAllowsThreeLinePreview(role) {
-		return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width))), width, false)
+		return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width))), width, false, mode)
 	}
 	if mode == ModeOngoing || mode == ModeDetailCollapsed {
 		first := firstDisplayLine(text)
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
-			return attachPrefix(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3)), width, false)
+			return attachPrefix(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3)), width, false, mode)
 		}
-		return attachPrefixWithFirstLineMeta(role, textLines(role, []string{first}), width, len(strings.Split(text, "\n")) > 1, inlineMeta)
+		return attachPrefixWithFirstLineMeta(role, textLines(role, []string{first}), width, len(strings.Split(text, "\n")) > 1, inlineMeta, mode)
 	}
-	return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width))), width, false)
+	return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width))), width, false, mode)
 }
 
 func textLines(role StyleRole, lines []string) []Line {
@@ -278,11 +278,11 @@ func textLines(role StyleRole, lines []string) []Line {
 	return out
 }
 
-func attachPrefix(role StyleRole, lines []Line, width int, forceEllipsis bool) []Line {
-	return attachPrefixWithFirstLineMeta(role, lines, width, forceEllipsis, "")
+func attachPrefix(role StyleRole, lines []Line, width int, forceEllipsis bool, mode Mode) []Line {
+	return attachPrefixWithFirstLineMeta(role, lines, width, forceEllipsis, "", mode)
 }
 
-func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forceEllipsis bool, firstLineMeta string) []Line {
+func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forceEllipsis bool, firstLineMeta string, mode Mode) []Line {
 	if len(lines) == 0 {
 		lines = []Line{{Spans: []Span{{Role: role}}}}
 	}
@@ -309,7 +309,7 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 		if idx == 0 {
 			spans = append([]Span{{Text: roleSymbol(role), Role: role}, {Text: " ", Role: role}}, spans...)
 		} else {
-			spans = append([]Span{{Text: "└", Role: StyleRoleNotice, Faint: true}, {Text: strings.Repeat(" ", max(0, prefixWidth-1)), Role: StyleRoleNotice, Faint: true}}, spans...)
+			spans = append(continuationPrefix(mode, prefixWidth), spans...)
 		}
 		line = Line{Spans: spans}
 		if forceEllipsis || lipgloss.Width(line.Plain()) > max(1, width) {
@@ -318,6 +318,16 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 		out = append(out, line)
 	}
 	return out
+}
+
+func continuationPrefix(mode Mode, prefixWidth int) []Span {
+	if mode == ModeOngoing {
+		return []Span{{Text: strings.Repeat(" ", max(0, prefixWidth)), Role: StyleRoleNotice, Faint: true}}
+	}
+	return []Span{
+		{Text: "│", Role: StyleRoleNotice, Faint: true},
+		{Text: strings.Repeat(" ", max(0, prefixWidth-1)), Role: StyleRoleNotice, Faint: true},
+	}
 }
 
 func inlineMetaCommandSpans(spans []Span, role StyleRole) []Span {
