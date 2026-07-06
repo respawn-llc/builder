@@ -3,6 +3,7 @@ package tui
 import (
 	"testing"
 
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -93,5 +94,57 @@ func TestDetailModeExpandsSelectedEntry(t *testing.T) {
 	model = next.(Model)
 	if _, ok := model.expanded[0]; !ok {
 		t.Fatal("selected detail entry was not expanded")
+	}
+}
+
+func TestDetailChatEntryNoticeKeepsCompactTextSeparateFromExpandedBody(t *testing.T) {
+	row, ok := detailRowFromChatEntry(clientui.ChatEntry{
+		Role:          "compaction_notice",
+		Text:          "  full persisted notice body  ",
+		CondensedText: "compact notice",
+	})
+	if !ok {
+		t.Fatal("notice chat entry was dropped")
+	}
+	if row.Kind != clientui.TranscriptRowNotice || row.Notice == nil {
+		t.Fatalf("row = %#v, want notice row", row)
+	}
+	if row.Notice.Data.LegacyText == nil || *row.Notice.Data.LegacyText != "  full persisted notice body  " {
+		t.Fatalf("notice legacy text = %#v, want full body", row.Notice.Data.LegacyText)
+	}
+	if row.Notice.Data.CondensedText != "compact notice" {
+		t.Fatalf("notice condensed text = %q, want compact metadata", row.Notice.Data.CondensedText)
+	}
+	expanded := transcriptrender.RenderCommittedRow(row, 80, "", transcriptrender.ModeDetailExpanded)
+	if len(expanded.Lines) != 1 || len(expanded.Lines[0].Spans) < 3 {
+		t.Fatalf("expanded notice row = %#v, want prefixed body span", expanded)
+	}
+	if got := expanded.Lines[0].Spans[2].Text; got != "  full persisted notice body  " {
+		t.Fatalf("expanded notice body span = %q, want full body", got)
+	}
+}
+
+func TestDetailChatEntryToolCallRendersAsToolRow(t *testing.T) {
+	row, ok := detailRowFromChatEntry(clientui.ChatEntry{
+		Role:       "tool_call",
+		ToolCallID: "tool-1",
+		ToolCall: &clientui.ToolCallMeta{
+			ToolName:    "exec_command",
+			IsShell:     true,
+			CompactText: "run tests",
+			Command:     "./scripts/test.sh ./cli/tui",
+		},
+	})
+	if !ok {
+		t.Fatal("tool_call chat entry was dropped")
+	}
+	if row.Kind != clientui.TranscriptRowTool || row.Tool == nil {
+		t.Fatalf("row = %#v, want tool row", row)
+	}
+	if row.Tool.ToolCallID != "tool-1" || row.Tool.ToolName != "exec_command" {
+		t.Fatalf("tool row identity = %#v, want persisted tool call identity", row.Tool)
+	}
+	if row.Tool.ToolPresentation == nil || row.Tool.ToolPresentation.CompactText != "run tests" {
+		t.Fatalf("tool presentation = %#v, want compact call metadata", row.Tool.ToolPresentation)
 	}
 }

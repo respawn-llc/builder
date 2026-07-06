@@ -315,6 +315,12 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	typedCompactText := firstNonEmpty(row.Data.CompactLabel, row.Data.CondensedText, noticeLegacyText(row), row.Data.SourcePath)
 	compactText := firstNonEmpty(typedCompactText, string(row.Reason), "notice")
 	text := compactText
+	if mode == ModeDetailExpanded {
+		text = firstNonBlankPreservingWhitespace(noticeLegacyText(row), row.Data.CondensedText, row.Data.CompactLabel, row.Data.SourcePath)
+		if strings.TrimSpace(text) == "" {
+			text = firstNonEmpty(string(row.Reason), "notice")
+		}
+	}
 	if row.Diagnostic != nil && (mode == ModeDetailExpanded || typedCompactText == "") {
 		text = firstNonEmpty(row.Diagnostic.Detail, row.Diagnostic.Code, text)
 	}
@@ -332,7 +338,7 @@ func noticeLegacyText(row *clientui.TranscriptNoticeRow) string {
 	if row == nil || row.Data.LegacyText == nil {
 		return ""
 	}
-	return strings.TrimSpace(*row.Data.LegacyText)
+	return *row.Data.LegacyText
 }
 
 func isPatchTool(meta toolMeta) bool {
@@ -441,6 +447,15 @@ func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if trimmed := strings.TrimSpace(safeTranscriptText(value)); trimmed != "" {
 			return trimmed
+		}
+	}
+	return ""
+}
+
+func firstNonBlankPreservingWhitespace(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(safeTranscriptText(value)) != "" {
+			return value
 		}
 	}
 	return ""

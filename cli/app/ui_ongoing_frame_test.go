@@ -97,6 +97,61 @@ func TestOngoingTranscriptControllerPlacesCursorAfterPrependedLiveSections(t *te
 	}
 }
 
+func TestOngoingFrameInputKeepsServerBackedQueuedStateTranscriptOwned(t *testing.T) {
+	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
+	m.pendingInjected = []clientui.QueuedUserMessage{{
+		ID:   "11111111-1111-4111-8111-111111111111",
+		Text: "server accepted",
+	}}
+
+	frame := m.ongoingFrameInput()
+
+	if section, ok := frameSection(frame, ongoing.FrameSectionQueuedOrSteered); ok {
+		t.Fatalf("legacy queued section = %+v, want absent for server-backed accepted items", section)
+	}
+}
+
+func TestOngoingFrameInputStillRendersClientLocalQueuedMessages(t *testing.T) {
+	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
+	m.queueInput("queued before server acceptance")
+
+	frame := m.ongoingFrameInput()
+
+	section, ok := frameSection(frame, ongoing.FrameSectionQueuedOrSteered)
+	if !ok {
+		t.Fatal("local queued section missing")
+	}
+	if got, want := section.Lines, []string{padANSIRight("queued before server acceptance", 48)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("local queued lines = %q, want %q", got, want)
+	}
+}
+
+func TestOngoingFrameInputSanitizesPromptHistorySection(t *testing.T) {
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUIPromptHistory([]string{"alpha\nbeta\tgamma\x1b"}),
+	), 48, 10)
+	m.promptHistorySelection = 0
+
+	frame := m.ongoingFrameInput()
+
+	section, ok := frameSection(frame, ongoing.FrameSectionPromptHistory)
+	if !ok {
+		t.Fatal("prompt history section missing")
+	}
+	if got, want := section.Lines, []string{"alpha beta gamma"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("prompt history lines = %q, want %q", got, want)
+	}
+}
+
+func frameSection(frame ongoing.FrameInput, kind ongoing.FrameSectionKind) (ongoing.FrameSection, bool) {
+	for _, section := range frame.Sections {
+		if section.Kind == kind {
+			return section, true
+		}
+	}
+	return ongoing.FrameSection{}, false
+}
+
 func frameSectionKinds(frame ongoing.FrameInput) []ongoing.FrameSectionKind {
 	kinds := make([]ongoing.FrameSectionKind, 0, len(frame.Sections))
 	for _, section := range frame.Sections {

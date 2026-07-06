@@ -7,16 +7,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type queuedPaneEntryKind uint8
-
-const (
-	queuedPaneEntryQueued queuedPaneEntryKind = iota
-	queuedPaneEntryPending
-)
-
 type queuedPaneEntry struct {
 	Text string
-	Kind queuedPaneEntryKind
 }
 
 func (l uiViewLayout) renderChatPanel(width, height int, style uiStyles) []string {
@@ -124,18 +116,13 @@ func (l uiViewLayout) renderQueuedMessagesPane(width int) []string {
 	}
 	palette := uiPalette(l.model.theme)
 	queueStyle := lipgloss.NewStyle().Foreground(palette.secondary).Faint(true)
-	pendingStyle := lipgloss.NewStyle().Foreground(palette.primary)
 	out := make([]string, 0, len(visible)+1)
 	if hidden > 0 {
 		out = append(out, queueStyle.Render(padANSIRight(fmt.Sprintf("%d more messages", hidden), width)))
 	}
 	for _, entry := range visible {
 		line := truncateQueuedMessageLine(entry.displayText(), width)
-		style := queueStyle
-		if entry.Kind == queuedPaneEntryPending {
-			style = pendingStyle
-		}
-		out = append(out, style.Render(padANSIRight(line, width)))
+		out = append(out, queueStyle.Render(padANSIRight(line, width)))
 	}
 	return out
 }
@@ -166,27 +153,13 @@ func (l uiViewLayout) queuedVisibleMessages() ([]queuedPaneEntry, int) {
 }
 
 func (l uiViewLayout) queuedMessages() []queuedPaneEntry {
-	deferredPending := l.model.deferredPendingInjectedMessages()
-	entries := make([]queuedPaneEntry, 0, len(l.model.queued)+len(deferredPending)+len(l.model.pendingInjected))
+	entries := make([]queuedPaneEntry, 0, len(l.model.queued))
 	for _, message := range l.model.queued {
-		entries = append(entries, queuedPaneEntry{Text: message.Text, Kind: queuedPaneEntryQueued})
-	}
-	for _, message := range deferredPending {
-		entries = append(entries, queuedPaneEntry{Text: message, Kind: queuedPaneEntryPending})
-	}
-	for _, message := range l.model.pendingInjected {
-		entries = append(entries, queuedPaneEntry{Text: message.Text, Kind: queuedPaneEntryPending})
+		entries = append(entries, queuedPaneEntry{Text: message.Text})
 	}
 	return entries
 }
 
-func (m *uiModel) deferredPendingInjectedMessages() []string {
-	return nil
-}
-
 func (e queuedPaneEntry) displayText() string {
-	if e.Kind == queuedPaneEntryPending {
-		return "next: " + e.Text
-	}
 	return e.Text
 }

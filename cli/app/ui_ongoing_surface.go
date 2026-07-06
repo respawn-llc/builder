@@ -204,7 +204,7 @@ func (m *uiModel) ongoingFrameInput() ongoing.FrameInput {
 	appendSection(ongoing.FrameSectionHelp, layout.renderHelpPane(width, helpPaneMaxLines(height, 1, 0, 0), style))
 	appendSection(ongoing.FrameSectionInput, layout.renderInputLines(width, style))
 	if selected, ok := m.selectedPromptHistoryText(); ok {
-		appendSection(ongoing.FrameSectionPromptHistory, []string{selected})
+		appendSection(ongoing.FrameSectionPromptHistory, terminalSafeFrameLinesForWidth([]string{selected}, width))
 	}
 	statusLine := layout.renderStatusLine(width, style)
 	if statusLine != "" {

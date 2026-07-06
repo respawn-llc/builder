@@ -534,7 +534,13 @@ func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommit
 		}
 		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: entry.Text, Phase: entry.Phase}}, true
 	case "tool_call":
-		return clientui.TranscriptCommittedRow{}, false
+		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
+			ToolCallID:       strings.TrimSpace(entry.ToolCallID),
+			ToolName:         detailToolName(entry),
+			Text:             entry.Text,
+			CondensedText:    strings.TrimSpace(firstNonEmptyString(entry.CondensedText, entry.CompactLabel)),
+			ToolPresentation: entry.ToolCall,
+		}}, true
 	case "tool_result_ok", "tool_result_error":
 		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
 			ToolCallID:       strings.TrimSpace(entry.ToolCallID),
@@ -550,7 +556,7 @@ func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommit
 			Reason:   clientui.TranscriptNoticeLegacyUntypedNotice,
 			Severity: clientui.TranscriptNoticeInfo,
 			Data: clientui.TranscriptNoticeData{
-				LegacyText:    stringPtr(firstNonEmptyString(entry.CondensedText, entry.Text, entry.CompactLabel, entry.Role)),
+				LegacyText:    stringPtrIfNonBlank(entry.Text),
 				NoticeID:      stringPtr(strings.TrimSpace(entry.NoticeID)),
 				MessageType:   entry.MessageType,
 				SourcePath:    entry.SourcePath,
@@ -570,6 +576,13 @@ func detailToolName(entry clientui.ChatEntry) string {
 
 func stringPtr(value string) *string {
 	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func stringPtrIfNonBlank(value string) *string {
+	if strings.TrimSpace(value) == "" {
 		return nil
 	}
 	return &value
