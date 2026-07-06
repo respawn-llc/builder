@@ -5,6 +5,7 @@ import (
 
 	"core/server/runtime"
 	"core/shared/clientui"
+	"core/shared/clientuicopy"
 )
 
 const RecentTailEntryLimit = 500
@@ -89,7 +90,7 @@ func cloneChatEntries(entries []clientui.ChatEntry) []clientui.ChatEntry {
 	cloned := make([]clientui.ChatEntry, 0, len(entries))
 	for _, entry := range entries {
 		copyEntry := entry
-		copyEntry.ToolCall = clientui.CloneToolCallMeta(entry.ToolCall)
+		copyEntry.ToolCall = clientuicopy.ToolCallMeta(entry.ToolCall)
 		cloned = append(cloned, copyEntry)
 	}
 	return cloned

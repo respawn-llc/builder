@@ -7,6 +7,7 @@ import (
 	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/shared/clientui"
+	"core/shared/clientuicopy"
 	"core/shared/transcript"
 )
 
@@ -285,7 +286,7 @@ func cloneToolCallMeta(meta *transcript.ToolCallMeta) *clientui.ToolCallMeta {
 		}
 	}
 	if meta.PatchRender != nil {
-		copyMeta.PatchRender = clientui.CloneRenderedPatch(meta.PatchRender)
+		copyMeta.PatchRender = clientuicopy.RenderedPatch(meta.PatchRender)
 	}
 	return copyMeta
 }

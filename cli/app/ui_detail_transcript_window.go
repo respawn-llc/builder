@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/clientuicopy"
 	"core/shared/transcript"
 )
 
@@ -327,7 +328,7 @@ func cloneDetailChatEntries(entries []clientui.ChatEntry) []clientui.ChatEntry {
 	out := make([]clientui.ChatEntry, 0, len(entries))
 	for _, entry := range entries {
 		copyEntry := entry
-		copyEntry.ToolCall = clientui.CloneToolCallMeta(entry.ToolCall)
+		copyEntry.ToolCall = clientuicopy.ToolCallMeta(entry.ToolCall)
 		out = append(out, copyEntry)
 	}
 	return out

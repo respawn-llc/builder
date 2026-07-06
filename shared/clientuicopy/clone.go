@@ -1,8 +1,11 @@
-package clientui
+package clientuicopy
 
-import patchformat "core/shared/transcript/patchformat"
+import (
+	"core/shared/clientui"
+	patchformat "core/shared/transcript/patchformat"
+)
 
-func CloneToolCallMeta(meta *ToolCallMeta) *ToolCallMeta {
+func ToolCallMeta(meta *clientui.ToolCallMeta) *clientui.ToolCallMeta {
 	if meta == nil {
 		return nil
 	}
@@ -14,11 +17,11 @@ func CloneToolCallMeta(meta *ToolCallMeta) *ToolCallMeta {
 		renderHint := *meta.RenderHint
 		copyMeta.RenderHint = &renderHint
 	}
-	copyMeta.PatchRender = CloneRenderedPatch(meta.PatchRender)
+	copyMeta.PatchRender = RenderedPatch(meta.PatchRender)
 	return &copyMeta
 }
 
-func CloneRenderedPatch(in *patchformat.RenderedPatch) *patchformat.RenderedPatch {
+func RenderedPatch(in *patchformat.RenderedPatch) *patchformat.RenderedPatch {
 	if in == nil {
 		return nil
 	}
