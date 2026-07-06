@@ -58,12 +58,35 @@ func RenderDivider(group clientui.TranscriptRowKind, width int) Line {
 		label = "tool"
 	}
 	text := " " + label + " "
-	if width < lipgloss.Width(text) {
-		width = lipgloss.Width(text)
+	if width <= 0 {
+		return Line{}
 	}
-	left := strings.Repeat("─", max(1, (width-lipgloss.Width(text))/2))
-	right := strings.Repeat("─", max(1, width-lipgloss.Width(text)-lipgloss.Width(left)))
-	return Line{Spans: []Span{{Text: left + text + right, Role: StyleRoleNotice, Faint: true}}}
+	labelWidth := lipgloss.Width(text)
+	if width <= labelWidth {
+		return truncateDividerLine(text, width)
+	}
+	leftWidth := (width - labelWidth) / 2
+	left := strings.Repeat("─", leftWidth)
+	right := strings.Repeat("─", width-labelWidth-leftWidth)
+	return dividerLine(left + text + right)
+}
+
+func dividerLine(text string) Line {
+	return Line{Spans: []Span{{Text: text, Role: StyleRoleNotice, Faint: true}}}
+}
+
+func truncateDividerLine(text string, width int) Line {
+	if width <= 0 {
+		return Line{}
+	}
+	if width == 1 {
+		return dividerLine("…")
+	}
+	line := dividerLine(text)
+	if lipgloss.Width(text) <= width {
+		return line
+	}
+	return TruncateLine(line, width, false)
 }
 
 type toolMeta struct {

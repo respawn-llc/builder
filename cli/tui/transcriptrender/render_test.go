@@ -6,6 +6,8 @@ import (
 
 	"core/shared/clientui"
 	patchformat "core/shared/transcript/patchformat"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestRenderCommittedRowStyleMatrix(t *testing.T) {
@@ -70,6 +72,46 @@ func TestRenderPatchToolStylesPathAndCounts(t *testing.T) {
 	}
 	if !slices.Equal(spans, want) {
 		t.Fatalf("patch spans = %+v, want %+v", spans, want)
+	}
+}
+
+func TestRenderDividerStaysWithinFrameWidth(t *testing.T) {
+	assistantLabelWidth := lipgloss.Width(" assistant ")
+	cases := []struct {
+		name  string
+		group clientui.TranscriptRowKind
+		width int
+	}{
+		{name: "negative", group: clientui.TranscriptRowAssistant, width: -1},
+		{name: "zero", group: clientui.TranscriptRowAssistant, width: 0},
+		{name: "single cell", group: clientui.TranscriptRowAssistant, width: 1},
+		{name: "narrower than label", group: clientui.TranscriptRowAssistant, width: 4},
+		{name: "exact label width", group: clientui.TranscriptRowAssistant, width: assistantLabelWidth},
+		{name: "barely wider than label", group: clientui.TranscriptRowAssistant, width: assistantLabelWidth + 1},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			line := RenderDivider(tt.group, tt.width)
+			plainWidth := lipgloss.Width(line.Plain())
+			if tt.width <= 0 {
+				if plainWidth != 0 {
+					t.Fatalf("divider width = %d, want empty for nonpositive frame width %d", plainWidth, tt.width)
+				}
+				return
+			}
+			if plainWidth > tt.width {
+				t.Fatalf("divider width = %d, want <= frame width %d", plainWidth, tt.width)
+			}
+			if plainWidth == 0 {
+				t.Fatalf("divider unexpectedly empty for positive frame width %d", tt.width)
+			}
+			for _, span := range line.Spans {
+				if span.Role != StyleRoleNotice || !span.Faint {
+					t.Fatalf("divider span has invalid style metadata: %+v", span)
+				}
+			}
+		})
 	}
 }
 
