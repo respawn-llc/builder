@@ -97,6 +97,30 @@ func TestDetailModeExpandsSelectedEntry(t *testing.T) {
 	}
 }
 
+func TestDetailSelectionActionReflectsSelectedExpansionState(t *testing.T) {
+	model := NewModel()
+	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
+		Entries: []clientui.ChatEntry{{Role: "assistant", Text: "line one\nline two"}},
+	}})
+	model = next.(Model)
+	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
+	model = next.(Model)
+
+	if got := model.DetailSelectionAction(); got != DetailSelectionActionExpand {
+		t.Fatalf("detail action = %v, want expand", got)
+	}
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(Model)
+	if got := model.DetailSelectionAction(); got != DetailSelectionActionCollapse {
+		t.Fatalf("detail action = %v, want collapse", got)
+	}
+	next, _ = model.Update(SetModeMsg{Mode: ModeOngoing})
+	model = next.(Model)
+	if got := model.DetailSelectionAction(); got != DetailSelectionActionNone {
+		t.Fatalf("ongoing detail action = %v, want none", got)
+	}
+}
+
 func TestDetailChatEntryNoticeKeepsCompactTextSeparateFromExpandedBody(t *testing.T) {
 	row, ok := detailRowFromChatEntry(clientui.ChatEntry{
 		Role:          "compaction_notice",
@@ -121,6 +145,33 @@ func TestDetailChatEntryNoticeKeepsCompactTextSeparateFromExpandedBody(t *testin
 	}
 	if got := expanded.Lines[0].Spans[2].Text; got != "  full persisted notice body  " {
 		t.Fatalf("expanded notice body span = %q, want full body", got)
+	}
+}
+
+func TestDetailChatEntryNoticeMapsLegacySeverityRoles(t *testing.T) {
+	cases := []struct {
+		role         string
+		wantSeverity clientui.TranscriptNoticeSeverity
+		wantReason   clientui.TranscriptNoticeReason
+	}{
+		{role: "error", wantSeverity: clientui.TranscriptNoticeError, wantReason: clientui.TranscriptNoticeLegacyUntypedNotice},
+		{role: "warning", wantSeverity: clientui.TranscriptNoticeWarning, wantReason: clientui.TranscriptNoticeLegacyUntypedNotice},
+		{role: "cache_warning", wantSeverity: clientui.TranscriptNoticeWarning, wantReason: clientui.TranscriptNoticeCacheWarning},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.role, func(t *testing.T) {
+			row, ok := detailRowFromChatEntry(clientui.ChatEntry{Role: tt.role, Text: "legacy notice"})
+			if !ok {
+				t.Fatal("notice chat entry was dropped")
+			}
+			if row.Kind != clientui.TranscriptRowNotice || row.Notice == nil {
+				t.Fatalf("row = %#v, want notice row", row)
+			}
+			if row.Notice.Severity != tt.wantSeverity || row.Notice.Reason != tt.wantReason {
+				t.Fatalf("notice severity/reason = %s/%s, want %s/%s", row.Notice.Severity, row.Notice.Reason, tt.wantSeverity, tt.wantReason)
+			}
+		})
 	}
 }
 

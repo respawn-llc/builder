@@ -31,7 +31,14 @@ func (r uiWindowFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			}
 			return handledUIFeatureUpdate(m, nil)
 		}
-		result, err := m.ongoingSurface.Resize(ongoing.Size{Width: msg.Width, Height: msg.Height}, m.ongoingFrameInput())
+		size := ongoing.Size{Width: msg.Width, Height: msg.Height}
+		var result ongoing.Result
+		var err error
+		if m.ongoingTranscript != nil {
+			result, err = m.ongoingTranscript.Resize(size)
+		} else {
+			result, err = m.ongoingSurface.Resize(size, m.ongoingFrameInput())
+		}
 		if err != nil {
 			return handledUIFeatureUpdate(m, m.handleOngoingSurfaceError(err))
 		}

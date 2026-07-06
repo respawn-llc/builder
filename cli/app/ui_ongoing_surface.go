@@ -72,7 +72,13 @@ func (m *uiModel) renderNativeOngoingSurface() tea.Cmd {
 	if m == nil || m.ongoingSurface == nil || !m.nativeOngoingSurfaceActive() {
 		return nil
 	}
-	result, err := m.ongoingSurface.Render(m.ongoingFrameInput())
+	var result ongoing.Result
+	var err error
+	if m.ongoingTranscript != nil {
+		result, err = m.ongoingTranscript.Render()
+	} else {
+		result, err = m.ongoingSurface.Render(m.ongoingFrameInput())
+	}
 	if err != nil {
 		return m.handleOngoingSurfaceError(err)
 	}

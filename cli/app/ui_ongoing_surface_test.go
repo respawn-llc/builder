@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -79,6 +80,41 @@ func TestOngoingTranscriptEventReachesNativeSurface(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, "hydrated row") {
 		t.Fatalf("native surface output = %q, want hydrated row", got)
+	}
+}
+
+func TestNativeOngoingRepaintKeepsControllerLiveFrameSections(t *testing.T) {
+	var out bytes.Buffer
+	nativeSurface := ongoing.NewSurface(&out)
+	spySurface := &ongoingSurfaceSpy{}
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUIOngoingSurface(nativeSurface),
+	), 40, 8)
+	m.ongoingTranscript = newOngoingTranscriptController(spySurface, m.ongoingFrameInput)
+	if _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	if _, err := m.ongoingTranscript.Accept(clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessagePendingSessionPrompt,
+		PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{
+			ID:    "ask-1",
+			State: clientui.TranscriptPromptPending,
+			Data:  clientui.TranscriptPendingSessionPromptData{Question: "Approve command?"},
+		},
+	}); err != nil {
+		t.Fatalf("accept pending prompt: %v", err)
+	}
+	spySurface.calls = nil
+
+	m.input = "typing while prompt is pending"
+	_ = m.renderNativeOngoingSurface()
+
+	if got, want := spySurface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls = %v, want %v", got, want)
+	}
+	if got, want := spySurface.lastFrameSectionLines(ongoing.FrameSectionPendingPrompt), []string{"Approve command?"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("prompt section lines = %v, want %v", got, want)
 	}
 }
 

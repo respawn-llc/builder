@@ -671,6 +671,45 @@ func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
 		t.Fatalf("did not expect transcript mode label in detail status line, got %q", statusLine)
 	}
 }
+
+func TestDetailModeStatusLineShowsSelectedExpandAction(t *testing.T) {
+	m := newProjectedStaticUIModel(
+		WithUIModelName("gpt-5"),
+	)
+	m.termWidth = 100
+	m.termHeight = 16
+	m.windowSizeKnown = true
+	m.layout().syncViewport()
+	m.forwardToView(tui.SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
+		Entries: []clientui.ChatEntry{{Role: "assistant", Text: "line one\nline two"}},
+	}})
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	updated := next.(*uiModel)
+	if updated.view.Mode() != tui.ModeDetail {
+		t.Fatalf("mode=%q want detail", updated.view.Mode())
+	}
+	statusLine := lastRenderedLine(updated.View())
+	if !strings.Contains(ansi.Strip(statusLine), "Enter to expand") {
+		t.Fatalf("detail status line = %q, want expand action", statusLine)
+	}
+
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = next.(*uiModel)
+	statusLine = lastRenderedLine(updated.View())
+	if !strings.Contains(ansi.Strip(statusLine), "Enter to collapse") {
+		t.Fatalf("detail status line = %q, want collapse action", statusLine)
+	}
+}
+
+func lastRenderedLine(view string) string {
+	lines := strings.Split(ansi.Strip(view), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	return lines[len(lines)-1]
+}
+
 func TestAskQuestionMarkdownPromptCursorTracksInputAfterExpandedQuestion(t *testing.T) {
 	question := strings.Join([]string{
 		"Review **this plan** before answer:",

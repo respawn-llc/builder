@@ -15,6 +15,7 @@ const ongoingTranscriptQueueLimit = 1000
 type ongoingTranscriptSurface interface {
 	ApplyTerminalMessage(clientui.TranscriptMessage, ongoing.FrameInput) (ongoing.Result, error)
 	Render(ongoing.FrameInput) (ongoing.Result, error)
+	Resize(ongoing.Size, ongoing.FrameInput) (ongoing.Result, error)
 }
 
 type ongoingFrameProvider func() ongoing.FrameInput
@@ -75,6 +76,20 @@ func (c *ongoingTranscriptController) ResetForScratchHydration() {
 	c.hydrated = false
 	c.lastSequence = 0
 	c.liveReadModel.reset()
+}
+
+func (c *ongoingTranscriptController) Render() (ongoing.Result, error) {
+	if c == nil || c.surface == nil {
+		return ongoing.Result{}, nil
+	}
+	return c.surface.Render(c.frameInput())
+}
+
+func (c *ongoingTranscriptController) Resize(size ongoing.Size) (ongoing.Result, error) {
+	if c == nil || c.surface == nil {
+		return ongoing.Result{}, nil
+	}
+	return c.surface.Resize(size, c.frameInput())
 }
 
 func (c *ongoingTranscriptController) HandleSubscriptionLoss() ongoing.Result {

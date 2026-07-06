@@ -223,7 +223,7 @@ func hasClosedBlockBoundary(source string, boundary int) bool {
 		return false
 	}
 	if boundary == len(source) {
-		return strings.HasSuffix(source, "\n")
+		return hasTrailingClosedBlockBoundary(source)
 	}
 	index := boundary
 	sawNewline := false
@@ -243,5 +243,28 @@ func hasClosedBlockBoundary(source string, boundary int) bool {
 			return false
 		}
 	}
-	return sawNewline
+	return false
+}
+
+func hasTrailingClosedBlockBoundary(source string) bool {
+	newlines := 0
+	for index := len(source) - 1; index >= 0; index-- {
+		switch source[index] {
+		case ' ', '\t':
+			continue
+		case '\n':
+			newlines++
+			if newlines >= 2 {
+				return true
+			}
+			if index > 0 && source[index-1] == '\r' {
+				index--
+			}
+		case '\r':
+			continue
+		default:
+			return false
+		}
+	}
+	return false
 }

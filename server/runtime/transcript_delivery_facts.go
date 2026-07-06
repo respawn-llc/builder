@@ -105,7 +105,7 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 		if strings.TrimSpace(evt.Error) == "" {
 			return nil
 		}
-		return []TranscriptCommittedRowFact{runtimeDiagnosticNoticeFact("in_flight_clear_failed", "error", evt.Error)}
+		return []TranscriptCommittedRowFact{runtimeDiagnosticNoticeFact("in_flight_clear_failed", transcript.NoticeSeverityError, evt.Error)}
 	case EventBackgroundUpdated:
 		return nil
 	default:
@@ -146,7 +146,7 @@ func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID
 	switch msg.Role {
 	case llm.RoleUser:
 		if msg.MessageType == llm.MessageTypeCompactionSummary {
-			return []TranscriptCommittedRowFact{runtimeNoticeFactFromMessage(msg, "info")}
+			return []TranscriptCommittedRowFact{runtimeNoticeFactFromMessage(msg, transcript.NoticeSeverityInfo)}
 		}
 		if strings.TrimSpace(msg.Content) == "" {
 			return nil
@@ -194,7 +194,7 @@ func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID
 		if strings.TrimSpace(msg.Content) == "" || msg.MessageType == llm.MessageTypeReviewerFeedback {
 			return nil
 		}
-		return []TranscriptCommittedRowFact{runtimeNoticeFactFromMessage(msg, "info")}
+		return []TranscriptCommittedRowFact{runtimeNoticeFactFromMessage(msg, transcript.NoticeSeverityInfo)}
 	default:
 		return nil
 	}
@@ -287,8 +287,8 @@ func transcriptToolRowFactFromResult(result tools.Result) TranscriptCommittedRow
 func transcriptCacheWarningFact(warning transcript.CacheWarning, visibility transcript.EntryVisibility) TranscriptCommittedRowFact {
 	normalized := normalizeRuntimeEntryVisibility(visibility)
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: normalized, Notice: &TranscriptNoticeRowFact{
-		Reason:   "cache_warning",
-		Severity: "warning",
+		Reason:   transcript.NoticeReasonCacheWarning,
+		Severity: transcript.NoticeSeverityWarning,
 		CacheWarning: &TranscriptCacheWarningFact{
 			Scope:           string(warning.Scope),
 			Reason:          string(warning.Reason),
@@ -310,22 +310,11 @@ func legacyUntypedNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedR
 		legacyTextPtr = &legacyText
 	}
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: normalizeRuntimeEntryVisibility(entry.Visibility), Notice: &TranscriptNoticeRowFact{
-		Reason:     "legacy_untyped_notice",
-		Severity:   legacyLocalEntrySeverity(entry),
+		Reason:     transcript.NoticeReasonLegacyUntypedNotice,
+		Severity:   transcript.LegacyNoticeSeverityForRole(entry.Role),
 		LegacyText: legacyTextPtr,
 		NoticeID:   noticeIDPtr,
 	}}
-}
-
-func legacyLocalEntrySeverity(entry ChatEntry) string {
-	switch strings.TrimSpace(entry.Role) {
-	case "error":
-		return "error"
-	case "warning", cacheWarningTranscriptRole:
-		return "warning"
-	default:
-		return "info"
-	}
 }
 
 func runtimeNoticeFactFromMessage(msg llm.Message, severity string) TranscriptCommittedRowFact {
@@ -334,7 +323,7 @@ func runtimeNoticeFactFromMessage(msg llm.Message, severity string) TranscriptCo
 		code = "runtime_notice"
 	}
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: messageTypeTranscriptVisibility(msg.MessageType), Notice: &TranscriptNoticeRowFact{
-		Reason:           "runtime_diagnostic",
+		Reason:           transcript.NoticeReasonRuntimeDiagnostic,
 		Severity:         normalizeTranscriptNoticeSeverity(severity),
 		MessageType:      msg.MessageType,
 		SourcePath:       strings.TrimSpace(msg.SourcePath),
@@ -353,8 +342,8 @@ func runtimeNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedRowFact
 	}
 	detail := firstNonEmpty(entry.Text, entry.CondensedText, entry.CompactLabel, entry.ToolResultSummary)
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: normalizeRuntimeEntryVisibility(entry.Visibility), Notice: &TranscriptNoticeRowFact{
-		Reason:           "runtime_diagnostic",
-		Severity:         legacyLocalEntrySeverity(entry),
+		Reason:           transcript.NoticeReasonRuntimeDiagnostic,
+		Severity:         transcript.LegacyNoticeSeverityForRole(entry.Role),
 		NoticeID:         noticeIDPtr,
 		MessageType:      entry.MessageType,
 		SourcePath:       strings.TrimSpace(entry.SourcePath),
@@ -371,7 +360,7 @@ func runtimeDiagnosticNoticeFact(code string, severity string, detail string) Tr
 		code = "runtime_notice"
 	}
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: transcript.EntryVisibilityOngoing, Notice: &TranscriptNoticeRowFact{
-		Reason:           "runtime_diagnostic",
+		Reason:           transcript.NoticeReasonRuntimeDiagnostic,
 		Severity:         normalizeTranscriptNoticeSeverity(severity),
 		DiagnosticCode:   code,
 		DiagnosticDetail: detail,
@@ -381,7 +370,7 @@ func runtimeDiagnosticNoticeFact(code string, severity string, detail string) Tr
 func normalizeTranscriptNoticeSeverity(severity string) string {
 	severity = strings.TrimSpace(severity)
 	if severity == "" {
-		return "info"
+		return transcript.NoticeSeverityInfo
 	}
 	return severity
 }

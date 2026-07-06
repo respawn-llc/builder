@@ -110,6 +110,43 @@ func TestWindowResizeWhileDetailOwnsTerminalRequestsWidthRehydrationOnReturn(t *
 	}
 }
 
+func TestWindowResizeKeepsControllerLiveFrameSections(t *testing.T) {
+	var raw bytes.Buffer
+	nativeSurface := ongoing.NewSurface(&raw)
+	surface := &ongoingSurfaceSpy{}
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUIOngoingSurface(nativeSurface),
+	), 40, 8)
+	m.ongoingTranscript = newOngoingTranscriptController(surface, m.ongoingFrameInput)
+	if _, err := m.ongoingTranscript.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	if _, err := m.ongoingTranscript.Accept(clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessagePendingSessionPrompt,
+		PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{
+			ID:    "ask-1",
+			State: clientui.TranscriptPromptPending,
+			Data:  clientui.TranscriptPendingSessionPromptData{Question: "Approve command?"},
+		},
+	}); err != nil {
+		t.Fatalf("accept pending prompt: %v", err)
+	}
+	surface.calls = nil
+
+	result := m.windowReducer().Update(tea.WindowSizeMsg{Width: 40, Height: 10})
+
+	if !result.handled {
+		t.Fatal("window resize was not handled")
+	}
+	if got, want := surface.callKinds(), []string{"resize"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls = %v, want %v", got, want)
+	}
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingPrompt), []string{"Approve command?"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("prompt section lines = %v, want %v", got, want)
+	}
+}
+
 func committedMessageForOngoingResizeTest() clientui.TranscriptMessage {
 	return clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageCommittedRow,

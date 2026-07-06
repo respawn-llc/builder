@@ -192,6 +192,11 @@ func (s *ongoingSurfaceSpy) Render(frame ongoing.FrameInput) (ongoing.Result, er
 	return ongoing.Result{}, s.err
 }
 
+func (s *ongoingSurfaceSpy) Resize(_ ongoing.Size, frame ongoing.FrameInput) (ongoing.Result, error) {
+	s.calls = append(s.calls, ongoingSurfaceCall{name: "resize", frame: frame})
+	return ongoing.Result{}, s.err
+}
+
 func (s *ongoingSurfaceSpy) appliedKinds() []clientui.TranscriptMessageKind {
 	kinds := make([]clientui.TranscriptMessageKind, 0, len(s.calls))
 	for _, call := range s.calls {
@@ -281,7 +286,7 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 	case clientui.TranscriptMessageCompactionStatus:
 		message.CompactionStatus = &clientui.TranscriptCompactionStatus{Mode: "auto", Count: 2, State: "ready"}
 	case clientui.TranscriptMessagePendingSessionPrompt:
-		message.PendingSessionPrompt = &clientui.TranscriptPendingSessionPrompt{ID: "33333333-3333-4333-8333-333333333333", State: clientui.TranscriptPromptPending, Data: clientui.TranscriptPendingSessionPromptData{Question: "Approve command?"}}
+		message.PendingSessionPrompt = &clientui.TranscriptPendingSessionPrompt{ID: "ask-1", State: clientui.TranscriptPromptPending, Data: clientui.TranscriptPendingSessionPromptData{Question: "Approve command?"}}
 	case clientui.TranscriptMessageContextUsage:
 		message.ContextUsage = &clientui.RuntimeContextUsage{UsedTokens: 1200, WindowTokens: 2000}
 	case clientui.TranscriptMessageGoalStatus:

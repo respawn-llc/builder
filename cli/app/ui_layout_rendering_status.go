@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 
+	"core/cli/tui"
 	"core/server/llm"
 	sharedtheme "core/shared/theme"
 
@@ -119,7 +120,20 @@ func (l uiViewLayout) renderStatusLineRight(width int, left string, style uiStyl
 	}
 	prepend(l.renderStatusNotice(noticeAvailable))
 
+	prepend(l.renderDetailSelectionAction(style))
+
 	return strings.Join(segments, separator)
+}
+
+func (l uiViewLayout) renderDetailSelectionAction(style uiStyles) string {
+	switch l.model.view.DetailSelectionAction() {
+	case tui.DetailSelectionActionExpand:
+		return style.meta.Render("Enter to expand")
+	case tui.DetailSelectionActionCollapse:
+		return style.meta.Render("Enter to collapse")
+	default:
+		return ""
+	}
 }
 
 func (l uiViewLayout) renderStatusNotice(available int) string {

@@ -56,6 +56,14 @@ const (
 	DetailTranscriptAnchorPreserve
 )
 
+type DetailSelectionAction uint8
+
+const (
+	DetailSelectionActionNone DetailSelectionAction = iota
+	DetailSelectionActionExpand
+	DetailSelectionActionCollapse
+)
+
 type Option func(*Model)
 
 func WithTheme(themeName string) Option {
@@ -186,6 +194,20 @@ func (m Model) View() string {
 
 func (m Model) Mode() Mode {
 	return m.mode
+}
+
+func (m Model) DetailSelectionAction() DetailSelectionAction {
+	if m.mode != ModeDetail {
+		return DetailSelectionActionNone
+	}
+	selected, ok := m.selectedDetailIndex()
+	if !ok || selected < 0 || selected >= len(m.detailEntries) {
+		return DetailSelectionActionNone
+	}
+	if _, ok := m.expanded[selected]; ok {
+		return DetailSelectionActionCollapse
+	}
+	return DetailSelectionActionExpand
 }
 
 func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor DetailTranscriptPageAnchor) {
@@ -522,7 +544,8 @@ func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommit
 	if visibility == transcript.EntryVisibilityHidden {
 		return clientui.TranscriptCommittedRow{}, false
 	}
-	switch strings.TrimSpace(entry.Role) {
+	role := strings.TrimSpace(entry.Role)
+	switch role {
 	case "user":
 		if strings.TrimSpace(entry.Text) == "" {
 			return clientui.TranscriptCommittedRow{}, false
@@ -553,8 +576,8 @@ func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommit
 		}}, true
 	default:
 		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
-			Reason:   clientui.TranscriptNoticeLegacyUntypedNotice,
-			Severity: clientui.TranscriptNoticeInfo,
+			Reason:   clientui.TranscriptNoticeReason(transcript.LegacyNoticeReasonForRole(role)),
+			Severity: clientui.TranscriptNoticeSeverity(transcript.LegacyNoticeSeverityForRole(role)),
 			Data: clientui.TranscriptNoticeData{
 				LegacyText:    stringPtrIfNonBlank(entry.Text),
 				NoticeID:      stringPtr(strings.TrimSpace(entry.NoticeID)),

@@ -18,9 +18,9 @@ type ongoingTranscriptReadModel struct {
 	sections         map[ongoing.FrameSectionKind]ongoing.FrameSection
 	pendingTools     []ongoingPendingTool
 	pendingToolIndex map[string]int
-	queuedMessages   keyedOngoingLiveItems[clientui.TranscriptQueuedOrSteeredMessageState]
-	pendingPrompts   keyedOngoingLiveItems[clientui.TranscriptPendingSessionPrompt]
-	backgroundTasks  keyedOngoingLiveItems[clientui.TranscriptBackgroundActivity]
+	queuedMessages   keyedOngoingLiveItems[ongoingLiveItemID, clientui.TranscriptQueuedOrSteeredMessageState]
+	pendingPrompts   keyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPendingSessionPrompt]
+	backgroundTasks  keyedOngoingLiveItems[ongoingLiveItemID, clientui.TranscriptBackgroundActivity]
 }
 
 type ongoingPendingTool struct {
@@ -28,20 +28,22 @@ type ongoingPendingTool struct {
 	tool clientui.TranscriptToolStart
 }
 
-type keyedOngoingLiveItems[T any] struct {
-	order []ongoingLiveItemID
-	items map[ongoingLiveItemID]T
+type keyedOngoingLiveItems[K comparable, T any] struct {
+	order []K
+	items map[K]T
 }
 
 type ongoingLiveItemID uuid.UUID
+
+type ongoingPromptID string
 
 func newOngoingTranscriptReadModel() ongoingTranscriptReadModel {
 	return ongoingTranscriptReadModel{
 		sections:         map[ongoing.FrameSectionKind]ongoing.FrameSection{},
 		pendingToolIndex: map[string]int{},
-		queuedMessages:   newKeyedOngoingLiveItems[clientui.TranscriptQueuedOrSteeredMessageState](),
-		pendingPrompts:   newKeyedOngoingLiveItems[clientui.TranscriptPendingSessionPrompt](),
-		backgroundTasks:  newKeyedOngoingLiveItems[clientui.TranscriptBackgroundActivity](),
+		queuedMessages:   newKeyedOngoingLiveItems[ongoingLiveItemID, clientui.TranscriptQueuedOrSteeredMessageState](),
+		pendingPrompts:   newKeyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPendingSessionPrompt](),
+		backgroundTasks:  newKeyedOngoingLiveItems[ongoingLiveItemID, clientui.TranscriptBackgroundActivity](),
 	}
 }
 
@@ -154,7 +156,7 @@ func (m *ongoingTranscriptReadModel) applyPendingPrompt(prompt *clientui.Transcr
 	if prompt == nil {
 		return
 	}
-	id := parseOngoingLiveItemID(prompt.ID, "pending prompt")
+	id := parseOngoingPromptID(prompt.ID)
 	if prompt.State != clientui.TranscriptPromptPending {
 		m.pendingPrompts.remove(id)
 		m.refreshPendingPromptSection(80)
@@ -186,18 +188,18 @@ func (m *ongoingTranscriptReadModel) refreshBackgroundActivitySection(width int)
 	m.setSection(ongoing.FrameSectionBackgroundActivity, terminalSafeFrameLinesForWidth(backgroundActivityListLines(m.backgroundTasks.values()), width))
 }
 
-func newKeyedOngoingLiveItems[T any]() keyedOngoingLiveItems[T] {
-	return keyedOngoingLiveItems[T]{items: map[ongoingLiveItemID]T{}}
+func newKeyedOngoingLiveItems[K comparable, T any]() keyedOngoingLiveItems[K, T] {
+	return keyedOngoingLiveItems[K, T]{items: map[K]T{}}
 }
 
-func (items *keyedOngoingLiveItems[T]) set(id ongoingLiveItemID, value T) {
+func (items *keyedOngoingLiveItems[K, T]) set(id K, value T) {
 	if _, exists := items.items[id]; !exists {
 		items.order = append(items.order, id)
 	}
 	items.items[id] = value
 }
 
-func (items *keyedOngoingLiveItems[T]) remove(id ongoingLiveItemID) {
+func (items *keyedOngoingLiveItems[K, T]) remove(id K) {
 	if _, exists := items.items[id]; !exists {
 		return
 	}
@@ -211,7 +213,7 @@ func (items *keyedOngoingLiveItems[T]) remove(id ongoingLiveItemID) {
 	items.order = filtered
 }
 
-func (items keyedOngoingLiveItems[T]) values() []T {
+func (items keyedOngoingLiveItems[K, T]) values() []T {
 	out := make([]T, 0, len(items.order))
 	for _, id := range items.order {
 		if value, exists := items.items[id]; exists {
@@ -219,6 +221,14 @@ func (items keyedOngoingLiveItems[T]) values() []T {
 		}
 	}
 	return out
+}
+
+func parseOngoingPromptID(raw string) ongoingPromptID {
+	id := strings.TrimSpace(raw)
+	if id == "" {
+		panicOngoingTranscriptReadModelDeveloperError("pending_prompt_id", "missing id", nil)
+	}
+	return ongoingPromptID(id)
 }
 
 func parseOngoingLiveItemID(raw string, label string) ongoingLiveItemID {

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/transcript"
+
 	"github.com/google/uuid"
 )
 
@@ -98,17 +100,17 @@ const (
 type TranscriptNoticeReason string
 
 const (
-	TranscriptNoticeCacheWarning        TranscriptNoticeReason = "cache_warning"
-	TranscriptNoticeRuntimeDiagnostic   TranscriptNoticeReason = "runtime_diagnostic"
-	TranscriptNoticeLegacyUntypedNotice TranscriptNoticeReason = "legacy_untyped_notice"
+	TranscriptNoticeCacheWarning        TranscriptNoticeReason = TranscriptNoticeReason(transcript.NoticeReasonCacheWarning)
+	TranscriptNoticeRuntimeDiagnostic   TranscriptNoticeReason = TranscriptNoticeReason(transcript.NoticeReasonRuntimeDiagnostic)
+	TranscriptNoticeLegacyUntypedNotice TranscriptNoticeReason = TranscriptNoticeReason(transcript.NoticeReasonLegacyUntypedNotice)
 )
 
 type TranscriptNoticeSeverity string
 
 const (
-	TranscriptNoticeInfo    TranscriptNoticeSeverity = "info"
-	TranscriptNoticeWarning TranscriptNoticeSeverity = "warning"
-	TranscriptNoticeError   TranscriptNoticeSeverity = "error"
+	TranscriptNoticeInfo    TranscriptNoticeSeverity = TranscriptNoticeSeverity(transcript.NoticeSeverityInfo)
+	TranscriptNoticeWarning TranscriptNoticeSeverity = TranscriptNoticeSeverity(transcript.NoticeSeverityWarning)
+	TranscriptNoticeError   TranscriptNoticeSeverity = TranscriptNoticeSeverity(transcript.NoticeSeverityError)
 )
 
 type TranscriptPromptKind string

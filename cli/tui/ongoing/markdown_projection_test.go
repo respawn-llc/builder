@@ -85,6 +85,18 @@ func TestMarkdownProjectionKeepsOpenBlocksMutableUntilBlankBoundary(t *testing.T
 		t.Fatalf("open table volatile rows = %v, want %v", got, want)
 	}
 
+	openParagraphAtEOF := projector.Project(markdownProjectionInput{
+		Source:           "hello\n",
+		Width:            40,
+		PromotedBoundary: 0,
+	})
+	if len(openParagraphAtEOF.PromotedRows) != 0 {
+		t.Fatalf("single-newline paragraph promoted rows = %v, want none", openParagraphAtEOF.PromotedRows)
+	}
+	if got, want := openParagraphAtEOF.VolatileRows, []string{"hello"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("single-newline paragraph volatile rows = %v, want %v", got, want)
+	}
+
 	closedTable := projector.Project(markdownProjectionInput{
 		Source:           "| a | b |\n| - | - |\n| 1 | 2 |\n\n",
 		Width:            40,
