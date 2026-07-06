@@ -96,6 +96,42 @@ func TestTranscriptMessagesIgnoreNoopAssistantResetWithoutStream(t *testing.T) {
 	}
 }
 
+func TestTranscriptBackgroundActivityUsesRuntimeActivityID(t *testing.T) {
+	activityID := uuid.New()
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind: runtime.EventBackgroundUpdated,
+		Background: &runtime.BackgroundShellEvent{
+			ID:         "1000",
+			ActivityID: activityID,
+			State:      "running",
+			Preview:    "tests",
+		},
+	})
+	if len(messages) != 1 || messages[0].BackgroundActivity == nil {
+		t.Fatalf("messages = %+v, want one background activity", messages)
+	}
+	if got := messages[0].BackgroundActivity.ID; got != activityID.String() {
+		t.Fatalf("background transcript id = %q, want activity id %q", got, activityID)
+	}
+}
+
+func TestTranscriptBackgroundActivityRejectsMissingRuntimeActivityID(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected missing background activity id panic")
+		}
+	}()
+
+	_ = TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind: runtime.EventBackgroundUpdated,
+		Background: &runtime.BackgroundShellEvent{
+			ID:      "1000",
+			State:   "running",
+			Preview: "tests",
+		},
+	})
+}
+
 func TestTranscriptMessagesEmitAssistantRowBeforeToolStarts(t *testing.T) {
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind: runtime.EventAssistantMessage,

@@ -1,6 +1,7 @@
 package runtimeview
 
 import (
+	"fmt"
 	"strings"
 
 	"core/server/runtime"
@@ -147,16 +148,7 @@ func transcriptFeedStateMessages(evt runtime.Event) []clientui.TranscriptMessage
 		out = append(out, clientui.TranscriptMessage{Kind: clientui.TranscriptMessageGoalStatus, GoalStatus: &goal})
 	}
 	if evt.Background != nil {
-		background := clientui.TranscriptBackgroundActivity{
-			ID:                evt.Background.ID,
-			State:             evt.Background.State,
-			Command:           evt.Background.Command,
-			Workdir:           evt.Background.Workdir,
-			LogPath:           evt.Background.LogPath,
-			Preview:           evt.Background.Preview,
-			Removed:           evt.Background.Removed > 0,
-			UserRequestedKill: evt.Background.UserRequestedKill,
-		}
+		background := transcriptBackgroundActivity(*evt.Background)
 		if evt.Background.ExitCode != nil {
 			exitCode := *evt.Background.ExitCode
 			background.ExitCode = &exitCode
@@ -164,6 +156,22 @@ func transcriptFeedStateMessages(evt runtime.Event) []clientui.TranscriptMessage
 		out = append(out, clientui.TranscriptMessage{Kind: clientui.TranscriptMessageBackgroundActivity, BackgroundActivity: &background})
 	}
 	return out
+}
+
+func transcriptBackgroundActivity(evt runtime.BackgroundShellEvent) clientui.TranscriptBackgroundActivity {
+	if evt.ActivityID == uuid.Nil || evt.ActivityID.Version() != 4 {
+		panic(fmt.Sprintf("runtime background transcript activity missing UUIDv4 activity id: process_id=%q activity_id=%q", evt.ID, evt.ActivityID))
+	}
+	return clientui.TranscriptBackgroundActivity{
+		ID:                evt.ActivityID.String(),
+		State:             evt.State,
+		Command:           evt.Command,
+		Workdir:           evt.Workdir,
+		LogPath:           evt.LogPath,
+		Preview:           evt.Preview,
+		Removed:           evt.Removed > 0,
+		UserRequestedKill: evt.UserRequestedKill,
+	}
 }
 
 func TranscriptSessionIdentityFromRuntime(engine *runtime.Engine) clientui.TranscriptSessionIdentity {

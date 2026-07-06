@@ -65,7 +65,7 @@ func (m *uiModel) handleOngoingSurfaceError(err error) tea.Cmd {
 		m.transientStatusKind = uiStatusNoticeError
 		m.logf("ongoing.surface.error err=%q", err.Error())
 	}
-	return nil
+	return tea.Quit
 }
 
 func (m *uiModel) renderNativeOngoingSurface() tea.Cmd {
@@ -108,16 +108,21 @@ func (m *uiModel) setOngoingNormalBufferOwned(owned bool) tea.Cmd {
 	if m == nil || m.ongoingTranscript == nil {
 		return nil
 	}
+	var widthRehydrationCmd tea.Cmd
 	if owned {
 		if cmd := m.applyPendingOngoingScratchReset(); cmd != nil {
 			return cmd
+		}
+		if m.pendingOngoingWidthReset {
+			m.pendingOngoingWidthReset = false
+			widthRehydrationCmd = m.scheduleOngoingWidthRehydration()
 		}
 	}
 	result, err := m.ongoingTranscript.SetNormalBufferOwned(owned)
 	if err != nil {
 		return m.handleOngoingSurfaceError(err)
 	}
-	return m.handleOngoingResult(result)
+	return tea.Batch(m.handleOngoingResult(result), widthRehydrationCmd)
 }
 
 func waitOngoingTranscriptEvent(events <-chan ongoingTranscriptEvent) tea.Cmd {
@@ -208,17 +213,82 @@ func (m *uiModel) ongoingFrameInput() ongoing.FrameInput {
 	cursor := layout.inputPaneCursor(width)
 	visible := cursor.Visible
 	column := cursor.Col + 1
+	cursorSectionRow := cursor.Row
 	if !visible {
 		visible = true
 		column = clampCursor(m.inputCursor, len([]rune(m.input))) + 1
+		cursorSectionRow = 1
 	}
-	return ongoing.FrameInput{
+	frame := ongoing.FrameInput{
 		Size:     ongoing.Size{Width: width, Height: height},
 		Sections: sections,
 		Cursor: ongoing.Cursor{
 			Visible: visible,
 			Row:     height,
 			Column:  column,
+			Target: &ongoing.CursorTarget{
+				SectionKind: ongoing.FrameSectionInput,
+				Row:         cursorSectionRow,
+			},
 		},
 	}
+	frame.Cursor.Row = ongoingFrameInputCursorTerminalRow(frame, cursorSectionRow)
+	return frame
+}
+
+func ongoingFrameInputCursorSectionRow(frame ongoing.FrameInput) (int, bool) {
+	if !frame.Cursor.Visible {
+		return 0, false
+	}
+	if frame.Cursor.Target != nil && frame.Cursor.Target.SectionKind == ongoing.FrameSectionInput && frame.Cursor.Target.Row > 0 {
+		return frame.Cursor.Target.Row, true
+	}
+	start, end, ok := ongoingFrameSectionTerminalRows(frame, ongoing.FrameSectionInput)
+	if !ok || frame.Cursor.Row < start || frame.Cursor.Row > end {
+		return 0, false
+	}
+	return frame.Cursor.Row - start + 1, true
+}
+
+func ongoingFrameInputCursorTerminalRow(frame ongoing.FrameInput, cursorSectionRow int) int {
+	start, end, ok := ongoingFrameSectionTerminalRows(frame, ongoing.FrameSectionInput)
+	if !ok {
+		return clampTerminalCursorRow(frame.Cursor.Row, frame.Size.Height)
+	}
+	if cursorSectionRow <= 0 {
+		cursorSectionRow = 1
+	}
+	inputSectionLines := end - start + 1
+	if cursorSectionRow > inputSectionLines {
+		cursorSectionRow = inputSectionLines
+	}
+	return clampTerminalCursorRow(start+cursorSectionRow-1, frame.Size.Height)
+}
+
+func ongoingFrameSectionTerminalRows(frame ongoing.FrameInput, kind ongoing.FrameSectionKind) (int, int, bool) {
+	totalSectionLines := 0
+	for _, section := range frame.Sections {
+		totalSectionLines += len(section.Lines)
+	}
+	row := frame.Size.Height - totalSectionLines + 1
+	for _, section := range frame.Sections {
+		if section.Kind == kind {
+			return row, row + len(section.Lines) - 1, true
+		}
+		row += len(section.Lines)
+	}
+	return 0, 0, false
+}
+
+func clampTerminalCursorRow(row int, height int) int {
+	if height <= 0 {
+		return row
+	}
+	if row < 1 {
+		return 1
+	}
+	if row > height {
+		return height
+	}
+	return row
 }

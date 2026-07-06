@@ -1,12 +1,15 @@
 package runtimewire
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"core/server/runtime"
 	shelltool "core/server/tools/shell"
+
+	"github.com/google/uuid"
 )
 
 type BackgroundEventRouter struct {
@@ -64,6 +67,9 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 	if ownerSessionID == "" {
 		return
 	}
+	if evt.Snapshot.ActivityID == uuid.Nil || evt.Snapshot.ActivityID.Version() != 4 {
+		panic(fmt.Sprintf("background event missing UUIDv4 activity id: process_id=%q activity_id=%q", evt.Snapshot.ID, evt.Snapshot.ActivityID))
+	}
 	r.mu.RLock()
 	activeRuntime, ok := r.active[ownerSessionID]
 	outputLimit := r.outputLimit
@@ -86,6 +92,7 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 	activeRuntime.engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
 		Type:              string(evt.Type),
 		ID:                evt.Snapshot.ID,
+		ActivityID:        evt.Snapshot.ActivityID,
 		State:             evt.Snapshot.State,
 		Command:           evt.Snapshot.Command,
 		Workdir:           evt.Snapshot.Workdir,

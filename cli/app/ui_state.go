@@ -136,6 +136,7 @@ type uiPresentationFeatureState struct {
 	requestOngoingOpen         func()
 	ongoingWidthToken          uint64
 	pendingOngoingScratchReset *ongoing.RehydrateReason
+	pendingOngoingWidthReset   bool
 	termWidth                  int
 	termHeight                 int
 	windowSizeKnown            bool

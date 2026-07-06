@@ -3,6 +3,8 @@ package app
 import (
 	"errors"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestOngoingSurfaceErrorExitsTUIInRelease(t *testing.T) {
@@ -10,8 +12,11 @@ func TestOngoingSurfaceErrorExitsTUIInRelease(t *testing.T) {
 
 	cmd := m.handleOngoingSurfaceError(errors.New("terminal write failed"))
 
-	if cmd != nil {
-		t.Fatal("ongoing fatal error handler returned recovery command")
+	if cmd == nil {
+		t.Fatal("ongoing fatal error handler did not return quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatal("ongoing fatal error handler command did not return quit message")
 	}
 	if !m.Transition().Exit {
 		t.Fatal("ongoing fatal error did not request clear TUI exit")

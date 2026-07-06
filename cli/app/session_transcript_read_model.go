@@ -9,6 +9,8 @@ import (
 	"core/cli/tui/ongoing"
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+
+	"github.com/google/uuid"
 )
 
 type ongoingTranscriptReadModel struct {
@@ -31,7 +33,7 @@ type keyedOngoingLiveItems[T any] struct {
 	items map[ongoingLiveItemID]T
 }
 
-type ongoingLiveItemID string
+type ongoingLiveItemID uuid.UUID
 
 func newOngoingTranscriptReadModel() ongoingTranscriptReadModel {
 	return ongoingTranscriptReadModel{
@@ -127,25 +129,25 @@ func (m *ongoingTranscriptReadModel) applyQueuedOrSteered(state *clientui.Transc
 	id := queuedOrSteeredStateID(*state)
 	if state.Status != clientui.QueuedUserMessageAccepted {
 		m.queuedMessages.remove(id)
-		m.refreshQueuedOrSteeredSection()
+		m.refreshQueuedOrSteeredSection(80)
 		return
 	}
 	m.queuedMessages.set(id, *state)
-	m.refreshQueuedOrSteeredSection()
+	m.refreshQueuedOrSteeredSection(80)
 }
 
-func (m *ongoingTranscriptReadModel) refreshQueuedOrSteeredSection() {
-	m.setSection(ongoing.FrameSectionQueuedOrSteered, queuedOrSteeredListLines(m.queuedMessages.values()))
+func (m *ongoingTranscriptReadModel) refreshQueuedOrSteeredSection(width int) {
+	m.setSection(ongoing.FrameSectionQueuedOrSteered, terminalSafeFrameLinesForWidth(queuedOrSteeredListLines(m.queuedMessages.values()), width))
 }
 
 func queuedOrSteeredStateID(state clientui.TranscriptQueuedOrSteeredMessageState) ongoingLiveItemID {
-	if id := strings.TrimSpace(state.QueueItemID); id != "" {
-		return ongoingLiveItemID(id)
+	if strings.TrimSpace(state.QueueItemID) != "" {
+		return parseOngoingLiveItemID(state.QueueItemID, "queued message queue item")
 	}
-	if id := strings.TrimSpace(state.ClientRequestID); id != "" {
-		return ongoingLiveItemID(id)
+	if strings.TrimSpace(state.ClientRequestID) != "" {
+		return parseOngoingLiveItemID(state.ClientRequestID, "queued message client request")
 	}
-	panic("ongoing queued or steered message missing item id")
+	return parseOngoingLiveItemID("", "queued message queue item or client request")
 }
 
 func (m *ongoingTranscriptReadModel) applyPendingPrompt(prompt *clientui.TranscriptPendingSessionPrompt) {
@@ -155,15 +157,15 @@ func (m *ongoingTranscriptReadModel) applyPendingPrompt(prompt *clientui.Transcr
 	id := parseOngoingLiveItemID(prompt.ID, "pending prompt")
 	if prompt.State != clientui.TranscriptPromptPending {
 		m.pendingPrompts.remove(id)
-		m.refreshPendingPromptSection()
+		m.refreshPendingPromptSection(80)
 		return
 	}
 	m.pendingPrompts.set(id, *prompt)
-	m.refreshPendingPromptSection()
+	m.refreshPendingPromptSection(80)
 }
 
-func (m *ongoingTranscriptReadModel) refreshPendingPromptSection() {
-	m.setSection(ongoing.FrameSectionPendingPrompt, pendingPromptListLines(m.pendingPrompts.values()))
+func (m *ongoingTranscriptReadModel) refreshPendingPromptSection(width int) {
+	m.setSection(ongoing.FrameSectionPendingPrompt, terminalSafeFrameLinesForWidth(pendingPromptListLines(m.pendingPrompts.values()), width))
 }
 
 func (m *ongoingTranscriptReadModel) applyBackgroundActivity(activity *clientui.TranscriptBackgroundActivity) {
@@ -173,15 +175,15 @@ func (m *ongoingTranscriptReadModel) applyBackgroundActivity(activity *clientui.
 	id := parseOngoingLiveItemID(activity.ID, "background activity")
 	if activity.Removed {
 		m.backgroundTasks.remove(id)
-		m.refreshBackgroundActivitySection()
+		m.refreshBackgroundActivitySection(80)
 		return
 	}
 	m.backgroundTasks.set(id, *activity)
-	m.refreshBackgroundActivitySection()
+	m.refreshBackgroundActivitySection(80)
 }
 
-func (m *ongoingTranscriptReadModel) refreshBackgroundActivitySection() {
-	m.setSection(ongoing.FrameSectionBackgroundActivity, backgroundActivityListLines(m.backgroundTasks.values()))
+func (m *ongoingTranscriptReadModel) refreshBackgroundActivitySection(width int) {
+	m.setSection(ongoing.FrameSectionBackgroundActivity, terminalSafeFrameLinesForWidth(backgroundActivityListLines(m.backgroundTasks.values()), width))
 }
 
 func newKeyedOngoingLiveItems[T any]() keyedOngoingLiveItems[T] {
@@ -226,7 +228,14 @@ func parseOngoingLiveItemID(raw string, label string) ongoingLiveItemID {
 			"label": label,
 		})
 	}
-	return ongoingLiveItemID(id)
+	parsed, err := uuid.Parse(id)
+	if err != nil || parsed == uuid.Nil || parsed.Version() != 4 {
+		panicOngoingTranscriptReadModelDeveloperError("live_item_id", "invalid UUIDv4 id", map[string]any{
+			"label": label,
+			"id":    id,
+		})
+	}
+	return ongoingLiveItemID(parsed)
 }
 
 func panicOngoingTranscriptReadModelDeveloperError(operation, reason string, facts map[string]any) {

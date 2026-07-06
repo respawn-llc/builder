@@ -106,6 +106,32 @@ func TestRenderShrinksLiveBandBeforeTerminalCoordinateWrites(t *testing.T) {
 	assertVisibleTextOps(t, ops, []string{"three", "four", "five"})
 }
 
+func TestRenderPlacesTargetedCursorAfterLiveBandShrink(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+
+	_, err := surface.Render(FrameInput{
+		Size: Size{Width: 20, Height: 4},
+		Sections: []FrameSection{
+			{Kind: FrameSectionInput, Lines: []string{"one", "two", "three", "four"}},
+			{Kind: FrameSectionStatus, Lines: []string{"ready"}},
+		},
+		Cursor: Cursor{
+			Visible: true,
+			Row:     4,
+			Column:  2,
+			Target:  &CursorTarget{SectionKind: FrameSectionInput, Row: 4},
+		},
+	})
+	if err != nil {
+		t.Fatalf("render shrink cursor frame: %v", err)
+	}
+
+	ops := parseTerminalOps(out.String())
+	assertVisibleTextOps(t, ops, []string{"two", "three", "four", "ready"})
+	assertCursorAddress(t, ops, 3, 2)
+}
+
 func TestCommittedRowsReserveTerminalSpaceBeforeLiveBand(t *testing.T) {
 	var out bytes.Buffer
 	surface := NewSurface(&out)
@@ -124,18 +150,43 @@ func TestCommittedRowsReserveTerminalSpaceBeforeLiveBand(t *testing.T) {
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"❯ committed"})
 }
 
+func assertCursorAddress(t *testing.T, ops []terminalOp, wantRow int, wantColumn int) {
+	t.Helper()
+	for _, address := range cursorAddresses(ops) {
+		if address.row == wantRow && address.column == wantColumn {
+			return
+		}
+	}
+	t.Fatalf("cursor address %d,%d not found in ops %+v", wantRow, wantColumn, ops)
+}
+
 func assertCursorAddressRowsAtLeastOne(t *testing.T, ops []terminalOp) {
 	t.Helper()
+	for _, address := range cursorAddresses(ops) {
+		if address.row < 1 {
+			t.Fatalf("cursor address row = %d, want >= 1", address.row)
+		}
+	}
+}
+
+type cursorAddress struct {
+	row    int
+	column int
+}
+
+func cursorAddresses(ops []terminalOp) []cursorAddress {
+	var out []cursorAddress
 	for _, op := range ops {
 		if op.kind != terminalOpCSI {
 			continue
 		}
 		var row int
 		var column int
-		if _, err := fmt.Sscanf(op.value, "\x1b[%d;%dH", &row, &column); err == nil && row < 1 {
-			t.Fatalf("cursor address row = %d in op %q, want >= 1", row, op.value)
+		if _, err := fmt.Sscanf(op.value, "\x1b[%d;%dH", &row, &column); err == nil {
+			out = append(out, cursorAddress{row: row, column: column})
 		}
 	}
+	return out
 }
 
 func TestHeightOnlyResizeRepaintsWithoutRehydration(t *testing.T) {

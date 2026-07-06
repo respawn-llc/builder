@@ -125,6 +125,7 @@ type RunState struct {
 type BackgroundShellEvent struct {
 	Type              string
 	ID                string
+	ActivityID        uuid.UUID
 	State             string
 	Command           string
 	Workdir           string

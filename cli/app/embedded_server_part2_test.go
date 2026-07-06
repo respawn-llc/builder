@@ -43,6 +43,7 @@ func TestEmbeddedAppServerDeliversBackgroundCompletionWhileIdle(t *testing.T) {
 		NoticeSuppressed: true,
 		Snapshot: shelltool.Snapshot{
 			ID:             processID,
+			ActivityID:     uuid.New(),
 			OwnerSessionID: plan.SessionID,
 			State:          "completed",
 			Command:        "sleep 1; printf done",
@@ -81,6 +82,7 @@ func TestPrepareRuntimeForwardsBackgroundCompletionIntoProjectedRuntimeEvents(t 
 		NoticeSuppressed: true,
 		Snapshot: shelltool.Snapshot{
 			ID:             processID,
+			ActivityID:     uuid.New(),
 			OwnerSessionID: plan.SessionID,
 			State:          "completed",
 			Command:        "sleep 1; printf done",

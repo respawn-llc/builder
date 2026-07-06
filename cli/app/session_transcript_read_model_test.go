@@ -6,6 +6,8 @@ import (
 
 	"core/cli/tui/ongoing"
 	"core/shared/clientui"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestOngoingTranscriptControllerSeedsHydrationAppOwnedFrameSections(t *testing.T) {
@@ -271,4 +273,117 @@ func TestOngoingTranscriptControllerTracksPluralLiveSectionsByID(t *testing.T) {
 	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionBackgroundActivity), []string{"second background · running"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("background section lines = %v, want %v", got, want)
 	}
+}
+
+func TestOngoingTranscriptControllerRejectsInvalidLiveItemIDs(t *testing.T) {
+	tests := []struct {
+		name    string
+		message clientui.TranscriptMessage
+	}{
+		{
+			name: "queued queue item",
+			message: clientui.TranscriptMessage{
+				Sequence: 2,
+				Kind:     clientui.TranscriptMessageQueuedOrSteeredMessageState,
+				QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{
+					QueueItemID: "queued-1",
+					Status:      clientui.QueuedUserMessageAccepted,
+					UserText:    "queued",
+				},
+			},
+		},
+		{
+			name: "queued client request",
+			message: clientui.TranscriptMessage{
+				Sequence: 2,
+				Kind:     clientui.TranscriptMessageQueuedOrSteeredMessageState,
+				QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{
+					ClientRequestID: "11111111-1111-1111-8111-111111111111",
+					Status:          clientui.QueuedUserMessageAccepted,
+					UserText:        "queued",
+				},
+			},
+		},
+		{
+			name: "pending prompt",
+			message: clientui.TranscriptMessage{
+				Sequence: 2,
+				Kind:     clientui.TranscriptMessagePendingSessionPrompt,
+				PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{
+					ID:    "prompt-1",
+					State: clientui.TranscriptPromptPending,
+					Data:  clientui.TranscriptPendingSessionPromptData{Question: "approve?"},
+				},
+			},
+		},
+		{
+			name: "background activity",
+			message: clientui.TranscriptMessage{
+				Sequence: 2,
+				Kind:     clientui.TranscriptMessageBackgroundActivity,
+				BackgroundActivity: &clientui.TranscriptBackgroundActivity{
+					ID:      "background-1",
+					State:   "running",
+					Preview: "tests",
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			surface := &ongoingSurfaceSpy{}
+			controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+			if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+				t.Fatalf("accept hydration: %v", err)
+			}
+
+			assertPanic(t, func() {
+				_, _ = controller.Accept(tt.message)
+			})
+		})
+	}
+}
+
+func TestOngoingTranscriptControllerConstrainsPluralLiveSectionsToFrameWidth(t *testing.T) {
+	const width = 12
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(surface, func() ongoing.FrameInput {
+		return ongoing.FrameInput{Size: ongoing.Size{Width: width, Height: 24}}
+	})
+	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+
+	messages := []clientui.TranscriptMessage{
+		{Sequence: 2, Kind: clientui.TranscriptMessageQueuedOrSteeredMessageState, QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{QueueItemID: "11111111-1111-4111-8111-111111111111", Status: clientui.QueuedUserMessageAccepted, UserText: "queued text that must not wrap in the native live band"}},
+		{Sequence: 3, Kind: clientui.TranscriptMessagePendingSessionPrompt, PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{ID: "33333333-3333-4333-8333-333333333333", State: clientui.TranscriptPromptPending, Data: clientui.TranscriptPendingSessionPromptData{Question: "pending prompt that must not wrap in the native live band"}}},
+		{Sequence: 4, Kind: clientui.TranscriptMessageBackgroundActivity, BackgroundActivity: &clientui.TranscriptBackgroundActivity{ID: "22222222-2222-4222-8222-222222222222", State: "running", Preview: "background activity that must not wrap in the native live band"}},
+	}
+	for _, message := range messages {
+		if _, err := controller.Accept(message); err != nil {
+			t.Fatalf("accept %s: %v", message.Kind, err)
+		}
+	}
+
+	for _, kind := range []ongoing.FrameSectionKind{
+		ongoing.FrameSectionQueuedOrSteered,
+		ongoing.FrameSectionPendingPrompt,
+		ongoing.FrameSectionBackgroundActivity,
+	} {
+		for _, line := range surface.lastFrameSectionLines(kind) {
+			if got := lipgloss.Width(line); got > width {
+				t.Fatalf("section %s line width = %d for %q, want <= %d", kind, got, line, width)
+			}
+		}
+	}
+}
+
+func assertPanic(t *testing.T, fn func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic")
+		}
+	}()
+	fn()
 }

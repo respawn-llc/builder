@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/cli/tui/ongoing"
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 )
 
@@ -244,11 +245,18 @@ func hydrationHasNoTerminalRows(hydration *clientui.TranscriptHydration) bool {
 func (c *ongoingTranscriptController) frameInput() ongoing.FrameInput {
 	frame := c.frameProvider()
 	c.liveReadModel.refreshPendingToolSection(frame.Size.Width)
+	c.liveReadModel.refreshQueuedOrSteeredSection(frame.Size.Width)
+	c.liveReadModel.refreshBackgroundActivitySection(frame.Size.Width)
+	c.liveReadModel.refreshPendingPromptSection(frame.Size.Width)
+	cursorSectionRow, cursorTargetsInput := ongoingFrameInputCursorSectionRow(frame)
 	sections := make([]ongoing.FrameSection, 0, len(c.liveReadModel.sectionOrder))
 	for _, kind := range c.liveReadModel.sectionOrder {
 		sections = append(sections, c.liveReadModel.sections[kind])
 	}
 	frame.Sections = append(sections, frame.Sections...)
+	if cursorTargetsInput {
+		frame.Cursor.Row = ongoingFrameInputCursorTerminalRow(frame, cursorSectionRow)
+	}
 	return frame
 }
 
@@ -408,6 +416,22 @@ func terminalSafeFrameLines(lines []string) []string {
 	for _, line := range lines {
 		if safe := ongoing.TerminalSafeSingleLine(line); safe != "" {
 			out = append(out, safe)
+		}
+	}
+	return out
+}
+
+func terminalSafeFrameLinesForWidth(lines []string, width int) []string {
+	if width <= 0 {
+		width = 80
+	}
+	out := make([]string, 0, len(lines))
+	for _, line := range terminalSafeFrameLines(lines) {
+		truncated := transcriptrender.TruncateLine(transcriptrender.Line{
+			Spans: []transcriptrender.Span{{Text: line}},
+		}, width, false).Plain()
+		if truncated != "" {
+			out = append(out, truncated)
 		}
 	}
 	return out

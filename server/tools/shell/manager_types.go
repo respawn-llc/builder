@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"core/server/tools/shell/postprocess"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -46,6 +48,7 @@ type Event struct {
 
 type Snapshot struct {
 	ID                      string
+	ActivityID              uuid.UUID
 	OwnerSessionID          string
 	OwnerRunID              string
 	OwnerStepID             string
@@ -159,6 +162,7 @@ func (e *PollingCanceledError) Unwrap() error {
 
 type processEntry struct {
 	id             string
+	activityID     uuid.UUID
 	ownerSessionID string
 	ownerRunID     string
 	ownerStepID    string
@@ -204,6 +208,7 @@ func (p *processEntry) snapshotLocked() Snapshot {
 	}
 	return Snapshot{
 		ID:                      p.id,
+		ActivityID:              p.activityID,
 		OwnerSessionID:          p.ownerSessionID,
 		OwnerRunID:              p.ownerRunID,
 		OwnerStepID:             p.ownerStepID,

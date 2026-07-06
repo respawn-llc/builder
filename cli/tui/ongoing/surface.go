@@ -26,11 +26,23 @@ type Cursor struct {
 	Visible bool
 	Row     int
 	Column  int
+	Target  *CursorTarget
+}
+
+type CursorTarget struct {
+	SectionKind FrameSectionKind
+	Row         int
 }
 
 type FrameSection struct {
 	Kind  FrameSectionKind
 	Lines []string
+}
+
+type liveBandLine struct {
+	text        string
+	sectionKind FrameSectionKind
+	sectionRow  int
 }
 
 type FrameSectionKind string
@@ -258,14 +270,17 @@ func isAssistantFinalization(message clientui.TranscriptMessage) bool {
 }
 
 func (s *Surface) Render(frame FrameInput) (Result, error) {
-	lines := s.liveBandLines(frame)
+	liveLayout := s.liveBandLayout(frame)
+	lines := liveBandLineTexts(liveLayout)
 	s.validateRenderFrame(frame, "render")
 	if !s.minimumLiveBandFits(frame, lines) {
-		lines = nil
+		liveLayout = nil
 		frame.Cursor = Cursor{}
 	} else {
-		lines = s.shrinkLiveBandLinesToFrame(frame, lines)
+		liveLayout = s.shrinkLiveBandLayoutToFrame(frame, liveLayout)
 	}
+	lines = liveBandLineTexts(liveLayout)
+	frame.Cursor = cursorForVisibleLiveBand(frame.Cursor, frame.Size.Height, liveLayout)
 	eraseHeight := min(max(s.previousBandHeight, len(lines)), frame.Size.Height)
 	var transaction strings.Builder
 	transaction.WriteString(resetScrollRegionAndOriginMode())
@@ -285,12 +300,24 @@ func (s *Surface) SetNormalBufferOwned(_ bool, _ FrameInput) (Result, error) {
 }
 
 func (s *Surface) Resize(size Size, frame FrameInput) (Result, error) {
-	if s.widthChanged(size) && s.immutableScrollbackProduced() {
-		s.lastSize = size
-		return Result{Action: ResultScheduleWidthRehydration, Reason: RehydrateReasonWidthChange}, nil
+	if result := s.observeResizeForWidthRehydration(size); result.Action != ResultNoop {
+		return result, nil
 	}
 	frame.Size = size
 	return s.Render(frame)
+}
+
+func (s *Surface) ObserveResize(size Size) Result {
+	return s.observeResizeForWidthRehydration(size)
+}
+
+func (s *Surface) observeResizeForWidthRehydration(size Size) Result {
+	if s.widthChanged(size) && s.immutableScrollbackProduced() {
+		s.lastSize = size
+		return Result{Action: ResultScheduleWidthRehydration, Reason: RehydrateReasonWidthChange}
+	}
+	s.lastSize = size
+	return Result{}
 }
 
 func (s *Surface) widthChanged(size Size) bool {
@@ -477,13 +504,16 @@ func (s *Surface) validateRenderFrame(frame FrameInput, operation string) {
 }
 
 func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string) (Result, error) {
-	liveLines := s.liveBandLines(frame)
+	liveLayout := s.liveBandLayout(frame)
+	liveLines := liveBandLineTexts(liveLayout)
 	if !s.minimumLiveBandFits(frame, liveLines) {
-		liveLines = nil
+		liveLayout = nil
 		frame.Cursor = Cursor{}
 	} else {
-		liveLines = s.shrinkLiveBandLinesToFrame(frame, liveLines)
+		liveLayout = s.shrinkLiveBandLayoutToFrame(frame, liveLayout)
 	}
+	liveLines = liveBandLineTexts(liveLayout)
+	frame.Cursor = cursorForVisibleLiveBand(frame.Cursor, frame.Size.Height, liveLayout)
 	if len(immutableRows) > 0 && len(liveLines) >= frame.Size.Height {
 		liveLines = nil
 		frame.Cursor = Cursor{}
@@ -508,16 +538,24 @@ func (s *Surface) minimumLiveBandFits(frame FrameInput, liveLines []string) bool
 }
 
 func (s *Surface) liveBandLines(frame FrameInput) []string {
-	lines := activeAssistantLines(s.activeAssistant, frameWidthOrDefault(frame))
-	lines = append(lines, frameLines(frame)...)
-	return lines
+	return liveBandLineTexts(s.liveBandLayout(frame))
 }
 
-func (s *Surface) shrinkLiveBandLinesToFrame(frame FrameInput, liveLines []string) []string {
-	if len(liveLines) <= frame.Size.Height {
-		return liveLines
+func (s *Surface) liveBandLayout(frame FrameInput) []liveBandLine {
+	lines := activeAssistantLines(s.activeAssistant, frameWidthOrDefault(frame))
+	layout := make([]liveBandLine, 0, len(lines)+len(frame.Sections))
+	for _, line := range lines {
+		layout = append(layout, liveBandLine{text: line})
 	}
-	lines := minimumLiveBandLines(frame, s.activeAssistant)
+	layout = append(layout, frameLines(frame)...)
+	return layout
+}
+
+func (s *Surface) shrinkLiveBandLayoutToFrame(frame FrameInput, liveLayout []liveBandLine) []liveBandLine {
+	if len(liveLayout) <= frame.Size.Height {
+		return liveLayout
+	}
+	lines := minimumLiveBandLayout(frame, s.activeAssistant)
 	if len(lines) > frame.Size.Height {
 		return lines[len(lines)-frame.Size.Height:]
 	}
@@ -525,12 +563,20 @@ func (s *Surface) shrinkLiveBandLinesToFrame(frame FrameInput, liveLines []strin
 }
 
 func minimumLiveBandLines(frame FrameInput, assistant activeAssistantState) []string {
+	return liveBandLineTexts(minimumLiveBandLayout(frame, assistant))
+}
+
+func minimumLiveBandLayout(frame FrameInput, assistant activeAssistantState) []liveBandLine {
 	var lines []string
 	if assistant.source != "" {
 		assistantLines := activeAssistantLines(assistant, frameWidthOrDefault(frame))
 		if len(assistantLines) > 0 {
 			lines = append(lines, assistantLines[len(assistantLines)-1])
 		}
+	}
+	layout := make([]liveBandLine, 0, len(lines)+len(frame.Sections))
+	for _, line := range lines {
+		layout = append(layout, liveBandLine{text: line})
 	}
 	for _, section := range frame.Sections {
 		if len(section.Lines) == 0 {
@@ -543,13 +589,19 @@ func minimumLiveBandLines(frame FrameInput, assistant activeAssistantState) []st
 		case FrameSectionInput:
 			limit = min(3, len(section.Lines))
 		}
+		start := 0
 		if section.Kind == FrameSectionInput && len(section.Lines) > limit {
-			lines = append(lines, section.Lines[len(section.Lines)-limit:]...)
-			continue
+			start = len(section.Lines) - limit
 		}
-		lines = append(lines, section.Lines[:limit]...)
+		for index := start; index < start+limit; index++ {
+			layout = append(layout, liveBandLine{
+				text:        section.Lines[index],
+				sectionKind: section.Kind,
+				sectionRow:  index + 1,
+			})
+		}
 	}
-	return lines
+	return layout
 }
 
 func activeAssistantLines(state activeAssistantState, width int) []string {
@@ -610,12 +662,43 @@ func frameWidthOrDefault(frame FrameInput) int {
 	return 80
 }
 
-func frameLines(frame FrameInput) []string {
-	var lines []string
+func frameLines(frame FrameInput) []liveBandLine {
+	var lines []liveBandLine
 	for _, section := range frame.Sections {
-		lines = append(lines, section.Lines...)
+		for index, line := range section.Lines {
+			lines = append(lines, liveBandLine{
+				text:        line,
+				sectionKind: section.Kind,
+				sectionRow:  index + 1,
+			})
+		}
 	}
 	return lines
+}
+
+func liveBandLineTexts(layout []liveBandLine) []string {
+	if len(layout) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(layout))
+	for _, line := range layout {
+		lines = append(lines, line.text)
+	}
+	return lines
+}
+
+func cursorForVisibleLiveBand(cursor Cursor, terminalHeight int, layout []liveBandLine) Cursor {
+	if !cursor.Visible || cursor.Target == nil {
+		return cursor
+	}
+	for index, line := range layout {
+		if line.sectionKind == cursor.Target.SectionKind && line.sectionRow == cursor.Target.Row {
+			cursor.Row = terminalHeight - len(layout) + index + 1
+			return cursor
+		}
+	}
+	cursor.Visible = false
+	return cursor
 }
 
 func resetScrollRegionAndOriginMode() string {

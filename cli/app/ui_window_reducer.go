@@ -23,6 +23,12 @@ func (r uiWindowFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		m.windowSizeKnown = true
 		m.layout().syncViewport()
 		if !m.nativeOngoingSurfaceActive() {
+			if m.ongoingSurface != nil {
+				result := m.ongoingSurface.ObserveResize(ongoing.Size{Width: msg.Width, Height: msg.Height})
+				if result.Action == ongoing.ResultScheduleWidthRehydration {
+					m.pendingOngoingWidthReset = true
+				}
+			}
 			return handledUIFeatureUpdate(m, nil)
 		}
 		result, err := m.ongoingSurface.Resize(ongoing.Size{Width: msg.Width, Height: msg.Height}, m.ongoingFrameInput())

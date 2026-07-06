@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/runtimewirefixture"
 	"core/server/auth"
 	"core/server/llm"
 	"core/server/runtime"
@@ -21,7 +22,6 @@ import (
 	"core/server/tools"
 	askquestion "core/server/tools"
 	patchtool "core/server/tools/patch"
-	shelltool "core/server/tools/shell"
 	"core/shared/config"
 	"core/shared/toolspec"
 )
@@ -410,7 +410,7 @@ func TestBackgroundEventRouterSkipsDeveloperNoticeForOrphanedShells(t *testing.T
 
 	router := &BackgroundEventRouter{}
 	router.SetActiveSession(storeB.Meta().SessionID, engB)
-	router.Handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1000", OwnerSessionID: storeA.Meta().SessionID, State: "completed", Command: "kent run", Workdir: root, LogPath: filepath.Join(root, "1000.log")}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1000", storeA.Meta().SessionID, root))
 
 	time.Sleep(150 * time.Millisecond)
 	if got := clientB.CallCount(); got != 0 {
@@ -439,7 +439,7 @@ func TestBackgroundEventRouterRoutesCompletionToMatchingActiveOwnerSession(t *te
 	router := &BackgroundEventRouter{}
 	router.SetActiveSession(storeA.Meta().SessionID, engA)
 	router.SetActiveSession(storeB.Meta().SessionID, engB)
-	router.Handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1002", OwnerSessionID: storeA.Meta().SessionID, State: "completed", Command: "kent run", Workdir: root, LogPath: filepath.Join(root, "1002.log")}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1002", storeA.Meta().SessionID, root))
 
 	deadline := time.Now().Add(2 * time.Second)
 	for clientA.CallCount() == 0 && time.Now().Before(deadline) {
@@ -466,7 +466,7 @@ func TestBackgroundEventRouterClearActiveSessionDropsOnlyThatOwner(t *testing.T)
 	router.SetActiveSession(storeA.Meta().SessionID, engA)
 	router.SetActiveSession(storeB.Meta().SessionID, engB)
 	router.ClearActiveSession(storeA.Meta().SessionID, engA)
-	router.Handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1003", OwnerSessionID: storeA.Meta().SessionID, State: "completed", Command: "kent run", Workdir: root, LogPath: filepath.Join(root, "1003.log")}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1003", storeA.Meta().SessionID, root))
 	time.Sleep(150 * time.Millisecond)
 	if got := clientA.CallCount(); got != 0 {
 		t.Fatalf("expected cleared owner session to drop completions, got %d", got)
@@ -475,7 +475,7 @@ func TestBackgroundEventRouterClearActiveSessionDropsOnlyThatOwner(t *testing.T)
 		t.Fatalf("did not expect foreign active session to receive cleared-owner completion, got %d", got)
 	}
 
-	router.Handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1004", OwnerSessionID: storeB.Meta().SessionID, State: "completed", Command: "kent run", Workdir: root, LogPath: filepath.Join(root, "1004.log")}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1004", storeB.Meta().SessionID, root))
 	deadline := time.Now().Add(2 * time.Second)
 	for clientB.CallCount() == 0 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
@@ -497,7 +497,7 @@ func TestBackgroundEventRouterStaleClearKeepsReplacementForSameSession(t *testin
 	router.SetActiveSession(store.Meta().SessionID, engA)
 	router.SetActiveSession(store.Meta().SessionID, engB)
 	router.ClearActiveSession(store.Meta().SessionID, engA)
-	router.Handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1005", OwnerSessionID: store.Meta().SessionID, State: "completed", Command: "kent run", Workdir: root, LogPath: filepath.Join(root, "1005.log")}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1005", store.Meta().SessionID, root))
 
 	deadline := time.Now().Add(2 * time.Second)
 	for clientB.CallCount() == 0 && time.Now().Before(deadline) {
@@ -519,7 +519,7 @@ func TestBackgroundEventRouterQueuesNoticeForActiveOwnerSession(t *testing.T) {
 
 	router := &BackgroundEventRouter{}
 	router.SetActiveSession(store.Meta().SessionID, eng)
-	router.Handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1001", OwnerSessionID: store.Meta().SessionID, State: "completed", Command: "kent run", Workdir: root, LogPath: filepath.Join(root, "1001.log")}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.Handle(runtimewirefixture.BackgroundCompletionEvent("1001", store.Meta().SessionID, root))
 
 	deadline := time.Now().Add(2 * time.Second)
 	for client.CallCount() == 0 && time.Now().Before(deadline) {
