@@ -8,6 +8,8 @@ import (
 
 	"core/cli/tui/ongoing"
 	"core/shared/clientui"
+
+	"github.com/google/uuid"
 )
 
 func TestOngoingTranscriptControllerRequiresHydrationFirst(t *testing.T) {
@@ -78,6 +80,56 @@ func TestOngoingTranscriptControllerQueuesOriginalMessagesWhileUnowned(t *testin
 	wantKinds := []clientui.TranscriptMessageKind{clientui.TranscriptMessageHydration, clientui.TranscriptMessageCommittedRow}
 	if got := surface.appliedKinds(); !reflect.DeepEqual(got, wantKinds) {
 		t.Fatalf("drained message kinds = %v, want %v", got, wantKinds)
+	}
+}
+
+func TestOngoingTranscriptControllerDrainsQueuedAssistantFinalizationAfterDetail(t *testing.T) {
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+	streamID := uuid.New()
+	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+	if _, err := controller.Accept(clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageAssistantDelta,
+		AssistantDelta: &clientui.TranscriptAssistantDelta{
+			StreamID: streamID,
+			Delta:    "roundtrip commentary\n\n",
+		},
+	}); err != nil {
+		t.Fatalf("accept assistant delta: %v", err)
+	}
+	surface.calls = nil
+	if _, err := controller.SetNormalBufferOwned(false); err != nil {
+		t.Fatalf("mark unowned: %v", err)
+	}
+
+	if _, err := controller.Accept(clientui.TranscriptMessage{
+		Sequence: 3,
+		Kind:     clientui.TranscriptMessageCommittedRow,
+		CommittedRow: &clientui.TranscriptCommittedRow{
+			Kind: clientui.TranscriptRowAssistant,
+			Assistant: &clientui.TranscriptAssistantRow{
+				StreamID: &streamID,
+				Text:     "roundtrip commentary\n\nroundtrip complete",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("accept queued assistant finalization: %v", err)
+	}
+	if len(surface.calls) != 0 {
+		t.Fatalf("surface calls while unowned = %v, want none", surface.calls)
+	}
+	if _, err := controller.SetNormalBufferOwned(true); err != nil {
+		t.Fatalf("restore ownership: %v", err)
+	}
+
+	if got, want := surface.callKinds(), []string{"apply"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls after restore = %v, want %v", got, want)
+	}
+	if got, want := surface.calls[0].message.CommittedRow.Assistant.Text, "roundtrip commentary\n\nroundtrip complete"; got != want {
+		t.Fatalf("drained finalization text = %q, want %q", got, want)
 	}
 }
 

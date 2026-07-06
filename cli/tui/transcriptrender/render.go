@@ -30,11 +30,11 @@ func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, _ string
 func RenderToolRow(row clientui.TranscriptToolRow, width int, mode Mode) []Line {
 	meta := normalizeToolMeta(row.ToolName, row.ToolPresentation)
 	role := toolRole(meta, row.IsError)
-	text := toolDisplayText(row, meta, mode)
+	display := toolDisplayText(row, meta, mode)
 	if isPatchTool(meta) {
-		return renderPatchTool(role, text, meta.PatchRender, width, mode)
+		return renderPatchTool(role, display.Text, display.InlineMeta, meta.PatchRender, width, mode)
 	}
-	return renderTextBlock(role, text, width, mode)
+	return renderTextBlockWithInlineMeta(role, display.Text, display.InlineMeta, width, mode)
 }
 
 func RenderPendingTool(tool clientui.TranscriptToolStart, width int) Line {
@@ -188,19 +188,21 @@ func toolRole(meta toolMeta, isError bool) StyleRole {
 	return StyleRoleTool
 }
 
-func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) string {
+type toolDisplay struct {
+	Text       string
+	InlineMeta string
+}
+
+func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) toolDisplay {
 	if mode == ModeOngoing || mode == ModeDetailCollapsed {
 		text := firstNonEmpty(row.CondensedText, compactToolText(meta, row.Text))
-		if summary := strings.TrimSpace(row.ResultSummary); summary != "" {
-			text = text + inlineMetaSeparator + summary
-		}
-		return text
+		return toolDisplay{Text: text, InlineMeta: firstNonEmpty(row.ResultSummary, meta.InlineMeta)}
 	}
 	text := firstNonEmpty(meta.PatchDetail, row.Text, meta.Command, meta.CompactText, meta.ToolName)
 	if summary := strings.TrimSpace(row.ResultSummary); summary != "" {
 		text = text + "\n" + summary
 	}
-	return text
+	return toolDisplay{Text: text}
 }
 
 func compactToolText(meta toolMeta, fallback string) string {
@@ -213,9 +215,9 @@ func compactToolText(meta toolMeta, fallback string) string {
 	return patchformat.StripEditedLabel(strings.TrimSpace(text))
 }
 
-func renderPatchTool(role StyleRole, text string, rendered *patchformat.RenderedPatch, width int, mode Mode) []Line {
+func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *patchformat.RenderedPatch, width int, mode Mode) []Line {
 	if rendered == nil || len(rendered.SummaryLines) == 0 || mode == ModeDetailExpanded {
-		return renderTextBlock(role, text, width, mode)
+		return renderTextBlockWithInlineMeta(role, text, inlineMeta, width, mode)
 	}
 	lines := make([]Line, 0, len(rendered.Files))
 	for _, file := range rendered.Files {
@@ -238,11 +240,16 @@ func renderPatchTool(role StyleRole, text string, rendered *patchformat.Rendered
 	if len(lines) == 0 {
 		lines = []Line{{Spans: []Span{{Text: text, Role: role}}}}
 	}
-	return attachPrefix(role, lines, width, false)
+	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta)
 }
 
 func renderTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
+	return renderTextBlockWithInlineMeta(role, text, "", width, mode)
+}
+
+func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta string, width int, mode Mode) []Line {
 	text = safeTranscriptText(text)
+	inlineMeta = strings.TrimSpace(safeTranscriptText(inlineMeta))
 	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	if text == "" {
 		text = labelForRole(role)
@@ -255,7 +262,7 @@ func renderTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
 			return attachPrefix(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3)), width, false)
 		}
-		return attachPrefix(role, textLines(role, []string{first}), width, len(strings.Split(text, "\n")) > 1)
+		return attachPrefixWithFirstLineMeta(role, textLines(role, []string{first}), width, len(strings.Split(text, "\n")) > 1, inlineMeta)
 	}
 	return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width))), width, false)
 }
@@ -272,17 +279,24 @@ func textLines(role StyleRole, lines []string) []Line {
 }
 
 func attachPrefix(role StyleRole, lines []Line, width int, forceEllipsis bool) []Line {
+	return attachPrefixWithFirstLineMeta(role, lines, width, forceEllipsis, "")
+}
+
+func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forceEllipsis bool, firstLineMeta string) []Line {
 	if len(lines) == 0 {
 		lines = []Line{{Spans: []Span{{Role: role}}}}
 	}
+	firstLineMeta = strings.TrimSpace(safeTranscriptText(firstLineMeta))
 	prefixWidth := lipgloss.Width(roleSymbol(role) + " ")
 	bodyWidth := max(1, width-prefixWidth)
 	out := make([]Line, 0, len(lines))
 	for idx, line := range lines {
-		command, meta := splitInlineMeta(line.Plain())
+		command := strings.TrimSpace(line.Plain())
+		meta := ""
 		spans := line.Spans
-		if meta != "" {
-			spans = []Span{{Text: command, Role: role, Faint: role == StyleRoleToolShell}}
+		if idx == 0 && firstLineMeta != "" {
+			meta = firstLineMeta
+			spans = inlineMetaCommandSpans(spans, role)
 		}
 		if meta != "" {
 			gap := bodyWidth - lipgloss.Width(command) - lipgloss.Width(meta)
@@ -302,6 +316,19 @@ func attachPrefix(role StyleRole, lines []Line, width int, forceEllipsis bool) [
 			line = TruncateLine(line, max(1, width), forceEllipsis)
 		}
 		out = append(out, line)
+	}
+	return out
+}
+
+func inlineMetaCommandSpans(spans []Span, role StyleRole) []Span {
+	if role != StyleRoleToolShell {
+		return spans
+	}
+	out := append([]Span(nil), spans...)
+	for idx := range out {
+		if out[idx].Role == role {
+			out[idx].Faint = true
+		}
 	}
 	return out
 }
@@ -458,14 +485,6 @@ func contentWidth(role StyleRole, width int) int {
 	return max(1, width-lipgloss.Width(roleSymbol(role)+" "))
 }
 
-func splitInlineMeta(line string) (string, string) {
-	parts := strings.SplitN(line, inlineMetaSeparator, 2)
-	if len(parts) == 1 {
-		return strings.TrimSpace(line), ""
-	}
-	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
-}
-
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if trimmed := strings.TrimSpace(safeTranscriptText(value)); trimmed != "" {
@@ -549,5 +568,3 @@ func max(left, right int) int {
 	}
 	return right
 }
-
-const inlineMetaSeparator = "\x1f"

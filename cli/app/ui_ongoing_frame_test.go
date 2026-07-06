@@ -126,6 +126,55 @@ func TestOngoingFrameInputStillRendersClientLocalQueuedMessages(t *testing.T) {
 	}
 }
 
+func TestOngoingFrameInputRendersPendingInjectedMessagesBeforeServerAcceptance(t *testing.T) {
+	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
+	m.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:         "11111111-1111-4111-8111-111111111111",
+		Text:            "pending injected before server acceptance",
+		ClientRequestID: "22222222-2222-4222-8222-222222222222",
+		State:           injectedRuntimeQueuePendingCreate,
+	}}
+	m.pendingInjected = []clientui.QueuedUserMessage{{
+		ID:              "11111111-1111-4111-8111-111111111111",
+		Text:            "pending injected before server acceptance",
+		ClientRequestID: "22222222-2222-4222-8222-222222222222",
+	}}
+
+	frame := m.ongoingFrameInput()
+
+	section, ok := frameSection(frame, ongoing.FrameSectionQueuedOrSteered)
+	if !ok {
+		t.Fatal("pending injected section missing")
+	}
+	if got, want := section.Lines, []string{padANSIRight("pending injected before server acceptance", 48)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending injected lines = %q, want %q", got, want)
+	}
+}
+
+func TestOngoingFrameInputRendersNoRuntimeInjectedMessages(t *testing.T) {
+	m := sizedTestUIModel(newProjectedStaticUIModel(), 48, 10)
+	m.injectedQueue = []injectedRuntimeQueueItem{{
+		LocalID:  "11111111-1111-4111-8111-111111111111",
+		ServerID: "11111111-1111-4111-8111-111111111111",
+		Text:     "local injected without runtime client",
+		State:    injectedRuntimeQueueEnqueued,
+	}}
+	m.pendingInjected = []clientui.QueuedUserMessage{{
+		ID:   "11111111-1111-4111-8111-111111111111",
+		Text: "local injected without runtime client",
+	}}
+
+	frame := m.ongoingFrameInput()
+
+	section, ok := frameSection(frame, ongoing.FrameSectionQueuedOrSteered)
+	if !ok {
+		t.Fatal("no-runtime injected section missing")
+	}
+	if got, want := section.Lines, []string{padANSIRight("local injected without runtime client", 48)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("no-runtime injected lines = %q, want %q", got, want)
+	}
+}
+
 func TestOngoingFrameInputSanitizesPromptHistorySection(t *testing.T) {
 	m := sizedTestUIModel(newProjectedStaticUIModel(
 		WithUIPromptHistory([]string{"alpha\nbeta\tgamma\x1b"}),

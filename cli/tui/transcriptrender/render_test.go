@@ -75,6 +75,40 @@ func TestRenderPatchToolStylesPathAndCounts(t *testing.T) {
 	}
 }
 
+func TestCollapsedToolResultSummaryRendersAsFaintInlineMetadata(t *testing.T) {
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)
+	row.Tool.ResultSummary = "passed"
+
+	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
+	if len(rendered.Lines) == 0 {
+		t.Fatal("rendered no lines")
+	}
+	spans := rendered.Lines[0].Spans
+	if len(spans) == 0 {
+		t.Fatal("rendered line has no spans")
+	}
+	meta := spans[len(spans)-1]
+	if meta.Text != "passed" || meta.Role != StyleRoleNotice || !meta.Faint {
+		t.Fatalf("result summary span = %+v, want faint notice metadata", meta)
+	}
+	gap := spans[len(spans)-2]
+	if gap.Text == "" || gap.Role != StyleRoleToolShell {
+		t.Fatalf("result summary gap span = %+v, want shell-role spacing before metadata", gap)
+	}
+}
+
+func TestCollapsedToolResultSummarySanitizesMetadataBeforeInlineRender(t *testing.T) {
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)
+	row.Tool.ResultSummary = "passed\x1b[31m"
+
+	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
+	spans := rendered.Lines[0].Spans
+	meta := spans[len(spans)-1]
+	if meta.Text != "passed[31m" || meta.Role != StyleRoleNotice || !meta.Faint {
+		t.Fatalf("sanitized result summary span = %+v, want sanitized faint notice metadata", meta)
+	}
+}
+
 func TestRenderDividerStaysWithinFrameWidth(t *testing.T) {
 	assistantLabelWidth := lipgloss.Width(" assistant ")
 	cases := []struct {

@@ -46,6 +46,22 @@ func TestAssistantFinalizationExtensionEmitsOnlyMissingSuffix(t *testing.T) {
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"more"})
 }
 
+func TestAssistantFinalizationAfterClosedParagraphStreamAppendsSuffix(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	streamID := uuid.New()
+	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(streamID, "roundtrip commentary\n\n"), FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
+		t.Fatalf("apply initial delta: %v", err)
+	}
+	out.Reset()
+
+	if _, err := surface.ApplyTerminalMessage(committedAssistantMessage(streamID, "roundtrip commentary\n\nroundtrip complete"), FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
+		t.Fatalf("finalize extension: %v", err)
+	}
+
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"roundtrip complete"})
+}
+
 func TestAssistantFinalizationMismatchPanics(t *testing.T) {
 	surface := NewSurface(&bytes.Buffer{})
 	streamID := uuid.New()

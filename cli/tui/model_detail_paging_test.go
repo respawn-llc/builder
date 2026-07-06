@@ -136,6 +136,36 @@ func TestDetailPagePreserveAnchorKeepsUILocalState(t *testing.T) {
 	}
 }
 
+func TestDetailCollapseClampsStoredScroll(t *testing.T) {
+	model := NewModel()
+	next, _ := model.Update(SetViewportSizeMsg{Lines: 1, Width: 80})
+	model = next.(Model)
+	next, _ = model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
+		Entries: []clientui.ChatEntry{
+			{Role: "assistant", Text: "one"},
+			{Role: "assistant", Text: "two\nthree\nfour"},
+		},
+	}})
+	model = next.(Model)
+	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
+	model = next.(Model)
+	model.setSelectedDetailIndex(1)
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(Model)
+	model.detailScroll = model.maxDetailScroll()
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(Model)
+
+	if got, maxScroll := model.detailScroll, model.maxDetailScroll(); got != maxScroll {
+		t.Fatalf("detail scroll after collapse = %d, want clamped max %d", got, maxScroll)
+	}
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if cmd != nil {
+		t.Fatal("down after collapse requested another page instead of staying within clamped page")
+	}
+}
+
 func TestDetailLineMovementSelectsItemNearestViewportCenter(t *testing.T) {
 	model := NewModel()
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 3, Width: 80})

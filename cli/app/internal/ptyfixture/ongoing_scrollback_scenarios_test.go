@@ -254,17 +254,19 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		{
 			name: "detail_roundtrip_during_stream",
 			script: map[string]any{
-				"prompt":        "detail roundtrip",
-				"stream_deltas": []string{"roundtrip commentary\n\n"},
-				"final":         "roundtrip commentary\n\nroundtrip complete",
+				"prompt":          "detail roundtrip",
+				"stream_deltas":   []string{"roundtrip commentary\n", "\n"},
+				"stream_delay_ms": 2000,
+				"final":           "roundtrip commentary\n\nroundtrip complete",
 			},
 			expectedAppends: []string{rightPad("roundtrip complete", 80)},
 			inputs: []pty.InputEvent{
-				{After: 600 * time.Millisecond, Bytes: []byte("\x1b[Z")},
-				{After: 1100 * time.Millisecond, Bytes: []byte("\x1b[Z")},
+				{After: 1500 * time.Millisecond, Bytes: []byte("\x1b[Z")},
+				{After: 3200 * time.Millisecond, Bytes: []byte("\x1b[Z")},
 			},
 			allowsAltScroll:  true,
 			allowsFullScreen: true,
+			interruptAfter:   durationPtr(6 * time.Second),
 		},
 		{
 			name: "warning_notice_shape",

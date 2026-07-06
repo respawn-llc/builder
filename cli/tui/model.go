@@ -122,6 +122,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SetViewportLinesMsg:
 		if msg.Lines > 0 {
 			m.viewportLines = msg.Lines
+			m.clampDetailScroll()
 		}
 	case SetViewportSizeMsg:
 		if msg.Lines > 0 {
@@ -130,6 +131,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Width > 0 {
 			m.viewportWidth = msg.Width
 		}
+		m.clampDetailScroll()
 	case SetDetailTranscriptPageMsg:
 		m.applyDetailTranscriptPage(msg.Page, msg.Anchor)
 	case tea.KeyMsg:
@@ -185,11 +187,9 @@ func (m Model) View() string {
 	if len(lines) == 0 {
 		lines = []string{m.detailEmptyLine()}
 	}
-	if m.detailScroll > m.maxScrollForLines(lines) {
-		m.detailScroll = m.maxScrollForLines(lines)
-	}
-	end := minInt(len(lines), m.detailScroll+maxInt(1, m.viewportLines))
-	return strings.Join(lines[m.detailScroll:end], "\n")
+	scroll := clampInt(m.detailScroll, 0, m.maxScrollForLines(lines))
+	end := minInt(len(lines), scroll+maxInt(1, m.viewportLines))
+	return strings.Join(lines[scroll:end], "\n")
 }
 
 func (m Model) Mode() Mode {
@@ -410,6 +410,14 @@ func (m *Model) toggleSelectedDetailEntry() {
 	} else {
 		m.expanded[selected] = struct{}{}
 	}
+	m.clampDetailScroll()
+}
+
+func (m *Model) clampDetailScroll() {
+	if m == nil {
+		return
+	}
+	m.detailScroll = clampInt(m.detailScroll, 0, m.maxDetailScroll())
 }
 
 func (m Model) maxDetailScroll() int {

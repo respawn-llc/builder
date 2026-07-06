@@ -689,25 +689,15 @@ func TestDetailModeStatusLineShowsSelectedExpandAction(t *testing.T) {
 	if updated.view.Mode() != tui.ModeDetail {
 		t.Fatalf("mode=%q want detail", updated.view.Mode())
 	}
-	statusLine := lastRenderedLine(updated.View())
-	if !strings.Contains(ansi.Strip(statusLine), "Enter to expand") {
-		t.Fatalf("detail status line = %q, want expand action", statusLine)
+	if got := updated.view.DetailSelectionAction(); got != tui.DetailSelectionActionExpand {
+		t.Fatalf("detail selection action = %v, want expand", got)
 	}
 
 	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	statusLine = lastRenderedLine(updated.View())
-	if !strings.Contains(ansi.Strip(statusLine), "Enter to collapse") {
-		t.Fatalf("detail status line = %q, want collapse action", statusLine)
+	if got := updated.view.DetailSelectionAction(); got != tui.DetailSelectionActionCollapse {
+		t.Fatalf("detail selection action = %v, want collapse", got)
 	}
-}
-
-func lastRenderedLine(view string) string {
-	lines := strings.Split(ansi.Strip(view), "\n")
-	if len(lines) == 0 {
-		return ""
-	}
-	return lines[len(lines)-1]
 }
 
 func TestAskQuestionMarkdownPromptCursorTracksInputAfterExpandedQuestion(t *testing.T) {

@@ -153,11 +153,28 @@ func (l uiViewLayout) queuedVisibleMessages() ([]queuedPaneEntry, int) {
 }
 
 func (l uiViewLayout) queuedMessages() []queuedPaneEntry {
-	entries := make([]queuedPaneEntry, 0, len(l.model.queued))
+	entries := make([]queuedPaneEntry, 0, len(l.model.queued)+len(l.model.injectedQueue))
 	for _, message := range l.model.queued {
 		entries = append(entries, queuedPaneEntry{Text: message.Text})
 	}
+	for _, message := range l.model.injectedQueue {
+		if !l.model.injectedQueueItemNeedsLocalPane(message) {
+			continue
+		}
+		entries = append(entries, queuedPaneEntry{Text: message.Text})
+	}
 	return entries
+}
+
+func (m *uiModel) injectedQueueItemNeedsLocalPane(item injectedRuntimeQueueItem) bool {
+	switch item.State {
+	case injectedRuntimeQueuePendingCreate, injectedRuntimeQueueCreateFailed, injectedRuntimeQueueDiscardFailed:
+		return true
+	case injectedRuntimeQueueEnqueued:
+		return m != nil && !m.hasRuntimeClient()
+	default:
+		return false
+	}
 }
 
 func (e queuedPaneEntry) displayText() string {
