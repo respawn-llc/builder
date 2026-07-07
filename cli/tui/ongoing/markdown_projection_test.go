@@ -25,10 +25,10 @@ func TestAssistantDeltaPromotesClosedParagraphAndKeepsTailMutable(t *testing.T) 
 		t.Fatalf("apply assistant delta: %v", err)
 	}
 
-	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
-		"────────────── assistant ───────────────",
-		"Stable paragraph.",
-		"open tail",
+	assertRowStructure(t, visibleTextRows(parseTerminalOps(out.String())), []rowKind{
+		{divider: true},
+		{content: "Stable paragraph.", divider: false},
+		{content: "open tail", divider: false},
 	})
 	if got, want := surface.activeAssistant.promotedSourceBoundary, len("Stable paragraph."); got != want {
 		t.Fatalf("promotion boundary = %d, want %d", got, want)
@@ -61,10 +61,10 @@ func TestAssistantDeltaPromotionOpensAssistantGroupAfterPriorGroup(t *testing.T)
 		t.Fatalf("apply assistant delta: %v", err)
 	}
 
-	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
-		"────────────── assistant ───────────────",
-		"Stable paragraph.",
-		"open tail",
+	assertRowStructure(t, visibleTextRows(parseTerminalOps(out.String())), []rowKind{
+		{divider: true},
+		{content: "Stable paragraph.", divider: false},
+		{content: "open tail", divider: false},
 	})
 	if surface.dividerGroup == nil || *surface.dividerGroup != clientui.TranscriptRowAssistant {
 		t.Fatalf("divider group = %v, want assistant", surface.dividerGroup)

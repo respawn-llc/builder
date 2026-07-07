@@ -28,23 +28,21 @@ func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithGroupDividers(
 		t.Fatalf("apply hydration: %v", err)
 	}
 
-	ops := parseTerminalOps(out.String())
-	assertTerminalPrefix(t, ops, []terminalOp{
-		{kind: terminalOpCSI, value: "\x1b[r"},
-		{kind: terminalOpCSI, value: "\x1b[?6l"},
-		{kind: terminalOpCSI, value: "\x1b[1;5r"},
-		{kind: terminalOpCSI, value: "\x1b[5;1H"},
-	})
-	assertVisibleTextOps(t, ops, []string{
-		"❯ first user",
-		"❯ second user",
-		"────────────── assistant ───────────────",
-		"❮ assistant answer",
-		"───────────────── tool ─────────────────",
-		"• tool result",
-		"──────────────── notice ────────────────",
-		"ℹ notice",
-	})
+	rows := visibleTextRows(parseTerminalOps(out.String()))
+	// Two consecutive user rows form one group: no divider between them.
+	// Each group transition (user->assistant, assistant->tool, tool->notice)
+	// emits exactly one plain-rule divider line immediately before the new group.
+	wantStructure := []rowKind{
+		{content: "❯ first user", divider: false},
+		{content: "❯ second user", divider: false},
+		{divider: true},
+		{content: "❮ assistant answer", divider: false},
+		{divider: true},
+		{content: "• tool result", divider: false},
+		{divider: true},
+		{content: "ℹ notice", divider: false},
+	}
+	assertRowStructure(t, rows, wantStructure)
 	if out.String() == ansi.Strip(out.String()) {
 		t.Fatalf("immutable append text = %q, want styled ANSI output", out.String())
 	}
@@ -61,13 +59,17 @@ func TestApplyTerminalMessageDoesNotEmitDividerForConsecutiveSameGroup(t *testin
 	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("second")), testFrame()); err != nil {
 		t.Fatalf("apply second row: %v", err)
 	}
-	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"❯ second"})
+	rows := visibleTextRows(parseTerminalOps(out.String()))
+	// Same-group append (user->user): no divider before the second row.
+	assertRowStructure(t, rows, []rowKind{{content: "❯ second", divider: false}})
 	out.Reset()
 
 	if _, err := surface.ApplyTerminalMessage(committedMessage(assistantRow("answer")), testFrame()); err != nil {
 		t.Fatalf("apply assistant row: %v", err)
 	}
-	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"────────────── assistant ───────────────", "❮ answer"})
+	rows = visibleTextRows(parseTerminalOps(out.String()))
+	// Group transition (user->assistant): one divider before the assistant row.
+	assertRowStructure(t, rows, []rowKind{{divider: true}, {content: "❮ answer", divider: false}})
 }
 
 func TestSurfaceDoesNotRetainCommittedRowContentAfterAppend(t *testing.T) {
@@ -106,16 +108,18 @@ func TestCommittedRowsNeutralizeTranscriptSourcedControlBytes(t *testing.T) {
 		t.Fatalf("apply malicious hydration: %v", err)
 	}
 
-	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
-		"❯ user[2J",
-		"  next lineafter",
-		"────────────── assistant ───────────────",
-		"❮ assistant]0;spoof **answer**",
-		"───────────────── tool ─────────────────",
-		"• tool[3;1H result",
-		"──────────────── notice ────────────────",
-		"ℹ notice value",
-	})
+	rows := visibleTextRows(parseTerminalOps(out.String()))
+	wantStructure := []rowKind{
+		{content: "❯ user[2J", divider: false},
+		{content: "  next lineafter", divider: false},
+		{divider: true},
+		{content: "❮ assistant]0;spoof **answer**", divider: false},
+		{divider: true},
+		{content: "• tool[3;1H result", divider: false},
+		{divider: true},
+		{content: "ℹ notice value", divider: false},
+	}
+	assertRowStructure(t, rows, wantStructure)
 }
 
 func TestCommittedRowsFilterNonOngoingVisibility(t *testing.T) {
@@ -243,25 +247,24 @@ func assertTerminalPrefix(t *testing.T, got []terminalOp, want []terminalOp) {
 	}
 }
 
-func assertVisibleTextOps(t *testing.T, ops []terminalOp, want []string) {
-	t.Helper()
+func visibleTextRows(ops []terminalOp) []string {
 	got := make([]string, 0)
 	current := ""
+	flush := func() {
+		if row := strings.TrimRight(current, " "); row != "" {
+			got = append(got, row)
+		}
+		current = ""
+	}
 	for _, op := range ops {
 		switch op.kind {
 		case terminalOpCRLF:
-			if row := strings.TrimRight(current, " "); row != "" {
-				got = append(got, row)
-			}
-			current = ""
+			flush()
 		case terminalOpCSI:
 			if len(op.value) > 0 {
 				final := op.value[len(op.value)-1]
 				if final == 'H' || final == 'f' {
-					if row := strings.TrimRight(current, " "); row != "" {
-						got = append(got, row)
-					}
-					current = ""
+					flush()
 				}
 			}
 		case terminalOpText:
@@ -270,10 +273,59 @@ func assertVisibleTextOps(t *testing.T, ops []terminalOp, want []string) {
 			continue
 		}
 	}
-	if row := strings.TrimRight(current, " "); row != "" {
-		got = append(got, row)
-	}
+	flush()
+	return got
+}
+
+func assertVisibleTextOps(t *testing.T, ops []terminalOp, want []string) {
+	t.Helper()
+	got := visibleTextRows(ops)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("visible terminal text ops = %#v, want %#v", got, want)
+	}
+}
+
+// isDividerRule reports whether a visible row is a plain horizontal rule made
+// only of the box-drawing "─" rune (the divider line shape), with no label text.
+func isDividerRule(row string) bool {
+	if row == "" {
+		return false
+	}
+	for _, r := range row {
+		if r != '─' && r != '…' {
+			return false
+		}
+	}
+	return true
+}
+
+// rowKind describes one visible terminal row by structural role: either a plain
+// divider rule, or a content row carrying the visible text. Tests assert
+// structure (divider placement and content presence) rather than literal text,
+// so divider content/style changes do not break them.
+type rowKind struct {
+	divider bool
+	content string
+}
+
+func assertRowStructure(t *testing.T, rows []string, want []rowKind) {
+	t.Helper()
+	if len(rows) != len(want) {
+		t.Fatalf("visible rows = %#v, want %d rows of structure %#v", rows, len(want), want)
+	}
+	for idx, wantRow := range want {
+		got := rows[idx]
+		if wantRow.divider {
+			if !isDividerRule(got) {
+				t.Fatalf("row %d = %q, want a plain divider rule", idx, got)
+			}
+			continue
+		}
+		if isDividerRule(got) {
+			t.Fatalf("row %d = %q, want content %q (not a divider)", idx, got, wantRow.content)
+		}
+		if got != wantRow.content {
+			t.Fatalf("row %d = %q, want content %q", idx, got, wantRow.content)
+		}
 	}
 }

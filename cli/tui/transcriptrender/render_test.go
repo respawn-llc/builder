@@ -158,7 +158,6 @@ func TestCacheWarningNoticeRendersStructuredPayload(t *testing.T) {
 }
 
 func TestRenderDividerStaysWithinFrameWidth(t *testing.T) {
-	assistantLabelWidth := lipgloss.Width(" assistant ")
 	cases := []struct {
 		name  string
 		group clientui.TranscriptRowKind
@@ -167,9 +166,8 @@ func TestRenderDividerStaysWithinFrameWidth(t *testing.T) {
 		{name: "negative", group: clientui.TranscriptRowAssistant, width: -1},
 		{name: "zero", group: clientui.TranscriptRowAssistant, width: 0},
 		{name: "single cell", group: clientui.TranscriptRowAssistant, width: 1},
-		{name: "narrower than label", group: clientui.TranscriptRowAssistant, width: 4},
-		{name: "exact label width", group: clientui.TranscriptRowAssistant, width: assistantLabelWidth},
-		{name: "barely wider than label", group: clientui.TranscriptRowAssistant, width: assistantLabelWidth + 1},
+		{name: "narrow", group: clientui.TranscriptRowAssistant, width: 4},
+		{name: "wide", group: clientui.TranscriptRowUser, width: 120},
 	}
 
 	for _, tt := range cases {
@@ -186,7 +184,7 @@ func TestRenderDividerStaysWithinFrameWidth(t *testing.T) {
 				t.Fatalf("divider width = %d, want <= frame width %d", plainWidth, tt.width)
 			}
 			if plainWidth == 0 {
-				t.Fatalf("divider unexpectedly empty for positive frame width %d", tt.width)
+				t.Fatalf("divider unexpectedly empty for positive frame width %d", plainWidth)
 			}
 			for _, span := range line.Spans {
 				if span.Role != StyleRoleNotice || !span.Faint {
@@ -194,6 +192,33 @@ func TestRenderDividerStaysWithinFrameWidth(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A divider is a plain horizontal rule: every visible rune is the box-drawing
+// horizontal "─" (or the ellipsis fallback at width 1), with no embedded
+// group-kind label, letters, or digits. Group kind only selects presence, not text.
+func TestRenderDividerIsPlainRuleWithoutLabel(t *testing.T) {
+	for _, group := range []clientui.TranscriptRowKind{
+		clientui.TranscriptRowUser,
+		clientui.TranscriptRowAssistant,
+		clientui.TranscriptRowTool,
+		clientui.TranscriptRowNotice,
+	} {
+		line := RenderDivider(group, 80)
+		plain := line.Plain()
+		if plain == "" {
+			t.Fatalf("group %q: divider empty", group)
+		}
+		for _, r := range plain {
+			if r == '─' || r == '…' {
+				continue
+			}
+			t.Fatalf("group %q: divider contains non-rule rune %q in %q", group, r, plain)
+		}
+		if w := lipgloss.Width(plain); w != 80 {
+			t.Fatalf("group %q: divider width %d, want full frame width 80", group, w)
+		}
 	}
 }
 
