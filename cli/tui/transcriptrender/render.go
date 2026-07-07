@@ -264,6 +264,7 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 	prefixWidth := lipgloss.Width(roleSymbol(role) + " ")
 	bodyWidth := max(1, width-prefixWidth)
 	out := make([]Line, 0, len(lines))
+	lastIndex := len(lines) - 1
 	for idx, line := range lines {
 		command := strings.TrimSpace(line.Plain())
 		meta := ""
@@ -283,7 +284,7 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 		if idx == 0 {
 			spans = append([]Span{{Text: roleSymbol(role), Role: role}, {Text: " ", Role: role}}, spans...)
 		} else {
-			spans = append(continuationPrefix(mode, prefixWidth), spans...)
+			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex), spans...)
 		}
 		line = Line{Spans: spans}
 		if forceEllipsis || lipgloss.Width(line.Plain()) > max(1, width) {
@@ -294,12 +295,18 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 	return out
 }
 
-func continuationPrefix(mode Mode, prefixWidth int) []Span {
+func continuationPrefix(mode Mode, prefixWidth int, isLast bool) []Span {
 	if mode == ModeOngoing {
 		return []Span{{Text: strings.Repeat(" ", max(0, prefixWidth)), Role: StyleRoleNotice, Faint: true}}
 	}
+	// Detail continuations form a real tree: middle lines use the vertical "│"
+	// guide, the last continuation line of the entry closes the tree with "└".
+	guide := "│"
+	if isLast {
+		guide = "└"
+	}
 	return []Span{
-		{Text: "│", Role: StyleRoleNotice, Faint: true},
+		{Text: guide, Role: StyleRoleNotice, Faint: true},
 		{Text: strings.Repeat(" ", max(0, prefixWidth-1)), Role: StyleRoleNotice, Faint: true},
 	}
 }

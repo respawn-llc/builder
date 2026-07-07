@@ -234,7 +234,7 @@ func TestExpandedDetailWrapPreservesWhitespace(t *testing.T) {
 	for _, line := range rendered.Lines {
 		got = append(got, line.Plain())
 	}
-	want := []string{"❮   indented  value", "│ ", "│     code"}
+	want := []string{"❮   indented  value", "│ ", "└     code"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("expanded detail lines = %#v, want %#v", got, want)
 	}
@@ -254,6 +254,47 @@ func TestOngoingContinuationUsesIndentWithoutTreeMarker(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("ongoing continuation lines = %#v, want %#v", got, want)
 	}
+}
+
+// Detail mode renders a real tree of continuation guides: the middle
+// continuation lines of an entry use the vertical "│" guide, and the LAST
+// continuation line closes the tree with the corner "└". The first line keeps
+// the normal role symbol; ongoing continuations stay indent-only (no guide).
+func TestDetailContinuationUsesTreeGuidesWithCornerOnLastLine(t *testing.T) {
+	rendered := RenderCommittedRow(clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowAssistant,
+		Assistant: &clientui.TranscriptAssistantRow{
+			Text: "line one\nline two\nline three\nline four",
+		},
+	}, 80, "", ModeDetailExpanded)
+
+	if len(rendered.Lines) != 4 {
+		t.Fatalf("detail expanded lines = %d, want 4", len(rendered.Lines))
+	}
+	assertContinuationGuide(t, "first/role-symbol", rendered.Lines[0].Plain(), "")
+	assertContinuationGuide(t, "middle-1", rendered.Lines[1].Plain(), "│")
+	assertContinuationGuide(t, "middle-2", rendered.Lines[2].Plain(), "│")
+	assertContinuationGuide(t, "last", rendered.Lines[3].Plain(), "└")
+}
+
+func assertContinuationGuide(t *testing.T, label, row, wantGuide string) {
+	t.Helper()
+	if wantGuide == "" {
+		if r := firstRune(row); r == '│' || r == '└' {
+			t.Fatalf("%s: first rune of %q is a tree guide %q, want role symbol", label, row, string(r))
+		}
+		return
+	}
+	if r := firstRune(row); r != []rune(wantGuide)[0] {
+		t.Fatalf("%s: first rune of %q = %q, want guide %q", label, row, string(r), wantGuide)
+	}
+}
+
+func firstRune(s string) rune {
+	for _, r := range s {
+		return r
+	}
+	return 0
 }
 
 func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing.T) {

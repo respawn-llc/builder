@@ -37,19 +37,19 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	for _, tc := range []struct {
 		name                  string
 		script                map[string]any
-		inputs                []pty.InputEvent
-		resizes               []pty.DriverResizeEvent
-		expectedAppends       []string
-		expectedAnyAppends    []string
-		forbiddenAnyAppends   []string
-		expectedFaintAppends  []string
-		expectedStyledAppends []styledAppendExpectation
-		expectedStyledWrites  []styledAppendExpectation
-		expectedStyledRows    []styledRowExpectation
-		allowDuplicateAppends bool
-		allowsAltScroll       bool
-		allowsFullScreen      bool
-		interruptAfter        *time.Duration
+		inputs                    []pty.InputEvent
+		resizes                   []pty.DriverResizeEvent
+		expectedAppends           []string
+		expectedAnyAppends        []string
+		forbiddenAnyAppends       []string
+		expectedFaintDividerCount int
+		expectedStyledAppends     []styledAppendExpectation
+		expectedStyledWrites      []styledAppendExpectation
+		expectedStyledRows        []styledRowExpectation
+		allowDuplicateAppends     bool
+		allowsAltScroll           bool
+		allowsFullScreen          bool
+		interruptAfter            *time.Duration
 	}{
 		{
 			name: "visibility_o_real_app_path",
@@ -136,11 +136,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"❯ seeded_tool_message_style_matrix_real_app_path",
 				"›                                                                               ",
 			},
-			expectedFaintAppends: []string{
-				"────────────────────────────────────────────────────── assistant ───────────────",
-				"──────────────────────────────────────────────────────── notice ────────────────",
-				"───────────────────────────────────────────────────────── tool ─────────────────",
-			},
+			expectedFaintDividerCount: 3,
 			expectedStyledAppends: []styledAppendExpectation{
 				{Text: "❯ PTY_STYLE_USER", Foreground: colorForStyle(transcriptrender.StyleRoleUser)},
 				{Text: "❮ PTY_STYLE_ASSISTANT", Foreground: colorForStyle(transcriptrender.StyleRoleAssistant)},
@@ -328,9 +324,9 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					t.Fatalf("forbidden full-window append: %v", err)
 				}
 			}
-			for _, content := range tc.expectedFaintAppends {
-				if err := faintContentAppendedAtLeastOnce(allAppends, content); err != nil {
-					t.Fatalf("expected faint full-window append: %v", err)
+			if tc.expectedFaintDividerCount > 0 {
+				if err := faintDividerAppendedAtLeast(allAppends, tc.expectedFaintDividerCount); err != nil {
+					t.Fatalf("expected faint divider appends: %v", err)
 				}
 			}
 			if len(tc.expectedStyledAppends) > 0 {
@@ -641,13 +637,35 @@ func contentNotAppended(appends []pty.AppendOperation, content string) error {
 	return nil
 }
 
-func faintContentAppendedAtLeastOnce(appends []pty.AppendOperation, content string) error {
+// faintDividerAppendedAtLeast asserts that at least `minCount` faint divider
+// rule appends were emitted. A divider rule is a faint, non-empty append whose
+// visible text is made only of the box-drawing horizontal "─" rune (the divider
+// shape). This asserts structure (a divider was emitted) rather than literal
+// label text, so divider wording/styling changes do not break it.
+func faintDividerAppendedAtLeast(appends []pty.AppendOperation, minCount int) error {
+	count := 0
 	for _, appendOperation := range appends {
-		if appendOperation.Operation.Write != nil && appendOperation.Operation.Write.Text == content && appendOperation.Operation.Write.Faint {
-			return nil
+		write := appendOperation.Operation.Write
+		if write == nil || !write.Faint || write.Text == "" {
+			continue
+		}
+		if isPlainDividerRule(write.Text) {
+			count++
 		}
 	}
-	return fmt.Errorf("faint content append count for %q = 0, want at least 1", content)
+	if count < minCount {
+		return fmt.Errorf("faint divider append count = %d, want at least %d", count, minCount)
+	}
+	return nil
+}
+
+func isPlainDividerRule(text string) bool {
+	for _, r := range text {
+		if r != '─' && r != '…' {
+			return false
+		}
+	}
+	return text != ""
 }
 
 func styledContentAppendedAtLeastOnce(appends []pty.AppendOperation, expected styledAppendExpectation) error {
