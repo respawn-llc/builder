@@ -230,6 +230,44 @@ func TestDetailTranscriptWindowTrimsFarResidentSegmentsAfterPrepend(t *testing.T
 	}
 }
 
+// Spec: the resident detail window is bounded to two pages max (current + one
+// adjacent), evicting the far page on cross. This must hold regardless of total
+// entry count — there is no entry-count ceiling. These tests use small pages
+// (well under any legacy 1000-entry gate) to prove eviction is segment-driven.
+func TestDetailTranscriptWindowTrimsFarSegmentByCountAfterAppend(t *testing.T) {
+	var window uiDetailTranscriptWindow
+	window.replace(detailTestPage("session-1", 0, 2, appInt64Ptr(3), nil))
+	window.appendCursorPage(detailTestPage("session-1", 3, 5, appInt64Ptr(6), appInt64Ptr(3)))
+	window.appendCursorPage(detailTestPage("session-1", 6, 8, nil, appInt64Ptr(6)))
+
+	if len(window.segments) != uiDetailTranscriptMinResidentSegments {
+		t.Fatalf("resident segment count = %d, want %d (segment-driven, not entry-count)", len(window.segments), uiDetailTranscriptMinResidentSegments)
+	}
+	if len(window.entries) != 6 {
+		t.Fatalf("resident entry count = %d, want two retained 3-entry segments", len(window.entries))
+	}
+	if got := window.entries[0].Text; got != "entry-3" {
+		t.Fatalf("first retained entry = %q, want appended window to unload oldest segment", got)
+	}
+}
+
+func TestDetailTranscriptWindowTrimsFarSegmentByCountAfterPrepend(t *testing.T) {
+	var window uiDetailTranscriptWindow
+	window.replace(detailTestPage("session-1", 6, 8, nil, appInt64Ptr(6)))
+	window.prependCursorPage(detailTestPage("session-1", 3, 5, appInt64Ptr(3), appInt64Ptr(6)))
+	window.prependCursorPage(detailTestPage("session-1", 0, 2, appInt64Ptr(0), appInt64Ptr(3)))
+
+	if len(window.segments) != uiDetailTranscriptMinResidentSegments {
+		t.Fatalf("resident segment count = %d, want %d (segment-driven, not entry-count)", len(window.segments), uiDetailTranscriptMinResidentSegments)
+	}
+	if len(window.entries) != 6 {
+		t.Fatalf("resident entry count = %d, want two retained 3-entry segments", len(window.entries))
+	}
+	if got := window.entries[len(window.entries)-1].Text; got != "entry-5" {
+		t.Fatalf("last retained entry = %q, want prepended window to unload newest far segment", got)
+	}
+}
+
 func TestDetailTranscriptPageDeepClonesPatchRender(t *testing.T) {
 	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
 	sourcePatch := &patchformat.RenderedPatch{Files: []patchformat.RenderedFile{{

@@ -9,7 +9,6 @@ import (
 )
 
 const (
-	uiDetailTranscriptMaxEntries          = 1000
 	uiDetailTranscriptMinResidentSegments = 2
 )
 
@@ -281,7 +280,12 @@ func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) []clientui.Ch
 		}
 	}
 	trimmedFrontEntries := []clientui.ChatEntry(nil)
-	for len(w.segments) > uiDetailTranscriptMinResidentSegments && len(w.entries) > uiDetailTranscriptMaxEntries {
+	// The resident window is bounded to two pages max (current + one adjacent):
+	// the spec model for detail pagination. Eviction is driven by segment count
+	// alone — there is no entry-count ceiling. The far segment from the anchor is
+	// unloaded whenever a third resident segment appears, regardless of how many
+	// entries those segments hold.
+	for len(w.segments) > uiDetailTranscriptMinResidentSegments {
 		last := len(w.segments) - 1
 		firstDist := anchorSeg
 		lastDist := last - anchorSeg
