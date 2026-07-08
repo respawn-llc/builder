@@ -229,8 +229,70 @@ func TestDetailPrependedPageIgnoresHiddenEntriesWhenPreservingBoundary(t *testin
 	}
 }
 
-func TestDetailAppendedPagePreservesLineScrollBoundary(t *testing.T) {
+// Spec: detail scroll is line-oriented. Prepending an older page must keep the
+// viewport on the same content line the user was reading, even when the entire
+// prepended page is hidden (X visibility) entries — those add zero rendered
+// lines, so the viewport content does not shift and scroll must not reset to
+// the top of the new page. A subsequent Up at the new top should move by one
+// rendered line, not re-fire a page request when content already sits above.
+func TestDetailPrependedAllHiddenPageDoesNotJumpToTopOrRefire(t *testing.T) {
 	model := NewModel()
+	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 80})
+	model = next.(Model)
+	// Load a page with more entries than the viewport so scrolling is possible.
+	next, _ = model.Update(SetDetailTranscriptPageMsg{
+		Page: clientui.TranscriptPage{
+			OlderCursor:  int64Ptr(64),
+			HasMoreAbove: true,
+			Entries: []clientui.ChatEntry{
+				{Role: "assistant", Text: "current first"},
+				{Role: "assistant", Text: "current second"},
+				{Role: "assistant", Text: "current third"},
+				{Role: "assistant", Text: "current fourth"},
+			},
+		},
+		Anchor: DetailTranscriptAnchorTop,
+	})
+	model = next.(Model)
+	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
+	model = next.(Model)
+	// User scrolled down one rendered line, so the top boundary is no longer at
+	// scroll 0 — they are mid-page.
+	model.detailScroll = 1
+	beforeScroll := model.detailScroll
+	if model.maxDetailScroll() < beforeScroll {
+		t.Fatalf("test setup invalid: maxDetailScroll=%d < beforeScroll=%d", model.maxDetailScroll(), beforeScroll)
+	}
+
+	// Prepend an older page whose entries are ALL hidden.
+	next, _ = model.Update(SetDetailTranscriptPageMsg{
+		Page: clientui.TranscriptPage{
+			Entries: []clientui.ChatEntry{
+				{Visibility: clientui.EntryVisibilityHidden, Role: "system", Text: "hidden one"},
+				{Visibility: clientui.EntryVisibilityHidden, Role: "system", Text: "hidden two"},
+				{Role: "assistant", Text: "current first"},
+				{Role: "assistant", Text: "current second"},
+				{Role: "assistant", Text: "current third"},
+				{Role: "assistant", Text: "current fourth"},
+			},
+		},
+		Anchor:                DetailTranscriptAnchorPreserve,
+		PrependedEntriesCount: 2,
+	})
+	model = next.(Model)
+
+	// No visible prepended rows => viewport content unchanged => scroll must
+	// stay where it was, not jump to 0 (top of the new page).
+	if model.detailScroll != beforeScroll {
+		t.Fatalf("detail scroll after all-hidden prepend = %d, want %d (same content line, no jump to top)", model.detailScroll, beforeScroll)
+	}
+	// Selection should remain on the same visible entry the user had selected.
+	if selected, ok := model.selectedDetailIndex(); !ok || selected != 0 {
+		t.Fatalf("selected entry after all-hidden prepend = %d/%t, want 0/true (unchanged)", selected, ok)
+	}
+}
+
+func TestDetailAppendedPagePreservesLineScrollBoundary(t *testing.T) {	model := NewModel()
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 80})
 	model = next.(Model)
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
