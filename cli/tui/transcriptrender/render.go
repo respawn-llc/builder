@@ -168,7 +168,7 @@ type toolDisplay struct {
 }
 
 func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) toolDisplay {
-	if mode == ModeOngoing || mode == ModeDetailCollapsed {
+	if mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed {
 		text := firstNonEmpty(row.CondensedText, compactToolText(meta, row.Text))
 		return toolDisplay{Text: text, InlineMeta: firstNonEmpty(row.ResultSummary, meta.InlineMeta)}
 	}
@@ -231,7 +231,7 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 	if mode == ModeOngoing && roleAllowsThreeLinePreview(role) {
 		return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width))), width, false, mode)
 	}
-	if mode == ModeOngoing || mode == ModeDetailCollapsed {
+	if mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed {
 		first := firstDisplayLine(text)
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
 			return attachPrefix(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3)), width, false, mode)
@@ -296,7 +296,7 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 }
 
 func continuationPrefix(mode Mode, prefixWidth int, isLast bool) []Span {
-	if mode == ModeOngoing {
+	if mode == ModeOngoing || mode == ModeOngoingCollapsed {
 		return []Span{{Text: strings.Repeat(" ", max(0, prefixWidth)), Role: StyleRoleNotice, Faint: true}}
 	}
 	// Detail continuations form a real tree: middle lines use the vertical "│"

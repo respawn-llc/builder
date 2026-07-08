@@ -368,6 +368,17 @@ func (s *Surface) renderCommittedRow(row clientui.TranscriptCommittedRow, width 
 	return s.renderGroupedRows(group, lines, width, themeName, false)
 }
 
+// ongoingRenderMode selects the renderer mode for a committed row in the
+// ongoing surface. O rows render their full ongoing preview; OC rows render
+// the collapsed/short (single-line) ongoing form per tui-transcript.md
+// visibility rules. D and X rows never reach this path.
+func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
+	if transcript.NormalizeEntryVisibility(transcript.EntryVisibility(row.Visibility)) == transcript.EntryVisibilityOngoingCollapsed {
+		return transcriptrender.ModeOngoingCollapsed
+	}
+	return transcriptrender.ModeOngoing
+}
+
 func (s *Surface) renderAssistantPromotedRows(rows []string, width int, themeName string) []string {
 	return s.renderGroupedRows(clientui.TranscriptRowAssistant, rows, width, themeName, true)
 }
@@ -389,7 +400,7 @@ func (s *Surface) renderGroupedRows(group clientui.TranscriptRowKind, rows []str
 func committedRowLines(row clientui.TranscriptCommittedRow, width int, themeName string) (clientui.TranscriptRowKind, []string) {
 	switch row.Kind {
 	case clientui.TranscriptRowUser, clientui.TranscriptRowAssistant, clientui.TranscriptRowTool, clientui.TranscriptRowNotice:
-		rendered := transcriptrender.RenderCommittedRow(row, width, themeName, transcriptrender.ModeOngoing)
+		rendered := transcriptrender.RenderCommittedRow(row, width, themeName, ongoingRenderMode(row))
 		return rendered.Group, encodeTranscriptLines(rendered.Lines, themeName)
 	default:
 		panic(fmt.Sprintf("ongoing render unknown committed row kind %q", row.Kind))

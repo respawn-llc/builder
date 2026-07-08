@@ -147,6 +147,59 @@ func TestCommittedRowsFilterNonOngoingVisibility(t *testing.T) {
 	})
 }
 
+// Spec tui-transcript.md: visibility OC = "collapsed/short ongoing plus full
+// detail". An OC row in ongoing must render its compact (single-line) form,
+// NOT the full multi-line preview that an O row shows. This proves the OC row
+// emits exactly one content line while the O row emits the full preview.
+func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
+	multiLine := "first line\nsecond line\nthird line"
+	cases := []struct {
+		name              string
+		visibility        clientui.EntryVisibility
+		wantContentRows   int
+		wantCompactMarker bool
+	}{
+		{name: "O shows full preview", visibility: clientui.EntryVisibilityOngoing, wantContentRows: 3, wantCompactMarker: false},
+		{name: "OC shows compact single line", visibility: clientui.EntryVisibilityOngoingCollapsed, wantContentRows: 1, wantCompactMarker: true},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			surface := NewSurface(&out)
+			row := clientui.TranscriptCommittedRow{
+				Kind:       clientui.TranscriptRowAssistant,
+				Visibility: tt.visibility,
+				Assistant:  &clientui.TranscriptAssistantRow{Text: multiLine},
+			}
+			if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
+				Kind:      clientui.TranscriptMessageHydration,
+				Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{row}},
+			}, FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			rows := visibleTextRows(parseTerminalOps(out.String()))
+			contentRows := 0
+			for _, r := range rows {
+				if isDividerRule(r) {
+					continue
+				}
+				contentRows++
+			}
+			if contentRows != tt.wantContentRows {
+				t.Fatalf("content rows = %d, want %d (rows=%v)", contentRows, tt.wantContentRows, rows)
+			}
+			if tt.wantCompactMarker {
+				// OC compact form shows only the first non-empty line, never "second line".
+				for _, r := range rows {
+					if strings.Contains(r, "second line") || strings.Contains(r, "third line") {
+						t.Fatalf("OC compact form leaked non-first body line: %q (rows=%v)", r, rows)
+					}
+				}
+			}
+		})
+	}
+}
+
 func committedMessage(row clientui.TranscriptCommittedRow) clientui.TranscriptMessage {
 	return clientui.TranscriptMessage{
 		Kind:         clientui.TranscriptMessageCommittedRow,
