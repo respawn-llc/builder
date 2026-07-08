@@ -2,6 +2,7 @@ package transcriptrender
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"unicode"
 
@@ -327,6 +328,43 @@ func TestCollapsedDiagnosticNoticeUsesCompactLabelForDetailVisibility(t *testing
 	}, 80, "", ModeDetailExpanded)
 	if got, want := expanded.Lines[0].Plain(), "ℹ raw diagnostic body"; got != want {
 		t.Fatalf("expanded diagnostic line = %q, want %q", got, want)
+	}
+}
+
+// Spec tui-transcript.md: collapsed detail + ongoing use compact text, expansion
+// reveals full entry content verbatim. For user/assistant, the compact form is
+// the server-provided CondensedText when present (else first non-empty line).
+func TestUserAssistantCompactTextToggleBetweenCollapsedAndExpanded(t *testing.T) {
+	for _, kind := range []struct {
+		name   string
+		row    func(text, condensed string) clientui.TranscriptCommittedRow
+		symbol string
+	}{{"user", func(text, condensed string) clientui.TranscriptCommittedRow {
+		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: text, CondensedText: condensed}}
+	}, "❯"}, {"assistant", func(text, condensed string) clientui.TranscriptCommittedRow {
+		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: text, CondensedText: condensed}}
+	}, "❮"}} {
+		t.Run(kind.name, func(t *testing.T) {
+			full := "first body line\nsecond body line\nthird body line"
+			condensed := "server compact summary"
+
+			collapsed := RenderCommittedRow(kind.row(full, condensed), 80, "", ModeDetailCollapsed)
+			if len(collapsed.Lines) != 1 {
+				t.Fatalf("collapsed lines = %d, want 1 (compact)", len(collapsed.Lines))
+			}
+			if got, want := collapsed.Lines[0].Plain(), kind.symbol+" "+condensed; got != want {
+				t.Fatalf("collapsed line = %q, want compact %q", got, want)
+			}
+
+			expanded := RenderCommittedRow(kind.row(full, condensed), 80, "", ModeDetailExpanded)
+			plain := expanded.Lines[0].Plain()
+			if !strings.Contains(plain, "first body line") {
+				t.Fatalf("expanded line = %q, want full first body line", plain)
+			}
+			if strings.Contains(plain, condensed) {
+				t.Fatalf("expanded line leaked compact text %q into full body: %q", condensed, plain)
+			}
+		})
 	}
 }
 

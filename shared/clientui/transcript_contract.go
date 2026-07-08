@@ -177,13 +177,15 @@ type TranscriptCommittedRow struct {
 }
 
 type TranscriptUserRow struct {
-	Text string
+	Text          string
+	CondensedText string
 }
 
 type TranscriptAssistantRow struct {
-	Text     string
-	Phase    MessagePhase
-	StreamID *uuid.UUID
+	Text          string
+	CondensedText string
+	Phase         MessagePhase
+	StreamID      *uuid.UUID
 }
 
 type TranscriptToolRow struct {

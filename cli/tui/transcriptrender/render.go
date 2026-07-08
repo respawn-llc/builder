@@ -16,9 +16,9 @@ import (
 func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, _ string, mode Mode) Row {
 	switch row.Kind {
 	case clientui.TranscriptRowUser:
-		return Row{Group: clientui.TranscriptRowUser, Lines: renderTextBlock(StyleRoleUser, row.User.Text, width, mode)}
+		return Row{Group: clientui.TranscriptRowUser, Lines: renderTextBlock(StyleRoleUser, userAssistantDisplayText(row.User.Text, row.User.CondensedText, mode), width, mode)}
 	case clientui.TranscriptRowAssistant:
-		return Row{Group: clientui.TranscriptRowAssistant, Lines: renderTextBlock(StyleRoleAssistant, row.Assistant.Text, width, mode)}
+		return Row{Group: clientui.TranscriptRowAssistant, Lines: renderTextBlock(StyleRoleAssistant, userAssistantDisplayText(row.Assistant.Text, row.Assistant.CondensedText, mode), width, mode)}
 	case clientui.TranscriptRowTool:
 		return Row{Group: clientui.TranscriptRowTool, Lines: RenderToolRow(*row.Tool, width, mode)}
 	case clientui.TranscriptRowNotice:
@@ -165,6 +165,20 @@ func toolRole(meta toolMeta, isError bool) StyleRole {
 type toolDisplay struct {
 	Text       string
 	InlineMeta string
+}
+
+// userAssistantDisplayText selects the compact vs full text for user/assistant
+// rows. Collapsed (ongoing-collapsed or detail-collapsed) shows the
+// server-provided CondensedText when present, else the first non-empty line of
+// the full text. Ongoing-O and detail-expanded show the full text verbatim.
+func userAssistantDisplayText(text, condensed string, mode Mode) string {
+	if mode == ModeDetailExpanded || mode == ModeOngoing {
+		return text
+	}
+	if compact := strings.TrimSpace(condensed); compact != "" {
+		return compact
+	}
+	return text
 }
 
 func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) toolDisplay {

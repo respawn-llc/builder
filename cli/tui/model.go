@@ -606,12 +606,12 @@ func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommit
 		if strings.TrimSpace(entry.Text) == "" {
 			return clientui.TranscriptCommittedRow{}, false
 		}
-		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: entry.Text}}, true
+		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: entry.Text, CondensedText: entry.CondensedText}}, true
 	case "assistant":
 		if strings.TrimSpace(entry.Text) == "" {
 			return clientui.TranscriptCommittedRow{}, false
 		}
-		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: entry.Text, Phase: entry.Phase}}, true
+		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: entry.Text, CondensedText: entry.CondensedText, Phase: entry.Phase}}, true
 	case "tool_call":
 		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
 			ToolCallID:       strings.TrimSpace(entry.ToolCallID),
