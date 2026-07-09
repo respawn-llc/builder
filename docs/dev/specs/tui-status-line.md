@@ -30,7 +30,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 ## Segments
 
-- Model label: model display name + thinking level; marked `fast` when fast mode is available and enabled; marked model-locked when the session's model contract is locked and differs from the configured model. The model label is the ongoing-visible location for `/thinking` level changes; `/thinking` transcript feedback is detail-only. Exact copy is presentation, not contract.
+- Model label: model display name + thinking level; marked `fast` when fast mode is available and enabled; marked model-locked when the session's model contract is locked and differs from the configured model. The model label is the durable visible location for `/thinking` level changes; successful `/thinking` feedback is status-only and is not rendered as a transcript row in ongoing or detail. Exact copy is presentation, not contract.
 - Git branch, only when known and healthy: hidden while git facts are unavailable, errored, or the branch is unknown. Git facts come from the server-side status source, refreshed in the background — never blocking render.
 - Running background-process count (running/starting only); hidden at zero.
 - There is NO server-ownership segment: the TUI never owns a server under the server-only client model. (owner: tui-startup :: Startup Sequence)

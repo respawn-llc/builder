@@ -165,10 +165,7 @@ func (c uiInputController) handleThinkingLevelCommand(requested string) (tea.Mod
 		if m.hasRuntimeClient() {
 			current = m.cachedRuntimeStatus().ThinkingLevel
 		}
-		if current == "" {
-			current = "unknown"
-		}
-		return m, c.model.appendLocalEntryWithNoticeID("system", "Thinking level is "+current, "")
+		return m, c.model.sendThinkingLevelQueryStatus(current)
 	}
 
 	normalized, ok := clientui.NormalizeThinkingLevel(requested)
@@ -180,7 +177,19 @@ func (c uiInputController) handleThinkingLevelCommand(requested string) (tea.Mod
 		return m, m.runtimeControlCommand(runtimeControlSetThinkingLevel, normalized, false, "")
 	}
 	m.thinkingLevel = normalized
-	return m, c.model.appendLocalEntryWithNoticeID("system", "Thinking level set to "+m.thinkingLevel, "")
+	return m, c.model.sendThinkingLevelSetStatus(m.thinkingLevel)
+}
+
+func (m *uiModel) sendThinkingLevelQueryStatus(level string) tea.Cmd {
+	current := strings.TrimSpace(level)
+	if current == "" {
+		current = "unknown"
+	}
+	return m.sendTransientStatusWithNoticeID("Thinking level is "+current, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, "")
+}
+
+func (m *uiModel) sendThinkingLevelSetStatus(level string) tea.Cmd {
+	return m.sendTransientStatusWithNoticeID("Thinking level set to "+strings.TrimSpace(level), uiStatusNoticeSuccess, transientStatusDuration, uiStatusNoticeReplace, "")
 }
 
 func (c uiInputController) handleFastModeCommand(requested string) (tea.Model, tea.Cmd) {

@@ -555,7 +555,7 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 		return sequenceCmds(tea.SetWindowTitle(sessionTitle(m.sessionName)), followUpCmd)
 	case runtimeControlSetThinkingLevel:
 		m.thinkingLevel = strings.TrimSpace(msg.text)
-		return sequenceCmds(m.appendLocalEntryWithNoticeID("system", "Thinking level set to "+m.thinkingLevel, ""), followUpCmd)
+		return sequenceCmds(m.sendThinkingLevelSetStatus(m.thinkingLevel), followUpCmd)
 	case runtimeControlSetFastMode:
 		m.fastModeEnabled = msg.enabled
 		status := serverapi.FastModeToggleStatusMessage(m.fastModeEnabled, msg.changed)
