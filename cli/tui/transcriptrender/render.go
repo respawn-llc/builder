@@ -239,7 +239,7 @@ func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *p
 	if len(lines) == 0 {
 		lines = []Line{{Spans: []Span{{Text: text, Role: role, Faint: roleDefaultFaint(role)}}}}
 	}
-	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta, mode)
+	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta, mode, toolMeta{})
 }
 
 func renderTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
@@ -256,11 +256,11 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 	if mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed {
 		first := firstDisplayLine(text)
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
-			return attachPrefix(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3), meta), width, false, mode)
+			return attachPrefixWithMeta(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3), meta), width, false, mode, meta)
 		}
-		return attachPrefixWithFirstLineMeta(role, textLines(role, []string{first}, meta), width, len(strings.Split(text, "\n")) > 1, inlineMeta, mode)
+		return attachPrefixWithFirstLineMeta(role, textLines(role, []string{first}, meta), width, len(strings.Split(text, "\n")) > 1, inlineMeta, mode, meta)
 	}
-	return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width)), meta), width, false, mode)
+	return attachPrefixWithMeta(role, textLines(role, wrapLines(text, contentWidth(role, width)), meta), width, false, mode, meta)
 }
 
 func textLines(role StyleRole, lines []string, meta toolMeta) []Line {
@@ -350,10 +350,14 @@ func shellSyntaxRole(tokenType chroma.TokenType) StyleRole {
 }
 
 func attachPrefix(role StyleRole, lines []Line, width int, forceEllipsis bool, mode Mode) []Line {
-	return attachPrefixWithFirstLineMeta(role, lines, width, forceEllipsis, "", mode)
+	return attachPrefixWithMeta(role, lines, width, forceEllipsis, mode, toolMeta{})
 }
 
-func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forceEllipsis bool, firstLineMeta string, mode Mode) []Line {
+func attachPrefixWithMeta(role StyleRole, lines []Line, width int, forceEllipsis bool, mode Mode, meta toolMeta) []Line {
+	return attachPrefixWithFirstLineMeta(role, lines, width, forceEllipsis, "", mode, meta)
+}
+
+func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forceEllipsis bool, firstLineMeta string, mode Mode, meta toolMeta) []Line {
 	if len(lines) == 0 {
 		lines = []Line{{Spans: []Span{{Role: role}}}}
 	}
@@ -364,22 +368,23 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 	lastIndex := len(lines) - 1
 	for idx, line := range lines {
 		command := strings.TrimSpace(line.Plain())
-		meta := ""
+		inlineMeta := ""
 		spans := line.Spans
 		if idx == 0 && firstLineMeta != "" {
-			meta = firstLineMeta
+			inlineMeta = firstLineMeta
 			spans = inlineMetaCommandSpans(spans, role)
 		}
-		if meta != "" {
-			gap := bodyWidth - lipgloss.Width(command) - lipgloss.Width(meta)
+		if inlineMeta != "" {
+			gap := bodyWidth - lipgloss.Width(command) - lipgloss.Width(inlineMeta)
 			if gap < 1 {
 				gap = 1
 			}
 			spans = append(spans, Span{Text: strings.Repeat(" ", gap), Role: role, Faint: roleDefaultFaint(role)})
-			spans = append(spans, Span{Text: meta, Role: StyleRoleNotice, Faint: true})
+			spans = append(spans, Span{Text: inlineMeta, Role: StyleRoleNotice, Faint: true})
 		}
 		if idx == 0 {
-			spans = append([]Span{{Text: roleSymbol(role), Role: role, Faint: roleDefaultFaint(role)}, {Text: " ", Role: role, Faint: roleDefaultFaint(role)}}, spans...)
+			symbolRole := roleSymbolStyleRole(role, meta)
+			spans = append([]Span{{Text: roleSymbol(role), Role: symbolRole, Faint: roleSymbolFaint(role, symbolRole)}, {Text: " ", Role: role, Faint: roleDefaultFaint(role)}}, spans...)
 		} else {
 			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex), spans...)
 		}
@@ -427,14 +432,46 @@ func replaceLeadingRoleSymbol(line Line, role StyleRole, symbol string) Line {
 	}
 	out := Line{Spans: append([]Span(nil), line.Spans...)}
 	for idx := range out.Spans {
-		if out.Spans[idx].Role != role || out.Spans[idx].Text != roleSymbol(role) {
+		if out.Spans[idx].Text != roleSymbol(role) {
 			continue
 		}
 		out.Spans[idx].Text = symbol
-		out.Spans[idx].Faint = roleDefaultFaint(role)
 		return out
 	}
 	return out
+}
+
+func roleSymbolStyleRole(role StyleRole, meta toolMeta) StyleRole {
+	switch role {
+	case StyleRoleToolError:
+		return StyleRoleToolError
+	case StyleRoleToolShell:
+		if meta.RawOutputRequested {
+			return StyleRoleWarning
+		}
+		return StyleRoleToolSuccess
+	case StyleRoleTool,
+		StyleRoleToolPatch,
+		StyleRoleToolQuestion,
+		StyleRoleToolWebSearch:
+		return StyleRoleToolSuccess
+	default:
+		return role
+	}
+}
+
+func roleSymbolFaint(role StyleRole, symbolRole StyleRole) bool {
+	switch role {
+	case StyleRoleTool,
+		StyleRoleToolShell,
+		StyleRoleToolPatch,
+		StyleRoleToolQuestion,
+		StyleRoleToolWebSearch,
+		StyleRoleToolError:
+		return false
+	default:
+		return roleDefaultFaint(symbolRole)
+	}
 }
 
 func roleDefaultFaint(role StyleRole) bool {

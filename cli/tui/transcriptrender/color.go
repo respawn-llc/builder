@@ -19,6 +19,8 @@ func ColorForRole(role ColorRole, themeName string) theme.Color {
 		return tokens.Transcript.ToolSuccess
 	case ColorRoleToolError:
 		return tokens.Transcript.ToolError
+	case ColorRoleSuccess:
+		return tokens.Transcript.Success
 	case ColorRoleWarning:
 		return tokens.Transcript.Warning
 	case ColorRoleError:

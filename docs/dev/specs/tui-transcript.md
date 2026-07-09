@@ -24,6 +24,7 @@
 - Transcript-affecting transport failures must not be swallowed or converted to fake empty/idle state.
 - Terminal width changes after emitted transcript content exists, an event-seq gap or connection/subscription loss, and navigation/event buffering overflow trigger scratch rehydration through the same in-process session navigation/open hydration path used when the TUI opens a session. Height-only changes repaint the mutable normal-buffer area without scratch rehydration. Scratch rehydration erases only the mutable normal-buffer area, requests the active transcript segment since the latest compaction boundary or conversation start, and appends the hydrated chunk below existing immutable scrollback.
 - Scratch rehydration never restarts the TUI process, clears immutable scrollback, compares against emitted lines, or suppresses duplicate-looking output.
+- Scratch rehydration emits committed assistant final answers from their full saved text, preserving multi-line answer content. The compact ongoing assistant preview rule applies to live/normal rendering, not to scratch rehydration of already-final assistant answers.
 - Assistant finalization while native streaming is active matches by the committed entry's carried stream/step identity and compares only against the in-memory stream source. If the final saved assistant text extends the streamed source, ongoing emits only the missing suffix and finalizes; if it does not and there was no real connection gap, the TUI treats it as an invariant/API failure rather than rehydrating.
 - **Pending tool-call activity lives only in the volatile live region. When tool execution is in progress and no tool completion event has been issued, the tool calls render a loading spinner in a separate terminal area that is refreshed every frame to enable animations, but when tools are completed, they use regular `steer` path to get committed to permanent native terminal scrollback.**
 - Messages in TUI use icon-like, single-symbol glyphs: `@` for web search, `§` for reviewer status/suggestion entries, `⇄` for file edits (edit/patch tools), `$` for shell tool calls, `⚠` for all warnings, `!` for all errors, `ℹ` for all ongoing-visible neutral notices (such as goal, worktree messages), and `?` for questions.
@@ -95,6 +96,7 @@
 - `worktree_mode`: `O`
 - `worktree_mode_exit`: `O`
 - `goal`: `O`
+- Thinking-level feedback from `/thinking` is not rendered as a transcript row in ongoing or detail. The TUI surfaces thinking level through the status-line model label/reasoning segment instead of neutral transcript notices.
 - Locked non-message roles:
 - user turns: `O`
 - assistant turns: `O`
@@ -122,9 +124,14 @@
 - Workflow-related rows use primary text and `OC` visibility.
 - Worktree rows use foreground text.
 - `subagents` developer-context rows use foreground text.
+- Supervisor/reviewer-related non-error rows use success text. Supervisor/reviewer error rows use error text.
 - Cache warnings and non-interrupting warnings use warning text.
 - Error rows use error text, including interruption rows.
 - Background shell completion notices use foreground text, faint styling, and remain separate from shell tool call/result rows.
+- The rendering matrix applies to ongoing and detail modes. Mode-specific compact/full rules may change which content is selected, but not the semantic style roles for the selected content.
+- Role symbols/icons are styled independently from row body text when specified: successful tool-call symbols use success, shell tool-call symbols with raw output requested use warning, failed tool-call symbols use error, supervisor/reviewer symbols use the row's success/error color, compaction symbols use secondary, goal symbols use primary, warning symbols use warning, and error symbols use error. Unspecified symbol color behavior requires an explicit spec decision before implementation.
+- Tool previews are input-first. Shell previews show the typed command from tool metadata. Patch/edit previews show structured patch paths and diff add/remove counts or lines. Other tool previews show typed compact/input metadata. Tool result summaries and error summaries do not replace the input preview.
+- Tool-call errors in ongoing and detail keep the failed tool input visible with an error-colored symbol. Patch/edit errors render the patch/edit input shape, including file path and diff add/remove lines when structured patch metadata exists, instead of replacing the row with only error text.
 - No timestamps are shown in UI.
 - Streaming paint cadence is 16ms with token coalescing per flush tick.
 - Main status line is compact and fixed: activity indicator, optional git branch, model label, process metadata, transient warning, and right-aligned context meter. Composition, priority, and notice semantics are owned by tui-status-line.md.

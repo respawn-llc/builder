@@ -53,6 +53,7 @@ const (
 	ColorRoleTool
 	ColorRoleToolSuccess
 	ColorRoleToolError
+	ColorRoleSuccess
 	ColorRoleWarning
 	ColorRoleError
 	ColorRoleSubdued
@@ -68,13 +69,14 @@ func ColorRoleForStyle(role StyleRole) ColorRole {
 		StyleRoleToolQuestion,
 		StyleRoleToolWebSearch,
 		StyleRoleNoticeForeground,
-		StyleRoleNoticeForegroundFaint,
-		StyleRoleNoticeReviewer:
+		StyleRoleNoticeForegroundFaint:
 		return ColorRoleForeground
 	case StyleRoleNoticePrimary:
 		return ColorRolePrimary
 	case StyleRoleNoticeSecondary:
 		return ColorRoleSecondary
+	case StyleRoleNoticeReviewer:
+		return ColorRoleSuccess
 	case StyleRoleToolShellPrimary:
 		return ColorRolePrimary
 	case StyleRoleToolShellSecondary:
