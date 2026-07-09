@@ -63,15 +63,17 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
 	row := toolRow("exec_command", clientui.ToolPresentationShell, "sed -n '1,10p' cli/tui/model.go", false)
 	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{ShellDialect: clientui.ToolShellDialectPosix}
-	rendered := RenderCommittedRow(row, 120, "", ModeOngoing)
-	if len(rendered.Lines) == 0 {
-		t.Fatal("rendered no shell row lines")
+	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed, ModeDetailExpanded} {
+		rendered := RenderCommittedRow(row, 120, "", mode)
+		if len(rendered.Lines) == 0 {
+			t.Fatalf("mode %v rendered no shell row lines", mode)
+		}
+		line := rendered.Lines[0]
+		if got, want := line.Plain(), "$ sed -n '1,10p' cli/tui/model.go"; got != want {
+			t.Fatalf("mode %v shell line = %q, want %q", mode, got, want)
+		}
+		assertShellLineHasTypedSyntax(t, line)
 	}
-	line := rendered.Lines[0]
-	if got, want := line.Plain(), "$ sed -n '1,10p' cli/tui/model.go"; got != want {
-		t.Fatalf("shell line = %q, want %q", got, want)
-	}
-	assertShellLineHasTypedSyntax(t, line)
 }
 
 func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
@@ -439,6 +441,32 @@ func TestCollapsedToolResultSummaryRendersAsFaintInlineMetadata(t *testing.T) {
 	gap := spans[len(spans)-2]
 	if gap.Text == "" || gap.Role != StyleRoleToolShell {
 		t.Fatalf("result summary gap span = %+v, want shell-role spacing before metadata", gap)
+	}
+}
+
+func TestCollapsedToolRowsKeepInputPreviewAheadOfResultCondensedText(t *testing.T) {
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "raw output text", false)
+	row.Tool.CondensedText = "passed"
+	row.Tool.ResultSummary = "exit 0"
+	row.Tool.ToolPresentation.Command = "go test ./..."
+	row.Tool.ToolPresentation.CompactText = "go test ./..."
+
+	for _, mode := range []Mode{ModeOngoing, ModeOngoingCollapsed, ModeDetailCollapsed} {
+		rendered := RenderCommittedRow(row, 80, "", mode)
+		if len(rendered.Lines) == 0 {
+			t.Fatalf("mode %v rendered no lines", mode)
+		}
+		if got := rendered.Lines[0].Plain(); !strings.HasPrefix(got, "$ go test ./...") || strings.Contains(got, "$ passed") || !strings.HasSuffix(got, "exit 0") {
+			t.Fatalf("mode %v line = %q, want input preview with inline result metadata", mode, got)
+		}
+		spans := rendered.Lines[0].Spans
+		if len(spans) == 0 {
+			t.Fatalf("mode %v rendered no spans", mode)
+		}
+		meta := spans[len(spans)-1]
+		if meta.Text != "exit 0" || meta.Role != StyleRoleNotice || !meta.Faint {
+			t.Fatalf("mode %v metadata span = %+v, want faint result metadata", mode, meta)
+		}
 	}
 }
 

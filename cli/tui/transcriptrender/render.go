@@ -194,7 +194,7 @@ func userAssistantDisplayText(text, condensed string, mode Mode) string {
 
 func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) toolDisplay {
 	if mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed {
-		text := firstNonEmpty(row.CondensedText, compactToolText(meta, row.Text))
+		text := compactToolText(meta, firstNonEmpty(row.CondensedText, row.Text))
 		return toolDisplay{Text: text, InlineMeta: firstNonEmpty(row.ResultSummary, meta.InlineMeta)}
 	}
 	text := firstNonEmpty(meta.PatchDetail, row.Text, meta.Command, meta.CompactText, meta.ToolName)
