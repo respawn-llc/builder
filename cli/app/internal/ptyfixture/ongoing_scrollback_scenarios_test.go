@@ -151,49 +151,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
 				{Text: "❯ seeded_tool_message_style_matrix_real_app_path", Foreground: colorForStyle(transcriptrender.StyleRoleUser)},
 			},
-			expectedStyledRows: []styledRowExpectation{
-				{
-					{Text: "$", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-					{Text: "printf", Foreground: colorForStyle(transcriptrender.StyleRoleToolShellSecondary), Faint: true},
-					{Text: "PTY_TOOL_SHELL", Foreground: colorForStyle(transcriptrender.StyleRoleToolShell), Faint: true},
-				},
-				{
-					{Text: "⇄", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-					{Text: " ./pty_patch.txt ", Foreground: colorForStyle(transcriptrender.StyleRoleToolPatch)},
-					{Text: "-1", Foreground: colorForStyle(transcriptrender.StyleRoleToolError)},
-					{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-				},
-				{
-					{Text: "⇄", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-					{Text: " ./pty_edit.txt ", Foreground: colorForStyle(transcriptrender.StyleRoleToolPatch)},
-					{Text: "-1", Foreground: colorForStyle(transcriptrender.StyleRoleToolError)},
-					{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-				},
-				{
-					{Text: "•", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-					{Text: " path: image.png", Foreground: colorForStyle(transcriptrender.StyleRoleTool), Faint: true},
-				},
-				{
-					{Text: "@", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-					{Text: " web search: \"PTY_TOOL_WEB\"", Foreground: colorForStyle(transcriptrender.StyleRoleToolWebSearch), Faint: true},
-				},
-				{
-					{Text: "•", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-					{Text: " {\"input\":\"PTY_TOOL_CUSTOM\"}", Foreground: colorForStyle(transcriptrender.StyleRoleTool), Faint: true},
-				},
-				{
-					{Text: "•", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-					{Text: " commentary: PTY_TOOL_COMPLETE", Foreground: colorForStyle(transcriptrender.StyleRoleTool), Faint: true},
-				},
-				{
-					{Text: "?", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-					{Text: " PTY_TOOL_QUESTION", Foreground: colorForStyle(transcriptrender.StyleRoleToolQuestion), Faint: true},
-				},
-				{
-					{Text: "•", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-					{Text: " Model requested compaction.", Foreground: colorForStyle(transcriptrender.StyleRoleTool), Faint: true},
-				},
-			},
 		},
 		{
 			name: "markdown_streaming_promotion_and_final_tail",

@@ -1,7 +1,7 @@
 package transcriptrender
 
 import (
-	"core/shared/clientui"
+	"core/shared/transcript"
 
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -33,16 +33,16 @@ func shellSyntaxSpans(line string, meta toolMeta) []Span {
 }
 
 func shellSyntaxLexer(meta toolMeta) chroma.Lexer {
-	dialect := clientui.ToolShellDialectPosix
-	if meta.ShellDialect != "" {
-		dialect = meta.ShellDialect
+	dialect := transcript.ToolShellDialectPosix
+	if meta.RenderHint != nil && meta.RenderHint.ShellDialect != "" {
+		dialect = meta.RenderHint.ShellDialect
 	}
 	switch dialect {
-	case clientui.ToolShellDialectPowerShell:
+	case transcript.ToolShellDialectPowerShell:
 		return firstAvailableLexer("powershell", "posh", "shell")
-	case clientui.ToolShellDialectWindowsCommand:
+	case transcript.ToolShellDialectWindowsCommand:
 		return firstAvailableLexer("batch", "bat", "shell")
-	case clientui.ToolShellDialectPosix:
+	case transcript.ToolShellDialectPosix:
 		return firstAvailableLexer("bash", "shell")
 	default:
 		return firstAvailableLexer("bash", "shell")

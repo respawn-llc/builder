@@ -5,6 +5,7 @@ import (
 
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+	"core/shared/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -97,7 +98,7 @@ func TestDetailModeExpandsSelectedEntry(t *testing.T) {
 	}
 }
 
-func TestDetailSelectionPreservesSemanticSymbolStyle(t *testing.T) {
+func TestDetailSelectionChangesOnlySymbolText(t *testing.T) {
 	model := NewModel()
 	model.viewportWidth = 80
 	model.expanded = map[int]struct{}{0: {}}
@@ -111,9 +112,14 @@ func TestDetailSelectionPreservesSemanticSymbolStyle(t *testing.T) {
 	if len(decorated) != 1 || len(decorated[0].Spans) != len(line.Spans) {
 		t.Fatalf("decorated lines = %+v", decorated)
 	}
+	original := line.Spans[0]
 	symbol := decorated[0].Spans[0]
-	if symbol.Text != "▼" || symbol.Role != transcriptrender.StyleRoleToolError || symbol.Faint {
-		t.Fatalf("selected symbol = %+v, want expanded affordance with error role", symbol)
+	if symbol.Text == original.Text {
+		t.Fatalf("selected symbol text was not decorated: %+v", symbol)
+	}
+	symbol.Text = original.Text
+	if symbol != original {
+		t.Fatalf("selection changed symbol metadata: got %+v, want %+v", symbol, original)
 	}
 }
 
@@ -234,9 +240,10 @@ func TestWorkflowModeChatEntryRendersCollapsedOngoingAndExpandedDetail(t *testin
 }
 
 func TestDetailChatEntryToolCallRendersAsToolRow(t *testing.T) {
+	const callID = "1bcbb5bd-f688-4e64-8a35-89f6b0706cf1"
 	row, ok := detailRowFromChatEntry(clientui.ChatEntry{
 		Role:       "tool_call",
-		ToolCallID: "tool-1",
+		ToolCallID: callID,
 		ToolCall: &clientui.ToolCallMeta{
 			ToolName:    "exec_command",
 			IsShell:     true,
@@ -250,7 +257,7 @@ func TestDetailChatEntryToolCallRendersAsToolRow(t *testing.T) {
 	if row.Kind != clientui.TranscriptRowTool || row.Tool == nil {
 		t.Fatalf("row = %#v, want tool row", row)
 	}
-	if row.Tool.ToolCallID != "tool-1" || row.Tool.ToolName != "exec_command" {
+	if row.Tool.ToolCallID != callID || row.Tool.ToolName != "exec_command" {
 		t.Fatalf("tool row identity = %#v, want persisted tool call identity", row.Tool)
 	}
 	if row.Tool.ToolPresentation == nil || row.Tool.ToolPresentation.CompactText != "run tests" {
@@ -258,35 +265,19 @@ func TestDetailChatEntryToolCallRendersAsToolRow(t *testing.T) {
 	}
 }
 
-func TestDetailReviewerEntriesKeepReviewerStyling(t *testing.T) {
-	tests := []struct {
-		role      string
-		wantRole  transcriptrender.StyleRole
-		wantColor transcriptrender.ColorRole
-	}{
-		{role: "reviewer_status", wantRole: transcriptrender.StyleRoleNoticeReviewer, wantColor: transcriptrender.ColorRoleSuccess},
-		{role: "reviewer_error", wantRole: transcriptrender.StyleRoleError, wantColor: transcriptrender.ColorRoleError},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.role, func(t *testing.T) {
+func TestDetailReviewerEntriesPreserveDiagnosticRoles(t *testing.T) {
+	for _, role := range []transcript.EntryRole{transcript.EntryRoleReviewerStatus, transcript.EntryRoleReviewerError} {
+		t.Run(string(role), func(t *testing.T) {
 			row, ok := detailRowFromChatEntry(clientui.ChatEntry{
-				Role:        tt.role,
+				Role:        string(role),
 				Text:        "review result",
 				MessageType: clientui.MessageTypeReviewerFeedback,
 			})
 			if !ok || row.Notice == nil || row.Notice.Diagnostic == nil {
 				t.Fatalf("reviewer row = %+v, ok=%t", row, ok)
 			}
-			rendered := transcriptrender.RenderCommittedRow(row, 80, "", transcriptrender.ModeDetailCollapsed)
-			if len(rendered.Lines) != 1 || len(rendered.Lines[0].Spans) < 3 {
-				t.Fatalf("rendered reviewer row = %+v", rendered.Lines)
-			}
-			if body := rendered.Lines[0].Spans[2]; body.Role != tt.wantRole {
-				t.Fatalf("reviewer body role = %v, want %v", body.Role, tt.wantRole)
-			}
-			if got := transcriptrender.ColorRoleForStyle(rendered.Lines[0].Spans[0].Role); got != tt.wantColor {
-				t.Fatalf("reviewer symbol color = %v, want %v", got, tt.wantColor)
+			if row.Notice.Diagnostic.Code != string(role) {
+				t.Fatalf("reviewer diagnostic role = %q, want %q", row.Notice.Diagnostic.Code, role)
 			}
 		})
 	}

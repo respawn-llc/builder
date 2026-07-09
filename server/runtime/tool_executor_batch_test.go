@@ -114,19 +114,19 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 	}{
 		{
 			name:        "shell command",
-			call:        llm.ToolCall{ID: "shell-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
+			call:        llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23901", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 			wantCommand: "pwd",
 		},
 		{
 			name:         "raw shell command",
-			call:         llm.ToolCall{ID: "shell-raw-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"printf raw","raw":true}`)},
+			call:         llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23902", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"printf raw","raw":true}`)},
 			presentation: &transcript.ToolCallMeta{RawOutputRequested: true},
 			wantCommand:  "printf raw",
 			wantRaw:      true,
 		},
 		{
 			name:          "truncated shell command",
-			call:          llm.ToolCall{ID: "shell-truncated-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"cat large.log"}`)},
+			call:          llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23903", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"cat large.log"}`)},
 			presentation:  &transcript.ToolCallMeta{OutputTruncated: true},
 			wantCommand:   "cat large.log",
 			wantTruncated: true,
@@ -134,7 +134,7 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 		{
 			name: "patch input",
 			call: llm.ToolCall{
-				ID:          "patch-1",
+				ID:          "0f63b1c2-6b29-4dc0-9b0f-405a92a23904",
 				Name:        string(toolspec.ToolPatch),
 				Custom:      true,
 				CustomInput: "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch",

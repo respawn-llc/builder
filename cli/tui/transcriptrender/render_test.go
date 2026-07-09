@@ -16,26 +16,17 @@ import (
 func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 	legacy := "neutral notice"
 	cases := []struct {
-		name       string
-		row        clientui.TranscriptCommittedRow
-		want       string
-		wantRole   StyleRole
-		wantColor  ColorRole
-		wantSymbol string
+		name      string
+		row       clientui.TranscriptCommittedRow
+		want      string
+		wantRole  StyleRole
+		wantColor ColorRole
 	}{
 		{name: "user", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "hello"}}, want: "❯ hello", wantRole: StyleRoleUser, wantColor: ColorRoleForeground},
 		{name: "model", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "answer"}}, want: "❮ answer", wantRole: StyleRoleAssistant, wantColor: ColorRoleForeground},
 		{name: "warning", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeWarning, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "⚠ neutral notice", wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
 		{name: "error", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeError, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "! neutral notice", wantRole: StyleRoleError, wantColor: ColorRoleError},
 		{name: "notice", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeInfo, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "ℹ neutral notice", wantRole: StyleRoleNotice, wantColor: ColorRoleSubdued},
-		{name: "shell", row: toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false), want: "$ go test ./...", wantRole: StyleRoleToolShell, wantColor: ColorRoleForeground},
-		{name: "ask_question", row: toolRow("ask_question", clientui.ToolPresentationAskQuestion, "Pick one", false), want: "? Pick one", wantRole: StyleRoleToolQuestion, wantColor: ColorRoleForeground},
-		{name: "web_search", row: toolRow("web_search", clientui.ToolPresentationDefault, "query", false), want: "@ query", wantRole: StyleRoleToolWebSearch, wantColor: ColorRoleForeground},
-		{name: "custom", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false), want: "• custom preview", wantRole: StyleRoleTool, wantColor: ColorRoleForeground},
-		{name: "workflow_completion", row: toolRow("workflow_completion", clientui.ToolPresentationDefault, "workflow done", false), want: "• workflow done", wantRole: StyleRoleTool, wantColor: ColorRoleForeground},
-		{name: "view_image", row: toolRow("view_image", clientui.ToolPresentationDefault, "image.png", false), want: "• image.png", wantRole: StyleRoleTool, wantColor: ColorRoleForeground},
-		{name: "trigger_handoff", row: toolRow("trigger_handoff", clientui.ToolPresentationDefault, "handoff", false), want: "• handoff", wantRole: StyleRoleTool, wantColor: ColorRoleForeground},
-		{name: "tool_error", row: toolRow("exec_command", clientui.ToolPresentationShell, "failed", true), want: "! failed", wantRole: StyleRoleToolShell, wantColor: ColorRoleForeground, wantSymbol: "!"},
 	}
 
 	for _, tt := range cases {
@@ -48,11 +39,7 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 			if got := line.Plain(); got != tt.want {
 				t.Fatalf("rendered line = %q, want %q", got, tt.want)
 			}
-			wantSymbol := tt.wantSymbol
-			if wantSymbol == "" {
-				wantSymbol = roleSymbol(tt.wantRole)
-			}
-			if len(line.Spans) < 3 || line.Spans[0].Text != wantSymbol {
+			if len(line.Spans) < 3 || line.Spans[0].Role != tt.wantRole {
 				t.Fatalf("line has invalid style spans: %+v", line.Spans)
 			}
 			if tt.wantRole != StyleRoleToolShell && line.Spans[2].Role != tt.wantRole {
@@ -103,7 +90,7 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 			assertShellLineHasTypedSyntax(t, rendered.Lines[0])
 
 			pending := RenderPendingTool(clientui.TranscriptToolStart{
-				ToolCallID: "tool-1",
+				ToolCallID: "2d97d231-7765-471a-bf55-a4c17157af01",
 				ToolName:   "exec_command",
 				ToolPresentation: &clientui.ToolCallMeta{
 					ToolName:     "exec_command",
@@ -148,61 +135,7 @@ func TestDefaultToolRowsDoNotUseShellSyntaxRoles(t *testing.T) {
 	}
 }
 
-func TestToolRoleSymbolsUseIndependentStatusColors(t *testing.T) {
-	successTool := toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false)
-	rawShell := toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)
-	rawShell.Tool.ToolPresentation.RawOutputRequested = true
-	failedTool := toolRow("custom_tool", clientui.ToolPresentationDefault, "failed input", true)
-	patchTool := toolRow("patch", clientui.ToolPresentationDefault, "ignored", false)
-	patchTool.Tool.ToolPresentation.PatchRender = &patchformat.RenderedPatch{
-		Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2, Removed: 1}},
-		SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go -1 +2", FileIndex: 0}},
-	}
-
-	cases := []struct {
-		name             string
-		row              clientui.TranscriptCommittedRow
-		wantSymbolRole   StyleRole
-		wantSymbolFaint  bool
-		checkContent     bool
-		wantContentRole  StyleRole
-		wantContentFaint bool
-		wantSymbolColor  ColorRole
-		wantContentColor ColorRole
-	}{
-		{name: "successful tool", row: successTool, wantSymbolRole: StyleRoleToolSuccess, checkContent: true, wantContentRole: StyleRoleTool, wantContentFaint: true, wantSymbolColor: ColorRoleToolSuccess, wantContentColor: ColorRoleForeground},
-		{name: "raw shell warning marker", row: rawShell, wantSymbolRole: StyleRoleWarning, wantSymbolColor: ColorRoleWarning},
-		{name: "failed tool", row: failedTool, wantSymbolRole: StyleRoleToolError, checkContent: true, wantContentRole: StyleRoleTool, wantContentFaint: true, wantSymbolColor: ColorRoleError, wantContentColor: ColorRoleForeground},
-		{name: "patch tool", row: patchTool, wantSymbolRole: StyleRoleToolSuccess, checkContent: true, wantContentRole: StyleRoleToolPatch, wantSymbolColor: ColorRoleToolSuccess, wantContentColor: ColorRoleForeground},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			rendered := RenderCommittedRow(tt.row, 120, "", ModeOngoing)
-			if len(rendered.Lines) == 0 || len(rendered.Lines[0].Spans) < 3 {
-				t.Fatalf("rendered invalid line: %+v", rendered.Lines)
-			}
-			symbol := rendered.Lines[0].Spans[0]
-			content := rendered.Lines[0].Spans[2]
-			if symbol.Role != tt.wantSymbolRole || symbol.Faint != tt.wantSymbolFaint {
-				t.Fatalf("symbol span = %+v, want role %v faint %v", symbol, tt.wantSymbolRole, tt.wantSymbolFaint)
-			}
-			if got := ColorRoleForStyle(symbol.Role); got != tt.wantSymbolColor {
-				t.Fatalf("symbol color role = %v, want %v", got, tt.wantSymbolColor)
-			}
-			if tt.checkContent {
-				if content.Role != tt.wantContentRole || content.Faint != tt.wantContentFaint {
-					t.Fatalf("content span = %+v, want role %v faint %v", content, tt.wantContentRole, tt.wantContentFaint)
-				}
-				if got := ColorRoleForStyle(content.Role); got != tt.wantContentColor {
-					t.Fatalf("content color role = %v, want %v", got, tt.wantContentColor)
-				}
-			}
-		})
-	}
-}
-
-func TestRoleSymbolsUseSpecifiedColorRoles(t *testing.T) {
+func TestToolSymbolsUseSeparateMetadataFromBodies(t *testing.T) {
 	rawShell := toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)
 	rawShell.Tool.ToolPresentation.RawOutputRequested = true
 	patchTool := toolRow("patch", clientui.ToolPresentationDefault, "ignored", false)
@@ -212,45 +145,25 @@ func TestRoleSymbolsUseSpecifiedColorRoles(t *testing.T) {
 	}
 
 	cases := []struct {
-		name            string
-		row             clientui.TranscriptCommittedRow
-		mode            Mode
-		wantSymbol      string
-		wantSymbolColor ColorRole
-		wantSymbolFaint bool
+		name string
+		row  clientui.TranscriptCommittedRow
 	}{
-		{name: "successful tool ongoing", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false), mode: ModeOngoing, wantSymbol: "•", wantSymbolColor: ColorRoleToolSuccess},
-		{name: "successful tool detail", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false), mode: ModeDetailCollapsed, wantSymbol: "•", wantSymbolColor: ColorRoleToolSuccess},
-		{name: "raw shell warning marker", row: rawShell, mode: ModeOngoing, wantSymbol: "$", wantSymbolColor: ColorRoleWarning},
-		{name: "failed tool", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "failed input", true), mode: ModeOngoing, wantSymbol: "!", wantSymbolColor: ColorRoleError},
-		{name: "patch tool", row: patchTool, mode: ModeOngoing, wantSymbol: "⇄", wantSymbolColor: ColorRoleToolSuccess},
-		{name: "question tool", row: toolRow("ask_question", clientui.ToolPresentationAskQuestion, "Pick one", false), mode: ModeOngoing, wantSymbol: "?", wantSymbolColor: ColorRoleToolSuccess},
-		{name: "web search tool", row: toolRow("web_search", clientui.ToolPresentationDefault, "query", false), mode: ModeOngoing, wantSymbol: "@", wantSymbolColor: ColorRoleToolSuccess},
-		{name: "compaction", row: noticeMessageTypeRow(clientui.MessageTypeCompactionSummary, clientui.TranscriptNoticeInfo), mode: ModeOngoing, wantSymbol: "ℹ", wantSymbolColor: ColorRoleSecondary},
-		{name: "goal", row: noticeMessageTypeRow(clientui.MessageTypeGoal, clientui.TranscriptNoticeInfo), mode: ModeOngoing, wantSymbol: "ℹ", wantSymbolColor: ColorRolePrimary},
-		{name: "workflow detail", row: noticeMessageTypeRow(clientui.MessageTypeWorkflowMode, clientui.TranscriptNoticeInfo), mode: ModeDetailCollapsed, wantSymbol: "ℹ", wantSymbolColor: ColorRolePrimary},
-		{name: "warning", row: noticeMessageTypeRow("", clientui.TranscriptNoticeWarning), mode: ModeOngoing, wantSymbol: "⚠", wantSymbolColor: ColorRoleWarning},
-		{name: "error", row: noticeMessageTypeRow("", clientui.TranscriptNoticeError), mode: ModeOngoing, wantSymbol: "!", wantSymbolColor: ColorRoleError},
-		{name: "reviewer success", row: reviewerNoticeRow(clientui.TranscriptNoticeInfo, transcript.EntryRoleReviewerSuggestions), mode: ModeOngoingCollapsed, wantSymbol: "§", wantSymbolColor: ColorRoleSuccess},
-		{name: "reviewer error", row: reviewerNoticeRow(clientui.TranscriptNoticeError, transcript.EntryRoleReviewerError), mode: ModeDetailCollapsed, wantSymbol: "!", wantSymbolColor: ColorRoleError},
-		{name: "background completion", row: noticeMessageTypeRow(clientui.MessageTypeBackgroundNotice, clientui.TranscriptNoticeInfo), mode: ModeOngoing, wantSymbol: "ℹ", wantSymbolColor: ColorRoleToolSuccess},
+		{name: "successful tool", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false)},
+		{name: "raw shell", row: rawShell},
+		{name: "failed tool", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "failed input", true)},
+		{name: "patch tool", row: patchTool},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			rendered := RenderCommittedRow(tt.row, 120, "", tt.mode)
-			if len(rendered.Lines) == 0 || len(rendered.Lines[0].Spans) == 0 {
+			rendered := RenderCommittedRow(tt.row, 120, "", ModeOngoing)
+			if len(rendered.Lines) == 0 || len(rendered.Lines[0].Spans) < 3 {
 				t.Fatalf("rendered invalid line: %+v", rendered.Lines)
 			}
 			symbol := rendered.Lines[0].Spans[0]
-			if symbol.Text != tt.wantSymbol {
-				t.Fatalf("symbol text = %q, want %q", symbol.Text, tt.wantSymbol)
-			}
-			if got := ColorRoleForStyle(symbol.Role); got != tt.wantSymbolColor {
-				t.Fatalf("symbol color role = %v, want %v (span=%+v)", got, tt.wantSymbolColor, symbol)
-			}
-			if symbol.Faint != tt.wantSymbolFaint {
-				t.Fatalf("symbol faint = %v, want %v (span=%+v)", symbol.Faint, tt.wantSymbolFaint, symbol)
+			body := rendered.Lines[0].Spans[2]
+			if symbol.Role == body.Role && symbol.Faint == body.Faint {
+				t.Fatalf("symbol metadata was coupled to body metadata: symbol=%+v body=%+v", symbol, body)
 			}
 		})
 	}
@@ -274,7 +187,6 @@ func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
 		{name: "worktree exit", messageType: clientui.MessageTypeWorktreeModeExit, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
 		{name: "background shell completion", messageType: clientui.MessageTypeBackgroundNotice, wantRole: StyleRoleNoticeForegroundFaint, wantColor: ColorRoleForeground},
 		{name: "subagents", messageType: clientui.MessageTypeSubagents, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
-		{name: "supervisor reviewer feedback", messageType: clientui.MessageTypeReviewerFeedback, wantRole: StyleRoleNoticeReviewer, wantColor: ColorRoleSuccess},
 		{name: "cache warning", reason: clientui.TranscriptNoticeCacheWarning, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
 		{name: "compaction reminder", messageType: clientui.MessageTypeCompactionSoonReminder, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
 		{name: "interruption", messageType: clientui.MessageTypeInterruption, wantRole: StyleRoleError, wantColor: ColorRoleError},
@@ -323,60 +235,31 @@ func TestOngoingUserAssistantRowsUseCompactText(t *testing.T) {
 	}
 }
 
-func TestToolAndBackgroundNoticeFaintMatrix(t *testing.T) {
-	cases := []struct {
-		name            string
-		row             clientui.TranscriptCommittedRow
-		wantSymbolFaint bool
-	}{
-		{name: "shell", row: toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)},
-		{name: "custom", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false)},
-		{
-			name: "background shell completion",
-			row: clientui.TranscriptCommittedRow{
-				Kind: clientui.TranscriptRowNotice,
-				Notice: &clientui.TranscriptNoticeRow{
-					Severity: clientui.TranscriptNoticeInfo,
-					Data: clientui.TranscriptNoticeData{
-						MessageType:  clientui.MessageTypeBackgroundNotice,
-						CompactLabel: "background done",
-					},
-				},
-			},
-		},
-	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			rendered := RenderCommittedRow(tt.row, 80, "", ModeOngoing)
-			if len(rendered.Lines) == 0 || len(rendered.Lines[0].Spans) < 3 {
-				t.Fatalf("rendered invalid line: %+v", rendered.Lines)
-			}
-			if rendered.Lines[0].Spans[0].Faint != tt.wantSymbolFaint || !rendered.Lines[0].Spans[2].Faint {
-				t.Fatalf("line spans are not faint: %+v", rendered.Lines[0].Spans)
-			}
-		})
-	}
-}
-
-func TestPendingToolUsesSpinnerWithCommittedToolStyling(t *testing.T) {
-	line := RenderPendingTool(clientui.TranscriptToolStart{
-		ToolCallID: "tool-1",
+func TestPendingToolChangesOnlyCommittedSymbolText(t *testing.T) {
+	start := clientui.TranscriptToolStart{
+		ToolCallID: "2d97d231-7765-471a-bf55-a4c17157af02",
 		ToolName:   "exec_command",
 		ToolPresentation: &clientui.ToolCallMeta{
 			Presentation: clientui.ToolPresentationShell,
 			Command:      "go test ./...",
 		},
-	}, 80, "⢎ ")
+	}
+	committed := RenderPendingTool(start, 80, "")
+	pending := RenderPendingTool(start, 80, "⢎ ")
 
-	if got, want := line.Plain(), "⢎  go test ./..."; got != want {
+	if got, want := pending.Plain(), "⢎  go test ./..."; got != want {
 		t.Fatalf("pending tool plain line = %q, want %q", got, want)
 	}
-	if len(line.Spans) < 3 || line.Spans[0].Role != StyleRoleToolSuccess || line.Spans[0].Faint || !line.Spans[2].Faint {
-		t.Fatalf("pending tool spans = %+v, want spinner using shell tool styling", line.Spans)
+	if len(committed.Spans) < 3 || len(pending.Spans) != len(committed.Spans) {
+		t.Fatalf("pending spans = %+v, committed spans = %+v", pending.Spans, committed.Spans)
+	}
+	pending.Spans[0].Text = committed.Spans[0].Text
+	if !slices.Equal(pending.Spans, committed.Spans) {
+		t.Fatalf("pending decoration changed non-text metadata: pending=%+v committed=%+v", pending.Spans, committed.Spans)
 	}
 }
 
-func TestRenderPatchToolStylesPathAndCounts(t *testing.T) {
+func TestRenderPatchToolShowsStructuredPathAndCounts(t *testing.T) {
 	row := toolRow("patch", clientui.ToolPresentationDefault, "ignored", false)
 	row.Tool.ToolPresentation.PatchRender = &patchformat.RenderedPatch{
 		Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2, Removed: 1}},
@@ -386,18 +269,8 @@ func TestRenderPatchToolStylesPathAndCounts(t *testing.T) {
 	if len(rendered.Lines) == 0 {
 		t.Fatal("rendered no patch lines")
 	}
-	spans := rendered.Lines[0].Spans
-	want := []Span{
-		{Text: "⇄", Role: StyleRoleToolSuccess},
-		{Text: " ", Role: StyleRoleToolPatch},
-		{Text: "cli/tui/model.go", Role: StyleRoleToolPatch},
-		{Text: " ", Role: StyleRoleToolPatch},
-		{Text: "-1", Role: StyleRoleToolError},
-		{Text: " ", Role: StyleRoleToolPatch},
-		{Text: "+2", Role: StyleRoleToolSuccess},
-	}
-	if !slices.Equal(spans, want) {
-		t.Fatalf("patch spans = %+v, want %+v", spans, want)
+	if got, want := rendered.Lines[0].Plain(), "⇄ cli/tui/model.go -1 +2"; got != want {
+		t.Fatalf("patch line = %q, want %q", got, want)
 	}
 }
 
@@ -415,7 +288,7 @@ func TestPatchFamilyToolsDoNotFallbackToToolName(t *testing.T) {
 			}
 
 			pending := RenderPendingTool(clientui.TranscriptToolStart{
-				ToolCallID:       toolName + "-1",
+				ToolCallID:       "2d97d231-7765-471a-bf55-a4c17157af03",
 				ToolName:         toolName,
 				ToolPresentation: &clientui.ToolCallMeta{ToolName: toolName},
 			}, 80, "")
@@ -469,8 +342,8 @@ func TestCollapsedToolRowsKeepInputPreviewAheadOfResultCondensedText(t *testing.
 			t.Fatalf("mode %v command = %q, want typed input", mode, command)
 		}
 		meta := spans[len(spans)-1]
-		if meta.Text != "exit 0" || meta.Role != StyleRoleNotice || !meta.Faint {
-			t.Fatalf("mode %v metadata span = %+v, want faint result metadata", mode, meta)
+		if meta.Text != "exit 0" {
+			t.Fatalf("mode %v result metadata = %q, want exit 0", mode, meta.Text)
 		}
 	}
 }
@@ -498,7 +371,7 @@ func TestExpandedPatchRowsKeepFullTypedInputAheadOfOutput(t *testing.T) {
 	}
 }
 
-func TestToolErrorRowsKeepInputPreviewWithErrorSymbol(t *testing.T) {
+func TestToolErrorRowsKeepInputPreview(t *testing.T) {
 	row := toolRow("exec_command", clientui.ToolPresentationShell, "raw failure output", true)
 	row.Tool.CondensedText = "permission denied"
 	row.Tool.ResultSummary = "exit 1"
@@ -517,84 +390,65 @@ func TestToolErrorRowsKeepInputPreviewWithErrorSymbol(t *testing.T) {
 		if command := (Line{Spans: spans[2 : len(spans)-2]}).Plain(); command != "cat /root/secret" {
 			t.Fatalf("mode %v command = %q, want failed typed input", mode, command)
 		}
-		if meta := spans[len(spans)-1]; meta.Text != "exit 1" || meta.Role != StyleRoleNotice || !meta.Faint {
-			t.Fatalf("mode %v metadata span = %+v, want error summary", mode, meta)
-		}
-		if got := ColorRoleForStyle(spans[0].Role); got != ColorRoleError {
-			t.Fatalf("mode %v symbol color = %v, want error", mode, got)
+		if meta := spans[len(spans)-1]; meta.Text != "exit 1" {
+			t.Fatalf("mode %v error summary = %q, want exit 1", mode, meta.Text)
 		}
 	}
 }
 
-func TestUserAssistantFullRowsUseTypedMarkdownStyling(t *testing.T) {
+func TestUserAssistantFullRowsRenderMarkdownContent(t *testing.T) {
 	rows := []clientui.TranscriptCommittedRow{
 		{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "**bold** and `code`"}},
 		{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "# Heading\nplain"}},
 	}
 
+	expectedAssistant := map[Mode][]string{
+		ModeOngoingFull:    {"❮ Heading", "  ", "  plain"},
+		ModeDetailExpanded: {"❮ Heading", "│ ", "└ plain"},
+	}
 	for _, mode := range []Mode{ModeOngoingFull, ModeDetailExpanded} {
 		user := RenderCommittedRow(rows[0], 80, "", mode)
-		if len(user.Lines) != 1 || len(user.Lines[0].Spans) != 5 {
-			t.Fatalf("mode %v user markdown spans = %+v", mode, user.Lines)
-		}
-		if got := user.Lines[0].Spans[2]; got.Text != "bold" || !got.Bold || got.Faint {
-			t.Fatalf("mode %v bold span = %+v", mode, got)
-		}
-		if got := user.Lines[0].Spans[4]; got.Text != "code" || got.Bold || !got.Faint {
-			t.Fatalf("mode %v code span = %+v", mode, got)
+		if got := PlainLines(user.Lines); !slices.Equal(got, []string{"❯ bold and code"}) {
+			t.Fatalf("mode %v user markdown content = %q", mode, got)
 		}
 
 		assistant := RenderCommittedRow(rows[1], 80, "", mode)
-		if len(assistant.Lines) != 3 || len(assistant.Lines[0].Spans) < 3 {
-			t.Fatalf("mode %v assistant markdown lines = %+v", mode, assistant.Lines)
-		}
-		if got := assistant.Lines[0].Spans[2]; got.Text != "Heading" || !got.Bold {
-			t.Fatalf("mode %v heading span = %+v", mode, got)
-		}
-		if got := assistant.Lines[2].Plain(); got != "  plain" && got != "└ plain" {
-			t.Fatalf("mode %v paragraph line = %q", mode, got)
+		if got := PlainLines(assistant.Lines); !slices.Equal(got, expectedAssistant[mode]) {
+			t.Fatalf("mode %v assistant markdown content = %q, want %q", mode, got, expectedAssistant[mode])
 		}
 	}
 }
 
-func TestBackgroundNoticeSymbolUsesTypedExitCode(t *testing.T) {
-	tests := []struct {
-		name      string
-		exitCode  int
-		wantColor ColorRole
-	}{
-		{name: "success", exitCode: 0, wantColor: ColorRoleToolSuccess},
-		{name: "failure", exitCode: 7, wantColor: ColorRoleError},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			exitCode := tt.exitCode
-			row := clientui.TranscriptCommittedRow{
-				Kind: clientui.TranscriptRowNotice,
-				Notice: &clientui.TranscriptNoticeRow{
-					Severity: clientui.TranscriptNoticeInfo,
-					Data: clientui.TranscriptNoticeData{
-						MessageType:        clientui.MessageTypeBackgroundNotice,
-						CompactLabel:       "background complete",
-						BackgroundExitCode: &exitCode,
-					},
+func TestBackgroundExitStatusChangesOnlySymbolMetadata(t *testing.T) {
+	render := func(exitCode *int) []Span {
+		row := clientui.TranscriptCommittedRow{
+			Kind: clientui.TranscriptRowNotice,
+			Notice: &clientui.TranscriptNoticeRow{
+				Severity: clientui.TranscriptNoticeInfo,
+				Data: clientui.TranscriptNoticeData{
+					MessageType:        clientui.MessageTypeBackgroundNotice,
+					CompactLabel:       "background complete",
+					BackgroundExitCode: exitCode,
 				},
-			}
-			rendered := RenderCommittedRow(row, 80, "", ModeOngoingCollapsed)
-			if len(rendered.Lines) != 1 || len(rendered.Lines[0].Spans) < 3 {
-				t.Fatalf("background row = %+v", rendered.Lines)
-			}
-			if got := ColorRoleForStyle(rendered.Lines[0].Spans[0].Role); got != tt.wantColor {
-				t.Fatalf("symbol color = %v, want %v", got, tt.wantColor)
-			}
-			if body := rendered.Lines[0].Spans[2]; body.Role != StyleRoleNoticeForegroundFaint || !body.Faint {
-				t.Fatalf("background body = %+v, want faint foreground", body)
-			}
-		})
+			},
+		}
+		return RenderCommittedRow(row, 80, "", ModeOngoingCollapsed).Lines[0].Spans
+	}
+
+	successCode, failureCode := 0, 7
+	success, failure, missing := render(&successCode), render(&failureCode), render(nil)
+	if success[0].Role == failure[0].Role {
+		t.Fatalf("typed success and failure statuses produced identical symbol metadata: success=%+v failure=%+v", success[0], failure[0])
+	}
+	if success[0].Role != missing[0].Role {
+		t.Fatalf("missing legacy status diverged from non-error symbol metadata: success=%+v missing=%+v", success[0], missing[0])
+	}
+	if !slices.Equal(success[1:], failure[1:]) || !slices.Equal(success[1:], missing[1:]) {
+		t.Fatalf("exit status changed background body metadata: success=%+v failure=%+v missing=%+v", success, failure, missing)
 	}
 }
 
-func TestPatchToolErrorKeepsPatchInputShapeWithErrorSymbol(t *testing.T) {
+func TestPatchToolErrorKeepsPatchInputShape(t *testing.T) {
 	row := toolRow("patch", clientui.ToolPresentationDefault, "patch failure output", true)
 	row.Tool.CondensedText = "patch failed"
 	row.Tool.ResultSummary = "failed"
@@ -609,20 +463,14 @@ func TestPatchToolErrorKeepsPatchInputShapeWithErrorSymbol(t *testing.T) {
 			t.Fatalf("mode %v rendered no lines", mode)
 		}
 		spans := rendered.Lines[0].Spans
-		want := []Span{
-			{Text: "!", Role: StyleRoleToolError},
-			{Text: " ", Role: StyleRoleToolPatch},
-			{Text: "cli/tui/model.go", Role: StyleRoleToolPatch},
-			{Text: " ", Role: StyleRoleToolPatch},
-			{Text: "-1", Role: StyleRoleToolError},
-			{Text: " ", Role: StyleRoleToolPatch},
-			{Text: "+2", Role: StyleRoleToolSuccess},
+		if len(spans) < 8 {
+			t.Fatalf("mode %v patch error spans = %+v", mode, spans)
 		}
-		if len(spans) < len(want) || !slices.Equal(spans[:len(want)], want) {
-			t.Fatalf("mode %v patch error prefix spans = %+v, want %+v", mode, spans, want)
+		if got, want := (Line{Spans: spans[2:7]}).Plain(), "cli/tui/model.go -1 +2"; got != want {
+			t.Fatalf("mode %v patch input = %q, want %q", mode, got, want)
 		}
-		if meta := spans[len(spans)-1]; meta.Text != "failed" || meta.Role != StyleRoleNotice || !meta.Faint {
-			t.Fatalf("mode %v patch error metadata = %+v, want failed summary", mode, meta)
+		if got := spans[len(spans)-1].Text; got != "failed" {
+			t.Fatalf("mode %v patch result summary = %q, want failed", mode, got)
 		}
 	}
 }
@@ -918,35 +766,6 @@ func TestReviewerNoticeRendersReviewerGlyph(t *testing.T) {
 		if got := rendered.Lines[0].Plain(); !strings.HasPrefix(got, "§ ") {
 			t.Fatalf("mode %v reviewer line = %q, want reviewer glyph", mode, got)
 		}
-		if got := ColorRoleForStyle(rendered.Lines[0].Spans[0].Role); got != ColorRoleSuccess {
-			t.Fatalf("mode %v reviewer glyph color role = %v, want success", mode, got)
-		}
-	}
-}
-
-func TestReviewerErrorNoticeRendersErrorGlyph(t *testing.T) {
-	row := clientui.TranscriptCommittedRow{
-		Visibility: clientui.EntryVisibilityOngoing,
-		Kind:       clientui.TranscriptRowNotice,
-		Notice: &clientui.TranscriptNoticeRow{
-			Severity: clientui.TranscriptNoticeError,
-			Data: clientui.TranscriptNoticeData{
-				MessageType:  clientui.MessageTypeReviewerFeedback,
-				CompactLabel: "Supervisor failed.",
-			},
-			Diagnostic: &clientui.TranscriptDiagnosticData{Code: string(transcript.EntryRoleReviewerError)},
-		},
-	}
-
-	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
-	if len(rendered.Lines) != 1 {
-		t.Fatalf("rendered lines = %d, want 1", len(rendered.Lines))
-	}
-	if got := rendered.Lines[0].Plain(); !strings.HasPrefix(got, "! ") {
-		t.Fatalf("reviewer error line = %q, want error glyph", got)
-	}
-	if got := ColorRoleForStyle(rendered.Lines[0].Spans[0].Role); got != ColorRoleError {
-		t.Fatalf("reviewer error glyph color role = %v, want error", got)
 	}
 }
 

@@ -36,96 +36,51 @@ func RenderPendingTool(tool clientui.TranscriptToolStart, width int, spinner str
 }
 
 type toolMeta struct {
-	ToolName               string
-	IsError                bool
-	Presentation           clientui.ToolPresentationKind
-	RenderBehavior         clientui.ToolCallRenderBehavior
-	ShellDialect           clientui.ToolShellDialect
-	IsShell                bool
-	UserInitiated          bool
-	Command                string
-	CompactText            string
-	InlineMeta             string
-	TimeoutLabel           string
-	PatchSummary           string
-	PatchDetail            string
-	PatchRender            *patchformat.RenderedPatch
-	Question               string
-	Suggestions            []string
-	RecommendedOptionIndex int
-	RawOutputRequested     bool
-	OutputTruncated        bool
-	BackgroundExitCode     *int
+	transcript.ToolCallMeta
+	IsError            bool
+	BackgroundExitCode *int
 }
 
 func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
-	meta := toolMeta{ToolName: strings.TrimSpace(toolName)}
+	adapted := transcript.ToolCallMeta{ToolName: strings.TrimSpace(toolName)}
 	if in != nil {
-		meta = toolMeta{
+		adapted = transcript.ToolCallMeta{
 			ToolName:               firstNonEmpty(in.ToolName, toolName),
-			Presentation:           in.Presentation,
-			RenderBehavior:         in.RenderBehavior,
+			Presentation:           transcript.ToolPresentationKind(in.Presentation),
+			RenderBehavior:         transcript.ToolCallRenderBehavior(in.RenderBehavior),
 			IsShell:                in.IsShell,
 			UserInitiated:          in.UserInitiated,
-			Command:                strings.TrimSpace(in.Command),
-			CompactText:            strings.TrimSpace(in.CompactText),
-			InlineMeta:             strings.TrimSpace(in.InlineMeta),
-			TimeoutLabel:           strings.TrimSpace(in.TimeoutLabel),
-			PatchSummary:           strings.TrimSpace(in.PatchSummary),
-			PatchDetail:            strings.TrimSpace(in.PatchDetail),
+			Command:                in.Command,
+			CompactText:            in.CompactText,
+			InlineMeta:             in.InlineMeta,
+			TimeoutLabel:           in.TimeoutLabel,
+			PatchSummary:           in.PatchSummary,
+			PatchDetail:            in.PatchDetail,
 			PatchRender:            in.PatchRender,
-			Question:               strings.TrimSpace(in.Question),
+			Question:               in.Question,
 			Suggestions:            append([]string(nil), in.Suggestions...),
 			RecommendedOptionIndex: in.RecommendedOptionIndex,
+			OmitSuccessfulResult:   in.OmitSuccessfulResult,
 			RawOutputRequested:     in.RawOutputRequested,
 			OutputTruncated:        in.OutputTruncated,
 		}
 		if in.RenderHint != nil {
-			meta.ShellDialect = in.RenderHint.ShellDialect
+			adapted.RenderHint = &transcript.ToolRenderHint{
+				Kind:         transcript.ToolRenderKind(in.RenderHint.Kind),
+				Path:         in.RenderHint.Path,
+				ResultOnly:   in.RenderHint.ResultOnly,
+				ShellDialect: transcript.ToolShellDialect(in.RenderHint.ShellDialect),
+			}
 		}
 	}
-	if meta.Presentation == "" {
-		switch {
-		case meta.RenderBehavior == clientui.ToolCallRenderBehaviorShell || meta.IsShell || isShellTool(meta.ToolName):
-			meta.Presentation = clientui.ToolPresentationShell
-		case meta.RenderBehavior == clientui.ToolCallRenderBehaviorAskQuestion || meta.Question != "" || len(meta.Suggestions) > 0:
-			meta.Presentation = clientui.ToolPresentationAskQuestion
-		default:
-			meta.Presentation = clientui.ToolPresentationDefault
-		}
-	}
-	if meta.Presentation == clientui.ToolPresentationShell || meta.RenderBehavior == clientui.ToolCallRenderBehaviorShell {
-		meta.IsShell = true
-	}
-	if meta.InlineMeta == "" {
-		meta.InlineMeta = meta.TimeoutLabel
-	}
-	if meta.TimeoutLabel == "" {
-		meta.TimeoutLabel = meta.InlineMeta
-	}
-	if meta.PatchRender != nil {
-		if meta.PatchSummary == "" {
-			meta.PatchSummary = strings.TrimSpace(meta.PatchRender.SummaryText())
-		}
-		if meta.PatchDetail == "" {
-			meta.PatchDetail = strings.TrimSpace(meta.PatchRender.DetailText())
-		}
-	}
-	if meta.Command == "" {
-		meta.Command = meta.PatchDetail
-	}
-	if meta.CompactText == "" {
-		meta.CompactText = firstNonEmpty(meta.PatchSummary, meta.Command)
-	}
-	meta.ToolName = strings.TrimSpace(meta.ToolName)
-	return meta
+	return toolMeta{ToolCallMeta: transcript.NormalizeToolCallMeta(adapted)}
 }
 
 func toolRole(meta toolMeta) StyleRole {
 	if isPatchTool(meta) {
 		return StyleRoleToolPatch
 	}
-	if meta.Presentation == clientui.ToolPresentationAskQuestion {
+	if meta.Presentation == transcript.ToolPresentationAskQuestion {
 		return StyleRoleToolQuestion
 	}
 	if isWebSearchTool(meta.ToolName) {
@@ -155,33 +110,11 @@ func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) t
 }
 
 func compactToolText(meta toolMeta, fallback string) string {
-	return transcript.CompactToolCallText(transcriptToolMeta(meta), fallback)
+	return transcript.CompactToolCallText(&meta.ToolCallMeta, fallback)
 }
 
 func detailedToolText(meta toolMeta, fallback string) string {
-	return transcript.DetailedToolCallText(transcriptToolMeta(meta), fallback)
-}
-
-func transcriptToolMeta(meta toolMeta) *transcript.ToolCallMeta {
-	return &transcript.ToolCallMeta{
-		ToolName:               meta.ToolName,
-		Presentation:           transcript.ToolPresentationKind(meta.Presentation),
-		RenderBehavior:         transcript.ToolCallRenderBehavior(meta.RenderBehavior),
-		IsShell:                meta.IsShell,
-		UserInitiated:          meta.UserInitiated,
-		Command:                meta.Command,
-		CompactText:            meta.CompactText,
-		InlineMeta:             meta.InlineMeta,
-		TimeoutLabel:           meta.TimeoutLabel,
-		PatchSummary:           meta.PatchSummary,
-		PatchDetail:            meta.PatchDetail,
-		PatchRender:            meta.PatchRender,
-		Question:               meta.Question,
-		Suggestions:            append([]string(nil), meta.Suggestions...),
-		RecommendedOptionIndex: meta.RecommendedOptionIndex,
-		RawOutputRequested:     meta.RawOutputRequested,
-		OutputTruncated:        meta.OutputTruncated,
-	}
+	return transcript.DetailedToolCallText(&meta.ToolCallMeta, fallback)
 }
 
 func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *patchformat.RenderedPatch, width int, mode Mode, meta toolMeta) []Line {
@@ -215,17 +148,8 @@ func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *p
 func isPatchTool(meta toolMeta) bool {
 	return transcript.IsPatchFamilyToolName(meta.ToolName) ||
 		meta.PatchRender != nil ||
-		meta.PatchSummary != "" ||
-		meta.PatchDetail != ""
-}
-
-func isShellTool(toolName string) bool {
-	switch strings.TrimSpace(toolName) {
-	case "exec_command", "write_stdin", "shell":
-		return true
-	default:
-		return false
-	}
+		meta.HasPatchSummary() ||
+		meta.HasPatchDetail()
 }
 
 func isWebSearchTool(toolName string) bool {
