@@ -137,6 +137,65 @@ func TestNativeOngoingRepaintKeepsControllerLiveFrameSections(t *testing.T) {
 	}
 }
 
+func TestNativeOngoingClipboardImagePasteRepaintsInput(t *testing.T) {
+	var out bytes.Buffer
+	nativeSurface := ongoing.NewSurface(&out)
+	spySurface := &ongoingSurfaceSpy{}
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUIOngoingSurface(nativeSurface),
+	), 40, 8)
+	m.ongoingTranscript = newOngoingTranscriptController(spySurface, m.ongoingFrameInput)
+	m.mainInputDraftToken = 3
+
+	next, _ := m.Update(clipboardImagePasteDoneMsg{
+		Target:         uiClipboardPasteTargetMain,
+		MainDraftToken: 3,
+		Path:           "/tmp/kent-clipboard.png",
+	})
+	updated := next.(*uiModel)
+
+	if got, want := spySurface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls = %v, want %v", got, want)
+	}
+	if updated.input != "/tmp/kent-clipboard.png" {
+		t.Fatalf("input = %q, want pasted clipboard image path", updated.input)
+	}
+	section, ok := frameSection(updated.ongoingFrameInput(), ongoing.FrameSectionInput)
+	if !ok {
+		t.Fatal("input section missing from updated ongoing frame")
+	}
+	if got, want := spySurface.lastFrameSectionLines(ongoing.FrameSectionInput), section.Lines; !reflect.DeepEqual(got, want) {
+		t.Fatalf("rendered input section lines = %v, want %v", got, want)
+	}
+}
+
+func TestNativeOngoingClipboardImagePasteErrorRepaintsStatus(t *testing.T) {
+	var out bytes.Buffer
+	nativeSurface := ongoing.NewSurface(&out)
+	spySurface := &ongoingSurfaceSpy{}
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUIOngoingSurface(nativeSurface),
+	), 40, 8)
+	m.ongoingTranscript = newOngoingTranscriptController(spySurface, m.ongoingFrameInput)
+
+	next, _ := m.Update(clipboardImagePasteDoneMsg{
+		Target: uiClipboardPasteTargetMain,
+		Err:    &uiClipboardPasteError{Kind: uiClipboardPasteErrorNoImage, Message: "Clipboard does not contain an image"},
+	})
+	updated := next.(*uiModel)
+
+	if got, want := spySurface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls = %v, want %v", got, want)
+	}
+	section, ok := frameSection(updated.ongoingFrameInput(), ongoing.FrameSectionStatus)
+	if !ok {
+		t.Fatal("status section missing from updated ongoing frame")
+	}
+	if got, want := spySurface.lastFrameSectionLines(ongoing.FrameSectionStatus), section.Lines; !reflect.DeepEqual(got, want) {
+		t.Fatalf("rendered status section lines = %v, want %v", got, want)
+	}
+}
+
 func TestNativeOngoingViewClearsLegacyAppCursorPlacement(t *testing.T) {
 	cursor := newUITerminalCursorState()
 	cursor.Set(uiTerminalCursorPlacement{Visible: true, CursorRow: 1, CursorCol: 1, AnchorRow: 2})

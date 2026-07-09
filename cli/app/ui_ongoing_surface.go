@@ -85,6 +85,11 @@ func (m *uiModel) renderNativeOngoingSurface() tea.Cmd {
 	return m.handleOngoingResult(result)
 }
 
+func (m *uiModel) batchWithNativeOngoingRepaint(cmd tea.Cmd) tea.Cmd {
+	repaintCmd := m.renderNativeOngoingSurface()
+	return tea.Batch(cmd, repaintCmd)
+}
+
 func (m *uiModel) updateOngoingOwnershipBeforeSurfaceTransition(prev, next uiSurface) {
 	if m == nil || m.ongoingTranscript == nil || prev == next {
 		return
