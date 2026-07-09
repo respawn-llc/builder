@@ -292,7 +292,8 @@ func TestDetailPrependedAllHiddenPageDoesNotJumpToTopOrRefire(t *testing.T) {
 	}
 }
 
-func TestDetailAppendedPagePreservesLineScrollBoundary(t *testing.T) {	model := NewModel()
+func TestDetailAppendedPagePreservesLineScrollBoundary(t *testing.T) {
+	model := NewModel()
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 80})
 	model = next.(Model)
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
