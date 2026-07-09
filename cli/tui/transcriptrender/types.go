@@ -7,6 +7,7 @@ type Mode uint8
 const (
 	ModeOngoing Mode = iota
 	ModeOngoingCollapsed
+	ModeOngoingFull
 	ModeDetailCollapsed
 	ModeDetailExpanded
 )

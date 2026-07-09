@@ -352,7 +352,7 @@ func (s *Surface) hydrationImmutableLines(hydration clientui.TranscriptHydration
 		if !committedRowVisibleInOngoing(row) {
 			continue
 		}
-		lines = append(lines, s.renderCommittedRow(row, width, themeName)...)
+		lines = append(lines, s.renderHydratedCommittedRow(row, width, themeName)...)
 	}
 	return lines
 }
@@ -367,7 +367,15 @@ func committedRowVisibleInOngoing(row clientui.TranscriptCommittedRow) bool {
 }
 
 func (s *Surface) renderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string) []string {
-	group, lines := committedRowLines(row, width, themeName)
+	return s.renderCommittedRowWithMode(row, width, themeName, ongoingRenderMode(row))
+}
+
+func (s *Surface) renderHydratedCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string) []string {
+	return s.renderCommittedRowWithMode(row, width, themeName, hydrationRenderMode(row))
+}
+
+func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow, width int, themeName string, mode transcriptrender.Mode) []string {
+	group, lines := committedRowLines(row, width, themeName, mode)
 	return s.renderGroupedRows(group, lines, width, themeName, false)
 }
 
@@ -380,6 +388,15 @@ func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mod
 		return transcriptrender.ModeOngoingCollapsed
 	}
 	return transcriptrender.ModeOngoing
+}
+
+func hydrationRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
+	if row.Kind == clientui.TranscriptRowAssistant &&
+		row.Assistant != nil &&
+		clientui.NormalizeMessagePhase(string(row.Assistant.Phase)) == clientui.MessagePhaseFinal {
+		return transcriptrender.ModeOngoingFull
+	}
+	return ongoingRenderMode(row)
 }
 
 func (s *Surface) renderAssistantPromotedRows(rows []string, width int, themeName string) []string {
@@ -400,10 +417,10 @@ func (s *Surface) renderGroupedRows(group clientui.TranscriptRowKind, rows []str
 	return output
 }
 
-func committedRowLines(row clientui.TranscriptCommittedRow, width int, themeName string) (clientui.TranscriptRowKind, []string) {
+func committedRowLines(row clientui.TranscriptCommittedRow, width int, themeName string, mode transcriptrender.Mode) (clientui.TranscriptRowKind, []string) {
 	switch row.Kind {
 	case clientui.TranscriptRowUser, clientui.TranscriptRowAssistant, clientui.TranscriptRowTool, clientui.TranscriptRowNotice:
-		rendered := transcriptrender.RenderCommittedRow(row, width, themeName, ongoingRenderMode(row))
+		rendered := transcriptrender.RenderCommittedRow(row, width, themeName, mode)
 		return rendered.Group, encodeTranscriptLines(rendered.Lines, themeName)
 	default:
 		panic(fmt.Sprintf("ongoing render unknown committed row kind %q", row.Kind))

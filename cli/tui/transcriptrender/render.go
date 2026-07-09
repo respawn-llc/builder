@@ -178,12 +178,12 @@ type toolDisplay struct {
 	InlineMeta string
 }
 
-// userAssistantDisplayText selects the compact vs full text for user/assistant
-// rows. Ongoing and collapsed detail show the server-provided CondensedText
-// when present, else the first non-empty line of the full text. Detail-expanded
-// shows the full text verbatim.
+// userAssistantDisplayText selects compact vs full text for user/assistant
+// rows. Normal ongoing and collapsed detail prefer the server-provided
+// CondensedText when present. Detail-expanded and ongoing scratch hydration of
+// final assistant answers show the full text verbatim.
 func userAssistantDisplayText(text, condensed string, mode Mode) string {
-	if mode == ModeDetailExpanded {
+	if modeUsesFullUserAssistantText(mode) {
 		return text
 	}
 	if compact := strings.TrimSpace(condensed); compact != "" {
@@ -271,7 +271,7 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 	if text == "" {
 		text = labelForRole(role)
 	}
-	if mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed {
+	if modeUsesCompactTextBlock(mode) {
 		first := firstDisplayLine(text)
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
 			return attachPrefixWithMeta(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3), meta), width, false, mode, meta)
@@ -416,7 +416,7 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 }
 
 func continuationPrefix(mode Mode, prefixWidth int, isLast bool) []Span {
-	if mode == ModeOngoing || mode == ModeOngoingCollapsed {
+	if modeUsesOngoingContinuationPrefix(mode) {
 		return []Span{{Text: strings.Repeat(" ", max(0, prefixWidth)), Role: StyleRoleNotice, Faint: true}}
 	}
 	// Detail continuations form a real tree: middle lines use the vertical "│"
@@ -644,6 +644,18 @@ func isWebSearchTool(toolName string) bool {
 
 func roleAllowsThreeLinePreview(role StyleRole) bool {
 	return role == StyleRoleUser || role == StyleRoleAssistant
+}
+
+func modeUsesFullUserAssistantText(mode Mode) bool {
+	return mode == ModeOngoingFull || mode == ModeDetailExpanded
+}
+
+func modeUsesCompactTextBlock(mode Mode) bool {
+	return mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed
+}
+
+func modeUsesOngoingContinuationPrefix(mode Mode) bool {
+	return mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeOngoingFull
 }
 
 func labelForRole(role StyleRole) string {

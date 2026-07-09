@@ -168,10 +168,7 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 				Visibility: tt.visibility,
 				Assistant:  &clientui.TranscriptAssistantRow{Text: multiLine},
 			}
-			if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-				Kind:      clientui.TranscriptMessageHydration,
-				Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{row}},
-			}, FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
+			if _, err := surface.ApplyTerminalMessage(committedMessage(row), FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
 				t.Fatalf("apply: %v", err)
 			}
 			rows := visibleTextRows(parseTerminalOps(out.String()))
@@ -195,6 +192,33 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHydrationRendersFinalAssistantFullText(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	row := clientui.TranscriptCommittedRow{
+		Kind:       clientui.TranscriptRowAssistant,
+		Visibility: clientui.EntryVisibilityOngoing,
+		Assistant: &clientui.TranscriptAssistantRow{
+			Text:          "first line\nsecond line\nthird line",
+			CondensedText: "compact answer",
+			Phase:         clientui.MessagePhaseFinal,
+		},
+	}
+
+	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
+		Kind:      clientui.TranscriptMessageHydration,
+		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{row}},
+	}, FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
+		t.Fatalf("apply hydration: %v", err)
+	}
+
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+		"❮ first line",
+		"  second line",
+		"  third line",
+	})
 }
 
 func committedMessage(row clientui.TranscriptCommittedRow) clientui.TranscriptMessage {
