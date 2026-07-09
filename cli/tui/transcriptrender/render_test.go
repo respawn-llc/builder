@@ -10,6 +10,7 @@ import (
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
+	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -61,7 +62,9 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 }
 
 func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
-	rendered := RenderCommittedRow(toolRow("exec_command", clientui.ToolPresentationShell, "sed -n '1,10p' cli/tui/model.go", false), 120, "", ModeOngoing)
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "sed -n '1,10p' cli/tui/model.go", false)
+	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{ShellDialect: clientui.ToolShellDialectPosix}
+	rendered := RenderCommittedRow(row, 120, "", ModeOngoing)
 	if len(rendered.Lines) == 0 {
 		t.Fatal("rendered no shell row lines")
 	}
@@ -81,6 +84,62 @@ func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
 	if !foundSyntax {
 		t.Fatalf("shell row did not include syntax role spans: %+v", line.Spans)
 	}
+}
+
+func TestShellSyntaxLexerUsesTypedDialect(t *testing.T) {
+	cases := []struct {
+		name       string
+		dialect    clientui.ToolShellDialect
+		lexerNames []string
+	}{
+		{name: "default", lexerNames: []string{"bash", "shell"}},
+		{name: "posix", dialect: clientui.ToolShellDialectPosix, lexerNames: []string{"bash", "shell"}},
+		{name: "powershell", dialect: clientui.ToolShellDialectPowerShell, lexerNames: []string{"powershell", "posh", "shell"}},
+		{name: "windows command", dialect: clientui.ToolShellDialectWindowsCommand, lexerNames: []string{"batch", "bat", "shell"}},
+		{name: "unknown", dialect: clientui.ToolShellDialect("fish"), lexerNames: []string{"bash", "shell"}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := toolMeta{}
+			if tt.dialect != "" {
+				meta.RenderHint = &clientui.ToolRenderHint{ShellDialect: tt.dialect}
+			}
+			got := shellSyntaxLexer(meta)
+			if got == nil {
+				t.Fatal("shell syntax lexer is nil")
+			}
+			want := testFirstAvailableLexerName(t, tt.lexerNames...)
+			if got.Config().Name != want {
+				t.Fatalf("lexer = %q, want %q for dialect %q", got.Config().Name, want, tt.dialect)
+			}
+		})
+	}
+}
+
+func TestDefaultToolRowsDoNotUseShellSyntaxRoles(t *testing.T) {
+	rendered := RenderCommittedRow(toolRow("custom_tool", clientui.ToolPresentationDefault, "sed -n '1,10p' cli/tui/model.go", false), 120, "", ModeOngoing)
+	if len(rendered.Lines) == 0 {
+		t.Fatal("rendered no custom tool row lines")
+	}
+	for _, span := range rendered.Lines[0].Spans {
+		switch span.Role {
+		case StyleRoleToolShellPrimary, StyleRoleToolShellSecondary, StyleRoleToolShellWarning, StyleRoleToolShellError:
+			t.Fatalf("default tool row used shell syntax role span: %+v", span)
+		}
+	}
+}
+
+func testFirstAvailableLexerName(t *testing.T, names ...string) string {
+	t.Helper()
+	for _, name := range names {
+		lexer := lexers.Get(name)
+		if lexer != nil {
+			return lexer.Config().Name
+		}
+	}
+	t.Fatalf("none of the expected Chroma lexers are available: %v", names)
+	return ""
 }
 
 func TestNoticeMessageTypeStyleMatrix(t *testing.T) {

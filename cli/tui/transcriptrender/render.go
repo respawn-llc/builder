@@ -38,14 +38,14 @@ func RenderToolRow(row clientui.TranscriptToolRow, width int, mode Mode) []Line 
 	if isPatchTool(meta) {
 		return renderPatchTool(role, display.Text, display.InlineMeta, meta.PatchRender, width, mode)
 	}
-	return renderTextBlockWithInlineMeta(role, display.Text, display.InlineMeta, width, mode)
+	return renderTextBlockWithInlineMeta(role, display.Text, display.InlineMeta, width, mode, meta)
 }
 
 func RenderPendingTool(tool clientui.TranscriptToolStart, width int, spinner string) Line {
 	meta := normalizeToolMeta(tool.ToolName, tool.ToolPresentation)
 	role := toolRole(meta, false)
 	text := compactToolText(meta, tool.ToolName)
-	lines := renderTextBlock(role, text, width, ModeOngoing)
+	lines := renderTextBlockWithInlineMeta(role, text, "", width, ModeOngoing, meta)
 	if len(lines) == 0 {
 		return Line{}
 	}
@@ -74,6 +74,7 @@ type toolMeta struct {
 	ToolName               string
 	Presentation           clientui.ToolPresentationKind
 	RenderBehavior         clientui.ToolCallRenderBehavior
+	RenderHint             *clientui.ToolRenderHint
 	IsShell                bool
 	UserInitiated          bool
 	Command                string
@@ -97,6 +98,7 @@ func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
 			ToolName:               firstNonEmpty(in.ToolName, toolName),
 			Presentation:           in.Presentation,
 			RenderBehavior:         in.RenderBehavior,
+			RenderHint:             cloneToolRenderHint(in.RenderHint),
 			IsShell:                in.IsShell,
 			UserInitiated:          in.UserInitiated,
 			Command:                strings.TrimSpace(in.Command),
@@ -148,6 +150,18 @@ func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
 	}
 	meta.ToolName = strings.TrimSpace(meta.ToolName)
 	return meta
+}
+
+func cloneToolRenderHint(in *clientui.ToolRenderHint) *clientui.ToolRenderHint {
+	if in == nil {
+		return nil
+	}
+	return &clientui.ToolRenderHint{
+		Kind:         in.Kind,
+		Path:         strings.TrimSpace(in.Path),
+		ResultOnly:   in.ResultOnly,
+		ShellDialect: in.ShellDialect,
+	}
 }
 
 func toolRole(meta toolMeta, isError bool) StyleRole {
@@ -212,7 +226,7 @@ func compactToolText(meta toolMeta, fallback string) string {
 
 func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *patchformat.RenderedPatch, width int, mode Mode) []Line {
 	if rendered == nil || len(rendered.SummaryLines) == 0 || mode == ModeDetailExpanded {
-		return renderTextBlockWithInlineMeta(role, text, inlineMeta, width, mode)
+		return renderTextBlockWithInlineMeta(role, text, inlineMeta, width, mode, toolMeta{})
 	}
 	lines := make([]Line, 0, len(rendered.Files))
 	for _, file := range rendered.Files {
@@ -239,10 +253,10 @@ func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *p
 }
 
 func renderTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
-	return renderTextBlockWithInlineMeta(role, text, "", width, mode)
+	return renderTextBlockWithInlineMeta(role, text, "", width, mode, toolMeta{})
 }
 
-func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta string, width int, mode Mode) []Line {
+func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta string, width int, mode Mode, meta toolMeta) []Line {
 	text = safeTranscriptText(text)
 	inlineMeta = strings.TrimSpace(safeTranscriptText(inlineMeta))
 	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
@@ -252,21 +266,21 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 	if mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed {
 		first := firstDisplayLine(text)
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
-			return attachPrefix(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3)), width, false, mode)
+			return attachPrefix(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3), meta), width, false, mode)
 		}
-		return attachPrefixWithFirstLineMeta(role, textLines(role, []string{first}), width, len(strings.Split(text, "\n")) > 1, inlineMeta, mode)
+		return attachPrefixWithFirstLineMeta(role, textLines(role, []string{first}, meta), width, len(strings.Split(text, "\n")) > 1, inlineMeta, mode)
 	}
-	return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width))), width, false, mode)
+	return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width)), meta), width, false, mode)
 }
 
-func textLines(role StyleRole, lines []string) []Line {
+func textLines(role StyleRole, lines []string, meta toolMeta) []Line {
 	if len(lines) == 0 {
 		return []Line{{Spans: []Span{{Role: role, Faint: roleDefaultFaint(role)}}}}
 	}
 	out := make([]Line, 0, len(lines))
 	for _, line := range lines {
 		if role == StyleRoleToolShell {
-			out = append(out, Line{Spans: shellSyntaxSpans(line)})
+			out = append(out, Line{Spans: shellSyntaxSpans(line, meta)})
 			continue
 		}
 		out = append(out, Line{Spans: []Span{{Text: line, Role: role, Faint: roleDefaultFaint(role)}}})
@@ -274,11 +288,11 @@ func textLines(role StyleRole, lines []string) []Line {
 	return out
 }
 
-func shellSyntaxSpans(line string) []Span {
+func shellSyntaxSpans(line string, meta toolMeta) []Span {
 	if line == "" {
 		return []Span{{Role: StyleRoleToolShell, Faint: true}}
 	}
-	lexer := lexers.Get("shell")
+	lexer := shellSyntaxLexer(meta)
 	if lexer == nil {
 		return []Span{{Text: line, Role: StyleRoleToolShell, Faint: true}}
 	}
@@ -297,6 +311,33 @@ func shellSyntaxSpans(line string) []Span {
 		return []Span{{Text: line, Role: StyleRoleToolShell, Faint: true}}
 	}
 	return spans
+}
+
+func shellSyntaxLexer(meta toolMeta) chroma.Lexer {
+	dialect := clientui.ToolShellDialectPosix
+	if meta.RenderHint != nil && meta.RenderHint.ShellDialect != "" {
+		dialect = meta.RenderHint.ShellDialect
+	}
+	switch dialect {
+	case clientui.ToolShellDialectPowerShell:
+		return firstAvailableLexer("powershell", "posh", "shell")
+	case clientui.ToolShellDialectWindowsCommand:
+		return firstAvailableLexer("batch", "bat", "shell")
+	case clientui.ToolShellDialectPosix:
+		return firstAvailableLexer("bash", "shell")
+	default:
+		return firstAvailableLexer("bash", "shell")
+	}
+}
+
+func firstAvailableLexer(names ...string) chroma.Lexer {
+	for _, name := range names {
+		lexer := lexers.Get(name)
+		if lexer != nil {
+			return lexer
+		}
+	}
+	return nil
 }
 
 func shellSyntaxRole(tokenType chroma.TokenType) StyleRole {
