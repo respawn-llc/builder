@@ -103,6 +103,7 @@ func clonePersistedChatEntries(entries []ChatEntry) []ChatEntry {
 
 func clonePersistedChatEntry(entry ChatEntry) ChatEntry {
 	copyEntry := entry
+	copyEntry.BackgroundExitCode = cloneIntPtr(entry.BackgroundExitCode)
 	copyEntry.ToolCall = clonePersistedToolCallMeta(entry.ToolCall)
 	return copyEntry
 }

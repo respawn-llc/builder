@@ -51,17 +51,18 @@ type TranscriptToolRowFact struct {
 }
 
 type TranscriptNoticeRowFact struct {
-	Reason           string
-	Severity         string
-	LegacyText       *string
-	NoticeID         *string
-	MessageType      llm.MessageType
-	SourcePath       string
-	CondensedText    string
-	CompactLabel     string
-	DiagnosticCode   string
-	DiagnosticDetail string
-	CacheWarning     *TranscriptCacheWarningFact
+	Reason             string
+	Severity           string
+	LegacyText         *string
+	NoticeID           *string
+	MessageType        llm.MessageType
+	SourcePath         string
+	CondensedText      string
+	CompactLabel       string
+	BackgroundExitCode *int
+	DiagnosticCode     string
+	DiagnosticDetail   string
+	CacheWarning       *TranscriptCacheWarningFact
 }
 
 type TranscriptCacheWarningFact struct {
@@ -340,14 +341,15 @@ func runtimeNoticeFactFromMessage(msg llm.Message, severity string) TranscriptCo
 		code = "runtime_notice"
 	}
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: messageTypeTranscriptVisibility(msg.MessageType), Notice: &TranscriptNoticeRowFact{
-		Reason:           transcript.NoticeReasonRuntimeDiagnostic,
-		Severity:         normalizeTranscriptNoticeSeverity(severity),
-		MessageType:      msg.MessageType,
-		SourcePath:       strings.TrimSpace(msg.SourcePath),
-		CondensedText:    strings.TrimSpace(msg.CompactContent),
-		CompactLabel:     compactLabelForMessage(msg),
-		DiagnosticCode:   code,
-		DiagnosticDetail: msg.Content,
+		Reason:             transcript.NoticeReasonRuntimeDiagnostic,
+		Severity:           normalizeTranscriptNoticeSeverity(severity),
+		MessageType:        msg.MessageType,
+		SourcePath:         strings.TrimSpace(msg.SourcePath),
+		CondensedText:      strings.TrimSpace(msg.CompactContent),
+		CompactLabel:       compactLabelForMessage(msg),
+		BackgroundExitCode: cloneIntPtr(msg.BackgroundExitCode),
+		DiagnosticCode:     code,
+		DiagnosticDetail:   msg.Content,
 	}}
 }
 
@@ -364,15 +366,16 @@ func runtimeNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedRowFact
 		messageType = llm.MessageTypeReviewerFeedback
 	}
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: normalizeRuntimeEntryVisibility(entry.Visibility), Notice: &TranscriptNoticeRowFact{
-		Reason:           transcript.NoticeReasonRuntimeDiagnostic,
-		Severity:         transcript.LegacyNoticeSeverityForRole(entry.Role),
-		NoticeID:         noticeIDPtr,
-		MessageType:      messageType,
-		SourcePath:       strings.TrimSpace(entry.SourcePath),
-		CondensedText:    strings.TrimSpace(entry.CondensedText),
-		CompactLabel:     strings.TrimSpace(entry.CompactLabel),
-		DiagnosticCode:   role,
-		DiagnosticDetail: detail,
+		Reason:             transcript.NoticeReasonRuntimeDiagnostic,
+		Severity:           transcript.LegacyNoticeSeverityForRole(entry.Role),
+		NoticeID:           noticeIDPtr,
+		MessageType:        messageType,
+		SourcePath:         strings.TrimSpace(entry.SourcePath),
+		CondensedText:      strings.TrimSpace(entry.CondensedText),
+		CompactLabel:       strings.TrimSpace(entry.CompactLabel),
+		BackgroundExitCode: cloneIntPtr(entry.BackgroundExitCode),
+		DiagnosticCode:     role,
+		DiagnosticDetail:   detail,
 	}}
 }
 

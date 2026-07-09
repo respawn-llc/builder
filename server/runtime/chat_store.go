@@ -15,19 +15,20 @@ import (
 )
 
 type ChatEntry struct {
-	Visibility        transcript.EntryVisibility
-	RollbackTargetID  string
-	Role              string
-	Text              string
-	CondensedText     string
-	Phase             llm.MessagePhase
-	MessageType       llm.MessageType
-	SourcePath        string
-	CompactLabel      string
-	ToolResultSummary string
-	ToolCallID        string
-	NoticeID          string
-	ToolCall          *transcript.ToolCallMeta
+	Visibility         transcript.EntryVisibility
+	RollbackTargetID   string
+	Role               string
+	Text               string
+	CondensedText      string
+	Phase              llm.MessagePhase
+	MessageType        llm.MessageType
+	SourcePath         string
+	CompactLabel       string
+	ToolResultSummary  string
+	ToolCallID         string
+	NoticeID           string
+	BackgroundExitCode *int
+	ToolCall           *transcript.ToolCallMeta
 }
 
 type ChatSnapshot struct {

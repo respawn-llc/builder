@@ -206,14 +206,15 @@ type TranscriptNoticeRow struct {
 }
 
 type TranscriptNoticeData struct {
-	LegacyText        *string
-	NoticeID          *string
-	CacheWarning      *TranscriptCacheWarningData
-	RuntimeDiagnostic *TranscriptDiagnosticData
-	MessageType       MessageType
-	SourcePath        string
-	CondensedText     string
-	CompactLabel      string
+	LegacyText         *string
+	NoticeID           *string
+	CacheWarning       *TranscriptCacheWarningData
+	RuntimeDiagnostic  *TranscriptDiagnosticData
+	MessageType        MessageType
+	SourcePath         string
+	CondensedText      string
+	CompactLabel       string
+	BackgroundExitCode *int
 }
 
 type TranscriptCacheWarningData struct {

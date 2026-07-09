@@ -6,6 +6,7 @@ import (
 	"core/server/runtime"
 	"core/shared/clientui"
 	"core/shared/clientuicopy"
+	"core/shared/transcript"
 )
 
 const RecentTailEntryLimit = 500
@@ -54,26 +55,39 @@ func transcriptCursor(hasMore bool, cursor int64) *int64 {
 	return &cursor
 }
 
+func cloneOptionalInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
+}
+
 func chatEntriesFromRuntimeSnapshot(snapshot runtime.ChatSnapshot) []clientui.ChatEntry {
 	entries := make([]clientui.ChatEntry, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
 		if isSuppressedNoopAssistantEntry(entry) {
 			continue
 		}
+		messageType := clientui.MessageType(entry.MessageType)
+		if transcript.IsReviewerEntryRole(strings.TrimSpace(entry.Role)) {
+			messageType = clientui.MessageTypeReviewerFeedback
+		}
 		entries = append(entries, clientui.ChatEntry{
-			Visibility:        clientui.EntryVisibility(entry.Visibility),
-			RollbackTargetID:  entry.RollbackTargetID,
-			Role:              entry.Role,
-			Text:              entry.Text,
-			CondensedText:     entry.CondensedText,
-			Phase:             clientui.MessagePhase(entry.Phase),
-			MessageType:       clientui.MessageType(entry.MessageType),
-			SourcePath:        entry.SourcePath,
-			CompactLabel:      entry.CompactLabel,
-			ToolResultSummary: entry.ToolResultSummary,
-			ToolCallID:        entry.ToolCallID,
-			NoticeID:          entry.NoticeID,
-			ToolCall:          cloneToolCallMeta(entry.ToolCall),
+			Visibility:         clientui.EntryVisibility(entry.Visibility),
+			RollbackTargetID:   entry.RollbackTargetID,
+			Role:               entry.Role,
+			Text:               entry.Text,
+			CondensedText:      entry.CondensedText,
+			Phase:              clientui.MessagePhase(entry.Phase),
+			MessageType:        messageType,
+			SourcePath:         entry.SourcePath,
+			CompactLabel:       entry.CompactLabel,
+			ToolResultSummary:  entry.ToolResultSummary,
+			ToolCallID:         entry.ToolCallID,
+			NoticeID:           entry.NoticeID,
+			BackgroundExitCode: cloneOptionalInt(entry.BackgroundExitCode),
+			ToolCall:           cloneToolCallMeta(entry.ToolCall),
 		})
 	}
 	return entries

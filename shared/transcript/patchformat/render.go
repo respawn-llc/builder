@@ -31,28 +31,6 @@ func Raw(src string) RenderedPatch {
 	return RenderedPatch{SummaryLines: []RenderedLine{detail[0]}, DetailLines: detail}
 }
 
-func StripEditedLabel(text string) string {
-	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(text), "\r\n", "\n"), "\n")
-	if len(lines) == 0 {
-		return ""
-	}
-	out := make([]string, 0, len(lines))
-	for idx, line := range lines {
-		if idx == 0 {
-			fields := strings.Fields(line)
-			if len(fields) == 1 && fields[0] == "Edited:" {
-				continue
-			}
-			if len(fields) > 1 && fields[0] == "Edited:" {
-				out = append(out, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), fields[0])))
-				continue
-			}
-		}
-		out = append(out, line)
-	}
-	return strings.TrimSpace(strings.Join(out, "\n"))
-}
-
 func Format(doc Document, cwd string) RenderedPatch {
 	files := buildRenderedFiles(doc, cwd)
 	if len(files) == 0 {

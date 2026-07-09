@@ -101,6 +101,52 @@ func TestPrepareExecutorToolCallsRejectsMissingProviderCallID(t *testing.T) {
 	}
 }
 
+func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
+	tests := []struct {
+		name        string
+		call        llm.ToolCall
+		wantCommand string
+		wantPatch   bool
+	}{
+		{
+			name:        "shell command",
+			call:        llm.ToolCall{ID: "shell-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
+			wantCommand: "pwd",
+		},
+		{
+			name: "patch input",
+			call: llm.ToolCall{
+				ID:          "patch-1",
+				Name:        string(toolspec.ToolPatch),
+				Custom:      true,
+				CustomInput: "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch",
+			},
+			wantPatch: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := toolResultWithTranscriptPresentation(tools.Result{
+				CallID:  tt.call.ID,
+				Name:    toolspec.ID(tt.call.Name),
+				IsError: true,
+				Summary: "failed",
+			}, tt.call, t.TempDir())
+
+			if result.Presentation == nil {
+				t.Fatal("tool result presentation is nil")
+			}
+			if tt.wantCommand != "" && result.Presentation.Command != tt.wantCommand {
+				t.Fatalf("presentation command = %q, want %q", result.Presentation.Command, tt.wantCommand)
+			}
+			if tt.wantPatch && result.Presentation.PatchRender == nil {
+				t.Fatal("patch result presentation has no structured patch")
+			}
+		})
+	}
+}
+
 func askQuestionInput(t *testing.T, question string) json.RawMessage {
 	t.Helper()
 	encoded, err := json.Marshal(map[string]string{"question": question})

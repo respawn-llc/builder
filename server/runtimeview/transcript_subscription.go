@@ -285,12 +285,13 @@ func transcriptNoticeFromFact(fact *runtime.TranscriptNoticeRowFact) *clientui.T
 		Reason:   clientui.TranscriptNoticeReason(strings.TrimSpace(fact.Reason)),
 		Severity: clientui.TranscriptNoticeSeverity(strings.TrimSpace(fact.Severity)),
 		Data: clientui.TranscriptNoticeData{
-			LegacyText:    fact.LegacyText,
-			NoticeID:      fact.NoticeID,
-			MessageType:   clientui.MessageType(strings.TrimSpace(string(fact.MessageType))),
-			SourcePath:    strings.TrimSpace(fact.SourcePath),
-			CondensedText: strings.TrimSpace(fact.CondensedText),
-			CompactLabel:  strings.TrimSpace(fact.CompactLabel),
+			LegacyText:         fact.LegacyText,
+			NoticeID:           fact.NoticeID,
+			MessageType:        clientui.MessageType(strings.TrimSpace(string(fact.MessageType))),
+			SourcePath:         strings.TrimSpace(fact.SourcePath),
+			CondensedText:      strings.TrimSpace(fact.CondensedText),
+			CompactLabel:       strings.TrimSpace(fact.CompactLabel),
+			BackgroundExitCode: cloneOptionalInt(fact.BackgroundExitCode),
 		},
 	}
 	if strings.TrimSpace(fact.DiagnosticCode) != "" || strings.TrimSpace(fact.DiagnosticDetail) != "" {

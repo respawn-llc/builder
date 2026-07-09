@@ -233,7 +233,7 @@ func TestRoleSymbolsUseSpecifiedColorRoles(t *testing.T) {
 		{name: "error", row: noticeMessageTypeRow("", clientui.TranscriptNoticeError), mode: ModeOngoing, wantSymbol: "!", wantSymbolColor: ColorRoleError},
 		{name: "reviewer success", row: reviewerNoticeRow(clientui.TranscriptNoticeInfo, transcript.EntryRoleReviewerSuggestions), mode: ModeOngoingCollapsed, wantSymbol: "§", wantSymbolColor: ColorRoleSuccess},
 		{name: "reviewer error", row: reviewerNoticeRow(clientui.TranscriptNoticeError, transcript.EntryRoleReviewerError), mode: ModeDetailCollapsed, wantSymbol: "!", wantSymbolColor: ColorRoleError},
-		{name: "background completion", row: noticeMessageTypeRow(clientui.MessageTypeBackgroundNotice, clientui.TranscriptNoticeInfo), mode: ModeOngoing, wantSymbol: "ℹ", wantSymbolColor: ColorRoleForeground, wantSymbolFaint: true},
+		{name: "background completion", row: noticeMessageTypeRow(clientui.MessageTypeBackgroundNotice, clientui.TranscriptNoticeInfo), mode: ModeOngoing, wantSymbol: "ℹ", wantSymbolColor: ColorRoleToolSuccess},
 	}
 
 	for _, tt := range cases {
@@ -332,8 +332,7 @@ func TestToolAndBackgroundNoticeFaintMatrix(t *testing.T) {
 		{name: "shell", row: toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)},
 		{name: "custom", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false)},
 		{
-			name:            "background shell completion",
-			wantSymbolFaint: true,
+			name: "background shell completion",
 			row: clientui.TranscriptCommittedRow{
 				Kind: clientui.TranscriptRowNotice,
 				Notice: &clientui.TranscriptNoticeRow{
@@ -461,17 +460,41 @@ func TestCollapsedToolRowsKeepInputPreviewAheadOfResultCondensedText(t *testing.
 		if len(rendered.Lines) == 0 {
 			t.Fatalf("mode %v rendered no lines", mode)
 		}
-		if got := rendered.Lines[0].Plain(); !strings.HasPrefix(got, "$ go test ./...") || strings.Contains(got, "$ passed") || !strings.HasSuffix(got, "exit 0") {
-			t.Fatalf("mode %v line = %q, want input preview with inline result metadata", mode, got)
-		}
 		spans := rendered.Lines[0].Spans
-		if len(spans) == 0 {
+		if len(spans) < 5 {
 			t.Fatalf("mode %v rendered no spans", mode)
+		}
+		command := Line{Spans: spans[2 : len(spans)-2]}.Plain()
+		if command != "go test ./..." {
+			t.Fatalf("mode %v command = %q, want typed input", mode, command)
 		}
 		meta := spans[len(spans)-1]
 		if meta.Text != "exit 0" || meta.Role != StyleRoleNotice || !meta.Faint {
 			t.Fatalf("mode %v metadata span = %+v, want faint result metadata", mode, meta)
 		}
+	}
+}
+
+func TestExpandedToolRowsKeepTypedInputAheadOfOutput(t *testing.T) {
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "raw output text", false)
+	row.Tool.ResultSummary = "exit 0"
+	row.Tool.ToolPresentation.Command = "go test ./..."
+	row.Tool.ToolPresentation.CompactText = "run tests"
+
+	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
+	if got, want := PlainLines(rendered.Lines), []string{"$ go test ./...", "└ exit 0"}; !slices.Equal(got, want) {
+		t.Fatalf("expanded tool lines = %q, want %q", got, want)
+	}
+}
+
+func TestExpandedPatchRowsKeepFullTypedInputAheadOfOutput(t *testing.T) {
+	row := toolRow("patch", clientui.ToolPresentationDefault, "raw patch output", true)
+	row.Tool.ResultSummary = "failed"
+	row.Tool.ToolPresentation.PatchDetail = "cli/tui/model.go\n-old\n+new"
+
+	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
+	if got, want := PlainLines(rendered.Lines), []string{"! cli/tui/model.go", "│ -old", "│ +new", "└ failed"}; !slices.Equal(got, want) {
+		t.Fatalf("expanded patch lines = %q, want %q", got, want)
 	}
 }
 
@@ -487,12 +510,87 @@ func TestToolErrorRowsKeepInputPreviewWithErrorSymbol(t *testing.T) {
 		if len(rendered.Lines) == 0 {
 			t.Fatalf("mode %v rendered no lines", mode)
 		}
-		if got := rendered.Lines[0].Plain(); !strings.HasPrefix(got, "! cat /root/secret") || strings.Contains(got, "permission denied") || !strings.HasSuffix(got, "exit 1") {
-			t.Fatalf("mode %v line = %q, want failed input preview with inline error metadata", mode, got)
+		spans := rendered.Lines[0].Spans
+		if len(spans) < 5 {
+			t.Fatalf("mode %v rendered spans = %+v", mode, spans)
 		}
-		if got := ColorRoleForStyle(rendered.Lines[0].Spans[0].Role); got != ColorRoleError {
+		if command := (Line{Spans: spans[2 : len(spans)-2]}).Plain(); command != "cat /root/secret" {
+			t.Fatalf("mode %v command = %q, want failed typed input", mode, command)
+		}
+		if meta := spans[len(spans)-1]; meta.Text != "exit 1" || meta.Role != StyleRoleNotice || !meta.Faint {
+			t.Fatalf("mode %v metadata span = %+v, want error summary", mode, meta)
+		}
+		if got := ColorRoleForStyle(spans[0].Role); got != ColorRoleError {
 			t.Fatalf("mode %v symbol color = %v, want error", mode, got)
 		}
+	}
+}
+
+func TestUserAssistantFullRowsUseTypedMarkdownStyling(t *testing.T) {
+	rows := []clientui.TranscriptCommittedRow{
+		{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "**bold** and `code`"}},
+		{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "# Heading\nplain"}},
+	}
+
+	for _, mode := range []Mode{ModeOngoingFull, ModeDetailExpanded} {
+		user := RenderCommittedRow(rows[0], 80, "", mode)
+		if len(user.Lines) != 1 || len(user.Lines[0].Spans) != 5 {
+			t.Fatalf("mode %v user markdown spans = %+v", mode, user.Lines)
+		}
+		if got := user.Lines[0].Spans[2]; got.Text != "bold" || !got.Bold || got.Faint {
+			t.Fatalf("mode %v bold span = %+v", mode, got)
+		}
+		if got := user.Lines[0].Spans[4]; got.Text != "code" || got.Bold || !got.Faint {
+			t.Fatalf("mode %v code span = %+v", mode, got)
+		}
+
+		assistant := RenderCommittedRow(rows[1], 80, "", mode)
+		if len(assistant.Lines) != 3 || len(assistant.Lines[0].Spans) < 3 {
+			t.Fatalf("mode %v assistant markdown lines = %+v", mode, assistant.Lines)
+		}
+		if got := assistant.Lines[0].Spans[2]; got.Text != "Heading" || !got.Bold {
+			t.Fatalf("mode %v heading span = %+v", mode, got)
+		}
+		if got := assistant.Lines[2].Plain(); got != "  plain" && got != "└ plain" {
+			t.Fatalf("mode %v paragraph line = %q", mode, got)
+		}
+	}
+}
+
+func TestBackgroundNoticeSymbolUsesTypedExitCode(t *testing.T) {
+	tests := []struct {
+		name      string
+		exitCode  int
+		wantColor ColorRole
+	}{
+		{name: "success", exitCode: 0, wantColor: ColorRoleToolSuccess},
+		{name: "failure", exitCode: 7, wantColor: ColorRoleError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exitCode := tt.exitCode
+			row := clientui.TranscriptCommittedRow{
+				Kind: clientui.TranscriptRowNotice,
+				Notice: &clientui.TranscriptNoticeRow{
+					Severity: clientui.TranscriptNoticeInfo,
+					Data: clientui.TranscriptNoticeData{
+						MessageType:        clientui.MessageTypeBackgroundNotice,
+						CompactLabel:       "background complete",
+						BackgroundExitCode: &exitCode,
+					},
+				},
+			}
+			rendered := RenderCommittedRow(row, 80, "", ModeOngoingCollapsed)
+			if len(rendered.Lines) != 1 || len(rendered.Lines[0].Spans) < 3 {
+				t.Fatalf("background row = %+v", rendered.Lines)
+			}
+			if got := ColorRoleForStyle(rendered.Lines[0].Spans[0].Role); got != tt.wantColor {
+				t.Fatalf("symbol color = %v, want %v", got, tt.wantColor)
+			}
+			if body := rendered.Lines[0].Spans[2]; body.Role != StyleRoleNoticeForegroundFaint || !body.Faint {
+				t.Fatalf("background body = %+v, want faint foreground", body)
+			}
+		})
 	}
 }
 
@@ -523,8 +621,8 @@ func TestPatchToolErrorKeepsPatchInputShapeWithErrorSymbol(t *testing.T) {
 		if len(spans) < len(want) || !slices.Equal(spans[:len(want)], want) {
 			t.Fatalf("mode %v patch error prefix spans = %+v, want %+v", mode, spans, want)
 		}
-		if got := rendered.Lines[0].Plain(); strings.Contains(got, "patch failed") {
-			t.Fatalf("mode %v patch error line = %q, replaced input shape with error text", mode, got)
+		if meta := spans[len(spans)-1]; meta.Text != "failed" || meta.Role != StyleRoleNotice || !meta.Faint {
+			t.Fatalf("mode %v patch error metadata = %+v, want failed summary", mode, meta)
 		}
 	}
 }

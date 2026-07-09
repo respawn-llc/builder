@@ -106,9 +106,12 @@ type Line struct {
 }
 
 type Span struct {
-	Text  string
-	Role  StyleRole
-	Faint bool
+	Text      string
+	Role      StyleRole
+	Faint     bool
+	Bold      bool
+	Italic    bool
+	Underline bool
 }
 
 func PlainLines(lines []Line) []string {

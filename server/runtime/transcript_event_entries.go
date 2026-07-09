@@ -94,12 +94,13 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 		}
 		compact := formatBackgroundShellCompact(*evt.Background)
 		return []ChatEntry{{
-			Role:          "system",
-			Visibility:    transcript.EntryVisibilityOngoingCollapsed,
-			Text:          formatBackgroundShellNotice(*evt.Background),
-			CondensedText: compact,
-			MessageType:   llm.MessageTypeBackgroundNotice,
-			CompactLabel:  compact,
+			Role:               "system",
+			Visibility:         transcript.EntryVisibilityOngoingCollapsed,
+			Text:               formatBackgroundShellNotice(*evt.Background),
+			CondensedText:      compact,
+			MessageType:        llm.MessageTypeBackgroundNotice,
+			CompactLabel:       compact,
+			BackgroundExitCode: cloneIntPtr(evt.Background.ExitCode),
 		}}
 	default:
 		return nil

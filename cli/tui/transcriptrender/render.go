@@ -1,16 +1,12 @@
 package transcriptrender
 
 import (
-	"fmt"
 	"strings"
 	"unicode"
 
 	"core/shared/clientui"
 	"core/shared/transcript"
-	patchformat "core/shared/transcript/patchformat"
 
-	"github.com/alecthomas/chroma/v2"
-	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rivo/uniseg"
 )
@@ -18,43 +14,21 @@ import (
 func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, _ string, mode Mode) Row {
 	switch row.Kind {
 	case clientui.TranscriptRowUser:
-		return Row{Group: clientui.TranscriptRowUser, Lines: renderTextBlock(StyleRoleUser, userAssistantDisplayText(row.User.Text, row.User.CondensedText, mode), width, mode)}
+		return Row{Group: clientui.TranscriptRowUser, Lines: renderUserAssistantTextBlock(StyleRoleUser, userAssistantDisplayText(row.User.Text, row.User.CondensedText, mode), width, mode)}
 	case clientui.TranscriptRowAssistant:
-		return Row{Group: clientui.TranscriptRowAssistant, Lines: renderTextBlock(StyleRoleAssistant, userAssistantDisplayText(row.Assistant.Text, row.Assistant.CondensedText, mode), width, mode)}
+		return Row{Group: clientui.TranscriptRowAssistant, Lines: renderUserAssistantTextBlock(StyleRoleAssistant, userAssistantDisplayText(row.Assistant.Text, row.Assistant.CondensedText, mode), width, mode)}
 	case clientui.TranscriptRowTool:
 		return Row{Group: clientui.TranscriptRowTool, Lines: RenderToolRow(*row.Tool, width, mode)}
 	case clientui.TranscriptRowNotice:
 		role, text := noticeRoleAndText(row.Notice, row.Visibility, mode)
-		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(role, text, width, mode)}
+		meta := toolMeta{}
+		if row.Notice != nil {
+			meta.BackgroundExitCode = row.Notice.Data.BackgroundExitCode
+		}
+		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlockWithInlineMeta(role, text, "", width, mode, meta)}
 	default:
 		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlock(StyleRoleNotice, "unknown transcript row", width, mode)}
 	}
-}
-
-func RenderToolRow(row clientui.TranscriptToolRow, width int, mode Mode) []Line {
-	meta := normalizeToolMeta(row.ToolName, row.ToolPresentation)
-	meta.IsError = row.IsError
-	role := toolRole(meta)
-	display := toolDisplayText(row, meta, mode)
-	if isPatchTool(meta) {
-		return renderPatchTool(role, display.Text, display.InlineMeta, meta.PatchRender, width, mode, meta)
-	}
-	return renderTextBlockWithInlineMeta(role, display.Text, display.InlineMeta, width, mode, meta)
-}
-
-func RenderPendingTool(tool clientui.TranscriptToolStart, width int, spinner string) Line {
-	meta := normalizeToolMeta(tool.ToolName, tool.ToolPresentation)
-	role := toolRole(meta)
-	text := compactToolText(meta, tool.ToolName)
-	lines := renderTextBlockWithInlineMeta(role, text, "", width, ModeOngoing, meta)
-	if len(lines) == 0 {
-		return Line{}
-	}
-	line := lines[0]
-	if spinner == "" {
-		return line
-	}
-	return replaceLeadingRoleSymbol(line, role, spinner)
 }
 
 func RenderDivider(group clientui.TranscriptRowKind, width int) Line {
@@ -71,112 +45,6 @@ func dividerLine(text string) Line {
 	return Line{Spans: []Span{{Text: text, Role: StyleRoleNotice, Faint: true}}}
 }
 
-type toolMeta struct {
-	ToolName               string
-	IsError                bool
-	Presentation           clientui.ToolPresentationKind
-	RenderBehavior         clientui.ToolCallRenderBehavior
-	ShellDialect           clientui.ToolShellDialect
-	IsShell                bool
-	UserInitiated          bool
-	Command                string
-	CompactText            string
-	InlineMeta             string
-	TimeoutLabel           string
-	PatchSummary           string
-	PatchDetail            string
-	PatchRender            *patchformat.RenderedPatch
-	Question               string
-	Suggestions            []string
-	RecommendedOptionIndex int
-	RawOutputRequested     bool
-	OutputTruncated        bool
-}
-
-func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
-	meta := toolMeta{ToolName: strings.TrimSpace(toolName)}
-	if in != nil {
-		meta = toolMeta{
-			ToolName:               firstNonEmpty(in.ToolName, toolName),
-			Presentation:           in.Presentation,
-			RenderBehavior:         in.RenderBehavior,
-			IsShell:                in.IsShell,
-			UserInitiated:          in.UserInitiated,
-			Command:                strings.TrimSpace(in.Command),
-			CompactText:            strings.TrimSpace(in.CompactText),
-			InlineMeta:             strings.TrimSpace(in.InlineMeta),
-			TimeoutLabel:           strings.TrimSpace(in.TimeoutLabel),
-			PatchSummary:           strings.TrimSpace(in.PatchSummary),
-			PatchDetail:            strings.TrimSpace(in.PatchDetail),
-			PatchRender:            in.PatchRender,
-			Question:               strings.TrimSpace(in.Question),
-			Suggestions:            append([]string(nil), in.Suggestions...),
-			RecommendedOptionIndex: in.RecommendedOptionIndex,
-			RawOutputRequested:     in.RawOutputRequested,
-			OutputTruncated:        in.OutputTruncated,
-		}
-		if in.RenderHint != nil {
-			meta.ShellDialect = in.RenderHint.ShellDialect
-		}
-	}
-	if meta.Presentation == "" {
-		switch {
-		case meta.RenderBehavior == clientui.ToolCallRenderBehaviorShell || meta.IsShell || isShellTool(meta.ToolName):
-			meta.Presentation = clientui.ToolPresentationShell
-		case meta.RenderBehavior == clientui.ToolCallRenderBehaviorAskQuestion || meta.Question != "" || len(meta.Suggestions) > 0:
-			meta.Presentation = clientui.ToolPresentationAskQuestion
-		default:
-			meta.Presentation = clientui.ToolPresentationDefault
-		}
-	}
-	if meta.Presentation == clientui.ToolPresentationShell || meta.RenderBehavior == clientui.ToolCallRenderBehaviorShell {
-		meta.IsShell = true
-	}
-	if meta.InlineMeta == "" {
-		meta.InlineMeta = meta.TimeoutLabel
-	}
-	if meta.TimeoutLabel == "" {
-		meta.TimeoutLabel = meta.InlineMeta
-	}
-	if meta.PatchRender != nil {
-		if meta.PatchSummary == "" {
-			meta.PatchSummary = strings.TrimSpace(meta.PatchRender.SummaryText())
-		}
-		if meta.PatchDetail == "" {
-			meta.PatchDetail = strings.TrimSpace(meta.PatchRender.DetailText())
-		}
-	}
-	if meta.Command == "" {
-		meta.Command = meta.PatchDetail
-	}
-	if meta.CompactText == "" {
-		meta.CompactText = firstNonEmpty(meta.PatchSummary, meta.Command)
-	}
-	meta.ToolName = strings.TrimSpace(meta.ToolName)
-	return meta
-}
-
-func toolRole(meta toolMeta) StyleRole {
-	if isPatchTool(meta) {
-		return StyleRoleToolPatch
-	}
-	if meta.Presentation == clientui.ToolPresentationAskQuestion {
-		return StyleRoleToolQuestion
-	}
-	if isWebSearchTool(meta.ToolName) {
-		return StyleRoleToolWebSearch
-	}
-	if meta.IsShell {
-		return StyleRoleToolShell
-	}
-	return StyleRoleTool
-}
-
-type toolDisplay struct {
-	Text       string
-	InlineMeta string
-}
-
 // userAssistantDisplayText selects compact vs full text for user/assistant
 // rows. Normal ongoing and collapsed detail prefer the server-provided
 // CondensedText when present. Detail-expanded and ongoing scratch hydration of
@@ -191,76 +59,27 @@ func userAssistantDisplayText(text, condensed string, mode Mode) string {
 	return text
 }
 
-func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) toolDisplay {
-	if mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed {
-		text := compactToolText(meta, firstNonEmpty(row.CondensedText, row.Text))
-		return toolDisplay{Text: text, InlineMeta: firstNonEmpty(row.ResultSummary, meta.InlineMeta)}
-	}
-	text := firstNonEmpty(meta.PatchDetail, row.Text, meta.Command, meta.CompactText, meta.ToolName)
-	if summary := strings.TrimSpace(row.ResultSummary); summary != "" {
-		text = text + "\n" + summary
-	}
-	return toolDisplay{Text: text}
-}
-
-func compactToolText(meta toolMeta, fallback string) string {
-	candidates := []string{meta.CompactText, meta.PatchSummary, meta.Command, fallback}
-	if !isPatchTool(meta) {
-		candidates = append(candidates, meta.ToolName)
-	}
-	candidates = append(candidates, "tool call")
-	for _, text := range candidates {
-		if isPatchTool(meta) && strings.TrimSpace(text) == strings.TrimSpace(meta.ToolName) {
-			continue
-		}
-		if compact := firstCompactPatchTextLine(text); compact != "" {
-			return compact
-		}
-	}
-	return "tool call"
-}
-
-func firstCompactPatchTextLine(text string) string {
-	for _, line := range strings.Split(text, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			if stripped := patchformat.StripEditedLabel(trimmed); stripped != "" {
-				return stripped
-			}
-		}
-	}
-	return ""
-}
-
-func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *patchformat.RenderedPatch, width int, mode Mode, meta toolMeta) []Line {
-	if rendered == nil || len(rendered.SummaryLines) == 0 || mode == ModeDetailExpanded {
-		return renderTextBlockWithInlineMeta(role, text, inlineMeta, width, mode, meta)
-	}
-	lines := make([]Line, 0, len(rendered.Files))
-	for _, file := range rendered.Files {
-		path := firstNonEmpty(file.RelPath, file.AbsPath)
-		if path == "" {
-			continue
-		}
-		var spans []Span
-		spans = append(spans, Span{Text: path, Role: role, Faint: roleDefaultFaint(role)})
-		if file.Removed > 0 {
-			spans = append(spans, Span{Text: " ", Role: role, Faint: roleDefaultFaint(role)})
-			spans = append(spans, Span{Text: fmt.Sprintf("-%d", file.Removed), Role: StyleRoleToolError})
-		}
-		if file.Added > 0 {
-			spans = append(spans, Span{Text: " ", Role: role, Faint: roleDefaultFaint(role)})
-			spans = append(spans, Span{Text: fmt.Sprintf("+%d", file.Added), Role: StyleRoleToolSuccess})
-		}
-		lines = append(lines, Line{Spans: spans})
-	}
-	if len(lines) == 0 {
-		lines = []Line{{Spans: []Span{{Text: text, Role: role, Faint: roleDefaultFaint(role)}}}}
-	}
-	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta, mode, meta)
-}
-
 func renderTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
 	return renderTextBlockWithInlineMeta(role, text, "", width, mode, toolMeta{})
+}
+
+func renderUserAssistantTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
+	text = safeTranscriptText(text)
+	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	if text == "" {
+		text = labelForRole(role)
+	}
+	if modeUsesCompactTextBlock(mode) {
+		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
+			lines := markdownTextLines(role, text, contentWidth(role, width))
+			if len(lines) > 3 {
+				lines = lines[:3]
+			}
+			return attachPrefixWithMeta(role, lines, width, false, mode, toolMeta{})
+		}
+		return attachPrefixWithMeta(role, markdownTextLines(role, firstDisplayLine(text), contentWidth(role, width)), width, len(strings.Split(text, "\n")) > 1, mode, toolMeta{})
+	}
+	return attachPrefixWithMeta(role, markdownTextLines(role, text, contentWidth(role, width)), width, false, mode, toolMeta{})
 }
 
 func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta string, width int, mode Mode, meta toolMeta) []Line {
@@ -293,77 +112,6 @@ func textLines(role StyleRole, lines []string, meta toolMeta) []Line {
 		out = append(out, Line{Spans: []Span{{Text: line, Role: role, Faint: roleDefaultFaint(role)}}})
 	}
 	return out
-}
-
-func shellSyntaxSpans(line string, meta toolMeta) []Span {
-	if line == "" {
-		return []Span{{Role: StyleRoleToolShell, Faint: true}}
-	}
-	lexer := shellSyntaxLexer(meta)
-	if lexer == nil {
-		return []Span{{Text: line, Role: StyleRoleToolShell, Faint: true}}
-	}
-	iterator, err := chroma.Coalesce(lexer).Tokenise(nil, line)
-	if err != nil {
-		return []Span{{Text: line, Role: StyleRoleToolShell, Faint: true}}
-	}
-	var spans []Span
-	for token := iterator(); token != chroma.EOF; token = iterator() {
-		if token.Value == "" {
-			continue
-		}
-		spans = append(spans, Span{Text: token.Value, Role: shellSyntaxRole(token.Type), Faint: true})
-	}
-	if len(spans) == 0 {
-		return []Span{{Text: line, Role: StyleRoleToolShell, Faint: true}}
-	}
-	return spans
-}
-
-func shellSyntaxLexer(meta toolMeta) chroma.Lexer {
-	dialect := clientui.ToolShellDialectPosix
-	if meta.ShellDialect != "" {
-		dialect = meta.ShellDialect
-	}
-	switch dialect {
-	case clientui.ToolShellDialectPowerShell:
-		return firstAvailableLexer("powershell", "posh", "shell")
-	case clientui.ToolShellDialectWindowsCommand:
-		return firstAvailableLexer("batch", "bat", "shell")
-	case clientui.ToolShellDialectPosix:
-		return firstAvailableLexer("bash", "shell")
-	default:
-		return firstAvailableLexer("bash", "shell")
-	}
-}
-
-func firstAvailableLexer(names ...string) chroma.Lexer {
-	for _, name := range names {
-		lexer := lexers.Get(name)
-		if lexer != nil {
-			return lexer
-		}
-	}
-	return nil
-}
-
-func shellSyntaxRole(tokenType chroma.TokenType) StyleRole {
-	switch {
-	case tokenType == chroma.Error:
-		return StyleRoleToolShellError
-	case tokenType.InCategory(chroma.Keyword),
-		tokenType.InSubCategory(chroma.LiteralString),
-		tokenType.InSubCategory(chroma.LiteralNumber):
-		return StyleRoleToolShellPrimary
-	case tokenType.InSubCategory(chroma.NameBuiltin),
-		tokenType.InSubCategory(chroma.NameVariable),
-		tokenType.InSubCategory(chroma.NameFunction):
-		return StyleRoleToolShellSecondary
-	case tokenType.InCategory(chroma.Comment):
-		return StyleRoleToolShellWarning
-	default:
-		return StyleRoleToolShell
-	}
 }
 
 func attachPrefix(role StyleRole, lines []Line, width int, forceEllipsis bool, mode Mode) []Line {
@@ -475,6 +223,11 @@ func roleSymbolStyleRole(role StyleRole, meta toolMeta) StyleRole {
 		StyleRoleToolPatch,
 		StyleRoleToolQuestion,
 		StyleRoleToolWebSearch:
+		return StyleRoleToolSuccess
+	case StyleRoleNoticeForegroundFaint:
+		if meta.BackgroundExitCode != nil && *meta.BackgroundExitCode != 0 {
+			return StyleRoleToolError
+		}
 		return StyleRoleToolSuccess
 	default:
 		return role
@@ -628,28 +381,6 @@ func cacheWarningNoticeText(data *clientui.TranscriptCacheWarningData) string {
 		Reason:          transcript.CacheWarningReason(strings.TrimSpace(data.Reason)),
 		LostInputTokens: data.LostInputTokens,
 	})
-}
-
-func isPatchTool(meta toolMeta) bool {
-	switch strings.TrimSpace(meta.ToolName) {
-	case "patch", "edit":
-		return true
-	default:
-		return meta.PatchRender != nil || meta.PatchSummary != "" || meta.PatchDetail != ""
-	}
-}
-
-func isShellTool(toolName string) bool {
-	switch strings.TrimSpace(toolName) {
-	case "exec_command", "write_stdin", "shell":
-		return true
-	default:
-		return false
-	}
-}
-
-func isWebSearchTool(toolName string) bool {
-	return strings.TrimSpace(toolName) == "web_search"
 }
 
 func roleAllowsThreeLinePreview(role StyleRole) bool {

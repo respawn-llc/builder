@@ -64,6 +64,31 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 }
 
+func TestTranscriptPageProjectsReviewerAndBackgroundMetadata(t *testing.T) {
+	exitCode := 9
+	page := TranscriptPageFromSegment("session", "name", clientui.ConversationFreshnessEstablished, runtime.TranscriptSegmentPage{
+		Snapshot: runtime.ChatSnapshot{Entries: []runtime.ChatEntry{
+			{Role: "reviewer_status", Text: "review complete"},
+			{
+				Role:               "system",
+				Text:               "background failed",
+				MessageType:        llm.MessageTypeBackgroundNotice,
+				BackgroundExitCode: &exitCode,
+			},
+		}},
+	})
+
+	if len(page.Entries) != 2 {
+		t.Fatalf("page entries = %+v", page.Entries)
+	}
+	if got := page.Entries[0].MessageType; got != clientui.MessageTypeReviewerFeedback {
+		t.Fatalf("reviewer message type = %q, want reviewer feedback", got)
+	}
+	if got := page.Entries[1].BackgroundExitCode; got == nil || *got != exitCode {
+		t.Fatalf("background exit code = %+v, want %d", got, exitCode)
+	}
+}
+
 func TestTranscriptHydrationOmitsAssistantStreamWithoutRuntimeIdentity(t *testing.T) {
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
 		ActiveAssistantText:     "hello",
@@ -112,6 +137,28 @@ func TestTranscriptBackgroundActivityUsesRuntimeActivityID(t *testing.T) {
 	}
 	if got := messages[0].BackgroundActivity.ID; got != activityID.String() {
 		t.Fatalf("background transcript id = %q, want activity id %q", got, activityID)
+	}
+}
+
+func TestTranscriptBackgroundNoticeCarriesTypedExitCode(t *testing.T) {
+	exitCode := 3
+	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind: runtime.EventConversationUpdated,
+		Message: llm.Message{
+			Role:               llm.RoleDeveloper,
+			MessageType:        llm.MessageTypeBackgroundNotice,
+			Content:            "background failed",
+			CompactContent:     "background failed",
+			BackgroundExitCode: &exitCode,
+		},
+	})
+
+	if len(messages) != 1 || messages[0].CommittedRow == nil || messages[0].CommittedRow.Notice == nil {
+		t.Fatalf("messages = %+v, want one background notice", messages)
+	}
+	got := messages[0].CommittedRow.Notice.Data.BackgroundExitCode
+	if got == nil || *got != exitCode {
+		t.Fatalf("background exit code = %+v, want %d", got, exitCode)
 	}
 }
 

@@ -142,19 +142,20 @@ type BackgroundShellEvent struct {
 }
 
 type ChatEntry struct {
-	Visibility        EntryVisibility
-	RollbackTargetID  string
-	Role              string
-	Text              string
-	CondensedText     string
-	Phase             MessagePhase
-	MessageType       MessageType
-	SourcePath        string
-	CompactLabel      string
-	ToolResultSummary string
-	ToolCallID        string
-	NoticeID          string
-	ToolCall          *ToolCallMeta
+	Visibility         EntryVisibility
+	RollbackTargetID   string
+	Role               string
+	Text               string
+	CondensedText      string
+	Phase              MessagePhase
+	MessageType        MessageType
+	SourcePath         string
+	CompactLabel       string
+	ToolResultSummary  string
+	ToolCallID         string
+	NoticeID           string
+	BackgroundExitCode *int
+	ToolCall           *ToolCallMeta
 }
 
 const ChatEntryPhaseFinalAnswer = string(MessagePhaseFinal)

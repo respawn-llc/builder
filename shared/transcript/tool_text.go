@@ -2,8 +2,6 @@ package transcript
 
 import (
 	"strings"
-
-	patchformat "core/shared/transcript/patchformat"
 )
 
 const (
@@ -21,31 +19,84 @@ func SplitInlineMeta(line string) (string, string) {
 }
 
 func CompactToolCallText(meta *ToolCallMeta, text string) string {
+	normalized := normalizeToolTextMeta(meta)
+	candidates := []string{normalized.CompactText, normalized.PatchSummary, normalized.Command, text}
+	if !IsPatchFamilyToolName(normalized.ToolName) {
+		candidates = append(candidates, normalized.ToolName)
+	}
+	return firstToolTextCandidate(candidates, patchToolNameToSkip(normalized))
+}
+
+func DetailedToolCallText(meta *ToolCallMeta, text string) string {
+	normalized := normalizeToolTextMeta(meta)
+	candidates := []string{normalized.PatchDetail, normalized.Command, normalized.CompactText, text}
+	if !IsPatchFamilyToolName(normalized.ToolName) {
+		candidates = append(candidates, normalized.ToolName)
+	}
+	for _, candidate := range candidates {
+		if skippedToolTextCandidate(normalized, candidate) {
+			continue
+		}
+		if detailed := strings.TrimSpace(candidate); detailed != "" {
+			return detailed
+		}
+	}
+	return defaultToolCallFallback
+}
+
+func IsPatchFamilyToolName(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "patch", "edit":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeToolTextMeta(meta *ToolCallMeta) ToolCallMeta {
 	if meta != nil && meta.HasCompactText() {
-		if compact := patchformat.StripEditedLabel(meta.CompactText); compact != "" {
-			return compact
+		return NormalizeToolCallMeta(*meta)
+	}
+	if meta == nil {
+		return ToolCallMeta{}
+	}
+	return NormalizeToolCallMeta(*meta)
+}
+
+func firstToolTextCandidate(candidates []string, skipped string) string {
+	for _, candidate := range candidates {
+		if skipped != "" && strings.TrimSpace(candidate) == skipped {
+			continue
+		}
+		if text := firstToolTextLine(candidate); text != "" {
+			return text
 		}
 	}
-	if meta != nil && meta.HasPatchSummary() {
-		if summary := patchformat.StripEditedLabel(meta.PatchSummary); summary != "" {
-			return summary
-		}
+	return defaultToolCallFallback
+}
+
+func patchToolNameToSkip(meta ToolCallMeta) string {
+	if !IsPatchFamilyToolName(meta.ToolName) {
+		return ""
 	}
-	if meta != nil && strings.TrimSpace(meta.Command) != "" {
-		return strings.TrimSpace(meta.Command)
-	}
+	return strings.TrimSpace(meta.ToolName)
+}
+
+func skippedToolTextCandidate(meta ToolCallMeta, candidate string) bool {
+	skipped := patchToolNameToSkip(meta)
+	return skipped != "" && strings.TrimSpace(candidate) == skipped
+}
+
+func firstToolTextLine(text string) string {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
-		return defaultToolCallFallback
+		return ""
 	}
 	parts := strings.SplitN(trimmed, "\n", 2)
 	first := strings.TrimSpace(parts[0])
 	if first == "" {
-		return defaultToolCallFallback
+		return ""
 	}
 	command, _ := SplitInlineMeta(first)
-	if command == "" {
-		return defaultToolCallFallback
-	}
 	return command
 }

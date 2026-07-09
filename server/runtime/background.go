@@ -41,11 +41,12 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 		return
 	}
 	b.QueueDeveloperNotice(llm.Message{
-		Role:           llm.RoleDeveloper,
-		MessageType:    llm.MessageTypeBackgroundNotice,
-		Name:           strings.TrimSpace(evt.ID),
-		Content:        formatBackgroundShellNotice(evt),
-		CompactContent: formatBackgroundShellCompact(evt),
+		Role:               llm.RoleDeveloper,
+		MessageType:        llm.MessageTypeBackgroundNotice,
+		Name:               strings.TrimSpace(evt.ID),
+		Content:            formatBackgroundShellNotice(evt),
+		CompactContent:     formatBackgroundShellCompact(evt),
+		BackgroundExitCode: cloneIntPtr(evt.ExitCode),
 	})
 }
 

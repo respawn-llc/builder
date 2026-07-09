@@ -140,13 +140,14 @@ func messageTypeTranscriptVisibility(messageType llm.MessageType) transcript.Ent
 
 func developerContextEntry(msg llm.Message, visibility transcript.EntryVisibility) ChatEntry {
 	return ChatEntry{
-		Visibility:    visibility,
-		Role:          string(transcript.EntryRoleDeveloperContext),
-		Text:          msg.Content,
-		CondensedText: strings.TrimSpace(msg.CompactContent),
-		MessageType:   msg.MessageType,
-		SourcePath:    strings.TrimSpace(msg.SourcePath),
-		CompactLabel:  compactLabelForMessage(msg),
+		Visibility:         visibility,
+		Role:               string(transcript.EntryRoleDeveloperContext),
+		Text:               msg.Content,
+		CondensedText:      strings.TrimSpace(msg.CompactContent),
+		MessageType:        msg.MessageType,
+		SourcePath:         strings.TrimSpace(msg.SourcePath),
+		CompactLabel:       compactLabelForMessage(msg),
+		BackgroundExitCode: cloneIntPtr(msg.BackgroundExitCode),
 	}
 }
 

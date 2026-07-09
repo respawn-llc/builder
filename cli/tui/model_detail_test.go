@@ -97,6 +97,26 @@ func TestDetailModeExpandsSelectedEntry(t *testing.T) {
 	}
 }
 
+func TestDetailSelectionPreservesSemanticSymbolStyle(t *testing.T) {
+	model := NewModel()
+	model.viewportWidth = 80
+	model.expanded = map[int]struct{}{0: {}}
+	line := transcriptrender.Line{Spans: []transcriptrender.Span{
+		{Text: "!", Role: transcriptrender.StyleRoleToolError},
+		{Text: " ", Role: transcriptrender.StyleRoleToolShell, Faint: true},
+		{Text: "false", Role: transcriptrender.StyleRoleToolShell, Faint: true},
+	}}
+
+	decorated := model.decorateSelectedDetailLines([]transcriptrender.Line{line}, 0)
+	if len(decorated) != 1 || len(decorated[0].Spans) != len(line.Spans) {
+		t.Fatalf("decorated lines = %+v", decorated)
+	}
+	symbol := decorated[0].Spans[0]
+	if symbol.Text != "▼" || symbol.Role != transcriptrender.StyleRoleToolError || symbol.Faint {
+		t.Fatalf("selected symbol = %+v, want expanded affordance with error role", symbol)
+	}
+}
+
 func TestDetailSelectionActionReflectsSelectedExpansionState(t *testing.T) {
 	model := NewModel()
 	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
@@ -235,5 +255,39 @@ func TestDetailChatEntryToolCallRendersAsToolRow(t *testing.T) {
 	}
 	if row.Tool.ToolPresentation == nil || row.Tool.ToolPresentation.CompactText != "run tests" {
 		t.Fatalf("tool presentation = %#v, want compact call metadata", row.Tool.ToolPresentation)
+	}
+}
+
+func TestDetailReviewerEntriesKeepReviewerStyling(t *testing.T) {
+	tests := []struct {
+		role      string
+		wantRole  transcriptrender.StyleRole
+		wantColor transcriptrender.ColorRole
+	}{
+		{role: "reviewer_status", wantRole: transcriptrender.StyleRoleNoticeReviewer, wantColor: transcriptrender.ColorRoleSuccess},
+		{role: "reviewer_error", wantRole: transcriptrender.StyleRoleError, wantColor: transcriptrender.ColorRoleError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.role, func(t *testing.T) {
+			row, ok := detailRowFromChatEntry(clientui.ChatEntry{
+				Role:        tt.role,
+				Text:        "review result",
+				MessageType: clientui.MessageTypeReviewerFeedback,
+			})
+			if !ok || row.Notice == nil || row.Notice.Diagnostic == nil {
+				t.Fatalf("reviewer row = %+v, ok=%t", row, ok)
+			}
+			rendered := transcriptrender.RenderCommittedRow(row, 80, "", transcriptrender.ModeDetailCollapsed)
+			if len(rendered.Lines) != 1 || len(rendered.Lines[0].Spans) < 3 {
+				t.Fatalf("rendered reviewer row = %+v", rendered.Lines)
+			}
+			if body := rendered.Lines[0].Spans[2]; body.Role != tt.wantRole {
+				t.Fatalf("reviewer body role = %v, want %v", body.Role, tt.wantRole)
+			}
+			if got := transcriptrender.ColorRoleForStyle(rendered.Lines[0].Spans[0].Role); got != tt.wantColor {
+				t.Fatalf("reviewer symbol color = %v, want %v", got, tt.wantColor)
+			}
+		})
 	}
 }

@@ -391,9 +391,11 @@ func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mod
 }
 
 func hydrationRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
-	if row.Kind == clientui.TranscriptRowAssistant &&
-		row.Assistant != nil &&
-		clientui.NormalizeMessagePhase(string(row.Assistant.Phase)) == clientui.MessagePhaseFinal {
+	if row.Kind != clientui.TranscriptRowAssistant || row.Assistant == nil {
+		return ongoingRenderMode(row)
+	}
+	phase := clientui.NormalizeMessagePhase(string(row.Assistant.Phase))
+	if phase == clientui.MessagePhaseFinal || phase == "" {
 		return transcriptrender.ModeOngoingFull
 	}
 	return ongoingRenderMode(row)
@@ -461,6 +463,15 @@ func encodeTranscriptSpan(span transcriptrender.Span, themeName string) string {
 	prefix := ansiTrueColorForeground(color)
 	if span.Faint {
 		prefix += "\x1b[2m"
+	}
+	if span.Bold {
+		prefix += "\x1b[1m"
+	}
+	if span.Italic {
+		prefix += "\x1b[3m"
+	}
+	if span.Underline {
+		prefix += "\x1b[4m"
 	}
 	return prefix + span.Text + "\x1b[0m"
 }

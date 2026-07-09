@@ -345,16 +345,16 @@ func (m Model) decorateSelectedDetailLines(lines []transcriptrender.Line, entryI
 	if _, ok := m.expanded[entryIndex]; ok {
 		symbol = "▼"
 	}
-	out[0] = replaceFirstVisibleSymbol(out[0], transcriptrender.Span{Text: symbol, Role: transcriptrender.StyleRoleNotice})
+	out[0] = replaceFirstVisibleSymbol(out[0], symbol)
 	for idx, line := range out {
 		out[idx] = transcriptrender.TruncateLine(line, maxInt(1, m.viewportWidth), false)
 	}
 	return out
 }
 
-func replaceFirstVisibleSymbol(line transcriptrender.Line, symbol transcriptrender.Span) transcriptrender.Line {
+func replaceFirstVisibleSymbol(line transcriptrender.Line, symbol string) transcriptrender.Line {
 	if len(line.Spans) == 0 {
-		return transcriptrender.Line{Spans: []transcriptrender.Span{symbol}}
+		return transcriptrender.Line{Spans: []transcriptrender.Span{{Text: symbol, Role: transcriptrender.StyleRoleNotice}}}
 	}
 	out := transcriptrender.Line{Spans: append([]transcriptrender.Span(nil), line.Spans...)}
 	for idx, span := range out.Spans {
@@ -365,12 +365,10 @@ func replaceFirstVisibleSymbol(line transcriptrender.Line, symbol transcriptrend
 		if len(runes) == 0 {
 			continue
 		}
-		out.Spans[idx].Text = symbol.Text + string(runes[1:])
-		out.Spans[idx].Role = symbol.Role
-		out.Spans[idx].Faint = symbol.Faint
+		out.Spans[idx].Text = symbol + string(runes[1:])
 		return out
 	}
-	out.Spans = append([]transcriptrender.Span{symbol}, out.Spans...)
+	out.Spans = append([]transcriptrender.Span{{Text: symbol, Role: transcriptrender.StyleRoleNotice}}, out.Spans...)
 	return out
 }
 
@@ -392,6 +390,15 @@ func renderDetailLine(line transcriptrender.Line, themeName string, selected boo
 		style := lipgloss.NewStyle().Foreground(detailRoleColor(span.Role, themeName))
 		if span.Faint {
 			style = style.Faint(true)
+		}
+		if span.Bold {
+			style = style.Bold(true)
+		}
+		if span.Italic {
+			style = style.Italic(true)
+		}
+		if span.Underline {
+			style = style.Underline(true)
 		}
 		out.WriteString(style.Render(span.Text))
 	}
@@ -631,19 +638,33 @@ func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommit
 			ToolPresentation: entry.ToolCall,
 		}}, true
 	default:
+		var diagnostic *clientui.TranscriptDiagnosticData
+		if transcript.IsReviewerEntryRole(role) {
+			diagnostic = &clientui.TranscriptDiagnosticData{Code: role, Detail: firstNonEmptyString(entry.Text, entry.CondensedText, entry.CompactLabel)}
+		}
 		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
 			Reason:   clientui.TranscriptNoticeReason(transcript.LegacyNoticeReasonForRole(role)),
 			Severity: clientui.TranscriptNoticeSeverity(transcript.LegacyNoticeSeverityForRole(role)),
 			Data: clientui.TranscriptNoticeData{
-				LegacyText:    stringPtrIfNonBlank(entry.Text),
-				NoticeID:      stringPtr(strings.TrimSpace(entry.NoticeID)),
-				MessageType:   entry.MessageType,
-				SourcePath:    entry.SourcePath,
-				CondensedText: entry.CondensedText,
-				CompactLabel:  entry.CompactLabel,
+				LegacyText:         stringPtrIfNonBlank(entry.Text),
+				NoticeID:           stringPtr(strings.TrimSpace(entry.NoticeID)),
+				MessageType:        entry.MessageType,
+				SourcePath:         entry.SourcePath,
+				CondensedText:      entry.CondensedText,
+				CompactLabel:       entry.CompactLabel,
+				BackgroundExitCode: cloneIntPointer(entry.BackgroundExitCode),
 			},
+			Diagnostic: diagnostic,
 		}}, true
 	}
+}
+
+func cloneIntPointer(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copyValue := *value
+	return &copyValue
 }
 
 func detailToolName(entry clientui.ChatEntry) string {

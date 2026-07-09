@@ -112,7 +112,7 @@ func TestCommittedRowsNeutralizeTranscriptSourcedControlBytes(t *testing.T) {
 	wantStructure := []rowKind{
 		{content: "❯ user[2J…", divider: false},
 		{divider: true},
-		{content: "❮ assistant]0;spoof **answer**", divider: false},
+		{content: "❮ assistant]0;spoof answer", divider: false},
 		{divider: true},
 		{content: "• tool[3;1H result", divider: false},
 		{divider: true},
@@ -195,30 +195,34 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 }
 
 func TestHydrationRendersFinalAssistantFullText(t *testing.T) {
-	var out bytes.Buffer
-	surface := NewSurface(&out)
-	row := clientui.TranscriptCommittedRow{
-		Kind:       clientui.TranscriptRowAssistant,
-		Visibility: clientui.EntryVisibilityOngoing,
-		Assistant: &clientui.TranscriptAssistantRow{
-			Text:          "first line\nsecond line\nthird line",
-			CondensedText: "compact answer",
-			Phase:         clientui.MessagePhaseFinal,
-		},
-	}
+	for _, phase := range []clientui.MessagePhase{clientui.MessagePhaseFinal, ""} {
+		t.Run(string(phase), func(t *testing.T) {
+			var out bytes.Buffer
+			surface := NewSurface(&out)
+			row := clientui.TranscriptCommittedRow{
+				Kind:       clientui.TranscriptRowAssistant,
+				Visibility: clientui.EntryVisibilityOngoing,
+				Assistant: &clientui.TranscriptAssistantRow{
+					Text:          "first line\nsecond line\nthird line",
+					CondensedText: "compact answer",
+					Phase:         phase,
+				},
+			}
 
-	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
-		Kind:      clientui.TranscriptMessageHydration,
-		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{row}},
-	}, FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
-		t.Fatalf("apply hydration: %v", err)
-	}
+			if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
+				Kind:      clientui.TranscriptMessageHydration,
+				Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{row}},
+			}, FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
+				t.Fatalf("apply hydration: %v", err)
+			}
 
-	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
-		"❮ first line",
-		"  second line",
-		"  third line",
-	})
+			assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+				"❮ first line",
+				"  second line",
+				"  third line",
+			})
+		})
+	}
 }
 
 func committedMessage(row clientui.TranscriptCommittedRow) clientui.TranscriptMessage {
