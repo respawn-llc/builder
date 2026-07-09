@@ -33,17 +33,18 @@ func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, _ string
 
 func RenderToolRow(row clientui.TranscriptToolRow, width int, mode Mode) []Line {
 	meta := normalizeToolMeta(row.ToolName, row.ToolPresentation)
-	role := toolRole(meta, row.IsError)
+	meta.IsError = row.IsError
+	role := toolRole(meta)
 	display := toolDisplayText(row, meta, mode)
 	if isPatchTool(meta) {
-		return renderPatchTool(role, display.Text, display.InlineMeta, meta.PatchRender, width, mode)
+		return renderPatchTool(role, display.Text, display.InlineMeta, meta.PatchRender, width, mode, meta)
 	}
 	return renderTextBlockWithInlineMeta(role, display.Text, display.InlineMeta, width, mode, meta)
 }
 
 func RenderPendingTool(tool clientui.TranscriptToolStart, width int, spinner string) Line {
 	meta := normalizeToolMeta(tool.ToolName, tool.ToolPresentation)
-	role := toolRole(meta, false)
+	role := toolRole(meta)
 	text := compactToolText(meta, tool.ToolName)
 	lines := renderTextBlockWithInlineMeta(role, text, "", width, ModeOngoing, meta)
 	if len(lines) == 0 {
@@ -72,6 +73,7 @@ func dividerLine(text string) Line {
 
 type toolMeta struct {
 	ToolName               string
+	IsError                bool
 	Presentation           clientui.ToolPresentationKind
 	RenderBehavior         clientui.ToolCallRenderBehavior
 	ShellDialect           clientui.ToolShellDialect
@@ -154,10 +156,7 @@ func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
 	return meta
 }
 
-func toolRole(meta toolMeta, isError bool) StyleRole {
-	if isError {
-		return StyleRoleToolError
-	}
+func toolRole(meta toolMeta) StyleRole {
 	if isPatchTool(meta) {
 		return StyleRoleToolPatch
 	}
@@ -232,9 +231,9 @@ func firstCompactPatchTextLine(text string) string {
 	return ""
 }
 
-func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *patchformat.RenderedPatch, width int, mode Mode) []Line {
+func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *patchformat.RenderedPatch, width int, mode Mode, meta toolMeta) []Line {
 	if rendered == nil || len(rendered.SummaryLines) == 0 || mode == ModeDetailExpanded {
-		return renderTextBlockWithInlineMeta(role, text, inlineMeta, width, mode, toolMeta{})
+		return renderTextBlockWithInlineMeta(role, text, inlineMeta, width, mode, meta)
 	}
 	lines := make([]Line, 0, len(rendered.Files))
 	for _, file := range rendered.Files {
@@ -257,7 +256,7 @@ func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *p
 	if len(lines) == 0 {
 		lines = []Line{{Spans: []Span{{Text: text, Role: role, Faint: roleDefaultFaint(role)}}}}
 	}
-	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta, mode, toolMeta{})
+	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta, mode, meta)
 }
 
 func renderTextBlock(role StyleRole, text string, width int, mode Mode) []Line {
@@ -380,7 +379,8 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 		lines = []Line{{Spans: []Span{{Role: role}}}}
 	}
 	firstLineMeta = strings.TrimSpace(safeTranscriptText(firstLineMeta))
-	prefixWidth := lipgloss.Width(roleSymbol(role) + " ")
+	symbolText := roleSymbolText(role, meta)
+	prefixWidth := lipgloss.Width(symbolText + " ")
 	bodyWidth := max(1, width-prefixWidth)
 	out := make([]Line, 0, len(lines))
 	lastIndex := len(lines) - 1
@@ -402,7 +402,7 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 		}
 		if idx == 0 {
 			symbolRole := roleSymbolStyleRole(role, meta)
-			spans = append([]Span{{Text: roleSymbol(role), Role: symbolRole, Faint: roleSymbolFaint(role, symbolRole)}, {Text: " ", Role: role, Faint: roleDefaultFaint(role)}}, spans...)
+			spans = append([]Span{{Text: symbolText, Role: symbolRole, Faint: roleSymbolFaint(role, symbolRole)}, {Text: " ", Role: role, Faint: roleDefaultFaint(role)}}, spans...)
 		} else {
 			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex), spans...)
 		}
@@ -460,6 +460,9 @@ func replaceLeadingRoleSymbol(line Line, role StyleRole, symbol string) Line {
 }
 
 func roleSymbolStyleRole(role StyleRole, meta toolMeta) StyleRole {
+	if meta.IsError {
+		return StyleRoleToolError
+	}
 	switch role {
 	case StyleRoleToolError:
 		return StyleRoleToolError
@@ -510,6 +513,13 @@ func roleDefaultFaint(role StyleRole) bool {
 }
 
 func roleSymbol(role StyleRole) string {
+	return roleSymbolText(role, toolMeta{})
+}
+
+func roleSymbolText(role StyleRole, meta toolMeta) string {
+	if meta.IsError {
+		return "!"
+	}
 	symbol := "•"
 	switch role {
 	case StyleRoleUser:

@@ -16,11 +16,12 @@ import (
 func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 	legacy := "neutral notice"
 	cases := []struct {
-		name      string
-		row       clientui.TranscriptCommittedRow
-		want      string
-		wantRole  StyleRole
-		wantColor ColorRole
+		name       string
+		row        clientui.TranscriptCommittedRow
+		want       string
+		wantRole   StyleRole
+		wantColor  ColorRole
+		wantSymbol string
 	}{
 		{name: "user", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "hello"}}, want: "❯ hello", wantRole: StyleRoleUser, wantColor: ColorRoleForeground},
 		{name: "model", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "answer"}}, want: "❮ answer", wantRole: StyleRoleAssistant, wantColor: ColorRoleForeground},
@@ -34,7 +35,7 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 		{name: "workflow_completion", row: toolRow("workflow_completion", clientui.ToolPresentationDefault, "workflow done", false), want: "• workflow done", wantRole: StyleRoleTool, wantColor: ColorRoleForeground},
 		{name: "view_image", row: toolRow("view_image", clientui.ToolPresentationDefault, "image.png", false), want: "• image.png", wantRole: StyleRoleTool, wantColor: ColorRoleForeground},
 		{name: "trigger_handoff", row: toolRow("trigger_handoff", clientui.ToolPresentationDefault, "handoff", false), want: "• handoff", wantRole: StyleRoleTool, wantColor: ColorRoleForeground},
-		{name: "tool_error", row: toolRow("exec_command", clientui.ToolPresentationShell, "failed", true), want: "! failed", wantRole: StyleRoleToolError, wantColor: ColorRoleError},
+		{name: "tool_error", row: toolRow("exec_command", clientui.ToolPresentationShell, "failed", true), want: "! failed", wantRole: StyleRoleToolShell, wantColor: ColorRoleForeground, wantSymbol: "!"},
 	}
 
 	for _, tt := range cases {
@@ -47,7 +48,11 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 			if got := line.Plain(); got != tt.want {
 				t.Fatalf("rendered line = %q, want %q", got, tt.want)
 			}
-			if len(line.Spans) < 3 || line.Spans[0].Text != roleSymbol(tt.wantRole) {
+			wantSymbol := tt.wantSymbol
+			if wantSymbol == "" {
+				wantSymbol = roleSymbol(tt.wantRole)
+			}
+			if len(line.Spans) < 3 || line.Spans[0].Text != wantSymbol {
 				t.Fatalf("line has invalid style spans: %+v", line.Spans)
 			}
 			if tt.wantRole != StyleRoleToolShell && line.Spans[2].Role != tt.wantRole {
@@ -167,7 +172,7 @@ func TestToolRoleSymbolsUseIndependentStatusColors(t *testing.T) {
 	}{
 		{name: "successful tool", row: successTool, wantSymbolRole: StyleRoleToolSuccess, checkContent: true, wantContentRole: StyleRoleTool, wantContentFaint: true, wantSymbolColor: ColorRoleToolSuccess, wantContentColor: ColorRoleForeground},
 		{name: "raw shell warning marker", row: rawShell, wantSymbolRole: StyleRoleWarning, wantSymbolColor: ColorRoleWarning},
-		{name: "failed tool", row: failedTool, wantSymbolRole: StyleRoleToolError, checkContent: true, wantContentRole: StyleRoleToolError, wantSymbolColor: ColorRoleError, wantContentColor: ColorRoleError},
+		{name: "failed tool", row: failedTool, wantSymbolRole: StyleRoleToolError, checkContent: true, wantContentRole: StyleRoleTool, wantContentFaint: true, wantSymbolColor: ColorRoleError, wantContentColor: ColorRoleForeground},
 		{name: "patch tool", row: patchTool, wantSymbolRole: StyleRoleToolSuccess, checkContent: true, wantContentRole: StyleRoleToolPatch, wantSymbolColor: ColorRoleToolSuccess, wantContentColor: ColorRoleForeground},
 	}
 
@@ -466,6 +471,60 @@ func TestCollapsedToolRowsKeepInputPreviewAheadOfResultCondensedText(t *testing.
 		meta := spans[len(spans)-1]
 		if meta.Text != "exit 0" || meta.Role != StyleRoleNotice || !meta.Faint {
 			t.Fatalf("mode %v metadata span = %+v, want faint result metadata", mode, meta)
+		}
+	}
+}
+
+func TestToolErrorRowsKeepInputPreviewWithErrorSymbol(t *testing.T) {
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "raw failure output", true)
+	row.Tool.CondensedText = "permission denied"
+	row.Tool.ResultSummary = "exit 1"
+	row.Tool.ToolPresentation.Command = "cat /root/secret"
+	row.Tool.ToolPresentation.CompactText = "cat /root/secret"
+
+	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed} {
+		rendered := RenderCommittedRow(row, 80, "", mode)
+		if len(rendered.Lines) == 0 {
+			t.Fatalf("mode %v rendered no lines", mode)
+		}
+		if got := rendered.Lines[0].Plain(); !strings.HasPrefix(got, "! cat /root/secret") || strings.Contains(got, "permission denied") || !strings.HasSuffix(got, "exit 1") {
+			t.Fatalf("mode %v line = %q, want failed input preview with inline error metadata", mode, got)
+		}
+		if got := ColorRoleForStyle(rendered.Lines[0].Spans[0].Role); got != ColorRoleError {
+			t.Fatalf("mode %v symbol color = %v, want error", mode, got)
+		}
+	}
+}
+
+func TestPatchToolErrorKeepsPatchInputShapeWithErrorSymbol(t *testing.T) {
+	row := toolRow("patch", clientui.ToolPresentationDefault, "patch failure output", true)
+	row.Tool.CondensedText = "patch failed"
+	row.Tool.ResultSummary = "failed"
+	row.Tool.ToolPresentation.PatchRender = &patchformat.RenderedPatch{
+		Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2, Removed: 1}},
+		SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go -1 +2", FileIndex: 0}},
+	}
+
+	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed} {
+		rendered := RenderCommittedRow(row, 120, "", mode)
+		if len(rendered.Lines) == 0 {
+			t.Fatalf("mode %v rendered no lines", mode)
+		}
+		spans := rendered.Lines[0].Spans
+		want := []Span{
+			{Text: "!", Role: StyleRoleToolError},
+			{Text: " ", Role: StyleRoleToolPatch},
+			{Text: "cli/tui/model.go", Role: StyleRoleToolPatch},
+			{Text: " ", Role: StyleRoleToolPatch},
+			{Text: "-1", Role: StyleRoleToolError},
+			{Text: " ", Role: StyleRoleToolPatch},
+			{Text: "+2", Role: StyleRoleToolSuccess},
+		}
+		if len(spans) < len(want) || !slices.Equal(spans[:len(want)], want) {
+			t.Fatalf("mode %v patch error prefix spans = %+v, want %+v", mode, spans, want)
+		}
+		if got := rendered.Lines[0].Plain(); strings.Contains(got, "patch failed") {
+			t.Fatalf("mode %v patch error line = %q, replaced input shape with error text", mode, got)
 		}
 	}
 }
