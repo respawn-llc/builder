@@ -685,6 +685,32 @@ func TestReviewerNoticeRendersReviewerGlyph(t *testing.T) {
 	}
 }
 
+func TestReviewerErrorNoticeRendersErrorGlyph(t *testing.T) {
+	row := clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityOngoing,
+		Kind:       clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Severity: clientui.TranscriptNoticeError,
+			Data: clientui.TranscriptNoticeData{
+				MessageType:  clientui.MessageTypeReviewerFeedback,
+				CompactLabel: "Supervisor failed.",
+			},
+			Diagnostic: &clientui.TranscriptDiagnosticData{Code: string(transcript.EntryRoleReviewerError)},
+		},
+	}
+
+	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
+	if len(rendered.Lines) != 1 {
+		t.Fatalf("rendered lines = %d, want 1", len(rendered.Lines))
+	}
+	if got := rendered.Lines[0].Plain(); !strings.HasPrefix(got, "! ") {
+		t.Fatalf("reviewer error line = %q, want error glyph", got)
+	}
+	if got := ColorRoleForStyle(rendered.Lines[0].Spans[0].Role); got != ColorRoleError {
+		t.Fatalf("reviewer error glyph color role = %v, want error", got)
+	}
+}
+
 func toolRow(name string, presentation clientui.ToolPresentationKind, text string, isError bool) clientui.TranscriptCommittedRow {
 	return clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowTool,

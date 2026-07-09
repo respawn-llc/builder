@@ -32,12 +32,16 @@ const EntryRoleGoalFeedback EntryRole = "goal_feedback"
 // EntryRoleReviewerStatus marks reviewer lifecycle status entries.
 const EntryRoleReviewerStatus EntryRole = "reviewer_status"
 
+// EntryRoleReviewerError marks reviewer lifecycle status entries that report a
+// failed supervisor/reviewer action.
+const EntryRoleReviewerError EntryRole = "reviewer_error"
+
 // EntryRoleReviewerSuggestions marks reviewer suggestion summary entries.
 const EntryRoleReviewerSuggestions EntryRole = "reviewer_suggestions"
 
 func IsReviewerEntryRole(role string) bool {
 	switch EntryRole(strings.TrimSpace(role)) {
-	case EntryRoleReviewerStatus, EntryRoleReviewerSuggestions:
+	case EntryRoleReviewerStatus, EntryRoleReviewerError, EntryRoleReviewerSuggestions:
 		return true
 	default:
 		return false

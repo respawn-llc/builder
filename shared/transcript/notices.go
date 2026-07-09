@@ -21,7 +21,7 @@ func LegacyNoticeReasonForRole(role string) string {
 
 func LegacyNoticeSeverityForRole(role string) string {
 	switch strings.TrimSpace(role) {
-	case NoticeSeverityError:
+	case NoticeSeverityError, string(EntryRoleReviewerError):
 		return NoticeSeverityError
 	case NoticeSeverityWarning, NoticeReasonCacheWarning:
 		return NoticeSeverityWarning

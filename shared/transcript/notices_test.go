@@ -9,6 +9,7 @@ func TestLegacyNoticeNormalizationForRole(t *testing.T) {
 		wantSeverity string
 	}{
 		{role: "error", wantReason: NoticeReasonLegacyUntypedNotice, wantSeverity: NoticeSeverityError},
+		{role: string(EntryRoleReviewerError), wantReason: NoticeReasonLegacyUntypedNotice, wantSeverity: NoticeSeverityError},
 		{role: "warning", wantReason: NoticeReasonLegacyUntypedNotice, wantSeverity: NoticeSeverityWarning},
 		{role: "cache_warning", wantReason: NoticeReasonCacheWarning, wantSeverity: NoticeSeverityWarning},
 		{role: "compaction_notice", wantReason: NoticeReasonLegacyUntypedNotice, wantSeverity: NoticeSeverityInfo},
