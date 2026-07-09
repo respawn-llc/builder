@@ -195,6 +195,60 @@ func TestToolRoleSymbolsUseIndependentStatusColors(t *testing.T) {
 	}
 }
 
+func TestRoleSymbolsUseSpecifiedColorRoles(t *testing.T) {
+	rawShell := toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)
+	rawShell.Tool.ToolPresentation.RawOutputRequested = true
+	patchTool := toolRow("patch", clientui.ToolPresentationDefault, "ignored", false)
+	patchTool.Tool.ToolPresentation.PatchRender = &patchformat.RenderedPatch{
+		Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2}},
+		SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go +2", FileIndex: 0}},
+	}
+
+	cases := []struct {
+		name            string
+		row             clientui.TranscriptCommittedRow
+		mode            Mode
+		wantSymbol      string
+		wantSymbolColor ColorRole
+		wantSymbolFaint bool
+	}{
+		{name: "successful tool ongoing", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false), mode: ModeOngoing, wantSymbol: "•", wantSymbolColor: ColorRoleToolSuccess},
+		{name: "successful tool detail", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false), mode: ModeDetailCollapsed, wantSymbol: "•", wantSymbolColor: ColorRoleToolSuccess},
+		{name: "raw shell warning marker", row: rawShell, mode: ModeOngoing, wantSymbol: "$", wantSymbolColor: ColorRoleWarning},
+		{name: "failed tool", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "failed input", true), mode: ModeOngoing, wantSymbol: "!", wantSymbolColor: ColorRoleError},
+		{name: "patch tool", row: patchTool, mode: ModeOngoing, wantSymbol: "⇄", wantSymbolColor: ColorRoleToolSuccess},
+		{name: "question tool", row: toolRow("ask_question", clientui.ToolPresentationAskQuestion, "Pick one", false), mode: ModeOngoing, wantSymbol: "?", wantSymbolColor: ColorRoleToolSuccess},
+		{name: "web search tool", row: toolRow("web_search", clientui.ToolPresentationDefault, "query", false), mode: ModeOngoing, wantSymbol: "@", wantSymbolColor: ColorRoleToolSuccess},
+		{name: "compaction", row: noticeMessageTypeRow(clientui.MessageTypeCompactionSummary, clientui.TranscriptNoticeInfo), mode: ModeOngoing, wantSymbol: "ℹ", wantSymbolColor: ColorRoleSecondary},
+		{name: "goal", row: noticeMessageTypeRow(clientui.MessageTypeGoal, clientui.TranscriptNoticeInfo), mode: ModeOngoing, wantSymbol: "ℹ", wantSymbolColor: ColorRolePrimary},
+		{name: "workflow detail", row: noticeMessageTypeRow(clientui.MessageTypeWorkflowMode, clientui.TranscriptNoticeInfo), mode: ModeDetailCollapsed, wantSymbol: "ℹ", wantSymbolColor: ColorRolePrimary},
+		{name: "warning", row: noticeMessageTypeRow("", clientui.TranscriptNoticeWarning), mode: ModeOngoing, wantSymbol: "⚠", wantSymbolColor: ColorRoleWarning},
+		{name: "error", row: noticeMessageTypeRow("", clientui.TranscriptNoticeError), mode: ModeOngoing, wantSymbol: "!", wantSymbolColor: ColorRoleError},
+		{name: "reviewer success", row: reviewerNoticeRow(clientui.TranscriptNoticeInfo, transcript.EntryRoleReviewerSuggestions), mode: ModeOngoingCollapsed, wantSymbol: "§", wantSymbolColor: ColorRoleSuccess},
+		{name: "reviewer error", row: reviewerNoticeRow(clientui.TranscriptNoticeError, transcript.EntryRoleReviewerError), mode: ModeDetailCollapsed, wantSymbol: "!", wantSymbolColor: ColorRoleError},
+		{name: "background completion", row: noticeMessageTypeRow(clientui.MessageTypeBackgroundNotice, clientui.TranscriptNoticeInfo), mode: ModeOngoing, wantSymbol: "ℹ", wantSymbolColor: ColorRoleForeground, wantSymbolFaint: true},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			rendered := RenderCommittedRow(tt.row, 120, "", tt.mode)
+			if len(rendered.Lines) == 0 || len(rendered.Lines[0].Spans) == 0 {
+				t.Fatalf("rendered invalid line: %+v", rendered.Lines)
+			}
+			symbol := rendered.Lines[0].Spans[0]
+			if symbol.Text != tt.wantSymbol {
+				t.Fatalf("symbol text = %q, want %q", symbol.Text, tt.wantSymbol)
+			}
+			if got := ColorRoleForStyle(symbol.Role); got != tt.wantSymbolColor {
+				t.Fatalf("symbol color role = %v, want %v (span=%+v)", got, tt.wantSymbolColor, symbol)
+			}
+			if symbol.Faint != tt.wantSymbolFaint {
+				t.Fatalf("symbol faint = %v, want %v (span=%+v)", symbol.Faint, tt.wantSymbolFaint, symbol)
+			}
+		})
+	}
+}
+
 func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -708,6 +762,33 @@ func TestReviewerErrorNoticeRendersErrorGlyph(t *testing.T) {
 	}
 	if got := ColorRoleForStyle(rendered.Lines[0].Spans[0].Role); got != ColorRoleError {
 		t.Fatalf("reviewer error glyph color role = %v, want error", got)
+	}
+}
+
+func noticeMessageTypeRow(messageType clientui.MessageType, severity clientui.TranscriptNoticeSeverity) clientui.TranscriptCommittedRow {
+	return clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Severity: severity,
+			Data: clientui.TranscriptNoticeData{
+				MessageType:  messageType,
+				CompactLabel: "notice",
+			},
+		},
+	}
+}
+
+func reviewerNoticeRow(severity clientui.TranscriptNoticeSeverity, role transcript.EntryRole) clientui.TranscriptCommittedRow {
+	return clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Severity: severity,
+			Data: clientui.TranscriptNoticeData{
+				MessageType:  clientui.MessageTypeReviewerFeedback,
+				CompactLabel: "reviewer",
+			},
+			Diagnostic: &clientui.TranscriptDiagnosticData{Code: string(role)},
+		},
 	}
 }
 
