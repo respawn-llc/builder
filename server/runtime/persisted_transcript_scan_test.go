@@ -286,7 +286,7 @@ func TestPersistedTranscriptScanRendersPatchToolCallsWithoutEditedLabel(t *testi
 	wantSummaries := map[string]string{
 		"call-patch-single": "./cli/app/ui_status.go +2 -1",
 		"call-patch-multi":  "./a.go +1\n./b.go -1",
-		"call-patch-raw":    "Patch",
+		"call-patch-raw":    rawPatch,
 	}
 	for _, entry := range page.Entries {
 		if entry.Role != "tool_call" {

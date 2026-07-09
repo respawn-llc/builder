@@ -205,13 +205,31 @@ func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) t
 }
 
 func compactToolText(meta toolMeta, fallback string) string {
-	text := firstNonEmpty(meta.CompactText, meta.PatchSummary, meta.Command, fallback, meta.ToolName, "tool call")
-	for _, line := range strings.Split(text, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			return patchformat.StripEditedLabel(trimmed)
+	candidates := []string{meta.CompactText, meta.PatchSummary, meta.Command, fallback}
+	if !isPatchTool(meta) {
+		candidates = append(candidates, meta.ToolName)
+	}
+	candidates = append(candidates, "tool call")
+	for _, text := range candidates {
+		if isPatchTool(meta) && strings.TrimSpace(text) == strings.TrimSpace(meta.ToolName) {
+			continue
+		}
+		if compact := firstCompactPatchTextLine(text); compact != "" {
+			return compact
 		}
 	}
-	return patchformat.StripEditedLabel(strings.TrimSpace(text))
+	return "tool call"
+}
+
+func firstCompactPatchTextLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			if stripped := patchformat.StripEditedLabel(trimmed); stripped != "" {
+				return stripped
+			}
+		}
+	}
+	return ""
 }
 
 func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *patchformat.RenderedPatch, width int, mode Mode) []Line {

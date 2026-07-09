@@ -22,6 +22,8 @@ func TestCompactToolCallText(t *testing.T) {
 		want string
 	}{
 		{name: "compact text", meta: &ToolCallMeta{CompactText: "Edited: /tmp/file.go"}, want: "/tmp/file.go"},
+		{name: "empty edited compact falls through", meta: &ToolCallMeta{CompactText: "Edited:", PatchSummary: "./a.go +1"}, want: "./a.go +1"},
+		{name: "empty edited summary falls through", meta: &ToolCallMeta{PatchSummary: "Edited:", Command: "*** Begin Patch"}, want: "*** Begin Patch"},
 		{name: "patch summary", meta: &ToolCallMeta{PatchSummary: "Edited: cli/app"}, want: "cli/app"},
 		{name: "command", meta: &ToolCallMeta{Command: "go test ./..."}, want: "go test ./..."},
 		{name: "first text line", text: "pwd\n/tmp", want: "pwd"},

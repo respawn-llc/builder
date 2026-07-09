@@ -494,13 +494,13 @@ func TestPatchToolCallFormattingFallsBackToRawPatchWhenFileViewParseFails(t *tes
 	if rendered.ToolCall.RenderHint == nil || rendered.ToolCall.RenderHint.Kind != transcript.ToolRenderKindDiff {
 		t.Fatalf("expected diff render hint for patch fallback, got %+v", rendered.ToolCall.RenderHint)
 	}
-	if rendered.ToolCall.PatchSummary != "Patch" {
+	if rendered.ToolCall.PatchSummary != patchText {
 		t.Fatalf("expected fallback patch summary, got %q", rendered.ToolCall.PatchSummary)
 	}
 	if rendered.ToolCall.PatchRender == nil {
 		t.Fatalf("expected fallback typed patch render metadata, got %+v", rendered.ToolCall)
 	}
-	if !strings.Contains(rendered.ToolCall.PatchDetail, patchText) {
+	if rendered.ToolCall.PatchDetail != patchText {
 		t.Fatalf("expected fallback patch detail to include raw payload, got %q", rendered.ToolCall.PatchDetail)
 	}
 }

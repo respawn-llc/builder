@@ -22,10 +22,14 @@ func SplitInlineMeta(line string) (string, string) {
 
 func CompactToolCallText(meta *ToolCallMeta, text string) string {
 	if meta != nil && meta.HasCompactText() {
-		return patchformat.StripEditedLabel(meta.CompactText)
+		if compact := patchformat.StripEditedLabel(meta.CompactText); compact != "" {
+			return compact
+		}
 	}
 	if meta != nil && meta.HasPatchSummary() {
-		return patchformat.StripEditedLabel(meta.PatchSummary)
+		if summary := patchformat.StripEditedLabel(meta.PatchSummary); summary != "" {
+			return summary
+		}
 	}
 	if meta != nil && strings.TrimSpace(meta.Command) != "" {
 		return strings.TrimSpace(meta.Command)

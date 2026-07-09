@@ -341,6 +341,31 @@ func TestRenderPatchToolStylesPathAndCounts(t *testing.T) {
 	}
 }
 
+func TestPatchFamilyToolsDoNotFallbackToToolName(t *testing.T) {
+	for _, toolName := range []string{"patch", "edit"} {
+		t.Run(toolName, func(t *testing.T) {
+			row := toolRow(toolName, clientui.ToolPresentationDefault, toolName, false)
+			row.Tool.ToolPresentation = &clientui.ToolCallMeta{ToolName: toolName}
+			rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
+			if len(rendered.Lines) == 0 {
+				t.Fatal("rendered no patch-family lines")
+			}
+			if got := rendered.Lines[0].Plain(); got != "⇄ tool call" {
+				t.Fatalf("patch-family row fell back to tool name or unexpected fallback: %q", got)
+			}
+
+			pending := RenderPendingTool(clientui.TranscriptToolStart{
+				ToolCallID:       toolName + "-1",
+				ToolName:         toolName,
+				ToolPresentation: &clientui.ToolCallMeta{ToolName: toolName},
+			}, 80, "")
+			if got := pending.Plain(); got != "⇄ tool call" {
+				t.Fatalf("pending patch-family row fell back to tool name or unexpected fallback: %q", got)
+			}
+		})
+	}
+}
+
 func TestCollapsedToolResultSummaryRendersAsFaintInlineMetadata(t *testing.T) {
 	row := toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)
 	row.Tool.ResultSummary = "passed"

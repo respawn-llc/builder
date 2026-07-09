@@ -19,16 +19,16 @@ func Render(src, cwd string) RenderedPatch {
 }
 
 func Raw(src string) RenderedPatch {
-	summary := []RenderedLine{{Kind: RenderedLineKindHeader, Text: "Patch", FileIndex: -1}}
-	detail := []RenderedLine{{Kind: RenderedLineKindHeader, Text: "Patch", FileIndex: -1}}
 	trimmed := strings.TrimSpace(src)
 	if trimmed == "" {
-		return RenderedPatch{SummaryLines: summary, DetailLines: detail}
+		line := RenderedLine{Kind: RenderedLineKindRaw, Text: "empty patch input", FileIndex: -1}
+		return RenderedPatch{SummaryLines: []RenderedLine{line}, DetailLines: []RenderedLine{line}}
 	}
+	detail := make([]RenderedLine, 0, 8)
 	for _, line := range strings.Split(strings.ReplaceAll(trimmed, "\r\n", "\n"), "\n") {
 		detail = append(detail, RenderedLine{Kind: RenderedLineKindRaw, Text: line, FileIndex: -1})
 	}
-	return RenderedPatch{SummaryLines: summary, DetailLines: detail}
+	return RenderedPatch{SummaryLines: []RenderedLine{detail[0]}, DetailLines: detail}
 }
 
 func StripEditedLabel(text string) string {
@@ -50,11 +50,7 @@ func StripEditedLabel(text string) string {
 		}
 		out = append(out, line)
 	}
-	stripped := strings.TrimSpace(strings.Join(out, "\n"))
-	if stripped == "" {
-		return "Patch"
-	}
-	return stripped
+	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
 func Format(doc Document, cwd string) RenderedPatch {
