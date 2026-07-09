@@ -71,18 +71,7 @@ func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
 	if got, want := line.Plain(), "$ sed -n '1,10p' cli/tui/model.go"; got != want {
 		t.Fatalf("shell line = %q, want %q", got, want)
 	}
-	foundSyntax := false
-	for _, span := range line.Spans[2:] {
-		if !span.Faint {
-			t.Fatalf("shell syntax span is not faint: %+v", span)
-		}
-		if span.Role == StyleRoleToolShellPrimary || span.Role == StyleRoleToolShellSecondary || span.Role == StyleRoleToolShellWarning || span.Role == StyleRoleToolShellError {
-			foundSyntax = true
-		}
-	}
-	if !foundSyntax {
-		t.Fatalf("shell row did not include syntax role spans: %+v", line.Spans)
-	}
+	assertShellLineHasTypedSyntax(t, line)
 }
 
 func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
