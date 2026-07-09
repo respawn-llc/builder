@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 func TestPrepareExecutorToolCallsAssignsAskQuestionBatchMetadata(t *testing.T) {
@@ -103,15 +104,32 @@ func TestPrepareExecutorToolCallsRejectsMissingProviderCallID(t *testing.T) {
 
 func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 	tests := []struct {
-		name        string
-		call        llm.ToolCall
-		wantCommand string
-		wantPatch   bool
+		name          string
+		call          llm.ToolCall
+		presentation  *transcript.ToolCallMeta
+		wantCommand   string
+		wantPatch     bool
+		wantRaw       bool
+		wantTruncated bool
 	}{
 		{
 			name:        "shell command",
 			call:        llm.ToolCall{ID: "shell-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
 			wantCommand: "pwd",
+		},
+		{
+			name:         "raw shell command",
+			call:         llm.ToolCall{ID: "shell-raw-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"printf raw","raw":true}`)},
+			presentation: &transcript.ToolCallMeta{RawOutputRequested: true},
+			wantCommand:  "printf raw",
+			wantRaw:      true,
+		},
+		{
+			name:          "truncated shell command",
+			call:          llm.ToolCall{ID: "shell-truncated-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"cat large.log"}`)},
+			presentation:  &transcript.ToolCallMeta{OutputTruncated: true},
+			wantCommand:   "cat large.log",
+			wantTruncated: true,
 		},
 		{
 			name: "patch input",
@@ -128,10 +146,11 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := toolResultWithTranscriptPresentation(tools.Result{
-				CallID:  tt.call.ID,
-				Name:    toolspec.ID(tt.call.Name),
-				IsError: true,
-				Summary: "failed",
+				CallID:       tt.call.ID,
+				Name:         toolspec.ID(tt.call.Name),
+				IsError:      true,
+				Summary:      "failed",
+				Presentation: tt.presentation,
 			}, tt.call, t.TempDir())
 
 			if result.Presentation == nil {
@@ -142,6 +161,12 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 			}
 			if tt.wantPatch && result.Presentation.PatchRender == nil {
 				t.Fatal("patch result presentation has no structured patch")
+			}
+			if result.Presentation.RawOutputRequested != tt.wantRaw {
+				t.Fatalf("raw output requested = %t, want %t", result.Presentation.RawOutputRequested, tt.wantRaw)
+			}
+			if result.Presentation.OutputTruncated != tt.wantTruncated {
+				t.Fatalf("output truncated = %t, want %t", result.Presentation.OutputTruncated, tt.wantTruncated)
 			}
 		})
 	}

@@ -239,10 +239,7 @@ func serialToolExecutionRequired(toolID toolspec.ID, workflowActive bool) bool {
 }
 
 func toolResultWithTranscriptPresentation(result tools.Result, call llm.ToolCall, workingDir string) tools.Result {
-	if result.Presentation != nil {
-		return result
-	}
-	result.Presentation = transcriptToolCallMeta(call, workingDir)
+	result.Presentation = mergeToolCallMeta(transcriptToolCallMeta(call, workingDir), result.Presentation)
 	return result
 }
 

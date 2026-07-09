@@ -55,6 +55,71 @@ func transcriptToolCallMeta(call llm.ToolCall, workingDir string) *transcript.To
 	return &built
 }
 
+func mergeToolCallMeta(callMeta, resultMeta *transcript.ToolCallMeta) *transcript.ToolCallMeta {
+	if callMeta == nil {
+		if resultMeta == nil {
+			return nil
+		}
+		normalized := transcript.NormalizeToolCallMeta(*resultMeta)
+		return &normalized
+	}
+	if resultMeta == nil {
+		return callMeta
+	}
+
+	merged := *resultMeta
+	if strings.TrimSpace(merged.ToolName) == "" {
+		merged.ToolName = callMeta.ToolName
+	}
+	if merged.Presentation == "" {
+		merged.Presentation = callMeta.Presentation
+	}
+	if merged.RenderBehavior == "" {
+		merged.RenderBehavior = callMeta.RenderBehavior
+	}
+	merged.IsShell = merged.IsShell || callMeta.IsShell
+	merged.UserInitiated = merged.UserInitiated || callMeta.UserInitiated
+	if strings.TrimSpace(merged.Command) == "" {
+		merged.Command = callMeta.Command
+	}
+	if strings.TrimSpace(merged.CompactText) == "" {
+		merged.CompactText = callMeta.CompactText
+	}
+	if strings.TrimSpace(merged.InlineMeta) == "" {
+		merged.InlineMeta = callMeta.InlineMeta
+	}
+	if strings.TrimSpace(merged.TimeoutLabel) == "" {
+		merged.TimeoutLabel = callMeta.TimeoutLabel
+	}
+	if strings.TrimSpace(merged.PatchSummary) == "" {
+		merged.PatchSummary = callMeta.PatchSummary
+	}
+	if strings.TrimSpace(merged.PatchDetail) == "" {
+		merged.PatchDetail = callMeta.PatchDetail
+	}
+	if merged.PatchRender == nil {
+		merged.PatchRender = callMeta.PatchRender
+	}
+	if merged.RenderHint == nil {
+		merged.RenderHint = callMeta.RenderHint
+	}
+	if strings.TrimSpace(merged.Question) == "" {
+		merged.Question = callMeta.Question
+	}
+	if len(merged.Suggestions) == 0 && len(callMeta.Suggestions) > 0 {
+		merged.Suggestions = append([]string(nil), callMeta.Suggestions...)
+	}
+	if merged.RecommendedOptionIndex == 0 {
+		merged.RecommendedOptionIndex = callMeta.RecommendedOptionIndex
+	}
+	merged.OmitSuccessfulResult = merged.OmitSuccessfulResult || callMeta.OmitSuccessfulResult
+	merged.RawOutputRequested = merged.RawOutputRequested || callMeta.RawOutputRequested
+	merged.OutputTruncated = merged.OutputTruncated || callMeta.OutputTruncated
+
+	normalized := transcript.NormalizeToolCallMeta(merged)
+	return &normalized
+}
+
 func currentTranscriptDefaultShellPath() string {
 	if shellPath := strings.TrimSpace(os.Getenv("SHELL")); shellPath != "" {
 		return shellPath
