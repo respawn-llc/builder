@@ -33,6 +33,38 @@ func TestMessageTypeTranscriptVisibilityMatrix(t *testing.T) {
 	}
 }
 
+func TestUnknownDeveloperMessageVisibilityDependsOnRecoverableContent(t *testing.T) {
+	unknownType := llm.MessageType("unknown_future_context")
+
+	withText := VisibleChatEntriesFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: unknownType, Content: "recoverable text"})
+	if len(withText) != 1 || withText[0].Visibility != transcript.EntryVisibilityOngoing || withText[0].Text != "recoverable text" {
+		t.Fatalf("unknown developer with text entries = %+v, want ongoing recoverable text", withText)
+	}
+
+	emptyUnknown := VisibleChatEntriesFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: unknownType, Content: " \n\t "})
+	if len(emptyUnknown) != 1 || emptyUnknown[0].Visibility != transcript.EntryVisibilityDetail {
+		t.Fatalf("empty unknown developer entries = %+v, want detail diagnostic", emptyUnknown)
+	}
+
+	emptyUntyped := VisibleChatEntriesFromMessage(llm.Message{Role: llm.RoleDeveloper, Content: " \n\t "})
+	if len(emptyUntyped) != 0 {
+		t.Fatalf("empty untyped developer entries = %+v, want hidden no-op", emptyUntyped)
+	}
+}
+
+func TestEmptyUnknownDeveloperMessageProjectsDetailDiagnosticFact(t *testing.T) {
+	unknownType := llm.MessageType("unknown_future_context")
+	facts := transcriptCommittedRowFactsFromMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: unknownType, Content: " "}, nil, nil, nil)
+
+	if len(facts) != 1 || facts[0].Kind != TranscriptCommittedRowFactNotice || facts[0].Visibility != transcript.EntryVisibilityDetail || facts[0].Notice == nil {
+		t.Fatalf("empty unknown developer facts = %+v, want one detail diagnostic notice", facts)
+	}
+	notice := facts[0].Notice
+	if notice.DiagnosticCode != string(unknownType) || notice.DiagnosticDetail == "" {
+		t.Fatalf("diagnostic notice = %+v, want unknown type code and non-empty detail", notice)
+	}
+}
+
 func TestCustomToolCallOutputProjectsAsCommittedToolRowFact(t *testing.T) {
 	msg := llm.Message{
 		Role:        llm.RoleTool,

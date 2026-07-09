@@ -386,6 +386,8 @@ func roleSymbol(role StyleRole) string {
 		symbol = "@"
 	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticeForegroundFaint, StyleRoleNoticePrimary, StyleRoleNoticeSecondary:
 		symbol = "ℹ"
+	case StyleRoleNoticeReviewer:
+		symbol = "§"
 	case StyleRoleWarning:
 		symbol = "⚠"
 	case StyleRoleError, StyleRoleToolError:
@@ -424,6 +426,9 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 	if row.Severity == clientui.TranscriptNoticeWarning || row.Reason == clientui.TranscriptNoticeCacheWarning {
 		return StyleRoleWarning
 	}
+	if row.Data.MessageType == clientui.MessageTypeReviewerFeedback || noticeDiagnosticHasReviewerRole(row) {
+		return StyleRoleNoticeReviewer
+	}
 	switch row.Data.MessageType {
 	case clientui.MessageTypeInterruption, clientui.MessageTypeErrorFeedback:
 		return StyleRoleError
@@ -444,6 +449,13 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 	default:
 		return StyleRoleNotice
 	}
+}
+
+func noticeDiagnosticHasReviewerRole(row *clientui.TranscriptNoticeRow) bool {
+	if row == nil || row.Diagnostic == nil {
+		return false
+	}
+	return transcript.IsReviewerEntryRole(strings.TrimSpace(row.Diagnostic.Code))
 }
 
 func noticeLegacyText(row *clientui.TranscriptNoticeRow) string {
@@ -496,7 +508,7 @@ func labelForRole(role StyleRole) string {
 		return "user"
 	case StyleRoleAssistant:
 		return "assistant"
-	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticeForegroundFaint, StyleRoleNoticePrimary, StyleRoleNoticeSecondary:
+	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticeForegroundFaint, StyleRoleNoticePrimary, StyleRoleNoticeSecondary, StyleRoleNoticeReviewer:
 		return "notice"
 	default:
 		return "tool call"

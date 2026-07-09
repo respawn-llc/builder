@@ -126,9 +126,55 @@ func TestStatusLineInterruptedRendersAsNotice(t *testing.T) {
 
 	status := stripANSIAndTrimRight(m.layout().renderStatusLine(120, uiThemeStyles("dark")))
 
-	if !strings.Contains(status, "interrupted") {
-		t.Fatalf("status line did not show interrupted notice: %q", status)
+	if strings.Contains(status, "interrupted") {
+		t.Fatalf("status line rendered interruption without a delivered notice: %q", status)
 	}
+	m.transientStatus = "interrupted"
+	m.transientStatusKind = uiStatusNoticeError
+
+	status = stripANSIAndTrimRight(m.layout().renderStatusLine(120, uiThemeStyles("dark")))
+	if !strings.Contains(status, "interrupted") {
+		t.Fatalf("status line did not show delivered interrupted notice: %q", status)
+	}
+}
+
+func TestStatusLineLadderTruncatesNoticeBeforeDroppingHigherPriorityFacts(t *testing.T) {
+	m := newStatusLineLadderTestModel()
+	m.transientStatus = "notice-message-that-should-stay-visible-while-truncated"
+	m.transientStatusKind = uiStatusNoticeWarning
+
+	found := false
+	for width := 30; width <= 80; width++ {
+		status := stripANSIAndTrimRight(m.layout().renderStatusLine(width, uiThemeStyles("dark")))
+		if !strings.Contains(status, "notice") || !strings.Contains(status, "…") {
+			continue
+		}
+		if !strings.Contains(status, "ps 1") || !strings.Contains(status, "42%") || !strings.ContainsAny(status, "▮▯") {
+			continue
+		}
+		found = true
+		for _, dropped := range []string{"feature-branch", "gpt-5", "reasoning-now"} {
+			if strings.Contains(status, dropped) {
+				t.Fatalf("status line kept lower-priority %q while truncating notice at width %d: %q", dropped, width, status)
+			}
+		}
+		break
+	}
+	if !found {
+		t.Fatal("did not find a narrow status-line width where notice truncates while process count and context meter remain")
+	}
+}
+
+func newStatusLineLadderTestModel() *uiModel {
+	m := newProjectedStaticUIModel(
+		WithUISessionID("status-ladder-session"),
+		WithUIModelName("gpt-5"),
+	)
+	m.status.snapshot.Git = uiStatusGitInfo{Visible: true, Branch: "feature-branch"}
+	m.reasoningStatusHeader = "reasoning-now"
+	m.processList.entries = []clientui.BackgroundProcess{{Running: true}}
+	m.setRuntimeContextUsage("status-ladder-session", clientui.RuntimeContextUsage{UsedTokens: 42, WindowTokens: 100})
+	return m
 }
 
 func TestStatusOverlayOmitsServerOwnershipRow(t *testing.T) {

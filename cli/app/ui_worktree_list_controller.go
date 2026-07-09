@@ -166,7 +166,7 @@ func (c uiInputController) handleWorktreeOverlayKey(msg tea.KeyMsg) (tea.Model, 
 			return m, nil
 		}
 		if target.IsCurrent {
-			return m, c.model.sendTransientStatusWithNoticeID("Already current worktree", uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, "")
+			return m, c.model.sendTransientStatusWithNoticeID("Already current worktree", uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, "")
 		}
 		return m, m.worktreeSwitchCmd(target)
 	default:

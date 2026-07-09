@@ -262,10 +262,10 @@ type askEventMsg struct {
 type uiStatusNoticeKind uint8
 
 const (
-	uiStatusNoticeNeutral uiStatusNoticeKind = iota
+	uiStatusNoticeInfo uiStatusNoticeKind = iota
 	uiStatusNoticeSuccess
+	uiStatusNoticeWarning
 	uiStatusNoticeError
-	uiStatusNoticeUpdateAvailable
 )
 
 type uiStatusNotice struct {

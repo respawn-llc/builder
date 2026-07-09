@@ -568,15 +568,15 @@ func (m *uiModel) applyRuntimeControlDone(msg runtimeControlDoneMsg) tea.Cmd {
 		m.reviewerMode = nextMode
 		m.reviewerEnabled = nextMode != "off"
 		status := serverapi.ReviewerToggleStatusMessage(m.reviewerEnabled, nextMode, msg.changed)
-		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
+		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
 	case runtimeControlSetAutoCompaction:
 		m.autoCompactionEnabled = msg.enabled
 		status := serverapi.AutoCompactionToggleStatusMessage(msg.enabled, msg.changed, msg.compactionMode)
-		return sequenceCmds(m.inputController().appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeNeutral), followUpCmd)
+		return sequenceCmds(m.inputController().appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo), followUpCmd)
 	case runtimeControlSetQuestions:
 		m.questionsEnabled = msg.enabled
 		status := serverapi.QuestionsToggleStatusMessage(msg.enabled, msg.changed)
-		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
+		return sequenceCmds(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""), followUpCmd)
 	case runtimeControlInterrupt:
 		if client, ok := m.runtimeClient().(interface{ consumeRuntimeReadModelStale() bool }); ok && client.consumeRuntimeReadModelStale() {
 			decision := m.startRuntimeMainViewRefreshRequest(runtimeReadModelResetMainViewRefreshRequest())

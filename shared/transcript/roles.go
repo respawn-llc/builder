@@ -1,5 +1,7 @@
 package transcript
 
+import "strings"
+
 type EntryRole string
 
 // EntryRoleCompactionSummary marks a persisted compaction or handoff summary.
@@ -26,3 +28,18 @@ const EntryRoleInterruption EntryRole = "interruption"
 
 // EntryRoleGoalFeedback marks user-facing goal lifecycle notices.
 const EntryRoleGoalFeedback EntryRole = "goal_feedback"
+
+// EntryRoleReviewerStatus marks reviewer lifecycle status entries.
+const EntryRoleReviewerStatus EntryRole = "reviewer_status"
+
+// EntryRoleReviewerSuggestions marks reviewer suggestion summary entries.
+const EntryRoleReviewerSuggestions EntryRole = "reviewer_suggestions"
+
+func IsReviewerEntryRole(role string) bool {
+	switch EntryRole(strings.TrimSpace(role)) {
+	case EntryRoleReviewerStatus, EntryRoleReviewerSuggestions:
+		return true
+	default:
+		return false
+	}
+}

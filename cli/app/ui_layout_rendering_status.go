@@ -27,7 +27,6 @@ func (l uiViewLayout) renderStatusLine(width int, style uiStyles) string {
 		{text: style.meta.Render(l.statusBranchLabel()), priority: 9, side: statusLineSideLeft, order: 1},
 		{text: style.meta.Render(l.statusModelLabel()), priority: 8, side: statusLineSideLeft, order: 2},
 		{text: l.renderReasoningStatus(statusLineUnboundedWidth), priority: 7, side: statusLineSideLeft, order: 5},
-		{text: l.renderStatusNotice(statusLineUnboundedWidth), priority: 6, side: statusLineSideLeft, order: 4},
 		{text: style.meta.Render(processCountLabel(m.processList.entries)), priority: 5, side: statusLineSideLeft, order: 3},
 		{text: l.renderStatusContextBar(style), priority: 4, side: statusLineSideRight, order: 2},
 		{text: l.renderStatusContextPercent(style), priority: 3, side: statusLineSideRight, order: 1},
@@ -35,20 +34,36 @@ func (l uiViewLayout) renderStatusLine(width int, style uiStyles) string {
 		{text: l.renderHelpHint(style), priority: 10, side: statusLineSideRight, order: 0},
 	}
 	segments = compactStatusLineSegments(segments)
-	for {
-		line := l.renderStatusLineCandidate(width, style, segments, indicatorLabel)
-		if lipgloss.Width(line) <= width {
+	notice := l.renderStatusNotice(statusLineUnboundedWidth)
+	for line := l.renderStatusLineCandidate(width, style, statusLineSegmentsWithNotice(segments, notice), indicatorLabel); lipgloss.Width(line) > width; line = l.renderStatusLineCandidate(width, style, statusLineSegmentsWithNotice(segments, notice), indicatorLabel) {
+		if removeLowestPriorityStatusSegmentAbove(&segments, 6) {
+			continue
+		}
+		break
+	}
+	if notice != "" {
+		if line := l.renderStatusLineCandidate(width, style, statusLineSegmentsWithNotice(segments, notice), indicatorLabel); lipgloss.Width(line) <= width {
 			return padANSIRight(line, width)
 		}
-		if removeLowestPriorityStatusSegment(&segments) {
-			continue
+		if noticeWidth := l.fittingStatusNoticeWidth(width, style, segments, indicatorLabel); noticeWidth > 0 {
+			line := l.renderStatusLineCandidate(width, style, statusLineSegmentsWithNotice(segments, l.renderStatusNotice(noticeWidth)), indicatorLabel)
+			return padANSIRight(line, width)
 		}
-		if indicatorLabel != "" {
-			indicatorLabel = ""
-			continue
-		}
-		return padANSIRight(truncateANSIRight(line, width), width)
+		notice = ""
 	}
+	if line := l.renderStatusLineCandidate(width, style, segments, indicatorLabel); lipgloss.Width(line) <= width {
+		return padANSIRight(line, width)
+	}
+	removeStatusLineSegmentPriority(&segments, 4)
+	if line := l.renderStatusLineCandidate(width, style, segments, indicatorLabel); lipgloss.Width(line) <= width {
+		return padANSIRight(line, width)
+	}
+	indicatorLabel = ""
+	line := l.renderStatusLineCandidate(width, style, segments, indicatorLabel)
+	if lipgloss.Width(line) <= width {
+		return padANSIRight(line, width)
+	}
+	return padANSIRight(truncateANSIRight(line, width), width)
 }
 
 func (l uiViewLayout) renderDetailSelectionAction(style uiStyles) string {
@@ -82,7 +97,7 @@ func (l uiViewLayout) renderStatusLineCandidate(width int, style uiStyles, segme
 	indicator := renderStatusIndicator(l.model.theme, l.model.statusLinePhase(), l.model.statusLineSpinning(), l.model.spinnerFrame, indicatorLabel)
 	left := renderStatusLineLeft(indicator, orderedStatusLineTexts(segments, statusLineSideLeft), style.meta.Render(statusLineSeparator))
 	right := strings.Join(orderedStatusLineTexts(segments, statusLineSideRight), style.meta.Render(statusLineSeparator))
-	if lipgloss.Width(left) >= width || strings.TrimSpace(ansi.Strip(right)) == "" {
+	if strings.TrimSpace(ansi.Strip(right)) == "" {
 		return left
 	}
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -110,18 +125,44 @@ func compactStatusLineSegments(segments []statusLineSegment) []statusLineSegment
 	return out
 }
 
-func removeLowestPriorityStatusSegment(segments *[]statusLineSegment) bool {
+func statusLineSegmentsWithNotice(segments []statusLineSegment, notice string) []statusLineSegment {
+	if strings.TrimSpace(ansi.Strip(notice)) == "" {
+		return segments
+	}
+	out := append([]statusLineSegment(nil), segments...)
+	out = append(out, statusLineSegment{text: notice, priority: 6, side: statusLineSideLeft, order: 4})
+	return out
+}
+
+func removeLowestPriorityStatusSegmentAbove(segments *[]statusLineSegment, priority int) bool {
 	if len(*segments) == 0 {
 		return false
 	}
-	index := 0
-	for i := 1; i < len(*segments); i++ {
-		if (*segments)[i].priority > (*segments)[index].priority {
+	index := -1
+	for i := range *segments {
+		if (*segments)[i].priority <= priority {
+			continue
+		}
+		if index == -1 || (*segments)[i].priority > (*segments)[index].priority {
 			index = i
 		}
 	}
+	if index == -1 {
+		return false
+	}
 	*segments = append((*segments)[:index], (*segments)[index+1:]...)
 	return true
+}
+
+func removeStatusLineSegmentPriority(segments *[]statusLineSegment, priority int) bool {
+	for i := range *segments {
+		if (*segments)[i].priority != priority {
+			continue
+		}
+		*segments = append((*segments)[:i], (*segments)[i+1:]...)
+		return true
+	}
+	return false
 }
 
 func orderedStatusLineTexts(segments []statusLineSegment, side statusLineSide) []string {
@@ -143,6 +184,23 @@ func orderedStatusLineTexts(segments []statusLineSegment, side statusLineSide) [
 	return texts
 }
 
+func (l uiViewLayout) fittingStatusNoticeWidth(width int, style uiStyles, segments []statusLineSegment, indicatorLabel string) int {
+	full := l.renderStatusNotice(statusLineUnboundedWidth)
+	high := min(lipgloss.Width(full), width)
+	best := 0
+	for low := 1; low <= high; {
+		mid := low + (high-low)/2
+		line := l.renderStatusLineCandidate(width, style, statusLineSegmentsWithNotice(segments, l.renderStatusNotice(mid)), indicatorLabel)
+		if lipgloss.Width(line) <= width {
+			best = mid
+			low = mid + 1
+			continue
+		}
+		high = mid - 1
+	}
+	return best
+}
+
 func (l uiViewLayout) statusBranchLabel() string {
 	git := l.model.status.snapshot.Git
 	if !git.Visible || strings.TrimSpace(git.Error) != "" {
@@ -162,10 +220,6 @@ func (l uiViewLayout) renderStatusNotice(available int) string {
 	}
 	text := strings.TrimSpace(m.transientStatus)
 	kind := m.transientStatusKind
-	if text == "" && m.activity == uiActivityInterrupted {
-		text = "interrupted"
-		kind = uiStatusNoticeNeutral
-	}
 	if text == "" && strings.TrimSpace(m.worktrees.visibleErrorText()) == "" {
 		text = strings.TrimSpace(m.runtimeDisconnectStatusText())
 		kind = uiStatusNoticeError
@@ -196,7 +250,7 @@ func (l uiViewLayout) renderReasoningStatus(available int) string {
 	}
 	if text := strings.TrimSpace(l.model.reasoningStatusHeader); text != "" {
 		text = truncateQueuedMessageLine(text, available)
-		return statusNoticeStyle(l.model.theme, uiStatusNoticeNeutral).Render(text)
+		return statusNoticeStyle(l.model.theme, uiStatusNoticeInfo).Render(text)
 	}
 	return ""
 }
@@ -220,15 +274,15 @@ func (l uiViewLayout) shouldRenderHelpHint() bool {
 }
 
 func statusNoticeStyle(theme string, kind uiStatusNoticeKind) lipgloss.Style {
-	palette := uiPalette(theme)
-	color := palette.primary
+	palette := sharedtheme.ResolvePalette(theme)
+	color := palette.App.Primary.Lipgloss()
 	switch kind {
 	case uiStatusNoticeSuccess:
-		color = palette.secondary
-	case uiStatusNoticeUpdateAvailable:
-		color = sharedtheme.DefaultPalette().Status.Success.Adaptive()
+		color = palette.Status.Success.Lipgloss()
+	case uiStatusNoticeWarning:
+		color = palette.Status.Warning.Lipgloss()
 	case uiStatusNoticeError:
-		color = sharedtheme.DefaultPalette().Status.Error.Adaptive()
+		color = palette.Status.Error.Lipgloss()
 	}
 	return lipgloss.NewStyle().Foreground(color).Bold(true)
 }

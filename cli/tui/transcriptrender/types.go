@@ -33,6 +33,7 @@ const (
 	StyleRoleNoticeForegroundFaint
 	StyleRoleNoticePrimary
 	StyleRoleNoticeSecondary
+	StyleRoleNoticeReviewer
 	StyleRoleWarning
 	StyleRoleError
 )
@@ -63,7 +64,8 @@ func ColorRoleForStyle(role StyleRole) ColorRole {
 		StyleRoleToolQuestion,
 		StyleRoleToolWebSearch,
 		StyleRoleNoticeForeground,
-		StyleRoleNoticeForegroundFaint:
+		StyleRoleNoticeForegroundFaint,
+		StyleRoleNoticeReviewer:
 		return ColorRoleForeground
 	case StyleRoleNoticePrimary:
 		return ColorRolePrimary

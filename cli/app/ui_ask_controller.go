@@ -152,7 +152,7 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.activity = uiActivityInterrupted
 		}
-		return m, interruptCmd
+		return m, tea.Batch(interruptCmd, m.interruptedStatusNoticeCmd())
 	case tea.KeyEsc:
 		hasNext := c.answer(clientui.PromptAnswer{}, errors.New("question canceled"))
 		if hasNext {

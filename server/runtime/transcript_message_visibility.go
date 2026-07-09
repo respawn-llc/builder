@@ -22,6 +22,16 @@ func visibleUserTranscriptEntry(msg llm.Message) (ChatEntry, bool) {
 
 func visibleDeveloperChatEntry(msg llm.Message) (ChatEntry, bool) {
 	if strings.TrimSpace(msg.Content) == "" {
+		if isUnknownDeveloperMessageType(msg.MessageType) {
+			return ChatEntry{
+				Visibility:   transcript.EntryVisibilityDetail,
+				Role:         string(transcript.EntryRoleDeveloperContext),
+				Text:         "empty developer message",
+				MessageType:  msg.MessageType,
+				SourcePath:   strings.TrimSpace(msg.SourcePath),
+				CompactLabel: compactLabelForMessage(msg),
+			}, true
+		}
 		return ChatEntry{}, false
 	}
 	switch msg.MessageType {
@@ -54,6 +64,36 @@ func visibleDeveloperChatEntry(msg llm.Message) (ChatEntry, bool) {
 		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleManualCompactionCarryover), Text: msg.Content, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg)}, true
 	default:
 		return developerContextEntry(msg, messageTypeTranscriptVisibility(msg.MessageType)), true
+	}
+}
+
+func isUnknownDeveloperMessageType(messageType llm.MessageType) bool {
+	if strings.TrimSpace(string(messageType)) == "" {
+		return false
+	}
+	switch messageType {
+	case llm.MessageTypeAgentsMD,
+		llm.MessageTypeSkills,
+		llm.MessageTypeSubagents,
+		llm.MessageTypeEnvironment,
+		llm.MessageTypeCompactionSummary,
+		llm.MessageTypeInterruption,
+		llm.MessageTypeErrorFeedback,
+		llm.MessageTypeCompactionSoonReminder,
+		llm.MessageTypeHandoffFutureMessage,
+		llm.MessageTypeReviewerFeedback,
+		llm.MessageTypeBackgroundNotice,
+		llm.MessageTypeCustomToolCallOutput,
+		llm.MessageTypeManualCompactionCarryover,
+		llm.MessageTypeHeadlessMode,
+		llm.MessageTypeHeadlessModeExit,
+		llm.MessageTypeWorkflowMode,
+		llm.MessageTypeWorktreeMode,
+		llm.MessageTypeWorktreeModeExit,
+		llm.MessageTypeGoal:
+		return false
+	default:
+		return true
 	}
 }
 

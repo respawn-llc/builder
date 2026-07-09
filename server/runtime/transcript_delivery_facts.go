@@ -173,7 +173,13 @@ func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID
 		}
 		return []TranscriptCommittedRowFact{toolMessageRowFact(msg, completions)}
 	case llm.RoleDeveloper:
-		if strings.TrimSpace(msg.Content) == "" || msg.MessageType == llm.MessageTypeReviewerFeedback {
+		if msg.MessageType == llm.MessageTypeReviewerFeedback {
+			return nil
+		}
+		if strings.TrimSpace(msg.Content) == "" {
+			if isUnknownDeveloperMessageType(msg.MessageType) {
+				return []TranscriptCommittedRowFact{emptyDeveloperMessageDiagnosticFact(msg)}
+			}
 			return nil
 		}
 		return []TranscriptCommittedRowFact{runtimeNoticeFactFromMessage(msg, transcript.NoticeSeverityInfo)}
@@ -352,16 +358,34 @@ func runtimeNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedRowFact
 		noticeIDPtr = &noticeID
 	}
 	detail := firstNonEmpty(entry.Text, entry.CondensedText, entry.CompactLabel, entry.ToolResultSummary)
+	messageType := entry.MessageType
+	role := strings.TrimSpace(entry.Role)
+	if transcript.IsReviewerEntryRole(role) {
+		messageType = llm.MessageTypeReviewerFeedback
+	}
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: normalizeRuntimeEntryVisibility(entry.Visibility), Notice: &TranscriptNoticeRowFact{
 		Reason:           transcript.NoticeReasonRuntimeDiagnostic,
 		Severity:         transcript.LegacyNoticeSeverityForRole(entry.Role),
 		NoticeID:         noticeIDPtr,
-		MessageType:      entry.MessageType,
+		MessageType:      messageType,
 		SourcePath:       strings.TrimSpace(entry.SourcePath),
 		CondensedText:    strings.TrimSpace(entry.CondensedText),
 		CompactLabel:     strings.TrimSpace(entry.CompactLabel),
-		DiagnosticCode:   strings.TrimSpace(entry.Role),
+		DiagnosticCode:   role,
 		DiagnosticDetail: detail,
+	}}
+}
+
+func emptyDeveloperMessageDiagnosticFact(msg llm.Message) TranscriptCommittedRowFact {
+	code := strings.TrimSpace(string(msg.MessageType))
+	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: transcript.EntryVisibilityDetail, Notice: &TranscriptNoticeRowFact{
+		Reason:           transcript.NoticeReasonRuntimeDiagnostic,
+		Severity:         transcript.NoticeSeverityInfo,
+		MessageType:      msg.MessageType,
+		SourcePath:       strings.TrimSpace(msg.SourcePath),
+		CompactLabel:     compactLabelForMessage(msg),
+		DiagnosticCode:   code,
+		DiagnosticDetail: "empty developer message",
 	}}
 }
 

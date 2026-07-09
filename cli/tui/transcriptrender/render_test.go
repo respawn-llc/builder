@@ -491,6 +491,31 @@ func TestUserAssistantCompactTextToggleBetweenCollapsedAndExpanded(t *testing.T)
 	}
 }
 
+func TestReviewerNoticeRendersReviewerGlyph(t *testing.T) {
+	row := clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityOngoingCollapsed,
+		Kind:       clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Severity: clientui.TranscriptNoticeInfo,
+			Data: clientui.TranscriptNoticeData{
+				MessageType:  clientui.MessageTypeReviewerFeedback,
+				CompactLabel: "Reviewer made 1 suggestion.",
+			},
+			Diagnostic: &clientui.TranscriptDiagnosticData{Code: string(transcript.EntryRoleReviewerSuggestions)},
+		},
+	}
+
+	for _, mode := range []Mode{ModeOngoingCollapsed, ModeDetailCollapsed, ModeDetailExpanded} {
+		rendered := RenderCommittedRow(row, 80, "", mode)
+		if len(rendered.Lines) != 1 {
+			t.Fatalf("mode %v rendered lines = %d, want 1", mode, len(rendered.Lines))
+		}
+		if got := rendered.Lines[0].Plain(); !strings.HasPrefix(got, "§ ") {
+			t.Fatalf("mode %v reviewer line = %q, want reviewer glyph", mode, got)
+		}
+	}
+}
+
 func toolRow(name string, presentation clientui.ToolPresentationKind, text string, isError bool) clientui.TranscriptCommittedRow {
 	return clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowTool,

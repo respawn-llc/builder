@@ -224,7 +224,7 @@ func (m *uiModel) setDebugKeyTransientStatus(raw tea.Msg, normalized tea.KeyMsg,
 	}
 	m.transientStatusToken++
 	m.transientStatus = fmt.Sprintf("key src=%s raw=%q norm=%q type=%d", source, rawString, normalized.String(), normalized.Type)
-	m.transientStatusKind = uiStatusNoticeNeutral
+	m.transientStatusKind = uiStatusNoticeInfo
 }
 
 func statusHasAuthData(snapshot uiStatusSnapshot) bool {
@@ -358,15 +358,12 @@ func (m *uiModel) showTransientStatusNotice(notice uiStatusNotice) tea.Cmd {
 	m.transientStatus = strings.TrimSpace(notice.Text)
 	m.transientStatusKind = notice.Kind
 	m.transientStatusNoticeID = strings.TrimSpace(notice.NoticeID)
-	if notice.Kind == uiStatusNoticeUpdateAvailable {
-		m.startupUpdateShown = true
-	}
 	return scheduleTransientStatusClear(notice.Duration, token)
 }
 
 func (m *uiModel) advanceTransientStatusQueue() tea.Cmd {
 	m.transientStatus = ""
-	m.transientStatusKind = uiStatusNoticeNeutral
+	m.transientStatusKind = uiStatusNoticeInfo
 	m.transientStatusNoticeID = ""
 	if len(m.transientStatusQueue) == 0 {
 		m.layout().syncViewport()

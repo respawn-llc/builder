@@ -552,12 +552,12 @@ func clipboardImagePasteStatus(err error) (string, uiStatusNoticeKind) {
 	var pasteErr *uiClipboardPasteError
 	if errors.As(err, &pasteErr) {
 		if pasteErr.Kind == uiClipboardPasteErrorNoImage {
-			return pasteErr.Message, uiStatusNoticeNeutral
+			return pasteErr.Message, uiStatusNoticeInfo
 		}
 		return pasteErr.Message, uiStatusNoticeError
 	}
 	if err == nil {
-		return "", uiStatusNoticeNeutral
+		return "", uiStatusNoticeInfo
 	}
 	return "Clipboard image paste failed", uiStatusNoticeError
 }
@@ -568,7 +568,7 @@ func clipboardTextCopyStatus(err error) (string, uiStatusNoticeKind) {
 		return copyErr.Message, uiStatusNoticeError
 	}
 	if err == nil {
-		return "", uiStatusNoticeNeutral
+		return "", uiStatusNoticeInfo
 	}
 	return "Clipboard copy failed", uiStatusNoticeError
 }

@@ -99,7 +99,8 @@ func (r uiNoticeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, nil)
 		}
-		cmd := m.sendTransientStatusWithNoticeID("update available: "+strings.TrimSpace(msg.version), uiStatusNoticeUpdateAvailable, updateNoticeDuration, uiStatusNoticeQueue, "")
+		m.startupUpdateShown = true
+		cmd := m.sendTransientStatusWithNoticeID("update available: "+strings.TrimSpace(msg.version), uiStatusNoticeSuccess, updateNoticeDuration, uiStatusNoticeQueue, "")
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
 	}

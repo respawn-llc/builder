@@ -1148,6 +1148,10 @@ func TestTranscriptDeliverySnapshotHydratesLocalEntriesAsLiveTypedFacts(t *testi
 	if len(snapshot.Rows) != 1 || snapshot.Rows[0].Notice == nil || snapshot.Rows[0].Notice.Reason != "runtime_diagnostic" {
 		t.Fatalf("hydrated rows = %+v, want typed runtime diagnostic notice", snapshot.Rows)
 	}
+	notice := snapshot.Rows[0].Notice
+	if notice.MessageType != llm.MessageTypeReviewerFeedback || notice.DiagnosticCode != string(transcript.EntryRoleReviewerStatus) {
+		t.Fatalf("hydrated reviewer notice = %+v, want reviewer metadata", notice)
+	}
 }
 
 func TestTranscriptDeliverySnapshotFossilizesOnlyUntypedLocalEntries(t *testing.T) {

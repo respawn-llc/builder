@@ -46,7 +46,7 @@ func (r uiRuntimeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, waitRuntimeConnectionStateChange(m.runtimeConnectionEvents))
 	case runtimeReconnectWarningMsg:
-		cmd := m.sendTransientStatusWithNoticeID(msg.text, uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, "")
+		cmd := m.sendTransientStatusWithNoticeID(msg.text, uiStatusNoticeWarning, transientStatusDuration, uiStatusNoticeReplace, "")
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, sequenceCmds(cmd, waitRuntimeReconnectWarning(m.runtimeReconnectWarning)))
 	case runtimeMainViewRefreshedMsg:

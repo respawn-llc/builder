@@ -259,7 +259,7 @@ func (c uiInputController) handleSupervisorModeCommand(requested string) (tea.Mo
 	m.reviewerMode = nextMode
 	m.reviewerEnabled = nextMode != "off"
 	status := serverapi.ReviewerToggleStatusMessage(m.reviewerEnabled, nextMode, changed)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeNeutral)
+	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
 }
 
 func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, tea.Cmd) {
@@ -289,7 +289,7 @@ func (c uiInputController) handleQuestionsCommand(requested string) (tea.Model, 
 	}
 	m.questionsEnabled = nextEnabled
 	status := serverapi.QuestionsToggleStatusMessage(nextEnabled, changed)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeNeutral)
+	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
 }
 
 func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Model, tea.Cmd) {
@@ -328,5 +328,5 @@ func (c uiInputController) handleAutoCompactionCommand(requested string) (tea.Mo
 	}
 	m.autoCompactionEnabled = nextEnabled
 	status := serverapi.AutoCompactionToggleStatusMessage(nextEnabled, changed, currentCompactionMode)
-	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeNeutral)
+	return m, c.appendSystemFeedbackWithMirroredStatus(status, uiStatusNoticeInfo)
 }
