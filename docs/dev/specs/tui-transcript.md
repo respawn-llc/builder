@@ -78,6 +78,7 @@
 - Locked message-type visibility:
 - `agents.md`: `D`
 - `skills`: `D`
+- `subagents`: `D`
 - `environment`: `D`
 - `compaction_summary`: `O`, using compact label in ongoing/collapsed detail and full summary on expansion.
 - `interruption`: `O`
@@ -85,10 +86,15 @@
 - `compaction_soon_reminder`: `D`
 - `reviewer_feedback`: represented by reviewer transcript roles, effective `OC` or `O` depending on reviewer verbosity.
 - `background_notice`: `OC`
+- `custom_tool_call_output`: follows the tool call/result row it belongs to.
 - `handoff_future_message`: `D`
 - `manual_compaction_carryover`: `D`
 - `headless_mode`: `D`
 - `headless_mode_exit`: `D`
+- `workflow_mode`: `OC`
+- `worktree_mode`: `O`
+- `worktree_mode_exit`: `O`
+- `goal`: `O`
 - Locked non-message roles:
 - user turns: `O`
 - assistant turns: `O`
@@ -107,8 +113,18 @@
 - Semantic color tokens are centralized in `shared/theme`.
 - Syntax-highlighted output must not emit backgrounds unless explicitly intended, such as diff add/remove decoration.
 - Formatted text uses app foreground as base text color.
-- Patch/edit tools use `⇄` in ongoing, detail, and native replay, inheriting result-state color.
-- Detail shell commands use full syntax color. Ongoing shell commands are subdued.
+- User and assistant rows use foreground text plus Markdown styling.
+- Shell tool calls use shell syntax-highlighted foreground text. Shell syntax color selection is OS-dependent.
+- Non-shell tool calls use foreground text with no syntax highlighting.
+- Patch/edit tools use `⇄` in ongoing, detail, and native replay. Patch paths and neutral text use foreground; diff add/remove counts use semantic add/remove colors.
+- Compaction-related rows use secondary text.
+- Goal-related rows use primary text.
+- Workflow-related rows use primary text and `OC` visibility.
+- Worktree rows use foreground text.
+- `subagents` developer-context rows use foreground text.
+- Cache warnings and non-interrupting warnings use warning text.
+- Error rows use error text, including interruption rows.
+- Background shell completion notices use foreground text and remain separate from shell tool call/result rows.
 - No timestamps are shown in UI.
 - Streaming paint cadence is 16ms with token coalescing per flush tick.
 - Main status line is compact and fixed: activity indicator, optional git branch, model label, process metadata, transient warning, and right-aligned context meter. Composition, priority, and notice semantics are owned by tui-status-line.md.

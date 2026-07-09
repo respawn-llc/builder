@@ -175,6 +175,44 @@ func TestDetailChatEntryNoticeMapsLegacySeverityRoles(t *testing.T) {
 	}
 }
 
+func TestWorkflowModeChatEntryRendersCollapsedOngoingAndExpandedDetail(t *testing.T) {
+	row, ok := detailRowFromChatEntry(clientui.ChatEntry{
+		Visibility:    clientui.EntryVisibilityOngoingCollapsed,
+		Role:          "developer_context",
+		Text:          "full workflow instructions\nwith second line",
+		CondensedText: "workflow compact",
+		MessageType:   clientui.MessageTypeWorkflowMode,
+	})
+	if !ok {
+		t.Fatal("workflow chat entry was dropped")
+	}
+	if row.Visibility != clientui.EntryVisibilityOngoingCollapsed || row.Kind != clientui.TranscriptRowNotice || row.Notice == nil {
+		t.Fatalf("workflow row = %#v, want ongoing-collapsed notice", row)
+	}
+
+	ongoing := transcriptrender.RenderCommittedRow(row, 80, "", transcriptrender.ModeOngoingCollapsed)
+	if len(ongoing.Lines) != 1 {
+		t.Fatalf("ongoing workflow lines = %d, want compact single line", len(ongoing.Lines))
+	}
+	if got, want := ongoing.Lines[0].Plain(), "ℹ workflow compact"; got != want {
+		t.Fatalf("ongoing workflow line = %q, want %q", got, want)
+	}
+	if len(ongoing.Lines[0].Spans) < 3 || ongoing.Lines[0].Spans[2].Role != transcriptrender.StyleRoleNoticePrimary {
+		t.Fatalf("ongoing workflow spans = %+v, want primary notice body", ongoing.Lines[0].Spans)
+	}
+
+	detail := transcriptrender.RenderCommittedRow(row, 80, "", transcriptrender.ModeDetailExpanded)
+	if len(detail.Lines) != 2 {
+		t.Fatalf("detail workflow lines = %d, want full body lines", len(detail.Lines))
+	}
+	if got, want := detail.Lines[0].Plain(), "ℹ full workflow instructions"; got != want {
+		t.Fatalf("detail workflow first line = %q, want %q", got, want)
+	}
+	if got, want := detail.Lines[1].Plain(), "└ with second line"; got != want {
+		t.Fatalf("detail workflow continuation = %q, want %q", got, want)
+	}
+}
+
 func TestDetailChatEntryToolCallRendersAsToolRow(t *testing.T) {
 	row, ok := detailRowFromChatEntry(clientui.ChatEntry{
 		Role:       "tool_call",

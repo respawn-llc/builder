@@ -16,24 +16,25 @@ import (
 func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 	legacy := "neutral notice"
 	cases := []struct {
-		name     string
-		row      clientui.TranscriptCommittedRow
-		want     string
-		wantRole StyleRole
+		name      string
+		row       clientui.TranscriptCommittedRow
+		want      string
+		wantRole  StyleRole
+		wantColor ColorRole
 	}{
-		{name: "user", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "hello"}}, want: "❯ hello", wantRole: StyleRoleUser},
-		{name: "model", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "answer"}}, want: "❮ answer", wantRole: StyleRoleAssistant},
-		{name: "warning", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeWarning, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "⚠ neutral notice", wantRole: StyleRoleWarning},
-		{name: "error", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeError, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "! neutral notice", wantRole: StyleRoleError},
-		{name: "notice", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeInfo, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "ℹ neutral notice", wantRole: StyleRoleNotice},
-		{name: "shell", row: toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false), want: "$ go test ./...", wantRole: StyleRoleToolShell},
-		{name: "ask_question", row: toolRow("ask_question", clientui.ToolPresentationAskQuestion, "Pick one", false), want: "? Pick one", wantRole: StyleRoleToolQuestion},
-		{name: "web_search", row: toolRow("web_search", clientui.ToolPresentationDefault, "query", false), want: "@ query", wantRole: StyleRoleToolWebSearch},
-		{name: "custom", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false), want: "• custom preview", wantRole: StyleRoleTool},
-		{name: "workflow_completion", row: toolRow("workflow_completion", clientui.ToolPresentationDefault, "workflow done", false), want: "• workflow done", wantRole: StyleRoleTool},
-		{name: "view_image", row: toolRow("view_image", clientui.ToolPresentationDefault, "image.png", false), want: "• image.png", wantRole: StyleRoleTool},
-		{name: "trigger_handoff", row: toolRow("trigger_handoff", clientui.ToolPresentationDefault, "handoff", false), want: "• handoff", wantRole: StyleRoleTool},
-		{name: "tool_error", row: toolRow("exec_command", clientui.ToolPresentationShell, "failed", true), want: "! failed", wantRole: StyleRoleToolError},
+		{name: "user", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "hello"}}, want: "❯ hello", wantRole: StyleRoleUser, wantColor: ColorRoleForeground},
+		{name: "model", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "answer"}}, want: "❮ answer", wantRole: StyleRoleAssistant, wantColor: ColorRoleForeground},
+		{name: "warning", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeWarning, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "⚠ neutral notice", wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
+		{name: "error", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeError, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "! neutral notice", wantRole: StyleRoleError, wantColor: ColorRoleError},
+		{name: "notice", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeInfo, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "ℹ neutral notice", wantRole: StyleRoleNotice, wantColor: ColorRoleSubdued},
+		{name: "shell", row: toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false), want: "$ go test ./...", wantRole: StyleRoleToolShell, wantColor: ColorRoleForeground},
+		{name: "ask_question", row: toolRow("ask_question", clientui.ToolPresentationAskQuestion, "Pick one", false), want: "? Pick one", wantRole: StyleRoleToolQuestion, wantColor: ColorRoleForeground},
+		{name: "web_search", row: toolRow("web_search", clientui.ToolPresentationDefault, "query", false), want: "@ query", wantRole: StyleRoleToolWebSearch, wantColor: ColorRoleForeground},
+		{name: "custom", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false), want: "• custom preview", wantRole: StyleRoleTool, wantColor: ColorRoleForeground},
+		{name: "workflow_completion", row: toolRow("workflow_completion", clientui.ToolPresentationDefault, "workflow done", false), want: "• workflow done", wantRole: StyleRoleTool, wantColor: ColorRoleForeground},
+		{name: "view_image", row: toolRow("view_image", clientui.ToolPresentationDefault, "image.png", false), want: "• image.png", wantRole: StyleRoleTool, wantColor: ColorRoleForeground},
+		{name: "trigger_handoff", row: toolRow("trigger_handoff", clientui.ToolPresentationDefault, "handoff", false), want: "• handoff", wantRole: StyleRoleTool, wantColor: ColorRoleForeground},
+		{name: "tool_error", row: toolRow("exec_command", clientui.ToolPresentationShell, "failed", true), want: "! failed", wantRole: StyleRoleToolError, wantColor: ColorRoleError},
 	}
 
 	for _, tt := range cases {
@@ -48,6 +49,55 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 			}
 			if len(line.Spans) < 3 || line.Spans[0].Role != tt.wantRole || line.Spans[2].Role != tt.wantRole {
 				t.Fatalf("line has invalid style spans: %+v", line.Spans)
+			}
+			if got := ColorRoleForStyle(tt.wantRole); got != tt.wantColor {
+				t.Fatalf("style role color = %v, want %v", got, tt.wantColor)
+			}
+		})
+	}
+}
+
+func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
+	cases := []struct {
+		name        string
+		messageType clientui.MessageType
+		reason      clientui.TranscriptNoticeReason
+		severity    clientui.TranscriptNoticeSeverity
+		wantRole    StyleRole
+		wantColor   ColorRole
+	}{
+		{name: "compaction summary", messageType: clientui.MessageTypeCompactionSummary, wantRole: StyleRoleNoticeSecondary, wantColor: ColorRoleSecondary},
+		{name: "handoff future message", messageType: clientui.MessageTypeHandoffFutureMessage, wantRole: StyleRoleNoticeSecondary, wantColor: ColorRoleSecondary},
+		{name: "manual compaction carryover", messageType: clientui.MessageTypeManualCompactionCarryover, wantRole: StyleRoleNoticeSecondary, wantColor: ColorRoleSecondary},
+		{name: "goal", messageType: clientui.MessageTypeGoal, wantRole: StyleRoleNoticePrimary, wantColor: ColorRolePrimary},
+		{name: "workflow", messageType: clientui.MessageTypeWorkflowMode, wantRole: StyleRoleNoticePrimary, wantColor: ColorRolePrimary},
+		{name: "worktree enter", messageType: clientui.MessageTypeWorktreeMode, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
+		{name: "worktree exit", messageType: clientui.MessageTypeWorktreeModeExit, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
+		{name: "background shell completion", messageType: clientui.MessageTypeBackgroundNotice, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
+		{name: "subagents", messageType: clientui.MessageTypeSubagents, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
+		{name: "cache warning", reason: clientui.TranscriptNoticeCacheWarning, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
+		{name: "compaction reminder", messageType: clientui.MessageTypeCompactionSoonReminder, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
+		{name: "interruption", messageType: clientui.MessageTypeInterruption, wantRole: StyleRoleError, wantColor: ColorRoleError},
+		{name: "error feedback", messageType: clientui.MessageTypeErrorFeedback, wantRole: StyleRoleError, wantColor: ColorRoleError},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			notice := &clientui.TranscriptNoticeRow{
+				Reason:   tt.reason,
+				Severity: tt.severity,
+				Data: clientui.TranscriptNoticeData{
+					MessageType:  tt.messageType,
+					CompactLabel: "compact label",
+				},
+			}
+
+			gotRole, _ := noticeRoleAndText(notice, clientui.EntryVisibilityOngoing, ModeOngoing)
+			if gotRole != tt.wantRole {
+				t.Fatalf("notice role = %v, want %v", gotRole, tt.wantRole)
+			}
+			if gotColor := ColorRoleForStyle(gotRole); gotColor != tt.wantColor {
+				t.Fatalf("notice color role = %v, want %v", gotColor, tt.wantColor)
 			}
 		})
 	}

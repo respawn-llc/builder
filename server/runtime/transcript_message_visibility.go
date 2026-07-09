@@ -80,10 +80,11 @@ func messageTypeTranscriptVisibility(messageType llm.MessageType) transcript.Ent
 		llm.MessageTypeHandoffFutureMessage,
 		llm.MessageTypeManualCompactionCarryover,
 		llm.MessageTypeHeadlessMode,
-		llm.MessageTypeHeadlessModeExit,
-		llm.MessageTypeWorkflowMode:
+		llm.MessageTypeHeadlessModeExit:
 		return transcript.EntryVisibilityDetail
 	case llm.MessageTypeBackgroundNotice:
+		return transcript.EntryVisibilityOngoingCollapsed
+	case llm.MessageTypeWorkflowMode:
 		return transcript.EntryVisibilityOngoingCollapsed
 	case llm.MessageTypeCompactionSummary,
 		llm.MessageTypeInterruption,

@@ -45,6 +45,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		expectedFaintDividerCount int
 		expectedStyledAppends     []styledAppendExpectation
 		expectedStyledWrites      []styledAppendExpectation
+		forbiddenStyledWrites     []styledAppendExpectation
 		expectedStyledRows        []styledRowExpectation
 		allowDuplicateAppends     bool
 		allowsAltScroll           bool
@@ -204,7 +205,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedStyledAppends: []styledAppendExpectation{
 				{Text: rightPad("stream slash live", 80), Foreground: markdownTerminalForeground},
 			},
-			expectedStyledWrites: []styledAppendExpectation{
+			forbiddenStyledWrites: []styledAppendExpectation{
 				{Text: rightPad("Server: owned by this CLI", 80), Foreground: defaultTerminalForeground},
 			},
 		},
@@ -349,6 +350,15 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				for _, expected := range tc.expectedStyledWrites {
 					if err := styledContentAppendedAtLeastOnce(styledWrites, expected); err != nil {
 						t.Fatalf("expected styled full-window write: %v", err)
+					}
+				}
+			}
+			if len(tc.forbiddenStyledWrites) > 0 {
+				rawWrites := allScenarioRawWrites(analysis, window)
+				styledWrites := coalesceStyledAppendRuns(rawWrites)
+				for _, forbidden := range tc.forbiddenStyledWrites {
+					if err := contentNotAppended(styledWrites, forbidden.Text); err != nil {
+						t.Fatalf("forbidden styled full-window write: %v", err)
 					}
 				}
 			}

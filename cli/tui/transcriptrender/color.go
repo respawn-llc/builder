@@ -5,6 +5,12 @@ import "core/shared/theme"
 func ColorForRole(role ColorRole, themeName string) theme.Color {
 	tokens := theme.ResolvePalette(themeName)
 	switch role {
+	case ColorRoleForeground:
+		return tokens.Transcript.Foreground
+	case ColorRolePrimary:
+		return tokens.App.Primary
+	case ColorRoleSecondary:
+		return tokens.App.Secondary
 	case ColorRoleUser:
 		return tokens.Transcript.User
 	case ColorRoleAssistant:

@@ -661,7 +661,7 @@ func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
 
 	lines := strings.Split(ansi.Strip(updated.View()), "\n")
 	statusLine := lines[len(lines)-1]
-	if want := statusStateCircleGlyph + statusLineSpinnerSeparator + "gpt-5 · detail-mode-v2"; !strings.HasPrefix(statusLine, want) {
+	if want := statusStateCircleGlyph + statusLineSpinnerSeparator + "detail-mode-v2 · gpt-5"; !strings.HasPrefix(statusLine, want) {
 		t.Fatalf("detail status line prefix = %q, want prefix %q", statusLine, want)
 	}
 	if strings.Contains(statusLine, statusStateCircleGlyph+statusLineSpinnerSeparator+"ongoing"+statusLineSeparator) ||

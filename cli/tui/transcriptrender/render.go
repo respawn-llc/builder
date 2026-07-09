@@ -353,7 +353,7 @@ func roleSymbol(role StyleRole) string {
 		symbol = "?"
 	case StyleRoleToolWebSearch:
 		symbol = "@"
-	case StyleRoleNotice:
+	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticePrimary, StyleRoleNoticeSecondary:
 		symbol = "ℹ"
 	case StyleRoleWarning:
 		symbol = "⚠"
@@ -380,13 +380,37 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row.Diagnostic != nil && (mode == ModeDetailExpanded || typedCompactText == "") {
 		text = firstNonEmpty(row.Diagnostic.Detail, row.Diagnostic.Code, text)
 	}
-	switch row.Severity {
-	case clientui.TranscriptNoticeWarning:
-		return StyleRoleWarning, text
-	case clientui.TranscriptNoticeError:
-		return StyleRoleError, text
+	return noticeStyleRole(row), text
+}
+
+func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
+	if row == nil {
+		return StyleRoleNotice
+	}
+	if row.Severity == clientui.TranscriptNoticeError {
+		return StyleRoleError
+	}
+	if row.Severity == clientui.TranscriptNoticeWarning || row.Reason == clientui.TranscriptNoticeCacheWarning {
+		return StyleRoleWarning
+	}
+	switch row.Data.MessageType {
+	case clientui.MessageTypeInterruption, clientui.MessageTypeErrorFeedback:
+		return StyleRoleError
+	case clientui.MessageTypeCompactionSoonReminder:
+		return StyleRoleWarning
+	case clientui.MessageTypeCompactionSummary,
+		clientui.MessageTypeHandoffFutureMessage,
+		clientui.MessageTypeManualCompactionCarryover:
+		return StyleRoleNoticeSecondary
+	case clientui.MessageTypeGoal, clientui.MessageTypeWorkflowMode:
+		return StyleRoleNoticePrimary
+	case clientui.MessageTypeWorktreeMode,
+		clientui.MessageTypeWorktreeModeExit,
+		clientui.MessageTypeBackgroundNotice,
+		clientui.MessageTypeSubagents:
+		return StyleRoleNoticeForeground
 	default:
-		return StyleRoleNotice, text
+		return StyleRoleNotice
 	}
 }
 
@@ -440,7 +464,7 @@ func labelForRole(role StyleRole) string {
 		return "user"
 	case StyleRoleAssistant:
 		return "assistant"
-	case StyleRoleNotice:
+	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticePrimary, StyleRoleNoticeSecondary:
 		return "notice"
 	default:
 		return "tool call"

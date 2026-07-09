@@ -168,28 +168,10 @@ func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID
 		}
 		return out
 	case llm.RoleTool:
-		callID := strings.TrimSpace(msg.ToolCallID)
-		result := tools.Result{
-			CallID: callID,
-			Name:   toolspecIDFromString(msg.Name),
-			Output: json.RawMessage(msg.Content),
+		if msg.MessageType == llm.MessageTypeCustomToolCallOutput {
+			return []TranscriptCommittedRowFact{customToolCallOutputRowFact(msg, completions)}
 		}
-		if completion, ok := completions[callID]; ok {
-			if result.Name == "" {
-				result.Name = completion.Name
-			}
-			if strings.TrimSpace(msg.Content) == "" && len(completion.Output) > 0 {
-				result.Output = completion.Output
-			}
-			result.IsError = completion.IsError
-			result.Summary = completion.Summary
-			result.CondensedText = completion.CondensedText
-			result.Presentation = completion.Presentation
-		}
-		if result.Name == "" {
-			result.Name = "tool"
-		}
-		return []TranscriptCommittedRowFact{transcriptToolRowFactFromResult(result)}
+		return []TranscriptCommittedRowFact{toolMessageRowFact(msg, completions)}
 	case llm.RoleDeveloper:
 		if strings.TrimSpace(msg.Content) == "" || msg.MessageType == llm.MessageTypeReviewerFeedback {
 			return nil
@@ -198,6 +180,35 @@ func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID
 	default:
 		return nil
 	}
+}
+
+func customToolCallOutputRowFact(msg llm.Message, completions map[string]tools.Result) TranscriptCommittedRowFact {
+	return toolMessageRowFact(msg, completions)
+}
+
+func toolMessageRowFact(msg llm.Message, completions map[string]tools.Result) TranscriptCommittedRowFact {
+	callID := strings.TrimSpace(msg.ToolCallID)
+	result := tools.Result{
+		CallID: callID,
+		Name:   toolspecIDFromString(msg.Name),
+		Output: json.RawMessage(msg.Content),
+	}
+	if completion, ok := completions[callID]; ok {
+		if result.Name == "" {
+			result.Name = completion.Name
+		}
+		if strings.TrimSpace(msg.Content) == "" && len(completion.Output) > 0 {
+			result.Output = completion.Output
+		}
+		result.IsError = completion.IsError
+		result.Summary = completion.Summary
+		result.CondensedText = completion.CondensedText
+		result.Presentation = completion.Presentation
+	}
+	if result.Name == "" {
+		result.Name = "tool"
+	}
+	return transcriptToolRowFactFromResult(result)
 }
 
 func transcriptCommittedEntryCountFromMessage(msg llm.Message, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) int {

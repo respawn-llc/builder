@@ -29,6 +29,9 @@ const (
 	StyleRoleToolQuestion
 	StyleRoleToolWebSearch
 	StyleRoleNotice
+	StyleRoleNoticeForeground
+	StyleRoleNoticePrimary
+	StyleRoleNoticeSecondary
 	StyleRoleWarning
 	StyleRoleError
 )
@@ -36,7 +39,10 @@ const (
 type ColorRole uint8
 
 const (
-	ColorRoleUser ColorRole = iota
+	ColorRoleForeground ColorRole = iota
+	ColorRolePrimary
+	ColorRoleSecondary
+	ColorRoleUser
 	ColorRoleAssistant
 	ColorRoleTool
 	ColorRoleToolSuccess
@@ -48,14 +54,23 @@ const (
 
 func ColorRoleForStyle(role StyleRole) ColorRole {
 	switch role {
-	case StyleRoleUser, StyleRoleToolQuestion:
-		return ColorRoleUser
-	case StyleRoleAssistant:
-		return ColorRoleAssistant
+	case StyleRoleUser,
+		StyleRoleAssistant,
+		StyleRoleTool,
+		StyleRoleToolShell,
+		StyleRoleToolPatch,
+		StyleRoleToolQuestion,
+		StyleRoleToolWebSearch,
+		StyleRoleNoticeForeground:
+		return ColorRoleForeground
+	case StyleRoleNoticePrimary:
+		return ColorRolePrimary
+	case StyleRoleNoticeSecondary:
+		return ColorRoleSecondary
 	case StyleRoleToolSuccess:
 		return ColorRoleToolSuccess
 	case StyleRoleToolError:
-		return ColorRoleToolError
+		return ColorRoleError
 	case StyleRoleWarning:
 		return ColorRoleWarning
 	case StyleRoleError:

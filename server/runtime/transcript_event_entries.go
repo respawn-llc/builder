@@ -25,16 +25,11 @@ func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
 			entries = append(entries, formatPersistedToolCall(call))
 		}
 	case llm.RoleTool:
-		callID := strings.TrimSpace(msg.ToolCallID)
-		result := tools.Result{
-			CallID: callID,
-			Name:   toolspec.ID(strings.TrimSpace(msg.Name)),
-			Output: []byte(msg.Content),
+		if msg.MessageType == llm.MessageTypeCustomToolCallOutput {
+			entries = append(entries, customToolCallOutputChatEntry(msg))
+		} else {
+			entries = append(entries, toolMessageChatEntry(msg))
 		}
-		if result.Name == "" {
-			result.Name = toolspec.ID("tool")
-		}
-		entries = append(entries, toolResultChatEntry(result))
 	case llm.RoleDeveloper:
 		if entry, ok := visibleDeveloperChatEntry(msg); ok {
 			entries = append(entries, entry)
@@ -109,6 +104,23 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 	default:
 		return nil
 	}
+}
+
+func customToolCallOutputChatEntry(msg llm.Message) ChatEntry {
+	return toolMessageChatEntry(msg)
+}
+
+func toolMessageChatEntry(msg llm.Message) ChatEntry {
+	callID := strings.TrimSpace(msg.ToolCallID)
+	result := tools.Result{
+		CallID: callID,
+		Name:   toolspec.ID(strings.TrimSpace(msg.Name)),
+		Output: []byte(msg.Content),
+	}
+	if result.Name == "" {
+		result.Name = toolspec.ID("tool")
+	}
+	return toolResultChatEntry(result)
 }
 
 func toolResultChatEntry(result tools.Result) ChatEntry {

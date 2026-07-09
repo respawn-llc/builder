@@ -4,6 +4,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -99,6 +100,28 @@ func TestTranscriptEntriesFromEventEmitsVisibleToolCompletionEntriesForOrdinaryA
 				t.Fatalf("entry condensed text = %q, want %q", entry.CondensedText, tc.result.CondensedText)
 			}
 		})
+	}
+}
+
+func TestCustomToolCallOutputProjectsAsRegularToolResultEntry(t *testing.T) {
+	msg := llm.Message{
+		Role:        llm.RoleTool,
+		MessageType: llm.MessageTypeCustomToolCallOutput,
+		ToolCallID:  "call-patch-1",
+		Name:        string(toolspec.ToolPatch),
+		Content:     `"patched"`,
+	}
+
+	entries := VisibleChatEntriesFromMessage(msg)
+	if len(entries) != 1 {
+		t.Fatalf("custom tool output entries = %+v, want one tool result entry", entries)
+	}
+	entry := entries[0]
+	if entry.Role != "tool_result_ok" || entry.Visibility != transcript.EntryVisibilityOngoingCollapsed {
+		t.Fatalf("custom tool output entry role/visibility = %q/%q, want regular collapsed tool result", entry.Role, entry.Visibility)
+	}
+	if entry.ToolCallID != msg.ToolCallID {
+		t.Fatalf("custom tool output call id = %q, want %q", entry.ToolCallID, msg.ToolCallID)
 	}
 }
 

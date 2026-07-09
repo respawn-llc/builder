@@ -69,6 +69,86 @@ func TestStatusLineGitStartupUsesRuntimeWorktreeRootBranch(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusLineOmitsServerOwnershipSegment(t *testing.T) {
+	m := newProjectedStaticUIModel(
+		WithUIModelName("gpt-5"),
+		WithUIStatusConfig(uiStatusConfig{OwnsServer: true}),
+	)
+
+	status := stripANSIAndTrimRight(m.layout().renderStatusLine(120, uiThemeStyles("dark")))
+
+	if strings.Contains(status, "server owned") {
+		t.Fatalf("status line contains forbidden server ownership segment: %q", status)
+	}
+}
+
+func TestStatusLineUsesIndicatorLabelForRollbackEditing(t *testing.T) {
+	m := newProjectedStaticUIModel(
+		WithUIModelName("gpt-5"),
+	)
+	m.rollback.phase = uiRollbackPhaseEditing
+
+	status := stripANSIAndTrimRight(m.layout().renderStatusLine(120, uiThemeStyles("dark")))
+
+	if !strings.HasPrefix(status, statusStateCircleGlyph+" editing"+statusLineSpinnerSeparator+"gpt-5") {
+		t.Fatalf("status line editing placement = %q", status)
+	}
+	if strings.Contains(status, statusLineSeparator+"editing"+statusLineSeparator) {
+		t.Fatalf("status line rendered editing as a separate segment: %q", status)
+	}
+}
+
+func TestStatusLineTransientNoticeOvertakesDisconnect(t *testing.T) {
+	m := newProjectedStaticUIModel(
+		WithUIModelName("gpt-5"),
+	)
+	m.engine = &runtimeControlFakeClient{}
+	m.setRuntimeDisconnected(true)
+	m.transientStatus = "image pasted"
+	m.transientStatusKind = uiStatusNoticeSuccess
+
+	status := stripANSIAndTrimRight(m.layout().renderStatusLine(120, uiThemeStyles("dark")))
+
+	if !strings.Contains(status, "image pasted") {
+		t.Fatalf("status line did not show transient notice over disconnect: %q", status)
+	}
+	if strings.Contains(status, "server disconnected") {
+		t.Fatalf("status line showed persisted disconnect while transient notice is active: %q", status)
+	}
+}
+
+func TestStatusLineInterruptedRendersAsNotice(t *testing.T) {
+	m := newProjectedStaticUIModel(
+		WithUIModelName("gpt-5"),
+	)
+	m.activity = uiActivityInterrupted
+
+	status := stripANSIAndTrimRight(m.layout().renderStatusLine(120, uiThemeStyles("dark")))
+
+	if !strings.Contains(status, "interrupted") {
+		t.Fatalf("status line did not show interrupted notice: %q", status)
+	}
+}
+
+func TestStatusOverlayOmitsServerOwnershipRow(t *testing.T) {
+	m := newProjectedStaticUIModel(
+		WithUIStatusConfig(uiStatusConfig{OwnsServer: true}),
+	)
+	m.status.snapshot = uiStatusSnapshot{
+		OwnsServer: true,
+		Workdir:    "/workspace",
+		Model:      uiStatusModelInfo{Summary: "gpt-5"},
+	}
+
+	lines := m.layout().statusOverlayContentLines(80)
+
+	plain := stripANSIAndTrimRight(strings.Join(lines, "\n"))
+	if strings.Contains(plain, "Server: owned by this CLI") || strings.Contains(plain, "server owned") {
+		t.Fatalf("status overlay contains forbidden server ownership row: %q", plain)
+	}
+}
+
 func initStatusLineGitRepo(t *testing.T, branch string) string {
 	t.Helper()
 	repoRoot := t.TempDir()
