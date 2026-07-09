@@ -110,8 +110,7 @@ func TestCommittedRowsNeutralizeTranscriptSourcedControlBytes(t *testing.T) {
 
 	rows := visibleTextRows(parseTerminalOps(out.String()))
 	wantStructure := []rowKind{
-		{content: "❯ user[2J", divider: false},
-		{content: "  next lineafter", divider: false},
+		{content: "❯ user[2J…", divider: false},
 		{divider: true},
 		{content: "❮ assistant]0;spoof **answer**", divider: false},
 		{divider: true},
@@ -147,10 +146,8 @@ func TestCommittedRowsFilterNonOngoingVisibility(t *testing.T) {
 	})
 }
 
-// Spec tui-transcript.md: visibility OC = "collapsed/short ongoing plus full
-// detail". An OC row in ongoing must render its compact (single-line) form,
-// NOT the full multi-line preview that an O row shows. This proves the OC row
-// emits exactly one content line while the O row emits the full preview.
+// Ongoing native scrollback uses compact transcript text. Detail expansion owns
+// full transcript text.
 func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 	multiLine := "first line\nsecond line\nthird line"
 	cases := []struct {
@@ -159,7 +156,7 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 		wantContentRows   int
 		wantCompactMarker bool
 	}{
-		{name: "O shows full preview", visibility: clientui.EntryVisibilityOngoing, wantContentRows: 3, wantCompactMarker: false},
+		{name: "O shows compact single line", visibility: clientui.EntryVisibilityOngoing, wantContentRows: 1, wantCompactMarker: true},
 		{name: "OC shows compact single line", visibility: clientui.EntryVisibilityOngoingCollapsed, wantContentRows: 1, wantCompactMarker: true},
 	}
 	for _, tt := range cases {

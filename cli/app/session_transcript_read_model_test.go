@@ -234,9 +234,11 @@ func TestOngoingTranscriptControllerSanitizesTranscriptFactsBeforeFrameInput(t *
 func TestOngoingFrameInputExcludesRawTranscriptFactBucketsAndAssistantTail(t *testing.T) {
 	frameType := reflect.TypeOf(ongoing.FrameInput{})
 	allowed := map[string]reflect.Type{
-		"Size":     reflect.TypeOf(ongoing.Size{}),
-		"Sections": reflect.TypeOf([]ongoing.FrameSection{}),
-		"Cursor":   reflect.TypeOf(ongoing.Cursor{}),
+		"Size":         reflect.TypeOf(ongoing.Size{}),
+		"Theme":        reflect.TypeOf(""),
+		"SpinnerFrame": reflect.TypeOf(0),
+		"Sections":     reflect.TypeOf([]ongoing.FrameSection{}),
+		"Cursor":       reflect.TypeOf(ongoing.Cursor{}),
 	}
 	if frameType.NumField() != len(allowed) {
 		t.Fatalf("FrameInput field count = %d, want %d", frameType.NumField(), len(allowed))

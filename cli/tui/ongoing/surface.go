@@ -17,9 +17,11 @@ type Size struct {
 }
 
 type FrameInput struct {
-	Size     Size
-	Sections []FrameSection
-	Cursor   Cursor
+	Size         Size
+	Theme        string
+	SpinnerFrame int
+	Sections     []FrameSection
+	Cursor       Cursor
 }
 
 type Cursor struct {
@@ -35,8 +37,9 @@ type CursorTarget struct {
 }
 
 type FrameSection struct {
-	Kind  FrameSectionKind
-	Lines []string
+	Kind        FrameSectionKind
+	Lines       []string
+	StyledLines []transcriptrender.Line
 }
 
 type liveBandLine struct {
@@ -124,7 +127,7 @@ func (s *Surface) ApplyTerminalMessage(message clientui.TranscriptMessage, frame
 	if isAssistantFinalization(message) {
 		return s.finalizeAssistantStream(*message.CommittedRow.Assistant.StreamID, message.CommittedRow.Assistant.Text, frame)
 	}
-	lines := s.immutableLines(message, frame.Size.Width, "")
+	lines := s.immutableLines(message, frame.Size.Width, frame.Theme)
 	if len(lines) == 0 {
 		return Result{}, nil
 	}
@@ -135,7 +138,7 @@ func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame Frame
 	if message.Hydration == nil {
 		return Result{}, nil
 	}
-	lines := s.hydrationImmutableLines(*message.Hydration, frame.Size.Width, "")
+	lines := s.hydrationImmutableLines(*message.Hydration, frame.Size.Width, frame.Theme)
 	activeStreamHydrated := s.hydrateActiveAssistantStream(message.Hydration.ActiveAssistantStream)
 	if activeStreamHydrated {
 		projection := newMarkdownProjector(nil).Project(markdownProjectionInput{
@@ -152,7 +155,7 @@ func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame Frame
 			})
 		}
 		s.activeAssistant.promotedSourceBoundary = projection.PromotedBoundary
-		lines = append(lines, s.renderAssistantPromotedRows(projection.PromotedRows, frameWidthOrDefault(frame), "")...)
+		lines = append(lines, s.renderAssistantPromotedRows(projection.PromotedRows, frameWidthOrDefault(frame), frame.Theme)...)
 	}
 	if len(lines) == 0 && !activeStreamHydrated {
 		return Result{}, nil
@@ -572,23 +575,30 @@ func minimumLiveBandLayout(frame FrameInput, assistant activeAssistantState) []l
 		layout = append(layout, liveBandLine{text: line})
 	}
 	for _, section := range frame.Sections {
-		if len(section.Lines) == 0 {
+		totalLines := len(section.StyledLines) + len(section.Lines)
+		if totalLines == 0 {
 			continue
 		}
 		limit := 1
 		switch section.Kind {
 		case FrameSectionQueuedOrSteered:
-			limit = min(2, len(section.Lines))
+			limit = min(2, totalLines)
 		case FrameSectionInput:
-			limit = min(3, len(section.Lines))
+			limit = min(3, totalLines)
 		}
 		start := 0
-		if section.Kind == FrameSectionInput && len(section.Lines) > limit {
-			start = len(section.Lines) - limit
+		if section.Kind == FrameSectionInput && totalLines > limit {
+			start = totalLines - limit
 		}
 		for index := start; index < start+limit; index++ {
+			text := ""
+			if index < len(section.StyledLines) {
+				text = encodeTranscriptLine(section.StyledLines[index], frame.Theme)
+			} else {
+				text = section.Lines[index-len(section.StyledLines)]
+			}
 			layout = append(layout, liveBandLine{
-				text:        section.Lines[index],
+				text:        text,
 				sectionKind: section.Kind,
 				sectionRow:  index + 1,
 			})
@@ -626,16 +636,17 @@ func enforcedMinimumLiveBandHeight(frame FrameInput, assistant activeAssistantSt
 		total++
 	}
 	for _, section := range frame.Sections {
-		if len(section.Lines) == 0 {
+		totalLines := len(section.StyledLines) + len(section.Lines)
+		if totalLines == 0 {
 			continue
 		}
 		switch section.Kind {
 		case FrameSectionPendingTools:
 			total++
 		case FrameSectionQueuedOrSteered:
-			total += min(2, len(section.Lines))
+			total += min(2, totalLines)
 		case FrameSectionInput:
-			total += min(3, len(section.Lines))
+			total += min(3, totalLines)
 		case FrameSectionStatus:
 			total++
 		default:
@@ -658,11 +669,18 @@ func frameWidthOrDefault(frame FrameInput) int {
 func frameLines(frame FrameInput) []liveBandLine {
 	var lines []liveBandLine
 	for _, section := range frame.Sections {
+		for index, line := range section.StyledLines {
+			lines = append(lines, liveBandLine{
+				text:        encodeTranscriptLine(line, frame.Theme),
+				sectionKind: section.Kind,
+				sectionRow:  index + 1,
+			})
+		}
 		for index, line := range section.Lines {
 			lines = append(lines, liveBandLine{
 				text:        line,
 				sectionKind: section.Kind,
-				sectionRow:  index + 1,
+				sectionRow:  len(section.StyledLines) + index + 1,
 			})
 		}
 	}

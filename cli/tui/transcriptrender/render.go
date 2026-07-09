@@ -39,14 +39,19 @@ func RenderToolRow(row clientui.TranscriptToolRow, width int, mode Mode) []Line 
 	return renderTextBlockWithInlineMeta(role, display.Text, display.InlineMeta, width, mode)
 }
 
-func RenderPendingTool(tool clientui.TranscriptToolStart, width int) Line {
+func RenderPendingTool(tool clientui.TranscriptToolStart, width int, spinner string) Line {
 	meta := normalizeToolMeta(tool.ToolName, tool.ToolPresentation)
+	role := toolRole(meta, false)
 	text := compactToolText(meta, tool.ToolName)
-	lines := renderTextBlock(toolRole(meta, false), text, width, ModeOngoing)
+	lines := renderTextBlock(role, text, width, ModeOngoing)
 	if len(lines) == 0 {
 		return Line{}
 	}
-	return lines[0]
+	line := lines[0]
+	if spinner == "" {
+		return line
+	}
+	return replaceLeadingRoleSymbol(line, role, spinner)
 }
 
 func RenderDivider(group clientui.TranscriptRowKind, width int) Line {
@@ -168,11 +173,11 @@ type toolDisplay struct {
 }
 
 // userAssistantDisplayText selects the compact vs full text for user/assistant
-// rows. Collapsed (ongoing-collapsed or detail-collapsed) shows the
-// server-provided CondensedText when present, else the first non-empty line of
-// the full text. Ongoing-O and detail-expanded show the full text verbatim.
+// rows. Ongoing and collapsed detail show the server-provided CondensedText
+// when present, else the first non-empty line of the full text. Detail-expanded
+// shows the full text verbatim.
 func userAssistantDisplayText(text, condensed string, mode Mode) string {
-	if mode == ModeDetailExpanded || mode == ModeOngoing {
+	if mode == ModeDetailExpanded {
 		return text
 	}
 	if compact := strings.TrimSpace(condensed); compact != "" {
@@ -214,19 +219,19 @@ func renderPatchTool(role StyleRole, text string, inlineMeta string, rendered *p
 			continue
 		}
 		var spans []Span
-		spans = append(spans, Span{Text: path, Role: role})
+		spans = append(spans, Span{Text: path, Role: role, Faint: roleDefaultFaint(role)})
 		if file.Removed > 0 {
-			spans = append(spans, Span{Text: " ", Role: role})
+			spans = append(spans, Span{Text: " ", Role: role, Faint: roleDefaultFaint(role)})
 			spans = append(spans, Span{Text: fmt.Sprintf("-%d", file.Removed), Role: StyleRoleToolError})
 		}
 		if file.Added > 0 {
-			spans = append(spans, Span{Text: " ", Role: role})
+			spans = append(spans, Span{Text: " ", Role: role, Faint: roleDefaultFaint(role)})
 			spans = append(spans, Span{Text: fmt.Sprintf("+%d", file.Added), Role: StyleRoleToolSuccess})
 		}
 		lines = append(lines, Line{Spans: spans})
 	}
 	if len(lines) == 0 {
-		lines = []Line{{Spans: []Span{{Text: text, Role: role}}}}
+		lines = []Line{{Spans: []Span{{Text: text, Role: role, Faint: roleDefaultFaint(role)}}}}
 	}
 	return attachPrefixWithFirstLineMeta(role, lines, width, false, inlineMeta, mode)
 }
@@ -242,9 +247,6 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 	if text == "" {
 		text = labelForRole(role)
 	}
-	if mode == ModeOngoing && roleAllowsThreeLinePreview(role) {
-		return attachPrefix(role, textLines(role, wrapLines(text, contentWidth(role, width))), width, false, mode)
-	}
 	if mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed {
 		first := firstDisplayLine(text)
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
@@ -257,11 +259,11 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 
 func textLines(role StyleRole, lines []string) []Line {
 	if len(lines) == 0 {
-		return []Line{{Spans: []Span{{Role: role}}}}
+		return []Line{{Spans: []Span{{Role: role, Faint: roleDefaultFaint(role)}}}}
 	}
 	out := make([]Line, 0, len(lines))
 	for _, line := range lines {
-		out = append(out, Line{Spans: []Span{{Text: line, Role: role}}})
+		out = append(out, Line{Spans: []Span{{Text: line, Role: role, Faint: roleDefaultFaint(role)}}})
 	}
 	return out
 }
@@ -292,11 +294,11 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 			if gap < 1 {
 				gap = 1
 			}
-			spans = append(spans, Span{Text: strings.Repeat(" ", gap), Role: role})
+			spans = append(spans, Span{Text: strings.Repeat(" ", gap), Role: role, Faint: roleDefaultFaint(role)})
 			spans = append(spans, Span{Text: meta, Role: StyleRoleNotice, Faint: true})
 		}
 		if idx == 0 {
-			spans = append([]Span{{Text: roleSymbol(role), Role: role}, {Text: " ", Role: role}}, spans...)
+			spans = append([]Span{{Text: roleSymbol(role), Role: role, Faint: roleDefaultFaint(role)}, {Text: " ", Role: role, Faint: roleDefaultFaint(role)}}, spans...)
 		} else {
 			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex), spans...)
 		}
@@ -338,6 +340,35 @@ func inlineMetaCommandSpans(spans []Span, role StyleRole) []Span {
 	return out
 }
 
+func replaceLeadingRoleSymbol(line Line, role StyleRole, symbol string) Line {
+	if len(line.Spans) == 0 {
+		return line
+	}
+	out := Line{Spans: append([]Span(nil), line.Spans...)}
+	for idx := range out.Spans {
+		if out.Spans[idx].Role != role || out.Spans[idx].Text != roleSymbol(role) {
+			continue
+		}
+		out.Spans[idx].Text = symbol
+		out.Spans[idx].Faint = roleDefaultFaint(role)
+		return out
+	}
+	return out
+}
+
+func roleDefaultFaint(role StyleRole) bool {
+	switch role {
+	case StyleRoleTool,
+		StyleRoleToolShell,
+		StyleRoleToolQuestion,
+		StyleRoleToolWebSearch,
+		StyleRoleNoticeForegroundFaint:
+		return true
+	default:
+		return false
+	}
+}
+
 func roleSymbol(role StyleRole) string {
 	symbol := "•"
 	switch role {
@@ -353,7 +384,7 @@ func roleSymbol(role StyleRole) string {
 		symbol = "?"
 	case StyleRoleToolWebSearch:
 		symbol = "@"
-	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticePrimary, StyleRoleNoticeSecondary:
+	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticeForegroundFaint, StyleRoleNoticePrimary, StyleRoleNoticeSecondary:
 		symbol = "ℹ"
 	case StyleRoleWarning:
 		symbol = "⚠"
@@ -404,9 +435,10 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 		return StyleRoleNoticeSecondary
 	case clientui.MessageTypeGoal, clientui.MessageTypeWorkflowMode:
 		return StyleRoleNoticePrimary
+	case clientui.MessageTypeBackgroundNotice:
+		return StyleRoleNoticeForegroundFaint
 	case clientui.MessageTypeWorktreeMode,
 		clientui.MessageTypeWorktreeModeExit,
-		clientui.MessageTypeBackgroundNotice,
 		clientui.MessageTypeSubagents:
 		return StyleRoleNoticeForeground
 	default:
@@ -464,7 +496,7 @@ func labelForRole(role StyleRole) string {
 		return "user"
 	case StyleRoleAssistant:
 		return "assistant"
-	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticePrimary, StyleRoleNoticeSecondary:
+	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticeForegroundFaint, StyleRoleNoticePrimary, StyleRoleNoticeSecondary:
 		return "notice"
 	default:
 		return "tool call"

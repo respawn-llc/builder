@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"testing"
 
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/google/uuid"
 )
 
@@ -32,6 +34,33 @@ func TestRenderPaintsLiveAreaWhenMinimumFits(t *testing.T) {
 	if got := out.String(); got != want {
 		t.Fatalf("live band bytes = %q, want %q", got, want)
 	}
+}
+
+func TestRenderPaintsStyledLiveAreaThroughThemeEncoder(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+
+	_, err := surface.Render(FrameInput{
+		Size:  Size{Width: 30, Height: 2},
+		Theme: "dark",
+		Sections: []FrameSection{{
+			Kind: FrameSectionPendingTools,
+			StyledLines: []transcriptrender.Line{{Spans: []transcriptrender.Span{
+				{Text: "⢎ ", Role: transcriptrender.StyleRoleToolShell, Faint: true},
+				{Text: " ", Role: transcriptrender.StyleRoleToolShell, Faint: true},
+				{Text: "go test", Role: transcriptrender.StyleRoleToolShell, Faint: true},
+			}}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("render styled live band: %v", err)
+	}
+
+	got := out.String()
+	if got == "" || got == ansi.Strip(got) {
+		t.Fatalf("styled live band output has no ANSI styling: %q", got)
+	}
+	assertVisibleTextOps(t, parseTerminalOps(got), []string{"⢎  go test"})
 }
 
 func TestRenderHidesEntireLiveAreaWhenMinimumDoesNotFit(t *testing.T) {

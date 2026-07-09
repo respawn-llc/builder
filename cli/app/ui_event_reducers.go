@@ -172,7 +172,7 @@ func (r uiInputAsyncFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		next, cmd := m.inputController().handleSpinnerTick(msg)
 		nextModel := next.(*uiModel)
 		nextModel.layout().syncViewport()
-		return handledUIFeatureUpdate(nextModel, cmd)
+		return handledUIFeatureUpdate(nextModel, tea.Batch(cmd, nextModel.renderNativeOngoingSurface()))
 	}
 	return uiFeatureUpdateResult{}
 }

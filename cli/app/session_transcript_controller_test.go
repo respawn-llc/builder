@@ -285,7 +285,12 @@ func (s *ongoingSurfaceSpy) lastFrameSectionLines(kind ongoing.FrameSectionKind)
 	}
 	for _, section := range s.calls[len(s.calls)-1].frame.Sections {
 		if section.Kind == kind {
-			return append([]string(nil), section.Lines...)
+			lines := make([]string, 0, len(section.StyledLines)+len(section.Lines))
+			for _, line := range section.StyledLines {
+				lines = append(lines, line.Plain())
+			}
+			lines = append(lines, section.Lines...)
+			return lines
 		}
 	}
 	return nil

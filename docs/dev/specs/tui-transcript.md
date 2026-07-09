@@ -113,9 +113,9 @@
 - Semantic color tokens are centralized in `shared/theme`.
 - Syntax-highlighted output must not emit backgrounds unless explicitly intended, such as diff add/remove decoration.
 - Formatted text uses app foreground as base text color.
-- User and assistant rows use foreground text plus Markdown styling.
-- Shell tool calls use shell syntax-highlighted foreground text. Shell syntax color selection is OS-dependent.
-- Non-shell tool calls use foreground text with no syntax highlighting.
+- User and assistant rows use compact text in ongoing mode and collapsed detail, full text in expanded detail, and foreground text plus Markdown styling.
+- Shell tool calls use shell syntax-highlighted foreground text, faint styling, and OS-dependent shell syntax selection.
+- Non-shell tool calls use foreground text, no syntax highlighting, and faint styling.
 - Patch/edit tools use `⇄` in ongoing, detail, and native replay. Patch paths and neutral text use foreground; diff add/remove counts use semantic add/remove colors.
 - Compaction-related rows use secondary text.
 - Goal-related rows use primary text.
@@ -124,7 +124,7 @@
 - `subagents` developer-context rows use foreground text.
 - Cache warnings and non-interrupting warnings use warning text.
 - Error rows use error text, including interruption rows.
-- Background shell completion notices use foreground text and remain separate from shell tool call/result rows.
+- Background shell completion notices use foreground text, faint styling, and remain separate from shell tool call/result rows.
 - No timestamps are shown in UI.
 - Streaming paint cadence is 16ms with token coalescing per flush tick.
 - Main status line is compact and fixed: activity indicator, optional git branch, model label, process metadata, transient warning, and right-aligned context meter. Composition, priority, and notice semantics are owned by tui-status-line.md.

@@ -73,7 +73,7 @@ func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
 		{name: "workflow", messageType: clientui.MessageTypeWorkflowMode, wantRole: StyleRoleNoticePrimary, wantColor: ColorRolePrimary},
 		{name: "worktree enter", messageType: clientui.MessageTypeWorktreeMode, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
 		{name: "worktree exit", messageType: clientui.MessageTypeWorktreeModeExit, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
-		{name: "background shell completion", messageType: clientui.MessageTypeBackgroundNotice, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
+		{name: "background shell completion", messageType: clientui.MessageTypeBackgroundNotice, wantRole: StyleRoleNoticeForegroundFaint, wantColor: ColorRoleForeground},
 		{name: "subagents", messageType: clientui.MessageTypeSubagents, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
 		{name: "cache warning", reason: clientui.TranscriptNoticeCacheWarning, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
 		{name: "compaction reminder", messageType: clientui.MessageTypeCompactionSoonReminder, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
@@ -100,6 +100,78 @@ func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
 				t.Fatalf("notice color role = %v, want %v", gotColor, tt.wantColor)
 			}
 		})
+	}
+}
+
+func TestOngoingUserAssistantRowsUseCompactText(t *testing.T) {
+	row := clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowAssistant,
+		Assistant: &clientui.TranscriptAssistantRow{
+			Text:          "full first line\nfull second line",
+			CondensedText: "compact assistant",
+		},
+	}
+
+	ongoing := RenderCommittedRow(row, 80, "", ModeOngoing)
+	if got, want := ongoing.Lines[0].Plain(), "❮ compact assistant"; got != want {
+		t.Fatalf("ongoing assistant row = %q, want %q", got, want)
+	}
+
+	expanded := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
+	if got, want := expanded.Lines[0].Plain(), "❮ full first line"; got != want {
+		t.Fatalf("expanded assistant row = %q, want %q", got, want)
+	}
+}
+
+func TestToolAndBackgroundNoticeFaintMatrix(t *testing.T) {
+	cases := []struct {
+		name string
+		row  clientui.TranscriptCommittedRow
+	}{
+		{name: "shell", row: toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false)},
+		{name: "custom", row: toolRow("custom_tool", clientui.ToolPresentationDefault, "custom preview", false)},
+		{
+			name: "background shell completion",
+			row: clientui.TranscriptCommittedRow{
+				Kind: clientui.TranscriptRowNotice,
+				Notice: &clientui.TranscriptNoticeRow{
+					Severity: clientui.TranscriptNoticeInfo,
+					Data: clientui.TranscriptNoticeData{
+						MessageType:  clientui.MessageTypeBackgroundNotice,
+						CompactLabel: "background done",
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			rendered := RenderCommittedRow(tt.row, 80, "", ModeOngoing)
+			if len(rendered.Lines) == 0 || len(rendered.Lines[0].Spans) < 3 {
+				t.Fatalf("rendered invalid line: %+v", rendered.Lines)
+			}
+			if !rendered.Lines[0].Spans[0].Faint || !rendered.Lines[0].Spans[2].Faint {
+				t.Fatalf("line spans are not faint: %+v", rendered.Lines[0].Spans)
+			}
+		})
+	}
+}
+
+func TestPendingToolUsesSpinnerWithCommittedToolStyling(t *testing.T) {
+	line := RenderPendingTool(clientui.TranscriptToolStart{
+		ToolCallID: "tool-1",
+		ToolName:   "exec_command",
+		ToolPresentation: &clientui.ToolCallMeta{
+			Presentation: clientui.ToolPresentationShell,
+			Command:      "go test ./...",
+		},
+	}, 80, "⢎ ")
+
+	if got, want := line.Plain(), "⢎  go test ./..."; got != want {
+		t.Fatalf("pending tool plain line = %q, want %q", got, want)
+	}
+	if len(line.Spans) < 3 || line.Spans[0].Role != StyleRoleToolShell || !line.Spans[0].Faint || !line.Spans[2].Faint {
+		t.Fatalf("pending tool spans = %+v, want spinner using shell tool styling", line.Spans)
 	}
 }
 
@@ -291,7 +363,7 @@ func TestExpandedDetailWrapPreservesWhitespace(t *testing.T) {
 	}
 }
 
-func TestOngoingContinuationUsesIndentWithoutTreeMarker(t *testing.T) {
+func TestOngoingUsesCompactSingleLineWithoutContinuationTree(t *testing.T) {
 	rendered := RenderCommittedRow(clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowUser,
 		User: &clientui.TranscriptUserRow{Text: "first\nsecond"},
@@ -301,16 +373,17 @@ func TestOngoingContinuationUsesIndentWithoutTreeMarker(t *testing.T) {
 	for _, line := range rendered.Lines {
 		got = append(got, line.Plain())
 	}
-	want := []string{"❯ first", "  second"}
+	want := []string{"❯ first…"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("ongoing continuation lines = %#v, want %#v", got, want)
+		t.Fatalf("ongoing compact lines = %#v, want %#v", got, want)
 	}
 }
 
 // Detail mode renders a real tree of continuation guides: the middle
 // continuation lines of an entry use the vertical "│" guide, and the LAST
 // continuation line closes the tree with the corner "└". The first line keeps
-// the normal role symbol; ongoing continuations stay indent-only (no guide).
+// the normal role symbol; ongoing rows stay compact and do not render
+// continuations.
 func TestDetailContinuationUsesTreeGuidesWithCornerOnLastLine(t *testing.T) {
 	rendered := RenderCommittedRow(clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowAssistant,

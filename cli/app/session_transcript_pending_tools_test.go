@@ -102,7 +102,7 @@ func TestPendingToolsRenderInServerArrivalOrder(t *testing.T) {
 			t.Fatalf("accept tool start: %v", err)
 		}
 	}
-	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"• alpha", "• beta"}; !reflect.DeepEqual(got, want) {
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"⢎  alpha", "⢎  beta"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pending tool lines = %v, want %v", got, want)
 	}
 
@@ -115,7 +115,7 @@ func TestPendingToolsRenderInServerArrivalOrder(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("accept tool abort: %v", err)
 	}
-	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"• beta"}; !reflect.DeepEqual(got, want) {
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"⢎  beta"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pending tool lines after abort = %v, want %v", got, want)
 	}
 }
@@ -143,7 +143,7 @@ func TestPendingToolStartUsesPresentationMetadata(t *testing.T) {
 		t.Fatalf("accept tool start: %v", err)
 	}
 
-	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"$ go test ./cli/app"}; !reflect.DeepEqual(got, want) {
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"⢎  go test ./cli/app"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pending tool lines = %v, want %v", got, want)
 	}
 }

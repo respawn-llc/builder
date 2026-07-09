@@ -245,8 +245,10 @@ func (m *uiModel) ongoingFrameInput() ongoing.FrameInput {
 		cursorSectionRow = 1
 	}
 	frame := ongoing.FrameInput{
-		Size:     ongoing.Size{Width: width, Height: height},
-		Sections: sections,
+		Size:         ongoing.Size{Width: width, Height: height},
+		Theme:        m.theme,
+		SpinnerFrame: m.spinnerFrame,
+		Sections:     sections,
 		Cursor: ongoing.Cursor{
 			Visible: visible,
 			Row:     height,
@@ -293,16 +295,21 @@ func ongoingFrameInputCursorTerminalRow(frame ongoing.FrameInput, cursorSectionR
 func ongoingFrameSectionTerminalRows(frame ongoing.FrameInput, kind ongoing.FrameSectionKind) (int, int, bool) {
 	totalSectionLines := 0
 	for _, section := range frame.Sections {
-		totalSectionLines += len(section.Lines)
+		totalSectionLines += ongoingFrameSectionLineCount(section)
 	}
 	row := frame.Size.Height - totalSectionLines + 1
 	for _, section := range frame.Sections {
+		count := ongoingFrameSectionLineCount(section)
 		if section.Kind == kind {
-			return row, row + len(section.Lines) - 1, true
+			return row, row + count - 1, true
 		}
-		row += len(section.Lines)
+		row += count
 	}
 	return 0, 0, false
+}
+
+func ongoingFrameSectionLineCount(section ongoing.FrameSection) int {
+	return len(section.StyledLines) + len(section.Lines)
 }
 
 func clampTerminalCursorRow(row int, height int) int {
