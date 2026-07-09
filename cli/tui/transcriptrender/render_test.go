@@ -47,13 +47,39 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 			if got := line.Plain(); got != tt.want {
 				t.Fatalf("rendered line = %q, want %q", got, tt.want)
 			}
-			if len(line.Spans) < 3 || line.Spans[0].Role != tt.wantRole || line.Spans[2].Role != tt.wantRole {
+			if len(line.Spans) < 3 || line.Spans[0].Role != tt.wantRole {
 				t.Fatalf("line has invalid style spans: %+v", line.Spans)
+			}
+			if tt.wantRole != StyleRoleToolShell && line.Spans[2].Role != tt.wantRole {
+				t.Fatalf("line content role = %v, want %v; spans: %+v", line.Spans[2].Role, tt.wantRole, line.Spans)
 			}
 			if got := ColorRoleForStyle(tt.wantRole); got != tt.wantColor {
 				t.Fatalf("style role color = %v, want %v", got, tt.wantColor)
 			}
 		})
+	}
+}
+
+func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
+	rendered := RenderCommittedRow(toolRow("exec_command", clientui.ToolPresentationShell, "sed -n '1,10p' cli/tui/model.go", false), 120, "", ModeOngoing)
+	if len(rendered.Lines) == 0 {
+		t.Fatal("rendered no shell row lines")
+	}
+	line := rendered.Lines[0]
+	if got, want := line.Plain(), "$ sed -n '1,10p' cli/tui/model.go"; got != want {
+		t.Fatalf("shell line = %q, want %q", got, want)
+	}
+	foundSyntax := false
+	for _, span := range line.Spans[2:] {
+		if !span.Faint {
+			t.Fatalf("shell syntax span is not faint: %+v", span)
+		}
+		if span.Role == StyleRoleToolShellPrimary || span.Role == StyleRoleToolShellSecondary || span.Role == StyleRoleToolShellWarning || span.Role == StyleRoleToolShellError {
+			foundSyntax = true
+		}
+	}
+	if !foundSyntax {
+		t.Fatalf("shell row did not include syntax role spans: %+v", line.Spans)
 	}
 }
 

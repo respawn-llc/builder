@@ -25,6 +25,10 @@ const (
 	StyleRoleToolSuccess
 	StyleRoleToolError
 	StyleRoleToolShell
+	StyleRoleToolShellPrimary
+	StyleRoleToolShellSecondary
+	StyleRoleToolShellWarning
+	StyleRoleToolShellError
 	StyleRoleToolPatch
 	StyleRoleToolQuestion
 	StyleRoleToolWebSearch
@@ -71,6 +75,14 @@ func ColorRoleForStyle(role StyleRole) ColorRole {
 		return ColorRolePrimary
 	case StyleRoleNoticeSecondary:
 		return ColorRoleSecondary
+	case StyleRoleToolShellPrimary:
+		return ColorRolePrimary
+	case StyleRoleToolShellSecondary:
+		return ColorRoleSecondary
+	case StyleRoleToolShellWarning:
+		return ColorRoleWarning
+	case StyleRoleToolShellError:
+		return ColorRoleError
 	case StyleRoleToolSuccess:
 		return ColorRoleToolSuccess
 	case StyleRoleToolError:

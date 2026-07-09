@@ -9,6 +9,8 @@ import (
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/rivo/uniseg"
 )
@@ -263,9 +265,57 @@ func textLines(role StyleRole, lines []string) []Line {
 	}
 	out := make([]Line, 0, len(lines))
 	for _, line := range lines {
+		if role == StyleRoleToolShell {
+			out = append(out, Line{Spans: shellSyntaxSpans(line)})
+			continue
+		}
 		out = append(out, Line{Spans: []Span{{Text: line, Role: role, Faint: roleDefaultFaint(role)}}})
 	}
 	return out
+}
+
+func shellSyntaxSpans(line string) []Span {
+	if line == "" {
+		return []Span{{Role: StyleRoleToolShell, Faint: true}}
+	}
+	lexer := lexers.Get("shell")
+	if lexer == nil {
+		return []Span{{Text: line, Role: StyleRoleToolShell, Faint: true}}
+	}
+	iterator, err := chroma.Coalesce(lexer).Tokenise(nil, line)
+	if err != nil {
+		return []Span{{Text: line, Role: StyleRoleToolShell, Faint: true}}
+	}
+	var spans []Span
+	for token := iterator(); token != chroma.EOF; token = iterator() {
+		if token.Value == "" {
+			continue
+		}
+		spans = append(spans, Span{Text: token.Value, Role: shellSyntaxRole(token.Type), Faint: true})
+	}
+	if len(spans) == 0 {
+		return []Span{{Text: line, Role: StyleRoleToolShell, Faint: true}}
+	}
+	return spans
+}
+
+func shellSyntaxRole(tokenType chroma.TokenType) StyleRole {
+	switch {
+	case tokenType == chroma.Error:
+		return StyleRoleToolShellError
+	case tokenType.InCategory(chroma.Keyword),
+		tokenType.InSubCategory(chroma.LiteralString),
+		tokenType.InSubCategory(chroma.LiteralNumber):
+		return StyleRoleToolShellPrimary
+	case tokenType.InSubCategory(chroma.NameBuiltin),
+		tokenType.InSubCategory(chroma.NameVariable),
+		tokenType.InSubCategory(chroma.NameFunction):
+		return StyleRoleToolShellSecondary
+	case tokenType.InCategory(chroma.Comment):
+		return StyleRoleToolShellWarning
+	default:
+		return StyleRoleToolShell
+	}
 }
 
 func attachPrefix(role StyleRole, lines []Line, width int, forceEllipsis bool, mode Mode) []Line {
@@ -360,6 +410,10 @@ func roleDefaultFaint(role StyleRole) bool {
 	switch role {
 	case StyleRoleTool,
 		StyleRoleToolShell,
+		StyleRoleToolShellPrimary,
+		StyleRoleToolShellSecondary,
+		StyleRoleToolShellWarning,
+		StyleRoleToolShellError,
 		StyleRoleToolQuestion,
 		StyleRoleToolWebSearch,
 		StyleRoleNoticeForegroundFaint:
@@ -376,7 +430,11 @@ func roleSymbol(role StyleRole) string {
 		symbol = "❯"
 	case StyleRoleAssistant:
 		symbol = "❮"
-	case StyleRoleToolShell:
+	case StyleRoleToolShell,
+		StyleRoleToolShellPrimary,
+		StyleRoleToolShellSecondary,
+		StyleRoleToolShellWarning,
+		StyleRoleToolShellError:
 		symbol = "$"
 	case StyleRoleToolPatch:
 		symbol = "⇄"
@@ -510,6 +568,12 @@ func labelForRole(role StyleRole) string {
 		return "assistant"
 	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticeForegroundFaint, StyleRoleNoticePrimary, StyleRoleNoticeSecondary, StyleRoleNoticeReviewer:
 		return "notice"
+	case StyleRoleToolShell,
+		StyleRoleToolShellPrimary,
+		StyleRoleToolShellSecondary,
+		StyleRoleToolShellWarning,
+		StyleRoleToolShellError:
+		return "tool call"
 	default:
 		return "tool call"
 	}
