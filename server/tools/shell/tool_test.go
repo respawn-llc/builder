@@ -1016,8 +1016,8 @@ func TestExecCommandForegroundTruncationUsesForegroundBanner(t *testing.T) {
 	if strings.Contains(text, "Process moved to background.") {
 		t.Fatalf("expected immediate completion, got %q", text)
 	}
-	if result.Presentation == nil || !result.Presentation.OutputTruncated {
-		t.Fatalf("expected foreground truncation presentation metadata, got %+v", result.Presentation)
+	if result.PresentationDelta == nil || !result.PresentationDelta.OutputTruncated {
+		t.Fatalf("expected foreground truncation presentation delta, got %+v", result.PresentationDelta)
 	}
 	if manager.Count() != 0 {
 		t.Fatalf("manager count = %d, want 0", manager.Count())
@@ -1039,8 +1039,8 @@ func TestExecCommandRawOutputAddsPresentationMetadata(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected exec_command error: %s", string(result.Output))
 	}
-	if result.Presentation == nil || !result.Presentation.RawOutputRequested || result.Presentation.OutputTruncated {
-		t.Fatalf("expected raw output presentation metadata without truncation, got %+v", result.Presentation)
+	if result.PresentationDelta == nil || !result.PresentationDelta.RawOutputRequested || result.PresentationDelta.OutputTruncated {
+		t.Fatalf("expected raw output presentation delta without truncation, got %+v", result.PresentationDelta)
 	}
 }
 
@@ -1070,8 +1070,8 @@ func TestWriteStdinRawSessionAddsPresentationMetadata(t *testing.T) {
 	if stdinResult.IsError {
 		t.Fatalf("unexpected write_stdin error: %s", string(stdinResult.Output))
 	}
-	if stdinResult.Presentation == nil || !stdinResult.Presentation.RawOutputRequested || stdinResult.Presentation.OutputTruncated {
-		t.Fatalf("expected raw write_stdin presentation metadata without truncation, got %+v", stdinResult.Presentation)
+	if stdinResult.PresentationDelta == nil || !stdinResult.PresentationDelta.RawOutputRequested || stdinResult.PresentationDelta.OutputTruncated {
+		t.Fatalf("expected raw write_stdin presentation delta without truncation, got %+v", stdinResult.PresentationDelta)
 	}
 	waitForManagerCount(t, manager, 0, time.Second)
 }
@@ -1159,8 +1159,8 @@ func TestWriteStdinUsesBackgroundTruncationBannerOnCompletion(t *testing.T) {
 	if !strings.Contains(stdinText, "Log file:") {
 		t.Fatalf("expected completed background shell response to include log file, got %q", stdinText)
 	}
-	if stdinResult.Presentation == nil || !stdinResult.Presentation.OutputTruncated {
-		t.Fatalf("expected write_stdin truncation presentation metadata, got %+v", stdinResult.Presentation)
+	if stdinResult.PresentationDelta == nil || !stdinResult.PresentationDelta.OutputTruncated {
+		t.Fatalf("expected write_stdin truncation presentation delta, got %+v", stdinResult.PresentationDelta)
 	}
 	waitForManagerCount(t, manager, 0, 3*time.Second)
 }
@@ -1191,8 +1191,8 @@ func TestWriteStdinPreservesBackgroundSummaryTruncationMetadata(t *testing.T) {
 	if stdinResult.IsError {
 		t.Fatalf("unexpected write_stdin error: %s", string(stdinResult.Output))
 	}
-	if stdinResult.Presentation == nil || !stdinResult.Presentation.OutputTruncated {
-		t.Fatalf("expected source truncation presentation metadata, got %+v", stdinResult.Presentation)
+	if stdinResult.PresentationDelta == nil || !stdinResult.PresentationDelta.OutputTruncated {
+		t.Fatalf("expected source truncation presentation delta, got %+v", stdinResult.PresentationDelta)
 	}
 	waitForManagerCount(t, manager, 0, 3*time.Second)
 }

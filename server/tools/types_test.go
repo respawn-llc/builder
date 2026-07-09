@@ -221,8 +221,11 @@ func TestDefinitionContractsBuildTranscriptMetadata(t *testing.T) {
 
 	edit, _ := DefinitionFor(toolspec.ToolEdit)
 	editMeta := edit.BuildToolCallMeta(ToolCallContext{}, json.RawMessage(`{"path":"a.go","old_string":"old","new_string":"new"}`))
-	if editMeta.ToolName != string(toolspec.ToolEdit) || editMeta.Command != "a.go" || editMeta.CompactText != "a.go" {
+	if editMeta.ToolName != string(toolspec.ToolEdit) || editMeta.PatchRender == nil {
 		t.Fatalf("unexpected edit transcript metadata: %+v", editMeta)
+	}
+	if editMeta.Command != editMeta.PatchDetail || editMeta.CompactText != editMeta.PatchSummary {
+		t.Fatalf("expected edit text aliases normalized, got %+v", editMeta)
 	}
 	if editMeta.RenderHint == nil || editMeta.RenderHint.Kind != transcript.ToolRenderKindDiff {
 		t.Fatalf("expected edit diff render hint, got %+v", editMeta.RenderHint)
@@ -247,6 +250,30 @@ func TestDefinitionContractsBuildTranscriptMetadata(t *testing.T) {
 	handoffMeta := triggerHandoff.BuildToolCallMeta(ToolCallContext{}, json.RawMessage(`{"summarizer_prompt":"keep API details","future_agent_message":"resume with tests"}`))
 	if handoffMeta.Command == "" || handoffMeta.CompactText == "" {
 		t.Fatalf("expected trigger_handoff metadata to expose compact and detail text, got %+v", handoffMeta)
+	}
+}
+
+func TestEditDefinitionBuildsStructuredPresentationFromCallInput(t *testing.T) {
+	edit, ok := DefinitionFor(toolspec.ToolEdit)
+	if !ok {
+		t.Fatalf("expected %s definition", toolspec.ToolEdit)
+	}
+
+	meta := edit.BuildToolCallMeta(ToolCallContext{WorkingDir: "/workspace"}, json.RawMessage(`{
+		"filePath":"a.go",
+		"oldText":"old\nunchanged\n",
+		"newText":"new\nunchanged\n"
+	}`))
+
+	if meta.PatchRender == nil || len(meta.PatchRender.Files) != 1 {
+		t.Fatalf("expected one structured edit file, got %+v", meta.PatchRender)
+	}
+	file := meta.PatchRender.Files[0]
+	if file.RelPath != "./a.go" || file.Added != 1 || file.Removed != 1 {
+		t.Fatalf("unexpected structured edit file: %+v", file)
+	}
+	if meta.Command != meta.PatchDetail || meta.CompactText != meta.PatchSummary {
+		t.Fatalf("expected edit text aliases to come from structured input: %+v", meta)
 	}
 }
 

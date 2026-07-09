@@ -12,6 +12,7 @@ import (
 	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -239,7 +240,24 @@ func serialToolExecutionRequired(toolID toolspec.ID, workflowActive bool) bool {
 }
 
 func toolResultWithTranscriptPresentation(result tools.Result, call llm.ToolCall, workingDir string) tools.Result {
-	result.Presentation = mergeToolCallMeta(transcriptToolCallMeta(call, workingDir), result.Presentation)
+	if result.Presentation != nil {
+		panic(fmt.Sprintf(
+			"tool result presentation invariant violated: live handler returned finalized presentation (call_id=%q tool=%q)",
+			result.CallID,
+			result.Name,
+		))
+	}
+	callMeta := transcriptToolCallMeta(call, workingDir)
+	if callMeta == nil {
+		panic(fmt.Sprintf(
+			"tool result presentation invariant violated: call metadata is unavailable (call_id=%q tool=%q)",
+			result.CallID,
+			result.Name,
+		))
+	}
+	finalized := transcript.ApplyToolResultPresentationDelta(*callMeta, result.PresentationDelta)
+	result.PresentationDelta = nil
+	result.Presentation = &finalized
 	return result
 }
 

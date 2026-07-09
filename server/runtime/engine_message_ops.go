@@ -19,6 +19,13 @@ import (
 )
 
 func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) error {
+	if r.PresentationDelta != nil {
+		panic(fmt.Sprintf(
+			"tool result presentation invariant violated: unconsumed presentation delta reached persistence (call_id=%q tool=%q)",
+			r.CallID,
+			r.Name,
+		))
+	}
 	if sessionID, ok := harvestedBackgroundCompletionSessionID(r); ok {
 		e.ensureOrchestrationCollaborators()
 		e.backgroundFlow.ConsumePendingBackgroundNotice(sessionID)

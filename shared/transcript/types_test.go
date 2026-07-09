@@ -2,6 +2,32 @@ package transcript
 
 import "testing"
 
+func TestNormalizeToolCallMetaRecoversKnownShellToolsWithoutPresentationMetadata(t *testing.T) {
+	tests := []struct {
+		name          string
+		toolName      string
+		wantPlainHint bool
+	}{
+		{name: "exec command", toolName: "exec_command"},
+		{name: "write stdin", toolName: "write_stdin", wantPlainHint: true},
+		{name: "legacy shell alias", toolName: "shell"},
+		{name: "legacy bash alias", toolName: "bash"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := NormalizeToolCallMeta(ToolCallMeta{ToolName: tt.toolName})
+
+			if meta.Presentation != ToolPresentationShell || meta.RenderBehavior != ToolCallRenderBehaviorShell || !meta.IsShell {
+				t.Fatalf("expected known shell tool metadata recovered, got %+v", meta)
+			}
+			if tt.wantPlainHint && (meta.RenderHint == nil || meta.RenderHint.Kind != ToolRenderKindPlain) {
+				t.Fatalf("expected write_stdin to use plain shell input rendering, got %+v", meta.RenderHint)
+			}
+		})
+	}
+}
+
 func TestNormalizeToolCallMetaMarksWriteStdinShellAsPlainRenderHint(t *testing.T) {
 	meta := NormalizeToolCallMeta(ToolCallMeta{
 		ToolName:       "write_stdin",

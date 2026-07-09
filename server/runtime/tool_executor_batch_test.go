@@ -106,7 +106,7 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 	tests := []struct {
 		name          string
 		call          llm.ToolCall
-		presentation  *transcript.ToolCallMeta
+		delta         *transcript.ToolResultPresentationDelta
 		wantCommand   string
 		wantPatch     bool
 		wantRaw       bool
@@ -118,16 +118,16 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 			wantCommand: "pwd",
 		},
 		{
-			name:         "raw shell command",
-			call:         llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23902", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"printf raw","raw":true}`)},
-			presentation: &transcript.ToolCallMeta{RawOutputRequested: true},
-			wantCommand:  "printf raw",
-			wantRaw:      true,
+			name:        "raw shell command",
+			call:        llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23902", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"printf raw","raw":true}`)},
+			delta:       &transcript.ToolResultPresentationDelta{RawOutputRequested: true},
+			wantCommand: "printf raw",
+			wantRaw:     true,
 		},
 		{
 			name:          "truncated shell command",
 			call:          llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23903", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"cat large.log"}`)},
-			presentation:  &transcript.ToolCallMeta{OutputTruncated: true},
+			delta:         &transcript.ToolResultPresentationDelta{OutputTruncated: true},
 			wantCommand:   "cat large.log",
 			wantTruncated: true,
 		},
@@ -141,20 +141,32 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 			},
 			wantPatch: true,
 		},
+		{
+			name: "edit input",
+			call: llm.ToolCall{
+				ID:    "0f63b1c2-6b29-4dc0-9b0f-405a92a23906",
+				Name:  string(toolspec.ToolEdit),
+				Input: json.RawMessage(`{"path":"a.txt","old_string":"hello","new_string":"goodbye"}`),
+			},
+			wantPatch: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := toolResultWithTranscriptPresentation(tools.Result{
-				CallID:       tt.call.ID,
-				Name:         toolspec.ID(tt.call.Name),
-				IsError:      true,
-				Summary:      "failed",
-				Presentation: tt.presentation,
+				CallID:            tt.call.ID,
+				Name:              toolspec.ID(tt.call.Name),
+				IsError:           true,
+				Summary:           "failed",
+				PresentationDelta: tt.delta,
 			}, tt.call, t.TempDir())
 
 			if result.Presentation == nil {
 				t.Fatal("tool result presentation is nil")
+			}
+			if result.PresentationDelta != nil {
+				t.Fatalf("tool result presentation delta was not consumed: %+v", result.PresentationDelta)
 			}
 			if tt.wantCommand != "" && result.Presentation.Command != tt.wantCommand {
 				t.Fatalf("presentation command = %q, want %q", result.Presentation.Command, tt.wantCommand)
@@ -170,6 +182,25 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestToolResultWithTranscriptPresentationRejectsHandlerFinalizedPresentation(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected handler-owned finalized presentation to violate the finalization invariant")
+		}
+	}()
+
+	call := llm.ToolCall{
+		ID:    "0f63b1c2-6b29-4dc0-9b0f-405a92a23905",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"command":"pwd"}`),
+	}
+	toolResultWithTranscriptPresentation(tools.Result{
+		CallID:       call.ID,
+		Name:         toolspec.ToolExecCommand,
+		Presentation: &transcript.ToolCallMeta{Command: "handler override"},
+	}, call, t.TempDir())
 }
 
 func askQuestionInput(t *testing.T, question string) json.RawMessage {

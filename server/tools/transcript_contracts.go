@@ -169,16 +169,27 @@ func patchToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage
 
 func editToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage) transcript.ToolCallMeta {
 	return func(ctx ToolCallContext, raw json.RawMessage) transcript.ToolCallMeta {
-		path := parseEditToolCallPath(raw)
-		command := path
-		if command == "" {
-			command = "file change"
+		in, err := ParseEditInput(raw)
+		if err != nil {
+			meta := defaultToolCallMeta(toolID)(ctx, raw)
+			if path := strings.TrimSpace(in.Path); path != "" {
+				meta.Command = path
+				meta.CompactText = path
+			}
+			meta.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
+			return meta
 		}
+		rendered := patchformat.RenderEdit(in.Path, in.OldString, in.NewString, ctx.WorkingDir)
+		detail := rendered.DetailText()
+		compact := rendered.SummaryText()
 		return transcript.ToolCallMeta{
-			ToolName:    string(toolID),
-			Command:     command,
-			CompactText: command,
-			RenderHint:  &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
+			ToolName:     string(toolID),
+			Command:      detail,
+			CompactText:  compact,
+			PatchSummary: compact,
+			PatchDetail:  detail,
+			PatchRender:  &rendered,
+			RenderHint:   &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
 		}
 	}
 }
@@ -457,24 +468,6 @@ func parsePatchToolCall(raw json.RawMessage, cwd string) (detail string, compact
 	}
 	r := patchformat.Render(patchText, cwd)
 	return r.DetailText(), r.SummaryText(), &r, true
-}
-
-func parseEditToolCallPath(raw json.RawMessage) string {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return ""
-	}
-	for _, name := range []string{"path", "file_path", "filePath"} {
-		rawValue, ok := obj[name]
-		if !ok {
-			continue
-		}
-		var value string
-		if err := json.Unmarshal(rawValue, &value); err == nil {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 func detectShellRenderHint(ctx ToolCallContext, toolID toolspec.ID, raw json.RawMessage, command string) *transcript.ToolRenderHint {

@@ -18,6 +18,47 @@ func Render(src, cwd string) RenderedPatch {
 	return rendered
 }
 
+func RenderEdit(path, oldText, newText, cwd string) RenderedPatch {
+	return Format(Document{Hunks: []any{UpdateFile{
+		Path:    path,
+		Changes: editChangeLines(oldText, newText),
+	}}}, cwd)
+}
+
+func editChangeLines(oldText, newText string) []ChangeLine {
+	oldLines := normalizedEditLines(oldText)
+	newLines := normalizedEditLines(newText)
+	commonPrefix := 0
+	for commonPrefix < len(oldLines) && commonPrefix < len(newLines) && oldLines[commonPrefix] == newLines[commonPrefix] {
+		commonPrefix++
+	}
+	oldSuffix := len(oldLines)
+	newSuffix := len(newLines)
+	for oldSuffix > commonPrefix && newSuffix > commonPrefix && oldLines[oldSuffix-1] == newLines[newSuffix-1] {
+		oldSuffix--
+		newSuffix--
+	}
+	out := make([]ChangeLine, 0, oldSuffix-commonPrefix+newSuffix-commonPrefix)
+	for _, line := range oldLines[commonPrefix:oldSuffix] {
+		out = append(out, ChangeLine{Kind: '-', Content: line})
+	}
+	for _, line := range newLines[commonPrefix:newSuffix] {
+		out = append(out, ChangeLine{Kind: '+', Content: line})
+	}
+	if len(out) == 0 && oldText != newText {
+		out = append(out, ChangeLine{Kind: '-', Content: oldText}, ChangeLine{Kind: '+', Content: newText})
+	}
+	return out
+}
+
+func normalizedEditLines(text string) []string {
+	lines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(text, "\r\n", "\n"), "\n"), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return nil
+	}
+	return lines
+}
+
 func Raw(src string) RenderedPatch {
 	trimmed := strings.TrimSpace(src)
 	if trimmed == "" {

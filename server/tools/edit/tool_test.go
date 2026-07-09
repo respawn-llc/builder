@@ -12,7 +12,7 @@ import (
 	"core/shared/toolspec"
 )
 
-func TestCreateMissingFileReturnsJSONStringAndDiff(t *testing.T) {
+func TestCreateMissingFileReturnsJSONString(t *testing.T) {
 	dir := t.TempDir()
 	tool := newTestTool(t, dir)
 
@@ -33,11 +33,8 @@ func TestCreateMissingFileReturnsJSONStringAndDiff(t *testing.T) {
 	if string(got) != "hello\n" {
 		t.Fatalf("created content = %q", string(got))
 	}
-	if result.Presentation == nil || result.Presentation.PatchRender == nil {
-		t.Fatalf("expected result diff metadata, got %+v", result.Presentation)
-	}
-	if summary := result.Presentation.PatchRender.SummaryText(); !strings.Contains(summary, "nested/a.txt") || !strings.Contains(summary, "+1") {
-		t.Fatalf("unexpected diff summary: %q", summary)
+	if result.Presentation != nil || result.PresentationDelta != nil {
+		t.Fatalf("edit handler must not own transcript presentation, got presentation=%+v delta=%+v", result.Presentation, result.PresentationDelta)
 	}
 }
 

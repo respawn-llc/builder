@@ -3,6 +3,7 @@ package transcript
 import (
 	"strings"
 
+	"core/shared/toolspec"
 	patchformat "core/shared/transcript/patchformat"
 )
 
@@ -66,11 +67,30 @@ type ToolCallMeta struct {
 	OutputTruncated        bool
 }
 
+// ToolResultPresentationDelta contains only presentation facts learned from a
+// tool result. Tool-call input metadata remains authoritative for every other
+// presentation field.
+type ToolResultPresentationDelta struct {
+	RawOutputRequested bool
+	OutputTruncated    bool
+}
+
+func ApplyToolResultPresentationDelta(meta ToolCallMeta, delta *ToolResultPresentationDelta) ToolCallMeta {
+	if delta == nil {
+		return NormalizeToolCallMeta(meta)
+	}
+	meta.RawOutputRequested = meta.RawOutputRequested || delta.RawOutputRequested
+	meta.OutputTruncated = meta.OutputTruncated || delta.OutputTruncated
+	return NormalizeToolCallMeta(meta)
+}
+
 func NormalizeToolCallMeta(in ToolCallMeta) ToolCallMeta {
 	out := in
+	toolID, knownTool := toolspec.ParseID(out.ToolName)
+	knownShellTool := knownTool && (toolID == toolspec.ToolExecCommand || toolID == toolspec.ToolWriteStdin)
 	if out.Presentation == "" {
 		switch {
-		case out.RenderBehavior == ToolCallRenderBehaviorShell || out.IsShell:
+		case out.RenderBehavior == ToolCallRenderBehaviorShell || out.IsShell || knownShellTool:
 			out.Presentation = ToolPresentationShell
 		case out.RenderBehavior == ToolCallRenderBehaviorAskQuestion || strings.TrimSpace(out.Question) != "" || len(out.Suggestions) > 0 || out.RecommendedOptionIndex > 0:
 			out.Presentation = ToolPresentationAskQuestion
@@ -94,7 +114,7 @@ func NormalizeToolCallMeta(in ToolCallMeta) ToolCallMeta {
 	if out.RenderBehavior == ToolCallRenderBehaviorShell {
 		out.IsShell = true
 	}
-	if out.RenderHint == nil && strings.TrimSpace(out.ToolName) == "write_stdin" && out.IsShell {
+	if out.RenderHint == nil && knownTool && toolID == toolspec.ToolWriteStdin && out.IsShell {
 		out.RenderHint = &ToolRenderHint{Kind: ToolRenderKindPlain}
 	}
 	if strings.TrimSpace(out.InlineMeta) == "" {
