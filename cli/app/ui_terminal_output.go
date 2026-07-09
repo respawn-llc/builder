@@ -82,3 +82,44 @@ func (w *uiTerminalOutput) writeMarkerLocked(marker runner.TerminalPhaseMarker) 
 	_, err = w.out.Write(payload)
 	return err
 }
+
+// uiTerminalOutputFile forwards the terminal-cursor-file interface (Read/Close/
+// Fd) through to the underlying file so the cursor/gate writer wrappers and the
+// Bubble Tea program can still detect the real terminal file descriptor. This
+// keeps resize detection (term.IsTerminal on the output writer's Fd) working
+// even though uiTerminalOutput intercepts Write for phase-marker injection.
+// When the underlying writer is not a file, it degrades to the plain marker
+// sink and satisfies io.Writer + TerminalPhaseMarkerSink only.
+type uiTerminalOutputFile struct {
+	*uiTerminalOutput
+	file terminalCursorFile
+}
+
+func newUITerminalOutputFile(out io.Writer, markerEncoder runner.TerminalPhaseMarkerEncoder) uiTerminalOutputFile {
+	base := newUITerminalOutput(out, markerEncoder)
+	if file, ok := out.(terminalCursorFile); ok {
+		return uiTerminalOutputFile{uiTerminalOutput: base, file: file}
+	}
+	return uiTerminalOutputFile{uiTerminalOutput: base}
+}
+
+func (w uiTerminalOutputFile) Read(p []byte) (int, error) {
+	if w.file == nil {
+		return 0, io.ErrClosedPipe
+	}
+	return w.file.Read(p)
+}
+
+func (w uiTerminalOutputFile) Close() error {
+	if w.file == nil {
+		return nil
+	}
+	return w.file.Close()
+}
+
+func (w uiTerminalOutputFile) Fd() uintptr {
+	if w.file == nil {
+		return 0
+	}
+	return w.file.Fd()
+}

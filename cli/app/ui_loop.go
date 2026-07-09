@@ -18,7 +18,12 @@ import (
 func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, logger *runLogger, commandRegistry *commands.Registry, initialPrompt string, initialPromptHistoryRecorded bool, initialInput string, recoveryBuffers []serverapi.SessionDraftRecoveryBuffer, sessionName string, modelContractLocked bool, configuredModelName string, statusConfig uiStatusConfig, startupUpdateNotice bool, markerEncoder runner.TerminalPhaseMarkerEncoder, markerSinkObserver runner.TerminalPhaseMarkerSinkObserver) (tea.Model, error) {
 	terminalCursor := newUITerminalCursorState()
 	rendererOutputGate := newUIRendererOutputGateState()
-	terminalOutput := newUITerminalOutput(os.Stdout, markerEncoder)
+	// The terminal output intercepts Write to inject phase markers while
+	// preserving terminal-file identity (Fd/Read/Close) when the underlying
+	// writer is a file, so Bubble Tea can still detect the real terminal and
+	// emit WindowSizeMsg. Without file identity, resize detection no-ops and the
+	// surface falls back to a hardcoded width.
+	terminalOutput := newUITerminalOutputFile(os.Stdout, markerEncoder)
 	ongoingSurface := ongoing.NewSurface(terminalOutput)
 	if markerSinkObserver != nil {
 		if err := markerSinkObserver.TerminalPhaseMarkerSinkReady(context.Background(), terminalOutput); err != nil {

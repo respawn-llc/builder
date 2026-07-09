@@ -103,6 +103,24 @@ func TestTerminalPhaseMarkerRejectsNonV7WindowID(t *testing.T) {
 	}
 }
 
+func TestTerminalOutputFilePreservesTerminalFileDescriptor(t *testing.T) {
+	file := &rendererOutputGateTerminalFile{fd: 42}
+	terminal := newUITerminalOutputFile(file, nil)
+	terminalFile, ok := any(terminal).(interface{ Fd() uintptr })
+	if !ok {
+		t.Fatalf("expected terminal output to preserve Fd for Bubble Tea TTY detection, got %T", terminal)
+	}
+	if got := terminalFile.Fd(); got != 42 {
+		t.Fatalf("fd = %d, want 42", got)
+	}
+	if _, err := terminal.Write([]byte("native output")); err != nil {
+		t.Fatalf("write terminal output: %v", err)
+	}
+	if got := file.String(); got != "native output" {
+		t.Fatalf("forwarded output = %q", got)
+	}
+}
+
 func TestProductionAppCodeDoesNotConstructRawFixturePhaseMarkerOSC(t *testing.T) {
 	for _, path := range productionGoFiles(t, ".") {
 		fileSet := token.NewFileSet()
