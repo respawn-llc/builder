@@ -74,7 +74,7 @@ type toolMeta struct {
 	ToolName               string
 	Presentation           clientui.ToolPresentationKind
 	RenderBehavior         clientui.ToolCallRenderBehavior
-	RenderHint             *clientui.ToolRenderHint
+	ShellDialect           clientui.ToolShellDialect
 	IsShell                bool
 	UserInitiated          bool
 	Command                string
@@ -98,7 +98,6 @@ func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
 			ToolName:               firstNonEmpty(in.ToolName, toolName),
 			Presentation:           in.Presentation,
 			RenderBehavior:         in.RenderBehavior,
-			RenderHint:             cloneToolRenderHint(in.RenderHint),
 			IsShell:                in.IsShell,
 			UserInitiated:          in.UserInitiated,
 			Command:                strings.TrimSpace(in.Command),
@@ -113,6 +112,9 @@ func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
 			RecommendedOptionIndex: in.RecommendedOptionIndex,
 			RawOutputRequested:     in.RawOutputRequested,
 			OutputTruncated:        in.OutputTruncated,
+		}
+		if in.RenderHint != nil {
+			meta.ShellDialect = in.RenderHint.ShellDialect
 		}
 	}
 	if meta.Presentation == "" {
@@ -150,18 +152,6 @@ func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
 	}
 	meta.ToolName = strings.TrimSpace(meta.ToolName)
 	return meta
-}
-
-func cloneToolRenderHint(in *clientui.ToolRenderHint) *clientui.ToolRenderHint {
-	if in == nil {
-		return nil
-	}
-	return &clientui.ToolRenderHint{
-		Kind:         in.Kind,
-		Path:         strings.TrimSpace(in.Path),
-		ResultOnly:   in.ResultOnly,
-		ShellDialect: in.ShellDialect,
-	}
 }
 
 func toolRole(meta toolMeta, isError bool) StyleRole {
@@ -315,8 +305,8 @@ func shellSyntaxSpans(line string, meta toolMeta) []Span {
 
 func shellSyntaxLexer(meta toolMeta) chroma.Lexer {
 	dialect := clientui.ToolShellDialectPosix
-	if meta.RenderHint != nil && meta.RenderHint.ShellDialect != "" {
-		dialect = meta.RenderHint.ShellDialect
+	if meta.ShellDialect != "" {
+		dialect = meta.ShellDialect
 	}
 	switch dialect {
 	case clientui.ToolShellDialectPowerShell:

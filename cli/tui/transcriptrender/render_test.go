@@ -10,7 +10,6 @@ import (
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
-	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -86,34 +85,57 @@ func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
 	}
 }
 
-func TestShellSyntaxLexerUsesTypedDialect(t *testing.T) {
+func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 	cases := []struct {
-		name       string
-		dialect    clientui.ToolShellDialect
-		lexerNames []string
+		name    string
+		dialect clientui.ToolShellDialect
+		command string
 	}{
-		{name: "default", lexerNames: []string{"bash", "shell"}},
-		{name: "posix", dialect: clientui.ToolShellDialectPosix, lexerNames: []string{"bash", "shell"}},
-		{name: "powershell", dialect: clientui.ToolShellDialectPowerShell, lexerNames: []string{"powershell", "posh", "shell"}},
-		{name: "windows command", dialect: clientui.ToolShellDialectWindowsCommand, lexerNames: []string{"batch", "bat", "shell"}},
-		{name: "unknown", dialect: clientui.ToolShellDialect("fish"), lexerNames: []string{"bash", "shell"}},
+		{name: "posix", dialect: clientui.ToolShellDialectPosix, command: "printf 'ok' # comment"},
+		{name: "powershell", dialect: clientui.ToolShellDialectPowerShell, command: "Write-Host \"ok\" # comment"},
+		{name: "windows command", dialect: clientui.ToolShellDialectWindowsCommand, command: "rem comment"},
 	}
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			meta := toolMeta{}
-			if tt.dialect != "" {
-				meta.RenderHint = &clientui.ToolRenderHint{ShellDialect: tt.dialect}
+			row := toolRow("exec_command", clientui.ToolPresentationShell, tt.command, false)
+			row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{ShellDialect: tt.dialect}
+			rendered := RenderCommittedRow(row, 120, "", ModeOngoing)
+			if len(rendered.Lines) == 0 {
+				t.Fatal("rendered no committed shell row lines")
 			}
-			got := shellSyntaxLexer(meta)
-			if got == nil {
-				t.Fatal("shell syntax lexer is nil")
-			}
-			want := testFirstAvailableLexerName(t, tt.lexerNames...)
-			if got.Config().Name != want {
-				t.Fatalf("lexer = %q, want %q for dialect %q", got.Config().Name, want, tt.dialect)
-			}
+			assertShellLineHasTypedSyntax(t, rendered.Lines[0])
+
+			pending := RenderPendingTool(clientui.TranscriptToolStart{
+				ToolCallID: "tool-1",
+				ToolName:   "exec_command",
+				ToolPresentation: &clientui.ToolCallMeta{
+					ToolName:     "exec_command",
+					Presentation: clientui.ToolPresentationShell,
+					Command:      tt.command,
+					CompactText:  tt.command,
+					RenderHint:   &clientui.ToolRenderHint{ShellDialect: tt.dialect},
+				},
+			}, 120, "⢎ ")
+			assertShellLineHasTypedSyntax(t, pending)
 		})
+	}
+}
+
+func assertShellLineHasTypedSyntax(t *testing.T, line Line) {
+	t.Helper()
+	foundSyntax := false
+	for _, span := range line.Spans[2:] {
+		if !span.Faint {
+			t.Fatalf("shell syntax span is not faint: %+v", span)
+		}
+		switch span.Role {
+		case StyleRoleToolShellPrimary, StyleRoleToolShellSecondary, StyleRoleToolShellWarning, StyleRoleToolShellError:
+			foundSyntax = true
+		}
+	}
+	if !foundSyntax {
+		t.Fatalf("shell line did not include typed syntax role spans: %+v", line.Spans)
 	}
 }
 
@@ -128,18 +150,6 @@ func TestDefaultToolRowsDoNotUseShellSyntaxRoles(t *testing.T) {
 			t.Fatalf("default tool row used shell syntax role span: %+v", span)
 		}
 	}
-}
-
-func testFirstAvailableLexerName(t *testing.T, names ...string) string {
-	t.Helper()
-	for _, name := range names {
-		lexer := lexers.Get(name)
-		if lexer != nil {
-			return lexer.Config().Name
-		}
-	}
-	t.Fatalf("none of the expected Chroma lexers are available: %v", names)
-	return ""
 }
 
 func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
