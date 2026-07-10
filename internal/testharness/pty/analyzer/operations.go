@@ -34,8 +34,9 @@ func canExtendWrite(pending pendingWrite, position Position, text string, backen
 		text != ""
 }
 
-// flushPendingWrite emits one semantic row segment. Terminal operations are
-// evidence, not a screen diff: identical redraws remain distinct operations.
+// flushPendingWrite emits one semantic row segment. Redraw suppression is
+// valid only while no screen-mutating operation intervenes; erase and resize
+// invalidate the cache so a subsequent identical redraw stays observable.
 func (b *tracingBackend) flushPendingWrite() error {
 	if b.pendingWrite == nil {
 		return nil
@@ -43,6 +44,9 @@ func (b *tracingBackend) flushPendingWrite() error {
 	pending := b.pendingWrite
 	b.pendingWrite = nil
 	text := string(pending.text)
+	if previous, exists := b.writeCache[pending.region]; exists && previous == text {
+		return nil
+	}
 	span, err := b.writeText.append(text)
 	if err != nil {
 		return err
@@ -60,5 +64,6 @@ func (b *tracingBackend) flushPendingWrite() error {
 	}) {
 		return b.err
 	}
+	b.writeCache[pending.region] = text
 	return nil
 }

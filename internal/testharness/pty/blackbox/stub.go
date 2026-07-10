@@ -37,18 +37,19 @@ type ObservedCall struct {
 }
 
 type ResponsesStub struct {
-	server     *http.Server
-	listener   net.Listener
-	required   []RequiredOperation
-	mu         sync.Mutex
-	index      int
-	active     int
-	failure    error
-	observed   []ObservedCall
-	handlers   map[uint64]context.CancelFunc
-	nextHandle uint64
-	done       chan struct{}
-	events     chan struct{}
+	server           *http.Server
+	listener         net.Listener
+	required         []RequiredOperation
+	mu               sync.Mutex
+	index            int
+	requiredInFlight bool
+	active           int
+	failure          error
+	observed         []ObservedCall
+	handlers         map[uint64]context.CancelFunc
+	nextHandle       uint64
+	done             chan struct{}
+	events           chan struct{}
 }
 
 func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
@@ -175,6 +176,9 @@ func (s *ResponsesStub) serveHTTP(writer http.ResponseWriter, request *http.Requ
 		http.Error(writer, "unexpected model operation", http.StatusBadRequest)
 		return
 	}
+	if operation != nil {
+		defer s.completeRequired()
+	}
 	s.recordObserved(call)
 	switch route {
 	case RouteResponses:
@@ -227,6 +231,9 @@ func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (
 		}
 		return nil, fmt.Errorf("required model operation route=%s got=%s", required.Route, route)
 	}
+	if s.requiredInFlight {
+		return nil, errors.New("concurrent declared model operation")
+	}
 	if required.Probe != "" && !requestContainsProbe(body, required.Probe) {
 		return nil, errors.New("required response probe was not present in typed input")
 	}
@@ -234,8 +241,16 @@ func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (
 		return nil, errors.New("required response session_id and prompt_cache_key relation was not present")
 	}
 	s.index++
+	s.requiredInFlight = true
 	s.notify()
 	return &required, nil
+}
+
+func (s *ResponsesStub) completeRequired() {
+	s.mu.Lock()
+	s.requiredInFlight = false
+	s.mu.Unlock()
+	s.notify()
 }
 
 func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseWriter, operation *RequiredOperation) {
