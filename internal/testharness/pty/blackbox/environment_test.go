@@ -1,13 +1,22 @@
 package blackbox
 
 import (
+	"context"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProcessEnvironmentsAreSeparateAndFallible(t *testing.T) {
+	t.Setenv("KENT_OPENAI_BASE_URL", "http://ambient.invalid")
+	t.Setenv("OPENAI_API_KEY", "ambient")
+	t.Setenv("HTTPS_PROXY", "http://ambient.invalid")
+	t.Setenv("COLORTERM", "truecolor")
 	root := t.TempDir()
 	client, err := clientEnvironment(filepath.Join(root, "client"), root, "127.0.0.1", 7777)
 	if err != nil {
@@ -34,6 +43,90 @@ func TestProcessEnvironmentsAreSeparateAndFallible(t *testing.T) {
 	if _, err := os.Stat(clientValues["HOME"]); err != nil {
 		t.Fatalf("client HOME was not created: %v", err)
 	}
+	for _, values := range []map[string]string{clientValues, serverValues} {
+		for _, forbidden := range []string{"OPENAI_API_KEY", "HTTPS_PROXY", "COLORTERM"} {
+			if _, exists := values[forbidden]; exists {
+				t.Fatalf("controlled process inherited %s: %#v", forbidden, values)
+			}
+		}
+	}
+	if _, exists := clientValues["COLORTERM"]; exists {
+		t.Fatalf("client contains forbidden COLORTERM: %#v", clientValues)
+	}
+}
+
+func TestEnvironmentBuilderRejectsDuplicateKeysAndUncreatableHome(t *testing.T) {
+	if _, err := appendEnvironment([]string{"A=1"}, "A=2"); err == nil {
+		t.Fatal("appendEnvironment accepted duplicate key")
+	}
+	root := t.TempDir()
+	home := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(home, []byte("file"), 0o600); err != nil {
+		t.Fatalf("create home file: %v", err)
+	}
+	if _, err := clientEnvironment(home, root, "127.0.0.1", 7777); err == nil {
+		t.Fatal("clientEnvironment accepted a file as HOME")
+	}
+}
+
+func TestWaitReadyRejectsForeignPIDAndExitedServer(t *testing.T) {
+	foreign := httptestReadyServer(t, func(writer http.ResponseWriter) {
+		_, _ = writer.Write([]byte(`{"ready":true,"pid":1}`))
+	})
+	cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", "sleep 5")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start process: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	environment := &IsolatedEnvironment{
+		Host: foreign.host, Port: foreign.port,
+		Server: &ServerHandle{cmd: cmd, done: make(chan struct{}), stderr: newBoundedLog(1024)},
+	}
+	if err := environment.WaitReady(); err == nil {
+		t.Fatal("WaitReady accepted readiness from a foreign PID")
+	}
+
+	exit := exec.CommandContext(context.Background(), "/bin/sh", "-c", "exit 0")
+	if err := exit.Start(); err != nil {
+		t.Fatalf("start exiting process: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		_ = exit.Wait()
+		close(done)
+	}()
+	environment = &IsolatedEnvironment{
+		Host: "127.0.0.1", Port: 1,
+		Server: &ServerHandle{cmd: exit, done: done, stderr: newBoundedLog(1024)},
+	}
+	started := time.Now()
+	if err := environment.WaitReady(); err == nil {
+		t.Fatal("WaitReady accepted an exited server")
+	}
+	if time.Since(started) > fixedWait {
+		t.Fatal("WaitReady did not fail within its fixed deadline")
+	}
+}
+
+type readyServer struct {
+	host string
+	port int
+}
+
+func httptestReadyServer(t *testing.T, serve func(http.ResponseWriter)) readyServer {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen readiness server: %v", err)
+	}
+	server := &http.Server{Handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) { serve(writer) })}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+	address := listener.Addr().(*net.TCPAddr)
+	return readyServer{host: address.IP.String(), port: address.Port}
 }
 
 func environmentValues(t *testing.T, environment []string) map[string]string {

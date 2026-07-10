@@ -49,6 +49,73 @@ func TestDecodeScenarioRejectsUnknownFieldsAndUnionEscapeHatches(t *testing.T) {
 	}
 }
 
+func TestDecodeScenarioRejectsInvalidIdentitiesPayloadsAndRouteCombinations(t *testing.T) {
+	t.Parallel()
+
+	id := uuid.New().String()
+	action := uuid.New().String()
+	operation := uuid.New().String()
+	cases := []string{
+		`{"version":2,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[]}`,
+		`{"version":1,"id":"00000000-0000-0000-0000-000000000000","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[]}`,
+		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"enter_input","input":""}]}`,
+		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[{"id":"` + operation + `","route":"compact","outcome":"hold_sse"}],"actions":[]}`,
+		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[{"id":"` + operation + `","route":"model_metadata","outcome":"json","output":"x"}],"actions":[]}`,
+		`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + action + `","kind":"wait","predicate":{"kind":"all","children":[]}}]}`,
+	}
+	for _, document := range cases {
+		if _, err := blackbox.DecodeScenario([]byte(document)); err == nil {
+			t.Fatalf("DecodeScenario accepted invalid document: %s", document)
+		}
+	}
+	oversized := []byte(`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[],"padding":"` + strings.Repeat("x", 256*1024) + `"}`)
+	if _, err := blackbox.DecodeScenario(oversized); err == nil {
+		t.Fatal("DecodeScenario accepted oversized document")
+	}
+}
+
+func TestPredicateVocabularyAndCompositesUseStructuredObservation(t *testing.T) {
+	t.Parallel()
+
+	dimensions := analyzer.MustDimensions(2, 8)
+	screen := analyzer.NewScreenSnapshot(dimensions)
+	analysis := analyzer.Analysis{
+		Dimensions:         dimensions,
+		Screen:             screen,
+		PrivateModeChanges: []analyzer.PrivateModeChange{{Mode: 25, Enabled: true}},
+	}
+	observation := blackbox.RunObservation{
+		Analysis:     &analysis,
+		ClientExited: true,
+		ServerReady:  true,
+		Model: blackbox.StubSnapshot{
+			RequiredIndex: 1, RequiredTotal: 1,
+		},
+	}
+	enabled := true
+	for _, predicate := range []blackbox.Predicate{
+		{Kind: blackbox.PredicateParseable},
+		{Kind: blackbox.PredicateBlank},
+		{Kind: blackbox.PredicateDimensions, Rows: 2, Cols: 8},
+		{Kind: blackbox.PredicatePrivateMode, Mode: 25, Enabled: &enabled},
+		{Kind: blackbox.PredicatePromptReady},
+		{Kind: blackbox.PredicateProcessExited},
+		{Kind: blackbox.PredicateServerReady},
+		{Kind: blackbox.PredicateModelConsumed},
+		{Kind: blackbox.PredicateNoActiveModels},
+		{Kind: blackbox.PredicateAll, Children: []blackbox.Predicate{{Kind: blackbox.PredicateParseable}, {Kind: blackbox.PredicateServerReady}}},
+		{Kind: blackbox.PredicateAny, Children: []blackbox.Predicate{{Kind: blackbox.PredicateNonBlank}, {Kind: blackbox.PredicateServerReady}}},
+	} {
+		if !predicate.Matches(observation) {
+			t.Fatalf("structured predicate %s did not match %#v", predicate.Kind, observation)
+		}
+	}
+	analysis.Screen.Cells[0][0] = analyzer.Cell{Content: "x"}
+	if !(&blackbox.Predicate{Kind: blackbox.PredicateNonBlank}).Matches(observation) {
+		t.Fatal("nonblank predicate did not inspect screen structure")
+	}
+}
+
 func TestPromptReadyRequiresCursorVisibilityAfterMostRecentAlternateExit(t *testing.T) {
 	t.Parallel()
 
