@@ -168,6 +168,11 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 			http.Error(writer, "invalid request", http.StatusRequestEntityTooLarge)
 			return
 		}
+		if err := validateRouteBody(route, body); err != nil {
+			s.recordFailure(err)
+			http.Error(writer, "invalid request", http.StatusBadRequest)
+			return
+		}
 		call := ObservedCall{Route: route, Headers: request.Header.Clone(), Body: append(json.RawMessage(nil), body...)}
 		operation, err := s.consume(route, body, request.Header)
 		if err != nil {
@@ -347,6 +352,23 @@ func boundedBody(request *http.Request) ([]byte, error) {
 		return nil, errors.New("request body exceeds limit")
 	}
 	return body, nil
+}
+
+func validateRouteBody(route Route, body []byte) error {
+	if route == RouteModel {
+		if len(body) != 0 {
+			return errors.New("model metadata request must not include a body")
+		}
+		return nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(body, &object); err != nil {
+		return fmt.Errorf("decode %s request DTO: %w", route, err)
+	}
+	if object == nil {
+		return fmt.Errorf("decode %s request DTO: object is required", route)
+	}
+	return nil
 }
 
 type responseRequest struct {

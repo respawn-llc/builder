@@ -169,6 +169,30 @@ func TestResponsesStubRejectsProbeMismatch(t *testing.T) {
 	}
 }
 
+func TestResponsesStubRejectsMalformedRouteDTO(t *testing.T) {
+	t.Parallel()
+
+	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(stub.Close)
+
+	response, err := http.Post(stub.URL()+"/responses", "application/json", bytes.NewBufferString(`{"input":`))
+	if err != nil {
+		t.Fatalf("POST malformed DTO: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("malformed DTO status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+	if err := stub.Verify(); err == nil {
+		t.Fatal("Verify accepted malformed DTO")
+	}
+}
+
 func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	t.Parallel()
 
