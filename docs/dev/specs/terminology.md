@@ -210,7 +210,7 @@ Primary long-running TUI mode backed by normal-buffer terminal scrollback. Ongoi
 
 ### Detail Mode
 
-Transcript inspection mode with UI-local selection, expansion, and line-oriented viewport scrolling. Detail content can update while open, but scroll/anchor behavior stays stable unless the user navigates.
+Transcript inspection mode with UI-local selection, expansion, and line-oriented viewport scrolling over stale bounded cursor pages. Server-backed page membership changes through initial mode-entry hydration, session-target replacement, and user-triggered adjacent-page loads. Runtime events never append to or reconcile the current detail page membership while it is open.
 
 ### Transcript Mode
 

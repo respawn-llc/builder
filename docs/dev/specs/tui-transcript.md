@@ -50,16 +50,25 @@
 - Detail tool calls with error results stay collapsed by default but may show compact input plus structured error summary.
 - Detail scrolling is line-oriented.
 - `Up`/`Down` move by one rendered line when viewport can scroll.
-- `Enter` toggles the selected entry's expansion; `PgUp`/`PgDn` scroll by a viewport page; `Tab` inside detail returns to ongoing mode.
+- `Enter` toggles the selected expandable entry's expansion; it is a no-op for a non-expandable selection. `PgUp`/`PgDn` scroll by a viewport page; `Tab` inside detail returns to ongoing mode.
+- Raw wheel movement and terminal alternate-scroll cursor keys follow the same one-line state machine as `Up`/`Down`.
+- `PgUp`/`PgDn` pass a signed viewport-page delta through compact detail's generic scroll operation: they move the camera by that delta and select the center owner when possible; at a camera edge they attempt visible selection movement using that same signed delta before requesting an adjacent cursor page.
 - The detail transcript is a bounded window over the session transcript: scrolling at the loaded edge requests the adjacent page; no full-transcript load ever occurs.
-- After line, page, wheel, or alternate-scroll movement, compact detail selects the visible selectable item nearest viewport center.
+- In the scrollable interior, line, page, wheel, or alternate-scroll movement moves the camera and selects the visible selectable item nearest viewport center.
+- At the top or bottom camera edge, line movement continues through visible selectable items beyond the center anchor. Reverse movement walks an off-center selection back to the center anchor before camera scrolling resumes.
+- Detail requests an adjacent cursor page only after movement in that direction cannot move either the loaded camera or the visible local selection.
 - Tall expanded entries remain selected while their body crosses the center anchor.
 - Detail rows do not use dedicated collapsed/expanded glyphs. First rendered line keeps normal role/tool symbol; continuations use faint tree guides.
 - Compact detail replaces selected expandable item's role symbol with `▶` or `▼`. The affordance is selected-only.
+- The selected expansion affordance inherits the replaced role symbol's semantic foreground and faintness.
 - Detail status line mirrors selected action as `Enter to expand` or `Enter to collapse`.
 - Detail items use blank-line role-group separators. Consecutive tool rows form dense chunks.
-- Detail selection uses full-width selected background/fill only and does not change foreground colors.
-- Detail loads stale bounded cursor pages from the server. Scrolling at a loaded edge requests the adjacent page; loaded content does not self-update, append, reconcile, or refresh from live events.
+- The selected lens extends through its adjacent visual spacer lines. Selection spacers are render-only and do not change transcript line ownership, viewport scroll, selection, or paging.
+- Detail reserves a one-cell lens rail before transcript content. Unselected lines use a blank rail cell; every line owned by the selected item uses the primary `▎` rail and full-width `App.ModeBg` fill.
+- The rail owns the first terminal cell at every viewport width. A one-cell viewport shows only the selected rail or unselected blank rail; wider viewports render transcript content within the remaining cells using normal truncation.
+- Detail selection does not change semantic foreground colors or text attributes. Markdown, shell syntax, role symbols, continuation guides, and trailing row padding retain their semantic styling over the selected fill.
+- Detail loads stale bounded cursor pages from the server. Scrolling at a loaded edge requests the adjacent page, which may prepend or append server-backed page membership. Runtime and live transcript events never self-update, append to, reconcile, or refresh that membership.
+- An adjacent-page request shows a request-scoped `info` status notice using replace delivery and the request UUID as its notice identity. A later notice may replace it and it does not resurface. Matching completion clears only that loading notice; matching failure replaces it through the ordinary error-notice path. The selected expansion action remains the independent detail help-slot segment.
 - Detail owns only UI-local expansion, selection, and scroll state.
 - Mid-step entries are absent until a loaded page contains their committed snapshot.
 - Detail rendering is a flat continuous stream with no grouped sections.
