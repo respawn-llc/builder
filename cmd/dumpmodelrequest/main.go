@@ -32,13 +32,13 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
+	"core/server/runtimewire"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/config"
-	"core/shared/toolspec"
 )
 
 func main() {
@@ -130,22 +130,18 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		return capturedRequest{}, fmt.Errorf("open read-only session: %w", err)
 	}
 	meta := store.Meta()
-	workspaceRoot := strings.TrimSpace(meta.WorkspaceRoot)
-	if workspaceRoot == "" {
-		workspaceRoot = meta.WorkspaceContainer
+	bootstrap, err := launch.ResolveBootstrapPlan(persistenceRoot, launch.BootstrapRequest{SessionID: sessionID})
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("resolve launch bootstrap: %w", err)
 	}
-	if workspaceRoot == "" {
-		workspaceRoot, _ = os.Getwd()
-	}
-
-	// Load config against the session's workspace so provider settings (Store,
-	// ModelVerbosity, OpenAIBaseURL, capabilities override) resolve exactly as the
-	// live runtime resolves them.
-	cfg, err := config.Load(workspaceRoot, config.LoadOptions{ConfigRoot: persistenceRoot})
+	cfg, err := loadSessionConfig(bootstrap, persistenceRoot)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("load config: %w", err)
 	}
-	active := launchEffectiveSettings(cfg, &meta)
+	resolved, err := launch.ResolvePromptFacingSnapshotConfig(cfg, store, false)
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("resolve session launch settings: %w", err)
+	}
 	authState, err := auth.NewEnvAPIKeyOverrideStore(
 		auth.NewFileStore(config.GlobalAuthConfigPath(cfg)),
 		os.LookupEnv,
@@ -154,28 +150,44 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		return capturedRequest{}, fmt.Errorf("load auth state: %w", err)
 	}
 
-	caps, providerID, err := resolveProviderCapabilities(&meta, active, providerOverride)
+	caps, err := resolveProviderCapabilities(authState, resolved.Settings, providerOverride)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve provider capabilities: %w", err)
 	}
-
-	registry := buildInspectionRegistry(&meta, active)
-
-	engineCfg := buildEngineConfig(&meta, active, cfg, workspaceRoot, persistenceRoot, caps)
-	eng, err := runtime.New(store, inspectionStubClient{}, registry, engineCfg)
+	wiring, err := runtimewire.NewRuntimeWiring(
+		store,
+		resolved.Settings,
+		resolved.ActiveToolIDs,
+		cfg.WorkspaceRoot,
+		nil,
+		nil,
+		runtimewire.RuntimeWiringOptions{
+			Context:         ctx,
+			Client:          inspectionCapabilityClient{capabilities: caps},
+			Headless:        false,
+			Sources:         resolved.Source.Sources,
+			GlobalConfigDir: persistenceRoot,
+		},
+	)
 	if err != nil {
-		return capturedRequest{}, fmt.Errorf("construct engine: %w", err)
+		return capturedRequest{}, fmt.Errorf("construct runtime wiring: %w", err)
 	}
+	defer func() {
+		_ = wiring.Close()
+		if wiring.Background != nil {
+			_ = wiring.Background.Close()
+		}
+	}()
 
-	req, err := runtime.PrepareInspectionRequest(ctx, eng, allowTools)
+	req, err := runtime.PrepareInspectionRequest(ctx, wiring.Engine, allowTools)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("prepare request: %w", err)
 	}
 
 	openAIReq := llm.RequestAsOpenAI(req)
 	mode := llm.OpenAIAuthModeForAuthState(authState)
-	storeFlag := active.Store
-	modelVerbosity := string(active.ModelVerbosity)
+	storeFlag := resolved.Settings.Store
+	modelVerbosity := string(resolved.Settings.ModelVerbosity)
 	wireBytes, err := llm.MarshalOpenAIWirePayload(openAIReq, storeFlag, modelVerbosity, mode, caps)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("marshal wire payload: %w", err)
@@ -190,7 +202,7 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 
 	return capturedRequest{
 		SessionID:   meta.SessionID,
-		Provider:    providerID,
+		Provider:    string(caps.ProviderID),
 		Model:       req.Model,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		WirePayload: prettyWire,
@@ -199,123 +211,24 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	}, nil
 }
 
-// launchEffectiveSettings mirrors the launch planner's effective-settings
-// resolution: base settings reconciled with the session's locked contract so the
-// returned settings reflect what the live runtime would actually use.
-func launchEffectiveSettings(app config.App, meta *session.Meta) config.Settings {
-	// Prefer the locked model when present (the runtime always runs the locked
-	// model); otherwise fall back to the configured model.
-	active := app.Settings
-	if meta != nil && meta.Locked != nil && strings.TrimSpace(meta.Locked.Model) != "" {
-		active.Model = meta.Locked.Model
+func loadSessionConfig(bootstrap launch.BootstrapPlan, persistenceRoot string) (config.App, error) {
+	options := config.LoadOptions{
+		ConfigRoot:    persistenceRoot,
+		OpenAIBaseURL: bootstrap.OpenAIBaseURL,
 	}
-	return active
+	if strings.TrimSpace(bootstrap.WorkspaceRoot) == "" {
+		return config.LoadGlobal(options)
+	}
+	return config.Load(bootstrap.WorkspaceRoot, options)
 }
 
-// resolveProviderCapabilities resolves the provider id and capability contract for
-// the session. Precedence: explicit override flag > session's locked provider
-// contract > settings provider override > config capabilities override.
-func resolveProviderCapabilities(meta *session.Meta, active config.Settings, providerOverride string) (llm.ProviderCapabilities, string, error) {
-	if pid := strings.TrimSpace(providerOverride); pid != "" {
-		caps, ok := llm.LookupProviderCapabilityContract(pid)
-		if !ok {
-			return llm.ProviderCapabilities{}, "", fmt.Errorf("unknown provider id %q", pid)
-		}
-		return caps, pid, nil
+func resolveProviderCapabilities(authState auth.State, active config.Settings, providerOverride string) (llm.ProviderCapabilities, error) {
+	settings := active
+	if override := strings.TrimSpace(providerOverride); override != "" {
+		settings.ProviderOverride = override
+		settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{}
 	}
-	if meta != nil && meta.Locked != nil {
-		if caps, ok := llm.ProviderCapabilitiesFromLocked(meta.Locked); ok {
-			return caps, caps.ProviderID, nil
-		}
-	}
-	if pid := strings.TrimSpace(active.ProviderOverride); pid != "" {
-		if caps, ok := llm.LookupProviderCapabilityContract(pid); ok {
-			return caps, pid, nil
-		}
-	}
-	if pid := strings.TrimSpace(string(active.ProviderCapabilities.ProviderID)); pid != "" {
-		if caps, ok := llm.LookupProviderCapabilityContract(pid); ok {
-			return caps, pid, nil
-		}
-	}
-	caps, ok := llm.LookupProviderCapabilityContract("openai")
-	if !ok {
-		return llm.ProviderCapabilities{}, "", errors.New("no provider capabilities resolved and openai fallback unavailable")
-	}
-	return caps, "openai", nil
-}
-
-// buildInspectionRegistry registers the session's enabled tools with no-op
-// handlers. Tool definitions (name, description, JSON schema) come from the
-// centralized catalog, so the request exposes the exact same tool shapes the live
-// runtime exposes. Handlers are never invoked because no model turn runs.
-func buildInspectionRegistry(meta *session.Meta, active config.Settings) *tools.Registry {
-	enabled := enabledToolIDs(meta, active)
-	noop := noopHandler{}
-	handlers := make([]tools.HandlerRegistration, 0, len(enabled))
-	for _, id := range enabled {
-		def, ok := tools.DefinitionFor(id)
-		if !ok {
-			continue
-		}
-		if !def.AvailableInLocalRuntime() {
-			continue
-		}
-		handlers = append(handlers, tools.HandlerRegistration{ID: id, Handler: noop})
-	}
-	return tools.NewRegistry(handlers...)
-}
-
-func enabledToolIDs(meta *session.Meta, active config.Settings) []toolspec.ID {
-	if meta != nil && meta.Locked != nil && len(meta.Locked.EnabledTools) > 0 {
-		ids := make([]toolspec.ID, 0, len(meta.Locked.EnabledTools))
-		for _, raw := range meta.Locked.EnabledTools {
-			trimmed := strings.TrimSpace(raw)
-			if trimmed != "" {
-				ids = append(ids, toolspec.ID(trimmed))
-			}
-		}
-		return ids
-	}
-	out := make([]toolspec.ID, 0, len(active.EnabledTools))
-	for id, on := range active.EnabledTools {
-		if on {
-			out = append(out, id)
-		}
-	}
-	if len(out) == 0 {
-		return tools.DefaultEnabledToolIDs()
-	}
-	return out
-}
-
-// buildEngineConfig constructs the runtime.Config for inspection, sourcing every
-// field from the session's locked contract and effective settings so the prepared
-// request matches what the live runtime would produce.
-func buildEngineConfig(meta *session.Meta, active config.Settings, app config.App, workspaceRoot, persistenceRoot string, caps llm.ProviderCapabilities) runtime.Config {
-	cfg := runtime.Config{
-		ProviderCapabilitiesOverride: &caps,
-		EnabledTools:                 enabledToolIDs(meta, active),
-		FastModeEnabled:              active.PriorityRequestMode,
-		HeadlessMode:                 true,
-		GlobalConfigDir:              persistenceRoot,
-		WebSearchMode:                strings.TrimSpace(active.WebSearch),
-	}
-	if meta != nil && meta.Locked != nil {
-		cfg.Model = meta.Locked.Model
-		cfg.Temperature = meta.Locked.Temperature
-		cfg.MaxTokens = meta.Locked.MaxOutputToken
-		cfg.ContextWindowTokens = meta.Locked.ContextWindow
-		cfg.EffectiveContextWindowPercent = meta.Locked.ContextPercent
-		cfg.ModelCapabilities = meta.Locked.ModelCapabilities
-		cfg.SystemPromptFiles = app.Settings.SystemPromptFiles
-	} else {
-		cfg.Model = active.Model
-		cfg.SystemPromptFiles = active.SystemPromptFiles
-	}
-	cfg.ThinkingLevel = active.ThinkingLevel
-	cfg.Reviewer = runtime.ReviewerConfig{Frequency: "off"}
-	return cfg
+	return llm.ResolveRuntimeProviderCapabilities(authState, settings)
 }
 
 func prettyPrint(raw json.RawMessage) (json.RawMessage, error) {
@@ -339,26 +252,33 @@ func writeOutput(flagPath string, result capturedRequest) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, body, 0o644); err != nil {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+	if err := file.Chmod(0o600); err != nil {
+		return "", err
+	}
+	if _, err := file.Write(body); err != nil {
+		return "", err
+	}
+	if err := file.Close(); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
-// inspectionStubClient satisfies runtime's llm.Client requirement without ever
-// performing I/O. It is never invoked: inspection only builds the request, never
-// runs a turn, and provider capabilities are supplied via the engine config
-// override so the engine never consults the client for them.
-type inspectionStubClient struct{}
+// inspectionCapabilityClient exposes the already-resolved production capability
+// contract while rejecting generation. Request inspection never dispatches.
+type inspectionCapabilityClient struct {
+	capabilities llm.ProviderCapabilities
+}
 
-func (inspectionStubClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (inspectionCapabilityClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{}, errors.New("dumpmodelrequest: model generation is not supported (inspection-only)")
 }
 
-// noopHandler is a placeholder tool handler used only so the tool registry's
-// non-nil-handler invariant is satisfied. It is never invoked during inspection.
-type noopHandler struct{}
-
-func (noopHandler) Call(context.Context, tools.Call) (tools.Result, error) {
-	return tools.Result{IsError: true, Output: []byte(`{"error":"inspection-only registry"}`)}, nil
+func (c inspectionCapabilityClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return c.capabilities, nil
 }

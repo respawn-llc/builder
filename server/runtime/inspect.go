@@ -13,8 +13,12 @@ import (
 // provider.
 //
 // The engine must already be constructed (which auto-hydrates the active transcript
-// segment via restoreMessages). allowTools mirrors the production tool-exposure
-// behavior; pass false to produce a tool-less payload.
+// segment via restoreMessages). It prepares the same meta context that a live turn
+// prepares before building the request. allowTools mirrors the production
+// tool-exposure behavior; pass false to produce a tool-less payload.
 func PrepareInspectionRequest(ctx context.Context, eng *Engine, allowTools bool) (llm.Request, error) {
+	if err := eng.ensureMetaContextForRequest(ctx, "inspect"); err != nil {
+		return llm.Request{}, err
+	}
 	return eng.buildRequest(ctx, "inspect", allowTools)
 }
