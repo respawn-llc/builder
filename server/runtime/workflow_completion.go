@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	workflowInvalidNudge = "Workflow completion was rejected. Retry with valid workflow completion output only."
 	// This is not a config fallback. Runtime config validation should reject
 	// invalid caps; if an invalid value reaches the runtime anyway, fail closed
 	// by recording one durable violation and interrupting immediately.

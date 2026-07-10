@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"core/prompts"
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
@@ -538,19 +539,17 @@ func (s *defaultStepExecutor) appendWorkflowInvalidCompletionNudge(ctx context.C
 	if record.Interrupted {
 		return true, nil
 	}
-	content := workflowInvalidNudge
-	if strings.TrimSpace(err.Error()) != "" {
-		content += "\n\n" + err.Error()
-	}
 	instructions, instructionsErr := e.currentWorkflowCompletionInstructions(ctx)
 	if instructionsErr != nil {
 		return false, instructionsErr
 	}
-	if strings.TrimSpace(instructions) != "" {
-		content += "\n\n" + strings.TrimSpace(instructions)
-	}
+	goalReminder := ""
 	if reminder, ok := e.goalContinuation().reminderText(); ok {
-		content += "\n\n" + reminder
+		goalReminder = reminder
+	}
+	content, renderErr := prompts.RenderWorkflowNudgePrompt(err.Error(), instructions, goalReminder)
+	if renderErr != nil {
+		return false, renderErr
 	}
 	return false, e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: content}}))
 }

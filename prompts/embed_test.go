@@ -355,6 +355,29 @@ func TestRenderGoalNudgePrompt(t *testing.T) {
 	}
 }
 
+func TestRenderWorkflowNudgePrompt(t *testing.T) {
+	rendered, err := RenderWorkflowNudgePrompt(
+		"transition is required",
+		"Call complete_node with the selected transition.",
+		"Continue working toward the active session goal.",
+	)
+	if err != nil {
+		t.Fatalf("RenderWorkflowNudgePrompt: %v", err)
+	}
+	for _, want := range []string{
+		"transition is required",
+		"Call complete_node with the selected transition.",
+		"Continue working toward the active session goal.",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected workflow nudge to substitute %q, got %q", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "{{") {
+		t.Fatalf("expected workflow nudge placeholders rendered, got %q", rendered)
+	}
+}
+
 func TestRenderGoalSetPrompt(t *testing.T) {
 	rendered := RenderGoalSetPrompt("ship /goal mode")
 	if !strings.Contains(rendered, "ship /goal mode") {
