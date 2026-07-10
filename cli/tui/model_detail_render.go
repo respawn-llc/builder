@@ -40,8 +40,10 @@ type detailRenderedLine struct {
 	EntryIndex *int
 }
 
-func (m Model) detailLines() []string {
-	return detailRenderedText(m.detailRenderedLines())
+type detailProjectedViewport struct {
+	Lines     []detailProjectedLine
+	Scroll    int
+	MaxScroll int
 }
 
 func (m Model) detailProjectedLines() []detailProjectedLine {
@@ -104,23 +106,36 @@ func (m Model) detailRenderedLines() []detailRenderedLine {
 }
 
 func (m Model) detailVisibleProjectedLines() []detailProjectedLine {
-	lines := m.detailProjectedLines()
-	if len(lines) == 0 {
+	viewport := m.detailProjectedCameraViewport()
+	if len(viewport.Lines) == 0 {
 		return nil
 	}
-	scroll := clampInt(m.detailScroll, 0, m.maxScrollForProjectedLines(lines))
-	end := minInt(len(lines), scroll+maxInt(1, m.viewportLines))
-	visible := append([]detailProjectedLine(nil), lines[scroll:end]...)
-	visible = m.withDetailSelectionSpacers(visible, scroll, m.maxScrollForProjectedLines(lines))
+	visible := append([]detailProjectedLine(nil), viewport.Lines...)
+	visible = m.withDetailSelectionSpacers(visible, viewport.Scroll, viewport.MaxScroll)
 	limit := maxInt(1, m.viewportLines)
 	if overflow := len(visible) - limit; overflow > 0 {
-		if scroll > 0 && scroll == m.maxScrollForProjectedLines(lines) {
+		if viewport.Scroll > 0 && viewport.Scroll == viewport.MaxScroll {
 			visible = visible[overflow:]
 		} else {
 			visible = visible[:limit]
 		}
 	}
 	return visible
+}
+
+func (m Model) detailProjectedCameraViewport() detailProjectedViewport {
+	lines := m.detailProjectedLines()
+	if len(lines) == 0 {
+		return detailProjectedViewport{}
+	}
+	maxScroll := m.maxScrollForProjectedLines(lines)
+	scroll := clampInt(m.detailScroll, 0, maxScroll)
+	end := minInt(len(lines), scroll+maxInt(1, m.viewportLines))
+	return detailProjectedViewport{
+		Lines:     lines[scroll:end],
+		Scroll:    scroll,
+		MaxScroll: maxScroll,
+	}
 }
 
 func (m Model) withDetailSelectionSpacers(lines []detailProjectedLine, scroll int, maxScroll int) []detailProjectedLine {
@@ -269,15 +284,4 @@ func renderDetailSpan(span transcriptrender.Span, themeName string, selected boo
 		style = style.Underline(true)
 	}
 	return style.Render(span.Text)
-}
-
-func detailRenderedText(lines []detailRenderedLine) []string {
-	if len(lines) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		out = append(out, line.Text)
-	}
-	return out
 }

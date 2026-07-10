@@ -385,8 +385,11 @@ func TestDetailAppendedPageWithFrontTrimPreservesLineScrollBoundary(t *testing.T
 		t.Fatal("down after front-trimmed append requested another page instead of moving by one rendered line")
 	}
 	updated := next.(Model)
-	if updated.detailScroll != model.detailScroll+1 {
-		t.Fatalf("detail scroll after down = %d, want %d", updated.detailScroll, model.detailScroll+1)
+	if updated.detailScroll != model.detailScroll {
+		t.Fatalf("detail scroll after down = %d, want pinned boundary %d", updated.detailScroll, model.detailScroll)
+	}
+	if selected, ok := updated.selectedDetailIndex(); !ok || selected != 1 {
+		t.Fatalf("detail selection after down = %d/%t, want center entry 1/true", selected, ok)
 	}
 }
 
@@ -444,8 +447,11 @@ func TestDetailLineMovementSelectsItemNearestViewportCenter(t *testing.T) {
 	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	model = next.(Model)
 
-	if selected, ok := model.selectedDetailIndex(); !ok || selected != 2 {
-		t.Fatalf("selected entry after line movement = %d/%t, want center entry 2/true", selected, ok)
+	if model.detailScroll != 0 {
+		t.Fatalf("detail scroll after top-edge reverse movement = %d, want 0", model.detailScroll)
+	}
+	if selected, ok := model.selectedDetailIndex(); !ok || selected != 1 {
+		t.Fatalf("selected entry after line movement = %d/%t, want center entry 1/true", selected, ok)
 	}
 }
 

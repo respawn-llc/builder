@@ -57,6 +57,43 @@ func TestDetailTranscriptRequestIsSingleFlight(t *testing.T) {
 	}
 }
 
+func TestDetailTranscriptEdgeInputsShareSingleFlightRequest(t *testing.T) {
+	inputs := []struct {
+		name string
+		msg  tea.Msg
+	}{
+		{name: "alternate scroll key", msg: tea.KeyMsg{Type: tea.KeyDown}},
+		{name: "raw wheel", msg: tea.MouseMsg{Button: tea.MouseButtonWheelDown}},
+	}
+	for _, input := range inputs {
+		t.Run(input.name, func(t *testing.T) {
+			sessionViews := newControlledTranscriptPageClient()
+			model := newDetailTranscriptRequestTestModel(sessionViews)
+			model.detailTranscript.replace(clientui.TranscriptPage{
+				SessionID:    "session-1",
+				NewerCursor:  appInt64Ptr(25),
+				HasMoreBelow: true,
+				Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "current page"}},
+			})
+			model.view = tui.NewModel()
+			model.forwardToView(tui.SetViewportSizeMsg{Lines: 2, Width: 80})
+			model.forwardToView(tui.SetDetailTranscriptPageMsg{Page: model.detailTranscript.page()})
+			model.view = mustUpdateTUIModel(t, model.view, tui.SetModeMsg{Mode: tui.ModeDetail})
+
+			model, firstCmd := startDetailTranscriptRequestFromInput(t, model, input.msg)
+			firstDone := runDetailTranscriptCommand(firstCmd)
+			waitForDetailTranscriptRequest(t, sessionViews)
+
+			model, repeatedCmd := startDetailTranscriptRequestFromInput(t, model, input.msg)
+			if repeatedCmd != nil {
+				t.Fatal("repeated edge input started a second request while the first was pending")
+			}
+			sessionViews.results <- controlledTranscriptPageResult{err: errors.New("stop test request")}
+			_ = waitForDetailTranscriptCompletion(t, firstDone)
+		})
+	}
+}
+
 func TestDetailTranscriptMatchingSuccessAllowsNextRequest(t *testing.T) {
 	sessionViews := newControlledTranscriptPageClient()
 	model := newDetailTranscriptRequestTestModel(sessionViews)
@@ -308,6 +345,18 @@ func updateDetailTranscriptRequest(t *testing.T, model *uiModel, direction tui.D
 		t.Fatalf("updated model type = %T, want *uiModel", next)
 	}
 	return updated, cmd
+}
+
+func startDetailTranscriptRequestFromInput(t *testing.T, model *uiModel, input tea.Msg) (*uiModel, tea.Cmd) {
+	t.Helper()
+	next, intentCmd := model.Update(input)
+	updated := next.(*uiModel)
+	if intentCmd == nil {
+		t.Fatal("detail edge input did not emit a paging intent")
+	}
+	intent := intentCmd()
+	next, requestCmd := updated.Update(intent)
+	return next.(*uiModel), requestCmd
 }
 
 func runDetailTranscriptCommand(cmd tea.Cmd) <-chan tea.Msg {

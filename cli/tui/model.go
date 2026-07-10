@@ -145,29 +145,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == ModeDetail {
 			switch msg.Type {
 			case tea.KeyUp:
-				if m.detailScroll == 0 {
+				if !m.navigateDetail(-1) {
 					return m, m.detailPageRequestCmd(DetailTranscriptPageOlder)
 				}
-				m.detailScroll = clampInt(m.detailScroll-1, 0, m.maxDetailScroll())
-				m.selectDetailViewportCenter()
 			case tea.KeyDown:
-				if m.detailScroll >= m.maxDetailScroll() {
+				if !m.navigateDetail(1) {
 					return m, m.detailPageRequestCmd(DetailTranscriptPageNewer)
 				}
-				m.detailScroll = clampInt(m.detailScroll+1, 0, m.maxDetailScroll())
-				m.selectDetailViewportCenter()
 			case tea.KeyPgUp:
-				if m.detailScroll == 0 {
+				if !m.navigateDetail(-maxInt(1, m.viewportLines-1)) {
 					return m, m.detailPageRequestCmd(DetailTranscriptPageOlder)
 				}
-				m.detailScroll = clampInt(m.detailScroll-maxInt(1, m.viewportLines-1), 0, m.maxDetailScroll())
-				m.selectDetailViewportCenter()
 			case tea.KeyPgDown:
-				if m.detailScroll >= m.maxDetailScroll() {
+				if !m.navigateDetail(maxInt(1, m.viewportLines-1)) {
 					return m, m.detailPageRequestCmd(DetailTranscriptPageNewer)
 				}
-				m.detailScroll = clampInt(m.detailScroll+maxInt(1, m.viewportLines-1), 0, m.maxDetailScroll())
-				m.selectDetailViewportCenter()
 			case tea.KeyEnter:
 				m.toggleSelectedDetailEntry()
 			case tea.KeyTab:
@@ -180,6 +172,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mode = ModeOngoing
 			} else {
 				m.mode = ModeDetail
+			}
+		}
+	case tea.MouseMsg:
+		if m.mode == ModeDetail {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				if !m.navigateDetail(-1) {
+					return m, m.detailPageRequestCmd(DetailTranscriptPageOlder)
+				}
+			case tea.MouseButtonWheelDown:
+				if !m.navigateDetail(1) {
+					return m, m.detailPageRequestCmd(DetailTranscriptPageNewer)
+				}
 			}
 		}
 	}
@@ -298,53 +303,12 @@ func (anchor DetailTranscriptPageAnchor) valid() bool {
 		anchor == DetailTranscriptAnchorPreserve
 }
 
-func (m Model) detailPageRequestCmd(direction DetailTranscriptPageDirection) tea.Cmd {
-	if direction != DetailTranscriptPageOlder && direction != DetailTranscriptPageNewer {
-		return nil
-	}
-	return func() tea.Msg { return RequestDetailTranscriptPageMsg{Direction: direction} }
-}
-
 func (m Model) detailEmptyLine() string {
 	tokens := theme.ResolvePalette(m.theme)
 	if m.detailPageLoaded {
 		return lipgloss.NewStyle().Foreground(tokens.App.Muted.Lipgloss()).Render("Transcript detail has no committed rows")
 	}
 	return lipgloss.NewStyle().Foreground(tokens.App.Muted.Lipgloss()).Render("Transcript detail is waiting for committed rows")
-}
-
-func (m *Model) toggleSelectedDetailEntry() {
-	selected, ok := m.selectedDetailIndex()
-	if !ok || selected >= len(m.detailEntries) {
-		return
-	}
-	if !m.detailEntries[selected].presentation(maxInt(1, m.viewportWidth), m.theme).Expandable {
-		return
-	}
-	if m.expanded == nil {
-		m.expanded = make(map[int]struct{})
-	}
-	if _, ok := m.expanded[selected]; ok {
-		delete(m.expanded, selected)
-	} else {
-		m.expanded[selected] = struct{}{}
-	}
-	m.clampDetailScroll()
-}
-
-func (m *Model) clampDetailScroll() {
-	if m == nil {
-		return
-	}
-	m.detailScroll = clampInt(m.detailScroll, 0, m.maxDetailScroll())
-}
-
-func (m Model) maxDetailScroll() int {
-	return m.maxScrollForLines(m.detailLines())
-}
-
-func (m Model) maxScrollForLines(lines []string) int {
-	return maxInt(0, len(lines)-maxInt(1, m.viewportLines))
 }
 
 func clampInt(value int, minValue int, maxValue int) int {
@@ -382,12 +346,11 @@ func (m Model) detailLineOffsetForEntryIndex(entryIndex int) int {
 	if entryIndex <= 0 {
 		return 0
 	}
-	for idx, line := range m.detailRenderedLines() {
-		if line.EntryIndex != nil && *line.EntryIndex >= entryIndex {
-			return idx
-		}
+	lines := m.detailProjectedLines()
+	if lineRange, ok := detailEntryLineRangeIn(lines, entryIndex); ok {
+		return lineRange.first
 	}
-	return len(m.detailRenderedLines())
+	return len(lines)
 }
 
 func shiftExpandedDetailEntries(expanded map[int]struct{}, offset int) map[int]struct{} {
@@ -403,52 +366,4 @@ func shiftExpandedDetailEntries(expanded map[int]struct{}, offset int) map[int]s
 		shifted[nextEntryIndex] = struct{}{}
 	}
 	return shifted
-}
-
-func (m *Model) selectDetailViewportCenter() {
-	if len(m.detailEntries) == 0 {
-		m.clearSelectedDetailIndex()
-		return
-	}
-	lines := m.detailRenderedLines()
-	if len(lines) == 0 {
-		m.clearSelectedDetailIndex()
-		return
-	}
-	center := clampInt(m.detailScroll+(maxInt(1, m.viewportLines)-1)/2, 0, len(lines)-1)
-	var selected *int
-	bestDistance := len(lines) + 1
-	for idx, line := range lines {
-		if line.EntryIndex == nil {
-			continue
-		}
-		distance := absInt(idx - center)
-		if distance < bestDistance {
-			selectedCopy := *line.EntryIndex
-			selected = &selectedCopy
-			bestDistance = distance
-		}
-		if distance == 0 {
-			break
-		}
-	}
-	if selected != nil {
-		m.setSelectedDetailIndex(*selected)
-	}
-}
-
-func (m Model) selectedDetailIndex() (int, bool) {
-	if m.selected == nil {
-		return 0, false
-	}
-	return *m.selected, true
-}
-
-func (m *Model) setSelectedDetailIndex(index int) {
-	indexCopy := index
-	m.selected = &indexCopy
-}
-
-func (m *Model) clearSelectedDetailIndex() {
-	m.selected = nil
 }
