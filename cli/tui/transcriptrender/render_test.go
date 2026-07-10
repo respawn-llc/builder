@@ -805,7 +805,7 @@ func TestExpandedPatchRowsKeepFullTypedInputAheadOfOutput(t *testing.T) {
 	row.Tool.ToolPresentation.PatchDetail = "cli/tui/model.go\n-old\n+new"
 
 	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
-	if got, want := PlainLines(rendered.Lines), []string{"! cli/tui/model.go", "│ -old", "│ +new", "└ failed"}; !slices.Equal(got, want) {
+	if got, want := PlainLines(rendered.Lines), []string{"⇄ cli/tui/model.go", "│ -old", "│ +new", "└ failed"}; !slices.Equal(got, want) {
 		t.Fatalf("expanded patch lines = %q, want %q", got, want)
 	}
 }
@@ -936,6 +936,9 @@ func TestPatchToolErrorKeepsAuthoritativeInputFirstAndErrorClassification(t *tes
 			t.Fatalf("mode %v rendered no lines", mode)
 		}
 		assertFailedToolClassification(t, mode, rendered.Lines[0])
+		if got, want := rendered.Lines[0].LeadingSymbol.Text, "⇄"; got != want {
+			t.Fatalf("mode %v patch error symbol = %q, want %q", mode, got, want)
+		}
 		spans := rendered.Lines[0].Spans
 		if len(spans) < 7 {
 			t.Fatalf("mode %v patch error spans = %+v", mode, spans)

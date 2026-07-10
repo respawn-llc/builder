@@ -282,6 +282,9 @@ func roleSymbol(role StyleRole) string {
 }
 
 func roleSymbolText(role StyleRole, meta toolMeta) string {
+	if role == StyleRoleToolPatch {
+		return "⇄"
+	}
 	if meta.IsError {
 		return "!"
 	}
@@ -297,8 +300,6 @@ func roleSymbolText(role StyleRole, meta toolMeta) string {
 		StyleRoleToolShellWarning,
 		StyleRoleToolShellError:
 		symbol = "$"
-	case StyleRoleToolPatch:
-		symbol = "⇄"
 	case StyleRoleToolQuestion:
 		symbol = "?"
 	case StyleRoleToolWebSearch:
