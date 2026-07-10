@@ -185,8 +185,8 @@ func (operation RequiredOperation) Validate() error {
 	if operation.Output != nil && len(*operation.Output) > maxScenarioPayload {
 		return errors.New("model payload exceeds limit")
 	}
-	if operation.Route != RouteResponses && (operation.Probe != nil || operation.SessionCacheKey || operation.Outcome == OutcomeStream || operation.Outcome == OutcomeHoldSSE) {
-		return errors.New("only responses operations may declare probe, session cache key, stream, or hold outcome")
+	if operation.Route != RouteResponses && (operation.Probe != nil || operation.Output != nil || operation.SessionCacheKey || operation.Outcome == OutcomeStream || operation.Outcome == OutcomeHoldSSE) {
+		return errors.New("only responses operations may declare probe, output, session cache key, stream, or hold outcome")
 	}
 	if operation.Probe != nil {
 		probe, err := uuid.Parse(*operation.Probe)

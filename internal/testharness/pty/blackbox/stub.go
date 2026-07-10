@@ -11,12 +11,15 @@ import (
 	"sync"
 	"time"
 
+	"core/internal/testharness/pty/analyzer"
+
 	"github.com/google/uuid"
 )
 
 const (
 	maxHTTPBodyBytes    = 64 * 1024
 	maxHTTPHeadersBytes = 16 * 1024
+	maxModelDiagnostics = 1 * 1024 * 1024
 )
 
 type StubSnapshot struct {
@@ -47,6 +50,7 @@ type ResponsesStub struct {
 	active           int
 	failure          error
 	observed         []ObservedCall
+	observedBytes    int
 	handlers         map[uint64]context.CancelFunc
 	nextHandle       uint64
 	stopping         bool
@@ -85,8 +89,11 @@ func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
 	router.HandleFunc("GET /v1/models/{model}", stub.serveRoute(RouteModel))
 	router.HandleFunc("/", stub.serveUnsupportedRoute)
 	stub.server = &http.Server{
-		Handler:           router,
-		MaxHeaderBytes:    maxHTTPHeadersBytes,
+		Handler: router,
+		// Keep net/http's ingress guard while retaining enough headroom for
+		// the handler to record a typed protocol failure at the harness's
+		// stricter diagnostic-header boundary.
+		MaxHeaderBytes:    maxHTTPHeadersBytes + 4096,
 		ReadHeaderTimeout: 500 * time.Millisecond,
 	}
 	go func() {
@@ -202,6 +209,17 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 			return
 		}
 		defer done()
+		if headerBytes := requestHeaderBytes(request.Header); headerBytes > maxHTTPHeadersBytes {
+			err := &analyzer.EvidenceLimitExceeded{
+				Source:   analyzer.EvidenceSourceModelDiagnostics,
+				Limit:    maxHTTPHeadersBytes,
+				Observed: headerBytes,
+				Detail:   "request headers",
+			}
+			s.recordFailure(err)
+			http.Error(writer, "request headers exceed limit", http.StatusRequestHeaderFieldsTooLarge)
+			return
+		}
 		body, err := boundedBody(request)
 		if err != nil {
 			s.recordFailure(err)
@@ -214,6 +232,11 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 			return
 		}
 		call := ObservedCall{Route: route, Headers: request.Header.Clone(), Body: append(json.RawMessage(nil), body...)}
+		if err := s.recordObserved(call); err != nil {
+			s.recordFailure(err)
+			http.Error(writer, "model diagnostics exceed limit", http.StatusRequestEntityTooLarge)
+			return
+		}
 		operation, err := s.consume(route, body, request.Header)
 		if err != nil {
 			s.recordFailure(err)
@@ -223,7 +246,6 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 		if operation != nil {
 			defer s.completeRequired()
 		}
-		s.recordObserved(call)
 		s.writeOperationResponse(ctx, writer, route, operation)
 	}
 }
@@ -310,7 +332,13 @@ func (s *ResponsesStub) writeOperationResponse(ctx context.Context, writer http.
 	case RouteInputTokens:
 		writeJSON(writer, http.StatusOK, map[string]int{"input_tokens": 0})
 	case RouteModel:
-		writeJSON(writer, http.StatusOK, map[string]any{"id": "gpt-5", "object": "model"})
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"id":             "gpt-5",
+			"object":         "model",
+			"created":        0,
+			"owned_by":       "kent",
+			"context_window": 200000,
+		})
 	case RouteCompact:
 		writeJSON(writer, http.StatusOK, map[string]any{"output": []any{}})
 	default:
@@ -370,13 +398,22 @@ func (s *ResponsesStub) recordFailure(err error) {
 	s.notify()
 }
 
-func (s *ResponsesStub) recordObserved(call ObservedCall) {
+func (s *ResponsesStub) recordObserved(call ObservedCall) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.observed) < maxModelOperations {
-		s.observed = append(s.observed, call)
+	observedBytes := observedCallBytes(call)
+	if len(s.observed) >= maxModelOperations || observedBytes > maxModelDiagnostics-s.observedBytes {
+		return &analyzer.EvidenceLimitExceeded{
+			Source:   analyzer.EvidenceSourceModelDiagnostics,
+			Limit:    maxModelDiagnostics,
+			Observed: s.observedBytes + observedBytes,
+			Detail:   "observed model diagnostics",
+		}
 	}
+	s.observed = append(s.observed, call)
+	s.observedBytes += observedBytes
 	s.notify()
+	return nil
 }
 
 func (s *ResponsesStub) notify() {
@@ -404,6 +441,20 @@ func boundedBody(request *http.Request) ([]byte, error) {
 	return body, nil
 }
 
+func requestHeaderBytes(headers http.Header) int {
+	total := 0
+	for name, values := range headers {
+		for _, value := range values {
+			total += len(name) + len(value) + len(": \r\n")
+		}
+	}
+	return total
+}
+
+func observedCallBytes(call ObservedCall) int {
+	return len(call.Route) + len(call.Body) + requestHeaderBytes(call.Headers)
+}
+
 func validateRouteBody(route Route, body []byte) error {
 	if route == RouteModel {
 		if len(body) != 0 {
@@ -411,14 +462,21 @@ func validateRouteBody(route Route, body []byte) error {
 		}
 		return nil
 	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(body, &object); err != nil {
+	var request modelRequest
+	if err := json.Unmarshal(body, &request); err != nil {
 		return fmt.Errorf("decode %s request DTO: %w", route, err)
 	}
-	if object == nil {
+	if request.Input == nil {
 		return fmt.Errorf("decode %s request DTO: object is required", route)
 	}
+	if len(request.Input) == 0 || string(request.Input) == "null" {
+		return fmt.Errorf("decode %s request DTO: input is required", route)
+	}
 	return nil
+}
+
+type modelRequest struct {
+	Input json.RawMessage `json:"input"`
 }
 
 type responseRequest struct {

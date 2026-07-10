@@ -3,7 +3,10 @@ package blackbox_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +192,68 @@ func TestResponsesStubConsumesTypedProbeAndRejectsUnconsumedQueue(t *testing.T) 
 	}
 }
 
+func TestResponsesStubAcceptsLosslessResponseDTOAndStaticAdaptiveDefaults(t *testing.T) {
+	t.Parallel()
+
+	probe := uuid.New().String()
+	cacheKey := uuid.New().String()
+	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, Probe: &probe, SessionCacheKey: true, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(stub.Close)
+
+	for _, request := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodPost, path: "/responses/input_tokens", body: `{"input":[]}`},
+		{method: http.MethodGet, path: "/models/gpt-5", body: ""},
+	} {
+		httpRequest, err := http.NewRequest(request.method, stub.URL()+request.path, bytes.NewBufferString(request.body))
+		if err != nil {
+			t.Fatalf("NewRequest %s: %v", request.path, err)
+		}
+		response, err := http.DefaultClient.Do(httpRequest)
+		if err != nil {
+			t.Fatalf("request %s: %v", request.path, err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("adaptive request %s status = %d, want %d", request.path, response.StatusCode, http.StatusOK)
+		}
+	}
+	if snapshot := stub.Snapshot(); snapshot.RequiredIndex != 0 || len(snapshot.Observed) != 2 {
+		t.Fatalf("adaptive defaults affected required proof: %#v", snapshot)
+	}
+
+	request, err := http.NewRequest(http.MethodPost, stub.URL()+"/responses", bytes.NewBufferString(`{
+		"input":[
+			{"role":"system","content":[{"type":"input_text","text":"system"}]},
+			{"role":"developer","content":[{"type":"input_text","text":"developer"}]},
+			{"role":"user","content":[{"type":"input_text","text":"`+probe+`"}]}
+		],
+		"prompt_cache_key":"`+cacheKey+`",
+		"tools":[{"type":"function","name":"shell","parameters":{"type":"object","properties":{"command":{"type":"string"}}}}],
+		"metadata":{"generated_skill":"present"}
+	}`))
+	if err != nil {
+		t.Fatalf("NewRequest response: %v", err)
+	}
+	request.Header.Set("session_id", cacheKey)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("POST response: %v", err)
+	}
+	_ = response.Body.Close()
+	if err := stub.Verify(); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+}
+
 func TestResponsesStubRejectsProbeMismatch(t *testing.T) {
 	t.Parallel()
 
@@ -231,6 +296,25 @@ func TestResponsesStubRejectsMalformedRouteDTO(t *testing.T) {
 	}
 	if err := stub.Verify(); err == nil {
 		t.Fatal("Verify accepted malformed DTO")
+	}
+
+	inputMissing, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub input DTO: %v", err)
+	}
+	t.Cleanup(inputMissing.Close)
+	response, err = http.Post(inputMissing.URL()+"/responses/input_tokens", "application/json", bytes.NewBufferString(`{"model":"gpt-5"}`))
+	if err != nil {
+		t.Fatalf("POST missing input DTO: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing input DTO status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+	if err := inputMissing.Verify(); err == nil {
+		t.Fatal("Verify accepted missing input DTO")
 	}
 }
 
@@ -280,6 +364,17 @@ func TestResponsesStubRejectsInvalidDeclaredOperationBeforeListening(t *testing.
 		Route: blackbox.RouteResponses,
 	}}); err == nil {
 		t.Fatal("StartResponsesStub accepted an invalid declared operation")
+	}
+	output := "invalid"
+	if _, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeStream,
+	}}); err == nil {
+		t.Fatal("StartResponsesStub accepted compact stream outcome")
+	}
+	if _, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeJSON, Output: &output,
+	}}); err == nil {
+		t.Fatal("StartResponsesStub accepted route-irrelevant output")
 	}
 }
 
@@ -364,6 +459,174 @@ func TestResponsesStubRejectsOversizedBodyBeforeQueueConsumption(t *testing.T) {
 	}
 }
 
+func TestResponsesStubRejectsOversizedHeadersAndChunkedBodiesBeforeQueueConsumption(t *testing.T) {
+	t.Parallel()
+
+	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(stub.Close)
+
+	headerRequest, err := http.NewRequest(http.MethodPost, stub.URL()+"/responses", bytes.NewBufferString(`{"input":[]}`))
+	if err != nil {
+		t.Fatalf("NewRequest headers: %v", err)
+	}
+	headerRequest.Header.Set("X-Harness-Overflow", strings.Repeat("h", 16*1024))
+	response, err := http.DefaultClient.Do(headerRequest)
+	if err != nil {
+		t.Fatalf("POST oversized headers: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("oversized header status = %d, want %d", response.StatusCode, http.StatusRequestHeaderFieldsTooLarge)
+	}
+	if stub.Snapshot().RequiredIndex != 0 {
+		t.Fatal("oversized headers consumed required operation")
+	}
+
+	chunkedStub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub chunked: %v", err)
+	}
+	t.Cleanup(chunkedStub.Close)
+	chunkedRequest, err := http.NewRequest(http.MethodPost, chunkedStub.URL()+"/responses", unknownLengthReader{Reader: bytes.NewReader(bytes.Repeat([]byte("x"), 64*1024+1))})
+	if err != nil {
+		t.Fatalf("NewRequest chunked: %v", err)
+	}
+	if chunkedRequest.ContentLength != 0 {
+		t.Fatalf("chunked request content length = %d, want unknown", chunkedRequest.ContentLength)
+	}
+	response, err = http.DefaultClient.Do(chunkedRequest)
+	if err != nil {
+		t.Fatalf("POST chunked oversized body: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("chunked oversized body status = %d, want %d", response.StatusCode, http.StatusRequestEntityTooLarge)
+	}
+	if chunkedStub.Snapshot().RequiredIndex != 0 {
+		t.Fatal("chunked oversized body consumed required operation")
+	}
+}
+
+func TestResponsesStubBoundsObservedDiagnosticsAndEnforcesRequiredOrder(t *testing.T) {
+	t.Parallel()
+
+	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{
+		{ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON},
+		{ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON},
+	})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(stub.Close)
+	response, err := http.Post(stub.URL()+"/responses", "application/json", bytes.NewBufferString(`{"input":[]}`))
+	if err != nil {
+		t.Fatalf("POST route-order mismatch: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("route-order mismatch status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+	if err := stub.Verify(); err == nil {
+		t.Fatal("Verify accepted required operation order mismatch")
+	}
+
+	diagnostics, err := blackbox.StartResponsesStub(nil)
+	if err != nil {
+		t.Fatalf("StartResponsesStub diagnostics: %v", err)
+	}
+	t.Cleanup(diagnostics.Close)
+	body := []byte(`{"input":"` + strings.Repeat("d", 64*1024-32) + `"}`)
+	for requestNumber := 0; ; requestNumber++ {
+		response, err = http.Post(diagnostics.URL()+"/responses/input_tokens", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST diagnostics request %d: %v", requestNumber, err)
+		}
+		status := response.StatusCode
+		_ = response.Body.Close()
+		if status == http.StatusRequestEntityTooLarge {
+			break
+		}
+		if status != http.StatusOK {
+			t.Fatalf("diagnostic request %d status = %d", requestNumber, status)
+		}
+		if requestNumber > 32 {
+			t.Fatal("model diagnostics did not enforce their aggregate bound")
+		}
+	}
+	var limit *analyzer.EvidenceLimitExceeded
+	if !errors.As(diagnostics.Snapshot().Failure, &limit) {
+		t.Fatalf("diagnostic overflow failure = %T %v, want EvidenceLimitExceeded", diagnostics.Snapshot().Failure, diagnostics.Snapshot().Failure)
+	}
+}
+
+func TestResponsesStubRejectsRequiredQueueExhaustionAndProvidesProviderFailuresForAllRoutes(t *testing.T) {
+	t.Parallel()
+
+	exhausted, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub exhausted: %v", err)
+	}
+	t.Cleanup(exhausted.Close)
+	for requestNumber := 0; requestNumber < 2; requestNumber++ {
+		response, err := http.Post(exhausted.URL()+"/responses", "application/json", bytes.NewBufferString(`{"input":[]}`))
+		if err != nil {
+			t.Fatalf("POST exhausted request %d: %v", requestNumber, err)
+		}
+		status := response.StatusCode
+		_ = response.Body.Close()
+		if requestNumber == 0 && status != http.StatusOK {
+			t.Fatalf("first exhausted request status = %d, want %d", status, http.StatusOK)
+		}
+		if requestNumber == 1 && status != http.StatusBadRequest {
+			t.Fatalf("second exhausted request status = %d, want %d", status, http.StatusBadRequest)
+		}
+	}
+	if err := exhausted.Verify(); err == nil {
+		t.Fatal("Verify accepted required queue exhaustion")
+	}
+
+	for _, failure := range []struct {
+		route  blackbox.Route
+		method string
+		path   string
+		body   string
+	}{
+		{route: blackbox.RouteInputTokens, method: http.MethodPost, path: "/responses/input_tokens", body: `{"input":[]}`},
+		{route: blackbox.RouteModel, method: http.MethodGet, path: "/models/gpt-5"},
+	} {
+		stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+			ID: uuid.New(), Route: failure.route, Outcome: blackbox.OutcomeProviderFailure,
+		}})
+		if err != nil {
+			t.Fatalf("StartResponsesStub %s: %v", failure.route, err)
+		}
+		request, err := http.NewRequest(failure.method, stub.URL()+failure.path, bytes.NewBufferString(failure.body))
+		if err != nil {
+			t.Fatalf("NewRequest %s: %v", failure.route, err)
+		}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatalf("provider failure request %s: %v", failure.route, err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusBadGateway {
+			t.Fatalf("provider failure %s status = %d, want %d", failure.route, response.StatusCode, http.StatusBadGateway)
+		}
+		if err := stub.Stop(); err != nil {
+			t.Fatalf("Stop provider failure stub: %v", err)
+		}
+	}
+}
+
 func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	t.Parallel()
 
@@ -399,4 +662,78 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	if err := stub.Verify(); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
+}
+
+func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *testing.T) {
+	t.Parallel()
+
+	compact, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub compact: %v", err)
+	}
+	t.Cleanup(compact.Close)
+	compactTransport := newStubTransport(compact)
+	if _, err := compactTransport.Compact(context.Background(), llm.OpenAICompactionRequest{
+		Model:      "gpt-5",
+		InputItems: []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "input"}},
+	}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if err := compact.Verify(); err != nil {
+		t.Fatalf("Verify compact: %v", err)
+	}
+
+	inputTokens, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub input_tokens: %v", err)
+	}
+	t.Cleanup(inputTokens.Close)
+	count, err := newStubTransport(inputTokens).CountRequestInputTokens(context.Background(), llm.OpenAIRequest{
+		Model: "gpt-5",
+		Items: []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, Content: "input"}},
+	})
+	if err != nil {
+		t.Fatalf("CountRequestInputTokens: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("input token count = %d, want 0", count)
+	}
+	if err := inputTokens.Verify(); err != nil {
+		t.Fatalf("Verify input_tokens: %v", err)
+	}
+
+	model, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteModel, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub model metadata: %v", err)
+	}
+	t.Cleanup(model.Close)
+	modelTransport := newStubTransport(model)
+	modelTransport.ContextWindowTokens = 0
+	window, err := modelTransport.ResolveModelContextWindow(context.Background(), "gpt-5")
+	if err != nil {
+		t.Fatalf("ResolveModelContextWindow: %v", err)
+	}
+	if window != 200000 {
+		t.Fatalf("model context window = %d, want 200000", window)
+	}
+	if err := model.Verify(); err != nil {
+		t.Fatalf("Verify model metadata: %v", err)
+	}
+}
+
+func newStubTransport(stub *blackbox.ResponsesStub) *llm.HTTPTransport {
+	transport := llm.NewHTTPTransport(staticTransportAuth{})
+	transport.BaseURL = stub.URL()
+	transport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
+	return transport
+}
+
+type unknownLengthReader struct {
+	io.Reader
 }

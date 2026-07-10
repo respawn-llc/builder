@@ -145,10 +145,11 @@ const (
 type EvidenceSource string
 
 const (
-	EvidenceSourcePTY           EvidenceSource = "pty"
-	EvidenceSourceOperationText EvidenceSource = "operation_text"
-	EvidenceSourceOperations    EvidenceSource = "operations"
-	EvidenceSourceArtifacts     EvidenceSource = "artifacts"
+	EvidenceSourcePTY              EvidenceSource = "pty"
+	EvidenceSourceOperationText    EvidenceSource = "operation_text"
+	EvidenceSourceOperations       EvidenceSource = "operations"
+	EvidenceSourceArtifacts        EvidenceSource = "artifacts"
+	EvidenceSourceModelDiagnostics EvidenceSource = "model_diagnostics"
 )
 
 type EvidenceLimitExceeded struct {
