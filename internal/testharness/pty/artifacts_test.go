@@ -103,21 +103,8 @@ func TestWriteArtifactsSerializesBatchedRecordsBySpan(t *testing.T) {
 	if len(operations) != 1 {
 		t.Fatalf("operation count = %d, want 1", len(operations))
 	}
-	records, ok := operations[0]["records"].([]any)
-	if !ok || len(records) != 3 {
-		t.Fatalf("records = %#v, want ordered write/erase/write records", operations[0]["records"])
-	}
-	first, ok := records[0].(map[string]any)
-	if !ok || first["kind"] != float64(pty.OperationWrite) {
-		t.Fatalf("first record = %#v, want write", records[0])
-	}
-	second, ok := records[1].(map[string]any)
-	if !ok || second["kind"] != float64(pty.OperationErase) {
-		t.Fatalf("second record = %#v, want erase", records[1])
-	}
-	third, ok := records[2].(map[string]any)
-	if !ok || third["kind"] != float64(pty.OperationWrite) {
-		t.Fatalf("third record = %#v, want write", records[2])
+	if operations[0]["record_count"] != float64(3) {
+		t.Fatalf("record count = %#v, want 3", operations[0]["record_count"])
 	}
 	if bytes.Contains(encoded, []byte(`"write":"`)) {
 		t.Fatalf("operations artifact contains duplicated write text: %s", encoded)

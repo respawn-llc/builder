@@ -28,17 +28,17 @@ type artifactChunk struct {
 }
 
 type artifactOperation struct {
-	Sequence    int                 `json:"sequence"`
-	Kind        OperationKind       `json:"kind"`
-	ChunkIndex  int                 `json:"chunk_index"`
-	ByteRange   ByteRange           `json:"byte_range"`
-	Before      Position            `json:"before"`
-	After       Position            `json:"after"`
-	Region      Region              `json:"region"`
-	CapturedAt  int64               `json:"captured_at_ns"`
-	Write       *TextSpan           `json:"write_span,omitempty"`
-	Records     []artifactOperation `json:"records,omitempty"`
-	PrivateMode *PrivateModeChange  `json:"private_mode,omitempty"`
+	Sequence    int                `json:"sequence"`
+	Kind        OperationKind      `json:"kind"`
+	ChunkIndex  int                `json:"chunk_index"`
+	ByteRange   ByteRange          `json:"byte_range"`
+	Before      Position           `json:"before"`
+	After       Position           `json:"after"`
+	Region      Region             `json:"region"`
+	CapturedAt  int64              `json:"captured_at_ns"`
+	Write       *TextSpan          `json:"write_span,omitempty"`
+	RecordCount int                `json:"record_count,omitempty"`
+	PrivateMode *PrivateModeChange `json:"private_mode,omitempty"`
 }
 
 type ArtifactAttachment struct {
@@ -130,7 +130,10 @@ func artifactOperations(operations []Operation) []artifactOperation {
 			item.Write = &span
 		}
 		if len(operation.WriteSegments) > 0 || len(operation.Controls) > 0 {
-			item.Records = artifactOperations(analyzer.OperationRecords(operation))
+			// Batches can legally contain one record per terminal cell. Persist
+			// their top-level span/control metadata without recursively
+			// materializing an unbounded JSON tree.
+			item.RecordCount = len(analyzer.OperationRecords(operation))
 		}
 		result = append(result, item)
 	}
