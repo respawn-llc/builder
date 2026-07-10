@@ -17,7 +17,7 @@ type sessionFeedSnapshot struct {
 	runState            *clientui.RunState
 	runtimeActivity     *clientui.RuntimeActivity
 	inputReconciliation *clientui.RuntimeInputReconciliationSnapshot
-	queuedMessages      map[string]clientui.TranscriptQueuedOrSteeredMessageState
+	queuedMessages      []clientui.TranscriptQueuedOrSteeredMessageState
 	pendingPrompts      map[string]clientui.TranscriptPendingSessionPrompt
 	inFlightTools       map[string]clientui.TranscriptToolStart
 	sessionStatus       *clientui.TranscriptSessionStatus
@@ -32,7 +32,6 @@ func newSessionFeedSequencer(broker *transcriptSubscriptionBroker) *sessionFeedS
 	return &sessionFeedSequencer{
 		broker: broker,
 		snapshot: sessionFeedSnapshot{
-			queuedMessages: make(map[string]clientui.TranscriptQueuedOrSteeredMessageState),
 			pendingPrompts: make(map[string]clientui.TranscriptPendingSessionPrompt),
 			inFlightTools:  make(map[string]clientui.TranscriptToolStart),
 			backgrounds:    make(map[string]clientui.TranscriptBackgroundActivity),
@@ -122,10 +121,7 @@ func (s sessionFeedSnapshot) applyToHydration(hydration *clientui.TranscriptHydr
 		}
 	}
 	if len(s.queuedMessages) > 0 {
-		hydration.QueuedOrSteeredMessages = make([]clientui.TranscriptQueuedOrSteeredMessageState, 0, len(s.queuedMessages))
-		for _, queued := range s.queuedMessages {
-			hydration.QueuedOrSteeredMessages = append(hydration.QueuedOrSteeredMessages, queued)
-		}
+		hydration.QueuedOrSteeredMessages = append([]clientui.TranscriptQueuedOrSteeredMessageState(nil), s.queuedMessages...)
 	}
 	if len(s.pendingPrompts) > 0 {
 		hydration.PendingSessionPrompts = make([]clientui.TranscriptPendingSessionPrompt, 0, len(s.pendingPrompts))
@@ -167,21 +163,27 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 		if message.QueuedOrSteeredMessageState == nil {
 			return
 		}
-		if s.queuedMessages == nil {
-			s.queuedMessages = make(map[string]clientui.TranscriptQueuedOrSteeredMessageState)
-		}
-		key := message.QueuedOrSteeredMessageState.QueueItemID
-		if key == "" {
-			key = message.QueuedOrSteeredMessageState.ClientRequestID
-		}
-		if key == "" {
+		state := *message.QueuedOrSteeredMessageState
+		if state.QueueItemID == "" && state.ClientRequestID == "" {
 			return
 		}
 		if !transcriptQueueStateHydrates(message.QueuedOrSteeredMessageState.Status) {
-			delete(s.queuedMessages, key)
+			filtered := s.queuedMessages[:0]
+			for _, existing := range s.queuedMessages {
+				if !transcriptQueueStatesReferToSameItem(existing, state) {
+					filtered = append(filtered, existing)
+				}
+			}
+			s.queuedMessages = filtered
 			return
 		}
-		s.queuedMessages[key] = *message.QueuedOrSteeredMessageState
+		for index, existing := range s.queuedMessages {
+			if transcriptQueueStatesReferToSameItem(existing, state) {
+				s.queuedMessages[index] = state
+				return
+			}
+		}
+		s.queuedMessages = append(s.queuedMessages, state)
 	case clientui.TranscriptMessagePendingSessionPrompt:
 		if message.PendingSessionPrompt == nil || message.PendingSessionPrompt.ID == "" {
 			return
@@ -229,6 +231,15 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 
 func transcriptQueueStateHydrates(status clientui.QueuedUserMessageStatus) bool {
 	return status == clientui.QueuedUserMessageAccepted
+}
+
+func transcriptQueueStatesReferToSameItem(left clientui.TranscriptQueuedOrSteeredMessageState, right clientui.TranscriptQueuedOrSteeredMessageState) bool {
+	if left.QueueItemID != "" && right.QueueItemID != "" {
+		return left.QueueItemID == right.QueueItemID
+	}
+	return left.ClientRequestID != "" &&
+		right.ClientRequestID != "" &&
+		left.ClientRequestID == right.ClientRequestID
 }
 
 func (s *sessionFeedSnapshot) shouldDrop(message clientui.TranscriptMessage) bool {

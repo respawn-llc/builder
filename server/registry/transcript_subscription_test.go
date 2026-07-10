@@ -357,7 +357,7 @@ func TestSessionTranscriptFeedSequencerReceivesEngineQueueStatus(t *testing.T) {
 	}
 }
 
-func TestSessionTranscriptFeedSequencerHydratesEngineQueuedText(t *testing.T) {
+func TestSessionTranscriptFeedSequencerHydratesEngineQueuedTextInFIFOOrder(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	var engine *runtime.Engine
 	engine = newRegistryTestRuntime(t, func(evt runtime.Event) {
@@ -366,17 +366,24 @@ func TestSessionTranscriptFeedSequencerHydratesEngineQueuedText(t *testing.T) {
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
 
-	item := engine.QueueUserMessage("queued for hydration")
+	items := []runtime.QueuedUserMessage{
+		engine.QueueUserMessage("first queued for hydration"),
+		engine.QueueUserMessage("second queued for hydration"),
+		engine.QueueUserMessage("third queued for hydration"),
+		engine.QueueUserMessage("fourth queued for hydration"),
+	}
 	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
 	defer func() { _ = sub.Close() }()
 
 	hydration := nextTranscriptMessage(t, sub)
-	if hydration.Hydration == nil || len(hydration.Hydration.QueuedOrSteeredMessages) != 1 {
-		t.Fatalf("hydration = %+v, want one queued message", hydration)
+	if hydration.Hydration == nil || len(hydration.Hydration.QueuedOrSteeredMessages) != len(items) {
+		t.Fatalf("hydration = %+v, want %d queued messages", hydration, len(items))
 	}
-	queued := hydration.Hydration.QueuedOrSteeredMessages[0]
-	if queued.QueueItemID != item.ID || queued.UserText != "queued for hydration" {
-		t.Fatalf("hydrated queued message = %+v, want queued text for %q", queued, item.ID)
+	for index, item := range items {
+		queued := hydration.Hydration.QueuedOrSteeredMessages[index]
+		if queued.QueueItemID != item.ID || queued.UserText != item.Text {
+			t.Fatalf("hydrated queued message %d = %+v, want FIFO item %+v", index, queued, item)
+		}
 	}
 }
 
@@ -391,22 +398,15 @@ func TestSessionTranscriptFeedPublishesUpdatedToolStartMetadataByCallID(t *testi
 	_ = nextTranscriptMessage(t, sub)
 
 	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
-		Kind: runtime.EventAssistantMessage,
-		Message: llm.Message{
-			Role: llm.RoleAssistant,
-			ToolCalls: []llm.ToolCall{{
-				ID:   "call-duplicate",
-				Name: "shell",
-			}},
+		Kind: runtime.EventToolCallStarted,
+		ToolCall: &llm.ToolCall{
+			ID:   "call-duplicate",
+			Name: "shell",
 		},
 	})
 	start := nextTranscriptMessage(t, sub)
 	if start.Kind != clientui.TranscriptMessageToolStart || start.ToolStart == nil || start.ToolStart.ToolCallID != "call-duplicate" {
 		t.Fatalf("first start = %+v, want tool_start", start)
-	}
-	status := nextTranscriptMessage(t, sub)
-	if status.Kind != clientui.TranscriptMessageSessionStatus {
-		t.Fatalf("second message = %+v, want session status from assistant event", status)
 	}
 
 	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{

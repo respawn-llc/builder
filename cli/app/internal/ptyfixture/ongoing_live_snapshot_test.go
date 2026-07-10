@@ -152,6 +152,55 @@ func committedShellIsOnlyCompletedCommandRow(screen pty.ScreenSnapshot, command 
 	return nil
 }
 
+func committedToolInputLeadsOnlyCompletedRow(screen pty.ScreenSnapshot, input string, symbol string) error {
+	wantPrefix := symbol + " " + input
+	count := 0
+	for _, row := range screen.Cells {
+		_, _, found := cellRangeContaining(row, input)
+		if !found {
+			continue
+		}
+		count++
+		var visible strings.Builder
+		for _, cell := range row {
+			visible.WriteString(cell.Content)
+		}
+		got := strings.TrimRight(visible.String(), " ")
+		if got != wantPrefix && !strings.HasPrefix(got, wantPrefix+" ") {
+			return fmt.Errorf("tool row = %q, want committed input-first prefix %q", got, wantPrefix)
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("completed tool row count for %q = %d, want 1; screen=%q", input, count, screen.RenderText())
+	}
+	return nil
+}
+
+func toolRowSymbolUsesRole(screen pty.ScreenSnapshot, body string, symbol string, role transcriptrender.StyleRole) error {
+	row, start, _, ok := screenRowContaining(screen, body)
+	if !ok {
+		return fmt.Errorf("tool row body %q not visible; screen=%q", body, screen.RenderText())
+	}
+	expectedForeground := colorForStyle(role)
+	for _, cell := range row[:start] {
+		if cell.Content != symbol {
+			continue
+		}
+		if cell.Foreground != expectedForeground || cell.Faint {
+			return fmt.Errorf(
+				"tool symbol %q before %q style = foreground %q faint=%t, want foreground %q faint=false",
+				symbol,
+				body,
+				cell.Foreground,
+				cell.Faint,
+				expectedForeground,
+			)
+		}
+		return nil
+	}
+	return fmt.Errorf("tool symbol %q not found before %q", symbol, body)
+}
+
 func backgroundCompletionVisibleWithSemanticStyle(screen pty.ScreenSnapshot) error {
 	row, start, _, ok := screenRowContaining(screen, "Background shell ")
 	if !ok {

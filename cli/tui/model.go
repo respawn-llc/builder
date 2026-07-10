@@ -622,7 +622,7 @@ func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommit
 		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{
 			Text:          entry.Text,
 			CondensedText: entry.CondensedText,
-			Phase:         clientui.ClassifyTranscriptAssistantPhase(entry.Phase),
+			Phase:         transcript.ClassifyAssistantPhase(string(entry.Phase)),
 		}}, true
 	case "tool_call":
 		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{

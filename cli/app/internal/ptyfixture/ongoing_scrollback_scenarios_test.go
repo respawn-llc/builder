@@ -27,8 +27,13 @@ type backgroundCompletionExpectation struct {
 	Forbidden []string
 }
 
+type failedToolExpectation struct {
+	ShellCommand string
+	PatchSummary string
+	Forbidden    []string
+}
+
 const defaultTerminalForeground = "#c0c0c0"
-const markdownTerminalForeground = "#d0d0d0"
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -46,6 +51,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		inputs                    []pty.InputEvent
 		resizes                   []pty.DriverResizeEvent
 		expectedAppends           []string
+		expectedScrollbackAppends []string
 		expectedAnyAppends        []string
 		forbiddenAnyAppends       []string
 		expectedFaintDividerCount int
@@ -55,6 +61,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		expectedStyledRows        []styledRowExpectation
 		liveSnapshot              *liveSnapshotExpectation
 		backgroundCompletion      *backgroundCompletionExpectation
+		failedTools               *failedToolExpectation
 		allowDuplicateAppends     bool
 		allowsAltScroll           bool
 		allowsFullScreen          bool
@@ -70,6 +77,30 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			},
 			expectedAppends:    []string{"❯ visibility_o_real_app_path", "❮ VISIBILITY_O_MODEL"},
 			expectedAnyAppends: []string{"❯ PTY_SEED_O_USER"},
+		},
+		{
+			name: "hydrated_legacy_final_assistant_full_answer",
+			script: map[string]any{
+				"seed_transcript": []map[string]any{
+					{
+						"kind":           "message",
+						"role":           "assistant",
+						"text":           "PTY_HYDRATED_FIRST\nPTY_HYDRATED_SECOND\nPTY_HYDRATED_THIRD",
+						"condensed_text": "PTY_HYDRATED_COMPACT",
+					},
+				},
+				"final": "hydration fixture complete",
+			},
+			expectedAppends: []string{
+				"❯ hydrated_legacy_final_assistant_full_answer",
+				"❮ hydration fixture complete",
+			},
+			expectedAnyAppends: []string{
+				"❮ PTY_HYDRATED_FIRST",
+				"  PTY_HYDRATED_SECOND",
+				"  PTY_HYDRATED_THIRD",
+			},
+			forbiddenAnyAppends: []string{"❮ PTY_HYDRATED_COMPACT"},
 		},
 		{
 			name: "visibility_oc_tool_real_app_path",
@@ -133,6 +164,8 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"ℹ PTY_STYLE_TOGGLE_FAST_OFF",
 				"ℹ PTY_STYLE_TOGGLE_SUPERVISOR_ON",
 				"ℹ PTY_STYLE_TOGGLE_SUPERVISOR_OFF",
+				"§ PTY_STYLE_REVIEWER_SUCCESS",
+				"! PTY_STYLE_REVIEWER_ERROR",
 				"$ printf 'PTY_TOOL_SHELL",
 				"⇄ ./pty_patch.txt -1 +1",
 				"⇄ ./pty_edit.txt -1 +1",
@@ -155,6 +188,8 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				{Text: "ℹ PTY_STYLE_TOGGLE_FAST_OFF", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
 				{Text: "ℹ PTY_STYLE_TOGGLE_SUPERVISOR_ON", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
 				{Text: "ℹ PTY_STYLE_TOGGLE_SUPERVISOR_OFF", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
+				{Text: "§ PTY_STYLE_REVIEWER_SUCCESS", Foreground: colorForStyle(transcriptrender.StyleRoleNoticeReviewer)},
+				{Text: "! PTY_STYLE_REVIEWER_ERROR", Foreground: colorForStyle(transcriptrender.StyleRoleError)},
 				{Text: "-1", Foreground: colorForStyle(transcriptrender.StyleRoleToolError)},
 				{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
 				{Text: "❯ seeded_tool_message_style_matrix_real_app_path", Foreground: colorForStyle(transcriptrender.StyleRoleUser)},
@@ -167,7 +202,8 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"stream_deltas": []string{"Plain stable.\n\nUse `INLINE_CODE`.\n\n```text\nBLOCK_CODE\n```\n\n", "volatile tail"},
 				"final":         "Plain stable.\n\nUse `INLINE_CODE`.\n\n```text\nBLOCK_CODE\n```\n\nvolatile tail",
 			},
-			expectedAppends: []string{"Plain stable."},
+			expectedAppends:           []string{"Plain stable."},
+			expectedScrollbackAppends: []string{"volatile tail"},
 			expectedStyledAppends: []styledAppendExpectation{
 				{Text: "INLINE_CODE", Foreground: colorForStyle(transcriptrender.StyleRoleMarkdownCode)},
 				{Text: "BLOCK_CODE", Foreground: colorForStyle(transcriptrender.StyleRoleMarkdownCode)},
@@ -188,13 +224,13 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				{After: 6200 * time.Millisecond, Bytes: []byte("\r")},
 				{After: 7200 * time.Millisecond, Bytes: []byte("\x1b")},
 			},
-			expectedAppends:       []string{rightPad("stream slash live", 80)},
+			expectedAppends:       []string{"stream slash live"},
 			allowDuplicateAppends: true,
 			allowsAltScroll:       true,
 			allowsFullScreen:      true,
 			interruptAfter:        durationPtr(12 * time.Second),
 			expectedStyledAppends: []styledAppendExpectation{
-				{Text: rightPad("stream slash live", 80), Foreground: markdownTerminalForeground},
+				{Text: "stream slash live", Foreground: colorForStyle(transcriptrender.StyleRoleAssistant)},
 			},
 			forbiddenStyledWrites: []styledAppendExpectation{
 				{Text: rightPad("Server: owned by this CLI", 80), Foreground: defaultTerminalForeground},
@@ -397,6 +433,55 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			interruptAfter: durationPtr(12 * time.Second),
 		},
 		{
+			name: "live_failed_tools_retain_input",
+			script: map[string]any{
+				"prompt": "run failing tools",
+				"steps": []map[string]any{
+					{
+						"tool_calls": []map[string]any{
+							{
+								"id":   "c02cd36b-4a5f-4c66-b632-d762cf424bb5",
+								"name": "exec_command",
+								"input": map[string]any{
+									"cmd":     "echo $((61616160+1))",
+									"workdir": "missing-workdir",
+								},
+							},
+							{
+								"id":   "9a728c41-f7ca-4776-922f-30166f146d6c",
+								"name": "patch",
+								"input": map[string]any{
+									"patch": "*** Begin Patch\n*** Update File: pty_missing_patch.txt\n@@\n-old\n+new\n*** End Patch\n",
+								},
+							},
+						},
+					},
+					{
+						"expected_tool_results": []map[string]any{
+							{"CallID": "c02cd36b-4a5f-4c66-b632-d762cf424bb5", "Name": "exec_command"},
+							{"CallID": "9a728c41-f7ca-4776-922f-30166f146d6c", "Name": "patch"},
+						},
+						"final": "failed tool lifecycle complete",
+					},
+				},
+			},
+			expectedAppends: []string{"❯ live_failed_tools_retain_input"},
+			expectedAnyAppends: []string{
+				"❮ failed tool lifecycle complete",
+			},
+			expectedStyledAppends: []styledAppendExpectation{
+				{Text: " ./pty_missing_patch.txt ", Foreground: colorForStyle(transcriptrender.StyleRoleToolPatch)},
+				{Text: "-1", Foreground: colorForStyle(transcriptrender.StyleRoleToolError)},
+				{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
+			},
+			failedTools: &failedToolExpectation{
+				ShellCommand: "echo $((61616160+1))",
+				PatchSummary: "./pty_missing_patch.txt -1 +1",
+				Forbidden:    []string{"61616161", "No output", "tool call"},
+			},
+			interruptAfter: durationPtr(8 * time.Second),
+		},
+		{
 			name: "detail_roundtrip_during_stream",
 			script: map[string]any{
 				"prompt":          "detail roundtrip",
@@ -404,7 +489,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"stream_delay_ms": 2000,
 				"final":           "roundtrip commentary\n\nroundtrip complete",
 			},
-			expectedAppends: []string{rightPad("roundtrip complete", 80)},
+			expectedAppends: []string{"roundtrip complete"},
 			inputs: []pty.InputEvent{
 				{After: 1500 * time.Millisecond, Bytes: []byte("\x1b[Z")},
 				{After: 3200 * time.Millisecond, Bytes: []byte("\x1b[Z")},
@@ -420,7 +505,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"stream_deltas": []string{"working\n\n"},
 				"final":         "working\n\ndone",
 			},
-			expectedAppends: []string{rightPad("done", 80)},
+			expectedAppends: []string{"done"},
 		},
 	} {
 		tc := tc
@@ -463,6 +548,12 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					t.Fatalf("append cardinality: %v", err)
 				}
 			}
+			scrollbackAppends := scrollbackTransactionWrites(analysis, window)
+			for _, content := range tc.expectedScrollbackAppends {
+				if err := pty.ContentAppendedExactlyOnce(scrollbackAppends, content); err != nil {
+					t.Fatalf("scrollback append cardinality: %v; appends=%q", err, appendTexts(scrollbackAppends))
+				}
+			}
 			for _, content := range tc.expectedAnyAppends {
 				if err := contentAppendedAtLeastOnce(allAppends, content); err != nil {
 					t.Fatalf("expected full-window append: %v", err)
@@ -496,6 +587,25 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				for _, forbidden := range tc.backgroundCompletion.Forbidden {
 					if _, _, _, found := screenRowContaining(analysis.Screen, forbidden); found {
 						t.Fatalf("completed screen contains forbidden background text %q: %q", forbidden, analysis.Screen.RenderText())
+					}
+				}
+			}
+			if tc.failedTools != nil {
+				if err := committedToolInputLeadsOnlyCompletedRow(analysis.Screen, tc.failedTools.ShellCommand, "!"); err != nil {
+					t.Fatalf("failed shell command row: %v", err)
+				}
+				if err := committedToolInputLeadsOnlyCompletedRow(analysis.Screen, tc.failedTools.PatchSummary, "!"); err != nil {
+					t.Fatalf("failed patch input row: %v", err)
+				}
+				if err := toolRowSymbolUsesRole(analysis.Screen, tc.failedTools.ShellCommand, "!", transcriptrender.StyleRoleToolError); err != nil {
+					t.Fatalf("failed shell symbol: %v", err)
+				}
+				if err := toolRowSymbolUsesRole(analysis.Screen, tc.failedTools.PatchSummary, "!", transcriptrender.StyleRoleToolError); err != nil {
+					t.Fatalf("failed patch symbol: %v", err)
+				}
+				for _, forbidden := range tc.failedTools.Forbidden {
+					if _, _, _, found := screenRowContaining(analysis.Screen, forbidden); found {
+						t.Fatalf("completed screen contains forbidden failed-tool text %q: %q", forbidden, analysis.Screen.RenderText())
 					}
 				}
 			}
@@ -568,6 +678,8 @@ func seededStyleMatrixTranscript() []map[string]any {
 		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_TOGGLE_FAST_OFF"},
 		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_TOGGLE_SUPERVISOR_ON"},
 		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_TOGGLE_SUPERVISOR_OFF"},
+		{"kind": "local_entry", "visibility": "OC", "role": "reviewer_status", "text": "PTY_STYLE_REVIEWER_SUCCESS", "condensed_text": "PTY_STYLE_REVIEWER_SUCCESS"},
+		{"kind": "local_entry", "visibility": "OC", "role": "reviewer_error", "text": "PTY_STYLE_REVIEWER_ERROR", "condensed_text": "PTY_STYLE_REVIEWER_ERROR"},
 		toolSeed("exec_command", "call_shell", map[string]any{"cmd": "printf 'PTY_TOOL_SHELL\n'"}, "PTY_TOOL_SHELL", false),
 		toolSeedWithPatch("patch", "call_patch", map[string]any{"patch": patchStyleFixture("pty_patch.txt")}, patchStyleFixture("pty_patch.txt"), false),
 		toolSeedWithPatch("edit", "call_edit", map[string]any{"file_path": "pty_edit.txt", "old_string": "old", "new_string": "new"}, patchStyleFixture("pty_edit.txt"), false),
@@ -625,6 +737,20 @@ func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name s
 		t.Fatalf("write script: %v", err)
 	}
 	observationsPath := filepath.Join(root, "observations.json")
+	phaseInputs := make([]pty.PhaseInputEvent, 0, len(inputs)+2)
+	phaseInputs = append(phaseInputs, pty.PhaseInputEvent{Phase: pty.PhaseScenarioStart, Bytes: []byte(name + "\r")})
+	for _, input := range inputs {
+		phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
+			Phase: pty.PhaseScenarioStart,
+			After: input.After,
+			Bytes: input.Bytes,
+		})
+	}
+	phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
+		Phase: pty.PhaseScenarioStart,
+		After: resolvedInterruptAfter,
+		Bytes: []byte{0x03, 0x03},
+	})
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path: bin,
 		Env:  append([]string(nil), env...),
@@ -634,13 +760,10 @@ func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name s
 			"--script", scriptPath,
 			"--observations", observationsPath,
 		},
-		Dimensions: pty.MustDimensions(24, 80),
-		PhaseInputs: []pty.PhaseInputEvent{
-			{Phase: pty.PhaseScenarioStart, Bytes: []byte(name + "\r")},
-		},
-		Inputs:  append(append([]pty.InputEvent(nil), inputs...), pty.InputEvent{After: resolvedInterruptAfter, Bytes: []byte{0x03, 0x03}}),
-		Resizes: resizes,
-		Timeout: 30 * time.Second,
+		Dimensions:  pty.MustDimensions(24, 80),
+		PhaseInputs: phaseInputs,
+		Resizes:     resizes,
+		Timeout:     30 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run fixture: %v raw=%q", err, string(capture.Raw))
@@ -756,6 +879,21 @@ func allScenarioRawWrites(analysis pty.Analysis, window pty.OperationWindow) []p
 		out = append(out, pty.AppendOperation{Operation: operation})
 	}
 	return out
+}
+
+func scrollbackTransactionWrites(analysis pty.Analysis, window pty.OperationWindow) []pty.AppendOperation {
+	out := make([]pty.AppendOperation, 0)
+	inRestrictedScrollRegion := false
+	for _, operation := range analysis.Operations[window.Start:window.End] {
+		if operation.Kind == pty.OperationScrollRegionChange {
+			inRestrictedScrollRegion = operation.Region.Bottom < analysis.Dimensions.Rows
+			continue
+		}
+		if inRestrictedScrollRegion && operation.Write != nil {
+			out = append(out, pty.AppendOperation{Operation: operation})
+		}
+	}
+	return pty.CoalesceAppendRows(out)
 }
 
 func coalesceStyledAppendRuns(appends []pty.AppendOperation) []pty.AppendOperation {

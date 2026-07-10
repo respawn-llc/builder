@@ -76,7 +76,7 @@ func TestTranscriptProjectionClassifiesBlankLegacyAssistantPhase(t *testing.T) {
 	if len(hydration.CommittedRows) != 1 || hydration.CommittedRows[0].Assistant == nil {
 		t.Fatalf("hydration rows = %+v, want one assistant row", hydration.CommittedRows)
 	}
-	if got := hydration.CommittedRows[0].Assistant.Phase; got != clientui.TranscriptAssistantPhaseLegacyFinal {
+	if got := hydration.CommittedRows[0].Assistant.Phase; got != transcript.AssistantPhaseLegacyFinal {
 		t.Fatalf("legacy assistant phase = %q, want explicit legacy final classification", got)
 	}
 }

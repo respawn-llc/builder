@@ -56,9 +56,7 @@ func TestOngoingRenderedWidthFollowsTerminalWidth(t *testing.T) {
 		Dimensions: pty.MustDimensions(24, 150),
 		PhaseInputs: []pty.PhaseInputEvent{
 			{Phase: pty.PhaseScenarioStart, Bytes: []byte("width_follows_terminal\r")},
-		},
-		Inputs: []pty.InputEvent{
-			{After: 4 * time.Second, Bytes: []byte{0x03, 0x03}},
+			{Phase: pty.PhaseScenarioStart, After: 4 * time.Second, Bytes: []byte{0x03, 0x03}},
 		},
 		Timeout: 30 * time.Second,
 	})

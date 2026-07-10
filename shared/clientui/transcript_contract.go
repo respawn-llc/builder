@@ -2,7 +2,6 @@ package clientui
 
 import (
 	"fmt"
-	"strings"
 
 	"core/shared/transcript"
 
@@ -12,41 +11,16 @@ import (
 type MessagePhase string
 
 const (
-	MessagePhaseCommentary MessagePhase = "commentary"
-	MessagePhaseFinal      MessagePhase = "final_answer"
+	MessagePhaseCommentary MessagePhase = MessagePhase(transcript.AssistantPhaseCommentary)
+	MessagePhaseFinal      MessagePhase = MessagePhase(transcript.AssistantPhaseFinal)
 )
 
 func NormalizeMessagePhase(raw string) MessagePhase {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "commentary":
-		return MessagePhaseCommentary
-	case "final_answer", "finalanswer", "final":
-		return MessagePhaseFinal
-	default:
+	phase, ok := transcript.ParseExplicitAssistantPhase(raw)
+	if !ok {
 		return ""
 	}
-}
-
-type TranscriptAssistantPhase string
-
-const (
-	TranscriptAssistantPhaseCommentary  TranscriptAssistantPhase = "commentary"
-	TranscriptAssistantPhaseFinal       TranscriptAssistantPhase = "final_answer"
-	TranscriptAssistantPhaseLegacyFinal TranscriptAssistantPhase = "legacy_final_answer"
-)
-
-func ClassifyTranscriptAssistantPhase(raw MessagePhase) TranscriptAssistantPhase {
-	switch NormalizeMessagePhase(string(raw)) {
-	case MessagePhaseCommentary:
-		return TranscriptAssistantPhaseCommentary
-	case MessagePhaseFinal:
-		return TranscriptAssistantPhaseFinal
-	default:
-		if strings.TrimSpace(string(raw)) == "" {
-			return TranscriptAssistantPhaseLegacyFinal
-		}
-		panic(fmt.Sprintf("unsupported transcript assistant phase %q", raw))
-	}
+	return MessagePhase(phase)
 }
 
 type MessageType string
@@ -206,7 +180,7 @@ type TranscriptUserRow struct {
 type TranscriptAssistantRow struct {
 	Text          string
 	CondensedText string
-	Phase         TranscriptAssistantPhase
+	Phase         transcript.AssistantPhase
 	StreamID      *uuid.UUID
 }
 

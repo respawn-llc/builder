@@ -26,6 +26,7 @@ type InputEvent struct {
 
 type PhaseInputEvent struct {
 	Phase analyzer.PhaseKind
+	After time.Duration
 	Bytes []byte
 }
 

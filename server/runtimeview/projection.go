@@ -7,8 +7,8 @@ import (
 	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/shared/clientui"
-	"core/shared/clientuicopy"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 )
 
 const runtimeNoopFinalToken = "NO_OP"
@@ -286,7 +286,7 @@ func cloneToolCallMeta(meta *transcript.ToolCallMeta) *clientui.ToolCallMeta {
 		}
 	}
 	if meta.PatchRender != nil {
-		copyMeta.PatchRender = clientuicopy.RenderedPatch(meta.PatchRender)
+		copyMeta.PatchRender = valuecopy.RenderedPatch(meta.PatchRender)
 	}
 	return copyMeta
 }

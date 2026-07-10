@@ -1,4 +1,4 @@
-package clientuicopy
+package valuecopy
 
 import (
 	"testing"

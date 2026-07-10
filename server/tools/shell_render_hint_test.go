@@ -138,6 +138,35 @@ func TestDetectShellRenderHintRejectsComplexOrAmbiguousCommands(t *testing.T) {
 	}
 }
 
+func TestParseSedFileArgAcceptsOnlyPrintRangeExpressions(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantPath string
+		wantOK   bool
+	}{
+		{name: "single line", args: []string{"sed", "-n", "1p", "file.go"}, wantPath: "file.go", wantOK: true},
+		{name: "line range", args: []string{"sed", "-n", "1,120p", "file.go"}, wantPath: "file.go", wantOK: true},
+		{name: "leading zeros", args: []string{"sed", "-n", "001,002p", "--", "file.go"}, wantPath: "file.go", wantOK: true},
+		{name: "missing start", args: []string{"sed", "-n", ",2p", "file.go"}},
+		{name: "missing end", args: []string{"sed", "-n", "1,p", "file.go"}},
+		{name: "multiple commas", args: []string{"sed", "-n", "1,2,3p", "file.go"}},
+		{name: "missing print suffix", args: []string{"sed", "-n", "1,2", "file.go"}},
+		{name: "extra print suffix", args: []string{"sed", "-n", "1,2pp", "file.go"}},
+		{name: "non ascii digits", args: []string{"sed", "-n", "１,２p", "file.go"}},
+		{name: "negative line", args: []string{"sed", "-n", "-1p", "file.go"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path, ok := parseSedFileArg(tc.args)
+			if ok != tc.wantOK || path != tc.wantPath {
+				t.Fatalf("parseSedFileArg(%q) = %q/%t, want %q/%t", tc.args, path, ok, tc.wantPath, tc.wantOK)
+			}
+		})
+	}
+}
+
 func jsonQuoted(value string) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/transcript"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -195,7 +196,7 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 }
 
 func TestHydrationRendersFinalAssistantFullText(t *testing.T) {
-	for _, phase := range []clientui.TranscriptAssistantPhase{clientui.TranscriptAssistantPhaseFinal, clientui.TranscriptAssistantPhaseLegacyFinal} {
+	for _, phase := range []transcript.AssistantPhase{transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal} {
 		t.Run(string(phase), func(t *testing.T) {
 			var out bytes.Buffer
 			surface := NewSurface(&out)
@@ -244,7 +245,7 @@ func visibleRow(row clientui.TranscriptCommittedRow, visibility clientui.EntryVi
 func assistantRow(text string) clientui.TranscriptCommittedRow {
 	return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{
 		Text:  text,
-		Phase: clientui.TranscriptAssistantPhaseFinal,
+		Phase: transcript.AssistantPhaseFinal,
 	}}
 }
 

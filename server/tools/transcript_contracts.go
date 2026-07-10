@@ -8,14 +8,11 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
-
-var sedPrintRangePattern = regexp.MustCompile(`^\d+(?:,\d+)?p$`)
 
 const noOutputText = "No output"
 
@@ -586,7 +583,7 @@ func parseNlFileArg(args []string) (string, bool) {
 }
 
 func parseSedFileArg(args []string) (string, bool) {
-	if len(args) < 4 || args[1] != "-n" || !sedPrintRangePattern.MatchString(args[2]) {
+	if len(args) < 4 || args[1] != "-n" || !isSedPrintRangeExpression(args[2]) {
 		return "", false
 	}
 
@@ -602,6 +599,28 @@ func parseSedFileArg(args []string) (string, bool) {
 	}
 
 	return "", false
+}
+
+func isSedPrintRangeExpression(expression string) bool {
+	if len(expression) < 2 || expression[len(expression)-1] != 'p' {
+		return false
+	}
+	rangeExpression := expression[:len(expression)-1]
+	seenComma := false
+	segmentHasDigit := false
+	for index := 0; index < len(rangeExpression); index++ {
+		character := rangeExpression[index]
+		if character >= '0' && character <= '9' {
+			segmentHasDigit = true
+			continue
+		}
+		if character != ',' || seenComma || !segmentHasDigit {
+			return false
+		}
+		seenComma = true
+		segmentHasDigit = false
+	}
+	return segmentHasDigit
 }
 
 func decodeHostedWebSearchOutput(item HostedToolOutput) (HostedExecution, bool) {

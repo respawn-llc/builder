@@ -106,6 +106,48 @@ func TestRunCommandFeedsInputAndAppliesResize(t *testing.T) {
 	}
 }
 
+func TestRunCommandDelaysInputRelativeToPhase(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "phase-input-writer")
+	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/phase-input-writer", output); err != nil {
+		t.Fatalf("BuildPackage: %v", err)
+	}
+	delay := 100 * time.Millisecond
+	capture, err := driver.RunCommand(context.Background(), driver.CommandSpec{
+		Path:       output,
+		Dimensions: pty.MustDimensions(2, 16),
+		PhaseInputs: []driver.PhaseInputEvent{{
+			Phase: pty.PhaseScenarioStart,
+			After: delay,
+			Bytes: []byte("x\n"),
+		}},
+		Timeout: commandTestTimeout,
+	})
+	if err != nil {
+		t.Fatalf("RunCommand: %v", err)
+	}
+	analysis, err := pty.Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if len(analysis.PhaseEvents) != 1 {
+		t.Fatalf("phase events = %#v, want one scenario start", analysis.PhaseEvents)
+	}
+	var inputWriteAt *time.Duration
+	for _, operation := range analysis.Operations {
+		if operation.Write != nil && operation.Write.Text == "input:x" {
+			capturedAt := operation.CapturedAt
+			inputWriteAt = &capturedAt
+			break
+		}
+	}
+	if inputWriteAt == nil {
+		t.Fatalf("delayed input output missing: operations=%#v", analysis.Operations)
+	}
+	if elapsed := *inputWriteAt - analysis.PhaseEvents[0].CapturedAt; elapsed < delay {
+		t.Fatalf("phase-relative input elapsed = %s, want at least %s", elapsed, delay)
+	}
+}
+
 func TestRunCommandRecordsResizeAtActualCapturePosition(t *testing.T) {
 	t.Parallel()
 

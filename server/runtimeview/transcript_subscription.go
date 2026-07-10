@@ -6,6 +6,7 @@ import (
 
 	"core/server/runtime"
 	"core/shared/clientui"
+	"core/shared/transcript"
 	"core/shared/valuecopy"
 
 	"github.com/google/uuid"
@@ -254,7 +255,7 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		}
 		row := clientui.TranscriptAssistantRow{
 			Text:  fact.Assistant.Text,
-			Phase: clientui.ClassifyTranscriptAssistantPhase(clientui.MessagePhase(fact.Assistant.Phase)),
+			Phase: transcript.ClassifyAssistantPhase(string(fact.Assistant.Phase)),
 		}
 		if fact.Assistant.StreamID != nil {
 			parsed := *fact.Assistant.StreamID

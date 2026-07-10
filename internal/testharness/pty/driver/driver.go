@@ -57,8 +57,19 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 				copied := append([]analyzer.Chunk(nil), chunks...)
 				copiedResizes := append([]analyzer.ResizeEvent(nil), resizes...)
 				mu.Unlock()
-				for _, payload := range phaseInputs.pending(copied, spec.Dimensions, copiedResizes) {
-					_, _ = ptmx.Write(payload)
+				for _, input := range phaseInputs.pending(copied, spec.Dimensions, copiedResizes) {
+					input := input
+					eventWG.Add(1)
+					go func() {
+						defer eventWG.Done()
+						timer := time.NewTimer(input.After)
+						defer timer.Stop()
+						select {
+						case <-timer.C:
+							_, _ = ptmx.Write(input.Bytes)
+						case <-ctx.Done():
+						}
+					}()
 				}
 				for _, payload := range parseableInputs.pending(copied, spec.Dimensions, copiedResizes) {
 					_, _ = ptmx.Write(payload)
@@ -160,7 +171,7 @@ func newPhaseInputDispatcher(events []PhaseInputEvent) *phaseInputDispatcher {
 	return &phaseInputDispatcher{events: append([]PhaseInputEvent(nil), events...), triggered: make([]bool, len(events))}
 }
 
-func (d *phaseInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analyzer.Dimensions, resizes []analyzer.ResizeEvent) [][]byte {
+func (d *phaseInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analyzer.Dimensions, resizes []analyzer.ResizeEvent) []PhaseInputEvent {
 	if d == nil || len(d.events) == 0 || len(chunks) == 0 {
 		return nil
 	}
@@ -172,14 +183,16 @@ func (d *phaseInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analy
 	if err != nil {
 		return nil
 	}
-	out := make([][]byte, 0)
+	out := make([]PhaseInputEvent, 0)
 	for _, phase := range analysis.PhaseEvents {
 		for i, event := range d.events {
 			if d.triggered[i] || event.Phase != phase.Phase {
 				continue
 			}
 			d.triggered[i] = true
-			out = append(out, append([]byte(nil), event.Bytes...))
+			copyEvent := event
+			copyEvent.Bytes = append([]byte(nil), event.Bytes...)
+			out = append(out, copyEvent)
 		}
 	}
 	return out

@@ -260,7 +260,7 @@ func (s *Surface) finalizeAssistantStream(streamID uuid.UUID, text string, frame
 func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame FrameInput) (Result, error) {
 	row := clientui.TranscriptCommittedRow{
 		Kind:      clientui.TranscriptRowAssistant,
-		Assistant: &clientui.TranscriptAssistantRow{Text: text, Phase: clientui.TranscriptAssistantPhaseFinal},
+		Assistant: &clientui.TranscriptAssistantRow{Text: text, Phase: transcript.AssistantPhaseFinal},
 	}
 	return s.writeFrameTransaction(frame, s.renderCommittedRow(row, frameWidthOrDefault(frame), ""))
 }
@@ -395,9 +395,9 @@ func hydrationRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.M
 		return ongoingRenderMode(row)
 	}
 	switch row.Assistant.Phase {
-	case clientui.TranscriptAssistantPhaseFinal, clientui.TranscriptAssistantPhaseLegacyFinal:
+	case transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal:
 		return transcriptrender.ModeOngoingFull
-	case clientui.TranscriptAssistantPhaseCommentary:
+	case transcript.AssistantPhaseCommentary:
 		return ongoingRenderMode(row)
 	default:
 		panic(fmt.Sprintf("ongoing hydration received unclassified assistant phase %q", row.Assistant.Phase))
