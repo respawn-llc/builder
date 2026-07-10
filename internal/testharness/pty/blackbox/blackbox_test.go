@@ -232,6 +232,45 @@ func TestResponsesStubRejectsMalformedRouteDTO(t *testing.T) {
 	}
 }
 
+func TestResponsesStubRecordsUnsupportedRouteAsProtocolFailure(t *testing.T) {
+	t.Parallel()
+
+	stub, err := blackbox.StartResponsesStub(nil)
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(stub.Close)
+
+	response, err := http.Get(stub.URL() + "/unsupported")
+	if err != nil {
+		t.Fatalf("GET unsupported route: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("unsupported route status = %d, want %d", response.StatusCode, http.StatusNotFound)
+	}
+	if err := stub.Verify(); err == nil {
+		t.Fatal("Verify accepted unsupported route")
+	}
+
+	methodStub, err := blackbox.StartResponsesStub(nil)
+	if err != nil {
+		t.Fatalf("StartResponsesStub method: %v", err)
+	}
+	t.Cleanup(methodStub.Close)
+	response, err = http.Get(methodStub.URL() + "/responses")
+	if err != nil {
+		t.Fatalf("GET unsupported method: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("unsupported method status = %d, want %d", response.StatusCode, http.StatusNotFound)
+	}
+	if err := methodStub.Verify(); err == nil {
+		t.Fatal("Verify accepted unsupported method")
+	}
+}
+
 func TestResponsesStubRejectsOversizedBodyBeforeQueueConsumption(t *testing.T) {
 	t.Parallel()
 

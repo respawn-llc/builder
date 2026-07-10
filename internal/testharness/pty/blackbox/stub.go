@@ -68,6 +68,7 @@ func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
 	router.HandleFunc("POST /v1/responses/compact", stub.serveRoute(RouteCompact))
 	router.HandleFunc("POST /v1/responses/input_tokens", stub.serveRoute(RouteInputTokens))
 	router.HandleFunc("GET /v1/models/{model}", stub.serveRoute(RouteModel))
+	router.HandleFunc("/", stub.serveUnsupportedRoute)
 	stub.server = &http.Server{
 		Handler:           router,
 		MaxHeaderBytes:    maxHTTPHeadersBytes,
@@ -78,6 +79,11 @@ func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
 		close(stub.done)
 	}()
 	return stub, nil
+}
+
+func (s *ResponsesStub) serveUnsupportedRoute(writer http.ResponseWriter, request *http.Request) {
+	s.recordFailure(errors.New("unsupported model route or method"))
+	http.Error(writer, "unsupported model route", http.StatusNotFound)
 }
 
 func (s *ResponsesStub) URL() string {
