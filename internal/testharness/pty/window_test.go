@@ -46,6 +46,36 @@ func TestResolveOperationWindowAndClassifyAppends(t *testing.T) {
 	}
 }
 
+func TestWindowMarkersDelimitBatchedBottomWrites(t *testing.T) {
+	t.Parallel()
+
+	windowID := mustWindowID(t)
+	capture, err := pty.NewCapture(pty.MustDimensions(3, 16), []pty.Chunk{
+		pty.NewChunk(0, 0, []byte(
+			"\x1b[3;1Hbefore"+
+				marker(t, 1, "WindowStart", windowID)+
+				"\x1b[3;1Hinside"+
+				marker(t, 2, "WindowEnd", windowID)+
+				"\x1b[3;1Hafter",
+		)),
+	})
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	analysis, err := pty.Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	windows, err := pty.ResolveOperationWindows(analysis)
+	if err != nil {
+		t.Fatalf("ResolveOperationWindows: %v", err)
+	}
+	appends := pty.ClassifyAppends(analysis, windows[windowID], 2)
+	if len(appends) != 1 || appends[0].Operation.Write == nil || appends[0].Operation.Write.Text() != "inside" {
+		t.Fatalf("window append records = %#v, want only inside", appends)
+	}
+}
+
 func TestPhaseMarkerRejectsInvalidWindowID(t *testing.T) {
 	t.Parallel()
 

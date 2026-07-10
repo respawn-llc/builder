@@ -2,6 +2,7 @@ package blackbox
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"core/internal/testharness/pty/analyzer"
 )
 
 func TestProcessEnvironmentsAreSeparateAndFallible(t *testing.T) {
@@ -108,6 +111,23 @@ func TestWaitReadyRejectsForeignPIDAndExitedServer(t *testing.T) {
 	}
 	if time.Since(started) > fixedWait {
 		t.Fatal("WaitReady did not fail within its fixed deadline")
+	}
+}
+
+func TestServerLogOverflowIsTypedAndRetainsDiagnosticExcerpts(t *testing.T) {
+	stream := newBoundedLog(16)
+	if _, err := stream.Write([]byte("0123456789abcdef")); err != nil {
+		t.Fatalf("fill bounded log: %v", err)
+	}
+	if _, err := stream.Write([]byte("overflow")); err == nil {
+		t.Fatal("bounded log accepted evidence overflow")
+	}
+	var overflow *analyzer.EvidenceLimitExceeded
+	if !errors.As(stream.Error(), &overflow) {
+		t.Fatalf("log error = %T %v, want EvidenceLimitExceeded", stream.Error(), stream.Error())
+	}
+	if overflow.Limit != 16 || overflow.Observed != 24 || len(overflow.Prefix) == 0 || len(overflow.Tail) == 0 {
+		t.Fatalf("overflow diagnostic = %+v", overflow)
 	}
 }
 

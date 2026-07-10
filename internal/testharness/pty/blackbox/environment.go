@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"core/internal/testharness/pty/analyzer"
 	"core/shared/client"
 	"core/shared/serverapi"
 )
@@ -42,10 +43,12 @@ type IsolatedEnvironment struct {
 }
 
 type ServerHandle struct {
-	cmd    *exec.Cmd
-	done   chan struct{}
-	stdout *boundedLog
-	stderr *boundedLog
+	cmd     *exec.Cmd
+	done    chan struct{}
+	stdout  *boundedLog
+	stderr  *boundedLog
+	mu      sync.Mutex
+	waitErr error
 }
 
 func NewIsolatedEnvironment(serverBinary string, operations []RequiredOperation) (*IsolatedEnvironment, error) {
@@ -133,6 +136,9 @@ func (e *IsolatedEnvironment) WaitReady() error {
 		}
 		select {
 		case <-e.Server.done:
+			if err := e.Server.Error(); err != nil {
+				return fmt.Errorf("standalone server exited before readiness: %w", err)
+			}
 			return fmt.Errorf("standalone server exited before readiness: stderr=%s", e.Server.stderr.String())
 		case <-time.After(10 * time.Millisecond):
 		}
@@ -185,6 +191,24 @@ func (s *ServerHandle) Done() <-chan struct{} {
 	return s.done
 }
 
+func (s *ServerHandle) Error() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.waitErr != nil {
+		return s.waitErr
+	}
+	if s.stdout != nil && s.stdout.Error() != nil {
+		return s.stdout.Error()
+	}
+	if s.stderr != nil && s.stderr.Error() != nil {
+		return s.stderr.Error()
+	}
+	return nil
+}
+
 func (s *ServerHandle) Terminate() error {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
 		return nil
@@ -222,7 +246,10 @@ func startServer(binary string, root string, host string, port int, stubURL stri
 	}
 	handle := &ServerHandle{cmd: cmd, done: make(chan struct{}), stdout: stdout, stderr: stderr}
 	go func() {
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
+		handle.mu.Lock()
+		handle.waitErr = waitErr
+		handle.mu.Unlock()
 		close(handle.done)
 	}()
 	return handle, nil
@@ -313,6 +340,8 @@ type boundedLog struct {
 	limit int
 	mu    sync.Mutex
 	data  []byte
+	tail  []byte
+	err   error
 }
 
 func newBoundedLog(limit int) *boundedLog {
@@ -326,7 +355,21 @@ func (b *boundedLog) Write(payload []byte) (int, error) {
 	if remaining > 0 {
 		b.data = append(b.data, payload[:min(remaining, len(payload))]...)
 	}
-	return len(payload), nil
+	if len(payload) <= remaining {
+		return len(payload), nil
+	}
+	if b.err == nil {
+		b.tail = appendTail(b.tail, payload, 32*1024)
+		b.err = &analyzer.EvidenceLimitExceeded{
+			Source:   analyzer.EvidenceSourceArtifacts,
+			Detail:   "server log",
+			Limit:    b.limit,
+			Observed: len(b.data) + len(payload) - remaining,
+			Prefix:   bytes.Clone(b.data[:min(len(b.data), 32*1024)]),
+			Tail:     bytes.Clone(b.tail),
+		}
+	}
+	return 0, b.err
 }
 
 func (b *boundedLog) String() string {
@@ -337,4 +380,18 @@ func (b *boundedLog) Bytes() []byte {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return bytes.Clone(b.data)
+}
+
+func (b *boundedLog) Error() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.err
+}
+
+func appendTail(tail []byte, payload []byte, limit int) []byte {
+	tail = append(tail, payload...)
+	if len(tail) > limit {
+		tail = append([]byte(nil), tail[len(tail)-limit:]...)
+	}
+	return tail
 }

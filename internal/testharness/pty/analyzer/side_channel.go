@@ -136,6 +136,17 @@ func (s *sequenceSideChannel) handleOSC(cmd int, data []byte) {
 		s.err = fmt.Errorf("phase marker sequence must increase: previous=%d current=%d", s.phaseEvents[len(s.phaseEvents)-1].Sequence, event.Sequence)
 		return
 	}
+	// Marker windows are a legacy assertion boundary. Finalize the current
+	// terminal transaction before recording either edge so a batch can never
+	// contain writes from both sides of a window.
+	if err := s.backend.flushPendingWrite(); err != nil {
+		s.err = err
+		return
+	}
+	if err := s.backend.flushWriteBatch(); err != nil {
+		s.err = err
+		return
+	}
 	s.backend.operationBudget.detail = "phase_marker"
 	if err := s.backend.operationBudget.reserve(); err != nil {
 		s.err = err

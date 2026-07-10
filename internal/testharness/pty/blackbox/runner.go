@@ -221,6 +221,11 @@ func runActions(session *driver.Session, environment *IsolatedEnvironment, actio
 				}
 			case <-modelEvents:
 				observation.Model = environment.Stub.Snapshot()
+			case <-environment.Server.Done():
+				if err := environment.Server.Error(); err != nil {
+					return observation, fmt.Errorf("standalone server failure: %w", err)
+				}
+				return observation, errors.New("standalone server exited during scenario")
 			case <-deadline.C:
 				return observation, fmt.Errorf("action %d (%s) timed out after %s: private_modes=%v", index, action.Kind, fixedWait, privateModeState(observation.Analysis))
 			}
@@ -330,10 +335,12 @@ func (s cleanupSupervisor) finishUntil(result *RunResult, dimensions Dimensions,
 			result.Err = incomplete
 		}
 	}
-	if result.Err == nil && incomplete == nil && environment != nil && environment.Root != "" {
+	if incomplete == nil && environment != nil && environment.Root != "" {
 		if err := removeOwnedRootUntil(environment.Root, deadline); err != nil {
 			incomplete = appendCleanupFailure(incomplete, "temporary_root", err)
-			result.Err = incomplete
+			if result.Err == nil {
+				result.Err = incomplete
+			}
 		}
 	}
 	result.Cleanup = incomplete
