@@ -7,19 +7,19 @@ import (
 )
 
 type tracingBackend struct {
-	dimensions      Dimensions
-	cells           [][]Cell
-	cursor          Position
-	modes           map[vt.PrivateMode]vt.ModeStatus
-	chunk           Chunk
-	byteOffset      int64
-	byteEnd         int64
-	ops             []Operation
-	writeText       *writeTextArena
-	pendingWrite    *pendingWrite
-	writeCache      map[Region]string
-	operationBudget *operationBudget
-	err             error
+	dimensions           Dimensions
+	cells                [][]Cell
+	cursor               Position
+	modes                map[vt.PrivateMode]vt.ModeStatus
+	chunk                Chunk
+	byteOffset           int64
+	byteEnd              int64
+	ops                  []Operation
+	writeText            *writeTextArena
+	pendingWrite         *pendingWrite
+	writeTransactionOpen bool
+	operationBudget      *operationBudget
+	err                  error
 }
 
 type pendingWrite struct {
@@ -38,7 +38,6 @@ func newTracingBackend(dimensions Dimensions) *tracingBackend {
 		cells:           snapshot.Cells,
 		modes:           map[vt.PrivateMode]vt.ModeStatus{},
 		writeText:       newDefaultWriteTextArena(),
-		writeCache:      make(map[Region]string),
 		operationBudget: newOperationBudget(),
 	}
 }
@@ -78,15 +77,23 @@ func (b *tracingBackend) appendFinalOperation(operation Operation) bool {
 	if b.err != nil {
 		return false
 	}
-	if err := b.operationBudget.reserve(); err != nil {
-		b.err = err
-		return false
+	if operation.Kind == OperationWrite {
+		if !b.writeTransactionOpen {
+			if err := b.operationBudget.reserve(); err != nil {
+				b.err = err
+				return false
+			}
+			b.writeTransactionOpen = true
+		}
+	} else {
+		if err := b.operationBudget.reserve(); err != nil {
+			b.err = err
+			return false
+		}
+		b.writeTransactionOpen = false
 	}
 	operation.Sequence = len(b.ops)
 	b.ops = append(b.ops, operation)
-	if operation.Kind == OperationErase || operation.Kind == OperationResize {
-		clear(b.writeCache)
-	}
 	return true
 }
 
@@ -181,7 +188,7 @@ func (b *tracingBackend) Reset() {
 	snapshot := NewScreenSnapshot(b.dimensions)
 	b.cells = snapshot.Cells
 	b.cursor = Position{}
-	clear(b.writeCache)
+	b.writeTransactionOpen = false
 }
 
 func (b *tracingBackend) RaiseResize() {}
