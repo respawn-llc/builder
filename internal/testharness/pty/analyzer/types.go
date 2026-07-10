@@ -143,7 +143,10 @@ const (
 
 type EvidenceSource string
 
-const EvidenceSourcePTY EvidenceSource = "pty"
+const (
+	EvidenceSourcePTY           EvidenceSource = "pty"
+	EvidenceSourceOperationText EvidenceSource = "operation_text"
+)
 
 type EvidenceLimitExceeded struct {
 	Source   EvidenceSource

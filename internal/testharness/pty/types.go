@@ -38,7 +38,10 @@ type EvidenceLimitExceeded = analyzer.EvidenceLimitExceeded
 
 type EvidenceSource = analyzer.EvidenceSource
 
-const EvidenceSourcePTY = analyzer.EvidenceSourcePTY
+const (
+	EvidenceSourcePTY           = analyzer.EvidenceSourcePTY
+	EvidenceSourceOperationText = analyzer.EvidenceSourceOperationText
+)
 
 type ResizePlacement = analyzer.ResizePlacement
 

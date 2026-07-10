@@ -34,7 +34,13 @@ func TestWriteTextArenaRejectsAggregateOverflow(t *testing.T) {
 	}
 	if _, err := arena.append("x"); err == nil {
 		t.Fatal("append beyond limit succeeded")
-	} else if !errors.Is(err, errWriteTextArenaLimit) {
-		t.Fatalf("append error = %T %v, want typed arena limit error", err, err)
+	} else {
+		var overflow *EvidenceLimitExceeded
+		if !errors.As(err, &overflow) {
+			t.Fatalf("append error = %T %v, want EvidenceLimitExceeded", err, err)
+		}
+		if overflow.Source != EvidenceSourceOperationText || overflow.Observed != maxOperationTextBytes+1 {
+			t.Fatalf("overflow = %+v", overflow)
+		}
 	}
 }
