@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -52,6 +54,16 @@ type ResponsesStub struct {
 }
 
 func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
+	seen := make(map[uuid.UUID]struct{}, len(required))
+	for index, operation := range required {
+		if err := operation.Validate(); err != nil {
+			return nil, fmt.Errorf("required operation %d: %w", index, err)
+		}
+		if _, exists := seen[operation.ID]; exists {
+			return nil, fmt.Errorf("duplicate required operation identity %s", operation.ID)
+		}
+		seen[operation.ID] = struct{}{}
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("listen response stub: %w", err)

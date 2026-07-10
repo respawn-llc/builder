@@ -177,7 +177,9 @@ func TestResponsesStubConsumesTypedProbeAndRejectsUnconsumedQueue(t *testing.T) 
 		t.Fatalf("Verify: %v", err)
 	}
 
-	unconsumed, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{ID: uuid.New(), Route: blackbox.RouteResponses}})
+	unconsumed, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON,
+	}})
 	if err != nil {
 		t.Fatalf("Start unconsumed stub: %v", err)
 	}
@@ -192,7 +194,7 @@ func TestResponsesStubRejectsProbeMismatch(t *testing.T) {
 
 	probe := uuid.New().String()
 	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID: uuid.New(), Route: blackbox.RouteResponses, Probe: &probe,
+		ID: uuid.New(), Route: blackbox.RouteResponses, Probe: &probe, Outcome: blackbox.OutcomeJSON,
 	}})
 	if err != nil {
 		t.Fatalf("StartResponsesStub: %v", err)
@@ -268,6 +270,16 @@ func TestResponsesStubRecordsUnsupportedRouteAsProtocolFailure(t *testing.T) {
 	}
 	if err := methodStub.Verify(); err == nil {
 		t.Fatal("Verify accepted unsupported method")
+	}
+}
+
+func TestResponsesStubRejectsInvalidDeclaredOperationBeforeListening(t *testing.T) {
+	t.Parallel()
+
+	if _, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		Route: blackbox.RouteResponses,
+	}}); err == nil {
+		t.Fatal("StartResponsesStub accepted an invalid declared operation")
 	}
 }
 
