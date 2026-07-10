@@ -19,21 +19,21 @@ jobs:
       changelog: ${{ steps.changelog.outputs.changelog }}
       artifact_name: ${{ steps.artifact.outputs.name }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.base.ref || github.ref_name }}
           token: ${{ secrets.OPENSOURCE_PAT || github.token }}
 
-      - uses: actions/setup-go@v6.4.0
+      - uses: actions/setup-go@v6.5.0
         with:
           go-version-file: go.mod
           check-latest: true
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6.0.3
+        uses: pnpm/action-setup@v6.0.9
         with:
-          version: 10.33.2
+          version: 11.11.0
 
       - name: Setup Node
         uses: actions/setup-node@v6.4.0
@@ -121,7 +121,7 @@ jobs:
 
       - name: Build changelog
         id: changelog
-        uses: mikepenz/release-changelog-builder-action@v6.2.1
+        uses: mikepenz/release-changelog-builder-action@v6.2.3
         with:
           commitMode: true
           configuration: ".github/changelog_config.json"
@@ -153,7 +153,7 @@ jobs:
     needs: prepare_release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.0
 
       - name: Download release artifacts
         uses: actions/download-artifact@v8.0.1
@@ -202,7 +202,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.0
 
       - name: Download release artifacts
         uses: actions/download-artifact@v8.0.1
@@ -251,7 +251,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.0
 
       - name: Download release artifacts
         uses: actions/download-artifact@v8.0.1
@@ -263,7 +263,7 @@ jobs:
       # public, so a failed desktop build leaves a re-runnable draft (reused by
       # prepare_release) instead of a public release missing desktop assets.
       - name: Create or update release
-        uses: softprops/action-gh-release@v3.0.0
+        uses: softprops/action-gh-release@v3.0.1
         with:
           tag_name: ${{ needs.prepare_release.outputs.tag }}
           name: ${{ needs.prepare_release.outputs.tag }}
@@ -292,7 +292,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.0
 
       - name: Install Linux bundling dependencies
         if: matrix.platform == 'linux'
@@ -304,14 +304,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: apps/desktop/src-tauri
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6.0.3
+        uses: pnpm/action-setup@v6.0.9
         with:
-          version: 10.33.2
+          version: 11.11.0
 
       - name: Setup Node
         uses: actions/setup-node@v6.4.0
@@ -350,7 +350,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.0
 
       # Both platforms' staged bundles merge into one dist dir so assemble sees all
       # updater .sig files and emits a single latest.json covering both platforms.
@@ -379,7 +379,7 @@ jobs:
       # Uploads the desktop bundles and flips the release public (draft: false) — the
       # last step, so the release only goes live once every platform's assets exist.
       - name: Upload desktop assets and publish release
-        uses: softprops/action-gh-release@v3.0.0
+        uses: softprops/action-gh-release@v3.0.1
         with:
           tag_name: ${{ needs.prepare_release.outputs.tag }}
           draft: false
@@ -394,11 +394,11 @@ jobs:
     env:
       BREW_FORMULA_NAME: kent
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
 
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.0
         with:
           repository: respawn-llc/homebrew-tap
           path: homebrew-tap

@@ -1,7 +1,7 @@
 {
   "$schema": "./dependency-policy.schema.json",
   "minimumReleaseAgeMinutes": 10080,
-  "minimumReleaseAgeExclude": ["@types/node", "vite", "@rolldown/*"],
+  "minimumReleaseAgeExclude": ["@types/node", "vite", "typescript", "@typescript/*", "@rolldown/*"],
   "directDependencyAllowlist": {
     "@app/apps": {
       "devDependencies": ["postcss", "prettier"]

@@ -8,10 +8,11 @@ cd "$repo_root"
 
 usage() {
 	cat <<'USAGE'
-Usage: scripts/update-deps.sh [--dry-run] [--skip-go] [--skip-docs] [--skip-rust]
+Usage: scripts/update-deps.sh [--dry-run] [--skip-apps] [--skip-go] [--skip-docs] [--skip-rust]
 
 Updates repository dependencies for the currently supported package managers:
   - root Go module (`go.mod` / `go.sum`)
+  - desktop pnpm workspace (`apps/package.json` / `apps/pnpm-lock.yaml`)
   - docs pnpm workspace (`docs/package.json` / `docs/pnpm-lock.yaml`)
   - Rust Cargo workspaces (`Cargo.toml` / `Cargo.lock`)
 
@@ -20,6 +21,7 @@ script on the same 7-day dependency update cadence as the other ecosystems.
 
 Options:
   --dry-run    Print planned update commands without executing them.
+  --skip-apps  Skip desktop pnpm dependency updates.
   --skip-go    Skip Go module dependency updates.
   --skip-docs  Skip docs pnpm dependency updates.
   --skip-rust  Skip Rust Cargo dependency updates.
@@ -27,6 +29,7 @@ USAGE
 }
 
 dry_run="false"
+skip_apps="false"
 skip_go="false"
 skip_docs="false"
 skip_rust="false"
@@ -35,6 +38,10 @@ while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--dry-run)
 		dry_run="true"
+		shift
+		;;
+	--skip-apps)
+		skip_apps="true"
 		shift
 		;;
 	--skip-go)
@@ -99,6 +106,22 @@ update_go_deps() {
 	updated_any="true"
 }
 
+update_apps_deps() {
+	if [[ "$skip_apps" == "true" ]]; then
+		return
+	fi
+	if [[ ! -f "$repo_root/apps/package.json" ]]; then
+		return
+	fi
+	require_cmd pnpm
+	echo "==> Updating desktop pnpm dependencies"
+	run_cmd pnpm --dir "$repo_root/apps" --recursive up --latest --lockfile-only
+	# The lint parser supports TypeScript 6 only. Desktop build/typecheck scripts
+	# invoke the stable TypeScript 7 alias explicitly.
+	run_cmd pnpm --dir "$repo_root/apps" --filter @app/desktop --filter @app/native-bridge add --save-dev "typescript@^6.0.3" --lockfile-only
+	updated_any="true"
+}
+
 update_docs_deps() {
 	if [[ "$skip_docs" == "true" ]]; then
 		return
@@ -108,7 +131,7 @@ update_docs_deps() {
 	fi
 	require_cmd pnpm
 	echo "==> Updating docs pnpm dependencies"
-	run_cmd pnpm --dir "$repo_root/docs" up --latest
+	run_cmd pnpm --dir "$repo_root/docs" up --latest --lockfile-only
 	updated_any="true"
 }
 
@@ -142,6 +165,7 @@ update_rust_deps() {
 }
 
 update_go_deps
+update_apps_deps
 update_docs_deps
 update_rust_deps
 
