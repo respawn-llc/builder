@@ -153,6 +153,7 @@ const (
 
 type EvidenceLimitExceeded struct {
 	Source   EvidenceSource
+	Detail   string
 	Limit    int
 	Observed int
 	Prefix   []byte
@@ -160,6 +161,9 @@ type EvidenceLimitExceeded struct {
 }
 
 func (e *EvidenceLimitExceeded) Error() string {
+	if e.Detail != "" {
+		return fmt.Sprintf("%s evidence limit exceeded: detail=%s observed=%d limit=%d", e.Source, e.Detail, e.Observed, e.Limit)
+	}
 	return fmt.Sprintf("%s evidence limit exceeded: observed=%d limit=%d", e.Source, e.Observed, e.Limit)
 }
 
@@ -464,16 +468,30 @@ type Position struct {
 }
 
 type Operation struct {
-	Sequence    int
-	Kind        OperationKind
-	ChunkIndex  int
-	ByteRange   ByteRange
-	Before      Position
-	After       Position
-	Region      Region
-	Write       *WritePayload
-	PrivateMode *PrivateModeChange
-	CapturedAt  time.Duration
+	Sequence      int
+	Kind          OperationKind
+	ChunkIndex    int
+	ByteRange     ByteRange
+	Before        Position
+	After         Position
+	Region        Region
+	Write         *WritePayload
+	WriteSegments []WriteSegment
+	Controls      []Operation
+	PrivateMode   *PrivateModeChange
+	CapturedAt    time.Duration
+}
+
+// WriteSegment preserves each observed write within one bounded logical write
+// transaction. The enclosing Operation is the transaction budget unit.
+type WriteSegment struct {
+	ChunkIndex int
+	ByteRange  ByteRange
+	Before     Position
+	After      Position
+	Region     Region
+	Write      WritePayload
+	CapturedAt time.Duration
 }
 
 type WritePayload struct {

@@ -2,10 +2,16 @@ package analyzer
 
 const maxAnalyzerOperations = 16_384
 
+// A write transaction records screen-local spans. Its independent cap is the
+// maximum validated screen cardinality; top-level operations remain capped at
+// 16,384 and aggregate write text at 1 MiB.
+const maxWriteBatchSegments = maxTerminalCells
+
 // operationBudget is shared by terminal writes, controls, private-mode
 // changes, and phase events. It retains only bounded raw-byte diagnostics.
 type operationBudget struct {
 	count  int
+	detail string
 	prefix []byte
 	tail   []byte
 }
@@ -39,6 +45,7 @@ func (b *operationBudget) reserve() error {
 	if b.count == maxAnalyzerOperations {
 		return &EvidenceLimitExceeded{
 			Source:   EvidenceSourceOperations,
+			Detail:   b.detail,
 			Limit:    maxAnalyzerOperations,
 			Observed: b.count + 1,
 			Prefix:   append([]byte(nil), b.prefix...),

@@ -139,9 +139,13 @@ func TestRunCommandRecordsResizeAtActualCapturePosition(t *testing.T) {
 			index := i
 			resizeIndex = &index
 		}
-		if operation.Kind == pty.OperationWrite && operation.Write != nil && operation.Write.Text() == "after" {
-			index := i
-			afterWriteIndex = &index
+		if operation.Kind == pty.OperationWrite {
+			for _, segment := range operation.WriteSegments {
+				if segment.Write.Text() == "after" {
+					index := i
+					afterWriteIndex = &index
+				}
+			}
 		}
 	}
 	if resizeIndex == nil || afterWriteIndex == nil || *resizeIndex > *afterWriteIndex {

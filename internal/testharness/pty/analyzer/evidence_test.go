@@ -160,7 +160,7 @@ func TestCaptureAssemblerRejectsEvidenceBlockOverflow(t *testing.T) {
 func TestAnalyzeRejectsOperationOverflowWithBoundedDiagnostics(t *testing.T) {
 	t.Parallel()
 
-	payload := bytes.Repeat([]byte("\x1b[H"), 16_385)
+	payload := bytes.Repeat([]byte("x\n"), 100_001)
 	capture, err := pty.NewCapture(pty.MustDimensions(2, 8), []pty.Chunk{pty.NewChunk(0, 0, payload)})
 	if err != nil {
 		t.Fatalf("NewCapture: %v", err)
@@ -170,7 +170,7 @@ func TestAnalyzeRejectsOperationOverflowWithBoundedDiagnostics(t *testing.T) {
 	if !errors.As(err, &overflow) {
 		t.Fatalf("Analyze error = %T %v, want EvidenceLimitExceeded", err, err)
 	}
-	if overflow.Source != analyzer.EvidenceSourceOperations || overflow.Limit != 16_384 || overflow.Observed != 16_385 {
+	if overflow.Source != analyzer.EvidenceSourceOperations || overflow.Limit != 100_000 || overflow.Observed != 100_001 {
 		t.Fatalf("overflow = %+v", overflow)
 	}
 	if len(overflow.Prefix) == 0 || len(overflow.Tail) == 0 || len(overflow.Prefix) > 32*1024 || len(overflow.Tail) > 32*1024 {

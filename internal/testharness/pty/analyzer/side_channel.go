@@ -98,6 +98,7 @@ func (s *sequenceSideChannel) handleCSI(cmd ansi.Cmd, params ansi.Params) {
 		if cmd.Prefix() == '?' {
 			enabled := cmd.Final() == 'h'
 			params.ForEach(0, func(_ int, mode int, _ bool) {
+				s.backend.operationBudget.detail = "private_mode"
 				if err := s.backend.operationBudget.reserve(); err != nil {
 					s.err = err
 					return
@@ -135,6 +136,7 @@ func (s *sequenceSideChannel) handleOSC(cmd int, data []byte) {
 		s.err = fmt.Errorf("phase marker sequence must increase: previous=%d current=%d", s.phaseEvents[len(s.phaseEvents)-1].Sequence, event.Sequence)
 		return
 	}
+	s.backend.operationBudget.detail = "phase_marker"
 	if err := s.backend.operationBudget.reserve(); err != nil {
 		s.err = err
 		return

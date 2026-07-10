@@ -392,6 +392,11 @@ func requireOperation(t *testing.T, analysis pty.Analysis, kind pty.OperationKin
 		if op.Kind == kind && op.Region == region {
 			return
 		}
+		for _, control := range op.Controls {
+			if control.Kind == kind && control.Region == region {
+				return
+			}
+		}
 	}
 	t.Fatalf("operation kind=%v region=%#v not found in %#v", kind, region, analysis.Operations)
 }

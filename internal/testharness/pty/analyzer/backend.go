@@ -1,25 +1,26 @@
 package analyzer
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/gdamore/tcell/v3/vt"
 )
 
 type tracingBackend struct {
-	dimensions           Dimensions
-	cells                [][]Cell
-	cursor               Position
-	modes                map[vt.PrivateMode]vt.ModeStatus
-	chunk                Chunk
-	byteOffset           int64
-	byteEnd              int64
-	ops                  []Operation
-	writeText            *writeTextArena
-	pendingWrite         *pendingWrite
-	writeTransactionOpen bool
-	operationBudget      *operationBudget
-	err                  error
+	dimensions      Dimensions
+	cells           [][]Cell
+	cursor          Position
+	modes           map[vt.PrivateMode]vt.ModeStatus
+	chunk           Chunk
+	byteOffset      int64
+	byteEnd         int64
+	ops             []Operation
+	writeText       *writeTextArena
+	pendingWrite    *pendingWrite
+	writeBatch      *writeBatch
+	operationBudget *operationBudget
+	err             error
 }
 
 type pendingWrite struct {
@@ -28,7 +29,12 @@ type pendingWrite struct {
 	before    Position
 	after     Position
 	region    Region
-	text      []byte
+	span      TextSpan
+}
+
+type writeBatch struct {
+	segments []WriteSegment
+	controls []Operation
 }
 
 func newTracingBackend(dimensions Dimensions) *tracingBackend {
@@ -70,6 +76,22 @@ func (b *tracingBackend) appendOperation(operation Operation) bool {
 		b.err = err
 		return false
 	}
+	switch operation.Kind {
+	case OperationCursorMove, OperationErase, OperationScrollRegionChange:
+		if b.writeBatch == nil {
+			b.writeBatch = &writeBatch{}
+		}
+		if len(b.writeBatch.segments)+len(b.writeBatch.controls) == maxWriteBatchSegments {
+			b.err = &EvidenceLimitExceeded{Source: EvidenceSourceOperations, Limit: maxWriteBatchSegments, Observed: maxWriteBatchSegments + 1, Prefix: append([]byte(nil), b.operationBudget.prefix...), Tail: append([]byte(nil), b.operationBudget.tail...)}
+			return false
+		}
+		b.writeBatch.controls = append(b.writeBatch.controls, operation)
+		return true
+	}
+	if err := b.flushWriteBatch(); err != nil {
+		b.err = err
+		return false
+	}
 	return b.appendFinalOperation(operation)
 }
 
@@ -77,20 +99,10 @@ func (b *tracingBackend) appendFinalOperation(operation Operation) bool {
 	if b.err != nil {
 		return false
 	}
-	if operation.Kind == OperationWrite {
-		if !b.writeTransactionOpen {
-			if err := b.operationBudget.reserve(); err != nil {
-				b.err = err
-				return false
-			}
-			b.writeTransactionOpen = true
-		}
-	} else {
-		if err := b.operationBudget.reserve(); err != nil {
-			b.err = err
-			return false
-		}
-		b.writeTransactionOpen = false
+	b.operationBudget.detail = fmt.Sprintf("operation_kind=%d", operation.Kind)
+	if err := b.operationBudget.reserve(); err != nil {
+		b.err = err
+		return false
 	}
 	operation.Sequence = len(b.ops)
 	b.ops = append(b.ops, operation)
@@ -101,30 +113,24 @@ func (b *tracingBackend) operations() []Operation {
 	if err := b.flushPendingWrite(); err != nil {
 		b.err = err
 	}
+	if err := b.flushWriteBatch(); err != nil {
+		b.err = err
+	}
 	return append([]Operation(nil), b.ops...)
 }
 
 func (b *tracingBackend) snapshotOperations() ([]Operation, error) {
 	operations := append([]Operation(nil), b.ops...)
-	if b.pendingWrite == nil {
-		return operations, nil
+	segments := append([]WriteSegment(nil), b.writeBatchSegments()...)
+	controls := append([]Operation(nil), b.writeBatchControls()...)
+	if b.pendingWrite != nil {
+		pending := b.pendingWrite
+		payload := WritePayload{Span: pending.span, arena: b.writeText}
+		segments = append(segments, WriteSegment{ChunkIndex: pending.chunk.Index, ByteRange: pending.byteRange, Before: pending.before, After: pending.after, Region: pending.region, Write: payload, CapturedAt: pending.chunk.At})
 	}
-	pending := b.pendingWrite
-	payload, err := NewWritePayload(string(pending.text))
-	if err != nil {
-		return nil, err
+	if len(segments) > 0 || len(controls) > 0 {
+		operations = append(operations, b.operationForWriteBatch(segments, controls))
 	}
-	operations = append(operations, Operation{
-		Sequence:   len(operations),
-		Kind:       OperationWrite,
-		ChunkIndex: pending.chunk.Index,
-		ByteRange:  pending.byteRange,
-		Before:     pending.before,
-		After:      pending.after,
-		Region:     pending.region,
-		Write:      &payload,
-		CapturedAt: pending.chunk.At,
-	})
 	return operations, nil
 }
 
@@ -209,10 +215,13 @@ func (b *tracingBackend) Reset() {
 		b.err = err
 		return
 	}
+	if err := b.flushWriteBatch(); err != nil {
+		b.err = err
+		return
+	}
 	snapshot := NewScreenSnapshot(b.dimensions)
 	b.cells = snapshot.Cells
 	b.cursor = Position{}
-	b.writeTransactionOpen = false
 }
 
 func (b *tracingBackend) RaiseResize() {}

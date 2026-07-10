@@ -59,8 +59,12 @@ func TestIdenticalRedrawAfterEraseRemainsSemanticOperation(t *testing.T) {
 	}
 	writes := 0
 	for _, operation := range analysis.Operations {
-		if operation.Kind == OperationWrite && operation.Write != nil && operation.Write.Text() == "x" {
-			writes++
+		if operation.Kind == OperationWrite {
+			for _, segment := range operation.WriteSegments {
+				if segment.Write.Text() == "x" {
+					writes++
+				}
+			}
 		}
 	}
 	if writes != 2 {
