@@ -234,7 +234,7 @@ func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (
 	if s.requiredInFlight {
 		return nil, errors.New("concurrent declared model operation")
 	}
-	if required.Probe != "" && !requestContainsProbe(body, required.Probe) {
+	if required.Probe != nil && !requestContainsProbe(body, *required.Probe) {
 		return nil, errors.New("required response probe was not present in typed input")
 	}
 	if required.SessionCacheKey && !hasMatchingSessionCacheKey(body, headers) {
@@ -261,8 +261,8 @@ func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseW
 	if operation.Stream {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n")
-		_, _ = fmt.Fprintf(writer, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":%q}\n\n", operation.Output)
-		_, _ = fmt.Fprintf(writer, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":%q}]}]}}\n\n", operation.Output)
+		_, _ = fmt.Fprintf(writer, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":%q}\n\n", optionalText(operation.Output))
+		_, _ = fmt.Fprintf(writer, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":%q}]}]}}\n\n", optionalText(operation.Output))
 		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
 		return
 	}
@@ -274,9 +274,16 @@ func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseW
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"output": []any{map[string]any{
 			"type": "message", "role": "assistant", "phase": "final_answer",
-			"content": []any{map[string]any{"type": "output_text", "text": operation.Output}},
+			"content": []any{map[string]any{"type": "output_text", "text": optionalText(operation.Output)}},
 		}},
 	})
+}
+
+func optionalText(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func (s *ResponsesStub) recordFailure(err error) {

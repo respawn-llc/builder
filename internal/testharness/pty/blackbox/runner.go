@@ -190,7 +190,7 @@ func dispatchAction(session *driver.Session, action Action) (uuid.UUID, bool, er
 	case ActionWait, ActionAssert, ActionWaitExit:
 		return uuid.Nil, false, nil
 	case ActionEnterInput:
-		return enqueue(session, driver.SessionCommandWrite, []byte(action.Input), nil)
+		return enqueue(session, driver.SessionCommandWrite, []byte(*action.Input), nil)
 	case ActionSubmitPrompt:
 		return enqueue(session, driver.SessionCommandWrite, []byte("\r"), nil)
 	case ActionCancel:

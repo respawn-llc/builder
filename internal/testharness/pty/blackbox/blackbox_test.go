@@ -40,12 +40,13 @@ func TestResponsesStubConsumesTypedProbeAndRejectsUnconsumedQueue(t *testing.T) 
 	t.Parallel()
 
 	probe := uuid.New().String()
+	output := "ok"
 	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
 		ID:     uuid.New(),
 		Route:  blackbox.RouteResponses,
-		Probe:  probe,
+		Probe:  &probe,
 		Stream: true,
-		Output: "ok",
+		Output: &output,
 	}})
 	if err != nil {
 		t.Fatalf("StartResponsesStub: %v", err)
@@ -74,8 +75,9 @@ func TestResponsesStubConsumesTypedProbeAndRejectsUnconsumedQueue(t *testing.T) 
 func TestResponsesStubRejectsProbeMismatch(t *testing.T) {
 	t.Parallel()
 
+	probe := uuid.New().String()
 	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID: uuid.New(), Route: blackbox.RouteResponses, Probe: uuid.New().String(),
+		ID: uuid.New(), Route: blackbox.RouteResponses, Probe: &probe,
 	}})
 	if err != nil {
 		t.Fatalf("StartResponsesStub: %v", err)

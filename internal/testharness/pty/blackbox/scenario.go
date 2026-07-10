@@ -37,9 +37,9 @@ type Dimensions struct {
 type RequiredOperation struct {
 	ID              uuid.UUID `json:"id"`
 	Route           Route     `json:"route"`
-	Probe           string    `json:"probe,omitempty"`
+	Probe           *string   `json:"probe,omitempty"`
 	Stream          bool      `json:"stream"`
-	Output          string    `json:"output,omitempty"`
+	Output          *string   `json:"output,omitempty"`
 	SessionCacheKey bool      `json:"session_cache_key"`
 }
 
@@ -55,7 +55,7 @@ const (
 type Action struct {
 	ID         uuid.UUID   `json:"id"`
 	Kind       ActionKind  `json:"kind"`
-	Input      string      `json:"input,omitempty"`
+	Input      *string     `json:"input,omitempty"`
 	Dimensions *Dimensions `json:"dimensions,omitempty"`
 	Predicate  *Predicate  `json:"predicate,omitempty"`
 }
@@ -170,14 +170,17 @@ func (operation RequiredOperation) Validate() error {
 	default:
 		return fmt.Errorf("unsupported model route %q", operation.Route)
 	}
-	if len(operation.Probe) > maxScenarioPayload || len(operation.Output) > maxScenarioPayload {
+	if operation.Probe != nil && len(*operation.Probe) > maxScenarioPayload {
+		return errors.New("model probe exceeds limit")
+	}
+	if operation.Output != nil && len(*operation.Output) > maxScenarioPayload {
 		return errors.New("model payload exceeds limit")
 	}
-	if operation.Route != RouteResponses && (operation.Probe != "" || operation.Stream || operation.SessionCacheKey) {
+	if operation.Route != RouteResponses && (operation.Probe != nil || operation.Stream || operation.SessionCacheKey) {
 		return errors.New("only responses operations may declare probe, stream, or session cache key")
 	}
-	if operation.Probe != "" {
-		probe, err := uuid.Parse(operation.Probe)
+	if operation.Probe != nil {
+		probe, err := uuid.Parse(*operation.Probe)
 		if err != nil || probe.Version() != 4 || probe == uuid.Nil {
 			return errors.New("response probe must be UUIDv4")
 		}
@@ -189,9 +192,9 @@ func (operation *RequiredOperation) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		ID              uuid.UUID `json:"id"`
 		Route           Route     `json:"route"`
-		Probe           string    `json:"probe"`
+		Probe           *string   `json:"probe"`
 		Stream          bool      `json:"stream"`
-		Output          string    `json:"output"`
+		Output          *string   `json:"output"`
 		SessionCacheKey bool      `json:"session_cache_key"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -221,25 +224,25 @@ func (action Action) Validate() error {
 	if err := validateV4(action.ID, "action id"); err != nil {
 		return err
 	}
-	if len(action.Input) > maxScenarioPayload {
+	if action.Input != nil && len(*action.Input) > maxScenarioPayload {
 		return errors.New("action input exceeds limit")
 	}
 	switch action.Kind {
 	case ActionWait, ActionAssert:
-		if action.Predicate == nil || action.Input != "" || action.Dimensions != nil {
+		if action.Predicate == nil || action.Input != nil || action.Dimensions != nil {
 			return errors.New("predicate action must contain only a predicate")
 		}
 		return action.Predicate.Validate()
 	case ActionEnterInput:
-		if action.Input == "" || action.Predicate != nil || action.Dimensions != nil {
+		if action.Input == nil || *action.Input == "" || action.Predicate != nil || action.Dimensions != nil {
 			return errors.New("enter_input must contain only nonempty input")
 		}
 	case ActionSubmitPrompt, ActionCancel, ActionTerminate, ActionWaitExit:
-		if action.Input != "" || action.Predicate != nil || action.Dimensions != nil {
+		if action.Input != nil || action.Predicate != nil || action.Dimensions != nil {
 			return fmt.Errorf("%s must not include payload", action.Kind)
 		}
 	case ActionResize:
-		if action.Input != "" || action.Predicate != nil || action.Dimensions == nil {
+		if action.Input != nil || action.Predicate != nil || action.Dimensions == nil {
 			return errors.New("resize must contain only dimensions")
 		}
 		if _, err := analyzer.NewDimensions(action.Dimensions.Rows, action.Dimensions.Cols); err != nil {
@@ -286,11 +289,7 @@ func (action *Action) UnmarshalJSON(data []byte) error {
 	if raw.Kind == ActionResize && raw.Dimensions == nil {
 		return errors.New("resize dimensions are required")
 	}
-	input := ""
-	if raw.Input != nil {
-		input = *raw.Input
-	}
-	*action = Action{ID: raw.ID, Kind: raw.Kind, Input: input, Dimensions: raw.Dimensions, Predicate: raw.Predicate}
+	*action = Action{ID: raw.ID, Kind: raw.Kind, Input: raw.Input, Dimensions: raw.Dimensions, Predicate: raw.Predicate}
 	return nil
 }
 
