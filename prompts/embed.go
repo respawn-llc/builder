@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -442,9 +443,17 @@ func RenderWorkflowTaskInstructions(args WorkflowNodeContextArgs, nodeCompletion
 }
 
 func RenderWorkflowNudgePrompt(rejectionReason, nodeCompletionInstructions, goalReminder string) (string, error) {
+	rejectionReason = strings.TrimSpace(rejectionReason)
+	if rejectionReason == "" {
+		return "", errors.New("render workflow nudge: rejection reason is required")
+	}
+	nodeCompletionInstructions = strings.TrimSpace(nodeCompletionInstructions)
+	if nodeCompletionInstructions == "" {
+		return "", errors.New("render workflow nudge: node completion instructions are required")
+	}
 	return renderNamedTemplate("workflow nudge", WorkflowNudgePrompt, workflowNudgeTemplateData{
-		RejectionReason:            strings.TrimSpace(rejectionReason),
-		NodeCompletionInstructions: strings.TrimSpace(nodeCompletionInstructions),
+		RejectionReason:            rejectionReason,
+		NodeCompletionInstructions: nodeCompletionInstructions,
 		GoalReminder:               strings.TrimSpace(goalReminder),
 	})
 }

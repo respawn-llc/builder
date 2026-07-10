@@ -378,6 +378,25 @@ func TestRenderWorkflowNudgePrompt(t *testing.T) {
 	}
 }
 
+func TestRenderWorkflowNudgePromptRequiresReasonAndNodeCompletionInstructions(t *testing.T) {
+	tests := []struct {
+		name         string
+		reason       string
+		instructions string
+	}{
+		{name: "missing rejection reason", instructions: "Call complete_node."},
+		{name: "missing node completion instructions", reason: "transition is required"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := RenderWorkflowNudgePrompt(tt.reason, tt.instructions, ""); err == nil {
+				t.Fatal("RenderWorkflowNudgePrompt accepted an incomplete nudge")
+			}
+		})
+	}
+}
+
 func TestRenderGoalSetPrompt(t *testing.T) {
 	rendered := RenderGoalSetPrompt("ship /goal mode")
 	if !strings.Contains(rendered, "ship /goal mode") {
