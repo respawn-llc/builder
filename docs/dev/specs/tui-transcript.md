@@ -57,6 +57,7 @@
 - In the scrollable interior, line, page, wheel, or alternate-scroll movement moves the camera and selects the visible selectable item nearest viewport center.
 - At the top or bottom camera edge, line movement continues through visible selectable items beyond the center anchor. Reverse movement walks an off-center selection back to the center anchor before camera scrolling resumes.
 - Detail requests an adjacent cursor page only after movement in that direction cannot move either the loaded camera or the visible local selection.
+- Every transition into detail resets its bounded transcript membership and UI-local detail state, requests the newest page without a cursor, and anchors the camera and selection at that page's end.
 - Tall expanded entries remain selected while their body crosses the center anchor.
 - Detail rows do not use dedicated collapsed/expanded glyphs. First rendered line keeps normal role/tool symbol; continuations use faint tree guides.
 - Compact detail replaces selected expandable item's role symbol with `▶` or `▼`. The affordance is selected-only.

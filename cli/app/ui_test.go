@@ -690,21 +690,33 @@ func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
 }
 
 func TestDetailModeStatusLineShowsSelectedExpandAction(t *testing.T) {
+	page := clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("line one\nline two\nline three\nline four"),
+		},
+	}
 	m := newProjectedStaticUIModel(
+		WithUISessionID(detailTestSessionID),
 		WithUIModelName("gpt-5"),
 	)
+	m.statusConfig.SessionViews = &countingSessionViewClient{page: page}
 	m.termWidth = 100
 	m.termHeight = 16
 	m.windowSizeKnown = true
 	m.layout().syncViewport()
-	m.forwardToView(tui.SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
-		Entries: []clientui.TranscriptCommittedRow{
-			detailTestAssistantRow("line one\nline two\nline three\nline four"),
-		},
-	}})
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
-	updated := next.(*uiModel)
+	cmd := m.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{
+		target:            tui.ModeDetail,
+		suppressAltScreen: true,
+		preserveSurface:   true,
+	})
+	updated := m
+	for _, msg := range collectCmdMessages(t, cmd) {
+		if load, ok := msg.(detailTranscriptLoadMsg); ok {
+			updated = updateUIModel(t, updated, load)
+		}
+	}
 	if updated.view.Mode() != tui.ModeDetail {
 		t.Fatalf("mode=%q want detail", updated.view.Mode())
 	}
@@ -712,7 +724,7 @@ func TestDetailModeStatusLineShowsSelectedExpandAction(t *testing.T) {
 		t.Fatalf("detail selection action = %v, want expand", got)
 	}
 
-	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
 	if got := updated.view.DetailSelectionAction(); got != tui.DetailSelectionActionCollapse {
 		t.Fatalf("detail selection action = %v, want collapse", got)

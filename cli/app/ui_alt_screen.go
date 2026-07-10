@@ -73,7 +73,11 @@ func (m *uiModel) detailLoadCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
 	if prev == next || next != tui.ModeDetail {
 		return nil
 	}
-	return m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
+	cancelCmd := m.cancelPendingDetailTranscriptRequest()
+	m.detailTranscript.reset()
+	resetViewCmd := m.forwardToView(tui.ResetDetailTranscriptMsg{})
+	loadCmd := m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
+	return sequenceCmds(cancelCmd, resetViewCmd, loadCmd)
 }
 
 func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {

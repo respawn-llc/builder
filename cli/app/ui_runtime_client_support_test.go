@@ -17,6 +17,7 @@ type countingSessionViewClient struct {
 	count           atomic.Int32
 	mainViewCount   atomic.Int32
 	lastMainViewReq serverapi.SessionMainViewRequest
+	lastPageReq     serverapi.SessionTranscriptPageRequest
 }
 
 func (c *countingSessionViewClient) GetSessionMainView(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
@@ -26,7 +27,8 @@ func (c *countingSessionViewClient) GetSessionMainView(_ context.Context, req se
 	return serverapi.SessionMainViewResponse{MainView: c.view}, nil
 }
 
-func (c *countingSessionViewClient) GetSessionTranscriptPage(_ context.Context, _ serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+func (c *countingSessionViewClient) GetSessionTranscriptPage(_ context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	c.lastPageReq = req
 	return serverapi.SessionTranscriptPageResponse{Transcript: c.page}, nil
 }
 

@@ -44,6 +44,56 @@ func TestDetailModeTransitionLoadsServerBackedTranscriptPage(t *testing.T) {
 	}
 }
 
+func TestDetailModeReentryReloadsNewestPageAndSelectsItsEnd(t *testing.T) {
+	stale := clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("stale detail page"),
+		},
+	}
+	fresh := clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("fresh expandable\nline two\nline three\nline four"),
+			detailTestUserRow("fresh newest"),
+		},
+	}
+	sessionViews := &countingSessionViewClient{page: fresh}
+	model := newProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		WithUISessionID(detailTestSessionID),
+		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
+	)
+	model.detailTranscript.replace(stale)
+	model.view = tui.NewModel()
+	model.forwardToView(tui.SetViewportSizeMsg{Lines: 1, Width: 80})
+	model.forwardToView(tui.SetDetailTranscriptPageMsg{Page: stale})
+
+	cmd := model.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{
+		target:            tui.ModeDetail,
+		suppressAltScreen: true,
+		preserveSurface:   true,
+	})
+	if cmd == nil {
+		t.Fatal("detail reentry did not request a fresh newest page")
+	}
+	for _, msg := range collectCmdMessages(t, cmd) {
+		if load, ok := msg.(detailTranscriptLoadMsg); ok {
+			model = updateUIModel(t, model, load)
+		}
+	}
+
+	if sessionViews.lastPageReq.Cursor != nil || sessionViews.lastPageReq.NewerCursor != nil {
+		t.Fatalf("detail reentry request = %#v, want newest-page request without cursors", sessionViews.lastPageReq)
+	}
+	if got := model.detailTranscript.page().Entries; !detailTestRowsEqual(got, fresh.Entries) {
+		t.Fatalf("detail reentry entries = %#v, want fresh newest page %#v", got, fresh.Entries)
+	}
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionNone {
+		t.Fatalf("detail reentry selected action = %v, want non-expandable newest row at page end", action)
+	}
+}
+
 func TestDetailTranscriptLoadMergesAdjacentCursorPages(t *testing.T) {
 	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
 	newest := clientui.TranscriptPage{
