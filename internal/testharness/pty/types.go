@@ -30,6 +30,16 @@ var NewCaptureWithEvents = analyzer.NewCaptureWithEvents
 
 type ResizeEvent = analyzer.ResizeEvent
 
+type CaptureAssembler = analyzer.CaptureAssembler
+
+var NewCaptureAssembler = analyzer.NewCaptureAssembler
+
+type EvidenceLimitExceeded = analyzer.EvidenceLimitExceeded
+
+type EvidenceSource = analyzer.EvidenceSource
+
+const EvidenceSourcePTY = analyzer.EvidenceSourcePTY
+
 type ResizePlacement = analyzer.ResizePlacement
 
 type ResizePlacementKind = analyzer.ResizePlacementKind
