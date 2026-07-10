@@ -1,8 +1,13 @@
 package analyzer
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 const maxOperationTextBytes = 1 * 1024 * 1024
+
+var errWriteTextArenaLimit = errors.New("write text arena limit exceeded")
 
 type writeTextArena struct {
 	bytes []byte
@@ -28,7 +33,7 @@ func (a *writeTextArena) append(text string) (TextSpan, error) {
 		return TextSpan{}, fmt.Errorf("write text must not be empty")
 	}
 	if len(text) > a.limit-len(a.bytes) {
-		return TextSpan{}, fmt.Errorf("write text arena limit exceeded: observed=%d limit=%d", len(a.bytes)+len(text), a.limit)
+		return TextSpan{}, fmt.Errorf("%w: observed=%d limit=%d", errWriteTextArenaLimit, len(a.bytes)+len(text), a.limit)
 	}
 	start := len(a.bytes)
 	a.bytes = append(a.bytes, text...)

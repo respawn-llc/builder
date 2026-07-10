@@ -1,6 +1,10 @@
 package analyzer
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestRecordPutMergesContiguousSpansWithoutCopyingPriorText(t *testing.T) {
 	backend := newTracingBackend(MustDimensions(1, 8))
@@ -20,5 +24,17 @@ func TestRecordPutMergesContiguousSpansWithoutCopyingPriorText(t *testing.T) {
 	}
 	if backend.ops[0].Write.Span != (TextSpan{Start: 0, End: 2}) {
 		t.Fatalf("write span = %+v, want [0,2)", backend.ops[0].Write.Span)
+	}
+}
+
+func TestWriteTextArenaRejectsAggregateOverflow(t *testing.T) {
+	arena := newDefaultWriteTextArena()
+	if _, err := arena.append(strings.Repeat("x", maxOperationTextBytes)); err != nil {
+		t.Fatalf("append limit-sized payload: %v", err)
+	}
+	if _, err := arena.append("x"); err == nil {
+		t.Fatal("append beyond limit succeeded")
+	} else if !errors.Is(err, errWriteTextArenaLimit) {
+		t.Fatalf("append error = %T %v, want typed arena limit error", err, err)
 	}
 }
