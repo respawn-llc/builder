@@ -142,11 +142,11 @@ func (s *ResponsesStub) Verify() error {
 	return nil
 }
 
-// Close stops admission, cancels all handlers, and closes listener connections
+// Stop stops admission, cancels all handlers, and closes listener connections
 // without an unbounded graceful shutdown.
-func (s *ResponsesStub) Close() {
+func (s *ResponsesStub) Stop() error {
 	if s == nil {
-		return
+		return nil
 	}
 	s.mu.Lock()
 	for _, cancel := range s.handlers {
@@ -155,7 +155,16 @@ func (s *ResponsesStub) Close() {
 	s.handlers = map[uint64]context.CancelFunc{}
 	s.mu.Unlock()
 	s.notify()
-	_ = s.server.Close()
+	if err := s.server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("close Responses stub server: %w", err)
+	}
+	return nil
+}
+
+// Close preserves the convenience lifecycle boundary used by existing direct
+// tests. The runner uses Stop so its sole cleanup supervisor retains failures.
+func (s *ResponsesStub) Close() {
+	_ = s.Stop()
 }
 
 func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {

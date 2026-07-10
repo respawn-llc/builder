@@ -35,11 +35,17 @@ type RunResult struct {
 }
 
 type IncompleteCleanup struct {
-	Owners []string
+	Owners      []string            `json:"owners"`
+	Diagnostics []CleanupDiagnostic `json:"diagnostics,omitempty"`
+}
+
+type CleanupDiagnostic struct {
+	Owner string `json:"owner"`
+	Cause string `json:"cause"`
 }
 
 func (e *IncompleteCleanup) Error() string {
-	return fmt.Sprintf("incomplete cleanup: owners=%v", e.Owners)
+	return fmt.Sprintf("incomplete cleanup: owners=%v diagnostics=%v", e.Owners, e.Diagnostics)
 }
 
 type Runner struct{}
@@ -64,7 +70,6 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 	result.RunRoot = environment.Root
 	var session *driver.Session
 	defer func() {
-		primaryFailure := result.Err != nil
 		cleanupDeadline := time.Now().Add(fixedWait)
 		result.Cleanup = cleanup(session, environment, result.Err == nil, cleanupDeadline)
 		if result.Err == nil && result.Cleanup != nil {
@@ -77,12 +82,31 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 				result.Err = captureErr
 			}
 		}
-		if primaryFailure && environment != nil && session != nil && result.Capture.ReadLoopDone {
-			artifactDir, artifactErr := publishFailureArtifacts(cleanupDeadline, environment.Root, result.Capture, result.Observation.Analysis, result.Err, result.Cleanup)
-			if artifactErr != nil {
-				result.Cleanup = appendCleanupOwner(result.Cleanup, "artifact_publication")
-			} else {
+		if environment == nil || environment.Artifacts == nil {
+			return
+		}
+		if result.Err != nil {
+			evidence, evidenceErr := failureArtifactEvidence(result.Capture, result.Observation.Analysis, request.Scenario.Dimensions)
+			if evidenceErr != nil {
+				result.Cleanup = appendCleanupFailure(result.Cleanup, "artifact_evidence", evidenceErr)
+				return
+			}
+			artifactDir, artifactErr := publishFailureArtifacts(cleanupDeadline, environment.Artifacts, evidence, result.Err, result.Cleanup)
+			if artifactDir != "" {
 				result.ArtifactDir = artifactDir
+			}
+			if artifactErr != nil {
+				result.Cleanup = appendCleanupFailure(result.Cleanup, "artifact_publication", artifactErr)
+			}
+			if err := environment.Artifacts.release(); err != nil {
+				result.Cleanup = appendCleanupFailure(result.Cleanup, "artifact_lease", err)
+			}
+			return
+		}
+		if err := environment.Artifacts.discard(cleanupDeadline); err != nil {
+			result.Cleanup = appendCleanupFailure(result.Cleanup, "artifact_staging", err)
+			if result.Err == nil {
+				result.Err = result.Cleanup
 			}
 		}
 	}()
@@ -123,11 +147,30 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 	return result
 }
 
+func failureArtifactEvidence(capture analyzer.Capture, analysis *analyzer.Analysis, dimensions Dimensions) (artifactEvidence, error) {
+	if capture.Dimensions.Rows != 0 && capture.Dimensions.Cols != 0 {
+		return artifactEvidence{capture: capture, analysis: analysis}, nil
+	}
+	empty, err := analyzer.NewCapture(analyzer.MustDimensions(dimensions.Rows, dimensions.Cols), nil)
+	if err != nil {
+		return artifactEvidence{}, fmt.Errorf("create empty failure capture: %w", err)
+	}
+	return artifactEvidence{capture: empty, analysis: analysis}, nil
+}
+
 func appendCleanupOwner(cleanup *IncompleteCleanup, owner string) *IncompleteCleanup {
 	if cleanup == nil {
 		return &IncompleteCleanup{Owners: []string{owner}}
 	}
 	cleanup.Owners = append(cleanup.Owners, owner)
+	return cleanup
+}
+
+func appendCleanupFailure(cleanup *IncompleteCleanup, owner string, cause error) *IncompleteCleanup {
+	cleanup = appendCleanupOwner(cleanup, owner)
+	if cause != nil {
+		cleanup.Diagnostics = append(cleanup.Diagnostics, CleanupDiagnostic{Owner: owner, Cause: cause.Error()})
+	}
 	return cleanup
 }
 
@@ -241,15 +284,24 @@ func cloneAnalysis(analysis analyzer.Analysis) analyzer.Analysis {
 }
 
 func cleanup(session *driver.Session, environment *IsolatedEnvironment, success bool, deadline time.Time) *IncompleteCleanup {
+	var incomplete *IncompleteCleanup
 	if session != nil {
-		_ = session.Close()
-		_ = session.Terminate()
+		if err := session.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			incomplete = appendCleanupFailure(incomplete, "client_pty", err)
+		}
+		if err := session.Terminate(); err != nil {
+			incomplete = appendCleanupFailure(incomplete, "client_terminate", err)
+		}
 	}
 	if environment != nil && environment.Stub != nil {
-		environment.Stub.Close()
+		if err := environment.Stub.Stop(); err != nil {
+			incomplete = appendCleanupFailure(incomplete, "model_stub_stop", err)
+		}
 	}
 	if environment != nil && environment.Server != nil {
-		environment.Server.Terminate()
+		if err := environment.Server.Terminate(); err != nil {
+			incomplete = appendCleanupFailure(incomplete, "server_terminate", err)
+		}
 	}
 	graceDeadline := deadline.Add(-fixedWait / 2)
 	waitForOwners(graceDeadline, session, environment)
@@ -257,27 +309,31 @@ func cleanup(session *driver.Session, environment *IsolatedEnvironment, success 
 		select {
 		case <-session.Done():
 		default:
-			_ = session.ForceKill()
+			if err := session.ForceKill(); err != nil {
+				incomplete = appendCleanupFailure(incomplete, "client_force_kill", err)
+			}
 		}
 	}
 	if environment != nil && environment.Server != nil {
 		select {
 		case <-environment.Server.Done():
 		default:
-			environment.Server.ForceKill()
+			if err := environment.Server.ForceKill(); err != nil {
+				incomplete = appendCleanupFailure(incomplete, "server_force_kill", err)
+			}
 		}
 	}
 	waitForOwners(deadline, session, environment)
 	owners := liveOwners(session, environment)
 	if success && environment != nil && environment.Root != "" && len(owners) == 0 {
 		if err := removeOwnedRootUntil(environment.Root, deadline); err != nil {
-			owners = append(owners, "temporary_root")
+			incomplete = appendCleanupFailure(incomplete, "temporary_root", err)
 		}
 	}
-	if len(owners) == 0 {
-		return nil
+	for _, owner := range owners {
+		incomplete = appendCleanupOwner(incomplete, owner)
 	}
-	return &IncompleteCleanup{Owners: owners}
+	return incomplete
 }
 
 func removeOwnedRootUntil(root string, deadline time.Time) error {

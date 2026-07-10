@@ -37,6 +37,7 @@ type IsolatedEnvironment struct {
 	Workspace string
 	Host      string
 	Port      int
+	Artifacts *artifactRun
 	Stub      *ResponsesStub
 	Server    *ServerHandle
 }
@@ -57,8 +58,27 @@ func NewIsolatedEnvironment(serverBinary string, operations []RequiredOperation)
 		return nil, fmt.Errorf("create isolated root: %w", err)
 	}
 	environment := &IsolatedEnvironment{Root: root}
+	artifacts, err := beginArtifactRun()
+	if err != nil {
+		if removeErr := removeTreeUntil(root, time.Now().Add(fixedWait)); removeErr != nil {
+			return nil, fmt.Errorf("create artifact run: %w; remove isolated root: %v", err, removeErr)
+		}
+		return nil, fmt.Errorf("create artifact run: %w", err)
+	}
+	environment.Artifacts = artifacts
 	fail := func(cause error) (*IsolatedEnvironment, error) {
-		_ = cleanup(nil, environment, false, time.Now().Add(fixedWait))
+		deadline := time.Now().Add(fixedWait)
+		cleanupErr := cleanup(nil, environment, false, deadline)
+		artifactErr := environment.Artifacts.discard(deadline)
+		if cleanupErr != nil && artifactErr != nil {
+			return nil, fmt.Errorf("%w; cleanup: %v; discard artifact staging: %v; run_root=%s", cause, cleanupErr, artifactErr, root)
+		}
+		if cleanupErr != nil {
+			return nil, fmt.Errorf("%w; cleanup: %v; run_root=%s", cause, cleanupErr, root)
+		}
+		if artifactErr != nil {
+			return nil, fmt.Errorf("%w; discard artifact staging: %v; run_root=%s", cause, artifactErr, root)
+		}
 		return nil, fmt.Errorf("%w; run_root=%s", cause, root)
 	}
 	workspace := filepath.Join(root, "workspace")
@@ -183,18 +203,24 @@ func (s *ServerHandle) Done() <-chan struct{} {
 	return s.done
 }
 
-func (s *ServerHandle) Terminate() {
+func (s *ServerHandle) Terminate() error {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
-		return
+		return nil
 	}
-	_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM)
+	if err := syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("terminate standalone server process group: %w", err)
+	}
+	return nil
 }
 
-func (s *ServerHandle) ForceKill() {
+func (s *ServerHandle) ForceKill() error {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
-		return
+		return nil
 	}
-	_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
+	if err := syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("force-kill standalone server process group: %w", err)
+	}
+	return nil
 }
 
 func startServer(binary string, root string, host string, port int, stubURL string) (*ServerHandle, error) {
