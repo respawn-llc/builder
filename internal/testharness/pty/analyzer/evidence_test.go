@@ -156,3 +156,24 @@ func TestCaptureAssemblerRejectsEvidenceBlockOverflow(t *testing.T) {
 		t.Fatal("Capture after block limit succeeded")
 	}
 }
+
+func TestAnalyzeRejectsOperationOverflowWithBoundedDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	payload := bytes.Repeat([]byte("\x1b[H"), 16_385)
+	capture, err := pty.NewCapture(pty.MustDimensions(2, 8), []pty.Chunk{pty.NewChunk(0, 0, payload)})
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	_, err = pty.Analyze(capture)
+	var overflow *analyzer.EvidenceLimitExceeded
+	if !errors.As(err, &overflow) {
+		t.Fatalf("Analyze error = %T %v, want EvidenceLimitExceeded", err, err)
+	}
+	if overflow.Source != analyzer.EvidenceSourceOperations || overflow.Limit != 16_384 || overflow.Observed != 16_385 {
+		t.Fatalf("overflow = %+v", overflow)
+	}
+	if len(overflow.Prefix) == 0 || len(overflow.Tail) == 0 || len(overflow.Prefix) > 32*1024 || len(overflow.Tail) > 32*1024 {
+		t.Fatalf("overflow excerpts = prefix:%d tail:%d", len(overflow.Prefix), len(overflow.Tail))
+	}
+}

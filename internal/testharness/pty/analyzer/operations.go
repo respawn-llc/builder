@@ -8,7 +8,6 @@ func (b *tracingBackend) recordPut(position Position, text string) {
 	}
 	payload := WritePayload{Span: span, arena: b.writeText}
 	current := Operation{
-		Sequence:   len(b.ops),
 		Kind:       OperationWrite,
 		ChunkIndex: b.chunk.Index,
 		ByteRange: ByteRange{
@@ -29,7 +28,7 @@ func (b *tracingBackend) recordPut(position Position, text string) {
 		previous.ByteRange.End = current.ByteRange.End
 		return
 	}
-	b.ops = append(b.ops, current)
+	b.appendOperation(current)
 }
 
 func canMergeWrite(previous Operation, current Operation) bool {

@@ -43,7 +43,13 @@ func (command SessionCommand) Validate() error {
 		if len(command.Bytes) == 0 {
 			return errors.New("write command bytes are required")
 		}
+		if command.Dimensions != nil {
+			return errors.New("write command must not include dimensions")
+		}
 	case SessionCommandResize:
+		if len(command.Bytes) != 0 {
+			return errors.New("resize command must not include bytes")
+		}
 		if command.Dimensions == nil {
 			return errors.New("resize command dimensions are required")
 		}
@@ -51,6 +57,9 @@ func (command SessionCommand) Validate() error {
 			return err
 		}
 	case SessionCommandTerminateProcess:
+		if len(command.Bytes) != 0 || command.Dimensions != nil {
+			return errors.New("terminate command must not include bytes or dimensions")
+		}
 	default:
 		return fmt.Errorf("unknown session command kind %d", command.Kind)
 	}

@@ -88,6 +88,50 @@ func TestNewCaptureRejectsAfterChunkResizeForEmptyCapture(t *testing.T) {
 	}
 }
 
+func TestAnalyzeRejectsMalformedPublicCaptureInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+
+	capture := pty.Capture{
+		Dimensions: pty.MustDimensions(2, 4),
+		Raw:        []byte("x"),
+		Resizes: []pty.ResizeEvent{{
+			Placement:  pty.BeforeFirstChunk(),
+			Offset:     0,
+			Dimensions: pty.Dimensions{},
+		}},
+	}
+	if _, err := pty.Analyze(capture); err == nil {
+		t.Fatal("Analyze succeeded for malformed public capture")
+	}
+}
+
+func TestAnalyzePreservesChunkAndTimestampMetadataAcrossReplay(t *testing.T) {
+	t.Parallel()
+
+	capture, err := pty.NewCapture(
+		pty.MustDimensions(2, 8),
+		[]pty.Chunk{
+			pty.NewChunk(0, time.Millisecond, []byte("\x1b[?1049h")),
+			pty.NewChunk(1, 2*time.Millisecond, []byte("x")),
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	analysis, err := pty.Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if len(analysis.PrivateModeChanges) != 1 || analysis.PrivateModeChanges[0].ChunkIndex != 0 || analysis.PrivateModeChanges[0].CapturedAt != time.Millisecond {
+		t.Fatalf("mode metadata = %#v", analysis.PrivateModeChanges)
+	}
+	for _, operation := range analysis.Operations {
+		if operation.Kind == pty.OperationWrite && (operation.ChunkIndex != 1 || operation.CapturedAt != 2*time.Millisecond) {
+			t.Fatalf("write metadata = %#v", operation)
+		}
+	}
+}
+
 func TestAnalyzeCursorMovementRecordsTypedOperation(t *testing.T) {
 	t.Parallel()
 

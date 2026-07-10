@@ -57,14 +57,6 @@ type compactionResult struct {
 	summary           string
 }
 
-func cloneOptionalInt(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
-}
-
 type defaultContextCompactor struct {
 	engine *Engine
 	steps  exclusiveStepLifecycle

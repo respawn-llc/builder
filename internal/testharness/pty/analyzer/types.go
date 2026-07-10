@@ -147,6 +147,7 @@ type EvidenceSource string
 const (
 	EvidenceSourcePTY           EvidenceSource = "pty"
 	EvidenceSourceOperationText EvidenceSource = "operation_text"
+	EvidenceSourceOperations    EvidenceSource = "operations"
 )
 
 type EvidenceLimitExceeded struct {
@@ -205,34 +206,35 @@ func (a *CaptureAssembler) Append(payload []byte) error {
 }
 
 func (a *CaptureAssembler) overflow(payload []byte) error {
-	evidence := a.evidenceBytes()
-	combinedLength := len(evidence) + len(payload)
 	return &EvidenceLimitExceeded{
 		Source:   EvidenceSourcePTY,
 		Limit:    maxPTYEvidenceBytes,
-		Observed: combinedLength,
+		Observed: int(a.offset) + len(payload),
 		Prefix:   a.prefixExcerpt(payload),
 		Tail:     a.tailExcerpt(payload),
 	}
 }
 
 func (a *CaptureAssembler) prefixExcerpt(extra []byte) []byte {
-	evidence := a.evidenceBytes()
-	if len(evidence) < evidenceExcerptSize {
-		evidence = append(evidence, extra[:min(len(extra), evidenceExcerptSize-len(evidence))]...)
+	size := min(int(a.offset)+len(extra), evidenceExcerptSize)
+	prefix := make([]byte, size)
+	fromEvidence := min(int(a.offset), size)
+	a.copyEvidencePrefix(prefix[:fromEvidence])
+	if fromEvidence < size {
+		copy(prefix[fromEvidence:], extra[:size-fromEvidence])
 	}
-	if len(evidence) > evidenceExcerptSize {
-		evidence = evidence[:evidenceExcerptSize]
-	}
-	return append([]byte(nil), evidence...)
+	return prefix
 }
 
 func (a *CaptureAssembler) tailExcerpt(extra []byte) []byte {
-	evidence := append(a.evidenceBytes(), extra...)
-	if len(evidence) > evidenceExcerptSize {
-		evidence = evidence[len(evidence)-evidenceExcerptSize:]
+	size := min(int(a.offset)+len(extra), evidenceExcerptSize)
+	tail := make([]byte, size)
+	fromExtra := min(len(extra), size)
+	if fromExtra > 0 {
+		copy(tail[size-fromExtra:], extra[len(extra)-fromExtra:])
 	}
-	return append([]byte(nil), evidence...)
+	a.copyEvidenceTail(tail[:size-fromExtra])
+	return tail
 }
 
 func (a *CaptureAssembler) evidenceBytes() []byte {
@@ -245,6 +247,43 @@ func (a *CaptureAssembler) evidenceBytes() []byte {
 		evidence = append(evidence, block...)
 	}
 	return append(evidence, a.current...)
+}
+
+// copyEvidencePrefix copies only the requested bounded diagnostic prefix.
+func (a *CaptureAssembler) copyEvidencePrefix(dst []byte) {
+	cursor := 0
+	copyFromStart := func(source []byte) {
+		if cursor == len(dst) {
+			return
+		}
+		take := min(len(dst)-cursor, len(source))
+		copy(dst[cursor:cursor+take], source[:take])
+		cursor += take
+	}
+	for _, block := range a.blocks {
+		copyFromStart(block)
+		if cursor == len(dst) {
+			return
+		}
+	}
+	copyFromStart(a.current)
+}
+
+// copyEvidenceTail copies only the requested bounded diagnostic tail.
+func (a *CaptureAssembler) copyEvidenceTail(dst []byte) {
+	cursor := len(dst)
+	copyFromEnd := func(source []byte) {
+		if cursor == 0 {
+			return
+		}
+		take := min(cursor, len(source))
+		cursor -= take
+		copy(dst[cursor:cursor+take], source[len(source)-take:])
+	}
+	copyFromEnd(a.current)
+	for index := len(a.blocks) - 1; index >= 0 && cursor > 0; index-- {
+		copyFromEnd(a.blocks[index])
+	}
 }
 
 func (a *CaptureAssembler) Resize(dimensions Dimensions) error {

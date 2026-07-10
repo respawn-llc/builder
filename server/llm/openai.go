@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"fmt"
+
+	"core/shared/optional"
 )
 
 type OpenAIRequest struct {
@@ -233,16 +235,8 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	return CompactionResponse{
 		OutputItems:       CloneResponseItems(providerResp.OutputItems),
 		Usage:             providerResp.Usage,
-		TrimmedItemsCount: cloneOptionalInt(providerResp.TrimmedItemsCount),
+		TrimmedItemsCount: optional.CloneInt(providerResp.TrimmedItemsCount),
 	}, nil
-}
-
-func cloneOptionalInt(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
 }
 
 func (c *OpenAIClient) ProviderCapabilities(ctx context.Context) (ProviderCapabilities, error) {

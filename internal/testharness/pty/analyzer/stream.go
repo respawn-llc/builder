@@ -3,6 +3,7 @@ package analyzer
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/gdamore/tcell/v3/vt"
 )
@@ -42,16 +43,24 @@ func (s *Stream) Offset() int64 {
 }
 
 func (s *Stream) Feed(payload []byte) error {
+	return s.FeedChunk(Chunk{Index: 0, Payload: payload})
+}
+
+// FeedChunk preserves the deterministic source block metadata associated with
+// bytes in a persisted capture. Live callers may use Feed for unannotated data.
+func (s *Stream) FeedChunk(source Chunk) error {
 	if s == nil {
 		return errors.New("terminal stream is required")
 	}
 	if s.finished {
 		return errors.New("terminal stream is finished")
 	}
-	source := Chunk{Index: 0}
-	for _, b := range payload {
+	for _, b := range source.Payload {
 		s.backend.beginByte(source, s.offset)
 		s.sideChannel.advance(b, source, s.offset)
+		if err := s.sideChannel.error(); err != nil {
+			return fmt.Errorf("analyze byte at offset %d: %w", s.offset, err)
+		}
 		if _, err := s.emulator.Write([]byte{b}); err != nil {
 			return fmt.Errorf("analyze byte at offset %d: %w", s.offset, err)
 		}
@@ -64,6 +73,12 @@ func (s *Stream) Feed(payload []byte) error {
 }
 
 func (s *Stream) Resize(dimensions Dimensions) error {
+	return s.ResizeFrom(dimensions, Chunk{Index: 0}, 0)
+}
+
+// ResizeFrom applies an observer-ordered barrier with deterministic source
+// metadata retained for legacy operation correlation.
+func (s *Stream) ResizeFrom(dimensions Dimensions, source Chunk, at time.Duration) error {
 	if s == nil {
 		return errors.New("terminal stream is required")
 	}
@@ -73,7 +88,8 @@ func (s *Stream) Resize(dimensions Dimensions) error {
 	if _, err := NewDimensions(dimensions.Rows, dimensions.Cols); err != nil {
 		return err
 	}
-	s.backend.resize(dimensions, 0)
+	s.backend.beginChunk(source, s.offset)
+	s.backend.resize(dimensions, at)
 	s.emulator.ResizeEvent(vt.Coord{X: vt.Col(dimensions.Cols), Y: vt.Row(dimensions.Rows)})
 	return nil
 }

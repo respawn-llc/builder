@@ -20,14 +20,14 @@ func TestStreamAndCaptureReplayShareTerminalInterpretation(t *testing.T) {
 		t.Fatalf("NewStream: %v", err)
 	}
 	for _, fragment := range [][]byte{beforeResize[:3], beforeResize[3:]} {
-		if err := stream.Feed(fragment); err != nil {
+		if err := stream.FeedChunk(pty.NewChunk(0, 0, fragment)); err != nil {
 			t.Fatalf("Feed: %v", err)
 		}
 	}
 	if err := stream.Resize(pty.MustDimensions(4, 8)); err != nil {
 		t.Fatalf("Resize: %v", err)
 	}
-	if err := stream.Feed(afterResize); err != nil {
+	if err := stream.FeedChunk(pty.NewChunk(1, 0, afterResize)); err != nil {
 		t.Fatalf("Feed after resize: %v", err)
 	}
 	live, err := stream.Finish()

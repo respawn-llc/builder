@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/shared/optional"
 )
 
 type compactionPersistence struct {
@@ -34,7 +35,7 @@ func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode co
 		Mode:              string(mode),
 		Engine:            strings.TrimSpace(engine),
 		Provider:          strings.TrimSpace(provider),
-		TrimmedItemsCount: cloneOptionalInt(trimmed),
+		TrimmedItemsCount: optional.CloneInt(trimmed),
 		Count:             count,
 		Error:             strings.TrimSpace(errText),
 	}

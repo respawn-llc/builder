@@ -7,25 +7,27 @@ import (
 )
 
 type tracingBackend struct {
-	dimensions Dimensions
-	cells      [][]Cell
-	cursor     Position
-	modes      map[vt.PrivateMode]vt.ModeStatus
-	chunk      Chunk
-	byteOffset int64
-	byteEnd    int64
-	ops        []Operation
-	writeText  *writeTextArena
-	err        error
+	dimensions      Dimensions
+	cells           [][]Cell
+	cursor          Position
+	modes           map[vt.PrivateMode]vt.ModeStatus
+	chunk           Chunk
+	byteOffset      int64
+	byteEnd         int64
+	ops             []Operation
+	writeText       *writeTextArena
+	operationBudget *operationBudget
+	err             error
 }
 
 func newTracingBackend(dimensions Dimensions) *tracingBackend {
 	snapshot := NewScreenSnapshot(dimensions)
 	return &tracingBackend{
-		dimensions: dimensions,
-		cells:      snapshot.Cells,
-		modes:      map[vt.PrivateMode]vt.ModeStatus{},
-		writeText:  newDefaultWriteTextArena(),
+		dimensions:      dimensions,
+		cells:           snapshot.Cells,
+		modes:           map[vt.PrivateMode]vt.ModeStatus{},
+		writeText:       newDefaultWriteTextArena(),
+		operationBudget: newOperationBudget(),
 	}
 }
 
@@ -43,6 +45,23 @@ func (b *tracingBackend) beginByte(chunk Chunk, offset int64) {
 	b.chunk = chunk
 	b.byteOffset = offset
 	b.byteEnd = offset + 1
+}
+
+func (b *tracingBackend) observeByte(value byte) {
+	b.operationBudget.observeByte(value)
+}
+
+func (b *tracingBackend) appendOperation(operation Operation) bool {
+	if b.err != nil {
+		return false
+	}
+	if err := b.operationBudget.reserve(); err != nil {
+		b.err = err
+		return false
+	}
+	operation.Sequence = len(b.ops)
+	b.ops = append(b.ops, operation)
+	return true
 }
 
 func (b *tracingBackend) operations() []Operation {
@@ -74,8 +93,7 @@ func (b *tracingBackend) resize(dimensions Dimensions, at time.Duration) {
 		Row: clamp(b.cursor.Row, 0, dimensions.Rows-1),
 		Col: clamp(b.cursor.Col, 0, dimensions.Cols-1),
 	}
-	b.ops = append(b.ops, Operation{
-		Sequence:   len(b.ops),
+	b.appendOperation(Operation{
 		Kind:       OperationResize,
 		ChunkIndex: b.chunk.Index,
 		ByteRange:  ByteRange{Start: b.byteEnd, End: b.byteEnd},
