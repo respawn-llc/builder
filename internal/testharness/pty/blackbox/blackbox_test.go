@@ -283,6 +283,59 @@ func TestResponsesStubRejectsInvalidDeclaredOperationBeforeListening(t *testing.
 	}
 }
 
+func TestResponsesStubRejectsConcurrentDeclaredOperation(t *testing.T) {
+	t.Parallel()
+
+	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{
+		{ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeHoldSSE},
+		{ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON},
+	})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(stub.Close)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		response, requestErr := http.Post(stub.URL()+"/responses", "application/json", bytes.NewBufferString(`{"input":[]}`))
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		firstDone <- requestErr
+	}()
+	waitForActiveRequest(t, stub)
+	response, err := http.Post(stub.URL()+"/responses", "application/json", bytes.NewBufferString(`{"input":[]}`))
+	if err != nil {
+		t.Fatalf("POST concurrent request: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("concurrent request status = %d, want %d", response.StatusCode, http.StatusBadRequest)
+	}
+	if err := stub.Verify(); err == nil {
+		t.Fatal("Verify accepted concurrent declared operation")
+	}
+	stub.Close()
+	select {
+	case <-firstDone:
+	case <-time.After(time.Second):
+		t.Fatal("held first request did not unblock")
+	}
+}
+
+func waitForActiveRequest(t *testing.T, stub *blackbox.ResponsesStub) {
+	t.Helper()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for stub.Snapshot().ActiveRequests == 0 {
+		select {
+		case <-stub.Events():
+		case <-deadline.C:
+			t.Fatal("model request did not become active")
+		}
+	}
+}
+
 func TestResponsesStubRejectsOversizedBodyBeforeQueueConsumption(t *testing.T) {
 	t.Parallel()
 
