@@ -238,6 +238,7 @@ type workflowTaskInstructionsTemplateData struct {
 }
 
 type workflowNudgeTemplateData struct {
+	LaunchCommand              string
 	RejectionReason            string
 	NodeCompletionInstructions string
 	GoalText                   string
@@ -453,6 +454,7 @@ func RenderWorkflowNudgePrompt(rejectionReason, nodeCompletionInstructions, goal
 		return "", errors.New("render workflow nudge: node completion instructions are required")
 	}
 	return renderNamedTemplate("workflow nudge", WorkflowNudgePrompt, workflowNudgeTemplateData{
+		LaunchCommand:              LaunchCommand(),
 		RejectionReason:            rejectionReason,
 		NodeCompletionInstructions: nodeCompletionInstructions,
 		GoalText:                   strings.TrimSpace(goalText),

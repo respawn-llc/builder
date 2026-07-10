@@ -369,7 +369,6 @@ func TestRenderWorkflowNudgePrompt(t *testing.T) {
 		"transition is required",
 		"Call complete_node with the selected transition.",
 		"Ship workflow execution.",
-		"Continue working toward the active session goal.",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected workflow nudge to substitute %q, got %q", want, rendered)
