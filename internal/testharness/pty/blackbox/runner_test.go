@@ -2,9 +2,11 @@ package blackbox
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -70,7 +72,9 @@ func TestCleanupForceKillsTERMAndHUPIgnoringClientAtGraceDeadline(t *testing.T) 
 	waitForVisibleCursor(t, session)
 
 	started := time.Now()
-	incomplete := cleanup(session, nil, false, started.Add(fixedWait))
+	sessionOwner := session
+	var environment *IsolatedEnvironment
+	incomplete := (cleanupSupervisor{session: &sessionOwner, environment: &environment}).stopOwners(session, nil, started.Add(fixedWait))
 	elapsed := time.Since(started)
 	if incomplete != nil {
 		t.Fatalf("cleanup incomplete: %v", incomplete)
@@ -93,8 +97,16 @@ func TestCleanupRemovesOnlyCompletedSuccessfulRunRootWithinDeadline(t *testing.T
 	if err := os.WriteFile(filepath.Join(root, "evidence.bin"), []byte("bounded"), 0o600); err != nil {
 		t.Fatalf("write root content: %v", err)
 	}
-	if incomplete := cleanup(nil, &IsolatedEnvironment{Root: root}, true, time.Now().Add(fixedWait)); incomplete != nil {
-		t.Fatalf("cleanup incomplete: %v", incomplete)
+	artifacts, err := newArtifactStore(t.TempDir()).beginRun()
+	if err != nil {
+		t.Fatalf("begin artifact run: %v", err)
+	}
+	var session *driver.Session
+	environment := &IsolatedEnvironment{Root: root}
+	result := RunResult{}
+	(cleanupSupervisor{artifacts: artifacts, session: &session, environment: &environment}).finish(&result, Dimensions{Rows: 2, Cols: 8})
+	if result.Err != nil {
+		t.Fatalf("cleanup result: %v", result.Err)
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
 		t.Fatalf("successful root cleanup stat error = %v, want not exist", err)
@@ -103,11 +115,52 @@ func TestCleanupRemovesOnlyCompletedSuccessfulRunRootWithinDeadline(t *testing.T
 
 func TestCleanupRetainsRunRootWhenItsDeadlineHasElapsed(t *testing.T) {
 	root := t.TempDir()
-	if incomplete := cleanup(nil, &IsolatedEnvironment{Root: root}, true, time.Now().Add(-time.Millisecond)); incomplete == nil {
+	artifacts, err := newArtifactStore(t.TempDir()).beginRun()
+	if err != nil {
+		t.Fatalf("begin artifact run: %v", err)
+	}
+	var session *driver.Session
+	environment := &IsolatedEnvironment{Root: root}
+	result := RunResult{}
+	(cleanupSupervisor{artifacts: artifacts, session: &session, environment: &environment}).finishUntil(&result, Dimensions{Rows: 2, Cols: 8}, time.Now().Add(-time.Millisecond))
+	if result.Err == nil {
 		t.Fatal("cleanup succeeded after its deadline elapsed")
 	}
 	if _, err := os.Stat(root); err != nil {
 		t.Fatalf("expired cleanup removed retained root: %v", err)
+	}
+}
+
+func TestCleanupReportsNonReturningModelStubHandlerWithoutReplacingPrimaryFailure(t *testing.T) {
+	stub, err := StartResponsesStub(nil)
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	_, releaseHandler, admitted := stub.beginHandler(context.Background())
+	if !admitted {
+		t.Fatal("non-returning model handler was not admitted")
+	}
+
+	var session *driver.Session
+	environment := &IsolatedEnvironment{Stub: stub}
+	result := RunResult{Err: errors.New("primary scenario failure")}
+	(cleanupSupervisor{session: &session, environment: &environment}).finishUntil(
+		&result,
+		Dimensions{Rows: 2, Cols: 8},
+		time.Now().Add(20*time.Millisecond),
+	)
+	if result.Err == nil || result.Err.Error() != "primary scenario failure" {
+		t.Fatalf("cleanup replaced primary failure: %v", result.Err)
+	}
+	if result.Cleanup == nil || !slices.Contains(result.Cleanup.Owners, "model_stub") {
+		t.Fatalf("cleanup did not report live model stub owner: %#v", result.Cleanup)
+	}
+
+	releaseHandler()
+	select {
+	case <-stub.Done():
+	case <-time.After(time.Second):
+		t.Fatal("model stub did not complete after non-returning handler released")
 	}
 }
 

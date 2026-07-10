@@ -37,7 +37,6 @@ type IsolatedEnvironment struct {
 	Workspace string
 	Host      string
 	Port      int
-	Artifacts *artifactRun
 	Stub      *ResponsesStub
 	Server    *ServerHandle
 }
@@ -58,28 +57,8 @@ func NewIsolatedEnvironment(serverBinary string, operations []RequiredOperation)
 		return nil, fmt.Errorf("create isolated root: %w", err)
 	}
 	environment := &IsolatedEnvironment{Root: root}
-	artifacts, err := beginArtifactRun()
-	if err != nil {
-		if removeErr := removeTreeUntil(root, time.Now().Add(fixedWait)); removeErr != nil {
-			return nil, fmt.Errorf("create artifact run: %w; remove isolated root: %v", err, removeErr)
-		}
-		return nil, fmt.Errorf("create artifact run: %w", err)
-	}
-	environment.Artifacts = artifacts
 	fail := func(cause error) (*IsolatedEnvironment, error) {
-		deadline := time.Now().Add(fixedWait)
-		cleanupErr := cleanup(nil, environment, false, deadline)
-		artifactErr := environment.Artifacts.discard(deadline)
-		if cleanupErr != nil && artifactErr != nil {
-			return nil, fmt.Errorf("%w; cleanup: %v; discard artifact staging: %v; run_root=%s", cause, cleanupErr, artifactErr, root)
-		}
-		if cleanupErr != nil {
-			return nil, fmt.Errorf("%w; cleanup: %v; run_root=%s", cause, cleanupErr, root)
-		}
-		if artifactErr != nil {
-			return nil, fmt.Errorf("%w; discard artifact staging: %v; run_root=%s", cause, artifactErr, root)
-		}
-		return nil, fmt.Errorf("%w; run_root=%s", cause, root)
+		return environment, fmt.Errorf("%w; run_root=%s", cause, root)
 	}
 	workspace := filepath.Join(root, "workspace")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {

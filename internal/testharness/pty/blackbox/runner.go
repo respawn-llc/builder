@@ -63,53 +63,24 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 	if _, err := os.Stat(request.ClientBinary); err != nil {
 		return RunResult{Err: fmt.Errorf("client binary: %w", err)}
 	}
-	environment, err := NewIsolatedEnvironment(request.ServerBinary, request.Scenario.ModelOperations)
+	artifacts, err := beginArtifactRun()
 	if err != nil {
-		return RunResult{Err: err}
+		return RunResult{Err: fmt.Errorf("begin run artifacts: %w", err)}
 	}
-	result.RunRoot = environment.Root
 	var session *driver.Session
+	var environment *IsolatedEnvironment
+	supervisor := cleanupSupervisor{artifacts: artifacts, session: &session, environment: &environment}
 	defer func() {
-		cleanupDeadline := time.Now().Add(fixedWait)
-		result.Cleanup = cleanup(session, environment, result.Err == nil, cleanupDeadline)
-		if result.Err == nil && result.Cleanup != nil {
-			result.Err = result.Cleanup
-		}
-		if session != nil {
-			capture, captureErr := session.Capture()
-			result.Capture = capture
-			if result.Err == nil && captureErr != nil {
-				result.Err = captureErr
-			}
-		}
-		if environment == nil || environment.Artifacts == nil {
-			return
-		}
-		if result.Err != nil {
-			evidence, evidenceErr := failureArtifactEvidence(result.Capture, result.Observation.Analysis, request.Scenario.Dimensions)
-			if evidenceErr != nil {
-				result.Cleanup = appendCleanupFailure(result.Cleanup, "artifact_evidence", evidenceErr)
-				return
-			}
-			artifactDir, artifactErr := publishFailureArtifacts(cleanupDeadline, environment.Artifacts, evidence, result.Err, result.Cleanup)
-			if artifactDir != "" {
-				result.ArtifactDir = artifactDir
-			}
-			if artifactErr != nil {
-				result.Cleanup = appendCleanupFailure(result.Cleanup, "artifact_publication", artifactErr)
-			}
-			if err := environment.Artifacts.release(); err != nil {
-				result.Cleanup = appendCleanupFailure(result.Cleanup, "artifact_lease", err)
-			}
-			return
-		}
-		if err := environment.Artifacts.discard(cleanupDeadline); err != nil {
-			result.Cleanup = appendCleanupFailure(result.Cleanup, "artifact_staging", err)
-			if result.Err == nil {
-				result.Err = result.Cleanup
-			}
-		}
+		supervisor.finish(&result, request.Scenario.Dimensions)
 	}()
+	environment, err = NewIsolatedEnvironment(request.ServerBinary, request.Scenario.ModelOperations)
+	if environment != nil {
+		result.RunRoot = environment.Root
+	}
+	if err != nil {
+		result.Err = err
+		return result
+	}
 	if err := environment.WaitReady(); err != nil {
 		result.Err = err
 		return result
@@ -283,7 +254,63 @@ func cloneAnalysis(analysis analyzer.Analysis) analyzer.Analysis {
 	return analysis
 }
 
-func cleanup(session *driver.Session, environment *IsolatedEnvironment, success bool, deadline time.Time) *IncompleteCleanup {
+type cleanupSupervisor struct {
+	artifacts   *artifactRun
+	session     **driver.Session
+	environment **IsolatedEnvironment
+}
+
+func (s cleanupSupervisor) finish(result *RunResult, dimensions Dimensions) {
+	s.finishUntil(result, dimensions, time.Now().Add(fixedWait))
+}
+
+func (s cleanupSupervisor) finishUntil(result *RunResult, dimensions Dimensions, deadline time.Time) {
+	session := *s.session
+	environment := *s.environment
+	incomplete := s.stopOwners(session, environment, deadline)
+	if session != nil {
+		capture, err := session.Capture()
+		if err != nil {
+			incomplete = appendCleanupFailure(incomplete, "client_capture", err)
+		} else {
+			result.Capture = capture
+		}
+	}
+	if result.Err == nil && incomplete != nil {
+		result.Err = incomplete
+	}
+	if result.Err != nil && s.artifacts != nil {
+		evidence, evidenceErr := failureArtifactEvidence(result.Capture, result.Observation.Analysis, dimensions)
+		if evidenceErr != nil {
+			incomplete = appendCleanupFailure(incomplete, "artifact_evidence", evidenceErr)
+		} else {
+			artifactDir, artifactErr := publishFailureArtifacts(deadline, s.artifacts, evidence, result.Err, incomplete)
+			if artifactDir != "" {
+				result.ArtifactDir = artifactDir
+			}
+			if artifactErr != nil {
+				incomplete = appendCleanupFailure(incomplete, "artifact_publication", artifactErr)
+			}
+		}
+		if err := s.artifacts.release(); err != nil {
+			incomplete = appendCleanupFailure(incomplete, "artifact_lease", err)
+		}
+	} else if result.Err == nil && s.artifacts != nil {
+		if err := s.artifacts.discard(deadline); err != nil {
+			incomplete = appendCleanupFailure(incomplete, "artifact_staging", err)
+			result.Err = incomplete
+		}
+	}
+	if result.Err == nil && incomplete == nil && environment != nil && environment.Root != "" {
+		if err := removeOwnedRootUntil(environment.Root, deadline); err != nil {
+			incomplete = appendCleanupFailure(incomplete, "temporary_root", err)
+			result.Err = incomplete
+		}
+	}
+	result.Cleanup = incomplete
+}
+
+func (cleanupSupervisor) stopOwners(session *driver.Session, environment *IsolatedEnvironment, deadline time.Time) *IncompleteCleanup {
 	var incomplete *IncompleteCleanup
 	if session != nil {
 		if err := session.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
@@ -325,11 +352,6 @@ func cleanup(session *driver.Session, environment *IsolatedEnvironment, success 
 	}
 	waitForOwners(deadline, session, environment)
 	owners := liveOwners(session, environment)
-	if success && environment != nil && environment.Root != "" && len(owners) == 0 {
-		if err := removeOwnedRootUntil(environment.Root, deadline); err != nil {
-			incomplete = appendCleanupFailure(incomplete, "temporary_root", err)
-		}
-	}
 	for _, owner := range owners {
 		incomplete = appendCleanupOwner(incomplete, owner)
 	}
