@@ -62,7 +62,8 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 	result.RunRoot = environment.Root
 	var session *driver.Session
 	defer func() {
-		result.Cleanup = cleanup(session, environment, result.Err == nil)
+		cleanupDeadline := time.Now().Add(fixedWait)
+		result.Cleanup = cleanup(session, environment, result.Err == nil, cleanupDeadline)
 		if result.Err == nil && result.Cleanup != nil {
 			result.Err = result.Cleanup
 		}
@@ -74,7 +75,7 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 			}
 		}
 		if result.Err != nil && environment != nil && session != nil && result.Capture.ReadLoopDone {
-			artifactDir, artifactErr := publishFailureArtifacts(environment.Root, result.Capture, result.Observation.Analysis, result.Err, result.Cleanup)
+			artifactDir, artifactErr := publishFailureArtifacts(cleanupDeadline, environment.Root, result.Capture, result.Observation.Analysis, result.Err, result.Cleanup)
 			if artifactErr != nil {
 				result.Cleanup = appendCleanupOwner(result.Cleanup, "artifact_publication")
 			} else {
@@ -228,8 +229,7 @@ func cloneAnalysis(analysis analyzer.Analysis) analyzer.Analysis {
 	return analysis
 }
 
-func cleanup(session *driver.Session, environment *IsolatedEnvironment, success bool) *IncompleteCleanup {
-	deadline := time.Now().Add(fixedWait)
+func cleanup(session *driver.Session, environment *IsolatedEnvironment, success bool, deadline time.Time) *IncompleteCleanup {
 	if session != nil {
 		_ = session.Close()
 		_ = session.Terminate()
@@ -240,7 +240,7 @@ func cleanup(session *driver.Session, environment *IsolatedEnvironment, success 
 	if environment != nil && environment.Server != nil {
 		environment.Server.Terminate()
 	}
-	graceDeadline := time.Now().Add(fixedWait / 2)
+	graceDeadline := deadline.Add(-fixedWait / 2)
 	waitForOwners(graceDeadline, session, environment)
 	if session != nil {
 		select {

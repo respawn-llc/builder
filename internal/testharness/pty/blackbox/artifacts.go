@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/analyzer"
@@ -15,7 +16,10 @@ import (
 // publishFailureArtifacts uses a per-run staging directory so callers never
 // observe a partially written failure bundle. The run root is already unique,
 // so this publisher has no cross-run deletion authority.
-func publishFailureArtifacts(root string, capture analyzer.Capture, analysis *analyzer.Analysis, runErr error, cleanup *IncompleteCleanup) (string, error) {
+func publishFailureArtifacts(deadline time.Time, root string, capture analyzer.Capture, analysis *analyzer.Analysis, runErr error, cleanup *IncompleteCleanup) (string, error) {
+	if time.Now().After(deadline) {
+		return "", fmt.Errorf("artifact publication deadline elapsed")
+	}
 	if root == "" {
 		return "", fmt.Errorf("artifact root is required")
 	}
@@ -27,6 +31,19 @@ func publishFailureArtifacts(root string, capture analyzer.Capture, analysis *an
 		analysis = &replayed
 	}
 	artifactRoot := filepath.Join(root, "artifacts")
+	lockPath := filepath.Join(artifactRoot, "publish.lock")
+	if err := os.MkdirAll(artifactRoot, 0o700); err != nil {
+		return "", fmt.Errorf("create artifact root: %w", err)
+	}
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("acquire artifact publication lock: %w", err)
+	}
+	_ = lock.Close()
+	defer func() { _ = os.Remove(lockPath) }()
+	if time.Now().After(deadline) {
+		return "", fmt.Errorf("artifact publication deadline elapsed")
+	}
 	runsRoot := filepath.Join(artifactRoot, "runs")
 	if err := os.MkdirAll(runsRoot, 0o700); err != nil {
 		return "", fmt.Errorf("create artifact runs root: %w", err)

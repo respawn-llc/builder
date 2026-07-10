@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"core/internal/testharness/pty/analyzer"
 )
@@ -23,7 +24,7 @@ func TestPublishFailureArtifactsAtomicallyPublishesLatestBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
-	dir, err := publishFailureArtifacts(root, capture, &analysis, errors.New("primary failure"), nil)
+	dir, err := publishFailureArtifacts(time.Now().Add(time.Second), root, capture, &analysis, errors.New("primary failure"), nil)
 	if err != nil {
 		t.Fatalf("publishFailureArtifacts: %v", err)
 	}
