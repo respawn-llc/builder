@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -12,6 +13,7 @@ import (
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, logger *runLogger, commandRegistry *commands.Registry, initialPrompt string, initialPromptHistoryRecorded bool, initialInput string, recoveryBuffers []serverapi.SessionDraftRecoveryBuffer, sessionName string, modelContractLocked bool, configuredModelName string, statusConfig uiStatusConfig, startupUpdateNotice bool, markerEncoder runner.TerminalPhaseMarkerEncoder, markerSinkObserver runner.TerminalPhaseMarkerSinkObserver) (tea.Model, error) {
@@ -43,6 +45,12 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 	askEvents := wiring.askEvents
 	if askEvents == nil {
 		return nil, errors.New("prompt event stream is required")
+	}
+	// A live interactive session is ready to accept terminal input before its
+	// first projected frame arrives. Emit the standard native-cursor signal so
+	// terminals and black-box clients can observe that boundary without copy.
+	if _, err := terminalOutput.Write([]byte(xansi.ShowCursor)); err != nil {
+		return nil, fmt.Errorf("announce terminal input readiness: %w", err)
 	}
 	sessionID := ""
 	if runtimeClient != nil {

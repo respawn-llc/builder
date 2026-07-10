@@ -225,6 +225,33 @@ func TestSessionCommandRequiresUUIDv4AndClosedPayloadShape(t *testing.T) {
 	}
 }
 
+func TestSessionPublishesTerminalAndProcessEvents(t *testing.T) {
+	t.Parallel()
+
+	session, err := driver.StartSession(driver.SessionSpec{
+		Path:       buildHelper(t),
+		Args:       []string{"write"},
+		Env:        []string{"TERM=xterm-256color", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"},
+		Dimensions: pty.MustDimensions(2, 8),
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	var terminal bool
+	var exited bool
+	for event := range session.Events() {
+		if event.Kind == driver.SessionEventTerminalAnalysis && event.Analysis != nil {
+			terminal = true
+		}
+		if event.Kind == driver.SessionEventProcessExit {
+			exited = true
+		}
+	}
+	if !terminal || !exited {
+		t.Fatalf("events terminal=%v exited=%v", terminal, exited)
+	}
+}
+
 func buildHelper(t *testing.T) string {
 	t.Helper()
 	output := filepath.Join(t.TempDir(), "ansi-writer")

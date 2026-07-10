@@ -1,0 +1,268 @@
+package blackbox
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"time"
+
+	"core/internal/testharness/pty/analyzer"
+	"core/internal/testharness/pty/driver"
+
+	"github.com/google/uuid"
+)
+
+type ClientProfile string
+
+const GoProfile ClientProfile = "go"
+
+type RunRequest struct {
+	Scenario     Scenario
+	Profile      ClientProfile
+	ClientBinary string
+	ServerBinary string
+}
+
+type RunResult struct {
+	Observation RunObservation
+	Capture     analyzer.Capture
+	Err         error
+	Cleanup     *IncompleteCleanup
+}
+
+type IncompleteCleanup struct {
+	Owners []string
+}
+
+func (e *IncompleteCleanup) Error() string {
+	return fmt.Sprintf("incomplete cleanup: owners=%v", e.Owners)
+}
+
+type Runner struct{}
+
+func (Runner) Run(request RunRequest) (result RunResult) {
+	if err := request.Scenario.Validate(); err != nil {
+		return RunResult{Err: err}
+	}
+	if request.Profile != GoProfile {
+		return RunResult{Err: fmt.Errorf("requested client profile is unavailable: %s", request.Profile)}
+	}
+	if request.ClientBinary == "" || request.ServerBinary == "" {
+		return RunResult{Err: errors.New("client and server binaries are required")}
+	}
+	if _, err := os.Stat(request.ClientBinary); err != nil {
+		return RunResult{Err: fmt.Errorf("client binary: %w", err)}
+	}
+	environment, err := NewIsolatedEnvironment(request.ServerBinary, request.Scenario.ModelOperations)
+	if err != nil {
+		return RunResult{Err: err}
+	}
+	var session *driver.Session
+	defer func() {
+		result.Cleanup = cleanup(session, environment)
+		if result.Err == nil && result.Cleanup != nil {
+			result.Err = result.Cleanup
+		}
+	}()
+	session, err = driver.StartSession(driver.SessionSpec{
+		Path:       request.ClientBinary,
+		Args:       []string{"--force-interactive", "--persistence-root", environment.Root},
+		Env:        environment.ClientEnvironment(),
+		Dir:        environment.Workspace,
+		Dimensions: analyzer.MustDimensions(request.Scenario.Dimensions.Rows, request.Scenario.Dimensions.Cols),
+	})
+	if err != nil {
+		result.Err = fmt.Errorf("start client PTY session: %w", err)
+		return result
+	}
+	observation, err := runActions(session, environment, request.Scenario.Actions)
+	result.Observation = observation
+	if err != nil {
+		result.Err = err
+		return result
+	}
+	if err := environment.Stub.Verify(); err != nil {
+		result.Err = err
+		return result
+	}
+	<-session.Done()
+	capture, captureErr := session.Capture()
+	result.Capture = capture
+	if captureErr != nil {
+		result.Err = captureErr
+	}
+	return result
+}
+
+func runActions(session *driver.Session, environment *IsolatedEnvironment, actions []Action) (RunObservation, error) {
+	observation := RunObservation{ServerReady: true, Model: environment.Stub.Snapshot()}
+	events := session.Events()
+	for index, action := range actions {
+		deadline := time.NewTimer(fixedWait)
+		commandID, commandPending, err := dispatchAction(session, action)
+		if err != nil {
+			deadline.Stop()
+			return observation, fmt.Errorf("action %d (%s): %w", index, action.Kind, err)
+		}
+		for {
+			observation.Model = environment.Stub.Snapshot()
+			if !commandPending && actionSatisfied(action, observation) {
+				deadline.Stop()
+				break
+			}
+			select {
+			case event, ok := <-events:
+				if !ok {
+					observation.ClientExited = true
+					if !commandPending && actionSatisfied(action, observation) {
+						deadline.Stop()
+						break
+					}
+					return observation, fmt.Errorf("action %d (%s) observed closed session before completion", index, action.Kind)
+				}
+				if event.Analysis != nil {
+					analysis := cloneAnalysis(*event.Analysis)
+					observation.Analysis = &analysis
+				}
+				if event.Kind == driver.SessionEventProcessExit {
+					observation.ClientExited = true
+				}
+				if event.Kind == driver.SessionEventFailure {
+					return observation, fmt.Errorf("client PTY failure: %w", event.Err)
+				}
+				if event.CommandID == commandID {
+					switch event.Kind {
+					case driver.SessionEventCommandCompleted:
+						commandPending = false
+					case driver.SessionEventCommandFailed:
+						return observation, fmt.Errorf("command %s failed: %w", commandID, event.Err)
+					}
+				}
+			case <-deadline.C:
+				return observation, fmt.Errorf("action %d (%s) timed out after %s: private_modes=%v", index, action.Kind, fixedWait, privateModeState(observation.Analysis))
+			case <-time.After(5 * time.Millisecond):
+			}
+			if !commandPending && actionSatisfied(action, observation) {
+				deadline.Stop()
+				break
+			}
+		}
+	}
+	return observation, nil
+}
+
+func privateModeState(analysis *analyzer.Analysis) []analyzer.PrivateModeChange {
+	if analysis == nil {
+		return nil
+	}
+	return append([]analyzer.PrivateModeChange(nil), analysis.PrivateModeChanges...)
+}
+
+func dispatchAction(session *driver.Session, action Action) (uuid.UUID, bool, error) {
+	switch action.Kind {
+	case ActionWait, ActionAssert, ActionWaitExit:
+		return uuid.Nil, false, nil
+	case ActionEnterInput:
+		return enqueue(session, driver.SessionCommandWrite, []byte(action.Input), nil)
+	case ActionSubmitPrompt:
+		return enqueue(session, driver.SessionCommandWrite, []byte("\r"), nil)
+	case ActionCancel:
+		return enqueue(session, driver.SessionCommandRuntimeControlByte, []byte{3}, nil)
+	case ActionTerminate:
+		return enqueue(session, driver.SessionCommandTerminateProcess, nil, nil)
+	case ActionResize:
+		dimensions := analyzer.MustDimensions(action.Dimensions.Rows, action.Dimensions.Cols)
+		return enqueue(session, driver.SessionCommandResize, nil, &dimensions)
+	default:
+		return uuid.Nil, false, fmt.Errorf("unsupported action kind %s", action.Kind)
+	}
+}
+
+func enqueue(session *driver.Session, kind driver.SessionCommandKind, bytes []byte, dimensions *analyzer.Dimensions) (uuid.UUID, bool, error) {
+	id := uuid.New()
+	if err := session.Enqueue(driver.SessionCommand{ID: id, Kind: kind, Bytes: bytes, Dimensions: dimensions}); err != nil {
+		return uuid.Nil, false, err
+	}
+	return id, true, nil
+}
+
+func actionSatisfied(action Action, observation RunObservation) bool {
+	switch action.Kind {
+	case ActionWait, ActionAssert:
+		return action.Predicate.Matches(observation)
+	case ActionWaitExit, ActionTerminate:
+		return observation.ClientExited
+	default:
+		return true
+	}
+}
+
+func cloneAnalysis(analysis analyzer.Analysis) analyzer.Analysis {
+	return analysis
+}
+
+func cleanup(session *driver.Session, environment *IsolatedEnvironment) *IncompleteCleanup {
+	deadline := time.Now().Add(fixedWait)
+	owners := make([]string, 0)
+	if session != nil {
+		_ = session.Close()
+		_ = session.Terminate()
+	}
+	if environment != nil && environment.Stub != nil {
+		environment.Stub.Close()
+	}
+	if environment != nil && environment.Server != nil {
+		environment.Server.Terminate()
+	}
+	grace := time.NewTimer(250 * time.Millisecond)
+	if session != nil {
+		select {
+		case <-session.Done():
+		case <-grace.C:
+			_ = session.ForceKill()
+		}
+	}
+	if !grace.Stop() {
+		select {
+		case <-grace.C:
+		default:
+		}
+	}
+	waitDone := make(chan struct{})
+	go func() {
+		if session != nil {
+			select {
+			case <-session.Done():
+			default:
+				owners = append(owners, "client")
+			}
+		}
+		if environment != nil && environment.Server != nil {
+			select {
+			case <-environment.Server.Done():
+			default:
+				owners = append(owners, "server")
+			}
+		}
+		if environment != nil && environment.Stub != nil {
+			select {
+			case <-environment.Stub.Done():
+			default:
+				owners = append(owners, "model_stub")
+			}
+		}
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+	case <-time.After(time.Until(deadline)):
+		owners = append(owners, "cleanup_observer")
+	}
+	if environment != nil && environment.Root != "" && len(owners) == 0 {
+		_ = os.RemoveAll(environment.Root)
+	}
+	if len(owners) == 0 {
+		return nil
+	}
+	return &IncompleteCleanup{Owners: owners}
+}

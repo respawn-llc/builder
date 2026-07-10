@@ -121,3 +121,27 @@ func (s *Stream) Finish() (Analysis, error) {
 		Screen:             screen,
 	}, nil
 }
+
+// Snapshot returns the current interpreted state without consuming the stream.
+// It is used for immutable live driver observations; replay remains the final
+// artifact authority.
+func (s *Stream) Snapshot() (Analysis, error) {
+	if s == nil {
+		return Analysis{}, errors.New("terminal stream is required")
+	}
+	if s.finished {
+		return Analysis{}, errors.New("terminal stream is finished")
+	}
+	if err := s.sideChannel.error(); err != nil {
+		return Analysis{}, err
+	}
+	privateModeChanges := s.sideChannel.privateModeChangeLog()
+	screen := s.backend.snapshot()
+	return Analysis{
+		Dimensions:         screen.Dimensions,
+		Operations:         mergePrivateModeOperations(s.backend.operations(), privateModeChanges),
+		PrivateModeChanges: privateModeChanges,
+		PhaseEvents:        s.sideChannel.phaseEventLog(),
+		Screen:             screen,
+	}, nil
+}
