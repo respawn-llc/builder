@@ -25,7 +25,7 @@ func TestDetailModeRendersHydratedCommittedRows(t *testing.T) {
 	if model.Mode() != ModeDetail || !model.detailPageLoaded {
 		t.Fatalf("detail mode/loaded = %s/%t, want detail/loaded", model.Mode(), model.detailPageLoaded)
 	}
-	if len(model.detailEntries) != 2 || model.detailEntries[0].Kind != clientui.TranscriptRowUser || model.detailEntries[1].Kind != clientui.TranscriptRowAssistant {
+	if len(model.detailEntries) != 2 || model.detailEntries[0].row().Kind != clientui.TranscriptRowUser || model.detailEntries[1].row().Kind != clientui.TranscriptRowAssistant {
 		t.Fatalf("detail entries = %#v, want user then assistant", model.detailEntries)
 	}
 	if selected, ok := model.selectedDetailIndex(); !ok || selected != 1 {
@@ -45,11 +45,81 @@ func TestDetailModeFiltersHiddenTranscriptEntries(t *testing.T) {
 	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
 	model = next.(Model)
 
-	if len(model.detailEntries) != 1 || model.detailEntries[0].Kind != clientui.TranscriptRowUser {
+	if len(model.detailEntries) != 1 || model.detailEntries[0].row().Kind != clientui.TranscriptRowUser {
 		t.Fatalf("detail entries = %#v, want visible user only", model.detailEntries)
 	}
 	if selected, ok := model.selectedDetailIndex(); !ok || selected != 0 {
 		t.Fatalf("selected detail entry = %d/%t, want 0/true", selected, ok)
+	}
+}
+
+func TestDetailEmptyMalformedUserEntryRemainsDetailOnlyAndNonExpandable(t *testing.T) {
+	entry, ok := detailEntryFromChatEntry(clientui.ChatEntry{Role: "user"})
+	if !ok {
+		t.Fatal("empty malformed user entry was dropped")
+	}
+	if entry.row().Visibility != clientui.EntryVisibilityDetail {
+		t.Fatalf("empty malformed user visibility = %q, want detail-only", entry.row().Visibility)
+	}
+	presentation := entry.presentation(80, "")
+	if presentation.Expandable || len(presentation.Collapsed) == 0 {
+		t.Fatalf("empty malformed user presentation = %+v, want visible non-expandable diagnostic", presentation)
+	}
+}
+
+func TestDetailUnrecoverableMalformedEntriesStayVisibleAsDetailOnlyDiagnostics(t *testing.T) {
+	cases := []struct {
+		name string
+		item clientui.ChatEntry
+		kind clientui.TranscriptRowKind
+	}{
+		{name: "user", item: clientui.ChatEntry{Role: detailRoleUser}, kind: clientui.TranscriptRowUser},
+		{name: "assistant", item: clientui.ChatEntry{Role: detailRoleAssistant}, kind: clientui.TranscriptRowAssistant},
+		{name: "tool", item: clientui.ChatEntry{Role: detailRoleToolCall}, kind: clientui.TranscriptRowTool},
+		{name: "notice", item: clientui.ChatEntry{Role: "unknown_notice"}, kind: clientui.TranscriptRowNotice},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, ok := detailEntryFromChatEntry(tt.item)
+			if !ok {
+				t.Fatal("unrecoverable malformed entry was dropped")
+			}
+			if row := entry.row(); row.Visibility != clientui.EntryVisibilityDetail || row.Kind != tt.kind {
+				t.Fatalf("unrecoverable row = %+v, want detail-only %q", row, tt.kind)
+			}
+			presentation := entry.presentation(80, "")
+			if presentation.Expandable || len(presentation.Collapsed) == 0 {
+				t.Fatalf("unrecoverable presentation = %+v, want visible non-expandable diagnostic", presentation)
+			}
+		})
+	}
+}
+
+func TestDetailRecoverableMalformedEntriesStayOngoingAndExpandable(t *testing.T) {
+	cases := []struct {
+		name string
+		item clientui.ChatEntry
+	}{
+		{name: "user", item: clientui.ChatEntry{Role: detailRoleUser, CondensedText: "legacy user"}},
+		{name: "assistant", item: clientui.ChatEntry{Role: detailRoleAssistant, CompactLabel: "legacy assistant"}},
+		{name: "tool", item: clientui.ChatEntry{Role: detailRoleToolCall, Text: "legacy tool"}},
+		{name: "notice", item: clientui.ChatEntry{Role: "unknown_notice", Text: "legacy notice"}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, ok := detailEntryFromChatEntry(tt.item)
+			if !ok {
+				t.Fatal("recoverable malformed entry was dropped")
+			}
+			if row := entry.row(); row.Visibility != clientui.EntryVisibilityOngoing {
+				t.Fatalf("recoverable row visibility = %q, want ongoing", row.Visibility)
+			}
+			if presentation := entry.presentation(80, ""); !presentation.Expandable {
+				t.Fatalf("recoverable malformed presentation is not expandable: %+v", presentation)
+			}
+		})
 	}
 }
 
@@ -65,13 +135,13 @@ func TestDetailModeCachedRowsPreserveVisibility(t *testing.T) {
 				Detail: "diagnostic detail",
 			},
 		},
-	})}
+	}, transcriptrender.DetailIntegrityValid)}
 	model.detailPageLoaded = true
 	model.setSelectedDetailIndex(0)
 	next, _ := model.Update(SetModeMsg{Mode: ModeDetail})
 	model = next.(Model)
 
-	if len(model.detailEntries) != 1 || model.detailEntries[0].Visibility != clientui.EntryVisibilityOngoingCollapsed {
+	if len(model.detailEntries) != 1 || model.detailEntries[0].row().Visibility != clientui.EntryVisibilityOngoingCollapsed {
 		t.Fatalf("detail entries = %#v, want preserved ongoing-collapsed visibility", model.detailEntries)
 	}
 	if selected, ok := model.selectedDetailIndex(); !ok || selected != 0 {
@@ -102,18 +172,21 @@ func TestDetailSelectionChangesOnlySymbolText(t *testing.T) {
 	model := NewModel()
 	model.viewportWidth = 80
 	model.expanded = map[int]struct{}{0: {}}
-	line := transcriptrender.Line{Spans: []transcriptrender.Span{
-		{Text: "!", Role: transcriptrender.StyleRoleToolError},
+	leading := transcriptrender.Span{Text: "!", Role: transcriptrender.StyleRoleToolError}
+	line := transcriptrender.Line{LeadingSymbol: &leading, Spans: []transcriptrender.Span{
 		{Text: " ", Role: transcriptrender.StyleRoleToolShell, Faint: true},
 		{Text: "false", Role: transcriptrender.StyleRoleToolShell, Faint: true},
 	}}
 
-	decorated := model.decorateSelectedDetailLines([]transcriptrender.Line{line}, 0)
+	decorated := model.decorateSelectedDetailLines([]transcriptrender.Line{line}, 0, model.viewportWidth-1)
 	if len(decorated) != 1 || len(decorated[0].Spans) != len(line.Spans) {
 		t.Fatalf("decorated lines = %+v", decorated)
 	}
-	original := line.Spans[0]
-	symbol := decorated[0].Spans[0]
+	if decorated[0].LeadingSymbol == nil {
+		t.Fatalf("decorated line has no typed symbol: %+v", decorated[0])
+	}
+	original := *line.LeadingSymbol
+	symbol := *decorated[0].LeadingSymbol
 	if symbol.Text == original.Text {
 		t.Fatalf("selected symbol text was not decorated: %+v", symbol)
 	}
@@ -126,7 +199,7 @@ func TestDetailSelectionChangesOnlySymbolText(t *testing.T) {
 func TestDetailSelectionActionReflectsSelectedExpansionState(t *testing.T) {
 	model := NewModel()
 	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
-		Entries: []clientui.ChatEntry{{Role: "assistant", Text: "line one\nline two"}},
+		Entries: []clientui.ChatEntry{{Role: "assistant", Text: "line one\nline two\nline three\nline four"}},
 	}})
 	model = next.(Model)
 	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
@@ -147,8 +220,34 @@ func TestDetailSelectionActionReflectsSelectedExpansionState(t *testing.T) {
 	}
 }
 
+func TestDetailNonExpandableSelectionHasNoActionOrEnterMutation(t *testing.T) {
+	model := NewModel()
+	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
+		Entries: []clientui.ChatEntry{{Role: detailRoleUser, Text: "short row"}},
+	}})
+	model = next.(Model)
+	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
+	model = next.(Model)
+
+	if got := model.DetailSelectionAction(); got != DetailSelectionActionNone {
+		t.Fatalf("detail action = %v, want none for non-expandable row", got)
+	}
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(Model)
+	if _, expanded := model.expanded[0]; expanded {
+		t.Fatal("Enter mutated expansion state for non-expandable row")
+	}
+	presentation := model.detailEntries[0].presentation(model.viewportWidth, model.theme)
+	if presentation.Collapsed[0].LeadingSymbol == nil {
+		t.Fatalf("short row has no typed role symbol: %+v", presentation)
+	}
+	if got := model.detailRenderedLines()[0].Text; got == "" {
+		t.Fatal("non-expandable selected row rendered no content")
+	}
+}
+
 func TestDetailChatEntryNoticeKeepsCompactTextSeparateFromExpandedBody(t *testing.T) {
-	row, ok := detailRowFromChatEntry(clientui.ChatEntry{
+	entry, ok := detailEntryFromChatEntry(clientui.ChatEntry{
 		Role:          "compaction_notice",
 		Text:          "  full persisted notice body  ",
 		CondensedText: "compact notice",
@@ -156,6 +255,7 @@ func TestDetailChatEntryNoticeKeepsCompactTextSeparateFromExpandedBody(t *testin
 	if !ok {
 		t.Fatal("notice chat entry was dropped")
 	}
+	row := entry.row()
 	if row.Kind != clientui.TranscriptRowNotice || row.Notice == nil {
 		t.Fatalf("row = %#v, want notice row", row)
 	}
@@ -166,10 +266,10 @@ func TestDetailChatEntryNoticeKeepsCompactTextSeparateFromExpandedBody(t *testin
 		t.Fatalf("notice condensed text = %q, want compact metadata", row.Notice.Data.CondensedText)
 	}
 	expanded := transcriptrender.RenderCommittedRow(row, 80, "", transcriptrender.ModeDetailExpanded)
-	if len(expanded.Lines) != 1 || len(expanded.Lines[0].Spans) < 3 {
+	if len(expanded.Lines) != 1 || expanded.Lines[0].LeadingSymbol == nil || len(expanded.Lines[0].Spans) < 2 {
 		t.Fatalf("expanded notice row = %#v, want prefixed body span", expanded)
 	}
-	if got := expanded.Lines[0].Spans[2].Text; got != "  full persisted notice body  " {
+	if got := expanded.Lines[0].Spans[1].Text; got != "  full persisted notice body  " {
 		t.Fatalf("expanded notice body span = %q, want full body", got)
 	}
 }
@@ -187,10 +287,11 @@ func TestDetailChatEntryNoticeMapsLegacySeverityRoles(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.role, func(t *testing.T) {
-			row, ok := detailRowFromChatEntry(clientui.ChatEntry{Role: tt.role, Text: "legacy notice"})
+			entry, ok := detailEntryFromChatEntry(clientui.ChatEntry{Role: tt.role, Text: "legacy notice"})
 			if !ok {
 				t.Fatal("notice chat entry was dropped")
 			}
+			row := entry.row()
 			if row.Kind != clientui.TranscriptRowNotice || row.Notice == nil {
 				t.Fatalf("row = %#v, want notice row", row)
 			}
@@ -202,7 +303,7 @@ func TestDetailChatEntryNoticeMapsLegacySeverityRoles(t *testing.T) {
 }
 
 func TestWorkflowModeChatEntryRendersCollapsedOngoingAndExpandedDetail(t *testing.T) {
-	row, ok := detailRowFromChatEntry(clientui.ChatEntry{
+	entry, ok := detailEntryFromChatEntry(clientui.ChatEntry{
 		Visibility:    clientui.EntryVisibilityOngoingCollapsed,
 		Role:          "developer_context",
 		Text:          "full workflow instructions\nwith second line",
@@ -212,6 +313,7 @@ func TestWorkflowModeChatEntryRendersCollapsedOngoingAndExpandedDetail(t *testin
 	if !ok {
 		t.Fatal("workflow chat entry was dropped")
 	}
+	row := entry.row()
 	if row.Visibility != clientui.EntryVisibilityOngoingCollapsed || row.Kind != clientui.TranscriptRowNotice || row.Notice == nil {
 		t.Fatalf("workflow row = %#v, want ongoing-collapsed notice", row)
 	}
@@ -223,7 +325,7 @@ func TestWorkflowModeChatEntryRendersCollapsedOngoingAndExpandedDetail(t *testin
 	if got, want := ongoing.Lines[0].Plain(), "ℹ workflow compact"; got != want {
 		t.Fatalf("ongoing workflow line = %q, want %q", got, want)
 	}
-	if len(ongoing.Lines[0].Spans) < 3 || ongoing.Lines[0].Spans[2].Role != transcriptrender.StyleRoleNoticePrimary {
+	if ongoing.Lines[0].LeadingSymbol == nil || len(ongoing.Lines[0].Spans) < 2 || ongoing.Lines[0].Spans[1].Role != transcriptrender.StyleRoleNoticePrimary {
 		t.Fatalf("ongoing workflow spans = %+v, want primary notice body", ongoing.Lines[0].Spans)
 	}
 
@@ -241,7 +343,7 @@ func TestWorkflowModeChatEntryRendersCollapsedOngoingAndExpandedDetail(t *testin
 
 func TestDetailChatEntryToolCallRendersAsToolRow(t *testing.T) {
 	const callID = "1bcbb5bd-f688-4e64-8a35-89f6b0706cf1"
-	row, ok := detailRowFromChatEntry(clientui.ChatEntry{
+	entry, ok := detailEntryFromChatEntry(clientui.ChatEntry{
 		Role:       "tool_call",
 		ToolCallID: callID,
 		ToolCall: &clientui.ToolCallMeta{
@@ -254,6 +356,7 @@ func TestDetailChatEntryToolCallRendersAsToolRow(t *testing.T) {
 	if !ok {
 		t.Fatal("tool_call chat entry was dropped")
 	}
+	row := entry.row()
 	if row.Kind != clientui.TranscriptRowTool || row.Tool == nil {
 		t.Fatalf("row = %#v, want tool row", row)
 	}
@@ -268,13 +371,17 @@ func TestDetailChatEntryToolCallRendersAsToolRow(t *testing.T) {
 func TestDetailReviewerEntriesPreserveDiagnosticRoles(t *testing.T) {
 	for _, role := range []transcript.EntryRole{transcript.EntryRoleReviewerStatus, transcript.EntryRoleReviewerError} {
 		t.Run(string(role), func(t *testing.T) {
-			row, ok := detailRowFromChatEntry(clientui.ChatEntry{
+			entry, ok := detailEntryFromChatEntry(clientui.ChatEntry{
 				Role:        string(role),
 				Text:        "review result",
 				MessageType: clientui.MessageTypeReviewerFeedback,
 			})
-			if !ok || row.Notice == nil || row.Notice.Diagnostic == nil {
-				t.Fatalf("reviewer row = %+v, ok=%t", row, ok)
+			if !ok {
+				t.Fatal("reviewer row was dropped")
+			}
+			row := entry.row()
+			if row.Notice == nil || row.Notice.Diagnostic == nil {
+				t.Fatalf("reviewer row = %+v", row)
 			}
 			if row.Notice.Diagnostic.Code != string(role) {
 				t.Fatalf("reviewer diagnostic role = %q, want %q", row.Notice.Diagnostic.Code, role)

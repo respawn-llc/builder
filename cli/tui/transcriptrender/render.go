@@ -150,11 +150,13 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 		}
 		if idx == 0 {
 			symbolRole := roleSymbolStyleRole(role, meta)
-			spans = append([]Span{{Text: symbolText, Role: symbolRole, Faint: roleSymbolFaint(role, symbolRole)}, {Text: " ", Role: role, Faint: roleDefaultFaint(role)}}, spans...)
+			symbol := Span{Text: symbolText, Role: symbolRole, Faint: roleSymbolFaint(role, symbolRole)}
+			spans = append([]Span{{Text: " ", Role: role, Faint: roleDefaultFaint(role)}}, spans...)
+			line = Line{LeadingSymbol: &symbol, Spans: spans}
 		} else {
 			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex), spans...)
+			line = Line{Spans: spans}
 		}
-		line = Line{Spans: spans}
 		if forceEllipsis || lipgloss.Width(line.Plain()) > max(1, width) {
 			line = TruncateLine(line, max(1, width), forceEllipsis)
 		}
@@ -188,21 +190,6 @@ func inlineMetaCommandSpans(spans []Span, role StyleRole) []Span {
 		if out[idx].Role == role {
 			out[idx].Faint = true
 		}
-	}
-	return out
-}
-
-func replaceLeadingRoleSymbol(line Line, role StyleRole, symbol string) Line {
-	if len(line.Spans) == 0 {
-		return line
-	}
-	out := Line{Spans: append([]Span(nil), line.Spans...)}
-	for idx := range out.Spans {
-		if out.Spans[idx].Text != roleSymbol(role) {
-			continue
-		}
-		out.Spans[idx].Text = symbol
-		return out
 	}
 	return out
 }
@@ -531,16 +518,41 @@ func TruncateLine(line Line, width int, forceEllipsis bool) Line {
 	}
 	consumed := 0
 	out := Line{}
+	type positionedSpan struct {
+		span    Span
+		leading bool
+	}
+	spans := make([]positionedSpan, 0, len(line.Spans)+1)
+	if line.LeadingSymbol != nil {
+		spans = append(spans, positionedSpan{span: *line.LeadingSymbol, leading: true})
+	}
 	for _, span := range line.Spans {
+		spans = append(spans, positionedSpan{span: span})
+	}
+	appendText := func(span Span, text string, leading bool) {
+		fragment := span
+		fragment.Text = text
+		if leading {
+			if out.LeadingSymbol == nil {
+				out.LeadingSymbol = &fragment
+			} else {
+				out.LeadingSymbol.Text += text
+			}
+			return
+		}
+		out.Spans = append(out.Spans, fragment)
+	}
+	for _, positioned := range spans {
+		span := positioned.span
 		graphemes := uniseg.NewGraphemes(span.Text)
 		for graphemes.Next() {
 			cluster := graphemes.Str()
 			w := lipgloss.Width(cluster)
 			if consumed+w > visibleLimit {
-				out.Spans = append(out.Spans, Span{Text: "…", Role: span.Role, Faint: span.Faint})
+				appendText(span, "…", positioned.leading)
 				return out
 			}
-			out.Spans = append(out.Spans, Span{Text: cluster, Role: span.Role, Faint: span.Faint})
+			appendText(span, cluster, positioned.leading)
 			consumed += w
 		}
 	}

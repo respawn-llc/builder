@@ -449,6 +449,9 @@ func encodeTranscriptLines(lines []transcriptrender.Line, themeName string) []st
 
 func encodeTranscriptLine(line transcriptrender.Line, themeName string) string {
 	var out strings.Builder
+	if line.LeadingSymbol != nil {
+		out.WriteString(encodeTranscriptSpan(*line.LeadingSymbol, themeName))
+	}
 	for _, span := range line.Spans {
 		out.WriteString(encodeTranscriptSpan(span, themeName))
 	}
@@ -459,28 +462,25 @@ func encodeTranscriptSpan(span transcriptrender.Span, themeName string) string {
 	if span.Text == "" {
 		return ""
 	}
-	color := transcriptRoleColor(span.Role, themeName)
-	if color == "" && !span.Faint {
+	resolved := transcriptrender.ResolveSpanStyle(span, themeName)
+	color := resolved.Foreground.TrueColor
+	if color == "" && !resolved.Faint && !resolved.Bold && !resolved.Italic && !resolved.Underline {
 		return span.Text
 	}
 	prefix := ansiTrueColorForeground(color)
-	if span.Faint {
+	if resolved.Faint {
 		prefix += "\x1b[2m"
 	}
-	if span.Bold {
+	if resolved.Bold {
 		prefix += "\x1b[1m"
 	}
-	if span.Italic {
+	if resolved.Italic {
 		prefix += "\x1b[3m"
 	}
-	if span.Underline {
+	if resolved.Underline {
 		prefix += "\x1b[4m"
 	}
 	return prefix + span.Text + "\x1b[0m"
-}
-
-func transcriptRoleColor(role transcriptrender.StyleRole, themeName string) string {
-	return transcriptrender.ColorForRole(transcriptrender.ColorRoleForStyle(role), themeName).TrueColor
 }
 
 func ansiTrueColorForeground(hex string) string {

@@ -1,6 +1,9 @@
 package transcriptrender
 
-import "core/shared/clientui"
+import (
+	"core/shared/clientui"
+	"core/shared/theme"
+)
 
 type Mode uint8
 
@@ -105,7 +108,8 @@ func ColorRoleForStyle(role StyleRole) ColorRole {
 }
 
 type Line struct {
-	Spans []Span
+	LeadingSymbol *Span
+	Spans         []Span
 }
 
 type Span struct {
@@ -115,6 +119,24 @@ type Span struct {
 	Bold      bool
 	Italic    bool
 	Underline bool
+}
+
+type ResolvedSpanStyle struct {
+	Foreground theme.Color
+	Faint      bool
+	Bold       bool
+	Italic     bool
+	Underline  bool
+}
+
+func ResolveSpanStyle(span Span, themeName string) ResolvedSpanStyle {
+	return ResolvedSpanStyle{
+		Foreground: ColorForRole(ColorRoleForStyle(span.Role), themeName),
+		Faint:      span.Faint,
+		Bold:       span.Bold,
+		Italic:     span.Italic,
+		Underline:  span.Underline,
+	}
 }
 
 func PlainLines(lines []Line) []string {
@@ -130,8 +152,21 @@ func PlainLines(lines []Line) []string {
 
 func (l Line) Plain() string {
 	out := ""
+	if l.LeadingSymbol != nil {
+		out += l.LeadingSymbol.Text
+	}
 	for _, span := range l.Spans {
 		out += span.Text
 	}
 	return out
+}
+
+func (l Line) WithLeadingSymbolText(text string) Line {
+	if l.LeadingSymbol == nil {
+		return l
+	}
+	symbol := *l.LeadingSymbol
+	symbol.Text = text
+	l.LeadingSymbol = &symbol
+	return l
 }

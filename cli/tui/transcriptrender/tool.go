@@ -37,7 +37,7 @@ func RenderPendingTool(tool clientui.TranscriptToolStart, width int, spinner str
 	if spinner == "" {
 		return line
 	}
-	return replaceLeadingRoleSymbol(line, role, spinner)
+	return line.WithLeadingSymbolText(spinner)
 }
 
 type toolMeta struct {

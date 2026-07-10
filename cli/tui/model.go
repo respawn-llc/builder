@@ -4,11 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/theme"
-	"core/shared/transcript"
-	"core/shared/valuecopy"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -186,13 +183,11 @@ func (m Model) View() string {
 	if m.mode != ModeDetail {
 		return ""
 	}
-	lines := detailRenderedText(m.detailRenderedLines())
+	lines := renderDetailProjectedLines(m.detailVisibleProjectedLines(), m.theme)
 	if len(lines) == 0 {
 		lines = []string{m.detailEmptyLine()}
 	}
-	scroll := clampInt(m.detailScroll, 0, m.maxScrollForLines(lines))
-	end := minInt(len(lines), scroll+maxInt(1, m.viewportLines))
-	return strings.Join(lines[scroll:end], "\n")
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) Mode() Mode {
@@ -205,6 +200,9 @@ func (m Model) DetailSelectionAction() DetailSelectionAction {
 	}
 	selected, ok := m.selectedDetailIndex()
 	if !ok || selected < 0 || selected >= len(m.detailEntries) {
+		return DetailSelectionActionNone
+	}
+	if !m.detailEntries[selected].presentation(maxInt(1, m.viewportWidth), m.theme).Expandable {
 		return DetailSelectionActionNone
 	}
 	if _, ok := m.expanded[selected]; ok {
@@ -232,8 +230,8 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 	m.detailHasMoreBelow = page.HasMoreBelow
 	m.detailEntries = m.detailEntries[:0]
 	for _, entry := range page.Entries {
-		if row, ok := detailRowFromChatEntry(entry); ok {
-			m.detailEntries = append(m.detailEntries, newDetailEntry(row))
+		if detail, ok := detailEntryFromChatEntry(entry); ok {
+			m.detailEntries = append(m.detailEntries, detail)
 		}
 	}
 	if anchor == DetailTranscriptAnchorPreserve {
@@ -281,7 +279,7 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 func visibleDetailEntryCount(entries []clientui.ChatEntry, limit int) int {
 	count := 0
 	for _, entry := range entries[:minInt(maxInt(0, limit), len(entries))] {
-		if _, ok := detailRowFromChatEntry(entry); ok {
+		if _, ok := detailEntryFromChatEntry(entry); ok {
 			count++
 		}
 	}
@@ -311,113 +309,6 @@ func (m Model) detailPageRequestCmd(newer bool) tea.Cmd {
 	return func() tea.Msg { return RequestDetailTranscriptPageMsg{Request: req} }
 }
 
-func (m Model) detailLines() []string {
-	return detailRenderedText(m.detailRenderedLines())
-}
-
-func (m Model) detailRenderedLines() []detailRenderedLine {
-	width := maxInt(1, m.viewportWidth)
-	out := make([]detailRenderedLine, 0, (len(m.detailEntries)+1)*2)
-	selected, hasSelection := m.selectedDetailIndex()
-	for idx, entry := range m.detailEntries {
-		if idx > 0 && !sameDetailGroup(m.detailEntries[idx-1], entry) {
-			out = append(out, detailRenderedLine{})
-		}
-		mode := transcriptrender.ModeDetailCollapsed
-		if _, ok := m.expanded[idx]; ok {
-			mode = transcriptrender.ModeDetailExpanded
-		}
-		rendered := transcriptrender.RenderCommittedRow(entry.row(), width, m.theme, mode)
-		lines := rendered.Lines
-		if hasSelection && idx == selected {
-			lines = m.decorateSelectedDetailLines(lines, idx)
-		}
-		out = append(out, detailRenderLines(lines, m.theme, hasSelection && idx == selected, idx, width)...)
-	}
-	return out
-}
-
-func (m Model) decorateSelectedDetailLines(lines []transcriptrender.Line, entryIndex int) []transcriptrender.Line {
-	if len(lines) == 0 {
-		return lines
-	}
-	out := append([]transcriptrender.Line(nil), lines...)
-	symbol := "▶"
-	if _, ok := m.expanded[entryIndex]; ok {
-		symbol = "▼"
-	}
-	out[0] = replaceFirstVisibleSymbol(out[0], symbol)
-	for idx, line := range out {
-		out[idx] = transcriptrender.TruncateLine(line, maxInt(1, m.viewportWidth), false)
-	}
-	return out
-}
-
-func replaceFirstVisibleSymbol(line transcriptrender.Line, symbol string) transcriptrender.Line {
-	if len(line.Spans) == 0 {
-		return transcriptrender.Line{Spans: []transcriptrender.Span{{Text: symbol, Role: transcriptrender.StyleRoleNotice}}}
-	}
-	out := transcriptrender.Line{Spans: append([]transcriptrender.Span(nil), line.Spans...)}
-	for idx, span := range out.Spans {
-		if strings.TrimSpace(span.Text) == "" {
-			continue
-		}
-		runes := []rune(span.Text)
-		if len(runes) == 0 {
-			continue
-		}
-		out.Spans[idx].Text = symbol + string(runes[1:])
-		return out
-	}
-	out.Spans = append([]transcriptrender.Span{{Text: symbol, Role: transcriptrender.StyleRoleNotice}}, out.Spans...)
-	return out
-}
-
-func detailRenderLines(lines []transcriptrender.Line, themeName string, selected bool, entryIndex int, width int) []detailRenderedLine {
-	out := make([]detailRenderedLine, 0, len(lines))
-	for _, line := range lines {
-		indexCopy := entryIndex
-		out = append(out, detailRenderedLine{
-			Text:       renderDetailLine(line, themeName, selected, width),
-			EntryIndex: &indexCopy,
-		})
-	}
-	return out
-}
-
-func renderDetailLine(line transcriptrender.Line, themeName string, selected bool, width int) string {
-	out := strings.Builder{}
-	for _, span := range line.Spans {
-		style := lipgloss.NewStyle().Foreground(detailRoleColor(span.Role, themeName))
-		if span.Faint {
-			style = style.Faint(true)
-		}
-		if span.Bold {
-			style = style.Bold(true)
-		}
-		if span.Italic {
-			style = style.Italic(true)
-		}
-		if span.Underline {
-			style = style.Underline(true)
-		}
-		out.WriteString(style.Render(span.Text))
-	}
-	rendered := out.String()
-	if !selected {
-		return rendered
-	}
-	tokens := theme.ResolvePalette(themeName)
-	return lipgloss.NewStyle().
-		Background(tokens.Transcript.SelectionBackground.Lipgloss()).
-		Width(maxInt(1, width)).
-		Render(rendered)
-}
-
-func detailRoleColor(role transcriptrender.StyleRole, themeName string) lipgloss.TerminalColor {
-	return transcriptrender.ColorForRole(transcriptrender.ColorRoleForStyle(role), themeName).Lipgloss()
-}
-
 func (m Model) detailEmptyLine() string {
 	tokens := theme.ResolvePalette(m.theme)
 	if m.detailPageLoaded {
@@ -429,6 +320,9 @@ func (m Model) detailEmptyLine() string {
 func (m *Model) toggleSelectedDetailEntry() {
 	selected, ok := m.selectedDetailIndex()
 	if !ok || selected >= len(m.detailEntries) {
+		return
+	}
+	if !m.detailEntries[selected].presentation(maxInt(1, m.viewportWidth), m.theme).Expandable {
 		return
 	}
 	if m.expanded == nil {
@@ -486,26 +380,6 @@ func absInt(value int) int {
 		return -value
 	}
 	return value
-}
-
-func sameDetailGroup(left, right detailEntry) bool {
-	return left.Kind == right.Kind
-}
-
-type detailRenderedLine struct {
-	Text       string
-	EntryIndex *int
-}
-
-func detailRenderedText(lines []detailRenderedLine) []string {
-	if len(lines) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		out = append(out, line.Text)
-	}
-	return out
 }
 
 func (m Model) detailLineOffsetForEntryIndex(entryIndex int) int {
@@ -581,126 +455,4 @@ func (m *Model) setSelectedDetailIndex(index int) {
 
 func (m *Model) clearSelectedDetailIndex() {
 	m.selected = nil
-}
-
-type detailEntry struct {
-	Visibility clientui.EntryVisibility
-	Kind       clientui.TranscriptRowKind
-	User       *clientui.TranscriptUserRow
-	Assistant  *clientui.TranscriptAssistantRow
-	Tool       *clientui.TranscriptToolRow
-	Notice     *clientui.TranscriptNoticeRow
-}
-
-func newDetailEntry(row clientui.TranscriptCommittedRow) detailEntry {
-	return detailEntry{
-		Visibility: row.Visibility,
-		Kind:       row.Kind,
-		User:       row.User,
-		Assistant:  row.Assistant,
-		Tool:       row.Tool,
-		Notice:     row.Notice,
-	}
-}
-
-func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommittedRow, bool) {
-	visibility := transcript.NormalizeEntryVisibility(transcript.EntryVisibility(entry.Visibility))
-	if visibility == transcript.EntryVisibilityHidden {
-		return clientui.TranscriptCommittedRow{}, false
-	}
-	role := strings.TrimSpace(entry.Role)
-	switch role {
-	case "user":
-		if strings.TrimSpace(entry.Text) == "" {
-			return clientui.TranscriptCommittedRow{}, false
-		}
-		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: entry.Text, CondensedText: entry.CondensedText}}, true
-	case "assistant":
-		if strings.TrimSpace(entry.Text) == "" {
-			return clientui.TranscriptCommittedRow{}, false
-		}
-		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{
-			Text:          entry.Text,
-			CondensedText: entry.CondensedText,
-			Phase:         transcript.ClassifyAssistantPhase(string(entry.Phase)),
-		}}, true
-	case "tool_call":
-		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
-			ToolCallID:       strings.TrimSpace(entry.ToolCallID),
-			ToolName:         detailToolName(entry),
-			Text:             entry.Text,
-			CondensedText:    strings.TrimSpace(firstNonEmptyString(entry.CondensedText, entry.CompactLabel)),
-			ToolPresentation: entry.ToolCall,
-		}}, true
-	case "tool_result_ok", "tool_result_error":
-		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
-			ToolCallID:       strings.TrimSpace(entry.ToolCallID),
-			ToolName:         detailToolName(entry),
-			Text:             entry.Text,
-			IsError:          strings.TrimSpace(entry.Role) == "tool_result_error",
-			ResultSummary:    strings.TrimSpace(entry.ToolResultSummary),
-			CondensedText:    strings.TrimSpace(entry.CondensedText),
-			ToolPresentation: entry.ToolCall,
-		}}, true
-	default:
-		var diagnostic *clientui.TranscriptDiagnosticData
-		if transcript.IsReviewerEntryRole(role) {
-			diagnostic = &clientui.TranscriptDiagnosticData{Code: role, Detail: firstNonEmptyString(entry.Text, entry.CondensedText, entry.CompactLabel)}
-		}
-		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
-			Reason:   clientui.TranscriptNoticeReason(transcript.LegacyNoticeReasonForRole(role)),
-			Severity: clientui.TranscriptNoticeSeverity(transcript.LegacyNoticeSeverityForRole(role)),
-			Data: clientui.TranscriptNoticeData{
-				LegacyText:         stringPtrIfNonBlank(entry.Text),
-				NoticeID:           stringPtr(strings.TrimSpace(entry.NoticeID)),
-				MessageType:        entry.MessageType,
-				SourcePath:         entry.SourcePath,
-				CondensedText:      entry.CondensedText,
-				CompactLabel:       entry.CompactLabel,
-				BackgroundExitCode: valuecopy.Pointer(entry.BackgroundExitCode),
-			},
-			Diagnostic: diagnostic,
-		}}, true
-	}
-}
-
-func detailToolName(entry clientui.ChatEntry) string {
-	if entry.ToolCall != nil && strings.TrimSpace(entry.ToolCall.ToolName) != "" {
-		return strings.TrimSpace(entry.ToolCall.ToolName)
-	}
-	return firstNonEmptyString(entry.ToolCallID, "tool")
-}
-
-func stringPtr(value string) *string {
-	if value == "" {
-		return nil
-	}
-	return &value
-}
-
-func stringPtrIfNonBlank(value string) *string {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return &value
-}
-
-func (entry detailEntry) row() clientui.TranscriptCommittedRow {
-	return clientui.TranscriptCommittedRow{
-		Visibility: entry.Visibility,
-		Kind:       entry.Kind,
-		User:       entry.User,
-		Assistant:  entry.Assistant,
-		Tool:       entry.Tool,
-		Notice:     entry.Notice,
-	}
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }

@@ -39,11 +39,11 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 			if got := line.Plain(); got != tt.want {
 				t.Fatalf("rendered line = %q, want %q", got, tt.want)
 			}
-			if len(line.Spans) < 3 || line.Spans[0].Role != tt.wantRole {
-				t.Fatalf("line has invalid style spans: %+v", line.Spans)
+			if line.LeadingSymbol == nil || len(line.Spans) < 2 || line.LeadingSymbol.Role != tt.wantRole {
+				t.Fatalf("line has invalid typed symbol or body spans: %+v", line)
 			}
-			if tt.wantRole != StyleRoleToolShell && line.Spans[2].Role != tt.wantRole {
-				t.Fatalf("line content role = %v, want %v; spans: %+v", line.Spans[2].Role, tt.wantRole, line.Spans)
+			if tt.wantRole != StyleRoleToolShell && line.Spans[1].Role != tt.wantRole {
+				t.Fatalf("line content role = %v, want %v; spans: %+v", line.Spans[1].Role, tt.wantRole, line.Spans)
 			}
 			if got := ColorRoleForStyle(tt.wantRole); got != tt.wantColor {
 				t.Fatalf("style role color = %v, want %v", got, tt.wantColor)
@@ -108,7 +108,7 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 func assertShellLineHasTypedSyntax(t *testing.T, line Line) {
 	t.Helper()
 	foundSyntax := false
-	for _, span := range line.Spans[2:] {
+	for _, span := range line.Spans[1:] {
 		if !span.Faint {
 			t.Fatalf("shell syntax span is not faint: %+v", span)
 		}
@@ -157,15 +157,39 @@ func TestToolSymbolsUseSeparateMetadataFromBodies(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			rendered := RenderCommittedRow(tt.row, 120, "", ModeOngoing)
-			if len(rendered.Lines) == 0 || len(rendered.Lines[0].Spans) < 3 {
+			if len(rendered.Lines) == 0 || rendered.Lines[0].LeadingSymbol == nil || len(rendered.Lines[0].Spans) < 2 {
 				t.Fatalf("rendered invalid line: %+v", rendered.Lines)
 			}
-			symbol := rendered.Lines[0].Spans[0]
-			body := rendered.Lines[0].Spans[2]
+			symbol := *rendered.Lines[0].LeadingSymbol
+			body := rendered.Lines[0].Spans[1]
 			if symbol.Role == body.Role && symbol.Faint == body.Faint {
 				t.Fatalf("symbol metadata was coupled to body metadata: symbol=%+v body=%+v", symbol, body)
 			}
 		})
+	}
+}
+
+func TestRoleSymbolOwnsTypedLeadingSlotOutsideBodySpans(t *testing.T) {
+	rendered := RenderCommittedRow(
+		toolRow("exec_command", clientui.ToolPresentationShell, "go test ./...", false),
+		80,
+		"",
+		ModeOngoing,
+	)
+	if len(rendered.Lines) == 0 {
+		t.Fatal("rendered no tool lines")
+	}
+	line := rendered.Lines[0]
+	if line.LeadingSymbol == nil {
+		t.Fatalf("rendered line has no typed leading symbol: %+v", line)
+	}
+	if line.LeadingSymbol.Text == "" || line.LeadingSymbol.Role != StyleRoleToolSuccess || line.LeadingSymbol.Faint {
+		t.Fatalf("typed leading symbol = %+v, want full-strength successful tool role", line.LeadingSymbol)
+	}
+	for _, span := range line.Spans {
+		if span.Text == line.LeadingSymbol.Text {
+			t.Fatalf("body spans duplicate typed leading symbol: symbol=%+v spans=%+v", line.LeadingSymbol, line.Spans)
+		}
 	}
 }
 
@@ -215,6 +239,104 @@ func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
 	}
 }
 
+func TestResolveSpanStyleCarriesSemanticColorAndAttributes(t *testing.T) {
+	span := Span{
+		Text:      "semantic",
+		Role:      StyleRoleToolShellWarning,
+		Faint:     true,
+		Bold:      true,
+		Italic:    true,
+		Underline: true,
+	}
+
+	resolved := ResolveSpanStyle(span, "dark")
+	if resolved.Foreground != ColorForRole(ColorRoleForStyle(span.Role), "dark") {
+		t.Fatalf("resolved foreground = %+v, want role color", resolved.Foreground)
+	}
+	if !resolved.Faint || !resolved.Bold || !resolved.Italic || !resolved.Underline {
+		t.Fatalf("resolved attributes = %+v, want every semantic attribute", resolved)
+	}
+}
+
+func TestRenderDetailPresentationDoesNotExpandIdenticalValidLines(t *testing.T) {
+	presentation := RenderDetailPresentation(
+		clientui.TranscriptCommittedRow{
+			Kind: clientui.TranscriptRowUser,
+			User: &clientui.TranscriptUserRow{Text: "short user row"},
+		},
+		80,
+		"",
+		DetailIntegrityValid,
+	)
+
+	if presentation.Expandable {
+		t.Fatalf("short valid presentation is expandable: %+v", presentation)
+	}
+	if got, want := PlainLines(presentation.Collapsed), PlainLines(presentation.Expanded); !slices.Equal(got, want) {
+		t.Fatalf("short valid lines differ: collapsed=%q expanded=%q", got, want)
+	}
+}
+
+func TestRenderDetailPresentationExpandsDifferingValidLines(t *testing.T) {
+	presentation := RenderDetailPresentation(
+		clientui.TranscriptCommittedRow{
+			Kind: clientui.TranscriptRowAssistant,
+			Assistant: &clientui.TranscriptAssistantRow{
+				Text:          "full first line\nfull second line",
+				CondensedText: "compact answer",
+			},
+		},
+		80,
+		"",
+		DetailIntegrityValid,
+	)
+
+	if !presentation.Expandable {
+		t.Fatalf("differing valid presentation is not expandable: %+v", presentation)
+	}
+}
+
+func TestRenderDetailPresentationKeepsRecoverableMalformedRowsExpandable(t *testing.T) {
+	legacyNotice := "legacy notice"
+	rows := []clientui.TranscriptCommittedRow{
+		{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "legacy user"}},
+		{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "legacy assistant"}},
+		{Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{Text: "legacy tool"}},
+		{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
+			Reason: clientui.TranscriptNoticeLegacyUntypedNotice,
+			Data:   clientui.TranscriptNoticeData{LegacyText: &legacyNotice},
+		}},
+	}
+
+	for _, row := range rows {
+		presentation := RenderDetailPresentation(row, 80, "", DetailIntegrityRecoverableMalformed)
+		if !presentation.Expandable {
+			t.Fatalf("recoverable malformed row %q is not expandable: %+v", row.Kind, presentation)
+		}
+	}
+}
+
+func TestRenderDetailPresentationDoesNotExpandUnrecoverableMalformedRows(t *testing.T) {
+	rows := []clientui.TranscriptCommittedRow{
+		{Visibility: clientui.EntryVisibilityDetail, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{}},
+		{Visibility: clientui.EntryVisibilityDetail, Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{}},
+		{Visibility: clientui.EntryVisibilityDetail, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{}},
+		{Visibility: clientui.EntryVisibilityDetail, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
+			Reason: clientui.TranscriptNoticeLegacyUntypedNotice,
+		}},
+	}
+
+	for _, row := range rows {
+		presentation := RenderDetailPresentation(row, 80, "", DetailIntegrityUnrecoverableMalformed)
+		if presentation.Expandable {
+			t.Fatalf("unrecoverable malformed row %q is expandable: %+v", row.Kind, presentation)
+		}
+		if len(presentation.Collapsed) == 0 {
+			t.Fatalf("unrecoverable malformed row %q was dropped", row.Kind)
+		}
+	}
+}
+
 func TestOngoingUserAssistantRowsUseCompactText(t *testing.T) {
 	row := clientui.TranscriptCommittedRow{
 		Kind: clientui.TranscriptRowAssistant,
@@ -250,12 +372,14 @@ func TestPendingToolChangesOnlyCommittedSymbolText(t *testing.T) {
 	if got, want := pending.Plain(), "⢎  go test ./..."; got != want {
 		t.Fatalf("pending tool plain line = %q, want %q", got, want)
 	}
-	if len(committed.Spans) < 3 || len(pending.Spans) != len(committed.Spans) {
-		t.Fatalf("pending spans = %+v, committed spans = %+v", pending.Spans, committed.Spans)
+	if committed.LeadingSymbol == nil || pending.LeadingSymbol == nil || len(pending.Spans) != len(committed.Spans) {
+		t.Fatalf("pending line = %+v, committed line = %+v", pending, committed)
 	}
-	pending.Spans[0].Text = committed.Spans[0].Text
-	if !slices.Equal(pending.Spans, committed.Spans) {
-		t.Fatalf("pending decoration changed non-text metadata: pending=%+v committed=%+v", pending.Spans, committed.Spans)
+	pendingSymbol := *pending.LeadingSymbol
+	committedSymbol := *committed.LeadingSymbol
+	pendingSymbol.Text = committedSymbol.Text
+	if pendingSymbol != committedSymbol || !slices.Equal(pending.Spans, committed.Spans) {
+		t.Fatalf("pending decoration changed non-text metadata: pending=%+v committed=%+v", pending, committed)
 	}
 }
 
@@ -364,10 +488,10 @@ func TestCollapsedToolRowsKeepInputPreviewAheadOfResultCondensedText(t *testing.
 			t.Fatalf("mode %v rendered no lines", mode)
 		}
 		spans := rendered.Lines[0].Spans
-		if len(spans) < 5 {
+		if len(spans) < 4 {
 			t.Fatalf("mode %v rendered no spans", mode)
 		}
-		command := Line{Spans: spans[2 : len(spans)-2]}.Plain()
+		command := Line{Spans: spans[1 : len(spans)-2]}.Plain()
 		if command != "go test ./..." {
 			t.Fatalf("mode %v command = %q, want typed input", mode, command)
 		}
@@ -415,10 +539,10 @@ func TestToolErrorRowsKeepAuthoritativeInputFirstAndErrorClassification(t *testi
 		}
 		assertFailedToolClassification(t, mode, rendered.Lines[0])
 		spans := rendered.Lines[0].Spans
-		if len(spans) < 5 {
+		if len(spans) < 4 {
 			t.Fatalf("mode %v rendered spans = %+v", mode, spans)
 		}
-		if command := (Line{Spans: spans[2 : len(spans)-2]}).Plain(); command != "cat /root/secret" {
+		if command := (Line{Spans: spans[1 : len(spans)-2]}).Plain(); command != "cat /root/secret" {
 			t.Fatalf("mode %v command = %q, want failed typed input", mode, command)
 		}
 		if meta := spans[len(spans)-1]; meta.Text != "exit 1" {
@@ -481,7 +605,7 @@ func TestUserAssistantMarkdownCodeUsesPrimaryFullStrengthRole(t *testing.T) {
 }
 
 func TestBackgroundExitStatusChangesOnlySymbolMetadata(t *testing.T) {
-	render := func(exitCode *int) []Span {
+	render := func(exitCode *int) Line {
 		row := clientui.TranscriptCommittedRow{
 			Kind: clientui.TranscriptRowNotice,
 			Notice: &clientui.TranscriptNoticeRow{
@@ -493,18 +617,21 @@ func TestBackgroundExitStatusChangesOnlySymbolMetadata(t *testing.T) {
 				},
 			},
 		}
-		return RenderCommittedRow(row, 80, "", ModeOngoingCollapsed).Lines[0].Spans
+		return RenderCommittedRow(row, 80, "", ModeOngoingCollapsed).Lines[0]
 	}
 
 	successCode, failureCode := 0, 7
 	success, failure, missing := render(&successCode), render(&failureCode), render(nil)
-	if success[0].Role == failure[0].Role {
-		t.Fatalf("typed success and failure statuses produced identical symbol metadata: success=%+v failure=%+v", success[0], failure[0])
+	if success.LeadingSymbol == nil || failure.LeadingSymbol == nil || missing.LeadingSymbol == nil {
+		t.Fatalf("background status lines lack typed symbols: success=%+v failure=%+v missing=%+v", success, failure, missing)
 	}
-	if success[0].Role != missing[0].Role {
-		t.Fatalf("missing legacy status diverged from non-error symbol metadata: success=%+v missing=%+v", success[0], missing[0])
+	if success.LeadingSymbol.Role == failure.LeadingSymbol.Role {
+		t.Fatalf("typed success and failure statuses produced identical symbol metadata: success=%+v failure=%+v", success.LeadingSymbol, failure.LeadingSymbol)
 	}
-	if !slices.Equal(success[1:], failure[1:]) || !slices.Equal(success[1:], missing[1:]) {
+	if success.LeadingSymbol.Role != missing.LeadingSymbol.Role {
+		t.Fatalf("missing legacy status diverged from non-error symbol metadata: success=%+v missing=%+v", success.LeadingSymbol, missing.LeadingSymbol)
+	}
+	if !slices.Equal(success.Spans, failure.Spans) || !slices.Equal(success.Spans, missing.Spans) {
 		t.Fatalf("exit status changed background body metadata: success=%+v failure=%+v missing=%+v", success, failure, missing)
 	}
 }
@@ -525,10 +652,10 @@ func TestPatchToolErrorKeepsAuthoritativeInputFirstAndErrorClassification(t *tes
 		}
 		assertFailedToolClassification(t, mode, rendered.Lines[0])
 		spans := rendered.Lines[0].Spans
-		if len(spans) < 8 {
+		if len(spans) < 7 {
 			t.Fatalf("mode %v patch error spans = %+v", mode, spans)
 		}
-		if got, want := (Line{Spans: spans[2:7]}).Plain(), "cli/tui/model.go -1 +2"; got != want {
+		if got, want := (Line{Spans: spans[1:6]}).Plain(), "cli/tui/model.go -1 +2"; got != want {
 			t.Fatalf("mode %v patch input = %q, want %q", mode, got, want)
 		}
 		if got := spans[len(spans)-1].Text; got != "failed" {
@@ -539,10 +666,10 @@ func TestPatchToolErrorKeepsAuthoritativeInputFirstAndErrorClassification(t *tes
 
 func assertFailedToolClassification(t *testing.T, mode Mode, line Line) {
 	t.Helper()
-	if len(line.Spans) == 0 {
-		t.Fatalf("mode %v failed tool line has no spans", mode)
+	if line.LeadingSymbol == nil {
+		t.Fatalf("mode %v failed tool line has no typed symbol", mode)
 	}
-	symbol := line.Spans[0]
+	symbol := *line.LeadingSymbol
 	if symbol.Role != StyleRoleToolError || symbol.Faint {
 		t.Fatalf("mode %v failed tool classification = %+v, want full-strength tool error role", mode, symbol)
 	}
