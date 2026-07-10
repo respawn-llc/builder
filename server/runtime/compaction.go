@@ -618,7 +618,10 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 	}
 
 	compactionNumber := e.compactionRuntimeState().Count() + 1
-	result.items = withCompactionSummaryLabel(result.items, fmt.Sprintf("context compacted for the %s time", ordinal(compactionNumber)))
+	result.items = withCompactionSummaryLabel(
+		result.items,
+		fmt.Sprintf("Context compacted for the %s time.", ordinal(compactionNumber)),
+	)
 	postReplacementMeta, err := e.compactionReinjectedMetaMessages(ctx)
 	if err != nil {
 		statusErr := newCompactionPersistence(e).emitStatus(stepID, EventCompactionFailed, mode, result.engine, providerID, result.trimmedItemsCount, 0, err.Error())

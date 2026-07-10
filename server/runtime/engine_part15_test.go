@@ -303,7 +303,7 @@ func TestCompactionLabelsSingleSummaryEntry(t *testing.T) {
 	for _, entry := range snap.Entries {
 		if entry.Role == string(transcript.EntryRoleCompactionSummary) {
 			summaries++
-			if entry.CompactLabel != "context compacted for the 1st time" || entry.CondensedText != "context compacted for the 1st time" {
+			if entry.CompactLabel != "Context compacted for the 1st time." || entry.CondensedText != "Context compacted for the 1st time." {
 				t.Fatalf("unexpected compaction summary label: %+v", entry)
 			}
 		}
