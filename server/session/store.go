@@ -278,10 +278,23 @@ func (s *Store) mutateLockedContractWithCommitStatus(mutator func(*LockedContrac
 	if mutator == nil {
 		return LockedContractMutationResult{}, nil
 	}
-	return s.mutateMetaAndLockedContractWithCommitStatus(nil, mutator, true)
+	return s.mutateMetaAndReplaceLockedContractWithCommitStatus(nil, func(locked *LockedContract) *LockedContract {
+		mutator(locked)
+		return locked
+	}, true)
 }
 
 func (s *Store) mutateMetaAndLockedContractWithCommitStatus(metaMutator func(*Meta), lockedMutator func(*LockedContract), requireLocked bool) (LockedContractMutationResult, error) {
+	if lockedMutator == nil {
+		return s.mutateMetaAndReplaceLockedContractWithCommitStatus(metaMutator, nil, requireLocked)
+	}
+	return s.mutateMetaAndReplaceLockedContractWithCommitStatus(metaMutator, func(locked *LockedContract) *LockedContract {
+		lockedMutator(locked)
+		return locked
+	}, requireLocked)
+}
+
+func (s *Store) mutateMetaAndReplaceLockedContractWithCommitStatus(metaMutator func(*Meta), lockedMutator func(*LockedContract) *LockedContract, requireLocked bool) (LockedContractMutationResult, error) {
 	s.mu.Lock()
 	if requireLocked && s.meta.Locked == nil {
 		s.mu.Unlock()
@@ -294,9 +307,7 @@ func (s *Store) mutateMetaAndLockedContractWithCommitStatus(metaMutator func(*Me
 		metaMutator(&s.meta)
 	}
 	if lockedMutator != nil && s.meta.Locked != nil {
-		next := *s.meta.Locked
-		lockedMutator(&next)
-		s.meta.Locked = &next
+		s.meta.Locked = lockedMutator(cloneLockedContract(s.meta.Locked))
 	}
 	s.meta.UpdatedAt = time.Now().UTC()
 	observation, persistErr := s.persistMetaLocked()
@@ -795,6 +806,15 @@ func (s *Store) MarkModelDispatchLocked(contract LockedContract) error {
 		s.meta.UpdatedAt = time.Now().UTC()
 		return nil
 	})
+}
+
+func (s *Store) ResetLockedContractForCompactionBoundary() error {
+	_, err := s.mutateMetaAndReplaceLockedContractWithCommitStatus(func(meta *Meta) {
+		meta.PromptCacheLineageGeneration++
+	}, func(*LockedContract) *LockedContract {
+		return nil
+	}, false)
+	return err
 }
 
 func (s *Store) BackfillLockedContextBudget(contextWindow, contextPercent int) error {

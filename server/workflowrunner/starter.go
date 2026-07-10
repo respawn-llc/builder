@@ -487,6 +487,19 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 			return launch.SessionPlan{}, nil, err
 		}
 	}
+	if compactAndContinueRequiresFreshContract(input, plan) {
+		if err := plan.Store.ResetLockedContractForCompactionBoundary(); err != nil {
+			return launch.SessionPlan{}, nil, err
+		}
+		plan, err = planner.PlanSession(ctx, launch.SessionRequest{
+			Mode:                                launch.ModeHeadless,
+			SelectedSessionID:                   plan.Store.Meta().SessionID,
+			SkipContinuationAgentRoleValidation: skipPersistedRoleValidation,
+		})
+		if err != nil {
+			return launch.SessionPlan{}, nil, err
+		}
+	}
 	warnings := []string{}
 	allowLockedRoleChange := allowLockedWorkflowContinuationRoleChange(plan, overrides)
 	plan, warnings, err = launch.ApplyRunPromptOverridesWithOptions(plan, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
@@ -497,6 +510,14 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 	}
 	planSucceeded = true
 	return plan, warnings, nil
+}
+
+func compactAndContinueRequiresFreshContract(input workflowstore.RunStartContext, plan launch.SessionPlan) bool {
+	if input.ContextMode != workflow.ContextModeCompactAndContinueSession || plan.Store == nil {
+		return false
+	}
+	activeWorkflowSession := plan.Store.Meta().WorkflowSession
+	return activeWorkflowSession == nil || strings.TrimSpace(activeWorkflowSession.RunID) != strings.TrimSpace(string(input.Run.ID))
 }
 
 func allowLockedWorkflowContinuationRoleChange(plan launch.SessionPlan, overrides serverapi.RunPromptOverrides) bool {

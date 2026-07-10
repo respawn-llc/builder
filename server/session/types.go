@@ -156,6 +156,7 @@ type Meta struct {
 	LastSequence                    int64                      `json:"last_sequence"`
 	ConversationEstablished         bool                       `json:"conversation_established,omitempty"`
 	ModelRequestCount               int64                      `json:"model_request_count"`
+	PromptCacheLineageGeneration    int                        `json:"prompt_cache_lineage_generation,omitempty"`
 	HeadlessActive                  bool                       `json:"headless_active,omitempty"`
 	CompactionSoonReminderIssued    bool                       `json:"compaction_soon_reminder_issued,omitempty"`
 	GeneratedRecoveredWarningIssued bool                       `json:"generated_recovered_warning_issued,omitempty"`

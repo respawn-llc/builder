@@ -1884,6 +1884,7 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	metadataJSON, err := marshalJSON(map[string]any{
 		"workspace_root":                     snapshot.Meta.WorkspaceRoot,
 		"workspace_container":                snapshot.Meta.WorkspaceContainer,
+		"prompt_cache_lineage_generation":    snapshot.Meta.PromptCacheLineageGeneration,
 		"headless_active":                    snapshot.Meta.HeadlessActive,
 		"compaction_soon_reminder_issued":    snapshot.Meta.CompactionSoonReminderIssued,
 		"generated_recovered_warning_issued": snapshot.Meta.GeneratedRecoveredWarningIssued,
@@ -1992,6 +1993,7 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 	metadataPayload := struct {
 		WorkspaceRoot                   string                         `json:"workspace_root"`
 		WorkspaceContainer              string                         `json:"workspace_container"`
+		PromptCacheLineageGeneration    int                            `json:"prompt_cache_lineage_generation"`
 		HeadlessActive                  bool                           `json:"headless_active"`
 		CompactionSoonReminderIssued    bool                           `json:"compaction_soon_reminder_issued"`
 		GeneratedRecoveredWarningIssued bool                           `json:"generated_recovered_warning_issued"`
@@ -2045,6 +2047,7 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		UpdatedAt:                       timeFromStoredTimestamp(row.UpdatedAtUnixMs),
 		LastSequence:                    row.LastSequence,
 		ModelRequestCount:               row.ModelRequestCount,
+		PromptCacheLineageGeneration:    metadataPayload.PromptCacheLineageGeneration,
 		HeadlessActive:                  metadataPayload.HeadlessActive,
 		CompactionSoonReminderIssued:    metadataPayload.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: metadataPayload.GeneratedRecoveredWarningIssued,

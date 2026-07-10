@@ -703,6 +703,25 @@ func conversationPromptCacheKey(sessionID string, compactionCount int) string {
 	return fmt.Sprintf("%s/compact-%d", trimmed, compactionCount)
 }
 
+func conversationPromptCacheKeyForLineage(sessionID string, lineageGeneration, compactionCount int) string {
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return ""
+	}
+	if lineageGeneration > 0 {
+		trimmed = fmt.Sprintf("%s/contract-%d", trimmed, lineageGeneration)
+	}
+	return conversationPromptCacheKey(trimmed, compactionCount)
+}
+
+func (e *Engine) conversationPromptCacheKey(sessionID string) string {
+	if e == nil || e.store == nil {
+		return ""
+	}
+	meta := e.store.Meta()
+	return conversationPromptCacheKeyForLineage(sessionID, meta.PromptCacheLineageGeneration, e.compactionRuntimeState().Count())
+}
+
 func (e *Engine) ParentSessionID() string {
 	return strings.TrimSpace(e.store.Meta().ParentSessionID)
 }
