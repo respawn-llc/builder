@@ -202,6 +202,9 @@ func runActions(session *driver.Session, environment *IsolatedEnvironment, actio
 		}
 		for {
 			observation.Model = environment.Stub.Snapshot()
+			if err := environment.Server.Error(); err != nil {
+				return observation, fmt.Errorf("standalone server failure: %w", err)
+			}
 			if !commandPending && actionSatisfied(action, observation) {
 				deadline.Stop()
 				break
@@ -371,14 +374,14 @@ func (cleanupSupervisor) stopOwners(session *driver.Session, environment *Isolat
 			incomplete = appendCleanupFailure(incomplete, "client_terminate", err)
 		}
 	}
-	if environment != nil && environment.Stub != nil {
-		if err := environment.Stub.Stop(); err != nil {
-			incomplete = appendCleanupFailure(incomplete, "model_stub_stop", err)
-		}
-	}
 	if environment != nil && environment.Server != nil {
 		if err := environment.Server.Terminate(); err != nil {
 			incomplete = appendCleanupFailure(incomplete, "server_terminate", err)
+		}
+	}
+	if environment != nil && environment.Stub != nil {
+		if err := environment.Stub.Stop(); err != nil {
+			incomplete = appendCleanupFailure(incomplete, "model_stub_stop", err)
 		}
 	}
 	graceDeadline := time.Now().Add(time.Until(deadline) / 2)
