@@ -67,3 +67,25 @@ func TestIdenticalRedrawAfterEraseRemainsSemanticOperation(t *testing.T) {
 		t.Fatalf("identical redraw writes = %d, want 2; operations=%#v", writes, analysis.Operations)
 	}
 }
+
+func TestIdenticalRedrawAfterTerminalResetRemainsSemanticOperation(t *testing.T) {
+	capture, err := NewCapture(MustDimensions(2, 8), []Chunk{
+		NewChunk(0, 0, []byte("x\x1bcx")),
+	})
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	analysis, err := Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	writes := 0
+	for _, operation := range analysis.Operations {
+		if operation.Kind == OperationWrite && operation.Write != nil && operation.Write.Text() == "x" {
+			writes++
+		}
+	}
+	if writes != 2 {
+		t.Fatalf("post-reset redraw writes = %d, want 2; operations=%#v", writes, analysis.Operations)
+	}
+}

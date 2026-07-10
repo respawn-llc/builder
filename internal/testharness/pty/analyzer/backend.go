@@ -174,9 +174,14 @@ func (b *tracingBackend) SetPosition(coord vt.Coord) {
 }
 
 func (b *tracingBackend) Reset() {
+	if err := b.flushPendingWrite(); err != nil {
+		b.err = err
+		return
+	}
 	snapshot := NewScreenSnapshot(b.dimensions)
 	b.cells = snapshot.Cells
 	b.cursor = Position{}
+	clear(b.writeCache)
 }
 
 func (b *tracingBackend) RaiseResize() {}
