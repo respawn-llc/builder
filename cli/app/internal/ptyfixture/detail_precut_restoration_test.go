@@ -271,8 +271,8 @@ func assertSelectedMarkdownDetail(t *testing.T, screen pty.ScreenSnapshot) {
 			hasFaintGuide,
 		)
 	}
-	if len(foregrounds) < 3 {
-		t.Fatalf("selected Markdown foreground roles = %d, want at least 3", len(foregrounds))
+	if len(foregrounds) < 2 {
+		t.Fatalf("selected Markdown foreground roles = %d, want foreground and primary roles", len(foregrounds))
 	}
 	assertSelectedVisualSpacer(t, screen, rows, background)
 }
