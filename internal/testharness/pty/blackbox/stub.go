@@ -330,17 +330,23 @@ func (s *ResponsesStub) writeOperationResponse(ctx context.Context, writer http.
 	case RouteResponses:
 		s.writeResponse(ctx, writer, operation)
 	case RouteInputTokens:
-		writeJSON(writer, http.StatusOK, map[string]int{"input_tokens": 0})
+		if err := writeJSON(writer, http.StatusOK, map[string]int{"input_tokens": 0}); err != nil {
+			s.recordFailure(fmt.Errorf("write input-token response: %w", err))
+		}
 	case RouteModel:
-		writeJSON(writer, http.StatusOK, map[string]any{
+		if err := writeJSON(writer, http.StatusOK, map[string]any{
 			"id":             "gpt-5",
 			"object":         "model",
 			"created":        0,
 			"owned_by":       "kent",
 			"context_window": 200000,
-		})
+		}); err != nil {
+			s.recordFailure(fmt.Errorf("write model metadata response: %w", err))
+		}
 	case RouteCompact:
-		writeJSON(writer, http.StatusOK, map[string]any{"output": []any{}})
+		if err := writeJSON(writer, http.StatusOK, map[string]any{"output": []any{}}); err != nil {
+			s.recordFailure(fmt.Errorf("write compact response: %w", err))
+		}
 	default:
 		http.Error(writer, "unsupported model route", http.StatusNotFound)
 	}
@@ -359,10 +365,16 @@ func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseW
 	case OutcomeProviderFailure:
 	case OutcomeStream:
 		writer.Header().Set("Content-Type", "text/event-stream")
-		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n")
-		_, _ = fmt.Fprintf(writer, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":%q}\n\n", optionalText(operation.Output))
-		_, _ = fmt.Fprintf(writer, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":%q}]}]}}\n\n", optionalText(operation.Output))
-		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+		if !s.writeSSE(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n") {
+			return
+		}
+		if operation.Output != nil && !s.writeSSE(writer, fmt.Sprintf("data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":%q}\n\n", *operation.Output)) {
+			return
+		}
+		if !s.writeSSE(writer, fmt.Sprintf("data: {\"type\":\"response.completed\",\"response\":{\"output\":%s}}\n\n", responseOutputJSON(operation.Output))) {
+			return
+		}
+		s.writeSSE(writer, "data: [DONE]\n\n")
 		return
 	case OutcomeJSON:
 	default:
@@ -374,19 +386,35 @@ func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseW
 		return
 	default:
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"output": []any{map[string]any{
-			"type": "message", "role": "assistant", "phase": "final_answer",
-			"content": []any{map[string]any{"type": "output_text", "text": optionalText(operation.Output)}},
-		}},
-	})
+	if err := writeJSON(writer, http.StatusOK, map[string]any{"output": responseOutput(operation.Output)}); err != nil {
+		s.recordFailure(fmt.Errorf("write JSON response: %w", err))
+	}
 }
 
-func optionalText(value *string) string {
+func responseOutput(value *string) []any {
 	if value == nil {
-		return ""
+		return []any{}
 	}
-	return *value
+	return []any{map[string]any{
+		"type": "message", "role": "assistant", "phase": "final_answer",
+		"content": []any{map[string]any{"type": "output_text", "text": *value}},
+	}}
+}
+
+func responseOutputJSON(value *string) string {
+	encoded, err := json.Marshal(responseOutput(value))
+	if err != nil {
+		panic(fmt.Sprintf("marshal fixed response output: %v", err))
+	}
+	return string(encoded)
+}
+
+func (s *ResponsesStub) writeSSE(writer http.ResponseWriter, payload string) bool {
+	if _, err := io.WriteString(writer, payload); err != nil {
+		s.recordFailure(fmt.Errorf("write SSE response: %w", err))
+		return false
+	}
+	return true
 }
 
 func (s *ResponsesStub) recordFailure(err error) {
@@ -467,29 +495,26 @@ func validateRouteBody(route Route, body []byte) error {
 		return fmt.Errorf("decode %s request DTO: %w", route, err)
 	}
 	if request.Input == nil {
-		return fmt.Errorf("decode %s request DTO: object is required", route)
-	}
-	if len(request.Input) == 0 || string(request.Input) == "null" {
 		return fmt.Errorf("decode %s request DTO: input is required", route)
 	}
 	return nil
 }
 
 type modelRequest struct {
-	Input json.RawMessage `json:"input"`
+	Input *json.RawMessage `json:"input"`
 }
 
 type responseRequest struct {
 	Input          []responseInputItem `json:"input"`
-	PromptCacheKey string              `json:"prompt_cache_key"`
+	PromptCacheKey *uuid.UUID          `json:"prompt_cache_key"`
 }
 
 func hasMatchingSessionCacheKey(body []byte, headers http.Header) bool {
 	var request responseRequest
-	if json.Unmarshal(body, &request) != nil || request.PromptCacheKey == "" {
+	if json.Unmarshal(body, &request) != nil || request.PromptCacheKey == nil {
 		return false
 	}
-	return headers.Get("session_id") == request.PromptCacheKey
+	return headers.Get("session_id") == request.PromptCacheKey.String()
 }
 
 type responseInputItem struct {
@@ -524,8 +549,8 @@ func requestContainsProbe(body []byte, probe string) bool {
 	return false
 }
 
-func writeJSON(writer http.ResponseWriter, status int, value any) {
+func writeJSON(writer http.ResponseWriter, status int, value any) error {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
-	_ = json.NewEncoder(writer).Encode(value)
+	return json.NewEncoder(writer).Encode(value)
 }

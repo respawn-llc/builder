@@ -149,7 +149,22 @@ func artifactAttachments(environment *IsolatedEnvironment) ([]pty.ArtifactAttach
 		}
 	}
 	if environment.Stub != nil {
-		model, err := json.Marshal(environment.Stub.Snapshot())
+		snapshot := environment.Stub.Snapshot()
+		var failure *string
+		if snapshot.Failure != nil {
+			message := snapshot.Failure.Error()
+			failure = &message
+		}
+		model, err := json.Marshal(struct {
+			RequiredIndex  int            `json:"required_index"`
+			RequiredTotal  int            `json:"required_total"`
+			ActiveRequests int            `json:"active_requests"`
+			Failure        *string        `json:"failure,omitempty"`
+			Observed       []ObservedCall `json:"observed"`
+		}{
+			RequiredIndex: snapshot.RequiredIndex, RequiredTotal: snapshot.RequiredTotal,
+			ActiveRequests: snapshot.ActiveRequests, Failure: failure, Observed: snapshot.Observed,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("marshal model diagnostics: %w", err)
 		}
