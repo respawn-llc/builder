@@ -1,45 +1,71 @@
 package analyzer
 
 func (b *tracingBackend) recordPut(position Position, text string) {
-	span, err := b.writeText.append(text)
-	if err != nil {
+	if b.err != nil {
+		return
+	}
+	if b.pendingWrite != nil && canExtendWrite(*b.pendingWrite, position, text, b) {
+		b.pendingWrite.text = append(b.pendingWrite.text, text...)
+		b.pendingWrite.after = position
+		b.pendingWrite.region.Right = position.Col + 1
+		b.pendingWrite.byteRange.End = b.byteEnd
+		return
+	}
+	if err := b.flushPendingWrite(); err != nil {
 		b.err = err
 		return
 	}
-	payload := WritePayload{Span: span, arena: b.writeText}
-	current := Operation{
-		Kind:       OperationWrite,
-		ChunkIndex: b.chunk.Index,
-		ByteRange: ByteRange{
-			Start: b.byteOffset,
-			End:   b.byteEnd,
-		},
-		Before:     b.cursor,
-		After:      position,
-		Region:     Region{Top: position.Row, Bottom: position.Row + 1, Left: position.Col, Right: position.Col + 1},
-		Write:      &payload,
-		CapturedAt: b.chunk.At,
+	b.pendingWrite = &pendingWrite{
+		chunk:     b.chunk,
+		byteRange: ByteRange{Start: b.byteOffset, End: b.byteEnd},
+		before:    b.cursor,
+		after:     position,
+		region:    Region{Top: position.Row, Bottom: position.Row + 1, Left: position.Col, Right: position.Col + 1},
+		text:      append([]byte(nil), text...),
 	}
-	if len(b.ops) > 0 && canMergeWrite(b.ops[len(b.ops)-1], current) {
-		previous := &b.ops[len(b.ops)-1]
-		previous.Region.Right = current.Region.Right
-		previous.Write.Span.End = current.Write.Span.End
-		previous.After = current.After
-		previous.ByteRange.End = current.ByteRange.End
-		return
-	}
-	b.appendOperation(current)
 }
 
-func canMergeWrite(previous Operation, current Operation) bool {
-	return previous.Kind == OperationWrite &&
-		previous.Write != nil &&
-		current.Write != nil &&
-		previous.Write.arena == current.Write.arena &&
-		previous.Write.Span.End == current.Write.Span.Start &&
-		previous.ChunkIndex == current.ChunkIndex &&
-		previous.Region.Top == current.Region.Top &&
-		previous.Region.Bottom == current.Region.Bottom &&
-		previous.Region.Right == current.Region.Left &&
-		previous.ByteRange.End == current.ByteRange.Start
+func canExtendWrite(pending pendingWrite, position Position, text string, backend *tracingBackend) bool {
+	return backend.chunk.Index == pending.chunk.Index &&
+		backend.chunk.At == pending.chunk.At &&
+		pending.region.Top == position.Row &&
+		pending.region.Right == position.Col &&
+		pending.byteRange.End == backend.byteOffset &&
+		text != ""
+}
+
+// flushPendingWrite emits one semantic row segment. Repeated redraws of an
+// unchanged segment do not add duplicate diagnostic operations or arena text:
+// the final screen is authoritative and one representative operation remains.
+func (b *tracingBackend) flushPendingWrite() error {
+	if b.pendingWrite == nil {
+		return nil
+	}
+	pending := b.pendingWrite
+	b.pendingWrite = nil
+	text := string(pending.text)
+	if previous, exists := b.writeCache[pending.region]; exists && previous == text {
+		return nil
+	}
+	span, err := b.writeText.append(text)
+	if err != nil {
+		return err
+	}
+	payload := WritePayload{Span: span, arena: b.writeText}
+	if !b.appendFinalOperation(Operation{
+		Kind:       OperationWrite,
+		ChunkIndex: pending.chunk.Index,
+		ByteRange:  pending.byteRange,
+		Before:     pending.before,
+		After:      pending.after,
+		Region:     pending.region,
+		Write:      &payload,
+		CapturedAt: pending.chunk.At,
+	}) {
+		return b.err
+	}
+	if len(b.writeCache) < maxAnalyzerOperations {
+		b.writeCache[pending.region] = text
+	}
+	return nil
 }

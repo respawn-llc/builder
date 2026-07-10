@@ -150,7 +150,7 @@ func (s *Session) Terminate() error {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
 		return nil
 	}
-	return s.cmd.Process.Signal(syscall.SIGTERM)
+	return signalProcessGroup(s.cmd.Process.Pid, syscall.SIGTERM)
 }
 
 // ForceKill sends SIGKILL to the child process group after the cleanup grace.
@@ -158,7 +158,7 @@ func (s *Session) ForceKill() error {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
 		return nil
 	}
-	return s.cmd.Process.Kill()
+	return signalProcessGroup(s.cmd.Process.Pid, syscall.SIGKILL)
 }
 
 func (s *Session) run(dimensions analyzer.Dimensions) {
@@ -180,19 +180,20 @@ func (s *Session) run(dimensions analyzer.Dimensions) {
 	go func() { wait <- s.cmd.Wait() }()
 
 	buffer := make([]byte, 16*1024)
+	responder := terminalResponder{}
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	var waitErr error
 	exited := false
 	for !exited {
-		if err := s.drainReadable(buffer, assembler, stream); err != nil {
+		if err := s.drainReadable(buffer, assembler, stream, &responder); err != nil {
 			s.fail(err)
 			return
 		}
 		select {
 		case command := <-s.commands:
 			s.emit(SessionEvent{Kind: SessionEventCommandStarted, CommandID: command.ID})
-			if err := s.execute(command, assembler, stream, buffer); err != nil {
+			if err := s.execute(command, assembler, stream, buffer, &responder); err != nil {
 				s.emit(SessionEvent{Kind: SessionEventCommandFailed, CommandID: command.ID, Err: err})
 			} else {
 				s.emit(SessionEvent{Kind: SessionEventCommandCompleted, CommandID: command.ID})
@@ -202,7 +203,7 @@ func (s *Session) run(dimensions analyzer.Dimensions) {
 		case <-ticker.C:
 		}
 	}
-	if err := s.drainReadable(buffer, assembler, stream); err != nil {
+	if err := s.drainReadable(buffer, assembler, stream, &responder); err != nil {
 		s.fail(err)
 		return
 	}
@@ -226,7 +227,7 @@ func (s *Session) run(dimensions analyzer.Dimensions) {
 	_ = waitErr // Exit status is an immutable process observation, not a driver failure.
 }
 
-func (s *Session) execute(command SessionCommand, assembler *analyzer.CaptureAssembler, stream *analyzer.Stream, buffer []byte) error {
+func (s *Session) execute(command SessionCommand, assembler *analyzer.CaptureAssembler, stream *analyzer.Stream, buffer []byte, responder *terminalResponder) error {
 	switch command.Kind {
 	case SessionCommandWrite, SessionCommandRuntimeControlByte:
 		if _, err := s.ptmx.Write(command.Bytes); err != nil {
@@ -234,7 +235,7 @@ func (s *Session) execute(command SessionCommand, assembler *analyzer.CaptureAss
 		}
 		return nil
 	case SessionCommandResize:
-		if err := s.drainReadable(buffer, assembler, stream); err != nil {
+		if err := s.drainReadable(buffer, assembler, stream, responder); err != nil {
 			return err
 		}
 		if err := creackpty.Setsize(s.ptmx, &creackpty.Winsize{Rows: uint16(command.Dimensions.Rows), Cols: uint16(command.Dimensions.Cols)}); err != nil {
@@ -251,13 +252,23 @@ func (s *Session) execute(command SessionCommand, assembler *analyzer.CaptureAss
 		if s.cmd.Process == nil {
 			return errors.New("PTY child process is unavailable")
 		}
-		return s.cmd.Process.Signal(syscall.SIGTERM)
+		return signalProcessGroup(s.cmd.Process.Pid, syscall.SIGTERM)
 	default:
 		return fmt.Errorf("unsupported session command kind %d", command.Kind)
 	}
 }
 
-func (s *Session) drainReadable(buffer []byte, assembler *analyzer.CaptureAssembler, stream *analyzer.Stream) error {
+func signalProcessGroup(pid int, signal syscall.Signal) error {
+	if pid <= 0 {
+		return errors.New("PTY child process id is unavailable")
+	}
+	if err := syscall.Kill(-pid, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
+}
+
+func (s *Session) drainReadable(buffer []byte, assembler *analyzer.CaptureAssembler, stream *analyzer.Stream, responder *terminalResponder) error {
 	for {
 		count, err := s.ptmx.Read(buffer)
 		if count > 0 {
@@ -267,6 +278,11 @@ func (s *Session) drainReadable(buffer []byte, assembler *analyzer.CaptureAssemb
 			}
 			if feedErr := stream.Feed(payload); feedErr != nil {
 				return feedErr
+			}
+			for _, reply := range responder.Feed(payload) {
+				if _, writeErr := s.ptmx.Write(reply); writeErr != nil {
+					return fmt.Errorf("respond to terminal query: %w", writeErr)
+				}
 			}
 			analysis, snapshotErr := stream.Snapshot()
 			if snapshotErr != nil {

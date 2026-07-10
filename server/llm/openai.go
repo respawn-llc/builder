@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"core/shared/optional"
+	"core/shared/textutil"
 )
 
 type OpenAIRequest struct {
@@ -235,7 +235,7 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	return CompactionResponse{
 		OutputItems:       CloneResponseItems(providerResp.OutputItems),
 		Usage:             providerResp.Usage,
-		TrimmedItemsCount: optional.CloneInt(providerResp.TrimmedItemsCount),
+		TrimmedItemsCount: textutil.CloneInt(providerResp.TrimmedItemsCount),
 	}, nil
 }
 

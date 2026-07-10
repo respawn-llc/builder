@@ -47,7 +47,7 @@ func (command SessionCommand) Validate() error {
 			return errors.New("write command must not include dimensions")
 		}
 	case SessionCommandResize:
-		if len(command.Bytes) != 0 {
+		if command.Bytes != nil {
 			return errors.New("resize command must not include bytes")
 		}
 		if command.Dimensions == nil {
@@ -57,7 +57,7 @@ func (command SessionCommand) Validate() error {
 			return err
 		}
 	case SessionCommandTerminateProcess:
-		if len(command.Bytes) != 0 || command.Dimensions != nil {
+		if command.Bytes != nil || command.Dimensions != nil {
 			return errors.New("terminate command must not include bytes or dimensions")
 		}
 	default:

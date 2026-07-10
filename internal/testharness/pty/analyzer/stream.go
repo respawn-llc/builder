@@ -113,6 +113,9 @@ func (s *Stream) Finish() (Analysis, error) {
 	}
 	privateModeChanges := s.sideChannel.privateModeChangeLog()
 	screen := s.backend.snapshot()
+	if err := s.backend.error(); err != nil {
+		return Analysis{}, err
+	}
 	return Analysis{
 		Dimensions:         screen.Dimensions,
 		Operations:         mergePrivateModeOperations(s.backend.operations(), privateModeChanges),
@@ -137,6 +140,12 @@ func (s *Stream) Snapshot() (Analysis, error) {
 	}
 	privateModeChanges := s.sideChannel.privateModeChangeLog()
 	screen := s.backend.snapshot()
+	if err := s.backend.flushPendingWrite(); err != nil {
+		return Analysis{}, err
+	}
+	if err := s.backend.error(); err != nil {
+		return Analysis{}, err
+	}
 	return Analysis{
 		Dimensions:         screen.Dimensions,
 		Operations:         mergePrivateModeOperations(s.backend.operations(), privateModeChanges),

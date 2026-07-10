@@ -213,7 +213,9 @@ func TestSessionCommandRequiresUUIDv4AndClosedPayloadShape(t *testing.T) {
 		{ID: uuid.New(), Kind: driver.SessionCommandWrite, Bytes: []byte("x"), Dimensions: &dimensions},
 		{ID: uuid.New(), Kind: driver.SessionCommandRuntimeControlByte, Bytes: []byte("x"), Dimensions: &dimensions},
 		{ID: uuid.New(), Kind: driver.SessionCommandResize, Bytes: []byte("x"), Dimensions: &dimensions},
+		{ID: uuid.New(), Kind: driver.SessionCommandResize, Bytes: []byte{}, Dimensions: &dimensions},
 		{ID: uuid.New(), Kind: driver.SessionCommandTerminateProcess, Bytes: []byte("x")},
+		{ID: uuid.New(), Kind: driver.SessionCommandTerminateProcess, Bytes: []byte{}},
 		{ID: uuid.New(), Kind: driver.SessionCommandTerminateProcess, Dimensions: &dimensions},
 	} {
 		if err := command.Validate(); err == nil {

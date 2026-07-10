@@ -24,6 +24,10 @@ import (
 
 const fixedWait = 500 * time.Millisecond
 
+var directHTTPClient = &http.Client{
+	Transport: &http.Transport{Proxy: nil},
+}
+
 //go:embed testdata/config.toml
 var harnessConfigTemplate []byte
 
@@ -107,7 +111,7 @@ func (e *IsolatedEnvironment) WaitReady() error {
 	deadline := time.Now().Add(fixedWait)
 	url := "http://" + net.JoinHostPort(e.Host, strconv.Itoa(e.Port)) + "/readyz"
 	for time.Now().Before(deadline) {
-		response, err := http.Get(url)
+		response, err := directHTTPClient.Get(url)
 		if err == nil {
 			var body struct {
 				Ready bool `json:"ready"`
@@ -189,11 +193,13 @@ func (s *ServerHandle) Terminate() {
 		return
 	}
 	_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM)
-	select {
-	case <-s.done:
-	case <-time.After(250 * time.Millisecond):
-		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
+}
+
+func (s *ServerHandle) ForceKill() {
+	if s == nil || s.cmd == nil || s.cmd.Process == nil {
+		return
 	}
+	_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
 }
 
 func startServer(binary string, root string, host string, port int, stubURL string) (*ServerHandle, error) {

@@ -16,8 +16,19 @@ type tracingBackend struct {
 	byteEnd         int64
 	ops             []Operation
 	writeText       *writeTextArena
+	pendingWrite    *pendingWrite
+	writeCache      map[Region]string
 	operationBudget *operationBudget
 	err             error
+}
+
+type pendingWrite struct {
+	chunk     Chunk
+	byteRange ByteRange
+	before    Position
+	after     Position
+	region    Region
+	text      []byte
 }
 
 func newTracingBackend(dimensions Dimensions) *tracingBackend {
@@ -27,6 +38,7 @@ func newTracingBackend(dimensions Dimensions) *tracingBackend {
 		cells:           snapshot.Cells,
 		modes:           map[vt.PrivateMode]vt.ModeStatus{},
 		writeText:       newDefaultWriteTextArena(),
+		writeCache:      make(map[Region]string),
 		operationBudget: newOperationBudget(),
 	}
 }
@@ -55,6 +67,17 @@ func (b *tracingBackend) appendOperation(operation Operation) bool {
 	if b.err != nil {
 		return false
 	}
+	if err := b.flushPendingWrite(); err != nil {
+		b.err = err
+		return false
+	}
+	return b.appendFinalOperation(operation)
+}
+
+func (b *tracingBackend) appendFinalOperation(operation Operation) bool {
+	if b.err != nil {
+		return false
+	}
 	if err := b.operationBudget.reserve(); err != nil {
 		b.err = err
 		return false
@@ -65,6 +88,9 @@ func (b *tracingBackend) appendOperation(operation Operation) bool {
 }
 
 func (b *tracingBackend) operations() []Operation {
+	if err := b.flushPendingWrite(); err != nil {
+		b.err = err
+	}
 	return append([]Operation(nil), b.ops...)
 }
 

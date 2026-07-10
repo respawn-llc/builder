@@ -8,7 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/shared/optional"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -50,7 +50,7 @@ func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.R
 		engine:            "remote",
 		items:             replacement,
 		usage:             resp.Usage,
-		trimmedItemsCount: optional.CloneInt(resp.TrimmedItemsCount),
+		trimmedItemsCount: textutil.CloneInt(resp.TrimmedItemsCount),
 		overflowRepair:    repairStats,
 		provider:          providerID,
 	}, nil

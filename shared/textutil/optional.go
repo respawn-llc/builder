@@ -1,5 +1,4 @@
-// Package optional contains immutable helpers for typed optional values.
-package optional
+package textutil
 
 // CloneInt returns an independent copy of value and preserves nil as absence.
 func CloneInt(value *int) *int {

@@ -26,6 +26,7 @@ type RunRequest struct {
 type RunResult struct {
 	Observation RunObservation
 	Capture     analyzer.Capture
+	RunRoot     string
 	Err         error
 	Cleanup     *IncompleteCleanup
 }
@@ -57,11 +58,19 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 	if err != nil {
 		return RunResult{Err: err}
 	}
+	result.RunRoot = environment.Root
 	var session *driver.Session
 	defer func() {
-		result.Cleanup = cleanup(session, environment)
+		result.Cleanup = cleanup(session, environment, result.Err == nil)
 		if result.Err == nil && result.Cleanup != nil {
 			result.Err = result.Cleanup
+		}
+		if session != nil {
+			capture, captureErr := session.Capture()
+			result.Capture = capture
+			if result.Err == nil && captureErr != nil {
+				result.Err = captureErr
+			}
 		}
 	}()
 	session, err = driver.StartSession(driver.SessionSpec{
@@ -84,12 +93,6 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 	if err := environment.Stub.Verify(); err != nil {
 		result.Err = err
 		return result
-	}
-	<-session.Done()
-	capture, captureErr := session.Capture()
-	result.Capture = capture
-	if captureErr != nil {
-		result.Err = captureErr
 	}
 	return result
 }
@@ -201,9 +204,8 @@ func cloneAnalysis(analysis analyzer.Analysis) analyzer.Analysis {
 	return analysis
 }
 
-func cleanup(session *driver.Session, environment *IsolatedEnvironment) *IncompleteCleanup {
+func cleanup(session *driver.Session, environment *IsolatedEnvironment, success bool) *IncompleteCleanup {
 	deadline := time.Now().Add(fixedWait)
-	owners := make([]string, 0)
 	if session != nil {
 		_ = session.Close()
 		_ = session.Terminate()
@@ -214,55 +216,61 @@ func cleanup(session *driver.Session, environment *IsolatedEnvironment) *Incompl
 	if environment != nil && environment.Server != nil {
 		environment.Server.Terminate()
 	}
-	grace := time.NewTimer(250 * time.Millisecond)
+	graceDeadline := time.Now().Add(fixedWait / 2)
+	waitForOwners(graceDeadline, session, environment)
 	if session != nil {
 		select {
 		case <-session.Done():
-		case <-grace.C:
+		default:
 			_ = session.ForceKill()
 		}
 	}
-	if !grace.Stop() {
+	if environment != nil && environment.Server != nil {
 		select {
-		case <-grace.C:
+		case <-environment.Server.Done():
 		default:
+			environment.Server.ForceKill()
 		}
 	}
-	waitDone := make(chan struct{})
-	go func() {
-		if session != nil {
-			select {
-			case <-session.Done():
-			default:
-				owners = append(owners, "client")
-			}
-		}
-		if environment != nil && environment.Server != nil {
-			select {
-			case <-environment.Server.Done():
-			default:
-				owners = append(owners, "server")
-			}
-		}
-		if environment != nil && environment.Stub != nil {
-			select {
-			case <-environment.Stub.Done():
-			default:
-				owners = append(owners, "model_stub")
-			}
-		}
-		close(waitDone)
-	}()
-	select {
-	case <-waitDone:
-	case <-time.After(time.Until(deadline)):
-		owners = append(owners, "cleanup_observer")
-	}
-	if environment != nil && environment.Root != "" && len(owners) == 0 {
+	waitForOwners(deadline, session, environment)
+	owners := liveOwners(session, environment)
+	if success && environment != nil && environment.Root != "" && len(owners) == 0 {
 		_ = os.RemoveAll(environment.Root)
 	}
 	if len(owners) == 0 {
 		return nil
 	}
 	return &IncompleteCleanup{Owners: owners}
+}
+
+func waitForOwners(deadline time.Time, session *driver.Session, environment *IsolatedEnvironment) {
+	for len(liveOwners(session, environment)) > 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func liveOwners(session *driver.Session, environment *IsolatedEnvironment) []string {
+	owners := make([]string, 0, 3)
+	if session != nil {
+		select {
+		case <-session.Done():
+		default:
+			owners = append(owners, "client")
+		}
+	}
+	if environment != nil && environment.Server != nil {
+		select {
+		case <-environment.Server.Done():
+		default:
+			owners = append(owners, "server")
+		}
+	}
+	if environment != nil && environment.Stub != nil {
+		select {
+		case <-environment.Stub.Done():
+		default:
+			owners = append(owners, "model_stub")
+		}
+	}
+	return owners
 }

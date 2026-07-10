@@ -13,17 +13,18 @@ func TestRecordPutMergesContiguousSpansWithoutCopyingPriorText(t *testing.T) {
 	backend.beginByte(Chunk{}, 1)
 	backend.recordPut(Position{Row: 0, Col: 1}, "b")
 
-	if len(backend.ops) != 1 {
-		t.Fatalf("operation count = %d, want 1", len(backend.ops))
+	operations := backend.operations()
+	if len(operations) != 1 {
+		t.Fatalf("operation count = %d, want 1", len(operations))
 	}
-	if got := backend.ops[0].Write.Text(); got != "ab" {
+	if got := operations[0].Write.Text(); got != "ab" {
 		t.Fatalf("merged write = %q, want ab", got)
 	}
 	if got := len(backend.writeText.bytes); got != 2 {
 		t.Fatalf("arena bytes = %d, want 2", got)
 	}
-	if backend.ops[0].Write.Span != (TextSpan{Start: 0, End: 2}) {
-		t.Fatalf("write span = %+v, want [0,2)", backend.ops[0].Write.Span)
+	if operations[0].Write.Span != (TextSpan{Start: 0, End: 2}) {
+		t.Fatalf("write span = %+v, want [0,2)", operations[0].Write.Span)
 	}
 }
 
