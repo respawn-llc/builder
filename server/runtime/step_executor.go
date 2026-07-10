@@ -543,11 +543,13 @@ func (s *defaultStepExecutor) appendWorkflowInvalidCompletionNudge(ctx context.C
 	if instructionsErr != nil {
 		return false, instructionsErr
 	}
+	goalText := ""
 	goalReminder := ""
-	if reminder, ok := e.goalContinuation().reminderText(); ok {
+	if objective, reminder, ok := e.goalContinuation().reminderContext(); ok {
+		goalText = objective
 		goalReminder = reminder
 	}
-	content, renderErr := prompts.RenderWorkflowNudgePrompt(err.Error(), instructions, goalReminder)
+	content, renderErr := prompts.RenderWorkflowNudgePrompt(err.Error(), instructions, goalText, goalReminder)
 	if renderErr != nil {
 		return false, renderErr
 	}

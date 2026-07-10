@@ -359,6 +359,7 @@ func TestRenderWorkflowNudgePrompt(t *testing.T) {
 	rendered, err := RenderWorkflowNudgePrompt(
 		"transition is required",
 		"Call complete_node with the selected transition.",
+		"Ship workflow execution.",
 		"Continue working toward the active session goal.",
 	)
 	if err != nil {
@@ -367,6 +368,7 @@ func TestRenderWorkflowNudgePrompt(t *testing.T) {
 	for _, want := range []string{
 		"transition is required",
 		"Call complete_node with the selected transition.",
+		"Ship workflow execution.",
 		"Continue working toward the active session goal.",
 	} {
 		if !strings.Contains(rendered, want) {
@@ -390,7 +392,7 @@ func TestRenderWorkflowNudgePromptRequiresReasonAndNodeCompletionInstructions(t 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := RenderWorkflowNudgePrompt(tt.reason, tt.instructions, ""); err == nil {
+			if _, err := RenderWorkflowNudgePrompt(tt.reason, tt.instructions, "", ""); err == nil {
 				t.Fatal("RenderWorkflowNudgePrompt accepted an incomplete nudge")
 			}
 		})

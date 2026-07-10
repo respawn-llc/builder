@@ -240,6 +240,7 @@ type workflowTaskInstructionsTemplateData struct {
 type workflowNudgeTemplateData struct {
 	RejectionReason            string
 	NodeCompletionInstructions string
+	GoalText                   string
 	GoalReminder               string
 }
 
@@ -442,7 +443,7 @@ func RenderWorkflowTaskInstructions(args WorkflowNodeContextArgs, nodeCompletion
 	return renderNamedTemplate("workflow task instructions", WorkflowTaskInstructionsPrompt, newWorkflowTaskInstructionsTemplateData(args, nodeCompletionInstructions))
 }
 
-func RenderWorkflowNudgePrompt(rejectionReason, nodeCompletionInstructions, goalReminder string) (string, error) {
+func RenderWorkflowNudgePrompt(rejectionReason, nodeCompletionInstructions, goalText, goalReminder string) (string, error) {
 	rejectionReason = strings.TrimSpace(rejectionReason)
 	if rejectionReason == "" {
 		return "", errors.New("render workflow nudge: rejection reason is required")
@@ -454,6 +455,7 @@ func RenderWorkflowNudgePrompt(rejectionReason, nodeCompletionInstructions, goal
 	return renderNamedTemplate("workflow nudge", WorkflowNudgePrompt, workflowNudgeTemplateData{
 		RejectionReason:            rejectionReason,
 		NodeCompletionInstructions: nodeCompletionInstructions,
+		GoalText:                   strings.TrimSpace(goalText),
 		GoalReminder:               strings.TrimSpace(goalReminder),
 	})
 }
