@@ -1,7 +1,12 @@
 package analyzer
 
 func (b *tracingBackend) recordPut(position Position, text string) {
-	payload := MustWritePayload(text)
+	span, err := b.writeText.append(text)
+	if err != nil {
+		b.err = err
+		return
+	}
+	payload := WritePayload{Span: span, arena: b.writeText}
 	current := Operation{
 		Sequence:   len(b.ops),
 		Kind:       OperationWrite,
@@ -19,8 +24,7 @@ func (b *tracingBackend) recordPut(position Position, text string) {
 	if len(b.ops) > 0 && canMergeWrite(b.ops[len(b.ops)-1], current) {
 		previous := &b.ops[len(b.ops)-1]
 		previous.Region.Right = current.Region.Right
-		mergedPayload := MustWritePayload(previous.Write.Text + current.Write.Text)
-		previous.Write = &mergedPayload
+		previous.Write.Span.End = current.Write.Span.End
 		previous.After = current.After
 		previous.ByteRange.End = current.ByteRange.End
 		return
@@ -32,6 +36,8 @@ func canMergeWrite(previous Operation, current Operation) bool {
 	return previous.Kind == OperationWrite &&
 		previous.Write != nil &&
 		current.Write != nil &&
+		previous.Write.arena == current.Write.arena &&
+		previous.Write.Span.End == current.Write.Span.Start &&
 		previous.ChunkIndex == current.ChunkIndex &&
 		previous.Region.Top == current.Region.Top &&
 		previous.Region.Bottom == current.Region.Bottom &&

@@ -109,6 +109,7 @@ type ProcessExit struct {
 
 type ResizeEvent struct {
 	Placement  ResizePlacement
+	Offset     int64
 	At         time.Duration
 	Dimensions Dimensions
 }
@@ -131,6 +132,143 @@ func BeforeFirstChunk() ResizePlacement {
 
 func AfterChunk(index int) ResizePlacement {
 	return ResizePlacement{Kind: ResizeAfterChunk, ChunkIndex: index}
+}
+
+const evidenceBlockSize = 16 * 1024
+
+const (
+	maxPTYEvidenceBytes = 1 * 1024 * 1024
+	evidenceExcerptSize = 32 * 1024
+)
+
+type EvidenceSource string
+
+const EvidenceSourcePTY EvidenceSource = "pty"
+
+type EvidenceLimitExceeded struct {
+	Source   EvidenceSource
+	Limit    int
+	Observed int
+	Prefix   []byte
+	Tail     []byte
+}
+
+func (e *EvidenceLimitExceeded) Error() string {
+	return fmt.Sprintf("%s evidence limit exceeded: observed=%d limit=%d", e.Source, e.Observed, e.Limit)
+}
+
+// CaptureAssembler coalesces transient PTY reads into deterministic evidence
+// blocks. A resize flushes the current block so its observer offset is stable
+// regardless of how the kernel fragmented reads.
+type CaptureAssembler struct {
+	dimensions Dimensions
+	blocks     [][]byte
+	current    []byte
+	offset     int64
+	resizes    []ResizeEvent
+}
+
+func NewCaptureAssembler(dimensions Dimensions) (*CaptureAssembler, error) {
+	if _, err := NewDimensions(dimensions.Rows, dimensions.Cols); err != nil {
+		return nil, err
+	}
+	return &CaptureAssembler{
+		dimensions: dimensions,
+		current:    make([]byte, 0, evidenceBlockSize),
+	}, nil
+}
+
+func (a *CaptureAssembler) Append(payload []byte) error {
+	if a == nil {
+		return errors.New("capture assembler is required")
+	}
+	if len(payload) > maxPTYEvidenceBytes-int(a.offset) {
+		return a.overflow(payload)
+	}
+	for len(payload) > 0 {
+		space := evidenceBlockSize - len(a.current)
+		take := min(space, len(payload))
+		a.current = append(a.current, payload[:take]...)
+		a.offset += int64(take)
+		payload = payload[take:]
+		if len(a.current) == evidenceBlockSize {
+			a.flush()
+		}
+	}
+	return nil
+}
+
+func (a *CaptureAssembler) overflow(payload []byte) error {
+	evidence := a.evidenceBytes()
+	combinedLength := len(evidence) + len(payload)
+	prefix := append([]byte(nil), evidence...)
+	prefix = append(prefix, payload...)
+	if len(prefix) > evidenceExcerptSize {
+		prefix = prefix[:evidenceExcerptSize]
+	}
+	tailSource := append(evidence, payload...)
+	if len(tailSource) > evidenceExcerptSize {
+		tailSource = tailSource[len(tailSource)-evidenceExcerptSize:]
+	}
+	return &EvidenceLimitExceeded{
+		Source:   EvidenceSourcePTY,
+		Limit:    maxPTYEvidenceBytes,
+		Observed: combinedLength,
+		Prefix:   append([]byte(nil), prefix...),
+		Tail:     append([]byte(nil), tailSource...),
+	}
+}
+
+func (a *CaptureAssembler) evidenceBytes() []byte {
+	size := len(a.current)
+	for _, block := range a.blocks {
+		size += len(block)
+	}
+	evidence := make([]byte, 0, size)
+	for _, block := range a.blocks {
+		evidence = append(evidence, block...)
+	}
+	return append(evidence, a.current...)
+}
+
+func (a *CaptureAssembler) Resize(dimensions Dimensions) error {
+	if a == nil {
+		return errors.New("capture assembler is required")
+	}
+	if _, err := NewDimensions(dimensions.Rows, dimensions.Cols); err != nil {
+		return err
+	}
+	a.flush()
+	placement := BeforeFirstChunk()
+	if len(a.blocks) > 0 {
+		placement = AfterChunk(len(a.blocks) - 1)
+	}
+	a.resizes = append(a.resizes, ResizeEvent{
+		Placement:  placement,
+		Offset:     a.offset,
+		Dimensions: dimensions,
+	})
+	return nil
+}
+
+func (a *CaptureAssembler) Capture() (Capture, error) {
+	if a == nil {
+		return Capture{}, errors.New("capture assembler is required")
+	}
+	a.flush()
+	chunks := make([]Chunk, len(a.blocks))
+	for index, block := range a.blocks {
+		chunks[index] = NewChunk(index, 0, block)
+	}
+	return NewCaptureWithEvents(a.dimensions, chunks, a.resizes)
+}
+
+func (a *CaptureAssembler) flush() {
+	if len(a.current) == 0 {
+		return
+	}
+	a.blocks = append(a.blocks, append([]byte(nil), a.current...))
+	a.current = make([]byte, 0, evidenceBlockSize)
 }
 
 func NewCapture(dimensions Dimensions, chunks []Chunk) (Capture, error) {
@@ -159,6 +297,7 @@ func NewCaptureWithEvents(dimensions Dimensions, chunks []Chunk, resizes []Resiz
 	}
 	copiedResizes := make([]ResizeEvent, len(resizes))
 	var previousPlacement *ResizePlacement
+	var previousOffset *int64
 	for i, resize := range resizes {
 		if _, err := NewDimensions(resize.Dimensions.Rows, resize.Dimensions.Cols); err != nil {
 			return Capture{}, fmt.Errorf("resize event %d: %w", i, err)
@@ -173,8 +312,19 @@ func NewCaptureWithEvents(dimensions Dimensions, chunks []Chunk, resizes []Resiz
 			return Capture{}, fmt.Errorf("resize event timestamps must be monotonic: resize=%d at=%s previous=%s", i, resize.At, resizes[i-1].At)
 		}
 		copiedResizes[i] = resize
+		if copiedResizes[i].Offset == 0 {
+			copiedResizes[i].Offset = resizePlacementOffset(resize.Placement, copied)
+		}
+		if copiedResizes[i].Offset < 0 || copiedResizes[i].Offset > int64(rawLen) {
+			return Capture{}, fmt.Errorf("resize event %d observer offset %d outside captured byte range [0,%d]", i, copiedResizes[i].Offset, rawLen)
+		}
+		if previousOffset != nil && copiedResizes[i].Offset < *previousOffset {
+			return Capture{}, fmt.Errorf("resize event observer offsets must be monotonic: resize=%d offset=%d previous=%d", i, copiedResizes[i].Offset, *previousOffset)
+		}
 		placement := resize.Placement
 		previousPlacement = &placement
+		offset := copiedResizes[i].Offset
+		previousOffset = &offset
 	}
 	return Capture{
 		Dimensions: dimensions,
@@ -182,6 +332,17 @@ func NewCaptureWithEvents(dimensions Dimensions, chunks []Chunk, resizes []Resiz
 		Resizes:    copiedResizes,
 		Raw:        raw,
 	}, nil
+}
+
+func resizePlacementOffset(placement ResizePlacement, chunks []Chunk) int64 {
+	if placement.Kind == ResizeBeforeFirstChunk {
+		return 0
+	}
+	offset := int64(0)
+	for index := 0; index <= placement.ChunkIndex; index++ {
+		offset += int64(len(chunks[index].Payload))
+	}
+	return offset
 }
 
 func validateResizePlacement(placement ResizePlacement, chunkCount int) error {
@@ -246,14 +407,39 @@ type Operation struct {
 }
 
 type WritePayload struct {
-	Text string
+	Span  TextSpan
+	arena *writeTextArena
+}
+
+type TextSpan struct {
+	Start int
+	End   int
+}
+
+func (span TextSpan) Validate() error {
+	if span.Start < 0 || span.End <= span.Start {
+		return fmt.Errorf("invalid write text span: start=%d end=%d", span.Start, span.End)
+	}
+	return nil
+}
+
+func (payload WritePayload) Text() string {
+	if payload.arena == nil || payload.Span.Validate() != nil || payload.Span.End > len(payload.arena.bytes) {
+		panic(fmt.Sprintf("invalid write payload span=%+v arena_bytes=%d", payload.Span, len(payload.arena.bytes)))
+	}
+	return string(payload.arena.bytes[payload.Span.Start:payload.Span.End])
 }
 
 func NewWritePayload(text string) (WritePayload, error) {
 	if text == "" {
 		return WritePayload{}, errors.New("write payload text must not be empty")
 	}
-	return WritePayload{Text: text}, nil
+	arena := newWriteTextArena(len(text))
+	span, err := arena.append(text)
+	if err != nil {
+		return WritePayload{}, err
+	}
+	return WritePayload{Span: span, arena: arena}, nil
 }
 
 func MustWritePayload(text string) WritePayload {

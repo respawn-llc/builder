@@ -85,7 +85,7 @@ func ContentAppendedExactlyOnce(appends []analyzer.AppendOperation, content stri
 		if appendOperation.Operation.Kind == analyzer.OperationWrite && appendOperation.Operation.Write == nil {
 			return fmt.Errorf("append write operation missing payload: sequence=%d byte_range=%+v", appendOperation.Operation.Sequence, appendOperation.Operation.ByteRange)
 		}
-		if appendOperation.Operation.Write != nil && appendOperation.Operation.Write.Text == content {
+		if appendOperation.Operation.Write != nil && appendOperation.Operation.Write.Text() == content {
 			count++
 		}
 	}

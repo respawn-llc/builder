@@ -41,7 +41,7 @@ func TestResolveOperationWindowAndClassifyAppends(t *testing.T) {
 	if len(appends) != 1 {
 		t.Fatalf("append count = %d, want 1: %#v", len(appends), appends)
 	}
-	if appends[0].Operation.Write == nil || appends[0].Operation.Write.Text != "bottom" {
+	if appends[0].Operation.Write == nil || appends[0].Operation.Write.Text() != "bottom" {
 		t.Fatalf("append write payload = %#v, want text %q", appends[0].Operation.Write, "bottom")
 	}
 }
@@ -113,7 +113,7 @@ func TestClassifyAppendsDoesNotTreatEveryMutableBandWriteAsAppend(t *testing.T) 
 		},
 	}
 	appends := pty.ClassifyAppends(analysis, pty.OperationWindow{Start: 0, End: len(analysis.Operations)}, 2)
-	if len(appends) != 2 || appends[0].Operation.Write == nil || appends[0].Operation.Write.Text != "boundary" || appends[1].Operation.Write == nil || appends[1].Operation.Write.Text != "bottom" {
+	if len(appends) != 2 || appends[0].Operation.Write == nil || appends[0].Operation.Write.Text() != "boundary" || appends[1].Operation.Write == nil || appends[1].Operation.Write.Text() != "bottom" {
 		t.Fatalf("appends = %#v, want boundary and bottom writes only", appends)
 	}
 }

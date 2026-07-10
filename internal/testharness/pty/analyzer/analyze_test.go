@@ -41,7 +41,7 @@ func TestAnalyzePrintableChunkRecordsScreenAndWriteOperation(t *testing.T) {
 	if op.Region != (pty.Region{Top: 0, Bottom: 1, Left: 0, Right: 5}) {
 		t.Fatalf("operation region = %#v, want first row columns [0,5)", op.Region)
 	}
-	if op.Write == nil || op.Write.Text != "hello" {
+	if op.Write == nil || op.Write.Text() != "hello" {
 		t.Fatalf("operation write payload = %#v, want text %q", op.Write, "hello")
 	}
 	if op.ByteRange != (pty.ByteRange{Start: 0, End: 5}) {

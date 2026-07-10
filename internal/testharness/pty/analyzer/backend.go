@@ -15,6 +15,8 @@ type tracingBackend struct {
 	byteOffset int64
 	byteEnd    int64
 	ops        []Operation
+	writeText  *writeTextArena
+	err        error
 }
 
 func newTracingBackend(dimensions Dimensions) *tracingBackend {
@@ -23,7 +25,12 @@ func newTracingBackend(dimensions Dimensions) *tracingBackend {
 		dimensions: dimensions,
 		cells:      snapshot.Cells,
 		modes:      map[vt.PrivateMode]vt.ModeStatus{},
+		writeText:  newDefaultWriteTextArena(),
 	}
+}
+
+func (b *tracingBackend) error() error {
+	return b.err
 }
 
 func (b *tracingBackend) beginChunk(chunk Chunk, offset int64) {
