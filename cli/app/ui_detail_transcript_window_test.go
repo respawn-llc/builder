@@ -1,11 +1,13 @@
 package app
 
 import (
+	"errors"
 	"strconv"
 	"testing"
 
 	"core/cli/tui"
 	"core/shared/clientui"
+	"core/shared/serverapi"
 	patchformat "core/shared/transcript/patchformat"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,6 +43,145 @@ func TestDetailModeTransitionLoadsServerBackedTranscriptPage(t *testing.T) {
 	want := []clientui.TranscriptCommittedRow{detailTestUserRow("first page")}
 	if !detailTestRowsEqual(got.Entries, want) {
 		t.Fatalf("detail transcript entries = %#v, want %#v", got.Entries, want)
+	}
+}
+
+func TestDetailModeReentryShowsCachedPageWhileRefreshingNewestPage(t *testing.T) {
+	sessionViews := newControlledTranscriptPageClient()
+	cached := clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("cached detail page\nsecond line"),
+		},
+	}
+	cached.Entries[0].Visibility = clientui.EntryVisibilityOngoing
+	model := newProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		WithUISessionID(detailTestSessionID),
+		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
+	)
+	model.detailTranscript.replace(cached)
+	model.view = tui.NewModel()
+	model.forwardToView(tui.SetViewportSizeMsg{Lines: 1, Width: 80})
+	model.forwardToView(tui.SetDetailTranscriptPageMsg{Page: cached})
+
+	cmd := model.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{
+		target:            tui.ModeDetail,
+		suppressAltScreen: true,
+		preserveSurface:   true,
+	})
+	if cmd == nil {
+		t.Fatal("detail reentry did not request a fresh newest page")
+	}
+	if got := model.detailTranscript.page().Entries; !detailTestRowsEqual(got, cached.Entries) {
+		t.Fatalf("detail reentry synchronously replaced cached membership: %#v", got)
+	}
+	done := runDetailTranscriptCommand(cmd)
+	request := waitForDetailTranscriptRequest(t, sessionViews)
+	if request.Cursor != nil || request.NewerCursor != nil {
+		t.Fatalf("detail reentry request = %#v, want newest-page request without cursors", request)
+	}
+	sessionViews.results <- controlledTranscriptPageResult{err: errors.New("stop test refresh")}
+	_ = waitForDetailTranscriptCompletion(t, done)
+}
+
+func TestDetailModeNewestRefreshPreservesCachedNavigationWhenSelectedRowSurvives(t *testing.T) {
+	sessionViews := newControlledTranscriptPageClient()
+	selected := detailTestUserRow("selected full detail")
+	selected.Visibility = clientui.EntryVisibilityOngoing
+	selected.User.CondensedText = "selected"
+	cached := clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			selected,
+			detailTestUserRow("cached newest"),
+		},
+	}
+	model := newProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		WithUISessionID(detailTestSessionID),
+		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
+	)
+	model.detailTranscript.replace(cached)
+	model.view = tui.NewModel()
+	model.forwardToView(tui.SetViewportSizeMsg{Lines: 1, Width: 80})
+	model.forwardToView(tui.SetDetailTranscriptPageMsg{
+		Page:   cached,
+		Anchor: tui.DetailTranscriptAnchorBottom,
+	})
+
+	cmd := model.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{
+		target:            tui.ModeDetail,
+		suppressAltScreen: true,
+		preserveSurface:   true,
+	})
+	done := runDetailTranscriptCommand(cmd)
+	waitForDetailTranscriptRequest(t, sessionViews)
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = next.(*uiModel)
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
+		t.Fatalf("cached navigation selected action = %v, want expandable surviving row", action)
+	}
+
+	sessionViews.results <- controlledTranscriptPageResult{response: serverapi.SessionTranscriptPageResponse{
+		Transcript: clientui.TranscriptPage{
+			SessionID: detailTestSessionID,
+			Entries: []clientui.TranscriptCommittedRow{
+				detailTestAssistantRow("fresh older boundary"),
+				selected,
+				detailTestUserRow("fresh newest"),
+			},
+		},
+	}}
+	model = updateUIModel(t, model, waitForDetailTranscriptCompletion(t, done))
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
+		t.Fatalf("newest refresh selected action = %v, want surviving cached selection", action)
+	}
+}
+
+func TestDetailModeNewestRefreshAnchorsAtEndWhenCachedWindowHasNewerContent(t *testing.T) {
+	selected := detailTestUserRow("selected full detail")
+	selected.Visibility = clientui.EntryVisibilityOngoing
+	selected.User.CondensedText = "selected"
+	cached := clientui.TranscriptPage{
+		SessionID:    detailTestSessionID,
+		NewerCursor:  appInt64Ptr(75),
+		HasMoreBelow: true,
+		Entries: []clientui.TranscriptCommittedRow{
+			selected,
+			detailTestUserRow("cached page end"),
+		},
+	}
+	model := newProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		WithUISessionID(detailTestSessionID),
+	)
+	model.detailTranscript.replace(cached)
+	model.view = tui.NewModel()
+	model.forwardToView(tui.SetViewportSizeMsg{Lines: 1, Width: 80})
+	model.forwardToView(tui.SetDetailTranscriptPageMsg{
+		Page:   cached,
+		Anchor: tui.DetailTranscriptAnchorBottom,
+	})
+	model.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail})
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	model = next.(*uiModel)
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
+		t.Fatalf("cached older-window selected action = %v, want expandable row", action)
+	}
+
+	model.applyDetailTranscriptLoad(detailTestSessionID, clientui.TranscriptPageRequest{}, clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("fresh older boundary"),
+			selected,
+			detailTestUserRow("fresh newest"),
+		},
+	})
+
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionNone {
+		t.Fatalf("older-window refresh selected action = %v, want fresh page end", action)
 	}
 }
 
@@ -162,7 +303,7 @@ func TestDetailTranscriptLoadIgnoresDuplicateAdjacentCursorResponse(t *testing.T
 	}
 }
 
-func TestDetailTranscriptDefaultRefreshDoesNotCollapseResidentWindow(t *testing.T) {
+func TestDetailTranscriptNewestRefreshReplacesResidentWindow(t *testing.T) {
 	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
 	newest := clientui.TranscriptPage{
 		SessionID:    detailTestSessionID,
@@ -190,19 +331,16 @@ func TestDetailTranscriptDefaultRefreshDoesNotCollapseResidentWindow(t *testing.
 	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, refreshedNewest)
 
 	got := model.detailTranscript.page().Entries
-	want := []clientui.TranscriptCommittedRow{
-		detailTestUserRow("older"),
-		detailTestAssistantRow("newer"),
-	}
+	want := refreshedNewest.Entries
 	if !detailTestRowsEqual(got, want) {
-		t.Fatalf("detail entries after default refresh = %#v, want stale resident window %#v", got, want)
+		t.Fatalf("detail entries after newest refresh = %#v, want refreshed newest page %#v", got, want)
 	}
-	if len(model.detailTranscript.segments) != 2 {
-		t.Fatalf("resident segment count = %d, want 2", len(model.detailTranscript.segments))
+	if len(model.detailTranscript.segments) != 1 {
+		t.Fatalf("resident segment count = %d, want refreshed newest segment only", len(model.detailTranscript.segments))
 	}
 }
 
-func TestDetailTranscriptDefaultRefreshDoesNotMutateViewLocalState(t *testing.T) {
+func TestDetailTranscriptNewestRefreshReplacesChangedSelectedRow(t *testing.T) {
 	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
 	model.view = tui.NewModel()
 	model.view = mustUpdateTUIModel(t, model.view, tui.SetViewportSizeMsg{Lines: 2, Width: 80})
@@ -239,16 +377,13 @@ func TestDetailTranscriptDefaultRefreshDoesNotMutateViewLocalState(t *testing.T)
 
 	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, refreshedNewest)
 
-	if got := model.view.DetailSelectionAction(); got != tui.DetailSelectionActionCollapse {
-		t.Fatalf("detail selection action after default refresh = %v, want UI-local expansion preserved", got)
+	if got := model.view.DetailSelectionAction(); got != tui.DetailSelectionActionExpand {
+		t.Fatalf("detail selection action after newest refresh = %v, want refreshed row collapsed at page end", got)
 	}
 	got := model.detailTranscript.page().Entries
-	want := []clientui.TranscriptCommittedRow{
-		detailTestUserRow("older"),
-		detailTestAssistantRow("newer\nline two\nline three\nline four"),
-	}
+	want := refreshedNewest.Entries
 	if !detailTestRowsEqual(got, want) {
-		t.Fatalf("detail entries after default refresh = %#v, want stale resident window %#v", got, want)
+		t.Fatalf("detail entries after newest refresh = %#v, want refreshed newest page %#v", got, want)
 	}
 }
 

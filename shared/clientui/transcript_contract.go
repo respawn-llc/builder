@@ -208,6 +208,112 @@ type TranscriptNoticeRow struct {
 	Diagnostic *TranscriptDiagnosticData
 }
 
+func TranscriptCommittedRowEqual(left, right TranscriptCommittedRow) bool {
+	if left.Visibility != right.Visibility ||
+		left.Integrity != right.Integrity ||
+		left.Kind != right.Kind {
+		return false
+	}
+	return transcriptUserRowEqual(left.User, right.User) &&
+		transcriptAssistantRowEqual(left.Assistant, right.Assistant) &&
+		transcriptToolRowEqual(left.Tool, right.Tool) &&
+		transcriptNoticeRowEqual(left.Notice, right.Notice)
+}
+
+func transcriptUserRowEqual(left, right *TranscriptUserRow) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func transcriptAssistantRowEqual(left, right *TranscriptAssistantRow) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Text == right.Text &&
+		left.CondensedText == right.CondensedText &&
+		left.Phase == right.Phase &&
+		pointersEqual(left.StreamID, right.StreamID)
+}
+
+func transcriptToolRowEqual(left, right *TranscriptToolRow) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.ToolCallID == right.ToolCallID &&
+		left.ToolName == right.ToolName &&
+		left.Text == right.Text &&
+		left.IsError == right.IsError &&
+		left.ResultSummary == right.ResultSummary &&
+		left.CondensedText == right.CondensedText &&
+		transcript.ToolCallMetaEqual(
+			transcriptToolCallMeta(left.ToolPresentation),
+			transcriptToolCallMeta(right.ToolPresentation),
+		)
+}
+
+func transcriptNoticeRowEqual(left, right *TranscriptNoticeRow) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Reason == right.Reason &&
+		left.Severity == right.Severity &&
+		pointersEqual(left.Data.LegacyText, right.Data.LegacyText) &&
+		pointersEqual(left.Data.NoticeID, right.Data.NoticeID) &&
+		pointersEqual(left.Data.CacheWarning, right.Data.CacheWarning) &&
+		pointersEqual(left.Data.RuntimeDiagnostic, right.Data.RuntimeDiagnostic) &&
+		left.Data.MessageType == right.Data.MessageType &&
+		left.Data.SourcePath == right.Data.SourcePath &&
+		left.Data.CondensedText == right.Data.CondensedText &&
+		left.Data.CompactLabel == right.Data.CompactLabel &&
+		pointersEqual(left.Data.BackgroundExitCode, right.Data.BackgroundExitCode) &&
+		pointersEqual(left.Diagnostic, right.Diagnostic)
+}
+
+func pointersEqual[T comparable](left, right *T) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func transcriptToolCallMeta(meta *ToolCallMeta) *transcript.ToolCallMeta {
+	if meta == nil {
+		return nil
+	}
+	out := transcript.ToolCallMeta{
+		ToolName:               meta.ToolName,
+		Presentation:           transcript.ToolPresentationKind(meta.Presentation),
+		RenderBehavior:         transcript.ToolCallRenderBehavior(meta.RenderBehavior),
+		IsShell:                meta.IsShell,
+		UserInitiated:          meta.UserInitiated,
+		Command:                meta.Command,
+		CompactText:            meta.CompactText,
+		InlineMeta:             meta.InlineMeta,
+		TimeoutLabel:           meta.TimeoutLabel,
+		PatchSummary:           meta.PatchSummary,
+		PatchDetail:            meta.PatchDetail,
+		PatchRender:            meta.PatchRender,
+		Question:               meta.Question,
+		Suggestions:            append([]string(nil), meta.Suggestions...),
+		RecommendedOptionIndex: meta.RecommendedOptionIndex,
+		OmitSuccessfulResult:   meta.OmitSuccessfulResult,
+		RawOutputRequested:     meta.RawOutputRequested,
+		OutputTruncated:        meta.OutputTruncated,
+		MovedToBackground:      meta.MovedToBackground,
+	}
+	if meta.RenderHint != nil {
+		out.RenderHint = &transcript.ToolRenderHint{
+			Kind:         transcript.ToolRenderKind(meta.RenderHint.Kind),
+			Path:         meta.RenderHint.Path,
+			ResultOnly:   meta.RenderHint.ResultOnly,
+			ShellDialect: transcript.ToolShellDialect(meta.RenderHint.ShellDialect),
+		}
+	}
+	return &out
+}
+
 func ValidateTranscriptCommittedRow(row TranscriptCommittedRow) error {
 	if !row.Integrity.Valid() {
 		return fmt.Errorf("committed row has invalid integrity %d", row.Integrity)

@@ -409,6 +409,79 @@ func TestDetailAppendedPageWithFrontTrimPreservesLineScrollBoundary(t *testing.T
 	}
 }
 
+func TestDetailNewestRefreshPreservesSurvivingSelectionAndCamera(t *testing.T) {
+	model := NewModel()
+	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 80})
+	model = next.(Model)
+	first := detailAssistant("first")
+	second := detailAssistant("second")
+	selectedRow := detailAssistant("selected")
+	next, _ = model.Update(SetDetailTranscriptPageMsg{
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			first,
+			second,
+			selectedRow,
+			detailAssistant("old newest"),
+		}},
+		Anchor: DetailTranscriptAnchorBottom,
+	})
+	model = next.(Model)
+	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
+	model = next.(Model)
+	model.setSelectedDetailIndex(2)
+	model.detailScroll = 1
+
+	next, _ = model.Update(SetDetailTranscriptPageMsg{
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			detailAssistant("new older boundary"),
+			first,
+			second,
+			selectedRow,
+		}},
+		Anchor: DetailTranscriptAnchorRefresh,
+	})
+	model = next.(Model)
+
+	if selected, ok := model.selectedDetailIndex(); !ok || selected != 3 {
+		t.Fatalf("selected entry after newest refresh = %d/%t, want surviving row 3/true", selected, ok)
+	}
+	if model.detailScroll != 2 {
+		t.Fatalf("detail scroll after newest refresh = %d, want camera-relative scroll 2", model.detailScroll)
+	}
+}
+
+func TestDetailNewestRefreshAnchorsAtEndWhenSelectionDisappears(t *testing.T) {
+	model := NewModel()
+	next, _ := model.Update(SetViewportSizeMsg{Lines: 1, Width: 80})
+	model = next.(Model)
+	next, _ = model.Update(SetDetailTranscriptPageMsg{
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			detailAssistant("selected stale row"),
+			detailAssistant("old newest"),
+		}},
+		Anchor: DetailTranscriptAnchorBottom,
+	})
+	model = next.(Model)
+	model.setSelectedDetailIndex(0)
+	model.detailScroll = 0
+
+	next, _ = model.Update(SetDetailTranscriptPageMsg{
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			detailAssistant("fresh first"),
+			detailAssistant("fresh newest"),
+		}},
+		Anchor: DetailTranscriptAnchorRefresh,
+	})
+	model = next.(Model)
+
+	if selected, ok := model.selectedDetailIndex(); !ok || selected != 1 {
+		t.Fatalf("selected entry after missing refresh selection = %d/%t, want page end 1/true", selected, ok)
+	}
+	if model.detailScroll != model.maxDetailScroll() {
+		t.Fatalf("detail scroll after missing refresh selection = %d, want page end %d", model.detailScroll, model.maxDetailScroll())
+	}
+}
+
 func TestDetailFrontEvictionPreservesExpandedWrappedPatchLine(t *testing.T) {
 	model := NewModel()
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 24})

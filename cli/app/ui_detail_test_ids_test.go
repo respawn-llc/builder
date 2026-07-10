@@ -41,5 +41,5 @@ func detailTestToolRow(tool clientui.TranscriptToolRow) clientui.TranscriptCommi
 }
 
 func detailTestRowsEqual(left, right []clientui.TranscriptCommittedRow) bool {
-	return slices.EqualFunc(left, right, clientTranscriptRowEqual)
+	return slices.EqualFunc(left, right, clientui.TranscriptCommittedRowEqual)
 }

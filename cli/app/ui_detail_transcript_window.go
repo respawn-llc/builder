@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"core/shared/clientui"
-	"core/shared/transcript"
 	"core/shared/valuecopy"
 )
 
@@ -116,7 +115,7 @@ func (w uiDetailTranscriptWindow) matchesPage(page clientui.TranscriptPage) bool
 		return false
 	}
 	for i := range page.Entries {
-		if !clientTranscriptRowEqual(w.entries[i], page.Entries[i]) {
+		if !clientui.TranscriptCommittedRowEqual(w.entries[i], page.Entries[i]) {
 			return false
 		}
 	}
@@ -242,7 +241,7 @@ func (w uiDetailTranscriptWindow) hasSegment(page clientui.TranscriptPage) bool 
 		}
 		matches := true
 		for entryIndex, entry := range page.Entries {
-			if !clientTranscriptRowEqual(w.entries[seg.startLocal+entryIndex], entry) {
+			if !clientui.TranscriptCommittedRowEqual(w.entries[seg.startLocal+entryIndex], entry) {
 				matches = false
 				break
 			}
@@ -379,102 +378,4 @@ func cloneDetailTranscriptNotice(notice *clientui.TranscriptNoticeRow) *clientui
 
 func int64PointerEqual(left, right *int64) bool {
 	return ptrEqual(left, right)
-}
-
-func clientTranscriptRowEqual(left, right clientui.TranscriptCommittedRow) bool {
-	if left.Visibility != right.Visibility ||
-		left.Integrity != right.Integrity ||
-		left.Kind != right.Kind {
-		return false
-	}
-	return clientTranscriptUserRowEqual(left.User, right.User) &&
-		clientTranscriptAssistantRowEqual(left.Assistant, right.Assistant) &&
-		clientTranscriptToolRowEqual(left.Tool, right.Tool) &&
-		clientTranscriptNoticeRowEqual(left.Notice, right.Notice)
-}
-
-func clientTranscriptUserRowEqual(left, right *clientui.TranscriptUserRow) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return *left == *right
-}
-
-func clientTranscriptAssistantRowEqual(left, right *clientui.TranscriptAssistantRow) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return left.Text == right.Text &&
-		left.CondensedText == right.CondensedText &&
-		left.Phase == right.Phase &&
-		ptrEqual(left.StreamID, right.StreamID)
-}
-
-func clientTranscriptToolRowEqual(left, right *clientui.TranscriptToolRow) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return left.ToolCallID == right.ToolCallID &&
-		left.ToolName == right.ToolName &&
-		left.Text == right.Text &&
-		left.IsError == right.IsError &&
-		left.ResultSummary == right.ResultSummary &&
-		left.CondensedText == right.CondensedText &&
-		transcript.ToolCallMetaEqual(
-			transcriptToolCallMeta(left.ToolPresentation),
-			transcriptToolCallMeta(right.ToolPresentation),
-		)
-}
-
-func clientTranscriptNoticeRowEqual(left, right *clientui.TranscriptNoticeRow) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	return left.Reason == right.Reason &&
-		left.Severity == right.Severity &&
-		ptrEqual(left.Data.LegacyText, right.Data.LegacyText) &&
-		ptrEqual(left.Data.NoticeID, right.Data.NoticeID) &&
-		ptrEqual(left.Data.CacheWarning, right.Data.CacheWarning) &&
-		ptrEqual(left.Data.RuntimeDiagnostic, right.Data.RuntimeDiagnostic) &&
-		left.Data.MessageType == right.Data.MessageType &&
-		left.Data.SourcePath == right.Data.SourcePath &&
-		left.Data.CondensedText == right.Data.CondensedText &&
-		left.Data.CompactLabel == right.Data.CompactLabel &&
-		ptrEqual(left.Data.BackgroundExitCode, right.Data.BackgroundExitCode) &&
-		ptrEqual(left.Diagnostic, right.Diagnostic)
-}
-
-func transcriptToolCallMeta(meta *clientui.ToolCallMeta) *transcript.ToolCallMeta {
-	if meta == nil {
-		return nil
-	}
-	out := transcript.ToolCallMeta{
-		ToolName:               meta.ToolName,
-		Presentation:           transcript.ToolPresentationKind(meta.Presentation),
-		RenderBehavior:         transcript.ToolCallRenderBehavior(meta.RenderBehavior),
-		IsShell:                meta.IsShell,
-		UserInitiated:          meta.UserInitiated,
-		Command:                meta.Command,
-		CompactText:            meta.CompactText,
-		InlineMeta:             meta.InlineMeta,
-		TimeoutLabel:           meta.TimeoutLabel,
-		PatchSummary:           meta.PatchSummary,
-		PatchDetail:            meta.PatchDetail,
-		PatchRender:            meta.PatchRender,
-		Question:               meta.Question,
-		Suggestions:            append([]string(nil), meta.Suggestions...),
-		RecommendedOptionIndex: meta.RecommendedOptionIndex,
-		OmitSuccessfulResult:   meta.OmitSuccessfulResult,
-		RawOutputRequested:     meta.RawOutputRequested,
-		OutputTruncated:        meta.OutputTruncated,
-	}
-	if meta.RenderHint != nil {
-		out.RenderHint = &transcript.ToolRenderHint{
-			Kind:         transcript.ToolRenderKind(meta.RenderHint.Kind),
-			Path:         meta.RenderHint.Path,
-			ResultOnly:   meta.RenderHint.ResultOnly,
-			ShellDialect: transcript.ToolShellDialect(meta.RenderHint.ShellDialect),
-		}
-	}
-	return &out
 }

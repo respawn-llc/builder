@@ -69,6 +69,22 @@ func (entry detailEntry) presentation() transcriptrender.DetailPresentation {
 	return entry.presentationData
 }
 
+func (p detailProjection) indexOfRow(row clientui.TranscriptCommittedRow) (int, bool) {
+	match := 0
+	found := false
+	for index, entry := range p.entries {
+		if !clientui.TranscriptCommittedRowEqual(entry.row(), row) {
+			continue
+		}
+		if found {
+			return 0, false
+		}
+		match = index
+		found = true
+	}
+	return match, found
+}
+
 func sameDetailGroup(left, right detailEntry) bool {
 	return left.rowData.Kind == right.rowData.Kind
 }

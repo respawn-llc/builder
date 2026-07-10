@@ -58,7 +58,10 @@
 - In the scrollable interior, line, page, wheel, or alternate-scroll movement moves the camera and selects the visible selectable item nearest viewport center.
 - At the top or bottom camera edge, line movement continues through visible selectable items beyond the center anchor. Reverse movement walks an off-center selection back to the center anchor before camera scrolling resumes.
 - Detail requests an adjacent cursor page only after movement in that direction cannot move either the loaded camera or the visible local selection.
-- Every transition into detail resets its bounded transcript membership and UI-local detail state, requests the newest page without a cursor, and anchors the camera and selection at that page's end.
+- A transition into detail renders the same-session cached bounded page and UI-local detail position immediately, then requests the newest page without a cursor.
+- When the cached window reaches the newest edge, the refreshed newest page preserves the response-time selection and camera only if the selected committed row has one unambiguous surviving identity match. Otherwise, the refreshed page anchors the camera and selection at its end.
+- When the cached window has newer content beyond its bottom edge, the refreshed newest page replaces it and anchors the camera and selection at the refreshed page's end.
+- Session-target replacement clears the previous session's cached bounded page and UI-local detail state before hydrating the new target.
 - Tall expanded entries remain selected while their body crosses the center anchor.
 - Detail rows do not use dedicated collapsed/expanded glyphs. First rendered line keeps normal role/tool symbol; continuations use faint tree guides.
 - Compact detail replaces selected expandable item's role symbol with `▶` or `▼`. The affordance is selected-only.

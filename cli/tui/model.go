@@ -63,6 +63,7 @@ const (
 	DetailTranscriptAnchorTop
 	DetailTranscriptAnchorBottom
 	DetailTranscriptAnchorPreserve
+	DetailTranscriptAnchorRefresh
 )
 
 type DetailSelectionAction uint8
@@ -236,6 +237,14 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 	previousScroll := m.detailScroll
 	previousSelected, previousSelectedOK := m.selectedDetailIndex()
 	previousExpanded := m.expanded
+	var previousSelectedRow clientui.TranscriptCommittedRow
+	previousSelectedFirstLine := 0
+	if previousSelectedOK && previousSelected >= 0 && previousSelected < len(m.detailProjection.entries) {
+		previousSelectedRow = m.detailProjection.entries[previousSelected].row()
+		if lineRange, ok := m.detailEntryLineRange(previousSelected); ok {
+			previousSelectedFirstLine = lineRange.first
+		}
+	}
 	prependedEntries = maxInt(0, prependedEntries)
 	visiblePrependedEntries := visibleDetailEntryCount(page.Entries, prependedEntries)
 	visibleTrimmedFrontEntries := visibleDetailEntryCount(trimmedFrontEntries, len(trimmedFrontEntries))
@@ -258,6 +267,14 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 		return
 	}
 	switch {
+	case anchor == DetailTranscriptAnchorRefresh && previousSelectedOK:
+		refreshedSelected, ok := m.detailProjection.indexOfRow(previousSelectedRow)
+		if !ok {
+			m.setSelectedDetailIndex(len(m.detailProjection.entries) - 1)
+			m.detailScroll = m.maxDetailScroll()
+			return
+		}
+		m.setSelectedDetailIndex(refreshedSelected)
 	case anchor == DetailTranscriptAnchorPreserve && previousSelectedOK:
 		m.setSelectedDetailIndex(clampInt(previousSelected+preservedEntryIndexShift, 0, len(m.detailProjection.entries)-1))
 	case anchor == DetailTranscriptAnchorTop:
@@ -268,6 +285,14 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 		m.setSelectedDetailIndex(len(m.detailProjection.entries) - 1)
 	}
 	switch anchor {
+	case DetailTranscriptAnchorRefresh:
+		refreshedSelected, _ := m.selectedDetailIndex()
+		refreshedRange, _ := m.detailEntryLineRange(refreshedSelected)
+		m.detailScroll = clampInt(
+			refreshedRange.first-(previousSelectedFirstLine-previousScroll),
+			0,
+			m.maxDetailScroll(),
+		)
 	case DetailTranscriptAnchorPreserve:
 		m.detailScroll = clampInt(previousScroll+m.detailLineOffsetForEntryIndex(visiblePrependedEntries)-trimmedFrontLineOffset, 0, m.maxDetailScroll())
 	case DetailTranscriptAnchorTop:
@@ -301,7 +326,8 @@ func (anchor DetailTranscriptPageAnchor) valid() bool {
 	return anchor == DetailTranscriptAnchorDefault ||
 		anchor == DetailTranscriptAnchorTop ||
 		anchor == DetailTranscriptAnchorBottom ||
-		anchor == DetailTranscriptAnchorPreserve
+		anchor == DetailTranscriptAnchorPreserve ||
+		anchor == DetailTranscriptAnchorRefresh
 }
 
 func (m Model) detailEmptyLine() string {

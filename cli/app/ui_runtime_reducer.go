@@ -103,10 +103,6 @@ func (m *uiModel) applyDetailTranscriptLoad(requestSessionID string, request cli
 		m.detailTranscript.refreshEdgeCursors(responsePage)
 		return
 	}
-	if request.Cursor == nil && request.NewerCursor == nil && m.detailTranscript.loaded && !transcriptPageSessionChanged(m.detailTranscript.sessionID, responsePage.SessionID) {
-		m.detailTranscript.lastRequest = request
-		return
-	}
 	anchor := tui.DetailTranscriptAnchorDefault
 	prependedEntries := 0
 	var trimmedFrontEntries []clientui.TranscriptCommittedRow
@@ -120,7 +116,16 @@ func (m *uiModel) applyDetailTranscriptLoad(requestSessionID string, request cli
 		trimmedFrontEntries = result.trimmedFrontEntries
 		anchor = tui.DetailTranscriptAnchorPreserve
 	} else {
-		m.detailTranscript.apply(responsePage)
+		preserveCachedPosition := m.detailTranscript.loaded &&
+			!transcriptPageSessionChanged(m.detailTranscript.sessionID, responsePage.SessionID) &&
+			!m.detailTranscript.hasMoreBelow &&
+			m.detailTranscript.newerCursor == nil
+		m.detailTranscript.replace(responsePage)
+		if preserveCachedPosition {
+			anchor = tui.DetailTranscriptAnchorRefresh
+		} else {
+			anchor = tui.DetailTranscriptAnchorBottom
+		}
 	}
 	m.detailTranscript.lastRequest = request
 	page := m.detailTranscript.page()
