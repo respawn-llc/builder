@@ -105,7 +105,9 @@ func TestCaptureAssemblerIsInvariantToRandomReadFragmentation(t *testing.T) {
 		if !bytes.Equal(capture.Raw, coalesced.Raw) || !reflect.DeepEqual(capture.Resizes, coalesced.Resizes) {
 			t.Fatalf("seed=%d capture differs: got=%#v want=%#v", seed, capture, coalesced)
 		}
-		if !reflect.DeepEqual(analysis.Screen, coalescedAnalysis.Screen) || !reflect.DeepEqual(analysis.PrivateModeChanges, coalescedAnalysis.PrivateModeChanges) {
+		if !reflect.DeepEqual(analysis.Screen, coalescedAnalysis.Screen) ||
+			!reflect.DeepEqual(analysis.PrivateModeChanges, coalescedAnalysis.PrivateModeChanges) ||
+			!reflect.DeepEqual(operationView(analysis), operationView(coalescedAnalysis)) {
 			t.Fatalf("seed=%d analysis differs: got=%#v want=%#v", seed, analysis, coalescedAnalysis)
 		}
 	}
