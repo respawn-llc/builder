@@ -3,6 +3,8 @@ package analyzer_test
 import (
 	"bytes"
 	"errors"
+	"math/rand/v2"
+	"reflect"
 	"testing"
 
 	"core/internal/testharness/pty"
@@ -42,6 +44,70 @@ func TestCaptureAssemblerCoalescesEquivalentFragmentationAtResizeBarrier(t *test
 	}
 	if len(split.Resizes) != 1 || len(coalesced.Resizes) != 1 || split.Resizes[0].Offset != coalesced.Resizes[0].Offset {
 		t.Fatalf("resize evidence differs: split=%#v coalesced=%#v", split.Resizes, coalesced.Resizes)
+	}
+}
+
+func TestCaptureAssemblerIsInvariantToRandomReadFragmentation(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte("a\x1b[?1049hhello\x1b[2J\x1b[?25hworld")
+	resizeOffset := len([]byte("a\x1b[?1049hhello"))
+	build := func(fragments [][]byte) (pty.Capture, pty.Analysis) {
+		t.Helper()
+		assembler, err := analyzer.NewCaptureAssembler(pty.MustDimensions(3, 8))
+		if err != nil {
+			t.Fatalf("NewCaptureAssembler: %v", err)
+		}
+		observed := 0
+		for _, fragment := range fragments {
+			if observed == resizeOffset {
+				if err := assembler.Resize(pty.MustDimensions(4, 8)); err != nil {
+					t.Fatalf("Resize: %v", err)
+				}
+			}
+			if err := assembler.Append(fragment); err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			observed += len(fragment)
+		}
+		if observed == resizeOffset {
+			if err := assembler.Resize(pty.MustDimensions(4, 8)); err != nil {
+				t.Fatalf("final Resize: %v", err)
+			}
+		}
+		capture, err := assembler.Capture()
+		if err != nil {
+			t.Fatalf("Capture: %v", err)
+		}
+		analysis, err := pty.Analyze(capture)
+		if err != nil {
+			t.Fatalf("Analyze: %v", err)
+		}
+		return capture, analysis
+	}
+
+	coalesced, coalescedAnalysis := build([][]byte{payload[:resizeOffset], payload[resizeOffset:]})
+	for seed := uint64(0); seed < 8; seed++ {
+		random := rand.New(rand.NewPCG(seed, seed+1))
+		fragments := make([][]byte, 0)
+		for start := 0; start < len(payload); {
+			end := start + 1 + random.IntN(4)
+			if start < resizeOffset && end > resizeOffset {
+				end = resizeOffset
+			}
+			if end > len(payload) {
+				end = len(payload)
+			}
+			fragments = append(fragments, payload[start:end])
+			start = end
+		}
+		capture, analysis := build(fragments)
+		if !bytes.Equal(capture.Raw, coalesced.Raw) || !reflect.DeepEqual(capture.Resizes, coalesced.Resizes) {
+			t.Fatalf("seed=%d capture differs: got=%#v want=%#v", seed, capture, coalesced)
+		}
+		if !reflect.DeepEqual(analysis.Screen, coalescedAnalysis.Screen) || !reflect.DeepEqual(analysis.PrivateModeChanges, coalescedAnalysis.PrivateModeChanges) {
+			t.Fatalf("seed=%d analysis differs: got=%#v want=%#v", seed, analysis, coalescedAnalysis)
+		}
 	}
 }
 
