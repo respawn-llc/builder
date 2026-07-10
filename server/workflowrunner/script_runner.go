@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	tools "core/server/tools"
@@ -172,29 +170,13 @@ func executeWorkflowScript(ctx context.Context, req SchedulerStartRunRequest, in
 	cmd.Env = workflowScriptEnv(req, input)
 	cmd.Stdin = strings.NewReader(string(stdin))
 	prepareScriptCommand(cmd)
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return workflowScriptResult{ResolvedPath: resolvedPath}, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return workflowScriptResult{ResolvedPath: resolvedPath}, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
-	}
+	stdout := shelltool.NewBoundedOutput(scriptOutputLimitBytes)
+	stderr := shelltool.NewBoundedOutput(scriptOutputLimitBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return workflowScriptResult{ResolvedPath: resolvedPath}, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
 	}
-	stdout := shelltool.NewBoundedOutput(scriptOutputLimitBytes)
-	stderr := shelltool.NewBoundedOutput(scriptOutputLimitBytes)
-	var copyWG sync.WaitGroup
-	copyWG.Add(2)
-	go func() {
-		defer copyWG.Done()
-		_, _ = io.Copy(stdout, stdoutPipe)
-	}()
-	go func() {
-		defer copyWG.Done()
-		_, _ = io.Copy(stderr, stderrPipe)
-	}()
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- cmd.Wait()
@@ -217,7 +199,6 @@ func executeWorkflowScript(ctx context.Context, req SchedulerStartRunRequest, in
 			waitErr = <-waitCh
 		}
 	}
-	copyWG.Wait()
 	result := workflowScriptResult{
 		ResolvedPath:   resolvedPath,
 		Stdout:         stdout.Bytes(),
