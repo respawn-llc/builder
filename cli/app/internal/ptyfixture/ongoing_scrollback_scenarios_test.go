@@ -13,19 +13,13 @@ import (
 	"core/internal/testharness/pty"
 )
 
-var (
-	extendedScenarioCompletionDrain      = 8 * time.Second
-	toolLifecycleScenarioCompletionDrain = 15 * time.Second
-)
+var postResponseResizeCompletionDrain = 2 * time.Second
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	buildCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	bin := filepath.Join(t.TempDir(), "kent-pty-fixture")
-	if err := pty.BuildPackage(buildCtx, "core/cli/app/internal/ptyfixture/cmd/kent-pty-fixture", bin); err != nil {
-		t.Fatalf("build fixture: %v", err)
-	}
+	bin := buildPTYFixtureBinary(t, buildCtx)
 
 	for _, tc := range []struct {
 		name                      string
@@ -196,6 +190,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				After:      500 * time.Millisecond,
 				Dimensions: pty.MustDimensions(18, 72),
 			}},
+			completionDrain: &postResponseResizeCompletionDrain,
 		},
 		{
 			name: "parallel_tools_order_and_long_output",
@@ -278,7 +273,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedAppends:     []string{"❮ question lifecycle complete"},
 			expectedAnyAppends:  []string{"? PTY_LIVE_QUESTION"},
 			forbiddenAnyAppends: []string{"? tool call"},
-			completionDrain:     &extendedScenarioCompletionDrain,
 		},
 		{
 			name: "live_background_shell_completion_style",
@@ -314,7 +308,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"ℹ Background shell 1000 completed (exit 0)",
 			},
 			expectedScreenRows: []string{"$ sleep 2; echo $((51515150+1))"},
-			completionDrain:    &extendedScenarioCompletionDrain,
 		},
 		{
 			name: "live_tool_promotion_and_input_dispositions",
@@ -349,7 +342,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			},
 			expectedAppends:    []string{"❮ live lifecycle complete", "❮ queued lifecycle complete"},
 			expectedScreenRows: []string{"$ sleep 5; echo $((42424241+1))"},
-			completionDrain:    &toolLifecycleScenarioCompletionDrain,
 		},
 		{
 			name: "live_failed_tools_retain_input",
@@ -452,7 +444,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				if tc.allowDuplicateAppends {
 					err = contentAppendedAtLeastOnce(appends, content)
 				} else {
-					err = pty.ContentAppendedExactlyOnce(appends, content)
+					err = contentAppendedExactlyOnce(appends, content)
 				}
 				if err != nil {
 					t.Fatalf("append cardinality: %v", err)
@@ -460,7 +452,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			}
 			scrollbackAppends := scrollbackTransactionWrites(analysis, window)
 			for _, content := range tc.expectedScrollbackAppends {
-				if err := pty.ContentAppendedExactlyOnce(scrollbackAppends, content); err != nil {
+				if err := contentAppendedExactlyOnce(scrollbackAppends, content); err != nil {
 					t.Fatalf("scrollback append cardinality: %v; appends=%q", err, appendTexts(scrollbackAppends))
 				}
 			}
@@ -550,12 +542,34 @@ func patchStyleFixture(path string) string {
 
 func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
 	t.Helper()
-	completionDrain := 2 * time.Second
+	return runPTYFixtureScenarioWithInputPlan(
+		t,
+		ctx,
+		bin,
+		name,
+		script,
+		env,
+		ptyFixtureInputPlan{scheduled: inputs},
+		resizes,
+		configuredCompletionDrain,
+	)
+}
+
+type ptyFixtureInputPlan struct {
+	scheduled      []pty.InputEvent
+	frameSequences []pty.FrameInputSequence
+}
+
+func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputPlan ptyFixtureInputPlan, resizes []pty.DriverResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
+	t.Helper()
+	completionDrain := time.Duration(0)
+	completionPhase := pty.PhaseScenarioFinalApplied
 	if configuredCompletionDrain != nil {
 		if *configuredCompletionDrain <= 0 {
 			t.Fatalf("completion drain must be positive: %s", configuredCompletionDrain.String())
 		}
 		completionDrain = *configuredCompletionDrain
+		completionPhase = pty.PhaseScenarioComplete
 	}
 	root := t.TempDir()
 	scriptPath := filepath.Join(root, "script.json")
@@ -567,9 +581,17 @@ func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name s
 		t.Fatalf("write script: %v", err)
 	}
 	observationsPath := filepath.Join(root, "observations.json")
-	phaseInputs := make([]pty.PhaseInputEvent, 0, len(inputs)+2)
+	env = append(env, ptyFixtureProcessEnv(
+		t,
+		root,
+		filepath.Join(root, "workspace"),
+		filepath.Join(root, "persistence"),
+		scriptPath,
+		observationsPath,
+	))
+	phaseInputs := make([]pty.PhaseInputEvent, 0, len(inputPlan.scheduled)+2)
 	phaseInputs = append(phaseInputs, pty.PhaseInputEvent{Phase: pty.PhaseScenarioStart, Bytes: []byte(name + "\r")})
-	for _, input := range inputs {
+	for _, input := range inputPlan.scheduled {
 		phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
 			Phase: pty.PhaseScenarioStart,
 			After: input.After,
@@ -577,23 +599,18 @@ func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name s
 		})
 	}
 	phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
-		Phase: pty.PhaseScenarioComplete,
+		Phase: completionPhase,
 		After: completionDrain,
 		Bytes: []byte{0x03, 0x03},
 	})
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
-		Path: bin,
-		Env:  append([]string(nil), env...),
-		Args: []string{
-			"--workspace", filepath.Join(root, "workspace"),
-			"--persistence-root", filepath.Join(root, "persistence"),
-			"--script", scriptPath,
-			"--observations", observationsPath,
-		},
-		Dimensions:  pty.MustDimensions(24, 80),
-		PhaseInputs: phaseInputs,
-		Resizes:     resizes,
-		Timeout:     75 * time.Second,
+		Path:                bin,
+		Env:                 append([]string(nil), env...),
+		Dimensions:          pty.MustDimensions(24, 80),
+		PhaseInputs:         phaseInputs,
+		FrameInputSequences: inputPlan.frameSequences,
+		Resizes:             resizes,
+		Timeout:             75 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run fixture: %v raw=%q", err, string(capture.Raw))
@@ -616,13 +633,13 @@ func scenarioOperationWindow(analysis pty.Analysis) (pty.OperationWindow, error)
 	return pty.OperationWindow{Start: *start, End: len(analysis.Operations)}, nil
 }
 
-func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.OperationWindow, expected []string, allowDuplicates bool) ([]pty.AppendOperation, error) {
+func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.OperationWindow, expected []string, allowDuplicates bool) ([]logicalAppendRow, error) {
 	if len(expected) == 0 {
 		return nil, fmt.Errorf("scenario requires exact appended content expectations")
 	}
 	var lastTexts []string
 	for boundary := analysis.Dimensions.Rows - 1; boundary > 0; boundary-- {
-		appends := coalesceCompleteAppendRows(pty.ClassifyAppends(analysis, window, boundary))
+		appends := classifyLogicalAppendRows(analysis, window, boundary)
 		lastTexts = appendTexts(appends)
 		matched := true
 		for _, content := range expected {
@@ -630,7 +647,7 @@ func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.Oper
 			if allowDuplicates {
 				err = contentAppendedAtLeastOnce(appends, content)
 			} else {
-				err = pty.ContentAppendedExactlyOnce(appends, content)
+				err = contentAppendedExactlyOnce(appends, content)
 			}
 			if err != nil {
 				matched = false
@@ -641,10 +658,7 @@ func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.Oper
 			continue
 		}
 		appendAnalysis := analysis
-		appendAnalysis.Operations = make([]pty.Operation, 0, len(appends))
-		for _, appendOperation := range appends {
-			appendAnalysis.Operations = append(appendAnalysis.Operations, appendOperation.Operation)
-		}
+		appendAnalysis.Operations = appendOperations(appends)
 		if err := pty.NoWritesAbove(appendAnalysis, pty.OperationWindow{Start: 0, End: len(appendAnalysis.Operations)}, boundary); err != nil {
 			return nil, err
 		}
@@ -653,14 +667,14 @@ func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.Oper
 	return nil, fmt.Errorf("no non-zero append boundary classified expected content exactly once; candidates=%q", lastTexts)
 }
 
-func allScenarioAppendRows(analysis pty.Analysis, expected []string) ([]pty.AppendOperation, error) {
+func allScenarioAppendRows(analysis pty.Analysis, expected []string) ([]logicalAppendRow, error) {
 	if len(expected) == 0 {
 		return nil, nil
 	}
 	window := pty.OperationWindow{Start: 0, End: len(analysis.Operations)}
 	var lastTexts []string
 	for boundary := analysis.Dimensions.Rows - 1; boundary > 0; boundary-- {
-		appends := coalesceCompleteAppendRows(pty.ClassifyAppends(analysis, window, boundary))
+		appends := classifyLogicalAppendRows(analysis, window, boundary)
 		lastTexts = appendTexts(appends)
 		matched := true
 		for _, content := range expected {
@@ -676,7 +690,7 @@ func allScenarioAppendRows(analysis pty.Analysis, expected []string) ([]pty.Appe
 	return nil, fmt.Errorf("no append boundary classified full-window expected content; candidates=%q", lastTexts)
 }
 
-func scrollbackTransactionWrites(analysis pty.Analysis, window pty.OperationWindow) []pty.AppendOperation {
+func scrollbackTransactionWrites(analysis pty.Analysis, window pty.OperationWindow) []logicalAppendRow {
 	out := make([]pty.AppendOperation, 0)
 	inRestrictedScrollRegion := false
 	for _, operation := range analysis.Operations[window.Start:window.End] {
@@ -691,56 +705,108 @@ func scrollbackTransactionWrites(analysis pty.Analysis, window pty.OperationWind
 	return coalesceCompleteAppendRows(out)
 }
 
-func coalesceCompleteAppendRows(appends []pty.AppendOperation) []pty.AppendOperation {
-	out := make([]pty.AppendOperation, 0, len(appends))
+type logicalAppendRow struct {
+	segments []pty.AppendOperation
+}
+
+// A logical append row is all ordered semantic writes that land on one terminal
+// row at or below the immutable boundary. A row can contain differently styled
+// segments, so it must never be represented by one synthetic write payload.
+func classifyLogicalAppendRows(analysis pty.Analysis, window pty.OperationWindow, immutableBoundary int) []logicalAppendRow {
+	if window.Start < 0 || window.End < window.Start || window.End > len(analysis.Operations) {
+		panic(fmt.Sprintf("invalid operation window: window=%+v operation_count=%d", window, len(analysis.Operations)))
+	}
+	appends := make([]pty.AppendOperation, 0)
+	for _, operation := range analysis.Operations[window.Start:window.End] {
+		if operation.Kind != pty.OperationWrite || operation.Region.Top < immutableBoundary {
+			continue
+		}
+		if operation.Write == nil {
+			panic(fmt.Sprintf("append write operation missing payload: sequence=%d byte_range=%+v", operation.Sequence, operation.ByteRange))
+		}
+		appends = append(appends, pty.AppendOperation{Operation: operation})
+	}
+	return coalesceCompleteAppendRows(appends)
+}
+
+func (row logicalAppendRow) text() string {
+	var out strings.Builder
+	for _, segment := range row.segments {
+		if segment.Operation.Write == nil {
+			panic(fmt.Sprintf("logical append row contains operation without write payload: sequence=%d", segment.Operation.Sequence))
+		}
+		out.WriteString(segment.Operation.Write.Text)
+	}
+	return out.String()
+}
+
+func coalesceCompleteAppendRows(appends []pty.AppendOperation) []logicalAppendRow {
+	out := make([]logicalAppendRow, 0, len(appends))
 	for _, appendOperation := range appends {
 		current := appendOperation.Operation
 		if current.Write == nil || len(out) == 0 {
-			out = append(out, appendOperation)
+			out = append(out, logicalAppendRow{segments: []pty.AppendOperation{appendOperation}})
 			continue
 		}
-		previous := &out[len(out)-1].Operation
-		if previous.Write == nil ||
-			previous.Region.Top != current.Region.Top ||
-			previous.Region.Bottom != current.Region.Bottom ||
-			previous.Region.Right != current.Region.Left {
-			out = append(out, appendOperation)
+		previous := &out[len(out)-1]
+		previousOperation := previous.segments[len(previous.segments)-1].Operation
+		if previousOperation.Write == nil ||
+			previousOperation.Region.Top != current.Region.Top ||
+			previousOperation.Region.Bottom != current.Region.Bottom ||
+			previousOperation.Region.Right != current.Region.Left {
+			out = append(out, logicalAppendRow{segments: []pty.AppendOperation{appendOperation}})
 			continue
 		}
-		previous.Region.Right = current.Region.Right
-		previous.ByteRange.End = current.ByteRange.End
-		previous.After = current.After
-		previous.CapturedAt = current.CapturedAt
-		payload := pty.MustWritePayload(previous.Write.Text + current.Write.Text)
-		previous.Write = &payload
+		previous.segments = append(previous.segments, appendOperation)
 	}
 	return out
 }
 
-func contentAppendedAtLeastOnce(appends []pty.AppendOperation, content string) error {
-	for _, appendOperation := range appends {
-		if appendOperation.Operation.Write != nil && appendOperation.Operation.Write.Text == content {
+func appendOperations(rows []logicalAppendRow) []pty.Operation {
+	operations := make([]pty.Operation, 0)
+	for _, row := range rows {
+		for _, segment := range row.segments {
+			operations = append(operations, segment.Operation)
+		}
+	}
+	return operations
+}
+
+func contentAppendedExactlyOnce(appends []logicalAppendRow, content string) error {
+	count := 0
+	for _, row := range appends {
+		if row.text() == content {
+			count++
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("content append count for %q = %d, want exactly 1", content, count)
+	}
+	return nil
+}
+
+func contentAppendedAtLeastOnce(appends []logicalAppendRow, content string) error {
+	for _, row := range appends {
+		if row.text() == content {
 			return nil
 		}
 	}
 	return fmt.Errorf("content append count for %q = 0, want at least 1; appends=%q", content, appendTexts(appends))
 }
 
-func contentNotAppended(appends []pty.AppendOperation, content string) error {
-	for _, appendOperation := range appends {
-		if appendOperation.Operation.Write != nil && appendOperation.Operation.Write.Text == content {
+func contentNotAppended(appends []logicalAppendRow, content string) error {
+	for _, row := range appends {
+		if row.text() == content {
 			return fmt.Errorf("content append for %q found", content)
 		}
 	}
 	return nil
 }
 
-func appendTexts(appends []pty.AppendOperation) []string {
+func appendTexts(appends []logicalAppendRow) []string {
 	out := make([]string, 0, len(appends))
-	for _, appendOperation := range appends {
-		if appendOperation.Operation.Write != nil {
-			out = append(out, appendOperation.Operation.Write.Text)
-		}
+	for _, row := range appends {
+		out = append(out, row.text())
 	}
 	return out
 }

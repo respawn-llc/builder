@@ -8,28 +8,12 @@ import (
 )
 
 func shellSyntaxSpans(line string, meta toolMeta) []Span {
-	if line == "" {
-		return []Span{{Role: StyleRoleToolShell, Faint: true}}
-	}
+	fallback := SemanticStyle(StyleRoleToolShell, SpanAttributeFaint)
 	lexer := shellSyntaxLexer(meta)
-	if lexer == nil {
-		return []Span{{Text: line, Role: StyleRoleToolShell, Faint: true}}
-	}
-	iterator, err := chroma.Coalesce(lexer).Tokenise(nil, line)
-	if err != nil {
-		return []Span{{Text: line, Role: StyleRoleToolShell, Faint: true}}
-	}
-	var spans []Span
-	for token := iterator(); token != chroma.EOF; token = iterator() {
-		if token.Value == "" {
-			continue
-		}
-		spans = append(spans, Span{Text: token.Value, Role: shellSyntaxRole(token.Type), Faint: true})
-	}
-	if len(spans) == 0 {
-		return []Span{{Text: line, Role: StyleRoleToolShell, Faint: true}}
-	}
-	return spans
+	projected := projectSyntaxSpans(lexer, line, fallback, func(tokenType chroma.TokenType) SpanStyle {
+		return SemanticStyle(shellSyntaxRole(tokenType), SpanAttributeFaint)
+	})
+	return projected[0]
 }
 
 func shellSyntaxLexer(meta toolMeta) chroma.Lexer {

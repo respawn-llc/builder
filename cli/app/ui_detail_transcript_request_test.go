@@ -8,6 +8,7 @@ import (
 	"core/cli/tui"
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"core/shared/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -16,14 +17,14 @@ func TestDetailTranscriptRequestIsSingleFlight(t *testing.T) {
 	sessionViews := newControlledTranscriptPageClient()
 	model := newProjectedClosedUIModel(
 		&runtimeControlFakeClient{},
-		WithUISessionID("session-1"),
+		WithUISessionID(detailTestSessionID),
 		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
 	)
 	model.detailTranscript.replace(clientui.TranscriptPage{
-		SessionID:    "session-1",
+		SessionID:    detailTestSessionID,
 		OlderCursor:  appInt64Ptr(25),
 		HasMoreAbove: true,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "current page"}},
+		Entries:      []clientui.TranscriptCommittedRow{detailTestAssistantRow("current page")},
 	})
 
 	next, firstCmd := model.Update(tui.RequestDetailTranscriptPageMsg{Direction: tui.DetailTranscriptPageOlder})
@@ -70,10 +71,10 @@ func TestDetailTranscriptEdgeInputsShareSingleFlightRequest(t *testing.T) {
 			sessionViews := newControlledTranscriptPageClient()
 			model := newDetailTranscriptRequestTestModel(sessionViews)
 			model.detailTranscript.replace(clientui.TranscriptPage{
-				SessionID:    "session-1",
+				SessionID:    detailTestSessionID,
 				NewerCursor:  appInt64Ptr(25),
 				HasMoreBelow: true,
-				Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "current page"}},
+				Entries:      []clientui.TranscriptCommittedRow{detailTestAssistantRow("current page")},
 			})
 			model.view = tui.NewModel()
 			model.forwardToView(tui.SetViewportSizeMsg{Lines: 2, Width: 80})
@@ -103,12 +104,12 @@ func TestDetailTranscriptMatchingSuccessAllowsNextRequest(t *testing.T) {
 	waitForDetailTranscriptRequest(t, sessionViews)
 	sessionViews.results <- controlledTranscriptPageResult{response: serverapi.SessionTranscriptPageResponse{
 		Transcript: clientui.TranscriptPage{
-			SessionID:    "session-1",
+			SessionID:    detailTestSessionID,
 			OlderCursor:  appInt64Ptr(10),
 			HasMoreAbove: true,
 			NewerCursor:  appInt64Ptr(25),
 			HasMoreBelow: true,
-			Entries:      []clientui.ChatEntry{{Role: "user", Text: "older page"}},
+			Entries:      []clientui.TranscriptCommittedRow{detailTestUserRow("older page")},
 		},
 	}}
 	model = updateUIModel(t, model, waitForDetailTranscriptCompletion(t, firstDone))
@@ -152,17 +153,159 @@ func TestDetailTranscriptMatchingErrorAllowsNextRequest(t *testing.T) {
 	_ = waitForDetailTranscriptCompletion(t, secondDone)
 }
 
+func TestDetailTranscriptMalformedPageClearsPendingRequestWithoutMutatingMembershipOrTUI(t *testing.T) {
+	malformed := detailTestUserRow("invalid row")
+	malformed.Integrity = transcript.RowIntegrity(255)
+	assertDetailTranscriptPageRejected(t, clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries:   []clientui.TranscriptCommittedRow{malformed},
+	})
+}
+
+func TestDetailTranscriptUnresolvedVisibilityClearsPendingRequestWithoutMutatingMembershipOrTUI(t *testing.T) {
+	unresolved := detailTestUserRow("unresolved visibility")
+	unresolved.Visibility = clientui.EntryVisibilityAuto
+	assertDetailTranscriptPageRejected(t, clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries:   []clientui.TranscriptCommittedRow{unresolved},
+	})
+}
+
+func TestDetailTranscriptMismatchedResponseSessionClearsPendingRequestWithoutMutatingMembershipOrTUI(t *testing.T) {
+	assertDetailTranscriptPageRejected(t, clientui.TranscriptPage{
+		SessionID: detailTestReplacementSessionID,
+		Entries:   []clientui.TranscriptCommittedRow{detailTestUserRow("wrong session")},
+	})
+}
+
+func assertDetailTranscriptPageRejected(t *testing.T, page clientui.TranscriptPage) {
+	t.Helper()
+	sessionViews := newControlledTranscriptPageClient()
+	model := newDetailTranscriptRequestTestModel(sessionViews)
+	defer model.Close()
+	model.view = tui.NewModel()
+	model.forwardToView(tui.SetViewportSizeMsg{Lines: 4, Width: 80})
+	model.forwardToView(tui.SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("line one\nline two\nline three\nline four"),
+		},
+	}})
+	model.view = mustUpdateTUIModel(t, model.view, tui.SetModeMsg{Mode: tui.ModeDetail})
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
+		t.Fatalf("detail action before malformed response = %v, want expand", action)
+	}
+	before := model.detailTranscript.page()
+
+	model, cmd := updateDetailTranscriptRequest(t, model, tui.DetailTranscriptPageOlder)
+	done := runDetailTranscriptCommand(cmd)
+	waitForDetailTranscriptRequest(t, sessionViews)
+	sessionViews.results <- controlledTranscriptPageResult{response: serverapi.SessionTranscriptPageResponse{
+		Transcript: page,
+	}}
+	model = updateUIModel(t, model, waitForDetailTranscriptCompletion(t, done))
+
+	if model.pendingDetailTranscript != nil {
+		t.Fatalf("invalid page retained pending request: %#v", model.pendingDetailTranscript)
+	}
+	if !detailTestRowsEqual(model.detailTranscript.page().Entries, before.Entries) {
+		t.Fatalf("invalid page mutated detail membership: %#v", model.detailTranscript.page().Entries)
+	}
+	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
+		t.Fatalf("invalid page mutated TUI detail selection action: %v", action)
+	}
+	if model.transientStatusKind != uiStatusNoticeError || model.transientStatusRequestID != nil {
+		t.Fatalf("invalid page did not use the matching request error path: kind=%v request=%v", model.transientStatusKind, model.transientStatusRequestID)
+	}
+	_, nextCmd := updateDetailTranscriptRequest(t, model, tui.DetailTranscriptPageOlder)
+	if nextCmd == nil {
+		t.Fatal("invalid page did not clear the matching pending request")
+	}
+}
+
+func TestDetailTranscriptMalformedToolRowsRemainLoadable(t *testing.T) {
+	sessionViews := newControlledTranscriptPageClient()
+	model := newDetailTranscriptRequestTestModel(sessionViews)
+	defer model.Close()
+	before := model.detailTranscript.page()
+	malformedRows := []clientui.TranscriptCommittedRow{
+		{
+			Visibility: clientui.EntryVisibilityDetail,
+			Integrity:  transcript.RowIntegrityRecoverableMalformed,
+			Kind:       clientui.TranscriptRowTool,
+			Tool:       &clientui.TranscriptToolRow{},
+		},
+		{
+			Visibility: clientui.EntryVisibilityDetail,
+			Integrity:  transcript.RowIntegrityUnrecoverableMalformed,
+			Kind:       clientui.TranscriptRowTool,
+			Tool:       &clientui.TranscriptToolRow{},
+		},
+	}
+
+	model, cmd := updateDetailTranscriptRequest(t, model, tui.DetailTranscriptPageOlder)
+	done := runDetailTranscriptCommand(cmd)
+	waitForDetailTranscriptRequest(t, sessionViews)
+	sessionViews.results <- controlledTranscriptPageResult{response: serverapi.SessionTranscriptPageResponse{
+		Transcript: clientui.TranscriptPage{
+			SessionID: detailTestSessionID,
+			Entries:   malformedRows,
+		},
+	}}
+	model = updateUIModel(t, model, waitForDetailTranscriptCompletion(t, done))
+
+	wantEntries := append(append([]clientui.TranscriptCommittedRow(nil), malformedRows...), before.Entries...)
+	if !detailTestRowsEqual(model.detailTranscript.page().Entries, wantEntries) {
+		t.Fatalf("malformed tool rows were not loaded: %#v", model.detailTranscript.page().Entries)
+	}
+	if model.pendingDetailTranscript != nil || model.transientStatusKind == uiStatusNoticeError {
+		t.Fatalf("malformed tool rows followed the page error path: pending=%#v status=%v", model.pendingDetailTranscript, model.transientStatusKind)
+	}
+}
+
+func TestDetailTranscriptInvalidSessionIDDoesNotCreatePendingRequest(t *testing.T) {
+	sessionViews := newControlledTranscriptPageClient()
+	model := newProjectedClosedUIModel(
+		&runtimeControlFakeClient{},
+		WithUISessionID("not-a-valid-session-uuid"),
+		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
+	)
+	model.detailTranscript.replace(clientui.TranscriptPage{
+		SessionID:    detailTestSessionID,
+		OlderCursor:  appInt64Ptr(25),
+		HasMoreAbove: true,
+		Entries:      []clientui.TranscriptCommittedRow{detailTestAssistantRow("current page")},
+	})
+
+	next, cmd := model.Update(tui.RequestDetailTranscriptPageMsg{Direction: tui.DetailTranscriptPageOlder})
+	model = next.(*uiModel)
+
+	if cmd == nil {
+		t.Fatal("invalid detail session did not schedule the existing transient error path")
+	}
+	if model.pendingDetailTranscript != nil {
+		t.Fatalf("invalid detail session created pending request %#v", model.pendingDetailTranscript)
+	}
+	if model.transientStatusKind != uiStatusNoticeError || model.transientStatus == "" {
+		t.Fatalf("invalid detail session did not surface an error status: kind=%v text=%q", model.transientStatusKind, model.transientStatus)
+	}
+	select {
+	case request := <-sessionViews.started:
+		t.Fatalf("invalid detail session reached session view client: %#v", request)
+	default:
+	}
+}
+
 func TestDetailTranscriptLoadingNoticeKeepsExpansionActionIndependent(t *testing.T) {
 	sessionViews := newControlledTranscriptPageClient()
 	model := newDetailTranscriptRequestTestModel(sessionViews)
 	model.view = tui.NewModel()
 	model.forwardToView(tui.SetViewportSizeMsg{Lines: 4, Width: 80})
 	model.forwardToView(tui.SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
-		SessionID: "session-1",
-		Entries: []clientui.ChatEntry{{
-			Role: "assistant",
-			Text: "line one\nline two\nline three\nline four",
-		}},
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("line one\nline two\nline three\nline four"),
+		},
 	}})
 	model.view = mustUpdateTUIModel(t, model.view, tui.SetModeMsg{Mode: tui.ModeDetail})
 	if action := model.view.DetailSelectionAction(); action != tui.DetailSelectionActionExpand {
@@ -196,9 +339,10 @@ func TestDetailTranscriptMatchingSuccessClearsOnlyItsLoadingNotice(t *testing.T)
 	model.sendTransientStatusWithNoticeID(overtakingNotice, uiStatusNoticeWarning, transientStatusDuration, uiStatusNoticeReplace, "")
 	sessionViews.results <- controlledTranscriptPageResult{response: serverapi.SessionTranscriptPageResponse{
 		Transcript: clientui.TranscriptPage{
-			SessionID:   "session-1",
-			NewerCursor: appInt64Ptr(25),
-			Entries:     []clientui.ChatEntry{{Role: "user", Text: "older page"}},
+			SessionID:    detailTestSessionID,
+			NewerCursor:  appInt64Ptr(25),
+			HasMoreBelow: true,
+			Entries:      []clientui.TranscriptCommittedRow{detailTestUserRow("older page")},
 		},
 	}}
 	model = updateUIModel(t, model, waitForDetailTranscriptCompletion(t, done))
@@ -223,7 +367,7 @@ func TestDetailTranscriptCloseCancelsAndInvalidatesPendingRequest(t *testing.T) 
 	completion := waitForDetailTranscriptCompletion(t, done)
 	model = updateUIModel(t, model, completion)
 
-	if !sameChatEntries(model.detailTranscript.page().Entries, before.Entries) {
+	if !detailTestRowsEqual(model.detailTranscript.page().Entries, before.Entries) {
 		t.Fatalf("late completion after Close mutated detail membership: %#v", model.detailTranscript.page().Entries)
 	}
 	if model.transientStatusRequestID != nil || model.transientStatusKind == uiStatusNoticeError {
@@ -240,11 +384,10 @@ func TestDetailTranscriptVisibleSessionReplacementCancelsOldRequestAndHydratesNe
 	model := newDetailTranscriptRequestTestModel(sessionViews)
 	model.view = tui.NewModel()
 	model.forwardToView(tui.SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
-		SessionID: "session-1",
-		Entries: []clientui.ChatEntry{{
-			Role: "assistant",
-			Text: "line one\nline two\nline three\nline four",
-		}},
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("line one\nline two\nline three\nline four"),
+		},
 	}})
 	model.view = mustUpdateTUIModel(t, model.view, tui.SetModeMsg{Mode: tui.ModeDetail})
 
@@ -252,7 +395,7 @@ func TestDetailTranscriptVisibleSessionReplacementCancelsOldRequestAndHydratesNe
 	oldDone := runDetailTranscriptCommand(oldCmd)
 	waitForDetailTranscriptRequest(t, sessionViews)
 
-	newCmd := model.runtimeAdapter().applyProjectedSessionMetadata(clientui.RuntimeSessionView{SessionID: "session-2"})
+	newCmd := model.runtimeAdapter().applyProjectedSessionMetadata(clientui.RuntimeSessionView{SessionID: detailTestReplacementSessionID})
 	if model.detailTranscript.loaded {
 		t.Fatal("visible session replacement retained old app detail membership")
 	}
@@ -265,8 +408,8 @@ func TestDetailTranscriptVisibleSessionReplacementCancelsOldRequestAndHydratesNe
 
 	newDone := runDetailTranscriptCommand(newCmd)
 	newRequest := waitForDetailTranscriptRequest(t, sessionViews)
-	if newRequest.SessionID != "session-2" {
-		t.Fatalf("replacement hydration session = %q, want session-2", newRequest.SessionID)
+	if newRequest.SessionID != detailTestReplacementSessionID {
+		t.Fatalf("replacement hydration session = %q, want %q", newRequest.SessionID, detailTestReplacementSessionID)
 	}
 	replacementNotice := "replacement target active"
 	model.sendTransientStatusWithNoticeID(replacementNotice, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, "")
@@ -276,14 +419,15 @@ func TestDetailTranscriptVisibleSessionReplacementCancelsOldRequestAndHydratesNe
 	}
 	sessionViews.results <- controlledTranscriptPageResult{response: serverapi.SessionTranscriptPageResponse{
 		Transcript: clientui.TranscriptPage{
-			SessionID: "session-2",
-			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "replacement page"}},
+			SessionID: detailTestReplacementSessionID,
+			Entries:   []clientui.TranscriptCommittedRow{detailTestAssistantRow("replacement page")},
 		},
 	}}
 	model = updateUIModel(t, model, waitForDetailTranscriptCompletion(t, newDone))
 	got := model.detailTranscript.page()
-	if got.SessionID != "session-2" || len(got.Entries) != 1 || got.Entries[0].Text != "replacement page" {
-		t.Fatalf("replacement detail page = %#v, want session-2 membership", got)
+	wantEntries := []clientui.TranscriptCommittedRow{detailTestAssistantRow("replacement page")}
+	if got.SessionID != detailTestReplacementSessionID || !detailTestRowsEqual(got.Entries, wantEntries) {
+		t.Fatalf("replacement detail page = %#v, want session %q with %#v", got, detailTestReplacementSessionID, wantEntries)
 	}
 }
 
@@ -292,14 +436,13 @@ func TestDetailTranscriptHiddenSessionReplacementResetsAndHydratesNewTarget(t *t
 	model := newDetailTranscriptRequestTestModel(sessionViews)
 	model.view = tui.NewModel()
 	model.forwardToView(tui.SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
-		SessionID: "session-1",
-		Entries: []clientui.ChatEntry{{
-			Role: "assistant",
-			Text: "line one\nline two\nline three\nline four",
-		}},
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("line one\nline two\nline three\nline four"),
+		},
 	}})
 
-	cmd := model.runtimeAdapter().applyProjectedSessionMetadata(clientui.RuntimeSessionView{SessionID: "session-2"})
+	cmd := model.runtimeAdapter().applyProjectedSessionMetadata(clientui.RuntimeSessionView{SessionID: detailTestReplacementSessionID})
 	if model.detailTranscript.loaded {
 		t.Fatal("hidden session replacement retained old app detail membership")
 	}
@@ -313,11 +456,11 @@ func TestDetailTranscriptHiddenSessionReplacementResetsAndHydratesNewTarget(t *t
 
 	done := runDetailTranscriptCommand(cmd)
 	request := waitForDetailTranscriptRequest(t, sessionViews)
-	if request.SessionID != "session-2" {
-		t.Fatalf("hidden replacement hydration session = %q, want session-2", request.SessionID)
+	if request.SessionID != detailTestReplacementSessionID {
+		t.Fatalf("hidden replacement hydration session = %q, want %q", request.SessionID, detailTestReplacementSessionID)
 	}
 	sessionViews.results <- controlledTranscriptPageResult{response: serverapi.SessionTranscriptPageResponse{
-		Transcript: clientui.TranscriptPage{SessionID: "session-2"},
+		Transcript: clientui.TranscriptPage{SessionID: detailTestReplacementSessionID},
 	}}
 	_ = waitForDetailTranscriptCompletion(t, done)
 }
@@ -325,14 +468,14 @@ func TestDetailTranscriptHiddenSessionReplacementResetsAndHydratesNewTarget(t *t
 func newDetailTranscriptRequestTestModel(sessionViews *controlledTranscriptPageClient) *uiModel {
 	model := newProjectedClosedUIModel(
 		&runtimeControlFakeClient{},
-		WithUISessionID("session-1"),
+		WithUISessionID(detailTestSessionID),
 		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
 	)
 	model.detailTranscript.replace(clientui.TranscriptPage{
-		SessionID:    "session-1",
+		SessionID:    detailTestSessionID,
 		OlderCursor:  appInt64Ptr(25),
 		HasMoreAbove: true,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "current page"}},
+		Entries:      []clientui.TranscriptCommittedRow{detailTestAssistantRow("current page")},
 	})
 	return model
 }

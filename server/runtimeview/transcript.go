@@ -1,12 +1,8 @@
 package runtimeview
 
 import (
-	"strings"
-
 	"core/server/runtime"
 	"core/shared/clientui"
-	"core/shared/transcript"
-	"core/shared/valuecopy"
 )
 
 const RecentTailEntryLimit = 500
@@ -44,7 +40,7 @@ func TranscriptPageFromSegment(sessionID, sessionName string, freshness clientui
 		HasMoreAbove:          page.HasMoreAbove,
 		NewerCursor:           transcriptCursor(page.HasMoreBelow, page.NewerCursor),
 		HasMoreBelow:          page.HasMoreBelow,
-		Entries:               chatEntriesFromRuntimeSnapshot(page.Snapshot),
+		Entries:               transcriptRowsFromFacts(runtime.TranscriptCommittedRowFactsFromSnapshot(page.Snapshot)),
 	}
 }
 
@@ -53,51 +49,4 @@ func transcriptCursor(hasMore bool, cursor int64) *int64 {
 		return nil
 	}
 	return &cursor
-}
-
-func chatEntriesFromRuntimeSnapshot(snapshot runtime.ChatSnapshot) []clientui.ChatEntry {
-	entries := make([]clientui.ChatEntry, 0, len(snapshot.Entries))
-	for _, entry := range snapshot.Entries {
-		if isSuppressedNoopAssistantEntry(entry) {
-			continue
-		}
-		messageType := clientui.MessageType(entry.MessageType)
-		if transcript.IsReviewerEntryRole(strings.TrimSpace(entry.Role)) {
-			messageType = clientui.MessageTypeReviewerFeedback
-		}
-		entries = append(entries, clientui.ChatEntry{
-			Visibility:         clientui.EntryVisibility(entry.Visibility),
-			RollbackTargetID:   entry.RollbackTargetID,
-			Role:               entry.Role,
-			Text:               entry.Text,
-			CondensedText:      entry.CondensedText,
-			Phase:              clientui.MessagePhase(entry.Phase),
-			MessageType:        messageType,
-			SourcePath:         entry.SourcePath,
-			CompactLabel:       entry.CompactLabel,
-			ToolResultSummary:  entry.ToolResultSummary,
-			ToolCallID:         entry.ToolCallID,
-			NoticeID:           entry.NoticeID,
-			BackgroundExitCode: valuecopy.Pointer(entry.BackgroundExitCode),
-			ToolCall:           cloneToolCallMeta(entry.ToolCall),
-		})
-	}
-	return entries
-}
-
-func isSuppressedNoopAssistantEntry(entry runtime.ChatEntry) bool {
-	return strings.TrimSpace(entry.Role) == "assistant" && strings.TrimSpace(entry.Text) == runtimeNoopFinalToken
-}
-
-func cloneChatEntries(entries []clientui.ChatEntry) []clientui.ChatEntry {
-	if len(entries) == 0 {
-		return nil
-	}
-	cloned := make([]clientui.ChatEntry, 0, len(entries))
-	for _, entry := range entries {
-		copyEntry := entry
-		copyEntry.ToolCall = valuecopy.ToolCallMeta(entry.ToolCall)
-		cloned = append(cloned, copyEntry)
-	}
-	return cloned
 }

@@ -11,14 +11,28 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, _ string, mode Mode) Row {
+func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string, mode Mode) Row {
+	var syntax *syntaxProjector
+	if mode == ModeDetailExpanded {
+		configured := newSyntaxProjector(themeName)
+		syntax = &configured
+	}
+	return renderCommittedRow(row, width, mode, syntax)
+}
+
+func renderCommittedRow(
+	row clientui.TranscriptCommittedRow,
+	width int,
+	mode Mode,
+	syntax *syntaxProjector,
+) Row {
 	switch row.Kind {
 	case clientui.TranscriptRowUser:
 		return Row{Group: clientui.TranscriptRowUser, Lines: renderUserAssistantTextBlock(StyleRoleUser, userAssistantDisplayText(row.User.Text, row.User.CondensedText, mode), width, mode)}
 	case clientui.TranscriptRowAssistant:
 		return Row{Group: clientui.TranscriptRowAssistant, Lines: renderUserAssistantTextBlock(StyleRoleAssistant, userAssistantDisplayText(row.Assistant.Text, row.Assistant.CondensedText, mode), width, mode)}
 	case clientui.TranscriptRowTool:
-		return Row{Group: clientui.TranscriptRowTool, Lines: RenderToolRow(*row.Tool, width, mode)}
+		return Row{Group: clientui.TranscriptRowTool, Lines: renderToolRow(*row.Tool, width, mode, syntax)}
 	case clientui.TranscriptRowNotice:
 		role, text := noticeRoleAndText(row.Notice, row.Visibility, mode)
 		meta := toolMeta{}
@@ -42,7 +56,7 @@ func RenderDivider(group clientui.TranscriptRowKind, width int) Line {
 }
 
 func dividerLine(text string) Line {
-	return Line{Spans: []Span{{Text: text, Role: StyleRoleNotice, Faint: true}}}
+	return Line{Spans: []Span{SemanticSpan(text, StyleRoleNotice, SpanAttributeFaint)}}
 }
 
 // userAssistantDisplayText selects compact vs full text for user/assistant
@@ -101,7 +115,7 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 
 func textLines(role StyleRole, lines []string, meta toolMeta) []Line {
 	if len(lines) == 0 {
-		return []Line{{Spans: []Span{{Role: role, Faint: roleDefaultFaint(role)}}}}
+		return []Line{{Spans: []Span{roleSpan("", role)}}}
 	}
 	out := make([]Line, 0, len(lines))
 	for _, line := range lines {
@@ -109,7 +123,7 @@ func textLines(role StyleRole, lines []string, meta toolMeta) []Line {
 			out = append(out, Line{Spans: shellSyntaxSpans(line, meta)})
 			continue
 		}
-		out = append(out, Line{Spans: []Span{{Text: line, Role: role, Faint: roleDefaultFaint(role)}}})
+		out = append(out, Line{Spans: []Span{roleSpan(line, role)}})
 	}
 	return out
 }
@@ -124,7 +138,7 @@ func attachPrefixWithMeta(role StyleRole, lines []Line, width int, forceEllipsis
 
 func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forceEllipsis bool, firstLineMeta string, mode Mode, meta toolMeta) []Line {
 	if len(lines) == 0 {
-		lines = []Line{{Spans: []Span{{Role: role}}}}
+		lines = []Line{{Spans: []Span{SemanticSpan("", role)}}}
 	}
 	firstLineMeta = strings.TrimSpace(safeTranscriptText(firstLineMeta))
 	symbolText := roleSymbolText(role, meta)
@@ -145,17 +159,20 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 			if gap < 1 {
 				gap = 1
 			}
-			spans = append(spans, Span{Text: strings.Repeat(" ", gap), Role: role, Faint: roleDefaultFaint(role)})
-			spans = append(spans, Span{Text: inlineMeta, Role: StyleRoleNotice, Faint: true})
+			spans = append(spans, roleSpan(strings.Repeat(" ", gap), role))
+			spans = append(spans, SemanticSpan(inlineMeta, StyleRoleNotice, SpanAttributeFaint))
 		}
 		if idx == 0 {
 			symbolRole := roleSymbolStyleRole(role, meta)
-			symbol := Span{Text: symbolText, Role: symbolRole, Faint: roleSymbolFaint(role, symbolRole)}
-			spans = append([]Span{{Text: " ", Role: role, Faint: roleDefaultFaint(role)}}, spans...)
-			line = Line{LeadingSymbol: &symbol, Spans: spans}
+			symbol := SemanticSpan(symbolText, symbolRole)
+			if roleSymbolFaint(role, symbolRole) {
+				symbol.Style = symbol.Style.With(SpanAttributeFaint)
+			}
+			spans = append([]Span{roleSpan(" ", role)}, spans...)
+			line = Line{LeadingSymbol: &symbol, Spans: spans, Background: line.Background}
 		} else {
 			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex), spans...)
-			line = Line{Spans: spans}
+			line = Line{Spans: spans, Background: line.Background}
 		}
 		if forceEllipsis || lipgloss.Width(line.Plain()) > max(1, width) {
 			line = TruncateLine(line, max(1, width), forceEllipsis)
@@ -167,17 +184,17 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 
 func continuationPrefix(mode Mode, prefixWidth int, isLast bool) []Span {
 	if modeUsesOngoingContinuationPrefix(mode) {
-		return []Span{{Text: strings.Repeat(" ", max(0, prefixWidth)), Role: StyleRoleNotice, Faint: true}}
+		return []Span{SemanticSpan(strings.Repeat(" ", max(0, prefixWidth)), StyleRoleNotice, SpanAttributeFaint)}
 	}
 	// Detail continuations form a real tree: middle lines use the vertical "│"
 	// guide, the last continuation line of the entry closes the tree with "└".
-	guide := "│"
+	guide := DetailContinuationGuide
 	if isLast {
-		guide = "└"
+		guide = DetailContinuationClosingGuide
 	}
 	return []Span{
-		{Text: guide, Role: StyleRoleNotice, Faint: true},
-		{Text: strings.Repeat(" ", max(0, prefixWidth-1)), Role: StyleRoleNotice, Faint: true},
+		SemanticSpan(guide, StyleRoleNotice, SpanAttributeFaint),
+		SemanticSpan(strings.Repeat(" ", max(0, prefixWidth-1)), StyleRoleNotice, SpanAttributeFaint),
 	}
 }
 
@@ -187,8 +204,8 @@ func inlineMetaCommandSpans(spans []Span, role StyleRole) []Span {
 	}
 	out := append([]Span(nil), spans...)
 	for idx := range out {
-		if out[idx].Role == role {
-			out[idx].Faint = true
+		if spanRole, ok := out[idx].Style.Role(); ok && spanRole == role {
+			out[idx].Style = out[idx].Style.With(SpanAttributeFaint)
 		}
 	}
 	return out
@@ -252,6 +269,14 @@ func roleDefaultFaint(role StyleRole) bool {
 	}
 }
 
+func roleSpan(text string, role StyleRole) Span {
+	span := SemanticSpan(text, role)
+	if roleDefaultFaint(role) {
+		span.Style = span.Style.With(SpanAttributeFaint)
+	}
+	return span
+}
+
 func roleSymbol(role StyleRole) string {
 	return roleSymbolText(role, toolMeta{})
 }
@@ -265,7 +290,7 @@ func roleSymbolText(role StyleRole, meta toolMeta) string {
 	case StyleRoleUser:
 		symbol = "❯"
 	case StyleRoleAssistant:
-		symbol = "❮"
+		symbol = AssistantSymbol
 	case StyleRoleToolShell,
 		StyleRoleToolShellPrimary,
 		StyleRoleToolShellSecondary,
@@ -502,7 +527,7 @@ func TruncateLine(line Line, width int, forceEllipsis bool) Line {
 	plain := line.Plain()
 	if plain == "" {
 		if forceEllipsis {
-			return Line{Spans: []Span{{Text: "…", Role: StyleRoleNotice}}}
+			return Line{Spans: []Span{SemanticSpan("…", StyleRoleNotice)}, Background: line.Background}
 		}
 		return line
 	}
@@ -510,14 +535,14 @@ func TruncateLine(line Line, width int, forceEllipsis bool) Line {
 		return line
 	}
 	if width == 1 {
-		return Line{Spans: []Span{{Text: "…", Role: StyleRoleNotice}}}
+		return Line{Spans: []Span{SemanticSpan("…", StyleRoleNotice)}, Background: line.Background}
 	}
 	visibleLimit := width - 1
 	if forceEllipsis && lipgloss.Width(plain) < width {
 		visibleLimit = lipgloss.Width(plain)
 	}
 	consumed := 0
-	out := Line{}
+	out := Line{Background: line.Background}
 	type positionedSpan struct {
 		span    Span
 		leading bool
@@ -557,7 +582,7 @@ func TruncateLine(line Line, width int, forceEllipsis bool) Line {
 		}
 	}
 	if forceEllipsis || lipgloss.Width(plain) > width {
-		out.Spans = append(out.Spans, Span{Text: "…", Role: StyleRoleNotice})
+		out.Spans = append(out.Spans, SemanticSpan("…", StyleRoleNotice))
 	}
 	return out
 }

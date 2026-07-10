@@ -2,7 +2,9 @@ package clientui
 
 import (
 	"fmt"
+	"strings"
 
+	"core/shared/runtimeids"
 	"core/shared/transcript"
 
 	"github.com/google/uuid"
@@ -165,6 +167,7 @@ type TranscriptHydration struct {
 
 type TranscriptCommittedRow struct {
 	Visibility EntryVisibility
+	Integrity  transcript.RowIntegrity
 	Kind       TranscriptRowKind
 	User       *TranscriptUserRow
 	Assistant  *TranscriptAssistantRow
@@ -194,11 +197,98 @@ type TranscriptToolRow struct {
 	ToolPresentation *ToolCallMeta
 }
 
+func (row *TranscriptToolRow) HasToolCallID() bool {
+	return row != nil && strings.TrimSpace(row.ToolCallID) != ""
+}
+
 type TranscriptNoticeRow struct {
 	Reason     TranscriptNoticeReason
 	Severity   TranscriptNoticeSeverity
 	Data       TranscriptNoticeData
 	Diagnostic *TranscriptDiagnosticData
+}
+
+func ValidateTranscriptCommittedRow(row TranscriptCommittedRow) error {
+	if !row.Integrity.Valid() {
+		return fmt.Errorf("committed row has invalid integrity %d", row.Integrity)
+	}
+	switch row.Visibility {
+	case EntryVisibilityOngoing, EntryVisibilityOngoingCollapsed, EntryVisibilityDetail, EntryVisibilityHidden:
+	default:
+		return fmt.Errorf("committed row has unresolved visibility %q", row.Visibility)
+	}
+
+	payloads := 0
+	expectedKind := TranscriptRowKind("")
+	if row.User != nil {
+		payloads++
+		expectedKind = TranscriptRowUser
+	}
+	if row.Assistant != nil {
+		payloads++
+		expectedKind = TranscriptRowAssistant
+	}
+	if row.Tool != nil {
+		payloads++
+		expectedKind = TranscriptRowTool
+	}
+	if row.Notice != nil {
+		payloads++
+		expectedKind = TranscriptRowNotice
+	}
+	if payloads != 1 {
+		return fmt.Errorf("committed row kind %q has %d payloads, want exactly one", row.Kind, payloads)
+	}
+	if row.Kind == "" {
+		return fmt.Errorf("committed row kind is required")
+	}
+	if row.Kind != expectedKind {
+		return fmt.Errorf("committed row kind %q does not match payload kind %q", row.Kind, expectedKind)
+	}
+	if row.Integrity != transcript.RowIntegrityValid {
+		return nil
+	}
+	if row.Assistant != nil && row.Assistant.StreamID != nil && *row.Assistant.StreamID == uuid.Nil {
+		return fmt.Errorf("committed assistant row has zero stream_id")
+	}
+	if row.Tool != nil && !row.Tool.HasToolCallID() {
+		return fmt.Errorf("committed tool row has empty tool_call_id")
+	}
+	return nil
+}
+
+func ValidateTranscriptPage(page TranscriptPage) error {
+	if _, err := runtimeids.ParseSessionID(page.SessionID); err != nil {
+		return fmt.Errorf("transcript page session identity: %w", err)
+	}
+	if err := validateTranscriptPageCursor("older", page.HasMoreAbove, page.OlderCursor); err != nil {
+		return err
+	}
+	if err := validateTranscriptPageCursor("newer", page.HasMoreBelow, page.NewerCursor); err != nil {
+		return err
+	}
+	for index, row := range page.Entries {
+		if err := ValidateTranscriptCommittedRow(row); err != nil {
+			return fmt.Errorf("transcript page entry %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func validateTranscriptPageCursor(name string, hasMore bool, cursor *int64) error {
+	if !hasMore {
+		if cursor != nil {
+			return fmt.Errorf("transcript page %s cursor is present without more entries", name)
+		}
+		return nil
+	}
+	if cursor == nil {
+		return fmt.Errorf("transcript page %s cursor is required when more entries exist", name)
+	}
+	if *cursor <= 0 {
+		return fmt.Errorf("transcript page %s cursor must be positive, got %d", name, *cursor)
+	}
+	return nil
 }
 
 type TranscriptNoticeData struct {

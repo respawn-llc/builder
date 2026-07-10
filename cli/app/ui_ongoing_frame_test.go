@@ -138,7 +138,10 @@ func TestOngoingFrameInputStillRendersClientLocalQueuedMessages(t *testing.T) {
 		t.Fatalf("local queued styled lines = %+v, want one typed line", section.StyledLines)
 	}
 	span := section.StyledLines[0].Spans[0]
-	if span.Role != transcriptrender.StyleRoleNoticeSecondary || !span.Faint {
+	role, semantic := span.Style.Role()
+	if !semantic ||
+		role != transcriptrender.StyleRoleNoticeSecondary ||
+		!span.Style.Has(transcriptrender.SpanAttributeFaint) {
 		t.Fatalf("local queued span = %+v, want secondary/faint", span)
 	}
 }
@@ -167,7 +170,10 @@ func TestOngoingFrameInputRendersPendingInjectedMessagesBeforeServerAcceptance(t
 		t.Fatalf("pending injected styled lines = %+v, want one typed line", section.StyledLines)
 	}
 	span := section.StyledLines[0].Spans[0]
-	if span.Role != transcriptrender.StyleRoleNoticePrimary || span.Faint {
+	role, semantic := span.Style.Role()
+	if !semantic ||
+		role != transcriptrender.StyleRoleNoticePrimary ||
+		span.Style.Has(transcriptrender.SpanAttributeFaint) {
 		t.Fatalf("pending injected span = %+v, want primary/full-strength", span)
 	}
 }
@@ -195,7 +201,10 @@ func TestOngoingFrameInputRendersNoRuntimeInjectedMessages(t *testing.T) {
 		t.Fatalf("no-runtime injected styled lines = %+v, want one typed line", section.StyledLines)
 	}
 	span := section.StyledLines[0].Spans[0]
-	if span.Role != transcriptrender.StyleRoleNoticePrimary || span.Faint {
+	role, semantic := span.Style.Role()
+	if !semantic ||
+		role != transcriptrender.StyleRoleNoticePrimary ||
+		span.Style.Has(transcriptrender.SpanAttributeFaint) {
 		t.Fatalf("no-runtime injected span = %+v, want primary/full-strength", span)
 	}
 }

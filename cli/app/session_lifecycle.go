@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/runner"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -63,10 +62,8 @@ type interactiveSessionServer interface {
 }
 
 type sessionLifecycleOptions struct {
-	ForceNewSession                 bool
-	Overrides                       serverapi.RunPromptOverrides
-	TerminalPhaseMarkerEncoder      runner.TerminalPhaseMarkerEncoder
-	TerminalPhaseMarkerSinkObserver runner.TerminalPhaseMarkerSinkObserver
+	ForceNewSession bool
+	Overrides       serverapi.RunPromptOverrides
 }
 
 func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string) error {
@@ -74,6 +71,20 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 }
 
 func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string, opts sessionLifecycleOptions) error {
+	return runSessionLifecycleWithUIRunner(ctx, server, interactor, initialSessionID, opts, runUILoop)
+}
+
+func runSessionLifecycleWithUIRunner(
+	ctx context.Context,
+	server interactiveSessionServer,
+	interactor authInteractor,
+	initialSessionID string,
+	opts sessionLifecycleOptions,
+	runUI uiLoopRunner,
+) error {
+	if runUI == nil {
+		return errors.New("UI loop runner is required")
+	}
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
 	if err != nil {
@@ -130,23 +141,21 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		}
 		initialState := sessionLaunchInitialStateFromServer(ctx, server, plan.SessionID, nextSessionInitialInput)
 
-		finalModel, runErr := runUILoopWithInitialPrompt(
-			runtimePlan.Wiring,
-			plan.ActiveSettings,
-			runtimePlan.Logger,
-			commandRegistry,
-			nextSessionInitialPrompt,
-			nextSessionInitialPromptHistoryRecorded,
-			initialState.Input,
-			initialState.RecoveryBuffers,
-			plan.SessionName,
-			plan.ModelContractLocked,
-			plan.ConfiguredModelName,
-			plan.StatusConfig,
-			showStartupUpdateNotice,
-			opts.TerminalPhaseMarkerEncoder,
-			opts.TerminalPhaseMarkerSinkObserver,
-		)
+		finalModel, runErr := runUI(uiLoopRequest{
+			wiring:                       runtimePlan.Wiring,
+			active:                       plan.ActiveSettings,
+			logger:                       runtimePlan.Logger,
+			commandRegistry:              commandRegistry,
+			initialPrompt:                nextSessionInitialPrompt,
+			initialPromptHistoryRecorded: nextSessionInitialPromptHistoryRecorded,
+			initialInput:                 initialState.Input,
+			recoveryBuffers:              initialState.RecoveryBuffers,
+			sessionName:                  plan.SessionName,
+			modelContractLocked:          plan.ModelContractLocked,
+			configuredModelName:          plan.ConfiguredModelName,
+			statusConfig:                 plan.StatusConfig,
+			startupUpdateNotice:          showStartupUpdateNotice,
+		})
 		showStartupUpdateNotice = shouldRetryStartupUpdateNotice(finalModel, showStartupUpdateNotice)
 		nextSessionInitialPrompt = ""
 		nextSessionInitialPromptHistoryRecorded = false

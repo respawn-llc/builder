@@ -3,9 +3,10 @@ package app
 import (
 	"context"
 	"errors"
-	"strings"
+	"fmt"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/valuecopy"
 
@@ -15,7 +16,7 @@ import (
 
 type uiPendingDetailTranscriptRequest struct {
 	id        uuid.UUID
-	sessionID string
+	sessionID runtimeids.SessionID
 	request   clientui.TranscriptPageRequest
 	cancel    context.CancelFunc
 }
@@ -24,7 +25,16 @@ func (m *uiModel) loadDetailTranscriptPageCmd(req clientui.TranscriptPageRequest
 	if m == nil || m.pendingDetailTranscript != nil {
 		return nil
 	}
-	sessionID := strings.TrimSpace(m.currentRuntimeSessionID())
+	sessionID, err := runtimeids.ParseSessionID(m.currentRuntimeSessionID())
+	if err != nil {
+		return m.sendTransientStatusWithNoticeID(
+			err.Error(),
+			uiStatusNoticeError,
+			transientStatusDuration,
+			uiStatusNoticeReplace,
+			"",
+		)
+	}
 	request := clientui.TranscriptPageRequest{
 		Cursor:      valuecopy.Pointer(req.Cursor),
 		NewerCursor: valuecopy.Pointer(req.NewerCursor),
@@ -51,12 +61,36 @@ func (m *uiModel) loadDetailTranscriptPageCmd(req clientui.TranscriptPageRequest
 		ctx, timeoutCancel := context.WithTimeout(parentCtx, uiRuntimeHydrationReadTimeout)
 		defer timeoutCancel()
 		resp, err := client.GetSessionTranscriptPage(ctx, serverapi.SessionTranscriptPageRequest{
-			SessionID:   sessionID,
+			SessionID:   sessionID.String(),
 			Cursor:      request.Cursor,
 			NewerCursor: request.NewerCursor,
 		})
+		if err == nil {
+			err = validateDetailTranscriptPageResponse(sessionID, resp.Transcript)
+		}
 		return detailTranscriptLoadMsg{requestID: requestID, page: resp.Transcript, err: err}
 	}
+}
+
+func validateDetailTranscriptPageResponse(
+	requestSessionID runtimeids.SessionID,
+	page clientui.TranscriptPage,
+) error {
+	if err := clientui.ValidateTranscriptPage(page); err != nil {
+		return err
+	}
+	responseSessionID, err := runtimeids.ParseSessionID(page.SessionID)
+	if err != nil {
+		return err
+	}
+	if responseSessionID != requestSessionID {
+		return fmt.Errorf(
+			"transcript page session %s does not match requested session %s",
+			responseSessionID.String(),
+			requestSessionID.String(),
+		)
+	}
+	return nil
 }
 
 func (m *uiModel) takePendingDetailTranscriptRequest(requestID uuid.UUID) (uiPendingDetailTranscriptRequest, bool) {
@@ -93,12 +127,4 @@ func (m *uiModel) clearDetailTranscriptLoadingNotice(requestID uuid.UUID) tea.Cm
 		return nil
 	}
 	return m.advanceTransientStatusQueue()
-}
-
-func cloneUUID(value *uuid.UUID) *uuid.UUID {
-	if value == nil {
-		return nil
-	}
-	copyValue := *value
-	return &copyValue
 }

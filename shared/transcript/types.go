@@ -173,6 +173,23 @@ func (m *ToolCallMeta) HasRenderHint() bool {
 	return m != nil && m.RenderHint != nil && m.RenderHint.Valid()
 }
 
+func (m *ToolCallMeta) Valid() bool {
+	if m == nil || strings.TrimSpace(m.ToolName) == "" {
+		return false
+	}
+	switch m.Presentation {
+	case ToolPresentationDefault, ToolPresentationShell, ToolPresentationAskQuestion:
+	default:
+		return false
+	}
+	switch m.RenderBehavior {
+	case "", ToolCallRenderBehaviorDefault, ToolCallRenderBehaviorShell, ToolCallRenderBehaviorAskQuestion:
+	default:
+		return false
+	}
+	return m.RenderHint == nil || m.RenderHint.Valid()
+}
+
 func (m *ToolCallMeta) HasCompactText() bool {
 	return m != nil && strings.TrimSpace(m.CompactText) != ""
 }

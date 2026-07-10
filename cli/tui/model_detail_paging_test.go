@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	patchformat "core/shared/transcript/patchformat"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -11,7 +12,7 @@ import (
 func TestDetailTopEdgeEmitsOlderPageDirection(t *testing.T) {
 	model := NewModel()
 	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
-		Entries: []clientui.ChatEntry{{Role: "assistant", Text: "current"}},
+		Entries: []clientui.TranscriptCommittedRow{detailAssistant("current")},
 	}})
 	model = next.(Model)
 	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
@@ -36,7 +37,7 @@ func TestDetailBottomEdgeEmitsNewerPageDirection(t *testing.T) {
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 80})
 	model = next.(Model)
 	next, _ = model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
-		Entries: []clientui.ChatEntry{{Role: "user", Text: "one"}},
+		Entries: []clientui.TranscriptCommittedRow{detailUser("one")},
 	}})
 	model = next.(Model)
 	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
@@ -61,9 +62,9 @@ func TestDetailPageAnchorKeepsLoadedOlderPageVisible(t *testing.T) {
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 1, Width: 80})
 	model = next.(Model)
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
-		Page: clientui.TranscriptPage{Entries: []clientui.ChatEntry{
-			{Role: "assistant", Text: "older"},
-			{Role: "assistant", Text: "newer"},
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			detailAssistant("older"),
+			detailAssistant("newer"),
 		}},
 		Anchor: DetailTranscriptAnchorTop,
 	})
@@ -82,9 +83,9 @@ func TestDetailPageAnchorKeepsLoadedNewerPageVisible(t *testing.T) {
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 1, Width: 80})
 	model = next.(Model)
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
-		Page: clientui.TranscriptPage{Entries: []clientui.ChatEntry{
-			{Role: "assistant", Text: "older"},
-			{Role: "assistant", Text: "newer"},
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			detailAssistant("older"),
+			detailAssistant("newer"),
 		}},
 		Anchor: DetailTranscriptAnchorBottom,
 	})
@@ -103,9 +104,9 @@ func TestDetailPagePreserveAnchorKeepsUILocalState(t *testing.T) {
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 1, Width: 80})
 	model = next.(Model)
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
-		Page: clientui.TranscriptPage{Entries: []clientui.ChatEntry{
-			{Role: "assistant", Text: "first"},
-			{Role: "assistant", Text: "second"},
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			detailAssistant("first"),
+			detailAssistant("second"),
 		}},
 		Anchor: DetailTranscriptAnchorTop,
 	})
@@ -115,10 +116,10 @@ func TestDetailPagePreserveAnchorKeepsUILocalState(t *testing.T) {
 	model.detailScroll = 1
 
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
-		Page: clientui.TranscriptPage{Entries: []clientui.ChatEntry{
-			{Role: "assistant", Text: "first"},
-			{Role: "assistant", Text: "second"},
-			{Role: "assistant", Text: "third"},
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			detailAssistant("first"),
+			detailAssistant("second"),
+			detailAssistant("third"),
 		}},
 		Anchor: DetailTranscriptAnchorPreserve,
 	})
@@ -140,9 +141,9 @@ func TestDetailPrependedPagePreservesLineScrollBoundary(t *testing.T) {
 		Page: clientui.TranscriptPage{
 			OlderCursor:  int64Ptr(64),
 			HasMoreAbove: true,
-			Entries: []clientui.ChatEntry{
-				{Role: "assistant", Text: "current first"},
-				{Role: "assistant", Text: "current second"},
+			Entries: []clientui.TranscriptCommittedRow{
+				detailAssistant("current first"),
+				detailAssistant("current second"),
 			},
 		},
 		Anchor: DetailTranscriptAnchorTop,
@@ -155,10 +156,10 @@ func TestDetailPrependedPagePreservesLineScrollBoundary(t *testing.T) {
 
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
 		Page: clientui.TranscriptPage{
-			Entries: []clientui.ChatEntry{
-				{Role: "user", Text: "older"},
-				{Role: "assistant", Text: "current first"},
-				{Role: "assistant", Text: "current second"},
+			Entries: []clientui.TranscriptCommittedRow{
+				detailUser("older"),
+				detailAssistant("current first"),
+				detailAssistant("current second"),
 			},
 		},
 		Anchor:                DetailTranscriptAnchorPreserve,
@@ -184,15 +185,20 @@ func TestDetailPrependedPagePreservesLineScrollBoundary(t *testing.T) {
 
 func TestDetailPrependedPageIgnoresHiddenEntriesWhenPreservingBoundary(t *testing.T) {
 	model := NewModel()
+	hiddenOlder := detailNotice(clientui.TranscriptNoticeRow{
+		Severity: clientui.TranscriptNoticeInfo,
+		Data:     clientui.TranscriptNoticeData{CompactLabel: "hidden older"},
+	})
+	hiddenOlder.Visibility = clientui.EntryVisibilityHidden
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 80})
 	model = next.(Model)
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
 		Page: clientui.TranscriptPage{
 			OlderCursor:  int64Ptr(64),
 			HasMoreAbove: true,
-			Entries: []clientui.ChatEntry{
-				{Role: "assistant", Text: "current first"},
-				{Role: "assistant", Text: "current second"},
+			Entries: []clientui.TranscriptCommittedRow{
+				detailAssistant("current first"),
+				detailAssistant("current second"),
 			},
 		},
 		Anchor: DetailTranscriptAnchorTop,
@@ -205,11 +211,11 @@ func TestDetailPrependedPageIgnoresHiddenEntriesWhenPreservingBoundary(t *testin
 
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
 		Page: clientui.TranscriptPage{
-			Entries: []clientui.ChatEntry{
-				{Visibility: clientui.EntryVisibilityHidden, Role: "system", Text: "hidden older"},
-				{Role: "user", Text: "visible older"},
-				{Role: "assistant", Text: "current first"},
-				{Role: "assistant", Text: "current second"},
+			Entries: []clientui.TranscriptCommittedRow{
+				hiddenOlder,
+				detailUser("visible older"),
+				detailAssistant("current first"),
+				detailAssistant("current second"),
 			},
 		},
 		Anchor:                DetailTranscriptAnchorPreserve,
@@ -233,6 +239,16 @@ func TestDetailPrependedPageIgnoresHiddenEntriesWhenPreservingBoundary(t *testin
 // rendered line, not re-fire a page request when content already sits above.
 func TestDetailPrependedAllHiddenPageDoesNotJumpToTopOrRefire(t *testing.T) {
 	model := NewModel()
+	hiddenOne := detailNotice(clientui.TranscriptNoticeRow{
+		Severity: clientui.TranscriptNoticeInfo,
+		Data:     clientui.TranscriptNoticeData{CompactLabel: "hidden one"},
+	})
+	hiddenOne.Visibility = clientui.EntryVisibilityHidden
+	hiddenTwo := detailNotice(clientui.TranscriptNoticeRow{
+		Severity: clientui.TranscriptNoticeInfo,
+		Data:     clientui.TranscriptNoticeData{CompactLabel: "hidden two"},
+	})
+	hiddenTwo.Visibility = clientui.EntryVisibilityHidden
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 80})
 	model = next.(Model)
 	// Load a page with more entries than the viewport so scrolling is possible.
@@ -240,11 +256,11 @@ func TestDetailPrependedAllHiddenPageDoesNotJumpToTopOrRefire(t *testing.T) {
 		Page: clientui.TranscriptPage{
 			OlderCursor:  int64Ptr(64),
 			HasMoreAbove: true,
-			Entries: []clientui.ChatEntry{
-				{Role: "assistant", Text: "current first"},
-				{Role: "assistant", Text: "current second"},
-				{Role: "assistant", Text: "current third"},
-				{Role: "assistant", Text: "current fourth"},
+			Entries: []clientui.TranscriptCommittedRow{
+				detailAssistant("current first"),
+				detailAssistant("current second"),
+				detailAssistant("current third"),
+				detailAssistant("current fourth"),
 			},
 		},
 		Anchor: DetailTranscriptAnchorTop,
@@ -263,13 +279,13 @@ func TestDetailPrependedAllHiddenPageDoesNotJumpToTopOrRefire(t *testing.T) {
 	// Prepend an older page whose entries are ALL hidden.
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
 		Page: clientui.TranscriptPage{
-			Entries: []clientui.ChatEntry{
-				{Visibility: clientui.EntryVisibilityHidden, Role: "system", Text: "hidden one"},
-				{Visibility: clientui.EntryVisibilityHidden, Role: "system", Text: "hidden two"},
-				{Role: "assistant", Text: "current first"},
-				{Role: "assistant", Text: "current second"},
-				{Role: "assistant", Text: "current third"},
-				{Role: "assistant", Text: "current fourth"},
+			Entries: []clientui.TranscriptCommittedRow{
+				hiddenOne,
+				hiddenTwo,
+				detailAssistant("current first"),
+				detailAssistant("current second"),
+				detailAssistant("current third"),
+				detailAssistant("current fourth"),
 			},
 		},
 		Anchor:                DetailTranscriptAnchorPreserve,
@@ -296,9 +312,9 @@ func TestDetailAppendedPagePreservesLineScrollBoundary(t *testing.T) {
 		Page: clientui.TranscriptPage{
 			NewerCursor:  int64Ptr(96),
 			HasMoreBelow: true,
-			Entries: []clientui.ChatEntry{
-				{Role: "assistant", Text: "current first"},
-				{Role: "assistant", Text: "current second"},
+			Entries: []clientui.TranscriptCommittedRow{
+				detailAssistant("current first"),
+				detailAssistant("current second"),
 			},
 		},
 		Anchor: DetailTranscriptAnchorBottom,
@@ -311,10 +327,10 @@ func TestDetailAppendedPagePreservesLineScrollBoundary(t *testing.T) {
 
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
 		Page: clientui.TranscriptPage{
-			Entries: []clientui.ChatEntry{
-				{Role: "assistant", Text: "current first"},
-				{Role: "assistant", Text: "current second"},
-				{Role: "user", Text: "newer"},
+			Entries: []clientui.TranscriptCommittedRow{
+				detailAssistant("current first"),
+				detailAssistant("current second"),
+				detailUser("newer"),
 			},
 		},
 		Anchor: DetailTranscriptAnchorPreserve,
@@ -338,14 +354,14 @@ func TestDetailAppendedPageWithFrontTrimPreservesLineScrollBoundary(t *testing.T
 	model := NewModel()
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 80})
 	model = next.(Model)
-	trimmedFront := clientui.ChatEntry{Role: "assistant", Text: "trimmed front"}
-	keptFirst := clientui.ChatEntry{Role: "assistant", Text: "kept first"}
-	keptSecond := clientui.ChatEntry{Role: "assistant", Text: "kept second"}
+	trimmedFront := detailAssistant("trimmed front")
+	keptFirst := detailAssistant("kept first")
+	keptSecond := detailAssistant("kept second")
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
 		Page: clientui.TranscriptPage{
 			NewerCursor:  int64Ptr(96),
 			HasMoreBelow: true,
-			Entries:      []clientui.ChatEntry{trimmedFront, keptFirst, keptSecond},
+			Entries:      []clientui.TranscriptCommittedRow{trimmedFront, keptFirst, keptSecond},
 		},
 		Anchor: DetailTranscriptAnchorBottom,
 	})
@@ -360,14 +376,14 @@ func TestDetailAppendedPageWithFrontTrimPreservesLineScrollBoundary(t *testing.T
 
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
 		Page: clientui.TranscriptPage{
-			Entries: []clientui.ChatEntry{
+			Entries: []clientui.TranscriptCommittedRow{
 				keptFirst,
 				keptSecond,
-				{Role: "user", Text: "newer"},
+				detailUser("newer"),
 			},
 		},
 		Anchor:              DetailTranscriptAnchorPreserve,
-		TrimmedFrontEntries: []clientui.ChatEntry{trimmedFront},
+		TrimmedFrontEntries: []clientui.TranscriptCommittedRow{trimmedFront},
 	})
 	model = next.(Model)
 
@@ -393,14 +409,93 @@ func TestDetailAppendedPageWithFrontTrimPreservesLineScrollBoundary(t *testing.T
 	}
 }
 
+func TestDetailFrontEvictionPreservesExpandedWrappedPatchLine(t *testing.T) {
+	model := NewModel()
+	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 24})
+	model = next.(Model)
+
+	trimmedFront := detailUser("trimmed front")
+	wrappedMarkdown := detailAssistant(
+		"## Heading\n\nThis expanded Markdown paragraph wraps across several narrow detail lines.\n\n- first item\n- second item",
+	)
+	renderedPatch := patchformat.Render(
+		"*** Begin Patch\n*** Update File: example.go\n@@\n package main\n-oldValue := \"old\"\n+newValue := \"new\"\n*** End Patch\n",
+		"/workspace",
+	)
+	structuredPatch := detailTool(clientui.TranscriptToolRow{
+		ToolCallID: "3d5e4cfb-f04f-4b14-a623-c6fa70c5caa7",
+		ToolName:   "patch",
+		Text:       renderedPatch.DetailText(),
+		ToolPresentation: &clientui.ToolCallMeta{
+			ToolName:    "patch",
+			PatchRender: &renderedPatch,
+			RenderHint:  &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff},
+		},
+	})
+	keptRows := []clientui.TranscriptCommittedRow{wrappedMarkdown, structuredPatch}
+	next, _ = model.Update(SetDetailTranscriptPageMsg{
+		Page: clientui.TranscriptPage{
+			NewerCursor:  int64Ptr(96),
+			HasMoreBelow: true,
+			Entries:      append([]clientui.TranscriptCommittedRow{trimmedFront}, keptRows...),
+		},
+		Anchor: DetailTranscriptAnchorBottom,
+	})
+	model = next.(Model)
+	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
+	model = next.(Model)
+
+	model.setSelectedDetailIndex(1)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(Model)
+	model.setSelectedDetailIndex(2)
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(Model)
+
+	oldPatchRange, ok := model.detailEntryLineRange(2)
+	if !ok || oldPatchRange.last-oldPatchRange.first < 2 {
+		t.Fatalf("expanded patch range = %+v/%t, want multiple structured lines", oldPatchRange, ok)
+	}
+	const relativePatchLine = 2
+	model.detailScroll = oldPatchRange.first + relativePatchLine
+
+	next, _ = model.Update(SetDetailTranscriptPageMsg{
+		Page: clientui.TranscriptPage{
+			Entries: append(keptRows, detailNotice(clientui.TranscriptNoticeRow{
+				Severity: clientui.TranscriptNoticeInfo,
+				Data:     clientui.TranscriptNoticeData{CompactLabel: "newer notice"},
+			})),
+		},
+		Anchor:              DetailTranscriptAnchorPreserve,
+		TrimmedFrontEntries: []clientui.TranscriptCommittedRow{trimmedFront},
+	})
+	model = next.(Model)
+
+	if selected, selectedOK := model.selectedDetailIndex(); !selectedOK || selected != 1 {
+		t.Fatalf("selected entry after front eviction = %d/%t, want structured patch 1/true", selected, selectedOK)
+	}
+	for _, expandedIndex := range []int{0, 1} {
+		if _, expanded := model.expanded[expandedIndex]; !expanded {
+			t.Fatalf("expanded entry %d was not shifted through front eviction", expandedIndex)
+		}
+	}
+	newPatchRange, ok := model.detailEntryLineRange(1)
+	if !ok {
+		t.Fatal("shifted structured patch has no line range")
+	}
+	if want := newPatchRange.first + relativePatchLine; model.detailScroll != want {
+		t.Fatalf("scroll after front eviction = %d, want preserved patch line %d", model.detailScroll, want)
+	}
+}
+
 func TestDetailCollapseClampsStoredScroll(t *testing.T) {
 	model := NewModel()
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 1, Width: 80})
 	model = next.(Model)
 	next, _ = model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
-		Entries: []clientui.ChatEntry{
-			{Role: "assistant", Text: "one"},
-			{Role: "assistant", Text: "two\nthree\nfour"},
+		Entries: []clientui.TranscriptCommittedRow{
+			detailAssistant("one"),
+			detailAssistant("two\nthree\nfour"),
 		},
 	}})
 	model = next.(Model)
@@ -432,11 +527,11 @@ func TestDetailLineMovementSelectsItemNearestViewportCenter(t *testing.T) {
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 3, Width: 80})
 	model = next.(Model)
 	next, _ = model.Update(SetDetailTranscriptPageMsg{
-		Page: clientui.TranscriptPage{Entries: []clientui.ChatEntry{
-			{Role: "assistant", Text: "first"},
-			{Role: "assistant", Text: "second"},
-			{Role: "assistant", Text: "third"},
-			{Role: "assistant", Text: "fourth"},
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			detailAssistant("first"),
+			detailAssistant("second"),
+			detailAssistant("third"),
+			detailAssistant("fourth"),
 		}},
 		Anchor: DetailTranscriptAnchorTop,
 	})
@@ -465,7 +560,7 @@ func TestDetailPageInvalidAnchorPanics(t *testing.T) {
 	}()
 
 	_, _ = model.Update(SetDetailTranscriptPageMsg{
-		Page:   clientui.TranscriptPage{Entries: []clientui.ChatEntry{{Role: "assistant", Text: "entry"}}},
+		Page:   clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{detailAssistant("entry")}},
 		Anchor: DetailTranscriptPageAnchor(99),
 	})
 }

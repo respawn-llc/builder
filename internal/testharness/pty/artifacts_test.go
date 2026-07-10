@@ -34,7 +34,17 @@ func TestWriteArtifactsForAssertionFailure(t *testing.T) {
 		t.Fatalf("WriteArtifacts: %v", err)
 	}
 
-	for _, name := range []string{"raw.bin", "escaped.txt", "chunks.json", "operations.json", "screen.txt", "diagnostics.json"} {
+	for _, name := range []string{
+		"raw.bin",
+		"escaped.txt",
+		"chunks.json",
+		"operations.json",
+		"phase-input-dispatches.json",
+		"frame-input-dispatches.json",
+		"screen.txt",
+		"screen.json",
+		"diagnostics.json",
+	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("artifact %s missing: %v", name, err)
 		}

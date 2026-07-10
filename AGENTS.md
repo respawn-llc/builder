@@ -124,6 +124,7 @@ Prefer using scripts provided in `./scripts/` over raw commands like `cargo buil
 - Delete or rewrite tests that only preserve implementation shape, fake call order, literal human-readable text, colors/styles, private route tables, file layout, or compatibility shims without a current product contract.
 - Use red/green TDD when developing new features.
 - Never write tests that assert literal prompt strings, log lines, colors, styles, or other textual/visual content. Such tests check the wording of an artifact rather than its behavior, break on every copy edit, and provide no signal — the prompt/log itself is the source of truth. Test behavior, parsing, structure, or invariants instead.
+  - Explicit PTY terminal-contract exception: PTY tests may assert ANSI-derived cell styling and compare terminal content with shared product constants. They must not hardcode product copy/raw text or use text matching for synchronization, parsing, or control flow.
 - Before handing off to the user after Go code changes, rebuild via `./scripts/build.sh --output ./bin/kent`. Don't ask for confirmation to run/write tests and run checks.
 - Run tests via `./scripts/test.sh` passing normal go test arguments. With no package args this also runs GUI frontend tests.
 - Releases are driven by `VERSION`; keep Homebrew release plumbing in sync with `scripts/update-brew-tap.sh` and the tap formula. Tap formula lives in a separate repo.

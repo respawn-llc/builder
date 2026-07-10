@@ -39,11 +39,11 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 			if got := line.Plain(); got != tt.want {
 				t.Fatalf("rendered line = %q, want %q", got, tt.want)
 			}
-			if line.LeadingSymbol == nil || len(line.Spans) < 2 || line.LeadingSymbol.Role != tt.wantRole {
+			if line.LeadingSymbol == nil || len(line.Spans) < 2 || line.LeadingSymbol.Style.SemanticRole != tt.wantRole {
 				t.Fatalf("line has invalid typed symbol or body spans: %+v", line)
 			}
-			if tt.wantRole != StyleRoleToolShell && line.Spans[1].Role != tt.wantRole {
-				t.Fatalf("line content role = %v, want %v; spans: %+v", line.Spans[1].Role, tt.wantRole, line.Spans)
+			if tt.wantRole != StyleRoleToolShell && line.Spans[1].Style.SemanticRole != tt.wantRole {
+				t.Fatalf("line content role = %v, want %v; spans: %+v", line.Spans[1].Style.SemanticRole, tt.wantRole, line.Spans)
 			}
 			if got := ColorRoleForStyle(tt.wantRole); got != tt.wantColor {
 				t.Fatalf("style role color = %v, want %v", got, tt.wantColor)
@@ -54,7 +54,10 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 
 func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
 	row := toolRow("exec_command", clientui.ToolPresentationShell, "sed -n '1,10p' cli/tui/model.go", false)
-	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{ShellDialect: clientui.ToolShellDialectPosix}
+	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{
+		Kind:         clientui.ToolRenderKindShell,
+		ShellDialect: clientui.ToolShellDialectPosix,
+	}
 	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed, ModeDetailExpanded} {
 		rendered := RenderCommittedRow(row, 120, "", mode)
 		if len(rendered.Lines) == 0 {
@@ -82,7 +85,10 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			row := toolRow("exec_command", clientui.ToolPresentationShell, tt.command, false)
-			row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{ShellDialect: tt.dialect}
+			row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{
+				Kind:         clientui.ToolRenderKindShell,
+				ShellDialect: tt.dialect,
+			}
 			rendered := RenderCommittedRow(row, 120, "", ModeOngoing)
 			if len(rendered.Lines) == 0 {
 				t.Fatal("rendered no committed shell row lines")
@@ -97,7 +103,10 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 					Presentation: clientui.ToolPresentationShell,
 					Command:      tt.command,
 					CompactText:  tt.command,
-					RenderHint:   &clientui.ToolRenderHint{ShellDialect: tt.dialect},
+					RenderHint: &clientui.ToolRenderHint{
+						Kind:         clientui.ToolRenderKindShell,
+						ShellDialect: tt.dialect,
+					},
 				},
 			}, 120, "⢎ ")
 			assertShellLineHasTypedSyntax(t, pending)
@@ -109,10 +118,10 @@ func assertShellLineHasTypedSyntax(t *testing.T, line Line) {
 	t.Helper()
 	foundSyntax := false
 	for _, span := range line.Spans[1:] {
-		if !span.Faint {
+		if !span.Style.Has(SpanAttributeFaint) {
 			t.Fatalf("shell syntax span is not faint: %+v", span)
 		}
-		switch span.Role {
+		switch span.Style.SemanticRole {
 		case StyleRoleToolShellPrimary, StyleRoleToolShellSecondary, StyleRoleToolShellWarning, StyleRoleToolShellError:
 			foundSyntax = true
 		}
@@ -128,7 +137,7 @@ func TestDefaultToolRowsDoNotUseShellSyntaxRoles(t *testing.T) {
 		t.Fatal("rendered no custom tool row lines")
 	}
 	for _, span := range rendered.Lines[0].Spans {
-		switch span.Role {
+		switch span.Style.SemanticRole {
 		case StyleRoleToolShellPrimary, StyleRoleToolShellSecondary, StyleRoleToolShellWarning, StyleRoleToolShellError:
 			t.Fatalf("default tool row used shell syntax role span: %+v", span)
 		}
@@ -162,7 +171,7 @@ func TestToolSymbolsUseSeparateMetadataFromBodies(t *testing.T) {
 			}
 			symbol := *rendered.Lines[0].LeadingSymbol
 			body := rendered.Lines[0].Spans[1]
-			if symbol.Role == body.Role && symbol.Faint == body.Faint {
+			if symbol.Style == body.Style {
 				t.Fatalf("symbol metadata was coupled to body metadata: symbol=%+v body=%+v", symbol, body)
 			}
 		})
@@ -183,7 +192,9 @@ func TestRoleSymbolOwnsTypedLeadingSlotOutsideBodySpans(t *testing.T) {
 	if line.LeadingSymbol == nil {
 		t.Fatalf("rendered line has no typed leading symbol: %+v", line)
 	}
-	if line.LeadingSymbol.Text == "" || line.LeadingSymbol.Role != StyleRoleToolSuccess || line.LeadingSymbol.Faint {
+	if line.LeadingSymbol.Text == "" ||
+		line.LeadingSymbol.Style.SemanticRole != StyleRoleToolSuccess ||
+		line.LeadingSymbol.Style.Has(SpanAttributeFaint) {
 		t.Fatalf("typed leading symbol = %+v, want full-strength successful tool role", line.LeadingSymbol)
 	}
 	for _, span := range line.Spans {
@@ -240,17 +251,18 @@ func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
 }
 
 func TestResolveSpanStyleCarriesSemanticColorAndAttributes(t *testing.T) {
-	span := Span{
-		Text:      "semantic",
-		Role:      StyleRoleToolShellWarning,
-		Faint:     true,
-		Bold:      true,
-		Italic:    true,
-		Underline: true,
-	}
+	span := SemanticSpan(
+		"semantic",
+		StyleRoleToolShellWarning,
+		SpanAttributeFaint,
+		SpanAttributeBold,
+		SpanAttributeItalic,
+		SpanAttributeUnderline,
+	)
 
 	resolved := ResolveSpanStyle(span, "dark")
-	if resolved.Foreground != ColorForRole(ColorRoleForStyle(span.Role), "dark") {
+	if resolved.Foreground.Kind != ResolvedForegroundTheme ||
+		resolved.Foreground.Theme != ColorForRole(ColorRoleForStyle(span.Style.SemanticRole), "dark") {
 		t.Fatalf("resolved foreground = %+v, want role color", resolved.Foreground)
 	}
 	if !resolved.Faint || !resolved.Bold || !resolved.Italic || !resolved.Underline {
@@ -261,12 +273,12 @@ func TestResolveSpanStyleCarriesSemanticColorAndAttributes(t *testing.T) {
 func TestRenderDetailPresentationDoesNotExpandIdenticalValidLines(t *testing.T) {
 	presentation := RenderDetailPresentation(
 		clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowUser,
-			User: &clientui.TranscriptUserRow{Text: "short user row"},
+			Integrity: transcript.RowIntegrityValid,
+			Kind:      clientui.TranscriptRowUser,
+			User:      &clientui.TranscriptUserRow{Text: "short user row"},
 		},
 		80,
 		"",
-		DetailIntegrityValid,
 	)
 
 	if presentation.Expandable {
@@ -280,7 +292,8 @@ func TestRenderDetailPresentationDoesNotExpandIdenticalValidLines(t *testing.T) 
 func TestRenderDetailPresentationExpandsDifferingValidLines(t *testing.T) {
 	presentation := RenderDetailPresentation(
 		clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowAssistant,
+			Integrity: transcript.RowIntegrityValid,
+			Kind:      clientui.TranscriptRowAssistant,
 			Assistant: &clientui.TranscriptAssistantRow{
 				Text:          "full first line\nfull second line",
 				CondensedText: "compact answer",
@@ -288,7 +301,6 @@ func TestRenderDetailPresentationExpandsDifferingValidLines(t *testing.T) {
 		},
 		80,
 		"",
-		DetailIntegrityValid,
 	)
 
 	if !presentation.Expandable {
@@ -299,17 +311,17 @@ func TestRenderDetailPresentationExpandsDifferingValidLines(t *testing.T) {
 func TestRenderDetailPresentationKeepsRecoverableMalformedRowsExpandable(t *testing.T) {
 	legacyNotice := "legacy notice"
 	rows := []clientui.TranscriptCommittedRow{
-		{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "legacy user"}},
-		{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "legacy assistant"}},
-		{Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{Text: "legacy tool"}},
-		{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
+		{Integrity: transcript.RowIntegrityRecoverableMalformed, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: "legacy user"}},
+		{Integrity: transcript.RowIntegrityRecoverableMalformed, Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "legacy assistant"}},
+		{Integrity: transcript.RowIntegrityRecoverableMalformed, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{Text: "legacy tool"}},
+		{Integrity: transcript.RowIntegrityRecoverableMalformed, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
 			Reason: clientui.TranscriptNoticeLegacyUntypedNotice,
 			Data:   clientui.TranscriptNoticeData{LegacyText: &legacyNotice},
 		}},
 	}
 
 	for _, row := range rows {
-		presentation := RenderDetailPresentation(row, 80, "", DetailIntegrityRecoverableMalformed)
+		presentation := RenderDetailPresentation(row, 80, "")
 		if !presentation.Expandable {
 			t.Fatalf("recoverable malformed row %q is not expandable: %+v", row.Kind, presentation)
 		}
@@ -318,16 +330,16 @@ func TestRenderDetailPresentationKeepsRecoverableMalformedRowsExpandable(t *test
 
 func TestRenderDetailPresentationDoesNotExpandUnrecoverableMalformedRows(t *testing.T) {
 	rows := []clientui.TranscriptCommittedRow{
-		{Visibility: clientui.EntryVisibilityDetail, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{}},
-		{Visibility: clientui.EntryVisibilityDetail, Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{}},
-		{Visibility: clientui.EntryVisibilityDetail, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{}},
-		{Visibility: clientui.EntryVisibilityDetail, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
+		{Visibility: clientui.EntryVisibilityDetail, Integrity: transcript.RowIntegrityUnrecoverableMalformed, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{}},
+		{Visibility: clientui.EntryVisibilityDetail, Integrity: transcript.RowIntegrityUnrecoverableMalformed, Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{}},
+		{Visibility: clientui.EntryVisibilityDetail, Integrity: transcript.RowIntegrityUnrecoverableMalformed, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{}},
+		{Visibility: clientui.EntryVisibilityDetail, Integrity: transcript.RowIntegrityUnrecoverableMalformed, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{
 			Reason: clientui.TranscriptNoticeLegacyUntypedNotice,
 		}},
 	}
 
 	for _, row := range rows {
-		presentation := RenderDetailPresentation(row, 80, "", DetailIntegrityUnrecoverableMalformed)
+		presentation := RenderDetailPresentation(row, 80, "")
 		if presentation.Expandable {
 			t.Fatalf("unrecoverable malformed row %q is expandable: %+v", row.Kind, presentation)
 		}
@@ -398,6 +410,240 @@ func TestRenderPatchToolShowsStructuredPathAndCounts(t *testing.T) {
 	}
 }
 
+func TestDetailCompilerRendersStructuredPatchSyntaxAndDiffSemantics(t *testing.T) {
+	renderedPatch := patchformat.Render(
+		"*** Begin Patch\n*** Update File: example.go\n@@\n package main\n-var oldValue = \"old\"\n+var newValue = \"new\"\n*** End Patch\n",
+		"/workspace",
+	)
+	row := toolRow("patch", clientui.ToolPresentationDefault, renderedPatch.DetailText(), false)
+	row.Tool.ToolPresentation.PatchRender = &renderedPatch
+	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
+
+	presentation := NewDetailCompiler(100, "dark").Compile(row)
+	added, addedOK := detailLineContaining(presentation.Expanded, "newValue")
+	removed, removedOK := detailLineContaining(presentation.Expanded, "oldValue")
+	context, contextOK := detailLineContaining(presentation.Expanded, "package main")
+	hunk, hunkOK := detailLineContaining(presentation.Expanded, "@@")
+	if !addedOK || !removedOK || !contextOK || !hunkOK {
+		t.Fatalf(
+			"structured patch lines missing: added=%t removed=%t context=%t hunk=%t lines=%q",
+			addedOK,
+			removedOK,
+			contextOK,
+			hunkOK,
+			PlainLines(presentation.Expanded),
+		)
+	}
+	if added.Background != LineBackgroundDiffAdded || removed.Background != LineBackgroundDiffRemoved {
+		t.Fatalf("diff backgrounds = added %v removed %v", added.Background, removed.Background)
+	}
+	if context.Background != LineBackgroundDefault || hunk.Background != LineBackgroundDefault {
+		t.Fatalf("neutral patch backgrounds = context %v hunk %v", context.Background, hunk.Background)
+	}
+	if !lineHasSemanticMarker(added, "+", StyleRoleToolSuccess) ||
+		!lineHasSemanticMarker(removed, "-", StyleRoleToolError) {
+		t.Fatalf("patch markers lack typed add/remove semantics: added=%+v removed=%+v", added.Spans, removed.Spans)
+	}
+	foregrounds := make(map[RGBColor]struct{})
+	for _, span := range added.Spans {
+		if span.Style.Kind == SpanStyleExplicitRGB {
+			foregrounds[span.Style.Foreground] = struct{}{}
+		}
+	}
+	if len(foregrounds) < 2 {
+		t.Fatalf("added source line has %d Chroma foregrounds, want syntax-token styling: %+v", len(foregrounds), added.Spans)
+	}
+	for _, span := range hunk.Spans {
+		if span.Style.Kind == SpanStyleExplicitRGB {
+			t.Fatalf("hunk metadata was syntax-highlighted as source: %+v", hunk.Spans)
+		}
+	}
+}
+
+func TestDetailCompilerKeepsStructuredPatchInputAheadOfResult(t *testing.T) {
+	renderedPatch := patchformat.Render(
+		"*** Begin Patch\n*** Update File: example.go\n@@\n-oldValue := 1\n+newValue := 2\n*** End Patch\n",
+		"/workspace",
+	)
+	tests := []struct {
+		name       string
+		isError    bool
+		result     string
+		symbolRole StyleRole
+	}{
+		{name: "success", result: "applied", symbolRole: StyleRoleToolSuccess},
+		{name: "failure", isError: true, result: "failed", symbolRole: StyleRoleToolError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			row := toolRow("patch", clientui.ToolPresentationDefault, "unstructured result fallback", test.isError)
+			row.Tool.ResultSummary = test.result
+			row.Tool.ToolPresentation.PatchRender = &renderedPatch
+			row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
+
+			expanded := NewDetailCompiler(80, "dark").Compile(row).Expanded
+			if len(expanded) < 3 || expanded[0].LeadingSymbol == nil {
+				t.Fatalf("expanded structured patch = %+v, want input lines followed by result", expanded)
+			}
+			if expanded[0].LeadingSymbol.Style.SemanticRole != test.symbolRole {
+				t.Fatalf("leading symbol role = %v, want %v", expanded[0].LeadingSymbol.Style.SemanticRole, test.symbolRole)
+			}
+			addedIndex := -1
+			for index, line := range expanded {
+				if line.Background == LineBackgroundDiffAdded {
+					addedIndex = index
+					break
+				}
+			}
+			resultIndex := len(expanded) - 1
+			if addedIndex < 0 || addedIndex >= resultIndex {
+				t.Fatalf("structured input index = %d, result index = %d: %+v", addedIndex, resultIndex, expanded)
+			}
+			resultLine := expanded[resultIndex]
+			if len(resultLine.Spans) == 0 || resultLine.Spans[len(resultLine.Spans)-1].Text != test.result {
+				t.Fatalf("last expanded line = %+v, want typed result %q", resultLine, test.result)
+			}
+			for _, span := range resultLine.Spans {
+				if span.Style.Kind == SpanStyleExplicitRGB {
+					t.Fatalf("result line inherited source syntax styling: %+v", resultLine.Spans)
+				}
+			}
+		})
+	}
+}
+
+func TestDetailCompilerKeepsRawPatchFallbackSemantic(t *testing.T) {
+	raw := patchformat.Raw("unstructured patch input\nsecond raw line")
+	row := toolRow("patch", clientui.ToolPresentationDefault, "unstructured result fallback", false)
+	row.Tool.ToolPresentation.PatchRender = &raw
+	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
+
+	expanded := NewDetailCompiler(80, "dark").Compile(row).Expanded
+	if len(expanded) != len(raw.DetailLines) {
+		t.Fatalf("raw patch rendered %d lines, want %d: %+v", len(expanded), len(raw.DetailLines), expanded)
+	}
+	for index, line := range expanded {
+		if line.Background != LineBackgroundDefault {
+			t.Fatalf("raw line %d received diff background %v", index, line.Background)
+		}
+		for _, span := range line.Spans {
+			if span.Style.Kind == SpanStyleExplicitRGB {
+				t.Fatalf("raw line %d received source syntax style: %+v", index, line.Spans)
+			}
+		}
+		if got := line.Spans[len(line.Spans)-1].Text; got != raw.DetailLines[index].Text {
+			t.Fatalf("raw line %d body = %q, want %q", index, got, raw.DetailLines[index].Text)
+		}
+	}
+}
+
+func TestDetailCompilerWrapsStructuredPatchWithOneMarkerPerSourceLine(t *testing.T) {
+	renderedPatch := patchformat.Render(
+		"*** Begin Patch\n*** Update File: example.go\n+var extremelyLongIdentifier = \"a long source value\"\n*** End Patch\n",
+		"/workspace",
+	)
+	row := toolRow("patch", clientui.ToolPresentationDefault, renderedPatch.DetailText(), false)
+	row.Tool.ToolPresentation.PatchRender = &renderedPatch
+	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
+
+	const width = 14
+	expanded := NewDetailCompiler(width, "dark").Compile(row).Expanded
+	addedLines := make([]Line, 0, 4)
+	for _, line := range expanded {
+		if line.Background != LineBackgroundDiffAdded {
+			continue
+		}
+		if got := lipgloss.Width(line.Plain()); got > width {
+			t.Fatalf("wrapped patch line width = %d, want <= %d: %+v", got, width, line)
+		}
+		addedLines = append(addedLines, line)
+	}
+	if len(addedLines) < 2 {
+		t.Fatalf("long added source rendered %d line(s), want wrapping: %+v", len(addedLines), expanded)
+	}
+	if !lineHasSemanticMarker(addedLines[0], "+", StyleRoleToolSuccess) {
+		t.Fatalf("first added chunk lacks typed marker: %+v", addedLines[0].Spans)
+	}
+	for index, line := range addedLines[1:] {
+		if lineHasSemanticMarker(line, "+", StyleRoleToolSuccess) {
+			t.Fatalf("continuation chunk %d repeated added marker: %+v", index+1, line.Spans)
+		}
+	}
+}
+
+func TestDetailLineEqualityUsesExplicitStyleValues(t *testing.T) {
+	color := RGBColor{Red: 0x12, Green: 0x34, Blue: 0x56}
+	left := []Line{{Spans: []Span{ExplicitRGBSpan("source", color, SpanAttributeBold)}}}
+	right := []Line{{Spans: []Span{ExplicitRGBSpan("source", color, SpanAttributeBold)}}}
+
+	if !detailLinesEqual(left, right) {
+		t.Fatalf("separately constructed equivalent explicit styles compare unequal: left=%+v right=%+v", left, right)
+	}
+	right[0].Spans[0].Style = right[0].Spans[0].Style.With(SpanAttributeItalic)
+	if detailLinesEqual(left, right) {
+		t.Fatalf("different explicit attributes compare equal: left=%+v right=%+v", left, right)
+	}
+}
+
+func TestDetailCompilerSanitizesStructuredPatchSpans(t *testing.T) {
+	renderedPatch := patchformat.RenderedPatch{
+		Files: []patchformat.RenderedFile{{AbsPath: "/workspace/example.go", RelPath: "./example.go", Added: 1}},
+		SummaryLines: []patchformat.RenderedLine{{
+			Kind:      patchformat.RenderedLineKindFile,
+			Text:      "./example.go +1",
+			FileIndex: 0,
+			Path:      "./example.go",
+		}},
+		DetailLines: []patchformat.RenderedLine{
+			{
+				Kind:      patchformat.RenderedLineKindFile,
+				Text:      "/workspace/example.go\x1b[31m",
+				FileIndex: 0,
+				Path:      "/workspace/example.go\x1b[31m",
+			},
+			{
+				Kind:      patchformat.RenderedLineKindDiff,
+				Text:      "+var safeValue = \"safe\"\x1b[0m",
+				FileIndex: 0,
+			},
+		},
+	}
+	row := toolRow("patch", clientui.ToolPresentationDefault, renderedPatch.DetailText(), false)
+	row.Tool.ToolPresentation.PatchRender = &renderedPatch
+	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
+
+	expanded := NewDetailCompiler(80, "dark").Compile(row).Expanded
+	for lineIndex, line := range expanded {
+		for _, span := range line.Spans {
+			for _, value := range span.Text {
+				if unicode.IsControl(value) {
+					t.Fatalf("structured patch line %d contains control rune %U: %+v", lineIndex, value, line.Spans)
+				}
+			}
+		}
+	}
+}
+
+func detailLineContaining(lines []Line, text string) (Line, bool) {
+	for _, line := range lines {
+		if strings.Contains(line.Plain(), text) {
+			return line, true
+		}
+	}
+	return Line{}, false
+}
+
+func lineHasSemanticMarker(line Line, marker string, role StyleRole) bool {
+	for _, span := range line.Spans {
+		if span.Text == marker &&
+			span.Style.Kind == SpanStyleSemantic &&
+			span.Style.SemanticRole == role {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPendingPatchToolUsesStructuredPathAndCounts(t *testing.T) {
 	line := RenderPendingTool(clientui.TranscriptToolStart{
 		ToolCallID: "e5d6245b-579f-487c-87f7-cd57e21a0d38",
@@ -418,9 +664,9 @@ func TestPendingPatchToolUsesStructuredPathAndCounts(t *testing.T) {
 	for _, span := range line.Spans {
 		switch span.Text {
 		case "-1":
-			removedRole = span.Role
+			removedRole = span.Style.SemanticRole
 		case "+2":
-			addedRole = span.Role
+			addedRole = span.Style.SemanticRole
 		}
 	}
 	if removedRole != StyleRoleToolError || addedRole != StyleRoleToolSuccess {
@@ -466,11 +712,11 @@ func TestCollapsedToolResultSummaryRendersAsFaintInlineMetadata(t *testing.T) {
 		t.Fatal("rendered line has no spans")
 	}
 	meta := spans[len(spans)-1]
-	if meta.Text != "passed" || meta.Role != StyleRoleNotice || !meta.Faint {
+	if meta.Text != "passed" || meta.Style.SemanticRole != StyleRoleNotice || !meta.Style.Has(SpanAttributeFaint) {
 		t.Fatalf("result summary span = %+v, want faint notice metadata", meta)
 	}
 	gap := spans[len(spans)-2]
-	if gap.Text == "" || gap.Role != StyleRoleToolShell {
+	if gap.Text == "" || gap.Style.SemanticRole != StyleRoleToolShell {
 		t.Fatalf("result summary gap span = %+v, want shell-role spacing before metadata", gap)
 	}
 }
@@ -595,10 +841,10 @@ func TestUserAssistantMarkdownCodeUsesPrimaryFullStrengthRole(t *testing.T) {
 		t.Fatalf("markdown code spans = %+v, want inline and block code", codeSpans)
 	}
 	for _, span := range codeSpans {
-		if got := ColorRoleForStyle(span.Role); got != ColorRolePrimary {
+		if got := ColorRoleForStyle(span.Style.SemanticRole); got != ColorRolePrimary {
 			t.Fatalf("markdown code color role = %v, want primary", got)
 		}
-		if span.Faint {
+		if span.Style.Has(SpanAttributeFaint) {
 			t.Fatalf("markdown code span is faint: %+v", span)
 		}
 	}
@@ -625,10 +871,10 @@ func TestBackgroundExitStatusChangesOnlySymbolMetadata(t *testing.T) {
 	if success.LeadingSymbol == nil || failure.LeadingSymbol == nil || missing.LeadingSymbol == nil {
 		t.Fatalf("background status lines lack typed symbols: success=%+v failure=%+v missing=%+v", success, failure, missing)
 	}
-	if success.LeadingSymbol.Role == failure.LeadingSymbol.Role {
+	if success.LeadingSymbol.Style == failure.LeadingSymbol.Style {
 		t.Fatalf("typed success and failure statuses produced identical symbol metadata: success=%+v failure=%+v", success.LeadingSymbol, failure.LeadingSymbol)
 	}
-	if success.LeadingSymbol.Role != missing.LeadingSymbol.Role {
+	if success.LeadingSymbol.Style != missing.LeadingSymbol.Style {
 		t.Fatalf("missing legacy status diverged from non-error symbol metadata: success=%+v missing=%+v", success.LeadingSymbol, missing.LeadingSymbol)
 	}
 	if !slices.Equal(success.Spans, failure.Spans) || !slices.Equal(success.Spans, missing.Spans) {
@@ -670,7 +916,7 @@ func assertFailedToolClassification(t *testing.T, mode Mode, line Line) {
 		t.Fatalf("mode %v failed tool line has no typed symbol", mode)
 	}
 	symbol := *line.LeadingSymbol
-	if symbol.Role != StyleRoleToolError || symbol.Faint {
+	if symbol.Style.SemanticRole != StyleRoleToolError || symbol.Style.Has(SpanAttributeFaint) {
 		t.Fatalf("mode %v failed tool classification = %+v, want full-strength tool error role", mode, symbol)
 	}
 }
@@ -682,7 +928,7 @@ func TestCollapsedToolResultSummarySanitizesMetadataBeforeInlineRender(t *testin
 	rendered := RenderCommittedRow(row, 80, "", ModeOngoing)
 	spans := rendered.Lines[0].Spans
 	meta := spans[len(spans)-1]
-	if meta.Text != "passed[31m" || meta.Role != StyleRoleNotice || !meta.Faint {
+	if meta.Text != "passed[31m" || meta.Style.SemanticRole != StyleRoleNotice || !meta.Style.Has(SpanAttributeFaint) {
 		t.Fatalf("sanitized result summary span = %+v, want sanitized faint notice metadata", meta)
 	}
 }
@@ -763,7 +1009,7 @@ func TestRenderDividerStaysWithinFrameWidth(t *testing.T) {
 				t.Fatalf("divider unexpectedly empty for positive frame width %d", plainWidth)
 			}
 			for _, span := range line.Spans {
-				if span.Role != StyleRoleNotice || !span.Faint {
+				if span.Style.SemanticRole != StyleRoleNotice || !span.Style.Has(SpanAttributeFaint) {
 					t.Fatalf("divider span has invalid style metadata: %+v", span)
 				}
 			}

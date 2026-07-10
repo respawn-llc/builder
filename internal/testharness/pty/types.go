@@ -22,6 +22,20 @@ var NewChunk = analyzer.NewChunk
 
 type Capture = analyzer.Capture
 
+type PhaseInputDispatch = analyzer.PhaseInputDispatch
+
+type FrameInputDispatch = analyzer.FrameInputDispatch
+
+type ReadinessBoundaryKind = analyzer.ReadinessBoundaryKind
+
+const (
+	ReadinessRendererFrame        = analyzer.ReadinessRendererFrame
+	ReadinessInputApplied         = analyzer.ReadinessInputApplied
+	ReadinessNormalBufferRestored = analyzer.ReadinessNormalBufferRestored
+)
+
+type ReadinessBoundary = analyzer.ReadinessBoundary
+
 type ProcessExit = analyzer.ProcessExit
 
 var NewCapture = analyzer.NewCapture
@@ -71,11 +85,14 @@ type PrivateModeChange = analyzer.PrivateModeChange
 type PhaseKind = analyzer.PhaseKind
 
 const (
-	PhaseScenarioStart    = analyzer.PhaseScenarioStart
-	PhaseWindowStart      = analyzer.PhaseWindowStart
-	PhaseWindowEnd        = analyzer.PhaseWindowEnd
-	PhaseReadyForQuit     = analyzer.PhaseReadyForQuit
-	PhaseScenarioComplete = analyzer.PhaseScenarioComplete
+	PhaseScenarioStart            = analyzer.PhaseScenarioStart
+	PhaseWindowStart              = analyzer.PhaseWindowStart
+	PhaseWindowEnd                = analyzer.PhaseWindowEnd
+	PhaseReadyForQuit             = analyzer.PhaseReadyForQuit
+	PhaseScenarioComplete         = analyzer.PhaseScenarioComplete
+	PhaseInputApplied             = analyzer.PhaseInputApplied
+	PhaseDetailInitialPageApplied = analyzer.PhaseDetailInitialPageApplied
+	PhaseScenarioFinalApplied     = analyzer.PhaseScenarioFinalApplied
 )
 
 type WindowID = analyzer.WindowID
@@ -97,6 +114,8 @@ var ResolveOperationWindows = analyzer.ResolveOperationWindows
 var ClassifyAppends = analyzer.ClassifyAppends
 
 var CoalesceAppendRows = analyzer.CoalesceAppendRows
+
+var LatestReadinessBoundaryAfter = analyzer.LatestReadinessBoundaryAfter
 
 type Cell = analyzer.Cell
 

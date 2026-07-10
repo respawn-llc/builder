@@ -15,7 +15,7 @@ func TestDetailModeKeyForwardingReturnsPageRequestCommand(t *testing.T) {
 	m.forwardToView(tui.SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
 		OlderCursor:  &olderCursor,
 		HasMoreAbove: true,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "current"}},
+		Entries:      []clientui.TranscriptCommittedRow{detailTestAssistantRow("current")},
 	}})
 	m.forwardToView(tui.SetModeMsg{Mode: tui.ModeDetail})
 
@@ -34,9 +34,9 @@ func TestDetailModeKeyForwardingReturnsPageRequestCommand(t *testing.T) {
 }
 
 func TestDetailTabForwardingReturnsWarmupPageLoadCommand(t *testing.T) {
-	m := newProjectedStaticUIModel(WithUISessionID("session-1"))
+	m := newProjectedStaticUIModel(WithUISessionID(detailTestSessionID))
 	m.activeSurface = uiSurfaceTranscriptDetail
-	m.statusConfig.SessionViews = &countingSessionViewClient{page: clientui.TranscriptPage{SessionID: "session-1"}}
+	m.statusConfig.SessionViews = &countingSessionViewClient{page: clientui.TranscriptPage{SessionID: detailTestSessionID}}
 
 	cmd := m.forwardToView(tea.KeyMsg{Type: tea.KeyTab})
 	if cmd == nil {

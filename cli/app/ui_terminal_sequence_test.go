@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestTerminalSequenceWriteFailureIsDeliveredAsErrorNotice(t *testing.T) {
+func TestTerminalSequenceWriteFailureUsesFatalTerminalErrorPolicy(t *testing.T) {
 	originalWrite := writeTerminalSequence
 	writeTerminalSequence = func(string) error {
 		return errors.New("terminal unavailable")
@@ -19,7 +19,7 @@ func TestTerminalSequenceWriteFailureIsDeliveredAsErrorNotice(t *testing.T) {
 		t.Fatalf("terminal write failure message = %T, want terminalSequenceWriteErrMsg", msg)
 	}
 	model := updateUIModel(t, newProjectedStaticUIModel(), msg)
-	if model.transientStatusKind != uiStatusNoticeError || model.transientStatus == "" {
-		t.Fatalf("terminal write failure notice = %q kind %v, want visible error", model.transientStatus, model.transientStatusKind)
+	if !model.Transition().Exit || !model.forcedLocalExit {
+		t.Fatalf("terminal write failure did not request a clean local exit: transition=%+v forced=%t", model.Transition(), model.forcedLocalExit)
 	}
 }

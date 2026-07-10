@@ -12,6 +12,10 @@ type InputEvent = driver.InputEvent
 
 type PhaseInputEvent = driver.PhaseInputEvent
 
+type FrameInputSequence = driver.FrameInputSequence
+
+type FrameInput = driver.FrameInput
+
 type ParseableInputEvent = driver.ParseableInputEvent
 
 type DriverResizeEvent = driver.ResizeEvent
@@ -24,4 +28,8 @@ func RunCommand(ctx context.Context, spec CommandSpec) (Capture, error) {
 
 func BuildPackage(ctx context.Context, packagePath, outputPath string) error {
 	return driver.BuildPackage(ctx, packagePath, outputPath)
+}
+
+func BuildTestBinary(ctx context.Context, packagePath, outputPath string) error {
+	return driver.BuildTestBinary(ctx, packagePath, outputPath)
 }

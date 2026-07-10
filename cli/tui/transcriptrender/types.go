@@ -1,6 +1,8 @@
 package transcriptrender
 
 import (
+	"fmt"
+
 	"core/shared/clientui"
 	"core/shared/theme"
 )
@@ -110,19 +112,125 @@ func ColorRoleForStyle(role StyleRole) ColorRole {
 type Line struct {
 	LeadingSymbol *Span
 	Spans         []Span
+	Background    LineBackground
 }
 
 type Span struct {
-	Text      string
-	Role      StyleRole
-	Faint     bool
-	Bold      bool
-	Italic    bool
-	Underline bool
+	Text  string
+	Style SpanStyle
+}
+
+type LineBackground uint8
+
+const (
+	LineBackgroundDefault LineBackground = iota
+	LineBackgroundDiffAdded
+	LineBackgroundDiffRemoved
+)
+
+type SpanStyleKind uint8
+
+const (
+	SpanStyleSemantic SpanStyleKind = iota
+	SpanStyleExplicitRGB
+)
+
+type SpanAttribute uint8
+
+const (
+	SpanAttributeFaint SpanAttribute = 1 << iota
+	SpanAttributeBold
+	SpanAttributeItalic
+	SpanAttributeUnderline
+)
+
+type RGBColor struct {
+	Red   uint8
+	Green uint8
+	Blue  uint8
+}
+
+func (c RGBColor) Hex() string {
+	return fmt.Sprintf("#%02x%02x%02x", c.Red, c.Green, c.Blue)
+}
+
+type SpanStyle struct {
+	Kind         SpanStyleKind
+	SemanticRole StyleRole
+	Foreground   RGBColor
+	Attributes   SpanAttribute
+}
+
+func SemanticStyle(role StyleRole, attributes ...SpanAttribute) SpanStyle {
+	return SpanStyle{
+		Kind:         SpanStyleSemantic,
+		SemanticRole: role,
+		Attributes:   combineSpanAttributes(attributes),
+	}
+}
+
+func ExplicitRGBStyle(foreground RGBColor, attributes ...SpanAttribute) SpanStyle {
+	return SpanStyle{
+		Kind:       SpanStyleExplicitRGB,
+		Foreground: foreground,
+		Attributes: combineSpanAttributes(attributes),
+	}
+}
+
+func SemanticSpan(text string, role StyleRole, attributes ...SpanAttribute) Span {
+	return Span{Text: text, Style: SemanticStyle(role, attributes...)}
+}
+
+func ExplicitRGBSpan(text string, foreground RGBColor, attributes ...SpanAttribute) Span {
+	return Span{Text: text, Style: ExplicitRGBStyle(foreground, attributes...)}
+}
+
+func combineSpanAttributes(attributes []SpanAttribute) SpanAttribute {
+	var combined SpanAttribute
+	for _, attribute := range attributes {
+		combined |= attribute
+	}
+	return combined
+}
+
+func (s SpanStyle) Has(attribute SpanAttribute) bool {
+	return s.Attributes&attribute != 0
+}
+
+func (s SpanStyle) With(attribute SpanAttribute) SpanStyle {
+	s.Attributes |= attribute
+	return s
+}
+
+func (s SpanStyle) Role() (StyleRole, bool) {
+	if s.Kind != SpanStyleSemantic {
+		return 0, false
+	}
+	return s.SemanticRole, true
+}
+
+type ResolvedForegroundKind uint8
+
+const (
+	ResolvedForegroundTheme ResolvedForegroundKind = iota
+	ResolvedForegroundRGB
+)
+
+type ResolvedForeground struct {
+	Kind  ResolvedForegroundKind
+	Theme theme.Color
+	RGB   RGBColor
+}
+
+func (f ResolvedForeground) TrueColor() string {
+	if f.Kind == ResolvedForegroundRGB {
+		return f.RGB.Hex()
+	}
+	return f.Theme.TrueColor
 }
 
 type ResolvedSpanStyle struct {
-	Foreground theme.Color
+	Foreground ResolvedForeground
 	Faint      bool
 	Bold       bool
 	Italic     bool
@@ -130,12 +238,27 @@ type ResolvedSpanStyle struct {
 }
 
 func ResolveSpanStyle(span Span, themeName string) ResolvedSpanStyle {
+	foreground := ResolvedForeground{}
+	switch span.Style.Kind {
+	case SpanStyleSemantic:
+		foreground = ResolvedForeground{
+			Kind:  ResolvedForegroundTheme,
+			Theme: ColorForRole(ColorRoleForStyle(span.Style.SemanticRole), themeName),
+		}
+	case SpanStyleExplicitRGB:
+		foreground = ResolvedForeground{
+			Kind: ResolvedForegroundRGB,
+			RGB:  span.Style.Foreground,
+		}
+	default:
+		panic(fmt.Sprintf("resolve transcript span with invalid style kind %d", span.Style.Kind))
+	}
 	return ResolvedSpanStyle{
-		Foreground: ColorForRole(ColorRoleForStyle(span.Role), themeName),
-		Faint:      span.Faint,
-		Bold:       span.Bold,
-		Italic:     span.Italic,
-		Underline:  span.Underline,
+		Foreground: foreground,
+		Faint:      span.Style.Has(SpanAttributeFaint),
+		Bold:       span.Style.Has(SpanAttributeBold),
+		Italic:     span.Style.Has(SpanAttributeItalic),
+		Underline:  span.Style.Has(SpanAttributeUnderline),
 	}
 }
 

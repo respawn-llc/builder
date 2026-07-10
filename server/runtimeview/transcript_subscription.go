@@ -246,27 +246,28 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 	switch fact.Kind {
 	case runtime.TranscriptCommittedRowFactUser:
 		if fact.User == nil {
-			return clientui.TranscriptCommittedRow{Visibility: visibility, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
+			return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
 		}
-		return clientui.TranscriptCommittedRow{Visibility: visibility, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: fact.User.Text}}
+		return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: fact.User.Text, CondensedText: fact.User.CondensedText}}
 	case runtime.TranscriptCommittedRowFactAssistant:
 		if fact.Assistant == nil {
-			return clientui.TranscriptCommittedRow{Visibility: visibility, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
+			return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
 		}
 		row := clientui.TranscriptAssistantRow{
-			Text:  fact.Assistant.Text,
-			Phase: transcript.ClassifyAssistantPhase(string(fact.Assistant.Phase)),
+			Text:          fact.Assistant.Text,
+			CondensedText: fact.Assistant.CondensedText,
+			Phase:         transcript.ClassifyAssistantPhase(string(fact.Assistant.Phase)),
 		}
 		if fact.Assistant.StreamID != nil {
 			parsed := *fact.Assistant.StreamID
 			row.StreamID = &parsed
 		}
-		return clientui.TranscriptCommittedRow{Visibility: visibility, Kind: clientui.TranscriptRowAssistant, Assistant: &row}
+		return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowAssistant, Assistant: &row}
 	case runtime.TranscriptCommittedRowFactTool:
 		if fact.Tool == nil {
-			return clientui.TranscriptCommittedRow{Visibility: visibility, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
+			return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
 		}
-		return clientui.TranscriptCommittedRow{Visibility: visibility, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
+		return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
 			ToolCallID:       strings.TrimSpace(fact.Tool.ToolCallID),
 			ToolName:         strings.TrimSpace(fact.Tool.ToolName),
 			Text:             fact.Tool.Text,
@@ -276,7 +277,7 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 			ToolPresentation: cloneToolCallMeta(fact.Tool.Presentation),
 		}}
 	default:
-		return clientui.TranscriptCommittedRow{Visibility: visibility, Kind: clientui.TranscriptRowNotice, Notice: transcriptNoticeFromFact(fact.Notice)}
+		return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowNotice, Notice: transcriptNoticeFromFact(fact.Notice)}
 	}
 }
 

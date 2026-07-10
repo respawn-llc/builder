@@ -1,9 +1,6 @@
 package analyzer
 
-import (
-	"errors"
-	"fmt"
-)
+import "fmt"
 
 func ResolveOperationWindows(analysis Analysis) (map[WindowID]OperationWindow, error) {
 	starts := map[WindowID]PhaseEvent{}
@@ -129,28 +126,4 @@ func firstOperationAtOrAfter(operations []Operation, byteOffset int64) int {
 		}
 	}
 	return len(operations)
-}
-
-func phaseKindFromProtocol(raw string) (PhaseKind, error) {
-	switch raw {
-	case "ScenarioStart":
-		return PhaseScenarioStart, nil
-	case "WindowStart":
-		return PhaseWindowStart, nil
-	case "WindowEnd":
-		return PhaseWindowEnd, nil
-	case "ReadyForQuit":
-		return PhaseReadyForQuit, nil
-	case "ScenarioComplete":
-		return PhaseScenarioComplete, nil
-	default:
-		return 0, fmt.Errorf("unknown phase %q", raw)
-	}
-}
-
-func validateWindowEventID(kind PhaseKind, id *WindowID) error {
-	if (kind == PhaseWindowStart || kind == PhaseWindowEnd) && id == nil {
-		return errors.New("window phase requires window_id")
-	}
-	return nil
 }

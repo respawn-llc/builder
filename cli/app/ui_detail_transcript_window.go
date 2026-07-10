@@ -22,7 +22,7 @@ type residentSegmentMeta struct {
 
 type uiDetailTranscriptWindow struct {
 	sessionID    string
-	entries      []clientui.ChatEntry
+	entries      []clientui.TranscriptCommittedRow
 	loaded       bool
 	olderCursor  *int64
 	hasMoreAbove bool
@@ -34,7 +34,7 @@ type uiDetailTranscriptWindow struct {
 
 type uiDetailTranscriptMergeResult struct {
 	addedEntries        int
-	trimmedFrontEntries []clientui.ChatEntry
+	trimmedFrontEntries []clientui.TranscriptCommittedRow
 }
 
 func (w uiDetailTranscriptWindow) page() clientui.TranscriptPage {
@@ -44,7 +44,7 @@ func (w uiDetailTranscriptWindow) page() clientui.TranscriptPage {
 		HasMoreAbove: w.hasMoreAbove,
 		NewerCursor:  w.newerCursor,
 		HasMoreBelow: w.hasMoreBelow,
-		Entries:      cloneDetailChatEntries(w.entries),
+		Entries:      cloneDetailTranscriptRows(w.entries),
 	}
 }
 
@@ -116,7 +116,7 @@ func (w uiDetailTranscriptWindow) matchesPage(page clientui.TranscriptPage) bool
 		return false
 	}
 	for i := range page.Entries {
-		if !clientChatEntryEqual(w.entries[i], page.Entries[i]) {
+		if !clientTranscriptRowEqual(w.entries[i], page.Entries[i]) {
 			return false
 		}
 	}
@@ -128,7 +128,7 @@ func (w *uiDetailTranscriptWindow) replace(page clientui.TranscriptPage) {
 		return
 	}
 	w.sessionID = strings.TrimSpace(page.SessionID)
-	w.entries = cloneDetailChatEntries(page.Entries)
+	w.entries = cloneDetailTranscriptRows(page.Entries)
 	w.loaded = true
 	w.segments = []residentSegmentMeta{segmentMetaFromPage(0, page)}
 	w.refreshBounds()
@@ -146,7 +146,7 @@ func (w *uiDetailTranscriptWindow) prependCursorPage(page clientui.TranscriptPag
 	if w.hasSegment(page) {
 		return uiDetailTranscriptMergeResult{}
 	}
-	pageEntries := cloneDetailChatEntries(page.Entries)
+	pageEntries := cloneDetailTranscriptRows(page.Entries)
 	if len(pageEntries) == 0 {
 		if len(w.segments) == 0 {
 			w.segments = []residentSegmentMeta{segmentMetaFromPage(0, page)}
@@ -159,7 +159,7 @@ func (w *uiDetailTranscriptWindow) prependCursorPage(page clientui.TranscriptPag
 		w.loaded = true
 		return uiDetailTranscriptMergeResult{}
 	}
-	merged := make([]clientui.ChatEntry, 0, len(pageEntries)+len(w.entries))
+	merged := make([]clientui.TranscriptCommittedRow, 0, len(pageEntries)+len(w.entries))
 	merged = append(merged, pageEntries...)
 	merged = append(merged, w.entries...)
 	w.entries = merged
@@ -187,7 +187,7 @@ func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage
 	if w.hasSegment(page) {
 		return uiDetailTranscriptMergeResult{}
 	}
-	pageEntries := cloneDetailChatEntries(page.Entries)
+	pageEntries := cloneDetailTranscriptRows(page.Entries)
 	if len(pageEntries) == 0 {
 		if len(w.segments) == 0 {
 			w.segments = []residentSegmentMeta{segmentMetaFromPage(len(w.entries), page)}
@@ -242,7 +242,7 @@ func (w uiDetailTranscriptWindow) hasSegment(page clientui.TranscriptPage) bool 
 		}
 		matches := true
 		for entryIndex, entry := range page.Entries {
-			if !clientChatEntryEqual(w.entries[seg.startLocal+entryIndex], entry) {
+			if !clientTranscriptRowEqual(w.entries[seg.startLocal+entryIndex], entry) {
 				matches = false
 				break
 			}
@@ -261,7 +261,7 @@ func segmentBoundaryEqual(seg residentSegmentMeta, page clientui.TranscriptPage)
 		int64PointerEqual(seg.newerCursor, page.NewerCursor)
 }
 
-func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) []clientui.ChatEntry {
+func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) []clientui.TranscriptCommittedRow {
 	if w == nil || len(w.segments) <= uiDetailTranscriptMinResidentSegments {
 		return nil
 	}
@@ -279,7 +279,7 @@ func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) []clientui.Ch
 			break
 		}
 	}
-	trimmedFrontEntries := []clientui.ChatEntry(nil)
+	trimmedFrontEntries := []clientui.TranscriptCommittedRow(nil)
 	// The resident window is bounded to two pages max (current + one adjacent):
 	// the spec model for detail pagination. Eviction is driven by segment count
 	// alone — there is no entry-count ceiling. The far segment from the anchor is
@@ -291,12 +291,12 @@ func (w *uiDetailTranscriptWindow) trimToSegments(anchorLocal int) []clientui.Ch
 		lastDist := last - anchorSeg
 		if lastDist >= firstDist && anchorSeg != last {
 			cut := w.segments[last].startLocal
-			w.entries = append([]clientui.ChatEntry(nil), w.entries[:cut]...)
+			w.entries = append([]clientui.TranscriptCommittedRow(nil), w.entries[:cut]...)
 			w.segments = w.segments[:last]
 		} else if anchorSeg != 0 {
 			cut := w.segments[1].startLocal
-			trimmedFrontEntries = append(trimmedFrontEntries, cloneDetailChatEntries(w.entries[:cut])...)
-			w.entries = append([]clientui.ChatEntry(nil), w.entries[cut:]...)
+			trimmedFrontEntries = append(trimmedFrontEntries, cloneDetailTranscriptRows(w.entries[:cut])...)
+			w.entries = append([]clientui.TranscriptCommittedRow(nil), w.entries[cut:]...)
 			w.segments = w.segments[1:]
 			for i := range w.segments {
 				w.segments[i].startLocal -= cut
@@ -341,46 +341,107 @@ func transcriptPageSessionChanged(currentSessionID, nextSessionID string) bool {
 	return trimmedCurrent != trimmedNext
 }
 
-func cloneDetailChatEntries(entries []clientui.ChatEntry) []clientui.ChatEntry {
+func cloneDetailTranscriptRows(entries []clientui.TranscriptCommittedRow) []clientui.TranscriptCommittedRow {
 	if len(entries) == 0 {
 		return nil
 	}
-	out := make([]clientui.ChatEntry, 0, len(entries))
-	for _, entry := range entries {
-		copyEntry := entry
-		copyEntry.ToolCall = valuecopy.ToolCallMeta(entry.ToolCall)
-		out = append(out, copyEntry)
+	out := make([]clientui.TranscriptCommittedRow, 0, len(entries))
+	for _, row := range entries {
+		copyRow := row
+		copyRow.User = valuecopy.Pointer(row.User)
+		copyRow.Assistant = valuecopy.Pointer(row.Assistant)
+		if copyRow.Assistant != nil {
+			copyRow.Assistant.StreamID = valuecopy.Pointer(row.Assistant.StreamID)
+		}
+		copyRow.Tool = valuecopy.Pointer(row.Tool)
+		if copyRow.Tool != nil {
+			copyRow.Tool.ToolPresentation = valuecopy.ToolCallMeta(row.Tool.ToolPresentation)
+		}
+		copyRow.Notice = cloneDetailTranscriptNotice(row.Notice)
+		out = append(out, copyRow)
 	}
 	return out
 }
 
+func cloneDetailTranscriptNotice(notice *clientui.TranscriptNoticeRow) *clientui.TranscriptNoticeRow {
+	if notice == nil {
+		return nil
+	}
+	copyNotice := *notice
+	copyNotice.Diagnostic = valuecopy.Pointer(notice.Diagnostic)
+	copyNotice.Data.LegacyText = valuecopy.Pointer(notice.Data.LegacyText)
+	copyNotice.Data.NoticeID = valuecopy.Pointer(notice.Data.NoticeID)
+	copyNotice.Data.CacheWarning = valuecopy.Pointer(notice.Data.CacheWarning)
+	copyNotice.Data.RuntimeDiagnostic = valuecopy.Pointer(notice.Data.RuntimeDiagnostic)
+	copyNotice.Data.BackgroundExitCode = valuecopy.Pointer(notice.Data.BackgroundExitCode)
+	return &copyNotice
+}
+
 func int64PointerEqual(left, right *int64) bool {
+	return ptrEqual(left, right)
+}
+
+func clientTranscriptRowEqual(left, right clientui.TranscriptCommittedRow) bool {
+	if left.Visibility != right.Visibility ||
+		left.Integrity != right.Integrity ||
+		left.Kind != right.Kind {
+		return false
+	}
+	return clientTranscriptUserRowEqual(left.User, right.User) &&
+		clientTranscriptAssistantRowEqual(left.Assistant, right.Assistant) &&
+		clientTranscriptToolRowEqual(left.Tool, right.Tool) &&
+		clientTranscriptNoticeRowEqual(left.Notice, right.Notice)
+}
+
+func clientTranscriptUserRowEqual(left, right *clientui.TranscriptUserRow) bool {
 	if left == nil || right == nil {
 		return left == right
 	}
 	return *left == *right
 }
 
-func clientChatEntryEqual(left, right clientui.ChatEntry) bool {
-	return transcript.EntryPayloadEqual(clientEntryPayload(left), clientEntryPayload(right))
+func clientTranscriptAssistantRowEqual(left, right *clientui.TranscriptAssistantRow) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Text == right.Text &&
+		left.CondensedText == right.CondensedText &&
+		left.Phase == right.Phase &&
+		ptrEqual(left.StreamID, right.StreamID)
 }
 
-func clientEntryPayload(entry clientui.ChatEntry) transcript.EntryPayload {
-	return transcript.EntryPayload{
-		Visibility:        transcript.EntryVisibility(entry.Visibility),
-		RollbackTargetID:  entry.RollbackTargetID,
-		Role:              entry.Role,
-		Text:              entry.Text,
-		CondensedText:     entry.CondensedText,
-		Phase:             string(entry.Phase),
-		MessageType:       string(entry.MessageType),
-		SourcePath:        entry.SourcePath,
-		CompactLabel:      entry.CompactLabel,
-		ToolResultSummary: entry.ToolResultSummary,
-		ToolCallID:        entry.ToolCallID,
-		NoticeID:          entry.NoticeID,
-		ToolCall:          transcriptToolCallMeta(entry.ToolCall),
+func clientTranscriptToolRowEqual(left, right *clientui.TranscriptToolRow) bool {
+	if left == nil || right == nil {
+		return left == right
 	}
+	return left.ToolCallID == right.ToolCallID &&
+		left.ToolName == right.ToolName &&
+		left.Text == right.Text &&
+		left.IsError == right.IsError &&
+		left.ResultSummary == right.ResultSummary &&
+		left.CondensedText == right.CondensedText &&
+		transcript.ToolCallMetaEqual(
+			transcriptToolCallMeta(left.ToolPresentation),
+			transcriptToolCallMeta(right.ToolPresentation),
+		)
+}
+
+func clientTranscriptNoticeRowEqual(left, right *clientui.TranscriptNoticeRow) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Reason == right.Reason &&
+		left.Severity == right.Severity &&
+		ptrEqual(left.Data.LegacyText, right.Data.LegacyText) &&
+		ptrEqual(left.Data.NoticeID, right.Data.NoticeID) &&
+		ptrEqual(left.Data.CacheWarning, right.Data.CacheWarning) &&
+		ptrEqual(left.Data.RuntimeDiagnostic, right.Data.RuntimeDiagnostic) &&
+		left.Data.MessageType == right.Data.MessageType &&
+		left.Data.SourcePath == right.Data.SourcePath &&
+		left.Data.CondensedText == right.Data.CondensedText &&
+		left.Data.CompactLabel == right.Data.CompactLabel &&
+		ptrEqual(left.Data.BackgroundExitCode, right.Data.BackgroundExitCode) &&
+		ptrEqual(left.Diagnostic, right.Diagnostic)
 }
 
 func transcriptToolCallMeta(meta *clientui.ToolCallMeta) *transcript.ToolCallMeta {

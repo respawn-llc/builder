@@ -173,7 +173,7 @@ type TranscriptPage struct {
 	HasMoreAbove          bool
 	NewerCursor           *int64
 	HasMoreBelow          bool
-	Entries               []ChatEntry
+	Entries               []TranscriptCommittedRow
 }
 
 type ToolPresentationKind string

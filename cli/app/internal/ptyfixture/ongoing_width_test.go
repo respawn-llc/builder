@@ -22,10 +22,7 @@ import (
 func TestOngoingRenderedWidthFollowsTerminalWidth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	bin := filepath.Join(t.TempDir(), "kent-pty-fixture")
-	if err := pty.BuildPackage(ctx, "core/cli/app/internal/ptyfixture/cmd/kent-pty-fixture", bin); err != nil {
-		t.Fatalf("build fixture: %v", err)
-	}
+	bin := buildPTYFixtureBinary(t, ctx)
 
 	longText := strings.Repeat("x", 140)
 	script := map[string]any{
@@ -47,11 +44,15 @@ func TestOngoingRenderedWidthFollowsTerminalWidth(t *testing.T) {
 
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path: bin,
-		Args: []string{
-			"--workspace", filepath.Join(root, "workspace"),
-			"--persistence-root", filepath.Join(root, "persistence"),
-			"--script", scriptPath,
-			"--observations", observationsPath,
+		Env: []string{
+			ptyFixtureProcessEnv(
+				t,
+				root,
+				filepath.Join(root, "workspace"),
+				filepath.Join(root, "persistence"),
+				scriptPath,
+				observationsPath,
+			),
 		},
 		Dimensions: pty.MustDimensions(24, 150),
 		PhaseInputs: []pty.PhaseInputEvent{

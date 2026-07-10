@@ -313,7 +313,10 @@ func TestOngoingTranscriptControllerTracksPluralLiveSectionsByID(t *testing.T) {
 		t.Fatalf("server steering styled lines = %+v, want one typed line", queuedLines)
 	}
 	queuedSpan := queuedLines[0].Spans[0]
-	if queuedSpan.Role != transcriptrender.StyleRoleNoticePrimary || queuedSpan.Faint {
+	queuedRole, semantic := queuedSpan.Style.Role()
+	if !semantic ||
+		queuedRole != transcriptrender.StyleRoleNoticePrimary ||
+		queuedSpan.Style.Has(transcriptrender.SpanAttributeFaint) {
 		t.Fatalf("server steering span = %+v, want primary/full-strength", queuedSpan)
 	}
 	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingPrompt), []string{"second prompt"}; !reflect.DeepEqual(got, want) {
@@ -349,7 +352,10 @@ func TestOngoingBackgroundActivityUsesCommandFirstFaintForeground(t *testing.T) 
 		t.Fatalf("background activity lines = %+v", lines)
 	}
 	for _, span := range lines[0].Spans {
-		if span.Role != transcriptrender.StyleRoleNoticeForegroundFaint || !span.Faint {
+		role, semantic := span.Style.Role()
+		if !semantic ||
+			role != transcriptrender.StyleRoleNoticeForegroundFaint ||
+			!span.Style.Has(transcriptrender.SpanAttributeFaint) {
 			t.Fatalf("background activity span = %+v, want faint foreground", span)
 		}
 	}

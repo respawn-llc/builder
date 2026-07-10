@@ -240,9 +240,9 @@ func TestDetailExpansionKeepsSelectedRangeInView(t *testing.T) {
 	model := NewModel()
 	model = mustUpdateDetailNavigationModel(t, model, SetViewportSizeMsg{Lines: 4, Width: 80})
 	model = mustUpdateDetailNavigationModel(t, model, SetDetailTranscriptPageMsg{
-		Page: clientui.TranscriptPage{Entries: []clientui.ChatEntry{
-			{Role: "assistant", Text: "intro"},
-			{Role: "assistant", Text: strings.Join([]string{"one", "two", "three", "four", "five", "six"}, "\n")},
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			detailAssistant("intro"),
+			detailAssistant(strings.Join([]string{"one", "two", "three", "four", "five", "six"}, "\n")),
 		}},
 		Anchor: DetailTranscriptAnchorTop,
 	})
@@ -260,6 +260,40 @@ func TestDetailExpansionKeepsSelectedRangeInView(t *testing.T) {
 	}
 	if selected, ok := updated.selectedDetailIndex(); !ok || selected != 1 {
 		t.Fatalf("selection after expansion = %d/%t, want 1/true", selected, ok)
+	}
+}
+
+func TestDetailWidthReflowMakesMinimumScrollAdjustmentToKeepSelectionVisible(t *testing.T) {
+	model := NewModel()
+	model = mustUpdateDetailNavigationModel(t, model, SetViewportSizeMsg{Lines: 4, Width: 80})
+	model = mustUpdateDetailNavigationModel(t, model, SetDetailTranscriptPageMsg{
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			detailUser(strings.Repeat("wrapping content ", 5)),
+			detailAssistant("selected entry"),
+		}},
+		Anchor: DetailTranscriptAnchorBottom,
+	})
+	model = mustUpdateDetailNavigationModel(t, model, SetModeMsg{Mode: ModeDetail})
+	if model.detailScroll != 0 {
+		t.Fatalf("wide detail scroll = %d, want selected entry visible at scroll 0", model.detailScroll)
+	}
+
+	model = mustUpdateDetailNavigationModel(t, model, SetViewportSizeMsg{Lines: 4, Width: 20})
+
+	selected, ok := model.selectedDetailIndex()
+	if !ok || selected != 1 {
+		t.Fatalf("selection after width reflow = %d/%t, want entry 1/true", selected, ok)
+	}
+	lineRange, ok := model.detailEntryLineRange(selected)
+	if !ok {
+		t.Fatal("selected entry has no reflowed line range")
+	}
+	wantScroll := lineRange.first - model.viewportLines + 1
+	if model.detailScroll != wantScroll {
+		t.Fatalf("detail scroll after width reflow = %d, want minimum adjustment %d", model.detailScroll, wantScroll)
+	}
+	if lineRange.first < model.detailScroll || lineRange.first >= model.detailScroll+model.viewportLines {
+		t.Fatalf("selected range %+v is outside reflowed viewport [%d,%d)", lineRange, model.detailScroll, model.detailScroll+model.viewportLines)
 	}
 }
 
@@ -303,13 +337,13 @@ func newTallExpandedDetailNavigationModel(t *testing.T) Model {
 	model := NewModel()
 	model = mustUpdateDetailNavigationModel(t, model, SetViewportSizeMsg{Lines: 6, Width: 80})
 	model = mustUpdateDetailNavigationModel(t, model, SetDetailTranscriptPageMsg{
-		Page: clientui.TranscriptPage{Entries: []clientui.ChatEntry{
-			{Role: "assistant", Text: "intro"},
-			{Role: "assistant", Text: strings.Join([]string{
+		Page: clientui.TranscriptPage{Entries: []clientui.TranscriptCommittedRow{
+			detailAssistant("intro"),
+			detailAssistant(strings.Join([]string{
 				"line 00", "line 01", "line 02", "line 03", "line 04", "line 05",
 				"line 06", "line 07", "line 08", "line 09", "line 10", "line 11",
-			}, "\n")},
-			{Role: "assistant", Text: "tail"},
+			}, "\n")),
+			detailAssistant("tail"),
 		}},
 		Anchor: DetailTranscriptAnchorTop,
 	})
@@ -333,9 +367,9 @@ func assertDetailPageDirection(t *testing.T, cmd tea.Cmd, want DetailTranscriptP
 
 func newDetailNavigationModel(t *testing.T, viewportLines int, entryCount int, anchor DetailTranscriptPageAnchor) Model {
 	t.Helper()
-	entries := make([]clientui.ChatEntry, 0, entryCount)
+	entries := make([]clientui.TranscriptCommittedRow, 0, entryCount)
 	for index := 0; index < entryCount; index++ {
-		entries = append(entries, clientui.ChatEntry{Role: "assistant", Text: "entry"})
+		entries = append(entries, detailAssistant("entry"))
 	}
 	model := NewModel()
 	model = mustUpdateDetailNavigationModel(t, model, SetViewportSizeMsg{Lines: viewportLines, Width: 80})

@@ -56,9 +56,9 @@ func visibleDeveloperChatEntry(msg llm.Message) (ChatEntry, bool) {
 	case llm.MessageTypeReviewerFeedback:
 		return ChatEntry{}, false
 	case llm.MessageTypeCompactionSoonReminder:
-		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: "warning", Text: msg.Content, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg)}, true
+		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleWarning), Text: msg.Content, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg)}, true
 	case llm.MessageTypeBackgroundNotice:
-		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: "system", Text: msg.Content, CondensedText: msg.CompactContent, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg)}, true
+		return ChatEntry{Visibility: messageTypeTranscriptVisibility(msg.MessageType), Role: string(transcript.EntryRoleSystem), Text: msg.Content, CondensedText: msg.CompactContent, MessageType: msg.MessageType, CompactLabel: compactLabelForMessage(msg)}, true
 	case llm.MessageTypeHandoffFutureMessage:
 		return developerContextEntry(msg, messageTypeTranscriptVisibility(msg.MessageType)), true
 	case llm.MessageTypeManualCompactionCarryover:

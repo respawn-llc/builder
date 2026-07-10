@@ -4,6 +4,12 @@ import "strings"
 
 type EntryRole string
 
+// EntryRoleSystem marks general runtime notices with typed message metadata.
+const EntryRoleSystem EntryRole = "system"
+
+// EntryRoleWarning marks non-error runtime warnings with typed message metadata.
+const EntryRoleWarning EntryRole = "warning"
+
 // EntryRoleCompactionSummary marks a persisted compaction or handoff summary.
 const EntryRoleCompactionSummary EntryRole = "compaction_summary"
 

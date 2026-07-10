@@ -98,10 +98,16 @@ func TestTranscriptPageProjectsReviewerAndBackgroundMetadata(t *testing.T) {
 	if len(page.Entries) != 2 {
 		t.Fatalf("page entries = %+v", page.Entries)
 	}
-	if got := page.Entries[0].MessageType; got != clientui.MessageTypeReviewerFeedback {
+	if page.Entries[0].Kind != clientui.TranscriptRowNotice || page.Entries[0].Notice == nil {
+		t.Fatalf("reviewer row = %+v, want notice", page.Entries[0])
+	}
+	if got := page.Entries[0].Notice.Data.MessageType; got != clientui.MessageTypeReviewerFeedback {
 		t.Fatalf("reviewer message type = %q, want reviewer feedback", got)
 	}
-	if got := page.Entries[1].BackgroundExitCode; got == nil || *got != exitCode {
+	if page.Entries[1].Kind != clientui.TranscriptRowNotice || page.Entries[1].Notice == nil {
+		t.Fatalf("background row = %+v, want notice", page.Entries[1])
+	}
+	if got := page.Entries[1].Notice.Data.BackgroundExitCode; got == nil || *got != exitCode {
 		t.Fatalf("background exit code = %+v, want %d", got, exitCode)
 	}
 }

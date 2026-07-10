@@ -12,6 +12,7 @@ type tracingBackend struct {
 	dimensions Dimensions
 	cells      [][]Cell
 	cursor     Position
+	normal     *ScreenSnapshot
 	modes      map[vt.PrivateMode]vt.ModeStatus
 	chunk      Chunk
 	byteOffset int64
@@ -24,7 +25,9 @@ func newTracingBackend(dimensions Dimensions) *tracingBackend {
 	return &tracingBackend{
 		dimensions: dimensions,
 		cells:      snapshot.Cells,
-		modes:      map[vt.PrivateMode]vt.ModeStatus{},
+		modes: map[vt.PrivateMode]vt.ModeStatus{
+			vt.PmAltScreen: vt.ModeOff,
+		},
 	}
 }
 
@@ -58,17 +61,14 @@ func (b *tracingBackend) snapshot() ScreenSnapshot {
 
 func (b *tracingBackend) resize(dimensions Dimensions, at time.Duration) {
 	old := b.snapshot()
-	newCells := NewScreenSnapshot(dimensions).Cells
-	copyRows := min(len(old.Cells), dimensions.Rows)
-	for row := 0; row < copyRows; row++ {
-		copy(newCells[row], old.Cells[row][:min(len(old.Cells[row]), dimensions.Cols)])
+	resized := resizeScreenSnapshot(old, dimensions)
+	if b.normal != nil {
+		normal := resizeScreenSnapshot(*b.normal, dimensions)
+		b.normal = &normal
 	}
 	b.dimensions = dimensions
-	b.cells = newCells
-	b.cursor = Position{
-		Row: clamp(b.cursor.Row, 0, dimensions.Rows-1),
-		Col: clamp(b.cursor.Col, 0, dimensions.Cols-1),
-	}
+	b.cells = resized.Cells
+	b.cursor = resized.Cursor
 	b.ops = append(b.ops, Operation{
 		Sequence:   len(b.ops),
 		Kind:       OperationResize,
@@ -89,8 +89,41 @@ func (b *tracingBackend) GetPrivateMode(mode vt.PrivateMode) vt.ModeStatus {
 }
 
 func (b *tracingBackend) SetPrivateMode(mode vt.PrivateMode, status vt.ModeStatus) error {
+	if mode == vt.PmAltScreen {
+		switch status {
+		case vt.ModeOn:
+			if b.modes[mode] != vt.ModeOn {
+				normal := b.snapshot()
+				b.normal = &normal
+				alternate := NewScreenSnapshot(b.dimensions)
+				b.cells = alternate.Cells
+				b.cursor = alternate.Cursor
+			}
+		case vt.ModeOff:
+			if b.modes[mode] == vt.ModeOn && b.normal != nil {
+				b.cells = b.normal.Cells
+				b.cursor = b.normal.Cursor
+				b.normal = nil
+			}
+		default:
+			return fmt.Errorf("set alternate-screen mode to unsupported status %d", status)
+		}
+	}
 	b.modes[mode] = status
 	return nil
+}
+
+func resizeScreenSnapshot(snapshot ScreenSnapshot, dimensions Dimensions) ScreenSnapshot {
+	resized := NewScreenSnapshot(dimensions)
+	copyRows := min(len(snapshot.Cells), dimensions.Rows)
+	for row := 0; row < copyRows; row++ {
+		copy(resized.Cells[row], snapshot.Cells[row][:min(len(snapshot.Cells[row]), dimensions.Cols)])
+	}
+	resized.Cursor = Position{
+		Row: clamp(snapshot.Cursor.Row, 0, dimensions.Rows-1),
+		Col: clamp(snapshot.Cursor.Col, 0, dimensions.Cols-1),
+	}
+	return resized
 }
 
 func (b *tracingBackend) GetSize() vt.Coord {

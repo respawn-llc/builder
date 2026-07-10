@@ -45,7 +45,7 @@ func TestPhaseMarkerMalformedAndOutOfOrderErrors(t *testing.T) {
 		name    string
 		payload []byte
 	}{
-		{name: "bad base64", payload: []byte("\x1b]777;kent-pty-phase;not-base64!\a")},
+		{name: "bad base64", payload: []byte("\x1b]777;kent-pty-checkpoint;not-base64!\a")},
 		{name: "unknown phase", payload: []byte(marker(t, 1, "Unknown", mustWindowID(t)))},
 		{name: "out of order", payload: []byte(markerRaw(t, 2, "ScenarioStart", nil) + markerRaw(t, 1, "ScenarioComplete", nil))},
 	} {

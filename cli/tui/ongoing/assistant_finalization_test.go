@@ -170,7 +170,8 @@ func committedAssistantMessage(streamID uuid.UUID, text string) clientui.Transcr
 	return clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowAssistant,
+			Visibility: clientui.EntryVisibilityOngoing,
+			Kind:       clientui.TranscriptRowAssistant,
 			Assistant: &clientui.TranscriptAssistantRow{
 				StreamID: &streamID,
 				Text:     text,

@@ -118,17 +118,30 @@ func (l uiViewLayout) renderQueuedMessagesPane(width int) []string {
 	for _, line := range lines {
 		rendered := ""
 		for _, span := range line.Spans {
+			role, semantic := span.Style.Role()
+			if !semantic {
+				panic("queued pane received explicit RGB transcript span")
+			}
 			style := lipgloss.NewStyle()
-			switch transcriptrender.ColorRoleForStyle(span.Role) {
+			switch transcriptrender.ColorRoleForStyle(role) {
 			case transcriptrender.ColorRolePrimary:
 				style = style.Foreground(palette.primary)
 			case transcriptrender.ColorRoleSecondary:
 				style = style.Foreground(palette.secondary)
 			default:
-				panic(fmt.Sprintf("queued pane received unsupported transcript style role %d", span.Role))
+				panic(fmt.Sprintf("queued pane received unsupported transcript style role %d", role))
 			}
-			if span.Faint {
+			if span.Style.Has(transcriptrender.SpanAttributeFaint) {
 				style = style.Faint(true)
+			}
+			if span.Style.Has(transcriptrender.SpanAttributeBold) {
+				style = style.Bold(true)
+			}
+			if span.Style.Has(transcriptrender.SpanAttributeItalic) {
+				style = style.Italic(true)
+			}
+			if span.Style.Has(transcriptrender.SpanAttributeUnderline) {
+				style = style.Underline(true)
 			}
 			rendered += style.Render(span.Text)
 		}

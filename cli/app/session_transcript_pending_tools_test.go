@@ -153,13 +153,17 @@ func TestPendingToolStartUsesPresentationMetadata(t *testing.T) {
 	}
 	foundSyntax := false
 	for _, span := range lines[0].Spans {
-		switch span.Role {
+		role, semantic := span.Style.Role()
+		if !semantic {
+			continue
+		}
+		switch role {
 		case transcriptrender.StyleRoleToolShellPrimary,
 			transcriptrender.StyleRoleToolShellSecondary,
 			transcriptrender.StyleRoleToolShellWarning,
 			transcriptrender.StyleRoleToolShellError:
 			foundSyntax = true
-			if !span.Faint {
+			if !span.Style.Has(transcriptrender.SpanAttributeFaint) {
 				t.Fatalf("pending shell syntax span is not faint: %+v", span)
 			}
 		}

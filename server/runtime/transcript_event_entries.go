@@ -95,7 +95,7 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 		}
 		compact := formatBackgroundShellCompact(*evt.Background)
 		return []ChatEntry{{
-			Role:               "system",
+			Role:               string(transcript.EntryRoleSystem),
 			Visibility:         transcript.EntryVisibilityOngoingCollapsed,
 			Text:               formatBackgroundShellNotice(*evt.Background),
 			CondensedText:      compact,

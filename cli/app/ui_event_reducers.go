@@ -134,7 +134,7 @@ func (r uiInputAsyncFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			return handledUIFeatureUpdate(m, nil)
 		}
 		m.logf("terminal.sequence_write_error err=%q stack=%s", msg.err.Error(), debug.Stack())
-		return handledUIFeatureUpdate(m, m.sendTransientStatusWithNoticeID("terminal control write failed: "+msg.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
+		return handledUIFeatureUpdate(m, m.handleOngoingSurfaceError(msg.err))
 	case committedEntryPersistDoneMsg:
 		m.observeRuntimeRequestResult(msg.err)
 		if msg.err == nil {

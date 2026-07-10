@@ -88,8 +88,9 @@ func TestOngoingTranscriptEventReachesNativeSurface(t *testing.T) {
 			Sequence: 1,
 			Kind:     clientui.TranscriptMessageHydration,
 			Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{{
-				Kind: clientui.TranscriptRowUser,
-				User: &clientui.TranscriptUserRow{Text: "hydrated row"},
+				Visibility: clientui.EntryVisibilityOngoing,
+				Kind:       clientui.TranscriptRowUser,
+				User:       &clientui.TranscriptUserRow{Text: "hydrated row"},
 			}}},
 		},
 	})

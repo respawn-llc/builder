@@ -40,7 +40,7 @@ type SetDetailTranscriptPageMsg struct {
 	Page                  clientui.TranscriptPage
 	Anchor                DetailTranscriptPageAnchor
 	PrependedEntriesCount int
-	TrimmedFrontEntries   []clientui.ChatEntry
+	TrimmedFrontEntries   []clientui.TranscriptCommittedRow
 }
 
 type ResetDetailTranscriptMsg struct{}
@@ -88,7 +88,7 @@ type Model struct {
 	theme            string
 	detailScroll     int
 	detailPageLoaded bool
-	detailEntries    []detailEntry
+	detailProjection detailProjection
 	expanded         map[int]struct{}
 	selected         *int
 }
@@ -105,6 +105,7 @@ func NewModel(opts ...Option) Model {
 			opt(&m)
 		}
 	}
+	m.detailProjection = newDetailProjection(m.detailContentWidth(), m.theme)
 	return m
 }
 
@@ -130,13 +131,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clampDetailScroll()
 		}
 	case SetViewportSizeMsg:
+		previousContentWidth := m.detailContentWidth()
 		if msg.Lines > 0 {
 			m.viewportLines = msg.Lines
 		}
 		if msg.Width > 0 {
 			m.viewportWidth = msg.Width
 		}
-		m.clampDetailScroll()
+		if m.detailContentWidth() != previousContentWidth {
+			m.reflowDetailProjection()
+		} else {
+			m.clampDetailScroll()
+		}
 	case SetDetailTranscriptPageMsg:
 		m.applyDetailTranscriptPage(msg.Page, msg.Anchor, msg.PrependedEntriesCount, msg.TrimmedFrontEntries)
 	case ResetDetailTranscriptMsg:
@@ -211,10 +217,10 @@ func (m Model) DetailSelectionAction() DetailSelectionAction {
 		return DetailSelectionActionNone
 	}
 	selected, ok := m.selectedDetailIndex()
-	if !ok || selected < 0 || selected >= len(m.detailEntries) {
+	if !ok || selected < 0 || selected >= len(m.detailProjection.entries) {
 		return DetailSelectionActionNone
 	}
-	if !m.detailEntries[selected].presentation(maxInt(1, m.viewportWidth), m.theme).Expandable {
+	if !m.detailProjection.entries[selected].presentation().Expandable {
 		return DetailSelectionActionNone
 	}
 	if _, ok := m.expanded[selected]; ok {
@@ -223,7 +229,7 @@ func (m Model) DetailSelectionAction() DetailSelectionAction {
 	return DetailSelectionActionExpand
 }
 
-func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor DetailTranscriptPageAnchor, prependedEntries int, trimmedFrontEntries []clientui.ChatEntry) {
+func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor DetailTranscriptPageAnchor, prependedEntries int, trimmedFrontEntries []clientui.TranscriptCommittedRow) {
 	if !anchor.valid() {
 		panic(fmt.Sprintf("invalid detail transcript page anchor: %d", anchor))
 	}
@@ -236,12 +242,6 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 	trimmedFrontLineOffset := m.detailLineOffsetForEntryIndex(visibleTrimmedFrontEntries)
 	preservedEntryIndexShift := visiblePrependedEntries - visibleTrimmedFrontEntries
 	m.detailPageLoaded = true
-	m.detailEntries = m.detailEntries[:0]
-	for _, entry := range page.Entries {
-		if detail, ok := detailEntryFromChatEntry(entry); ok {
-			m.detailEntries = append(m.detailEntries, detail)
-		}
-	}
 	if anchor == DetailTranscriptAnchorPreserve {
 		if preservedEntryIndexShift != 0 {
 			m.expanded = shiftExpandedDetailEntries(previousExpanded, preservedEntryIndexShift)
@@ -251,20 +251,21 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 	} else {
 		m.expanded = nil
 	}
-	if len(m.detailEntries) == 0 {
+	m.detailProjection.replaceSnapshot(page.Entries, m.detailContentWidth(), m.theme, m.expanded)
+	if len(m.detailProjection.entries) == 0 {
 		m.clearSelectedDetailIndex()
 		m.detailScroll = 0
 		return
 	}
 	switch {
 	case anchor == DetailTranscriptAnchorPreserve && previousSelectedOK:
-		m.setSelectedDetailIndex(clampInt(previousSelected+preservedEntryIndexShift, 0, len(m.detailEntries)-1))
+		m.setSelectedDetailIndex(clampInt(previousSelected+preservedEntryIndexShift, 0, len(m.detailProjection.entries)-1))
 	case anchor == DetailTranscriptAnchorTop:
 		m.setSelectedDetailIndex(0)
 	case anchor == DetailTranscriptAnchorBottom:
-		m.setSelectedDetailIndex(len(m.detailEntries) - 1)
+		m.setSelectedDetailIndex(len(m.detailProjection.entries) - 1)
 	default:
-		m.setSelectedDetailIndex(len(m.detailEntries) - 1)
+		m.setSelectedDetailIndex(len(m.detailProjection.entries) - 1)
 	}
 	switch anchor {
 	case DetailTranscriptAnchorPreserve:
@@ -280,16 +281,16 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 
 func (m *Model) resetDetailTranscript() {
 	m.detailPageLoaded = false
-	m.detailEntries = nil
+	m.detailProjection.clear(m.detailContentWidth(), m.theme)
 	m.expanded = nil
 	m.detailScroll = 0
 	m.clearSelectedDetailIndex()
 }
 
-func visibleDetailEntryCount(entries []clientui.ChatEntry, limit int) int {
+func visibleDetailEntryCount(entries []clientui.TranscriptCommittedRow, limit int) int {
 	count := 0
-	for _, entry := range entries[:minInt(maxInt(0, limit), len(entries))] {
-		if _, ok := detailEntryFromChatEntry(entry); ok {
+	for _, row := range entries[:minInt(maxInt(0, limit), len(entries))] {
+		if detailCommittedRowVisible(row) {
 			count++
 		}
 	}
@@ -346,11 +347,39 @@ func (m Model) detailLineOffsetForEntryIndex(entryIndex int) int {
 	if entryIndex <= 0 {
 		return 0
 	}
-	lines := m.detailProjectedLines()
-	if lineRange, ok := detailEntryLineRangeIn(lines, entryIndex); ok {
-		return lineRange.first
+	if entryIndex < len(m.detailProjection.ranges) {
+		return m.detailProjection.ranges[entryIndex].first
 	}
-	return len(lines)
+	return len(m.detailProjection.lines)
+}
+
+func (m Model) detailContentWidth() int {
+	return maxInt(0, maxInt(1, m.viewportWidth)-1)
+}
+
+func (m *Model) reflowDetailProjection() {
+	if m == nil {
+		return
+	}
+	previousScroll := m.detailScroll
+	m.detailProjection.recompile(m.detailContentWidth(), m.theme, m.expanded)
+	m.detailScroll = clampInt(previousScroll, 0, m.maxDetailScroll())
+	selected, ok := m.selectedDetailIndex()
+	if !ok {
+		return
+	}
+	lineRange, ok := m.detailEntryLineRange(selected)
+	if !ok {
+		return
+	}
+	viewportEnd := m.detailScroll + maxInt(1, m.viewportLines) - 1
+	switch {
+	case lineRange.last < m.detailScroll:
+		m.detailScroll = lineRange.last
+	case lineRange.first > viewportEnd:
+		m.detailScroll = lineRange.first - maxInt(1, m.viewportLines) + 1
+	}
+	m.clampDetailScroll()
 }
 
 func shiftExpandedDetailEntries(expanded map[int]struct{}, offset int) map[int]struct{} {

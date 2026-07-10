@@ -64,9 +64,9 @@
 - Detail status line mirrors selected action as `Enter to expand` or `Enter to collapse`.
 - Detail items use blank-line role-group separators. Consecutive tool rows form dense chunks.
 - The selected lens extends through its adjacent visual spacer lines. Selection spacers are render-only and do not change transcript line ownership, viewport scroll, selection, or paging.
-- Detail reserves a one-cell lens rail before transcript content. Unselected lines use a blank rail cell; every line owned by the selected item uses the primary `▎` rail and full-width `App.ModeBg` fill.
+- Detail reserves a one-cell lens rail before transcript content. Unselected lines use a blank rail cell; every line owned by the selected item uses the primary `▎` rail and `App.ModeBg` content fill, except added/removed patch lines whose diff background takes priority over the lens fill.
 - The rail owns the first terminal cell at every viewport width. A one-cell viewport shows only the selected rail or unselected blank rail; wider viewports render transcript content within the remaining cells using normal truncation.
-- Detail selection does not change semantic foreground colors or text attributes. Markdown, shell syntax, role symbols, continuation guides, and trailing row padding retain their semantic styling over the selected fill.
+- Detail selection does not change semantic foreground colors or text attributes. Markdown, shell syntax, role symbols, continuation guides, and trailing row padding retain their semantic styling over the resolved lens or diff background.
 - Detail loads stale bounded cursor pages from the server. Scrolling at a loaded edge requests the adjacent page, which may prepend or append server-backed page membership. Runtime and live transcript events never self-update, append to, reconcile, or refresh that membership.
 - An adjacent-page request shows a request-scoped `info` status notice using replace delivery and the request UUID as its notice identity. A later notice may replace it and it does not resurface. Matching completion clears only that loading notice; matching failure replaces it through the ordinary error-notice path. The selected expansion action remains the independent detail help-slot segment.
 - Detail owns only UI-local expansion, selection, and scroll state.

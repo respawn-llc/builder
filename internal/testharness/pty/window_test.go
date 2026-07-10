@@ -54,7 +54,7 @@ func TestPhaseMarkerRejectsInvalidWindowID(t *testing.T) {
 		windowID string
 	}{
 		{name: "empty", windowID: ""},
-		{name: "v4", windowID: uuid.NewString()},
+		{name: "v7", windowID: "0197efce-6976-7c0e-83f6-c0a0c1875f4c"},
 		{name: "malformed", windowID: "not-a-uuid"},
 	} {
 		tc := tc
@@ -170,10 +170,7 @@ func mustCapture(t *testing.T, payload []byte, dimensions pty.Dimensions) pty.Ca
 
 func mustWindowID(t *testing.T) pty.WindowID {
 	t.Helper()
-	id, err := uuid.NewV7()
-	if err != nil {
-		t.Fatalf("NewV7: %v", err)
-	}
+	id := uuid.New()
 	windowID, err := pty.NewWindowID(id.String())
 	if err != nil {
 		t.Fatalf("NewWindowID: %v", err)
@@ -192,7 +189,7 @@ func markerRaw(t *testing.T, seq int, phase string, windowID *string) string {
 	payload := map[string]any{
 		"version": 1,
 		"seq":     seq,
-		"phase":   phase,
+		"kind":    phase,
 	}
 	if windowID != nil {
 		payload["window_id"] = *windowID
@@ -201,5 +198,5 @@ func markerRaw(t *testing.T, seq int, phase string, windowID *string) string {
 	if err != nil {
 		t.Fatalf("marshal marker: %v", err)
 	}
-	return "\x1b]777;kent-pty-phase;" + base64.RawURLEncoding.EncodeToString(encoded) + "\a"
+	return "\x1b]777;kent-pty-checkpoint;" + base64.RawURLEncoding.EncodeToString(encoded) + "\a"
 }

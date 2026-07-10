@@ -46,9 +46,9 @@ func TestRenderPaintsStyledLiveAreaThroughThemeEncoder(t *testing.T) {
 		Sections: []FrameSection{{
 			Kind: FrameSectionPendingTools,
 			StyledLines: []transcriptrender.Line{{Spans: []transcriptrender.Span{
-				{Text: "⢎ ", Role: transcriptrender.StyleRoleToolShell, Faint: true},
-				{Text: " ", Role: transcriptrender.StyleRoleToolShell, Faint: true},
-				{Text: "go test", Role: transcriptrender.StyleRoleToolShell, Faint: true},
+				transcriptrender.SemanticSpan("⢎ ", transcriptrender.StyleRoleToolShell, transcriptrender.SpanAttributeFaint),
+				transcriptrender.SemanticSpan(" ", transcriptrender.StyleRoleToolShell, transcriptrender.SpanAttributeFaint),
+				transcriptrender.SemanticSpan("go test", transcriptrender.StyleRoleToolShell, transcriptrender.SpanAttributeFaint),
 			}}},
 		}},
 	})

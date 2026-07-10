@@ -786,11 +786,13 @@ func (s *transcriptDeliveryFactScan) ApplyLocalEntry(entry ChatEntry, projected 
 		return
 	}
 	if projected {
-		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry); ok {
+		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry, transcriptCommittedStreamProjection); ok {
 			s.rows = append(s.rows, fact)
 		}
 	} else {
-		s.rows = append(s.rows, localEntryNoticeFact(entry))
+		if fact, ok := transcriptNoticeRowFactFromChatEntry(entry); ok {
+			s.rows = append(s.rows, fact)
+		}
 	}
 	s.currentEntryIndex++
 }

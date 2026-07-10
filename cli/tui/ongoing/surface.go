@@ -358,20 +358,22 @@ func (s *Surface) hydrationImmutableLines(hydration clientui.TranscriptHydration
 }
 
 func committedRowVisibleInOngoing(row clientui.TranscriptCommittedRow) bool {
-	switch transcript.NormalizeEntryVisibility(transcript.EntryVisibility(row.Visibility)) {
+	switch row.Visibility {
+	case clientui.EntryVisibilityOngoing, clientui.EntryVisibilityOngoingCollapsed:
+		return true
 	case transcript.EntryVisibilityDetail, transcript.EntryVisibilityHidden:
 		return false
 	default:
-		return true
+		panic(fmt.Sprintf("ongoing received committed row with unresolved visibility %q", row.Visibility))
 	}
 }
 
 func (s *Surface) renderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string) []string {
-	return s.renderCommittedRowWithMode(row, width, themeName, ongoingRenderMode(row))
+	return s.renderCommittedRowWithMode(row, width, themeName, committedRowRenderMode(row))
 }
 
 func (s *Surface) renderHydratedCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string) []string {
-	return s.renderCommittedRowWithMode(row, width, themeName, hydrationRenderMode(row))
+	return s.renderCommittedRowWithMode(row, width, themeName, committedRowRenderMode(row))
 }
 
 func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow, width int, themeName string, mode transcriptrender.Mode) []string {
@@ -384,13 +386,17 @@ func (s *Surface) renderCommittedRowWithMode(row clientui.TranscriptCommittedRow
 // the collapsed/short (single-line) ongoing form per tui-transcript.md
 // visibility rules. D and X rows never reach this path.
 func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
-	if transcript.NormalizeEntryVisibility(transcript.EntryVisibility(row.Visibility)) == transcript.EntryVisibilityOngoingCollapsed {
+	switch row.Visibility {
+	case clientui.EntryVisibilityOngoingCollapsed:
 		return transcriptrender.ModeOngoingCollapsed
+	case clientui.EntryVisibilityOngoing:
+		return transcriptrender.ModeOngoing
+	default:
+		panic(fmt.Sprintf("ongoing render received non-ongoing visibility %q", row.Visibility))
 	}
-	return transcriptrender.ModeOngoing
 }
 
-func hydrationRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
+func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
 	if row.Kind != clientui.TranscriptRowAssistant || row.Assistant == nil {
 		return ongoingRenderMode(row)
 	}
@@ -400,7 +406,7 @@ func hydrationRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.M
 	case transcript.AssistantPhaseCommentary:
 		return ongoingRenderMode(row)
 	default:
-		panic(fmt.Sprintf("ongoing hydration received unclassified assistant phase %q", row.Assistant.Phase))
+		panic(fmt.Sprintf("ongoing committed row has unclassified assistant phase %q", row.Assistant.Phase))
 	}
 }
 
@@ -463,7 +469,7 @@ func encodeTranscriptSpan(span transcriptrender.Span, themeName string) string {
 		return ""
 	}
 	resolved := transcriptrender.ResolveSpanStyle(span, themeName)
-	color := resolved.Foreground.TrueColor
+	color := resolved.Foreground.TrueColor()
 	if color == "" && !resolved.Faint && !resolved.Bold && !resolved.Italic && !resolved.Underline {
 		return span.Text
 	}

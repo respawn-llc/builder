@@ -1064,7 +1064,7 @@ func TestTranscriptFactsPreserveCacheWarningVisibility(t *testing.T) {
 	}
 }
 
-func TestTranscriptFactsPreserveProjectedLocalEntryVisibility(t *testing.T) {
+func TestTranscriptFactsSuppressProjectedHiddenLocalEntries(t *testing.T) {
 	facts := TranscriptCommittedRowFactsFromEvent(Event{
 		Kind:                EventLocalEntryAdded,
 		LocalEntryProjected: true,
@@ -1074,11 +1074,8 @@ func TestTranscriptFactsPreserveProjectedLocalEntryVisibility(t *testing.T) {
 			Text:       "hidden assistant",
 		},
 	})
-	if len(facts) != 1 || facts[0].Assistant == nil {
-		t.Fatalf("facts = %+v, want projected assistant fact", facts)
-	}
-	if facts[0].Visibility != transcript.EntryVisibilityHidden {
-		t.Fatalf("row visibility = %q, want hidden", facts[0].Visibility)
+	if len(facts) != 0 {
+		t.Fatalf("facts = %+v, want hidden projected entry suppressed", facts)
 	}
 }
 
@@ -1194,7 +1191,7 @@ func TestTranscriptDeliveryLiveAndHydrationAgreeOnProjectedCompactionEntries(t *
 
 func TestTranscriptFactsMapToolResultEntriesWithoutCallIDToNotices(t *testing.T) {
 	entry := ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "tool_result_ok", Text: "orphan result"}
-	fact, ok := transcriptCommittedRowFactFromChatEntry(entry)
+	fact, ok := transcriptCommittedRowFactFromChatEntry(entry, transcriptCommittedStreamProjection)
 	if !ok || fact.Notice == nil || fact.Notice.DiagnosticDetail != "orphan result" {
 		t.Fatalf("fact = %+v ok=%t, want notice preserving text", fact, ok)
 	}

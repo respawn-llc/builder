@@ -202,8 +202,9 @@ func committedMessageForOngoingResizeTest() clientui.TranscriptMessage {
 	return clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowUser,
-			User: &clientui.TranscriptUserRow{Text: "committed"},
+			Visibility: clientui.EntryVisibilityOngoing,
+			Kind:       clientui.TranscriptRowUser,
+			User:       &clientui.TranscriptUserRow{Text: "committed"},
 		},
 	}
 }

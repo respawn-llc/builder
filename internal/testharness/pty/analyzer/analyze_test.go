@@ -224,6 +224,19 @@ func TestAnalyzeDECPrivateModesRecordTypedOperations(t *testing.T) {
 	}
 }
 
+func TestAnalyzeAlternateScreenRestoresNormalBuffer(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeBytes(
+		t,
+		[]byte("normal\x1b[?1049h\x1b[2J\x1b[Halternate\x1b[?1049l"),
+		pty.MustDimensions(2, 12),
+	)
+	if got := analysis.Screen.TextInRegion(pty.Region{Top: 0, Bottom: 1, Left: 0, Right: 6}); got != "normal" {
+		t.Fatalf("restored normal buffer = %q, want %q", got, "normal")
+	}
+}
+
 func TestScreenSnapshotReportsBlankFrame(t *testing.T) {
 	t.Parallel()
 

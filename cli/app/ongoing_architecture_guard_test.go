@@ -46,6 +46,25 @@ type badMirror struct {
 		assertOngoingArchitectureViolation(t, violations, ongoingArchitectureViolationCommittedRowsRetained)
 	})
 
+	t.Run("bounded detail owner", func(t *testing.T) {
+		source := `package app
+
+import "core/shared/clientui"
+
+type uiDetailTranscriptWindow struct {
+	entries []clientui.TranscriptCommittedRow
+}
+
+type uiDetailTranscriptMergeResult struct {
+	trimmedFrontEntries []clientui.TranscriptCommittedRow
+}
+`
+		pkgs, root := parseOngoingArchitectureFixture(t, "cli/app/ui_detail_transcript_window.go", source)
+		if violations := collectOngoingArchitectureViolations(pkgs, root); len(violations) != 0 {
+			t.Fatalf("bounded detail ownership violations = %v, want none", violations)
+		}
+	})
+
 	t.Run("page read in ongoing path", func(t *testing.T) {
 		source := `package app
 func badPageRead(client interface{ GetSessionTranscriptPage() }) {
@@ -106,10 +125,8 @@ func ongoingArchitectureViolationsInFile(pkg *packages.Package, file *ast.File, 
 	var violations []ongoingArchitectureViolation
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch typed := node.(type) {
-		case *ast.ArrayType:
-			if typeName(pkg.TypesInfo.TypeOf(typed.Elt)) == "core/shared/clientui.TranscriptCommittedRow" && !isSanctionedCommittedRowCollectionPath(relPath) {
-				violations = append(violations, newOngoingArchitectureViolation(pkg, typed.Pos(), relPath, ongoingArchitectureViolationCommittedRowsRetained))
-			}
+		case *ast.TypeSpec:
+			violations = append(violations, committedRowStateViolations(pkg, typed, relPath)...)
 		case *ast.SelectorExpr:
 			if isForbiddenOngoingTranscriptReadSelector(typed.Sel.Name) && isOngoingDeliveryOrSurfacePath(relPath) {
 				violations = append(violations, newOngoingArchitectureViolation(pkg, typed.Pos(), relPath, ongoingArchitectureViolationPageRead))
@@ -128,6 +145,50 @@ func ongoingArchitectureViolationsInFile(pkg *packages.Package, file *ast.File, 
 		return true
 	})
 	return violations
+}
+
+func committedRowStateViolations(pkg *packages.Package, spec *ast.TypeSpec, relPath string) []ongoingArchitectureViolation {
+	structType, ok := spec.Type.(*ast.StructType)
+	if !ok {
+		return nil
+	}
+	var violations []ongoingArchitectureViolation
+	for _, field := range structType.Fields.List {
+		if !isCommittedRowCollectionType(pkg.TypesInfo.TypeOf(field.Type)) {
+			continue
+		}
+		if len(field.Names) == 0 {
+			violations = append(violations, newOngoingArchitectureViolation(pkg, field.Pos(), relPath, ongoingArchitectureViolationCommittedRowsRetained))
+			continue
+		}
+		for _, fieldName := range field.Names {
+			if isSanctionedDetailCommittedRowState(pkg.PkgPath, spec.Name.Name, fieldName.Name) {
+				continue
+			}
+			violations = append(violations, newOngoingArchitectureViolation(pkg, fieldName.Pos(), relPath, ongoingArchitectureViolationCommittedRowsRetained))
+		}
+	}
+	return violations
+}
+
+func isCommittedRowCollectionType(typ types.Type) bool {
+	slice, ok := typ.(*types.Slice)
+	return ok && typeName(slice.Elem()) == "core/shared/clientui.TranscriptCommittedRow"
+}
+
+func isSanctionedDetailCommittedRowState(packagePath, ownerType, fieldName string) bool {
+	switch packagePath {
+	case "core/cli/app":
+		switch ownerType {
+		case "uiDetailTranscriptWindow":
+			return fieldName == "entries"
+		case "uiDetailTranscriptMergeResult":
+			return fieldName == "trimmedFrontEntries"
+		}
+	case "core/cli/tui":
+		return ownerType == "SetDetailTranscriptPageMsg" && fieldName == "TrimmedFrontEntries"
+	}
+	return false
 }
 
 func parseOngoingArchitectureFixture(t *testing.T, relPath, source string) ([]*packages.Package, string) {
@@ -186,7 +247,7 @@ func (v ongoingArchitectureViolation) String() string {
 func (r ongoingArchitectureViolationReason) Message() string {
 	switch r {
 	case ongoingArchitectureViolationCommittedRowsRetained:
-		return "committed transcript rows may not be retained in client production state outside the sanctioned ongoing render path"
+		return "committed transcript rows may not be retained in client production state outside the bounded detail owners"
 	case ongoingArchitectureViolationPageRead:
 		return "ongoing startup/rehydration must use transcript subscription hydration, not page/tail/gap reads"
 	case ongoingArchitectureViolationUncountedAppPath:
@@ -246,10 +307,6 @@ func isOngoingDeliveryOrSurfacePath(relPath string) bool {
 	return strings.HasPrefix(relPath, "cli/tui/ongoing/") || isCountedOngoingAppPath(relPath)
 }
 
-func isSanctionedCommittedRowCollectionPath(relPath string) bool {
-	return strings.HasPrefix(relPath, "cli/tui/ongoing/") || strings.HasPrefix(relPath, "shared/clientui/") || isCountedOngoingAppPath(relPath)
-}
-
 func isForbiddenOngoingTranscriptReadSelector(name string) bool {
 	switch name {
 	case "TranscriptSegmentPage",
@@ -271,7 +328,7 @@ func isClientUITranscriptSymbol(obj types.Object) bool {
 	switch name := obj.Name(); {
 	case strings.HasPrefix(name, "TranscriptMessage"):
 		return true
-	case name == "TranscriptCommittedRow", name == "TranscriptHydration":
+	case name == "TranscriptHydration":
 		return true
 	default:
 		return false

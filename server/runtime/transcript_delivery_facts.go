@@ -22,8 +22,16 @@ const (
 	TranscriptCommittedRowFactNotice    TranscriptCommittedRowFactKind = "notice"
 )
 
+type transcriptChatEntryProjection uint8
+
+const (
+	transcriptCommittedStreamProjection transcriptChatEntryProjection = iota
+	transcriptBoundedDetailProjection
+)
+
 type TranscriptCommittedRowFact struct {
 	Visibility transcript.EntryVisibility
+	Integrity  transcript.RowIntegrity
 	Kind       TranscriptCommittedRowFactKind
 	User       *TranscriptUserRowFact
 	Assistant  *TranscriptAssistantRowFact
@@ -32,13 +40,15 @@ type TranscriptCommittedRowFact struct {
 }
 
 type TranscriptUserRowFact struct {
-	Text string
+	Text          string
+	CondensedText string
 }
 
 type TranscriptAssistantRowFact struct {
-	Text     string
-	Phase    llm.MessagePhase
-	StreamID *uuid.UUID
+	Text          string
+	CondensedText string
+	Phase         llm.MessagePhase
+	StreamID      *uuid.UUID
 }
 
 type TranscriptToolRowFact struct {
@@ -97,12 +107,15 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 			return nil
 		}
 		if evt.LocalEntryProjected {
-			if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry); ok {
+			if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry, transcriptCommittedStreamProjection); ok {
 				return []TranscriptCommittedRowFact{fact}
 			}
 			return nil
 		}
-		return []TranscriptCommittedRowFact{localEntryNoticeFact(*evt.LocalEntry)}
+		if fact, ok := transcriptNoticeRowFactFromChatEntry(*evt.LocalEntry); ok {
+			return []TranscriptCommittedRowFact{fact}
+		}
+		return nil
 	case EventInFlightClearFailed:
 		if strings.TrimSpace(evt.Error) == "" {
 			return nil
@@ -113,6 +126,21 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 	default:
 		return nil
 	}
+}
+
+func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []TranscriptCommittedRowFact {
+	facts := make([]TranscriptCommittedRowFact, 0, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
+		if strings.TrimSpace(entry.Role) == "assistant" &&
+			strings.TrimSpace(entry.Text) == reviewerNoopToken {
+			continue
+		}
+		fact, ok := transcriptCommittedRowFactFromChatEntry(entry, transcriptBoundedDetailProjection)
+		if ok {
+			facts = append(facts, fact)
+		}
+	}
+	return facts
 }
 
 func TranscriptToolStartFactsFromEvent(evt Event) []TranscriptLiveToolStart {
@@ -219,41 +247,219 @@ func transcriptCommittedEntryCountFromMessage(msg llm.Message, completions map[s
 	return count
 }
 
-func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+func transcriptCommittedRowFactFromChatEntry(entry ChatEntry, projection transcriptChatEntryProjection) (TranscriptCommittedRowFact, bool) {
 	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
-	switch strings.TrimSpace(entry.Role) {
+	if visibility == transcript.EntryVisibilityHidden {
+		return TranscriptCommittedRowFact{}, false
+	}
+	role := strings.TrimSpace(entry.Role)
+	switch role {
 	case "user":
-		if strings.TrimSpace(entry.Text) == "" {
-			return TranscriptCommittedRowFact{}, false
+		integrity := transcriptTextEntryIntegrity(entry.Text, entry.CondensedText, entry.CompactLabel)
+		text := entry.Text
+		if strings.TrimSpace(text) == "" {
+			text = firstNonBlankTranscriptValue(entry.CondensedText, entry.CompactLabel)
 		}
-		return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactUser, User: &TranscriptUserRowFact{Text: entry.Text}, Visibility: visibility}, true
+		return TranscriptCommittedRowFact{
+			Kind:       TranscriptCommittedRowFactUser,
+			User:       &TranscriptUserRowFact{Text: text, CondensedText: entry.CondensedText},
+			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing), integrity),
+			Integrity:  integrity,
+		}, true
 	case "assistant":
-		if strings.TrimSpace(entry.Text) == "" {
+		integrity := transcriptTextEntryIntegrity(entry.Text, entry.CondensedText, entry.CompactLabel)
+		text := entry.Text
+		if strings.TrimSpace(text) == "" {
+			text = firstNonBlankTranscriptValue(entry.CondensedText, entry.CompactLabel)
+		}
+		return TranscriptCommittedRowFact{
+			Kind: TranscriptCommittedRowFactAssistant,
+			Assistant: &TranscriptAssistantRowFact{
+				Text:          text,
+				CondensedText: entry.CondensedText,
+				Phase:         entry.Phase,
+			},
+			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing), integrity),
+			Integrity:  integrity,
+		}, true
+	case "tool_call", "tool_result_ok", "tool_result_error":
+		if role == "tool_call" && projection == transcriptCommittedStreamProjection {
 			return TranscriptCommittedRowFact{}, false
 		}
-		return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactAssistant, Assistant: &TranscriptAssistantRowFact{Text: entry.Text, Phase: entry.Phase}, Visibility: visibility}, true
-	case "tool_result_ok", "tool_result_error":
 		if strings.TrimSpace(entry.ToolCallID) == "" {
-			return localEntryNoticeFact(entry), true
+			return transcriptNoticeRowFactFromChatEntry(entry)
 		}
+		integrity := transcriptToolEntryIntegrity(entry)
 		toolName := "tool"
 		if entry.ToolCall != nil && strings.TrimSpace(entry.ToolCall.ToolName) != "" {
 			toolName = strings.TrimSpace(entry.ToolCall.ToolName)
 		}
-		return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactTool, Visibility: visibility, Tool: &TranscriptToolRowFact{
-			ToolCallID:    strings.TrimSpace(entry.ToolCallID),
-			ToolName:      toolName,
-			Text:          entry.Text,
-			IsError:       strings.TrimSpace(entry.Role) == "tool_result_error",
-			ResultSummary: strings.TrimSpace(entry.ToolResultSummary),
-			CondensedText: strings.TrimSpace(entry.CondensedText),
-			Presentation:  cloneTranscriptToolCallMeta(entry.ToolCall),
-		}}, true
-	case "tool_call":
-		return TranscriptCommittedRowFact{}, false
+		return TranscriptCommittedRowFact{
+			Kind:       TranscriptCommittedRowFactTool,
+			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoingCollapsed), integrity),
+			Integrity:  integrity,
+			Tool: &TranscriptToolRowFact{
+				ToolCallID:    strings.TrimSpace(entry.ToolCallID),
+				ToolName:      toolName,
+				Text:          entry.Text,
+				IsError:       role == "tool_result_error",
+				ResultSummary: strings.TrimSpace(entry.ToolResultSummary),
+				CondensedText: strings.TrimSpace(firstNonBlankTranscriptValue(entry.CondensedText, entry.CompactLabel)),
+				Presentation:  cloneTranscriptToolCallMeta(entry.ToolCall),
+			},
+		}, true
 	default:
-		return localEntryNoticeFact(entry), true
+		return transcriptNoticeRowFactFromChatEntry(entry)
 	}
+}
+
+func transcriptNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
+	if visibility == transcript.EntryVisibilityHidden {
+		return TranscriptCommittedRowFact{}, false
+	}
+	integrity := transcriptNoticeEntryIntegrity(entry)
+	fact := localEntryNoticeFact(entry)
+	fact.Visibility = transcriptVisibilityForIntegrity(
+		resolveTranscriptVisibility(visibility, defaultTranscriptNoticeVisibility(entry)),
+		integrity,
+	)
+	fact.Integrity = integrity
+	return fact, true
+}
+
+func transcriptTextEntryIntegrity(primary string, alternatives ...string) transcript.RowIntegrity {
+	if strings.TrimSpace(primary) != "" {
+		return transcript.RowIntegrityValid
+	}
+	if strings.TrimSpace(firstNonBlankTranscriptValue(alternatives...)) != "" {
+		return transcript.RowIntegrityRecoverableMalformed
+	}
+	return transcript.RowIntegrityUnrecoverableMalformed
+}
+
+func transcriptToolEntryIntegrity(entry ChatEntry) transcript.RowIntegrity {
+	if !transcriptToolEntryHasRecoverableText(entry) {
+		return transcript.RowIntegrityUnrecoverableMalformed
+	}
+	if !entry.ToolCall.Valid() {
+		return transcript.RowIntegrityRecoverableMalformed
+	}
+	return transcript.RowIntegrityValid
+}
+
+func transcriptToolEntryHasRecoverableText(entry ChatEntry) bool {
+	if firstNonBlankTranscriptValue(entry.Text, entry.CondensedText, entry.CompactLabel, entry.ToolResultSummary) != "" {
+		return true
+	}
+	meta := entry.ToolCall
+	if meta == nil {
+		return false
+	}
+	return firstNonBlankTranscriptValue(
+		meta.ToolName,
+		meta.Command,
+		meta.CompactText,
+		meta.PatchSummary,
+		meta.PatchDetail,
+		meta.Question,
+	) != "" || len(meta.Suggestions) > 0 || (meta.RenderHint != nil && strings.TrimSpace(meta.RenderHint.Path) != "")
+}
+
+func transcriptNoticeEntryIntegrity(entry ChatEntry) transcript.RowIntegrity {
+	if firstNonBlankTranscriptValue(entry.Text, entry.CondensedText, entry.CompactLabel, entry.SourcePath) == "" {
+		return transcript.RowIntegrityUnrecoverableMalformed
+	}
+	messageType := entry.MessageType
+	if transcript.IsReviewerEntryRole(strings.TrimSpace(entry.Role)) {
+		messageType = llm.MessageTypeReviewerFeedback
+	}
+	if !knownTranscriptNoticeRole(strings.TrimSpace(entry.Role)) ||
+		(strings.TrimSpace(string(messageType)) != "" && isUnknownDeveloperMessageType(messageType)) {
+		return transcript.RowIntegrityRecoverableMalformed
+	}
+	return transcript.RowIntegrityValid
+}
+
+func knownTranscriptNoticeRole(role string) bool {
+	switch transcript.EntryRole(role) {
+	case transcript.EntryRoleSystem,
+		transcript.EntryRoleWarning,
+		transcript.EntryRoleCompactionSummary,
+		transcript.EntryRoleManualCompactionCarryover,
+		transcript.EntryRoleDeveloperContext,
+		transcript.EntryRoleDeveloperFeedback,
+		transcript.EntryRoleDeveloperErrorFeedback,
+		transcript.EntryRoleInterruption,
+		transcript.EntryRoleGoalFeedback,
+		transcript.EntryRoleReviewerStatus,
+		transcript.EntryRoleReviewerError,
+		transcript.EntryRoleReviewerSuggestions:
+		return true
+	default:
+		return false
+	}
+}
+
+func transcriptVisibilityForIntegrity(original transcript.EntryVisibility, integrity transcript.RowIntegrity) transcript.EntryVisibility {
+	switch integrity {
+	case transcript.RowIntegrityValid:
+		return original
+	case transcript.RowIntegrityRecoverableMalformed:
+		return transcript.EntryVisibilityOngoing
+	case transcript.RowIntegrityUnrecoverableMalformed:
+		return transcript.EntryVisibilityDetail
+	default:
+		panic("transcript row has invalid integrity classification")
+	}
+}
+
+func resolveTranscriptVisibility(visibility transcript.EntryVisibility, fallback transcript.EntryVisibility) transcript.EntryVisibility {
+	switch normalizeRuntimeEntryVisibility(visibility) {
+	case transcript.EntryVisibilityOngoing:
+		return transcript.EntryVisibilityOngoing
+	case transcript.EntryVisibilityOngoingCollapsed:
+		return transcript.EntryVisibilityOngoingCollapsed
+	case transcript.EntryVisibilityDetail:
+		return transcript.EntryVisibilityDetail
+	case transcript.EntryVisibilityHidden:
+		return transcript.EntryVisibilityHidden
+	default:
+		return fallback
+	}
+}
+
+func defaultTranscriptNoticeVisibility(entry ChatEntry) transcript.EntryVisibility {
+	messageType := entry.MessageType
+	if transcript.IsReviewerEntryRole(strings.TrimSpace(entry.Role)) {
+		messageType = llm.MessageTypeReviewerFeedback
+	}
+	if strings.TrimSpace(string(messageType)) != "" && !isUnknownDeveloperMessageType(messageType) {
+		if messageType != llm.MessageTypeReviewerFeedback {
+			return messageTypeTranscriptVisibility(messageType)
+		}
+	}
+	switch transcript.EntryRole(strings.TrimSpace(entry.Role)) {
+	case transcript.EntryRoleManualCompactionCarryover,
+		transcript.EntryRoleDeveloperContext:
+		return transcript.EntryVisibilityDetail
+	case transcript.EntryRoleReviewerStatus:
+		return transcript.EntryVisibilityOngoingCollapsed
+	case transcript.EntryRoleReviewerSuggestions,
+		transcript.EntryRoleReviewerError:
+		return transcript.EntryVisibilityOngoing
+	default:
+		return transcript.EntryVisibilityOngoing
+	}
+}
+
+func firstNonBlankTranscriptValue(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func localEntryNoticeFact(entry ChatEntry) TranscriptCommittedRowFact {
@@ -279,6 +485,11 @@ func synthesizedTranscriptToolResultFact(call llm.ToolCall, completions map[stri
 }
 
 func transcriptToolRowFactFromResult(result tools.Result) TranscriptCommittedRowFact {
+	if strings.TrimSpace(result.CallID) == "" {
+		entry := toolResultChatEntry(result)
+		fact, _ := transcriptNoticeRowFactFromChatEntry(entry)
+		return fact
+	}
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactTool, Visibility: transcript.EntryVisibilityOngoingCollapsed, Tool: &TranscriptToolRowFact{
 		ToolCallID:    strings.TrimSpace(result.CallID),
 		ToolName:      strings.TrimSpace(string(result.Name)),
@@ -291,7 +502,7 @@ func transcriptToolRowFactFromResult(result tools.Result) TranscriptCommittedRow
 }
 
 func transcriptCacheWarningFact(warning transcript.CacheWarning, visibility transcript.EntryVisibility) TranscriptCommittedRowFact {
-	normalized := normalizeRuntimeEntryVisibility(visibility)
+	normalized := resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing)
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactNotice, Visibility: normalized, Notice: &TranscriptNoticeRowFact{
 		Reason:   transcript.NoticeReasonCacheWarning,
 		Severity: transcript.NoticeSeverityWarning,

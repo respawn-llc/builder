@@ -51,7 +51,11 @@ func renderOngoingLiveTextLines(texts []string, width int, role transcriptrender
 }
 
 func renderOngoingLiveTextLine(text string, width int, role transcriptrender.StyleRole, faint bool) transcriptrender.Line {
-	line := transcriptrender.Line{Spans: []transcriptrender.Span{{Text: text, Role: role, Faint: faint}}}
+	span := transcriptrender.SemanticSpan(text, role)
+	if faint {
+		span.Style = span.Style.With(transcriptrender.SpanAttributeFaint)
+	}
+	line := transcriptrender.Line{Spans: []transcriptrender.Span{span}}
 	return transcriptrender.TruncateLine(line, width, false)
 }
 

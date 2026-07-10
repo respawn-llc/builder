@@ -16,6 +16,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -115,8 +116,9 @@ func TestTranscriptSubscriptionBrokerPanicsOnContractViolationInTestMode(t *test
 	broker.Publish([]clientui.TranscriptMessage{{
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowTool,
-			Tool: &clientui.TranscriptToolRow{ToolCallID: ""},
+			Visibility: clientui.EntryVisibilityDetail,
+			Kind:       clientui.TranscriptRowTool,
+			Tool:       &clientui.TranscriptToolRow{ToolCallID: ""},
 		},
 	}})
 }
@@ -135,8 +137,9 @@ func TestTranscriptSubscriptionBrokerClosesOnContractViolationWhenPanicDisabled(
 	broker.Publish([]clientui.TranscriptMessage{{
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowTool,
-			Tool: &clientui.TranscriptToolRow{ToolCallID: ""},
+			Visibility: clientui.EntryVisibilityDetail,
+			Kind:       clientui.TranscriptRowTool,
+			Tool:       &clientui.TranscriptToolRow{ToolCallID: ""},
 		},
 	}})
 	_, err = sub.Next(context.Background())
@@ -165,10 +168,68 @@ func TestTranscriptSubscriptionBrokerRejectsCommittedRowKindPayloadMismatch(t *t
 	broker.Publish([]clientui.TranscriptMessage{{
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowUser,
-			Tool: &clientui.TranscriptToolRow{ToolCallID: "mismatched"},
+			Visibility: clientui.EntryVisibilityDetail,
+			Kind:       clientui.TranscriptRowUser,
+			Tool:       &clientui.TranscriptToolRow{ToolCallID: "mismatched"},
 		},
 	}})
+}
+
+func TestTranscriptSubscriptionBoundaryValidatesCommittedRowIntegrity(t *testing.T) {
+	valid := clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityDetail,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       clientui.TranscriptRowUser,
+		User:       &clientui.TranscriptUserRow{Text: "valid"},
+	}
+	if err := validateCommittedRow(valid); err != nil {
+		t.Fatalf("zero-value valid integrity was rejected: %v", err)
+	}
+
+	invalidRows := []clientui.TranscriptCommittedRow{valid, valid}
+	invalidRows[0].Integrity = transcript.RowIntegrity(255)
+	invalidRows[1].Visibility = clientui.EntryVisibilityAuto
+	for _, invalid := range invalidRows {
+		if err := clientui.ValidateTranscriptCommittedRow(invalid); err == nil {
+			t.Fatalf("shared committed-row validator accepted invalid row: %#v", invalid)
+		}
+		err := validateCommittedRow(invalid)
+		if err == nil {
+			t.Fatalf("invalid committed row was accepted: %#v", invalid)
+		}
+		var violation transcriptContractViolation
+		if !errors.As(err, &violation) {
+			t.Fatalf("broker validation error = %T, want transcript contract violation", err)
+		}
+	}
+}
+
+func TestTranscriptSubscriptionBrokerDeliversMalformedToolRowsWithoutCallID(t *testing.T) {
+	broker := newTranscriptSubscriptionBroker()
+	sub, err := broker.Subscribe(clientui.TranscriptMessage{Kind: clientui.TranscriptMessageHydration, Hydration: &clientui.TranscriptHydration{}})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	_ = nextTranscriptMessage(t, sub)
+
+	for _, integrity := range []transcript.RowIntegrity{
+		transcript.RowIntegrityRecoverableMalformed,
+		transcript.RowIntegrityUnrecoverableMalformed,
+	} {
+		broker.Publish([]clientui.TranscriptMessage{{
+			Kind: clientui.TranscriptMessageCommittedRow,
+			CommittedRow: &clientui.TranscriptCommittedRow{
+				Visibility: clientui.EntryVisibilityDetail,
+				Integrity:  integrity,
+				Kind:       clientui.TranscriptRowTool,
+				Tool:       &clientui.TranscriptToolRow{},
+			},
+		}})
+		message := nextTranscriptMessage(t, sub)
+		if message.CommittedRow == nil || message.CommittedRow.Integrity != integrity || message.CommittedRow.Tool == nil {
+			t.Fatalf("malformed tool row delivery = %#v", message)
+		}
+	}
 }
 
 func TestSessionTranscriptSubscriptionHydratesFirstAndSequencesPerSubscription(t *testing.T) {
@@ -877,8 +938,9 @@ func TestTranscriptSubscriptionBrokerDeliversToolTerminalsWithoutStart(t *testin
 	broker.Publish([]clientui.TranscriptMessage{{
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowTool,
-			Tool: &clientui.TranscriptToolRow{ToolCallID: "hosted-call", ToolName: "web_search"},
+			Visibility: clientui.EntryVisibilityOngoingCollapsed,
+			Kind:       clientui.TranscriptRowTool,
+			Tool:       &clientui.TranscriptToolRow{ToolCallID: "hosted-call", ToolName: "web_search"},
 		},
 	}})
 	row := nextTranscriptMessage(t, sub)

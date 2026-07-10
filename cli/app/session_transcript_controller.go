@@ -463,7 +463,7 @@ func terminalSafeFrameLinesForWidth(lines []string, width int) []string {
 	out := make([]string, 0, len(lines))
 	for _, line := range terminalSafeFrameLines(lines) {
 		truncated := transcriptrender.TruncateLine(transcriptrender.Line{
-			Spans: []transcriptrender.Span{{Text: line}},
+			Spans: []transcriptrender.Span{transcriptrender.SemanticSpan(line, transcriptrender.StyleRoleNotice)},
 		}, width, false).Plain()
 		if truncated != "" {
 			out = append(out, truncated)

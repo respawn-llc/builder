@@ -16,7 +16,7 @@ func RenderMarkdownLines(role StyleRole, sourceText string, width int) []Line {
 	source := []byte(sourceText)
 	document := goldmark.New().Parser().Parse(text.NewReader(source))
 	if document.FirstChild() == nil {
-		return []Line{{Spans: []Span{{Role: role}}}}
+		return []Line{{Spans: []Span{SemanticSpan("", role)}}}
 	}
 	var logical []Line
 	for node := document.FirstChild(); node != nil; node = node.NextSibling() {
@@ -25,7 +25,7 @@ func RenderMarkdownLines(role StyleRole, sourceText string, width int) []Line {
 			continue
 		}
 		if len(logical) > 0 {
-			logical = append(logical, Line{Spans: []Span{{Role: role}}})
+			logical = append(logical, Line{Spans: []Span{SemanticSpan("", role)}})
 		}
 		logical = append(logical, block...)
 	}
@@ -34,7 +34,7 @@ func RenderMarkdownLines(role StyleRole, sourceText string, width int) []Line {
 		out = append(out, wrapStyledLine(line.Spans, width)...)
 	}
 	if len(out) == 0 {
-		return []Line{{Spans: []Span{{Role: role}}}}
+		return []Line{{Spans: []Span{SemanticSpan("", role)}}}
 	}
 	return out
 }
@@ -56,7 +56,7 @@ func markdownBlockLines(node ast.Node, source []byte, role StyleRole) []Line {
 	case *ast.Blockquote:
 		return prefixMarkdownLines(markdownChildBlockLines(node, source, role), "> ", role, true)
 	case *ast.ThematicBreak:
-		return []Line{{Spans: []Span{{Text: "───", Role: role, Faint: true}}}}
+		return []Line{{Spans: []Span{SemanticSpan("───", role, SpanAttributeFaint)}}}
 	default:
 		return markdownChildBlockLines(node, source, role)
 	}
@@ -84,14 +84,21 @@ func (b *markdownLineBuilder) append(text string, style markdownInlineStyle) {
 	if style.Role != nil {
 		role = *style.Role
 	}
-	next := Span{
-		Text:      text,
-		Role:      role,
-		Faint:     style.Faint,
-		Bold:      style.Bold,
-		Italic:    style.Italic,
-		Underline: style.Underline,
+	attributes := SpanAttribute(0)
+	if style.Faint {
+		attributes |= SpanAttributeFaint
 	}
+	if style.Bold {
+		attributes |= SpanAttributeBold
+	}
+	if style.Italic {
+		attributes |= SpanAttributeItalic
+	}
+	if style.Underline {
+		attributes |= SpanAttributeUnderline
+	}
+	next := Span{Text: text, Style: SemanticStyle(role)}
+	next.Style.Attributes = attributes
 	last := len(b.spans) - 1
 	if last >= 0 && sameSpanStyle(b.spans[last], next) {
 		b.spans[last].Text += text
@@ -161,12 +168,12 @@ func renderMarkdownInlineChildren(builder *markdownLineBuilder, node ast.Node, s
 func markdownCodeLines(code string) []Line {
 	code = strings.TrimRight(strings.ReplaceAll(code, "\r\n", "\n"), "\n")
 	if code == "" {
-		return []Line{{Spans: []Span{{Role: StyleRoleMarkdownCode}}}}
+		return []Line{{Spans: []Span{SemanticSpan("", StyleRoleMarkdownCode)}}}
 	}
 	lines := strings.Split(code, "\n")
 	out := make([]Line, 0, len(lines))
 	for _, line := range lines {
-		out = append(out, Line{Spans: []Span{{Text: line, Role: StyleRoleMarkdownCode}}})
+		out = append(out, Line{Spans: []Span{SemanticSpan(line, StyleRoleMarkdownCode)}})
 	}
 	return out
 }
@@ -212,7 +219,7 @@ func restoreMarkdownParagraphIndent(node ast.Node, source []byte, lines []Line) 
 		if len(prefix) == 0 || !bytesOnlyWhitespace(prefix) {
 			continue
 		}
-		out[index].Spans = append([]Span{{Text: string(prefix), Role: firstSpanRole(out[index].Spans)}}, out[index].Spans...)
+		out[index].Spans = append([]Span{SemanticSpan(string(prefix), firstSpanRole(out[index].Spans))}, out[index].Spans...)
 	}
 	return out
 }
@@ -265,7 +272,11 @@ func prefixMarkdownLines(lines []Line, firstPrefix string, role StyleRole, faint
 		if index == 0 {
 			prefix = firstPrefix
 		}
-		spans := append([]Span{{Text: prefix, Role: role, Faint: faint}}, line.Spans...)
+		prefixSpan := SemanticSpan(prefix, role)
+		if faint {
+			prefixSpan.Style = prefixSpan.Style.With(SpanAttributeFaint)
+		}
+		spans := append([]Span{prefixSpan}, line.Spans...)
 		out = append(out, Line{Spans: spans})
 	}
 	return out
@@ -310,22 +321,20 @@ func wrapStyledLine(spans []Span, width int) []Line {
 		flushLine()
 	}
 	if len(lines) == 0 {
-		return []Line{{Spans: []Span{{Role: firstSpanRole(spans)}}}}
+		return []Line{{Spans: []Span{SemanticSpan("", firstSpanRole(spans))}}}
 	}
 	return lines
 }
 
 func sameSpanStyle(left, right Span) bool {
-	return left.Role == right.Role &&
-		left.Faint == right.Faint &&
-		left.Bold == right.Bold &&
-		left.Italic == right.Italic &&
-		left.Underline == right.Underline
+	return left.Style == right.Style
 }
 
 func firstSpanRole(spans []Span) StyleRole {
 	for _, span := range spans {
-		return span.Role
+		if role, ok := span.Style.Role(); ok {
+			return role
+		}
 	}
 	return StyleRoleNotice
 }

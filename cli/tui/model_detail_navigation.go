@@ -1,5 +1,7 @@
 package tui
 
+import "maps"
+
 import tea "github.com/charmbracelet/bubbletea"
 
 type detailLineRange struct {
@@ -16,20 +18,22 @@ func (m Model) detailPageRequestCmd(direction DetailTranscriptPageDirection) tea
 
 func (m *Model) toggleSelectedDetailEntry() {
 	selected, ok := m.selectedDetailIndex()
-	if !ok || selected >= len(m.detailEntries) {
+	if !ok || selected >= len(m.detailProjection.entries) {
 		return
 	}
-	if !m.detailEntries[selected].presentation(maxInt(1, m.viewportWidth), m.theme).Expandable {
+	if !m.detailProjection.entries[selected].presentation().Expandable {
 		return
 	}
-	if m.expanded == nil {
-		m.expanded = make(map[int]struct{})
-	}
+	m.expanded = maps.Clone(m.expanded)
 	if _, ok := m.expanded[selected]; ok {
 		delete(m.expanded, selected)
 	} else {
+		if m.expanded == nil {
+			m.expanded = make(map[int]struct{})
+		}
 		m.expanded[selected] = struct{}{}
 	}
+	m.detailProjection.rebuildLines(m.detailContentWidth(), m.expanded)
 	m.scrollSelectedDetailEntryIntoView()
 }
 
@@ -41,7 +45,7 @@ func (m *Model) clampDetailScroll() {
 }
 
 func (m Model) maxDetailScroll() int {
-	return m.maxScrollForProjectedLines(m.detailProjectedLines())
+	return m.maxScrollForProjectedLines(m.detailProjection.lines)
 }
 
 func (m *Model) navigateDetail(delta int) bool {
@@ -104,11 +108,11 @@ func (m *Model) moveDetailSelectionWithinViewport(delta int) bool {
 	lines := m.detailNavigationViewportLines()
 	selected, _ := m.selectedDetailIndex()
 	for lineIndex := startLine; lineIndex >= 0 && lineIndex < len(lines); lineIndex += delta {
-		entryIndex := lines[lineIndex].EntryIndex
-		if entryIndex == nil || *entryIndex == selected {
+		line := lines[lineIndex]
+		if line.Kind != detailLineContent || line.EntryIndex == selected {
 			continue
 		}
-		m.setSelectedDetailIndex(*entryIndex)
+		m.setSelectedDetailIndex(line.EntryIndex)
 		return true
 	}
 	return false
@@ -130,7 +134,7 @@ func detailEntryLineRangeIn(lines []detailProjectedLine, entryIndex int) (detail
 	lineRange := detailLineRange{}
 	found := false
 	for lineIndex, line := range lines {
-		if line.EntryIndex == nil || *line.EntryIndex != entryIndex {
+		if line.Kind != detailLineContent || line.EntryIndex != entryIndex {
 			continue
 		}
 		if !found {
@@ -152,14 +156,14 @@ func (m Model) centerVisibleDetailEntry() (int, bool) {
 	bestDistance := len(lines) + 1
 	found := false
 	for lineIndex, line := range lines {
-		if line.EntryIndex == nil {
+		if line.Kind != detailLineContent {
 			continue
 		}
 		distance := absInt(lineIndex - anchor)
 		if distance >= bestDistance {
 			continue
 		}
-		bestEntry = *line.EntryIndex
+		bestEntry = line.EntryIndex
 		bestDistance = distance
 		found = true
 	}
@@ -219,5 +223,8 @@ func (m *Model) scrollSelectedDetailEntryIntoView() {
 }
 
 func (m Model) detailEntryLineRange(entryIndex int) (detailLineRange, bool) {
-	return detailEntryLineRangeIn(m.detailProjectedLines(), entryIndex)
+	if entryIndex < 0 || entryIndex >= len(m.detailProjection.ranges) {
+		return detailLineRange{}, false
+	}
+	return m.detailProjection.ranges[entryIndex], true
 }

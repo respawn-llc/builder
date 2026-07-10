@@ -51,6 +51,24 @@ func TestNormalizeToolCallMetaPreservesExplicitRenderHint(t *testing.T) {
 	}
 }
 
+func TestToolCallMetaValidityUsesAuthoritativeRenderHintValidation(t *testing.T) {
+	valid := &ToolCallMeta{
+		ToolName:       "exec_command",
+		Presentation:   ToolPresentationShell,
+		RenderBehavior: ToolCallRenderBehaviorShell,
+		RenderHint:     &ToolRenderHint{Kind: ToolRenderKindSource, Path: "main.go"},
+	}
+	if !valid.Valid() {
+		t.Fatalf("valid tool metadata rejected: %+v", valid)
+	}
+
+	invalid := *valid
+	invalid.RenderHint = &ToolRenderHint{Kind: ToolRenderKindSource}
+	if invalid.Valid() {
+		t.Fatalf("tool metadata accepted invalid render hint: %+v", invalid)
+	}
+}
+
 func TestToolCallMetaEqualIncludesShellOutputStatus(t *testing.T) {
 	left := &ToolCallMeta{ToolName: "exec_command", IsShell: true, RawOutputRequested: true}
 	right := &ToolCallMeta{ToolName: "exec_command", IsShell: true}

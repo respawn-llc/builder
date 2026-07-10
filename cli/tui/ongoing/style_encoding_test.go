@@ -12,10 +12,10 @@ import (
 
 func TestTranscriptStyleEncodingPreservesOngoingGeometryAndForegroundOnlyPaint(t *testing.T) {
 	line := transcriptrender.Line{Spans: []transcriptrender.Span{
-		{Text: "F", Role: transcriptrender.StyleRoleToolShellPrimary, Faint: true},
-		{Text: "B", Role: transcriptrender.StyleRoleToolShellSecondary, Bold: true},
-		{Text: "I", Role: transcriptrender.StyleRoleToolShellWarning, Italic: true},
-		{Text: "U", Role: transcriptrender.StyleRoleToolShellError, Underline: true},
+		transcriptrender.SemanticSpan("F", transcriptrender.StyleRoleToolShellPrimary, transcriptrender.SpanAttributeFaint),
+		transcriptrender.SemanticSpan("B", transcriptrender.StyleRoleToolShellSecondary, transcriptrender.SpanAttributeBold),
+		transcriptrender.SemanticSpan("I", transcriptrender.StyleRoleToolShellWarning, transcriptrender.SpanAttributeItalic),
+		transcriptrender.SemanticSpan("U", transcriptrender.StyleRoleToolShellError, transcriptrender.SpanAttributeUnderline),
 	}}
 
 	var encoded strings.Builder

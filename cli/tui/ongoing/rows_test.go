@@ -73,6 +73,22 @@ func TestApplyTerminalMessageDoesNotEmitDividerForConsecutiveSameGroup(t *testin
 	assertRowStructure(t, rows, []rowKind{{divider: true}, {content: "❮ answer", divider: false}})
 }
 
+func TestCommittedAssistantFinalWithoutStreamRendersFullAnswer(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	row := assistantRow("first final line\nsecond final line")
+	row.Visibility = clientui.EntryVisibilityOngoingCollapsed
+
+	if _, err := surface.ApplyTerminalMessage(committedMessage(row), testFrame()); err != nil {
+		t.Fatalf("apply final assistant row: %v", err)
+	}
+
+	assertRowStructure(t, visibleTextRows(parseTerminalOps(out.String())), []rowKind{
+		{content: "❮ first final line", divider: false},
+		{content: "  second final line", divider: false},
+	})
+}
+
 func TestSurfaceDoesNotRetainCommittedRowContentAfterAppend(t *testing.T) {
 	surface := NewSurface(discardWriter{})
 	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("not retained")), testFrame()); err != nil {
@@ -131,7 +147,6 @@ func TestCommittedRowsFilterNonOngoingVisibility(t *testing.T) {
 		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{
 			visibleRow(userRow("ongoing"), clientui.EntryVisibilityOngoing),
 			visibleRow(userRow("collapsed ongoing"), clientui.EntryVisibilityOngoingCollapsed),
-			visibleRow(userRow("auto default"), clientui.EntryVisibilityAuto),
 			visibleRow(userRow("detail only"), clientui.EntryVisibilityDetail),
 			visibleRow(userRow("hidden"), clientui.EntryVisibilityHidden),
 		}},
@@ -143,8 +158,20 @@ func TestCommittedRowsFilterNonOngoingVisibility(t *testing.T) {
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
 		"❯ ongoing",
 		"❯ collapsed ongoing",
-		"❯ auto default",
 	})
+}
+
+func TestCommittedRowsRejectUnresolvedVisibility(t *testing.T) {
+	surface := NewSurface(discardWriter{})
+	row := userRow("invalid")
+	row.Visibility = clientui.EntryVisibilityAuto
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("unresolved committed row visibility did not panic")
+		}
+	}()
+	_, _ = surface.ApplyTerminalMessage(committedMessage(row), testFrame())
 }
 
 // Ongoing native scrollback uses compact transcript text. Detail expansion owns
@@ -167,7 +194,10 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 			row := clientui.TranscriptCommittedRow{
 				Kind:       clientui.TranscriptRowAssistant,
 				Visibility: tt.visibility,
-				Assistant:  &clientui.TranscriptAssistantRow{Text: multiLine},
+				Assistant: &clientui.TranscriptAssistantRow{
+					Text:  multiLine,
+					Phase: transcript.AssistantPhaseCommentary,
+				},
 			}
 			if _, err := surface.ApplyTerminalMessage(committedMessage(row), FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
 				t.Fatalf("apply: %v", err)
@@ -234,7 +264,7 @@ func committedMessage(row clientui.TranscriptCommittedRow) clientui.TranscriptMe
 }
 
 func userRow(text string) clientui.TranscriptCommittedRow {
-	return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: text}}
+	return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibilityOngoing, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: text}}
 }
 
 func visibleRow(row clientui.TranscriptCommittedRow, visibility clientui.EntryVisibility) clientui.TranscriptCommittedRow {
@@ -243,21 +273,22 @@ func visibleRow(row clientui.TranscriptCommittedRow, visibility clientui.EntryVi
 }
 
 func assistantRow(text string) clientui.TranscriptCommittedRow {
-	return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{
+	return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibilityOngoing, Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{
 		Text:  text,
 		Phase: transcript.AssistantPhaseFinal,
 	}}
 }
 
 func toolRow(text string) clientui.TranscriptCommittedRow {
-	return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{Text: text}}
+	return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibilityOngoingCollapsed, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{Text: text}}
 }
 
 func noticeRow(text string) clientui.TranscriptCommittedRow {
 	legacyText := text
 	return clientui.TranscriptCommittedRow{
-		Kind:   clientui.TranscriptRowNotice,
-		Notice: &clientui.TranscriptNoticeRow{Data: clientui.TranscriptNoticeData{LegacyText: &legacyText}},
+		Visibility: clientui.EntryVisibilityOngoing,
+		Kind:       clientui.TranscriptRowNotice,
+		Notice:     &clientui.TranscriptNoticeRow{Data: clientui.TranscriptNoticeData{LegacyText: &legacyText}},
 	}
 }
 

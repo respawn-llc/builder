@@ -84,11 +84,14 @@ func (m *uiModel) handleDetailTranscriptLoad(msg detailTranscriptLoadMsg) tea.Cm
 	if !ok {
 		return nil
 	}
+	if msg.err == nil {
+		msg.err = validateDetailTranscriptPageResponse(pending.sessionID, msg.page)
+	}
 	if msg.err != nil {
 		return m.sendTransientStatusWithNoticeID(msg.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	clearLoadingCmd := m.clearDetailTranscriptLoadingNotice(msg.requestID)
-	m.applyDetailTranscriptLoad(pending.sessionID, pending.request, msg.page)
+	m.applyDetailTranscriptLoad(pending.sessionID.String(), pending.request, msg.page)
 	return clearLoadingCmd
 }
 
@@ -106,7 +109,7 @@ func (m *uiModel) applyDetailTranscriptLoad(requestSessionID string, request cli
 	}
 	anchor := tui.DetailTranscriptAnchorDefault
 	prependedEntries := 0
-	var trimmedFrontEntries []clientui.ChatEntry
+	var trimmedFrontEntries []clientui.TranscriptCommittedRow
 	if request.NewerCursor != nil {
 		result := m.detailTranscript.appendCursorPage(responsePage)
 		trimmedFrontEntries = result.trimmedFrontEntries

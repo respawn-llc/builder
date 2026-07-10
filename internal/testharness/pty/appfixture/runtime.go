@@ -3,6 +3,7 @@ package appfixture
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,22 +68,39 @@ type ToolCallFile struct {
 	Custom bool            `json:"custom"`
 }
 
+type ScriptFinalAssistantOrdinal uint64
+
 type Runtime struct {
-	ScriptFile ScriptFile
-	Client     *scriptedllm.Client
-	recorder   *FactoryRecorder
+	ScriptFile                  ScriptFile
+	Client                      *scriptedllm.Client
+	recorder                    *FactoryRecorder
+	targetFinalAssistantOrdinal ScriptFinalAssistantOrdinal
 }
 
-func NewRuntime(scriptPath string, afterResponse func(context.Context) error) (*Runtime, error) {
-	scriptFile, script, err := loadScript(scriptPath, afterResponse)
+func NewRuntime(
+	scriptPath string,
+	newAfterResponse func(ScriptFinalAssistantOrdinal) func(context.Context) error,
+) (*Runtime, error) {
+	scriptFile, script, targetFinalAssistantOrdinal, err := loadScript(
+		scriptPath,
+		newAfterResponse,
+	)
 	if err != nil {
 		return nil, err
 	}
 	return &Runtime{
-		ScriptFile: scriptFile,
-		Client:     scriptedllm.NewClient(script),
-		recorder:   &FactoryRecorder{},
+		ScriptFile:                  scriptFile,
+		Client:                      scriptedllm.NewClient(script),
+		recorder:                    &FactoryRecorder{},
+		targetFinalAssistantOrdinal: targetFinalAssistantOrdinal,
 	}, nil
+}
+
+func (r *Runtime) TargetFinalAssistantOrdinal() ScriptFinalAssistantOrdinal {
+	if r == nil {
+		panic("read target final assistant ordinal from nil PTY fixture runtime")
+	}
+	return r.targetFinalAssistantOrdinal
 }
 
 func (r *Runtime) StartupOptions() serverstartup.Options {
@@ -141,21 +159,54 @@ func (r *Runtime) Observation(runErr error) Observation {
 	return obs
 }
 
-func loadScript(path string, afterResponse func(context.Context) error) (ScriptFile, scriptedllm.Script, error) {
+func loadScript(
+	path string,
+	newAfterResponse func(ScriptFinalAssistantOrdinal) func(context.Context) error,
+) (ScriptFile, scriptedllm.Script, ScriptFinalAssistantOrdinal, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ScriptFile{}, scriptedllm.Script{}, fmt.Errorf("read script: %w", err)
+		return ScriptFile{}, scriptedllm.Script{}, 0, fmt.Errorf("read script: %w", err)
 	}
 	var file ScriptFile
 	if err := json.Unmarshal(data, &file); err != nil {
-		return ScriptFile{}, scriptedllm.Script{}, fmt.Errorf("decode script: %w", err)
+		return ScriptFile{}, scriptedllm.Script{}, 0, fmt.Errorf("decode script: %w", err)
 	}
 	steps, err := scriptSteps(file)
 	if err != nil {
-		return ScriptFile{}, scriptedllm.Script{}, err
+		return ScriptFile{}, scriptedllm.Script{}, 0, err
 	}
-	steps[len(steps)-1].AfterResponse = afterResponse
-	return file, scriptedllm.Script{Steps: steps}, nil
+	targetFinalAssistantOrdinal, err := deriveTargetFinalAssistantOrdinal(steps)
+	if err != nil {
+		return ScriptFile{}, scriptedllm.Script{}, 0, err
+	}
+	if newAfterResponse != nil {
+		steps[len(steps)-1].AfterResponse = newAfterResponse(targetFinalAssistantOrdinal)
+	}
+	return file, scriptedllm.Script{Steps: steps}, targetFinalAssistantOrdinal, nil
+}
+
+func deriveTargetFinalAssistantOrdinal(steps []scriptedllm.Step) (ScriptFinalAssistantOrdinal, error) {
+	if len(steps) == 0 {
+		return 0, errors.New("PTY fixture script requires at least one step")
+	}
+	var ordinal ScriptFinalAssistantOrdinal
+	for _, step := range steps {
+		if isFinalAssistantStep(step) {
+			ordinal++
+		}
+	}
+	if ordinal == 0 {
+		return 0, errors.New("PTY fixture script requires an assistant final response")
+	}
+	if !isFinalAssistantStep(steps[len(steps)-1]) {
+		return 0, errors.New("PTY fixture script must end with an assistant final response")
+	}
+	return ordinal, nil
+}
+
+func isFinalAssistantStep(step scriptedllm.Step) bool {
+	return step.Response.Assistant.Role == llm.RoleAssistant &&
+		step.Response.Assistant.Phase == llm.MessagePhaseFinal
 }
 
 func scriptSteps(file ScriptFile) ([]scriptedllm.Step, error) {

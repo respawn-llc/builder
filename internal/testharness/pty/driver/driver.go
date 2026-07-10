@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -26,6 +27,16 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	if _, err := analyzer.NewDimensions(spec.Dimensions.Rows, spec.Dimensions.Cols); err != nil {
 		return analyzer.Capture{}, err
 	}
+	phaseInputs := newPhaseInputDispatcher(spec.PhaseInputs)
+	frameInputs, err := newFrameInputDispatcher(spec.FrameInputSequences)
+	if err != nil {
+		return analyzer.Capture{}, err
+	}
+	parseableInputs := newParseableInputDispatcher(spec.ParseableInputs)
+	readiness, err := analyzer.NewReadinessTracker(spec.Dimensions)
+	if err != nil {
+		return analyzer.Capture{}, err
+	}
 	cmd := exec.CommandContext(ctx, spec.Path, spec.Args...)
 	cmd.Env = append(os.Environ(), spec.Env...)
 	cmd.Dir = spec.Dir
@@ -33,7 +44,10 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	started := time.Now()
 	ptmx, err := creackpty.StartWithSize(cmd, &creackpty.Winsize{Rows: uint16(spec.Dimensions.Rows), Cols: uint16(spec.Dimensions.Cols)})
 	if err != nil {
-		return analyzer.Capture{}, fmt.Errorf("start pty command path=%s args=%v dimensions=%+v: %w", spec.Path, spec.Args, spec.Dimensions, err)
+		return analyzer.Capture{}, errors.Join(
+			fmt.Errorf("start pty command path=%s args=%v dimensions=%+v: %w", spec.Path, spec.Args, spec.Dimensions, err),
+			readiness.Close(),
+		)
 	}
 	defer func() {
 		_ = ptmx.Close()
@@ -44,9 +58,74 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	var eventErrors concurrentErrors
 	chunks := make([]analyzer.Chunk, 0)
 	resizes := make([]analyzer.ResizeEvent, 0, len(spec.Resizes))
-	phaseInputs := newPhaseInputDispatcher(spec.PhaseInputs)
-	parseableInputs := newParseableInputDispatcher(spec.ParseableInputs)
+	phaseInputDispatches := make([]analyzer.PhaseInputDispatch, 0, len(spec.PhaseInputs))
+	frameInputDispatches := make([]analyzer.FrameInputDispatch, 0)
+	dispatchPendingInputs := func() error {
+		pendingPhaseInputs := phaseInputs.pending(readiness.PhaseEvents())
+		for _, input := range pendingPhaseInputs {
+			input := input
+			eventWG.Add(1)
+			go func() {
+				defer eventWG.Done()
+				timer := time.NewTimer(input.After)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+					startedAt := time.Since(started)
+					if err := writeFull(ptmx, input.Bytes); err != nil {
+						eventErrors.Add(fmt.Errorf("write phase-relative PTY input for phase=%d: %w", input.Phase, err))
+						cancel()
+						return
+					}
+					mu.Lock()
+					phaseInputDispatches = append(phaseInputDispatches, analyzer.PhaseInputDispatch{
+						Phase:          input.Phase,
+						ScheduledAfter: input.After,
+						StartedAt:      startedAt,
+					})
+					mu.Unlock()
+				case <-ctx.Done():
+				}
+			}()
+		}
+		pendingFrameInputs := frameInputs.pending(readiness)
+		for _, input := range pendingFrameInputs {
+			startedAt := time.Since(started)
+			if err := writeFull(ptmx, input.Bytes); err != nil {
+				return fmt.Errorf(
+					"write frame-gated PTY input for phase=%d input_index=%d: %w",
+					input.Phase,
+					input.InputIndex,
+					err,
+				)
+			}
+			mu.Lock()
+			frameInputDispatches = append(frameInputDispatches, analyzer.FrameInputDispatch{
+				Phase:                      input.Phase,
+				InputIndex:                 input.InputIndex,
+				ReadyBoundary:              input.ReadyBoundary,
+				ReadyBoundaryEndByteOffset: input.ReadyBoundaryEndByteOffset,
+				StartedAt:                  startedAt,
+			})
+			mu.Unlock()
+		}
+		pendingParseableInputs := parseableInputs.pending(readiness)
+		for _, payload := range pendingParseableInputs {
+			if err := writeFull(ptmx, payload); err != nil {
+				return fmt.Errorf("write parseable PTY input: %w", err)
+			}
+		}
+		return nil
+	}
+
 	readDone := make(chan struct{})
+	analysisWake := make(chan struct{}, 1)
+	requestAnalysis := func() {
+		select {
+		case analysisWake <- struct{}{}:
+		default:
+		}
+	}
 	go func() {
 		defer close(readDone)
 		buffer := make([]byte, 4096)
@@ -55,45 +134,8 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			if n > 0 {
 				mu.Lock()
 				chunks = append(chunks, analyzer.NewChunk(len(chunks), time.Since(started), buffer[:n]))
-				copied := append([]analyzer.Chunk(nil), chunks...)
-				copiedResizes := append([]analyzer.ResizeEvent(nil), resizes...)
 				mu.Unlock()
-				pendingPhaseInputs, dispatchErr := phaseInputs.pending(copied, spec.Dimensions, copiedResizes)
-				if dispatchErr != nil {
-					eventErrors.Add(fmt.Errorf("resolve phase-relative PTY input: %w", dispatchErr))
-					cancel()
-					return
-				}
-				for _, input := range pendingPhaseInputs {
-					input := input
-					eventWG.Add(1)
-					go func() {
-						defer eventWG.Done()
-						timer := time.NewTimer(input.After)
-						defer timer.Stop()
-						select {
-						case <-timer.C:
-							if err := writeFull(ptmx, input.Bytes); err != nil {
-								eventErrors.Add(fmt.Errorf("write phase-relative PTY input for phase=%d: %w", input.Phase, err))
-								cancel()
-							}
-						case <-ctx.Done():
-						}
-					}()
-				}
-				pendingParseableInputs, dispatchErr := parseableInputs.pending(copied, spec.Dimensions, copiedResizes)
-				if dispatchErr != nil {
-					eventErrors.Add(fmt.Errorf("resolve parseable PTY input: %w", dispatchErr))
-					cancel()
-					return
-				}
-				for _, payload := range pendingParseableInputs {
-					if err := writeFull(ptmx, payload); err != nil {
-						eventErrors.Add(fmt.Errorf("write parseable PTY input: %w", err))
-						cancel()
-						return
-					}
-				}
+				requestAnalysis()
 			}
 			if err != nil {
 				if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) || errors.Is(err, syscall.EIO) {
@@ -102,6 +144,55 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 				eventErrors.Add(fmt.Errorf("read PTY output: %w", err))
 				cancel()
 				return
+			}
+		}
+	}()
+
+	analysisDone := make(chan struct{})
+	go func() {
+		defer close(analysisDone)
+		analyzedChunkCount := 0
+		analyzedResizeCount := 0
+		for {
+			select {
+			case <-analysisWake:
+			case <-readDone:
+			}
+			for {
+				mu.Lock()
+				copied := append([]analyzer.Chunk(nil), chunks...)
+				copiedResizes := append([]analyzer.ResizeEvent(nil), resizes...)
+				mu.Unlock()
+				if len(copied) == analyzedChunkCount && len(copiedResizes) == analyzedResizeCount {
+					break
+				}
+				if err := advanceReadinessTracker(
+					readiness,
+					copied,
+					copiedResizes,
+					&analyzedChunkCount,
+					&analyzedResizeCount,
+				); err != nil {
+					eventErrors.Add(fmt.Errorf("advance PTY input readiness: %w", err))
+					cancel()
+					return
+				}
+				if err := dispatchPendingInputs(); err != nil {
+					eventErrors.Add(err)
+					cancel()
+					return
+				}
+				mu.Lock()
+				caughtUp := len(chunks) == analyzedChunkCount && len(resizes) == analyzedResizeCount
+				mu.Unlock()
+				if caughtUp {
+					break
+				}
+			}
+			select {
+			case <-readDone:
+				return
+			default:
 			}
 		}
 	}()
@@ -127,6 +218,7 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 				}
 				resizes = append(resizes, analyzer.ResizeEvent{Placement: placement, At: time.Since(started), Dimensions: resize.Dimensions})
 				mu.Unlock()
+				requestAnalysis()
 			case <-ctx.Done():
 			}
 		}()
@@ -170,19 +262,31 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	cancel()
 	_ = ptmx.Close()
 	<-readDone
+	<-analysisDone
 	eventWG.Wait()
+	readinessErr := readiness.Close()
 
 	mu.Lock()
 	copiedChunks := append([]analyzer.Chunk(nil), chunks...)
 	copiedResizes := append([]analyzer.ResizeEvent(nil), resizes...)
+	copiedPhaseInputDispatches := append([]analyzer.PhaseInputDispatch(nil), phaseInputDispatches...)
+	copiedFrameInputDispatches := append([]analyzer.FrameInputDispatch(nil), frameInputDispatches...)
 	mu.Unlock()
 	capture, captureErr := analyzer.NewCaptureWithEvents(spec.Dimensions, copiedChunks, copiedResizes)
 	if captureErr != nil {
 		return analyzer.Capture{}, captureErr
 	}
+	sort.Slice(copiedPhaseInputDispatches, func(i, j int) bool {
+		return copiedPhaseInputDispatches[i].StartedAt < copiedPhaseInputDispatches[j].StartedAt
+	})
+	capture.PhaseInputDispatches = copiedPhaseInputDispatches
+	sort.Slice(copiedFrameInputDispatches, func(i, j int) bool {
+		return copiedFrameInputDispatches[i].StartedAt < copiedFrameInputDispatches[j].StartedAt
+	})
+	capture.FrameInputDispatches = copiedFrameInputDispatches
 	capture.ProcessExit = processExit(cmd.ProcessState)
 	capture.ReadLoopDone = true
-	eventErr := eventErrors.Err()
+	eventErr := errors.Join(eventErrors.Err(), readinessErr)
 	if timeout {
 		return capture, errors.Join(&TimeoutError{Command: spec.Path, Elapsed: time.Since(started)}, eventErr)
 	}
@@ -195,6 +299,57 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	return capture, nil
 }
 
+func advanceReadinessTracker(
+	readiness *analyzer.ReadinessTracker,
+	chunks []analyzer.Chunk,
+	resizes []analyzer.ResizeEvent,
+	chunkCount *int,
+	resizeCount *int,
+) error {
+	if readiness == nil || chunkCount == nil || resizeCount == nil {
+		return errors.New("advance PTY readiness with missing state")
+	}
+	for {
+	resizeLoop:
+		for *resizeCount < len(resizes) {
+			resize := resizes[*resizeCount]
+			switch resize.Placement.Kind {
+			case analyzer.ResizeBeforeFirstChunk:
+				if *chunkCount != 0 {
+					return fmt.Errorf("late before-first-chunk resize at index %d", *resizeCount)
+				}
+			case analyzer.ResizeAfterChunk:
+				if resize.Placement.ChunkIndex >= *chunkCount {
+					break resizeLoop
+				}
+			default:
+				return fmt.Errorf("unknown readiness resize placement kind %d", resize.Placement.Kind)
+			}
+			if err := readiness.Resize(resize.Dimensions, resize.At); err != nil {
+				return fmt.Errorf("apply readiness resize %d: %w", *resizeCount, err)
+			}
+			(*resizeCount)++
+		}
+
+		if *chunkCount >= len(chunks) {
+			break
+		}
+		if err := readiness.AdvanceChunk(chunks[*chunkCount]); err != nil {
+			return err
+		}
+		(*chunkCount)++
+	}
+	if *resizeCount != len(resizes) {
+		return fmt.Errorf(
+			"readiness resizes remain after available chunks: applied=%d total=%d chunks=%d",
+			*resizeCount,
+			len(resizes),
+			len(chunks),
+		)
+	}
+	return nil
+}
+
 type phaseInputDispatcher struct {
 	events    []PhaseInputEvent
 	triggered []bool
@@ -204,20 +359,12 @@ func newPhaseInputDispatcher(events []PhaseInputEvent) *phaseInputDispatcher {
 	return &phaseInputDispatcher{events: append([]PhaseInputEvent(nil), events...), triggered: make([]bool, len(events))}
 }
 
-func (d *phaseInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analyzer.Dimensions, resizes []analyzer.ResizeEvent) ([]PhaseInputEvent, error) {
-	if d == nil || len(d.events) == 0 || len(chunks) == 0 {
-		return nil, nil
-	}
-	capture, err := analyzer.NewCaptureWithEvents(dimensions, chunks, resizes)
-	if err != nil {
-		return nil, err
-	}
-	analysis, err := analyzer.Analyze(capture)
-	if err != nil {
-		return nil, err
+func (d *phaseInputDispatcher) pending(phases []analyzer.PhaseEvent) []PhaseInputEvent {
+	if d == nil || len(d.events) == 0 || len(phases) == 0 || allDispatchesTriggered(d.triggered) {
+		return nil
 	}
 	out := make([]PhaseInputEvent, 0)
-	for _, phase := range analysis.PhaseEvents {
+	for _, phase := range phases {
 		for i, event := range d.events {
 			if d.triggered[i] || event.Phase != phase.Phase {
 				continue
@@ -228,7 +375,158 @@ func (d *phaseInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analy
 			out = append(out, copyEvent)
 		}
 	}
-	return out, nil
+	return out
+}
+
+type frameInputDispatcher struct {
+	sequences []frameInputSequenceState
+}
+
+type frameInputSequenceState struct {
+	phase           analyzer.PhaseKind
+	inputs          []FrameInput
+	phaseObserved   bool
+	nextInput       int
+	afterByteOffset int64
+	inputApplied    *analyzer.ReadinessBoundary
+}
+
+type readyFrameInput struct {
+	Phase                      analyzer.PhaseKind
+	InputIndex                 int
+	ReadyBoundary              analyzer.ReadinessBoundaryKind
+	ReadyBoundaryEndByteOffset int64
+	Bytes                      []byte
+}
+
+func newFrameInputDispatcher(sequences []FrameInputSequence) (*frameInputDispatcher, error) {
+	states := make([]frameInputSequenceState, 0, len(sequences))
+	for sequenceIndex, sequence := range sequences {
+		if len(sequence.Inputs) == 0 {
+			return nil, fmt.Errorf("frame input sequence %d has no inputs", sequenceIndex)
+		}
+		inputs := make([]FrameInput, len(sequence.Inputs))
+		for inputIndex, input := range sequence.Inputs {
+			if !input.Readiness.Valid() {
+				return nil, fmt.Errorf(
+					"frame input sequence %d input %d has invalid readiness boundary %d",
+					sequenceIndex,
+					inputIndex,
+					input.Readiness,
+				)
+			}
+			if len(input.Bytes) == 0 {
+				return nil, fmt.Errorf("frame input sequence %d input %d is empty", sequenceIndex, inputIndex)
+			}
+			if inputIndex == 0 && input.Readiness == analyzer.ReadinessInputApplied {
+				return nil, fmt.Errorf(
+					"frame input sequence %d first input cannot wait for input-applied readiness",
+					sequenceIndex,
+				)
+			}
+			var afterPhase *analyzer.PhaseKind
+			if input.AfterPhase != nil {
+				phaseCopy := *input.AfterPhase
+				afterPhase = &phaseCopy
+			}
+			inputs[inputIndex] = FrameInput{
+				Readiness:  input.Readiness,
+				AfterPhase: afterPhase,
+				Bytes:      append([]byte(nil), input.Bytes...),
+			}
+		}
+		states = append(states, frameInputSequenceState{phase: sequence.Phase, inputs: inputs})
+	}
+	return &frameInputDispatcher{sequences: states}, nil
+}
+
+func (d *frameInputDispatcher) pending(readiness *analyzer.ReadinessTracker) []readyFrameInput {
+	if d == nil || readiness == nil || len(d.sequences) == 0 || readiness.ByteCount() == 0 || d.allDispatched() {
+		return nil
+	}
+	phases := readiness.PhaseEvents()
+	out := make([]readyFrameInput, 0, len(d.sequences))
+	for stateIndex := range d.sequences {
+		state := &d.sequences[stateIndex]
+		if state.nextInput >= len(state.inputs) {
+			continue
+		}
+		if !state.phaseObserved {
+			for _, phase := range phases {
+				if phase.Phase != state.phase {
+					continue
+				}
+				state.phaseObserved = true
+				state.afterByteOffset = phase.ByteRange.End
+				break
+			}
+		}
+		if !state.phaseObserved {
+			continue
+		}
+		input := state.inputs[state.nextInput]
+		boundary, ok := state.nextBoundary(readiness, input)
+		if !ok {
+			continue
+		}
+		inputIndex := state.nextInput
+		out = append(out, readyFrameInput{
+			Phase:                      state.phase,
+			InputIndex:                 inputIndex,
+			ReadyBoundary:              boundary.Kind,
+			ReadyBoundaryEndByteOffset: boundary.ByteRange.End,
+			Bytes:                      append([]byte(nil), input.Bytes...),
+		})
+		state.nextInput++
+		state.afterByteOffset = readiness.ByteCount()
+		state.inputApplied = nil
+	}
+	return out
+}
+
+func (s *frameInputSequenceState) nextBoundary(
+	readiness *analyzer.ReadinessTracker,
+	input FrameInput,
+) (analyzer.ReadinessBoundary, bool) {
+	if s == nil || readiness == nil {
+		return analyzer.ReadinessBoundary{}, false
+	}
+	afterByteOffset := s.afterByteOffset
+	if s.nextInput == 0 {
+		afterByteOffset = s.afterByteOffset
+	} else if s.inputApplied == nil {
+		applied, ok := readiness.LatestBoundaryAfter(
+			analyzer.ReadinessInputApplied,
+			s.afterByteOffset,
+		)
+		if !ok {
+			return analyzer.ReadinessBoundary{}, false
+		}
+		s.inputApplied = &applied
+		afterByteOffset = applied.ByteRange.End
+	} else {
+		afterByteOffset = s.inputApplied.ByteRange.End
+	}
+	if input.AfterPhase != nil {
+		phase, ok := readiness.LatestPhaseAfter(*input.AfterPhase, afterByteOffset)
+		if !ok {
+			return analyzer.ReadinessBoundary{}, false
+		}
+		afterByteOffset = phase.ByteRange.End
+	}
+	if input.Readiness == analyzer.ReadinessInputApplied && input.AfterPhase == nil {
+		return *s.inputApplied, true
+	}
+	return readiness.LatestBoundaryAfter(input.Readiness, afterByteOffset)
+}
+
+func (d *frameInputDispatcher) allDispatched() bool {
+	for _, state := range d.sequences {
+		if state.nextInput < len(state.inputs) {
+			return false
+		}
+	}
+	return true
 }
 
 type parseableInputDispatcher struct {
@@ -240,19 +538,9 @@ func newParseableInputDispatcher(events []ParseableInputEvent) *parseableInputDi
 	return &parseableInputDispatcher{events: append([]ParseableInputEvent(nil), events...), triggered: make([]bool, len(events))}
 }
 
-func (d *parseableInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analyzer.Dimensions, resizes []analyzer.ResizeEvent) ([][]byte, error) {
-	if d == nil || len(d.events) == 0 || len(chunks) == 0 {
-		return nil, nil
-	}
-	capture, err := analyzer.NewCaptureWithEvents(dimensions, chunks, resizes)
-	if err != nil {
-		return nil, err
-	}
-	if len(capture.Raw) == 0 {
-		return nil, nil
-	}
-	if _, err := analyzer.Analyze(capture); err != nil {
-		return nil, err
+func (d *parseableInputDispatcher) pending(readiness *analyzer.ReadinessTracker) [][]byte {
+	if d == nil || readiness == nil || len(d.events) == 0 || readiness.ByteCount() == 0 || allDispatchesTriggered(d.triggered) {
+		return nil
 	}
 	out := make([][]byte, 0)
 	for i, event := range d.events {
@@ -262,7 +550,16 @@ func (d *parseableInputDispatcher) pending(chunks []analyzer.Chunk, dimensions a
 		d.triggered[i] = true
 		out = append(out, append([]byte(nil), event.Bytes...))
 	}
-	return out, nil
+	return out
+}
+
+func allDispatchesTriggered(triggered []bool) bool {
+	for _, dispatched := range triggered {
+		if !dispatched {
+			return false
+		}
+	}
+	return true
 }
 
 type concurrentErrors struct {

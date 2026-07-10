@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"core/cli/tui/transcriptrender"
@@ -26,18 +27,17 @@ const (
 
 type detailProjectedLine struct {
 	Content      transcriptrender.Line
-	EntryIndex   *int
+	EntryIndex   int
 	Kind         detailLineKind
 	Rail         detailRail
 	SelectedFill bool
-	VisualSpacer bool
 	TargetWidth  int
 	ContentWidth int
 }
 
 type detailRenderedLine struct {
 	Text       string
-	EntryIndex *int
+	EntryIndex int
 }
 
 type detailProjectedViewport struct {
@@ -47,43 +47,7 @@ type detailProjectedViewport struct {
 }
 
 func (m Model) detailProjectedLines() []detailProjectedLine {
-	targetWidth := maxInt(1, m.viewportWidth)
-	contentWidth := maxInt(0, targetWidth-1)
-	renderWidth := maxInt(1, contentWidth)
-	out := make([]detailProjectedLine, 0, (len(m.detailEntries)+1)*2)
-	selected, hasSelection := m.selectedDetailIndex()
-	for entryIndex, entry := range m.detailEntries {
-		if entryIndex > 0 && !sameDetailGroup(m.detailEntries[entryIndex-1], entry) {
-			out = append(out, detailProjectedLine{
-				Kind:         detailLineGroupSpacer,
-				Rail:         detailRailBlank,
-				TargetWidth:  targetWidth,
-				ContentWidth: contentWidth,
-			})
-		}
-		presentation := entry.presentation(renderWidth, m.theme)
-		lines := presentation.Collapsed
-		if _, expanded := m.expanded[entryIndex]; expanded && presentation.Expandable {
-			lines = presentation.Expanded
-		}
-		entrySelected := hasSelection && entryIndex == selected
-		if entrySelected && presentation.Expandable {
-			lines = m.decorateSelectedDetailLines(lines, entryIndex, renderWidth)
-		}
-		for _, line := range lines {
-			indexCopy := entryIndex
-			out = append(out, detailProjectedLine{
-				Content:      transcriptrender.TruncateLine(line, renderWidth, false),
-				EntryIndex:   &indexCopy,
-				Kind:         detailLineContent,
-				Rail:         detailRailForSelection(entrySelected),
-				SelectedFill: entrySelected,
-				TargetWidth:  targetWidth,
-				ContentWidth: contentWidth,
-			})
-		}
-	}
-	return out
+	return m.detailProjection.lines
 }
 
 func detailRailForSelection(selected bool) detailRail {
@@ -111,6 +75,7 @@ func (m Model) detailVisibleProjectedLines() []detailProjectedLine {
 		return nil
 	}
 	visible := append([]detailProjectedLine(nil), viewport.Lines...)
+	m.decorateVisibleDetailSelection(visible, viewport.Scroll)
 	visible = m.withDetailSelectionSpacers(visible, viewport.Scroll, viewport.MaxScroll)
 	limit := maxInt(1, m.viewportLines)
 	if overflow := len(visible) - limit; overflow > 0 {
@@ -124,7 +89,7 @@ func (m Model) detailVisibleProjectedLines() []detailProjectedLine {
 }
 
 func (m Model) detailProjectedCameraViewport() detailProjectedViewport {
-	lines := m.detailProjectedLines()
+	lines := m.detailProjection.lines
 	if len(lines) == 0 {
 		return detailProjectedViewport{}
 	}
@@ -138,6 +103,30 @@ func (m Model) detailProjectedCameraViewport() detailProjectedViewport {
 	}
 }
 
+func (m Model) decorateVisibleDetailSelection(lines []detailProjectedLine, scroll int) {
+	selected, hasSelection := m.selectedDetailIndex()
+	if !hasSelection || selected < 0 || selected >= len(m.detailProjection.entries) {
+		return
+	}
+	presentation := m.detailProjection.entries[selected].presentation()
+	lineRange, hasRange := m.detailEntryLineRange(selected)
+	for index := range lines {
+		line := &lines[index]
+		if line.Kind != detailLineContent || line.EntryIndex != selected {
+			continue
+		}
+		line.Rail = detailRailSelected
+		line.SelectedFill = true
+		if hasRange && presentation.Expandable && scroll+index == lineRange.first {
+			symbol := transcriptrender.DetailCollapsedAffordance
+			if _, expanded := m.expanded[selected]; expanded {
+				symbol = transcriptrender.DetailExpandedAffordance
+			}
+			line.Content = line.Content.WithLeadingSymbolText(symbol)
+		}
+	}
+}
+
 func (m Model) withDetailSelectionSpacers(lines []detailProjectedLine, scroll int, maxScroll int) []detailProjectedLine {
 	selected, hasSelection := m.selectedDetailIndex()
 	if !hasSelection || len(lines) == 0 {
@@ -145,7 +134,7 @@ func (m Model) withDetailSelectionSpacers(lines []detailProjectedLine, scroll in
 	}
 	firstSelected, lastSelected := -1, -1
 	for index, line := range lines {
-		if line.EntryIndex == nil || *line.EntryIndex != selected {
+		if line.Kind != detailLineContent || line.EntryIndex != selected {
 			continue
 		}
 		if firstSelected < 0 {
@@ -180,7 +169,7 @@ func (m Model) withDetailSelectionSpacers(lines []detailProjectedLine, scroll in
 }
 
 func detailLineHasOwner(lines []detailProjectedLine, index int) bool {
-	return index >= 0 && index < len(lines) && lines[index].EntryIndex != nil
+	return index >= 0 && index < len(lines) && lines[index].Kind == detailLineContent
 }
 
 func detailSelectionSpacerLine(selected detailProjectedLine) detailProjectedLine {
@@ -202,9 +191,9 @@ func (m Model) decorateSelectedDetailLines(lines []transcriptrender.Line, entryI
 		return lines
 	}
 	out := append([]transcriptrender.Line(nil), lines...)
-	symbol := "▶"
+	symbol := transcriptrender.DetailCollapsedAffordance
 	if _, ok := m.expanded[entryIndex]; ok {
-		symbol = "▼"
+		symbol = transcriptrender.DetailExpandedAffordance
 	}
 	out[0] = out[0].WithLeadingSymbolText(symbol)
 	for index, line := range out {
@@ -233,12 +222,13 @@ func renderDetailProjectedLine(line detailProjectedLine, themeName string) strin
 	if line.Kind == detailLineContent {
 		content = renderDetailSemanticLine(line.Content, themeName, line.SelectedFill)
 	}
-	if !line.SelectedFill {
+	background := resolveDetailLineBackground(line.Content.Background, palette, line.SelectedFill)
+	if !background.present {
 		return rail + content
 	}
 	paddingWidth := maxInt(0, line.ContentWidth-lipgloss.Width(content))
 	padding := lipgloss.NewStyle().
-		Background(palette.App.ModeBg.Lipgloss()).
+		Background(background.color.Lipgloss()).
 		Render(strings.Repeat(" ", paddingWidth))
 	return rail + content + padding
 }
@@ -255,33 +245,51 @@ func renderDetailProjectedLines(lines []detailProjectedLine, themeName string) [
 }
 
 func renderDetailSemanticLine(line transcriptrender.Line, themeName string, selected bool) string {
+	palette := theme.ResolvePalette(themeName)
+	background := resolveDetailLineBackground(line.Background, palette, selected)
 	var out strings.Builder
 	if line.LeadingSymbol != nil {
-		out.WriteString(renderDetailSpan(*line.LeadingSymbol, themeName, selected))
+		out.WriteString(renderDetailSpan(*line.LeadingSymbol, themeName, background))
 	}
 	for _, span := range line.Spans {
-		out.WriteString(renderDetailSpan(span, themeName, selected))
+		out.WriteString(renderDetailSpan(span, themeName, background))
 	}
 	return out.String()
 }
 
-func renderDetailSpan(span transcriptrender.Span, themeName string, selected bool) string {
-	resolved := transcriptrender.ResolveSpanStyle(span, themeName)
-	style := lipgloss.NewStyle().Foreground(resolved.Foreground.Lipgloss())
-	if selected {
-		style = style.Background(theme.ResolvePalette(themeName).App.ModeBg.Lipgloss())
+type detailResolvedBackground struct {
+	color   theme.Color
+	present bool
+}
+
+func resolveDetailLineBackground(
+	background transcriptrender.LineBackground,
+	palette theme.ResolvedPalette,
+	selected bool,
+) detailResolvedBackground {
+	switch background {
+	case transcriptrender.LineBackgroundDefault:
+		if selected {
+			return detailResolvedBackground{color: palette.App.ModeBg, present: true}
+		}
+		return detailResolvedBackground{}
+	case transcriptrender.LineBackgroundDiffAdded:
+		return detailResolvedBackground{color: palette.Transcript.DiffAddBackground, present: true}
+	case transcriptrender.LineBackgroundDiffRemoved:
+		return detailResolvedBackground{color: palette.Transcript.DiffRemoveBackground, present: true}
+	default:
+		panic(fmt.Sprintf("render detail line with invalid background semantic %d", background))
 	}
-	if resolved.Faint {
-		style = style.Faint(true)
-	}
-	if resolved.Bold {
-		style = style.Bold(true)
-	}
-	if resolved.Italic {
-		style = style.Italic(true)
-	}
-	if resolved.Underline {
-		style = style.Underline(true)
+}
+
+func renderDetailSpan(
+	span transcriptrender.Span,
+	themeName string,
+	background detailResolvedBackground,
+) string {
+	style := transcriptSpanStyle(span, themeName)
+	if background.present {
+		style = style.Background(background.color.Lipgloss())
 	}
 	return style.Render(span.Text)
 }

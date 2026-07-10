@@ -9,10 +9,7 @@ import (
 )
 
 func run() error {
-	rawID, err := uuid.NewV7()
-	if err != nil {
-		return err
-	}
+	rawID := uuid.New()
 	windowID, err := pty.NewWindowID(rawID.String())
 	if err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/transcriptdiag"
+	"core/shared/valuecopy"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -359,7 +360,7 @@ func (m *uiModel) showTransientStatusNotice(notice uiStatusNotice) tea.Cmd {
 	m.transientStatus = strings.TrimSpace(notice.Text)
 	m.transientStatusKind = notice.Kind
 	m.transientStatusNoticeID = strings.TrimSpace(notice.NoticeID)
-	m.transientStatusRequestID = cloneUUID(notice.RequestID)
+	m.transientStatusRequestID = valuecopy.Pointer(notice.RequestID)
 	if notice.Duration <= 0 {
 		return nil
 	}
