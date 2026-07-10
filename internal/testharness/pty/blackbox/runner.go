@@ -310,7 +310,7 @@ type cleanupSupervisor struct {
 }
 
 func (s cleanupSupervisor) finish(result *RunResult, dimensions Dimensions) {
-	s.finishUntil(result, dimensions, time.Now().Add(fixedWait))
+	s.finishUntil(result, dimensions, time.Now().Add(cleanupWait))
 }
 
 func (s cleanupSupervisor) finishUntil(result *RunResult, dimensions Dimensions, deadline time.Time) {
@@ -381,7 +381,7 @@ func (cleanupSupervisor) stopOwners(session *driver.Session, environment *Isolat
 			incomplete = appendCleanupFailure(incomplete, "server_terminate", err)
 		}
 	}
-	graceDeadline := deadline.Add(-fixedWait / 2)
+	graceDeadline := time.Now().Add(time.Until(deadline) / 2)
 	waitForOwners(graceDeadline, session, environment)
 	if session != nil {
 		select {

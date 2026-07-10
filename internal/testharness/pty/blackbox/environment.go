@@ -25,6 +25,7 @@ import (
 )
 
 const fixedWait = 500 * time.Millisecond
+const cleanupWait = 10 * time.Second
 
 var directHTTPClient = &http.Client{
 	Transport: &http.Transport{Proxy: nil},
