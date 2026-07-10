@@ -83,6 +83,14 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 			}
 		}
 	}()
+	if err := environment.WaitReady(); err != nil {
+		result.Err = err
+		return result
+	}
+	if err := environment.BindProject(); err != nil {
+		result.Err = err
+		return result
+	}
 	clientEnvironment, err := environment.ClientEnvironment()
 	if err != nil {
 		result.Err = fmt.Errorf("build client environment: %w", err)

@@ -56,38 +56,35 @@ func NewIsolatedEnvironment(serverBinary string, operations []RequiredOperation)
 	if err != nil {
 		return nil, fmt.Errorf("create isolated root: %w", err)
 	}
+	environment := &IsolatedEnvironment{Root: root}
+	fail := func(cause error) (*IsolatedEnvironment, error) {
+		_ = cleanup(nil, environment, false, time.Now().Add(fixedWait))
+		return nil, fmt.Errorf("%w; run_root=%s", cause, root)
+	}
 	workspace := filepath.Join(root, "workspace")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
-		return nil, fmt.Errorf("create isolated workspace: %w", err)
+		return fail(fmt.Errorf("create isolated workspace: %w", err))
 	}
 	if err := os.WriteFile(filepath.Join(root, "config.toml"), harnessConfigTemplate, 0o600); err != nil {
-		return nil, fmt.Errorf("copy harness config template: %w", err)
+		return fail(fmt.Errorf("copy harness config template: %w", err))
 	}
 	stub, err := StartResponsesStub(operations)
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
+	environment.Workspace = workspace
+	environment.Stub = stub
 	host, port, err := reserveLoopbackPort()
 	if err != nil {
-		stub.Close()
-		return nil, err
+		return fail(err)
 	}
 	server, err := startServer(serverBinary, root, host, port, stub.URL())
 	if err != nil {
-		stub.Close()
-		return nil, err
+		return fail(err)
 	}
-	environment := &IsolatedEnvironment{
-		Root: root, Workspace: workspace, Host: host, Port: port, Stub: stub, Server: server,
-	}
-	if err := environment.WaitReady(); err != nil {
-		environment.Close()
-		return nil, fmt.Errorf("%w; run_root=%s", err, root)
-	}
-	if err := environment.BindProject(); err != nil {
-		environment.Close()
-		return nil, fmt.Errorf("%w; run_root=%s", err, root)
-	}
+	environment.Host = host
+	environment.Port = port
+	environment.Server = server
 	return environment, nil
 }
 
@@ -177,18 +174,6 @@ func (e *IsolatedEnvironment) BindProject() error {
 		return fmt.Errorf("isolated project binding is not bound: kind=%s", plan.Kind)
 	}
 	return nil
-}
-
-func (e *IsolatedEnvironment) Close() {
-	if e == nil {
-		return
-	}
-	if e.Stub != nil {
-		e.Stub.Close()
-	}
-	if e.Server != nil {
-		e.Server.Terminate()
-	}
 }
 
 func (s *ServerHandle) Done() <-chan struct{} {
