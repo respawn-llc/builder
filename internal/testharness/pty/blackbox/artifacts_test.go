@@ -48,7 +48,10 @@ func TestPublishFailureArtifactsRejectsContendedPublicationLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create publication lock: %v", err)
 	}
-	t.Cleanup(func() { _ = lock.Close() })
+	t.Cleanup(func() {
+		_ = lock.Close()
+		_ = os.Remove(filepath.Join(artifactRoot, "publish.lock"))
+	})
 
 	capture, err := analyzer.NewCapture(analyzer.MustDimensions(1, 1), nil)
 	if err != nil {
