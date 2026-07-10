@@ -71,6 +71,31 @@ func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
 	}
 }
 
+func TestPlainShellRenderHintSkipsSyntaxHighlighting(t *testing.T) {
+	row := toolRow("write_stdin", clientui.ToolPresentationShell, "Polled session 1149 for 2s", false)
+	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindPlain}
+	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed, ModeDetailExpanded} {
+		rendered := RenderCommittedRow(row, 120, "", mode)
+		if len(rendered.Lines) == 0 {
+			t.Fatalf("mode %v rendered no plain shell row lines", mode)
+		}
+		assertShellLineIsPlainText(t, rendered.Lines[0])
+	}
+
+	pending := RenderPendingTool(clientui.TranscriptToolStart{
+		ToolCallID: "b5c34536-1994-46bd-a3e4-839402a5ee1e",
+		ToolName:   "write_stdin",
+		ToolPresentation: &clientui.ToolCallMeta{
+			ToolName:     "write_stdin",
+			Presentation: clientui.ToolPresentationShell,
+			Command:      "Polled session 1149 for 2s",
+			CompactText:  "Polled session 1149 for 2s",
+			RenderHint:   &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindPlain},
+		},
+	}, 120, "⢎ ")
+	assertShellLineIsPlainText(t, pending)
+}
+
 func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -111,6 +136,20 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 			}, 120, "⢎ ")
 			assertShellLineHasTypedSyntax(t, pending)
 		})
+	}
+}
+
+func assertShellLineIsPlainText(t *testing.T, line Line) {
+	t.Helper()
+	if len(line.Spans) < 2 {
+		t.Fatalf("plain shell line has no body spans: %+v", line)
+	}
+	for _, span := range line.Spans[1:] {
+		if span.Style.Kind != SpanStyleSemantic ||
+			span.Style.SemanticRole != StyleRoleToolShell ||
+			!span.Style.Has(SpanAttributeFaint) {
+			t.Fatalf("plain shell body used syntax styling: %+v", line.Spans)
+		}
 	}
 }
 

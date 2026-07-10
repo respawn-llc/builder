@@ -120,7 +120,7 @@ func textLines(role StyleRole, lines []string, meta toolMeta) []Line {
 	out := make([]Line, 0, len(lines))
 	for _, line := range lines {
 		if role == StyleRoleToolShell {
-			out = append(out, Line{Spans: shellSyntaxSpans(line, meta)})
+			out = append(out, Line{Spans: shellInputSpans(line, meta)})
 			continue
 		}
 		out = append(out, Line{Spans: []Span{roleSpan(line, role)}})

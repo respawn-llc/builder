@@ -7,6 +7,13 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 )
 
+func shellInputSpans(line string, meta toolMeta) []Span {
+	if meta.RenderHint != nil && meta.RenderHint.Kind == transcript.ToolRenderKindPlain {
+		return []Span{SemanticSpan(line, StyleRoleToolShell, SpanAttributeFaint)}
+	}
+	return shellSyntaxSpans(line, meta)
+}
+
 func shellSyntaxSpans(line string, meta toolMeta) []Span {
 	fallback := SemanticStyle(StyleRoleToolShell, SpanAttributeFaint)
 	lexer := shellSyntaxLexer(meta)
