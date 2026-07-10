@@ -80,47 +80,56 @@ func (r uiRuntimeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 }
 
 func (m *uiModel) handleDetailTranscriptLoad(msg detailTranscriptLoadMsg) tea.Cmd {
+	pending, ok := m.takePendingDetailTranscriptRequest(msg.requestID)
+	if !ok {
+		return nil
+	}
 	if msg.err != nil {
 		return m.sendTransientStatusWithNoticeID(msg.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
-	if !m.detailTranscriptResponseCurrent(msg.sessionID, msg.page.SessionID) {
-		return nil
+	clearLoadingCmd := m.clearDetailTranscriptLoadingNotice(msg.requestID)
+	m.applyDetailTranscriptLoad(pending.sessionID, pending.request, msg.page)
+	return clearLoadingCmd
+}
+
+func (m *uiModel) applyDetailTranscriptLoad(requestSessionID string, request clientui.TranscriptPageRequest, responsePage clientui.TranscriptPage) {
+	if !m.detailTranscriptResponseCurrent(requestSessionID, responsePage.SessionID) {
+		return
 	}
-	if pageRequestEqual(m.detailTranscript.lastRequest, msg.request) && m.detailTranscript.matchesPage(msg.page) {
-		m.detailTranscript.refreshEdgeCursors(msg.page)
-		return nil
+	if pageRequestEqual(m.detailTranscript.lastRequest, request) && m.detailTranscript.matchesPage(responsePage) {
+		m.detailTranscript.refreshEdgeCursors(responsePage)
+		return
 	}
-	if msg.request.Cursor == nil && msg.request.NewerCursor == nil && m.detailTranscript.loaded && !transcriptPageSessionChanged(m.detailTranscript.sessionID, msg.page.SessionID) {
-		m.detailTranscript.lastRequest = msg.request
-		return nil
+	if request.Cursor == nil && request.NewerCursor == nil && m.detailTranscript.loaded && !transcriptPageSessionChanged(m.detailTranscript.sessionID, responsePage.SessionID) {
+		m.detailTranscript.lastRequest = request
+		return
 	}
 	anchor := tui.DetailTranscriptAnchorDefault
 	prependedEntries := 0
 	var trimmedFrontEntries []clientui.ChatEntry
-	if msg.request.NewerCursor != nil {
-		result := m.detailTranscript.appendCursorPage(msg.page)
+	if request.NewerCursor != nil {
+		result := m.detailTranscript.appendCursorPage(responsePage)
 		trimmedFrontEntries = result.trimmedFrontEntries
 		anchor = tui.DetailTranscriptAnchorPreserve
-	} else if msg.request.Cursor != nil {
-		result := m.detailTranscript.prependCursorPage(msg.page)
+	} else if request.Cursor != nil {
+		result := m.detailTranscript.prependCursorPage(responsePage)
 		prependedEntries = result.addedEntries
 		trimmedFrontEntries = result.trimmedFrontEntries
 		anchor = tui.DetailTranscriptAnchorPreserve
 	} else {
-		m.detailTranscript.apply(msg.page)
+		m.detailTranscript.apply(responsePage)
 	}
-	m.detailTranscript.lastRequest = msg.request
+	m.detailTranscript.lastRequest = request
 	page := m.detailTranscript.page()
-	page.SessionID = msg.page.SessionID
-	page.SessionName = msg.page.SessionName
-	page.ConversationFreshness = msg.page.ConversationFreshness
+	page.SessionID = responsePage.SessionID
+	page.SessionName = responsePage.SessionName
+	page.ConversationFreshness = responsePage.ConversationFreshness
 	m.forwardToView(tui.SetDetailTranscriptPageMsg{
 		Page:                  page,
 		Anchor:                anchor,
 		PrependedEntriesCount: prependedEntries,
 		TrimmedFrontEntries:   trimmedFrontEntries,
 	})
-	return nil
 }
 
 func (m *uiModel) detailTranscriptResponseCurrent(requestSessionID, responseSessionID string) bool {

@@ -1,19 +1,15 @@
 package app
 
 import (
-	"context"
 	"core/cli/tui"
-	"core/shared/clientui"
-	"core/shared/serverapi"
-	"errors"
 	"os"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-var writeTerminalSequence = func(sequence string) {
-	_, _ = os.Stdout.WriteString(sequence)
+var writeTerminalSequence = func(sequence string) error {
+	_, err := os.Stdout.WriteString(sequence)
+	return err
 }
 
 func (m *uiModel) toggleTranscriptMode() tea.Cmd {
@@ -80,27 +76,6 @@ func (m *uiModel) detailLoadCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
 	return m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
 }
 
-func (m *uiModel) loadDetailTranscriptPageCmd(req clientui.TranscriptPageRequest) tea.Cmd {
-	sessionID := strings.TrimSpace(m.sessionID)
-	if sessionID == "" && m.engine != nil {
-		sessionID = strings.TrimSpace(m.engine.SessionView().SessionID)
-	}
-	client := m.statusConfig.SessionViews
-	return func() tea.Msg {
-		if client == nil {
-			return detailTranscriptLoadMsg{sessionID: sessionID, request: req, err: errors.New("session view client is required")}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), uiRuntimeHydrationReadTimeout)
-		defer cancel()
-		resp, err := client.GetSessionTranscriptPage(ctx, serverapi.SessionTranscriptPageRequest{
-			SessionID:   sessionID,
-			Cursor:      req.Cursor,
-			NewerCursor: req.NewerCursor,
-		})
-		return detailTranscriptLoadMsg{sessionID: sessionID, request: req, page: resp.Transcript, err: err}
-	}
-}
-
 func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {
 	filtered := make([]tea.Cmd, 0, len(cmds))
 	for _, cmd := range cmds {
@@ -126,14 +101,18 @@ func (m *uiModel) altScreenCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
 
 func enableAlternateScrollCmd() tea.Cmd {
 	return func() tea.Msg {
-		writeTerminalSequence("\x1b[?1007h")
+		if err := writeTerminalSequence("\x1b[?1007h"); err != nil {
+			return terminalSequenceWriteErrMsg{err: err}
+		}
 		return nil
 	}
 }
 
 func disableAlternateScrollCmd() tea.Cmd {
 	return func() tea.Msg {
-		writeTerminalSequence("\x1b[?1007l")
+		if err := writeTerminalSequence("\x1b[?1007l"); err != nil {
+			return terminalSequenceWriteErrMsg{err: err}
+		}
 		return nil
 	}
 }

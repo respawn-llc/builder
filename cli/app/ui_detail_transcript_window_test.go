@@ -23,11 +23,11 @@ func TestDetailModeTransitionLoadsServerBackedTranscriptPage(t *testing.T) {
 		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
 	)
 	model.view = tui.NewModel()
-	if cmd := model.detailLoadCmdForModeTransition(tui.ModeOngoing, tui.ModeDetail); cmd == nil {
+	cmd := model.detailLoadCmdForModeTransition(tui.ModeOngoing, tui.ModeDetail)
+	if cmd == nil {
 		t.Fatal("detail transition did not create a transcript page load command")
 	}
 
-	cmd := model.loadDetailTranscriptPageCmd(clientui.TranscriptPageRequest{})
 	for _, msg := range collectCmdMessages(t, cmd) {
 		if load, ok := msg.(detailTranscriptLoadMsg); ok {
 			model = updateUIModel(t, model, load)
@@ -63,8 +63,8 @@ func TestDetailTranscriptLoadMergesAdjacentCursorPages(t *testing.T) {
 		Entries:      []clientui.ChatEntry{{Role: "user", Text: "older"}},
 	}
 
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: newest})
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}, page: older})
+	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, newest)
+	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}, older)
 
 	got := model.detailTranscript.page()
 	wantEntries := []clientui.ChatEntry{
@@ -98,9 +98,9 @@ func TestDetailTranscriptLoadIgnoresDuplicateAdjacentCursorResponse(t *testing.T
 	}
 	request := clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}
 
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: newest})
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: request, page: older})
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: request, page: older})
+	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, newest)
+	model.applyDetailTranscriptLoad("", request, older)
+	model.applyDetailTranscriptLoad("", request, older)
 
 	got := model.detailTranscript.page().Entries
 	want := []clientui.ChatEntry{
@@ -133,9 +133,9 @@ func TestDetailTranscriptDefaultRefreshDoesNotCollapseResidentWindow(t *testing.
 	refreshedNewest := newest
 	refreshedNewest.Entries = []clientui.ChatEntry{{Role: "assistant", Text: "newer refreshed\nline two\nline three\nline four"}}
 
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: newest})
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}, page: older})
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: refreshedNewest})
+	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, newest)
+	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}, older)
+	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, refreshedNewest)
 
 	got := model.detailTranscript.page().Entries
 	want := []clientui.ChatEntry{
@@ -174,14 +174,14 @@ func TestDetailTranscriptDefaultRefreshDoesNotMutateViewLocalState(t *testing.T)
 	refreshedNewest := newest
 	refreshedNewest.Entries = []clientui.ChatEntry{{Role: "assistant", Text: "newer refreshed\nline two\nline three\nline four"}}
 
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: newest})
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}, page: older})
+	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, newest)
+	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}, older)
 	model.view = mustUpdateTUIModel(t, model.view, tea.KeyMsg{Type: tea.KeyEnter})
 	if got := model.view.DetailSelectionAction(); got != tui.DetailSelectionActionCollapse {
 		t.Fatalf("detail selection action after expand = %v, want collapse", got)
 	}
 
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: refreshedNewest})
+	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, refreshedNewest)
 
 	if got := model.view.DetailSelectionAction(); got != tui.DetailSelectionActionCollapse {
 		t.Fatalf("detail selection action after default refresh = %v, want UI-local expansion preserved", got)
@@ -282,7 +282,7 @@ func TestDetailTranscriptPageDeepClonesPatchRender(t *testing.T) {
 		}},
 	}
 
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: page})
+	model.applyDetailTranscriptLoad("", clientui.TranscriptPageRequest{}, page)
 	sourcePatch.Files[0].Diff[0] = "source changed"
 	firstRead := model.detailTranscript.page()
 	if got := firstRead.Entries[0].ToolCall.PatchRender.Files[0].Diff[0]; got != "old" {
@@ -331,23 +331,23 @@ func detailTestEntries(first int, last int) []clientui.ChatEntry {
 
 func TestDetailTranscriptLoadIgnoresStaleSessionResponse(t *testing.T) {
 	model := newProjectedClosedUIModel(&runtimeControlFakeClient{}, WithUISessionID("session-current"))
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{
-		sessionID: "session-current",
-		request:   clientui.TranscriptPageRequest{},
-		page: clientui.TranscriptPage{
+	model.applyDetailTranscriptLoad(
+		"session-current",
+		clientui.TranscriptPageRequest{},
+		clientui.TranscriptPage{
 			SessionID: "session-current",
 			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "current"}},
 		},
-	})
+	)
 
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{
-		sessionID: "session-stale",
-		request:   clientui.TranscriptPageRequest{},
-		page: clientui.TranscriptPage{
+	model.applyDetailTranscriptLoad(
+		"session-stale",
+		clientui.TranscriptPageRequest{},
+		clientui.TranscriptPage{
 			SessionID: "session-stale",
 			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "stale"}},
 		},
-	})
+	)
 
 	got := model.detailTranscript.page().Entries
 	want := []clientui.ChatEntry{{Role: "assistant", Text: "current"}}
@@ -358,14 +358,14 @@ func TestDetailTranscriptLoadIgnoresStaleSessionResponse(t *testing.T) {
 
 func TestDetailTranscriptIgnoresRuntimeCommittedChangesUntilPageIsRequested(t *testing.T) {
 	model := newProjectedClosedUIModel(&runtimeControlFakeClient{}, WithUISessionID("session-1"))
-	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{
-		sessionID: "session-1",
-		request:   clientui.TranscriptPageRequest{},
-		page: clientui.TranscriptPage{
+	model.applyDetailTranscriptLoad(
+		"session-1",
+		clientui.TranscriptPageRequest{},
+		clientui.TranscriptPage{
 			SessionID: "session-1",
 			Entries:   []clientui.ChatEntry{{Role: "assistant", Text: "loaded page"}},
 		},
-	})
+	)
 
 	got := model.detailTranscript.page().Entries
 	want := []clientui.ChatEntry{{Role: "assistant", Text: "loaded page"}}

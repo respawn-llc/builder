@@ -12,6 +12,7 @@ import (
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 )
 
 type uiModel struct {
@@ -182,17 +183,18 @@ type uiStatusFeatureState struct {
 	clipboardImagePaster        uiClipboardImagePaster
 	clipboardTextCopier         uiClipboardTextCopier
 
-	transientStatus         string
-	transientStatusKind     uiStatusNoticeKind
-	transientStatusNoticeID string
-	transientStatusToken    uint64
-	transientStatusQueue    []uiStatusNotice
-	localNoticeSequence     uint64
-	startupUpdateNotice     bool
-	startupUpdateShown      bool
-	debugKeys               bool
-	debugMode               bool
-	transcriptDiagnostics   bool
+	transientStatus          string
+	transientStatusKind      uiStatusNoticeKind
+	transientStatusNoticeID  string
+	transientStatusRequestID *uuid.UUID
+	transientStatusToken     uint64
+	transientStatusQueue     []uiStatusNotice
+	localNoticeSequence      uint64
+	startupUpdateNotice      bool
+	startupUpdateShown       bool
+	debugKeys                bool
+	debugMode                bool
+	transcriptDiagnostics    bool
 }
 
 type uiTranscriptFeatureState struct {
@@ -203,6 +205,7 @@ type uiTranscriptFeatureState struct {
 	runtimeMainViewPendingSet    bool
 	runtimeMainViewPending       runtimeMainViewRefreshRequest
 	detailTranscript             uiDetailTranscriptWindow
+	pendingDetailTranscript      *uiPendingDetailTranscriptRequest
 }
 
 type uiKeyboardFeatureState struct {

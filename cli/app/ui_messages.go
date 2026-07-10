@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"core/shared/clientui"
+
+	"github.com/google/uuid"
 )
 
 type submitDoneMsg struct {
@@ -204,10 +206,13 @@ const (
 )
 
 type detailTranscriptLoadMsg struct {
-	sessionID string
-	request   clientui.TranscriptPageRequest
+	requestID uuid.UUID
 	page      clientui.TranscriptPage
 	err       error
+}
+
+type terminalSequenceWriteErrMsg struct {
+	err error
 }
 
 type runLoggerDiagnosticMsg struct {
@@ -269,10 +274,11 @@ const (
 )
 
 type uiStatusNotice struct {
-	Text     string
-	Kind     uiStatusNoticeKind
-	Duration time.Duration
-	NoticeID string
+	Text      string
+	Kind      uiStatusNoticeKind
+	Duration  time.Duration
+	NoticeID  string
+	RequestID *uuid.UUID
 }
 
 type uiStatusNoticeDelivery uint8

@@ -42,6 +42,37 @@ func (blockingSessionViewClient) GetSessionTranscriptPage(ctx context.Context, _
 	return serverapi.SessionTranscriptPageResponse{}, ctx.Err()
 }
 
+type controlledTranscriptPageResult struct {
+	response serverapi.SessionTranscriptPageResponse
+	err      error
+}
+
+type controlledTranscriptPageClient struct {
+	started chan serverapi.SessionTranscriptPageRequest
+	results chan controlledTranscriptPageResult
+}
+
+func newControlledTranscriptPageClient() *controlledTranscriptPageClient {
+	return &controlledTranscriptPageClient{
+		started: make(chan serverapi.SessionTranscriptPageRequest, 8),
+		results: make(chan controlledTranscriptPageResult, 8),
+	}
+}
+
+func (c *controlledTranscriptPageClient) GetSessionMainView(context.Context, serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+	return serverapi.SessionMainViewResponse{}, nil
+}
+
+func (c *controlledTranscriptPageClient) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	c.started <- req
+	select {
+	case result := <-c.results:
+		return result.response, result.err
+	case <-ctx.Done():
+		return serverapi.SessionTranscriptPageResponse{}, ctx.Err()
+	}
+}
+
 type flakySessionViewClient struct {
 	mu        sync.Mutex
 	responses []serverapi.SessionMainViewResponse

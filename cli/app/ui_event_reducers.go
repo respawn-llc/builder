@@ -129,6 +129,12 @@ func (r uiInputAsyncFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		m.logf("prompt_history.persist_error err=%q stack=%s", msg.err.Error(), debug.Stack())
 		return handledUIFeatureUpdate(m, m.sendTransientStatusWithNoticeID("prompt history persistence failed: "+msg.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
+	case terminalSequenceWriteErrMsg:
+		if msg.err == nil {
+			return handledUIFeatureUpdate(m, nil)
+		}
+		m.logf("terminal.sequence_write_error err=%q stack=%s", msg.err.Error(), debug.Stack())
+		return handledUIFeatureUpdate(m, m.sendTransientStatusWithNoticeID("terminal control write failed: "+msg.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 	case committedEntryPersistDoneMsg:
 		m.observeRuntimeRequestResult(msg.err)
 		if msg.err == nil {

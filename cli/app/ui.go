@@ -262,6 +262,7 @@ func (m *uiModel) Close() {
 		m.pathReferenceSearch = nil
 		m.pathReferenceEvents = nil
 	}
+	_ = m.cancelPendingDetailTranscriptRequest()
 }
 
 func (m *uiModel) Transition() UITransition {
@@ -358,6 +359,10 @@ func (m *uiModel) showTransientStatusNotice(notice uiStatusNotice) tea.Cmd {
 	m.transientStatus = strings.TrimSpace(notice.Text)
 	m.transientStatusKind = notice.Kind
 	m.transientStatusNoticeID = strings.TrimSpace(notice.NoticeID)
+	m.transientStatusRequestID = cloneUUID(notice.RequestID)
+	if notice.Duration <= 0 {
+		return nil
+	}
 	return scheduleTransientStatusClear(notice.Duration, token)
 }
 
@@ -365,6 +370,7 @@ func (m *uiModel) advanceTransientStatusQueue() tea.Cmd {
 	m.transientStatus = ""
 	m.transientStatusKind = uiStatusNoticeInfo
 	m.transientStatusNoticeID = ""
+	m.transientStatusRequestID = nil
 	if len(m.transientStatusQueue) == 0 {
 		m.layout().syncViewport()
 		return nil
