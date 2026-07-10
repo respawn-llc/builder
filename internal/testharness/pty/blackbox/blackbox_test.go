@@ -22,6 +22,18 @@ func TestDecodeScenarioRejectsUnknownFieldsAndUnionEscapeHatches(t *testing.T) {
 	if err == nil {
 		t.Fatal("DecodeScenario accepted mixed action union")
 	}
+	_, err = blackbox.DecodeScenario([]byte(`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + uuid.New().String() + `","kind":"terminate_process","input":""}]}`))
+	if err == nil {
+		t.Fatal("DecodeScenario accepted explicitly empty mixed action union field")
+	}
+	_, err = blackbox.DecodeScenario([]byte(`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[],"actions":[{"id":"` + uuid.New().String() + `","kind":"wait","predicate":{"kind":"private_mode","mode":25,"enabled":true,"rows":0}}]}`))
+	if err == nil {
+		t.Fatal("DecodeScenario accepted an irrelevant predicate field")
+	}
+	_, err = blackbox.DecodeScenario([]byte(`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[{"id":"` + uuid.New().String() + `","route":"compact","stream":false}],"actions":[]}`))
+	if err == nil {
+		t.Fatal("DecodeScenario accepted explicitly irrelevant model operation field")
+	}
 }
 
 func TestResponsesStubConsumesTypedProbeAndRejectsUnconsumedQueue(t *testing.T) {

@@ -27,6 +27,7 @@ type RunResult struct {
 	Observation RunObservation
 	Capture     analyzer.Capture
 	RunRoot     string
+	ArtifactDir string
 	Err         error
 	Cleanup     *IncompleteCleanup
 }
@@ -72,6 +73,14 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 				result.Err = captureErr
 			}
 		}
+		if result.Err != nil && environment != nil && session != nil && result.Capture.ReadLoopDone {
+			artifactDir, artifactErr := publishFailureArtifacts(environment.Root, result.Capture, result.Observation.Analysis, result.Err, result.Cleanup)
+			if artifactErr != nil {
+				result.Cleanup = appendCleanupOwner(result.Cleanup, "artifact_publication")
+			} else {
+				result.ArtifactDir = artifactDir
+			}
+		}
 	}()
 	session, err = driver.StartSession(driver.SessionSpec{
 		Path:       request.ClientBinary,
@@ -95,6 +104,14 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 		return result
 	}
 	return result
+}
+
+func appendCleanupOwner(cleanup *IncompleteCleanup, owner string) *IncompleteCleanup {
+	if cleanup == nil {
+		return &IncompleteCleanup{Owners: []string{owner}}
+	}
+	cleanup.Owners = append(cleanup.Owners, owner)
+	return cleanup
 }
 
 func runActions(session *driver.Session, environment *IsolatedEnvironment, actions []Action) (RunObservation, error) {

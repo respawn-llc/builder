@@ -185,6 +185,38 @@ func (operation RequiredOperation) Validate() error {
 	return nil
 }
 
+func (operation *RequiredOperation) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		ID              uuid.UUID `json:"id"`
+		Route           Route     `json:"route"`
+		Probe           string    `json:"probe"`
+		Stream          bool      `json:"stream"`
+		Output          string    `json:"output"`
+		SessionCacheKey bool      `json:"session_cache_key"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	allowed := map[string]struct{}{"id": {}, "route": {}, "output": {}}
+	if raw.Route == RouteResponses {
+		allowed["probe"] = struct{}{}
+		allowed["stream"] = struct{}{}
+		allowed["session_cache_key"] = struct{}{}
+	}
+	if err := rejectUnknownJSONFields(data, allowed); err != nil {
+		return err
+	}
+	*operation = RequiredOperation{
+		ID:              raw.ID,
+		Route:           raw.Route,
+		Probe:           raw.Probe,
+		Stream:          raw.Stream,
+		Output:          raw.Output,
+		SessionCacheKey: raw.SessionCacheKey,
+	}
+	return nil
+}
+
 func (action Action) Validate() error {
 	if err := validateV4(action.ID, "action id"); err != nil {
 		return err
@@ -219,6 +251,49 @@ func (action Action) Validate() error {
 	return nil
 }
 
+func (action *Action) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		ID         uuid.UUID   `json:"id"`
+		Kind       ActionKind  `json:"kind"`
+		Input      *string     `json:"input"`
+		Dimensions *Dimensions `json:"dimensions"`
+		Predicate  *Predicate  `json:"predicate"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	allowed := map[string]struct{}{"id": {}, "kind": {}}
+	switch raw.Kind {
+	case ActionWait, ActionAssert:
+		allowed["predicate"] = struct{}{}
+	case ActionEnterInput:
+		allowed["input"] = struct{}{}
+	case ActionResize:
+		allowed["dimensions"] = struct{}{}
+	case ActionSubmitPrompt, ActionCancel, ActionTerminate, ActionWaitExit:
+	default:
+		return fmt.Errorf("unsupported action kind %q", raw.Kind)
+	}
+	if err := rejectUnknownJSONFields(data, allowed); err != nil {
+		return err
+	}
+	if raw.Kind == ActionEnterInput && raw.Input == nil {
+		return errors.New("enter_input input is required")
+	}
+	if (raw.Kind == ActionWait || raw.Kind == ActionAssert) && raw.Predicate == nil {
+		return errors.New("predicate action predicate is required")
+	}
+	if raw.Kind == ActionResize && raw.Dimensions == nil {
+		return errors.New("resize dimensions are required")
+	}
+	input := ""
+	if raw.Input != nil {
+		input = *raw.Input
+	}
+	*action = Action{ID: raw.ID, Kind: raw.Kind, Input: input, Dimensions: raw.Dimensions, Predicate: raw.Predicate}
+	return nil
+}
+
 func (predicate Predicate) Validate() error {
 	switch predicate.Kind {
 	case PredicateParseable, PredicateBlank, PredicateNonBlank, PredicatePromptReady, PredicateProcessExited, PredicateServerReady, PredicateModelConsumed, PredicateNoActiveModels:
@@ -226,14 +301,23 @@ func (predicate Predicate) Validate() error {
 			return fmt.Errorf("predicate %s includes irrelevant fields", predicate.Kind)
 		}
 	case PredicateDimensions:
+		if predicate.Mode != 0 || predicate.Enabled != nil || len(predicate.Children) != 0 {
+			return errors.New("dimensions predicate includes irrelevant fields")
+		}
 		if _, err := analyzer.NewDimensions(predicate.Rows, predicate.Cols); err != nil {
 			return err
 		}
 	case PredicatePrivateMode:
+		if predicate.Rows != 0 || predicate.Cols != 0 || len(predicate.Children) != 0 {
+			return errors.New("private_mode predicate includes irrelevant fields")
+		}
 		if predicate.Mode <= 0 || predicate.Enabled == nil {
 			return errors.New("private_mode requires positive mode and enabled")
 		}
 	case PredicateAll, PredicateAny:
+		if predicate.Rows != 0 || predicate.Cols != 0 || predicate.Mode != 0 || predicate.Enabled != nil {
+			return errors.New("composite predicate includes irrelevant fields")
+		}
 		if len(predicate.Children) == 0 {
 			return errors.New("composite predicate requires children")
 		}
@@ -244,6 +328,54 @@ func (predicate Predicate) Validate() error {
 		}
 	default:
 		return fmt.Errorf("unsupported predicate kind %q", predicate.Kind)
+	}
+	return nil
+}
+
+func (predicate *Predicate) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Kind     PredicateKind `json:"kind"`
+		Rows     int           `json:"rows"`
+		Cols     int           `json:"cols"`
+		Enabled  *bool         `json:"enabled"`
+		Mode     int           `json:"mode"`
+		Children []Predicate   `json:"children"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	allowed := map[string]struct{}{"kind": {}}
+	switch raw.Kind {
+	case PredicateParseable, PredicateBlank, PredicateNonBlank, PredicatePromptReady, PredicateProcessExited, PredicateServerReady, PredicateModelConsumed, PredicateNoActiveModels:
+	case PredicateDimensions:
+		allowed["rows"] = struct{}{}
+		allowed["cols"] = struct{}{}
+	case PredicatePrivateMode:
+		allowed["mode"] = struct{}{}
+		allowed["enabled"] = struct{}{}
+	case PredicateAll, PredicateAny:
+		allowed["children"] = struct{}{}
+	default:
+		return fmt.Errorf("unsupported predicate kind %q", raw.Kind)
+	}
+	if err := rejectUnknownJSONFields(data, allowed); err != nil {
+		return err
+	}
+	*predicate = Predicate{
+		Kind: raw.Kind, Rows: raw.Rows, Cols: raw.Cols, Enabled: raw.Enabled, Mode: raw.Mode, Children: raw.Children,
+	}
+	return nil
+}
+
+func rejectUnknownJSONFields(data []byte, allowed map[string]struct{}) error {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return err
+	}
+	for field := range object {
+		if _, ok := allowed[field]; !ok {
+			return fmt.Errorf("field %q is not valid for this tagged union variant", field)
+		}
 	}
 	return nil
 }
