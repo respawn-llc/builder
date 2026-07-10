@@ -8,12 +8,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestDetailTopEdgeRequestsOlderCursorPage(t *testing.T) {
+func TestDetailTopEdgeEmitsOlderPageDirection(t *testing.T) {
 	model := NewModel()
 	next, _ := model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
-		OlderCursor:  int64Ptr(64),
-		HasMoreAbove: true,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "current"}},
+		Entries: []clientui.ChatEntry{{Role: "assistant", Text: "current"}},
 	}})
 	model = next.(Model)
 	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
@@ -28,19 +26,17 @@ func TestDetailTopEdgeRequestsOlderCursorPage(t *testing.T) {
 	if !ok {
 		t.Fatalf("page request message type = %T", msg)
 	}
-	if request.Request.Cursor == nil || *request.Request.Cursor != 64 || request.Request.NewerCursor != nil {
-		t.Fatalf("page request = %#v, want cursor 64", request.Request)
+	if request.Direction != DetailTranscriptPageOlder {
+		t.Fatalf("page direction = %v, want older", request.Direction)
 	}
 }
 
-func TestDetailBottomEdgeRequestsNewerCursorPage(t *testing.T) {
+func TestDetailBottomEdgeEmitsNewerPageDirection(t *testing.T) {
 	model := NewModel()
 	next, _ := model.Update(SetViewportSizeMsg{Lines: 2, Width: 80})
 	model = next.(Model)
 	next, _ = model.Update(SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
-		NewerCursor:  int64Ptr(96),
-		HasMoreBelow: true,
-		Entries:      []clientui.ChatEntry{{Role: "user", Text: "one"}},
+		Entries: []clientui.ChatEntry{{Role: "user", Text: "one"}},
 	}})
 	model = next.(Model)
 	next, _ = model.Update(SetModeMsg{Mode: ModeDetail})
@@ -55,8 +51,8 @@ func TestDetailBottomEdgeRequestsNewerCursorPage(t *testing.T) {
 	if !ok {
 		t.Fatalf("page request message type = %T", msg)
 	}
-	if request.Request.NewerCursor == nil || *request.Request.NewerCursor != 96 || request.Request.Cursor != nil {
-		t.Fatalf("page request = %#v, want newer cursor 96", request.Request)
+	if request.Direction != DetailTranscriptPageNewer {
+		t.Fatalf("page direction = %v, want newer", request.Direction)
 	}
 }
 
@@ -419,8 +415,12 @@ func TestDetailCollapseClampsStoredScroll(t *testing.T) {
 		t.Fatalf("detail scroll after collapse = %d, want clamped max %d", got, maxScroll)
 	}
 	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if cmd != nil {
-		t.Fatal("down after collapse requested another page instead of staying within clamped page")
+	if cmd == nil {
+		t.Fatal("down after local collapse exhaustion did not emit a newer-page direction")
+	}
+	request, ok := cmd().(RequestDetailTranscriptPageMsg)
+	if !ok || request.Direction != DetailTranscriptPageNewer {
+		t.Fatalf("down after collapse message = %#v, want newer-page direction", request)
 	}
 }
 

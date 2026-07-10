@@ -131,7 +131,7 @@ func TestDetailTranscriptDefaultRefreshDoesNotCollapseResidentWindow(t *testing.
 		Entries:      []clientui.ChatEntry{{Role: "user", Text: "older"}},
 	}
 	refreshedNewest := newest
-	refreshedNewest.Entries = []clientui.ChatEntry{{Role: "assistant", Text: "newer refreshed"}}
+	refreshedNewest.Entries = []clientui.ChatEntry{{Role: "assistant", Text: "newer refreshed\nline two\nline three\nline four"}}
 
 	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: newest})
 	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}, page: older})
@@ -161,7 +161,7 @@ func TestDetailTranscriptDefaultRefreshDoesNotMutateViewLocalState(t *testing.T)
 		HasMoreAbove: true,
 		NewerCursor:  appInt64Ptr(80),
 		HasMoreBelow: false,
-		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "newer"}},
+		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "newer\nline two\nline three\nline four"}},
 	}
 	older := clientui.TranscriptPage{
 		SessionID:    "session-1",
@@ -172,7 +172,7 @@ func TestDetailTranscriptDefaultRefreshDoesNotMutateViewLocalState(t *testing.T)
 		Entries:      []clientui.ChatEntry{{Role: "user", Text: "older"}},
 	}
 	refreshedNewest := newest
-	refreshedNewest.Entries = []clientui.ChatEntry{{Role: "assistant", Text: "newer refreshed"}}
+	refreshedNewest.Entries = []clientui.ChatEntry{{Role: "assistant", Text: "newer refreshed\nline two\nline three\nline four"}}
 
 	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{}, page: newest})
 	model.handleDetailTranscriptLoad(detailTranscriptLoadMsg{request: clientui.TranscriptPageRequest{Cursor: appInt64Ptr(40)}, page: older})
@@ -189,7 +189,7 @@ func TestDetailTranscriptDefaultRefreshDoesNotMutateViewLocalState(t *testing.T)
 	got := model.detailTranscript.page().Entries
 	want := []clientui.ChatEntry{
 		{Role: "user", Text: "older"},
-		{Role: "assistant", Text: "newer"},
+		{Role: "assistant", Text: "newer\nline two\nline three\nline four"},
 	}
 	if !sameChatEntries(got, want) {
 		t.Fatalf("detail entries after default refresh = %#v, want stale resident window %#v", got, want)
@@ -384,8 +384,14 @@ func TestDetailEdgeRequestMessageLoadsAdjacentPage(t *testing.T) {
 		WithUISessionID("session-1"),
 		WithUIStatusConfig(uiStatusConfig{SessionViews: sessionViews}),
 	)
+	model.detailTranscript.replace(clientui.TranscriptPage{
+		SessionID:    "session-1",
+		OlderCursor:  appInt64Ptr(25),
+		HasMoreAbove: true,
+		Entries:      []clientui.ChatEntry{{Role: "assistant", Text: "current page"}},
+	})
 
-	next, cmd := model.Update(tui.RequestDetailTranscriptPageMsg{Request: clientui.TranscriptPageRequest{Cursor: appInt64Ptr(25)}})
+	next, cmd := model.Update(tui.RequestDetailTranscriptPageMsg{Direction: tui.DetailTranscriptPageOlder})
 	model = next.(*uiModel)
 	for _, msg := range collectCmdMessages(t, cmd) {
 		if load, ok := msg.(detailTranscriptLoadMsg); ok {
@@ -394,7 +400,10 @@ func TestDetailEdgeRequestMessageLoadsAdjacentPage(t *testing.T) {
 	}
 
 	got := model.detailTranscript.page().Entries
-	want := []clientui.ChatEntry{{Role: "user", Text: "older page"}}
+	want := []clientui.ChatEntry{
+		{Role: "user", Text: "older page"},
+		{Role: "assistant", Text: "current page"},
+	}
 	if !sameChatEntries(got, want) {
 		t.Fatalf("loaded adjacent entries = %#v, want %#v", got, want)
 	}

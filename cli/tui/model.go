@@ -43,8 +43,17 @@ type SetDetailTranscriptPageMsg struct {
 	TrimmedFrontEntries   []clientui.ChatEntry
 }
 
+type ResetDetailTranscriptMsg struct{}
+
+type DetailTranscriptPageDirection uint8
+
+const (
+	DetailTranscriptPageOlder DetailTranscriptPageDirection = iota + 1
+	DetailTranscriptPageNewer
+)
+
 type RequestDetailTranscriptPageMsg struct {
-	Request clientui.TranscriptPageRequest
+	Direction DetailTranscriptPageDirection
 }
 
 type DetailTranscriptPageAnchor uint8
@@ -73,19 +82,15 @@ func WithTheme(themeName string) Option {
 }
 
 type Model struct {
-	mode               Mode
-	viewportLines      int
-	viewportWidth      int
-	theme              string
-	detailScroll       int
-	detailPageLoaded   bool
-	detailOlderCursor  *int64
-	detailHasMoreAbove bool
-	detailNewerCursor  *int64
-	detailHasMoreBelow bool
-	detailEntries      []detailEntry
-	expanded           map[int]struct{}
-	selected           *int
+	mode             Mode
+	viewportLines    int
+	viewportWidth    int
+	theme            string
+	detailScroll     int
+	detailPageLoaded bool
+	detailEntries    []detailEntry
+	expanded         map[int]struct{}
+	selected         *int
 }
 
 func NewModel(opts ...Option) Model {
@@ -134,30 +139,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampDetailScroll()
 	case SetDetailTranscriptPageMsg:
 		m.applyDetailTranscriptPage(msg.Page, msg.Anchor, msg.PrependedEntriesCount, msg.TrimmedFrontEntries)
+	case ResetDetailTranscriptMsg:
+		m.resetDetailTranscript()
 	case tea.KeyMsg:
 		if m.mode == ModeDetail {
 			switch msg.Type {
 			case tea.KeyUp:
 				if m.detailScroll == 0 {
-					return m, m.detailPageRequestCmd(false)
+					return m, m.detailPageRequestCmd(DetailTranscriptPageOlder)
 				}
 				m.detailScroll = clampInt(m.detailScroll-1, 0, m.maxDetailScroll())
 				m.selectDetailViewportCenter()
 			case tea.KeyDown:
 				if m.detailScroll >= m.maxDetailScroll() {
-					return m, m.detailPageRequestCmd(true)
+					return m, m.detailPageRequestCmd(DetailTranscriptPageNewer)
 				}
 				m.detailScroll = clampInt(m.detailScroll+1, 0, m.maxDetailScroll())
 				m.selectDetailViewportCenter()
 			case tea.KeyPgUp:
 				if m.detailScroll == 0 {
-					return m, m.detailPageRequestCmd(false)
+					return m, m.detailPageRequestCmd(DetailTranscriptPageOlder)
 				}
 				m.detailScroll = clampInt(m.detailScroll-maxInt(1, m.viewportLines-1), 0, m.maxDetailScroll())
 				m.selectDetailViewportCenter()
 			case tea.KeyPgDown:
 				if m.detailScroll >= m.maxDetailScroll() {
-					return m, m.detailPageRequestCmd(true)
+					return m, m.detailPageRequestCmd(DetailTranscriptPageNewer)
 				}
 				m.detailScroll = clampInt(m.detailScroll+maxInt(1, m.viewportLines-1), 0, m.maxDetailScroll())
 				m.selectDetailViewportCenter()
@@ -224,10 +231,6 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 	trimmedFrontLineOffset := m.detailLineOffsetForEntryIndex(visibleTrimmedFrontEntries)
 	preservedEntryIndexShift := visiblePrependedEntries - visibleTrimmedFrontEntries
 	m.detailPageLoaded = true
-	m.detailOlderCursor = page.OlderCursor
-	m.detailHasMoreAbove = page.HasMoreAbove
-	m.detailNewerCursor = page.NewerCursor
-	m.detailHasMoreBelow = page.HasMoreBelow
 	m.detailEntries = m.detailEntries[:0]
 	for _, entry := range page.Entries {
 		if detail, ok := detailEntryFromChatEntry(entry); ok {
@@ -255,10 +258,8 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 		m.setSelectedDetailIndex(0)
 	case anchor == DetailTranscriptAnchorBottom:
 		m.setSelectedDetailIndex(len(m.detailEntries) - 1)
-	case !page.HasMoreBelow || page.NewerCursor == nil:
-		m.setSelectedDetailIndex(len(m.detailEntries) - 1)
 	default:
-		m.setSelectedDetailIndex(0)
+		m.setSelectedDetailIndex(len(m.detailEntries) - 1)
 	}
 	switch anchor {
 	case DetailTranscriptAnchorPreserve:
@@ -268,12 +269,16 @@ func (m *Model) applyDetailTranscriptPage(page clientui.TranscriptPage, anchor D
 	case DetailTranscriptAnchorBottom:
 		m.detailScroll = m.maxDetailScroll()
 	default:
-		if !page.HasMoreBelow || page.NewerCursor == nil {
-			m.detailScroll = m.maxDetailScroll()
-		} else {
-			m.detailScroll = 0
-		}
+		m.detailScroll = m.maxDetailScroll()
 	}
+}
+
+func (m *Model) resetDetailTranscript() {
+	m.detailPageLoaded = false
+	m.detailEntries = nil
+	m.expanded = nil
+	m.detailScroll = 0
+	m.clearSelectedDetailIndex()
 }
 
 func visibleDetailEntryCount(entries []clientui.ChatEntry, limit int) int {
@@ -293,20 +298,11 @@ func (anchor DetailTranscriptPageAnchor) valid() bool {
 		anchor == DetailTranscriptAnchorPreserve
 }
 
-func (m Model) detailPageRequestCmd(newer bool) tea.Cmd {
-	req := clientui.TranscriptPageRequest{}
-	if newer {
-		if !m.detailHasMoreBelow || m.detailNewerCursor == nil {
-			return nil
-		}
-		req.NewerCursor = m.detailNewerCursor
-	} else {
-		if !m.detailHasMoreAbove || m.detailOlderCursor == nil {
-			return nil
-		}
-		req.Cursor = m.detailOlderCursor
+func (m Model) detailPageRequestCmd(direction DetailTranscriptPageDirection) tea.Cmd {
+	if direction != DetailTranscriptPageOlder && direction != DetailTranscriptPageNewer {
+		return nil
 	}
-	return func() tea.Msg { return RequestDetailTranscriptPageMsg{Request: req} }
+	return func() tea.Msg { return RequestDetailTranscriptPageMsg{Direction: direction} }
 }
 
 func (m Model) detailEmptyLine() string {

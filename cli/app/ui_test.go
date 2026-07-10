@@ -681,7 +681,7 @@ func TestDetailModeStatusLineShowsSelectedExpandAction(t *testing.T) {
 	m.windowSizeKnown = true
 	m.layout().syncViewport()
 	m.forwardToView(tui.SetDetailTranscriptPageMsg{Page: clientui.TranscriptPage{
-		Entries: []clientui.ChatEntry{{Role: "assistant", Text: "line one\nline two"}},
+		Entries: []clientui.ChatEntry{{Role: "assistant", Text: "line one\nline two\nline three\nline four"}},
 	}})
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})

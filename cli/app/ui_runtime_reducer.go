@@ -58,7 +58,21 @@ func (r uiRuntimeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
 	case tui.RequestDetailTranscriptPageMsg:
-		cmd := m.loadDetailTranscriptPageCmd(msg.Request)
+		var (
+			request clientui.TranscriptPageRequest
+			ok      bool
+		)
+		switch msg.Direction {
+		case tui.DetailTranscriptPageOlder:
+			request, ok = m.detailTranscript.pageBefore()
+		case tui.DetailTranscriptPageNewer:
+			request, ok = m.detailTranscript.pageAfter()
+		}
+		if !ok {
+			m.layout().syncViewport()
+			return handledUIFeatureUpdate(m, nil)
+		}
+		cmd := m.loadDetailTranscriptPageCmd(request)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
 	}

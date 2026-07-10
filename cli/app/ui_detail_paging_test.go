@@ -28,8 +28,8 @@ func TestDetailModeKeyForwardingReturnsPageRequestCommand(t *testing.T) {
 	if !ok {
 		t.Fatalf("command message = %T, want detail page request", msg)
 	}
-	if request.Request.Cursor == nil || *request.Request.Cursor != 64 {
-		t.Fatalf("page request = %#v, want older cursor 64", request.Request)
+	if request.Direction != tui.DetailTranscriptPageOlder {
+		t.Fatalf("page request direction = %v, want older", request.Direction)
 	}
 }
 
