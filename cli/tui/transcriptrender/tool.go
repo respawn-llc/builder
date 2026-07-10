@@ -60,8 +60,8 @@ func RenderPendingTool(tool clientui.TranscriptToolStart, width int, spinner str
 
 type toolMeta struct {
 	transcript.ToolCallMeta
-	IsError            bool
-	BackgroundExitCode *int
+	IsError         bool
+	SymbolStyleRole *StyleRole
 }
 
 func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {

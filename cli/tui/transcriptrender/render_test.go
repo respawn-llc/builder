@@ -259,7 +259,7 @@ func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
 		{name: "workflow", messageType: clientui.MessageTypeWorkflowMode, wantRole: StyleRoleNoticePrimary, wantColor: ColorRolePrimary},
 		{name: "worktree enter", messageType: clientui.MessageTypeWorktreeMode, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
 		{name: "worktree exit", messageType: clientui.MessageTypeWorktreeModeExit, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
-		{name: "background shell completion", messageType: clientui.MessageTypeBackgroundNotice, wantRole: StyleRoleNoticeForegroundFaint, wantColor: ColorRoleForeground},
+		{name: "background shell completion", messageType: clientui.MessageTypeBackgroundNotice, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
 		{name: "subagents", messageType: clientui.MessageTypeSubagents, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
 		{name: "cache warning", reason: clientui.TranscriptNoticeCacheWarning, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
 		{name: "compaction reminder", messageType: clientui.MessageTypeCompactionSoonReminder, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
@@ -286,6 +286,40 @@ func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
 				t.Fatalf("notice color role = %v, want %v", gotColor, tt.wantColor)
 			}
 		})
+	}
+}
+
+func TestBackgroundNoticeUsesPrimaryInfoSymbolAndFullStrengthBody(t *testing.T) {
+	row := clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Severity: clientui.TranscriptNoticeInfo,
+			Data: clientui.TranscriptNoticeData{
+				MessageType:  clientui.MessageTypeBackgroundNotice,
+				CompactLabel: "background complete",
+			},
+		},
+	}
+
+	for _, mode := range []Mode{ModeOngoingCollapsed, ModeDetailCollapsed, ModeDetailExpanded} {
+		rendered := RenderCommittedRow(row, 80, "", mode)
+		if len(rendered.Lines) != 1 || rendered.Lines[0].LeadingSymbol == nil {
+			t.Fatalf("mode %v background notice = %+v, want one line with typed symbol", mode, rendered)
+		}
+		line := rendered.Lines[0]
+		if line.LeadingSymbol.Text != "ℹ" ||
+			line.LeadingSymbol.Style.SemanticRole != StyleRoleNoticePrimary ||
+			line.LeadingSymbol.Style.Has(SpanAttributeFaint) {
+			t.Fatalf("mode %v background symbol = %+v, want full-strength primary info symbol", mode, line.LeadingSymbol)
+		}
+		for _, span := range line.Spans {
+			if strings.TrimSpace(span.Text) == "" {
+				continue
+			}
+			if span.Style.SemanticRole != StyleRoleNoticeForeground || span.Style.Has(SpanAttributeFaint) {
+				t.Fatalf("mode %v background body span = %+v, want full-strength foreground", mode, span)
+			}
+		}
 	}
 }
 
@@ -897,7 +931,7 @@ func TestUserAssistantMarkdownCodeUsesPrimaryFullStrengthRole(t *testing.T) {
 	}
 }
 
-func TestBackgroundExitStatusChangesOnlySymbolMetadata(t *testing.T) {
+func TestBackgroundExitStatusDoesNotOverridePrimaryNoticeSymbol(t *testing.T) {
 	render := func(exitCode *int) Line {
 		row := clientui.TranscriptCommittedRow{
 			Kind: clientui.TranscriptRowNotice,
@@ -918,11 +952,10 @@ func TestBackgroundExitStatusChangesOnlySymbolMetadata(t *testing.T) {
 	if success.LeadingSymbol == nil || failure.LeadingSymbol == nil || missing.LeadingSymbol == nil {
 		t.Fatalf("background status lines lack typed symbols: success=%+v failure=%+v missing=%+v", success, failure, missing)
 	}
-	if success.LeadingSymbol.Style == failure.LeadingSymbol.Style {
-		t.Fatalf("typed success and failure statuses produced identical symbol metadata: success=%+v failure=%+v", success.LeadingSymbol, failure.LeadingSymbol)
-	}
-	if success.LeadingSymbol.Style != missing.LeadingSymbol.Style {
-		t.Fatalf("missing legacy status diverged from non-error symbol metadata: success=%+v missing=%+v", success.LeadingSymbol, missing.LeadingSymbol)
+	if success.LeadingSymbol.Style != failure.LeadingSymbol.Style ||
+		success.LeadingSymbol.Style != missing.LeadingSymbol.Style ||
+		success.LeadingSymbol.Style.SemanticRole != StyleRoleNoticePrimary {
+		t.Fatalf("exit status changed primary background symbol metadata: success=%+v failure=%+v missing=%+v", success.LeadingSymbol, failure.LeadingSymbol, missing.LeadingSymbol)
 	}
 	if !slices.Equal(success.Spans, failure.Spans) || !slices.Equal(success.Spans, missing.Spans) {
 		t.Fatalf("exit status changed background body metadata: success=%+v failure=%+v missing=%+v", success, failure, missing)

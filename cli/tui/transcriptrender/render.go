@@ -36,8 +36,9 @@ func renderCommittedRow(
 	case clientui.TranscriptRowNotice:
 		role, text := noticeRoleAndText(row.Notice, row.Visibility, mode)
 		meta := toolMeta{}
-		if row.Notice != nil {
-			meta.BackgroundExitCode = row.Notice.Data.BackgroundExitCode
+		if row.Notice != nil && row.Notice.Data.MessageType == clientui.MessageTypeBackgroundNotice {
+			symbolRole := StyleRoleNoticePrimary
+			meta.SymbolStyleRole = &symbolRole
 		}
 		return Row{Group: clientui.TranscriptRowNotice, Lines: renderTextBlockWithInlineMeta(role, text, "", width, mode, meta)}
 	default:
@@ -215,6 +216,9 @@ func roleSymbolStyleRole(role StyleRole, meta toolMeta) StyleRole {
 	if meta.IsError {
 		return StyleRoleToolError
 	}
+	if meta.SymbolStyleRole != nil {
+		return *meta.SymbolStyleRole
+	}
 	switch role {
 	case StyleRoleToolError:
 		return StyleRoleToolError
@@ -227,11 +231,6 @@ func roleSymbolStyleRole(role StyleRole, meta toolMeta) StyleRole {
 		StyleRoleToolPatch,
 		StyleRoleToolQuestion,
 		StyleRoleToolWebSearch:
-		return StyleRoleToolSuccess
-	case StyleRoleNoticeForegroundFaint:
-		if meta.BackgroundExitCode != nil && *meta.BackgroundExitCode != 0 {
-			return StyleRoleToolError
-		}
 		return StyleRoleToolSuccess
 	default:
 		return role
@@ -361,7 +360,7 @@ func noticeStyleRole(row *clientui.TranscriptNoticeRow) StyleRole {
 	case clientui.MessageTypeGoal, clientui.MessageTypeWorkflowMode:
 		return StyleRoleNoticePrimary
 	case clientui.MessageTypeBackgroundNotice:
-		return StyleRoleNoticeForegroundFaint
+		return StyleRoleNoticeForeground
 	case clientui.MessageTypeWorktreeMode,
 		clientui.MessageTypeWorktreeModeExit,
 		clientui.MessageTypeSubagents:
