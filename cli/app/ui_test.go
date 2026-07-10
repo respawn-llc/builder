@@ -643,6 +643,22 @@ func TestDetailModeHidesInputBox(t *testing.T) {
 	}
 }
 
+func TestTabInsideDetailReturnsToOngoingMode(t *testing.T) {
+	m := newProjectedStaticUIModel()
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	updated := next.(*uiModel)
+	if updated.view.Mode() != tui.ModeDetail {
+		t.Fatalf("mode=%q want detail", updated.view.Mode())
+	}
+
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = next.(*uiModel)
+	if updated.view.Mode() != tui.ModeOngoing {
+		t.Fatalf("mode=%q want ongoing after Tab", updated.view.Mode())
+	}
+}
+
 func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
 	m := newProjectedStaticUIModel(
 		WithUIModelName("gpt-5"),

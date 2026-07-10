@@ -54,7 +54,7 @@ func (c uiInputController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return c.handleIdleRollbackEsc()
-		case tea.KeyShiftTab, tea.KeyCtrlT:
+		case tea.KeyTab, tea.KeyShiftTab, tea.KeyCtrlT:
 			return m, m.toggleTranscriptMode()
 		case tea.KeyCtrlC:
 			// Preserve the normal interrupt/quit path below.
