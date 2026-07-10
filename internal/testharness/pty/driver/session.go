@@ -234,7 +234,7 @@ func (s *Session) run(dimensions analyzer.Dimensions) {
 func (s *Session) execute(command SessionCommand, assembler *analyzer.CaptureAssembler, stream *analyzer.Stream, buffer []byte, responder *terminalResponder) error {
 	switch command.Kind {
 	case SessionCommandWrite, SessionCommandRuntimeControlByte:
-		if _, err := s.ptmx.Write(command.Bytes); err != nil {
+		if err := s.writeAll(command.Bytes); err != nil {
 			return fmt.Errorf("write PTY command %s: %w", command.ID, err)
 		}
 		return nil
@@ -284,7 +284,7 @@ func (s *Session) drainReadable(buffer []byte, assembler *analyzer.CaptureAssemb
 				return feedErr
 			}
 			for _, reply := range responder.Feed(payload) {
-				if _, writeErr := s.ptmx.Write(reply); writeErr != nil {
+				if writeErr := s.writeAll(reply); writeErr != nil {
 					return fmt.Errorf("respond to terminal query: %w", writeErr)
 				}
 			}
@@ -308,6 +308,33 @@ func (s *Session) drainReadable(buffer []byte, assembler *analyzer.CaptureAssemb
 		}
 		return fmt.Errorf("read PTY: %w", err)
 	}
+}
+
+// writeAll is reactor-owned and does not report command completion until every
+// byte has been accepted by the nonblocking PTY. The bounded retry deadline
+// turns a saturated terminal into an explicit driver failure.
+func (s *Session) writeAll(payload []byte) error {
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for len(payload) > 0 {
+		count, err := s.ptmx.Write(payload)
+		if count > 0 {
+			payload = payload[count:]
+		}
+		if err == nil {
+			if count == 0 {
+				return errors.New("PTY write accepted zero bytes")
+			}
+			continue
+		}
+		if !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return errors.New("PTY write remained blocked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return nil
 }
 
 func (s *Session) emit(event SessionEvent) {
