@@ -118,6 +118,30 @@ func TestStatusLineTransientNoticeOvertakesDisconnect(t *testing.T) {
 	}
 }
 
+func TestStatusLineTransientNoticeReplacesRightAlignedReasoningSlot(t *testing.T) {
+	m := newStatusLineLadderTestModel()
+	m.transientStatus = "image pasted"
+	m.transientStatusKind = uiStatusNoticeSuccess
+
+	statusWithNotice := stripANSIAndTrimRight(m.layout().renderStatusLine(120, uiThemeStyles("dark")))
+	noticeIndex := strings.Index(statusWithNotice, "image pasted")
+	contextIndex := strings.Index(statusWithNotice, "42%")
+	if noticeIndex < 0 || contextIndex < 0 || noticeIndex >= contextIndex {
+		t.Fatalf("transient notice does not occupy the right-side slot before context: %q", statusWithNotice)
+	}
+	if strings.Contains(statusWithNotice, "reasoning-now") {
+		t.Fatalf("reasoning remained visible while transient notice occupied its slot: %q", statusWithNotice)
+	}
+
+	m.transientStatus = ""
+	statusWithReasoning := stripANSIAndTrimRight(m.layout().renderStatusLine(120, uiThemeStyles("dark")))
+	reasoningIndex := strings.Index(statusWithReasoning, "reasoning-now")
+	contextIndex = strings.Index(statusWithReasoning, "42%")
+	if reasoningIndex < 0 || contextIndex < 0 || reasoningIndex >= contextIndex {
+		t.Fatalf("reasoning did not return to the right-side slot before context: %q", statusWithReasoning)
+	}
+}
+
 func TestStatusLineInterruptedRendersAsNotice(t *testing.T) {
 	m := newProjectedStaticUIModel(
 		WithUIModelName("gpt-5"),

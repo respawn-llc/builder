@@ -26,10 +26,10 @@ func (l uiViewLayout) renderStatusLine(width int, style uiStyles) string {
 	segments := []statusLineSegment{
 		{text: style.meta.Render(l.statusBranchLabel()), priority: 9, side: statusLineSideLeft, order: 1},
 		{text: style.meta.Render(l.statusModelLabel()), priority: 8, side: statusLineSideLeft, order: 2},
-		{text: l.renderReasoningStatus(statusLineUnboundedWidth), priority: 7, side: statusLineSideLeft, order: 5},
+		{text: l.renderReasoningStatus(statusLineUnboundedWidth), priority: 7, side: statusLineSideRight, order: 1, kind: statusLineSegmentAttention},
 		{text: style.meta.Render(processCountLabel(m.processList.entries)), priority: 5, side: statusLineSideLeft, order: 3},
-		{text: l.renderStatusContextBar(style), priority: 4, side: statusLineSideRight, order: 2, kind: statusLineSegmentContextBar},
-		{text: l.renderStatusContextPercent(style), priority: 3, side: statusLineSideRight, order: 1, kind: statusLineSegmentContextPercent},
+		{text: l.renderStatusContextBar(style), priority: 4, side: statusLineSideRight, order: 3, kind: statusLineSegmentContextBar},
+		{text: l.renderStatusContextPercent(style), priority: 3, side: statusLineSideRight, order: 2, kind: statusLineSegmentContextPercent},
 		{text: l.renderDetailSelectionAction(style), priority: 10, side: statusLineSideRight, order: 0},
 		{text: l.renderHelpHint(style), priority: 10, side: statusLineSideRight, order: 0},
 	}
@@ -90,6 +90,7 @@ type statusLineSegmentKind uint8
 
 const (
 	statusLineSegmentDefault statusLineSegmentKind = iota
+	statusLineSegmentAttention
 	statusLineSegmentContextPercent
 	statusLineSegmentContextBar
 )
@@ -154,8 +155,13 @@ func statusLineSegmentsWithNotice(segments []statusLineSegment, notice string) [
 	if strings.TrimSpace(ansi.Strip(notice)) == "" {
 		return segments
 	}
-	out := append([]statusLineSegment(nil), segments...)
-	out = append(out, statusLineSegment{text: notice, priority: 6, side: statusLineSideLeft, order: 4})
+	out := make([]statusLineSegment, 0, len(segments))
+	for _, segment := range segments {
+		if segment.kind != statusLineSegmentAttention {
+			out = append(out, segment)
+		}
+	}
+	out = append(out, statusLineSegment{text: notice, priority: 6, side: statusLineSideRight, order: 1, kind: statusLineSegmentAttention})
 	return out
 }
 
