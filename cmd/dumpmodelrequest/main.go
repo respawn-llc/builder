@@ -186,6 +186,7 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	if forceProviderContract {
 		providerCapabilitiesOverride = &caps
 	}
+	headless := meta.HeadlessActive || workflowConfig != nil
 	wiring, err := runtimewire.NewRuntimeWiring(
 		store,
 		activeSettings,
@@ -196,7 +197,7 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		runtimewire.RuntimeWiringOptions{
 			Context:                             ctx,
 			Client:                              inspectionCapabilityClient{capabilities: caps},
-			Headless:                            workflowConfig != nil,
+			Headless:                            headless,
 			Sources:                             activeSources,
 			SkipContinuationAgentRoleValidation: resolved.SkipContinuationAgentRoleValidation,
 			ProviderCapabilitiesOverride:        providerCapabilitiesOverride,
@@ -287,6 +288,10 @@ func validateOpenAIResponsesInspectionProvider(caps llm.ProviderCapabilities) er
 		return fmt.Errorf("provider %q does not support OpenAI Responses payload inspection", caps.ProviderID)
 	}
 	return nil
+}
+
+func inspectionHeadlessMode(persistedHeadless, workflow bool) bool {
+	return persistedHeadless || workflow
 }
 
 func resolveOpenAIWirePayloadCapabilities(mode llm.OpenAIAuthMode, active config.Settings, providerOverride string) (llm.ProviderCapabilities, error) {

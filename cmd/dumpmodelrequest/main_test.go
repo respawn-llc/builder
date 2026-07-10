@@ -140,3 +140,15 @@ func TestResolveOpenAIWirePayloadCapabilitiesHonorsExplicitProviderOverride(t *t
 		t.Fatalf("provider id = %q, want %q", got, want)
 	}
 }
+
+func TestInspectionHeadlessModeIncludesPersistedHeadlessSessions(t *testing.T) {
+	if !inspectionHeadlessMode(true, false) {
+		t.Fatal("persisted headless session was not inspected as headless")
+	}
+	if !inspectionHeadlessMode(false, true) {
+		t.Fatal("workflow session was not inspected as headless")
+	}
+	if inspectionHeadlessMode(false, false) {
+		t.Fatal("interactive session was inspected as headless")
+	}
+}
