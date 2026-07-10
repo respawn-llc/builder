@@ -319,8 +319,12 @@ func TestSessionWriteCommandCompletesOnlyAfterLargePTYInputIsAccepted(t *testing
 	if !completed {
 		t.Fatal("large write command never completed")
 	}
-	if !bytes.Contains(capture.Raw, []byte("received:262144")) {
-		t.Fatalf("child did not receive the complete PTY payload: raw=%q", capture.Raw)
+	analysis, err := pty.Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if got := analysis.Screen.TextInRegion(pty.Region{Top: 0, Bottom: 1, Left: 0, Right: 15}); got != "received:262144" {
+		t.Fatalf("child receipt = %q, want complete payload acknowledgement", got)
 	}
 }
 
