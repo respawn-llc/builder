@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -37,6 +39,10 @@ func runMode(mode string) error {
 		fmt.Printf("received:%d", len(payload))
 	case "hang":
 		fmt.Print("ready")
+		time.Sleep(24 * time.Hour)
+	case "ignore-term":
+		signal.Ignore(syscall.SIGHUP, syscall.SIGTERM)
+		fmt.Print("\x1b[?25h")
 		time.Sleep(24 * time.Hour)
 	case "resize-order":
 		fmt.Print("before")
