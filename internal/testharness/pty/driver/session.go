@@ -119,7 +119,11 @@ func (s *Session) Capture() (analyzer.Capture, error) {
 	if s == nil {
 		return analyzer.Capture{}, errors.New("PTY session is required")
 	}
-	<-s.done
+	select {
+	case <-s.done:
+	default:
+		return analyzer.Capture{}, errors.New("PTY session capture is unavailable before reactor completion")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {

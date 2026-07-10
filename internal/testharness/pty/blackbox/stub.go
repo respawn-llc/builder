@@ -48,6 +48,7 @@ type ResponsesStub struct {
 	handlers   map[uint64]context.CancelFunc
 	nextHandle uint64
 	done       chan struct{}
+	events     chan struct{}
 }
 
 func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
@@ -60,6 +61,7 @@ func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
 		required: append([]RequiredOperation(nil), required...),
 		handlers: map[uint64]context.CancelFunc{},
 		done:     make(chan struct{}),
+		events:   make(chan struct{}, 1),
 	}
 	stub.server = &http.Server{
 		Handler:           http.HandlerFunc(stub.serveHTTP),
@@ -87,18 +89,40 @@ func (s *ResponsesStub) Done() <-chan struct{} {
 	return s.done
 }
 
+// Events notifies consumers that a predicate-relevant stub state transition
+// occurred. Consumers must always obtain the authoritative immutable state
+// through Snapshot after receiving it.
+func (s *ResponsesStub) Events() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	return s.events
+}
+
 func (s *ResponsesStub) Snapshot() StubSnapshot {
 	if s == nil {
 		return StubSnapshot{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	observed := make([]ObservedCall, len(s.observed))
+	for index, call := range s.observed {
+		headers := make(map[string][]string, len(call.Headers))
+		for name, values := range call.Headers {
+			headers[name] = append([]string(nil), values...)
+		}
+		observed[index] = ObservedCall{
+			Route:   call.Route,
+			Headers: headers,
+			Body:    append(json.RawMessage(nil), call.Body...),
+		}
+	}
 	return StubSnapshot{
 		RequiredIndex:  s.index,
 		RequiredTotal:  len(s.required),
 		ActiveRequests: s.active,
 		Failure:        s.failure,
-		Observed:       append([]ObservedCall(nil), s.observed...),
+		Observed:       observed,
 	}
 }
 
@@ -125,6 +149,7 @@ func (s *ResponsesStub) Close() {
 	}
 	s.handlers = map[uint64]context.CancelFunc{}
 	s.mu.Unlock()
+	s.notify()
 	_ = s.server.Close()
 }
 
@@ -171,12 +196,14 @@ func (s *ResponsesStub) beginHandler(parent context.Context) (uint64, context.Co
 	s.handlers[handle] = cancel
 	s.active++
 	s.mu.Unlock()
+	s.notify()
 	return handle, ctx, func() {
 		s.mu.Lock()
 		delete(s.handlers, handle)
 		s.active--
 		s.mu.Unlock()
 		cancel()
+		s.notify()
 	}
 }
 
@@ -206,6 +233,7 @@ func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) e
 		return errors.New("required response session_id and prompt_cache_key relation was not present")
 	}
 	s.index++
+	s.notify()
 	return nil
 }
 
@@ -241,6 +269,7 @@ func (s *ResponsesStub) recordFailure(err error) {
 	if s.failure == nil {
 		s.failure = err
 	}
+	s.notify()
 }
 
 func (s *ResponsesStub) recordObserved(call ObservedCall) {
@@ -248,6 +277,17 @@ func (s *ResponsesStub) recordObserved(call ObservedCall) {
 	defer s.mu.Unlock()
 	if len(s.observed) < maxModelOperations {
 		s.observed = append(s.observed, call)
+	}
+	s.notify()
+}
+
+func (s *ResponsesStub) notify() {
+	if s == nil {
+		return
+	}
+	select {
+	case s.events <- struct{}{}:
+	default:
 	}
 }
 

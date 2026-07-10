@@ -55,12 +55,6 @@ func NewIsolatedEnvironment(serverBinary string, operations []RequiredOperation)
 	if err != nil {
 		return nil, fmt.Errorf("create isolated root: %w", err)
 	}
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.RemoveAll(root)
-		}
-	}()
 	workspace := filepath.Join(root, "workspace")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		return nil, fmt.Errorf("create isolated workspace: %w", err)
@@ -93,7 +87,6 @@ func NewIsolatedEnvironment(serverBinary string, operations []RequiredOperation)
 		environment.Close()
 		return nil, fmt.Errorf("%w; run_root=%s", err, root)
 	}
-	cleanup = false
 	return environment, nil
 }
 

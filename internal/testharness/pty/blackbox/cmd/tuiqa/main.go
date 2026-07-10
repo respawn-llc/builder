@@ -38,7 +38,7 @@ func main() {
 		Scenario: scenario, Profile: blackbox.ClientProfile(*profile), ClientBinary: absoluteClient, ServerBinary: absoluteServer,
 	})
 	if result.Err != nil {
-		fmt.Fprintf(os.Stderr, "%v; run_root=%s; pty_raw=%q\n", result.Err, result.RunRoot, string(result.Capture.Raw))
+		fmt.Fprintf(os.Stderr, "%v; run_root=%s; artifacts=%s\n", result.Err, result.RunRoot, result.ArtifactDir)
 		os.Exit(1)
 	}
 }

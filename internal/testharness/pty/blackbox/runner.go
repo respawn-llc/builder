@@ -117,6 +117,7 @@ func appendCleanupOwner(cleanup *IncompleteCleanup, owner string) *IncompleteCle
 func runActions(session *driver.Session, environment *IsolatedEnvironment, actions []Action) (RunObservation, error) {
 	observation := RunObservation{ServerReady: true, Model: environment.Stub.Snapshot()}
 	events := session.Events()
+	modelEvents := environment.Stub.Events()
 	for index, action := range actions {
 		deadline := time.NewTimer(fixedWait)
 		commandID, commandPending, err := dispatchAction(session, action)
@@ -158,9 +159,10 @@ func runActions(session *driver.Session, environment *IsolatedEnvironment, actio
 						return observation, fmt.Errorf("command %s failed: %w", commandID, event.Err)
 					}
 				}
+			case <-modelEvents:
+				observation.Model = environment.Stub.Snapshot()
 			case <-deadline.C:
 				return observation, fmt.Errorf("action %d (%s) timed out after %s: private_modes=%v", index, action.Kind, fixedWait, privateModeState(observation.Analysis))
-			case <-time.After(5 * time.Millisecond):
 			}
 			if !commandPending && actionSatisfied(action, observation) {
 				deadline.Stop()
@@ -261,8 +263,40 @@ func cleanup(session *driver.Session, environment *IsolatedEnvironment, success 
 }
 
 func waitForOwners(deadline time.Time, session *driver.Session, environment *IsolatedEnvironment) {
-	for len(liveOwners(session, environment)) > 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+	for {
+		if len(liveOwners(session, environment)) == 0 {
+			return
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return
+		}
+		timer := time.NewTimer(remaining)
+		var clientDone <-chan struct{}
+		var serverDone <-chan struct{}
+		var stubDone <-chan struct{}
+		if session != nil {
+			clientDone = session.Done()
+		}
+		if environment != nil && environment.Server != nil {
+			serverDone = environment.Server.Done()
+		}
+		if environment != nil && environment.Stub != nil {
+			stubDone = environment.Stub.Done()
+		}
+		select {
+		case <-clientDone:
+		case <-serverDone:
+		case <-stubDone:
+		case <-timer.C:
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
 	}
 }
 
