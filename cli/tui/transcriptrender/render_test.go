@@ -817,21 +817,29 @@ func TestToolErrorRowsKeepAuthoritativeInputFirstAndErrorClassification(t *testi
 	row.Tool.ToolPresentation.Command = "cat /root/secret"
 	row.Tool.ToolPresentation.CompactText = "cat /root/secret"
 
-	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed} {
-		rendered := RenderCommittedRow(row, 80, "", mode)
+	tests := []struct {
+		mode        Mode
+		wantSummary string
+	}{
+		{mode: ModeOngoing},
+		{mode: ModeOngoingCollapsed},
+		{mode: ModeDetailCollapsed, wantSummary: "exit 1"},
+	}
+	for _, test := range tests {
+		rendered := RenderCommittedRow(row, 80, "", test.mode)
 		if len(rendered.Lines) == 0 {
-			t.Fatalf("mode %v rendered no lines", mode)
+			t.Fatalf("mode %v rendered no lines", test.mode)
 		}
-		assertFailedToolClassification(t, mode, rendered.Lines[0])
-		spans := rendered.Lines[0].Spans
-		if len(spans) < 4 {
-			t.Fatalf("mode %v rendered spans = %+v", mode, spans)
+		line := rendered.Lines[0]
+		assertFailedToolClassification(t, test.mode, line)
+		if test.wantSummary == "" {
+			if got, want := line.Plain(), "! cat /root/secret"; got != want {
+				t.Fatalf("mode %v failed tool line = %q, want %q", test.mode, got, want)
+			}
+			continue
 		}
-		if command := (Line{Spans: spans[1 : len(spans)-2]}).Plain(); command != "cat /root/secret" {
-			t.Fatalf("mode %v command = %q, want failed typed input", mode, command)
-		}
-		if meta := spans[len(spans)-1]; meta.Text != "exit 1" {
-			t.Fatalf("mode %v error summary = %q, want exit 1", mode, meta.Text)
+		if got := line.Spans[len(line.Spans)-1].Text; got != test.wantSummary {
+			t.Fatalf("mode %v failed tool summary = %q, want %q", test.mode, got, test.wantSummary)
 		}
 	}
 }
@@ -930,24 +938,32 @@ func TestPatchToolErrorKeepsAuthoritativeInputFirstAndErrorClassification(t *tes
 		SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go -1 +2", FileIndex: 0}},
 	}
 
-	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed} {
-		rendered := RenderCommittedRow(row, 120, "", mode)
+	tests := []struct {
+		mode        Mode
+		wantSummary string
+	}{
+		{mode: ModeOngoing},
+		{mode: ModeOngoingCollapsed},
+		{mode: ModeDetailCollapsed, wantSummary: "failed"},
+	}
+	for _, test := range tests {
+		rendered := RenderCommittedRow(row, 120, "", test.mode)
 		if len(rendered.Lines) == 0 {
-			t.Fatalf("mode %v rendered no lines", mode)
+			t.Fatalf("mode %v rendered no lines", test.mode)
 		}
-		assertFailedToolClassification(t, mode, rendered.Lines[0])
+		assertFailedToolClassification(t, test.mode, rendered.Lines[0])
 		if got, want := rendered.Lines[0].LeadingSymbol.Text, "⇄"; got != want {
-			t.Fatalf("mode %v patch error symbol = %q, want %q", mode, got, want)
+			t.Fatalf("mode %v patch error symbol = %q, want %q", test.mode, got, want)
 		}
-		spans := rendered.Lines[0].Spans
-		if len(spans) < 7 {
-			t.Fatalf("mode %v patch error spans = %+v", mode, spans)
+		line := rendered.Lines[0]
+		if test.wantSummary == "" {
+			if got, want := line.Plain(), "⇄ cli/tui/model.go -1 +2"; got != want {
+				t.Fatalf("mode %v failed patch line = %q, want %q", test.mode, got, want)
+			}
+			continue
 		}
-		if got, want := (Line{Spans: spans[1:6]}).Plain(), "cli/tui/model.go -1 +2"; got != want {
-			t.Fatalf("mode %v patch input = %q, want %q", mode, got, want)
-		}
-		if got := spans[len(spans)-1].Text; got != "failed" {
-			t.Fatalf("mode %v patch result summary = %q, want failed", mode, got)
+		if got := line.Spans[len(line.Spans)-1].Text; got != test.wantSummary {
+			t.Fatalf("mode %v failed patch summary = %q, want %q", test.mode, got, test.wantSummary)
 		}
 	}
 }

@@ -123,7 +123,11 @@ type toolDisplay struct {
 func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) toolDisplay {
 	if mode == ModeOngoing || mode == ModeOngoingCollapsed || mode == ModeDetailCollapsed {
 		text := compactToolText(meta, firstNonEmpty(row.CondensedText, row.Text))
-		return toolDisplay{Text: text, InlineMeta: firstNonEmpty(row.ResultSummary, meta.InlineMeta)}
+		resultSummary := row.ResultSummary
+		if meta.IsError && (mode == ModeOngoing || mode == ModeOngoingCollapsed) {
+			resultSummary = ""
+		}
+		return toolDisplay{Text: text, InlineMeta: firstNonEmpty(resultSummary, meta.InlineMeta)}
 	}
 	text := detailedToolText(meta, row.Text)
 	if summary := strings.TrimSpace(row.ResultSummary); summary != "" {
