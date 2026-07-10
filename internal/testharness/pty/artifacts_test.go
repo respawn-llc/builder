@@ -123,3 +123,31 @@ func TestWriteArtifactsSerializesBatchedRecordsBySpan(t *testing.T) {
 		t.Fatalf("operations artifact contains duplicated write text: %s", encoded)
 	}
 }
+
+func TestWriteArtifactsIncludesBoundedAttachmentsInDirectoryBudget(t *testing.T) {
+	dir := t.TempDir()
+	capture, err := pty.NewCapture(pty.MustDimensions(2, 8), []pty.Chunk{
+		pty.NewChunk(0, 0, []byte("evidence")),
+	})
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	analysis, err := pty.Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if err := pty.WriteArtifactsWithAttachments(dir, capture, analysis, nil, []pty.ArtifactAttachment{
+		{Name: "server.stderr.log", Data: []byte("server diagnostic")},
+		{Name: "model.json", Data: []byte(`{"route":"responses"}`)},
+	}); err != nil {
+		t.Fatalf("WriteArtifactsWithAttachments: %v", err)
+	}
+	for _, name := range []string{"server.stderr.log", "model.json"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("attachment %s: %v", name, err)
+		}
+	}
+	if err := pty.WriteArtifactsWithAttachments(dir, capture, analysis, nil, []pty.ArtifactAttachment{{Name: "../escape", Data: []byte("no")}}); err == nil {
+		t.Fatal("WriteArtifactsWithAttachments accepted path-traversal attachment")
+	}
+}

@@ -330,7 +330,11 @@ func (b *boundedLog) Write(payload []byte) (int, error) {
 }
 
 func (b *boundedLog) String() string {
+	return string(b.Bytes())
+}
+
+func (b *boundedLog) Bytes() []byte {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return string(bytes.Clone(b.data))
+	return bytes.Clone(b.data)
 }

@@ -1,6 +1,7 @@
 package blackbox
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/driver"
 
@@ -118,15 +120,42 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 	return result
 }
 
-func failureArtifactEvidence(capture analyzer.Capture, analysis *analyzer.Analysis, dimensions Dimensions) (artifactEvidence, error) {
+func failureArtifactEvidence(capture analyzer.Capture, analysis *analyzer.Analysis, dimensions Dimensions, environment *IsolatedEnvironment) (artifactEvidence, error) {
+	attachments, err := artifactAttachments(environment)
+	if err != nil {
+		return artifactEvidence{}, err
+	}
 	if capture.Dimensions.Rows != 0 && capture.Dimensions.Cols != 0 {
-		return artifactEvidence{capture: capture, analysis: analysis}, nil
+		return artifactEvidence{capture: capture, analysis: analysis, attachments: attachments}, nil
 	}
 	empty, err := analyzer.NewCapture(analyzer.MustDimensions(dimensions.Rows, dimensions.Cols), nil)
 	if err != nil {
 		return artifactEvidence{}, fmt.Errorf("create empty failure capture: %w", err)
 	}
-	return artifactEvidence{capture: empty, analysis: analysis}, nil
+	return artifactEvidence{capture: empty, analysis: analysis, attachments: attachments}, nil
+}
+
+func artifactAttachments(environment *IsolatedEnvironment) ([]pty.ArtifactAttachment, error) {
+	if environment == nil {
+		return nil, nil
+	}
+	attachments := make([]pty.ArtifactAttachment, 0, 3)
+	if environment.Server != nil {
+		if environment.Server.stdout != nil {
+			attachments = append(attachments, pty.ArtifactAttachment{Name: "server.stdout.log", Data: environment.Server.stdout.Bytes()})
+		}
+		if environment.Server.stderr != nil {
+			attachments = append(attachments, pty.ArtifactAttachment{Name: "server.stderr.log", Data: environment.Server.stderr.Bytes()})
+		}
+	}
+	if environment.Stub != nil {
+		model, err := json.Marshal(environment.Stub.Snapshot())
+		if err != nil {
+			return nil, fmt.Errorf("marshal model diagnostics: %w", err)
+		}
+		attachments = append(attachments, pty.ArtifactAttachment{Name: "model.json", Data: model})
+	}
+	return attachments, nil
 }
 
 func appendCleanupOwner(cleanup *IncompleteCleanup, owner string) *IncompleteCleanup {
@@ -280,7 +309,7 @@ func (s cleanupSupervisor) finishUntil(result *RunResult, dimensions Dimensions,
 		result.Err = incomplete
 	}
 	if result.Err != nil && s.artifacts != nil {
-		evidence, evidenceErr := failureArtifactEvidence(result.Capture, result.Observation.Analysis, dimensions)
+		evidence, evidenceErr := failureArtifactEvidence(result.Capture, result.Observation.Analysis, dimensions, environment)
 		if evidenceErr != nil {
 			incomplete = appendCleanupFailure(incomplete, "artifact_evidence", evidenceErr)
 		} else {

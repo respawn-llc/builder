@@ -41,7 +41,16 @@ type artifactOperation struct {
 	PrivateMode *PrivateModeChange  `json:"private_mode,omitempty"`
 }
 
+type ArtifactAttachment struct {
+	Name string
+	Data []byte
+}
+
 func WriteArtifacts(dir string, capture Capture, analysis Analysis, assertionErr error) error {
+	return WriteArtifactsWithAttachments(dir, capture, analysis, assertionErr, nil)
+}
+
+func WriteArtifactsWithAttachments(dir string, capture Capture, analysis Analysis, assertionErr error, attachments []ArtifactAttachment) error {
 	if len(capture.Raw) > 1*1024*1024 {
 		return artifactLimitExceeded(len(capture.Raw))
 	}
@@ -84,6 +93,14 @@ func WriteArtifacts(dir string, capture Capture, analysis Analysis, assertionErr
 	}
 	if err := budget.writeJSON(filepath.Join(dir, "diagnostics.json"), diagnostics); err != nil {
 		return err
+	}
+	for _, attachment := range attachments {
+		if attachment.Name == "" || filepath.Base(attachment.Name) != attachment.Name {
+			return fmt.Errorf("invalid artifact attachment name %q", attachment.Name)
+		}
+		if err := budget.write(filepath.Join(dir, attachment.Name), attachment.Data); err != nil {
+			return fmt.Errorf("write artifact attachment %s: %w", attachment.Name, err)
+		}
 	}
 	return nil
 }

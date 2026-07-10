@@ -30,8 +30,9 @@ type artifactRun struct {
 }
 
 type artifactEvidence struct {
-	capture  analyzer.Capture
-	analysis *analyzer.Analysis
+	capture     analyzer.Capture
+	analysis    *analyzer.Analysis
+	attachments []pty.ArtifactAttachment
 }
 
 type artifactLatestPointer struct {
@@ -73,7 +74,7 @@ func publishFailureArtifacts(deadline time.Time, run *artifactRun, evidence arti
 		}
 		evidence.analysis = &replayed
 	}
-	if err := pty.WriteArtifacts(run.staging, evidence.capture, *evidence.analysis, runErr); err != nil {
+	if err := pty.WriteArtifactsWithAttachments(run.staging, evidence.capture, *evidence.analysis, runErr, evidence.attachments); err != nil {
 		return "", err
 	}
 	if err := ensureBefore(deadline, "artifact evidence write"); err != nil {
