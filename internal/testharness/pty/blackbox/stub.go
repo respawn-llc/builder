@@ -49,6 +49,7 @@ type ResponsesStub struct {
 	observed         []ObservedCall
 	handlers         map[uint64]context.CancelFunc
 	nextHandle       uint64
+	stopping         bool
 	done             chan struct{}
 	events           chan struct{}
 }
@@ -169,6 +170,7 @@ func (s *ResponsesStub) Stop() error {
 		return nil
 	}
 	s.mu.Lock()
+	s.stopping = true
 	for _, cancel := range s.handlers {
 		cancel()
 	}
@@ -189,7 +191,11 @@ func (s *ResponsesStub) Close() {
 
 func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
-		ctx, done := s.beginHandler(request.Context())
+		ctx, done, admitted := s.beginHandler(request.Context())
+		if !admitted {
+			http.Error(writer, "model stub is stopping", http.StatusServiceUnavailable)
+			return
+		}
 		defer done()
 		body, err := boundedBody(request)
 		if err != nil {
@@ -217,8 +223,12 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 	}
 }
 
-func (s *ResponsesStub) beginHandler(parent context.Context) (context.Context, func()) {
+func (s *ResponsesStub) beginHandler(parent context.Context) (context.Context, func(), bool) {
 	s.mu.Lock()
+	if s.stopping {
+		s.mu.Unlock()
+		return parent, nil, false
+	}
 	handle := s.nextHandle
 	s.nextHandle++
 	ctx, cancel := context.WithCancel(parent)
@@ -233,7 +243,7 @@ func (s *ResponsesStub) beginHandler(parent context.Context) (context.Context, f
 		s.mu.Unlock()
 		cancel()
 		s.notify()
-	}
+	}, true
 }
 
 func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (*RequiredOperation, error) {
