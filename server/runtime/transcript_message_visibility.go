@@ -7,6 +7,7 @@ import (
 
 	"core/server/llm"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 )
 
 func visibleUserTranscriptEntry(msg llm.Message) (ChatEntry, bool) {
@@ -147,7 +148,7 @@ func developerContextEntry(msg llm.Message, visibility transcript.EntryVisibilit
 		MessageType:        msg.MessageType,
 		SourcePath:         strings.TrimSpace(msg.SourcePath),
 		CompactLabel:       compactLabelForMessage(msg),
-		BackgroundExitCode: cloneIntPtr(msg.BackgroundExitCode),
+		BackgroundExitCode: valuecopy.Pointer(msg.BackgroundExitCode),
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 
 	"core/cli/app/internal/onboarding"
 	"core/shared/serverapi"
+	"core/shared/valuecopy"
 
 	"github.com/google/uuid"
 )
@@ -128,7 +129,7 @@ func importChoicesFromFacts(facts []serverapi.ImportChoiceFact) []onboardingImpo
 	choices := make([]onboardingImportChoice, 0, len(facts))
 	for _, fact := range facts {
 		provider := providerIDFromPtr(fact.ImportProviderID)
-		sourceRoot := cloneStringPtr(fact.SourceRootPath)
+		sourceRoot := valuecopy.Pointer(fact.SourceRootPath)
 		choices = append(choices, onboardingImportChoice{
 			OptionID:   uuid.NewString(),
 			Mode:       onboardingImportMode(fact.Ref.Mode),
@@ -156,7 +157,7 @@ func skillImportItemFromFact(item serverapi.ImportItemFact) onboardingSkillImpor
 	if ref.Name != nil && strings.TrimSpace(*ref.Name) != "" {
 		name = *ref.Name
 	}
-	sourceDir := cloneStringPtr(ref.SourcePath)
+	sourceDir := valuecopy.Pointer(ref.SourcePath)
 	defaultEnabled := true
 	if item.DefaultEnabled != nil {
 		defaultEnabled = *item.DefaultEnabled
@@ -176,7 +177,7 @@ func skillImportItemFromFact(item serverapi.ImportItemFact) onboardingSkillImpor
 func commandImportItemFromFact(item serverapi.ImportItemFact) onboardingCommandImportItem {
 	ref := item.Ref
 	provider := providerIDFromPtr(ref.ImportProviderID)
-	sourceFile := cloneStringPtr(ref.SourcePath)
+	sourceFile := valuecopy.Pointer(ref.SourcePath)
 	name := ref.TargetName
 	if ref.Name != nil && strings.TrimSpace(*ref.Name) != "" {
 		name = *ref.Name
@@ -231,14 +232,6 @@ func providerIDFromPtr(value *string) *onboardingImportProviderID {
 	}
 	provider := onboardingImportProviderID(*value)
 	return &provider
-}
-
-func cloneStringPtr(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
 
 func hasImportChoices(choices []onboardingImportChoice) bool {
@@ -315,7 +308,7 @@ func applyImportChoice(selection *onboardingImportSelection, choiceID string, ch
 			provider := *choice.Provider
 			next.Provider = &provider
 		}
-		next.SourceRoot = cloneStringPtr(choice.SourceRoot)
+		next.SourceRoot = valuecopy.Pointer(choice.SourceRoot)
 		*selection = next
 		return nil
 	}

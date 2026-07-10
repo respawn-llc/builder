@@ -275,7 +275,7 @@ func TestRenderPatchToolShowsStructuredPathAndCounts(t *testing.T) {
 }
 
 func TestPatchFamilyToolsDoNotFallbackToToolName(t *testing.T) {
-	for _, toolName := range []string{"patch", "edit"} {
+	for _, toolName := range []string{"patch", "edit", "replace", "write"} {
 		t.Run(toolName, func(t *testing.T) {
 			row := toolRow(toolName, clientui.ToolPresentationDefault, toolName, false)
 			row.Tool.ToolPresentation = &clientui.ToolCallMeta{ToolName: toolName}

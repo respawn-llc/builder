@@ -8,6 +8,7 @@ import (
 
 	"core/server/runtime"
 	shelltool "core/server/tools/shell"
+	"core/shared/valuecopy"
 
 	"github.com/google/uuid"
 )
@@ -101,7 +102,7 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 		CompactText:       summary.CondensedText,
 		Preview:           evt.Preview,
 		Removed:           evt.Removed,
-		ExitCode:          cloneIntPtr(evt.Snapshot.ExitCode),
+		ExitCode:          valuecopy.Pointer(evt.Snapshot.ExitCode),
 		UserRequestedKill: evt.Snapshot.KillRequested,
 		NoticeSuppressed:  evt.NoticeSuppressed,
 	}, shouldNotify)
@@ -109,12 +110,4 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 
 func (r *BackgroundEventRouter) Handle(evt shelltool.Event) {
 	r.handle(evt)
-}
-
-func cloneIntPtr(v *int) *int {
-	if v == nil {
-		return nil
-	}
-	out := *v
-	return &out
 }

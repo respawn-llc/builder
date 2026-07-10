@@ -27,7 +27,9 @@ func TestCompactToolCallText(t *testing.T) {
 		{name: "first text line", text: "pwd\n/tmp", want: "pwd"},
 		{name: "inline meta removed", text: "pwd" + InlineMetaSeparator + "timeout", want: "pwd"},
 		{name: "fallback", want: "tool call"},
-		{name: "patch family skips tool name fallback", meta: &ToolCallMeta{ToolName: "patch"}, want: "tool call"},
+		{name: "patch skips tool name fallback", meta: &ToolCallMeta{ToolName: "patch"}, want: "tool call"},
+		{name: "edit alias replace skips tool name fallback", meta: &ToolCallMeta{ToolName: "replace"}, want: "tool call"},
+		{name: "edit alias write skips tool name fallback", meta: &ToolCallMeta{ToolName: "write"}, want: "tool call"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

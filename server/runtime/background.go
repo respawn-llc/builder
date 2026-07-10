@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/toolspec"
+	"core/shared/valuecopy"
 )
 
 type defaultBackgroundNoticeScheduler struct {
@@ -46,7 +47,7 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 		Name:               strings.TrimSpace(evt.ID),
 		Content:            formatBackgroundShellNotice(evt),
 		CompactContent:     formatBackgroundShellCompact(evt),
-		BackgroundExitCode: cloneIntPtr(evt.ExitCode),
+		BackgroundExitCode: valuecopy.Pointer(evt.ExitCode),
 	})
 }
 

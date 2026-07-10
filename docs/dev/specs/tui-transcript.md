@@ -151,6 +151,7 @@
 - Mid-run steering is soft-insert only at safe boundaries after current tool completion.
 - Steering submissions never lock the input box; each `Enter` while busy queues another steering message.
 - Pending steering and pending user messages are strict FIFO.
+- Live-band queued inputs use secondary/faint styling; live-band steering inputs use primary styling.
 - Multiple queued user steering messages flushed at one boundary coalesce into one user message separated by blank lines.
 - Pending queues are unbounded and in-memory only.
 - Injected mid-run messages persist only on delivery boundary.

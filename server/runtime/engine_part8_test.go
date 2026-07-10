@@ -680,6 +680,13 @@ func TestSubmitUserShellCommandReturnsUnknownToolErrorWhenShellNotRegistered(t *
 	if !foundToolOutput {
 		t.Fatalf("expected persisted shell tool output message, messages=%+v", messages)
 	}
+	completion, ok := eng.transcriptRuntimeState().ToolCompletionSnapshot(result.CallID)
+	if !ok {
+		t.Fatal("expected persisted shell tool completion")
+	}
+	if completion.Presentation == nil || completion.Presentation.Command != "pwd" || !completion.Presentation.IsShell {
+		t.Fatalf("persisted shell presentation = %+v, want typed command input", completion.Presentation)
+	}
 }
 
 func TestParallelToolsReturnDeclaredOrder(t *testing.T) {

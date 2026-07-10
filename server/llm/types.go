@@ -6,6 +6,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/modelcontract"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -139,7 +140,7 @@ func CloneResponseItems(items []ResponseItem) []ResponseItem {
 	out := make([]ResponseItem, 0, len(items))
 	for _, item := range items {
 		copyItem := item
-		copyItem.BackgroundExitCode = cloneMessageInt(item.BackgroundExitCode)
+		copyItem.BackgroundExitCode = valuecopy.Pointer(item.BackgroundExitCode)
 		if len(item.Arguments) > 0 {
 			copyItem.Arguments = append(json.RawMessage(nil), item.Arguments...)
 		}
@@ -174,7 +175,7 @@ func ItemsFromMessages(messages []Message) []ResponseItem {
 					Phase:              msg.Phase,
 					Content:            msg.Content,
 					CompactContent:     msg.CompactContent,
-					BackgroundExitCode: cloneMessageInt(msg.BackgroundExitCode),
+					BackgroundExitCode: valuecopy.Pointer(msg.BackgroundExitCode),
 				})
 			}
 			for _, tc := range msg.ToolCalls {
@@ -236,7 +237,7 @@ func ItemsFromMessages(messages []Message) []ResponseItem {
 				SourcePath:         msg.SourcePath,
 				Content:            msg.Content,
 				CompactContent:     msg.CompactContent,
-				BackgroundExitCode: cloneMessageInt(msg.BackgroundExitCode),
+				BackgroundExitCode: valuecopy.Pointer(msg.BackgroundExitCode),
 				Name:               msg.Name,
 			})
 		}
@@ -266,7 +267,7 @@ func MessagesFromItems(items []ResponseItem) []Message {
 				Phase:              item.Phase,
 				Content:            item.Content,
 				CompactContent:     item.CompactContent,
-				BackgroundExitCode: cloneMessageInt(item.BackgroundExitCode),
+				BackgroundExitCode: valuecopy.Pointer(item.BackgroundExitCode),
 				Name:               item.Name,
 			}
 			out = append(out, msg)
@@ -344,14 +345,6 @@ func MessagesFromItems(items []ResponseItem) []Message {
 		filtered = append(filtered, msg)
 	}
 	return append([]Message(nil), filtered...)
-}
-
-func cloneMessageInt(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	copyValue := *value
-	return &copyValue
 }
 
 func stringFromJSONRaw(raw json.RawMessage) string {

@@ -9,6 +9,7 @@ import (
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 )
 
 type PersistedTranscriptScanRequest struct {
@@ -103,7 +104,7 @@ func clonePersistedChatEntries(entries []ChatEntry) []ChatEntry {
 
 func clonePersistedChatEntry(entry ChatEntry) ChatEntry {
 	copyEntry := entry
-	copyEntry.BackgroundExitCode = cloneIntPtr(entry.BackgroundExitCode)
+	copyEntry.BackgroundExitCode = valuecopy.Pointer(entry.BackgroundExitCode)
 	copyEntry.ToolCall = clonePersistedToolCallMeta(entry.ToolCall)
 	return copyEntry
 }

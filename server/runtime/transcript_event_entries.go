@@ -8,6 +8,7 @@ import (
 	"core/server/tools"
 	"core/shared/toolspec"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 )
 
 func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
@@ -100,7 +101,7 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 			CondensedText:      compact,
 			MessageType:        llm.MessageTypeBackgroundNotice,
 			CompactLabel:       compact,
-			BackgroundExitCode: cloneIntPtr(evt.Background.ExitCode),
+			BackgroundExitCode: valuecopy.Pointer(evt.Background.ExitCode),
 		}}
 	default:
 		return nil

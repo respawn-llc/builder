@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"strings"
 
+	"core/cli/tui/transcriptrender"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
 type queuedPaneEntry struct {
-	Text string
+	ongoingLiveInput
 }
 
 func (l uiViewLayout) renderChatPanel(width, height int, style uiStyles) []string {
@@ -107,6 +109,35 @@ func (l uiViewLayout) renderActivePicker(width int) []string {
 }
 
 func (l uiViewLayout) renderQueuedMessagesPane(width int) []string {
+	lines := l.renderQueuedMessageLines(width)
+	if len(lines) == 0 {
+		return nil
+	}
+	palette := uiPalette(l.model.theme)
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		rendered := ""
+		for _, span := range line.Spans {
+			style := lipgloss.NewStyle()
+			switch transcriptrender.ColorRoleForStyle(span.Role) {
+			case transcriptrender.ColorRolePrimary:
+				style = style.Foreground(palette.primary)
+			case transcriptrender.ColorRoleSecondary:
+				style = style.Foreground(palette.secondary)
+			default:
+				panic(fmt.Sprintf("queued pane received unsupported transcript style role %d", span.Role))
+			}
+			if span.Faint {
+				style = style.Faint(true)
+			}
+			rendered += style.Render(span.Text)
+		}
+		out = append(out, padANSIRight(rendered, width))
+	}
+	return out
+}
+
+func (l uiViewLayout) renderQueuedMessageLines(width int) []transcriptrender.Line {
 	if width < 1 {
 		return nil
 	}
@@ -114,17 +145,14 @@ func (l uiViewLayout) renderQueuedMessagesPane(width int) []string {
 	if len(visible) == 0 {
 		return nil
 	}
-	palette := uiPalette(l.model.theme)
-	queueStyle := lipgloss.NewStyle().Foreground(palette.secondary).Faint(true)
-	out := make([]string, 0, len(visible)+1)
+	inputs := make([]ongoingLiveInput, 0, len(visible)+1)
 	if hidden > 0 {
-		out = append(out, queueStyle.Render(padANSIRight(fmt.Sprintf("%d more messages", hidden), width)))
+		inputs = append(inputs, ongoingLiveInput{Text: fmt.Sprintf("%d more messages", hidden), Disposition: ongoingLiveInputQueued})
 	}
 	for _, entry := range visible {
-		line := truncateQueuedMessageLine(entry.displayText(), width)
-		out = append(out, queueStyle.Render(padANSIRight(line, width)))
+		inputs = append(inputs, entry.ongoingLiveInput)
 	}
-	return out
+	return renderOngoingLiveInputLines(inputs, width)
 }
 
 func (l uiViewLayout) queuedPaneLineCount() int {
@@ -155,13 +183,13 @@ func (l uiViewLayout) queuedVisibleMessages() ([]queuedPaneEntry, int) {
 func (l uiViewLayout) queuedMessages() []queuedPaneEntry {
 	entries := make([]queuedPaneEntry, 0, len(l.model.queued)+len(l.model.injectedQueue))
 	for _, message := range l.model.queued {
-		entries = append(entries, queuedPaneEntry{Text: message.Text})
+		entries = append(entries, queuedPaneEntry{ongoingLiveInput: ongoingLiveInput{Text: message.Text, Disposition: ongoingLiveInputQueued}})
 	}
 	for _, message := range l.model.injectedQueue {
 		if !l.model.injectedQueueItemNeedsLocalPane(message) {
 			continue
 		}
-		entries = append(entries, queuedPaneEntry{Text: message.Text})
+		entries = append(entries, queuedPaneEntry{ongoingLiveInput: ongoingLiveInput{Text: message.Text, Disposition: ongoingLiveInputSteering}})
 	}
 	return entries
 }

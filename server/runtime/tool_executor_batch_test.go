@@ -184,7 +184,7 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 	}
 }
 
-func TestToolResultWithTranscriptPresentationRejectsHandlerFinalizedPresentation(t *testing.T) {
+func TestLiveToolCompletionBoundaryRejectsHandlerFinalizedPresentation(t *testing.T) {
 	defer func() {
 		if recover() == nil {
 			t.Fatal("expected handler-owned finalized presentation to violate the finalization invariant")
@@ -196,11 +196,19 @@ func TestToolResultWithTranscriptPresentationRejectsHandlerFinalizedPresentation
 		Name:  string(toolspec.ToolExecCommand),
 		Input: json.RawMessage(`{"command":"pwd"}`),
 	}
-	toolResultWithTranscriptPresentation(tools.Result{
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if err := engine.steer("step", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{call},
+	}})); err != nil {
+		t.Fatalf("persist assistant tool call: %v", err)
+	}
+	engine.finalizeLiveToolCompletion(tools.Result{
 		CallID:       call.ID,
 		Name:         toolspec.ToolExecCommand,
 		Presentation: &transcript.ToolCallMeta{Command: "handler override"},
-	}, call, t.TempDir())
+	})
 }
 
 func askQuestionInput(t *testing.T, question string) json.RawMessage {

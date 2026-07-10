@@ -196,6 +196,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 		for _, hosted := range hostedToolExecutions {
+			if err := s.publishHostedToolStart(stepID, hosted.Call); err != nil {
+				return stepLoopResult{}, err
+			}
 			if err := e.steer(stepID, steerToolCompletionIntent(hosted.Result)); err != nil {
 				return stepLoopResult{}, err
 			}
@@ -444,6 +447,9 @@ func (s *defaultStepExecutor) workflowDurableCompletionTerminal(ctx context.Cont
 func (s *defaultStepExecutor) appendHostedToolExecutionResults(stepID string, hostedToolExecutions []hostedToolExecution) error {
 	e := s.engine
 	for _, hosted := range hostedToolExecutions {
+		if err := s.publishHostedToolStart(stepID, hosted.Call); err != nil {
+			return err
+		}
 		if err := e.steer(stepID, steerToolCompletionIntent(hosted.Result)); err != nil {
 			return err
 		}
@@ -453,6 +459,16 @@ func (s *defaultStepExecutor) appendHostedToolExecutionResults(stepID string, ho
 		}
 	}
 	return nil
+}
+
+func (s *defaultStepExecutor) publishHostedToolStart(stepID string, call llm.ToolCall) error {
+	normalized := normalizeToolCallForTranscript(call, s.engine.transcriptWorkingDir())
+	return s.engine.steer(stepID, steerEventIntent(Event{
+		Kind:                       EventToolCallStarted,
+		StepID:                     stepID,
+		ToolCall:                   &normalized,
+		CommittedTranscriptChanged: true,
+	}))
 }
 
 func (s *defaultStepExecutor) handleWorkflowAssistantWithoutTools(ctx context.Context, stepID string, assistantMsg llm.Message) (bool, bool, error) {

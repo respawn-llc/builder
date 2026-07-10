@@ -8,6 +8,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/theme"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -618,7 +619,11 @@ func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommit
 		if strings.TrimSpace(entry.Text) == "" {
 			return clientui.TranscriptCommittedRow{}, false
 		}
-		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: entry.Text, CondensedText: entry.CondensedText, Phase: entry.Phase}}, true
+		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{
+			Text:          entry.Text,
+			CondensedText: entry.CondensedText,
+			Phase:         clientui.ClassifyTranscriptAssistantPhase(entry.Phase),
+		}}, true
 	case "tool_call":
 		return clientui.TranscriptCommittedRow{Visibility: clientui.EntryVisibility(visibility), Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
 			ToolCallID:       strings.TrimSpace(entry.ToolCallID),
@@ -652,19 +657,11 @@ func detailRowFromChatEntry(entry clientui.ChatEntry) (clientui.TranscriptCommit
 				SourcePath:         entry.SourcePath,
 				CondensedText:      entry.CondensedText,
 				CompactLabel:       entry.CompactLabel,
-				BackgroundExitCode: cloneIntPointer(entry.BackgroundExitCode),
+				BackgroundExitCode: valuecopy.Pointer(entry.BackgroundExitCode),
 			},
 			Diagnostic: diagnostic,
 		}}, true
 	}
-}
-
-func cloneIntPointer(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	copyValue := *value
-	return &copyValue
 }
 
 func detailToolName(entry clientui.ChatEntry) string {

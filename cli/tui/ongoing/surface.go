@@ -260,7 +260,7 @@ func (s *Surface) finalizeAssistantStream(streamID uuid.UUID, text string, frame
 func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame FrameInput) (Result, error) {
 	row := clientui.TranscriptCommittedRow{
 		Kind:      clientui.TranscriptRowAssistant,
-		Assistant: &clientui.TranscriptAssistantRow{Text: text, Phase: clientui.MessagePhaseFinal},
+		Assistant: &clientui.TranscriptAssistantRow{Text: text, Phase: clientui.TranscriptAssistantPhaseFinal},
 	}
 	return s.writeFrameTransaction(frame, s.renderCommittedRow(row, frameWidthOrDefault(frame), ""))
 }
@@ -394,11 +394,14 @@ func hydrationRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.M
 	if row.Kind != clientui.TranscriptRowAssistant || row.Assistant == nil {
 		return ongoingRenderMode(row)
 	}
-	phase := clientui.NormalizeMessagePhase(string(row.Assistant.Phase))
-	if phase == clientui.MessagePhaseFinal || phase == "" {
+	switch row.Assistant.Phase {
+	case clientui.TranscriptAssistantPhaseFinal, clientui.TranscriptAssistantPhaseLegacyFinal:
 		return transcriptrender.ModeOngoingFull
+	case clientui.TranscriptAssistantPhaseCommentary:
+		return ongoingRenderMode(row)
+	default:
+		panic(fmt.Sprintf("ongoing hydration received unclassified assistant phase %q", row.Assistant.Phase))
 	}
-	return ongoingRenderMode(row)
 }
 
 func (s *Surface) renderAssistantPromotedRows(rows []string, width int, themeName string) []string {

@@ -18,6 +18,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 )
 
 type RuntimeResolver interface {
@@ -722,7 +723,7 @@ func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptR
 	sessionID := strings.TrimSpace(req.SessionID)
 	reqData := runtimeInterruptMemoRequest{
 		SessionID:            sessionID,
-		TargetOperationRef:   cloneRuntimeOperationRefPtr(req.TargetOperationRef),
+		TargetOperationRef:   valuecopy.Pointer(req.TargetOperationRef),
 		PendingOperationRefs: append([]clientui.RuntimeOperationRef(nil), req.PendingOperationRefs...),
 	}
 	return s.interrupt(ctx, reqData)
@@ -762,14 +763,6 @@ func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest
 		engine.DiscardQueuedUserMessage(req.TargetOperationRef.QueueItemID)
 	}
 	return s.runtimeInterruptResponse(sessionID, engine, pendingRefs), nil
-}
-
-func cloneRuntimeOperationRefPtr(ref *clientui.RuntimeOperationRef) *clientui.RuntimeOperationRef {
-	if ref == nil {
-		return nil
-	}
-	clone := *ref
-	return &clone
 }
 
 func (s *Service) runtimeActivityActiveForControl(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) bool {

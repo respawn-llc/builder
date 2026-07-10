@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"core/cli/tui/ongoing"
+	"core/cli/tui/transcriptrender"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -224,8 +225,14 @@ func (m *uiModel) ongoingFrameInput() ongoing.FrameInput {
 		}
 		sections = append(sections, ongoing.FrameSection{Kind: kind, Lines: append([]string(nil), lines...)})
 	}
+	appendStyledSection := func(kind ongoing.FrameSectionKind, lines []transcriptrender.Line) {
+		if len(lines) == 0 {
+			return
+		}
+		sections = append(sections, ongoing.FrameSection{Kind: kind, StyledLines: append([]transcriptrender.Line(nil), lines...)})
+	}
 	appendSection(ongoing.FrameSectionPicker, layout.renderActivePicker(width))
-	appendSection(ongoing.FrameSectionQueuedOrSteered, layout.renderQueuedMessagesPane(width))
+	appendStyledSection(ongoing.FrameSectionQueuedOrSteered, layout.renderQueuedMessageLines(width))
 	appendSection(ongoing.FrameSectionHelp, layout.renderHelpPane(width, helpPaneMaxLines(height, 1, 0, 0), style))
 	appendSection(ongoing.FrameSectionInput, layout.renderInputLines(width, style))
 	if selected, ok := m.selectedPromptHistoryText(); ok {

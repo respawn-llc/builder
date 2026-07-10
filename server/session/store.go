@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"core/shared/sessioncontract"
+	"core/shared/valuecopy"
 	"github.com/google/uuid"
 )
 
@@ -890,7 +891,7 @@ func (s *Store) RefreshLockedMainPromptSnapshot(snapshot LockedMainPromptSnapsho
 	return s.mutateLockedContractWithCommitStatus(func(locked *LockedContract) {
 		locked.SystemPrompt = strings.TrimSpace(snapshot.SystemPrompt)
 		locked.HasSystemPrompt = snapshot.HasSystemPrompt
-		locked.ToolPreambles = cloneBoolPtr(snapshot.ToolPreambles)
+		locked.ToolPreambles = valuecopy.Pointer(snapshot.ToolPreambles)
 		if snapshot.ContextWindow > 0 {
 			locked.ContextWindow = snapshot.ContextWindow
 		}
@@ -913,14 +914,6 @@ func (s *Store) BackfillLockedRequestShape(fields LockedRequestShapeBackfill) (L
 		locked.HasEnabledTools = fields.HasEnabledTools
 		locked.WebSearchMode = strings.TrimSpace(fields.WebSearchMode)
 	})
-}
-
-func cloneBoolPtr(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	copyValue := *value
-	return &copyValue
 }
 
 func (s *Store) AppendEvent(stepID, kind string, payload any) (Event, bool, error) {

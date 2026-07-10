@@ -195,7 +195,7 @@ func TestOngoingRendersOngoingCollapsedRowsAsCompactSingleLine(t *testing.T) {
 }
 
 func TestHydrationRendersFinalAssistantFullText(t *testing.T) {
-	for _, phase := range []clientui.MessagePhase{clientui.MessagePhaseFinal, ""} {
+	for _, phase := range []clientui.TranscriptAssistantPhase{clientui.TranscriptAssistantPhaseFinal, clientui.TranscriptAssistantPhaseLegacyFinal} {
 		t.Run(string(phase), func(t *testing.T) {
 			var out bytes.Buffer
 			surface := NewSurface(&out)
@@ -242,7 +242,10 @@ func visibleRow(row clientui.TranscriptCommittedRow, visibility clientui.EntryVi
 }
 
 func assistantRow(text string) clientui.TranscriptCommittedRow {
-	return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: text}}
+	return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{
+		Text:  text,
+		Phase: clientui.TranscriptAssistantPhaseFinal,
+	}}
 }
 
 func toolRow(text string) clientui.TranscriptCommittedRow {

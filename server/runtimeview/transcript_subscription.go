@@ -6,6 +6,7 @@ import (
 
 	"core/server/runtime"
 	"core/shared/clientui"
+	"core/shared/valuecopy"
 
 	"github.com/google/uuid"
 )
@@ -186,12 +187,11 @@ func TranscriptSessionIdentityFromRuntime(engine *runtime.Engine) clientui.Trans
 }
 
 func transcriptCommittedRowMessages(evt runtime.Event) []clientui.TranscriptMessage {
-	startMessages := transcriptToolStartMessages(runtime.TranscriptToolStartFactsFromEvent(evt))
 	rowFacts := runtime.TranscriptCommittedRowFactsFromEvent(evt)
 	if len(rowFacts) == 0 {
-		return startMessages
+		return nil
 	}
-	out := make([]clientui.TranscriptMessage, 0, len(startMessages)+len(rowFacts))
+	out := make([]clientui.TranscriptMessage, 0, len(rowFacts))
 	for _, fact := range rowFacts {
 		row := transcriptRowFromFact(fact)
 		out = append(out, clientui.TranscriptMessage{
@@ -199,7 +199,6 @@ func transcriptCommittedRowMessages(evt runtime.Event) []clientui.TranscriptMess
 			CommittedRow: &row,
 		})
 	}
-	out = append(out, startMessages...)
 	return out
 }
 
@@ -253,7 +252,10 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		if fact.Assistant == nil {
 			return clientui.TranscriptCommittedRow{Visibility: visibility, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
 		}
-		row := clientui.TranscriptAssistantRow{Text: fact.Assistant.Text, Phase: clientui.MessagePhase(fact.Assistant.Phase)}
+		row := clientui.TranscriptAssistantRow{
+			Text:  fact.Assistant.Text,
+			Phase: clientui.ClassifyTranscriptAssistantPhase(clientui.MessagePhase(fact.Assistant.Phase)),
+		}
 		if fact.Assistant.StreamID != nil {
 			parsed := *fact.Assistant.StreamID
 			row.StreamID = &parsed
@@ -291,7 +293,7 @@ func transcriptNoticeFromFact(fact *runtime.TranscriptNoticeRowFact) *clientui.T
 			SourcePath:         strings.TrimSpace(fact.SourcePath),
 			CondensedText:      strings.TrimSpace(fact.CondensedText),
 			CompactLabel:       strings.TrimSpace(fact.CompactLabel),
-			BackgroundExitCode: cloneOptionalInt(fact.BackgroundExitCode),
+			BackgroundExitCode: valuecopy.Pointer(fact.BackgroundExitCode),
 		},
 	}
 	if strings.TrimSpace(fact.DiagnosticCode) != "" || strings.TrimSpace(fact.DiagnosticDetail) != "" {

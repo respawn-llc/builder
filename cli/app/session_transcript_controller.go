@@ -321,21 +321,24 @@ func inputReconciliationLines(snapshot *clientui.RuntimeInputReconciliationSnaps
 }
 
 func queuedOrSteeredLines(state *clientui.TranscriptQueuedOrSteeredMessageState) []string {
-	if state == nil {
-		return nil
-	}
-	if text := strings.TrimSpace(state.UserText); text != "" {
+	if text := queuedOrSteeredText(state); text != "" {
 		return []string{text}
 	}
-	return joinFacts(compactNonEmptyStrings(humanizeTranscriptFact(string(state.Status)), humanizeTranscriptFact(string(state.FailureReason))))
+	return nil
 }
 
-func queuedOrSteeredListLines(states []clientui.TranscriptQueuedOrSteeredMessageState) []string {
-	lines := make([]string, 0, len(states))
-	for _, state := range states {
-		lines = append(lines, queuedOrSteeredLines(&state)...)
+func queuedOrSteeredText(state *clientui.TranscriptQueuedOrSteeredMessageState) string {
+	if state == nil {
+		return ""
 	}
-	return lines
+	if text := strings.TrimSpace(state.UserText); text != "" {
+		return text
+	}
+	lines := joinFacts(compactNonEmptyStrings(humanizeTranscriptFact(string(state.Status)), humanizeTranscriptFact(string(state.FailureReason))))
+	if len(lines) == 0 {
+		return ""
+	}
+	return lines[0]
 }
 
 func sessionStatusLines(status *clientui.TranscriptSessionStatus) []string {

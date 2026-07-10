@@ -2,6 +2,8 @@ package transcript
 
 import (
 	"strings"
+
+	"core/shared/toolspec"
 )
 
 const (
@@ -45,12 +47,8 @@ func DetailedToolCallText(meta *ToolCallMeta, text string) string {
 }
 
 func IsPatchFamilyToolName(toolName string) bool {
-	switch strings.TrimSpace(toolName) {
-	case "patch", "edit":
-		return true
-	default:
-		return false
-	}
+	id, ok := toolspec.ParseID(toolName)
+	return ok && (id == toolspec.ToolPatch || id == toolspec.ToolEdit)
 }
 
 func normalizeToolTextMeta(meta *ToolCallMeta) ToolCallMeta {

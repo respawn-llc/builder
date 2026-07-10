@@ -18,7 +18,7 @@ type ongoingTranscriptReadModel struct {
 	sections         map[ongoing.FrameSectionKind]ongoing.FrameSection
 	pendingTools     []ongoingPendingTool
 	pendingToolIndex map[string]int
-	queuedMessages   keyedOngoingLiveItems[ongoingLiveItemID, clientui.TranscriptQueuedOrSteeredMessageState]
+	queuedMessages   keyedOngoingLiveItems[ongoingLiveItemID, ongoingLiveInput]
 	pendingPrompts   keyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPendingSessionPrompt]
 	backgroundTasks  keyedOngoingLiveItems[ongoingLiveItemID, clientui.TranscriptBackgroundActivity]
 }
@@ -41,7 +41,7 @@ func newOngoingTranscriptReadModel() ongoingTranscriptReadModel {
 	return ongoingTranscriptReadModel{
 		sections:         map[ongoing.FrameSectionKind]ongoing.FrameSection{},
 		pendingToolIndex: map[string]int{},
-		queuedMessages:   newKeyedOngoingLiveItems[ongoingLiveItemID, clientui.TranscriptQueuedOrSteeredMessageState](),
+		queuedMessages:   newKeyedOngoingLiveItems[ongoingLiveItemID, ongoingLiveInput](),
 		pendingPrompts:   newKeyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPendingSessionPrompt](),
 		backgroundTasks:  newKeyedOngoingLiveItems[ongoingLiveItemID, clientui.TranscriptBackgroundActivity](),
 	}
@@ -145,12 +145,15 @@ func (m *ongoingTranscriptReadModel) applyQueuedOrSteered(state *clientui.Transc
 		m.refreshQueuedOrSteeredSection(80)
 		return
 	}
-	m.queuedMessages.set(id, *state)
+	m.queuedMessages.set(id, ongoingLiveInput{
+		Text:        queuedOrSteeredText(state),
+		Disposition: ongoingLiveInputSteering,
+	})
 	m.refreshQueuedOrSteeredSection(80)
 }
 
 func (m *ongoingTranscriptReadModel) refreshQueuedOrSteeredSection(width int) {
-	m.setSection(ongoing.FrameSectionQueuedOrSteered, terminalSafeFrameLinesForWidth(queuedOrSteeredListLines(m.queuedMessages.values()), width))
+	m.setStyledSection(ongoing.FrameSectionQueuedOrSteered, renderOngoingLiveInputLines(m.queuedMessages.values(), width))
 }
 
 func queuedOrSteeredStateID(state clientui.TranscriptQueuedOrSteeredMessageState) ongoingLiveItemID {

@@ -175,7 +175,7 @@ func TestRepairMissingToolOutputsMarksResultAsError(t *testing.T) {
 	store := mustCreateTestSession(t)
 	appendRepairEvent(t, store, "message", llm.Message{
 		Role:      llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec", Input: json.RawMessage(`{}`)}},
+		ToolCalls: []llm.ToolCall{{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{"cmd":"go test ./server/runtime"}`)}},
 	})
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
 
@@ -200,6 +200,9 @@ func TestRepairMissingToolOutputsMarksResultAsError(t *testing.T) {
 	}
 	if !completion.IsError {
 		t.Fatal("synthetic completion should be marked as an error result")
+	}
+	if completion.Presentation == nil || completion.Presentation.Command != "go test ./server/runtime" || !completion.Presentation.IsShell {
+		t.Fatalf("synthetic completion presentation = %+v, want typed shell input", completion.Presentation)
 	}
 }
 

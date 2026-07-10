@@ -64,9 +64,26 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 }
 
+func TestTranscriptProjectionClassifiesBlankLegacyAssistantPhase(t *testing.T) {
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		CommittedRows: []runtime.TranscriptCommittedRowFact{{
+			Kind: runtime.TranscriptCommittedRowFactAssistant,
+			Assistant: &runtime.TranscriptAssistantRowFact{
+				Text: "legacy final answer",
+			},
+		}},
+	})
+	if len(hydration.CommittedRows) != 1 || hydration.CommittedRows[0].Assistant == nil {
+		t.Fatalf("hydration rows = %+v, want one assistant row", hydration.CommittedRows)
+	}
+	if got := hydration.CommittedRows[0].Assistant.Phase; got != clientui.TranscriptAssistantPhaseLegacyFinal {
+		t.Fatalf("legacy assistant phase = %q, want explicit legacy final classification", got)
+	}
+}
+
 func TestTranscriptPageProjectsReviewerAndBackgroundMetadata(t *testing.T) {
 	exitCode := 9
-	page := TranscriptPageFromSegment("session", "name", clientui.ConversationFreshnessEstablished, runtime.TranscriptSegmentPage{
+	page := TranscriptPageFromSegment("58e121b5-30f7-4d0f-a1fa-fb3e6695e39c", "name", clientui.ConversationFreshnessEstablished, runtime.TranscriptSegmentPage{
 		Snapshot: runtime.ChatSnapshot{Entries: []runtime.ChatEntry{
 			{Role: "reviewer_status", Text: "review complete"},
 			{
@@ -179,25 +196,26 @@ func TestTranscriptBackgroundActivityRejectsMissingRuntimeActivityID(t *testing.
 	})
 }
 
-func TestTranscriptMessagesEmitAssistantRowBeforeToolStarts(t *testing.T) {
-	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
-		Kind: runtime.EventAssistantMessage,
-		Message: llm.Message{
-			Role:    llm.RoleAssistant,
-			Content: "checking the repo",
-			ToolCalls: []llm.ToolCall{{
-				ID:   "call-1",
-				Name: "shell",
-			}},
-		},
-	})
-	if len(messages) != 2 {
-		t.Fatalf("messages = %+v, want assistant row then tool start", messages)
-	}
-	if messages[0].Kind != clientui.TranscriptMessageCommittedRow || messages[0].CommittedRow == nil || messages[0].CommittedRow.Assistant == nil {
-		t.Fatalf("first message = %+v, want assistant committed row", messages[0])
-	}
-	if messages[1].Kind != clientui.TranscriptMessageToolStart || messages[1].ToolStart == nil {
-		t.Fatalf("second message = %+v, want tool start", messages[1])
+func TestAssistantTranscriptMessagesDoNotReemitLiveToolStarts(t *testing.T) {
+	for _, kind := range []runtime.EventKind{runtime.EventAssistantMessage, runtime.EventConversationUpdated} {
+		t.Run(string(kind), func(t *testing.T) {
+			messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+				Kind: kind,
+				Message: llm.Message{
+					Role:    llm.RoleAssistant,
+					Content: "checking the repo",
+					ToolCalls: []llm.ToolCall{{
+						ID:   "call-1",
+						Name: "shell",
+					}},
+				},
+			})
+			if len(messages) != 1 {
+				t.Fatalf("messages = %+v, want only assistant committed row", messages)
+			}
+			if messages[0].Kind != clientui.TranscriptMessageCommittedRow || messages[0].CommittedRow == nil || messages[0].CommittedRow.Assistant == nil {
+				t.Fatalf("message = %+v, want assistant committed row", messages[0])
+			}
+		})
 	}
 }

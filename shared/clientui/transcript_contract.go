@@ -27,6 +27,28 @@ func NormalizeMessagePhase(raw string) MessagePhase {
 	}
 }
 
+type TranscriptAssistantPhase string
+
+const (
+	TranscriptAssistantPhaseCommentary  TranscriptAssistantPhase = "commentary"
+	TranscriptAssistantPhaseFinal       TranscriptAssistantPhase = "final_answer"
+	TranscriptAssistantPhaseLegacyFinal TranscriptAssistantPhase = "legacy_final_answer"
+)
+
+func ClassifyTranscriptAssistantPhase(raw MessagePhase) TranscriptAssistantPhase {
+	switch NormalizeMessagePhase(string(raw)) {
+	case MessagePhaseCommentary:
+		return TranscriptAssistantPhaseCommentary
+	case MessagePhaseFinal:
+		return TranscriptAssistantPhaseFinal
+	default:
+		if strings.TrimSpace(string(raw)) == "" {
+			return TranscriptAssistantPhaseLegacyFinal
+		}
+		panic(fmt.Sprintf("unsupported transcript assistant phase %q", raw))
+	}
+}
+
 type MessageType string
 
 const (
@@ -184,7 +206,7 @@ type TranscriptUserRow struct {
 type TranscriptAssistantRow struct {
 	Text          string
 	CondensedText string
-	Phase         MessagePhase
+	Phase         TranscriptAssistantPhase
 	StreamID      *uuid.UUID
 }
 

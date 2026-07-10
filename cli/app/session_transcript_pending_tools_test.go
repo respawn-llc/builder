@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/cli/tui/ongoing"
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 )
 
@@ -145,5 +146,42 @@ func TestPendingToolStartUsesPresentationMetadata(t *testing.T) {
 
 	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingTools), []string{"⢎  go test ./cli/app"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pending tool lines = %v, want %v", got, want)
+	}
+	lines := surface.lastFrameStyledSection(ongoing.FrameSectionPendingTools)
+	if len(lines) != 1 {
+		t.Fatalf("pending styled lines = %+v, want one", lines)
+	}
+	foundSyntax := false
+	for _, span := range lines[0].Spans {
+		switch span.Role {
+		case transcriptrender.StyleRoleToolShellPrimary,
+			transcriptrender.StyleRoleToolShellSecondary,
+			transcriptrender.StyleRoleToolShellWarning,
+			transcriptrender.StyleRoleToolShellError:
+			foundSyntax = true
+			if !span.Faint {
+				t.Fatalf("pending shell syntax span is not faint: %+v", span)
+			}
+		}
+	}
+	if !foundSyntax {
+		t.Fatalf("pending shell line has no typed syntax spans: %+v", lines[0].Spans)
+	}
+
+	surface.calls = nil
+	row := clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowTool,
+		Tool: &clientui.TranscriptToolRow{
+			ToolCallID:       "77777777-7777-4777-8777-777777777777",
+			ToolName:         "exec_command",
+			Text:             "No output",
+			ToolPresentation: &clientui.ToolCallMeta{ToolName: "exec_command", Presentation: clientui.ToolPresentationShell, Command: "go test ./cli/app"},
+		},
+	}
+	if _, err := controller.Accept(clientui.TranscriptMessage{Sequence: 3, Kind: clientui.TranscriptMessageCommittedRow, CommittedRow: &row}); err != nil {
+		t.Fatalf("accept committed tool row: %v", err)
+	}
+	if got := surface.lastFrameSectionKinds(); len(got) != 0 {
+		t.Fatalf("committed tool frame sections = %v, want pending tool removed before append", got)
 	}
 }

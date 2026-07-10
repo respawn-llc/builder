@@ -7,6 +7,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/clientuicopy"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 )
 
 const RecentTailEntryLimit = 500
@@ -55,14 +56,6 @@ func transcriptCursor(hasMore bool, cursor int64) *int64 {
 	return &cursor
 }
 
-func cloneOptionalInt(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	copyValue := *value
-	return &copyValue
-}
-
 func chatEntriesFromRuntimeSnapshot(snapshot runtime.ChatSnapshot) []clientui.ChatEntry {
 	entries := make([]clientui.ChatEntry, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
@@ -86,7 +79,7 @@ func chatEntriesFromRuntimeSnapshot(snapshot runtime.ChatSnapshot) []clientui.Ch
 			ToolResultSummary:  entry.ToolResultSummary,
 			ToolCallID:         entry.ToolCallID,
 			NoticeID:           entry.NoticeID,
-			BackgroundExitCode: cloneOptionalInt(entry.BackgroundExitCode),
+			BackgroundExitCode: valuecopy.Pointer(entry.BackgroundExitCode),
 			ToolCall:           cloneToolCallMeta(entry.ToolCall),
 		})
 	}

@@ -6,6 +6,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/clientuicopy"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 )
 
 const (
@@ -72,10 +73,10 @@ func (w *uiDetailTranscriptWindow) refreshEdgeCursors(page clientui.TranscriptPa
 		return
 	}
 	top := &w.segments[0]
-	top.olderCursor = cloneInt64Pointer(page.OlderCursor)
+	top.olderCursor = valuecopy.Pointer(page.OlderCursor)
 	top.hasMoreAbove = page.HasMoreAbove
 	bottom := &w.segments[len(w.segments)-1]
-	bottom.newerCursor = cloneInt64Pointer(page.NewerCursor)
+	bottom.newerCursor = valuecopy.Pointer(page.NewerCursor)
 	bottom.hasMoreBelow = page.HasMoreBelow
 	w.refreshBounds()
 }
@@ -83,9 +84,9 @@ func (w *uiDetailTranscriptWindow) refreshEdgeCursors(page clientui.TranscriptPa
 func segmentMetaFromPage(startLocal int, page clientui.TranscriptPage) residentSegmentMeta {
 	return residentSegmentMeta{
 		startLocal:   startLocal,
-		olderCursor:  cloneInt64Pointer(page.OlderCursor),
+		olderCursor:  valuecopy.Pointer(page.OlderCursor),
 		hasMoreAbove: page.HasMoreAbove,
-		newerCursor:  cloneInt64Pointer(page.NewerCursor),
+		newerCursor:  valuecopy.Pointer(page.NewerCursor),
 		hasMoreBelow: page.HasMoreBelow,
 	}
 }
@@ -152,7 +153,7 @@ func (w *uiDetailTranscriptWindow) prependCursorPage(page clientui.TranscriptPag
 			w.segments = []residentSegmentMeta{segmentMetaFromPage(0, page)}
 		} else {
 			top := &w.segments[0]
-			top.olderCursor = cloneInt64Pointer(page.OlderCursor)
+			top.olderCursor = valuecopy.Pointer(page.OlderCursor)
 			top.hasMoreAbove = page.HasMoreAbove
 		}
 		w.refreshBounds()
@@ -193,7 +194,7 @@ func (w *uiDetailTranscriptWindow) appendCursorPage(page clientui.TranscriptPage
 			w.segments = []residentSegmentMeta{segmentMetaFromPage(len(w.entries), page)}
 		} else {
 			bottom := &w.segments[len(w.segments)-1]
-			bottom.newerCursor = cloneInt64Pointer(page.NewerCursor)
+			bottom.newerCursor = valuecopy.Pointer(page.NewerCursor)
 			bottom.hasMoreBelow = page.HasMoreBelow
 		}
 		w.refreshBounds()
@@ -318,14 +319,14 @@ func (w uiDetailTranscriptWindow) pageBefore() (clientui.TranscriptPageRequest, 
 	if !w.loaded || !w.hasMoreAbove || w.olderCursor == nil {
 		return clientui.TranscriptPageRequest{}, false
 	}
-	return clientui.TranscriptPageRequest{Cursor: cloneInt64Pointer(w.olderCursor)}, true
+	return clientui.TranscriptPageRequest{Cursor: valuecopy.Pointer(w.olderCursor)}, true
 }
 
 func (w uiDetailTranscriptWindow) pageAfter() (clientui.TranscriptPageRequest, bool) {
 	if !w.loaded || !w.hasMoreBelow || w.newerCursor == nil {
 		return clientui.TranscriptPageRequest{}, false
 	}
-	return clientui.TranscriptPageRequest{NewerCursor: cloneInt64Pointer(w.newerCursor)}, true
+	return clientui.TranscriptPageRequest{NewerCursor: valuecopy.Pointer(w.newerCursor)}, true
 }
 
 func pageRequestEqual(a, b clientui.TranscriptPageRequest) bool {
@@ -352,14 +353,6 @@ func cloneDetailChatEntries(entries []clientui.ChatEntry) []clientui.ChatEntry {
 		out = append(out, copyEntry)
 	}
 	return out
-}
-
-func cloneInt64Pointer(value *int64) *int64 {
-	if value == nil {
-		return nil
-	}
-	copyValue := *value
-	return &copyValue
 }
 
 func int64PointerEqual(left, right *int64) bool {

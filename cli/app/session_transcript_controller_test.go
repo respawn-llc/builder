@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"core/cli/tui/ongoing"
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 
 	"github.com/google/uuid"
@@ -291,6 +292,18 @@ func (s *ongoingSurfaceSpy) lastFrameSectionLines(kind ongoing.FrameSectionKind)
 			}
 			lines = append(lines, section.Lines...)
 			return lines
+		}
+	}
+	return nil
+}
+
+func (s *ongoingSurfaceSpy) lastFrameStyledSection(kind ongoing.FrameSectionKind) []transcriptrender.Line {
+	if len(s.calls) == 0 {
+		return nil
+	}
+	for _, section := range s.calls[len(s.calls)-1].frame.Sections {
+		if section.Kind == kind {
+			return append([]transcriptrender.Line(nil), section.StyledLines...)
 		}
 	}
 	return nil

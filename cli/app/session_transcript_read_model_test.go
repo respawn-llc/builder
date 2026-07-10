@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/cli/tui/ongoing"
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 
 	"github.com/charmbracelet/lipgloss"
@@ -306,6 +307,14 @@ func TestOngoingTranscriptControllerTracksPluralLiveSectionsByID(t *testing.T) {
 
 	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionQueuedOrSteered), []string{"second queued"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("queued section lines = %v, want %v", got, want)
+	}
+	queuedLines := surface.lastFrameStyledSection(ongoing.FrameSectionQueuedOrSteered)
+	if len(queuedLines) != 1 || len(queuedLines[0].Spans) == 0 {
+		t.Fatalf("server steering styled lines = %+v, want one typed line", queuedLines)
+	}
+	queuedSpan := queuedLines[0].Spans[0]
+	if queuedSpan.Role != transcriptrender.StyleRoleNoticePrimary || queuedSpan.Faint {
+		t.Fatalf("server steering span = %+v, want primary/full-strength", queuedSpan)
 	}
 	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingPrompt), []string{"second prompt"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("prompt section lines = %v, want %v", got, want)

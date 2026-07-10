@@ -12,7 +12,6 @@ import (
 	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -71,14 +70,14 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				defer serialGate.done(serialOrdinal)
 			}
 			if !knownTool {
-				results[idx] = toolResultWithTranscriptPresentation(tools.Result{CallID: tc.ID, Name: toolspec.ID(tc.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: "unknown tool"}, tc, workingDir)
+				results[idx] = tools.Result{CallID: tc.ID, Name: toolspec.ID(tc.Name), IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: "unknown tool"}
 				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
 					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
 				}
 				return
 			}
 			if toolID == toolspec.ToolCompleteNode {
-				results[idx] = toolResultWithTranscriptPresentation(t.executeCompleteNodeTool(ctx, stepID, tc), tc, workingDir)
+				results[idx] = t.executeCompleteNodeTool(ctx, stepID, tc)
 				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
 					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
 				}
@@ -87,7 +86,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 			h, ok := e.registry.Get(toolID)
 			if toolID == toolspec.ToolWebSearch {
 				if err := tools.ValidateWebSearchInput(tc.Input); err != nil {
-					results[idx] = toolResultWithTranscriptPresentation(tools.ErrorResult(tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID}, tools.InvalidWebSearchQueryMessage), tc, workingDir)
+					results[idx] = tools.ErrorResult(tools.Call{ID: tc.ID, Name: toolID, Input: tc.Input, RunID: runID, StepID: stepID}, tools.InvalidWebSearchQueryMessage)
 					if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
 						callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
 					}
@@ -95,7 +94,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				}
 			}
 			if !ok {
-				results[idx] = toolResultWithTranscriptPresentation(tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: "unknown tool"}, tc, workingDir)
+				results[idx] = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": "unknown tool"}), Summary: "unknown tool"}
 				if err := e.steer(stepID, steerToolCompletionIntent(results[idx])); err != nil {
 					callErrs[idx] = fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, results[idx].Name, err)
 				}
@@ -106,10 +105,8 @@ func (t *defaultToolExecutor) ExecuteToolCalls(ctx context.Context, stepID strin
 				callErr = err
 				res = tools.Result{CallID: tc.ID, Name: toolID, IsError: true, Output: mustJSON(map[string]any{"error": err.Error()}), Summary: err.Error()}
 			}
-			if res.Name == "" {
-				res.Name = toolID
-			}
-			res = toolResultWithTranscriptPresentation(res, tc, workingDir)
+			res.CallID = tc.ID
+			res.Name = toolID
 			results[idx] = res
 			if err := e.steer(stepID, steerToolCompletionIntent(res)); err != nil {
 				persistErr := fmt.Errorf("%w (call_id=%s tool=%s): %w", errPersistToolCompletion, tc.ID, res.Name, err)
@@ -237,28 +234,6 @@ func serialToolExecutionRequired(toolID toolspec.ID, workflowActive bool) bool {
 	default:
 		return false
 	}
-}
-
-func toolResultWithTranscriptPresentation(result tools.Result, call llm.ToolCall, workingDir string) tools.Result {
-	if result.Presentation != nil {
-		panic(fmt.Sprintf(
-			"tool result presentation invariant violated: live handler returned finalized presentation (call_id=%q tool=%q)",
-			result.CallID,
-			result.Name,
-		))
-	}
-	callMeta := transcriptToolCallMeta(call, workingDir)
-	if callMeta == nil {
-		panic(fmt.Sprintf(
-			"tool result presentation invariant violated: call metadata is unavailable (call_id=%q tool=%q)",
-			result.CallID,
-			result.Name,
-		))
-	}
-	finalized := transcript.ApplyToolResultPresentationDelta(*callMeta, result.PresentationDelta)
-	result.PresentationDelta = nil
-	result.Presentation = &finalized
-	return result
 }
 
 func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepID string, call llm.ToolCall) tools.Result {

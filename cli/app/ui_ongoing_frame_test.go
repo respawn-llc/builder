@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/cli/tui/ongoing"
+	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 )
 
@@ -133,8 +134,12 @@ func TestOngoingFrameInputStillRendersClientLocalQueuedMessages(t *testing.T) {
 	if !ok {
 		t.Fatal("local queued section missing")
 	}
-	if got, want := section.Lines, []string{padANSIRight("queued before server acceptance", 48)}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("local queued lines = %q, want %q", got, want)
+	if len(section.StyledLines) != 1 || len(section.StyledLines[0].Spans) == 0 {
+		t.Fatalf("local queued styled lines = %+v, want one typed line", section.StyledLines)
+	}
+	span := section.StyledLines[0].Spans[0]
+	if span.Role != transcriptrender.StyleRoleNoticeSecondary || !span.Faint {
+		t.Fatalf("local queued span = %+v, want secondary/faint", span)
 	}
 }
 
@@ -158,8 +163,12 @@ func TestOngoingFrameInputRendersPendingInjectedMessagesBeforeServerAcceptance(t
 	if !ok {
 		t.Fatal("pending injected section missing")
 	}
-	if got, want := section.Lines, []string{padANSIRight("pending injected before server acceptance", 48)}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("pending injected lines = %q, want %q", got, want)
+	if len(section.StyledLines) != 1 || len(section.StyledLines[0].Spans) == 0 {
+		t.Fatalf("pending injected styled lines = %+v, want one typed line", section.StyledLines)
+	}
+	span := section.StyledLines[0].Spans[0]
+	if span.Role != transcriptrender.StyleRoleNoticePrimary || span.Faint {
+		t.Fatalf("pending injected span = %+v, want primary/full-strength", span)
 	}
 }
 
@@ -182,8 +191,12 @@ func TestOngoingFrameInputRendersNoRuntimeInjectedMessages(t *testing.T) {
 	if !ok {
 		t.Fatal("no-runtime injected section missing")
 	}
-	if got, want := section.Lines, []string{padANSIRight("local injected without runtime client", 48)}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("no-runtime injected lines = %q, want %q", got, want)
+	if len(section.StyledLines) != 1 || len(section.StyledLines[0].Spans) == 0 {
+		t.Fatalf("no-runtime injected styled lines = %+v, want one typed line", section.StyledLines)
+	}
+	span := section.StyledLines[0].Spans[0]
+	if span.Role != transcriptrender.StyleRoleNoticePrimary || span.Faint {
+		t.Fatalf("no-runtime injected span = %+v, want primary/full-strength", span)
 	}
 }
 

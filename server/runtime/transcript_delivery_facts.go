@@ -8,6 +8,7 @@ import (
 	"core/server/tools"
 	"core/shared/toolspec"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 
 	"github.com/google/uuid"
 )
@@ -125,19 +126,6 @@ func TranscriptToolStartFactsFromEvent(evt Event) []TranscriptLiveToolStart {
 			return nil
 		}
 		return []TranscriptLiveToolStart{start}
-	case EventConversationUpdated, EventAssistantMessage:
-		if len(evt.Message.ToolCalls) == 0 {
-			return nil
-		}
-		out := make([]TranscriptLiveToolStart, 0, len(evt.Message.ToolCalls))
-		for _, call := range evt.Message.ToolCalls {
-			start := transcriptLiveToolStartFromCall(call)
-			if strings.TrimSpace(start.ToolCallID) == "" {
-				continue
-			}
-			out = append(out, start)
-		}
-		return out
 	default:
 		return nil
 	}
@@ -347,7 +335,7 @@ func runtimeNoticeFactFromMessage(msg llm.Message, severity string) TranscriptCo
 		SourcePath:         strings.TrimSpace(msg.SourcePath),
 		CondensedText:      strings.TrimSpace(msg.CompactContent),
 		CompactLabel:       compactLabelForMessage(msg),
-		BackgroundExitCode: cloneIntPtr(msg.BackgroundExitCode),
+		BackgroundExitCode: valuecopy.Pointer(msg.BackgroundExitCode),
 		DiagnosticCode:     code,
 		DiagnosticDetail:   msg.Content,
 	}}
@@ -373,7 +361,7 @@ func runtimeNoticeFactFromLocalEntry(entry ChatEntry) TranscriptCommittedRowFact
 		SourcePath:         strings.TrimSpace(entry.SourcePath),
 		CondensedText:      strings.TrimSpace(entry.CondensedText),
 		CompactLabel:       strings.TrimSpace(entry.CompactLabel),
-		BackgroundExitCode: cloneIntPtr(entry.BackgroundExitCode),
+		BackgroundExitCode: valuecopy.Pointer(entry.BackgroundExitCode),
 		DiagnosticCode:     role,
 		DiagnosticDetail:   detail,
 	}}

@@ -309,10 +309,11 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return e.replaceHistoryRaw(stepID, *item.historyReplace)
 	}
 	if item.toolCompletion != nil {
-		if err := e.persistToolCompletionRaw(stepID, *item.toolCompletion); err != nil {
+		result := e.finalizeLiveToolCompletion(*item.toolCompletion)
+		if err := e.persistToolCompletionRaw(stepID, result); err != nil {
 			return err
 		}
-		result := cloneToolResult(*item.toolCompletion)
+		result = cloneToolResult(result)
 		e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
 		e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true})
 		return nil
