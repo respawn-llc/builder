@@ -64,12 +64,13 @@ func TestResponsesStubCancelsHeldSSEAndReturnsDeclaredProviderFailure(t *testing
 		}
 		responseDone <- requestErr
 	}()
-	deadline := time.After(time.Second)
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
 	for hold.Snapshot().ActiveRequests == 0 {
 		select {
-		case <-deadline:
+		case <-hold.Events():
+		case <-deadline.C:
 			t.Fatal("held SSE did not become active")
-		case <-time.After(time.Millisecond):
 		}
 	}
 	hold.Close()
@@ -77,6 +78,11 @@ func TestResponsesStubCancelsHeldSSEAndReturnsDeclaredProviderFailure(t *testing
 	case <-responseDone:
 	case <-time.After(time.Second):
 		t.Fatal("held SSE request did not unblock on stub close")
+	}
+	select {
+	case <-hold.Done():
+	case <-time.After(time.Second):
+		t.Fatal("held SSE stub did not close")
 	}
 
 	provider, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
