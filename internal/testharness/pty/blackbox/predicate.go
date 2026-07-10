@@ -34,15 +34,24 @@ func (p Predicate) Matches(observation RunObservation) bool {
 			return false
 		}
 		lastAlternateExit := -1
+		alternateScreenActive := false
+		lastVisibleCursor := -1
 		for index, change := range observation.Analysis.PrivateModeChanges {
-			if change.Mode == 1049 && !change.Enabled {
-				lastAlternateExit = index
+			if change.Mode == 1049 {
+				if change.Enabled {
+					alternateScreenActive = true
+					lastVisibleCursor = -1
+				} else {
+					alternateScreenActive = false
+					lastAlternateExit = index
+					lastVisibleCursor = -1
+				}
 			}
-			if change.Mode == 25 && change.Enabled && index > lastAlternateExit {
-				return true
+			if change.Mode == 25 && change.Enabled && !alternateScreenActive && index > lastAlternateExit {
+				lastVisibleCursor = index
 			}
 		}
-		return false
+		return !alternateScreenActive && lastVisibleCursor > lastAlternateExit
 	case PredicateProcessExited:
 		return observation.ClientExited
 	case PredicateServerReady:

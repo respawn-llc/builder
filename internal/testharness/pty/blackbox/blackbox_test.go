@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/blackbox"
 	"core/server/llm"
 
@@ -42,6 +43,38 @@ func TestDecodeScenarioRejectsUnknownFieldsAndUnionEscapeHatches(t *testing.T) {
 	_, err = blackbox.DecodeScenario([]byte(`{"version":1,"id":"` + id + `","dimensions":{"rows":2,"cols":8},"model_operations":[{"id":"` + uuid.New().String() + `","route":"compact","stream":false}],"actions":[]}`))
 	if err == nil {
 		t.Fatal("DecodeScenario accepted explicitly irrelevant model operation field")
+	}
+}
+
+func TestPromptReadyRequiresCursorVisibilityAfterMostRecentAlternateExit(t *testing.T) {
+	t.Parallel()
+
+	predicate := blackbox.Predicate{Kind: blackbox.PredicatePromptReady}
+	observation := func(changes ...analyzer.PrivateModeChange) blackbox.RunObservation {
+		return blackbox.RunObservation{Analysis: &analyzer.Analysis{PrivateModeChanges: changes}}
+	}
+	if !predicate.Matches(observation(analyzer.PrivateModeChange{Mode: 25, Enabled: true})) {
+		t.Fatal("startup cursor-visible transition did not satisfy prompt readiness")
+	}
+	if predicate.Matches(observation(
+		analyzer.PrivateModeChange{Mode: 1049, Enabled: true},
+		analyzer.PrivateModeChange{Mode: 25, Enabled: true},
+	)) {
+		t.Fatal("cursor-visible transition inside alternate screen satisfied prompt readiness")
+	}
+	if predicate.Matches(observation(
+		analyzer.PrivateModeChange{Mode: 25, Enabled: true},
+		analyzer.PrivateModeChange{Mode: 1049, Enabled: true},
+		analyzer.PrivateModeChange{Mode: 1049, Enabled: false},
+	)) {
+		t.Fatal("cursor transition before alternate exit satisfied prompt readiness")
+	}
+	if !predicate.Matches(observation(
+		analyzer.PrivateModeChange{Mode: 1049, Enabled: true},
+		analyzer.PrivateModeChange{Mode: 1049, Enabled: false},
+		analyzer.PrivateModeChange{Mode: 25, Enabled: true},
+	)) {
+		t.Fatal("cursor-visible transition after alternate exit did not satisfy prompt readiness")
 	}
 }
 
