@@ -608,6 +608,45 @@ func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndTool
 	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committed)
 }
 
+func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   llm.MessagePhaseFinal,
+			Content: "done",
+		},
+		Reasoning: []llm.ReasoningEntry{{
+			Role: "reasoning",
+			Text: "**Reviewing test flow for mode transitions**",
+		}},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}}}
+	events := make([]Event, 0, 8)
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeTool{name: toolspec.ToolExecCommand},
+	}), Config{
+		Model:   "gpt-5",
+		OnEvent: func(evt Event) { events = append(events, evt) },
+	})
+
+	if _, err := eng.runStepLoopWithOptions(context.Background(), "step-1", "off", nil, false); err != nil {
+		t.Fatalf("run step loop: %v", err)
+	}
+
+	for _, evt := range committedTranscriptEventsWithEntries(events) {
+		if evt.Kind != EventLocalEntryAdded || evt.LocalEntry == nil || evt.LocalEntry.Role != "reasoning" {
+			continue
+		}
+		entries := TranscriptEntriesFromEvent(evt)
+		if len(entries) != 1 || entries[0].Visibility != transcript.EntryVisibilityDetail {
+			t.Fatalf("reasoning progress entries = %+v, want one detail-only entry", entries)
+		}
+		return
+	}
+	t.Fatal("reasoning progress was not committed")
+}
+
 func TestStreamingToolLoopAssistantCommitClearsServerStreamingBeforeNextTurn(t *testing.T) {
 	client := &streamingToolLoopClient{}
 	events := make([]Event, 0, 16)

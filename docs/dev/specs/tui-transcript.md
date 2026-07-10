@@ -112,6 +112,7 @@
 - assistant turns: `O`
 - tool calls: `OC`
 - reviewer suggestions/status: `OC` or `O`
+- reasoning-summary progress updates: `D`; their live first bold span is projected into the status-line reasoning slot while the model is reasoning.
 - Runtime projection decides whether persisted/runtime messages become transcript entries and which role they use.
 - TUI rendering decides how transcript roles behave in ongoing and detail.
 - When a concept already has a dedicated transcript role, do not also render its raw developer/request artifact.
