@@ -82,10 +82,15 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 			}
 		}
 	}()
+	clientEnvironment, err := environment.ClientEnvironment()
+	if err != nil {
+		result.Err = fmt.Errorf("build client environment: %w", err)
+		return result
+	}
 	session, err = driver.StartSession(driver.SessionSpec{
 		Path:       request.ClientBinary,
 		Args:       []string{"--force-interactive", "--persistence-root", environment.Root},
-		Env:        environment.ClientEnvironment(),
+		Env:        clientEnvironment,
 		Dir:        environment.Workspace,
 		Dimensions: analyzer.MustDimensions(request.Scenario.Dimensions.Rows, request.Scenario.Dimensions.Cols),
 	})

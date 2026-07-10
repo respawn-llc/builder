@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -90,11 +91,11 @@ func NewIsolatedEnvironment(serverBinary string, operations []RequiredOperation)
 	return environment, nil
 }
 
-func (e *IsolatedEnvironment) ClientEnvironment() []string {
+func (e *IsolatedEnvironment) ClientEnvironment() ([]string, error) {
 	if e == nil {
-		return nil
+		return nil, errors.New("isolated environment is required")
 	}
-	return exactEnvironment(filepath.Join(e.Root, "client-home"), e.Root, e.Host, e.Port, "")
+	return clientEnvironment(filepath.Join(e.Root, "client-home"), e.Root, e.Host, e.Port)
 }
 
 func (e *IsolatedEnvironment) WaitReady() error {
@@ -213,7 +214,11 @@ func (s *ServerHandle) ForceKill() {
 
 func startServer(binary string, root string, host string, port int, stubURL string) (*ServerHandle, error) {
 	cmd := exec.Command(binary, "serve", "--persistence-root", root)
-	cmd.Env = exactEnvironment(filepath.Join(root, "server-home"), root, host, port, stubURL)
+	environment, err := serverEnvironment(filepath.Join(root, "server-home"), root, host, port, stubURL)
+	if err != nil {
+		return nil, err
+	}
+	cmd.Env = environment
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout := newBoundedLog(512 * 1024)
 	stderr := newBoundedLog(512 * 1024)
@@ -243,30 +248,72 @@ func reserveLoopbackPort() (string, int, error) {
 	return "127.0.0.1", address.Port, nil
 }
 
-func exactEnvironment(home string, root string, host string, port int, modelURL string) []string {
-	_ = os.MkdirAll(home, 0o700)
-	runtime := filepath.Join(home, "runtime")
-	temporary := filepath.Join(home, "tmp")
-	_ = os.MkdirAll(runtime, 0o700)
-	_ = os.MkdirAll(temporary, 0o700)
-	environment := []string{
-		"HOME=" + home,
-		"TMPDIR=" + temporary,
-		"XDG_RUNTIME_DIR=" + runtime,
-		"PATH=" + os.Getenv("PATH"),
-		"SHELL=/bin/sh",
-		"TZ=UTC",
-		"KENT_PERSISTENCE_ROOT=" + root,
-		"KENT_SERVER_HOST=" + host,
-		"KENT_SERVER_PORT=" + strconv.Itoa(port),
+func clientEnvironment(home string, root string, host string, port int) ([]string, error) {
+	environment, err := baseEnvironment(home, root, host, port)
+	if err != nil {
+		return nil, err
+	}
+	return appendEnvironment(environment,
 		"TERM=xterm-256color",
 		"LANG=C.UTF-8",
 		"LC_ALL=C.UTF-8",
+	)
+}
+
+func serverEnvironment(home string, root string, host string, port int, modelURL string) ([]string, error) {
+	environment, err := baseEnvironment(home, root, host, port)
+	if err != nil {
+		return nil, err
 	}
-	if modelURL != "" {
-		environment = append(environment, "KENT_OPENAI_BASE_URL="+modelURL)
+	return appendEnvironment(environment, "KENT_OPENAI_BASE_URL="+modelURL)
+}
+
+func baseEnvironment(home string, root string, host string, port int) ([]string, error) {
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return nil, fmt.Errorf("create process home: %w", err)
 	}
-	return environment
+	runtime := filepath.Join(home, "runtime")
+	temporary := filepath.Join(home, "tmp")
+	if err := os.MkdirAll(runtime, 0o700); err != nil {
+		return nil, fmt.Errorf("create process runtime directory: %w", err)
+	}
+	if err := os.MkdirAll(temporary, 0o700); err != nil {
+		return nil, fmt.Errorf("create process temporary directory: %w", err)
+	}
+	return appendEnvironment(nil,
+		"HOME="+home,
+		"TMPDIR="+temporary,
+		"XDG_RUNTIME_DIR="+runtime,
+		"PATH="+os.Getenv("PATH"),
+		"SHELL=/bin/sh",
+		"TZ=UTC",
+		"KENT_PERSISTENCE_ROOT="+root,
+		"KENT_SERVER_HOST="+host,
+		"KENT_SERVER_PORT="+strconv.Itoa(port),
+	)
+}
+
+func appendEnvironment(environment []string, entries ...string) ([]string, error) {
+	keys := make(map[string]struct{}, len(environment)+len(entries))
+	for _, entry := range environment {
+		key, _, found := strings.Cut(entry, "=")
+		if !found || key == "" {
+			return nil, fmt.Errorf("invalid environment entry %q", entry)
+		}
+		keys[key] = struct{}{}
+	}
+	for _, entry := range entries {
+		key, _, found := strings.Cut(entry, "=")
+		if !found || key == "" {
+			return nil, fmt.Errorf("invalid environment entry %q", entry)
+		}
+		if _, exists := keys[key]; exists {
+			return nil, fmt.Errorf("duplicate environment key %q", key)
+		}
+		keys[key] = struct{}{}
+		environment = append(environment, entry)
+	}
+	return environment, nil
 }
 
 type boundedLog struct {
