@@ -154,6 +154,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Download release artifacts
         uses: actions/download-artifact@v8.0.1
@@ -203,6 +205,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Download release artifacts
         uses: actions/download-artifact@v8.0.1
@@ -252,6 +256,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Download release artifacts
         uses: actions/download-artifact@v8.0.1
@@ -293,6 +299,8 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Install Linux bundling dependencies
         if: matrix.platform == 'linux'
@@ -351,6 +359,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
 
       # Both platforms' staged bundles merge into one dist dir so assemble sees all
       # updater .sig files and emits a single latest.json covering both platforms.
@@ -397,6 +407,7 @@ jobs:
       - uses: actions/checkout@v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/checkout@v7.0.0
         with:

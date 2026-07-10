@@ -9,11 +9,11 @@ index 0354f11fb5fd294ba494c02c7cb1f794f957a707..564aecdbbe6202dcd318a142cbf39ae0
 +let astroContainer: Awaited<ReturnType<typeof experimental_AstroContainer.create>> | undefined;
 +
 +async function getAstroContainer() {
-+  astroContainer ??= await experimental_AstroContainer.create({
-+    renderers: [{ name: 'astro:jsx', ssr: mdxServer }],
-+  });
-+  return astroContainer;
++	astroContainer ??= await experimental_AstroContainer.create({
++		renderers: [{ name: 'astro:jsx', ssr: mdxServer }],
++	});
++	return astroContainer;
 +}
 @@ -221 +226 @@ export async function entryToSimpleMarkdown(
 -	const html = await astroContainer.renderToString(Content, context);
-+  const html = await (await getAstroContainer()).renderToString(Content, context);
++	const html = await (await getAstroContainer()).renderToString(Content, context);
