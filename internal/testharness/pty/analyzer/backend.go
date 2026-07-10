@@ -17,7 +17,6 @@ type tracingBackend struct {
 	ops             []Operation
 	writeText       *writeTextArena
 	pendingWrite    *pendingWrite
-	writeCache      map[Region]string
 	operationBudget *operationBudget
 	err             error
 }
@@ -38,7 +37,6 @@ func newTracingBackend(dimensions Dimensions) *tracingBackend {
 		cells:           snapshot.Cells,
 		modes:           map[vt.PrivateMode]vt.ModeStatus{},
 		writeText:       newDefaultWriteTextArena(),
-		writeCache:      make(map[Region]string),
 		operationBudget: newOperationBudget(),
 	}
 }

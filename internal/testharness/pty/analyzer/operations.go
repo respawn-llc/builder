@@ -34,9 +34,8 @@ func canExtendWrite(pending pendingWrite, position Position, text string, backen
 		text != ""
 }
 
-// flushPendingWrite emits one semantic row segment. Repeated redraws of an
-// unchanged segment do not add duplicate diagnostic operations or arena text:
-// the final screen is authoritative and one representative operation remains.
+// flushPendingWrite emits one semantic row segment. Terminal operations are
+// evidence, not a screen diff: identical redraws remain distinct operations.
 func (b *tracingBackend) flushPendingWrite() error {
 	if b.pendingWrite == nil {
 		return nil
@@ -44,9 +43,6 @@ func (b *tracingBackend) flushPendingWrite() error {
 	pending := b.pendingWrite
 	b.pendingWrite = nil
 	text := string(pending.text)
-	if previous, exists := b.writeCache[pending.region]; exists && previous == text {
-		return nil
-	}
 	span, err := b.writeText.append(text)
 	if err != nil {
 		return err
@@ -63,9 +59,6 @@ func (b *tracingBackend) flushPendingWrite() error {
 		CapturedAt: pending.chunk.At,
 	}) {
 		return b.err
-	}
-	if len(b.writeCache) < maxAnalyzerOperations {
-		b.writeCache[pending.region] = text
 	}
 	return nil
 }

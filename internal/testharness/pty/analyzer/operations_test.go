@@ -45,3 +45,25 @@ func TestWriteTextArenaRejectsAggregateOverflow(t *testing.T) {
 		}
 	}
 }
+
+func TestIdenticalRedrawAfterEraseRemainsSemanticOperation(t *testing.T) {
+	capture, err := NewCapture(MustDimensions(2, 8), []Chunk{
+		NewChunk(0, 0, []byte("x\x1b[2Jx")),
+	})
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	analysis, err := Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	writes := 0
+	for _, operation := range analysis.Operations {
+		if operation.Kind == OperationWrite && operation.Write != nil && operation.Write.Text() == "x" {
+			writes++
+		}
+	}
+	if writes != 2 {
+		t.Fatalf("identical redraw writes = %d, want 2; operations=%#v", writes, analysis.Operations)
+	}
+}

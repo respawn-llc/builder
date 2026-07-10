@@ -104,7 +104,13 @@ func (e *IsolatedEnvironment) WaitReady() error {
 	deadline := time.Now().Add(fixedWait)
 	url := "http://" + net.JoinHostPort(e.Host, strconv.Itoa(e.Port)) + "/readyz"
 	for time.Now().Before(deadline) {
-		response, err := directHTTPClient.Get(url)
+		probeContext, cancel := context.WithDeadline(context.Background(), deadline)
+		request, requestErr := http.NewRequestWithContext(probeContext, http.MethodGet, url, nil)
+		if requestErr != nil {
+			cancel()
+			return fmt.Errorf("create readiness request: %w", requestErr)
+		}
+		response, err := directHTTPClient.Do(request)
 		if err == nil {
 			var body struct {
 				Ready bool `json:"ready"`
@@ -112,6 +118,7 @@ func (e *IsolatedEnvironment) WaitReady() error {
 			}
 			decodeErr := json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&body)
 			_ = response.Body.Close()
+			cancel()
 			if decodeErr != nil {
 				return fmt.Errorf("decode readiness: %w", decodeErr)
 			}
@@ -121,6 +128,8 @@ func (e *IsolatedEnvironment) WaitReady() error {
 			if response.StatusCode == http.StatusOK && body.Ready {
 				return nil
 			}
+		} else {
+			cancel()
 		}
 		select {
 		case <-e.Server.done:
@@ -132,27 +141,34 @@ func (e *IsolatedEnvironment) WaitReady() error {
 }
 
 func (e *IsolatedEnvironment) BindProject() error {
-	ctx, cancel := context.WithTimeout(context.Background(), fixedWait)
-	defer cancel()
-	remote, err := client.DialRemoteURL(ctx, "ws://"+net.JoinHostPort(e.Host, strconv.Itoa(e.Port))+"/rpc")
+	dialContext, cancelDial := context.WithTimeout(context.Background(), fixedWait)
+	remote, err := client.DialRemoteURL(dialContext, "ws://"+net.JoinHostPort(e.Host, strconv.Itoa(e.Port))+"/rpc")
+	cancelDial()
 	if err != nil {
 		return fmt.Errorf("dial standalone server project API: %w", err)
 	}
 	defer remote.Close()
-	if err := remote.EnableNoAuthBootstrapAcknowledgement(ctx); err != nil {
+	acknowledgeContext, cancelAcknowledge := context.WithTimeout(context.Background(), fixedWait)
+	err = remote.EnableNoAuthBootstrapAcknowledgement(acknowledgeContext)
+	cancelAcknowledge()
+	if err != nil {
 		return fmt.Errorf("acknowledge standalone no-auth setup: %w", err)
 	}
-	created, err := remote.CreateProject(ctx, serverapi.ProjectCreateRequest{
+	createContext, cancelCreate := context.WithTimeout(context.Background(), fixedWait)
+	created, err := remote.CreateProject(createContext, serverapi.ProjectCreateRequest{
 		DisplayName:   "PTY Harness",
 		WorkspaceRoot: e.Workspace,
 	})
+	cancelCreate()
 	if err != nil {
 		return fmt.Errorf("create isolated project: %w", err)
 	}
-	plan, err := remote.PlanWorkspaceBinding(ctx, serverapi.ProjectBindingPlanRequest{
+	planContext, cancelPlan := context.WithTimeout(context.Background(), fixedWait)
+	plan, err := remote.PlanWorkspaceBinding(planContext, serverapi.ProjectBindingPlanRequest{
 		Path: e.Workspace,
 		Mode: serverapi.ProjectBindingPlanModeInteractive,
 	})
+	cancelPlan()
 	if err != nil {
 		return fmt.Errorf("verify isolated project binding: %w", err)
 	}
