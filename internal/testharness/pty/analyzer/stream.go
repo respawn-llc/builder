@@ -140,15 +140,16 @@ func (s *Stream) Snapshot() (Analysis, error) {
 	}
 	privateModeChanges := s.sideChannel.privateModeChangeLog()
 	screen := s.backend.snapshot()
+	operations, err := s.backend.snapshotOperations()
+	if err != nil {
+		return Analysis{}, err
+	}
 	if err := s.backend.error(); err != nil {
 		return Analysis{}, err
 	}
 	return Analysis{
-		Dimensions: screen.Dimensions,
-		// Snapshot must not materialize pending semantic writes: that would
-		// make operations depend on kernel read fragmentation. Finish is the
-		// only semantic finalization point.
-		Operations:         mergePrivateModeOperations(append([]Operation(nil), s.backend.ops...), privateModeChanges),
+		Dimensions:         screen.Dimensions,
+		Operations:         mergePrivateModeOperations(operations, privateModeChanges),
 		PrivateModeChanges: privateModeChanges,
 		PhaseEvents:        s.sideChannel.phaseEventLog(),
 		Screen:             screen,

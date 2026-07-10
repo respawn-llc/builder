@@ -104,6 +104,30 @@ func (b *tracingBackend) operations() []Operation {
 	return append([]Operation(nil), b.ops...)
 }
 
+func (b *tracingBackend) snapshotOperations() ([]Operation, error) {
+	operations := append([]Operation(nil), b.ops...)
+	if b.pendingWrite == nil {
+		return operations, nil
+	}
+	pending := b.pendingWrite
+	payload, err := NewWritePayload(string(pending.text))
+	if err != nil {
+		return nil, err
+	}
+	operations = append(operations, Operation{
+		Sequence:   len(operations),
+		Kind:       OperationWrite,
+		ChunkIndex: pending.chunk.Index,
+		ByteRange:  pending.byteRange,
+		Before:     pending.before,
+		After:      pending.after,
+		Region:     pending.region,
+		Write:      &payload,
+		CapturedAt: pending.chunk.At,
+	})
+	return operations, nil
+}
+
 func (b *tracingBackend) snapshot() ScreenSnapshot {
 	cells := make([][]Cell, len(b.cells))
 	for row := range b.cells {
