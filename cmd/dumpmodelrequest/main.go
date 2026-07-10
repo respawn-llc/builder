@@ -130,13 +130,26 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("load config: %w", err)
 	}
-	resolved, err := launch.ResolvePromptFacingSnapshotConfig(cfg, store, false)
+	resolved, err := launch.ResolvePromptFacingSnapshotPlan(cfg, store, false)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve session launch settings: %w", err)
 	}
-	workflowConfig, err := resolvePersistedWorkflowRuntimeConfig(ctx, md, store, resolved.Settings)
-	if err != nil {
-		return capturedRequest{}, fmt.Errorf("resolve workflow runtime: %w", err)
+	activeSettings := resolved.ActiveSettings
+	activeToolIDs := resolved.EnabledTools
+	activeSources := resolved.Source.Sources
+	workingDirectory := ""
+	var workflowConfig *workflowruntime.Config
+	if store.Meta().WorkflowSession != nil {
+		workflowInspection, workflowErr := resolvePersistedWorkflowInspection(ctx, cfg, md, store)
+		if workflowErr != nil {
+			return capturedRequest{}, fmt.Errorf("resolve workflow session launch settings: %w", workflowErr)
+		}
+		resolved = workflowInspection.Plan
+		workflowConfig = workflowInspection.Runtime
+		workingDirectory = workflowInspection.WorktreeRoot
+		activeSettings = resolved.ActiveSettings
+		activeToolIDs = resolved.EnabledTools
+		activeSources = resolved.Source.Sources
 	}
 	authStore := auth.NewEnvAPIKeyOverrideStore(
 		auth.NewFileStore(config.GlobalAuthConfigPath(cfg)),
@@ -147,7 +160,7 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		return capturedRequest{}, fmt.Errorf("load auth state: %w", err)
 	}
 
-	caps, forceProviderContract, err := resolveInspectionProviderCapabilities(authState, resolved.Settings, meta.Locked, providerOverride)
+	caps, forceProviderContract, err := resolveInspectionProviderCapabilities(authState, activeSettings, meta.Locked, providerOverride)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve provider capabilities: %w", err)
 	}
@@ -155,16 +168,19 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		return capturedRequest{}, err
 	}
 	mode := llm.OpenAIAuthModeForAuthState(authState)
-	wireCaps, err := resolveOpenAIWirePayloadCapabilities(mode, resolved.Settings, providerOverride)
+	wireCaps, err := resolveOpenAIWirePayloadCapabilities(mode, activeSettings, providerOverride)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve wire provider capabilities: %w", err)
 	}
 	if err := validateOpenAIResponsesInspectionProvider(wireCaps); err != nil {
 		return capturedRequest{}, err
 	}
-	target, err := md.ResolveSessionExecutionTarget(ctx, sessionID)
-	if err != nil {
-		return capturedRequest{}, fmt.Errorf("resolve session execution target: %w", err)
+	if workflowConfig == nil {
+		target, targetErr := md.ResolveSessionExecutionTarget(ctx, sessionID)
+		if targetErr != nil {
+			return capturedRequest{}, fmt.Errorf("resolve session execution target: %w", targetErr)
+		}
+		workingDirectory = target.EffectiveWorkdir
 	}
 	var providerCapabilitiesOverride *llm.ProviderCapabilities
 	if forceProviderContract {
@@ -172,19 +188,20 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	}
 	wiring, err := runtimewire.NewRuntimeWiring(
 		store,
-		resolved.Settings,
-		resolved.ActiveToolIDs,
-		target.EffectiveWorkdir,
+		activeSettings,
+		activeToolIDs,
+		workingDirectory,
 		auth.NewManager(authStore, nil, nil),
 		nil,
 		runtimewire.RuntimeWiringOptions{
-			Context:                      ctx,
-			Client:                       inspectionCapabilityClient{capabilities: caps},
-			Headless:                     workflowConfig != nil,
-			Sources:                      resolved.Source.Sources,
-			ProviderCapabilitiesOverride: providerCapabilitiesOverride,
-			GlobalConfigDir:              persistenceRoot,
-			WorkflowRun:                  workflowConfig,
+			Context:                             ctx,
+			Client:                              inspectionCapabilityClient{capabilities: caps},
+			Headless:                            workflowConfig != nil,
+			Sources:                             activeSources,
+			SkipContinuationAgentRoleValidation: resolved.SkipContinuationAgentRoleValidation,
+			ProviderCapabilitiesOverride:        providerCapabilitiesOverride,
+			GlobalConfigDir:                     persistenceRoot,
+			WorkflowRun:                         workflowConfig,
 		},
 	)
 	if err != nil {
@@ -203,8 +220,8 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	}
 
 	openAIReq := llm.RequestAsOpenAI(req)
-	storeFlag := resolved.Settings.Store
-	modelVerbosity := string(resolved.Settings.ModelVerbosity)
+	storeFlag := activeSettings.Store
+	modelVerbosity := string(activeSettings.ModelVerbosity)
 	wireBytes, err := llm.MarshalOpenAIWirePayload(openAIReq, storeFlag, modelVerbosity, mode, wireCaps)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("marshal wire payload: %w", err)
@@ -239,21 +256,12 @@ func loadSessionConfig(bootstrap launch.BootstrapPlan, persistenceRoot string) (
 	return config.Load(bootstrap.WorkspaceRoot, options)
 }
 
-func resolvePersistedWorkflowRuntimeConfig(ctx context.Context, metadataStore *metadata.Store, store *session.Store, settings config.Settings) (*workflowruntime.Config, error) {
-	if store == nil || store.Meta().WorkflowSession == nil {
-		return nil, nil
-	}
+func resolvePersistedWorkflowInspection(ctx context.Context, app config.App, metadataStore *metadata.Store, store *session.Store) (workflowrunner.PersistedWorkflowInspection, error) {
 	workflowStore, err := workflowstore.New(metadataStore)
 	if err != nil {
-		return nil, err
+		return workflowrunner.PersistedWorkflowInspection{}, err
 	}
-	return workflowrunner.BuildPersistedWorkflowRuntimeConfig(
-		ctx,
-		workflowStore,
-		*store.Meta().WorkflowSession,
-		store.Meta().SessionID,
-		settings.Workflow.MaxInvalidCompletionAttempts,
-	)
+	return workflowrunner.BuildPersistedWorkflowInspection(ctx, app, store, workflowStore)
 }
 
 func resolveInspectionProviderCapabilities(authState auth.State, active config.Settings, locked *session.LockedContract, providerOverride string) (llm.ProviderCapabilities, bool, error) {

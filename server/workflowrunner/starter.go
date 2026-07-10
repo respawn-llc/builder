@@ -487,11 +487,7 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 			return launch.SessionPlan{}, nil, err
 		}
 	}
-	warnings := []string{}
-	allowLockedRoleChange := allowLockedWorkflowContinuationRoleChange(plan, overrides)
-	plan, warnings, err = launch.ApplyRunPromptOverridesWithOptions(plan, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
-		AllowLockedAgentRoleChange: allowLockedRoleChange,
-	})
+	plan, warnings, err := applyWorkflowSessionPromptOverrides(plan, input)
 	if err != nil {
 		return launch.SessionPlan{}, nil, err
 	}
@@ -512,6 +508,13 @@ func allowLockedWorkflowContinuationRoleChange(plan launch.SessionPlan, override
 		currentRole = strings.TrimSpace(plan.Store.Meta().Continuation.AgentRole)
 	}
 	return currentRole != roleOverride.Role
+}
+
+func applyWorkflowSessionPromptOverrides(plan launch.SessionPlan, input workflowstore.RunStartContext) (launch.SessionPlan, []string, error) {
+	overrides := workflowRunPromptOverrides(input.Node.SubagentRole)
+	return launch.ApplyRunPromptOverridesWithOptions(plan, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
+		AllowLockedAgentRoleChange: allowLockedWorkflowContinuationRoleChange(plan, overrides),
+	})
 }
 
 type sessionListingMetadata struct {
