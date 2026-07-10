@@ -135,10 +135,13 @@ func (e *IsolatedEnvironment) WaitReady() error {
 				PID   int  `json:"pid"`
 			}
 			decodeErr := json.NewDecoder(io.LimitReader(response.Body, 16*1024)).Decode(&body)
-			_ = response.Body.Close()
+			closeErr := response.Body.Close()
 			cancel()
 			if decodeErr != nil {
 				return fmt.Errorf("decode readiness: %w", decodeErr)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("close readiness response: %w", closeErr)
 			}
 			if body.PID != e.Server.cmd.Process.Pid {
 				return fmt.Errorf("readiness PID mismatch: got=%d want=%d", body.PID, e.Server.cmd.Process.Pid)
