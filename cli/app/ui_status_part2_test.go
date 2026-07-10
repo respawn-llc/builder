@@ -165,6 +165,24 @@ func TestStatusLineLadderTruncatesNoticeBeforeDroppingHigherPriorityFacts(t *tes
 	}
 }
 
+func TestStatusLineTreatsContextPercentageAndBarAsOneElement(t *testing.T) {
+	m := newProjectedStaticUIModel(
+		WithUISessionID("context-meter-session"),
+	)
+	m.setRuntimeContextUsage("context-meter-session", clientui.RuntimeContextUsage{
+		UsedTokens:   42,
+		WindowTokens: 100,
+	})
+
+	status := stripANSIAndTrimRight(m.layout().renderStatusLine(80, uiThemeStyles("dark")))
+	if !strings.Contains(status, "42% ▮") {
+		t.Fatalf("context meter does not use a single-space join: %q", status)
+	}
+	if strings.Contains(status, "42%"+statusLineSeparator) {
+		t.Fatalf("context meter percentage and bar use the segment separator: %q", status)
+	}
+}
+
 func newStatusLineLadderTestModel() *uiModel {
 	m := newProjectedStaticUIModel(
 		WithUISessionID("status-ladder-session"),

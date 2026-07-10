@@ -34,7 +34,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - Git branch, only when known and healthy: hidden while git facts are unavailable, errored, or the branch is unknown. Git facts come from the server-side status source, refreshed in the background — never blocking render.
 - Running background-process count (running/starting only); hidden at zero.
 - There is NO server-ownership segment: the TUI never owns a server under the server-only client model. (owner: tui-startup :: Startup Sequence)
-- Context meter, rightmost: used-context percentage plus a small proportional bar, colored by zone: below 50% success, 50–79% warning, 80%+ error. Hidden when the context window size is unknown. Usage comes from server runtime status pushed with runtime events.
+- Context meter, rightmost: used-context percentage plus a small proportional bar joined by one space as a single element, colored by zone: below 50% success, 50–79% warning, 80%+ error. Hidden when the context window size is unknown. Usage comes from server runtime status pushed with runtime events.
 - Live reasoning status header while the model is reasoning (ladder rung 7); visibility is governed purely by the space ladder.
 - Post-interrupt feedback (`interrupted`) is an ordinary status notice delivered through the notice system (ladder rung 6) — there is no separate marker concept, dedicated state, or bespoke render path.
 - Help slot (ladder rung 10, one shown at a time): in detail mode, the selected entry's expansion action as `Enter to expand`/`Enter to collapse` (owner: tui-transcript :: Detail Mode); otherwise the idle help hint, hidden while busy/compacting/reviewing or while the help overlay is open.

@@ -28,8 +28,8 @@ func (l uiViewLayout) renderStatusLine(width int, style uiStyles) string {
 		{text: style.meta.Render(l.statusModelLabel()), priority: 8, side: statusLineSideLeft, order: 2},
 		{text: l.renderReasoningStatus(statusLineUnboundedWidth), priority: 7, side: statusLineSideLeft, order: 5},
 		{text: style.meta.Render(processCountLabel(m.processList.entries)), priority: 5, side: statusLineSideLeft, order: 3},
-		{text: l.renderStatusContextBar(style), priority: 4, side: statusLineSideRight, order: 2},
-		{text: l.renderStatusContextPercent(style), priority: 3, side: statusLineSideRight, order: 1},
+		{text: l.renderStatusContextBar(style), priority: 4, side: statusLineSideRight, order: 2, kind: statusLineSegmentContextBar},
+		{text: l.renderStatusContextPercent(style), priority: 3, side: statusLineSideRight, order: 1, kind: statusLineSegmentContextPercent},
 		{text: l.renderDetailSelectionAction(style), priority: 10, side: statusLineSideRight, order: 0},
 		{text: l.renderHelpHint(style), priority: 10, side: statusLineSideRight, order: 0},
 	}
@@ -86,17 +86,26 @@ const (
 	statusLineSideRight
 )
 
+type statusLineSegmentKind uint8
+
+const (
+	statusLineSegmentDefault statusLineSegmentKind = iota
+	statusLineSegmentContextPercent
+	statusLineSegmentContextBar
+)
+
 type statusLineSegment struct {
 	text     string
 	priority int
 	side     statusLineSide
 	order    int
+	kind     statusLineSegmentKind
 }
 
 func (l uiViewLayout) renderStatusLineCandidate(width int, style uiStyles, segments []statusLineSegment, indicatorLabel string) string {
 	indicator := renderStatusIndicator(l.model.theme, l.model.statusLinePhase(), l.model.statusLineSpinning(), l.model.spinnerFrame, indicatorLabel)
 	left := renderStatusLineLeft(indicator, orderedStatusLineTexts(segments, statusLineSideLeft), style.meta.Render(statusLineSeparator))
-	right := strings.Join(orderedStatusLineTexts(segments, statusLineSideRight), style.meta.Render(statusLineSeparator))
+	right := renderStatusLineRight(orderedStatusLineSegments(segments, statusLineSideRight), style)
 	if strings.TrimSpace(ansi.Strip(right)) == "" {
 		return left
 	}
@@ -105,6 +114,22 @@ func (l uiViewLayout) renderStatusLineCandidate(width int, style uiStyles, segme
 		gap = 1
 	}
 	return left + strings.Repeat(" ", gap) + right
+}
+
+func renderStatusLineRight(segments []statusLineSegment, style uiStyles) string {
+	var out strings.Builder
+	for index, segment := range segments {
+		if index > 0 {
+			separator := statusLineSeparator
+			if segments[index-1].kind == statusLineSegmentContextPercent &&
+				segment.kind == statusLineSegmentContextBar {
+				separator = statusLineSpinnerSeparator
+			}
+			out.WriteString(style.meta.Render(separator))
+		}
+		out.WriteString(segment.text)
+	}
+	return out.String()
 }
 
 func renderStatusLineLeft(spin string, segments []string, separator string) string {
@@ -166,6 +191,15 @@ func removeStatusLineSegmentPriority(segments *[]statusLineSegment, priority int
 }
 
 func orderedStatusLineTexts(segments []statusLineSegment, side statusLineSide) []string {
+	selected := orderedStatusLineSegments(segments, side)
+	texts := make([]string, 0, len(selected))
+	for _, segment := range selected {
+		texts = append(texts, segment.text)
+	}
+	return texts
+}
+
+func orderedStatusLineSegments(segments []statusLineSegment, side statusLineSide) []statusLineSegment {
 	selected := make([]statusLineSegment, 0, len(segments))
 	for _, segment := range segments {
 		if segment.side == side {
@@ -177,11 +211,7 @@ func orderedStatusLineTexts(segments []statusLineSegment, side statusLineSide) [
 			selected[j-1], selected[j] = selected[j], selected[j-1]
 		}
 	}
-	texts := make([]string, 0, len(selected))
-	for _, segment := range selected {
-		texts = append(texts, segment.text)
-	}
-	return texts
+	return selected
 }
 
 func (l uiViewLayout) fittingStatusNoticeWidth(width int, style uiStyles, segments []statusLineSegment, indicatorLabel string) int {
