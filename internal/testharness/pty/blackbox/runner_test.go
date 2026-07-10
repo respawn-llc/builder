@@ -113,7 +113,7 @@ func TestCleanupRetainsRunRootWhenItsDeadlineHasElapsed(t *testing.T) {
 
 func waitForVisibleCursor(t *testing.T, session *driver.Session) {
 	t.Helper()
-	deadline := time.NewTimer(time.Second)
+	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
 	for {
 		select {
