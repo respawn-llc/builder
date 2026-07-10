@@ -21,6 +21,28 @@ type OpenAIRequest struct {
 	StructuredOutput        *StructuredOutput
 }
 
+// RequestAsOpenAI projects the provider-agnostic Request into the OpenAI-family
+// provider DTO. It is the single source of truth for that projection: the
+// OpenAIClient request methods and the offline inspection seam both use it, so
+// the wire shape stays identical between live generation and captured payloads.
+func RequestAsOpenAI(request Request) OpenAIRequest {
+	return OpenAIRequest{
+		Model:                   request.Model,
+		Temperature:             request.Temperature,
+		MaxTokens:               request.MaxTokens,
+		ReasoningEffort:         request.ReasoningEffort,
+		SupportsReasoningEffort: request.SupportsReasoningEffort,
+		FastMode:                request.FastMode,
+		EnableNativeWebSearch:   request.EnableNativeWebSearch,
+		SystemPrompt:            request.SystemPrompt,
+		PromptCacheKey:          request.PromptCacheKey,
+		SessionID:               request.SessionID,
+		Items:                   CloneResponseItems(request.Items),
+		Tools:                   append([]Tool(nil), request.Tools...),
+		StructuredOutput:        request.StructuredOutput,
+	}
+}
+
 type OpenAIResponse struct {
 	AssistantText  string
 	AssistantPhase MessagePhase
@@ -89,21 +111,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, request Request) (Response,
 		return Response{}, err
 	}
 
-	providerReq := OpenAIRequest{
-		Model:                   request.Model,
-		Temperature:             request.Temperature,
-		MaxTokens:               request.MaxTokens,
-		ReasoningEffort:         request.ReasoningEffort,
-		SupportsReasoningEffort: request.SupportsReasoningEffort,
-		FastMode:                request.FastMode,
-		EnableNativeWebSearch:   request.EnableNativeWebSearch,
-		SystemPrompt:            request.SystemPrompt,
-		PromptCacheKey:          request.PromptCacheKey,
-		SessionID:               request.SessionID,
-		Items:                   CloneResponseItems(request.Items),
-		Tools:                   append([]Tool(nil), request.Tools...),
-		StructuredOutput:        request.StructuredOutput,
-	}
+	providerReq := RequestAsOpenAI(request)
 
 	providerResp, err := c.transport.Generate(ctx, providerReq)
 	if err != nil {
@@ -144,21 +152,7 @@ func (c *OpenAIClient) GenerateStreamWithEvents(ctx context.Context, request Req
 		return Response{}, err
 	}
 
-	providerReq := OpenAIRequest{
-		Model:                   request.Model,
-		Temperature:             request.Temperature,
-		MaxTokens:               request.MaxTokens,
-		ReasoningEffort:         request.ReasoningEffort,
-		SupportsReasoningEffort: request.SupportsReasoningEffort,
-		FastMode:                request.FastMode,
-		EnableNativeWebSearch:   request.EnableNativeWebSearch,
-		SystemPrompt:            request.SystemPrompt,
-		PromptCacheKey:          request.PromptCacheKey,
-		SessionID:               request.SessionID,
-		Items:                   CloneResponseItems(request.Items),
-		Tools:                   append([]Tool(nil), request.Tools...),
-		StructuredOutput:        request.StructuredOutput,
-	}
+	providerReq := RequestAsOpenAI(request)
 
 	if streamTransport, ok := c.transport.(OpenAIStreamingEventsTransport); ok {
 		providerResp, err := streamTransport.GenerateStreamWithEvents(ctx, providerReq, callbacks)

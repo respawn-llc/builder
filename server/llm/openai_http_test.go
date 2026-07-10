@@ -53,7 +53,7 @@ func (missingAuth) AuthorizationHeader(context.Context) (string, error) {
 	return "", auth.ErrAuthNotConfigured
 }
 
-func requireProviderCapabilities(t *testing.T, transport *HTTPTransport, mode openAIAuthMode) ProviderCapabilities {
+func requireProviderCapabilities(t *testing.T, transport *HTTPTransport, mode OpenAIAuthMode) ProviderCapabilities {
 	t.Helper()
 	caps, err := transport.providerCapabilitiesForMode(mode)
 	if err != nil {
@@ -101,7 +101,7 @@ func TestBuildPayload_SerializesAssistantToolCalls(t *testing.T) {
 			},
 			{Role: RoleTool, ToolCallID: "call-1", Name: "shell", Content: "{}"},
 		}),
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -619,11 +619,11 @@ func TestServiceBaseURL_UsesCodexEndpointBaseForOAuth(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.BaseURL = "https://other.example/v1"
 
-	got := transport.serviceBaseURL(openAIAuthMode{IsOAuth: true})
+	got := transport.serviceBaseURL(OpenAIAuthMode{IsOAuth: true})
 	if got != strings.TrimSuffix(codexResponsesEndpoint, "/responses") {
 		t.Fatalf("expected oauth base endpoint %q, got %q", strings.TrimSuffix(codexResponsesEndpoint, "/responses"), got)
 	}
-	standard := transport.serviceBaseURL(openAIAuthMode{})
+	standard := transport.serviceBaseURL(OpenAIAuthMode{})
 	if standard != "https://other.example/v1" {
 		t.Fatalf("expected standard base endpoint, got %q", standard)
 	}
@@ -634,7 +634,7 @@ func TestServiceBaseURL_ExplicitBaseURLOverridesOAuthEndpoint(t *testing.T) {
 	transport.BaseURL = "http://localhost:8001/v1"
 	transport.BaseURLExplicit = true
 
-	got := transport.serviceBaseURL(openAIAuthMode{IsOAuth: true})
+	got := transport.serviceBaseURL(OpenAIAuthMode{IsOAuth: true})
 	if got != "http://localhost:8001/v1" {
 		t.Fatalf("expected explicit base url to override oauth endpoint, got %q", got)
 	}
@@ -650,14 +650,14 @@ func TestNewOpenAIProviderClientCanonicalizesBareDefaultOpenAIBaseURL(t *testing
 	if !ok {
 		t.Fatalf("expected *HTTPTransport, got %T", openAIClient.transport)
 	}
-	if got := transport.serviceBaseURL(openAIAuthMode{}); got != defaultOpenAIBaseURL {
+	if got := transport.serviceBaseURL(OpenAIAuthMode{}); got != defaultOpenAIBaseURL {
 		t.Fatalf("service base url = %q, want %q", got, defaultOpenAIBaseURL)
 	}
 }
 
 func TestBuildRequestOptions_OAuthAddsCodexHeaders(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	opts := transport.buildRequestOptions("Bearer x", openAIAuthMode{
+	opts := transport.buildRequestOptions("Bearer x", OpenAIAuthMode{
 		IsOAuth:   true,
 		AccountID: "acc-1",
 	}, "session-1")
@@ -665,10 +665,10 @@ func TestBuildRequestOptions_OAuthAddsCodexHeaders(t *testing.T) {
 	if len(opts) != 5 {
 		t.Fatalf("expected 5 request options, got %d", len(opts))
 	}
-	if len(transport.buildRequestOptions("Bearer x", openAIAuthMode{}, "session-1")) != 4 {
+	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, "session-1")) != 4 {
 		t.Fatal("expected non-oauth options to include auth/session/caching headers")
 	}
-	if len(transport.buildRequestOptions("Bearer x", openAIAuthMode{}, "")) != 3 {
+	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, "")) != 3 {
 		t.Fatal("expected non-oauth options to include auth/caching headers")
 	}
 }
@@ -699,13 +699,13 @@ func TestSupportsRequestInputTokenCount_AllowsStandardOpenAI(t *testing.T) {
 
 func TestBuildRequestOptions_OmitsAuthorizationHeaderWhenAuthHeaderEmpty(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	if len(transport.buildRequestOptions("", openAIAuthMode{}, "")) != 2 {
+	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "")) != 2 {
 		t.Fatal("expected empty auth header to omit Authorization request option")
 	}
-	if len(transport.buildRequestOptions("   ", openAIAuthMode{}, "")) != 2 {
+	if len(transport.buildRequestOptions("   ", OpenAIAuthMode{}, "")) != 2 {
 		t.Fatal("expected whitespace auth header to omit Authorization request option")
 	}
-	if len(transport.buildRequestOptions("", openAIAuthMode{}, "session-1")) != 3 {
+	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "session-1")) != 3 {
 		t.Fatal("expected session header to remain when Authorization is omitted")
 	}
 }
@@ -805,7 +805,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 func TestBuildPayload_UsesTransportStoreSetting(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.Store = true
-	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5"}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -820,7 +820,7 @@ func TestBuildPayload_AddsNativeWebSearchToolWhenEnabled(t *testing.T) {
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:                 "gpt-5",
 		EnableNativeWebSearch: true,
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -848,7 +848,7 @@ func TestBuildPayload_SerializesPatchAsCustomGrammarTool(t *testing.T) {
 			Description: "Apply edits to files using freeform patch syntax.",
 			Custom:      &CustomToolFormat{Type: "grammar", Syntax: "lark", Definition: "start: \"x\""},
 		}},
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -882,7 +882,7 @@ func TestBuildPayload_SerializesPatchAsCustomGrammarTool(t *testing.T) {
 
 func TestBuildPayload_UsesExplicitPatchCustomGrammarTool(t *testing.T) {
 	transport := NewHTTPTransport(oauthStaticAuth{})
-	mode := openAIAuthMode{IsOAuth: true, AccountID: "acc-1"}
+	mode := OpenAIAuthMode{IsOAuth: true, AccountID: "acc-1"}
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model: "gpt-5.4",
 		Tools: []Tool{
@@ -953,7 +953,7 @@ func TestBuildPayload_DoesNotAddNativeWebSearchToolWhenDisabled(t *testing.T) {
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:                 "gpt-5",
 		EnableNativeWebSearch: false,
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -969,7 +969,7 @@ func TestBuildPayload_SetsPromptCacheKey(t *testing.T) {
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:          "gpt-5",
 		PromptCacheKey: "cache-key-1",
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -985,7 +985,7 @@ func TestBuildPayload_DoesNotSetPromptCacheKeyForOpenAICompatibleProvider(t *tes
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:          "gpt-5",
 		PromptCacheKey: "cache-key-1",
-	}, openAIAuthMode{}, ProviderCapabilities{
+	}, OpenAIAuthMode{}, ProviderCapabilities{
 		ProviderID:           "openai-compatible",
 		SupportsResponsesAPI: true,
 		IsOpenAIFirstParty:   false,
@@ -1005,7 +1005,7 @@ func TestBuildPayload_SetsPromptCacheKeyWhenExplicitCapabilityIsEnabled(t *testi
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:          "gpt-5",
 		PromptCacheKey: "cache-key-1",
-	}, openAIAuthMode{}, ProviderCapabilities{
+	}, OpenAIAuthMode{}, ProviderCapabilities{
 		ProviderID:             "openai-compatible",
 		SupportsResponsesAPI:   true,
 		SupportsPromptCacheKey: true,
@@ -1031,7 +1031,7 @@ func TestHTTPTransport_ProviderCapabilitiesOverrideControlsPromptCacheKeyPayload
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:          "gpt-5",
 		PromptCacheKey: "cache-key-1",
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}

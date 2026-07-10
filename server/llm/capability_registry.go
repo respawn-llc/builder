@@ -59,7 +59,7 @@ func LookupProviderCapabilityContract(providerID string) (ProviderCapabilities, 
 	return registration.Variant.Capabilities, true
 }
 
-func resolveProviderTransportVariant(provider Provider, baseURL string, mode openAIAuthMode) (ProviderVariantContract, error) {
+func resolveProviderTransportVariant(provider Provider, baseURL string, mode OpenAIAuthMode) (ProviderVariantContract, error) {
 	contract, ok := globalProviderRegistry.contractsByProvider[provider]
 	if !ok {
 		return ProviderVariantContract{}, fmt.Errorf("%w: %s", ErrUnsupportedProvider, provider)
@@ -81,7 +81,7 @@ func resolveProviderTransportVariant(provider Provider, baseURL string, mode ope
 	return registration.Variant, nil
 }
 
-func resolveOpenAITransportProviderVariant(baseURL string, mode openAIAuthMode) (string, error) {
+func resolveOpenAITransportProviderVariant(baseURL string, mode OpenAIAuthMode) (string, error) {
 	if mode.IsOAuth {
 		return "chatgpt-codex", nil
 	}
