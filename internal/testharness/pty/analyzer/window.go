@@ -73,7 +73,11 @@ func CoalesceAppendRows(appends []AppendOperation) []AppendOperation {
 		if previous.Kind != OperationWrite ||
 			previous.Write == nil ||
 			previous.Write.Faint != current.Write.Faint ||
+			previous.Write.Bold != current.Write.Bold ||
+			previous.Write.Italic != current.Write.Italic ||
+			previous.Write.Underline != current.Write.Underline ||
 			previous.Write.Foreground != current.Write.Foreground ||
+			previous.Write.Background != current.Write.Background ||
 			previous.Region.Top != current.Region.Top ||
 			previous.Region.Bottom != current.Region.Bottom ||
 			previous.Region.Right != current.Region.Left {
@@ -86,7 +90,11 @@ func CoalesceAppendRows(appends []AppendOperation) []AppendOperation {
 		previous.CapturedAt = current.CapturedAt
 		payload := MustWritePayload(previous.Write.Text + current.Write.Text)
 		payload.Faint = previous.Write.Faint
+		payload.Bold = previous.Write.Bold
+		payload.Italic = previous.Write.Italic
+		payload.Underline = previous.Write.Underline
 		payload.Foreground = previous.Write.Foreground
+		payload.Background = previous.Write.Background
 		previous.Write = &payload
 	}
 	return out

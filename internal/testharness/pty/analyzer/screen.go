@@ -5,7 +5,11 @@ import "strings"
 type Cell struct {
 	Content    string
 	Faint      bool
+	Bold       bool
+	Italic     bool
+	Underline  bool
 	Foreground string
+	Background string
 }
 
 type ScreenSnapshot struct {

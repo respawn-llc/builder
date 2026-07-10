@@ -1,9 +1,13 @@
 package analyzer
 
-func (b *tracingBackend) recordPut(position Position, text string, faint bool, foreground string) {
-	payload := MustWritePayload(text)
-	payload.Faint = faint
-	payload.Foreground = foreground
+func (b *tracingBackend) recordPut(position Position, cell Cell) {
+	payload := MustWritePayload(cell.Content)
+	payload.Faint = cell.Faint
+	payload.Bold = cell.Bold
+	payload.Italic = cell.Italic
+	payload.Underline = cell.Underline
+	payload.Foreground = cell.Foreground
+	payload.Background = cell.Background
 	current := Operation{
 		Sequence:   len(b.ops),
 		Kind:       OperationWrite,
@@ -23,7 +27,11 @@ func (b *tracingBackend) recordPut(position Position, text string, faint bool, f
 		previous.Region.Right = current.Region.Right
 		mergedPayload := MustWritePayload(previous.Write.Text + current.Write.Text)
 		mergedPayload.Faint = previous.Write.Faint
+		mergedPayload.Bold = previous.Write.Bold
+		mergedPayload.Italic = previous.Write.Italic
+		mergedPayload.Underline = previous.Write.Underline
 		mergedPayload.Foreground = previous.Write.Foreground
+		mergedPayload.Background = previous.Write.Background
 		previous.Write = &mergedPayload
 		previous.After = current.After
 		previous.ByteRange.End = current.ByteRange.End
@@ -37,7 +45,11 @@ func canMergeWrite(previous Operation, current Operation) bool {
 		previous.Write != nil &&
 		current.Write != nil &&
 		previous.Write.Faint == current.Write.Faint &&
+		previous.Write.Bold == current.Write.Bold &&
+		previous.Write.Italic == current.Write.Italic &&
+		previous.Write.Underline == current.Write.Underline &&
 		previous.Write.Foreground == current.Write.Foreground &&
+		previous.Write.Background == current.Write.Background &&
 		previous.ChunkIndex == current.ChunkIndex &&
 		previous.Region.Top == current.Region.Top &&
 		previous.Region.Bottom == current.Region.Bottom &&

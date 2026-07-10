@@ -106,24 +106,52 @@ func (b *tracingBackend) Put(coord vt.Coord, cell vt.Cell) {
 	if position.Row < 0 || position.Row >= b.dimensions.Rows || position.Col < 0 || position.Col >= b.dimensions.Cols {
 		return
 	}
-	faint := cell.S != nil && cell.S.Attr()&vt.Dim != 0
-	foreground := styleForeground(cell.S)
-	b.cells[position.Row][position.Col] = Cell{Content: cell.C, Faint: faint, Foreground: foreground}
+	style := cellStyle(cell.S)
+	styledCell := Cell{
+		Content:    cell.C,
+		Faint:      style.Faint,
+		Bold:       style.Bold,
+		Italic:     style.Italic,
+		Underline:  style.Underline,
+		Foreground: style.Foreground,
+		Background: style.Background,
+	}
+	b.cells[position.Row][position.Col] = styledCell
 	if cell.C == "" {
 		return
 	}
-	b.recordPut(position, cell.C, faint, foreground)
+	b.recordPut(position, styledCell)
 }
 
-func styleForeground(style vt.Style) string {
+type terminalCellStyle struct {
+	Faint      bool
+	Bold       bool
+	Italic     bool
+	Underline  bool
+	Foreground string
+	Background string
+}
+
+func cellStyle(style vt.Style) terminalCellStyle {
 	if style == nil {
+		return terminalCellStyle{}
+	}
+	attrs := style.Attr()
+	return terminalCellStyle{
+		Faint:      attrs&vt.Dim != 0,
+		Bold:       attrs&vt.Bold != 0,
+		Italic:     attrs&vt.Italic != 0,
+		Underline:  attrs&vt.Underline != 0,
+		Foreground: styleColor(style.Fg()),
+		Background: styleColor(style.Bg()),
+	}
+}
+
+func styleColor(value color.Color) string {
+	if !value.Valid() || value == color.Default {
 		return ""
 	}
-	fg := style.Fg()
-	if !fg.Valid() || fg == color.Default {
-		return ""
-	}
-	r, g, b := fg.TrueColor().RGB()
+	r, g, b := value.TrueColor().RGB()
 	return fmt.Sprintf("#%02x%02x%02x", uint8(r), uint8(g), uint8(b))
 }
 
