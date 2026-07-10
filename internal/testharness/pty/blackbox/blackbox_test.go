@@ -8,9 +8,16 @@ import (
 	"time"
 
 	"core/internal/testharness/pty/blackbox"
+	"core/server/llm"
 
 	"github.com/google/uuid"
 )
+
+type staticTransportAuth struct{}
+
+func (staticTransportAuth) AuthorizationHeader(context.Context) (string, error) {
+	return "Bearer test", nil
+}
 
 func TestDecodeScenarioRejectsUnknownFieldsAndUnionEscapeHatches(t *testing.T) {
 	t.Parallel()
@@ -143,5 +150,42 @@ func TestResponsesStubRejectsProbeMismatch(t *testing.T) {
 	_ = response.Body.Close()
 	if err := stub.Verify(); err == nil {
 		t.Fatal("Verify accepted probe mismatch")
+	}
+}
+
+func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
+	t.Parallel()
+
+	probe := uuid.New().String()
+	output := "ok"
+	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, Probe: &probe, Outcome: blackbox.OutcomeStream, Output: &output,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(stub.Close)
+
+	transport := llm.NewHTTPTransport(staticTransportAuth{})
+	transport.BaseURL = stub.URL()
+	transport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
+	var deltas []string
+	response, err := transport.GenerateStream(context.Background(), llm.OpenAIRequest{
+		Model: "gpt-5",
+		Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: probe}}),
+	}, func(delta string) {
+		deltas = append(deltas, delta)
+	})
+	if err != nil {
+		t.Fatalf("GenerateStream: %v", err)
+	}
+	if response.AssistantText != output {
+		t.Fatalf("assistant text = %q, want %q", response.AssistantText, output)
+	}
+	if len(deltas) != 1 || deltas[0] != output {
+		t.Fatalf("assistant deltas = %#v, want %q", deltas, output)
+	}
+	if err := stub.Verify(); err != nil {
+		t.Fatalf("Verify: %v", err)
 	}
 }
