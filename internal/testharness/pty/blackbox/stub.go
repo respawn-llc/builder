@@ -169,7 +169,8 @@ func (s *ResponsesStub) serveHTTP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	call := ObservedCall{Route: route, Headers: request.Header.Clone(), Body: append(json.RawMessage(nil), body...)}
-	if err := s.consume(route, body, request.Header); err != nil {
+	operation, err := s.consume(route, body, request.Header)
+	if err != nil {
 		s.recordFailure(err)
 		http.Error(writer, "unexpected model operation", http.StatusBadRequest)
 		return
@@ -177,7 +178,7 @@ func (s *ResponsesStub) serveHTTP(writer http.ResponseWriter, request *http.Requ
 	s.recordObserved(call)
 	switch route {
 	case RouteResponses:
-		s.writeResponse(ctx, writer)
+		s.writeResponse(ctx, writer, operation)
 	case RouteInputTokens:
 		writeJSON(writer, http.StatusOK, map[string]int{"input_tokens": 0})
 	case RouteModel:
@@ -207,41 +208,41 @@ func (s *ResponsesStub) beginHandler(parent context.Context) (uint64, context.Co
 	}
 }
 
-func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) error {
+func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (*RequiredOperation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failure != nil {
-		return s.failure
+		return nil, s.failure
 	}
 	if s.index >= len(s.required) {
 		if route == RouteInputTokens || route == RouteModel {
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("unexpected model operation route=%s after required queue", route)
+		return nil, fmt.Errorf("unexpected model operation route=%s after required queue", route)
 	}
 	required := s.required[s.index]
 	if route != required.Route {
 		if route == RouteInputTokens || route == RouteModel {
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("required model operation route=%s got=%s", required.Route, route)
+		return nil, fmt.Errorf("required model operation route=%s got=%s", required.Route, route)
 	}
 	if required.Probe != "" && !requestContainsProbe(body, required.Probe) {
-		return errors.New("required response probe was not present in typed input")
+		return nil, errors.New("required response probe was not present in typed input")
 	}
 	if required.SessionCacheKey && !hasMatchingSessionCacheKey(body, headers) {
-		return errors.New("required response session_id and prompt_cache_key relation was not present")
+		return nil, errors.New("required response session_id and prompt_cache_key relation was not present")
 	}
 	s.index++
 	s.notify()
-	return nil
+	return &required, nil
 }
 
-func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseWriter) {
-	s.mu.Lock()
-	index := s.index - 1
-	operation := s.required[index]
-	s.mu.Unlock()
+func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseWriter, operation *RequiredOperation) {
+	if operation == nil {
+		http.Error(writer, "response operation is not declared", http.StatusBadRequest)
+		return
+	}
 	if operation.Stream {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n")
