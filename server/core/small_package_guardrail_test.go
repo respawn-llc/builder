@@ -101,7 +101,7 @@ func listRepoPackages(t *testing.T, repoRoot string) []smallPackageInfo {
 }
 
 var allowedSmallPackages = map[string]string{
-	"cmd/dumpmodelrequest":                "temporary standalone model-request inspector command that keeps diagnostic request serialization out of production server startup paths",
+	"cmd/dumpmodelrequest":               "temporary standalone model-request inspector command that keeps diagnostic request serialization out of production server startup paths",
 	"cli/app/internal/daemonlaunch":      "narrow process helper that intentionally isolates daemon process ownership and termination behavior from attachment policy",
 	"cli/app/internal/apphooks":          "internal-only app runner hook context for fixture dependency injection without exporting cli/app harness APIs",
 	"cli/app/internal/embeddedattach":    "narrow embedded-server attachment seam after absorbing embedded binding/startup helpers",
