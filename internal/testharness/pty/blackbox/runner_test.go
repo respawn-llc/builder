@@ -2,6 +2,7 @@ package blackbox
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -84,6 +85,29 @@ func TestCleanupForceKillsTERMAndHUPIgnoringClientAtGraceDeadline(t *testing.T) 
 	case <-session.Done():
 	default:
 		t.Fatal("TERM-ignoring client remains live after cleanup")
+	}
+}
+
+func TestCleanupRemovesOnlyCompletedSuccessfulRunRootWithinDeadline(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "evidence.bin"), []byte("bounded"), 0o600); err != nil {
+		t.Fatalf("write root content: %v", err)
+	}
+	if incomplete := cleanup(nil, &IsolatedEnvironment{Root: root}, true, time.Now().Add(fixedWait)); incomplete != nil {
+		t.Fatalf("cleanup incomplete: %v", incomplete)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("successful root cleanup stat error = %v, want not exist", err)
+	}
+}
+
+func TestCleanupRetainsRunRootWhenItsDeadlineHasElapsed(t *testing.T) {
+	root := t.TempDir()
+	if incomplete := cleanup(nil, &IsolatedEnvironment{Root: root}, true, time.Now().Add(-time.Millisecond)); incomplete == nil {
+		t.Fatal("cleanup succeeded after its deadline elapsed")
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Fatalf("expired cleanup removed retained root: %v", err)
 	}
 }
 

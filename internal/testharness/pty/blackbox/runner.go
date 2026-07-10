@@ -3,7 +3,9 @@ package blackbox
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"core/internal/testharness/pty/analyzer"
@@ -62,6 +64,7 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 	result.RunRoot = environment.Root
 	var session *driver.Session
 	defer func() {
+		primaryFailure := result.Err != nil
 		cleanupDeadline := time.Now().Add(fixedWait)
 		result.Cleanup = cleanup(session, environment, result.Err == nil, cleanupDeadline)
 		if result.Err == nil && result.Cleanup != nil {
@@ -74,7 +77,7 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 				result.Err = captureErr
 			}
 		}
-		if result.Err != nil && environment != nil && session != nil && result.Capture.ReadLoopDone {
+		if primaryFailure && environment != nil && session != nil && result.Capture.ReadLoopDone {
 			artifactDir, artifactErr := publishFailureArtifacts(cleanupDeadline, environment.Root, result.Capture, result.Observation.Analysis, result.Err, result.Cleanup)
 			if artifactErr != nil {
 				result.Cleanup = appendCleanupOwner(result.Cleanup, "artifact_publication")
@@ -267,12 +270,66 @@ func cleanup(session *driver.Session, environment *IsolatedEnvironment, success 
 	waitForOwners(deadline, session, environment)
 	owners := liveOwners(session, environment)
 	if success && environment != nil && environment.Root != "" && len(owners) == 0 {
-		_ = os.RemoveAll(environment.Root)
+		if err := removeOwnedRootUntil(environment.Root, deadline); err != nil {
+			owners = append(owners, "temporary_root")
+		}
 	}
 	if len(owners) == 0 {
 		return nil
 	}
 	return &IncompleteCleanup{Owners: owners}
+}
+
+func removeOwnedRootUntil(root string, deadline time.Time) error {
+	return removeTreeUntil(root, deadline)
+}
+
+func removeTreeUntil(path string, deadline time.Time) error {
+	if time.Now().After(deadline) {
+		return errors.New("temporary root cleanup deadline elapsed")
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return os.Remove(path)
+	}
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	for {
+		entries, readErr := directory.ReadDir(16)
+		for _, entry := range entries {
+			if time.Now().After(deadline) {
+				return closeTreeDirectory(directory, errors.New("temporary root cleanup deadline elapsed"))
+			}
+			if err := removeTreeUntil(filepath.Join(path, entry.Name()), deadline); err != nil {
+				return closeTreeDirectory(directory, err)
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return closeTreeDirectory(directory, readErr)
+		}
+	}
+	if err := directory.Close(); err != nil {
+		return err
+	}
+	return os.Remove(path)
+}
+
+func closeTreeDirectory(directory *os.File, cause error) error {
+	if closeErr := directory.Close(); closeErr != nil {
+		return fmt.Errorf("%w; close directory: %v", cause, closeErr)
+	}
+	return cause
 }
 
 func waitForOwners(deadline time.Time, session *driver.Session, environment *IsolatedEnvironment) {
