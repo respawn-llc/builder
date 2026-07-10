@@ -124,7 +124,7 @@
 ## Rendering Pipeline
 
 - Transcript rendering stages are ordered: content render, low-level semantic transform, wrap, line layout, final decoration.
-- Formatter config owns syntax backgrounds and formatter base foreground.
+- Chroma owns syntax foregrounds and text attributes through `catppuccin-latte` in light mode and `onedark` in dark mode. Shell commands, file-read source results, and structured patch source share the same syntax projection path; Markdown formatting remains independent.
 - Transcript rendering owns role styling, faint shell preview styling, and diff semantics.
 - Layout owns prefixes, indentation, and wrapping only.
 - Semantic color tokens are centralized in `shared/theme`.
@@ -132,9 +132,9 @@
 - Formatted text uses app foreground as base text color.
 - Faint text always uses the transcript foreground token plus the terminal faint attribute; there is no separate subdued/gray transcript foreground token.
 - User and assistant rows use compact text in ongoing mode and collapsed detail, full text in expanded detail, and foreground text plus Markdown styling.
-- Shell tool calls use shell syntax-highlighted foreground text, faint styling, and OS-dependent shell syntax selection.
+- Shell tool calls use the shared Chroma syntax projection, faint styling, and OS-dependent shell syntax selection.
 - Non-shell tool calls use foreground text, no syntax highlighting, and faint styling.
-- Patch/edit tools use `⇄` in ongoing, detail, and native replay. Patch paths and neutral text use foreground; diff add/remove counts use semantic add/remove colors.
+- Patch/edit tools use `⇄` in ongoing, detail, and native replay. Patch paths and neutral text use foreground; source lines use the shared Chroma syntax projection; diff add/remove counts use semantic add/remove colors. Diff-line backgrounds blend 20% of the Success/Error token over the active detail surface background.
 - Compaction-related rows use secondary text.
 - Goal-related rows use primary text.
 - Workflow-related rows use primary text and `OC` visibility.

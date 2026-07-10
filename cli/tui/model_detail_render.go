@@ -262,11 +262,17 @@ type detailResolvedBackground struct {
 	present bool
 }
 
+const detailDiffForegroundPercent uint8 = 20
+
 func resolveDetailLineBackground(
 	background transcriptrender.LineBackground,
 	palette theme.ResolvedPalette,
 	selected bool,
 ) detailResolvedBackground {
+	surfaceBackground := palette.App.ChatBg
+	if selected {
+		surfaceBackground = palette.App.ModeBg
+	}
 	switch background {
 	case transcriptrender.LineBackgroundDefault:
 		if selected {
@@ -274,9 +280,15 @@ func resolveDetailLineBackground(
 		}
 		return detailResolvedBackground{}
 	case transcriptrender.LineBackgroundDiffAdded:
-		return detailResolvedBackground{color: palette.Transcript.DiffAddBackground, present: true}
+		return detailResolvedBackground{
+			color:   theme.BlendColor(palette.Transcript.Success, surfaceBackground, detailDiffForegroundPercent),
+			present: true,
+		}
 	case transcriptrender.LineBackgroundDiffRemoved:
-		return detailResolvedBackground{color: palette.Transcript.DiffRemoveBackground, present: true}
+		return detailResolvedBackground{
+			color:   theme.BlendColor(palette.Transcript.Error, surfaceBackground, detailDiffForegroundPercent),
+			present: true,
+		}
 	default:
 		panic(fmt.Sprintf("render detail line with invalid background semantic %d", background))
 	}

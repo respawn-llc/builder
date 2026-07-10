@@ -96,12 +96,12 @@ func (m *ongoingTranscriptReadModel) addPendingTool(tool clientui.TranscriptTool
 	}
 	if index, exists := m.pendingToolIndex[tool.ToolCallID]; exists {
 		m.pendingTools[index].tool = tool
-		m.refreshPendingToolSection(80, 0)
+		m.refreshPendingToolSection(80, 0, "")
 		return
 	}
 	m.pendingToolIndex[tool.ToolCallID] = len(m.pendingTools)
 	m.pendingTools = append(m.pendingTools, ongoingPendingTool{id: tool.ToolCallID, tool: tool})
-	m.refreshPendingToolSection(80, 0)
+	m.refreshPendingToolSection(80, 0, "")
 }
 
 func (m *ongoingTranscriptReadModel) removePendingTool(toolCallID string) {
@@ -117,10 +117,10 @@ func (m *ongoingTranscriptReadModel) removePendingTool(toolCallID string) {
 	for shifted := index; shifted < len(m.pendingTools); shifted++ {
 		m.pendingToolIndex[m.pendingTools[shifted].id] = shifted
 	}
-	m.refreshPendingToolSection(80, 0)
+	m.refreshPendingToolSection(80, 0, "")
 }
 
-func (m *ongoingTranscriptReadModel) refreshPendingToolSection(width int, spinnerFrame int) {
+func (m *ongoingTranscriptReadModel) refreshPendingToolSection(width int, spinnerFrame int, themeName string) {
 	if len(m.pendingTools) == 0 {
 		m.removeSection(ongoing.FrameSectionPendingTools)
 		return
@@ -130,7 +130,7 @@ func (m *ongoingTranscriptReadModel) refreshPendingToolSection(width int, spinne
 	}
 	lines := make([]transcriptrender.Line, 0, len(m.pendingTools))
 	for _, tool := range m.pendingTools {
-		lines = append(lines, transcriptrender.RenderPendingTool(tool.tool, width, padSpinnerIndicator(pendingToolSpinnerFrame(spinnerFrame))))
+		lines = append(lines, transcriptrender.RenderPendingTool(tool.tool, width, themeName, padSpinnerIndicator(pendingToolSpinnerFrame(spinnerFrame))))
 	}
 	m.setStyledSection(ongoing.FrameSectionPendingTools, lines)
 }

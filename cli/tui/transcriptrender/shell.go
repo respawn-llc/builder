@@ -11,16 +11,26 @@ func shellInputSpans(line string, meta toolMeta) []Span {
 	if meta.RenderHint != nil && meta.RenderHint.Kind == transcript.ToolRenderKindPlain {
 		return []Span{SemanticSpan(line, StyleRoleToolShell, SpanAttributeFaint)}
 	}
-	return shellSyntaxSpans(line, meta)
+	if meta.syntax == nil {
+		panic("render highlighted shell input without syntax projector")
+	}
+	return meta.syntax.highlight(shellSyntaxLexer(meta), line, SpanAttributeFaint)[0]
 }
 
-func shellSyntaxSpans(line string, meta toolMeta) []Span {
-	fallback := SemanticStyle(StyleRoleToolShell, SpanAttributeFaint)
-	lexer := shellSyntaxLexer(meta)
-	projected := projectSyntaxSpans(lexer, line, fallback, func(tokenType chroma.TokenType) SpanStyle {
-		return SemanticStyle(shellSyntaxRole(tokenType), SpanAttributeFaint)
-	})
-	return projected[0]
+func sourceResultLines(source string, width int, meta toolMeta) []Line {
+	if meta.syntax == nil || meta.RenderHint == nil {
+		panic("render highlighted source result without syntax metadata")
+	}
+	highlighted := meta.syntax.highlight(
+		sourceSyntaxLexer(meta.RenderHint.Path, source),
+		source,
+		SpanAttributeFaint,
+	)
+	lines := make([]Line, 0, len(highlighted))
+	for _, spans := range highlighted {
+		lines = append(lines, wrapStyledLine(spans, width)...)
+	}
+	return lines
 }
 
 func shellSyntaxLexer(meta toolMeta) chroma.Lexer {
@@ -48,23 +58,4 @@ func firstAvailableLexer(names ...string) chroma.Lexer {
 		}
 	}
 	return nil
-}
-
-func shellSyntaxRole(tokenType chroma.TokenType) StyleRole {
-	switch {
-	case tokenType == chroma.Error:
-		return StyleRoleToolShellError
-	case tokenType.InCategory(chroma.Keyword),
-		tokenType.InSubCategory(chroma.LiteralString),
-		tokenType.InSubCategory(chroma.LiteralNumber):
-		return StyleRoleToolShellPrimary
-	case tokenType.InSubCategory(chroma.NameBuiltin),
-		tokenType.InSubCategory(chroma.NameVariable),
-		tokenType.InSubCategory(chroma.NameFunction):
-		return StyleRoleToolShellSecondary
-	case tokenType.InCategory(chroma.Comment):
-		return StyleRoleToolShellWarning
-	default:
-		return StyleRoleToolShell
-	}
 }

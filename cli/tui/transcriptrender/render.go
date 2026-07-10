@@ -15,7 +15,7 @@ const BackgroundedShellSuffix = "• backgrounded"
 
 func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string, mode Mode) Row {
 	var syntax *syntaxProjector
-	if mode == ModeDetailExpanded {
+	if row.Kind == clientui.TranscriptRowTool {
 		configured := newSyntaxProjector(themeName)
 		syntax = &configured
 	}
@@ -97,6 +97,22 @@ func renderUserAssistantTextBlock(role StyleRole, text string, width int, mode M
 		return attachPrefixWithMeta(role, RenderMarkdownLines(role, firstDisplayLine(text), contentWidth(role, width)), width, len(strings.Split(text, "\n")) > 1, mode, toolMeta{})
 	}
 	return attachPrefixWithMeta(role, RenderMarkdownLines(role, text, contentWidth(role, width)), width, false, mode, toolMeta{})
+}
+
+func renderSourceResultTextBlock(role StyleRole, text string, width int, mode Mode, meta toolMeta) []Line {
+	text = safeTranscriptText(text)
+	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	if text == "" {
+		text = labelForRole(role)
+	}
+	return attachPrefixWithMeta(
+		role,
+		sourceResultLines(text, contentWidth(role, width), meta),
+		width,
+		false,
+		mode,
+		meta,
+	)
 }
 
 func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta string, width int, mode Mode, meta toolMeta) []Line {
@@ -293,10 +309,7 @@ func roleDefaultFaint(role StyleRole) bool {
 	switch role {
 	case StyleRoleTool,
 		StyleRoleToolShell,
-		StyleRoleToolShellPrimary,
 		StyleRoleToolShellSecondary,
-		StyleRoleToolShellWarning,
-		StyleRoleToolShellError,
 		StyleRoleToolQuestion,
 		StyleRoleToolWebSearch,
 		StyleRoleNotice,
@@ -333,10 +346,7 @@ func roleSymbolText(role StyleRole, meta toolMeta) string {
 	case StyleRoleAssistant:
 		symbol = AssistantSymbol
 	case StyleRoleToolShell,
-		StyleRoleToolShellPrimary,
-		StyleRoleToolShellSecondary,
-		StyleRoleToolShellWarning,
-		StyleRoleToolShellError:
+		StyleRoleToolShellSecondary:
 		symbol = "$"
 	case StyleRoleToolQuestion:
 		symbol = "?"
@@ -459,10 +469,7 @@ func labelForRole(role StyleRole) string {
 	case StyleRoleNotice, StyleRoleNoticeForeground, StyleRoleNoticeForegroundFaint, StyleRoleNoticePrimary, StyleRoleNoticeSecondary, StyleRoleNoticeReviewer:
 		return "notice"
 	case StyleRoleToolShell,
-		StyleRoleToolShellPrimary,
-		StyleRoleToolShellSecondary,
-		StyleRoleToolShellWarning,
-		StyleRoleToolShellError:
+		StyleRoleToolShellSecondary:
 		return "tool call"
 	default:
 		return "tool call"

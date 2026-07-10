@@ -29,6 +29,7 @@ func renderToolRow(
 	syntax *syntaxProjector,
 ) []Line {
 	meta := normalizeToolMeta(row.ToolName, row.ToolPresentation)
+	meta.syntax = syntax
 	meta.IsError = row.IsError
 	role := toolRole(meta)
 	display := toolDisplayText(row, meta, mode)
@@ -38,11 +39,16 @@ func renderToolRow(
 	if isPatchTool(meta) {
 		return renderPatchTool(role, display.Text, display.InlineMeta, row.ResultSummary, meta.PatchRender, width, mode, meta, syntax)
 	}
+	if display.kind == toolDisplaySourceResult {
+		return renderSourceResultTextBlock(role, display.Text, width, mode, meta)
+	}
 	return renderTextBlockWithInlineMeta(role, display.Text, display.InlineMeta, width, mode, meta)
 }
 
-func RenderPendingTool(tool clientui.TranscriptToolStart, width int, spinner string) Line {
+func RenderPendingTool(tool clientui.TranscriptToolStart, width int, themeName string, spinner string) Line {
 	meta := normalizeToolMeta(tool.ToolName, tool.ToolPresentation)
+	syntax := newSyntaxProjector(themeName)
+	meta.syntax = &syntax
 	role := toolRole(meta)
 	text := compactToolText(meta, tool.ToolName)
 	var lines []Line
@@ -65,6 +71,7 @@ type toolMeta struct {
 	transcript.ToolCallMeta
 	IsError         bool
 	SymbolStyleRole *StyleRole
+	syntax          *syntaxProjector
 }
 
 func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
@@ -119,9 +126,17 @@ func toolRole(meta toolMeta) StyleRole {
 	return StyleRoleTool
 }
 
+type toolDisplayKind uint8
+
+const (
+	toolDisplayDefault toolDisplayKind = iota
+	toolDisplaySourceResult
+)
+
 type toolDisplay struct {
 	Text       string
 	InlineMeta string
+	kind       toolDisplayKind
 }
 
 func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) toolDisplay {
@@ -132,6 +147,12 @@ func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) t
 			resultSummary = ""
 		}
 		return toolDisplay{Text: text, InlineMeta: firstNonEmpty(resultSummary, meta.InlineMeta)}
+	}
+	if !meta.IsError &&
+		meta.RenderHint != nil &&
+		meta.RenderHint.Kind == transcript.ToolRenderKindSource &&
+		meta.RenderHint.ResultOnly {
+		return toolDisplay{Text: row.Text, kind: toolDisplaySourceResult}
 	}
 	text := detailedToolText(meta, row.Text)
 	if summary := strings.TrimSpace(row.ResultSummary); summary != "" {
@@ -247,8 +268,7 @@ func renderStructuredPatch(
 			}
 			lexer = inferredLexer
 		}
-		fallback := syntax.explicitStyle(chroma.Text)
-		highlighted := projectSyntaxSpans(lexer, source, fallback, syntax.explicitStyle)
+		highlighted := syntax.highlight(lexer, source)
 		for index, sourceLine := range pending {
 			out = append(out, wrapPatchSourceLine(
 				sourceLine.kind,

@@ -153,23 +153,16 @@ func TestPendingToolStartUsesPresentationMetadata(t *testing.T) {
 	}
 	foundSyntax := false
 	for _, span := range lines[0].Spans {
-		role, semantic := span.Style.Role()
-		if !semantic {
+		if span.Style.Kind != transcriptrender.SpanStyleExplicitRGB {
 			continue
 		}
-		switch role {
-		case transcriptrender.StyleRoleToolShellPrimary,
-			transcriptrender.StyleRoleToolShellSecondary,
-			transcriptrender.StyleRoleToolShellWarning,
-			transcriptrender.StyleRoleToolShellError:
-			foundSyntax = true
-			if !span.Style.Has(transcriptrender.SpanAttributeFaint) {
-				t.Fatalf("pending shell syntax span is not faint: %+v", span)
-			}
+		foundSyntax = true
+		if !span.Style.Has(transcriptrender.SpanAttributeFaint) {
+			t.Fatalf("pending shell syntax span is not faint: %+v", span)
 		}
 	}
 	if !foundSyntax {
-		t.Fatalf("pending shell line has no typed syntax spans: %+v", lines[0].Spans)
+		t.Fatalf("pending shell line has no Chroma syntax spans: %+v", lines[0].Spans)
 	}
 
 	surface.calls = nil

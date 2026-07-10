@@ -6,7 +6,13 @@ import (
 	"core/shared/theme"
 
 	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
+)
+
+const (
+	lightSyntaxStyle = "catppuccin-latte"
+	darkSyntaxStyle  = "onedark"
 )
 
 type syntaxProjector struct {
@@ -26,21 +32,15 @@ func newSyntaxProjector(themeName string) syntaxProjector {
 }
 
 func chromaStyleForTheme(themeName string) *chroma.Style {
+	styleName := darkSyntaxStyle
 	if themeName == theme.Light {
-		if style := styles.Get("github"); style != nil {
-			return style
-		}
-		if style := styles.Get("friendly"); style != nil {
-			return style
-		}
+		styleName = lightSyntaxStyle
 	}
-	if style := styles.Get("github-dark"); style != nil {
-		return style
+	style := styles.Get(styleName)
+	if style == nil {
+		panic("required Chroma style is not registered: " + styleName)
 	}
-	if style := styles.Get("monokai"); style != nil {
-		return style
-	}
-	return styles.Fallback
+	return style
 }
 
 func (p syntaxProjector) explicitStyle(tokenType chroma.TokenType) SpanStyle {
@@ -64,6 +64,27 @@ func (p syntaxProjector) explicitStyle(tokenType chroma.TokenType) SpanStyle {
 		Green: foreground.Green(),
 		Blue:  foreground.Blue(),
 	}, attributes...)
+}
+
+func (p syntaxProjector) highlight(
+	lexer chroma.Lexer,
+	source string,
+	attributes ...SpanAttribute,
+) [][]Span {
+	fallback := p.explicitStyle(chroma.Text)
+	fallback.Attributes |= combineSpanAttributes(attributes)
+	return projectSyntaxSpans(lexer, source, fallback, func(tokenType chroma.TokenType) SpanStyle {
+		style := p.explicitStyle(tokenType)
+		style.Attributes |= combineSpanAttributes(attributes)
+		return style
+	})
+}
+
+func sourceSyntaxLexer(path string, source string) chroma.Lexer {
+	if lexer := lexers.Match(strings.TrimSpace(path)); lexer != nil {
+		return lexer
+	}
+	return lexers.Analyse(source)
 }
 
 type syntaxStyleResolver func(chroma.TokenType) SpanStyle

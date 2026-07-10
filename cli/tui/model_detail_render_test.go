@@ -63,7 +63,7 @@ func TestSelectedDetailAdapterPreservesSemanticStylesAcrossFullWidthFill(t *test
 				transcriptrender.SemanticSpan("I", transcriptrender.StyleRoleMarkdownCode, transcriptrender.SpanAttributeItalic),
 				transcriptrender.SemanticSpan(
 					"U",
-					transcriptrender.StyleRoleToolShellError,
+					transcriptrender.StyleRoleError,
 					transcriptrender.SpanAttributeFaint,
 					transcriptrender.SpanAttributeUnderline,
 				),
@@ -117,21 +117,17 @@ func TestUnselectedDetailAdapterAppliesTypedDiffBackgroundAcrossContentWidth(t *
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
 
-	palette := theme.ResolvePalette("dark")
 	tests := []struct {
 		name       string
 		background transcriptrender.LineBackground
-		expected   string
 	}{
 		{
 			name:       "added",
 			background: transcriptrender.LineBackgroundDiffAdded,
-			expected:   palette.Transcript.DiffAddBackground.TrueColor,
 		},
 		{
 			name:       "removed",
 			background: transcriptrender.LineBackgroundDiffRemoved,
-			expected:   palette.Transcript.DiffRemoveBackground.TrueColor,
 		},
 	}
 	for _, test := range tests {
@@ -160,12 +156,16 @@ func TestUnselectedDetailAdapterAppliesTypedDiffBackgroundAcrossContentWidth(t *
 			}
 
 			cells := analysis.Screen.Cells[0]
-			if strings.EqualFold(cells[0].Background, test.expected) {
-				t.Fatalf("unselected rail unexpectedly inherited diff background %q", cells[0].Background)
+			contentBackground := cells[1].Background
+			if contentBackground == "" {
+				t.Fatal("unselected diff content has no background")
+			}
+			if strings.EqualFold(cells[0].Background, contentBackground) {
+				t.Fatalf("unselected rail unexpectedly inherited diff background %q", contentBackground)
 			}
 			for index, cell := range cells[1:] {
-				if !strings.EqualFold(cell.Background, test.expected) {
-					t.Fatalf("content cell %d background = %q, want %q", index+1, cell.Background, test.expected)
+				if !strings.EqualFold(cell.Background, contentBackground) {
+					t.Fatalf("content cell %d background = %q, want consistent diff fill %q", index+1, cell.Background, contentBackground)
 				}
 			}
 		})
@@ -244,13 +244,17 @@ func TestSelectedStructuredPatchKeepsChromaStylesUnderDiffFill(t *testing.T) {
 	if !strings.EqualFold(cells[0].Background, palette.App.ModeBg.TrueColor) {
 		t.Fatalf("rail background = %q, want selected fill %q", cells[0].Background, palette.App.ModeBg.TrueColor)
 	}
+	diffBackground := cells[1].Background
+	if diffBackground == "" || strings.EqualFold(diffBackground, palette.App.ModeBg.TrueColor) {
+		t.Fatalf("selected diff content background = %q, want tinted fill distinct from selection", diffBackground)
+	}
 	for index, cell := range cells[1:] {
-		if !strings.EqualFold(cell.Background, palette.Transcript.DiffAddBackground.TrueColor) {
+		if !strings.EqualFold(cell.Background, diffBackground) {
 			t.Fatalf(
 				"content cell %d background = %q, want selected diff fill %q",
 				index+1,
 				cell.Background,
-				palette.Transcript.DiffAddBackground.TrueColor,
+				diffBackground,
 			)
 		}
 	}

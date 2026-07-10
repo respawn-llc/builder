@@ -44,21 +44,19 @@ type AppPalette struct {
 }
 
 type TranscriptPalette struct {
-	Foreground           AdaptiveColor
-	SelectionBackground  AdaptiveColor
-	SelectionForeground  AdaptiveColor
-	User                 AdaptiveColor
-	Assistant            AdaptiveColor
-	Tool                 AdaptiveColor
-	ToolSuccess          AdaptiveColor
-	ToolError            AdaptiveColor
-	System               AdaptiveColor
-	Success              AdaptiveColor
-	Warning              AdaptiveColor
-	Error                AdaptiveColor
-	Compaction           AdaptiveColor
-	DiffAddBackground    AdaptiveColor
-	DiffRemoveBackground AdaptiveColor
+	Foreground          AdaptiveColor
+	SelectionBackground AdaptiveColor
+	SelectionForeground AdaptiveColor
+	User                AdaptiveColor
+	Assistant           AdaptiveColor
+	Tool                AdaptiveColor
+	ToolSuccess         AdaptiveColor
+	ToolError           AdaptiveColor
+	System              AdaptiveColor
+	Success             AdaptiveColor
+	Warning             AdaptiveColor
+	Error               AdaptiveColor
+	Compaction          AdaptiveColor
 }
 
 type StatusPalette struct {
@@ -87,21 +85,19 @@ type ResolvedAppPalette struct {
 }
 
 type ResolvedTranscriptPalette struct {
-	Foreground           Color
-	SelectionBackground  Color
-	SelectionForeground  Color
-	User                 Color
-	Assistant            Color
-	Tool                 Color
-	ToolSuccess          Color
-	ToolError            Color
-	System               Color
-	Success              Color
-	Warning              Color
-	Error                Color
-	Compaction           Color
-	DiffAddBackground    Color
-	DiffRemoveBackground Color
+	Foreground          Color
+	SelectionBackground Color
+	SelectionForeground Color
+	User                Color
+	Assistant           Color
+	Tool                Color
+	ToolSuccess         Color
+	ToolError           Color
+	System              Color
+	Success             Color
+	Warning             Color
+	Error               Color
+	Compaction          Color
 }
 
 type ResolvedStatusPalette struct {
@@ -142,21 +138,19 @@ func (p Palette) Resolve(themeName string) ResolvedPalette {
 			InputBg:    p.App.InputBg.Resolve(resolvedTheme),
 		},
 		Transcript: ResolvedTranscriptPalette{
-			Foreground:           p.Transcript.Foreground.Resolve(resolvedTheme),
-			SelectionBackground:  p.Transcript.SelectionBackground.Resolve(resolvedTheme),
-			SelectionForeground:  p.Transcript.SelectionForeground.Resolve(resolvedTheme),
-			User:                 p.Transcript.User.Resolve(resolvedTheme),
-			Assistant:            p.Transcript.Assistant.Resolve(resolvedTheme),
-			Tool:                 p.Transcript.Tool.Resolve(resolvedTheme),
-			ToolSuccess:          p.Transcript.ToolSuccess.Resolve(resolvedTheme),
-			ToolError:            p.Transcript.ToolError.Resolve(resolvedTheme),
-			System:               p.Transcript.System.Resolve(resolvedTheme),
-			Success:              p.Transcript.Success.Resolve(resolvedTheme),
-			Warning:              p.Transcript.Warning.Resolve(resolvedTheme),
-			Error:                p.Transcript.Error.Resolve(resolvedTheme),
-			Compaction:           p.Transcript.Compaction.Resolve(resolvedTheme),
-			DiffAddBackground:    p.Transcript.DiffAddBackground.Resolve(resolvedTheme),
-			DiffRemoveBackground: p.Transcript.DiffRemoveBackground.Resolve(resolvedTheme),
+			Foreground:          p.Transcript.Foreground.Resolve(resolvedTheme),
+			SelectionBackground: p.Transcript.SelectionBackground.Resolve(resolvedTheme),
+			SelectionForeground: p.Transcript.SelectionForeground.Resolve(resolvedTheme),
+			User:                p.Transcript.User.Resolve(resolvedTheme),
+			Assistant:           p.Transcript.Assistant.Resolve(resolvedTheme),
+			Tool:                p.Transcript.Tool.Resolve(resolvedTheme),
+			ToolSuccess:         p.Transcript.ToolSuccess.Resolve(resolvedTheme),
+			ToolError:           p.Transcript.ToolError.Resolve(resolvedTheme),
+			System:              p.Transcript.System.Resolve(resolvedTheme),
+			Success:             p.Transcript.Success.Resolve(resolvedTheme),
+			Warning:             p.Transcript.Warning.Resolve(resolvedTheme),
+			Error:               p.Transcript.Error.Resolve(resolvedTheme),
+			Compaction:          p.Transcript.Compaction.Resolve(resolvedTheme),
 		},
 		Status: ResolvedStatusPalette{
 			Success:      p.Status.Success.Resolve(resolvedTheme),
@@ -258,14 +252,6 @@ var defaultPalette = Palette{
 		Compaction: AdaptiveColor{
 			Light: Color{ANSI: "11", ANSI256: "220", TrueColor: "#FFE74C"},
 			Dark:  Color{ANSI: "3", ANSI256: "216", TrueColor: "#FFE74C"},
-		},
-		DiffAddBackground: AdaptiveColor{
-			Light: Color{ANSI: "2", ANSI256: "194", TrueColor: "#E6FFED"},
-			Dark:  Color{ANSI: "2", ANSI256: "22", TrueColor: "#1F2A22"},
-		},
-		DiffRemoveBackground: AdaptiveColor{
-			Light: Color{ANSI: "1", ANSI256: "224", TrueColor: "#FFECEF"},
-			Dark:  Color{ANSI: "1", ANSI256: "52", TrueColor: "#2B1F22"},
 		},
 	},
 	Status: StatusPalette{

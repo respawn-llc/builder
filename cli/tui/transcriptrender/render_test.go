@@ -126,8 +126,47 @@ func TestPlainShellRenderHintSkipsSyntaxHighlighting(t *testing.T) {
 			CompactText:  "Polled session 1149 for 2s",
 			RenderHint:   &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindPlain},
 		},
-	}, 120, "⢎ ")
+	}, 120, "", "⢎ ")
 	assertShellLineIsPlainText(t, pending)
+}
+
+func TestSourceReadUsesCommandPreviewAndSourceResultDetail(t *testing.T) {
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "package transcriptrender\n\nfunc example() {}", false)
+	row.Tool.ToolPresentation.Command = "sed -n '1,20p' cli/tui/transcriptrender/render.go"
+	row.Tool.ToolPresentation.CompactText = row.Tool.ToolPresentation.Command
+	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{
+		Kind:       clientui.ToolRenderKindSource,
+		Path:       "cli/tui/transcriptrender/render.go",
+		ResultOnly: true,
+	}
+
+	presentation := RenderDetailPresentation(row, 120, "dark")
+	if got := presentation.Collapsed[0].Plain(); !strings.Contains(got, row.Tool.ToolPresentation.Command) {
+		t.Fatalf("collapsed source read = %q, want typed command preview", got)
+	}
+	expanded := strings.Join(PlainLines(presentation.Expanded), "\n")
+	if !strings.Contains(expanded, "package transcriptrender") ||
+		!strings.Contains(expanded, "func example() {}") {
+		t.Fatalf("expanded source read = %q, want source result", expanded)
+	}
+	if strings.Contains(expanded, row.Tool.ToolPresentation.Command) {
+		t.Fatalf("expanded source read retained command instead of result-only source: %q", expanded)
+	}
+	foundSyntax := false
+	for _, line := range presentation.Expanded {
+		for _, span := range line.Spans {
+			if span.Style.Kind != SpanStyleExplicitRGB {
+				continue
+			}
+			foundSyntax = true
+			if !span.Style.Has(SpanAttributeFaint) {
+				t.Fatalf("source result syntax span is not faint: %+v", span)
+			}
+		}
+	}
+	if !foundSyntax {
+		t.Fatalf("expanded source read has no Chroma syntax spans: %+v", presentation.Expanded)
+	}
 }
 
 func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
@@ -167,7 +206,7 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 						ShellDialect: tt.dialect,
 					},
 				},
-			}, 120, "⢎ ")
+			}, 120, "", "⢎ ")
 			assertShellLineHasTypedSyntax(t, pending)
 		})
 	}
@@ -221,25 +260,23 @@ func assertShellLineHasTypedSyntax(t *testing.T, line Line) {
 		if !span.Style.Has(SpanAttributeFaint) {
 			t.Fatalf("shell syntax span is not faint: %+v", span)
 		}
-		switch span.Style.SemanticRole {
-		case StyleRoleToolShellPrimary, StyleRoleToolShellSecondary, StyleRoleToolShellWarning, StyleRoleToolShellError:
+		if span.Style.Kind == SpanStyleExplicitRGB {
 			foundSyntax = true
 		}
 	}
 	if !foundSyntax {
-		t.Fatalf("shell line did not include typed syntax role spans: %+v", line.Spans)
+		t.Fatalf("shell line did not include Chroma syntax spans: %+v", line.Spans)
 	}
 }
 
-func TestDefaultToolRowsDoNotUseShellSyntaxRoles(t *testing.T) {
+func TestDefaultToolRowsDoNotUseChromaSyntax(t *testing.T) {
 	rendered := RenderCommittedRow(toolRow("custom_tool", clientui.ToolPresentationDefault, "sed -n '1,10p' cli/tui/model.go", false), 120, "", ModeOngoing)
 	if len(rendered.Lines) == 0 {
 		t.Fatal("rendered no custom tool row lines")
 	}
 	for _, span := range rendered.Lines[0].Spans {
-		switch span.Style.SemanticRole {
-		case StyleRoleToolShellPrimary, StyleRoleToolShellSecondary, StyleRoleToolShellWarning, StyleRoleToolShellError:
-			t.Fatalf("default tool row used shell syntax role span: %+v", span)
+		if span.Style.Kind == SpanStyleExplicitRGB {
+			t.Fatalf("default tool row used Chroma syntax span: %+v", span)
 		}
 	}
 }
@@ -387,7 +424,7 @@ func TestBackgroundNoticeUsesPrimaryInfoSymbolAndFullStrengthBody(t *testing.T) 
 func TestResolveSpanStyleCarriesSemanticColorAndAttributes(t *testing.T) {
 	span := SemanticSpan(
 		"semantic",
-		StyleRoleToolShellWarning,
+		StyleRoleWarning,
 		SpanAttributeFaint,
 		SpanAttributeBold,
 		SpanAttributeItalic,
@@ -512,8 +549,8 @@ func TestPendingToolChangesOnlyCommittedSymbolText(t *testing.T) {
 			Command:      "go test ./...",
 		},
 	}
-	committed := RenderPendingTool(start, 80, "")
-	pending := RenderPendingTool(start, 80, "⢎ ")
+	committed := RenderPendingTool(start, 80, "", "")
+	pending := RenderPendingTool(start, 80, "", "⢎ ")
 
 	if got, want := pending.Plain(), "⢎  go test ./..."; got != want {
 		t.Fatalf("pending tool plain line = %q, want %q", got, want)
@@ -789,7 +826,7 @@ func TestPendingPatchToolUsesStructuredPathAndCounts(t *testing.T) {
 				SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go -1 +2", FileIndex: 0}},
 			},
 		},
-	}, 80, "⢎ ")
+	}, 80, "", "⢎ ")
 
 	if got, want := line.Plain(), "⢎  cli/tui/model.go -1 +2"; got != want {
 		t.Fatalf("pending patch line = %q, want %q", got, want)
@@ -825,7 +862,7 @@ func TestPatchFamilyToolsDoNotFallbackToToolName(t *testing.T) {
 				ToolCallID:       "2d97d231-7765-471a-bf55-a4c17157af03",
 				ToolName:         toolName,
 				ToolPresentation: &clientui.ToolCallMeta{ToolName: toolName},
-			}, 80, "")
+			}, 80, "", "")
 			if got := pending.Plain(); got != "⇄ tool call" {
 				t.Fatalf("pending patch-family row fell back to tool name or unexpected fallback: %q", got)
 			}
