@@ -7,7 +7,7 @@
       "id": "21f6bfca-b2e6-4b9e-b9d0-1fe16e139a11",
       "route": "responses",
       "probe": "6fb17b47-d43a-43e8-9d25-8504410b0e19",
-      "stream": true,
+      "outcome": "stream",
       "output": "ok",
       "session_cache_key": true
     }

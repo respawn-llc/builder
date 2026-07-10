@@ -2,8 +2,10 @@ package blackbox_test
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"core/internal/testharness/pty/blackbox"
 
@@ -36,17 +38,68 @@ func TestDecodeScenarioRejectsUnknownFieldsAndUnionEscapeHatches(t *testing.T) {
 	}
 }
 
+func TestResponsesStubCancelsHeldSSEAndReturnsDeclaredProviderFailure(t *testing.T) {
+	hold, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeHoldSSE,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub hold: %v", err)
+	}
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, hold.URL()+"/responses", bytes.NewBufferString(`{"input":[]}`))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	responseDone := make(chan error, 1)
+	go func() {
+		response, requestErr := http.DefaultClient.Do(request)
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		responseDone <- requestErr
+	}()
+	deadline := time.After(time.Second)
+	for hold.Snapshot().ActiveRequests == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("held SSE did not become active")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	hold.Close()
+	select {
+	case <-responseDone:
+	case <-time.After(time.Second):
+		t.Fatal("held SSE request did not unblock on stub close")
+	}
+
+	provider, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeProviderFailure,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub provider failure: %v", err)
+	}
+	t.Cleanup(provider.Close)
+	response, err := http.Post(provider.URL()+"/responses", "application/json", bytes.NewBufferString(`{"input":[]}`))
+	if err != nil {
+		t.Fatalf("POST provider failure: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("provider failure status = %d, want %d", response.StatusCode, http.StatusBadGateway)
+	}
+}
+
 func TestResponsesStubConsumesTypedProbeAndRejectsUnconsumedQueue(t *testing.T) {
 	t.Parallel()
 
 	probe := uuid.New().String()
 	output := "ok"
 	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
-		ID:     uuid.New(),
-		Route:  blackbox.RouteResponses,
-		Probe:  &probe,
-		Stream: true,
-		Output: &output,
+		ID:      uuid.New(),
+		Route:   blackbox.RouteResponses,
+		Probe:   &probe,
+		Outcome: blackbox.OutcomeStream,
+		Output:  &output,
 	}})
 	if err != nil {
 		t.Fatalf("StartResponsesStub: %v", err)

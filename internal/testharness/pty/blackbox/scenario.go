@@ -38,10 +38,19 @@ type RequiredOperation struct {
 	ID              uuid.UUID `json:"id"`
 	Route           Route     `json:"route"`
 	Probe           *string   `json:"probe,omitempty"`
-	Stream          bool      `json:"stream"`
+	Outcome         Outcome   `json:"outcome"`
 	Output          *string   `json:"output,omitempty"`
 	SessionCacheKey bool      `json:"session_cache_key"`
 }
+
+type Outcome string
+
+const (
+	OutcomeJSON            Outcome = "json"
+	OutcomeStream          Outcome = "stream"
+	OutcomeProviderFailure Outcome = "provider_failure"
+	OutcomeHoldSSE         Outcome = "hold_sse"
+)
 
 type Route string
 
@@ -176,14 +185,19 @@ func (operation RequiredOperation) Validate() error {
 	if operation.Output != nil && len(*operation.Output) > maxScenarioPayload {
 		return errors.New("model payload exceeds limit")
 	}
-	if operation.Route != RouteResponses && (operation.Probe != nil || operation.Stream || operation.SessionCacheKey) {
-		return errors.New("only responses operations may declare probe, stream, or session cache key")
+	if operation.Route != RouteResponses && (operation.Probe != nil || operation.SessionCacheKey || operation.Outcome == OutcomeStream || operation.Outcome == OutcomeHoldSSE) {
+		return errors.New("only responses operations may declare probe, session cache key, stream, or hold outcome")
 	}
 	if operation.Probe != nil {
 		probe, err := uuid.Parse(*operation.Probe)
 		if err != nil || probe.Version() != 4 || probe == uuid.Nil {
 			return errors.New("response probe must be UUIDv4")
 		}
+	}
+	switch operation.Outcome {
+	case OutcomeJSON, OutcomeStream, OutcomeProviderFailure, OutcomeHoldSSE:
+	default:
+		return fmt.Errorf("unsupported model outcome %q", operation.Outcome)
 	}
 	return nil
 }
@@ -193,7 +207,7 @@ func (operation *RequiredOperation) UnmarshalJSON(data []byte) error {
 		ID              uuid.UUID `json:"id"`
 		Route           Route     `json:"route"`
 		Probe           *string   `json:"probe"`
-		Stream          bool      `json:"stream"`
+		Outcome         Outcome   `json:"outcome"`
 		Output          *string   `json:"output"`
 		SessionCacheKey bool      `json:"session_cache_key"`
 	}
@@ -203,9 +217,9 @@ func (operation *RequiredOperation) UnmarshalJSON(data []byte) error {
 	allowed := map[string]struct{}{"id": {}, "route": {}, "output": {}}
 	if raw.Route == RouteResponses {
 		allowed["probe"] = struct{}{}
-		allowed["stream"] = struct{}{}
 		allowed["session_cache_key"] = struct{}{}
 	}
+	allowed["outcome"] = struct{}{}
 	if err := rejectUnknownJSONFields(data, allowed); err != nil {
 		return err
 	}
@@ -213,7 +227,7 @@ func (operation *RequiredOperation) UnmarshalJSON(data []byte) error {
 		ID:              raw.ID,
 		Route:           raw.Route,
 		Probe:           raw.Probe,
-		Stream:          raw.Stream,
+		Outcome:         raw.Outcome,
 		Output:          raw.Output,
 		SessionCacheKey: raw.SessionCacheKey,
 	}

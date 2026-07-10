@@ -258,12 +258,24 @@ func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseW
 		http.Error(writer, "response operation is not declared", http.StatusBadRequest)
 		return
 	}
-	if operation.Stream {
+	switch operation.Outcome {
+	case OutcomeHoldSSE:
+		writer.Header().Set("Content-Type", "text/event-stream")
+		<-ctx.Done()
+		return
+	case OutcomeProviderFailure:
+		http.Error(writer, "declared provider failure", http.StatusBadGateway)
+		return
+	case OutcomeStream:
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n")
 		_, _ = fmt.Fprintf(writer, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":%q}\n\n", optionalText(operation.Output))
 		_, _ = fmt.Fprintf(writer, "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":%q}]}]}}\n\n", optionalText(operation.Output))
 		_, _ = fmt.Fprint(writer, "data: [DONE]\n\n")
+		return
+	case OutcomeJSON:
+	default:
+		http.Error(writer, "unsupported declared outcome", http.StatusInternalServerError)
 		return
 	}
 	select {
