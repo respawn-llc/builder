@@ -1,6 +1,9 @@
 package analyzer
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 type Cell struct {
 	Content string
@@ -12,7 +15,16 @@ type ScreenSnapshot struct {
 	Cursor     Position
 }
 
+type BlankFrameDiagnostic struct {
+	Dimensions Dimensions
+	Position   Position
+	Content    string
+}
+
 func NewScreenSnapshot(dimensions Dimensions) ScreenSnapshot {
+	if err := validateDimensions(dimensions.Rows, dimensions.Cols); err != nil {
+		panic(fmt.Sprintf("new screen snapshot: %v", err))
+	}
 	cells := make([][]Cell, dimensions.Rows)
 	for row := range cells {
 		cells[row] = make([]Cell, dimensions.Cols)
@@ -41,12 +53,20 @@ func (s ScreenSnapshot) RenderText() string {
 }
 
 func (s ScreenSnapshot) IsBlank() bool {
+	return s.BlankFrameDiagnostic() == nil
+}
+
+func (s ScreenSnapshot) BlankFrameDiagnostic() *BlankFrameDiagnostic {
 	for row := 0; row < s.Dimensions.Rows; row++ {
 		for col := 0; col < s.Dimensions.Cols; col++ {
 			if s.Cells[row][col].Content != "" {
-				return false
+				return &BlankFrameDiagnostic{
+					Dimensions: s.Dimensions,
+					Position:   Position{Row: row, Col: col},
+					Content:    s.Cells[row][col].Content,
+				}
 			}
 		}
 	}
-	return true
+	return nil
 }

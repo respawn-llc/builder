@@ -14,11 +14,35 @@ type Dimensions struct {
 	Cols int
 }
 
+const (
+	minTerminalRows  = 1
+	maxTerminalRows  = 200
+	minTerminalCols  = 1
+	maxTerminalCols  = 500
+	maxTerminalCells = 100_000
+)
+
 func NewDimensions(rows, cols int) (Dimensions, error) {
-	if rows <= 0 || cols <= 0 {
-		return Dimensions{}, fmt.Errorf("terminal dimensions must be positive: rows=%d cols=%d", rows, cols)
+	if err := validateDimensions(rows, cols); err != nil {
+		return Dimensions{}, err
 	}
 	return Dimensions{Rows: rows, Cols: cols}, nil
+}
+
+func validateDimensions(rows, cols int) error {
+	if rows < minTerminalRows || cols < minTerminalCols {
+		return fmt.Errorf("terminal dimensions must be positive: rows=%d cols=%d", rows, cols)
+	}
+	if rows > maxTerminalCells/cols {
+		return fmt.Errorf("terminal dimensions exceed cell limit: rows=%d cols=%d cells>%d", rows, cols, maxTerminalCells)
+	}
+	if rows > maxTerminalRows {
+		return fmt.Errorf("terminal rows exceed limit: rows=%d max=%d", rows, maxTerminalRows)
+	}
+	if cols > maxTerminalCols {
+		return fmt.Errorf("terminal columns exceed limit: cols=%d max=%d", cols, maxTerminalCols)
+	}
+	return nil
 }
 
 func MustDimensions(rows, cols int) Dimensions {
@@ -278,8 +302,8 @@ func NewWindowID(raw string) (WindowID, error) {
 	if id == uuid.Nil {
 		return WindowID{}, errors.New("window_id must not be nil UUID")
 	}
-	if id.Version() != 7 {
-		return WindowID{}, fmt.Errorf("window_id must be UUIDv7: got version %d", id.Version())
+	if id.Version() != 4 {
+		return WindowID{}, fmt.Errorf("window_id must be UUIDv4: got version %d", id.Version())
 	}
 	return WindowID{value: id}, nil
 }

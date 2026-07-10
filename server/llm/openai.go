@@ -63,7 +63,7 @@ type OpenAICompactionRequest struct {
 type OpenAICompactionResponse struct {
 	OutputItems       []ResponseItem
 	Usage             Usage
-	TrimmedItemsCount int
+	TrimmedItemsCount *int
 }
 
 type OpenAITransport interface {
@@ -233,8 +233,16 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	return CompactionResponse{
 		OutputItems:       CloneResponseItems(providerResp.OutputItems),
 		Usage:             providerResp.Usage,
-		TrimmedItemsCount: providerResp.TrimmedItemsCount,
+		TrimmedItemsCount: cloneOptionalInt(providerResp.TrimmedItemsCount),
 	}, nil
+}
+
+func cloneOptionalInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func (c *OpenAIClient) ProviderCapabilities(ctx context.Context) (ProviderCapabilities, error) {

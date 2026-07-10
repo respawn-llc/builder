@@ -180,10 +180,50 @@ func TestScreenSnapshotReportsBlankFrame(t *testing.T) {
 	if !blank.IsBlank() {
 		t.Fatal("new screen snapshot should be blank")
 	}
+	if diagnostic := blank.BlankFrameDiagnostic(); diagnostic != nil {
+		t.Fatalf("blank frame diagnostic = %+v, want nil", diagnostic)
+	}
 	written := analyzeBytes(t, []byte("x"), pty.MustDimensions(2, 4)).Screen
 	if written.IsBlank() {
 		t.Fatal("screen with content should not be blank")
 	}
+	diagnostic := written.BlankFrameDiagnostic()
+	if diagnostic == nil {
+		t.Fatal("nonblank screen diagnostic = nil")
+	}
+	if diagnostic.Dimensions != (pty.MustDimensions(2, 4)) || diagnostic.Position != (pty.Position{Row: 0, Col: 0}) || diagnostic.Content != "x" {
+		t.Fatalf("blank frame diagnostic = %+v", diagnostic)
+	}
+}
+
+func TestDimensionsRejectOutOfRangeAndOversizedGeometryBeforeScreenAllocation(t *testing.T) {
+	t.Parallel()
+
+	for _, dimensions := range []pty.Dimensions{
+		{Rows: 0, Cols: 1},
+		{Rows: 201, Cols: 1},
+		{Rows: 1, Cols: 501},
+		{Rows: 201, Cols: 500},
+	} {
+		if _, err := pty.NewDimensions(dimensions.Rows, dimensions.Cols); err == nil {
+			t.Fatalf("NewDimensions(%+v) succeeded", dimensions)
+		}
+	}
+
+	if _, err := pty.NewCaptureWithEvents(
+		pty.MustDimensions(1, 1),
+		nil,
+		[]pty.ResizeEvent{{Placement: pty.BeforeFirstChunk(), Dimensions: pty.Dimensions{Rows: 201, Cols: 500}}},
+	); err == nil {
+		t.Fatal("NewCaptureWithEvents accepted oversized resize")
+	}
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("NewScreenSnapshot accepted invalid dimensions")
+		}
+	}()
+	_ = pty.NewScreenSnapshot(pty.Dimensions{Rows: 201, Cols: 500})
 }
 
 func TestAnalyzeResizeEventRecordsTypedOperation(t *testing.T) {

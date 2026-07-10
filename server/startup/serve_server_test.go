@@ -619,6 +619,71 @@ func TestServeStartsUnauthenticatedAndReportsBootstrapReadiness(t *testing.T) {
 	}
 }
 
+func TestServeReadinessDoesNotRequireAuthForNonFirstPartyProvider(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	writeServeSettings(t, home, `
+model = "gpt-5"
+openai_base_url = "http://127.0.0.1:11434/v1"
+`)
+	configureServeTestServerPort(t)
+	cfg, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load for binding: %v", err)
+	}
+	if _, err := metadata.RegisterBinding(context.Background(), cfg.PersistenceRoot, workspace); err != nil {
+		t.Fatalf("RegisterBinding: %v", err)
+	}
+
+	server := startServeTestServer(t,
+		Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true, AllowUnauthenticated: true},
+		envAuthHandler{lookupEnv: func(string) string { return "" }},
+		noopOnboarding,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		releaseServeTestPortForConfig(server.Config())
+		errCh <- server.Serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if serveErr := <-errCh; !errors.Is(serveErr, context.Canceled) {
+			t.Errorf("Serve error = %v, want context canceled", serveErr)
+		}
+	})
+
+	loadCfg, err := config.Load(workspace, config.LoadOptions{})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	readyURL := config.ServerHTTPBaseURL(loadCfg) + protocol.ReadinessPath
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, requestErr := http.Get(readyURL)
+		if requestErr == nil {
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("readiness status = %d, want 200", resp.StatusCode)
+			}
+			var body map[string]any
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode readiness body: %v", err)
+			}
+			if body["ready"] != true || body["auth_ready"] != false {
+				t.Fatalf("readiness body = %+v, want ready with unavailable auth", body)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("GET ready: %v", requestErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestMissingConfigServeStartsBootstrapSurfaceBeforeAuthReady(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()

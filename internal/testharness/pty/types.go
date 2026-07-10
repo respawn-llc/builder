@@ -100,4 +100,6 @@ type Cell = analyzer.Cell
 
 type ScreenSnapshot = analyzer.ScreenSnapshot
 
+type BlankFrameDiagnostic = analyzer.BlankFrameDiagnostic
+
 var NewScreenSnapshot = analyzer.NewScreenSnapshot

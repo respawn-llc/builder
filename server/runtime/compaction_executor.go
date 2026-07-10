@@ -49,7 +49,7 @@ func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.R
 		engine:            "remote",
 		items:             replacement,
 		usage:             resp.Usage,
-		trimmedItemsCount: resp.TrimmedItemsCount,
+		trimmedItemsCount: cloneOptionalInt(resp.TrimmedItemsCount),
 		overflowRepair:    repairStats,
 		provider:          providerID,
 	}, nil
@@ -232,7 +232,7 @@ func (e *Engine) compactLocal(ctx context.Context, input []llm.ResponseItem, pro
 		engine:            "local",
 		items:             replacement,
 		usage:             llm.Usage{InputTokens: usageInputTokens, WindowTokens: e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())},
-		trimmedItemsCount: 0,
+		trimmedItemsCount: nil,
 		overflowRepair:    repairStats,
 		provider:          providerID,
 		summary:           strings.TrimSpace(summary),

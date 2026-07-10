@@ -299,7 +299,7 @@ func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionReq
 	return OpenAICompactionResponse{
 		OutputItems:       outputItems,
 		Usage:             usageFromSDK(decoded.Usage, windowTokens),
-		TrimmedItemsCount: 0,
+		TrimmedItemsCount: nil,
 	}, nil
 }
 

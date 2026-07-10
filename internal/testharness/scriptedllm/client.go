@@ -76,7 +76,16 @@ func (c *Client) Compact(_ context.Context, req llm.CompactionRequest) (llm.Comp
 	}
 	response := c.compactions[0]
 	c.compactions = c.compactions[1:]
+	response.TrimmedItemsCount = cloneOptionalInt(response.TrimmedItemsCount)
 	return response, nil
+}
+
+func cloneOptionalInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func (c *Client) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {

@@ -7,6 +7,29 @@ import (
 	"core/internal/testharness/pty/analyzer"
 )
 
+type BlankFrameAssertionError struct {
+	analyzer.BlankFrameDiagnostic
+}
+
+func (e *BlankFrameAssertionError) Error() string {
+	return fmt.Sprintf(
+		"terminal frame is not blank: dimensions=%dx%d first_occupied=row:%d col:%d content=%q",
+		e.Dimensions.Rows,
+		e.Dimensions.Cols,
+		e.Position.Row,
+		e.Position.Col,
+		e.Content,
+	)
+}
+
+func BlankFrame(analysis analyzer.Analysis) error {
+	diagnostic := analysis.Screen.BlankFrameDiagnostic()
+	if diagnostic == nil {
+		return nil
+	}
+	return &BlankFrameAssertionError{BlankFrameDiagnostic: *diagnostic}
+}
+
 func NoWritesAbove(analysis analyzer.Analysis, window analyzer.OperationWindow, immutableBoundary int) error {
 	if err := validateWindow(analysis, window); err != nil {
 		return err

@@ -51,10 +51,18 @@ type compactionResult struct {
 	engine            string
 	items             []llm.ResponseItem
 	usage             llm.Usage
-	trimmedItemsCount int
+	trimmedItemsCount *int
 	overflowRepair    compactionOverflowRepairStats
 	provider          string
 	summary           string
+}
+
+func cloneOptionalInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 type defaultContextCompactor struct {
@@ -587,7 +595,7 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 		providerID = "unknown"
 	}
 
-	if err := newCompactionPersistence(e).emitStatus(stepID, EventCompactionStarted, mode, "selector", providerID, 0, 0, ""); err != nil {
+	if err := newCompactionPersistence(e).emitStatus(stepID, EventCompactionStarted, mode, "selector", providerID, nil, 0, ""); err != nil {
 		return compactionResult{}, err
 	}
 

@@ -54,7 +54,8 @@ func TestPhaseMarkerRejectsInvalidWindowID(t *testing.T) {
 		windowID string
 	}{
 		{name: "empty", windowID: ""},
-		{name: "v4", windowID: uuid.NewString()},
+		{name: "nil", windowID: uuid.Nil.String()},
+		{name: "v7", windowID: uuid.Must(uuid.NewV7()).String()},
 		{name: "malformed", windowID: "not-a-uuid"},
 	} {
 		tc := tc
@@ -133,11 +134,7 @@ func mustCapture(t *testing.T, payload []byte, dimensions pty.Dimensions) pty.Ca
 
 func mustWindowID(t *testing.T) pty.WindowID {
 	t.Helper()
-	id, err := uuid.NewV7()
-	if err != nil {
-		t.Fatalf("NewV7: %v", err)
-	}
-	windowID, err := pty.NewWindowID(id.String())
+	windowID, err := pty.NewWindowID(uuid.NewString())
 	if err != nil {
 		t.Fatalf("NewWindowID: %v", err)
 	}

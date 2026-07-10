@@ -30,8 +30,8 @@ func (m TerminalPhaseMarker) Validate() error {
 	if *m.WindowID == uuid.Nil {
 		return errors.New("terminal phase marker window id must not be nil UUID")
 	}
-	if m.WindowID.Version() != 7 {
-		return fmt.Errorf("terminal phase marker window id must be UUIDv7: got version %d", m.WindowID.Version())
+	if m.WindowID.Version() != 4 {
+		return fmt.Errorf("terminal phase marker window id must be UUIDv4: got version %d", m.WindowID.Version())
 	}
 	return nil
 }
