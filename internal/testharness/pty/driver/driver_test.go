@@ -10,6 +10,8 @@ import (
 
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/driver"
+
+	"github.com/google/uuid"
 )
 
 const commandTestTimeout = 5 * time.Second
@@ -194,6 +196,27 @@ func TestRunCommandTimeoutTerminatesProcessAndReader(t *testing.T) {
 	}
 	if !capture.ReadLoopDone {
 		t.Fatalf("read loop completion not recorded after timeout cleanup")
+	}
+}
+
+func TestSessionCommandRequiresUUIDv4AndClosedPayloadShape(t *testing.T) {
+	t.Parallel()
+
+	dimensions := pty.MustDimensions(2, 8)
+	for _, command := range []driver.SessionCommand{
+		{ID: uuid.Nil, Kind: driver.SessionCommandWrite, Bytes: []byte("x")},
+		{ID: uuid.Must(uuid.NewV7()), Kind: driver.SessionCommandWrite, Bytes: []byte("x")},
+		{ID: uuid.New(), Kind: driver.SessionCommandWrite},
+		{ID: uuid.New(), Kind: driver.SessionCommandResize},
+		{ID: uuid.New(), Kind: driver.SessionCommandRuntimeControlByte},
+		{ID: uuid.New(), Kind: driver.SessionCommandKind(99)},
+	} {
+		if err := command.Validate(); err == nil {
+			t.Fatalf("Validate succeeded for %#v", command)
+		}
+	}
+	if err := (driver.SessionCommand{ID: uuid.New(), Kind: driver.SessionCommandResize, Dimensions: &dimensions}).Validate(); err != nil {
+		t.Fatalf("Validate resize: %v", err)
 	}
 }
 
