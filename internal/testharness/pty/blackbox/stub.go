@@ -87,7 +87,9 @@ func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
 		ReadHeaderTimeout: 500 * time.Millisecond,
 	}
 	go func() {
-		_ = stub.server.Serve(listener)
+		if err := stub.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			stub.recordFailure(fmt.Errorf("serve Responses stub: %w", err))
+		}
 		close(stub.done)
 	}()
 	return stub, nil
