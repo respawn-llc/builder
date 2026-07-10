@@ -274,6 +274,36 @@ func TestRenderPatchToolShowsStructuredPathAndCounts(t *testing.T) {
 	}
 }
 
+func TestPendingPatchToolUsesStructuredPathAndCounts(t *testing.T) {
+	line := RenderPendingTool(clientui.TranscriptToolStart{
+		ToolCallID: "e5d6245b-579f-487c-87f7-cd57e21a0d38",
+		ToolName:   "patch",
+		ToolPresentation: &clientui.ToolCallMeta{
+			ToolName: "patch",
+			PatchRender: &patchformat.RenderedPatch{
+				Files:        []patchformat.RenderedFile{{RelPath: "cli/tui/model.go", Added: 2, Removed: 1}},
+				SummaryLines: []patchformat.RenderedLine{{Kind: patchformat.RenderedLineKindFile, Text: "cli/tui/model.go -1 +2", FileIndex: 0}},
+			},
+		},
+	}, 80, "⢎ ")
+
+	if got, want := line.Plain(), "⢎  cli/tui/model.go -1 +2"; got != want {
+		t.Fatalf("pending patch line = %q, want %q", got, want)
+	}
+	var removedRole, addedRole StyleRole
+	for _, span := range line.Spans {
+		switch span.Text {
+		case "-1":
+			removedRole = span.Role
+		case "+2":
+			addedRole = span.Role
+		}
+	}
+	if removedRole != StyleRoleToolError || addedRole != StyleRoleToolSuccess {
+		t.Fatalf("pending patch count roles = removed %v added %v", removedRole, addedRole)
+	}
+}
+
 func TestPatchFamilyToolsDoNotFallbackToToolName(t *testing.T) {
 	for _, toolName := range []string{"patch", "edit", "replace", "write"} {
 		t.Run(toolName, func(t *testing.T) {
@@ -415,6 +445,36 @@ func TestUserAssistantFullRowsRenderMarkdownContent(t *testing.T) {
 		assistant := RenderCommittedRow(rows[1], 80, "", mode)
 		if got := PlainLines(assistant.Lines); !slices.Equal(got, expectedAssistant[mode]) {
 			t.Fatalf("mode %v assistant markdown content = %q, want %q", mode, got, expectedAssistant[mode])
+		}
+	}
+}
+
+func TestUserAssistantMarkdownCodeUsesPrimaryFullStrengthRole(t *testing.T) {
+	row := clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowAssistant,
+		Assistant: &clientui.TranscriptAssistantRow{
+			Text: "Use `inline()`.\n\n```go\nblock()\n```",
+		},
+	}
+
+	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
+	codeSpans := make([]Span, 0, 2)
+	for _, line := range rendered.Lines {
+		for _, span := range line.Spans {
+			if span.Text == "inline()" || span.Text == "block()" {
+				codeSpans = append(codeSpans, span)
+			}
+		}
+	}
+	if len(codeSpans) != 2 {
+		t.Fatalf("markdown code spans = %+v, want inline and block code", codeSpans)
+	}
+	for _, span := range codeSpans {
+		if got := ColorRoleForStyle(span.Role); got != ColorRolePrimary {
+			t.Fatalf("markdown code color role = %v, want primary", got)
+		}
+		if span.Faint {
+			t.Fatalf("markdown code span is faint: %+v", span)
 		}
 	}
 }

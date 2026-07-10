@@ -60,13 +60,13 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 	}
 
 	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       "completed",
+		Type:       BackgroundShellEventCompleted,
 		ID:         "1000",
 		State:      "completed",
 		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone-a",
 	}, true)
 	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       "completed",
+		Type:       BackgroundShellEventCompleted,
 		ID:         "1001",
 		State:      "completed",
 		NoticeText: "Background shell 1001 completed.\nExit code: 0\nOutput:\ndone-b",
@@ -154,14 +154,14 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
 	manager.SetEventHandler(func(evt shelltool.Event) {
 		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-			Type:    string(evt.Type),
-			ID:      evt.Snapshot.ID,
-			State:   evt.Snapshot.State,
-			Command: evt.Snapshot.Command,
-			Workdir: evt.Snapshot.Workdir,
-			LogPath: evt.Snapshot.LogPath,
-			Preview: evt.Preview,
-			Removed: evt.Removed,
+			Type:           backgroundShellEventTypeForTest(evt.Type),
+			ID:             evt.Snapshot.ID,
+			State:          evt.Snapshot.State,
+			Command:        evt.Snapshot.Command,
+			Workdir:        evt.Snapshot.Workdir,
+			LogPath:        evt.Snapshot.LogPath,
+			Preview:        evt.Preview,
+			PreviewRemoved: evt.Removed,
 			ExitCode: func() *int {
 				if evt.Snapshot.ExitCode == nil {
 					return nil

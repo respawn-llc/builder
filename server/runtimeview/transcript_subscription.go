@@ -170,7 +170,7 @@ func transcriptBackgroundActivity(evt runtime.BackgroundShellEvent) clientui.Tra
 		Workdir:           evt.Workdir,
 		LogPath:           evt.LogPath,
 		Preview:           evt.Preview,
-		Removed:           evt.Removed > 0,
+		Removed:           evt.Type.IsTerminal(),
 		UserRequestedKill: evt.UserRequestedKill,
 	}
 }

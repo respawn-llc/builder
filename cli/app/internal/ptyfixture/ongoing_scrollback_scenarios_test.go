@@ -22,6 +22,11 @@ type styledAppendExpectation struct {
 
 type styledRowExpectation []styledAppendExpectation
 
+type backgroundCompletionExpectation struct {
+	Command   string
+	Forbidden []string
+}
+
 const defaultTerminalForeground = "#c0c0c0"
 const markdownTerminalForeground = "#d0d0d0"
 
@@ -37,6 +42,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	for _, tc := range []struct {
 		name                      string
 		script                    map[string]any
+		env                       []string
 		inputs                    []pty.InputEvent
 		resizes                   []pty.DriverResizeEvent
 		expectedAppends           []string
@@ -48,6 +54,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		forbiddenStyledWrites     []styledAppendExpectation
 		expectedStyledRows        []styledRowExpectation
 		liveSnapshot              *liveSnapshotExpectation
+		backgroundCompletion      *backgroundCompletionExpectation
 		allowDuplicateAppends     bool
 		allowsAltScroll           bool
 		allowsFullScreen          bool
@@ -157,10 +164,14 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			name: "markdown_streaming_promotion_and_final_tail",
 			script: map[string]any{
 				"prompt":        "stream markdown",
-				"stream_deltas": []string{"Stable paragraph.\n\n", "volatile tail"},
-				"final":         "Stable paragraph.\n\nvolatile tail",
+				"stream_deltas": []string{"Plain stable.\n\nUse `INLINE_CODE`.\n\n```text\nBLOCK_CODE\n```\n\n", "volatile tail"},
+				"final":         "Plain stable.\n\nUse `INLINE_CODE`.\n\n```text\nBLOCK_CODE\n```\n\nvolatile tail",
 			},
-			expectedAppends: []string{rightPad("Stable paragraph.", 80)},
+			expectedAppends: []string{"Plain stable."},
+			expectedStyledAppends: []styledAppendExpectation{
+				{Text: "INLINE_CODE", Foreground: colorForStyle(transcriptrender.StyleRoleMarkdownCode)},
+				{Text: "BLOCK_CODE", Foreground: colorForStyle(transcriptrender.StyleRoleMarkdownCode)},
+			},
 		},
 		{
 			name: "slash_input_status_live_area_during_stream",
@@ -226,6 +237,115 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedAppends: []string{"❮ tools complete"},
 		},
 		{
+			name: "live_patch_call_structured_preview",
+			script: map[string]any{
+				"prompt": "apply a patch",
+				"steps": []map[string]any{
+					{
+						"tool_calls": []map[string]any{
+							{
+								"id":   "87cffd9a-d9e4-49b5-a2a7-61c5e043b991",
+								"name": "patch",
+								"input": map[string]any{
+									"patch": "*** Begin Patch\n*** Add File: pty_live_patch.txt\n+PATCH_LIVE_CONTENT\n*** End Patch\n",
+								},
+							},
+						},
+					},
+					{
+						"expected_tool_results": []map[string]any{
+							{"CallID": "87cffd9a-d9e4-49b5-a2a7-61c5e043b991", "Name": "patch"},
+						},
+						"final": "patch lifecycle complete",
+					},
+				},
+			},
+			expectedAppends:     []string{"❮ patch lifecycle complete"},
+			expectedAnyAppends:  []string{"⇄ ./pty_live_patch.txt +1"},
+			forbiddenAnyAppends: []string{"⇄ tool call"},
+			expectedStyledAppends: []styledAppendExpectation{
+				{Text: " ./pty_live_patch.txt ", Foreground: colorForStyle(transcriptrender.StyleRoleToolPatch)},
+				{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
+			},
+		},
+		{
+			name: "live_ask_question_call_input_preview",
+			script: map[string]any{
+				"prompt": "ask a question",
+				"steps": []map[string]any{
+					{
+						"tool_calls": []map[string]any{
+							{
+								"id":   "7cf8ac4b-0551-4814-a312-37e039523c1c",
+								"name": "ask_question",
+								"input": map[string]any{
+									"question":                 "PTY_LIVE_QUESTION",
+									"suggestions":              []string{"accept", "decline"},
+									"recommended_option_index": 1,
+								},
+							},
+						},
+					},
+					{
+						"expected_tool_results": []map[string]any{
+							{"CallID": "7cf8ac4b-0551-4814-a312-37e039523c1c", "Name": "ask_question"},
+						},
+						"final": "question lifecycle complete",
+					},
+				},
+			},
+			inputs:              []pty.InputEvent{{After: 1500 * time.Millisecond, Bytes: []byte("\r")}},
+			expectedAppends:     []string{"❮ question lifecycle complete"},
+			expectedAnyAppends:  []string{"? PTY_LIVE_QUESTION"},
+			forbiddenAnyAppends: []string{"? tool call"},
+			interruptAfter:      durationPtr(6 * time.Second),
+			expectedStyledAppends: []styledAppendExpectation{
+				{Text: "?", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
+				{Text: " PTY_LIVE_QUESTION", Foreground: colorForStyle(transcriptrender.StyleRoleToolQuestion), Faint: true},
+			},
+		},
+		{
+			name: "live_background_shell_completion_style",
+			env:  []string{"KENT_MINIMUM_EXEC_TO_BG_SECONDS=1"},
+			script: map[string]any{
+				"prompt": "start a background shell",
+				"steps": []map[string]any{
+					{
+						"tool_calls": []map[string]any{
+							{
+								"id":   "28e08736-9539-41c1-a96c-56baf10e4fa4",
+								"name": "exec_command",
+								"input": map[string]any{
+									"cmd":           "sleep 2; echo $((51515150+1))",
+									"yield_time_ms": 1000,
+								},
+							},
+						},
+					},
+					{
+						"expected_tool_results": []map[string]any{
+							{"CallID": "28e08736-9539-41c1-a96c-56baf10e4fa4", "Name": "exec_command"},
+						},
+						"final": "background launch complete",
+					},
+					{
+						"final": "background continuation complete",
+					},
+				},
+			},
+			expectedAppends: []string{"❯ live_background_shell_completion_style"},
+			backgroundCompletion: &backgroundCompletionExpectation{
+				Command: "sleep 2; echo $((51515150+1))",
+				Forbidden: []string{
+					"51515151",
+					"Process moved to background with ID",
+					"No output",
+					"tool call",
+				},
+			},
+			interruptAfter: durationPtr(6 * time.Second),
+		},
+		{
 			name: "live_tool_promotion_and_input_dispositions",
 			script: map[string]any{
 				"prompt": "observe live tool lifecycle",
@@ -235,7 +355,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 							{
 								"id":    "4c2725e5-9997-45f9-8aaf-a79c1ae523f6",
 								"name":  "exec_command",
-								"input": map[string]any{"cmd": "sleep 5"},
+								"input": map[string]any{"cmd": "sleep 5; echo $((42424241+1))"},
 							},
 						},
 					},
@@ -260,7 +380,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			liveSnapshot: &liveSnapshotExpectation{
 				At: 3500 * time.Millisecond,
 				PendingShell: livePendingShellExpectation{
-					Command: "sleep 5",
+					Command: "sleep 5; echo $((42424241+1))",
 				},
 				Queued: liveStyledLineExpectation{
 					Text:       "queued after tool start",
@@ -271,10 +391,10 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					Text:       "steering after tool start",
 					Foreground: colorForStyle(transcriptrender.StyleRoleNoticePrimary),
 				},
-				CompletedShellCommand: "sleep 5",
-				ForbiddenCompleted:    []string{"No output", "tool call"},
+				CompletedShellCommand: "sleep 5; echo $((42424241+1))",
+				ForbiddenCompleted:    []string{"42424242", "No output", "tool call"},
 			},
-			interruptAfter: durationPtr(8 * time.Second),
+			interruptAfter: durationPtr(12 * time.Second),
 		},
 		{
 			name: "detail_roundtrip_during_stream",
@@ -305,7 +425,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			capture, observationsPath := runPTYFixtureScenario(t, ctx, bin, tc.name, tc.script, tc.inputs, tc.resizes, tc.interruptAfter)
+			capture, observationsPath := runPTYFixtureScenario(t, ctx, bin, tc.name, tc.script, tc.env, tc.inputs, tc.resizes, tc.interruptAfter)
 			analysis, err := pty.Analyze(capture)
 			if err != nil {
 				t.Fatalf("analyze capture: %v", err)
@@ -363,6 +483,19 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				for _, forbidden := range tc.liveSnapshot.ForbiddenCompleted {
 					if strings.Contains(analysis.Screen.RenderText(), forbidden) {
 						t.Fatalf("completed screen contains forbidden tool text %q: %q", forbidden, analysis.Screen.RenderText())
+					}
+				}
+			}
+			if tc.backgroundCompletion != nil {
+				if err := committedShellIsOnlyCompletedCommandRow(analysis.Screen, tc.backgroundCompletion.Command); err != nil {
+					t.Fatalf("background shell command row: %v", err)
+				}
+				if err := backgroundCompletionVisibleWithSemanticStyle(analysis.Screen); err != nil {
+					t.Fatalf("background completion row: %v", err)
+				}
+				for _, forbidden := range tc.backgroundCompletion.Forbidden {
+					if _, _, _, found := screenRowContaining(analysis.Screen, forbidden); found {
+						t.Fatalf("completed screen contains forbidden background text %q: %q", forbidden, analysis.Screen.RenderText())
 					}
 				}
 			}
@@ -473,7 +606,7 @@ func patchStyleFixture(path string) string {
 	return "*** Begin Patch\n*** Update File: " + path + "\n@@\n-old\n+new\n*** End Patch\n"
 }
 
-func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent, interruptAfter *time.Duration) (pty.Capture, string) {
+func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent, interruptAfter *time.Duration) (pty.Capture, string) {
 	t.Helper()
 	resolvedInterruptAfter := 4 * time.Second
 	if interruptAfter != nil {
@@ -494,6 +627,7 @@ func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name s
 	observationsPath := filepath.Join(root, "observations.json")
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path: bin,
+		Env:  append([]string(nil), env...),
 		Args: []string{
 			"--workspace", filepath.Join(root, "workspace"),
 			"--persistence-root", filepath.Join(root, "persistence"),
@@ -680,9 +814,20 @@ func contentAppendedAtLeastOnce(appends []pty.AppendOperation, content string) e
 }
 
 func contentNotAppended(appends []pty.AppendOperation, content string) error {
-	for _, appendOperation := range appends {
-		if appendOperation.Operation.Write != nil && appendOperation.Operation.Write.Text == content {
-			return fmt.Errorf("content append for %q found", content)
+	for start := range appends {
+		combined := ""
+		for idx := start; idx < len(appends); idx++ {
+			write := appends[idx].Operation.Write
+			if write == nil {
+				break
+			}
+			combined += write.Text
+			if combined == content {
+				return fmt.Errorf("content append for %q found", content)
+			}
+			if len(combined) >= len(content) {
+				break
+			}
 		}
 	}
 	return nil

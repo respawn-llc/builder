@@ -24,7 +24,12 @@ func RenderPendingTool(tool clientui.TranscriptToolStart, width int, spinner str
 	meta := normalizeToolMeta(tool.ToolName, tool.ToolPresentation)
 	role := toolRole(meta)
 	text := compactToolText(meta, tool.ToolName)
-	lines := renderTextBlockWithInlineMeta(role, text, "", width, ModeOngoing, meta)
+	var lines []Line
+	if isPatchTool(meta) {
+		lines = renderPatchTool(role, text, "", meta.PatchRender, width, ModeOngoing, meta)
+	} else {
+		lines = renderTextBlockWithInlineMeta(role, text, "", width, ModeOngoing, meta)
+	}
 	if len(lines) == 0 {
 		return Line{}
 	}

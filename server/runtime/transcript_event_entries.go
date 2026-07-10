@@ -90,7 +90,7 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 		if evt.Background == nil {
 			return nil
 		}
-		if evt.Background.Type != "completed" && evt.Background.Type != "killed" {
+		if !evt.Background.Type.IsTerminal() {
 			return nil
 		}
 		compact := formatBackgroundShellCompact(*evt.Background)

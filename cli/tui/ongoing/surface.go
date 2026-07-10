@@ -141,7 +141,7 @@ func (s *Surface) applyHydration(message clientui.TranscriptMessage, frame Frame
 	lines := s.hydrationImmutableLines(*message.Hydration, frame.Size.Width, frame.Theme)
 	activeStreamHydrated := s.hydrateActiveAssistantStream(message.Hydration.ActiveAssistantStream)
 	if activeStreamHydrated {
-		projection := newMarkdownProjector(nil).Project(markdownProjectionInput{
+		projection := newMarkdownProjector(nil, frame.Theme).Project(markdownProjectionInput{
 			Source:           s.activeAssistant.source,
 			Width:            frameWidthOrDefault(frame),
 			PromotedBoundary: s.activeAssistant.promotedSourceBoundary,
@@ -189,7 +189,7 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, frame Fr
 		})
 	}
 	s.activeAssistant.source += delta
-	projection := newMarkdownProjector(nil).Project(markdownProjectionInput{
+	projection := newMarkdownProjector(nil, frame.Theme).Project(markdownProjectionInput{
 		Source:           s.activeAssistant.source,
 		Width:            frameWidthOrDefault(frame),
 		PromotedBoundary: s.activeAssistant.promotedSourceBoundary,
@@ -206,7 +206,7 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, frame Fr
 	if len(projection.PromotedRows) == 0 {
 		return s.writeFrameTransaction(frame, nil)
 	}
-	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(projection.PromotedRows, frameWidthOrDefault(frame), ""))
+	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(projection.PromotedRows, frameWidthOrDefault(frame), frame.Theme))
 }
 
 func (s *Surface) abortAssistantStream(streamID uuid.UUID, frame FrameInput) (Result, error) {
@@ -251,10 +251,10 @@ func (s *Surface) finalizeAssistantStream(streamID uuid.UUID, text string, frame
 	unpromoted := s.activeAssistant.source[s.activeAssistant.promotedSourceBoundary:]
 	var rows []string
 	if unpromoted != "" {
-		rows = newMarkdownProjector(nil).renderer.Render(unpromoted, frameWidthOrDefault(frame))
+		rows = newMarkdownProjector(nil, frame.Theme).renderer.Render(unpromoted, frameWidthOrDefault(frame))
 	}
 	s.activeAssistant = activeAssistantState{}
-	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(rows, frameWidthOrDefault(frame), ""))
+	return s.writeFrameTransaction(frame, s.renderAssistantPromotedRows(rows, frameWidthOrDefault(frame), frame.Theme))
 }
 
 func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame FrameInput) (Result, error) {
@@ -569,7 +569,7 @@ func (s *Surface) liveBandLines(frame FrameInput) []string {
 }
 
 func (s *Surface) liveBandLayout(frame FrameInput) []liveBandLine {
-	lines := activeAssistantLines(s.activeAssistant, frameWidthOrDefault(frame))
+	lines := activeAssistantLines(s.activeAssistant, frameWidthOrDefault(frame), frame.Theme)
 	layout := make([]liveBandLine, 0, len(lines)+len(frame.Sections))
 	for _, line := range lines {
 		layout = append(layout, liveBandLine{text: line})
@@ -596,7 +596,7 @@ func minimumLiveBandLines(frame FrameInput, assistant activeAssistantState) []st
 func minimumLiveBandLayout(frame FrameInput, assistant activeAssistantState) []liveBandLine {
 	var lines []string
 	if assistant.source != "" {
-		assistantLines := activeAssistantLines(assistant, frameWidthOrDefault(frame))
+		assistantLines := activeAssistantLines(assistant, frameWidthOrDefault(frame), frame.Theme)
 		if len(assistantLines) > 0 {
 			lines = append(lines, assistantLines[len(assistantLines)-1])
 		}
@@ -638,11 +638,11 @@ func minimumLiveBandLayout(frame FrameInput, assistant activeAssistantState) []l
 	return layout
 }
 
-func activeAssistantLines(state activeAssistantState, width int) []string {
+func activeAssistantLines(state activeAssistantState, width int, themeName string) []string {
 	if state.source == "" {
 		return nil
 	}
-	projection := newMarkdownProjector(nil).Project(markdownProjectionInput{
+	projection := newMarkdownProjector(nil, themeName).Project(markdownProjectionInput{
 		Source:           state.source,
 		Width:            width,
 		PromotedBoundary: state.promotedSourceBoundary,

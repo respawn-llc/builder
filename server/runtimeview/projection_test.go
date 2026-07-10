@@ -119,7 +119,7 @@ func TestEventFromRuntimeProjectsReasoningBackgroundAndRunState(t *testing.T) {
 		ReasoningDelta:             &llm.ReasoningSummaryDelta{Key: "k", Role: "reasoning", Text: "thinking"},
 		RunState:                   &runtime.RunState{Lifecycle: runtime.RunningRunLifecycle(runtime.RunModeTurn), RunID: projectionRunID, ActiveKind: runtime.ActiveKindUserTurn, Status: runtime.RunStatusRunning},
 		Background: &runtime.BackgroundShellEvent{
-			Type:              "completed",
+			Type:              runtime.BackgroundShellEventCompleted,
 			ID:                projectionBackgroundID,
 			State:             "completed",
 			Command:           "echo hi",
@@ -128,7 +128,7 @@ func TestEventFromRuntimeProjectsReasoningBackgroundAndRunState(t *testing.T) {
 			NoticeText:        "done",
 			CompactText:       "done compact",
 			Preview:           "hi",
-			Removed:           2,
+			PreviewRemoved:    2,
 			ExitCode:          &exitCode,
 			UserRequestedKill: true,
 			NoticeSuppressed:  true,

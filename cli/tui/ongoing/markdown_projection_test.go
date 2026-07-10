@@ -71,8 +71,28 @@ func TestAssistantDeltaPromotionOpensAssistantGroupAfterPriorGroup(t *testing.T)
 	}
 }
 
+func TestAssistantDeltaPromotesInlineAndBlockCodeThroughTranscriptRenderer(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	streamID := uuid.New()
+
+	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(
+		streamID,
+		"Use `INLINE_CODE`.\n\n```text\nBLOCK_CODE\n```\n\nopen tail",
+	), FrameInput{Size: Size{Width: 80, Height: 8}, Theme: "dark"}); err != nil {
+		t.Fatalf("apply assistant delta: %v", err)
+	}
+
+	assertRowStructure(t, visibleTextRows(parseTerminalOps(out.String())), []rowKind{
+		{divider: true},
+		{content: "Use INLINE_CODE."},
+		{content: "BLOCK_CODE"},
+		{content: "open tail"},
+	})
+}
+
 func TestMarkdownProjectionKeepsOpenBlocksMutableUntilBlankBoundary(t *testing.T) {
-	projector := newMarkdownProjector(&countingMarkdownRenderer{})
+	projector := newMarkdownProjector(&countingMarkdownRenderer{}, "")
 
 	openTable := projector.Project(markdownProjectionInput{
 		Source:           "| a | b |\n| - | - |\n| 1 | 2 |",
@@ -113,7 +133,7 @@ func TestMarkdownProjectionKeepsOpenBlocksMutableUntilBlankBoundary(t *testing.T
 
 func TestMarkdownProjectionPromotesOnlyLongestSafeCandidateWithTwoRenders(t *testing.T) {
 	renderer := &countingMarkdownRenderer{}
-	projector := newMarkdownProjector(renderer)
+	projector := newMarkdownProjector(renderer, "")
 
 	result := projector.Project(markdownProjectionInput{
 		Source:           "one\n\ntwo\n\nthree",

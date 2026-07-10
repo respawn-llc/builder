@@ -1020,7 +1020,7 @@ func TestHasQueuedUserWorkDetectsBackgroundNotices(t *testing.T) {
 		t.Fatal("did not expect queued work in fresh engine")
 	}
 
-	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{ID: "42", Type: "completed", State: "done"}, true)
+	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{ID: "42", Type: BackgroundShellEventCompleted, State: "done"}, true)
 	if !eng.HasQueuedUserWork() {
 		t.Fatal("expected queued work after background notice was queued")
 	}

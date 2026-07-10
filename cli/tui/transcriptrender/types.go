@@ -22,6 +22,7 @@ type StyleRole uint8
 const (
 	StyleRoleUser StyleRole = iota
 	StyleRoleAssistant
+	StyleRoleMarkdownCode
 	StyleRoleTool
 	StyleRoleToolSuccess
 	StyleRoleToolError
@@ -73,6 +74,8 @@ func ColorRoleForStyle(role StyleRole) ColorRole {
 		StyleRoleNoticeForegroundFaint:
 		return ColorRoleForeground
 	case StyleRoleNoticePrimary:
+		return ColorRolePrimary
+	case StyleRoleMarkdownCode:
 		return ColorRolePrimary
 	case StyleRoleNoticeSecondary:
 		return ColorRoleSecondary

@@ -152,6 +152,61 @@ func committedShellIsOnlyCompletedCommandRow(screen pty.ScreenSnapshot, command 
 	return nil
 }
 
+func backgroundCompletionVisibleWithSemanticStyle(screen pty.ScreenSnapshot) error {
+	row, start, _, ok := screenRowContaining(screen, "Background shell ")
+	if !ok {
+		return fmt.Errorf("background completion row not visible; screen=%q", screen.RenderText())
+	}
+	expectedSymbol := liveStyledLineExpectation{
+		Text:       "ℹ",
+		Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess),
+	}
+	symbolFound := false
+	for _, cell := range row[:start] {
+		if cell.Content != expectedSymbol.Text {
+			continue
+		}
+		symbolFound = true
+		if cell.Foreground != expectedSymbol.Foreground || cell.Faint != expectedSymbol.Faint {
+			return fmt.Errorf(
+				"background completion symbol style = foreground %q faint=%t, want foreground %q faint=%t",
+				cell.Foreground,
+				cell.Faint,
+				expectedSymbol.Foreground,
+				expectedSymbol.Faint,
+			)
+		}
+	}
+	if !symbolFound {
+		return fmt.Errorf("background completion symbol not found before body")
+	}
+
+	end := len(row)
+	for end > start && strings.TrimSpace(row[end-1].Content) == "" {
+		end--
+	}
+	expectedBody := liveStyledLineExpectation{
+		Foreground: colorForStyle(transcriptrender.StyleRoleNoticeForegroundFaint),
+		Faint:      true,
+	}
+	for _, cell := range row[start:end] {
+		if cell.Content == "" {
+			continue
+		}
+		if cell.Foreground != expectedBody.Foreground || cell.Faint != expectedBody.Faint {
+			return fmt.Errorf(
+				"background completion body cell %q style = foreground %q faint=%t, want foreground %q faint=%t",
+				cell.Content,
+				cell.Foreground,
+				cell.Faint,
+				expectedBody.Foreground,
+				expectedBody.Faint,
+			)
+		}
+	}
+	return nil
+}
+
 func screenRowContaining(screen pty.ScreenSnapshot, text string) ([]pty.Cell, int, int, bool) {
 	for _, row := range screen.Cells {
 		if start, end, ok := cellRangeContaining(row, text); ok {

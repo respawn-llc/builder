@@ -30,10 +30,29 @@ func renderOngoingLiveInputLines(inputs []ongoingLiveInput, width int) []transcr
 			continue
 		}
 		role, faint := ongoingLiveInputStyle(input.Disposition)
-		line := transcriptrender.Line{Spans: []transcriptrender.Span{{Text: text, Role: role, Faint: faint}}}
-		lines = append(lines, transcriptrender.TruncateLine(line, width, false))
+		lines = append(lines, renderOngoingLiveTextLine(text, width, role, faint))
 	}
 	return lines
+}
+
+func renderOngoingLiveTextLines(texts []string, width int, role transcriptrender.StyleRole, faint bool) []transcriptrender.Line {
+	if width <= 0 {
+		width = 80
+	}
+	lines := make([]transcriptrender.Line, 0, len(texts))
+	for _, text := range texts {
+		text = ongoing.TerminalSafeSingleLine(text)
+		if text == "" {
+			continue
+		}
+		lines = append(lines, renderOngoingLiveTextLine(text, width, role, faint))
+	}
+	return lines
+}
+
+func renderOngoingLiveTextLine(text string, width int, role transcriptrender.StyleRole, faint bool) transcriptrender.Line {
+	line := transcriptrender.Line{Spans: []transcriptrender.Span{{Text: text, Role: role, Faint: faint}}}
+	return transcriptrender.TruncateLine(line, width, false)
 }
 
 func ongoingLiveInputStyle(disposition ongoingLiveInputDisposition) (transcriptrender.StyleRole, bool) {

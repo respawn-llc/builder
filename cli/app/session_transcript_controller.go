@@ -399,7 +399,11 @@ func backgroundActivityLines(activity *clientui.TranscriptBackgroundActivity) []
 	if activity == nil || activity.Removed {
 		return nil
 	}
-	return joinFacts(compactNonEmptyStrings(activity.Preview, activity.Command, humanizeTranscriptFact(activity.State)))
+	command := strings.TrimSpace(activity.Command)
+	if command == "" {
+		command = strings.TrimSpace(activity.Preview)
+	}
+	return joinFacts(compactNonEmptyStrings(command, humanizeTranscriptFact(activity.State)))
 }
 
 func backgroundActivityListLines(activities []clientui.TranscriptBackgroundActivity) []string {

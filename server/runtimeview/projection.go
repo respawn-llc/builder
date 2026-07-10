@@ -162,7 +162,7 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 	}
 	if evt.Background != nil {
 		view.Background = &clientui.BackgroundShellEvent{
-			Type:              evt.Background.Type,
+			Type:              string(evt.Background.Type),
 			ID:                evt.Background.ID,
 			State:             evt.Background.State,
 			Command:           evt.Background.Command,
@@ -171,7 +171,7 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 			NoticeText:        evt.Background.NoticeText,
 			CompactText:       evt.Background.CompactText,
 			Preview:           evt.Background.Preview,
-			Removed:           evt.Background.Removed,
+			Removed:           evt.Background.PreviewRemoved,
 			UserRequestedKill: evt.Background.UserRequestedKill,
 			NoticeSuppressed:  evt.Background.NoticeSuppressed,
 		}

@@ -90,8 +90,15 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 	if shouldNotify && !evt.Snapshot.FinishedAt.IsZero() && evt.Snapshot.FinishedAt.Before(activeRuntime.activatedAt) {
 		shouldNotify = false
 	}
+	eventType := runtime.BackgroundShellEventBackgrounded
+	switch evt.Type {
+	case shelltool.EventCompleted:
+		eventType = runtime.BackgroundShellEventCompleted
+	case shelltool.EventKilled:
+		eventType = runtime.BackgroundShellEventKilled
+	}
 	activeRuntime.engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
-		Type:              string(evt.Type),
+		Type:              eventType,
 		ID:                evt.Snapshot.ID,
 		ActivityID:        evt.Snapshot.ActivityID,
 		State:             evt.Snapshot.State,
@@ -101,7 +108,7 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 		NoticeText:        summary.DetailText,
 		CompactText:       summary.CondensedText,
 		Preview:           evt.Preview,
-		Removed:           evt.Removed,
+		PreviewRemoved:    evt.Removed,
 		ExitCode:          valuecopy.Pointer(evt.Snapshot.ExitCode),
 		UserRequestedKill: evt.Snapshot.KillRequested,
 		NoticeSuppressed:  evt.NoticeSuppressed,

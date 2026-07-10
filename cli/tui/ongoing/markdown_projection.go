@@ -1,11 +1,9 @@
 package ongoing
 
 import (
+	"core/cli/tui/transcriptrender"
 	"strings"
 
-	"github.com/charmbracelet/glamour"
-	glamouransi "github.com/charmbracelet/glamour/ansi"
-	glamourstyles "github.com/charmbracelet/glamour/styles"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
@@ -39,9 +37,9 @@ type markdownProjector struct {
 	renderer markdownRenderer
 }
 
-func newMarkdownProjector(renderer markdownRenderer) markdownProjector {
+func newMarkdownProjector(renderer markdownRenderer, themeName string) markdownProjector {
 	if renderer == nil {
-		renderer = terminalMarkdownRenderer{}
+		renderer = terminalMarkdownRenderer{themeName: themeName}
 	}
 	return markdownProjector{renderer: renderer}
 }
@@ -85,47 +83,17 @@ func (p markdownProjector) Project(input markdownProjectionInput) markdownProjec
 	}
 }
 
-type terminalMarkdownRenderer struct{}
+type terminalMarkdownRenderer struct {
+	themeName string
+}
 
-func (terminalMarkdownRenderer) Render(source string, width int) []string {
+func (r terminalMarkdownRenderer) Render(source string, width int) []string {
 	source = terminalSafeMarkdownSource(source)
 	if strings.TrimSpace(source) == "" {
 		return nil
 	}
-	renderer, err := glamour.NewTermRenderer(
-		glamour.WithWordWrap(width),
-		glamour.WithStyles(ongoingMarkdownStyle()),
-	)
-	if err != nil {
-		panicOngoingDeveloperError("markdown_render", "create terminal markdown renderer", map[string]any{
-			"width": width,
-			"err":   err.Error(),
-		})
-	}
-	rendered, err := renderer.Render(source)
-	if err != nil {
-		panicOngoingDeveloperError("markdown_render", "render terminal markdown", map[string]any{
-			"width":      width,
-			"source_len": len(source),
-			"err":        err.Error(),
-		})
-	}
-	return splitRenderedMarkdownRows(rendered)
-}
-
-func ongoingMarkdownStyle() glamouransi.StyleConfig {
-	style := glamourstyles.DarkStyleConfig
-	zero := uint(0)
-	style.Document.Margin = &zero
-	return style
-}
-
-func splitRenderedMarkdownRows(rendered string) []string {
-	rendered = strings.TrimRight(rendered, "\n")
-	if rendered == "" {
-		return nil
-	}
-	return strings.Split(rendered, "\n")
+	lines := transcriptrender.RenderMarkdownLines(transcriptrender.StyleRoleAssistant, source, width)
+	return encodeTranscriptLines(lines, r.themeName)
 }
 
 func longestSafeCandidateBoundary(suffix string) int {

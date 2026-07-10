@@ -10,7 +10,9 @@ import (
 	"github.com/yuin/goldmark/text"
 )
 
-func markdownTextLines(role StyleRole, sourceText string, width int) []Line {
+// RenderMarkdownLines projects Markdown source into transcript-owned semantic
+// spans without adding row symbols or continuation guides.
+func RenderMarkdownLines(role StyleRole, sourceText string, width int) []Line {
 	source := []byte(sourceText)
 	document := goldmark.New().Parser().Parse(text.NewReader(source))
 	if document.FirstChild() == nil {
@@ -46,9 +48,9 @@ func markdownBlockLines(node ast.Node, source []byte, role StyleRole) []Line {
 	case *ast.TextBlock:
 		return markdownInlineLines(node, source, role, markdownInlineStyle{})
 	case *ast.FencedCodeBlock:
-		return markdownCodeLines(string(typed.Text(source)), role)
+		return markdownCodeLines(string(typed.Text(source)))
 	case *ast.CodeBlock:
-		return markdownCodeLines(markdownBlockSource(node, source), role)
+		return markdownCodeLines(markdownBlockSource(node, source))
 	case *ast.List:
 		return markdownListLines(typed, source, role)
 	case *ast.Blockquote:
@@ -65,6 +67,7 @@ type markdownInlineStyle struct {
 	Italic    bool
 	Faint     bool
 	Underline bool
+	Role      *StyleRole
 }
 
 type markdownLineBuilder struct {
@@ -77,9 +80,13 @@ func (b *markdownLineBuilder) append(text string, style markdownInlineStyle) {
 	if text == "" {
 		return
 	}
+	role := b.role
+	if style.Role != nil {
+		role = *style.Role
+	}
 	next := Span{
 		Text:      text,
-		Role:      b.role,
+		Role:      role,
 		Faint:     style.Faint,
 		Bold:      style.Bold,
 		Italic:    style.Italic,
@@ -131,7 +138,9 @@ func renderMarkdownInlineChildren(builder *markdownLineBuilder, node ast.Node, s
 			renderMarkdownInlineChildren(builder, typed, source, next)
 		case *ast.CodeSpan:
 			next := style
-			next.Faint = true
+			codeRole := StyleRoleMarkdownCode
+			next.Role = &codeRole
+			next.Faint = false
 			renderMarkdownInlineChildren(builder, typed, source, next)
 		case *ast.Link:
 			next := style
@@ -149,15 +158,15 @@ func renderMarkdownInlineChildren(builder *markdownLineBuilder, node ast.Node, s
 	}
 }
 
-func markdownCodeLines(code string, role StyleRole) []Line {
+func markdownCodeLines(code string) []Line {
 	code = strings.TrimRight(strings.ReplaceAll(code, "\r\n", "\n"), "\n")
 	if code == "" {
-		return []Line{{Spans: []Span{{Role: role, Faint: true}}}}
+		return []Line{{Spans: []Span{{Role: StyleRoleMarkdownCode}}}}
 	}
 	lines := strings.Split(code, "\n")
 	out := make([]Line, 0, len(lines))
 	for _, line := range lines {
-		out = append(out, Line{Spans: []Span{{Text: line, Role: role, Faint: true}}})
+		out = append(out, Line{Spans: []Span{{Text: line, Role: StyleRoleMarkdownCode}}})
 	}
 	return out
 }

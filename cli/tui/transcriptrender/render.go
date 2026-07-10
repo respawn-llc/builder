@@ -71,15 +71,15 @@ func renderUserAssistantTextBlock(role StyleRole, text string, width int, mode M
 	}
 	if modeUsesCompactTextBlock(mode) {
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
-			lines := markdownTextLines(role, text, contentWidth(role, width))
+			lines := RenderMarkdownLines(role, text, contentWidth(role, width))
 			if len(lines) > 3 {
 				lines = lines[:3]
 			}
 			return attachPrefixWithMeta(role, lines, width, false, mode, toolMeta{})
 		}
-		return attachPrefixWithMeta(role, markdownTextLines(role, firstDisplayLine(text), contentWidth(role, width)), width, len(strings.Split(text, "\n")) > 1, mode, toolMeta{})
+		return attachPrefixWithMeta(role, RenderMarkdownLines(role, firstDisplayLine(text), contentWidth(role, width)), width, len(strings.Split(text, "\n")) > 1, mode, toolMeta{})
 	}
-	return attachPrefixWithMeta(role, markdownTextLines(role, text, contentWidth(role, width)), width, false, mode, toolMeta{})
+	return attachPrefixWithMeta(role, RenderMarkdownLines(role, text, contentWidth(role, width)), width, false, mode, toolMeta{})
 }
 
 func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta string, width int, mode Mode, meta toolMeta) []Line {

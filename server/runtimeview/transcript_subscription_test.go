@@ -157,6 +157,40 @@ func TestTranscriptBackgroundActivityUsesRuntimeActivityID(t *testing.T) {
 	}
 }
 
+func TestTranscriptBackgroundActivityRemovalFollowsLifecycleNotPreviewTruncation(t *testing.T) {
+	tests := []struct {
+		name           string
+		eventType      runtime.BackgroundShellEventType
+		previewRemoved int
+		wantRemoved    bool
+	}{
+		{name: "running truncated preview remains live", eventType: runtime.BackgroundShellEventBackgrounded, previewRemoved: 2},
+		{name: "completed activity leaves live band", eventType: runtime.BackgroundShellEventCompleted, wantRemoved: true},
+		{name: "killed activity leaves live band", eventType: runtime.BackgroundShellEventKilled, wantRemoved: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+				Kind: runtime.EventBackgroundUpdated,
+				Background: &runtime.BackgroundShellEvent{
+					Type:           tt.eventType,
+					ID:             "1000",
+					ActivityID:     uuid.New(),
+					State:          string(tt.eventType),
+					Command:        "sleep 2",
+					PreviewRemoved: tt.previewRemoved,
+				},
+			})
+			if len(messages) != 1 || messages[0].BackgroundActivity == nil {
+				t.Fatalf("messages = %+v, want one background activity", messages)
+			}
+			if got := messages[0].BackgroundActivity.Removed; got != tt.wantRemoved {
+				t.Fatalf("background activity removed = %t, want %t", got, tt.wantRemoved)
+			}
+		})
+	}
+}
+
 func TestTranscriptBackgroundNoticeCarriesTypedExitCode(t *testing.T) {
 	exitCode := 3
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{

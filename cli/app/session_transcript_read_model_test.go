@@ -324,6 +324,37 @@ func TestOngoingTranscriptControllerTracksPluralLiveSectionsByID(t *testing.T) {
 	}
 }
 
+func TestOngoingBackgroundActivityUsesCommandFirstFaintForeground(t *testing.T) {
+	surface := &ongoingSurfaceSpy{}
+	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
+		t.Fatalf("accept hydration: %v", err)
+	}
+
+	if _, err := controller.Accept(clientui.TranscriptMessage{
+		Sequence: 2,
+		Kind:     clientui.TranscriptMessageBackgroundActivity,
+		BackgroundActivity: &clientui.TranscriptBackgroundActivity{
+			ID:      "22222222-2222-4222-8222-222222222222",
+			State:   "running",
+			Command: "sleep 2; echo result",
+			Preview: "result",
+		},
+	}); err != nil {
+		t.Fatalf("accept background activity: %v", err)
+	}
+
+	lines := surface.lastFrameStyledSection(ongoing.FrameSectionBackgroundActivity)
+	if len(lines) != 1 || lines[0].Plain() != "sleep 2; echo result · running" {
+		t.Fatalf("background activity lines = %+v", lines)
+	}
+	for _, span := range lines[0].Spans {
+		if span.Role != transcriptrender.StyleRoleNoticeForegroundFaint || !span.Faint {
+			t.Fatalf("background activity span = %+v, want faint foreground", span)
+		}
+	}
+}
+
 func TestOngoingTranscriptControllerRejectsInvalidLiveItemIDs(t *testing.T) {
 	tests := []struct {
 		name    string

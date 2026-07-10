@@ -38,7 +38,7 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 	if !queueNotice {
 		return
 	}
-	if evt.Type != "completed" && evt.Type != "killed" {
+	if !evt.Type.IsTerminal() {
 		return
 	}
 	b.QueueDeveloperNotice(llm.Message{

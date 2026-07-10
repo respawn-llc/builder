@@ -273,14 +273,14 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
 	manager.SetEventHandler(func(evt shelltool.Event) {
 		eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-			Type:    string(evt.Type),
-			ID:      evt.Snapshot.ID,
-			State:   evt.Snapshot.State,
-			Command: evt.Snapshot.Command,
-			Workdir: evt.Snapshot.Workdir,
-			LogPath: evt.Snapshot.LogPath,
-			Preview: evt.Preview,
-			Removed: evt.Removed,
+			Type:           backgroundShellEventTypeForTest(evt.Type),
+			ID:             evt.Snapshot.ID,
+			State:          evt.Snapshot.State,
+			Command:        evt.Snapshot.Command,
+			Workdir:        evt.Snapshot.Workdir,
+			LogPath:        evt.Snapshot.LogPath,
+			Preview:        evt.Preview,
+			PreviewRemoved: evt.Removed,
 			ExitCode: func() *int {
 				if evt.Snapshot.ExitCode == nil {
 					return nil
@@ -362,7 +362,7 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 	}
 
 	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       "completed",
+		Type:       BackgroundShellEventCompleted,
 		ID:         "1000",
 		State:      "completed",
 		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
@@ -443,7 +443,7 @@ func TestEmitRawClearsCommittedRangeForBackgroundUpdated(t *testing.T) {
 		CommittedEntryStart:    42,
 		CommittedEntryStartSet: true,
 		Background: &BackgroundShellEvent{
-			Type:       "completed",
+			Type:       BackgroundShellEventCompleted,
 			ID:         "bg-1",
 			State:      "completed",
 			NoticeText: "Background shell bg-1 completed (exit 0)",
@@ -522,7 +522,7 @@ func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEven
 	}
 
 	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       "completed",
+		Type:       BackgroundShellEventCompleted,
 		ID:         "1000",
 		State:      "completed",
 		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
@@ -748,7 +748,7 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 		beforeReturn: func() error {
 			queueOnce.Do(func() {
 				eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-					Type:       "completed",
+					Type:       BackgroundShellEventCompleted,
 					ID:         backgroundID,
 					State:      "completed",
 					NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",
@@ -850,7 +850,7 @@ func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
 	}
 
 	eng.HandleBackgroundShellUpdate(BackgroundShellEvent{
-		Type:       "completed",
+		Type:       BackgroundShellEventCompleted,
 		ID:         "1000",
 		State:      "completed",
 		NoticeText: "Background shell 1000 completed.\nExit code: 0\nOutput:\ndone",

@@ -199,7 +199,15 @@ func (m *ongoingTranscriptReadModel) applyBackgroundActivity(activity *clientui.
 }
 
 func (m *ongoingTranscriptReadModel) refreshBackgroundActivitySection(width int) {
-	m.setSection(ongoing.FrameSectionBackgroundActivity, terminalSafeFrameLinesForWidth(backgroundActivityListLines(m.backgroundTasks.values()), width))
+	m.setStyledSection(
+		ongoing.FrameSectionBackgroundActivity,
+		renderOngoingLiveTextLines(
+			backgroundActivityListLines(m.backgroundTasks.values()),
+			width,
+			transcriptrender.StyleRoleNoticeForegroundFaint,
+			true,
+		),
+	)
 }
 
 func newKeyedOngoingLiveItems[K comparable, T any]() keyedOngoingLiveItems[K, T] {
