@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -64,8 +63,13 @@ func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
 		done:     make(chan struct{}),
 		events:   make(chan struct{}, 1),
 	}
+	router := http.NewServeMux()
+	router.HandleFunc("POST /v1/responses", stub.serveRoute(RouteResponses))
+	router.HandleFunc("POST /v1/responses/compact", stub.serveRoute(RouteCompact))
+	router.HandleFunc("POST /v1/responses/input_tokens", stub.serveRoute(RouteInputTokens))
+	router.HandleFunc("GET /v1/models/{model}", stub.serveRoute(RouteModel))
 	stub.server = &http.Server{
-		Handler:           http.HandlerFunc(stub.serveHTTP),
+		Handler:           router,
 		MaxHeaderBytes:    maxHTTPHeadersBytes,
 		ReadHeaderTimeout: 500 * time.Millisecond,
 	}
@@ -154,43 +158,39 @@ func (s *ResponsesStub) Close() {
 	_ = s.server.Close()
 }
 
-func (s *ResponsesStub) serveHTTP(writer http.ResponseWriter, request *http.Request) {
-	handle, ctx, done := s.beginHandler(request.Context())
-	defer done()
-	body, err := boundedBody(request)
-	if err != nil {
-		s.recordFailure(err)
-		http.Error(writer, "invalid request", http.StatusRequestEntityTooLarge)
-		return
+func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
+	return func(writer http.ResponseWriter, request *http.Request) {
+		handle, ctx, done := s.beginHandler(request.Context())
+		defer done()
+		body, err := boundedBody(request)
+		if err != nil {
+			s.recordFailure(err)
+			http.Error(writer, "invalid request", http.StatusRequestEntityTooLarge)
+			return
+		}
+		call := ObservedCall{Route: route, Headers: request.Header.Clone(), Body: append(json.RawMessage(nil), body...)}
+		operation, err := s.consume(route, body, request.Header)
+		if err != nil {
+			s.recordFailure(err)
+			http.Error(writer, "unexpected model operation", http.StatusBadRequest)
+			return
+		}
+		if operation != nil {
+			defer s.completeRequired()
+		}
+		s.recordObserved(call)
+		switch route {
+		case RouteResponses:
+			s.writeResponse(ctx, writer, operation)
+		case RouteInputTokens:
+			writeJSON(writer, http.StatusOK, map[string]int{"input_tokens": 0})
+		case RouteModel:
+			writeJSON(writer, http.StatusOK, map[string]any{"id": "gpt-5", "object": "model"})
+		case RouteCompact:
+			writeJSON(writer, http.StatusOK, map[string]any{"output": []any{}})
+		}
+		_ = handle
 	}
-	route, err := routeForRequest(request)
-	if err != nil {
-		s.recordFailure(err)
-		http.NotFound(writer, request)
-		return
-	}
-	call := ObservedCall{Route: route, Headers: request.Header.Clone(), Body: append(json.RawMessage(nil), body...)}
-	operation, err := s.consume(route, body, request.Header)
-	if err != nil {
-		s.recordFailure(err)
-		http.Error(writer, "unexpected model operation", http.StatusBadRequest)
-		return
-	}
-	if operation != nil {
-		defer s.completeRequired()
-	}
-	s.recordObserved(call)
-	switch route {
-	case RouteResponses:
-		s.writeResponse(ctx, writer, operation)
-	case RouteInputTokens:
-		writeJSON(writer, http.StatusOK, map[string]int{"input_tokens": 0})
-	case RouteModel:
-		writeJSON(writer, http.StatusOK, map[string]any{"id": "gpt-5", "object": "model"})
-	case RouteCompact:
-		writeJSON(writer, http.StatusOK, map[string]any{"output": []any{}})
-	}
-	_ = handle
 }
 
 func (s *ResponsesStub) beginHandler(parent context.Context) (uint64, context.Context, func()) {
@@ -320,32 +320,6 @@ func boundedBody(request *http.Request) ([]byte, error) {
 		return nil, errors.New("request body exceeds limit")
 	}
 	return body, nil
-}
-
-func routeForRequest(request *http.Request) (Route, error) {
-	if request.Method != http.MethodPost && request.Method != http.MethodGet {
-		return "", fmt.Errorf("unsupported model method %s", request.Method)
-	}
-	switch request.URL.Path {
-	case "/v1/responses":
-		if request.Method == http.MethodPost {
-			return RouteResponses, nil
-		}
-	case "/v1/responses/compact":
-		if request.Method == http.MethodPost {
-			return RouteCompact, nil
-		}
-	case "/v1/responses/input_tokens":
-		if request.Method == http.MethodPost {
-			return RouteInputTokens, nil
-		}
-	default:
-		segments := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
-		if request.Method == http.MethodGet && len(segments) == 3 && segments[0] == "v1" && segments[1] == "models" && segments[2] != "" {
-			return RouteModel, nil
-		}
-	}
-	return "", fmt.Errorf("unsupported model route %s %s", request.Method, request.URL.Path)
 }
 
 type responseRequest struct {
