@@ -1,6 +1,7 @@
 package driver_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os/exec"
@@ -255,6 +256,71 @@ func TestSessionPublishesTerminalAndProcessEvents(t *testing.T) {
 	}
 	if !terminal || !exited {
 		t.Fatalf("events terminal=%v exited=%v", terminal, exited)
+	}
+}
+
+func TestSessionWriteCommandCompletesOnlyAfterLargePTYInputIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	session, err := driver.StartSession(driver.SessionSpec{
+		Path:       buildHelper(t),
+		Args:       []string{"read-large"},
+		Env:        []string{"TERM=xterm-256color", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"},
+		Dimensions: pty.MustDimensions(2, 32),
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = session.Close()
+		_ = session.ForceKill()
+		select {
+		case <-session.Done():
+		case <-time.After(time.Second):
+			t.Error("session did not exit during cleanup")
+		}
+	})
+	ready := false
+	for !ready {
+		event, ok := <-session.Events()
+		if !ok {
+			t.Fatal("session exited before terminal raw-mode readiness")
+		}
+		if event.Analysis == nil {
+			continue
+		}
+		for _, mode := range event.Analysis.PrivateModeChanges {
+			if mode.Mode == 25 && mode.Enabled {
+				ready = true
+				break
+			}
+		}
+	}
+	commandID := uuid.New()
+	payload := bytes.Repeat([]byte("x"), 256*1024)
+	if err := session.Enqueue(driver.SessionCommand{ID: commandID, Kind: driver.SessionCommandWrite, Bytes: payload}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	completed := false
+	var capture pty.Capture
+	for event := range session.Events() {
+		if event.Kind == driver.SessionEventCommandCompleted && event.CommandID == commandID {
+			completed = true
+		}
+		if event.Kind == driver.SessionEventCommandFailed && event.CommandID == commandID {
+			t.Fatalf("large write command failed: %v", event.Err)
+		}
+	}
+	capture, err = session.Capture()
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	if !completed {
+		t.Fatal("large write command never completed")
+	}
+	if !bytes.Contains(capture.Raw, []byte("received:262144")) {
+		t.Fatalf("child did not receive the complete PTY payload: raw=%q", capture.Raw)
 	}
 }
 

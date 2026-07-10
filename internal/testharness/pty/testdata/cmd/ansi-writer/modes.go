@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"time"
+
+	"golang.org/x/term"
 )
 
 func runMode(mode string) error {
@@ -20,6 +22,19 @@ func runMode(mode string) error {
 			os.Exit(1)
 		}
 		fmt.Printf("input:%s", string(b[:]))
+	case "read-large":
+		state, err := term.MakeRaw(int(os.Stdin.Fd()))
+		if err != nil {
+			return fmt.Errorf("make stdin raw: %w", err)
+		}
+		defer func() { _ = term.Restore(int(os.Stdin.Fd()), state) }()
+		fmt.Print("\x1b[?25h")
+		const size = 256 * 1024
+		payload := make([]byte, size)
+		if _, err := io.ReadFull(os.Stdin, payload); err != nil {
+			return fmt.Errorf("read large input: %w", err)
+		}
+		fmt.Printf("received:%d", len(payload))
 	case "hang":
 		fmt.Print("ready")
 		time.Sleep(24 * time.Hour)
