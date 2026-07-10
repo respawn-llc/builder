@@ -8,7 +8,8 @@
       "route": "responses",
       "probe": "6fb17b47-d43a-43e8-9d25-8504410b0e19",
       "stream": true,
-      "output": "ok"
+      "output": "ok",
+      "session_cache_key": true
     }
   ],
   "actions": [

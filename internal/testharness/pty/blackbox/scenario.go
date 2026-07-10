@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"core/internal/testharness/pty/analyzer"
@@ -34,11 +35,12 @@ type Dimensions struct {
 }
 
 type RequiredOperation struct {
-	ID     uuid.UUID `json:"id"`
-	Route  Route     `json:"route"`
-	Probe  string    `json:"probe,omitempty"`
-	Stream bool      `json:"stream"`
-	Output string    `json:"output,omitempty"`
+	ID              uuid.UUID `json:"id"`
+	Route           Route     `json:"route"`
+	Probe           string    `json:"probe,omitempty"`
+	Stream          bool      `json:"stream"`
+	Output          string    `json:"output,omitempty"`
+	SessionCacheKey bool      `json:"session_cache_key"`
 }
 
 type Route string
@@ -115,7 +117,7 @@ func DecodeScenario(data []byte) (Scenario, error) {
 	if err := decoder.Decode(&scenario); err != nil {
 		return Scenario{}, fmt.Errorf("decode scenario: %w", err)
 	}
-	if decoder.More() {
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return Scenario{}, errors.New("scenario must contain one JSON document")
 	}
 	if err := scenario.Validate(); err != nil {
@@ -171,8 +173,8 @@ func (operation RequiredOperation) Validate() error {
 	if len(operation.Probe) > maxScenarioPayload || len(operation.Output) > maxScenarioPayload {
 		return errors.New("model payload exceeds limit")
 	}
-	if operation.Route != RouteResponses && (operation.Probe != "" || operation.Stream) {
-		return errors.New("only responses operations may declare probe or stream")
+	if operation.Route != RouteResponses && (operation.Probe != "" || operation.Stream || operation.SessionCacheKey) {
+		return errors.New("only responses operations may declare probe, stream, or session cache key")
 	}
 	if operation.Probe != "" {
 		probe, err := uuid.Parse(operation.Probe)
