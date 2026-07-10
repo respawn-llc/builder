@@ -199,6 +199,34 @@ func TestResponsesStubRejectsMalformedRouteDTO(t *testing.T) {
 	}
 }
 
+func TestResponsesStubRejectsOversizedBodyBeforeQueueConsumption(t *testing.T) {
+	t.Parallel()
+
+	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(stub.Close)
+
+	response, err := http.Post(stub.URL()+"/responses", "application/json", bytes.NewReader(bytes.Repeat([]byte("x"), 64*1024+1)))
+	if err != nil {
+		t.Fatalf("POST oversized DTO: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized DTO status = %d, want %d", response.StatusCode, http.StatusRequestEntityTooLarge)
+	}
+	snapshot := stub.Snapshot()
+	if snapshot.RequiredIndex != 0 {
+		t.Fatalf("oversized DTO consumed required operation: %#v", snapshot)
+	}
+	if err := stub.Verify(); err == nil {
+		t.Fatal("Verify accepted oversized DTO")
+	}
+}
+
 func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	t.Parallel()
 
