@@ -47,6 +47,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		expectedStyledWrites      []styledAppendExpectation
 		forbiddenStyledWrites     []styledAppendExpectation
 		expectedStyledRows        []styledRowExpectation
+		liveSnapshot              *liveSnapshotExpectation
 		allowDuplicateAppends     bool
 		allowsAltScroll           bool
 		allowsFullScreen          bool
@@ -225,6 +226,57 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedAppends: []string{"❮ tools complete"},
 		},
 		{
+			name: "live_tool_promotion_and_input_dispositions",
+			script: map[string]any{
+				"prompt": "observe live tool lifecycle",
+				"steps": []map[string]any{
+					{
+						"tool_calls": []map[string]any{
+							{
+								"id":    "4c2725e5-9997-45f9-8aaf-a79c1ae523f6",
+								"name":  "exec_command",
+								"input": map[string]any{"cmd": "sleep 5"},
+							},
+						},
+					},
+					{
+						"expected_tool_results": []map[string]any{
+							{"CallID": "4c2725e5-9997-45f9-8aaf-a79c1ae523f6", "Name": "exec_command"},
+						},
+						"final": "live lifecycle complete",
+					},
+					{
+						"final": "queued lifecycle complete",
+					},
+				},
+			},
+			inputs: []pty.InputEvent{
+				{After: 1500 * time.Millisecond, Bytes: []byte("queued after tool start")},
+				{After: 1700 * time.Millisecond, Bytes: []byte("\t")},
+				{After: 2100 * time.Millisecond, Bytes: []byte("steering after tool start")},
+				{After: 2300 * time.Millisecond, Bytes: []byte("\r")},
+			},
+			expectedAppends: []string{"❮ live lifecycle complete", "❮ queued lifecycle complete"},
+			liveSnapshot: &liveSnapshotExpectation{
+				At: 3500 * time.Millisecond,
+				PendingShell: livePendingShellExpectation{
+					Command: "sleep 5",
+				},
+				Queued: liveStyledLineExpectation{
+					Text:       "queued after tool start",
+					Foreground: colorForStyle(transcriptrender.StyleRoleNoticeSecondary),
+					Faint:      true,
+				},
+				Steering: liveStyledLineExpectation{
+					Text:       "steering after tool start",
+					Foreground: colorForStyle(transcriptrender.StyleRoleNoticePrimary),
+				},
+				CompletedShellCommand: "sleep 5",
+				ForbiddenCompleted:    []string{"No output", "tool call"},
+			},
+			interruptAfter: durationPtr(8 * time.Second),
+		},
+		{
 			name: "detail_roundtrip_during_stream",
 			script: map[string]any{
 				"prompt":          "detail roundtrip",
@@ -299,6 +351,19 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			for _, content := range tc.forbiddenAnyAppends {
 				if err := contentNotAppended(allAppends, content); err != nil {
 					t.Fatalf("forbidden full-window append: %v", err)
+				}
+			}
+			if tc.liveSnapshot != nil {
+				if err := assertLiveSnapshot(capture, *tc.liveSnapshot); err != nil {
+					t.Fatalf("live snapshot: %v", err)
+				}
+				if err := committedShellIsOnlyCompletedCommandRow(analysis.Screen, tc.liveSnapshot.CompletedShellCommand); err != nil {
+					t.Fatalf("completed shell row: %v", err)
+				}
+				for _, forbidden := range tc.liveSnapshot.ForbiddenCompleted {
+					if strings.Contains(analysis.Screen.RenderText(), forbidden) {
+						t.Fatalf("completed screen contains forbidden tool text %q: %q", forbidden, analysis.Screen.RenderText())
+					}
 				}
 			}
 			if tc.expectedFaintDividerCount > 0 {
