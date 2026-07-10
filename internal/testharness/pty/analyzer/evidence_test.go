@@ -65,3 +65,26 @@ func TestCaptureAssemblerRejectsPTYEvidenceOverflowWithPrefixAndTail(t *testing.
 		t.Fatalf("overflow excerpts = prefix:%d tail:%d", len(overflow.Prefix), len(overflow.Tail))
 	}
 }
+
+func TestCaptureAssemblerRejectsEvidenceBlockOverflow(t *testing.T) {
+	t.Parallel()
+
+	assembler, err := analyzer.NewCaptureAssembler(pty.MustDimensions(1, 1))
+	if err != nil {
+		t.Fatalf("NewCaptureAssembler: %v", err)
+	}
+	for index := 0; index < 320; index++ {
+		if err := assembler.Append([]byte("x")); err != nil {
+			t.Fatalf("Append %d: %v", index, err)
+		}
+		if err := assembler.Resize(pty.MustDimensions(1, 1)); err != nil {
+			t.Fatalf("Resize %d: %v", index, err)
+		}
+	}
+	if err := assembler.Append([]byte("x")); err != nil {
+		t.Fatalf("Append after block limit: %v", err)
+	}
+	if _, err := assembler.Capture(); err == nil {
+		t.Fatal("Capture after block limit succeeded")
+	}
+}

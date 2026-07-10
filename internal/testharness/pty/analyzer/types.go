@@ -139,6 +139,7 @@ const evidenceBlockSize = 16 * 1024
 const (
 	maxPTYEvidenceBytes = 1 * 1024 * 1024
 	evidenceExcerptSize = 32 * 1024
+	maxEvidenceBlocks   = 320
 )
 
 type EvidenceSource string
@@ -195,7 +196,9 @@ func (a *CaptureAssembler) Append(payload []byte) error {
 		a.offset += int64(take)
 		payload = payload[take:]
 		if len(a.current) == evidenceBlockSize {
-			a.flush()
+			if err := a.flush(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -204,22 +207,32 @@ func (a *CaptureAssembler) Append(payload []byte) error {
 func (a *CaptureAssembler) overflow(payload []byte) error {
 	evidence := a.evidenceBytes()
 	combinedLength := len(evidence) + len(payload)
-	prefix := append([]byte(nil), evidence...)
-	prefix = append(prefix, payload...)
-	if len(prefix) > evidenceExcerptSize {
-		prefix = prefix[:evidenceExcerptSize]
-	}
-	tailSource := append(evidence, payload...)
-	if len(tailSource) > evidenceExcerptSize {
-		tailSource = tailSource[len(tailSource)-evidenceExcerptSize:]
-	}
 	return &EvidenceLimitExceeded{
 		Source:   EvidenceSourcePTY,
 		Limit:    maxPTYEvidenceBytes,
 		Observed: combinedLength,
-		Prefix:   append([]byte(nil), prefix...),
-		Tail:     append([]byte(nil), tailSource...),
+		Prefix:   a.prefixExcerpt(payload),
+		Tail:     a.tailExcerpt(payload),
 	}
+}
+
+func (a *CaptureAssembler) prefixExcerpt(extra []byte) []byte {
+	evidence := a.evidenceBytes()
+	if len(evidence) < evidenceExcerptSize {
+		evidence = append(evidence, extra[:min(len(extra), evidenceExcerptSize-len(evidence))]...)
+	}
+	if len(evidence) > evidenceExcerptSize {
+		evidence = evidence[:evidenceExcerptSize]
+	}
+	return append([]byte(nil), evidence...)
+}
+
+func (a *CaptureAssembler) tailExcerpt(extra []byte) []byte {
+	evidence := append(a.evidenceBytes(), extra...)
+	if len(evidence) > evidenceExcerptSize {
+		evidence = evidence[len(evidence)-evidenceExcerptSize:]
+	}
+	return append([]byte(nil), evidence...)
 }
 
 func (a *CaptureAssembler) evidenceBytes() []byte {
@@ -241,7 +254,9 @@ func (a *CaptureAssembler) Resize(dimensions Dimensions) error {
 	if _, err := NewDimensions(dimensions.Rows, dimensions.Cols); err != nil {
 		return err
 	}
-	a.flush()
+	if err := a.flush(); err != nil {
+		return err
+	}
 	placement := BeforeFirstChunk()
 	if len(a.blocks) > 0 {
 		placement = AfterChunk(len(a.blocks) - 1)
@@ -258,7 +273,9 @@ func (a *CaptureAssembler) Capture() (Capture, error) {
 	if a == nil {
 		return Capture{}, errors.New("capture assembler is required")
 	}
-	a.flush()
+	if err := a.flush(); err != nil {
+		return Capture{}, err
+	}
 	chunks := make([]Chunk, len(a.blocks))
 	for index, block := range a.blocks {
 		chunks[index] = NewChunk(index, 0, block)
@@ -266,12 +283,22 @@ func (a *CaptureAssembler) Capture() (Capture, error) {
 	return NewCaptureWithEvents(a.dimensions, chunks, a.resizes)
 }
 
-func (a *CaptureAssembler) flush() {
+func (a *CaptureAssembler) flush() error {
 	if len(a.current) == 0 {
-		return
+		return nil
+	}
+	if len(a.blocks) == maxEvidenceBlocks {
+		return &EvidenceLimitExceeded{
+			Source:   EvidenceSourcePTY,
+			Limit:    maxEvidenceBlocks,
+			Observed: len(a.blocks) + 1,
+			Prefix:   a.prefixExcerpt(nil),
+			Tail:     a.tailExcerpt(nil),
+		}
 	}
 	a.blocks = append(a.blocks, append([]byte(nil), a.current...))
 	a.current = make([]byte, 0, evidenceBlockSize)
+	return nil
 }
 
 func NewCapture(dimensions Dimensions, chunks []Chunk) (Capture, error) {
