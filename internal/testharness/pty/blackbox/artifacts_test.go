@@ -11,8 +11,6 @@ import (
 )
 
 func TestPublishFailureArtifactsAtomicallyPublishesLatestBundle(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	capture, err := analyzer.NewCapture(analyzer.MustDimensions(2, 8), []analyzer.Chunk{
 		analyzer.NewChunk(0, 0, []byte("failure")),
@@ -31,7 +29,7 @@ func TestPublishFailureArtifactsAtomicallyPublishesLatestBundle(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "raw.bin")); err != nil {
 		t.Fatalf("published raw artifact: %v", err)
 	}
-	latest, err := os.ReadFile(filepath.Join(root, "artifacts", "latest.json"))
+	latest, err := os.ReadFile(filepath.Join(artifactStoreRoot(), "latest.json"))
 	if err != nil {
 		t.Fatalf("read latest pointer: %v", err)
 	}
@@ -42,7 +40,7 @@ func TestPublishFailureArtifactsAtomicallyPublishesLatestBundle(t *testing.T) {
 
 func TestPublishFailureArtifactsRejectsContendedPublicationLock(t *testing.T) {
 	root := t.TempDir()
-	artifactRoot := filepath.Join(root, "artifacts")
+	artifactRoot := artifactStoreRoot()
 	if err := os.MkdirAll(artifactRoot, 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}

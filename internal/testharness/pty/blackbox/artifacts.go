@@ -13,9 +13,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// publishFailureArtifacts uses a per-run staging directory so callers never
-// observe a partially written failure bundle. The run root is already unique,
-// so this publisher has no cross-run deletion authority.
+// publishFailureArtifacts uses the harness-wide retained-failure store so
+// independent runs can coordinate latest-pointer publication and retention.
 func publishFailureArtifacts(deadline time.Time, root string, capture analyzer.Capture, analysis *analyzer.Analysis, runErr error, cleanup *IncompleteCleanup) (string, error) {
 	if time.Now().After(deadline) {
 		return "", fmt.Errorf("artifact publication deadline elapsed")
@@ -30,7 +29,7 @@ func publishFailureArtifacts(deadline time.Time, root string, capture analyzer.C
 		}
 		analysis = &replayed
 	}
-	artifactRoot := filepath.Join(root, "artifacts")
+	artifactRoot := artifactStoreRoot()
 	lockPath := filepath.Join(artifactRoot, "publish.lock")
 	if err := os.MkdirAll(artifactRoot, 0o700); err != nil {
 		return "", fmt.Errorf("create artifact root: %w", err)
@@ -82,4 +81,8 @@ func publishFailureArtifacts(deadline time.Time, root string, capture analyzer.C
 		return "", fmt.Errorf("publish latest artifact pointer: %w", err)
 	}
 	return final, nil
+}
+
+func artifactStoreRoot() string {
+	return filepath.Join(os.TempDir(), "kent-pty-artifacts")
 }
