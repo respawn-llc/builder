@@ -73,6 +73,8 @@ type Operation = analyzer.Operation
 
 type WritePayload = analyzer.WritePayload
 
+type WriteSegment = analyzer.WriteSegment
+
 var NewWritePayload = analyzer.NewWritePayload
 
 var MustWritePayload = analyzer.MustWritePayload

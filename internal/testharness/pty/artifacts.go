@@ -27,16 +27,28 @@ type artifactChunk struct {
 }
 
 type artifactOperation struct {
-	Sequence    int                `json:"sequence"`
-	Kind        OperationKind      `json:"kind"`
-	ChunkIndex  int                `json:"chunk_index"`
-	ByteRange   ByteRange          `json:"byte_range"`
-	Before      Position           `json:"before"`
-	After       Position           `json:"after"`
-	Region      Region             `json:"region"`
-	CapturedAt  int64              `json:"captured_at_ns"`
-	Write       *string            `json:"write,omitempty"`
-	PrivateMode *PrivateModeChange `json:"private_mode,omitempty"`
+	Sequence      int                    `json:"sequence"`
+	Kind          OperationKind          `json:"kind"`
+	ChunkIndex    int                    `json:"chunk_index"`
+	ByteRange     ByteRange              `json:"byte_range"`
+	Before        Position               `json:"before"`
+	After         Position               `json:"after"`
+	Region        Region                 `json:"region"`
+	CapturedAt    int64                  `json:"captured_at_ns"`
+	Write         *string                `json:"write,omitempty"`
+	WriteSegments []artifactWriteSegment `json:"write_segments,omitempty"`
+	Controls      []artifactOperation    `json:"controls,omitempty"`
+	PrivateMode   *PrivateModeChange     `json:"private_mode,omitempty"`
+}
+
+type artifactWriteSegment struct {
+	ChunkIndex int       `json:"chunk_index"`
+	ByteRange  ByteRange `json:"byte_range"`
+	Before     Position  `json:"before"`
+	After      Position  `json:"after"`
+	Region     Region    `json:"region"`
+	Write      string    `json:"write"`
+	CapturedAt int64     `json:"captured_at_ns"`
 }
 
 func WriteArtifacts(dir string, capture Capture, analysis Analysis, assertionErr error) error {
@@ -103,7 +115,25 @@ func artifactOperations(operations []Operation) []artifactOperation {
 			text := operation.Write.Text()
 			item.Write = &text
 		}
+		item.WriteSegments = artifactWriteSegments(operation.WriteSegments)
+		item.Controls = artifactOperations(operation.Controls)
 		result = append(result, item)
+	}
+	return result
+}
+
+func artifactWriteSegments(segments []WriteSegment) []artifactWriteSegment {
+	result := make([]artifactWriteSegment, 0, len(segments))
+	for _, segment := range segments {
+		result = append(result, artifactWriteSegment{
+			ChunkIndex: segment.ChunkIndex,
+			ByteRange:  segment.ByteRange,
+			Before:     segment.Before,
+			After:      segment.After,
+			Region:     segment.Region,
+			Write:      segment.Write.Text(),
+			CapturedAt: segment.CapturedAt.Nanoseconds(),
+		})
 	}
 	return result
 }
