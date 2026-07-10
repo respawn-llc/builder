@@ -3098,7 +3098,7 @@ fn contract_provider_capabilities_json() -> serde_json::Value {
 
 fn contract_settings_json() -> serde_json::Value {
     json!({
-        "Model": "gpt-5.5",
+        "Model": "gpt-5.6-sol",
         "ThinkingLevel": "medium",
         "ModelVerbosity": "",
         "SystemPromptFile": "",

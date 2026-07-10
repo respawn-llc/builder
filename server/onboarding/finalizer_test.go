@@ -21,7 +21,7 @@ func TestFinalizerDefaultEqualChoicesRenderLikeDefaults(t *testing.T) {
 	nullHome := t.TempDir()
 	defaultRoot := t.TempDir()
 	defaultHome := t.TempDir()
-	defaultModel := serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: "gpt-5.5"}
+	defaultModel := serverapi.OnboardingModelChoice{Kind: serverapi.OnboardingModelKnown, ModelID: "gpt-5.6-sol"}
 	defaultTheme := serverapi.OnboardingThemeAuto
 
 	if _, err := newTestFinalizer(t, nullRoot, nullHome).FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{}); err != nil {
@@ -99,7 +99,7 @@ func TestFinalizerProjectsModelContextThinkingVerbosityAskQuestionSupervisorAndC
 				window:     123_456,
 				threshold:  117_283,
 				thinking:   "",
-				verbosity:  config.ModelVerbosityMedium,
+				verbosity:  config.ModelVerbosityLow,
 				ask:        &falseValue,
 				supervisor: "off",
 				compaction: config.CompactionModeNone,

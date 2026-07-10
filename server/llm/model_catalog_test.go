@@ -36,15 +36,15 @@ func TestLookupModelMetadataForCodexSpark(t *testing.T) {
 	}
 }
 
-func TestLookupModelMetadataForGPT55ContextWindow(t *testing.T) {
-	meta, ok := LookupModelMetadata("gpt-5.5")
+func TestLookupModelMetadataForGPT56SolContextWindow(t *testing.T) {
+	meta, ok := LookupModelMetadata("gpt-5.6-sol")
 	if !ok {
-		t.Fatal("expected model metadata for gpt-5.5")
+		t.Fatal("expected model metadata for gpt-5.6-sol")
 	}
-	if meta.ContextWindowTokens != 272_000 {
+	if meta.ContextWindowTokens != 372_000 {
 		t.Fatalf("unexpected default context window: %d", meta.ContextWindowTokens)
 	}
-	if meta.LargeContextWindowTokens != 272_000 {
+	if meta.LargeContextWindowTokens != 372_000 {
 		t.Fatalf("unexpected large context window: %d", meta.LargeContextWindowTokens)
 	}
 }
@@ -76,12 +76,12 @@ func TestLookupModelMetadataForGPT54MiniLargeContext(t *testing.T) {
 }
 
 func TestSupportedThinkingLevelsModel(t *testing.T) {
-	levels := SupportedThinkingLevelsModel("gpt-5.5")
-	if got := len(levels); got != 4 {
-		t.Fatalf("expected 4 gpt-5.5 thinking levels, got %d (%v)", got, levels)
+	levels := SupportedThinkingLevelsModel("gpt-5.6-sol")
+	if got := len(levels); got != 6 {
+		t.Fatalf("expected 6 gpt-5.6-sol thinking levels, got %d (%v)", got, levels)
 	}
-	if levels[3] != "xhigh" {
-		t.Fatalf("expected xhigh support for gpt-5.5, got %v", levels)
+	if levels[5] != "ultra" {
+		t.Fatalf("expected ultra support for gpt-5.6-sol, got %v", levels)
 	}
 	unknown := SupportedThinkingLevelsModel("custom-alias")
 	if got := len(unknown); got != 3 {
@@ -94,7 +94,7 @@ func TestSupportsReasoningEffortModel(t *testing.T) {
 		model string
 		want  bool
 	}{
-		{model: "gpt-5.5", want: true},
+		{model: "gpt-5.6-sol", want: true},
 		{model: "gpt-5.4", want: true},
 		{model: "gpt-5.4-mini", want: true},
 		{model: "gpt-5.4-nano", want: true},
@@ -117,7 +117,7 @@ func TestSupportsReasoningSummaryModel(t *testing.T) {
 		model string
 		want  bool
 	}{
-		{model: "gpt-5.5", want: true},
+		{model: "gpt-5.6-sol", want: true},
 		{model: "gpt-5.4", want: true},
 		{model: "gpt-5.4-mini", want: true},
 		{model: "gpt-5.4-nano", want: true},
@@ -139,7 +139,7 @@ func TestSupportsVisionInputsModel(t *testing.T) {
 		model string
 		want  bool
 	}{
-		{model: "gpt-5.5", want: true},
+		{model: "gpt-5.6-sol", want: true},
 		{model: "gpt-5.3-codex", want: true},
 		{model: "gpt-5.3-codex-spark", want: false},
 		{model: " GPT-4.1 ", want: true},
@@ -161,7 +161,7 @@ func TestSupportsVerbosityModel(t *testing.T) {
 		model string
 		want  bool
 	}{
-		{model: "gpt-5.5", want: true},
+		{model: "gpt-5.6-sol", want: true},
 		{model: "gpt-5.4", want: true},
 		{model: "gpt-5.4-mini", want: true},
 		{model: "gpt-5.4-nano", want: true},
@@ -230,7 +230,7 @@ func TestModelDisplayLabel(t *testing.T) {
 		{model: "gpt-5.3-codex", thinkingLevel: "high", want: "gpt-5.3-codex high"},
 		{model: "claude-3-7-sonnet", thinkingLevel: "high", want: "claude-3-7-sonnet high"},
 		{model: "custom-alias", thinkingLevel: "high", want: "custom-alias high"},
-		{model: "", thinkingLevel: "", want: "gpt-5"},
+		{model: "", thinkingLevel: "", want: "gpt-5.6-sol"},
 	}
 
 	for _, tc := range tests {

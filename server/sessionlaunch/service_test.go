@@ -272,7 +272,7 @@ func TestServicePlanSessionDefaultRoleClearDoesNotRequireAuthState(t *testing.T)
 		Config: config.App{
 			WorkspaceRoot:   workspace,
 			PersistenceRoot: t.TempDir(),
-			Settings:        config.Settings{Model: "gpt-5.5"},
+			Settings:        config.Settings{Model: "gpt-5.6-sol"},
 		},
 		ContainerDir: containerDir,
 	}, registry.NewSessionStoreRegistry()).WithAuthStateReader(failingAuthStateReader{})
@@ -366,7 +366,7 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 		ClientRequestID:   "req-1",
 		Mode:              serverapi.SessionLaunchModeInteractive,
 		SelectedSessionID: store.Meta().SessionID,
-		Overrides:         serverapi.RunPromptOverrides{Model: "gpt-5.5"},
+		Overrides:         serverapi.RunPromptOverrides{Model: "gpt-5.6-sol"},
 	})
 	if err == nil {
 		t.Fatal("expected invalid persisted role validation to fail")

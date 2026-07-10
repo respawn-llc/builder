@@ -15,7 +15,7 @@ import (
 type embeddedAttachFactsService struct{}
 
 func (embeddedAttachFactsService) GetCapabilityFacts(context.Context, serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-	return serverapi.CapabilityFactsResponse{Defaults: serverapi.CapabilityDefaultFacts{PrimaryModelID: "gpt-5.5"}}, nil
+	return serverapi.CapabilityFactsResponse{Defaults: serverapi.CapabilityDefaultFacts{PrimaryModelID: "gpt-5.6-sol"}}, nil
 }
 
 func TestBuildStartupRequestMapsOptions(t *testing.T) {
@@ -74,7 +74,7 @@ func TestAdaptOnboardingHandlerMapsRequest(t *testing.T) {
 		if err != nil {
 			t.Fatalf("capability facts: %v", err)
 		}
-		if facts.Defaults.PrimaryModelID != "gpt-5.5" {
+		if facts.Defaults.PrimaryModelID != "gpt-5.6-sol" {
 			t.Fatalf("capability facts = %+v", facts)
 		}
 		reloaded, err := req.ReloadConfig()

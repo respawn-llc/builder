@@ -1208,7 +1208,7 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 		t.Fatalf("runs after first process = %+v, want completed source and unstarted target", runs)
 	}
 	role := fixture.cfg.Settings.Subagents["coder"]
-	role.Settings.Model = "gpt-5.5-drifted"
+	role.Settings.Model = "gpt-5.6-sol-drifted"
 	role.Sources["model"] = "drifted-test"
 	fixture.cfg.Settings.Subagents["coder"] = role
 	fixture.rebuildStarter(t)
@@ -1222,7 +1222,7 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 	if len(reqs) < 2 {
 		t.Fatalf("fake model request count = %d, want 2", len(reqs))
 	}
-	if reqs[0].Model == "" || reqs[1].Model != reqs[0].Model || reqs[1].Model == "gpt-5.5-drifted" {
+	if reqs[0].Model == "" || reqs[1].Model != reqs[0].Model || reqs[1].Model == "gpt-5.6-sol-drifted" {
 		t.Fatalf("request models = %q then %q, want locked source session model reused after config drift", reqs[0].Model, reqs[1].Model)
 	}
 }
@@ -1555,7 +1555,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 
@@ -1575,7 +1575,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planSession: %v", err)
 	}
-	if plan.ActiveSettings.Model != "gpt-5.5" {
+	if plan.ActiveSettings.Model != "gpt-5.6-sol" {
 		t.Fatalf("model = %q, want locked model", plan.ActiveSettings.Model)
 	}
 	reopened, err := session.Open(source.Dir(), fixture.metadata.AuthoritativeSessionStoreOptions()...)
@@ -1597,7 +1597,7 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: "reviewer"}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
-	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 	planner := launch.Planner{

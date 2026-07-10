@@ -432,7 +432,7 @@ func TestNormalizePersistenceRootExpandsTildeAndAbsolutizes(t *testing.T) {
 func TestLoadSubagentRoleFromFile(t *testing.T) {
 	home, workspace, configPath := newConfigTestFile(t)
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.fast]",
 		"model = \"gpt-5.4-mini\"",
@@ -500,7 +500,7 @@ func TestLoadSubagentRoleMetadataFromFile(t *testing.T) {
 func TestLoadSubagentRoleRejectsReservedNames(t *testing.T) {
 	for _, reserved := range []string{"default", "none", "self"} {
 		t.Run(reserved, func(t *testing.T) {
-			err := loadConfigTestFileError(t, "[subagents."+reserved+"]\nmodel = \"gpt-5.5\"\n", LoadOptions{})
+			err := loadConfigTestFileError(t, "[subagents."+reserved+"]\nmodel = \"gpt-5.6-sol\"\n", LoadOptions{})
 			if err == nil {
 				t.Fatal("expected reserved role to fail")
 			}
@@ -550,7 +550,7 @@ func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t
 			SupportsResponsesAPI: true,
 		},
 		Reviewer: ReviewerSettings{
-			Model:          "gpt-5.5",
+			Model:          "gpt-5.6-sol",
 			TimeoutSeconds: 60,
 		},
 	}
@@ -711,7 +711,7 @@ func TestParseSubagentRoleSystemPromptFileResolvesConfigRelativePath(t *testing.
 
 func TestLoadSubagentRoleRejectsNestedSubagentsTable(t *testing.T) {
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.fast]",
 		"thinking_level = \"low\"",
@@ -731,7 +731,7 @@ func TestLoadSubagentRoleRejectsNestedSubagentsTable(t *testing.T) {
 
 func TestLoadSubagentRoleRejectsUnknownKeys(t *testing.T) {
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.fast]",
 		"thinking_level = \"low\"",
@@ -849,7 +849,7 @@ func TestLoadCreatesWorktreeBaseDir(t *testing.T) {
 
 func TestLoadSubagentRoleRejectsInvalidValues(t *testing.T) {
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.fast]",
 		"provider_override = \"bogus\"",
@@ -931,7 +931,7 @@ func TestLoadSubagentRoleRejectsReviewerModelContextWindowExplicitZero(t *testin
 
 func TestLoadSubagentRoleAllowsReviewerAuthNoneToInheritParentBaseURL(t *testing.T) {
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"openai_base_url = \"http://127.0.0.1:8080/v1\"",
 		"",
 		"[subagents.fast.reviewer]",
@@ -947,7 +947,7 @@ func TestLoadSubagentRoleAllowsReviewerAuthNoneToInheritParentBaseURL(t *testing
 
 func TestLoadSubagentRoleAllowsReviewerAuthNoneWithExplicitFirstPartyBaseURL(t *testing.T) {
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.fast.reviewer]",
 		"auth = \"none\"",
@@ -963,7 +963,7 @@ func TestLoadSubagentRoleAllowsReviewerAuthNoneWithExplicitFirstPartyBaseURL(t *
 
 func TestLoadSubagentRoleRejectsPersistenceRoot(t *testing.T) {
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.fast]",
 		"persistence_root = \"/tmp/custom\"",

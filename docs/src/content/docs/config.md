@@ -34,9 +34,9 @@ Selecting a non-default root also makes client attach root-aware: a client only 
 ## Example
 
 ```toml
-model = "gpt-5.5"
-thinking_level = "medium" # low, medium, high, xhigh
-model_verbosity = "medium" # or "low"
+model = "gpt-5.6-sol"
+thinking_level = "medium" # low, medium, high, xhigh, max, ultra
+model_verbosity = "low" # or "medium" / "high"
 # system_prompt_file = "SYSTEM.md" # relative to this config.toml directory
 theme = "auto" # or light / dark
 web_search = "native"
@@ -71,7 +71,7 @@ max_invalid_completion_attempts = 5
 
 [reviewer] # aka supervisor
 frequency = "edits"
-# model = "gpt-5.4-mini"
+# model = "gpt-5.6-sol"
 # model_verbosity = "low"
 # provider_override = "openai"
 # openai_base_url = "http://127.0.0.1:11434/v1"
@@ -85,7 +85,8 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 [subagents.fast]
 # agent_callable = true
 # description = ""
-# model = "gpt-5.4-mini"
+# model = "gpt-5.6-terra"
+# thinking_level = "low"
 # priority_request_mode = true
 ```
 
@@ -110,9 +111,9 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 
 | Key | Type | Default | Env | CLI | Description |
 | --- | --- | --- | --- | --- | --- |
-| `model` | string | `gpt-5.5` | `KENT_MODEL` | `kent run --model` | Model name. If provider inference from the model name is not enough, set `provider_override` too. |
+| `model` | string | `gpt-5.6-sol` | `KENT_MODEL` | `kent run --model` | Model name. If provider inference from the model name is not enough, set `provider_override` too. |
 | `thinking_level` | string | `medium` | `KENT_THINKING_LEVEL` | `kent run --thinking-level` | Provider-specific reasoning effort string. |
-| `model_verbosity` | string | `medium` |  |  | Text verbosity hint for supported models. Allowed: `""`, `low`, `medium`, `high`. Unsupported models ignore it. |
+| `model_verbosity` | string | `low` |  |  | Text verbosity hint for supported models. Allowed: `""`, `low`, `medium`, `high`. Unsupported models ignore it. |
 | `system_prompt_file` | string | `""` |  |  | Main system prompt file. Relative paths resolve from the containing `config.toml` directory. Empty files are skipped. |
 | `theme` | string | `auto` | `KENT_THEME` | `kent run --theme` | TUI theme. Allowed: `auto`, `light`, `dark`. `light` and `dark` force Kent's fixed palettes. `auto` or an omitted value falls back to terminal background detection. |
 | `notification_method` | string | `auto` | `KENT_NOTIFICATION_METHOD` |  | Terminal notification backend. Allowed: `auto`, `osc9`, `bel`. `auto` chooses `osc9` on supported terminals and falls back to `bel`. |
@@ -126,8 +127,8 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `openai_base_url` | string | `""` | `KENT_OPENAI_BASE_URL` | `kent run --openai-base-url` | OpenAI-compatible base URL. Must be used with `provider_override=openai` or with no explicit provider override. Cannot be changed mid-session. |
 | `store` | bool | `false` | `KENT_STORE` |  | Sets OpenAI Responses `store=true` for main model requests. |
 | `allow_non_cwd_edits` | bool | `false` | `KENT_ALLOW_NON_CWD_EDITS` |  | Lets first-class file edit tools edit files outside the workspace root. This is not sandboxing - model can still bypass this easily. |
-| `model_context_window` | int | `272000` | `KENT_MODEL_CONTEXT_WINDOW` |  | Explicit context-window size used for compaction and token accounting. Must be at least `40000`. |
-| `context_compaction_threshold_tokens` | int | `258400` | `KENT_CONTEXT_COMPACTION_THRESHOLD_TOKENS` |  | Auto-compaction threshold. Must be `> 0`, `< model_context_window`, and at least `50%` of `model_context_window`. The default is derived from the default context window. |
+| `model_context_window` | int | `372000` | `KENT_MODEL_CONTEXT_WINDOW` |  | Explicit context-window size used for compaction and token accounting. Must be at least `40000`. |
+| `context_compaction_threshold_tokens` | int | `353400` | `KENT_CONTEXT_COMPACTION_THRESHOLD_TOKENS` |  | Auto-compaction threshold. Must be `> 0`, `< model_context_window`, and at least `50%` of `model_context_window`. The default is derived from the default context window. |
 | `pre_submit_compaction_lead_tokens` | int | `35000` | `KENT_PRE_SUBMIT_COMPACTION_LEAD_TOKENS` |  | Fixed pre-submit runway reserve before auto-compaction. Kent compacts before sending the next user prompt once (`context_compaction_threshold_tokens` - this threshold) is reached. |
 | `minimum_exec_to_bg_seconds` | int | `15` | `KENT_MINIMUM_EXEC_TO_BG_SECONDS` |  | Default floor for `exec_command` yield time before it moves to background and lets Kent manage it asynchronously. Must be `> 0`. Use if model frequently expects your commands to complete fast, they background, and force model to poll for them. |
 | `compaction_mode` | string | `local` | `KENT_COMPACTION_MODE` |  | Allowed: `native`, `local`, `none`. `native` prefers provider-native compaction and falls back to local compaction. `local` always uses local summary compaction. `none` disables auto-compaction and makes manual compaction fail. |
@@ -157,7 +158,7 @@ Configure the supervisor agent that oversees model changes ("reviewer" is the le
 | --- | --- | --- | --- | --- |
 | `reviewer.frequency` | string | `edits` | `KENT_REVIEWER_FREQUENCY` | Allowed: `off`, `all`, `edits`. `all` runs the reviewer after every completed assistant turn. `edits` runs it only after successful first-class file edits. |
 | `reviewer.model` | string | inherits `model` | `KENT_REVIEWER_MODEL` | Separate model for the reviewer pass. If unset, Kent uses main `model`. |
-| `reviewer.thinking_level` | string | inherits `thinking_level` | `KENT_REVIEWER_THINKING_LEVEL` | Allowed: `low`, `medium`, `high`, `xhigh`. |
+| `reviewer.thinking_level` | string | inherits `thinking_level` | `KENT_REVIEWER_THINKING_LEVEL` | Allowed: `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. |
 | `reviewer.model_verbosity` | string | inherits `model_verbosity` | `KENT_REVIEWER_MODEL_VERBOSITY` | Text verbosity hint for supported reviewer models. Allowed: `""`, `low`, `medium`, `high`. |
 | `reviewer.provider_override` | string | inherits `provider_override` | `KENT_REVIEWER_PROVIDER_OVERRIDE` | Forces provider family for the reviewer model. Allowed: `openai`, `anthropic`. |
 | `reviewer.openai_base_url` | string | inherits `openai_base_url` for OpenAI-family reviewer providers | `KENT_REVIEWER_OPENAI_BASE_URL` | OpenAI-compatible base URL for the reviewer model. Non-OpenAI endpoints can run without Kent auth when the server accepts anonymous requests. |

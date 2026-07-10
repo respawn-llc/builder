@@ -170,7 +170,7 @@ func (c uiInputController) handleThinkingLevelCommand(requested string) (tea.Mod
 
 	normalized, ok := clientui.NormalizeThinkingLevel(requested)
 	if !ok {
-		errText := "invalid thinking level " + strconv.Quote(requested) + " (expected low|medium|high|xhigh)"
+		errText := "invalid thinking level " + strconv.Quote(requested) + " (expected low|medium|high|xhigh|max|ultra)"
 		return m, c.model.appendLocalEntryWithNoticeID("error", errText, "")
 	}
 	if m.hasRuntimeClient() {

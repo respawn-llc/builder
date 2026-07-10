@@ -16,7 +16,7 @@ import (
 
 func TestSubagentsMetaMessageRendersCallableNonNoopRoles(t *testing.T) {
 	settings := config.Settings{
-		Model:         "gpt-5.5",
+		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",
 		EnabledTools: map[toolspec.ID]bool{
 			toolspec.ToolExecCommand: true,
@@ -36,7 +36,7 @@ func TestSubagentsMetaMessageRendersCallableNonNoopRoles(t *testing.T) {
 				Description: "Repo research specialist.",
 			},
 			"placebo": {
-				Settings:    config.Settings{Model: "gpt-5.5"},
+				Settings:    config.Settings{Model: "gpt-5.6-sol"},
 				Sources:     map[string]string{"model": "file"},
 				Description: "Sounds useful, but no behavior differs.",
 			},
@@ -51,7 +51,7 @@ func TestSubagentsMetaMessageRendersCallableNonNoopRoles(t *testing.T) {
 			},
 		},
 	}
-	builder := newMetaContextBuilder("/tmp/work", "gpt-5.5", "medium", nil, time.Unix(0, 0)).
+	builder := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)).
 		withSubagents(settings, []toolspec.ID{toolspec.ToolExecCommand})
 	result, err := builder.Build(metaContextBuildOptions{IncludeSubagents: true})
 	if err != nil {
@@ -81,7 +81,7 @@ func TestSubagentsMetaMessageRendersCallableNonNoopRoles(t *testing.T) {
 
 func TestSubagentsMetaMessageUsesFallbackAndRequiresCallerShell(t *testing.T) {
 	settings := config.Settings{
-		Model:               "gpt-5.5",
+		Model:               "gpt-5.6-sol",
 		ThinkingLevel:       "medium",
 		PriorityRequestMode: true,
 		EnabledTools: map[toolspec.ID]bool{
@@ -103,7 +103,7 @@ func TestSubagentsMetaMessageUsesFallbackAndRequiresCallerShell(t *testing.T) {
 			},
 		},
 	}
-	withShell := newMetaContextBuilder("/tmp/work", "gpt-5.5", "medium", nil, time.Unix(0, 0)).
+	withShell := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)).
 		withSubagents(settings, []toolspec.ID{toolspec.ToolExecCommand})
 	result, err := withShell.Build(metaContextBuildOptions{IncludeSubagents: true})
 	if err != nil {
@@ -113,7 +113,7 @@ func TestSubagentsMetaMessageUsesFallbackAndRequiresCallerShell(t *testing.T) {
 		t.Fatalf("unexpected fallback content: %+v", result.Subagents)
 	}
 
-	withoutShell := newMetaContextBuilder("/tmp/work", "gpt-5.5", "medium", nil, time.Unix(0, 0)).
+	withoutShell := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)).
 		withSubagents(settings, []toolspec.ID{toolspec.ToolPatch})
 	result, err = withoutShell.Build(metaContextBuildOptions{IncludeSubagents: true})
 	if err != nil {
@@ -126,7 +126,7 @@ func TestSubagentsMetaMessageUsesFallbackAndRequiresCallerShell(t *testing.T) {
 
 func TestSubagentsMetaMessageCurrentNonCallableRoleDoesNotDisableOtherRoles(t *testing.T) {
 	settings := config.Settings{
-		Model:         "gpt-5.5",
+		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",
 		EnabledTools: map[toolspec.ID]bool{
 			toolspec.ToolExecCommand: true,
@@ -145,7 +145,7 @@ func TestSubagentsMetaMessageCurrentNonCallableRoleDoesNotDisableOtherRoles(t *t
 			},
 		},
 	}
-	builder := newMetaContextBuilder("/tmp/work", "gpt-5.5", "medium", nil, time.Unix(0, 0)).
+	builder := newMetaContextBuilder("/tmp/work", "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)).
 		withSubagents(settings, []toolspec.ID{toolspec.ToolExecCommand})
 	result, err := builder.Build(metaContextBuildOptions{IncludeSubagents: true})
 	if err != nil {
@@ -168,7 +168,7 @@ func TestCompactionReinjectsSubagentsMetaContext(t *testing.T) {
 	workspace := t.TempDir()
 	store := mustCreateNamedTestSession(t, "ws", workspace)
 	settings := config.Settings{
-		Model:         "gpt-5.5",
+		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",
 		EnabledTools: map[toolspec.ID]bool{
 			toolspec.ToolExecCommand: true,
@@ -182,7 +182,7 @@ func TestCompactionReinjectsSubagentsMetaContext(t *testing.T) {
 		},
 	}
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
-		Model:                   "gpt-5.5",
+		Model:                   "gpt-5.6-sol",
 		ThinkingLevel:           "medium",
 		EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
 		SubagentCatalogSettings: settings,
@@ -202,7 +202,7 @@ func TestManualCompactionPersistsSubagentCatalogInCanonicalTranscript(t *testing
 	workspace := t.TempDir()
 	store := mustCreateNamedTestSession(t, "ws", workspace)
 	settings := config.Settings{
-		Model:         "gpt-5.5",
+		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",
 		EnabledTools: map[toolspec.ID]bool{
 			toolspec.ToolExecCommand: true,
@@ -216,7 +216,7 @@ func TestManualCompactionPersistsSubagentCatalogInCanonicalTranscript(t *testing
 		},
 	}
 	cfg := Config{
-		Model:                   "gpt-5.5",
+		Model:                   "gpt-5.6-sol",
 		ThinkingLevel:           "medium",
 		CompactionMode:          "local",
 		EnabledTools:            []toolspec.ID{toolspec.ToolExecCommand},
@@ -292,7 +292,7 @@ func TestReviewerPromptFiltersSubagentsMetaContext(t *testing.T) {
 		{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeSubagents, Content: "Available subagent roles:\n- worker: specialist"},
 		{Role: llm.RoleUser, Content: "request"},
 	}
-	got, err := buildReviewerRequestMessagesWithBuilder(messages, newMetaContextBuilder(t.TempDir(), "gpt-5.5", "medium", nil, time.Unix(0, 0)), false)
+	got, err := buildReviewerRequestMessagesWithBuilder(messages, newMetaContextBuilder(t.TempDir(), "gpt-5.6-sol", "medium", nil, time.Unix(0, 0)), false)
 	if err != nil {
 		t.Fatalf("buildReviewerRequestMessagesWithBuilder: %v", err)
 	}
