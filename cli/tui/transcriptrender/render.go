@@ -11,6 +11,8 @@ import (
 	"github.com/rivo/uniseg"
 )
 
+const BackgroundedShellSuffix = "• backgrounded"
+
 func RenderCommittedRow(row clientui.TranscriptCommittedRow, width int, themeName string, mode Mode) Row {
 	var syntax *syntaxProjector
 	if mode == ModeDetailExpanded {
@@ -112,6 +114,42 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 		return attachPrefixWithFirstLineMeta(role, textLines(role, []string{first}, meta), width, len(strings.Split(text, "\n")) > 1, inlineMeta, mode, meta)
 	}
 	return attachPrefixWithMeta(role, textLines(role, wrapLines(text, contentWidth(role, width)), meta), width, false, mode, meta)
+}
+
+func RenderBackgroundedShell(command string, width int) Line {
+	if width <= 0 {
+		return Line{}
+	}
+	command = strings.TrimSpace(firstDisplayLine(safeTranscriptText(command)))
+	symbol := SemanticSpan("$", StyleRoleToolShellSecondary)
+	fixed := []Span{
+		SemanticSpan(" ", StyleRoleToolShell, SpanAttributeFaint),
+		SemanticSpan(BackgroundedShellSuffix, StyleRoleNoticeForegroundFaint, SpanAttributeFaint),
+	}
+	fixedWidth := lipgloss.Width(symbol.Text) + spansWidth(fixed)
+	if command == "" || width <= fixedWidth {
+		return TruncateLine(Line{LeadingSymbol: &symbol, Spans: fixed}, width, false)
+	}
+
+	commandWidth := width - fixedWidth - 1
+	commandLine := TruncateLine(Line{Spans: []Span{
+		SemanticSpan(command, StyleRoleToolShell, SpanAttributeFaint),
+	}}, commandWidth, false)
+	spans := []Span{SemanticSpan(" ", StyleRoleToolShell, SpanAttributeFaint)}
+	spans = append(spans, commandLine.Spans...)
+	spans = append(spans,
+		SemanticSpan(" ", StyleRoleToolShell, SpanAttributeFaint),
+		SemanticSpan(BackgroundedShellSuffix, StyleRoleNoticeForegroundFaint, SpanAttributeFaint),
+	)
+	return Line{LeadingSymbol: &symbol, Spans: spans}
+}
+
+func spansWidth(spans []Span) int {
+	width := 0
+	for _, span := range spans {
+		width += lipgloss.Width(span.Text)
+	}
+	return width
 }
 
 func textLines(role StyleRole, lines []string, meta toolMeta) []Line {

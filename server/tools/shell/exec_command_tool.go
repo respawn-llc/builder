@@ -113,18 +113,19 @@ func (t *ExecCommandTool) Call(ctx context.Context, c tools.Call) (tools.Result,
 		return tools.Result{}, marshalErr
 	}
 	toolResult := tools.Result{CallID: c.ID, Name: c.Name, Output: body}
-	if in.Raw || result.Truncated {
-		toolResult.PresentationDelta = shellOutputStatusPresentationDelta(in.Raw, result.Truncated)
+	if in.Raw || result.Truncated || result.MovedToBackground {
+		toolResult.PresentationDelta = shellResultPresentationDelta(in.Raw, result.Truncated, result.MovedToBackground)
 	}
 	return toolResult, nil
 }
 
-func shellOutputStatusPresentationDelta(rawRequested bool, truncated bool) *transcript.ToolResultPresentationDelta {
-	if !rawRequested && !truncated {
+func shellResultPresentationDelta(rawRequested bool, truncated bool, movedToBackground bool) *transcript.ToolResultPresentationDelta {
+	if !rawRequested && !truncated && !movedToBackground {
 		return nil
 	}
 	return &transcript.ToolResultPresentationDelta{
 		RawOutputRequested: rawRequested,
 		OutputTruncated:    truncated,
+		MovedToBackground:  movedToBackground,
 	}
 }

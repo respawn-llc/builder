@@ -173,6 +173,33 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 	}
 }
 
+func TestMovedToBackgroundShellRowKeepsMovedToBackgroundSuffixAtNarrowWidth(t *testing.T) {
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "sleep 20; printf completed", false)
+	row.Tool.ToolPresentation.MovedToBackground = true
+
+	rendered := RenderCommittedRow(row, 24, "", ModeOngoing)
+	if len(rendered.Lines) != 1 {
+		t.Fatalf("backgrounded shell lines = %+v, want one line", rendered.Lines)
+	}
+	line := rendered.Lines[0]
+	if got, want := line.Plain(), "$ sleep … • backgrounded"; got != want {
+		t.Fatalf("backgrounded shell line = %q, want %q", got, want)
+	}
+	if line.LeadingSymbol == nil {
+		t.Fatal("backgrounded shell line has no symbol")
+	}
+	if role, ok := line.LeadingSymbol.Style.Role(); !ok || role != StyleRoleToolShellSecondary {
+		t.Fatalf("backgrounded shell symbol style = %+v, want secondary shell role", line.LeadingSymbol.Style)
+	}
+	for _, span := range line.Spans {
+		role, ok := span.Style.Role()
+		if !ok || (role != StyleRoleToolShell && role != StyleRoleNoticeForegroundFaint) ||
+			!span.Style.Has(SpanAttributeFaint) {
+			t.Fatalf("backgrounded shell body span = %+v, want faint foreground", span)
+		}
+	}
+}
+
 func assertShellLineIsPlainText(t *testing.T, line Line) {
 	t.Helper()
 	if len(line.Spans) < 2 {

@@ -104,13 +104,14 @@ func TestPrepareExecutorToolCallsRejectsMissingProviderCallID(t *testing.T) {
 
 func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 	tests := []struct {
-		name          string
-		call          llm.ToolCall
-		delta         *transcript.ToolResultPresentationDelta
-		wantCommand   string
-		wantPatch     bool
-		wantRaw       bool
-		wantTruncated bool
+		name                  string
+		call                  llm.ToolCall
+		delta                 *transcript.ToolResultPresentationDelta
+		wantCommand           string
+		wantPatch             bool
+		wantRaw               bool
+		wantTruncated         bool
+		wantMovedToBackground bool
 	}{
 		{
 			name:        "shell command",
@@ -130,6 +131,13 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 			delta:         &transcript.ToolResultPresentationDelta{OutputTruncated: true},
 			wantCommand:   "cat large.log",
 			wantTruncated: true,
+		},
+		{
+			name:                  "backgrounded shell command",
+			call:                  llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23907", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"sleep 20"}`)},
+			delta:                 &transcript.ToolResultPresentationDelta{MovedToBackground: true},
+			wantCommand:           "sleep 20",
+			wantMovedToBackground: true,
 		},
 		{
 			name: "patch input",
@@ -179,6 +187,9 @@ func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
 			}
 			if result.Presentation.OutputTruncated != tt.wantTruncated {
 				t.Fatalf("output truncated = %t, want %t", result.Presentation.OutputTruncated, tt.wantTruncated)
+			}
+			if result.Presentation.MovedToBackground != tt.wantMovedToBackground {
+				t.Fatalf("backgrounded = %t, want %t", result.Presentation.MovedToBackground, tt.wantMovedToBackground)
 			}
 		})
 	}

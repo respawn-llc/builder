@@ -536,6 +536,9 @@ func TestExecCommandMovesToBackgroundAndPollsToCompletion(t *testing.T) {
 	if manager.Count() != 1 {
 		t.Fatalf("manager count = %d, want 1", manager.Count())
 	}
+	if result.PresentationDelta == nil || !result.PresentationDelta.MovedToBackground {
+		t.Fatalf("expected backgrounded presentation delta, got %+v", result.PresentationDelta)
+	}
 
 	pollResult := callWriteStdin(t, pollTool, "bg-2", map[string]any{
 		"session_id":    1000,

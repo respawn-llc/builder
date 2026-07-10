@@ -227,4 +227,5 @@ type ToolCallMeta struct {
 	OmitSuccessfulResult   bool
 	RawOutputRequested     bool
 	OutputTruncated        bool
+	MovedToBackground      bool
 }

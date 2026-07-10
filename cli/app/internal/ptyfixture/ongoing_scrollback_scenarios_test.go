@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
 )
 
@@ -307,7 +308,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedAnyAppends: []string{
 				"ℹ Background shell 1000 completed (exit 0)",
 			},
-			expectedScreenRows: []string{"$ sleep 2; echo $((51515150+1))"},
+			expectedScreenRows: []string{"$ sleep 2; echo $((51515150+1)) " + transcriptrender.BackgroundedShellSuffix},
 		},
 		{
 			name: "live_tool_promotion_and_input_dispositions",

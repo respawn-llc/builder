@@ -32,6 +32,9 @@ func renderToolRow(
 	meta.IsError = row.IsError
 	role := toolRole(meta)
 	display := toolDisplayText(row, meta, mode)
+	if role == StyleRoleToolShell && meta.MovedToBackground && !meta.IsError {
+		return []Line{RenderBackgroundedShell(display.Text, width)}
+	}
 	if isPatchTool(meta) {
 		return renderPatchTool(role, display.Text, display.InlineMeta, row.ResultSummary, meta.PatchRender, width, mode, meta, syntax)
 	}
@@ -86,6 +89,7 @@ func normalizeToolMeta(toolName string, in *clientui.ToolCallMeta) toolMeta {
 			OmitSuccessfulResult:   in.OmitSuccessfulResult,
 			RawOutputRequested:     in.RawOutputRequested,
 			OutputTruncated:        in.OutputTruncated,
+			MovedToBackground:      in.MovedToBackground,
 		}
 		if in.RenderHint != nil {
 			adapted.RenderHint = &transcript.ToolRenderHint{

@@ -273,6 +273,7 @@ func cloneToolCallMeta(meta *transcript.ToolCallMeta) *clientui.ToolCallMeta {
 		OmitSuccessfulResult:   meta.OmitSuccessfulResult,
 		RawOutputRequested:     meta.RawOutputRequested,
 		OutputTruncated:        meta.OutputTruncated,
+		MovedToBackground:      meta.MovedToBackground,
 	}
 	if len(meta.Suggestions) > 0 {
 		copyMeta.Suggestions = append([]string(nil), meta.Suggestions...)

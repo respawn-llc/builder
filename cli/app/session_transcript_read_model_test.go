@@ -322,14 +322,17 @@ func TestOngoingTranscriptControllerTracksPluralLiveSectionsByID(t *testing.T) {
 	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingPrompt), []string{"second prompt"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("prompt section lines = %v, want %v", got, want)
 	}
-	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionBackgroundActivity), []string{"second background · running"}; !reflect.DeepEqual(got, want) {
+	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionBackgroundActivity), []string{"$ second background • backgrounded"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("background section lines = %v, want %v", got, want)
 	}
 }
 
-func TestOngoingBackgroundActivityUsesCommandFirstFaintForeground(t *testing.T) {
+func TestOngoingBackgroundActivityKeepsBackgroundedSuffixAtNarrowWidth(t *testing.T) {
+	const width = 24
 	surface := &ongoingSurfaceSpy{}
-	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
+	controller := newOngoingTranscriptController(surface, func() ongoing.FrameInput {
+		return ongoing.FrameInput{Size: ongoing.Size{Width: width, Height: 24}}
+	})
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
@@ -348,13 +351,20 @@ func TestOngoingBackgroundActivityUsesCommandFirstFaintForeground(t *testing.T) 
 	}
 
 	lines := surface.lastFrameStyledSection(ongoing.FrameSectionBackgroundActivity)
-	if len(lines) != 1 || lines[0].Plain() != "sleep 2; echo result · running" {
+	if len(lines) != 1 || lines[0].Plain() != "$ sleep … • backgrounded" {
 		t.Fatalf("background activity lines = %+v", lines)
+	}
+	if lines[0].LeadingSymbol == nil {
+		t.Fatal("background activity line has no symbol")
+	}
+	if role, semantic := lines[0].LeadingSymbol.Style.Role(); !semantic ||
+		role != transcriptrender.StyleRoleToolShellSecondary {
+		t.Fatalf("background activity symbol = %+v, want secondary shell symbol", lines[0].LeadingSymbol)
 	}
 	for _, span := range lines[0].Spans {
 		role, semantic := span.Style.Role()
 		if !semantic ||
-			role != transcriptrender.StyleRoleNoticeForegroundFaint ||
+			(role != transcriptrender.StyleRoleToolShell && role != transcriptrender.StyleRoleNoticeForegroundFaint) ||
 			!span.Style.Has(transcriptrender.SpanAttributeFaint) {
 			t.Fatalf("background activity span = %+v, want faint foreground", span)
 		}

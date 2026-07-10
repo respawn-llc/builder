@@ -395,25 +395,6 @@ func goalStatusLines(goal *clientui.TranscriptGoalStatus) []string {
 	return joinFacts(compactNonEmptyStrings(goal.Objective, humanizeTranscriptFact(string(goal.Status))))
 }
 
-func backgroundActivityLines(activity *clientui.TranscriptBackgroundActivity) []string {
-	if activity == nil || activity.Removed {
-		return nil
-	}
-	command := strings.TrimSpace(activity.Command)
-	if command == "" {
-		command = strings.TrimSpace(activity.Preview)
-	}
-	return joinFacts(compactNonEmptyStrings(command, humanizeTranscriptFact(activity.State)))
-}
-
-func backgroundActivityListLines(activities []clientui.TranscriptBackgroundActivity) []string {
-	lines := make([]string, 0, len(activities))
-	for _, activity := range activities {
-		lines = append(lines, backgroundActivityLines(&activity)...)
-	}
-	return lines
-}
-
 func pendingPromptLines(prompt *clientui.TranscriptPendingSessionPrompt) []string {
 	if prompt == nil || prompt.State != clientui.TranscriptPromptPending {
 		return nil

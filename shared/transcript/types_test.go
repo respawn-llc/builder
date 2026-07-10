@@ -86,4 +86,10 @@ func TestToolCallMetaEqualIncludesShellOutputStatus(t *testing.T) {
 	if ToolCallMetaEqual(left, right) {
 		t.Fatal("expected truncation status to affect tool metadata equality")
 	}
+
+	right.OutputTruncated = false
+	right.MovedToBackground = true
+	if ToolCallMetaEqual(left, right) {
+		t.Fatal("expected backgrounded status to affect tool metadata equality")
+	}
 }
