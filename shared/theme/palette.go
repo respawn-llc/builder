@@ -45,7 +45,6 @@ type AppPalette struct {
 
 type TranscriptPalette struct {
 	Foreground           AdaptiveColor
-	Subdued              AdaptiveColor
 	SelectionBackground  AdaptiveColor
 	SelectionForeground  AdaptiveColor
 	User                 AdaptiveColor
@@ -89,7 +88,6 @@ type ResolvedAppPalette struct {
 
 type ResolvedTranscriptPalette struct {
 	Foreground           Color
-	Subdued              Color
 	SelectionBackground  Color
 	SelectionForeground  Color
 	User                 Color
@@ -145,7 +143,6 @@ func (p Palette) Resolve(themeName string) ResolvedPalette {
 		},
 		Transcript: ResolvedTranscriptPalette{
 			Foreground:           p.Transcript.Foreground.Resolve(resolvedTheme),
-			Subdued:              p.Transcript.Subdued.Resolve(resolvedTheme),
 			SelectionBackground:  p.Transcript.SelectionBackground.Resolve(resolvedTheme),
 			SelectionForeground:  p.Transcript.SelectionForeground.Resolve(resolvedTheme),
 			User:                 p.Transcript.User.Resolve(resolvedTheme),
@@ -213,10 +210,6 @@ var defaultPalette = Palette{
 		Foreground: AdaptiveColor{
 			Light: Color{ANSI: "0", ANSI256: "235", TrueColor: "#12100E"},
 			Dark:  Color{ANSI: "7", ANSI256: "231", TrueColor: "#FFFFFF"},
-		},
-		Subdued: AdaptiveColor{
-			Light: Color{ANSI: "8", ANSI256: "243", TrueColor: "#5A5651"},
-			Dark:  Color{ANSI: "8", ANSI256: "103", TrueColor: "#8F97A1"},
 		},
 		SelectionBackground: AdaptiveColor{
 			Light: Color{ANSI: "4", ANSI256: "111", TrueColor: "#D0E2FF"},

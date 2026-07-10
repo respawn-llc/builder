@@ -261,6 +261,7 @@ func roleDefaultFaint(role StyleRole) bool {
 		StyleRoleToolShellError,
 		StyleRoleToolQuestion,
 		StyleRoleToolWebSearch,
+		StyleRoleNotice,
 		StyleRoleNoticeForegroundFaint:
 		return true
 	default:

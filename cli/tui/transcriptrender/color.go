@@ -25,8 +25,6 @@ func ColorForRole(role ColorRole, themeName string) theme.Color {
 		return tokens.Transcript.Warning
 	case ColorRoleError:
 		return tokens.Transcript.Error
-	case ColorRoleSubdued:
-		return tokens.Transcript.Subdued
 	default:
 		return tokens.Transcript.Tool
 	}

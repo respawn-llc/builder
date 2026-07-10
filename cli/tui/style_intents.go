@@ -11,7 +11,6 @@ type StyleIntent uint16
 
 const (
 	ThemeForeground StyleIntent = 1 << iota
-	Subdued
 	PrimaryForeground
 	SuccessForeground
 	WarningForeground
@@ -34,8 +33,6 @@ func ApplyThemeStyleIntents(text, themeName string, intents StyleIntent) string 
 	palette := theme.ResolvePalette(themeName)
 	style := lipgloss.NewStyle()
 	switch {
-	case intents.Has(Subdued):
-		style = style.Foreground(palette.Transcript.Subdued.Lipgloss()).Faint(true)
 	case intents.Has(PrimaryForeground):
 		style = style.Foreground(palette.App.Primary.Lipgloss())
 	case intents.Has(SuccessForeground):

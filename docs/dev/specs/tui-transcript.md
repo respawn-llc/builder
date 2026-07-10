@@ -121,11 +121,12 @@
 
 - Transcript rendering stages are ordered: content render, low-level semantic transform, wrap, line layout, final decoration.
 - Formatter config owns syntax backgrounds and formatter base foreground.
-- Transcript rendering owns role styling, subdued shell preview styling, and diff semantics.
+- Transcript rendering owns role styling, faint shell preview styling, and diff semantics.
 - Layout owns prefixes, indentation, and wrapping only.
 - Semantic color tokens are centralized in `shared/theme`.
 - Syntax-highlighted output must not emit backgrounds unless explicitly intended, such as diff add/remove decoration.
 - Formatted text uses app foreground as base text color.
+- Faint text always uses the transcript foreground token plus the terminal faint attribute; there is no separate subdued/gray transcript foreground token.
 - User and assistant rows use compact text in ongoing mode and collapsed detail, full text in expanded detail, and foreground text plus Markdown styling.
 - Shell tool calls use shell syntax-highlighted foreground text, faint styling, and OS-dependent shell syntax selection.
 - Non-shell tool calls use foreground text, no syntax highlighting, and faint styling.

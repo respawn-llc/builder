@@ -26,7 +26,7 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 		{name: "model", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &clientui.TranscriptAssistantRow{Text: "answer"}}, want: "❮ answer", wantRole: StyleRoleAssistant, wantColor: ColorRoleForeground},
 		{name: "warning", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeWarning, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "⚠ neutral notice", wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
 		{name: "error", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeError, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "! neutral notice", wantRole: StyleRoleError, wantColor: ColorRoleError},
-		{name: "notice", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeInfo, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "ℹ neutral notice", wantRole: StyleRoleNotice, wantColor: ColorRoleSubdued},
+		{name: "notice", row: clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Severity: clientui.TranscriptNoticeInfo, Data: clientui.TranscriptNoticeData{LegacyText: &legacy}}}, want: "ℹ neutral notice", wantRole: StyleRoleNotice, wantColor: ColorRoleForeground},
 	}
 
 	for _, tt := range cases {
@@ -49,6 +49,40 @@ func TestRenderCommittedRowStyleMatrix(t *testing.T) {
 				t.Fatalf("style role color = %v, want %v", got, tt.wantColor)
 			}
 		})
+	}
+}
+
+func TestFaintRowsUseBaseForegroundWithTerminalFaintAttribute(t *testing.T) {
+	legacy := "neutral notice"
+	notice := RenderCommittedRow(clientui.TranscriptCommittedRow{
+		Kind: clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{
+			Severity: clientui.TranscriptNoticeInfo,
+			Data:     clientui.TranscriptNoticeData{LegacyText: &legacy},
+		},
+	}, 80, "dark", ModeDetailCollapsed)
+	tool := RenderCommittedRow(toolRow("ask_question", clientui.ToolPresentationDefault, "question", false), 80, "dark", ModeDetailCollapsed)
+
+	for name, row := range map[string]Row{"notice": notice, "tool": tool} {
+		if len(row.Lines) != 1 {
+			t.Fatalf("%s row lines = %+v, want one line", name, row.Lines)
+		}
+		var body *Span
+		for index := range row.Lines[0].Spans {
+			if strings.TrimSpace(row.Lines[0].Spans[index].Text) != "" {
+				body = &row.Lines[0].Spans[index]
+				break
+			}
+		}
+		if body == nil {
+			t.Fatalf("%s row has no body span: %+v", name, row.Lines[0])
+		}
+		resolved := ResolveSpanStyle(*body, "dark")
+		if resolved.Foreground.Kind != ResolvedForegroundTheme ||
+			resolved.Foreground.Theme != ColorForRole(ColorRoleForeground, "dark") ||
+			!resolved.Faint {
+			t.Fatalf("%s faint body resolves to %+v, want base foreground with terminal faint", name, resolved)
+		}
 	}
 }
 
