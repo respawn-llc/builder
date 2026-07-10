@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"core/server/auth"
+	"core/server/llm"
+	"core/server/session"
 	"core/shared/config"
 )
 
@@ -26,34 +28,84 @@ func TestWriteOutputUsesPrivatePermissions(t *testing.T) {
 	}
 }
 
-func TestResolveProviderCapabilitiesUsesRuntimeBaseURLResolution(t *testing.T) {
-	caps, err := resolveProviderCapabilities(
+func TestResolveInspectionProviderCapabilitiesUsesRuntimeBaseURLResolution(t *testing.T) {
+	caps, forced, err := resolveInspectionProviderCapabilities(
 		auth.EmptyState(),
 		config.Settings{
 			Model:            "gpt-5.5",
 			ProviderOverride: "openai",
 			OpenAIBaseURL:    "https://example.invalid/v1",
 		},
+		nil,
 		"",
 	)
 	if err != nil {
-		t.Fatalf("resolveProviderCapabilities: %v", err)
+		t.Fatalf("resolveInspectionProviderCapabilities: %v", err)
+	}
+	if forced {
+		t.Fatal("runtime provider resolution unexpectedly forced a contract")
 	}
 	if got, want := caps.ProviderID, "openai-compatible"; got != want {
 		t.Fatalf("provider id = %q, want %q", got, want)
 	}
 }
 
-func TestResolveProviderCapabilitiesAcceptsProviderContractOverrides(t *testing.T) {
-	for _, providerID := range []string{"openai-compatible", "chatgpt-codex"} {
+func TestResolveInspectionProviderCapabilitiesAcceptsProviderContractOverrides(t *testing.T) {
+	for _, providerID := range []string{"openai", "openai-compatible", "chatgpt-codex"} {
 		t.Run(providerID, func(t *testing.T) {
-			caps, err := resolveProviderCapabilities(auth.EmptyState(), config.Settings{}, providerID)
+			caps, forced, err := resolveInspectionProviderCapabilities(auth.EmptyState(), config.Settings{OpenAIBaseURL: "https://example.invalid/v1"}, nil, providerID)
 			if err != nil {
-				t.Fatalf("resolveProviderCapabilities: %v", err)
+				t.Fatalf("resolveInspectionProviderCapabilities: %v", err)
+			}
+			if !forced {
+				t.Fatal("provider override did not force its capability contract")
 			}
 			if got := caps.ProviderID; got != providerID {
 				t.Fatalf("provider id = %q, want %q", got, providerID)
 			}
 		})
+	}
+}
+
+func TestResolveInspectionProviderCapabilitiesPrefersConfiguredContractOverLockedContract(t *testing.T) {
+	caps, forced, err := resolveInspectionProviderCapabilities(
+		auth.EmptyState(),
+		config.Settings{ProviderCapabilities: config.ProviderCapabilitiesOverride{ProviderID: "configured", SupportsResponsesAPI: true}},
+		&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{ProviderID: "locked"}},
+		"",
+	)
+	if err != nil {
+		t.Fatalf("resolveInspectionProviderCapabilities: %v", err)
+	}
+	if forced {
+		t.Fatal("configured contract unexpectedly forced an inspector override")
+	}
+	if got, want := caps.ProviderID, "configured"; got != want {
+		t.Fatalf("provider id = %q, want %q", got, want)
+	}
+}
+
+func TestResolveInspectionProviderCapabilitiesUsesLockedContract(t *testing.T) {
+	caps, forced, err := resolveInspectionProviderCapabilities(
+		auth.EmptyState(),
+		config.Settings{OpenAIBaseURL: "https://api.openai.com/v1"},
+		&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}},
+		"",
+	)
+	if err != nil {
+		t.Fatalf("resolveInspectionProviderCapabilities: %v", err)
+	}
+	if forced {
+		t.Fatal("locked contract unexpectedly forced an inspector override")
+	}
+	if got, want := caps.ProviderID, "openai-compatible"; got != want {
+		t.Fatalf("provider id = %q, want %q", got, want)
+	}
+}
+
+func TestValidateOpenAIResponsesInspectionProviderRejectsUnsupportedProvider(t *testing.T) {
+	err := validateOpenAIResponsesInspectionProvider(llm.ProviderCapabilities{ProviderID: "anthropic"})
+	if err == nil {
+		t.Fatal("expected unsupported provider error")
 	}
 }

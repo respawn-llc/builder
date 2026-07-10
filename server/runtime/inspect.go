@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"core/server/llm"
+	"github.com/google/uuid"
 )
 
 // PrepareInspectionRequest builds the provider-agnostic llm.Request for a session
@@ -17,8 +18,9 @@ import (
 // prepares before building the request. allowTools mirrors the production
 // tool-exposure behavior; pass false to produce a tool-less payload.
 func PrepareInspectionRequest(ctx context.Context, eng *Engine, allowTools bool) (llm.Request, error) {
-	if err := eng.ensureMetaContextForRequest(ctx, "inspect"); err != nil {
+	stepID := uuid.NewString()
+	if err := eng.ensureMetaContextForRequest(ctx, stepID); err != nil {
 		return llm.Request{}, err
 	}
-	return eng.buildRequest(ctx, "inspect", allowTools)
+	return eng.buildRequest(ctx, stepID, allowTools)
 }

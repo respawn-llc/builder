@@ -62,7 +62,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	root, err := resolvePersistenceRoot(*persistenceRoot)
+	root, err := config.ResolvePersistenceRoot(*persistenceRoot)
 	if err != nil {
 		fmt.Fprintf(stderr, "dumpmodelrequest: resolve persistence root: %v\n", err)
 		return 1
@@ -84,18 +84,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, outPath)
 	return 0
-}
-
-// resolvePersistenceRoot mirrors the production precedence: explicit flag,
-// KENT_PERSISTENCE_ROOT env, then the default ~/.kent.
-func resolvePersistenceRoot(flagValue string) (string, error) {
-	if trimmed := strings.TrimSpace(flagValue); trimmed != "" {
-		return config.NormalizePersistenceRoot(trimmed)
-	}
-	if env := strings.TrimSpace(os.Getenv(config.PersistenceRootEnvName)); env != "" {
-		return config.NormalizePersistenceRoot(env)
-	}
-	return config.NormalizePersistenceRoot(config.DefaultPersistence)
 }
 
 type capturedRequest struct {
@@ -152,13 +140,20 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		return capturedRequest{}, fmt.Errorf("load auth state: %w", err)
 	}
 
-	caps, err := resolveProviderCapabilities(authState, resolved.Settings, providerOverride)
+	caps, forceProviderContract, err := resolveInspectionProviderCapabilities(authState, resolved.Settings, meta.Locked, providerOverride)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve provider capabilities: %w", err)
+	}
+	if err := validateOpenAIResponsesInspectionProvider(caps); err != nil {
+		return capturedRequest{}, err
 	}
 	target, err := md.ResolveSessionExecutionTarget(ctx, sessionID)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve session execution target: %w", err)
+	}
+	var providerCapabilitiesOverride *llm.ProviderCapabilities
+	if forceProviderContract {
+		providerCapabilitiesOverride = &caps
 	}
 	wiring, err := runtimewire.NewRuntimeWiring(
 		store,
@@ -172,7 +167,7 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 			Client:                       inspectionCapabilityClient{capabilities: caps},
 			Headless:                     false,
 			Sources:                      resolved.Source.Sources,
-			ProviderCapabilitiesOverride: &caps,
+			ProviderCapabilitiesOverride: providerCapabilitiesOverride,
 			GlobalConfigDir:              persistenceRoot,
 		},
 	)
@@ -229,22 +224,29 @@ func loadSessionConfig(bootstrap launch.BootstrapPlan, persistenceRoot string) (
 	return config.Load(bootstrap.WorkspaceRoot, options)
 }
 
-func resolveProviderCapabilities(authState auth.State, active config.Settings, providerOverride string) (llm.ProviderCapabilities, error) {
-	switch strings.TrimSpace(providerOverride) {
-	case "":
-		return llm.ResolveRuntimeProviderCapabilities(authState, active)
-	case "openai-compatible", "chatgpt-codex":
-		caps, ok := llm.LookupProviderCapabilityContract(providerOverride)
+func resolveInspectionProviderCapabilities(authState auth.State, active config.Settings, locked *session.LockedContract, providerOverride string) (llm.ProviderCapabilities, bool, error) {
+	if requested := strings.TrimSpace(providerOverride); requested != "" {
+		caps, ok := llm.LookupProviderCapabilityContract(requested)
 		if !ok {
-			return llm.ProviderCapabilities{}, fmt.Errorf("unknown provider id %q", providerOverride)
+			return llm.ProviderCapabilities{}, false, fmt.Errorf("unsupported provider override %q", requested)
 		}
-		return caps, nil
-	default:
-		settings := active
-		settings.ProviderOverride = providerOverride
-		settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{}
-		return llm.ResolveRuntimeProviderCapabilities(authState, settings)
+		return caps, true, nil
 	}
+	if caps, ok := llm.ProviderCapabilitiesFromOverride(active.ProviderCapabilities); ok {
+		return caps, false, nil
+	}
+	if caps, ok := llm.ProviderCapabilitiesFromLocked(locked); ok {
+		return caps, false, nil
+	}
+	caps, err := llm.ResolveRuntimeProviderCapabilities(authState, active)
+	return caps, false, err
+}
+
+func validateOpenAIResponsesInspectionProvider(caps llm.ProviderCapabilities) error {
+	if !caps.SupportsResponsesAPI {
+		return fmt.Errorf("provider %q does not support OpenAI Responses payload inspection", caps.ProviderID)
+	}
+	return nil
 }
 
 func prettyPrint(raw json.RawMessage) (json.RawMessage, error) {

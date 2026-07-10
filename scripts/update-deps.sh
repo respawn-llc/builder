@@ -115,7 +115,7 @@ update_apps_deps() {
 	fi
 	require_cmd pnpm
 	echo "==> Updating desktop pnpm dependencies"
-	run_cmd pnpm --dir "$repo_root/apps" --recursive up --latest --lockfile-only
+	run_cmd pnpm --dir "$repo_root/apps" --recursive --include-workspace-root up --latest --lockfile-only
 	# The lint parser supports TypeScript 6 only. Desktop build/typecheck scripts
 	# invoke the stable TypeScript 7 alias explicitly.
 	run_cmd pnpm --dir "$repo_root/apps" --filter @app/desktop --filter @app/native-bridge add --save-dev "typescript@^6.0.3" --lockfile-only

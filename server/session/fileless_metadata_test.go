@@ -132,14 +132,18 @@ func TestFilelessEventPersistenceDoesNotAppendToEventLog(t *testing.T) {
 		t.Fatalf("seed event: %v", err)
 	}
 	eventsPath := filepath.Join(persisted.Dir(), eventsFile)
+	sessionPath := filepath.Join(persisted.Dir(), sessionFile)
 	before, err := os.ReadFile(eventsPath)
 	if err != nil {
 		t.Fatalf("read event log before inspection: %v", err)
 	}
+	metaBefore, err := os.ReadFile(sessionPath)
+	if err != nil {
+		t.Fatalf("read session metadata before inspection: %v", err)
+	}
 
 	inspection, err := Open(
 		persisted.Dir(),
-		WithFilelessMetadataPersistence(),
 		WithFilelessEventPersistence(),
 	)
 	if err != nil {
@@ -162,6 +166,13 @@ func TestFilelessEventPersistenceDoesNotAppendToEventLog(t *testing.T) {
 	}
 	if string(after) != string(before) {
 		t.Fatal("inspection appended to the durable event log")
+	}
+	metaAfter, err := os.ReadFile(sessionPath)
+	if err != nil {
+		t.Fatalf("read session metadata after inspection: %v", err)
+	}
+	if string(metaAfter) != string(metaBefore) {
+		t.Fatal("inspection advanced durable session metadata")
 	}
 }
 
