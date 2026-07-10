@@ -50,7 +50,9 @@ type ResponsesStub struct {
 	handlers         map[uint64]context.CancelFunc
 	nextHandle       uint64
 	stopping         bool
+	serveStopped     bool
 	done             chan struct{}
+	doneOnce         sync.Once
 	events           chan struct{}
 }
 
@@ -91,7 +93,10 @@ func StartResponsesStub(required []RequiredOperation) (*ResponsesStub, error) {
 		if err := stub.server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			stub.recordFailure(fmt.Errorf("serve Responses stub: %w", err))
 		}
-		close(stub.done)
+		stub.mu.Lock()
+		stub.serveStopped = true
+		stub.closeDoneLocked()
+		stub.mu.Unlock()
 	}()
 	return stub, nil
 }
@@ -240,10 +245,17 @@ func (s *ResponsesStub) beginHandler(parent context.Context) (context.Context, f
 		s.mu.Lock()
 		delete(s.handlers, handle)
 		s.active--
+		s.closeDoneLocked()
 		s.mu.Unlock()
 		cancel()
 		s.notify()
 	}, true
+}
+
+func (s *ResponsesStub) closeDoneLocked() {
+	if s.serveStopped && s.active == 0 {
+		s.doneOnce.Do(func() { close(s.done) })
+	}
 }
 
 func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (*RequiredOperation, error) {
