@@ -387,6 +387,57 @@ func TestSessionTranscriptFeedSequencerHydratesEngineQueuedTextInFIFOOrder(t *te
 	}
 }
 
+func TestQueuedMessageStateLedgerPreservesFIFOAcrossIdentityBridgeAndRemoval(t *testing.T) {
+	firstClientID := uuid.NewString()
+	secondClientID := uuid.NewString()
+	secondQueueID := uuid.NewString()
+	thirdClientID := uuid.NewString()
+	ledger := queuedMessageStateLedger{}
+
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		ClientRequestID: firstClientID,
+		Status:          clientui.QueuedUserMessageAccepted,
+		UserText:        "first",
+	})
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		ClientRequestID: secondClientID,
+		Status:          clientui.QueuedUserMessageAccepted,
+		UserText:        "second pending identity",
+	})
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		ClientRequestID: thirdClientID,
+		Status:          clientui.QueuedUserMessageAccepted,
+		UserText:        "third",
+	})
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		QueueItemID:     secondQueueID,
+		ClientRequestID: secondClientID,
+		Status:          clientui.QueuedUserMessageAccepted,
+		UserText:        "second authoritative identity",
+	})
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		ClientRequestID: firstClientID,
+		Status:          clientui.QueuedUserMessageDiscarded,
+	})
+
+	got := ledger.values()
+	if len(got) != 2 {
+		t.Fatalf("ledger values = %+v, want second and third", got)
+	}
+	if got[0].QueueItemID != secondQueueID || got[0].UserText != "second authoritative identity" || got[1].ClientRequestID != thirdClientID {
+		t.Fatalf("ledger values = %+v, want updated second followed by third", got)
+	}
+
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		QueueItemID: secondQueueID,
+		Status:      clientui.QueuedUserMessageDiscarded,
+	})
+	got = ledger.values()
+	if len(got) != 1 || got[0].ClientRequestID != thirdClientID {
+		t.Fatalf("ledger after authoritative removal = %+v, want third only", got)
+	}
+}
+
 func TestSessionTranscriptFeedPublishesUpdatedToolStartMetadataByCallID(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	engine := newRegistryTestRuntime(t, nil)

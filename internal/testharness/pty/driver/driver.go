@@ -41,6 +41,7 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 
 	var mu sync.Mutex
 	var eventWG sync.WaitGroup
+	var eventErrors concurrentErrors
 	chunks := make([]analyzer.Chunk, 0)
 	resizes := make([]analyzer.ResizeEvent, 0, len(spec.Resizes))
 	phaseInputs := newPhaseInputDispatcher(spec.PhaseInputs)
@@ -57,7 +58,13 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 				copied := append([]analyzer.Chunk(nil), chunks...)
 				copiedResizes := append([]analyzer.ResizeEvent(nil), resizes...)
 				mu.Unlock()
-				for _, input := range phaseInputs.pending(copied, spec.Dimensions, copiedResizes) {
+				pendingPhaseInputs, dispatchErr := phaseInputs.pending(copied, spec.Dimensions, copiedResizes)
+				if dispatchErr != nil {
+					eventErrors.Add(fmt.Errorf("resolve phase-relative PTY input: %w", dispatchErr))
+					cancel()
+					return
+				}
+				for _, input := range pendingPhaseInputs {
 					input := input
 					eventWG.Add(1)
 					go func() {
@@ -66,19 +73,34 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 						defer timer.Stop()
 						select {
 						case <-timer.C:
-							_, _ = ptmx.Write(input.Bytes)
+							if err := writeFull(ptmx, input.Bytes); err != nil {
+								eventErrors.Add(fmt.Errorf("write phase-relative PTY input for phase=%d: %w", input.Phase, err))
+								cancel()
+							}
 						case <-ctx.Done():
 						}
 					}()
 				}
-				for _, payload := range parseableInputs.pending(copied, spec.Dimensions, copiedResizes) {
-					_, _ = ptmx.Write(payload)
+				pendingParseableInputs, dispatchErr := parseableInputs.pending(copied, spec.Dimensions, copiedResizes)
+				if dispatchErr != nil {
+					eventErrors.Add(fmt.Errorf("resolve parseable PTY input: %w", dispatchErr))
+					cancel()
+					return
+				}
+				for _, payload := range pendingParseableInputs {
+					if err := writeFull(ptmx, payload); err != nil {
+						eventErrors.Add(fmt.Errorf("write parseable PTY input: %w", err))
+						cancel()
+						return
+					}
 				}
 			}
 			if err != nil {
-				if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
+				if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) || errors.Is(err, syscall.EIO) {
 					return
 				}
+				eventErrors.Add(fmt.Errorf("read PTY output: %w", err))
+				cancel()
 				return
 			}
 		}
@@ -93,7 +115,11 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			defer timer.Stop()
 			select {
 			case <-timer.C:
-				_ = creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(resize.Dimensions.Rows), Cols: uint16(resize.Dimensions.Cols)})
+				if err := creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(resize.Dimensions.Rows), Cols: uint16(resize.Dimensions.Cols)}); err != nil {
+					eventErrors.Add(fmt.Errorf("resize PTY to dimensions=%+v: %w", resize.Dimensions, err))
+					cancel()
+					return
+				}
 				mu.Lock()
 				placement := analyzer.BeforeFirstChunk()
 				if len(chunks) > 0 {
@@ -114,7 +140,10 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			defer timer.Stop()
 			select {
 			case <-timer.C:
-				_, _ = ptmx.Write(input.Bytes)
+				if err := writeFull(ptmx, input.Bytes); err != nil {
+					eventErrors.Add(fmt.Errorf("write scheduled PTY input: %w", err))
+					cancel()
+				}
 			case <-ctx.Done():
 			}
 		}()
@@ -153,8 +182,12 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	}
 	capture.ProcessExit = processExit(cmd.ProcessState)
 	capture.ReadLoopDone = true
+	eventErr := eventErrors.Err()
 	if timeout {
-		return capture, &TimeoutError{Command: spec.Path, Elapsed: time.Since(started)}
+		return capture, errors.Join(&TimeoutError{Command: spec.Path, Elapsed: time.Since(started)}, eventErr)
+	}
+	if eventErr != nil {
+		return capture, eventErr
 	}
 	if waitErr != nil {
 		return capture, fmt.Errorf("pty command exited with error path=%s args=%v: %w", spec.Path, spec.Args, waitErr)
@@ -171,17 +204,17 @@ func newPhaseInputDispatcher(events []PhaseInputEvent) *phaseInputDispatcher {
 	return &phaseInputDispatcher{events: append([]PhaseInputEvent(nil), events...), triggered: make([]bool, len(events))}
 }
 
-func (d *phaseInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analyzer.Dimensions, resizes []analyzer.ResizeEvent) []PhaseInputEvent {
+func (d *phaseInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analyzer.Dimensions, resizes []analyzer.ResizeEvent) ([]PhaseInputEvent, error) {
 	if d == nil || len(d.events) == 0 || len(chunks) == 0 {
-		return nil
+		return nil, nil
 	}
 	capture, err := analyzer.NewCaptureWithEvents(dimensions, chunks, resizes)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	analysis, err := analyzer.Analyze(capture)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	out := make([]PhaseInputEvent, 0)
 	for _, phase := range analysis.PhaseEvents {
@@ -195,7 +228,7 @@ func (d *phaseInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analy
 			out = append(out, copyEvent)
 		}
 	}
-	return out
+	return out, nil
 }
 
 type parseableInputDispatcher struct {
@@ -207,19 +240,19 @@ func newParseableInputDispatcher(events []ParseableInputEvent) *parseableInputDi
 	return &parseableInputDispatcher{events: append([]ParseableInputEvent(nil), events...), triggered: make([]bool, len(events))}
 }
 
-func (d *parseableInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analyzer.Dimensions, resizes []analyzer.ResizeEvent) [][]byte {
+func (d *parseableInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analyzer.Dimensions, resizes []analyzer.ResizeEvent) ([][]byte, error) {
 	if d == nil || len(d.events) == 0 || len(chunks) == 0 {
-		return nil
+		return nil, nil
 	}
 	capture, err := analyzer.NewCaptureWithEvents(dimensions, chunks, resizes)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	if len(capture.Raw) == 0 {
-		return nil
+		return nil, nil
 	}
 	if _, err := analyzer.Analyze(capture); err != nil {
-		return nil
+		return nil, err
 	}
 	out := make([][]byte, 0)
 	for i, event := range d.events {
@@ -229,7 +262,38 @@ func (d *parseableInputDispatcher) pending(chunks []analyzer.Chunk, dimensions a
 		d.triggered[i] = true
 		out = append(out, append([]byte(nil), event.Bytes...))
 	}
-	return out
+	return out, nil
+}
+
+type concurrentErrors struct {
+	mu     sync.Mutex
+	values []error
+}
+
+func (e *concurrentErrors) Add(err error) {
+	if err == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.values = append(e.values, err)
+}
+
+func (e *concurrentErrors) Err() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return errors.Join(e.values...)
+}
+
+func writeFull(writer io.Writer, payload []byte) error {
+	written, err := writer.Write(payload)
+	if err != nil {
+		return err
+	}
+	if written != len(payload) {
+		return fmt.Errorf("short PTY write: wrote=%d expected=%d: %w", written, len(payload), io.ErrShortWrite)
+	}
+	return nil
 }
 
 func processExit(state *os.ProcessState) *analyzer.ProcessExit {

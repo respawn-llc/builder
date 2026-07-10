@@ -143,7 +143,7 @@ func TestTranscriptBackgroundActivityUsesRuntimeActivityID(t *testing.T) {
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind: runtime.EventBackgroundUpdated,
 		Background: &runtime.BackgroundShellEvent{
-			ID:         "1000",
+			ID:         uuid.NewString(),
 			ActivityID: activityID,
 			State:      "running",
 			Preview:    "tests",
@@ -174,7 +174,7 @@ func TestTranscriptBackgroundActivityRemovalFollowsLifecycleNotPreviewTruncation
 				Kind: runtime.EventBackgroundUpdated,
 				Background: &runtime.BackgroundShellEvent{
 					Type:           tt.eventType,
-					ID:             "1000",
+					ID:             uuid.NewString(),
 					ActivityID:     uuid.New(),
 					State:          string(tt.eventType),
 					Command:        "sleep 2",
@@ -223,7 +223,7 @@ func TestTranscriptBackgroundActivityRejectsMissingRuntimeActivityID(t *testing.
 	_ = TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind: runtime.EventBackgroundUpdated,
 		Background: &runtime.BackgroundShellEvent{
-			ID:      "1000",
+			ID:      uuid.NewString(),
 			State:   "running",
 			Preview: "tests",
 		},

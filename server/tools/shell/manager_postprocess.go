@@ -10,6 +10,7 @@ import (
 
 	"core/server/tools/shell/postprocess"
 	"core/shared/toolspec"
+	"core/shared/valuecopy"
 )
 
 // ErrOutputLogExceedsFullReadLimit is returned when a captured output log is
@@ -26,7 +27,7 @@ func (m *Manager) applyPostprocessing(ctx context.Context, entry *processEntry, 
 		CommandText:     entry.command,
 		Workdir:         entry.workdir,
 		OwnerSessionID:  entry.ownerSessionID,
-		ExitCode:        postprocess.CloneIntPtr(exitCode),
+		ExitCode:        valuecopy.Pointer(exitCode),
 		Raw:             entry.raw,
 		Output:          output,
 		MaxDisplayChars: maxOutputChars,

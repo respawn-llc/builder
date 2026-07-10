@@ -13,6 +13,7 @@ import (
 
 	"core/server/tools"
 	"core/shared/toolspec"
+	"core/shared/valuecopy"
 )
 
 const (
@@ -60,7 +61,7 @@ func (p userHookProcessor) Process(ctx context.Context, envelope Envelope) (Deci
 		Workdir:         req.Workdir,
 		OriginalOutput:  envelope.OriginalOutput,
 		CurrentOutput:   envelope.CurrentOutput,
-		ExitCode:        CloneIntPtr(req.ExitCode),
+		ExitCode:        valuecopy.Pointer(req.ExitCode),
 		Backgrounded:    req.Backgrounded,
 		MaxDisplayChars: req.MaxDisplayChars,
 	})
@@ -141,12 +142,4 @@ func hookFailureWarning(err error, stderr string) string {
 		return fmt.Sprintf("command postprocess hook failed: %v", err)
 	}
 	return fmt.Sprintf("command postprocess hook failed: %v: %s", err, trimmed)
-}
-
-func CloneIntPtr(in *int) *int {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	return &out
 }

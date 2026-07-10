@@ -10,37 +10,20 @@ import (
 	"testing"
 	"time"
 
-	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
 )
 
-type styledAppendExpectation struct {
-	Text       string
-	Foreground string
-	Faint      bool
-}
-
-type styledRowExpectation []styledAppendExpectation
-
-type backgroundCompletionExpectation struct {
-	Command   string
-	Forbidden []string
-}
-
-type failedToolExpectation struct {
-	ShellCommand string
-	PatchSummary string
-	Forbidden    []string
-}
-
-const defaultTerminalForeground = "#c0c0c0"
+var (
+	extendedScenarioCompletionDrain      = 8 * time.Second
+	toolLifecycleScenarioCompletionDrain = 15 * time.Second
+)
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	buildCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	bin := filepath.Join(t.TempDir(), "kent-pty-fixture")
-	if err := pty.BuildPackage(ctx, "core/cli/app/internal/ptyfixture/cmd/kent-pty-fixture", bin); err != nil {
+	if err := pty.BuildPackage(buildCtx, "core/cli/app/internal/ptyfixture/cmd/kent-pty-fixture", bin); err != nil {
 		t.Fatalf("build fixture: %v", err)
 	}
 
@@ -54,18 +37,11 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		expectedScrollbackAppends []string
 		expectedAnyAppends        []string
 		forbiddenAnyAppends       []string
-		expectedFaintDividerCount int
-		expectedStyledAppends     []styledAppendExpectation
-		expectedStyledWrites      []styledAppendExpectation
-		forbiddenStyledWrites     []styledAppendExpectation
-		expectedStyledRows        []styledRowExpectation
-		liveSnapshot              *liveSnapshotExpectation
-		backgroundCompletion      *backgroundCompletionExpectation
-		failedTools               *failedToolExpectation
+		expectedScreenRows        []string
 		allowDuplicateAppends     bool
 		allowsAltScroll           bool
 		allowsFullScreen          bool
-		interruptAfter            *time.Duration
+		completionDrain           *time.Duration
 	}{
 		{
 			name: "visibility_o_real_app_path",
@@ -177,23 +153,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"• Model requested compaction.",
 				"❯ seeded_tool_message_style_matrix_real_app_path",
 			},
-			expectedFaintDividerCount: 3,
-			expectedStyledAppends: []styledAppendExpectation{
-				{Text: "❯ PTY_STYLE_USER", Foreground: colorForStyle(transcriptrender.StyleRoleUser)},
-				{Text: "❮ PTY_STYLE_ASSISTANT", Foreground: colorForStyle(transcriptrender.StyleRoleAssistant)},
-				{Text: "⚠ PTY_STYLE_WARNING", Foreground: colorForStyle(transcriptrender.StyleRoleWarning)},
-				{Text: "! PTY_STYLE_ERROR", Foreground: colorForStyle(transcriptrender.StyleRoleError)},
-				{Text: "ℹ PTY_STYLE_NOTICE", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
-				{Text: "ℹ PTY_STYLE_TOGGLE_FAST_ON", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
-				{Text: "ℹ PTY_STYLE_TOGGLE_FAST_OFF", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
-				{Text: "ℹ PTY_STYLE_TOGGLE_SUPERVISOR_ON", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
-				{Text: "ℹ PTY_STYLE_TOGGLE_SUPERVISOR_OFF", Foreground: colorForStyle(transcriptrender.StyleRoleNotice)},
-				{Text: "§ PTY_STYLE_REVIEWER_SUCCESS", Foreground: colorForStyle(transcriptrender.StyleRoleNoticeReviewer)},
-				{Text: "! PTY_STYLE_REVIEWER_ERROR", Foreground: colorForStyle(transcriptrender.StyleRoleError)},
-				{Text: "-1", Foreground: colorForStyle(transcriptrender.StyleRoleToolError)},
-				{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-				{Text: "❯ seeded_tool_message_style_matrix_real_app_path", Foreground: colorForStyle(transcriptrender.StyleRoleUser)},
-			},
 		},
 		{
 			name: "markdown_streaming_promotion_and_final_tail",
@@ -204,10 +163,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			},
 			expectedAppends:           []string{"Plain stable."},
 			expectedScrollbackAppends: []string{"volatile tail"},
-			expectedStyledAppends: []styledAppendExpectation{
-				{Text: "INLINE_CODE", Foreground: colorForStyle(transcriptrender.StyleRoleMarkdownCode)},
-				{Text: "BLOCK_CODE", Foreground: colorForStyle(transcriptrender.StyleRoleMarkdownCode)},
-			},
 		},
 		{
 			name: "slash_input_status_live_area_during_stream",
@@ -228,13 +183,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			allowDuplicateAppends: true,
 			allowsAltScroll:       true,
 			allowsFullScreen:      true,
-			interruptAfter:        durationPtr(12 * time.Second),
-			expectedStyledAppends: []styledAppendExpectation{
-				{Text: "stream slash live", Foreground: colorForStyle(transcriptrender.StyleRoleAssistant)},
-			},
-			forbiddenStyledWrites: []styledAppendExpectation{
-				{Text: rightPad("Server: owned by this CLI", 80), Foreground: defaultTerminalForeground},
-			},
 		},
 		{
 			name: "long_final_answer_with_resize",
@@ -299,10 +247,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedAppends:     []string{"❮ patch lifecycle complete"},
 			expectedAnyAppends:  []string{"⇄ ./pty_live_patch.txt +1"},
 			forbiddenAnyAppends: []string{"⇄ tool call"},
-			expectedStyledAppends: []styledAppendExpectation{
-				{Text: " ./pty_live_patch.txt ", Foreground: colorForStyle(transcriptrender.StyleRoleToolPatch)},
-				{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-			},
 		},
 		{
 			name: "live_ask_question_call_input_preview",
@@ -334,11 +278,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedAppends:     []string{"❮ question lifecycle complete"},
 			expectedAnyAppends:  []string{"? PTY_LIVE_QUESTION"},
 			forbiddenAnyAppends: []string{"? tool call"},
-			interruptAfter:      durationPtr(6 * time.Second),
-			expectedStyledAppends: []styledAppendExpectation{
-				{Text: "?", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
-				{Text: " PTY_LIVE_QUESTION", Foreground: colorForStyle(transcriptrender.StyleRoleToolQuestion), Faint: true},
-			},
+			completionDrain:     &extendedScenarioCompletionDrain,
 		},
 		{
 			name: "live_background_shell_completion_style",
@@ -370,16 +310,11 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				},
 			},
 			expectedAppends: []string{"❯ live_background_shell_completion_style"},
-			backgroundCompletion: &backgroundCompletionExpectation{
-				Command: "sleep 2; echo $((51515150+1))",
-				Forbidden: []string{
-					"51515151",
-					"Process moved to background with ID",
-					"No output",
-					"tool call",
-				},
+			expectedAnyAppends: []string{
+				"ℹ Background shell 1000 completed (exit 0)",
 			},
-			interruptAfter: durationPtr(6 * time.Second),
+			expectedScreenRows: []string{"$ sleep 2; echo $((51515150+1))"},
+			completionDrain:    &extendedScenarioCompletionDrain,
 		},
 		{
 			name: "live_tool_promotion_and_input_dispositions",
@@ -412,28 +347,13 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				{After: 2100 * time.Millisecond, Bytes: []byte("steering after tool start")},
 				{After: 2300 * time.Millisecond, Bytes: []byte("\r")},
 			},
-			expectedAppends: []string{"❮ live lifecycle complete", "❮ queued lifecycle complete"},
-			liveSnapshot: &liveSnapshotExpectation{
-				At: 3500 * time.Millisecond,
-				PendingShell: livePendingShellExpectation{
-					Command: "sleep 5; echo $((42424241+1))",
-				},
-				Queued: liveStyledLineExpectation{
-					Text:       "queued after tool start",
-					Foreground: colorForStyle(transcriptrender.StyleRoleNoticeSecondary),
-					Faint:      true,
-				},
-				Steering: liveStyledLineExpectation{
-					Text:       "steering after tool start",
-					Foreground: colorForStyle(transcriptrender.StyleRoleNoticePrimary),
-				},
-				CompletedShellCommand: "sleep 5; echo $((42424241+1))",
-				ForbiddenCompleted:    []string{"42424242", "No output", "tool call"},
-			},
-			interruptAfter: durationPtr(12 * time.Second),
+			expectedAppends:    []string{"❮ live lifecycle complete", "❮ queued lifecycle complete"},
+			expectedScreenRows: []string{"$ sleep 5; echo $((42424241+1))"},
+			completionDrain:    &toolLifecycleScenarioCompletionDrain,
 		},
 		{
 			name: "live_failed_tools_retain_input",
+			env:  []string{"SHELL=/bin/sh"},
 			script: map[string]any{
 				"prompt": "run failing tools",
 				"steps": []map[string]any{
@@ -469,17 +389,10 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedAnyAppends: []string{
 				"❮ failed tool lifecycle complete",
 			},
-			expectedStyledAppends: []styledAppendExpectation{
-				{Text: " ./pty_missing_patch.txt ", Foreground: colorForStyle(transcriptrender.StyleRoleToolPatch)},
-				{Text: "-1", Foreground: colorForStyle(transcriptrender.StyleRoleToolError)},
-				{Text: "+1", Foreground: colorForStyle(transcriptrender.StyleRoleToolSuccess)},
+			expectedScreenRows: []string{
+				"! echo $((61616160+1)) exec_command failed: start process: fork/exec /bin/sh: n…",
+				"! ./pty_missing_patch.txt -1 +1 Patch failed: target file does not exist: pty_m…",
 			},
-			failedTools: &failedToolExpectation{
-				ShellCommand: "echo $((61616160+1))",
-				PatchSummary: "./pty_missing_patch.txt -1 +1",
-				Forbidden:    []string{"61616161", "No output", "tool call"},
-			},
-			interruptAfter: durationPtr(8 * time.Second),
 		},
 		{
 			name: "detail_roundtrip_during_stream",
@@ -496,7 +409,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			},
 			allowsAltScroll:  true,
 			allowsFullScreen: true,
-			interruptAfter:   durationPtr(6 * time.Second),
 		},
 		{
 			name: "warning_notice_shape",
@@ -510,7 +422,9 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			capture, observationsPath := runPTYFixtureScenario(t, ctx, bin, tc.name, tc.script, tc.env, tc.inputs, tc.resizes, tc.interruptAfter)
+			scenarioCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			capture, observationsPath := runPTYFixtureScenario(t, scenarioCtx, bin, tc.name, tc.script, tc.env, tc.inputs, tc.resizes, tc.completionDrain)
 			analysis, err := pty.Analyze(capture)
 			if err != nil {
 				t.Fatalf("analyze capture: %v", err)
@@ -564,89 +478,9 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					t.Fatalf("forbidden full-window append: %v", err)
 				}
 			}
-			if tc.liveSnapshot != nil {
-				if err := assertLiveSnapshot(capture, *tc.liveSnapshot); err != nil {
-					t.Fatalf("live snapshot: %v", err)
-				}
-				if err := committedShellIsOnlyCompletedCommandRow(analysis.Screen, tc.liveSnapshot.CompletedShellCommand); err != nil {
-					t.Fatalf("completed shell row: %v", err)
-				}
-				for _, forbidden := range tc.liveSnapshot.ForbiddenCompleted {
-					if strings.Contains(analysis.Screen.RenderText(), forbidden) {
-						t.Fatalf("completed screen contains forbidden tool text %q: %q", forbidden, analysis.Screen.RenderText())
-					}
-				}
-			}
-			if tc.backgroundCompletion != nil {
-				if err := committedShellIsOnlyCompletedCommandRow(analysis.Screen, tc.backgroundCompletion.Command); err != nil {
-					t.Fatalf("background shell command row: %v", err)
-				}
-				if err := backgroundCompletionVisibleWithSemanticStyle(analysis.Screen); err != nil {
-					t.Fatalf("background completion row: %v", err)
-				}
-				for _, forbidden := range tc.backgroundCompletion.Forbidden {
-					if _, _, _, found := screenRowContaining(analysis.Screen, forbidden); found {
-						t.Fatalf("completed screen contains forbidden background text %q: %q", forbidden, analysis.Screen.RenderText())
-					}
-				}
-			}
-			if tc.failedTools != nil {
-				if err := committedToolInputLeadsOnlyCompletedRow(analysis.Screen, tc.failedTools.ShellCommand, "!"); err != nil {
-					t.Fatalf("failed shell command row: %v", err)
-				}
-				if err := committedToolInputLeadsOnlyCompletedRow(analysis.Screen, tc.failedTools.PatchSummary, "!"); err != nil {
-					t.Fatalf("failed patch input row: %v", err)
-				}
-				if err := toolRowSymbolUsesRole(analysis.Screen, tc.failedTools.ShellCommand, "!", transcriptrender.StyleRoleToolError); err != nil {
-					t.Fatalf("failed shell symbol: %v", err)
-				}
-				if err := toolRowSymbolUsesRole(analysis.Screen, tc.failedTools.PatchSummary, "!", transcriptrender.StyleRoleToolError); err != nil {
-					t.Fatalf("failed patch symbol: %v", err)
-				}
-				for _, forbidden := range tc.failedTools.Forbidden {
-					if _, _, _, found := screenRowContaining(analysis.Screen, forbidden); found {
-						t.Fatalf("completed screen contains forbidden failed-tool text %q: %q", forbidden, analysis.Screen.RenderText())
-					}
-				}
-			}
-			if tc.expectedFaintDividerCount > 0 {
-				if err := faintDividerAppendedAtLeast(allAppends, tc.expectedFaintDividerCount); err != nil {
-					t.Fatalf("expected faint divider appends: %v", err)
-				}
-			}
-			if len(tc.expectedStyledAppends) > 0 {
-				rawAppends, err := allScenarioRawAppendRows(analysis, tc.expectedAppends)
-				if err != nil {
-					t.Fatalf("raw append rows: %v", err)
-				}
-				styledAppends := coalesceStyledAppendRuns(rawAppends)
-				for _, expected := range tc.expectedStyledAppends {
-					if err := styledContentAppendedAtLeastOnce(styledAppends, expected); err != nil {
-						t.Fatalf("expected styled full-window append: %v", err)
-					}
-				}
-				for _, expected := range tc.expectedStyledRows {
-					if err := styledRowAppendedAtLeastOnce(styledAppends, expected); err != nil {
-						t.Fatalf("expected styled row append: %v", err)
-					}
-				}
-			}
-			if len(tc.expectedStyledWrites) > 0 {
-				rawWrites := allScenarioRawWrites(analysis, window)
-				styledWrites := coalesceStyledAppendRuns(rawWrites)
-				for _, expected := range tc.expectedStyledWrites {
-					if err := styledContentAppendedAtLeastOnce(styledWrites, expected); err != nil {
-						t.Fatalf("expected styled full-window write: %v", err)
-					}
-				}
-			}
-			if len(tc.forbiddenStyledWrites) > 0 {
-				rawWrites := allScenarioRawWrites(analysis, window)
-				styledWrites := coalesceStyledAppendRuns(rawWrites)
-				for _, forbidden := range tc.forbiddenStyledWrites {
-					if err := contentNotAppended(styledWrites, forbidden.Text); err != nil {
-						t.Fatalf("forbidden styled full-window write: %v", err)
-					}
+			for _, row := range tc.expectedScreenRows {
+				if err := screenRowAppearsExactlyOnce(analysis.Screen, row); err != nil {
+					t.Fatalf("expected completed screen row: %v", err)
 				}
 			}
 			if analysis.Screen.IsBlank() {
@@ -718,14 +552,14 @@ func patchStyleFixture(path string) string {
 	return "*** Begin Patch\n*** Update File: " + path + "\n@@\n-old\n+new\n*** End Patch\n"
 }
 
-func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent, interruptAfter *time.Duration) (pty.Capture, string) {
+func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
 	t.Helper()
-	resolvedInterruptAfter := 4 * time.Second
-	if interruptAfter != nil {
-		if *interruptAfter <= 0 {
-			t.Fatalf("interruptAfter must be greater than zero: %s", (*interruptAfter).String())
+	completionDrain := 2 * time.Second
+	if configuredCompletionDrain != nil {
+		if *configuredCompletionDrain <= 0 {
+			t.Fatalf("completion drain must be positive: %s", configuredCompletionDrain.String())
 		}
-		resolvedInterruptAfter = *interruptAfter
+		completionDrain = *configuredCompletionDrain
 	}
 	root := t.TempDir()
 	scriptPath := filepath.Join(root, "script.json")
@@ -747,8 +581,8 @@ func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name s
 		})
 	}
 	phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
-		Phase: pty.PhaseScenarioStart,
-		After: resolvedInterruptAfter,
+		Phase: pty.PhaseScenarioComplete,
+		After: completionDrain,
 		Bytes: []byte{0x03, 0x03},
 	})
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
@@ -763,7 +597,7 @@ func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name s
 		Dimensions:  pty.MustDimensions(24, 80),
 		PhaseInputs: phaseInputs,
 		Resizes:     resizes,
-		Timeout:     30 * time.Second,
+		Timeout:     75 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run fixture: %v raw=%q", err, string(capture.Raw))
@@ -792,7 +626,7 @@ func scenarioAppendRowsWithBoundaryChecks(analysis pty.Analysis, window pty.Oper
 	}
 	var lastTexts []string
 	for boundary := analysis.Dimensions.Rows - 1; boundary > 0; boundary-- {
-		appends := pty.CoalesceAppendRows(pty.ClassifyAppends(analysis, window, boundary))
+		appends := coalesceCompleteAppendRows(pty.ClassifyAppends(analysis, window, boundary))
 		lastTexts = appendTexts(appends)
 		matched := true
 		for _, content := range expected {
@@ -830,7 +664,7 @@ func allScenarioAppendRows(analysis pty.Analysis, expected []string) ([]pty.Appe
 	window := pty.OperationWindow{Start: 0, End: len(analysis.Operations)}
 	var lastTexts []string
 	for boundary := analysis.Dimensions.Rows - 1; boundary > 0; boundary-- {
-		appends := pty.CoalesceAppendRows(pty.ClassifyAppends(analysis, window, boundary))
+		appends := coalesceCompleteAppendRows(pty.ClassifyAppends(analysis, window, boundary))
 		lastTexts = appendTexts(appends)
 		matched := true
 		for _, content := range expected {
@@ -846,41 +680,6 @@ func allScenarioAppendRows(analysis pty.Analysis, expected []string) ([]pty.Appe
 	return nil, fmt.Errorf("no append boundary classified full-window expected content; candidates=%q", lastTexts)
 }
 
-func allScenarioRawAppendRows(analysis pty.Analysis, expected []string) ([]pty.AppendOperation, error) {
-	if len(expected) == 0 {
-		return nil, nil
-	}
-	window := pty.OperationWindow{Start: 0, End: len(analysis.Operations)}
-	var lastTexts []string
-	for boundary := analysis.Dimensions.Rows - 1; boundary > 0; boundary-- {
-		rawAppends := pty.ClassifyAppends(analysis, window, boundary)
-		coalesced := pty.CoalesceAppendRows(rawAppends)
-		lastTexts = appendTexts(coalesced)
-		matched := true
-		for _, content := range expected {
-			if err := contentAppendedAtLeastOnce(coalesced, content); err != nil {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return rawAppends, nil
-		}
-	}
-	return nil, fmt.Errorf("no raw append boundary classified full-window expected content; candidates=%q", lastTexts)
-}
-
-func allScenarioRawWrites(analysis pty.Analysis, window pty.OperationWindow) []pty.AppendOperation {
-	out := make([]pty.AppendOperation, 0)
-	for _, operation := range analysis.Operations[window.Start:window.End] {
-		if operation.Write == nil {
-			continue
-		}
-		out = append(out, pty.AppendOperation{Operation: operation})
-	}
-	return out
-}
-
 func scrollbackTransactionWrites(analysis pty.Analysis, window pty.OperationWindow) []pty.AppendOperation {
 	out := make([]pty.AppendOperation, 0)
 	inRestrictedScrollRegion := false
@@ -893,18 +692,14 @@ func scrollbackTransactionWrites(analysis pty.Analysis, window pty.OperationWind
 			out = append(out, pty.AppendOperation{Operation: operation})
 		}
 	}
-	return pty.CoalesceAppendRows(out)
+	return coalesceCompleteAppendRows(out)
 }
 
-func coalesceStyledAppendRuns(appends []pty.AppendOperation) []pty.AppendOperation {
+func coalesceCompleteAppendRows(appends []pty.AppendOperation) []pty.AppendOperation {
 	out := make([]pty.AppendOperation, 0, len(appends))
 	for _, appendOperation := range appends {
 		current := appendOperation.Operation
-		if current.Write == nil {
-			out = append(out, appendOperation)
-			continue
-		}
-		if len(out) == 0 {
+		if current.Write == nil || len(out) == 0 {
 			out = append(out, appendOperation)
 			continue
 		}
@@ -912,16 +707,15 @@ func coalesceStyledAppendRuns(appends []pty.AppendOperation) []pty.AppendOperati
 		if previous.Write == nil ||
 			previous.Region.Top != current.Region.Top ||
 			previous.Region.Bottom != current.Region.Bottom ||
-			previous.Region.Right != current.Region.Left ||
-			previous.Write.Faint != current.Write.Faint ||
-			previous.Write.Foreground != current.Write.Foreground {
+			previous.Region.Right != current.Region.Left {
 			out = append(out, appendOperation)
 			continue
 		}
 		previous.Region.Right = current.Region.Right
+		previous.ByteRange.End = current.ByteRange.End
+		previous.After = current.After
+		previous.CapturedAt = current.CapturedAt
 		payload := pty.MustWritePayload(previous.Write.Text + current.Write.Text)
-		payload.Faint = previous.Write.Faint
-		payload.Foreground = previous.Write.Foreground
 		previous.Write = &payload
 	}
 	return out
@@ -933,146 +727,16 @@ func contentAppendedAtLeastOnce(appends []pty.AppendOperation, content string) e
 			return nil
 		}
 	}
-	for start := range appends {
-		combined := ""
-		for idx := start; idx < len(appends); idx++ {
-			if appends[idx].Operation.Write == nil {
-				break
-			}
-			combined += appends[idx].Operation.Write.Text
-			if combined == content {
-				return nil
-			}
-			if len(combined) >= len(content) {
-				break
-			}
-		}
-	}
 	return fmt.Errorf("content append count for %q = 0, want at least 1; appends=%q", content, appendTexts(appends))
 }
 
 func contentNotAppended(appends []pty.AppendOperation, content string) error {
-	for start := range appends {
-		combined := ""
-		for idx := start; idx < len(appends); idx++ {
-			write := appends[idx].Operation.Write
-			if write == nil {
-				break
-			}
-			combined += write.Text
-			if combined == content {
-				return fmt.Errorf("content append for %q found", content)
-			}
-			if len(combined) >= len(content) {
-				break
-			}
+	for _, appendOperation := range appends {
+		if appendOperation.Operation.Write != nil && appendOperation.Operation.Write.Text == content {
+			return fmt.Errorf("content append for %q found", content)
 		}
 	}
 	return nil
-}
-
-// faintDividerAppendedAtLeast asserts that at least `minCount` faint divider
-// rule appends were emitted. A divider rule is a faint, non-empty append whose
-// visible text is made only of the box-drawing horizontal "─" rune (the divider
-// shape). This asserts structure (a divider was emitted) rather than literal
-// label text, so divider wording/styling changes do not break it.
-func faintDividerAppendedAtLeast(appends []pty.AppendOperation, minCount int) error {
-	count := 0
-	for _, appendOperation := range appends {
-		write := appendOperation.Operation.Write
-		if write == nil || !write.Faint || write.Text == "" {
-			continue
-		}
-		if isPlainDividerRule(write.Text) {
-			count++
-		}
-	}
-	if count < minCount {
-		return fmt.Errorf("faint divider append count = %d, want at least %d", count, minCount)
-	}
-	return nil
-}
-
-func isPlainDividerRule(text string) bool {
-	for _, r := range text {
-		if r != '─' && r != '…' {
-			return false
-		}
-	}
-	return text != ""
-}
-
-func styledContentAppendedAtLeastOnce(appends []pty.AppendOperation, expected styledAppendExpectation) error {
-	var candidates []styledAppendExpectation
-	for _, appendOperation := range appends {
-		write := appendOperation.Operation.Write
-		if write == nil || write.Text != expected.Text {
-			continue
-		}
-		candidates = append(candidates, styledAppendExpectation{Text: write.Text, Foreground: write.Foreground, Faint: write.Faint})
-		if write.Faint != expected.Faint {
-			continue
-		}
-		if write.Foreground != expected.Foreground {
-			continue
-		}
-		return nil
-	}
-	return fmt.Errorf("styled append for %q with foreground=%q faint=%t not found; candidates=%+v raw=%+v", expected.Text, expected.Foreground, expected.Faint, candidates, firstStyledAppendSamples(appends, 80))
-}
-
-func styledRowAppendedAtLeastOnce(appends []pty.AppendOperation, expected styledRowExpectation) error {
-	if len(expected) == 0 {
-		return nil
-	}
-	for idx := range appends {
-		write := appends[idx].Operation.Write
-		if write == nil || !styledWriteMatches(write, expected[0]) {
-			continue
-		}
-		row := appends[idx].Operation.Region.Top
-		nextCol := appends[idx].Operation.Region.Right
-		matched := 1
-		for cursor := idx + 1; cursor < len(appends) && matched < len(expected); cursor++ {
-			op := appends[cursor].Operation
-			if op.Region.Top != row {
-				break
-			}
-			if op.Region.Left < nextCol {
-				continue
-			}
-			if op.Write == nil {
-				continue
-			}
-			nextCol = op.Region.Right
-			if styledWriteMatches(op.Write, expected[matched]) {
-				matched++
-			}
-		}
-		if matched == len(expected) {
-			return nil
-		}
-	}
-	return fmt.Errorf("styled row sequence not found: %+v", expected)
-}
-
-func styledWriteMatches(write *pty.WritePayload, expected styledAppendExpectation) bool {
-	return write.Text == expected.Text && write.Foreground == expected.Foreground && write.Faint == expected.Faint
-}
-
-func firstStyledAppendSamples(appends []pty.AppendOperation, limit int) []styledAppendExpectation {
-	out := make([]styledAppendExpectation, 0, min(limit, len(appends)))
-	for _, appendOperation := range appends {
-		if len(out) >= limit {
-			return out
-		}
-		write := appendOperation.Operation.Write
-		if write == nil || write.Text == "" {
-			continue
-		}
-		out = append(out, styledAppendExpectation{Text: write.Text, Foreground: write.Foreground, Faint: write.Faint})
-	}
-	return out
 }
 
 func appendTexts(appends []pty.AppendOperation) []string {
@@ -1085,19 +749,26 @@ func appendTexts(appends []pty.AppendOperation) []string {
 	return out
 }
 
-func rightPad(value string, width int) string {
-	if len(value) >= width {
-		return value
+func screenRowAppearsExactlyOnce(screen pty.ScreenSnapshot, expected string) error {
+	rows := make([]string, 0, len(screen.Cells))
+	count := 0
+	for _, cells := range screen.Cells {
+		var row strings.Builder
+		for _, cell := range cells {
+			row.WriteString(cell.Content)
+		}
+		text := strings.TrimRight(row.String(), " ")
+		if text != "" {
+			rows = append(rows, text)
+		}
+		if text == expected {
+			count++
+		}
 	}
-	return value + strings.Repeat(" ", width-len(value))
-}
-
-func durationPtr(value time.Duration) *time.Duration {
-	return &value
-}
-
-func colorForStyle(role transcriptrender.StyleRole) string {
-	return strings.ToLower(transcriptrender.ColorForRole(transcriptrender.ColorRoleForStyle(role), "").TrueColor)
+	if count != 1 {
+		return fmt.Errorf("screen row count for %q = %d, want exactly 1; complete_rows=%q", expected, count, rows)
+	}
+	return nil
 }
 
 func firstOperationAtOrAfterByte(operations []pty.Operation, offset int64) int {

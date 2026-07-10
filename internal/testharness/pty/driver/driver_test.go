@@ -148,6 +148,27 @@ func TestRunCommandDelaysInputRelativeToPhase(t *testing.T) {
 	}
 }
 
+func TestRunCommandSurfacesPhaseRelativeInputWriteFailure(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "phase-input-writer")
+	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/phase-input-writer", output); err != nil {
+		t.Fatalf("BuildPackage: %v", err)
+	}
+	_, err := driver.RunCommand(context.Background(), driver.CommandSpec{
+		Path:       output,
+		Args:       []string{"close-stdio"},
+		Dimensions: pty.MustDimensions(2, 16),
+		PhaseInputs: []driver.PhaseInputEvent{{
+			Phase: pty.PhaseScenarioStart,
+			After: 100 * time.Millisecond,
+			Bytes: []byte("x\n"),
+		}},
+		Timeout: commandTestTimeout,
+	})
+	if err == nil {
+		t.Fatal("RunCommand returned nil after required phase-relative input could not be written")
+	}
+}
+
 func TestRunCommandRecordsResizeAtActualCapturePosition(t *testing.T) {
 	t.Parallel()
 

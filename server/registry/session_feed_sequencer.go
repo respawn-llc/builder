@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"fmt"
 	"reflect"
 	"sync"
 
@@ -17,7 +18,7 @@ type sessionFeedSnapshot struct {
 	runState            *clientui.RunState
 	runtimeActivity     *clientui.RuntimeActivity
 	inputReconciliation *clientui.RuntimeInputReconciliationSnapshot
-	queuedMessages      []clientui.TranscriptQueuedOrSteeredMessageState
+	queuedMessages      queuedMessageStateLedger
 	pendingPrompts      map[string]clientui.TranscriptPendingSessionPrompt
 	inFlightTools       map[string]clientui.TranscriptToolStart
 	sessionStatus       *clientui.TranscriptSessionStatus
@@ -32,6 +33,10 @@ func newSessionFeedSequencer(broker *transcriptSubscriptionBroker) *sessionFeedS
 	return &sessionFeedSequencer{
 		broker: broker,
 		snapshot: sessionFeedSnapshot{
+			queuedMessages: queuedMessageStateLedger{
+				byQueueItemID:     make(map[string]*queuedMessageStateNode),
+				byClientRequestID: make(map[string]*queuedMessageStateNode),
+			},
 			pendingPrompts: make(map[string]clientui.TranscriptPendingSessionPrompt),
 			inFlightTools:  make(map[string]clientui.TranscriptToolStart),
 			backgrounds:    make(map[string]clientui.TranscriptBackgroundActivity),
@@ -120,8 +125,8 @@ func (s sessionFeedSnapshot) applyToHydration(hydration *clientui.TranscriptHydr
 			hydration.BackgroundActivities = append(hydration.BackgroundActivities, background)
 		}
 	}
-	if len(s.queuedMessages) > 0 {
-		hydration.QueuedOrSteeredMessages = append([]clientui.TranscriptQueuedOrSteeredMessageState(nil), s.queuedMessages...)
+	if queuedMessages := s.queuedMessages.values(); len(queuedMessages) > 0 {
+		hydration.QueuedOrSteeredMessages = queuedMessages
 	}
 	if len(s.pendingPrompts) > 0 {
 		hydration.PendingSessionPrompts = make([]clientui.TranscriptPendingSessionPrompt, 0, len(s.pendingPrompts))
@@ -167,23 +172,7 @@ func (s *sessionFeedSnapshot) apply(message clientui.TranscriptMessage) {
 		if state.QueueItemID == "" && state.ClientRequestID == "" {
 			return
 		}
-		if !transcriptQueueStateHydrates(message.QueuedOrSteeredMessageState.Status) {
-			filtered := s.queuedMessages[:0]
-			for _, existing := range s.queuedMessages {
-				if !transcriptQueueStatesReferToSameItem(existing, state) {
-					filtered = append(filtered, existing)
-				}
-			}
-			s.queuedMessages = filtered
-			return
-		}
-		for index, existing := range s.queuedMessages {
-			if transcriptQueueStatesReferToSameItem(existing, state) {
-				s.queuedMessages[index] = state
-				return
-			}
-		}
-		s.queuedMessages = append(s.queuedMessages, state)
+		s.queuedMessages.apply(state)
 	case clientui.TranscriptMessagePendingSessionPrompt:
 		if message.PendingSessionPrompt == nil || message.PendingSessionPrompt.ID == "" {
 			return
@@ -233,13 +222,122 @@ func transcriptQueueStateHydrates(status clientui.QueuedUserMessageStatus) bool 
 	return status == clientui.QueuedUserMessageAccepted
 }
 
-func transcriptQueueStatesReferToSameItem(left clientui.TranscriptQueuedOrSteeredMessageState, right clientui.TranscriptQueuedOrSteeredMessageState) bool {
-	if left.QueueItemID != "" && right.QueueItemID != "" {
-		return left.QueueItemID == right.QueueItemID
+type queuedMessageStateNode struct {
+	state clientui.TranscriptQueuedOrSteeredMessageState
+	prev  *queuedMessageStateNode
+	next  *queuedMessageStateNode
+}
+
+type queuedMessageStateLedger struct {
+	head              *queuedMessageStateNode
+	tail              *queuedMessageStateNode
+	size              int
+	byQueueItemID     map[string]*queuedMessageStateNode
+	byClientRequestID map[string]*queuedMessageStateNode
+}
+
+func (l *queuedMessageStateLedger) apply(state clientui.TranscriptQueuedOrSteeredMessageState) {
+	node := l.find(state)
+	if !transcriptQueueStateHydrates(state.Status) {
+		if node != nil {
+			l.remove(node)
+		}
+		return
 	}
-	return left.ClientRequestID != "" &&
-		right.ClientRequestID != "" &&
-		left.ClientRequestID == right.ClientRequestID
+	if node != nil {
+		l.unindex(node)
+		node.state = state
+		l.index(node)
+		return
+	}
+	node = &queuedMessageStateNode{state: state, prev: l.tail}
+	if l.tail == nil {
+		l.head = node
+	} else {
+		l.tail.next = node
+	}
+	l.tail = node
+	l.size++
+	l.index(node)
+}
+
+func (l *queuedMessageStateLedger) values() []clientui.TranscriptQueuedOrSteeredMessageState {
+	values := make([]clientui.TranscriptQueuedOrSteeredMessageState, 0, l.size)
+	for node := l.head; node != nil; node = node.next {
+		values = append(values, node.state)
+	}
+	return values
+}
+
+func (l *queuedMessageStateLedger) find(state clientui.TranscriptQueuedOrSteeredMessageState) *queuedMessageStateNode {
+	if state.QueueItemID != "" {
+		if node := l.byQueueItemID[state.QueueItemID]; node != nil {
+			return node
+		}
+	}
+	if state.ClientRequestID == "" {
+		return nil
+	}
+	node := l.byClientRequestID[state.ClientRequestID]
+	if node == nil {
+		return nil
+	}
+	if state.QueueItemID != "" && node.state.QueueItemID != "" && state.QueueItemID != node.state.QueueItemID {
+		panic(fmt.Sprintf(
+			"queued transcript state identity conflict: client_request_id=%q existing_queue_item_id=%q incoming_queue_item_id=%q",
+			state.ClientRequestID,
+			node.state.QueueItemID,
+			state.QueueItemID,
+		))
+	}
+	return node
+}
+
+func (l *queuedMessageStateLedger) index(node *queuedMessageStateNode) {
+	if l.byQueueItemID == nil {
+		l.byQueueItemID = make(map[string]*queuedMessageStateNode)
+	}
+	if l.byClientRequestID == nil {
+		l.byClientRequestID = make(map[string]*queuedMessageStateNode)
+	}
+	if node.state.QueueItemID != "" {
+		if existing := l.byQueueItemID[node.state.QueueItemID]; existing != nil && existing != node {
+			panic(fmt.Sprintf("duplicate queued transcript queue_item_id=%q", node.state.QueueItemID))
+		}
+		l.byQueueItemID[node.state.QueueItemID] = node
+	}
+	if node.state.ClientRequestID != "" {
+		if existing := l.byClientRequestID[node.state.ClientRequestID]; existing != nil && existing != node {
+			panic(fmt.Sprintf("duplicate queued transcript client_request_id=%q", node.state.ClientRequestID))
+		}
+		l.byClientRequestID[node.state.ClientRequestID] = node
+	}
+}
+
+func (l *queuedMessageStateLedger) unindex(node *queuedMessageStateNode) {
+	if node.state.QueueItemID != "" && l.byQueueItemID[node.state.QueueItemID] == node {
+		delete(l.byQueueItemID, node.state.QueueItemID)
+	}
+	if node.state.ClientRequestID != "" && l.byClientRequestID[node.state.ClientRequestID] == node {
+		delete(l.byClientRequestID, node.state.ClientRequestID)
+	}
+}
+
+func (l *queuedMessageStateLedger) remove(node *queuedMessageStateNode) {
+	l.unindex(node)
+	if node.prev == nil {
+		l.head = node.next
+	} else {
+		node.prev.next = node.next
+	}
+	if node.next == nil {
+		l.tail = node.prev
+	} else {
+		node.next.prev = node.prev
+	}
+	l.size--
+	node.prev = nil
+	node.next = nil
 }
 
 func (s *sessionFeedSnapshot) shouldDrop(message clientui.TranscriptMessage) bool {
