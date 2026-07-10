@@ -126,6 +126,45 @@ func TestFilelessMetadataPersistenceSkipsSessionFileAndPublishesObserver(t *test
 	}
 }
 
+func TestFilelessEventPersistenceDoesNotAppendToEventLog(t *testing.T) {
+	persisted := newSessionTestStore(t)
+	if _, _, err := persisted.AppendEvent("live", "message", map[string]any{"role": "user", "content": "before inspection"}); err != nil {
+		t.Fatalf("seed event: %v", err)
+	}
+	eventsPath := filepath.Join(persisted.Dir(), eventsFile)
+	before, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("read event log before inspection: %v", err)
+	}
+
+	inspection, err := Open(
+		persisted.Dir(),
+		WithFilelessMetadataPersistence(),
+		WithFilelessEventPersistence(),
+	)
+	if err != nil {
+		t.Fatalf("open inspection store: %v", err)
+	}
+	event, committed, err := inspection.AppendEvent("inspect", "message", map[string]any{"role": "developer", "content": "ephemeral context"})
+	if err != nil {
+		t.Fatalf("append inspection event: %v", err)
+	}
+	if !committed {
+		t.Fatal("expected inspection event to apply to the in-memory store")
+	}
+	if event.Seq != 2 || inspection.Meta().LastSequence != 2 {
+		t.Fatalf("inspection sequence = %d / %d, want 2", event.Seq, inspection.Meta().LastSequence)
+	}
+
+	after, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("read event log after inspection: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("inspection appended to the durable event log")
+	}
+}
+
 func TestForkAtUserMessagePreservesPersistenceOptions(t *testing.T) {
 	root := t.TempDir()
 	observer := &recordingPersistenceObserver{}

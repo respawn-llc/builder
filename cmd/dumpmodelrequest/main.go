@@ -125,6 +125,7 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		sessionID,
 		session.WithPersistedSessionResolver(md),
 		session.WithFilelessMetadataPersistence(),
+		session.WithFilelessEventPersistence(),
 	)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("open read-only session: %w", err)
@@ -142,10 +143,11 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve session launch settings: %w", err)
 	}
-	authState, err := auth.NewEnvAPIKeyOverrideStore(
+	authStore := auth.NewEnvAPIKeyOverrideStore(
 		auth.NewFileStore(config.GlobalAuthConfigPath(cfg)),
 		os.LookupEnv,
-	).Load(ctx)
+	)
+	authState, err := authStore.Load(ctx)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("load auth state: %w", err)
 	}
@@ -154,19 +156,24 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve provider capabilities: %w", err)
 	}
+	target, err := md.ResolveSessionExecutionTarget(ctx, sessionID)
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("resolve session execution target: %w", err)
+	}
 	wiring, err := runtimewire.NewRuntimeWiring(
 		store,
 		resolved.Settings,
 		resolved.ActiveToolIDs,
-		cfg.WorkspaceRoot,
-		nil,
+		target.EffectiveWorkdir,
+		auth.NewManager(authStore, nil, nil),
 		nil,
 		runtimewire.RuntimeWiringOptions{
-			Context:         ctx,
-			Client:          inspectionCapabilityClient{capabilities: caps},
-			Headless:        false,
-			Sources:         resolved.Source.Sources,
-			GlobalConfigDir: persistenceRoot,
+			Context:                      ctx,
+			Client:                       inspectionCapabilityClient{capabilities: caps},
+			Headless:                     false,
+			Sources:                      resolved.Source.Sources,
+			ProviderCapabilitiesOverride: &caps,
+			GlobalConfigDir:              persistenceRoot,
 		},
 	)
 	if err != nil {
@@ -223,12 +230,21 @@ func loadSessionConfig(bootstrap launch.BootstrapPlan, persistenceRoot string) (
 }
 
 func resolveProviderCapabilities(authState auth.State, active config.Settings, providerOverride string) (llm.ProviderCapabilities, error) {
-	settings := active
-	if override := strings.TrimSpace(providerOverride); override != "" {
-		settings.ProviderOverride = override
+	switch strings.TrimSpace(providerOverride) {
+	case "":
+		return llm.ResolveRuntimeProviderCapabilities(authState, active)
+	case "openai-compatible", "chatgpt-codex":
+		caps, ok := llm.LookupProviderCapabilityContract(providerOverride)
+		if !ok {
+			return llm.ProviderCapabilities{}, fmt.Errorf("unknown provider id %q", providerOverride)
+		}
+		return caps, nil
+	default:
+		settings := active
+		settings.ProviderOverride = providerOverride
 		settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{}
+		return llm.ResolveRuntimeProviderCapabilities(authState, settings)
 	}
-	return llm.ResolveRuntimeProviderCapabilities(authState, settings)
 }
 
 func prettyPrint(raw json.RawMessage) (json.RawMessage, error) {

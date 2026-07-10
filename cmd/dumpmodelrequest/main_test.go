@@ -43,3 +43,17 @@ func TestResolveProviderCapabilitiesUsesRuntimeBaseURLResolution(t *testing.T) {
 		t.Fatalf("provider id = %q, want %q", got, want)
 	}
 }
+
+func TestResolveProviderCapabilitiesAcceptsProviderContractOverrides(t *testing.T) {
+	for _, providerID := range []string{"openai-compatible", "chatgpt-codex"} {
+		t.Run(providerID, func(t *testing.T) {
+			caps, err := resolveProviderCapabilities(auth.EmptyState(), config.Settings{}, providerID)
+			if err != nil {
+				t.Fatalf("resolveProviderCapabilities: %v", err)
+			}
+			if got := caps.ProviderID; got != providerID {
+				t.Fatalf("provider id = %q, want %q", got, providerID)
+			}
+		})
+	}
+}

@@ -259,20 +259,7 @@ func (c *OpenAIClient) CountRequestInputTokens(ctx context.Context, request Requ
 		return 0, fmt.Errorf("openai request token counting is not supported by transport")
 	}
 
-	providerReq := OpenAIRequest{
-		Model:                   request.Model,
-		Temperature:             request.Temperature,
-		MaxTokens:               request.MaxTokens,
-		ReasoningEffort:         request.ReasoningEffort,
-		SupportsReasoningEffort: request.SupportsReasoningEffort,
-		EnableNativeWebSearch:   request.EnableNativeWebSearch,
-		SystemPrompt:            request.SystemPrompt,
-		PromptCacheKey:          request.PromptCacheKey,
-		SessionID:               request.SessionID,
-		Items:                   CloneResponseItems(request.Items),
-		Tools:                   append([]Tool(nil), request.Tools...),
-		StructuredOutput:        request.StructuredOutput,
-	}
+	providerReq := RequestAsOpenAI(request)
 
 	count, err := counter.CountRequestInputTokens(ctx, providerReq)
 	if err != nil {

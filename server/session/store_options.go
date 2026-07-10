@@ -26,6 +26,7 @@ type storeOptions struct {
 	observer        PersistenceObserver
 	resolver        PersistedSessionResolver
 	filelessMeta    bool
+	filelessEvents  bool
 	observerTimeout time.Duration
 	now             func() time.Time
 }
@@ -56,6 +57,15 @@ func WithPersistedSessionResolver(resolver PersistedSessionResolver) StoreOption
 func WithFilelessMetadataPersistence() StoreOption {
 	return func(options *storeOptions) {
 		options.filelessMeta = true
+	}
+}
+
+// WithFilelessEventPersistence applies events to the opened store's in-memory
+// state without appending them to events.jsonl. It is for read-only diagnostic
+// execution that must exercise normal event-driven state transitions.
+func WithFilelessEventPersistence() StoreOption {
+	return func(options *storeOptions) {
+		options.filelessEvents = true
 	}
 }
 
