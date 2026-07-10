@@ -2,10 +2,15 @@ package runtime
 
 import (
 	"context"
+	"errors"
 
 	"core/server/llm"
 	"github.com/google/uuid"
 )
+
+// ErrInspectionExactTokenCountRequired reports that an offline inspector cannot
+// safely reproduce a live compaction decision without provider token counting.
+var ErrInspectionExactTokenCountRequired = errors.New("offline inspection requires provider input-token counting near the compaction threshold")
 
 // PrepareInspectionRequest builds the provider-agnostic llm.Request for a session
 // using the exact production request-assembly path, WITHOUT running a model turn
@@ -26,8 +31,29 @@ func PrepareInspectionRequest(ctx context.Context, eng *Engine, allowTools bool)
 	if err := eng.ensureMetaContextForRequest(ctx, stepID); err != nil {
 		return llm.Request{}, err
 	}
+	if eng.inspectionRequiresExactTokenCount(ctx) {
+		return llm.Request{}, ErrInspectionExactTokenCountRequired
+	}
 	if err := (&defaultStepExecutor{engine: eng}).prepareModelTurn(ctx, stepID); err != nil {
 		return llm.Request{}, err
 	}
 	return eng.buildRequest(ctx, stepID, allowTools)
+}
+
+func (e *Engine) inspectionRequiresExactTokenCount(ctx context.Context) bool {
+	snapshot := e.compactionPlanningSnapshot()
+	planner := e.compactionPlannerState()
+	if !planner.autoCompactionAvailable(snapshot) {
+		return false
+	}
+	limit := planner.autoCompactTokenLimit(snapshot)
+	if limit <= 0 {
+		return false
+	}
+	caps, err := e.providerCapabilities(ctx)
+	if err != nil || !caps.SupportsRequestInputTokenCount {
+		return false
+	}
+	total := e.currentTokenUsage() + planner.reservedOutputTokens(snapshot)
+	return total+autoCompactPrecisionMarginForLimit(limit) >= limit
 }
