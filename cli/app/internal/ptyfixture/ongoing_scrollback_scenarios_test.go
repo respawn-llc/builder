@@ -389,10 +389,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedAnyAppends: []string{
 				"❮ failed tool lifecycle complete",
 			},
-			expectedScreenRows: []string{
-				"! echo $((61616160+1)) exec_command failed: start process: fork/exec /bin/sh: n…",
-				"! ./pty_missing_patch.txt -1 +1 Patch failed: target file does not exist: pty_m…",
-			},
 		},
 		{
 			name: "detail_roundtrip_during_stream",

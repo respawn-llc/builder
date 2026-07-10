@@ -401,7 +401,7 @@ func TestExpandedPatchRowsKeepFullTypedInputAheadOfOutput(t *testing.T) {
 	}
 }
 
-func TestToolErrorRowsKeepInputPreview(t *testing.T) {
+func TestToolErrorRowsKeepAuthoritativeInputFirstAndErrorClassification(t *testing.T) {
 	row := toolRow("exec_command", clientui.ToolPresentationShell, "raw failure output", true)
 	row.Tool.CondensedText = "permission denied"
 	row.Tool.ResultSummary = "exit 1"
@@ -413,6 +413,7 @@ func TestToolErrorRowsKeepInputPreview(t *testing.T) {
 		if len(rendered.Lines) == 0 {
 			t.Fatalf("mode %v rendered no lines", mode)
 		}
+		assertFailedToolClassification(t, mode, rendered.Lines[0])
 		spans := rendered.Lines[0].Spans
 		if len(spans) < 5 {
 			t.Fatalf("mode %v rendered spans = %+v", mode, spans)
@@ -508,7 +509,7 @@ func TestBackgroundExitStatusChangesOnlySymbolMetadata(t *testing.T) {
 	}
 }
 
-func TestPatchToolErrorKeepsPatchInputShape(t *testing.T) {
+func TestPatchToolErrorKeepsAuthoritativeInputFirstAndErrorClassification(t *testing.T) {
 	row := toolRow("patch", clientui.ToolPresentationDefault, "patch failure output", true)
 	row.Tool.CondensedText = "patch failed"
 	row.Tool.ResultSummary = "failed"
@@ -522,6 +523,7 @@ func TestPatchToolErrorKeepsPatchInputShape(t *testing.T) {
 		if len(rendered.Lines) == 0 {
 			t.Fatalf("mode %v rendered no lines", mode)
 		}
+		assertFailedToolClassification(t, mode, rendered.Lines[0])
 		spans := rendered.Lines[0].Spans
 		if len(spans) < 8 {
 			t.Fatalf("mode %v patch error spans = %+v", mode, spans)
@@ -532,6 +534,17 @@ func TestPatchToolErrorKeepsPatchInputShape(t *testing.T) {
 		if got := spans[len(spans)-1].Text; got != "failed" {
 			t.Fatalf("mode %v patch result summary = %q, want failed", mode, got)
 		}
+	}
+}
+
+func assertFailedToolClassification(t *testing.T, mode Mode, line Line) {
+	t.Helper()
+	if len(line.Spans) == 0 {
+		t.Fatalf("mode %v failed tool line has no spans", mode)
+	}
+	symbol := line.Spans[0]
+	if symbol.Role != StyleRoleToolError || symbol.Faint {
+		t.Fatalf("mode %v failed tool classification = %+v, want full-strength tool error role", mode, symbol)
 	}
 }
 
