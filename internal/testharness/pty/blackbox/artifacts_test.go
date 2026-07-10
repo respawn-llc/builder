@@ -1,9 +1,12 @@
 package blackbox
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -58,6 +61,87 @@ func TestPublishFailureArtifactsRetainsBundleWhenLatestLeaseIsContended(t *testi
 	if _, err := os.Stat(run.final); err != nil {
 		t.Fatalf("complete bundle was not retained after latest contention: %v", err)
 	}
+}
+
+func TestPublishFailureArtifactsRetainsBundleWhenLatestLeaseIsContendedCrossProcess(t *testing.T) {
+	store := newArtifactStore(t.TempDir())
+	run := beginTestArtifactRun(t, store)
+	t.Cleanup(func() { closeTestArtifactRun(t, run) })
+	holder, err := startLeaseHolder(store.latestLeasePath())
+	if err != nil {
+		t.Fatalf("start cross-process lease holder: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := holder.stop(); err != nil {
+			t.Errorf("stop cross-process lease holder: %v", err)
+		}
+	})
+
+	_, err = publishFailureArtifacts(time.Now().Add(40*time.Millisecond), run, testArtifactEvidence(t), errors.New("primary failure"), nil)
+	var incomplete *ArtifactPublicationIncomplete
+	if !errors.As(err, &incomplete) {
+		t.Fatalf("publish error = %T %v, want ArtifactPublicationIncomplete", err, err)
+	}
+	if _, err := os.Stat(run.final); err != nil {
+		t.Fatalf("complete bundle was not retained after cross-process contention: %v", err)
+	}
+}
+
+func TestArtifactLeaseHolder(t *testing.T) {
+	path := os.Getenv("KENT_ARTIFACT_LEASE_PATH")
+	if path == "" {
+		return
+	}
+	lease, err := acquireFileLease(path)
+	if err != nil {
+		t.Fatalf("acquire child lease: %v", err)
+	}
+	if _, err := os.Stdout.WriteString("locked\n"); err != nil {
+		t.Fatalf("signal child lease: %v", err)
+	}
+	_, _ = io.ReadAll(os.Stdin)
+	if err := lease.release(); err != nil {
+		t.Fatalf("release child lease: %v", err)
+	}
+}
+
+type leaseHolder struct {
+	stdin io.WriteCloser
+	cmd   *exec.Cmd
+}
+
+func startLeaseHolder(path string) (*leaseHolder, error) {
+	command := exec.Command(os.Args[0], "-test.run=TestArtifactLeaseHolder$")
+	command.Env = append(os.Environ(), "KENT_ARTIFACT_LEASE_PATH="+path)
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := command.Start(); err != nil {
+		return nil, err
+	}
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	if line != "locked\n" {
+		return nil, errors.New("cross-process artifact lease holder did not lock")
+	}
+	return &leaseHolder{stdin: stdin, cmd: command}, nil
+}
+
+func (h *leaseHolder) stop() error {
+	if h == nil {
+		return nil
+	}
+	if err := h.stdin.Close(); err != nil {
+		return err
+	}
+	return h.cmd.Wait()
 }
 
 func TestArtifactStoreDoesNotPruneLiveRunAndPrunesReleasedRun(t *testing.T) {
