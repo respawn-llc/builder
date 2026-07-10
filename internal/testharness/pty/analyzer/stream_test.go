@@ -68,6 +68,85 @@ func TestStreamAndCaptureReplayShareTerminalInterpretation(t *testing.T) {
 	}
 }
 
+func TestSnapshotDoesNotMutatePendingWriteBatch(t *testing.T) {
+	t.Parallel()
+
+	stream, err := analyzer.NewStream(pty.MustDimensions(2, 8))
+	if err != nil {
+		t.Fatalf("NewStream: %v", err)
+	}
+	if err := stream.Feed([]byte("ab")); err != nil {
+		t.Fatalf("Feed first fragment: %v", err)
+	}
+	before, err := stream.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot before: %v", err)
+	}
+	if err := stream.Feed([]byte("cd")); err != nil {
+		t.Fatalf("Feed second fragment: %v", err)
+	}
+	after, err := stream.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot after: %v", err)
+	}
+	finished, err := stream.Finish()
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	if got := operationView(before); len(got) != 1 || got[0].Write != "ab" {
+		t.Fatalf("before snapshot operations = %#v, want write ab", got)
+	}
+	if got, want := operationView(after), operationView(finished); !reflect.DeepEqual(got, want) {
+		t.Fatalf("post-feed snapshot differs from finish: got=%#v want=%#v", got, want)
+	}
+	if len(finished.Operations) != 1 || finished.Operations[0].Write == nil || finished.Operations[0].Write.Text() != "abcd" {
+		t.Fatalf("finished operations = %#v, want one write abcd", finished.Operations)
+	}
+}
+
+func TestLiveSnapshotsAreInvariantToReadFragmentation(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte("\x1b[?1049hhello\x1b[2J\x1b[?25hworld")
+	analyze := func(fragments [][]byte) pty.Analysis {
+		t.Helper()
+		stream, err := analyzer.NewStream(pty.MustDimensions(3, 8))
+		if err != nil {
+			t.Fatalf("NewStream: %v", err)
+		}
+		for _, fragment := range fragments {
+			if err := stream.Feed(fragment); err != nil {
+				t.Fatalf("Feed %q: %v", fragment, err)
+			}
+		}
+		snapshot, err := stream.Snapshot()
+		if err != nil {
+			t.Fatalf("Snapshot: %v", err)
+		}
+		return snapshot
+	}
+
+	coalesced := analyze([][]byte{payload})
+	oneByte := make([][]byte, 0, len(payload))
+	for _, value := range payload {
+		oneByte = append(oneByte, []byte{value})
+	}
+	if got := analyze(oneByte); !equivalentAnalysis(got, coalesced) {
+		t.Fatalf("one-byte snapshot differs: got=%#v want=%#v", operationView(got), operationView(coalesced))
+	}
+	if got := analyze([][]byte{payload[:1], payload[1:5], payload[5:14], payload[14:23], payload[23:]}); !equivalentAnalysis(got, coalesced) {
+		t.Fatalf("randomized snapshot differs: got=%#v want=%#v", operationView(got), operationView(coalesced))
+	}
+}
+
+func equivalentAnalysis(left, right pty.Analysis) bool {
+	return reflect.DeepEqual(left.Screen, right.Screen) &&
+		reflect.DeepEqual(left.PrivateModeChanges, right.PrivateModeChanges) &&
+		reflect.DeepEqual(left.PhaseEvents, right.PhaseEvents) &&
+		reflect.DeepEqual(operationView(left), operationView(right))
+}
+
 type operationViewEntry struct {
 	Kind        pty.OperationKind
 	ByteRange   pty.ByteRange
@@ -77,18 +156,20 @@ type operationViewEntry struct {
 }
 
 func operationView(analysis pty.Analysis) []operationViewEntry {
-	result := make([]operationViewEntry, len(analysis.Operations))
-	for index, operation := range analysis.Operations {
-		entry := operationViewEntry{
-			Kind:        operation.Kind,
-			ByteRange:   operation.ByteRange,
-			Region:      operation.Region,
-			PrivateMode: operation.PrivateMode,
+	result := make([]operationViewEntry, 0, len(analysis.Operations))
+	for _, operation := range analysis.Operations {
+		for _, record := range pty.OperationRecords(operation) {
+			entry := operationViewEntry{
+				Kind:        record.Kind,
+				ByteRange:   record.ByteRange,
+				Region:      record.Region,
+				PrivateMode: record.PrivateMode,
+			}
+			if record.Write != nil {
+				entry.Write = record.Write.Text()
+			}
+			result = append(result, entry)
 		}
-		if operation.Write != nil {
-			entry.Write = operation.Write.Text()
-		}
-		result[index] = entry
 	}
 	return result
 }

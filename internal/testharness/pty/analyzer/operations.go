@@ -56,14 +56,8 @@ func (b *tracingBackend) flushPendingWrite() error {
 	if b.writeBatch == nil {
 		b.writeBatch = &writeBatch{}
 	}
-	if len(b.writeBatch.segments) == maxWriteBatchSegments {
-		return &EvidenceLimitExceeded{
-			Source:   EvidenceSourceOperations,
-			Limit:    maxWriteBatchSegments,
-			Observed: len(b.writeBatch.segments) + 1,
-			Prefix:   append([]byte(nil), b.operationBudget.prefix...),
-			Tail:     append([]byte(nil), b.operationBudget.tail...),
-		}
+	if len(b.writeBatch.segments)+len(b.writeBatch.controls) >= maxWriteBatchSegments {
+		return writeBatchLimitExceeded(b)
 	}
 	b.writeBatch.segments = append(b.writeBatch.segments, WriteSegment{ChunkIndex: pending.chunk.Index, ByteRange: pending.byteRange, Before: pending.before, After: pending.after, Region: pending.region, Write: payload, CapturedAt: pending.chunk.At})
 	return nil
@@ -92,14 +86,29 @@ func (b *tracingBackend) writeBatchControls() []Operation {
 }
 
 func (b *tracingBackend) operationForWriteBatch(segments []WriteSegment, controls []Operation) Operation {
-	if len(segments) == 0 {
-		first := controls[0]
-		last := controls[len(controls)-1]
-		return Operation{Sequence: len(b.ops), Kind: OperationCursorMove, ChunkIndex: first.ChunkIndex, ByteRange: ByteRange{Start: first.ByteRange.Start, End: last.ByteRange.End}, Before: first.Before, After: last.After, Region: first.Region, Controls: controls, CapturedAt: first.CapturedAt}
+	batch := Operation{
+		Sequence:      len(b.ops),
+		Kind:          OperationCursorMove,
+		WriteSegments: segments,
+		Controls:      controls,
 	}
-	first := segments[0]
-	last := segments[len(segments)-1]
-	return Operation{Sequence: len(b.ops), Kind: OperationWrite, ChunkIndex: first.ChunkIndex, ByteRange: ByteRange{Start: first.ByteRange.Start, End: last.ByteRange.End}, Before: first.Before, After: last.After, Region: first.Region, Write: &first.Write, WriteSegments: segments, Controls: controls, CapturedAt: first.CapturedAt}
+	if len(segments) > 0 {
+		batch.Kind = OperationWrite
+		batch.Write = &segments[0].Write
+	}
+	records := OperationRecords(batch)
+	first := records[0]
+	last := records[len(records)-1]
+	batch.ChunkIndex = first.ChunkIndex
+	batch.ByteRange = ByteRange{Start: first.ByteRange.Start, End: last.ByteRange.End}
+	batch.Before = first.Before
+	batch.After = last.After
+	batch.Region = first.Region
+	batch.CapturedAt = first.CapturedAt
+	for _, record := range records[1:] {
+		batch.Region = unionRegion(batch.Region, record.Region)
+	}
+	return batch
 }
 
 func (b *tracingBackend) flushWriteBatch() error {
@@ -112,4 +121,24 @@ func (b *tracingBackend) flushWriteBatch() error {
 		return b.err
 	}
 	return nil
+}
+
+func writeBatchLimitExceeded(backend *tracingBackend) error {
+	return &EvidenceLimitExceeded{
+		Source:   EvidenceSourceOperations,
+		Detail:   "write_batch_records",
+		Limit:    maxWriteBatchSegments,
+		Observed: len(backend.writeBatch.segments) + len(backend.writeBatch.controls) + 1,
+		Prefix:   append([]byte(nil), backend.operationBudget.prefix...),
+		Tail:     append([]byte(nil), backend.operationBudget.tail...),
+	}
+}
+
+func unionRegion(left, right Region) Region {
+	return Region{
+		Top:    min(left.Top, right.Top),
+		Bottom: max(left.Bottom, right.Bottom),
+		Left:   min(left.Left, right.Left),
+		Right:  max(left.Right, right.Right),
+	}
 }

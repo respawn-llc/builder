@@ -3,6 +3,7 @@ package pty
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,28 +28,17 @@ type artifactChunk struct {
 }
 
 type artifactOperation struct {
-	Sequence      int                    `json:"sequence"`
-	Kind          OperationKind          `json:"kind"`
-	ChunkIndex    int                    `json:"chunk_index"`
-	ByteRange     ByteRange              `json:"byte_range"`
-	Before        Position               `json:"before"`
-	After         Position               `json:"after"`
-	Region        Region                 `json:"region"`
-	CapturedAt    int64                  `json:"captured_at_ns"`
-	Write         *string                `json:"write,omitempty"`
-	WriteSegments []artifactWriteSegment `json:"write_segments,omitempty"`
-	Controls      []artifactOperation    `json:"controls,omitempty"`
-	PrivateMode   *PrivateModeChange     `json:"private_mode,omitempty"`
-}
-
-type artifactWriteSegment struct {
-	ChunkIndex int       `json:"chunk_index"`
-	ByteRange  ByteRange `json:"byte_range"`
-	Before     Position  `json:"before"`
-	After      Position  `json:"after"`
-	Region     Region    `json:"region"`
-	Write      string    `json:"write"`
-	CapturedAt int64     `json:"captured_at_ns"`
+	Sequence    int                 `json:"sequence"`
+	Kind        OperationKind       `json:"kind"`
+	ChunkIndex  int                 `json:"chunk_index"`
+	ByteRange   ByteRange           `json:"byte_range"`
+	Before      Position            `json:"before"`
+	After       Position            `json:"after"`
+	Region      Region              `json:"region"`
+	CapturedAt  int64               `json:"captured_at_ns"`
+	Write       *TextSpan           `json:"write_span,omitempty"`
+	Records     []artifactOperation `json:"records,omitempty"`
+	PrivateMode *PrivateModeChange  `json:"private_mode,omitempty"`
 }
 
 func WriteArtifacts(dir string, capture Capture, analysis Analysis, assertionErr error) error {
@@ -57,6 +47,10 @@ func WriteArtifacts(dir string, capture Capture, analysis Analysis, assertionErr
 	}
 	if len(analysis.Operations) > 16_384 {
 		return artifactLimitExceeded(len(analysis.Operations))
+	}
+	writeText, err := analyzer.WriteTextArena(analysis)
+	if err != nil {
+		return fmt.Errorf("validate operation write-text arena: %w", err)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create artifact directory %s: %w", dir, err)
@@ -67,6 +61,9 @@ func WriteArtifacts(dir string, capture Capture, analysis Analysis, assertionErr
 	}
 	if err := budget.write(filepath.Join(dir, "escaped.txt"), []byte(strconv.QuoteToASCII(string(capture.Raw)))); err != nil {
 		return fmt.Errorf("write escaped artifact: %w", err)
+	}
+	if err := budget.write(filepath.Join(dir, "write_text.bin"), writeText); err != nil {
+		return fmt.Errorf("write operation text artifact: %w", err)
 	}
 	if err := budget.writeJSON(filepath.Join(dir, "chunks.json"), artifactChunks(capture.Chunks)); err != nil {
 		return err
@@ -112,28 +109,13 @@ func artifactOperations(operations []Operation) []artifactOperation {
 			Region: operation.Region, CapturedAt: operation.CapturedAt.Nanoseconds(), PrivateMode: operation.PrivateMode,
 		}
 		if operation.Write != nil {
-			text := operation.Write.Text()
-			item.Write = &text
+			span := operation.Write.Span
+			item.Write = &span
 		}
-		item.WriteSegments = artifactWriteSegments(operation.WriteSegments)
-		item.Controls = artifactOperations(operation.Controls)
+		if len(operation.WriteSegments) > 0 || len(operation.Controls) > 0 {
+			item.Records = artifactOperations(analyzer.OperationRecords(operation))
+		}
 		result = append(result, item)
-	}
-	return result
-}
-
-func artifactWriteSegments(segments []WriteSegment) []artifactWriteSegment {
-	result := make([]artifactWriteSegment, 0, len(segments))
-	for _, segment := range segments {
-		result = append(result, artifactWriteSegment{
-			ChunkIndex: segment.ChunkIndex,
-			ByteRange:  segment.ByteRange,
-			Before:     segment.Before,
-			After:      segment.After,
-			Region:     segment.Region,
-			Write:      segment.Write.Text(),
-			CapturedAt: segment.CapturedAt.Nanoseconds(),
-		})
 	}
 	return result
 }
@@ -154,14 +136,48 @@ func (b *artifactBudget) write(path string, data []byte) error {
 }
 
 func (b *artifactBudget) writeJSON(path string, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
-		return fmt.Errorf("marshal artifact %s: %w", path, err)
+		return err
 	}
-	if err := b.write(path, data); err != nil {
-		return fmt.Errorf("write artifact %s: %w", path, err)
+	writer := &artifactLimitWriter{file: file, remaining: maxArtifactBytes - b.written}
+	encoder := json.NewEncoder(writer)
+	encoder.SetIndent("", "  ")
+	encodeErr := encoder.Encode(value)
+	closeErr := file.Close()
+	if encodeErr != nil {
+		if closeErr != nil {
+			return fmt.Errorf("encode artifact %s: %w; close artifact: %v", path, encodeErr, closeErr)
+		}
+		return fmt.Errorf("encode artifact %s: %w", path, encodeErr)
 	}
+	if closeErr != nil {
+		return fmt.Errorf("close artifact %s: %w", path, closeErr)
+	}
+	b.written += writer.written
 	return nil
+}
+
+type artifactLimitWriter struct {
+	file      *os.File
+	remaining int
+	written   int
+}
+
+func (w *artifactLimitWriter) Write(data []byte) (int, error) {
+	if len(data) > w.remaining {
+		return 0, artifactLimitExceeded(w.written + len(data))
+	}
+	written, err := w.file.Write(data)
+	w.remaining -= written
+	w.written += written
+	if err != nil {
+		return written, err
+	}
+	if written != len(data) {
+		return written, io.ErrShortWrite
+	}
+	return written, nil
 }
 
 func artifactLimitExceeded(observed int) error {

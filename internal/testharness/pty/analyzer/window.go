@@ -50,8 +50,10 @@ func ClassifyAppends(analysis Analysis, window OperationWindow, immutableBoundar
 	}
 	appends := make([]AppendOperation, 0)
 	for _, operation := range analysis.Operations[window.Start:window.End] {
-		if isAppendWrite(analysis.Dimensions, operation, immutableBoundary) {
-			appends = append(appends, AppendOperation{Operation: operation})
+		for _, record := range OperationRecords(operation) {
+			if isAppendWrite(analysis.Dimensions, record, immutableBoundary) {
+				appends = append(appends, AppendOperation{Operation: record})
+			}
 		}
 	}
 	return appends

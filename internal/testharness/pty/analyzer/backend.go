@@ -81,8 +81,8 @@ func (b *tracingBackend) appendOperation(operation Operation) bool {
 		if b.writeBatch == nil {
 			b.writeBatch = &writeBatch{}
 		}
-		if len(b.writeBatch.segments)+len(b.writeBatch.controls) == maxWriteBatchSegments {
-			b.err = &EvidenceLimitExceeded{Source: EvidenceSourceOperations, Limit: maxWriteBatchSegments, Observed: maxWriteBatchSegments + 1, Prefix: append([]byte(nil), b.operationBudget.prefix...), Tail: append([]byte(nil), b.operationBudget.tail...)}
+		if len(b.writeBatch.segments)+len(b.writeBatch.controls) >= maxWriteBatchSegments {
+			b.err = writeBatchLimitExceeded(b)
 			return false
 		}
 		b.writeBatch.controls = append(b.writeBatch.controls, operation)
@@ -200,6 +200,35 @@ func (b *tracingBackend) Put(coord vt.Coord, cell vt.Cell) {
 		return
 	}
 	b.recordPut(position, cell.C)
+}
+
+// Blit applies emulator-internal scrolling without synthesizing terminal
+// writes. The terminal byte stream already records the user-visible write that
+// caused the scroll; recording the emulator's fallback cell repaint would turn
+// one printable byte into a full-screen redraw and exhaust bounded evidence.
+func (b *tracingBackend) Blit(source, destination, size vt.Coord) {
+	if size.X <= 0 || size.Y <= 0 {
+		return
+	}
+	type copiedCell struct {
+		position Position
+		cell     Cell
+	}
+	copied := make([]copiedCell, 0, int(size.X)*int(size.Y))
+	for row := 0; row < int(size.Y); row++ {
+		for col := 0; col < int(size.X); col++ {
+			from := Position{Row: int(source.Y) + row, Col: int(source.X) + col}
+			to := Position{Row: int(destination.Y) + row, Col: int(destination.X) + col}
+			if from.Row < 0 || from.Row >= b.dimensions.Rows || from.Col < 0 || from.Col >= b.dimensions.Cols ||
+				to.Row < 0 || to.Row >= b.dimensions.Rows || to.Col < 0 || to.Col >= b.dimensions.Cols {
+				continue
+			}
+			copied = append(copied, copiedCell{position: to, cell: b.cells[from.Row][from.Col]})
+		}
+	}
+	for _, copiedCell := range copied {
+		b.cells[copiedCell.position.Row][copiedCell.position.Col] = copiedCell.cell
+	}
 }
 
 func (b *tracingBackend) GetPosition() vt.Coord {

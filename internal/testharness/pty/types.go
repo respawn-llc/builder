@@ -75,9 +75,15 @@ type WritePayload = analyzer.WritePayload
 
 type WriteSegment = analyzer.WriteSegment
 
+type TextSpan = analyzer.TextSpan
+
 var NewWritePayload = analyzer.NewWritePayload
 
 var MustWritePayload = analyzer.MustWritePayload
+
+var OperationRecords = analyzer.OperationRecords
+
+var WriteTextArena = analyzer.WriteTextArena
 
 type Analysis = analyzer.Analysis
 
