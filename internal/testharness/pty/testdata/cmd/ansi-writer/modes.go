@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,8 @@ func runMode(mode string) error {
 	switch mode {
 	case "no-output":
 		return nil
+	case "env-json":
+		return json.NewEncoder(os.Stdout).Encode(os.Environ())
 	case "write":
 		fmt.Print("hello")
 	case "echo-byte":

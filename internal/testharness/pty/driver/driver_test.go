@@ -3,9 +3,11 @@ package driver_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,6 +258,49 @@ func TestSessionPublishesTerminalAndProcessEvents(t *testing.T) {
 	}
 	if !terminal || !exited {
 		t.Fatalf("events terminal=%v exited=%v", terminal, exited)
+	}
+}
+
+func TestSessionChildReceivesOnlyDeclaredEnvironment(t *testing.T) {
+	t.Setenv("KENT_OPENAI_BASE_URL", "http://poisoned.invalid/v1")
+	t.Setenv("OPENAI_API_KEY", "poisoned")
+	t.Setenv("HTTP_PROXY", "http://poisoned.invalid")
+	t.Setenv("COLORTERM", "truecolor")
+
+	session, err := driver.StartSession(driver.SessionSpec{
+		Path:       buildHelper(t),
+		Args:       []string{"env-json"},
+		Env:        []string{"TERM=xterm-256color", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"},
+		Dimensions: pty.MustDimensions(2, 8),
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	for range session.Events() {
+	}
+	capture, err := session.Capture()
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	var entries []string
+	if err := json.Unmarshal(capture.Raw, &entries); err != nil {
+		t.Fatalf("decode child environment: %v; raw=%q", err, capture.Raw)
+	}
+	environment := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		key, value, found := strings.Cut(entry, "=")
+		if !found || key == "" {
+			t.Fatalf("invalid child environment entry %q", entry)
+		}
+		environment[key] = value
+	}
+	if len(environment) != 3 || environment["TERM"] != "xterm-256color" || environment["LANG"] != "C.UTF-8" || environment["LC_ALL"] != "C.UTF-8" {
+		t.Fatalf("child environment = %#v", environment)
+	}
+	for _, poisoned := range []string{"KENT_OPENAI_BASE_URL", "OPENAI_API_KEY", "HTTP_PROXY", "COLORTERM"} {
+		if _, exists := environment[poisoned]; exists {
+			t.Fatalf("child inherited poisoned environment key %s", poisoned)
+		}
 	}
 }
 
