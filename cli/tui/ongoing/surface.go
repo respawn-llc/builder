@@ -555,7 +555,13 @@ func (s *Surface) writeFrameTransaction(frame FrameInput, immutableRows []string
 		writeImmutableRegionScrollForLiveBandGrowth(&transaction, frame.Size.Height, s.previousBandHeight, len(liveLines))
 	}
 	writeMutableBandErase(&transaction, frame.Size.Height, eraseHeight)
-	writeImmutableRowsAboveMutableBand(&transaction, frame.Size.Height, len(liveLines), immutableRows)
+	writeImmutableRowsAboveMutableBand(
+		&transaction,
+		frame.Size.Height,
+		s.previousBandHeight,
+		len(liveLines),
+		immutableRows,
+	)
 	writeMutableBandLines(&transaction, frame.Size.Height, liveLines)
 	writeCursor(&transaction, frame.Cursor)
 	if _, err := io.WriteString(s.writer, transaction.String()); err != nil {
@@ -786,7 +792,13 @@ func writeMutableBandLines(builder *strings.Builder, terminalHeight int, lines [
 	}
 }
 
-func writeImmutableRowsAboveMutableBand(builder *strings.Builder, terminalHeight, bandHeight int, rows []string) {
+func writeImmutableRowsAboveMutableBand(
+	builder *strings.Builder,
+	terminalHeight int,
+	previousBandHeight int,
+	bandHeight int,
+	rows []string,
+) {
 	if len(rows) == 0 {
 		return
 	}
@@ -794,7 +806,12 @@ func writeImmutableRowsAboveMutableBand(builder *strings.Builder, terminalHeight
 	if bottom < 1 {
 		return
 	}
-	fmt.Fprintf(builder, "\x1b[1;%dr\x1b[%d;1H", bottom, bottom)
+	previousBottom := terminalHeight - min(previousBandHeight, terminalHeight)
+	appendRow := bottom
+	if previousBottom >= 1 && previousBottom < bottom {
+		appendRow = previousBottom
+	}
+	fmt.Fprintf(builder, "\x1b[1;%dr\x1b[%d;1H", bottom, appendRow)
 	for _, row := range rows {
 		builder.WriteString("\r\n")
 		builder.WriteString(row)

@@ -2,8 +2,12 @@ package ongoing
 
 import (
 	"bytes"
+	"strings"
 	"testing"
+	"time"
 
+	"core/internal/testharness/pty"
+	"core/internal/testharness/pty/analyzer"
 	"core/shared/clientui"
 	"github.com/google/uuid"
 )
@@ -60,6 +64,58 @@ func TestAssistantFinalizationAfterClosedParagraphStreamAppendsSuffix(t *testing
 	}
 
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"roundtrip complete"})
+}
+
+func TestAssistantFinalizationDoesNotLeaveBlankRowsFromVolatileTail(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	frame := FrameInput{
+		Size: Size{Width: 40, Height: 12},
+		Sections: []FrameSection{
+			{Kind: FrameSectionInput, Lines: []string{"> prompt"}},
+			{Kind: FrameSectionStatus, Lines: []string{"ready"}},
+		},
+	}
+	if _, err := surface.ApplyTerminalMessage(committedMessage(toolRow("previous tool")), frame); err != nil {
+		t.Fatalf("append previous tool: %v", err)
+	}
+
+	streamID := uuid.New()
+	source := "```text\nalpha\nbeta\ngamma"
+	if _, err := surface.ApplyTerminalMessage(assistantDeltaMessage(streamID, source), frame); err != nil {
+		t.Fatalf("stream multiline volatile tail: %v", err)
+	}
+	if _, err := surface.ApplyTerminalMessage(committedAssistantMessage(streamID, source), frame); err != nil {
+		t.Fatalf("finalize multiline volatile tail: %v", err)
+	}
+
+	capture, err := pty.NewCapture(
+		pty.MustDimensions(frame.Size.Height, frame.Size.Width),
+		[]pty.Chunk{pty.NewChunk(0, time.Millisecond, out.Bytes())},
+	)
+	if err != nil {
+		t.Fatalf("create assistant finalization capture: %v", err)
+	}
+	analysis, err := analyzer.Analyze(capture)
+	if err != nil {
+		t.Fatalf("analyze assistant finalization: %v", err)
+	}
+	rows := strings.Split(analysis.Screen.RenderText(), "\n")
+	alphaRow := screenRowIndex(rows, "alpha")
+	betaRow := screenRowIndex(rows, "beta")
+	gammaRow := screenRowIndex(rows, "gamma")
+	if alphaRow < 0 || betaRow < 0 || gammaRow < 0 {
+		t.Fatalf("assistant rows missing from terminal screen: %q", rows)
+	}
+	if betaRow != alphaRow+1 || gammaRow != betaRow+1 {
+		t.Fatalf(
+			"assistant rows = %d, %d, %d, want adjacent rows; screen=%q",
+			alphaRow,
+			betaRow,
+			gammaRow,
+			rows,
+		)
+	}
 }
 
 func TestAssistantFinalizationMismatchPanics(t *testing.T) {

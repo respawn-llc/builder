@@ -3,9 +3,13 @@ package ongoing
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"core/cli/tui/transcriptrender"
+	"core/internal/testharness/pty"
+	"core/internal/testharness/pty/analyzer"
 	"core/shared/clientui"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/google/uuid"
@@ -220,6 +224,74 @@ func TestLiveBandGrowthScrollsImmutableRegionBeforeErase(t *testing.T) {
 	}
 	assertTerminalPrefix(t, parseTerminalOps(out.String()), wantPrefix)
 	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{"tool", "> prompt", "ready"})
+}
+
+func TestPendingToolCommitDoesNotLeaveBlankRowBetweenConsecutiveTools(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	baseFrame := FrameInput{
+		Size: Size{Width: 40, Height: 10},
+		Sections: []FrameSection{
+			{Kind: FrameSectionInput, Lines: []string{"> prompt"}},
+			{Kind: FrameSectionStatus, Lines: []string{"ready"}},
+		},
+	}
+	pendingFrame := baseFrame
+	pendingFrame.Sections = append(
+		[]FrameSection{{Kind: FrameSectionPendingTools, Lines: []string{"tool running"}}},
+		baseFrame.Sections...,
+	)
+
+	if _, err := surface.ApplyTerminalMessage(committedMessage(userRow("request")), baseFrame); err != nil {
+		t.Fatalf("append initial user row: %v", err)
+	}
+	if _, err := surface.Render(pendingFrame); err != nil {
+		t.Fatalf("render first pending tool: %v", err)
+	}
+	if _, err := surface.ApplyTerminalMessage(committedMessage(toolRow("tool one")), baseFrame); err != nil {
+		t.Fatalf("commit first tool: %v", err)
+	}
+	if _, err := surface.Render(pendingFrame); err != nil {
+		t.Fatalf("render second pending tool: %v", err)
+	}
+	if _, err := surface.ApplyTerminalMessage(committedMessage(toolRow("tool two")), baseFrame); err != nil {
+		t.Fatalf("commit second tool: %v", err)
+	}
+
+	capture, err := pty.NewCapture(
+		pty.MustDimensions(baseFrame.Size.Height, baseFrame.Size.Width),
+		[]pty.Chunk{pty.NewChunk(0, time.Millisecond, out.Bytes())},
+	)
+	if err != nil {
+		t.Fatalf("create pending-tool lifecycle capture: %v", err)
+	}
+	analysis, err := analyzer.Analyze(capture)
+	if err != nil {
+		t.Fatalf("analyze pending-tool lifecycle: %v", err)
+	}
+	rows := strings.Split(analysis.Screen.RenderText(), "\n")
+	firstToolRow := screenRowIndex(rows, "• tool one")
+	secondToolRow := screenRowIndex(rows, "• tool two")
+	if firstToolRow < 0 || secondToolRow < 0 {
+		t.Fatalf("tool rows missing from terminal screen: %q", rows)
+	}
+	if secondToolRow != firstToolRow+1 {
+		t.Fatalf(
+			"consecutive tool rows = %d and %d, want adjacent rows; screen=%q",
+			firstToolRow,
+			secondToolRow,
+			rows,
+		)
+	}
+}
+
+func screenRowIndex(rows []string, want string) int {
+	for index, row := range rows {
+		if strings.TrimSpace(row) == want {
+			return index
+		}
+	}
+	return -1
 }
 
 func TestInitialLiveBandRenderDoesNotScrollBlankScreen(t *testing.T) {
