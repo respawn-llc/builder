@@ -187,7 +187,7 @@ func (s *ResponsesStub) Close() {
 
 func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 	return func(writer http.ResponseWriter, request *http.Request) {
-		handle, ctx, done := s.beginHandler(request.Context())
+		ctx, done := s.beginHandler(request.Context())
 		defer done()
 		body, err := boundedBody(request)
 		if err != nil {
@@ -212,11 +212,10 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 		}
 		s.recordObserved(call)
 		s.writeOperationResponse(ctx, writer, route, operation)
-		_ = handle
 	}
 }
 
-func (s *ResponsesStub) beginHandler(parent context.Context) (uint64, context.Context, func()) {
+func (s *ResponsesStub) beginHandler(parent context.Context) (context.Context, func()) {
 	s.mu.Lock()
 	handle := s.nextHandle
 	s.nextHandle++
@@ -225,7 +224,7 @@ func (s *ResponsesStub) beginHandler(parent context.Context) (uint64, context.Co
 	s.active++
 	s.mu.Unlock()
 	s.notify()
-	return handle, ctx, func() {
+	return ctx, func() {
 		s.mu.Lock()
 		delete(s.handlers, handle)
 		s.active--
