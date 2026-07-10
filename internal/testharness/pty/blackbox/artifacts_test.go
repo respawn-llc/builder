@@ -39,3 +39,28 @@ func TestPublishFailureArtifactsAtomicallyPublishesLatestBundle(t *testing.T) {
 		t.Fatal("latest pointer is empty")
 	}
 }
+
+func TestPublishFailureArtifactsRejectsContendedPublicationLock(t *testing.T) {
+	root := t.TempDir()
+	artifactRoot := filepath.Join(root, "artifacts")
+	if err := os.MkdirAll(artifactRoot, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	lock, err := os.OpenFile(filepath.Join(artifactRoot, "publish.lock"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("create publication lock: %v", err)
+	}
+	t.Cleanup(func() { _ = lock.Close() })
+
+	capture, err := analyzer.NewCapture(analyzer.MustDimensions(1, 1), nil)
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	analysis, err := analyzer.Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if _, err := publishFailureArtifacts(time.Now().Add(time.Second), root, capture, &analysis, errors.New("primary failure"), nil); err == nil {
+		t.Fatal("publishFailureArtifacts succeeded while publication lock was held")
+	}
+}
