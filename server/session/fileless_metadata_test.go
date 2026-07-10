@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type stubPersistedSessionResolver struct {
@@ -128,7 +130,7 @@ func TestFilelessMetadataPersistenceSkipsSessionFileAndPublishesObserver(t *test
 
 func TestFilelessEventPersistenceDoesNotAppendToEventLog(t *testing.T) {
 	persisted := newSessionTestStore(t)
-	if _, _, err := persisted.AppendEvent("live", "message", map[string]any{"role": "user", "content": "before inspection"}); err != nil {
+	if _, _, err := persisted.AppendEvent(uuid.NewString(), "message", map[string]any{"role": "user", "content": "before inspection"}); err != nil {
 		t.Fatalf("seed event: %v", err)
 	}
 	eventsPath := filepath.Join(persisted.Dir(), eventsFile)
@@ -149,7 +151,7 @@ func TestFilelessEventPersistenceDoesNotAppendToEventLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open inspection store: %v", err)
 	}
-	event, committed, err := inspection.AppendEvent("inspect", "message", map[string]any{"role": "developer", "content": "ephemeral context"})
+	event, committed, err := inspection.AppendEvent(uuid.NewString(), "message", map[string]any{"role": "developer", "content": "ephemeral context"})
 	if err != nil {
 		t.Fatalf("append inspection event: %v", err)
 	}

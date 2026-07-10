@@ -15,11 +15,18 @@ import (
 //
 // The engine must already be constructed (which auto-hydrates the active transcript
 // segment via restoreMessages). It prepares the same meta context that a live turn
-// prepares before building the request. allowTools mirrors the production
-// tool-exposure behavior; pass false to produce a tool-less payload.
+// prepares before running the same pre-dispatch preparation as a live turn. If
+// that preparation requires a model-backed compaction, inspection returns the
+// preparation error rather than emitting a stale post-preparation payload.
+// allowTools mirrors the production tool-exposure behavior; pass false to
+// produce a tool-less payload.
 func PrepareInspectionRequest(ctx context.Context, eng *Engine, allowTools bool) (llm.Request, error) {
+	eng.ensureOrchestrationCollaborators()
 	stepID := uuid.NewString()
 	if err := eng.ensureMetaContextForRequest(ctx, stepID); err != nil {
+		return llm.Request{}, err
+	}
+	if err := (&defaultStepExecutor{engine: eng}).prepareModelTurn(ctx, stepID); err != nil {
 		return llm.Request{}, err
 	}
 	return eng.buildRequest(ctx, stepID, allowTools)

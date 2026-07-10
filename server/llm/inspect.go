@@ -6,6 +6,13 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
+// ResolveOpenAIWirePayloadCapabilities resolves the provider contract used by
+// the HTTP transport immediately before it builds an OpenAI wire payload.
+func ResolveOpenAIWirePayloadCapabilities(options ProviderClientOptions, mode OpenAIAuthMode) (ProviderCapabilities, error) {
+	transport := newOpenAIHTTPTransport(options)
+	return transport.providerCapabilitiesForMode(mode)
+}
+
 // MarshalOpenAIWirePayload builds the exact responses.ResponseNewParams that the
 // OpenAI / openai-compatible HTTP transport would POST, using the same production
 // buildPayload path, and marshals it to the byte-identical JSON body the openai-go

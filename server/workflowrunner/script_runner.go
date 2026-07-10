@@ -75,7 +75,7 @@ func (s *Starter) runScript(ctx context.Context, req SchedulerStartRunRequest, i
 }
 
 func (s *Starter) scriptCompletionContract(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext) (workflowruntime.CompletionContract, error) {
-	contract := workflowCompletionContract(req, input)
+	contract := workflowCompletionContractForRun(input.Run, input)
 	live, err := s.store.GetRunCompletionContext(ctx, req.RunID)
 	if err != nil {
 		return workflowruntime.CompletionContract{}, err

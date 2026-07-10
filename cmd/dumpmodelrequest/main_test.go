@@ -109,3 +109,34 @@ func TestValidateOpenAIResponsesInspectionProviderRejectsUnsupportedProvider(t *
 		t.Fatal("expected unsupported provider error")
 	}
 }
+
+func TestResolveOpenAIWirePayloadCapabilitiesUsesLiveBaseURLContract(t *testing.T) {
+	caps, err := resolveOpenAIWirePayloadCapabilities(
+		llm.OpenAIAuthMode{},
+		config.Settings{
+			ProviderOverride: "openai",
+			OpenAIBaseURL:    "https://example.invalid/v1",
+		},
+		"",
+	)
+	if err != nil {
+		t.Fatalf("resolveOpenAIWirePayloadCapabilities: %v", err)
+	}
+	if got, want := caps.ProviderID, "openai-compatible"; got != want {
+		t.Fatalf("provider id = %q, want %q", got, want)
+	}
+}
+
+func TestResolveOpenAIWirePayloadCapabilitiesHonorsExplicitProviderOverride(t *testing.T) {
+	caps, err := resolveOpenAIWirePayloadCapabilities(
+		llm.OpenAIAuthMode{},
+		config.Settings{OpenAIBaseURL: "https://example.invalid/v1"},
+		"openai",
+	)
+	if err != nil {
+		t.Fatalf("resolveOpenAIWirePayloadCapabilities: %v", err)
+	}
+	if got, want := caps.ProviderID, "openai"; got != want {
+		t.Fatalf("provider id = %q, want %q", got, want)
+	}
+}

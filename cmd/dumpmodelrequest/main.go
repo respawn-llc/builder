@@ -38,6 +38,9 @@ import (
 	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
+	"core/server/workflowrunner"
+	"core/server/workflowruntime"
+	"core/server/workflowstore"
 	"core/shared/config"
 )
 
@@ -131,6 +134,10 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("resolve session launch settings: %w", err)
 	}
+	workflowConfig, err := resolvePersistedWorkflowRuntimeConfig(ctx, md, store, resolved.Settings)
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("resolve workflow runtime: %w", err)
+	}
 	authStore := auth.NewEnvAPIKeyOverrideStore(
 		auth.NewFileStore(config.GlobalAuthConfigPath(cfg)),
 		os.LookupEnv,
@@ -145,6 +152,14 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		return capturedRequest{}, fmt.Errorf("resolve provider capabilities: %w", err)
 	}
 	if err := validateOpenAIResponsesInspectionProvider(caps); err != nil {
+		return capturedRequest{}, err
+	}
+	mode := llm.OpenAIAuthModeForAuthState(authState)
+	wireCaps, err := resolveOpenAIWirePayloadCapabilities(mode, resolved.Settings, providerOverride)
+	if err != nil {
+		return capturedRequest{}, fmt.Errorf("resolve wire provider capabilities: %w", err)
+	}
+	if err := validateOpenAIResponsesInspectionProvider(wireCaps); err != nil {
 		return capturedRequest{}, err
 	}
 	target, err := md.ResolveSessionExecutionTarget(ctx, sessionID)
@@ -165,10 +180,11 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 		runtimewire.RuntimeWiringOptions{
 			Context:                      ctx,
 			Client:                       inspectionCapabilityClient{capabilities: caps},
-			Headless:                     false,
+			Headless:                     workflowConfig != nil,
 			Sources:                      resolved.Source.Sources,
 			ProviderCapabilitiesOverride: providerCapabilitiesOverride,
 			GlobalConfigDir:              persistenceRoot,
+			WorkflowRun:                  workflowConfig,
 		},
 	)
 	if err != nil {
@@ -187,10 +203,9 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 	}
 
 	openAIReq := llm.RequestAsOpenAI(req)
-	mode := llm.OpenAIAuthModeForAuthState(authState)
 	storeFlag := resolved.Settings.Store
 	modelVerbosity := string(resolved.Settings.ModelVerbosity)
-	wireBytes, err := llm.MarshalOpenAIWirePayload(openAIReq, storeFlag, modelVerbosity, mode, caps)
+	wireBytes, err := llm.MarshalOpenAIWirePayload(openAIReq, storeFlag, modelVerbosity, mode, wireCaps)
 	if err != nil {
 		return capturedRequest{}, fmt.Errorf("marshal wire payload: %w", err)
 	}
@@ -204,7 +219,7 @@ func captureSessionRequest(ctx context.Context, persistenceRoot, sessionID, prov
 
 	return capturedRequest{
 		SessionID:   meta.SessionID,
-		Provider:    string(caps.ProviderID),
+		Provider:    string(wireCaps.ProviderID),
 		Model:       req.Model,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		WirePayload: prettyWire,
@@ -222,6 +237,23 @@ func loadSessionConfig(bootstrap launch.BootstrapPlan, persistenceRoot string) (
 		return config.LoadGlobal(options)
 	}
 	return config.Load(bootstrap.WorkspaceRoot, options)
+}
+
+func resolvePersistedWorkflowRuntimeConfig(ctx context.Context, metadataStore *metadata.Store, store *session.Store, settings config.Settings) (*workflowruntime.Config, error) {
+	if store == nil || store.Meta().WorkflowSession == nil {
+		return nil, nil
+	}
+	workflowStore, err := workflowstore.New(metadataStore)
+	if err != nil {
+		return nil, err
+	}
+	return workflowrunner.BuildPersistedWorkflowRuntimeConfig(
+		ctx,
+		workflowStore,
+		*store.Meta().WorkflowSession,
+		store.Meta().SessionID,
+		settings.Workflow.MaxInvalidCompletionAttempts,
+	)
 }
 
 func resolveInspectionProviderCapabilities(authState auth.State, active config.Settings, locked *session.LockedContract, providerOverride string) (llm.ProviderCapabilities, bool, error) {
@@ -247,6 +279,25 @@ func validateOpenAIResponsesInspectionProvider(caps llm.ProviderCapabilities) er
 		return fmt.Errorf("provider %q does not support OpenAI Responses payload inspection", caps.ProviderID)
 	}
 	return nil
+}
+
+func resolveOpenAIWirePayloadCapabilities(mode llm.OpenAIAuthMode, active config.Settings, providerOverride string) (llm.ProviderCapabilities, error) {
+	options := llm.ProviderClientOptions{
+		Provider:      llm.Provider(strings.TrimSpace(active.ProviderOverride)),
+		OpenAIBaseURL: active.OpenAIBaseURL,
+	}
+	if configured, ok := llm.ProviderCapabilitiesFromOverride(active.ProviderCapabilities); ok {
+		options.ProviderCapabilitiesOverride = &configured
+	}
+	if requested := strings.TrimSpace(providerOverride); requested != "" {
+		caps, ok := llm.LookupProviderCapabilityContract(requested)
+		if !ok {
+			return llm.ProviderCapabilities{}, fmt.Errorf("unsupported provider override %q", requested)
+		}
+		options.Provider = llm.ProviderOpenAI
+		options.ProviderCapabilitiesOverride = &caps
+	}
+	return llm.ResolveOpenAIWirePayloadCapabilities(options, mode)
 }
 
 func prettyPrint(raw json.RawMessage) (json.RawMessage, error) {
