@@ -94,6 +94,22 @@ func TestResponsesStubCancelsHeldSSEAndReturnsDeclaredProviderFailure(t *testing
 	if response.StatusCode != http.StatusBadGateway {
 		t.Fatalf("provider failure status = %d, want %d", response.StatusCode, http.StatusBadGateway)
 	}
+
+	compact, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeProviderFailure,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub compact failure: %v", err)
+	}
+	t.Cleanup(compact.Close)
+	response, err = http.Post(compact.URL()+"/responses/compact", "application/json", bytes.NewBufferString(`{"input":[]}`))
+	if err != nil {
+		t.Fatalf("POST compact provider failure: %v", err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatalf("compact provider failure status = %d, want %d", response.StatusCode, http.StatusBadGateway)
+	}
 }
 
 func TestResponsesStubConsumesTypedProbeAndRejectsUnconsumedQueue(t *testing.T) {

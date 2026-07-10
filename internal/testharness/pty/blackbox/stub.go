@@ -179,16 +179,7 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 			defer s.completeRequired()
 		}
 		s.recordObserved(call)
-		switch route {
-		case RouteResponses:
-			s.writeResponse(ctx, writer, operation)
-		case RouteInputTokens:
-			writeJSON(writer, http.StatusOK, map[string]int{"input_tokens": 0})
-		case RouteModel:
-			writeJSON(writer, http.StatusOK, map[string]any{"id": "gpt-5", "object": "model"})
-		case RouteCompact:
-			writeJSON(writer, http.StatusOK, map[string]any{"output": []any{}})
-		}
+		s.writeOperationResponse(ctx, writer, route, operation)
 		_ = handle
 	}
 }
@@ -253,6 +244,25 @@ func (s *ResponsesStub) completeRequired() {
 	s.notify()
 }
 
+func (s *ResponsesStub) writeOperationResponse(ctx context.Context, writer http.ResponseWriter, route Route, operation *RequiredOperation) {
+	if operation != nil && operation.Outcome == OutcomeProviderFailure {
+		http.Error(writer, "declared provider failure", http.StatusBadGateway)
+		return
+	}
+	switch route {
+	case RouteResponses:
+		s.writeResponse(ctx, writer, operation)
+	case RouteInputTokens:
+		writeJSON(writer, http.StatusOK, map[string]int{"input_tokens": 0})
+	case RouteModel:
+		writeJSON(writer, http.StatusOK, map[string]any{"id": "gpt-5", "object": "model"})
+	case RouteCompact:
+		writeJSON(writer, http.StatusOK, map[string]any{"output": []any{}})
+	default:
+		http.Error(writer, "unsupported model route", http.StatusNotFound)
+	}
+}
+
 func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseWriter, operation *RequiredOperation) {
 	if operation == nil {
 		http.Error(writer, "response operation is not declared", http.StatusBadRequest)
@@ -264,8 +274,6 @@ func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseW
 		<-ctx.Done()
 		return
 	case OutcomeProviderFailure:
-		http.Error(writer, "declared provider failure", http.StatusBadGateway)
-		return
 	case OutcomeStream:
 		writer.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n")
