@@ -1639,9 +1639,9 @@ func (s *Service) questionAttentionItems(ctx context.Context, projectID string, 
 	items := []serverapi.WorkflowAttentionItem{}
 	questions := newPendingQuestionResolver(s.transcripts, s.prompts)
 	for _, row := range rows {
-		askID := strings.TrimSpace(row.WaitingAskID)
-		if askID == "" {
-			return nil, fmt.Errorf("workflow question attention projection returned invalid ask id for run %q", row.RunID)
+		askID, err := requiredWaitingAskID(row.WaitingAskID, row.RunID)
+		if err != nil {
+			return nil, err
 		}
 		question, err := questions.Question(ctx, row.SessionID, askID)
 		if err != nil {
@@ -1650,6 +1650,14 @@ func (s *Service) questionAttentionItems(ctx context.Context, projectID string, 
 		items = append(items, workflowQuestionAttentionItem("question:"+row.RunID+":"+askID, row.ProjectID, row.WorkflowID, row.TaskID, row.ShortID, row.Title, row.RunID, row.SessionID, askID, question, row.UpdatedAtUnixMs))
 	}
 	return items, nil
+}
+
+func requiredWaitingAskID(value sql.NullString, runID string) (string, error) {
+	askID := strings.TrimSpace(value.String)
+	if !value.Valid || askID == "" {
+		return "", fmt.Errorf("workflow question attention projection returned invalid ask id for run %q", runID)
+	}
+	return askID, nil
 }
 
 func workflowQuestionAttentionItem(id string, projectID string, workflowID string, taskID string, shortID string, title string, runID string, sessionID string, askID string, question pendingQuestion, occurredAtUnixMs int64) serverapi.WorkflowAttentionItem {
