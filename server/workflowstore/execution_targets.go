@@ -818,6 +818,12 @@ func (s *Store) GetTaskExecutionTarget(ctx context.Context, taskID workflow.Task
 	return &target, nil
 }
 
+// DecodeTaskExecutionTarget converts one generated persistence row into the
+// domain target used by execution and read-model projections.
+func DecodeTaskExecutionTarget(row sqlitegen.TaskExecutionTarget) (workflow.ExecutionTarget, error) {
+	return taskExecutionTargetFromRow(row)
+}
+
 func (s *Store) ExecutionTargetRecoveryContext(ctx context.Context, taskID workflow.TaskID) (ExecutionTargetRecoveryContext, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
 		return ExecutionTargetRecoveryContext{}, errors.New("task id is required")

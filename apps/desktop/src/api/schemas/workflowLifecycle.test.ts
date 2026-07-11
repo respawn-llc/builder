@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { workflowExecutionPolicySchema } from "./workflow";
+import { taskDetailSchema } from "./workflowBoard";
 import { workflowTaskInitiatingActionResultSchema } from "./workflowLifecycle";
 
 describe("workflow execution policy schemas", () => {
@@ -73,5 +74,52 @@ describe("workflow execution policy schemas", () => {
         conflict: { task_id: "task-1" },
       }),
     ).toEqual({ conflict: { taskID: "task-1" }, outcome: "conflict" });
+  });
+
+  it("parses locked task-detail target facts only through the detail read model", () => {
+    const parsed = taskDetailSchema.parse({
+      task: {
+        summary: {
+          id: "task-1",
+          project_id: "project-1",
+          workflow_id: "workflow-1",
+          short_id: "PROJ-1",
+          title: "Task",
+          created_at_unix_ms: 1,
+          updated_at_unix_ms: 1,
+          done: false,
+        },
+        project: { display_name: "Project" },
+        workflow: {
+          workflow_id: "workflow-1",
+          display_name: "Workflow",
+          version: 1,
+          is_project_default: true,
+          valid_for_task_creation: true,
+        },
+        body: "",
+        source_workspace: {
+          workspace_id: "workspace-1",
+          display_name: "Source",
+          root_path: "/repo",
+          availability: "available",
+          is_primary: true,
+          updated_at_unix_ms: 1,
+        },
+        execution_target: {
+          policy: "custom_ref",
+          custom_ref: "refs/tags/v1.2.3",
+          source: { kind: "detached_commit", commit: "deadbeef" },
+        },
+        status: { kind: "backlog", label: "Backlog", native_state: "active" },
+        actions: { can_start: true, can_interrupt: false, can_resume: false, can_cancel: true },
+      },
+    });
+
+    expect(parsed.executionTarget).toEqual({
+      customRef: "refs/tags/v1.2.3",
+      policy: "custom_ref",
+      source: { commit: "deadbeef", kind: "detached_commit", namedRef: null },
+    });
   });
 });

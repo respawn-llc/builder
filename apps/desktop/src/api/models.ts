@@ -1,3 +1,10 @@
+import type {
+  TaskExecutionTarget,
+  WorkflowTaskExecutionTargetMaterializationProgress,
+  WorkflowTaskExecutionTargetNegotiationConflict,
+  WorkflowTaskExecutionTargetSelectionRequired,
+} from "./workflowExecutionTarget";
+
 export type ServerCause = Readonly<{
   code: string;
   severity: string;
@@ -499,39 +506,15 @@ export type TaskApproveResponse = Readonly<{
   runIDs: readonly string[];
 }>;
 
-export type WorkflowTaskExecutionTargetSelectionMode = "none" | "head" | "default_branch" | "custom_ref";
-
-export type WorkflowTaskExecutionTargetSelection =
-  | Readonly<{ mode: "custom_ref"; customRef: string }>
-  | Readonly<{
-      mode: Exclude<WorkflowTaskExecutionTargetSelectionMode, "custom_ref">;
-      customRef: null;
-    }>;
-
-export type WorkflowTaskExecutionTargetSource =
-  | Readonly<{ kind: "non_git"; namedRef: null; commit: null }>
-  | Readonly<{ kind: "named_ref"; namedRef: string; commit: string }>
-  | Readonly<{ kind: "detached_commit"; namedRef: null; commit: string }>
-  | Readonly<{ kind: "unavailable"; namedRef: null; commit: null }>;
-
-export type WorkflowTaskExecutionTargetSelectionRequired = Readonly<{
-  taskID: string;
-  generation: string;
-  sourceWorkspaceID: string;
-  source: WorkflowTaskExecutionTargetSource;
-  supportedSelections: readonly WorkflowTaskExecutionTargetSelectionMode[];
-  configuredPolicy: WorkflowExecutionPolicy;
-  recoveryCause: string | null;
-}>;
-
-export type WorkflowTaskExecutionTargetMaterializationProgress = Readonly<{
-  taskID: string;
-  phase: "materializing" | "recovery_queued" | "recovering";
-}>;
-
-export type WorkflowTaskExecutionTargetNegotiationConflict = Readonly<{
-  taskID: string;
-}>;
+export type {
+  TaskExecutionTarget,
+  WorkflowTaskExecutionTargetMaterializationProgress,
+  WorkflowTaskExecutionTargetNegotiationConflict,
+  WorkflowTaskExecutionTargetSelection,
+  WorkflowTaskExecutionTargetSelectionMode,
+  WorkflowTaskExecutionTargetSelectionRequired,
+  WorkflowTaskExecutionTargetSource,
+} from "./workflowExecutionTarget";
 
 export type WorkflowTaskInitiatingActionResult =
   | Readonly<{ outcome: "started"; started: TaskStartResponse }>
@@ -701,6 +684,7 @@ export type TaskDetail = Readonly<{
   body: string;
   sourceURL: string;
   sourceWorkspace: WorkspaceSummary;
+  executionTarget: TaskExecutionTarget | null;
   status: TaskStatus;
   actions: TaskActions;
   attention: readonly AttentionItem[];

@@ -213,6 +213,71 @@ func TestBoardAndTaskDetailProjectTaskSourceWorkspaceAndBody(t *testing.T) {
 	}
 }
 
+func TestTaskDetailProjectsLockedExecutionTargetWithoutLeakingItToBoardCards(t *testing.T) {
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Locked target",
+		Body:      "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	customRef := "refs/tags/v1.2.3"
+	provisioningGeneration := "provisioning-1"
+	if err := workflowStore.SaveTaskExecutionTarget(ctx, workflow.ExecutionTarget{
+		TaskID:             task.ID,
+		Policy:             workflow.ExecutionPolicyCustomRef,
+		RequestedCustomRef: &customRef,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: "deadbeef",
+		},
+		State:                       workflow.ExecutionTargetStateLocked,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupSucceeded,
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+	}); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+
+	detail, err := view.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if detail.ExecutionTarget == nil ||
+		detail.ExecutionTarget.Policy != serverapi.WorkflowExecutionPolicyCustomRef ||
+		detail.ExecutionTarget.CustomRef == nil ||
+		*detail.ExecutionTarget.CustomRef != customRef ||
+		detail.ExecutionTarget.Source.Kind != serverapi.WorkflowTaskExecutionTargetSourceDetachedCommit ||
+		detail.ExecutionTarget.Source.Commit == nil ||
+		*detail.ExecutionTarget.Source.Commit != "deadbeef" {
+		t.Fatalf("execution target = %+v, want locked detached custom target", detail.ExecutionTarget)
+	}
+
+	board, err := view.GetBoard(ctx, serverapi.WorkflowBoardRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("GetBoard: %v", err)
+	}
+	backlog := workflowViewColumnByKind(t, board, workflow.NodeKindStart)
+	cards, err := view.ListBoardNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: string(workflowID),
+		NodeID:     backlog.Node.NodeID,
+	}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("ListBoardNodeCards: %v", err)
+	}
+	if len(cards.Cards) != 1 {
+		t.Fatalf("board cards = %+v, want one card", cards.Cards)
+	}
+}
+
 func TestBoardAndTaskDetailProjectParallelBranchPlacements(t *testing.T) {
 	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
 	workflowID := createWorkflowViewFanoutWorkflow(t, ctx, workflowStore)

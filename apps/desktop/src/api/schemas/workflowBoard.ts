@@ -8,6 +8,7 @@ import type {
   BoardNodeCardsPage,
   CommentPage,
   PendingAsk,
+  TaskExecutionTarget,
   TaskDetail,
   TaskMoveResponse,
   WorkflowBoard,
@@ -29,6 +30,52 @@ import {
   workspaceSummarySchema,
 } from "./common";
 import { emptyArray, firstNonEmpty } from "./workflowHelpers";
+
+const lockedExecutionTargetSourceSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("named_ref"),
+      named_ref: z.string().min(1),
+      commit: z.string().min(1),
+    })
+    .strict()
+    .transform((value) => ({ commit: value.commit, kind: "named_ref", namedRef: value.named_ref }) as const),
+  z
+    .object({
+      kind: z.literal("detached_commit"),
+      named_ref: z.undefined().optional(),
+      commit: z.string().min(1),
+    })
+    .strict()
+    .transform((value) => ({ commit: value.commit, kind: "detached_commit", namedRef: null }) as const),
+]);
+
+const taskExecutionTargetSchema: z.ZodType<TaskExecutionTarget> = z.discriminatedUnion("policy", [
+  z
+    .object({
+      policy: z.literal("none"),
+      custom_ref: z.undefined().optional(),
+      source: z.undefined().optional(),
+    })
+    .strict()
+    .transform(() => ({ customRef: null, policy: "none", source: null }) as const),
+  z
+    .object({
+      policy: z.enum(["head", "default_branch"]),
+      custom_ref: z.undefined().optional(),
+      source: lockedExecutionTargetSourceSchema,
+    })
+    .strict()
+    .transform((value) => ({ customRef: null, policy: value.policy, source: value.source }) as const),
+  z
+    .object({
+      policy: z.literal("custom_ref"),
+      custom_ref: z.string().min(1),
+      source: lockedExecutionTargetSourceSchema,
+    })
+    .strict()
+    .transform((value) => ({ customRef: value.custom_ref, policy: value.policy, source: value.source }) as const),
+]);
 
 const boardGroupsSchema = z
   .array(boardGroupSchema)
@@ -183,6 +230,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
       body: emptyString,
       source_url: emptyString,
       source_workspace: workspaceSummarySchema,
+      execution_target: taskExecutionTargetSchema.nullish(),
       managed_worktree: z
         .object({
           canonical_root: z.string().optional().default(""),
@@ -209,6 +257,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     body: value.task.body,
     sourceURL: value.task.source_url,
     sourceWorkspace: value.task.source_workspace,
+    executionTarget: value.task.execution_target ?? null,
     status: value.task.status,
     actions: value.task.actions,
     attention: value.task.attention,

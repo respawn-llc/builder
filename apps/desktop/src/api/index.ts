@@ -75,6 +75,7 @@ export type {
   WorkflowExecutionPolicyMode,
   WorkflowTaskExecutionTargetMaterializationProgress,
   WorkflowTaskExecutionTargetSelection,
+  WorkflowTaskExecutionTargetSelectionMode,
   WorkflowTaskExecutionTargetSelectionRequired,
   WorkflowTaskExecutionTargetSource,
   WorkflowTaskInitiatingActionResult,

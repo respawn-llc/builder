@@ -1379,20 +1379,29 @@ type WorkflowTaskSummary struct {
 }
 
 type WorkflowTaskDetail struct {
-	Summary         WorkflowTaskSummary      `json:"summary"`
-	Project         ProjectBoardProject      `json:"project"`
-	Workflow        WorkflowPickerItem       `json:"workflow"`
-	Body            string                   `json:"body"`
-	SourceURL       string                   `json:"source_url,omitempty"`
-	SourceWorkspace ProjectWorkspaceSummary  `json:"source_workspace"`
-	ManagedWorktree *WorktreeView            `json:"managed_worktree,omitempty"`
-	Status          WorkflowTaskStatus       `json:"status"`
-	Actions         WorkflowTaskActions      `json:"actions"`
-	Attention       []WorkflowAttentionItem  `json:"attention,omitempty"`
-	Placements      []WorkflowPlacement      `json:"placements"`
-	Runs            []WorkflowRun            `json:"runs"`
-	Transitions     []WorkflowTaskTransition `json:"transitions"`
-	Comments        []WorkflowTaskComment    `json:"comments"`
+	Summary         WorkflowTaskSummary          `json:"summary"`
+	Project         ProjectBoardProject          `json:"project"`
+	Workflow        WorkflowPickerItem           `json:"workflow"`
+	Body            string                       `json:"body"`
+	SourceURL       string                       `json:"source_url,omitempty"`
+	SourceWorkspace ProjectWorkspaceSummary      `json:"source_workspace"`
+	ManagedWorktree *WorktreeView                `json:"managed_worktree,omitempty"`
+	ExecutionTarget *WorkflowTaskExecutionTarget `json:"execution_target,omitempty"`
+	Status          WorkflowTaskStatus           `json:"status"`
+	Actions         WorkflowTaskActions          `json:"actions"`
+	Attention       []WorkflowAttentionItem      `json:"attention,omitempty"`
+	Placements      []WorkflowPlacement          `json:"placements"`
+	Runs            []WorkflowRun                `json:"runs"`
+	Transitions     []WorkflowTaskTransition     `json:"transitions"`
+	Comments        []WorkflowTaskComment        `json:"comments"`
+}
+
+// WorkflowTaskExecutionTarget is the immutable target facts locked for a task.
+// It is projected only through task detail; board cards intentionally omit it.
+type WorkflowTaskExecutionTarget struct {
+	Policy    WorkflowExecutionPolicyMode        `json:"policy"`
+	CustomRef *string                            `json:"custom_ref,omitempty"`
+	Source    *WorkflowTaskExecutionTargetSource `json:"source,omitempty"`
 }
 
 type WorkflowPlacement struct {

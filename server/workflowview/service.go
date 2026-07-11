@@ -20,6 +20,7 @@ import (
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowscript"
+	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -658,6 +659,19 @@ func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.Workflo
 	summary := taskSummary(task, placements, nodeKinds)
 	status, actions := taskStatusAndActions(task, summary, placements, runs, def, nodeKinds)
 	detail := serverapi.WorkflowTaskDetail{Summary: summary, Project: projectBoardProject(project), Workflow: workflowPickerItem(def, linkByWorkflowID[task.WorkflowID], nil), Body: task.Body, SourceURL: task.SourceUrl, SourceWorkspace: sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace), Status: status, Actions: actions}
+	if targetRow, targetErr := s.queries.GetTaskExecutionTarget(ctx, task.ID); targetErr == nil {
+		target, decodeErr := workflowstore.DecodeTaskExecutionTarget(targetRow)
+		if decodeErr != nil {
+			return serverapi.WorkflowTaskDetail{}, fmt.Errorf("decode task execution target: %w", decodeErr)
+		}
+		targetDTO, projectionErr := taskExecutionTargetDTO(target)
+		if projectionErr != nil {
+			return serverapi.WorkflowTaskDetail{}, projectionErr
+		}
+		detail.ExecutionTarget = &targetDTO
+	} else if !errors.Is(targetErr, sql.ErrNoRows) {
+		return serverapi.WorkflowTaskDetail{}, targetErr
+	}
 	if strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
 		if worktree, err := s.queries.GetWorktreeByID(ctx, strings.TrimSpace(task.ManagedWorktreeID.String)); err == nil {
 			view := worktreeView(worktree)
@@ -702,6 +716,33 @@ func (s *Service) GetTask(ctx context.Context, taskID string) (serverapi.Workflo
 		detail.Comments = append(detail.Comments, commentDTO(comment))
 	}
 	return detail, nil
+}
+
+func taskExecutionTargetDTO(target workflow.ExecutionTarget) (serverapi.WorkflowTaskExecutionTarget, error) {
+	if err := target.Validate(); err != nil {
+		return serverapi.WorkflowTaskExecutionTarget{}, fmt.Errorf("invalid task execution target: %w", err)
+	}
+	dto := serverapi.WorkflowTaskExecutionTarget{
+		Policy:    serverapi.WorkflowExecutionPolicyMode(target.Policy),
+		CustomRef: target.RequestedCustomRef,
+	}
+	if target.ResolvedSource == nil {
+		return dto, nil
+	}
+	source := serverapi.WorkflowTaskExecutionTargetSource{
+		Commit: &target.ResolvedSource.Commit,
+	}
+	switch target.ResolvedSource.Kind {
+	case workflow.ExecutionTargetSourceNamedRef:
+		source.Kind = serverapi.WorkflowTaskExecutionTargetSourceNamedRef
+		source.NamedRef = target.ResolvedSource.NamedRef
+	case workflow.ExecutionTargetSourceDetachedCommit:
+		source.Kind = serverapi.WorkflowTaskExecutionTargetSourceDetachedCommit
+	default:
+		return serverapi.WorkflowTaskExecutionTarget{}, fmt.Errorf("unsupported task execution target source kind %q", target.ResolvedSource.Kind)
+	}
+	dto.Source = &source
+	return dto, nil
 }
 
 func (s *Service) GetTaskByProjectShortID(ctx context.Context, projectID string, shortID string) (serverapi.WorkflowTaskDetail, error) {
