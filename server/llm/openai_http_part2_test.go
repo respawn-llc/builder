@@ -22,7 +22,7 @@ func TestBuildPayload_AppliesStructuredOutputJSONSchema(t *testing.T) {
 			Schema: json.RawMessage(`{"type":"object","properties":{"suggestions":{"type":"array","items":{"type":"string"}}},"required":["suggestions"],"additionalProperties":false}`),
 			Strict: true,
 		},
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestBuildPayload_PreservesNullableStructuredOutputSchemaProperties(t *testi
 			}`),
 			Strict: true,
 		},
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -118,7 +118,7 @@ func assertNullablePayloadProperty(t *testing.T, properties map[string]any, name
 func TestBuildPayload_AppliesConfiguredModelVerbosityForSupportedModels(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "high"
-	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5"}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestBuildPayload_AppliesConfiguredModelVerbosityForSupportedModels(t *testi
 func TestBuildPayload_IgnoresConfiguredModelVerbosityForUnsupportedModels(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "high"
-	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-4.1"}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-4.1"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestBuildPayload_IgnoresConfiguredModelVerbosityForUnsupportedModels(t *tes
 func TestBuildPayload_AppliesConfiguredModelVerbosityForUnknownFirstPartyModels(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "high"
-	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5-preview"}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5-preview"}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestBuildPayload_AppliesConfiguredModelVerbosityForUnknownFirstPartyModels(
 func TestBuildPayload_IgnoresConfiguredModelVerbosityForUnknownNonFirstPartyProviders(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "high"
-	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5-preview"}, openAIAuthMode{}, ProviderCapabilities{ProviderID: "openai-compatible", IsOpenAIFirstParty: false})
+	payload, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5-preview"}, OpenAIAuthMode{}, ProviderCapabilities{ProviderID: "openai-compatible", IsOpenAIFirstParty: false})
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestBuildPayload_MergesConfiguredModelVerbosityWithStructuredOutput(t *test
 			Schema: json.RawMessage(`{"type":"object","properties":{"suggestions":{"type":"array","items":{"type":"string"}}},"required":["suggestions"],"additionalProperties":false}`),
 			Strict: true,
 		},
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestBuildPayload_AppliesReasoningEffortForOpenAIModels(t *testing.T) {
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:           "gpt-5",
 		ReasoningEffort: "xhigh",
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestBuildPayload_SkipsReasoningSummaryForUnknownModels(t *testing.T) {
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:           "custom-model",
 		ReasoningEffort: "high",
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestBuildPayload_SkipsReasoningSummaryForCodexSpark(t *testing.T) {
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:           "gpt-5.3-codex-spark",
 		ReasoningEffort: "high",
-	}, openAIAuthMode{IsOAuth: true}, requireProviderCapabilities(t, transport, openAIAuthMode{IsOAuth: true}))
+	}, OpenAIAuthMode{IsOAuth: true}, requireProviderCapabilities(t, transport, OpenAIAuthMode{IsOAuth: true}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestBuildPayload_AppliesFastModeForCodexProvider(t *testing.T) {
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:    "gpt-5.3-codex",
 		FastMode: true,
-	}, openAIAuthMode{IsOAuth: true}, requireProviderCapabilities(t, transport, openAIAuthMode{IsOAuth: true}))
+	}, OpenAIAuthMode{IsOAuth: true}, requireProviderCapabilities(t, transport, OpenAIAuthMode{IsOAuth: true}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestBuildPayload_AppliesFastModeForOpenAIProvider(t *testing.T) {
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:    "gpt-5.3-codex",
 		FastMode: true,
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestBuildPayload_SkipsFastModeForRemoteOpenAICompatibleProvider(t *testing.
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:    "gpt-5.3-codex",
 		FastMode: true,
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -350,7 +350,7 @@ func TestBuildPayload_SkipsFastModeForRemoteOpenAICompatibleProvider(t *testing.
 		t.Fatalf("expected service_tier omitted, got %+v", jsonPayload["service_tier"])
 	}
 
-	providerCaps, err := transport.providerCapabilitiesForMode(openAIAuthMode{})
+	providerCaps, err := transport.providerCapabilitiesForMode(OpenAIAuthMode{})
 	if err != nil {
 		t.Fatalf("resolve provider capabilities: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestBuildPayload_DefaultsReasoningEffortForUnknownModelFamily(t *testing.T)
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:           "custom-model",
 		ReasoningEffort: "high",
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestBuildPayload_AddsAdditionalPropertiesFalseToToolSchemas(t *testing.T) {
 				Schema: json.RawMessage(`{"type":"object","required":["question"],"properties":{"question":{"type":"string"},"meta":{"type":"object","properties":{"foo":{"type":"string"}}}}}`),
 			},
 		},
-	}, openAIAuthMode{}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
@@ -679,7 +679,7 @@ func TestInputTokenCountPayloadMatchesCompactPayloadInputShape(t *testing.T) {
 		Model:        "gpt-5",
 		SystemPrompt: "compaction instructions",
 		Items:        canonicalItems,
-	}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build input-token-count payload: %v", err)
 	}
@@ -697,7 +697,7 @@ func TestInputTokenCountPayloadMatchesCompactPayloadInputShape(t *testing.T) {
 func TestOpenAIRequestBuildersRejectUnmaterializedViewImageInputFileOutput(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	unpreparedItems := []ResponseItem{unmaterializedViewImageInputFileOutput()}
-	caps := requireProviderCapabilities(t, transport, openAIAuthMode{})
+	caps := requireProviderCapabilities(t, transport, OpenAIAuthMode{})
 	checkErr := func(name string, err error) {
 		t.Helper()
 		if !errors.Is(err, ErrViewImageOutputNotMaterialized) {
@@ -705,7 +705,7 @@ func TestOpenAIRequestBuildersRejectUnmaterializedViewImageInputFileOutput(t *te
 		}
 	}
 
-	_, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5", Items: unpreparedItems}, openAIAuthMode{}, caps)
+	_, err := transport.buildPayload(OpenAIRequest{Model: "gpt-5", Items: unpreparedItems}, OpenAIAuthMode{}, caps)
 	checkErr("buildPayload", err)
 
 	_, err = transport.buildInputTokenCountParams(OpenAIRequest{Model: "gpt-5", Items: unpreparedItems}, caps)
@@ -727,7 +727,7 @@ func unmaterializedViewImageInputFileOutput() ResponseItem {
 func TestBuildInputTokenCountParams_AppliesConfiguredModelVerbosity(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "medium"
-	payload, err := transport.buildInputTokenCountParams(OpenAIRequest{Model: "gpt-5"}, requireProviderCapabilities(t, transport, openAIAuthMode{}))
+	payload, err := transport.buildInputTokenCountParams(OpenAIRequest{Model: "gpt-5"}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build input-token-count payload: %v", err)
 	}

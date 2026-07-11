@@ -85,8 +85,25 @@ type PromptFacingSnapshotResolution struct {
 }
 
 func ResolvePromptFacingSnapshotConfig(app config.App, store *session.Store, skipContinuationAgentRoleValidation bool) (PromptFacingSnapshotResolution, error) {
+	plan, err := ResolvePromptFacingSnapshotPlan(app, store, skipContinuationAgentRoleValidation)
+	if err != nil {
+		return PromptFacingSnapshotResolution{}, err
+	}
+	return PromptFacingSnapshotResolution{
+		Settings:      plan.ActiveSettings,
+		Source:        plan.Source,
+		ActiveToolIDs: plan.EnabledTools,
+		WebSearchMode: strings.TrimSpace(plan.ActiveSettings.WebSearch),
+	}, nil
+}
+
+// ResolvePromptFacingSnapshotPlan reconstructs the request-facing session plan
+// from a persisted store without creating or selecting a session. It is shared
+// by diagnostic paths that need the same settings, source, tools, and
+// locked-contract semantics as launch planning.
+func ResolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipContinuationAgentRoleValidation bool) (SessionPlan, error) {
 	if store == nil {
-		return PromptFacingSnapshotResolution{}, errors.New("session store is required")
+		return SessionPlan{}, errors.New("session store is required")
 	}
 	meta := store.Meta()
 	baseActive := EffectiveSettings(app.Settings, meta.Locked)
@@ -97,7 +114,7 @@ func ResolvePromptFacingSnapshotConfig(app config.App, store *session.Store, ski
 		var err error
 		active, source, err = applyPersistedSubagentRoleSettings(baseActive, baseSource, role, meta.Locked == nil, !skipContinuationAgentRoleValidation)
 		if err != nil {
-			return PromptFacingSnapshotResolution{}, err
+			return SessionPlan{}, err
 		}
 		if shouldApplyPersistedContinuationBaseURL(baseActive, role) {
 			if baseURL := strings.TrimSpace(meta.Continuation.OpenAIBaseURL); baseURL != "" {
@@ -107,7 +124,7 @@ func ResolvePromptFacingSnapshotConfig(app config.App, store *session.Store, ski
 	}
 	enabledTools, err := ActiveToolIDsForPlan(active, source, meta.Locked)
 	if err != nil {
-		return PromptFacingSnapshotResolution{}, err
+		return SessionPlan{}, err
 	}
 	if meta.Locked != nil && (!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") {
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
@@ -116,14 +133,28 @@ func ResolvePromptFacingSnapshotConfig(app config.App, store *session.Store, ski
 			WebSearchMode:   strings.TrimSpace(active.WebSearch),
 		})
 		if backfillErr != nil && !backfill.Committed {
-			return PromptFacingSnapshotResolution{}, backfillErr
+			return SessionPlan{}, backfillErr
+		}
+		if backfill.Committed && backfill.Locked != nil {
+			meta.Locked = backfill.Locked
 		}
 	}
-	return PromptFacingSnapshotResolution{
-		Settings:      active,
-		Source:        source,
-		ActiveToolIDs: enabledTools,
-		WebSearchMode: strings.TrimSpace(active.WebSearch),
+	configuredModelName := app.Settings.Model
+	if meta.Locked == nil {
+		configuredModelName = active.Model
+	}
+	return SessionPlan{
+		Store:                               store,
+		ActiveSettings:                      active,
+		BaseSettings:                        baseActive,
+		EnabledTools:                        enabledTools,
+		ConfiguredModelName:                 configuredModelName,
+		SessionName:                         meta.Name,
+		ModelContractLocked:                 meta.Locked != nil,
+		SkipContinuationAgentRoleValidation: skipContinuationAgentRoleValidation,
+		WorkspaceRoot:                       app.WorkspaceRoot,
+		Source:                              source,
+		BaseSource:                          baseSource,
 	}, nil
 }
 

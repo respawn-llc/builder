@@ -20,6 +20,16 @@ func LoadGlobal(opts LoadOptions) (App, error) {
 	return load("", false, opts)
 }
 
+// ResolvePersistenceRoot resolves the config+data root using the production
+// precedence: an explicit flag, KENT_PERSISTENCE_ROOT, then ~/.kent.
+func ResolvePersistenceRoot(explicitRoot string) (string, error) {
+	root, _ := resolveConfigRoot(LoadOptions{ConfigRoot: explicitRoot})
+	if root == "" {
+		root = DefaultPersistence
+	}
+	return NormalizePersistenceRoot(root)
+}
+
 func load(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions) (App, error) {
 	absWorkspace := ""
 	trimmedWorkspaceRoot := strings.TrimSpace(workspaceRoot)

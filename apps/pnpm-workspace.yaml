@@ -10,8 +10,17 @@ minimumReleaseAgeExclude:
   - "@types/node"
   # Approved bootstrap exception: Vite 8.0.13 is part of the initial latest-deps scaffold.
   - "vite"
+  # Nikita approved the explicitly pinned TypeScript 7.0.2 rollout on July 10,
+  # 2026 before its seven-day maturity window. Keep this exact-version exception
+  # narrow; remove it after the package ages out.
+  - "typescript@7.0.2"
+  - "@typescript/typescript-*"
   # Vite 8 resolves Rolldown platform bindings as transitive toolchain packages.
   - "@rolldown/*"
 
 # No frontend dependency may run install/build lifecycle scripts unless explicitly reviewed here.
 onlyBuiltDependencies: []
+
+# PNPM 11 requires an explicit decision for ignored lifecycle scripts.
+allowBuilds:
+  msw: false
