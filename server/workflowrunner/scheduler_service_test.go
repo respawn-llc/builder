@@ -221,6 +221,25 @@ func TestSchedulerActiveOwnershipIsMemoryOnly(t *testing.T) {
 	}
 }
 
+func TestSchedulerHoldsProjectActivityPermitUntilRuntimeFinishes(t *testing.T) {
+	ctx, store, binding, _ := newSchedulerTestContextStore(t)
+	createLinkedSchedulerValidWorkflow(t, ctx, store, binding.ProjectID)
+	started := createAndStartSchedulerTask(t, ctx, store, binding.ProjectID)
+	activity := &recordingProjectActivity{}
+	scheduler := newSchedulerTestService(t, store, &recordingStarter{}, SchedulerConfig{Concurrency: 1}, WithSchedulerProjectActivity(activity))
+
+	if err := scheduler.Process(ctx); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if len(activity.projects) != 1 || activity.projects[0] != binding.ProjectID || activity.releases != 0 {
+		t.Fatalf("activity after Process = %+v, want acquired project permit", activity)
+	}
+	scheduler.RuntimeFinished(workflow.RunID(started.RunID), 1)
+	if activity.releases != 1 {
+		t.Fatalf("activity releases = %d, want 1 after RuntimeFinished", activity.releases)
+	}
+}
+
 func TestSchedulerCloseStopsNewClaims(t *testing.T) {
 	ctx, store, binding, _ := newSchedulerTestContextStore(t)
 	createLinkedSchedulerValidWorkflow(t, ctx, store, binding.ProjectID)
@@ -355,6 +374,16 @@ type recordingStarter struct {
 	mu      sync.Mutex
 	started []SchedulerStartRunRequest
 	err     error
+}
+
+type recordingProjectActivity struct {
+	projects []string
+	releases int
+}
+
+func (a *recordingProjectActivity) AcquireProjectActivity(projectID string) (func(), error) {
+	a.projects = append(a.projects, projectID)
+	return func() { a.releases++ }, nil
 }
 
 func (s *recordingStarter) StartWorkflowRun(_ context.Context, req SchedulerStartRunRequest) error {
