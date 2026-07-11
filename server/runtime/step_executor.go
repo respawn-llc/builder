@@ -209,6 +209,10 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			}
 		}
 
+		if responseOutputIsReasoningOnly(resp.OutputItems) {
+			continue
+		}
+
 		if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
 			handled, terminal, err := s.handleWorkflowAssistantWithoutTools(ctx, stepID, assistantMsg)
 			if err != nil {
@@ -475,6 +479,9 @@ func (s *defaultStepExecutor) publishHostedToolStart(stepID string, call llm.Too
 func (s *defaultStepExecutor) handleWorkflowAssistantWithoutTools(ctx context.Context, stepID string, assistantMsg llm.Message) (bool, bool, error) {
 	e := s.engine
 	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
+		return false, false, nil
+	}
+	if assistantMsg.Phase == llm.MessagePhaseFinal && strings.TrimSpace(assistantMsg.Content) == "" {
 		return false, false, nil
 	}
 	outcome, err := s.workflowCompletionAdapter().Evaluate(ctx, assistantMsg)
