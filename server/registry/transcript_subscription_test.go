@@ -14,6 +14,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -190,7 +191,7 @@ func TestTranscriptSubscriptionBoundaryValidatesCommittedRowIntegrity(t *testing
 	invalidRows[0].Integrity = transcript.RowIntegrity(255)
 	invalidRows[1].Visibility = clientui.EntryVisibilityAuto
 	for _, invalid := range invalidRows {
-		if err := clientui.ValidateTranscriptCommittedRow(invalid); err == nil {
+		if err := invariant.ValidateTranscriptCommittedRow(invalid); err == nil {
 			t.Fatalf("shared committed-row validator accepted invalid row: %#v", invalid)
 		}
 		err := validateCommittedRow(invalid)

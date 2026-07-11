@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/valuecopy"
@@ -76,7 +77,7 @@ func validateDetailTranscriptPageResponse(
 	requestSessionID runtimeids.SessionID,
 	page clientui.TranscriptPage,
 ) error {
-	if err := clientui.ValidateTranscriptPage(page); err != nil {
+	if err := invariant.ValidateTranscriptPage(page); err != nil {
 		return err
 	}
 	responseSessionID, err := runtimeids.ParseSessionID(page.SessionID)

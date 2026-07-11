@@ -73,7 +73,7 @@ func (p detailProjection) indexOfRow(row clientui.TranscriptCommittedRow) (int, 
 	match := 0
 	found := false
 	for index, entry := range p.entries {
-		if !clientui.TranscriptCommittedRowEqual(entry.row(), row) {
+		if !TranscriptCommittedRowEqual(entry.row(), row) {
 			continue
 		}
 		if found {

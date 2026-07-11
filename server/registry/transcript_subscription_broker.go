@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/serverapi"
 	"core/shared/transcript"
 
@@ -261,7 +262,7 @@ func (c *transcriptSubscriptionContract) validateLiveMessage(message clientui.Tr
 			}
 		}
 		if row := message.CommittedRow; row.Tool != nil {
-			if row.Integrity != transcript.RowIntegrityValid && !row.Tool.HasToolCallID() {
+			if row.Integrity != transcript.RowIntegrityValid && strings.TrimSpace(row.Tool.ToolCallID) == "" {
 				return nil
 			}
 			return c.trackToolTerminal(row.Tool.ToolCallID, fmt.Sprintf("committed tool row at seq=%d", message.Sequence))
@@ -313,7 +314,7 @@ func (c *transcriptSubscriptionContract) trackToolTerminal(toolCallID string, op
 }
 
 func validateCommittedRow(row clientui.TranscriptCommittedRow) error {
-	if err := clientui.ValidateTranscriptCommittedRow(row); err != nil {
+	if err := invariant.ValidateTranscriptCommittedRow(row); err != nil {
 		return errTranscriptContractViolation(err.Error())
 	}
 	return nil

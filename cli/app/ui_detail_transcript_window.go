@@ -3,6 +3,7 @@ package app
 import (
 	"strings"
 
+	"core/cli/tui"
 	"core/shared/clientui"
 	"core/shared/valuecopy"
 )
@@ -115,7 +116,7 @@ func (w uiDetailTranscriptWindow) matchesPage(page clientui.TranscriptPage) bool
 		return false
 	}
 	for i := range page.Entries {
-		if !clientui.TranscriptCommittedRowEqual(w.entries[i], page.Entries[i]) {
+		if !tui.TranscriptCommittedRowEqual(w.entries[i], page.Entries[i]) {
 			return false
 		}
 	}
@@ -241,7 +242,7 @@ func (w uiDetailTranscriptWindow) hasSegment(page clientui.TranscriptPage) bool 
 		}
 		matches := true
 		for entryIndex, entry := range page.Entries {
-			if !clientui.TranscriptCommittedRowEqual(w.entries[seg.startLocal+entryIndex], entry) {
+			if !tui.TranscriptCommittedRowEqual(w.entries[seg.startLocal+entryIndex], entry) {
 				matches = false
 				break
 			}

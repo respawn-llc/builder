@@ -3,6 +3,7 @@ package app
 import (
 	"slices"
 
+	"core/cli/tui"
 	"core/shared/clientui"
 	"core/shared/transcript"
 )
@@ -41,5 +42,5 @@ func detailTestToolRow(tool clientui.TranscriptToolRow) clientui.TranscriptCommi
 }
 
 func detailTestRowsEqual(left, right []clientui.TranscriptCommittedRow) bool {
-	return slices.EqualFunc(left, right, clientui.TranscriptCommittedRowEqual)
+	return slices.EqualFunc(left, right, tui.TranscriptCommittedRowEqual)
 }
