@@ -1191,7 +1191,7 @@ func TestTranscriptDeliveryLiveAndHydrationAgreeOnProjectedCompactionEntries(t *
 
 func TestTranscriptFactsMapToolResultEntriesWithoutCallIDToNotices(t *testing.T) {
 	entry := ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "tool_result_ok", Text: "orphan result"}
-	fact, ok := transcriptCommittedRowFactFromChatEntry(entry, transcriptCommittedStreamProjection)
+	fact, ok := transcriptCommittedRowFactFromChatEntry(entry)
 	if !ok || fact.Notice == nil || fact.Notice.DiagnosticDetail != "orphan result" {
 		t.Fatalf("fact = %+v ok=%t, want notice preserving text", fact, ok)
 	}

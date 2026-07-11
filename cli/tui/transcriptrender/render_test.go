@@ -101,7 +101,7 @@ func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
 		if got, want := line.Plain(), "$ sed -n '1,10p' cli/tui/model.go"; got != want {
 			t.Fatalf("mode %v shell line = %q, want %q", mode, got, want)
 		}
-		assertShellLineHasTypedSyntax(t, line)
+		assertShellLineHasTypedSyntax(t, line, mode != ModeDetailExpanded)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestPlainShellRenderHintSkipsSyntaxHighlighting(t *testing.T) {
 		if len(rendered.Lines) == 0 {
 			t.Fatalf("mode %v rendered no plain shell row lines", mode)
 		}
-		assertShellLineIsPlainText(t, rendered.Lines[0])
+		assertShellLineIsPlainText(t, rendered.Lines[0], mode != ModeDetailExpanded)
 	}
 	if got, want := PlainLines(RenderCommittedRow(row, 120, "", ModeDetailExpanded).Lines), []string{
 		"$ Polled session 1149 for 2s",
@@ -136,7 +136,7 @@ func TestPlainShellRenderHintSkipsSyntaxHighlighting(t *testing.T) {
 			RenderHint:   &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindPlain},
 		},
 	}, 120, "", "⢎ ")
-	assertShellLineIsPlainText(t, pending)
+	assertShellLineIsPlainText(t, pending, true)
 }
 
 func TestSourceReadUsesCommandPreviewAndSourceResultDetail(t *testing.T) {
@@ -174,13 +174,38 @@ func TestSourceReadUsesCommandPreviewAndSourceResultDetail(t *testing.T) {
 				continue
 			}
 			foundSourceSyntax = true
-			if !span.Style.Has(SpanAttributeFaint) {
-				t.Fatalf("source result syntax span is not faint: %+v", span)
+			if span.Style.Has(SpanAttributeFaint) {
+				t.Fatalf("expanded source result syntax span remains faint: %+v", span)
 			}
 		}
 	}
 	if !foundSourceSyntax {
 		t.Fatalf("expanded source read output has no Chroma syntax spans: %+v", presentation.Expanded)
+	}
+}
+
+func TestDetailExpandedRowsRemoveFaintStyling(t *testing.T) {
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "package example\n\nfunc main() {}", false)
+	row.Tool.ToolPresentation.Command = "sed -n '1,20p' example.go"
+	row.Tool.ToolPresentation.CompactText = row.Tool.ToolPresentation.Command
+	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{
+		Kind:       clientui.ToolRenderKindSource,
+		Path:       "example.go",
+		ResultOnly: true,
+	}
+
+	for _, line := range RenderDetailPresentation(row, 120, "dark").Expanded {
+		if line.LeadingSymbol != nil && line.LeadingSymbol.Style.Has(SpanAttributeFaint) {
+			t.Fatalf("expanded leading symbol remains faint: %+v", line.LeadingSymbol)
+		}
+		for _, span := range line.Spans {
+			if role, ok := span.Style.Role(); ok && role == StyleRoleNotice {
+				continue
+			}
+			if span.Style.Has(SpanAttributeFaint) {
+				t.Fatalf("expanded span remains faint: %+v", span)
+			}
+		}
 	}
 }
 
@@ -206,7 +231,7 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 			if len(rendered.Lines) == 0 {
 				t.Fatal("rendered no committed shell row lines")
 			}
-			assertShellLineHasTypedSyntax(t, rendered.Lines[0])
+			assertShellLineHasTypedSyntax(t, rendered.Lines[0], true)
 
 			pending := RenderPendingTool(clientui.TranscriptToolStart{
 				ToolCallID: "2d97d231-7765-471a-bf55-a4c17157af01",
@@ -222,7 +247,7 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 					},
 				},
 			}, 120, "", "⢎ ")
-			assertShellLineHasTypedSyntax(t, pending)
+			assertShellLineHasTypedSyntax(t, pending, true)
 		})
 	}
 }
@@ -254,7 +279,7 @@ func TestMovedToBackgroundShellRowKeepsMovedToBackgroundSuffixAtNarrowWidth(t *t
 	}
 }
 
-func assertShellLineIsPlainText(t *testing.T, line Line) {
+func assertShellLineIsPlainText(t *testing.T, line Line, wantFaint bool) {
 	t.Helper()
 	if len(line.Spans) < 2 {
 		t.Fatalf("plain shell line has no body spans: %+v", line)
@@ -262,18 +287,18 @@ func assertShellLineIsPlainText(t *testing.T, line Line) {
 	for _, span := range line.Spans[1:] {
 		if span.Style.Kind != SpanStyleSemantic ||
 			span.Style.SemanticRole != StyleRoleToolShell ||
-			!span.Style.Has(SpanAttributeFaint) {
+			span.Style.Has(SpanAttributeFaint) != wantFaint {
 			t.Fatalf("plain shell body used syntax styling: %+v", line.Spans)
 		}
 	}
 }
 
-func assertShellLineHasTypedSyntax(t *testing.T, line Line) {
+func assertShellLineHasTypedSyntax(t *testing.T, line Line, wantFaint bool) {
 	t.Helper()
 	foundSyntax := false
 	for _, span := range line.Spans[1:] {
-		if !span.Style.Has(SpanAttributeFaint) {
-			t.Fatalf("shell syntax span is not faint: %+v", span)
+		if span.Style.Has(SpanAttributeFaint) != wantFaint {
+			t.Fatalf("shell syntax span faintness = %t, want %t: %+v", span.Style.Has(SpanAttributeFaint), wantFaint, span)
 		}
 		if span.Style.Kind == SpanStyleExplicitRGB {
 			foundSyntax = true

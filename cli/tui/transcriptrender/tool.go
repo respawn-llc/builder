@@ -51,7 +51,7 @@ func renderToolRow(
 			return renderDetailedToolWithOutputLines(
 				role,
 				input,
-				sourceResultLines(display.Text, contentWidth(role, width), meta),
+				sourceResultLines(display.Text, contentWidth(role, width), meta, mode),
 				width,
 				meta,
 			)
@@ -225,9 +225,9 @@ func renderDetailedToolWithOutputLines(
 	width int,
 	meta toolMeta,
 ) []Line {
-	inputLines := textLines(role, wrapLines(input, contentWidth(role, width)), meta)
+	inputLines := textLines(role, wrapLines(input, contentWidth(role, width)), meta, ModeDetailExpanded)
 	if len(outputLines) > 0 {
-		inputLines = append(inputLines, Line{Spans: []Span{roleSpan("", role)}})
+		inputLines = append(inputLines, Line{Spans: []Span{contentRoleSpan("", role, ModeDetailExpanded)}})
 		inputLines = append(inputLines, outputLines...)
 	}
 	return attachPrefixWithMeta(role, inputLines, width, false, ModeDetailExpanded, meta)
@@ -240,7 +240,7 @@ func detailedToolOutputLines(role StyleRole, output string, width int) []Line {
 	lines := wrapLines(output, width)
 	out := make([]Line, 0, len(lines))
 	for _, line := range lines {
-		out = append(out, Line{Spans: []Span{roleSpan(line, role)}})
+		out = append(out, Line{Spans: []Span{contentRoleSpan(line, role, ModeDetailExpanded)}})
 	}
 	return out
 }
@@ -259,7 +259,7 @@ func renderPatchTool(
 	if mode == ModeDetailExpanded {
 		if lines, ok := renderStructuredPatch(rendered, contentWidth(role, width), syntax); ok {
 			if result != "" {
-				lines = append(lines, Line{Spans: []Span{roleSpan("", role)}})
+				lines = append(lines, Line{Spans: []Span{contentRoleSpan("", role, ModeDetailExpanded)}})
 				lines = append(lines, detailedToolOutputLines(role, result, contentWidth(role, width))...)
 			}
 			return attachPrefixWithMeta(role, lines, width, false, mode, meta)

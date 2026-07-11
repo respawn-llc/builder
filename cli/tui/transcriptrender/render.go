@@ -108,11 +108,11 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 	if modeUsesCompactTextBlock(mode) {
 		first := firstDisplayLine(text)
 		if mode == ModeDetailCollapsed && roleAllowsThreeLinePreview(role) {
-			return attachPrefixWithMeta(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3), meta), width, false, mode, meta)
+			return attachPrefixWithMeta(role, textLines(role, firstNWrapped(text, contentWidth(role, width), 3), meta, mode), width, false, mode, meta)
 		}
-		return attachPrefixWithFirstLineMeta(role, textLines(role, []string{first}, meta), width, len(strings.Split(text, "\n")) > 1, inlineMeta, mode, meta)
+		return attachPrefixWithFirstLineMeta(role, textLines(role, []string{first}, meta, mode), width, len(strings.Split(text, "\n")) > 1, inlineMeta, mode, meta)
 	}
-	return attachPrefixWithMeta(role, textLines(role, wrapLines(text, contentWidth(role, width)), meta), width, false, mode, meta)
+	return attachPrefixWithMeta(role, textLines(role, wrapLines(text, contentWidth(role, width)), meta, mode), width, false, mode, meta)
 }
 
 func RenderBackgroundedShell(command string, width int) Line {
@@ -151,17 +151,17 @@ func spansWidth(spans []Span) int {
 	return width
 }
 
-func textLines(role StyleRole, lines []string, meta toolMeta) []Line {
+func textLines(role StyleRole, lines []string, meta toolMeta, mode Mode) []Line {
 	if len(lines) == 0 {
-		return []Line{{Spans: []Span{roleSpan("", role)}}}
+		return []Line{{Spans: []Span{contentRoleSpan("", role, mode)}}}
 	}
 	out := make([]Line, 0, len(lines))
 	for _, line := range lines {
 		if role == StyleRoleToolShell {
-			out = append(out, Line{Spans: shellInputSpans(line, meta)})
+			out = append(out, Line{Spans: shellInputSpans(line, meta, mode)})
 			continue
 		}
-		out = append(out, Line{Spans: []Span{roleSpan(line, role)}})
+		out = append(out, Line{Spans: []Span{contentRoleSpan(line, role, mode)}})
 	}
 	return out
 }
@@ -197,16 +197,16 @@ func attachPrefixWithFirstLineMeta(role StyleRole, lines []Line, width int, forc
 			if gap < 1 {
 				gap = 1
 			}
-			spans = append(spans, roleSpan(strings.Repeat(" ", gap), role))
+			spans = append(spans, contentRoleSpan(strings.Repeat(" ", gap), role, mode))
 			spans = append(spans, SemanticSpan(inlineMeta, StyleRoleNotice, SpanAttributeFaint))
 		}
 		if idx == 0 {
 			symbolRole := roleSymbolStyleRole(role, meta)
 			symbol := SemanticSpan(symbolText, symbolRole)
-			if roleSymbolFaint(role, symbolRole) {
+			if mode != ModeDetailExpanded && roleSymbolFaint(role, symbolRole) {
 				symbol.Style = symbol.Style.With(SpanAttributeFaint)
 			}
-			spans = append([]Span{roleSpan(" ", role)}, spans...)
+			spans = append([]Span{contentRoleSpan(" ", role, mode)}, spans...)
 			line = Line{LeadingSymbol: &symbol, Spans: spans, Background: line.Background}
 		} else {
 			spans = append(continuationPrefix(mode, prefixWidth, idx == lastIndex), spans...)
@@ -304,8 +304,12 @@ func roleDefaultFaint(role StyleRole) bool {
 }
 
 func roleSpan(text string, role StyleRole) Span {
+	return contentRoleSpan(text, role, ModeOngoing)
+}
+
+func contentRoleSpan(text string, role StyleRole, mode Mode) Span {
 	span := SemanticSpan(text, role)
-	if roleDefaultFaint(role) {
+	if mode != ModeDetailExpanded && roleDefaultFaint(role) {
 		span.Style = span.Style.With(SpanAttributeFaint)
 	}
 	return span
