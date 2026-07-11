@@ -14,6 +14,8 @@ type EventKind string
 
 type AssistantStreamAbortReason string
 
+type BackgroundShellEventType string
+
 const (
 	EventConversationUpdated        EventKind = "conversation_updated"
 	EventAssistantDelta             EventKind = "assistant_delta"
@@ -44,6 +46,21 @@ const (
 
 	AssistantStreamAbortSuperseded AssistantStreamAbortReason = "superseded"
 )
+
+const (
+	BackgroundShellEventBackgrounded BackgroundShellEventType = "backgrounded"
+	BackgroundShellEventCompleted    BackgroundShellEventType = "completed"
+	BackgroundShellEventKilled       BackgroundShellEventType = "killed"
+)
+
+func (t BackgroundShellEventType) IsTerminal() bool {
+	switch t {
+	case BackgroundShellEventCompleted, BackgroundShellEventKilled:
+		return true
+	default:
+		return false
+	}
+}
 
 type QueuedUserMessageStatus string
 
@@ -123,8 +140,9 @@ type RunState struct {
 }
 
 type BackgroundShellEvent struct {
-	Type              string
+	Type              BackgroundShellEventType
 	ID                string
+	ActivityID        uuid.UUID
 	State             string
 	Command           string
 	Workdir           string
@@ -132,7 +150,7 @@ type BackgroundShellEvent struct {
 	NoticeText        string
 	CompactText       string
 	Preview           string
-	Removed           int
+	PreviewRemoved    int
 	ExitCode          *int
 	UserRequestedKill bool
 	NoticeSuppressed  bool
@@ -158,7 +176,7 @@ type CompactionStatus struct {
 	Mode              string
 	Engine            string
 	Provider          string
-	TrimmedItemsCount int
+	TrimmedItemsCount *int
 	Count             int
 	Error             string
 }

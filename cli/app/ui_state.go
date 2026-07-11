@@ -6,11 +6,13 @@ import (
 	"core/cli/app/commands"
 	"core/cli/app/internal/runtimestate"
 	"core/cli/tui"
+	"core/cli/tui/ongoing"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 )
 
 type uiModel struct {
@@ -123,18 +125,26 @@ type uiInputFeatureState struct {
 }
 
 type uiPresentationFeatureState struct {
-	theme              string
-	activeSurface      uiSurface
-	altScreenActive    bool
-	terminalFocus      *terminalFocusState
-	terminalCursor     *uiTerminalCursorState
-	rendererOutputGate *uiRendererOutputGateState
-	termWidth          int
-	termHeight         int
-	windowSizeKnown    bool
-	helpVisible        bool
-	startupCmds        []tea.Cmd
-	uiMainThread       uiMainThreadState
+	theme                       string
+	activeSurface               uiSurface
+	altScreenActive             bool
+	terminalFocus               *terminalFocusState
+	terminalCursor              *uiTerminalCursorState
+	rendererOutputGate          *uiRendererOutputGateState
+	ongoingSurface              *ongoing.Surface
+	ongoingTranscript           *ongoingTranscriptController
+	ongoingEvents               <-chan ongoingTranscriptEvent
+	requestOngoingOpen          func()
+	ongoingWidthToken           uint64
+	pendingOngoingScratchReset  *ongoing.RehydrateReason
+	pendingOngoingWidthReset    bool
+	pendingOngoingResizeRepaint bool
+	termWidth                   int
+	termHeight                  int
+	windowSizeKnown             bool
+	helpVisible                 bool
+	startupCmds                 []tea.Cmd
+	uiMainThread                uiMainThreadState
 }
 
 type uiConversationFeatureState struct {
@@ -173,17 +183,18 @@ type uiStatusFeatureState struct {
 	clipboardImagePaster        uiClipboardImagePaster
 	clipboardTextCopier         uiClipboardTextCopier
 
-	transientStatus         string
-	transientStatusKind     uiStatusNoticeKind
-	transientStatusNoticeID string
-	transientStatusToken    uint64
-	transientStatusQueue    []uiStatusNotice
-	localNoticeSequence     uint64
-	startupUpdateNotice     bool
-	startupUpdateShown      bool
-	debugKeys               bool
-	debugMode               bool
-	transcriptDiagnostics   bool
+	transientStatus          string
+	transientStatusKind      uiStatusNoticeKind
+	transientStatusNoticeID  string
+	transientStatusRequestID *uuid.UUID
+	transientStatusToken     uint64
+	transientStatusQueue     []uiStatusNotice
+	localNoticeSequence      uint64
+	startupUpdateNotice      bool
+	startupUpdateShown       bool
+	debugKeys                bool
+	debugMode                bool
+	transcriptDiagnostics    bool
 }
 
 type uiTranscriptFeatureState struct {
@@ -193,6 +204,8 @@ type uiTranscriptFeatureState struct {
 	runtimeMainViewActiveRequest runtimeMainViewRefreshRequest
 	runtimeMainViewPendingSet    bool
 	runtimeMainViewPending       runtimeMainViewRefreshRequest
+	detailTranscript             uiDetailTranscriptWindow
+	pendingDetailTranscript      *uiPendingDetailTranscriptRequest
 }
 
 type uiKeyboardFeatureState struct {

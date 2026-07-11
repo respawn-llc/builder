@@ -383,7 +383,7 @@ func TestBrokenSymlinkedSkillsAreSkippedAndWarnedInTranscript(t *testing.T) {
 	snapshot := eng.ChatSnapshot()
 	foundWarning := false
 	for _, entry := range snapshot.Entries {
-		if entry.Role != "warning" || entry.Visibility != transcript.EntryVisibilityAll {
+		if entry.Role != "warning" || entry.Visibility != transcript.EntryVisibilityOngoing {
 			continue
 		}
 		if strings.Contains(entry.Text, "Skipped skill \"broken-skill\"") && strings.Contains(entry.Text, filepath.ToSlash(brokenLinkPath)) {

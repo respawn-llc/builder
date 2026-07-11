@@ -8,14 +8,11 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
-
-var sedPrintRangePattern = regexp.MustCompile(`^\d+(?:,\d+)?p$`)
 
 const noOutputText = "No output"
 
@@ -169,16 +166,27 @@ func patchToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage
 
 func editToolCallMeta(toolID toolspec.ID) func(ToolCallContext, json.RawMessage) transcript.ToolCallMeta {
 	return func(ctx ToolCallContext, raw json.RawMessage) transcript.ToolCallMeta {
-		path := parseEditToolCallPath(raw)
-		command := path
-		if command == "" {
-			command = "file change"
+		in, err := ParseEditInput(raw)
+		if err != nil {
+			meta := defaultToolCallMeta(toolID)(ctx, raw)
+			if path := strings.TrimSpace(in.Path); path != "" {
+				meta.Command = path
+				meta.CompactText = path
+			}
+			meta.RenderHint = &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff}
+			return meta
 		}
+		rendered := patchformat.RenderEdit(in.Path, in.OldString, in.NewString, ctx.WorkingDir)
+		detail := rendered.DetailText()
+		compact := rendered.SummaryText()
 		return transcript.ToolCallMeta{
-			ToolName:    string(toolID),
-			Command:     command,
-			CompactText: command,
-			RenderHint:  &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
+			ToolName:     string(toolID),
+			Command:      detail,
+			CompactText:  compact,
+			PatchSummary: compact,
+			PatchDetail:  detail,
+			PatchRender:  &rendered,
+			RenderHint:   &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindDiff},
 		}
 	}
 }
@@ -459,24 +467,6 @@ func parsePatchToolCall(raw json.RawMessage, cwd string) (detail string, compact
 	return r.DetailText(), r.SummaryText(), &r, true
 }
 
-func parseEditToolCallPath(raw json.RawMessage) string {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &obj); err != nil {
-		return ""
-	}
-	for _, name := range []string{"path", "file_path", "filePath"} {
-		rawValue, ok := obj[name]
-		if !ok {
-			continue
-		}
-		var value string
-		if err := json.Unmarshal(rawValue, &value); err == nil {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
-}
-
 func detectShellRenderHint(ctx ToolCallContext, toolID toolspec.ID, raw json.RawMessage, command string) *transcript.ToolRenderHint {
 	defaultHint := &transcript.ToolRenderHint{Kind: transcript.ToolRenderKindShell, ShellDialect: detectToolShellDialect(ctx, toolID, raw)}
 	args, ok := ParseSimpleShellCommand(command)
@@ -593,7 +583,7 @@ func parseNlFileArg(args []string) (string, bool) {
 }
 
 func parseSedFileArg(args []string) (string, bool) {
-	if len(args) < 4 || args[1] != "-n" || !sedPrintRangePattern.MatchString(args[2]) {
+	if len(args) < 4 || args[1] != "-n" || !isSedPrintRangeExpression(args[2]) {
 		return "", false
 	}
 
@@ -609,6 +599,28 @@ func parseSedFileArg(args []string) (string, bool) {
 	}
 
 	return "", false
+}
+
+func isSedPrintRangeExpression(expression string) bool {
+	if len(expression) < 2 || expression[len(expression)-1] != 'p' {
+		return false
+	}
+	rangeExpression := expression[:len(expression)-1]
+	seenComma := false
+	segmentHasDigit := false
+	for index := 0; index < len(rangeExpression); index++ {
+		character := rangeExpression[index]
+		if character >= '0' && character <= '9' {
+			segmentHasDigit = true
+			continue
+		}
+		if character != ',' || seenComma || !segmentHasDigit {
+			return false
+		}
+		seenComma = true
+		segmentHasDigit = false
+	}
+	return segmentHasDigit
 }
 
 func decodeHostedWebSearchOutput(item HostedToolOutput) (HostedExecution, bool) {

@@ -537,7 +537,7 @@ func TestReviewSummaryIncludesGeneratedSkillSelectionWithoutImport(t *testing.T)
 	state := &onboardingFlowState{
 		settings: config.Settings{
 			Theme:        theme.Auto,
-			Model:        "gpt-5.5",
+			Model:        "gpt-5.6-sol",
 			EnabledTools: map[toolspec.ID]bool{},
 		},
 		imports: onboardingImportDiscovery{generatedSkillItems: []onboardingSkillImportItem{

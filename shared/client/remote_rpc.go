@@ -492,6 +492,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodeServerNotReady && len(resp.Data) > 0 {
 		return serverapi.DecodeServerNotReadyError(resp.Data, message)
 	}
+	if resp.Code == protocol.ErrCodeWorkflowTaskListScope && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowTaskListScopeError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeWorkflowTaskLegacyExecutionTargetMissing && len(resp.Data) > 0 {
 		return serverapi.DecodeWorkflowTaskLegacyExecutionTargetMissingError(resp.Data, message)
 	}

@@ -141,6 +141,41 @@ type BackgroundShellEvent struct {
 	NoticeSuppressed  bool
 }
 
+type ChatEntry struct {
+	Visibility         EntryVisibility
+	RollbackTargetID   string
+	Role               string
+	Text               string
+	CondensedText      string
+	Phase              MessagePhase
+	MessageType        MessageType
+	SourcePath         string
+	CompactLabel       string
+	ToolResultSummary  string
+	ToolCallID         string
+	NoticeID           string
+	BackgroundExitCode *int
+	ToolCall           *ToolCallMeta
+}
+
+const ChatEntryPhaseFinalAnswer = string(MessagePhaseFinal)
+
+type TranscriptPageRequest struct {
+	Cursor      *int64
+	NewerCursor *int64
+}
+
+type TranscriptPage struct {
+	SessionID             string
+	SessionName           string
+	ConversationFreshness ConversationFreshness
+	OlderCursor           *int64
+	HasMoreAbove          bool
+	NewerCursor           *int64
+	HasMoreBelow          bool
+	Entries               []TranscriptCommittedRow
+}
+
 type ToolPresentationKind string
 type ToolCallRenderBehavior string
 type ToolRenderKind string
@@ -192,4 +227,5 @@ type ToolCallMeta struct {
 	OmitSuccessfulResult   bool
 	RawOutputRequested     bool
 	OutputTruncated        bool
+	MovedToBackground      bool
 }

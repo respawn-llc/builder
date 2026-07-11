@@ -1838,6 +1838,13 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
 	}
+	if snapshot.Meta.Continuation != nil {
+		continuation, err := session.NormalizeContinuationContext(*snapshot.Meta.Continuation)
+		if err != nil {
+			return fmt.Errorf("validate session continuation: %w", err)
+		}
+		snapshot.Meta.Continuation = continuation
+	}
 	binding, err := s.EnsureWorkspaceBinding(ctx, snapshot.Meta.WorkspaceRoot)
 	if err != nil {
 		if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
@@ -1884,11 +1891,13 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	metadataJSON, err := marshalJSON(map[string]any{
 		"workspace_root":                     snapshot.Meta.WorkspaceRoot,
 		"workspace_container":                snapshot.Meta.WorkspaceContainer,
+		"prompt_cache_lineage_generation":    snapshot.Meta.PromptCacheLineageGeneration,
 		"headless_active":                    snapshot.Meta.HeadlessActive,
 		"compaction_soon_reminder_issued":    snapshot.Meta.CompactionSoonReminderIssued,
 		"generated_recovered_warning_issued": snapshot.Meta.GeneratedRecoveredWarningIssued,
 		"worktree_reminder":                  persistedWorktreeReminder,
 		"goal":                               snapshot.Meta.Goal,
+		"workflow_session":                   snapshot.Meta.WorkflowSession,
 	})
 	if err != nil {
 		return err
@@ -1992,21 +2001,24 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 	metadataPayload := struct {
 		WorkspaceRoot                   string                         `json:"workspace_root"`
 		WorkspaceContainer              string                         `json:"workspace_container"`
+		PromptCacheLineageGeneration    int                            `json:"prompt_cache_lineage_generation"`
 		HeadlessActive                  bool                           `json:"headless_active"`
 		CompactionSoonReminderIssued    bool                           `json:"compaction_soon_reminder_issued"`
 		GeneratedRecoveredWarningIssued bool                           `json:"generated_recovered_warning_issued"`
 		WorktreeReminder                *session.WorktreeReminderState `json:"worktree_reminder"`
 		Goal                            *session.GoalState             `json:"goal"`
+		WorkflowSession                 *session.WorkflowSessionState  `json:"workflow_session"`
 	}{}
 	if err := unmarshalStoredJSON(row.MetadataJson, &metadataPayload); err != nil {
 		return session.Meta{}, fmt.Errorf("decode session metadata json: %w", err)
 	}
-	continuation := &session.ContinuationContext{}
-	if err := unmarshalStoredJSON(row.ContinuationJson, continuation); err != nil {
+	var decodedContinuation session.ContinuationContext
+	if err := unmarshalStoredJSON(row.ContinuationJson, &decodedContinuation); err != nil {
 		return session.Meta{}, fmt.Errorf("decode continuation json: %w", err)
 	}
-	if strings.TrimSpace(continuation.OpenAIBaseURL) == "" && strings.TrimSpace(continuation.AgentRole) == "" {
-		continuation = nil
+	continuation, err := session.NormalizeContinuationContext(decodedContinuation)
+	if err != nil {
+		return session.Meta{}, fmt.Errorf("validate continuation json: %w", err)
 	}
 	locked := &session.LockedContract{}
 	if err := unmarshalStoredJSON(row.LockedJson, locked); err != nil {
@@ -2045,11 +2057,13 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		UpdatedAt:                       timeFromStoredTimestamp(row.UpdatedAtUnixMs),
 		LastSequence:                    row.LastSequence,
 		ModelRequestCount:               row.ModelRequestCount,
+		PromptCacheLineageGeneration:    metadataPayload.PromptCacheLineageGeneration,
 		HeadlessActive:                  metadataPayload.HeadlessActive,
 		CompactionSoonReminderIssued:    metadataPayload.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: metadataPayload.GeneratedRecoveredWarningIssued,
 		WorktreeReminder:                metadataPayload.WorktreeReminder,
 		Goal:                            metadataPayload.Goal,
+		WorkflowSession:                 metadataPayload.WorkflowSession,
 		UsageState:                      usageState,
 		Locked:                          locked,
 	}, nil

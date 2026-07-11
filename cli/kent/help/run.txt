@@ -46,6 +46,6 @@ Examples:
   kent run stop <session-id>
   kent run wait --output-mode=json <session-id>
   kent run --fast --output-mode=json "scan the repo and return JSON"
-  kent run --model gpt-5.4-mini "review this module"
+  kent run --model gpt-5.6-terra "review this module"
 
 Flags:

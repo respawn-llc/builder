@@ -9,11 +9,11 @@ import (
 )
 
 const (
-	defaultModel                         = "gpt-5.5"
+	defaultModel                         = "gpt-5.6-sol"
 	defaultThinkingLevel                 = "medium"
-	defaultModelVerbosity                = ModelVerbosityMedium
+	defaultModelVerbosity                = ModelVerbosityLow
 	defaultTheme                         = theme.Auto
-	defaultModelContextWindow            = 272_000
+	defaultModelContextWindow            = 372_000
 	minimumModelContextWindow            = 40_000
 	defaultModelTimeoutSeconds           = 400
 	defaultMinimumExecToBgSec            = 15
@@ -24,6 +24,7 @@ const (
 	defaultWorkflowCompletionMode        = WorkflowCompletionModeAuto
 	defaultWorkflowConcurrency           = 5
 	defaultWorkflowInvalidCompletionCap  = 5
+	defaultWorkflowSubagents             = false
 	defaultCompactionThreshold           = defaultModelContextWindow * 95 / 100
 	defaultPreSubmitCompactionLeadTokens = DefaultPreSubmitRunwayTokens
 	defaultReviewerFrequency             = "edits"
@@ -141,9 +142,14 @@ func writeBuiltInSubagentSections(builder *strings.Builder) {
 	builder.WriteString("# inherits all main settings unless overridden\n")
 	builder.WriteString("# agent_callable = true # set false to hide/block this role from Kent-session subagent calls\n")
 	builder.WriteString("# description = \"\" # model-visible role description for future/catalog uses\n")
-	builder.WriteString("# model = \"gpt-5.4-mini\" # built-in heuristic on exact OpenAI first-party setups\n")
+	builder.WriteString("# model = \"gpt-5.6-terra\" # built-in heuristic on exact OpenAI first-party setups\n")
+	builder.WriteString("# thinking_level = \"low\" # built-in heuristic on exact OpenAI first-party setups\n")
 	builder.WriteString("# priority_request_mode = true # built-in heuristic on exact OpenAI first-party setups\n")
-	builder.WriteString("# model_context_window = 272000 # conservative default; larger API-key windows can be added later\n")
+	builder.WriteString("# model_context_window = 372000 # built-in heuristic on exact OpenAI first-party setups\n")
+}
+
+func DefaultModel() string {
+	return defaultModel
 }
 
 func filterRenderedLines(lines []defaultConfigLine, omittedKeys map[string]bool) []defaultConfigLine {

@@ -7,7 +7,6 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
-	"core/shared/transcript"
 )
 
 type RuntimeSetSessionNameRequest struct {
@@ -353,8 +352,10 @@ func (r RuntimeAppendCommittedEntryRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
-	if visibility := transcript.NormalizeEntryVisibility(transcript.EntryVisibility(r.Visibility)); visibility != "" && visibility != transcript.EntryVisibilityAll && visibility != transcript.EntryVisibilityVerbose {
-		return errors.New("visibility must be empty/auto, all, or verbose")
+	switch strings.ToLower(strings.TrimSpace(r.Visibility)) {
+	case "", "auto", "o", "oc", "d", "x":
+	default:
+		return errors.New("visibility must be empty/auto, O, OC, D, or X")
 	}
 	return nil
 }

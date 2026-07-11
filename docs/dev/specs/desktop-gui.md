@@ -123,8 +123,8 @@
 - Resume appears only when resumable.
 - Interrupt appears in the same action slot when exactly one active run is interruptible and acts immediately.
 - Tasks with multiple active runs open detail for per-run controls.
-- Board visual states include Backlog/idle, queued, running, interrupted, approval-gated, question-gated, done/completed, canceled, and validation-blocked.
-- Dragging a Backlog task to the first active node requests task start. When the server requires an execution selection, the board presents it before automation begins; cancellation keeps the task in Backlog. Otherwise automation starts immediately with no confirmation.
+- Board visual states include Backlog/idle, queued, running, interrupted, approval-gated, question-gated, done/completed, and canceled.
+- Dragging Backlog task to first active node starts automation immediately with no confirmation.
 - Dragging to Done is a user archive/manual move, not normal edge completion.
 - Manual move and Done drag targets are unavailable while a task has a started active run that is not completed or interrupted, including runs waiting on a question.
 - Agent and script drag targets are available only when the server exposes a concrete workflow edge to that executable target.

@@ -17,7 +17,7 @@ func TestApplyRunPromptOverridesCLIModelOverridePreservesExplicitThreshold(t *te
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace,
 		"model = \"gpt-5.4\"",
-		"context_compaction_threshold_tokens = 180000",
+		"context_compaction_threshold_tokens = 221000",
 	)
 	store := createTestSession(t, workspace)
 	plan := SessionPlan{
@@ -36,8 +36,8 @@ func TestApplyRunPromptOverridesCLIModelOverridePreservesExplicitThreshold(t *te
 	if updated.ActiveSettings.ModelContextWindow != 272_000 {
 		t.Fatalf("context window = %d, want 272000", updated.ActiveSettings.ModelContextWindow)
 	}
-	if updated.ActiveSettings.ContextCompactionThresholdTokens != 180_000 {
-		t.Fatalf("compaction threshold = %d, want 180000", updated.ActiveSettings.ContextCompactionThresholdTokens)
+	if updated.ActiveSettings.ContextCompactionThresholdTokens != 221_000 {
+		t.Fatalf("compaction threshold = %d, want 221000", updated.ActiveSettings.ContextCompactionThresholdTokens)
 	}
 }
 

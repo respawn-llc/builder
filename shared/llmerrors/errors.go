@@ -31,6 +31,8 @@ const (
 	UnifiedErrorCodeProviderContract      UnifiedErrorCode = "provider_contract_error"
 )
 
+const providerTypeResponseIncomplete = "response.incomplete"
+
 type ProviderAPIError struct {
 	ProviderID    string
 	StatusCode    int
@@ -154,6 +156,9 @@ func IsNonRetriableModelError(err error) bool {
 	}
 	var providerErr *ProviderAPIError
 	if errors.As(err, &providerErr) {
+		if providerErr.ProviderType == providerTypeResponseIncomplete {
+			return true
+		}
 		if providerErr.Code == UnifiedErrorCodeProviderContract {
 			return true
 		}

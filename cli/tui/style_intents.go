@@ -1,8 +1,8 @@
 package tui
 
 import (
+	"core/cli/tui/transcriptrender"
 	"core/shared/theme"
-	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -11,7 +11,6 @@ type StyleIntent uint16
 
 const (
 	ThemeForeground StyleIntent = 1 << iota
-	Subdued
 	PrimaryForeground
 	SuccessForeground
 	WarningForeground
@@ -34,8 +33,6 @@ func ApplyThemeStyleIntents(text, themeName string, intents StyleIntent) string 
 	palette := theme.ResolvePalette(themeName)
 	style := lipgloss.NewStyle()
 	switch {
-	case intents.Has(Subdued):
-		style = style.Foreground(palette.Transcript.Subdued.Lipgloss()).Faint(true)
 	case intents.Has(PrimaryForeground):
 		style = style.Foreground(palette.App.Primary.Lipgloss())
 	case intents.Has(SuccessForeground):
@@ -53,10 +50,28 @@ func ApplyThemeStyleIntents(text, themeName string, intents StyleIntent) string 
 	return style.Render(text)
 }
 
-func RenderAskQuestionMarkdownLines(question string, _ string, _ int) []string {
-	lines := strings.Split(question, "\n")
-	if len(lines) == 0 {
-		return []string{""}
+func transcriptSpanStyle(span transcriptrender.Span, themeName string) lipgloss.Style {
+	resolved := transcriptrender.ResolveSpanStyle(span, themeName)
+	style := lipgloss.NewStyle()
+	switch resolved.Foreground.Kind {
+	case transcriptrender.ResolvedForegroundTheme:
+		style = style.Foreground(resolved.Foreground.Theme.Lipgloss())
+	case transcriptrender.ResolvedForegroundRGB:
+		style = style.Foreground(lipgloss.Color(resolved.Foreground.RGB.Hex()))
+	default:
+		panic("transcript span resolved an invalid foreground kind")
 	}
-	return lines
+	if resolved.Faint {
+		style = style.Faint(true)
+	}
+	if resolved.Bold {
+		style = style.Bold(true)
+	}
+	if resolved.Italic {
+		style = style.Italic(true)
+	}
+	if resolved.Underline {
+		style = style.Underline(true)
+	}
+	return style
 }

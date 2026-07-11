@@ -457,18 +457,6 @@ pub const ROUTES: &[RouteMetadata] = &[
         dedicated_request_id: None,
     },
     RouteMetadata {
-        method: "session.getCommittedTranscriptSuffix",
-        route_scope: "interactive_tui",
-        kind: "unary",
-        auth: "pre_server_auth",
-        rpc_scope: "session_active_project",
-        connection: "control",
-        dependency: "session_view",
-        event_method: None,
-        complete_method: None,
-        dedicated_request_id: None,
-    },
-    RouteMetadata {
         method: "session.getInitialInput",
         route_scope: "interactive_tui",
         kind: "unary",

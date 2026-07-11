@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
-	"regexp"
-	"runtime"
 	"strings"
 
 	"core/shared/config"
@@ -16,7 +14,6 @@ type PathMatcherKind string
 const (
 	PathMatcherLiteral PathMatcherKind = "literal"
 	PathMatcherGlob    PathMatcherKind = "glob"
-	PathMatcherRegex   PathMatcherKind = "regex"
 )
 
 type PathMatcherConfig struct {
@@ -66,10 +63,6 @@ type literalPathMatcher struct {
 
 type globPathMatcher struct {
 	pattern string
-}
-
-type regexPathMatcher struct {
-	pattern *regexp.Regexp
 }
 
 func CompilePathDenyPolicy(rules []PathDenyRuleConfig) (PathDenyPolicy, error) {
@@ -181,19 +174,6 @@ func compilePathMatcher(cfg PathMatcherConfig) (pathMatcher, error) {
 			return nil, err
 		}
 		return globPathMatcher{pattern: normalized}, nil
-	case PathMatcherRegex:
-		pattern := filepath.ToSlash(strings.TrimSpace(cfg.Pattern))
-		if pattern == "" {
-			return nil, fmt.Errorf("regex pattern is required")
-		}
-		if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
-			pattern = "(?i:" + pattern + ")"
-		}
-		compiled, err := regexp.Compile(pattern)
-		if err != nil {
-			return nil, fmt.Errorf("compile regex path matcher: %w", err)
-		}
-		return regexPathMatcher{pattern: compiled}, nil
 	default:
 		return nil, fmt.Errorf("unsupported path matcher kind %q", cfg.Kind)
 	}
@@ -215,10 +195,6 @@ func (m literalPathMatcher) Match(candidate string) bool {
 
 func (m globPathMatcher) Match(candidate string) bool {
 	return matchGlobSegments(splitGlobPath(m.pattern), splitGlobPath(filepath.ToSlash(candidate)))
-}
-
-func (m regexPathMatcher) Match(candidate string) bool {
-	return m.pattern.MatchString(filepath.ToSlash(candidate))
 }
 
 func validateGlobPattern(pattern string) error {

@@ -444,7 +444,7 @@ const taskDetailResponse = {
       created_at_unix_ms: 1,
       updated_at_unix_ms: 2,
       done: false,
-      canceled_at_unix_ms: 0,
+      canceled_at_unix_ms: null,
     },
     project: { display_name: "Project" },
     workflow,
@@ -452,7 +452,6 @@ const taskDetailResponse = {
     source_workspace: workspace,
     status: {
       kind: "waiting_question",
-      label: "Waiting question",
       native_state: "running",
       node_ids: ["node-1"],
       run_ids: ["run-1"],

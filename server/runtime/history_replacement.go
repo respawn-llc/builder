@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/shared/valuecopy"
 )
 
 const legacyHistoryReplacementEngineReviewerRollback = "reviewer_rollback"
@@ -47,7 +48,7 @@ func decodePersistedHistoryReplacementPayload(payload []byte) (historyReplacemen
 		Mode:                              strings.TrimSpace(envelope.Mode),
 		WorkflowRunID:                     strings.TrimSpace(envelope.WorkflowRunID),
 		CompactionNumber:                  envelope.CompactionNumber,
-		CommittedEntryStart:               cloneIntPtr(envelope.CommittedEntryStart),
+		CommittedEntryStart:               valuecopy.Pointer(envelope.CommittedEntryStart),
 		PendingHandoffFutureMessage:       strings.TrimSpace(envelope.PendingHandoffFutureMessage),
 		LastCommittedAssistantFinalAnswer: envelope.LastCommittedAssistantFinalAnswer,
 	}
@@ -59,14 +60,6 @@ func decodePersistedHistoryReplacementPayload(payload []byte) (historyReplacemen
 		return historyReplacementPayload{}, false, err
 	}
 	return decoded, false, nil
-}
-
-func cloneIntPtr(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	clone := *value
-	return &clone
 }
 
 func transcriptEntriesFromHistoryReplacement(items []llm.ResponseItem) []ChatEntry {

@@ -19,7 +19,7 @@ func PrepareConfigAndBinding(ctx context.Context, persistenceRoot string, worksp
 		return err
 	}
 	configPath := filepath.Join(persistenceRoot, "config.toml")
-	config := fmt.Sprintf("model = \"gpt-5\"\nprovider_override = \"openai\"\nopenai_base_url = \"http://127.0.0.1:1/v1\"\nserver_port = %d\n\n[reviewer]\nfrequency = \"off\"\n", port)
+	config := fmt.Sprintf("model = \"gpt-5\"\nprovider_override = \"openai\"\nopenai_base_url = \"http://127.0.0.1:1/v1\"\nserver_port = %d\ntheme = \"dark\"\n\n[reviewer]\nfrequency = \"off\"\n", port)
 	if err := os.WriteFile(configPath, []byte(config), 0o644); err != nil {
 		return fmt.Errorf("write fixture config: %w", err)
 	}

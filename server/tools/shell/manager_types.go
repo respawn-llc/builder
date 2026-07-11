@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"core/server/tools/shell/postprocess"
+	"core/shared/textutil"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -46,6 +49,7 @@ type Event struct {
 
 type Snapshot struct {
 	ID                      string
+	ActivityID              uuid.UUID
 	OwnerSessionID          string
 	OwnerRunID              string
 	OwnerStepID             string
@@ -159,6 +163,7 @@ func (e *PollingCanceledError) Unwrap() error {
 
 type processEntry struct {
 	id             string
+	activityID     uuid.UUID
 	ownerSessionID string
 	ownerRunID     string
 	ownerStepID    string
@@ -204,6 +209,7 @@ func (p *processEntry) snapshotLocked() Snapshot {
 	}
 	return Snapshot{
 		ID:                      p.id,
+		ActivityID:              p.activityID,
 		OwnerSessionID:          p.ownerSessionID,
 		OwnerRunID:              p.ownerRunID,
 		OwnerStepID:             p.ownerStepID,
@@ -212,7 +218,7 @@ func (p *processEntry) snapshotLocked() Snapshot {
 		Workdir:                 p.workdir,
 		StartedAt:               p.startedAt,
 		FinishedAt:              p.finishedAt,
-		ExitCode:                postprocess.CloneIntPtr(p.exitCode),
+		ExitCode:                textutil.CloneInt(p.exitCode),
 		LogPath:                 p.logPath,
 		RecentOutput:            recentOutput,
 		OutputAvailable:         p.logPath != "",

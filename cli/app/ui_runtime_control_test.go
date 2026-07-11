@@ -8,12 +8,9 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"core/server/llm"
 	"core/shared/clientui"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type runtimeControlFakeClient struct {
@@ -33,6 +30,7 @@ type runtimeControlFakeClient struct {
 	pauseGoalCalls         int
 	resumeGoalCalls        int
 	clearGoalCalls         int
+	appendCalls            int
 	appendedRole           string
 	appendedText           string
 	submitText             string
@@ -157,6 +155,7 @@ func (f *runtimeControlFakeClient) AppendCommittedEntry(role, text string) error
 	return f.AppendCommittedEntryWithNoticeID(role, text, "")
 }
 func (f *runtimeControlFakeClient) AppendCommittedEntryWithNoticeID(role, text, noticeID string) error {
+	f.appendCalls++
 	f.appendedRole = role
 	f.appendedText = text
 	if f.appendErr != nil {
@@ -257,6 +256,79 @@ func (f *runtimeControlFakeClient) DiscardQueuedUserMessage(queueItemID string) 
 func (f *runtimeControlFakeClient) RecordPromptHistory(text string) error {
 	f.recordedPromptHistory = text
 	return f.err
+}
+
+func TestThinkingQueryUsesStatusOnly(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+
+	client := &runtimeControlFakeClient{status: clientui.RuntimeStatus{ThinkingLevel: "medium"}}
+	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+
+	next, cmd := m.inputController().handleThinkingLevelCommand("")
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		next, _ = updated.Update(msg)
+		updated = next.(*uiModel)
+	}
+
+	if client.appendCalls != 0 {
+		t.Fatalf("thinking query must not append transcript entries, got %d append calls", client.appendCalls)
+	}
+	if updated.transientStatus == "" || updated.transientStatusKind != uiStatusNoticeInfo {
+		t.Fatalf("thinking query should surface an info status notice, got status=%q kind=%v", updated.transientStatus, updated.transientStatusKind)
+	}
+}
+
+func TestThinkingSetWithoutRuntimeUsesStatusOnly(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+
+	m := newProjectedStaticUIModel()
+
+	next, cmd := m.inputController().handleThinkingLevelCommand("low")
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		next, _ = updated.Update(msg)
+		updated = next.(*uiModel)
+	}
+
+	if updated.thinkingLevel != "low" {
+		t.Fatalf("thinking level = %q, want low", updated.thinkingLevel)
+	}
+	if updated.transientStatus == "" || updated.transientStatusKind != uiStatusNoticeSuccess {
+		t.Fatalf("thinking set should surface a success status notice, got status=%q kind=%v", updated.transientStatus, updated.transientStatusKind)
+	}
+}
+
+func TestThinkingRuntimeCompletionUsesStatusOnly(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+
+	client := &runtimeControlFakeClient{}
+	m := newProjectedTestUIModel(client, closedProjectedRuntimeEvents(), closedAskEvents())
+	cmd := m.runtimeControlCommand(runtimeControlSetThinkingLevel, "high", false, "")
+	msgs := collectCmdMessages(t, cmd)
+
+	var done runtimeControlDoneMsg
+	for _, msg := range msgs {
+		if typed, ok := msg.(runtimeControlDoneMsg); ok {
+			done = typed
+		}
+	}
+	next, cmd := m.Update(done)
+	updated := next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		next, _ = updated.Update(msg)
+		updated = next.(*uiModel)
+	}
+
+	if client.appendCalls != 0 {
+		t.Fatalf("thinking runtime completion must not append transcript entries, got %d append calls", client.appendCalls)
+	}
+	if updated.thinkingLevel != "high" {
+		t.Fatalf("thinking level = %q, want high", updated.thinkingLevel)
+	}
+	if updated.transientStatus == "" || updated.transientStatusKind != uiStatusNoticeSuccess {
+		t.Fatalf("thinking runtime completion should surface a success status notice, got status=%q kind=%v", updated.transientStatus, updated.transientStatusKind)
+	}
 }
 
 func TestRuntimeControlCompletionsAreScopedPerOperation(t *testing.T) {
@@ -398,9 +470,7 @@ func TestRuntimeControlHelpersFallbackWithoutRuntimeClient(t *testing.T) {
 	}
 }
 func TestSubmitErrorShowsTransientStatusWithoutPersisting(t *testing.T) {
-	originalClear := scheduleTransientStatusClear
-	scheduleTransientStatusClear = func(time.Duration, uint64) tea.Cmd { return nil }
-	defer func() { scheduleTransientStatusClear = originalClear }()
+	disableTransientStatusClearForTest(t)
 
 	client := &runtimeControlFakeClient{}
 	m := newProjectedStaticUIModel()

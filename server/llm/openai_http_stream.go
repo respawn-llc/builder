@@ -2,9 +2,11 @@ package llm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
+	"core/shared/llmerrors"
 	"core/shared/textutil"
 	"github.com/openai/openai-go/v3/responses"
 )
@@ -22,10 +24,12 @@ type responseStreamAccumulator struct {
 }
 
 type responseStreamError struct {
-	Code    string
-	Param   string
+	Raw              string
+	ProviderContract *responseStreamProviderContract
+}
+
+type responseStreamProviderContract struct {
 	Message string
-	Raw     string
 }
 
 func newResponseStreamAccumulator(callbacks StreamCallbacks, windowTokens int) *responseStreamAccumulator {
@@ -82,27 +86,68 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 		a.reasoning.Set(reasoningRoleSummary, key, evt.Part.Text)
 		a.emitReasoningSummaryDelta(key)
 	case "response.completed":
-		completed := evt.AsResponseCompleted().Response
+		completedEvent := evt.AsResponseCompleted()
+		if !responseCompletedEventHasValidPayload(completedEvent) {
+			a.responseError = &responseStreamError{
+				Raw: completedEvent.RawJSON(),
+				ProviderContract: &responseStreamProviderContract{
+					Message: "OpenAI-compatible Responses stream emitted response.completed without a valid response payload",
+				},
+			}
+			return
+		}
+		completed := completedEvent.Response
 		a.completed = &completed
 	case "response.failed":
 		failed := evt.AsResponseFailed()
 		a.responseError = &responseStreamError{Raw: failed.RawJSON()}
-	case "error":
-		errorEvent := evt.AsError()
-		a.responseError = &responseStreamError{
-			Code:    errorEvent.Code,
-			Param:   errorEvent.Param,
-			Message: errorEvent.Message,
-			Raw:     evt.RawJSON(),
+	case "response.incomplete":
+		incomplete := evt.AsResponseIncomplete()
+		raw := incomplete.RawJSON()
+		if strings.TrimSpace(incomplete.Response.IncompleteDetails.Reason) == "" {
+			a.responseError = &responseStreamError{
+				Raw: raw,
+				ProviderContract: &responseStreamProviderContract{
+					Message: "OpenAI-compatible Responses stream emitted response.incomplete without incomplete_details.reason",
+				},
+			}
+			return
 		}
+		a.responseError = &responseStreamError{Raw: raw}
+	case "error":
+		a.responseError = &responseStreamError{Raw: evt.RawJSON()}
 	}
 }
 
-func (a *responseStreamAccumulator) Err(providerID string) error {
+func responseCompletedEventHasValidPayload(evt responses.ResponseCompletedEvent) bool {
+	if !evt.JSON.Response.Valid() || !evt.Response.JSON.Output.Valid() {
+		return false
+	}
+	var output []json.RawMessage
+	if err := json.Unmarshal([]byte(evt.Response.JSON.Output.Raw()), &output); err != nil {
+		return false
+	}
+	return output != nil
+}
+
+func (a *responseStreamAccumulator) Err(providerID string, responseStatus *openAIResponseStatus) error {
 	if a == nil || a.responseError == nil {
 		return nil
 	}
-	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil); ok {
+	if responseStatus == nil {
+		message := strings.TrimSpace(a.responseError.Raw)
+		if a.responseError.ProviderContract != nil {
+			message = a.responseError.ProviderContract.Message
+		}
+		if message == "" {
+			message = "unrecognized stream error"
+		}
+		return errors.New(message)
+	}
+	if a.responseError.ProviderContract != nil {
+		return llmerrors.NewProviderContractError(providerID, responseStatus.Code, errors.New(a.responseError.ProviderContract.Message))
+	}
+	if err, ok := mapOpenAIStreamErrorPayload(providerID, []byte(a.responseError.Raw), nil, responseStatus.Code); ok {
 		return err
 	}
 	message := strings.TrimSpace(a.responseError.Raw)
@@ -111,6 +156,7 @@ func (a *responseStreamAccumulator) Err(providerID string) error {
 	}
 	return &ProviderAPIError{
 		ProviderID: providerID,
+		StatusCode: responseStatus.Code,
 		Code:       UnifiedErrorCodeUnknown,
 		Message:    message,
 		Raw:        message,

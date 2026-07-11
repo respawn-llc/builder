@@ -88,7 +88,10 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 		}
 		return 0
 	}
-	writeTaskDetail(stdout, task)
+	if err := writeTaskDetail(stdout, task); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	return 0
 }
 

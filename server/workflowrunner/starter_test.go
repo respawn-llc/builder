@@ -23,6 +23,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
@@ -35,6 +36,8 @@ import (
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
+
+const workflowRunnerTestWaitTimeout = 15 * time.Second
 
 func TestSchedulerRunsNewSessionWorkflowNodeWithStructuredOutput(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"finished structured"}`))
@@ -58,7 +61,7 @@ func TestSchedulerRunsNewSessionWorkflowNodeWithStructuredOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || strings.TrimSpace(runs[0].SessionID) == "" || runs[0].CompletedAt == 0 {
+	if len(runs) != 1 || strings.TrimSpace(runs[0].SessionID) == "" || runs[0].CompletedAt == nil {
 		t.Fatalf("run not attached/completed: %+v", runs)
 	}
 	transitions, err := fixture.store.ListTransitions(context.Background(), task.ID)
@@ -196,7 +199,7 @@ func TestWorkflowRuntimeAskQuestionWaitsAndResumesSameRunSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].SessionID != waiting.SessionID || runs[0].WaitingAskID != "" {
+	if len(runs) != 1 || runs[0].SessionID != waiting.SessionID || runs[0].WaitingAskID != nil {
 		t.Fatalf("run after answer = %+v, want same session and cleared waiting ask", runs)
 	}
 	transitions, err := fixture.store.ListTransitions(context.Background(), task.ID)
@@ -254,7 +257,7 @@ func TestWorkflowRuntimeMultipleAskQuestionsInOneToolBatchResumeSequentially(t *
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].SessionID != first.SessionID || runs[0].WaitingAskID != "" {
+	if len(runs) != 1 || runs[0].SessionID != first.SessionID || runs[0].WaitingAskID != nil {
 		t.Fatalf("run after answers = %+v, want same session and cleared waiting ask", runs)
 	}
 	askResults := workflowRequestAskQuestionToolMessages(fixture.client.Requests())
@@ -529,12 +532,13 @@ func TestWorkflowAskHandlerCancellationAfterDurableClearResolvesBatch(t *testing
 	cancel()
 	batch := workflowTestAskBatch("ask-1", "ask-1", "ask-2")
 	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
+	interruptedAt := int64(123)
 	store := &recordingRuntimeStore{
 		clearErr: sql.ErrNoRows,
 		getRun: workflowstore.RunRecord{
 			ID:            "run-1",
 			Generation:    7,
-			InterruptedAt: 123,
+			InterruptedAt: &interruptedAt,
 		},
 	}
 	starter := &Starter{store: store, runtimes: runtimes}
@@ -563,12 +567,13 @@ func TestWorkflowAskHandlerApprovalCancellationAfterDurableClearResolvesQuestion
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
+	interruptedAt := int64(123)
 	store := &recordingRuntimeStore{
 		clearErr: sql.ErrNoRows,
 		getRun: workflowstore.RunRecord{
 			ID:            "run-1",
 			Generation:    7,
-			InterruptedAt: 123,
+			InterruptedAt: &interruptedAt,
 		},
 	}
 	starter := &Starter{store: store, runtimes: runtimes}
@@ -712,7 +717,7 @@ func TestStarterAutoPersistsShellCommandForContinuationWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeShellCommand) {
+	if len(runs) != 1 || runs[0].EffectiveCompletionMode == nil || *runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeShellCommand) {
 		t.Fatalf("stored mode = %+v, want shell_command", runs)
 	}
 }
@@ -776,7 +781,7 @@ func TestStarterAutoPersistsUnstructuredWhenShellUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeUnstructuredOutput) {
+	if len(runs) != 1 || runs[0].EffectiveCompletionMode == nil || *runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeUnstructuredOutput) {
 		t.Fatalf("stored mode = %+v, want unstructured_output", runs)
 	}
 }
@@ -795,7 +800,7 @@ func TestStarterExplicitShellModeFailsWhenShellUnavailable(t *testing.T) {
 	if listErr != nil {
 		t.Fatalf("ListRuns: %v", listErr)
 	}
-	if len(runs) != 1 || runs[0].EffectiveCompletionMode != "" {
+	if len(runs) != 1 || runs[0].EffectiveCompletionMode != nil {
 		t.Fatalf("stored mode after failed explicit shell = %+v, want empty", runs)
 	}
 }
@@ -922,7 +927,7 @@ func TestStarterStartWorkflowRunPersistsEffectiveCompletionModeBeforeModelReques
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeShellCommand) {
+	if len(runs) != 1 || runs[0].EffectiveCompletionMode == nil || *runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeShellCommand) {
 		t.Fatalf("stored mode = %+v, want shell_command", runs)
 	}
 	if err := fixture.starter.Close(); err != nil {
@@ -945,7 +950,7 @@ func TestStarterStartWorkflowRunFailsExplicitShellModeWithoutShell(t *testing.T)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InterruptedAt == 0 || runs[0].EffectiveCompletionMode != "" || runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
+	if len(runs) != 1 || runs[0].InterruptedAt == nil || runs[0].EffectiveCompletionMode != nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
 		t.Fatalf("run after explicit shell failure = %+v, want interrupted without stored mode", runs)
 	}
 	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != runs[0].ID {
@@ -986,7 +991,7 @@ func TestStarterRestoresReusedSessionMetadataWhenSetupFailsAfterPlanning(t *test
 	if err != nil {
 		t.Fatalf("ListRuns after failed continuation: %v", err)
 	}
-	if len(runs) != 2 || runs[1].InterruptedAt == 0 || strings.TrimSpace(runs[1].SessionID) != "" {
+	if len(runs) != 2 || runs[1].InterruptedAt == nil || strings.TrimSpace(runs[1].SessionID) != "" {
 		t.Fatalf("runs after failed continuation = %+v, want interrupted unattached continuation", runs)
 	}
 	metaAfter := fixture.sessionMeta(t, sourceSessionID)
@@ -1238,11 +1243,11 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 	if err != nil {
 		t.Fatalf("ListRuns after first run: %v", err)
 	}
-	if len(runs) != 2 || runs[0].CompletedAt == 0 || runs[1].StartedAt != 0 {
+	if len(runs) != 2 || runs[0].CompletedAt == nil || runs[1].StartedAt != nil {
 		t.Fatalf("runs after first process = %+v, want completed source and unstarted target", runs)
 	}
 	role := fixture.cfg.Settings.Subagents["coder"]
-	role.Settings.Model = "gpt-5.5-drifted"
+	role.Settings.Model = "gpt-5.6-sol-drifted"
 	role.Sources["model"] = "drifted-test"
 	fixture.cfg.Settings.Subagents["coder"] = role
 	fixture.rebuildStarter(t)
@@ -1256,7 +1261,7 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 	if len(reqs) < 2 {
 		t.Fatalf("fake model request count = %d, want 2", len(reqs))
 	}
-	if reqs[0].Model == "" || reqs[1].Model != reqs[0].Model || reqs[1].Model == "gpt-5.5-drifted" {
+	if reqs[0].Model == "" || reqs[1].Model != reqs[0].Model || reqs[1].Model == "gpt-5.6-sol-drifted" {
 		t.Fatalf("request models = %q then %q, want locked source session model reused after config drift", reqs[0].Model, reqs[1].Model)
 	}
 }
@@ -1403,7 +1408,12 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 		ScriptedFinalAnswer(`{"commentary":"compaction summary"}`),
 		ScriptedFinalAnswer(`{"commentary":"second done"}`),
 	)
+	coderRole := fixture.cfg.Settings.Subagents["coder"]
+	coderRole.Settings.Model = "gpt-5.3-codex-spark"
+	coderRole.Sources = map[string]string{"model": "test"}
+	fixture.cfg.Settings.Subagents["coder"] = coderRole
 	reviewerRole := fixture.cfg.Settings.Subagents["reviewer"]
+	reviewerRole.Settings.Model = "gpt-5.6-sol"
 	reviewerRole.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolEdit: true}
 	reviewerRole.Sources = map[string]string{
 		"model":       "test",
@@ -1412,6 +1422,15 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 		"tools.edit":  "test",
 	}
 	fixture.cfg.Settings.Subagents["reviewer"] = reviewerRole
+	fixture.client = NewScriptedClient(llm.ProviderCapabilities{
+		ProviderID:             "fake",
+		SupportsResponsesAPI:   true,
+		SupportsPromptCacheKey: true,
+	}, ScriptedFinalAnswer(`{"commentary":"first comments","prior_summary":"first summary"}`),
+		ScriptedFinalAnswer(`{"commentary":"compaction summary"}`),
+		ScriptedFinalAnswer(`{"commentary":"second done"}`),
+	)
+	fixture.clientFactory = func(SchedulerStartRunRequest) llm.Client { return fixture.client }
 	fixture.rebuildStarter(t)
 	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeCompactAndContinueSession, "reviewer")
 	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
@@ -1432,8 +1451,15 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 2 || runs[1].InterruptedAt != 0 || runs[1].CompletedAt == 0 || runs[0].SessionID != runs[1].SessionID {
+	if len(runs) != 2 || runs[1].InterruptedAt != nil || runs[1].CompletedAt == nil || runs[0].SessionID != runs[1].SessionID {
 		t.Fatalf("runs = %+v, want cross-role compact_and_continue to complete in source session", runs)
+	}
+	reqs := fixture.client.Requests()
+	if len(reqs) != 3 {
+		t.Fatalf("model request count = %d, want source turn, target-contract compaction, and target turn", len(reqs))
+	}
+	if reqs[0].Model != "gpt-5.3-codex-spark" || reqs[1].Model != "gpt-5.6-sol" || reqs[2].Model != "gpt-5.6-sol" {
+		t.Fatalf("request models = %q, %q, %q, want source model then target model for compaction and target turn", reqs[0].Model, reqs[1].Model, reqs[2].Model)
 	}
 	containerDir := filepath.Join(filepath.Join(fixture.cfg.PersistenceRoot, "projects"), fixture.projectID, "sessions")
 	sourceDir, err := session.ResolveScopedSessionDir(containerDir, runs[1].SessionID)
@@ -1444,13 +1470,24 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open source session: %v", err)
 	}
-	if got := sourceStore.Meta().Continuation; got == nil || got.AgentRole != "reviewer" {
+	if got := sourceStore.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("reviewer")) {
 		t.Fatalf("continuation role = %+v, want reviewer", got)
+	}
+	if got := sourceStore.Meta().PromptCacheLineageGeneration; got != 1 {
+		t.Fatalf("prompt cache lineage generation = %d, want fresh target generation 1", got)
 	}
 	if locked := sourceStore.Meta().Locked; locked == nil || !locked.HasSystemPrompt || !locked.HasEnabledTools {
 		t.Fatalf("locked prompt-facing contract = %+v, want refreshed prompt and request shape", locked)
 	} else if !lockedContractHasTool(locked, toolspec.ToolEdit) || lockedContractHasTool(locked, toolspec.ToolExecCommand) {
 		t.Fatalf("locked enabled tools = %+v, want refreshed reviewer role tools", locked.EnabledTools)
+	} else if locked.Model != "gpt-5.6-sol" {
+		t.Fatalf("locked model = %q, want target reviewer model", locked.Model)
+	}
+	if reqs[0].PromptCacheKey == "" || reqs[1].PromptCacheKey == "" {
+		t.Fatalf("request cache keys = %q, %q, want cache lineages for source and target contracts", reqs[0].PromptCacheKey, reqs[1].PromptCacheKey)
+	}
+	if reqs[1].PromptCacheKey == reqs[0].PromptCacheKey {
+		t.Fatalf("target compaction cache key = %q, want fresh target-contract cache lineage instead of source key %q", reqs[1].PromptCacheKey, reqs[0].PromptCacheKey)
 	}
 }
 
@@ -1550,7 +1587,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 
@@ -1577,7 +1614,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != "" {
+	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared role", got)
 	}
 }
@@ -1589,7 +1626,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 
@@ -1609,14 +1646,14 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planSession: %v", err)
 	}
-	if plan.ActiveSettings.Model != "gpt-5.5" {
+	if plan.ActiveSettings.Model != "gpt-5.6-sol" {
 		t.Fatalf("model = %q, want locked model", plan.ActiveSettings.Model)
 	}
 	reopened, err := session.Open(source.Dir(), fixture.metadata.AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got == nil || got.AgentRole != "coder" {
+	if got := reopened.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("coder")) {
 		t.Fatalf("continuation = %+v, want coder role persisted", got)
 	}
 }
@@ -1628,10 +1665,10 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: "reviewer"}); err != nil {
+	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("reviewer")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
-	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 	planner := launch.Planner{
@@ -1667,7 +1704,7 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 	if err != nil {
 		t.Fatalf("workflow planSession: %v", err)
 	}
-	if got := plan.Store.Meta().Continuation; got == nil || got.AgentRole != "coder" {
+	if got := plan.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("coder")) {
 		t.Fatalf("workflow continuation = %+v, want coder role", got)
 	}
 }
@@ -1686,7 +1723,7 @@ func TestWorkflowRuntimeStartFailsWhenRoleDisappearedAfterTaskStart(t *testing.T
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
+	if len(runs) != 1 || runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
 		t.Fatalf("run after missing role = %+v", runs)
 	}
 	var detail string
@@ -1696,14 +1733,17 @@ func TestWorkflowRuntimeStartFailsWhenRoleDisappearedAfterTaskStart(t *testing.T
 	}
 }
 
-func TestWorkflowRuntimeStartsConfiguredNoOpRole(t *testing.T) {
+func TestWorkflowRuntimeStartsWorkflowHiddenConfiguredNoOpRole(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput,
 		ScriptedFinalAnswer(`{"commentary":"first comments","prior_summary":"first summary"}`),
 		ScriptedFinalAnswer(`{"commentary":"second done"}`),
 	)
+	fixture.cfg.Settings.Workflow.Subagents = false
 	fixture.cfg.Settings.Subagents["planner"] = config.SubagentRole{
-		Settings: config.Settings{ThinkingLevel: fixture.cfg.Settings.ThinkingLevel},
-		Sources:  map[string]string{"thinking_level": "test"},
+		Settings:            config.Settings{ThinkingLevel: fixture.cfg.Settings.ThinkingLevel},
+		Sources:             map[string]string{"thinking_level": "test"},
+		WorkflowSubagent:    false,
+		WorkflowSubagentSet: true,
 	}
 	fixture.rebuildStarter(t)
 	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeNewSession, "planner")
@@ -1746,7 +1786,7 @@ func TestWorkflowRuntimeStartFailsWhenTransitionPromptPreviewCannotRender(t *tes
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed || strings.TrimSpace(runs[0].SessionID) != "" {
+	if len(runs) != 1 || runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed || strings.TrimSpace(runs[0].SessionID) != "" {
 		t.Fatalf("run after prompt render failure = %+v, want interrupted without attached session", runs)
 	}
 	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != runs[0].ID {
@@ -1760,6 +1800,9 @@ func TestWorkflowRuntimeStartFailsWhenTransitionPromptPreviewCannotRender(t *tes
 func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"resumed"}`))
 	task := fixture.createStartedTask(t)
+	if err := fixture.worktrees.EnsureTaskWorktree(context.Background(), TaskWorktreeEnsureRequest{TaskID: task.ID}); err != nil {
+		t.Fatalf("EnsureTaskWorktree: %v", err)
+	}
 	def, _, err := fixture.store.GetDefinition(context.Background(), fixture.workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
@@ -1797,7 +1840,7 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns interrupted: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InterruptedAt == 0 || strings.TrimSpace(runs[0].SessionID) == "" {
+	if len(runs) != 1 || runs[0].InterruptedAt == nil || strings.TrimSpace(runs[0].SessionID) == "" {
 		t.Fatalf("interrupted run session = %+v", runs)
 	}
 	originalSessionID := runs[0].SessionID
@@ -1826,7 +1869,42 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	}
 }
 
-func TestWorkflowRuntimeLoadsSkillFromPreMaterializedExecutionRoot(t *testing.T) {
+func TestStartWorkflowRunWaitsForTaskWorktreeEnsureBeforeRunContext(t *testing.T) {
+	ensureStarted := make(chan TaskWorktreeEnsureRequest, 1)
+	releaseEnsure := make(chan struct{})
+	ensureErr := errors.New("setup failed")
+	ensurer := blockingStarterTaskWorktreeEnsurer{started: ensureStarted, release: releaseEnsure, err: ensureErr}
+	starter := &Starter{store: &recordingRuntimeStore{}, worktrees: ensurer}
+	done := make(chan error, 1)
+	go func() {
+		done <- starter.StartWorkflowRun(context.Background(), SchedulerStartRunRequest{TaskID: "task-1", RunID: "run-1", Generation: 1})
+	}()
+	var req TaskWorktreeEnsureRequest
+	select {
+	case req = <-ensureStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for worktree ensure")
+	}
+	if req.TaskID != "task-1" || req.RunID != "run-1" {
+		t.Fatalf("ensure request = %+v", req)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("StartWorkflowRun returned before ensure released: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseEnsure)
+	select {
+	case err := <-done:
+		if !errors.Is(err, ensureErr) {
+			t.Fatalf("StartWorkflowRun error = %v, want %v", err, ensureErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for StartWorkflowRun")
+	}
+}
+
+func TestStartWorkflowRunIncludesSetupCreatedSkillInFirstModelRequest(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"done"}`))
 	const skillName = "setup-created-workflow-skill"
 	const skillDescription = "created before context lock"
@@ -1864,57 +1942,16 @@ func TestWorkflowRuntimeLoadsSkillFromPreMaterializedExecutionRoot(t *testing.T)
 	assertRequestHasSkillEntry(t, reqs[0], skillName, skillPath, skillDescription)
 }
 
-func TestWorkflowRuntimeNoneTargetUsesSourceExecutionRootWithoutWorktree(t *testing.T) {
-	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"done"}`))
-	task, err := fixture.store.CreateTask(context.Background(), workflowstore.CreateTaskRequest{
-		ProjectID: fixture.projectID,
-		Title:     "Source-root workflow",
-		Body:      "Body",
-	})
-	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	if err := fixture.store.SaveTaskExecutionTarget(context.Background(), workflow.ExecutionTarget{
-		TaskID:              task.ID,
-		Policy:              workflow.ExecutionPolicyNone,
-		State:               workflow.ExecutionTargetStateLocked,
-		SetupState:          workflow.ExecutionTargetSetupNotApplicable,
-		RecoveryDisposition: workflow.ExecutionTargetRecoveryAvailable,
-	}); err != nil {
-		t.Fatalf("SaveTaskExecutionTarget: %v", err)
-	}
-	if _, err := fixture.store.StartTask(context.Background(), task.ID); err != nil {
-		t.Fatalf("StartTask: %v", err)
-	}
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
-		t.Fatalf("Process: %v", err)
-	}
-	fixture.waitForCompletedRun(t, task.ID)
-	runs, err := fixture.store.ListRuns(context.Background(), task.ID)
-	if err != nil {
-		t.Fatalf("ListRuns: %v", err)
-	}
-	if len(runs) != 1 || strings.TrimSpace(runs[0].SessionID) == "" {
-		t.Fatalf("runs = %+v, want completed run with session", runs)
-	}
-	root, err := fixture.store.ResolveTaskExecutionRoot(context.Background(), task.ID)
-	if err != nil {
-		t.Fatalf("ResolveTaskExecutionRoot: %v", err)
-	}
-	meta := fixture.sessionMeta(t, runs[0].SessionID)
-	if meta.WorkspaceRoot != root.EffectiveRoot || meta.WorktreeReminder != nil {
-		t.Fatalf("none session metadata = %+v, want source root without worktree reminder", meta)
-	}
-	target, err := fixture.metadata.ResolveSessionExecutionTarget(context.Background(), runs[0].SessionID)
-	if err != nil {
-		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
-	}
-	if target.WorkspaceRoot != root.SourceWorkspace.Root || target.Worktree != nil {
-		t.Fatalf("none session target = %+v, want source workspace without worktree", target)
-	}
-	if _, err := os.Stat(filepath.Join(fixture.worktrees.root, task.ShortID)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("legacy runner worktree = %v, want absent", err)
-	}
+type blockingStarterTaskWorktreeEnsurer struct {
+	started chan<- TaskWorktreeEnsureRequest
+	release <-chan struct{}
+	err     error
+}
+
+func (e blockingStarterTaskWorktreeEnsurer) EnsureTaskWorktree(_ context.Context, req TaskWorktreeEnsureRequest) error {
+	e.started <- req
+	<-e.release
+	return e.err
 }
 
 func TestRemoveFanoutCloneDeletesOrphanedClone(t *testing.T) {
@@ -2013,6 +2050,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	sessionRuntime := sessionruntime.NewService(cfg.PersistenceRoot, metadataStore, nil, nil, nil, nil, runtimes, nil)
 	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, runtimes, StarterOptions{
 		ClientFactory:  clientFactory,
+		Worktrees:      worktrees,
 		SessionRuntime: sessionRuntime,
 	})
 	if err != nil {
@@ -2045,6 +2083,7 @@ func (f *starterFixture) rebuildStarter(t *testing.T) {
 	sessionRuntime := sessionruntime.NewService(f.cfg.PersistenceRoot, f.metadata, nil, nil, nil, nil, f.runtimes.(*registry.RuntimeRegistry), nil)
 	starter, err := NewStarter(f.cfg, f.metadata, f.store, nil, nil, f.runtimes, StarterOptions{
 		ClientFactory:  f.clientFactory,
+		Worktrees:      f.worktrees,
 		SessionRuntime: sessionRuntime,
 	})
 	if err != nil {
@@ -2076,9 +2115,6 @@ func (f starterFixture) createStartedTask(t *testing.T) workflowstore.TaskRecord
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if err := f.worktrees.ensureTaskWorktree(context.Background(), task.ID); err != nil {
-		t.Fatalf("materialize legacy task worktree: %v", err)
-	}
 	if _, err := f.store.StartTask(context.Background(), task.ID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
@@ -2088,6 +2124,9 @@ func (f starterFixture) createStartedTask(t *testing.T) workflowstore.TaskRecord
 func (f starterFixture) claimPlannedRun(t *testing.T) (workflowstore.RunnableRunRecord, workflowstore.RunStartContext, launch.SessionPlan) {
 	t.Helper()
 	task := f.createStartedTask(t)
+	if err := f.worktrees.EnsureTaskWorktree(context.Background(), TaskWorktreeEnsureRequest{TaskID: task.ID}); err != nil {
+		t.Fatalf("EnsureTaskWorktree: %v", err)
+	}
 	runs, err := f.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
@@ -2315,6 +2354,10 @@ func (s *recordingRuntimeStore) RecordProtocolViolation(context.Context, workflo
 	panic("RecordProtocolViolation not expected")
 }
 
+func (s *recordingRuntimeStore) ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error {
+	panic("ResetProtocolViolationBudget not expected")
+}
+
 func (s *recordingRuntimeStore) CountTaskComments(context.Context, workflow.TaskID) (int64, error) {
 	panic("CountTaskComments not expected")
 }
@@ -2383,16 +2426,16 @@ func (s panicRuntimeStore) ClearRunWaitingAsk(context.Context, workflow.RunID, i
 
 func (f starterFixture) waitForCompletedRun(t *testing.T, taskID workflow.TaskID) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
 		}
-		if len(runs) == 1 && runs[0].CompletedAt != 0 {
+		if len(runs) == 1 && runs[0].CompletedAt != nil {
 			return
 		}
-		if len(runs) == 1 && runs[0].InterruptedAt != 0 {
+		if len(runs) == 1 && runs[0].InterruptedAt != nil {
 			var detail string
 			_ = f.metadata.DB().QueryRowContext(context.Background(), `SELECT interruption_detail_json FROM task_runs WHERE id = ?`, string(runs[0].ID)).Scan(&detail)
 			t.Fatalf("run interrupted: %+v detail=%s", runs[0], detail)
@@ -2404,7 +2447,7 @@ func (f starterFixture) waitForCompletedRun(t *testing.T, taskID workflow.TaskID
 
 func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2412,12 +2455,12 @@ func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.T
 		}
 		completed := 0
 		for _, run := range runs {
-			if run.InterruptedAt != 0 {
+			if run.InterruptedAt != nil {
 				var detail string
 				_ = f.metadata.DB().QueryRowContext(context.Background(), `SELECT interruption_detail_json FROM task_runs WHERE id = ?`, string(run.ID)).Scan(&detail)
 				t.Fatalf("run interrupted: %+v detail=%s", run, detail)
 			}
-			if run.CompletedAt != 0 {
+			if run.CompletedAt != nil {
 				completed++
 			}
 		}
@@ -2431,17 +2474,17 @@ func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.T
 
 func (f starterFixture) waitForWaitingAsk(t *testing.T, taskID workflow.TaskID, askID string) workflowstore.RunRecord {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
 		}
-		if len(runs) == 1 && runs[0].WaitingAskID == askID {
+		if len(runs) == 1 && runs[0].WaitingAskID != nil && *runs[0].WaitingAskID == askID {
 			if strings.TrimSpace(runs[0].SessionID) == "" {
 				t.Fatalf("waiting run has no session: %+v", runs[0])
 			}
-			if runs[0].CompletedAt != 0 || runs[0].InterruptedAt != 0 {
+			if runs[0].CompletedAt != nil || runs[0].InterruptedAt != nil {
 				t.Fatalf("waiting run has terminal outcome: %+v", runs[0])
 			}
 			return runs[0]
@@ -2454,7 +2497,7 @@ func (f starterFixture) waitForWaitingAsk(t *testing.T, taskID workflow.TaskID, 
 
 func (f starterFixture) waitForRunCount(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2470,7 +2513,7 @@ func (f starterFixture) waitForRunCount(t *testing.T, taskID workflow.TaskID, co
 
 func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2478,10 +2521,10 @@ func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.Ta
 		}
 		completed := 0
 		for _, run := range runs {
-			if run.InterruptedAt != 0 {
+			if run.InterruptedAt != nil {
 				t.Fatalf("run interrupted: %+v", run)
 			}
-			if run.CompletedAt != 0 {
+			if run.CompletedAt != nil {
 				completed++
 			}
 		}
@@ -2495,15 +2538,15 @@ func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.Ta
 
 func (f starterFixture) waitForInterruptedRun(t *testing.T, scheduler *SchedulerService, taskID workflow.TaskID, reason string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
 		}
-		if len(runs) == 1 && runs[0].InterruptedAt != 0 {
-			if runs[0].InterruptionReason != reason {
-				t.Fatalf("interruption reason = %q, want %q", runs[0].InterruptionReason, reason)
+		if len(runs) == 1 && runs[0].InterruptedAt != nil {
+			if runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != reason {
+				t.Fatalf("interruption reason = %v, want %q", runs[0].InterruptionReason, reason)
 			}
 			f.waitForActiveCountZero(t, scheduler)
 			return
@@ -2515,7 +2558,7 @@ func (f starterFixture) waitForInterruptedRun(t *testing.T, scheduler *Scheduler
 
 func (f starterFixture) waitForActiveCountZero(t *testing.T, scheduler *SchedulerService) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		if scheduler.ActiveCount() == 0 {
 			return
@@ -2650,16 +2693,16 @@ type metadataTaskWorktrees struct {
 	afterCreate func(worktreeRoot string) error
 }
 
-func (e *metadataTaskWorktrees) ensureTaskWorktree(ctx context.Context, taskID workflow.TaskID) error {
+func (e *metadataTaskWorktrees) EnsureTaskWorktree(ctx context.Context, req TaskWorktreeEnsureRequest) error {
 	if e == nil || e.metadata == nil {
 		return nil
 	}
-	taskIDString := string(taskID)
+	taskID := string(req.TaskID)
 	var shortID string
-	if err := e.metadata.DB().QueryRowContext(ctx, `SELECT short_id FROM tasks WHERE id = ?`, taskIDString).Scan(&shortID); err != nil {
+	if err := e.metadata.DB().QueryRowContext(ctx, `SELECT short_id FROM tasks WHERE id = ?`, taskID).Scan(&shortID); err != nil {
 		return err
 	}
-	worktreeID := "worktree-" + taskIDString
+	worktreeID := "worktree-" + taskID
 	worktreeRoot := filepath.Join(e.root, shortID)
 	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
 		return err
@@ -2681,7 +2724,7 @@ func (e *metadataTaskWorktrees) ensureTaskWorktree(ctx context.Context, taskID w
 	}); err != nil {
 		return err
 	}
-	result, err := e.metadata.DB().ExecContext(ctx, `UPDATE tasks SET managed_worktree_id = ?, updated_at_unix_ms = ? WHERE id = ?`, sql.NullString{String: worktreeID, Valid: true}, time.Now().UTC().UnixMilli(), taskIDString)
+	result, err := e.metadata.DB().ExecContext(ctx, `UPDATE tasks SET managed_worktree_id = ?, updated_at_unix_ms = ? WHERE id = ?`, sql.NullString{String: worktreeID, Valid: true}, time.Now().UTC().UnixMilli(), taskID)
 	if err != nil {
 		return err
 	}

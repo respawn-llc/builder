@@ -105,7 +105,7 @@ func NewDefaultRegistry() *Registry {
 	r.RegisterWithOptions("name", "Set session title and terminal title (usage: /name <title>; empty resets)", RegisterOptions{RunWhileBusy: true, PreservePromptHistoryDraft: true}, func(args string) Result {
 		return Result{Handled: true, Action: ActionSetName, SessionName: strings.TrimSpace(args)}
 	})
-	r.RegisterWithOptions("thinking", "Set or show thinking level (usage: /thinking <low|medium|high|xhigh>; empty shows current)", RegisterOptions{RunWhileBusy: true}, func(args string) Result {
+	r.RegisterWithOptions("thinking", "Set or show thinking level (usage: /thinking <low|medium|high|xhigh|max|ultra>; empty shows current)", RegisterOptions{RunWhileBusy: true}, func(args string) Result {
 		return Result{Handled: true, Action: ActionSetThinking, ThinkingLevel: strings.ToLower(strings.TrimSpace(args))}
 	})
 	r.RegisterWithOptions("fast", "Toggle Fast mode to request priority inference (usage: /fast [on|off|status]; empty toggles)", RegisterOptions{RunWhileBusy: true}, func(args string) Result {

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -234,7 +235,7 @@ func steerCacheWarningIntent(warning transcript.CacheWarning, visibility transcr
 		priority: steeringPriorityRuntimeEvent,
 		items: []steeringItem{{cacheWarning: &steeringCacheWarning{
 			warning:    copyWarning,
-			visibility: transcript.NormalizeEntryVisibility(visibility),
+			visibility: normalizeRuntimeEntryVisibility(visibility),
 			emit:       emit,
 		}}},
 	}
@@ -249,7 +250,7 @@ func steerCacheObservationIntent(events []session.EventInput, warning transcript
 		items: []steeringItem{{cacheObservation: &steeringCacheObservation{
 			events:     copyEvents,
 			warning:    copyWarning,
-			visibility: transcript.NormalizeEntryVisibility(visibility),
+			visibility: normalizeRuntimeEntryVisibility(visibility),
 			emit:       emit,
 		}}},
 	}
@@ -309,10 +310,11 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		return e.replaceHistoryRaw(stepID, *item.historyReplace)
 	}
 	if item.toolCompletion != nil {
-		if err := e.persistToolCompletionRaw(stepID, *item.toolCompletion); err != nil {
+		result := e.finalizeLiveToolCompletion(*item.toolCompletion)
+		if err := e.persistToolCompletionRaw(stepID, result); err != nil {
 			return err
 		}
-		result := cloneToolResult(*item.toolCompletion)
+		result = cloneToolResult(result)
 		e.transcriptRuntimeState().CompleteLiveTool(result.CallID)
 		e.emitRaw(Event{Kind: EventToolCallCompleted, StepID: stepID, ToolResult: &result, CommittedTranscriptChanged: true})
 		return nil
@@ -334,7 +336,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	}
 	if item.cacheWarning != nil {
 		warning := item.cacheWarning.warning
-		visibility := transcript.NormalizeEntryVisibility(item.cacheWarning.visibility)
+		visibility := normalizeRuntimeEntryVisibility(item.cacheWarning.visibility)
 		_, committed, appendErr := e.store.AppendEvent(stepID, sessionEventCacheWarning, warning)
 		if appendErr != nil && !committed {
 			return appendErr
@@ -356,7 +358,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			return err
 		}
 		warning := observation.warning
-		visibility := transcript.NormalizeEntryVisibility(observation.visibility)
+		visibility := normalizeRuntimeEntryVisibility(observation.visibility)
 		newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility)
 		if observation.emit {
 			e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true})
@@ -418,8 +420,13 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
 	e.emitProjectedHistoryReplacementEntriesRaw(stepID, projectedStart, replacement.projectedEntries)
 	e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID})
+	// The durable history replacement is the compaction boundary. Apply that
+	// committed replacement in memory before resetting workflow-adjacent state,
+	// so any reset failure cannot make the live engine diverge from restore.
+	budgetResetErr := e.resetWorkflowProtocolViolationBudget(context.Background())
 	return errors.Join(
 		appendErr,
+		budgetResetErr,
 		e.store.SetCompactionSoonReminderIssued(reminderIssued),
 		e.store.SetUsageState(nil),
 	)

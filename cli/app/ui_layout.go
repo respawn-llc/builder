@@ -33,6 +33,12 @@ type uiRenderFrame struct {
 func (m *uiModel) View() string {
 	defer m.enterUIMainThread("View")()
 	m.syncRendererOutputGate()
+	if m.nativeOngoingSurfaceActive() {
+		if m.terminalCursor != nil {
+			m.terminalCursor.Clear()
+		}
+		return ""
+	}
 	return m.layout().render()
 }
 
@@ -40,7 +46,7 @@ func (m *uiModel) syncRendererOutputGate() {
 	if m == nil || m.rendererOutputGate == nil {
 		return
 	}
-	m.rendererOutputGate.SetSuppressRendererWrites(false)
+	m.rendererOutputGate.SetSuppressRendererWrites(m.nativeOngoingSurfaceActive())
 }
 
 func (l uiViewLayout) render() string {

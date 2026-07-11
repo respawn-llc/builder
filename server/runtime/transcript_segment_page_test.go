@@ -25,6 +25,15 @@ func mustEngineSegmentPage(t *testing.T, eng *Engine, cursor int64) TranscriptSe
 	return page
 }
 
+func mustEngineNewestSegmentPage(t *testing.T, eng *Engine) TranscriptSegmentPage {
+	t.Helper()
+	page, err := eng.TranscriptNewestSegmentPage()
+	if err != nil {
+		t.Fatalf("newest transcript segment page: %v", err)
+	}
+	return page
+}
+
 func mustEngineSegmentPageForward(t *testing.T, eng *Engine, startOffset int64) TranscriptSegmentPage {
 	t.Helper()
 	page, err := eng.TranscriptSegmentPageForward(startOffset)
@@ -68,7 +77,7 @@ func TestEngineTranscriptSegmentPagePaginatesAcrossCompaction(t *testing.T) {
 	appendSegmentTestMessage(t, store, llm.RoleUser, "u2")
 	appendSegmentTestMessage(t, store, llm.RoleAssistant, "a2")
 
-	newest := mustEngineSegmentPage(t, eng, 0)
+	newest := mustEngineNewestSegmentPage(t, eng)
 	newestTexts := segmentEntryTexts(newest)
 	if !containsText(newestTexts, "u2") || !containsText(newestTexts, "a2") {
 		t.Fatalf("newest segment must contain post-compaction turns, got %v", newestTexts)
@@ -108,7 +117,7 @@ func TestEngineTranscriptSegmentPageForwardMatchesBackwardSegments(t *testing.T)
 	appendSegmentTestMessage(t, store, llm.RoleUser, "u2")
 	appendSegmentTestMessage(t, store, llm.RoleAssistant, "a2")
 
-	newest := mustEngineSegmentPage(t, eng, 0)
+	newest := mustEngineNewestSegmentPage(t, eng)
 	older := mustEngineSegmentPage(t, eng, newest.OlderCursor)
 	if !older.HasMoreBelow || older.NewerCursor <= 0 {
 		t.Fatalf("older segment must report more below with a forward cursor, got below=%t cursor=%d", older.HasMoreBelow, older.NewerCursor)
@@ -140,7 +149,7 @@ func TestEngineTranscriptSegmentPageSingleSegment(t *testing.T) {
 	appendSegmentTestMessage(t, store, llm.RoleUser, "only")
 	appendSegmentTestMessage(t, store, llm.RoleAssistant, "answer")
 
-	page := mustEngineSegmentPage(t, eng, 0)
+	page := mustEngineNewestSegmentPage(t, eng)
 	if page.HasMoreAbove {
 		t.Fatalf("never-compacted session must not report more above")
 	}

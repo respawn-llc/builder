@@ -28,7 +28,7 @@ type ModelVerbositySupport struct {
 func ModelDisplayLabel(model string, thinkingLevel string) string {
 	modelLabel := strings.TrimSpace(model)
 	if modelLabel == "" {
-		modelLabel = "gpt-5"
+		modelLabel = config.DefaultModel()
 	}
 	level := strings.TrimSpace(thinkingLevel)
 	if level == "" {
@@ -92,7 +92,7 @@ func VerbositySupportForModelAndProvider(model string, providerCaps ProviderCapa
 			Levels:    verbosityLevelsFromSupport(contract.SupportsVerbosity, contract.SupportedVerbosityLevels),
 		}
 	}
-	supported := strings.TrimSpace(model) != "" && providerCaps.IsOpenAIFirstParty
+	supported := strings.TrimSpace(model) != "" && providerCaps.SupportsProviderVerbosity
 	return ModelVerbositySupport{
 		Supported: supported,
 		Source:    ModelVerbositySupportSourceProviderDefault,

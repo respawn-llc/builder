@@ -35,7 +35,7 @@ func TestOnboardingDefaultsPathPreservesAutoWhenUsingDetectedDefault(t *testing.
 }
 
 func TestOnboardingImportDiscoveryKeepsTypedInput(t *testing.T) {
-	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{settings: config.Settings{Model: "gpt-5.5"}})
+	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol"}})
 	steps := model.workflow.visibleSteps(&model.state)
 	modelStepIndex := -1
 	for index, step := range steps {
@@ -336,16 +336,16 @@ func TestExecuteOnboardingImportsRollsBackSkillsWhenCommandImportFails(t *testin
 func TestApplyOnboardingModelUpdatesKnownContextWindow(t *testing.T) {
 	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits"}}, baselineSettings: config.Settings{ModelContextWindow: 272_000, ContextCompactionThresholdTokens: 272_000 * 95 / 100}}
 	state.facts = testOnboardingCapabilityFacts()
-	if err := applyOnboardingModel(state, "gpt-5.5"); err != nil {
+	if err := applyOnboardingModel(state, "gpt-5.6-sol"); err != nil {
 		t.Fatalf("apply onboarding model: %v", err)
 	}
 	if state.settings.ModelContextWindow != 272_000 {
-		t.Fatalf("expected gpt-5.5 default context window, got %d", state.settings.ModelContextWindow)
+		t.Fatalf("expected gpt-5.6-sol default context window, got %d", state.settings.ModelContextWindow)
 	}
 	if state.settings.ContextCompactionThresholdTokens != 272_000*95/100 {
 		t.Fatalf("unexpected compaction threshold: %d", state.settings.ContextCompactionThresholdTokens)
 	}
-	if state.settings.Reviewer.Model != "gpt-5.5" {
+	if state.settings.Reviewer.Model != "gpt-5.6-sol" {
 		t.Fatalf("expected reviewer model to follow main model, got %q", state.settings.Reviewer.Model)
 	}
 	if state.settings.Reviewer.ThinkingLevel != "medium" {
@@ -380,15 +380,15 @@ func TestApplyOnboardingModelResetsUnknownModelContextWindowToBaseline(t *testin
 }
 
 func TestReviewerModelStepDefaultsToMainModel(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.5", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.5"}}}
+	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol"}}}
 	screen := findWorkflowStep(t, state, "reviewer_model").build(state)
-	if screen.InputValue != "gpt-5.5" {
+	if screen.InputValue != "gpt-5.6-sol" {
 		t.Fatalf("expected reviewer model default to follow main model, got %q", screen.InputValue)
 	}
 }
 
 func TestReviewerThinkingStepDefaultsToMainThinking(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.5", ThinkingLevel: "high", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.5", ThinkingLevel: "high"}}}
+	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "high", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "high"}}}
 	screen := findWorkflowStep(t, state, "reviewer_thinking").build(state)
 	if screen.DefaultOptionID != "high" {
 		t.Fatalf("expected reviewer thinking default to follow main thinking, got %q", screen.DefaultOptionID)
@@ -396,7 +396,7 @@ func TestReviewerThinkingStepDefaultsToMainThinking(t *testing.T) {
 }
 
 func TestMainThinkingChoiceSynchronizesReviewerThinking(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.5", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.5", ThinkingLevel: "medium"}}}
+	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "medium"}}}
 	if err := findWorkflowStep(t, state, "thinking").apply(state, "high"); err != nil {
 		t.Fatalf("apply thinking choice: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestMainThinkingChoiceSynchronizesReviewerThinking(t *testing.T) {
 
 func TestMainThinkingChoicePreservesCustomReviewerThinking(t *testing.T) {
 	state := &onboardingFlowState{
-		settings:               config.Settings{Model: "gpt-5.5", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.5", ThinkingLevel: "low"}},
+		settings:               config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "low"}},
 		reviewerCustomThinking: true,
 	}
 	state.facts = testOnboardingCapabilityFacts()
@@ -420,7 +420,7 @@ func TestMainThinkingChoicePreservesCustomReviewerThinking(t *testing.T) {
 }
 
 func TestReviewerThinkingDisableDoesNotForceCustomInput(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.5", ThinkingLevel: "high", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.5", ThinkingLevel: "high"}}}
+	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "high", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "high"}}}
 	if err := findWorkflowStep(t, state, "reviewer_thinking").apply(state, "disable"); err != nil {
 		t.Fatalf("apply reviewer disable choice: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestReviewerThinkingDisableDoesNotForceCustomInput(t *testing.T) {
 }
 
 func TestReviewerThinkingPresetChoiceDoesNotForceCustomInput(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.5", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.5", ThinkingLevel: "medium"}}}
+	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "medium"}}}
 	if err := findWorkflowStep(t, state, "reviewer_thinking").apply(state, "low"); err != nil {
 		t.Fatalf("apply reviewer preset choice: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestReviewerThinkingPresetChoiceDoesNotForceCustomInput(t *testing.T) {
 }
 
 func TestMainThinkingChoicePreservesDisabledReviewerThinking(t *testing.T) {
-	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.5", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.5", ThinkingLevel: "medium"}}}
+	state := &onboardingFlowState{settings: config.Settings{Model: "gpt-5.6-sol", ThinkingLevel: "medium", Reviewer: config.ReviewerSettings{Frequency: "edits", Model: "gpt-5.6-sol", ThinkingLevel: "medium"}}}
 	if err := findWorkflowStep(t, state, "reviewer_thinking").apply(state, "disable"); err != nil {
 		t.Fatalf("apply reviewer disable choice: %v", err)
 	}
@@ -473,7 +473,7 @@ func TestMainThinkingChoicePreservesDisabledReviewerThinking(t *testing.T) {
 func TestApplyOnboardingModelPreservesCustomReviewerOverrides(t *testing.T) {
 	state := &onboardingFlowState{
 		settings: config.Settings{
-			Model:                            "gpt-5.5",
+			Model:                            "gpt-5.6-sol",
 			ThinkingLevel:                    "medium",
 			ModelContextWindow:               272_000,
 			ContextCompactionThresholdTokens: 272_000 * 95 / 100,
@@ -513,7 +513,7 @@ func testOnboardingCapabilityFacts() serverapi.CapabilityFactsResponse {
 	contextWindow := 272_000
 	largeWindow := 400_000
 	models := []serverapi.ModelCapabilityFact{
-		{ModelID: ptrString("gpt-5.5"), Known: true, ContextWindowTokens: &contextWindow, LargeWindow: &serverapi.ModelLargeWindowFact{Tokens: largeWindow}, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}}},
+		{ModelID: ptrString("gpt-5.6-sol"), Known: true, ContextWindowTokens: &contextWindow, LargeWindow: &serverapi.ModelLargeWindowFact{Tokens: largeWindow}, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}}},
 		{ModelID: ptrString("gpt-5.3-codex"), Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}}},
 		{ModelID: ptrString("gpt-4.1"), Known: true, ContextWindowTokens: &contextWindow, SupportsThinking: true, SupportedThinkingLevels: []string{"low", "medium", "high"}, Verbosity: serverapi.ModelVerbosityFact{Supported: true, Levels: []string{"low", "medium", "high"}}},
 	}

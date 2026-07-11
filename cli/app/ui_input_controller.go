@@ -182,8 +182,8 @@ func statusKindForLocalEntryRole(role string) uiStatusNoticeKind {
 	case string(transcript.EntryRoleDeveloperErrorFeedback), "error":
 		return uiStatusNoticeError
 	case "warning":
-		return uiStatusNoticeNeutral
+		return uiStatusNoticeWarning
 	default:
-		return uiStatusNoticeNeutral
+		return uiStatusNoticeInfo
 	}
 }

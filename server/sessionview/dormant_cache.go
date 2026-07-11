@@ -121,7 +121,7 @@ func buildDormantTranscriptCacheEntry(ctx context.Context, store *session.Store)
 
 func buildDormantTranscriptCacheEntryWithMode(_ context.Context, store *session.Store, cacheWarningMode config.CacheWarningMode) (dormantTranscriptCacheEntry, error) {
 	meta := store.Meta()
-	segment, err := runtime.TranscriptSegmentPageFromStore(store, 0, cacheWarningMode)
+	segment, err := runtime.TranscriptNewestSegmentPageFromStore(store, cacheWarningMode)
 	if err != nil {
 		return dormantTranscriptCacheEntry{}, err
 	}
@@ -157,6 +157,10 @@ func (e dormantTranscriptCacheEntry) mainView(meta session.Meta, freshness clien
 			ConversationFreshness: freshness,
 		},
 	)
+}
+
+func (e dormantTranscriptCacheEntry) newestSegmentPage(meta session.Meta, freshness clientui.ConversationFreshness) clientui.TranscriptPage {
+	return runtimeview.TranscriptPageFromSegment(meta.SessionID, meta.Name, freshness, e.newestSegment)
 }
 
 func (e dormantTranscriptCacheEntry) newestSegmentTailEntries() []runtime.ChatEntry {

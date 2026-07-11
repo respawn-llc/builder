@@ -1,7 +1,7 @@
 {
   "name": "@app/apps",
   "private": true,
-  "packageManager": "pnpm@10.33.2",
+  "packageManager": "pnpm@11.11.0",
   "engines": {
     "node": ">=22"
   },
@@ -19,7 +19,7 @@
     "build": "pnpm deps:policy && pnpm ts:policy && pnpm --recursive --if-present build"
   },
   "devDependencies": {
-    "postcss": "8.5.14",
-    "prettier": "^3.8.3"
+    "postcss": "8.5.16",
+    "prettier": "^3.9.4"
   }
 }

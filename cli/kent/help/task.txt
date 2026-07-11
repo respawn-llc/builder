@@ -6,7 +6,7 @@ Usage of kent task:
   kent task approve <transition-id> [--execution-target <none|head|default_branch|custom_ref> [--custom-ref <ref>]]
   kent task move <short-id-or-task-id> <target-node-id> [--output name=value] [--execution-target <none|head|default_branch|custom_ref> [--custom-ref <ref>]]
   kent task complete [--transition <id>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--run <run-id>|--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
-  kent task list [--project <project>] [--status <key>[,<key>...]] [--column <key>[,<key>...]] [--run-status <open|running|interrupted|done|canceled>[,...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
+  kent task list [--project <project>] [--workflow <uuid>] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
   kent task show <short-id-or-task-id> [--json]
   kent task cancel <short-id-or-task-id> [--reason <text>]
   kent task delete <short-id-or-task-id>
@@ -22,6 +22,6 @@ What This Does:
   Agents can start an authorized task with kent task start.
   Outside Kent agent sessions, task completion requires --force plus one explicit selector.
   Short ids are resolved within the current project by default.
-  kent task list filters workflow status keys with --status or --column, filters coarse run status with --run-status, and sorts by created, updated, status, run_count, or title. The default sort is status:asc,updated:desc.
   task start accepts one concrete --execution-target as a deliberate override of a fixed workflow policy. Move and approval use it only to retry a server-required selection. custom_ref requires --custom-ref.
   task start --json writes one initiating-action object to stdout and no stderr: started exits 0, selection_required exits 3, and in_progress exits 4.
+  kent task list resolves one active project/workflow link. Supply either scope only when its active link is unique, or supply both to select an exact link. --status filters the primary task status, --attention filters current question, approval, or interruption attention, and --column filters workflow columns. Sort by created, updated, status, column, run_count, or title. The default sort is status:asc,updated:desc.

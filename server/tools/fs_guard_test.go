@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -88,7 +87,7 @@ func TestPathDenyPolicyLiteralTreeAndMultipleRuleMessages(t *testing.T) {
 	}
 }
 
-func TestPathDenyPolicyGlobRegexAndCompileErrors(t *testing.T) {
+func TestPathDenyPolicyGlobAndCompileErrors(t *testing.T) {
 	root := t.TempDir()
 	globPolicy, err := CompilePathDenyPolicy([]PathDenyRuleConfig{{
 		Message: "glob message",
@@ -104,21 +103,11 @@ func TestPathDenyPolicyGlobRegexAndCompileErrors(t *testing.T) {
 		t.Fatalf("glob root match = %+v/%t err=%v", match, ok, matchErr)
 	}
 
-	regexPolicy, err := CompilePathDenyPolicy([]PathDenyRuleConfig{{
-		Message: "regex message",
-		Matcher: PathMatcherConfig{Kind: PathMatcherRegex, Pattern: regexp.QuoteMeta(".generated") + `(/|$)`},
-	}})
-	if err != nil {
-		t.Fatalf("compile regex policy: %v", err)
-	}
-	if match, ok, matchErr := regexPolicy.Match(filepath.Join(root, ".generated", "x")); matchErr != nil || !ok || match.Message != "regex message" {
-		t.Fatalf("regex match = %+v/%t err=%v", match, ok, matchErr)
-	}
 	if _, err := CompilePathDenyPolicy([]PathDenyRuleConfig{{Message: "bad", Matcher: PathMatcherConfig{Kind: PathMatcherGlob, Pattern: filepath.Join(root, "[")}}}); err == nil {
 		t.Fatal("expected invalid glob compile error")
 	}
-	if _, err := CompilePathDenyPolicy([]PathDenyRuleConfig{{Message: "bad", Matcher: PathMatcherConfig{Kind: PathMatcherRegex, Pattern: "["}}}); err == nil {
-		t.Fatal("expected invalid regex compile error")
+	if _, err := CompilePathDenyPolicy([]PathDenyRuleConfig{{Message: "bad", Matcher: PathMatcherConfig{Kind: PathMatcherKind("unsupported"), Pattern: root}}}); err == nil {
+		t.Fatal("expected unsupported matcher compile error")
 	}
 	if _, err := CompilePathDenyPolicy([]PathDenyRuleConfig{{Label: pathDenyLabelForTest("  "), Message: "bad", Matcher: PathMatcherConfig{Kind: PathMatcherLiteral, Pattern: root}}}); err == nil {
 		t.Fatal("expected blank diagnostic label compile error")

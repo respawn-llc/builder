@@ -9,6 +9,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 ## Surface And Lifecycle
 
 - The prompt renders in the ongoing live region (mutable band), not as an alt-screen overlay; it takes input focus while active. Ask entries in the transcript are owned by tui-transcript (collapsed = question only).
+- The active question is Markdown-rendered and wraps within the live region. Answer options take viewport priority; question lines use the remaining capacity and follow the live region's existing collapse/truncation behavior. Pure freeform prompts retain the existing cursor-anchored viewport behavior.
 - Prompts queue FIFO: one active at a time; answering (or external resolution) activates the next. A prompt resolved from another attached client disappears here too — including from the queue. Updates to the active prompt (same prompt ID) refresh it in place. (multi-client consistency owner: terminology :: Equal Full-Control Attach)
 - Bell rings when a new prompt is shown; notification text is owned by tui-transcript :: Notifications.
 - Submitting an answer never freezes input: the UI stays responsive throughout answer delivery. After the last prompt resolves, focus returns to the main composer and activity returns to running/idle.

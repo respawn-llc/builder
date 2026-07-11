@@ -64,12 +64,13 @@ type LockedProviderCapabilities struct {
 	SupportsNativeWebSearch           bool   `json:"supports_native_web_search,omitempty"`
 	SupportsReasoningEncrypted        bool   `json:"supports_reasoning_encrypted,omitempty"`
 	SupportsServerSideContextEdit     bool   `json:"supports_server_side_context_edit,omitempty"`
+	SupportsProviderVerbosity         *bool  `json:"supports_provider_verbosity,omitempty"`
 	IsOpenAIFirstParty                bool   `json:"is_openai_first_party,omitempty"`
 }
 
 type ContinuationContext struct {
-	OpenAIBaseURL string `json:"openai_base_url,omitempty"`
-	AgentRole     string `json:"agent_role,omitempty"`
+	OpenAIBaseURL string  `json:"openai_base_url,omitempty"`
+	AgentRole     *string `json:"agent_role,omitempty"`
 }
 
 type UsageState struct {
@@ -156,6 +157,7 @@ type Meta struct {
 	LastSequence                    int64                      `json:"last_sequence"`
 	ConversationEstablished         bool                       `json:"conversation_established,omitempty"`
 	ModelRequestCount               int64                      `json:"model_request_count"`
+	PromptCacheLineageGeneration    int                        `json:"prompt_cache_lineage_generation,omitempty"`
 	HeadlessActive                  bool                       `json:"headless_active,omitempty"`
 	CompactionSoonReminderIssued    bool                       `json:"compaction_soon_reminder_issued,omitempty"`
 	GeneratedRecoveredWarningIssued bool                       `json:"generated_recovered_warning_issued,omitempty"`

@@ -467,9 +467,19 @@ export type WorkflowPickerItem = Readonly<{
   validationErrors: readonly WorkflowValidationError[];
 }>;
 
+export type TaskStatusKind =
+  | "canceled"
+  | "done"
+  | "waiting_question"
+  | "waiting_approval"
+  | "interrupted"
+  | "running"
+  | "queued"
+  | "backlog"
+  | "active";
+
 export type TaskStatus = Readonly<{
-  kind: string;
-  label: string;
+  kind: TaskStatusKind;
   nativeState: string;
   nodeIDs: readonly string[];
   runIDs: readonly string[];
@@ -641,11 +651,11 @@ export type TaskRun = Readonly<{
   role: string;
   status: string;
   generation: number;
-  waitingAskID: string;
-  startedAt: number;
-  completedAt: number;
-  interruptedAt: number;
-  interruptionReason: string;
+  waitingAskID: string | null;
+  startedAt: number | null;
+  completedAt: number | null;
+  interruptedAt: number | null;
+  interruptionReason: string | null;
   interruptionDetail: string;
 }>;
 
@@ -660,7 +670,7 @@ export type TaskTransition = Readonly<{
   edges: readonly TransitionEdge[];
   version: number;
   createdAt: number;
-  appliedAt: number;
+  appliedAt: number | null;
 }>;
 
 export type TransitionEdge = Readonly<{
@@ -695,7 +705,8 @@ export type TaskDetail = Readonly<{
   createdAt: number;
   updatedAt: number;
   done: boolean;
-  canceledAt: number;
+  canceledAt: number | null;
+  cancelReason: string | null;
 }>;
 
 export type ActivityItem = Readonly<{

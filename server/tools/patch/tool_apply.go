@@ -2,7 +2,7 @@ package patch
 
 import (
 	"fmt"
-	"strconv"
+	"math"
 	"strings"
 
 	patchformat "core/shared/transcript/patchformat"
@@ -116,36 +116,70 @@ func parseHunkHeader(line string) (hunkHeader, error) {
 	if line == "@@" {
 		return hunkHeader{}, nil
 	}
+	if isPositionedHunkHeader(line) {
+		return parsePositionedHunkHeader(line)
+	}
+	if isContextHunkHeader(line) {
+		return hunkHeader{context: line[3:]}, nil
+	}
+	return hunkHeader{}, malformedFailure(fmt.Sprintf("invalid hunk header %q", line))
+}
 
-	m := unifiedHunkHeaderPattern.FindStringSubmatch(line)
-	if len(m) == 0 {
-		if strings.HasPrefix(line, "@@ ") {
-			return hunkHeader{context: strings.TrimPrefix(line, "@@ ")}, nil
-		}
+func isPositionedHunkHeader(line string) bool {
+	return len(line) >= 4 &&
+		line[0] == '@' &&
+		line[1] == '@' &&
+		line[2] == ' ' &&
+		line[3] == '-'
+}
+
+func isContextHunkHeader(line string) bool {
+	return len(line) >= 3 &&
+		line[0] == '@' &&
+		line[1] == '@' &&
+		line[2] == ' '
+}
+
+type hunkHeaderParser struct {
+	line  string
+	index int
+}
+
+func parsePositionedHunkHeader(line string) (hunkHeader, error) {
+	parser := hunkHeaderParser{line: line}
+	if !parser.consume('@') || !parser.consume('@') || !parser.consume(' ') || !parser.consume('-') {
 		return hunkHeader{}, malformedFailure(fmt.Sprintf("invalid hunk header %q", line))
 	}
-
-	oldStart, err := strconv.Atoi(m[1])
+	oldStart, err := parser.decimal("old start")
 	if err != nil {
-		return hunkHeader{}, malformedFailure(fmt.Sprintf("invalid hunk old start %q", m[1]))
+		return hunkHeader{}, err
 	}
 	oldCount := 1
-	if strings.TrimSpace(m[2]) != "" {
-		oldCount, err = strconv.Atoi(m[2])
+	if parser.consume(',') {
+		oldCount, err = parser.decimal("old count")
 		if err != nil {
-			return hunkHeader{}, malformedFailure(fmt.Sprintf("invalid hunk old count %q", m[2]))
+			return hunkHeader{}, err
 		}
 	}
-	newStart, err := strconv.Atoi(m[3])
+	if !parser.consume(' ') || !parser.consume('+') {
+		return hunkHeader{}, malformedFailure(fmt.Sprintf("invalid hunk header %q", line))
+	}
+	newStart, err := parser.decimal("new start")
 	if err != nil {
-		return hunkHeader{}, malformedFailure(fmt.Sprintf("invalid hunk new start %q", m[3]))
+		return hunkHeader{}, err
 	}
 	newCount := 1
-	if strings.TrimSpace(m[4]) != "" {
-		newCount, err = strconv.Atoi(m[4])
+	if parser.consume(',') {
+		newCount, err = parser.decimal("new count")
 		if err != nil {
-			return hunkHeader{}, malformedFailure(fmt.Sprintf("invalid hunk new count %q", m[4]))
+			return hunkHeader{}, err
 		}
+	}
+	if !parser.consume(' ') || !parser.consume('@') || !parser.consume('@') {
+		return hunkHeader{}, malformedFailure(fmt.Sprintf("invalid hunk header %q", line))
+	}
+	if !parser.atEnd() && !parser.consume(' ') {
+		return hunkHeader{}, malformedFailure(fmt.Sprintf("invalid hunk header %q", line))
 	}
 
 	return hunkHeader{
@@ -155,6 +189,38 @@ func parseHunkHeader(line string) (hunkHeader, error) {
 		newStart:    newStart,
 		newCount:    newCount,
 	}, nil
+}
+
+func (p *hunkHeaderParser) consume(expected byte) bool {
+	if p == nil || p.index >= len(p.line) || p.line[p.index] != expected {
+		return false
+	}
+	p.index++
+	return true
+}
+
+func (p *hunkHeaderParser) decimal(label string) (int, error) {
+	if p == nil || p.index >= len(p.line) || !isASCIIDigit(p.line[p.index]) {
+		return 0, malformedFailure(fmt.Sprintf("invalid hunk %s in %q", label, p.line))
+	}
+	value := 0
+	for p.index < len(p.line) && isASCIIDigit(p.line[p.index]) {
+		digit := int(p.line[p.index] - '0')
+		if value > (math.MaxInt-digit)/10 {
+			return 0, malformedFailure(fmt.Sprintf("invalid hunk %s in %q", label, p.line))
+		}
+		value = value*10 + digit
+		p.index++
+	}
+	return value, nil
+}
+
+func (p *hunkHeaderParser) atEnd() bool {
+	return p != nil && p.index == len(p.line)
+}
+
+func isASCIIDigit(character byte) bool {
+	return character >= '0' && character <= '9'
 }
 
 func findHunkAnchor(lines []string, changes []patchformat.ChangeLine, expected, floor int, anchored bool, context string, endOfFile bool) (int, error) {

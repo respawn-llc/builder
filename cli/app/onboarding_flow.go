@@ -110,7 +110,7 @@ func applyOnboardingModel(state *onboardingFlowState, value string) error {
 	if !modelSupportsVerbosity(state, model) {
 		state.settings.ModelVerbosity = config.ModelVerbosity("")
 	} else if strings.TrimSpace(string(state.settings.ModelVerbosity)) == "" {
-		state.settings.ModelVerbosity = config.ModelVerbosityMedium
+		state.settings.ModelVerbosity = config.ModelVerbosityLow
 	}
 	if !modelSupportsThinking(state, model) {
 		state.customThinking = false
@@ -302,7 +302,7 @@ func containsOnboardingOption(options []onboardingOption, target string) bool {
 
 func isKnownThinkingLevel(level string) bool {
 	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "low", "medium", "high", "xhigh":
+	case "low", "medium", "high", "xhigh", "max", "ultra":
 		return true
 	default:
 		return false
@@ -313,6 +313,10 @@ func titleCaseThinking(level string) string {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "xhigh":
 		return "Extra high"
+	case "max":
+		return "Max"
+	case "ultra":
+		return "Ultra"
 	case "":
 		return ""
 	default:
@@ -398,6 +402,10 @@ func thinkingLevelEstimate(level string) string {
 		return "Heavier reasoning budget. Better for deeper planning and harder bugs."
 	case "xhigh":
 		return "Maximum reasoning budget. Slowest and costliest, for the hardest tasks."
+	case "max":
+		return "Maximum reasoning depth for the hardest problems."
+	case "ultra":
+		return "Maximum reasoning with automatic task delegation."
 	default:
 		return ""
 	}

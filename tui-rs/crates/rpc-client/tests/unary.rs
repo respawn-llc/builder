@@ -39,8 +39,7 @@ use client_contracts::runtime_control::{
     RuntimeSubmitUserTurnRequest, RuntimeSubmitUserTurnResponse,
 };
 use client_contracts::session::{
-    RunPromptOverrides, SessionCommittedTranscriptSuffixRequest,
-    SessionCommittedTranscriptSuffixResponse, SessionInitialInputRequest,
+    RunPromptOverrides, SessionInitialInputRequest,
     SessionInitialInputResponse, SessionLaunchMode, SessionMainViewRequest, SessionMainViewResponse,
     SessionPersistInputDraftRequest, SessionPersistInputDraftResponse, SessionPlanRequest,
     SessionResolveTransitionRequest, SessionResolveTransitionResponse,
@@ -915,84 +914,17 @@ fn remote_resolve_session_transition_uses_control_connection_and_typed_shape() {
 }
 
 #[test]
-fn committed_suffix_wrapper_uses_contract_dto_and_method_name() {
-    let response: SessionCommittedTranscriptSuffixResponse = serde_json::from_value(json!({
-        "suffix": {
-            "SessionID": "session-1",
-            "SessionName": "Demo Session",
-            "ConversationFreshness": 1,
-            "Revision": 12,
-            "CommittedEntryCount": 4,
-            "StartEntryCount": 2,
-            "NextEntryCount": 4,
-            "HasMoreCommittedEntries": true,
-            "Entries": contract_chat_entries_json()
-        }
-    }))
-    .unwrap();
-    let connection = ScriptedConnection::new(vec![success_response("rpc-1", response.clone())]);
-    let mut client = Client::new(connection);
-    let request = SessionCommittedTranscriptSuffixRequest {
-        session_id: "session-1".to_owned(),
-    };
-
-    let actual = client.get_committed_transcript_suffix(request).unwrap();
-    let connection = client.into_connection();
-
-    assert_eq!(actual, response);
-    assert_sent_methods(
-        &connection.sent,
-        &[("rpc-1", "session.getCommittedTranscriptSuffix")],
-    );
-    assert_eq!(
-        connection.sent[0].request().params.unwrap(),
-        json!({"session_id": "session-1"})
-    );
-}
-
-#[test]
-fn committed_suffix_wrapper_preserves_method_not_found_error() {
-    let connection = ScriptedConnection::new(vec![Frame::from_response(Response {
-        jsonrpc: JSONRPC_VERSION.to_owned(),
-        id: "rpc-1".to_owned(),
-        result: None,
-        error: Some(rpc_client::wire::ResponseError {
-            code: ErrorCode::MethodNotFound.code(),
-            message: "method not found".to_owned(),
-        }),
-    })]);
-    let mut client = Client::new(connection);
-    let request = SessionCommittedTranscriptSuffixRequest {
-        session_id: "session-1".to_owned(),
-    };
-
-    let error = client.get_committed_transcript_suffix(request).unwrap_err();
-
-    assert_eq!(
-        error,
-        RpcError::Protocol(rpc_client::error::ProtocolError {
-            code: ErrorCode::MethodNotFound,
-            raw_code: ErrorCode::MethodNotFound.code(),
-            message: "method not found".to_owned(),
-        })
-    );
-}
-
-#[test]
 fn transcript_page_wrapper_uses_contract_dto_and_method_name() {
     let response: SessionTranscriptPageResponse = serde_json::from_value(json!({
         "transcript": {
             "SessionID": "session-1",
             "SessionName": "Demo Session",
             "ConversationFreshness": 1,
-            "Revision": 12,
             "OlderCursor": 4096,
             "HasMoreAbove": true,
             "NewerCursor": 8192,
             "HasMoreBelow": true,
-            "Entries": contract_chat_entries_json(),
-            "Streaming": "streaming tail",
-            "StreamingError": "tail warning"
+            "Entries": contract_transcript_rows_json()
         }
     }))
     .unwrap();
@@ -1000,8 +932,8 @@ fn transcript_page_wrapper_uses_contract_dto_and_method_name() {
     let mut client = Client::new(connection);
     let request = SessionTranscriptPageRequest {
         session_id: "session-1".to_owned(),
-        cursor: 42,
-        newer_cursor: 0,
+        cursor: Some(42),
+        newer_cursor: None,
     };
 
     let actual = client.get_transcript_page(request).unwrap();
@@ -3166,7 +3098,7 @@ fn contract_provider_capabilities_json() -> serde_json::Value {
 
 fn contract_settings_json() -> serde_json::Value {
     json!({
-        "Model": "gpt-5.5",
+        "Model": "gpt-5.6-sol",
         "ThinkingLevel": "medium",
         "ModelVerbosity": "",
         "SystemPromptFile": "",
@@ -3237,54 +3169,19 @@ fn contract_source_report_json() -> serde_json::Value {
     })
 }
 
-fn contract_chat_entries_json() -> serde_json::Value {
+fn contract_transcript_rows_json() -> serde_json::Value {
     json!([
         {
-            "Visibility": "",
-            "RollbackTargetID": "",
-            "Role": "assistant",
-            "Text": "final answer",
-            "Phase": "final_answer",
-            "MessageType": "",
-            "SourcePath": "",
-            "CompactLabel": "",
-            "ToolResultSummary": "",
-            "ToolCallID": "",
-            "NoticeID": "",
-            "ToolCall": null
-        },
-        {
-            "Visibility": "",
-            "RollbackTargetID": "",
-            "Role": "tool_call",
-            "Text": "echo hi",
-            "Phase": "",
-            "MessageType": "",
-            "SourcePath": "",
-            "CompactLabel": "",
-            "ToolResultSummary": "",
-            "ToolCallID": "call-1",
-            "NoticeID": "",
-            "ToolCall": {
-                "ToolName": "shell",
-                "Presentation": "",
-                "RenderBehavior": "",
-                "IsShell": true,
-                "UserInitiated": false,
-                "Command": "echo hi",
-                "CompactText": "",
-                "InlineMeta": "",
-                "TimeoutLabel": "",
-                "PatchSummary": "",
-                "PatchDetail": "",
-                "PatchRender": null,
-                "RenderHint": null,
-                "Question": "",
-                "RecommendedOptionIndex": 0,
-                "OmitSuccessfulResult": false,
-                "RawOutputRequested": false,
-                "OutputTruncated": false
-            }
+            "Visibility": "O",
+            "Integrity": 0,
+            "Kind": "user",
+            "User": {
+                "Text": "ship the fix",
+                "CondensedText": ""
+            },
+            "Assistant": null,
+            "Tool": null,
+            "Notice": null
         }
     ])
 }
@@ -3335,8 +3232,6 @@ fn zero_main_view_json() -> serde_json::Value {
                     "CwdRelpath": "",
                     "EffectiveWorkdir": ""
                 },
-                "Transcript": {"Revision": 0, "CommittedEntryCount": 0},
-                "Chat": {"Entries": null, "Streaming": "", "StreamingError": ""}
             },
             "ActiveRun": null
         }

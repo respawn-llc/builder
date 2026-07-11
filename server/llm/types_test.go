@@ -93,6 +93,24 @@ func TestCustomToolCallItemsRoundTripThroughMessages(t *testing.T) {
 	}
 }
 
+func TestBackgroundExitCodeRoundTripsThroughResponseItems(t *testing.T) {
+	exitCode := 5
+	items := ItemsFromMessages([]Message{{
+		Role:               RoleDeveloper,
+		MessageType:        MessageTypeBackgroundNotice,
+		Content:            "background failed",
+		BackgroundExitCode: &exitCode,
+	}})
+	if len(items) != 1 || items[0].BackgroundExitCode == nil || *items[0].BackgroundExitCode != exitCode {
+		t.Fatalf("response items = %+v, want typed background exit code", items)
+	}
+
+	messages := MessagesFromItems(items)
+	if len(messages) != 1 || messages[0].BackgroundExitCode == nil || *messages[0].BackgroundExitCode != exitCode {
+		t.Fatalf("messages = %+v, want typed background exit code", messages)
+	}
+}
+
 func TestMessagesFromItemsStartsNewAssistantAfterFunctionToolOutput(t *testing.T) {
 	items := []ResponseItem{
 		{Type: ResponseItemTypeFunctionCall, ID: "fc_1", CallID: "call_1", Name: "shell", Arguments: json.RawMessage(`{"cmd":"pwd"}`)},

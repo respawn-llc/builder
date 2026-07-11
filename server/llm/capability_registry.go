@@ -59,7 +59,7 @@ func LookupProviderCapabilityContract(providerID string) (ProviderCapabilities, 
 	return registration.Variant.Capabilities, true
 }
 
-func resolveProviderTransportVariant(provider Provider, baseURL string, mode openAIAuthMode) (ProviderVariantContract, error) {
+func resolveProviderTransportVariant(provider Provider, baseURL string, mode OpenAIAuthMode) (ProviderVariantContract, error) {
 	contract, ok := globalProviderRegistry.contractsByProvider[provider]
 	if !ok {
 		return ProviderVariantContract{}, fmt.Errorf("%w: %s", ErrUnsupportedProvider, provider)
@@ -81,7 +81,7 @@ func resolveProviderTransportVariant(provider Provider, baseURL string, mode ope
 	return registration.Variant, nil
 }
 
-func resolveOpenAITransportProviderVariant(baseURL string, mode openAIAuthMode) (string, error) {
+func resolveOpenAITransportProviderVariant(baseURL string, mode OpenAIAuthMode) (string, error) {
 	if mode.IsOAuth {
 		return "chatgpt-codex", nil
 	}
@@ -153,6 +153,7 @@ func LockedModelCapabilitiesForConfig(model string, override config.ModelCapabil
 }
 
 func LockedProviderCapabilitiesFromContract(contract ProviderCapabilities) session.LockedProviderCapabilities {
+	supportsProviderVerbosity := contract.SupportsProviderVerbosity
 	return session.LockedProviderCapabilities{
 		ProviderID:                        strings.TrimSpace(contract.ProviderID),
 		SupportsResponsesAPI:              contract.SupportsResponsesAPI,
@@ -164,6 +165,7 @@ func LockedProviderCapabilitiesFromContract(contract ProviderCapabilities) sessi
 		SupportsNativeWebSearch:           contract.SupportsNativeWebSearch,
 		SupportsReasoningEncrypted:        contract.SupportsReasoningEncrypted,
 		SupportsServerSideContextEdit:     contract.SupportsServerSideContextEdit,
+		SupportsProviderVerbosity:         &supportsProviderVerbosity,
 		IsOpenAIFirstParty:                contract.IsOpenAIFirstParty,
 	}
 }
@@ -182,6 +184,7 @@ func ProviderCapabilitiesFromOverride(override config.ProviderCapabilitiesOverri
 		SupportsNativeWebSearch:        override.SupportsNativeWebSearch,
 		SupportsReasoningEncrypted:     override.SupportsReasoningEncrypted,
 		SupportsServerSideContextEdit:  override.SupportsServerSideContextEdit,
+		SupportsProviderVerbosity:      override.SupportsProviderVerbosity,
 		IsOpenAIFirstParty:             override.IsOpenAIFirstParty,
 	}, true
 }
@@ -207,6 +210,10 @@ func ProviderCapabilitiesFromLocked(locked *session.LockedContract) (ProviderCap
 			supportsPromptCacheKey = locked.ProviderContract.SupportsResponsesAPI
 		}
 	}
+	supportsProviderVerbosity := locked.ProviderContract.IsOpenAIFirstParty
+	if locked.ProviderContract.SupportsProviderVerbosity != nil {
+		supportsProviderVerbosity = *locked.ProviderContract.SupportsProviderVerbosity
+	}
 	return ProviderCapabilities{
 		ProviderID:                     providerID,
 		SupportsResponsesAPI:           locked.ProviderContract.SupportsResponsesAPI,
@@ -216,8 +223,19 @@ func ProviderCapabilitiesFromLocked(locked *session.LockedContract) (ProviderCap
 		SupportsNativeWebSearch:        locked.ProviderContract.SupportsNativeWebSearch,
 		SupportsReasoningEncrypted:     locked.ProviderContract.SupportsReasoningEncrypted,
 		SupportsServerSideContextEdit:  locked.ProviderContract.SupportsServerSideContextEdit,
+		SupportsProviderVerbosity:      supportsProviderVerbosity,
 		IsOpenAIFirstParty:             locked.ProviderContract.IsOpenAIFirstParty,
 	}, true
+}
+
+// ProviderCapabilitiesFromLockedOrOverride resolves the Session Contract before
+// current operator configuration so resumed request shaping cannot drift after
+// a config change.
+func ProviderCapabilitiesFromLockedOrOverride(locked *session.LockedContract, override config.ProviderCapabilitiesOverride) (ProviderCapabilities, bool) {
+	if caps, ok := ProviderCapabilitiesFromLocked(locked); ok {
+		return caps, true
+	}
+	return ProviderCapabilitiesFromOverride(override)
 }
 
 func LockedContractSupportsReasoningEffort(locked *session.LockedContract, model string) bool {

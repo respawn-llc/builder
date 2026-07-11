@@ -3,6 +3,7 @@ package processview
 import (
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
+	"core/shared/valuecopy"
 )
 
 func ProcessFromSnapshot(snapshot shelltool.Snapshot) clientui.BackgroundProcess {
@@ -16,7 +17,7 @@ func ProcessFromSnapshot(snapshot shelltool.Snapshot) clientui.BackgroundProcess
 		Workdir:                 snapshot.Workdir,
 		StartedAt:               snapshot.StartedAt,
 		FinishedAt:              snapshot.FinishedAt,
-		ExitCode:                cloneInt(snapshot.ExitCode),
+		ExitCode:                valuecopy.Pointer(snapshot.ExitCode),
 		LogPath:                 snapshot.LogPath,
 		RecentOutput:            snapshot.RecentOutput,
 		OutputAvailable:         snapshot.OutputAvailable,
@@ -28,12 +29,4 @@ func ProcessFromSnapshot(snapshot shelltool.Snapshot) clientui.BackgroundProcess
 		KillRequested:           snapshot.KillRequested,
 		LastUpdatedAt:           snapshot.LastUpdatedAt,
 	}
-}
-
-func cloneInt(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
 }

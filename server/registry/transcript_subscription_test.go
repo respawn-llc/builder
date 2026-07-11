@@ -14,8 +14,10 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -115,8 +117,9 @@ func TestTranscriptSubscriptionBrokerPanicsOnContractViolationInTestMode(t *test
 	broker.Publish([]clientui.TranscriptMessage{{
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowTool,
-			Tool: &clientui.TranscriptToolRow{ToolCallID: ""},
+			Visibility: clientui.EntryVisibilityDetail,
+			Kind:       clientui.TranscriptRowTool,
+			Tool:       &clientui.TranscriptToolRow{ToolCallID: ""},
 		},
 	}})
 }
@@ -135,8 +138,9 @@ func TestTranscriptSubscriptionBrokerClosesOnContractViolationWhenPanicDisabled(
 	broker.Publish([]clientui.TranscriptMessage{{
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowTool,
-			Tool: &clientui.TranscriptToolRow{ToolCallID: ""},
+			Visibility: clientui.EntryVisibilityDetail,
+			Kind:       clientui.TranscriptRowTool,
+			Tool:       &clientui.TranscriptToolRow{ToolCallID: ""},
 		},
 	}})
 	_, err = sub.Next(context.Background())
@@ -165,10 +169,68 @@ func TestTranscriptSubscriptionBrokerRejectsCommittedRowKindPayloadMismatch(t *t
 	broker.Publish([]clientui.TranscriptMessage{{
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowUser,
-			Tool: &clientui.TranscriptToolRow{ToolCallID: "mismatched"},
+			Visibility: clientui.EntryVisibilityDetail,
+			Kind:       clientui.TranscriptRowUser,
+			Tool:       &clientui.TranscriptToolRow{ToolCallID: "mismatched"},
 		},
 	}})
+}
+
+func TestTranscriptSubscriptionBoundaryValidatesCommittedRowIntegrity(t *testing.T) {
+	valid := clientui.TranscriptCommittedRow{
+		Visibility: clientui.EntryVisibilityDetail,
+		Integrity:  transcript.RowIntegrityValid,
+		Kind:       clientui.TranscriptRowUser,
+		User:       &clientui.TranscriptUserRow{Text: "valid"},
+	}
+	if err := validateCommittedRow(valid); err != nil {
+		t.Fatalf("zero-value valid integrity was rejected: %v", err)
+	}
+
+	invalidRows := []clientui.TranscriptCommittedRow{valid, valid}
+	invalidRows[0].Integrity = transcript.RowIntegrity(255)
+	invalidRows[1].Visibility = clientui.EntryVisibilityAuto
+	for _, invalid := range invalidRows {
+		if err := invariant.ValidateTranscriptCommittedRow(invalid); err == nil {
+			t.Fatalf("shared committed-row validator accepted invalid row: %#v", invalid)
+		}
+		err := validateCommittedRow(invalid)
+		if err == nil {
+			t.Fatalf("invalid committed row was accepted: %#v", invalid)
+		}
+		var violation transcriptContractViolation
+		if !errors.As(err, &violation) {
+			t.Fatalf("broker validation error = %T, want transcript contract violation", err)
+		}
+	}
+}
+
+func TestTranscriptSubscriptionBrokerDeliversMalformedToolRowsWithoutCallID(t *testing.T) {
+	broker := newTranscriptSubscriptionBroker()
+	sub, err := broker.Subscribe(clientui.TranscriptMessage{Kind: clientui.TranscriptMessageHydration, Hydration: &clientui.TranscriptHydration{}})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	_ = nextTranscriptMessage(t, sub)
+
+	for _, integrity := range []transcript.RowIntegrity{
+		transcript.RowIntegrityRecoverableMalformed,
+		transcript.RowIntegrityUnrecoverableMalformed,
+	} {
+		broker.Publish([]clientui.TranscriptMessage{{
+			Kind: clientui.TranscriptMessageCommittedRow,
+			CommittedRow: &clientui.TranscriptCommittedRow{
+				Visibility: clientui.EntryVisibilityDetail,
+				Integrity:  integrity,
+				Kind:       clientui.TranscriptRowTool,
+				Tool:       &clientui.TranscriptToolRow{},
+			},
+		}})
+		message := nextTranscriptMessage(t, sub)
+		if message.CommittedRow == nil || message.CommittedRow.Integrity != integrity || message.CommittedRow.Tool == nil {
+			t.Fatalf("malformed tool row delivery = %#v", message)
+		}
+	}
 }
 
 func TestSessionTranscriptSubscriptionHydratesFirstAndSequencesPerSubscription(t *testing.T) {
@@ -357,7 +419,7 @@ func TestSessionTranscriptFeedSequencerReceivesEngineQueueStatus(t *testing.T) {
 	}
 }
 
-func TestSessionTranscriptFeedSequencerHydratesEngineQueuedText(t *testing.T) {
+func TestSessionTranscriptFeedSequencerHydratesEngineQueuedTextInFIFOOrder(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	var engine *runtime.Engine
 	engine = newRegistryTestRuntime(t, func(evt runtime.Event) {
@@ -366,17 +428,75 @@ func TestSessionTranscriptFeedSequencerHydratesEngineQueuedText(t *testing.T) {
 	registerReady(t, registry, engine.SessionID(), engine)
 	t.Cleanup(func() { closeRuntime(registry, engine.SessionID(), engine) })
 
-	item := engine.QueueUserMessage("queued for hydration")
+	items := []runtime.QueuedUserMessage{
+		engine.QueueUserMessage("first queued for hydration"),
+		engine.QueueUserMessage("second queued for hydration"),
+		engine.QueueUserMessage("third queued for hydration"),
+		engine.QueueUserMessage("fourth queued for hydration"),
+	}
 	sub := subscribeTranscriptForTest(t, registry, engine.SessionID())
 	defer func() { _ = sub.Close() }()
 
 	hydration := nextTranscriptMessage(t, sub)
-	if hydration.Hydration == nil || len(hydration.Hydration.QueuedOrSteeredMessages) != 1 {
-		t.Fatalf("hydration = %+v, want one queued message", hydration)
+	if hydration.Hydration == nil || len(hydration.Hydration.QueuedOrSteeredMessages) != len(items) {
+		t.Fatalf("hydration = %+v, want %d queued messages", hydration, len(items))
 	}
-	queued := hydration.Hydration.QueuedOrSteeredMessages[0]
-	if queued.QueueItemID != item.ID || queued.UserText != "queued for hydration" {
-		t.Fatalf("hydrated queued message = %+v, want queued text for %q", queued, item.ID)
+	for index, item := range items {
+		queued := hydration.Hydration.QueuedOrSteeredMessages[index]
+		if queued.QueueItemID != item.ID || queued.UserText != item.Text {
+			t.Fatalf("hydrated queued message %d = %+v, want FIFO item %+v", index, queued, item)
+		}
+	}
+}
+
+func TestQueuedMessageStateLedgerPreservesFIFOAcrossIdentityBridgeAndRemoval(t *testing.T) {
+	firstClientID := uuid.NewString()
+	secondClientID := uuid.NewString()
+	secondQueueID := uuid.NewString()
+	thirdClientID := uuid.NewString()
+	ledger := queuedMessageStateLedger{}
+
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		ClientRequestID: firstClientID,
+		Status:          clientui.QueuedUserMessageAccepted,
+		UserText:        "first",
+	})
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		ClientRequestID: secondClientID,
+		Status:          clientui.QueuedUserMessageAccepted,
+		UserText:        "second pending identity",
+	})
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		ClientRequestID: thirdClientID,
+		Status:          clientui.QueuedUserMessageAccepted,
+		UserText:        "third",
+	})
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		QueueItemID:     secondQueueID,
+		ClientRequestID: secondClientID,
+		Status:          clientui.QueuedUserMessageAccepted,
+		UserText:        "second authoritative identity",
+	})
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		ClientRequestID: firstClientID,
+		Status:          clientui.QueuedUserMessageDiscarded,
+	})
+
+	got := ledger.values()
+	if len(got) != 2 {
+		t.Fatalf("ledger values = %+v, want second and third", got)
+	}
+	if got[0].QueueItemID != secondQueueID || got[0].UserText != "second authoritative identity" || got[1].ClientRequestID != thirdClientID {
+		t.Fatalf("ledger values = %+v, want updated second followed by third", got)
+	}
+
+	ledger.apply(clientui.TranscriptQueuedOrSteeredMessageState{
+		QueueItemID: secondQueueID,
+		Status:      clientui.QueuedUserMessageDiscarded,
+	})
+	got = ledger.values()
+	if len(got) != 1 || got[0].ClientRequestID != thirdClientID {
+		t.Fatalf("ledger after authoritative removal = %+v, want third only", got)
 	}
 }
 
@@ -391,22 +511,15 @@ func TestSessionTranscriptFeedPublishesUpdatedToolStartMetadataByCallID(t *testi
 	_ = nextTranscriptMessage(t, sub)
 
 	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
-		Kind: runtime.EventAssistantMessage,
-		Message: llm.Message{
-			Role: llm.RoleAssistant,
-			ToolCalls: []llm.ToolCall{{
-				ID:   "call-duplicate",
-				Name: "shell",
-			}},
+		Kind: runtime.EventToolCallStarted,
+		ToolCall: &llm.ToolCall{
+			ID:   "call-duplicate",
+			Name: "shell",
 		},
 	})
 	start := nextTranscriptMessage(t, sub)
 	if start.Kind != clientui.TranscriptMessageToolStart || start.ToolStart == nil || start.ToolStart.ToolCallID != "call-duplicate" {
 		t.Fatalf("first start = %+v, want tool_start", start)
-	}
-	status := nextTranscriptMessage(t, sub)
-	if status.Kind != clientui.TranscriptMessageSessionStatus {
-		t.Fatalf("second message = %+v, want session status from assistant event", status)
 	}
 
 	registry.PublishRuntimeEvent(engine.SessionID(), runtime.Event{
@@ -826,8 +939,9 @@ func TestTranscriptSubscriptionBrokerDeliversToolTerminalsWithoutStart(t *testin
 	broker.Publish([]clientui.TranscriptMessage{{
 		Kind: clientui.TranscriptMessageCommittedRow,
 		CommittedRow: &clientui.TranscriptCommittedRow{
-			Kind: clientui.TranscriptRowTool,
-			Tool: &clientui.TranscriptToolRow{ToolCallID: "hosted-call", ToolName: "web_search"},
+			Visibility: clientui.EntryVisibilityOngoingCollapsed,
+			Kind:       clientui.TranscriptRowTool,
+			Tool:       &clientui.TranscriptToolRow{ToolCallID: "hosted-call", ToolName: "web_search"},
 		},
 	}})
 	row := nextTranscriptMessage(t, sub)

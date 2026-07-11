@@ -6,6 +6,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -89,11 +90,11 @@ func TestPlannerHeadlessUsesDefaultGPT55ModelAndOpenAIProviderInference(t *testi
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
-	if plan.ActiveSettings.Model != "gpt-5.5" {
-		t.Fatalf("active model = %q, want gpt-5.5", plan.ActiveSettings.Model)
+	if plan.ActiveSettings.Model != "gpt-5.6-sol" {
+		t.Fatalf("active model = %q, want gpt-5.6-sol", plan.ActiveSettings.Model)
 	}
-	if plan.ConfiguredModelName != "gpt-5.5" {
-		t.Fatalf("configured model = %q, want gpt-5.5", plan.ConfiguredModelName)
+	if plan.ConfiguredModelName != "gpt-5.6-sol" {
+		t.Fatalf("configured model = %q, want gpt-5.6-sol", plan.ConfiguredModelName)
 	}
 	provider, err := llm.InferProviderFromModel(plan.ActiveSettings.Model)
 	if err != nil {
@@ -160,7 +161,7 @@ func TestPlannerReappliesPersistedSubagentRoleSettingsOnResume(t *testing.T) {
 	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "smart_reviewer"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("smart_reviewer")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	loaded := loadLaunchConfig(t, workspace)
@@ -205,7 +206,7 @@ func TestPlannerReappliesPersistedSubagentRoleSettingsOnResume(t *testing.T) {
 	if plan.Source.Sources["thinking_level"] != "subagent" || plan.Source.Sources["tools.patch"] != "subagent" {
 		t.Fatalf("source report did not mark role overrides as subagent: %+v", plan.Source.Sources)
 	}
-	if got := plan.Store.Meta().Continuation; got == nil || got.AgentRole != "smart_reviewer" {
+	if got := plan.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("smart_reviewer")) {
 		t.Fatalf("continuation = %+v, want smart_reviewer preserved", got)
 	}
 }
@@ -215,7 +216,7 @@ func TestPlannerIgnoresMissingPersistedSubagentRoleOnResume(t *testing.T) {
 	workspace := t.TempDir()
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "deleted_role"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("deleted_role")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	planner := Planner{
@@ -223,7 +224,7 @@ func TestPlannerIgnoresMissingPersistedSubagentRoleOnResume(t *testing.T) {
 			WorkspaceRoot:   workspace,
 			PersistenceRoot: root,
 			Settings: config.Settings{
-				Model:         "gpt-5.5",
+				Model:         "gpt-5.6-sol",
 				ThinkingLevel: "medium",
 			},
 		},
@@ -237,7 +238,7 @@ func TestPlannerIgnoresMissingPersistedSubagentRoleOnResume(t *testing.T) {
 	if plan.ActiveSettings.ThinkingLevel != "medium" {
 		t.Fatalf("thinking level = %q, want base config when role is missing", plan.ActiveSettings.ThinkingLevel)
 	}
-	if got := plan.Store.Meta().Continuation; got == nil || got.AgentRole != "deleted_role" {
+	if got := plan.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("deleted_role")) {
 		t.Fatalf("continuation = %+v, want missing role preserved", got)
 	}
 }
@@ -250,7 +251,7 @@ func TestPlannerKeepsRoleBaseURLOutOfBaseSettingsOnResume(t *testing.T) {
 	store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace)
 	if err := store.SetContinuationContext(session.ContinuationContext{
 		OpenAIBaseURL: "https://worker.example/v1",
-		AgentRole:     "worker",
+		AgentRole:     sessiontest.AgentRole("worker"),
 	}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
@@ -305,11 +306,11 @@ func TestPlannerKeepsRoleBaseURLOutOfBaseSettingsOnResume(t *testing.T) {
 	if cleared.ActiveSettings.OpenAIBaseURL != "https://base.example/v1" {
 		t.Fatalf("cleared base url = %q, want base", cleared.ActiveSettings.OpenAIBaseURL)
 	}
-	if got := plan.Store.Meta().Continuation; got != nil && got.AgentRole != "" {
+	if got := plan.Store.Meta().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation after clear = %+v, want no role", got)
 	}
 
-	if err := plan.Store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: "https://worker.example/v1", AgentRole: "worker"}); err != nil {
+	if err := plan.Store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: "https://worker.example/v1", AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("reset continuation: %v", err)
 	}
 	switched, warnings, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: "research"}, auth.EmptyState())
@@ -328,7 +329,7 @@ func TestApplyRunPromptOverridesExplicitRoleUsesBaseSettingsAfterPersistedRoleRe
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)
 	store := createTestSession(t, workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "old_role"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("old_role")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	baseSettings := loaded.Settings
@@ -361,7 +362,7 @@ func TestApplyRunPromptOverridesExplicitRoleUsesBaseSettingsAfterPersistedRoleRe
 		ActiveSettings:      resumedSettings,
 		BaseSettings:        baseSettings,
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
-		ConfiguredModelName: "gpt-5.5",
+		ConfiguredModelName: "gpt-5.6-sol",
 		WorkspaceRoot:       workspace,
 		Source:              resumedSource,
 		BaseSource:          baseSource,
@@ -377,7 +378,7 @@ func TestApplyRunPromptOverridesExplicitRoleUsesBaseSettingsAfterPersistedRoleRe
 	if updated.Source.Sources["tools.patch"] != "file" {
 		t.Fatalf("tools.patch source = %q, want base source", updated.Source.Sources["tools.patch"])
 	}
-	if got := store.Meta().Continuation; got == nil || got.AgentRole != "worker" {
+	if got := store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("worker")) {
 		t.Fatalf("continuation = %+v, want worker", got)
 	}
 }
@@ -385,11 +386,11 @@ func TestApplyRunPromptOverridesExplicitRoleUsesBaseSettingsAfterPersistedRoleRe
 func TestApplyRunPromptOverridesExplicitDefaultClearsPersistedRole(t *testing.T) {
 	workspace := t.TempDir()
 	store := createTestSession(t, workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "old_role"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("old_role")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	baseSettings := config.Settings{
-		Model:         "gpt-5.5",
+		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",
 		EnabledTools:  map[toolspec.ID]bool{toolspec.ToolExecCommand: true},
 	}
@@ -400,7 +401,7 @@ func TestApplyRunPromptOverridesExplicitDefaultClearsPersistedRole(t *testing.T)
 		ActiveSettings:      resumedSettings,
 		BaseSettings:        baseSettings,
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
-		ConfiguredModelName: "gpt-5.5",
+		ConfiguredModelName: "gpt-5.6-sol",
 		WorkspaceRoot:       workspace,
 		Source:              config.SourceReport{Sources: map[string]string{"thinking_level": "subagent"}},
 		BaseSource:          config.SourceReport{Sources: map[string]string{"thinking_level": "file"}},
@@ -413,7 +414,7 @@ func TestApplyRunPromptOverridesExplicitDefaultClearsPersistedRole(t *testing.T)
 	if updated.Source.Sources["thinking_level"] != "file" {
 		t.Fatalf("thinking source = %q, want base source", updated.Source.Sources["thinking_level"])
 	}
-	if got := store.Meta().Continuation; got != nil && got.AgentRole != "" {
+	if got := store.Meta().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared role", got)
 	}
 }
@@ -423,7 +424,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 	loaded := loadLaunchConfig(t, workspace)
 	baseSettings := loaded.Settings
 	baseSettings.EnabledTools = cloneEnabledToolSet(baseSettings.EnabledTools)
-	baseSettings.Model = "gpt-5.5"
+	baseSettings.Model = "gpt-5.6-sol"
 	baseSettings.ThinkingLevel = "medium"
 	baseSettings.EnabledTools[toolspec.ToolExecCommand] = true
 	baseSettings.EnabledTools[toolspec.ToolPatch] = true
@@ -458,15 +459,15 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 		wantModel        string
 		wantThinking     string
 		wantPatchSetting bool
-		wantAgentRole    string
+		wantAgentRole    *string
 	}{
 		{
 			name:             "no override keeps resumed role",
 			overrides:        serverapi.RunPromptOverrides{},
-			wantModel:        "gpt-5.5",
+			wantModel:        "gpt-5.6-sol",
 			wantThinking:     "xhigh",
 			wantPatchSetting: false,
-			wantAgentRole:    "old_role",
+			wantAgentRole:    sessiontest.AgentRole("old_role"),
 		},
 		{
 			name:             "new role starts from base settings",
@@ -474,21 +475,21 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 			wantModel:        "gpt-5.4-mini",
 			wantThinking:     "high",
 			wantPatchSetting: true,
-			wantAgentRole:    "worker",
+			wantAgentRole:    sessiontest.AgentRole("worker"),
 		},
 		{
 			name:             "default clears resumed role",
 			overrides:        serverapi.RunPromptOverrides{AgentRole: config.DefaultSubagentRole},
-			wantModel:        "gpt-5.5",
+			wantModel:        "gpt-5.6-sol",
 			wantThinking:     "medium",
 			wantPatchSetting: true,
-			wantAgentRole:    "",
+			wantAgentRole:    nil,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := createTestSession(t, workspace)
-			if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "old_role"}); err != nil {
+			if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("old_role")}); err != nil {
 				t.Fatalf("SetContinuationContext: %v", err)
 			}
 			planBaseSettings := cloneSettings(baseSettings)
@@ -505,7 +506,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 				ActiveSettings:      planResumedSettings,
 				BaseSettings:        planBaseSettings,
 				EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
-				ConfiguredModelName: "gpt-5.5",
+				ConfiguredModelName: "gpt-5.6-sol",
 				WorkspaceRoot:       workspace,
 				Source:              resumedSource,
 				BaseSource:          baseSource,
@@ -522,12 +523,12 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 			if updated.ActiveSettings.EnabledTools[toolspec.ToolPatch] != tt.wantPatchSetting {
 				t.Fatalf("patch setting = %t, want %t", updated.ActiveSettings.EnabledTools[toolspec.ToolPatch], tt.wantPatchSetting)
 			}
-			gotRole := ""
+			var gotRole *string
 			if continuation := store.Meta().Continuation; continuation != nil {
 				gotRole = continuation.AgentRole
 			}
-			if gotRole != tt.wantAgentRole {
-				t.Fatalf("continuation role = %q, want %q", gotRole, tt.wantAgentRole)
+			if !sessiontest.SameAgentRole(gotRole, tt.wantAgentRole) {
+				t.Fatalf("continuation role = %v, want %v", gotRole, tt.wantAgentRole)
 			}
 		})
 	}
@@ -537,7 +538,7 @@ func TestApplyRunPromptOverridesRejectsDifferentAgentRoleForLockedSession(t *tes
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace,
 		"[subagents.old_role]",
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.worker]",
 		"model = \"gpt-5.4-mini\"",
@@ -567,7 +568,7 @@ func TestApplyRunPromptOverridesRejectsDifferentAgentRoleForLockedSession(t *tes
 		t.Run(tt.name, func(t *testing.T) {
 			store := createTestSession(t, workspace)
 			if tt.persisted != "" {
-				if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: tt.persisted}); err != nil {
+				if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole(tt.persisted)}); err != nil {
 					t.Fatalf("SetContinuationContext: %v", err)
 				}
 			}
@@ -602,7 +603,7 @@ func TestApplyRunPromptOverridesAllowsSameAgentRoleForLockedSession(t *testing.T
 	)
 	loaded.Settings.ProviderOverride = "openai"
 	store := createTestSession(t, workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-model", EnabledTools: []string{"shell"}}); err != nil {
@@ -621,7 +622,7 @@ func TestApplyRunPromptOverridesAllowsSameAgentRoleForLockedSession(t *testing.T
 	}
 
 	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: "worker"}, auth.EmptyState())
-	if got := updated.Store.Meta().Continuation; got == nil || got.AgentRole != "worker" {
+	if got := updated.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("worker")) {
 		t.Fatalf("continuation = %+v, want worker", got)
 	}
 	if updated.ActiveSettings.Model != "locked-model" {
@@ -646,7 +647,7 @@ func TestApplyRunPromptOverridesOptionAllowsAgentRoleChangeForLockedSession(t *t
 	}
 	loaded.Settings.Subagents["worker"] = workerRole
 	store := createTestSession(t, workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "old_role"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("old_role")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-model", EnabledTools: []string{"shell"}, HasEnabledTools: true}); err != nil {
@@ -670,7 +671,7 @@ func TestApplyRunPromptOverridesOptionAllowsAgentRoleChangeForLockedSession(t *t
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverridesWithOptions: %v", err)
 	}
-	if got := updated.Store.Meta().Continuation; got == nil || got.AgentRole != "worker" {
+	if got := updated.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("worker")) {
 		t.Fatalf("continuation = %+v, want worker", got)
 	}
 	if updated.ActiveSettings.Model != "locked-model" {
@@ -701,7 +702,7 @@ func TestApplyRunPromptOverridesLockedModelDoesNotMarkModelSourceAsSubagent(t *t
 	baseSource.Sources["model"] = "file"
 	baseSource.Sources["thinking_level"] = "file"
 	store := createTestSession(t, workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-model", EnabledTools: []string{"shell"}}); err != nil {
@@ -712,7 +713,7 @@ func TestApplyRunPromptOverridesLockedModelDoesNotMarkModelSourceAsSubagent(t *t
 		ActiveSettings:      baseSettings,
 		BaseSettings:        baseSettings,
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
-		ConfiguredModelName: "gpt-5.5",
+		ConfiguredModelName: "gpt-5.6-sol",
 		WorkspaceRoot:       workspace,
 		Source:              baseSource,
 		BaseSource:          baseSource,
@@ -893,7 +894,7 @@ func TestPlannerHeadlessChildWithRoleUsesFreshSystemPromptSnapshot(t *testing.T)
 	}
 	if err := parent.SetContinuationContext(session.ContinuationContext{
 		OpenAIBaseURL: "https://parent.example/v1",
-		AgentRole:     "old_parent_role",
+		AgentRole:     sessiontest.AgentRole("old_parent_role"),
 	}); err != nil {
 		t.Fatalf("SetContinuationContext parent: %v", err)
 	}
@@ -925,7 +926,7 @@ func TestPlannerHeadlessChildWithRoleUsesFreshSystemPromptSnapshot(t *testing.T)
 	if len(updated.ActiveSettings.SystemPromptFiles) != 1 || updated.ActiveSettings.SystemPromptFiles[0].Path != rolePrompt {
 		t.Fatalf("active system prompt files = %+v, want role prompt %q", updated.ActiveSettings.SystemPromptFiles, rolePrompt)
 	}
-	if got := updated.Store.Meta().Continuation; got == nil || got.AgentRole != "code_review" {
+	if got := updated.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("code_review")) {
 		t.Fatalf("child continuation = %+v, want only selected role persisted", got)
 	}
 }
@@ -1425,20 +1426,20 @@ func TestApplyRunPromptOverridesFastRoleAppliesBuiltInHeuristics(t *testing.T) {
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
 	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: config.BuiltInSubagentRoleFast}, auth.State{Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}}})
-	if updated.ActiveSettings.Model != "gpt-5.4-mini" {
-		t.Fatalf("model = %q, want gpt-5.4-mini", updated.ActiveSettings.Model)
+	if updated.ActiveSettings.Model != "gpt-5.6-terra" {
+		t.Fatalf("model = %q, want gpt-5.6-terra", updated.ActiveSettings.Model)
 	}
 	if !updated.ActiveSettings.PriorityRequestMode {
 		t.Fatal("expected priority request mode enabled for fast role")
 	}
-	if updated.ActiveSettings.Reviewer.Model != "gpt-5.4-mini" {
-		t.Fatalf("reviewer model = %q, want gpt-5.4-mini", updated.ActiveSettings.Reviewer.Model)
+	if updated.ActiveSettings.Reviewer.Model != "gpt-5.6-terra" {
+		t.Fatalf("reviewer model = %q, want gpt-5.6-terra", updated.ActiveSettings.Reviewer.Model)
 	}
-	if updated.ActiveSettings.ModelContextWindow != 272_000 {
-		t.Fatalf("context window = %d, want 272000", updated.ActiveSettings.ModelContextWindow)
+	if updated.ActiveSettings.ModelContextWindow != 372_000 {
+		t.Fatalf("context window = %d, want 372000", updated.ActiveSettings.ModelContextWindow)
 	}
-	if updated.ConfiguredModelName != "gpt-5.4-mini" {
-		t.Fatalf("configured model = %q, want gpt-5.4-mini", updated.ConfiguredModelName)
+	if updated.ConfiguredModelName != "gpt-5.6-terra" {
+		t.Fatalf("configured model = %q, want gpt-5.6-terra", updated.ConfiguredModelName)
 	}
 }
 
@@ -1452,7 +1453,7 @@ func TestApplyRunPromptOverridesLockedDefaultModelTreatsSessionModelAsExplicitFo
 	)
 	baseSettings := EffectiveSettings(loaded.Settings, &session.LockedContract{Model: "locked-session-model"})
 	store := createTestSession(t, workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-session-model", EnabledTools: []string{"shell"}}); err != nil {
@@ -1487,6 +1488,8 @@ func TestApplyRunPromptOverridesFastRoleWarnsWhenExplicitRoleMatchesBase(t *test
 	loaded := loadLaunchConfig(t, workspace,
 		"model = \"gpt-5.4\"",
 		"thinking_level = \"medium\"",
+		"model_context_window = 272000",
+		"context_compaction_threshold_tokens = 258400",
 		"",
 		"[subagents.fast]",
 		"model = \"gpt-5.4\"",
@@ -1533,7 +1536,7 @@ func TestApplyRunPromptOverridesSubagentProviderOverrideCanInheritBaseModel(t *t
 func TestApplyRunPromptOverridesSubagentReviewerSystemPromptFile(t *testing.T) {
 	workspace := t.TempDir()
 	loaded, home := loadLaunchConfigWithHome(t, workspace,
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[reviewer]",
 		"system_prompt_file = \"base-reviewer.md\"",
@@ -1643,8 +1646,8 @@ func TestApplyRunPromptOverridesFastRoleUsesCLIProviderOverrideForHeuristic(t *t
 		ProviderOverride: "openai",
 		OpenAIBaseURL:    "https://api.openai.com/v1",
 	}, auth.State{Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}}})
-	if updated.ActiveSettings.Model != "gpt-5.4-mini" {
-		t.Fatalf("model = %q, want gpt-5.4-mini", updated.ActiveSettings.Model)
+	if updated.ActiveSettings.Model != "gpt-5.6-terra" {
+		t.Fatalf("model = %q, want gpt-5.6-terra", updated.ActiveSettings.Model)
 	}
 	if !updated.ActiveSettings.PriorityRequestMode {
 		t.Fatal("expected priority request mode enabled")
@@ -1660,7 +1663,7 @@ func TestPlannerResumeFastRoleUsesProviderOverrideForHeuristic(t *testing.T) {
 	)
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: config.BuiltInSubagentRoleFast}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole(config.BuiltInSubagentRoleFast)}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	planner := Planner{
@@ -1677,7 +1680,7 @@ func TestPlannerResumeFastRoleUsesProviderOverrideForHeuristic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
-	if plan.ActiveSettings.Model != "gpt-5.4-mini" {
+	if plan.ActiveSettings.Model != "gpt-5.6-terra" {
 		t.Fatalf("model = %q, want fast heuristic model", plan.ActiveSettings.Model)
 	}
 	if !plan.ActiveSettings.PriorityRequestMode {
@@ -1696,7 +1699,7 @@ func TestPlannerResumeLockedDefaultModelTreatsSessionModelAsExplicitForRoleProvi
 	)
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-session-model", EnabledTools: []string{"shell"}}); err != nil {
@@ -1736,7 +1739,7 @@ func TestPlannerResumeFastRoleUsesOpenAIBaseURLForHeuristic(t *testing.T) {
 	)
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: config.BuiltInSubagentRoleFast}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole(config.BuiltInSubagentRoleFast)}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	planner := Planner{
@@ -1753,7 +1756,7 @@ func TestPlannerResumeFastRoleUsesOpenAIBaseURLForHeuristic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
-	if plan.ActiveSettings.Model != "gpt-5.4-mini" {
+	if plan.ActiveSettings.Model != "gpt-5.6-terra" {
 		t.Fatalf("model = %q, want fast heuristic model", plan.ActiveSettings.Model)
 	}
 	if !plan.ActiveSettings.PriorityRequestMode {
@@ -1776,7 +1779,7 @@ func TestPlannerResumePersistedRoleRejectsContextWindowBelowMinimum(t *testing.T
 	}
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	planner := Planner{
@@ -1810,7 +1813,7 @@ func TestPlannerResumePersistedRoleRejectsReviewerContextWindowBelowMinimum(t *t
 	}
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	planner := Planner{
@@ -1836,7 +1839,7 @@ func TestPlannerResumeRemovedPersistedRoleKeepsBaseSettings(t *testing.T) {
 	loaded := loadLaunchConfig(t, workspace)
 	containerDir := filepath.Join(root, "projects", "project-a", "sessions")
 	store := createTestSessionInContainer(t, containerDir, "workspace-a", workspace)
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "removed"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("removed")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	planner := Planner{
@@ -1906,7 +1909,7 @@ func TestApplyRunPromptOverridesRoleOnlyOverridePersistsContinuation(t *testing.
 		t.Fatalf("openai base url = %q, want worker override", updated.ActiveSettings.OpenAIBaseURL)
 	}
 	got := plan.Store.Meta().Continuation
-	if got == nil || got.OpenAIBaseURL != "https://worker.example/v1" || got.AgentRole != "worker" {
+	if got == nil || got.OpenAIBaseURL != "https://worker.example/v1" || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("worker")) {
 		t.Fatalf("continuation = %+v, want worker base url and agent role", got)
 	}
 }

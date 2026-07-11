@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"core/prompts"
 	"core/server/llm"
 	"core/server/tools"
 	"core/server/workflowruntime"
@@ -181,8 +182,8 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			}
 			for _, entry := range resp.Reasoning {
 				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
-					Visibility: transcript.EntryVisibilityAuto,
-					Role:       entry.Role,
+					Visibility: transcript.EntryVisibilityDetail,
+					Role:       string(transcript.EntryRoleReasoning),
 					Text:       entry.Text,
 				})); err != nil {
 					return stepLoopResult{}, err
@@ -196,6 +197,9 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 		for _, hosted := range hostedToolExecutions {
+			if err := s.publishHostedToolStart(stepID, hosted.Call); err != nil {
+				return stepLoopResult{}, err
+			}
 			if err := e.steer(stepID, steerToolCompletionIntent(hosted.Result)); err != nil {
 				return stepLoopResult{}, err
 			}
@@ -203,6 +207,10 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{msg})); err != nil {
 				return stepLoopResult{}, err
 			}
+		}
+
+		if responseOutputIsReasoningOnly(resp.OutputItems) {
+			continue
 		}
 
 		if len(localToolCalls) == 0 && len(hostedToolExecutions) == 0 {
@@ -321,7 +329,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 				_ = s.publishCommittedAssistantMessage(stepID, resolved, resolvedCommittedStart, resolvedCommittedStartSet)
 			}
 			if reviewerCompletion != nil {
-				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: "reviewer_status", Text: reviewerStatusText(*reviewerCompletion, nil)})); err != nil {
+				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: reviewerStatusEntryRole(*reviewerCompletion), Text: reviewerStatusText(*reviewerCompletion, nil)})); err != nil {
 					return stepLoopResult{}, err
 				}
 				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID, Reviewer: reviewerCompletion}))
@@ -444,6 +452,9 @@ func (s *defaultStepExecutor) workflowDurableCompletionTerminal(ctx context.Cont
 func (s *defaultStepExecutor) appendHostedToolExecutionResults(stepID string, hostedToolExecutions []hostedToolExecution) error {
 	e := s.engine
 	for _, hosted := range hostedToolExecutions {
+		if err := s.publishHostedToolStart(stepID, hosted.Call); err != nil {
+			return err
+		}
 		if err := e.steer(stepID, steerToolCompletionIntent(hosted.Result)); err != nil {
 			return err
 		}
@@ -455,9 +466,22 @@ func (s *defaultStepExecutor) appendHostedToolExecutionResults(stepID string, ho
 	return nil
 }
 
+func (s *defaultStepExecutor) publishHostedToolStart(stepID string, call llm.ToolCall) error {
+	normalized := normalizeToolCallForTranscript(call, s.engine.transcriptWorkingDir())
+	return s.engine.steer(stepID, steerEventIntent(Event{
+		Kind:                       EventToolCallStarted,
+		StepID:                     stepID,
+		ToolCall:                   &normalized,
+		CommittedTranscriptChanged: true,
+	}))
+}
+
 func (s *defaultStepExecutor) handleWorkflowAssistantWithoutTools(ctx context.Context, stepID string, assistantMsg llm.Message) (bool, bool, error) {
 	e := s.engine
 	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
+		return false, false, nil
+	}
+	if assistantMsg.Phase == llm.MessagePhaseFinal && strings.TrimSpace(assistantMsg.Content) == "" {
 		return false, false, nil
 	}
 	outcome, err := s.workflowCompletionAdapter().Evaluate(ctx, assistantMsg)
@@ -522,19 +546,19 @@ func (s *defaultStepExecutor) appendWorkflowInvalidCompletionNudge(ctx context.C
 	if record.Interrupted {
 		return true, nil
 	}
-	content := workflowInvalidNudge
-	if strings.TrimSpace(err.Error()) != "" {
-		content += "\n\n" + err.Error()
-	}
 	instructions, instructionsErr := e.currentWorkflowCompletionInstructions(ctx)
 	if instructionsErr != nil {
 		return false, instructionsErr
 	}
-	if strings.TrimSpace(instructions) != "" {
-		content += "\n\n" + strings.TrimSpace(instructions)
+	goalText := ""
+	goalReminder := ""
+	if objective, reminder, ok := e.goalContinuation().reminderContext(); ok {
+		goalText = objective
+		goalReminder = reminder
 	}
-	if reminder, ok := e.goalContinuation().reminderText(); ok {
-		content += "\n\n" + reminder
+	content, renderErr := prompts.RenderWorkflowNudgePrompt(err.Error(), instructions, goalText, goalReminder)
+	if renderErr != nil {
+		return false, renderErr
 	}
 	return false, e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeErrorFeedback, Content: content}}))
 }

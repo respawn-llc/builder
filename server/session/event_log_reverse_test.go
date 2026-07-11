@@ -86,16 +86,15 @@ func TestReadSegmentBackwardPaginatesSegmentsViaCursor(t *testing.T) {
 
 	for _, chunk := range []int64{1, 5, 13, 1 << 20} {
 		var collected []Event
-		endOffset := int64(0)
 		pages := 0
+		window, err := readNewestSegmentBackwardFile(path, chunk, matchEventKind("history_replaced"))
+		if err != nil {
+			t.Fatalf("chunk=%d: read newest segment: %v", chunk, err)
+		}
 		for {
 			pages++
 			if pages > segments+1 {
 				t.Fatalf("chunk=%d: pagination did not terminate", chunk)
-			}
-			window, err := readSegmentBackwardFile(path, endOffset, chunk, matchEventKind("history_replaced"))
-			if err != nil {
-				t.Fatalf("chunk=%d: read segment: %v", chunk, err)
 			}
 			if len(window.Events) != perSegment {
 				t.Fatalf("chunk=%d: segment returned %d events, want %d", chunk, len(window.Events), perSegment)
@@ -104,7 +103,10 @@ func TestReadSegmentBackwardPaginatesSegmentsViaCursor(t *testing.T) {
 			if window.ReachedStart {
 				break
 			}
-			endOffset = window.StartOffset
+			window, err = readSegmentBackwardFile(path, window.StartOffset, chunk, matchEventKind("history_replaced"))
+			if err != nil {
+				t.Fatalf("chunk=%d: read older segment: %v", chunk, err)
+			}
 		}
 		if pages != segments {
 			t.Fatalf("chunk=%d: paginated %d segments, want %d", chunk, pages, segments)
@@ -202,7 +204,7 @@ func TestReadSegmentForwardAndBackwardAgreeOnBoundaries(t *testing.T) {
 		t.Fatalf("write events file: %v", err)
 	}
 
-	tail, err := readSegmentBackwardFile(path, 0, 1<<20, matchEventKind("history_replaced"))
+	tail, err := readNewestSegmentBackwardFile(path, 1<<20, matchEventKind("history_replaced"))
 	if err != nil {
 		t.Fatalf("read tail: %v", err)
 	}
@@ -292,7 +294,7 @@ func TestReadSegmentBackwardReassemblesAcrossChunksAndToleratesTornTail(t *testi
 	}
 
 	for _, chunk := range []int64{1, 3, 7, 64, 1 << 20} {
-		window, err := readSegmentBackwardFile(path, 0, chunk, matchEventKind("history_replaced"))
+		window, err := readNewestSegmentBackwardFile(path, chunk, matchEventKind("history_replaced"))
 		if err != nil {
 			t.Fatalf("read backward (chunk=%d): %v", chunk, err)
 		}

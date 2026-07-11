@@ -479,6 +479,11 @@ func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMa
 	return resp, c.call(ctx, protocol.MethodSessionGetMainView, req, &resp)
 }
 
+func (c *Remote) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	var resp serverapi.SessionTranscriptPageResponse
+	return resp, c.call(ctx, protocol.MethodSessionGetTranscriptPage, req, &resp)
+}
+
 func (c *Remote) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
 	var resp serverapi.SessionInitialInputResponse
 	return resp, c.call(ctx, protocol.MethodSessionGetInitialInput, req, &resp)

@@ -133,7 +133,7 @@
 - `previous_target` resolves the latest completed run of the target node before the transition event and fails when none exists.
 - `previous_target_or_new` resolves the latest completed run of the target node before the transition event when one exists; otherwise the target run starts with effective `new_session` and no source run/session.
 - Pending approvals freeze context-source resolution before approval. A fallback-to-new result remains effective `new_session` even if another target run completes before approval, and a resolved prior-target source remains fixed even if a newer target run completes before approval.
-- Continuation modes apply the target node's subagent role context. A reused session remains authoritative for immutable contract fields already snapshotted by prior model dispatch.
+- Continuation modes apply the target node's subagent role context. `continue_session` preserves the reused session's contract generation. `compact_and_continue_session` compacts the reused session and establishes a fresh target-node contract generation, including model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
 - `new_session` uses current role config at its fresh context boundary.
 - Consuming agent nodes own required inputs as named top-level string fields with descriptions.
 - Prompt placeholders validate against the consuming node's required inputs through `.Inputs.<name>`.
@@ -166,6 +166,7 @@
 
 - Scheduler has durable inputs in SQLite, but pending scheduler work and active runtime execution are live memory, not durable run states.
 - Runnable work derives from active executable placements with approved automation intent, no terminal run outcome, and no task cancellation.
+- An executable task whose run has not started is `queued`.
 - Pending-work ordering is scheduler memory.
 - Active execution derives from the live runtime registry and scheduler.
 - Concurrency limit is global only and configured in `[workflow].concurrency`.
@@ -182,6 +183,20 @@
 - Run completion and transition application remain one SQLite transaction.
 - Runtime failures, cancellation, crashes, model/runtime interruptions, and fixable scheduling validation blockers converge on interrupted outcome with reason metadata.
 - `failed` is reserved for unrecoverable corrupted orchestration state.
+- Kent does not migrate, reconcile, diagnose, or repair unfinished historical runs owned by completed placements.
+
+## Task Status And Listing
+
+- Task detail, workflow board cards, and paginated task lists use one server-authoritative typed task-status projection derived only from current placements and their runs.
+- Task status is UI-neutral structured data. Clients render and localize status labels.
+- One primary status uses this precedence: canceled, done, waiting for a question, waiting for approval, interrupted, running, queued, backlog, active.
+- The status projection preserves all applicable typed attention kinds and run references even when parallel branches have different conditions.
+- Workflow validity is workflow-level state and is not a task status.
+- Task lists expose typed task status and attention filters. They do not expose a separate coarse run status.
+- CLI `--status` filters typed task status, `--column` filters workflow node keys, and `--attention` filters attention kinds.
+- Either project or workflow task-list scope may be inferred only when exactly one active link is possible. Zero links return a typed not-linked error; multiple links return a typed ambiguity error with the available choices.
+- Explicit workflow selectors are workflow UUIDs. When both project and workflow are supplied, Kent validates their active link.
+- Task-list status sorting follows primary typed-status precedence; column sorting follows workflow column position.
 
 ## Worktrees
 
@@ -294,10 +309,9 @@
 - `kent task start --json` writes exactly one typed result object with an `outcome` discriminator to stdout and nothing to stderr. `selection_required` exits `3`; `in_progress` exits `4`; both skip session polling. Human-readable forms of those outcomes write one concise actionable line to stderr. A successful start exits `0`.
 - Human-readable task details show only execution facts that Kent has recorded; a managed-worktree path is not revalidated on each read. JSON task details expose all available execution-target fields.
 - CLI output must include stable IDs needed by later commands.
-- `kent task list` uses `status` for workflow/Kanban status, backed by current workflow column/node keys such as `backlog`, `recon`, `plan`, and `done`; `--column` is an alias for `--status`, and raw node IDs are not exposed as list filters.
-- `kent task list --run-status` filters the coarse operational states `open`, `running`, `done`, and `canceled`. Human output distinguishes `Status:` (workflow/Kanban status key) from `Run status:` (coarse operational state), and JSON output carries both as structured fields. JSON keeps `status` as a compatibility alias for coarse run status; `run_status` is the canonical coarse field and `status_keys` carries workflow/Kanban status keys.
-- `kent task list` filters and sorts before pagination through server-owned structured request fields. Multiple values for one filter are ORed; different filter types are ANDed. Tasks with multiple active placements match a status filter when any active placement matches, display all current status keys in board order, and sort by the earliest current status order.
-- `kent task list` default ordering is `status:asc,updated:desc`, where `status` uses board column order and `updated` is newest-first. Custom `--sort` accepts ordered `field:direction` selectors for at least `created`, `updated`, `status`, `run_count`, and `title`; selectors can be comma-separated in one flag and may be supplied by repeated flags.
+- `kent task list` exposes one typed task status. `--status` filters primary status, `--attention` filters typed attention, and `--column` filters workflow node keys.
+- `kent task list` filters and sorts before pagination through server-owned structured request fields. Multiple values for one filter are ORed; different filter types are ANDed. Tasks with multiple current placements expose all matching column keys in workflow order.
+- `kent task list` default ordering is `status:asc,updated:desc`, where `status` uses primary typed-status precedence and `updated` is newest-first. Custom `--sort` accepts ordered `field:direction` selectors for `created`, `updated`, `status`, `column`, `run_count`, and `title`; selectors can be comma-separated in one flag and may be supplied by repeated flags.
 - `kent task complete` accepts dynamic parameter flags, repeatable `--param name=value`, and `--json`/`--json-file` completion payload input. JSON input modes print JSON responses.
 - `kent task edit <task>` mutates an existing task's title, body, and source workspace through `UpdateWorkflowTask`. It requires at least one of `--title`/`--body`/`--body-file`/`--source-workspace`, reuses the current title when `--title` is omitted, and is available to agents like `task create` (no human-only gate). `--json` prints the update response.
 - `kent task create` and `kent task edit` accept `--source-workspace` as either a workspace id or a path; a path is resolved through its project binding. An omitted source workspace leaves it unchanged on edit.

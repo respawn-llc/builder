@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"core/shared/sessioncontract"
+	"core/shared/valuecopy"
 	"github.com/google/uuid"
 )
 
@@ -277,10 +278,23 @@ func (s *Store) mutateLockedContractWithCommitStatus(mutator func(*LockedContrac
 	if mutator == nil {
 		return LockedContractMutationResult{}, nil
 	}
-	return s.mutateMetaAndLockedContractWithCommitStatus(nil, mutator, true)
+	return s.mutateMetaAndReplaceLockedContractWithCommitStatus(nil, func(locked *LockedContract) *LockedContract {
+		mutator(locked)
+		return locked
+	}, true)
 }
 
 func (s *Store) mutateMetaAndLockedContractWithCommitStatus(metaMutator func(*Meta), lockedMutator func(*LockedContract), requireLocked bool) (LockedContractMutationResult, error) {
+	if lockedMutator == nil {
+		return s.mutateMetaAndReplaceLockedContractWithCommitStatus(metaMutator, nil, requireLocked)
+	}
+	return s.mutateMetaAndReplaceLockedContractWithCommitStatus(metaMutator, func(locked *LockedContract) *LockedContract {
+		lockedMutator(locked)
+		return locked
+	}, requireLocked)
+}
+
+func (s *Store) mutateMetaAndReplaceLockedContractWithCommitStatus(metaMutator func(*Meta), lockedMutator func(*LockedContract) *LockedContract, requireLocked bool) (LockedContractMutationResult, error) {
 	s.mu.Lock()
 	if requireLocked && s.meta.Locked == nil {
 		s.mu.Unlock()
@@ -293,9 +307,7 @@ func (s *Store) mutateMetaAndLockedContractWithCommitStatus(metaMutator func(*Me
 		metaMutator(&s.meta)
 	}
 	if lockedMutator != nil && s.meta.Locked != nil {
-		next := *s.meta.Locked
-		lockedMutator(&next)
-		s.meta.Locked = &next
+		s.meta.Locked = lockedMutator(cloneLockedContract(s.meta.Locked))
 	}
 	s.meta.UpdatedAt = time.Now().UTC()
 	observation, persistErr := s.persistMetaLocked()
@@ -737,9 +749,13 @@ func (s *Store) SetUsageState(state *UsageState) error {
 }
 
 func (s *Store) SetContinuationContext(ctx ContinuationContext) error {
+	normalized, err := NormalizeContinuationContext(ctx)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 
-	s.meta.Continuation = normalizeContinuationContext(ctx)
+	s.meta.Continuation = normalized
 	s.meta.UpdatedAt = time.Now().UTC()
 	if !s.persisted {
 		s.mu.Unlock()
@@ -749,8 +765,12 @@ func (s *Store) SetContinuationContext(ctx ContinuationContext) error {
 }
 
 func (s *Store) SetContinuationContextAndMarkLockedPromptFacingContractStale(ctx ContinuationContext) (LockedContractMutationResult, error) {
+	normalized, err := NormalizeContinuationContext(ctx)
+	if err != nil {
+		return LockedContractMutationResult{}, err
+	}
 	return s.mutateMetaAndLockedContractWithCommitStatus(func(meta *Meta) {
-		meta.Continuation = normalizeContinuationContext(ctx)
+		meta.Continuation = normalized
 	}, markLockedPromptFacingContractStale, false)
 }
 
@@ -794,6 +814,15 @@ func (s *Store) MarkModelDispatchLocked(contract LockedContract) error {
 		s.meta.UpdatedAt = time.Now().UTC()
 		return nil
 	})
+}
+
+func (s *Store) ResetLockedContractForCompactionBoundary() error {
+	_, err := s.mutateMetaAndReplaceLockedContractWithCommitStatus(func(meta *Meta) {
+		meta.PromptCacheLineageGeneration++
+	}, func(*LockedContract) *LockedContract {
+		return nil
+	}, false)
+	return err
 }
 
 func (s *Store) BackfillLockedContextBudget(contextWindow, contextPercent int) error {
@@ -890,7 +919,7 @@ func (s *Store) RefreshLockedMainPromptSnapshot(snapshot LockedMainPromptSnapsho
 	return s.mutateLockedContractWithCommitStatus(func(locked *LockedContract) {
 		locked.SystemPrompt = strings.TrimSpace(snapshot.SystemPrompt)
 		locked.HasSystemPrompt = snapshot.HasSystemPrompt
-		locked.ToolPreambles = cloneBoolPtr(snapshot.ToolPreambles)
+		locked.ToolPreambles = valuecopy.Pointer(snapshot.ToolPreambles)
 		if snapshot.ContextWindow > 0 {
 			locked.ContextWindow = snapshot.ContextWindow
 		}
@@ -913,14 +942,6 @@ func (s *Store) BackfillLockedRequestShape(fields LockedRequestShapeBackfill) (L
 		locked.HasEnabledTools = fields.HasEnabledTools
 		locked.WebSearchMode = strings.TrimSpace(fields.WebSearchMode)
 	})
-}
-
-func cloneBoolPtr(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	copyValue := *value
-	return &copyValue
 }
 
 func (s *Store) AppendEvent(stepID, kind string, payload any) (Event, bool, error) {
@@ -1039,11 +1060,20 @@ type EventInput struct {
 }
 
 func (s *Store) ReadEventsBackwardUntil(match func(Event) bool) ([]Event, error) {
-	window, err := s.ReadSegmentBackward(0, match)
+	window, err := s.ReadNewestSegmentBackward(match)
 	if err != nil {
 		return nil, err
 	}
 	return window.Events, nil
+}
+
+func (s *Store) ReadNewestSegmentBackward(match func(Event) bool) (SegmentWindow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.persisted {
+		return SegmentWindow{ReachedStart: true, ReachedEnd: true}, nil
+	}
+	return readNewestSegmentBackwardFile(s.eventsFP, activeTailReverseChunkBytes, match)
 }
 
 func (s *Store) ReadSegmentBackward(endOffset int64, match func(Event) bool) (SegmentWindow, error) {
@@ -1112,6 +1142,9 @@ func readMetaFile(path string) (Meta, error) {
 func (s *Store) loadMetaLocked() error {
 	m, err := readMetaFile(s.sessionFP)
 	if err == nil {
+		if err := normalizeMetaContinuation(&m); err != nil {
+			return fmt.Errorf("validate session continuation: %w", err)
+		}
 		s.meta = m
 		return nil
 	}
@@ -1126,6 +1159,9 @@ func (s *Store) loadMetaLocked() error {
 		return fmt.Errorf("%w (resolver fallback returned nil metadata)", err)
 	}
 	s.meta = *record.Meta
+	if err := normalizeMetaContinuation(&s.meta); err != nil {
+		return fmt.Errorf("validate session continuation: %w", err)
+	}
 	return nil
 }
 
@@ -1167,6 +1203,18 @@ func (s *Store) hasDurableMetadataLocked() bool {
 func (s *Store) appendEventsAtomicLockedWithCommitStatus(events []Event) (*persistenceObservation, bool, error) {
 	if err := s.ensurePersistedLocked(); err != nil {
 		return nil, false, err
+	}
+
+	if s.options.filelessEvents {
+		for _, e := range events {
+			s.meta.LastSequence = e.Seq
+		}
+		s.meta.UpdatedAt = time.Now().UTC()
+		snapshot, err := s.persistMetaLocked()
+		if err != nil {
+			return nil, false, err
+		}
+		return snapshot, true, nil
 	}
 
 	if _, err := s.appendEventsLogLocked(events); err != nil {
@@ -1227,15 +1275,6 @@ func (s *Store) observePersistence(observation *persistenceObservation) error {
 		s.mu.Unlock()
 	}
 	return nil
-}
-
-func normalizeContinuationContext(ctx ContinuationContext) *ContinuationContext {
-	openAIBaseURL := strings.TrimSpace(ctx.OpenAIBaseURL)
-	agentRole := strings.TrimSpace(ctx.AgentRole)
-	if openAIBaseURL == "" && agentRole == "" {
-		return nil
-	}
-	return &ContinuationContext{OpenAIBaseURL: openAIBaseURL, AgentRole: agentRole}
 }
 
 func normalizeUsageState(state *UsageState) *UsageState {

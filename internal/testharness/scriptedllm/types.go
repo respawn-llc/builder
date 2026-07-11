@@ -3,6 +3,7 @@ package scriptedllm
 import (
 	"context"
 	"errors"
+	"time"
 
 	"core/server/llm"
 )
@@ -25,6 +26,7 @@ type Step struct {
 	Err                 error
 	Cancel              bool
 	StreamDeltas        []llm.AssistantDelta
+	StreamDeltaDelay    *time.Duration
 	ReasoningDeltas     []llm.ReasoningSummaryDelta
 	ExpectedToolResults []ExpectedToolResult
 	BeforeResponse      func(context.Context) error

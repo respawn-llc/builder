@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"core/shared/clientui"
+
+	"github.com/google/uuid"
 )
 
 type submitDoneMsg struct {
@@ -203,7 +205,15 @@ const (
 	runtimeMainViewRefreshCauseStartupUpdate    runtimeMainViewRefreshCause = "startup_update"
 )
 
-type detailTranscriptLoadMsg struct{}
+type detailTranscriptLoadMsg struct {
+	requestID uuid.UUID
+	page      clientui.TranscriptPage
+	err       error
+}
+
+type terminalSequenceWriteErrMsg struct {
+	err error
+}
 
 type runLoggerDiagnosticMsg struct {
 	diagnostic runLoggerDiagnostic
@@ -257,17 +267,18 @@ type askEventMsg struct {
 type uiStatusNoticeKind uint8
 
 const (
-	uiStatusNoticeNeutral uiStatusNoticeKind = iota
+	uiStatusNoticeInfo uiStatusNoticeKind = iota
 	uiStatusNoticeSuccess
+	uiStatusNoticeWarning
 	uiStatusNoticeError
-	uiStatusNoticeUpdateAvailable
 )
 
 type uiStatusNotice struct {
-	Text     string
-	Kind     uiStatusNoticeKind
-	Duration time.Duration
-	NoticeID string
+	Text      string
+	Kind      uiStatusNoticeKind
+	Duration  time.Duration
+	NoticeID  string
+	RequestID *uuid.UUID
 }
 
 type uiStatusNoticeDelivery uint8

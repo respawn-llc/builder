@@ -89,6 +89,23 @@ func (l *transcriptLiveToolLedger) Snapshot() []TranscriptLiveToolStart {
 	return out
 }
 
+func (l *transcriptLiveToolLedger) Lookup(callID string) (TranscriptLiveToolStart, bool) {
+	if l == nil {
+		return TranscriptLiveToolStart{}, false
+	}
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return TranscriptLiveToolStart{}, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	start, ok := l.inFlight[callID]
+	if !ok {
+		return TranscriptLiveToolStart{}, false
+	}
+	return cloneTranscriptLiveToolStart(start), true
+}
+
 func (l *transcriptLiveToolLedger) Seed(starts []TranscriptLiveToolStart) {
 	if l == nil || len(starts) == 0 {
 		return

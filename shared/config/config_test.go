@@ -429,10 +429,44 @@ func TestNormalizePersistenceRootExpandsTildeAndAbsolutizes(t *testing.T) {
 	}
 }
 
+func TestResolvePersistenceRootUsesFlagThenEnvironmentThenDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	envRoot := filepath.Join(t.TempDir(), "env-root")
+	flagRoot := filepath.Join(t.TempDir(), "flag-root")
+
+	t.Setenv(PersistenceRootEnvName, envRoot)
+	got, err := ResolvePersistenceRoot(flagRoot)
+	if err != nil {
+		t.Fatalf("resolve flag root: %v", err)
+	}
+	if got != flagRoot {
+		t.Fatalf("flag root = %q, want %q", got, flagRoot)
+	}
+
+	got, err = ResolvePersistenceRoot("")
+	if err != nil {
+		t.Fatalf("resolve environment root: %v", err)
+	}
+	if got != envRoot {
+		t.Fatalf("environment root = %q, want %q", got, envRoot)
+	}
+
+	t.Setenv(PersistenceRootEnvName, "")
+	got, err = ResolvePersistenceRoot("")
+	if err != nil {
+		t.Fatalf("resolve default root: %v", err)
+	}
+	wantDefault := filepath.Join(home, ConfigDirName)
+	if got != wantDefault {
+		t.Fatalf("default root = %q, want %q", got, wantDefault)
+	}
+}
+
 func TestLoadSubagentRoleFromFile(t *testing.T) {
 	home, workspace, configPath := newConfigTestFile(t)
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.fast]",
 		"model = \"gpt-5.4-mini\"",
@@ -497,10 +531,38 @@ func TestLoadSubagentRoleMetadataFromFile(t *testing.T) {
 	}
 }
 
+func TestLoadSubagentRoleWorkflowSubagentMetadata(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		want    bool
+		wantSet bool
+	}{
+		{name: "omitted defaults enabled", body: "[subagents.worker]\nmodel = \"gpt-5.4-mini\"\n", want: true},
+		{name: "explicit enabled", body: "[subagents.worker]\nworkflow_subagent = true\nmodel = \"gpt-5.4-mini\"\n", want: true, wantSet: true},
+		{name: "explicit disabled", body: "[subagents.worker]\nworkflow_subagent = false\nmodel = \"gpt-5.4-mini\"\n", wantSet: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, cfg := loadConfigTestFileApp(t, tt.body, LoadOptions{})
+			lookup := LookupSubagentRole(cfg.Settings, " Worker ")
+			if lookup.Status != SubagentRoleLookupPresent {
+				t.Fatalf("role lookup = %q, want present", lookup.Status)
+			}
+			if lookup.Role.WorkflowSubagent != tt.want || lookup.Role.WorkflowSubagentSet != tt.wantSet {
+				t.Fatalf("workflow_subagent metadata = (%t, %t), want (%t, %t)", lookup.Role.WorkflowSubagent, lookup.Role.WorkflowSubagentSet, tt.want, tt.wantSet)
+			}
+			if _, exists := lookup.Role.Sources["workflow_subagent"]; exists {
+				t.Fatalf("workflow_subagent should not be runtime source, got %+v", lookup.Role.Sources)
+			}
+		})
+	}
+}
+
 func TestLoadSubagentRoleRejectsReservedNames(t *testing.T) {
 	for _, reserved := range []string{"default", "none", "self"} {
 		t.Run(reserved, func(t *testing.T) {
-			err := loadConfigTestFileError(t, "[subagents."+reserved+"]\nmodel = \"gpt-5.5\"\n", LoadOptions{})
+			err := loadConfigTestFileError(t, "[subagents."+reserved+"]\nmodel = \"gpt-5.6-sol\"\n", LoadOptions{})
 			if err == nil {
 				t.Fatal("expected reserved role to fail")
 			}
@@ -525,6 +587,10 @@ func TestLoadSubagentRoleRejectsInvalidMetadata(t *testing.T) {
 			var typeErr *SettingsKeyTypeError
 			return errors.As(err, &typeErr) && typeErr.ExpectedType == "boolean"
 		}},
+		{name: "workflow subagent type", body: "[subagents.worker]\nworkflow_subagent = \"no\"\n", match: func(err error) bool {
+			var typeErr *SettingsKeyTypeError
+			return errors.As(err, &typeErr) && typeErr.ExpectedType == "boolean"
+		}},
 		{name: "description length", body: "[subagents.worker]\ndescription = \"" + strings.Repeat("x", MaxSubagentDescriptionChars+1) + "\"\n", match: func(err error) bool {
 			return errors.Is(err, errSubagentDescriptionTooLong)
 		}},
@@ -546,11 +612,12 @@ func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t
 	base := Settings{
 		Timeouts: Timeouts{ModelRequestSeconds: 100},
 		ProviderCapabilities: ProviderCapabilitiesOverride{
-			ProviderID:           "openai",
-			SupportsResponsesAPI: true,
+			ProviderID:                "openai",
+			SupportsResponsesAPI:      true,
+			SupportsProviderVerbosity: true,
 		},
 		Reviewer: ReviewerSettings{
-			Model:          "gpt-5.5",
+			Model:          "gpt-5.6-sol",
 			TimeoutSeconds: 60,
 		},
 	}
@@ -558,9 +625,10 @@ func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t
 	same := SubagentRole{
 		Settings: base,
 		Sources: map[string]string{
-			"timeouts.model_request_seconds":                        "file",
-			"provider_capabilities.supports_responses_api":          "file",
-			"reviewer.model":                                        "file",
+			"timeouts.model_request_seconds":                    "file",
+			"provider_capabilities.supports_responses_api":      "file",
+			"provider_capabilities.supports_provider_verbosity": "file",
+			"reviewer.model": "file",
 			"reviewer.provider_capabilities.supports_responses_api": "file",
 		},
 	}
@@ -580,6 +648,13 @@ func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t
 	changedProvider.Settings.ProviderCapabilities.SupportsResponsesAPI = false
 	if !SubagentRoleHasMeaningfulDiff(base, changedProvider) {
 		t.Fatal("expected provider capability change to be meaningful")
+	}
+
+	changedVerbosityProvider := same
+	changedVerbosityProvider.Settings = base
+	changedVerbosityProvider.Settings.ProviderCapabilities.SupportsProviderVerbosity = false
+	if !SubagentRoleHasMeaningfulDiff(base, changedVerbosityProvider) {
+		t.Fatal("expected provider verbosity capability change to be meaningful")
 	}
 
 	changedReviewer := same
@@ -673,6 +748,72 @@ func TestAvailableSubagentRoleNamesRemainsPresentationOnly(t *testing.T) {
 	}
 }
 
+func TestWorkflowSubagentCallabilityPolicy(t *testing.T) {
+	role := func(agentCallable bool, agentCallableSet bool, workflowSubagent bool, workflowSubagentSet bool) SubagentRole {
+		return SubagentRole{
+			Settings:            Settings{Model: "gpt-5.4-mini"},
+			Sources:             map[string]string{"model": "file"},
+			AgentCallable:       agentCallable,
+			AgentCallableSet:    agentCallableSet,
+			WorkflowSubagent:    workflowSubagent,
+			WorkflowSubagentSet: workflowSubagentSet,
+		}
+	}
+	tests := []struct {
+		name              string
+		context           SubagentInvocationContext
+		workflowSubagents bool
+		roleName          string
+		role              SubagentRole
+		want              bool
+	}{
+		{name: "ordinary ignores workflow switches", context: SubagentInvocationContextOrdinary, roleName: "worker", role: role(true, false, false, true), want: true},
+		{name: "workflow global disabled dominates enabled role", context: SubagentInvocationContextWorkflow, roleName: "worker", role: role(true, false, true, true)},
+		{name: "workflow global enabled permits omitted role metadata", context: SubagentInvocationContextWorkflow, workflowSubagents: true, roleName: "worker", role: role(true, false, false, false), want: true},
+		{name: "workflow global enabled rejects disabled role", context: SubagentInvocationContextWorkflow, workflowSubagents: true, roleName: "worker", role: role(true, false, false, true)},
+		{name: "agent callable false rejects ordinary role", context: SubagentInvocationContextOrdinary, roleName: "worker", role: role(false, true, true, true)},
+		{name: "agent callable false rejects workflow role", context: SubagentInvocationContextWorkflow, workflowSubagents: true, roleName: "worker", role: role(false, true, true, true)},
+		{name: "fast bypasses disabled workflow switches", context: SubagentInvocationContextWorkflow, roleName: BuiltInSubagentRoleFast, role: role(true, false, false, true), want: true},
+		{name: "fast still obeys agent callability", context: SubagentInvocationContextWorkflow, roleName: BuiltInSubagentRoleFast, role: role(false, true, true, true)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			settings := Settings{
+				Workflow: WorkflowSettings{Subagents: tt.workflowSubagents},
+				Subagents: map[string]SubagentRole{
+					tt.roleName: tt.role,
+				},
+			}
+			if got := SubagentRoleCallableInContext(settings, tt.roleName, tt.context); got != tt.want {
+				t.Fatalf("callability = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAvailableCallableSubagentRoleNamesUsesWorkflowPolicy(t *testing.T) {
+	settings := Settings{
+		Workflow: WorkflowSettings{Subagents: true},
+		Subagents: map[string]SubagentRole{
+			"visible": {
+				Settings: Settings{Model: "gpt-5.4-mini"},
+				Sources:  map[string]string{"model": "file"},
+			},
+			"hidden": {
+				Settings:            Settings{Model: "gpt-5.4-mini"},
+				Sources:             map[string]string{"model": "file"},
+				WorkflowSubagentSet: true,
+			},
+		},
+	}
+	if got := strings.Join(AvailableCallableSubagentRoleNames(settings, SubagentInvocationContextOrdinary), ","); got != "fast,hidden,visible" {
+		t.Fatalf("ordinary callable roles = %q, want fast,hidden,visible", got)
+	}
+	if got := strings.Join(AvailableCallableSubagentRoleNames(settings, SubagentInvocationContextWorkflow), ","); got != "fast,visible" {
+		t.Fatalf("workflow callable roles = %q, want fast,visible", got)
+	}
+}
+
 func TestAppendSystemPromptFileFromConfigResolvesConfigRelativePath(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), ConfigDirName, "config.toml")
 	state := configRegistry.defaultState()
@@ -711,7 +852,7 @@ func TestParseSubagentRoleSystemPromptFileResolvesConfigRelativePath(t *testing.
 
 func TestLoadSubagentRoleRejectsNestedSubagentsTable(t *testing.T) {
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.fast]",
 		"thinking_level = \"low\"",
@@ -730,20 +871,24 @@ func TestLoadSubagentRoleRejectsNestedSubagentsTable(t *testing.T) {
 }
 
 func TestLoadSubagentRoleRejectsUnknownKeys(t *testing.T) {
-	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
-		"",
-		"[subagents.fast]",
-		"thinking_level = \"low\"",
-		"unknown_toggle = true",
-	}, "\n")
+	for _, key := range []string{"unknown_toggle", "workflow_subagent_typo"} {
+		t.Run(key, func(t *testing.T) {
+			contents := strings.Join([]string{
+				"model = \"gpt-5.6-sol\"",
+				"",
+				"[subagents.fast]",
+				"thinking_level = \"low\"",
+				key + " = true",
+			}, "\n")
 
-	err := loadConfigTestFileError(t, contents, LoadOptions{})
-	if err == nil {
-		t.Fatal("expected unknown subagent key to fail")
-	}
-	if !unknownSettingsKeyReported(err, "subagents.fast.unknown_toggle") {
-		t.Fatalf("unexpected error: %v", err)
+			err := loadConfigTestFileError(t, contents, LoadOptions{})
+			if err == nil {
+				t.Fatal("expected unknown subagent key to fail")
+			}
+			if !unknownSettingsKeyReported(err, "subagents.fast."+key) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
@@ -849,7 +994,7 @@ func TestLoadCreatesWorktreeBaseDir(t *testing.T) {
 
 func TestLoadSubagentRoleRejectsInvalidValues(t *testing.T) {
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.fast]",
 		"provider_override = \"bogus\"",
@@ -931,7 +1076,7 @@ func TestLoadSubagentRoleRejectsReviewerModelContextWindowExplicitZero(t *testin
 
 func TestLoadSubagentRoleAllowsReviewerAuthNoneToInheritParentBaseURL(t *testing.T) {
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"openai_base_url = \"http://127.0.0.1:8080/v1\"",
 		"",
 		"[subagents.fast.reviewer]",
@@ -947,7 +1092,7 @@ func TestLoadSubagentRoleAllowsReviewerAuthNoneToInheritParentBaseURL(t *testing
 
 func TestLoadSubagentRoleAllowsReviewerAuthNoneWithExplicitFirstPartyBaseURL(t *testing.T) {
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.fast.reviewer]",
 		"auth = \"none\"",
@@ -963,7 +1108,7 @@ func TestLoadSubagentRoleAllowsReviewerAuthNoneWithExplicitFirstPartyBaseURL(t *
 
 func TestLoadSubagentRoleRejectsPersistenceRoot(t *testing.T) {
 	contents := strings.Join([]string{
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.fast]",
 		"persistence_root = \"/tmp/custom\"",
@@ -987,6 +1132,7 @@ func TestSettingsTOMLRoundTripsCapabilityOverrides(t *testing.T) {
 		SupportsRequestInputTokenCount: true,
 		SupportsPromptCacheKey:         true,
 		SupportsServerSideContextEdit:  true,
+		SupportsProviderVerbosity:      true,
 	}
 	toml := settingsTOMLWithRenderingOptions(settings, true, nil, nil)
 
@@ -1017,6 +1163,9 @@ func TestSettingsTOMLRoundTripsCapabilityOverrides(t *testing.T) {
 	}
 	if !state.Settings.ProviderCapabilities.SupportsServerSideContextEdit {
 		t.Fatal("expected supports_server_side_context_edit to round-trip")
+	}
+	if !state.Settings.ProviderCapabilities.SupportsProviderVerbosity {
+		t.Fatal("expected supports_provider_verbosity to round-trip")
 	}
 }
 

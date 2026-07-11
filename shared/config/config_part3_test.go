@@ -156,7 +156,7 @@ func TestLoadOpenAIBaseURLPrecedence(t *testing.T) {
 
 func TestNormalizeSettingsForPersistence_AllowsDisabledThinkingWithReviewerInheritance(t *testing.T) {
 	settings := configRegistry.defaultState().Settings
-	settings.Model = "gpt-5.5"
+	settings.Model = "gpt-5.6-sol"
 	settings.ThinkingLevel = ""
 	settings.Reviewer = ReviewerSettings{
 		Frequency:      "edits",
@@ -170,7 +170,7 @@ func TestNormalizeSettingsForPersistence_AllowsDisabledThinkingWithReviewerInher
 	if err != nil {
 		t.Fatalf("normalize settings for persistence: %v", err)
 	}
-	if normalized.Reviewer.Model != "gpt-5.5" {
+	if normalized.Reviewer.Model != "gpt-5.6-sol" {
 		t.Fatalf("expected reviewer model to inherit main model, got %q", normalized.Reviewer.Model)
 	}
 	if normalized.Reviewer.ThinkingLevel != "" {

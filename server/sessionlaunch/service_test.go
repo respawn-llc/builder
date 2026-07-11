@@ -13,6 +13,7 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -272,7 +273,7 @@ func TestServicePlanSessionDefaultRoleClearDoesNotRequireAuthState(t *testing.T)
 		Config: config.App{
 			WorkspaceRoot:   workspace,
 			PersistenceRoot: t.TempDir(),
-			Settings:        config.Settings{Model: "gpt-5.5"},
+			Settings:        config.Settings{Model: "gpt-5.6-sol"},
 		},
 		ContainerDir: containerDir,
 	}, registry.NewSessionStoreRegistry()).WithAuthStateReader(failingAuthStateReader{})
@@ -296,7 +297,7 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
@@ -330,7 +331,7 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	if err != nil {
 		t.Fatalf("reopen session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != "" {
+	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared agent role", got)
 	}
 }
@@ -344,7 +345,7 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
@@ -366,7 +367,7 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 		ClientRequestID:   "req-1",
 		Mode:              serverapi.SessionLaunchModeInteractive,
 		SelectedSessionID: store.Meta().SessionID,
-		Overrides:         serverapi.RunPromptOverrides{Model: "gpt-5.5"},
+		Overrides:         serverapi.RunPromptOverrides{Model: "gpt-5.6-sol"},
 	})
 	if err == nil {
 		t.Fatal("expected invalid persisted role validation to fail")
@@ -385,7 +386,7 @@ func TestServicePlanSessionInvalidRoleOverridePrecedesPersistedRoleValidation(t 
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)

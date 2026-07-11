@@ -35,7 +35,7 @@ type ProviderErrorReducerFactory func(providerID string) ProviderErrorReducer
 
 type ProviderModelMatcher func(model string) bool
 
-type ProviderTransportVariantResolver func(baseURL string, mode openAIAuthMode) (string, error)
+type ProviderTransportVariantResolver func(baseURL string, mode OpenAIAuthMode) (string, error)
 
 type ProviderVariantContract struct {
 	ProviderID      string
@@ -91,6 +91,7 @@ func providerContracts() []ProviderContract {
 						SupportsNativeWebSearch:        false,
 						SupportsReasoningEncrypted:     false,
 						SupportsServerSideContextEdit:  false,
+						SupportsProviderVerbosity:      false,
 						IsOpenAIFirstParty:             false,
 					},
 					NewErrorReducer: newOpaqueProviderErrorReducer,
@@ -114,6 +115,7 @@ func providerContracts() []ProviderContract {
 						SupportsNativeWebSearch:        true,
 						SupportsReasoningEncrypted:     true,
 						SupportsServerSideContextEdit:  true,
+						SupportsProviderVerbosity:      true,
 						IsOpenAIFirstParty:             true,
 					},
 					NewErrorReducer: newOpenAICompatibleErrorReducer,
@@ -129,6 +131,7 @@ func providerContracts() []ProviderContract {
 						SupportsNativeWebSearch:        false,
 						SupportsReasoningEncrypted:     false,
 						SupportsServerSideContextEdit:  false,
+						SupportsProviderVerbosity:      false,
 						IsOpenAIFirstParty:             false,
 					},
 					NewErrorReducer: newOpenAICompatibleErrorReducer,
@@ -144,6 +147,7 @@ func providerContracts() []ProviderContract {
 						SupportsNativeWebSearch:        true,
 						SupportsReasoningEncrypted:     true,
 						SupportsServerSideContextEdit:  true,
+						SupportsProviderVerbosity:      true,
 						IsOpenAIFirstParty:             true,
 					},
 					NewErrorReducer: newOpenAICompatibleErrorReducer,
@@ -151,10 +155,9 @@ func providerContracts() []ProviderContract {
 			},
 			ModelContracts: []ModelCapabilityContract{
 				{Model: "gpt-5", SupportsReasoningEffort: true, SupportedReasoningEfforts: []string{"low", "medium", "high"}, SupportsReasoningSummary: true, SupportsVerbosity: true, SupportedVerbosityLevels: []string{"low", "medium", "high"}, SupportsVisionInputs: true},
-				// Sourced from the Codex Desktop 0.124 line (`codex-cli 0.124.0-alpha.2`, released as
-				// `rust-v0.124.0` on 2026-04-23) via shared `~/.codex/models_cache.json` and a live
-				// over-limit probe. Do not widen this to 1M based on article text alone.
-				{Model: "gpt-5.5", ContextWindowTokens: 272_000, LargeContextWindowTokens: 272_000, SupportsReasoningEffort: true, SupportedReasoningEfforts: []string{"low", "medium", "high", "xhigh"}, SupportsReasoningSummary: true, SupportsVerbosity: true, SupportedVerbosityLevels: []string{"low", "medium", "high"}, SupportsVisionInputs: true},
+				{Model: "gpt-5.6-sol", ContextWindowTokens: 372_000, LargeContextWindowTokens: 372_000, SupportsReasoningEffort: true, SupportedReasoningEfforts: []string{"low", "medium", "high", "xhigh", "max", "ultra"}, SupportsReasoningSummary: true, SupportsVerbosity: true, SupportedVerbosityLevels: []string{"low", "medium", "high"}, SupportsVisionInputs: true},
+				{Model: "gpt-5.6-terra", ContextWindowTokens: 372_000, LargeContextWindowTokens: 372_000, SupportsReasoningEffort: true, SupportedReasoningEfforts: []string{"low", "medium", "high", "xhigh", "max", "ultra"}, SupportsReasoningSummary: true, SupportsVerbosity: true, SupportedVerbosityLevels: []string{"low", "medium", "high"}, SupportsVisionInputs: true},
+				{Model: "gpt-5.6-luna", ContextWindowTokens: 372_000, LargeContextWindowTokens: 372_000, SupportsReasoningEffort: true, SupportedReasoningEfforts: []string{"low", "medium", "high", "xhigh", "max"}, SupportsReasoningSummary: true, SupportsVerbosity: true, SupportedVerbosityLevels: []string{"low", "medium", "high"}, SupportsVisionInputs: true},
 				{Model: "gpt-5.4", ContextWindowTokens: 272_000, LargeContextWindowTokens: 1_000_000, SupportsReasoningEffort: true, SupportedReasoningEfforts: []string{"low", "medium", "high", "xhigh"}, SupportsReasoningSummary: true, SupportsVerbosity: true, SupportedVerbosityLevels: []string{"low", "medium", "high"}, SupportsVisionInputs: true},
 				{Model: "gpt-5.4-mini", ContextWindowTokens: 272_000, LargeContextWindowTokens: 400_000, SupportsReasoningEffort: true, SupportedReasoningEfforts: []string{"low", "medium", "high", "xhigh"}, SupportsReasoningSummary: true, SupportsVerbosity: true, SupportedVerbosityLevels: []string{"low", "medium", "high"}, SupportsVisionInputs: true},
 				{Model: "gpt-5.4-nano", ContextWindowTokens: 272_000, LargeContextWindowTokens: 400_000, SupportsReasoningEffort: true, SupportedReasoningEfforts: []string{"low", "medium", "high", "xhigh"}, SupportsReasoningSummary: true, SupportsVerbosity: true, SupportedVerbosityLevels: []string{"low", "medium", "high"}, SupportsVisionInputs: false},
@@ -239,6 +242,11 @@ func newOpenAIProviderClient(opts ProviderClientOptions) (Client, error) {
 	if opts.Auth == nil && !allowsAnonymousOpenAIBaseURL(opts.OpenAIBaseURL) {
 		return nil, fmt.Errorf("openai auth provider is required")
 	}
+	transport := newOpenAIHTTPTransport(opts)
+	return newIdleWatchdogClient(NewOpenAIClient(transport), transport.Client.Timeout), nil
+}
+
+func newOpenAIHTTPTransport(opts ProviderClientOptions) *HTTPTransport {
 	transport := NewHTTPTransport(opts.Auth)
 	if opts.Provider != "" {
 		transport.Provider = opts.Provider
@@ -260,7 +268,7 @@ func newOpenAIProviderClient(opts ProviderClientOptions) (Client, error) {
 		transport.ProviderCapabilitiesOverride = &caps
 	}
 	transport.Store = opts.Store
-	return newIdleWatchdogClient(NewOpenAIClient(transport), transport.Client.Timeout), nil
+	return transport
 }
 
 func allowsAnonymousOpenAIBaseURL(baseURL string) bool {

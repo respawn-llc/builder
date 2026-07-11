@@ -8,8 +8,8 @@ import (
 	"core/cli/tui"
 	sharedtheme "core/shared/theme"
 
+	"charm.land/glamour/v2"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	ansi "github.com/charmbracelet/x/ansi"
 )

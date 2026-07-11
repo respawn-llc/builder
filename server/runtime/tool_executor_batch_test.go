@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 func TestPrepareExecutorToolCallsAssignsAskQuestionBatchMetadata(t *testing.T) {
@@ -99,6 +100,126 @@ func TestPrepareExecutorToolCallsRejectsMissingProviderCallID(t *testing.T) {
 	if len(prepared) != 0 {
 		t.Fatalf("prepared calls = %+v, want none", prepared)
 	}
+}
+
+func TestToolResultWithTranscriptPresentationKeepsTypedInput(t *testing.T) {
+	tests := []struct {
+		name                  string
+		call                  llm.ToolCall
+		delta                 *transcript.ToolResultPresentationDelta
+		wantCommand           string
+		wantPatch             bool
+		wantRaw               bool
+		wantTruncated         bool
+		wantMovedToBackground bool
+	}{
+		{
+			name:        "shell command",
+			call:        llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23901", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)},
+			wantCommand: "pwd",
+		},
+		{
+			name:        "raw shell command",
+			call:        llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23902", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"printf raw","raw":true}`)},
+			delta:       &transcript.ToolResultPresentationDelta{RawOutputRequested: true},
+			wantCommand: "printf raw",
+			wantRaw:     true,
+		},
+		{
+			name:          "truncated shell command",
+			call:          llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23903", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"cat large.log"}`)},
+			delta:         &transcript.ToolResultPresentationDelta{OutputTruncated: true},
+			wantCommand:   "cat large.log",
+			wantTruncated: true,
+		},
+		{
+			name:                  "backgrounded shell command",
+			call:                  llm.ToolCall{ID: "0f63b1c2-6b29-4dc0-9b0f-405a92a23907", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"cmd":"sleep 20"}`)},
+			delta:                 &transcript.ToolResultPresentationDelta{MovedToBackground: true},
+			wantCommand:           "sleep 20",
+			wantMovedToBackground: true,
+		},
+		{
+			name: "patch input",
+			call: llm.ToolCall{
+				ID:          "0f63b1c2-6b29-4dc0-9b0f-405a92a23904",
+				Name:        string(toolspec.ToolPatch),
+				Custom:      true,
+				CustomInput: "*** Begin Patch\n*** Add File: a.txt\n+hello\n*** End Patch",
+			},
+			wantPatch: true,
+		},
+		{
+			name: "edit input",
+			call: llm.ToolCall{
+				ID:    "0f63b1c2-6b29-4dc0-9b0f-405a92a23906",
+				Name:  string(toolspec.ToolEdit),
+				Input: json.RawMessage(`{"path":"a.txt","old_string":"hello","new_string":"goodbye"}`),
+			},
+			wantPatch: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := toolResultWithTranscriptPresentation(tools.Result{
+				CallID:            tt.call.ID,
+				Name:              toolspec.ID(tt.call.Name),
+				IsError:           true,
+				Summary:           "failed",
+				PresentationDelta: tt.delta,
+			}, tt.call, t.TempDir())
+
+			if result.Presentation == nil {
+				t.Fatal("tool result presentation is nil")
+			}
+			if result.PresentationDelta != nil {
+				t.Fatalf("tool result presentation delta was not consumed: %+v", result.PresentationDelta)
+			}
+			if tt.wantCommand != "" && result.Presentation.Command != tt.wantCommand {
+				t.Fatalf("presentation command = %q, want %q", result.Presentation.Command, tt.wantCommand)
+			}
+			if tt.wantPatch && result.Presentation.PatchRender == nil {
+				t.Fatal("patch result presentation has no structured patch")
+			}
+			if result.Presentation.RawOutputRequested != tt.wantRaw {
+				t.Fatalf("raw output requested = %t, want %t", result.Presentation.RawOutputRequested, tt.wantRaw)
+			}
+			if result.Presentation.OutputTruncated != tt.wantTruncated {
+				t.Fatalf("output truncated = %t, want %t", result.Presentation.OutputTruncated, tt.wantTruncated)
+			}
+			if result.Presentation.MovedToBackground != tt.wantMovedToBackground {
+				t.Fatalf("backgrounded = %t, want %t", result.Presentation.MovedToBackground, tt.wantMovedToBackground)
+			}
+		})
+	}
+}
+
+func TestLiveToolCompletionBoundaryRejectsHandlerFinalizedPresentation(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected handler-owned finalized presentation to violate the finalization invariant")
+		}
+	}()
+
+	call := llm.ToolCall{
+		ID:    "0f63b1c2-6b29-4dc0-9b0f-405a92a23905",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"command":"pwd"}`),
+	}
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if err := engine.steer("step", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{
+		Role:      llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{call},
+	}})); err != nil {
+		t.Fatalf("persist assistant tool call: %v", err)
+	}
+	engine.finalizeLiveToolCompletion(tools.Result{
+		CallID:       call.ID,
+		Name:         toolspec.ToolExecCommand,
+		Presentation: &transcript.ToolCallMeta{Command: "handler override"},
+	})
 }
 
 func askQuestionInput(t *testing.T, question string) json.RawMessage {

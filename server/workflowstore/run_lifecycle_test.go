@@ -1,6 +1,7 @@
 package workflowstore
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -32,8 +33,170 @@ func TestRecordProtocolViolationInterruptsAtCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InvalidCompletions != 2 || runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != "workflow_protocol_violation_limit" {
+	if len(runs) != 1 || runs[0].InvalidCompletions != 2 || runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != "workflow_protocol_violation_limit" {
 		t.Fatalf("run after cap = %+v", runs)
+	}
+}
+
+func TestResetProtocolViolationBudgetResetsCurrentRunGeneration(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	claimed, err := store.ClaimRun(ctx, started.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if _, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:              started.RunID,
+		Kind:               ProtocolViolationInvalidCompletion,
+		MaxCount:           2,
+		Detail:             `{"detail":"before compaction"}`,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+	}); err != nil {
+		t.Fatalf("RecordProtocolViolation: %v", err)
+	}
+	if err := store.ResetProtocolViolationBudget(ctx, ResetProtocolViolationBudgetRequest{
+		RunID:              started.RunID,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+	}); err != nil {
+		t.Fatalf("ResetProtocolViolationBudget: %v", err)
+	}
+
+	afterReset, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:              started.RunID,
+		Kind:               ProtocolViolationInvalidCompletion,
+		MaxCount:           2,
+		Detail:             `{"detail":"after compaction"}`,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+	})
+	if err != nil {
+		t.Fatalf("RecordProtocolViolation after reset: %v", err)
+	}
+	if afterReset.Count != 1 || afterReset.Interrupted {
+		t.Fatalf("violation after reset = %+v, want count 1 active", afterReset)
+	}
+}
+
+func TestResumeTaskRunsResetsProtocolViolationBudget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+
+	if _, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    started.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"first"}`,
+	}); err != nil {
+		t.Fatalf("RecordProtocolViolation: %v", err)
+	}
+	if err := store.InterruptRun(ctx, started.RunID, "user_interrupt", "{}"); err != nil {
+		t.Fatalf("InterruptRun: %v", err)
+	}
+	if _, err := store.ResumeTaskRuns(ctx, task.ID); err != nil {
+		t.Fatalf("ResumeTaskRuns: %v", err)
+	}
+
+	resumed, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    started.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"after resume"}`,
+	})
+	if err != nil {
+		t.Fatalf("RecordProtocolViolation after resume: %v", err)
+	}
+	if resumed.Count != 1 || resumed.Interrupted {
+		t.Fatalf("violation after resume = %+v, want count 1 active", resumed)
+	}
+}
+
+func TestResumeTaskRunsResetsProtocolViolationBudgetAfterCap(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+
+	capped, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    started.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 1,
+		Detail:   `{"detail":"cap"}`,
+	})
+	if err != nil {
+		t.Fatalf("RecordProtocolViolation: %v", err)
+	}
+	if capped.Count != 1 || !capped.Interrupted {
+		t.Fatalf("capped violation = %+v, want count 1 interrupted", capped)
+	}
+	if _, err := store.ResumeTaskRuns(ctx, task.ID); err != nil {
+		t.Fatalf("ResumeTaskRuns: %v", err)
+	}
+
+	resumed, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    started.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"after cap resume"}`,
+	})
+	if err != nil {
+		t.Fatalf("RecordProtocolViolation after cap resume: %v", err)
+	}
+	if resumed.Count != 1 || resumed.Interrupted {
+		t.Fatalf("violation after cap resume = %+v, want count 1 active", resumed)
+	}
+}
+
+func TestNodeTransitionStartsWithFreshProtocolViolationBudget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+
+	if _, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    started.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"plan attempt"}`,
+	}); err != nil {
+		t.Fatalf("RecordProtocolViolation plan: %v", err)
+	}
+	completeRun(t, ctx, store, CompleteRunRequest{
+		RunID:        started.RunID,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "plan complete"},
+	})
+
+	runs, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	implementation := nodeByKey(t, def, "implement")
+	nextRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementation))
+	if nextRun.InvalidCompletions != 0 {
+		t.Fatalf("new node run invalid completions = %d, want 0; runs=%+v", nextRun.InvalidCompletions, runs)
+	}
+	nextViolation, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    nextRun.ID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"implementation attempt"}`,
+	})
+	if err != nil {
+		t.Fatalf("RecordProtocolViolation implementation: %v", err)
+	}
+	if nextViolation.Count != 1 || nextViolation.Interrupted {
+		t.Fatalf("violation after node transition = %+v, want count 1 active", nextViolation)
 	}
 }
 
@@ -46,8 +209,8 @@ func TestSetRunEffectiveCompletionModePersistsAndRefusesDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimRun: %v", err)
 	}
-	if claimed.EffectiveCompletionMode != "" {
-		t.Fatalf("claimed effective mode = %q, want empty before resolution", claimed.EffectiveCompletionMode)
+	if claimed.EffectiveCompletionMode != nil {
+		t.Fatalf("claimed effective mode = %v, want absent before resolution", claimed.EffectiveCompletionMode)
 	}
 	if err := store.SetRunEffectiveCompletionMode(ctx, started.RunID, claimed.Generation, "invalid"); !errors.Is(err, ErrInvalidEffectiveCompletionMode) {
 		t.Fatalf("SetRunEffectiveCompletionMode invalid error = %v, want ErrInvalidEffectiveCompletionMode", err)
@@ -59,7 +222,7 @@ func TestSetRunEffectiveCompletionModePersistsAndRefusesDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].EffectiveCompletionMode != "shell_command" {
+	if len(runs) != 1 || runs[0].EffectiveCompletionMode == nil || *runs[0].EffectiveCompletionMode != "shell_command" {
 		t.Fatalf("run effective mode = %+v, want shell_command", runs)
 	}
 	if err := store.SetRunEffectiveCompletionMode(ctx, started.RunID, claimed.Generation, "shell_command"); err != nil {
@@ -230,7 +393,7 @@ func TestSetAndClearRunWaitingAskGenerationGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWaitingAskRuns: %v", err)
 	}
-	if len(waiting) != 1 || waiting[0].ID != started.RunID || waiting[0].WaitingAskID != "ask-1" || waiting[0].SessionID != sessionID {
+	if len(waiting) != 1 || waiting[0].ID != started.RunID || waiting[0].WaitingAskID == nil || *waiting[0].WaitingAskID != "ask-1" || waiting[0].SessionID != sessionID {
 		t.Fatalf("waiting runs = %+v", waiting)
 	}
 	if _, err := store.ClaimRun(ctx, started.RunID, claimed.Generation); !errors.Is(err, sql.ErrNoRows) {
@@ -249,7 +412,7 @@ func TestSetAndClearRunWaitingAskGenerationGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if runs[0].WaitingAskID != "" || runs[0].CompletedAt != 0 || runs[0].InterruptedAt != 0 {
+	if runs[0].WaitingAskID != nil || runs[0].CompletedAt != nil || runs[0].InterruptedAt != nil {
 		t.Fatalf("run after clear = %+v", runs[0])
 	}
 }
@@ -313,7 +476,7 @@ func TestInterruptRunGenerationGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns stale: %v", err)
 	}
-	if runs[0].InterruptedAt != 0 {
+	if runs[0].InterruptedAt != nil {
 		t.Fatalf("stale generation interrupted run: %+v", runs[0])
 	}
 	if err := store.InterruptRunGeneration(ctx, started.RunID, claimed.Generation, "current", "{}"); err != nil {
@@ -326,8 +489,49 @@ func TestInterruptRunGenerationGuard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns current: %v", err)
 	}
-	if runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != "current" {
+	if runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != "current" {
 		t.Fatalf("run after interrupt = %+v, want current interruption", runs[0])
+	}
+}
+
+func TestInterruptRunBlankReasonPersistsNull(t *testing.T) {
+	for _, interrupt := range []struct {
+		name string
+		run  func(context.Context, *Store, workflow.RunID, int64) error
+	}{
+		{
+			name: "run",
+			run: func(ctx context.Context, store *Store, runID workflow.RunID, _ int64) error {
+				return store.InterruptRun(ctx, runID, " \t ", "{}")
+			},
+		},
+		{
+			name: "generation",
+			run: func(ctx context.Context, store *Store, runID workflow.RunID, generation int64) error {
+				return store.InterruptRunGeneration(ctx, runID, generation, " \t ", "{}")
+			},
+		},
+	} {
+		t.Run(interrupt.name, func(t *testing.T) {
+			ctx, store, binding := newTestStoreContext(t)
+			createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+			task := createDefaultTask(t, ctx, store, binding.ProjectID)
+			started := startTask(t, ctx, store, task.ID)
+			claimed, err := store.ClaimRun(ctx, started.RunID, 0)
+			if err != nil {
+				t.Fatalf("ClaimRun: %v", err)
+			}
+			if err := interrupt.run(ctx, store, started.RunID, claimed.Generation); err != nil {
+				t.Fatalf("interrupt blank reason: %v", err)
+			}
+			runs, err := store.ListRuns(ctx, task.ID)
+			if err != nil {
+				t.Fatalf("ListRuns: %v", err)
+			}
+			if len(runs) != 1 || runs[0].InterruptedAt == nil || runs[0].InterruptionReason != nil {
+				t.Fatalf("interrupted run = %+v, want interrupted run with nil reason", runs)
+			}
+		})
 	}
 }
 
@@ -356,7 +560,7 @@ func TestResumeTaskRunRequeuesInterruptedRunWithSameSession(t *testing.T) {
 		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
 	}
 	resumed := resumedRuns[0]
-	if resumed.ID != started.RunID || resumed.SessionID != sessionID || resumed.StartedAt != 0 || resumed.InterruptedAt != 0 || resumed.Generation <= claimed.Generation {
+	if resumed.ID != started.RunID || resumed.SessionID != sessionID || resumed.StartedAt != nil || resumed.InterruptedAt != nil || resumed.Generation <= claimed.Generation {
 		t.Fatalf("resumed run = %+v, want same run/session requeued with newer generation", resumed)
 	}
 	runnable, err := store.ListRunnableRuns(ctx, 10)
@@ -424,7 +628,7 @@ func TestResumeTaskRunAllowsDefaultAgentRoleWithoutResolver(t *testing.T) {
 		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
 	}
 	resumed := resumedRuns[0]
-	if resumed.ID != started.RunID || resumed.InterruptedAt != 0 || resumed.StartedAt != 0 {
+	if resumed.ID != started.RunID || resumed.InterruptedAt != nil || resumed.StartedAt != nil {
 		t.Fatalf("resumed run = %+v, want default-role run requeued", resumed)
 	}
 }
@@ -457,7 +661,7 @@ func TestResumeTaskRunCanResumeInterruptedWaitingAskRun(t *testing.T) {
 		t.Fatalf("resumed runs = %+v, want one", resumedRuns)
 	}
 	resumed := resumedRuns[0]
-	if resumed.ID != started.RunID || resumed.WaitingAskID != "" || resumed.InterruptedAt != 0 || resumed.StartedAt != 0 {
+	if resumed.ID != started.RunID || resumed.WaitingAskID != nil || resumed.InterruptedAt != nil || resumed.StartedAt != nil {
 		t.Fatalf("resumed waiting ask run = %+v, want requeued same run without waiting ask", resumed)
 	}
 }
@@ -490,7 +694,7 @@ func TestInterruptTargetsBySessionAndResumeRequeuesAllRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InterruptTaskRuns by session: %v", err)
 	}
-	if len(interrupted) != 1 || interrupted[0].ID != runIDs[0] || interrupted[0].InterruptedAt == 0 {
+	if len(interrupted) != 1 || interrupted[0].ID != runIDs[0] || interrupted[0].InterruptedAt == nil {
 		t.Fatalf("interrupted = %+v, want only %s", interrupted, runIDs[0])
 	}
 	interruptedRest, err := store.InterruptTaskRuns(ctx, task.ID, "", "manual")
@@ -508,7 +712,7 @@ func TestInterruptTargetsBySessionAndResumeRequeuesAllRuns(t *testing.T) {
 		t.Fatalf("resumed = %+v, want both runs", resumed)
 	}
 	for _, run := range resumed {
-		if run.InterruptedAt != 0 || run.StartedAt != 0 {
+		if run.InterruptedAt != nil || run.StartedAt != nil {
 			t.Fatalf("resumed run = %+v, want reset", run)
 		}
 	}

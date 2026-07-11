@@ -379,6 +379,15 @@ func reviewerStatusText(status ReviewerStatus, _ []string) string {
 	return statusText
 }
 
+func reviewerStatusEntryRole(status ReviewerStatus) string {
+	switch strings.TrimSpace(status.Outcome) {
+	case "failed", "followup_failed":
+		return string(transcript.EntryRoleReviewerError)
+	default:
+		return string(transcript.EntryRoleReviewerStatus)
+	}
+}
+
 func reviewerSuggestionsText(suggestions []string) string {
 	if len(suggestions) == 0 {
 		return ""

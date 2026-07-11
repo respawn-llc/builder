@@ -55,6 +55,7 @@ type RuntimeStore interface {
 	ClearRunWaitingAsk(context.Context, workflow.RunID, int64, string) error
 	CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error)
 	RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error)
+	ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
 	InterruptRun(context.Context, workflow.RunID, string, string) error
 	InterruptRunGeneration(context.Context, workflow.RunID, int64, string, string) error
@@ -464,16 +465,33 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 			return launch.SessionPlan{}, nil, err
 		}
 	}
-	warnings := []string{}
-	allowLockedRoleChange := allowLockedWorkflowContinuationRoleChange(plan, overrides)
-	plan, warnings, err = launch.ApplyRunPromptOverridesWithOptions(plan, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
-		AllowLockedAgentRoleChange: allowLockedRoleChange,
-	})
+	if compactAndContinueRequiresFreshContract(input, plan) {
+		if err := plan.Store.ResetLockedContractForCompactionBoundary(); err != nil {
+			return launch.SessionPlan{}, nil, err
+		}
+		plan, err = planner.PlanSession(ctx, launch.SessionRequest{
+			Mode:                                launch.ModeHeadless,
+			SelectedSessionID:                   plan.Store.Meta().SessionID,
+			SkipContinuationAgentRoleValidation: skipPersistedRoleValidation,
+		})
+		if err != nil {
+			return launch.SessionPlan{}, nil, err
+		}
+	}
+	plan, warnings, err := applyWorkflowSessionPromptOverrides(plan, input)
 	if err != nil {
 		return launch.SessionPlan{}, nil, err
 	}
 	planSucceeded = true
 	return plan, warnings, nil
+}
+
+func compactAndContinueRequiresFreshContract(input workflowstore.RunStartContext, plan launch.SessionPlan) bool {
+	if input.ContextMode != workflow.ContextModeCompactAndContinueSession || plan.Store == nil {
+		return false
+	}
+	activeWorkflowSession := plan.Store.Meta().WorkflowSession
+	return activeWorkflowSession == nil || strings.TrimSpace(activeWorkflowSession.RunID) != strings.TrimSpace(string(input.Run.ID))
 }
 
 func allowLockedWorkflowContinuationRoleChange(plan launch.SessionPlan, overrides serverapi.RunPromptOverrides) bool {
@@ -484,11 +502,21 @@ func allowLockedWorkflowContinuationRoleChange(plan launch.SessionPlan, override
 	if err != nil || !roleOverride.Present {
 		return false
 	}
-	currentRole := ""
+	var currentRole *string
 	if plan.Store != nil && plan.Store.Meta().Continuation != nil {
-		currentRole = strings.TrimSpace(plan.Store.Meta().Continuation.AgentRole)
+		currentRole = plan.Store.Meta().Continuation.AgentRole
 	}
-	return currentRole != roleOverride.Role
+	if currentRole == nil {
+		return !roleOverride.Default
+	}
+	return roleOverride.Default || *currentRole != roleOverride.Role
+}
+
+func applyWorkflowSessionPromptOverrides(plan launch.SessionPlan, input workflowstore.RunStartContext) (launch.SessionPlan, []string, error) {
+	overrides := workflowRunPromptOverrides(input.Node.SubagentRole)
+	return launch.ApplyRunPromptOverridesWithOptions(plan, overrides, auth.EmptyState(), launch.RunPromptOverrideOptions{
+		AllowLockedAgentRoleChange: allowLockedWorkflowContinuationRoleChange(plan, overrides),
+	})
 }
 
 type sessionListingMetadata struct {
@@ -580,7 +608,7 @@ func workflowSessionName(input workflowstore.RunStartContext) (string, error) {
 
 func (s *Starter) resolveAndPersistWorkflowCompletionMode(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
 	shellAvailable := toolIDEnabled(plan.EnabledTools, toolspec.ToolExecCommand)
-	if stored := strings.TrimSpace(input.Run.EffectiveCompletionMode); stored != "" {
+	if stored := optionalRunCompletionMode(input.Run.EffectiveCompletionMode); stored != "" {
 		mode, err := workflowruntime.ParseCompletionMode(stored)
 		if err != nil {
 			return "", client, err
@@ -659,6 +687,7 @@ func (s *Starter) workflowProviderCapabilities(ctx context.Context, plan launch.
 
 func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.SessionPlan) (llm.Client, error) {
 	active := plan.ActiveSettings
+	providerCapabilitiesOverride := workflowProviderCapabilitiesOverride(plan)
 	if s.runtimeClientFactory != nil {
 		client, err := s.runtimeClientFactory.NewRuntimeClient(ctx, runtimewire.RuntimeClientRequest{
 			Purpose:        runtimewire.RuntimeClientPurposeWorkflow,
@@ -675,7 +704,7 @@ func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.Ses
 				Store:                        active.Store,
 				ContextWindowTokens:          active.ModelContextWindow,
 				Auth:                         "inherit",
-				ProviderCapabilitiesOverride: workflowProviderCapabilitiesOverridePtr(active.ProviderCapabilities),
+				ProviderCapabilitiesOverride: providerCapabilitiesOverride,
 			},
 		})
 		if err != nil {
@@ -690,11 +719,6 @@ func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.Ses
 	if s.authManager != nil {
 		authProvider = s.authManager
 	}
-	override, _ := llm.ProviderCapabilitiesFromOverride(active.ProviderCapabilities)
-	var overridePtr *llm.ProviderCapabilities
-	if strings.TrimSpace(override.ProviderID) != "" {
-		overridePtr = &override
-	}
 	return llm.NewProviderClient(llm.ProviderClientOptions{
 		Provider:                     llm.Provider(strings.TrimSpace(active.ProviderOverride)),
 		Model:                        active.Model,
@@ -704,12 +728,12 @@ func (s *Starter) newWorkflowProviderClient(ctx context.Context, plan launch.Ses
 		ModelVerbosity:               string(active.ModelVerbosity),
 		Store:                        active.Store,
 		ContextWindowTokens:          active.ModelContextWindow,
-		ProviderCapabilitiesOverride: overridePtr,
+		ProviderCapabilitiesOverride: providerCapabilitiesOverride,
 	})
 }
 
-func workflowProviderCapabilitiesOverridePtr(override config.ProviderCapabilitiesOverride) *llm.ProviderCapabilities {
-	caps, ok := llm.ProviderCapabilitiesFromOverride(override)
+func workflowProviderCapabilitiesOverride(plan launch.SessionPlan) *llm.ProviderCapabilities {
+	caps, ok := llm.ProviderCapabilitiesFromLockedOrOverride(plan.Store.Meta().Locked, plan.ActiveSettings.ProviderCapabilities)
 	if !ok {
 		return nil
 	}
@@ -802,11 +826,6 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 	for _, warning := range warnings {
 		logger.Logf("workflow.runtime.warning %s", warning)
 	}
-	instructions, instructionsErr := BuildWorkflowTaskInstructions(input)
-	if instructionsErr != nil {
-		s.interrupt(context.Background(), req.RunID, req.Generation, ReasonRuntimeFailed, instructionsErr)
-		return
-	}
 	sessionID := plan.Store.Meta().SessionID
 	ownerID := uuid.NewString()
 	var engine *runtime.Engine
@@ -822,6 +841,16 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 		flushRuntimeEventsAfterResolve := func() {
 			runtimeEvents.FlushAfterResolve()
 		}
+		workflowConfig, err := BuildWorkflowRuntimeConfig(
+			input,
+			effectiveMode,
+			s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
+			workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer},
+			s.store,
+		)
+		if err != nil {
+			return sessionruntime.RuntimeBuildResult{}, err
+		}
 		wiring, err := runtimewire.NewRuntimeWiringWithBackground(plan.Store, plan.ActiveSettings, workflowRuntimeEnabledTools(plan.EnabledTools), input.ExecutionRoot.EffectiveRoot, s.authManager, logger, s.background, runtimewire.RuntimeWiringOptions{
 			Headless:                            true,
 			FastMode:                            nil,
@@ -831,15 +860,7 @@ func (s *Starter) run(ctx context.Context, req SchedulerStartRunRequest, input w
 			GlobalConfigDir:                     s.cfg.PersistenceRoot,
 			SkipContinuationAgentRoleValidation: workflowRunPromptOverrides(input.Node.SubagentRole).HasAny(),
 			StepLifecycle:                       runtimewire.NewStepLifecycleSink(sessionID, s.runtimes),
-			WorkflowRun: &workflowruntime.Config{
-				RunID:                        req.RunID,
-				Contract:                     workflowCompletionContract(req, input),
-				CompletionMode:               effectiveMode,
-				MaxInvalidCompletionAttempts: s.cfg.Settings.Workflow.MaxInvalidCompletionAttempts,
-				Controller:                   workflowruntime.StoreController{Store: s.store, AttentionFinalizer: s.attentionFinalizer},
-				TaskCommentCounter:           s.store,
-				Instructions:                 instructions,
-			},
+			WorkflowRun:                         workflowConfig,
 			AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
 				if attention, ok := s.runtimes.(workflowattention.QuestionAttentionRegistry); ok {
 					if err := workflowattention.PrepareSkippedTaskQuestionBatch(attention, input, sessionID, req.RunID, batch, time.Now().UTC()); err != nil {
@@ -1063,10 +1084,10 @@ func workflowInstructionTransitions(options []workflowstore.TransitionOption, tr
 	return out
 }
 
-func workflowCompletionContract(req SchedulerStartRunRequest, input workflowstore.RunStartContext) workflowruntime.CompletionContract {
+func workflowCompletionContractForRun(run workflowstore.RunRecord, input workflowstore.RunStartContext) workflowruntime.CompletionContract {
 	return workflowruntime.CompletionContract{
-		RunID:              req.RunID,
-		ExpectedGeneration: req.Generation,
+		RunID:              run.ID,
+		ExpectedGeneration: run.Generation,
 		RequireGeneration:  true,
 		Transitions:        workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs),
 	}

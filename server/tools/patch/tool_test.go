@@ -290,6 +290,45 @@ func TestParseEditHunksPreservesSoleEndOfFileMarker(t *testing.T) {
 	}
 }
 
+func TestParseHunkHeaderParsesPositionedAndContextHeaders(t *testing.T) {
+	tests := []struct {
+		name    string
+		line    string
+		want    hunkHeader
+		wantErr bool
+	}{
+		{name: "empty context", line: "@@", want: hunkHeader{}},
+		{name: "named context", line: "@@ function body", want: hunkHeader{context: "function body"}},
+		{name: "default counts", line: "@@ -4 +7 @@", want: hunkHeader{hasPosition: true, oldStart: 4, oldCount: 1, newStart: 7, newCount: 1}},
+		{name: "explicit counts", line: "@@ -4,2 +7,3 @@ section", want: hunkHeader{hasPosition: true, oldStart: 4, oldCount: 2, newStart: 7, newCount: 3}},
+		{name: "zero counts", line: "@@ -0,0 +1,0 @@", want: hunkHeader{hasPosition: true, oldStart: 0, oldCount: 0, newStart: 1, newCount: 0}},
+		{name: "missing terminator", line: "@@ -1 +1", wantErr: true},
+		{name: "missing old start", line: "@@ - +1 @@", wantErr: true},
+		{name: "missing old count", line: "@@ -1, +1 @@", wantErr: true},
+		{name: "missing new start", line: "@@ -1 + @@", wantErr: true},
+		{name: "invalid terminator suffix", line: "@@ -1 +1 @@section", wantErr: true},
+		{name: "overflow", line: "@@ -999999999999999999999999999999 +1 @@", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseHunkHeader(tc.line)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parseHunkHeader(%q) = %+v, want error", tc.line, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseHunkHeader(%q): %v", tc.line, err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseHunkHeader(%q) = %+v, want %+v", tc.line, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestUpdateFileRejectsEmptyHunk(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "a.txt")

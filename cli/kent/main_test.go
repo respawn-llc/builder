@@ -19,6 +19,7 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
 	serverstartup "core/server/startup"
 	"core/shared/config"
@@ -201,7 +202,7 @@ func TestRootCommandContinueAgentRejectsLockedRoleChange(t *testing.T) {
 		t.Fatalf("config.Load: %v", err)
 	}
 	reviewerSettings := cfg.Settings
-	reviewerSettings.Model = "gpt-5.5"
+	reviewerSettings.Model = "gpt-5.6-sol"
 	workerSettings := cfg.Settings
 	workerSettings.Model = "gpt-5.4-mini"
 	cfg.Settings.Subagents = map[string]config.SubagentRole{
@@ -225,10 +226,10 @@ func TestRootCommandContinueAgentRejectsLockedRoleChange(t *testing.T) {
 	if err := store.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable: %v", err)
 	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "reviewer"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("reviewer")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
-	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 	service := sessionlaunch.NewService(launch.Planner{

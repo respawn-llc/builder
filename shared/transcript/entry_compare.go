@@ -76,7 +76,8 @@ func ToolCallMetaEqual(left, right *ToolCallMeta) bool {
 		normalizedLeft.RecommendedOptionIndex == normalizedRight.RecommendedOptionIndex &&
 		normalizedLeft.OmitSuccessfulResult == normalizedRight.OmitSuccessfulResult &&
 		normalizedLeft.RawOutputRequested == normalizedRight.RawOutputRequested &&
-		normalizedLeft.OutputTruncated == normalizedRight.OutputTruncated
+		normalizedLeft.OutputTruncated == normalizedRight.OutputTruncated &&
+		normalizedLeft.MovedToBackground == normalizedRight.MovedToBackground
 }
 
 func toolCallMetaEmpty(meta ToolCallMeta) bool {
@@ -98,7 +99,8 @@ func toolCallMetaEmpty(meta ToolCallMeta) bool {
 		meta.RecommendedOptionIndex == 0 &&
 		!meta.OmitSuccessfulResult &&
 		!meta.RawOutputRequested &&
-		!meta.OutputTruncated
+		!meta.OutputTruncated &&
+		!meta.MovedToBackground
 }
 
 func toolRenderHintsEqual(left, right *ToolRenderHint) bool {

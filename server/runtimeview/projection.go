@@ -8,7 +8,7 @@ import (
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/transcript"
-	patchformat "core/shared/transcript/patchformat"
+	"core/shared/valuecopy"
 )
 
 const runtimeNoopFinalToken = "NO_OP"
@@ -162,7 +162,7 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 	}
 	if evt.Background != nil {
 		view.Background = &clientui.BackgroundShellEvent{
-			Type:              evt.Background.Type,
+			Type:              string(evt.Background.Type),
 			ID:                evt.Background.ID,
 			State:             evt.Background.State,
 			Command:           evt.Background.Command,
@@ -171,7 +171,7 @@ func EventFromRuntime(evt runtime.Event) clientui.Event {
 			NoticeText:        evt.Background.NoticeText,
 			CompactText:       evt.Background.CompactText,
 			Preview:           evt.Background.Preview,
-			Removed:           evt.Background.Removed,
+			Removed:           evt.Background.PreviewRemoved,
 			UserRequestedKill: evt.Background.UserRequestedKill,
 			NoticeSuppressed:  evt.Background.NoticeSuppressed,
 		}
@@ -273,6 +273,7 @@ func cloneToolCallMeta(meta *transcript.ToolCallMeta) *clientui.ToolCallMeta {
 		OmitSuccessfulResult:   meta.OmitSuccessfulResult,
 		RawOutputRequested:     meta.RawOutputRequested,
 		OutputTruncated:        meta.OutputTruncated,
+		MovedToBackground:      meta.MovedToBackground,
 	}
 	if len(meta.Suggestions) > 0 {
 		copyMeta.Suggestions = append([]string(nil), meta.Suggestions...)
@@ -286,31 +287,7 @@ func cloneToolCallMeta(meta *transcript.ToolCallMeta) *clientui.ToolCallMeta {
 		}
 	}
 	if meta.PatchRender != nil {
-		copyMeta.PatchRender = cloneRenderedPatch(meta.PatchRender)
+		copyMeta.PatchRender = valuecopy.RenderedPatch(meta.PatchRender)
 	}
 	return copyMeta
-}
-
-func cloneRenderedPatch(in *patchformat.RenderedPatch) *patchformat.RenderedPatch {
-	if in == nil {
-		return nil
-	}
-	out := &patchformat.RenderedPatch{}
-	if len(in.Files) > 0 {
-		out.Files = make([]patchformat.RenderedFile, 0, len(in.Files))
-		for _, file := range in.Files {
-			copyFile := file
-			if len(file.Diff) > 0 {
-				copyFile.Diff = append([]string(nil), file.Diff...)
-			}
-			out.Files = append(out.Files, copyFile)
-		}
-	}
-	if len(in.SummaryLines) > 0 {
-		out.SummaryLines = append([]patchformat.RenderedLine(nil), in.SummaryLines...)
-	}
-	if len(in.DetailLines) > 0 {
-		out.DetailLines = append([]patchformat.RenderedLine(nil), in.DetailLines...)
-	}
-	return out
 }

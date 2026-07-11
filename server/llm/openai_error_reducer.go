@@ -29,7 +29,7 @@ func newOpaqueProviderErrorReducer(providerID string) ProviderErrorReducer {
 }
 
 func (r openAICompatibleErrorReducer) Reduce(err error, rawResp *http.Response) (*ProviderAPIError, bool) {
-	if reduced, ok := r.reduceFromStreamError(err); ok {
+	if reduced, ok := r.reduceFromStreamError(err, newOpenAIResponseStatus(rawResp)); ok {
 		return reduced, true
 	}
 	if reduced, ok := r.reduceFromSDK(err); ok {
@@ -59,29 +59,32 @@ func (r opaqueProviderErrorReducer) Reduce(err error, rawResp *http.Response) (*
 	return nil, false
 }
 
-func (r openAICompatibleErrorReducer) reduceFromStreamError(err error) (*ProviderAPIError, bool) {
+func (r openAICompatibleErrorReducer) reduceFromStreamError(err error, responseStatus *openAIResponseStatus) (*ProviderAPIError, bool) {
 	if err == nil {
+		return nil, false
+	}
+	if responseStatus == nil {
 		return nil, false
 	}
 	var streamErr *ssestream.StreamError
 	if !errors.As(err, &streamErr) {
 		return nil, false
 	}
-	reduced, ok := mapOpenAIStreamErrorPayload(r.providerID, streamErr.Event.Data, err)
+	reduced, ok := mapOpenAIStreamErrorPayload(r.providerID, streamErr.Event.Data, err, responseStatus.Code)
 	if !ok {
 		return nil, false
 	}
 	return reduced, true
 }
 
-func mapOpenAIStreamErrorPayload(providerID string, data []byte, cause error) (*ProviderAPIError, bool) {
+func mapOpenAIStreamErrorPayload(providerID string, data []byte, cause error, statusCode int) (*ProviderAPIError, bool) {
 	payload, ok := decodeOpenAIStreamErrorPayload(data)
 	if !ok {
 		return nil, false
 	}
 	return mapOpenAIProviderErrorContract(
 		providerID,
-		0,
+		statusCode,
 		payload.Code,
 		payload.Type,
 		payload.Param,
@@ -211,6 +214,9 @@ func decodeOpenAIStreamErrorPayload(data []byte) (openAIStreamErrorPayload, bool
 			Message string `json:"message"`
 		} `json:"error"`
 		Response struct {
+			IncompleteDetails struct {
+				Reason string `json:"reason"`
+			} `json:"incomplete_details"`
 			Error struct {
 				Type    string `json:"type"`
 				Code    string `json:"code"`
@@ -222,8 +228,9 @@ func decodeOpenAIStreamErrorPayload(data []byte) (openAIStreamErrorPayload, bool
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return openAIStreamErrorPayload{}, false
 	}
+	eventType := strings.TrimSpace(envelope.Type)
 	payload := openAIStreamErrorPayload{
-		Type:    strings.TrimSpace(envelope.Type),
+		Type:    eventType,
 		Code:    strings.TrimSpace(envelope.Code),
 		Param:   strings.TrimSpace(envelope.Param),
 		Message: strings.TrimSpace(envelope.Message),
@@ -242,6 +249,17 @@ func decodeOpenAIStreamErrorPayload(data []byte) (openAIStreamErrorPayload, bool
 			Code:    strings.TrimSpace(envelope.Response.Error.Code),
 			Param:   strings.TrimSpace(envelope.Response.Error.Param),
 			Message: strings.TrimSpace(envelope.Response.Error.Message),
+		}
+	}
+	if eventType == "response.incomplete" {
+		reason := strings.TrimSpace(envelope.Response.IncompleteDetails.Reason)
+		if reason != "" {
+			payload = openAIStreamErrorPayload{
+				Type:    eventType,
+				Code:    reason,
+				Param:   "response.incomplete_details.reason",
+				Message: "response incomplete: " + reason,
+			}
 		}
 	}
 	if payload.Code == "" && payload.Message == "" {

@@ -18,6 +18,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -34,7 +35,7 @@ const (
 	commentaryWithoutToolCallsWarning = "You sent a commentary-channel message without tool calls. This is wrong. If you intend to keep working, include tool calls with commentary updates. If you are done, send a final-channel message with no tool calls."
 	finalWithoutContentWarning        = "You sent a final-channel message with empty content- this is wrong. If you are done, send a non-empty final message. If you intend to keep working, send a commentary-channel message with tool calls. If you actually wanted to just stay silent, send exactly 'NO_OP' as the final response."
 	goalNoopFinalWarning              = "Unfortunately NO_OP is not available when goal is active to prevent stalling indefinitely. Please use write_stdin polls instead if you want to wait for something"
-	reviewerNoopToken                 = "NO_OP"
+	reviewerNoopToken                 = transcript.NoopFinalToken
 	reviewerMetaBoundaryMessage       = "End of meta information. Transcript begins starting with next message. Below is NOT YOUR conversation, but another agent's transcript.\n-------"
 )
 
@@ -981,12 +982,18 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 			}
 			return resp, nil
 		}
+		resetAttempt := func() {
+			if (attemptEmitted || reasoningEmitted) && onAttemptReset != nil {
+				onAttemptReset()
+			}
+		}
 		if llm.IsNonRetriableModelError(attemptErr) || llm.IsContextLengthOverflowError(attemptErr) {
+			if !llm.HasHTTPStatus(attemptErr, 400) {
+				resetAttempt()
+			}
 			return llm.Response{}, attemptErr
 		}
-		if (attemptEmitted || reasoningEmitted) && onAttemptReset != nil {
-			onAttemptReset()
-		}
+		resetAttempt()
 		lastErr = attemptErr
 		delays := generateRetryDelays
 		if errors.Is(attemptErr, llm.ErrModelStreamStalled) {

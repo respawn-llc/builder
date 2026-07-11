@@ -34,29 +34,6 @@ const statusToastHarness = vi.hoisted(() => ({
   notices: new Map<string, StatusNotice>(),
 }));
 
-const selectionRequiredResponse = {
-  outcome: "selection_required",
-  selection_required: {
-    task_id: "task-1",
-    generation: "generation-1",
-    source_workspace_id: "workspace-1",
-    source: { kind: "named_ref", named_ref: "refs/heads/main", commit: "abc123" },
-    supported_selections: ["none", "head"],
-    configured_policy: { mode: "ask" },
-  },
-};
-
-const approvedResponse = {
-  outcome: "approved",
-  approved: {
-    transition_id: "transition-1",
-    task_id: "task-1",
-    state: "approved",
-    placement_ids: ["placement-1"],
-    run_ids: ["run-1"],
-  },
-};
-
 vi.mock("../../ui", async (importOriginal) => {
   const actual = await importOriginal<typeof uiModule>();
   return {
@@ -88,17 +65,7 @@ describe("TaskDetailSurface", () => {
         { method: "workflow.task.activity.list", result: activityResponse },
         { method: "ask.listPendingBySession", result: pendingAskResponse },
         { method: "workflow.task.question.answer", result: {} },
-        {
-          method: "workflow.task.approve",
-          result: {
-            outcome: "approved",
-            approved: {
-              transition_id: "transition-1",
-              task_id: "task-1",
-              state: "approved",
-            },
-          },
-        },
+        { method: "workflow.task.approve", result: {} },
         { method: "workflow.task.comment.add", result: commentAddResponse },
         { method: "workflow.task.comment.replace", result: {} },
       ],
@@ -140,9 +107,7 @@ describe("TaskDetailSurface", () => {
     await waitFor(() => {
       const params = callParams(services.transport.calls, "workflow.task.approve");
       expect(params.task_transition_id).toBe("transition-1");
-      expect(
-        services.transport.calls.find((call) => call.method === "workflow.task.approve")?.options,
-      ).toEqual({
+      expect(services.transport.calls.find((call) => call.method === "workflow.task.approve")?.options).toEqual({
         timeoutMs: null,
       });
     });
@@ -178,147 +143,33 @@ describe("TaskDetailSurface", () => {
     });
   });
 
-  it("retries an approval with the server-issued execution-target selection", async () => {
+  it("renders queued task status from the typed server status", async () => {
     window.history.pushState(null, "", "/tasks/task-1");
     const services = createTestServices([
       ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponse },
-      { method: "workflow.task.comment.list", result: commentListResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
       {
-        method: "workflow.task.approve",
-        handler(_params, callIndex) {
-          if (callIndex === 0) {
-            return selectionRequiredResponse;
-          }
-          return approvedResponse;
-        },
-      },
-    ]);
-
-    render(<App services={services} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
-    expect(await screen.findByRole("dialog", { name: "Choose execution target" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    await waitFor(() => {
-      const approveCalls = services.transport.calls.filter((call) => call.method === "workflow.task.approve");
-      expect(approveCalls).toHaveLength(2);
-      expect(approveCalls[1]?.params).toMatchObject({
-        task_transition_id: "transition-1",
-        selection_generation: "generation-1",
-        selection: { mode: "none" },
-      });
-    });
-  });
-
-  it("leaves an approval untouched when execution-target selection is dismissed", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponse },
-      { method: "workflow.task.comment.list", result: commentListResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      { method: "workflow.task.approve", result: selectionRequiredResponse },
-    ]);
-
-    render(<App services={services} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
-    const dialog = await screen.findByRole("dialog", { name: "Choose execution target" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
-
-    await waitFor(() => {
-      expect(services.transport.calls.filter((call) => call.method === "workflow.task.approve")).toHaveLength(1);
-    });
-  });
-
-  it("does not report approval applied while execution-target materialization is in progress", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailResponse },
-      { method: "workflow.task.comment.list", result: commentListResponse },
-      { method: "workflow.task.activity.list", result: activityResponse },
-      {
-        method: "workflow.task.approve",
+        method: "workflow.task.get",
         result: {
-          outcome: "in_progress",
-          in_progress: { task_id: "task-1", phase: "materializing" },
+          ...taskDetailNoInboxResponse,
+          task: {
+            ...taskDetailNoInboxResponse.task,
+            status: {
+              attention_types: [],
+              kind: "queued",
+              native_state: "queued",
+              node_ids: ["node-1"],
+              run_ids: ["run-1"],
+            },
+          },
         },
       },
-    ]);
-
-    render(<App services={services} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
-    await waitFor(() => {
-      expect(services.transport.calls.filter((call) => call.method === "workflow.task.approve")).toHaveLength(1);
-    });
-    expect(screen.queryByRole("dialog", { name: "Choose execution target" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
-  });
-
-  it.each([
-    {
-      target: {
-        policy: "head",
-        source: { kind: "named_ref", named_ref: "refs/heads/main", commit: "0123456789abcdef" },
-      },
-      values: ["HEAD", "refs/heads/main", "0123456789abcdef"],
-    },
-    {
-      target: {
-        policy: "custom_ref",
-        custom_ref: "refs/tags/v1.2.3",
-        source: { kind: "detached_commit", commit: "fedcba9876543210" },
-      },
-      values: ["Custom ref", "refs/tags/v1.2.3", "fedcba9876543210"],
-    },
-  ])("renders locked execution-target facts", async ({ target, values }) => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const services = createTestServices([
-      ...startupRoutes,
-      { method: "workflow.task.get", result: taskDetailWithExecutionTarget(target) },
       { method: "workflow.task.comment.list", result: commentListResponse },
       { method: "workflow.task.activity.list", result: activityResponse },
     ]);
 
     render(<App services={services} />);
 
-    await screen.findByRole("textbox", { name: "Description" });
-    for (const value of values) {
-      expect(screen.getByText(value)).toBeInTheDocument();
-    }
-  });
-
-  it("copies a locked execution-target fact through the native clipboard bridge", async () => {
-    window.history.pushState(null, "", "/tasks/task-1");
-    const copied: string[] = [];
-    const services = createTestServices(
-      [
-        ...startupRoutes,
-        {
-          method: "workflow.task.get",
-          result: taskDetailWithExecutionTarget({
-            policy: "custom_ref",
-            custom_ref: "refs/tags/v1.2.3",
-            source: { kind: "detached_commit", commit: "fedcba9876543210" },
-          }),
-        },
-        { method: "workflow.task.comment.list", result: commentListResponse },
-        { method: "workflow.task.activity.list", result: activityResponse },
-      ],
-      nativeBridgeWithClipboard(copied),
-    );
-
-    render(<App services={services} />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "fedcba9876543210" }));
-    await waitFor(() => {
-      expect(copied).toEqual(["fedcba9876543210"]);
-    });
+    expect(await screen.findByText("Queued")).toBeInTheDocument();
   });
 
   it("opens script files through native file capabilities without exposing CLI sessions", async () => {
@@ -903,13 +754,4 @@ function nativeBridgeWithFiles({
 
 function toastCount(): number {
   return statusToastHarness.notices.size;
-}
-
-function taskDetailWithExecutionTarget(executionTarget: Readonly<Record<string, unknown>>) {
-  return {
-    task: {
-      ...taskDetailResponse.task,
-      execution_target: executionTarget,
-    },
-  };
 }

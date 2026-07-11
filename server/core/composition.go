@@ -346,7 +346,7 @@ func (p workflowApprovalProjection) InterruptedRunProjection(ctx context.Context
 	if err != nil {
 		return workflowattention.InterruptedRunProjection{}, false, err
 	}
-	if !workflowattention.ShouldNotifyInterruptedRun(run.InterruptionReason) {
+	if run.InterruptionReason == nil || run.InterruptedAt == nil || !workflowattention.ShouldNotifyInterruptedRun(*run.InterruptionReason) {
 		return workflowattention.InterruptedRunProjection{}, false, nil
 	}
 	if projection, ok, err := p.interruptedRunAttentionProjection(ctx, run); err != nil || ok {
@@ -364,8 +364,8 @@ func (p workflowApprovalProjection) InterruptedRunProjection(ctx context.Context
 		TaskTitle:        input.Task.Title,
 		RunID:            run.ID,
 		SessionID:        run.SessionID,
-		Reason:           run.InterruptionReason,
-		OccurredAtUnixMs: run.InterruptedAt,
+		Reason:           *run.InterruptionReason,
+		OccurredAtUnixMs: *run.InterruptedAt,
 	}, true, nil
 }
 
@@ -387,7 +387,7 @@ func (p workflowApprovalProjection) interruptedRunAttentionProjection(ctx contex
 			RunID:            run.ID,
 			SessionID:        item.SessionID,
 			Message:          item.Message,
-			Reason:           run.InterruptionReason,
+			Reason:           *run.InterruptionReason,
 			OccurredAtUnixMs: item.OccurredAtUnixMs,
 		}, true, nil
 	}

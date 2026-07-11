@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "id": "528bbb92-68a6-42df-9757-4dc2f7ddaf02",
+  "dimensions": {"rows": 40, "cols": 120},
+  "model_operations": [
+    {
+      "id": "21f6bfca-b2e6-4b9e-b9d0-1fe16e139a11",
+      "route": "responses",
+      "probe": "6fb17b47-d43a-43e8-9d25-8504410b0e19",
+      "outcome": "stream",
+      "output": "ok",
+      "session_cache_key": true
+    }
+  ],
+  "actions": [
+    {"id": "3eef690d-6a95-4262-84e0-ae16767730c1", "kind": "wait", "predicate": {"kind": "prompt_ready"}},
+    {"id": "5504a337-2fc4-40c8-b15e-8f1521bd12ef", "kind": "enter_input", "input": "6fb17b47-d43a-43e8-9d25-8504410b0e19"},
+    {"id": "63ddf485-a247-4811-9d47-3a3c73f11fa9", "kind": "submit_prompt"},
+    {"id": "ae74c8b5-2c25-47bd-afc4-4c512eb3e4e6", "kind": "wait", "predicate": {"kind": "model_consumed"}},
+    {"id": "6db24d3f-835a-4cc1-ae24-d82658faf5e3", "kind": "terminate_process"},
+    {"id": "97876cf3-16a8-4a4e-a208-dc70c538ecc3", "kind": "wait_exit"}
+  ]
+}

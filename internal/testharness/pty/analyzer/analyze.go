@@ -1,64 +1,79 @@
 package analyzer
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
-
-	"github.com/gdamore/tcell/v3/vt"
 )
 
 func Analyze(capture Capture) (Analysis, error) {
-	backend := newTracingBackend(capture.Dimensions)
-	emulator := vt.NewEmulator(backend)
-	if err := emulator.Start(); err != nil {
-		return Analysis{}, fmt.Errorf("start terminal emulator: %w", err)
-	}
-	defer func() {
-		_ = emulator.Stop()
-	}()
-
-	offset := int64(0)
-	sideChannel := newSequenceSideChannel(backend)
-	resizeIndex := 0
-	for resizeIndex < len(capture.Resizes) && capture.Resizes[resizeIndex].Placement.Kind == ResizeBeforeFirstChunk {
-		resize := capture.Resizes[resizeIndex]
-		backend.resize(resize.Dimensions, resize.At)
-		emulator.ResizeEvent(vt.Coord{X: vt.Col(resize.Dimensions.Cols), Y: vt.Row(resize.Dimensions.Rows)})
-		resizeIndex++
-	}
-	for _, chunk := range capture.Chunks {
-		backend.beginChunk(chunk, offset)
-		for i, b := range chunk.Payload {
-			absoluteOffset := offset + int64(i)
-			backend.beginByte(chunk, absoluteOffset)
-			sideChannel.advance(b, chunk, absoluteOffset)
-			if _, err := emulator.Write([]byte{b}); err != nil {
-				return Analysis{}, fmt.Errorf("analyze chunk %d at byte offset %d: %w", chunk.Index, absoluteOffset, err)
-			}
-		}
-		offset += int64(len(chunk.Payload))
-		for resizeIndex < len(capture.Resizes) && capture.Resizes[resizeIndex].Placement.Kind == ResizeAfterChunk && capture.Resizes[resizeIndex].Placement.ChunkIndex == chunk.Index {
-			resize := capture.Resizes[resizeIndex]
-			backend.resize(resize.Dimensions, resize.At)
-			emulator.ResizeEvent(vt.Coord{X: vt.Col(resize.Dimensions.Cols), Y: vt.Row(resize.Dimensions.Rows)})
-			resizeIndex++
-		}
-	}
-	if err := emulator.Drain(); err != nil {
-		return Analysis{}, fmt.Errorf("drain terminal emulator: %w", err)
-	}
-	if err := sideChannel.error(); err != nil {
+	normalized, err := normalizeReplayCapture(capture)
+	if err != nil {
 		return Analysis{}, err
 	}
-	privateModeChanges := sideChannel.privateModeChangeLog()
-	screen := backend.snapshot()
-	return Analysis{
-		Dimensions:         screen.Dimensions,
-		Operations:         mergePrivateModeOperations(backend.operations(), privateModeChanges),
-		PrivateModeChanges: privateModeChanges,
-		PhaseEvents:        sideChannel.phaseEventLog(),
-		Screen:             screen,
-	}, nil
+	capture = normalized
+	stream, err := NewStream(capture.Dimensions)
+	if err != nil {
+		return Analysis{}, err
+	}
+	finished := false
+	defer func() {
+		if !finished {
+			_, _ = stream.Finish()
+		}
+	}()
+	finish := func() (Analysis, error) {
+		finished = true
+		return stream.Finish()
+	}
+	resizeIndex := 0
+	applyResizes := func(offset int64, source Chunk) error {
+		for resizeIndex < len(capture.Resizes) && *capture.Resizes[resizeIndex].Offset == offset {
+			resize := capture.Resizes[resizeIndex]
+			if err := stream.ResizeFrom(resize.Dimensions, source, resize.At); err != nil {
+				return fmt.Errorf("apply replay resize at offset %d: %w", offset, err)
+			}
+			resizeIndex++
+		}
+		return nil
+	}
+	var offset int64
+	for _, chunk := range capture.Chunks {
+		for _, b := range chunk.Payload {
+			if err := applyResizes(offset, chunk); err != nil {
+				return Analysis{}, err
+			}
+			if err := stream.FeedChunk(Chunk{Index: chunk.Index, At: chunk.At, Payload: []byte{b}}); err != nil {
+				return Analysis{}, err
+			}
+			offset++
+		}
+	}
+	source := Chunk{}
+	if len(capture.Chunks) > 0 {
+		source = capture.Chunks[len(capture.Chunks)-1]
+	}
+	if err := applyResizes(offset, source); err != nil {
+		return Analysis{}, err
+	}
+	if resizeIndex != len(capture.Resizes) {
+		return Analysis{}, fmt.Errorf("resize event %d has invalid observer offset %d for %d bytes", resizeIndex, *capture.Resizes[resizeIndex].Offset, offset)
+	}
+	return finish()
+}
+
+func normalizeReplayCapture(capture Capture) (Capture, error) {
+	if _, err := NewDimensions(capture.Dimensions.Rows, capture.Dimensions.Cols); err != nil {
+		return Capture{}, err
+	}
+	rebuilt, err := NewCaptureWithEvents(capture.Dimensions, capture.Chunks, capture.Resizes)
+	if err != nil {
+		return Capture{}, err
+	}
+	if !bytes.Equal(rebuilt.Raw, capture.Raw) {
+		return Capture{}, fmt.Errorf("capture raw bytes do not match chunk evidence: raw=%d chunk_bytes=%d", len(capture.Raw), len(rebuilt.Raw))
+	}
+	return rebuilt, nil
 }
 
 func mergePrivateModeOperations(operations []Operation, changes []PrivateModeChange) []Operation {

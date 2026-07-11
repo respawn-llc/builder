@@ -247,6 +247,7 @@ func TestServiceInterruptDedupesSuccessfulRetry(t *testing.T) {
 
 func newRuntimeControlCompactionFixture(t *testing.T) (*session.Store, *runtime.Engine, *runtimeControlFakeClient) {
 	t.Helper()
+	trimmed := 1
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
@@ -262,7 +263,7 @@ func newRuntimeControlCompactionFixture(t *testing.T) (*session.Store, *runtime.
 				{Type: llm.ResponseItemTypeCompaction, EncryptedContent: "checkpoint"},
 			},
 			Usage:             llm.Usage{WindowTokens: 200000},
-			TrimmedItemsCount: 1,
+			TrimmedItemsCount: &trimmed,
 		}},
 	}
 	engine, err := runtime.New(store, client, tools.NewRegistry(), runtime.Config{Model: "gpt-5", ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities})
@@ -349,7 +350,7 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 		t.Fatalf("create runtime engine: %v", err)
 	}
 	service := NewService(stubRuntimeResolver{engine: engine})
-	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Role: "warning", Text: "visible warning", Visibility: string(transcript.EntryVisibilityAll)}
+	req := serverapi.RuntimeAppendCommittedEntryRequest{ClientRequestID: "req-1", SessionID: store.Meta().SessionID, Role: "warning", Text: "visible warning", Visibility: string(transcript.EntryVisibilityOngoing)}
 
 	if err := service.AppendCommittedEntry(context.Background(), req); err != nil {
 		t.Fatalf("AppendCommittedEntry first: %v", err)
@@ -361,8 +362,8 @@ func TestServiceAppendCommittedEntryReplaysVisibility(t *testing.T) {
 	for _, entry := range localEntryEvents(t, store) {
 		if entry.Role == "warning" && entry.Text == "visible warning" {
 			count++
-			if entry.Visibility != transcript.EntryVisibilityAll {
-				t.Fatalf("entry visibility = %q, want all", entry.Visibility)
+			if entry.Visibility != transcript.EntryVisibilityOngoing {
+				t.Fatalf("entry visibility = %q, want ongoing", entry.Visibility)
 			}
 		}
 	}

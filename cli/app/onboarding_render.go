@@ -271,7 +271,7 @@ func (m *onboardingModel) renderThemePreview(width int) []string {
 	heading := lipgloss.NewStyle().Foreground(palette.primary).Bold(true).Render("Preview")
 	modelLabel := strings.TrimSpace(m.state.settings.Model)
 	if modelLabel == "" {
-		modelLabel = "gpt-5"
+		modelLabel = config.DefaultModel()
 	}
 	statusLine := lipgloss.NewStyle().Foreground(palette.primary).Bold(true).Render(config.Command) +
 		lipgloss.NewStyle().Foreground(palette.muted).Render(" | ") +

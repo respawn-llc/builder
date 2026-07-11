@@ -97,6 +97,23 @@ func TestStoreControllerFinalizesInterruptedRunAfterProtocolViolationInterruptsR
 	}
 }
 
+func TestStoreControllerResetsProtocolViolationBudget(t *testing.T) {
+	store := &recordingCompletionStore{}
+	controller := StoreController{Store: store}
+
+	err := controller.ResetWorkflowProtocolViolationBudget(context.Background(), ViolationResetRequest{
+		RunID:              "run-1",
+		ExpectedGeneration: 7,
+		RequireGeneration:  true,
+	})
+	if err != nil {
+		t.Fatalf("ResetWorkflowProtocolViolationBudget: %v", err)
+	}
+	if store.resetReq.RunID != "run-1" || store.resetReq.ExpectedGeneration != 7 || !store.resetReq.RequireGeneration {
+		t.Fatalf("reset request = %+v", store.resetReq)
+	}
+}
+
 func TestCompletionJSONSchemaUsesOpenAICompatibleNullableTransitionParameters(t *testing.T) {
 	raw, err := CompletionJSONSchema(CompletionContract{
 		Transitions: []CompletionTransition{
@@ -420,6 +437,7 @@ type recordingCompletionStore struct {
 	req            workflowstore.CompleteRunRequest
 	protocolResult workflowstore.RecordProtocolViolationResult
 	protocolReq    workflowstore.RecordProtocolViolationRequest
+	resetReq       workflowstore.ResetProtocolViolationBudgetRequest
 }
 
 func (s *recordingCompletionStore) CompleteRun(_ context.Context, req workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error) {
@@ -430,6 +448,11 @@ func (s *recordingCompletionStore) CompleteRun(_ context.Context, req workflowst
 func (s *recordingCompletionStore) RecordProtocolViolation(_ context.Context, req workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error) {
 	s.protocolReq = req
 	return s.protocolResult, nil
+}
+
+func (s *recordingCompletionStore) ResetProtocolViolationBudget(_ context.Context, req workflowstore.ResetProtocolViolationBudgetRequest) error {
+	s.resetReq = req
+	return nil
 }
 
 func (s *recordingCompletionStore) GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error) {

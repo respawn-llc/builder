@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"core/server/tools"
 )
 
 type rangeMatch struct {
@@ -19,7 +21,7 @@ type replacementSelection struct {
 	newText string
 }
 
-func selectReplacement(content string, in input) (replacementSelection, error) {
+func selectReplacement(content string, in tools.EditInput) (replacementSelection, error) {
 	matches := findMatches(content, in.OldString)
 	if len(matches) == 0 {
 		return replacementSelection{}, failf("old_string matched 0 occurrences")

@@ -237,8 +237,8 @@ func TestTaskExecutionTargetNegotiationBlocksLegacyInitiatingMutations(t *testin
 			t.Fatalf("ListPlacements: %v", err)
 		}
 		activePlacement := placements[len(placements)-1]
-		if activePlacement.State != "completed" {
-			t.Fatalf("terminal placement = %+v, want completed", activePlacement)
+		if activePlacement.State != "active" {
+			t.Fatalf("terminal placement = %+v, want active", activePlacement)
 		}
 		saveTaskExecutionTargetNegotiation(t, ctx, store, workflow.ExecutionTargetNegotiation{
 			TaskID:            task.ID,

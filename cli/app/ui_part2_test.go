@@ -297,7 +297,7 @@ func TestAskResolutionEventRestoresRunningActivityWhenRuntimeIsBusy(t *testing.T
 	}
 }
 func TestSubmitErrorShowsStatusOnlyWithoutRuntimeClient(t *testing.T) {
-	m := newProjectedStaticUIModel()
+	m := newProjectedStaticUIModel(WithUISessionID(detailTestSessionID))
 	longErr := "openai status 400: " + strings.Repeat("X", 320)
 
 	next, _ := m.Update(submitDoneMsg{err: errors.New(longErr)})
@@ -311,7 +311,7 @@ func TestSubmitErrorShowsStatusOnlyWithoutRuntimeClient(t *testing.T) {
 }
 
 func TestSubmitErrorShowsAPIStatusOnlyWithoutRuntimeClient(t *testing.T) {
-	m := newProjectedStaticUIModel()
+	m := newProjectedStaticUIModel(WithUISessionID(detailTestSessionID))
 	body := strings.Repeat("AUTH_ERR_", 64)
 	root := &llm.APIStatusError{StatusCode: 429, Body: body}
 	wrapped := fmt.Errorf("model generation failed after retries: %w", root)

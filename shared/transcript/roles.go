@@ -1,6 +1,17 @@
 package transcript
 
+import "strings"
+
 type EntryRole string
+
+// EntryRoleSystem marks general runtime notices with typed message metadata.
+const EntryRoleSystem EntryRole = "system"
+
+// EntryRoleWarning marks non-error runtime warnings with typed message metadata.
+const EntryRoleWarning EntryRole = "warning"
+
+// EntryRoleCacheWarning marks typed prompt-cache continuity warnings.
+const EntryRoleCacheWarning EntryRole = "cache_warning"
 
 // EntryRoleCompactionSummary marks a persisted compaction or handoff summary.
 const EntryRoleCompactionSummary EntryRole = "compaction_summary"
@@ -26,3 +37,25 @@ const EntryRoleInterruption EntryRole = "interruption"
 
 // EntryRoleGoalFeedback marks user-facing goal lifecycle notices.
 const EntryRoleGoalFeedback EntryRole = "goal_feedback"
+
+// EntryRoleReasoning marks persisted assistant reasoning-summary progress.
+const EntryRoleReasoning EntryRole = "reasoning"
+
+// EntryRoleReviewerStatus marks reviewer lifecycle status entries.
+const EntryRoleReviewerStatus EntryRole = "reviewer_status"
+
+// EntryRoleReviewerError marks reviewer lifecycle status entries that report a
+// failed supervisor/reviewer action.
+const EntryRoleReviewerError EntryRole = "reviewer_error"
+
+// EntryRoleReviewerSuggestions marks reviewer suggestion summary entries.
+const EntryRoleReviewerSuggestions EntryRole = "reviewer_suggestions"
+
+func IsReviewerEntryRole(role string) bool {
+	switch EntryRole(strings.TrimSpace(role)) {
+	case EntryRoleReviewerStatus, EntryRoleReviewerError, EntryRoleReviewerSuggestions:
+		return true
+	default:
+		return false
+	}
+}

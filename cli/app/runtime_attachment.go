@@ -33,6 +33,7 @@ type runtimeAttachmentClients struct {
 	PromptControl                   client.PromptControlClient
 	RuntimeControls                 client.RuntimeControlClient
 	SessionActivity                 client.SessionActivityClient
+	SessionTranscript               client.SessionTranscriptClient
 	SessionRuntime                  client.SessionRuntimeClient
 	SessionViews                    client.SessionViewClient
 	Worktrees                       client.WorktreeClient
@@ -62,11 +63,12 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 	logger := &runLogger{}
 	_ = diagnosticWriter
 	logger.Logf("%s", startLogLine)
-	wiring, stopRuntimeEvents, stopAskEvents, stopAttentionEvents := prepareSharedRuntimeWiring(ctx, clients, plan, activities, reactivator, logger)
+	wiring, stopRuntimeEvents, stopAskEvents, stopAttentionEvents, stopTranscriptEvents := prepareSharedRuntimeWiring(ctx, clients, plan, activities, reactivator, logger)
 	var stopStreamsOnce sync.Once
 	stopStreams := func() {
 		stopStreamsOnce.Do(func() {
 			stopAttentionEvents()
+			stopTranscriptEvents()
 			stopAskEvents()
 			stopRuntimeEvents()
 		})
@@ -104,7 +106,7 @@ func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients
 	return reactivator, lease.OwnerID, nil
 }
 
-func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan, activities runtimeattach.Activities, reactivator *runtimeReactivator, logger *runLogger) (*runtimeWiring, func(), func(), func()) {
+func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan, activities runtimeattach.Activities, reactivator *runtimeReactivator, logger *runLogger) (*runtimeWiring, func(), func(), func(), func()) {
 	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls).(*sessionRuntimeClient)
 	if reactivator != nil {
 		runtimeClient.SetRuntimeReactivator(reactivator)
@@ -115,6 +117,16 @@ func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentCl
 	}, runtimeClient.transcriptDiagnosticsEnabled, func(line string) {
 		logger.Logf("%s", line)
 	})
+	var subscribeTranscript sessionTranscriptSubscriber
+	if clients.SessionTranscript != nil {
+		subscribeTranscript = func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+			return clients.SessionTranscript.SubscribeSessionTranscript(ctx, req)
+		}
+	}
+	transcriptStream := startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript)
+	transcriptEvents := transcriptStream.Events
+	requestTranscriptOpen := transcriptStream.RequestRehydration
+	stopTranscriptEvents := transcriptStream.Stop
 	terminalFocus := newTerminalFocusState()
 	turnQueueHook := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
 		if runtimeClient != nil {
@@ -139,6 +151,8 @@ func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentCl
 	}, turnQueueHook)
 	wiring := &runtimeWiring{
 		runtimeEvents:         runtimeEvents,
+		transcriptEvents:      transcriptEvents,
+		requestTranscriptOpen: requestTranscriptOpen,
 		askEvents:             askEvents,
 		turnQueueHook:         turnQueueHook,
 		terminalFocus:         terminalFocus,
@@ -152,12 +166,13 @@ func prepareSharedRuntimeWiring(ctx context.Context, clients runtimeAttachmentCl
 		approvalViews:         clients.ApprovalViews,
 		askViews:              clients.AskViews,
 		sessionActivity:       clients.SessionActivity,
+		sessionTranscript:     clients.SessionTranscript,
 		sessionViews:          clients.SessionViews,
 		promptHistory:         append([]string(nil), plan.PromptHistory...),
 		hasOtherSessions:      plan.HasOtherSessions,
 		hasOtherSessionsKnown: plan.HasOtherSessionsKnown,
 	}
-	return wiring, stopRuntimeEvents, stopAskEvents, stopAttentionEvents
+	return wiring, stopRuntimeEvents, stopAskEvents, stopAttentionEvents, stopTranscriptEvents
 }
 
 func newClosedAskEventStream() (<-chan askEvent, func()) {

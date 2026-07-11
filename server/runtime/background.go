@@ -11,6 +11,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/toolspec"
+	"core/shared/valuecopy"
 )
 
 type defaultBackgroundNoticeScheduler struct {
@@ -37,15 +38,16 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 	if !queueNotice {
 		return
 	}
-	if evt.Type != "completed" && evt.Type != "killed" {
+	if !evt.Type.IsTerminal() {
 		return
 	}
 	b.QueueDeveloperNotice(llm.Message{
-		Role:           llm.RoleDeveloper,
-		MessageType:    llm.MessageTypeBackgroundNotice,
-		Name:           strings.TrimSpace(evt.ID),
-		Content:        formatBackgroundShellNotice(evt),
-		CompactContent: formatBackgroundShellCompact(evt),
+		Role:               llm.RoleDeveloper,
+		MessageType:        llm.MessageTypeBackgroundNotice,
+		Name:               strings.TrimSpace(evt.ID),
+		Content:            formatBackgroundShellNotice(evt),
+		CompactContent:     formatBackgroundShellCompact(evt),
+		BackgroundExitCode: valuecopy.Pointer(evt.ExitCode),
 	})
 }
 

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::config::null_to_default;
 
@@ -18,14 +19,6 @@ pub struct Event {
     pub recovery_cause: TranscriptRecoveryCause,
     #[serde(rename = "CommittedTranscriptChanged")]
     pub committed_transcript_changed: bool,
-    #[serde(rename = "TranscriptRevision")]
-    pub transcript_revision: i64,
-    #[serde(rename = "CommittedEntryCount")]
-    pub committed_entry_count: i32,
-    #[serde(rename = "CommittedEntryStart")]
-    pub committed_entry_start: i32,
-    #[serde(rename = "CommittedEntryStartSet")]
-    pub committed_entry_start_set: bool,
     #[serde(rename = "Error")]
     pub error: String,
     #[serde(rename = "AssistantDelta")]
@@ -364,55 +357,136 @@ pub struct TranscriptPage {
     pub session_name: String,
     #[serde(rename = "ConversationFreshness")]
     pub conversation_freshness: ConversationFreshness,
-    #[serde(rename = "Revision")]
-    pub revision: i64,
     #[serde(rename = "OlderCursor", default)]
-    pub older_cursor: i64,
+    pub older_cursor: Option<i64>,
     #[serde(rename = "HasMoreAbove", default)]
     pub has_more_above: bool,
     #[serde(rename = "NewerCursor", default)]
-    pub newer_cursor: i64,
+    pub newer_cursor: Option<i64>,
     #[serde(rename = "HasMoreBelow", default)]
     pub has_more_below: bool,
     #[serde(rename = "Entries", default, deserialize_with = "null_to_default")]
-    pub entries: Vec<ChatEntry>,
-    #[serde(rename = "Streaming")]
-    pub ongoing: String,
-    #[serde(rename = "StreamingError")]
-    pub ongoing_error: String,
+    pub entries: Vec<TranscriptCommittedRow>,
 }
 
-pub const DEFAULT_COMMITTED_TRANSCRIPT_SUFFIX_LIMIT: i32 = 250;
-pub const MAX_COMMITTED_TRANSCRIPT_SUFFIX_LIMIT: i32 = 500;
+pub type TranscriptRowIntegrity = u8;
+pub type TranscriptRowKind = String;
+pub type TranscriptNoticeReason = String;
+pub type TranscriptNoticeSeverity = String;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-pub struct CommittedTranscriptSuffixRequest {}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TranscriptCommittedRow {
+    #[serde(rename = "Visibility")]
+    pub visibility: EntryVisibility,
+    #[serde(rename = "Integrity")]
+    pub integrity: TranscriptRowIntegrity,
+    #[serde(rename = "Kind")]
+    pub kind: TranscriptRowKind,
+    #[serde(rename = "User")]
+    pub user: Option<TranscriptUserRow>,
+    #[serde(rename = "Assistant")]
+    pub assistant: Option<TranscriptAssistantRow>,
+    #[serde(rename = "Tool")]
+    pub tool: Option<TranscriptToolRow>,
+    #[serde(rename = "Notice")]
+    pub notice: Option<TranscriptNoticeRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TranscriptUserRow {
+    #[serde(rename = "Text")]
+    pub text: String,
+    #[serde(rename = "CondensedText")]
+    pub condensed_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TranscriptAssistantRow {
+    #[serde(rename = "Text")]
+    pub text: String,
+    #[serde(rename = "CondensedText")]
+    pub condensed_text: String,
+    #[serde(rename = "Phase")]
+    pub phase: String,
+    #[serde(rename = "StreamID")]
+    pub stream_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TranscriptToolRow {
+    #[serde(rename = "ToolCallID")]
+    pub tool_call_id: String,
+    #[serde(rename = "ToolName")]
+    pub tool_name: String,
+    #[serde(rename = "Text")]
+    pub text: String,
+    #[serde(rename = "IsError")]
+    pub is_error: bool,
+    #[serde(rename = "ResultSummary")]
+    pub result_summary: String,
+    #[serde(rename = "CondensedText")]
+    pub condensed_text: String,
+    #[serde(rename = "ToolPresentation")]
+    pub tool_presentation: Option<ToolCallMeta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TranscriptNoticeRow {
+    #[serde(rename = "Reason")]
+    pub reason: TranscriptNoticeReason,
+    #[serde(rename = "Severity")]
+    pub severity: TranscriptNoticeSeverity,
+    #[serde(rename = "Data")]
+    pub data: TranscriptNoticeData,
+    #[serde(rename = "Diagnostic")]
+    pub diagnostic: Option<TranscriptDiagnosticData>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TranscriptNoticeData {
+    #[serde(rename = "LegacyText")]
+    pub legacy_text: Option<String>,
+    #[serde(rename = "NoticeID")]
+    pub notice_id: Option<String>,
+    #[serde(rename = "CacheWarning")]
+    pub cache_warning: Option<TranscriptCacheWarningData>,
+    #[serde(rename = "RuntimeDiagnostic")]
+    pub runtime_diagnostic: Option<TranscriptDiagnosticData>,
+    #[serde(rename = "MessageType")]
+    pub message_type: String,
+    #[serde(rename = "SourcePath")]
+    pub source_path: String,
+    #[serde(rename = "CondensedText")]
+    pub condensed_text: String,
+    #[serde(rename = "CompactLabel")]
+    pub compact_label: String,
+    #[serde(rename = "BackgroundExitCode")]
+    pub background_exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TranscriptCacheWarningData {
+    #[serde(rename = "Scope")]
+    pub scope: String,
+    #[serde(rename = "Reason")]
+    pub reason: String,
+    #[serde(rename = "LostInputTokens")]
+    pub lost_input_tokens: i32,
+    #[serde(rename = "Visibility")]
+    pub visibility: EntryVisibility,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TranscriptDiagnosticData {
+    #[serde(rename = "Code")]
+    pub code: String,
+    #[serde(rename = "Detail")]
+    pub detail: String,
+}
 
 pub type ConversationFreshness = u8;
 pub const CONVERSATION_FRESHNESS_FRESH: ConversationFreshness = 0;
 pub const CONVERSATION_FRESHNESS_ESTABLISHED: ConversationFreshness = 1;
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct CommittedTranscriptSuffix {
-    #[serde(rename = "SessionID")]
-    pub session_id: String,
-    #[serde(rename = "SessionName")]
-    pub session_name: String,
-    #[serde(rename = "ConversationFreshness")]
-    pub conversation_freshness: ConversationFreshness,
-    #[serde(rename = "Revision")]
-    pub revision: i64,
-    #[serde(rename = "CommittedEntryCount")]
-    pub committed_entry_count: i32,
-    #[serde(rename = "StartEntryCount")]
-    pub start_entry_count: i32,
-    #[serde(rename = "NextEntryCount")]
-    pub next_entry_count: i32,
-    #[serde(rename = "HasMoreCommittedEntries")]
-    pub has_more_committed_entries: bool,
-    #[serde(rename = "Entries", default, deserialize_with = "null_to_default")]
-    pub entries: Vec<ChatEntry>,
-}
 
 pub type EntryVisibility = String;
 

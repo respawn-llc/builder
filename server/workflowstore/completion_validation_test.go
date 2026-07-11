@@ -42,7 +42,7 @@ func TestCompleteRunValidatesOutputRequirements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns after rejected completion: %v", err)
 	}
-	if len(runs) != 1 || runs[0].CompletedAt != 0 || runs[0].InterruptedAt != 0 {
+	if len(runs) != 1 || runs[0].CompletedAt != nil || runs[0].InterruptedAt != nil {
 		t.Fatalf("rejected completion mutated run outcome: %+v", runs)
 	}
 }

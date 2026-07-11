@@ -19,6 +19,20 @@ import (
 )
 
 func (e *Engine) persistToolCompletionRaw(stepID string, r tools.Result) error {
+	if r.PresentationDelta != nil {
+		panic(fmt.Sprintf(
+			"tool result presentation invariant violated: unconsumed presentation delta reached persistence (call_id=%q tool=%q)",
+			r.CallID,
+			r.Name,
+		))
+	}
+	if r.Presentation == nil {
+		panic(fmt.Sprintf(
+			"tool result presentation invariant violated: live completion reached persistence without finalized presentation (call_id=%q tool=%q)",
+			r.CallID,
+			r.Name,
+		))
+	}
 	if sessionID, ok := harvestedBackgroundCompletionSessionID(r); ok {
 		e.ensureOrchestrationCollaborators()
 		e.backgroundFlow.ConsumePendingBackgroundNotice(sessionID)
@@ -131,7 +145,7 @@ func (e *Engine) appendPersistedLocalEntryRecordRaw(stepID string, entry storedL
 
 func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
 	return &ChatEntry{
-		Visibility:    entry.Visibility,
+		Visibility:    normalizeRuntimeEntryVisibility(entry.Visibility),
 		Role:          strings.TrimSpace(entry.Role),
 		Text:          strings.TrimSpace(entry.Text),
 		CondensedText: strings.TrimSpace(entry.CondensedText),
@@ -168,9 +182,6 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 	} else {
 		e.markCurrentRequestShapeDirty()
 	}
-	if err := e.applyTranscriptLiveToolMessageMutation(msg); err != nil {
-		return err
-	}
 	newTranscriptPersistenceCoordinator(e.transcriptRuntimeState()).AppendMessage(msg)
 	if persist {
 		if _, _, err := e.store.AppendEvent(stepID, "message", msg); err != nil {
@@ -180,25 +191,6 @@ func (e *Engine) appendMessageRaw(stepID string, msg llm.Message, eventPolicy st
 	currentCommittedCount := e.CommittedTranscriptEntryCount()
 	if eventPolicy != steeringMessageEventNone && currentCommittedCount > previousCommittedCount && shouldEmitCommittedMessageEvent(msg) {
 		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true, Message: msg})
-	}
-	return nil
-}
-
-func (e *Engine) applyTranscriptLiveToolMessageMutation(msg llm.Message) error {
-	if e == nil {
-		return nil
-	}
-	state := e.transcriptRuntimeState()
-	switch msg.Role {
-	case llm.RoleAssistant:
-		for _, call := range msg.ToolCalls {
-			normalized := normalizeToolCallForTranscript(call, e.transcriptWorkingDir())
-			if err := state.RecordLiveToolStart(normalized); err != nil {
-				return err
-			}
-		}
-	case llm.RoleTool:
-		state.CompleteLiveTool(msg.ToolCallID)
 	}
 	return nil
 }

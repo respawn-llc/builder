@@ -35,7 +35,5 @@ func SessionLifecycleOptionsFor[SO any](req Request[SO]) SessionLifecycleOptions
 		Overrides: serverapi.RunPromptOverrides{
 			AgentRole: agentRole,
 		},
-		TerminalPhaseMarkerEncoder:      req.TerminalPhaseMarkerEncoder,
-		TerminalPhaseMarkerSinkObserver: req.TerminalPhaseMarkerSinkObserver,
 	}
 }

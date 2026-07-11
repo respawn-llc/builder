@@ -10,8 +10,8 @@ import (
 	tuiinput "core/cli/tui/input"
 	sharedtheme "core/shared/theme"
 
+	"charm.land/glamour/v2"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 

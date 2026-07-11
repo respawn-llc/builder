@@ -134,6 +134,9 @@ func (m *uiModel) statusLinePhase() statusLinePhase {
 	if m.isReviewerRunning() {
 		return statusLinePhaseSuccess
 	}
+	if m.rollback.isActive() {
+		return statusLinePhasePrimary
+	}
 	if goalIsActive(m.cachedRuntimeStatus().Goal) {
 		return statusLinePhasePrimary
 	}
@@ -152,6 +155,9 @@ func (m *uiModel) statusLineLabel() string {
 	}
 	if m.isReviewerRunning() {
 		return "review"
+	}
+	if m.rollback.isActive() {
+		return "editing"
 	}
 	if goalIsPresent(m.cachedRuntimeStatus().Goal) {
 		return "goal"

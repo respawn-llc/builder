@@ -46,6 +46,7 @@ type RuntimeWiringOptions struct {
 	WorkflowRun                         *workflowruntime.Config
 	AskQuestionBatchSkipped             func(askquestion.AskQuestionBatchMetadata)
 	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
+	ProviderCapabilitiesOverride        *llm.ProviderCapabilities
 	SkipContinuationAgentRoleValidation bool
 	StepLifecycle                       runtime.StepLifecycleSink
 	// GlobalConfigDir is the absolute persistence root that owns model-visible
@@ -92,6 +93,9 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 	}
 
 	mainProvider := mainProviderRuntimeSettings(active)
+	if resolvedCapabilities, ok := llm.ProviderCapabilitiesFromLockedOrOverride(store.Meta().Locked, active.ProviderCapabilities); ok {
+		mainProvider.ProviderCapabilitiesOverride = &resolvedCapabilities
+	}
 	var client llm.Client
 	if opts.Client != nil {
 		client = opts.Client
@@ -171,6 +175,10 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 			skipContinuationAgentRoleValidation: opts.SkipContinuationAgentRoleValidation,
 		}
 	}
+	providerCapabilitiesOverride := mainProvider.ProviderCapabilitiesOverride
+	if opts.ProviderCapabilitiesOverride != nil {
+		providerCapabilitiesOverride = opts.ProviderCapabilitiesOverride
+	}
 	eng, err = runtime.New(store, client, toolRegistry, runtime.Config{
 		Model:                         active.Model,
 		Temperature:                   1,
@@ -181,7 +189,7 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 		FastModeState:                 opts.FastMode,
 		WebSearchMode:                 active.WebSearch,
 		PromptFacingSnapshotReloader:  promptReloader,
-		ProviderCapabilitiesOverride:  mainProvider.ProviderCapabilitiesOverride,
+		ProviderCapabilitiesOverride:  providerCapabilitiesOverride,
 		EnabledTools:                  enabledTools,
 		DisabledSkills:                config.DisabledSkillToggles(active),
 		SubagentCatalogSettings:       active,

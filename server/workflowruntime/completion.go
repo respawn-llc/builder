@@ -131,6 +131,7 @@ type ViolationResult struct {
 type Controller interface {
 	CompleteWorkflowRun(ctx context.Context, req CompletionRequest) (CompletionResult, error)
 	RecordWorkflowProtocolViolation(ctx context.Context, req ViolationRequest) (ViolationResult, error)
+	ResetWorkflowProtocolViolationBudget(ctx context.Context, req ViolationResetRequest) error
 	ObserveWorkflowRunCompletion(ctx context.Context, req CompletionObservationRequest) (CompletionObservationResult, error)
 }
 
@@ -143,10 +144,17 @@ type ViolationRequest struct {
 	RequireGeneration  bool
 }
 
+type ViolationResetRequest struct {
+	RunID              workflow.RunID
+	ExpectedGeneration int64
+	RequireGeneration  bool
+}
+
 type StoreController struct {
 	Store interface {
 		CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error)
 		RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error)
+		ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error
 		GetRun(context.Context, workflow.RunID) (workflowstore.RunRecord, error)
 	}
 	AttentionFinalizer interface {
@@ -207,7 +215,7 @@ func (c StoreController) ObserveWorkflowRunCompletion(ctx context.Context, req C
 	if req.RequireGeneration && run.Generation != req.ExpectedGeneration {
 		return CompletionObservationResult{}, nil
 	}
-	return CompletionObservationResult{Completed: run.CompletedAt != 0}, nil
+	return CompletionObservationResult{Completed: run.CompletedAt != nil}, nil
 }
 
 func (c StoreController) RecordWorkflowProtocolViolation(ctx context.Context, req ViolationRequest) (ViolationResult, error) {
@@ -233,6 +241,17 @@ func (c StoreController) RecordWorkflowProtocolViolation(ctx context.Context, re
 		}
 	}
 	return ViolationResult{Count: result.Count, Interrupted: result.Interrupted}, nil
+}
+
+func (c StoreController) ResetWorkflowProtocolViolationBudget(ctx context.Context, req ViolationResetRequest) error {
+	if c.Store == nil {
+		return errors.New("workflow completion store is required")
+	}
+	return c.Store.ResetProtocolViolationBudget(ctx, workflowstore.ResetProtocolViolationBudgetRequest{
+		RunID:              req.RunID,
+		ExpectedGeneration: req.ExpectedGeneration,
+		RequireGeneration:  req.RequireGeneration,
+	})
 }
 
 func SelectCompletionMode(selection CompletionModeSelection) (CompletionMode, error) {

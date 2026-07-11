@@ -26,7 +26,24 @@ type Request struct {
 type RunPromptResult struct {
 	Config                config.App
 	ResolvedWorkspaceRoot string
-	ContextAgentRole      string
+	CallerContext         CallerContext
+}
+
+type CallerKind string
+
+const (
+	CallerKindHuman       CallerKind = "human"
+	CallerKindKentSession CallerKind = "kent_session"
+)
+
+type CallerContext struct {
+	Kind            CallerKind
+	WorkflowSession bool
+	AgentRole       *string
+}
+
+func humanCallerContext() CallerContext {
+	return CallerContext{Kind: CallerKindHuman}
 }
 
 func ResolveSessionConfig(req Request) (config.App, error) {
@@ -72,17 +89,27 @@ func ResolveRunPromptConfig(req Request) (RunPromptResult, error) {
 		}
 		return RunPromptResult{}, err
 	}
-	contextAgentRole := ""
+	caller := humanCallerContext()
 	if contextSessionID != "" {
-		if agentRole, err := bootstrap.ResolveSessionAgentRole(plan.Config.PersistenceRoot, contextSessionID); err == nil {
-			contextAgentRole = agentRole
+		sessionContext := plan.SessionContext
+		if sessionContext == nil || contextSessionID != sessionID {
+			resolved, err := bootstrap.ResolveSessionCallerContext(plan.Config.PersistenceRoot, contextSessionID)
+			if err != nil {
+				return RunPromptResult{}, workspaceContextSessionError(contextSessionID, err)
+			}
+			sessionContext = &resolved
+		}
+		caller = CallerContext{
+			Kind:            CallerKindKentSession,
+			WorkflowSession: sessionContext.WorkflowSession,
+			AgentRole:       sessionContext.AgentRole,
 		}
 	}
 	resolvedRoot := workspaceRoot
 	if strings.TrimSpace(plan.Config.WorkspaceRoot) != "" && plan.Config.WorkspaceRoot != workspaceRoot {
 		resolvedRoot = plan.Config.WorkspaceRoot
 	}
-	return RunPromptResult{Config: plan.Config, ResolvedWorkspaceRoot: resolvedRoot, ContextAgentRole: contextAgentRole}, nil
+	return RunPromptResult{Config: plan.Config, ResolvedWorkspaceRoot: resolvedRoot, CallerContext: caller}, nil
 }
 
 func ResolveWorkspaceRoot(workspaceRoot string) (string, error) {

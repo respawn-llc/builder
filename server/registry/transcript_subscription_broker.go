@@ -10,7 +10,9 @@ import (
 	"sync"
 
 	"core/shared/clientui"
+	"core/shared/invariant"
 	"core/shared/serverapi"
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -215,7 +217,7 @@ func (c *transcriptSubscriptionContract) validateHydration(hydration clientui.Tr
 		}
 	}
 	for _, row := range hydration.CommittedRows {
-		if err := validateCommittedRow(row, false); err != nil {
+		if err := validateCommittedRow(row); err != nil {
 			return err
 		}
 	}
@@ -243,10 +245,13 @@ func (c *transcriptSubscriptionContract) validateLiveMessage(message clientui.Tr
 	case clientui.TranscriptMessageToolAbort:
 		return c.trackToolTerminal(message.ToolAbort.ToolCallID, fmt.Sprintf("tool_abort at seq=%d", message.Sequence))
 	case clientui.TranscriptMessageCommittedRow:
-		if err := validateCommittedRow(*message.CommittedRow, true); err != nil {
+		if err := validateCommittedRow(*message.CommittedRow); err != nil {
 			return err
 		}
 		if row := message.CommittedRow; row.Assistant != nil {
+			if row.Integrity != transcript.RowIntegrityValid {
+				return nil
+			}
 			if row.Assistant.StreamID != nil {
 				if err := c.matchActiveStream(*row.Assistant.StreamID, message.Sequence, "committed assistant row"); err != nil {
 					return err
@@ -257,6 +262,9 @@ func (c *transcriptSubscriptionContract) validateLiveMessage(message clientui.Tr
 			}
 		}
 		if row := message.CommittedRow; row.Tool != nil {
+			if row.Integrity != transcript.RowIntegrityValid && strings.TrimSpace(row.Tool.ToolCallID) == "" {
+				return nil
+			}
 			return c.trackToolTerminal(row.Tool.ToolCallID, fmt.Sprintf("committed tool row at seq=%d", message.Sequence))
 		}
 	}
@@ -305,39 +313,9 @@ func (c *transcriptSubscriptionContract) trackToolTerminal(toolCallID string, op
 	return nil
 }
 
-func validateCommittedRow(row clientui.TranscriptCommittedRow, _ bool) error {
-	payloads := 0
-	expectedKind := clientui.TranscriptRowKind("")
-	if row.User != nil {
-		payloads++
-		expectedKind = clientui.TranscriptRowUser
-	}
-	if row.Assistant != nil {
-		payloads++
-		expectedKind = clientui.TranscriptRowAssistant
-		if row.Assistant.StreamID != nil && *row.Assistant.StreamID == uuid.Nil {
-			return errTranscriptContractViolation("committed assistant row has zero stream_id")
-		}
-	}
-	if row.Tool != nil {
-		payloads++
-		expectedKind = clientui.TranscriptRowTool
-		if strings.TrimSpace(row.Tool.ToolCallID) == "" {
-			return errTranscriptContractViolation("committed tool row has empty tool_call_id")
-		}
-	}
-	if row.Notice != nil {
-		payloads++
-		expectedKind = clientui.TranscriptRowNotice
-	}
-	if payloads != 1 {
-		return errTranscriptContractViolation(fmt.Sprintf("committed row kind %q has %d payloads, want exactly one", row.Kind, payloads))
-	}
-	if row.Kind == "" {
-		return errTranscriptContractViolation("committed row kind is required")
-	}
-	if row.Kind != expectedKind {
-		return errTranscriptContractViolation(fmt.Sprintf("committed row kind %q does not match payload kind %q", row.Kind, expectedKind))
+func validateCommittedRow(row clientui.TranscriptCommittedRow) error {
+	if err := invariant.ValidateTranscriptCommittedRow(row); err != nil {
+		return errTranscriptContractViolation(err.Error())
 	}
 	return nil
 }

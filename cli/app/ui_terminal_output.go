@@ -2,24 +2,22 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
-	"core/cli/app/internal/runner"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
-var errTerminalPhaseMarkerEncoderRequired = errors.New("terminal phase marker encoder is required")
-
 type uiTerminalOutput struct {
-	mu             sync.Mutex
-	out            io.Writer
-	markerEncoder  runner.TerminalPhaseMarkerEncoder
-	started        bool
-	pendingMarkers []runner.TerminalPhaseMarker
+	mu               sync.Mutex
+	out              io.Writer
+	started          bool
+	readinessPending bool
 }
 
-func newUITerminalOutput(out io.Writer, markerEncoder runner.TerminalPhaseMarkerEncoder) *uiTerminalOutput {
-	return &uiTerminalOutput{out: out, markerEncoder: markerEncoder}
+func newUITerminalOutput(out io.Writer) *uiTerminalOutput {
+	return &uiTerminalOutput{out: out}
 }
 
 func (w *uiTerminalOutput) Write(payload []byte) (int, error) {
@@ -31,54 +29,67 @@ func (w *uiTerminalOutput) Write(payload []byte) (int, error) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.readinessPending {
+		if _, err := w.out.Write([]byte(xansi.ShowCursor)); err != nil {
+			return 0, fmt.Errorf("announce terminal input readiness: %w", err)
+		}
+		w.readinessPending = false
+	}
 	n, err := w.out.Write(payload)
-	if err != nil || n != len(payload) {
-		return n, err
+	if err == nil && n == len(payload) {
+		w.started = true
 	}
-	w.started = true
-	if err := w.drainPendingMarkersLocked(); err != nil {
-		return n, err
-	}
-	return n, nil
+	return n, err
 }
 
-func (w *uiTerminalOutput) RequestTerminalPhaseMarker(marker runner.TerminalPhaseMarker) error {
+// AnnounceInputReady queues the standard native-cursor readiness signal for
+// the first renderer write, which occurs after Bubble Tea owns terminal mode.
+func (w *uiTerminalOutput) AnnounceInputReady() error {
 	if w == nil || w.out == nil {
 		return io.ErrClosedPipe
 	}
-	if w.markerEncoder == nil {
-		return errTerminalPhaseMarkerEncoderRequired
-	}
-	if err := marker.Validate(); err != nil {
-		return err
-	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if !w.started {
-		w.pendingMarkers = append(w.pendingMarkers, marker)
-		return nil
+	if w.started {
+		return errors.New("terminal output already started before input readiness")
 	}
-	return w.writeMarkerLocked(marker)
-}
-
-func (w *uiTerminalOutput) drainPendingMarkersLocked() error {
-	for _, marker := range w.pendingMarkers {
-		if err := w.writeMarkerLocked(marker); err != nil {
-			return err
-		}
-	}
-	w.pendingMarkers = nil
+	w.readinessPending = true
 	return nil
 }
 
-func (w *uiTerminalOutput) writeMarkerLocked(marker runner.TerminalPhaseMarker) error {
-	payload, err := w.markerEncoder.EncodeTerminalPhaseMarker(marker)
-	if err != nil {
-		return err
+// uiTerminalOutputFile forwards the terminal-cursor-file interface (Read/Close/
+// Fd) through to the underlying file so the cursor/gate writer wrappers and the
+// Bubble Tea program can still detect the real terminal file descriptor.
+type uiTerminalOutputFile struct {
+	*uiTerminalOutput
+	file terminalCursorFile
+}
+
+func newUITerminalOutputFile(out io.Writer) uiTerminalOutputFile {
+	base := newUITerminalOutput(out)
+	if file, ok := out.(terminalCursorFile); ok {
+		return uiTerminalOutputFile{uiTerminalOutput: base, file: file}
 	}
-	if len(payload) == 0 {
+	return uiTerminalOutputFile{uiTerminalOutput: base}
+}
+
+func (w uiTerminalOutputFile) Read(p []byte) (int, error) {
+	if w.file == nil {
+		return 0, io.ErrClosedPipe
+	}
+	return w.file.Read(p)
+}
+
+func (w uiTerminalOutputFile) Close() error {
+	if w.file == nil {
 		return nil
 	}
-	_, err = w.out.Write(payload)
-	return err
+	return w.file.Close()
+}
+
+func (w uiTerminalOutputFile) Fd() uintptr {
+	if w.file == nil {
+		return 0
+	}
+	return w.file.Fd()
 }

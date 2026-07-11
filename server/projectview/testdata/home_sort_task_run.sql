@@ -4,4 +4,4 @@ INSERT INTO task_runs (
     completed_at_unix_ms, interrupted_at_unix_ms, interruption_reason, interruption_detail_json,
     waiting_ask_id, effective_completion_mode, invalid_completion_count, run_start_snapshot_json,
     metadata_json
-) VALUES (?, ?, NULL, 0, 1, 0, ?, ?, 0, 0, 0, '', '{}', '', '', 0, '{}', '{}')
+) VALUES (?, ?, NULL, 0, 1, ?, ?, ?, NULL, NULL, NULL, NULL, '{}', NULL, NULL, 0, '{}', '{}')

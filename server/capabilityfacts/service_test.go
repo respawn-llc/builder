@@ -14,7 +14,7 @@ import (
 )
 
 func TestServiceProjectsModelCatalogAndUnknownFallback(t *testing.T) {
-	service := NewService(Options{Config: testConfig(t, config.Settings{Model: "gpt-5.5"})})
+	service := NewService(Options{Config: testConfig(t, config.Settings{Model: "gpt-5.6-sol"})})
 
 	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
 	if err != nil {
@@ -50,11 +50,11 @@ func TestServiceProjectsModelCatalogAndUnknownFallback(t *testing.T) {
 			modelWithLargeWindow = &resp.Models.KnownModels[idx]
 		}
 	}
-	if !seen["gpt-5.5"] {
-		t.Fatalf("known model catalog missing gpt-5.5: %#v", seen)
+	if !seen["gpt-5.6-sol"] {
+		t.Fatalf("known model catalog missing gpt-5.6-sol: %#v", seen)
 	}
-	if gpt55 := knownModelFact(resp.Models.KnownModels, "gpt-5.5"); gpt55 == nil || gpt55.LargeWindow != nil {
-		t.Fatalf("gpt-5.5 large-window fact = %+v, want absent because large window equals standard window", gpt55)
+	if gpt55 := knownModelFact(resp.Models.KnownModels, "gpt-5.6-sol"); gpt55 == nil || gpt55.LargeWindow != nil {
+		t.Fatalf("gpt-5.6-sol large-window fact = %+v, want absent because large window equals standard window", gpt55)
 	}
 	if modelWithLargeWindow == nil {
 		t.Fatal("expected at least one model with large-window facts")
@@ -86,7 +86,7 @@ func TestServiceProjectsModelCatalogAndUnknownFallback(t *testing.T) {
 
 func TestServiceProjectsProviderFactsAndExplicitProviders(t *testing.T) {
 	settings := config.Settings{
-		Model:            "gpt-5.5",
+		Model:            "gpt-5.6-sol",
 		ProviderOverride: "openai",
 		OpenAIBaseURL:    "https://api.compatible.example/v1",
 	}
@@ -123,8 +123,40 @@ func TestServiceProjectsProviderFactsAndExplicitProviders(t *testing.T) {
 	}
 }
 
+func TestServiceProjectsProviderVerbosityIndependentlyOfFirstPartyClassification(t *testing.T) {
+	tests := []struct {
+		name                      string
+		isOpenAIFirstParty        bool
+		supportsProviderVerbosity bool
+	}{
+		{name: "enabled for non-first-party provider", isOpenAIFirstParty: false, supportsProviderVerbosity: true},
+		{name: "disabled for first-party provider", isOpenAIFirstParty: true, supportsProviderVerbosity: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := NewService(Options{Config: testConfig(t, config.Settings{
+				Model: "operator-alias",
+				ProviderCapabilities: config.ProviderCapabilitiesOverride{
+					ProviderID:                "custom-provider",
+					IsOpenAIFirstParty:        tt.isOpenAIFirstParty,
+					SupportsProviderVerbosity: tt.supportsProviderVerbosity,
+				},
+			})})
+
+			resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+			if err != nil {
+				t.Fatalf("GetCapabilityFacts: %v", err)
+			}
+			if got := resp.Providers.CurrentEffective.SupportsProviderVerbosity; got != tt.supportsProviderVerbosity {
+				t.Fatalf("provider verbosity = %v, want %v, provider=%+v", got, tt.supportsProviderVerbosity, resp.Providers.CurrentEffective)
+			}
+		})
+	}
+}
+
 func TestServiceRejectsUnsupportedExplicitProvider(t *testing.T) {
-	service := NewService(Options{Config: testConfig(t, config.Settings{Model: "gpt-5.5"})})
+	service := NewService(Options{Config: testConfig(t, config.Settings{Model: "gpt-5.6-sol"})})
 
 	_, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{ExplicitLLMProviderIDs: []string{"missing-provider"}})
 	if !errors.Is(err, serverapi.ErrUnsupportedProvider) {
@@ -149,8 +181,8 @@ func TestServiceProjectsDefaults(t *testing.T) {
 	if resp.Defaults.PrimaryModelID != "custom-model" {
 		t.Fatalf("primary model = %q", resp.Defaults.PrimaryModelID)
 	}
-	if resp.Defaults.Thinking.Mode != "custom" || resp.Defaults.Thinking.Value == nil || *resp.Defaults.Thinking.Value != "ultra" {
-		t.Fatalf("thinking default = %+v, want custom ultra", resp.Defaults.Thinking)
+	if resp.Defaults.Thinking.Mode != "level" || resp.Defaults.Thinking.Level == nil || *resp.Defaults.Thinking.Level != "ultra" {
+		t.Fatalf("thinking default = %+v, want level ultra", resp.Defaults.Thinking)
 	}
 	if resp.Defaults.Verbosity == nil || resp.Defaults.Verbosity.Level != string(config.ModelVerbosityHigh) {
 		t.Fatalf("verbosity default = %+v", resp.Defaults.Verbosity)
@@ -181,7 +213,7 @@ func TestServiceProjectsImportDomainFacts(t *testing.T) {
 	configRoot := t.TempDir()
 	writeProviderSkill(t, home, ".claude", "skills", "helper", "Helper")
 	service := NewService(Options{
-		Config:  testConfigAt(configRoot, config.Settings{Model: "gpt-5.5"}),
+		Config:  testConfigAt(configRoot, config.Settings{Model: "gpt-5.6-sol"}),
 		HomeDir: home,
 	})
 
@@ -218,7 +250,7 @@ func TestServiceProjectsImportTargetSkipFacts(t *testing.T) {
 		t.Fatalf("mkdir existing skills target: %v", err)
 	}
 	service := NewService(Options{
-		Config:  testConfigAt(configRoot, config.Settings{Model: "gpt-5.5"}),
+		Config:  testConfigAt(configRoot, config.Settings{Model: "gpt-5.6-sol"}),
 		HomeDir: home,
 	})
 
@@ -233,7 +265,7 @@ func TestServiceProjectsImportTargetSkipFacts(t *testing.T) {
 
 func TestServiceProjectsHomeResolutionFailureAsImportErrorFact(t *testing.T) {
 	t.Setenv("HOME", "")
-	service := NewService(Options{Config: testConfigAt(t.TempDir(), config.Settings{Model: "gpt-5.5"})})
+	service := NewService(Options{Config: testConfigAt(t.TempDir(), config.Settings{Model: "gpt-5.6-sol"})})
 
 	resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
 	if err != nil {
@@ -258,7 +290,7 @@ func TestServiceUsesSavedAuthWhenAvailable(t *testing.T) {
 	state.Method.Type = auth.MethodOAuth
 	state.Method.OAuth = &auth.OAuthMethod{AccessToken: "token", AccountID: "account"}
 	service := NewService(Options{
-		Config:      testConfig(t, config.Settings{Model: "gpt-5.5"}),
+		Config:      testConfig(t, config.Settings{Model: "gpt-5.6-sol"}),
 		AuthManager: auth.NewManager(auth.NewMemoryStore(state), nil, nil),
 	})
 
@@ -287,7 +319,7 @@ func TestServiceDoesNotRefreshAuthForPreAuthFacts(t *testing.T) {
 		return auth.Method{}, errors.New("refresh must not run for capability facts")
 	}
 	service := NewService(Options{
-		Config:      testConfig(t, config.Settings{Model: "gpt-5.5"}),
+		Config:      testConfig(t, config.Settings{Model: "gpt-5.6-sol"}),
 		AuthManager: auth.NewManager(auth.NewMemoryStore(state), refresher, time.Now),
 	})
 

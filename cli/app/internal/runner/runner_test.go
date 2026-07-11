@@ -25,17 +25,13 @@ func TestRunInteractiveUsesInjectedStarterAndLifecycle(t *testing.T) {
 	auth := &struct{}{}
 	server := &fakeServer{}
 	factory := core.Options{}.RuntimeClientFactory
-	encoder := terminalPhaseMarkerEncoderStub{}
-	observer := terminalPhaseMarkerSinkObserverStub{}
 	startCalls := 0
 	lifecycleCalls := 0
 
 	err := RunInteractive(ctx, Request[serverstartup.Options]{
-		SessionID:                       "selected-session",
-		AgentRole:                       "reviewer",
-		StartupOptions:                  serverstartup.Options{Core: core.Options{RuntimeClientFactory: factory}},
-		TerminalPhaseMarkerEncoder:      encoder,
-		TerminalPhaseMarkerSinkObserver: observer,
+		SessionID:      "selected-session",
+		AgentRole:      "reviewer",
+		StartupOptions: serverstartup.Options{Core: core.Options{RuntimeClientFactory: factory}},
 	}, Dependencies[*fakeServer, *struct{}, serverstartup.Options]{
 		NewAuthInteractor: func() *struct{} {
 			return auth
@@ -72,12 +68,6 @@ func TestRunInteractiveUsesInjectedStarterAndLifecycle(t *testing.T) {
 			}
 			if opts.Overrides.AgentRole != "reviewer" {
 				t.Fatalf("agent role override = %q, want reviewer", opts.Overrides.AgentRole)
-			}
-			if opts.TerminalPhaseMarkerEncoder != encoder {
-				t.Fatal("terminal phase marker encoder was not carried to lifecycle")
-			}
-			if opts.TerminalPhaseMarkerSinkObserver != observer {
-				t.Fatal("terminal phase marker sink observer was not carried to lifecycle")
 			}
 			return nil
 		},
@@ -142,23 +132,6 @@ func TestRunInteractiveClosesServerAfterLifecycleError(t *testing.T) {
 	}
 }
 
-func TestFixturePackageCanUseInternalRunnerWithoutImportingAppPackage(t *testing.T) {
-	_ = CompileTimeFixtureDependencies[*fakeServer, struct{}, serverstartup.Options]{
-		Request: Request[serverstartup.Options]{
-			StartupOptions: serverstartup.Options{Core: core.Options{}},
-		},
-		Dependencies: Dependencies[*fakeServer, struct{}, serverstartup.Options]{
-			NewAuthInteractor: func() struct{} { return struct{}{} },
-			StartSessionServer: func(ctx context.Context, req Request[serverstartup.Options], auth struct{}, interactive bool) (*fakeServer, error) {
-				return &fakeServer{}, nil
-			},
-			RunSessionLifecycle: func(context.Context, *fakeServer, struct{}, string, SessionLifecycleOptions) error {
-				return nil
-			},
-		},
-	}
-}
-
 func TestRequestDefaultsDoNotForceDefaultSubagentRole(t *testing.T) {
 	opts := SessionLifecycleOptionsFor(Request[NoStartupOptions]{AgentRole: config.DefaultSubagentRole})
 	if opts.ForceNewSession {
@@ -167,16 +140,4 @@ func TestRequestDefaultsDoNotForceDefaultSubagentRole(t *testing.T) {
 	if opts.Overrides != (serverapi.RunPromptOverrides{AgentRole: config.DefaultSubagentRole}) {
 		t.Fatalf("unexpected overrides: %+v", opts.Overrides)
 	}
-}
-
-type terminalPhaseMarkerEncoderStub struct{}
-
-func (terminalPhaseMarkerEncoderStub) EncodeTerminalPhaseMarker(TerminalPhaseMarker) ([]byte, error) {
-	return nil, nil
-}
-
-type terminalPhaseMarkerSinkObserverStub struct{}
-
-func (terminalPhaseMarkerSinkObserverStub) TerminalPhaseMarkerSinkReady(context.Context, TerminalPhaseMarkerSink) error {
-	return nil
 }

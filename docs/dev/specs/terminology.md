@@ -134,7 +134,7 @@ A run stopped before producing a valid transition result. Its session and worktr
 
 ### Session Contract
 
-The execution setup captured by a Kent session for one compaction generation. Model/provider setup, generation parameters, active enabled tool IDs, and native web-search mode stay locked for the session lifetime. System and reviewer prompt snapshots are immutable within a generation and can be lazily refreshed from current config/source truth after successful compaction. Developer meta context messages are transcript entries, not lazy-refreshed session-contract snapshots. Tool declarations for locked tool IDs are runtime-defined and are not persisted as session snapshots.
+The execution setup captured by a Kent session for one contract generation. Model/provider setup, generation parameters, active enabled tool IDs, and native web-search mode stay locked within that generation. `compact_and_continue_session` starts a fresh target-node contract generation; ordinary compaction can lazily refresh system and reviewer prompt snapshots from current config/source truth within its generation. Developer meta context messages are transcript entries, not lazy-refreshed session-contract snapshots. Tool declarations for locked tool IDs are runtime-defined and are not persisted as session snapshots.
 
 ### Runtime Parameter Contract
 
@@ -210,7 +210,7 @@ Primary long-running TUI mode backed by normal-buffer terminal scrollback. Ongoi
 
 ### Detail Mode
 
-Transcript inspection mode with UI-local selection, expansion, and line-oriented viewport scrolling. Detail content can update while open, but scroll/anchor behavior stays stable unless the user navigates.
+Transcript inspection mode with UI-local selection, expansion, and line-oriented viewport scrolling over stale bounded cursor pages. Server-backed page membership changes through initial mode-entry hydration, session-target replacement, and user-triggered adjacent-page loads. Runtime events never append to or reconcile the current detail page membership while it is open.
 
 ### Transcript Mode
 

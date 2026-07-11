@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"fmt"
+
+	"core/shared/textutil"
 )
 
 type OpenAIRequest struct {
@@ -19,6 +21,28 @@ type OpenAIRequest struct {
 	Items                   []ResponseItem
 	Tools                   []Tool
 	StructuredOutput        *StructuredOutput
+}
+
+// RequestAsOpenAI projects the provider-agnostic Request into the OpenAI-family
+// provider DTO. It is the single source of truth for that projection: the
+// OpenAIClient request methods and the offline inspection seam both use it, so
+// the wire shape stays identical between live generation and captured payloads.
+func RequestAsOpenAI(request Request) OpenAIRequest {
+	return OpenAIRequest{
+		Model:                   request.Model,
+		Temperature:             request.Temperature,
+		MaxTokens:               request.MaxTokens,
+		ReasoningEffort:         request.ReasoningEffort,
+		SupportsReasoningEffort: request.SupportsReasoningEffort,
+		FastMode:                request.FastMode,
+		EnableNativeWebSearch:   request.EnableNativeWebSearch,
+		SystemPrompt:            request.SystemPrompt,
+		PromptCacheKey:          request.PromptCacheKey,
+		SessionID:               request.SessionID,
+		Items:                   CloneResponseItems(request.Items),
+		Tools:                   append([]Tool(nil), request.Tools...),
+		StructuredOutput:        request.StructuredOutput,
+	}
 }
 
 type OpenAIResponse struct {
@@ -41,7 +65,7 @@ type OpenAICompactionRequest struct {
 type OpenAICompactionResponse struct {
 	OutputItems       []ResponseItem
 	Usage             Usage
-	TrimmedItemsCount int
+	TrimmedItemsCount *int
 }
 
 type OpenAITransport interface {
@@ -89,21 +113,7 @@ func (c *OpenAIClient) Generate(ctx context.Context, request Request) (Response,
 		return Response{}, err
 	}
 
-	providerReq := OpenAIRequest{
-		Model:                   request.Model,
-		Temperature:             request.Temperature,
-		MaxTokens:               request.MaxTokens,
-		ReasoningEffort:         request.ReasoningEffort,
-		SupportsReasoningEffort: request.SupportsReasoningEffort,
-		FastMode:                request.FastMode,
-		EnableNativeWebSearch:   request.EnableNativeWebSearch,
-		SystemPrompt:            request.SystemPrompt,
-		PromptCacheKey:          request.PromptCacheKey,
-		SessionID:               request.SessionID,
-		Items:                   CloneResponseItems(request.Items),
-		Tools:                   append([]Tool(nil), request.Tools...),
-		StructuredOutput:        request.StructuredOutput,
-	}
+	providerReq := RequestAsOpenAI(request)
 
 	providerResp, err := c.transport.Generate(ctx, providerReq)
 	if err != nil {
@@ -144,21 +154,7 @@ func (c *OpenAIClient) GenerateStreamWithEvents(ctx context.Context, request Req
 		return Response{}, err
 	}
 
-	providerReq := OpenAIRequest{
-		Model:                   request.Model,
-		Temperature:             request.Temperature,
-		MaxTokens:               request.MaxTokens,
-		ReasoningEffort:         request.ReasoningEffort,
-		SupportsReasoningEffort: request.SupportsReasoningEffort,
-		FastMode:                request.FastMode,
-		EnableNativeWebSearch:   request.EnableNativeWebSearch,
-		SystemPrompt:            request.SystemPrompt,
-		PromptCacheKey:          request.PromptCacheKey,
-		SessionID:               request.SessionID,
-		Items:                   CloneResponseItems(request.Items),
-		Tools:                   append([]Tool(nil), request.Tools...),
-		StructuredOutput:        request.StructuredOutput,
-	}
+	providerReq := RequestAsOpenAI(request)
 
 	if streamTransport, ok := c.transport.(OpenAIStreamingEventsTransport); ok {
 		providerResp, err := streamTransport.GenerateStreamWithEvents(ctx, providerReq, callbacks)
@@ -239,7 +235,7 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	return CompactionResponse{
 		OutputItems:       CloneResponseItems(providerResp.OutputItems),
 		Usage:             providerResp.Usage,
-		TrimmedItemsCount: providerResp.TrimmedItemsCount,
+		TrimmedItemsCount: textutil.CloneInt(providerResp.TrimmedItemsCount),
 	}, nil
 }
 
@@ -265,20 +261,7 @@ func (c *OpenAIClient) CountRequestInputTokens(ctx context.Context, request Requ
 		return 0, fmt.Errorf("openai request token counting is not supported by transport")
 	}
 
-	providerReq := OpenAIRequest{
-		Model:                   request.Model,
-		Temperature:             request.Temperature,
-		MaxTokens:               request.MaxTokens,
-		ReasoningEffort:         request.ReasoningEffort,
-		SupportsReasoningEffort: request.SupportsReasoningEffort,
-		EnableNativeWebSearch:   request.EnableNativeWebSearch,
-		SystemPrompt:            request.SystemPrompt,
-		PromptCacheKey:          request.PromptCacheKey,
-		SessionID:               request.SessionID,
-		Items:                   CloneResponseItems(request.Items),
-		Tools:                   append([]Tool(nil), request.Tools...),
-		StructuredOutput:        request.StructuredOutput,
-	}
+	providerReq := RequestAsOpenAI(request)
 
 	count, err := counter.CountRequestInputTokens(ctx, providerReq)
 	if err != nil {

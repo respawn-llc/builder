@@ -23,6 +23,8 @@ import (
 type fakeWorkflowController struct {
 	completed                           atomic.Int64
 	violations                          atomic.Int64
+	protocolBudgetResets                atomic.Int64
+	protocolBudgetResetErr              error
 	maxHits                             atomic.Int64
 	completionObservations              atomic.Int64
 	completeExternallyAfterObservations int64
@@ -48,6 +50,15 @@ func (c *fakeWorkflowController) RecordWorkflowProtocolViolation(_ context.Conte
 		c.maxHits.Add(1)
 	}
 	return workflowruntime.ViolationResult{Count: count, Interrupted: interrupted}, nil
+}
+
+func (c *fakeWorkflowController) ResetWorkflowProtocolViolationBudget(_ context.Context, _ workflowruntime.ViolationResetRequest) error {
+	if c.protocolBudgetResetErr != nil {
+		return c.protocolBudgetResetErr
+	}
+	c.violations.Store(0)
+	c.protocolBudgetResets.Add(1)
+	return nil
 }
 
 func (c *fakeWorkflowController) ObserveWorkflowRunCompletion(_ context.Context, req workflowruntime.CompletionObservationRequest) (workflowruntime.CompletionObservationResult, error) {
@@ -1085,41 +1096,59 @@ func TestWorkflowFinalAnswersUseInvalidCompletionCap(t *testing.T) {
 	assertDeveloperErrorFeedbackAfterAssistantFinal(t, eng, "done 1", strings.TrimSpace(prompts.WorkflowFinalAnswerNudgePrompt))
 }
 
-func TestWorkflowEmptyFinalAnswersUseInvalidCompletionCap(t *testing.T) {
+func TestWorkflowToolModeEmptyFinalUsesGenericFeedback(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
 		structuredFinalResponse(""),
-		structuredFinalResponse(""),
-		structuredFinalResponse(""),
-		structuredFinalResponse("unexpected"),
+		commentaryResponse("complete", completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`))),
 	}}
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{})
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	assertModelCallCount(t, client, 2)
-	if got := controller.maxHits.Load(); got != 1 {
-		t.Fatalf("max hits = %d, want 1", got)
+	if got := controller.violations.Load(); got != 0 {
+		t.Fatalf("violations = %d, want 0", got)
+	}
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("completions = %d, want 1", got)
+	}
+	if !requestHasDeveloperErrorFeedback(client.calls[1]) {
+		t.Fatalf("empty final did not add generic developer feedback")
 	}
 }
 
-func TestWorkflowStructuredEmptyFinalInterruptsAtInvalidCompletionCap(t *testing.T) {
+func TestWorkflowStructuredModeEmptyFinalUsesGenericFeedback(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
 	client := &fakeClient{responses: []llm.Response{
 		structuredFinalResponse(""),
-		structuredFinalResponse(""),
-		structuredFinalResponse("unexpected"),
+		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
 	}}
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput), Config{})
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
 	assertModelCallCount(t, client, 2)
-	if got := controller.maxHits.Load(); got != 1 {
-		t.Fatalf("max hits = %d, want 1", got)
+	if got := controller.violations.Load(); got != 0 {
+		t.Fatalf("violations = %d, want 0", got)
 	}
+	if got := controller.completed.Load(); got != 1 {
+		t.Fatalf("completions = %d, want 1", got)
+	}
+	if !requestHasDeveloperErrorFeedback(client.calls[1]) {
+		t.Fatalf("empty final did not add generic developer feedback")
+	}
+}
+
+func requestHasDeveloperErrorFeedback(request llm.Request) bool {
+	for _, message := range requestMessages(request) {
+		if message.Role == llm.RoleDeveloper && message.MessageType == llm.MessageTypeErrorFeedback {
+			return true
+		}
+	}
+	return false
 }
 
 func assertCompletionSchema(t *testing.T, schema json.RawMessage, parameterDescriptions map[string]string) {

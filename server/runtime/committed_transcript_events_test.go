@@ -114,6 +114,24 @@ func TestCommittedTranscriptChangedMarksOnlyDurableTranscriptMutations(t *testin
 	assertEventFlags(t, events[start:], []eventFlagExpectation{{kind: EventToolCallStarted, stepID: "tool-step", committedChanged: true}, {kind: EventToolCallCompleted, stepID: "tool-step", committedChanged: true}})
 }
 
+func TestPersistedAssistantToolCallDoesNotCreateLiveToolState(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	if err := eng.steer("step", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{
+		Role: llm.RoleAssistant,
+		ToolCalls: []llm.ToolCall{{
+			ID:    "94c31d15-a829-4a16-9498-35170f710da7",
+			Name:  string(toolspec.ToolExecCommand),
+			Input: json.RawMessage(`{"cmd":"pwd"}`),
+		}},
+	}})); err != nil {
+		t.Fatalf("persist assistant tool call: %v", err)
+	}
+	if starts := eng.TranscriptLiveToolSnapshot(); len(starts) != 0 {
+		t.Fatalf("live tool starts = %+v, want explicit start events to be the only authority", starts)
+	}
+}
+
 func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var (
@@ -588,6 +606,63 @@ func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndTool
 		t.Fatalf("reasoning start = %d, want %d after assistant/tool-call rows; assistant=%+v reasoning=%+v", reasoning.CommittedEntryStart, assistant.CommittedEntryStart+len(assistantEntries), assistant, reasoning)
 	}
 	assertRuntimeEventsAdvanceCommittedFrontierContiguously(t, committed)
+}
+
+func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
+	client := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   llm.MessagePhaseFinal,
+			Content: "done",
+		},
+		Reasoning: []llm.ReasoningEntry{{
+			Role: "reasoning",
+			Text: "**Reviewing test flow for mode transitions**",
+		}},
+		Usage: llm.Usage{WindowTokens: 200000},
+	}}}
+	events := make([]Event, 0, 8)
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: fakeTool{name: toolspec.ToolExecCommand},
+	}), Config{
+		Model:   "gpt-5",
+		OnEvent: func(evt Event) { events = append(events, evt) },
+	})
+
+	if _, err := eng.runStepLoopWithOptions(context.Background(), "step-1", "off", nil, false); err != nil {
+		t.Fatalf("run step loop: %v", err)
+	}
+
+	for _, evt := range committedTranscriptEventsWithEntries(events) {
+		if evt.Kind != EventLocalEntryAdded || evt.LocalEntry == nil || evt.LocalEntry.Role != "reasoning" {
+			continue
+		}
+		facts := TranscriptCommittedRowFactsFromEvent(evt)
+		if len(facts) != 1 ||
+			facts[0].Visibility != transcript.EntryVisibilityDetail ||
+			facts[0].Integrity != transcript.RowIntegrityValid {
+			t.Fatalf("reasoning progress facts = %+v, want one valid detail-only row", facts)
+		}
+		var hydration TranscriptHydrationSnapshot
+		if err := eng.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
+			hydration = snapshot
+			return nil
+		}); err != nil {
+			t.Fatalf("hydrate transcript: %v", err)
+		}
+		for _, row := range hydration.CommittedRows {
+			if row.Notice != nil && row.Notice.DiagnosticCode == "reasoning" {
+				if row.Visibility != transcript.EntryVisibilityDetail ||
+					row.Integrity != transcript.RowIntegrityValid {
+					t.Fatalf("hydrated reasoning row = %+v, want valid detail-only row", row)
+				}
+				return
+			}
+		}
+		t.Fatalf("hydration rows = %+v, want persisted reasoning row", hydration.CommittedRows)
+	}
+	t.Fatal("reasoning progress was not committed")
 }
 
 func TestStreamingToolLoopAssistantCommitClearsServerStreamingBeforeNextTurn(t *testing.T) {

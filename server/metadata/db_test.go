@@ -718,6 +718,171 @@ func TestOpenMigratesHistoricalTerminalPlacementsToSuperseded(t *testing.T) {
 	}
 }
 
+func TestOpenNormalizesCurrentCompletedTerminalSinkWithoutChangingRuns(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 43)
+	if err != nil {
+		t.Fatalf("open test database at version 43: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json) VALUES ('project-terminal-sink', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-terminal-sink", now)
+	execSeed(t, db, "workflow task", workflowSeedTaskSQL, "task-terminal-sink", "link-1", 1, "TSK-1", now, now)
+	execSeed(t, db, "historical terminal placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms) VALUES ('placement-terminal-history', 'task-terminal-sink', 'node-done', 'superseded', ?, ?)`, now+1, now+1)
+	execSeed(t, db, "current completed terminal placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms) VALUES ('placement-terminal-current', 'task-terminal-sink', 'node-done', 'completed', ?, ?)`, now+2, now+2)
+	execSeed(t, db, "parallel active placement", `INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms) VALUES ('placement-parallel-active', 'task-terminal-sink', 'node-agent', 'active', ?, ?)`, now+2, now+2)
+	execSeed(t, db, "legacy terminal run", `INSERT INTO task_runs (id, placement_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms, completed_at_unix_ms) VALUES ('run-terminal-current', 'placement-terminal-current', 1, ?, ?, ?)`, now+2, now+2, now+3)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 43 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	states := map[string]string{}
+	rows, err := store.db.QueryContext(t.Context(), `SELECT id, state FROM task_node_placements WHERE task_id = 'task-terminal-sink'`)
+	if err != nil {
+		t.Fatalf("query terminal placement states: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, state string
+		if err := rows.Scan(&id, &state); err != nil {
+			t.Fatalf("scan terminal placement state: %v", err)
+		}
+		states[id] = state
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate terminal placement states: %v", err)
+	}
+	if states["placement-terminal-current"] != "active" || states["placement-terminal-history"] != "superseded" {
+		t.Fatalf("terminal placement states = %+v, want active current sink and unchanged superseded history", states)
+	}
+	var completedAt int64
+	if err := store.db.QueryRowContext(t.Context(), `SELECT completed_at_unix_ms FROM task_runs WHERE id = 'run-terminal-current'`).Scan(&completedAt); err != nil {
+		t.Fatalf("query terminal run after migration: %v", err)
+	}
+	if completedAt != now+3 {
+		t.Fatalf("terminal run completion = %d, want unchanged %d", completedAt, now+3)
+	}
+}
+
+func TestOpenMigratesLifecycleAbsenceSentinelsToNull(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 45)
+	if err != nil {
+		t.Fatalf("open test database at version 45: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json) VALUES ('project-lifecycle-null', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-lifecycle-null", now)
+	execSeed(t, db, "workflow task", workflowSeedTaskSQL, "task-lifecycle-null", "link-1", 1, "NUL-1", now, now)
+	execSeed(t, db, "legacy lifecycle sentinels", `
+UPDATE tasks
+SET canceled_at_unix_ms = 0
+WHERE id = 'task-lifecycle-null';
+INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('placement-lifecycle-null', 'task-lifecycle-null', 'node-agent', 'active', ?, ?);
+INSERT INTO task_runs (
+    id,
+    placement_id,
+    workflow_revision_seen,
+    automation_requested_at_unix_ms,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    started_at_unix_ms,
+    completed_at_unix_ms,
+    interrupted_at_unix_ms,
+    waiting_ask_id
+) VALUES ('run-lifecycle-null', 'placement-lifecycle-null', 1, 0, ?, ?, 0, 0, 0, '');
+INSERT INTO task_transitions (
+    id,
+    task_id,
+    source_placement_id,
+    source_node_key,
+    transition_id,
+    workflow_revision_seen,
+    actor,
+    state,
+    created_at_unix_ms,
+    applied_at_unix_ms
+) VALUES ('transition-lifecycle-null', 'task-lifecycle-null', 'placement-lifecycle-null', 'agent', 'done', 1, 'system', 'pending_approval', ?, 0);
+`, now, now, now, now, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 45 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	var canceledAt, automationRequestedAt, startedAt, completedAt, interruptedAt, appliedAt sql.NullInt64
+	var waitingAskID sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    t.canceled_at_unix_ms,
+    r.automation_requested_at_unix_ms,
+    r.started_at_unix_ms,
+    r.completed_at_unix_ms,
+    r.interrupted_at_unix_ms,
+    r.waiting_ask_id,
+    tt.applied_at_unix_ms
+FROM tasks t
+JOIN task_node_placements p ON p.task_id = t.id
+JOIN task_runs r ON r.placement_id = p.id
+JOIN task_transitions tt ON tt.task_id = t.id
+WHERE t.id = 'task-lifecycle-null'
+`).Scan(&canceledAt, &automationRequestedAt, &startedAt, &completedAt, &interruptedAt, &waitingAskID, &appliedAt); err != nil {
+		t.Fatalf("query migrated lifecycle facts: %v", err)
+	}
+	if canceledAt.Valid || automationRequestedAt.Valid || startedAt.Valid || completedAt.Valid || interruptedAt.Valid || waitingAskID.Valid || appliedAt.Valid {
+		t.Fatalf("migrated lifecycle facts = canceled=%+v automation_requested=%+v started=%+v completed=%+v interrupted=%+v waiting_ask=%+v applied=%+v, want NULL absence", canceledAt, automationRequestedAt, startedAt, completedAt, interruptedAt, waitingAskID, appliedAt)
+	}
+	var status string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT kind
+FROM workflow_task_status_records
+WHERE task_id = 'task-lifecycle-null'
+`).Scan(&status); err != nil {
+		t.Fatalf("query canonical status after lifecycle migration: %v", err)
+	}
+	if status != "waiting_approval" {
+		t.Fatalf("canonical status after lifecycle migration = %q, want waiting_approval", status)
+	}
+	var currentRunID string
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT id
+FROM workflow_task_current_run_records
+WHERE task_id = 'task-lifecycle-null'
+`).Scan(&currentRunID); err != nil {
+		t.Fatalf("query current run projection after lifecycle migration: %v", err)
+	}
+	if currentRunID != "run-lifecycle-null" {
+		t.Fatalf("current run projection after lifecycle migration = %q, want run-lifecycle-null", currentRunID)
+	}
+	if _, err := store.db.ExecContext(t.Context(), `
+UPDATE task_runs
+SET automation_requested_at_unix_ms = 0
+WHERE id = 'run-lifecycle-null'
+`); err == nil {
+		t.Fatal("zero automation request timestamp should be rejected after lifecycle migration")
+	}
+	if _, err := store.db.ExecContext(t.Context(), `
+UPDATE task_transitions
+SET applied_at_unix_ms = 0
+WHERE id = 'transition-lifecycle-null'
+`); err == nil {
+		t.Fatal("zero transition application timestamp should be rejected after lifecycle migration")
+	}
+}
+
 func TestOpenMigratesWorkflowScriptNodesWithRuntimeReferences(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")

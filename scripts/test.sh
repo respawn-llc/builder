@@ -29,6 +29,8 @@ Options:
 Environment:
   KENT_TEST_TIMEOUT_SECONDS
             Server test wall-clock cap in seconds. Defaults to 120.
+  KENT_TEST_GO_PACKAGE_PARALLELISM
+            Maximum Go test packages to execute concurrently. Defaults to 4.
   KENT_TEST_TUI_TIMEOUT_SECONDS
             TUI test wall-clock cap in seconds. Defaults to 600.
   -h, --help
@@ -96,7 +98,7 @@ fi
 if [ "$inherit_env" != "1" ]; then
     while IFS= read -r name; do
         case "$name" in
-            KENT_SKIP_FRONTEND|KENT_TEST_DISABLE_WALL_CLOCK_CAP|KENT_TEST_FRONTEND|KENT_TEST_INHERIT_ENV|KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP|KENT_TEST_TIMEOUT_SECONDS|KENT_TEST_TUI_TIMEOUT_SECONDS)
+            KENT_SKIP_FRONTEND|KENT_TEST_DISABLE_WALL_CLOCK_CAP|KENT_TEST_FRONTEND|KENT_TEST_GO_PACKAGE_PARALLELISM|KENT_TEST_INHERIT_ENV|KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP|KENT_TEST_TIMEOUT_SECONDS|KENT_TEST_TUI_TIMEOUT_SECONDS)
                 ;;
             KENT_*)
                 unset "$name"
@@ -115,8 +117,20 @@ case "$disable_wall_clock_cap" in
 esac
 
 timeout_seconds="${KENT_TEST_TIMEOUT_SECONDS:-120}"
+go_test_package_parallelism="${KENT_TEST_GO_PACKAGE_PARALLELISM:-4}"
 tui_timeout_seconds="${KENT_TEST_TUI_TIMEOUT_SECONDS:-600}"
 inside_tui_wall_clock_cap="${KENT_TEST_INSIDE_TUI_WALL_CLOCK_CAP:-0}"
+case "$go_test_package_parallelism" in
+    ''|*[!0-9]*)
+        printf 'KENT_TEST_GO_PACKAGE_PARALLELISM must be a positive integer\n' >&2
+        exit 2
+        ;;
+esac
+if [ "$go_test_package_parallelism" -le 0 ]; then
+    printf 'KENT_TEST_GO_PACKAGE_PARALLELISM must be a positive integer\n' >&2
+    exit 2
+fi
+server_go_test_args=(-p "$go_test_package_parallelism" "${server_test_args[@]}")
 if [ "$disable_wall_clock_cap" != "1" ]; then
     case "$timeout_seconds" in
         ''|*[!0-9]*)
@@ -307,7 +321,7 @@ run_desktop_tests() {
 run_server_tests() {
     if [ "$disable_wall_clock_cap" = "1" ]; then
         set +e
-        go test "${server_test_args[@]}" >"$go_log_file" 2>&1
+        go test "${server_go_test_args[@]}" >"$go_log_file" 2>&1
         status=$?
         set -e
         if [ "$status" -eq 0 ]; then
@@ -318,7 +332,7 @@ run_server_tests() {
     fi
 
     set +e
-    python3 - "$go_log_file" "${server_test_args[@]}" <<'PY' &
+    python3 - "$go_log_file" "${server_go_test_args[@]}" <<'PY' &
 import os
 import sys
 

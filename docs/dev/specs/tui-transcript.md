@@ -22,13 +22,15 @@
 - Runtime-control feedback rows that appear in the transcript are committed by the runtime. Runtime-backed clients must not emit optimistic or transient transcript echoes for those rows. No local transcript fallback exists; a committed-append failure surfaces as an error.
 - Connectivity/subscription continuity loss discards transient live viewport immediately and recovers by hydrating authoritative committed transcript state.
 - Transcript-affecting transport failures must not be swallowed or converted to fake empty/idle state.
-- Terminal resize that leaves emitted transcript content visually broken under the previous geometry, an event-seq gap or connection/subscription loss, and navigation/event buffering overflow trigger scratch rehydration through the same in-process session navigation/open hydration path used when the TUI opens a session. Scratch rehydration erases only the mutable normal-buffer area, requests the active transcript segment since the latest compaction boundary or conversation start, and appends the hydrated chunk below existing immutable scrollback.
+- Terminal width changes after emitted transcript content exists, an event-seq gap or connection/subscription loss, and navigation/event buffering overflow trigger scratch rehydration through the same in-process session navigation/open hydration path used when the TUI opens a session. Height-only changes repaint the mutable normal-buffer area without scratch rehydration. Scratch rehydration erases only the mutable normal-buffer area, requests the active transcript segment since the latest compaction boundary or conversation start, and appends the hydrated chunk below existing immutable scrollback.
 - Scratch rehydration never restarts the TUI process, clears immutable scrollback, compares against emitted lines, or suppresses duplicate-looking output.
+- Scratch rehydration emits committed assistant final answers from their full saved text, preserving multi-line answer content. The compact ongoing assistant preview rule applies to live/normal rendering, not to scratch rehydration of already-final assistant answers.
 - Assistant finalization while native streaming is active matches by the committed entry's carried stream/step identity and compares only against the in-memory stream source. If the final saved assistant text extends the streamed source, ongoing emits only the missing suffix and finalizes; if it does not and there was no real connection gap, the TUI treats it as an invariant/API failure rather than rehydrating.
 - **Pending tool-call activity lives only in the volatile live region. When tool execution is in progress and no tool completion event has been issued, the tool calls render a loading spinner in a separate terminal area that is refreshed every frame to enable animations, but when tools are completed, they use regular `steer` path to get committed to permanent native terminal scrollback.**
 - Messages in TUI use icon-like, single-symbol glyphs: `@` for web search, `§` for reviewer status/suggestion entries, `⇄` for file edits (edit/patch tools), `$` for shell tool calls, `⚠` for all warnings, `!` for all errors, `ℹ` for all ongoing-visible neutral notices (such as goal, worktree messages), and `?` for questions.
 - **Pending tool-call previews in live region use the same rendering/layout as committed tool-call previews, with no pending-only labels.**
 - **Tool completion appends exactly one final committed line in server emission order. Ongoing never recolors/mutates an earlier emitted tool line.**
+- **A shell invocation that moves to the background renders both its committed tool row and volatile background-activity row with a secondary `$`, faint foreground command, and `• backgrounded` suffix. The command truncates before the suffix so the complete suffix remains visible whenever the terminal can fit it; these rows never label the state as `running`.**
 - **Parallel tool calls commit in server emission order with no ordering guarantee among concurrent calls.**
 - **In main-input mode, `Up`/`Down` are reserved for prompt-history recall at whole-buffer boundaries or multiline cursor movement. They do not scroll ongoing transcript.**
 - `PgUp`/`PgDn` also do not scroll ongoing transcript state.
@@ -49,18 +51,31 @@
 - Detail tool calls with error results stay collapsed by default but may show compact input plus structured error summary.
 - Detail scrolling is line-oriented.
 - `Up`/`Down` move by one rendered line when viewport can scroll.
-- `Enter` toggles the selected entry's expansion; `PgUp`/`PgDn` scroll by a viewport page; `Tab` inside detail returns to ongoing mode.
+- `Enter` toggles the selected expandable entry's expansion; it is a no-op for a non-expandable selection. `PgUp`/`PgDn` scroll by a viewport page; `Tab` inside detail returns to ongoing mode.
+- Raw wheel movement and terminal alternate-scroll cursor keys follow the same one-line state machine as `Up`/`Down`.
+- `PgUp`/`PgDn` pass a signed viewport-page delta through compact detail's generic scroll operation: they move the camera by that delta and select the center owner when possible; at a camera edge they attempt visible selection movement using that same signed delta before requesting an adjacent cursor page.
 - The detail transcript is a bounded window over the session transcript: scrolling at the loaded edge requests the adjacent page; no full-transcript load ever occurs.
-- After line, page, wheel, or alternate-scroll movement, compact detail selects the visible selectable item nearest viewport center.
+- In the scrollable interior, line, page, wheel, or alternate-scroll movement moves the camera and selects the visible selectable item nearest viewport center.
+- At the top or bottom camera edge, line movement continues through visible selectable items beyond the center anchor. Reverse movement walks an off-center selection back to the center anchor before camera scrolling resumes.
+- Detail requests an adjacent cursor page only after movement in that direction cannot move either the loaded camera or the visible local selection.
+- A transition into detail renders the same-session cached bounded page and UI-local detail position immediately, then requests the newest page without a cursor.
+- When the cached window reaches the newest edge, the refreshed newest page preserves the response-time selection and camera only if the selected committed row has one unambiguous surviving identity match. Otherwise, the refreshed page anchors the camera and selection at its end.
+- When the cached window has newer content beyond its bottom edge, the refreshed newest page replaces it and anchors the camera and selection at the refreshed page's end.
+- Session-target replacement clears the previous session's cached bounded page and UI-local detail state before hydrating the new target.
 - Tall expanded entries remain selected while their body crosses the center anchor.
 - Detail rows do not use dedicated collapsed/expanded glyphs. First rendered line keeps normal role/tool symbol; continuations use faint tree guides.
 - Compact detail replaces selected expandable item's role symbol with `▶` or `▼`. The affordance is selected-only.
+- The selected expansion affordance inherits the replaced role symbol's semantic foreground and faintness.
 - Detail status line mirrors selected action as `Enter to expand` or `Enter to collapse`.
 - Detail items use blank-line role-group separators. Consecutive tool rows form dense chunks.
-- Detail selection uses full-width selected background/fill only and does not change foreground colors.
-- Detail is a live transcript view with UI-local expansion and selection. Transcript changes update content while scroll/anchor stays stable unless the user navigates.
-- Mid-step entries show latest completed snapshot only.
-- Snapshot scope is the full session transcript up to latest completed step.
+- The selected lens extends through its adjacent visual spacer lines. Selection spacers are render-only and do not change transcript line ownership, viewport scroll, selection, or paging.
+- Detail reserves a one-cell lens rail before transcript content. Unselected lines use a blank rail cell; every line owned by the selected item uses the primary `▎` rail and `App.ModeBg` content fill, except added/removed patch lines whose diff background takes priority over the lens fill.
+- The rail owns the first terminal cell at every viewport width. A one-cell viewport shows only the selected rail or unselected blank rail; wider viewports render transcript content within the remaining cells using normal truncation.
+- Detail selection does not change semantic foreground colors or text attributes. Markdown, shell syntax, role symbols, continuation guides, and trailing row padding retain their semantic styling over the resolved lens or diff background.
+- Detail loads stale bounded cursor pages from the server. Scrolling at a loaded edge requests the adjacent page, which may prepend or append server-backed page membership. Runtime and live transcript events never self-update, append to, reconcile, or refresh that membership.
+- An adjacent-page request shows a request-scoped `info` status notice using replace delivery and the request UUID as its notice identity. A later notice may replace it and it does not resurface. Matching completion clears only that loading notice; matching failure replaces it through the ordinary error-notice path. The selected expansion action remains the independent detail help-slot segment.
+- Detail owns only UI-local expansion, selection, and scroll state.
+- Mid-step entries are absent until a loaded page contains their committed snapshot.
 - Detail rendering is a flat continuous stream with no grouped sections.
 - Step-end markers appear in detail only.
 - Detail transcript overlay always uses terminal alt-screen `?1049`.
@@ -78,6 +93,7 @@
 - Locked message-type visibility:
 - `agents.md`: `D`
 - `skills`: `D`
+- `subagents`: `D`
 - `environment`: `D`
 - `compaction_summary`: `O`, using compact label in ongoing/collapsed detail and full summary on expansion.
 - `interruption`: `O`
@@ -85,15 +101,23 @@
 - `compaction_soon_reminder`: `D`
 - `reviewer_feedback`: represented by reviewer transcript roles, effective `OC` or `O` depending on reviewer verbosity.
 - `background_notice`: `OC`
+- `custom_tool_call_output`: follows the tool call/result row it belongs to.
 - `handoff_future_message`: `D`
 - `manual_compaction_carryover`: `D`
 - `headless_mode`: `D`
 - `headless_mode_exit`: `D`
+- `workflow_mode`: `OC`
+- `worktree_mode`: `O`
+- `worktree_mode_exit`: `O`
+- `goal`: `O`
+- Thinking-level feedback from `/thinking` is not rendered as a transcript row in ongoing or detail. The TUI surfaces thinking level through the status-line model label/reasoning segment instead of neutral transcript notices.
 - Locked non-message roles:
 - user turns: `O`
-- assistant turns: `O`
+- final assistant turns: `O`
+- assistant commentary/thinking turns: `D`
 - tool calls: `OC`
 - reviewer suggestions/status: `OC` or `O`
+- reasoning-summary progress updates: `D`; their live first bold span is projected into the status-line reasoning slot while the model is reasoning. Ongoing scrollback contains neither reasoning-summary rows nor assistant commentary/thinking rows.
 - Runtime projection decides whether persisted/runtime messages become transcript entries and which role they use.
 - TUI rendering decides how transcript roles behave in ongoing and detail.
 - When a concept already has a dedicated transcript role, do not also render its raw developer/request artifact.
@@ -101,14 +125,31 @@
 ## Rendering Pipeline
 
 - Transcript rendering stages are ordered: content render, low-level semantic transform, wrap, line layout, final decoration.
-- Formatter config owns syntax backgrounds and formatter base foreground.
-- Transcript rendering owns role styling, subdued shell preview styling, and diff semantics.
+- Chroma owns syntax foregrounds and text attributes through `catppuccin-latte` in light mode and `onedark` in dark mode. Shell commands, file-read source results, and structured patch source share the same syntax projection path; Markdown formatting remains independent.
+- Transcript rendering owns role styling, faint shell preview styling, and diff semantics.
 - Layout owns prefixes, indentation, and wrapping only.
 - Semantic color tokens are centralized in `shared/theme`.
 - Syntax-highlighted output must not emit backgrounds unless explicitly intended, such as diff add/remove decoration.
 - Formatted text uses app foreground as base text color.
-- Patch/edit tools use `⇄` in ongoing, detail, and native replay, inheriting result-state color.
-- Detail shell commands use full syntax color. Ongoing shell commands are subdued.
+- Faint text always uses the transcript foreground token plus the terminal faint attribute; there is no separate subdued/gray transcript foreground token.
+- User turns render their full submitted text in ongoing, including multiline prompts that invoke slash commands. Final assistant turns render their full text in ongoing. User and assistant rows use compact text in collapsed detail and full text in expanded detail, with foreground text plus Markdown styling.
+- Shell tool calls use the shared Chroma syntax projection, faint styling, and OS-dependent shell syntax selection.
+- Non-shell tool calls use foreground text, no syntax highlighting, and faint styling.
+- Patch/edit tools use `⇄` in ongoing, detail, and native replay. Patch paths and neutral text use foreground; source lines use the shared Chroma syntax projection; diff add/remove counts use semantic add/remove colors. Diff-line backgrounds blend 20% of the Success/Error token over the active detail surface background.
+- Compaction-related rows use secondary text.
+- Goal-related rows use primary text.
+- Workflow-related rows use primary text and `OC` visibility.
+- Worktree rows use foreground text.
+- `subagents` developer-context rows use foreground text.
+- Supervisor/reviewer-related non-error rows use success text. Supervisor/reviewer error rows use error text.
+- Cache warnings and non-interrupting warnings use warning text.
+- Error rows use error text, including interruption rows.
+- Background shell completion notices use full-strength foreground text and remain separate from shell tool call/result rows.
+- Moving a shell to the background ends its mutable live-tool presentation. The backgrounded tool row remains in immutable ongoing scrollback, and completion is represented by a separate immutable notice.
+- The rendering matrix applies to ongoing and detail modes. Mode-specific compact/full rules may change which content is selected, but not the semantic style roles for the selected content.
+- Role symbols/icons are styled independently from row body text when specified: successful tool-call symbols use success, shell tool-call symbols with raw output requested use warning, shell invocations moved to the background use secondary, failed tool-call symbols use error, supervisor/reviewer symbols use the row's success/error color, compaction symbols use secondary, goal symbols use primary, workflow symbols use primary, and background shell completion symbols use primary regardless of exit status; clients never infer status from display text. Warning symbols use warning, and error symbols use error. Unspecified symbol color behavior requires an explicit spec decision before implementation.
+- Tool previews are input-first. Shell previews show the typed command from tool metadata. Patch/edit previews show structured patch paths and diff add/remove counts or lines. Other tool previews show typed compact/input metadata. Tool result summaries and error summaries do not replace the input preview.
+- Tool-call errors in ongoing and detail keep the failed tool input visible with an error-colored symbol. Patch/edit errors render the patch/edit input shape, including file path and diff add/remove lines when structured patch metadata exists, instead of replacing the row with only error text.
 - No timestamps are shown in UI.
 - Streaming paint cadence is 16ms with token coalescing per flush tick.
 - Main status line is compact and fixed: activity indicator, optional git branch, model label, process metadata, transient warning, and right-aligned context meter. Composition, priority, and notice semantics are owned by tui-status-line.md.
@@ -128,6 +169,7 @@
 - Mid-run steering is soft-insert only at safe boundaries after current tool completion.
 - Steering submissions never lock the input box; each `Enter` while busy queues another steering message.
 - Pending steering and pending user messages are strict FIFO.
+- Live-band queued inputs use secondary/faint styling; live-band steering inputs use primary styling.
 - Multiple queued user steering messages flushed at one boundary coalesce into one user message separated by blank lines.
 - Pending queues are unbounded and in-memory only.
 - Injected mid-run messages persist only on delivery boundary.

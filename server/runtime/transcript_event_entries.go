@@ -8,6 +8,7 @@ import (
 	"core/server/tools"
 	"core/shared/toolspec"
 	"core/shared/transcript"
+	"core/shared/valuecopy"
 )
 
 func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
@@ -19,28 +20,39 @@ func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
 		}
 	case llm.RoleAssistant:
 		if strings.TrimSpace(msg.Content) != "" && !isNoopFinalAnswer(msg) {
-			entries = append(entries, ChatEntry{Role: "assistant", Text: msg.Content, Phase: msg.Phase})
+			entries = append(entries, ChatEntry{
+				Visibility: assistantTranscriptVisibility(msg.Phase),
+				Role:       "assistant",
+				Text:       msg.Content,
+				Phase:      msg.Phase,
+			})
 		}
 		for _, call := range msg.ToolCalls {
 			entries = append(entries, formatPersistedToolCall(call))
 		}
 	case llm.RoleTool:
-		callID := strings.TrimSpace(msg.ToolCallID)
-		result := tools.Result{
-			CallID: callID,
-			Name:   toolspec.ID(strings.TrimSpace(msg.Name)),
-			Output: []byte(msg.Content),
+		if msg.MessageType == llm.MessageTypeCustomToolCallOutput {
+			entries = append(entries, customToolCallOutputChatEntry(msg))
+		} else {
+			entries = append(entries, toolMessageChatEntry(msg))
 		}
-		if result.Name == "" {
-			result.Name = toolspec.ID("tool")
-		}
-		entries = append(entries, toolResultChatEntry(result))
 	case llm.RoleDeveloper:
 		if entry, ok := visibleDeveloperChatEntry(msg); ok {
 			entries = append(entries, entry)
 		}
 	}
 	return entries
+}
+
+func assistantTranscriptVisibility(phase llm.MessagePhase) transcript.EntryVisibility {
+	switch transcript.ClassifyAssistantPhase(string(phase)) {
+	case transcript.AssistantPhaseCommentary:
+		return transcript.EntryVisibilityDetail
+	case transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal:
+		return transcript.EntryVisibilityOngoing
+	default:
+		panic(fmt.Sprintf("unsupported assistant transcript phase %q", phase))
+	}
 }
 
 func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
@@ -52,7 +64,7 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 		if text == "" {
 			return nil
 		}
-		return []ChatEntry{{Role: "user", Text: evt.UserMessage}}
+		return []ChatEntry{{Visibility: transcript.EntryVisibilityOngoing, Role: "user", Text: evt.UserMessage}}
 	case EventAssistantMessage:
 		return VisibleChatEntriesFromMessage(evt.Message)
 	case EventToolCallStarted:
@@ -94,20 +106,39 @@ func TranscriptEntriesFromEvent(evt Event) []ChatEntry {
 		if evt.Background == nil {
 			return nil
 		}
-		if evt.Background.Type != "completed" && evt.Background.Type != "killed" {
+		if !evt.Background.Type.IsTerminal() {
 			return nil
 		}
 		compact := formatBackgroundShellCompact(*evt.Background)
 		return []ChatEntry{{
-			Role:          "system",
-			Text:          formatBackgroundShellNotice(*evt.Background),
-			CondensedText: compact,
-			MessageType:   llm.MessageTypeBackgroundNotice,
-			CompactLabel:  compact,
+			Role:               string(transcript.EntryRoleSystem),
+			Visibility:         transcript.EntryVisibilityOngoingCollapsed,
+			Text:               formatBackgroundShellNotice(*evt.Background),
+			CondensedText:      compact,
+			MessageType:        llm.MessageTypeBackgroundNotice,
+			CompactLabel:       compact,
+			BackgroundExitCode: valuecopy.Pointer(evt.Background.ExitCode),
 		}}
 	default:
 		return nil
 	}
+}
+
+func customToolCallOutputChatEntry(msg llm.Message) ChatEntry {
+	return toolMessageChatEntry(msg)
+}
+
+func toolMessageChatEntry(msg llm.Message) ChatEntry {
+	callID := strings.TrimSpace(msg.ToolCallID)
+	result := tools.Result{
+		CallID: callID,
+		Name:   toolspec.ID(strings.TrimSpace(msg.Name)),
+		Output: []byte(msg.Content),
+	}
+	if result.Name == "" {
+		result.Name = toolspec.ID("tool")
+	}
+	return toolResultChatEntry(result)
 }
 
 func toolResultChatEntry(result tools.Result) ChatEntry {
@@ -121,6 +152,7 @@ func toolResultChatEntry(result tools.Result) ChatEntry {
 		presentation = &normalized
 	}
 	return ChatEntry{
+		Visibility:        transcript.EntryVisibilityOngoingCollapsed,
 		Role:              role,
 		Text:              tools.FormatToolResultByName(string(result.Name), result.Output, result.IsError),
 		CondensedText:     strings.TrimSpace(result.CondensedText),

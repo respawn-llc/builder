@@ -1,9 +1,6 @@
 package analyzer
 
 import (
-	"encoding/base64"
-	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/charmbracelet/x/ansi"
@@ -43,6 +40,7 @@ func (s *sequenceSideChannel) advance(b byte, chunk Chunk, offset int64) {
 	}
 	s.currentChunk = chunk
 	s.currentOffset = offset
+	s.backend.observeByte(b)
 	s.parser.Advance(b)
 	if s.parser.State() == parser.GroundState {
 		s.activeSequence = nil
@@ -97,6 +95,11 @@ func (s *sequenceSideChannel) handleCSI(cmd ansi.Cmd, params ansi.Params) {
 		if cmd.Prefix() == '?' {
 			enabled := cmd.Final() == 'h'
 			params.ForEach(0, func(_ int, mode int, _ bool) {
+				s.backend.operationBudget.detail = "private_mode"
+				if err := s.backend.operationBudget.reserve(); err != nil {
+					s.err = err
+					return
+				}
 				s.privateModeChanges = append(s.privateModeChanges, PrivateModeChange{
 					Mode:       mode,
 					Enabled:    enabled,
@@ -117,17 +120,40 @@ func (s *sequenceSideChannel) handleOSC(cmd int, data []byte) {
 	if !ok {
 		return
 	}
-	payload, ok := phaseMarkerPayload(data)
-	if !ok {
-		return
-	}
-	event, err := parsePhaseMarker(payload, byteRange, s.currentChunk)
+	marker, recognized, err := DecodeOSCData(data)
 	if err != nil {
 		s.err = err
 		return
 	}
+	if !recognized {
+		return
+	}
+	event := PhaseEvent{
+		Sequence:   marker.Sequence,
+		Phase:      marker.Kind,
+		WindowID:   marker.WindowID,
+		ChunkIndex: s.currentChunk.Index,
+		ByteRange:  byteRange,
+		CapturedAt: s.currentChunk.At,
+	}
 	if len(s.phaseEvents) > 0 && event.Sequence <= s.phaseEvents[len(s.phaseEvents)-1].Sequence {
 		s.err = fmt.Errorf("phase marker sequence must increase: previous=%d current=%d", s.phaseEvents[len(s.phaseEvents)-1].Sequence, event.Sequence)
+		return
+	}
+	// Marker windows are a legacy assertion boundary. Finalize the current
+	// terminal transaction before recording either edge so a batch can never
+	// contain writes from both sides of a window.
+	if err := s.backend.flushPendingWrite(); err != nil {
+		s.err = err
+		return
+	}
+	if err := s.backend.flushWriteBatch(); err != nil {
+		s.err = err
+		return
+	}
+	s.backend.operationBudget.detail = "phase_marker"
+	if err := s.backend.operationBudget.reserve(); err != nil {
+		s.err = err
 		return
 	}
 	s.phaseEvents = append(s.phaseEvents, event)
@@ -144,8 +170,7 @@ func (s *sequenceSideChannel) activeByteRange(kind string) (ByteRange, bool) {
 func (s *sequenceSideChannel) recordCursorMove(position Position, byteRange ByteRange) {
 	position.Row = clamp(position.Row, 0, s.backend.dimensions.Rows-1)
 	position.Col = clamp(position.Col, 0, s.backend.dimensions.Cols-1)
-	s.backend.ops = append(s.backend.ops, Operation{
-		Sequence:   len(s.backend.ops),
+	s.backend.appendOperation(Operation{
 		Kind:       OperationCursorMove,
 		ChunkIndex: s.currentChunk.Index,
 		ByteRange:  byteRange,
@@ -157,8 +182,7 @@ func (s *sequenceSideChannel) recordCursorMove(position Position, byteRange Byte
 }
 
 func (s *sequenceSideChannel) recordErase(region Region, byteRange ByteRange) {
-	s.backend.ops = append(s.backend.ops, Operation{
-		Sequence:   len(s.backend.ops),
+	s.backend.appendOperation(Operation{
 		Kind:       OperationErase,
 		ChunkIndex: s.currentChunk.Index,
 		ByteRange:  byteRange,
@@ -170,8 +194,7 @@ func (s *sequenceSideChannel) recordErase(region Region, byteRange ByteRange) {
 }
 
 func (s *sequenceSideChannel) recordScrollRegion(region Region, byteRange ByteRange) {
-	s.backend.ops = append(s.backend.ops, Operation{
-		Sequence:   len(s.backend.ops),
+	s.backend.appendOperation(Operation{
 		Kind:       OperationScrollRegionChange,
 		ChunkIndex: s.currentChunk.Index,
 		ByteRange:  byteRange,
@@ -202,68 +225,4 @@ func eraseLineRegion(cursor Position, dimensions Dimensions, mode int) Region {
 	default:
 		return Region{Top: cursor.Row, Bottom: cursor.Row + 1, Left: cursor.Col, Right: dimensions.Cols}
 	}
-}
-
-type phaseMarkerJSON struct {
-	Version  int     `json:"version"`
-	Seq      int     `json:"seq"`
-	Phase    string  `json:"phase"`
-	WindowID *string `json:"window_id"`
-}
-
-func phaseMarkerPayload(data []byte) ([]byte, bool) {
-	prefix := []byte("777;kent-pty-phase;")
-	if len(data) <= len(prefix) {
-		return nil, false
-	}
-	for index, want := range prefix {
-		if data[index] != want {
-			return nil, false
-		}
-	}
-	return data[len(prefix):], true
-}
-
-func parsePhaseMarker(payload []byte, byteRange ByteRange, chunk Chunk) (PhaseEvent, error) {
-	decoded := make([]byte, base64.RawURLEncoding.DecodedLen(len(payload)))
-	n, err := base64.RawURLEncoding.Decode(decoded, payload)
-	if err != nil {
-		return PhaseEvent{}, fmt.Errorf("decode phase marker payload: %w", err)
-	}
-	var marker phaseMarkerJSON
-	if err := json.Unmarshal(decoded[:n], &marker); err != nil {
-		return PhaseEvent{}, fmt.Errorf("decode phase marker JSON: %w", err)
-	}
-	if marker.Version != 1 {
-		return PhaseEvent{}, fmt.Errorf("unsupported phase marker version %d", marker.Version)
-	}
-	if marker.Seq <= 0 {
-		return PhaseEvent{}, fmt.Errorf("phase marker seq must be positive: %d", marker.Seq)
-	}
-	kind, err := phaseKindFromProtocol(marker.Phase)
-	if err != nil {
-		return PhaseEvent{}, err
-	}
-	var windowID *WindowID
-	if marker.WindowID != nil {
-		if *marker.WindowID == "" {
-			return PhaseEvent{}, errors.New("window_id must not be empty")
-		}
-		parsed, err := NewWindowID(*marker.WindowID)
-		if err != nil {
-			return PhaseEvent{}, err
-		}
-		windowID = &parsed
-	}
-	if err := validateWindowEventID(kind, windowID); err != nil {
-		return PhaseEvent{}, err
-	}
-	return PhaseEvent{
-		Sequence:   marker.Seq,
-		Phase:      kind,
-		WindowID:   windowID,
-		ChunkIndex: chunk.Index,
-		ByteRange:  byteRange,
-		CapturedAt: chunk.At,
-	}, nil
 }

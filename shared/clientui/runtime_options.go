@@ -7,6 +7,8 @@ var supportedThinkingLevels = map[string]struct{}{
 	"medium": {},
 	"high":   {},
 	"xhigh":  {},
+	"max":    {},
+	"ultra":  {},
 }
 
 func NormalizeThinkingLevel(level string) (string, bool) {

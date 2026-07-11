@@ -117,7 +117,7 @@ func (l uiViewLayout) inputPaneCursor(width int) uiInputFieldCursor {
 		return uiInputFieldCursor{}
 	}
 	cursorLine, cursorCol = normalizeInputFieldCursorCell(cursorLine, cursorCol, width, len(visible))
-	return uiInputFieldCursor{Visible: true, Row: cursorLine + 1, Col: cursorCol}
+	return uiInputFieldCursor{Visible: true, Row: framedInputContentCursorRow(cursorLine), Col: cursorCol}
 }
 
 func (l uiViewLayout) wrappedAskPromptLines(width int) ([]wrappedAskPromptLine, int) {
@@ -228,7 +228,11 @@ func (l uiViewLayout) askInputPaneCursor(width int) uiInputFieldCursor {
 		cursorCol = lines[cursorLine].CursorCol
 	}
 	cursorLine, cursorCol = normalizeInputFieldCursorCell(cursorLine, cursorCol, width, len(lines))
-	return uiInputFieldCursor{Visible: true, Row: cursorLine + 1, Col: cursorCol}
+	return uiInputFieldCursor{Visible: true, Row: framedInputContentCursorRow(cursorLine), Col: cursorCol}
+}
+
+func framedInputContentCursorRow(contentRow int) int {
+	return contentRow + 2
 }
 
 func normalizeInputFieldCursorCell(row int, col int, width int, lineCount int) (int, int) {

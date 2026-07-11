@@ -9,7 +9,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 ## Placement And Composition
 
 - The status line is the bottom row of the main-surface frame, part of the ongoing mutable band; exactly one line, present in both ongoing and detail modes. (mutable-band membership owner: ongoing-scrollback-buffer :: Definitions)
-- Compact and fixed: activity indicator, optional git branch, model label, process metadata, transient warning, right-aligned context meter. (owner: tui-transcript :: Rendering)
+- Compact and fixed: activity indicator, optional git branch, model label, process metadata, and a right-aligned help slot, reasoning-or-notice slot, and context meter. (owner: tui-transcript :: Rendering)
 - Space contract: every status-line item has a fixed priority; as width shrinks, lower-priority items yield their space in full before any higher-priority item degrades. Priority descending, each with its own degradation behavior:
   1. Activity spinner/dot — always shown, never truncates.
   2. Spinner word (indicator label: `compacting`/`review`/`goal`/`editing`/`error`) — disappears whole.
@@ -30,18 +30,18 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 
 ## Segments
 
-- Model label: model display name + thinking level; marked `fast` when fast mode is available and enabled; marked model-locked when the session's model contract is locked and differs from the configured model. Exact copy is presentation, not contract.
+- Model label: model display name + thinking level; marked `fast` when fast mode is available and enabled; marked model-locked when the session's model contract is locked and differs from the configured model. The model label is the durable visible location for `/thinking` level changes; successful `/thinking` feedback is status-only and is not rendered as a transcript row in ongoing or detail. Exact copy is presentation, not contract.
 - Git branch, only when known and healthy: hidden while git facts are unavailable, errored, or the branch is unknown. Git facts come from the server-side status source, refreshed in the background — never blocking render.
 - Running background-process count (running/starting only); hidden at zero.
 - There is NO server-ownership segment: the TUI never owns a server under the server-only client model. (owner: tui-startup :: Startup Sequence)
-- Context meter, rightmost: used-context percentage plus a small proportional bar, colored by zone: below 50% success, 50–79% warning, 80%+ error. Hidden when the context window size is unknown. Usage comes from server runtime status pushed with runtime events.
-- Live reasoning status header while the model is reasoning (ladder rung 7); visibility is governed purely by the space ladder.
+- Context meter, rightmost: used-context percentage plus a small proportional bar joined by one space as a single element, colored by zone: below 50% success, 50–79% warning, 80%+ error. Hidden when the context window size is unknown. Usage comes from server runtime status pushed with runtime events.
+- Live reasoning status header while the model is reasoning (ladder rung 7), in a right-aligned slot immediately before the context meter; visibility is governed purely by the space ladder.
 - Post-interrupt feedback (`interrupted`) is an ordinary status notice delivered through the notice system (ladder rung 6) — there is no separate marker concept, dedicated state, or bespoke render path.
 - Help slot (ladder rung 10, one shown at a time): in detail mode, the selected entry's expansion action as `Enter to expand`/`Enter to collapse` (owner: tui-transcript :: Detail Mode); otherwise the idle help hint, hidden while busy/compacting/reviewing or while the help overlay is open.
 
 ## Notices
 
-- One notice shows at a time (ladder rung 6). The only persisted notice is server-disconnect. Transient notices overtake it for their duration: a transient shows immediately even while the disconnect notice is up, and the disconnect notice resumes when the transient clears. Whether other status-line items render alongside is governed solely by the space ladder.
+- One notice shows at a time (ladder rung 6), in the right-aligned reasoning slot immediately before the context meter. A notice replaces the live reasoning status header while visible; reasoning returns when the notice clears if the model is still reasoning. The only persisted notice is server-disconnect. Transient notices overtake it for their duration: a transient shows immediately even while the disconnect notice is up, and the disconnect notice resumes when the transient clears. Whether other status-line items render alongside is governed solely by the space ladder.
 - Persisted disconnect notice: set when any runtime request fails with a connection error, cleared automatically when a later request confirms reachability. This is the single global connection handler — individual surfaces never grow their own connection handling. (owner: tui-startup :: Errors)
 - There is NO native-terminal-write-failure notice. Terminal write-failure handling is owned by ongoing-scrollback-buffer :: Errors (immediate synchronous surfacing, debug-mode panics) and follows that spec to the letter.
 - Transient notices carry exactly one of four kinds — `error`, `warning`, `info`, `success` — mapped to theme color roles, and auto-clear after a default duration (~8s; a default, not a contract). Notice sources are assigned to these four kinds by meaning/best fit (e.g. update-available → `success`); no bespoke per-notice kinds may be added.

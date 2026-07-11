@@ -52,6 +52,10 @@ func (surface uiSurface) wantsAltScreen() bool {
 	}
 }
 
+func isOngoingNormalBufferRestoreTransition(prev, next uiSurface) bool {
+	return prev.wantsAltScreen() && next == uiSurfaceOngoingTranscript
+}
+
 // wantsAlternateScroll reports whether a surface enables terminal alternate-scroll
 // (`?1007`) while active. Per docs/dev/specs/tui-transcript.md, every alt-screen
 // surface enables it except ongoing (never) and the rollback/edit picker (which
@@ -72,17 +76,23 @@ func (m *uiModel) restoreTranscriptSurface() tea.Cmd {
 }
 
 func (m *uiModel) activateSurface(surface uiSurface) tea.Cmd {
+	return m.activateSurfaceFrom(m.surface(), surface, false)
+}
+
+func (m *uiModel) activateSurfaceFrom(prev, surface uiSurface, suppressAltScreen bool) tea.Cmd {
 	if surface == "" {
 		surface = surfaceForTranscriptMode(m.view.Mode())
 	}
-	prev := m.surface()
+	m.updateOngoingOwnershipBeforeSurfaceTransition(prev, surface)
 	m.activeSurface = surface
 	m.syncRendererOutputGate()
-	if prev == surface {
+	if prev == surface || suppressAltScreen {
 		return nil
 	}
-	transitionCmd := m.altScreenCmdForSurfaceTransition(prev, surface)
-	return transitionCmd
+	return sequenceCmds(
+		m.altScreenCmdForSurfaceTransition(prev, surface),
+		m.ongoingOwnershipAfterSurfaceTransitionCmd(prev, surface),
+	)
 }
 
 type uiPresentationFeatureReducer struct {

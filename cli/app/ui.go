@@ -12,6 +12,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/transcriptdiag"
+	"core/shared/valuecopy"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -150,9 +151,13 @@ func (m *uiModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.waitRuntimeEventCmd(),
 		waitAskEvent(m.askEvents),
+		waitOngoingTranscriptEvent(m.ongoingEvents),
 		waitPathReferenceSearchEvent(m.pathReferenceEvents),
 		tea.SetWindowTitle(sessionTitle(m.sessionName)),
 		tea.WindowSize(),
+	}
+	if !m.windowSizeKnown && m.nativeOngoingSurfaceActive() {
+		cmds = append(cmds, m.setOngoingNormalBufferOwned(false))
 	}
 	if m.runtimeConnectionEvents != nil {
 		cmds = append(cmds, waitRuntimeConnectionStateChange(m.runtimeConnectionEvents))
@@ -167,6 +172,13 @@ func (m *uiModel) Init() tea.Cmd {
 	if len(m.startupCmds) > 0 {
 		cmds = append(cmds, m.startupCmds...)
 		m.startupCmds = nil
+	}
+	if m.windowSizeKnown && m.nativeOngoingSurfaceActive() {
+		if result, err := m.ongoingSurface.Render(m.ongoingFrameInput()); err != nil {
+			cmds = append(cmds, m.handleOngoingSurfaceError(err))
+		} else if cmd := m.handleOngoingResult(result); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -204,9 +216,9 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout().syncViewport()
 		return m, nil
 	}
-	m.forwardToView(msg)
+	cmd := m.forwardToView(msg)
 	m.layout().syncViewport()
-	return m, nil
+	return m, cmd
 }
 
 func (m *uiModel) setDebugKeyTransientStatus(raw tea.Msg, normalized tea.KeyMsg, source string) {
@@ -216,24 +228,31 @@ func (m *uiModel) setDebugKeyTransientStatus(raw tea.Msg, normalized tea.KeyMsg,
 	}
 	m.transientStatusToken++
 	m.transientStatus = fmt.Sprintf("key src=%s raw=%q norm=%q type=%d", source, rawString, normalized.String(), normalized.Type)
-	m.transientStatusKind = uiStatusNoticeNeutral
+	m.transientStatusKind = uiStatusNoticeInfo
 }
 
 func statusHasAuthData(snapshot uiStatusSnapshot) bool {
 	return snapshot.Auth.Visible || snapshot.Subscription.Applicable || strings.TrimSpace(snapshot.Subscription.Summary) != "" || len(snapshot.Subscription.Windows) > 0
 }
 
-func (m *uiModel) forwardToView(msg tea.Msg) {
+func (m *uiModel) forwardToView(msg tea.Msg) tea.Cmd {
 	prevMode := m.view.Mode()
-	next, _ := m.view.Update(msg)
+	prevSurface := m.surface()
+	next, cmd := m.view.Update(msg)
 	casted, ok := next.(tui.Model)
 	if ok {
 		m.view = casted
 	}
 	if prevMode != m.view.Mode() && m.surface().isTranscript() {
-		m.activeSurface = surfaceForTranscriptMode(m.view.Mode())
-		m.syncRendererOutputGate()
+		surfaceTransitionCmd := m.activateSurfaceFrom(prevSurface, surfaceForTranscriptMode(m.view.Mode()), false)
+		detailLoadCmd := m.detailLoadCmdForModeTransition(prevMode, m.view.Mode())
+		return sequenceCmds(
+			cmd,
+			surfaceTransitionCmd,
+			detailLoadCmd,
+		)
 	}
+	return cmd
 }
 
 func (m *uiModel) Close() {
@@ -247,6 +266,7 @@ func (m *uiModel) Close() {
 		m.pathReferenceSearch = nil
 		m.pathReferenceEvents = nil
 	}
+	_ = m.cancelPendingDetailTranscriptRequest()
 }
 
 func (m *uiModel) Transition() UITransition {
@@ -343,16 +363,18 @@ func (m *uiModel) showTransientStatusNotice(notice uiStatusNotice) tea.Cmd {
 	m.transientStatus = strings.TrimSpace(notice.Text)
 	m.transientStatusKind = notice.Kind
 	m.transientStatusNoticeID = strings.TrimSpace(notice.NoticeID)
-	if notice.Kind == uiStatusNoticeUpdateAvailable {
-		m.startupUpdateShown = true
+	m.transientStatusRequestID = valuecopy.Pointer(notice.RequestID)
+	if notice.Duration <= 0 {
+		return nil
 	}
 	return scheduleTransientStatusClear(notice.Duration, token)
 }
 
 func (m *uiModel) advanceTransientStatusQueue() tea.Cmd {
 	m.transientStatus = ""
-	m.transientStatusKind = uiStatusNoticeNeutral
+	m.transientStatusKind = uiStatusNoticeInfo
 	m.transientStatusNoticeID = ""
+	m.transientStatusRequestID = nil
 	if len(m.transientStatusQueue) == 0 {
 		m.layout().syncViewport()
 		return nil

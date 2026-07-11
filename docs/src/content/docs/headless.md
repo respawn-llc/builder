@@ -58,12 +58,13 @@ If that session has a locked model request shape, the role must match the sessio
 
 ```toml
 [subagents.research]
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 thinking_level = "xhigh"
 system_prompt_file = "research-agent.md"
 description = "Use when you need fast, smart general-purpose researcher for deep thinking or complicated plans."
 priority_request_mode = true
 agent_callable = true
+workflow_subagent = true
 
 [subagents.research.tools]
 patch = false
@@ -73,6 +74,7 @@ patch = false
 ```
 
 - Set `agent_callable = false` to disallow agents to call that subagent role on their own.
+- Set `workflow_subagent = false` to disallow workflow agents from calling that custom role.
 - The built-in `fast` role exists even without config.
 - Subagent roles inherit the main config and then override only the keys you set in that role table.
 
@@ -82,10 +84,13 @@ Useful role-specific keys include:
 - `thinking_level`, `model_verbosity`, `priority_request_mode`
 - `system_prompt_file`
 - `description`, `agent_callable`
+- `workflow_subagent`
 - `[subagents.<role>.tools]`
 - `[subagents.<role>.skills]`
 
 For the full list of shared overrides, see [Configuration](../config/).
+
+Workflow-agent launches of hidden custom roles fail. Direct `kent run --agent <role>` commands from a human shell remain available, and `fast` is exempt from workflow-specific controls.
 
 ## Session Behavior
 

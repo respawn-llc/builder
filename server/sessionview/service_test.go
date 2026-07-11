@@ -318,8 +318,8 @@ func TestServiceSessionTranscriptTailEntriesUsesConfiguredCacheWarningModeForDor
 		mode config.CacheWarningMode
 		want clientui.EntryVisibility
 	}{
-		{name: "default", mode: config.CacheWarningModeDefault, want: clientui.EntryVisibilityVerbose},
-		{name: "verbose", mode: config.CacheWarningModeVerbose, want: clientui.EntryVisibilityAll},
+		{name: "default", mode: config.CacheWarningModeDefault, want: clientui.EntryVisibilityDetail},
+		{name: "verbose", mode: config.CacheWarningModeVerbose, want: clientui.EntryVisibilityOngoing},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -353,8 +353,8 @@ func TestServiceWithCacheWarningModeInvalidatesDormantCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get dormant transcript tail entries default: %v", err)
 	}
-	if got := first[0].Visibility; got != clientui.EntryVisibilityVerbose {
-		t.Fatalf("default cache warning visibility = %q, want %q", got, clientui.EntryVisibilityVerbose)
+	if got := first[0].Visibility; got != clientui.EntryVisibilityDetail {
+		t.Fatalf("default cache warning visibility = %q, want %q", got, clientui.EntryVisibilityDetail)
 	}
 
 	secondSvc := svc.WithCacheWarningMode(config.CacheWarningModeVerbose)
@@ -365,8 +365,8 @@ func TestServiceWithCacheWarningModeInvalidatesDormantCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get dormant transcript tail entries verbose: %v", err)
 	}
-	if got := second[0].Visibility; got != clientui.EntryVisibilityAll {
-		t.Fatalf("verbose cache warning visibility = %q, want %q", got, clientui.EntryVisibilityAll)
+	if got := second[0].Visibility; got != clientui.EntryVisibilityOngoing {
+		t.Fatalf("verbose cache warning visibility = %q, want %q", got, clientui.EntryVisibilityOngoing)
 	}
 }
 

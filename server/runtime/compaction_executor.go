@@ -8,6 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -49,7 +50,7 @@ func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.R
 		engine:            "remote",
 		items:             replacement,
 		usage:             resp.Usage,
-		trimmedItemsCount: resp.TrimmedItemsCount,
+		trimmedItemsCount: textutil.CloneInt(resp.TrimmedItemsCount),
 		overflowRepair:    repairStats,
 		provider:          providerID,
 	}, nil
@@ -179,7 +180,7 @@ func (e *Engine) compactionCacheObservationRequest(ctx context.Context, request 
 	if e == nil {
 		return llm.Request{}, false, nil
 	}
-	cacheKey := conversationPromptCacheKey(e.SessionID(), e.compactionRuntimeState().Count())
+	cacheKey := e.conversationPromptCacheKey(e.SessionID())
 	if cacheKey == "" {
 		return llm.Request{}, false, nil
 	}
@@ -232,7 +233,7 @@ func (e *Engine) compactLocal(ctx context.Context, input []llm.ResponseItem, pro
 		engine:            "local",
 		items:             replacement,
 		usage:             llm.Usage{InputTokens: usageInputTokens, WindowTokens: e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())},
-		trimmedItemsCount: 0,
+		trimmedItemsCount: nil,
 		overflowRepair:    repairStats,
 		provider:          providerID,
 		summary:           strings.TrimSpace(summary),
@@ -326,7 +327,7 @@ func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, locked se
 		req.FastMode = e.FastModeEnabled()
 		req.SessionID = e.SessionID()
 		if e.supportsPromptCacheKey(ctx) {
-			if cacheKey := conversationPromptCacheKey(e.SessionID(), e.compactionRuntimeState().Count()); cacheKey != "" {
+			if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
 				req.PromptCacheKey = cacheKey
 				req.PromptCacheScope = transcript.CacheWarningScopeConversation
 			}

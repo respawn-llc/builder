@@ -41,7 +41,7 @@ func TestAnalyzePrintableChunkRecordsScreenAndWriteOperation(t *testing.T) {
 	if op.Region != (pty.Region{Top: 0, Bottom: 1, Left: 0, Right: 5}) {
 		t.Fatalf("operation region = %#v, want first row columns [0,5)", op.Region)
 	}
-	if op.Write == nil || op.Write.Text != "hello" {
+	if op.Write == nil || op.Write.Text() != "hello" {
 		t.Fatalf("operation write payload = %#v, want text %q", op.Write, "hello")
 	}
 	if op.ByteRange != (pty.ByteRange{Start: 0, End: 5}) {
@@ -49,6 +49,59 @@ func TestAnalyzePrintableChunkRecordsScreenAndWriteOperation(t *testing.T) {
 	}
 	if op.ChunkIndex != 0 {
 		t.Fatalf("operation chunk index = %d, want 0", op.ChunkIndex)
+	}
+}
+
+func TestAnalyzePersistsCellStyleFacts(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeBytes(t, []byte(
+		"\x1b[1;3;4;38;2;17;34;51;48;2;68;85;102mB\x1b[0m"+
+			"\x1b[2;38;2;17;34;51;48;2;68;85;102mF\x1b[0m",
+	), pty.MustDimensions(2, 4))
+
+	boldCell := analysis.Screen.Cells[0][0]
+	if boldCell.Content != "B" {
+		t.Fatalf("bold cell content = %q, want B", boldCell.Content)
+	}
+	if boldCell.Foreground == "" || boldCell.Background == "" || boldCell.Foreground == boldCell.Background {
+		t.Fatalf("bold cell colors = foreground %q background %q, want distinct terminal colors", boldCell.Foreground, boldCell.Background)
+	}
+	if !boldCell.Bold || boldCell.Faint || !boldCell.Italic || !boldCell.Underline {
+		t.Fatalf("bold cell attributes = bold=%t faint=%t italic=%t underline=%t", boldCell.Bold, boldCell.Faint, boldCell.Italic, boldCell.Underline)
+	}
+
+	faintCell := analysis.Screen.Cells[0][1]
+	if faintCell.Content != "F" || !faintCell.Faint || faintCell.Bold {
+		t.Fatalf("faint cell = content %q bold=%t faint=%t", faintCell.Content, faintCell.Bold, faintCell.Faint)
+	}
+
+	var boldWrite *pty.WritePayload
+	var faintWrite *pty.WritePayload
+	for _, operation := range analysis.Operations {
+		for _, record := range pty.OperationRecords(operation) {
+			if record.Kind != pty.OperationWrite || record.Write == nil {
+				continue
+			}
+			switch record.Write.Text() {
+			case "B":
+				boldWrite = record.Write
+			case "F":
+				faintWrite = record.Write
+			}
+		}
+	}
+	if boldWrite == nil || faintWrite == nil {
+		t.Fatalf("styled write operations missing: bold=%#v faint=%#v", boldWrite, faintWrite)
+	}
+	if boldWrite.Foreground != boldCell.Foreground || boldWrite.Background != boldCell.Background {
+		t.Fatalf("bold write colors = foreground %q background %q, want cell colors %q/%q", boldWrite.Foreground, boldWrite.Background, boldCell.Foreground, boldCell.Background)
+	}
+	if !boldWrite.Bold || boldWrite.Faint || !boldWrite.Italic || !boldWrite.Underline {
+		t.Fatalf("bold write attributes = bold=%t faint=%t italic=%t underline=%t", boldWrite.Bold, boldWrite.Faint, boldWrite.Italic, boldWrite.Underline)
+	}
+	if !faintWrite.Faint || faintWrite.Bold {
+		t.Fatalf("faint write attributes = bold=%t faint=%t", faintWrite.Bold, faintWrite.Faint)
 	}
 }
 
@@ -85,6 +138,51 @@ func TestNewCaptureRejectsAfterChunkResizeForEmptyCapture(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("NewCaptureWithEvents succeeded for after-chunk resize without chunks")
+	}
+}
+
+func TestAnalyzeRejectsMalformedPublicCaptureInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+
+	offset := int64(0)
+	capture := pty.Capture{
+		Dimensions: pty.MustDimensions(2, 4),
+		Raw:        []byte("x"),
+		Resizes: []pty.ResizeEvent{{
+			Placement:  pty.BeforeFirstChunk(),
+			Offset:     &offset,
+			Dimensions: pty.Dimensions{},
+		}},
+	}
+	if _, err := pty.Analyze(capture); err == nil {
+		t.Fatal("Analyze succeeded for malformed public capture")
+	}
+}
+
+func TestAnalyzePreservesChunkAndTimestampMetadataAcrossReplay(t *testing.T) {
+	t.Parallel()
+
+	capture, err := pty.NewCapture(
+		pty.MustDimensions(2, 8),
+		[]pty.Chunk{
+			pty.NewChunk(0, time.Millisecond, []byte("\x1b[?1049h")),
+			pty.NewChunk(1, 2*time.Millisecond, []byte("x")),
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	analysis, err := pty.Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if len(analysis.PrivateModeChanges) != 1 || analysis.PrivateModeChanges[0].ChunkIndex != 0 || analysis.PrivateModeChanges[0].CapturedAt != time.Millisecond {
+		t.Fatalf("mode metadata = %#v", analysis.PrivateModeChanges)
+	}
+	for _, operation := range analysis.Operations {
+		if operation.Kind == pty.OperationWrite && (operation.ChunkIndex != 1 || operation.CapturedAt != 2*time.Millisecond) {
+			t.Fatalf("write metadata = %#v", operation)
+		}
 	}
 }
 
@@ -173,6 +271,19 @@ func TestAnalyzeDECPrivateModesRecordTypedOperations(t *testing.T) {
 	}
 }
 
+func TestAnalyzeAlternateScreenRestoresNormalBuffer(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeBytes(
+		t,
+		[]byte("normal\x1b[?1049h\x1b[2J\x1b[Halternate\x1b[?1049l"),
+		pty.MustDimensions(2, 12),
+	)
+	if got := analysis.Screen.TextInRegion(pty.Region{Top: 0, Bottom: 1, Left: 0, Right: 6}); got != "normal" {
+		t.Fatalf("restored normal buffer = %q, want %q", got, "normal")
+	}
+}
+
 func TestScreenSnapshotReportsBlankFrame(t *testing.T) {
 	t.Parallel()
 
@@ -180,10 +291,50 @@ func TestScreenSnapshotReportsBlankFrame(t *testing.T) {
 	if !blank.IsBlank() {
 		t.Fatal("new screen snapshot should be blank")
 	}
+	if diagnostic := blank.BlankFrameDiagnostic(); diagnostic != nil {
+		t.Fatalf("blank frame diagnostic = %+v, want nil", diagnostic)
+	}
 	written := analyzeBytes(t, []byte("x"), pty.MustDimensions(2, 4)).Screen
 	if written.IsBlank() {
 		t.Fatal("screen with content should not be blank")
 	}
+	diagnostic := written.BlankFrameDiagnostic()
+	if diagnostic == nil {
+		t.Fatal("nonblank screen diagnostic = nil")
+	}
+	if diagnostic.Dimensions != (pty.MustDimensions(2, 4)) || diagnostic.Position != (pty.Position{Row: 0, Col: 0}) || diagnostic.Content != "x" {
+		t.Fatalf("blank frame diagnostic = %+v", diagnostic)
+	}
+}
+
+func TestDimensionsRejectOutOfRangeAndOversizedGeometryBeforeScreenAllocation(t *testing.T) {
+	t.Parallel()
+
+	for _, dimensions := range []pty.Dimensions{
+		{Rows: 0, Cols: 1},
+		{Rows: 201, Cols: 1},
+		{Rows: 1, Cols: 501},
+		{Rows: 201, Cols: 500},
+	} {
+		if _, err := pty.NewDimensions(dimensions.Rows, dimensions.Cols); err == nil {
+			t.Fatalf("NewDimensions(%+v) succeeded", dimensions)
+		}
+	}
+
+	if _, err := pty.NewCaptureWithEvents(
+		pty.MustDimensions(1, 1),
+		nil,
+		[]pty.ResizeEvent{{Placement: pty.BeforeFirstChunk(), Dimensions: pty.Dimensions{Rows: 201, Cols: 500}}},
+	); err == nil {
+		t.Fatal("NewCaptureWithEvents accepted oversized resize")
+	}
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("NewScreenSnapshot accepted invalid dimensions")
+		}
+	}()
+	_ = pty.NewScreenSnapshot(pty.Dimensions{Rows: 201, Cols: 500})
 }
 
 func TestAnalyzeResizeEventRecordsTypedOperation(t *testing.T) {
@@ -307,6 +458,11 @@ func requireOperation(t *testing.T, analysis pty.Analysis, kind pty.OperationKin
 	for _, op := range analysis.Operations {
 		if op.Kind == kind && op.Region == region {
 			return
+		}
+		for _, control := range op.Controls {
+			if control.Kind == kind && control.Region == region {
+				return
+			}
 		}
 	}
 	t.Fatalf("operation kind=%v region=%#v not found in %#v", kind, region, analysis.Operations)

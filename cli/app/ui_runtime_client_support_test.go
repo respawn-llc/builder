@@ -13,9 +13,11 @@ import (
 
 type countingSessionViewClient struct {
 	view            clientui.RuntimeMainView
+	page            clientui.TranscriptPage
 	count           atomic.Int32
 	mainViewCount   atomic.Int32
 	lastMainViewReq serverapi.SessionMainViewRequest
+	lastPageReq     serverapi.SessionTranscriptPageRequest
 }
 
 func (c *countingSessionViewClient) GetSessionMainView(_ context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
@@ -25,11 +27,52 @@ func (c *countingSessionViewClient) GetSessionMainView(_ context.Context, req se
 	return serverapi.SessionMainViewResponse{MainView: c.view}, nil
 }
 
+func (c *countingSessionViewClient) GetSessionTranscriptPage(_ context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	c.lastPageReq = req
+	return serverapi.SessionTranscriptPageResponse{Transcript: c.page}, nil
+}
+
 type blockingSessionViewClient struct{}
 
 func (blockingSessionViewClient) GetSessionMainView(ctx context.Context, _ serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	<-ctx.Done()
 	return serverapi.SessionMainViewResponse{}, ctx.Err()
+}
+
+func (blockingSessionViewClient) GetSessionTranscriptPage(ctx context.Context, _ serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	<-ctx.Done()
+	return serverapi.SessionTranscriptPageResponse{}, ctx.Err()
+}
+
+type controlledTranscriptPageResult struct {
+	response serverapi.SessionTranscriptPageResponse
+	err      error
+}
+
+type controlledTranscriptPageClient struct {
+	started chan serverapi.SessionTranscriptPageRequest
+	results chan controlledTranscriptPageResult
+}
+
+func newControlledTranscriptPageClient() *controlledTranscriptPageClient {
+	return &controlledTranscriptPageClient{
+		started: make(chan serverapi.SessionTranscriptPageRequest, 8),
+		results: make(chan controlledTranscriptPageResult, 8),
+	}
+}
+
+func (c *controlledTranscriptPageClient) GetSessionMainView(context.Context, serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
+	return serverapi.SessionMainViewResponse{}, nil
+}
+
+func (c *controlledTranscriptPageClient) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	c.started <- req
+	select {
+	case result := <-c.results:
+		return result.response, result.err
+	case <-ctx.Done():
+		return serverapi.SessionTranscriptPageResponse{}, ctx.Err()
+	}
 }
 
 type flakySessionViewClient struct {
@@ -54,6 +97,10 @@ func (c *flakySessionViewClient) GetSessionMainView(context.Context, serverapi.S
 		return c.responses[len(c.responses)-1], nil
 	}
 	return serverapi.SessionMainViewResponse{}, nil
+}
+
+func (c *flakySessionViewClient) GetSessionTranscriptPage(context.Context, serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	return serverapi.SessionTranscriptPageResponse{}, nil
 }
 
 type mutableRuntimeResolver struct {

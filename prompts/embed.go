@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -236,6 +237,14 @@ type workflowTaskInstructionsTemplateData struct {
 	TaskCommentListCommand     string
 }
 
+type workflowNudgeTemplateData struct {
+	LaunchCommand              string
+	RejectionReason            string
+	NodeCompletionInstructions string
+	GoalText                   string
+	GoalReminder               string
+}
+
 //go:embed *.md system_prompt/*.md goal/*.md workflow/*.md questions/*.md
 var promptFS embed.FS
 
@@ -276,6 +285,7 @@ var (
 	HeadlessModePrompt                               = mustPrompt("headless_mode_prompt.md")
 	HeadlessModeExitPrompt                           = mustPrompt("headless_mode_exit_prompt.md")
 	WorkflowTaskInstructionsPrompt                   = mustPrompt("workflow/workflow_task_instructions.md")
+	WorkflowNudgePrompt                              = mustPrompt("workflow/nudge.md")
 	WorkflowToolCompletionInstructionsPrompt         = mustPrompt("workflow/tool_completion_instructions.md")
 	WorkflowStructuredCompletionInstructionsPrompt   = mustPrompt("workflow/structured_completion_instructions.md")
 	WorkflowShellCompletionInstructionsPrompt        = mustPrompt("workflow/shell_completion_instructions.md")
@@ -432,6 +442,24 @@ func RenderWorktreeModeExitPrompt(branch, cwd, worktreePath, workspaceRoot strin
 
 func RenderWorkflowTaskInstructions(args WorkflowNodeContextArgs, nodeCompletionInstructions string) (string, error) {
 	return renderNamedTemplate("workflow task instructions", WorkflowTaskInstructionsPrompt, newWorkflowTaskInstructionsTemplateData(args, nodeCompletionInstructions))
+}
+
+func RenderWorkflowNudgePrompt(rejectionReason, nodeCompletionInstructions, goalText, goalReminder string) (string, error) {
+	rejectionReason = strings.TrimSpace(rejectionReason)
+	if rejectionReason == "" {
+		return "", errors.New("render workflow nudge: rejection reason is required")
+	}
+	nodeCompletionInstructions = strings.TrimSpace(nodeCompletionInstructions)
+	if nodeCompletionInstructions == "" {
+		return "", errors.New("render workflow nudge: node completion instructions are required")
+	}
+	return renderNamedTemplate("workflow nudge", WorkflowNudgePrompt, workflowNudgeTemplateData{
+		LaunchCommand:              LaunchCommand(),
+		RejectionReason:            rejectionReason,
+		NodeCompletionInstructions: nodeCompletionInstructions,
+		GoalText:                   strings.TrimSpace(goalText),
+		GoalReminder:               strings.TrimSpace(goalReminder),
+	})
 }
 
 func newWorkflowTaskInstructionsTemplateData(args WorkflowNodeContextArgs, nodeCompletionInstructions string) workflowTaskInstructionsTemplateData {

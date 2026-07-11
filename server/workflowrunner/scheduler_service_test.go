@@ -37,7 +37,7 @@ func TestSchedulerSelectsOldestRunnableRunAndRespectsConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns second: %v", err)
 	}
-	if runs[0].StartedAt != 0 {
+	if runs[0].StartedAt != nil {
 		t.Fatalf("second run was durably started despite concurrency cap: %+v", runs[0])
 	}
 }
@@ -156,7 +156,7 @@ func TestSchedulerRestartKeepsInterruptedRunInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != "manual" {
+	if runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != "manual" {
 		t.Fatalf("interrupted run changed after restart: %+v", runs[0])
 	}
 }
@@ -213,7 +213,7 @@ func TestSchedulerActiveOwnershipIsMemoryOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != ReasonSchedulerStartupOrphanedRun {
+	if runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerStartupOrphanedRun {
 		t.Fatalf("restarted scheduler did not treat prior active owner as orphaned: %+v", runs[0])
 	}
 	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != startedRun.RunID {
@@ -255,14 +255,14 @@ func TestSchedulerRecoveryInterruptsOrphanedStartedRunsAndKeepsRunnable(t *testi
 	if err != nil {
 		t.Fatalf("ListRuns orphan: %v", err)
 	}
-	if orphanRuns[0].InterruptedAt == 0 || orphanRuns[0].InterruptionReason != ReasonSchedulerStartupOrphanedRun {
+	if orphanRuns[0].InterruptedAt == nil || orphanRuns[0].InterruptionReason == nil || *orphanRuns[0].InterruptionReason != ReasonSchedulerStartupOrphanedRun {
 		t.Fatalf("orphan run = %+v, want interrupted", orphanRuns[0])
 	}
 	runnableRuns, err := store.ListRuns(ctx, runnable.TaskID)
 	if err != nil {
 		t.Fatalf("ListRuns runnable: %v", err)
 	}
-	if runnableRuns[0].InterruptedAt != 0 || runnableRuns[0].StartedAt != 0 {
+	if runnableRuns[0].InterruptedAt != nil || runnableRuns[0].StartedAt != nil {
 		t.Fatalf("runnable run changed during recovery: %+v", runnableRuns[0])
 	}
 }
@@ -290,14 +290,14 @@ func TestSchedulerRecoveryUsesPendingAskResolver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns keep: %v", err)
 	}
-	if keepRuns[0].InterruptedAt != 0 || keepRuns[0].WaitingAskID != "ask-keep" {
+	if keepRuns[0].InterruptedAt != nil || keepRuns[0].WaitingAskID == nil || *keepRuns[0].WaitingAskID != "ask-keep" {
 		t.Fatalf("keep waiting run = %+v", keepRuns[0])
 	}
 	dropRuns, err := store.ListRuns(ctx, drop.TaskID)
 	if err != nil {
 		t.Fatalf("ListRuns drop: %v", err)
 	}
-	if dropRuns[0].InterruptedAt == 0 || dropRuns[0].InterruptionReason != ReasonSchedulerPendingAskUnavailable {
+	if dropRuns[0].InterruptedAt == nil || dropRuns[0].InterruptionReason == nil || *dropRuns[0].InterruptionReason != ReasonSchedulerPendingAskUnavailable {
 		t.Fatalf("drop waiting run = %+v, want interrupted", dropRuns[0])
 	}
 }
@@ -316,7 +316,7 @@ func TestSchedulerRuntimeStartFailureInterruptsRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
+	if runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
 		t.Fatalf("run after starter failure = %+v", runs[0])
 	}
 	var detail string
@@ -346,7 +346,7 @@ func TestSchedulerStartContinuesAfterRuntimeStartFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
+	if runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
 		t.Fatalf("run after startup starter failure = %+v", runs[0])
 	}
 }

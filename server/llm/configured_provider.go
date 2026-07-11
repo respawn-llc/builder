@@ -29,7 +29,7 @@ func ResolveRuntimeProviderCapabilities(authState auth.State, settings config.Se
 			}
 		}
 	}
-	mode := runtimeOpenAIAuthMode(authState)
+	mode := OpenAIAuthModeForAuthState(authState)
 	variant, err := resolveRuntimeTransportVariant(provider, settings.OpenAIBaseURL, mode)
 	if err != nil {
 		return ProviderCapabilities{}, err
@@ -37,18 +37,18 @@ func ResolveRuntimeProviderCapabilities(authState auth.State, settings config.Se
 	return variant.Capabilities, nil
 }
 
-func runtimeOpenAIAuthMode(authState auth.State) openAIAuthMode {
+func OpenAIAuthModeForAuthState(authState auth.State) OpenAIAuthMode {
 	if authState.Method.Type != auth.MethodOAuth {
-		return openAIAuthMode{}
+		return OpenAIAuthMode{}
 	}
 	accountID := ""
 	if authState.Method.OAuth != nil {
 		accountID = strings.TrimSpace(authState.Method.OAuth.AccountID)
 	}
-	return openAIAuthMode{IsOAuth: true, AccountID: accountID}
+	return OpenAIAuthMode{IsOAuth: true, AccountID: accountID}
 }
 
-func resolveRuntimeTransportVariant(provider Provider, baseURL string, mode openAIAuthMode) (ProviderVariantContract, error) {
+func resolveRuntimeTransportVariant(provider Provider, baseURL string, mode OpenAIAuthMode) (ProviderVariantContract, error) {
 	if variant, err := resolveProviderTransportVariant(provider, baseURL, mode); err == nil {
 		return variant, nil
 	} else if provider == ProviderOpenAI {

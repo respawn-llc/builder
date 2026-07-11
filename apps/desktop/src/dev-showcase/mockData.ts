@@ -132,12 +132,12 @@ export const mockAttentionRows = [
 ] as const;
 
 const statuses = {
-  backlog: status("backlog", "Backlog", []),
-  running: status("running", "Running", ["run-a7f2"]),
-  question: status("waiting_question", "Waiting question", ["run-22bc"]),
-  approval: status("waiting_approval", "Waiting approval", ["run-11cd"]),
-  interrupted: status("interrupted", "Interrupted", ["run-99da"]),
-  done: status("done", "Done", []),
+  backlog: status("backlog", []),
+  running: status("running", ["run-a7f2"]),
+  question: status("waiting_question", ["run-22bc"]),
+  approval: status("waiting_approval", ["run-11cd"]),
+  interrupted: status("interrupted", ["run-99da"]),
+  done: status("done", []),
 } as const;
 
 const taskActions = {
@@ -405,8 +405,8 @@ function card(
   };
 }
 
-function status(kind: string, label: string, runIDs: readonly string[]): TaskStatus {
-  return { attentionTypes: [], kind, label, nativeState: kind, nodeIDs: [], runIDs };
+function status(kind: TaskStatus["kind"], runIDs: readonly string[]): TaskStatus {
+  return { attentionTypes: [], kind, nativeState: kind, nodeIDs: [], runIDs };
 }
 
 function actions(overrides: Partial<TaskActions>): TaskActions {
