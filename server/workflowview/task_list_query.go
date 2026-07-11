@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -217,7 +218,7 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 		if err != nil {
 			return nil, err
 		}
-		columnKeys, err := workflowTaskStatusIDs(row.ID, "column_keys_json", row.ColumnKeysJson)
+		columnKeys, err := workflowTaskListColumnKeys(row.ID, row.ColumnKeysJson)
 		if err != nil {
 			return nil, err
 		}
@@ -239,6 +240,24 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 		})
 	}
 	return out, nil
+}
+
+func workflowTaskListColumnKeys(taskID string, encoded string) ([]string, error) {
+	var values []string
+	if err := json.Unmarshal([]byte(encoded), &values); err != nil {
+		return nil, fmt.Errorf("workflow task list record for task %q has malformed column_keys_json: %w", taskID, err)
+	}
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("workflow task list record for task %q has blank column_keys_json[%d]", taskID, index)
+		}
+		if _, exists := seen[value]; exists {
+			return nil, fmt.Errorf("workflow task list record for task %q has duplicate column_keys_json value %q", taskID, value)
+		}
+		seen[value] = struct{}{}
+	}
+	return values, nil
 }
 
 func workflowTaskListSortSelector(sortSelectors []serverapi.WorkflowTaskListSort, index int) serverapi.WorkflowTaskListSort {

@@ -302,6 +302,16 @@ func TestListTasksPreservesFanoutStatusUnions(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskListColumnKeysPreservesBoardOrder(t *testing.T) {
+	columnKeys, err := workflowTaskListColumnKeys("task-1", `["zeta","alpha"]`)
+	if err != nil {
+		t.Fatalf("workflowTaskListColumnKeys: %v", err)
+	}
+	if !reflect.DeepEqual(columnKeys, []string{"zeta", "alpha"}) {
+		t.Fatalf("column keys = %+v, want board order", columnKeys)
+	}
+}
+
 func TestListTasksSortAndCursorPagination(t *testing.T) {
 	ctx, store, workflowStore, binding, view := newWorkflowViewTestContextService(t)
 	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
