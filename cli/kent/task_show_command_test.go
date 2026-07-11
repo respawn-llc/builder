@@ -274,7 +274,6 @@ func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 	for _, want := range []string{
 		"WOR-1: Task\n",
 		"Body:\n```md\nDo the work.\n```\n",
-		"Status: backlog\n",
 		"Project: \"Project\" (project-1)\n",
 		"Workflow: \"Workflow\" (workflow-1)\n",
 		"Created at 2025-01-01T00:00:00Z UTC\n",

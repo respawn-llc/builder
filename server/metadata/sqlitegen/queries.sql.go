@@ -5932,6 +5932,91 @@ func (q *Queries) ListTaskRunsByIDs(ctx context.Context, ids []string) ([]TaskRu
 	return items, nil
 }
 
+const listTaskRunsByTasks = `-- name: ListTaskRunsByTasks :many
+SELECT
+    id,
+    task_id,
+    placement_id,
+    node_id,
+    session_id,
+    run_generation,
+    workflow_revision_seen,
+    automation_requested_at_unix_ms,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    started_at_unix_ms,
+    completed_at_unix_ms,
+    interrupted_at_unix_ms,
+    interruption_reason,
+    interruption_detail_json,
+    waiting_ask_id,
+    effective_completion_mode,
+    invalid_completion_count,
+    run_start_snapshot_json,
+    metadata_json
+FROM task_run_records
+WHERE task_id IN (/*SLICE:task_ids*/?)
+ORDER BY task_id ASC, created_at_unix_ms ASC, (
+    SELECT storage.rowid
+    FROM task_runs storage
+    WHERE storage.id = task_run_records.id
+) ASC
+`
+
+func (q *Queries) ListTaskRunsByTasks(ctx context.Context, taskIds []string) ([]TaskRunRecord, error) {
+	query := listTaskRunsByTasks
+	var queryParams []interface{}
+	if len(taskIds) > 0 {
+		for _, v := range taskIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", strings.Repeat(",?", len(taskIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:task_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskRunRecord
+	for rows.Next() {
+		var i TaskRunRecord
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.PlacementID,
+			&i.NodeID,
+			&i.SessionID,
+			&i.RunGeneration,
+			&i.WorkflowRevisionSeen,
+			&i.AutomationRequestedAtUnixMs,
+			&i.CreatedAtUnixMs,
+			&i.UpdatedAtUnixMs,
+			&i.StartedAtUnixMs,
+			&i.CompletedAtUnixMs,
+			&i.InterruptedAtUnixMs,
+			&i.InterruptionReason,
+			&i.InterruptionDetailJson,
+			&i.WaitingAskID,
+			&i.EffectiveCompletionMode,
+			&i.InvalidCompletionCount,
+			&i.RunStartSnapshotJson,
+			&i.MetadataJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskTransitionEdges = `-- name: ListTaskTransitionEdges :many
 SELECT
     id,
@@ -7447,21 +7532,61 @@ visible_columns AS (
     SELECT
         CAST(json_extract(value, '$.node_id') AS TEXT) AS node_id,
         CAST(json_extract(value, '$.node_key') AS TEXT) AS node_key,
+        CAST(json_extract(value, '$.node_kind') AS TEXT) AS node_kind,
         CAST(json_extract(value, '$.status_order') AS INTEGER) AS column_rank
     FROM args, json_each(args.visible_columns_json)
+),
+canceled_terminal_column AS (
+    SELECT node_id
+    FROM visible_columns
+    WHERE node_kind = 'terminal'
+    ORDER BY CASE node_key WHEN 'done' THEN 0 ELSE 1 END ASC, column_rank ASC
+    LIMIT 1
 ),
 current_positions AS (
     SELECT p.task_id, p.node_id
     FROM task_node_placements p
+    JOIN task_records t ON t.id = p.task_id
+    JOIN workflow_nodes n ON n.id = p.node_id
+    CROSS JOIN args
     WHERE p.state IN ('active', 'waiting_approval')
+      AND t.project_id = args.project_id
+      AND t.workflow_id = args.workflow_id
+      AND (
+          t.canceled_at_unix_ms IS NULL
+          OR n.kind = 'terminal'
+      )
 
     UNION
 
     SELECT tt.task_id, tt.source_node_id
     FROM task_transition_records tt
+    JOIN task_records t ON t.id = tt.task_id
+    CROSS JOIN args
     WHERE tt.state = 'pending_approval'
       AND tt.source_node_id IS NOT NULL
       AND trim(tt.source_node_id) != ''
+      AND t.project_id = args.project_id
+      AND t.workflow_id = args.workflow_id
+      AND t.canceled_at_unix_ms IS NULL
+
+    UNION
+
+    SELECT t.id, terminal.node_id
+    FROM task_records t
+    CROSS JOIN args
+    CROSS JOIN canceled_terminal_column terminal
+    WHERE t.project_id = args.project_id
+      AND t.workflow_id = args.workflow_id
+      AND t.canceled_at_unix_ms IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1
+          FROM task_node_placements p
+          JOIN workflow_nodes n ON n.id = p.node_id
+          WHERE p.task_id = t.id
+            AND p.state = 'active'
+            AND n.kind = 'terminal'
+      )
 ),
 column_positions AS (
     SELECT DISTINCT position.task_id, columns.node_key, columns.column_rank

@@ -186,13 +186,14 @@ func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardReque
 	if err != nil {
 		return serverapi.WorkflowBoard{}, err
 	}
+	pageRunsByTaskID, err := s.taskRunsByTask(ctx, candidates)
+	if err != nil {
+		return serverapi.WorkflowBoard{}, err
+	}
 	cards := make([]serverapi.WorkflowBoardTaskCard, 0, len(candidates))
 	for _, task := range candidates {
 		cardPlacements := pagePlacementsByTaskID[task.ID]
-		card, done, err := s.taskCard(ctx, task, statusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, cardPlacements, def, nodeKinds), def, nodeKinds, sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace))
-		if err != nil {
-			return serverapi.WorkflowBoard{}, err
-		}
+		card, done := s.taskCard(task, statusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, cardPlacements, def, nodeKinds), pageRunsByTaskID[task.ID], def, nodeKinds, sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace))
 		if done {
 			continue
 		}
@@ -216,6 +217,10 @@ func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardReque
 	if err != nil {
 		return serverapi.WorkflowBoard{}, err
 	}
+	doneRunsByTaskID, err := s.taskRunsByTask(ctx, doneTasks)
+	if err != nil {
+		return serverapi.WorkflowBoard{}, err
+	}
 	doneTaskIDs := make([]string, 0, len(doneTasks))
 	for _, task := range doneTasks {
 		doneTaskIDs = append(doneTaskIDs, task.ID)
@@ -226,10 +231,7 @@ func (s *Service) GetBoard(ctx context.Context, req serverapi.WorkflowBoardReque
 	}
 	donePreview := make([]serverapi.WorkflowBoardTaskCard, 0, len(doneTasks))
 	for _, task := range doneTasks {
-		card, done, err := s.taskCard(ctx, task, doneStatusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, donePlacementsByTaskID[task.ID], def, nodeKinds), def, nodeKinds, sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace))
-		if err != nil {
-			return serverapi.WorkflowBoard{}, err
-		}
+		card, done := s.taskCard(task, doneStatusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, donePlacementsByTaskID[task.ID], def, nodeKinds), doneRunsByTaskID[task.ID], def, nodeKinds, sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace))
 		if done {
 			donePreview = append(donePreview, card)
 		}
@@ -568,12 +570,13 @@ func (s *Service) ListBoardNodeCards(ctx context.Context, req serverapi.Workflow
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
+	runsByTaskID, err := s.taskRunsByTask(ctx, candidates)
+	if err != nil {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	}
 	cards := make([]serverapi.WorkflowBoardTaskCard, 0, len(candidates))
 	for _, task := range candidates {
-		card, _, err := s.taskCard(ctx, task, statusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, placementsByTaskID[task.ID], def, nodeKinds), def, nodeKinds, sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace))
-		if err != nil {
-			return serverapi.WorkflowBoardNodeCardsListResponse{}, err
-		}
+		card, _ := s.taskCard(task, statusesByTaskID[task.ID], effectiveBoardPlacementsForTask(task, placementsByTaskID[task.ID], def, nodeKinds), runsByTaskID[task.ID], def, nodeKinds, sourceWorkspaceForTask(task, workspacesByID, primaryWorkspace))
 		cards = append(cards, card)
 	}
 	nextPageToken := ""
@@ -606,6 +609,25 @@ func (s *Service) boardPlacementsByTask(ctx context.Context, tasks []sqlitegen.T
 	}
 	for taskID, taskPlacements := range pendingApprovalPlacements {
 		byTaskID[taskID] = append(byTaskID[taskID], taskPlacements...)
+	}
+	return byTaskID, nil
+}
+
+func (s *Service) taskRunsByTask(ctx context.Context, tasks []sqlitegen.TaskRecord) (map[string][]sqlitegen.TaskRunRecord, error) {
+	if len(tasks) == 0 {
+		return map[string][]sqlitegen.TaskRunRecord{}, nil
+	}
+	taskIDs := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		taskIDs = append(taskIDs, task.ID)
+	}
+	runs, err := s.queries.ListTaskRunsByTasks(ctx, taskIDs)
+	if err != nil {
+		return nil, err
+	}
+	byTaskID := make(map[string][]sqlitegen.TaskRunRecord, len(tasks))
+	for _, run := range runs {
+		byTaskID[run.TaskID] = append(byTaskID[run.TaskID], run)
 	}
 	return byTaskID, nil
 }
@@ -2097,14 +2119,20 @@ func boardVisibleNodeKind(kind string) bool {
 	return workflow.NodeKind(kind) != workflow.NodeKindJoin
 }
 
-func (s *Service) taskCard(ctx context.Context, task sqlitegen.TaskRecord, statusFact workflowTaskStatusFact, placements []sqlitegen.TaskNodePlacementRecord, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool, error) {
-	summary := taskSummary(task, statusFact.Status, statusFact.Done)
-	runs, err := s.queries.ListTaskRuns(ctx, task.ID)
-	if err != nil {
-		return serverapi.WorkflowBoardTaskCard{}, false, err
-	}
+func (s *Service) taskCard(task sqlitegen.TaskRecord, statusFact workflowTaskStatusFact, placements []sqlitegen.TaskNodePlacementRecord, runs []sqlitegen.TaskRunRecord, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind, sourceWorkspace serverapi.ProjectWorkspaceSummary) (serverapi.WorkflowBoardTaskCard, bool) {
+	summary := taskSummary(task, statusFact.Status, statusFact.Done || hasActiveTerminalPlacement(placements, nodeKinds))
 	actions := taskActions(task, summary, placements, runs, def, nodeKinds)
-	return serverapi.WorkflowBoardTaskCard{TaskID: task.ID, ShortID: task.ShortID, Title: task.Title, BodyPreview: summary.BodyPreview, WorkflowID: task.WorkflowID, ActiveNodeIDs: summary.ActiveNodeIDs, SourceWorkspace: sourceWorkspace, Status: statusFact.Status, Actions: actions, UpdatedAtUnixMs: task.UpdatedAtUnixMs}, summary.Done, nil
+	return serverapi.WorkflowBoardTaskCard{TaskID: task.ID, ShortID: task.ShortID, Title: task.Title, BodyPreview: summary.BodyPreview, WorkflowID: task.WorkflowID, ActiveNodeIDs: summary.ActiveNodeIDs, SourceWorkspace: sourceWorkspace, Status: statusFact.Status, Actions: actions, UpdatedAtUnixMs: task.UpdatedAtUnixMs}, summary.Done
+}
+
+func hasActiveTerminalPlacement(placements []sqlitegen.TaskNodePlacementRecord, nodeKinds map[string]workflow.NodeKind) bool {
+	for _, placement := range placements {
+		nodeID, ok := taskNodePlacementNodeID(placement)
+		if ok && placement.State == "active" && nodeKinds[nodeID] == workflow.NodeKindTerminal {
+			return true
+		}
+	}
+	return false
 }
 
 func taskActions(task sqlitegen.TaskRecord, summary serverapi.WorkflowTaskSummary, placements []sqlitegen.TaskNodePlacementRecord, runs []sqlitegen.TaskRunRecord, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind) serverapi.WorkflowTaskActions {

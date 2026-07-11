@@ -755,6 +755,9 @@ func TestBoardNodeCardsArchiveCanceledTaskInDoneNode(t *testing.T) {
 	if doneColumn.TaskCount != 1 {
 		t.Fatalf("done count = %d, want canceled task counted in Done", doneColumn.TaskCount)
 	}
+	if len(board.DonePreview) != 1 || board.DonePreview[0].TaskID != string(task.ID) || board.DonePreview[0].Status.Kind != serverapi.WorkflowTaskStatusKindCanceled {
+		t.Fatalf("done preview = %+v, want canceled task", board.DonePreview)
+	}
 	page, err := view.ListBoardNodeCards(ctx, serverapi.WorkflowBoardNodeCardsListRequest{ProjectID: binding.ProjectID, WorkflowID: string(workflowID), NodeID: doneColumn.Node.NodeID}, workflow.StaticRoleResolver{"coder": true})
 	if err != nil {
 		t.Fatalf("ListBoardNodeCards done: %v", err)

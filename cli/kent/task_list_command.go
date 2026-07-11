@@ -120,12 +120,6 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, jsonOut bool) int {
 	items := taskListItemsFromResponse(resp.Tasks)
-	for _, item := range items {
-		if _, err := taskStatusText(item.Status); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-	}
 	if jsonOut {
 		if err := json.NewEncoder(stdout).Encode(taskListOutput{ProjectID: resp.ProjectID, WorkflowID: resp.WorkflowID, NextPageToken: resp.NextPageToken, Tasks: items}); err != nil {
 			fmt.Fprintln(stderr, err)
@@ -174,9 +168,27 @@ func writeTaskListError(stderr io.Writer, err error) {
 		fmt.Fprintf(stderr, " Available project UUIDs: %s.", strings.Join(scopeErr.ProjectIDs, ", "))
 	}
 	if len(scopeErr.WorkflowIDs) > 0 {
-		fmt.Fprintf(stderr, " Available workflow UUIDs: %s.", strings.Join(scopeErr.WorkflowIDs, ", "))
+		fmt.Fprintf(stderr, " Available workflow UUIDs: %s.", strings.Join(workflowSelectorsForDisplay(scopeErr.WorkflowIDs), ", "))
 	}
 	fmt.Fprintln(stderr)
+}
+
+func workflowSelectorsForDisplay(workflowIDs []string) []string {
+	selectors := make([]string, 0, len(workflowIDs))
+	for _, workflowID := range workflowIDs {
+		selector, hasPrefix := strings.CutPrefix(workflowID, "workflow-")
+		if !hasPrefix {
+			selectors = append(selectors, workflowID)
+			continue
+		}
+		parsed, err := runtimeids.ParseCanonicalUUIDv4(selector, "workflow id")
+		if err != nil {
+			selectors = append(selectors, workflowID)
+			continue
+		}
+		selectors = append(selectors, parsed.String())
+	}
+	return selectors
 }
 
 func taskListColumnKeysText(columnKeys []string) string {

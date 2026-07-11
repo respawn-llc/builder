@@ -190,6 +190,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	if err := workflowStore.CancelTask(ctx, canceled.ID, "stop"); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
+	forceCanceledBacklogPlacementWithoutTerminal(t, ctx, store, canceled.ID, workflowID)
 
 	projectID := binding.ProjectID
 	list := func(request serverapi.WorkflowTaskListRequest) serverapi.WorkflowTaskListResponse {

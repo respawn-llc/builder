@@ -20,7 +20,7 @@ func parseUUIDv4Value(raw string, field string) (uuidv4Value, error) {
 	if err != nil {
 		return uuidv4Value{}, fmt.Errorf("%s must be a UUID", field)
 	}
-	if parsed.Version() != 4 {
+	if parsed.Version() != 4 || parsed.Variant() != uuid.RFC4122 {
 		return uuidv4Value{}, fmt.Errorf("%s must be a UUIDv4", field)
 	}
 	return uuidv4Value{value: parsed}, nil
@@ -42,7 +42,7 @@ func ParseCanonicalUUIDv4(raw string, field string) (uuid.UUID, error) {
 		return uuid.Nil, fmt.Errorf("%s must not have leading or trailing whitespace", field)
 	}
 	parsed, err := uuid.Parse(raw)
-	if err != nil || parsed.Version() != 4 || parsed.String() != raw {
+	if err != nil || parsed.Version() != 4 || parsed.Variant() != uuid.RFC4122 || parsed.String() != raw {
 		return uuid.Nil, fmt.Errorf("%s must be a UUIDv4", field)
 	}
 	return parsed, nil
