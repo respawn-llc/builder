@@ -25,6 +25,7 @@ import (
 )
 
 const fixedWait = 500 * time.Millisecond
+const readinessWait = 2 * time.Second
 const cleanupWait = 10 * time.Second
 
 var directHTTPClient = &http.Client{
@@ -103,7 +104,7 @@ func (e *IsolatedEnvironment) WaitReady() error {
 	if e == nil || e.Server == nil || e.Server.cmd == nil || e.Server.cmd.Process == nil {
 		return errors.New("isolated server is required")
 	}
-	deadline := time.Now().Add(fixedWait)
+	deadline := time.Now().Add(readinessWait)
 	url := "http://" + net.JoinHostPort(e.Host, strconv.Itoa(e.Port)) + "/readyz"
 	for time.Now().Before(deadline) {
 		probeContext, cancel := context.WithDeadline(context.Background(), deadline)
@@ -245,6 +246,12 @@ func (s *ServerHandle) ForceKill() error {
 }
 
 func startServer(binary string, root string, host string, port int, stubURL string) (*ServerHandle, error) {
+	preflightContext, cancelPreflight := context.WithTimeout(context.Background(), readinessWait)
+	preflightOutput, preflightErr := exec.CommandContext(preflightContext, binary, "--version").CombinedOutput()
+	cancelPreflight()
+	if preflightErr != nil {
+		return nil, fmt.Errorf("preflight standalone server binary: %w: %s", preflightErr, string(preflightOutput))
+	}
 	cmd := exec.Command(binary, "serve", "--persistence-root", root)
 	environment, err := serverEnvironment(filepath.Join(root, "server-home"), root, host, port, stubURL)
 	if err != nil {

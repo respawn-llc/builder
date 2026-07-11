@@ -116,8 +116,8 @@ func TestWaitReadyRejectsForeignPIDAndExitedServer(t *testing.T) {
 	if err := environment.WaitReady(); err == nil {
 		t.Fatal("WaitReady accepted an exited server")
 	}
-	if time.Since(started) > fixedWait {
-		t.Fatal("WaitReady did not fail within its fixed deadline")
+	if time.Since(started) > readinessWait {
+		t.Fatal("WaitReady did not fail within its readiness deadline")
 	}
 }
 
