@@ -612,7 +612,6 @@ type WorkflowDeleteRequest struct {
 	ExpectedProjectCount int64  `json:"expected_project_count"`
 	ExpectedLinkCount    int64  `json:"expected_link_count"`
 	ExpectedTaskCount    int64  `json:"expected_task_count"`
-	CleanupArtifacts     bool   `json:"cleanup_artifacts,omitempty"`
 }
 
 type WorkflowDeleteResponse struct {

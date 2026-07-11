@@ -941,7 +941,6 @@ func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 		ExpectedProjectCount: req.ExpectedProjectCount,
 		ExpectedLinkCount:    req.ExpectedLinkCount,
 		ExpectedTaskCount:    req.ExpectedTaskCount,
-		CleanupArtifacts:     req.CleanupArtifacts,
 	})
 	if err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err

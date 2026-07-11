@@ -29,7 +29,6 @@ type WorkflowDeleteRequest struct {
 	ExpectedProjectCount int64
 	ExpectedLinkCount    int64
 	ExpectedTaskCount    int64
-	CleanupArtifacts     bool
 }
 
 type WorkflowDeleteResult struct {
@@ -84,7 +83,6 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 		return WorkflowDeleteResult{Impact: impact, Blockers: blockers}, nil
 	}
 
-	now := s.now().UnixMilli()
 	pendingApprovals, err := q.ListPendingApprovalTransitionIDsByWorkflow(ctx, string(req.WorkflowID))
 	if err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("list workflow pending approvals: %w", err)
@@ -104,9 +102,6 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	}
 	if _, err := q.DeleteWorkflowTasksByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow tasks: %w", err)
-	}
-	if _, err := q.ClearDeletedWorkflowDefaultProjectLinks(ctx, sqlitegen.ClearDeletedWorkflowDefaultProjectLinksParams{UpdatedAtUnixMs: now, WorkflowID: string(req.WorkflowID)}); err != nil {
-		return WorkflowDeleteResult{}, fmt.Errorf("clear workflow default links: %w", err)
 	}
 	if _, err := q.DeleteProjectWorkflowLinksByWorkflowID(ctx, string(req.WorkflowID)); err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("delete workflow project links: %w", err)
@@ -196,11 +191,8 @@ func workflowDeleteImpactFromRow(row sqlitegen.GetWorkflowDeleteImpactRow) Workf
 
 func workflowDeleteBlockers(req WorkflowDeleteRequest, impact WorkflowDeleteImpact) []WorkflowDeleteBlocker {
 	blockers := []WorkflowDeleteBlocker{}
-	if req.CleanupArtifacts {
-		blockers = append(blockers, WorkflowDeleteBlocker{Code: "artifact_cleanup_unsupported", Message: "Artifact and worktree cleanup is not wired yet. Delete the workflow without cleanup to remove only database rows.", Count: 1})
-	}
 	if impact.DefaultReplacementProjectCount > 0 {
-		blockers = append(blockers, WorkflowDeleteBlocker{Code: "default_replacement_required", Message: "Workflow is the default for projects that still have other workflow links. Set replacement defaults before deleting this workflow.", Count: impact.DefaultReplacementProjectCount})
+		blockers = append(blockers, WorkflowDeleteBlocker{Code: "default_replacement_required", Message: "Workflow is the default for one or more projects. Set replacement defaults before deleting this workflow.", Count: impact.DefaultReplacementProjectCount})
 	}
 	if impact.ActiveRunCount > 0 {
 		blockers = append(blockers, WorkflowDeleteBlocker{Code: "active_runs", Message: "Workflow has active runs. Interrupt or finish affected tasks before deleting the workflow.", Count: impact.ActiveRunCount})

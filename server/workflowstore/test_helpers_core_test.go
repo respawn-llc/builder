@@ -80,7 +80,7 @@ func hasProjectWorkflowUnlinkBlocker(blockers []ProjectWorkflowUnlinkBlocker, co
 	return false
 }
 
-func confirmedWorkflowDeleteRequest(impact WorkflowDeleteImpact, cleanupArtifacts bool) WorkflowDeleteRequest {
+func confirmedWorkflowDeleteRequest(impact WorkflowDeleteImpact) WorkflowDeleteRequest {
 	return WorkflowDeleteRequest{
 		WorkflowID:           impact.WorkflowID,
 		Confirmed:            true,
@@ -88,7 +88,6 @@ func confirmedWorkflowDeleteRequest(impact WorkflowDeleteImpact, cleanupArtifact
 		ExpectedProjectCount: impact.ProjectCount,
 		ExpectedLinkCount:    impact.LinkCount,
 		ExpectedTaskCount:    impact.TaskCount,
-		CleanupArtifacts:     cleanupArtifacts,
 	}
 }
 

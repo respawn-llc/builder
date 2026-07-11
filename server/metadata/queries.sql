@@ -886,17 +886,6 @@ WHERE id IN (
     WHERE workflow_id = sqlc.arg(workflow_id)
 );
 
--- name: ClearDeletedWorkflowDefaultProjectLinks :execrows
-UPDATE projects
-SET
-    default_project_workflow_link_id = '',
-    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
-WHERE default_project_workflow_link_id IN (
-    SELECT id
-    FROM project_workflow_links
-    WHERE workflow_id = sqlc.arg(workflow_id)
-);
-
 -- name: DeleteProjectWorkflowLinksByWorkflowID :execrows
 DELETE FROM project_workflow_links
 WHERE workflow_id = sqlc.arg(workflow_id);

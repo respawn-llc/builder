@@ -43,7 +43,6 @@ export type WorkflowDeleteInput = Readonly<{
   expectedProjectCount: number;
   expectedLinkCount: number;
   expectedTaskCount: number;
-  cleanupArtifacts?: boolean;
 }>;
 
 export type WorkflowGraphValidateDraftInput = Readonly<{

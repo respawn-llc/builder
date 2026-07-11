@@ -486,7 +486,6 @@ describe("ApiClient", () => {
         expectedProjectCount: 1,
         expectedLinkCount: 1,
         expectedTaskCount: 2,
-        cleanupArtifacts: false,
       }),
     ).resolves.toMatchObject({
       deleted: false,
@@ -506,7 +505,6 @@ describe("ApiClient", () => {
         expected_project_count: 1,
         expected_link_count: 1,
         expected_task_count: 2,
-        cleanup_artifacts: false,
       },
     });
   });

@@ -380,7 +380,7 @@ func TestTaskExecutionTargetNegotiationCascadesOnTaskAndWorkflowDeletion(t *test
 			t.Fatalf("PreviewWorkflowDelete: %v", err)
 		}
 
-		deleted, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(impact, false))
+		deleted, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(impact))
 		if err != nil {
 			t.Fatalf("DeleteWorkflow: %v", err)
 		}

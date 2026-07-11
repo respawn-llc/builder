@@ -3,9 +3,12 @@ package workflowstore
 import (
 	"database/sql"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
+	"core/server/metadata"
+	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 )
 
@@ -171,6 +174,34 @@ func TestWorkflowDeletePreviewAndConfirmedApplyDeleteDatabaseRows(t *testing.T) 
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	worktreeRoot := t.TempDir()
+	const worktreeID = "workflow-delete-worktree"
+	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID: worktreeID, WorkspaceID: binding.WorkspaceID, CanonicalRoot: worktreeRoot, DisplayName: "Workflow delete target", Availability: "available", Managed: true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if _, err := store.queries.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID: string(task.ID), ManagedWorktreeID: nullableString(worktreeID), UpdatedAtUnixMs: store.now().UnixMilli(),
+	}); err != nil {
+		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
+	}
+	provisioningGeneration := "workflow-delete-provisioning"
+	if err := store.SaveTaskExecutionTarget(ctx, workflow.ExecutionTarget{
+		TaskID: task.ID, Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind: workflow.ExecutionTargetSourceNamedRef, NamedRef: executionTargetStringPointer("refs/heads/main"), Commit: "workflow-delete-commit",
+		},
+		State: workflow.ExecutionTargetStateLocked, ProvisioningGeneration: &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration, SetupState: workflow.ExecutionTargetSetupSucceeded,
+		RecoveryDisposition: workflow.ExecutionTargetRecoveryAvailable,
+	}); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+	sentinelPath := worktreeRoot + "/workflow-delete-sentinel"
+	if err := os.WriteFile(sentinelPath, []byte("preserve"), 0o600); err != nil {
+		t.Fatalf("write worktree sentinel: %v", err)
+	}
 
 	impact, err := store.PreviewWorkflowDelete(ctx, workflowID)
 	if err != nil {
@@ -188,15 +219,7 @@ func TestWorkflowDeletePreviewAndConfirmedApplyDeleteDatabaseRows(t *testing.T) 
 		t.Fatalf("unconfirmed delete result = %+v, want confirmation blocker", unconfirmed)
 	}
 
-	cleanup, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(impact, true))
-	if err != nil {
-		t.Fatalf("DeleteWorkflow cleanup: %v", err)
-	}
-	if cleanup.Deleted || !hasWorkflowDeleteBlocker(cleanup.Blockers, "artifact_cleanup_unsupported", 1) {
-		t.Fatalf("cleanup delete result = %+v, want unsupported cleanup blocker", cleanup)
-	}
-
-	deleted, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(impact, false))
+	deleted, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(impact))
 	if err != nil {
 		t.Fatalf("DeleteWorkflow confirmed: %v", err)
 	}
@@ -205,6 +228,9 @@ func TestWorkflowDeletePreviewAndConfirmedApplyDeleteDatabaseRows(t *testing.T) 
 	}
 	if _, err := store.queries.GetTask(ctx, string(task.ID)); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("GetTask after workflow delete = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := store.StartTask(ctx, task.ID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("StartTask after workflow delete = %v, want %v", err, sql.ErrNoRows)
 	}
 	if _, err := store.queries.GetWorkflow(ctx, string(workflowID)); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("GetWorkflow after workflow delete = %v, want sql.ErrNoRows", err)
@@ -223,6 +249,19 @@ func TestWorkflowDeletePreviewAndConfirmedApplyDeleteDatabaseRows(t *testing.T) 
 	if nodeCount != 0 {
 		t.Fatalf("workflow node count after delete = %d, want 0", nodeCount)
 	}
+	if _, err := store.metadata.GetWorktreeRecordByID(ctx, worktreeID); err != nil {
+		t.Fatalf("workflow deletion must preserve managed worktree metadata: %v", err)
+	}
+	if _, err := os.Stat(sentinelPath); err != nil {
+		t.Fatalf("workflow deletion must preserve managed worktree files: %v", err)
+	}
+	var targetCount int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_execution_targets WHERE task_id = ?`, string(task.ID)).Scan(&targetCount); err != nil {
+		t.Fatalf("count task execution targets after workflow delete: %v", err)
+	}
+	if targetCount != 0 {
+		t.Fatalf("task execution targets after workflow delete = %d, want cascade deletion", targetCount)
+	}
 }
 
 func TestWorkflowDeleteBlocksRunnableAndActiveRuns(t *testing.T) {
@@ -238,7 +277,7 @@ func TestWorkflowDeleteBlocksRunnableAndActiveRuns(t *testing.T) {
 	if runnableImpact.RunnableRunCount != 1 || runnableImpact.ActiveRunCount != 0 || runnableImpact.BlockedTaskCount != 1 {
 		t.Fatalf("runnable impact = %+v, want one runnable blocked task", runnableImpact)
 	}
-	runnableDelete, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(runnableImpact, false))
+	runnableDelete, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(runnableImpact))
 	if err != nil {
 		t.Fatalf("DeleteWorkflow runnable: %v", err)
 	}
@@ -256,7 +295,7 @@ func TestWorkflowDeleteBlocksRunnableAndActiveRuns(t *testing.T) {
 	if activeImpact.ActiveRunCount != 1 || activeImpact.RunnableRunCount != 0 || activeImpact.BlockedTaskCount != 1 {
 		t.Fatalf("active impact = %+v, want one active blocked task", activeImpact)
 	}
-	activeDelete, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(activeImpact, false))
+	activeDelete, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(activeImpact))
 	if err != nil {
 		t.Fatalf("DeleteWorkflow active: %v", err)
 	}
@@ -285,7 +324,7 @@ func TestWorkflowDeleteBlocksDefaultReplacementAndDetectsImpactChanges(t *testin
 	if defaultImpact.DefaultReplacementProjectCount != 1 {
 		t.Fatalf("default impact = %+v, want one project requiring replacement default", defaultImpact)
 	}
-	blockedDefault, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(defaultImpact, false))
+	blockedDefault, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(defaultImpact))
 	if err != nil {
 		t.Fatalf("DeleteWorkflow default: %v", err)
 	}
@@ -310,7 +349,7 @@ func TestWorkflowDeleteBlocksDefaultReplacementAndDetectsImpactChanges(t *testin
 	if deleteableImpact.DefaultReplacementProjectCount != 0 {
 		t.Fatalf("deleteable impact = %+v, want no replacement blocker", deleteableImpact)
 	}
-	deleted, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(deleteableImpact, false))
+	deleted, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(deleteableImpact))
 	if err != nil {
 		t.Fatalf("DeleteWorkflow after replacement: %v", err)
 	}
@@ -336,7 +375,7 @@ func TestWorkflowDeleteBlocksDefaultReplacementAndDetectsImpactChanges(t *testin
 	if _, err := store.CreateTask(ctx, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: staleWorkflowID, Title: "Stale", Body: "Body"}); err != nil {
 		t.Fatalf("CreateTask stale: %v", err)
 	}
-	staleDelete, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(staleImpact, false))
+	staleDelete, err := store.DeleteWorkflow(ctx, confirmedWorkflowDeleteRequest(staleImpact))
 	if err != nil {
 		t.Fatalf("DeleteWorkflow stale: %v", err)
 	}

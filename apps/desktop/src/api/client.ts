@@ -426,7 +426,6 @@ export class ApiClient {
           expected_project_count: input.expectedProjectCount,
           expected_link_count: input.expectedLinkCount,
           expected_task_count: input.expectedTaskCount,
-          cleanup_artifacts: input.cleanupArtifacts,
         }),
       ),
     );

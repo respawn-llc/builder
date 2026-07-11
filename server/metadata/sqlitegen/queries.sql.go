@@ -320,31 +320,6 @@ func (q *Queries) ClaimWorkflowRun(ctx context.Context, arg ClaimWorkflowRunPara
 	return i, err
 }
 
-const clearDeletedWorkflowDefaultProjectLinks = `-- name: ClearDeletedWorkflowDefaultProjectLinks :execrows
-UPDATE projects
-SET
-    default_project_workflow_link_id = '',
-    updated_at_unix_ms = ?1
-WHERE default_project_workflow_link_id IN (
-    SELECT id
-    FROM project_workflow_links
-    WHERE workflow_id = ?2
-)
-`
-
-type ClearDeletedWorkflowDefaultProjectLinksParams struct {
-	UpdatedAtUnixMs int64
-	WorkflowID      string
-}
-
-func (q *Queries) ClearDeletedWorkflowDefaultProjectLinks(ctx context.Context, arg ClearDeletedWorkflowDefaultProjectLinksParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, clearDeletedWorkflowDefaultProjectLinks, arg.UpdatedAtUnixMs, arg.WorkflowID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const clearProjectDefaultWorkflowLinks = `-- name: ClearProjectDefaultWorkflowLinks :exec
 UPDATE projects
 SET
