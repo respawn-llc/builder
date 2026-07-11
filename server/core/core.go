@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"core/server/auth"
 	"core/server/launch"
@@ -26,8 +25,7 @@ import (
 
 type Core struct {
 	bundles   *Bundles
-	closeOnce sync.Once
-	closeErr  error
+	lifecycle lifecycleController
 }
 
 type unregisteredSessionLaunchClient struct{}
@@ -312,12 +310,10 @@ func (s *Core) Close() error {
 	if s == nil {
 		return nil
 	}
-	s.closeOnce.Do(func() {
-		if s.bundles != nil {
-			s.closeErr = closeLifecycleResources(s.safeBundles().cleanup)
-		}
-	})
-	return s.closeErr
+	if s.bundles == nil {
+		return nil
+	}
+	return s.lifecycle.Close(s.safeBundles().cleanup)
 }
 
 func (s *Core) Config() config.App {

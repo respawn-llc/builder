@@ -1,8 +1,8 @@
 package core
 
 import (
-	"errors"
 	"fmt"
+	"sync"
 )
 
 type lifecycleResource struct {
@@ -10,18 +10,32 @@ type lifecycleResource struct {
 	close func() error
 }
 
-func closeLifecycleResources(resources []lifecycleResource) error {
-	var err error
-	for i := len(resources) - 1; i >= 0; i-- {
-		resource := resources[i]
-		if resource.close == nil {
-			continue
-		}
-		if closeErr := resource.close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("%s: %w", resource.name, closeErr))
-		}
+// lifecycleController serializes cleanup and retains the failed reverse-order
+// barrier so a later Close can retry without re-closing completed resources.
+type lifecycleController struct {
+	mu          sync.Mutex
+	next        int
+	initialized bool
+}
+
+func (c *lifecycleController) Close(resources []lifecycleResource) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.initialized {
+		c.next = len(resources)
+		c.initialized = true
 	}
-	return err
+	for c.next > 0 {
+		resource := resources[c.next-1]
+		if resource.close != nil {
+			if err := resource.close(); err != nil {
+				return fmt.Errorf("%s: %w", resource.name, err)
+			}
+		}
+		c.next--
+	}
+	return nil
 }
 
 // BundleResourceRequiredError reports that a required resource for a server
