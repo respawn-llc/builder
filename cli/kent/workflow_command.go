@@ -89,6 +89,8 @@ func workflowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	switch args[0] {
 	case "create":
 		return workflowCreateSubcommand(args[1:], stdout, stderr)
+	case "update":
+		return workflowUpdateSubcommand(args[1:], stdout, stderr)
 	case "list":
 		return workflowListSubcommand(args[1:], stdout, stderr)
 	case "node":
@@ -116,6 +118,8 @@ func workflowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 func workflowCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" workflow create", stderr, workflowCommandUsage)
 	description := fs.String("description", "", "workflow description")
+	executionPolicy := fs.String("execution-policy", "", "execution policy: none|head|default_branch|custom_ref|ask")
+	customRef := fs.String("custom-ref", "", "Git ref for custom_ref execution policy")
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
 	positionals, ok, exitCode := parseInterspersedPositionals(fs, args)
 	if !ok {
@@ -124,6 +128,11 @@ func workflowCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	name := strings.TrimSpace(strings.Join(positionals, " "))
 	if name == "" {
 		fmt.Fprintln(stderr, "workflow create requires <name>")
+		return 2
+	}
+	policy, err := workflowExecutionPolicyFromFlags(fs, *executionPolicy, *customRef)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
@@ -135,7 +144,7 @@ func workflowCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	defer func() { _ = remote.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
 	defer cancel()
-	resp, err := remote.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: name, Description: *description})
+	resp, err := remote.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{Name: name, Description: *description, ExecutionPolicy: policy})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -145,6 +154,79 @@ func workflowCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 	}
 	fmt.Fprintf(stdout, "Created workflow %q (%s).\n", resp.Workflow.Name, resp.Workflow.ID)
 	return 0
+}
+
+func workflowUpdateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := newCommandFlagSet(config.Command+" workflow update", stderr, workflowCommandUsage)
+	executionPolicy := fs.String("execution-policy", "", "execution policy: none|head|default_branch|custom_ref|ask")
+	customRef := fs.String("custom-ref", "", "Git ref for custom_ref execution policy")
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
+	positionals, ok, exitCode := parseWorkflowPositionals(fs, args, 1, stderr, "workflow update requires <workflow>")
+	if !ok {
+		return exitCode
+	}
+	policy, err := workflowExecutionPolicyFromFlags(fs, *executionPolicy, *customRef)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if policy == nil {
+		fmt.Fprintln(stderr, "workflow update requires --execution-policy")
+		return 2
+	}
+	_, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer func() { _ = remote.Close() }()
+	def, err := resolveWorkflowDefinition(context.Background(), remote, positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), workflowCommandTimeout)
+	defer cancel()
+	resp, err := remote.UpdateWorkflow(ctx, serverapi.WorkflowUpdateRequest{
+		WorkflowID:      def.Workflow.ID,
+		Name:            def.Workflow.Name,
+		Description:     def.Workflow.Description,
+		ExecutionPolicy: policy,
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if *jsonOut {
+		return writeWorkflowJSON(stdout, stderr, resp.Definition.Workflow)
+	}
+	fmt.Fprintf(stdout, "Updated workflow %q execution policy: %s.\n", resp.Definition.Workflow.Name, workflowExecutionPolicyLabel(resp.Definition.Workflow.ExecutionPolicy))
+	return 0
+}
+
+func workflowExecutionPolicyFromFlags(fs *flag.FlagSet, rawPolicy string, rawCustomRef string) (*serverapi.WorkflowExecutionPolicy, error) {
+	policyProvided := flagWasProvided(fs, "execution-policy")
+	customRefProvided := flagWasProvided(fs, "custom-ref")
+	if !policyProvided {
+		if customRefProvided {
+			return nil, errors.New("--custom-ref requires --execution-policy custom_ref")
+		}
+		return nil, nil
+	}
+	policy := serverapi.WorkflowExecutionPolicy{Mode: serverapi.WorkflowExecutionPolicyMode(strings.TrimSpace(rawPolicy))}
+	if policy.Mode == serverapi.WorkflowExecutionPolicyCustomRef {
+		customRef := strings.TrimSpace(rawCustomRef)
+		if !customRefProvided || customRef == "" {
+			return nil, errors.New("--execution-policy custom_ref requires --custom-ref")
+		}
+		policy.CustomRef = &customRef
+	} else if customRefProvided {
+		return nil, errors.New("--custom-ref is valid only with --execution-policy custom_ref")
+	}
+	if err := policy.Validate(); err != nil {
+		return nil, err
+	}
+	return &policy, nil
 }
 
 func workflowListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -837,8 +919,29 @@ func writeWorkflowDefinition(stdout io.Writer, def serverapi.WorkflowDefinition)
 	if description := strings.TrimSpace(def.Workflow.Description); description != "" {
 		fmt.Fprintf(stdout, "Description: %s\n", description)
 	}
+	fmt.Fprintf(stdout, "Execution policy: %s.\n", workflowExecutionPolicyLabel(def.Workflow.ExecutionPolicy))
 	writeWorkflowDefinitionNodes(stdout, def.Nodes)
 	writeWorkflowDefinitionTransitions(stdout, def)
+}
+
+func workflowExecutionPolicyLabel(policy serverapi.WorkflowExecutionPolicy) string {
+	switch policy.Mode {
+	case serverapi.WorkflowExecutionPolicyNone:
+		return "none"
+	case serverapi.WorkflowExecutionPolicyHead:
+		return "HEAD"
+	case serverapi.WorkflowExecutionPolicyDefaultBranch:
+		return "default branch"
+	case serverapi.WorkflowExecutionPolicyCustomRef:
+		if policy.CustomRef != nil && strings.TrimSpace(*policy.CustomRef) != "" {
+			return "custom ref " + strings.TrimSpace(*policy.CustomRef)
+		}
+		return "custom ref"
+	case serverapi.WorkflowExecutionPolicyAsk:
+		return "ask every time"
+	default:
+		return string(policy.Mode)
+	}
 }
 
 func writeWorkflowDefinitionNodes(stdout io.Writer, nodes []serverapi.WorkflowNode) {

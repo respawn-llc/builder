@@ -16,7 +16,7 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	defer restore()
 
 	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Task Workflow API")
-	setWorkflowCommandExecutionPolicy(t, remote, workflowID, serverapi.WorkflowExecutionPolicyHead)
+	setWorkflowCommandExecutionPolicy(t, remote, workflowID, serverapi.WorkflowExecutionPolicyNone)
 
 	taskOut, _ := runWorkflowRootCommandOK(t, "task", "create", "--title", "Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
 	shortID := taskDetailHeadingShortID(t, taskOut)

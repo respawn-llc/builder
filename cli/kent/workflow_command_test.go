@@ -129,6 +129,69 @@ func TestWorkflowJSONFlagPlacementCompatibility(t *testing.T) {
 	}
 }
 
+func TestWorkflowExecutionPolicyCLIFlagsRoundTrip(t *testing.T) {
+	cfg, _, remote := newWorkflowCommandLoopback(t)
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+
+	createdOut, createdErr, code := runWorkflowRootCommand(
+		"workflow", "create", "--json",
+		"--execution-policy", "custom_ref",
+		"--custom-ref", "refs/heads/release",
+		"Policy workflow",
+	)
+	if code != 0 || createdErr != "" {
+		t.Fatalf("workflow create policy exit=%d stderr=%q", code, createdErr)
+	}
+	var created serverapi.WorkflowRecord
+	if err := json.Unmarshal([]byte(createdOut), &created); err != nil {
+		t.Fatalf("decode workflow create json %q: %v", createdOut, err)
+	}
+	if created.ExecutionPolicy.Mode != serverapi.WorkflowExecutionPolicyCustomRef ||
+		created.ExecutionPolicy.CustomRef == nil ||
+		*created.ExecutionPolicy.CustomRef != "refs/heads/release" {
+		t.Fatalf("created workflow policy = %+v, want custom ref", created.ExecutionPolicy)
+	}
+
+	updatedOut, updatedErr, code := runWorkflowRootCommand(
+		"workflow", "update", "--json", created.ID,
+		"--execution-policy", "default_branch",
+	)
+	if code != 0 || updatedErr != "" {
+		t.Fatalf("workflow update policy exit=%d stderr=%q", code, updatedErr)
+	}
+	var updated serverapi.WorkflowRecord
+	if err := json.Unmarshal([]byte(updatedOut), &updated); err != nil {
+		t.Fatalf("decode workflow update json %q: %v", updatedOut, err)
+	}
+	if updated.ExecutionPolicy.Mode != serverapi.WorkflowExecutionPolicyDefaultBranch || updated.ExecutionPolicy.CustomRef != nil {
+		t.Fatalf("updated workflow policy = %+v, want default branch", updated.ExecutionPolicy)
+	}
+
+	inspectOut, inspectErr, code := runWorkflowRootCommand("workflow", "inspect", "--json", created.ID)
+	if code != 0 || inspectErr != "" {
+		t.Fatalf("workflow inspect policy exit=%d stderr=%q", code, inspectErr)
+	}
+	var definition serverapi.WorkflowDefinition
+	if err := json.Unmarshal([]byte(inspectOut), &definition); err != nil {
+		t.Fatalf("decode workflow inspect json %q: %v", inspectOut, err)
+	}
+	if definition.Workflow.ExecutionPolicy != updated.ExecutionPolicy {
+		t.Fatalf("inspected workflow policy = %+v, want %+v", definition.Workflow.ExecutionPolicy, updated.ExecutionPolicy)
+	}
+
+	for _, args := range [][]string{
+		{"workflow", "create", "--execution-policy", "custom_ref", "Missing custom ref"},
+		{"workflow", "create", "--execution-policy", "head", "--custom-ref", "refs/heads/release", "Unexpected custom ref"},
+		{"workflow", "update", created.ID, "--custom-ref", "refs/heads/release"},
+	} {
+		_, _, code := runWorkflowRootCommand(args...)
+		if code != 2 {
+			t.Fatalf("%v exit=%d, want validation exit 2", args, code)
+		}
+	}
+}
+
 func TestWorkflowEditCommandsPersistNodeAndEdgeMetadata(t *testing.T) {
 	cfg, _, remote := newWorkflowCommandLoopback(t)
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
