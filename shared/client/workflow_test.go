@@ -24,6 +24,20 @@ func (s *fakeWorkflowService) ListWorkflowTasks(ctx context.Context, req servera
 	return serverapi.WorkflowTaskListResponse{ProjectID: req.ProjectID, WorkflowID: req.WorkflowID}, nil
 }
 
+func (s *fakeWorkflowService) StartWorkflowTask(context.Context, serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+	return serverapi.WorkflowTaskInitiatingActionResult{
+		Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeSelectionRequired,
+		SelectionRequired: &serverapi.WorkflowTaskExecutionTargetSelectionRequired{
+			TaskID:              "task-1",
+			Generation:          "generation-1",
+			SourceWorkspaceID:   "workspace-1",
+			Source:              serverapi.WorkflowTaskExecutionTargetSource{Kind: serverapi.WorkflowTaskExecutionTargetSourceNonGit},
+			SupportedSelections: []serverapi.WorkflowTaskExecutionTargetSelectionMode{serverapi.WorkflowTaskExecutionTargetSelectionNone},
+			ConfiguredPolicy:    serverapi.WorkflowExecutionPolicy{Mode: serverapi.WorkflowExecutionPolicyAsk},
+		},
+	}, nil
+}
+
 func TestLoopbackWorkflowClientCallsService(t *testing.T) {
 	service := &fakeWorkflowService{}
 	client := NewLoopbackWorkflowClient(service)
@@ -40,5 +54,12 @@ func TestLoopbackWorkflowClientCallsService(t *testing.T) {
 	}
 	if taskList.ProjectID != "project-1" || service.listReq.WorkflowID != "workflow-1" {
 		t.Fatalf("task list response=%+v service=%+v", taskList, service.listReq)
+	}
+	start, err := client.StartWorkflowTask(context.Background(), serverapi.WorkflowTaskStartRequest{TaskID: "task-1", SetupOperationID: serverapi.NewWorktreeSetupOperationID()})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask: %v", err)
+	}
+	if start.Outcome != serverapi.WorkflowTaskInitiatingActionOutcomeSelectionRequired || start.SelectionRequired == nil || start.SelectionRequired.Generation != "generation-1" {
+		t.Fatalf("start outcome = %+v", start)
 	}
 }

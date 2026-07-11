@@ -11,6 +11,178 @@ import (
 	"core/server/workflow"
 )
 
+func TestWorkflowExecutionPolicyDefaultsToAskAndRoundTripsThroughList(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+
+	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Policy defaults"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	assertWorkflowExecutionPolicy(t, created.ExecutionPolicy, workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyAsk})
+
+	_, loaded, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	assertWorkflowExecutionPolicy(t, loaded.ExecutionPolicy, workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyAsk})
+
+	listed, err := store.ListWorkflows(ctx, ListWorkflowsRequest{})
+	if err != nil {
+		t.Fatalf("ListWorkflows: %v", err)
+	}
+	if len(listed.Workflows) != 1 {
+		t.Fatalf("listed workflows = %+v, want one workflow", listed.Workflows)
+	}
+	assertWorkflowExecutionPolicy(t, listed.Workflows[0].ExecutionPolicy, workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyAsk})
+}
+
+func TestWorkflowExecutionPolicyPersistsCustomRefConditionally(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+	customRef := "release/2026.07"
+	customPolicy := workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyCustomRef, CustomRef: &customRef}
+	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{
+		Name:            "Custom execution target",
+		ExecutionPolicy: &customPolicy,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	assertWorkflowExecutionPolicy(t, created.ExecutionPolicy, workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyCustomRef, CustomRef: &customRef})
+
+	def, record, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetDefinition custom policy: %v", err)
+	}
+	req := workflowGraphSaveRequestFromDefinition(created.ID, record.Version, false, def)
+	req.Metadata = &WorkflowGraphSaveMetadata{
+		Name:            record.Name,
+		Description:     record.Description,
+		ExecutionPolicy: executionPolicyPointer(workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyHead}),
+	}
+	saved, err := store.SaveWorkflowGraph(ctx, req)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph clear custom ref: %v", err)
+	}
+	if !saved.Saved || !saved.Changed || saved.Version != record.Version+1 {
+		t.Fatalf("policy save = %+v, want one persisted policy revision", saved)
+	}
+
+	_, updated, err := store.GetDefinition(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetDefinition cleared custom ref: %v", err)
+	}
+	assertWorkflowExecutionPolicy(t, updated.ExecutionPolicy, workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyHead})
+}
+
+func TestWorkflowExecutionPolicyRejectsInvalidModeAndCustomRefCombinations(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+	customRef := "release/2026.07"
+	emptyRef := "   "
+
+	for _, policy := range []workflow.ExecutionPolicy{
+		{Mode: "invalid"},
+		{Mode: workflow.ExecutionPolicyCustomRef},
+		{Mode: workflow.ExecutionPolicyCustomRef, CustomRef: &emptyRef},
+		{Mode: workflow.ExecutionPolicyAsk, CustomRef: &customRef},
+	} {
+		if _, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Invalid policy", ExecutionPolicy: &policy}); err == nil {
+			t.Fatalf("CreateWorkflow(%+v) succeeded, want policy validation error", policy)
+		}
+	}
+}
+
+func TestWorkflowGraphSaveExecutionPolicyVersionSemantics(t *testing.T) {
+	ctx, store, _ := newTestStoreContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	def, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+
+	policyOnly := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
+	policyOnly.Metadata = &WorkflowGraphSaveMetadata{
+		Name:            record.Name,
+		Description:     record.Description,
+		ExecutionPolicy: executionPolicyPointer(workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyDefaultBranch}),
+	}
+	policySaved, err := store.SaveWorkflowGraph(ctx, policyOnly)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph policy-only: %v", err)
+	}
+	if !policySaved.Saved || !policySaved.Changed || policySaved.Version != record.Version+1 {
+		t.Fatalf("policy-only save = %+v, want one version bump", policySaved)
+	}
+
+	afterPolicyDef, afterPolicy, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition after policy save: %v", err)
+	}
+	assertWorkflowExecutionPolicy(t, afterPolicy.ExecutionPolicy, workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyDefaultBranch})
+
+	combined := workflowGraphSaveRequestFromDefinition(workflowID, afterPolicy.Version, false, afterPolicyDef)
+	combined.Metadata = &WorkflowGraphSaveMetadata{
+		Name:            afterPolicy.Name,
+		Description:     afterPolicy.Description,
+		ExecutionPolicy: executionPolicyPointer(workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyNone}),
+	}
+	combined.Nodes = renameWorkflowGraphSaveNode(combined.Nodes, workflow.NodeID("node-agent-"+string(workflowID)), "Policy graph change")
+	combinedSaved, err := store.SaveWorkflowGraph(ctx, combined)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph combined: %v", err)
+	}
+	if !combinedSaved.Saved || !combinedSaved.Changed || combinedSaved.Version != afterPolicy.Version+1 {
+		t.Fatalf("combined save = %+v, want one version bump", combinedSaved)
+	}
+
+	combinedDef, combinedRecord, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition after combined save: %v", err)
+	}
+	noop := workflowGraphSaveRequestFromDefinition(workflowID, combinedRecord.Version, false, combinedDef)
+	noop.Metadata = &WorkflowGraphSaveMetadata{
+		Name:            combinedRecord.Name,
+		Description:     combinedRecord.Description,
+		ExecutionPolicy: executionPolicyPointer(combinedRecord.ExecutionPolicy),
+	}
+	noopSaved, err := store.SaveWorkflowGraph(ctx, noop)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph policy noop: %v", err)
+	}
+	if !noopSaved.Saved || noopSaved.Changed || noopSaved.Version != combinedRecord.Version {
+		t.Fatalf("policy noop save = %+v, want no version bump", noopSaved)
+	}
+
+	stale := workflowGraphSaveRequestFromDefinition(workflowID, afterPolicy.Version, false, combinedDef)
+	stale.Metadata = &WorkflowGraphSaveMetadata{
+		Name:            combinedRecord.Name,
+		Description:     combinedRecord.Description,
+		ExecutionPolicy: executionPolicyPointer(workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyHead}),
+	}
+	staleSaved, err := store.SaveWorkflowGraph(ctx, stale)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph stale policy: %v", err)
+	}
+	if staleSaved.Saved || workflowGraphSaveBlockerCount(staleSaved.Blockers, "version_changed") != combinedRecord.Version {
+		t.Fatalf("stale policy save = %+v, want version_changed blocker", staleSaved)
+	}
+}
+
+func executionPolicyPointer(policy workflow.ExecutionPolicy) *workflow.ExecutionPolicy {
+	return &policy
+}
+
+func assertWorkflowExecutionPolicy(t *testing.T, got workflow.ExecutionPolicy, want workflow.ExecutionPolicy) {
+	t.Helper()
+	if got.Mode != want.Mode {
+		t.Fatalf("execution policy mode = %q, want %q", got.Mode, want.Mode)
+	}
+	gotRef, gotHasRef := got.CustomRefValue()
+	wantRef, wantHasRef := want.CustomRefValue()
+	if gotHasRef != wantHasRef || gotRef != wantRef {
+		t.Fatalf("execution policy custom ref = %q/%t, want %q/%t", gotRef, gotHasRef, wantRef, wantHasRef)
+	}
+}
+
 func TestWorkflowGraphSaveRejectsChangedConfirmationImpact(t *testing.T) {
 	ctx, store, _ := newTestStoreContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)

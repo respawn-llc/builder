@@ -142,7 +142,7 @@ The run-start snapshot of possible and required transition parameters for a node
 
 ### Run Start Context
 
-The typed aggregate materialized for the runner before a workflow run starts. It combines task, run, node, workspace/worktree, run-start snapshot, accepted transition branch invocation facts, parameter values, context-preservation mode, and context source provenance. It is a store materialization interface, not an opaque persisted JSON envelope.
+The typed aggregate materialized for the runner before a workflow run starts. It combines task, run, node, execution root (source workspace plus optional managed worktree), run-start snapshot, accepted transition branch invocation facts, parameter values, context-preservation mode, and context source provenance. It is a store materialization interface, not an opaque persisted JSON envelope.
 
 ### Session
 

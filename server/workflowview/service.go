@@ -1020,7 +1020,16 @@ func (s *Service) definition(ctx context.Context, workflowID string) (serverapi.
 	if err != nil {
 		return serverapi.WorkflowDefinition{}, nil, err
 	}
-	def := serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{ID: row.ID, Name: row.Name, Description: row.Description, Version: row.Version}}
+	var executionCustomRef *string
+	if row.ExecutionCustomRef.Valid {
+		value := row.ExecutionCustomRef.String
+		executionCustomRef = &value
+	}
+	executionPolicy := workflow.ExecutionPolicy{Mode: workflow.ExecutionPolicyMode(row.ExecutionPolicy), CustomRef: executionCustomRef}
+	if err := executionPolicy.Validate(); err != nil {
+		return serverapi.WorkflowDefinition{}, nil, fmt.Errorf("decode workflow execution policy: %w", err)
+	}
+	def := serverapi.WorkflowDefinition{Workflow: serverapi.WorkflowRecord{ID: row.ID, Name: row.Name, Description: row.Description, ExecutionPolicy: ExecutionPolicyDTO(executionPolicy), Version: row.Version}}
 	nodeGroups, err := s.queries.ListWorkflowNodeGroups(ctx, workflowID)
 	if err != nil {
 		return serverapi.WorkflowDefinition{}, nil, err
@@ -1086,6 +1095,17 @@ func (s *Service) definition(ctx context.Context, workflowID string) (serverapi.
 	}
 	def.DerivedWiring = DerivedWiring(definitionForValidation(def))
 	return def, nodeKinds, nil
+}
+
+func ExecutionPolicyDTO(policy workflow.ExecutionPolicy) serverapi.WorkflowExecutionPolicy {
+	var customRef *string
+	if value, ok := policy.CustomRefValue(); ok {
+		customRef = &value
+	}
+	return serverapi.WorkflowExecutionPolicy{
+		Mode:      serverapi.WorkflowExecutionPolicyMode(policy.Mode),
+		CustomRef: customRef,
+	}
 }
 
 func taskSummary(task sqlitegen.TaskRecord, placements []sqlitegen.TaskNodePlacementRecord, nodeKinds map[string]workflow.NodeKind) serverapi.WorkflowTaskSummary {

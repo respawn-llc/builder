@@ -128,7 +128,7 @@ func (c *loopbackWorkflowClient) UpdateWorkflowTask(ctx context.Context, req ser
 	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.UpdateWorkflowTask)
 }
 
-func (c *loopbackWorkflowClient) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
+func (c *loopbackWorkflowClient) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.StartWorkflowTask)
 }
 
@@ -140,11 +140,11 @@ func (c *loopbackWorkflowClient) ResumeWorkflowTask(ctx context.Context, req ser
 	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.ResumeWorkflowTask)
 }
 
-func (c *loopbackWorkflowClient) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
+func (c *loopbackWorkflowClient) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.ApproveWorkflowTask)
 }
 
-func (c *loopbackWorkflowClient) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
+func (c *loopbackWorkflowClient) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 	return callLoopbackClient(c, "workflow service is required", ctx, req, servicecontract.WorkflowService.MoveWorkflowTask)
 }
 

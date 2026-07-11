@@ -41,7 +41,7 @@
 
 ## Nodes, Edges, And Validation
 
-- Nodes configure workflow states and executable behavior. Agent nodes configure subagent role, completion mode, and worktree/session execution policy. Script nodes configure an executable script path.
+- Nodes configure workflow states and executable behavior. Agent nodes configure subagent role and completion mode. Script nodes configure an executable script path.
 - Edges configure transitions: target node, approval/manual interaction, context preservation, context source, input bindings, output requirements, routing, and join/aggregation behavior.
 - Subagent role is the executable node assignee. There is no separate assignee field.
 - Workflow nodes select existing subagent roles only. There are no per-node model/provider/tool/auth overrides.
@@ -87,8 +87,8 @@
 
 - Script nodes are first-class executable workflow nodes. They can be Start targets, fan-out branches, join predecessors/successors, manual automation targets, and board columns anywhere agent nodes are accepted by graph semantics.
 - Script nodes store nullable `script_path`. Missing, nonexistent, directory, and non-executable paths do not block graph save or node add/update; they block execution validation, task start, or target run execution as appropriate.
-- Relative script paths resolve against the task managed worktree root. Absolute paths resolve on the Kent server host.
-- Script execution directly `exec`s the resolved file with the task managed worktree as cwd. It does not use a shell wrapper, retries, or a timeout.
+- Relative script paths resolve against the task execution root. A managed-worktree task uses its managed worktree root; a no-worktree task uses its source workspace root. Absolute paths resolve on the Kent server host.
+- Script execution directly `exec`s the resolved file with the task execution root as cwd. It does not use a shell wrapper, retries, or a timeout.
 - Script stdin is one JSON object. Incoming workflow parameter values are top-level properties. `_kent` is reserved for minimal runtime identifiers, including `run_id` and `placement_id`.
 - Script stdout is parsed as the workflow completion JSON using the same completion contract as agent nodes. Stderr is diagnostics only and is not mixed into completion parsing.
 - Script run failures, invalid stdout, invalid script path, cancellation, and execution errors interrupt the run with bounded structured details.
@@ -124,6 +124,7 @@
 - A task awaiting approval has no active placement; its live position is the pending transition's source node, surfaced as a synthesized `waiting_approval` placement.
 - Manually moving a task that is awaiting approval overrides the proposed transition: the pending approval is marked `rejected` (auditable, not deleted) and the task moves from the approval's source node to the chosen target. This is the operator path to reject a proposed transition (e.g. sending an awaiting-approval plan back to Backlog).
 - Missing-edge manual overrides cannot target executable nodes. Manual movement into an agent or script node requires a concrete workflow edge so the target run has a real prompt/contract.
+- When an executable manual move or approval would first enter automation for a task without a locked execution target, Kent uses the same server-owned selection and target-materialization negotiation as task start. A required selection or in-progress materialization leaves the placement and pending approval unchanged and creates no run; retry submits the original move or approval with the selected target.
 
 ## Context Preservation And Bindings
 
@@ -184,11 +185,25 @@
 
 ## Worktrees
 
-- A task owns one managed worktree by default.
-- All executable nodes require and reuse the task managed worktree.
-- Kent creates and, when configured, runs setup for the managed worktree on task start before first executable run is scheduled. Blocking setup prevents runs from locking context before setup-provided local skills, docs, or other worktree files are present.
-- Managed worktree setup failure fails task start without scheduling an executable run. The created worktree stays available for inspection or manual repair.
-- Starting the task again trusts an existing managed worktree as manually repaired. If the managed worktree was removed, task start recreates it and runs setup again.
+- A workflow owns one execution policy: no worktree, source-workspace `HEAD`, repository default branch, custom ref, or start-time selection. Start-time selection is the default for new workflows and for existing workflow records without a stored policy.
+- A task cannot override its workflow execution policy at creation.
+- The CLI may explicitly choose a task execution policy when it starts a task, including overriding a valid fixed workflow policy. The validated choice becomes the task's durable execution target for all later nodes and retries. Desktop offers that choice only when the workflow uses start-time selection or a configured managed target cannot resolve.
+- An unstarted Backlog task resolves the workflow's latest execution policy when task automation starts. Workflow policy edits affect unstarted Backlog tasks.
+- `HEAD` creates the task managed worktree from the checked-out commit of its source workspace repository when Kent first materializes an executable target.
+- `Default branch` creates the task managed worktree from the local default-branch pointer of the source workspace's checked-out branch upstream remote. Detached `HEAD` or a branch without an upstream uses `origin`. Kent does not fetch or guess branch names; an unavailable default-branch pointer requires explicit selection before Kent materializes an executable target.
+- `Custom ref` creates the task managed worktree from its configured existing ref after validation before Kent materializes an executable target.
+- `Ask every time` requires an operator selection when an executable action first needs the task target. The operator selects no worktree, source-workspace `HEAD`, repository default branch, or a custom ref; a custom-ref selection includes a ref value. Cancelling a task start leaves the task in Backlog and schedules no automation; cancelling a move or approval leaves that initiating action unchanged.
+- Kent validates a selection before recording it or committing the initiating executable action. A valid custom-ref selection records the requested ref and its resolved commit on the task so later nodes and retries use the same target.
+- If a configured default branch or custom ref cannot resolve, the initiating executable action returns a typed actionable resolution requirement. Kent does not guess a replacement branch. An operator can explicitly select no worktree, source-workspace `HEAD`, repository default branch, or a custom ref; only a valid selection is recorded. A selection that fails before task-worktree creation is not recorded and the next initiating action requires a new selection.
+- An initiating executable action without a selection returns a typed selection-required outcome when a selection is needed. The outcome supplies server-resolved source-workspace facts and recovery details for clients to render, and a later request submits the operator's selection. Clients do not inspect Git repositories.
+- The same typed selection-required or in-progress outcome applies when an executable manual move or approval is the first action that needs the task execution target. The server materializes the target before committing that placement or approval action; a failed selection, setup, or root-dependent execution validation applies no placement, approval, or run, and any materialized target remains available for retry.
+- `None` creates no managed worktree. Executable nodes use the task source workspace root as their execution root; Git is not required; the worktree setup script does not run.
+- `None` adds no workspace reservation, execution serialization, or fan-out restriction. Concurrent workflow executions may share the same source workspace.
+- Session worktree controls remain session-scoped and do not change the task execution target. A later workflow run reapplies the task target; workflow correctness after a manual session switch is unsupported.
+- Task details always show the source workspace. After a managed-worktree target locks, task details show its copyable resolved ref, abbreviated resolved commit, and worktree path; custom-ref targets also show the requested ref. No execution data is added to board cards.
+- Managed-worktree tasks create and, when configured, run setup for the managed worktree before the first executable run is scheduled. Blocking setup prevents runs from locking context before setup-provided local skills, docs, or other worktree files are present.
+- Managed worktree setup failure blocks the initiating executable action without scheduling a run. The created worktree stays available for inspection or manual repair.
+- A later initiating executable action reuses an existing task managed worktree, including after setup failure, ref movement, or a workflow execution-policy edit. If failed materialization created no managed worktree, a later action resolves the workflow's latest policy. If a locked managed worktree root was removed, Kent recreates it only when durable Git ownership evidence proves the locked target; when both the root and that ownership evidence are unavailable, Kent requires manual recovery rather than attaching or recreating from an unverifiable branch.
 - Task worktree branch name is the task short ID.
 - Worktree creation reuses existing worktree branch/root collision handling.
 - Worktree deletion/retargeting treats non-terminal tasks referencing a managed worktree as blockers.
@@ -273,6 +288,10 @@
 - High-level workflow mutation subcommands are the complete agent editing path; workflow import/export is a separate sharing feature, not the primary edit interface.
 - High-level workflow mutation commands use a CLI-local draft-edit module, then persist through batch graph save. The server does not expose row-level or semantic edit RPC routes for workflow graph mutation. Extract the draft-edit module only when a second Go caller exists.
 - Row-level workflow graph RPC methods, client methods, protocol constants, and route entries are removed in the graph-save cutover instead of preserved as migration stubs.
+- `kent task start` accepts an explicit execution selection for start-time selection, server-required recovery, and deliberate task override of a fixed workflow policy; custom-ref selection additionally requires an explicit ref parameter.
+- Agents may invoke `kent task start`, including task execution-policy selection and override.
+- `kent task start --json` writes exactly one typed result object with an `outcome` discriminator to stdout and nothing to stderr. `selection_required` exits `3`; `in_progress` exits `4`; both skip session polling. Human-readable forms of those outcomes write one concise actionable line to stderr. A successful start exits `0`.
+- Human-readable task details show only execution facts that Kent has recorded; a managed-worktree path is not revalidated on each read. JSON task details expose all available execution-target fields.
 - CLI output must include stable IDs needed by later commands.
 - `kent task list` uses `status` for workflow/Kanban status, backed by current workflow column/node keys such as `backlog`, `recon`, `plan`, and `done`; `--column` is an alias for `--status`, and raw node IDs are not exposed as list filters.
 - `kent task list --run-status` filters the coarse operational states `open`, `running`, `done`, and `canceled`. Human output distinguishes `Status:` (workflow/Kanban status key) from `Run status:` (coarse operational state), and JSON output carries both as structured fields. JSON keeps `status` as a compatibility alias for coarse run status; `run_status` is the canonical coarse field and `status_keys` carries workflow/Kanban status keys.

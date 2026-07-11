@@ -10,9 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pressly/goose/v3"
 	_ "modernc.org/sqlite"
 )
@@ -50,6 +52,322 @@ func TestOpenSuppressesGooseStatusLogging(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "goose:") {
 		t.Fatalf("did not expect goose status log output, got %q", buf.String())
+	}
+}
+
+func TestOpenIgnoresGlobalGoMigrationRegistry(t *testing.T) {
+	goose.ResetGlobalMigrations()
+	t.Cleanup(goose.ResetGlobalMigrations)
+
+	var ran atomic.Bool
+	if err := goose.SetGlobalMigrations(goose.NewGoMigration(
+		43,
+		&goose.GoFunc{RunTx: func(context.Context, *sql.Tx) error {
+			ran.Store(true)
+			return nil
+		}},
+		nil,
+	)); err != nil {
+		t.Fatalf("register conflicting global migration: %v", err)
+	}
+
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open metadata store with conflicting global migration: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if ran.Load() {
+		t.Fatal("metadata migration provider executed an unrelated global migration")
+	}
+}
+
+func TestIsolatedMetadataMigrationProviderRunsOnlyExplicitMigration(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "candidate.sqlite3")
+	db, err := openDatabaseAtPathWithoutMigrationsForTest(root, dbPath)
+	if err != nil {
+		t.Fatalf("open candidate database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	candidate := goose.NewGoMigration(47, &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE explicit_migration_candidate_marker (value TEXT NOT NULL)`)
+		return err
+	}}, nil)
+	provider, err := newMetadataMigrationProvider(db, candidate)
+	if err != nil {
+		t.Fatalf("create isolated candidate provider: %v", err)
+	}
+	if _, err := provider.Up(t.Context()); err != nil {
+		t.Fatalf("apply isolated candidate provider: %v", err)
+	}
+	if !tableExists(t, db, "explicit_migration_candidate_marker") {
+		t.Fatal("explicit candidate migration did not run")
+	}
+
+	productionProvider, err := newMetadataMigrationProvider(db)
+	if err != nil {
+		t.Fatalf("create production provider: %v", err)
+	}
+	status, err := productionProvider.Status(t.Context())
+	if err != nil {
+		t.Fatalf("read production provider status: %v", err)
+	}
+	for _, migration := range status {
+		if migration.Source.Version == 47 {
+			t.Fatal("production metadata provider must not expose an unregistered explicit migration")
+		}
+	}
+}
+
+func TestOpenPreservesLegacyMutableIdentityGraph(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 43)
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	legacyProjectID := "project-legacy"
+	parentSessionID := "b27f28bb-4a74-4e0a-81bf-257ba14d58fa"
+	childSessionID := "9f34347d-e61b-49c4-91a5-8f8091bb5a2b"
+	now := time.Now().UTC().UnixMilli()
+	seedLegacyMutableIdentityGraph(t, db, root, legacyProjectID, parentSessionID, childSessionID, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open legacy-identity database: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	for _, identity := range []struct {
+		table  string
+		column string
+	}{
+		{table: "projects", column: "id"},
+		{table: "workspaces", column: "id"},
+		{table: "worktrees", column: "id"},
+		{table: "workflows", column: "id"},
+		{table: "project_workflow_links", column: "id"},
+		{table: "workflow_node_groups", column: "id"},
+		{table: "workflow_nodes", column: "id"},
+		{table: "workflow_transition_groups", column: "id"},
+		{table: "workflow_edges", column: "id"},
+		{table: "tasks", column: "id"},
+		{table: "task_node_placements", column: "id"},
+		{table: "task_runs", column: "id"},
+		{table: "task_transitions", column: "id"},
+		{table: "task_transition_edges", column: "id"},
+		{table: "task_comments", column: "id"},
+	} {
+		assertTableLegacyIdentifierColumn(t, store.db, identity.table, identity.column)
+	}
+	for _, reference := range []struct {
+		table  string
+		column string
+	}{
+		{table: "projects", column: "primary_workspace_id"},
+		{table: "workspaces", column: "project_id"},
+		{table: "worktrees", column: "workspace_id"},
+		{table: "workflow_node_groups", column: "workflow_id"},
+		{table: "workflow_nodes", column: "workflow_id"},
+		{table: "workflow_nodes", column: "group_id"},
+		{table: "workflow_transition_groups", column: "source_node_id"},
+		{table: "workflow_edges", column: "transition_group_id"},
+		{table: "workflow_edges", column: "target_node_id"},
+		{table: "project_workflow_links", column: "project_id"},
+		{table: "project_workflow_links", column: "workflow_id"},
+		{table: "tasks", column: "project_workflow_link_id"},
+		{table: "tasks", column: "source_workspace_id"},
+		{table: "tasks", column: "managed_worktree_id"},
+		{table: "task_node_placements", column: "task_id"},
+		{table: "task_node_placements", column: "node_id"},
+		{table: "task_runs", column: "placement_id"},
+		{table: "task_transitions", column: "task_id"},
+		{table: "task_transitions", column: "source_run_id"},
+		{table: "task_transitions", column: "source_placement_id"},
+		{table: "task_transition_edges", column: "task_transition_id"},
+		{table: "task_transition_edges", column: "workflow_edge_id"},
+		{table: "task_transition_edges", column: "target_node_id"},
+		{table: "task_comments", column: "task_id"},
+	} {
+		assertTableLegacyIdentifierColumn(t, store.db, reference.table, reference.column)
+	}
+	if !columnExists(t, store.db, "task_runs", "metadata_json") {
+		t.Fatal("task_runs.metadata_json must remain available while the ID migration is out of scope")
+	}
+	assertJSONColumnContainsAll(t, store.db, "workflow_nodes", "join_input_providers_json", "edge-start-1")
+	assertJSONColumnContainsAll(t, store.db, "task_runs", "run_start_snapshot_json",
+		"workflow-1",
+		"node-start",
+		"node-agent",
+		"node-done",
+		"group-start",
+		"group-done",
+		"edge-start-1",
+		"edge-done-1",
+	)
+
+	var sessionID string
+	if err := store.db.QueryRowContext(t.Context(), `SELECT id FROM sessions WHERE id = ?`, childSessionID).Scan(&sessionID); err != nil {
+		t.Fatalf("load stable child session: %v", err)
+	}
+	if sessionID != childSessionID {
+		t.Fatalf("child session ID = %q, want stable %q", sessionID, childSessionID)
+	}
+	var artifactRelpath string
+	if err := store.db.QueryRowContext(t.Context(), `SELECT artifact_relpath FROM sessions WHERE id = ?`, childSessionID).Scan(&artifactRelpath); err != nil {
+		t.Fatalf("load remapped artifact relpath: %v", err)
+	}
+	if !strings.HasPrefix(artifactRelpath, "projects/") || !strings.Contains(artifactRelpath, legacyProjectID) {
+		t.Fatalf("artifact relpath = %q, want preserved legacy project root", artifactRelpath)
+	}
+	sessionJSON, err := os.ReadFile(filepath.Join(root, artifactRelpath, "session.json"))
+	if err != nil {
+		t.Fatalf("read preserved session.json: %v", err)
+	}
+	if string(sessionJSON) != `{"legacy":"opaque"}` {
+		t.Fatalf("session.json bytes = %q, want historical bytes preserved", sessionJSON)
+	}
+}
+
+func TestOpenMigratesLegacyWorkflowExecutionPolicyToAsk(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 43)
+	if err != nil {
+		t.Fatalf("open legacy database: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	if _, err := db.ExecContext(t.Context(), `
+		INSERT INTO workflows (id, name, description, version, created_at_unix_ms, updated_at_unix_ms)
+		VALUES ('workflow-legacy-policy', 'Legacy policy workflow', '', 1, ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("seed legacy workflow: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated database: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	var mode string
+	var customRef sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+		SELECT execution_policy, execution_custom_ref
+		FROM workflows
+		WHERE id = 'workflow-legacy-policy'
+	`).Scan(&mode, &customRef); err != nil {
+		t.Fatalf("load migrated workflow policy: %v", err)
+	}
+	if mode != "ask" || customRef.Valid {
+		t.Fatalf("migrated workflow policy = %q/%+v, want ask/null", mode, customRef)
+	}
+}
+
+func seedLegacyMutableIdentityGraph(t *testing.T, db *sql.DB, root string, projectID string, parentSessionID string, childSessionID string, now int64) {
+	t.Helper()
+	workspaceID := "workspace-legacy"
+	worktreeID := "worktree-legacy"
+	workspaceRoot := filepath.Join(root, "source-workspace")
+	worktreeRoot := filepath.Join(root, "task-worktree")
+	childRelpath := filepath.ToSlash(filepath.Join("projects", projectID, "sessions", childSessionID))
+	parentRelpath := filepath.ToSlash(filepath.Join("projects", projectID, "sessions", parentSessionID))
+	if err := os.MkdirAll(filepath.Join(root, childRelpath), 0o755); err != nil {
+		t.Fatalf("create legacy child session directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, childRelpath, "session.json"), []byte(`{"legacy":"opaque"}`), 0o600); err != nil {
+		t.Fatalf("write legacy session.json: %v", err)
+	}
+	execSeed(t, db, "legacy project", `INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json) VALUES (?, 'Legacy project', ?, ?, '{}')`, projectID, now, now)
+	execSeed(t, db, "legacy workspace", `INSERT INTO workspaces (id, project_id, canonical_root_path, git_metadata_json, created_at_unix_ms, updated_at_unix_ms) VALUES (?, ?, ?, '{}', ?, ?)`, workspaceID, projectID, workspaceRoot, now, now)
+	execSeed(t, db, "legacy project primary workspace", `UPDATE projects SET primary_workspace_id = ? WHERE id = ?`, workspaceID, projectID)
+	execSeed(t, db, "legacy worktree", `INSERT INTO worktrees (id, workspace_id, canonical_root_path, managed, created_branch, origin_session_id, git_metadata_json, created_at_unix_ms, updated_at_unix_ms) VALUES (?, ?, ?, 1, 1, ?, '{}', ?, ?)`, worktreeID, workspaceID, worktreeRoot, parentSessionID, now, now)
+	execSeed(t, db, "legacy parent session", `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, '{}')`, parentSessionID, projectID, workspaceID, worktreeID, parentRelpath, now, now)
+	execSeed(t, db, "legacy child session", `INSERT INTO sessions (id, project_id, workspace_id, worktree_id, artifact_relpath, parent_session_id, created_at_unix_ms, updated_at_unix_ms, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '{}')`, childSessionID, projectID, workspaceID, worktreeID, childRelpath, parentSessionID, now, now)
+	execSeed(t, db, "legacy prompt history", `INSERT INTO session_prompt_history_entries (session_id, source_id, text, created_at_unix_ms) VALUES (?, 'legacy-source', 'legacy prompt', ?)`, childSessionID, now)
+
+	seedWorkflowGraph(t, db, projectID, now)
+	execSeed(t, db, "legacy node group", `INSERT INTO workflow_node_groups (id, workflow_id, group_key, display_name, sort_order) VALUES ('node-group-legacy', 'workflow-1', 'legacy_group', 'Legacy group', 0)`)
+	execSeed(t, db, "legacy node group membership", `UPDATE workflow_nodes SET group_id = 'node-group-legacy' WHERE id = 'node-agent'`)
+	execSeed(t, db, "legacy join-provider edge reference", `UPDATE workflow_nodes SET join_input_providers_json = '[{"input_name":"summary","provider_edge_id":"edge-start-1"}]' WHERE id = 'node-agent'`)
+	execSeed(t, db, "legacy task", workflowSeedTaskSQL, "task-legacy", "link-1", 1, "LEG-1", now, now)
+	execSeed(t, db, "legacy task source and worktree", `UPDATE tasks SET source_workspace_id = ?, managed_worktree_id = ? WHERE id = 'task-legacy'`, workspaceID, worktreeID)
+	execSeed(t, db, "legacy placement", workflowSeedPlacementSQL, "placement-legacy", "task-legacy", "node-agent", now, now)
+	execSeed(t, db, "legacy run", `INSERT INTO task_runs (id, placement_id, session_id, workflow_revision_seen, created_at_unix_ms, updated_at_unix_ms, run_start_snapshot_json, metadata_json) VALUES ('run-legacy', 'placement-legacy', ?, 1, ?, ?, '{"workflow_id":"workflow-1","workflow_revision_seen":1,"node":{"id":"node-agent","key":"agent","display_name":"Agent","kind":"agent","join_input_providers":[{"input_name":"summary","provider_edge_id":"edge-start-1"}],"output_fields":[{"name":"summary","description":"Summary."}]},"nodes":[{"id":"node-start","key":"backlog","display_name":"Backlog","kind":"start"},{"id":"node-agent","key":"agent","display_name":"Agent","kind":"agent","join_input_providers":[{"input_name":"summary","provider_edge_id":"edge-start-1"}],"output_fields":[{"name":"summary","description":"Summary."}]},{"id":"node-done","key":"done","display_name":"Done","kind":"terminal"}],"transition_groups":[{"id":"group-start","source_node_id":"node-start","transition_id":"start","display_name":"Start","edges":[{"id":"edge-start-1","key":"start","target_node":{"id":"node-agent","key":"agent","display_name":"Agent","kind":"agent","join_input_providers":[{"input_name":"summary","provider_edge_id":"edge-start-1"}],"output_fields":[{"name":"summary","description":"Summary."}]},"context_mode":"new_session","context_source":{"kind":"immediate_source"},"requires_approval":false}]},{"id":"group-done","source_node_id":"node-agent","transition_id":"done","display_name":"Done","edges":[{"id":"edge-done-1","key":"done","target_node":{"id":"node-done","key":"done","display_name":"Done","kind":"terminal"},"context_mode":"new_session","context_source":{"kind":"immediate_source"},"requires_approval":false}]}]}', '{"context_mode":"new_session"}')`, childSessionID, now, now)
+	execSeed(t, db, "legacy transition", `INSERT INTO task_transitions (id, task_id, source_run_id, source_placement_id, source_node_key, source_node_display_name, transition_id, transition_display_name, workflow_revision_seen, actor, state, output_values_json, created_at_unix_ms, applied_at_unix_ms) VALUES ('transition-legacy', 'task-legacy', 'run-legacy', 'placement-legacy', 'agent', 'Agent', 'done', 'Done', 1, 'agent', 'applied', '{}', ?, ?)`, now, now)
+	execSeed(t, db, "legacy transition edge", `INSERT INTO task_transition_edges (id, task_transition_id, workflow_edge_id, edge_key, target_node_id, target_node_key, target_node_display_name, target_node_kind, target_placement_id, state, context_mode, input_bindings_json, output_requirements_json, metadata_json) VALUES ('transition-edge-legacy', 'transition-legacy', 'edge-done-1', 'done', 'node-done', 'done', 'Done', 'terminal', NULL, 'applied', 'new_session', '[]', '[]', '{}')`)
+	execSeed(t, db, "legacy comment", `INSERT INTO task_comments (id, task_id, body, author_kind, author_id, created_at_unix_ms, updated_at_unix_ms) VALUES ('comment-legacy', 'task-legacy', 'Legacy comment', 'user', 'user-legacy', ?, ?)`, now, now)
+}
+
+func assertTableLegacyIdentifierColumn(t *testing.T, db *sql.DB, table string, column string) {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), `SELECT `+column+` FROM `+table+` WHERE `+column+` IS NOT NULL`)
+	if err != nil {
+		t.Fatalf("query %s.%s: %v", table, column, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			t.Fatalf("scan %s.%s: %v", table, column, err)
+		}
+		if parsed, err := uuid.Parse(value); err == nil && parsed.Version() == 4 {
+			t.Fatalf("%s.%s = %q, want preserved legacy identifier", table, column, value)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate %s.%s: %v", table, column, err)
+	}
+}
+
+func assertJSONColumnContainsAll(t *testing.T, db *sql.DB, table string, column string, expected ...string) {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), `SELECT `+column+` FROM `+table)
+	if err != nil {
+		t.Fatalf("query %s.%s: %v", table, column, err)
+	}
+	defer func() { _ = rows.Close() }()
+	found := make(map[string]bool, len(expected))
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatalf("scan %s.%s: %v", table, column, err)
+		}
+		var value any
+		if err := json.Unmarshal([]byte(raw), &value); err != nil {
+			t.Fatalf("decode %s.%s: %v", table, column, err)
+		}
+		collectJSONStrings(value, found)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate %s.%s: %v", table, column, err)
+	}
+	for _, expectedValue := range expected {
+		if !found[expectedValue] {
+			t.Fatalf("typed JSON does not preserve legacy identifier %q", expectedValue)
+		}
+	}
+}
+
+func collectJSONStrings(value any, found map[string]bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, nested := range typed {
+			collectJSONStrings(nested, found)
+		}
+	case []any:
+		for _, nested := range typed {
+			collectJSONStrings(nested, found)
+		}
+	case string:
+		found[typed] = true
 	}
 }
 
@@ -102,6 +420,13 @@ func TestMetadataSQLiteDSNNormalizesWindowsPaths(t *testing.T) {
 	}
 	if !strings.Contains(dsn, "_pragma=foreign_keys%281%29") {
 		t.Fatalf("dsn = %q, want pragma query values preserved", dsn)
+	}
+}
+
+func TestMetadataMigrationSQLiteDSNUsesExclusiveTransactionLock(t *testing.T) {
+	dsn := metadataMigrationSQLiteDSN(filepath.Join(t.TempDir(), "main.sqlite3"))
+	if !strings.Contains(dsn, "_txlock=exclusive") {
+		t.Fatalf("migration DSN = %q, want exclusive transaction lock", dsn)
 	}
 }
 

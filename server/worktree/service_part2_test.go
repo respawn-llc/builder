@@ -65,7 +65,7 @@ func TestDeleteWorktreeRebindsCurrentSessionToMainBeforeRemoval(t *testing.T) {
 	}
 }
 
-func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
+func TestBeginMutationSerializesMutationsByRepository(t *testing.T) {
 	env := newServiceTestEnv(t)
 	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
 
@@ -116,7 +116,7 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	result.release()
 }
 
-func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *testing.T) {
+func TestBeginMutationReacquiresRepositoryLockWhenSessionWorkspaceChanges(t *testing.T) {
 	env := newServiceTestEnv(t)
 	secondWorkspace := t.TempDir()
 	initGitRepo(t, secondWorkspace)
@@ -130,11 +130,14 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	}
 	secondSession := createServiceTestSession(t, env.store, secondCfg, secondBinding)
 
-	firstWorkspaceLock := env.service.acquireWorkspaceMutationLock(env.binding.WorkspaceID)
+	firstRepositoryLock, err := env.service.AcquireRepositoryMutationLock(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("AcquireRepositoryMutationLock: %v", err)
+	}
 	firstLockReleased := false
 	defer func() {
 		if !firstLockReleased {
-			firstWorkspaceLock()
+			firstRepositoryLock()
 		}
 	}()
 
@@ -150,7 +153,7 @@ func TestBeginMutationReacquiresWorkspaceLockWhenSessionWorkspaceChanges(t *test
 	}()
 
 	updateServiceTestSessionTarget(t, env, env.session.Meta().SessionID, secondBinding.WorkspaceID, "", ".")
-	firstWorkspaceLock()
+	firstRepositoryLock()
 	firstLockReleased = true
 
 	var first mutationResult

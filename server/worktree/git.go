@@ -9,12 +9,47 @@ import (
 	"path/filepath"
 	"strings"
 
+	"core/server/workflow"
 	"core/shared/config"
 )
 
 // ErrBaseRefRequired is returned when a create spec omits a required base ref.
 // Callers match it via errors.Is; the create_branch context is added with %w.
 var ErrBaseRefRequired = errors.New("base ref is required")
+
+type ExecutionTargetResolutionFailureKind string
+
+const (
+	ExecutionTargetResolutionFailureNonGit      ExecutionTargetResolutionFailureKind = "non_git"
+	ExecutionTargetResolutionFailureUnavailable ExecutionTargetResolutionFailureKind = "unavailable"
+	ExecutionTargetResolutionFailureInvalidRef  ExecutionTargetResolutionFailureKind = "invalid_ref"
+)
+
+type ExecutionTargetResolutionError struct {
+	Kind         ExecutionTargetResolutionFailureKind
+	Policy       workflow.ExecutionPolicyMode
+	RequestedRef string
+	err          error
+}
+
+func (e *ExecutionTargetResolutionError) Error() string {
+	switch e.Kind {
+	case ExecutionTargetResolutionFailureNonGit:
+		return fmt.Sprintf("cannot resolve %q execution target because the source workspace is not a Git worktree", e.Policy)
+	case ExecutionTargetResolutionFailureInvalidRef:
+		return fmt.Sprintf("cannot resolve custom execution target ref %q", e.RequestedRef)
+	default:
+		return fmt.Sprintf("cannot resolve %q execution target from the source workspace", e.Policy)
+	}
+}
+
+func (e *ExecutionTargetResolutionError) Unwrap() error {
+	return e.err
+}
+
+type ExecutionTargetResolution struct {
+	Source workflow.ExecutionTargetResolvedSource
+}
 
 // InvalidCreateTargetError reports that a requested create target is neither a
 // valid branch name nor a resolvable ref. It exposes the offending target so
@@ -114,6 +149,230 @@ func (i *GitInspector) BranchExists(ctx context.Context, workspaceRoot string, b
 		return false, nil
 	}
 	return false, err
+}
+
+func (i *GitInspector) CommonDirectory(ctx context.Context, workspaceRoot string) (string, error) {
+	if i == nil {
+		return "", fmt.Errorf("git inspector is required")
+	}
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	output, exitCode, err := i.runner.Run(ctx, canonicalRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		return "", formatGitRunError(exitCode, err, output, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	}
+	commonDir := strings.TrimSpace(string(output))
+	if commonDir == "" {
+		return "", errors.New("Git common directory is required")
+	}
+	return config.CanonicalWorkspaceRoot(commonDir)
+}
+
+func (i *GitInspector) ResolveExecutionTarget(ctx context.Context, workspaceRoot string, policy workflow.ExecutionPolicyMode, customRef *string) (ExecutionTargetResolution, error) {
+	if i == nil {
+		return ExecutionTargetResolution{}, fmt.Errorf("git inspector is required")
+	}
+	canonicalRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return ExecutionTargetResolution{}, err
+	}
+	if err := i.requireGitWorktree(ctx, canonicalRoot, policy); err != nil {
+		return ExecutionTargetResolution{}, err
+	}
+	switch policy {
+	case workflow.ExecutionPolicyHead:
+		return i.resolveHeadExecutionTarget(ctx, canonicalRoot, policy)
+	case workflow.ExecutionPolicyDefaultBranch:
+		return i.resolveDefaultBranchExecutionTarget(ctx, canonicalRoot)
+	case workflow.ExecutionPolicyCustomRef:
+		if customRef == nil || strings.TrimSpace(*customRef) == "" {
+			return ExecutionTargetResolution{}, executionTargetResolutionFailure(ExecutionTargetResolutionFailureInvalidRef, policy, "", nil)
+		}
+		return i.resolveCustomRefExecutionTarget(ctx, canonicalRoot, strings.TrimSpace(*customRef))
+	default:
+		return ExecutionTargetResolution{}, fmt.Errorf("Git execution target resolution does not support policy %q", policy)
+	}
+}
+
+func (i *GitInspector) requireGitWorktree(ctx context.Context, workspaceRoot string, policy workflow.ExecutionPolicyMode) error {
+	output, exitCode, err := i.runner.Run(ctx, workspaceRoot, "rev-parse", "--is-inside-work-tree")
+	if err == nil {
+		if strings.TrimSpace(string(output)) == "true" {
+			return nil
+		}
+		return executionTargetResolutionFailure(ExecutionTargetResolutionFailureNonGit, policy, "", nil)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if exitCode == 128 {
+		return executionTargetResolutionFailure(ExecutionTargetResolutionFailureNonGit, policy, "", nil)
+	}
+	return executionTargetResolutionFailure(ExecutionTargetResolutionFailureUnavailable, policy, "", formatGitRunError(exitCode, err, output, "rev-parse", "--is-inside-work-tree"))
+}
+
+func (i *GitInspector) resolveHeadExecutionTarget(ctx context.Context, workspaceRoot string, policy workflow.ExecutionPolicyMode) (ExecutionTargetResolution, error) {
+	namedRef, detached, err := i.resolveSymbolicHead(ctx, workspaceRoot, policy)
+	if err != nil {
+		return ExecutionTargetResolution{}, err
+	}
+	commit, err := i.resolveCommit(ctx, workspaceRoot, "HEAD", policy, ExecutionTargetResolutionFailureUnavailable, "")
+	if err != nil {
+		return ExecutionTargetResolution{}, err
+	}
+	if detached {
+		return ExecutionTargetResolution{Source: workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: commit,
+		}}, nil
+	}
+	return ExecutionTargetResolution{Source: workflow.ExecutionTargetResolvedSource{
+		Kind:     workflow.ExecutionTargetSourceNamedRef,
+		NamedRef: namedRef,
+		Commit:   commit,
+	}}, nil
+}
+
+func (i *GitInspector) resolveDefaultBranchExecutionTarget(ctx context.Context, workspaceRoot string) (ExecutionTargetResolution, error) {
+	headRef, detached, err := i.resolveSymbolicHead(ctx, workspaceRoot, workflow.ExecutionPolicyDefaultBranch)
+	if err != nil {
+		return ExecutionTargetResolution{}, err
+	}
+	remote := "origin"
+	if !detached && headRef != nil {
+		branch := strings.TrimPrefix(*headRef, "refs/heads/")
+		output, exitCode, err := i.runner.Run(ctx, workspaceRoot, "for-each-ref", "--format=%(upstream:remotename)", "refs/heads/"+branch)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ExecutionTargetResolution{}, ctxErr
+			}
+			return ExecutionTargetResolution{}, executionTargetResolutionFailure(ExecutionTargetResolutionFailureUnavailable, workflow.ExecutionPolicyDefaultBranch, "", formatGitRunError(exitCode, err, output, "for-each-ref", "--format=%(upstream:remotename)", "refs/heads/"+branch))
+		}
+		if upstreamRemote := strings.TrimSpace(string(output)); upstreamRemote != "" {
+			remote = upstreamRemote
+		}
+	}
+	defaultPointer := "refs/remotes/" + remote + "/HEAD"
+	output, exitCode, err := i.runner.Run(ctx, workspaceRoot, "symbolic-ref", "--quiet", defaultPointer)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ExecutionTargetResolution{}, ctxErr
+		}
+		if exitCode == 1 {
+			return ExecutionTargetResolution{}, executionTargetResolutionFailure(ExecutionTargetResolutionFailureUnavailable, workflow.ExecutionPolicyDefaultBranch, "", nil)
+		}
+		return ExecutionTargetResolution{}, executionTargetResolutionFailure(ExecutionTargetResolutionFailureUnavailable, workflow.ExecutionPolicyDefaultBranch, "", formatGitRunError(exitCode, err, output, "symbolic-ref", "--quiet", defaultPointer))
+	}
+	namedRef := strings.TrimSpace(string(output))
+	if !strings.HasPrefix(namedRef, "refs/") {
+		return ExecutionTargetResolution{}, executionTargetResolutionFailure(ExecutionTargetResolutionFailureUnavailable, workflow.ExecutionPolicyDefaultBranch, "", nil)
+	}
+	commit, err := i.resolveCommit(ctx, workspaceRoot, namedRef, workflow.ExecutionPolicyDefaultBranch, ExecutionTargetResolutionFailureUnavailable, "")
+	if err != nil {
+		return ExecutionTargetResolution{}, err
+	}
+	return ExecutionTargetResolution{Source: workflow.ExecutionTargetResolvedSource{
+		Kind:     workflow.ExecutionTargetSourceNamedRef,
+		NamedRef: &namedRef,
+		Commit:   commit,
+	}}, nil
+}
+
+func (i *GitInspector) resolveCustomRefExecutionTarget(ctx context.Context, workspaceRoot string, requestedRef string) (ExecutionTargetResolution, error) {
+	commit, err := i.resolveCommit(ctx, workspaceRoot, requestedRef, workflow.ExecutionPolicyCustomRef, ExecutionTargetResolutionFailureInvalidRef, requestedRef)
+	if err != nil {
+		return ExecutionTargetResolution{}, err
+	}
+	namedRef, err := i.resolveCanonicalNamedRef(ctx, workspaceRoot, requestedRef)
+	if err != nil {
+		return ExecutionTargetResolution{}, err
+	}
+	if namedRef == nil {
+		return ExecutionTargetResolution{Source: workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: commit,
+		}}, nil
+	}
+	return ExecutionTargetResolution{Source: workflow.ExecutionTargetResolvedSource{
+		Kind:     workflow.ExecutionTargetSourceNamedRef,
+		NamedRef: namedRef,
+		Commit:   commit,
+	}}, nil
+}
+
+func (i *GitInspector) resolveSymbolicHead(ctx context.Context, workspaceRoot string, policy workflow.ExecutionPolicyMode) (*string, bool, error) {
+	output, exitCode, err := i.runner.Run(ctx, workspaceRoot, "symbolic-ref", "--quiet", "HEAD")
+	if err == nil {
+		namedRef := strings.TrimSpace(string(output))
+		if !strings.HasPrefix(namedRef, "refs/") {
+			return nil, false, executionTargetResolutionFailure(ExecutionTargetResolutionFailureUnavailable, policy, "", nil)
+		}
+		return &namedRef, false, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, false, ctxErr
+	}
+	if exitCode == 1 {
+		return nil, true, nil
+	}
+	return nil, false, executionTargetResolutionFailure(ExecutionTargetResolutionFailureUnavailable, policy, "", formatGitRunError(exitCode, err, output, "symbolic-ref", "--quiet", "HEAD"))
+}
+
+func (i *GitInspector) resolveCommit(ctx context.Context, workspaceRoot string, ref string, policy workflow.ExecutionPolicyMode, failureKind ExecutionTargetResolutionFailureKind, requestedRef string) (string, error) {
+	output, exitCode, err := i.runner.Run(ctx, workspaceRoot, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		if exitCode == 1 {
+			return "", executionTargetResolutionFailure(failureKind, policy, requestedRef, nil)
+		}
+		return "", executionTargetResolutionFailure(ExecutionTargetResolutionFailureUnavailable, policy, requestedRef, formatGitRunError(exitCode, err, output, "rev-parse", "--verify", "--quiet", ref+"^{commit}"))
+	}
+	commit := strings.TrimSpace(string(output))
+	if commit == "" {
+		return "", executionTargetResolutionFailure(failureKind, policy, requestedRef, nil)
+	}
+	return commit, nil
+}
+
+func (i *GitInspector) resolveCanonicalNamedRef(ctx context.Context, workspaceRoot string, requestedRef string) (*string, error) {
+	output, exitCode, err := i.runner.Run(ctx, workspaceRoot, "rev-parse", "--symbolic-full-name", "--verify", requestedRef)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if exitCode == 1 {
+			return nil, nil
+		}
+		return nil, executionTargetResolutionFailure(ExecutionTargetResolutionFailureUnavailable, workflow.ExecutionPolicyCustomRef, requestedRef, formatGitRunError(exitCode, err, output, "rev-parse", "--symbolic-full-name", "--verify", requestedRef))
+	}
+	namedRef := strings.TrimSpace(string(output))
+	if strings.HasPrefix(namedRef, "refs/") {
+		return &namedRef, nil
+	}
+	if namedRef != "HEAD" {
+		return nil, nil
+	}
+	headRef, detached, err := i.resolveSymbolicHead(ctx, workspaceRoot, workflow.ExecutionPolicyCustomRef)
+	if err != nil || detached {
+		return nil, err
+	}
+	return headRef, nil
+}
+
+func executionTargetResolutionFailure(kind ExecutionTargetResolutionFailureKind, policy workflow.ExecutionPolicyMode, requestedRef string, err error) *ExecutionTargetResolutionError {
+	return &ExecutionTargetResolutionError{
+		Kind:         kind,
+		Policy:       policy,
+		RequestedRef: requestedRef,
+		err:          err,
+	}
 }
 
 func (i *GitInspector) ResolveCreateTarget(ctx context.Context, workspaceRoot string, rawTarget string) (CreateTargetResolution, error) {

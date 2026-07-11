@@ -400,6 +400,9 @@ func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTas
 	if err != nil {
 		return StartTaskResult{}, err
 	}
+	if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, s.queries, taskID); err != nil {
+		return StartTaskResult{}, err
+	}
 	worktreeRoot, err := taskManagedWorktreeRoot(ctx, s.queries, prepared.task)
 	if err != nil {
 		return StartTaskResult{}, err
@@ -419,6 +422,9 @@ func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTas
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, q, taskID); err != nil {
+		return StartTaskResult{}, err
+	}
 	updatedStart, err := q.StartTaskCompleteStartPlacement(ctx, sqlitegen.StartTaskCompleteStartPlacementParams{
 		State:           "completed",
 		UpdatedAtUnixMs: now,
@@ -820,6 +826,9 @@ func (s *Store) CancelTask(ctx context.Context, taskID workflow.TaskID, reason s
 		return sql.ErrNoRows
 	}
 	if _, err := q.InterruptActiveTaskRuns(ctx, sqlitegen.InterruptActiveTaskRunsParams{TaskID: string(taskID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: now, InterruptionReason: "task_canceled", InterruptionDetailJson: "{}"}); err != nil {
+		return err
+	}
+	if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(taskID)); err != nil {
 		return err
 	}
 	placements, err := q.ListTaskNodePlacements(ctx, string(taskID))

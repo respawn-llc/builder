@@ -95,6 +95,45 @@ type TaskComment struct {
 	UpdatedAtUnixMs int64
 }
 
+type TaskExecutionTarget struct {
+	TaskID                      string
+	Policy                      string
+	RequestedCustomRef          sql.NullString
+	ResolvedSourceKind          sql.NullString
+	ResolvedSourceRef           sql.NullString
+	ResolvedCommit              sql.NullString
+	State                       string
+	ProvisioningGeneration      sql.NullString
+	SetupProvisioningGeneration sql.NullString
+	SetupState                  string
+	ActiveClaimGeneration       sql.NullString
+	ActiveClaimPhase            sql.NullString
+	RecoveryDisposition         string
+	RecoveryCause               sql.NullString
+	ExactBranchObservation      sql.NullString
+	LinkedWorktreeCommonDir     sql.NullString
+	LinkedWorktreeAdminEntry    sql.NullString
+	LinkedWorktreeGitdir        sql.NullString
+	LinkedWorktreeHeadRef       sql.NullString
+	ExpectedDetachmentCommit    sql.NullString
+}
+
+type TaskExecutionTargetNegotiation struct {
+	TaskID                string
+	Generation            string
+	WorkflowID            string
+	SourceWorkspaceID     string
+	SourceKind            string
+	SourceNamedRef        sql.NullString
+	SourceCommit          sql.NullString
+	RecoveryCause         sql.NullString
+	ActionKind            string
+	StartPlacementID      sql.NullString
+	MoveSourcePlacementID sql.NullString
+	MoveTargetNodeID      sql.NullString
+	ApprovalTransitionID  sql.NullString
+}
+
 type TaskNodePlacement struct {
 	ID                        string
 	TaskID                    string
@@ -258,12 +297,14 @@ type TaskTransitionRecord struct {
 }
 
 type Workflow struct {
-	ID              string
-	Name            string
-	Description     string
-	Version         int64
-	CreatedAtUnixMs int64
-	UpdatedAtUnixMs int64
+	ID                 string
+	Name               string
+	Description        string
+	Version            int64
+	CreatedAtUnixMs    int64
+	UpdatedAtUnixMs    int64
+	ExecutionPolicy    string
+	ExecutionCustomRef sql.NullString
 }
 
 type WorkflowEdge struct {

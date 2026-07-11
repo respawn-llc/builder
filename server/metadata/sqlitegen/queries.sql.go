@@ -987,6 +987,19 @@ func (q *Queries) DeleteTaskCommentsByTask(ctx context.Context, taskID string) (
 	return result.RowsAffected()
 }
 
+const deleteTaskExecutionTargetNegotiation = `-- name: DeleteTaskExecutionTargetNegotiation :execrows
+DELETE FROM task_execution_target_negotiations
+WHERE task_id = ?1
+`
+
+func (q *Queries) DeleteTaskExecutionTargetNegotiation(ctx context.Context, taskID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTaskExecutionTargetNegotiation, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteTaskNodePlacementsByTask = `-- name: DeleteTaskNodePlacementsByTask :execrows
 DELETE FROM task_node_placements
 WHERE task_id = ?1
@@ -2003,6 +2016,102 @@ func (q *Queries) GetTaskByProjectShortID(ctx context.Context, arg GetTaskByProj
 	return i, err
 }
 
+const getTaskExecutionTarget = `-- name: GetTaskExecutionTarget :one
+SELECT
+    task_id,
+    policy,
+    requested_custom_ref,
+    resolved_source_kind,
+    resolved_source_ref,
+    resolved_commit,
+    state,
+    provisioning_generation,
+    setup_provisioning_generation,
+    setup_state,
+    active_claim_generation,
+    active_claim_phase,
+    recovery_disposition,
+    recovery_cause,
+    exact_branch_observation,
+    linked_worktree_common_dir,
+    linked_worktree_admin_entry,
+    linked_worktree_gitdir,
+    linked_worktree_head_ref,
+    expected_detachment_commit
+FROM task_execution_targets
+WHERE task_id = ?1
+LIMIT 1
+`
+
+func (q *Queries) GetTaskExecutionTarget(ctx context.Context, taskID string) (TaskExecutionTarget, error) {
+	row := q.db.QueryRowContext(ctx, getTaskExecutionTarget, taskID)
+	var i TaskExecutionTarget
+	err := row.Scan(
+		&i.TaskID,
+		&i.Policy,
+		&i.RequestedCustomRef,
+		&i.ResolvedSourceKind,
+		&i.ResolvedSourceRef,
+		&i.ResolvedCommit,
+		&i.State,
+		&i.ProvisioningGeneration,
+		&i.SetupProvisioningGeneration,
+		&i.SetupState,
+		&i.ActiveClaimGeneration,
+		&i.ActiveClaimPhase,
+		&i.RecoveryDisposition,
+		&i.RecoveryCause,
+		&i.ExactBranchObservation,
+		&i.LinkedWorktreeCommonDir,
+		&i.LinkedWorktreeAdminEntry,
+		&i.LinkedWorktreeGitdir,
+		&i.LinkedWorktreeHeadRef,
+		&i.ExpectedDetachmentCommit,
+	)
+	return i, err
+}
+
+const getTaskExecutionTargetNegotiation = `-- name: GetTaskExecutionTargetNegotiation :one
+SELECT
+    task_id,
+    generation,
+    workflow_id,
+    source_workspace_id,
+    source_kind,
+    source_named_ref,
+    source_commit,
+    recovery_cause,
+    action_kind,
+    start_placement_id,
+    move_source_placement_id,
+    move_target_node_id,
+    approval_transition_id
+FROM task_execution_target_negotiations
+WHERE task_id = ?1
+LIMIT 1
+`
+
+func (q *Queries) GetTaskExecutionTargetNegotiation(ctx context.Context, taskID string) (TaskExecutionTargetNegotiation, error) {
+	row := q.db.QueryRowContext(ctx, getTaskExecutionTargetNegotiation, taskID)
+	var i TaskExecutionTargetNegotiation
+	err := row.Scan(
+		&i.TaskID,
+		&i.Generation,
+		&i.WorkflowID,
+		&i.SourceWorkspaceID,
+		&i.SourceKind,
+		&i.SourceNamedRef,
+		&i.SourceCommit,
+		&i.RecoveryCause,
+		&i.ActionKind,
+		&i.StartPlacementID,
+		&i.MoveSourcePlacementID,
+		&i.MoveTargetNodeID,
+		&i.ApprovalTransitionID,
+	)
+	return i, err
+}
+
 const getTaskIdentityForComment = `-- name: GetTaskIdentityForComment :one
 SELECT t.id AS task_id, t.project_id, t.workflow_id
 FROM task_comments c
@@ -2166,6 +2275,8 @@ SELECT
     id,
     name,
     description,
+    execution_policy,
+    execution_custom_ref,
     version,
     created_at_unix_ms,
     updated_at_unix_ms
@@ -2174,13 +2285,26 @@ WHERE id = ?1
 LIMIT 1
 `
 
-func (q *Queries) GetWorkflow(ctx context.Context, id string) (Workflow, error) {
+type GetWorkflowRow struct {
+	ID                 string
+	Name               string
+	Description        string
+	ExecutionPolicy    string
+	ExecutionCustomRef sql.NullString
+	Version            int64
+	CreatedAtUnixMs    int64
+	UpdatedAtUnixMs    int64
+}
+
+func (q *Queries) GetWorkflow(ctx context.Context, id string) (GetWorkflowRow, error) {
 	row := q.db.QueryRowContext(ctx, getWorkflow, id)
-	var i Workflow
+	var i GetWorkflowRow
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
 		&i.Description,
+		&i.ExecutionPolicy,
+		&i.ExecutionCustomRef,
 		&i.Version,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
@@ -2958,6 +3082,101 @@ func (q *Queries) InsertTaskComment(ctx context.Context, arg InsertTaskCommentPa
 	return err
 }
 
+const insertTaskExecutionTarget = `-- name: InsertTaskExecutionTarget :exec
+INSERT INTO task_execution_targets (
+    task_id,
+    policy,
+    requested_custom_ref,
+    resolved_source_kind,
+    resolved_source_ref,
+    resolved_commit,
+    state,
+    provisioning_generation,
+    setup_provisioning_generation,
+    setup_state,
+    active_claim_generation,
+    active_claim_phase,
+    recovery_disposition,
+    recovery_cause,
+    exact_branch_observation,
+    linked_worktree_common_dir,
+    linked_worktree_admin_entry,
+    linked_worktree_gitdir,
+    linked_worktree_head_ref,
+    expected_detachment_commit
+) VALUES (
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    ?5,
+    ?6,
+    ?7,
+    ?8,
+    ?9,
+    ?10,
+    ?11,
+    ?12,
+    ?13,
+    ?14,
+    ?15,
+    ?16,
+    ?17,
+    ?18,
+    ?19,
+    ?20
+)
+`
+
+type InsertTaskExecutionTargetParams struct {
+	TaskID                      string
+	Policy                      string
+	RequestedCustomRef          sql.NullString
+	ResolvedSourceKind          sql.NullString
+	ResolvedSourceRef           sql.NullString
+	ResolvedCommit              sql.NullString
+	State                       string
+	ProvisioningGeneration      sql.NullString
+	SetupProvisioningGeneration sql.NullString
+	SetupState                  string
+	ActiveClaimGeneration       sql.NullString
+	ActiveClaimPhase            sql.NullString
+	RecoveryDisposition         string
+	RecoveryCause               sql.NullString
+	ExactBranchObservation      sql.NullString
+	LinkedWorktreeCommonDir     sql.NullString
+	LinkedWorktreeAdminEntry    sql.NullString
+	LinkedWorktreeGitdir        sql.NullString
+	LinkedWorktreeHeadRef       sql.NullString
+	ExpectedDetachmentCommit    sql.NullString
+}
+
+func (q *Queries) InsertTaskExecutionTarget(ctx context.Context, arg InsertTaskExecutionTargetParams) error {
+	_, err := q.db.ExecContext(ctx, insertTaskExecutionTarget,
+		arg.TaskID,
+		arg.Policy,
+		arg.RequestedCustomRef,
+		arg.ResolvedSourceKind,
+		arg.ResolvedSourceRef,
+		arg.ResolvedCommit,
+		arg.State,
+		arg.ProvisioningGeneration,
+		arg.SetupProvisioningGeneration,
+		arg.SetupState,
+		arg.ActiveClaimGeneration,
+		arg.ActiveClaimPhase,
+		arg.RecoveryDisposition,
+		arg.RecoveryCause,
+		arg.ExactBranchObservation,
+		arg.LinkedWorktreeCommonDir,
+		arg.LinkedWorktreeAdminEntry,
+		arg.LinkedWorktreeGitdir,
+		arg.LinkedWorktreeHeadRef,
+		arg.ExpectedDetachmentCommit,
+	)
+	return err
+}
+
 const insertTaskNodePlacement = `-- name: InsertTaskNodePlacement :exec
 INSERT INTO task_node_placements (
     id,
@@ -3243,6 +3462,8 @@ INSERT INTO workflows (
     id,
     name,
     description,
+    execution_policy,
+    execution_custom_ref,
     version,
     created_at_unix_ms,
     updated_at_unix_ms
@@ -3252,17 +3473,21 @@ INSERT INTO workflows (
     ?3,
     ?4,
     ?5,
-    ?6
+    ?6,
+    ?7,
+    ?8
 )
 `
 
 type InsertWorkflowParams struct {
-	ID              string
-	Name            string
-	Description     string
-	Version         int64
-	CreatedAtUnixMs int64
-	UpdatedAtUnixMs int64
+	ID                 string
+	Name               string
+	Description        string
+	ExecutionPolicy    string
+	ExecutionCustomRef sql.NullString
+	Version            int64
+	CreatedAtUnixMs    int64
+	UpdatedAtUnixMs    int64
 }
 
 func (q *Queries) InsertWorkflow(ctx context.Context, arg InsertWorkflowParams) error {
@@ -3270,6 +3495,8 @@ func (q *Queries) InsertWorkflow(ctx context.Context, arg InsertWorkflowParams) 
 		arg.ID,
 		arg.Name,
 		arg.Description,
+		arg.ExecutionPolicy,
+		arg.ExecutionCustomRef,
 		arg.Version,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
@@ -7088,6 +7315,8 @@ WITH workflow_list(
     id,
     name,
     description,
+    execution_policy,
+    execution_custom_ref,
     version,
     created_at_unix_ms,
     updated_at_unix_ms,
@@ -7097,6 +7326,8 @@ WITH workflow_list(
         workflows.id,
         workflows.name,
         workflows.description,
+        workflows.execution_policy,
+        workflows.execution_custom_ref,
         workflows.version,
         workflows.created_at_unix_ms,
         workflows.updated_at_unix_ms,
@@ -7142,6 +7373,8 @@ SELECT
     id,
     name,
     description,
+    execution_policy,
+    execution_custom_ref,
     version,
     created_at_unix_ms,
     updated_at_unix_ms,
@@ -7161,13 +7394,15 @@ type ListWorkflowRecordsPageParams struct {
 }
 
 type ListWorkflowRecordsPageRow struct {
-	ID               string
-	Name             string
-	Description      string
-	Version          int64
-	CreatedAtUnixMs  int64
-	UpdatedAtUnixMs  int64
-	ActivityAtUnixMs int64
+	ID                 string
+	Name               string
+	Description        string
+	ExecutionPolicy    string
+	ExecutionCustomRef sql.NullString
+	Version            int64
+	CreatedAtUnixMs    int64
+	UpdatedAtUnixMs    int64
+	ActivityAtUnixMs   int64
 }
 
 func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowRecordsPageParams) ([]ListWorkflowRecordsPageRow, error) {
@@ -7190,6 +7425,8 @@ func (q *Queries) ListWorkflowRecordsPage(ctx context.Context, arg ListWorkflowR
 			&i.ID,
 			&i.Name,
 			&i.Description,
+			&i.ExecutionPolicy,
+			&i.ExecutionCustomRef,
 			&i.Version,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
@@ -7788,6 +8025,8 @@ SELECT
     id,
     name,
     description,
+    execution_policy,
+    execution_custom_ref,
     version,
     created_at_unix_ms,
     updated_at_unix_ms
@@ -7795,19 +8034,32 @@ FROM workflows
 ORDER BY updated_at_unix_ms DESC, rowid DESC
 `
 
-func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
+type ListWorkflowsRow struct {
+	ID                 string
+	Name               string
+	Description        string
+	ExecutionPolicy    string
+	ExecutionCustomRef sql.NullString
+	Version            int64
+	CreatedAtUnixMs    int64
+	UpdatedAtUnixMs    int64
+}
+
+func (q *Queries) ListWorkflows(ctx context.Context) ([]ListWorkflowsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflows)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Workflow
+	var items []ListWorkflowsRow
 	for rows.Next() {
-		var i Workflow
+		var i ListWorkflowsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,
 			&i.Description,
+			&i.ExecutionPolicy,
+			&i.ExecutionCustomRef,
 			&i.Version,
 			&i.CreatedAtUnixMs,
 			&i.UpdatedAtUnixMs,
@@ -9157,6 +9409,77 @@ func (q *Queries) UpdateWorkflowInfoWithoutVersion(ctx context.Context, arg Upda
 	return result.RowsAffected()
 }
 
+const updateWorkflowMetadata = `-- name: UpdateWorkflowMetadata :execrows
+UPDATE workflows
+SET
+    name = ?1,
+    description = ?2,
+    execution_policy = ?3,
+    execution_custom_ref = ?4,
+    version = version + 1,
+    updated_at_unix_ms = ?5
+WHERE id = ?6
+`
+
+type UpdateWorkflowMetadataParams struct {
+	Name               string
+	Description        string
+	ExecutionPolicy    string
+	ExecutionCustomRef sql.NullString
+	UpdatedAtUnixMs    int64
+	ID                 string
+}
+
+func (q *Queries) UpdateWorkflowMetadata(ctx context.Context, arg UpdateWorkflowMetadataParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateWorkflowMetadata,
+		arg.Name,
+		arg.Description,
+		arg.ExecutionPolicy,
+		arg.ExecutionCustomRef,
+		arg.UpdatedAtUnixMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateWorkflowMetadataWithoutVersion = `-- name: UpdateWorkflowMetadataWithoutVersion :execrows
+UPDATE workflows
+SET
+    name = ?1,
+    description = ?2,
+    execution_policy = ?3,
+    execution_custom_ref = ?4,
+    updated_at_unix_ms = ?5
+WHERE id = ?6
+`
+
+type UpdateWorkflowMetadataWithoutVersionParams struct {
+	Name               string
+	Description        string
+	ExecutionPolicy    string
+	ExecutionCustomRef sql.NullString
+	UpdatedAtUnixMs    int64
+	ID                 string
+}
+
+func (q *Queries) UpdateWorkflowMetadataWithoutVersion(ctx context.Context, arg UpdateWorkflowMetadataWithoutVersionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateWorkflowMetadataWithoutVersion,
+		arg.Name,
+		arg.Description,
+		arg.ExecutionPolicy,
+		arg.ExecutionCustomRef,
+		arg.UpdatedAtUnixMs,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateWorkflowNode = `-- name: UpdateWorkflowNode :execrows
 UPDATE workflow_nodes
 SET
@@ -9482,6 +9805,86 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.LockedJson,
 		arg.UsageStateJson,
 		arg.MetadataJson,
+	)
+	return err
+}
+
+const upsertTaskExecutionTargetNegotiation = `-- name: UpsertTaskExecutionTargetNegotiation :exec
+INSERT INTO task_execution_target_negotiations (
+    task_id,
+    generation,
+    workflow_id,
+    source_workspace_id,
+    source_kind,
+    source_named_ref,
+    source_commit,
+    recovery_cause,
+    action_kind,
+    start_placement_id,
+    move_source_placement_id,
+    move_target_node_id,
+    approval_transition_id
+) VALUES (
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    ?5,
+    ?6,
+    ?7,
+    ?8,
+    ?9,
+    ?10,
+    ?11,
+    ?12,
+    ?13
+)
+ON CONFLICT (task_id) DO UPDATE SET
+    generation = excluded.generation,
+    workflow_id = excluded.workflow_id,
+    source_workspace_id = excluded.source_workspace_id,
+    source_kind = excluded.source_kind,
+    source_named_ref = excluded.source_named_ref,
+    source_commit = excluded.source_commit,
+    recovery_cause = excluded.recovery_cause,
+    action_kind = excluded.action_kind,
+    start_placement_id = excluded.start_placement_id,
+    move_source_placement_id = excluded.move_source_placement_id,
+    move_target_node_id = excluded.move_target_node_id,
+    approval_transition_id = excluded.approval_transition_id
+`
+
+type UpsertTaskExecutionTargetNegotiationParams struct {
+	TaskID                string
+	Generation            string
+	WorkflowID            string
+	SourceWorkspaceID     string
+	SourceKind            string
+	SourceNamedRef        sql.NullString
+	SourceCommit          sql.NullString
+	RecoveryCause         sql.NullString
+	ActionKind            string
+	StartPlacementID      sql.NullString
+	MoveSourcePlacementID sql.NullString
+	MoveTargetNodeID      sql.NullString
+	ApprovalTransitionID  sql.NullString
+}
+
+func (q *Queries) UpsertTaskExecutionTargetNegotiation(ctx context.Context, arg UpsertTaskExecutionTargetNegotiationParams) error {
+	_, err := q.db.ExecContext(ctx, upsertTaskExecutionTargetNegotiation,
+		arg.TaskID,
+		arg.Generation,
+		arg.WorkflowID,
+		arg.SourceWorkspaceID,
+		arg.SourceKind,
+		arg.SourceNamedRef,
+		arg.SourceCommit,
+		arg.RecoveryCause,
+		arg.ActionKind,
+		arg.StartPlacementID,
+		arg.MoveSourcePlacementID,
+		arg.MoveTargetNodeID,
+		arg.ApprovalTransitionID,
 	)
 	return err
 }

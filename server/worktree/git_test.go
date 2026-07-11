@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"core/server/workflow"
 )
 
 type canceledGitCommandRunner struct{}
@@ -301,6 +303,231 @@ func TestGitInspectorResolveCreateTargetRejectsInvalidBranchName(t *testing.T) {
 	var invalidTarget *InvalidCreateTargetError
 	if !errors.As(err, &invalidTarget) || invalidTarget.Target != "feature..bad" {
 		t.Fatalf("ResolveCreateTarget error = %v", err)
+	}
+}
+
+func TestGitInspectorResolveExecutionTargetUsesTypedGitFacts(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	key := func(args ...string) string { return strings.Join(args, "\x00") }
+	gitRepository := map[string][]byte{
+		key("rev-parse", "--is-inside-work-tree"): []byte("true\n"),
+	}
+
+	t.Run("symbolic head", func(t *testing.T) {
+		runner := &stubGitCommandRunner{outputs: map[string][]byte{
+			key("rev-parse", "--is-inside-work-tree"):                gitRepository[key("rev-parse", "--is-inside-work-tree")],
+			key("symbolic-ref", "--quiet", "HEAD"):                   []byte("refs/heads/main\n"),
+			key("rev-parse", "--verify", "--quiet", "HEAD^{commit}"): []byte("01cafe\n"),
+		}}
+		resolution, err := NewGitInspector(runner).ResolveExecutionTarget(context.Background(), workspaceRoot, workflow.ExecutionPolicyHead, nil)
+		if err != nil {
+			t.Fatalf("ResolveExecutionTarget: %v", err)
+		}
+		if resolution.Source.Kind != workflow.ExecutionTargetSourceNamedRef ||
+			resolution.Source.NamedRef == nil ||
+			*resolution.Source.NamedRef != "refs/heads/main" ||
+			resolution.Source.Commit != "01cafe" {
+			t.Fatalf("HEAD resolution = %+v, want symbolic named source", resolution)
+		}
+	})
+
+	t.Run("detached head", func(t *testing.T) {
+		runner := &stubGitCommandRunner{
+			outputs: map[string][]byte{
+				key("rev-parse", "--is-inside-work-tree"):                gitRepository[key("rev-parse", "--is-inside-work-tree")],
+				key("rev-parse", "--verify", "--quiet", "HEAD^{commit}"): []byte("02cafe\n"),
+			},
+			errors: map[string]error{
+				key("symbolic-ref", "--quiet", "HEAD"): errors.New("exit status 1"),
+			},
+			exitCodes: map[string]int{
+				key("symbolic-ref", "--quiet", "HEAD"): 1,
+			},
+		}
+		resolution, err := NewGitInspector(runner).ResolveExecutionTarget(context.Background(), workspaceRoot, workflow.ExecutionPolicyHead, nil)
+		if err != nil {
+			t.Fatalf("ResolveExecutionTarget: %v", err)
+		}
+		if resolution.Source.Kind != workflow.ExecutionTargetSourceDetachedCommit ||
+			resolution.Source.NamedRef != nil ||
+			resolution.Source.Commit != "02cafe" {
+			t.Fatalf("detached HEAD resolution = %+v, want detached source", resolution)
+		}
+	})
+
+	t.Run("default branch uses upstream remote", func(t *testing.T) {
+		runner := &stubGitCommandRunner{outputs: map[string][]byte{
+			key("rev-parse", "--is-inside-work-tree"):                                            gitRepository[key("rev-parse", "--is-inside-work-tree")],
+			key("symbolic-ref", "--quiet", "HEAD"):                                               []byte("refs/heads/feature/current\n"),
+			key("for-each-ref", "--format=%(upstream:remotename)", "refs/heads/feature/current"): []byte("upstream\n"),
+			key("symbolic-ref", "--quiet", "refs/remotes/upstream/HEAD"):                         []byte("refs/remotes/upstream/trunk\n"),
+			key("rev-parse", "--verify", "--quiet", "refs/remotes/upstream/trunk^{commit}"):      []byte("03cafe\n"),
+		}}
+		resolution, err := NewGitInspector(runner).ResolveExecutionTarget(context.Background(), workspaceRoot, workflow.ExecutionPolicyDefaultBranch, nil)
+		if err != nil {
+			t.Fatalf("ResolveExecutionTarget: %v", err)
+		}
+		if resolution.Source.Kind != workflow.ExecutionTargetSourceNamedRef ||
+			resolution.Source.NamedRef == nil ||
+			*resolution.Source.NamedRef != "refs/remotes/upstream/trunk" ||
+			resolution.Source.Commit != "03cafe" {
+			t.Fatalf("default branch resolution = %+v, want upstream default pointer", resolution)
+		}
+	})
+
+	t.Run("default branch falls back to origin", func(t *testing.T) {
+		runner := &stubGitCommandRunner{outputs: map[string][]byte{
+			key("rev-parse", "--is-inside-work-tree"):                                    gitRepository[key("rev-parse", "--is-inside-work-tree")],
+			key("symbolic-ref", "--quiet", "HEAD"):                                       []byte("refs/heads/current\n"),
+			key("for-each-ref", "--format=%(upstream:remotename)", "refs/heads/current"): nil,
+			key("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"):                   []byte("refs/remotes/origin/main\n"),
+			key("rev-parse", "--verify", "--quiet", "refs/remotes/origin/main^{commit}"): []byte("04cafe\n"),
+		}}
+		resolution, err := NewGitInspector(runner).ResolveExecutionTarget(context.Background(), workspaceRoot, workflow.ExecutionPolicyDefaultBranch, nil)
+		if err != nil {
+			t.Fatalf("ResolveExecutionTarget: %v", err)
+		}
+		if resolution.Source.NamedRef == nil || *resolution.Source.NamedRef != "refs/remotes/origin/main" || resolution.Source.Commit != "04cafe" {
+			t.Fatalf("origin default branch resolution = %+v, want origin default pointer", resolution)
+		}
+	})
+
+	t.Run("custom ref records canonical named ref", func(t *testing.T) {
+		requestedRef := "release"
+		runner := &stubGitCommandRunner{outputs: map[string][]byte{
+			key("rev-parse", "--is-inside-work-tree"):                       gitRepository[key("rev-parse", "--is-inside-work-tree")],
+			key("rev-parse", "--verify", "--quiet", "release^{commit}"):     []byte("05cafe\n"),
+			key("rev-parse", "--symbolic-full-name", "--verify", "release"): []byte("refs/heads/release\n"),
+		}}
+		resolution, err := NewGitInspector(runner).ResolveExecutionTarget(context.Background(), workspaceRoot, workflow.ExecutionPolicyCustomRef, &requestedRef)
+		if err != nil {
+			t.Fatalf("ResolveExecutionTarget: %v", err)
+		}
+		if resolution.Source.Kind != workflow.ExecutionTargetSourceNamedRef ||
+			resolution.Source.NamedRef == nil ||
+			*resolution.Source.NamedRef != "refs/heads/release" ||
+			resolution.Source.Commit != "05cafe" {
+			t.Fatalf("custom resolution = %+v, want canonical named source", resolution)
+		}
+	})
+}
+
+func TestGitInspectorResolveExecutionTargetReportsTypedResolutionFailures(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	key := func(args ...string) string { return strings.Join(args, "\x00") }
+
+	t.Run("non Git workspace", func(t *testing.T) {
+		runner := &stubGitCommandRunner{
+			errors: map[string]error{
+				key("rev-parse", "--is-inside-work-tree"): errors.New("exit status 128"),
+			},
+			exitCodes: map[string]int{
+				key("rev-parse", "--is-inside-work-tree"): 128,
+			},
+		}
+		_, err := NewGitInspector(runner).ResolveExecutionTarget(context.Background(), workspaceRoot, workflow.ExecutionPolicyHead, nil)
+		assertExecutionTargetResolutionFailure(t, err, ExecutionTargetResolutionFailureNonGit)
+	})
+
+	t.Run("unavailable default pointer", func(t *testing.T) {
+		runner := &stubGitCommandRunner{
+			outputs: map[string][]byte{
+				key("rev-parse", "--is-inside-work-tree"):                                    []byte("true\n"),
+				key("symbolic-ref", "--quiet", "HEAD"):                                       []byte("refs/heads/current\n"),
+				key("for-each-ref", "--format=%(upstream:remotename)", "refs/heads/current"): nil,
+			},
+			errors: map[string]error{
+				key("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"): errors.New("exit status 1"),
+			},
+			exitCodes: map[string]int{
+				key("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"): 1,
+			},
+		}
+		_, err := NewGitInspector(runner).ResolveExecutionTarget(context.Background(), workspaceRoot, workflow.ExecutionPolicyDefaultBranch, nil)
+		assertExecutionTargetResolutionFailure(t, err, ExecutionTargetResolutionFailureUnavailable)
+	})
+
+	t.Run("missing custom ref", func(t *testing.T) {
+		requestedRef := "missing"
+		runner := &stubGitCommandRunner{
+			outputs: map[string][]byte{
+				key("rev-parse", "--is-inside-work-tree"): []byte("true\n"),
+			},
+			errors: map[string]error{
+				key("rev-parse", "--verify", "--quiet", "missing^{commit}"): errors.New("exit status 1"),
+			},
+			exitCodes: map[string]int{
+				key("rev-parse", "--verify", "--quiet", "missing^{commit}"): 1,
+			},
+		}
+		_, err := NewGitInspector(runner).ResolveExecutionTarget(context.Background(), workspaceRoot, workflow.ExecutionPolicyCustomRef, &requestedRef)
+		assertExecutionTargetResolutionFailure(t, err, ExecutionTargetResolutionFailureInvalidRef)
+	})
+}
+
+func TestGitInspectorCommonDirectoryUsesCanonicalGitIdentity(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	commonDir := t.TempDir()
+	runner := &stubGitCommandRunner{outputs: map[string][]byte{
+		strings.Join([]string{"rev-parse", "--path-format=absolute", "--git-common-dir"}, "\x00"): []byte(commonDir + "\n"),
+	}}
+
+	actual, err := NewGitInspector(runner).CommonDirectory(context.Background(), workspaceRoot)
+	if err != nil {
+		t.Fatalf("CommonDirectory: %v", err)
+	}
+	if actual != canonicalTestPath(t, commonDir) {
+		t.Fatalf("common directory = %q, want %q", actual, canonicalTestPath(t, commonDir))
+	}
+}
+
+func TestGitInspectorResolveExecutionTargetAgainstGitRepository(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	initGitRepo(t, workspaceRoot)
+	commit := strings.TrimSpace(runGit(t, workspaceRoot, "rev-parse", "HEAD"))
+	runGit(t, workspaceRoot, "update-ref", "refs/remotes/origin/main", commit)
+	runGit(t, workspaceRoot, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	inspector := NewGitInspector(nil)
+
+	head, err := inspector.ResolveExecutionTarget(context.Background(), workspaceRoot, workflow.ExecutionPolicyHead, nil)
+	if err != nil {
+		t.Fatalf("ResolveExecutionTarget HEAD: %v", err)
+	}
+	if head.Source.Kind != workflow.ExecutionTargetSourceNamedRef ||
+		head.Source.NamedRef == nil ||
+		!strings.HasPrefix(*head.Source.NamedRef, "refs/heads/") ||
+		head.Source.Commit != commit {
+		t.Fatalf("HEAD resolution = %+v, want source branch and commit %q", head, commit)
+	}
+
+	defaultBranch, err := inspector.ResolveExecutionTarget(context.Background(), workspaceRoot, workflow.ExecutionPolicyDefaultBranch, nil)
+	if err != nil {
+		t.Fatalf("ResolveExecutionTarget default branch: %v", err)
+	}
+	if defaultBranch.Source.NamedRef == nil ||
+		*defaultBranch.Source.NamedRef != "refs/remotes/origin/main" ||
+		defaultBranch.Source.Commit != commit {
+		t.Fatalf("default branch resolution = %+v, want origin default pointer and commit %q", defaultBranch, commit)
+	}
+
+	customRef := "HEAD"
+	custom, err := inspector.ResolveExecutionTarget(context.Background(), workspaceRoot, workflow.ExecutionPolicyCustomRef, &customRef)
+	if err != nil {
+		t.Fatalf("ResolveExecutionTarget custom HEAD: %v", err)
+	}
+	if custom.Source.Kind != workflow.ExecutionTargetSourceNamedRef ||
+		custom.Source.NamedRef == nil ||
+		*custom.Source.NamedRef != *head.Source.NamedRef ||
+		custom.Source.Commit != commit {
+		t.Fatalf("custom HEAD resolution = %+v, want canonical HEAD source %+v", custom, head.Source)
+	}
+}
+
+func assertExecutionTargetResolutionFailure(t *testing.T, err error, want ExecutionTargetResolutionFailureKind) {
+	t.Helper()
+	var failure *ExecutionTargetResolutionError
+	if !errors.As(err, &failure) || failure.Kind != want {
+		t.Fatalf("resolution error = %v, want typed failure %q", err, want)
 	}
 }
 

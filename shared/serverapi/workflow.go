@@ -2,6 +2,7 @@ package serverapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -70,10 +71,11 @@ const (
 )
 
 type WorkflowRecord struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Version     int64  `json:"version"`
+	ID              string                  `json:"id"`
+	Name            string                  `json:"name"`
+	Description     string                  `json:"description"`
+	ExecutionPolicy WorkflowExecutionPolicy `json:"execution_policy"`
+	Version         int64                   `json:"version"`
 }
 
 type WorkflowNode struct {
@@ -282,8 +284,28 @@ type WorkflowGraphSavePreviewRequest struct {
 }
 
 type WorkflowGraphMetadata struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name            string                   `json:"name"`
+	Description     string                   `json:"description"`
+	ExecutionPolicy *WorkflowExecutionPolicy `json:"execution_policy,omitempty"`
+}
+
+type WorkflowExecutionPolicyMode string
+
+const (
+	WorkflowExecutionPolicyNone          WorkflowExecutionPolicyMode = "none"
+	WorkflowExecutionPolicyHead          WorkflowExecutionPolicyMode = "head"
+	WorkflowExecutionPolicyDefaultBranch WorkflowExecutionPolicyMode = "default_branch"
+	WorkflowExecutionPolicyCustomRef     WorkflowExecutionPolicyMode = "custom_ref"
+	WorkflowExecutionPolicyAsk           WorkflowExecutionPolicyMode = "ask"
+)
+
+type WorkflowExecutionPolicy struct {
+	Mode      WorkflowExecutionPolicyMode `json:"mode"`
+	CustomRef *string                     `json:"custom_ref,omitempty"`
+}
+
+func (p WorkflowExecutionPolicy) Validate() error {
+	return validateWorkflowExecutionPolicy(p, "execution_policy")
 }
 
 type WorkflowGraphSaveConfirmation struct {
@@ -344,8 +366,9 @@ type WorkflowGraphSaveBlocker struct {
 }
 
 type WorkflowCreateRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	Name            string                   `json:"name"`
+	Description     string                   `json:"description,omitempty"`
+	ExecutionPolicy *WorkflowExecutionPolicy `json:"execution_policy,omitempty"`
 }
 
 type WorkflowCreateResponse struct {
@@ -353,10 +376,11 @@ type WorkflowCreateResponse struct {
 }
 
 type WorkflowCreateAndLinkProjectRequest struct {
-	Name          string                         `json:"name"`
-	Description   string                         `json:"description,omitempty"`
-	ProjectID     string                         `json:"project_id"`
-	DefaultPolicy WorkflowProjectLinkDefaultMode `json:"default_policy,omitempty"`
+	Name            string                         `json:"name"`
+	Description     string                         `json:"description,omitempty"`
+	ExecutionPolicy *WorkflowExecutionPolicy       `json:"execution_policy,omitempty"`
+	ProjectID       string                         `json:"project_id"`
+	DefaultPolicy   WorkflowProjectLinkDefaultMode `json:"default_policy,omitempty"`
 }
 
 type WorkflowCreateAndLinkProjectResponse struct {
@@ -365,9 +389,10 @@ type WorkflowCreateAndLinkProjectResponse struct {
 }
 
 type WorkflowUpdateRequest struct {
-	WorkflowID  string `json:"workflow_id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	WorkflowID      string                   `json:"workflow_id"`
+	Name            string                   `json:"name"`
+	Description     string                   `json:"description,omitempty"`
+	ExecutionPolicy *WorkflowExecutionPolicy `json:"execution_policy,omitempty"`
 }
 
 type WorkflowListRequest struct {
@@ -674,8 +699,10 @@ type WorkflowTaskUpdateResponse struct {
 }
 
 type WorkflowTaskStartRequest struct {
-	TaskID           string                   `json:"task_id"`
-	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
+	TaskID              string                                `json:"task_id"`
+	SetupOperationID    WorktreeSetupOperationID              `json:"setup_operation_id"`
+	SelectionGeneration *string                               `json:"selection_generation,omitempty"`
+	Selection           *WorkflowTaskExecutionTargetSelection `json:"selection,omitempty"`
 }
 
 type WorkflowTaskStartResponse struct {
@@ -700,9 +727,11 @@ type WorkflowTaskResumeResponse struct {
 }
 
 type WorkflowTaskApproveRequest struct {
-	TaskTransitionID string                   `json:"task_transition_id,omitempty"`
-	TransitionID     string                   `json:"transition_id,omitempty"`
-	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
+	TaskTransitionID    string                                `json:"task_transition_id,omitempty"`
+	TransitionID        string                                `json:"transition_id,omitempty"`
+	SetupOperationID    WorktreeSetupOperationID              `json:"setup_operation_id"`
+	SelectionGeneration *string                               `json:"selection_generation,omitempty"`
+	Selection           *WorkflowTaskExecutionTargetSelection `json:"selection,omitempty"`
 }
 
 type WorkflowTaskApproveResponse struct {
@@ -714,13 +743,196 @@ type WorkflowTaskApproveResponse struct {
 }
 
 type WorkflowTaskMoveRequest struct {
-	TaskID           string                   `json:"task_id"`
-	TargetNodeID     string                   `json:"target_node_id"`
-	OutputValues     map[string]string        `json:"output_values,omitempty"`
-	Commentary       string                   `json:"commentary,omitempty"`
-	AllowMissingEdge bool                     `json:"allow_missing_edge,omitempty"`
-	AutoApprove      bool                     `json:"auto_approve,omitempty"`
-	SetupOperationID WorktreeSetupOperationID `json:"setup_operation_id"`
+	TaskID              string                                `json:"task_id"`
+	TargetNodeID        string                                `json:"target_node_id"`
+	OutputValues        map[string]string                     `json:"output_values,omitempty"`
+	Commentary          string                                `json:"commentary,omitempty"`
+	AllowMissingEdge    bool                                  `json:"allow_missing_edge,omitempty"`
+	AutoApprove         bool                                  `json:"auto_approve,omitempty"`
+	SetupOperationID    WorktreeSetupOperationID              `json:"setup_operation_id"`
+	SelectionGeneration *string                               `json:"selection_generation,omitempty"`
+	Selection           *WorkflowTaskExecutionTargetSelection `json:"selection,omitempty"`
+}
+
+type WorkflowTaskExecutionTargetSelectionMode string
+
+const (
+	WorkflowTaskExecutionTargetSelectionNone          WorkflowTaskExecutionTargetSelectionMode = "none"
+	WorkflowTaskExecutionTargetSelectionHead          WorkflowTaskExecutionTargetSelectionMode = "head"
+	WorkflowTaskExecutionTargetSelectionDefaultBranch WorkflowTaskExecutionTargetSelectionMode = "default_branch"
+	WorkflowTaskExecutionTargetSelectionCustomRef     WorkflowTaskExecutionTargetSelectionMode = "custom_ref"
+)
+
+type WorkflowTaskExecutionTargetSelection struct {
+	Mode      WorkflowTaskExecutionTargetSelectionMode `json:"mode"`
+	CustomRef *string                                  `json:"custom_ref,omitempty"`
+}
+
+type WorkflowTaskExecutionTargetSourceKind string
+
+const (
+	WorkflowTaskExecutionTargetSourceNonGit         WorkflowTaskExecutionTargetSourceKind = "non_git"
+	WorkflowTaskExecutionTargetSourceNamedRef       WorkflowTaskExecutionTargetSourceKind = "named_ref"
+	WorkflowTaskExecutionTargetSourceDetachedCommit WorkflowTaskExecutionTargetSourceKind = "detached_commit"
+	WorkflowTaskExecutionTargetSourceUnavailable    WorkflowTaskExecutionTargetSourceKind = "unavailable"
+)
+
+type WorkflowTaskExecutionTargetSource struct {
+	Kind     WorkflowTaskExecutionTargetSourceKind `json:"kind"`
+	NamedRef *string                               `json:"named_ref,omitempty"`
+	Commit   *string                               `json:"commit,omitempty"`
+}
+
+type WorkflowTaskExecutionTargetRecoveryCause string
+
+type WorkflowTaskExecutionTargetSelectionRequired struct {
+	TaskID              string                                     `json:"task_id"`
+	Generation          string                                     `json:"generation"`
+	SourceWorkspaceID   string                                     `json:"source_workspace_id"`
+	Source              WorkflowTaskExecutionTargetSource          `json:"source"`
+	SupportedSelections []WorkflowTaskExecutionTargetSelectionMode `json:"supported_selections"`
+	ConfiguredPolicy    WorkflowExecutionPolicy                    `json:"configured_policy"`
+	RecoveryCause       *WorkflowTaskExecutionTargetRecoveryCause  `json:"recovery_cause,omitempty"`
+}
+
+type WorkflowTaskExecutionTargetMaterializationPhase string
+
+const (
+	WorkflowTaskExecutionTargetMaterializationPhaseMaterializing  WorkflowTaskExecutionTargetMaterializationPhase = "materializing"
+	WorkflowTaskExecutionTargetMaterializationPhaseRecoveryQueued WorkflowTaskExecutionTargetMaterializationPhase = "recovery_queued"
+	WorkflowTaskExecutionTargetMaterializationPhaseRecovering     WorkflowTaskExecutionTargetMaterializationPhase = "recovering"
+)
+
+type WorkflowTaskExecutionTargetMaterializationProgress struct {
+	TaskID string                                          `json:"task_id"`
+	Phase  WorkflowTaskExecutionTargetMaterializationPhase `json:"phase"`
+}
+
+type WorkflowTaskInitiatingActionOutcome string
+
+const (
+	WorkflowTaskInitiatingActionOutcomeStarted           WorkflowTaskInitiatingActionOutcome = "started"
+	WorkflowTaskInitiatingActionOutcomeMoved             WorkflowTaskInitiatingActionOutcome = "moved"
+	WorkflowTaskInitiatingActionOutcomeApproved          WorkflowTaskInitiatingActionOutcome = "approved"
+	WorkflowTaskInitiatingActionOutcomeSelectionRequired WorkflowTaskInitiatingActionOutcome = "selection_required"
+	WorkflowTaskInitiatingActionOutcomeInProgress        WorkflowTaskInitiatingActionOutcome = "in_progress"
+)
+
+// WorkflowTaskInitiatingActionResult is a closed wire union. Its JSON form
+// contains exactly one payload named by Outcome.
+type WorkflowTaskInitiatingActionResult struct {
+	Outcome           WorkflowTaskInitiatingActionOutcome                 `json:"outcome"`
+	Started           *WorkflowTaskStartResponse                          `json:"started,omitempty"`
+	Moved             *WorkflowTaskMoveResponse                           `json:"moved,omitempty"`
+	Approved          *WorkflowTaskApproveResponse                        `json:"approved,omitempty"`
+	SelectionRequired *WorkflowTaskExecutionTargetSelectionRequired       `json:"selection_required,omitempty"`
+	InProgress        *WorkflowTaskExecutionTargetMaterializationProgress `json:"in_progress,omitempty"`
+}
+
+func (result WorkflowTaskInitiatingActionResult) Validate() error {
+	payloads := 0
+	if result.Started != nil {
+		payloads++
+	}
+	if result.Moved != nil {
+		payloads++
+	}
+	if result.Approved != nil {
+		payloads++
+	}
+	if result.SelectionRequired != nil {
+		payloads++
+	}
+	if result.InProgress != nil {
+		payloads++
+	}
+	if payloads != 1 {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "result", "initiating action result must contain exactly one payload")
+	}
+	switch result.Outcome {
+	case WorkflowTaskInitiatingActionOutcomeStarted:
+		if result.Started == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "started", "started outcome requires a started payload")
+		}
+	case WorkflowTaskInitiatingActionOutcomeMoved:
+		if result.Moved == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "moved", "moved outcome requires a moved payload")
+		}
+	case WorkflowTaskInitiatingActionOutcomeApproved:
+		if result.Approved == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "approved", "approved outcome requires an approved payload")
+		}
+	case WorkflowTaskInitiatingActionOutcomeSelectionRequired:
+		if result.SelectionRequired == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "selection_required", "selection_required outcome requires a selection payload")
+		}
+		if err := result.SelectionRequired.Validate(); err != nil {
+			return err
+		}
+	case WorkflowTaskInitiatingActionOutcomeInProgress:
+		if result.InProgress == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "in_progress", "in_progress outcome requires a progress payload")
+		}
+		if err := result.InProgress.Validate(); err != nil {
+			return err
+		}
+	default:
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "outcome", "unknown initiating action outcome")
+	}
+	return nil
+}
+
+func (result WorkflowTaskInitiatingActionResult) MarshalJSON() ([]byte, error) {
+	if err := result.Validate(); err != nil {
+		return nil, err
+	}
+	type wireResult struct {
+		Outcome           WorkflowTaskInitiatingActionOutcome                 `json:"outcome"`
+		Started           *WorkflowTaskStartResponse                          `json:"started,omitempty"`
+		Moved             *WorkflowTaskMoveResponse                           `json:"moved,omitempty"`
+		Approved          *WorkflowTaskApproveResponse                        `json:"approved,omitempty"`
+		SelectionRequired *WorkflowTaskExecutionTargetSelectionRequired       `json:"selection_required,omitempty"`
+		InProgress        *WorkflowTaskExecutionTargetMaterializationProgress `json:"in_progress,omitempty"`
+	}
+	return json.Marshal(wireResult{
+		Outcome:           result.Outcome,
+		Started:           result.Started,
+		Moved:             result.Moved,
+		Approved:          result.Approved,
+		SelectionRequired: result.SelectionRequired,
+		InProgress:        result.InProgress,
+	})
+}
+
+func (result *WorkflowTaskInitiatingActionResult) UnmarshalJSON(data []byte) error {
+	if result == nil {
+		return errors.New("workflow task initiating action result is required")
+	}
+	type wireResult struct {
+		Outcome           WorkflowTaskInitiatingActionOutcome                 `json:"outcome"`
+		Started           *WorkflowTaskStartResponse                          `json:"started"`
+		Moved             *WorkflowTaskMoveResponse                           `json:"moved"`
+		Approved          *WorkflowTaskApproveResponse                        `json:"approved"`
+		SelectionRequired *WorkflowTaskExecutionTargetSelectionRequired       `json:"selection_required"`
+		InProgress        *WorkflowTaskExecutionTargetMaterializationProgress `json:"in_progress"`
+	}
+	var wire wireResult
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	decoded := WorkflowTaskInitiatingActionResult{
+		Outcome:           wire.Outcome,
+		Started:           wire.Started,
+		Moved:             wire.Moved,
+		Approved:          wire.Approved,
+		SelectionRequired: wire.SelectionRequired,
+		InProgress:        wire.InProgress,
+	}
+	if err := decoded.Validate(); err != nil {
+		return err
+	}
+	*result = decoded
+	return nil
 }
 
 type WorkflowTaskMoveResponse struct {
@@ -1257,7 +1469,10 @@ type WorkflowTaskActivityItem struct {
 }
 
 func (r WorkflowCreateRequest) Validate() error {
-	return validateWorkflowName(r.Name)
+	if err := validateWorkflowName(r.Name); err != nil {
+		return err
+	}
+	return validateOptionalWorkflowExecutionPolicy(r.ExecutionPolicy, "execution_policy")
 }
 
 func (r WorkflowCreateAndLinkProjectRequest) Validate() error {
@@ -1267,11 +1482,17 @@ func (r WorkflowCreateAndLinkProjectRequest) Validate() error {
 	if err := validateRequired("project_id", r.ProjectID); err != nil {
 		return err
 	}
+	if err := validateOptionalWorkflowExecutionPolicy(r.ExecutionPolicy, "execution_policy"); err != nil {
+		return err
+	}
 	return validateWorkflowProjectLinkDefaultMode(r.DefaultPolicy)
 }
 
 func (r WorkflowUpdateRequest) Validate() error {
-	return validateWorkflowIDAndName(r.WorkflowID, r.Name)
+	if err := validateWorkflowIDAndName(r.WorkflowID, r.Name); err != nil {
+		return err
+	}
+	return validateOptionalWorkflowExecutionPolicy(r.ExecutionPolicy, "execution_policy")
 }
 
 func (r WorkflowListRequest) Validate() error {
@@ -1626,7 +1847,156 @@ func validateWorkflowGraphMetadata(metadata *WorkflowGraphMetadata) error {
 	if metadata.Description != strings.TrimSpace(metadata.Description) {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "metadata.description", "metadata.description must not have leading or trailing whitespace")
 	}
+	return validateOptionalWorkflowExecutionPolicy(metadata.ExecutionPolicy, "metadata.execution_policy")
+}
+
+func validateOptionalWorkflowExecutionPolicy(policy *WorkflowExecutionPolicy, field string) error {
+	if policy == nil {
+		return nil
+	}
+	return validateWorkflowExecutionPolicy(*policy, field)
+}
+
+func validateWorkflowExecutionPolicy(policy WorkflowExecutionPolicy, field string) error {
+	customRefField := field + ".custom_ref"
+	switch policy.Mode {
+	case WorkflowExecutionPolicyNone, WorkflowExecutionPolicyHead, WorkflowExecutionPolicyDefaultBranch, WorkflowExecutionPolicyAsk:
+		if policy.CustomRef != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, customRefField, "custom_ref is only valid for custom_ref execution policy")
+		}
+		return nil
+	case WorkflowExecutionPolicyCustomRef:
+		if policy.CustomRef == nil || strings.TrimSpace(*policy.CustomRef) == "" {
+			return workflowRequestError(WorkflowRequestErrorRequired, customRefField, "custom_ref is required for custom_ref execution policy")
+		}
+		if *policy.CustomRef != strings.TrimSpace(*policy.CustomRef) {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, customRefField, "custom_ref must not have leading or trailing whitespace")
+		}
+		return nil
+	default:
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, field+".mode", "execution policy mode is invalid")
+	}
+}
+
+func validateWorkflowTaskExecutionTargetSelection(generation *string, selection *WorkflowTaskExecutionTargetSelection, allowUngeneratedSelection bool) error {
+	if generation != nil {
+		if strings.TrimSpace(*generation) == "" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "selection_generation", "selection_generation must be non-empty when present")
+		}
+		if *generation != strings.TrimSpace(*generation) {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "selection_generation", "selection_generation must not have leading or trailing whitespace")
+		}
+	}
+	if selection == nil {
+		if generation != nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "selection", "selection is required with selection_generation")
+		}
+		return nil
+	}
+	if generation == nil && !allowUngeneratedSelection {
+		return workflowRequestError(WorkflowRequestErrorRequired, "selection_generation", "selection_generation is required with selection")
+	}
+	switch selection.Mode {
+	case WorkflowTaskExecutionTargetSelectionNone, WorkflowTaskExecutionTargetSelectionHead, WorkflowTaskExecutionTargetSelectionDefaultBranch:
+		if selection.CustomRef != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "selection.custom_ref", "custom_ref is only valid for custom_ref selection")
+		}
+		return nil
+	case WorkflowTaskExecutionTargetSelectionCustomRef:
+		if selection.CustomRef == nil || strings.TrimSpace(*selection.CustomRef) == "" {
+			return workflowRequestError(WorkflowRequestErrorRequired, "selection.custom_ref", "custom_ref is required for custom_ref selection")
+		}
+		if *selection.CustomRef != strings.TrimSpace(*selection.CustomRef) {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "selection.custom_ref", "custom_ref must not have leading or trailing whitespace")
+		}
+		return nil
+	default:
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "selection.mode", "selection mode is invalid")
+	}
+}
+
+func (requirement WorkflowTaskExecutionTargetSelectionRequired) Validate() error {
+	if err := validateRequiredFields(
+		requiredField("selection_required.task_id", requirement.TaskID),
+		requiredField("selection_required.generation", requirement.Generation),
+		requiredField("selection_required.source_workspace_id", requirement.SourceWorkspaceID),
+	); err != nil {
+		return err
+	}
+	if err := requirement.Source.Validate(); err != nil {
+		return err
+	}
+	if err := requirement.ConfiguredPolicy.Validate(); err != nil {
+		return err
+	}
+	if len(requirement.SupportedSelections) == 0 {
+		return workflowRequestError(WorkflowRequestErrorRequired, "selection_required.supported_selections", "supported selections are required")
+	}
+	seen := make(map[WorkflowTaskExecutionTargetSelectionMode]struct{}, len(requirement.SupportedSelections))
+	for _, mode := range requirement.SupportedSelections {
+		if _, duplicate := seen[mode]; duplicate {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "selection_required.supported_selections", "supported selections must not contain duplicates")
+		}
+		seen[mode] = struct{}{}
+		if err := validateWorkflowTaskExecutionTargetSelection(nil, &WorkflowTaskExecutionTargetSelection{Mode: mode}, true); err != nil {
+			if mode == WorkflowTaskExecutionTargetSelectionCustomRef {
+				continue
+			}
+			return err
+		}
+	}
+	if requirement.RecoveryCause != nil && strings.TrimSpace(string(*requirement.RecoveryCause)) == "" {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "selection_required.recovery_cause", "recovery_cause must be non-empty when present")
+	}
 	return nil
+}
+
+func (source WorkflowTaskExecutionTargetSource) Validate() error {
+	validateOptionalNonEmpty := func(field string, value *string) error {
+		if value != nil && strings.TrimSpace(*value) == "" {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, field, field+" must be non-empty when present")
+		}
+		return nil
+	}
+	if err := validateOptionalNonEmpty("selection_required.source.named_ref", source.NamedRef); err != nil {
+		return err
+	}
+	if err := validateOptionalNonEmpty("selection_required.source.commit", source.Commit); err != nil {
+		return err
+	}
+	switch source.Kind {
+	case WorkflowTaskExecutionTargetSourceNonGit:
+		if source.NamedRef != nil || source.Commit != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "selection_required.source", "non_git source cannot have Git facts")
+		}
+	case WorkflowTaskExecutionTargetSourceNamedRef:
+		if source.NamedRef == nil || source.Commit == nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "selection_required.source", "named_ref source requires named_ref and commit")
+		}
+	case WorkflowTaskExecutionTargetSourceDetachedCommit:
+		if source.NamedRef != nil || source.Commit == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "selection_required.source", "detached_commit source requires only commit")
+		}
+	case WorkflowTaskExecutionTargetSourceUnavailable:
+		if source.NamedRef != nil || source.Commit != nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "selection_required.source", "unavailable source cannot have Git facts")
+		}
+	default:
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "selection_required.source.kind", "source kind is invalid")
+	}
+	return nil
+}
+
+func (progress WorkflowTaskExecutionTargetMaterializationProgress) Validate() error {
+	if err := validateRequired("in_progress.task_id", progress.TaskID); err != nil {
+		return err
+	}
+	switch progress.Phase {
+	case WorkflowTaskExecutionTargetMaterializationPhaseMaterializing, WorkflowTaskExecutionTargetMaterializationPhaseRecoveryQueued, WorkflowTaskExecutionTargetMaterializationPhaseRecovering:
+		return nil
+	default:
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, "in_progress.phase", "materialization phase is invalid")
+	}
 }
 
 func validateWorkflowGraphValidationModes(modes []WorkflowValidationMode) error {
@@ -1706,7 +2076,10 @@ func (r WorkflowTaskStartRequest) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
-	return r.SetupOperationID.Validate()
+	if err := r.SetupOperationID.Validate(); err != nil {
+		return err
+	}
+	return validateWorkflowTaskExecutionTargetSelection(r.SelectionGeneration, r.Selection, true)
 }
 
 func (r WorkflowTaskResumeRequest) Validate() error {
@@ -1715,19 +2088,28 @@ func (r WorkflowTaskResumeRequest) Validate() error {
 
 func (r WorkflowTaskApproveRequest) Validate() error {
 	if strings.TrimSpace(r.TaskTransitionID) != "" {
-		return r.SetupOperationID.Validate()
+		if err := r.SetupOperationID.Validate(); err != nil {
+			return err
+		}
+		return validateWorkflowTaskExecutionTargetSelection(r.SelectionGeneration, r.Selection, false)
 	}
 	if err := validateRequired("transition_id", r.TransitionID); err != nil {
 		return err
 	}
-	return r.SetupOperationID.Validate()
+	if err := r.SetupOperationID.Validate(); err != nil {
+		return err
+	}
+	return validateWorkflowTaskExecutionTargetSelection(r.SelectionGeneration, r.Selection, false)
 }
 
 func (r WorkflowTaskMoveRequest) Validate() error {
 	if err := validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("target_node_id", r.TargetNodeID)); err != nil {
 		return err
 	}
-	return r.SetupOperationID.Validate()
+	if err := r.SetupOperationID.Validate(); err != nil {
+		return err
+	}
+	return validateWorkflowTaskExecutionTargetSelection(r.SelectionGeneration, r.Selection, false)
 }
 
 func (r WorkflowTaskCompleteRequest) Validate() error {

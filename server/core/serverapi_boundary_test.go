@@ -212,7 +212,8 @@ func isAllowedServerAPIInterfaceName(name string) bool {
 }
 
 func isServerOwnedExecutionTypeName(name string) bool {
-	if name == "SessionRuntimeReleaseClosePolicy" {
+	switch name {
+	case "SessionRuntimeReleaseClosePolicy", "WorkflowExecutionPolicy", "WorkflowExecutionPolicyMode":
 		return false
 	}
 	for _, term := range []string{

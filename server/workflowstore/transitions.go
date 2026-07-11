@@ -163,6 +163,9 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
+	if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, s.queries, workflow.TaskID(task.ID)); err != nil {
+		return CompleteRunResult{}, err
+	}
 	worktreeRoot, err := taskManagedWorktreeRoot(ctx, s.queries, task)
 	if err != nil {
 		return CompleteRunResult{}, err
@@ -186,6 +189,9 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, q, workflow.TaskID(task.ID)); err != nil {
+		return CompleteRunResult{}, err
+	}
 	updatedCount, err := q.ApprovePendingTransition(ctx, sqlitegen.ApprovePendingTransitionParams{
 		AppliedAtUnixMs: now,
 		TransitionID:    id,

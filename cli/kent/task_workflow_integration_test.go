@@ -16,6 +16,7 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	defer restore()
 
 	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Task Workflow API")
+	setWorkflowCommandExecutionPolicy(t, remote, workflowID, serverapi.WorkflowExecutionPolicyHead)
 
 	taskOut, _ := runWorkflowRootCommandOK(t, "task", "create", "--title", "Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
 	shortID := taskDetailHeadingShortID(t, taskOut)
@@ -79,7 +80,10 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartWorkflowTask for resume command: %v", err)
 	}
-	runID := startResp.RunID
+	if startResp.Started == nil {
+		t.Fatalf("StartWorkflowTask result = %+v, want started", startResp)
+	}
+	runID := startResp.Started.RunID
 	claimed, err := remote.store.ClaimRun(context.Background(), workflow.RunID(runID), 0)
 	if err != nil {
 		t.Fatalf("ClaimRun for resume command: %v", err)

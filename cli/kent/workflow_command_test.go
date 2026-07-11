@@ -731,6 +731,23 @@ func workflowCreateForTest(t *testing.T, args ...string) serverapi.WorkflowRecor
 	return record
 }
 
+func setWorkflowCommandExecutionPolicy(t *testing.T, remote *workflowCommandLoopbackRemote, workflowID string, mode serverapi.WorkflowExecutionPolicyMode) {
+	t.Helper()
+	ctx := context.Background()
+	current, err := remote.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	if _, err := remote.UpdateWorkflow(ctx, serverapi.WorkflowUpdateRequest{
+		WorkflowID:      workflowID,
+		Name:            current.Definition.Workflow.Name,
+		Description:     current.Definition.Workflow.Description,
+		ExecutionPolicy: &serverapi.WorkflowExecutionPolicy{Mode: mode},
+	}); err != nil {
+		t.Fatalf("UpdateWorkflow execution policy: %v", err)
+	}
+}
+
 func workflowNodeAddForTest(t *testing.T, args ...string) workflowNodeOutput {
 	t.Helper()
 	full := append([]string{"workflow", "node", "add"}, args...)

@@ -478,8 +478,11 @@ func (r *taskStartPollingRemote) GetWorkflowTask(_ context.Context, req serverap
 	return serverapi.WorkflowTaskGetResponse{}, sql.ErrNoRows
 }
 
-func (r *taskStartPollingRemote) StartWorkflowTask(context.Context, serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
-	return serverapi.WorkflowTaskStartResponse{TransitionID: "transition-1", PlacementID: r.placementID, RunID: r.runID}, nil
+func (r *taskStartPollingRemote) StartWorkflowTask(context.Context, serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+	return serverapi.WorkflowTaskInitiatingActionResult{
+		Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeStarted,
+		Started: &serverapi.WorkflowTaskStartResponse{TransitionID: "transition-1", PlacementID: r.placementID, RunID: r.runID},
+	}, nil
 }
 
 func (r *taskStartPollingRemote) taskDetail(sessionID string) serverapi.WorkflowTaskDetail {
@@ -565,25 +568,34 @@ func (r *setupProgressLifecycleRemote) GetWorkflowTask(_ context.Context, req se
 	return serverapi.WorkflowTaskGetResponse{}, sql.ErrNoRows
 }
 
-func (r *setupProgressLifecycleRemote) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
+func (r *setupProgressLifecycleRemote) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 	if err := r.validateMutationContextAndSetupID(ctx, req.SetupOperationID); err != nil {
-		return serverapi.WorkflowTaskStartResponse{}, err
+		return serverapi.WorkflowTaskInitiatingActionResult{}, err
 	}
-	return serverapi.WorkflowTaskStartResponse{TransitionID: r.transitionID, PlacementID: r.placementID, RunID: r.runID}, nil
+	return serverapi.WorkflowTaskInitiatingActionResult{
+		Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeStarted,
+		Started: &serverapi.WorkflowTaskStartResponse{TransitionID: r.transitionID, PlacementID: r.placementID, RunID: r.runID},
+	}, nil
 }
 
-func (r *setupProgressLifecycleRemote) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
+func (r *setupProgressLifecycleRemote) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 	if err := r.validateMutationContextAndSetupID(ctx, req.SetupOperationID); err != nil {
-		return serverapi.WorkflowTaskApproveResponse{}, err
+		return serverapi.WorkflowTaskInitiatingActionResult{}, err
 	}
-	return serverapi.WorkflowTaskApproveResponse{TaskID: r.taskID, TransitionID: r.transitionID, RunIDs: []string{r.runID}}, nil
+	return serverapi.WorkflowTaskInitiatingActionResult{
+		Outcome:  serverapi.WorkflowTaskInitiatingActionOutcomeApproved,
+		Approved: &serverapi.WorkflowTaskApproveResponse{TaskID: r.taskID, TransitionID: r.transitionID, RunIDs: []string{r.runID}},
+	}, nil
 }
 
-func (r *setupProgressLifecycleRemote) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
+func (r *setupProgressLifecycleRemote) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 	if err := r.validateMutationContextAndSetupID(ctx, req.SetupOperationID); err != nil {
-		return serverapi.WorkflowTaskMoveResponse{}, err
+		return serverapi.WorkflowTaskInitiatingActionResult{}, err
 	}
-	return serverapi.WorkflowTaskMoveResponse{TransitionID: r.transitionID, RunIDs: []string{r.runID}}, nil
+	return serverapi.WorkflowTaskInitiatingActionResult{
+		Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeMoved,
+		Moved:   &serverapi.WorkflowTaskMoveResponse{TransitionID: r.transitionID, RunIDs: []string{r.runID}},
+	}, nil
 }
 
 func (r *setupProgressLifecycleRemote) validateMutationContextAndSetupID(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) error {

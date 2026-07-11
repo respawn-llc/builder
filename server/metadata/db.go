@@ -1,10 +1,12 @@
 package metadata
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -41,15 +43,24 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 	if err := os.MkdirAll(filepath.Dir(trimmedDatabasePath), 0o755); err != nil {
 		return nil, fmt.Errorf("create metadata db dir: %w", err)
 	}
+	migrationDB, err := sql.Open("sqlite", metadataMigrationSQLiteDSN(trimmedDatabasePath))
+	if err != nil {
+		return nil, fmt.Errorf("open metadata migration db: %w", err)
+	}
+	migrationDB.SetMaxOpenConns(1)
+	if err := runMigrations(migrationDB); err != nil {
+		_ = migrationDB.Close()
+		return nil, err
+	}
+	if err := migrationDB.Close(); err != nil {
+		return nil, fmt.Errorf("close metadata migration db: %w", err)
+	}
+
 	db, err := sql.Open("sqlite", metadataSQLiteDSN(trimmedDatabasePath))
 	if err != nil {
 		return nil, fmt.Errorf("open metadata db: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	if err := runMigrations(db); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
 	return db, nil
 }
 
@@ -60,6 +71,17 @@ func metadataSQLiteDSN(databasePath string) string {
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "synchronous(NORMAL)")
 	q.Add("_pragma", "busy_timeout(5000)")
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func metadataMigrationSQLiteDSN(databasePath string) string {
+	u, err := url.Parse(metadataSQLiteDSN(databasePath))
+	if err != nil {
+		panic(fmt.Sprintf("metadata migration DSN construction failed for %q: %v", databasePath, err))
+	}
+	q := u.Query()
+	q.Set("_txlock", "exclusive")
 	u.RawQuery = q.Encode()
 	return u.String()
 }
@@ -77,19 +99,42 @@ func isASCIILetter(r rune) bool {
 }
 
 func runMigrations(db *sql.DB) error {
-	goose.SetBaseFS(migrationsFS)
+	provider, err := newMetadataMigrationProvider(db)
+	if err != nil {
+		return err
+	}
+	if _, err := provider.Up(context.Background()); err != nil {
+		return fmt.Errorf("apply metadata migrations: %w", err)
+	}
+	return nil
+}
+
+func newMetadataMigrationProvider(db *sql.DB, goMigrations ...*goose.Migration) (*goose.Provider, error) {
 	var logger goose.Logger = goose.NopLogger()
 	if metadataMigrationDebugLogs && metadataMigrationLogWriter != nil {
 		logger = &metadataMigrationLogger{out: metadataMigrationLogWriter, debug: metadataMigrationDebugLogs}
 	}
-	goose.SetLogger(logger)
-	if err := goose.SetDialect("sqlite3"); err != nil {
-		return fmt.Errorf("set metadata migration dialect: %w", err)
+	migrations, err := fs.Sub(migrationsFS, "migrations")
+	if err != nil {
+		return nil, fmt.Errorf("open embedded metadata migrations: %w", err)
 	}
-	if err := goose.Up(db, "migrations"); err != nil {
-		return fmt.Errorf("apply metadata migrations: %w", err)
+	options := []goose.ProviderOption{
+		goose.WithLogger(logger),
+		goose.WithDisableGlobalRegistry(true),
 	}
-	return nil
+	if len(goMigrations) > 0 {
+		options = append(options, goose.WithGoMigrations(goMigrations...))
+	}
+	provider, err := goose.NewProvider(
+		goose.DialectSQLite3,
+		db,
+		migrations,
+		options...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create metadata migration provider: %w", err)
+	}
+	return provider, nil
 }
 
 type metadataMigrationLogger struct {

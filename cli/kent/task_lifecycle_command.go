@@ -210,13 +210,18 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskStartResponse, error) {
+	outcome, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 		return remote.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{SetupOperationID: setupOperationID, TaskID: taskID})
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if outcome.Started == nil {
+		fmt.Fprintln(stderr, "task start did not complete")
+		return 1
+	}
+	resp := *outcome.Started
 	detail, err := waitForWorkflowTaskRunSession(context.Background(), remote, taskID, resp.RunID, taskStartSessionPollTimeout, taskStartSessionPollInterval)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -372,13 +377,18 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		return 1
 	}
 	defer func() { _ = remote.Close() }()
-	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskApproveResponse, error) {
+	outcome, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 		return remote.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{SetupOperationID: setupOperationID, TransitionID: positionals[0]})
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if outcome.Approved == nil {
+		fmt.Fprintln(stderr, "task approval did not complete")
+		return 1
+	}
+	resp := *outcome.Approved
 	if strings.TrimSpace(resp.TaskID) == "" {
 		fmt.Fprintf(stderr, "approved transition %s but response did not include task id for output\n", resp.TransitionID)
 		return 1
@@ -421,13 +431,18 @@ func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	resp, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskMoveResponse, error) {
+	outcome, err := runWorkflowMutationWithSetupProgress(context.Background(), remote, stderr, func(ctx context.Context, setupOperationID serverapi.WorktreeSetupOperationID) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 		return remote.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{SetupOperationID: setupOperationID, TaskID: taskID, TargetNodeID: positionals[1], OutputValues: outputs.values, Commentary: *commentary})
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if outcome.Moved == nil {
+		fmt.Fprintln(stderr, "task move did not complete")
+		return 1
+	}
+	resp := *outcome.Moved
 	detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
 	if err != nil {
 		fmt.Fprintf(stderr, "moved task %s but failed to load task detail for output: %v\n", taskID, err)

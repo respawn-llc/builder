@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -32,6 +33,49 @@ const (
 	ContextModeContinueSession           ContextMode = "continue_session"
 	ContextModeCompactAndContinueSession ContextMode = "compact_and_continue_session"
 )
+
+type ExecutionPolicyMode string
+
+const (
+	ExecutionPolicyNone          ExecutionPolicyMode = "none"
+	ExecutionPolicyHead          ExecutionPolicyMode = "head"
+	ExecutionPolicyDefaultBranch ExecutionPolicyMode = "default_branch"
+	ExecutionPolicyCustomRef     ExecutionPolicyMode = "custom_ref"
+	ExecutionPolicyAsk           ExecutionPolicyMode = "ask"
+)
+
+type ExecutionPolicy struct {
+	Mode      ExecutionPolicyMode
+	CustomRef *string
+}
+
+func DefaultExecutionPolicy() ExecutionPolicy {
+	return ExecutionPolicy{Mode: ExecutionPolicyAsk}
+}
+
+func (p ExecutionPolicy) Validate() error {
+	switch p.Mode {
+	case ExecutionPolicyNone, ExecutionPolicyHead, ExecutionPolicyDefaultBranch, ExecutionPolicyAsk:
+		if p.CustomRef != nil {
+			return fmt.Errorf("execution policy %q cannot have a custom ref", p.Mode)
+		}
+		return nil
+	case ExecutionPolicyCustomRef:
+		if p.CustomRef == nil || strings.TrimSpace(*p.CustomRef) == "" {
+			return errors.New("custom_ref execution policy requires a non-empty custom ref")
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid execution policy %q", p.Mode)
+	}
+}
+
+func (p ExecutionPolicy) CustomRefValue() (string, bool) {
+	if p.CustomRef == nil {
+		return "", false
+	}
+	return *p.CustomRef, true
+}
 
 type ContextSourceKind string
 

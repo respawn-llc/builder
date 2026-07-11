@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -43,6 +44,61 @@ func TestEnsureTaskWorktreeCreatesShortIDBranchWithoutControllerLease(t *testing
 	}
 	if !row.ManagedWorktreeID.Valid || row.ManagedWorktreeID.String != resp.Worktree.WorktreeID {
 		t.Fatalf("task managed worktree id = %+v, want %q", row.ManagedWorktreeID, resp.Worktree.WorktreeID)
+	}
+}
+
+func TestRepositoryMutationLockSerializesLinkedWorkspaceBindings(t *testing.T) {
+	env := newServiceTestEnv(t)
+	linkedRoot := filepath.Join(t.TempDir(), "linked")
+	runGit(t, env.workspaceRoot, "worktree", "add", "-b", "lock-linked", linkedRoot, "HEAD")
+	t.Cleanup(func() {
+		_ = env.service.git.Remove(context.Background(), env.workspaceRoot, linkedRoot, true)
+	})
+	linkedBinding, err := env.store.RegisterWorkspaceBinding(env.ctx, linkedRoot)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding linked worktree: %v", err)
+	}
+	if linkedBinding.ProjectID == env.binding.ProjectID {
+		t.Fatalf("linked workspace project = %q, want a distinct project from %q", linkedBinding.ProjectID, env.binding.ProjectID)
+	}
+
+	releaseFirst, err := env.service.AcquireRepositoryMutationLock(env.ctx, env.workspaceRoot)
+	if err != nil {
+		t.Fatalf("AcquireRepositoryMutationLock main workspace: %v", err)
+	}
+	firstReleased := false
+	t.Cleanup(func() {
+		if !firstReleased {
+			releaseFirst()
+		}
+	})
+	type acquisition struct {
+		release func()
+		err     error
+	}
+	acquired := make(chan acquisition, 1)
+	go func() {
+		release, err := env.service.AcquireRepositoryMutationLock(context.Background(), linkedRoot)
+		acquired <- acquisition{release: release, err: err}
+	}()
+	select {
+	case result := <-acquired:
+		if result.release != nil {
+			result.release()
+		}
+		t.Fatalf("linked workspace acquired repository mutation lock before release: %v", result.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseFirst()
+	firstReleased = true
+	select {
+	case result := <-acquired:
+		if result.err != nil {
+			t.Fatalf("AcquireRepositoryMutationLock linked workspace: %v", result.err)
+		}
+		result.release()
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for linked workspace repository mutation lock")
 	}
 }
 

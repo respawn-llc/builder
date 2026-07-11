@@ -88,6 +88,8 @@ INSERT INTO workflows (
     id,
     name,
     description,
+    execution_policy,
+    execution_custom_ref,
     version,
     created_at_unix_ms,
     updated_at_unix_ms
@@ -95,6 +97,8 @@ INSERT INTO workflows (
     sqlc.arg(id),
     sqlc.arg(name),
     sqlc.arg(description),
+    sqlc.arg(execution_policy),
+    sqlc.narg(execution_custom_ref),
     sqlc.arg(version),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms)
@@ -117,6 +121,27 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(id);
 
+-- name: UpdateWorkflowMetadata :execrows
+UPDATE workflows
+SET
+    name = sqlc.arg(name),
+    description = sqlc.arg(description),
+    execution_policy = sqlc.arg(execution_policy),
+    execution_custom_ref = sqlc.narg(execution_custom_ref),
+    version = version + 1,
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(id);
+
+-- name: UpdateWorkflowMetadataWithoutVersion :execrows
+UPDATE workflows
+SET
+    name = sqlc.arg(name),
+    description = sqlc.arg(description),
+    execution_policy = sqlc.arg(execution_policy),
+    execution_custom_ref = sqlc.narg(execution_custom_ref),
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(id);
+
 -- name: IncrementWorkflowVersion :one
 UPDATE workflows
 SET
@@ -130,6 +155,8 @@ SELECT
     id,
     name,
     description,
+    execution_policy,
+    execution_custom_ref,
     version,
     created_at_unix_ms,
     updated_at_unix_ms
@@ -142,6 +169,8 @@ SELECT
     id,
     name,
     description,
+    execution_policy,
+    execution_custom_ref,
     version,
     created_at_unix_ms,
     updated_at_unix_ms
@@ -153,6 +182,8 @@ WITH workflow_list(
     id,
     name,
     description,
+    execution_policy,
+    execution_custom_ref,
     version,
     created_at_unix_ms,
     updated_at_unix_ms,
@@ -162,6 +193,8 @@ WITH workflow_list(
         workflows.id,
         workflows.name,
         workflows.description,
+        workflows.execution_policy,
+        workflows.execution_custom_ref,
         workflows.version,
         workflows.created_at_unix_ms,
         workflows.updated_at_unix_ms,
@@ -207,6 +240,8 @@ SELECT
     id,
     name,
     description,
+    execution_policy,
+    execution_custom_ref,
     version,
     created_at_unix_ms,
     updated_at_unix_ms,
@@ -1234,6 +1269,144 @@ SET
     managed_worktree_id = sqlc.narg(managed_worktree_id),
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(id);
+
+-- name: GetTaskExecutionTarget :one
+SELECT
+    task_id,
+    policy,
+    requested_custom_ref,
+    resolved_source_kind,
+    resolved_source_ref,
+    resolved_commit,
+    state,
+    provisioning_generation,
+    setup_provisioning_generation,
+    setup_state,
+    active_claim_generation,
+    active_claim_phase,
+    recovery_disposition,
+    recovery_cause,
+    exact_branch_observation,
+    linked_worktree_common_dir,
+    linked_worktree_admin_entry,
+    linked_worktree_gitdir,
+    linked_worktree_head_ref,
+    expected_detachment_commit
+FROM task_execution_targets
+WHERE task_id = sqlc.arg(task_id)
+LIMIT 1;
+
+-- name: InsertTaskExecutionTarget :exec
+INSERT INTO task_execution_targets (
+    task_id,
+    policy,
+    requested_custom_ref,
+    resolved_source_kind,
+    resolved_source_ref,
+    resolved_commit,
+    state,
+    provisioning_generation,
+    setup_provisioning_generation,
+    setup_state,
+    active_claim_generation,
+    active_claim_phase,
+    recovery_disposition,
+    recovery_cause,
+    exact_branch_observation,
+    linked_worktree_common_dir,
+    linked_worktree_admin_entry,
+    linked_worktree_gitdir,
+    linked_worktree_head_ref,
+    expected_detachment_commit
+) VALUES (
+    sqlc.arg(task_id),
+    sqlc.arg(policy),
+    sqlc.narg(requested_custom_ref),
+    sqlc.narg(resolved_source_kind),
+    sqlc.narg(resolved_source_ref),
+    sqlc.narg(resolved_commit),
+    sqlc.arg(state),
+    sqlc.narg(provisioning_generation),
+    sqlc.narg(setup_provisioning_generation),
+    sqlc.arg(setup_state),
+    sqlc.narg(active_claim_generation),
+    sqlc.narg(active_claim_phase),
+    sqlc.arg(recovery_disposition),
+    sqlc.narg(recovery_cause),
+    sqlc.narg(exact_branch_observation),
+    sqlc.narg(linked_worktree_common_dir),
+    sqlc.narg(linked_worktree_admin_entry),
+    sqlc.narg(linked_worktree_gitdir),
+    sqlc.narg(linked_worktree_head_ref),
+    sqlc.narg(expected_detachment_commit)
+);
+
+-- name: GetTaskExecutionTargetNegotiation :one
+SELECT
+    task_id,
+    generation,
+    workflow_id,
+    source_workspace_id,
+    source_kind,
+    source_named_ref,
+    source_commit,
+    recovery_cause,
+    action_kind,
+    start_placement_id,
+    move_source_placement_id,
+    move_target_node_id,
+    approval_transition_id
+FROM task_execution_target_negotiations
+WHERE task_id = sqlc.arg(task_id)
+LIMIT 1;
+
+-- name: UpsertTaskExecutionTargetNegotiation :exec
+INSERT INTO task_execution_target_negotiations (
+    task_id,
+    generation,
+    workflow_id,
+    source_workspace_id,
+    source_kind,
+    source_named_ref,
+    source_commit,
+    recovery_cause,
+    action_kind,
+    start_placement_id,
+    move_source_placement_id,
+    move_target_node_id,
+    approval_transition_id
+) VALUES (
+    sqlc.arg(task_id),
+    sqlc.arg(generation),
+    sqlc.arg(workflow_id),
+    sqlc.arg(source_workspace_id),
+    sqlc.arg(source_kind),
+    sqlc.narg(source_named_ref),
+    sqlc.narg(source_commit),
+    sqlc.narg(recovery_cause),
+    sqlc.arg(action_kind),
+    sqlc.narg(start_placement_id),
+    sqlc.narg(move_source_placement_id),
+    sqlc.narg(move_target_node_id),
+    sqlc.narg(approval_transition_id)
+)
+ON CONFLICT (task_id) DO UPDATE SET
+    generation = excluded.generation,
+    workflow_id = excluded.workflow_id,
+    source_workspace_id = excluded.source_workspace_id,
+    source_kind = excluded.source_kind,
+    source_named_ref = excluded.source_named_ref,
+    source_commit = excluded.source_commit,
+    recovery_cause = excluded.recovery_cause,
+    action_kind = excluded.action_kind,
+    start_placement_id = excluded.start_placement_id,
+    move_source_placement_id = excluded.move_source_placement_id,
+    move_target_node_id = excluded.move_target_node_id,
+    approval_transition_id = excluded.approval_transition_id;
+
+-- name: DeleteTaskExecutionTargetNegotiation :execrows
+DELETE FROM task_execution_target_negotiations
+WHERE task_id = sqlc.arg(task_id);
 
 -- name: ListTasksByProject :many
 SELECT

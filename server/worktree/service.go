@@ -67,11 +67,11 @@ type Service struct {
 	setupTimeoutSeconds int
 	setupBroker         *setupEventBroker
 
-	workspaceMu    sync.Mutex
-	workspaceLocks map[string]*workspaceMutationLock
+	repositoryMu    sync.Mutex
+	repositoryLocks map[string]*repositoryMutationLock
 }
 
-type workspaceMutationLock struct {
+type repositoryMutationLock struct {
 	mu   sync.Mutex
 	refs int
 }
@@ -151,8 +151,15 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, activ
 		setupScript:         strings.TrimSpace(opts.SetupScript),
 		setupTimeoutSeconds: opts.SetupTimeoutSeconds,
 		setupBroker:         newSetupEventBroker(),
-		workspaceLocks:      make(map[string]*workspaceMutationLock),
+		repositoryLocks:     make(map[string]*repositoryMutationLock),
 	}
+}
+
+func (s *Service) ResolveExecutionTarget(ctx context.Context, workspaceRoot string, policy workflow.ExecutionPolicyMode, customRef *string) (ExecutionTargetResolution, error) {
+	if s == nil || s.git == nil {
+		return ExecutionTargetResolution{}, errors.New("worktree service dependencies are required")
+	}
+	return s.git.ResolveExecutionTarget(ctx, workspaceRoot, policy, customRef)
 }
 
 func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktreeRequest) (resp EnsureTaskWorktreeResponse, err error) {
@@ -180,7 +187,10 @@ func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktree
 	if err != nil {
 		return EnsureTaskWorktreeResponse{}, err
 	}
-	release := s.acquireWorkspaceMutationLock(workspace.WorkspaceID)
+	release, err := s.AcquireRepositoryMutationLock(ctx, workspace.RootPath)
+	if err != nil {
+		return EnsureTaskWorktreeResponse{}, err
+	}
 	defer release()
 	task, err = s.metadata.Queries().GetTask(ctx, taskID)
 	if err != nil {
@@ -320,7 +330,10 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if workspaceRoot == "" {
 		return DeleteTaskWorktreeResponse{}, fmt.Errorf("workspace %q has no root path", strings.TrimSpace(record.WorkspaceID))
 	}
-	release := s.acquireWorkspaceMutationLock(record.WorkspaceID)
+	release, err := s.AcquireRepositoryMutationLock(ctx, workspaceRoot)
+	if err != nil {
+		return DeleteTaskWorktreeResponse{}, err
+	}
 	defer release()
 	task, err = s.metadata.Queries().GetTask(ctx, taskID)
 	if err != nil {
@@ -837,7 +850,10 @@ func (s *Service) beginMutation(ctx context.Context, sessionID string) (func(), 
 		if err != nil {
 			return nil, sessionWorkspaceContext{}, err
 		}
-		workspaceLease := s.acquireWorkspaceMutationLock(workspaceCtx.workspaceID)
+		workspaceLease, err := s.AcquireRepositoryMutationLock(ctx, workspaceCtx.workspaceRoot)
+		if err != nil {
+			return nil, sessionWorkspaceContext{}, err
+		}
 		lockedWorkspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
 		if err != nil {
 			workspaceLease()
@@ -850,32 +866,43 @@ func (s *Service) beginMutation(ctx context.Context, sessionID string) (func(), 
 	}
 }
 
-func (s *Service) acquireWorkspaceMutationLock(workspaceID string) func() {
-	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
-	if s == nil || trimmedWorkspaceID == "" {
+func (s *Service) AcquireRepositoryMutationLock(ctx context.Context, workspaceRoot string) (func(), error) {
+	if s == nil || s.git == nil {
+		return nil, errors.New("worktree service Git inspector is required")
+	}
+	commonDir, err := s.git.CommonDirectory(ctx, workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	return s.acquireRepositoryMutationLock(commonDir), nil
+}
+
+func (s *Service) acquireRepositoryMutationLock(commonDir string) func() {
+	trimmedCommonDir := strings.TrimSpace(commonDir)
+	if s == nil || trimmedCommonDir == "" {
 		return func() {}
 	}
-	s.workspaceMu.Lock()
-	if s.workspaceLocks == nil {
-		s.workspaceLocks = make(map[string]*workspaceMutationLock)
+	s.repositoryMu.Lock()
+	if s.repositoryLocks == nil {
+		s.repositoryLocks = make(map[string]*repositoryMutationLock)
 	}
-	lock := s.workspaceLocks[trimmedWorkspaceID]
+	lock := s.repositoryLocks[trimmedCommonDir]
 	if lock == nil {
-		lock = &workspaceMutationLock{}
-		s.workspaceLocks[trimmedWorkspaceID] = lock
+		lock = &repositoryMutationLock{}
+		s.repositoryLocks[trimmedCommonDir] = lock
 	}
 	lock.refs++
-	s.workspaceMu.Unlock()
+	s.repositoryMu.Unlock()
 	lock.mu.Lock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
 			lock.mu.Unlock()
-			s.workspaceMu.Lock()
-			defer s.workspaceMu.Unlock()
+			s.repositoryMu.Lock()
+			defer s.repositoryMu.Unlock()
 			lock.refs--
 			if lock.refs == 0 {
-				delete(s.workspaceLocks, trimmedWorkspaceID)
+				delete(s.repositoryLocks, trimmedCommonDir)
 			}
 		})
 	}

@@ -271,6 +271,96 @@ func TestWorkflowTaskAndCommentRequestValidation(t *testing.T) {
 	}
 }
 
+func TestWorkflowExecutionPolicyAndInitiatingActionContractValidation(t *testing.T) {
+	customRef := "refs/heads/release"
+	if err := (WorkflowExecutionPolicy{Mode: WorkflowExecutionPolicyCustomRef, CustomRef: &customRef}).Validate(); err != nil {
+		t.Fatalf("valid custom execution policy rejected: %v", err)
+	}
+	if err := (WorkflowExecutionPolicy{Mode: WorkflowExecutionPolicyHead, CustomRef: &customRef}).Validate(); !isWorkflowFieldError(err, "execution_policy.custom_ref", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("head policy with custom ref error = %#v, want invalid custom ref", err)
+	}
+	if err := (WorkflowExecutionPolicy{Mode: WorkflowExecutionPolicyCustomRef}).Validate(); !isWorkflowFieldError(err, "execution_policy.custom_ref", WorkflowRequestErrorRequired) {
+		t.Fatalf("custom policy without ref error = %#v, want required custom ref", err)
+	}
+
+	selection := WorkflowTaskExecutionTargetSelection{Mode: WorkflowTaskExecutionTargetSelectionCustomRef, CustomRef: &customRef}
+	if err := (WorkflowTaskStartRequest{TaskID: "task-1", SetupOperationID: NewWorktreeSetupOperationID(), Selection: &selection}).Validate(); err != nil {
+		t.Fatalf("start override selection rejected: %v", err)
+	}
+	if err := (WorkflowTaskApproveRequest{TaskTransitionID: "transition-1", SetupOperationID: NewWorktreeSetupOperationID(), Selection: &selection}).Validate(); !isWorkflowFieldError(err, "selection_generation", WorkflowRequestErrorRequired) {
+		t.Fatalf("approval selection without generation error = %#v, want required generation", err)
+	}
+	generation := "generation-1"
+	if err := (WorkflowTaskMoveRequest{TaskID: "task-1", TargetNodeID: "node-1", SetupOperationID: NewWorktreeSetupOperationID(), SelectionGeneration: &generation, Selection: &selection}).Validate(); err != nil {
+		t.Fatalf("move selection with generation rejected: %v", err)
+	}
+
+	selectionRequired := WorkflowTaskInitiatingActionResult{
+		Outcome: WorkflowTaskInitiatingActionOutcomeSelectionRequired,
+		SelectionRequired: &WorkflowTaskExecutionTargetSelectionRequired{
+			TaskID:              "task-1",
+			Generation:          "generation-1",
+			SourceWorkspaceID:   "workspace-1",
+			Source:              WorkflowTaskExecutionTargetSource{Kind: WorkflowTaskExecutionTargetSourceNamedRef, NamedRef: workflowTestStringPointer("refs/heads/main"), Commit: workflowTestStringPointer("abc123")},
+			SupportedSelections: []WorkflowTaskExecutionTargetSelectionMode{WorkflowTaskExecutionTargetSelectionNone, WorkflowTaskExecutionTargetSelectionHead, WorkflowTaskExecutionTargetSelectionDefaultBranch, WorkflowTaskExecutionTargetSelectionCustomRef},
+			ConfiguredPolicy:    WorkflowExecutionPolicy{Mode: WorkflowExecutionPolicyAsk},
+		},
+	}
+	if err := selectionRequired.Validate(); err != nil {
+		t.Fatalf("valid selection-required outcome rejected: %v", err)
+	}
+
+	mixed := selectionRequired
+	mixed.InProgress = &WorkflowTaskExecutionTargetMaterializationProgress{TaskID: "task-1", Phase: WorkflowTaskExecutionTargetMaterializationPhaseMaterializing}
+	if err := mixed.Validate(); err == nil {
+		t.Fatal("mixed outcome payloads accepted")
+	}
+}
+
+func TestWorkflowTaskInitiatingActionResultJSONIsClosedUnion(t *testing.T) {
+	result := WorkflowTaskInitiatingActionResult{
+		Outcome: WorkflowTaskInitiatingActionOutcomeStarted,
+		Started: &WorkflowTaskStartResponse{
+			TransitionID: "transition-1",
+			PlacementID:  "placement-1",
+			RunID:        "run-1",
+		},
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if raw["outcome"] != string(WorkflowTaskInitiatingActionOutcomeStarted) {
+		t.Fatalf("outcome = %#v, want started", raw["outcome"])
+	}
+	if _, ok := raw["started"]; !ok {
+		t.Fatalf("started payload missing: %#v", raw)
+	}
+	if _, ok := raw["selection_required"]; ok {
+		t.Fatalf("unexpected selection payload: %#v", raw)
+	}
+
+	var decoded WorkflowTaskInitiatingActionResult
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal typed result: %v", err)
+	}
+	if decoded.Started == nil || decoded.Started.RunID != "run-1" || decoded.SelectionRequired != nil || decoded.InProgress != nil {
+		t.Fatalf("decoded result = %#v", decoded)
+	}
+
+	if err := json.Unmarshal([]byte(`{"outcome":"started","started":{"transition_id":"transition-1","placement_id":"placement-1","run_id":"run-1"},"in_progress":{"task_id":"task-1","phase":"materializing"}}`), &decoded); err == nil {
+		t.Fatal("mixed JSON result accepted")
+	}
+}
+
+func workflowTestStringPointer(value string) *string {
+	return &value
+}
+
 func isWorkflowFieldError(err error, field string, code string) bool {
 	var validationErr WorkflowRequestValidationError
 	if !errors.As(err, &validationErr) {

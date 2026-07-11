@@ -389,8 +389,8 @@ func (c *Remote) UpdateWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	return callUnscopedRPC[serverapi.WorkflowTaskUpdateRequest, serverapi.WorkflowTaskUpdateResponse](c, ctx, protocol.MethodWorkflowTaskUpdate, req)
 }
 
-func (c *Remote) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowTaskStartRequest, serverapi.WorkflowTaskStartResponse](c, ctx, protocol.MethodWorkflowTaskStart, req)
+func (c *Remote) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+	return callUnscopedRPC[serverapi.WorkflowTaskStartRequest, serverapi.WorkflowTaskInitiatingActionResult](c, ctx, protocol.MethodWorkflowTaskStart, req)
 }
 
 func (c *Remote) InterruptWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskInterruptRequest) (serverapi.WorkflowTaskInterruptResponse, error) {
@@ -401,12 +401,12 @@ func (c *Remote) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	return callUnscopedRPC[serverapi.WorkflowTaskResumeRequest, serverapi.WorkflowTaskResumeResponse](c, ctx, protocol.MethodWorkflowTaskResume, req)
 }
 
-func (c *Remote) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowTaskApproveRequest, serverapi.WorkflowTaskApproveResponse](c, ctx, protocol.MethodWorkflowTaskApprove, req)
+func (c *Remote) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+	return callUnscopedRPC[serverapi.WorkflowTaskApproveRequest, serverapi.WorkflowTaskInitiatingActionResult](c, ctx, protocol.MethodWorkflowTaskApprove, req)
 }
 
-func (c *Remote) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowTaskMoveRequest, serverapi.WorkflowTaskMoveResponse](c, ctx, protocol.MethodWorkflowTaskMove, req)
+func (c *Remote) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskInitiatingActionResult, error) {
+	return callUnscopedRPC[serverapi.WorkflowTaskMoveRequest, serverapi.WorkflowTaskInitiatingActionResult](c, ctx, protocol.MethodWorkflowTaskMove, req)
 }
 
 func (c *Remote) CompleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
