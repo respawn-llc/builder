@@ -127,7 +127,8 @@ func TestCommittedRowsNeutralizeTranscriptSourcedControlBytes(t *testing.T) {
 
 	rows := visibleTextRows(parseTerminalOps(out.String()))
 	wantStructure := []rowKind{
-		{content: "❯ user[2J…", divider: false},
+		{content: "❯ user[2J", divider: false},
+		{content: "  next lineafter", divider: false},
 		{divider: true},
 		{content: "❮ assistant]0;spoof answer", divider: false},
 		{divider: true},
@@ -254,6 +255,32 @@ func TestHydrationRendersFinalAssistantFullText(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestHydrationRendersFullUserPrompt(t *testing.T) {
+	var out bytes.Buffer
+	surface := NewSurface(&out)
+	row := clientui.TranscriptCommittedRow{
+		Kind:       clientui.TranscriptRowUser,
+		Visibility: clientui.EntryVisibilityOngoing,
+		User: &clientui.TranscriptUserRow{
+			Text:          "/review\nInspect every changed file.\nReport architectural regressions.",
+			CondensedText: "/review",
+		},
+	}
+
+	if _, err := surface.ApplyTerminalMessage(clientui.TranscriptMessage{
+		Kind:      clientui.TranscriptMessageHydration,
+		Hydration: &clientui.TranscriptHydration{CommittedRows: []clientui.TranscriptCommittedRow{row}},
+	}, FrameInput{Size: Size{Width: 80, Height: 24}}); err != nil {
+		t.Fatalf("apply hydration: %v", err)
+	}
+
+	assertVisibleTextOps(t, parseTerminalOps(out.String()), []string{
+		"❯ /review",
+		"  Inspect every changed file.",
+		"  Report architectural regressions.",
+	})
 }
 
 func committedMessage(row clientui.TranscriptCommittedRow) clientui.TranscriptMessage {

@@ -397,6 +397,9 @@ func ongoingRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mod
 }
 
 func committedRowRenderMode(row clientui.TranscriptCommittedRow) transcriptrender.Mode {
+	if row.Kind == clientui.TranscriptRowUser && row.User != nil {
+		return transcriptrender.ModeOngoingFull
+	}
 	if row.Kind != clientui.TranscriptRowAssistant || row.Assistant == nil {
 		return ongoingRenderMode(row)
 	}

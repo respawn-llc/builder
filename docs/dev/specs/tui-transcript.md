@@ -132,7 +132,7 @@
 - Syntax-highlighted output must not emit backgrounds unless explicitly intended, such as diff add/remove decoration.
 - Formatted text uses app foreground as base text color.
 - Faint text always uses the transcript foreground token plus the terminal faint attribute; there is no separate subdued/gray transcript foreground token.
-- User and assistant rows use compact text in ongoing mode and collapsed detail, full text in expanded detail, and foreground text plus Markdown styling.
+- User turns render their full submitted text in ongoing, including multiline prompts that invoke slash commands. Final assistant turns render their full text in ongoing. User and assistant rows use compact text in collapsed detail and full text in expanded detail, with foreground text plus Markdown styling.
 - Shell tool calls use the shared Chroma syntax projection, faint styling, and OS-dependent shell syntax selection.
 - Non-shell tool calls use foreground text, no syntax highlighting, and faint styling.
 - Patch/edit tools use `⇄` in ongoing, detail, and native replay. Patch paths and neutral text use foreground; source lines use the shared Chroma syntax projection; diff add/remove counts use semantic add/remove colors. Diff-line backgrounds blend 20% of the Success/Error token over the active detail surface background.
