@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"core/internal/testharness/testvalues"
 	"core/server/attentionnotify"
 	"core/server/auth"
 	"core/server/launch"
@@ -531,12 +530,13 @@ func TestWorkflowAskHandlerCancellationAfterDurableClearResolvesBatch(t *testing
 	cancel()
 	batch := workflowTestAskBatch("ask-1", "ask-1", "ask-2")
 	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
+	interruptedAt := int64(123)
 	store := &recordingRuntimeStore{
 		clearErr: sql.ErrNoRows,
 		getRun: workflowstore.RunRecord{
 			ID:            "run-1",
 			Generation:    7,
-			InterruptedAt: testvalues.Pointer(int64(123)),
+			InterruptedAt: &interruptedAt,
 		},
 	}
 	starter := &Starter{store: store, runtimes: runtimes}
@@ -565,12 +565,13 @@ func TestWorkflowAskHandlerApprovalCancellationAfterDurableClearResolvesQuestion
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
+	interruptedAt := int64(123)
 	store := &recordingRuntimeStore{
 		clearErr: sql.ErrNoRows,
 		getRun: workflowstore.RunRecord{
 			ID:            "run-1",
 			Generation:    7,
-			InterruptedAt: testvalues.Pointer(int64(123)),
+			InterruptedAt: &interruptedAt,
 		},
 	}
 	starter := &Starter{store: store, runtimes: runtimes}

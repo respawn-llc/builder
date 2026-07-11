@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"core/internal/testharness/testvalues"
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -48,6 +47,8 @@ func TestTaskCommentAuthorForAddUsesWorkflowNodeWhenRoleMissing(t *testing.T) {
 
 func TestTaskCommentAuthorForAddUsesDeterministicCurrentWorkflowRun(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "session-workflow")
+	oldStartedAt := int64(20)
+	currentStartedAt := int64(10)
 	remote := &commentAuthorRemote{task: serverapi.WorkflowTaskDetail{
 		Status: serverapi.WorkflowTaskStatus{RunIDs: []string{"run-current"}},
 		Placements: []serverapi.WorkflowPlacement{
@@ -55,8 +56,8 @@ func TestTaskCommentAuthorForAddUsesDeterministicCurrentWorkflowRun(t *testing.T
 			{NodeID: "node-current", NodeKey: "current"},
 		},
 		Runs: []serverapi.WorkflowRun{
-			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: testvalues.Pointer(int64(20))},
-			{ID: "run-current", SessionID: "session-workflow", NodeID: "node-current", StartedAtUnixMs: testvalues.Pointer(int64(10))},
+			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: &oldStartedAt},
+			{ID: "run-current", SessionID: "session-workflow", NodeID: "node-current", StartedAtUnixMs: &currentStartedAt},
 		},
 	}}
 	got := taskCommentAuthorForAdd(context.Background(), remote, "task-1", "", false)
@@ -67,14 +68,16 @@ func TestTaskCommentAuthorForAddUsesDeterministicCurrentWorkflowRun(t *testing.T
 
 func TestTaskCommentAuthorForAddUsesLatestWorkflowRunWhenNoneCurrent(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "session-workflow")
+	oldStartedAt := int64(10)
+	newStartedAt := int64(20)
 	remote := &commentAuthorRemote{task: serverapi.WorkflowTaskDetail{
 		Placements: []serverapi.WorkflowPlacement{
 			{NodeID: "node-old", NodeKey: "old"},
 			{NodeID: "node-new", NodeKey: "new"},
 		},
 		Runs: []serverapi.WorkflowRun{
-			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: testvalues.Pointer(int64(10))},
-			{ID: "run-new", SessionID: "session-workflow", NodeID: "node-new", StartedAtUnixMs: testvalues.Pointer(int64(20))},
+			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: &oldStartedAt},
+			{ID: "run-new", SessionID: "session-workflow", NodeID: "node-new", StartedAtUnixMs: &newStartedAt},
 		},
 	}}
 	got := taskCommentAuthorForAdd(context.Background(), remote, "task-1", "", false)
