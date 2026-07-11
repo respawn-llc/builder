@@ -1305,6 +1305,13 @@ func TestExecutionTargetRecoveryCoordinatorReprovisionsExactMissingLockedRoot(t 
 	if materializer.provision.WorktreeRoot != worktreeRoot || materializer.setup.WorktreeRoot != attached.Root {
 		t.Fatalf("reprovision/setup = provision:%+v setup:%+v, want durable root", materializer.provision, materializer.setup)
 	}
+	root, err := service.store.ResolveTaskExecutionRoot(ctx, target.TaskID)
+	if err != nil {
+		t.Fatalf("ResolveTaskExecutionRoot: %v", err)
+	}
+	if root.ManagedWorktree == nil || root.ManagedWorktree.ID != attached.ID {
+		t.Fatalf("reprovisioned execution root = %+v, want existing worktree record %q", root, attached.ID)
+	}
 }
 
 func TestServiceStartHeadPolicyMissingScriptKeepsTargetWithoutStarting(t *testing.T) {
