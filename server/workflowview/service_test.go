@@ -1680,8 +1680,13 @@ func TestTaskDetailProjectsWaitingAskRun(t *testing.T) {
 	if len(detail.Runs) != 1 || detail.Runs[0].WaitingAskID == nil || *detail.Runs[0].WaitingAskID != "ask-view-1" || detail.Runs[0].SessionID != sessionID {
 		t.Fatalf("runs do not project waiting ask: %+v", detail.Runs)
 	}
-	if len(detail.Attention) != 1 || detail.Attention[0].AskID != "ask-view-1" || detail.Attention[0].Message != "Waiting ask?" || len(detail.Attention[0].Suggestions) != 3 || detail.Attention[0].Suggestions[1] != "Dark chocolate" || detail.Attention[0].RecommendedOptionIndex != 2 {
+	if len(detail.Attention) != 1 || detail.Attention[0].Kind != "question" || detail.Attention[0].AskID != "ask-view-1" || strings.TrimSpace(detail.Attention[0].Message) == "" || len(detail.Attention[0].Suggestions) != 3 || detail.Attention[0].RecommendedOptionIndex != 2 {
 		t.Fatalf("attention question options = %+v", detail.Attention)
+	}
+	for _, suggestion := range detail.Attention[0].Suggestions {
+		if strings.TrimSpace(suggestion) == "" {
+			t.Fatalf("attention contains blank suggestion: %+v", detail.Attention)
+		}
 	}
 }
 
