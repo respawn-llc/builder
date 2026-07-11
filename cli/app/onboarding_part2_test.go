@@ -148,6 +148,83 @@ func TestOnboardingEditorFieldDeleteCurrentLineUsesAppKeyAdapter(t *testing.T) {
 	}
 }
 
+func TestOnboardingInputWordNavigationStaysInField(t *testing.T) {
+	cases := []struct {
+		name          string
+		key           tea.KeyMsg
+		initialCursor func(string) int
+		wantCursor    func(string, int) int
+	}{
+		{
+			name:          "alt-left",
+			key:           tea.KeyMsg{Type: tea.KeyLeft, Alt: true},
+			initialCursor: func(text string) int { return len([]rune(text)) },
+			wantCursor:    moveBufferCursorWordLeft,
+		},
+		{
+			name:          "alt-right",
+			key:           tea.KeyMsg{Type: tea.KeyRight, Alt: true},
+			initialCursor: func(string) int { return 0 },
+			wantCursor:    moveBufferCursorWordRight,
+		},
+		{
+			name:          "alt-b",
+			key:           tea.KeyMsg{Type: tea.KeyRunes, Alt: true, Runes: []rune{'b'}},
+			initialCursor: func(text string) int { return len([]rune(text)) },
+			wantCursor:    moveBufferCursorWordLeft,
+		},
+		{
+			name:          "alt-f",
+			key:           tea.KeyMsg{Type: tea.KeyRunes, Alt: true, Runes: []rune{'f'}},
+			initialCursor: func(string) int { return 0 },
+			wantCursor:    moveBufferCursorWordRight,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{
+				settings: config.Settings{Model: "gpt-5.6-sol"},
+				theme:    "dark",
+			})
+			steps := model.workflow.visibleSteps(&model.state)
+			modelStepIndex := -1
+			for index, step := range steps {
+				if step.id == "model" {
+					modelStepIndex = index
+					break
+				}
+			}
+			if modelStepIndex < 1 {
+				t.Fatalf("model input step index = %d, want non-initial input step", modelStepIndex)
+			}
+			model.stepIndex = modelStepIndex
+			model.syncScreen(true)
+			if model.currentScreen.Kind != onboardingScreenInput {
+				t.Fatalf("screen kind = %q, want input", model.currentScreen.Kind)
+			}
+
+			const input = "alpha beta gamma"
+			model.input = newSingleLineEditor(input)
+			initialCursor := tt.initialCursor(input)
+			model.input.SetCursor(byteOffsetForRuneCursor(input, initialCursor))
+			screenID := model.currentScreen.ID
+
+			next, _ := model.Update(tt.key)
+			updated := next.(*onboardingModel)
+			if got := updated.currentScreen.ID; got != screenID {
+				t.Fatalf("screen after %s = %q, want %q", tt.name, got, screenID)
+			}
+			if got := updated.input.Text(); got != input {
+				t.Fatalf("input after %s = %q, want %q", tt.name, got, input)
+			}
+			if got, want := runeOffsetForByteCursor(updated.input.Text(), updated.input.Cursor()), tt.wantCursor(input, initialCursor); got != want {
+				t.Fatalf("cursor after %s = %d, want %d", tt.name, got, want)
+			}
+		})
+	}
+}
+
 func TestOnboardingSpinnerTickDoesNotRescheduleOutsideLoadingOrFinalize(t *testing.T) {
 	model := newOnboardingModelForWorkspace(t.TempDir(), "", onboardingFlowState{theme: "dark"})
 	model.state.imports.pending = false
