@@ -2,18 +2,15 @@ Usage of kent attach:
   kent attach [path]
   kent attach --project <project-id> [path]
 
-What This Does:
-  Attach another workspace path to an existing Kent project.
-  The command prints the project id after the attach succeeds.
+Attach a workspace to an existing project and print the project ID.
 
-How Project Selection Works:
-  Without `--project`, Kent reads the project bound to the current working directory and reuses it.
-  With `--project`, Kent skips current-directory lookup and uses the explicit project id instead.
-  If `[path]` is omitted, Kent attaches the current directory.
+Project selection:
+  Without `--project`, use the project attached to the current directory.
+  With `--project`, use the specified project.
+  Without `[path]`, attach the current directory.
 
-Path Semantics:
-  In loopback mode, `[path]` is a local filesystem path.
-  Against a remote daemon, `[path]` must be visible on the server machine.
+Paths:
+  With a remote server, `[path]` refers to the server's filesystem.
 
 Examples:
   kent attach ../other-checkout

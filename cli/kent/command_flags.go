@@ -6,6 +6,8 @@ import (
 	"io"
 )
 
+const persistenceRootFlagUsage = "Kent config and data directory; overrides KENT_PERSISTENCE_ROOT and ~/.kent"
+
 func newCommandFlagSet(name string, stderr io.Writer, usage commandUsage) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)

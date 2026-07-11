@@ -6,9 +6,8 @@ Usage of kent goal:
   kent goal clear [--session <id>]
   kent goal complete [--session <id>] [--confirm]
 
-What This Does:
-  Manage the live runtime goal for a session.
-  Inside Kent shell commands, KENT_SESSION_ID targets the caller session automatically.
-  Agent shell commands may set a goal when no active or paused goal exists; pause, resume, and clear are user-only.
-  Outside Kent shell commands, pass --session <id>.
-
+Show or change the goal that guides an active session.
+Inside a Kent shell command, the command targets that session.
+Otherwise, pass `--session <id>`.
+Agents may set a goal only when their session has no active or paused goal.
+Only humans may pause, resume, or clear a goal.

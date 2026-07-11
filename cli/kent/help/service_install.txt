@@ -1,8 +1,10 @@
 Usage of kent service install:
   kent service install [--force] [--no-start]
 
-Notes:
-  Refuses to start or restart the service inside Kent shell commands.
-  `--no-start` is allowed because it only writes service registration.
+Install the Kent background server as a user-scoped system service and start it.
+
+Inside a Kent shell command, use `--no-start` without `--force`.
+
+If you are an agent, you may not restart, stop, reinstall, or kill the Kent service, because YOU are run by it and this will kill YOU and disrupt all other agents. Do not try to circumvent this; ask the user to run the necessary commands instead. You may safely uninstall the server with --keep-running, and install with --no-start.
 
 Flags:

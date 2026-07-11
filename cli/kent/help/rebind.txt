@@ -1,14 +1,9 @@
 Usage of kent rebind:
   kent rebind <session-id> <new-path>
 
-What This Does:
-  Retarget one session to a different workspace root.
-  Use this when the original workspace moved or when the session should continue from another bound copy.
+Move a session to another workspace.
+Use this after moving on-disk location of the session's workspace directory or to continue a session from another workdir while keeping it attached to the same project.
+`<new-path>` must exist and not be already bound to another project.
 
-Requirements:
-  `<new-path>` must exist.
-  `<new-path>` must not already be bound to a different project.
-
-Examples:
+Example:
   kent rebind <session-id> ../moved-workspace
-

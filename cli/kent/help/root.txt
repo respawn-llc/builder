@@ -1,59 +1,24 @@
 Usage of kent:
   kent [flags]
-  kent --agent <role>
-  kent --continue <session-id>
-  kent run [flags] <prompt>
-  kent serve [flags]
-  kent service <status|install|uninstall|start|stop|restart>
-  kent session-id
-  kent goal <show|set|pause|resume|clear|complete>
-  kent workflow <create|list|node|edge|link|unlink|default|validate|inspect>
-  kent task <create|start|resume|approve|move|list|show|cancel|comment>
-  kent project [path]
-  kent project list
-  kent project create --path <server-path> --name <project-name>
-  kent attach [--project <project-id>] [path]
-  kent rebind <session-id> <new-path>
 
-What This Does:
-  `kent` without a subcommand starts the interactive TUI.
-  `kent --agent <role>` creates an interactive session with a subagent role.
-  `kent --continue <session-id>` reopens a previous session in the interactive TUI.
-  On locked sessions, `--agent` may only repeat the session's persisted role.
-  `kent run` executes one headless prompt and exits.
-  `kent serve` starts the app server in daemon mode.
-  `kent service` manages the Kent server background service.
-  `kent session-id` prints the caller session id when invoked from a Kent shell command.
-  `kent goal` manages the active session goal through the live runtime.
-  `kent workflow` manages workflow definitions and project links.
-  `kent task` manages workflow tasks and comments.
-  `kent project` / `attach` / `rebind` inspect or repair workspace bindings.
+Usage without a subcommand starts the interactive TUI. Use `--continue <session-id>` to reopen a session or
+`--agent <role>` to start with a configured subagent role.
 
 Commands:
-  run      Execute a headless prompt against a workspace and print the final result.
-  serve    Start the Kent app server and keep serving until interrupted.
-  service  Install, inspect, or restart the Kent server background service.
-  session-id  Print the Kent caller session id from KENT_SESSION_ID.
-  goal     Show or update the live session goal.
-  workflow Manage workflow definitions and project workflow links.
-  task     Manage workflow tasks and task comments.
-  project  Inspect project bindings, list projects, or create a project.
-  attach   Attach another workspace path to an existing project.
-  rebind   Retarget one session to a different workspace root.
+  run         Run a headless subagent prompt or control an active run.
+  serve       Run the Kent server in the foreground.
+  service     Manage the Kent's system service.
+  session-id  Print the session ID of the current agent session.
+  goal        Show or change a session goal.
+  workflow    Create workflows and link them to projects.
+  task        Create and operate workflow tasks.
+  project     Find, list, or create projects.
+  attach      Attach another workspace to a project.
+  rebind      Move a session to another workspace.
 
 Examples:
   kent
   kent --continue <session-id>
   kent run --fast "summarize the repo"
   kent service status
-  kent service install
-  kent session-id
-  kent goal show
-  kent workflow list
-  kent task list
-  kent project
-  kent attach ../other-checkout
-  kent rebind <session-id> ../moved-workspace
   kent <command> --help
-
-Flags:

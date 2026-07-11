@@ -136,10 +136,10 @@ func rootCommand(args []string, stdin io.Reader, stdout io.Writer, stderr io.Wri
 	}
 
 	rootFS := newCommandFlagSet(config.Command, stderr, rootUsage)
-	showVersion := rootFS.Bool("version", false, "print version and exit")
-	forceInteractive := rootFS.Bool("force-interactive", false, "run interactive UI even when stdin/stdout are not terminals")
-	agentRoleRaw := rootFS.String("agent", "", "subagent role override for the interactive session")
-	persistenceRoot := rootFS.String("persistence-root", "", "config and data root directory (overrides KENT_PERSISTENCE_ROOT and the default ~/.kent)")
+	showVersion := rootFS.Bool("version", false, "print the Kent version")
+	forceInteractive := rootFS.Bool("force-interactive", false, "start the TUI even when stdin or stdout is not a terminal")
+	agentRoleRaw := rootFS.String("agent", "", "configured subagent role for a new interactive session")
+	persistenceRoot := rootFS.String("persistence-root", "", persistenceRootFlagUsage)
 	flags := registerSessionFlags(rootFS)
 	if ok, exitCode := parseCommandFlags(rootFS, args); !ok {
 		return exitCode
@@ -259,10 +259,10 @@ func runSubcommand(args []string) int {
 	runFS.SetOutput(os.Stderr)
 	runFS.Usage = func() { runUsage.write(runFS) }
 	flags := registerCommonFlags(runFS, true)
-	agentRoleRaw := runFS.String("agent", "", "subagent role override")
+	agentRoleRaw := runFS.String("agent", "", "configured subagent role; use default for base settings")
 	fastRole := runFS.Bool("fast", false, "use the built-in fast subagent role")
-	timeoutRaw := runFS.String("timeout", "", "optional timeout duration (e.g. 30s, 2m); default is no timeout")
-	outputModeRaw := runFS.String("output-mode", string(runOutputModeFinalText), "output mode: final-text|json")
+	timeoutRaw := runFS.String("timeout", "", "maximum run duration, such as 30s or 2m")
+	outputModeRaw := runFS.String("output-mode", string(runOutputModeFinalText), "result format: final-text|json")
 	progressModeRaw := runFS.String("progress-mode", string(runProgressModeStderr), "live output: stderr|quiet")
 	quiet := false
 	runFS.BoolVar(&quiet, "quiet", false, "suppress live output and print only the final result")
@@ -473,9 +473,13 @@ func liveControlPositionals(verb string, args []string) ([]string, bool) {
 }
 
 func runLiveSteerSubcommand(args []string) int {
-	fs := flag.NewFlagSet(config.Command+" run steer", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	persistenceRoot := fs.String("persistence-root", "", "config and data root directory")
+	fs := newCommandFlagSet(config.Command+" run steer", os.Stderr, leafCommandUsage(
+		config.Command+" run steer [--persistence-root <root>] <session-id> <message...>",
+		"Queue a message for an active run.",
+		"",
+		"Use `run --continue` when the session is idle.",
+	))
+	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
 	if err := fs.Parse(args); err != nil {
 		return runLiveFlagError(err)
 	}
@@ -517,9 +521,11 @@ func runLiveSteerSubcommand(args []string) int {
 }
 
 func runLiveStopSubcommand(args []string) int {
-	fs := flag.NewFlagSet(config.Command+" run stop", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	persistenceRoot := fs.String("persistence-root", "", "config and data root directory")
+	fs := newCommandFlagSet(config.Command+" run stop", os.Stderr, leafCommandUsage(
+		config.Command+" run stop [--persistence-root <root>] <session-id>",
+		"Interrupt an active run.",
+	))
+	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
 	if err := fs.Parse(args); err != nil {
 		return runLiveFlagError(err)
 	}
@@ -557,10 +563,12 @@ func runLiveStopSubcommand(args []string) int {
 }
 
 func runLiveWaitSubcommand(args []string) int {
-	fs := flag.NewFlagSet(config.Command+" run wait", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	persistenceRoot := fs.String("persistence-root", "", "config and data root directory")
-	outputModeRaw := fs.String("output-mode", string(runOutputModeFinalText), "output mode: final-text|json")
+	fs := newCommandFlagSet(config.Command+" run wait", os.Stderr, leafCommandUsage(
+		config.Command+" run wait [--output-mode <mode>] [--persistence-root <root>] <session-id>",
+		"Wait for an active run and print its final result.",
+	))
+	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
+	outputModeRaw := fs.String("output-mode", string(runOutputModeFinalText), "result format: final-text|json")
 	usageOutputMode := inferRunOutputMode(args)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -658,18 +666,18 @@ func currentSessionIDForSelfTarget() (runtimeids.SessionID, bool) {
 
 func registerCommonFlags(fs *flag.FlagSet, includeSession bool) *commonFlags {
 	flags := &commonFlags{}
-	fs.StringVar(&flags.WorkspaceRoot, "workspace", ".", "workspace root")
+	fs.StringVar(&flags.WorkspaceRoot, "workspace", ".", "workspace for a new session")
 	if includeSession {
 		registerSessionFlagVars(fs, flags)
 	}
-	fs.StringVar(&flags.Model, "model", "", "model name override")
-	fs.StringVar(&flags.ProviderOverride, "provider-override", "", "provider override for custom/alias model names")
-	fs.StringVar(&flags.ThinkingLevel, "thinking-level", "", "thinking level override (low|medium|high|xhigh)")
-	fs.StringVar(&flags.Theme, "theme", "", "theme override (light|dark)")
-	fs.IntVar(&flags.ModelTimeoutSeconds, "model-timeout-seconds", 0, "model request timeout override in seconds")
-	fs.StringVar(&flags.Tools, "tools", "", "enabled tools override as csv (e.g. shell,patch)")
-	fs.StringVar(&flags.OpenAIBaseURL, "openai-base-url", "", "OpenAI-compatible base URL override")
-	fs.StringVar(&flags.PersistenceRoot, "persistence-root", "", "config and data root directory (overrides KENT_PERSISTENCE_ROOT and the default ~/.kent)")
+	fs.StringVar(&flags.Model, "model", "", "model for this session")
+	fs.StringVar(&flags.ProviderOverride, "provider-override", "", "provider for a custom or aliased model name")
+	fs.StringVar(&flags.ThinkingLevel, "thinking-level", "", "reasoning effort: low|medium|high|xhigh")
+	fs.StringVar(&flags.Theme, "theme", "", "theme: light|dark")
+	fs.IntVar(&flags.ModelTimeoutSeconds, "model-timeout-seconds", 0, "model request timeout in seconds")
+	fs.StringVar(&flags.Tools, "tools", "", "comma-separated enabled tool IDs, such as shell,patch")
+	fs.StringVar(&flags.OpenAIBaseURL, "openai-base-url", "", "base URL for an OpenAI-compatible API")
+	fs.StringVar(&flags.PersistenceRoot, "persistence-root", "", persistenceRootFlagUsage)
 	return flags
 }
 
@@ -680,8 +688,8 @@ func registerSessionFlags(fs *flag.FlagSet) *commonFlags {
 }
 
 func registerSessionFlagVars(fs *flag.FlagSet, flags *commonFlags) {
-	fs.StringVar(&flags.SessionID, "session", "", "session id to resume")
-	fs.StringVar(&flags.ContinueID, "continue", "", "session id to continue")
+	fs.StringVar(&flags.SessionID, "session", "", "session ID to resume")
+	fs.StringVar(&flags.ContinueID, "continue", "", "session ID to resume; alias of --session")
 }
 
 func effectiveSessionID(flags commonFlags) (string, error) {

@@ -1,11 +1,11 @@
 Usage of kent project create:
   kent project create --path <server-path> --name <project-name>
 
-What This Does:
-  Create a new Kent project and bind its first workspace root.
-  The path must exist and must be visible to the Kent server.
+Create a project, attach its first workspace, and print the project ID.
 
-Examples:
+`--path` must exist on the Kent server's filesystem.
+
+Example:
   kent project create --path /srv/repos/app --name app
 
 Flags:

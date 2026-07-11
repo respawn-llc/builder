@@ -20,15 +20,15 @@ var (
 )
 
 func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task create", stderr, taskCommandUsage)
+	fs := newCommandFlagSet(config.Command+" task create", stderr, taskCreateUsage)
 	title := fs.String("title", "", "task title")
 	body := fs.String("body", "", "task body")
-	bodyFile := fs.String("body-file", "", "path to task body file")
-	workflowRef := fs.String("workflow", "", "workflow id or exact workflow name")
-	projectRef := fs.String("project", ".", "project id or path")
-	sourceURL := fs.String("source-url", "", "external source URL")
-	sourceWorkspace := fs.String("source-workspace", "", "source workspace id or path")
-	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
+	bodyFile := fs.String("body-file", "", "read the task body from this file")
+	workflowRef := fs.String("workflow", "", "workflow ID or exact name; defaults to the project's default workflow")
+	projectRef := fs.String("project", ".", "project ID or attached workspace path")
+	sourceURL := fs.String("source-url", "", "URL of the issue or document that originated the task")
+	sourceWorkspace := fs.String("source-workspace", "", "workspace ID or path used as the task's source checkout")
+	jsonOut := fs.Bool("json", false, "write the created task detail as JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -92,13 +92,13 @@ func taskCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 }
 
 func taskEditSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task edit", stderr, taskCommandUsage)
-	title := fs.String("title", "", "new task title")
-	body := fs.String("body", "", "new task body")
-	bodyFile := fs.String("body-file", "", "path to new task body file")
-	sourceWorkspace := fs.String("source-workspace", "", "source workspace id or path")
-	projectRef := fs.String("project", ".", "project id or path for short ids")
-	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
+	fs := newCommandFlagSet(config.Command+" task edit", stderr, taskEditUsage)
+	title := fs.String("title", "", "replace the task title")
+	body := fs.String("body", "", "replace the task body; pass an empty value to clear")
+	bodyFile := fs.String("body-file", "", "replace the task body with this file; an empty file clears it")
+	sourceWorkspace := fs.String("source-workspace", "", "replace the source workspace with this workspace ID or path")
+	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
+	jsonOut := fs.Bool("json", false, "write the updated task as JSON")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -185,8 +185,8 @@ func readTaskEditBody(body string, bodyFile string, bodyFileProvided bool) (stri
 }
 
 func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task start", stderr, taskCommandUsage)
-	projectRef := fs.String("project", ".", "project id or path for short ids")
+	fs := newCommandFlagSet(config.Command+" task start", stderr, taskStartUsage)
+	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -227,9 +227,9 @@ func taskStartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 }
 
 func taskCancelSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task cancel", stderr, taskCommandUsage)
-	projectRef := fs.String("project", ".", "project id or path for short ids")
-	reason := fs.String("reason", "", "cancel reason")
+	fs := newCommandFlagSet(config.Command+" task cancel", stderr, taskCancelUsage)
+	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
+	reason := fs.String("reason", "", "reason recorded with the cancellation")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -269,8 +269,8 @@ func taskCancelSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 }
 
 func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task delete", stderr, taskCommandUsage)
-	projectRef := fs.String("project", ".", "project id or path for short ids")
+	fs := newCommandFlagSet(config.Command+" task delete", stderr, taskDeleteUsage)
+	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -311,8 +311,8 @@ func taskDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 }
 
 func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task resume", stderr, taskCommandUsage)
-	projectRef := fs.String("project", ".", "project id or path for short ids")
+	fs := newCommandFlagSet(config.Command+" task resume", stderr, taskResumeUsage)
+	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -353,7 +353,7 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 }
 
 func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task approve", stderr, taskCommandUsage)
+	fs := newCommandFlagSet(config.Command+" task approve", stderr, taskApproveUsage)
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -393,11 +393,11 @@ func taskApproveSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 }
 
 func taskMoveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task move", stderr, taskCommandUsage)
-	projectRef := fs.String("project", ".", "project id or path for short ids")
-	commentary := fs.String("commentary", "", "transition commentary")
+	fs := newCommandFlagSet(config.Command+" task move", stderr, taskMoveUsage)
+	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
+	commentary := fs.String("commentary", "", "note recorded with the workflow transition")
 	outputs := stringMapFlag{}
-	fs.Var(&outputs, "output", "output value as name=value; repeatable")
+	fs.Var(&outputs, "output", "transition value as name=value; repeatable")
 	positionals, flagArgs := takeLeadingPositionals(args, 2)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode

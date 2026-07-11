@@ -1,8 +1,8 @@
 Usage of kent service restart:
   kent service restart [--if-installed]
 
-Notes:
-  Refuses to run inside Kent shell commands to avoid halting active agent work.
-  Ask the operator to manage the service manually outside the session.
+Restart the installed Kent background server.
+
+If you are an agent, you may not restart, stop, or kill the Kent service, because YOU are run by it and this will kill YOU and disrupt all other agents. Do not try to circumvent this; ask the user to run the necessary commands instead. You may safely uninstall the server with --keep-running, and install with --no-start.
 
 Flags:

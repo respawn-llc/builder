@@ -34,19 +34,19 @@ type taskListItem struct {
 }
 
 func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task list", stderr, taskCommandUsage)
-	projectRef := fs.String("project", ".", "project id or path")
-	pageSize := fs.Int("page-size", taskListDefaultPageSize, "maximum tasks to print")
-	pageToken := fs.String("page-token", "", "page token from a previous task list response")
+	fs := newCommandFlagSet(config.Command+" task list", stderr, taskListUsage)
+	projectRef := fs.String("project", ".", "project ID or attached workspace path")
+	pageSize := fs.Int("page-size", taskListDefaultPageSize, "maximum number of tasks to return")
+	pageToken := fs.String("page-token", "", "continue from a previous list response")
 	var statusFlags repeatedStringFlag
 	var columnFlags repeatedStringFlag
 	var runStatusFlags repeatedStringFlag
 	var sortFlags repeatedStringFlag
-	fs.Var(&statusFlags, "status", "workflow status key filter; comma-separated or repeatable")
+	fs.Var(&statusFlags, "status", "include tasks in these workflow node keys; comma-separated or repeatable")
 	fs.Var(&columnFlags, "column", "alias for --status")
-	fs.Var(&runStatusFlags, "run-status", "run status filter: open|running|done|canceled; comma-separated or repeatable")
-	fs.Var(&sortFlags, "sort", "sort selectors such as status:asc,updated:desc")
-	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
+	fs.Var(&runStatusFlags, "run-status", "include these run states: open|running|done|canceled; comma-separated or repeatable")
+	fs.Var(&sortFlags, "sort", "order by field:direction; repeatable (default status:asc,updated:desc)")
+	jsonOut := fs.Bool("json", false, "write tasks and the next page token as JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}

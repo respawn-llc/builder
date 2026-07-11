@@ -1,8 +1,10 @@
 Usage of kent service uninstall:
   kent service uninstall [--keep-running]
 
-Notes:
-  Refuses to stop the service inside Kent shell commands.
-  `--keep-running` is allowed because it only removes service registration.
+Remove the Kent background server registration and stop the server.
+
+If you are an agent, you may not restart, stop, or kill the Kent service, because YOU are run by it and this will kill YOU and disrupt all other agents. Do not try to circumvent this; ask the user to run the necessary commands instead. You may safely uninstall the server with --keep-running, and install with --no-start.
+
+Windows does not support `--keep-running`.
 
 Flags:

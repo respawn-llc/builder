@@ -480,6 +480,13 @@ func TestWorkflowHelpSmoke(t *testing.T) {
 	}
 }
 
+func TestWorkflowValidateRejectsRemovedProjectFlag(t *testing.T) {
+	_, _, code := runWorkflowRootCommand("workflow", "validate", "workflow-id", "--project", "project-id")
+	if code != 2 {
+		t.Fatalf("workflow validate with removed --project exit=%d, want 2", code)
+	}
+}
+
 func TestWorkflowCommandValidationErrorsAreExitTwo(t *testing.T) {
 	for _, args := range [][]string{
 		{"workflow", "create"},

@@ -1,7 +1,5 @@
 Usage of kent session-id:
   kent session-id
 
-What This Does:
-  Print KENT_SESSION_ID when invoked from a shell command started by Kent.
-  The command fails outside Kent-managed shell commands.
-
+For agents, this will print your own session ID.
+This command is unavailable outside the Kent harness.

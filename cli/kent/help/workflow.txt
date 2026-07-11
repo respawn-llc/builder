@@ -3,17 +3,26 @@ Usage of kent workflow:
   kent workflow list [--page-size <n>] [--page-token <token>] [--json]
   kent workflow node add <workflow> --key <node-key> --kind start|agent|script|join|terminal [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
   kent workflow node update <workflow> <node-key> [--key <node-key>] [--kind start|agent|script|join|terminal] [--display-name <name>] [--prompt <text>] [--agent <role>] [--completion-mode auto|structured_output|tool|shell_command|unstructured_output] [--script-path <path>] [--json]
-  kent workflow edge add <workflow> --from <source-node-key> --transition <transition-id> --edge-key <edge-key> --to <target-node-key> --context <mode> [--requires-approval] [--context-source immediate_source|node:<node-key>] [--prompt <text>] [--transition-description <text>] [--param <key>=<description> ...] [--json]
-  kent workflow edge update <workflow> <edge-id> [--transition <transition-id>] [--transition-display-name <name>] [--transition-description <text>] [--edge-key <edge-key>] [--to <target-node-key>] [--context <mode>] [--requires-approval] [--context-source immediate_source|node:<node-key>] [--prompt <text>] [--param <key>=<description> ...] [--clear-params] [--json]
+  kent workflow edge add <workflow> --from <source-node-key> --transition <transition-key> --edge-key <edge-key> --to <target-node-key> --context new_session|continue_session|compact_and_continue_session [--requires-approval] [--context-source immediate_source|previous_target|previous_target_or_new|node:<node-key>] [--prompt <text>] [--transition-description <text>] [--param <key>=<description> ...] [--json]
+  kent workflow edge update <workflow> <edge-id> [--transition <transition-key>] [--transition-display-name <name>] [--transition-description <text>] [--edge-key <edge-key>] [--to <target-node-key>] [--context new_session|continue_session|compact_and_continue_session] [--requires-approval] [--context-source immediate_source|previous_target|previous_target_or_new|node:<node-key>] [--prompt <text>] [--param <key>=<description> ...] [--clear-params] [--json]
   kent workflow link <project> <workflow> [--default] [--json]
   kent workflow unlink <project> <workflow> [--json]
   kent workflow default <project> <workflow> [--json]
   kent workflow validate <workflow> [--mode draft|task_creation|execution] [--json]
   kent workflow inspect <workflow> [--json]
 
-What This Does:
-  Manage workflow definitions, graph nodes/edges, and project workflow links through the Kent server API.
-  Workflows describe durable automation pipelines: tasks start at a start node, agent nodes execute Kent runs, script nodes execute local server-side executables, and terminal nodes mark completion.
-  Use `workflow create`, add nodes/edges, link a workflow to a project, then create/start tasks with `kent task`.
-  Workflow references may be exact workflow ids or exact workflow names.
-  Default output is readable plaintext; pass --json for machine-readable output suited to scripting.
+Create reusable task workflows and link them to projects.
+
+A workflow begins at one start node, moves through agent or script nodes, and
+ends at a terminal node. Join nodes merge parallel branches.
+
+Typical setup:
+  1. Create the workflow.
+  2. Add nodes and edges.
+  3. Validate it.
+  4. Link it to a project.
+  5. Create and start tasks with `kent task`.
+
+Workflow references accept a workflow ID or exact name.
+For edge updates, use either `--param` or `--clear-params`, not both.
+Use `--json` when consuming command output from scripts.
