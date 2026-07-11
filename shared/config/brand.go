@@ -50,9 +50,7 @@ const (
 	// ServiceLaunchdLabel is the macOS launchd label (and plist base name).
 	ServiceLaunchdLabel = "sh.kent.server"
 	// ServiceSystemdUnitName is the Linux systemd user-unit name.
-	ServiceSystemdUnitName = "kent.service"
-	ServiceWindowsTaskName = Product + " Server"
-
+	ServiceSystemdUnitName    = "kent.service"
 	ServiceWindowsServiceName = Product + "Server"
 )
 
