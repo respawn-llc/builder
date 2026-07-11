@@ -807,6 +807,83 @@ func TestAskQuestionPickerMarkdownQuestionWrapsWithoutSourceMarkers(t *testing.T
 	}
 }
 
+func TestAskQuestionMarkdownLinksWrapIntoIndependentBoundedRows(t *testing.T) {
+	const target = "https://github.com/org/repo/pull/456"
+	m := newProjectedStaticUIModel()
+	m.termWidth = 24
+	m.termHeight = 12
+	m.windowSizeKnown = true
+	m.layout().syncViewport()
+	testSetActiveAsk(m, &askEvent{
+		req:   clientui.PendingPromptEvent{Question: "[PR #456](https://github.com/org/repo/pull/456)"},
+		reply: make(chan askReply, 1),
+	})
+	m.ask.input = "answer"
+	m.ask.inputCursor = len([]rune(m.ask.input))
+
+	wrapped, cursorLine := m.layout().wrappedAskPromptLines(12)
+	if cursorLine < 0 || wrapped[cursorLine].Line.Kind != askPromptLineKindInput {
+		t.Fatalf("cursor=%d should remain on answer input: %+v", cursorLine, wrapped)
+	}
+
+	var linked strings.Builder
+	for _, line := range wrapped {
+		if width := lipgloss.Width(line.Text); width > 12 {
+			t.Fatalf("line width=%d want <=12: %+v", width, line)
+		}
+		trace := traceTerminalHyperlinks(t, line.Text)
+		if line.Line.Kind == askPromptLineKindQuestion {
+			linked.WriteString(trace.linkedText(target))
+			continue
+		}
+		if len(trace.Events) != 0 {
+			t.Fatalf("non-question row inherited hyperlink metadata: %+v", line)
+		}
+	}
+	if got := linked.String(); !strings.Contains(got, "PR") || !strings.Contains(got, "#456") || !strings.Contains(got, target) {
+		t.Fatalf("linked visible content=%q want label and destination", got)
+	}
+}
+
+func TestAskQuestionPlainPRReferenceDoesNotCreateHyperlink(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	testSetActiveAsk(m, &askEvent{
+		req:   clientui.PendingPromptEvent{Question: "PR #456"},
+		reply: make(chan askReply, 1),
+	})
+
+	wrapped, _ := m.layout().wrappedAskPromptLines(12)
+	for _, line := range wrapped {
+		if line.Line.Kind != askPromptLineKindQuestion {
+			continue
+		}
+		if trace := traceTerminalHyperlinks(t, line.Text); len(trace.Events) != 0 {
+			t.Fatalf("plain PR reference emitted hyperlink events: %+v", trace.Events)
+		}
+	}
+}
+
+func TestAskQuestionOptionRowsDoNotInheritMarkdownHyperlinks(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	testSetActiveAsk(m, &askEvent{
+		req: clientui.PendingPromptEvent{
+			Question:    "[PR #456](https://github.com/org/repo/pull/456)",
+			Suggestions: []string{"Approve"},
+		},
+		reply: make(chan askReply, 1),
+	})
+
+	wrapped, _ := m.layout().wrappedAskPromptLines(12)
+	for _, line := range wrapped {
+		if line.Line.Kind == askPromptLineKindQuestion {
+			continue
+		}
+		if trace := traceTerminalHyperlinks(t, line.Text); len(trace.Events) != 0 {
+			t.Fatalf("option or hint row inherited hyperlink metadata: %+v", line)
+		}
+	}
+}
+
 func TestAskQuestionViewportPrioritizesAnswerOptionsOverQuestionLines(t *testing.T) {
 	m := newProjectedStaticUIModel()
 	m.termWidth = 56

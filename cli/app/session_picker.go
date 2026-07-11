@@ -9,10 +9,10 @@ import (
 	"core/shared/clientui"
 	sharedtheme "core/shared/theme"
 
+	"charm.land/glamour/v2"
+	glamouransi "charm.land/glamour/v2/ansi"
+	glamourstyles "charm.land/glamour/v2/styles"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
-	glamouransi "github.com/charmbracelet/glamour/ansi"
-	glamourstyles "github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 )
 
