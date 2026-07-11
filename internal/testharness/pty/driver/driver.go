@@ -85,11 +85,6 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 					})
 					mu.Unlock()
 				case <-ctx.Done():
-					eventErrors.Add(fmt.Errorf(
-						"dispatch required phase-relative PTY input for phase=%d: %w",
-						input.Phase,
-						ctx.Err(),
-					))
 				}
 			}()
 		}

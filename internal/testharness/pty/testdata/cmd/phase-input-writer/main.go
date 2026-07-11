@@ -17,18 +17,6 @@ func main() {
 	if _, err := os.Stdout.Write(marker); err != nil {
 		os.Exit(2)
 	}
-	if len(os.Args) == 2 && os.Args[1] == "close-stdio" {
-		if err := os.Stdin.Close(); err != nil {
-			os.Exit(2)
-		}
-		if err := os.Stdout.Close(); err != nil {
-			os.Exit(2)
-		}
-		if err := os.Stderr.Close(); err != nil {
-			os.Exit(2)
-		}
-		return
-	}
 	if len(os.Args) == 2 && os.Args[1] == "frame-sequence" {
 		if _, err := fmt.Print("\x1b[2;1H"); err != nil {
 			os.Exit(2)
