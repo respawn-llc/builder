@@ -3,19 +3,19 @@ Usage of kent project:
   kent project list
   kent project create --path <server-path> --name <project-name>
 
-What This Does:
-  Inspect or manage Kent project bindings.
-  `kent project [path]` prints the project id bound to `path` or the current directory.
-  `kent project list` lists projects known to the current server.
-  `kent project create` registers a new project for a server-visible workspace path.
+Find or create projects and their workspace attachments.
 
-Path Semantics:
-  For local loopback mode, paths are local filesystem paths.
-  For remote daemons, paths passed to `project create` must be visible on the server machine.
+Commands:
+  kent project [path]
+    Print the project ID attached to `path`. Defaults to the current directory.
+
+  kent project list
+    List projects available from the current server.
+
+  kent project create
+    Create a project and attach its first server-visible workspace.
 
 Examples:
   kent project
-  kent project ../other-checkout
   kent project list
   kent project create --path /srv/repos/app --name app
-

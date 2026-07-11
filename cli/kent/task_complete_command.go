@@ -473,17 +473,17 @@ func taskCompleteErrorMessage(err error) string {
 }
 
 func writeTaskCompleteUsage(stderr io.Writer) {
-	fs := newCommandFlagSet(config.Command+" task complete", stderr, taskCommandUsage)
-	fs.String("run", "", "active workflow run id to complete")
-	fs.String("session", "", "Kent session id whose active workflow run should be completed")
-	fs.String("task", "", "task id or short id whose active workflow run should be completed")
-	fs.String("project", ".", "project id or path for task short ids")
-	fs.String("transition", "", "workflow transition id")
-	fs.String("commentary", "", "transition commentary")
-	fs.String("param", "", "completion parameter as name=value; repeatable")
-	fs.String("json", "", "completion payload JSON; implies JSON response output")
-	fs.String("json-file", "", "path to completion payload JSON; implies JSON response output")
-	fs.Bool("force", false, "allow non-agent completion with an explicit selector")
+	fs := newCommandFlagSet(config.Command+" task complete", stderr, taskCompleteUsage)
+	fs.String("run", "", "active workflow run ID to complete")
+	fs.String("session", "", "session whose active workflow run should be completed")
+	fs.String("task", "", "task ID or short ID whose active workflow run should be completed")
+	fs.String("project", ".", "project ID or attached workspace path used to resolve a task short ID")
+	fs.String("transition", "", "selected transition key; required when the node has multiple transitions")
+	fs.String("commentary", "", "note recorded with the transition result")
+	fs.String("param", "", "transition value as name=value; repeatable")
+	fs.String("json", "", "complete from a JSON transition-result object and write the response as JSON")
+	fs.String("json-file", "", "read the JSON transition-result object from this file and write the response as JSON")
+	fs.Bool("force", false, "allow completion outside Kent shell commands with exactly one target selector")
 	fs.Usage()
 }
 

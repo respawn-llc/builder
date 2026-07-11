@@ -30,7 +30,7 @@ func serveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		stderr = io.Discard
 	}
 	serveFS := newCommandFlagSet(brand.Command+" serve", stderr, serveUsage)
-	persistenceRoot := serveFS.String("persistence-root", "", "config and data root directory (overrides KENT_PERSISTENCE_ROOT and the default ~/.kent)")
+	persistenceRoot := serveFS.String("persistence-root", "", persistenceRootFlagUsage)
 	if ok, exitCode := parseCommandFlags(serveFS, args); !ok {
 		return exitCode
 	}

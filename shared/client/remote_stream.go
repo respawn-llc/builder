@@ -78,6 +78,9 @@ func (c *Remote) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, 
 				if err := json.Unmarshal(frame.Params, &update); err != nil {
 					return serverapi.RunPromptResponse{}, err
 				}
+				if err := update.Validate(); err != nil {
+					return serverapi.RunPromptResponse{}, err
+				}
 				progress.PublishRunPromptProgress(update)
 			}
 			continue

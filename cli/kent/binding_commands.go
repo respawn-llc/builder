@@ -78,8 +78,8 @@ func projectListSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 
 func projectCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" project create", stderr, projectCreateUsage)
-	name := fs.String("name", "", "project display name")
-	path := fs.String("path", "", "server-visible workspace path")
+	name := fs.String("name", "", "project name")
+	path := fs.String("path", "", "existing workspace path on the Kent server")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -98,7 +98,7 @@ func projectCreateSubcommand(args []string, stdout io.Writer, stderr io.Writer) 
 
 func attachSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" attach", stderr, attachUsage)
-	projectID := fs.String("project", "", "explicit project id override")
+	projectID := fs.String("project", "", "project ID; defaults to the project attached to the current directory")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}

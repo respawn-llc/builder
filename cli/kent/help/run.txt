@@ -4,48 +4,30 @@ Usage:
   kent run stop [--persistence-root <root>] <session-id>
   kent run wait [--persistence-root <root>] [--output-mode=json] <session-id>
 
-What This Does:
-  Execute one headless prompt against a workspace without starting the TUI.
-  Kent creates or resumes a session, runs the prompt, prints the final answer, and exits.
+Run a headless subagent session. This will start a real Kent agent with optional specified role and a specific prompt to stay quieter during work.
 
-Requires a running server:
-  `kent run` is a client and never starts a server of its own. A server must
-  already be running. Start one with `kent serve` or install the background
-  service with `kent service install`. This lets many concurrent runs share one
-  server instead of each owning one that dies when it exits.
+- Headless subagents cannot ask questions and will try to work until they hit a blocker or do as much as they can.
+- For this command to work, a shared Kent server/service must be running (see relevant documentation).
+- Finalized assistant responses print as they are committed. Use `-q` or `--quiet` for final-result-only output.
+- New sessions print a ready-to-use `run steer` command after the run becomes steerable.
+- Prefer passing `--session <id>` (returned by the first run of the `run` command) to continue the previous session.
+- Prefer continuing sessions over starting new ones for re-reviews, continuation of work, follow-ups, discussion, and start new ones separate tasks.
+- If you're an agent, you can't control your own session.
 
-Session Selection:
-  `--session <id>` resumes an existing session.
-  `--continue <id>` is the same concept, optimized for chaining follow-up runs.
-  `--session` and `--continue` may both be provided only when they match.
-
-Live Controls:
-  `kent run steer <session-id> <message...>` queues a non-empty message into
-  an already-active run and prints `ok`. If the run is idle, use the suggested
-  `kent run --continue <session-id> <message>` command instead.
-  `kent run stop <session-id>` interrupts an active shared runtime and prints
-  `Stopped`; idle and nonexistent sessions print `No active run`.
-  `kent run wait <session-id>` waits for the active run's final answer and
-  prints the same final-text shape as `kent run`. `--output-mode=json` uses
-  the ordinary `kent run` JSON result object.
-  Live controls always require an explicit target session id, never read one
-  from KENT_SESSION_ID, and reject targeting their own KENT_SESSION_ID. Standard
-  input is not a live steering channel.
+Active-run controls:
+  `steer` queues a message for an active run.
+  `stop` interrupts an active run.
+  `wait` waits for an active run to finish.
 
 Subagents:
-  `--agent <role>` selects a named role from `[subagents.<role>]` in `~/.kent/config.toml`.
-  `--agent default` clears a resumed role and uses the base/default settings.
-  On locked sessions, `--agent` may only repeat the session's persisted role.
+  `--agent <role>` selects a named role from `[subagents.<role>]` section of the user configuration. For agents, available agents are the default (no flag), fast, and any listed in the developer reminder you received.
   `--fast` is shorthand for the built-in `fast` role.
-  `none` and `self` are not valid run-agent selectors.
 
 Examples:
   kent run "summarize the unstaged changes"
-  kent run --continue <session-id> "follow-up"
+  kent run --session <session-id> "follow-up"
   kent run steer <session-id> "use the safer migration path"
-  kent run stop <session-id>
   kent run wait --output-mode=json <session-id>
-  kent run --fast --output-mode=json "scan the repo and return JSON"
-  kent run --model gpt-5.6-terra "review this module"
+  kent run --fast "scan the repo"
 
 Flags:

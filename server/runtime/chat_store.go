@@ -786,7 +786,7 @@ func (s *transcriptDeliveryFactScan) ApplyLocalEntry(entry ChatEntry, projected 
 		return
 	}
 	if projected {
-		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry, transcriptCommittedStreamProjection); ok {
+		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry); ok {
 			s.rows = append(s.rows, fact)
 		}
 	} else {

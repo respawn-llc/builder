@@ -7,30 +7,41 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 )
 
-func shellInputSpans(line string, meta toolMeta) []Span {
+func shellInputSpans(line string, meta toolMeta, mode Mode) []Span {
+	attributes := []SpanAttribute{SpanAttributeFaint}
+	if mode == ModeDetailExpanded {
+		attributes = nil
+	}
 	if meta.RenderHint != nil && meta.RenderHint.Kind == transcript.ToolRenderKindPlain {
-		return []Span{SemanticSpan(line, StyleRoleToolShell, SpanAttributeFaint)}
+		return []Span{SemanticSpan(line, StyleRoleToolShell, attributes...)}
 	}
 	if meta.syntax == nil {
 		panic("render highlighted shell input without syntax projector")
 	}
-	return meta.syntax.highlight(shellSyntaxLexer(meta), line, SpanAttributeFaint)[0]
+	return meta.syntax.highlight(shellSyntaxLexer(meta), line, attributes...)[0]
 }
 
-func sourceResultLines(source string, width int, meta toolMeta) []Line {
+func sourceResultLines(source string, width int, meta toolMeta, mode Mode) []Line {
 	if meta.syntax == nil || meta.RenderHint == nil {
 		panic("render highlighted source result without syntax metadata")
 	}
 	highlighted := meta.syntax.highlight(
 		sourceSyntaxLexer(meta.RenderHint.Path, source),
 		source,
-		SpanAttributeFaint,
+		sourceResultAttributes(mode)...,
 	)
 	lines := make([]Line, 0, len(highlighted))
 	for _, spans := range highlighted {
 		lines = append(lines, wrapStyledLine(spans, width)...)
 	}
 	return lines
+}
+
+func sourceResultAttributes(mode Mode) []SpanAttribute {
+	if mode == ModeDetailExpanded {
+		return nil
+	}
+	return []SpanAttribute{SpanAttributeFaint}
 }
 
 func shellSyntaxLexer(meta toolMeta) chroma.Lexer {

@@ -90,7 +90,7 @@ func TestPromptServiceRunsPromptThroughPreparedRuntime(t *testing.T) {
 	if len(result.Warnings) != 1 || result.Warnings[0] != "warning one" {
 		t.Fatalf("unexpected warnings: %+v", result.Warnings)
 	}
-	if len(progresses) != 1 || progresses[0].Kind != serverapi.RunPromptProgressKindStatus {
+	if len(progresses) != 1 || progresses[0].Kind != serverapi.RunPromptProgressKindCompactionStarted {
 		t.Fatalf("unexpected progress events: %+v", progresses)
 	}
 	if launcher.runtime.logs[len(launcher.runtime.logs)-1] != "app.run_prompt.exit ok" {
@@ -157,7 +157,7 @@ type stubHeadlessPromptLauncher struct {
 func (s *stubHeadlessPromptLauncher) PrepareHeadlessPrompt(_ context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (PromptSessionRuntime, error) {
 	s.lastRequest = req
 	if progress != nil {
-		progress.PublishRunPromptProgress(serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindStatus, Message: "Prepared run context"})
+		progress.PublishRunPromptProgress(serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindCompactionStarted})
 	}
 	if s.runtime == nil {
 		s.runtime = &stubPromptSessionRuntime{}

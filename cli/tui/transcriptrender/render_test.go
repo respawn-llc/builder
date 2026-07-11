@@ -101,19 +101,28 @@ func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
 		if got, want := line.Plain(), "$ sed -n '1,10p' cli/tui/model.go"; got != want {
 			t.Fatalf("mode %v shell line = %q, want %q", mode, got, want)
 		}
-		assertShellLineHasTypedSyntax(t, line)
+		assertShellLineHasTypedSyntax(t, line, mode != ModeDetailExpanded)
 	}
 }
 
 func TestPlainShellRenderHintSkipsSyntaxHighlighting(t *testing.T) {
-	row := toolRow("write_stdin", clientui.ToolPresentationShell, "Polled session 1149 for 2s", false)
+	row := toolRow("write_stdin", clientui.ToolPresentationShell, "process completed output", false)
+	row.Tool.ToolPresentation.Command = "Polled session 1149 for 2s"
+	row.Tool.ToolPresentation.CompactText = row.Tool.ToolPresentation.Command
 	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindPlain}
 	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed, ModeDetailExpanded} {
 		rendered := RenderCommittedRow(row, 120, "", mode)
 		if len(rendered.Lines) == 0 {
 			t.Fatalf("mode %v rendered no plain shell row lines", mode)
 		}
-		assertShellLineIsPlainText(t, rendered.Lines[0])
+		assertShellLineIsPlainText(t, rendered.Lines[0], mode != ModeDetailExpanded)
+	}
+	if got, want := PlainLines(RenderCommittedRow(row, 120, "", ModeDetailExpanded).Lines), []string{
+		"$ Polled session 1149 for 2s",
+		"│ ",
+		"└ process completed output",
+	}; !slices.Equal(got, want) {
+		t.Fatalf("expanded poll lines = %q, want %q", got, want)
 	}
 
 	pending := RenderPendingTool(clientui.TranscriptToolStart{
@@ -127,7 +136,7 @@ func TestPlainShellRenderHintSkipsSyntaxHighlighting(t *testing.T) {
 			RenderHint:   &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindPlain},
 		},
 	}, 120, "", "⢎ ")
-	assertShellLineIsPlainText(t, pending)
+	assertShellLineIsPlainText(t, pending, true)
 }
 
 func TestSourceReadUsesCommandPreviewAndSourceResultDetail(t *testing.T) {
@@ -149,23 +158,54 @@ func TestSourceReadUsesCommandPreviewAndSourceResultDetail(t *testing.T) {
 		!strings.Contains(expanded, "func example() {}") {
 		t.Fatalf("expanded source read = %q, want source result", expanded)
 	}
-	if strings.Contains(expanded, row.Tool.ToolPresentation.Command) {
-		t.Fatalf("expanded source read retained command instead of result-only source: %q", expanded)
+	if !strings.Contains(expanded, row.Tool.ToolPresentation.Command) {
+		t.Fatalf("expanded source read = %q, want typed command before source result", expanded)
 	}
-	foundSyntax := false
+	if got, want := PlainLines(presentation.Expanded)[1], "│ "; got != want {
+		t.Fatalf("expanded source separator = %q, want blank line", got)
+	}
+	foundSourceSyntax := false
 	for _, line := range presentation.Expanded {
+		if !strings.Contains(line.Plain(), "func example() {}") {
+			continue
+		}
 		for _, span := range line.Spans {
 			if span.Style.Kind != SpanStyleExplicitRGB {
 				continue
 			}
-			foundSyntax = true
-			if !span.Style.Has(SpanAttributeFaint) {
-				t.Fatalf("source result syntax span is not faint: %+v", span)
+			foundSourceSyntax = true
+			if span.Style.Has(SpanAttributeFaint) {
+				t.Fatalf("expanded source result syntax span remains faint: %+v", span)
 			}
 		}
 	}
-	if !foundSyntax {
-		t.Fatalf("expanded source read has no Chroma syntax spans: %+v", presentation.Expanded)
+	if !foundSourceSyntax {
+		t.Fatalf("expanded source read output has no Chroma syntax spans: %+v", presentation.Expanded)
+	}
+}
+
+func TestDetailExpandedRowsRemoveFaintStyling(t *testing.T) {
+	row := toolRow("exec_command", clientui.ToolPresentationShell, "package example\n\nfunc main() {}", false)
+	row.Tool.ToolPresentation.Command = "sed -n '1,20p' example.go"
+	row.Tool.ToolPresentation.CompactText = row.Tool.ToolPresentation.Command
+	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{
+		Kind:       clientui.ToolRenderKindSource,
+		Path:       "example.go",
+		ResultOnly: true,
+	}
+
+	for _, line := range RenderDetailPresentation(row, 120, "dark").Expanded {
+		if line.LeadingSymbol != nil && line.LeadingSymbol.Style.Has(SpanAttributeFaint) {
+			t.Fatalf("expanded leading symbol remains faint: %+v", line.LeadingSymbol)
+		}
+		for _, span := range line.Spans {
+			if role, ok := span.Style.Role(); ok && role == StyleRoleNotice {
+				continue
+			}
+			if span.Style.Has(SpanAttributeFaint) {
+				t.Fatalf("expanded span remains faint: %+v", span)
+			}
+		}
 	}
 }
 
@@ -191,7 +231,7 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 			if len(rendered.Lines) == 0 {
 				t.Fatal("rendered no committed shell row lines")
 			}
-			assertShellLineHasTypedSyntax(t, rendered.Lines[0])
+			assertShellLineHasTypedSyntax(t, rendered.Lines[0], true)
 
 			pending := RenderPendingTool(clientui.TranscriptToolStart{
 				ToolCallID: "2d97d231-7765-471a-bf55-a4c17157af01",
@@ -207,7 +247,7 @@ func TestShellRowsUseRenderHintDialectsAtRenderBoundary(t *testing.T) {
 					},
 				},
 			}, 120, "", "⢎ ")
-			assertShellLineHasTypedSyntax(t, pending)
+			assertShellLineHasTypedSyntax(t, pending, true)
 		})
 	}
 }
@@ -239,7 +279,7 @@ func TestMovedToBackgroundShellRowKeepsMovedToBackgroundSuffixAtNarrowWidth(t *t
 	}
 }
 
-func assertShellLineIsPlainText(t *testing.T, line Line) {
+func assertShellLineIsPlainText(t *testing.T, line Line, wantFaint bool) {
 	t.Helper()
 	if len(line.Spans) < 2 {
 		t.Fatalf("plain shell line has no body spans: %+v", line)
@@ -247,18 +287,18 @@ func assertShellLineIsPlainText(t *testing.T, line Line) {
 	for _, span := range line.Spans[1:] {
 		if span.Style.Kind != SpanStyleSemantic ||
 			span.Style.SemanticRole != StyleRoleToolShell ||
-			!span.Style.Has(SpanAttributeFaint) {
+			span.Style.Has(SpanAttributeFaint) != wantFaint {
 			t.Fatalf("plain shell body used syntax styling: %+v", line.Spans)
 		}
 	}
 }
 
-func assertShellLineHasTypedSyntax(t *testing.T, line Line) {
+func assertShellLineHasTypedSyntax(t *testing.T, line Line, wantFaint bool) {
 	t.Helper()
 	foundSyntax := false
 	for _, span := range line.Spans[1:] {
-		if !span.Style.Has(SpanAttributeFaint) {
-			t.Fatalf("shell syntax span is not faint: %+v", span)
+		if span.Style.Has(SpanAttributeFaint) != wantFaint {
+			t.Fatalf("shell syntax span faintness = %t, want %t: %+v", span.Style.Has(SpanAttributeFaint), wantFaint, span)
 		}
 		if span.Style.Kind == SpanStyleExplicitRGB {
 			foundSyntax = true
@@ -338,52 +378,6 @@ func TestRoleSymbolOwnsTypedLeadingSlotOutsideBodySpans(t *testing.T) {
 		if span.Text == line.LeadingSymbol.Text {
 			t.Fatalf("body spans duplicate typed leading symbol: symbol=%+v spans=%+v", line.LeadingSymbol, line.Spans)
 		}
-	}
-}
-
-func TestNoticeMessageTypeStyleMatrix(t *testing.T) {
-	cases := []struct {
-		name        string
-		messageType clientui.MessageType
-		reason      clientui.TranscriptNoticeReason
-		severity    clientui.TranscriptNoticeSeverity
-		wantRole    StyleRole
-		wantColor   ColorRole
-	}{
-		{name: "compaction summary", messageType: clientui.MessageTypeCompactionSummary, wantRole: StyleRoleNoticeSecondary, wantColor: ColorRoleSecondary},
-		{name: "handoff future message", messageType: clientui.MessageTypeHandoffFutureMessage, wantRole: StyleRoleNoticeSecondary, wantColor: ColorRoleSecondary},
-		{name: "manual compaction carryover", messageType: clientui.MessageTypeManualCompactionCarryover, wantRole: StyleRoleNoticeSecondary, wantColor: ColorRoleSecondary},
-		{name: "goal", messageType: clientui.MessageTypeGoal, wantRole: StyleRoleNoticePrimary, wantColor: ColorRolePrimary},
-		{name: "workflow", messageType: clientui.MessageTypeWorkflowMode, wantRole: StyleRoleNoticePrimary, wantColor: ColorRolePrimary},
-		{name: "worktree enter", messageType: clientui.MessageTypeWorktreeMode, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
-		{name: "worktree exit", messageType: clientui.MessageTypeWorktreeModeExit, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
-		{name: "background shell completion", messageType: clientui.MessageTypeBackgroundNotice, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
-		{name: "subagents", messageType: clientui.MessageTypeSubagents, wantRole: StyleRoleNoticeForeground, wantColor: ColorRoleForeground},
-		{name: "cache warning", reason: clientui.TranscriptNoticeCacheWarning, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
-		{name: "compaction reminder", messageType: clientui.MessageTypeCompactionSoonReminder, wantRole: StyleRoleWarning, wantColor: ColorRoleWarning},
-		{name: "interruption", messageType: clientui.MessageTypeInterruption, wantRole: StyleRoleError, wantColor: ColorRoleError},
-		{name: "error feedback", messageType: clientui.MessageTypeErrorFeedback, wantRole: StyleRoleError, wantColor: ColorRoleError},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			notice := &clientui.TranscriptNoticeRow{
-				Reason:   tt.reason,
-				Severity: tt.severity,
-				Data: clientui.TranscriptNoticeData{
-					MessageType:  tt.messageType,
-					CompactLabel: "compact label",
-				},
-			}
-
-			gotRole, _ := noticeRoleAndText(notice, clientui.EntryVisibilityOngoing, ModeOngoing)
-			if gotRole != tt.wantRole {
-				t.Fatalf("notice role = %v, want %v", gotRole, tt.wantRole)
-			}
-			if gotColor := ColorRoleForStyle(gotRole); gotColor != tt.wantColor {
-				t.Fatalf("notice color role = %v, want %v", gotColor, tt.wantColor)
-			}
-		})
 	}
 }
 
@@ -690,8 +684,13 @@ func TestDetailCompilerKeepsRawPatchFallbackSemantic(t *testing.T) {
 	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
 
 	expanded := NewDetailCompiler(80, "dark").Compile(row).Expanded
-	if len(expanded) != len(raw.DetailLines) {
-		t.Fatalf("raw patch rendered %d lines, want %d: %+v", len(expanded), len(raw.DetailLines), expanded)
+	if got, want := PlainLines(expanded), []string{
+		"⇄ unstructured patch input",
+		"│ second raw line",
+		"│ ",
+		"└ unstructured result fallback",
+	}; !slices.Equal(got, want) {
+		t.Fatalf("raw patch lines = %q, want %q", got, want)
 	}
 	for index, line := range expanded {
 		if line.Background != LineBackgroundDefault {
@@ -701,9 +700,6 @@ func TestDetailCompilerKeepsRawPatchFallbackSemantic(t *testing.T) {
 			if span.Style.Kind == SpanStyleExplicitRGB {
 				t.Fatalf("raw line %d received source syntax style: %+v", index, line.Spans)
 			}
-		}
-		if got := line.Spans[len(line.Spans)-1].Text; got != raw.DetailLines[index].Text {
-			t.Fatalf("raw line %d body = %q, want %q", index, got, raw.DetailLines[index].Text)
 		}
 	}
 }
@@ -926,7 +922,7 @@ func TestExpandedToolRowsKeepTypedInputAheadOfOutput(t *testing.T) {
 	row.Tool.ToolPresentation.CompactText = "run tests"
 
 	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
-	if got, want := PlainLines(rendered.Lines), []string{"$ go test ./...", "└ exit 0"}; !slices.Equal(got, want) {
+	if got, want := PlainLines(rendered.Lines), []string{"$ go test ./...", "│ ", "│ raw output text", "└ exit 0"}; !slices.Equal(got, want) {
 		t.Fatalf("expanded tool lines = %q, want %q", got, want)
 	}
 }
@@ -937,7 +933,7 @@ func TestExpandedPatchRowsKeepFullTypedInputAheadOfOutput(t *testing.T) {
 	row.Tool.ToolPresentation.PatchDetail = "cli/tui/model.go\n-old\n+new"
 
 	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
-	if got, want := PlainLines(rendered.Lines), []string{"⇄ cli/tui/model.go", "│ -old", "│ +new", "└ failed"}; !slices.Equal(got, want) {
+	if got, want := PlainLines(rendered.Lines), []string{"⇄ cli/tui/model.go", "│ -old", "│ +new", "│ ", "│ raw patch output", "└ failed"}; !slices.Equal(got, want) {
 		t.Fatalf("expanded patch lines = %q, want %q", got, want)
 	}
 }

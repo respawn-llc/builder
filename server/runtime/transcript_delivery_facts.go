@@ -22,13 +22,6 @@ const (
 	TranscriptCommittedRowFactNotice    TranscriptCommittedRowFactKind = "notice"
 )
 
-type transcriptChatEntryProjection uint8
-
-const (
-	transcriptCommittedStreamProjection transcriptChatEntryProjection = iota
-	transcriptBoundedDetailProjection
-)
-
 type TranscriptCommittedRowFact struct {
 	Visibility transcript.EntryVisibility
 	Integrity  transcript.RowIntegrity
@@ -107,7 +100,7 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 			return nil
 		}
 		if evt.LocalEntryProjected {
-			if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry, transcriptCommittedStreamProjection); ok {
+			if fact, ok := transcriptCommittedRowFactFromChatEntry(*evt.LocalEntry); ok {
 				return []TranscriptCommittedRowFact{fact}
 			}
 			return nil
@@ -135,7 +128,7 @@ func TranscriptCommittedRowFactsFromSnapshot(snapshot ChatSnapshot) []Transcript
 			transcript.IsNoopFinalText(entry.Text) {
 			continue
 		}
-		fact, ok := transcriptCommittedRowFactFromChatEntry(entry, transcriptBoundedDetailProjection)
+		fact, ok := transcriptCommittedRowFactFromChatEntry(entry)
 		if ok {
 			facts = append(facts, fact)
 		}
@@ -247,7 +240,7 @@ func transcriptCommittedEntryCountFromMessage(msg llm.Message, completions map[s
 	return count
 }
 
-func transcriptCommittedRowFactFromChatEntry(entry ChatEntry, projection transcriptChatEntryProjection) (TranscriptCommittedRowFact, bool) {
+func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
 	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
 	if visibility == transcript.EntryVisibilityHidden {
 		return TranscriptCommittedRowFact{}, false
@@ -282,10 +275,9 @@ func transcriptCommittedRowFactFromChatEntry(entry ChatEntry, projection transcr
 			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing), integrity),
 			Integrity:  integrity,
 		}, true
-	case "tool_call", "tool_result_ok", "tool_result_error":
-		if role == "tool_call" && projection == transcriptCommittedStreamProjection {
-			return TranscriptCommittedRowFact{}, false
-		}
+	case "tool_call":
+		return TranscriptCommittedRowFact{}, false
+	case "tool_result_ok", "tool_result_error":
 		if strings.TrimSpace(entry.ToolCallID) == "" {
 			return transcriptNoticeRowFactFromChatEntry(entry)
 		}

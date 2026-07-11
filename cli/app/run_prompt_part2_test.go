@@ -40,13 +40,16 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 	stopServer := startStandingRunPromptServer(t, workspace, server.URL)
 	defer stopServer()
 
+	var progresses []serverapi.RunPromptProgress
 	result, err := RunPrompt(context.Background(), Options{
 		WorkspaceRoot:         workspace,
 		WorkspaceRootExplicit: true,
 		Model:                 "gpt-5",
 		OpenAIBaseURL:         server.URL,
 		OpenAIBaseURLExplicit: true,
-	}, "hello from user", 0, nil)
+	}, "hello from user", 0, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
+		progresses = append(progresses, progress)
+	}))
 	if err != nil {
 		t.Fatalf("RunPrompt: %v", err)
 	}
@@ -55,6 +58,17 @@ func TestRunPromptCreatesSessionAndPersistsDurableTranscript(t *testing.T) {
 	}
 	if strings.TrimSpace(result.SessionID) == "" {
 		t.Fatal("expected session id")
+	}
+	if len(progresses) < 2 {
+		t.Fatalf("progress events = %+v, want session start and assistant response", progresses)
+	}
+	started := progresses[0].SessionStarted
+	if progresses[0].Kind != serverapi.RunPromptProgressKindSessionStarted || started == nil || started.SessionID.String() != result.SessionID {
+		t.Fatalf("first progress event = %+v, want new session %q", progresses[0], result.SessionID)
+	}
+	last := progresses[len(progresses)-1].AssistantMessage
+	if progresses[len(progresses)-1].Kind != serverapi.RunPromptProgressKindAssistantMessage || last == nil || last.Content != result.Result {
+		t.Fatalf("last progress event = %+v, want assistant result", progresses[len(progresses)-1])
 	}
 	if !strings.HasSuffix(result.SessionName, " "+subagentSessionSuffix) {
 		t.Fatalf("expected subagent session name, got %q", result.SessionName)

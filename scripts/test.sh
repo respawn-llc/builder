@@ -389,3 +389,5 @@ fi
 if target_selected desktop; then
     run_desktop_tests
 fi
+
+printf 'pass\n'

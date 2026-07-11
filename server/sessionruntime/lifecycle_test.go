@@ -53,6 +53,7 @@ func newRuntimeServiceFixture(t *testing.T) (sessionRuntimeFixture, *registry.Ru
 	fixture := newSessionRuntimeFixture(t)
 	reg := registry.NewRuntimeRegistry()
 	fixture.service.runtimes = reg
+	reg.SetInterestObserver(fixture.service.runtimeInterestChanged)
 	return fixture, reg
 }
 

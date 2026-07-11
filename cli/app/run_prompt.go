@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -23,7 +21,7 @@ type RunPromptResult struct {
 	Warnings    []string
 }
 
-func runPrompt(ctx context.Context, client client.RunPromptClient, opts Options, initialSessionID, prompt string, timeout time.Duration, progress io.Writer) (RunPromptResult, error) {
+func runPrompt(ctx context.Context, client client.RunPromptClient, opts Options, initialSessionID, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
 	response, err := client.RunPrompt(ctx, serverapi.RunPromptRequest{
 		ClientRequestID:   uuid.NewString(),
 		SelectedSessionID: strings.TrimSpace(initialSessionID),
@@ -31,7 +29,7 @@ func runPrompt(ctx context.Context, client client.RunPromptClient, opts Options,
 		Prompt:            prompt,
 		Timeout:           timeout,
 		Overrides:         runPromptOverridesFromOptions(opts),
-	}, runPromptIOProgressSink{writer: progress})
+	}, progress)
 	result := RunPromptResult{
 		SessionID:   response.SessionID,
 		SessionName: response.SessionName,
@@ -63,19 +61,4 @@ func runPromptOverridesFromOptions(opts Options) serverapi.RunPromptOverrides {
 		Tools:               strings.TrimSpace(opts.Tools),
 		OpenAIBaseURL:       strings.TrimSpace(opts.OpenAIBaseURL),
 	}
-}
-
-type runPromptIOProgressSink struct {
-	writer io.Writer
-}
-
-func (s runPromptIOProgressSink) PublishRunPromptProgress(progress serverapi.RunPromptProgress) {
-	if s.writer == nil {
-		return
-	}
-	message := strings.TrimSpace(progress.Message)
-	if message == "" {
-		return
-	}
-	_, _ = fmt.Fprintln(s.writer, message)
 }

@@ -6,10 +6,10 @@ Usage of kent service:
   kent service stop
   kent service restart [--if-installed]
 
-What This Does:
-  Run one shared local `kent serve` as a background service that starts at login.
-  Lifecycle commands that stop or restart the service are refused inside Kent shell commands; use `install --no-start` or `uninstall --keep-running` for registration-only changes there.
+Run one shared user-scoped Kent server in the background and start it at login.
+The server will orchestrate all agents that connect to it and that belong to its persistence root.
+See kent.sh/server.md for more details.
 
-Windows Notes:
-  `install` and `uninstall` prompt for Administrator elevation; other commands need no elevation.
-  `uninstall --keep-running` is not supported; the server is bound to the service and stops with it.
+If you are an agent, you may not restart, stop, reinstall, or kill the Kent service, because YOU are run by it and this will kill YOU and disrupt all other agents. Do not try to circumvent this; ask the user to run the necessary commands instead. You may safely uninstall the server with --keep-running, and install with --no-start.
+
+On Windows, install and uninstall require Administrator elevation, and `uninstall --keep-running` is unavailable.

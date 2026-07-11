@@ -7,7 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"core/shared/clientui"
 	"core/shared/config"
+
+	"github.com/google/uuid"
 )
 
 type RunPromptRequest struct {
@@ -111,16 +114,41 @@ type RunPromptResponse struct {
 }
 
 type RunPromptProgress struct {
-	Kind    RunPromptProgressKind
-	Message string
+	Kind             RunPromptProgressKind
+	SessionStarted   *RunPromptSessionStarted  `json:",omitempty"`
+	AssistantMessage *RunPromptVisibleResponse `json:",omitempty"`
+	SteeredMessage   *RunPromptSteeredMessage  `json:",omitempty"`
+	Failure          *RunPromptFailure         `json:",omitempty"`
 }
 
 type RunPromptProgressKind string
 
 const (
-	RunPromptProgressKindStatus  RunPromptProgressKind = "status"
-	RunPromptProgressKindWarning RunPromptProgressKind = "warning"
+	RunPromptProgressKindSessionStarted    RunPromptProgressKind = "session_started"
+	RunPromptProgressKindAssistantMessage  RunPromptProgressKind = "assistant_message"
+	RunPromptProgressKindSteeredMessage    RunPromptProgressKind = "steered_message"
+	RunPromptProgressKindCompactionStarted RunPromptProgressKind = "compaction_started"
+	RunPromptProgressKindCompactionFailed  RunPromptProgressKind = "compaction_failed"
+	RunPromptProgressKindRunLoggingFailed  RunPromptProgressKind = "run_logging_failed"
+	RunPromptProgressKindRunCleanupFailed  RunPromptProgressKind = "run_cleanup_failed"
 )
+
+type RunPromptSessionStarted struct {
+	SessionID uuid.UUID
+}
+
+type RunPromptVisibleResponse struct {
+	Phase   clientui.MessagePhase
+	Content string
+}
+
+type RunPromptSteeredMessage struct {
+	Content string
+}
+
+type RunPromptFailure struct {
+	Error *string `json:",omitempty"`
+}
 
 type RunPromptProgressSink interface {
 	PublishRunPromptProgress(RunPromptProgress)
@@ -132,4 +160,43 @@ func (fn RunPromptProgressFunc) PublishRunPromptProgress(progress RunPromptProgr
 	if fn != nil {
 		fn(progress)
 	}
+}
+
+func (p RunPromptProgress) Validate() error {
+	switch p.Kind {
+	case RunPromptProgressKindSessionStarted:
+		if p.SessionStarted == nil {
+			return errors.New("session_started payload is required")
+		}
+		if p.SessionStarted.SessionID == uuid.Nil || p.SessionStarted.SessionID.Version() != 4 {
+			return errors.New("session_started.session_id must be a UUIDv4")
+		}
+	case RunPromptProgressKindAssistantMessage:
+		if p.AssistantMessage == nil {
+			return errors.New("assistant_message payload is required")
+		}
+		switch p.AssistantMessage.Phase {
+		case clientui.MessagePhaseCommentary, clientui.MessagePhaseFinal:
+		default:
+			return errors.New("assistant_message.phase is invalid")
+		}
+		if strings.TrimSpace(p.AssistantMessage.Content) == "" {
+			return errors.New("assistant_message.content is required")
+		}
+	case RunPromptProgressKindSteeredMessage:
+		if p.SteeredMessage == nil || strings.TrimSpace(p.SteeredMessage.Content) == "" {
+			return errors.New("steered_message.content is required")
+		}
+	case RunPromptProgressKindCompactionStarted:
+	case RunPromptProgressKindCompactionFailed, RunPromptProgressKindRunLoggingFailed, RunPromptProgressKindRunCleanupFailed:
+		if p.Failure == nil {
+			return errors.New("failure payload is required")
+		}
+		if p.Failure.Error != nil && strings.TrimSpace(*p.Failure.Error) == "" {
+			return errors.New("failure.error must not be blank")
+		}
+	default:
+		return fmt.Errorf("invalid run prompt progress kind %q", p.Kind)
+	}
+	return nil
 }

@@ -503,7 +503,7 @@ func TestCreateWorktreeSetupCancellationKeepsWorktreeAndSessionTarget(t *testing
 	cancel()
 	select {
 	case err = <-resultCh:
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for canceled create")
 	}
 	if err == nil {

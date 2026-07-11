@@ -9,6 +9,7 @@ import (
 
 	"core/server/auth"
 	"core/server/launch"
+	"core/server/llm"
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runlog"
@@ -108,7 +109,22 @@ func (l *headlessPromptLauncher) PrepareHeadlessPrompt(ctx context.Context, req 
 	if err != nil {
 		return nil, err
 	}
-	return &headlessPromptRuntime{plan: runtimePlan, warnings: result.Warnings, history: l.boot.PromptHistory}, nil
+	var sessionStarted *serverapi.RunPromptSessionStarted
+	if strings.TrimSpace(req.SelectedSessionID) == "" {
+		sessionID, err := uuid.Parse(runtimePlan.sessionID)
+		if err != nil || sessionID.Version() != 4 {
+			runtimePlan.CloseWithFailure(true)
+			return nil, fmt.Errorf("new headless session id %q is not a UUIDv4", runtimePlan.sessionID)
+		}
+		sessionStarted = &serverapi.RunPromptSessionStarted{SessionID: sessionID}
+	}
+	return &headlessPromptRuntime{
+		plan:           runtimePlan,
+		warnings:       result.Warnings,
+		history:        l.boot.PromptHistory,
+		progress:       progress,
+		sessionStarted: sessionStarted,
+	}, nil
 }
 
 type headlessRuntimePlan struct {
@@ -142,9 +158,13 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	sessionID := plan.Store.Meta().SessionID
 	ownerID := uuid.NewString()
 	diagLogger, err := runlog.NewRunLogger(plan.Store.Dir(), func(diag runlog.RunLoggerDiagnostic) {
-		if progress != nil {
-			progress.PublishRunPromptProgress(serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindWarning, Message: "Run logging degraded"})
+		if progress == nil {
+			return
 		}
+		progress.PublishRunPromptProgress(serverapi.RunPromptProgress{
+			Kind:    serverapi.RunPromptProgressKindRunLoggingFailed,
+			Failure: runPromptFailure(diag.Message),
+		})
 	})
 	if err != nil {
 		return nil, err
@@ -251,9 +271,11 @@ func headlessRuntimeWorkdir(plan launch.SessionPlan) string {
 }
 
 type headlessPromptRuntime struct {
-	plan     *headlessRuntimePlan
-	warnings []string
-	history  promptHistoryStore
+	plan           *headlessRuntimePlan
+	warnings       []string
+	history        promptHistoryStore
+	progress       serverapi.RunPromptProgressSink
+	sessionStarted *serverapi.RunPromptSessionStarted
 }
 
 func (r *headlessPromptRuntime) RecordPromptHistory(ctx context.Context, clientRequestID string, prompt string) error {
@@ -281,6 +303,9 @@ func (r *headlessPromptRuntime) SubmitUserMessage(ctx context.Context, prompt st
 			var waitStartErr error
 			assistant, submitErr := r.plan.engine.SubmitUserMessageWithHooks(runCtx, prompt, func() {
 				waitHandle, waitStartErr = r.plan.engine.CaptureActiveRunResult(runCtx)
+				if waitStartErr == nil {
+					r.publishSessionStarted()
+				}
 			}, nil)
 			content = assistant.Content
 			sessionName = r.plan.engine.SessionName()
@@ -309,6 +334,19 @@ func (r *headlessPromptRuntime) SubmitUserMessage(ctx context.Context, prompt st
 		DroppedEvents: dropped,
 	}, err
 }
+
+func (r *headlessPromptRuntime) publishSessionStarted() {
+	if r == nil || r.progress == nil || r.sessionStarted == nil {
+		return
+	}
+	started := r.sessionStarted
+	r.sessionStarted = nil
+	r.progress.PublishRunPromptProgress(serverapi.RunPromptProgress{
+		Kind:           serverapi.RunPromptProgressKindSessionStarted,
+		SessionStarted: started,
+	})
+}
+
 func (r *headlessPromptRuntime) Logf(format string, args ...any) {
 	r.plan.diagLogger.Logf(format, args...)
 }
@@ -345,21 +383,58 @@ func PublishRunPromptProgress(progress serverapi.RunPromptProgressSink, evt runt
 
 func RunPromptProgressFromRuntimeEvent(evt runtime.Event) (serverapi.RunPromptProgress, bool) {
 	switch evt.Kind {
-	case runtime.EventToolCallStarted:
-		return serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindStatus, Message: "Running tool"}, true
-	case runtime.EventToolCallCompleted:
-		return serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindStatus, Message: "Tool finished"}, true
-	case runtime.EventReviewerCompleted:
-		return serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindStatus, Message: "Review finished"}, true
+	case runtime.EventAssistantMessage:
+		content := evt.Message.Content
+		if evt.Message.Role != llm.RoleAssistant || strings.TrimSpace(content) == "" {
+			return serverapi.RunPromptProgress{}, false
+		}
+		switch evt.Message.Phase {
+		case llm.MessagePhaseCommentary, llm.MessagePhaseFinal:
+		default:
+			return serverapi.RunPromptProgress{}, false
+		}
+		return serverapi.RunPromptProgress{
+			Kind: serverapi.RunPromptProgressKindAssistantMessage,
+			AssistantMessage: &serverapi.RunPromptVisibleResponse{
+				Phase:   evt.Message.Phase,
+				Content: content,
+			},
+		}, true
 	case runtime.EventCompactionStarted:
-		return serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindStatus, Message: "Compacting context"}, true
-	case runtime.EventCompactionCompleted:
-		return serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindStatus, Message: "Context compaction finished"}, true
+		return serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindCompactionStarted}, true
 	case runtime.EventCompactionFailed:
-		return serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindWarning, Message: "Context compaction failed"}, true
+		var detail string
+		if evt.Compaction != nil {
+			detail = evt.Compaction.Error
+		}
+		return serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindCompactionFailed, Failure: runPromptFailure(detail)}, true
 	case runtime.EventInFlightClearFailed:
-		return serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindWarning, Message: "Run cleanup warning"}, true
+		return serverapi.RunPromptProgress{
+			Kind:    serverapi.RunPromptProgressKindRunCleanupFailed,
+			Failure: runPromptFailure(evt.Error),
+		}, true
+	case runtime.EventQueuedUserMessageStatus:
+		status := evt.QueuedUserMessageStatus
+		if status == nil || status.Status != runtime.QueuedUserMessageAccepted {
+			return serverapi.RunPromptProgress{}, false
+		}
+		content := status.RestoreText
+		if strings.TrimSpace(content) == "" {
+			return serverapi.RunPromptProgress{}, false
+		}
+		return serverapi.RunPromptProgress{
+			Kind:           serverapi.RunPromptProgressKindSteeredMessage,
+			SteeredMessage: &serverapi.RunPromptSteeredMessage{Content: content},
+		}, true
 	default:
 		return serverapi.RunPromptProgress{}, false
 	}
+}
+
+func runPromptFailure(raw string) *serverapi.RunPromptFailure {
+	detail := strings.TrimSpace(raw)
+	if detail == "" {
+		return &serverapi.RunPromptFailure{}
+	}
+	return &serverapi.RunPromptFailure{Error: &detail}
 }

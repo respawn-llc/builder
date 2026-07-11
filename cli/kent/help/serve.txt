@@ -1,16 +1,8 @@
 Usage of kent serve:
   kent serve [flags]
 
-What This Does:
-  Start the Kent app server and keep serving until interrupted.
-  This is for daemon/server mode, not for running one prompt interactively.
-
-Notes:
-  `kent serve` is workspace-agnostic at startup.
-  Session config is resolved from each session workspace: defaults, ~/.kent, env, <workspace>/.kent.
-
-Examples:
-  kent serve
-  kent project create --path /srv/repos/app --name app
+Run the Kent server in the foreground until interrupted. 
+The server will orchestrate all agents that connect to it and that belong to its persistence root.
+See kent.sh/server.md for more details.
 
 Flags:

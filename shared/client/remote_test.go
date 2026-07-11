@@ -64,10 +64,16 @@ func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
 		if req.Method != protocol.MethodRunPrompt {
 			t.Fatalf("run prompt method = %q", req.Method)
 		}
-		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodRunPromptProgress, Params: mustJSON(t, serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindStatus, Message: "Running tool"})}); err != nil {
+		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodRunPromptProgress, Params: mustJSON(t, serverapi.RunPromptProgress{
+			Kind: serverapi.RunPromptProgressKindAssistantMessage,
+			AssistantMessage: &serverapi.RunPromptVisibleResponse{
+				Phase:   clientui.MessagePhaseCommentary,
+				Content: "Checking the repository.",
+			},
+		})}); err != nil {
 			t.Fatalf("send progress: %v", err)
 		}
-		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodRunPromptProgress, Params: mustJSON(t, serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindStatus, Message: "Tool finished"})}); err != nil {
+		if err := websocket.JSON.Send(ws, protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: protocol.MethodRunPromptProgress, Params: mustJSON(t, serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindCompactionStarted})}); err != nil {
 			t.Fatalf("send progress: %v", err)
 		}
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.RunPromptResponse{SessionID: "session-1", SessionName: "Session 1", Result: "done"})); err != nil {
@@ -91,7 +97,10 @@ func TestRemoteRunPromptPublishesProgressNotifications(t *testing.T) {
 	if resp.SessionID != "session-1" || resp.Result != "done" {
 		t.Fatalf("unexpected run prompt response: %+v", resp)
 	}
-	if len(updates) != 2 || updates[0].Message != "Running tool" || updates[1].Message != "Tool finished" {
+	if len(updates) != 2 ||
+		updates[0].AssistantMessage == nil ||
+		updates[0].AssistantMessage.Content != "Checking the repository." ||
+		updates[1].Kind != serverapi.RunPromptProgressKindCompactionStarted {
 		t.Fatalf("unexpected progress updates: %+v", updates)
 	}
 }

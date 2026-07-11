@@ -301,6 +301,12 @@ func TestQueueUserMessageForActiveRunRejectsIdleWithoutBeforeQueue(t *testing.T)
 func TestQueueUserMessageForActiveRunAdmissionKeepsGroupOpenAcrossStepFinish(t *testing.T) {
 	store := mustCreateTestSession(t)
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng.pauseQueuedUserAutoDrain()
+	t.Cleanup(func() {
+		if err := eng.Close(); err != nil {
+			t.Errorf("close engine: %v", err)
+		}
+	})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 
 	stepStarted := make(chan struct{})

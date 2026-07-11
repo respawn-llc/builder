@@ -18,7 +18,8 @@
     "format:write": "prettier --write .",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "../../scripts/build-desktop.sh --skip-install"
+    "tauri:build": "../../scripts/build-desktop.sh --skip-install",
+    "tauri:install": "../../scripts/build-desktop.sh --install"
   },
   "dependencies": {
     "@app/native-bridge": "workspace:*",

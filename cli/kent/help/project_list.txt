@@ -1,10 +1,1 @@
-Usage of kent project list:
-  kent project list
-
-What This Does:
-  List projects known to the current Kent server.
-  Output columns are: project id, display name, and root path.
-
-Examples:
-  kent project list
-
+List the current server's projects. Use to get project IDs for further queries.

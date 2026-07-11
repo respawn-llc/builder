@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"core/cli/app/internal/daemonlaunch"
 	"core/cli/app/internal/remoteattach"
@@ -9,7 +8,6 @@ import (
 	"core/server/authservice"
 	"core/server/launch"
 	"core/server/runprompt"
-	"core/server/runtime"
 	"core/server/session"
 	serverstartup "core/server/startup"
 	askquestion "core/server/tools"
@@ -491,25 +489,6 @@ func TestEnsureSubagentSessionNamePreservesExistingName(t *testing.T) {
 
 	if got := store.Meta().Name; got != "incident triage" {
 		t.Fatalf("session name = %q, want incident triage", got)
-	}
-}
-
-func TestWriteRunProgressEventOnlyWritesSelectedKinds(t *testing.T) {
-	var out bytes.Buffer
-
-	runprompt.PublishRunPromptProgress(runPromptIOProgressSink{writer: &out}, runtime.Event{Kind: runtime.EventAssistantDelta, StepID: "s1", AssistantDelta: "hello"})
-	runprompt.PublishRunPromptProgress(runPromptIOProgressSink{writer: &out}, runtime.Event{Kind: runtime.EventToolCallStarted, StepID: "s1"})
-	runprompt.PublishRunPromptProgress(runPromptIOProgressSink{writer: &out}, runtime.Event{Kind: runtime.EventReviewerCompleted, StepID: "s1", Reviewer: &runtime.ReviewerStatus{Outcome: "no_suggestions"}})
-
-	text := out.String()
-	if strings.Contains(text, "AssistantDelta") {
-		t.Fatalf("unexpected assistant delta in progress output: %q", text)
-	}
-	if !strings.Contains(text, "Running tool") {
-		t.Fatalf("expected tool call started in progress output, got %q", text)
-	}
-	if !strings.Contains(text, "Review finished") {
-		t.Fatalf("expected reviewer completed in progress output, got %q", text)
 	}
 }
 

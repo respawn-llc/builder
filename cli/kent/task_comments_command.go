@@ -19,7 +19,7 @@ const taskCommentListDefaultPageSize = 100
 
 func taskCommentSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fs := newCommandFlagSet(config.Command+" task comment", stderr, taskUsage)
+		fs := newCommandFlagSet(config.Command+" task comment", stderr, taskCommentUsage)
 		fs.Usage()
 		if len(args) == 0 {
 			return 2
@@ -37,19 +37,19 @@ func taskCommentSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 		return taskCommentDeleteSubcommand(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown task comment command: %s\n\n", args[0])
-		fs := newCommandFlagSet(config.Command+" task comment", stderr, taskUsage)
-		taskUsage.write(fs)
+		fs := newCommandFlagSet(config.Command+" task comment", stderr, taskCommentUsage)
+		fs.Usage()
 		return 2
 	}
 }
 
 func taskCommentAddSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task comment add", stderr, taskCommandUsage)
+	fs := newCommandFlagSet(config.Command+" task comment add", stderr, taskCommentAddUsage)
 	body := fs.String("body", "", "comment body")
-	bodyFile := fs.String("body-file", "", "path to comment body file")
-	author := fs.String("author", "", "comment author")
-	authorID := fs.String("author-id", "", "comment author id")
-	projectRef := fs.String("project", ".", "project id or path for short ids")
+	bodyFile := fs.String("body-file", "", "read the comment body from this file")
+	author := fs.String("author", "", "author kind; defaults to user or the calling workflow agent")
+	authorID := fs.String("author-id", "", "author name or role shown with the comment")
+	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -223,10 +223,10 @@ func sessionAgentAuthorID(ctx context.Context, remote workflowCommandRemote, ses
 }
 
 func taskCommentListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task comment list", stderr, taskCommandUsage)
-	projectRef := fs.String("project", ".", "project id or path for short ids")
-	pageSize := fs.Int("page-size", taskCommentListDefaultPageSize, "maximum comments to print")
-	pageToken := fs.String("page-token", "", "page token from a previous task comment list response")
+	fs := newCommandFlagSet(config.Command+" task comment list", stderr, taskCommentListUsage)
+	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
+	pageSize := fs.Int("page-size", taskCommentListDefaultPageSize, "maximum number of comments to return")
+	pageToken := fs.String("page-token", "", "continue from a previous comment list response")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode
@@ -274,7 +274,7 @@ func writeTaskCommentList(stdout io.Writer, comments []serverapi.WorkflowTaskCom
 }
 
 func taskCommentReplaceSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task comment replace", stderr, taskCommandUsage)
+	fs := newCommandFlagSet(config.Command+" task comment replace", stderr, taskCommentReplaceUsage)
 	body := fs.String("body", "", "replacement comment body")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
@@ -302,7 +302,7 @@ func taskCommentReplaceSubcommand(args []string, stdout io.Writer, stderr io.Wri
 }
 
 func taskCommentDeleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task comment delete", stderr, taskUsage)
+	fs := newCommandFlagSet(config.Command+" task comment delete", stderr, taskCommentDeleteUsage)
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode

@@ -2,12 +2,12 @@ package app
 
 import (
 	"context"
-	"io"
 	"strings"
 	"time"
 
 	"core/cli/app/internal/embeddedattach"
 	"core/cli/app/internal/runner"
+	"core/shared/serverapi"
 )
 
 type Options struct {
@@ -43,7 +43,7 @@ func Run(ctx context.Context, opts Options) error {
 	})
 }
 
-func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Duration, progress io.Writer) (RunPromptResult, error) {
+func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (RunPromptResult, error) {
 	runClient, closeFn, err := startRunPromptClient(ctx, opts)
 	if err != nil {
 		return RunPromptResult{}, err

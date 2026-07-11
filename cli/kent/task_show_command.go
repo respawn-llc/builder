@@ -31,9 +31,9 @@ type taskShowOutput struct {
 }
 
 func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task show", stderr, taskCommandUsage)
-	projectRef := fs.String("project", ".", "project id or path for short ids")
-	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
+	fs := newCommandFlagSet(config.Command+" task show", stderr, taskShowUsage)
+	projectRef := fs.String("project", ".", "project ID or attached workspace path used to resolve a short ID")
+	jsonOut := fs.Bool("json", false, "write the complete task detail as JSON")
 	positionals, flagArgs := takeLeadingPositionals(args, 1)
 	if ok, exitCode := parseCommandFlags(fs, flagArgs); !ok {
 		return exitCode

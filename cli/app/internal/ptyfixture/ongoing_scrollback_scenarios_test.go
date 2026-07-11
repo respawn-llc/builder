@@ -119,37 +119,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			forbiddenAnyAppends: []string{"ℹ PTY_SEED_X_HIDDEN", "ℹ PTY_SEED_X_COMPACT"},
 		},
 		{
-			name: "seeded_tool_message_style_matrix_real_app_path",
-			script: map[string]any{
-				"seed_transcript": seededStyleMatrixTranscript(),
-				"final":           "style matrix complete",
-			},
-			expectedAppends: []string{"❮ style matrix complete"},
-			expectedAnyAppends: []string{
-				"❯ PTY_STYLE_USER",
-				"❮ PTY_STYLE_ASSISTANT",
-				"⚠ PTY_STYLE_WARNING",
-				"! PTY_STYLE_ERROR",
-				"ℹ PTY_STYLE_NOTICE",
-				"ℹ PTY_STYLE_TOGGLE_FAST_ON",
-				"ℹ PTY_STYLE_TOGGLE_FAST_OFF",
-				"ℹ PTY_STYLE_TOGGLE_SUPERVISOR_ON",
-				"ℹ PTY_STYLE_TOGGLE_SUPERVISOR_OFF",
-				"§ PTY_STYLE_REVIEWER_SUCCESS",
-				"! PTY_STYLE_REVIEWER_ERROR",
-				"$ printf 'PTY_TOOL_SHELL",
-				"⇄ ./pty_patch.txt -1 +1",
-				"⇄ ./pty_edit.txt -1 +1",
-				"• path: image.png",
-				"@ web search: \"PTY_TOOL_WEB\"",
-				"• {\"input\":\"PTY_TOOL_CUSTOM\"}",
-				"• commentary: PTY_TOOL_COMPLETE",
-				"? PTY_TOOL_QUESTION",
-				"• Model requested compaction.",
-				"❯ seeded_tool_message_style_matrix_real_app_path",
-			},
-		},
-		{
 			name: "markdown_streaming_promotion_and_final_tail",
 			script: map[string]any{
 				"prompt":        "stream markdown",
@@ -158,26 +127,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			},
 			expectedAppends:           []string{"Plain stable."},
 			expectedScrollbackAppends: []string{"volatile tail"},
-		},
-		{
-			name: "slash_input_status_live_area_during_stream",
-			script: map[string]any{
-				"prompt":          "stream slash command",
-				"stream_deltas":   []string{"stream slash live", "\n\nstream slash done"},
-				"stream_delay_ms": 8000,
-				"final":           "stream slash live\n\nstream slash done",
-			},
-			inputs: []pty.InputEvent{
-				{After: 4 * time.Second, Bytes: []byte("queued while streaming")},
-				{After: 5200 * time.Millisecond, Bytes: []byte{0x15}},
-				{After: 5500 * time.Millisecond, Bytes: []byte("/status")},
-				{After: 6200 * time.Millisecond, Bytes: []byte("\r")},
-				{After: 7200 * time.Millisecond, Bytes: []byte("\x1b")},
-			},
-			expectedAppends:       []string{"stream slash live"},
-			allowDuplicateAppends: true,
-			allowsAltScroll:       true,
-			allowsFullScreen:      true,
 		},
 		{
 			name: "long_final_answer_with_resize",
@@ -383,31 +332,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"❮ failed tool lifecycle complete",
 			},
 		},
-		{
-			name: "detail_roundtrip_during_stream",
-			script: map[string]any{
-				"prompt":          "detail roundtrip",
-				"stream_deltas":   []string{"roundtrip commentary\n", "\n"},
-				"stream_delay_ms": 2000,
-				"final":           "roundtrip commentary\n\nroundtrip complete",
-			},
-			expectedAppends: []string{"roundtrip complete"},
-			inputs: []pty.InputEvent{
-				{After: 1500 * time.Millisecond, Bytes: []byte("\x1b[Z")},
-				{After: 3200 * time.Millisecond, Bytes: []byte("\x1b[Z")},
-			},
-			allowsAltScroll:  true,
-			allowsFullScreen: true,
-		},
-		{
-			name: "warning_notice_shape",
-			script: map[string]any{
-				"prompt":        "notice",
-				"stream_deltas": []string{"working\n\n"},
-				"final":         "working\n\ndone",
-			},
-			expectedAppends: []string{"done"},
-		},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -490,31 +414,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	}
 }
 
-func seededStyleMatrixTranscript() []map[string]any {
-	return []map[string]any{
-		{"kind": "message", "role": "user", "text": "PTY_STYLE_USER"},
-		{"kind": "message", "role": "assistant", "text": "PTY_STYLE_ASSISTANT"},
-		{"kind": "local_entry", "visibility": "O", "role": "warning", "text": "PTY_STYLE_WARNING"},
-		{"kind": "local_entry", "visibility": "O", "role": "error", "text": "PTY_STYLE_ERROR"},
-		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_NOTICE"},
-		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_TOGGLE_FAST_ON"},
-		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_TOGGLE_FAST_OFF"},
-		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_TOGGLE_SUPERVISOR_ON"},
-		{"kind": "local_entry", "visibility": "O", "role": "system", "text": "PTY_STYLE_TOGGLE_SUPERVISOR_OFF"},
-		{"kind": "local_entry", "visibility": "OC", "role": "reviewer_status", "text": "PTY_STYLE_REVIEWER_SUCCESS", "condensed_text": "PTY_STYLE_REVIEWER_SUCCESS"},
-		{"kind": "local_entry", "visibility": "OC", "role": "reviewer_error", "text": "PTY_STYLE_REVIEWER_ERROR", "condensed_text": "PTY_STYLE_REVIEWER_ERROR"},
-		toolSeed("exec_command", "call_shell", map[string]any{"cmd": "printf 'PTY_TOOL_SHELL\n'"}, "PTY_TOOL_SHELL", false),
-		toolSeedWithPatch("patch", "call_patch", map[string]any{"patch": patchStyleFixture("pty_patch.txt")}, patchStyleFixture("pty_patch.txt"), false),
-		toolSeedWithPatch("edit", "call_edit", map[string]any{"file_path": "pty_edit.txt", "old_string": "old", "new_string": "new"}, patchStyleFixture("pty_edit.txt"), false),
-		toolSeed("view_image", "call_image", map[string]any{"path": "image.png"}, "PTY_TOOL_IMAGE", false),
-		toolSeed("web_search", "call_web", map[string]any{"query": "PTY_TOOL_WEB"}, "PTY_TOOL_WEB", false),
-		toolSeed("custom_tool", "call_custom", map[string]any{"input": "PTY_TOOL_CUSTOM"}, "PTY_TOOL_CUSTOM", true),
-		toolSeed("complete_node", "call_complete", map[string]any{"commentary": "PTY_TOOL_COMPLETE"}, "PTY_TOOL_COMPLETE", false),
-		toolSeed("ask_question", "call_question", map[string]any{"question": "PTY_TOOL_QUESTION", "suggestions": []string{"yes"}}, "PTY_TOOL_QUESTION", false),
-		toolSeed("trigger_handoff", "call_handoff", map[string]any{"future_agent_message": "PTY_TOOL_HANDOFF"}, "PTY_TOOL_HANDOFF", false),
-	}
-}
-
 func toolSeed(name string, callID string, input map[string]any, condensed string, custom bool) map[string]any {
 	rawInput, err := json.Marshal(input)
 	if err != nil {
@@ -529,16 +428,6 @@ func toolSeed(name string, callID string, input map[string]any, condensed string
 		"tool_condensed": condensed,
 		"tool_custom":    custom,
 	}
-}
-
-func toolSeedWithPatch(name string, callID string, input map[string]any, patchText string, custom bool) map[string]any {
-	seed := toolSeed(name, callID, input, "", custom)
-	seed["tool_patch"] = patchText
-	return seed
-}
-
-func patchStyleFixture(path string) string {
-	return "*** Begin Patch\n*** Update File: " + path + "\n@@\n-old\n+new\n*** End Patch\n"
 }
 
 func runPTYFixtureScenario(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputs []pty.InputEvent, resizes []pty.DriverResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {

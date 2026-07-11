@@ -1,24 +1,41 @@
 Usage of kent task:
   kent task create --title <title> (--body <body>|--body-file <path>) [--workflow <workflow>] [--project <project>] [--source-url <url>] [--source-workspace <id-or-path>] [--json]
   kent task edit <short-id-or-task-id> [--title <title>] [--body <body>|--body-file <path>] [--source-workspace <id-or-path>] [--project <project>] [--json]
-  kent task start <short-id-or-task-id>
-  kent task resume <short-id-or-task-id>
+  kent task start <short-id-or-task-id> [--project <project>]
+  kent task resume <short-id-or-task-id> [--project <project>]
   kent task approve <transition-id>
-  kent task move <short-id-or-task-id> <target-node-id> [--output name=value]
-  kent task complete [--transition <id>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--run <run-id>|--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
+  kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value]
+  kent task complete [--transition <key>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--run <run-id>|--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
   kent task list [--project <project>] [--workflow <uuid>] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
-  kent task show <short-id-or-task-id> [--json]
-  kent task cancel <short-id-or-task-id> [--reason <text>]
-  kent task delete <short-id-or-task-id>
-  kent task comment add <short-id-or-task-id> (--body <text>|--body-file <path>) [--author <user|agent>] [--author-id <id>]
-  kent task comment list <short-id-or-task-id> [--page-size <n>] [--page-token <token>]
+  kent task show <short-id-or-task-id> [--project <project>] [--json]
+  kent task cancel <short-id-or-task-id> [--project <project>] [--reason <text>]
+  kent task delete <short-id-or-task-id> [--project <project>]
+  kent task comment add <short-id-or-task-id> (--body <text>|--body-file <path>) [--project <project>] [--author <user|agent>] [--author-id <id>]
+  kent task comment list <short-id-or-task-id> [--project <project>] [--page-size <n>] [--page-token <token>]
   kent task comment replace <comment-id> --body <text>
   kent task comment delete <comment-id>
   kent task comments <add|list|replace|delete> ... (alias of kent task comment)
 
-What This Does:
-  Manage workflow tasks and comments through the Kent server API.
-  Agents can complete their current workflow node with kent task complete from a shell command.
-  Outside Kent agent sessions, task completion requires --force plus one explicit selector.
-  Short ids are resolved within the current project by default.
-  kent task list resolves one active project/workflow link. Supply either scope only when its active link is unique, or supply both to select an exact link. --status filters the primary task status, --attention filters current question, approval, or interruption attention, and --column filters workflow columns. Sort by created, updated, status, column, run_count, or title. The default sort is status:asc,updated:desc.
+Create tasks, start or resume their workflow work, inspect progress, and manage
+task comments.
+
+Task references:
+  Commands accept a task ID or project-scoped short ID such as `KNT-123`.
+  Short IDs use the project selected by `--project`, which defaults to the
+  project attached to the current workspace.
+
+Completing workflow work:
+For agents, `kent task complete` submits your task completion result - only call this when the workflow task assigned to you is fully complete. Outside Kent shell commands, pass `--force` and exactly one of `--run`, `--session`, or `--task` to override completion of other tasks. Only humans may do that. Positional arguments are not accepted. 
+If you are an agent, refer to the developer guidance you received for how to mark your task as completed if you are confused, or ask the User a question if stuck.
+
+Subcommands `resume`, `approve`, `move`, `cancel`, `delete` are only available to humans. Do not try to circumvent this restriction, and give the user the commands they have to run instead.
+
+Listing tasks:
+  `--status` filters primary typed task status; `--attention` filters current
+  question, approval, or interruption attention; `--column` filters workflow
+  node keys.
+  Supply either `--project` or `--workflow` only when its active link is unique,
+  or both to select an exact project/workflow link.
+  `--sort` accepts `created`, `updated`, `status`, `column`, `run_count`, or `title`
+  followed by `:asc` or `:desc`.
+  The default order is `status:asc,updated:desc`.

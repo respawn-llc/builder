@@ -536,6 +536,7 @@ func TestSessionWriteCommandCompletesOnlyAfterLargePTYInputIsAccepted(t *testing
 			t.Fatalf("large write command failed: %v", event.Err)
 		}
 	}
+	<-session.Done()
 	capture, err = session.Capture()
 	if err != nil {
 		t.Fatalf("Capture: %v", err)

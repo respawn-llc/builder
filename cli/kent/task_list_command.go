@@ -35,7 +35,7 @@ type taskListItem struct {
 }
 
 func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" task list", stderr, taskCommandUsage)
+	fs := newCommandFlagSet(config.Command+" task list", stderr, taskListUsage)
 	projectRef := fs.String("project", ".", "project id or path")
 	workflowID := fs.String("workflow", "", "workflow UUID")
 	pageSize := fs.Int("page-size", taskListDefaultPageSize, "maximum tasks to print")

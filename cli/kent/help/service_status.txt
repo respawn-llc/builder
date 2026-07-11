@@ -1,4 +1,6 @@
 Usage of kent service status:
   kent service status [--json]
 
+Show whether the Kent background server is installed, running, and healthy.
+
 Flags:

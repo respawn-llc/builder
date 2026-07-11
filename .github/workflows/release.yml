@@ -283,10 +283,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-26 is Apple Silicon (arm64) with Xcode 26 — required for the
-          # liquid-glass icon's actool compile and the aarch64-apple-darwin target.
+          # macos-26 is Apple Silicon (arm64) with Xcode 26 — needed for the
+          # liquid-glass icon actool compile and aarch64-apple-darwin target.
           # Pinned (not macos-latest) while GitHub migrates the latest label to
-          # macOS 26 (June 15 - July 15, 2026). Revisit ~2026-07-22: respawn-llc/kent#407.
+          # macOS 26. Revisit ~2026-07-22: respawn-llc/kent#407.
           - runs_on: macos-26
             platform: macos
           - runs_on: ubuntu-22.04

@@ -43,6 +43,7 @@
 - Collapsed detail is default presentation mode.
 - User and assistant messages show at most the first 3 rendered lines when collapsed.
 - Tool calls show the same first input line used by ongoing previews.
+- Detail projects only completed tool results. The result row carries the typed input metadata and output; raw persisted tool-call input records are not shown.
 - Ask-question entries show only the question when collapsed.
 - Known developer/context reminders use typed compact labels.
 - Expanding reveals full entry content verbatim.
@@ -71,7 +72,7 @@
 - The selected lens extends through its adjacent visual spacer lines. Selection spacers are render-only and do not change transcript line ownership, viewport scroll, selection, or paging.
 - Detail reserves a one-cell lens rail before transcript content. Unselected lines use a blank rail cell; every line owned by the selected item uses the primary `▎` rail and `App.ModeBg` content fill, except added/removed patch lines whose diff background takes priority over the lens fill.
 - The rail owns the first terminal cell at every viewport width. A one-cell viewport shows only the selected rail or unselected blank rail; wider viewports render transcript content within the remaining cells using normal truncation.
-- Detail selection does not change semantic foreground colors or text attributes. Markdown, shell syntax, role symbols, continuation guides, and trailing row padding retain their semantic styling over the resolved lens or diff background.
+- Detail selection does not change semantic foreground colors. Expanded detail entries render content and role symbols full-strength while retaining other semantic styling over the resolved lens or diff background; continuation guides remain faint structural chrome.
 - Detail loads stale bounded cursor pages from the server. Scrolling at a loaded edge requests the adjacent page, which may prepend or append server-backed page membership. Runtime and live transcript events never self-update, append to, reconcile, or refresh that membership.
 - An adjacent-page request shows a request-scoped `info` status notice using replace delivery and the request UUID as its notice identity. A later notice may replace it and it does not resurface. Matching completion clears only that loading notice; matching failure replaces it through the ordinary error-notice path. The selected expansion action remains the independent detail help-slot segment.
 - Detail owns only UI-local expansion, selection, and scroll state.
@@ -136,11 +137,13 @@
 - Shell tool calls use the shared Chroma syntax projection, faint styling, and OS-dependent shell syntax selection.
 - Non-shell tool calls use foreground text, no syntax highlighting, and faint styling.
 - Patch/edit tools use `⇄` in ongoing, detail, and native replay. Patch paths and neutral text use foreground; source lines use the shared Chroma syntax projection; diff add/remove counts use semantic add/remove colors. Diff-line backgrounds blend 20% of the Success/Error token over the active detail surface background.
-- Compaction-related rows use secondary text.
+- Compaction summaries and manual compaction carryover use secondary text.
+- Handoff future-agent context rows use the faint foreground system-notice style.
 - Goal-related rows use primary text.
 - Workflow-related rows use primary text and `OC` visibility.
-- Worktree rows use foreground text.
-- `subagents` developer-context rows use foreground text.
+- Worktree-enter rows use the faint foreground system-notice style.
+- Worktree-exit rows use full-strength foreground text.
+- `subagents` developer-context rows use the faint foreground system-notice style.
 - Supervisor/reviewer-related non-error rows use success text. Supervisor/reviewer error rows use error text.
 - Cache warnings and non-interrupting warnings use warning text.
 - Error rows use error text, including interruption rows.

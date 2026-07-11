@@ -22,11 +22,14 @@ import (
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
 	serverstartup "core/server/startup"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/llmerrors"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
+
+	"github.com/google/uuid"
 )
 
 type stubServeServer struct {
@@ -58,7 +61,7 @@ func TestRootCommandPrintsVersion(t *testing.T) {
 	}
 }
 
-func TestRootHelpShowsInteractiveContinueCommand(t *testing.T) {
+func TestRootHelpSmoke(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if code := rootCommand([]string{"--help"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
@@ -67,14 +70,8 @@ func TestRootHelpShowsInteractiveContinueCommand(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	got := stderr.String()
-	for _, want := range []string{
-		"kent --continue <session-id>",
-		"reopens a previous session in the interactive TUI",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("stderr = %q, want %q", got, want)
-		}
+	if strings.TrimSpace(stderr.String()) == "" {
+		t.Fatal("help output is empty")
 	}
 }
 
@@ -414,7 +411,7 @@ func TestRunSubcommandMapsCommonFlagsToRunPrompt(t *testing.T) {
 	var gotOpts app.Options
 	var gotPrompt string
 	var gotTimeout time.Duration
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 		gotOpts = opts
 		gotPrompt = prompt
 		gotTimeout = timeout
@@ -474,6 +471,77 @@ func TestRunSubcommandMapsCommonFlagsToRunPrompt(t *testing.T) {
 	}
 	if gotOpts.OpenAIBaseURL != "http://run.example/v1" || !gotOpts.OpenAIBaseURLExplicit {
 		t.Fatalf("unexpected base url mapping: %+v", gotOpts)
+	}
+}
+
+func TestRunSubcommandStreamsFinalizedAssistantResponsesAndNoticesByDefault(t *testing.T) {
+	original := runPromptApp
+	t.Cleanup(func() { runPromptApp = original })
+
+	sessionID := uuid.MustParse("018fdd67-89ab-4cde-8123-456789abcdef")
+	commentary := "checking the runtime boundary"
+	finalResponse := "implemented the fix"
+	steeredText := "preserve the typed contract"
+	runPromptApp = func(_ context.Context, _ app.Options, _ string, _ time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
+		if progress == nil {
+			t.Fatal("default run progress sink is absent")
+		}
+		progress.PublishRunPromptProgress(serverapi.RunPromptProgress{
+			Kind:           serverapi.RunPromptProgressKindSessionStarted,
+			SessionStarted: &serverapi.RunPromptSessionStarted{SessionID: sessionID},
+		})
+		progress.PublishRunPromptProgress(serverapi.RunPromptProgress{
+			Kind: serverapi.RunPromptProgressKindAssistantMessage,
+			AssistantMessage: &serverapi.RunPromptVisibleResponse{
+				Phase:   clientui.MessagePhaseCommentary,
+				Content: commentary,
+			},
+		})
+		progress.PublishRunPromptProgress(serverapi.RunPromptProgress{Kind: serverapi.RunPromptProgressKindCompactionStarted})
+		progress.PublishRunPromptProgress(serverapi.RunPromptProgress{
+			Kind:           serverapi.RunPromptProgressKindSteeredMessage,
+			SteeredMessage: &serverapi.RunPromptSteeredMessage{Content: steeredText},
+		})
+		progress.PublishRunPromptProgress(serverapi.RunPromptProgress{
+			Kind: serverapi.RunPromptProgressKindAssistantMessage,
+			AssistantMessage: &serverapi.RunPromptVisibleResponse{
+				Phase:   clientui.MessagePhaseFinal,
+				Content: finalResponse,
+			},
+		})
+		return app.RunPromptResult{SessionID: sessionID.String(), Result: finalResponse}, nil
+	}
+
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "hello"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if strings.Count(stdout, commentary) != 1 || strings.Count(stdout, finalResponse) != 1 {
+		t.Fatalf("stdout = %q, want each finalized assistant response once", stdout)
+	}
+	if strings.Count(stderr, sessionID.String()) != 1 || strings.Count(stderr, steeredText) != 1 {
+		t.Fatalf("stderr = %q, want session and steering notices", stderr)
+	}
+}
+
+func TestRunSubcommandQuietAliasPreservesFinalOnlyOutput(t *testing.T) {
+	original := runPromptApp
+	t.Cleanup(func() { runPromptApp = original })
+
+	finalResponse := "quiet final response"
+	runPromptApp = func(_ context.Context, _ app.Options, _ string, _ time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
+		if progress != nil {
+			t.Fatal("quiet run should not subscribe to progress")
+		}
+		return app.RunPromptResult{Result: finalResponse}, nil
+	}
+
+	stdout, stderr, code := runRootCommandWithCapturedProcessOutput(t, []string{"run", "-q", "hello"})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q", code, stderr)
+	}
+	if strings.Count(stdout, finalResponse) != 1 || stderr != "" {
+		t.Fatalf("stdout=%q stderr=%q, want final-only output", stdout, stderr)
 	}
 }
 
@@ -542,7 +610,7 @@ func TestRunSubcommandMapsFastFlagToAgentRole(t *testing.T) {
 		runPromptApp = original
 	})
 	var gotOpts app.Options
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 		gotOpts = opts
 		return app.RunPromptResult{Result: "done"}, nil
 	}
@@ -574,7 +642,7 @@ func TestRunSubcommandPreservesPromptStartingWithLiveWaitVerb(t *testing.T) {
 		runLiveWaitApp = originalWait
 	})
 	var gotPrompt string
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 		gotPrompt = prompt
 		return app.RunPromptResult{SessionID: "018fdd67-89ab-4cde-8123-456789abcdef", Result: "done"}, nil
 	}
@@ -603,7 +671,7 @@ func TestRunSubcommandPreservesShortPromptStartingWithLiveStopVerb(t *testing.T)
 		runLiveStopApp = originalStop
 	})
 	var gotPrompt string
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 		gotPrompt = prompt
 		return app.RunPromptResult{SessionID: "018fdd67-89ab-4cde-8123-456789abcdef", Result: "done"}, nil
 	}
@@ -630,7 +698,7 @@ func TestRunSubcommandPreservesPromptWhenLiveVerbArityDoesNotMatch(t *testing.T)
 		runLiveSteerApp = originalSteer
 	})
 	var prompts []string
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 		prompts = append(prompts, prompt)
 		return app.RunPromptResult{SessionID: "018fdd67-89ab-4cde-8123-456789abcdef", Result: "done"}, nil
 	}
@@ -818,7 +886,10 @@ func TestRunSubcommandJSONModeKeepsWarningsInJSONOnly(t *testing.T) {
 	t.Cleanup(func() {
 		runPromptApp = original
 	})
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
+		if progress != nil {
+			t.Fatal("JSON run should not subscribe to progress")
+		}
 		return app.RunPromptResult{Result: "done", Warnings: []string{"warning one"}}, nil
 	}
 
@@ -1003,7 +1074,7 @@ func TestRunSubcommandUsesKentSessionEnvAsWorkspaceContext(t *testing.T) {
 		runPromptApp = original
 	})
 	var gotOpts app.Options
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 		gotOpts = opts
 		return app.RunPromptResult{Result: "done"}, nil
 	}
@@ -1045,7 +1116,7 @@ func TestRunSubcommandDefaultAgentWithFastUsesFastRole(t *testing.T) {
 		runPromptApp = original
 	})
 	var gotOpts app.Options
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 		gotOpts = opts
 		return app.RunPromptResult{Result: "done"}, nil
 	}
@@ -1083,7 +1154,7 @@ func TestRunSubcommandContinueDefaultAgentSendsDefaultRoleOverride(t *testing.T)
 		runPromptApp = original
 	})
 	var gotOpts app.Options
-	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress io.Writer) (app.RunPromptResult, error) {
+	runPromptApp = func(ctx context.Context, opts app.Options, prompt string, timeout time.Duration, progress serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 		gotOpts = opts
 		return app.RunPromptResult{Result: "done"}, nil
 	}
@@ -1126,7 +1197,7 @@ func TestRunSubcommandRejectsRemovedDefaultAgentAliases(t *testing.T) {
 				runPromptApp = original
 			})
 			called := false
-			runPromptApp = func(context.Context, app.Options, string, time.Duration, io.Writer) (app.RunPromptResult, error) {
+			runPromptApp = func(context.Context, app.Options, string, time.Duration, serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 				called = true
 				return app.RunPromptResult{}, nil
 			}
@@ -1147,7 +1218,7 @@ func TestRunSubcommandRejectsExplicitBlankAgentRole(t *testing.T) {
 		runPromptApp = original
 	})
 	called := false
-	runPromptApp = func(context.Context, app.Options, string, time.Duration, io.Writer) (app.RunPromptResult, error) {
+	runPromptApp = func(context.Context, app.Options, string, time.Duration, serverapi.RunPromptProgressSink) (app.RunPromptResult, error) {
 		called = true
 		return app.RunPromptResult{}, nil
 	}

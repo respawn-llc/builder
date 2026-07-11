@@ -70,9 +70,9 @@ func goalSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func goalShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" goal show", stderr, goalCommandUsage)
-	sessionFlag := fs.String("session", "", "target session id")
-	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
+	fs := newCommandFlagSet(config.Command+" goal show", stderr, goalShowUsage)
+	sessionFlag := fs.String("session", "", "session to inspect; required outside Kent shell commands")
+	jsonOut := fs.Bool("json", false, "write the complete goal response as JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -110,8 +110,8 @@ func goalShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func goalSetSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" goal set", stderr, goalCommandUsage)
-	sessionFlag := fs.String("session", "", "target session id")
+	fs := newCommandFlagSet(config.Command+" goal set", stderr, goalSetUsage)
+	sessionFlag := fs.String("session", "", "session to update; required outside Kent shell commands")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -149,8 +149,12 @@ func goalSetSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func goalStatusSubcommand(action string, args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" goal "+action, stderr, goalCommandUsage)
-	sessionFlag := fs.String("session", "", "target session id")
+	usage := goalPauseUsage
+	if action == "resume" {
+		usage = goalResumeUsage
+	}
+	fs := newCommandFlagSet(config.Command+" goal "+action, stderr, usage)
+	sessionFlag := fs.String("session", "", "session to update; required outside Kent shell commands")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -191,9 +195,9 @@ func goalStatusSubcommand(action string, args []string, stdout io.Writer, stderr
 }
 
 func goalCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" goal complete", stderr, goalCommandUsage)
-	sessionFlag := fs.String("session", "", "target session id")
-	confirmed := fs.Bool("confirm", false, "confirm goal completion")
+	fs := newCommandFlagSet(config.Command+" goal complete", stderr, goalCompleteUsage)
+	sessionFlag := fs.String("session", "", "session to update; required outside Kent shell commands")
+	confirmed := fs.Bool("confirm", false, "allow an agent to mark the goal complete")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -253,8 +257,8 @@ func goalAlreadyComplete(goal *serverapi.RuntimeGoal) bool {
 }
 
 func goalClearSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" goal clear", stderr, goalCommandUsage)
-	sessionFlag := fs.String("session", "", "target session id")
+	fs := newCommandFlagSet(config.Command+" goal clear", stderr, goalClearUsage)
+	sessionFlag := fs.String("session", "", "session to update; required outside Kent shell commands")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}

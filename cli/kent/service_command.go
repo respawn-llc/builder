@@ -37,8 +37,6 @@ type serviceCommandOptions struct {
 	IfInstalled bool
 }
 
-const servicePersistenceRootFlagUsage = "config and data root directory (overrides KENT_PERSISTENCE_ROOT and the default ~/.kent)"
-
 func commitServicePersistenceRoot(value string, stderr io.Writer) (int, bool) {
 	if err := publishPersistenceRootEnv(value); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -88,8 +86,8 @@ func serviceSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func serviceStatusSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" service status", stderr, serviceStatusUsage)
-	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
-	persistenceRoot := fs.String("persistence-root", "", servicePersistenceRootFlagUsage)
+	jsonOut := fs.Bool("json", false, "write service state as JSON")
+	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -113,9 +111,9 @@ func guardBeforeElevation(action serviceAction, opts serviceCommandOptions, stde
 
 func serviceInstallSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" service install", stderr, serviceInstallUsage)
-	force := fs.Bool("force", false, "rewrite existing service registration")
-	noStart := fs.Bool("no-start", false, "install service without starting it")
-	persistenceRoot := fs.String("persistence-root", "", servicePersistenceRootFlagUsage)
+	force := fs.Bool("force", false, "replace an existing service registration")
+	noStart := fs.Bool("no-start", false, "register the service without starting it")
+	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -138,8 +136,8 @@ func serviceInstallSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 
 func serviceUninstallSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" service uninstall", stderr, serviceUninstallUsage)
-	keepRunning := fs.Bool("keep-running", false, "remove service registration without stopping current server process")
-	persistenceRoot := fs.String("persistence-root", "", servicePersistenceRootFlagUsage)
+	keepRunning := fs.Bool("keep-running", false, "remove registration without stopping the running server")
+	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -165,11 +163,17 @@ func serviceUninstallSubcommand(args []string, stdout io.Writer, stderr io.Write
 }
 
 func serviceLifecycleSubcommand(action serviceAction, args []string, stdout io.Writer, stderr io.Writer) int {
-	fs := newCommandFlagSet(config.Command+" service "+string(action), stderr, commandUsage{
-		title: "Usage of " + config.Command + " service " + string(action) + ":",
-		lines: []string{"  " + config.Command + " service " + string(action)},
-	})
-	persistenceRoot := fs.String("persistence-root", "", servicePersistenceRootFlagUsage)
+	summary := "Start the Kent background server."
+	if action == serviceActionStop {
+		summary = "Stop the Kent background server."
+	}
+	fs := newCommandFlagSet(config.Command+" service "+string(action), stderr, leafCommandUsage(
+		config.Command+" service "+string(action),
+		summary,
+		"",
+		"Unavailable inside Kent shell commands because it could interrupt the active session.",
+	))
+	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -185,8 +189,8 @@ func serviceLifecycleSubcommand(action serviceAction, args []string, stdout io.W
 
 func serviceRestartSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" service restart", stderr, serviceRestartUsage)
-	ifInstalled := fs.Bool("if-installed", false, "exit successfully without action when service is not installed")
-	persistenceRoot := fs.String("persistence-root", "", servicePersistenceRootFlagUsage)
+	ifInstalled := fs.Bool("if-installed", false, "succeed without action when the service is not installed")
+	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
@@ -203,10 +207,11 @@ func serviceRestartSubcommand(args []string, stdout io.Writer, stderr io.Writer)
 
 func serviceRunSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" service run", stderr, commandUsage{
-		title: "Usage of " + config.Command + " service run:",
-		lines: []string{"  " + config.Command + " service run  (internal: hosted by the OS service manager)"},
+		title:               "Usage:",
+		lines:               []string{"  " + config.Command + " service run", "", "Host the server process for the operating system's service manager.", "", "This command is invoked by the installed service, not directly."},
+		includeCommandFlags: true,
 	})
-	persistenceRoot := fs.String("persistence-root", "", servicePersistenceRootFlagUsage)
+	persistenceRoot := fs.String("persistence-root", "", persistenceRootFlagUsage)
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
 		return exitCode
 	}
