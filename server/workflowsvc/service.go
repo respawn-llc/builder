@@ -661,27 +661,12 @@ func (s *Service) negotiateTaskStartExecutionTarget(ctx context.Context, req ser
 	if err != nil {
 		return nil, err
 	}
-	if req.Selection != nil && req.Selection.Mode == serverapi.WorkflowTaskExecutionTargetSelectionNone && prepared.ExistingTarget == nil {
-		source, err := s.executionTargetNegotiationSource(ctx, prepared.SourceWorkspace.Root)
-		if err != nil {
-			return nil, err
-		}
-		if prepared.ExecutionPolicy.Mode == workflow.ExecutionPolicyAsk {
-			if prepared.ExistingNegotiation == nil ||
-				req.SelectionGeneration == nil ||
-				*req.SelectionGeneration != prepared.ExistingNegotiation.Generation ||
-				!executionTargetNegotiationActionMatches(prepared.ExistingNegotiation.Action, prepared.Action) ||
-				!executionTargetNegotiationSourceMatches(prepared.ExistingNegotiation.Source, source) {
-				return s.negotiateTaskExecutionTarget(ctx, prepared, nil)
-			}
-		}
-		started, err := s.store.StartTaskWithExecutionTarget(ctx, workflow.ExecutionTarget{
-			TaskID:              prepared.TaskID,
-			Policy:              workflow.ExecutionPolicyNone,
-			State:               workflow.ExecutionTargetStateLocked,
-			SetupState:          workflow.ExecutionTargetSetupNotApplicable,
-			RecoveryDisposition: workflow.ExecutionTargetRecoveryAvailable,
-		})
+	matchesNoneSelection, err := s.matchesNoneExecutionTargetSelection(ctx, prepared, req.SelectionGeneration, req.Selection)
+	if err != nil {
+		return nil, err
+	}
+	if matchesNoneSelection {
+		started, err := s.store.StartTaskWithExecutionTarget(ctx, noneExecutionTarget(prepared.TaskID))
 		if err != nil {
 			return nil, err
 		}
@@ -695,6 +680,37 @@ func (s *Service) negotiateTaskStartExecutionTarget(ctx context.Context, req ser
 		}, nil
 	}
 	return s.negotiateTaskExecutionTarget(ctx, prepared, req.Selection)
+}
+
+func noneExecutionTarget(taskID workflow.TaskID) workflow.ExecutionTarget {
+	return workflow.ExecutionTarget{
+		TaskID:              taskID,
+		Policy:              workflow.ExecutionPolicyNone,
+		State:               workflow.ExecutionTargetStateLocked,
+		SetupState:          workflow.ExecutionTargetSetupNotApplicable,
+		RecoveryDisposition: workflow.ExecutionTargetRecoveryAvailable,
+	}
+}
+
+func (s *Service) matchesNoneExecutionTargetSelection(ctx context.Context, prepared workflowstore.TaskExecutionTargetNegotiationPreparation, selectionGeneration *string, selection *serverapi.WorkflowTaskExecutionTargetSelection) (bool, error) {
+	if selection == nil || selection.Mode != serverapi.WorkflowTaskExecutionTargetSelectionNone || prepared.ExistingTarget != nil {
+		return false, nil
+	}
+	if prepared.ExecutionPolicy.Mode != workflow.ExecutionPolicyAsk {
+		return true, nil
+	}
+	source, err := s.executionTargetNegotiationSource(ctx, prepared.SourceWorkspace.Root)
+	if err != nil {
+		return false, err
+	}
+	if prepared.ExistingNegotiation == nil ||
+		selectionGeneration == nil ||
+		*selectionGeneration != prepared.ExistingNegotiation.Generation ||
+		!executionTargetNegotiationActionMatches(prepared.ExistingNegotiation.Action, prepared.Action) ||
+		!executionTargetNegotiationSourceMatches(prepared.ExistingNegotiation.Source, source) {
+		return false, nil
+	}
+	return true, nil
 }
 
 func (s *Service) negotiateTaskExecutionTarget(ctx context.Context, prepared workflowstore.TaskExecutionTargetNegotiationPreparation, selection *serverapi.WorkflowTaskExecutionTargetSelection) (*serverapi.WorkflowTaskInitiatingActionResult, error) {
@@ -972,6 +988,17 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		return serverapi.WorkflowTaskInitiatingActionResult{}, err
 	}
 	if requiresExecutionTarget {
+		matchesNoneSelection, matchErr := s.matchesNoneExecutionTargetSelection(ctx, prepared, req.SelectionGeneration, req.Selection)
+		if matchErr != nil {
+			return serverapi.WorkflowTaskInitiatingActionResult{}, matchErr
+		}
+		if matchesNoneSelection {
+			moved, moveErr := s.store.ManualMoveTaskWithExecutionTarget(ctx, noneExecutionTarget(prepared.TaskID), moveRequest)
+			if moveErr != nil {
+				return serverapi.WorkflowTaskInitiatingActionResult{}, moveErr
+			}
+			return s.movedWorkflowTaskResult(ctx, req, moved)
+		}
 		negotiation, negotiationErr := s.negotiateTaskExecutionTarget(ctx, prepared, req.Selection)
 		if negotiationErr != nil {
 			return serverapi.WorkflowTaskInitiatingActionResult{}, negotiationErr
@@ -984,6 +1011,10 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	if err != nil {
 		return serverapi.WorkflowTaskInitiatingActionResult{}, err
 	}
+	return s.movedWorkflowTaskResult(ctx, req, moved)
+}
+
+func (s *Service) movedWorkflowTaskResult(ctx context.Context, req serverapi.WorkflowTaskMoveRequest, moved workflowstore.ManualMoveResult) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 	approvalError := ""
 	resolvedApprovals := append([]workflow.TransitionID(nil), moved.ResolvedApprovalTransitionIDs...)
 	if req.AutoApprove && moved.State == "pending_approval" && !moved.RequiresApproval {
