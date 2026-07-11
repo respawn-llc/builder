@@ -98,22 +98,6 @@ func renderUserAssistantTextBlock(role StyleRole, text string, width int, mode M
 	return attachPrefixWithMeta(role, RenderMarkdownLines(role, text, contentWidth(role, width)), width, false, mode, toolMeta{})
 }
 
-func renderSourceResultTextBlock(role StyleRole, text string, width int, mode Mode, meta toolMeta) []Line {
-	text = safeTranscriptText(text)
-	text = strings.TrimRight(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	if text == "" {
-		text = labelForRole(role)
-	}
-	return attachPrefixWithMeta(
-		role,
-		sourceResultLines(text, contentWidth(role, width), meta),
-		width,
-		false,
-		mode,
-		meta,
-	)
-}
-
 func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta string, width int, mode Mode, meta toolMeta) []Line {
 	text = safeTranscriptText(text)
 	inlineMeta = strings.TrimSpace(safeTranscriptText(inlineMeta))

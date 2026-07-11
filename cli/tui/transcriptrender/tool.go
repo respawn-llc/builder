@@ -37,10 +37,32 @@ func renderToolRow(
 		return []Line{RenderBackgroundedShell(display.Text, width)}
 	}
 	if isPatchTool(meta) {
-		return renderPatchTool(role, display.Text, display.InlineMeta, row.ResultSummary, meta.PatchRender, width, mode, meta, syntax)
+		input := display.Text
+		result := row.ResultSummary
+		if mode == ModeDetailExpanded {
+			input = detailedToolText(meta, row.Text)
+			result = detailedToolResultText(row)
+		}
+		return renderPatchTool(role, input, display.InlineMeta, result, meta.PatchRender, width, mode, meta, syntax)
 	}
-	if display.kind == toolDisplaySourceResult {
-		return renderSourceResultTextBlock(role, display.Text, width, mode, meta)
+	if mode == ModeDetailExpanded {
+		input := detailedToolText(meta, row.Text)
+		if display.kind == toolDisplaySourceResult {
+			return renderDetailedToolWithOutputLines(
+				role,
+				input,
+				sourceResultLines(display.Text, contentWidth(role, width), meta),
+				width,
+				meta,
+			)
+		}
+		return renderDetailedToolTextBlock(
+			role,
+			input,
+			detailedToolResultText(row),
+			width,
+			meta,
+		)
 	}
 	return renderTextBlockWithInlineMeta(role, display.Text, display.InlineMeta, width, mode, meta)
 }
@@ -154,11 +176,7 @@ func toolDisplayText(row clientui.TranscriptToolRow, meta toolMeta, mode Mode) t
 		meta.RenderHint.ResultOnly {
 		return toolDisplay{Text: row.Text, kind: toolDisplaySourceResult}
 	}
-	text := detailedToolText(meta, row.Text)
-	if summary := strings.TrimSpace(row.ResultSummary); summary != "" {
-		text = text + "\n" + summary
-	}
-	return toolDisplay{Text: text}
+	return toolDisplay{Text: detailedToolText(meta, row.Text)}
 }
 
 func compactToolText(meta toolMeta, fallback string) string {
@@ -169,11 +187,69 @@ func detailedToolText(meta toolMeta, fallback string) string {
 	return transcript.DetailedToolCallText(&meta.ToolCallMeta, fallback)
 }
 
+func detailedToolResultText(row clientui.TranscriptToolRow) string {
+	output := strings.TrimSpace(safeTranscriptText(row.Text))
+	summary := strings.TrimSpace(safeTranscriptText(row.ResultSummary))
+	if output == summary {
+		return output
+	}
+	if output == "" {
+		return summary
+	}
+	if summary == "" {
+		return output
+	}
+	return output + "\n" + summary
+}
+
+func renderDetailedToolTextBlock(
+	role StyleRole,
+	input string,
+	output string,
+	width int,
+	meta toolMeta,
+) []Line {
+	return renderDetailedToolWithOutputLines(
+		role,
+		input,
+		detailedToolOutputLines(role, output, contentWidth(role, width)),
+		width,
+		meta,
+	)
+}
+
+func renderDetailedToolWithOutputLines(
+	role StyleRole,
+	input string,
+	outputLines []Line,
+	width int,
+	meta toolMeta,
+) []Line {
+	inputLines := textLines(role, wrapLines(input, contentWidth(role, width)), meta)
+	if len(outputLines) > 0 {
+		inputLines = append(inputLines, Line{Spans: []Span{roleSpan("", role)}})
+		inputLines = append(inputLines, outputLines...)
+	}
+	return attachPrefixWithMeta(role, inputLines, width, false, ModeDetailExpanded, meta)
+}
+
+func detailedToolOutputLines(role StyleRole, output string, width int) []Line {
+	if strings.TrimSpace(output) == "" {
+		return nil
+	}
+	lines := wrapLines(output, width)
+	out := make([]Line, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, Line{Spans: []Span{roleSpan(line, role)}})
+	}
+	return out
+}
+
 func renderPatchTool(
 	role StyleRole,
 	text string,
 	inlineMeta string,
-	resultSummary string,
+	result string,
 	rendered *patchformat.RenderedPatch,
 	width int,
 	mode Mode,
@@ -182,13 +258,17 @@ func renderPatchTool(
 ) []Line {
 	if mode == ModeDetailExpanded {
 		if lines, ok := renderStructuredPatch(rendered, contentWidth(role, width), syntax); ok {
-			if result := strings.TrimSpace(safeTranscriptText(resultSummary)); result != "" {
-				lines = append(lines, Line{Spans: []Span{roleSpan(result, role)}})
+			if result != "" {
+				lines = append(lines, Line{Spans: []Span{roleSpan("", role)}})
+				lines = append(lines, detailedToolOutputLines(role, result, contentWidth(role, width))...)
 			}
 			return attachPrefixWithMeta(role, lines, width, false, mode, meta)
 		}
 	}
 	if rendered == nil || len(rendered.SummaryLines) == 0 || mode == ModeDetailExpanded {
+		if mode == ModeDetailExpanded {
+			return renderDetailedToolTextBlock(role, text, result, width, meta)
+		}
 		return renderTextBlockWithInlineMeta(role, text, inlineMeta, width, mode, meta)
 	}
 	lines := make([]Line, 0, len(rendered.Files))

@@ -106,7 +106,9 @@ func TestShellToolRowsUseTypedSyntaxHighlighting(t *testing.T) {
 }
 
 func TestPlainShellRenderHintSkipsSyntaxHighlighting(t *testing.T) {
-	row := toolRow("write_stdin", clientui.ToolPresentationShell, "Polled session 1149 for 2s", false)
+	row := toolRow("write_stdin", clientui.ToolPresentationShell, "process completed output", false)
+	row.Tool.ToolPresentation.Command = "Polled session 1149 for 2s"
+	row.Tool.ToolPresentation.CompactText = row.Tool.ToolPresentation.Command
 	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindPlain}
 	for _, mode := range []Mode{ModeOngoing, ModeDetailCollapsed, ModeDetailExpanded} {
 		rendered := RenderCommittedRow(row, 120, "", mode)
@@ -114,6 +116,13 @@ func TestPlainShellRenderHintSkipsSyntaxHighlighting(t *testing.T) {
 			t.Fatalf("mode %v rendered no plain shell row lines", mode)
 		}
 		assertShellLineIsPlainText(t, rendered.Lines[0])
+	}
+	if got, want := PlainLines(RenderCommittedRow(row, 120, "", ModeDetailExpanded).Lines), []string{
+		"$ Polled session 1149 for 2s",
+		"│ ",
+		"└ process completed output",
+	}; !slices.Equal(got, want) {
+		t.Fatalf("expanded poll lines = %q, want %q", got, want)
 	}
 
 	pending := RenderPendingTool(clientui.TranscriptToolStart{
@@ -149,23 +158,29 @@ func TestSourceReadUsesCommandPreviewAndSourceResultDetail(t *testing.T) {
 		!strings.Contains(expanded, "func example() {}") {
 		t.Fatalf("expanded source read = %q, want source result", expanded)
 	}
-	if strings.Contains(expanded, row.Tool.ToolPresentation.Command) {
-		t.Fatalf("expanded source read retained command instead of result-only source: %q", expanded)
+	if !strings.Contains(expanded, row.Tool.ToolPresentation.Command) {
+		t.Fatalf("expanded source read = %q, want typed command before source result", expanded)
 	}
-	foundSyntax := false
+	if got, want := PlainLines(presentation.Expanded)[1], "│ "; got != want {
+		t.Fatalf("expanded source separator = %q, want blank line", got)
+	}
+	foundSourceSyntax := false
 	for _, line := range presentation.Expanded {
+		if !strings.Contains(line.Plain(), "func example() {}") {
+			continue
+		}
 		for _, span := range line.Spans {
 			if span.Style.Kind != SpanStyleExplicitRGB {
 				continue
 			}
-			foundSyntax = true
+			foundSourceSyntax = true
 			if !span.Style.Has(SpanAttributeFaint) {
 				t.Fatalf("source result syntax span is not faint: %+v", span)
 			}
 		}
 	}
-	if !foundSyntax {
-		t.Fatalf("expanded source read has no Chroma syntax spans: %+v", presentation.Expanded)
+	if !foundSourceSyntax {
+		t.Fatalf("expanded source read output has no Chroma syntax spans: %+v", presentation.Expanded)
 	}
 }
 
@@ -644,8 +659,13 @@ func TestDetailCompilerKeepsRawPatchFallbackSemantic(t *testing.T) {
 	row.Tool.ToolPresentation.RenderHint = &clientui.ToolRenderHint{Kind: clientui.ToolRenderKindDiff}
 
 	expanded := NewDetailCompiler(80, "dark").Compile(row).Expanded
-	if len(expanded) != len(raw.DetailLines) {
-		t.Fatalf("raw patch rendered %d lines, want %d: %+v", len(expanded), len(raw.DetailLines), expanded)
+	if got, want := PlainLines(expanded), []string{
+		"⇄ unstructured patch input",
+		"│ second raw line",
+		"│ ",
+		"└ unstructured result fallback",
+	}; !slices.Equal(got, want) {
+		t.Fatalf("raw patch lines = %q, want %q", got, want)
 	}
 	for index, line := range expanded {
 		if line.Background != LineBackgroundDefault {
@@ -655,9 +675,6 @@ func TestDetailCompilerKeepsRawPatchFallbackSemantic(t *testing.T) {
 			if span.Style.Kind == SpanStyleExplicitRGB {
 				t.Fatalf("raw line %d received source syntax style: %+v", index, line.Spans)
 			}
-		}
-		if got := line.Spans[len(line.Spans)-1].Text; got != raw.DetailLines[index].Text {
-			t.Fatalf("raw line %d body = %q, want %q", index, got, raw.DetailLines[index].Text)
 		}
 	}
 }
@@ -880,7 +897,7 @@ func TestExpandedToolRowsKeepTypedInputAheadOfOutput(t *testing.T) {
 	row.Tool.ToolPresentation.CompactText = "run tests"
 
 	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
-	if got, want := PlainLines(rendered.Lines), []string{"$ go test ./...", "└ exit 0"}; !slices.Equal(got, want) {
+	if got, want := PlainLines(rendered.Lines), []string{"$ go test ./...", "│ ", "│ raw output text", "└ exit 0"}; !slices.Equal(got, want) {
 		t.Fatalf("expanded tool lines = %q, want %q", got, want)
 	}
 }
@@ -891,7 +908,7 @@ func TestExpandedPatchRowsKeepFullTypedInputAheadOfOutput(t *testing.T) {
 	row.Tool.ToolPresentation.PatchDetail = "cli/tui/model.go\n-old\n+new"
 
 	rendered := RenderCommittedRow(row, 80, "", ModeDetailExpanded)
-	if got, want := PlainLines(rendered.Lines), []string{"⇄ cli/tui/model.go", "│ -old", "│ +new", "└ failed"}; !slices.Equal(got, want) {
+	if got, want := PlainLines(rendered.Lines), []string{"⇄ cli/tui/model.go", "│ -old", "│ +new", "│ ", "│ raw patch output", "└ failed"}; !slices.Equal(got, want) {
 		t.Fatalf("expanded patch lines = %q, want %q", got, want)
 	}
 }
