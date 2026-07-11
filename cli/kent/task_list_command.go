@@ -80,9 +80,6 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	if len(sortSelectors) == 0 {
-		sortSelectors = defaultTaskListSortSelectors()
-	}
 	projectProvided := flagWasProvided(fs, "project")
 	workflowProvided := flagWasProvided(fs, "workflow")
 	var selectedWorkflowID *string
@@ -189,13 +186,6 @@ func taskListColumnKeysText(columnKeys []string) string {
 	return strings.Join(columnKeys, ", ")
 }
 
-func defaultTaskListSortSelectors() []serverapi.WorkflowTaskListSort {
-	return []serverapi.WorkflowTaskListSort{
-		{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
-		{Field: serverapi.WorkflowTaskListSortFieldUpdated, Direction: serverapi.WorkflowTaskListSortDirectionDesc},
-	}
-}
-
 func taskListItemsFromResponse(tasks []serverapi.WorkflowTaskListItem) []taskListItem {
 	items := make([]taskListItem, 0, len(tasks))
 	for _, task := range tasks {
@@ -281,6 +271,9 @@ func parseTaskListSortSelectors(raw []string) ([]serverapi.WorkflowTaskListSort,
 	values, err := parseTaskListFilterValues(raw, "sort")
 	if err != nil {
 		return nil, err
+	}
+	if len(values) == 0 {
+		return nil, nil
 	}
 	selectors := make([]serverapi.WorkflowTaskListSort, 0, len(values))
 	seen := map[serverapi.WorkflowTaskListSortField]bool{}

@@ -68,6 +68,23 @@ func TestTaskListSendsTypedFiltersAndSorts(t *testing.T) {
 	}
 }
 
+func TestTaskListLeavesDefaultSortToServer(t *testing.T) {
+	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
+		ProjectID:  "project-1",
+		WorkflowID: taskListWorkflowID,
+	}}
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
+	defer restore()
+
+	_, stderr, code := runWorkflowRootCommand("task", "list", "--project", "project-1")
+	if code != 0 {
+		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
+	}
+	if len(remote.requests) != 1 || remote.requests[0].Sort != nil {
+		t.Fatalf("requests = %+v, want nil sort for server defaulting", remote.requests)
+	}
+}
+
 func TestTaskListWorkflowOnlyLeavesProjectScopeAbsent(t *testing.T) {
 	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
 		ProjectID:  "project-1",
