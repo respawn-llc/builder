@@ -65,7 +65,19 @@ describe("TaskDetailSurface", () => {
         { method: "workflow.task.activity.list", result: activityResponse },
         { method: "ask.listPendingBySession", result: pendingAskResponse },
         { method: "workflow.task.question.answer", result: {} },
-        { method: "workflow.task.approve", result: {} },
+        {
+          method: "workflow.task.approve",
+          result: {
+            outcome: "approved",
+            approved: {
+              transition_id: "transition-1",
+              task_id: "task-1",
+              state: "approved",
+              placement_ids: [],
+              run_ids: [],
+            },
+          },
+        },
         { method: "workflow.task.comment.add", result: commentAddResponse },
         { method: "workflow.task.comment.replace", result: {} },
       ],

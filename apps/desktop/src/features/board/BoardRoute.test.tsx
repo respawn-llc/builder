@@ -202,8 +202,7 @@ const backlogCard = {
   source_workspace: sourceWorkspace,
   status: {
     kind: "backlog",
-    label: "Backlog",
-    native_state: "backlog",
+    native_state: "active",
     node_ids: [],
     run_ids: [],
     attention_types: [],
@@ -226,7 +225,6 @@ const activeCard = {
   active_node_ids: ["node-1"],
   status: {
     kind: "running",
-    label: "Running",
     native_state: "running",
     node_ids: ["node-1"],
     run_ids: [],

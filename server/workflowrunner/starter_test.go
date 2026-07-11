@@ -80,7 +80,7 @@ func TestSchedulerRunsNewSessionWorkflowNodeWithStructuredOutput(t *testing.T) {
 		t.Fatalf("structured output schema missing in request: %+v", first)
 	}
 	assertNoUserPrompt(t, first)
-	fixture.assertRunSessionUsesTaskWorktree(t, runs[0].SessionID)
+	fixture.assertRunSessionUsesSourceExecutionRoot(t, runs[0].SessionID)
 	fixture.waitForActiveCountZero(t, scheduler)
 }
 
@@ -1000,7 +1000,7 @@ func TestStarterRestoresReusedSessionMetadataWhenSetupFailsAfterPlanning(t *test
 	}
 }
 
-func TestSchedulerRunsNextAgentWithBoundInputsAndTaskWorktreeContext(t *testing.T) {
+func TestSchedulerRunsNextAgentWithBoundInputsAndSourceExecutionRoot(t *testing.T) {
 	fixture := newChainedStarterFixture(t)
 	workflowID := createChainedStarterWorkflow(t, fixture.store)
 	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
@@ -1026,11 +1026,11 @@ func TestSchedulerRunsNextAgentWithBoundInputsAndTaskWorktreeContext(t *testing.
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	worktreeRoot := fixture.assertRunSessionUsesTaskWorktree(t, runs[1].SessionID)
+	executionRoot := fixture.assertRunSessionUsesSourceExecutionRoot(t, runs[1].SessionID)
 	if strings.TrimSpace(runs[0].SessionID) == "" || strings.TrimSpace(runs[1].SessionID) == "" || runs[0].SessionID == runs[1].SessionID {
 		t.Fatalf("runs = %+v, want new_session edge to create separate target session", runs)
 	}
-	assertPromptContains(t, reqs[1], []string{"\nCWD: " + worktreeRoot + "\n"})
+	assertPromptContains(t, reqs[1], []string{"\nCWD: " + executionRoot + "\n"})
 }
 
 func TestBuildWorkflowTaskInstructionsRendersTransitionParameters(t *testing.T) {
@@ -1800,9 +1800,6 @@ func TestWorkflowRuntimeStartFailsWhenTransitionPromptPreviewCannotRender(t *tes
 func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"resumed"}`))
 	task := fixture.createStartedTask(t)
-	if err := fixture.worktrees.EnsureTaskWorktree(context.Background(), TaskWorktreeEnsureRequest{TaskID: task.ID}); err != nil {
-		t.Fatalf("EnsureTaskWorktree: %v", err)
-	}
 	def, _, err := fixture.store.GetDefinition(context.Background(), fixture.workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
@@ -1869,91 +1866,6 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	}
 }
 
-func TestStartWorkflowRunWaitsForTaskWorktreeEnsureBeforeRunContext(t *testing.T) {
-	ensureStarted := make(chan TaskWorktreeEnsureRequest, 1)
-	releaseEnsure := make(chan struct{})
-	ensureErr := errors.New("setup failed")
-	ensurer := blockingStarterTaskWorktreeEnsurer{started: ensureStarted, release: releaseEnsure, err: ensureErr}
-	starter := &Starter{store: &recordingRuntimeStore{}, worktrees: ensurer}
-	done := make(chan error, 1)
-	go func() {
-		done <- starter.StartWorkflowRun(context.Background(), SchedulerStartRunRequest{TaskID: "task-1", RunID: "run-1", Generation: 1})
-	}()
-	var req TaskWorktreeEnsureRequest
-	select {
-	case req = <-ensureStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for worktree ensure")
-	}
-	if req.TaskID != "task-1" || req.RunID != "run-1" {
-		t.Fatalf("ensure request = %+v", req)
-	}
-	select {
-	case err := <-done:
-		t.Fatalf("StartWorkflowRun returned before ensure released: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(releaseEnsure)
-	select {
-	case err := <-done:
-		if !errors.Is(err, ensureErr) {
-			t.Fatalf("StartWorkflowRun error = %v, want %v", err, ensureErr)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for StartWorkflowRun")
-	}
-}
-
-func TestStartWorkflowRunIncludesSetupCreatedSkillInFirstModelRequest(t *testing.T) {
-	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"done"}`))
-	const skillName = "setup-created-workflow-skill"
-	const skillDescription = "created before context lock"
-	var skillPath string
-	fixture.worktrees.afterCreate = func(worktreeRoot string) error {
-		skillDir := filepath.Join(worktreeRoot, config.ConfigDirName, "skills", skillName)
-		if err := os.MkdirAll(skillDir, 0o755); err != nil {
-			return err
-		}
-		skillPath = filepath.Join(skillDir, "SKILL.md")
-		content := "---\nname: " + skillName + "\ndescription: " + skillDescription + "\n---\n\n# Setup skill\n"
-		if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
-			return err
-		}
-		canonicalPath, err := filepath.EvalSymlinks(skillPath)
-		if err == nil {
-			skillPath = canonicalPath
-		}
-		return nil
-	}
-	task := fixture.createStartedTask(t)
-
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
-		t.Fatalf("Process: %v", err)
-	}
-	fixture.waitForCompletedRun(t, task.ID)
-
-	reqs := fixture.client.Requests()
-	if len(reqs) == 0 {
-		t.Fatal("fake model was not called")
-	}
-	if skillPath == "" {
-		t.Fatal("task worktree setup hook did not create a skill")
-	}
-	assertRequestHasSkillEntry(t, reqs[0], skillName, skillPath, skillDescription)
-}
-
-type blockingStarterTaskWorktreeEnsurer struct {
-	started chan<- TaskWorktreeEnsureRequest
-	release <-chan struct{}
-	err     error
-}
-
-func (e blockingStarterTaskWorktreeEnsurer) EnsureTaskWorktree(_ context.Context, req TaskWorktreeEnsureRequest) error {
-	e.started <- req
-	<-e.release
-	return e.err
-}
-
 func TestRemoveFanoutCloneDeletesOrphanedClone(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"done"}`))
 	task := fixture.createStartedTask(t)
@@ -1992,7 +1904,6 @@ type starterFixture struct {
 	view     interface {
 		GetTask(context.Context, string) (serverapi.WorkflowTaskDetail, error)
 	}
-	worktrees       *metadataTaskWorktrees
 	client          *ScriptedClient
 	clientFactory   func(SchedulerStartRunRequest) llm.Client
 	runtimes        starterRuntimeRegistry
@@ -2042,7 +1953,6 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if err != nil {
 		t.Fatalf("workflowview.New: %v", err)
 	}
-	worktrees := &metadataTaskWorktrees{t: t, metadata: metadataStore, workspaceID: binding.WorkspaceID, root: filepath.Join(home, "task-worktrees")}
 	client := NewScriptedClient(llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: mode == config.WorkflowCompletionModeStructuredOutput}, steps...)
 	clientFactory := func(SchedulerStartRunRequest) llm.Client { return client }
 	attentionBroker := attentionnotify.NewBroker()
@@ -2050,7 +1960,6 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	sessionRuntime := sessionruntime.NewService(cfg.PersistenceRoot, metadataStore, nil, nil, nil, nil, runtimes, nil)
 	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, runtimes, StarterOptions{
 		ClientFactory:  clientFactory,
-		Worktrees:      worktrees,
 		SessionRuntime: sessionRuntime,
 	})
 	if err != nil {
@@ -2061,7 +1970,7 @@ func newStarterFixture(t *testing.T, mode config.WorkflowCompletionMode, steps .
 	if _, err := store.LinkWorkflow(context.Background(), binding.ProjectID, workflowID, true); err != nil {
 		t.Fatalf("LinkWorkflow: %v", err)
 	}
-	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, worktrees: worktrees, client: client, clientFactory: clientFactory, runtimes: runtimes, starter: starter, workflowID: workflowID, projectID: binding.ProjectID, attentionBroker: attentionBroker}
+	return starterFixture{cfg: cfg, metadata: metadataStore, store: store, view: view, client: client, clientFactory: clientFactory, runtimes: runtimes, starter: starter, workflowID: workflowID, projectID: binding.ProjectID, attentionBroker: attentionBroker}
 }
 
 func newChainedStarterFixture(t *testing.T) starterFixture {
@@ -2083,7 +1992,6 @@ func (f *starterFixture) rebuildStarter(t *testing.T) {
 	sessionRuntime := sessionruntime.NewService(f.cfg.PersistenceRoot, f.metadata, nil, nil, nil, nil, f.runtimes.(*registry.RuntimeRegistry), nil)
 	starter, err := NewStarter(f.cfg, f.metadata, f.store, nil, nil, f.runtimes, StarterOptions{
 		ClientFactory:  f.clientFactory,
-		Worktrees:      f.worktrees,
 		SessionRuntime: sessionRuntime,
 	})
 	if err != nil {
@@ -2115,6 +2023,15 @@ func (f starterFixture) createStartedTask(t *testing.T) workflowstore.TaskRecord
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
+	if err := f.store.SaveTaskExecutionTarget(context.Background(), workflow.ExecutionTarget{
+		TaskID:              task.ID,
+		Policy:              workflow.ExecutionPolicyNone,
+		State:               workflow.ExecutionTargetStateLocked,
+		SetupState:          workflow.ExecutionTargetSetupNotApplicable,
+		RecoveryDisposition: workflow.ExecutionTargetRecoveryAvailable,
+	}); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
 	if _, err := f.store.StartTask(context.Background(), task.ID); err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
@@ -2124,9 +2041,6 @@ func (f starterFixture) createStartedTask(t *testing.T) workflowstore.TaskRecord
 func (f starterFixture) claimPlannedRun(t *testing.T) (workflowstore.RunnableRunRecord, workflowstore.RunStartContext, launch.SessionPlan) {
 	t.Helper()
 	task := f.createStartedTask(t)
-	if err := f.worktrees.EnsureTaskWorktree(context.Background(), TaskWorktreeEnsureRequest{TaskID: task.ID}); err != nil {
-		t.Fatalf("EnsureTaskWorktree: %v", err)
-	}
 	runs, err := f.store.ListRuns(context.Background(), task.ID)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
@@ -2568,7 +2482,7 @@ func (f starterFixture) waitForActiveCountZero(t *testing.T, scheduler *Schedule
 	t.Fatalf("scheduler active count = %d, want 0 after runtime finish", scheduler.ActiveCount())
 }
 
-func (f starterFixture) assertRunSessionUsesTaskWorktree(t *testing.T, sessionID string) string {
+func (f starterFixture) assertRunSessionUsesSourceExecutionRoot(t *testing.T, sessionID string) string {
 	t.Helper()
 	record, err := f.metadata.ResolvePersistedSession(context.Background(), sessionID)
 	if err != nil {
@@ -2581,8 +2495,8 @@ func (f starterFixture) assertRunSessionUsesTaskWorktree(t *testing.T, sessionID
 	if err != nil {
 		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
 	}
-	if target.Worktree == nil || strings.TrimSpace(target.Worktree.ID) == "" || !strings.HasSuffix(target.EffectiveWorkdir, string(filepath.Separator)+"RUN-1") {
-		t.Fatalf("session target = %+v, want task worktree", target)
+	if target.Worktree != nil || target.EffectiveWorkdir != target.WorkspaceRoot {
+		t.Fatalf("session target = %+v, want source execution root without managed worktree", target)
 	}
 	return target.EffectiveWorkdir
 }
@@ -2683,59 +2597,6 @@ func (f starterFixture) historyReplacedWorkflowRunID(t *testing.T, sessionID str
 		}
 	}
 	return runID
-}
-
-type metadataTaskWorktrees struct {
-	t           *testing.T
-	metadata    *metadata.Store
-	workspaceID string
-	root        string
-	afterCreate func(worktreeRoot string) error
-}
-
-func (e *metadataTaskWorktrees) EnsureTaskWorktree(ctx context.Context, req TaskWorktreeEnsureRequest) error {
-	if e == nil || e.metadata == nil {
-		return nil
-	}
-	taskID := string(req.TaskID)
-	var shortID string
-	if err := e.metadata.DB().QueryRowContext(ctx, `SELECT short_id FROM tasks WHERE id = ?`, taskID).Scan(&shortID); err != nil {
-		return err
-	}
-	worktreeID := "worktree-" + taskID
-	worktreeRoot := filepath.Join(e.root, shortID)
-	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
-		return err
-	}
-	if e.afterCreate != nil {
-		if err := e.afterCreate(worktreeRoot); err != nil {
-			return err
-		}
-	}
-	if err := e.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
-		ID:              worktreeID,
-		WorkspaceID:     e.workspaceID,
-		CanonicalRoot:   worktreeRoot,
-		DisplayName:     shortID,
-		Availability:    "available",
-		Managed:         true,
-		CreatedBranch:   true,
-		GitMetadataJSON: `{}`,
-	}); err != nil {
-		return err
-	}
-	result, err := e.metadata.DB().ExecContext(ctx, `UPDATE tasks SET managed_worktree_id = ?, updated_at_unix_ms = ? WHERE id = ?`, sql.NullString{String: worktreeID, Valid: true}, time.Now().UTC().UnixMilli(), taskID)
-	if err != nil {
-		return err
-	}
-	updated, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if updated != 1 {
-		return sql.ErrNoRows
-	}
-	return nil
 }
 
 func createStarterWorkflow(t *testing.T, store *workflowstore.Store) workflow.WorkflowID {

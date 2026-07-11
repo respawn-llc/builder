@@ -220,6 +220,7 @@
 - Managed-worktree tasks create and, when configured, run setup for the managed worktree before the first executable run is scheduled. Blocking setup prevents runs from locking context before setup-provided local skills, docs, or other worktree files are present.
 - Managed worktree setup failure blocks the initiating executable action without scheduling a run. The created worktree stays available for inspection or manual repair.
 - A later initiating executable action reuses an existing task managed worktree, including after setup failure, ref movement, or a workflow execution-policy edit. If failed materialization created no managed worktree, a later action resolves the workflow's latest policy. If a locked managed worktree root was removed, Kent recreates it only when durable Git ownership evidence proves the locked target; when both the root and that ownership evidence are unavailable, Kent requires manual recovery rather than attaching or recreating from an unverifiable branch.
+- Each phase-two execution-target recovery attempt has a 30-second deadline. A deadline expiration records `deadline_exceeded`, clears that target's recovery claim, and requires explicit recovery selection or manual repair without blocking other queued targets.
 - Task worktree branch name is the task short ID.
 - Worktree creation reuses existing worktree branch/root collision handling.
 - Worktree deletion/retargeting treats non-terminal tasks referencing a managed worktree as blockers.

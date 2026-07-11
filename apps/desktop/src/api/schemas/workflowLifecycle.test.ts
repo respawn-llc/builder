@@ -111,7 +111,7 @@ describe("workflow execution policy schemas", () => {
           custom_ref: "refs/tags/v1.2.3",
           source: { kind: "detached_commit", commit: "deadbeef" },
         },
-        status: { kind: "backlog", label: "Backlog", native_state: "active" },
+        status: { kind: "backlog", native_state: "active", node_ids: [], run_ids: [], attention_types: [] },
         actions: { can_start: true, can_interrupt: false, can_resume: false, can_cancel: true },
       },
     });

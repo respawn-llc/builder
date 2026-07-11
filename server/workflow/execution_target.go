@@ -52,6 +52,7 @@ const (
 	ExecutionTargetRecoveryCauseAmbiguousProvisioning ExecutionTargetRecoveryCause = "ambiguous_provisioning"
 	ExecutionTargetRecoveryCauseAmbiguousWorktree     ExecutionTargetRecoveryCause = "ambiguous_worktree"
 	ExecutionTargetRecoveryCauseInspectionFailed      ExecutionTargetRecoveryCause = "inspection_failed"
+	ExecutionTargetRecoveryCauseDeadlineExceeded      ExecutionTargetRecoveryCause = "deadline_exceeded"
 	ExecutionTargetRecoveryCauseMissingManagedRoot    ExecutionTargetRecoveryCause = "missing_managed_root"
 	ExecutionTargetRecoveryCauseUnsupportedState      ExecutionTargetRecoveryCause = "unsupported_recovery_state"
 )

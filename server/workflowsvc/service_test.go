@@ -1185,6 +1185,52 @@ func TestExecutionTargetRecoveryCoordinatorContinuesAfterTargetLocalFailure(t *t
 	}
 }
 
+func TestExecutionTargetRecoveryCoordinatorDeadlineMarksOnlyBlockedTargetManualAndContinues(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	tasks := []serverapi.WorkflowTaskCreateResponse{
+		createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID),
+		createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID),
+	}
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].Task.ID < tasks[j].Task.ID })
+	blockedTask, recoveredTask := tasks[0], tasks[1]
+	saveQueuedInitialRecoveryTarget(t, ctx, service, blockedTask.Task.ID)
+	saveQueuedInitialRecoveryTarget(t, ctx, service, recoveredTask.Task.ID)
+	service.targetWorktrees = &recordingTaskExecutionTargetWorktreeMaterializer{
+		inspect: func(ctx context.Context, req worktree.InspectExecutionTargetWorktreeRequest) (worktree.ExecutionTargetWorktreeInspection, error) {
+			if req.TaskShortID != blockedTask.Task.ShortID {
+				return worktree.ExecutionTargetWorktreeInspection{Kind: worktree.ExecutionTargetWorktreeInspectionNoSideEffects}, nil
+			}
+			<-ctx.Done()
+			return worktree.ExecutionTargetWorktreeInspection{}, ctx.Err()
+		},
+	}
+
+	coordinator, err := service.startExecutionTargetRecovery(ctx, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("startExecutionTargetRecovery: %v", err)
+	}
+	defer func() {
+		if closeErr := coordinator.Close(); closeErr != nil {
+			t.Fatalf("ExecutionTargetRecoveryCoordinator.Close: %v", closeErr)
+		}
+	}()
+
+	waitForWorkflowServiceCondition(t, func() bool {
+		blocked, blockedErr := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(blockedTask.Task.ID))
+		recovered, recoveredErr := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(recoveredTask.Task.ID))
+		return blockedErr == nil &&
+			blocked != nil &&
+			blocked.ActiveClaim == nil &&
+			blocked.RecoveryDisposition == workflow.ExecutionTargetRecoveryManualRecovery &&
+			blocked.RecoveryCause != nil &&
+			*blocked.RecoveryCause == workflow.ExecutionTargetRecoveryCauseDeadlineExceeded &&
+			recoveredErr == nil &&
+			recovered == nil
+	})
+}
+
 func TestExecutionTargetRecoveryCoordinatorPagesPastTwoHundredRecoverableFailures(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
