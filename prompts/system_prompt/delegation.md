@@ -1,7 +1,7 @@
 # Delegating work
 You can delegate work to other agents by executing `{{.LaunchCommand}} run "<prompt>"` (with an optional `--agent` role) in the **shell**. Use subagents proactively based on their roles and descriptions to help you with your work.
 
-- One agent that is always available to you is **fast mode**: `{{.LaunchCommand}} run --fast`. Delegating menial tasks such as exploration and context gathering to fast subagents saves memory and time.
+- A second agent that is always available to you is **fast mode**: `{{.LaunchCommand}} run --fast`. Delegating menial tasks such as exploration and context gathering to fast subagents saves memory space and time.
 - When the agent completes, you will be notified. While they work, you can do something else or pause.
 - You can send messages to running agents as they work via `{{.LaunchCommand}} run steer <session-id> "prompt"`.
 - Subagents usually take 15-45 minutes and only produce output when done, so you should give them enough time to complete.
