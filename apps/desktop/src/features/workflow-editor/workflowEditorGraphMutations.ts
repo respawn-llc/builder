@@ -1,4 +1,7 @@
 export {
+  addConnectedWorkflowNode,
+} from "./workflowEditorGraphConnectedNodeMutations";
+export {
   connectWorkflowNodes,
   deleteWorkflowEdge,
   editWorkflowEdgeRoute,
@@ -15,7 +18,9 @@ export {
 } from "./workflowEditorGraphNodeMutations";
 export {
   workflowEditorGraphMutationWarnings,
+  type AddConnectedWorkflowNodeInput,
   type AddWorkflowNodeInput,
+  type CreatableWorkflowNodeKind,
   type AddWorkflowNodeToGroupInput,
   type ConnectWorkflowNodesInput,
   type CreateWorkflowNodeGroupInput,

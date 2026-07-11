@@ -1,6 +1,7 @@
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { WorkflowInspectorSelection } from "../../app/sidebarContext";
+import type { WorkflowInspectorInitialFocus, WorkflowInspectorSelection } from "../../app/sidebarContext";
 import { useAppServices } from "../../app/useAppServices";
 import { useStatusController } from "../../app/useStatusController";
 import { WorkflowGraphCanvas } from "./WorkflowGraphCanvas";
@@ -26,6 +27,20 @@ import {
 import type { WorkflowEditorDraftAction, WorkflowEditorDraftState } from "./workflowEditorDraft";
 import { newWorkflowTopologyID } from "./workflowTopologyID";
 import type { WorkflowGraphSelection } from "./workflowGraphSelection";
+import type { WorkflowNodeKindSelectionModality } from "./WorkflowNodeKindPicker";
+
+type PendingConnectedCreation = Readonly<{
+  conflictVersion: number | null;
+  edgeID: string;
+  expectedGraphVersion: number;
+  modality: WorkflowNodeKindSelectionModality;
+}>;
+
+type PendingGraphSelectionRequest = Readonly<{
+  edgeID: string;
+  expectedGraphVersion: number;
+  requestID: string;
+}>;
 
 export type WorkflowEditorCanvasProps = Readonly<{
   graph: WorkflowGraphLayout;
@@ -33,7 +48,7 @@ export type WorkflowEditorCanvasProps = Readonly<{
   draftState: WorkflowEditorDraftState | null;
   dispatch: (action: WorkflowEditorDraftAction) => void;
   deleteRequestIndexRef: { current: number };
-  inspect: (selection: WorkflowInspectorSelection) => void;
+  inspect: (selection: WorkflowInspectorSelection, initialFocus?: WorkflowInspectorInitialFocus) => void;
   closeDeletedNodeInspector: (selection: WorkflowGraphSelection) => void;
   onPendingGraphMutationChange: (mutation: PendingGraphMutation | null) => void;
   openDeleteConfirmation: (mutation: PendingGraphMutation) => Promise<void>;
@@ -55,6 +70,56 @@ export function WorkflowEditorCanvas({
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const { push: pushStatus } = useStatusController();
+  const [pendingConnectedCreation, setPendingConnectedCreation] = useState<PendingConnectedCreation | null>(null);
+  const [graphSelectionRequest, setGraphSelectionRequest] = useState<PendingGraphSelectionRequest | null>(null);
+  const clearPendingConnectedCreation = (): void => {
+    setGraphSelectionRequest(null);
+    setPendingConnectedCreation(null);
+  };
+
+  useEffect(() => {
+    if (pendingConnectedCreation === null || draftState === null) {
+      return;
+    }
+    const conflictVersion = draftState.conflict?.workflow.version ?? null;
+    if (conflictVersion !== pendingConnectedCreation.conflictVersion) {
+      queueMicrotask(clearPendingConnectedCreation);
+      return;
+    }
+    if (draftState.graphVersion < pendingConnectedCreation.expectedGraphVersion) {
+      return;
+    }
+    if (!connectedCreationSucceeded(draftState, pendingConnectedCreation)) {
+      queueMicrotask(clearPendingConnectedCreation);
+      return;
+    }
+    inspect(
+      { edgeID: pendingConnectedCreation.edgeID, kind: "edge" },
+      pendingConnectedCreation.modality === "keyboard" ? "firstEditableControl" : undefined,
+    );
+    queueMicrotask(() => {
+      setGraphSelectionRequest({
+        edgeID: pendingConnectedCreation.edgeID,
+        expectedGraphVersion: pendingConnectedCreation.expectedGraphVersion,
+        requestID: `connected-node:${pendingConnectedCreation.edgeID}`,
+      });
+      setPendingConnectedCreation(null);
+    });
+  }, [draftState, inspect, pendingConnectedCreation]);
+
+  useEffect(() => {
+    if (graphSelectionRequest === null || draftState === null) {
+      return;
+    }
+    if (
+      draftState.graphVersion > graphSelectionRequest.expectedGraphVersion ||
+      !draftState.draft.edges.some((edge) => edge.id === graphSelectionRequest.edgeID)
+    ) {
+      queueMicrotask(() => {
+        setGraphSelectionRequest(null);
+      });
+    }
+  }, [draftState, graphSelectionRequest]);
 
   const handleDeleteSelection = (selection: WorkflowGraphSelection): void => {
     if (draftState === null) {
@@ -135,6 +200,29 @@ export function WorkflowEditorCanvas({
       onAddNode={(kind) => {
         dispatch({ input: { id: newWorkflowTopologyID("node"), kind }, type: "addNode" });
       }}
+      onAddConnectedNode={(sourceNodeID, kind, modality) => {
+        if (draftState === null) {
+          return;
+        }
+        const edgeID = newWorkflowTopologyID("edge");
+        setGraphSelectionRequest(null);
+        setPendingConnectedCreation({
+          conflictVersion: draftState.conflict?.workflow.version ?? null,
+          edgeID,
+          expectedGraphVersion: draftState.graphVersion + 1,
+          modality,
+        });
+        dispatch({
+          input: {
+            edgeID,
+            kind,
+            nodeID: newWorkflowTopologyID("node"),
+            sourceNodeID,
+            transitionGroupID: newWorkflowTopologyID("transitionGroup"),
+          },
+          type: "addConnectedNode",
+        });
+      }}
       onAddNodeToGroup={(nodeID, groupID) => {
         dispatch({
           input: {
@@ -193,6 +281,32 @@ export function WorkflowEditorCanvas({
       onWorkflowInspect={() => {
         inspect({ kind: "workflow" });
       }}
+      graphSelectionRequest={
+        graphSelectionRequest === null
+          ? null
+          : {
+              edgeID: graphSelectionRequest.edgeID,
+              requestID: graphSelectionRequest.requestID,
+            }
+      }
+      onGraphSelectionConsumed={(requestID) => {
+        setGraphSelectionRequest((current) => (current?.requestID === requestID ? null : current));
+      }}
     />
+  );
+}
+
+function connectedCreationSucceeded(
+  draftState: WorkflowEditorDraftState,
+  creation: PendingConnectedCreation,
+): boolean {
+  const mutation = draftState.lastTopologyMutation;
+  return (
+    draftState.graphVersion === creation.expectedGraphVersion &&
+    mutation !== null &&
+    mutation.warnings.length === 0 &&
+    mutation.nextSelection.kind === "edge" &&
+    mutation.nextSelection.edgeID === creation.edgeID &&
+    draftState.draft.edges.some((edge) => edge.id === creation.edgeID)
   );
 }

@@ -11,6 +11,7 @@ import {
 import {
   addWorkflowNode,
   addWorkflowNodeToGroup,
+  addConnectedWorkflowNode,
   connectWorkflowNodes,
   createWorkflowNodeGroupFromNode,
   deleteWorkflowEdge,
@@ -23,6 +24,68 @@ import {
 } from "./workflowEditorGraphMutations";
 
 describe("workflowEditorGraphMutations", () => {
+  it.each(["agent", "script", "terminal"] as const)(
+    "atomically adds an ungrouped %s node and its normal transition",
+    (kind) => {
+      const draft = draftDefinitionFromSource(workflowDefinition);
+
+      const added = addConnectedWorkflowNode(draft, {
+        edgeID: `workflow-edge-${kind}`,
+        kind,
+        nodeID: `workflow-node-${kind}`,
+        sourceNodeID: "node-agent",
+        transitionGroupID: `workflow-transition-group-${kind}`,
+      });
+
+      const node = added.draft.nodes.find((item) => item.id === `workflow-node-${kind}`);
+      expect(added.draft.nodes).toHaveLength(draft.nodes.length + 1);
+      expect(added.draft.edges).toHaveLength(draft.edges.length + 1);
+      expect(added.draft.transitionGroups).toHaveLength(draft.transitionGroups.length + 1);
+      expect(node).toMatchObject({
+        groupID: "",
+        groupKey: "",
+        id: `workflow-node-${kind}`,
+        kind,
+      });
+      expect(added.draft.transitionGroups.at(-1)).toMatchObject({
+        id: `workflow-transition-group-${kind}`,
+        name: node?.name,
+        sourceNodeID: "node-agent",
+        transitionID: node?.key,
+      });
+      expect(added.draft.edges.at(-1)).toMatchObject({
+        contextMode: "new_session",
+        contextSource: { kind: "immediate_source", nodeKey: "" },
+        id: `workflow-edge-${kind}`,
+        key: node?.key,
+        promptTemplate: "",
+        requiresApproval: false,
+        targetNodeID: `workflow-node-${kind}`,
+        transitionGroupID: `workflow-transition-group-${kind}`,
+      });
+      expect(added.nextSelection).toEqual({ edgeID: `workflow-edge-${kind}`, kind: "edge" });
+      expect(added.warnings).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["missing-node", "source and target nodes are required"],
+    ["node-done", "terminal nodes cannot have outgoing edges"],
+  ])("retains the original draft when connected creation source %s is blocked", (sourceNodeID, warning) => {
+    const draft = draftDefinitionFromSource(workflowDefinition);
+
+    const added = addConnectedWorkflowNode(draft, {
+      edgeID: "workflow-edge-review",
+      kind: "agent",
+      nodeID: "workflow-node-review",
+      sourceNodeID,
+      transitionGroupID: "workflow-transition-group-review",
+    });
+
+    expect(added.draft).toBe(draft);
+    expect(added.warnings).toEqual([warning]);
+  });
+
   it("adds executable and terminal nodes", () => {
     const agent = addWorkflowNode(draftDefinitionFromSource(workflowDefinition), {
       id: "workflow-node-agent",

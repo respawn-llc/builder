@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { initializeI18n } from "../../i18n/setup";
+import type { WorkflowNodeKind } from "../../api";
+import { workflowEditorEnglish } from "../../i18n/workflowEditorEn";
 import { WorkflowGraphCanvas, WorkflowNodeInfoTooltipContent } from "./WorkflowGraphCanvas";
 import { groupIDFromPoint } from "./workflowGraphCanvasInteractions";
 import type { WorkflowGraphNode } from "./workflowGraphLayout";
@@ -23,6 +25,7 @@ describe("WorkflowGraphCanvas", () => {
   it("renders graph nodes and opens inspectors for editable nodes", async () => {
     const copied: string[] = [];
     const onNodeInspect = vi.fn();
+    const onAddConnectedNode = vi.fn();
     const { unmount } = render(
       <WorkflowGraphCanvas
         graph={{
@@ -60,6 +63,7 @@ describe("WorkflowGraphCanvas", () => {
         onCopyText={(value) => {
           copied.push(value);
         }}
+        onAddConnectedNode={onAddConnectedNode}
         onEdgeInspect={() => undefined}
         onGroupInspect={() => undefined}
         onNodeInspect={onNodeInspect}
@@ -83,8 +87,11 @@ describe("WorkflowGraphCanvas", () => {
     expect(onNodeInspect).toHaveBeenCalledWith("join");
     fireEvent.click(screen.getByTestId("workflow-graph-node-agent"));
     expect(onNodeInspect).toHaveBeenCalledWith("agent");
-    fireEvent.click(within(screen.getByTestId("workflow-graph-node-agent")).getByTestId("workflow-node-source-handle"));
-    expect(onNodeInspect).toHaveBeenLastCalledWith("agent");
+    fireEvent.click(within(screen.getByTestId("workflow-graph-node-agent")).getByTestId("workflow-node-source-handle"), {
+      detail: 1,
+    });
+    fireEvent.click(await screen.findByRole("button", { name: workflowEditorEnglish.addAgentNode }), { detail: 1 });
+    expect(onAddConnectedNode).toHaveBeenCalledWith("agent", "agent", "pointer");
     fireEvent.pointerMove(screen.getByTestId("workflow-graph-node-join"), { pointerType: "mouse" });
     await waitFor(() => {
       expect(screen.getByTestId("workflow-node-metadata-tooltip")).toBeInTheDocument();
@@ -152,6 +159,7 @@ describe("WorkflowGraphCanvas", () => {
           ],
         }}
         onDeleteSelection={onDeleteSelection}
+        onAddConnectedNode={() => undefined}
         onEdgeInspect={() => undefined}
         onGroupInspect={() => undefined}
         onNodeInspect={() => undefined}
@@ -185,6 +193,7 @@ describe("WorkflowGraphCanvas", () => {
             workflowGraphNode({ hasError: false, id: "terminal", kind: "terminal", label: "Done", x: 320 }),
           ],
         }}
+        onAddConnectedNode={() => undefined}
         onEdgeInspect={() => undefined}
         onGroupInspect={() => undefined}
         onNodeInspect={() => undefined}
@@ -213,6 +222,7 @@ describe("WorkflowGraphCanvas", () => {
           ],
         }}
         onAddNodeToGroup={onAddNodeToGroup}
+        onAddConnectedNode={() => undefined}
         onCreateNodeGroup={onCreateNodeGroup}
         onEdgeInspect={() => undefined}
         onGroupInspect={() => undefined}
@@ -374,7 +384,7 @@ function workflowGraphNode({
 }: Readonly<{
   hasError: boolean;
   id: string;
-  kind: string;
+  kind: WorkflowNodeKind;
   label: string;
   nodeKey?: string;
   type?: string;

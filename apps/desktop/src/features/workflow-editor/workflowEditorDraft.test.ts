@@ -328,6 +328,30 @@ describe("workflowEditorDraft", () => {
       removedTransitionGroupIDs: ["workflow-transition-group-review"],
     });
   });
+
+  it("adds a connected node in one graph version increment", () => {
+    const initial = initializeWorkflowEditorDraft(workflowDefinition);
+
+    const added = workflowEditorDraftReducer(initial, {
+      input: {
+        edgeID: "workflow-edge-review",
+        kind: "agent",
+        nodeID: "workflow-node-review",
+        sourceNodeID: "node-agent",
+        transitionGroupID: "workflow-transition-group-review",
+      },
+      type: "addConnectedNode",
+    });
+
+    expect(added.version).toBe(initial.version + 1);
+    expect(added.graphVersion).toBe(initial.graphVersion + 1);
+    expect(added.draft.nodes.some((node) => node.id === "workflow-node-review")).toBe(true);
+    expect(added.draft.edges.some((edge) => edge.id === "workflow-edge-review")).toBe(true);
+    expect(added.lastTopologyMutation?.nextSelection).toEqual({
+      edgeID: "workflow-edge-review",
+      kind: "edge",
+    });
+  });
 });
 
 function withVersion(source: WorkflowDefinition, version: number): WorkflowDefinition {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowValidation } from "../../api";
+import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowNode, type WorkflowValidation } from "../../api";
 import type { WorkflowGraphEdge, WorkflowGraphNode } from "./workflowGraphLayout";
 import { layoutWorkflowGraph, workflowGraphLayoutWithDraftProjection } from "./workflowGraphLayout";
 import {
@@ -814,7 +814,7 @@ const mainSWEWorkflow: WorkflowDefinition = {
   ],
 };
 
-function workflowNode(id: string, name: string, kind: string, groupID: string) {
+function workflowNode(id: string, name: string, kind: WorkflowNode["kind"], groupID: string) {
   return {
     id,
     workflowID: "workflow-1",

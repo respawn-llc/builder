@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  creatableWorkflowNodeKinds,
   hasWorkflowNodeMetadataTooltip,
   isInspectableWorkflowNodeKind,
 } from "./workflowGraphNodeKinds";
@@ -21,5 +22,9 @@ describe("workflowGraphNodeKinds", () => {
     expect(hasWorkflowNodeMetadataTooltip("start")).toBe(false);
     expect(hasWorkflowNodeMetadataTooltip("join")).toBe(true);
     expect(hasWorkflowNodeMetadataTooltip("terminal")).toBe(false);
+  });
+
+  it("owns the ordered quick-add node choices", () => {
+    expect(creatableWorkflowNodeKinds.map((item) => item.kind)).toEqual(["agent", "script", "terminal"]);
   });
 });

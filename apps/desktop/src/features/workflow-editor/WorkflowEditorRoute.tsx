@@ -1,10 +1,24 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type SetStateAction,
+} from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage } from "../../api/errors";
 import { useSidebar } from "../../app/sidebarContext";
-import type { SidebarDestination, WorkflowInspectorSelection } from "../../app/sidebarContext";
+import type {
+  SidebarDestination,
+  WorkflowInspectorInitialFocus,
+  WorkflowInspectorSelection,
+} from "../../app/sidebarContext";
 import { useStatusController } from "../../app/useStatusController";
 import { useWindowChromeTitle } from "../../app/windowChromeTitle";
 import { ErrorState, LoadingState } from "../../ui";
@@ -44,11 +58,13 @@ export type WorkflowEditorRouteProps = Readonly<{
 }>;
 
 type WorkflowEditorEmbeddedInspectorSelection = Readonly<{
+  initialFocus?: WorkflowInspectorInitialFocus | undefined;
   selection: WorkflowInspectorSelection;
   workflowID: string;
 }>;
 
 type WorkflowEditorReadyViewProps = Readonly<{
+  activeEmbeddedInspectorInitialFocus?: WorkflowInspectorInitialFocus | undefined;
   activeEmbeddedInspectorSelection: WorkflowInspectorSelection | null;
   closeDeletedNodeInspector: (selection: WorkflowGraphSelection) => void;
   controller: WorkflowEditorDraftController;
@@ -57,7 +73,7 @@ type WorkflowEditorReadyViewProps = Readonly<{
   dispatch: (action: WorkflowEditorDraftAction) => void;
   draftState: WorkflowEditorDraftState | null;
   graph: WorkflowGraphLayout;
-  inspect: (selection: WorkflowInspectorSelection) => void;
+  inspect: (selection: WorkflowInspectorSelection, initialFocus?: WorkflowInspectorInitialFocus) => void;
   onClearEmbeddedInspector: () => void;
   onPendingGraphMutationChange: (mutation: PendingGraphMutation | null) => void;
   openDeleteConfirmation: (mutation: PendingGraphMutation) => Promise<void>;
@@ -95,16 +111,12 @@ export function WorkflowEditorRoute({ projectID, surface = "route", workflowID }
     surface === "route",
   );
 
-  const inspectWorkflowGraphItem = useCallback(
-    (selection: WorkflowInspectorSelection) => {
-      if (surface === "sidebar") {
-        setEmbeddedInspectorSelection({ selection, workflowID });
-        return;
-      }
-      void openSidebar({ kind: "workflowInspect", mode: "overlay", selection, workflowID });
-    },
-    [openSidebar, surface, workflowID],
-  );
+  const inspectWorkflowGraphItem = useWorkflowGraphInspector({
+    openSidebar,
+    setEmbeddedInspectorSelection,
+    surface,
+    workflowID,
+  });
 
   const closeDeletedNodeInspector = useCallback(
     (selection: WorkflowGraphSelection) => {
@@ -188,10 +200,11 @@ export function WorkflowEditorRoute({ projectID, surface = "route", workflowID }
   });
 
   const viewState = workflowEditorViewState(data, layoutQuery, graphState.projectedGraph);
-  const activeEmbeddedInspectorSelection =
-    surface === "sidebar" && embeddedInspectorSelection?.workflowID === workflowID
-      ? embeddedInspectorSelection.selection
-      : null;
+  const activeEmbeddedInspector = embeddedInspectorForWorkflow(
+    embeddedInspectorSelection,
+    surface,
+    workflowID,
+  );
 
   if (viewState.kind !== "ready") {
     return (
@@ -211,7 +224,8 @@ export function WorkflowEditorRoute({ projectID, surface = "route", workflowID }
 
   return (
     <WorkflowEditorReadyView
-      activeEmbeddedInspectorSelection={activeEmbeddedInspectorSelection}
+      activeEmbeddedInspectorInitialFocus={activeEmbeddedInspector?.initialFocus}
+      activeEmbeddedInspectorSelection={activeEmbeddedInspector?.selection ?? null}
       closeDeletedNodeInspector={closeDeletedNodeInspector}
       controller={controller}
       deleteConfirmationFallback={deleteConfirmation.fallback}
@@ -232,8 +246,40 @@ export function WorkflowEditorRoute({ projectID, surface = "route", workflowID }
   );
 }
 
+function useWorkflowGraphInspector({
+  openSidebar,
+  setEmbeddedInspectorSelection,
+  surface,
+  workflowID,
+}: Readonly<{
+  openSidebar: ReturnType<typeof useSidebar>["openSidebar"];
+  setEmbeddedInspectorSelection: Dispatch<SetStateAction<WorkflowEditorEmbeddedInspectorSelection | null>>;
+  surface: "route" | "sidebar";
+  workflowID: string;
+}>): (selection: WorkflowInspectorSelection, initialFocus?: WorkflowInspectorInitialFocus) => void {
+  return useCallback(
+    (selection, initialFocus) => {
+      if (surface === "sidebar") {
+        setEmbeddedInspectorSelection({ initialFocus, selection, workflowID });
+        return;
+      }
+      void openSidebar({ initialFocus, kind: "workflowInspect", mode: "overlay", selection, workflowID });
+    },
+    [openSidebar, setEmbeddedInspectorSelection, surface, workflowID],
+  );
+}
+
+function embeddedInspectorForWorkflow(
+  embedded: WorkflowEditorEmbeddedInspectorSelection | null,
+  surface: "route" | "sidebar",
+  workflowID: string,
+): WorkflowEditorEmbeddedInspectorSelection | null {
+  return surface === "sidebar" && embedded?.workflowID === workflowID ? embedded : null;
+}
+
 function WorkflowEditorReadyView(props: WorkflowEditorReadyViewProps) {
   const {
+    activeEmbeddedInspectorInitialFocus,
     activeEmbeddedInspectorSelection,
     closeDeletedNodeInspector,
     controller,
@@ -274,6 +320,7 @@ function WorkflowEditorReadyView(props: WorkflowEditorReadyViewProps) {
         workflowID={workflowID}
       />
       <WorkflowEditorEmbeddedInspector
+        initialFocus={activeEmbeddedInspectorInitialFocus}
         onClose={onClearEmbeddedInspector}
         selection={activeEmbeddedInspectorSelection}
         workflowID={workflowID}

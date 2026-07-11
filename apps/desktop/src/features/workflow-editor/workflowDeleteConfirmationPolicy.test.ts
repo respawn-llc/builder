@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { emptyWorkflowDerivedWiring, type WorkflowDefinition } from "../../api";
+import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowNode } from "../../api";
 import {
   workflowDeleteNeedsConfirmation,
   workflowDeletionConfirmationCounts,
@@ -48,7 +48,7 @@ const agentNode = {
   groupKey: "",
   inputFields: [],
   joinInputProviders: [],
-  kind: "agent",
+  kind: "agent" satisfies WorkflowNode["kind"],
   outputFields: [],
   promptTemplate: "",
   subagentRole: "default",

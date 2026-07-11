@@ -15,8 +15,9 @@ import {
 } from "../../ui";
 import { cx } from "../../ui/classes";
 import { WorkflowNodeInfoTooltipContent, type CopyText } from "./WorkflowGraphNodeMetadata";
-import { isInspectableWorkflowNodeKind } from "./workflowGraphNodeKinds";
+import type { CreatableWorkflowNodeKind } from "./workflowEditorGraphMutationTypes";
 import type { WorkflowGraphSelection } from "./workflowGraphSelection";
+import { WorkflowNodeKindPicker, type WorkflowNodeKindSelectionModality } from "./WorkflowNodeKindPicker";
 import {
   workflowGraphCreationHandleID,
   workflowGraphTargetConnectionHandleID,
@@ -36,6 +37,13 @@ type WorkflowNodeContextMenuCallbacks = Readonly<{
   onInspectNode: (nodeID: string) => void;
   onRemoveNodeFromGroup: ((nodeID: string) => void) | undefined;
   onSelectContextMenu: (nodeID: string) => void;
+}>;
+
+type WorkflowConnectedNodeCallbacks = Readonly<{
+  onAddConnectedNode:
+    | ((sourceNodeID: string, kind: CreatableWorkflowNodeKind, modality: WorkflowNodeKindSelectionModality) => void)
+    | undefined;
+  onCreationHandleActivate: (nodeID: string) => boolean;
 }>;
 
 function WorkflowNodeContextMenuShell({
@@ -124,12 +132,14 @@ export const WorkflowNode = memo(function WorkflowNode({
   onInspectNode,
   onRemoveNodeFromGroup,
   onSelectContextMenu,
+  onAddConnectedNode,
+  onCreationHandleActivate,
   selected,
 }: NodeProps<WorkflowGraphWorkflowNode> &
   Readonly<
     {
       onCopyText: CopyText;
-    } & WorkflowNodeContextMenuCallbacks
+    } & WorkflowNodeContextMenuCallbacks & WorkflowConnectedNodeCallbacks
   >) {
   const { t } = useTranslation();
   const nodeCard = (
@@ -150,7 +160,11 @@ export const WorkflowNode = memo(function WorkflowNode({
     >
       <WorkflowTargetConnectionHandle data={data} />
       <WorkflowEndpointHandles endpointPorts={data.endpointPorts ?? []} />
-      <WorkflowCreationHandle data={data} onInspectNode={onInspectNode} />
+      <WorkflowCreationHandle
+        data={data}
+        onAddConnectedNode={onAddConnectedNode}
+        onCreationHandleActivate={onCreationHandleActivate}
+      />
       <strong className="line-clamp-2 min-w-0 text-[0.95rem] leading-snug text-[var(--color-on-island)]">
         {data.label}
       </strong>
@@ -217,12 +231,15 @@ export const WorkflowJoinNode = memo(function WorkflowJoinNode({
   onDeleteSelection,
   onInspectNode,
   onSelectContextMenu,
+  onAddConnectedNode,
+  onCreationHandleActivate,
   selected,
 }: NodeProps<WorkflowGraphWorkflowNode> &
   Readonly<
     {
       onCopyText: CopyText;
-    } & Pick<WorkflowNodeContextMenuCallbacks, "onDeleteSelection" | "onInspectNode" | "onSelectContextMenu">
+    } & Pick<WorkflowNodeContextMenuCallbacks, "onDeleteSelection" | "onInspectNode" | "onSelectContextMenu"> &
+      WorkflowConnectedNodeCallbacks
   >) {
   const nodeCard = (
     <div
@@ -235,7 +252,11 @@ export const WorkflowJoinNode = memo(function WorkflowJoinNode({
     >
       <WorkflowTargetConnectionHandle data={data} />
       <WorkflowEndpointHandles endpointPorts={data.endpointPorts ?? []} />
-      <WorkflowCreationHandle data={data} onInspectNode={onInspectNode} />
+      <WorkflowCreationHandle
+        data={data}
+        onAddConnectedNode={onAddConnectedNode}
+        onCreationHandleActivate={onCreationHandleActivate}
+      />
       <IslandSurface
         as="div"
         className={cx(
@@ -276,23 +297,37 @@ export const WorkflowJoinNode = memo(function WorkflowJoinNode({
 
 function WorkflowCreationHandle({
   data,
-  onInspectNode,
-}: Readonly<{ data: WorkflowGraphNodeData; onInspectNode: (nodeID: string) => void }>) {
-  if (data.kind === "terminal") {
+  onAddConnectedNode,
+  onCreationHandleActivate,
+}: Readonly<{
+  data: WorkflowGraphNodeData;
+  onAddConnectedNode: WorkflowConnectedNodeCallbacks["onAddConnectedNode"];
+  onCreationHandleActivate: WorkflowConnectedNodeCallbacks["onCreationHandleActivate"];
+}>) {
+  const { t } = useTranslation();
+  if (data.kind === "terminal" || onAddConnectedNode === undefined) {
     return null;
   }
   return (
     <>
-      <Handle
-        aria-label="Create outgoing transition"
-        className="workflow-editor-handle workflow-editor-creation-handle"
-        data-testid="workflow-node-source-handle"
-        id={data.creationHandleID ?? workflowGraphCreationHandleID(data.entityID)}
-        onClick={(event) => {
-          inspectEditableNodeFromHandle(event, data, onInspectNode);
+      <WorkflowNodeKindPicker
+        onTriggerActivate={() => onCreationHandleActivate(data.entityID)}
+        onSelect={(kind, modality) => {
+          onAddConnectedNode(data.entityID, kind, modality);
         }}
-        position={Position.Right}
-        type="source"
+        trigger={
+          <Handle
+            aria-label={t("workflowEditor.createOutgoingTransition")}
+            className="workflow-editor-handle workflow-editor-creation-handle"
+            data-testid="workflow-node-source-handle"
+            id={data.creationHandleID ?? workflowGraphCreationHandleID(data.entityID)}
+            position={Position.Right}
+            role="button"
+            tabIndex={0}
+            type="source"
+          />
+        }
+        triggerPolicy="activation"
       />
       <Plus
         aria-hidden="true"
@@ -367,17 +402,6 @@ function workflowNodeOutlineStyle(kind: string, hasError: boolean): WorkflowNode
     return { "--workflow-editor-node-outline-color": "var(--color-secondary)" };
   }
   return { "--workflow-editor-node-outline-color": "var(--color-outline)" };
-}
-
-function inspectEditableNodeFromHandle(
-  event: MouseEvent,
-  data: WorkflowGraphNodeData,
-  onInspectNode: (nodeID: string) => void,
-): void {
-  event.stopPropagation();
-  if (isInspectableWorkflowNodeKind(data.kind)) {
-    onInspectNode(data.entityID);
-  }
 }
 
 function stopPropagation(event: MouseEvent): void {
