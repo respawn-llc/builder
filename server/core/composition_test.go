@@ -3,7 +3,11 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +22,7 @@ import (
 	askquestion "core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/server/worktree"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -223,6 +228,133 @@ func TestNewWithContextFencesOrphanedExecutionTargetsBeforeStartingScheduler(t *
 	if !appCore.bundles.Workflows.scheduler.Started() {
 		t.Fatal("scheduler did not start after recovery fence")
 	}
+}
+
+func TestNewWithContextFencesProvisionedUnattachedTargetWithoutMutatingGitState(t *testing.T) {
+	ctx := t.Context()
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	initializeCoreTestGitRepository(t, workspace)
+
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	seedStore, err := metadata.Open(resolved.Config.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("metadata.Open seed: %v", err)
+	}
+	binding, err := seedStore.RegisterWorkspaceBinding(ctx, resolved.Config.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	workflowStore, err := workflowstore.New(seedStore, workflowstore.WithRoleResolver(workflow.StaticRoleResolver{"coder": true}))
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	workflowID := createCoreValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Unattached provision", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	commit := runCoreTestGit(t, workspace, "rev-parse", "HEAD")
+	worktreeService := worktree.NewService(seedStore, nil, nil, nil, nil, nil, worktree.ServiceOptions{BaseDir: filepath.Join(t.TempDir(), "managed-worktrees")})
+	provisioned, err := worktreeService.ProvisionExecutionTargetWorktree(ctx, worktree.ProvisionExecutionTargetWorktreeRequest{
+		WorkspaceID:         binding.WorkspaceID,
+		SourceWorkspaceRoot: workspace,
+		TaskShortID:         task.ShortID,
+		ResolvedCommit:      commit,
+	})
+	if err != nil {
+		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)
+	}
+	provisioningGeneration := "provisioning-before-attachment"
+	claimGeneration := "materializing-before-attachment"
+	target := workflow.ExecutionTarget{
+		TaskID: task.ID,
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: commit,
+		},
+		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
+		ActiveClaim:                 &workflow.ExecutionTargetClaim{Generation: claimGeneration, Phase: workflow.ExecutionTargetClaimMaterializing},
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := workflowStore.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+	if err := seedStore.Close(); err != nil {
+		t.Fatalf("seed metadata close: %v", err)
+	}
+
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildAuthSupport: %v", err)
+	}
+	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
+	if err != nil {
+		t.Fatalf("BuildRuntimeSupport: %v", err)
+	}
+	appCore, err := NewWithContext(ctx, resolved.Config, authSupport, runtimeSupport)
+	if err != nil {
+		t.Fatalf("NewWithContext: %v", err)
+	}
+	t.Cleanup(func() { _ = appCore.Close() })
+
+	recoveredStore, err := workflowstore.New(appCore.bundles.Persistence.metadataStore, workflowstore.WithRoleResolver(workflow.StaticRoleResolver{"coder": true}))
+	if err != nil {
+		t.Fatalf("workflowstore.New recovered: %v", err)
+	}
+	actual, err := recoveredStore.GetTaskExecutionTarget(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if actual == nil || actual.ActiveClaim == nil ||
+		actual.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued ||
+		actual.ActiveClaim.Generation == claimGeneration ||
+		actual.SetupState != workflow.ExecutionTargetSetupPending {
+		t.Fatalf("recovered target = %+v, want queued claim and unchanged pending setup", actual)
+	}
+	if _, err := os.Stat(provisioned.WorktreeRoot); err != nil {
+		t.Fatalf("provisioned worktree after startup fence: %v", err)
+	}
+	if got := runCoreTestGit(t, provisioned.WorktreeRoot, "rev-parse", "HEAD"); got != commit {
+		t.Fatalf("provisioned worktree commit after startup fence = %q, want %q", got, commit)
+	}
+	if _, err := recoveredStore.ResolveTaskExecutionRoot(ctx, task.ID); !errors.Is(err, workflowstore.ErrTaskExecutionRootUnavailable) {
+		t.Fatalf("ResolveTaskExecutionRoot after unattached provision error = %v, want %v", err, workflowstore.ErrTaskExecutionRootUnavailable)
+	}
+}
+
+func initializeCoreTestGitRepository(t *testing.T, root string) {
+	t.Helper()
+	runCoreTestGit(t, root, "init", "-q")
+	runCoreTestGit(t, root, "config", "user.email", "test@example.com")
+	runCoreTestGit(t, root, "config", "user.name", "Kent Test")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatalf("write Git fixture: %v", err)
+	}
+	runCoreTestGit(t, root, "add", "README.md")
+	runCoreTestGit(t, root, "commit", "-q", "-m", "initial")
+}
+
+func runCoreTestGit(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	command := exec.CommandContext(t.Context(), "git", args...)
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func TestNewWithContextOptionsAcceptsRuntimeClientFactory(t *testing.T) {
