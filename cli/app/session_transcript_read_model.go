@@ -20,7 +20,6 @@ type ongoingTranscriptReadModel struct {
 	pendingToolIndex map[string]int
 	queuedMessages   keyedOngoingLiveItems[ongoingLiveItemID, ongoingLiveInput]
 	pendingPrompts   keyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPendingSessionPrompt]
-	backgroundTasks  keyedOngoingLiveItems[ongoingLiveItemID, clientui.TranscriptBackgroundActivity]
 }
 
 type ongoingPendingTool struct {
@@ -43,7 +42,6 @@ func newOngoingTranscriptReadModel() ongoingTranscriptReadModel {
 		pendingToolIndex: map[string]int{},
 		queuedMessages:   newKeyedOngoingLiveItems[ongoingLiveItemID, ongoingLiveInput](),
 		pendingPrompts:   newKeyedOngoingLiveItems[ongoingPromptID, clientui.TranscriptPendingSessionPrompt](),
-		backgroundTasks:  newKeyedOngoingLiveItems[ongoingLiveItemID, clientui.TranscriptBackgroundActivity](),
 	}
 }
 
@@ -182,33 +180,6 @@ func (m *ongoingTranscriptReadModel) applyPendingPrompt(prompt *clientui.Transcr
 
 func (m *ongoingTranscriptReadModel) refreshPendingPromptSection(width int) {
 	m.setSection(ongoing.FrameSectionPendingPrompt, terminalSafeFrameLinesForWidth(pendingPromptListLines(m.pendingPrompts.values()), width))
-}
-
-func (m *ongoingTranscriptReadModel) applyBackgroundActivity(activity *clientui.TranscriptBackgroundActivity) {
-	if activity == nil {
-		return
-	}
-	id := parseOngoingLiveItemID(activity.ID, "background activity")
-	if activity.Removed {
-		m.backgroundTasks.remove(id)
-		m.refreshBackgroundActivitySection(80)
-		return
-	}
-	m.backgroundTasks.set(id, *activity)
-	m.refreshBackgroundActivitySection(80)
-}
-
-func (m *ongoingTranscriptReadModel) refreshBackgroundActivitySection(width int) {
-	activities := m.backgroundTasks.values()
-	lines := make([]transcriptrender.Line, 0, len(activities))
-	for _, activity := range activities {
-		command := strings.TrimSpace(activity.Command)
-		if command == "" {
-			command = strings.TrimSpace(activity.Preview)
-		}
-		lines = append(lines, transcriptrender.RenderBackgroundedShell(command, width))
-	}
-	m.setStyledSection(ongoing.FrameSectionBackgroundActivity, lines)
 }
 
 func newKeyedOngoingLiveItems[K comparable, T any]() keyedOngoingLiveItems[K, T] {

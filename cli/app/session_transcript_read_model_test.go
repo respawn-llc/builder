@@ -59,7 +59,6 @@ func TestOngoingTranscriptControllerSeedsHydrationAppOwnedFrameSections(t *testi
 	wantSections := []ongoing.FrameSectionKind{
 		ongoing.FrameSectionPendingTools,
 		ongoing.FrameSectionQueuedOrSteered,
-		ongoing.FrameSectionBackgroundActivity,
 		ongoing.FrameSectionPendingPrompt,
 	}
 	if got := surface.lastFrameSectionKinds(); !reflect.DeepEqual(got, wantSections) {
@@ -120,7 +119,7 @@ func TestOngoingTranscriptControllerLiveAppOwnedMessageKindsRenderFrameSections(
 		{name: "compaction", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageCompactionStatus)},
 		{name: "context", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageContextUsage)},
 		{name: "goal", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageGoalStatus)},
-		{name: "background", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageBackgroundActivity), want: []ongoing.FrameSectionKind{ongoing.FrameSectionBackgroundActivity}},
+		{name: "background", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageBackgroundActivity)},
 		{name: "pending prompt", message: ongoingTranscriptMessage(2, clientui.TranscriptMessagePendingSessionPrompt), want: []ongoing.FrameSectionKind{ongoing.FrameSectionPendingPrompt}},
 		{name: "tool start", message: ongoingTranscriptMessage(2, clientui.TranscriptMessageToolStart), want: []ongoing.FrameSectionKind{ongoing.FrameSectionPendingTools}},
 	}
@@ -293,11 +292,8 @@ func TestOngoingTranscriptControllerTracksPluralLiveSectionsByID(t *testing.T) {
 		{Sequence: 3, Kind: clientui.TranscriptMessageQueuedOrSteeredMessageState, QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{QueueItemID: "44444444-4444-4444-8444-444444444444", Status: clientui.QueuedUserMessageAccepted, UserText: "second queued"}},
 		{Sequence: 4, Kind: clientui.TranscriptMessagePendingSessionPrompt, PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{ID: "ask-1", State: clientui.TranscriptPromptPending, Data: clientui.TranscriptPendingSessionPromptData{Question: "first prompt"}}},
 		{Sequence: 5, Kind: clientui.TranscriptMessagePendingSessionPrompt, PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{ID: "approval-1", State: clientui.TranscriptPromptPending, Data: clientui.TranscriptPendingSessionPromptData{Question: "second prompt"}}},
-		{Sequence: 6, Kind: clientui.TranscriptMessageBackgroundActivity, BackgroundActivity: &clientui.TranscriptBackgroundActivity{ID: "22222222-2222-4222-8222-222222222222", State: "running", Preview: "first background"}},
-		{Sequence: 7, Kind: clientui.TranscriptMessageBackgroundActivity, BackgroundActivity: &clientui.TranscriptBackgroundActivity{ID: "66666666-6666-4666-8666-666666666666", State: "running", Preview: "second background"}},
-		{Sequence: 8, Kind: clientui.TranscriptMessageQueuedOrSteeredMessageState, QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{QueueItemID: "11111111-1111-4111-8111-111111111111", Status: clientui.QueuedUserMessageSubmitted}},
-		{Sequence: 9, Kind: clientui.TranscriptMessagePendingSessionPrompt, PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{ID: "ask-1", State: clientui.TranscriptPromptResolved}},
-		{Sequence: 10, Kind: clientui.TranscriptMessageBackgroundActivity, BackgroundActivity: &clientui.TranscriptBackgroundActivity{ID: "22222222-2222-4222-8222-222222222222", Removed: true}},
+		{Sequence: 6, Kind: clientui.TranscriptMessageQueuedOrSteeredMessageState, QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{QueueItemID: "11111111-1111-4111-8111-111111111111", Status: clientui.QueuedUserMessageSubmitted}},
+		{Sequence: 7, Kind: clientui.TranscriptMessagePendingSessionPrompt, PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{ID: "ask-1", State: clientui.TranscriptPromptResolved}},
 	}
 	for _, message := range messages {
 		if _, err := controller.Accept(message); err != nil {
@@ -322,17 +318,11 @@ func TestOngoingTranscriptControllerTracksPluralLiveSectionsByID(t *testing.T) {
 	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionPendingPrompt), []string{"second prompt"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("prompt section lines = %v, want %v", got, want)
 	}
-	if got, want := surface.lastFrameSectionLines(ongoing.FrameSectionBackgroundActivity), []string{"$ second background • backgrounded"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("background section lines = %v, want %v", got, want)
-	}
 }
 
-func TestOngoingBackgroundActivityKeepsBackgroundedSuffixAtNarrowWidth(t *testing.T) {
-	const width = 24
+func TestOngoingBackgroundActivityDoesNotOccupyLiveArea(t *testing.T) {
 	surface := &ongoingSurfaceSpy{}
-	controller := newOngoingTranscriptController(surface, func() ongoing.FrameInput {
-		return ongoing.FrameInput{Size: ongoing.Size{Width: width, Height: 24}}
-	})
+	controller := newOngoingTranscriptController(surface, ongoingTestFrameProvider)
 	if _, err := controller.Accept(ongoingHydrationMessage(1)); err != nil {
 		t.Fatalf("accept hydration: %v", err)
 	}
@@ -350,24 +340,8 @@ func TestOngoingBackgroundActivityKeepsBackgroundedSuffixAtNarrowWidth(t *testin
 		t.Fatalf("accept background activity: %v", err)
 	}
 
-	lines := surface.lastFrameStyledSection(ongoing.FrameSectionBackgroundActivity)
-	if len(lines) != 1 || lines[0].Plain() != "$ sleep … • backgrounded" {
-		t.Fatalf("background activity lines = %+v", lines)
-	}
-	if lines[0].LeadingSymbol == nil {
-		t.Fatal("background activity line has no symbol")
-	}
-	if role, semantic := lines[0].LeadingSymbol.Style.Role(); !semantic ||
-		role != transcriptrender.StyleRoleToolShellSecondary {
-		t.Fatalf("background activity symbol = %+v, want secondary shell symbol", lines[0].LeadingSymbol)
-	}
-	for _, span := range lines[0].Spans {
-		role, semantic := span.Style.Role()
-		if !semantic ||
-			(role != transcriptrender.StyleRoleToolShell && role != transcriptrender.StyleRoleNoticeForegroundFaint) ||
-			!span.Style.Has(transcriptrender.SpanAttributeFaint) {
-			t.Fatalf("background activity span = %+v, want faint foreground", span)
-		}
+	if got := surface.lastFrameSectionKinds(); len(got) != 0 {
+		t.Fatalf("background activity frame sections = %v, want none", got)
 	}
 }
 
@@ -397,18 +371,6 @@ func TestOngoingTranscriptControllerRejectsInvalidLiveItemIDs(t *testing.T) {
 					ClientRequestID: "11111111-1111-1111-8111-111111111111",
 					Status:          clientui.QueuedUserMessageAccepted,
 					UserText:        "queued",
-				},
-			},
-		},
-		{
-			name: "background activity",
-			message: clientui.TranscriptMessage{
-				Sequence: 2,
-				Kind:     clientui.TranscriptMessageBackgroundActivity,
-				BackgroundActivity: &clientui.TranscriptBackgroundActivity{
-					ID:      "background-1",
-					State:   "running",
-					Preview: "tests",
 				},
 			},
 		},
@@ -464,7 +426,6 @@ func TestOngoingTranscriptControllerConstrainsPluralLiveSectionsToFrameWidth(t *
 	messages := []clientui.TranscriptMessage{
 		{Sequence: 2, Kind: clientui.TranscriptMessageQueuedOrSteeredMessageState, QueuedOrSteeredMessageState: &clientui.TranscriptQueuedOrSteeredMessageState{QueueItemID: "11111111-1111-4111-8111-111111111111", Status: clientui.QueuedUserMessageAccepted, UserText: "queued text that must not wrap in the native live band"}},
 		{Sequence: 3, Kind: clientui.TranscriptMessagePendingSessionPrompt, PendingSessionPrompt: &clientui.TranscriptPendingSessionPrompt{ID: "ask-1", State: clientui.TranscriptPromptPending, Data: clientui.TranscriptPendingSessionPromptData{Question: "pending prompt that must not wrap in the native live band"}}},
-		{Sequence: 4, Kind: clientui.TranscriptMessageBackgroundActivity, BackgroundActivity: &clientui.TranscriptBackgroundActivity{ID: "22222222-2222-4222-8222-222222222222", State: "running", Preview: "background activity that must not wrap in the native live band"}},
 	}
 	for _, message := range messages {
 		if _, err := controller.Accept(message); err != nil {
@@ -475,7 +436,6 @@ func TestOngoingTranscriptControllerConstrainsPluralLiveSectionsToFrameWidth(t *
 	for _, kind := range []ongoing.FrameSectionKind{
 		ongoing.FrameSectionQueuedOrSteered,
 		ongoing.FrameSectionPendingPrompt,
-		ongoing.FrameSectionBackgroundActivity,
 	} {
 		for _, line := range surface.lastFrameSectionLines(kind) {
 			if got := lipgloss.Width(line); got > width {

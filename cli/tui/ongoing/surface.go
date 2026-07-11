@@ -67,7 +67,6 @@ const (
 	FrameSectionSessionStatus       FrameSectionKind = "session_status"
 	FrameSectionSessionIdentity     FrameSectionKind = "session_identity"
 	FrameSectionCompaction          FrameSectionKind = "compaction"
-	FrameSectionBackgroundActivity  FrameSectionKind = "background_activity"
 )
 
 type Result struct {

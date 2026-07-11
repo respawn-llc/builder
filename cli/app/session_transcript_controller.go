@@ -208,7 +208,8 @@ func (c *ongoingTranscriptController) applyAppOwnedMessage(message clientui.Tran
 	case clientui.TranscriptMessageGoalStatus:
 		// Goal status is already represented by the app status line.
 	case clientui.TranscriptMessageBackgroundActivity:
-		c.liveReadModel.applyBackgroundActivity(message.BackgroundActivity)
+		// Backgrounding ends the mutable foreground tool lifecycle. The immutable
+		// tool row and later completion notice own its ongoing presentation.
 	case clientui.TranscriptMessageToolStart:
 		if message.ToolStart != nil {
 			c.liveReadModel.addPendingTool(*message.ToolStart)
@@ -236,12 +237,6 @@ func (c *ongoingTranscriptController) applyHydrationAppOwnedFacts(hydration *cli
 	if len(hydration.QueuedOrSteeredMessages) > 0 {
 		for _, state := range hydration.QueuedOrSteeredMessages {
 			c.liveReadModel.applyQueuedOrSteered(&state)
-		}
-		changed = true
-	}
-	if len(hydration.BackgroundActivities) > 0 {
-		for _, activity := range hydration.BackgroundActivities {
-			c.liveReadModel.applyBackgroundActivity(&activity)
 		}
 		changed = true
 	}
@@ -274,7 +269,6 @@ func (c *ongoingTranscriptController) frameInput() ongoing.FrameInput {
 	frame := c.frameProvider()
 	c.liveReadModel.refreshPendingToolSection(frame.Size.Width, frame.SpinnerFrame, frame.Theme)
 	c.liveReadModel.refreshQueuedOrSteeredSection(frame.Size.Width)
-	c.liveReadModel.refreshBackgroundActivitySection(frame.Size.Width)
 	c.liveReadModel.refreshPendingPromptSection(frame.Size.Width)
 	cursorSectionRow, cursorTargetsInput := ongoingFrameInputCursorSectionRow(frame)
 	sections := make([]ongoing.FrameSection, 0, len(c.liveReadModel.sectionOrder))
