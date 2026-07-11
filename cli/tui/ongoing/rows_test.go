@@ -9,6 +9,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/transcript"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/google/uuid"
 )
 
 func TestApplyTerminalMessageAppendsHydrationRowsInServerOrderWithGroupDividers(t *testing.T) {
@@ -87,6 +88,28 @@ func TestCommittedAssistantFinalWithoutStreamRendersFullAnswer(t *testing.T) {
 		{content: "❮ first final line", divider: false},
 		{content: "  second final line", divider: false},
 	})
+}
+
+func TestCommittedAssistantFinalFallbackUsesFrameTheme(t *testing.T) {
+	frame := testFrame()
+	frame.Theme = "light"
+
+	var expected bytes.Buffer
+	if _, err := NewSurface(&expected).ApplyTerminalMessage(committedMessage(assistantRow("themed answer")), frame); err != nil {
+		t.Fatalf("apply ordinary committed assistant row: %v", err)
+	}
+
+	streamID := uuid.New()
+	fallbackRow := assistantRow("themed answer")
+	fallbackRow.Assistant.StreamID = &streamID
+	var actual bytes.Buffer
+	if _, err := NewSurface(&actual).ApplyTerminalMessage(committedMessage(fallbackRow), frame); err != nil {
+		t.Fatalf("apply fallback committed assistant row: %v", err)
+	}
+
+	if actual.String() != expected.String() {
+		t.Fatalf("fallback committed assistant row did not preserve the frame theme")
+	}
 }
 
 func TestSurfaceDoesNotRetainCommittedRowContentAfterAppend(t *testing.T) {

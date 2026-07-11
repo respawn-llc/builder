@@ -278,7 +278,7 @@ func (s *Surface) appendAssistantFinalWithoutActiveStream(text string, frame Fra
 		Kind:      clientui.TranscriptRowAssistant,
 		Assistant: &clientui.TranscriptAssistantRow{Text: text, Phase: transcript.AssistantPhaseFinal},
 	}
-	return s.writeFrameTransaction(frame, s.renderCommittedRow(row, frameWidthOrDefault(frame), ""))
+	return s.writeFrameTransaction(frame, s.renderCommittedRow(row, frameWidthOrDefault(frame), frame.Theme))
 }
 
 func isAssistantFinalization(message clientui.TranscriptMessage) bool {
