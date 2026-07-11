@@ -158,7 +158,9 @@ func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Re
 	}
 	appCore, err := core.NewWithContextOptions(ctx, cfg, authSupport, runtimeSupport, opts.Core)
 	if err != nil {
-		_ = runtimeSupport.Background.Close()
+		if _, retained := core.RetainedStartupCleanupCore(err); !retained {
+			_ = runtimeSupport.Background.Close()
+		}
 		return nil, err
 	}
 	return appCore, nil

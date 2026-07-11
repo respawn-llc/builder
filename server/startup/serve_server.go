@@ -444,6 +444,7 @@ type startupGatewayDependencies struct {
 	finalizer   client.OnboardingFinalizeClient
 	coreOptions core.Options
 	core        *core.Core
+	retryCore   *core.Core
 	activation  error
 }
 
@@ -462,6 +463,14 @@ func (d *startupGatewayDependencies) Close() error {
 	if d.core != nil {
 		return d.core.Close()
 	}
+	if d.retryCore != nil {
+		err := d.retryCore.Close()
+		if err == nil {
+			d.retryCore = nil
+			d.rootLease = nil
+		}
+		return err
+	}
 	if d.rootLease != nil {
 		err := d.rootLease.Close()
 		d.rootLease = nil
@@ -475,6 +484,11 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	defer d.mu.Unlock()
 	if d.core != nil {
 		return nil
+	}
+	if d.retryCore != nil {
+		err := errors.New("previous activation cleanup must complete before activation can retry")
+		d.activation = err
+		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, activationFailureDetails(resp, err), err)
 	}
 	refreshed, err := serverbootstrap.ResolveConfig(d.bootstrap)
 	if err != nil {
@@ -490,7 +504,12 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	coreOptions.RootLease = d.rootLease
 	appCore, err := core.NewWithContextOptions(ctx, refreshed.Config, d.authSupport, runtimeSupport, coreOptions)
 	if err != nil {
-		_ = runtimeSupport.Background.Close()
+		if retained, ok := core.RetainedStartupCleanupCore(err); ok {
+			d.retryCore = retained
+			d.rootLease = nil
+		} else {
+			_ = runtimeSupport.Background.Close()
+		}
 		d.activation = err
 		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, activationFailureDetails(resp, err), err)
 	}

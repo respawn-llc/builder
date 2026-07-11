@@ -200,10 +200,6 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
 	}
-	if err := workflowService.FenceExecutionTargetRecovery(ctx); err != nil {
-		cleanupNewFailure()
-		return nil, fmt.Errorf("workflow bundle: recovery fence: %w", err)
-	}
 	core := &Core{bundles: composeBundles(bundleCompositionInput{
 		cfg:                     cfg,
 		containerDir:            containerDir,
@@ -237,34 +233,32 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		worktreeService:         worktreeService,
 		sleepManager:            sleepManager,
 	})}
+	if err := workflowService.FenceExecutionTargetRecovery(ctx); err != nil {
+		return nil, startupFailureWithCleanup(core, fmt.Errorf("workflow bundle: recovery fence: %w", err))
+	}
 	if strings.TrimSpace(cfg.WorkspaceRoot) != "" {
 		binding, err := metadataStore.EnsureWorkspaceBinding(context.Background(), cfg.WorkspaceRoot)
 		if err != nil && !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
-			_ = core.Close()
-			return nil, fmt.Errorf("projects bundle: workspace binding: %w", err)
+			return nil, startupFailureWithCleanup(core, fmt.Errorf("projects bundle: workspace binding: %w", err))
 		}
 		if err == nil {
 			core.bundles.Projects.projectID = binding.ProjectID
 			core.bundles.Projects.containerDir = filepath.Join(filepath.Join(cfg.PersistenceRoot, "projects"), binding.ProjectID, "sessions")
 			if err := os.MkdirAll(core.bundles.Projects.containerDir, 0o755); err != nil {
-				_ = core.Close()
-				return nil, fmt.Errorf("projects bundle: sessions root: %w", err)
+				return nil, startupFailureWithCleanup(core, fmt.Errorf("projects bundle: sessions root: %w", err))
 			}
 			core.bundles.Sessions.sessionLaunch, err = core.SessionLaunchClientForProjectWorkspace(context.Background(), binding.ProjectID, cfg.WorkspaceRoot)
 			if err != nil {
-				_ = core.Close()
-				return nil, fmt.Errorf("sessions bundle: session launch client: %w", err)
+				return nil, startupFailureWithCleanup(core, fmt.Errorf("sessions bundle: session launch client: %w", err))
 			}
 			core.bundles.Sessions.runPrompt, err = core.RunPromptClientForProjectWorkspace(context.Background(), binding.ProjectID, cfg.WorkspaceRoot)
 			if err != nil {
-				_ = core.Close()
-				return nil, fmt.Errorf("sessions bundle: run prompt client: %w", err)
+				return nil, startupFailureWithCleanup(core, fmt.Errorf("sessions bundle: run prompt client: %w", err))
 			}
 		}
 	}
 	if err := workflowScheduler.Start(context.Background()); err != nil {
-		_ = core.Close()
-		return nil, fmt.Errorf("workflow bundle: scheduler start: %w", err)
+		return nil, startupFailureWithCleanup(core, fmt.Errorf("workflow bundle: scheduler start: %w", err))
 	}
 	updateStatusService.Start()
 	return core, nil

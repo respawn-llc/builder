@@ -144,6 +144,42 @@ func TestCoreCloseDoesNotRepeatResourcesClosedBeforeRetryBarrier(t *testing.T) {
 	}
 }
 
+func TestStartupCleanupErrorRetainsCoreForRetry(t *testing.T) {
+	startupErr := errors.New("scheduler start failed")
+	cleanupErr := errors.New("background manager blocked")
+	fail := true
+	appCore := &Core{
+		bundles: &Bundles{
+			cleanup: []lifecycleResource{
+				{name: "root lock", close: func() error { return nil }},
+				{name: "background manager", close: func() error {
+					if fail {
+						return cleanupErr
+					}
+					return nil
+				}},
+			},
+		},
+	}
+
+	err := startupFailureWithCleanup(appCore, startupErr)
+	var retained *StartupCleanupError
+	if !errors.As(err, &retained) {
+		t.Fatalf("startup error = %v, want StartupCleanupError", err)
+	}
+	if !errors.Is(err, startupErr) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("startup cleanup error = %v, want both startup and cleanup causes", err)
+	}
+	owner, ok := RetainedStartupCleanupCore(err)
+	if !ok || owner != appCore {
+		t.Fatalf("RetainedStartupCleanupCore = owner:%p ok:%t, want %p true", owner, ok, appCore)
+	}
+	fail = false
+	if err := retained.RetryClose(); err != nil {
+		t.Fatalf("RetryClose: %v", err)
+	}
+}
+
 func TestNewWithContextNamesMissingAuthBundleResource(t *testing.T) {
 	cfg := config.App{PersistenceRoot: t.TempDir()}
 	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(cfg)
