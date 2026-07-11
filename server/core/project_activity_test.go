@@ -9,13 +9,13 @@ import (
 
 func TestProjectActivityCoordinatorClosesAdmissionBeforeDrainingActivePermits(t *testing.T) {
 	var coordinator projectActivityCoordinator
-	release, err := coordinator.AcquireActive("project-a")
+	release, err := coordinator.AcquireProjectActivity("project-a")
 	if err != nil {
 		t.Fatalf("AcquireActive: %v", err)
 	}
 	coordinator.CloseAdmission()
-	if _, err := coordinator.AcquireActive("project-b"); !errors.Is(err, ErrProjectActivityAdmissionClosed) {
-		t.Fatalf("AcquireActive after CloseAdmission error = %v, want %v", err, ErrProjectActivityAdmissionClosed)
+	if _, err := coordinator.AcquireProjectActivity("project-b"); !errors.Is(err, ErrProjectActivityAdmissionClosed) {
+		t.Fatalf("AcquireProjectActivity after CloseAdmission error = %v, want %v", err, ErrProjectActivityAdmissionClosed)
 	}
 
 	drained := make(chan error, 1)
@@ -41,7 +41,7 @@ func TestProjectActivityCoordinatorClosesAdmissionBeforeDrainingActivePermits(t 
 
 func TestCoreCloseClosesProjectAdmissionBeforeSchedulerAndDrainsPermits(t *testing.T) {
 	var coordinator projectActivityCoordinator
-	release, err := coordinator.AcquireActive("project-a")
+	release, err := coordinator.AcquireProjectActivity("project-a")
 	if err != nil {
 		t.Fatalf("AcquireActive: %v", err)
 	}
@@ -79,8 +79,8 @@ func TestCoreCloseClosesProjectAdmissionBeforeSchedulerAndDrainsPermits(t *testi
 		t.Fatalf("Close completed before active permit release: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	if _, err := coordinator.AcquireActive("project-b"); !errors.Is(err, ErrProjectActivityAdmissionClosed) {
-		t.Fatalf("AcquireActive during shutdown error = %v, want %v", err, ErrProjectActivityAdmissionClosed)
+	if _, err := coordinator.AcquireProjectActivity("project-b"); !errors.Is(err, ErrProjectActivityAdmissionClosed) {
+		t.Fatalf("AcquireProjectActivity during shutdown error = %v, want %v", err, ErrProjectActivityAdmissionClosed)
 	}
 	release()
 	select {

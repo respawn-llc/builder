@@ -20,7 +20,7 @@ type projectActivityCoordinator struct {
 	projects      map[string]projectActivityGate
 }
 
-func (c *projectActivityCoordinator) AcquireActive(projectID string) (func(), error) {
+func (c *projectActivityCoordinator) AcquireProjectActivity(projectID string) (func(), error) {
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		return nil, errors.New("project id is required")

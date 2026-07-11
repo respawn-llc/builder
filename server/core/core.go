@@ -321,7 +321,7 @@ func (s *Core) AcquireProjectActivity(projectID string) (func(), error) {
 	if s == nil || s.activity == nil {
 		return nil, ErrProjectActivityAdmissionClosed
 	}
-	return s.activity.AcquireActive(projectID)
+	return s.activity.AcquireProjectActivity(projectID)
 }
 
 func (s *Core) Config() config.App {
