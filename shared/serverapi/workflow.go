@@ -1312,10 +1312,10 @@ type WorkflowRun struct {
 	Role                string  `json:"role,omitempty"`
 	Status              string  `json:"status"`
 	Generation          int64   `json:"generation"`
-	StartedAtUnixMs     *int64  `json:"started_at_unix_ms,omitempty"`
-	CompletedAtUnixMs   *int64  `json:"completed_at_unix_ms,omitempty"`
-	InterruptedAtUnixMs *int64  `json:"interrupted_at_unix_ms,omitempty"`
-	InterruptionReason  *string `json:"interruption_reason,omitempty"`
+	StartedAtUnixMs     *int64  `json:"started_at_unix_ms"`
+	CompletedAtUnixMs   *int64  `json:"completed_at_unix_ms"`
+	InterruptedAtUnixMs *int64  `json:"interrupted_at_unix_ms"`
+	InterruptionReason  *string `json:"interruption_reason"`
 	InterruptionDetail  string  `json:"interruption_detail_json,omitempty"`
 	WaitingAskID        *string `json:"waiting_ask_id,omitempty"`
 }

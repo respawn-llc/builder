@@ -689,6 +689,12 @@ func TestWorkflowLifecycleJSONOmitsAbsentFacts(t *testing.T) {
 		"completed_at_unix_ms",
 		"interrupted_at_unix_ms",
 		"interruption_reason",
+	} {
+		if value, ok := raw["run"][key]; !ok || value != nil {
+			t.Fatalf("absent run lifecycle fact %q serialized as %v in %s, want null", key, value, data)
+		}
+	}
+	for _, key := range []string{
 		"waiting_ask_id",
 	} {
 		if _, ok := raw["run"][key]; ok {

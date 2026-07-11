@@ -1728,7 +1728,7 @@ WHERE t.id IN (SELECT id FROM board_open_task_ids)
       FROM task_node_placements terminal_placement
       JOIN workflow_nodes terminal_node ON terminal_node.id = terminal_placement.node_id
       WHERE terminal_placement.task_id = t.id
-        AND terminal_placement.state = 'completed'
+        AND terminal_placement.state = 'active'
         AND terminal_node.kind = 'terminal'
   )
   AND (
