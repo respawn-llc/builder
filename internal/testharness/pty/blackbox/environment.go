@@ -303,7 +303,10 @@ func serverEnvironment(home string, root string, host string, port int, modelURL
 	if err != nil {
 		return nil, err
 	}
-	return appendEnvironment(environment, "KENT_OPENAI_BASE_URL="+modelURL)
+	return appendEnvironment(environment,
+		"KENT_OPENAI_BASE_URL="+modelURL,
+		"GOMAXPROCS=1",
+	)
 }
 
 func baseEnvironment(home string, root string, host string, port int) ([]string, error) {

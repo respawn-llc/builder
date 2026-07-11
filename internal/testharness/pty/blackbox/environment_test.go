@@ -47,6 +47,9 @@ func TestProcessEnvironmentsAreSeparateAndFallible(t *testing.T) {
 	if serverValues["KENT_OPENAI_BASE_URL"] != "http://127.0.0.1:9999/v1" {
 		t.Fatalf("server model endpoint = %q", serverValues["KENT_OPENAI_BASE_URL"])
 	}
+	if serverValues["GOMAXPROCS"] != "1" {
+		t.Fatalf("server scheduler limit = %q, want 1", serverValues["GOMAXPROCS"])
+	}
 	if _, err := os.Stat(clientValues["HOME"]); err != nil {
 		t.Fatalf("client HOME was not created: %v", err)
 	}
