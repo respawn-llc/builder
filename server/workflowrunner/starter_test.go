@@ -1303,12 +1303,14 @@ func TestWorkflowRuntimeCompactAndContinueReusesSourceSessionWithRealCompaction(
 		t.Fatalf("LinkWorkflow chained: %v", err)
 	}
 	task := fixture.createStartedTask(t)
+	scheduler := fixture.scheduler(t)
 
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("first Process: %v", err)
 	}
 	fixture.waitForRunCount(t, task.ID, 2)
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	fixture.waitForActiveCountZero(t, scheduler)
+	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("second Process: %v", err)
 	}
 	fixture.waitForAllRunsCompleted(t, task.ID, 2)
@@ -1437,12 +1439,14 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 		t.Fatalf("LinkWorkflow chained: %v", err)
 	}
 	task := fixture.createStartedTask(t)
+	scheduler := fixture.scheduler(t)
 
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("first Process: %v", err)
 	}
 	fixture.waitForRunCount(t, task.ID, 2)
-	if err := fixture.scheduler(t).Process(context.Background()); err != nil {
+	fixture.waitForActiveCountZero(t, scheduler)
+	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("second Process: %v", err)
 	}
 	fixture.waitForCompletedRunCount(t, task.ID, 2)
@@ -1757,6 +1761,7 @@ func TestWorkflowRuntimeStartsWorkflowHiddenConfiguredNoOpRole(t *testing.T) {
 		t.Fatalf("first Process: %v", err)
 	}
 	fixture.waitForRunCount(t, task.ID, 2)
+	fixture.waitForActiveCountZero(t, scheduler)
 	if err := scheduler.Process(context.Background()); err != nil {
 		t.Fatalf("second Process: %v", err)
 	}
