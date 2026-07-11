@@ -22,8 +22,6 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/shared/config"
 	"core/shared/toolspec"
-
-	"github.com/google/uuid"
 )
 
 type stubTriggerHandoffController struct{}
@@ -495,18 +493,9 @@ func TestBackgroundEventRouterShapesBackgroundNoticeByOutputMode(t *testing.T) {
 
 			router := newBackgroundEventRouter(nil, tt.maxChars, tt.mode)
 			router.SetActiveSession(store.Meta().SessionID, eng)
-			router.handle(shelltool.Event{
-				Type:             shelltool.EventCompleted,
-				NoticeSuppressed: true,
-				Snapshot: shelltool.Snapshot{
-					ID:             "1000",
-					ActivityID:     uuid.New(),
-					OwnerSessionID: store.Meta().SessionID,
-					State:          "completed",
-					LogPath:        logPath,
-					ExitCode:       &tt.exitCode,
-				},
-			})
+			event := runtimewirefixture.BackgroundCompletionEventWithExit("1000", store.Meta().SessionID, root, tt.exitCode)
+			event.NoticeSuppressed = true
+			router.handle(event)
 
 			select {
 			case evt := <-events:
@@ -522,7 +511,7 @@ func TestBackgroundEventRouterShapesBackgroundNoticeByOutputMode(t *testing.T) {
 	}
 }
 
-func TestBackgroundEventRouterWhitespacePreviewUsesNoOutputLine(t *testing.T) {
+func TestBackgroundEventRouterRoutesValidCompletion(t *testing.T) {
 	root := t.TempDir()
 	store := createAppRuntimeSessionAt(t, root, "ws", root)
 	client := &busyToggleFakeClient{}
@@ -539,23 +528,15 @@ func TestBackgroundEventRouterWhitespacePreviewUsesNoOutputLine(t *testing.T) {
 	router := newBackgroundEventRouter(nil, 80, shelltool.BackgroundOutputDefault)
 	router.SetActiveSession(store.Meta().SessionID, eng)
 	exitCode := 0
-	router.handle(shelltool.Event{
-		Type:             shelltool.EventCompleted,
-		NoticeSuppressed: true,
-		Snapshot: shelltool.Snapshot{
-			ID:             "1000",
-			ActivityID:     uuid.New(),
-			OwnerSessionID: store.Meta().SessionID,
-			State:          "completed",
-			ExitCode:       &exitCode,
-		},
-	})
+	event := runtimewirefixture.BackgroundCompletionEvent("1000", store.Meta().SessionID, root)
+	event.NoticeSuppressed = true
+	router.handle(event)
 
 	select {
 	case evt := <-events:
 		if evt.Background == nil || evt.Background.ExitCode == nil || *evt.Background.ExitCode != exitCode ||
-			evt.Background.NoticeText == "" || evt.Background.CompactText == "" || evt.Background.Preview != "" {
-			t.Fatalf("blank-output background update = %+v", evt.Background)
+			evt.Background.NoticeText == "" || evt.Background.CompactText == "" || evt.Background.Preview == "" {
+			t.Fatalf("valid background completion update = %+v", evt.Background)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for background update event")
@@ -676,15 +657,7 @@ func TestBackgroundEventRouterDropsNoticeWhenNoSessionIsActive(t *testing.T) {
 	eng := newAppRuntimeEngineWithStore(t, store, client, runtime.Config{})
 	router.SetActiveSession(store.Meta().SessionID, eng)
 	router.ClearActiveSession(store.Meta().SessionID, eng)
-	router.handle(shelltool.Event{
-		Type: shelltool.EventCompleted,
-		Snapshot: shelltool.Snapshot{
-			ID:             "1002",
-			ActivityID:     uuid.New(),
-			OwnerSessionID: store.Meta().SessionID,
-			State:          "completed",
-		},
-	})
+	router.handle(runtimewirefixture.BackgroundCompletionEvent("1002", store.Meta().SessionID, root))
 	time.Sleep(50 * time.Millisecond)
 	if got := client.CallCount(); got != 0 {
 		t.Fatalf("expected no notice delivery while no session is active, got %d", got)

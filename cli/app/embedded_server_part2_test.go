@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"core/internal/testharness/runtimewirefixture"
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/clientui"
@@ -38,21 +39,9 @@ func TestEmbeddedAppServerDeliversBackgroundCompletionWhileIdle(t *testing.T) {
 	defer func() { _ = sub.Close() }()
 
 	processID := "bg-1000"
-	exitCode := 0
-	server.inner.BackgroundRouter().Handle(shelltool.Event{
-		Type:             shelltool.EventCompleted,
-		NoticeSuppressed: true,
-		Snapshot: shelltool.Snapshot{
-			ID:             processID,
-			ActivityID:     uuid.New(),
-			OwnerSessionID: plan.SessionID,
-			State:          "completed",
-			Command:        "sleep 1; printf done",
-			Workdir:        workspace,
-			LogPath:        "/tmp/bg-1000.log",
-			ExitCode:       &exitCode,
-		},
-	})
+	event := runtimewirefixture.BackgroundCompletionEvent(processID, plan.SessionID, workspace)
+	event.NoticeSuppressed = true
+	server.inner.BackgroundRouter().Handle(event)
 
 	evt := waitForSessionActivityEvent(t, sub, 5*time.Second, func(evt clientui.Event) bool {
 		return evt.Kind == clientui.EventBackgroundUpdated && evt.Background != nil && evt.Background.ID == processID && evt.Background.Type == "completed"
@@ -78,21 +67,9 @@ func TestPrepareRuntimeForwardsBackgroundCompletionIntoProjectedRuntimeEvents(t 
 	defer runtimePlan.Close()
 
 	processID := "bg-1001"
-	exitCode := 0
-	server.inner.BackgroundRouter().Handle(shelltool.Event{
-		Type:             shelltool.EventCompleted,
-		NoticeSuppressed: true,
-		Snapshot: shelltool.Snapshot{
-			ID:             processID,
-			ActivityID:     uuid.New(),
-			OwnerSessionID: plan.SessionID,
-			State:          "completed",
-			Command:        "sleep 1; printf done",
-			Workdir:        workspace,
-			LogPath:        "/tmp/bg-1001.log",
-			ExitCode:       &exitCode,
-		},
-	})
+	event := runtimewirefixture.BackgroundCompletionEvent(processID, plan.SessionID, workspace)
+	event.NoticeSuppressed = true
+	server.inner.BackgroundRouter().Handle(event)
 
 	select {
 	case evt := <-runtimePlan.Wiring.runtimeEvents:
