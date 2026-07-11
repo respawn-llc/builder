@@ -2,39 +2,16 @@ package ongoing
 
 import (
 	"strings"
-	"unicode"
+
+	"core/cli/tui/terminaltext"
 )
 
 func terminalSafePlainText(text string) string {
-	var builder strings.Builder
-	for _, r := range text {
-		switch {
-		case r == '\n':
-			builder.WriteRune(r)
-		case r == '\t':
-			builder.WriteRune(' ')
-		case unicode.IsControl(r):
-			continue
-		default:
-			builder.WriteRune(r)
-		}
-	}
-	return strings.TrimRight(builder.String(), "\n")
+	return strings.TrimRight(terminaltext.Plain(text), "\n")
 }
 
 func TerminalSafeSingleLine(text string) string {
-	var builder strings.Builder
-	for _, r := range text {
-		switch {
-		case r == '\n' || r == '\t':
-			builder.WriteRune(' ')
-		case unicode.IsControl(r):
-			continue
-		default:
-			builder.WriteRune(r)
-		}
-	}
-	return strings.TrimSpace(builder.String())
+	return terminaltext.SingleLine(text)
 }
 
 func terminalSafeMarkdownSource(text string) string {

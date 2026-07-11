@@ -2,9 +2,8 @@ package tui
 
 import (
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
+	"core/cli/tui/terminaltext"
 	sharedtheme "core/shared/theme"
 
 	"charm.land/glamour/v2"
@@ -251,40 +250,5 @@ func renderPlainAskQuestionMarkdownSource(question string, width int) []string {
 }
 
 func plainAskQuestionMarkdownSource(question string) string {
-	source := xansi.Strip(question)
-	var out strings.Builder
-	for len(source) > 0 {
-		r, size := utf8.DecodeRuneInString(source)
-		if r == '\n' {
-			out.WriteByte('\n')
-			source = source[size:]
-			continue
-		}
-		if unicode.IsControl(r) || (r == utf8.RuneError && size == 1) {
-			source = source[size:]
-			continue
-		}
-		grapheme, _ := xansi.FirstGraphemeCluster(source, xansi.GraphemeWidth)
-		if len(grapheme) == 0 {
-			break
-		}
-		if isPlainAskQuestionGrapheme(grapheme) {
-			out.WriteString(grapheme)
-		}
-		source = source[len(grapheme):]
-	}
-	return out.String()
-}
-
-func isPlainAskQuestionGrapheme(grapheme string) bool {
-	hasPrintableRune := false
-	for _, r := range grapheme {
-		if unicode.IsControl(r) {
-			return false
-		}
-		if unicode.IsPrint(r) {
-			hasPrintableRune = true
-		}
-	}
-	return hasPrintableRune
+	return terminaltext.PrintableLines(xansi.Strip(question))
 }
