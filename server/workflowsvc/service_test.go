@@ -1031,6 +1031,110 @@ func TestServiceExecutableApprovalAskNoneMissingSourceScriptLeavesNoTargetOrAppr
 	}
 }
 
+func TestServiceExecutableFanoutApprovalAskNoneMissingSourceScriptLeavesNoTargetOrApproval(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceFanoutScriptApprovalWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	pending := createWorkflowServicePendingFanoutApproval(t, ctx, service, task.Task.ID)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+
+	required, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
+		TaskTransitionID: string(pending.TransitionID),
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("ApproveWorkflowTask requirement: %v", err)
+	}
+	if required.SelectionRequired == nil {
+		t.Fatalf("approval result = %+v, want selection_required", required)
+	}
+	_, err = service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
+		TaskTransitionID:    string(pending.TransitionID),
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SelectionGeneration: &required.SelectionRequired.Generation,
+		Selection:           &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionNone},
+	})
+	if err == nil {
+		t.Fatal("ApproveWorkflowTask fan-out with missing source script succeeded")
+	}
+	assertWorkflowServicePendingFanoutApprovalUntouched(t, ctx, service, task.Task.ID, pending.TransitionID)
+	target, targetErr := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if targetErr != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", targetErr)
+	}
+	if target != nil {
+		t.Fatalf("target = %+v, want no target after validation failure", target)
+	}
+	negotiation, negotiationErr := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if negotiationErr != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation: %v", negotiationErr)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation = %+v, want no durable selection after validation failure", negotiation)
+	}
+}
+
+func TestServiceExecutableFanoutApprovalHeadMissingScriptKeepsTargetWithoutApplyingApproval(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceFanoutScriptApprovalWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyHead)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	pending := createWorkflowServicePendingFanoutApproval(t, ctx, service, task.Task.ID)
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "deadbeef"),
+	}}
+	service.targetWorktrees = &recordingTaskExecutionTargetWorktreeMaterializer{worktreeRoot: t.TempDir()}
+
+	if _, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
+		TaskTransitionID: string(pending.TransitionID),
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	}); err == nil {
+		t.Fatal("ApproveWorkflowTask fan-out with missing managed script succeeded")
+	}
+	assertWorkflowServicePendingFanoutApprovalUntouched(t, ctx, service, task.Task.ID, pending.TransitionID)
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if target == nil || target.Policy != workflow.ExecutionPolicyHead || target.State != workflow.ExecutionTargetStateLocked || target.SetupState != workflow.ExecutionTargetSetupSucceeded {
+		t.Fatalf("target = %+v, want locked setup-complete head target", target)
+	}
+}
+
+func assertWorkflowServicePendingFanoutApprovalUntouched(t *testing.T, ctx context.Context, service *Service, taskID string, transitionID workflow.TransitionID) {
+	t.Helper()
+	transitions, err := service.store.ListTransitions(ctx, workflow.TaskID(taskID))
+	if err != nil {
+		t.Fatalf("ListTransitions: %v", err)
+	}
+	if len(transitions) != 2 || transitions[1].ID != transitionID || transitions[1].State != "pending_approval" {
+		t.Fatalf("transitions = %+v, want unchanged pending fan-out approval", transitions)
+	}
+	edges, err := service.store.ListTransitionEdges(ctx, transitionID)
+	if err != nil {
+		t.Fatalf("ListTransitionEdges: %v", err)
+	}
+	if len(edges) != 2 || edges[0].State != "pending" || edges[0].TargetPlacementID != "" || edges[1].State != "pending" || edges[1].TargetPlacementID != "" {
+		t.Fatalf("approval edges = %+v, want two untouched pending fan-out edges", edges)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(taskID))
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %+v, want only the completed source run", runs)
+	}
+	placements, err := service.store.ListPlacements(ctx, workflow.TaskID(taskID))
+	if err != nil {
+		t.Fatalf("ListPlacements: %v", err)
+	}
+	if len(placements) != 2 {
+		t.Fatalf("placements = %+v, want no target placements after approval validation failure", placements)
+	}
+}
+
 func TestServiceValidateWorkflowReportsScriptPathDiagnostics(t *testing.T) {
 	ctx, service, _ := newWorkflowServiceTestContext(t)
 	created, err := service.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{
@@ -3557,6 +3661,85 @@ func createWorkflowServiceScriptWorkflow(t *testing.T, ctx context.Context, serv
 		t.Fatalf("AddWorkflowEdge done: %v", err)
 	}
 	return created.Workflow.ID
+}
+
+func createWorkflowServiceFanoutScriptApprovalWorkflow(t *testing.T, ctx context.Context, service *Service) string {
+	t.Helper()
+	created, err := service.CreateWorkflow(ctx, serverapi.WorkflowCreateRequest{
+		Name:            "Fan-out Script Approval Workflow",
+		ExecutionPolicy: &serverapi.WorkflowExecutionPolicy{Mode: serverapi.WorkflowExecutionPolicyNone},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: created.Workflow.ID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	startID := workflowServiceNodeIDByKind(t, def.Definition, "start")
+	doneID := workflowServiceNodeIDByKind(t, def.Definition, "terminal")
+	agentID := "node-agent-" + created.Workflow.ID
+	validScriptID := "node-valid-script-" + created.Workflow.ID
+	missingScriptID := "node-missing-script-" + created.Workflow.ID
+	joinID := "node-join-" + created.Workflow.ID
+	for _, node := range []serverapi.WorkflowNodeAddRequest{
+		{WorkflowID: created.Workflow.ID, NodeID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder", PromptTemplate: "Prepare work."},
+		{WorkflowID: created.Workflow.ID, NodeID: validScriptID, Key: "valid_script", Kind: "script", DisplayName: "Valid script", ScriptPath: stringPtr("/bin/sh")},
+		{WorkflowID: created.Workflow.ID, NodeID: missingScriptID, Key: "missing_script", Kind: "script", DisplayName: "Missing script", ScriptPath: stringPtr("scripts/missing")},
+		{WorkflowID: created.Workflow.ID, NodeID: joinID, Key: "join", Kind: "join", DisplayName: "Join"},
+	} {
+		if _, err := service.AddWorkflowNode(ctx, node); err != nil {
+			t.Fatalf("AddWorkflowNode %s: %v", node.Key, err)
+		}
+	}
+	startGroup := "group-start-" + created.Workflow.ID
+	splitGroup := "group-split-" + created.Workflow.ID
+	validJoinGroup := "group-valid-join-" + created.Workflow.ID
+	missingJoinGroup := "group-missing-join-" + created.Workflow.ID
+	doneGroup := "group-join-done-" + created.Workflow.ID
+	for _, group := range []serverapi.WorkflowTransitionGroupAddRequest{
+		{WorkflowID: created.Workflow.ID, GroupID: startGroup, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
+		{WorkflowID: created.Workflow.ID, GroupID: splitGroup, SourceNodeID: agentID, TransitionID: "split", DisplayName: "Split"},
+		{WorkflowID: created.Workflow.ID, GroupID: validJoinGroup, SourceNodeID: validScriptID, TransitionID: "join", DisplayName: "Join"},
+		{WorkflowID: created.Workflow.ID, GroupID: missingJoinGroup, SourceNodeID: missingScriptID, TransitionID: "join", DisplayName: "Join"},
+		{WorkflowID: created.Workflow.ID, GroupID: doneGroup, SourceNodeID: joinID, TransitionID: "done", DisplayName: "Done"},
+	} {
+		if _, err := service.AddWorkflowTransitionGroup(ctx, group); err != nil {
+			t.Fatalf("AddWorkflowTransitionGroup %s: %v", group.TransitionID, err)
+		}
+	}
+	for _, edge := range []serverapi.WorkflowEdgeAddRequest{
+		{WorkflowID: created.Workflow.ID, EdgeID: "edge-start-" + created.Workflow.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: agentID, ContextMode: "new_session", PromptTemplate: "Prepare work."},
+		{WorkflowID: created.Workflow.ID, EdgeID: "edge-split-valid-" + created.Workflow.ID, TransitionGroupID: splitGroup, Key: "split_valid", TargetNodeID: validScriptID, RequiresApproval: true, ContextMode: "new_session"},
+		{WorkflowID: created.Workflow.ID, EdgeID: "edge-split-missing-" + created.Workflow.ID, TransitionGroupID: splitGroup, Key: "split_missing", TargetNodeID: missingScriptID, RequiresApproval: true, ContextMode: "new_session"},
+		{WorkflowID: created.Workflow.ID, EdgeID: "edge-valid-join-" + created.Workflow.ID, TransitionGroupID: validJoinGroup, Key: "join_valid", TargetNodeID: joinID, ContextMode: "new_session"},
+		{WorkflowID: created.Workflow.ID, EdgeID: "edge-missing-join-" + created.Workflow.ID, TransitionGroupID: missingJoinGroup, Key: "join_missing", TargetNodeID: joinID, ContextMode: "new_session"},
+		{WorkflowID: created.Workflow.ID, EdgeID: "edge-join-done-" + created.Workflow.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, ContextMode: "new_session"},
+	} {
+		if _, err := service.AddWorkflowEdge(ctx, edge); err != nil {
+			t.Fatalf("AddWorkflowEdge %s: %v", edge.Key, err)
+		}
+	}
+	return created.Workflow.ID
+}
+
+func createWorkflowServicePendingFanoutApproval(t *testing.T, ctx context.Context, service *Service, taskID string) workflowstore.CompleteRunResult {
+	t.Helper()
+	started, err := service.store.StartTask(ctx, workflow.TaskID(taskID))
+	if err != nil {
+		t.Fatalf("StartTask source: %v", err)
+	}
+	pending, err := service.store.CompleteRun(ctx, workflowstore.CompleteRunRequest{
+		RunID:        started.RunID,
+		TransitionID: "split",
+	})
+	if err != nil {
+		t.Fatalf("CompleteRun fan-out source: %v", err)
+	}
+	if pending.State != "pending_approval" || len(pending.PlacementIDs) != 0 || len(pending.RunIDs) != 0 {
+		t.Fatalf("pending fan-out approval = %+v, want unapplied fan-out", pending)
+	}
+	return pending
 }
 
 func workflowServiceNodeIDByKind(t *testing.T, def serverapi.WorkflowDefinition, kind string) string {
