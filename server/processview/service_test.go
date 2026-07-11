@@ -17,7 +17,7 @@ import (
 
 func TestServiceListProcessesIncludesRunOwnership(t *testing.T) {
 	fixture := newProcessViewFixture(t)
-	result := fixture.startCommand(t, "call-1", "printf 'working\n'; sleep 1", "run-1", "step-1")
+	result := fixture.startCommand(t, "call-1", "printf 'working\n'; sleep 30", "run-1", "step-1")
 	if result.IsError {
 		t.Fatalf("expected successful tool result, got %+v", result)
 	}
