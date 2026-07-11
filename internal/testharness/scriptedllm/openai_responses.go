@@ -1,7 +1,4 @@
-// Package openairesponses provides test-only HTTP fixtures for the OpenAI
-// Responses API contract. It belongs to the repository-internal test harness
-// and must not be imported by production paths.
-package openairesponses
+package scriptedllm
 
 import (
 	"encoding/json"
@@ -11,37 +8,38 @@ import (
 	"testing"
 )
 
-// Recorder captures Responses API request payloads and returns the minimal
-// successful responses required by provider-client integration tests.
-type Recorder struct {
+// OpenAIResponsesRecorder captures Responses API request payloads and returns
+// the minimal successful responses required by provider-client integration
+// tests.
+type OpenAIResponsesRecorder struct {
 	server   *httptest.Server
 	mu       sync.Mutex
 	payloads map[string]map[string]any
 }
 
-// NewRecorder starts an isolated Responses API fixture and registers its
-// cleanup with t.
-func NewRecorder(t testing.TB) *Recorder {
+// NewOpenAIResponsesRecorder starts an isolated Responses API fixture and
+// registers its cleanup with t.
+func NewOpenAIResponsesRecorder(t testing.TB) *OpenAIResponsesRecorder {
 	t.Helper()
-	recorder := &Recorder{payloads: make(map[string]map[string]any)}
+	recorder := &OpenAIResponsesRecorder{payloads: make(map[string]map[string]any)}
 	recorder.server = httptest.NewServer(http.HandlerFunc(recorder.handle))
 	t.Cleanup(recorder.server.Close)
 	return recorder
 }
 
 // URL returns the fixture origin.
-func (r *Recorder) URL() string {
+func (r *OpenAIResponsesRecorder) URL() string {
 	return r.server.URL
 }
 
 // Client returns an HTTP client configured for the fixture.
-func (r *Recorder) Client() *http.Client {
+func (r *OpenAIResponsesRecorder) Client() *http.Client {
 	return r.server.Client()
 }
 
 // AssertTextVerbosity verifies both Responses API request paths received the
 // expected text verbosity.
-func (r *Recorder) AssertTextVerbosity(t testing.TB, want string) {
+func (r *OpenAIResponsesRecorder) AssertTextVerbosity(t testing.TB, want string) {
 	t.Helper()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -60,7 +58,7 @@ func (r *Recorder) AssertTextVerbosity(t testing.TB, want string) {
 	}
 }
 
-func (r *Recorder) handle(w http.ResponseWriter, request *http.Request) {
+func (r *OpenAIResponsesRecorder) handle(w http.ResponseWriter, request *http.Request) {
 	var payload map[string]any
 	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 		w.WriteHeader(http.StatusBadRequest)

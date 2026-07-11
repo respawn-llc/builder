@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"core/internal/testharness/openairesponses"
+	"core/internal/testharness/scriptedllm"
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
@@ -91,7 +91,7 @@ func TestWorkflowProviderClientPreservesLockedVerbosityAcrossConfigChanges(t *te
 		{name: "runtime client factory", factory: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			recorder := openairesponses.NewRecorder(t)
+			recorder := scriptedllm.NewOpenAIResponsesRecorder(t)
 			plan := newLockedWorkflowProviderVerbosityPlan(t, recorder.URL())
 			starter := &Starter{}
 			if tt.factory {

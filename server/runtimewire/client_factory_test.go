@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"core/internal/testharness/openairesponses"
+	"core/internal/testharness/scriptedllm"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
@@ -200,7 +200,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 		t.Fatalf("lock session: %v", err)
 	}
 
-	recorder := openairesponses.NewRecorder(t)
+	recorder := scriptedllm.NewOpenAIResponsesRecorder(t)
 
 	var mainClient llm.Client
 	factory := RuntimeClientFactoryFunc(func(_ context.Context, req RuntimeClientRequest) (llm.Client, error) {
