@@ -63,15 +63,66 @@ func TestListTasksUsesCanonicalStatusProjection(t *testing.T) {
 	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindCanceled || len(detail.Status.AttentionTypes) != 0 {
 		t.Fatalf("canceled detail status = %+v, want canceled without approval attention", detail.Status)
 	}
-	resp, err = view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
-		ProjectID:      &projectID,
-		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval},
-	}, workflow.StaticRoleResolver{"coder": true})
+	questionTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Question", Body: "Body"})
 	if err != nil {
-		t.Fatalf("ListTasks canceled approval attention: %v", err)
+		t.Fatalf("CreateTask question: %v", err)
 	}
-	if len(resp.Tasks) != 0 {
-		t.Fatalf("approval attention after cancellation = %+v, want none", resp.Tasks)
+	questionStarted, err := workflowStore.StartTask(ctx, questionTask.ID)
+	if err != nil {
+		t.Fatalf("StartTask question: %v", err)
+	}
+	questionClaimed, err := workflowStore.ClaimRun(ctx, questionStarted.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun question: %v", err)
+	}
+	if err := workflowStore.SetRunWaitingAsk(ctx, questionStarted.RunID, questionClaimed.Generation, "ask-canceled"); err != nil {
+		t.Fatalf("SetRunWaitingAsk: %v", err)
+	}
+	if err := workflowStore.CancelTask(ctx, questionTask.ID, "stop"); err != nil {
+		t.Fatalf("CancelTask question: %v", err)
+	}
+	interruptedTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Interrupted", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask interrupted: %v", err)
+	}
+	interruptedStarted, err := workflowStore.StartTask(ctx, interruptedTask.ID)
+	if err != nil {
+		t.Fatalf("StartTask interrupted: %v", err)
+	}
+	interruptedClaimed, err := workflowStore.ClaimRun(ctx, interruptedStarted.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun interrupted: %v", err)
+	}
+	if err := workflowStore.InterruptRunGeneration(ctx, interruptedStarted.RunID, interruptedClaimed.Generation, "manual", "{}"); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+	if err := workflowStore.CancelTask(ctx, interruptedTask.ID, "stop"); err != nil {
+		t.Fatalf("CancelTask interrupted: %v", err)
+	}
+	for _, taskID := range []workflow.TaskID{questionTask.ID, interruptedTask.ID} {
+		detail, err := view.GetTask(ctx, string(taskID))
+		if err != nil {
+			t.Fatalf("GetTask canceled attention task %s: %v", taskID, err)
+		}
+		if detail.Status.Kind != serverapi.WorkflowTaskStatusKindCanceled || len(detail.Status.AttentionTypes) != 0 {
+			t.Fatalf("canceled detail status = %+v, want no attention", detail.Status)
+		}
+	}
+	for _, attentionKind := range []serverapi.WorkflowTaskAttentionKind{
+		serverapi.WorkflowTaskAttentionKindApproval,
+		serverapi.WorkflowTaskAttentionKindQuestion,
+		serverapi.WorkflowTaskAttentionKindInterrupted,
+	} {
+		resp, err = view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+			ProjectID:      &projectID,
+			AttentionKinds: []serverapi.WorkflowTaskAttentionKind{attentionKind},
+		}, workflow.StaticRoleResolver{"coder": true})
+		if err != nil {
+			t.Fatalf("ListTasks canceled %s attention: %v", attentionKind, err)
+		}
+		if len(resp.Tasks) != 0 {
+			t.Fatalf("%s attention after cancellation = %+v, want none", attentionKind, resp.Tasks)
+		}
 	}
 }
 
