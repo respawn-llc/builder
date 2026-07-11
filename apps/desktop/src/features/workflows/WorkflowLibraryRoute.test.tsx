@@ -66,45 +66,47 @@ describe("WorkflowLibraryRoute", () => {
 
   it("refreshes the mounted workflow list after saving from the sidebar editor", async () => {
     const user = userEvent.setup();
+    let saved = false;
     const updatedWorkflowDefinitionResponse = workflowDefinitionResponseWithMetadata({
       description: "Ship changes faster",
       name: "Delivery Updated",
       version: 2,
     });
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.list",
+        handler: () =>
+          saved
+            ? workflowListResponseWithMetadata({
+                description: "Ship changes faster",
+                name: "Delivery Updated",
+                version: 2,
+              })
+            : workflowListResponse,
+      },
+      {
+        method: "workflow.get",
+        handler: () => (saved ? updatedWorkflowDefinitionResponse : workflowDefinitionResponse),
+      },
+      { method: "workflow.validate", result: validWorkflowValidationResponse },
+      { method: "workflow.graph.validateDraft", result: validWorkflowGraphValidationResponse },
+      { method: "workflow.graph.savePreview", result: graphSavePreviewResponse },
+      {
+        method: "workflow.graph.save",
+        handler: () => {
+          saved = true;
+          return {
+            ...graphSavePreviewResponse,
+            current_version: 2,
+            definition: updatedWorkflowDefinitionResponse.definition,
+            saved: true,
+          };
+        },
+      },
+    ]);
     render(
-      <App
-        services={createTestServices([
-          ...startupRoutes,
-          {
-            method: "workflow.list",
-            handler: (_params, callIndex) =>
-              callIndex === 0
-                ? workflowListResponse
-                : workflowListResponseWithMetadata({
-                    description: "Ship changes faster",
-                    name: "Delivery Updated",
-                    version: 2,
-                  }),
-          },
-          {
-            method: "workflow.get",
-            handler: (_params, callIndex) =>
-              callIndex === 0 ? workflowDefinitionResponse : updatedWorkflowDefinitionResponse,
-          },
-          { method: "workflow.validate", result: validWorkflowValidationResponse },
-          { method: "workflow.graph.validateDraft", result: validWorkflowGraphValidationResponse },
-          { method: "workflow.graph.savePreview", result: graphSavePreviewResponse },
-          {
-            method: "workflow.graph.save",
-            result: {
-              ...graphSavePreviewResponse,
-              current_version: 2,
-              definition: updatedWorkflowDefinitionResponse.definition,
-              saved: true,
-            },
-          },
-        ])}
-      />,
+      <App services={services} />,
     );
 
     fireEvent.contextMenu(await screen.findByRole("button", { name: "Delivery rev 1" }));
