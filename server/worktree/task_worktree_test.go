@@ -73,6 +73,37 @@ func TestProvisionExecutionTargetWorktreeCreatesTaskBranchFromExactCommit(t *tes
 	}
 }
 
+func TestRunExecutionTargetSetupRunsFromProvisionedWorktree(t *testing.T) {
+	env := newServiceTestEnv(t)
+	scriptRelpath := filepath.Join("scripts", "target-setup.sh")
+	writeExecutableFile(t, filepath.Join(env.workspaceRoot, scriptRelpath), "#!/bin/sh\nprintf setup > setup.marker\n")
+	env.service.setupScript = scriptRelpath
+	provisioned, err := env.service.ProvisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{
+		WorkspaceID:         env.binding.WorkspaceID,
+		SourceWorkspaceRoot: env.workspaceRoot,
+		TaskShortID:         "WOR-100",
+		ResolvedCommit:      runGit(t, env.workspaceRoot, "rev-parse", "HEAD"),
+	})
+	if err != nil {
+		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)
+	}
+	if err := env.service.RunExecutionTargetSetup(env.ctx, RunExecutionTargetSetupRequest{
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SourceWorkspaceRoot: env.workspaceRoot,
+		WorktreeRoot:        provisioned.WorktreeRoot,
+		BranchName:          provisioned.BranchName,
+		ProjectID:           env.binding.ProjectID,
+		WorkspaceID:         env.binding.WorkspaceID,
+		WorktreeID:          "worktree-target-setup",
+		CreatedBranch:       provisioned.CreatedBranch,
+	}); err != nil {
+		t.Fatalf("RunExecutionTargetSetup: %v", err)
+	}
+	if got := waitForFileText(t, filepath.Join(provisioned.WorktreeRoot, "setup.marker")); got != "setup" {
+		t.Fatalf("setup marker = %q, want setup", got)
+	}
+}
+
 func TestRepositoryMutationLockSerializesLinkedWorkspaceBindings(t *testing.T) {
 	env := newServiceTestEnv(t)
 	linkedRoot := filepath.Join(t.TempDir(), "linked")

@@ -134,6 +134,17 @@ type ProvisionExecutionTargetWorktreeResponse struct {
 	CreatedBranch bool
 }
 
+type RunExecutionTargetSetupRequest struct {
+	SetupOperationID    serverapi.WorktreeSetupOperationID
+	SourceWorkspaceRoot string
+	WorktreeRoot        string
+	BranchName          string
+	ProjectID           string
+	WorkspaceID         string
+	WorktreeID          string
+	CreatedBranch       bool
+}
+
 type DeleteTaskWorktreeRequest struct {
 	TaskID string
 }
@@ -227,6 +238,26 @@ func (s *Service) ProvisionExecutionTargetWorktree(ctx context.Context, req Prov
 		BranchName:    createSpec.BranchName,
 		CreatedBranch: createdBranch,
 	}, nil
+}
+
+// RunExecutionTargetSetup executes the configured setup script after the
+// workflow service has durably attached a provisioned managed root.
+func (s *Service) RunExecutionTargetSetup(ctx context.Context, req RunExecutionTargetSetupRequest) error {
+	if s == nil {
+		return errors.New("worktree service is required")
+	}
+	return s.runSetupForWorktree(ctx, setupExecutionRequest{
+		SetupOperationID:    req.SetupOperationID,
+		SourceWorkspaceRoot: req.SourceWorkspaceRoot,
+		BranchName:          req.BranchName,
+		WorktreeRoot:        req.WorktreeRoot,
+		ScriptPayload: setupScriptPayload{
+			ProjectID:   req.ProjectID,
+			WorkspaceID: req.WorkspaceID,
+			WorktreeID:  req.WorktreeID,
+		},
+		CreatedBranch: req.CreatedBranch,
+	})
 }
 
 func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktreeRequest) (resp EnsureTaskWorktreeResponse, err error) {
