@@ -25,21 +25,41 @@ type filePromptCommand struct {
 	Content     string
 }
 
+// ClientPromptRoots is temporary client-owned compatibility state. KENT-214
+// replaces this filesystem reader with a server-owned prompt-command catalog.
+type ClientPromptRoots struct {
+	GlobalRoot string
+}
+
+func NewClientPromptRoots() (ClientPromptRoots, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ClientPromptRoots{}, fmt.Errorf("resolve client home: %w", err)
+	}
+	return ClientPromptRoots{GlobalRoot: filepath.Join(home, configDirName)}, nil
+}
+
+func NewDefaultRegistryWithClientPromptRoots(roots ClientPromptRoots) (*Registry, error) {
+	globalRoot := strings.TrimSpace(roots.GlobalRoot)
+	if globalRoot == "" {
+		return nil, errors.New("client global prompt root is required")
+	}
+	r := NewDefaultRegistry()
+	prompts, err := loadPromptCommands(filePromptGlobalSearchDirs(globalRoot))
+	if err != nil {
+		return nil, err
+	}
+	registerPromptCommands(r, promptCommandSpecs(prompts))
+	return r, nil
+}
+
 func NewDefaultRegistryWithFilePrompts(workspaceRoot, globalRoot string) (*Registry, error) {
 	r := NewDefaultRegistry()
 	prompts, err := loadFilePromptCommands(workspaceRoot, globalRoot)
 	if err != nil {
 		return nil, err
 	}
-	specs := make([]promptCommandSpec, 0, len(prompts))
-	for _, prompt := range prompts {
-		specs = append(specs, promptCommandSpec{
-			Name:        prompt.Name,
-			Description: prompt.Description,
-			Prompt:      prompt.Content,
-		})
-	}
-	registerPromptCommands(r, specs)
+	registerPromptCommands(r, promptCommandSpecs(prompts))
 	return r, nil
 }
 
@@ -48,7 +68,10 @@ func loadFilePromptCommands(workspaceRoot, globalRoot string) ([]filePromptComma
 	if err != nil {
 		return nil, err
 	}
+	return loadPromptCommands(dirs)
+}
 
+func loadPromptCommands(dirs []string) ([]filePromptCommand, error) {
 	seen := map[string]bool{}
 	commands := make([]filePromptCommand, 0)
 	for _, dir := range dirs {
@@ -96,6 +119,23 @@ func loadFilePromptCommands(workspaceRoot, globalRoot string) ([]filePromptComma
 		}
 	}
 	return commands, nil
+}
+
+func promptCommandSpecs(prompts []filePromptCommand) []promptCommandSpec {
+	specs := make([]promptCommandSpec, 0, len(prompts))
+	for _, prompt := range prompts {
+		specs = append(specs, promptCommandSpec{Name: prompt.Name, Description: prompt.Description, Prompt: prompt.Content})
+	}
+	return specs
+}
+
+func filePromptGlobalSearchDirs(globalRoot string) []string {
+	return []string{
+		filepath.Join(globalRoot, promptsDirName),
+		filepath.Join(globalRoot, commandsDirName),
+		filepath.Join(globalRoot, generatedDirName, promptsDirName),
+		filepath.Join(globalRoot, generatedDirName, commandsDirName),
+	}
 }
 
 func normalizeFilePromptCommandID(name string) string {

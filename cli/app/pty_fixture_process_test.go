@@ -98,11 +98,25 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 		startupOptions:        runtime.StartupOptions(),
 	}
 	interactor := newInteractiveAuthInteractor()
+	standingServer, err := startEmbeddedServer(ctx, options, interactor, true)
+	if err != nil {
+		return fmt.Errorf("start fixture server: %w", err)
+	}
+	defer func() { _ = standingServer.Close() }()
+
 	server, err := startSessionServer(ctx, options, interactor, true)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = server.Close() }()
+	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
+	if err != nil {
+		_ = server.Close()
+		return err
+	}
+	if shouldCloseReboundServer(server, boundServer) {
+		defer func() { _ = boundServer.Close() }()
+	}
+	server = boundServer
 
 	planner := newSessionLaunchPlanner(server)
 	plan, err := planner.PlanSession(ctx, sessionLaunchRequest{

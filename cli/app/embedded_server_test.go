@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"core/cli/app/commands"
 	"core/cli/app/internal/status"
 	"core/internal/testharness/runtimewirefixture"
 	"core/server/auth"
@@ -140,6 +141,12 @@ func (s *testEmbeddedServer) Close() error {
 func (s *testEmbeddedServer) OwnsServer() bool { return true }
 
 func (s *testEmbeddedServer) Config() config.App { return s.cfg }
+
+func (s *testEmbeddedServer) PresentationTheme() string { return "dark" }
+
+func (s *testEmbeddedServer) ClientPromptRoots() (commands.ClientPromptRoots, error) {
+	return commands.NewClientPromptRoots()
+}
 
 func (s *testEmbeddedServer) BindProjectWorkspace(_ context.Context, projectID string, workspaceID string) (interactiveSessionServer, error) {
 	if s == nil {

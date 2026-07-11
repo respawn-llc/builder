@@ -32,6 +32,7 @@ type WorkspacePickerResult struct {
 
 type Server[T any] interface {
 	Config() config.App
+	PresentationTheme() string
 	ProjectViewClient() client.ProjectViewClient
 	BindProjectWorkspace(ctx context.Context, projectID string, workspaceID string) (T, error)
 }
@@ -88,8 +89,8 @@ func ensureLocalPathBinding[T any](ctx context.Context, req Request[T], workspac
 	if req.PickLocalProject == nil {
 		return zero, errors.New("project picker is required")
 	}
-	cfg := req.Server.Config()
-	picked, err := req.PickLocalProject(projects, cfg.Settings.Theme)
+	theme := req.Server.PresentationTheme()
+	picked, err := req.PickLocalProject(projects, theme)
 	if err != nil {
 		return zero, err
 	}
@@ -100,7 +101,7 @@ func ensureLocalPathBinding[T any](ctx context.Context, req Request[T], workspac
 		if req.PromptProjectName == nil {
 			return zero, errors.New("project name prompt is required")
 		}
-		projectName, err := req.PromptProjectName(filepath.Base(filepath.Clean(workspaceRoot)), cfg.Settings.Theme)
+		projectName, err := req.PromptProjectName(filepath.Base(filepath.Clean(workspaceRoot)), theme)
 		if err != nil {
 			return zero, err
 		}
@@ -136,8 +137,7 @@ func ensureServerBrowsingBinding[T any](ctx context.Context, req Request[T], pro
 	if req.PickServerProject == nil {
 		return zero, errors.New("server project picker is required")
 	}
-	cfg := req.Server.Config()
-	picked, err := req.PickServerProject(projects, cfg.Settings.Theme)
+	picked, err := req.PickServerProject(projects, req.Server.PresentationTheme())
 	if err != nil {
 		return zero, err
 	}
@@ -169,6 +169,7 @@ func EnsureServerBrowsing[T any](ctx context.Context, req Request[T], projects [
 type WorkspaceSelectionRequest struct {
 	Server interface {
 		Config() config.App
+		PresentationTheme() string
 		ProjectViewClient() client.ProjectViewClient
 	}
 	ProjectID     string
@@ -192,7 +193,7 @@ func SelectWorkspaceForStartup(ctx context.Context, req WorkspaceSelectionReques
 	if req.PickWorkspace == nil {
 		return clientui.ProjectWorkspaceSummary{}, errors.New("workspace picker is required")
 	}
-	picked, err := req.PickWorkspace(overview.Overview.Workspaces, req.Server.Config().Settings.Theme)
+	picked, err := req.PickWorkspace(overview.Overview.Workspaces, req.Server.PresentationTheme())
 	if err != nil {
 		return clientui.ProjectWorkspaceSummary{}, err
 	}

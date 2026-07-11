@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"core/cli/app/internal/onboarding"
 	"core/shared/serverapi"
 	"core/shared/valuecopy"
 
@@ -27,13 +26,9 @@ type onboardingImportDiscovery struct {
 	fromFacts               bool
 	err                     error
 	skipSkills              bool
-	skipCommands            bool
 	skillChoices            []onboardingImportChoice
-	commandChoices          []onboardingImportChoice
 	skillRecommendationID   string
-	commandRecommendationID string
 	skillSymlinkItems       map[onboardingImportProviderID][]onboardingSkillImportItem
-	commandSymlinkItems     map[onboardingImportProviderID][]onboardingCommandImportItem
 	skillEnablementByChoice map[string][]onboardingSkillImportItem
 	generatedSkillItems     []onboardingSkillImportItem
 	existingSkillNames      map[string]bool
@@ -50,15 +45,6 @@ type onboardingSkillImportItem struct {
 	Warning        string
 }
 
-type onboardingCommandImportItem struct {
-	ID             string
-	Provider       *onboardingImportProviderID
-	ProviderLabel  string
-	SourceFile     *string
-	TargetFileName string
-	DisplayName    string
-}
-
 type onboardingImportDiscoveryDoneMsg struct {
 	discovery onboardingImportDiscovery
 }
@@ -67,28 +53,19 @@ func onboardingImportDiscoveryFromFacts(facts serverapi.ImportCapabilityFacts) o
 	discovery := onboardingImportDiscovery{
 		fromFacts:               true,
 		skillSymlinkItems:       map[onboardingImportProviderID][]onboardingSkillImportItem{},
-		commandSymlinkItems:     map[onboardingImportProviderID][]onboardingCommandImportItem{},
 		skillEnablementByChoice: map[string][]onboardingSkillImportItem{},
 		existingSkillNames:      map[string]bool{},
 	}
 	discovery.skipSkills = facts.Skills.Target.Skip
-	discovery.skipCommands = facts.Commands.Target.Skip
 	if len(facts.Errors) > 0 {
 		discovery.err = errors.New(facts.Errors[0].Message)
 	}
 	discovery.skillChoices = importChoicesFromFacts(facts.Skills.Choices)
-	discovery.commandChoices = importChoicesFromFacts(facts.Commands.Choices)
 	discovery.skillChoices = ensureNoneImportChoice(discovery.skillChoices)
-	discovery.commandChoices = ensureNoneImportChoice(discovery.commandChoices)
 	if id, ok := importChoiceIDFromRecommendation(facts.Recommendations.Skills, discovery.skillChoices); ok {
 		discovery.skillRecommendationID = id
 	} else if id, ok := noneChoiceID(discovery.skillChoices); ok {
 		discovery.skillRecommendationID = id
-	}
-	if id, ok := importChoiceIDFromRecommendation(facts.Recommendations.Commands, discovery.commandChoices); ok {
-		discovery.commandRecommendationID = id
-	} else if id, ok := noneChoiceID(discovery.commandChoices); ok {
-		discovery.commandRecommendationID = id
 	}
 	for _, item := range facts.Skills.Items {
 		converted := skillImportItemFromFact(item)
@@ -97,12 +74,6 @@ func onboardingImportDiscoveryFromFacts(facts serverapi.ImportCapabilityFacts) o
 			continue
 		}
 		discovery.skillSymlinkItems[*converted.Provider] = append(discovery.skillSymlinkItems[*converted.Provider], converted)
-	}
-	for _, item := range facts.Commands.Items {
-		converted := commandImportItemFromFact(item)
-		if converted.Provider != nil {
-			discovery.commandSymlinkItems[*converted.Provider] = append(discovery.commandSymlinkItems[*converted.Provider], converted)
-		}
 	}
 	for _, projection := range facts.SkillEnablement {
 		id, ok := optionIDForChoiceRef(discovery.skillChoices, projection.ChoiceRef)
@@ -171,24 +142,6 @@ func skillImportItemFromFact(item serverapi.ImportItemFact) onboardingSkillImpor
 		SkillName:      name,
 		DefaultEnabled: defaultEnabled,
 		Warning:        importConflictWarning(item.Conflicts),
-	}
-}
-
-func commandImportItemFromFact(item serverapi.ImportItemFact) onboardingCommandImportItem {
-	ref := item.Ref
-	provider := providerIDFromPtr(ref.ImportProviderID)
-	sourceFile := valuecopy.Pointer(ref.SourcePath)
-	name := ref.TargetName
-	if ref.Name != nil && strings.TrimSpace(*ref.Name) != "" {
-		name = *ref.Name
-	}
-	return onboardingCommandImportItem{
-		ID:             uuid.NewString(),
-		Provider:       provider,
-		ProviderLabel:  importProviderDisplayLabel(provider, ref.SourceKind),
-		SourceFile:     sourceFile,
-		TargetFileName: ref.TargetName,
-		DisplayName:    name,
 	}
 }
 
@@ -372,56 +325,6 @@ func importSkillsBody(discovery onboardingImportDiscovery) string {
 	return "Kent found importable skills from " + strings.Join(providers, ", ") + ". Would you like to symlink to the other provider's directories?"
 }
 
-func buildCommandImportScreen(state *onboardingFlowState) onboardingScreen {
-	if state.imports.pending {
-		return onboardingScreen{ID: "commands_import", Kind: onboardingScreenLoading, Title: "Import slash commands?", LoadingText: "Scanning Claude Code, Codex, Agents slash commands..."}
-	}
-	if state.imports.skipCommands {
-		return skippedImportScreen("commands_import", "Import slash commands?", "slash command import", state.imports.commandChoices, state.imports.err)
-	}
-	if state.imports.err != nil && !hasImportChoices(state.imports.commandChoices) {
-		optionID, _ := noneChoiceID(state.imports.commandChoices)
-		return onboardingScreen{ID: "commands_import", Kind: onboardingScreenChoice, Title: "Import slash commands?", Body: "Kent could not inspect importable slash commands on this machine.", ErrorText: state.imports.err.Error(), Options: []onboardingOption{{ID: optionID, Title: "Do not import"}}, DefaultOptionID: optionID}
-	}
-	defaultID := state.imports.commandRecommendationID
-	if selectedID, ok := optionIDForSelection(state.imports.commandChoices, state.commandImport); ok {
-		defaultID = selectedID
-	}
-	options := make([]onboardingOption, 0, len(state.imports.commandChoices))
-	for _, choice := range state.imports.commandChoices {
-		switch choice.Mode {
-		case onboardingImportModeNone:
-			options = append(options, onboardingOption{ID: choice.OptionID, Title: "Do not import"})
-		case onboardingImportModeSymlinkSource:
-			if choice.Count == 0 {
-				continue
-			}
-			options = append(options, onboardingOption{ID: choice.OptionID, Title: fmt.Sprintf("Symlink to %s (%d found)", importProviderDisplayLabel(choice.Provider, "external_provider"), choice.Count)})
-		}
-	}
-	if len(options) == 0 {
-		return skippedImportScreen("commands_import", "Import slash commands?", "slash command import", state.imports.commandChoices, state.imports.err)
-	}
-	if !containsOnboardingOption(options, defaultID) {
-		defaultID = options[0].ID
-	}
-	screen := onboardingScreen{ID: "commands_import", Kind: onboardingScreenChoice, Title: "Import slash commands?", Body: importCommandsBody(state.imports), Options: options, DefaultOptionID: defaultID}
-	if state.imports.err != nil {
-		screen.ErrorText = state.imports.err.Error()
-	}
-	return screen
-}
-
-func importCommandsBody(discovery onboardingImportDiscovery) string {
-	providers := make([]string, 0)
-	for _, choice := range discovery.commandChoices {
-		if choice.Mode == onboardingImportModeSymlinkSource && choice.Count > 0 {
-			providers = append(providers, importProviderDisplayLabel(choice.Provider, "external_provider"))
-		}
-	}
-	return "Kent found importable slash commands from " + strings.Join(providers, ", ") + ". Would you like to symlink to provider directories?"
-}
-
 func skippedImportScreen(id string, title string, bodyKind string, choices []onboardingImportChoice, err error) onboardingScreen {
 	optionID, ok := noneChoiceID(choices)
 	if !ok {
@@ -481,89 +384,4 @@ func skillImportSummary(state *onboardingFlowState) string {
 		return ""
 	}
 	return fmt.Sprintf("Symlink %d skills from %s", len(skillSelectionCandidates(state)), importProviderDisplayLabel(state.skillImport.Provider, "external_provider"))
-}
-
-func commandImportSummary(state *onboardingFlowState) string {
-	if state.imports.skipCommands {
-		return "skipped - existing found"
-	}
-	if state.commandImport.Mode != onboardingImportModeSymlinkSource {
-		return ""
-	}
-	count := 0
-	if state.commandImport.Provider != nil {
-		count = len(state.imports.commandSymlinkItems[*state.commandImport.Provider])
-	}
-	return fmt.Sprintf("Symlink %d from %s", count, importProviderDisplayLabel(state.commandImport.Provider, "external_provider"))
-}
-
-func executeOnboardingImports(globalRoot string, state onboardingFlowState) (func() error, error) {
-	createdPaths := []string{}
-	skillPaths, err := executeSkillImport(globalRoot, state.imports, state.skillImport)
-	if err != nil {
-		return func() error { return nil }, err
-	}
-	createdPaths = append(createdPaths, skillPaths...)
-	commandPaths, err := executeCommandImport(globalRoot, state.imports, state.commandImport)
-	if err != nil {
-		rollbackErr := onboarding.RollbackCreatedPaths(createdPaths)
-		if rollbackErr != nil {
-			err = errors.Join(err, rollbackErr)
-		}
-		return func() error { return nil }, err
-	}
-	createdPaths = append(createdPaths, commandPaths...)
-	return func() error {
-		return onboarding.RollbackCreatedPaths(createdPaths)
-	}, nil
-}
-
-func executeSkillImport(globalRoot string, discovery onboardingImportDiscovery, selection onboardingImportSelection) ([]string, error) {
-	selection = normalizeImportSelection(selection)
-	if discovery.skipSkills {
-		if selection.Mode != onboardingImportModeNone {
-			return nil, fmt.Errorf("skills import should have been skipped because existing content was found")
-		}
-		return nil, nil
-	}
-	if selection.Mode == onboardingImportModeNone {
-		return nil, nil
-	}
-	if selection.Mode != onboardingImportModeSymlinkSource {
-		return nil, fmt.Errorf("unsupported skills import mode %q", selection.Mode)
-	}
-	targetRoot := filepath.Join(globalRoot, "skills")
-	if selection.SourceRoot == nil {
-		return nil, errors.New("missing server-supplied skills source path")
-	}
-	sourcePath := strings.TrimSpace(*selection.SourceRoot)
-	if sourcePath == "" {
-		return nil, errors.New("missing server-supplied skills source path")
-	}
-	return onboarding.ExecuteSymlink(targetRoot, sourcePath, "skills", fmt.Sprintf("skills source %s", importProviderDisplayLabel(selection.Provider, "external_provider")))
-}
-
-func executeCommandImport(globalRoot string, discovery onboardingImportDiscovery, selection onboardingImportSelection) ([]string, error) {
-	selection = normalizeImportSelection(selection)
-	if discovery.skipCommands {
-		if selection.Mode != onboardingImportModeNone {
-			return nil, fmt.Errorf("slash command import should have been skipped because existing content was found")
-		}
-		return nil, nil
-	}
-	if selection.Mode == onboardingImportModeNone {
-		return nil, nil
-	}
-	if selection.Mode != onboardingImportModeSymlinkSource {
-		return nil, fmt.Errorf("unsupported slash command import mode %q", selection.Mode)
-	}
-	targetRoot := filepath.Join(globalRoot, "prompts")
-	if selection.SourceRoot == nil {
-		return nil, errors.New("missing server-supplied slash command source path")
-	}
-	sourcePath := strings.TrimSpace(*selection.SourceRoot)
-	if sourcePath == "" {
-		return nil, errors.New("missing server-supplied slash command source path")
-	}
-	return onboarding.ExecuteSymlink(targetRoot, sourcePath, "slash command", fmt.Sprintf("slash command source %s", importProviderDisplayLabel(selection.Provider, "external_provider")))
 }
