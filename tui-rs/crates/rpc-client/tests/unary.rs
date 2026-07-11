@@ -924,7 +924,7 @@ fn transcript_page_wrapper_uses_contract_dto_and_method_name() {
             "HasMoreAbove": true,
             "NewerCursor": 8192,
             "HasMoreBelow": true,
-            "Entries": contract_chat_entries_json()
+            "Entries": contract_transcript_rows_json()
         }
     }))
     .unwrap();
@@ -3169,54 +3169,19 @@ fn contract_source_report_json() -> serde_json::Value {
     })
 }
 
-fn contract_chat_entries_json() -> serde_json::Value {
+fn contract_transcript_rows_json() -> serde_json::Value {
     json!([
         {
-            "Visibility": "",
-            "RollbackTargetID": "",
-            "Role": "assistant",
-            "Text": "final answer",
-            "Phase": "final_answer",
-            "MessageType": "",
-            "SourcePath": "",
-            "CompactLabel": "",
-            "ToolResultSummary": "",
-            "ToolCallID": "",
-            "NoticeID": "",
-            "ToolCall": null
-        },
-        {
-            "Visibility": "",
-            "RollbackTargetID": "",
-            "Role": "tool_call",
-            "Text": "echo hi",
-            "Phase": "",
-            "MessageType": "",
-            "SourcePath": "",
-            "CompactLabel": "",
-            "ToolResultSummary": "",
-            "ToolCallID": "call-1",
-            "NoticeID": "",
-            "ToolCall": {
-                "ToolName": "shell",
-                "Presentation": "",
-                "RenderBehavior": "",
-                "IsShell": true,
-                "UserInitiated": false,
-                "Command": "echo hi",
-                "CompactText": "",
-                "InlineMeta": "",
-                "TimeoutLabel": "",
-                "PatchSummary": "",
-                "PatchDetail": "",
-                "PatchRender": null,
-                "RenderHint": null,
-                "Question": "",
-                "RecommendedOptionIndex": 0,
-                "OmitSuccessfulResult": false,
-                "RawOutputRequested": false,
-                "OutputTruncated": false
-            }
+            "Visibility": "O",
+            "Integrity": 0,
+            "Kind": "user",
+            "User": {
+                "Text": "ship the fix",
+                "CondensedText": ""
+            },
+            "Assistant": null,
+            "Tool": null,
+            "Notice": null
         }
     ])
 }

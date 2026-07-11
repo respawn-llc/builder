@@ -16,6 +16,7 @@ doctest = false
 
 [dependencies]
 serde.workspace = true
+uuid.workspace = true
 
 [build-dependencies]
 serde_json.workspace = true
