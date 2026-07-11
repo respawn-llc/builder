@@ -5859,6 +5859,82 @@ func (q *Queries) ListTaskCommentsPage(ctx context.Context, arg ListTaskComments
 	return items, nil
 }
 
+const listTaskExecutionTargetsNeedingRecoveryFence = `-- name: ListTaskExecutionTargetsNeedingRecoveryFence :many
+SELECT
+    task_id,
+    policy,
+    requested_custom_ref,
+    resolved_source_kind,
+    resolved_source_ref,
+    resolved_commit,
+    state,
+    provisioning_generation,
+    setup_provisioning_generation,
+    setup_state,
+    active_claim_generation,
+    active_claim_phase,
+    recovery_disposition,
+    recovery_cause,
+    exact_branch_observation,
+    linked_worktree_common_dir,
+    linked_worktree_admin_entry,
+    linked_worktree_gitdir,
+    linked_worktree_head_ref,
+    expected_detachment_commit
+FROM task_execution_targets
+WHERE active_claim_generation IS NOT NULL
+  AND (
+      active_claim_phase IN ('materializing', 'recovering')
+      OR setup_state = 'running'
+  )
+ORDER BY task_id ASC
+LIMIT ?1
+`
+
+func (q *Queries) ListTaskExecutionTargetsNeedingRecoveryFence(ctx context.Context, limit int64) ([]TaskExecutionTarget, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskExecutionTargetsNeedingRecoveryFence, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TaskExecutionTarget
+	for rows.Next() {
+		var i TaskExecutionTarget
+		if err := rows.Scan(
+			&i.TaskID,
+			&i.Policy,
+			&i.RequestedCustomRef,
+			&i.ResolvedSourceKind,
+			&i.ResolvedSourceRef,
+			&i.ResolvedCommit,
+			&i.State,
+			&i.ProvisioningGeneration,
+			&i.SetupProvisioningGeneration,
+			&i.SetupState,
+			&i.ActiveClaimGeneration,
+			&i.ActiveClaimPhase,
+			&i.RecoveryDisposition,
+			&i.RecoveryCause,
+			&i.ExactBranchObservation,
+			&i.LinkedWorktreeCommonDir,
+			&i.LinkedWorktreeAdminEntry,
+			&i.LinkedWorktreeGitdir,
+			&i.LinkedWorktreeHeadRef,
+			&i.ExpectedDetachmentCommit,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskNodePlacements = `-- name: ListTaskNodePlacements :many
 SELECT
     id,

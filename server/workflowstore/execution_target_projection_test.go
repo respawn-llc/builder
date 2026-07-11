@@ -171,6 +171,85 @@ func TestStoreUpdateTaskExecutionTargetLifecycleUsesClaimFence(t *testing.T) {
 	}
 }
 
+func TestStoreFenceExecutionTargetRecoveryRequeuesOrphanedClaims(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	createClaimedTarget := func(t *testing.T, title string, claimPhase workflow.ExecutionTargetClaimPhase, setupState workflow.ExecutionTargetSetupState) workflow.ExecutionTarget {
+		t.Helper()
+		task := createTask(t, ctx, store, CreateTaskRequest{
+			ProjectID:  binding.ProjectID,
+			WorkflowID: workflowID,
+			Title:      title,
+			Body:       "Body",
+		})
+		provisioningGeneration := title + "-provisioning"
+		claimGeneration := title + "-claim"
+		target := workflow.ExecutionTarget{
+			TaskID: task.ID,
+			Policy: workflow.ExecutionPolicyHead,
+			ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+				Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+				Commit: "deadbeef",
+			},
+			State:                       workflow.ExecutionTargetStateInitialProvisioning,
+			ProvisioningGeneration:      &provisioningGeneration,
+			SetupProvisioningGeneration: &provisioningGeneration,
+			SetupState:                  setupState,
+			ActiveClaim:                 &workflow.ExecutionTargetClaim{Generation: claimGeneration, Phase: claimPhase},
+			RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+		}
+		if err := store.SaveTaskExecutionTarget(ctx, target); err != nil {
+			t.Fatalf("SaveTaskExecutionTarget %s: %v", title, err)
+		}
+		return target
+	}
+	materializing := createClaimedTarget(t, "materializing", workflow.ExecutionTargetClaimMaterializing, workflow.ExecutionTargetSetupPending)
+	recovering := createClaimedTarget(t, "recovering", workflow.ExecutionTargetClaimRecovering, workflow.ExecutionTargetSetupRunning)
+	queuedRunning := createClaimedTarget(t, "queued-running", workflow.ExecutionTargetClaimRecoveryQueued, workflow.ExecutionTargetSetupRunning)
+
+	fenced, err := store.FenceExecutionTargetRecovery(ctx, 2)
+	if err != nil {
+		t.Fatalf("FenceExecutionTargetRecovery: %v", err)
+	}
+	if len(fenced) != 2 {
+		t.Fatalf("first fenced task ids = %+v, want two targets", fenced)
+	}
+	next, err := store.FenceExecutionTargetRecovery(ctx, 2)
+	if err != nil {
+		t.Fatalf("FenceExecutionTargetRecovery next page: %v", err)
+	}
+	if len(next) != 1 {
+		t.Fatalf("next fenced task ids = %+v, want one target", next)
+	}
+	assertFencedTarget := func(t *testing.T, expected workflow.ExecutionTarget, wantSetup workflow.ExecutionTargetSetupState, wantNewGeneration bool) {
+		t.Helper()
+		actual, err := store.GetTaskExecutionTarget(ctx, expected.TaskID)
+		if err != nil {
+			t.Fatalf("GetTaskExecutionTarget %s: %v", expected.TaskID, err)
+		}
+		if actual == nil || actual.ActiveClaim == nil ||
+			actual.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued ||
+			actual.SetupState != wantSetup {
+			t.Fatalf("fenced target = %+v, want queued claim and setup %q", actual, wantSetup)
+		}
+		if wantNewGeneration && actual.ActiveClaim.Generation == expected.ActiveClaim.Generation {
+			t.Fatalf("fenced target claim generation = %q, want a replacement for %q", actual.ActiveClaim.Generation, expected.ActiveClaim.Generation)
+		}
+		if !wantNewGeneration && actual.ActiveClaim.Generation != expected.ActiveClaim.Generation {
+			t.Fatalf("fenced target claim generation = %q, want retained %q", actual.ActiveClaim.Generation, expected.ActiveClaim.Generation)
+		}
+	}
+	assertFencedTarget(t, materializing, workflow.ExecutionTargetSetupPending, true)
+	assertFencedTarget(t, recovering, workflow.ExecutionTargetSetupFailed, true)
+	assertFencedTarget(t, queuedRunning, workflow.ExecutionTargetSetupFailed, false)
+
+	if next, err := store.FenceExecutionTargetRecovery(ctx, 2); err != nil {
+		t.Fatalf("FenceExecutionTargetRecovery second pass: %v", err)
+	} else if len(next) != 0 {
+		t.Fatalf("second recovery fence = %+v, want no already-fenced targets", next)
+	}
+}
+
 func TestStoreAttachManagedExecutionTargetWorktreeLocksClaimedTarget(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)

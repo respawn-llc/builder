@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/shared/config"
@@ -155,6 +157,67 @@ func executionTargetLifecycleFieldsFromTarget(target workflow.ExecutionTarget) e
 
 func (s *Store) UpdateTaskExecutionTargetLifecycle(ctx context.Context, target workflow.ExecutionTarget, expectedClaim workflow.ExecutionTargetClaim) error {
 	return updateTaskExecutionTargetLifecycle(ctx, s.queries, target, expectedClaim)
+}
+
+// FenceExecutionTargetRecovery performs the database-only startup fence for
+// orphaned target materialization. It never performs Git, setup, or initiating
+// action work. Each returned task has a recovery-queued claim that a later
+// recovery owner may safely acquire.
+func (s *Store) FenceExecutionTargetRecovery(ctx context.Context, limit int) ([]workflow.TaskID, error) {
+	if limit <= 0 {
+		return nil, errors.New("execution target recovery fence limit must be positive")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	rows, err := q.ListTaskExecutionTargetsNeedingRecoveryFence(ctx, int64(limit))
+	if err != nil {
+		return nil, err
+	}
+	taskIDs := make([]workflow.TaskID, 0, len(rows))
+	for _, row := range rows {
+		target, err := taskExecutionTargetFromRow(row)
+		if err != nil {
+			return nil, fmt.Errorf("decode task execution target for recovery fence: %w", err)
+		}
+		if target.ActiveClaim == nil {
+			return nil, errors.New("recovery fence selected target without an active claim")
+		}
+		expectedClaim := *target.ActiveClaim
+		changed := false
+		switch expectedClaim.Phase {
+		case workflow.ExecutionTargetClaimMaterializing, workflow.ExecutionTargetClaimRecovering:
+			target.ActiveClaim = &workflow.ExecutionTargetClaim{
+				Generation: uuid.NewString(),
+				Phase:      workflow.ExecutionTargetClaimRecoveryQueued,
+			}
+			changed = true
+		case workflow.ExecutionTargetClaimRecoveryQueued:
+		default:
+			return nil, fmt.Errorf("recovery fence selected target with unsupported claim phase %q", expectedClaim.Phase)
+		}
+		if target.SetupState == workflow.ExecutionTargetSetupRunning {
+			target.SetupState = workflow.ExecutionTargetSetupFailed
+			changed = true
+		}
+		if !changed {
+			continue
+		}
+		if err := updateTaskExecutionTargetLifecycle(ctx, q, target, expectedClaim); err != nil {
+			if errors.Is(err, ErrTaskExecutionTargetClaimChanged) {
+				continue
+			}
+			return nil, err
+		}
+		taskIDs = append(taskIDs, target.TaskID)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return taskIDs, nil
 }
 
 func updateTaskExecutionTargetLifecycle(ctx context.Context, q *sqlitegen.Queries, target workflow.ExecutionTarget, expectedClaim workflow.ExecutionTargetClaim) error {
