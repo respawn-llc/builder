@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/cellbuf"
 )
 
 type terminalHyperlinkEvent struct {
@@ -52,15 +53,12 @@ func traceTerminalHyperlinks(t *testing.T, output string) terminalHyperlinkTrace
 			if command != 8 {
 				return
 			}
-			oscCommand, payload, hasPayload := strings.Cut(string(data), ";")
-			_, target, hasTarget := strings.Cut(payload, ";")
-			if !hasPayload || !hasTarget || oscCommand != "8" {
-				t.Fatalf("malformed OSC 8 metadata: %q", data)
-			}
-			activeTarget = target
+			var link cellbuf.Link
+			cellbuf.ReadLink(data, &link)
+			activeTarget = link.URL
 			trace.Events = append(trace.Events, terminalHyperlinkEvent{
-				Target: target,
-				Active: target != "",
+				Target: link.URL,
+				Active: !link.Empty(),
 			})
 		},
 	})
