@@ -63,9 +63,12 @@ compile_app_icon() {
 	local out_car="apps/desktop/src-tauri/icons/Assets.car"
 	[ -d "$icon_dir" ] || return 0
 
-	if ! command -v actool >/dev/null 2>&1; then
+	local developer_dir=""
+	if ! command -v actool >/dev/null 2>&1 ||
+		! developer_dir="$(xcode-select --print-path 2>/dev/null)" ||
+		[ ! -d "$(dirname "$developer_dir")/Applications/Icon Composer.app" ]; then
 		rm -f "$out_car"
-		echo "actool not found; skipping liquid-glass app icon (Xcode 26+ required). Tauri will fall back to PNG -> icns." >&2
+		echo "Icon Composer unavailable; skipping liquid-glass app icon. Tauri will fall back to PNG -> icns." >&2
 		return 0
 	fi
 
