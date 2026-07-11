@@ -189,7 +189,7 @@ export function PropertiesIsland({
       <PropertyLine label={t("task.project")} value={detail.projectName} />
       <PropertyLine
         label={t("task.status")}
-        value={<TaskStatusText label={detail.status.label} tone={taskStatusTone(detail.status)} />}
+        value={<TaskStatusText label={t(`task.statusKinds.${detail.status.kind}`)} tone={taskStatusTone(detail.status)} />}
       />
       <PropertyLine label={t("task.workspace")} value={detail.sourceWorkspace.name} />
       <PropertyLine label={t("task.workflow")} value={detail.workflowName} />

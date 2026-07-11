@@ -2,6 +2,7 @@ package workflowstore
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"core/server/workflow"
@@ -36,8 +37,17 @@ func TestManualMoveToTerminalArchivesWithoutOutputValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements: %v", err)
 	}
-	if len(placements) != 3 || placements[1].State != "completed" || placements[2].NodeID != workflow.NodeIDOf(done) || placements[2].State != "completed" {
-		t.Fatalf("manual terminal placements = %+v", placements)
+	if len(placements) != 3 || placements[1].State != "completed" || placements[2].NodeID != workflow.NodeIDOf(done) || placements[2].State != "active" {
+		t.Fatalf("manual terminal placements = %+v, want an active terminal sink", placements)
+	}
+	runs, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	for _, run := range runs {
+		if run.PlacementID == moved.PlacementIDs[0] {
+			t.Fatalf("terminal placement unexpectedly owns run %+v", run)
+		}
 	}
 }
 
@@ -73,6 +83,72 @@ func TestManualMoveRejectsStartedRun(t *testing.T) {
 	}
 	if len(placements) != 2 || placements[1].State != "active" {
 		t.Fatalf("placements after rejected manual move = %+v, want original active placement", placements)
+	}
+}
+
+func TestManualRestartRejectsActiveRunWithoutMutatingTask(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	if _, err := store.ClaimRun(ctx, started.RunID, 0); err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	start := nodeByKind(t, def, workflow.NodeKindStart)
+
+	placementsBefore, err := store.ListPlacements(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPlacements before restart: %v", err)
+	}
+	runsBefore, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns before restart: %v", err)
+	}
+	transitionsBefore, err := store.ListTransitions(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListTransitions before restart: %v", err)
+	}
+
+	_, err = store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
+	if !errors.Is(err, ErrManualMoveDuringActiveRun) {
+		t.Fatalf("ManualMoveTask restart error = %v, want active-run rejection", err)
+	}
+
+	placementsAfterRejectedMove, err := store.ListPlacements(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListPlacements after rejected restart: %v", err)
+	}
+	runsAfterRejectedMove, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns after rejected restart: %v", err)
+	}
+	transitionsAfterRejectedMove, err := store.ListTransitions(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListTransitions after rejected restart: %v", err)
+	}
+	if !reflect.DeepEqual(placementsAfterRejectedMove, placementsBefore) {
+		t.Fatalf("placements after rejected restart = %+v, want unchanged %+v", placementsAfterRejectedMove, placementsBefore)
+	}
+	if !reflect.DeepEqual(runsAfterRejectedMove, runsBefore) {
+		t.Fatalf("runs after rejected restart = %+v, want unchanged %+v", runsAfterRejectedMove, runsBefore)
+	}
+	if !reflect.DeepEqual(transitionsAfterRejectedMove, transitionsBefore) {
+		t.Fatalf("transitions after rejected restart = %+v, want unchanged %+v", transitionsAfterRejectedMove, transitionsBefore)
+	}
+
+	if err := store.InterruptRun(ctx, started.RunID, "manual", "{}"); err != nil {
+		t.Fatalf("InterruptRun: %v", err)
+	}
+	moved, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(start)})
+	if err != nil {
+		t.Fatalf("ManualMoveTask restart after interrupt: %v", err)
+	}
+	if moved.State != "applied" || len(moved.PlacementIDs) != 1 || len(moved.RunIDs) != 0 {
+		t.Fatalf("restart result = %+v, want applied start placement without a run", moved)
 	}
 }
 

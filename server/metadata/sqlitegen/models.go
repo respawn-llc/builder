@@ -307,6 +307,52 @@ type WorkflowNodeGroup struct {
 	SortOrder   int64
 }
 
+type WorkflowTaskCurrentRunRecord struct {
+	ID                  string
+	TaskID              string
+	PlacementID         string
+	SessionID           sql.NullString
+	UpdatedAtUnixMs     int64
+	StartedAtUnixMs     interface{}
+	CompletedAtUnixMs   interface{}
+	InterruptedAtUnixMs interface{}
+	WaitingAskID        interface{}
+}
+
+type WorkflowTaskStatusRecord struct {
+	TaskID             string
+	IsDone             int64
+	Kind               string
+	NativeState        string
+	PrimaryStatusRank  int64
+	NodeIdsJson        interface{}
+	RunIdsJson         interface{}
+	AttentionTypesJson interface{}
+}
+
+type WorkflowTaskStatusRunRecord struct {
+	ID                  string
+	TaskID              string
+	PlacementID         string
+	SessionID           sql.NullString
+	UpdatedAtUnixMs     int64
+	StartedAtUnixMs     interface{}
+	CompletedAtUnixMs   interface{}
+	InterruptedAtUnixMs interface{}
+	WaitingAskID        interface{}
+}
+
+type WorkflowTaskStatusTaskRecord struct {
+	ID               string
+	CanceledAtUnixMs interface{}
+}
+
+type WorkflowTaskStatusTransitionRecord struct {
+	TaskID       string
+	State        string
+	SourceNodeID interface{}
+}
+
 type WorkflowTransitionGroup struct {
 	ID           string
 	SourceNodeID string

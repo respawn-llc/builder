@@ -449,9 +449,19 @@ export type WorkflowPickerItem = Readonly<{
   validationErrors: readonly WorkflowValidationError[];
 }>;
 
+export type TaskStatusKind =
+  | "canceled"
+  | "done"
+  | "waiting_question"
+  | "waiting_approval"
+  | "interrupted"
+  | "running"
+  | "queued"
+  | "backlog"
+  | "active";
+
 export type TaskStatus = Readonly<{
-  kind: string;
-  label: string;
+  kind: TaskStatusKind;
   nativeState: string;
   nodeIDs: readonly string[];
   runIDs: readonly string[];

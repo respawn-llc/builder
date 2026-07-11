@@ -21,7 +21,7 @@ func (s *fakeWorkflowService) CreateWorkflow(ctx context.Context, req serverapi.
 
 func (s *fakeWorkflowService) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	s.listReq = req
-	return serverapi.WorkflowTaskListResponse{ProjectID: req.ProjectID, WorkflowID: req.WorkflowID}, nil
+	return serverapi.WorkflowTaskListResponse{ProjectID: *req.ProjectID, WorkflowID: *req.WorkflowID}, nil
 }
 
 func TestLoopbackWorkflowClientCallsService(t *testing.T) {
@@ -34,11 +34,13 @@ func TestLoopbackWorkflowClientCallsService(t *testing.T) {
 	if resp.Workflow.ID != "workflow-1" || service.created.Name != "Workflow" {
 		t.Fatalf("response=%+v service=%+v", resp, service.created)
 	}
-	taskList, err := client.ListWorkflowTasks(context.Background(), serverapi.WorkflowTaskListRequest{ProjectID: "project-1", WorkflowID: "workflow-1"})
+	projectID := "project-1"
+	workflowID := "workflow-1"
+	taskList, err := client.ListWorkflowTasks(context.Background(), serverapi.WorkflowTaskListRequest{ProjectID: &projectID, WorkflowID: &workflowID})
 	if err != nil {
 		t.Fatalf("ListWorkflowTasks: %v", err)
 	}
-	if taskList.ProjectID != "project-1" || service.listReq.WorkflowID != "workflow-1" {
+	if taskList.ProjectID != "project-1" || service.listReq.WorkflowID == nil || *service.listReq.WorkflowID != "workflow-1" {
 		t.Fatalf("task list response=%+v service=%+v", taskList, service.listReq)
 	}
 }

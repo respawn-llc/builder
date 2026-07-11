@@ -293,10 +293,11 @@ func TestServiceListWorkflowTasksValidatesAndDelegates(t *testing.T) {
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 
-	if _, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: " "}); !isWorkflowServiceRequestFieldError(err, "project_id") {
+	blankProjectID := " "
+	if _, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &blankProjectID}); !isWorkflowServiceRequestFieldError(err, "project_id") {
 		t.Fatalf("blank project error = %#v, want project_id validation", err)
 	}
-	resp, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: binding.ProjectID})
+	resp, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &binding.ProjectID})
 	if err != nil {
 		t.Fatalf("ListWorkflowTasks: %v", err)
 	}

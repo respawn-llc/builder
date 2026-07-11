@@ -133,7 +133,7 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 		}
 	} else {
 		if sourceNode.Kind() == workflow.NodeKindTerminal {
-			updated, err := q.SupersedeCompletedTerminalManualMoveSourcePlacement(ctx, sqlitegen.SupersedeCompletedTerminalManualMoveSourcePlacementParams{
+			updated, err := q.SupersedeActiveTerminalManualMoveSourcePlacement(ctx, sqlitegen.SupersedeActiveTerminalManualMoveSourcePlacementParams{
 				UpdatedAtUnixMs: now,
 				PlacementID:     string(sourcePlacement),
 			})

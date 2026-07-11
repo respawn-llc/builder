@@ -13,6 +13,7 @@ import type {
   TaskComment,
   TaskRun,
   TaskStatus,
+  TaskStatusKind,
   TaskTransition,
   TransitionEdge,
   WorkflowOutputField,
@@ -178,16 +179,25 @@ export const workflowPickerItemSchema: z.ZodType<WorkflowPickerItem> = z
 
 export const taskStatusSchema: z.ZodType<TaskStatus> = z
   .object({
-    kind: z.string(),
-    label: z.string(),
+    kind: z.enum([
+      "canceled",
+      "done",
+      "waiting_question",
+      "waiting_approval",
+      "interrupted",
+      "running",
+      "queued",
+      "backlog",
+      "active",
+    ]),
     native_state: z.string(),
     node_ids: stringList,
     run_ids: stringList,
     attention_types: stringList,
   })
+  .strict()
   .transform((value) => ({
-    kind: value.kind,
-    label: value.label,
+    kind: value.kind satisfies TaskStatusKind,
     nativeState: value.native_state,
     nodeIDs: value.node_ids,
     runIDs: value.run_ids,

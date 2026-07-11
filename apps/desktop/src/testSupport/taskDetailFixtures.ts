@@ -67,7 +67,6 @@ export const taskDetailResponse = {
     managed_worktree: { canonical_root: "/tmp/worktree" },
     status: {
       kind: "running",
-      label: "Running",
       native_state: "running",
       node_ids: ["node-1"],
       run_ids: ["run-1"],

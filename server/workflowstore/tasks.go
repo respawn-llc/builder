@@ -834,8 +834,9 @@ func (s *Store) CancelTask(ctx context.Context, taskID workflow.TaskID, reason s
 	}
 	hasTerminalPlacement := false
 	for _, placement := range placements {
-		if placement.NodeID.Valid && placement.NodeID.String == string(workflow.NodeIDOf(terminal)) && placement.State == "completed" {
+		if placement.NodeID.Valid && placement.NodeID.String == string(workflow.NodeIDOf(terminal)) && placement.State == "active" {
 			hasTerminalPlacement = true
+			continue
 		}
 		if placement.State != "active" && placement.State != "waiting_approval" {
 			continue
@@ -845,7 +846,7 @@ func (s *Store) CancelTask(ctx context.Context, taskID workflow.TaskID, reason s
 		}
 	}
 	if !hasTerminalPlacement {
-		if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: prefixedID("placement"), TaskID: string(taskID), NodeID: nullableString(string(workflow.NodeIDOf(terminal))), State: "completed", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
+		if err := q.InsertTaskNodePlacement(ctx, sqlitegen.InsertTaskNodePlacementParams{ID: prefixedID("placement"), TaskID: string(taskID), NodeID: nullableString(string(workflow.NodeIDOf(terminal))), State: "active", CreatedAtUnixMs: now, UpdatedAtUnixMs: now}); err != nil {
 			return err
 		}
 	}
@@ -920,16 +921,10 @@ func (s *Store) liveScriptRunStartSnapshot(ctx context.Context, task sqlitegen.T
 }
 
 func placementStateForNode(node nodeContractSnapshot) string {
-	if node.Kind == workflow.NodeKindTerminal {
-		return "completed"
-	}
 	return "active"
 }
 
 func placementStateForWorkflowNode(node workflow.Node) string {
-	if node.Kind() == workflow.NodeKindTerminal {
-		return "completed"
-	}
 	return "active"
 }
 

@@ -638,6 +638,27 @@ func TestProtocolErrorMapsWorkflowTaskCompleteNotFoundCode(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorDecodesWorkflowTaskListScopeError(t *testing.T) {
+	missing := serverapi.WorkflowTaskListScopeDimensionProject
+	source := &serverapi.WorkflowTaskListScopeError{
+		Kind:         serverapi.WorkflowTaskListScopeErrorKindAmbiguous,
+		MissingScope: &missing,
+		ProjectIDs:   []string{"project-1", "project-2"},
+	}
+	err := protocolError(&protocol.ResponseError{
+		Code:    protocol.ErrCodeWorkflowTaskListScope,
+		Message: "scope resolution failed",
+		Data:    source.RPCErrorData(),
+	})
+	var decoded *serverapi.WorkflowTaskListScopeError
+	if !errors.As(err, &decoded) {
+		t.Fatalf("decoded error = %T %v, want WorkflowTaskListScopeError", err, err)
+	}
+	if decoded.Kind != source.Kind || decoded.MissingScope == nil || *decoded.MissingScope != missing || len(decoded.ProjectIDs) != 2 || decoded.ProjectIDs[0] != "project-1" || decoded.ProjectIDs[1] != "project-2" {
+		t.Fatalf("decoded scope error = %+v, want %+v", decoded, source)
+	}
+}
+
 func TestProtocolErrorMapsAuthRequiredCode(t *testing.T) {
 	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeAuthRequired, Message: "auth required"}); !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("expected server auth required, got %v", err)

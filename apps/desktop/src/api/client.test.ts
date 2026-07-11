@@ -803,7 +803,6 @@ const emptyTaskDetailResponse = {
     source_workspace: workspaceResponse,
     status: {
       kind: "backlog",
-      label: "Backlog",
       native_state: "active",
       node_ids: [],
       run_ids: [],

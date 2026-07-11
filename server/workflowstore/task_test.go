@@ -104,12 +104,12 @@ func TestTaskCreateStartCancelAndComments(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	done := nodeByKind(t, def, workflow.NodeKindTerminal)
-	completedDone := false
+	activeDone := false
 	activeNonTerminal := false
 	for _, placement := range placements {
 		if placement.NodeID == workflow.NodeIDOf(done) {
-			if placement.State == "completed" {
-				completedDone = true
+			if placement.State == "active" {
+				activeDone = true
 			}
 			continue
 		}
@@ -117,8 +117,8 @@ func TestTaskCreateStartCancelAndComments(t *testing.T) {
 			activeNonTerminal = true
 		}
 	}
-	if !completedDone || activeNonTerminal {
-		t.Fatalf("placements after cancel = %+v, want completed Done placement and no active non-terminal placement", placements)
+	if !activeDone || activeNonTerminal {
+		t.Fatalf("placements after cancel = %+v, want active Done sink and no active non-terminal placement", placements)
 	}
 }
 
@@ -146,21 +146,21 @@ func TestCancelTaskAfterMovingOutOfDoneWritesCurrentTerminalPlacement(t *testing
 	if err != nil {
 		t.Fatalf("ListPlacements: %v", err)
 	}
-	completedTerminalCount := 0
+	activeTerminalCount := 0
 	supersededTerminalCount := 0
 	for _, placement := range placements {
 		if placement.NodeID != workflow.NodeIDOf(done) {
 			continue
 		}
 		switch placement.State {
-		case "completed":
-			completedTerminalCount++
+		case "active":
+			activeTerminalCount++
 		case "superseded":
 			supersededTerminalCount++
 		}
 	}
-	if completedTerminalCount != 1 || supersededTerminalCount != 1 {
-		t.Fatalf("terminal placements after cancel = %+v, want one superseded history row and one current completed Done row", placements)
+	if activeTerminalCount != 1 || supersededTerminalCount != 1 {
+		t.Fatalf("terminal placements after cancel = %+v, want one superseded history row and one active Done sink", placements)
 	}
 }
 

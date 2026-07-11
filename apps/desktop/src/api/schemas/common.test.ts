@@ -1,4 +1,4 @@
-import { attentionItemSchema } from "./common";
+import { attentionItemSchema, taskStatusSchema } from "./common";
 
 const baseAttentionItem = {
   id: "question:run-1:ask-1",
@@ -45,5 +45,35 @@ describe("attentionItemSchema", () => {
         question: { kind: "approval", approval_decisions: ["allow_forever"] },
       }),
     ).toThrow();
+  });
+});
+
+describe("taskStatusSchema", () => {
+  const status = {
+    attention_types: [],
+    kind: "queued",
+    native_state: "queued",
+    node_ids: [],
+    run_ids: [],
+  };
+
+  it("accepts every typed task status kind without a display label", () => {
+    for (const kind of [
+      "canceled",
+      "done",
+      "waiting_question",
+      "waiting_approval",
+      "interrupted",
+      "running",
+      "queued",
+      "backlog",
+      "active",
+    ] as const) {
+      expect(taskStatusSchema.parse({ ...status, kind })).toMatchObject({ kind });
+    }
+  });
+
+  it("rejects the removed server display label", () => {
+    expect(() => taskStatusSchema.parse({ ...status, label: "Queued" })).toThrow();
   });
 });

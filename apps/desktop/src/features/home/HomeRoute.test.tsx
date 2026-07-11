@@ -452,7 +452,6 @@ const taskDetailResponse = {
     source_workspace: workspace,
     status: {
       kind: "waiting_question",
-      label: "Waiting question",
       native_state: "running",
       node_ids: ["node-1"],
       run_ids: ["run-1"],

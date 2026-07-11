@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 
 	"core/shared/config"
 	"core/shared/serverapi"
+
+	"github.com/google/uuid"
 )
 
 const taskListDefaultPageSize = 100
@@ -21,30 +24,30 @@ type taskListOutput struct {
 }
 
 type taskListItem struct {
-	ShortID         string   `json:"short_id"`
-	TaskID          string   `json:"task_id"`
-	WorkflowID      string   `json:"workflow_id"`
-	Status          string   `json:"status"`
-	StatusKeys      []string `json:"status_keys"`
-	RunStatus       string   `json:"run_status"`
-	Title           string   `json:"title"`
-	CreatedAtUnixMs int64    `json:"created_at_unix_ms"`
-	UpdatedAtUnixMs int64    `json:"updated_at_unix_ms"`
-	RunCount        int      `json:"run_count"`
+	ShortID         string                       `json:"short_id"`
+	TaskID          string                       `json:"task_id"`
+	WorkflowID      string                       `json:"workflow_id"`
+	Status          serverapi.WorkflowTaskStatus `json:"status"`
+	ColumnKeys      []string                     `json:"column_keys"`
+	Title           string                       `json:"title"`
+	CreatedAtUnixMs int64                        `json:"created_at_unix_ms"`
+	UpdatedAtUnixMs int64                        `json:"updated_at_unix_ms"`
+	RunCount        int                          `json:"run_count"`
 }
 
 func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := newCommandFlagSet(config.Command+" task list", stderr, taskCommandUsage)
 	projectRef := fs.String("project", ".", "project id or path")
+	workflowID := fs.String("workflow", "", "workflow UUID")
 	pageSize := fs.Int("page-size", taskListDefaultPageSize, "maximum tasks to print")
 	pageToken := fs.String("page-token", "", "page token from a previous task list response")
 	var statusFlags repeatedStringFlag
 	var columnFlags repeatedStringFlag
-	var runStatusFlags repeatedStringFlag
+	var attentionFlags repeatedStringFlag
 	var sortFlags repeatedStringFlag
-	fs.Var(&statusFlags, "status", "workflow status key filter; comma-separated or repeatable")
-	fs.Var(&columnFlags, "column", "alias for --status")
-	fs.Var(&runStatusFlags, "run-status", "run status filter: open|running|done|canceled; comma-separated or repeatable")
+	fs.Var(&statusFlags, "status", "task status filter; comma-separated or repeatable")
+	fs.Var(&columnFlags, "column", "workflow column key filter; comma-separated or repeatable")
+	fs.Var(&attentionFlags, "attention", "task attention filter; comma-separated or repeatable")
 	fs.Var(&sortFlags, "sort", "sort selectors such as status:asc,updated:desc")
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
@@ -58,12 +61,17 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "task list requires --page-size to be positive")
 		return 2
 	}
-	statusKeys, err := parseTaskListFilterValues(append([]string(statusFlags), []string(columnFlags)...), "status")
+	columnKeys, err := parseTaskListFilterValues([]string(columnFlags), "column")
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	runStatuses, err := parseTaskListRunStatuses([]string(runStatusFlags))
+	statusKinds, err := parseTaskListStatusKinds([]string(statusFlags))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	attentionKinds, err := parseTaskListAttentionKinds([]string(attentionFlags))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -76,25 +84,53 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	if len(sortSelectors) == 0 {
 		sortSelectors = defaultTaskListSortSelectors()
 	}
+	projectProvided := flagWasProvided(fs, "project")
+	workflowProvided := flagWasProvided(fs, "workflow")
+	var selectedWorkflowID *string
+	if workflowProvided {
+		selectedWorkflowID, err = workflowPointer(*workflowID)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+	}
 	cfg, remote, err := workflowCommandRemoteOpener(context.Background(), ".")
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	defer func() { _ = remote.Close() }()
-	resp, err := workflowTaskListForProject(context.Background(), cfg, remote, *projectRef, serverapi.WorkflowTaskListRequest{
-		StatusKeys:  statusKeys,
-		RunStatuses: runStatuses,
-		Sort:        sortSelectors,
-		PageSize:    *pageSize,
-		PageToken:   *pageToken,
-	})
+	request := serverapi.WorkflowTaskListRequest{
+		WorkflowID:     selectedWorkflowID,
+		ColumnKeys:     columnKeys,
+		StatusKinds:    statusKinds,
+		AttentionKinds: attentionKinds,
+		Sort:           sortSelectors,
+		PageSize:       *pageSize,
+		PageToken:      *pageToken,
+	}
+	var resp serverapi.WorkflowTaskListResponse
+	if projectProvided || (!workflowProvided && strings.TrimSpace(*pageToken) == "") {
+		resp, err = workflowTaskListForProject(context.Background(), cfg, remote, *projectRef, request)
+	} else {
+		resp, err = workflowTaskList(context.Background(), remote, request)
+	}
 	if err != nil {
-		fmt.Fprintln(stderr, err)
+		writeTaskListError(stderr, err)
 		return 1
 	}
+	return writeTaskListResponse(stdout, stderr, resp, *jsonOut)
+}
+
+func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, jsonOut bool) int {
 	items := taskListItemsFromResponse(resp.Tasks)
-	if *jsonOut {
+	for _, item := range items {
+		if _, err := taskStatusText(item.Status); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	if jsonOut {
 		if err := json.NewEncoder(stdout).Encode(taskListOutput{ProjectID: resp.ProjectID, WorkflowID: resp.WorkflowID, NextPageToken: resp.NextPageToken, Tasks: items}); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -102,7 +138,12 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	}
 	for _, item := range items {
-		fmt.Fprintf(stdout, "%s: %s.\nStatus: %s\nRun status: %s\n", item.ShortID, item.Title, taskListStatusKeysText(item.StatusKeys), item.RunStatus)
+		statusText, err := taskStatusText(item.Status)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s: %s.\nStatus: %s\nColumns: %s\n", item.ShortID, item.Title, statusText, taskListColumnKeysText(item.ColumnKeys))
 	}
 	if strings.TrimSpace(resp.NextPageToken) != "" {
 		fmt.Fprintf(stderr, "Next page token: `%s`\n", resp.NextPageToken)
@@ -110,11 +151,43 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	return 0
 }
 
-func taskListStatusKeysText(statusKeys []string) string {
-	if len(statusKeys) == 0 {
+func writeTaskListError(stderr io.Writer, err error) {
+	var scopeErr *serverapi.WorkflowTaskListScopeError
+	if !errors.As(err, &scopeErr) {
+		fmt.Fprintln(stderr, err)
+		return
+	}
+	switch scopeErr.Kind {
+	case serverapi.WorkflowTaskListScopeErrorKindAmbiguous:
+		fmt.Fprint(stderr, "Task list scope is ambiguous.")
+	case serverapi.WorkflowTaskListScopeErrorKindNotLinked:
+		fmt.Fprint(stderr, "Task list scope has no active project/workflow link.")
+	default:
+		fmt.Fprintln(stderr, err)
+		return
+	}
+	if scopeErr.MissingScope != nil {
+		switch *scopeErr.MissingScope {
+		case serverapi.WorkflowTaskListScopeDimensionProject:
+			fmt.Fprint(stderr, " Specify --project <project>.")
+		case serverapi.WorkflowTaskListScopeDimensionWorkflow:
+			fmt.Fprint(stderr, " Specify --workflow <uuid>.")
+		}
+	}
+	if len(scopeErr.ProjectIDs) > 0 {
+		fmt.Fprintf(stderr, " Available project UUIDs: %s.", strings.Join(scopeErr.ProjectIDs, ", "))
+	}
+	if len(scopeErr.WorkflowIDs) > 0 {
+		fmt.Fprintf(stderr, " Available workflow UUIDs: %s.", strings.Join(scopeErr.WorkflowIDs, ", "))
+	}
+	fmt.Fprintln(stderr)
+}
+
+func taskListColumnKeysText(columnKeys []string) string {
+	if len(columnKeys) == 0 {
 		return "(none)"
 	}
-	return strings.Join(statusKeys, ", ")
+	return strings.Join(columnKeys, ", ")
 }
 
 func defaultTaskListSortSelectors() []serverapi.WorkflowTaskListSort {
@@ -127,14 +200,12 @@ func defaultTaskListSortSelectors() []serverapi.WorkflowTaskListSort {
 func taskListItemsFromResponse(tasks []serverapi.WorkflowTaskListItem) []taskListItem {
 	items := make([]taskListItem, 0, len(tasks))
 	for _, task := range tasks {
-		runStatus := string(task.RunStatus)
 		items = append(items, taskListItem{
 			ShortID:         task.ShortID,
 			TaskID:          task.TaskID,
 			WorkflowID:      task.WorkflowID,
-			Status:          runStatus,
-			StatusKeys:      append([]string(nil), task.StatusKeys...),
-			RunStatus:       runStatus,
+			Status:          task.Status,
+			ColumnKeys:      append([]string(nil), task.ColumnKeys...),
 			Title:           task.Title,
 			CreatedAtUnixMs: task.CreatedAtUnixMs,
 			UpdatedAtUnixMs: task.UpdatedAtUnixMs,
@@ -162,22 +233,59 @@ func parseTaskListFilterValues(raw []string, name string) ([]string, error) {
 	return values, nil
 }
 
-func parseTaskListRunStatuses(raw []string) ([]serverapi.WorkflowTaskRunStatus, error) {
-	values, err := parseTaskListFilterValues(raw, "run-status")
+func parseTaskListStatusKinds(raw []string) ([]serverapi.WorkflowTaskStatusKind, error) {
+	values, err := parseTaskListFilterValues(raw, "status")
 	if err != nil {
 		return nil, err
 	}
-	statuses := make([]serverapi.WorkflowTaskRunStatus, 0, len(values))
+	statuses := make([]serverapi.WorkflowTaskStatusKind, 0, len(values))
 	for _, value := range values {
-		status := serverapi.WorkflowTaskRunStatus(value)
+		status := serverapi.WorkflowTaskStatusKind(value)
 		switch status {
-		case serverapi.WorkflowTaskRunStatusOpen, serverapi.WorkflowTaskRunStatusRunning, serverapi.WorkflowTaskRunStatusDone, serverapi.WorkflowTaskRunStatusCanceled:
+		case serverapi.WorkflowTaskStatusKindCanceled, serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindWaitingQuestion, serverapi.WorkflowTaskStatusKindWaitingApproval, serverapi.WorkflowTaskStatusKindInterrupted, serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindActive:
 			statuses = append(statuses, status)
 		default:
-			return nil, fmt.Errorf("--run-status must be open, running, done, or canceled")
+			return nil, fmt.Errorf("--status is invalid")
 		}
 	}
 	return statuses, nil
+}
+
+func parseTaskListAttentionKinds(raw []string) ([]serverapi.WorkflowTaskAttentionKind, error) {
+	values, err := parseTaskListFilterValues(raw, "attention")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]serverapi.WorkflowTaskAttentionKind, 0, len(values))
+	for _, value := range values {
+		kind := serverapi.WorkflowTaskAttentionKind(value)
+		switch kind {
+		case serverapi.WorkflowTaskAttentionKindQuestion, serverapi.WorkflowTaskAttentionKindApproval, serverapi.WorkflowTaskAttentionKindInterrupted:
+			out = append(out, kind)
+		default:
+			return nil, fmt.Errorf("--attention is invalid")
+		}
+	}
+	return out, nil
+}
+
+func workflowPointer(value string) (*string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, errors.New("workflow selector is required")
+	}
+	if strings.TrimSpace(value) != value {
+		return nil, errors.New("workflow selector must not have leading or trailing whitespace")
+	}
+	const workflowIDPrefix = "workflow-"
+	rawUUID, hasPrefix := strings.CutPrefix(value, workflowIDPrefix)
+	if !hasPrefix {
+		return nil, errors.New("workflow selector must be a workflow UUID")
+	}
+	parsed, err := uuid.Parse(rawUUID)
+	if err != nil || parsed.Version() != 4 || parsed.String() != rawUUID {
+		return nil, errors.New("workflow selector must be a workflow UUID")
+	}
+	return &value, nil
 }
 
 func parseTaskListSortSelectors(raw []string) ([]serverapi.WorkflowTaskListSort, error) {
@@ -219,11 +327,13 @@ func parseTaskListSortField(value string) (serverapi.WorkflowTaskListSortField, 
 		return serverapi.WorkflowTaskListSortFieldUpdated, nil
 	case "status":
 		return serverapi.WorkflowTaskListSortFieldStatus, nil
+	case "column":
+		return serverapi.WorkflowTaskListSortFieldColumn, nil
 	case "run_count":
 		return serverapi.WorkflowTaskListSortFieldRunCount, nil
 	case "title":
 		return serverapi.WorkflowTaskListSortFieldTitle, nil
 	default:
-		return "", fmt.Errorf("--sort field must be created, updated, status, run_count, or title")
+		return "", fmt.Errorf("--sort field must be created, updated, status, column, run_count, or title")
 	}
 }

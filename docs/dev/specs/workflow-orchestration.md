@@ -165,6 +165,7 @@
 
 - Scheduler has durable inputs in SQLite, but pending scheduler work and active runtime execution are live memory, not durable run states.
 - Runnable work derives from active executable placements with approved automation intent, no terminal run outcome, and no task cancellation.
+- An executable task whose run has not started is `queued`.
 - Pending-work ordering is scheduler memory.
 - Active execution derives from the live runtime registry and scheduler.
 - Concurrency limit is global only and configured in `[workflow].concurrency`.
@@ -181,6 +182,20 @@
 - Run completion and transition application remain one SQLite transaction.
 - Runtime failures, cancellation, crashes, model/runtime interruptions, and fixable scheduling validation blockers converge on interrupted outcome with reason metadata.
 - `failed` is reserved for unrecoverable corrupted orchestration state.
+- Kent does not migrate, reconcile, diagnose, or repair unfinished historical runs owned by completed placements.
+
+## Task Status And Listing
+
+- Task detail, workflow board cards, and paginated task lists use one server-authoritative typed task-status projection derived only from current placements and their runs.
+- Task status is UI-neutral structured data. Clients render and localize status labels.
+- One primary status uses this precedence: canceled, done, waiting for a question, waiting for approval, interrupted, running, queued, backlog, active.
+- The status projection preserves all applicable typed attention kinds and run references even when parallel branches have different conditions.
+- Workflow validity is workflow-level state and is not a task status.
+- Task lists expose typed task status and attention filters. They do not expose a separate coarse run status.
+- CLI `--status` filters typed task status, `--column` filters workflow node keys, and `--attention` filters attention kinds.
+- Either project or workflow task-list scope may be inferred only when exactly one active link is possible. Zero links return a typed not-linked error; multiple links return a typed ambiguity error with the available choices.
+- Explicit workflow selectors are workflow UUIDs. When both project and workflow are supplied, Kent validates their active link.
+- Task-list status sorting follows primary typed-status precedence; column sorting follows workflow column position.
 
 ## Worktrees
 

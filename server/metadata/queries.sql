@@ -913,7 +913,6 @@ FROM (
     WHERE p.node_id = sqlc.arg(node_id)
       AND (
           p.state IN ('active', 'waiting_approval')
-          OR (p.state = 'completed' AND n.kind = 'terminal')
       )
       AND t.canceled_at_unix_ms = 0
     UNION ALL
@@ -1181,6 +1180,34 @@ FROM task_records
 WHERE id = sqlc.arg(id)
 LIMIT 1;
 
+-- name: GetWorkflowTaskStatusRecord :one
+SELECT
+    task_id,
+    is_done,
+    kind,
+    native_state,
+    primary_status_rank,
+    node_ids_json,
+    run_ids_json,
+    attention_types_json
+FROM workflow_task_status_records
+WHERE task_id = sqlc.arg(task_id)
+LIMIT 1;
+
+-- name: ListWorkflowTaskStatusRecordsByTasks :many
+SELECT
+    task_id,
+    is_done,
+    kind,
+    native_state,
+    primary_status_rank,
+    node_ids_json,
+    run_ids_json,
+    attention_types_json
+FROM workflow_task_status_records
+WHERE task_id IN (sqlc.slice('task_ids'))
+ORDER BY task_id ASC;
+
 -- name: GetTaskByProjectShortID :one
 SELECT
     id,
@@ -1284,8 +1311,7 @@ WITH effective_board_placements AS (
     JOIN task_records t ON t.id = p.task_id
     JOIN workflow_nodes n ON n.id = p.node_id
     WHERE (
-          (p.state IN ('active', 'waiting_approval') AND n.kind != 'terminal')
-          OR (p.state = 'completed' AND n.kind = 'terminal')
+          p.state IN ('active', 'waiting_approval')
       )
       AND t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
@@ -1308,7 +1334,7 @@ WITH effective_board_placements AS (
           FROM task_node_placements p
           JOIN workflow_nodes n ON n.id = p.node_id
           WHERE p.task_id = t.id
-            AND p.state = 'completed'
+            AND p.state = 'active'
             AND n.kind = 'terminal'
       )
     UNION
@@ -1334,159 +1360,287 @@ GROUP BY node_id
 ORDER BY node_id ASC;
 
 -- name: ListWorkflowTaskListRows :many
-WITH args AS (
+WITH
+args AS (
     SELECT
-    CAST(sqlc.arg(status_filter_set) AS INTEGER) AS status_filter_set,
-    CAST(sqlc.arg(status_keys_json) AS TEXT) AS status_keys_json,
-    CAST(sqlc.arg(run_status_filter_set) AS INTEGER) AS run_status_filter_set,
-    CAST(sqlc.arg(run_statuses_json) AS TEXT) AS run_statuses_json,
-    CAST(sqlc.arg(visible_columns_json) AS TEXT) AS visible_columns_json,
-    CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
-    CAST(sqlc.arg(workflow_id) AS TEXT) AS workflow_id,
-    CAST(sqlc.arg(canceled_terminal_node_id) AS TEXT) AS canceled_terminal_node_id,
-    CAST(sqlc.arg(cursor_set) AS INTEGER) AS cursor_set,
-    CAST(sqlc.arg(cursor_task_id) AS TEXT) AS cursor_task_id,
-    CAST(sqlc.arg(cursor_created_at_unix_ms) AS INTEGER) AS cursor_created_at_unix_ms,
-    CAST(sqlc.arg(cursor_updated_at_unix_ms) AS INTEGER) AS cursor_updated_at_unix_ms,
-    CAST(sqlc.arg(cursor_status_order) AS INTEGER) AS cursor_status_order,
-    CAST(sqlc.arg(cursor_run_count) AS INTEGER) AS cursor_run_count,
-    CAST(sqlc.arg(cursor_title_sort) AS TEXT) AS cursor_title_sort,
-    CAST(sqlc.arg(sort_1_field) AS TEXT) AS sort_1_field,
-    CAST(sqlc.arg(sort_1_desc) AS INTEGER) AS sort_1_desc,
-    CAST(sqlc.arg(sort_2_field) AS TEXT) AS sort_2_field,
-    CAST(sqlc.arg(sort_2_desc) AS INTEGER) AS sort_2_desc,
-    CAST(sqlc.arg(sort_3_field) AS TEXT) AS sort_3_field,
-    CAST(sqlc.arg(sort_3_desc) AS INTEGER) AS sort_3_desc,
-    CAST(sqlc.arg(sort_4_field) AS TEXT) AS sort_4_field,
-    CAST(sqlc.arg(sort_4_desc) AS INTEGER) AS sort_4_desc,
-    CAST(sqlc.arg(sort_5_field) AS TEXT) AS sort_5_field,
-    CAST(sqlc.arg(sort_5_desc) AS INTEGER) AS sort_5_desc,
-    CAST(sqlc.arg(limit_rows) AS INTEGER) AS limit_rows
+        CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
+        CAST(sqlc.arg(workflow_id) AS TEXT) AS workflow_id,
+        CAST(sqlc.arg(visible_columns_json) AS TEXT) AS visible_columns_json,
+        CAST(sqlc.arg(column_filter_set) AS INTEGER) AS column_filter_set,
+        CAST(sqlc.arg(column_keys_json) AS TEXT) AS column_keys_json,
+        CAST(sqlc.arg(status_filter_set) AS INTEGER) AS status_filter_set,
+        CAST(sqlc.arg(status_kinds_json) AS TEXT) AS status_kinds_json,
+        CAST(sqlc.arg(attention_filter_set) AS INTEGER) AS attention_filter_set,
+        CAST(sqlc.arg(attention_kinds_json) AS TEXT) AS attention_kinds_json,
+        CAST(sqlc.arg(cursor_set) AS INTEGER) AS cursor_set,
+        CAST(sqlc.arg(cursor_created_at_unix_ms) AS INTEGER) AS cursor_created_at_unix_ms,
+        CAST(sqlc.arg(cursor_updated_at_unix_ms) AS INTEGER) AS cursor_updated_at_unix_ms,
+        CAST(sqlc.arg(cursor_primary_status_rank) AS INTEGER) AS cursor_primary_status_rank,
+        CAST(sqlc.arg(cursor_column_rank) AS INTEGER) AS cursor_column_rank,
+        CAST(sqlc.arg(cursor_run_count) AS INTEGER) AS cursor_run_count,
+        CAST(sqlc.arg(cursor_title_sort) AS TEXT) AS cursor_title_sort,
+        CAST(sqlc.arg(cursor_task_id) AS TEXT) AS cursor_task_id,
+        CAST(sqlc.arg(sort_1_field) AS TEXT) AS sort_1_field,
+        CAST(sqlc.arg(sort_1_desc) AS INTEGER) AS sort_1_desc,
+        CAST(sqlc.arg(sort_2_field) AS TEXT) AS sort_2_field,
+        CAST(sqlc.arg(sort_2_desc) AS INTEGER) AS sort_2_desc,
+        CAST(sqlc.arg(sort_3_field) AS TEXT) AS sort_3_field,
+        CAST(sqlc.arg(sort_3_desc) AS INTEGER) AS sort_3_desc,
+        CAST(sqlc.arg(sort_4_field) AS TEXT) AS sort_4_field,
+        CAST(sqlc.arg(sort_4_desc) AS INTEGER) AS sort_4_desc,
+        CAST(sqlc.arg(sort_5_field) AS TEXT) AS sort_5_field,
+        CAST(sqlc.arg(sort_5_desc) AS INTEGER) AS sort_5_desc,
+        CAST(sqlc.arg(limit_rows) AS INTEGER) AS limit_rows
 ),
 visible_columns AS (
     SELECT
         CAST(json_extract(value, '$.node_id') AS TEXT) AS node_id,
         CAST(json_extract(value, '$.node_key') AS TEXT) AS node_key,
-        CAST(json_extract(value, '$.node_kind') AS TEXT) AS node_kind,
-        CAST(json_extract(value, '$.status_order') AS INTEGER) AS status_order
+        CAST(json_extract(value, '$.status_order') AS INTEGER) AS column_rank
     FROM args, json_each(args.visible_columns_json)
 ),
-selected_tasks AS (
-    SELECT task_records.*
-    FROM task_records
-    CROSS JOIN args
-    WHERE task_records.project_id = args.project_id
-      AND task_records.workflow_id = args.workflow_id
-),
-effective_placements AS (
-    SELECT t.id AS task_id, p.id AS placement_id, p.node_id AS node_id, p.state AS state, vc.status_order AS status_order, vc.node_key AS node_key, vc.node_kind AS node_kind
-    FROM selected_tasks t
-    CROSS JOIN args
-    JOIN task_node_placements p ON p.task_id = t.id
-    JOIN visible_columns vc ON vc.node_id = p.node_id
-    WHERE (
-          (p.state IN ('active', 'waiting_approval') AND vc.node_kind != 'terminal')
-          OR (p.state = 'completed' AND vc.node_kind = 'terminal')
-      )
-      AND (t.canceled_at_unix_ms = 0 OR vc.node_kind = 'terminal' OR trim(args.canceled_terminal_node_id) = '')
+current_positions AS (
+    SELECT p.task_id, p.node_id
+    FROM task_node_placements p
+    WHERE p.state IN ('active', 'waiting_approval')
+
     UNION
-    SELECT t.id AS task_id, '' AS placement_id, vc.node_id AS node_id, 'active' AS state, vc.status_order AS status_order, vc.node_key AS node_key, vc.node_kind AS node_kind
-    FROM selected_tasks t
-    CROSS JOIN args
-    JOIN visible_columns vc ON vc.node_id = args.canceled_terminal_node_id
-    WHERE t.canceled_at_unix_ms != 0
-      AND trim(args.canceled_terminal_node_id) != ''
-      AND NOT EXISTS (
-          SELECT 1
-          FROM task_node_placements p
-          JOIN workflow_nodes n ON n.id = p.node_id
-          WHERE p.task_id = t.id
-            AND p.state = 'completed'
-            AND n.kind = 'terminal'
-      )
-    UNION
-    SELECT t.id AS task_id, 'pending-approval:' || tt.id AS placement_id, tt.source_node_id AS node_id, 'waiting_approval' AS state, vc.status_order AS status_order, vc.node_key AS node_key, vc.node_kind AS node_kind
+
+    SELECT tt.task_id, tt.source_node_id
     FROM task_transition_records tt
-    JOIN selected_tasks t ON t.id = tt.task_id
-    CROSS JOIN args
-    JOIN visible_columns vc ON vc.node_id = tt.source_node_id
     WHERE tt.state = 'pending_approval'
-      AND (t.canceled_at_unix_ms = 0 OR trim(args.canceled_terminal_node_id) = '')
+      AND tt.source_node_id IS NOT NULL
+      AND trim(tt.source_node_id) != ''
 ),
-per_task_status AS (
-    SELECT task_id, MIN(status_order) AS status_order
-    FROM effective_placements
+column_positions AS (
+    SELECT DISTINCT position.task_id, columns.node_key, columns.column_rank
+    FROM current_positions position
+    JOIN visible_columns columns ON columns.node_id = position.node_id
+),
+column_facts AS (
+    SELECT
+        task_id,
+        CAST(MIN(column_rank) AS INTEGER) AS column_rank,
+        CAST(json_group_array(node_key) AS TEXT) AS column_keys_json
+    FROM (
+        SELECT task_id, node_key, column_rank
+        FROM column_positions
+        ORDER BY task_id ASC, column_rank ASC, node_key ASC
+    )
     GROUP BY task_id
 ),
 run_counts AS (
-    SELECT r.task_id, COUNT(*) AS run_count
+    SELECT r.task_id, CAST(COUNT(*) AS INTEGER) AS run_count
     FROM task_run_records r
-    JOIN selected_tasks t ON t.id = r.task_id
+    JOIN task_records t ON t.id = r.task_id
+    CROSS JOIN args
+    WHERE t.project_id = args.project_id
+      AND t.workflow_id = args.workflow_id
     GROUP BY r.task_id
-)
-SELECT
-    t.id, t.project_id, t.project_workflow_link_id, t.workflow_id, t.workflow_revision_seen, t.task_seq, t.short_id, t.title, t.body, t.source_url, t.source_workspace_id, t.managed_worktree_id, t.canceled_at_unix_ms, t.cancellation_reason, t.created_at_unix_ms, t.updated_at_unix_ms, t.metadata_json,
-    CAST(pts.status_order AS INTEGER) AS status_order,
-    CAST(COALESCE(rc.run_count, 0) AS INTEGER) AS run_count,
-    CASE
-        WHEN t.canceled_at_unix_ms != 0 THEN 'canceled'
-        WHEN EXISTS (SELECT 1 FROM effective_placements ep_done WHERE ep_done.task_id = t.id AND ep_done.node_kind = 'terminal') THEN 'done'
-        WHEN EXISTS (SELECT 1 FROM effective_placements ep_waiting WHERE ep_waiting.task_id = t.id AND ep_waiting.state = 'waiting_approval')
+),
+selected_rows AS (
+    SELECT
+        t.id,
+        t.project_id,
+        t.project_workflow_link_id,
+        t.workflow_id,
+        t.workflow_revision_seen,
+        t.task_seq,
+        t.short_id,
+        t.title,
+        t.body,
+        t.source_url,
+        t.source_workspace_id,
+        t.managed_worktree_id,
+        t.canceled_at_unix_ms,
+        t.cancellation_reason,
+        t.created_at_unix_ms,
+        t.updated_at_unix_ms,
+        t.metadata_json,
+        CAST(column_facts.column_rank AS INTEGER) AS column_rank,
+        column_facts.column_keys_json,
+        status.kind,
+        status.native_state,
+        CAST(status.primary_status_rank AS INTEGER) AS primary_status_rank,
+        CAST(status.node_ids_json AS TEXT) AS node_ids_json,
+        CAST(status.run_ids_json AS TEXT) AS run_ids_json,
+        CAST(status.attention_types_json AS TEXT) AS attention_types_json,
+        CAST(COALESCE(run_counts.run_count, 0) AS INTEGER) AS run_count,
+        LOWER(t.title) AS title_sort,
+        CASE args.sort_1_field
+            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
+            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
+            WHEN 'status' THEN printf('%020d', status.primary_status_rank)
+            WHEN 'column' THEN printf('%020d', column_facts.column_rank)
+            WHEN 'run_count' THEN printf('%020d', COALESCE(run_counts.run_count, 0))
+            WHEN 'title' THEN LOWER(t.title)
+            ELSE ''
+        END AS sort_1_value,
+        CASE args.sort_2_field
+            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
+            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
+            WHEN 'status' THEN printf('%020d', status.primary_status_rank)
+            WHEN 'column' THEN printf('%020d', column_facts.column_rank)
+            WHEN 'run_count' THEN printf('%020d', COALESCE(run_counts.run_count, 0))
+            WHEN 'title' THEN LOWER(t.title)
+            ELSE ''
+        END AS sort_2_value,
+        CASE args.sort_3_field
+            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
+            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
+            WHEN 'status' THEN printf('%020d', status.primary_status_rank)
+            WHEN 'column' THEN printf('%020d', column_facts.column_rank)
+            WHEN 'run_count' THEN printf('%020d', COALESCE(run_counts.run_count, 0))
+            WHEN 'title' THEN LOWER(t.title)
+            ELSE ''
+        END AS sort_3_value,
+        CASE args.sort_4_field
+            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
+            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
+            WHEN 'status' THEN printf('%020d', status.primary_status_rank)
+            WHEN 'column' THEN printf('%020d', column_facts.column_rank)
+            WHEN 'run_count' THEN printf('%020d', COALESCE(run_counts.run_count, 0))
+            WHEN 'title' THEN LOWER(t.title)
+            ELSE ''
+        END AS sort_4_value,
+        CASE args.sort_5_field
+            WHEN 'created' THEN printf('%020d', t.created_at_unix_ms)
+            WHEN 'updated' THEN printf('%020d', t.updated_at_unix_ms)
+            WHEN 'status' THEN printf('%020d', status.primary_status_rank)
+            WHEN 'column' THEN printf('%020d', column_facts.column_rank)
+            WHEN 'run_count' THEN printf('%020d', COALESCE(run_counts.run_count, 0))
+            WHEN 'title' THEN LOWER(t.title)
+            ELSE ''
+        END AS sort_5_value
+    FROM task_records t
+    CROSS JOIN args
+    JOIN workflow_task_status_records status ON status.task_id = t.id
+    JOIN column_facts ON column_facts.task_id = t.id
+    LEFT JOIN run_counts ON run_counts.task_id = t.id
+    WHERE t.project_id = args.project_id
+      AND t.workflow_id = args.workflow_id
+      AND (
+          args.column_filter_set = 0
           OR EXISTS (
               SELECT 1
-              FROM task_run_records r
-              JOIN effective_placements ep_run ON ep_run.placement_id = r.placement_id
-              WHERE ep_run.task_id = t.id
-                AND r.completed_at_unix_ms = 0
-                AND (r.started_at_unix_ms != 0 OR r.interrupted_at_unix_ms != 0 OR trim(r.waiting_ask_id) != '')
-          ) THEN 'running'
-        ELSE 'open'
-    END AS run_status,
-    LOWER(t.title) AS title_sort
-FROM selected_tasks t
+              FROM json_each(args.column_keys_json) filter_key
+              JOIN json_each(column_facts.column_keys_json) task_key ON task_key.value = filter_key.value
+          )
+      )
+      AND (
+          args.status_filter_set = 0
+          OR status.kind IN (SELECT value FROM json_each(args.status_kinds_json))
+      )
+      AND (
+          args.attention_filter_set = 0
+          OR EXISTS (
+              SELECT 1
+              FROM json_each(args.attention_kinds_json) filter_attention
+              JOIN json_each(status.attention_types_json) task_attention ON task_attention.value = filter_attention.value
+          )
+      )
+),
+cursor_values AS (
+    SELECT
+        CASE args.sort_1_field
+            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
+            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
+            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
+            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
+            WHEN 'run_count' THEN printf('%020d', args.cursor_run_count)
+            WHEN 'title' THEN args.cursor_title_sort
+            ELSE ''
+        END AS sort_1_value,
+        CASE args.sort_2_field
+            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
+            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
+            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
+            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
+            WHEN 'run_count' THEN printf('%020d', args.cursor_run_count)
+            WHEN 'title' THEN args.cursor_title_sort
+            ELSE ''
+        END AS sort_2_value,
+        CASE args.sort_3_field
+            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
+            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
+            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
+            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
+            WHEN 'run_count' THEN printf('%020d', args.cursor_run_count)
+            WHEN 'title' THEN args.cursor_title_sort
+            ELSE ''
+        END AS sort_3_value,
+        CASE args.sort_4_field
+            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
+            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
+            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
+            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
+            WHEN 'run_count' THEN printf('%020d', args.cursor_run_count)
+            WHEN 'title' THEN args.cursor_title_sort
+            ELSE ''
+        END AS sort_4_value,
+        CASE args.sort_5_field
+            WHEN 'created' THEN printf('%020d', args.cursor_created_at_unix_ms)
+            WHEN 'updated' THEN printf('%020d', args.cursor_updated_at_unix_ms)
+            WHEN 'status' THEN printf('%020d', args.cursor_primary_status_rank)
+            WHEN 'column' THEN printf('%020d', args.cursor_column_rank)
+            WHEN 'run_count' THEN printf('%020d', args.cursor_run_count)
+            WHEN 'title' THEN args.cursor_title_sort
+            ELSE ''
+        END AS sort_5_value
+    FROM args
+)
+SELECT
+    rows.id,
+    rows.project_id,
+    rows.project_workflow_link_id,
+    rows.workflow_id,
+    rows.workflow_revision_seen,
+    rows.task_seq,
+    rows.short_id,
+    rows.title,
+    rows.body,
+    rows.source_url,
+    rows.source_workspace_id,
+    rows.managed_worktree_id,
+    rows.canceled_at_unix_ms,
+    rows.cancellation_reason,
+    rows.created_at_unix_ms,
+    rows.updated_at_unix_ms,
+    rows.metadata_json,
+    rows.column_rank,
+    rows.column_keys_json,
+    rows.kind,
+    rows.native_state,
+    rows.primary_status_rank,
+    rows.node_ids_json,
+    rows.run_ids_json,
+    rows.attention_types_json,
+    rows.run_count,
+    rows.title_sort
+FROM selected_rows rows
 CROSS JOIN args
-JOIN per_task_status pts ON pts.task_id = t.id
-LEFT JOIN run_counts rc ON rc.task_id = t.id
-GROUP BY t.id
-HAVING (
-    args.status_filter_set = 0
-    OR EXISTS (SELECT 1 FROM effective_placements ep_filter WHERE ep_filter.task_id = t.id AND ep_filter.node_key IN (SELECT value FROM json_each(args.status_keys_json)))
-)
-  AND (
-    args.run_status_filter_set = 0
-    OR run_status IN (SELECT value FROM json_each(args.run_statuses_json))
-)
-  AND (
-    args.cursor_set = 0
-    OR (((args.sort_1_field = 'created' AND ((args.sort_1_desc = 0 AND created_at_unix_ms > args.cursor_created_at_unix_ms) OR (args.sort_1_desc != 0 AND created_at_unix_ms < args.cursor_created_at_unix_ms))) OR (args.sort_1_field = 'updated' AND ((args.sort_1_desc = 0 AND updated_at_unix_ms > args.cursor_updated_at_unix_ms) OR (args.sort_1_desc != 0 AND updated_at_unix_ms < args.cursor_updated_at_unix_ms))) OR (args.sort_1_field = 'status' AND ((args.sort_1_desc = 0 AND CAST(pts.status_order AS INTEGER) > args.cursor_status_order) OR (args.sort_1_desc != 0 AND CAST(pts.status_order AS INTEGER) < args.cursor_status_order))) OR (args.sort_1_field = 'run_count' AND ((args.sort_1_desc = 0 AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) > args.cursor_run_count) OR (args.sort_1_desc != 0 AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) < args.cursor_run_count))) OR (args.sort_1_field = 'title' AND ((args.sort_1_desc = 0 AND title_sort > args.cursor_title_sort) OR (args.sort_1_desc != 0 AND title_sort < args.cursor_title_sort)))))
-        OR ((args.sort_1_field = '' OR (args.sort_1_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_1_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_1_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_1_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_1_field = 'title' AND title_sort = args.cursor_title_sort)) AND ((args.sort_2_field = 'created' AND ((args.sort_2_desc = 0 AND created_at_unix_ms > args.cursor_created_at_unix_ms) OR (args.sort_2_desc != 0 AND created_at_unix_ms < args.cursor_created_at_unix_ms))) OR (args.sort_2_field = 'updated' AND ((args.sort_2_desc = 0 AND updated_at_unix_ms > args.cursor_updated_at_unix_ms) OR (args.sort_2_desc != 0 AND updated_at_unix_ms < args.cursor_updated_at_unix_ms))) OR (args.sort_2_field = 'status' AND ((args.sort_2_desc = 0 AND CAST(pts.status_order AS INTEGER) > args.cursor_status_order) OR (args.sort_2_desc != 0 AND CAST(pts.status_order AS INTEGER) < args.cursor_status_order))) OR (args.sort_2_field = 'run_count' AND ((args.sort_2_desc = 0 AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) > args.cursor_run_count) OR (args.sort_2_desc != 0 AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) < args.cursor_run_count))) OR (args.sort_2_field = 'title' AND ((args.sort_2_desc = 0 AND title_sort > args.cursor_title_sort) OR (args.sort_2_desc != 0 AND title_sort < args.cursor_title_sort)))))
-        OR ((args.sort_1_field = '' OR (args.sort_1_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_1_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_1_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_1_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_1_field = 'title' AND title_sort = args.cursor_title_sort)) AND (args.sort_2_field = '' OR (args.sort_2_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_2_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_2_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_2_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_2_field = 'title' AND title_sort = args.cursor_title_sort)) AND ((args.sort_3_field = 'created' AND ((args.sort_3_desc = 0 AND created_at_unix_ms > args.cursor_created_at_unix_ms) OR (args.sort_3_desc != 0 AND created_at_unix_ms < args.cursor_created_at_unix_ms))) OR (args.sort_3_field = 'updated' AND ((args.sort_3_desc = 0 AND updated_at_unix_ms > args.cursor_updated_at_unix_ms) OR (args.sort_3_desc != 0 AND updated_at_unix_ms < args.cursor_updated_at_unix_ms))) OR (args.sort_3_field = 'status' AND ((args.sort_3_desc = 0 AND CAST(pts.status_order AS INTEGER) > args.cursor_status_order) OR (args.sort_3_desc != 0 AND CAST(pts.status_order AS INTEGER) < args.cursor_status_order))) OR (args.sort_3_field = 'run_count' AND ((args.sort_3_desc = 0 AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) > args.cursor_run_count) OR (args.sort_3_desc != 0 AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) < args.cursor_run_count))) OR (args.sort_3_field = 'title' AND ((args.sort_3_desc = 0 AND title_sort > args.cursor_title_sort) OR (args.sort_3_desc != 0 AND title_sort < args.cursor_title_sort)))))
-        OR ((args.sort_1_field = '' OR (args.sort_1_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_1_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_1_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_1_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_1_field = 'title' AND title_sort = args.cursor_title_sort)) AND (args.sort_2_field = '' OR (args.sort_2_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_2_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_2_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_2_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_2_field = 'title' AND title_sort = args.cursor_title_sort)) AND (args.sort_3_field = '' OR (args.sort_3_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_3_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_3_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_3_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_3_field = 'title' AND title_sort = args.cursor_title_sort)) AND ((args.sort_4_field = 'created' AND ((args.sort_4_desc = 0 AND created_at_unix_ms > args.cursor_created_at_unix_ms) OR (args.sort_4_desc != 0 AND created_at_unix_ms < args.cursor_created_at_unix_ms))) OR (args.sort_4_field = 'updated' AND ((args.sort_4_desc = 0 AND updated_at_unix_ms > args.cursor_updated_at_unix_ms) OR (args.sort_4_desc != 0 AND updated_at_unix_ms < args.cursor_updated_at_unix_ms))) OR (args.sort_4_field = 'status' AND ((args.sort_4_desc = 0 AND CAST(pts.status_order AS INTEGER) > args.cursor_status_order) OR (args.sort_4_desc != 0 AND CAST(pts.status_order AS INTEGER) < args.cursor_status_order))) OR (args.sort_4_field = 'run_count' AND ((args.sort_4_desc = 0 AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) > args.cursor_run_count) OR (args.sort_4_desc != 0 AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) < args.cursor_run_count))) OR (args.sort_4_field = 'title' AND ((args.sort_4_desc = 0 AND title_sort > args.cursor_title_sort) OR (args.sort_4_desc != 0 AND title_sort < args.cursor_title_sort)))))
-        OR ((args.sort_1_field = '' OR (args.sort_1_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_1_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_1_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_1_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_1_field = 'title' AND title_sort = args.cursor_title_sort)) AND (args.sort_2_field = '' OR (args.sort_2_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_2_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_2_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_2_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_2_field = 'title' AND title_sort = args.cursor_title_sort)) AND (args.sort_3_field = '' OR (args.sort_3_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_3_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_3_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_3_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_3_field = 'title' AND title_sort = args.cursor_title_sort)) AND (args.sort_4_field = '' OR (args.sort_4_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_4_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_4_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_4_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_4_field = 'title' AND title_sort = args.cursor_title_sort)) AND ((args.sort_5_field = 'created' AND ((args.sort_5_desc = 0 AND created_at_unix_ms > args.cursor_created_at_unix_ms) OR (args.sort_5_desc != 0 AND created_at_unix_ms < args.cursor_created_at_unix_ms))) OR (args.sort_5_field = 'updated' AND ((args.sort_5_desc = 0 AND updated_at_unix_ms > args.cursor_updated_at_unix_ms) OR (args.sort_5_desc != 0 AND updated_at_unix_ms < args.cursor_updated_at_unix_ms))) OR (args.sort_5_field = 'status' AND ((args.sort_5_desc = 0 AND CAST(pts.status_order AS INTEGER) > args.cursor_status_order) OR (args.sort_5_desc != 0 AND CAST(pts.status_order AS INTEGER) < args.cursor_status_order))) OR (args.sort_5_field = 'run_count' AND ((args.sort_5_desc = 0 AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) > args.cursor_run_count) OR (args.sort_5_desc != 0 AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) < args.cursor_run_count))) OR (args.sort_5_field = 'title' AND ((args.sort_5_desc = 0 AND title_sort > args.cursor_title_sort) OR (args.sort_5_desc != 0 AND title_sort < args.cursor_title_sort)))))
-        OR ((args.sort_1_field = '' OR (args.sort_1_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_1_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_1_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_1_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_1_field = 'title' AND title_sort = args.cursor_title_sort)) AND (args.sort_2_field = '' OR (args.sort_2_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_2_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_2_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_2_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_2_field = 'title' AND title_sort = args.cursor_title_sort)) AND (args.sort_3_field = '' OR (args.sort_3_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_3_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_3_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_3_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_3_field = 'title' AND title_sort = args.cursor_title_sort)) AND (args.sort_4_field = '' OR (args.sort_4_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_4_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_4_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_4_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_4_field = 'title' AND title_sort = args.cursor_title_sort)) AND (args.sort_5_field = '' OR (args.sort_5_field = 'created' AND created_at_unix_ms = args.cursor_created_at_unix_ms) OR (args.sort_5_field = 'updated' AND updated_at_unix_ms = args.cursor_updated_at_unix_ms) OR (args.sort_5_field = 'status' AND CAST(pts.status_order AS INTEGER) = args.cursor_status_order) OR (args.sort_5_field = 'run_count' AND CAST(COALESCE(rc.run_count, 0) AS INTEGER) = args.cursor_run_count) OR (args.sort_5_field = 'title' AND title_sort = args.cursor_title_sort)) AND id > args.cursor_task_id)
-)
+CROSS JOIN cursor_values cursor
+WHERE args.cursor_set = 0
+   OR (
+       (args.sort_1_field != '' AND ((args.sort_1_desc = 0 AND rows.sort_1_value > cursor.sort_1_value) OR (args.sort_1_desc != 0 AND rows.sort_1_value < cursor.sort_1_value)))
+       OR (rows.sort_1_value = cursor.sort_1_value AND args.sort_2_field != '' AND ((args.sort_2_desc = 0 AND rows.sort_2_value > cursor.sort_2_value) OR (args.sort_2_desc != 0 AND rows.sort_2_value < cursor.sort_2_value)))
+       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND args.sort_3_field != '' AND ((args.sort_3_desc = 0 AND rows.sort_3_value > cursor.sort_3_value) OR (args.sort_3_desc != 0 AND rows.sort_3_value < cursor.sort_3_value)))
+       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND (args.sort_3_field = '' OR rows.sort_3_value = cursor.sort_3_value) AND args.sort_4_field != '' AND ((args.sort_4_desc = 0 AND rows.sort_4_value > cursor.sort_4_value) OR (args.sort_4_desc != 0 AND rows.sort_4_value < cursor.sort_4_value)))
+       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND (args.sort_3_field = '' OR rows.sort_3_value = cursor.sort_3_value) AND (args.sort_4_field = '' OR rows.sort_4_value = cursor.sort_4_value) AND args.sort_5_field != '' AND ((args.sort_5_desc = 0 AND rows.sort_5_value > cursor.sort_5_value) OR (args.sort_5_desc != 0 AND rows.sort_5_value < cursor.sort_5_value)))
+       OR (rows.sort_1_value = cursor.sort_1_value AND (args.sort_2_field = '' OR rows.sort_2_value = cursor.sort_2_value) AND (args.sort_3_field = '' OR rows.sort_3_value = cursor.sort_3_value) AND (args.sort_4_field = '' OR rows.sort_4_value = cursor.sort_4_value) AND (args.sort_5_field = '' OR rows.sort_5_value = cursor.sort_5_value) AND rows.id > args.cursor_task_id)
+   )
 ORDER BY
-    CASE WHEN args.sort_1_field = 'created' AND args.sort_1_desc = 0 THEN created_at_unix_ms WHEN args.sort_1_field = 'updated' AND args.sort_1_desc = 0 THEN updated_at_unix_ms WHEN args.sort_1_field = 'status' AND args.sort_1_desc = 0 THEN CAST(pts.status_order AS INTEGER) WHEN args.sort_1_field = 'run_count' AND args.sort_1_desc = 0 THEN CAST(COALESCE(rc.run_count, 0) AS INTEGER) END ASC,
-    CASE WHEN args.sort_1_field = 'title' AND args.sort_1_desc = 0 THEN title_sort END ASC,
-    CASE WHEN args.sort_1_field = 'created' AND args.sort_1_desc != 0 THEN created_at_unix_ms WHEN args.sort_1_field = 'updated' AND args.sort_1_desc != 0 THEN updated_at_unix_ms WHEN args.sort_1_field = 'status' AND args.sort_1_desc != 0 THEN CAST(pts.status_order AS INTEGER) WHEN args.sort_1_field = 'run_count' AND args.sort_1_desc != 0 THEN CAST(COALESCE(rc.run_count, 0) AS INTEGER) END DESC,
-    CASE WHEN args.sort_1_field = 'title' AND args.sort_1_desc != 0 THEN title_sort END DESC,
-    CASE WHEN args.sort_2_field = 'created' AND args.sort_2_desc = 0 THEN created_at_unix_ms WHEN args.sort_2_field = 'updated' AND args.sort_2_desc = 0 THEN updated_at_unix_ms WHEN args.sort_2_field = 'status' AND args.sort_2_desc = 0 THEN CAST(pts.status_order AS INTEGER) WHEN args.sort_2_field = 'run_count' AND args.sort_2_desc = 0 THEN CAST(COALESCE(rc.run_count, 0) AS INTEGER) END ASC,
-    CASE WHEN args.sort_2_field = 'title' AND args.sort_2_desc = 0 THEN title_sort END ASC,
-    CASE WHEN args.sort_2_field = 'created' AND args.sort_2_desc != 0 THEN created_at_unix_ms WHEN args.sort_2_field = 'updated' AND args.sort_2_desc != 0 THEN updated_at_unix_ms WHEN args.sort_2_field = 'status' AND args.sort_2_desc != 0 THEN CAST(pts.status_order AS INTEGER) WHEN args.sort_2_field = 'run_count' AND args.sort_2_desc != 0 THEN CAST(COALESCE(rc.run_count, 0) AS INTEGER) END DESC,
-    CASE WHEN args.sort_2_field = 'title' AND args.sort_2_desc != 0 THEN title_sort END DESC,
-    CASE WHEN args.sort_3_field = 'created' AND args.sort_3_desc = 0 THEN created_at_unix_ms WHEN args.sort_3_field = 'updated' AND args.sort_3_desc = 0 THEN updated_at_unix_ms WHEN args.sort_3_field = 'status' AND args.sort_3_desc = 0 THEN CAST(pts.status_order AS INTEGER) WHEN args.sort_3_field = 'run_count' AND args.sort_3_desc = 0 THEN CAST(COALESCE(rc.run_count, 0) AS INTEGER) END ASC,
-    CASE WHEN args.sort_3_field = 'title' AND args.sort_3_desc = 0 THEN title_sort END ASC,
-    CASE WHEN args.sort_3_field = 'created' AND args.sort_3_desc != 0 THEN created_at_unix_ms WHEN args.sort_3_field = 'updated' AND args.sort_3_desc != 0 THEN updated_at_unix_ms WHEN args.sort_3_field = 'status' AND args.sort_3_desc != 0 THEN CAST(pts.status_order AS INTEGER) WHEN args.sort_3_field = 'run_count' AND args.sort_3_desc != 0 THEN CAST(COALESCE(rc.run_count, 0) AS INTEGER) END DESC,
-    CASE WHEN args.sort_3_field = 'title' AND args.sort_3_desc != 0 THEN title_sort END DESC,
-    CASE WHEN args.sort_4_field = 'created' AND args.sort_4_desc = 0 THEN created_at_unix_ms WHEN args.sort_4_field = 'updated' AND args.sort_4_desc = 0 THEN updated_at_unix_ms WHEN args.sort_4_field = 'status' AND args.sort_4_desc = 0 THEN CAST(pts.status_order AS INTEGER) WHEN args.sort_4_field = 'run_count' AND args.sort_4_desc = 0 THEN CAST(COALESCE(rc.run_count, 0) AS INTEGER) END ASC,
-    CASE WHEN args.sort_4_field = 'title' AND args.sort_4_desc = 0 THEN title_sort END ASC,
-    CASE WHEN args.sort_4_field = 'created' AND args.sort_4_desc != 0 THEN created_at_unix_ms WHEN args.sort_4_field = 'updated' AND args.sort_4_desc != 0 THEN updated_at_unix_ms WHEN args.sort_4_field = 'status' AND args.sort_4_desc != 0 THEN CAST(pts.status_order AS INTEGER) WHEN args.sort_4_field = 'run_count' AND args.sort_4_desc != 0 THEN CAST(COALESCE(rc.run_count, 0) AS INTEGER) END DESC,
-    CASE WHEN args.sort_4_field = 'title' AND args.sort_4_desc != 0 THEN title_sort END DESC,
-    CASE WHEN args.sort_5_field = 'created' AND args.sort_5_desc = 0 THEN created_at_unix_ms WHEN args.sort_5_field = 'updated' AND args.sort_5_desc = 0 THEN updated_at_unix_ms WHEN args.sort_5_field = 'status' AND args.sort_5_desc = 0 THEN CAST(pts.status_order AS INTEGER) WHEN args.sort_5_field = 'run_count' AND args.sort_5_desc = 0 THEN CAST(COALESCE(rc.run_count, 0) AS INTEGER) END ASC,
-    CASE WHEN args.sort_5_field = 'title' AND args.sort_5_desc = 0 THEN title_sort END ASC,
-    CASE WHEN args.sort_5_field = 'created' AND args.sort_5_desc != 0 THEN created_at_unix_ms WHEN args.sort_5_field = 'updated' AND args.sort_5_desc != 0 THEN updated_at_unix_ms WHEN args.sort_5_field = 'status' AND args.sort_5_desc != 0 THEN CAST(pts.status_order AS INTEGER) WHEN args.sort_5_field = 'run_count' AND args.sort_5_desc != 0 THEN CAST(COALESCE(rc.run_count, 0) AS INTEGER) END DESC,
-    CASE WHEN args.sort_5_field = 'title' AND args.sort_5_desc != 0 THEN title_sort END DESC,
-    id ASC
+    CASE WHEN args.sort_1_desc = 0 THEN rows.sort_1_value END ASC,
+    CASE WHEN args.sort_1_desc != 0 THEN rows.sort_1_value END DESC,
+    CASE WHEN args.sort_2_desc = 0 THEN rows.sort_2_value END ASC,
+    CASE WHEN args.sort_2_desc != 0 THEN rows.sort_2_value END DESC,
+    CASE WHEN args.sort_3_desc = 0 THEN rows.sort_3_value END ASC,
+    CASE WHEN args.sort_3_desc != 0 THEN rows.sort_3_value END DESC,
+    CASE WHEN args.sort_4_desc = 0 THEN rows.sort_4_value END ASC,
+    CASE WHEN args.sort_4_desc != 0 THEN rows.sort_4_value END DESC,
+    CASE WHEN args.sort_5_desc = 0 THEN rows.sort_5_value END ASC,
+    CASE WHEN args.sort_5_desc != 0 THEN rows.sort_5_value END DESC,
+    rows.id ASC
 LIMIT (SELECT limit_rows FROM args);
 
 -- name: ListBoardOpenTasks :many
@@ -1586,7 +1740,7 @@ WHERE t.project_id = sqlc.arg(project_id)
           FROM task_node_placements p
           JOIN workflow_nodes n ON n.id = p.node_id
           WHERE p.task_id = t.id
-            AND p.state = 'completed'
+            AND p.state = 'active'
             AND n.kind = 'terminal'
       )
       OR (
@@ -1606,8 +1760,7 @@ WITH board_node_task_ids AS (
     JOIN workflow_nodes n ON n.id = p.node_id
     WHERE p.node_id = sqlc.arg(node_id)
       AND (
-        (p.state IN ('active', 'waiting_approval') AND n.kind != 'terminal')
-        OR (p.state = 'completed' AND n.kind = 'terminal')
+        p.state IN ('active', 'waiting_approval')
       )
       AND t.project_id = sqlc.arg(project_id)
       AND t.workflow_id = sqlc.arg(workflow_id)
@@ -1644,7 +1797,7 @@ WITH board_node_task_ids AS (
         FROM task_node_placements p
         JOIN workflow_nodes n ON n.id = p.node_id
         WHERE p.task_id = t.id
-          AND p.state = 'completed'
+          AND p.state = 'active'
           AND n.kind = 'terminal'
       )
 )
@@ -2491,12 +2644,12 @@ SET state = 'completed',
 WHERE task_node_placements.id = sqlc.arg(placement_id)
   AND state = 'active';
 
--- name: SupersedeCompletedTerminalManualMoveSourcePlacement :execrows
+-- name: SupersedeActiveTerminalManualMoveSourcePlacement :execrows
 UPDATE task_node_placements
 SET state = 'superseded',
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE task_node_placements.id = sqlc.arg(placement_id)
-  AND state = 'completed'
+  AND state = 'active'
   AND EXISTS (
       SELECT 1
       FROM workflow_nodes n
@@ -2507,12 +2660,8 @@ WHERE task_node_placements.id = sqlc.arg(placement_id)
 -- name: ListActiveManualMoveSources :many
 SELECT task_node_placements.id, node_id, parallel_batch_transition_id
 FROM task_node_placements
-LEFT JOIN workflow_nodes n ON n.id = task_node_placements.node_id
 WHERE task_node_placements.task_id = sqlc.arg(task_id)
-  AND (
-      task_node_placements.state = 'active'
-      OR (task_node_placements.state = 'completed' AND n.kind = 'terminal')
-  )
+  AND task_node_placements.state = 'active'
 ORDER BY task_node_placements.created_at_unix_ms DESC, task_node_placements.rowid DESC;
 
 -- name: InsertTaskComment :exec
@@ -2956,34 +3105,11 @@ SELECT
     ) AS INTEGER) AS latest_activity_unix_ms,
     CAST((SELECT COUNT(*) FROM task_records t WHERE t.project_id = p.id) AS INTEGER) AS task_count,
     CAST((
-        SELECT COUNT(DISTINCT attention_tasks.id)
+        SELECT COUNT(*)
         FROM task_records attention_tasks
+        JOIN workflow_task_status_records attention_status ON attention_status.task_id = attention_tasks.id
         WHERE attention_tasks.project_id = p.id
-          AND attention_tasks.canceled_at_unix_ms = 0
-          AND (
-              EXISTS (
-                  SELECT 1
-                  FROM task_node_placements tnp
-                  WHERE tnp.task_id = attention_tasks.id
-                    AND tnp.state = 'waiting_approval'
-              )
-              OR EXISTS (
-                  SELECT 1
-                  FROM task_transitions tt
-                  WHERE tt.task_id = attention_tasks.id
-                    AND tt.state = 'pending_approval'
-              )
-              OR EXISTS (
-                  SELECT 1
-                  FROM task_run_records tr
-                  WHERE tr.task_id = attention_tasks.id
-                    AND tr.completed_at_unix_ms = 0
-                    AND (
-                        tr.interrupted_at_unix_ms > 0
-                        OR trim(tr.waiting_ask_id) <> ''
-                    )
-              )
-          )
+          AND json_array_length(attention_status.attention_types_json) > 0
     ) AS INTEGER) AS attention_count,
     CAST((
         SELECT COUNT(*)
@@ -3295,12 +3421,13 @@ WITH attention_candidates(
         '' AS interruption_reason,
         '' AS interruption_detail_json,
         r.updated_at_unix_ms AS occurred_at_unix_ms
-    FROM task_run_records r
+    FROM workflow_task_current_run_records r
     JOIN task_records t ON t.id = r.task_id
-    WHERE trim(r.waiting_ask_id) != ''
-      AND r.completed_at_unix_ms = 0
-      AND r.interrupted_at_unix_ms = 0
-      AND t.canceled_at_unix_ms = 0
+    JOIN workflow_task_status_task_records status_task ON status_task.id = t.id
+    WHERE r.waiting_ask_id IS NOT NULL
+      AND r.completed_at_unix_ms IS NULL
+      AND r.interrupted_at_unix_ms IS NULL
+      AND status_task.canceled_at_unix_ms IS NULL
       AND (sqlc.arg(project_id) = '' OR t.project_id = sqlc.arg(project_id))
       AND (sqlc.arg(task_id) = '' OR t.id = sqlc.arg(task_id))
       AND (
@@ -3395,12 +3522,13 @@ ORDER BY tt.created_at_unix_ms DESC, tt.rowid DESC;
 
 -- name: ListWorkflowQuestionAttentionItems :many
 SELECT r.id AS run_id, COALESCE(r.session_id, '') AS session_id, r.waiting_ask_id, t.project_id, t.workflow_id, t.id AS task_id, t.short_id, t.title, r.updated_at_unix_ms
-FROM task_run_records r
+FROM workflow_task_current_run_records r
 JOIN task_records t ON t.id = r.task_id
-WHERE trim(r.waiting_ask_id) != ''
-  AND r.completed_at_unix_ms = 0
-  AND r.interrupted_at_unix_ms = 0
-  AND t.canceled_at_unix_ms = 0
+JOIN workflow_task_status_task_records status_task ON status_task.id = t.id
+WHERE r.waiting_ask_id IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
+  AND status_task.canceled_at_unix_ms IS NULL
   AND (sqlc.arg(project_id) = '' OR t.project_id = sqlc.arg(project_id))
   AND (sqlc.arg(task_id) = '' OR t.id = sqlc.arg(task_id))
 ORDER BY r.updated_at_unix_ms DESC, (

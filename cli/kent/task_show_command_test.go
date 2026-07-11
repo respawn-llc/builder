@@ -167,6 +167,18 @@ func TestTaskShowSurfacesUnscopedShortIDLookupErrors(t *testing.T) {
 	}
 }
 
+func TestTaskShowRejectsUnknownStatus(t *testing.T) {
+	cfg := config.App{WorkspaceRoot: t.TempDir()}
+	remote := &unknownTaskStatusRemote{}
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+
+	stdout, stderr, code := runWorkflowRootCommand("task", "show", "task-unknown")
+	if code != 1 || stdout != "" {
+		t.Fatalf("task show exit=%d stdout=%q stderr=%q, want unsupported-status failure without output", code, stdout, stderr)
+	}
+}
+
 func createRunnableWorkflowForCommandTest(t *testing.T, name string) string {
 	t.Helper()
 	workflowID := workflowCreateForTest(t, name).ID
@@ -187,6 +199,23 @@ type crossProjectTaskShowRemote struct {
 	scopedErr     error
 	unscopedErr   error
 	unscopedCalls int
+}
+
+type unknownTaskStatusRemote struct {
+	client.WorkflowClient
+}
+
+func (r *unknownTaskStatusRemote) Close() error { return nil }
+
+func (r *unknownTaskStatusRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
+	return serverapi.ProjectResolvePathResponse{}, errors.New("no current project")
+}
+
+func (r *unknownTaskStatusRemote) GetWorkflowTask(context.Context, serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
+	return serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
+		Summary: serverapi.WorkflowTaskSummary{ID: "task-unknown", ShortID: "KNT-1", Title: "Task"},
+		Status:  serverapi.WorkflowTaskStatus{Kind: "future_status"},
+	}}, nil
 }
 
 func (r *crossProjectTaskShowRemote) Close() error { return nil }
@@ -210,6 +239,7 @@ func (r *crossProjectTaskShowRemote) GetWorkflowTask(_ context.Context, req serv
 		return serverapi.WorkflowTaskGetResponse{Task: serverapi.WorkflowTaskDetail{
 			Summary: serverapi.WorkflowTaskSummary{ID: "task-other", ProjectID: "project-other", WorkflowID: "workflow-other", ShortID: "OTH-1", Title: "Other Task"},
 			Project: serverapi.ProjectBoardProject{ProjectID: "project-other", ProjectKey: "OTH", DisplayName: "Other"},
+			Status:  serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
 		}}, nil
 	}
 	return serverapi.WorkflowTaskGetResponse{}, sql.ErrNoRows
@@ -217,7 +247,7 @@ func (r *crossProjectTaskShowRemote) GetWorkflowTask(_ context.Context, req serv
 
 func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 	var stdout bytes.Buffer
-	writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
+	if err := writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
 		Summary: serverapi.WorkflowTaskSummary{
 			ID:              "task-1",
 			ShortID:         "WOR-1",
@@ -236,13 +266,15 @@ func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 			{ID: "run-1"},
 			{ID: "run-2"},
 		},
-	})
+	}); err != nil {
+		t.Fatalf("writeTaskDetail: %v", err)
+	}
 
 	output := stdout.String()
 	for _, want := range []string{
 		"WOR-1: Task\n",
 		"Body:\n```md\nDo the work.\n```\n",
-		"Status: open\n",
+		"Status: backlog\n",
 		"Project: \"Project\" (project-1)\n",
 		"Workflow: \"Workflow\" (workflow-1)\n",
 		"Created at 2025-01-01T00:00:00Z UTC\n",
@@ -262,15 +294,18 @@ func TestWriteTaskDetailIncludesParallelBranchIDs(t *testing.T) {
 
 func TestWriteTaskDetailComments(t *testing.T) {
 	var stdout bytes.Buffer
-	writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
+	if err := writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
 		Summary:  serverapi.WorkflowTaskSummary{ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
 		Project:  serverapi.ProjectBoardProject{ProjectID: "project-1", DisplayName: "Project"},
 		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
+		Status:   serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
 		Comments: []serverapi.WorkflowTaskComment{
 			{ID: "comment-old", Author: "user", Body: "old", CreatedAtUnixMs: 1735689600000},
 			{ID: "comment-new", Author: "agent", AuthorID: "reviewer", Body: "new", CreatedAtUnixMs: 1735776000000},
 		},
-	})
+	}); err != nil {
+		t.Fatalf("writeTaskDetail: %v", err)
+	}
 
 	output := stdout.String()
 	want := "Comments (2):\nreviewer at 2025-01-02T00:00:00Z UTC:\nnew\n---\nUser at 2025-01-01T00:00:00Z UTC:\nold\n"
@@ -285,12 +320,15 @@ func TestWriteTaskDetailCommentOverflowPointsToCommentCommand(t *testing.T) {
 		comments[i] = serverapi.WorkflowTaskComment{ID: fmt.Sprintf("comment-%d", i), Author: "user", Body: "comment", CreatedAtUnixMs: 1735689600000 + int64(i)}
 	}
 	var stdout bytes.Buffer
-	writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
+	if err := writeTaskDetail(&stdout, serverapi.WorkflowTaskDetail{
 		Summary:  serverapi.WorkflowTaskSummary{ShortID: "WOR-1", Title: "Task", CreatedAtUnixMs: 1735689600000},
 		Project:  serverapi.ProjectBoardProject{ProjectID: "project-1", DisplayName: "Project"},
 		Workflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1", DisplayName: "Workflow"},
+		Status:   serverapi.WorkflowTaskStatus{Kind: serverapi.WorkflowTaskStatusKindBacklog},
 		Comments: comments,
-	})
+	}); err != nil {
+		t.Fatalf("writeTaskDetail: %v", err)
+	}
 
 	output := stdout.String()
 	if !strings.Contains(output, "Comments under this task: 10. `kent task comment list WOR-1` to show them.\n") {
