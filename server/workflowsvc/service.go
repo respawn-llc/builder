@@ -1932,15 +1932,15 @@ func (s *Service) workflowGraphValidationResultsForDefinition(def workflow.Defin
 	return out
 }
 
-func scriptPathValidationErrors(def workflow.Definition, worktreeRoot string) []serverapi.WorkflowValidationError {
+func scriptPathValidationErrors(def workflow.Definition, executionRoot string) []serverapi.WorkflowValidationError {
 	out := []serverapi.WorkflowValidationError{}
 	for _, node := range def.Nodes {
 		if node.Kind() != workflow.NodeKindScript {
 			continue
 		}
 		diagnostics := workflowscript.Validate(workflowscript.ValidationRequest{
-			RawPath:      workflow.NodeScriptPath(node).String(),
-			WorktreeRoot: worktreeRoot,
+			RawPath:       workflow.NodeScriptPath(node).String(),
+			ExecutionRoot: executionRoot,
 		})
 		for _, diagnostic := range diagnostics {
 			out = append(out, scriptPathValidationError(def.ID, workflow.NodeIDOf(node), diagnostic))

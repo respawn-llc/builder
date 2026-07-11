@@ -23,8 +23,8 @@ func taskManagedWorktreeRoot(ctx context.Context, q *sqlitegen.Queries, task sql
 	return strings.TrimSpace(record.CanonicalRootPath), nil
 }
 
-func (s *Store) validateScriptNodeForExecution(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, worktreeRoot string) error {
-	diagnostics, err := s.scriptNodeDiagnostics(ctx, q, nodeID, worktreeRoot)
+func (s *Store) validateScriptNodeForExecution(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, executionRoot string) error {
+	diagnostics, err := s.scriptNodeDiagnostics(ctx, q, nodeID, executionRoot)
 	if err != nil {
 		return err
 	}
@@ -36,8 +36,8 @@ func (s *Store) validateScriptNodeForExecution(ctx context.Context, q *sqlitegen
 	return nil
 }
 
-func (s *Store) scriptNodeInterruption(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, worktreeRoot string) (reason string, detail string, invalid bool, err error) {
-	diagnostics, err := s.scriptNodeDiagnostics(ctx, q, nodeID, worktreeRoot)
+func (s *Store) scriptNodeInterruption(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, executionRoot string) (reason string, detail string, invalid bool, err error) {
+	diagnostics, err := s.scriptNodeDiagnostics(ctx, q, nodeID, executionRoot)
 	if err != nil {
 		return "", "", false, err
 	}
@@ -51,7 +51,7 @@ func (s *Store) scriptNodeInterruption(ctx context.Context, q *sqlitegen.Queries
 	return "", "{}", false, nil
 }
 
-func (s *Store) scriptNodeDiagnostics(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, worktreeRoot string) ([]workflowscript.Diagnostic, error) {
+func (s *Store) scriptNodeDiagnostics(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, executionRoot string) ([]workflowscript.Diagnostic, error) {
 	node, err := q.GetWorkflowNode(ctx, string(nodeID))
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -67,8 +67,8 @@ func (s *Store) scriptNodeDiagnostics(ctx context.Context, q *sqlitegen.Queries,
 		path = node.ScriptPath.String
 	}
 	return workflowscript.Validate(workflowscript.ValidationRequest{
-		RawPath:             path,
-		WorktreeRoot:        worktreeRoot,
-		RequireWorktreeRoot: true,
+		RawPath:              path,
+		ExecutionRoot:        executionRoot,
+		RequireExecutionRoot: true,
 	}), nil
 }

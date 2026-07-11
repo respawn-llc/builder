@@ -10,21 +10,21 @@ import (
 )
 
 const (
-	CodeMissingPath         = "workflow.validation.script_path_missing"
-	CodeRelativePathSkipped = "workflow.validation.script_path_relative_check_skipped"
-	CodeWorktreeRootMissing = "workflow.validation.script_worktree_root_missing"
-	CodePathNotFound        = "workflow.validation.script_path_not_found"
-	CodePathInaccessible    = "workflow.validation.script_path_inaccessible"
-	CodePathIsDirectory     = "workflow.validation.script_path_is_directory"
-	CodePathNotExecutable   = "workflow.validation.script_path_not_executable"
+	CodeMissingPath          = "workflow.validation.script_path_missing"
+	CodeRelativePathSkipped  = "workflow.validation.script_path_relative_check_skipped"
+	CodeExecutionRootMissing = "workflow.validation.script_execution_root_missing"
+	CodePathNotFound         = "workflow.validation.script_path_not_found"
+	CodePathInaccessible     = "workflow.validation.script_path_inaccessible"
+	CodePathIsDirectory      = "workflow.validation.script_path_is_directory"
+	CodePathNotExecutable    = "workflow.validation.script_path_not_executable"
 )
 
 const ReasonValidationFailed = "workflow_script_validation_failed"
 
 type ValidationRequest struct {
-	RawPath             string
-	WorktreeRoot        string
-	RequireWorktreeRoot bool
+	RawPath              string
+	ExecutionRoot        string
+	RequireExecutionRoot bool
 }
 
 type Diagnostic struct {
@@ -54,7 +54,7 @@ func (e ValidationError) DetailJSON() string {
 
 func Validate(req ValidationRequest) []Diagnostic {
 	raw := strings.TrimSpace(req.RawPath)
-	root := strings.TrimSpace(req.WorktreeRoot)
+	root := strings.TrimSpace(req.ExecutionRoot)
 	if raw == "" {
 		return []Diagnostic{{
 			Code:     CodeMissingPath,
@@ -67,14 +67,14 @@ func Validate(req ValidationRequest) []Diagnostic {
 		if root == "" {
 			diagnostic := Diagnostic{
 				Code:     CodeRelativePathSkipped,
-				Message:  fmt.Sprintf("relative script_path %q was not checked because no task worktree root is available", raw),
+				Message:  fmt.Sprintf("relative script_path %q was not checked because no task execution root is available", raw),
 				RawPath:  raw,
 				Blocking: false,
 				Skipped:  true,
 			}
-			if req.RequireWorktreeRoot {
-				diagnostic.Code = CodeWorktreeRootMissing
-				diagnostic.Message = fmt.Sprintf("relative script_path %q requires a task worktree root", raw)
+			if req.RequireExecutionRoot {
+				diagnostic.Code = CodeExecutionRootMissing
+				diagnostic.Message = fmt.Sprintf("relative script_path %q requires a task execution root", raw)
 				diagnostic.Blocking = true
 				diagnostic.Skipped = false
 			}
@@ -122,9 +122,9 @@ func Validate(req ValidationRequest) []Diagnostic {
 
 func ResolveExecutable(req ValidationRequest) (string, error) {
 	diagnostics := Validate(ValidationRequest{
-		RawPath:             req.RawPath,
-		WorktreeRoot:        req.WorktreeRoot,
-		RequireWorktreeRoot: true,
+		RawPath:              req.RawPath,
+		ExecutionRoot:        req.ExecutionRoot,
+		RequireExecutionRoot: true,
 	})
 	for _, diagnostic := range diagnostics {
 		if diagnostic.Blocking {
@@ -135,5 +135,5 @@ func ResolveExecutable(req ValidationRequest) (string, error) {
 	if filepath.IsAbs(raw) {
 		return filepath.Clean(raw), nil
 	}
-	return filepath.Clean(filepath.Join(strings.TrimSpace(req.WorktreeRoot), raw)), nil
+	return filepath.Clean(filepath.Join(strings.TrimSpace(req.ExecutionRoot), raw)), nil
 }

@@ -1948,15 +1948,15 @@ func definitionExecutionValidation(def serverapi.WorkflowDefinition, roleResolve
 	return &result
 }
 
-func scriptPathDefinitionValidationErrors(def workflow.Definition, worktreeRoot string) []workflow.ValidationError {
+func scriptPathDefinitionValidationErrors(def workflow.Definition, executionRoot string) []workflow.ValidationError {
 	out := []workflow.ValidationError{}
 	for _, node := range def.Nodes {
 		if node.Kind() != workflow.NodeKindScript {
 			continue
 		}
 		diagnostics := workflowscript.Validate(workflowscript.ValidationRequest{
-			RawPath:      workflow.NodeScriptPath(node).String(),
-			WorktreeRoot: worktreeRoot,
+			RawPath:       workflow.NodeScriptPath(node).String(),
+			ExecutionRoot: executionRoot,
 		})
 		for _, diagnostic := range diagnostics {
 			out = append(out, workflow.ValidationError{

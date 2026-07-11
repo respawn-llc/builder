@@ -365,35 +365,7 @@ func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (R
 	}
 	priorParameterValues := clonePriorParameterValues(runMetadata.PriorParameterValues)
 	parameters := append([]workflow.Parameter(nil), runMetadata.Parameters...)
-	worktreeID := strings.TrimSpace(task.ManagedWorktreeID.String)
-	if worktreeID == "" {
-		return RunStartContext{
-			Run:                            runRecordFromTaskRun(run),
-			Task:                           taskRecordFromTask(task),
-			Workflow:                       workflowRecord,
-			Node:                           nodeRecord,
-			ContextMode:                    transitionContext.ContextMode,
-			WorkflowHasContinueSessionEdge: snapshot.hasContinueSessionEdge(),
-			SourceRunID:                    transitionContext.SourceRunID,
-			SourceSessionID:                transitionContext.SourceSessionID,
-			SourceNode:                     transitionContext.SourceNode,
-			AcceptedTransitionPath:         transitionContext.AcceptedTransitionPath,
-			IsFanoutBranch:                 isFanoutBranch,
-			TransitionIDs:                  transitionIDsFromSnapshot(snapshot),
-			TransitionOptions:              transitionOptionsFromSnapshot(snapshot),
-			PromptTemplate:                 strings.TrimSpace(runMetadata.PromptTemplate),
-			Parameters:                     parameters,
-			ParameterValues:                parameterValues,
-			PriorParameterValues:           priorParameterValues,
-			InputValues:                    inputValues,
-			NodeOutputValues:               runMetadata.NodeOutputValues,
-		}, nil
-	}
-	worktree, err := s.metadata.GetWorktreeRecordByID(ctx, worktreeID)
-	if err != nil {
-		return RunStartContext{}, err
-	}
-	workspace, err := s.metadata.GetWorkspaceByID(ctx, worktree.WorkspaceID)
+	executionRoot, err := s.runStartExecutionRoot(ctx, task)
 	if err != nil {
 		return RunStartContext{}, err
 	}
@@ -417,11 +389,51 @@ func (s *Store) GetRunStartContext(ctx context.Context, runID workflow.RunID) (R
 		PriorParameterValues:           priorParameterValues,
 		InputValues:                    inputValues,
 		NodeOutputValues:               runMetadata.NodeOutputValues,
-		WorkspaceID:                    workspace.ID,
-		WorkspaceRoot:                  workspace.CanonicalRootPath,
-		WorktreeID:                     worktree.ID,
-		WorktreeRoot:                   worktree.CanonicalRoot,
+		ExecutionRoot:                  executionRoot,
 	}, nil
+}
+
+// runStartExecutionRoot projects the immutable target when one exists. Legacy
+// task-managed worktrees predate execution targets and remain runnable without
+// inventing target history; a targetless task without its old worktree has no
+// execution root for the runner to use.
+func (s *Store) runStartExecutionRoot(ctx context.Context, task sqlitegen.TaskRecord) (*workflow.ExecutionRoot, error) {
+	target, err := s.GetTaskExecutionTarget(ctx, workflow.TaskID(task.ID))
+	if err != nil {
+		return nil, err
+	}
+	if target != nil {
+		root, err := s.ResolveTaskExecutionRoot(ctx, workflow.TaskID(task.ID))
+		if err != nil {
+			return nil, err
+		}
+		return &root, nil
+	}
+	worktreeID := strings.TrimSpace(task.ManagedWorktreeID.String)
+	if !task.ManagedWorktreeID.Valid || worktreeID == "" {
+		return nil, nil
+	}
+	worktree, err := s.metadata.GetWorktreeRecordByID(ctx, worktreeID)
+	if err != nil {
+		return nil, err
+	}
+	workspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
+	if workspaceID == "" {
+		workspaceID = worktree.WorkspaceID
+	}
+	workspace, err := s.metadata.GetWorkspaceByID(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	root := workflow.ExecutionRoot{
+		SourceWorkspace: workflow.ExecutionWorkspace{ID: workspace.ID, Root: workspace.CanonicalRootPath},
+		ManagedWorktree: &workflow.ExecutionWorktree{ID: worktree.ID, Root: worktree.CanonicalRoot},
+		EffectiveRoot:   worktree.CanonicalRoot,
+	}
+	if err := root.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid legacy task execution root: %w", err)
+	}
+	return &root, nil
 }
 
 func (s *Store) runStartNodeRecord(ctx context.Context, snapshot runStartSnapshot) (NodeRecord, error) {

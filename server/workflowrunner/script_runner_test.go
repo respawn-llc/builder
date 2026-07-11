@@ -21,17 +21,18 @@ func TestExecuteWorkflowScriptUsesJSONStdinAndSeparatedStderr(t *testing.T) {
 	}
 	dir := t.TempDir()
 	stdinPath := filepath.Join(dir, "stdin.json")
+	cwdPath := filepath.Join(dir, "cwd.txt")
 	scriptPath := filepath.Join(dir, "complete.sh")
-	script := "#!/bin/sh\ncat > " + shellQuote(stdinPath) + "\nprintf 'diagnostic' >&2\nprintf '{\"done\":\"ok\"}'\n"
+	script := "#!/bin/sh\npwd > " + shellQuote(cwdPath) + "\ncat > " + shellQuote(stdinPath) + "\nprintf 'diagnostic' >&2\nprintf '{\"done\":\"ok\"}'\n"
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 	req := SchedulerStartRunRequest{RunID: "run_script", TaskID: "task_1", PlacementID: "placement_1", NodeID: "node_script", Generation: 1}
 	input := workflowstore.RunStartContext{
-		Task:         workflowstore.TaskRecord{ID: "task_1", WorkflowID: "workflow_1"},
-		Node:         workflowstore.NodeRecord{ID: "node_script", WorkflowID: "workflow_1", Kind: workflow.NodeKindScript, ScriptPath: "complete.sh"},
-		InputValues:  map[string]string{"summary": "hello"},
-		WorktreeRoot: dir,
+		Task:          workflowstore.TaskRecord{ID: "task_1", WorkflowID: "workflow_1"},
+		Node:          workflowstore.NodeRecord{ID: "node_script", WorkflowID: "workflow_1", Kind: workflow.NodeKindScript, ScriptPath: "complete.sh"},
+		InputValues:   map[string]string{"summary": "hello"},
+		ExecutionRoot: scriptExecutionRoot(dir),
 	}
 
 	result, err := executeWorkflowScript(context.Background(), req, input)
@@ -63,6 +64,21 @@ func TestExecuteWorkflowScriptUsesJSONStdinAndSeparatedStderr(t *testing.T) {
 	if kent["run_id"] != "run_script" || kent["placement_id"] != "placement_1" {
 		t.Fatalf("_kent = %#v", kent)
 	}
+	cwd, err := os.ReadFile(cwdPath)
+	if err != nil {
+		t.Fatalf("read script cwd: %v", err)
+	}
+	cwdInfo, err := os.Stat(strings.TrimSpace(string(cwd)))
+	if err != nil {
+		t.Fatalf("stat script cwd: %v", err)
+	}
+	rootInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat execution root: %v", err)
+	}
+	if !os.SameFile(cwdInfo, rootInfo) {
+		t.Fatalf("script cwd = %q, want source execution root %q", strings.TrimSpace(string(cwd)), dir)
+	}
 }
 
 func TestExecuteWorkflowScriptCancelKillsTermIgnoringProcess(t *testing.T) {
@@ -78,10 +94,10 @@ func TestExecuteWorkflowScriptCancelKillsTermIgnoringProcess(t *testing.T) {
 	}
 	req := SchedulerStartRunRequest{RunID: "run_script", TaskID: "task_1", PlacementID: "placement_1", NodeID: "node_script", Generation: 1}
 	input := workflowstore.RunStartContext{
-		Task:         workflowstore.TaskRecord{ID: "task_1", WorkflowID: "workflow_1"},
-		Node:         workflowstore.NodeRecord{ID: "node_script", WorkflowID: "workflow_1", Kind: workflow.NodeKindScript, ScriptPath: "ignore-term.sh"},
-		InputValues:  map[string]string{},
-		WorktreeRoot: dir,
+		Task:          workflowstore.TaskRecord{ID: "task_1", WorkflowID: "workflow_1"},
+		Node:          workflowstore.NodeRecord{ID: "node_script", WorkflowID: "workflow_1", Kind: workflow.NodeKindScript, ScriptPath: "ignore-term.sh"},
+		InputValues:   map[string]string{},
+		ExecutionRoot: scriptExecutionRoot(dir),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -109,6 +125,13 @@ func TestExecuteWorkflowScriptCancelKillsTermIgnoringProcess(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("script cancellation did not kill TERM-ignoring process")
+	}
+}
+
+func scriptExecutionRoot(root string) *workflow.ExecutionRoot {
+	return &workflow.ExecutionRoot{
+		SourceWorkspace: workflow.ExecutionWorkspace{ID: "workspace_1", Root: root},
+		EffectiveRoot:   root,
 	}
 }
 

@@ -306,10 +306,7 @@ type RunStartContext struct {
 	PriorParameterValues map[string]map[string]string
 	InputValues          map[string]string
 	NodeOutputValues     map[string]map[string]string
-	WorkspaceID          string
-	WorkspaceRoot        string
-	WorktreeID           string
-	WorktreeRoot         string
+	ExecutionRoot        *workflow.ExecutionRoot
 }
 
 type AcceptedTransitionPath struct {

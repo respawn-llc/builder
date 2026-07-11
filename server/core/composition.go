@@ -184,7 +184,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: view: %w", err)
 	}
 	workflowAttentionFinalizer := workflowattention.NewFinalizer(workflowApprovalProjection{store: workflowStore, view: workflowViewService, roleResolver: workflowRoleResolver}, attentionBroker)
-	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, Worktrees: runtimeTaskWorktreeEnsurer{service: worktreeService}, SessionRuntime: sessionRuntimeService, AttentionFinalizer: workflowAttentionFinalizer})
+	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeSupport.Background, runtimeRegistry, workflowrunner.StarterOptions{RuntimeClientFactory: opts.RuntimeClientFactory, SessionRuntime: sessionRuntimeService, AttentionFinalizer: workflowAttentionFinalizer})
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: runtime starter: %w", err)
@@ -271,18 +271,6 @@ type taskWorktreeEnsurer struct {
 }
 
 func (e taskWorktreeEnsurer) EnsureTaskWorktree(ctx context.Context, req workflowsvc.TaskWorktreeEnsureRequest) error {
-	if e.service == nil {
-		return nil
-	}
-	_, err := e.service.EnsureTaskWorktree(ctx, worktree.EnsureTaskWorktreeRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
-	return err
-}
-
-type runtimeTaskWorktreeEnsurer struct {
-	service *worktree.Service
-}
-
-func (e runtimeTaskWorktreeEnsurer) EnsureTaskWorktree(ctx context.Context, req workflowrunner.TaskWorktreeEnsureRequest) error {
 	if e.service == nil {
 		return nil
 	}

@@ -159,6 +159,9 @@ func scriptFailureReason(err error) string {
 }
 
 func executeWorkflowScript(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext) (workflowScriptResult, error) {
+	if input.ExecutionRoot == nil {
+		return workflowScriptResult{}, workflowScriptError{Reason: ReasonScriptValidationFailed, Err: errors.New("workflow execution root is required")}
+	}
 	resolvedPath, err := resolveWorkflowScriptPath(input)
 	if err != nil {
 		return workflowScriptResult{}, workflowScriptError{Reason: ReasonScriptValidationFailed, Err: err}
@@ -168,7 +171,7 @@ func executeWorkflowScript(ctx context.Context, req SchedulerStartRunRequest, in
 		return workflowScriptResult{ResolvedPath: resolvedPath}, workflowScriptError{Reason: ReasonScriptExecutionFailed, Err: err}
 	}
 	cmd := exec.Command(resolvedPath)
-	cmd.Dir = input.WorktreeRoot
+	cmd.Dir = input.ExecutionRoot.EffectiveRoot
 	cmd.Env = workflowScriptEnv(req, input)
 	cmd.Stdin = strings.NewReader(string(stdin))
 	prepareScriptCommand(cmd)
@@ -240,10 +243,13 @@ func executeWorkflowScript(ctx context.Context, req SchedulerStartRunRequest, in
 }
 
 func resolveWorkflowScriptPath(input workflowstore.RunStartContext) (string, error) {
+	if input.ExecutionRoot == nil {
+		return "", errors.New("workflow execution root is required")
+	}
 	return workflowscript.ResolveExecutable(workflowscript.ValidationRequest{
-		RawPath:             input.Node.ScriptPath,
-		WorktreeRoot:        input.WorktreeRoot,
-		RequireWorktreeRoot: true,
+		RawPath:              input.Node.ScriptPath,
+		ExecutionRoot:        input.ExecutionRoot.EffectiveRoot,
+		RequireExecutionRoot: true,
 	})
 }
 
@@ -260,6 +266,10 @@ func workflowScriptStdin(req SchedulerStartRunRequest, input workflowstore.RunSt
 }
 
 func workflowScriptEnv(req SchedulerStartRunRequest, input workflowstore.RunStartContext) []string {
+	executionRoot := ""
+	if input.ExecutionRoot != nil {
+		executionRoot = input.ExecutionRoot.EffectiveRoot
+	}
 	env := tools.EnrichShellEnv(os.Environ())
 	env = append(env,
 		"KENT_WORKFLOW_RUN_ID="+string(req.RunID),
@@ -267,7 +277,7 @@ func workflowScriptEnv(req SchedulerStartRunRequest, input workflowstore.RunStar
 		"KENT_WORKFLOW_TASK_ID="+string(input.Task.ID),
 		"KENT_WORKFLOW_ID="+string(input.Task.WorkflowID),
 		"KENT_WORKFLOW_NODE_ID="+string(input.Node.ID),
-		"KENT_WORKTREE_ROOT="+input.WorktreeRoot,
+		"KENT_WORKTREE_ROOT="+executionRoot,
 	)
 	return env
 }
