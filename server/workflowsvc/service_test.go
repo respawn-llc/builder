@@ -400,6 +400,75 @@ func TestServiceStartHeadPolicyMaterializesManagedTargetBeforeStarting(t *testin
 	}
 }
 
+func TestServiceStartHeadPolicySetupFailureLocksTargetWithoutStarting(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyHead)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "deadbeef"),
+	}}
+	setupErr := errors.New("setup failed")
+	materializer := &recordingTaskExecutionTargetWorktreeMaterializer{worktreeRoot: t.TempDir(), setupErr: setupErr}
+	service.targetWorktrees = materializer
+
+	_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if !errors.Is(err, setupErr) {
+		t.Fatalf("StartWorkflowTask error = %v, want setup failure", err)
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if target == nil || target.State != workflow.ExecutionTargetStateLocked || target.SetupState != workflow.ExecutionTargetSetupFailed || target.ActiveClaim != nil {
+		t.Fatalf("target = %+v, want attached locked target with failed setup", target)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %+v, want no start run after setup failure", runs)
+	}
+}
+
+func TestServiceStartHeadPolicyMissingScriptKeepsTargetWithoutStarting(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceScriptWorkflow(t, ctx, service, "scripts/missing")
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyHead)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "deadbeef"),
+	}}
+	service.targetWorktrees = &recordingTaskExecutionTargetWorktreeMaterializer{worktreeRoot: t.TempDir()}
+
+	if _, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	}); err == nil {
+		t.Fatal("StartWorkflowTask missing managed script succeeded")
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if target == nil || target.State != workflow.ExecutionTargetStateLocked || target.SetupState != workflow.ExecutionTargetSetupSucceeded || target.ActiveClaim != nil {
+		t.Fatalf("target = %+v, want locked setup-complete target after script validation failure", target)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %+v, want no start run after script validation failure", runs)
+	}
+}
+
 func TestServiceStartNonGitHeadPolicyRequiresReplacementSelection(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -477,6 +546,45 @@ func TestServiceMoveHeadPolicyMaterializesManagedTargetBeforeApplyingMove(t *tes
 	}
 }
 
+func TestServiceMoveHeadPolicyMissingScriptKeepsTargetWithoutApplyingMove(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceScriptWorkflow(t, ctx, service, "scripts/missing")
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyHead)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "deadbeef"),
+	}}
+	service.targetWorktrees = &recordingTaskExecutionTargetWorktreeMaterializer{worktreeRoot: t.TempDir()}
+
+	if _, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:           task.Task.ID,
+		TargetNodeID:     workflowServiceNodeIDByKind(t, def.Definition, "script"),
+		AllowMissingEdge: true,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	}); err == nil {
+		t.Fatal("MoveWorkflowTask missing managed script succeeded")
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if target == nil || target.Policy != workflow.ExecutionPolicyHead || target.SetupState != workflow.ExecutionTargetSetupSucceeded {
+		t.Fatalf("target = %+v, want locked setup-complete target", target)
+	}
+	transitions, err := service.store.ListTransitions(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListTransitions: %v", err)
+	}
+	if len(transitions) != 0 {
+		t.Fatalf("transitions = %+v, want no move after script validation failure", transitions)
+	}
+}
+
 func TestServiceApprovalHeadPolicyMaterializesManagedTargetBeforeApplyingApproval(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -519,6 +627,58 @@ func TestServiceApprovalHeadPolicyMaterializesManagedTargetBeforeApplyingApprova
 	}
 	if target == nil || target.Policy != workflow.ExecutionPolicyHead || target.SetupState != workflow.ExecutionTargetSetupSucceeded {
 		t.Fatalf("target = %+v, want materialized head target", target)
+	}
+}
+
+func TestServiceApprovalHeadPolicyMissingScriptKeepsTargetWithoutApplyingApproval(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceScriptWorkflow(t, ctx, service, "scripts/missing")
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyHead)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	pending, err := service.store.ManualMoveTask(ctx, workflowstore.ManualMoveRequest{
+		TaskID:           workflow.TaskID(task.Task.ID),
+		TargetNodeID:     workflow.NodeID(workflowServiceNodeIDByKind(t, def.Definition, "script")),
+		AllowMissingEdge: true,
+	})
+	if err != nil {
+		t.Fatalf("ManualMoveTask setup: %v", err)
+	}
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "deadbeef"),
+	}}
+	service.targetWorktrees = &recordingTaskExecutionTargetWorktreeMaterializer{worktreeRoot: t.TempDir()}
+
+	if _, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
+		TaskTransitionID: string(pending.TransitionID),
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	}); err == nil {
+		t.Fatal("ApproveWorkflowTask missing managed script succeeded")
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if target == nil || target.Policy != workflow.ExecutionPolicyHead || target.SetupState != workflow.ExecutionTargetSetupSucceeded {
+		t.Fatalf("target = %+v, want locked setup-complete target", target)
+	}
+	transitions, err := service.store.ListTransitions(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListTransitions: %v", err)
+	}
+	if len(transitions) != 1 || transitions[0].State != "pending_approval" {
+		t.Fatalf("transitions = %+v, want pending approval after script validation failure", transitions)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %+v, want no approval run after script validation failure", runs)
 	}
 }
 
@@ -2276,20 +2436,21 @@ type recordingTaskExecutionTargetWorktreeMaterializer struct {
 	worktreeRoot string
 	provision    worktree.ProvisionExecutionTargetWorktreeRequest
 	setup        worktree.RunExecutionTargetSetupRequest
-	err          error
+	provisionErr error
+	setupErr     error
 }
 
 func (m *recordingTaskExecutionTargetWorktreeMaterializer) ProvisionExecutionTargetWorktree(_ context.Context, req worktree.ProvisionExecutionTargetWorktreeRequest) (worktree.ProvisionExecutionTargetWorktreeResponse, error) {
 	m.provision = req
-	if m.err != nil {
-		return worktree.ProvisionExecutionTargetWorktreeResponse{}, m.err
+	if m.provisionErr != nil {
+		return worktree.ProvisionExecutionTargetWorktreeResponse{}, m.provisionErr
 	}
 	return worktree.ProvisionExecutionTargetWorktreeResponse{WorktreeRoot: m.worktreeRoot, BranchName: req.TaskShortID, CreatedBranch: true}, nil
 }
 
 func (m *recordingTaskExecutionTargetWorktreeMaterializer) RunExecutionTargetSetup(_ context.Context, req worktree.RunExecutionTargetSetupRequest) error {
 	m.setup = req
-	return m.err
+	return m.setupErr
 }
 
 func (r *recordingTaskExecutionTargetResolver) ResolveExecutionTarget(_ context.Context, _ string, _ workflow.ExecutionPolicyMode, _ *string) (worktree.ExecutionTargetResolution, error) {

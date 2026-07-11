@@ -215,13 +215,16 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 			return CompleteRunResult{}, err
 		}
 		worktreeRoot = workspace.CanonicalRootPath
-		for _, edge := range edges {
-			if edge.State != "pending" || workflow.NodeKind(edge.TargetNodeKind) != workflow.NodeKindScript {
-				continue
-			}
-			if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeID(edge.TargetNodeID.String), worktreeRoot); err != nil {
+	}
+	for _, edge := range edges {
+		if edge.State != "pending" || workflow.NodeKind(edge.TargetNodeKind) != workflow.NodeKindScript {
+			continue
+		}
+		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeID(edge.TargetNodeID.String), worktreeRoot); err != nil {
+			if target != nil {
 				return CompleteRunResult{}, s.clearNoneExecutionTargetNegotiationAfterValidationFailure(ctx, target.TaskID, err)
 			}
+			return CompleteRunResult{}, err
 		}
 	}
 	hasSourceRun := transition.SourceRunID.Valid && strings.TrimSpace(transition.SourceRunID.String) != ""

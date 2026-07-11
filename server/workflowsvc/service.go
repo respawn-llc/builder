@@ -1213,6 +1213,9 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			}
 			return s.movedWorkflowTaskResult(ctx, req, moved)
 		}
+		if err := s.store.ValidateManualMoveExecutionScripts(ctx, moveRequest); err != nil {
+			return serverapi.WorkflowTaskInitiatingActionResult{}, err
+		}
 	}
 	moved, err := s.store.ManualMoveTask(ctx, moveRequest)
 	if err != nil {

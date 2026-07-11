@@ -45,6 +45,23 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	return result, nil
 }
 
+// ValidateManualMoveExecutionScripts validates every script the prepared
+// manual move can execute against the task's locked execution root.
+func (s *Store) ValidateManualMoveExecutionScripts(ctx context.Context, req ManualMoveRequest) error {
+	prepared, err := s.prepareManualMove(ctx, req)
+	if err != nil {
+		return err
+	}
+	if prepared.targetNode.Kind() != workflow.NodeKindScript {
+		return nil
+	}
+	root, err := s.ResolveTaskExecutionRoot(ctx, req.TaskID)
+	if err != nil {
+		return err
+	}
+	return s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.targetNode), root.EffectiveRoot)
+}
+
 func (s *Store) ManualMoveTaskWithExecutionTarget(ctx context.Context, target workflow.ExecutionTarget, req ManualMoveRequest) (ManualMoveResult, error) {
 	if err := target.Validate(); err != nil {
 		return ManualMoveResult{}, err
