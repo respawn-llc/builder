@@ -313,10 +313,7 @@ jobs:
         run: pnpm build
 
   gui-native:
-    runs-on: macos-latest
-    defaults:
-      run:
-        working-directory: apps/desktop/src-tauri
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
@@ -331,8 +328,63 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri
 
-      - name: Check Tauri native shell
-        run: cargo check --locked
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6.0.9
+        with:
+          version: 11.11.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/pnpm-lock.yaml
+
+      - name: Install GUI dependencies
+        run: pnpm --dir apps install --frozen-lockfile
+
+      - name: Build macOS 15 desktop bundle
+        run: bash scripts/build-desktop.sh --skip-install -- --bundles dmg
+
+      - name: Smoke test macOS 15 desktop bundle
+        run: |
+          shopt -s nullglob
+          dmgs=(apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg)
+          if [[ "${#dmgs[@]}" -ne 1 ]]; then
+            echo "Expected exactly one macOS DMG, found ${#dmgs[@]}." >&2
+            exit 1
+          fi
+
+          mount_dir="$RUNNER_TEMP/kent-desktop-dmg"
+          mkdir -p "$mount_dir"
+          hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$mount_dir"
+          trap 'hdiutil detach "$mount_dir"' EXIT
+
+          app="$mount_dir/Kent.app"
+          executable="$app/Contents/MacOS/kent-desktop"
+          minimum_system_version="$(plutil -extract LSMinimumSystemVersion raw "$app/Contents/Info.plist")"
+          if [[ "$minimum_system_version" != "15.0" ]]; then
+            echo "Expected LSMinimumSystemVersion 15.0, got ${minimum_system_version}." >&2
+            exit 1
+          fi
+          lipo -verify_arch arm64 "$executable"
+
+          "$executable" >"$RUNNER_TEMP/kent-desktop.log" 2>&1 &
+          app_pid=$!
+          sleep 10
+          if ! kill -0 "$app_pid"; then
+            wait "$app_pid"
+            exit $?
+          fi
+          kill -TERM "$app_pid"
+          wait "$app_pid" || true
+
+      - name: Upload macOS 15 desktop bundle
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: desktop-bundle-macos-15-arm64
+          path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
 
   desktop_bundle:
     # Catch desktop packaging breakage (bundling, AppImage/deb generation, updater
