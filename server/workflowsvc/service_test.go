@@ -268,6 +268,48 @@ func TestServiceStartAskPolicySupersedesSelectionWhenGitFactsChange(t *testing.T
 	}
 }
 
+func TestServiceStartAskNoneSelectionWithMissingSourceScriptLeavesNoTargetOrRun(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceScriptWorkflow(t, ctx, service, "scripts/missing")
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+
+	required, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask requirement: %v", err)
+	}
+	if required.SelectionRequired == nil {
+		t.Fatalf("start result = %+v, want selection_required", required)
+	}
+	_, err = service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:              task.Task.ID,
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SelectionGeneration: &required.SelectionRequired.Generation,
+		Selection:           &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionNone},
+	})
+	if err == nil {
+		t.Fatal("StartWorkflowTask missing source script succeeded")
+	}
+	target, targetErr := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if targetErr != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", targetErr)
+	}
+	if target != nil {
+		t.Fatalf("target = %+v, want no target after validation failure", target)
+	}
+	runs, runsErr := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if runsErr != nil {
+		t.Fatalf("ListRuns: %v", runsErr)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %+v, want no run after validation failure", runs)
+	}
+}
+
 func TestServiceExecutableManualMoveAskPolicyRequiresSelectionWithoutMutatingTask(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
