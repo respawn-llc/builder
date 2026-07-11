@@ -11,9 +11,20 @@ import (
 	"core/internal/testharness/pty"
 )
 
-func run(args []string) error {
+func run(args []string) (err error) {
 	if len(args) > 1 || (len(args) == 1 && args[0] != "await-dispatch") {
 		return fmt.Errorf("unexpected arguments %q", args)
+	}
+	if len(args) == 1 {
+		state, rawErr := term.MakeRaw(int(os.Stdin.Fd()))
+		if rawErr != nil {
+			return fmt.Errorf("make stdin raw: %w", rawErr)
+		}
+		defer func() {
+			if restoreErr := term.Restore(int(os.Stdin.Fd()), state); err == nil && restoreErr != nil {
+				err = fmt.Errorf("restore stdin: %w", restoreErr)
+			}
+		}()
 	}
 	windowID, err := pty.NewWindowID(uuid.NewString())
 	if err != nil {
@@ -40,16 +51,6 @@ func run(args []string) error {
 }
 
 func readDispatchedInput() (input []byte, err error) {
-	state, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		return nil, fmt.Errorf("make stdin raw: %w", err)
-	}
-	defer func() {
-		restoreErr := term.Restore(int(os.Stdin.Fd()), state)
-		if err == nil && restoreErr != nil {
-			err = fmt.Errorf("restore stdin: %w", restoreErr)
-		}
-	}()
 	input = make([]byte, 2)
 	if _, err := io.ReadFull(os.Stdin, input); err != nil {
 		return nil, fmt.Errorf("read dispatched input: %w", err)

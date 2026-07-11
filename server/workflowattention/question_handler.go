@@ -185,5 +185,5 @@ func taskQuestionAlreadyDurablyCleared(ctx context.Context, store QuestionStore,
 	if err != nil {
 		return false
 	}
-	return strings.TrimSpace(run.WaitingAskID) != strings.TrimSpace(askID)
+	return run.WaitingAskID == nil || strings.TrimSpace(*run.WaitingAskID) != strings.TrimSpace(askID)
 }

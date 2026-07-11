@@ -67,14 +67,14 @@ func TestTerminalWorkflowQueueFailureCompletesTaggedLiveItems(t *testing.T) {
 	if err != nil || !accepted || item.ID == "" {
 		t.Fatalf("QueueUserMessageForActiveRun item=%+v accepted=%t err=%v", item, accepted, err)
 	}
-	completed := *snapshot
-	completed.Status = RunStatusCompleted
-	completed.FinishedAt = startedAt.Add(time.Second)
-	eng.liveRun.finishStep(&completed, RunStatusCompleted, nil, false)
 	handle, err := eng.CaptureActiveRunResult(context.Background())
 	if err != nil {
 		t.Fatalf("CaptureActiveRunResult: %v", err)
 	}
+	completed := *snapshot
+	completed.Status = RunStatusCompleted
+	completed.FinishedAt = startedAt.Add(time.Second)
+	eng.liveRun.finishStep(&completed, RunStatusCompleted, nil, false)
 	eng.mu.Lock()
 	eng.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,

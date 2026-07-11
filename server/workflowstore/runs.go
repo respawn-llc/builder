@@ -28,7 +28,7 @@ func (s *Store) ListRunnableRuns(ctx context.Context, limit int64) ([]RunnableRu
 
 func (s *Store) ClaimRun(ctx context.Context, runID workflow.RunID, expectedGeneration int64) (RunnableRunRecord, error) {
 	now := s.now().UnixMilli()
-	row, err := s.queries.ClaimWorkflowRun(ctx, sqlitegen.ClaimWorkflowRunParams{ID: string(runID), ExpectedGeneration: expectedGeneration, UpdatedAtUnixMs: now, StartedAtUnixMs: now})
+	row, err := s.queries.ClaimWorkflowRun(ctx, sqlitegen.ClaimWorkflowRunParams{ID: string(runID), ExpectedGeneration: expectedGeneration, UpdatedAtUnixMs: now, StartedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}})
 	if err != nil {
 		return RunnableRunRecord{}, err
 	}
@@ -58,7 +58,7 @@ func (s *Store) SetRunEffectiveCompletionMode(ctx context.Context, runID workflo
 	updated, err := s.queries.SetTaskRunEffectiveCompletionMode(ctx, sqlitegen.SetTaskRunEffectiveCompletionModeParams{
 		ID:                      string(runID),
 		ExpectedGeneration:      expectedGeneration,
-		EffectiveCompletionMode: trimmedMode,
+		EffectiveCompletionMode: sql.NullString{String: trimmedMode, Valid: true},
 		UpdatedAtUnixMs:         now,
 	})
 	if err != nil {
@@ -84,7 +84,7 @@ func (s *Store) InterruptRun(ctx context.Context, runID workflow.RunID, reason s
 		detailJSON = "{}"
 	}
 	now := s.now().UnixMilli()
-	updated, err := s.queries.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{ID: string(runID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: now, InterruptionReason: strings.TrimSpace(reason), InterruptionDetailJson: detailJSON})
+	updated, err := s.queries.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{ID: string(runID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, InterruptionReason: nullableString(reason), InterruptionDetailJson: detailJSON})
 	if err != nil {
 		return err
 	}
@@ -101,8 +101,8 @@ func (s *Store) InterruptRunGeneration(ctx context.Context, runID workflow.RunID
 	now := s.now().UnixMilli()
 	updated, err := s.queries.InterruptRunGeneration(ctx, sqlitegen.InterruptRunGenerationParams{
 		UpdatedAtUnixMs:        now,
-		InterruptedAtUnixMs:    now,
-		InterruptionReason:     strings.TrimSpace(reason),
+		InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+		InterruptionReason:     nullableString(reason),
 		InterruptionDetailJson: detailJSON,
 		RunID:                  string(runID),
 		RunGeneration:          generation,
@@ -144,7 +144,7 @@ func (s *Store) InterruptTaskRuns(ctx context.Context, taskID workflow.TaskID, s
 	q := s.queries.WithTx(tx)
 	interrupted := make([]RunRecord, 0, len(candidates))
 	for _, candidate := range candidates {
-		updated, err := q.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{ID: string(candidate.ID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: now, InterruptionReason: interruptReason, InterruptionDetailJson: "{}"})
+		updated, err := q.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{ID: string(candidate.ID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, InterruptionReason: sql.NullString{String: interruptReason, Valid: true}, InterruptionDetailJson: "{}"})
 		if err != nil {
 			return nil, err
 		}
@@ -181,7 +181,7 @@ func (s *Store) ReconcileStartedRuns(ctx context.Context, reason string) ([]RunR
 	}
 	interrupted := make([]RunRecord, 0, len(candidates))
 	for _, candidate := range candidates {
-		updated, err := q.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{ID: string(candidate.ID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: now, InterruptionReason: strings.TrimSpace(reason), InterruptionDetailJson: "{}"})
+		updated, err := q.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{ID: string(candidate.ID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, InterruptionReason: sql.NullString{String: strings.TrimSpace(reason), Valid: true}, InterruptionDetailJson: "{}"})
 		if err != nil {
 			return nil, err
 		}
@@ -220,7 +220,7 @@ func (s *Store) ResumeTaskRuns(ctx context.Context, taskID workflow.TaskID) ([]R
 	if err != nil {
 		return nil, err
 	}
-	if task.CanceledAtUnixMs != 0 {
+	if task.CanceledAtUnixMs.Valid {
 		return nil, ErrTaskCanceled
 	}
 	candidates, err := s.queries.ListResumeTaskRunCandidates(ctx, string(taskID))
@@ -618,7 +618,7 @@ func (s *Store) SetRunWaitingAsk(ctx context.Context, runID workflow.RunID, expe
 	now := s.now().UnixMilli()
 	updated, err := s.queries.SetRunWaitingAsk(ctx, sqlitegen.SetRunWaitingAskParams{
 		UpdatedAtUnixMs: now,
-		AskID:           trimmedAskID,
+		AskID:           sql.NullString{String: trimmedAskID, Valid: true},
 		RunID:           string(runID),
 		RunGeneration:   expectedGeneration,
 	})
@@ -645,7 +645,7 @@ func (s *Store) ClearRunWaitingAsk(ctx context.Context, runID workflow.RunID, ex
 		UpdatedAtUnixMs: now,
 		RunID:           string(runID),
 		RunGeneration:   expectedGeneration,
-		AskID:           trimmedAskID,
+		AskID:           sql.NullString{String: trimmedAskID, Valid: true},
 	})
 	if err != nil {
 		return fmt.Errorf("clear workflow run waiting ask: %w", err)
@@ -694,7 +694,7 @@ func (s *Store) ResolveTaskWaitingAsk(ctx context.Context, taskID workflow.TaskI
 	}
 	rows, err := s.queries.ResolveTaskWaitingAsk(ctx, sqlitegen.ResolveTaskWaitingAskParams{
 		TaskID: trimmedTaskID,
-		AskID:  trimmedAskID,
+		AskID:  sql.NullString{String: trimmedAskID, Valid: true},
 		RunID:  trimmedRunID,
 	})
 	if err != nil {

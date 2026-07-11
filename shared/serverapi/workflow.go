@@ -2,11 +2,13 @@ package serverapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/protocol"
 	"core/shared/workflowkey"
 )
 
@@ -908,13 +910,63 @@ type WorkflowBoardRequest struct {
 	PageToken        string `json:"page_token"`
 }
 
-type WorkflowTaskRunStatus string
+type WorkflowTaskStatusKind string
 
 const (
-	WorkflowTaskRunStatusOpen     WorkflowTaskRunStatus = "open"
-	WorkflowTaskRunStatusRunning  WorkflowTaskRunStatus = "running"
-	WorkflowTaskRunStatusDone     WorkflowTaskRunStatus = "done"
-	WorkflowTaskRunStatusCanceled WorkflowTaskRunStatus = "canceled"
+	WorkflowTaskStatusKindCanceled        WorkflowTaskStatusKind = "canceled"
+	WorkflowTaskStatusKindDone            WorkflowTaskStatusKind = "done"
+	WorkflowTaskStatusKindWaitingQuestion WorkflowTaskStatusKind = "waiting_question"
+	WorkflowTaskStatusKindWaitingApproval WorkflowTaskStatusKind = "waiting_approval"
+	WorkflowTaskStatusKindInterrupted     WorkflowTaskStatusKind = "interrupted"
+	WorkflowTaskStatusKindRunning         WorkflowTaskStatusKind = "running"
+	WorkflowTaskStatusKindQueued          WorkflowTaskStatusKind = "queued"
+	WorkflowTaskStatusKindBacklog         WorkflowTaskStatusKind = "backlog"
+	WorkflowTaskStatusKindActive          WorkflowTaskStatusKind = "active"
+)
+
+type WorkflowTaskNativeState string
+
+const (
+	WorkflowTaskNativeStateCanceled        WorkflowTaskNativeState = "canceled"
+	WorkflowTaskNativeStateTerminal        WorkflowTaskNativeState = "terminal"
+	WorkflowTaskNativeStateWaitingAsk      WorkflowTaskNativeState = "waiting_ask"
+	WorkflowTaskNativeStateWaitingApproval WorkflowTaskNativeState = "waiting_approval"
+	WorkflowTaskNativeStateInterrupted     WorkflowTaskNativeState = "interrupted"
+	WorkflowTaskNativeStateRunning         WorkflowTaskNativeState = "running"
+	WorkflowTaskNativeStateQueued          WorkflowTaskNativeState = "queued"
+	WorkflowTaskNativeStateActive          WorkflowTaskNativeState = "active"
+)
+
+// NativeState returns the runtime-native state represented by a public task status.
+func (k WorkflowTaskStatusKind) NativeState() (WorkflowTaskNativeState, bool) {
+	switch k {
+	case WorkflowTaskStatusKindCanceled:
+		return WorkflowTaskNativeStateCanceled, true
+	case WorkflowTaskStatusKindDone:
+		return WorkflowTaskNativeStateTerminal, true
+	case WorkflowTaskStatusKindWaitingQuestion:
+		return WorkflowTaskNativeStateWaitingAsk, true
+	case WorkflowTaskStatusKindWaitingApproval:
+		return WorkflowTaskNativeStateWaitingApproval, true
+	case WorkflowTaskStatusKindInterrupted:
+		return WorkflowTaskNativeStateInterrupted, true
+	case WorkflowTaskStatusKindRunning:
+		return WorkflowTaskNativeStateRunning, true
+	case WorkflowTaskStatusKindQueued:
+		return WorkflowTaskNativeStateQueued, true
+	case WorkflowTaskStatusKindBacklog, WorkflowTaskStatusKindActive:
+		return WorkflowTaskNativeStateActive, true
+	default:
+		return "", false
+	}
+}
+
+type WorkflowTaskAttentionKind string
+
+const (
+	WorkflowTaskAttentionKindQuestion    WorkflowTaskAttentionKind = "question"
+	WorkflowTaskAttentionKindApproval    WorkflowTaskAttentionKind = "approval"
+	WorkflowTaskAttentionKindInterrupted WorkflowTaskAttentionKind = "interrupted"
 )
 
 type WorkflowTaskListSortField string
@@ -923,6 +975,7 @@ const (
 	WorkflowTaskListSortFieldCreated  WorkflowTaskListSortField = "created"
 	WorkflowTaskListSortFieldUpdated  WorkflowTaskListSortField = "updated"
 	WorkflowTaskListSortFieldStatus   WorkflowTaskListSortField = "status"
+	WorkflowTaskListSortFieldColumn   WorkflowTaskListSortField = "column"
 	WorkflowTaskListSortFieldRunCount WorkflowTaskListSortField = "run_count"
 	WorkflowTaskListSortFieldTitle    WorkflowTaskListSortField = "title"
 )
@@ -940,13 +993,14 @@ type WorkflowTaskListSort struct {
 }
 
 type WorkflowTaskListRequest struct {
-	ProjectID   string                  `json:"project_id"`
-	WorkflowID  string                  `json:"workflow_id,omitempty"`
-	StatusKeys  []string                `json:"status_keys,omitempty"`
-	RunStatuses []WorkflowTaskRunStatus `json:"run_statuses,omitempty"`
-	Sort        []WorkflowTaskListSort  `json:"sort,omitempty"`
-	PageSize    int                     `json:"page_size"`
-	PageToken   string                  `json:"page_token,omitempty"`
+	ProjectID      *string                     `json:"project_id,omitempty"`
+	WorkflowID     *string                     `json:"workflow_id,omitempty"`
+	ColumnKeys     []string                    `json:"column_keys,omitempty"`
+	StatusKinds    []WorkflowTaskStatusKind    `json:"status_kinds,omitempty"`
+	AttentionKinds []WorkflowTaskAttentionKind `json:"attention_kinds,omitempty"`
+	Sort           []WorkflowTaskListSort      `json:"sort,omitempty"`
+	PageSize       int                         `json:"page_size"`
+	PageToken      string                      `json:"page_token,omitempty"`
 }
 
 type WorkflowTaskListResponse struct {
@@ -959,15 +1013,89 @@ type WorkflowTaskListResponse struct {
 }
 
 type WorkflowTaskListItem struct {
-	TaskID          string                `json:"task_id"`
-	ShortID         string                `json:"short_id"`
-	WorkflowID      string                `json:"workflow_id"`
-	Title           string                `json:"title"`
-	CreatedAtUnixMs int64                 `json:"created_at_unix_ms"`
-	UpdatedAtUnixMs int64                 `json:"updated_at_unix_ms"`
-	StatusKeys      []string              `json:"status_keys"`
-	RunStatus       WorkflowTaskRunStatus `json:"run_status"`
-	RunCount        int                   `json:"run_count"`
+	TaskID          string             `json:"task_id"`
+	ShortID         string             `json:"short_id"`
+	WorkflowID      string             `json:"workflow_id"`
+	Title           string             `json:"title"`
+	CreatedAtUnixMs int64              `json:"created_at_unix_ms"`
+	UpdatedAtUnixMs int64              `json:"updated_at_unix_ms"`
+	ColumnKeys      []string           `json:"column_keys"`
+	Status          WorkflowTaskStatus `json:"status"`
+	RunCount        int                `json:"run_count"`
+}
+
+type WorkflowTaskListScopeErrorKind string
+
+const (
+	WorkflowTaskListScopeErrorKindNotLinked WorkflowTaskListScopeErrorKind = "not_linked"
+	WorkflowTaskListScopeErrorKindAmbiguous WorkflowTaskListScopeErrorKind = "ambiguous"
+)
+
+type WorkflowTaskListScopeDimension string
+
+const (
+	WorkflowTaskListScopeDimensionProject  WorkflowTaskListScopeDimension = "project"
+	WorkflowTaskListScopeDimensionWorkflow WorkflowTaskListScopeDimension = "workflow"
+)
+
+type WorkflowTaskListScopeError struct {
+	Kind         WorkflowTaskListScopeErrorKind
+	MissingScope *WorkflowTaskListScopeDimension
+	ProjectIDs   []string
+	WorkflowIDs  []string
+}
+
+func (e *WorkflowTaskListScopeError) Error() string {
+	if e == nil {
+		return "workflow task list scope error"
+	}
+	return "workflow task list scope error: " + string(e.Kind)
+}
+
+func (e *WorkflowTaskListScopeError) RPCErrorCode() int {
+	return protocol.ErrCodeWorkflowTaskListScope
+}
+
+func (e *WorkflowTaskListScopeError) RPCErrorData() json.RawMessage {
+	if e == nil {
+		return nil
+	}
+	return marshalRPCErrorData(struct {
+		Type         string                          `json:"type"`
+		Kind         WorkflowTaskListScopeErrorKind  `json:"kind"`
+		MissingScope *WorkflowTaskListScopeDimension `json:"missing_scope,omitempty"`
+		ProjectIDs   []string                        `json:"project_ids,omitempty"`
+		WorkflowIDs  []string                        `json:"workflow_ids,omitempty"`
+	}{
+		Type:         "workflow_task_list_scope_error",
+		Kind:         e.Kind,
+		MissingScope: e.MissingScope,
+		ProjectIDs:   e.ProjectIDs,
+		WorkflowIDs:  e.WorkflowIDs,
+	})
+}
+
+func DecodeWorkflowTaskListScopeError(data json.RawMessage, message string) error {
+	var envelope struct {
+		Type         string                          `json:"type"`
+		Kind         WorkflowTaskListScopeErrorKind  `json:"kind"`
+		MissingScope *WorkflowTaskListScopeDimension `json:"missing_scope,omitempty"`
+		ProjectIDs   []string                        `json:"project_ids,omitempty"`
+		WorkflowIDs  []string                        `json:"workflow_ids,omitempty"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil ||
+		envelope.Type != "workflow_task_list_scope_error" ||
+		(envelope.Kind != WorkflowTaskListScopeErrorKindNotLinked && envelope.Kind != WorkflowTaskListScopeErrorKindAmbiguous) ||
+		(envelope.MissingScope != nil && *envelope.MissingScope != WorkflowTaskListScopeDimensionProject && *envelope.MissingScope != WorkflowTaskListScopeDimensionWorkflow) ||
+		(envelope.Kind == WorkflowTaskListScopeErrorKindAmbiguous && envelope.MissingScope == nil) {
+		return errors.New(strings.TrimSpace(message))
+	}
+	return &WorkflowTaskListScopeError{
+		Kind:         envelope.Kind,
+		MissingScope: envelope.MissingScope,
+		ProjectIDs:   envelope.ProjectIDs,
+		WorkflowIDs:  envelope.WorkflowIDs,
+	}
 }
 
 type WorkflowBoardResponse struct {
@@ -1063,12 +1191,11 @@ type WorkflowBoardTaskCard struct {
 }
 
 type WorkflowTaskStatus struct {
-	Kind           string   `json:"kind"`
-	Label          string   `json:"label"`
-	NativeState    string   `json:"native_state"`
-	NodeIDs        []string `json:"node_ids,omitempty"`
-	RunIDs         []string `json:"run_ids,omitempty"`
-	AttentionTypes []string `json:"attention_types,omitempty"`
+	Kind           WorkflowTaskStatusKind      `json:"kind"`
+	NativeState    WorkflowTaskNativeState     `json:"native_state"`
+	NodeIDs        []string                    `json:"node_ids,omitempty"`
+	RunIDs         []string                    `json:"run_ids,omitempty"`
+	AttentionTypes []WorkflowTaskAttentionKind `json:"attention_types,omitempty"`
 }
 
 type WorkflowTaskActions struct {
@@ -1136,8 +1263,8 @@ type WorkflowTaskSummary struct {
 	Title             string   `json:"title"`
 	BodyPreview       string   `json:"body_preview,omitempty"`
 	SourceWorkspaceID string   `json:"source_workspace_id,omitempty"`
-	CanceledAt        int64    `json:"canceled_at_unix_ms"`
-	CancelReason      string   `json:"cancel_reason,omitempty"`
+	CanceledAt        *int64   `json:"canceled_at_unix_ms,omitempty"`
+	CancelReason      *string  `json:"cancel_reason,omitempty"`
 	CreatedAtUnixMs   int64    `json:"created_at_unix_ms"`
 	UpdatedAtUnixMs   int64    `json:"updated_at_unix_ms"`
 	Done              bool     `json:"done"`
@@ -1174,23 +1301,23 @@ type WorkflowPlacement struct {
 }
 
 type WorkflowRun struct {
-	ID                  string `json:"id"`
-	TaskID              string `json:"task_id"`
-	PlacementID         string `json:"placement_id"`
-	NodeID              string `json:"node_id"`
-	NodeKind            string `json:"node_kind,omitempty"`
-	ScriptPath          string `json:"script_path,omitempty"`
-	SessionID           string `json:"session_id,omitempty"`
-	SessionName         string `json:"session_name,omitempty"`
-	Role                string `json:"role,omitempty"`
-	Status              string `json:"status"`
-	Generation          int64  `json:"generation"`
-	StartedAtUnixMs     int64  `json:"started_at_unix_ms"`
-	CompletedAtUnixMs   int64  `json:"completed_at_unix_ms"`
-	InterruptedAtUnixMs int64  `json:"interrupted_at_unix_ms"`
-	InterruptionReason  string `json:"interruption_reason,omitempty"`
-	InterruptionDetail  string `json:"interruption_detail_json,omitempty"`
-	WaitingAskID        string `json:"waiting_ask_id,omitempty"`
+	ID                  string  `json:"id"`
+	TaskID              string  `json:"task_id"`
+	PlacementID         string  `json:"placement_id"`
+	NodeID              string  `json:"node_id"`
+	NodeKind            string  `json:"node_kind,omitempty"`
+	ScriptPath          string  `json:"script_path,omitempty"`
+	SessionID           string  `json:"session_id,omitempty"`
+	SessionName         string  `json:"session_name,omitempty"`
+	Role                string  `json:"role,omitempty"`
+	Status              string  `json:"status"`
+	Generation          int64   `json:"generation"`
+	StartedAtUnixMs     *int64  `json:"started_at_unix_ms"`
+	CompletedAtUnixMs   *int64  `json:"completed_at_unix_ms"`
+	InterruptedAtUnixMs *int64  `json:"interrupted_at_unix_ms"`
+	InterruptionReason  *string `json:"interruption_reason"`
+	InterruptionDetail  string  `json:"interruption_detail_json,omitempty"`
+	WaitingAskID        *string `json:"waiting_ask_id,omitempty"`
 }
 
 type WorkflowTaskTransition struct {
@@ -1210,7 +1337,7 @@ type WorkflowTaskTransition struct {
 	Commentary            string                   `json:"commentary,omitempty"`
 	OutputValues          map[string]string        `json:"output_values,omitempty"`
 	CreatedAt             int64                    `json:"created_at_unix_ms"`
-	AppliedAtUnixMs       int64                    `json:"applied_at_unix_ms"`
+	AppliedAtUnixMs       *int64                   `json:"applied_at_unix_ms,omitempty"`
 	Edges                 []WorkflowTransitionEdge `json:"edges,omitempty"`
 }
 
@@ -1923,8 +2050,25 @@ func (r WorkflowBoardRequest) Validate() error {
 }
 
 func (r WorkflowTaskListRequest) Validate() error {
-	if err := validateRequired("project_id", r.ProjectID); err != nil {
-		return err
+	if r.ProjectID == nil && r.WorkflowID == nil && strings.TrimSpace(r.PageToken) == "" {
+		return workflowRequestError(WorkflowRequestErrorRequired, "scope", "project_id, workflow_id, or page_token is required")
+	}
+	for _, scope := range []struct {
+		field string
+		value *string
+	}{
+		{field: "project_id", value: r.ProjectID},
+		{field: "workflow_id", value: r.WorkflowID},
+	} {
+		if scope.value == nil {
+			continue
+		}
+		if strings.TrimSpace(*scope.value) == "" {
+			return workflowRequestError(WorkflowRequestErrorRequired, scope.field, scope.field+" must not be blank")
+		}
+		if strings.TrimSpace(*scope.value) != *scope.value {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, scope.field, scope.field+" must not have leading or trailing whitespace")
+		}
 	}
 	if r.PageSize < 0 {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", "page_size must be non-negative")
@@ -1938,24 +2082,29 @@ func (r WorkflowTaskListRequest) Validate() error {
 	if len(r.Sort) > WorkflowTaskListMaxSortSelectors {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "sort", fmt.Sprintf("sort must include at most %d fields", WorkflowTaskListMaxSortSelectors))
 	}
-	for index, statusKey := range r.StatusKeys {
-		if !workflowkey.Valid(statusKey) {
-			return workflowRequestError(WorkflowRequestErrorInvalidKey, fmt.Sprintf("status_keys[%d]", index), fmt.Sprintf("status_keys[%d] must %s", index, workflowkey.Description))
+	for index, columnKey := range r.ColumnKeys {
+		if !workflowkey.Valid(columnKey) {
+			return workflowRequestError(WorkflowRequestErrorInvalidKey, fmt.Sprintf("column_keys[%d]", index), fmt.Sprintf("column_keys[%d] must %s", index, workflowkey.Description))
 		}
 	}
-	for index, status := range r.RunStatuses {
-		switch status {
-		case WorkflowTaskRunStatusOpen, WorkflowTaskRunStatusRunning, WorkflowTaskRunStatusDone, WorkflowTaskRunStatusCanceled:
+	for index, status := range r.StatusKinds {
+		if _, valid := status.NativeState(); !valid {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("status_kinds[%d]", index), "status kind is invalid")
+		}
+	}
+	for index, attention := range r.AttentionKinds {
+		switch attention {
+		case WorkflowTaskAttentionKindQuestion, WorkflowTaskAttentionKindApproval, WorkflowTaskAttentionKindInterrupted:
 		default:
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("run_statuses[%d]", index), "run_status must be open, running, done, or canceled")
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("attention_kinds[%d]", index), "attention kind is invalid")
 		}
 	}
 	seenSortFields := map[WorkflowTaskListSortField]bool{}
 	for index, sortSelector := range r.Sort {
 		switch sortSelector.Field {
-		case WorkflowTaskListSortFieldCreated, WorkflowTaskListSortFieldUpdated, WorkflowTaskListSortFieldStatus, WorkflowTaskListSortFieldRunCount, WorkflowTaskListSortFieldTitle:
+		case WorkflowTaskListSortFieldCreated, WorkflowTaskListSortFieldUpdated, WorkflowTaskListSortFieldStatus, WorkflowTaskListSortFieldColumn, WorkflowTaskListSortFieldRunCount, WorkflowTaskListSortFieldTitle:
 		default:
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("sort[%d].field", index), "sort field must be created, updated, status, run_count, or title")
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("sort[%d].field", index), "sort field must be created, updated, status, column, run_count, or title")
 		}
 		if seenSortFields[sortSelector.Field] {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("sort[%d].field", index), "sort field must not be duplicated")

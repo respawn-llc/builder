@@ -189,7 +189,7 @@ export function PropertiesIsland({
       <PropertyLine label={t("task.project")} value={detail.projectName} />
       <PropertyLine
         label={t("task.status")}
-        value={<TaskStatusText label={detail.status.label} tone={taskStatusTone(detail.status)} />}
+        value={<TaskStatusText label={t(`task.statusKinds.${detail.status.kind}`)} tone={taskStatusTone(detail.status)} />}
       />
       <PropertyLine label={t("task.workspace")} value={detail.sourceWorkspace.name} />
       <PropertyLine label={t("task.workflow")} value={detail.workflowName} />
@@ -211,7 +211,7 @@ function TaskActionPanel({
 }>) {
   const { t } = useTranslation();
   const activeRuns = useMemo(
-    () => detail.runs.filter((run) => run.completedAt === 0 && run.interruptedAt === 0),
+    () => detail.runs.filter((run) => run.completedAt === null && run.interruptedAt === null),
     [detail.runs],
   );
   const interruptableRuns = useMemo(
@@ -440,7 +440,7 @@ function sessionCommand(runs: readonly TaskRun[]): string {
 function preferredSessionRun(runs: readonly TaskRun[]): TaskRun | null {
   const sessionRuns = runs.filter((run) => run.sessionID.trim().length > 0);
   return (
-    [...sessionRuns].reverse().find((run) => run.completedAt === 0 && run.interruptedAt === 0) ??
+    [...sessionRuns].reverse().find((run) => run.completedAt === null && run.interruptedAt === null) ??
     sessionRuns.at(-1) ??
     null
   );
@@ -449,7 +449,7 @@ function preferredSessionRun(runs: readonly TaskRun[]): TaskRun | null {
 function preferredScriptRun(runs: readonly TaskRun[]): TaskRun | null {
   const scriptRuns = runs.filter((run) => run.nodeKind === "script" && run.scriptPath.trim().length > 0);
   return (
-    [...scriptRuns].reverse().find((run) => run.completedAt === 0 && run.interruptedAt === 0) ??
+    [...scriptRuns].reverse().find((run) => run.completedAt === null && run.interruptedAt === null) ??
     scriptRuns.at(-1) ??
     null
   );

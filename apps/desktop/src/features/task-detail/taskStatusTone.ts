@@ -8,7 +8,7 @@ export function taskStatusTone(status: TaskStatus): BadgeTone {
   if (status.kind === "done") {
     return "success";
   }
-  if (status.kind === "running" || status.nativeState === "running") {
+  if (status.kind === "running" || status.kind === "queued" || status.nativeState === "running") {
     return "info";
   }
   if (isInterruptedOrFailed(status)) {
@@ -22,10 +22,7 @@ export function taskStatusTone(status: TaskStatus): BadgeTone {
 
 function isInterruptedOrFailed(status: TaskStatus): boolean {
   return (
-    status.kind === "interrupted" ||
-    status.nativeState === "interrupted" ||
-    status.kind === "failed" ||
-    status.nativeState === "failed"
+    status.kind === "interrupted" || status.nativeState === "interrupted" || status.nativeState === "failed"
   );
 }
 

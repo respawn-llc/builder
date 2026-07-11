@@ -41,6 +41,7 @@ const (
 	ErrCodeUnsupportedProvider           = -32031
 	ErrCodeServerNotReady                = -32032
 	ErrCodeOnboardingFinalizeFailed      = -32033
+	ErrCodeWorkflowTaskListScope         = -32034
 )
 
 type Request struct {

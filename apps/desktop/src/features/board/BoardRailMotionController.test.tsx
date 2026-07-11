@@ -104,7 +104,7 @@ function card(over: Partial<BoardCard>): BoardCard {
     workflowID: "wf1",
     activeNodeIDs: ["backlog"],
     sourceWorkspace: { id: "w", name: "Main", rootPath: "", availability: "available", isPrimary: true, updatedAt: 0 },
-    status: { kind: "backlog", label: "", nativeState: "", nodeIDs: [], runIDs: [], attentionTypes: [] },
+    status: { kind: "backlog", nativeState: "", nodeIDs: [], runIDs: [], attentionTypes: [] },
     actions: {
       canStart: true,
       canInterrupt: false,

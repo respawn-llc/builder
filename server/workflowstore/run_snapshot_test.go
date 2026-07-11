@@ -50,24 +50,24 @@ func TestCompleteRunUsesRunStartSnapshotAfterGraphChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements: %v", err)
 	}
-	terminalCompleted := false
+	terminalActive := false
 	sourceCompleted := false
 	for _, placement := range placements {
 		if placement.ID == started.PlacementID && placement.State == "completed" {
 			sourceCompleted = true
 		}
-		if placement.ID == completed.PlacementIDs[0] && placement.State == "completed" {
-			terminalCompleted = true
+		if placement.ID == completed.PlacementIDs[0] && placement.State == "active" {
+			terminalActive = true
 		}
 	}
-	if !sourceCompleted || !terminalCompleted {
-		t.Fatalf("placements after completion = %+v, want completed source and completed terminal", placements)
+	if !sourceCompleted || !terminalActive {
+		t.Fatalf("placements after completion = %+v, want completed source and active terminal sink", placements)
 	}
 	runs, err := store.ListRuns(ctx, task.ID)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].CompletedAt == 0 {
+	if len(runs) != 1 || runs[0].CompletedAt == nil {
 		t.Fatalf("runs after completion = %+v", runs)
 	}
 }
@@ -304,7 +304,7 @@ func TestCompleteRunCreatesTargetRunForContinueSessionContextMode(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 2 || runs[0].CompletedAt == 0 || runs[1].CompletedAt != 0 || runs[1].InterruptedAt != 0 {
+	if len(runs) != 2 || runs[0].CompletedAt == nil || runs[1].CompletedAt != nil || runs[1].InterruptedAt != nil {
 		t.Fatalf("runs after continuation completion = %+v, want completed source and active target", runs)
 	}
 	edges, err := store.ListTransitionEdges(ctx, completed.TransitionID)

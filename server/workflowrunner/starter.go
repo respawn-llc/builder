@@ -594,7 +594,7 @@ func workflowSessionName(input workflowstore.RunStartContext) (string, error) {
 
 func (s *Starter) resolveAndPersistWorkflowCompletionMode(ctx context.Context, req SchedulerStartRunRequest, input workflowstore.RunStartContext, plan launch.SessionPlan, client llm.Client) (workflowruntime.CompletionMode, llm.Client, error) {
 	shellAvailable := toolIDEnabled(plan.EnabledTools, toolspec.ToolExecCommand)
-	if stored := strings.TrimSpace(input.Run.EffectiveCompletionMode); stored != "" {
+	if stored := optionalRunCompletionMode(input.Run.EffectiveCompletionMode); stored != "" {
 		mode, err := workflowruntime.ParseCompletionMode(stored)
 		if err != nil {
 			return "", client, err

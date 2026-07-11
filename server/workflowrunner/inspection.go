@@ -39,7 +39,7 @@ func BuildPersistedWorkflowRuntimeConfig(ctx context.Context, store *workflowsto
 	if err != nil {
 		return nil, err
 	}
-	mode, err := workflowruntime.ParseCompletionMode(input.Run.EffectiveCompletionMode)
+	mode, err := workflowruntime.ParseCompletionMode(optionalRunCompletionMode(input.Run.EffectiveCompletionMode))
 	if err != nil {
 		return nil, fmt.Errorf("parse workflow completion mode: %w", err)
 	}
@@ -58,6 +58,13 @@ type PersistedWorkflowInspection struct {
 	Plan         launch.SessionPlan
 	Runtime      *workflowruntime.Config
 	WorktreeRoot string
+}
+
+func optionalRunCompletionMode(mode *string) string {
+	if mode == nil {
+		return ""
+	}
+	return *mode
 }
 
 // BuildPersistedWorkflowInspection reconstructs the same workflow session plan
@@ -83,7 +90,7 @@ func BuildPersistedWorkflowInspection(ctx context.Context, app config.App, sessi
 	if err != nil {
 		return PersistedWorkflowInspection{}, err
 	}
-	mode, err := workflowruntime.ParseCompletionMode(input.Run.EffectiveCompletionMode)
+	mode, err := workflowruntime.ParseCompletionMode(optionalRunCompletionMode(input.Run.EffectiveCompletionMode))
 	if err != nil {
 		return PersistedWorkflowInspection{}, fmt.Errorf("parse workflow completion mode: %w", err)
 	}

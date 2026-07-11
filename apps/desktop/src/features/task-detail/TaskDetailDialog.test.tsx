@@ -143,6 +143,35 @@ describe("TaskDetailSurface", () => {
     });
   });
 
+  it("renders queued task status from the typed server status", async () => {
+    window.history.pushState(null, "", "/tasks/task-1");
+    const services = createTestServices([
+      ...startupRoutes,
+      {
+        method: "workflow.task.get",
+        result: {
+          ...taskDetailNoInboxResponse,
+          task: {
+            ...taskDetailNoInboxResponse.task,
+            status: {
+              attention_types: [],
+              kind: "queued",
+              native_state: "queued",
+              node_ids: ["node-1"],
+              run_ids: ["run-1"],
+            },
+          },
+        },
+      },
+      { method: "workflow.task.comment.list", result: commentListResponse },
+      { method: "workflow.task.activity.list", result: activityResponse },
+    ]);
+
+    render(<App services={services} />);
+
+    expect(await screen.findByText("Queued")).toBeInTheDocument();
+  });
+
   it("opens script files through native file capabilities without exposing CLI sessions", async () => {
     window.history.pushState(null, "", "/tasks/task-1");
     const opened: NativeFileTarget[] = [];
