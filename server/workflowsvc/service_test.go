@@ -197,6 +197,33 @@ func TestServiceStartAskPolicyRequiresDurableSelectionWithoutMutatingTask(t *tes
 	if retry.SelectionRequired == nil || retry.SelectionRequired.Generation != requirement.Generation {
 		t.Fatalf("retry = %+v, want same durable selection requirement", retry)
 	}
+
+	started, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:              task.Task.ID,
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SelectionGeneration: &requirement.Generation,
+		Selection:           &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionNone},
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask selection: %v", err)
+	}
+	if started.Started == nil || started.Started.RunID == "" {
+		t.Fatalf("selected start result = %+v, want started", started)
+	}
+	target, err = service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget after selected start: %v", err)
+	}
+	if target == nil || target.Policy != workflow.ExecutionPolicyNone || target.State != workflow.ExecutionTargetStateLocked {
+		t.Fatalf("target after selected start = %+v, want locked none target", target)
+	}
+	negotiation, err = service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation after selected start: %v", err)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation after selected start = %+v, want cleared", negotiation)
+	}
 }
 
 func TestServiceStartAskPolicySupersedesSelectionWhenGitFactsChange(t *testing.T) {

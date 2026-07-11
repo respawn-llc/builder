@@ -413,9 +413,6 @@ func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTas
 		}
 	}
 	now := s.now().UnixMilli()
-	transitionID := prefixedID("transition")
-	targetPlacementID := prefixedID("placement")
-	runID := prefixedID("run")
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return StartTaskResult{}, err
@@ -425,6 +422,71 @@ func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTas
 	if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, q, taskID); err != nil {
 		return StartTaskResult{}, err
 	}
+	result, err := s.applyPreparedTaskStart(ctx, q, taskID, prepared, now)
+	if err != nil {
+		return StartTaskResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return StartTaskResult{}, err
+	}
+	return result, nil
+}
+
+// StartTaskWithExecutionTarget commits a validated first execution target and
+// the initiating start action in one transaction. It currently materializes
+// source-root targets; managed targets need the separate Git provisioning
+// saga before they can safely reach this action boundary.
+func (s *Store) StartTaskWithExecutionTarget(ctx context.Context, target workflow.ExecutionTarget) (StartTaskResult, error) {
+	if err := target.Validate(); err != nil {
+		return StartTaskResult{}, err
+	}
+	if target.Policy != workflow.ExecutionPolicyNone {
+		return StartTaskResult{}, errors.New("managed execution targets require provisioning before task start")
+	}
+	prepared, err := s.prepareTaskStart(ctx, target.TaskID)
+	if err != nil {
+		return StartTaskResult{}, err
+	}
+	workspaceID := strings.TrimSpace(prepared.task.SourceWorkspaceID.String)
+	if workspaceID == "" {
+		return StartTaskResult{}, errors.New("task source workspace is required for none execution target")
+	}
+	workspace, err := s.metadata.GetWorkspaceByID(ctx, workspaceID)
+	if err != nil {
+		return StartTaskResult{}, err
+	}
+	if prepared.target.Kind() == workflow.NodeKindScript {
+		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.target), workspace.CanonicalRootPath); err != nil {
+			return StartTaskResult{}, err
+		}
+	}
+	now := s.now().UnixMilli()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return StartTaskResult{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
+		return StartTaskResult{}, err
+	}
+	if err := insertValidatedTaskExecutionTarget(ctx, q, target); err != nil {
+		return StartTaskResult{}, err
+	}
+	result, err := s.applyPreparedTaskStart(ctx, q, target.TaskID, prepared, now)
+	if err != nil {
+		return StartTaskResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return StartTaskResult{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) applyPreparedTaskStart(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID, prepared preparedTaskStart, now int64) (StartTaskResult, error) {
+	transitionID := prefixedID("transition")
+	targetPlacementID := prefixedID("placement")
+	runID := prefixedID("run")
 	updatedStart, err := q.StartTaskCompleteStartPlacement(ctx, sqlitegen.StartTaskCompleteStartPlacementParams{
 		State:           "completed",
 		UpdatedAtUnixMs: now,
@@ -468,9 +530,6 @@ func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTas
 		return StartTaskResult{}, err
 	}
 	if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: runID, PlacementID: targetPlacementID, WorkflowRevisionSeen: prepared.workflow.Version, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptionDetailJson: "{}", RunStartSnapshotJson: runSnapshotJSON, MetadataJson: runMetadataJSON}); err != nil {
-		return StartTaskResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
 		return StartTaskResult{}, err
 	}
 	return StartTaskResult{TransitionID: transitionID, PlacementID: workflow.PlacementID(targetPlacementID), RunID: workflow.RunID(runID)}, nil

@@ -633,6 +633,14 @@ func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 		return serverapi.WorkflowTaskInitiatingActionResult{}, err
 	}
 	if negotiation != nil {
+		if negotiation.Started != nil {
+			if s.schedulerWake != nil {
+				s.schedulerWake.Notify()
+			}
+			if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
+				s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "started", req.TaskID, negotiation.Started.RunID)
+			}
+		}
 		return *negotiation, nil
 	}
 	started, err := s.startTaskAutomation(ctx, TaskAutomationStartRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
@@ -652,6 +660,39 @@ func (s *Service) negotiateTaskStartExecutionTarget(ctx context.Context, req ser
 	prepared, err := s.store.PrepareTaskStartExecutionTargetNegotiation(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return nil, err
+	}
+	if req.Selection != nil && req.Selection.Mode == serverapi.WorkflowTaskExecutionTargetSelectionNone && prepared.ExistingTarget == nil {
+		source, err := s.executionTargetNegotiationSource(ctx, prepared.SourceWorkspace.Root)
+		if err != nil {
+			return nil, err
+		}
+		if prepared.ExecutionPolicy.Mode == workflow.ExecutionPolicyAsk {
+			if prepared.ExistingNegotiation == nil ||
+				req.SelectionGeneration == nil ||
+				*req.SelectionGeneration != prepared.ExistingNegotiation.Generation ||
+				!executionTargetNegotiationActionMatches(prepared.ExistingNegotiation.Action, prepared.Action) ||
+				!executionTargetNegotiationSourceMatches(prepared.ExistingNegotiation.Source, source) {
+				return s.negotiateTaskExecutionTarget(ctx, prepared, nil)
+			}
+		}
+		started, err := s.store.StartTaskWithExecutionTarget(ctx, workflow.ExecutionTarget{
+			TaskID:              prepared.TaskID,
+			Policy:              workflow.ExecutionPolicyNone,
+			State:               workflow.ExecutionTargetStateLocked,
+			SetupState:          workflow.ExecutionTargetSetupNotApplicable,
+			RecoveryDisposition: workflow.ExecutionTargetRecoveryAvailable,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &serverapi.WorkflowTaskInitiatingActionResult{
+			Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeStarted,
+			Started: &serverapi.WorkflowTaskStartResponse{
+				TransitionID: started.TransitionID,
+				PlacementID:  string(started.PlacementID),
+				RunID:        string(started.RunID),
+			},
+		}, nil
 	}
 	return s.negotiateTaskExecutionTarget(ctx, prepared, req.Selection)
 }
