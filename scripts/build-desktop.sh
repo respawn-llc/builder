@@ -63,9 +63,13 @@ compile_app_icon() {
 	local out_car="apps/desktop/src-tauri/icons/Assets.car"
 	[ -d "$icon_dir" ] || return 0
 
-	if ! command -v actool >/dev/null 2>&1; then
-		echo "actool not found; the macOS glass app icon needs Xcode 26 or newer (with Icon Composer)." >&2
-		return 1
+	local developer_dir=""
+	if ! command -v actool >/dev/null 2>&1 ||
+		! developer_dir="$(xcode-select --print-path 2>/dev/null)" ||
+		[ ! -d "$(dirname "$developer_dir")/Applications/Icon Composer.app" ]; then
+		rm -f "$out_car"
+		echo "Icon Composer unavailable; skipping liquid-glass app icon. Tauri will fall back to PNG -> icns." >&2
+		return 0
 	fi
 
 	local tmp attempt out
@@ -88,7 +92,7 @@ compile_app_icon() {
 			--enable-on-demand-resources NO \
 			--development-region en \
 			--target-device mac \
-			--minimum-deployment-target 26.0 \
+			--minimum-deployment-target 15.0 \
 			--platform macosx >/dev/null 2>&1 && [ -f "$out/Assets.car" ]; then
 			cp "$out/Assets.car" "$out_car"
 			echo "Compiled liquid-glass app icon -> ${out_car}" >&2
