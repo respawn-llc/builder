@@ -346,15 +346,11 @@ func (s artifactStore) pruneInactiveCompletedRuns(current uuid.UUID, deadline ti
 		if err != nil {
 			return fmt.Errorf("acquire artifact lease for prune %s: %w", entry.Name(), err)
 		}
-		if err := removeTreeUntil(runPath, deadline); err != nil {
-			releaseErr := lease.release()
-			if releaseErr != nil {
-				return fmt.Errorf("prune inactive artifact run %s: %w; release artifact lease: %v", entry.Name(), err, releaseErr)
-			}
-			return fmt.Errorf("prune inactive artifact run %s: %w", entry.Name(), err)
-		}
 		if err := lease.release(); err != nil {
 			return fmt.Errorf("release artifact lease for prune %s: %w", entry.Name(), err)
+		}
+		if err := removeTreeUntil(runPath, deadline); err != nil {
+			return fmt.Errorf("prune inactive artifact run %s: %w", entry.Name(), err)
 		}
 	}
 	return nil

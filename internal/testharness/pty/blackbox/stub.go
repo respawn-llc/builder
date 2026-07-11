@@ -371,8 +371,15 @@ func (s *ResponsesStub) writeResponse(ctx context.Context, writer http.ResponseW
 		if !s.writeSSE(writer, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[]}}\n\n") {
 			return
 		}
-		if operation.Output != nil && !s.writeSSE(writer, fmt.Sprintf("data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":%q}\n\n", *operation.Output)) {
-			return
+		if operation.Output != nil {
+			delta, err := json.Marshal(*operation.Output)
+			if err != nil {
+				s.recordFailure(fmt.Errorf("encode response delta: %w", err))
+				return
+			}
+			if !s.writeSSE(writer, fmt.Sprintf("data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"delta\":%s}\n\n", delta)) {
+				return
+			}
 		}
 		if !s.writeSSE(writer, fmt.Sprintf("data: {\"type\":\"response.completed\",\"response\":{\"output\":%s}}\n\n", responseOutputJSON(operation.Output))) {
 			return

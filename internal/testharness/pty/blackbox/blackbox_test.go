@@ -773,7 +773,7 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	t.Parallel()
 
 	probe := uuid.New().String()
-	output := "ok"
+	output := "\x1b\x00\n"
 	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
 		ID: uuid.New(), Route: blackbox.RouteResponses, Probe: &probe, Outcome: blackbox.OutcomeStream, Output: &output,
 	}})
