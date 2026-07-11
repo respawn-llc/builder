@@ -24,8 +24,8 @@ import (
 )
 
 const fixedWait = 500 * time.Millisecond
-const readinessWait = 2 * time.Second
 const cleanupWait = 10 * time.Second
+const readinessWait = cleanupWait
 const preflightWait = cleanupWait
 
 var directHTTPClient = &http.Client{
