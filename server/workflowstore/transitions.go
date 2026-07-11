@@ -186,9 +186,21 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 		if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, s.queries, workflow.TaskID(task.ID)); err != nil {
 			return CompleteRunResult{}, err
 		}
-		worktreeRoot, err = taskManagedWorktreeRoot(ctx, s.queries, task)
-		if err != nil {
-			return CompleteRunResult{}, err
+		existingTarget, targetErr := s.GetTaskExecutionTarget(ctx, workflow.TaskID(task.ID))
+		if targetErr != nil {
+			return CompleteRunResult{}, targetErr
+		}
+		if existingTarget != nil {
+			executionRoot, rootErr := s.ResolveTaskExecutionRoot(ctx, workflow.TaskID(task.ID))
+			if rootErr != nil {
+				return CompleteRunResult{}, rootErr
+			}
+			worktreeRoot = executionRoot.EffectiveRoot
+		} else {
+			worktreeRoot, err = taskManagedWorktreeRoot(ctx, s.queries, task)
+			if err != nil {
+				return CompleteRunResult{}, err
+			}
 		}
 	} else {
 		if target.TaskID != workflow.TaskID(task.ID) {

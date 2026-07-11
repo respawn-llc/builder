@@ -403,9 +403,22 @@ func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTas
 	if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, s.queries, taskID); err != nil {
 		return StartTaskResult{}, err
 	}
-	worktreeRoot, err := taskManagedWorktreeRoot(ctx, s.queries, prepared.task)
+	target, err := s.GetTaskExecutionTarget(ctx, taskID)
 	if err != nil {
 		return StartTaskResult{}, err
+	}
+	worktreeRoot := ""
+	if target != nil {
+		executionRoot, rootErr := s.ResolveTaskExecutionRoot(ctx, taskID)
+		if rootErr != nil {
+			return StartTaskResult{}, rootErr
+		}
+		worktreeRoot = executionRoot.EffectiveRoot
+	} else {
+		worktreeRoot, err = taskManagedWorktreeRoot(ctx, s.queries, prepared.task)
+		if err != nil {
+			return StartTaskResult{}, err
+		}
 	}
 	if prepared.target.Kind() == workflow.NodeKindScript {
 		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.target), worktreeRoot); err != nil {
