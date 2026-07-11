@@ -1156,6 +1156,34 @@ func (q *Queries) DeleteWorktreeByID(ctx context.Context, id string) (int64, err
 	return result.RowsAffected()
 }
 
+const getActiveProjectLifecycle = `-- name: GetActiveProjectLifecycle :one
+SELECT
+    lifecycle_state,
+    lifecycle_generation
+FROM projects
+WHERE id = ?1
+  AND lifecycle_state = 'active'
+  AND lifecycle_generation = ?2
+LIMIT 1
+`
+
+type GetActiveProjectLifecycleParams struct {
+	ProjectID          string
+	ExpectedGeneration int64
+}
+
+type GetActiveProjectLifecycleRow struct {
+	LifecycleState      string
+	LifecycleGeneration int64
+}
+
+func (q *Queries) GetActiveProjectLifecycle(ctx context.Context, arg GetActiveProjectLifecycleParams) (GetActiveProjectLifecycleRow, error) {
+	row := q.db.QueryRowContext(ctx, getActiveProjectLifecycle, arg.ProjectID, arg.ExpectedGeneration)
+	var i GetActiveProjectLifecycleRow
+	err := row.Scan(&i.LifecycleState, &i.LifecycleGeneration)
+	return i, err
+}
+
 const getActiveProjectWorkflowLinkByWorkflow = `-- name: GetActiveProjectWorkflowLinkByWorkflow :one
 SELECT
     id,
@@ -1600,6 +1628,27 @@ func (q *Queries) GetProjectKeyState(ctx context.Context, projectID string) (Get
 		&i.NextTaskSeq,
 		&i.TaskCount,
 	)
+	return i, err
+}
+
+const getProjectLifecycle = `-- name: GetProjectLifecycle :one
+SELECT
+    lifecycle_state,
+    lifecycle_generation
+FROM projects
+WHERE id = ?1
+LIMIT 1
+`
+
+type GetProjectLifecycleRow struct {
+	LifecycleState      string
+	LifecycleGeneration int64
+}
+
+func (q *Queries) GetProjectLifecycle(ctx context.Context, projectID string) (GetProjectLifecycleRow, error) {
+	row := q.db.QueryRowContext(ctx, getProjectLifecycle, projectID)
+	var i GetProjectLifecycleRow
+	err := row.Scan(&i.LifecycleState, &i.LifecycleGeneration)
 	return i, err
 }
 
@@ -9351,6 +9400,36 @@ func (q *Queries) TouchTaskUpdatedAt(ctx context.Context, arg TouchTaskUpdatedAt
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const transitionProjectLifecycleToDeleting = `-- name: TransitionProjectLifecycleToDeleting :one
+UPDATE projects
+SET
+    lifecycle_state = 'deleting',
+    lifecycle_generation = lifecycle_generation + 1,
+    updated_at_unix_ms = ?1
+WHERE id = ?2
+  AND lifecycle_state = 'active'
+  AND lifecycle_generation = ?3
+RETURNING lifecycle_state, lifecycle_generation
+`
+
+type TransitionProjectLifecycleToDeletingParams struct {
+	UpdatedAtUnixMs    int64
+	ProjectID          string
+	ExpectedGeneration int64
+}
+
+type TransitionProjectLifecycleToDeletingRow struct {
+	LifecycleState      string
+	LifecycleGeneration int64
+}
+
+func (q *Queries) TransitionProjectLifecycleToDeleting(ctx context.Context, arg TransitionProjectLifecycleToDeletingParams) (TransitionProjectLifecycleToDeletingRow, error) {
+	row := q.db.QueryRowContext(ctx, transitionProjectLifecycleToDeleting, arg.UpdatedAtUnixMs, arg.ProjectID, arg.ExpectedGeneration)
+	var i TransitionProjectLifecycleToDeletingRow
+	err := row.Scan(&i.LifecycleState, &i.LifecycleGeneration)
+	return i, err
 }
 
 const updateSessionExecutionTargetByID = `-- name: UpdateSessionExecutionTargetByID :execrows

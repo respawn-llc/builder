@@ -90,7 +90,7 @@ func TestIsolatedMetadataMigrationProviderRunsOnlyExplicitMigration(t *testing.T
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	candidate := goose.NewGoMigration(47, &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error {
+	candidate := goose.NewGoMigration(48, &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `CREATE TABLE explicit_migration_candidate_marker (value TEXT NOT NULL)`)
 		return err
 	}}, nil)
@@ -114,7 +114,7 @@ func TestIsolatedMetadataMigrationProviderRunsOnlyExplicitMigration(t *testing.T
 		t.Fatalf("read production provider status: %v", err)
 	}
 	for _, migration := range status {
-		if migration.Source.Version == 47 {
+		if migration.Source.Version == 48 {
 			t.Fatal("production metadata provider must not expose an unregistered explicit migration")
 		}
 	}

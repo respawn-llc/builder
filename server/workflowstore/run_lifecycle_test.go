@@ -75,8 +75,12 @@ func TestClaimRunRejectsDeletingProject(t *testing.T) {
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
-	if _, err := store.db.ExecContext(ctx, "UPDATE projects SET lifecycle_state = 'deleting' WHERE id = ?", binding.ProjectID); err != nil {
-		t.Fatalf("mark project deleting: %v", err)
+	lifecycle, err := store.metadata.GetProjectLifecycle(ctx, binding.ProjectID)
+	if err != nil {
+		t.Fatalf("GetProjectLifecycle: %v", err)
+	}
+	if _, err := store.metadata.TransitionProjectLifecycleToDeleting(ctx, binding.ProjectID, lifecycle.Generation); err != nil {
+		t.Fatalf("TransitionProjectLifecycleToDeleting: %v", err)
 	}
 
 	if _, err := store.ClaimRun(ctx, started.RunID, 0); !errors.Is(err, sql.ErrNoRows) {

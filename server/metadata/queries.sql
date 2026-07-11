@@ -2924,6 +2924,35 @@ ON CONFLICT(id) DO UPDATE SET
     updated_at_unix_ms = excluded.updated_at_unix_ms,
     metadata_json = excluded.metadata_json;
 
+-- name: GetProjectLifecycle :one
+SELECT
+    lifecycle_state,
+    lifecycle_generation
+FROM projects
+WHERE id = sqlc.arg(project_id)
+LIMIT 1;
+
+-- name: GetActiveProjectLifecycle :one
+SELECT
+    lifecycle_state,
+    lifecycle_generation
+FROM projects
+WHERE id = sqlc.arg(project_id)
+  AND lifecycle_state = 'active'
+  AND lifecycle_generation = sqlc.arg(expected_generation)
+LIMIT 1;
+
+-- name: TransitionProjectLifecycleToDeleting :one
+UPDATE projects
+SET
+    lifecycle_state = 'deleting',
+    lifecycle_generation = lifecycle_generation + 1,
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE id = sqlc.arg(project_id)
+  AND lifecycle_state = 'active'
+  AND lifecycle_generation = sqlc.arg(expected_generation)
+RETURNING lifecycle_state, lifecycle_generation;
+
 -- name: UpsertWorkspace :exec
 INSERT INTO workspaces (
     id,
