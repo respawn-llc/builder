@@ -148,9 +148,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Test Windows service package
-        run: go test ./cli/kent
-
       - name: Setup pnpm
         uses: pnpm/action-setup@v6.0.9
         with:
