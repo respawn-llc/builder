@@ -955,6 +955,17 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 		return serverapi.WorkflowTaskInitiatingActionResult{}, err
 	}
 	if requiresExecutionTarget {
+		matchesNoneSelection, matchErr := s.matchesNoneExecutionTargetSelection(ctx, prepared, req.SelectionGeneration, req.Selection)
+		if matchErr != nil {
+			return serverapi.WorkflowTaskInitiatingActionResult{}, matchErr
+		}
+		if matchesNoneSelection {
+			approved, approveErr := s.store.ApproveTransitionWithExecutionTarget(ctx, noneExecutionTarget(prepared.TaskID), workflow.TransitionID(transitionID))
+			if approveErr != nil {
+				return serverapi.WorkflowTaskInitiatingActionResult{}, approveErr
+			}
+			return s.approvedWorkflowTaskResult(ctx, approved, taskID, projectID, workflowID, transitionID)
+		}
 		negotiation, negotiationErr := s.negotiateTaskExecutionTarget(ctx, prepared, req.Selection)
 		if negotiationErr != nil {
 			return serverapi.WorkflowTaskInitiatingActionResult{}, negotiationErr
@@ -967,6 +978,10 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	if err != nil {
 		return serverapi.WorkflowTaskInitiatingActionResult{}, err
 	}
+	return s.approvedWorkflowTaskResult(ctx, approved, taskID, projectID, workflowID, transitionID)
+}
+
+func (s *Service) approvedWorkflowTaskResult(ctx context.Context, approved workflowstore.CompleteRunResult, taskID string, projectID string, workflowID string, transitionID string) (serverapi.WorkflowTaskInitiatingActionResult, error) {
 	s.finalizeWorkflowAttention(ctx, approved)
 	if s.schedulerWake != nil {
 		s.schedulerWake.Notify()

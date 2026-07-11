@@ -63,7 +63,7 @@ func (s *Store) ManualMoveTaskWithExecutionTarget(ctx context.Context, target wo
 			return ManualMoveResult{}, err
 		}
 		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.targetNode), workspace.CanonicalRootPath); err != nil {
-			return ManualMoveResult{}, err
+			return ManualMoveResult{}, s.clearNoneExecutionTargetNegotiationAfterValidationFailure(ctx, target.TaskID, err)
 		}
 	}
 	now := s.now().UnixMilli()

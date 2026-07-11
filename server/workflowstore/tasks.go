@@ -457,7 +457,7 @@ func (s *Store) StartTaskWithExecutionTarget(ctx context.Context, target workflo
 	}
 	if prepared.target.Kind() == workflow.NodeKindScript {
 		if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.target), workspace.CanonicalRootPath); err != nil {
-			return StartTaskResult{}, err
+			return StartTaskResult{}, s.clearNoneExecutionTargetNegotiationAfterValidationFailure(ctx, target.TaskID, err)
 		}
 	}
 	now := s.now().UnixMilli()

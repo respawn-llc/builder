@@ -205,6 +205,13 @@ func (s *Store) ClearTaskExecutionTargetNegotiation(ctx context.Context, taskID 
 	return err
 }
 
+func (s *Store) clearNoneExecutionTargetNegotiationAfterValidationFailure(ctx context.Context, taskID workflow.TaskID, validationErr error) error {
+	if clearErr := s.ClearTaskExecutionTargetNegotiation(ctx, taskID); clearErr != nil {
+		return errors.Join(validationErr, clearErr)
+	}
+	return validationErr
+}
+
 func ensureTaskExecutionTargetNegotiationIsNotActive(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) error {
 	_, err := q.GetTaskExecutionTargetNegotiation(ctx, string(taskID))
 	if errors.Is(err, sql.ErrNoRows) {

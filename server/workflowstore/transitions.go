@@ -138,6 +138,24 @@ func (s *Store) ApprovalTransitionProjection(ctx context.Context, transitionID w
 }
 
 func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.TransitionID) (CompleteRunResult, error) {
+	return s.approveTransition(ctx, transitionID, nil)
+}
+
+// ApproveTransitionWithExecutionTarget commits a validated first execution
+// target and its pending approval in one transaction. It currently
+// materializes source-root targets; managed targets require provisioning
+// before they can safely reach this action boundary.
+func (s *Store) ApproveTransitionWithExecutionTarget(ctx context.Context, target workflow.ExecutionTarget, transitionID workflow.TransitionID) (CompleteRunResult, error) {
+	if err := target.Validate(); err != nil {
+		return CompleteRunResult{}, err
+	}
+	if target.Policy != workflow.ExecutionPolicyNone {
+		return CompleteRunResult{}, errors.New("managed execution targets require provisioning before approval")
+	}
+	return s.approveTransition(ctx, transitionID, &target)
+}
+
+func (s *Store) approveTransition(ctx context.Context, transitionID workflow.TransitionID, target *workflow.ExecutionTarget) (CompleteRunResult, error) {
 	id := strings.TrimSpace(string(transitionID))
 	if id == "" {
 		return CompleteRunResult{}, ErrTransitionIDRequired
@@ -163,12 +181,36 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
-	if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, s.queries, workflow.TaskID(task.ID)); err != nil {
-		return CompleteRunResult{}, err
-	}
-	worktreeRoot, err := taskManagedWorktreeRoot(ctx, s.queries, task)
-	if err != nil {
-		return CompleteRunResult{}, err
+	worktreeRoot := ""
+	if target == nil {
+		if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, s.queries, workflow.TaskID(task.ID)); err != nil {
+			return CompleteRunResult{}, err
+		}
+		worktreeRoot, err = taskManagedWorktreeRoot(ctx, s.queries, task)
+		if err != nil {
+			return CompleteRunResult{}, err
+		}
+	} else {
+		if target.TaskID != workflow.TaskID(task.ID) {
+			return CompleteRunResult{}, errors.New("approval execution target must belong to the transition task")
+		}
+		workspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
+		if workspaceID == "" {
+			return CompleteRunResult{}, errors.New("task source workspace is required for none execution target")
+		}
+		workspace, err := s.metadata.GetWorkspaceByID(ctx, workspaceID)
+		if err != nil {
+			return CompleteRunResult{}, err
+		}
+		worktreeRoot = workspace.CanonicalRootPath
+		for _, edge := range edges {
+			if edge.State != "pending" || workflow.NodeKind(edge.TargetNodeKind) != workflow.NodeKindScript {
+				continue
+			}
+			if err := s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeID(edge.TargetNodeID.String), worktreeRoot); err != nil {
+				return CompleteRunResult{}, s.clearNoneExecutionTargetNegotiationAfterValidationFailure(ctx, target.TaskID, err)
+			}
+		}
 	}
 	hasSourceRun := transition.SourceRunID.Valid && strings.TrimSpace(transition.SourceRunID.String) != ""
 	sourceRun := sqlitegen.TaskRunRecord{}
@@ -189,8 +231,17 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, q, workflow.TaskID(task.ID)); err != nil {
-		return CompleteRunResult{}, err
+	if target == nil {
+		if err := ensureTaskExecutionTargetNegotiationIsNotActive(ctx, q, workflow.TaskID(task.ID)); err != nil {
+			return CompleteRunResult{}, err
+		}
+	} else {
+		if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
+			return CompleteRunResult{}, err
+		}
+		if err := insertValidatedTaskExecutionTarget(ctx, q, *target); err != nil {
+			return CompleteRunResult{}, err
+		}
 	}
 	updatedCount, err := q.ApprovePendingTransition(ctx, sqlitegen.ApprovePendingTransitionParams{
 		AppliedAtUnixMs: now,

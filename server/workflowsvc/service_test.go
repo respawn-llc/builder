@@ -308,6 +308,13 @@ func TestServiceStartAskNoneSelectionWithMissingSourceScriptLeavesNoTargetOrRun(
 	if len(runs) != 0 {
 		t.Fatalf("runs = %+v, want no run after validation failure", runs)
 	}
+	negotiation, negotiationErr := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if negotiationErr != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation: %v", negotiationErr)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation = %+v, want no durable selection after validation failure", negotiation)
+	}
 }
 
 func TestServiceExecutableManualMoveAskPolicyRequiresSelectionWithoutMutatingTask(t *testing.T) {
@@ -411,6 +418,57 @@ func TestServiceExecutableManualMoveAskNoneSelectionLocksTargetAndAppliesMove(t 
 	}
 }
 
+func TestServiceExecutableManualMoveAskNoneMissingSourceScriptLeavesNoTargetOrMove(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceScriptWorkflow(t, ctx, service, "scripts/missing")
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	request := serverapi.WorkflowTaskMoveRequest{
+		TaskID:           task.Task.ID,
+		TargetNodeID:     workflowServiceNodeIDByKind(t, def.Definition, "script"),
+		AllowMissingEdge: true,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	}
+	required, err := service.MoveWorkflowTask(ctx, request)
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask requirement: %v", err)
+	}
+	if required.SelectionRequired == nil {
+		t.Fatalf("move result = %+v, want selection_required", required)
+	}
+	request.SelectionGeneration = &required.SelectionRequired.Generation
+	request.Selection = &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionNone}
+	if _, err := service.MoveWorkflowTask(ctx, request); err == nil {
+		t.Fatal("MoveWorkflowTask missing source script succeeded")
+	}
+	target, targetErr := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if targetErr != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", targetErr)
+	}
+	if target != nil {
+		t.Fatalf("target = %+v, want no target after validation failure", target)
+	}
+	negotiation, negotiationErr := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if negotiationErr != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation: %v", negotiationErr)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation = %+v, want no durable selection after validation failure", negotiation)
+	}
+	transitions, transitionsErr := service.store.ListTransitions(ctx, workflow.TaskID(task.Task.ID))
+	if transitionsErr != nil {
+		t.Fatalf("ListTransitions: %v", transitionsErr)
+	}
+	if len(transitions) != 0 {
+		t.Fatalf("transitions = %+v, want no applied move", transitions)
+	}
+}
+
 func TestServiceExecutableApprovalAskPolicyRequiresSelectionWithoutApplyingApproval(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -465,6 +523,146 @@ func TestServiceExecutableApprovalAskPolicyRequiresSelectionWithoutApplyingAppro
 	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %+v, want no approval run", runs)
+	}
+}
+
+func TestServiceExecutableApprovalAskNoneSelectionLocksTargetAndAppliesApproval(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	targetNodeID := workflowServiceNodeIDByKind(t, def.Definition, "agent")
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:           task.Task.ID,
+		TargetNodeID:     targetNodeID,
+		AllowMissingEdge: true,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask setup: %v", err)
+	}
+	if moved.Moved == nil || moved.Moved.State != "pending_approval" {
+		t.Fatalf("setup move = %+v, want pending approval", moved)
+	}
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+	request := serverapi.WorkflowTaskApproveRequest{
+		TaskTransitionID: moved.Moved.TransitionID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	}
+
+	required, err := service.ApproveWorkflowTask(ctx, request)
+	if err != nil {
+		t.Fatalf("ApproveWorkflowTask requirement: %v", err)
+	}
+	if required.SelectionRequired == nil {
+		t.Fatalf("approval result = %+v, want selection_required", required)
+	}
+	request.SelectionGeneration = &required.SelectionRequired.Generation
+	request.Selection = &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionNone}
+
+	approved, err := service.ApproveWorkflowTask(ctx, request)
+	if err != nil {
+		t.Fatalf("ApproveWorkflowTask selection: %v", err)
+	}
+	if approved.Outcome != serverapi.WorkflowTaskInitiatingActionOutcomeApproved || approved.Approved == nil || approved.Approved.State != "approved" {
+		t.Fatalf("approval result = %+v, want approved", approved)
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if target == nil || target.Policy != workflow.ExecutionPolicyNone || target.State != workflow.ExecutionTargetStateLocked {
+		t.Fatalf("target = %+v, want locked none target", target)
+	}
+	negotiation, err := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation: %v", err)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation = %+v, want cleared after target lock", negotiation)
+	}
+	transitions, err := service.store.ListTransitions(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListTransitions: %v", err)
+	}
+	if len(transitions) != 1 || transitions[0].State != "approved" || string(transitions[0].ID) != approved.Approved.TransitionID {
+		t.Fatalf("transitions = %+v, want exactly the approved transition", transitions)
+	}
+}
+
+func TestServiceExecutableApprovalAskNoneMissingSourceScriptLeavesNoTargetOrApproval(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceScriptWorkflow(t, ctx, service, "scripts/missing")
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	scriptNodeID := workflowServiceNodeIDByKind(t, def.Definition, "script")
+	moved, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
+		TaskID:           task.Task.ID,
+		TargetNodeID:     scriptNodeID,
+		AllowMissingEdge: true,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask setup: %v", err)
+	}
+	if moved.Moved == nil || moved.Moved.State != "pending_approval" {
+		t.Fatalf("setup move = %+v, want pending approval", moved)
+	}
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+	required, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
+		TaskTransitionID: moved.Moved.TransitionID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("ApproveWorkflowTask requirement: %v", err)
+	}
+	if required.SelectionRequired == nil {
+		t.Fatalf("approval result = %+v, want selection_required", required)
+	}
+	_, err = service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{
+		TaskTransitionID:    moved.Moved.TransitionID,
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SelectionGeneration: &required.SelectionRequired.Generation,
+		Selection:           &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionNone},
+	})
+	if err == nil {
+		t.Fatal("ApproveWorkflowTask missing source script succeeded")
+	}
+	target, targetErr := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if targetErr != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", targetErr)
+	}
+	if target != nil {
+		t.Fatalf("target = %+v, want no target after validation failure", target)
+	}
+	negotiation, negotiationErr := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if negotiationErr != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation: %v", negotiationErr)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation = %+v, want no durable selection after validation failure", negotiation)
+	}
+	transitions, transitionsErr := service.store.ListTransitions(ctx, workflow.TaskID(task.Task.ID))
+	if transitionsErr != nil {
+		t.Fatalf("ListTransitions: %v", transitionsErr)
+	}
+	if len(transitions) != 1 || transitions[0].State != "pending_approval" {
+		t.Fatalf("transitions = %+v, want unchanged pending approval", transitions)
+	}
+	runs, runsErr := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if runsErr != nil {
+		t.Fatalf("ListRuns: %v", runsErr)
 	}
 	if len(runs) != 0 {
 		t.Fatalf("runs = %+v, want no approval run", runs)
