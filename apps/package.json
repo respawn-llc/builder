@@ -10,6 +10,7 @@
     "desktop:dev": "pnpm --filter @app/desktop tauri:dev",
     "desktop:dev:browser": "pnpm --filter @app/desktop dev:browser",
     "desktop:build": "pnpm --filter @app/desktop tauri:build",
+    "desktop:install": "pnpm --filter @app/desktop tauri:install",
     "lint": "pnpm deps:policy && pnpm ts:policy && pnpm --recursive --if-present lint",
     "ts:policy": "node ./scripts/check-typescript-policy.mjs",
     "typecheck": "pnpm --recursive --if-present typecheck",
