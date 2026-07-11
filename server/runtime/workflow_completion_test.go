@@ -24,6 +24,7 @@ type fakeWorkflowController struct {
 	completed                           atomic.Int64
 	violations                          atomic.Int64
 	protocolBudgetResets                atomic.Int64
+	protocolBudgetResetErr              error
 	maxHits                             atomic.Int64
 	completionObservations              atomic.Int64
 	completeExternallyAfterObservations int64
@@ -52,6 +53,9 @@ func (c *fakeWorkflowController) RecordWorkflowProtocolViolation(_ context.Conte
 }
 
 func (c *fakeWorkflowController) ResetWorkflowProtocolViolationBudget(_ context.Context, _ workflowruntime.ViolationResetRequest) error {
+	if c.protocolBudgetResetErr != nil {
+		return c.protocolBudgetResetErr
+	}
 	c.violations.Store(0)
 	c.protocolBudgetResets.Add(1)
 	return nil

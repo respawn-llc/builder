@@ -870,6 +870,26 @@ func TestHistoryReplacementAppendObserverFailureUpdatesLiveActiveListForNextTurn
 	}
 }
 
+func TestWorkflowBudgetResetFailureKeepsCommittedReplacementLive(t *testing.T) {
+	store := mustCreateTestSession(t)
+	resetErr := errors.New("workflow budget reset failed")
+	controller := &fakeWorkflowController{protocolBudgetResetErr: resetErr}
+	workflowCfg := testWorkflowConfig(controller, config.WorkflowCompletionModeTool)
+	eng := mustNewWorkflowTestEngine(t, store, &fakeClient{}, workflowCfg, Config{Model: "gpt-5"})
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "before replacement"}})); err != nil {
+		t.Fatalf("append seed message: %v", err)
+	}
+
+	err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary seed"}}))
+	if !errors.Is(err, resetErr) {
+		t.Fatalf("replaceHistory error = %v, want %v", err, resetErr)
+	}
+	messages := eng.transcriptRuntimeState().SnapshotMessages()
+	if len(messages) != 1 || messages[0].MessageType != llm.MessageTypeCompactionSummary || messages[0].Content != "summary seed" {
+		t.Fatalf("live active list after committed reset error = %+v, want compacted seed", messages)
+	}
+}
+
 func TestWorkflowRequestAfterCompactionDoesNotDuplicateReinjectedWorkflowPrompt(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}

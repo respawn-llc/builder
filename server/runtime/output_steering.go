@@ -410,12 +410,6 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	if appendErr != nil && !committed {
 		return appendErr
 	}
-	// The durable history replacement is the compaction boundary. A workflow
-	// run receives a new invalid-completion budget only after that boundary has
-	// committed.
-	if err := e.resetWorkflowProtocolViolationBudget(context.Background()); err != nil {
-		return errors.Join(appendErr, err)
-	}
 	// The committed event is the single durable record of this compaction's
 	// provenance; mirror it into runtime state so an in-process gate sees it
 	// without re-reading the transcript, matching what restore reconstructs.
@@ -426,8 +420,13 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	e.compactionRuntimeState().SetSoonReminderIssued(false)
 	e.emitProjectedHistoryReplacementEntriesRaw(stepID, projectedStart, replacement.projectedEntries)
 	e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID})
+	// The durable history replacement is the compaction boundary. Apply that
+	// committed replacement in memory before resetting workflow-adjacent state,
+	// so any reset failure cannot make the live engine diverge from restore.
+	budgetResetErr := e.resetWorkflowProtocolViolationBudget(context.Background())
 	return errors.Join(
 		appendErr,
+		budgetResetErr,
 		e.store.SetCompactionSoonReminderIssued(reminderIssued),
 		e.store.SetUsageState(nil),
 	)
