@@ -154,6 +154,7 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 | `workflow.completion_mode` | string | `auto` | `KENT_WORKFLOW_COMPLETION_MODE` | Default completion mode for workflow agent nodes that inherit the global default. Allowed: `auto`, `structured_output`, `tool`, `shell_command`, `unstructured_output`. |
 | `workflow.concurrency` | int | `5` | `KENT_WORKFLOW_CONCURRENCY` | Maximum number of workflow agent runs scheduled concurrently. Must be `> 0`. |
 | `workflow.max_invalid_completion_attempts` | int | `5` | `KENT_WORKFLOW_MAX_INVALID_COMPLETION_ATTEMPTS` | Number of invalid workflow completion attempts allowed before Kent interrupts the run. Must be `> 0`. |
+| `workflow.subagents` | bool | `false` |  | Allows workflow agents to launch eligible custom roles. |
 
 
 ### Supervisor
