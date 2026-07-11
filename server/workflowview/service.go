@@ -1159,29 +1159,13 @@ func taskSummary(task sqlitegen.TaskRecord, status serverapi.WorkflowTaskStatus,
 		Title:             task.Title,
 		BodyPreview:       bodyPreview(task.Body),
 		SourceWorkspaceID: strings.TrimSpace(task.SourceWorkspaceID.String),
-		CanceledAt:        nullableUnixMillis(task.CanceledAtUnixMs),
-		CancelReason:      nullableString(task.CancellationReason),
+		CanceledAt:        metadata.OptionalInt64(task.CanceledAtUnixMs),
+		CancelReason:      metadata.OptionalString(task.CancellationReason),
 		CreatedAtUnixMs:   task.CreatedAtUnixMs,
 		UpdatedAtUnixMs:   task.UpdatedAtUnixMs,
 		Done:              done,
 		ActiveNodeIDs:     append([]string(nil), status.NodeIDs...),
 	}
-}
-
-func nullableUnixMillis(value sql.NullInt64) *int64 {
-	if !value.Valid {
-		return nil
-	}
-	valueCopy := value.Int64
-	return &valueCopy
-}
-
-func nullableString(value sql.NullString) *string {
-	if !value.Valid {
-		return nil
-	}
-	valueCopy := value.String
-	return &valueCopy
 }
 
 func placementDTO(placement sqlitegen.TaskNodePlacementRecord, nodes map[string]serverapi.WorkflowNode) serverapi.WorkflowPlacement {
@@ -1329,7 +1313,7 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 			case "run_completed":
 				item.Summary = "Run completed"
 			case "run_interrupted":
-				item.Summary = interruptedRunMessage(nullableString(run.InterruptionReason), run.InterruptionDetailJson)
+				item.Summary = interruptedRunMessage(metadata.OptionalString(run.InterruptionReason), run.InterruptionDetailJson)
 				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: task.WorkflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, DetailJSON: run.InterruptionDetailJson, OccurredAtUnixMs: run.InterruptedAtUnixMs.Int64}
 				item.Attention = &attention
 			}
@@ -1345,7 +1329,7 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 
 func runDTO(run sqlitegen.TaskRunRecord, nodes map[string]serverapi.WorkflowNode, sessionNames map[string]string) serverapi.WorkflowRun {
 	nodeID := nullableWorkflowViewNodeID(run.NodeID)
-	dto := serverapi.WorkflowRun{ID: run.ID, TaskID: run.TaskID, PlacementID: run.PlacementID, NodeID: nodeID, SessionID: run.SessionID.String, Generation: run.RunGeneration, StartedAtUnixMs: nullableUnixMillis(run.StartedAtUnixMs), CompletedAtUnixMs: nullableUnixMillis(run.CompletedAtUnixMs), InterruptedAtUnixMs: nullableUnixMillis(run.InterruptedAtUnixMs), InterruptionReason: nullableString(run.InterruptionReason), InterruptionDetail: run.InterruptionDetailJson, WaitingAskID: nullableString(run.WaitingAskID), Status: runStatus(run)}
+	dto := serverapi.WorkflowRun{ID: run.ID, TaskID: run.TaskID, PlacementID: run.PlacementID, NodeID: nodeID, SessionID: run.SessionID.String, Generation: run.RunGeneration, StartedAtUnixMs: metadata.OptionalInt64(run.StartedAtUnixMs), CompletedAtUnixMs: metadata.OptionalInt64(run.CompletedAtUnixMs), InterruptedAtUnixMs: metadata.OptionalInt64(run.InterruptedAtUnixMs), InterruptionReason: metadata.OptionalString(run.InterruptionReason), InterruptionDetail: run.InterruptionDetailJson, WaitingAskID: metadata.OptionalString(run.WaitingAskID), Status: runStatus(run)}
 	if node, ok := nodes[nodeID]; ok {
 		dto.NodeKind = node.Kind
 		if node.ScriptPath != nil {
@@ -1396,7 +1380,7 @@ func transitionDTO(transition sqlitegen.TaskTransitionRecord, edges []sqlitegen.
 		Commentary:            transition.Commentary,
 		OutputValues:          outputs,
 		CreatedAt:             transition.CreatedAtUnixMs,
-		AppliedAtUnixMs:       nullableUnixMillis(transition.AppliedAtUnixMs),
+		AppliedAtUnixMs:       metadata.OptionalInt64(transition.AppliedAtUnixMs),
 	}
 	for _, edge := range edges {
 		inputs := []serverapi.WorkflowInputBinding{}
@@ -1797,7 +1781,7 @@ func (s *Service) interruptedRunAttentionItems(ctx context.Context, projectID st
 	}
 	items := make([]serverapi.WorkflowAttentionItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(nullableString(row.InterruptionReason), row.InterruptionDetailJson), DetailJSON: row.InterruptionDetailJson, OccurredAtUnixMs: row.InterruptedAtUnixMs.Int64})
+		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(metadata.OptionalString(row.InterruptionReason), row.InterruptionDetailJson), DetailJSON: row.InterruptionDetailJson, OccurredAtUnixMs: row.InterruptedAtUnixMs.Int64})
 	}
 	return items, nil
 }

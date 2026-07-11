@@ -84,7 +84,7 @@ func (s *Store) InterruptRun(ctx context.Context, runID workflow.RunID, reason s
 		detailJSON = "{}"
 	}
 	now := s.now().UnixMilli()
-	updated, err := s.queries.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{ID: string(runID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, InterruptionReason: sql.NullString{String: strings.TrimSpace(reason), Valid: true}, InterruptionDetailJson: detailJSON})
+	updated, err := s.queries.InterruptWorkflowRun(ctx, sqlitegen.InterruptWorkflowRunParams{ID: string(runID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, InterruptionReason: nullableString(reason), InterruptionDetailJson: detailJSON})
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func (s *Store) InterruptRunGeneration(ctx context.Context, runID workflow.RunID
 	updated, err := s.queries.InterruptRunGeneration(ctx, sqlitegen.InterruptRunGenerationParams{
 		UpdatedAtUnixMs:        now,
 		InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
-		InterruptionReason:     sql.NullString{String: strings.TrimSpace(reason), Valid: true},
+		InterruptionReason:     nullableString(reason),
 		InterruptionDetailJson: detailJSON,
 		RunID:                  string(runID),
 		RunGeneration:          generation,

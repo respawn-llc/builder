@@ -185,6 +185,36 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		default:
 		}
 	}
+	applyResize := func(resize ResizeEvent) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if err := creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(resize.Dimensions.Rows), Cols: uint16(resize.Dimensions.Cols)}); err != nil {
+			return fmt.Errorf("resize PTY to dimensions=%+v: %w", resize.Dimensions, err)
+		}
+		placement := analyzer.BeforeFirstChunk()
+		source := analyzer.Chunk{Index: 0}
+		if len(chunks) > 0 {
+			placement = analyzer.AfterChunk(len(chunks) - 1)
+			source = chunks[len(chunks)-1]
+		}
+		at := time.Since(started)
+		resizes = append(resizes, analyzer.ResizeEvent{Placement: placement, At: at, Dimensions: resize.Dimensions})
+		if err := stream.ResizeFrom(resize.Dimensions, source, at); err != nil {
+			return fmt.Errorf("apply live PTY resize: %w", err)
+		}
+		requestAnalysis()
+		return nil
+	}
+	for _, resize := range spec.Resizes {
+		if resize.After != 0 {
+			continue
+		}
+		if err := applyResize(resize); err != nil {
+			eventErrors.Add(err)
+			cancel()
+			break
+		}
+	}
 	go func() {
 		defer close(readDone)
 		buffer := make([]byte, 4096)
@@ -276,6 +306,9 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 
 	for _, resize := range spec.Resizes {
 		resize := resize
+		if resize.After == 0 {
+			continue
+		}
 		eventWG.Add(1)
 		go func() {
 			defer eventWG.Done()
@@ -286,32 +319,13 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 				if commandExited(processDone) || ctx.Err() != nil {
 					return
 				}
-				mu.Lock()
-				if err := creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(resize.Dimensions.Rows), Cols: uint16(resize.Dimensions.Cols)}); err != nil {
-					mu.Unlock()
+				if err := applyResize(resize); err != nil {
 					if commandExited(processDone) {
 						return
 					}
-					eventErrors.Add(fmt.Errorf("resize PTY to dimensions=%+v: %w", resize.Dimensions, err))
+					eventErrors.Add(err)
 					cancel()
-					return
 				}
-				placement := analyzer.BeforeFirstChunk()
-				source := analyzer.Chunk{Index: 0}
-				if len(chunks) > 0 {
-					placement = analyzer.AfterChunk(len(chunks) - 1)
-					source = chunks[len(chunks)-1]
-				}
-				at := time.Since(started)
-				resizes = append(resizes, analyzer.ResizeEvent{Placement: placement, At: at, Dimensions: resize.Dimensions})
-				if err := stream.ResizeFrom(resize.Dimensions, source, at); err != nil {
-					mu.Unlock()
-					eventErrors.Add(fmt.Errorf("apply live PTY resize: %w", err))
-					cancel()
-					return
-				}
-				mu.Unlock()
-				requestAnalysis()
 			case <-ctx.Done():
 			}
 		}()

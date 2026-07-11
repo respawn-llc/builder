@@ -1,6 +1,7 @@
 package workflowstore
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -490,6 +491,47 @@ func TestInterruptRunGenerationGuard(t *testing.T) {
 	}
 	if runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != "current" {
 		t.Fatalf("run after interrupt = %+v, want current interruption", runs[0])
+	}
+}
+
+func TestInterruptRunBlankReasonPersistsNull(t *testing.T) {
+	for _, interrupt := range []struct {
+		name string
+		run  func(context.Context, *Store, workflow.RunID, int64) error
+	}{
+		{
+			name: "run",
+			run: func(ctx context.Context, store *Store, runID workflow.RunID, _ int64) error {
+				return store.InterruptRun(ctx, runID, " \t ", "{}")
+			},
+		},
+		{
+			name: "generation",
+			run: func(ctx context.Context, store *Store, runID workflow.RunID, generation int64) error {
+				return store.InterruptRunGeneration(ctx, runID, generation, " \t ", "{}")
+			},
+		},
+	} {
+		t.Run(interrupt.name, func(t *testing.T) {
+			ctx, store, binding := newTestStoreContext(t)
+			createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+			task := createDefaultTask(t, ctx, store, binding.ProjectID)
+			started := startTask(t, ctx, store, task.ID)
+			claimed, err := store.ClaimRun(ctx, started.RunID, 0)
+			if err != nil {
+				t.Fatalf("ClaimRun: %v", err)
+			}
+			if err := interrupt.run(ctx, store, started.RunID, claimed.Generation); err != nil {
+				t.Fatalf("interrupt blank reason: %v", err)
+			}
+			runs, err := store.ListRuns(ctx, task.ID)
+			if err != nil {
+				t.Fatalf("ListRuns: %v", err)
+			}
+			if len(runs) != 1 || runs[0].InterruptedAt == nil || runs[0].InterruptionReason != nil {
+				t.Fatalf("interrupted run = %+v, want interrupted run with nil reason", runs)
+			}
+		})
 	}
 }
 

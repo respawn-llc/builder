@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testvalues"
 	"core/server/attentionnotify"
 	"core/server/auth"
 	"core/server/launch"
@@ -535,7 +536,7 @@ func TestWorkflowAskHandlerCancellationAfterDurableClearResolvesBatch(t *testing
 		getRun: workflowstore.RunRecord{
 			ID:            "run-1",
 			Generation:    7,
-			InterruptedAt: optionalUnixMillis(123),
+			InterruptedAt: testvalues.Pointer(int64(123)),
 		},
 	}
 	starter := &Starter{store: store, runtimes: runtimes}
@@ -569,7 +570,7 @@ func TestWorkflowAskHandlerApprovalCancellationAfterDurableClearResolvesQuestion
 		getRun: workflowstore.RunRecord{
 			ID:            "run-1",
 			Generation:    7,
-			InterruptedAt: optionalUnixMillis(123),
+			InterruptedAt: testvalues.Pointer(int64(123)),
 		},
 	}
 	starter := &Starter{store: store, runtimes: runtimes}

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testvalues"
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/workflow"
@@ -423,8 +424,8 @@ func TestTaskCommentAuthorForAddUsesCurrentWorkflowRun(t *testing.T) {
 			{NodeID: "node-current", NodeKey: "current"},
 		},
 		Runs: []serverapi.WorkflowRun{
-			{ID: "run-old", SessionID: "session-workflow", Role: "old-role", NodeID: "node-old", StartedAtUnixMs: optionalUnixMillis(20)},
-			{ID: "run-current", SessionID: "session-workflow", Role: "current-role", NodeID: "node-current", StartedAtUnixMs: optionalUnixMillis(10)},
+			{ID: "run-old", SessionID: "session-workflow", Role: "old-role", NodeID: "node-old", StartedAtUnixMs: testvalues.Pointer(int64(20))},
+			{ID: "run-current", SessionID: "session-workflow", Role: "current-role", NodeID: "node-current", StartedAtUnixMs: testvalues.Pointer(int64(10))},
 		},
 	}}
 	got := taskCommentAuthorForAdd(context.Background(), remote, "task-1", "", false)
@@ -455,8 +456,8 @@ func TestTaskCommentAuthorForAddBoundaryCases(t *testing.T) {
 			{NodeID: "node-new", NodeKey: "new"},
 		},
 		Runs: []serverapi.WorkflowRun{
-			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: optionalUnixMillis(10)},
-			{ID: "run-new", SessionID: "session-workflow", NodeID: "node-new", StartedAtUnixMs: optionalUnixMillis(20)},
+			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: testvalues.Pointer(int64(10))},
+			{ID: "run-new", SessionID: "session-workflow", NodeID: "node-new", StartedAtUnixMs: testvalues.Pointer(int64(20))},
 		},
 	}}
 	if got := taskCommentAuthorForAdd(context.Background(), latestRunRemote, "task-1", "", false); got.Kind != "agent" || got.ID != "Node new agent" {
