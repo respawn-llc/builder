@@ -193,6 +193,7 @@ func runActions(session *driver.Session, environment *IsolatedEnvironment, actio
 	observation := RunObservation{ServerReady: true, Model: environment.Stub.Snapshot()}
 	events := session.Events()
 	modelEvents := environment.Stub.Events()
+	serverFailures := environment.Server.Failure()
 	for index, action := range actions {
 		deadline := time.NewTimer(fixedWait)
 		commandID, commandPending, err := dispatchAction(session, action)
@@ -239,6 +240,11 @@ func runActions(session *driver.Session, environment *IsolatedEnvironment, actio
 				}
 			case <-modelEvents:
 				observation.Model = environment.Stub.Snapshot()
+			case <-serverFailures:
+				if err := environment.Server.Error(); err != nil {
+					return observation, fmt.Errorf("standalone server failure: %w", err)
+				}
+				return observation, errors.New("standalone server reported an unknown evidence failure")
 			case <-environment.Server.Done():
 				if err := environment.Server.Error(); err != nil {
 					return observation, fmt.Errorf("standalone server failure: %w", err)

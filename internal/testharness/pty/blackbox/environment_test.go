@@ -9,10 +9,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"core/internal/testharness/pty/analyzer"
+	"core/internal/testharness/pty/driver"
+
+	"github.com/google/uuid"
 )
 
 func TestProcessEnvironmentsAreSeparateAndFallible(t *testing.T) {
@@ -128,6 +132,65 @@ func TestServerLogOverflowIsTypedAndRetainsDiagnosticExcerpts(t *testing.T) {
 	}
 	if overflow.Limit != 16 || overflow.Observed != 24 || len(overflow.Prefix) == 0 || len(overflow.Tail) == 0 {
 		t.Fatalf("overflow diagnostic = %+v", overflow)
+	}
+}
+
+func TestServerFailureSignalWakesAQuietActionLoopOnLogOverflow(t *testing.T) {
+	stub, err := StartResponsesStub([]RequiredOperation{{
+		ID: uuid.New(), Route: RouteResponses, Outcome: OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(stub.Close)
+	failure := make(chan struct{})
+	var notifyOnce sync.Once
+	notify := func() {
+		notifyOnce.Do(func() {
+			close(failure)
+		})
+	}
+	environment := &IsolatedEnvironment{
+		Stub: stub,
+		Server: &ServerHandle{
+			done:    make(chan struct{}),
+			failure: failure,
+			stdout:  newBoundedLog(16, notify),
+			stderr:  newBoundedLog(16, notify),
+		},
+	}
+	session, err := driver.StartSession(driver.SessionSpec{
+		Path:       "/bin/sh",
+		Args:       []string{"-c", "sleep 10"},
+		Env:        []string{"TERM=xterm-256color", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"},
+		Dimensions: analyzer.MustDimensions(2, 8),
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = session.Close()
+		_ = session.Terminate()
+		_ = session.ForceKill()
+	})
+	result := make(chan error, 1)
+	go func() {
+		_, runErr := runActions(session, environment, []Action{{
+			ID: uuid.New(), Kind: ActionWait, Predicate: &Predicate{Kind: PredicateModelConsumed},
+		}})
+		result <- runErr
+	}()
+	if _, err := environment.Server.stderr.Write([]byte("0123456789abcdefx")); err == nil {
+		t.Fatal("server log overflow did not fail")
+	}
+	select {
+	case runErr := <-result:
+		var overflow *analyzer.EvidenceLimitExceeded
+		if !errors.As(runErr, &overflow) {
+			t.Fatalf("runActions error = %T %v, want EvidenceLimitExceeded", runErr, runErr)
+		}
+	case <-time.After(fixedWait):
+		t.Fatal("quiet action loop did not wake for server log overflow")
 	}
 }
 

@@ -46,6 +46,7 @@ type IsolatedEnvironment struct {
 type ServerHandle struct {
 	cmd     *exec.Cmd
 	done    chan struct{}
+	failure chan struct{}
 	stdout  *boundedLog
 	stderr  *boundedLog
 	mu      sync.Mutex
@@ -192,6 +193,15 @@ func (s *ServerHandle) Done() <-chan struct{} {
 	return s.done
 }
 
+// Failure becomes ready exactly once when bounded server evidence reaches a
+// terminal error. It remains ready so a quiet action loop cannot miss it.
+func (s *ServerHandle) Failure() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	return s.failure
+}
+
 func (s *ServerHandle) Error() error {
 	if s == nil {
 		return nil
@@ -238,14 +248,21 @@ func startServer(binary string, root string, host string, port int, stubURL stri
 	}
 	cmd.Env = environment
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	stdout := newBoundedLog(512 * 1024)
-	stderr := newBoundedLog(512 * 1024)
+	failure := make(chan struct{})
+	var signalFailure sync.Once
+	notifyFailure := func() {
+		signalFailure.Do(func() {
+			close(failure)
+		})
+	}
+	stdout := newBoundedLog(512*1024, notifyFailure)
+	stderr := newBoundedLog(512*1024, notifyFailure)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start standalone server: %w", err)
 	}
-	handle := &ServerHandle{cmd: cmd, done: make(chan struct{}), stdout: stdout, stderr: stderr}
+	handle := &ServerHandle{cmd: cmd, done: make(chan struct{}), failure: failure, stdout: stdout, stderr: stderr}
 	go func() {
 		waitErr := cmd.Wait()
 		handle.mu.Lock()
@@ -338,15 +355,20 @@ func appendEnvironment(environment []string, entries ...string) ([]string, error
 }
 
 type boundedLog struct {
-	limit int
-	mu    sync.Mutex
-	data  []byte
-	tail  []byte
-	err   error
+	limit      int
+	mu         sync.Mutex
+	data       []byte
+	tail       []byte
+	err        error
+	onOverflow func()
 }
 
-func newBoundedLog(limit int) *boundedLog {
-	return &boundedLog{limit: limit, data: make([]byte, 0, limit)}
+func newBoundedLog(limit int, onOverflow ...func()) *boundedLog {
+	var signal func()
+	if len(onOverflow) > 0 {
+		signal = onOverflow[0]
+	}
+	return &boundedLog{limit: limit, data: make([]byte, 0, limit), onOverflow: signal}
 }
 
 func (b *boundedLog) Write(payload []byte) (int, error) {
@@ -368,6 +390,9 @@ func (b *boundedLog) Write(payload []byte) (int, error) {
 			Observed: len(b.data) + len(payload) - remaining,
 			Prefix:   bytes.Clone(b.data[:min(len(b.data), 32*1024)]),
 			Tail:     bytes.Clone(b.tail),
+		}
+		if b.onOverflow != nil {
+			b.onOverflow()
 		}
 	}
 	return 0, b.err

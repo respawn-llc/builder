@@ -28,18 +28,25 @@ type artifactChunk struct {
 }
 
 type artifactOperation struct {
-	Sequence    int                `json:"sequence"`
-	Kind        OperationKind      `json:"kind"`
-	ChunkIndex  int                `json:"chunk_index"`
-	ByteRange   ByteRange          `json:"byte_range"`
-	Before      Position           `json:"before"`
-	After       Position           `json:"after"`
-	Region      Region             `json:"region"`
-	CapturedAt  int64              `json:"captured_at_ns"`
-	Write       *TextSpan          `json:"write_span,omitempty"`
-	RecordCount int                `json:"record_count,omitempty"`
-	PrivateMode *PrivateModeChange `json:"private_mode,omitempty"`
+	Sequence    int                 `json:"sequence"`
+	Kind        OperationKind       `json:"kind"`
+	ChunkIndex  int                 `json:"chunk_index"`
+	ByteRange   ByteRange           `json:"byte_range"`
+	Before      Position            `json:"before"`
+	After       Position            `json:"after"`
+	Region      Region              `json:"region"`
+	CapturedAt  int64               `json:"captured_at_ns"`
+	Write       *TextSpan           `json:"write_span,omitempty"`
+	PrivateMode *PrivateModeChange  `json:"private_mode,omitempty"`
+	Source      *artifactRecordKind `json:"source,omitempty"`
 }
+
+type artifactRecordKind string
+
+const (
+	artifactRecordWriteSegment artifactRecordKind = "write_segment"
+	artifactRecordControl      artifactRecordKind = "control"
+)
 
 type ArtifactAttachment struct {
 	Name string
@@ -77,7 +84,7 @@ func WriteArtifactsWithAttachments(dir string, capture Capture, analysis Analysi
 	if err := budget.writeJSON(filepath.Join(dir, "chunks.json"), artifactChunks(capture.Chunks)); err != nil {
 		return err
 	}
-	if err := budget.writeJSON(filepath.Join(dir, "operations.json"), artifactOperations(analysis.Operations)); err != nil {
+	if err := budget.writeOperations(filepath.Join(dir, "operations.json"), analysis.Operations); err != nil {
 		return err
 	}
 	if err := budget.write(filepath.Join(dir, "screen.txt"), []byte(analysis.Screen.RenderText())); err != nil {
@@ -117,27 +124,29 @@ func artifactChunks(chunks []Chunk) []artifactChunk {
 	return result
 }
 
-func artifactOperations(operations []Operation) []artifactOperation {
-	result := make([]artifactOperation, 0, len(operations))
-	for _, operation := range operations {
-		item := artifactOperation{
-			Sequence: operation.Sequence, Kind: operation.Kind, ChunkIndex: operation.ChunkIndex,
-			ByteRange: operation.ByteRange, Before: operation.Before, After: operation.After,
-			Region: operation.Region, CapturedAt: operation.CapturedAt.Nanoseconds(), PrivateMode: operation.PrivateMode,
-		}
-		if operation.Write != nil {
-			span := operation.Write.Span
-			item.Write = &span
-		}
-		if len(operation.WriteSegments) > 0 || len(operation.Controls) > 0 {
-			// Batches can legally contain one record per terminal cell. Persist
-			// their top-level span/control metadata without recursively
-			// materializing an unbounded JSON tree.
-			item.RecordCount = len(analyzer.OperationRecords(operation))
-		}
-		result = append(result, item)
+func artifactOperationFor(operation Operation, source *artifactRecordKind) artifactOperation {
+	item := artifactOperation{
+		Sequence: operation.Sequence, Kind: operation.Kind, ChunkIndex: operation.ChunkIndex,
+		ByteRange: operation.ByteRange, Before: operation.Before, After: operation.After,
+		Region: operation.Region, CapturedAt: operation.CapturedAt.Nanoseconds(),
+		PrivateMode: operation.PrivateMode, Source: source,
 	}
-	return result
+	if operation.Write != nil {
+		span := operation.Write.Span
+		item.Write = &span
+	}
+	return item
+}
+
+func artifactWriteSegmentFor(batch Operation, segment WriteSegment) artifactOperation {
+	source := artifactRecordWriteSegment
+	span := segment.Write.Span
+	return artifactOperation{
+		Sequence: batch.Sequence, Kind: OperationWrite, ChunkIndex: segment.ChunkIndex,
+		ByteRange: segment.ByteRange, Before: segment.Before, After: segment.After,
+		Region: segment.Region, CapturedAt: segment.CapturedAt.Nanoseconds(),
+		Write: &span, Source: &source,
+	}
 }
 
 type artifactBudget struct {
@@ -176,6 +185,117 @@ func (b *artifactBudget) writeJSON(path string, value any) error {
 	}
 	b.written += writer.written
 	return nil
+}
+
+func (b *artifactBudget) writeOperations(path string, operations []Operation) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	writer := &artifactLimitWriter{file: file, remaining: maxArtifactBytes - b.written}
+	writeErr := writeArtifactOperationList(writer, operations)
+	closeErr := file.Close()
+	if writeErr != nil {
+		if closeErr != nil {
+			return fmt.Errorf("encode artifact %s: %w; close artifact: %v", path, writeErr, closeErr)
+		}
+		return fmt.Errorf("encode artifact %s: %w", path, writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close artifact %s: %w", path, closeErr)
+	}
+	b.written += writer.written
+	return nil
+}
+
+func writeArtifactOperationList(writer io.Writer, operations []Operation) error {
+	if _, err := io.WriteString(writer, "["); err != nil {
+		return err
+	}
+	for index, operation := range operations {
+		if index > 0 {
+			if _, err := io.WriteString(writer, ","); err != nil {
+				return err
+			}
+		}
+		if err := writeArtifactOperation(writer, operation, nil); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(writer, "]\n")
+	return err
+}
+
+func writeArtifactOperation(writer io.Writer, operation Operation, source *artifactRecordKind) error {
+	header, err := json.Marshal(artifactOperationFor(operation, source))
+	if err != nil {
+		return err
+	}
+	if len(operation.WriteSegments) == 0 && len(operation.Controls) == 0 {
+		_, err := writer.Write(header)
+		return err
+	}
+	if _, err := writer.Write(header[:len(header)-1]); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(writer, `,"records":[`); err != nil {
+		return err
+	}
+	if err := writeArtifactBatchRecords(writer, operation); err != nil {
+		return err
+	}
+	_, err = io.WriteString(writer, "]}")
+	return err
+}
+
+func writeArtifactBatchRecords(writer io.Writer, batch Operation) error {
+	segmentIndex, controlIndex := 0, 0
+	recordIndex := 0
+	for segmentIndex < len(batch.WriteSegments) || controlIndex < len(batch.Controls) {
+		if recordIndex > 0 {
+			if _, err := io.WriteString(writer, ","); err != nil {
+				return err
+			}
+		}
+		if nextBatchRecordIsSegment(batch, segmentIndex, controlIndex) {
+			if err := writeArtifactWriteSegment(writer, batch, batch.WriteSegments[segmentIndex]); err != nil {
+				return err
+			}
+			segmentIndex++
+		} else {
+			source := artifactRecordControl
+			if err := writeArtifactOperation(writer, batch.Controls[controlIndex], &source); err != nil {
+				return err
+			}
+			controlIndex++
+		}
+		recordIndex++
+	}
+	return nil
+}
+
+func nextBatchRecordIsSegment(batch Operation, segmentIndex, controlIndex int) bool {
+	if segmentIndex == len(batch.WriteSegments) {
+		return false
+	}
+	if controlIndex == len(batch.Controls) {
+		return true
+	}
+	segment := batch.WriteSegments[segmentIndex].ByteRange
+	control := batch.Controls[controlIndex].ByteRange
+	if segment.Start != control.Start {
+		return segment.Start < control.Start
+	}
+	return segment.End <= control.End
+}
+
+func writeArtifactWriteSegment(writer io.Writer, batch Operation, segment WriteSegment) error {
+	encoded, err := json.Marshal(artifactWriteSegmentFor(batch, segment))
+	if err != nil {
+		return err
+	}
+	_, err = writer.Write(encoded)
+	return err
 }
 
 type artifactLimitWriter struct {
