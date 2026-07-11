@@ -599,6 +599,55 @@ func TestServiceStartHeadPolicySetupFailureLocksTargetWithoutStarting(t *testing
 	}
 }
 
+func TestServiceStartHeadPolicyProvisionFailureLeavesRecoverableClaimWithoutStarting(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyHead)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "deadbeef"),
+	}}
+	provisionErr := errors.New("worktree provision failed")
+	service.targetWorktrees = &recordingTaskExecutionTargetWorktreeMaterializer{provisionErr: provisionErr}
+
+	_, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if !errors.Is(err, provisionErr) {
+		t.Fatalf("StartWorkflowTask error = %v, want provision failure", err)
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if target == nil || target.State != workflow.ExecutionTargetStateInitialProvisioning ||
+		target.SetupState != workflow.ExecutionTargetSetupPending ||
+		target.ActiveClaim == nil || target.ActiveClaim.Phase != workflow.ExecutionTargetClaimMaterializing {
+		t.Fatalf("target = %+v, want recoverable initial materialization claim", target)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %+v, want no start run after provision failure", runs)
+	}
+
+	retry, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask retry: %v", err)
+	}
+	if retry.Outcome != serverapi.WorkflowTaskInitiatingActionOutcomeInProgress || retry.InProgress == nil ||
+		retry.InProgress.Phase != serverapi.WorkflowTaskExecutionTargetMaterializationPhaseMaterializing {
+		t.Fatalf("retry result = %+v, want materializing in_progress", retry)
+	}
+}
+
 func TestServiceStartReturnsInProgressWhileManagedTargetMaterializes(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
