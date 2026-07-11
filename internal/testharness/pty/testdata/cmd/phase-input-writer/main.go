@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	"core/internal/testharness/pty"
 )
@@ -28,7 +27,6 @@ func main() {
 		if err := os.Stderr.Close(); err != nil {
 			os.Exit(2)
 		}
-		time.Sleep(time.Second)
 		return
 	}
 	if len(os.Args) == 2 && os.Args[1] == "frame-sequence" {

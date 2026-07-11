@@ -287,7 +287,7 @@ func TestRunCommandSurfacesPhaseRelativeInputWriteFailure(t *testing.T) {
 		Dimensions: pty.MustDimensions(2, 16),
 		PhaseInputs: []driver.PhaseInputEvent{{
 			Phase: pty.PhaseScenarioStart,
-			After: 100 * time.Millisecond,
+			After: time.Second,
 			Bytes: []byte("x\n"),
 		}},
 		Timeout: commandTestTimeout,
