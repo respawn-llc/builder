@@ -70,6 +70,20 @@ func TestSetRunEffectiveCompletionModePersistsAndRefusesDrift(t *testing.T) {
 	}
 }
 
+func TestClaimRunRejectsDeletingProject(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	if _, err := store.db.ExecContext(ctx, "UPDATE projects SET lifecycle_state = 'deleting' WHERE id = ?", binding.ProjectID); err != nil {
+		t.Fatalf("mark project deleting: %v", err)
+	}
+
+	if _, err := store.ClaimRun(ctx, started.RunID, 0); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("ClaimRun deleting project error = %v, want %v", err, sql.ErrNoRows)
+	}
+}
+
 func TestWorkflowNodeCompletionModePersistsThroughGraphAndRunSnapshot(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
