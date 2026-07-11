@@ -3,15 +3,15 @@ package ongoing
 import (
 	"strings"
 
-	"core/cli/tui/terminaltext"
+	"core/cli/tui/transcriptrender"
 )
 
 func terminalSafePlainText(text string) string {
-	return strings.TrimRight(terminaltext.Plain(text), "\n")
+	return strings.TrimRight(transcriptrender.TerminalSafePlainText(text), "\n")
 }
 
 func TerminalSafeSingleLine(text string) string {
-	return terminaltext.SingleLine(text)
+	return transcriptrender.TerminalSafeSingleLine(text)
 }
 
 func terminalSafeMarkdownSource(text string) string {

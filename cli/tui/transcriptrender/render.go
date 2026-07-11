@@ -3,7 +3,6 @@ package transcriptrender
 import (
 	"strings"
 
-	"core/cli/tui/terminaltext"
 	"core/shared/clientui"
 	"core/shared/transcript"
 
@@ -550,7 +549,7 @@ func firstNonBlankPreservingWhitespace(values ...string) string {
 }
 
 func safeTranscriptText(text string) string {
-	return terminaltext.Plain(text)
+	return TerminalSafePlainText(text)
 }
 
 func TruncateLine(line Line, width int, forceEllipsis bool) Line {

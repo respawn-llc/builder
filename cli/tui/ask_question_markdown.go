@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	"core/cli/tui/terminaltext"
+	"core/cli/tui/transcriptrender"
 	sharedtheme "core/shared/theme"
 
 	"charm.land/glamour/v2"
@@ -250,5 +250,5 @@ func renderPlainAskQuestionMarkdownSource(question string, width int) []string {
 }
 
 func plainAskQuestionMarkdownSource(question string) string {
-	return terminaltext.PrintableLines(xansi.Strip(question))
+	return transcriptrender.TerminalSafePrintableLines(xansi.Strip(question))
 }
