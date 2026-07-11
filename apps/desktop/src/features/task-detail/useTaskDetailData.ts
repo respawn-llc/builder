@@ -133,7 +133,7 @@ export function useTaskMutations(taskID: string, onChanged?: () => void) {
       onSuccess: refresh,
     }),
     approve: useMutation({
-      mutationFn: async (transitionID: string) => api.approveTransition(transitionID),
+      mutationFn: async (transitionID: string) => api.approveTransition({ taskTransitionID: transitionID }),
       onSuccess: refresh,
     }),
     cancel: useMutation({

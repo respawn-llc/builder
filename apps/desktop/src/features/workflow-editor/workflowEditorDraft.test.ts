@@ -47,6 +47,73 @@ describe("workflowEditorDraft", () => {
     ]);
   });
 
+  it("preserves a custom ref while editing and omits it from a non-custom saved definition", () => {
+    const initial = initializeWorkflowEditorDraft(workflowDefinition);
+    const custom = workflowEditorDraftReducer(initial, {
+      mode: "custom_ref",
+      type: "editWorkflowExecutionPolicyMode",
+    });
+    const withRef = workflowEditorDraftReducer(custom, {
+      customRef: "refs/heads/release",
+      type: "editWorkflowExecutionPolicyCustomRef",
+    });
+    const head = workflowEditorDraftReducer(withRef, {
+      mode: "head",
+      type: "editWorkflowExecutionPolicyMode",
+    });
+    const restored = workflowEditorDraftReducer(head, {
+      mode: "custom_ref",
+      type: "editWorkflowExecutionPolicyMode",
+    });
+
+    expect(restored.draft.executionPolicyCustomRef).toBe("refs/heads/release");
+    expect(workflowDefinitionFromDraft(head.draft).workflow.executionPolicy).toEqual({
+      customRef: null,
+      mode: "head",
+    });
+    expect(workflowDefinitionFromDraft(restored.draft).workflow.executionPolicy).toEqual({
+      customRef: "refs/heads/release",
+      mode: "custom_ref",
+    });
+    expect(workflowEditorDirtyState(restored)).toEqual({
+      dirty: true,
+      graphDirty: false,
+      metadataDirty: true,
+    });
+
+    const discarded = workflowEditorDraftReducer(restored, { source: workflowDefinition, type: "reset" });
+    expect(discarded.draft.executionPolicyCustomRef).toBe("");
+    expect(workflowEditorDirtyState(discarded)).toEqual({
+      dirty: false,
+      graphDirty: false,
+      metadataDirty: false,
+    });
+
+    const savedHead = {
+      ...workflowDefinition,
+      workflow: {
+        ...workflowDefinition.workflow,
+        executionPolicy: { customRef: null, mode: "head" },
+      },
+    } satisfies WorkflowDefinition;
+    const hiddenRef = workflowEditorDraftReducer(initializeWorkflowEditorDraft(savedHead), {
+      mode: "custom_ref",
+      type: "editWorkflowExecutionPolicyMode",
+    });
+    const returnedToHead = workflowEditorDraftReducer(
+      workflowEditorDraftReducer(hiddenRef, {
+        customRef: "refs/heads/release",
+        type: "editWorkflowExecutionPolicyCustomRef",
+      }),
+      { mode: "head", type: "editWorkflowExecutionPolicyMode" },
+    );
+    expect(workflowEditorDirtyState(returnedToHead)).toEqual({
+      dirty: false,
+      graphDirty: false,
+      metadataDirty: false,
+    });
+  });
+
   it("keeps draft versions stable when topology mutations are blocked", () => {
     const initial = initializeWorkflowEditorDraft(workflowDefinition);
     const blocked = workflowEditorDraftReducer(initial, {
@@ -361,6 +428,7 @@ function expectDefined<T>(value: T | undefined, message: string): T {
 const workflowDefinition: WorkflowDefinition = {
   workflow: {
     description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
     version: 1,
     id: "workflow-1",
     name: "Workflow",

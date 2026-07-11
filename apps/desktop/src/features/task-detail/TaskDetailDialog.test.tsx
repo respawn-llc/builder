@@ -65,7 +65,17 @@ describe("TaskDetailSurface", () => {
         { method: "workflow.task.activity.list", result: activityResponse },
         { method: "ask.listPendingBySession", result: pendingAskResponse },
         { method: "workflow.task.question.answer", result: {} },
-        { method: "workflow.task.approve", result: {} },
+        {
+          method: "workflow.task.approve",
+          result: {
+            outcome: "approved",
+            approved: {
+              transition_id: "transition-1",
+              task_id: "task-1",
+              state: "approved",
+            },
+          },
+        },
         { method: "workflow.task.comment.add", result: commentAddResponse },
         { method: "workflow.task.comment.replace", result: {} },
       ],
@@ -107,7 +117,9 @@ describe("TaskDetailSurface", () => {
     await waitFor(() => {
       const params = callParams(services.transport.calls, "workflow.task.approve");
       expect(params.task_transition_id).toBe("transition-1");
-      expect(services.transport.calls.find((call) => call.method === "workflow.task.approve")?.options).toEqual({
+      expect(
+        services.transport.calls.find((call) => call.method === "workflow.task.approve")?.options,
+      ).toEqual({
         timeoutMs: null,
       });
     });

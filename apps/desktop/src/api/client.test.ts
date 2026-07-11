@@ -26,7 +26,13 @@ describe("ApiClient", () => {
           subagent_roles: [{ name: "default" }, { name: "coder" }],
         },
       },
-      { method: "workflow.task.start", result: {} },
+      {
+        method: "workflow.task.start",
+        result: {
+          outcome: "started",
+          started: { transition_id: "transition-1", placement_id: "placement-1", run_id: "run-1" },
+        },
+      },
     ]);
     const client = new ApiClient(transport);
 
@@ -37,11 +43,76 @@ describe("ApiClient", () => {
       protocolVersion: protocolVersion,
       subagentRoles: [{ name: "default" }, { name: "coder" }],
     });
-    await client.startTask("task-1");
+    await expect(client.startTask({ taskID: "task-1" })).resolves.toEqual({
+      outcome: "started",
+      started: { placementID: "placement-1", runID: "run-1", transitionID: "transition-1" },
+    });
 
     const startCall = transport.calls.find((call) => call.method === "workflow.task.start");
     expect(startCall?.options).toEqual({ timeoutMs: null });
     expect(startTaskParamsSchema.parse(startCall?.params).task_id).toBe("task-1");
+  });
+
+  it("parses each closed initiating-action outcome before task UI receives it", async () => {
+    const client = new ApiClient(
+      new FakeRpcTransport([
+        {
+          method: "workflow.task.start",
+          result: {
+            outcome: "selection_required",
+            selection_required: {
+              task_id: "task-1",
+              generation: "generation-1",
+              source_workspace_id: "workspace-1",
+              source: { kind: "named_ref", named_ref: "refs/heads/main", commit: "abc123" },
+              supported_selections: ["none", "head", "default_branch", "custom_ref"],
+              configured_policy: { mode: "ask" },
+            },
+          },
+        },
+        {
+          method: "workflow.task.move",
+          result: {
+            outcome: "in_progress",
+            in_progress: { task_id: "task-1", phase: "materializing" },
+          },
+        },
+        {
+          method: "workflow.task.approve",
+          result: {
+            outcome: "approved",
+            approved: {
+              transition_id: "transition-1",
+              task_id: "task-1",
+              state: "approved",
+              placement_ids: ["placement-1"],
+              run_ids: ["run-1"],
+            },
+          },
+        },
+      ]),
+    );
+
+    await expect(client.startTask({ taskID: "task-1" })).resolves.toMatchObject({
+      outcome: "selection_required",
+      selectionRequired: {
+        source: { commit: "abc123", kind: "named_ref", namedRef: "refs/heads/main" },
+      },
+    });
+    await expect(client.moveTask({ taskID: "task-1", targetNodeID: "node-1" })).resolves.toEqual({
+      inProgress: { phase: "materializing", taskID: "task-1" },
+      outcome: "in_progress",
+    });
+    await expect(client.approveTransition({ taskTransitionID: "transition-1" })).resolves.toEqual({
+      approved: {
+        placementIDs: ["placement-1"],
+        runIDs: ["run-1"],
+        state: "approved",
+        taskID: "task-1",
+        transitionID: "transition-1",
+      },
+      outcome: "approved",
+    });
   });
 
   it("rejects server contract drift before feature code receives raw data", async () => {
@@ -54,7 +125,21 @@ describe("ApiClient", () => {
 
   it("surfaces workflow move auto-approval failures returned in successful responses", async () => {
     const client = new ApiClient(
-      new FakeRpcTransport([{ method: "workflow.task.move", result: { approval_error: "approval failed" } }]),
+      new FakeRpcTransport([
+        {
+          method: "workflow.task.move",
+          result: {
+            outcome: "moved",
+            moved: {
+              transition_id: "transition-1",
+              state: "approved",
+              placement_ids: [],
+              run_ids: [],
+              approval_error: "approval failed",
+            },
+          },
+        },
+      ]),
     );
 
     await expect(
@@ -73,10 +158,13 @@ describe("ApiClient", () => {
         {
           method: "workflow.task.move",
           result: {
-            transition_id: "transition-1",
-            state: "approved",
-            placement_ids: ["placement-1"],
-            run_ids: ["run-1"],
+            outcome: "moved",
+            moved: {
+              transition_id: "transition-1",
+              state: "approved",
+              placement_ids: ["placement-1"],
+              run_ids: ["run-1"],
+            },
           },
         },
       ]),
@@ -90,10 +178,13 @@ describe("ApiClient", () => {
         autoApprove: true,
       }),
     ).resolves.toMatchObject({
-      placementIDs: ["placement-1"],
-      runIDs: ["run-1"],
-      state: "approved",
-      transitionID: "transition-1",
+      moved: {
+        placementIDs: ["placement-1"],
+        runIDs: ["run-1"],
+        state: "approved",
+        transitionID: "transition-1",
+      },
+      outcome: "moved",
     });
   });
 
@@ -372,6 +463,7 @@ describe("ApiClient", () => {
               id: "workflow-1",
               name: "Delivery",
               description: "Ship",
+              execution_policy: { mode: "ask" },
               version: 4,
             },
           ],
@@ -385,6 +477,7 @@ describe("ApiClient", () => {
             id: "workflow-2",
             name: "Ops",
             description: "",
+            execution_policy: { mode: "ask" },
             version: 1,
           },
         },
@@ -396,6 +489,7 @@ describe("ApiClient", () => {
             id: "workflow-3",
             name: "Project workflow",
             description: "",
+            execution_policy: { mode: "ask" },
             version: 1,
           },
           link: { id: "link-3", project_id: "project-1", workflow_id: "workflow-3", default: true },
@@ -827,6 +921,7 @@ const workflowDefinitionResponse = {
       id: "workflow-1",
       name: "Delivery",
       description: "Delivery workflow",
+      execution_policy: { mode: "ask" },
       version: 9,
     },
     node_groups: [

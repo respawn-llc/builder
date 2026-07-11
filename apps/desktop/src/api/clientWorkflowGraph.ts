@@ -1,9 +1,5 @@
 import { compactJsonObject, type JsonObject } from "./json";
-import type {
-  WorkflowGraphDraft,
-  WorkflowGraphMetadata,
-  WorkflowGraphSaveConfirmation,
-} from "./models";
+import type { WorkflowGraphDraft, WorkflowGraphMetadata, WorkflowGraphSaveConfirmation } from "./models";
 
 export function workflowGraphDraftPayload(graph: WorkflowGraphDraft): JsonObject {
   return {
@@ -77,10 +73,17 @@ export function workflowGraphMetadataPayload(
   if (!metadata) {
     return undefined;
   }
-  return {
+  return compactJsonObject({
     name: metadata.name,
     description: metadata.description,
-  };
+    execution_policy:
+      metadata.executionPolicy === undefined
+        ? undefined
+        : compactJsonObject({
+            mode: metadata.executionPolicy.mode,
+            custom_ref: metadata.executionPolicy.customRef ?? undefined,
+          }),
+  });
 }
 
 export function workflowGraphSaveConfirmationPayload(

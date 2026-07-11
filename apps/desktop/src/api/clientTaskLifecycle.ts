@@ -1,54 +1,100 @@
-import type { TaskMoveInput } from "./clientInputs";
+import type { TaskApproveInput, TaskMoveInput, TaskStartInput } from "./clientInputs";
 import { parseRpcResponse } from "./clientParse";
 import { compactJsonObject } from "./json";
-import type { TaskMoveResponse } from "./models";
-import { taskMoveResponseSchema } from "./schemas/workflowBoard";
-import { newSetupOperationID, type SetupOperationID } from "./setupOperationID";
+import type { WorkflowTaskInitiatingActionResult } from "./models";
+import { workflowTaskInitiatingActionResultSchema } from "./schemas/workflowLifecycle";
+import { newSetupOperationID } from "./setupOperationID";
 import type { RpcTransport } from "./transport";
 
 export async function startTask(
   transport: RpcTransport,
-  taskID: string,
-  setupOperationID: SetupOperationID = newSetupOperationID(),
-): Promise<void> {
-  await transport.call(
+  input: TaskStartInput,
+): Promise<WorkflowTaskInitiatingActionResult> {
+  return parseRpcResponse(
     "workflow.task.start",
-    { task_id: taskID, setup_operation_id: setupOperationID.toJSONValue() },
-    { timeoutMs: null },
+    workflowTaskInitiatingActionResultSchema,
+    await transport.call(
+      "workflow.task.start",
+      taskInitiatingActionPayload({
+        task_id: input.taskID,
+        setup_operation_id: (input.setupOperationID ?? newSetupOperationID()).toJSONValue(),
+        selection_generation: input.selectionGeneration,
+        selection: input.selection,
+      }),
+      { timeoutMs: null },
+    ),
   );
 }
 
-export async function moveTask(transport: RpcTransport, input: TaskMoveInput): Promise<TaskMoveResponse> {
+export async function moveTask(
+  transport: RpcTransport,
+  input: TaskMoveInput,
+): Promise<WorkflowTaskInitiatingActionResult> {
   const response = parseRpcResponse(
     "workflow.task.move",
-    taskMoveResponseSchema,
+    workflowTaskInitiatingActionResultSchema,
     await transport.call(
       "workflow.task.move",
-      compactJsonObject({
+      taskInitiatingActionPayload({
         task_id: input.taskID,
         target_node_id: input.targetNodeID,
         output_values: input.outputValues ?? {},
         allow_missing_edge: input.allowMissingEdge,
         auto_approve: input.autoApprove,
         setup_operation_id: (input.setupOperationID ?? newSetupOperationID()).toJSONValue(),
+        selection_generation: input.selectionGeneration,
+        selection: input.selection,
       }),
       { timeoutMs: null },
     ),
   );
-  if (response.approvalError.length > 0) {
-    throw new Error(response.approvalError);
+  if (response.outcome === "moved" && response.moved.approvalError.length > 0) {
+    throw new Error(response.moved.approvalError);
   }
   return response;
 }
 
 export async function approveTransition(
   transport: RpcTransport,
-  taskTransitionID: string,
-  setupOperationID: SetupOperationID = newSetupOperationID(),
-): Promise<void> {
-  await transport.call(
+  input: TaskApproveInput,
+): Promise<WorkflowTaskInitiatingActionResult> {
+  return parseRpcResponse(
     "workflow.task.approve",
-    { task_transition_id: taskTransitionID, setup_operation_id: setupOperationID.toJSONValue() },
-    { timeoutMs: null },
+    workflowTaskInitiatingActionResultSchema,
+    await transport.call(
+      "workflow.task.approve",
+      taskInitiatingActionPayload({
+        task_transition_id: input.taskTransitionID,
+        setup_operation_id: (input.setupOperationID ?? newSetupOperationID()).toJSONValue(),
+        selection_generation: input.selectionGeneration,
+        selection: input.selection,
+      }),
+      { timeoutMs: null },
+    ),
   );
+}
+
+function taskInitiatingActionPayload(
+  value: Readonly<{
+    setup_operation_id: string;
+    selection_generation?: string | undefined;
+    selection?: Readonly<{ mode: string; customRef: string | null }> | undefined;
+    task_id?: string | undefined;
+    task_transition_id?: string | undefined;
+    target_node_id?: string | undefined;
+    output_values?: Readonly<Record<string, string>> | undefined;
+    allow_missing_edge?: boolean | undefined;
+    auto_approve?: boolean | undefined;
+  }>,
+) {
+  return compactJsonObject({
+    ...value,
+    selection:
+      value.selection === undefined
+        ? undefined
+        : compactJsonObject({
+            mode: value.selection.mode,
+            custom_ref: value.selection.customRef ?? undefined,
+          }),
+  });
 }

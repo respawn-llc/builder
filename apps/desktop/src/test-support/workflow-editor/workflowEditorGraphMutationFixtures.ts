@@ -4,6 +4,7 @@ import type { draftDefinitionFromSource } from "../../features/workflow-editor/w
 export const workflowDefinition: WorkflowDefinition = {
   workflow: {
     description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
     id: "workflow-1",
     name: "Workflow",
     version: 1,

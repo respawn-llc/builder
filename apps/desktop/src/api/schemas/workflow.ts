@@ -10,6 +10,7 @@ import type {
   WorkflowGraphSaveResult,
   WorkflowGraphValidateDraftResult,
   WorkflowGraphValidationResults,
+  WorkflowExecutionPolicy,
   WorkflowPage,
   WorkflowRecord,
   ProjectWorkflowLink,
@@ -24,17 +25,36 @@ import {
 } from "./common";
 import { emptyArray } from "./workflowHelpers";
 
+export const workflowExecutionPolicySchema: z.ZodType<WorkflowExecutionPolicy> = z.discriminatedUnion(
+  "mode",
+  [
+    z
+      .object({ mode: z.literal("custom_ref"), custom_ref: z.string().min(1) })
+      .strict()
+      .transform((value) => ({ customRef: value.custom_ref, mode: value.mode }) as const),
+    z
+      .object({
+        mode: z.enum(["none", "head", "default_branch", "ask"]),
+        custom_ref: z.undefined().optional(),
+      })
+      .strict()
+      .transform((value) => ({ customRef: null, mode: value.mode }) as const),
+  ],
+);
+
 const workflowRecordSchema: z.ZodType<WorkflowRecord> = z
   .object({
     id: z.string(),
     name: z.string(),
     description: emptyString,
+    execution_policy: workflowExecutionPolicySchema,
     version: z.number(),
   })
   .transform((value) => ({
     id: value.id,
     name: value.name,
     description: value.description,
+    executionPolicy: value.execution_policy,
     version: value.version,
   }));
 
@@ -328,6 +348,7 @@ const workflowDefinitionValueSchema: z.ZodType<WorkflowDefinition> = z
       id: z.string(),
       name: z.string(),
       description: emptyString,
+      execution_policy: workflowExecutionPolicySchema,
       version: z.number(),
     }),
     node_groups: workflowNodeGroupsSchema,
@@ -343,6 +364,7 @@ const workflowDefinitionValueSchema: z.ZodType<WorkflowDefinition> = z
       id: value.workflow.id,
       name: value.workflow.name,
       description: value.workflow.description,
+      executionPolicy: value.workflow.execution_policy,
       version: value.workflow.version,
     },
     nodeGroups: value.node_groups,

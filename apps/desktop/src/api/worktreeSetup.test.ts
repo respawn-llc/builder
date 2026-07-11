@@ -34,14 +34,26 @@ describe("worktree setup API", () => {
 
   it("uses caller-provided setup operation ids and disables generic timeouts for workflow lifecycle mutations", async () => {
     const transport = new FakeRpcTransport([
-      { method: "workflow.task.start", result: {} },
+      {
+        method: "workflow.task.start",
+        result: {
+          outcome: "started",
+          started: { transition_id: "transition-1", placement_id: "placement-1", run_id: "run-1" },
+        },
+      },
       {
         method: "workflow.task.approve",
-        result: { transition_id: "transition-1", task_id: "task-1", state: "approved" },
+        result: {
+          outcome: "approved",
+          approved: { transition_id: "transition-1", task_id: "task-1", state: "approved" },
+        },
       },
       {
         method: "workflow.task.move",
-        result: { transition_id: "transition-1", state: "approved", run_ids: [] },
+        result: {
+          outcome: "moved",
+          moved: { transition_id: "transition-1", state: "approved", run_ids: [] },
+        },
       },
     ]);
     const client = new ApiClient(transport);
@@ -60,8 +72,8 @@ describe("worktree setup API", () => {
         throw error;
       },
     });
-    await client.startTask("task-1", startSetupID);
-    await client.approveTransition("transition-1", approveSetupID);
+    await client.startTask({ setupOperationID: startSetupID, taskID: "task-1" });
+    await client.approveTransition({ setupOperationID: approveSetupID, taskTransitionID: "transition-1" });
     await client.moveTask({
       taskID: "task-1",
       targetNodeID: "node-1",

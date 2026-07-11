@@ -9,9 +9,11 @@ import {
 } from "./clientWorkflowGraph";
 import type {
   QuestionAnswerInput,
+  TaskApproveInput,
   TaskEditInput,
   TaskMoveInput,
   TaskMutationInput,
+  TaskStartInput,
   WorkflowCreateAndLinkInput,
   WorkflowCreateInput,
   WorkflowDeleteInput,
@@ -25,10 +27,7 @@ import type {
 } from "./clientInputs";
 import { compactJsonObject, emptyJsonObject } from "./json";
 import type { SetupOperationID } from "./setupOperationID";
-import {
-  worktreeSetupRpcHandler,
-  type WorktreeSetupEventHandler,
-} from "./worktreeSetup";
+import { worktreeSetupRpcHandler, type WorktreeSetupEventHandler } from "./worktreeSetup";
 import type {
   ActivityPage,
   AttentionPage,
@@ -45,7 +44,6 @@ import type {
   ServerReadiness,
   TaskComment,
   TaskDetail,
-  TaskMoveResponse,
   WorkflowBoard,
   WorkflowDeleteImpact,
   WorkflowDeleteResponse,
@@ -56,6 +54,7 @@ import type {
   WorkflowGraphValidateDraftResult,
   WorkflowPage,
   WorkflowRecord,
+  WorkflowTaskInitiatingActionResult,
   WorkflowValidation,
   WorkspaceList,
   WorkspaceUnlinkResponse,
@@ -511,11 +510,11 @@ export class ApiClient {
     return response.task.id;
   }
 
-  async startTask(taskID: string, setupOperationID?: SetupOperationID): Promise<void> {
-    await taskLifecycle.startTask(this.transport, taskID, setupOperationID);
+  async startTask(input: TaskStartInput): Promise<WorkflowTaskInitiatingActionResult> {
+    return taskLifecycle.startTask(this.transport, input);
   }
 
-  async moveTask(input: TaskMoveInput): Promise<TaskMoveResponse> {
+  async moveTask(input: TaskMoveInput): Promise<WorkflowTaskInitiatingActionResult> {
     return taskLifecycle.moveTask(this.transport, input);
   }
 
@@ -530,11 +529,8 @@ export class ApiClient {
     await this.transport.call("workflow.task.resume", compactJsonObject({ task_id: taskID }));
   }
 
-  async approveTransition(
-    taskTransitionID: string,
-    setupOperationID?: SetupOperationID,
-  ): Promise<void> {
-    await taskLifecycle.approveTransition(this.transport, taskTransitionID, setupOperationID);
+  async approveTransition(input: TaskApproveInput): Promise<WorkflowTaskInitiatingActionResult> {
+    return taskLifecycle.approveTransition(this.transport, input);
   }
 
   async cancelTask(taskID: string): Promise<void> {
@@ -646,7 +642,10 @@ export class ApiClient {
     );
   }
 
-  subscribeWorktreeSetup(setupOperationID: SetupOperationID, handler: WorktreeSetupEventHandler): RpcSubscription {
+  subscribeWorktreeSetup(
+    setupOperationID: SetupOperationID,
+    handler: WorktreeSetupEventHandler,
+  ): RpcSubscription {
     return this.transport.subscribe(
       "worktree.setup.subscribe",
       { setup_operation_id: setupOperationID.toJSONValue() },

@@ -1,8 +1,4 @@
-import {
-  emptyWorkflowDerivedWiring,
-  type WorkflowDefinition,
-  type WorkflowValidation,
-} from "../../api";
+import { emptyWorkflowDerivedWiring, type WorkflowDefinition, type WorkflowValidation } from "../../api";
 import type { WorkflowGraphLayout } from "./workflowGraphLayout";
 
 export type WorkflowLayoutSnapshot = Readonly<{
@@ -19,7 +15,13 @@ export function emptyWorkflowDefinition(workflowID: string): WorkflowDefinition 
     nodeGroups: [],
     nodes: [],
     transitionGroups: [],
-    workflow: { description: "", version: 1, id: workflowID, name: "" },
+    workflow: {
+      description: "",
+      executionPolicy: { customRef: null, mode: "ask" },
+      version: 1,
+      id: workflowID,
+      name: "",
+    },
     derivedWiring: emptyWorkflowDerivedWiring,
   };
 }

@@ -1,11 +1,11 @@
 import type {
   WorkflowDefinition,
   WorkflowEdge,
-  WorkflowGraphDraft,
-  WorkflowGraphMetadata,
+  WorkflowExecutionPolicyMode,
   WorkflowInputField,
   WorkflowNode,
   WorkflowParameter,
+  WorkflowRecord,
 } from "../../api";
 import { z } from "zod";
 import {
@@ -31,7 +31,14 @@ import {
   type WorkflowEditorGraphMutationResult,
   type WorkflowEditorSelection,
 } from "./workflowEditorGraphMutations";
-import { workflowGraphsEqual } from "./workflowDraftEquality";
+import { workflowExecutionPolicy } from "./workflowExecutionPolicyDraft";
+
+export {
+  workflowDefinitionFromDraft,
+  workflowEditorDirtyState,
+  workflowEditorDraftGraph,
+  workflowEditorDraftMetadata,
+} from "./workflowEditorDraftProjection";
 
 const workflowParameterRowIDSchema = z.string();
 
@@ -57,10 +64,12 @@ export type DraftWorkflowEdge = Omit<WorkflowEdge, "parameters"> &
     parameters: readonly DraftWorkflowParameter[];
   }>;
 
-export type DraftWorkflowDefinition = Omit<WorkflowDefinition, "edges" | "nodes"> &
+export type DraftWorkflowDefinition = Omit<WorkflowDefinition, "edges" | "nodes" | "workflow"> &
   Readonly<{
     edges: readonly DraftWorkflowEdge[];
     nodes: readonly DraftWorkflowNode[];
+    executionPolicyCustomRef: string;
+    workflow: WorkflowRecord;
   }>;
 
 export type WorkflowEditorDraftState = Readonly<{
@@ -85,6 +94,8 @@ export type WorkflowEditorDraftAction =
   | Readonly<{ type: "keepEditing" }>
   | Readonly<{ type: "reloadConflict" }>
   | Readonly<{ type: "editWorkflowMetadata"; name: string; description: string }>
+  | Readonly<{ type: "editWorkflowExecutionPolicyMode"; mode: WorkflowExecutionPolicyMode }>
+  | Readonly<{ type: "editWorkflowExecutionPolicyCustomRef"; customRef: string }>
   | Readonly<{
       type: "editNodeIdentity";
       nodeID: string;
@@ -93,7 +104,9 @@ export type WorkflowEditorDraftAction =
   | Readonly<{
       type: "editAgentNode";
       nodeID: string;
-      patch: Partial<Pick<WorkflowNode, "key" | "name" | "subagentRole" | "promptTemplate" | "completionMode">>;
+      patch: Partial<
+        Pick<WorkflowNode, "key" | "name" | "subagentRole" | "promptTemplate" | "completionMode">
+      >;
     }>
   | Readonly<{
       type: "editScriptNode";
@@ -152,7 +165,16 @@ export function initializeWorkflowEditorDraft(source: WorkflowDefinition): Workf
 
 type LifecycleAction = Extract<
   WorkflowEditorDraftAction,
-  { type: "reset" | "conflict" | "keepEditing" | "reloadConflict" | "editWorkflowMetadata" }
+  {
+    type:
+      | "reset"
+      | "conflict"
+      | "keepEditing"
+      | "reloadConflict"
+      | "editWorkflowMetadata"
+      | "editWorkflowExecutionPolicyMode"
+      | "editWorkflowExecutionPolicyCustomRef";
+  }
 >;
 
 type NodeFieldAction = Extract<
@@ -208,6 +230,8 @@ const lifecycleActionTypes: ReadonlySet<DraftActionType> = new Set<LifecycleActi
   "keepEditing",
   "reloadConflict",
   "editWorkflowMetadata",
+  "editWorkflowExecutionPolicyMode",
+  "editWorkflowExecutionPolicyCustomRef",
 ]);
 
 const nodeFieldActionTypes: ReadonlySet<DraftActionType> = new Set<NodeFieldAction["type"]>([
@@ -283,6 +307,20 @@ function reduceLifecycleAction(
         },
         false,
       );
+    case "editWorkflowExecutionPolicyMode":
+      return nextDraftState(
+        state,
+        {
+          ...state.draft,
+          workflow: {
+            ...state.draft.workflow,
+            executionPolicy: workflowExecutionPolicy(action.mode, state.draft.executionPolicyCustomRef),
+          },
+        },
+        false,
+      );
+    case "editWorkflowExecutionPolicyCustomRef":
+      return nextDraftState(state, { ...state.draft, executionPolicyCustomRef: action.customRef }, false);
   }
 }
 
@@ -308,7 +346,11 @@ function reduceNodeFieldAction(
         if (node.kind !== "agent") {
           return node;
         }
-        return { ...node, ...action.patch, completionMode: action.patch.completionMode ?? node.completionMode };
+        return {
+          ...node,
+          ...action.patch,
+          completionMode: action.patch.completionMode ?? node.completionMode,
+        };
       });
     case "editScriptNode":
       return editDraftNode(state, action.nodeID, false, (node) => {
@@ -328,9 +370,7 @@ function reduceNodeFieldAction(
           {
             description: "",
             name: "",
-            rowID: [node.id, "input", state.version.toString(), node.inputFields.length.toString()].join(
-              ":",
-            ),
+            rowID: [node.id, "input", state.version.toString(), node.inputFields.length.toString()].join(":"),
           },
           ...node.inputFields,
         ],
@@ -355,7 +395,11 @@ function reduceNodeFieldAction(
     case "assignJoinInputProvider":
       return editDraftNode(state, action.nodeID, false, (node) => ({
         ...node,
-        joinInputProviders: assignJoinInputProvider(node.joinInputProviders, action.inputName, action.providerEdgeID),
+        joinInputProviders: assignJoinInputProvider(
+          node.joinInputProviders,
+          action.inputName,
+          action.providerEdgeID,
+        ),
       }));
   }
 }
@@ -435,8 +479,11 @@ function reduceTopologyAction(
 }
 
 export function draftDefinitionFromSource(source: WorkflowDefinition): DraftWorkflowDefinition {
+  const executionPolicy = source.workflow.executionPolicy;
   return {
     ...source,
+    workflow: { ...source.workflow, executionPolicy },
+    executionPolicyCustomRef: executionPolicy.customRef ?? "",
     edges: source.edges.map(draftEdgeWithParameterRowIDs),
     nodes: source.nodes.map((node) => ({
       ...node,
@@ -447,72 +494,6 @@ export function draftDefinitionFromSource(source: WorkflowDefinition): DraftWork
       })),
     })),
   };
-}
-
-export function workflowDefinitionFromDraft(draft: DraftWorkflowDefinition): WorkflowDefinition {
-  return {
-    ...draft,
-    edges: draft.edges.map((edge) => ({
-      ...edge,
-      parameters: edge.parameters.map(({ description, key }) => ({ description, key })),
-    })),
-    nodes: draft.nodes.map((node) => ({
-      ...node,
-      inputFields: node.inputFields.map(({ name, description }) => ({ name, description })),
-      outputFields: node.outputFields,
-    })),
-  };
-}
-
-export function workflowEditorDirtyState(state: WorkflowEditorDraftState): WorkflowEditorDirtyState {
-  const metadataDirty =
-    state.draft.workflow.name !== state.source.workflow.name ||
-    state.draft.workflow.description !== state.source.workflow.description;
-  const graphDirty = !workflowGraphsEqual(workflowDefinitionFromDraft(state.draft), state.source);
-  return { dirty: metadataDirty || graphDirty, graphDirty, metadataDirty };
-}
-
-export function workflowEditorDraftGraph(state: WorkflowEditorDraftState): WorkflowGraphDraft {
-  const definition = workflowDefinitionFromDraft(state.draft);
-  return {
-    edges: definition.edges.map((edge) => ({
-      contextMode: edge.contextMode,
-      contextSource: edge.contextSource,
-      id: edge.id,
-      key: edge.key,
-      parameters: edge.parameters.map(({ description, key }) => ({ description, key })),
-      promptTemplate: edge.promptTemplate,
-      requiresApproval: edge.requiresApproval,
-      targetNodeID: edge.targetNodeID,
-      transitionGroupID: edge.transitionGroupID,
-    })),
-    nodeGroups: definition.nodeGroups.map((group) => ({ id: group.id, key: group.key, name: group.name })),
-    nodes: definition.nodes.map((node) => ({
-      groupID: node.groupID,
-      groupKey: node.groupKey,
-      id: node.id,
-      key: node.key,
-      kind: node.kind,
-      name: node.name,
-      completionMode: node.completionMode,
-      scriptPath: node.scriptPath,
-      inputFields: node.inputFields,
-      joinInputProviders: node.joinInputProviders,
-      promptTemplate: node.promptTemplate,
-      subagentRole: node.subagentRole,
-    })),
-    transitionGroups: definition.transitionGroups.map((group) => ({
-      description: group.description,
-      id: group.id,
-      name: group.name,
-      sourceNodeID: group.sourceNodeID,
-      transitionID: group.transitionID,
-    })),
-  };
-}
-
-export function workflowEditorDraftMetadata(state: WorkflowEditorDraftState): WorkflowGraphMetadata {
-  return { description: state.draft.workflow.description, name: state.draft.workflow.name };
 }
 
 function nextDraftState(

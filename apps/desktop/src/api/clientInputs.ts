@@ -4,6 +4,7 @@ import type {
   WorkflowGraphMetadata,
   WorkflowGraphSaveConfirmation,
   WorkflowValidationMode,
+  WorkflowTaskExecutionTargetSelection,
 } from "./models";
 import type { SetupOperationID } from "./setupOperationID";
 
@@ -89,6 +90,22 @@ export type TaskMoveInput = Readonly<{
   allowMissingEdge?: boolean;
   autoApprove?: boolean;
   setupOperationID?: SetupOperationID | undefined;
+  selectionGeneration?: string | undefined;
+  selection?: WorkflowTaskExecutionTargetSelection | undefined;
+}>;
+
+export type TaskStartInput = Readonly<{
+  taskID: string;
+  setupOperationID?: SetupOperationID | undefined;
+  selectionGeneration?: string | undefined;
+  selection?: WorkflowTaskExecutionTargetSelection | undefined;
+}>;
+
+export type TaskApproveInput = Readonly<{
+  taskTransitionID: string;
+  setupOperationID?: SetupOperationID | undefined;
+  selectionGeneration?: string | undefined;
+  selection?: WorkflowTaskExecutionTargetSelection | undefined;
 }>;
 
 export type OrdinaryQuestionAnswerInput = Readonly<{

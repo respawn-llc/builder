@@ -177,10 +177,20 @@ export type WorkflowJoinInputProvider = Readonly<{
   providerEdgeID: string;
 }>;
 
+export type WorkflowExecutionPolicyMode = "none" | "head" | "default_branch" | "custom_ref" | "ask";
+
+export type WorkflowExecutionPolicy =
+  | Readonly<{ mode: "custom_ref"; customRef: string }>
+  | Readonly<{
+      mode: Exclude<WorkflowExecutionPolicyMode, "custom_ref">;
+      customRef: null;
+    }>;
+
 export type WorkflowRecord = Readonly<{
   id: string;
   name: string;
   description: string;
+  executionPolicy: WorkflowExecutionPolicy;
   version: number;
 }>;
 
@@ -362,6 +372,7 @@ export type WorkflowGraphValidateDraftResult = WorkflowGraphValidationResults &
 export type WorkflowGraphMetadata = Readonly<{
   name: string;
   description: string;
+  executionPolicy?: WorkflowExecutionPolicy | undefined;
 }>;
 
 export type WorkflowGraphSaveImpact = Readonly<{
@@ -473,6 +484,71 @@ export type TaskMoveResponse = Readonly<{
   runIDs: readonly string[];
   approvalError: string;
 }>;
+
+export type TaskStartResponse = Readonly<{
+  transitionID: string;
+  placementID: string;
+  runID: string;
+}>;
+
+export type TaskApproveResponse = Readonly<{
+  transitionID: string;
+  taskID: string;
+  state: string;
+  placementIDs: readonly string[];
+  runIDs: readonly string[];
+}>;
+
+export type WorkflowTaskExecutionTargetSelectionMode = "none" | "head" | "default_branch" | "custom_ref";
+
+export type WorkflowTaskExecutionTargetSelection =
+  | Readonly<{ mode: "custom_ref"; customRef: string }>
+  | Readonly<{
+      mode: Exclude<WorkflowTaskExecutionTargetSelectionMode, "custom_ref">;
+      customRef: null;
+    }>;
+
+export type WorkflowTaskExecutionTargetSource =
+  | Readonly<{ kind: "non_git"; namedRef: null; commit: null }>
+  | Readonly<{ kind: "named_ref"; namedRef: string; commit: string }>
+  | Readonly<{ kind: "detached_commit"; namedRef: null; commit: string }>
+  | Readonly<{ kind: "unavailable"; namedRef: null; commit: null }>;
+
+export type WorkflowTaskExecutionTargetSelectionRequired = Readonly<{
+  taskID: string;
+  generation: string;
+  sourceWorkspaceID: string;
+  source: WorkflowTaskExecutionTargetSource;
+  supportedSelections: readonly WorkflowTaskExecutionTargetSelectionMode[];
+  configuredPolicy: WorkflowExecutionPolicy;
+  recoveryCause: string | null;
+}>;
+
+export type WorkflowTaskExecutionTargetMaterializationProgress = Readonly<{
+  taskID: string;
+  phase: "materializing" | "recovery_queued" | "recovering";
+}>;
+
+export type WorkflowTaskExecutionTargetNegotiationConflict = Readonly<{
+  taskID: string;
+}>;
+
+export type WorkflowTaskInitiatingActionResult =
+  | Readonly<{ outcome: "started"; started: TaskStartResponse }>
+  | Readonly<{ outcome: "moved"; moved: TaskMoveResponse }>
+  | Readonly<{ outcome: "approved"; approved: TaskApproveResponse }>
+  | Readonly<{
+      outcome: "selection_required";
+      selectionRequired: WorkflowTaskExecutionTargetSelectionRequired;
+    }>
+  | Readonly<{
+      outcome: "in_progress";
+      inProgress: WorkflowTaskExecutionTargetMaterializationProgress;
+    }>
+  | Readonly<{
+      outcome: "conflict";
+      conflict: WorkflowTaskExecutionTargetNegotiationConflict;
+    }>;
 
 export type BoardCard = Readonly<{
   id: string;

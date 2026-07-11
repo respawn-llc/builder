@@ -117,11 +117,7 @@ function isDeletedTaskEvent(params: unknown, taskID: string): boolean {
   if (trimmedTaskID.length === 0 || event === null) {
     return false;
   }
-  return (
-    event.resource === "task" &&
-    event.action === "deleted" &&
-    event.changedIDs.includes(trimmedTaskID)
-  );
+  return event.resource === "task" && event.action === "deleted" && event.changedIDs.includes(trimmedTaskID);
 }
 
 export function shouldRefreshBoardFromProjectEvent(
@@ -176,7 +172,7 @@ export function useBoardTaskActions(
   }
   return {
     start: useMutation({
-      mutationFn: async (taskID: string) => api.startTask(taskID),
+      mutationFn: async (taskID: string) => api.startTask({ taskID }),
       onSuccess: refresh,
     }),
     move: useMutation({

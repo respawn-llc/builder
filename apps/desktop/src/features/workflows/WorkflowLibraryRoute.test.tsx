@@ -57,7 +57,9 @@ describe("WorkflowLibraryRoute", () => {
     expect(await within(sidebar).findByTestId("workflow-editor-route")).toBeInTheDocument();
     expect(await within(sidebar).findByTestId("workflow-editor-canvas")).toBeInTheDocument();
     fireEvent.click(within(sidebar).getByRole("button", { name: "Inspect workflow" }));
-    expect(await within(sidebar).findByRole("complementary", { name: "Inspect workflow" })).toBeInTheDocument();
+    expect(
+      await within(sidebar).findByRole("complementary", { name: "Inspect workflow" }),
+    ).toBeInTheDocument();
     expect(within(sidebar).getByTestId("workflow-editor-route")).toBeInTheDocument();
     expect(window.location.pathname).toBe("/workflows");
   });
@@ -198,6 +200,7 @@ const workflowListResponse = {
       id: "workflow-1",
       name: "Delivery",
       description: "Ship changes",
+      execution_policy: { mode: "ask" },
       version: 1,
     },
   ],
@@ -215,6 +218,7 @@ function workflowListResponseWithMetadata({
         id: "workflow-1",
         name,
         description,
+        execution_policy: { mode: "ask" },
         version,
       },
     ],
@@ -228,6 +232,7 @@ const workflowDefinitionResponse = {
       id: "workflow-1",
       name: "Delivery",
       description: "Ship changes",
+      execution_policy: { mode: "ask" },
       version: 1,
     },
     node_groups: [],

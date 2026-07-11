@@ -24,6 +24,7 @@ import {
   type DraftWorkflowEdge,
   type DraftWorkflowNode,
 } from "./workflowEditorDraft";
+import { workflowExecutionPolicyModeFromSelectValue } from "./workflowExecutionPolicyDraft";
 import { type WorkflowEditorDraftController } from "./workflowEditorDraftBridgeCore";
 import { ApprovalToggle, Bindings, FieldSummary } from "./WorkflowInspectorSharedSections";
 import {
@@ -361,6 +362,13 @@ function DerivedEdgeSections({
 
 function WorkflowDraftDetails({ controller }: Readonly<{ controller: WorkflowEditorDraftController }>) {
   const { t } = useTranslation();
+  const executionPolicyOptions = [
+    { label: t("workflowEditor.executionPolicyNone"), value: "none" },
+    { label: t("workflowEditor.executionPolicyHead"), value: "head" },
+    { label: t("workflowEditor.executionPolicyDefaultBranch"), value: "default_branch" },
+    { label: t("workflowEditor.executionPolicyCustomRef"), value: "custom_ref" },
+    { label: t("workflowEditor.executionPolicyAsk"), value: "ask" },
+  ];
   return (
     <InspectorStack>
       <DetailSection title={t("workflowEditor.workflowSettings")}>
@@ -386,6 +394,31 @@ function WorkflowDraftDetails({ controller }: Readonly<{ controller: WorkflowEdi
           }}
           value={controller.draft.workflow.description}
         />
+        <SelectField
+          label={t("workflowEditor.executionPolicy")}
+          labelHelp={t("workflowEditor.executionPolicyHelp")}
+          onValueChange={(value) => {
+            controller.dispatch({
+              mode: workflowExecutionPolicyModeFromSelectValue(value),
+              type: "editWorkflowExecutionPolicyMode",
+            });
+          }}
+          options={executionPolicyOptions}
+          value={controller.draft.workflow.executionPolicy.mode}
+        />
+        {controller.draft.workflow.executionPolicy.mode === "custom_ref" ? (
+          <TextInput
+            label={t("workflowEditor.customRef")}
+            labelHelp={t("workflowEditor.customRefHelp")}
+            onChange={(event) => {
+              controller.dispatch({
+                customRef: event.target.value,
+                type: "editWorkflowExecutionPolicyCustomRef",
+              });
+            }}
+            value={controller.draft.executionPolicyCustomRef}
+          />
+        ) : null}
       </DetailSection>
       <DetailSection title={t("workflowEditor.inspectorOverview")}>
         <DetailRow label={t("workflowEditor.version")} value={controller.draft.workflow.version.toString()} />

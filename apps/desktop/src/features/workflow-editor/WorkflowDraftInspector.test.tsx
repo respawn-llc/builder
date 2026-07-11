@@ -31,6 +31,43 @@ describe("WorkflowDraftInspectorContent", () => {
 
     expect(screen.queryByText("Completion mode")).not.toBeInTheDocument();
   });
+
+  it("shows the localized execution policy control and only reveals custom ref for that policy", async () => {
+    const user = userEvent.setup();
+    const controller = workflowDraftController(workflowDefinition);
+
+    mountInspector(controller, { kind: "workflow" });
+
+    expect(screen.getByRole("button", { name: "Execution policy" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Custom ref")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Execution policy" }));
+    await user.click(await screen.findByRole("menuitemradio", { name: "Custom ref" }));
+
+    expect(controller.dispatch).toHaveBeenCalledWith({
+      mode: "custom_ref",
+      type: "editWorkflowExecutionPolicyMode",
+    });
+  });
+
+  it("edits the custom ref only when the draft policy is custom ref", () => {
+    const controller = workflowDraftController({
+      ...workflowDefinition,
+      workflow: {
+        ...workflowDefinition.workflow,
+        executionPolicy: { customRef: "refs/heads/release", mode: "custom_ref" },
+      },
+    });
+
+    mountInspector(controller, { kind: "workflow" });
+
+    const customRef = screen.getByLabelText("Custom ref");
+    expect(customRef).toHaveValue("refs/heads/release");
+    fireEvent.change(customRef, { target: { value: "refs/heads/next" } });
+    expect(controller.dispatch).toHaveBeenCalledWith({
+      customRef: "refs/heads/next",
+      type: "editWorkflowExecutionPolicyCustomRef",
+    });
+  });
   it("keeps context source options openable when unavailable", async () => {
     const user = userEvent.setup();
     const controller = workflowDraftController(workflowDefinition);

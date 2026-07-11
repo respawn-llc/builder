@@ -174,8 +174,12 @@ describe("layoutWorkflowGraph", () => {
     expect(absoluteNodeX(graph.nodes, "code-review-join")).toBeGreaterThan(
       absoluteNodeX(graph.nodes, "workflow-group-code-review-parallel"),
     );
-    expect(absoluteNodeX(graph.nodes, planRejected.source)).toBeGreaterThan(absoluteNodeX(graph.nodes, planRejected.target));
-    expect(absoluteNodeX(graph.nodes, approvalRejected.source)).toBeGreaterThan(absoluteNodeX(graph.nodes, approvalRejected.target));
+    expect(absoluteNodeX(graph.nodes, planRejected.source)).toBeGreaterThan(
+      absoluteNodeX(graph.nodes, planRejected.target),
+    );
+    expect(absoluteNodeX(graph.nodes, approvalRejected.source)).toBeGreaterThan(
+      absoluteNodeX(graph.nodes, approvalRejected.target),
+    );
   });
 
   it("routes transition endpoints away from the reserved creation handle slot", async () => {
@@ -315,16 +319,24 @@ function assertEndpointHandle(
   expect(point?.y).toBe(workflowGraphEndpointPoint(node, handle, side, nodes).y);
 }
 
-function expectNodeXPositionsToIncrease(nodes: readonly WorkflowGraphNode[], nodeIDs: readonly string[]): void {
+function expectNodeXPositionsToIncrease(
+  nodes: readonly WorkflowGraphNode[],
+  nodeIDs: readonly string[],
+): void {
   for (const [index, nodeID] of nodeIDs.entries()) {
     const previousID = nodeIDs[index - 1];
     if (previousID !== undefined) {
-      expect(requireNode(nodes, nodeID).position.x).toBeGreaterThan(requireNode(nodes, previousID).position.x);
+      expect(requireNode(nodes, nodeID).position.x).toBeGreaterThan(
+        requireNode(nodes, previousID).position.x,
+      );
     }
   }
 }
 
-function expectAbsoluteNodeXPositionsToIncrease(nodes: readonly WorkflowGraphNode[], nodeIDs: readonly string[]): void {
+function expectAbsoluteNodeXPositionsToIncrease(
+  nodes: readonly WorkflowGraphNode[],
+  nodeIDs: readonly string[],
+): void {
   for (const [index, nodeID] of nodeIDs.entries()) {
     const previousID = nodeIDs[index - 1];
     if (previousID !== undefined) {
@@ -339,9 +351,7 @@ function absoluteNodeX(nodes: readonly WorkflowGraphNode[], nodeID: string): num
   return workflowGraphAbsoluteNodeRect(requireNode(nodes, nodeID), nodes).x;
 }
 
-function expectRouteSegmentsToBeOrthogonal(
-  points: readonly Readonly<{ x: number; y: number }>[],
-): void {
+function expectRouteSegmentsToBeOrthogonal(points: readonly Readonly<{ x: number; y: number }>[]): void {
   for (const [index, point] of points.entries()) {
     const previous = points[index - 1];
     if (previous !== undefined) {
@@ -367,7 +377,13 @@ function expectRouteToHaveCorner(points: readonly Readonly<{ x: number; y: numbe
 const emptyValidation: WorkflowValidation = { valid: true, errors: [] };
 
 const groupedWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: {
+    id: "workflow-1",
+    name: "Delivery",
+    description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
+    version: 1,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [
     {
@@ -403,7 +419,13 @@ const groupedWorkflow: WorkflowDefinition = {
 };
 
 const fanoutWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: {
+    id: "workflow-1",
+    name: "Delivery",
+    description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
+    version: 1,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -419,7 +441,13 @@ const fanoutWorkflow: WorkflowDefinition = {
 };
 
 const singleTransitionWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: {
+    id: "workflow-1",
+    name: "Delivery",
+    description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
+    version: 1,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -438,7 +466,13 @@ const singleTransitionWorkflow: WorkflowDefinition = {
 };
 
 const twoOutgoingTransitionWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: {
+    id: "workflow-1",
+    name: "Delivery",
+    description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
+    version: 1,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -467,7 +501,13 @@ const twoOutgoingTransitionWorkflow: WorkflowDefinition = {
 };
 
 const reconnectWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: {
+    id: "workflow-1",
+    name: "Delivery",
+    description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
+    version: 1,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -480,7 +520,13 @@ const reconnectWorkflow: WorkflowDefinition = {
 };
 
 const crossBoundaryWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: {
+    id: "workflow-1",
+    name: "Delivery",
+    description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
+    version: 1,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [
     {
@@ -521,7 +567,13 @@ const crossBoundaryWorkflow: WorkflowDefinition = {
 };
 
 const alignedJoinWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: {
+    id: "workflow-1",
+    name: "Delivery",
+    description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
+    version: 1,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [
     {
@@ -567,7 +619,13 @@ const alignedJoinWorkflow: WorkflowDefinition = {
 };
 
 const joinWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: {
+    id: "workflow-1",
+    name: "Delivery",
+    description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
+    version: 1,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -607,7 +665,13 @@ const joinWorkflow: WorkflowDefinition = {
 };
 
 const joinChainWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Delivery", description: "", version: 1 },
+  workflow: {
+    id: "workflow-1",
+    name: "Delivery",
+    description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
+    version: 1,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -644,7 +708,13 @@ const joinChainWorkflow: WorkflowDefinition = {
 };
 
 const loopedWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-1", name: "Looped Delivery", description: "", version: 1 },
+  workflow: {
+    id: "workflow-1",
+    name: "Looped Delivery",
+    description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
+    version: 1,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [],
   nodes: [
@@ -665,7 +735,12 @@ const loopedWorkflow: WorkflowDefinition = {
     workflowTransitionGroup("tg-review-implement", "review", "rework", "Rework"),
   ],
   edges: [
-    workflowEdge({ id: "edge-start-plan", key: "plan", targetNodeID: "plan", transitionGroupID: "tg-start-plan" }),
+    workflowEdge({
+      id: "edge-start-plan",
+      key: "plan",
+      targetNodeID: "plan",
+      transitionGroupID: "tg-start-plan",
+    }),
     workflowEdge({
       id: "edge-plan-implement",
       key: "implement",
@@ -684,7 +759,12 @@ const loopedWorkflow: WorkflowDefinition = {
       targetNodeID: "approval",
       transitionGroupID: "tg-review-approval",
     }),
-    workflowEdge({ id: "edge-approval-done", key: "done", targetNodeID: "done", transitionGroupID: "tg-approval-done" }),
+    workflowEdge({
+      id: "edge-approval-done",
+      key: "done",
+      targetNodeID: "done",
+      transitionGroupID: "tg-approval-done",
+    }),
     workflowEdge({
       id: "edge-approval-plan",
       key: "rejected",
@@ -701,7 +781,13 @@ const loopedWorkflow: WorkflowDefinition = {
 };
 
 const mainSWEWorkflow: WorkflowDefinition = {
-  workflow: { id: "workflow-main-swe", name: "Main SWE", description: "", version: 1 },
+  workflow: {
+    id: "workflow-main-swe",
+    name: "Main SWE",
+    description: "",
+    executionPolicy: { customRef: null, mode: "ask" },
+    version: 1,
+  },
   derivedWiring: emptyWorkflowDerivedWiring,
   nodeGroups: [
     {

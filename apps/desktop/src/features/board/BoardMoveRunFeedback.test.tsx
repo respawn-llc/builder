@@ -19,7 +19,16 @@ function Harness() {
     <div>
       <button
         onClick={() => {
-          tracker.trackMoveRunIDs({ runIDs: ["run-1"] });
+          tracker.trackMoveRunIDs({
+            moved: {
+              approvalError: "",
+              placementIDs: [],
+              runIDs: ["run-1"],
+              state: "started",
+              transitionID: "transition-1",
+            },
+            outcome: "moved",
+          });
         }}
         type="button"
       >

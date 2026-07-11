@@ -2,10 +2,11 @@ import { useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useStatusController } from "../../app/useStatusController";
+import type { WorkflowTaskInitiatingActionResult } from "../../api";
 
 export type BoardMoveRunTracker = Readonly<{
   observeInterruptedRun: (input: Readonly<{ runID: string; taskID: string }>) => void;
-  trackMoveRunIDs: (result: Readonly<{ runIDs: readonly string[] }>) => void;
+  trackMoveRunIDs: (result: WorkflowTaskInitiatingActionResult) => void;
 }>;
 
 export function useBoardMoveRunFeedback(): BoardMoveRunTracker {
@@ -17,8 +18,11 @@ export function useBoardMoveRunFeedback(): BoardMoveRunTracker {
   // render (which would drop the toast or race two observations into duplicates).
   const pendingMoveRunIDsRef = useRef<Set<string>>(new Set());
 
-  const trackMoveRunIDs = useCallback((result: Readonly<{ runIDs: readonly string[] }>): void => {
-    for (const runID of result.runIDs) {
+  const trackMoveRunIDs = useCallback((result: WorkflowTaskInitiatingActionResult): void => {
+    if (result.outcome !== "moved") {
+      return;
+    }
+    for (const runID of result.moved.runIDs) {
       const trimmed = runID.trim();
       if (trimmed.length > 0) {
         pendingMoveRunIDsRef.current.add(trimmed);
