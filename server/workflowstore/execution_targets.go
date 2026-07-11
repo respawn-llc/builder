@@ -19,6 +19,31 @@ func (s *Store) SaveTaskExecutionTarget(ctx context.Context, target workflow.Exe
 	return insertValidatedTaskExecutionTarget(ctx, s.queries, target)
 }
 
+func (s *Store) BeginManagedExecutionTargetMaterialization(ctx context.Context, target workflow.ExecutionTarget) error {
+	if err := target.Validate(); err != nil {
+		return err
+	}
+	if target.Policy == workflow.ExecutionPolicyNone ||
+		target.State != workflow.ExecutionTargetStateInitialProvisioning ||
+		target.ActiveClaim == nil ||
+		target.ActiveClaim.Phase != workflow.ExecutionTargetClaimMaterializing {
+		return errors.New("managed execution target materialization requires an initial materializing claim")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
+		return err
+	}
+	if err := insertValidatedTaskExecutionTarget(ctx, q, target); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func insertValidatedTaskExecutionTarget(ctx context.Context, q *sqlitegen.Queries, target workflow.ExecutionTarget) error {
 	var resolvedSourceKind sql.NullString
 	var resolvedSourceRef sql.NullString

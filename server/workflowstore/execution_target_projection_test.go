@@ -230,6 +230,65 @@ func TestStoreAttachManagedExecutionTargetWorktreeLocksClaimedTarget(t *testing.
 	}
 }
 
+func TestStoreBeginManagedExecutionTargetMaterializationClearsNegotiation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowID,
+		Title:      "Materializing target",
+		Body:       "Body",
+	})
+	startPlacement, err := store.queries.GetActiveStartPlacementForTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetActiveStartPlacementForTask: %v", err)
+	}
+	saveTaskExecutionTargetNegotiation(t, ctx, store, workflow.ExecutionTargetNegotiation{
+		TaskID:            task.ID,
+		Generation:        "negotiation-1",
+		WorkflowID:        workflowID,
+		SourceWorkspaceID: binding.WorkspaceID,
+		Source:            workflow.ExecutionTargetNegotiationSource{Kind: workflow.ExecutionTargetNegotiationSourceNonGit},
+		Action: workflow.ExecutionTargetNegotiationAction{
+			Kind:             workflow.ExecutionTargetNegotiationActionStart,
+			StartPlacementID: placementPointer(workflow.PlacementID(startPlacement.ID)),
+		},
+	})
+	provisioningGeneration := "provisioning-1"
+	claimGeneration := "claim-1"
+	target := workflow.ExecutionTarget{
+		TaskID: task.ID,
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: "deadbeef",
+		},
+		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
+		ActiveClaim:                 &workflow.ExecutionTargetClaim{Generation: claimGeneration, Phase: workflow.ExecutionTargetClaimMaterializing},
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := store.BeginManagedExecutionTargetMaterialization(ctx, target); err != nil {
+		t.Fatalf("BeginManagedExecutionTargetMaterialization: %v", err)
+	}
+	actual, err := store.GetTaskExecutionTarget(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if actual == nil || actual.State != workflow.ExecutionTargetStateInitialProvisioning || actual.ActiveClaim == nil || actual.ActiveClaim.Generation != claimGeneration {
+		t.Fatalf("target = %+v, want initial materializing target", actual)
+	}
+	negotiation, err := store.GetTaskExecutionTargetNegotiation(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation: %v", err)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation = %+v, want cleared after materialization claim", negotiation)
+	}
+}
+
 func TestTaskExecutionTargetProjectionRoundTripsManagedTargetAndRoot(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
