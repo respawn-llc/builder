@@ -677,6 +677,9 @@ func (s *Service) negotiateTaskStartExecutionTarget(ctx context.Context, req ser
 	if err != nil {
 		return nil, err
 	}
+	if materialization.conflict != nil {
+		return materialization.conflict, nil
+	}
 	if materialization.selectionRequired != nil {
 		return materialization.selectionRequired, nil
 	}
@@ -700,6 +703,7 @@ func (s *Service) negotiateTaskStartExecutionTarget(ctx context.Context, req ser
 type taskExecutionTargetActionMaterialization struct {
 	none              bool
 	selectionRequired *serverapi.WorkflowTaskInitiatingActionResult
+	conflict          *serverapi.WorkflowTaskInitiatingActionResult
 }
 
 func (s *Service) materializeTaskExecutionTargetForAction(ctx context.Context, prepared workflowstore.TaskExecutionTargetNegotiationPreparation, selectionGeneration *string, requestedSelection *serverapi.WorkflowTaskExecutionTargetSelection, setupOperationID serverapi.WorktreeSetupOperationID) (taskExecutionTargetActionMaterialization, error) {
@@ -709,6 +713,9 @@ func (s *Service) materializeTaskExecutionTargetForAction(ctx context.Context, p
 	}
 	matchesNoneSelection, err := s.matchesNoneExecutionTargetSelection(ctx, prepared, selectionGeneration, selection)
 	if err != nil {
+		if executionTargetNegotiationConflict(err) {
+			return taskExecutionTargetActionMaterialization{conflict: taskExecutionTargetNegotiationConflictResult(prepared.TaskID)}, nil
+		}
 		return taskExecutionTargetActionMaterialization{}, err
 	}
 	if matchesNoneSelection {
@@ -716,6 +723,9 @@ func (s *Service) materializeTaskExecutionTargetForAction(ctx context.Context, p
 	}
 	matchesSelection, err := s.matchesExecutionTargetSelection(ctx, prepared, selectionGeneration, selection)
 	if err != nil {
+		if executionTargetNegotiationConflict(err) {
+			return taskExecutionTargetActionMaterialization{conflict: taskExecutionTargetNegotiationConflictResult(prepared.TaskID)}, nil
+		}
 		return taskExecutionTargetActionMaterialization{}, err
 	}
 	if matchesSelection && selection != nil {
@@ -727,9 +737,15 @@ func (s *Service) materializeTaskExecutionTargetForAction(ctx context.Context, p
 			if implicitPolicySelection && executionTargetResolutionRequiresSelection(err) {
 				selectionRequired, selectionErr := s.requireTaskExecutionTargetSelection(ctx, prepared)
 				if selectionErr != nil {
+					if executionTargetNegotiationConflict(selectionErr) {
+						return taskExecutionTargetActionMaterialization{conflict: taskExecutionTargetNegotiationConflictResult(prepared.TaskID)}, nil
+					}
 					return taskExecutionTargetActionMaterialization{}, selectionErr
 				}
 				return taskExecutionTargetActionMaterialization{selectionRequired: selectionRequired}, nil
+			}
+			if executionTargetNegotiationConflict(err) {
+				return taskExecutionTargetActionMaterialization{conflict: taskExecutionTargetNegotiationConflictResult(prepared.TaskID)}, nil
 			}
 			return taskExecutionTargetActionMaterialization{}, err
 		}
@@ -737,6 +753,9 @@ func (s *Service) materializeTaskExecutionTargetForAction(ctx context.Context, p
 	}
 	selectionRequired, err := s.requireTaskExecutionTargetSelection(ctx, prepared)
 	if err != nil {
+		if executionTargetNegotiationConflict(err) {
+			return taskExecutionTargetActionMaterialization{conflict: taskExecutionTargetNegotiationConflictResult(prepared.TaskID)}, nil
+		}
 		return taskExecutionTargetActionMaterialization{}, err
 	}
 	return taskExecutionTargetActionMaterialization{selectionRequired: selectionRequired}, nil
@@ -942,7 +961,7 @@ func (s *Service) requireTaskExecutionTargetSelection(ctx context.Context, prepa
 		Source:            source,
 		Action:            prepared.Action,
 	}
-	if err := s.store.SaveTaskExecutionTargetNegotiation(ctx, negotiation); err != nil {
+	if err := s.store.SaveTaskExecutionTargetNegotiationIfExpected(ctx, prepared.ExistingNegotiation, negotiation); err != nil {
 		return nil, err
 	}
 	return taskExecutionTargetSelectionRequiredResult(negotiation, prepared.ExecutionPolicy), nil
@@ -1002,6 +1021,21 @@ func taskExecutionTargetInProgressResult(taskID workflow.TaskID, phase workflow.
 			Phase:  serverapi.WorkflowTaskExecutionTargetMaterializationPhase(phase),
 		},
 	}
+}
+
+func taskExecutionTargetNegotiationConflictResult(taskID workflow.TaskID) *serverapi.WorkflowTaskInitiatingActionResult {
+	return &serverapi.WorkflowTaskInitiatingActionResult{
+		Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeConflict,
+		Conflict: &serverapi.WorkflowTaskExecutionTargetNegotiationConflict{
+			TaskID: string(taskID),
+		},
+	}
+}
+
+func executionTargetNegotiationConflict(err error) bool {
+	return errors.Is(err, workflowstore.ErrTaskExecutionTargetNegotiationChanged) ||
+		errors.Is(err, workflowstore.ErrTaskExecutionTargetNegotiationRequired) ||
+		errors.Is(err, workflowstore.ErrTaskExecutionTargetNegotiationInProgress)
 }
 
 func taskExecutionTargetSource(source workflow.ExecutionTargetNegotiationSource) serverapi.WorkflowTaskExecutionTargetSource {
@@ -1162,6 +1196,9 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 		if materializationErr != nil {
 			return serverapi.WorkflowTaskInitiatingActionResult{}, materializationErr
 		}
+		if materialization.conflict != nil {
+			return *materialization.conflict, nil
+		}
 		if materialization.selectionRequired != nil {
 			return *materialization.selectionRequired, nil
 		}
@@ -1205,6 +1242,9 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 		materialization, materializationErr := s.materializeTaskExecutionTargetForAction(ctx, prepared, req.SelectionGeneration, req.Selection, req.SetupOperationID)
 		if materializationErr != nil {
 			return serverapi.WorkflowTaskInitiatingActionResult{}, materializationErr
+		}
+		if materialization.conflict != nil {
+			return *materialization.conflict, nil
 		}
 		if materialization.selectionRequired != nil {
 			return *materialization.selectionRequired, nil

@@ -114,6 +114,71 @@ func TestTaskExecutionTargetNegotiationRoundTripsFencesAndClearsOnCancellation(t
 	}
 }
 
+func TestTaskExecutionTargetNegotiationConditionalSaveFencesExpectedState(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowID,
+		Title:      "Conditional negotiation",
+		Body:       "Body",
+	})
+	startPlacement, err := store.queries.GetActiveStartPlacementForTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetActiveStartPlacementForTask: %v", err)
+	}
+	negotiation := workflow.ExecutionTargetNegotiation{
+		TaskID:            task.ID,
+		Generation:        "generation-1",
+		WorkflowID:        workflowID,
+		SourceWorkspaceID: binding.WorkspaceID,
+		Source: workflow.ExecutionTargetNegotiationSource{
+			Kind: workflow.ExecutionTargetNegotiationSourceNonGit,
+		},
+		Action: workflow.ExecutionTargetNegotiationAction{
+			Kind:             workflow.ExecutionTargetNegotiationActionStart,
+			StartPlacementID: placementPointer(workflow.PlacementID(startPlacement.ID)),
+		},
+	}
+	if err := store.SaveTaskExecutionTargetNegotiationIfExpected(ctx, nil, negotiation); err != nil {
+		t.Fatalf("SaveTaskExecutionTargetNegotiationIfExpected absent: %v", err)
+	}
+	actual, err := store.GetTaskExecutionTargetNegotiation(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation: %v", err)
+	}
+	if actual == nil || actual.Generation != negotiation.Generation {
+		t.Fatalf("stored negotiation = %+v, want generation %q", actual, negotiation.Generation)
+	}
+
+	replacement := negotiation
+	replacement.Generation = "generation-2"
+	if err := store.SaveTaskExecutionTargetNegotiationIfExpected(ctx, nil, replacement); !errors.Is(err, ErrTaskExecutionTargetNegotiationChanged) {
+		t.Fatalf("SaveTaskExecutionTargetNegotiationIfExpected stale absence error = %v, want %v", err, ErrTaskExecutionTargetNegotiationChanged)
+	}
+	actual, err = store.GetTaskExecutionTargetNegotiation(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation after stale absence: %v", err)
+	}
+	if actual == nil || actual.Generation != negotiation.Generation {
+		t.Fatalf("stored negotiation after stale absence = %+v, want original", actual)
+	}
+
+	if err := store.SaveTaskExecutionTargetNegotiationIfExpected(ctx, &negotiation, replacement); err != nil {
+		t.Fatalf("SaveTaskExecutionTargetNegotiationIfExpected replacement: %v", err)
+	}
+	actual, err = store.GetTaskExecutionTargetNegotiation(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation after replacement: %v", err)
+	}
+	if actual == nil || actual.Generation != replacement.Generation {
+		t.Fatalf("stored negotiation after replacement = %+v, want generation %q", actual, replacement.Generation)
+	}
+	if err := store.SaveTaskExecutionTargetNegotiationIfExpected(ctx, &negotiation, negotiation); !errors.Is(err, ErrTaskExecutionTargetNegotiationChanged) {
+		t.Fatalf("SaveTaskExecutionTargetNegotiationIfExpected stale replacement error = %v, want %v", err, ErrTaskExecutionTargetNegotiationChanged)
+	}
+}
+
 func TestTaskExecutionTargetNegotiationBlocksLegacyInitiatingMutations(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)

@@ -808,6 +808,13 @@ type WorkflowTaskExecutionTargetMaterializationProgress struct {
 	Phase  WorkflowTaskExecutionTargetMaterializationPhase `json:"phase"`
 }
 
+// WorkflowTaskExecutionTargetNegotiationConflict tells the caller that its
+// initiating action lost the durable negotiation fence. The caller must
+// refetch the task before attempting another initiating action.
+type WorkflowTaskExecutionTargetNegotiationConflict struct {
+	TaskID string `json:"task_id"`
+}
+
 type WorkflowTaskInitiatingActionOutcome string
 
 const (
@@ -816,6 +823,7 @@ const (
 	WorkflowTaskInitiatingActionOutcomeApproved          WorkflowTaskInitiatingActionOutcome = "approved"
 	WorkflowTaskInitiatingActionOutcomeSelectionRequired WorkflowTaskInitiatingActionOutcome = "selection_required"
 	WorkflowTaskInitiatingActionOutcomeInProgress        WorkflowTaskInitiatingActionOutcome = "in_progress"
+	WorkflowTaskInitiatingActionOutcomeConflict          WorkflowTaskInitiatingActionOutcome = "conflict"
 )
 
 // WorkflowTaskInitiatingActionResult is a closed wire union. Its JSON form
@@ -827,6 +835,7 @@ type WorkflowTaskInitiatingActionResult struct {
 	Approved          *WorkflowTaskApproveResponse                        `json:"approved,omitempty"`
 	SelectionRequired *WorkflowTaskExecutionTargetSelectionRequired       `json:"selection_required,omitempty"`
 	InProgress        *WorkflowTaskExecutionTargetMaterializationProgress `json:"in_progress,omitempty"`
+	Conflict          *WorkflowTaskExecutionTargetNegotiationConflict     `json:"conflict,omitempty"`
 }
 
 func (result WorkflowTaskInitiatingActionResult) Validate() error {
@@ -844,6 +853,9 @@ func (result WorkflowTaskInitiatingActionResult) Validate() error {
 		payloads++
 	}
 	if result.InProgress != nil {
+		payloads++
+	}
+	if result.Conflict != nil {
 		payloads++
 	}
 	if payloads != 1 {
@@ -876,6 +888,13 @@ func (result WorkflowTaskInitiatingActionResult) Validate() error {
 		if err := result.InProgress.Validate(); err != nil {
 			return err
 		}
+	case WorkflowTaskInitiatingActionOutcomeConflict:
+		if result.Conflict == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "conflict", "conflict outcome requires a conflict payload")
+		}
+		if err := result.Conflict.Validate(); err != nil {
+			return err
+		}
 	default:
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "outcome", "unknown initiating action outcome")
 	}
@@ -893,6 +912,7 @@ func (result WorkflowTaskInitiatingActionResult) MarshalJSON() ([]byte, error) {
 		Approved          *WorkflowTaskApproveResponse                        `json:"approved,omitempty"`
 		SelectionRequired *WorkflowTaskExecutionTargetSelectionRequired       `json:"selection_required,omitempty"`
 		InProgress        *WorkflowTaskExecutionTargetMaterializationProgress `json:"in_progress,omitempty"`
+		Conflict          *WorkflowTaskExecutionTargetNegotiationConflict     `json:"conflict,omitempty"`
 	}
 	return json.Marshal(wireResult{
 		Outcome:           result.Outcome,
@@ -901,6 +921,7 @@ func (result WorkflowTaskInitiatingActionResult) MarshalJSON() ([]byte, error) {
 		Approved:          result.Approved,
 		SelectionRequired: result.SelectionRequired,
 		InProgress:        result.InProgress,
+		Conflict:          result.Conflict,
 	})
 }
 
@@ -915,6 +936,7 @@ func (result *WorkflowTaskInitiatingActionResult) UnmarshalJSON(data []byte) err
 		Approved          *WorkflowTaskApproveResponse                        `json:"approved"`
 		SelectionRequired *WorkflowTaskExecutionTargetSelectionRequired       `json:"selection_required"`
 		InProgress        *WorkflowTaskExecutionTargetMaterializationProgress `json:"in_progress"`
+		Conflict          *WorkflowTaskExecutionTargetNegotiationConflict     `json:"conflict"`
 	}
 	var wire wireResult
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -927,6 +949,7 @@ func (result *WorkflowTaskInitiatingActionResult) UnmarshalJSON(data []byte) err
 		Approved:          wire.Approved,
 		SelectionRequired: wire.SelectionRequired,
 		InProgress:        wire.InProgress,
+		Conflict:          wire.Conflict,
 	}
 	if err := decoded.Validate(); err != nil {
 		return err
@@ -1997,6 +2020,10 @@ func (progress WorkflowTaskExecutionTargetMaterializationProgress) Validate() er
 	default:
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "in_progress.phase", "materialization phase is invalid")
 	}
+}
+
+func (conflict WorkflowTaskExecutionTargetNegotiationConflict) Validate() error {
+	return validateRequired("conflict.task_id", conflict.TaskID)
 }
 
 func validateWorkflowGraphValidationModes(modes []WorkflowValidationMode) error {

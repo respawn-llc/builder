@@ -147,21 +147,81 @@ func (s *Store) SaveTaskExecutionTargetNegotiation(ctx context.Context, negotiat
 	if err := negotiation.Validate(); err != nil {
 		return err
 	}
+	fields := taskExecutionTargetNegotiationPersistenceFieldsFromNegotiation(negotiation)
 	return s.queries.UpsertTaskExecutionTargetNegotiation(ctx, sqlitegen.UpsertTaskExecutionTargetNegotiationParams{
 		TaskID:                string(negotiation.TaskID),
-		Generation:            negotiation.Generation,
-		WorkflowID:            string(negotiation.WorkflowID),
-		SourceWorkspaceID:     negotiation.SourceWorkspaceID,
-		SourceKind:            string(negotiation.Source.Kind),
-		SourceNamedRef:        nullableExecutionTargetNegotiationString(negotiation.Source.NamedRef),
-		SourceCommit:          nullableExecutionTargetNegotiationString(negotiation.Source.Commit),
-		RecoveryCause:         nullableExecutionTargetNegotiationRecoveryCause(negotiation.RecoveryCause),
-		ActionKind:            string(negotiation.Action.Kind),
-		StartPlacementID:      nullableExecutionTargetNegotiationPlacementID(negotiation.Action.StartPlacementID),
-		MoveSourcePlacementID: nullableExecutionTargetNegotiationPlacementID(negotiation.Action.MoveSourcePlacementID),
-		MoveTargetNodeID:      nullableExecutionTargetNegotiationNodeID(negotiation.Action.MoveTargetNodeID),
-		ApprovalTransitionID:  nullableExecutionTargetNegotiationTransitionID(negotiation.Action.ApprovalTransitionID),
+		Generation:            fields.generation,
+		WorkflowID:            fields.workflowID,
+		SourceWorkspaceID:     fields.sourceWorkspaceID,
+		SourceKind:            fields.sourceKind,
+		SourceNamedRef:        fields.sourceNamedRef,
+		SourceCommit:          fields.sourceCommit,
+		RecoveryCause:         fields.recoveryCause,
+		ActionKind:            fields.actionKind,
+		StartPlacementID:      fields.startPlacementID,
+		MoveSourcePlacementID: fields.moveSourcePlacementID,
+		MoveTargetNodeID:      fields.moveTargetNodeID,
+		ApprovalTransitionID:  fields.approvalTransitionID,
 	})
+}
+
+// SaveTaskExecutionTargetNegotiationIfExpected atomically saves a replacement
+// negotiation only when the current row exactly matches expected. A nil
+// expected negotiation means the row must be absent.
+func (s *Store) SaveTaskExecutionTargetNegotiationIfExpected(ctx context.Context, expected *workflow.ExecutionTargetNegotiation, replacement workflow.ExecutionTargetNegotiation) error {
+	if err := replacement.Validate(); err != nil {
+		return err
+	}
+	if expected != nil {
+		if err := expected.Validate(); err != nil {
+			return err
+		}
+		if expected.TaskID != replacement.TaskID {
+			return errors.New("expected task execution target negotiation must belong to the replacement task")
+		}
+	}
+	replacementFields := taskExecutionTargetNegotiationPersistenceFieldsFromNegotiation(replacement)
+	params := sqlitegen.SaveTaskExecutionTargetNegotiationIfExpectedParams{
+		TaskID:                string(replacement.TaskID),
+		Generation:            replacementFields.generation,
+		WorkflowID:            replacementFields.workflowID,
+		SourceWorkspaceID:     replacementFields.sourceWorkspaceID,
+		SourceKind:            replacementFields.sourceKind,
+		SourceNamedRef:        replacementFields.sourceNamedRef,
+		SourceCommit:          replacementFields.sourceCommit,
+		RecoveryCause:         replacementFields.recoveryCause,
+		ActionKind:            replacementFields.actionKind,
+		StartPlacementID:      replacementFields.startPlacementID,
+		MoveSourcePlacementID: replacementFields.moveSourcePlacementID,
+		MoveTargetNodeID:      replacementFields.moveTargetNodeID,
+		ApprovalTransitionID:  replacementFields.approvalTransitionID,
+	}
+	if expected != nil {
+		expectedFields := taskExecutionTargetNegotiationPersistenceFieldsFromNegotiation(*expected)
+		params.ExpectedGeneration = nullableExecutionTargetNegotiationString(&expectedFields.generation)
+		params.ExpectedWorkflowID = nullableExecutionTargetNegotiationString(&expectedFields.workflowID)
+		params.ExpectedSourceWorkspaceID = nullableExecutionTargetNegotiationString(&expectedFields.sourceWorkspaceID)
+		params.ExpectedSourceKind = nullableExecutionTargetNegotiationString(&expectedFields.sourceKind)
+		params.ExpectedSourceNamedRef = expectedFields.sourceNamedRef
+		params.ExpectedSourceCommit = expectedFields.sourceCommit
+		params.ExpectedRecoveryCause = expectedFields.recoveryCause
+		params.ExpectedActionKind = nullableExecutionTargetNegotiationString(&expectedFields.actionKind)
+		params.ExpectedStartPlacementID = expectedFields.startPlacementID
+		params.ExpectedMoveSourcePlacementID = expectedFields.moveSourcePlacementID
+		params.ExpectedMoveTargetNodeID = expectedFields.moveTargetNodeID
+		params.ExpectedApprovalTransitionID = expectedFields.approvalTransitionID
+	}
+	rows, err := s.queries.SaveTaskExecutionTargetNegotiationIfExpected(ctx, params)
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrTaskExecutionTargetNegotiationChanged
+	}
+	if rows != 1 {
+		return fmt.Errorf("save task execution target negotiation affected %d rows", rows)
+	}
+	return nil
 }
 
 func (s *Store) GetTaskExecutionTargetNegotiation(ctx context.Context, taskID workflow.TaskID) (*workflow.ExecutionTargetNegotiation, error) {
@@ -277,6 +337,38 @@ func executionTargetNegotiationsEqual(left workflow.ExecutionTargetNegotiation, 
 		optionalExecutionTargetNegotiationValueEqual(left.Action.MoveSourcePlacementID, right.Action.MoveSourcePlacementID) &&
 		optionalExecutionTargetNegotiationValueEqual(left.Action.MoveTargetNodeID, right.Action.MoveTargetNodeID) &&
 		optionalExecutionTargetNegotiationValueEqual(left.Action.ApprovalTransitionID, right.Action.ApprovalTransitionID)
+}
+
+type taskExecutionTargetNegotiationPersistenceFields struct {
+	generation            string
+	workflowID            string
+	sourceWorkspaceID     string
+	sourceKind            string
+	sourceNamedRef        sql.NullString
+	sourceCommit          sql.NullString
+	recoveryCause         sql.NullString
+	actionKind            string
+	startPlacementID      sql.NullString
+	moveSourcePlacementID sql.NullString
+	moveTargetNodeID      sql.NullString
+	approvalTransitionID  sql.NullString
+}
+
+func taskExecutionTargetNegotiationPersistenceFieldsFromNegotiation(negotiation workflow.ExecutionTargetNegotiation) taskExecutionTargetNegotiationPersistenceFields {
+	return taskExecutionTargetNegotiationPersistenceFields{
+		generation:            negotiation.Generation,
+		workflowID:            string(negotiation.WorkflowID),
+		sourceWorkspaceID:     negotiation.SourceWorkspaceID,
+		sourceKind:            string(negotiation.Source.Kind),
+		sourceNamedRef:        nullableExecutionTargetNegotiationString(negotiation.Source.NamedRef),
+		sourceCommit:          nullableExecutionTargetNegotiationString(negotiation.Source.Commit),
+		recoveryCause:         nullableExecutionTargetNegotiationRecoveryCause(negotiation.RecoveryCause),
+		actionKind:            string(negotiation.Action.Kind),
+		startPlacementID:      nullableExecutionTargetNegotiationPlacementID(negotiation.Action.StartPlacementID),
+		moveSourcePlacementID: nullableExecutionTargetNegotiationPlacementID(negotiation.Action.MoveSourcePlacementID),
+		moveTargetNodeID:      nullableExecutionTargetNegotiationNodeID(negotiation.Action.MoveTargetNodeID),
+		approvalTransitionID:  nullableExecutionTargetNegotiationTransitionID(negotiation.Action.ApprovalTransitionID),
+	}
 }
 
 func nullableExecutionTargetNegotiationString(value *string) sql.NullString {

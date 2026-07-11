@@ -8870,6 +8870,142 @@ func (q *Queries) ResumeTaskRun(ctx context.Context, arg ResumeTaskRunParams) (i
 	return result.RowsAffected()
 }
 
+const saveTaskExecutionTargetNegotiationIfExpected = `-- name: SaveTaskExecutionTargetNegotiationIfExpected :execrows
+INSERT INTO task_execution_target_negotiations (
+    task_id,
+    generation,
+    workflow_id,
+    source_workspace_id,
+    source_kind,
+    source_named_ref,
+    source_commit,
+    recovery_cause,
+    action_kind,
+    start_placement_id,
+    move_source_placement_id,
+    move_target_node_id,
+    approval_transition_id
+)
+SELECT
+    ?1,
+    ?2,
+    ?3,
+    ?4,
+    ?5,
+    ?6,
+    ?7,
+    ?8,
+    ?9,
+    ?10,
+    ?11,
+    ?12,
+    ?13
+WHERE
+    (
+        CAST(?14 AS TEXT) IS NULL
+        AND NOT EXISTS (
+            SELECT 1
+            FROM task_execution_target_negotiations
+            WHERE task_id = ?1
+        )
+    )
+    OR (
+        CAST(?14 AS TEXT) IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+            FROM task_execution_target_negotiations AS existing
+            WHERE existing.task_id = ?1
+              AND existing.generation = CAST(?14 AS TEXT)
+              AND existing.workflow_id = ?15
+              AND existing.source_workspace_id = ?16
+              AND existing.source_kind = ?17
+              AND existing.source_named_ref IS ?18
+              AND existing.source_commit IS ?19
+              AND existing.recovery_cause IS ?20
+              AND existing.action_kind = ?21
+              AND existing.start_placement_id IS ?22
+              AND existing.move_source_placement_id IS ?23
+              AND existing.move_target_node_id IS ?24
+              AND existing.approval_transition_id IS ?25
+        )
+    )
+ON CONFLICT (task_id) DO UPDATE SET
+    generation = excluded.generation,
+    workflow_id = excluded.workflow_id,
+    source_workspace_id = excluded.source_workspace_id,
+    source_kind = excluded.source_kind,
+    source_named_ref = excluded.source_named_ref,
+    source_commit = excluded.source_commit,
+    recovery_cause = excluded.recovery_cause,
+    action_kind = excluded.action_kind,
+    start_placement_id = excluded.start_placement_id,
+    move_source_placement_id = excluded.move_source_placement_id,
+    move_target_node_id = excluded.move_target_node_id,
+    approval_transition_id = excluded.approval_transition_id
+`
+
+type SaveTaskExecutionTargetNegotiationIfExpectedParams struct {
+	TaskID                        string
+	Generation                    string
+	WorkflowID                    string
+	SourceWorkspaceID             string
+	SourceKind                    string
+	SourceNamedRef                sql.NullString
+	SourceCommit                  sql.NullString
+	RecoveryCause                 sql.NullString
+	ActionKind                    string
+	StartPlacementID              sql.NullString
+	MoveSourcePlacementID         sql.NullString
+	MoveTargetNodeID              sql.NullString
+	ApprovalTransitionID          sql.NullString
+	ExpectedGeneration            sql.NullString
+	ExpectedWorkflowID            sql.NullString
+	ExpectedSourceWorkspaceID     sql.NullString
+	ExpectedSourceKind            sql.NullString
+	ExpectedSourceNamedRef        sql.NullString
+	ExpectedSourceCommit          sql.NullString
+	ExpectedRecoveryCause         sql.NullString
+	ExpectedActionKind            sql.NullString
+	ExpectedStartPlacementID      sql.NullString
+	ExpectedMoveSourcePlacementID sql.NullString
+	ExpectedMoveTargetNodeID      sql.NullString
+	ExpectedApprovalTransitionID  sql.NullString
+}
+
+func (q *Queries) SaveTaskExecutionTargetNegotiationIfExpected(ctx context.Context, arg SaveTaskExecutionTargetNegotiationIfExpectedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, saveTaskExecutionTargetNegotiationIfExpected,
+		arg.TaskID,
+		arg.Generation,
+		arg.WorkflowID,
+		arg.SourceWorkspaceID,
+		arg.SourceKind,
+		arg.SourceNamedRef,
+		arg.SourceCommit,
+		arg.RecoveryCause,
+		arg.ActionKind,
+		arg.StartPlacementID,
+		arg.MoveSourcePlacementID,
+		arg.MoveTargetNodeID,
+		arg.ApprovalTransitionID,
+		arg.ExpectedGeneration,
+		arg.ExpectedWorkflowID,
+		arg.ExpectedSourceWorkspaceID,
+		arg.ExpectedSourceKind,
+		arg.ExpectedSourceNamedRef,
+		arg.ExpectedSourceCommit,
+		arg.ExpectedRecoveryCause,
+		arg.ExpectedActionKind,
+		arg.ExpectedStartPlacementID,
+		arg.ExpectedMoveSourcePlacementID,
+		arg.ExpectedMoveTargetNodeID,
+		arg.ExpectedApprovalTransitionID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setProjectDefaultWorkflowLink = `-- name: SetProjectDefaultWorkflowLink :execrows
 UPDATE projects
 SET

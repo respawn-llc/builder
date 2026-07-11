@@ -266,6 +266,169 @@ func TestServiceStartAskPolicySupersedesSelectionWhenGitFactsChange(t *testing.T
 	}
 }
 
+func TestServiceSelectedManagedStartReturnsConflictWhenNegotiationFenceChanges(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	resolver := &recordingTaskExecutionTargetResolver{
+		resolutions: []worktree.ExecutionTargetResolution{
+			namedExecutionTargetResolution("refs/heads/main", "commit-one"),
+		},
+	}
+	materializer := &recordingTaskExecutionTargetWorktreeMaterializer{worktreeRoot: t.TempDir()}
+	service.targetResolver = resolver
+	service.targetWorktrees = materializer
+
+	required, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask selection requirement: %v", err)
+	}
+	if required.SelectionRequired == nil {
+		t.Fatalf("selection requirement = %+v, want selection_required", required)
+	}
+	original, err := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation before race: %v", err)
+	}
+	if original == nil {
+		t.Fatal("GetTaskExecutionTargetNegotiation before race = nil, want negotiation")
+	}
+	replacement := *original
+	replacement.Generation = "concurrent-negotiation-generation"
+	hookRan := false
+	resolver.hook = func() {
+		if hookRan {
+			return
+		}
+		hookRan = true
+		if err := service.store.SaveTaskExecutionTargetNegotiation(ctx, replacement); err != nil {
+			t.Fatalf("SaveTaskExecutionTargetNegotiation concurrent replacement: %v", err)
+		}
+	}
+
+	result, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:              task.Task.ID,
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SelectionGeneration: &required.SelectionRequired.Generation,
+		Selection:           &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionHead},
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask selected race: %v", err)
+	}
+	if !hookRan || result.Outcome != serverapi.WorkflowTaskInitiatingActionOutcomeConflict || result.Conflict == nil || result.Conflict.TaskID != task.Task.ID {
+		t.Fatalf("selected race result = %+v, want conflict for task", result)
+	}
+	negotiation, err := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation after race: %v", err)
+	}
+	if negotiation == nil || negotiation.Generation != replacement.Generation {
+		t.Fatalf("negotiation after race = %+v, want preserved replacement", negotiation)
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget after race: %v", err)
+	}
+	if target != nil {
+		t.Fatalf("target after race = %+v, want nil", target)
+	}
+	if materializer.provision.WorkspaceID != "" || materializer.setup.WorkspaceID != "" {
+		t.Fatalf("materializer requests = provision:%+v setup:%+v, want no worktree or setup", materializer.provision, materializer.setup)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListRuns after race: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs after race = %+v, want none", runs)
+	}
+	placements, err := service.store.ListPlacements(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListPlacements after race: %v", err)
+	}
+	if len(placements) != 1 || placements[0].State != "active" {
+		t.Fatalf("placements after race = %+v, want unchanged start placement", placements)
+	}
+}
+
+func TestServiceAskSelectionRequirementReturnsConflictWhenNegotiationAppears(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	prepared, err := service.store.PrepareTaskStartExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("PrepareTaskStartExecutionTargetNegotiation: %v", err)
+	}
+	namedRef := "refs/heads/main"
+	commit := "commit-one"
+	replacement := workflow.ExecutionTargetNegotiation{
+		TaskID:            workflow.TaskID(task.Task.ID),
+		Generation:        "concurrent-negotiation-generation",
+		WorkflowID:        workflow.WorkflowID(workflowID),
+		SourceWorkspaceID: binding.WorkspaceID,
+		Source: workflow.ExecutionTargetNegotiationSource{
+			Kind:     workflow.ExecutionTargetNegotiationSourceNamedRef,
+			NamedRef: &namedRef,
+			Commit:   &commit,
+		},
+		Action: prepared.Action,
+	}
+	hookRan := false
+	service.targetResolver = &recordingTaskExecutionTargetResolver{
+		resolutions: []worktree.ExecutionTargetResolution{
+			namedExecutionTargetResolution(namedRef, commit),
+		},
+		hook: func() {
+			if hookRan {
+				return
+			}
+			hookRan = true
+			if err := service.store.SaveTaskExecutionTargetNegotiation(ctx, replacement); err != nil {
+				t.Fatalf("SaveTaskExecutionTargetNegotiation concurrent creation: %v", err)
+			}
+		},
+	}
+
+	result, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask raced selection requirement: %v", err)
+	}
+	if !hookRan || result.Outcome != serverapi.WorkflowTaskInitiatingActionOutcomeConflict || result.Conflict == nil || result.Conflict.TaskID != task.Task.ID {
+		t.Fatalf("selection requirement race result = %+v, want conflict for task", result)
+	}
+	negotiation, err := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation after race: %v", err)
+	}
+	if negotiation == nil || negotiation.Generation != replacement.Generation {
+		t.Fatalf("negotiation after race = %+v, want preserved replacement", negotiation)
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget after race: %v", err)
+	}
+	if target != nil {
+		t.Fatalf("target after race = %+v, want nil", target)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListRuns after race: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs after race = %+v, want none", runs)
+	}
+}
+
 func TestServiceStartAskNoneSelectionWithMissingSourceScriptLeavesNoTargetOrRun(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceScriptWorkflow(t, ctx, service, "scripts/missing")
@@ -2534,6 +2697,7 @@ type recordingTaskExecutionTargetResolver struct {
 	resolutions []worktree.ExecutionTargetResolution
 	err         error
 	calls       int
+	hook        func()
 }
 
 type recordingTaskExecutionTargetWorktreeMaterializer struct {
@@ -2568,6 +2732,9 @@ func (r *recordingTaskExecutionTargetResolver) ResolveExecutionTarget(_ context.
 	index := r.calls - 1
 	if index >= len(r.resolutions) {
 		index = len(r.resolutions) - 1
+	}
+	if r.hook != nil {
+		r.hook()
 	}
 	return r.resolutions[index], nil
 }

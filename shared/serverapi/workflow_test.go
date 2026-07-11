@@ -310,6 +310,21 @@ func TestWorkflowExecutionPolicyAndInitiatingActionContractValidation(t *testing
 		t.Fatalf("valid selection-required outcome rejected: %v", err)
 	}
 
+	conflict := WorkflowTaskInitiatingActionResult{
+		Outcome: WorkflowTaskInitiatingActionOutcomeConflict,
+		Conflict: &WorkflowTaskExecutionTargetNegotiationConflict{
+			TaskID: "task-1",
+		},
+	}
+	if err := conflict.Validate(); err != nil {
+		t.Fatalf("valid conflict outcome rejected: %v", err)
+	}
+	invalidConflict := conflict
+	invalidConflict.Conflict = &WorkflowTaskExecutionTargetNegotiationConflict{}
+	if err := invalidConflict.Validate(); !isWorkflowFieldError(err, "conflict.task_id", WorkflowRequestErrorRequired) {
+		t.Fatalf("conflict without task id error = %#v, want required task_id", err)
+	}
+
 	mixed := selectionRequired
 	mixed.InProgress = &WorkflowTaskExecutionTargetMaterializationProgress{TaskID: "task-1", Phase: WorkflowTaskExecutionTargetMaterializationPhaseMaterializing}
 	if err := mixed.Validate(); err == nil {
@@ -352,8 +367,28 @@ func TestWorkflowTaskInitiatingActionResultJSONIsClosedUnion(t *testing.T) {
 		t.Fatalf("decoded result = %#v", decoded)
 	}
 
+	conflict := WorkflowTaskInitiatingActionResult{
+		Outcome: WorkflowTaskInitiatingActionOutcomeConflict,
+		Conflict: &WorkflowTaskExecutionTargetNegotiationConflict{
+			TaskID: "task-1",
+		},
+	}
+	conflictData, err := json.Marshal(conflict)
+	if err != nil {
+		t.Fatalf("marshal conflict result: %v", err)
+	}
+	if err := json.Unmarshal(conflictData, &decoded); err != nil {
+		t.Fatalf("unmarshal conflict result: %v", err)
+	}
+	if decoded.Conflict == nil || decoded.Conflict.TaskID != "task-1" || decoded.Started != nil || decoded.SelectionRequired != nil || decoded.InProgress != nil {
+		t.Fatalf("decoded conflict result = %#v", decoded)
+	}
+
 	if err := json.Unmarshal([]byte(`{"outcome":"started","started":{"transition_id":"transition-1","placement_id":"placement-1","run_id":"run-1"},"in_progress":{"task_id":"task-1","phase":"materializing"}}`), &decoded); err == nil {
 		t.Fatal("mixed JSON result accepted")
+	}
+	if err := json.Unmarshal([]byte(`{"outcome":"conflict","conflict":{"task_id":"task-1"},"in_progress":{"task_id":"task-1","phase":"materializing"}}`), &decoded); err == nil {
+		t.Fatal("mixed conflict JSON result accepted")
 	}
 }
 

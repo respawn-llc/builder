@@ -1425,6 +1425,79 @@ ON CONFLICT (task_id) DO UPDATE SET
     move_target_node_id = excluded.move_target_node_id,
     approval_transition_id = excluded.approval_transition_id;
 
+-- name: SaveTaskExecutionTargetNegotiationIfExpected :execrows
+INSERT INTO task_execution_target_negotiations (
+    task_id,
+    generation,
+    workflow_id,
+    source_workspace_id,
+    source_kind,
+    source_named_ref,
+    source_commit,
+    recovery_cause,
+    action_kind,
+    start_placement_id,
+    move_source_placement_id,
+    move_target_node_id,
+    approval_transition_id
+)
+SELECT
+    sqlc.arg(task_id),
+    sqlc.arg(generation),
+    sqlc.arg(workflow_id),
+    sqlc.arg(source_workspace_id),
+    sqlc.arg(source_kind),
+    sqlc.narg(source_named_ref),
+    sqlc.narg(source_commit),
+    sqlc.narg(recovery_cause),
+    sqlc.arg(action_kind),
+    sqlc.narg(start_placement_id),
+    sqlc.narg(move_source_placement_id),
+    sqlc.narg(move_target_node_id),
+    sqlc.narg(approval_transition_id)
+WHERE
+    (
+        CAST(sqlc.narg(expected_generation) AS TEXT) IS NULL
+        AND NOT EXISTS (
+            SELECT 1
+            FROM task_execution_target_negotiations
+            WHERE task_id = sqlc.arg(task_id)
+        )
+    )
+    OR (
+        CAST(sqlc.narg(expected_generation) AS TEXT) IS NOT NULL
+        AND EXISTS (
+            SELECT 1
+            FROM task_execution_target_negotiations AS existing
+            WHERE existing.task_id = sqlc.arg(task_id)
+              AND existing.generation = CAST(sqlc.narg(expected_generation) AS TEXT)
+              AND existing.workflow_id = sqlc.narg(expected_workflow_id)
+              AND existing.source_workspace_id = sqlc.narg(expected_source_workspace_id)
+              AND existing.source_kind = sqlc.narg(expected_source_kind)
+              AND existing.source_named_ref IS sqlc.narg(expected_source_named_ref)
+              AND existing.source_commit IS sqlc.narg(expected_source_commit)
+              AND existing.recovery_cause IS sqlc.narg(expected_recovery_cause)
+              AND existing.action_kind = sqlc.narg(expected_action_kind)
+              AND existing.start_placement_id IS sqlc.narg(expected_start_placement_id)
+              AND existing.move_source_placement_id IS sqlc.narg(expected_move_source_placement_id)
+              AND existing.move_target_node_id IS sqlc.narg(expected_move_target_node_id)
+              AND existing.approval_transition_id IS sqlc.narg(expected_approval_transition_id)
+        )
+    )
+ON CONFLICT (task_id) DO UPDATE SET
+    generation = excluded.generation,
+    workflow_id = excluded.workflow_id,
+    source_workspace_id = excluded.source_workspace_id,
+    source_kind = excluded.source_kind,
+    source_named_ref = excluded.source_named_ref,
+    source_commit = excluded.source_commit,
+    recovery_cause = excluded.recovery_cause,
+    action_kind = excluded.action_kind,
+    start_placement_id = excluded.start_placement_id,
+    move_source_placement_id = excluded.move_source_placement_id,
+    move_target_node_id = excluded.move_target_node_id,
+    approval_transition_id = excluded.approval_transition_id;
+
 -- name: DeleteTaskExecutionTargetNegotiation :execrows
 DELETE FROM task_execution_target_negotiations
 WHERE task_id = sqlc.arg(task_id);
