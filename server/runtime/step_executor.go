@@ -183,7 +183,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 			for _, entry := range resp.Reasoning {
 				if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
 					Visibility: transcript.EntryVisibilityDetail,
-					Role:       entry.Role,
+					Role:       string(transcript.EntryRoleReasoning),
 					Text:       entry.Text,
 				})); err != nil {
 					return stepLoopResult{}, err

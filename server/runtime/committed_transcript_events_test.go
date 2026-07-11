@@ -638,11 +638,29 @@ func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
 		if evt.Kind != EventLocalEntryAdded || evt.LocalEntry == nil || evt.LocalEntry.Role != "reasoning" {
 			continue
 		}
-		entries := TranscriptEntriesFromEvent(evt)
-		if len(entries) != 1 || entries[0].Visibility != transcript.EntryVisibilityDetail {
-			t.Fatalf("reasoning progress entries = %+v, want one detail-only entry", entries)
+		facts := TranscriptCommittedRowFactsFromEvent(evt)
+		if len(facts) != 1 ||
+			facts[0].Visibility != transcript.EntryVisibilityDetail ||
+			facts[0].Integrity != transcript.RowIntegrityValid {
+			t.Fatalf("reasoning progress facts = %+v, want one valid detail-only row", facts)
 		}
-		return
+		var hydration TranscriptHydrationSnapshot
+		if err := eng.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
+			hydration = snapshot
+			return nil
+		}); err != nil {
+			t.Fatalf("hydrate transcript: %v", err)
+		}
+		for _, row := range hydration.CommittedRows {
+			if row.Notice != nil && row.Notice.DiagnosticCode == "reasoning" {
+				if row.Visibility != transcript.EntryVisibilityDetail ||
+					row.Integrity != transcript.RowIntegrityValid {
+					t.Fatalf("hydrated reasoning row = %+v, want valid detail-only row", row)
+				}
+				return
+			}
+		}
+		t.Fatalf("hydration rows = %+v, want persisted reasoning row", hydration.CommittedRows)
 	}
 	t.Fatal("reasoning progress was not committed")
 }

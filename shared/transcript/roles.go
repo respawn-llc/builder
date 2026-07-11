@@ -35,6 +35,9 @@ const EntryRoleInterruption EntryRole = "interruption"
 // EntryRoleGoalFeedback marks user-facing goal lifecycle notices.
 const EntryRoleGoalFeedback EntryRole = "goal_feedback"
 
+// EntryRoleReasoning marks persisted assistant reasoning-summary progress.
+const EntryRoleReasoning EntryRole = "reasoning"
+
 // EntryRoleReviewerStatus marks reviewer lifecycle status entries.
 const EntryRoleReviewerStatus EntryRole = "reviewer_status"
 

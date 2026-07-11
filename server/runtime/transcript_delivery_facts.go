@@ -392,6 +392,7 @@ func knownTranscriptNoticeRole(role string) bool {
 		transcript.EntryRoleDeveloperErrorFeedback,
 		transcript.EntryRoleInterruption,
 		transcript.EntryRoleGoalFeedback,
+		transcript.EntryRoleReasoning,
 		transcript.EntryRoleReviewerStatus,
 		transcript.EntryRoleReviewerError,
 		transcript.EntryRoleReviewerSuggestions:
@@ -441,7 +442,8 @@ func defaultTranscriptNoticeVisibility(entry ChatEntry) transcript.EntryVisibili
 	}
 	switch transcript.EntryRole(strings.TrimSpace(entry.Role)) {
 	case transcript.EntryRoleManualCompactionCarryover,
-		transcript.EntryRoleDeveloperContext:
+		transcript.EntryRoleDeveloperContext,
+		transcript.EntryRoleReasoning:
 		return transcript.EntryVisibilityDetail
 	case transcript.EntryRoleReviewerStatus:
 		return transcript.EntryVisibilityOngoingCollapsed
