@@ -180,7 +180,7 @@ type uiStatusFeatureState struct {
 	goalRuntimeMutationSerial   uint64
 	goalRuntimePending          goalRuntimePendingState
 	statusGitBackgroundInFlight bool
-	clipboardImagePaster        uiClipboardImagePaster
+	clipboardPaster             uiClipboardPaster
 	clipboardTextCopier         uiClipboardTextCopier
 
 	transientStatus          string

@@ -49,10 +49,11 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - `Shift+Tab`/`Ctrl+T` toggle ongoing↔detail transcript mode; mode-toggle ephemerality is owned by tui-transcript :: Modes.
 - Arming the rollback flow requires two consecutive `Esc` presses on empty idle input within a short window (Esc-Esc); a single `Esc` does nothing visible. Rollback behavior itself is owned by its own family spec.
 
-## Clipboard Image Paste
+## Clipboard Paste
 
-- `Ctrl+V` and `Ctrl+D` save clipboard images to temp image files and insert the path; the on-disk image format is OS/tool-specific, not a contract. (owner: tui-transcript :: Input And Queueing)
-- Paste failures (no image, missing host tool) surface as a transient status-line error naming the missing capability; never a silent no-op.
+- `Ctrl+V`, `Ctrl+D`, `Alt+V`, and `Alt+D` explicitly read the system clipboard. Images save to temporary PNG files and insert the path; text inserts unchanged at the active cursor. (owner: tui-transcript :: Input And Queueing)
+- Terminal bracketed paste follows ordinary text-input handling and never causes a system clipboard read.
+- Paste failures (unsupported or empty clipboard content, missing host tool) surface as a transient status-line error naming the missing capability; never a silent no-op.
 
 ## Known Drift (Go TUI, frozen)
 

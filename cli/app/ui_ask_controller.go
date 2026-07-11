@@ -124,8 +124,8 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inputController().clearPendingCSIShiftEnter()
 	}
 	req := m.ask.current.req
-	if m.ask.freeform && isClipboardImagePasteKey(msg) {
-		return m, m.pasteClipboardImageCmd(uiClipboardPasteTargetAsk)
+	if m.ask.freeform && isClipboardPasteKey(msg) {
+		return m, m.pasteClipboardCmd(uiClipboardPasteTargetAsk)
 	}
 	if m.ask.freeform && handleSharedInputEditKeyForGOOS(msg, uiSharedInputEditActions{
 		Backspace:          m.backspaceAskInput,
