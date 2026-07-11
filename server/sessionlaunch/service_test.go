@@ -2,7 +2,6 @@ package sessionlaunch
 
 import (
 	"context"
-	"core/internal/testharness/testoption"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -14,6 +13,7 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -297,7 +297,7 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: testoption.String("worker")}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
@@ -345,7 +345,7 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: testoption.String("worker")}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
@@ -386,7 +386,7 @@ func TestServicePlanSessionInvalidRoleOverridePrecedesPersistedRoleValidation(t 
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: testoption.String("worker")}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)

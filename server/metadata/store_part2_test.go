@@ -2,9 +2,9 @@ package metadata
 
 import (
 	"context"
-	"core/internal/testharness/testoption"
 	"core/server/metadata/sqlitegen"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/clientui"
 	"core/shared/config"
 	"database/sql"
@@ -63,8 +63,8 @@ func TestResolvePersistedSessionValidatesContinuationRoleJSON(t *testing.T) {
 	}{
 		{name: "omitted role", payload: `{}`},
 		{name: "null role", payload: `{"agent_role":null}`},
-		{name: "custom role", payload: `{"agent_role":"worker"}`, wantRole: testoption.String("worker")},
-		{name: "fast role", payload: `{"agent_role":"fast"}`, wantRole: testoption.String("fast")},
+		{name: "custom role", payload: `{"agent_role":"worker"}`, wantRole: sessiontest.AgentRole("worker")},
+		{name: "fast role", payload: `{"agent_role":"fast"}`, wantRole: sessiontest.AgentRole("fast")},
 		{name: "empty role", payload: `{"agent_role":""}`, wantErr: true},
 		{name: "whitespace role", payload: `{"agent_role":" \t "}`, wantErr: true},
 	}
@@ -105,7 +105,7 @@ func TestImportSessionSnapshotRejectsInvalidContinuationRole(t *testing.T) {
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
 	snapshot := session.PersistedStoreSnapshot{SessionDir: sess.Dir(), Meta: sess.Meta()}
-	snapshot.Meta.Continuation = &session.ContinuationContext{AgentRole: testoption.String(" ")}
+	snapshot.Meta.Continuation = &session.ContinuationContext{AgentRole: sessiontest.AgentRole(" ")}
 
 	err := store.ImportSessionSnapshot(ctx, snapshot)
 	if !errors.Is(err, session.ErrInvalidContinuationAgentRole) {

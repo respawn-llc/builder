@@ -1,7 +1,6 @@
 package session
 
 import (
-	"core/internal/testharness/testoption"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -396,7 +395,8 @@ func TestSetContinuationContextAndLockedPromptFacingContractStalePersistsTogethe
 		t.Fatalf("mark model dispatch locked: %v", err)
 	}
 
-	result, err := store.SetContinuationContextAndMarkLockedPromptFacingContractStale(ContinuationContext{AgentRole: testoption.String("reviewer")})
+	role := "reviewer"
+	result, err := store.SetContinuationContextAndMarkLockedPromptFacingContractStale(ContinuationContext{AgentRole: &role})
 	if err != nil {
 		t.Fatalf("set continuation and stale contract: %v", err)
 	}

@@ -1,7 +1,6 @@
 package session
 
 import (
-	"core/internal/testharness/testoption"
 	"encoding/json"
 	"errors"
 	"os"
@@ -10,6 +9,8 @@ import (
 )
 
 func TestContinuationRoleFilePersistence(t *testing.T) {
+	worker := "worker"
+	fast := "fast"
 	tests := []struct {
 		name        string
 		payload     string
@@ -19,8 +20,8 @@ func TestContinuationRoleFilePersistence(t *testing.T) {
 	}{
 		{name: "omitted default role", payload: `{}`, wantRoleKey: false},
 		{name: "null default role", payload: `{"agent_role":null}`, wantRoleKey: false},
-		{name: "custom role", payload: `{"agent_role":" Worker "}`, wantRole: testoption.String("worker"), wantRoleKey: true},
-		{name: "fast role", payload: `{"agent_role":"fast"}`, wantRole: testoption.String("fast"), wantRoleKey: true},
+		{name: "custom role", payload: `{"agent_role":" Worker "}`, wantRole: &worker, wantRoleKey: true},
+		{name: "fast role", payload: `{"agent_role":"fast"}`, wantRole: &fast, wantRoleKey: true},
 		{name: "empty role", payload: `{"agent_role":""}`, wantErr: true},
 		{name: "whitespace role", payload: `{"agent_role":" \t "}`, wantErr: true},
 	}

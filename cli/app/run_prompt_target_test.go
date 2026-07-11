@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"core/internal/testharness/testoption"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 
 	"core/cli/app/internal/startupconfig"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/shared/config"
 )
 
@@ -99,14 +99,14 @@ func TestValidateRunPromptAgentRoleWorkflowCallability(t *testing.T) {
 		{
 			name:     "fast caller bypasses workflow switches",
 			settings: config.Settings{},
-			caller:   testWorkflowRunPromptCaller(testoption.String(config.BuiltInSubagentRoleFast)),
+			caller:   testWorkflowRunPromptCaller(sessiontest.AgentRole(config.BuiltInSubagentRoleFast)),
 		},
 		{
 			name: "fast caller still obeys agent callable",
 			settings: config.Settings{Subagents: map[string]config.SubagentRole{
 				config.BuiltInSubagentRoleFast: {AgentCallable: false, AgentCallableSet: true},
 			}},
-			caller:  testWorkflowRunPromptCaller(testoption.String(config.BuiltInSubagentRoleFast)),
+			caller:  testWorkflowRunPromptCaller(sessiontest.AgentRole(config.BuiltInSubagentRoleFast)),
 			wantErr: errNonCallableSubagentRole,
 		},
 	}
@@ -143,9 +143,9 @@ func TestResolveRunPromptWorkspaceConfigPreservesCallerSessionIdentity(t *testin
 		role     *string
 		workflow bool
 	}{
-		{name: "ordinary custom role", role: testoption.String("worker")},
-		{name: "workflow custom role", role: testoption.String("worker"), workflow: true},
-		{name: "fast role", role: testoption.String(config.BuiltInSubagentRoleFast), workflow: true},
+		{name: "ordinary custom role", role: sessiontest.AgentRole("worker")},
+		{name: "workflow custom role", role: sessiontest.AgentRole("worker"), workflow: true},
+		{name: "fast role", role: sessiontest.AgentRole(config.BuiltInSubagentRoleFast), workflow: true},
 		{name: "default agent"},
 	}
 	for _, tt := range tests {
@@ -176,7 +176,7 @@ func TestResolveRunPromptWorkspaceConfigPreservesCallerSessionIdentity(t *testin
 			if caller.WorkflowSession != tt.workflow {
 				t.Fatalf("workflow session = %t, want %t", caller.WorkflowSession, tt.workflow)
 			}
-			if !testoption.EqualString(caller.AgentRole, tt.role) {
+			if !sessiontest.SameAgentRole(caller.AgentRole, tt.role) {
 				t.Fatalf("agent role = %v, want %v", caller.AgentRole, tt.role)
 			}
 		})
@@ -274,7 +274,7 @@ func TestStartRunPromptClientDefaultAliasBlocksNonCallableContextRole(t *testing
 	cfg := loadAppTestConfig(t, workspace, config.LoadOptions{})
 	registerAppWorkspace(t, cfg.WorkspaceRoot)
 	parent := createAuthoritativeAppSession(t, cfg.PersistenceRoot, cfg.WorkspaceRoot)
-	if err := parent.SetContinuationContext(session.ContinuationContext{AgentRole: testoption.String("blocked")}); err != nil {
+	if err := parent.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("blocked")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 
@@ -347,7 +347,7 @@ func TestValidateRunPromptAgentRoleBlocksDefaultAliasFromNonCallableContextRole(
 	}}
 	for _, rawRole := range []string{"", "default"} {
 		t.Run(rawRole, func(t *testing.T) {
-			err := validateRunPromptAgentRole(settings, rawRole, testRunPromptCaller(true, testoption.String("blocked")))
+			err := validateRunPromptAgentRole(settings, rawRole, testRunPromptCaller(true, sessiontest.AgentRole("blocked")))
 			if err == nil {
 				t.Fatal("expected non-callable context role to block default invocation")
 			}
@@ -356,7 +356,7 @@ func TestValidateRunPromptAgentRoleBlocksDefaultAliasFromNonCallableContextRole(
 			}
 		})
 	}
-	if err := validateRunPromptAgentRole(settings, "default", testRunPromptCaller(false, testoption.String("blocked"))); err != nil {
+	if err := validateRunPromptAgentRole(settings, "default", testRunPromptCaller(false, sessiontest.AgentRole("blocked"))); err != nil {
 		t.Fatalf("human/no-session default alias should not enforce context role: %v", err)
 	}
 }

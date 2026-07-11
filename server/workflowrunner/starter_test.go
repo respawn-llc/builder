@@ -2,7 +2,6 @@ package workflowrunner
 
 import (
 	"context"
-	"core/internal/testharness/testoption"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -24,6 +23,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
@@ -1411,7 +1411,7 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open source session: %v", err)
 	}
-	if got := sourceStore.Meta().Continuation; got == nil || !testoption.EqualString(got.AgentRole, testoption.String("reviewer")) {
+	if got := sourceStore.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("reviewer")) {
 		t.Fatalf("continuation role = %+v, want reviewer", got)
 	}
 	if locked := sourceStore.Meta().Locked; locked == nil || !locked.HasSystemPrompt || !locked.HasEnabledTools {
@@ -1517,7 +1517,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: testoption.String("worker")}); err != nil {
+	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 
@@ -1583,7 +1583,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got == nil || !testoption.EqualString(got.AgentRole, testoption.String("coder")) {
+	if got := reopened.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("coder")) {
 		t.Fatalf("continuation = %+v, want coder role persisted", got)
 	}
 }
@@ -1595,7 +1595,7 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: testoption.String("reviewer")}); err != nil {
+	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("reviewer")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
@@ -1634,7 +1634,7 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 	if err != nil {
 		t.Fatalf("workflow planSession: %v", err)
 	}
-	if got := plan.Store.Meta().Continuation; got == nil || !testoption.EqualString(got.AgentRole, testoption.String("coder")) {
+	if got := plan.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("coder")) {
 		t.Fatalf("workflow continuation = %+v, want coder role", got)
 	}
 }
