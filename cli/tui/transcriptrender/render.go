@@ -2,7 +2,6 @@ package transcriptrender
 
 import (
 	"strings"
-	"unicode"
 
 	"core/shared/clientui"
 	"core/shared/transcript"
@@ -550,20 +549,7 @@ func firstNonBlankPreservingWhitespace(values ...string) string {
 }
 
 func safeTranscriptText(text string) string {
-	var out strings.Builder
-	for _, r := range text {
-		switch {
-		case r == '\n':
-			out.WriteRune('\n')
-		case r == '\t':
-			out.WriteRune(' ')
-		case unicode.IsControl(r):
-			continue
-		default:
-			out.WriteRune(r)
-		}
-	}
-	return out.String()
+	return TerminalSafePlainText(text)
 }
 
 func TruncateLine(line Line, width int, forceEllipsis bool) Line {

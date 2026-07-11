@@ -4,7 +4,7 @@ import (
 	"core/cli/tui"
 	"core/shared/clientui"
 
-	"github.com/charmbracelet/glamour"
+	"charm.land/glamour/v2"
 )
 
 type uiInputMode string

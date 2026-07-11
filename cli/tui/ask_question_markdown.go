@@ -6,11 +6,11 @@ import (
 	"core/cli/tui/transcriptrender"
 	sharedtheme "core/shared/theme"
 
-	"github.com/charmbracelet/glamour"
-	glamouransi "github.com/charmbracelet/glamour/ansi"
-	glamourstyles "github.com/charmbracelet/glamour/styles"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/glamour/v2"
+	glamouransi "charm.land/glamour/v2/ansi"
+	glamourstyles "charm.land/glamour/v2/styles"
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/cellbuf"
 )
 
 func RenderAskQuestionMarkdownLines(question string, themeName string, width int) []string {
@@ -19,18 +19,28 @@ func RenderAskQuestionMarkdownLines(question string, themeName string, width int
 		glamour.WithWordWrap(width),
 		glamour.WithStyles(askQuestionMarkdownStyle(themeName)),
 	)
-	if err == nil {
-		rendered, renderErr := renderer.Render(question)
-		if renderErr == nil {
-			lines := trimAskQuestionMarkdownEdgeLines(
-				strings.Split(hardWrapAskQuestionMarkdown(rendered, width), "\n"),
-			)
-			if len(lines) > 0 {
-				return lines
-			}
+	if err != nil {
+		return resolveAskQuestionMarkdownLines(question, width, askQuestionMarkdownRenderOutcome{err: err})
+	}
+	rendered, err := renderer.Render(question)
+	return resolveAskQuestionMarkdownLines(question, width, askQuestionMarkdownRenderOutcome{rendered: rendered, err: err})
+}
+
+type askQuestionMarkdownRenderOutcome struct {
+	rendered string
+	err      error
+}
+
+func resolveAskQuestionMarkdownLines(question string, width int, outcome askQuestionMarkdownRenderOutcome) []string {
+	if outcome.err == nil {
+		lines := trimAskQuestionMarkdownEdgeLines(
+			strings.Split(hardWrapAskQuestionMarkdown(outcome.rendered, width), "\n"),
+		)
+		if len(lines) > 0 {
+			return lines
 		}
 	}
-	return renderAskQuestionMarkdownFallback(question, themeName, width)
+	return renderPlainAskQuestionMarkdownSource(question, width)
 }
 
 func askQuestionMarkdownStyle(themeName string) glamouransi.StyleConfig {
@@ -145,51 +155,100 @@ func hardWrapAskQuestionMarkdown(rendered string, width int) string {
 	lines := strings.Split(rendered, "\n")
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
-		if lipgloss.Width(line) <= width {
-			out = append(out, line)
-			continue
-		}
-		out = append(out, strings.Split(xansi.Hardwrap(line, width, true), "\n")...)
+		out = append(out, wrapAskQuestionMarkdownLine(line, width)...)
 	}
 	return strings.Join(out, "\n")
 }
 
+type askQuestionHyperlink = cellbuf.Link
+
+func wrapAskQuestionMarkdownLine(line string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	parser := xansi.GetParser()
+	defer xansi.PutParser(parser)
+
+	var (
+		active *askQuestionHyperlink
+		out    []string
+		row    strings.Builder
+		state  byte
+		used   int
+		input  = line
+	)
+	for len(input) > 0 {
+		sequence, sequenceWidth, consumed, nextState := xansi.GraphemeWidth.DecodeSequenceInString(input, state, parser)
+		if consumed <= 0 {
+			break
+		}
+		state = nextState
+		input = input[consumed:]
+
+		if sequenceWidth == 0 {
+			row.WriteString(sequence)
+			if hyperlink, isHyperlink := askQuestionHyperlinkFromParser(parser); isHyperlink {
+				if hyperlink.Empty() {
+					active = nil
+				} else {
+					active = &hyperlink
+				}
+			}
+			continue
+		}
+		if used > 0 && used+sequenceWidth > width {
+			if active != nil {
+				row.WriteString(xansi.ResetHyperlink())
+			}
+			out = append(out, row.String())
+			row.Reset()
+			used = 0
+			if active != nil {
+				row.WriteString(xansi.SetHyperlink(active.URL, active.Params))
+			}
+		}
+		row.WriteString(sequence)
+		used += sequenceWidth
+	}
+	if active != nil {
+		row.WriteString(xansi.ResetHyperlink())
+	}
+	out = append(out, row.String())
+	return out
+}
+
+func askQuestionHyperlinkFromParser(parser *xansi.Parser) (askQuestionHyperlink, bool) {
+	if parser.Command() != 8 {
+		return askQuestionHyperlink{}, false
+	}
+	var hyperlink askQuestionHyperlink
+	cellbuf.ReadLink(parser.Data(), &hyperlink)
+	return hyperlink, true
+}
+
 func trimAskQuestionMarkdownEdgeLines(lines []string) []string {
-	for len(lines) > 0 && lipgloss.Width(lines[0]) == 0 {
+	for len(lines) > 0 && strings.TrimSpace(xansi.Strip(lines[0])) == "" {
 		lines = lines[1:]
 	}
-	for len(lines) > 0 && lipgloss.Width(lines[len(lines)-1]) == 0 {
+	for len(lines) > 0 && strings.TrimSpace(xansi.Strip(lines[len(lines)-1])) == "" {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
 }
 
-func renderAskQuestionMarkdownFallback(question string, themeName string, width int) []string {
-	lines := transcriptrender.RenderMarkdownLines(
-		transcriptrender.StyleRoleToolQuestion,
-		question,
-		width,
-	)
-	if len(lines) == 0 {
-		return []string{""}
+func renderPlainAskQuestionMarkdownSource(question string, width int) []string {
+	width = max(1, width)
+	sourceLines := strings.Split(plainAskQuestionMarkdownSource(question), "\n")
+	out := make([]string, 0, len(sourceLines))
+	for _, sourceLine := range sourceLines {
+		out = append(out, wrapAskQuestionMarkdownLine(sourceLine, width)...)
 	}
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		var rendered strings.Builder
-		if line.LeadingSymbol != nil {
-			rendered.WriteString(renderTranscriptSpan(*line.LeadingSymbol, themeName))
-		}
-		for _, span := range line.Spans {
-			rendered.WriteString(renderTranscriptSpan(span, themeName))
-		}
-		out = append(out, rendered.String())
+	if len(out) == 0 {
+		return []string{""}
 	}
 	return out
 }
 
-func renderTranscriptSpan(span transcriptrender.Span, themeName string) string {
-	if span.Text == "" {
-		return ""
-	}
-	return transcriptSpanStyle(span, themeName).Render(span.Text)
+func plainAskQuestionMarkdownSource(question string) string {
+	return transcriptrender.TerminalSafePrintableLines(xansi.Strip(question))
 }

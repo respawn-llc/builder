@@ -244,8 +244,9 @@ func truncateANSIRight(line string, width int) string {
 	if line == "" || lipgloss.Width(line) <= width {
 		return line
 	}
+	truncationSuffix := xansi.ResetHyperlink() + "…" + "\x1b[0m"
 	if width == 1 {
-		return "…"
+		return truncationSuffix
 	}
 	parser := xansi.GetParser()
 	defer xansi.PutParser(parser)
@@ -254,7 +255,6 @@ func truncateANSIRight(line string, width int) string {
 	if visibleLimit < 0 {
 		visibleLimit = 0
 	}
-	hasANSI := strings.Contains(line, "\x1b[")
 	state := byte(0)
 	input := line
 	consumedWidth := 0
@@ -277,10 +277,7 @@ func truncateANSIRight(line string, width int) string {
 		consumedWidth += seqWidth
 		input = input[n:]
 	}
-	out.WriteString("…")
-	if hasANSI {
-		out.WriteString("\x1b[0m")
-	}
+	out.WriteString(truncationSuffix)
 	return out.String()
 }
 
