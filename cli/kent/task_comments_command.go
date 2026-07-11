@@ -12,6 +12,7 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
+	"core/shared/valuecopy"
 )
 
 const taskCommentListDefaultPageSize = 100
@@ -157,7 +158,7 @@ func workflowTaskAgentRun(task serverapi.WorkflowTaskDetail, sessionID string) (
 		}
 		score := workflowTaskAgentRunScore{
 			Current:       currentRunIDs[strings.TrimSpace(run.ID)],
-			Unfinished:    run.CompletedAtUnixMs == 0 && run.InterruptedAtUnixMs == 0,
+			Unfinished:    run.CompletedAtUnixMs == nil && run.InterruptedAtUnixMs == nil,
 			StartedAt:     run.StartedAtUnixMs,
 			CompletedAt:   run.CompletedAtUnixMs,
 			InterruptedAt: run.InterruptedAtUnixMs,
@@ -176,9 +177,9 @@ func workflowTaskAgentRun(task serverapi.WorkflowTaskDetail, sessionID string) (
 type workflowTaskAgentRunScore struct {
 	Current       bool
 	Unfinished    bool
-	StartedAt     int64
-	CompletedAt   int64
-	InterruptedAt int64
+	StartedAt     *int64
+	CompletedAt   *int64
+	InterruptedAt *int64
 	Generation    int64
 	ID            string
 }
@@ -189,12 +190,12 @@ func (s workflowTaskAgentRunScore) betterThan(other workflowTaskAgentRunScore) b
 		return s.Current
 	case s.Unfinished != other.Unfinished:
 		return s.Unfinished
-	case s.StartedAt != other.StartedAt:
-		return s.StartedAt > other.StartedAt
-	case s.CompletedAt != other.CompletedAt:
-		return s.CompletedAt > other.CompletedAt
-	case s.InterruptedAt != other.InterruptedAt:
-		return s.InterruptedAt > other.InterruptedAt
+	case valuecopy.CompareOptional(s.StartedAt, other.StartedAt) != 0:
+		return valuecopy.CompareOptional(s.StartedAt, other.StartedAt) > 0
+	case valuecopy.CompareOptional(s.CompletedAt, other.CompletedAt) != 0:
+		return valuecopy.CompareOptional(s.CompletedAt, other.CompletedAt) > 0
+	case valuecopy.CompareOptional(s.InterruptedAt, other.InterruptedAt) != 0:
+		return valuecopy.CompareOptional(s.InterruptedAt, other.InterruptedAt) > 0
 	case s.Generation != other.Generation:
 		return s.Generation > other.Generation
 	default:

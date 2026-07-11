@@ -20,7 +20,7 @@ func parseUUIDv4Value(raw string, field string) (uuidv4Value, error) {
 	if err != nil {
 		return uuidv4Value{}, fmt.Errorf("%s must be a UUID", field)
 	}
-	if parsed.Version() != 4 {
+	if parsed.Version() != 4 || parsed.Variant() != uuid.RFC4122 {
 		return uuidv4Value{}, fmt.Errorf("%s must be a UUIDv4", field)
 	}
 	return uuidv4Value{value: parsed}, nil
@@ -29,6 +29,23 @@ func parseUUIDv4Value(raw string, field string) (uuidv4Value, error) {
 func ValidateUUIDv4(raw string, field string) error {
 	_, err := parseUUIDv4Value(raw, field)
 	return err
+}
+
+// ParseCanonicalUUIDv4 accepts the exact UUIDv4 text form used by CLI
+// selectors. Unlike internal ID validation, selector input cannot normalize
+// whitespace or non-canonical UUID spellings.
+func ParseCanonicalUUIDv4(raw string, field string) (uuid.UUID, error) {
+	if strings.TrimSpace(raw) == "" {
+		return uuid.Nil, fmt.Errorf("%s is required", field)
+	}
+	if strings.TrimSpace(raw) != raw {
+		return uuid.Nil, fmt.Errorf("%s must not have leading or trailing whitespace", field)
+	}
+	parsed, err := uuid.Parse(raw)
+	if err != nil || parsed.Version() != 4 || parsed.Variant() != uuid.RFC4122 || parsed.String() != raw {
+		return uuid.Nil, fmt.Errorf("%s must be a UUIDv4", field)
+	}
+	return parsed, nil
 }
 
 func newUUIDv4Value() uuidv4Value {

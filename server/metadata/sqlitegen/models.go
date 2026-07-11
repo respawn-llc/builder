@@ -78,8 +78,8 @@ type Task struct {
 	SourceUrl             string
 	SourceWorkspaceID     sql.NullString
 	ManagedWorktreeID     sql.NullString
-	CanceledAtUnixMs      int64
-	CancellationReason    string
+	CanceledAtUnixMs      sql.NullInt64
+	CancellationReason    sql.NullString
 	CreatedAtUnixMs       int64
 	UpdatedAtUnixMs       int64
 	MetadataJson          string
@@ -131,8 +131,8 @@ type TaskRecord struct {
 	SourceUrl             string
 	SourceWorkspaceID     sql.NullString
 	ManagedWorktreeID     sql.NullString
-	CanceledAtUnixMs      int64
-	CancellationReason    string
+	CanceledAtUnixMs      sql.NullInt64
+	CancellationReason    sql.NullString
 	CreatedAtUnixMs       int64
 	UpdatedAtUnixMs       int64
 	MetadataJson          string
@@ -144,16 +144,16 @@ type TaskRun struct {
 	SessionID                   sql.NullString
 	RunGeneration               int64
 	WorkflowRevisionSeen        int64
-	AutomationRequestedAtUnixMs int64
+	AutomationRequestedAtUnixMs sql.NullInt64
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
-	StartedAtUnixMs             int64
-	CompletedAtUnixMs           int64
-	InterruptedAtUnixMs         int64
-	InterruptionReason          string
+	StartedAtUnixMs             sql.NullInt64
+	CompletedAtUnixMs           sql.NullInt64
+	InterruptedAtUnixMs         sql.NullInt64
+	InterruptionReason          sql.NullString
 	InterruptionDetailJson      string
-	WaitingAskID                string
-	EffectiveCompletionMode     string
+	WaitingAskID                sql.NullString
+	EffectiveCompletionMode     sql.NullString
 	InvalidCompletionCount      int64
 	RunStartSnapshotJson        string
 	MetadataJson                string
@@ -167,16 +167,16 @@ type TaskRunRecord struct {
 	SessionID                   sql.NullString
 	RunGeneration               int64
 	WorkflowRevisionSeen        int64
-	AutomationRequestedAtUnixMs int64
+	AutomationRequestedAtUnixMs sql.NullInt64
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
-	StartedAtUnixMs             int64
-	CompletedAtUnixMs           int64
-	InterruptedAtUnixMs         int64
-	InterruptionReason          string
+	StartedAtUnixMs             sql.NullInt64
+	CompletedAtUnixMs           sql.NullInt64
+	InterruptedAtUnixMs         sql.NullInt64
+	InterruptionReason          sql.NullString
 	InterruptionDetailJson      string
-	WaitingAskID                string
-	EffectiveCompletionMode     string
+	WaitingAskID                sql.NullString
+	EffectiveCompletionMode     sql.NullString
 	InvalidCompletionCount      int64
 	RunStartSnapshotJson        string
 	MetadataJson                string
@@ -197,7 +197,7 @@ type TaskTransition struct {
 	Commentary            string
 	OutputValuesJson      string
 	CreatedAtUnixMs       int64
-	AppliedAtUnixMs       int64
+	AppliedAtUnixMs       sql.NullInt64
 }
 
 type TaskTransitionEdge struct {
@@ -254,7 +254,7 @@ type TaskTransitionRecord struct {
 	Commentary            string
 	OutputValuesJson      string
 	CreatedAtUnixMs       int64
-	AppliedAtUnixMs       int64
+	AppliedAtUnixMs       sql.NullInt64
 }
 
 type Workflow struct {
@@ -305,6 +305,52 @@ type WorkflowNodeGroup struct {
 	GroupKey    string
 	DisplayName string
 	SortOrder   int64
+}
+
+type WorkflowTaskCurrentRunRecord struct {
+	ID                  string
+	TaskID              string
+	PlacementID         string
+	SessionID           sql.NullString
+	UpdatedAtUnixMs     int64
+	StartedAtUnixMs     sql.NullInt64
+	CompletedAtUnixMs   sql.NullInt64
+	InterruptedAtUnixMs sql.NullInt64
+	WaitingAskID        sql.NullString
+}
+
+type WorkflowTaskStatusRecord struct {
+	TaskID             string
+	IsDone             int64
+	Kind               string
+	PrimaryStatusRank  int64
+	NodeIdsJson        interface{}
+	RunIdsJson         interface{}
+	AttentionTypesJson interface{}
+}
+
+type WorkflowTaskStatusRunRecord struct {
+	ID                  string
+	TaskID              string
+	PlacementID         string
+	SessionID           sql.NullString
+	UpdatedAtUnixMs     int64
+	StartedAtUnixMs     sql.NullInt64
+	CompletedAtUnixMs   sql.NullInt64
+	InterruptedAtUnixMs sql.NullInt64
+	InterruptionReason  sql.NullString
+	WaitingAskID        sql.NullString
+}
+
+type WorkflowTaskStatusTaskRecord struct {
+	ID               string
+	CanceledAtUnixMs sql.NullInt64
+}
+
+type WorkflowTaskStatusTransitionRecord struct {
+	TaskID       string
+	State        string
+	SourceNodeID sql.NullString
 }
 
 type WorkflowTransitionGroup struct {

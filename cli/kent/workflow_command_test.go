@@ -416,6 +416,8 @@ func TestTaskCommandsExposeJSONAndPersistState(t *testing.T) {
 
 func TestTaskCommentAuthorForAddUsesCurrentWorkflowRun(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "session-workflow")
+	oldStartedAt := int64(20)
+	currentStartedAt := int64(10)
 	remote := &commentAuthorRemote{task: serverapi.WorkflowTaskDetail{
 		Status: serverapi.WorkflowTaskStatus{RunIDs: []string{"run-current"}},
 		Placements: []serverapi.WorkflowPlacement{
@@ -423,8 +425,8 @@ func TestTaskCommentAuthorForAddUsesCurrentWorkflowRun(t *testing.T) {
 			{NodeID: "node-current", NodeKey: "current"},
 		},
 		Runs: []serverapi.WorkflowRun{
-			{ID: "run-old", SessionID: "session-workflow", Role: "old-role", NodeID: "node-old", StartedAtUnixMs: 20},
-			{ID: "run-current", SessionID: "session-workflow", Role: "current-role", NodeID: "node-current", StartedAtUnixMs: 10},
+			{ID: "run-old", SessionID: "session-workflow", Role: "old-role", NodeID: "node-old", StartedAtUnixMs: &oldStartedAt},
+			{ID: "run-current", SessionID: "session-workflow", Role: "current-role", NodeID: "node-current", StartedAtUnixMs: &currentStartedAt},
 		},
 	}}
 	got := taskCommentAuthorForAdd(context.Background(), remote, "task-1", "", false)
@@ -440,6 +442,8 @@ func TestTaskCommentAuthorForAddBoundaryCases(t *testing.T) {
 	}
 
 	t.Setenv(sessionenv.SessionIDEnv, "session-workflow")
+	oldStartedAt := int64(10)
+	newStartedAt := int64(20)
 	nodeFallbackRemote := &commentAuthorRemote{task: serverapi.WorkflowTaskDetail{
 		Status:     serverapi.WorkflowTaskStatus{RunIDs: []string{"run-current"}},
 		Placements: []serverapi.WorkflowPlacement{{NodeID: "node-current", NodeKey: "current"}},
@@ -455,8 +459,8 @@ func TestTaskCommentAuthorForAddBoundaryCases(t *testing.T) {
 			{NodeID: "node-new", NodeKey: "new"},
 		},
 		Runs: []serverapi.WorkflowRun{
-			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: 10},
-			{ID: "run-new", SessionID: "session-workflow", NodeID: "node-new", StartedAtUnixMs: 20},
+			{ID: "run-old", SessionID: "session-workflow", NodeID: "node-old", StartedAtUnixMs: &oldStartedAt},
+			{ID: "run-new", SessionID: "session-workflow", NodeID: "node-new", StartedAtUnixMs: &newStartedAt},
 		},
 	}}
 	if got := taskCommentAuthorForAdd(context.Background(), latestRunRemote, "task-1", "", false); got.Kind != "agent" || got.ID != "Node new agent" {

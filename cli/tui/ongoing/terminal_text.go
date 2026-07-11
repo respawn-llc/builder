@@ -2,39 +2,16 @@ package ongoing
 
 import (
 	"strings"
-	"unicode"
+
+	"core/cli/tui/transcriptrender"
 )
 
 func terminalSafePlainText(text string) string {
-	var builder strings.Builder
-	for _, r := range text {
-		switch {
-		case r == '\n':
-			builder.WriteRune(r)
-		case r == '\t':
-			builder.WriteRune(' ')
-		case unicode.IsControl(r):
-			continue
-		default:
-			builder.WriteRune(r)
-		}
-	}
-	return strings.TrimRight(builder.String(), "\n")
+	return strings.TrimRight(transcriptrender.TerminalSafePlainText(text), "\n")
 }
 
 func TerminalSafeSingleLine(text string) string {
-	var builder strings.Builder
-	for _, r := range text {
-		switch {
-		case r == '\n' || r == '\t':
-			builder.WriteRune(' ')
-		case unicode.IsControl(r):
-			continue
-		default:
-			builder.WriteRune(r)
-		}
-	}
-	return strings.TrimSpace(builder.String())
+	return transcriptrender.TerminalSafeSingleLine(text)
 }
 
 func terminalSafeMarkdownSource(text string) string {

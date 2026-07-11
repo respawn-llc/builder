@@ -863,7 +863,6 @@ function taskDetailResult(attention: readonly unknown[]): unknown {
       },
       status: {
         kind: "active",
-        label: "Active",
         native_state: "active",
         node_ids: [],
         run_ids: [],

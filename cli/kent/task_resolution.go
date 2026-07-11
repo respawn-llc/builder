@@ -16,7 +16,13 @@ func workflowTaskListForProject(ctx context.Context, cfg config.App, remote work
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
-	req.ProjectID = projectID
+	req.ProjectID = &projectID
+	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
+	defer cancel()
+	return remote.ListWorkflowTasks(rpcCtx, req)
+}
+
+func workflowTaskList(ctx context.Context, remote workflowCommandRemote, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	rpcCtx, cancel := context.WithTimeout(ctx, workflowCommandTimeout)
 	defer cancel()
 	return remote.ListWorkflowTasks(rpcCtx, req)

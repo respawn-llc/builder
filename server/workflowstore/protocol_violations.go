@@ -27,7 +27,7 @@ func (s *Store) RecordProtocolViolation(ctx context.Context, req RecordProtocolV
 	}
 	now := s.now().UnixMilli()
 	var count int64
-	var interruptedAt int64
+	var interruptedAt sql.NullInt64
 	var err error
 	requireGeneration := int64(0)
 	if req.RequireGeneration {
@@ -38,7 +38,7 @@ func (s *Store) RecordProtocolViolation(ctx context.Context, req RecordProtocolV
 		row, recordErr := s.queries.RecordInvalidCompletionProtocolViolation(ctx, sqlitegen.RecordInvalidCompletionProtocolViolationParams{
 			UpdatedAtUnixMs:        now,
 			MaxCount:               int64(req.MaxCount),
-			InterruptedAtUnixMs:    now,
+			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
 			InterruptionDetailJson: detail,
 			RunID:                  string(req.RunID),
 			RequireGeneration:      requireGeneration,
@@ -55,10 +55,10 @@ func (s *Store) RecordProtocolViolation(ctx context.Context, req RecordProtocolV
 		if getErr != nil {
 			return RecordProtocolViolationResult{}, getErr
 		}
-		if run.CompletedAtUnixMs != 0 {
+		if run.CompletedAtUnixMs.Valid {
 			return RecordProtocolViolationResult{Count: protocolViolationCount(run, req.Kind), Interrupted: true}, nil
 		}
-		if run.InterruptedAtUnixMs != 0 {
+		if run.InterruptedAtUnixMs.Valid {
 			return RecordProtocolViolationResult{Count: protocolViolationCount(run, req.Kind), Interrupted: true}, nil
 		}
 		if req.RequireGeneration && run.RunGeneration != req.ExpectedGeneration {
@@ -69,7 +69,7 @@ func (s *Store) RecordProtocolViolation(ctx context.Context, req RecordProtocolV
 	if err != nil {
 		return RecordProtocolViolationResult{}, err
 	}
-	return RecordProtocolViolationResult{Count: count, Interrupted: interruptedAt != 0}, nil
+	return RecordProtocolViolationResult{Count: count, Interrupted: interruptedAt.Valid}, nil
 }
 
 func (s *Store) ResetProtocolViolationBudget(ctx context.Context, req ResetProtocolViolationBudgetRequest) error {

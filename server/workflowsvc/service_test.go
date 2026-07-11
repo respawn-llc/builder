@@ -293,10 +293,11 @@ func TestServiceListWorkflowTasksValidatesAndDelegates(t *testing.T) {
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 
-	if _, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: " "}); !isWorkflowServiceRequestFieldError(err, "project_id") {
+	blankProjectID := " "
+	if _, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &blankProjectID}); !isWorkflowServiceRequestFieldError(err, "project_id") {
 		t.Fatalf("blank project error = %#v, want project_id validation", err)
 	}
-	resp, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: binding.ProjectID})
+	resp, err := service.ListWorkflowTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: &binding.ProjectID})
 	if err != nil {
 		t.Fatalf("ListWorkflowTasks: %v", err)
 	}
@@ -561,7 +562,7 @@ func TestServiceStartTaskAutomationValidatesEnsuresWorktreeAndRecordsRunnableRun
 	if err != nil {
 		t.Fatalf("ListRuns after automation: %v", err)
 	}
-	if len(runs) != 1 || runs[0].ID != workflow.RunID(started.RunID) || runs[0].AutomationRequestedAt == 0 {
+	if len(runs) != 1 || runs[0].ID != workflow.RunID(started.RunID) || runs[0].AutomationRequestedAt == nil {
 		t.Fatalf("runs after automation = %+v", runs)
 	}
 	notifier := &recordingSchedulerNotifier{}
@@ -679,7 +680,7 @@ func TestServiceMoveTaskAutoApproveEnsuresWorktreeBeforeApprovingScript(t *testi
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InterruptedAt != 0 {
+	if len(runs) != 1 || runs[0].InterruptedAt != nil {
 		t.Fatalf("script runs = %+v, want one non-interrupted run", runs)
 	}
 }
@@ -734,7 +735,7 @@ func TestServiceCompleteWorkflowTaskFromAgentSessionCompletesWithoutSchedulerWak
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].CompletedAt == 0 {
+	if len(runs) != 1 || runs[0].CompletedAt == nil {
 		t.Fatalf("runs after completion = %+v, want completed source run", runs)
 	}
 }
@@ -771,7 +772,7 @@ func TestServiceCompleteWorkflowTaskRejectsAgentCrossSessionSelector(t *testing.
 	if listErr != nil {
 		t.Fatalf("ListRuns: %v", listErr)
 	}
-	if len(runs) != 1 || runs[0].CompletedAt != 0 {
+	if len(runs) != 1 || runs[0].CompletedAt != nil {
 		t.Fatalf("runs after rejected completion = %+v, want still active", runs)
 	}
 }

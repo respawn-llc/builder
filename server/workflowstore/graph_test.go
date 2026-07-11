@@ -364,7 +364,7 @@ func TestResumeTaskRunsSkipsAgentRoleValidationForScriptRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeTaskRuns: %v", err)
 	}
-	if len(resumed) != 1 || resumed[0].ID != started.RunID || resumed[0].InterruptedAt != 0 {
+	if len(resumed) != 1 || resumed[0].ID != started.RunID || resumed[0].InterruptedAt != nil {
 		t.Fatalf("resumed = %+v, want script run requeued", resumed)
 	}
 }
@@ -466,7 +466,7 @@ func TestCompleteRunReturnsPreInterruptedScriptTargetRun(t *testing.T) {
 		if run.ID != result.InterruptedRunIDs[0] {
 			continue
 		}
-		if run.InterruptedAt == 0 || run.InterruptionReason != workflowscript.ReasonValidationFailed {
+		if run.InterruptedAt == nil || run.InterruptionReason == nil || *run.InterruptionReason != workflowscript.ReasonValidationFailed {
 			t.Fatalf("script run = %+v, want validation interruption", run)
 		}
 		return

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -54,6 +55,13 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	defer func() {
 		_ = ptmx.Close()
 	}()
+	waitDone := make(chan error, 1)
+	var processExited atomic.Bool
+	go func() {
+		waitErr := cmd.Wait()
+		processExited.Store(true)
+		waitDone <- waitErr
+	}()
 
 	var mu sync.Mutex
 	var eventWG sync.WaitGroup
@@ -64,6 +72,9 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	frameInputDispatches := make([]analyzer.FrameInputDispatch, 0)
 	dispatchPhaseInputs := func(inputs []PhaseInputEvent) error {
 		for _, input := range inputs {
+			if processExited.Load() {
+				return nil
+			}
 			recordPhaseDispatch := func(startedAt time.Duration) {
 				mu.Lock()
 				phaseInputDispatches = append(phaseInputDispatches, analyzer.PhaseInputDispatch{
@@ -76,6 +87,9 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			if input.After == 0 {
 				startedAt := time.Since(started)
 				if err := writeFull(ptmx, input.Bytes); err != nil {
+					if processExited.Load() {
+						return nil
+					}
 					return fmt.Errorf("write phase-relative PTY input for phase=%d: %w", input.Phase, err)
 				}
 				recordPhaseDispatch(startedAt)
@@ -89,8 +103,14 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 				defer timer.Stop()
 				select {
 				case <-timer.C:
+					if processExited.Load() || ctx.Err() != nil {
+						return
+					}
 					startedAt := time.Since(started)
 					if err := writeFull(ptmx, input.Bytes); err != nil {
+						if processExited.Load() {
+							return
+						}
 						eventErrors.Add(fmt.Errorf("write phase-relative PTY input for phase=%d: %w", input.Phase, err))
 						cancel()
 						return
@@ -103,13 +123,22 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		return nil
 	}
 	dispatchPendingInputs := func() error {
+		if processExited.Load() {
+			return nil
+		}
 		if err := dispatchPhaseInputs(phaseInputs.pending(readiness.PhaseEvents())); err != nil {
 			return err
 		}
 		pendingFrameInputs := frameInputs.pending(readiness)
 		for _, input := range pendingFrameInputs {
+			if processExited.Load() {
+				return nil
+			}
 			startedAt := time.Since(started)
 			if err := writeFull(ptmx, input.Bytes); err != nil {
+				if processExited.Load() {
+					return nil
+				}
 				return fmt.Errorf(
 					"write frame-gated PTY input for phase=%d input_index=%d: %w",
 					input.Phase,
@@ -130,6 +159,9 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		if len(phaseInputs.events) == 0 || allDispatchesTriggered(phaseInputs.triggered) {
 			for _, payload := range parseableInputs.pending(analyzer.Analysis{}) {
 				if err := writeFull(ptmx, payload); err != nil {
+					if processExited.Load() {
+						return nil
+					}
 					return fmt.Errorf("write parseable PTY input: %w", err)
 				}
 			}
@@ -153,6 +185,36 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		select {
 		case analysisWake <- struct{}{}:
 		default:
+		}
+	}
+	applyResize := func(resize ResizeEvent) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if err := creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(resize.Dimensions.Rows), Cols: uint16(resize.Dimensions.Cols)}); err != nil {
+			return fmt.Errorf("resize PTY to dimensions=%+v: %w", resize.Dimensions, err)
+		}
+		placement := analyzer.BeforeFirstChunk()
+		source := analyzer.Chunk{Index: 0}
+		if len(chunks) > 0 {
+			placement = analyzer.AfterChunk(len(chunks) - 1)
+			source = chunks[len(chunks)-1]
+		}
+		at := time.Since(started)
+		resizes = append(resizes, analyzer.ResizeEvent{Placement: placement, At: at, Dimensions: resize.Dimensions})
+		if err := stream.ResizeFrom(resize.Dimensions, source, at); err != nil {
+			return fmt.Errorf("apply live PTY resize: %w", err)
+		}
+		requestAnalysis()
+		return nil
+	}
+	for _, resize := range spec.Resizes {
+		if resize.After != 0 {
+			continue
+		}
+		if err := applyResize(resize); err != nil {
+			eventErrors.Add(err)
+			cancel()
+			break
 		}
 	}
 	go func() {
@@ -246,6 +308,9 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 
 	for _, resize := range spec.Resizes {
 		resize := resize
+		if resize.After == 0 {
+			continue
+		}
 		eventWG.Add(1)
 		go func() {
 			defer eventWG.Done()
@@ -253,29 +318,16 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			defer timer.Stop()
 			select {
 			case <-timer.C:
-				mu.Lock()
-				if err := creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(resize.Dimensions.Rows), Cols: uint16(resize.Dimensions.Cols)}); err != nil {
-					mu.Unlock()
-					eventErrors.Add(fmt.Errorf("resize PTY to dimensions=%+v: %w", resize.Dimensions, err))
-					cancel()
+				if processExited.Load() || ctx.Err() != nil {
 					return
 				}
-				placement := analyzer.BeforeFirstChunk()
-				source := analyzer.Chunk{Index: 0}
-				if len(chunks) > 0 {
-					placement = analyzer.AfterChunk(len(chunks) - 1)
-					source = chunks[len(chunks)-1]
-				}
-				at := time.Since(started)
-				resizes = append(resizes, analyzer.ResizeEvent{Placement: placement, At: at, Dimensions: resize.Dimensions})
-				if err := stream.ResizeFrom(resize.Dimensions, source, at); err != nil {
-					mu.Unlock()
-					eventErrors.Add(fmt.Errorf("apply live PTY resize: %w", err))
+				if err := applyResize(resize); err != nil {
+					if processExited.Load() {
+						return
+					}
+					eventErrors.Add(err)
 					cancel()
-					return
 				}
-				mu.Unlock()
-				requestAnalysis()
 			case <-ctx.Done():
 			}
 		}()
@@ -289,7 +341,13 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			defer timer.Stop()
 			select {
 			case <-timer.C:
+				if processExited.Load() || ctx.Err() != nil {
+					return
+				}
 				if err := writeFull(ptmx, input.Bytes); err != nil {
+					if processExited.Load() {
+						return
+					}
 					eventErrors.Add(fmt.Errorf("write scheduled PTY input: %w", err))
 					cancel()
 				}
@@ -298,11 +356,6 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		}()
 	}
 
-	waitDone := make(chan error, 1)
-	go func() {
-		waitDone <- cmd.Wait()
-	}()
-
 	var waitErr error
 	timeout := false
 	select {
@@ -310,17 +363,20 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		timeout = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	case <-ctx.Done():
 		timeout = errors.Is(ctx.Err(), context.DeadlineExceeded)
-		_ = ptmx.Close()
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
 		waitErr = <-waitDone
 	}
 	cancel()
+	eventWG.Wait()
+	select {
+	case <-readDone:
+	case <-time.After(100 * time.Millisecond):
+	}
 	_ = ptmx.Close()
 	<-readDone
 	<-analysisDone
-	eventWG.Wait()
 	readinessErr := readiness.Close()
 
 	mu.Lock()

@@ -160,6 +160,17 @@ func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	if !viewExists(t, store.db, "task_transition_records") {
 		t.Fatal("task_transition_records view should expose derived transition source node")
 	}
+	for _, view := range []string{
+		"workflow_task_status_task_records",
+		"workflow_task_status_run_records",
+		"workflow_task_status_transition_records",
+		"workflow_task_current_run_records",
+		"workflow_task_status_records",
+	} {
+		if !viewExists(t, store.db, view) {
+			t.Fatalf("%s view should expose canonical task status facts", view)
+		}
+	}
 	if columnExists(t, store.db, "task_transitions", "transition_group_id") {
 		t.Fatal("task_transitions.transition_group_id should not exist; transition group is derived from edge snapshots when available")
 	}

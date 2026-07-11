@@ -4,35 +4,37 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
 
-func TestTaskListParsesStructuredFiltersAndSort(t *testing.T) {
-	cfg := config.App{WorkspaceRoot: t.TempDir()}
-	remote := &pagedTaskListRemote{
-		board: serverapi.WorkflowBoard{
-			ProjectID:        "project-1",
-			SelectedWorkflow: serverapi.WorkflowPickerItem{WorkflowID: "workflow-1"},
-		},
-	}
-	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+const taskListWorkflowSelector = "7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+const taskListWorkflowID = "workflow-" + taskListWorkflowSelector
+
+func TestTaskListSendsTypedFiltersAndSorts(t *testing.T) {
+	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
+		ProjectID:  "project-1",
+		WorkflowID: taskListWorkflowID,
+	}}
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
 	defer restore()
 
 	_, stderr, code := runWorkflowRootCommand(
 		"task", "list",
 		"--project", "project-1",
-		"--status", "backlog,recon",
+		"--workflow", taskListWorkflowSelector,
+		"--status", "queued,running",
+		"--attention", "approval",
 		"--column", "plan",
-		"--run-status", "open,running",
-		"--sort", "created_at:desc",
-		"--sort", "run_count:asc",
+		"--sort", "status:asc",
+		"--sort", "column:desc",
 	)
 	if code != 0 {
 		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
@@ -40,23 +42,102 @@ func TestTaskListParsesStructuredFiltersAndSort(t *testing.T) {
 	if len(remote.requests) != 1 {
 		t.Fatalf("requests = %+v, want one request", remote.requests)
 	}
-	req := remote.requests[0]
-	if !reflect.DeepEqual(req.StatusKeys, []string{"backlog", "recon", "plan"}) {
-		t.Fatalf("status keys = %+v", req.StatusKeys)
+	request := remote.requests[0]
+	if request.ProjectID == nil || *request.ProjectID != "project-1" || request.WorkflowID == nil || *request.WorkflowID != taskListWorkflowID {
+		t.Fatalf("scope = %+v, want exact pair", request)
 	}
-	if !reflect.DeepEqual(req.RunStatuses, []serverapi.WorkflowTaskRunStatus{serverapi.WorkflowTaskRunStatusOpen, serverapi.WorkflowTaskRunStatusRunning}) {
-		t.Fatalf("run statuses = %+v", req.RunStatuses)
+	if !reflect.DeepEqual(request.StatusKinds, []serverapi.WorkflowTaskStatusKind{
+		serverapi.WorkflowTaskStatusKindQueued,
+		serverapi.WorkflowTaskStatusKindRunning,
+	}) {
+		t.Fatalf("status kinds = %+v", request.StatusKinds)
 	}
-	wantSort := []serverapi.WorkflowTaskListSort{
-		{Field: serverapi.WorkflowTaskListSortFieldCreated, Direction: serverapi.WorkflowTaskListSortDirectionDesc},
-		{Field: serverapi.WorkflowTaskListSortFieldRunCount, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+	if !reflect.DeepEqual(request.AttentionKinds, []serverapi.WorkflowTaskAttentionKind{
+		serverapi.WorkflowTaskAttentionKindApproval,
+	}) {
+		t.Fatalf("attention kinds = %+v", request.AttentionKinds)
 	}
-	if !reflect.DeepEqual(req.Sort, wantSort) {
-		t.Fatalf("sort = %+v, want %+v", req.Sort, wantSort)
+	if !reflect.DeepEqual(request.ColumnKeys, []string{"plan"}) {
+		t.Fatalf("column keys = %+v", request.ColumnKeys)
+	}
+	if !reflect.DeepEqual(request.Sort, []serverapi.WorkflowTaskListSort{
+		{Field: serverapi.WorkflowTaskListSortFieldStatus, Direction: serverapi.WorkflowTaskListSortDirectionAsc},
+		{Field: serverapi.WorkflowTaskListSortFieldColumn, Direction: serverapi.WorkflowTaskListSortDirectionDesc},
+	}) {
+		t.Fatalf("sort = %+v", request.Sort)
 	}
 }
 
-func TestTaskListParserErrorsBeforeOpeningRemote(t *testing.T) {
+func TestTaskListLeavesDefaultSortToServer(t *testing.T) {
+	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
+		ProjectID:  "project-1",
+		WorkflowID: taskListWorkflowID,
+	}}
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
+	defer restore()
+
+	_, stderr, code := runWorkflowRootCommand("task", "list", "--project", "project-1")
+	if code != 0 {
+		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
+	}
+	if len(remote.requests) != 1 || remote.requests[0].Sort != nil {
+		t.Fatalf("requests = %+v, want nil sort for server defaulting", remote.requests)
+	}
+}
+
+func TestTaskListWorkflowOnlyLeavesProjectScopeAbsent(t *testing.T) {
+	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
+		ProjectID:  "project-1",
+		WorkflowID: taskListWorkflowID,
+	}}
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
+	defer restore()
+
+	_, stderr, code := runWorkflowRootCommand("task", "list", "--workflow", taskListWorkflowSelector)
+	if code != 0 {
+		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
+	}
+	if len(remote.requests) != 1 || remote.requests[0].ProjectID != nil || remote.requests[0].WorkflowID == nil || *remote.requests[0].WorkflowID != taskListWorkflowID {
+		t.Fatalf("requests = %+v, want workflow-only scope", remote.requests)
+	}
+}
+
+func TestTaskListTokenContinuationLeavesScopeAbsent(t *testing.T) {
+	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
+		ProjectID:  "project-1",
+		WorkflowID: "workflow-1",
+	}}
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
+	defer restore()
+
+	_, stderr, code := runWorkflowRootCommand("task", "list", "--page-token", "opaque-token")
+	if code != 0 {
+		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
+	}
+	if len(remote.requests) != 1 || remote.requests[0].ProjectID != nil || remote.requests[0].WorkflowID != nil || remote.requests[0].PageToken != "opaque-token" {
+		t.Fatalf("requests = %+v, want token-only scope", remote.requests)
+	}
+}
+
+func TestTaskListRejectsUnknownResponseStatus(t *testing.T) {
+	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
+		ProjectID:  "project-1",
+		WorkflowID: "workflow-1",
+		Tasks: []serverapi.WorkflowTaskListItem{{
+			TaskID: "task-1",
+			Status: serverapi.WorkflowTaskStatus{Kind: "future_status"},
+		}},
+	}}
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
+	defer restore()
+
+	stdout, stderr, code := runWorkflowRootCommand("task", "list", "--project", "project-1")
+	if code != 1 || stdout != "" {
+		t.Fatalf("task list exit=%d stdout=%q stderr=%q, want unsupported-status failure without output", code, stdout, stderr)
+	}
+}
+
+func TestTaskListRejectsInvalidFlagsBeforeOpeningRemote(t *testing.T) {
 	called := false
 	original := workflowCommandRemoteOpener
 	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
@@ -67,61 +148,198 @@ func TestTaskListParserErrorsBeforeOpeningRemote(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	code := taskListSubcommand([]string{"--sort", "updated"}, &stdout, &stderr)
+	code := taskListSubcommand([]string{"--run-status", "running"}, &stdout, &stderr)
 	if code != 2 {
-		t.Fatalf("task list code=%d stderr=%q, want usage error", code, stderr.String())
+		t.Fatalf("task list code=%d stderr=%q, want usage failure", code, stderr.String())
 	}
 	if called {
-		t.Fatalf("remote opener was called for invalid sort")
-	}
-	if !strings.Contains(stderr.String(), "field:direction") {
-		t.Fatalf("stderr = %q, want actionable sort error", stderr.String())
+		t.Fatal("remote opener was called for invalid flags")
 	}
 }
 
-func TestTaskListCommandFiltersSortsAndPaginatesThroughRealService(t *testing.T) {
+func TestTaskListRejectsBlankWorkflowBeforeOpeningRemote(t *testing.T) {
+	called := false
+	original := workflowCommandRemoteOpener
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		called = true
+		return config.App{}, nil, nil
+	}
+	defer func() { workflowCommandRemoteOpener = original }()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := taskListSubcommand([]string{"--workflow", " "}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("task list code=%d stderr=%q, want usage failure", code, stderr.String())
+	}
+	if called {
+		t.Fatal("remote opener was called for a blank workflow selector")
+	}
+}
+
+func TestTaskListWorkflowSelectorRequiresV4UUID(t *testing.T) {
+	value, err := workflowPointer(taskListWorkflowSelector)
+	if err != nil || value == nil || *value != taskListWorkflowID {
+		t.Fatalf("workflowPointer valid selector = %v, %v", value, err)
+	}
+	for _, invalid := range []string{"", " ", "7e8d24d2-8a98-1dcf-a197-6214db1cb3c0", "not-a-uuid", taskListWorkflowID} {
+		if _, err := workflowPointer(invalid); err == nil {
+			t.Fatalf("workflowPointer(%q) succeeded", invalid)
+		}
+	}
+}
+
+func TestTaskListParsesTypedStatusFilters(t *testing.T) {
+	statuses, err := parseTaskListStatusKinds([]string{"queued,running"})
+	if err != nil {
+		t.Fatalf("parseTaskListStatusKinds: %v", err)
+	}
+	if len(statuses) != 2 || statuses[0] != serverapi.WorkflowTaskStatusKindQueued || statuses[1] != serverapi.WorkflowTaskStatusKindRunning {
+		t.Fatalf("statuses = %+v", statuses)
+	}
+	attention, err := parseTaskListAttentionKinds([]string{"approval"})
+	if err != nil || len(attention) != 1 || attention[0] != serverapi.WorkflowTaskAttentionKindApproval {
+		t.Fatalf("attention = %+v, err=%v", attention, err)
+	}
+}
+
+type capturingTaskListRemote struct {
+	client.WorkflowClient
+	requests []serverapi.WorkflowTaskListRequest
+	response serverapi.WorkflowTaskListResponse
+	err      error
+}
+
+func (r *capturingTaskListRemote) Close() error { return nil }
+
+func (r *capturingTaskListRemote) ResolveProjectPath(context.Context, serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
+	return serverapi.ProjectResolvePathResponse{}, errors.New("unexpected project path resolution")
+}
+
+func (r *capturingTaskListRemote) ListWorkflowTasks(_ context.Context, request serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
+	r.requests = append(r.requests, request)
+	if r.err != nil {
+		return serverapi.WorkflowTaskListResponse{}, r.err
+	}
+	return r.response, nil
+}
+
+func TestTaskListJSONUsesTypedStatusObject(t *testing.T) {
+	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
+		ProjectID:  "project-1",
+		WorkflowID: "workflow-1",
+		Tasks: []serverapi.WorkflowTaskListItem{{
+			TaskID: "task-1",
+			Status: serverapi.WorkflowTaskStatus{
+				Kind:        serverapi.WorkflowTaskStatusKindQueued,
+				NativeState: "queued",
+			},
+			ColumnKeys: []string{"plan"},
+		}},
+	}}
+	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
+	defer restore()
+
+	stdout, stderr, code := runWorkflowRootCommand("task", "list", "--project", "project-1", "--json")
+	if code != 0 || stderr != "" {
+		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("list json = %q: %v", stdout, err)
+	}
+	if _, exists := payload["run_status"]; exists {
+		t.Fatalf("list json = %q, must not contain run_status", stdout)
+	}
+}
+
+func TestTaskListLoopbackResolvesUniqueProjectAndWorkflowScopes(t *testing.T) {
 	ctx := context.Background()
 	cfg, binding, remote := newWorkflowCommandLoopback(t)
 	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
 	defer restore()
-	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Task List Workflow")
-	alpha, err := remote.store.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflow.WorkflowID(workflowID), Title: "Alpha", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask alpha: %v", err)
+	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Unique Scope")
+	task := createTaskForListCommandTest(t, ctx, remote, binding.ProjectID, workflowID, "Task")
+
+	for _, args := range [][]string{
+		{"task", "list", "--project", binding.ProjectID, "--json"},
+	} {
+		stdout, stderr, code := runWorkflowRootCommand(args...)
+		if code != 0 {
+			t.Fatalf("%v exit=%d stderr=%q", args, code, stderr)
+		}
+		var response taskListOutput
+		if err := json.Unmarshal([]byte(stdout), &response); err != nil {
+			t.Fatalf("%v JSON = %q: %v", args, stdout, err)
+		}
+		if response.ProjectID != binding.ProjectID || response.WorkflowID != workflowID || len(response.Tasks) != 1 || response.Tasks[0].TaskID != string(task.ID) {
+			t.Fatalf("%v response = %+v, want exact resolved scope and task", args, response)
+		}
 	}
-	bravo, err := remote.store.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflow.WorkflowID(workflowID), Title: "Bravo", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask bravo: %v", err)
+}
+
+func TestTaskListLoopbackRejectsAmbiguousWorkflowScope(t *testing.T) {
+	cfg, binding, remote := newWorkflowCommandLoopback(t)
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+	setupLinkedWorkflow(t, binding.ProjectID, "First Workflow")
+	setupLinkedWorkflow(t, binding.ProjectID, "Second Workflow")
+
+	_, stderr, code := runWorkflowRootCommand("task", "list", "--project", binding.ProjectID)
+	if code != 1 {
+		t.Fatalf("task list exit=%d stderr=%q, want ambiguity failure", code, stderr)
 	}
-	done, err := remote.store.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: workflow.WorkflowID(workflowID), Title: "Charlie", Body: "Body"})
-	if err != nil {
-		t.Fatalf("CreateTask done: %v", err)
+}
+
+func TestTaskListLoopbackValidatesExactPairAndContinuesFromToken(t *testing.T) {
+	ctx := context.Background()
+	cfg, binding, remote := newWorkflowCommandLoopback(t)
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+	workflowID := setupLinkedWorkflow(t, binding.ProjectID, "Exact Scope")
+	createTaskForListCommandTest(t, ctx, remote, binding.ProjectID, workflowID, "First")
+	createTaskForListCommandTest(t, ctx, remote, binding.ProjectID, workflowID, "Second")
+
+	firstJSON, firstErr, code := runWorkflowRootCommand("task", "list", "--project", binding.ProjectID, "--page-size", "1", "--json")
+	if code != 0 {
+		t.Fatalf("first list exit=%d stderr=%q", code, firstErr)
 	}
-	started, err := remote.store.StartTask(ctx, done.ID)
-	if err != nil {
-		t.Fatalf("StartTask done: %v", err)
+	var first taskListOutput
+	if err := json.Unmarshal([]byte(firstJSON), &first); err != nil {
+		t.Fatalf("first list JSON = %q: %v", firstJSON, err)
 	}
-	if _, err := remote.store.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: started.RunID, TransitionID: "done"}); err != nil {
-		t.Fatalf("CompleteRun done: %v", err)
+	if first.ProjectID != binding.ProjectID || first.WorkflowID != workflowID || len(first.Tasks) != 1 || first.NextPageToken == "" {
+		t.Fatalf("first page = %+v, want exact scope and continuation", first)
 	}
 
-	firstRaw, _ := runWorkflowRootCommandOK(t, "task", "list", "--project", binding.ProjectID, "--status", "backlog", "--run-status", "open", "--sort", "title:desc", "--page-size", "1", "--json")
-	var first taskListOutput
-	if err := json.Unmarshal([]byte(firstRaw), &first); err != nil {
-		t.Fatalf("first page json = %q: %v", firstRaw, err)
+	secondJSON, secondErr, code := runWorkflowRootCommand("task", "list", "--page-token", first.NextPageToken, "--page-size", "1", "--json")
+	if code != 0 {
+		t.Fatalf("continuation exit=%d stderr=%q", code, secondErr)
 	}
-	if len(first.Tasks) != 1 || first.Tasks[0].TaskID != string(bravo.ID) || first.Tasks[0].Status != "open" || first.Tasks[0].RunStatus != "open" || !reflect.DeepEqual(first.Tasks[0].StatusKeys, []string{"backlog"}) || first.NextPageToken == "" {
-		t.Fatalf("first page = %+v, want Bravo backlog/open with next token", first)
-	}
-	secondRaw, _ := runWorkflowRootCommandOK(t, "task", "list", "--project", binding.ProjectID, "--status", "backlog", "--run-status", "open", "--sort", "title:desc", "--page-size", "1", "--page-token", first.NextPageToken, "--json")
 	var second taskListOutput
-	if err := json.Unmarshal([]byte(secondRaw), &second); err != nil {
-		t.Fatalf("second page json = %q: %v", secondRaw, err)
+	if err := json.Unmarshal([]byte(secondJSON), &second); err != nil {
+		t.Fatalf("continuation JSON = %q: %v", secondJSON, err)
 	}
-	if len(second.Tasks) != 1 || second.Tasks[0].TaskID != string(alpha.ID) || second.NextPageToken != "" {
-		t.Fatalf("second page = %+v, want Alpha and no next token", second)
+	if second.ProjectID != binding.ProjectID || second.WorkflowID != workflowID || len(second.Tasks) != 1 || second.Tasks[0].TaskID == first.Tasks[0].TaskID {
+		t.Fatalf("continuation = %+v, want distinct next task in exact token scope", second)
 	}
-	if strings.Contains(firstRaw+secondRaw, "Charlie") {
-		t.Fatalf("filtered output includes done task: first=%q second=%q", firstRaw, secondRaw)
+
+	unlinkedWorkflowID := createRunnableWorkflowForCommandTest(t, "Unlinked Workflow")
+	if unlinkedWorkflowID == workflowID {
+		t.Fatal("test fixture must create an unlinked workflow")
 	}
+}
+
+func createTaskForListCommandTest(t *testing.T, ctx context.Context, remote *workflowCommandLoopbackRemote, projectID string, workflowID string, title string) workflowstore.TaskRecord {
+	t.Helper()
+	task, err := remote.store.CreateTask(ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  projectID,
+		WorkflowID: workflow.WorkflowID(workflowID),
+		Title:      title,
+		Body:       "Body",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask %q: %v", title, err)
+	}
+	return task
 }

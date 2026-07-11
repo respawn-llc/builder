@@ -142,6 +142,30 @@ func callGatewayExpectError(t *testing.T, conn *websocket.Conn, id string, metho
 	return resp.Error
 }
 
+func TestDecodeAndHandlePreservesWorkflowTaskListScopeError(t *testing.T) {
+	projectID := "project-1"
+	missing := serverapi.WorkflowTaskListScopeDimensionWorkflow
+	source := &serverapi.WorkflowTaskListScopeError{
+		Kind:         serverapi.WorkflowTaskListScopeErrorKindAmbiguous,
+		MissingScope: &missing,
+		ProjectIDs:   []string{projectID},
+		WorkflowIDs:  []string{"workflow-1", "workflow-2"},
+	}
+	response := decodeAndHandle[serverapi.WorkflowTaskListRequest, struct{}](
+		protocol.Request{ID: "scope-error", Params: mustJSON(t, serverapi.WorkflowTaskListRequest{ProjectID: &projectID})},
+		func(serverapi.WorkflowTaskListRequest) (struct{}, error) {
+			return struct{}{}, source
+		},
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeWorkflowTaskListScope {
+		t.Fatalf("response error = %+v, want task-list scope code", response.Error)
+	}
+	decoded, ok := serverapi.DecodeWorkflowTaskListScopeError(response.Error.Data, response.Error.Message).(*serverapi.WorkflowTaskListScopeError)
+	if !ok || decoded.Kind != source.Kind || decoded.MissingScope == nil || *decoded.MissingScope != missing || len(decoded.WorkflowIDs) != 2 {
+		t.Fatalf("decoded scope error = %+v, want %+v", decoded, source)
+	}
+}
+
 func receiveGatewayNotification(t *testing.T, conn *websocket.Conn, method string, label string, out any) {
 	t.Helper()
 	var notif protocol.Request

@@ -251,9 +251,12 @@ func (s *SchedulerService) Reconcile(ctx context.Context) error {
 		return err
 	}
 	for _, run := range waiting {
+		if run.WaitingAskID == nil {
+			return fmt.Errorf("waiting ask run %q has no ask id", run.ID)
+		}
 		canRehydrate := false
 		if s.pendingAskResolver != nil {
-			canRehydrate, err = s.pendingAskResolver.CanRehydrate(ctx, run.SessionID, run.ID, run.WaitingAskID)
+			canRehydrate, err = s.pendingAskResolver.CanRehydrate(ctx, run.SessionID, run.ID, *run.WaitingAskID)
 			if err != nil {
 				return err
 			}
@@ -265,7 +268,7 @@ func (s *SchedulerService) Reconcile(ctx context.Context) error {
 			}
 			s.finalizeInterruptedRun(ctx, run.ID)
 		} else {
-			s.logf("workflow.scheduler.recovery run_id=%s action=preserve_waiting_ask ask_id=%s", run.ID, run.WaitingAskID)
+			s.logf("workflow.scheduler.recovery run_id=%s action=preserve_waiting_ask ask_id=%s", run.ID, *run.WaitingAskID)
 		}
 	}
 	s.logf("workflow.scheduler.recovery action=interrupt_orphaned_started reason=%s", ReasonSchedulerStartupOrphanedRun)

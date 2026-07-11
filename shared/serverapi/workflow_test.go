@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"core/shared/clientui"
+	"core/shared/protocol"
 )
 
 func TestWorkflowCreateUpdateRequestValidation(t *testing.T) {
@@ -426,21 +427,48 @@ func equalJSONArrays(got []any, want []any) bool {
 }
 
 func TestWorkflowTaskListRequestValidation(t *testing.T) {
+	projectID := "project-1"
+	workflowID := "workflow-1"
 	valid := WorkflowTaskListRequest{
-		ProjectID:   "project-1",
+		ProjectID:   &projectID,
+		WorkflowID:  &workflowID,
 		PageSize:    WorkflowTaskListMaxPageSize,
 		PageToken:   "token",
-		StatusKeys:  []string{"backlog", "plan"},
-		RunStatuses: []WorkflowTaskRunStatus{WorkflowTaskRunStatusOpen, WorkflowTaskRunStatusRunning, WorkflowTaskRunStatusDone, WorkflowTaskRunStatusCanceled},
+		ColumnKeys:  []string{"backlog", "plan"},
+		StatusKinds: []WorkflowTaskStatusKind{WorkflowTaskStatusKindBacklog, WorkflowTaskStatusKindRunning, WorkflowTaskStatusKindQueued, WorkflowTaskStatusKindDone, WorkflowTaskStatusKindCanceled},
+		AttentionKinds: []WorkflowTaskAttentionKind{
+			WorkflowTaskAttentionKindQuestion,
+			WorkflowTaskAttentionKindApproval,
+			WorkflowTaskAttentionKindInterrupted,
+		},
 		Sort: []WorkflowTaskListSort{
 			{Field: WorkflowTaskListSortFieldStatus, Direction: WorkflowTaskListSortDirectionAsc},
+			{Field: WorkflowTaskListSortFieldColumn, Direction: WorkflowTaskListSortDirectionAsc},
 			{Field: WorkflowTaskListSortFieldUpdated, Direction: WorkflowTaskListSortDirectionDesc},
 		},
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid task list request rejected: %v", err)
 	}
-	if err := (WorkflowTaskListRequest{ProjectID: "project-1"}).Validate(); err != nil {
+	validJSON, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatalf("marshal valid task list request: %v", err)
+	}
+	var validShape map[string]any
+	if err := json.Unmarshal(validJSON, &validShape); err != nil {
+		t.Fatalf("unmarshal valid task list request: %v", err)
+	}
+	for _, key := range []string{"project_id", "workflow_id", "column_keys", "status_kinds", "attention_kinds"} {
+		if _, ok := validShape[key]; !ok {
+			t.Fatalf("task list request JSON missing %s: %s", key, validJSON)
+		}
+	}
+	for _, key := range []string{"status_keys", "run_statuses"} {
+		if _, ok := validShape[key]; ok {
+			t.Fatalf("task list request JSON unexpectedly contains %s: %s", key, validJSON)
+		}
+	}
+	if err := (WorkflowTaskListRequest{ProjectID: &projectID}).Validate(); err != nil {
 		t.Fatalf("request with default sort rejected: %v", err)
 	}
 
@@ -451,44 +479,44 @@ func TestWorkflowTaskListRequestValidation(t *testing.T) {
 		code  string
 	}{
 		{
-			name:  "required project",
-			req:   WorkflowTaskListRequest{ProjectID: " "},
-			field: "project_id",
+			name:  "scope required without continuation token",
+			req:   WorkflowTaskListRequest{},
+			field: "scope",
 			code:  WorkflowRequestErrorRequired,
 		},
 		{
 			name:  "negative page size",
-			req:   WorkflowTaskListRequest{ProjectID: "project-1", PageSize: -1},
+			req:   WorkflowTaskListRequest{ProjectID: &projectID, PageSize: -1},
 			field: "page_size",
 			code:  WorkflowRequestErrorInvalidMode,
 		},
 		{
 			name:  "oversized page size",
-			req:   WorkflowTaskListRequest{ProjectID: "project-1", PageSize: WorkflowTaskListMaxPageSize + 1},
+			req:   WorkflowTaskListRequest{ProjectID: &projectID, PageSize: WorkflowTaskListMaxPageSize + 1},
 			field: "page_size",
 			code:  WorkflowRequestErrorInvalidMode,
 		},
 		{
 			name:  "page token whitespace",
-			req:   WorkflowTaskListRequest{ProjectID: "project-1", PageToken: " token"},
+			req:   WorkflowTaskListRequest{ProjectID: &projectID, PageToken: " token"},
 			field: "page_token",
 			code:  WorkflowRequestErrorInvalidMode,
 		},
 		{
 			name:  "invalid sort field",
-			req:   WorkflowTaskListRequest{ProjectID: "project-1", Sort: []WorkflowTaskListSort{{Field: "priority", Direction: WorkflowTaskListSortDirectionAsc}}},
+			req:   WorkflowTaskListRequest{ProjectID: &projectID, Sort: []WorkflowTaskListSort{{Field: "priority", Direction: WorkflowTaskListSortDirectionAsc}}},
 			field: "sort[0].field",
 			code:  WorkflowRequestErrorInvalidValue,
 		},
 		{
 			name:  "invalid sort direction",
-			req:   WorkflowTaskListRequest{ProjectID: "project-1", Sort: []WorkflowTaskListSort{{Field: WorkflowTaskListSortFieldCreated, Direction: "up"}}},
+			req:   WorkflowTaskListRequest{ProjectID: &projectID, Sort: []WorkflowTaskListSort{{Field: WorkflowTaskListSortFieldCreated, Direction: "up"}}},
 			field: "sort[0].direction",
 			code:  WorkflowRequestErrorInvalidValue,
 		},
 		{
 			name: "duplicate sort field",
-			req: WorkflowTaskListRequest{ProjectID: "project-1", Sort: []WorkflowTaskListSort{
+			req: WorkflowTaskListRequest{ProjectID: &projectID, Sort: []WorkflowTaskListSort{
 				{Field: WorkflowTaskListSortFieldTitle, Direction: WorkflowTaskListSortDirectionAsc},
 				{Field: WorkflowTaskListSortFieldTitle, Direction: WorkflowTaskListSortDirectionDesc},
 			}},
@@ -497,33 +525,39 @@ func TestWorkflowTaskListRequestValidation(t *testing.T) {
 		},
 		{
 			name: "too many sort fields",
-			req: WorkflowTaskListRequest{ProjectID: "project-1", Sort: []WorkflowTaskListSort{
+			req: WorkflowTaskListRequest{ProjectID: &projectID, Sort: []WorkflowTaskListSort{
 				{Field: WorkflowTaskListSortFieldCreated, Direction: WorkflowTaskListSortDirectionAsc},
 				{Field: WorkflowTaskListSortFieldUpdated, Direction: WorkflowTaskListSortDirectionAsc},
 				{Field: WorkflowTaskListSortFieldStatus, Direction: WorkflowTaskListSortDirectionAsc},
+				{Field: WorkflowTaskListSortFieldColumn, Direction: WorkflowTaskListSortDirectionAsc},
 				{Field: WorkflowTaskListSortFieldRunCount, Direction: WorkflowTaskListSortDirectionAsc},
 				{Field: WorkflowTaskListSortFieldTitle, Direction: WorkflowTaskListSortDirectionAsc},
-				{Field: WorkflowTaskListSortField("future"), Direction: WorkflowTaskListSortDirectionAsc},
 			}},
 			field: "sort",
 			code:  WorkflowRequestErrorInvalidValue,
 		},
 		{
-			name:  "invalid run status",
-			req:   WorkflowTaskListRequest{ProjectID: "project-1", RunStatuses: []WorkflowTaskRunStatus{"waiting"}},
-			field: "run_statuses[0]",
+			name:  "invalid task status",
+			req:   WorkflowTaskListRequest{ProjectID: &projectID, StatusKinds: []WorkflowTaskStatusKind{"waiting"}},
+			field: "status_kinds[0]",
 			code:  WorkflowRequestErrorInvalidValue,
 		},
 		{
-			name:  "blank status key",
-			req:   WorkflowTaskListRequest{ProjectID: "project-1", StatusKeys: []string{" "}},
-			field: "status_keys[0]",
+			name:  "invalid attention kind",
+			req:   WorkflowTaskListRequest{ProjectID: &projectID, AttentionKinds: []WorkflowTaskAttentionKind{"waiting"}},
+			field: "attention_kinds[0]",
+			code:  WorkflowRequestErrorInvalidValue,
+		},
+		{
+			name:  "blank column key",
+			req:   WorkflowTaskListRequest{ProjectID: &projectID, ColumnKeys: []string{" "}},
+			field: "column_keys[0]",
 			code:  WorkflowRequestErrorInvalidKey,
 		},
 		{
-			name:  "invalid status key syntax",
-			req:   WorkflowTaskListRequest{ProjectID: "project-1", StatusKeys: []string{"Plan"}},
-			field: "status_keys[0]",
+			name:  "invalid column key syntax",
+			req:   WorkflowTaskListRequest{ProjectID: &projectID, ColumnKeys: []string{"Plan"}},
+			field: "column_keys[0]",
 			code:  WorkflowRequestErrorInvalidKey,
 		},
 	}
@@ -550,8 +584,8 @@ func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 			Title:           "Task",
 			CreatedAtUnixMs: 11,
 			UpdatedAtUnixMs: 12,
-			StatusKeys:      []string{"plan", "qa"},
-			RunStatus:       WorkflowTaskRunStatusRunning,
+			ColumnKeys:      []string{"plan", "qa"},
+			Status:          WorkflowTaskStatus{Kind: WorkflowTaskStatusKindQueued, NativeState: "active", NodeIDs: []string{"node-1"}, RunIDs: []string{"run-1"}, AttentionTypes: []WorkflowTaskAttentionKind{WorkflowTaskAttentionKindApproval}},
 			RunCount:        2,
 		}},
 	}
@@ -577,10 +611,22 @@ func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 	if !ok {
 		t.Fatalf("task shape = %#v, want object", tasks[0])
 	}
-	for _, key := range []string{"status_keys", "run_status", "created_at_unix_ms", "updated_at_unix_ms", "run_count"} {
+	for _, key := range []string{"column_keys", "status", "created_at_unix_ms", "updated_at_unix_ms", "run_count"} {
 		if _, ok := task[key]; !ok {
 			t.Fatalf("task JSON missing %s: %s", key, raw)
 		}
+	}
+	for _, key := range []string{"status_keys", "run_status", "run_statuses"} {
+		if _, ok := task[key]; ok {
+			t.Fatalf("task JSON unexpectedly contains %s: %s", key, raw)
+		}
+	}
+	status, ok := task["status"].(map[string]any)
+	if !ok {
+		t.Fatalf("task status shape = %#v, want object", task["status"])
+	}
+	if _, ok := status["label"]; ok {
+		t.Fatalf("task status JSON unexpectedly contains label: %s", raw)
 	}
 
 	empty := WorkflowTaskListResponse{ProjectID: "project-1", WorkflowID: "", Tasks: []WorkflowTaskListItem{}}
@@ -598,6 +644,104 @@ func TestWorkflowTaskListResponseJSONShape(t *testing.T) {
 	if _, ok := emptyShape["selected_workflow"]; ok {
 		t.Fatalf("selected_workflow present in no-selected-workflow response JSON: %s", raw)
 	}
+}
+
+func TestWorkflowLifecycleJSONOmitsAbsentFacts(t *testing.T) {
+	payload := struct {
+		Summary    WorkflowTaskSummary    `json:"summary"`
+		Run        WorkflowRun            `json:"run"`
+		Transition WorkflowTaskTransition `json:"transition"`
+	}{
+		Summary: WorkflowTaskSummary{
+			ID:         "task-1",
+			ProjectID:  "project-1",
+			WorkflowID: "workflow-1",
+			ShortID:    "KT-1",
+			Title:      "Task",
+		},
+		Run: WorkflowRun{
+			ID:          "run-1",
+			TaskID:      "task-1",
+			PlacementID: "placement-1",
+			NodeID:      "node-1",
+			Status:      "queued",
+		},
+		Transition: WorkflowTaskTransition{
+			ID:        "transition-1",
+			TaskID:    "task-1",
+			CreatedAt: 1,
+		},
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal workflow lifecycle payload: %v", err)
+	}
+	var raw map[string]map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal workflow lifecycle payload: %v", err)
+	}
+	if _, ok := raw["summary"]["cancel_reason"]; ok {
+		t.Fatalf("absent task cancellation reason serialized: %s", data)
+	}
+	for _, key := range []string{
+		"started_at_unix_ms",
+		"completed_at_unix_ms",
+		"interrupted_at_unix_ms",
+		"interruption_reason",
+	} {
+		if value, ok := raw["run"][key]; !ok || value != nil {
+			t.Fatalf("absent run lifecycle fact %q serialized as %v in %s, want null", key, value, data)
+		}
+	}
+	for _, key := range []string{
+		"waiting_ask_id",
+	} {
+		if _, ok := raw["run"][key]; ok {
+			t.Fatalf("absent run lifecycle fact %q serialized: %s", key, data)
+		}
+	}
+	if _, ok := raw["transition"]["applied_at_unix_ms"]; ok {
+		t.Fatalf("absent transition applied fact serialized: %s", data)
+	}
+}
+
+func TestWorkflowTaskListScopeErrorRoundTrip(t *testing.T) {
+	for _, original := range []*WorkflowTaskListScopeError{
+		{
+			Kind:         WorkflowTaskListScopeErrorKindNotLinked,
+			MissingScope: workflowTaskListScopeDimensionPointer(WorkflowTaskListScopeDimensionWorkflow),
+		},
+		{
+			Kind:         WorkflowTaskListScopeErrorKindAmbiguous,
+			MissingScope: workflowTaskListScopeDimensionPointer(WorkflowTaskListScopeDimensionWorkflow),
+			WorkflowIDs:  []string{"workflow-1", "workflow-2"},
+		},
+	} {
+		decoded := DecodeWorkflowTaskListScopeError(original.RPCErrorData(), original.Error())
+		var scopeErr *WorkflowTaskListScopeError
+		if !errors.As(decoded, &scopeErr) {
+			t.Fatalf("decoded scope error = %T %v, want WorkflowTaskListScopeError", decoded, decoded)
+		}
+		if scopeErr.Kind != original.Kind || scopeErr.MissingScope == nil || *scopeErr.MissingScope != *original.MissingScope || !equalJSONArrays(stringSliceToJSONAny(scopeErr.WorkflowIDs), stringSliceToJSONAny(original.WorkflowIDs)) {
+			t.Fatalf("decoded scope error = %+v, want %+v", scopeErr, original)
+		}
+		if scopeErr.RPCErrorCode() != protocol.ErrCodeWorkflowTaskListScope {
+			t.Fatalf("scope error code = %d, want %d", scopeErr.RPCErrorCode(), protocol.ErrCodeWorkflowTaskListScope)
+		}
+	}
+}
+
+func workflowTaskListScopeDimensionPointer(value WorkflowTaskListScopeDimension) *WorkflowTaskListScopeDimension {
+	return &value
+}
+
+func stringSliceToJSONAny(values []string) []any {
+	out := make([]any, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
 }
 
 func TestWorkflowValidateRequestValidation(t *testing.T) {
@@ -742,6 +886,33 @@ func TestWorkflowProjectLinkRequestValidation(t *testing.T) {
 	}
 	if err := (WorkflowSetDefaultProjectLinkRequest{ProjectID: "", WorkflowID: "workflow-1"}).Validate(); !isWorkflowFieldError(err, "project_id", WorkflowRequestErrorRequired) {
 		t.Fatalf("empty project id error = %#v, want required on project_id", err)
+	}
+}
+
+func TestWorkflowTaskStatusKindNativeState(t *testing.T) {
+	cases := []struct {
+		kind WorkflowTaskStatusKind
+		want WorkflowTaskNativeState
+	}{
+		{WorkflowTaskStatusKindCanceled, WorkflowTaskNativeStateCanceled},
+		{WorkflowTaskStatusKindDone, WorkflowTaskNativeStateTerminal},
+		{WorkflowTaskStatusKindWaitingQuestion, WorkflowTaskNativeStateWaitingAsk},
+		{WorkflowTaskStatusKindWaitingApproval, WorkflowTaskNativeStateWaitingApproval},
+		{WorkflowTaskStatusKindInterrupted, WorkflowTaskNativeStateInterrupted},
+		{WorkflowTaskStatusKindRunning, WorkflowTaskNativeStateRunning},
+		{WorkflowTaskStatusKindQueued, WorkflowTaskNativeStateQueued},
+		{WorkflowTaskStatusKindBacklog, WorkflowTaskNativeStateActive},
+		{WorkflowTaskStatusKindActive, WorkflowTaskNativeStateActive},
+	}
+	for _, tt := range cases {
+		t.Run(string(tt.kind), func(t *testing.T) {
+			if got, valid := tt.kind.NativeState(); !valid || got != tt.want {
+				t.Fatalf("%q NativeState() = (%q, %t), want (%q, true)", tt.kind, got, valid, tt.want)
+			}
+		})
+	}
+	if nativeState, valid := WorkflowTaskStatusKind("invalid").NativeState(); valid || nativeState != "" {
+		t.Fatalf("invalid NativeState() = (%q, %t), want (empty, false)", nativeState, valid)
 	}
 }
 

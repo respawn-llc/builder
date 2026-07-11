@@ -19,7 +19,7 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 
 	taskOut, _ := runWorkflowRootCommandOK(t, "task", "create", "--title", "Task", "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
 	shortID := taskDetailHeadingShortID(t, taskOut)
-	if !strings.Contains(taskOut, shortID+": Task\n") || !strings.Contains(taskOut, "Body:\n```md\nBody\n```\n") || !strings.Contains(taskOut, "Status: open\n") {
+	if !strings.Contains(taskOut, shortID+": Task\n") || !strings.Contains(taskOut, "Body:\n```md\nBody\n```\n") || !strings.Contains(taskOut, "Status: backlog\n") {
 		t.Fatalf("task create output = %q, want task show output", taskOut)
 	}
 	taskResp, err := remote.GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{ProjectID: binding.ProjectID, ShortID: shortID})
@@ -29,8 +29,8 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	taskID := taskResp.Task.Summary.ID
 
 	taskListOut, _ := runWorkflowRootCommandOK(t, "task", "list", "--project", binding.ProjectID)
-	if !strings.Contains(taskListOut, shortID+": Task.") || !strings.Contains(taskListOut, "Status: backlog") || !strings.Contains(taskListOut, "Run status: open") {
-		t.Fatalf("task list output = %q, want short id, backlog status, and open run status", taskListOut)
+	if !strings.Contains(taskListOut, shortID+": Task.") || !strings.Contains(taskListOut, "Status: backlog") || !strings.Contains(taskListOut, "Columns: backlog") {
+		t.Fatalf("task list output = %q, want short id, typed status, and column", taskListOut)
 	}
 	taskListJSONOut, _ := runWorkflowRootCommandOK(t, "task", "list", "--project", binding.ProjectID, "--json")
 	if !strings.Contains(taskListJSONOut, shortID) || !strings.Contains(taskListJSONOut, taskID) {
@@ -38,7 +38,7 @@ func TestTaskCommandsUseWorkflowAPI(t *testing.T) {
 	}
 
 	taskShowOut, _ := runWorkflowRootCommandOK(t, "task", "show", "--project", binding.ProjectID, shortID)
-	if !strings.Contains(taskShowOut, shortID+": Task\n") || !strings.Contains(taskShowOut, "Body:\n```md\nBody\n```\n") || !strings.Contains(taskShowOut, "Status: open\n") {
+	if !strings.Contains(taskShowOut, shortID+": Task\n") || !strings.Contains(taskShowOut, "Body:\n```md\nBody\n```\n") || !strings.Contains(taskShowOut, "Status: backlog\n") {
 		t.Fatalf("task show output = %q, want summary block", taskShowOut)
 	}
 	taskShowJSONOut, _ := runWorkflowRootCommandOK(t, "task", "show", "--project", binding.ProjectID, "--json", shortID)

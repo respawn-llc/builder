@@ -58,13 +58,20 @@ func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Note: This task belongs to another project %s\n", task.Project.ProjectKey)
 	}
 	if *jsonOut {
+		if _, err := taskStatusText(task.Status); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 		if err := json.NewEncoder(stdout).Encode(taskShowOutputFromDetail(task)); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		return 0
 	}
-	writeTaskDetail(stdout, task)
+	if err := writeTaskDetail(stdout, task); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	return 0
 }
 
@@ -123,13 +130,17 @@ func getWorkflowTaskForShow(ctx context.Context, cfg config.App, remote workflow
 	}
 	return requestedProjectID, serverapi.WorkflowTaskDetail{}, fmt.Errorf("task %q not found", trimmed)
 }
-func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) {
+func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) error {
+	statusText, err := taskStatusText(task.Status)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(stdout, "%s: %s\n", task.Summary.ShortID, task.Summary.Title)
 	fmt.Fprintln(stdout, "Body:")
 	fmt.Fprintln(stdout, "```md")
 	fmt.Fprintln(stdout, task.Body)
 	fmt.Fprintln(stdout, "```")
-	fmt.Fprintf(stdout, "Status: %s\n", taskDetailStatus(task))
+	fmt.Fprintf(stdout, "Status: %s\n", statusText)
 	fmt.Fprintf(stdout, "Project: %q (%s)\n", task.Project.DisplayName, task.Project.ProjectID)
 	fmt.Fprintf(stdout, "Workflow: %q (%s)\n", task.Workflow.DisplayName, task.Workflow.WorkflowID)
 	fmt.Fprintf(stdout, "Created at %s UTC\n", time.UnixMilli(task.Summary.CreatedAtUnixMs).UTC().Format(time.RFC3339))
@@ -146,19 +157,14 @@ func writeTaskDetail(stdout io.Writer, task serverapi.WorkflowTaskDetail) {
 		fmt.Fprintf(stdout, "Imported from: %s\n", task.SourceURL)
 	}
 	writeTaskDetailComments(stdout, task.Summary.ShortID, task.Comments)
+	return nil
 }
 
-func taskDetailStatus(task serverapi.WorkflowTaskDetail) string {
-	if task.Summary.CanceledAt != 0 || task.Status.Kind == "canceled" {
-		return "canceled"
-	}
-	if task.Summary.Done || task.Status.Kind == "done" {
-		return "done"
-	}
-	switch task.Status.Kind {
-	case "", "backlog", "open":
-		return "open"
+func taskStatusText(status serverapi.WorkflowTaskStatus) (string, error) {
+	switch status.Kind {
+	case serverapi.WorkflowTaskStatusKindCanceled, serverapi.WorkflowTaskStatusKindDone, serverapi.WorkflowTaskStatusKindWaitingQuestion, serverapi.WorkflowTaskStatusKindWaitingApproval, serverapi.WorkflowTaskStatusKindInterrupted, serverapi.WorkflowTaskStatusKindRunning, serverapi.WorkflowTaskStatusKindQueued, serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindActive:
+		return string(status.Kind), nil
 	default:
-		return "running"
+		return "", fmt.Errorf("unsupported task status %q", status.Kind)
 	}
 }

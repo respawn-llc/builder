@@ -6,7 +6,7 @@ Usage of kent task:
   kent task approve <transition-id>
   kent task move <short-id-or-task-id> <target-node-id> [--project <project>] [--commentary <text>] [--output name=value]
   kent task complete [--transition <key>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--run <run-id>|--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
-  kent task list [--project <project>] [--status <key>[,<key>...]] [--column <key>[,<key>...]] [--run-status <open|running|done|canceled>[,...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
+  kent task list [--project <project>] [--workflow <uuid>] [--status <status>[,<status>...]] [--attention <attention>[,<attention>...]] [--column <key>[,<key>...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
   kent task show <short-id-or-task-id> [--project <project>] [--json]
   kent task cancel <short-id-or-task-id> [--project <project>] [--reason <text>]
   kent task delete <short-id-or-task-id> [--project <project>]
@@ -31,8 +31,11 @@ If you are an agent, refer to the developer guidance you received for how to mar
 Subommands `resume`, `approve`, `move`, `cancel`, `delete` are only available to humans. Do not try to circumvent this restriction, and give the user the commands they have to run instead.
 
 Listing tasks:
-  `--status` and `--column` filter workflow node keys (inspect the workflow to learn them).
-  `--run-status` filters by task activity: `open`, `running`, `done`, or `canceled`.
-  `--sort` accepts `created`, `updated`, `status`, `run_count`, or `title`
+  `--status` filters primary typed task status; `--attention` filters current
+  question, approval, or interruption attention; `--column` filters workflow
+  node keys.
+  Supply either `--project` or `--workflow` only when its active link is unique,
+  or both to select an exact project/workflow link.
+  `--sort` accepts `created`, `updated`, `status`, `column`, `run_count`, or `title`
   followed by `:asc` or `:desc`.
   The default order is `status:asc,updated:desc`.

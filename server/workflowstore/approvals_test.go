@@ -37,7 +37,7 @@ func TestCompleteRunCreatesPendingApprovalTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].CompletedAt == 0 {
+	if len(runs) != 1 || runs[0].CompletedAt == nil {
 		t.Fatalf("runs after pending approval = %+v, want source run completed", runs)
 	}
 }
@@ -82,8 +82,8 @@ func TestApprovePendingTransitionStartsStoredTargetEdgeSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListPlacements: %v", err)
 	}
-	if len(placements) != 3 || placements[2].ID != approved.PlacementIDs[0] || placements[2].State != "completed" {
-		t.Fatalf("placements after approval = %+v, want completed terminal placement", placements)
+	if len(placements) != 3 || placements[2].ID != approved.PlacementIDs[0] || placements[2].State != "active" {
+		t.Fatalf("placements after approval = %+v, want active terminal sink", placements)
 	}
 }
 

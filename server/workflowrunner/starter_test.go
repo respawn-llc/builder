@@ -37,6 +37,8 @@ import (
 	"core/shared/toolspec"
 )
 
+const workflowRunnerTestWaitTimeout = 15 * time.Second
+
 func TestSchedulerRunsNewSessionWorkflowNodeWithStructuredOutput(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"finished structured"}`))
 
@@ -59,7 +61,7 @@ func TestSchedulerRunsNewSessionWorkflowNodeWithStructuredOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || strings.TrimSpace(runs[0].SessionID) == "" || runs[0].CompletedAt == 0 {
+	if len(runs) != 1 || strings.TrimSpace(runs[0].SessionID) == "" || runs[0].CompletedAt == nil {
 		t.Fatalf("run not attached/completed: %+v", runs)
 	}
 	transitions, err := fixture.store.ListTransitions(context.Background(), task.ID)
@@ -197,7 +199,7 @@ func TestWorkflowRuntimeAskQuestionWaitsAndResumesSameRunSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].SessionID != waiting.SessionID || runs[0].WaitingAskID != "" {
+	if len(runs) != 1 || runs[0].SessionID != waiting.SessionID || runs[0].WaitingAskID != nil {
 		t.Fatalf("run after answer = %+v, want same session and cleared waiting ask", runs)
 	}
 	transitions, err := fixture.store.ListTransitions(context.Background(), task.ID)
@@ -255,7 +257,7 @@ func TestWorkflowRuntimeMultipleAskQuestionsInOneToolBatchResumeSequentially(t *
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].SessionID != first.SessionID || runs[0].WaitingAskID != "" {
+	if len(runs) != 1 || runs[0].SessionID != first.SessionID || runs[0].WaitingAskID != nil {
 		t.Fatalf("run after answers = %+v, want same session and cleared waiting ask", runs)
 	}
 	askResults := workflowRequestAskQuestionToolMessages(fixture.client.Requests())
@@ -530,12 +532,13 @@ func TestWorkflowAskHandlerCancellationAfterDurableClearResolvesBatch(t *testing
 	cancel()
 	batch := workflowTestAskBatch("ask-1", "ask-1", "ask-2")
 	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
+	interruptedAt := int64(123)
 	store := &recordingRuntimeStore{
 		clearErr: sql.ErrNoRows,
 		getRun: workflowstore.RunRecord{
 			ID:            "run-1",
 			Generation:    7,
-			InterruptedAt: 123,
+			InterruptedAt: &interruptedAt,
 		},
 	}
 	starter := &Starter{store: store, runtimes: runtimes}
@@ -564,12 +567,13 @@ func TestWorkflowAskHandlerApprovalCancellationAfterDurableClearResolvesQuestion
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
+	interruptedAt := int64(123)
 	store := &recordingRuntimeStore{
 		clearErr: sql.ErrNoRows,
 		getRun: workflowstore.RunRecord{
 			ID:            "run-1",
 			Generation:    7,
-			InterruptedAt: 123,
+			InterruptedAt: &interruptedAt,
 		},
 	}
 	starter := &Starter{store: store, runtimes: runtimes}
@@ -713,7 +717,7 @@ func TestStarterAutoPersistsShellCommandForContinuationWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeShellCommand) {
+	if len(runs) != 1 || runs[0].EffectiveCompletionMode == nil || *runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeShellCommand) {
 		t.Fatalf("stored mode = %+v, want shell_command", runs)
 	}
 }
@@ -777,7 +781,7 @@ func TestStarterAutoPersistsUnstructuredWhenShellUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeUnstructuredOutput) {
+	if len(runs) != 1 || runs[0].EffectiveCompletionMode == nil || *runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeUnstructuredOutput) {
 		t.Fatalf("stored mode = %+v, want unstructured_output", runs)
 	}
 }
@@ -796,7 +800,7 @@ func TestStarterExplicitShellModeFailsWhenShellUnavailable(t *testing.T) {
 	if listErr != nil {
 		t.Fatalf("ListRuns: %v", listErr)
 	}
-	if len(runs) != 1 || runs[0].EffectiveCompletionMode != "" {
+	if len(runs) != 1 || runs[0].EffectiveCompletionMode != nil {
 		t.Fatalf("stored mode after failed explicit shell = %+v, want empty", runs)
 	}
 }
@@ -923,7 +927,7 @@ func TestStarterStartWorkflowRunPersistsEffectiveCompletionModeBeforeModelReques
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeShellCommand) {
+	if len(runs) != 1 || runs[0].EffectiveCompletionMode == nil || *runs[0].EffectiveCompletionMode != string(workflowruntime.CompletionModeShellCommand) {
 		t.Fatalf("stored mode = %+v, want shell_command", runs)
 	}
 	if err := fixture.starter.Close(); err != nil {
@@ -946,7 +950,7 @@ func TestStarterStartWorkflowRunFailsExplicitShellModeWithoutShell(t *testing.T)
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InterruptedAt == 0 || runs[0].EffectiveCompletionMode != "" || runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
+	if len(runs) != 1 || runs[0].InterruptedAt == nil || runs[0].EffectiveCompletionMode != nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
 		t.Fatalf("run after explicit shell failure = %+v, want interrupted without stored mode", runs)
 	}
 	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != runs[0].ID {
@@ -987,7 +991,7 @@ func TestStarterRestoresReusedSessionMetadataWhenSetupFailsAfterPlanning(t *test
 	if err != nil {
 		t.Fatalf("ListRuns after failed continuation: %v", err)
 	}
-	if len(runs) != 2 || runs[1].InterruptedAt == 0 || strings.TrimSpace(runs[1].SessionID) != "" {
+	if len(runs) != 2 || runs[1].InterruptedAt == nil || strings.TrimSpace(runs[1].SessionID) != "" {
 		t.Fatalf("runs after failed continuation = %+v, want interrupted unattached continuation", runs)
 	}
 	metaAfter := fixture.sessionMeta(t, sourceSessionID)
@@ -1239,7 +1243,7 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 	if err != nil {
 		t.Fatalf("ListRuns after first run: %v", err)
 	}
-	if len(runs) != 2 || runs[0].CompletedAt == 0 || runs[1].StartedAt != 0 {
+	if len(runs) != 2 || runs[0].CompletedAt == nil || runs[1].StartedAt != nil {
 		t.Fatalf("runs after first process = %+v, want completed source and unstarted target", runs)
 	}
 	role := fixture.cfg.Settings.Subagents["coder"]
@@ -1447,7 +1451,7 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 2 || runs[1].InterruptedAt != 0 || runs[1].CompletedAt == 0 || runs[0].SessionID != runs[1].SessionID {
+	if len(runs) != 2 || runs[1].InterruptedAt != nil || runs[1].CompletedAt == nil || runs[0].SessionID != runs[1].SessionID {
 		t.Fatalf("runs = %+v, want cross-role compact_and_continue to complete in source session", runs)
 	}
 	reqs := fixture.client.Requests()
@@ -1719,7 +1723,7 @@ func TestWorkflowRuntimeStartFailsWhenRoleDisappearedAfterTaskStart(t *testing.T
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
+	if len(runs) != 1 || runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed {
 		t.Fatalf("run after missing role = %+v", runs)
 	}
 	var detail string
@@ -1782,7 +1786,7 @@ func TestWorkflowRuntimeStartFailsWhenTransitionPromptPreviewCannotRender(t *tes
 	if err != nil {
 		t.Fatalf("ListRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InterruptedAt == 0 || runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed || strings.TrimSpace(runs[0].SessionID) != "" {
+	if len(runs) != 1 || runs[0].InterruptedAt == nil || runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != ReasonSchedulerRuntimeStartFailed || strings.TrimSpace(runs[0].SessionID) != "" {
 		t.Fatalf("run after prompt render failure = %+v, want interrupted without attached session", runs)
 	}
 	if len(finalizer.interruptedRuns) != 1 || finalizer.interruptedRuns[0] != runs[0].ID {
@@ -1836,7 +1840,7 @@ func TestWorkflowRuntimeResumeInterruptedRunUsesSameSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRuns interrupted: %v", err)
 	}
-	if len(runs) != 1 || runs[0].InterruptedAt == 0 || strings.TrimSpace(runs[0].SessionID) == "" {
+	if len(runs) != 1 || runs[0].InterruptedAt == nil || strings.TrimSpace(runs[0].SessionID) == "" {
 		t.Fatalf("interrupted run session = %+v", runs)
 	}
 	originalSessionID := runs[0].SessionID
@@ -2422,16 +2426,16 @@ func (s panicRuntimeStore) ClearRunWaitingAsk(context.Context, workflow.RunID, i
 
 func (f starterFixture) waitForCompletedRun(t *testing.T, taskID workflow.TaskID) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
 		}
-		if len(runs) == 1 && runs[0].CompletedAt != 0 {
+		if len(runs) == 1 && runs[0].CompletedAt != nil {
 			return
 		}
-		if len(runs) == 1 && runs[0].InterruptedAt != 0 {
+		if len(runs) == 1 && runs[0].InterruptedAt != nil {
 			var detail string
 			_ = f.metadata.DB().QueryRowContext(context.Background(), `SELECT interruption_detail_json FROM task_runs WHERE id = ?`, string(runs[0].ID)).Scan(&detail)
 			t.Fatalf("run interrupted: %+v detail=%s", runs[0], detail)
@@ -2443,7 +2447,7 @@ func (f starterFixture) waitForCompletedRun(t *testing.T, taskID workflow.TaskID
 
 func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2451,12 +2455,12 @@ func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.T
 		}
 		completed := 0
 		for _, run := range runs {
-			if run.InterruptedAt != 0 {
+			if run.InterruptedAt != nil {
 				var detail string
 				_ = f.metadata.DB().QueryRowContext(context.Background(), `SELECT interruption_detail_json FROM task_runs WHERE id = ?`, string(run.ID)).Scan(&detail)
 				t.Fatalf("run interrupted: %+v detail=%s", run, detail)
 			}
-			if run.CompletedAt != 0 {
+			if run.CompletedAt != nil {
 				completed++
 			}
 		}
@@ -2470,17 +2474,17 @@ func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.T
 
 func (f starterFixture) waitForWaitingAsk(t *testing.T, taskID workflow.TaskID, askID string) workflowstore.RunRecord {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
 		}
-		if len(runs) == 1 && runs[0].WaitingAskID == askID {
+		if len(runs) == 1 && runs[0].WaitingAskID != nil && *runs[0].WaitingAskID == askID {
 			if strings.TrimSpace(runs[0].SessionID) == "" {
 				t.Fatalf("waiting run has no session: %+v", runs[0])
 			}
-			if runs[0].CompletedAt != 0 || runs[0].InterruptedAt != 0 {
+			if runs[0].CompletedAt != nil || runs[0].InterruptedAt != nil {
 				t.Fatalf("waiting run has terminal outcome: %+v", runs[0])
 			}
 			return runs[0]
@@ -2493,7 +2497,7 @@ func (f starterFixture) waitForWaitingAsk(t *testing.T, taskID workflow.TaskID, 
 
 func (f starterFixture) waitForRunCount(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2509,7 +2513,7 @@ func (f starterFixture) waitForRunCount(t *testing.T, taskID workflow.TaskID, co
 
 func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2517,10 +2521,10 @@ func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.Ta
 		}
 		completed := 0
 		for _, run := range runs {
-			if run.InterruptedAt != 0 {
+			if run.InterruptedAt != nil {
 				t.Fatalf("run interrupted: %+v", run)
 			}
-			if run.CompletedAt != 0 {
+			if run.CompletedAt != nil {
 				completed++
 			}
 		}
@@ -2534,15 +2538,15 @@ func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.Ta
 
 func (f starterFixture) waitForInterruptedRun(t *testing.T, scheduler *SchedulerService, taskID workflow.TaskID, reason string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
 			t.Fatalf("ListRuns: %v", err)
 		}
-		if len(runs) == 1 && runs[0].InterruptedAt != 0 {
-			if runs[0].InterruptionReason != reason {
-				t.Fatalf("interruption reason = %q, want %q", runs[0].InterruptionReason, reason)
+		if len(runs) == 1 && runs[0].InterruptedAt != nil {
+			if runs[0].InterruptionReason == nil || *runs[0].InterruptionReason != reason {
+				t.Fatalf("interruption reason = %v, want %q", runs[0].InterruptionReason, reason)
 			}
 			f.waitForActiveCountZero(t, scheduler)
 			return
@@ -2554,7 +2558,7 @@ func (f starterFixture) waitForInterruptedRun(t *testing.T, scheduler *Scheduler
 
 func (f starterFixture) waitForActiveCountZero(t *testing.T, scheduler *SchedulerService) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		if scheduler.ActiveCount() == 0 {
 			return

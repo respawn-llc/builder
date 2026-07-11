@@ -236,8 +236,8 @@ type TaskRecord struct {
 	SourceURL         string
 	SourceWorkspaceID string
 	ManagedWorktreeID string
-	CanceledAt        int64
-	CancelReason      string
+	CanceledAt        *int64
+	CancelReason      *string
 	Version           int64
 }
 
@@ -255,13 +255,13 @@ type RunRecord struct {
 	NodeID                  workflow.NodeID
 	SessionID               string
 	Generation              int64
-	AutomationRequestedAt   int64
-	StartedAt               int64
-	CompletedAt             int64
-	InterruptedAt           int64
-	InterruptionReason      string
-	WaitingAskID            string
-	EffectiveCompletionMode string
+	AutomationRequestedAt   *int64
+	StartedAt               *int64
+	CompletedAt             *int64
+	InterruptedAt           *int64
+	InterruptionReason      *string
+	WaitingAskID            *string
+	EffectiveCompletionMode *string
 	InvalidCompletions      int64
 }
 
