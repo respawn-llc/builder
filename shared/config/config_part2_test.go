@@ -26,6 +26,7 @@ supports_native_web_search = true
 supports_reasoning_encrypted = false
 supports_server_side_context_edit = false
 is_openai_first_party = false
+supports_provider_verbosity = true
 `, LoadOptions{})
 	if !cfg.Settings.ModelCapabilities.SupportsReasoningEffort || !cfg.Settings.ModelCapabilities.SupportsVisionInputs {
 		t.Fatalf("expected model capability overrides from file, got %+v", cfg.Settings.ModelCapabilities)
@@ -36,6 +37,9 @@ is_openai_first_party = false
 	if cfg.Settings.ProviderCapabilities.SupportsRequestInputTokenCount {
 		t.Fatalf("expected supports_request_input_token_count override from file, got %+v", cfg.Settings.ProviderCapabilities)
 	}
+	if !cfg.Settings.ProviderCapabilities.SupportsProviderVerbosity {
+		t.Fatalf("expected supports_provider_verbosity override from file, got %+v", cfg.Settings.ProviderCapabilities)
+	}
 	if got := cfg.Source.Sources["model_capabilities.supports_reasoning_effort"]; got != "file" {
 		t.Fatalf("expected model_capabilities.supports_reasoning_effort source file, got %q", got)
 	}
@@ -44,6 +48,9 @@ is_openai_first_party = false
 	}
 	if got := cfg.Source.Sources["provider_capabilities.supports_request_input_token_count"]; got != "file" {
 		t.Fatalf("expected provider_capabilities.supports_request_input_token_count source file, got %q", got)
+	}
+	if got := cfg.Source.Sources["provider_capabilities.supports_provider_verbosity"]; got != "file" {
+		t.Fatalf("expected provider_capabilities.supports_provider_verbosity source file, got %q", got)
 	}
 }
 
@@ -60,6 +67,7 @@ func TestLoadCapabilityOverridesFromEnv(t *testing.T) {
 	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_REASONING_ENCRYPTED", "false")
 	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_SERVER_SIDE_CONTEXT_EDIT", "false")
 	t.Setenv("KENT_PROVIDER_CAPABILITIES_IS_OPENAI_FIRST_PARTY", "false")
+	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_PROVIDER_VERBOSITY", "false")
 
 	cfg := loadConfigTestApp(t, workspace, LoadOptions{})
 	if !cfg.Settings.ModelCapabilities.SupportsReasoningEffort || !cfg.Settings.ModelCapabilities.SupportsVisionInputs {
@@ -71,6 +79,9 @@ func TestLoadCapabilityOverridesFromEnv(t *testing.T) {
 	if cfg.Settings.ProviderCapabilities.SupportsRequestInputTokenCount {
 		t.Fatalf("expected supports_request_input_token_count override from env, got %+v", cfg.Settings.ProviderCapabilities)
 	}
+	if cfg.Settings.ProviderCapabilities.SupportsProviderVerbosity {
+		t.Fatalf("expected supports_provider_verbosity=false override from env, got %+v", cfg.Settings.ProviderCapabilities)
+	}
 	if got := cfg.Source.Sources["model_capabilities.supports_reasoning_effort"]; got != "env" {
 		t.Fatalf("expected model_capabilities.supports_reasoning_effort source env, got %q", got)
 	}
@@ -79,6 +90,9 @@ func TestLoadCapabilityOverridesFromEnv(t *testing.T) {
 	}
 	if got := cfg.Source.Sources["provider_capabilities.supports_request_input_token_count"]; got != "env" {
 		t.Fatalf("expected provider_capabilities.supports_request_input_token_count source env, got %q", got)
+	}
+	if got := cfg.Source.Sources["provider_capabilities.supports_provider_verbosity"]; got != "env" {
+		t.Fatalf("expected provider_capabilities.supports_provider_verbosity source env, got %q", got)
 	}
 }
 
@@ -100,6 +114,7 @@ supports_vision_inputs = true
 provider_id = "local-reviewer"
 supports_responses_api = true
 supports_prompt_cache_key = true
+supports_provider_verbosity = false
 `, LoadOptions{})
 	if cfg.Settings.Reviewer.ModelVerbosity != ModelVerbosityLow {
 		t.Fatalf("expected reviewer.model_verbosity=low, got %q", cfg.Settings.Reviewer.ModelVerbosity)
@@ -112,6 +127,9 @@ supports_prompt_cache_key = true
 	}
 	if cfg.Settings.Reviewer.ProviderCapabilities.ProviderID != "local-reviewer" || !cfg.Settings.Reviewer.ProviderCapabilities.SupportsResponsesAPI || !cfg.Settings.Reviewer.ProviderCapabilities.SupportsPromptCacheKey {
 		t.Fatalf("expected reviewer provider capability overrides, got %+v", cfg.Settings.Reviewer.ProviderCapabilities)
+	}
+	if cfg.Settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity {
+		t.Fatalf("expected reviewer supports_provider_verbosity=false from file, got %+v", cfg.Settings.Reviewer.ProviderCapabilities)
 	}
 	if got := cfg.Source.Sources["reviewer.model_capabilities.supports_reasoning_effort"]; got != "file" {
 		t.Fatalf("expected reviewer model capability source file, got %q", got)
@@ -127,6 +145,7 @@ supports_prompt_cache_key = true
 	t.Setenv("KENT_REVIEWER_PROVIDER_CAPABILITIES_PROVIDER_ID", "env-reviewer")
 	t.Setenv("KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_RESPONSES_API", "true")
 	t.Setenv("KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_PROMPT_CACHE_KEY", "false")
+	t.Setenv("KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_PROVIDER_VERBOSITY", "true")
 	cfg = loadConfigTestApp(t, workspace, LoadOptions{})
 	if cfg.Settings.Reviewer.ModelVerbosity != ModelVerbosityMedium {
 		t.Fatalf("expected env reviewer.model_verbosity=medium, got %q", cfg.Settings.Reviewer.ModelVerbosity)
@@ -140,11 +159,17 @@ supports_prompt_cache_key = true
 	if cfg.Settings.Reviewer.ProviderCapabilities.ProviderID != "env-reviewer" || !cfg.Settings.Reviewer.ProviderCapabilities.SupportsResponsesAPI || cfg.Settings.Reviewer.ProviderCapabilities.SupportsPromptCacheKey {
 		t.Fatalf("expected env reviewer provider capability overrides, got %+v", cfg.Settings.Reviewer.ProviderCapabilities)
 	}
+	if !cfg.Settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity {
+		t.Fatalf("expected reviewer supports_provider_verbosity=true from env, got %+v", cfg.Settings.Reviewer.ProviderCapabilities)
+	}
 	if got := cfg.Source.Sources["reviewer.model_context_window"]; got != "env" {
 		t.Fatalf("expected reviewer.model_context_window source env, got %q", got)
 	}
 	if got := cfg.Source.Sources["reviewer.provider_capabilities.provider_id"]; got != "env" {
 		t.Fatalf("expected reviewer provider capability source env, got %q", got)
+	}
+	if got := cfg.Source.Sources["reviewer.provider_capabilities.supports_provider_verbosity"]; got != "env" {
+		t.Fatalf("expected reviewer supports_provider_verbosity source env, got %q", got)
 	}
 }
 
@@ -160,6 +185,7 @@ supports_reasoning_effort = true
 [provider_capabilities]
 provider_id = "main-provider"
 supports_responses_api = true
+supports_provider_verbosity = true
 `, LoadOptions{})
 	if cfg.Settings.Reviewer.ModelVerbosity != ModelVerbosityHigh {
 		t.Fatalf("expected reviewer.model_verbosity to inherit main, got %q", cfg.Settings.Reviewer.ModelVerbosity)
@@ -172,6 +198,9 @@ supports_responses_api = true
 	}
 	if cfg.Settings.Reviewer.ProviderCapabilities.ProviderID != "main-provider" || !cfg.Settings.Reviewer.ProviderCapabilities.SupportsResponsesAPI {
 		t.Fatalf("expected reviewer provider capabilities to inherit main, got %+v", cfg.Settings.Reviewer.ProviderCapabilities)
+	}
+	if !cfg.Settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity {
+		t.Fatalf("expected reviewer supports_provider_verbosity to inherit main, got %+v", cfg.Settings.Reviewer.ProviderCapabilities)
 	}
 }
 
@@ -195,6 +224,7 @@ supports_vision_inputs = false
 provider_id = "reviewer-provider"
 supports_responses_api = false
 supports_prompt_cache_key = false
+supports_provider_verbosity = false
 `, LoadOptions{})
 	reviewer := cfg.Settings.Reviewer
 	if reviewer.ModelCapabilities.SupportsReasoningEffort || reviewer.ModelCapabilities.SupportsVisionInputs {
@@ -202,6 +232,9 @@ supports_prompt_cache_key = false
 	}
 	if reviewer.ProviderCapabilities.ProviderID != "reviewer-provider" || reviewer.ProviderCapabilities.SupportsResponsesAPI || reviewer.ProviderCapabilities.SupportsPromptCacheKey {
 		t.Fatalf("expected explicit false reviewer provider capabilities to survive effective helper, got %+v", reviewer.ProviderCapabilities)
+	}
+	if reviewer.ProviderCapabilities.SupportsProviderVerbosity {
+		t.Fatalf("expected explicit false reviewer verbosity capability to survive effective helper, got %+v", reviewer.ProviderCapabilities)
 	}
 }
 
@@ -525,6 +558,47 @@ func TestLoadRequestInputTokenCountCapabilityRequiresProviderID(t *testing.T) {
 	}
 	if !errors.Is(err, errProviderCapabilitiesNeedID) {
 		t.Fatalf("expected provider_id validation error, got %v", err)
+	}
+}
+
+func TestLoadFalseProviderVerbosityCapabilityRequiresProviderID(t *testing.T) {
+	_, workspace := newConfigTestEnv(t)
+	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_PROVIDER_VERBOSITY", "false")
+
+	_, err := Load(workspace, LoadOptions{})
+	if err == nil {
+		t.Fatal("expected validation error when false verbosity capability override is set without provider_id")
+	}
+	if !errors.Is(err, errProviderCapabilitiesNeedID) {
+		t.Fatalf("expected provider_id validation error, got %v", err)
+	}
+}
+
+func TestLoadFalseReviewerProviderVerbosityCapabilityRequiresProviderID(t *testing.T) {
+	err := loadConfigTestFileError(t, `[reviewer.provider_capabilities]
+supports_provider_verbosity = false
+`, LoadOptions{})
+	if err == nil {
+		t.Fatal("expected validation error when false reviewer verbosity capability override is set without provider_id")
+	}
+	if !errors.Is(err, errReviewerProviderCapabilitiesNeedID) {
+		t.Fatalf("expected reviewer provider_id validation error, got %v", err)
+	}
+}
+
+func TestLoadProviderVerbosityCapabilityRejectsNonBooleanValues(t *testing.T) {
+	if err := loadConfigTestFileError(t, `[provider_capabilities]
+provider_id = "custom-provider"
+supports_provider_verbosity = "yes"
+`, LoadOptions{}); err == nil {
+		t.Fatal("expected non-boolean TOML verbosity capability to fail")
+	}
+
+	_, workspace := newConfigTestEnv(t)
+	t.Setenv("KENT_PROVIDER_CAPABILITIES_PROVIDER_ID", "custom-provider")
+	t.Setenv("KENT_PROVIDER_CAPABILITIES_SUPPORTS_PROVIDER_VERBOSITY", "yes")
+	if _, err := Load(workspace, LoadOptions{}); err == nil {
+		t.Fatal("expected non-boolean environment verbosity capability to fail")
 	}
 }
 

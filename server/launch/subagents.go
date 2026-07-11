@@ -144,6 +144,8 @@ func applySubagentRoleOverrides(settings *config.Settings, role config.SubagentR
 			settings.ProviderCapabilities.SupportsReasoningEncrypted = role.Settings.ProviderCapabilities.SupportsReasoningEncrypted
 		case "provider_capabilities.supports_server_side_context_edit":
 			settings.ProviderCapabilities.SupportsServerSideContextEdit = role.Settings.ProviderCapabilities.SupportsServerSideContextEdit
+		case "provider_capabilities.supports_provider_verbosity":
+			settings.ProviderCapabilities.SupportsProviderVerbosity = role.Settings.ProviderCapabilities.SupportsProviderVerbosity
 		case "provider_capabilities.is_openai_first_party":
 			settings.ProviderCapabilities.IsOpenAIFirstParty = role.Settings.ProviderCapabilities.IsOpenAIFirstParty
 		case "store":
@@ -226,6 +228,8 @@ func applySubagentProviderOverrides(settings *config.Settings, role config.Subag
 			settings.ProviderCapabilities.SupportsReasoningEncrypted = role.Settings.ProviderCapabilities.SupportsReasoningEncrypted
 		case "provider_capabilities.supports_server_side_context_edit":
 			settings.ProviderCapabilities.SupportsServerSideContextEdit = role.Settings.ProviderCapabilities.SupportsServerSideContextEdit
+		case "provider_capabilities.supports_provider_verbosity":
+			settings.ProviderCapabilities.SupportsProviderVerbosity = role.Settings.ProviderCapabilities.SupportsProviderVerbosity
 		case "provider_capabilities.is_openai_first_party":
 			settings.ProviderCapabilities.IsOpenAIFirstParty = role.Settings.ProviderCapabilities.IsOpenAIFirstParty
 		}
@@ -356,6 +360,9 @@ func applyReviewerProviderCapabilityInheritance(settings *config.Settings, sourc
 	if strings.TrimSpace(sources["reviewer.provider_capabilities.supports_server_side_context_edit"]) == "default" {
 		settings.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit = settings.ProviderCapabilities.SupportsServerSideContextEdit
 	}
+	if strings.TrimSpace(sources["reviewer.provider_capabilities.supports_provider_verbosity"]) == "default" {
+		settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity = settings.ProviderCapabilities.SupportsProviderVerbosity
+	}
 	if strings.TrimSpace(sources["reviewer.provider_capabilities.is_openai_first_party"]) == "default" {
 		settings.Reviewer.ProviderCapabilities.IsOpenAIFirstParty = settings.ProviderCapabilities.IsOpenAIFirstParty
 	}
@@ -415,6 +422,9 @@ var reviewerRoleOverrideApplicators = map[string]func(*config.Settings, config.S
 	},
 	"reviewer.provider_capabilities.supports_server_side_context_edit": func(settings *config.Settings, role config.Settings) {
 		settings.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit = role.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit
+	},
+	"reviewer.provider_capabilities.supports_provider_verbosity": func(settings *config.Settings, role config.Settings) {
+		settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity = role.Reviewer.ProviderCapabilities.SupportsProviderVerbosity
 	},
 	"reviewer.provider_capabilities.is_openai_first_party": func(settings *config.Settings, role config.Settings) {
 		settings.Reviewer.ProviderCapabilities.IsOpenAIFirstParty = role.Reviewer.ProviderCapabilities.IsOpenAIFirstParty

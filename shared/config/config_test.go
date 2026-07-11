@@ -580,8 +580,9 @@ func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t
 	base := Settings{
 		Timeouts: Timeouts{ModelRequestSeconds: 100},
 		ProviderCapabilities: ProviderCapabilitiesOverride{
-			ProviderID:           "openai",
-			SupportsResponsesAPI: true,
+			ProviderID:                "openai",
+			SupportsResponsesAPI:      true,
+			SupportsProviderVerbosity: true,
 		},
 		Reviewer: ReviewerSettings{
 			Model:          "gpt-5.5",
@@ -592,9 +593,10 @@ func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t
 	same := SubagentRole{
 		Settings: base,
 		Sources: map[string]string{
-			"timeouts.model_request_seconds":                        "file",
-			"provider_capabilities.supports_responses_api":          "file",
-			"reviewer.model":                                        "file",
+			"timeouts.model_request_seconds":                    "file",
+			"provider_capabilities.supports_responses_api":      "file",
+			"provider_capabilities.supports_provider_verbosity": "file",
+			"reviewer.model": "file",
 			"reviewer.provider_capabilities.supports_responses_api": "file",
 		},
 	}
@@ -614,6 +616,13 @@ func TestSubagentRoleHasMeaningfulDiffComparesProviderReviewerAndTimeoutValues(t
 	changedProvider.Settings.ProviderCapabilities.SupportsResponsesAPI = false
 	if !SubagentRoleHasMeaningfulDiff(base, changedProvider) {
 		t.Fatal("expected provider capability change to be meaningful")
+	}
+
+	changedVerbosityProvider := same
+	changedVerbosityProvider.Settings = base
+	changedVerbosityProvider.Settings.ProviderCapabilities.SupportsProviderVerbosity = false
+	if !SubagentRoleHasMeaningfulDiff(base, changedVerbosityProvider) {
+		t.Fatal("expected provider verbosity capability change to be meaningful")
 	}
 
 	changedReviewer := same
@@ -1021,6 +1030,7 @@ func TestSettingsTOMLRoundTripsCapabilityOverrides(t *testing.T) {
 		SupportsRequestInputTokenCount: true,
 		SupportsPromptCacheKey:         true,
 		SupportsServerSideContextEdit:  true,
+		SupportsProviderVerbosity:      true,
 	}
 	toml := settingsTOMLWithRenderingOptions(settings, true, nil, nil)
 
@@ -1051,6 +1061,9 @@ func TestSettingsTOMLRoundTripsCapabilityOverrides(t *testing.T) {
 	}
 	if !state.Settings.ProviderCapabilities.SupportsServerSideContextEdit {
 		t.Fatal("expected supports_server_side_context_edit to round-trip")
+	}
+	if !state.Settings.ProviderCapabilities.SupportsProviderVerbosity {
+		t.Fatal("expected supports_provider_verbosity to round-trip")
 	}
 }
 

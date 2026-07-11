@@ -92,6 +92,7 @@ func hasProviderCapabilitiesOverride(override ProviderCapabilitiesOverride) bool
 		override.SupportsNativeWebSearch ||
 		override.SupportsReasoningEncrypted ||
 		override.SupportsServerSideContextEdit ||
+		override.SupportsProviderVerbosity ||
 		override.IsOpenAIFirstParty
 }
 
@@ -138,6 +139,9 @@ func inheritReviewerProviderCapabilities(settings *Settings, sources map[string]
 	if !hasConfiguredSource(sources, "reviewer.provider_capabilities.supports_server_side_context_edit") {
 		settings.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit = settings.ProviderCapabilities.SupportsServerSideContextEdit
 	}
+	if !hasConfiguredSource(sources, "reviewer.provider_capabilities.supports_provider_verbosity") {
+		settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity = settings.ProviderCapabilities.SupportsProviderVerbosity
+	}
 	if !hasConfiguredSource(sources, "reviewer.provider_capabilities.is_openai_first_party") {
 		settings.Reviewer.ProviderCapabilities.IsOpenAIFirstParty = settings.ProviderCapabilities.IsOpenAIFirstParty
 	}
@@ -153,7 +157,22 @@ var reviewerModelCapabilityKeys = []string{
 	"reviewer.model_capabilities.supports_vision_inputs",
 }
 
-var providerCapabilityKeys = []string{
+type providerCapabilitySourceKeys struct {
+	all    []string
+	values []string
+}
+
+func newProviderCapabilitySourceKeys(providerID string, values ...string) providerCapabilitySourceKeys {
+	all := make([]string, 0, len(values)+1)
+	all = append(all, providerID)
+	all = append(all, values...)
+	return providerCapabilitySourceKeys{
+		all:    all,
+		values: values,
+	}
+}
+
+var mainProviderCapabilitySourceKeys = newProviderCapabilitySourceKeys(
 	"provider_capabilities.provider_id",
 	"provider_capabilities.supports_responses_api",
 	"provider_capabilities.supports_responses_compact",
@@ -162,10 +181,11 @@ var providerCapabilityKeys = []string{
 	"provider_capabilities.supports_native_web_search",
 	"provider_capabilities.supports_reasoning_encrypted",
 	"provider_capabilities.supports_server_side_context_edit",
+	"provider_capabilities.supports_provider_verbosity",
 	"provider_capabilities.is_openai_first_party",
-}
+)
 
-var reviewerProviderCapabilityKeys = []string{
+var reviewerProviderCapabilitySourceKeys = newProviderCapabilitySourceKeys(
 	"reviewer.provider_capabilities.provider_id",
 	"reviewer.provider_capabilities.supports_responses_api",
 	"reviewer.provider_capabilities.supports_responses_compact",
@@ -174,8 +194,13 @@ var reviewerProviderCapabilityKeys = []string{
 	"reviewer.provider_capabilities.supports_native_web_search",
 	"reviewer.provider_capabilities.supports_reasoning_encrypted",
 	"reviewer.provider_capabilities.supports_server_side_context_edit",
+	"reviewer.provider_capabilities.supports_provider_verbosity",
 	"reviewer.provider_capabilities.is_openai_first_party",
-}
+)
+
+var providerCapabilityKeys = mainProviderCapabilitySourceKeys.all
+
+var reviewerProviderCapabilityKeys = reviewerProviderCapabilitySourceKeys.all
 
 func hasAnyConfiguredSource(sources map[string]string, keys ...string) bool {
 	for _, key := range keys {

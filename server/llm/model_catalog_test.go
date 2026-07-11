@@ -180,20 +180,31 @@ func TestSupportsVerbosityModel(t *testing.T) {
 }
 
 func TestVerbositySupportForModelAndProvider(t *testing.T) {
-	firstParty := ProviderCapabilities{ProviderID: "openai", IsOpenAIFirstParty: true}
-	compatible := ProviderCapabilities{ProviderID: "openai-compatible", IsOpenAIFirstParty: false}
+	providerEnabled := ProviderCapabilities{
+		ProviderID:                "custom-enabled",
+		IsOpenAIFirstParty:        false,
+		SupportsProviderVerbosity: true,
+	}
+	providerDisabled := ProviderCapabilities{
+		ProviderID:                "custom-disabled",
+		IsOpenAIFirstParty:        true,
+		SupportsProviderVerbosity: false,
+	}
 
-	if support := VerbositySupportForModelAndProvider("gpt-5-preview", firstParty); !support.Supported || support.Source != ModelVerbositySupportSourceProviderDefault {
-		t.Fatalf("unknown first-party support = %+v, want provider default support", support)
+	if support := VerbositySupportForModelAndProvider("gpt-5-preview", providerEnabled); !support.Supported || support.Source != ModelVerbositySupportSourceProviderDefault {
+		t.Fatalf("unknown provider-enabled support = %+v, want provider default support", support)
 	}
-	if support := VerbositySupportForModelAndProvider("gpt-5-preview", compatible); support.Supported || support.Source != ModelVerbositySupportSourceProviderDefault {
-		t.Fatalf("unknown compatible support = %+v, want provider default unsupported", support)
+	if support := VerbositySupportForModelAndProvider("gpt-5-preview", providerDisabled); support.Supported || support.Source != ModelVerbositySupportSourceProviderDefault {
+		t.Fatalf("unknown provider-disabled support = %+v, want provider default unsupported", support)
 	}
-	if support := VerbositySupportForModelAndProvider("gpt-4.1", firstParty); support.Supported || support.Source != ModelVerbositySupportSourceModelCatalog {
+	if support := VerbositySupportForModelAndProvider("gpt-4.1", providerEnabled); support.Supported || support.Source != ModelVerbositySupportSourceModelCatalog {
 		t.Fatalf("known unsupported support = %+v, want model catalog unsupported", support)
 	}
-	if support := VerbositySupportForModelAndProvider("gpt-5", compatible); !support.Supported || support.Source != ModelVerbositySupportSourceModelCatalog {
+	if support := VerbositySupportForModelAndProvider("gpt-5", providerDisabled); !support.Supported || support.Source != ModelVerbositySupportSourceModelCatalog {
 		t.Fatalf("known supported support = %+v, want model catalog support", support)
+	}
+	if support := VerbositySupportForModelAndProvider("", providerEnabled); support.Supported || support.Source != ModelVerbositySupportSourceProviderDefault {
+		t.Fatalf("blank model support = %+v, want provider default unsupported", support)
 	}
 }
 

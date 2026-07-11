@@ -93,6 +93,9 @@ func NewRuntimeWiringWithBackground(store *session.Store, active config.Settings
 	}
 
 	mainProvider := mainProviderRuntimeSettings(active)
+	if lockedCapabilities, ok := llm.ProviderCapabilitiesFromLocked(store.Meta().Locked); ok {
+		mainProvider.ProviderCapabilitiesOverride = &lockedCapabilities
+	}
 	var client llm.Client
 	if opts.Client != nil {
 		client = opts.Client

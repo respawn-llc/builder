@@ -64,6 +64,7 @@ type LockedProviderCapabilities struct {
 	SupportsNativeWebSearch           bool   `json:"supports_native_web_search,omitempty"`
 	SupportsReasoningEncrypted        bool   `json:"supports_reasoning_encrypted,omitempty"`
 	SupportsServerSideContextEdit     bool   `json:"supports_server_side_context_edit,omitempty"`
+	SupportsProviderVerbosity         *bool  `json:"supports_provider_verbosity,omitempty"`
 	IsOpenAIFirstParty                bool   `json:"is_openai_first_party,omitempty"`
 }
 

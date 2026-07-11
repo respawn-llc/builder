@@ -179,7 +179,7 @@ func providerFact(caps llm.ProviderCapabilities, role string) serverapi.LLMProvi
 		SupportsReasoningEncryption:   caps.SupportsReasoningEncrypted,
 		SupportsServerSideContextEdit: caps.SupportsServerSideContextEdit,
 		IsOpenAIFirstParty:            caps.IsOpenAIFirstParty,
-		SupportsProviderVerbosity:     caps.IsOpenAIFirstParty,
+		SupportsProviderVerbosity:     caps.SupportsProviderVerbosity,
 	}
 }
 

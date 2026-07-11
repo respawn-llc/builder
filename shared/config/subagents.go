@@ -204,6 +204,8 @@ func subagentSourceDiffers(base Settings, role SubagentRole, key string) bool {
 		return base.ProviderCapabilities.SupportsReasoningEncrypted != role.Settings.ProviderCapabilities.SupportsReasoningEncrypted
 	case "provider_capabilities.supports_server_side_context_edit":
 		return base.ProviderCapabilities.SupportsServerSideContextEdit != role.Settings.ProviderCapabilities.SupportsServerSideContextEdit
+	case "provider_capabilities.supports_provider_verbosity":
+		return base.ProviderCapabilities.SupportsProviderVerbosity != role.Settings.ProviderCapabilities.SupportsProviderVerbosity
 	case "provider_capabilities.is_openai_first_party":
 		return base.ProviderCapabilities.IsOpenAIFirstParty != role.Settings.ProviderCapabilities.IsOpenAIFirstParty
 	case "web_search":
@@ -274,6 +276,8 @@ func subagentSourceDiffers(base Settings, role SubagentRole, key string) bool {
 		return base.Reviewer.ProviderCapabilities.SupportsReasoningEncrypted != role.Settings.Reviewer.ProviderCapabilities.SupportsReasoningEncrypted
 	case "reviewer.provider_capabilities.supports_server_side_context_edit":
 		return base.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit != role.Settings.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit
+	case "reviewer.provider_capabilities.supports_provider_verbosity":
+		return base.Reviewer.ProviderCapabilities.SupportsProviderVerbosity != role.Settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity
 	case "reviewer.provider_capabilities.is_openai_first_party":
 		return base.Reviewer.ProviderCapabilities.IsOpenAIFirstParty != role.Settings.Reviewer.ProviderCapabilities.IsOpenAIFirstParty
 	}

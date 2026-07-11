@@ -61,7 +61,7 @@ Bullets marked (owner: …) restate decisions owned by another spec for one-plac
 - Capability facts are recomputed for each request; there is no server-side memoization or cache contract.
 - This facts surface does not execute imports, finalize setup choices, or write configuration.
 - Provider and model facts expose domain capability fields from the server's runtime source of truth, including provider runtime capability booleans and registered model capabilities such as thinking, verbosity, vision input, reasoning summary, and context-window support.
-- Model-catalog verbosity support overrides fallback derivation for known models. Unknown models derive verbosity from provider facts: first-party OpenAI providers support verbosity and other providers do not. The server never derives verbosity from model-name prefix matching.
+- Model-catalog verbosity support overrides provider behavior for known models. For unknown non-empty models, a resolved explicit provider verbosity capability override decides support; when no override applies, first-party OpenAI built-ins default to enabled and other built-ins default to disabled. The server never derives verbosity from model-name prefix matching.
 
 ## Known Drift (Go TUI, frozen)
 
