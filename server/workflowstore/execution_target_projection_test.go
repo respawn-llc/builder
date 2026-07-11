@@ -250,6 +250,113 @@ func TestStoreFenceExecutionTargetRecoveryRequeuesOrphanedClaims(t *testing.T) {
 	}
 }
 
+func TestStoreClaimsQueuedExecutionTargetRecoveryWithGenerationFence(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowID,
+		Title:      "Queued recovery",
+		Body:       "Body",
+	})
+	provisioningGeneration := "provisioning-1"
+	queuedClaim := workflow.ExecutionTargetClaim{
+		Generation: "queued-claim-1",
+		Phase:      workflow.ExecutionTargetClaimRecoveryQueued,
+	}
+	target := workflow.ExecutionTarget{
+		TaskID: task.ID,
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: "deadbeef",
+		},
+		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
+		ActiveClaim:                 &queuedClaim,
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := store.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+
+	queued, err := store.ListQueuedExecutionTargetRecoveries(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListQueuedExecutionTargetRecoveries: %v", err)
+	}
+	if len(queued) != 1 || queued[0].TaskID != task.ID || queued[0].ActiveClaim == nil || *queued[0].ActiveClaim != queuedClaim {
+		t.Fatalf("queued recoveries = %+v, want task %q with queued claim %+v", queued, task.ID, queuedClaim)
+	}
+
+	claimed, err := store.ClaimQueuedExecutionTargetRecovery(ctx, task.ID, queuedClaim)
+	if err != nil {
+		t.Fatalf("ClaimQueuedExecutionTargetRecovery: %v", err)
+	}
+	if claimed.ActiveClaim == nil ||
+		claimed.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecovering ||
+		claimed.ActiveClaim.Generation == queuedClaim.Generation {
+		t.Fatalf("claimed recovery target = %+v, want a fresh recovering claim", claimed)
+	}
+	if _, err := store.ClaimQueuedExecutionTargetRecovery(ctx, task.ID, queuedClaim); !errors.Is(err, ErrTaskExecutionTargetClaimChanged) {
+		t.Fatalf("stale ClaimQueuedExecutionTargetRecovery error = %v, want %v", err, ErrTaskExecutionTargetClaimChanged)
+	}
+	queued, err = store.ListQueuedExecutionTargetRecoveries(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListQueuedExecutionTargetRecoveries after claim: %v", err)
+	}
+	if len(queued) != 0 {
+		t.Fatalf("queued recoveries after claim = %+v, want none", queued)
+	}
+}
+
+func TestStoreRequeuesOwnedExecutionTargetRecoveryWithGenerationFence(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowID,
+		Title:      "Recovering target",
+		Body:       "Body",
+	})
+	provisioningGeneration := "provisioning-1"
+	recoveringClaim := workflow.ExecutionTargetClaim{
+		Generation: "recovering-claim-1",
+		Phase:      workflow.ExecutionTargetClaimRecovering,
+	}
+	target := workflow.ExecutionTarget{
+		TaskID: task.ID,
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: "deadbeef",
+		},
+		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
+		ActiveClaim:                 &recoveringClaim,
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := store.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+
+	requeued, err := store.RequeueExecutionTargetRecovery(ctx, task.ID, recoveringClaim)
+	if err != nil {
+		t.Fatalf("RequeueExecutionTargetRecovery: %v", err)
+	}
+	if requeued.ActiveClaim == nil ||
+		requeued.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued ||
+		requeued.ActiveClaim.Generation == recoveringClaim.Generation {
+		t.Fatalf("requeued recovery target = %+v, want a fresh queued claim", requeued)
+	}
+	if _, err := store.RequeueExecutionTargetRecovery(ctx, task.ID, recoveringClaim); !errors.Is(err, ErrTaskExecutionTargetClaimChanged) {
+		t.Fatalf("stale RequeueExecutionTargetRecovery error = %v, want %v", err, ErrTaskExecutionTargetClaimChanged)
+	}
+}
+
 func TestStoreAttachManagedExecutionTargetWorktreeLocksClaimedTarget(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)

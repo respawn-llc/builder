@@ -220,6 +220,121 @@ func (s *Store) FenceExecutionTargetRecovery(ctx context.Context, limit int) ([]
 	return taskIDs, nil
 }
 
+// ListQueuedExecutionTargetRecoveries returns one bounded page of targets
+// whose durable recovery claim is awaiting a recovery worker.
+func (s *Store) ListQueuedExecutionTargetRecoveries(ctx context.Context, limit int) ([]workflow.ExecutionTarget, error) {
+	if limit <= 0 {
+		return nil, errors.New("queued execution target recovery limit must be positive")
+	}
+	rows, err := s.queries.ListQueuedExecutionTargetRecoveries(ctx, int64(limit))
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]workflow.ExecutionTarget, 0, len(rows))
+	for _, row := range rows {
+		target, err := taskExecutionTargetFromRow(row)
+		if err != nil {
+			return nil, fmt.Errorf("decode queued execution target recovery: %w", err)
+		}
+		if target.ActiveClaim == nil || target.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued {
+			return nil, errors.New("queued execution target recovery query returned a non-queued target")
+		}
+		targets = append(targets, target)
+	}
+	return targets, nil
+}
+
+// ClaimQueuedExecutionTargetRecovery atomically moves one durable queued claim
+// into recovering ownership. The supplied queue claim is an ABA fence.
+func (s *Store) ClaimQueuedExecutionTargetRecovery(ctx context.Context, taskID workflow.TaskID, expectedClaim workflow.ExecutionTargetClaim) (workflow.ExecutionTarget, error) {
+	if strings.TrimSpace(string(taskID)) == "" {
+		return workflow.ExecutionTarget{}, errors.New("task id is required")
+	}
+	if err := expectedClaim.Validate(); err != nil {
+		return workflow.ExecutionTarget{}, err
+	}
+	if expectedClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued {
+		return workflow.ExecutionTarget{}, errors.New("execution target recovery claim must be queued")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return workflow.ExecutionTarget{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	row, err := q.GetTaskExecutionTarget(ctx, string(taskID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return workflow.ExecutionTarget{}, ErrTaskExecutionTargetClaimChanged
+	}
+	if err != nil {
+		return workflow.ExecutionTarget{}, err
+	}
+	target, err := taskExecutionTargetFromRow(row)
+	if err != nil {
+		return workflow.ExecutionTarget{}, fmt.Errorf("decode queued execution target recovery: %w", err)
+	}
+	if target.ActiveClaim == nil || *target.ActiveClaim != expectedClaim {
+		return workflow.ExecutionTarget{}, ErrTaskExecutionTargetClaimChanged
+	}
+	target.ActiveClaim = &workflow.ExecutionTargetClaim{
+		Generation: uuid.NewString(),
+		Phase:      workflow.ExecutionTargetClaimRecovering,
+	}
+	if err := updateTaskExecutionTargetLifecycle(ctx, q, target, expectedClaim); err != nil {
+		return workflow.ExecutionTarget{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return workflow.ExecutionTarget{}, err
+	}
+	return target, nil
+}
+
+// RequeueExecutionTargetRecovery releases a recovery worker's claim back to
+// durable queue ownership. Its recovering claim is an ABA fence, so a stopped
+// worker cannot requeue a replacement owner.
+func (s *Store) RequeueExecutionTargetRecovery(ctx context.Context, taskID workflow.TaskID, expectedClaim workflow.ExecutionTargetClaim) (workflow.ExecutionTarget, error) {
+	if strings.TrimSpace(string(taskID)) == "" {
+		return workflow.ExecutionTarget{}, errors.New("task id is required")
+	}
+	if err := expectedClaim.Validate(); err != nil {
+		return workflow.ExecutionTarget{}, err
+	}
+	if expectedClaim.Phase != workflow.ExecutionTargetClaimRecovering {
+		return workflow.ExecutionTarget{}, errors.New("execution target recovery claim must be recovering")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return workflow.ExecutionTarget{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	row, err := q.GetTaskExecutionTarget(ctx, string(taskID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return workflow.ExecutionTarget{}, ErrTaskExecutionTargetClaimChanged
+	}
+	if err != nil {
+		return workflow.ExecutionTarget{}, err
+	}
+	target, err := taskExecutionTargetFromRow(row)
+	if err != nil {
+		return workflow.ExecutionTarget{}, fmt.Errorf("decode recovering execution target: %w", err)
+	}
+	if target.ActiveClaim == nil || *target.ActiveClaim != expectedClaim {
+		return workflow.ExecutionTarget{}, ErrTaskExecutionTargetClaimChanged
+	}
+	target.ActiveClaim = &workflow.ExecutionTargetClaim{
+		Generation: uuid.NewString(),
+		Phase:      workflow.ExecutionTargetClaimRecoveryQueued,
+	}
+	if err := updateTaskExecutionTargetLifecycle(ctx, q, target, expectedClaim); err != nil {
+		return workflow.ExecutionTarget{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return workflow.ExecutionTarget{}, err
+	}
+	return target, nil
+}
+
 func updateTaskExecutionTargetLifecycle(ctx context.Context, q *sqlitegen.Queries, target workflow.ExecutionTarget, expectedClaim workflow.ExecutionTargetClaim) error {
 	if err := target.Validate(); err != nil {
 		return err

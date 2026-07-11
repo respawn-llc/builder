@@ -1327,6 +1327,33 @@ WHERE active_claim_generation IS NOT NULL
 ORDER BY task_id ASC
 LIMIT sqlc.arg(limit);
 
+-- name: ListQueuedExecutionTargetRecoveries :many
+SELECT
+    task_id,
+    policy,
+    requested_custom_ref,
+    resolved_source_kind,
+    resolved_source_ref,
+    resolved_commit,
+    state,
+    provisioning_generation,
+    setup_provisioning_generation,
+    setup_state,
+    active_claim_generation,
+    active_claim_phase,
+    recovery_disposition,
+    recovery_cause,
+    exact_branch_observation,
+    linked_worktree_common_dir,
+    linked_worktree_admin_entry,
+    linked_worktree_gitdir,
+    linked_worktree_head_ref,
+    expected_detachment_commit
+FROM task_execution_targets
+WHERE active_claim_phase = 'recovery_queued'
+ORDER BY task_id ASC
+LIMIT sqlc.arg(limit);
+
 -- name: InsertTaskExecutionTarget :exec
 INSERT INTO task_execution_targets (
     task_id,
