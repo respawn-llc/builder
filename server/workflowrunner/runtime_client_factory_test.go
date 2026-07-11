@@ -2,13 +2,10 @@ package workflowrunner
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
-	"sync"
 	"testing"
 
+	"core/internal/testharness/openairesponses"
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/metadata"
@@ -94,8 +91,8 @@ func TestWorkflowProviderClientPreservesLockedVerbosityAcrossConfigChanges(t *te
 		{name: "runtime client factory", factory: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			recorder := newWorkflowProviderPayloadRecorder(t)
-			plan := newLockedWorkflowProviderVerbosityPlan(t, recorder.server.URL)
+			recorder := openairesponses.NewRecorder(t)
+			plan := newLockedWorkflowProviderVerbosityPlan(t, recorder.URL())
 			starter := &Starter{}
 			if tt.factory {
 				starter.runtimeClientFactory = runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, req runtimewire.RuntimeClientRequest) (llm.Client, error) {
@@ -106,7 +103,7 @@ func TestWorkflowProviderClientPreservesLockedVerbosityAcrossConfigChanges(t *te
 					return llm.NewProviderClient(llm.ProviderClientOptions{
 						Provider:                     llm.Provider(req.ProviderSettings.ProviderOverride),
 						Model:                        req.ProviderSettings.Model,
-						HTTPClient:                   recorder.server.Client(),
+						HTTPClient:                   recorder.Client(),
 						OpenAIBaseURL:                req.ProviderSettings.OpenAIBaseURL,
 						ModelVerbosity:               string(req.ProviderSettings.ModelVerbosity),
 						Store:                        req.ProviderSettings.Store,
@@ -136,7 +133,7 @@ func TestWorkflowProviderClientPreservesLockedVerbosityAcrossConfigChanges(t *te
 			if _, err := counter.CountRequestInputTokens(context.Background(), request); err != nil {
 				t.Fatalf("count input tokens: %v", err)
 			}
-			recorder.assertVerbosity(t)
+			recorder.AssertTextVerbosity(t, "high")
 		})
 	}
 }
@@ -162,63 +159,6 @@ func newWorkflowFactorySession(t *testing.T) *session.Store {
 		t.Fatalf("session.Create: %v", err)
 	}
 	return store
-}
-
-type workflowProviderPayloadRecorder struct {
-	server   *httptest.Server
-	mu       sync.Mutex
-	payloads map[string]map[string]any
-}
-
-func newWorkflowProviderPayloadRecorder(t *testing.T) *workflowProviderPayloadRecorder {
-	t.Helper()
-	recorder := &workflowProviderPayloadRecorder{payloads: make(map[string]map[string]any)}
-	recorder.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		recorder.mu.Lock()
-		recorder.payloads[r.URL.Path] = payload
-		recorder.mu.Unlock()
-
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/v1/responses":
-			_, _ = w.Write([]byte(`{
-				"id":"resp_workflow_locked_verbosity",
-				"object":"response",
-				"output":[{"type":"message","id":"msg_workflow_locked_verbosity","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],
-				"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
-			}`))
-		case "/v1/responses/input_tokens":
-			_, _ = w.Write([]byte(`{"object":"response.input_tokens","input_tokens":1}`))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	t.Cleanup(recorder.server.Close)
-	return recorder
-}
-
-func (r *workflowProviderPayloadRecorder) assertVerbosity(t *testing.T) {
-	t.Helper()
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, path := range []string{"/v1/responses", "/v1/responses/input_tokens"} {
-		payload, ok := r.payloads[path]
-		if !ok {
-			t.Fatalf("expected request payload for %s", path)
-		}
-		text, ok := payload["text"].(map[string]any)
-		if !ok {
-			t.Fatalf("expected text config in %s payload, got %#v", path, payload)
-		}
-		if got := text["verbosity"]; got != "high" {
-			t.Fatalf("%s text.verbosity = %#v, want high", path, got)
-		}
-	}
 }
 
 func newLockedWorkflowProviderVerbosityPlan(t *testing.T, baseURL string) launch.SessionPlan {

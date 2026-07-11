@@ -2,13 +2,10 @@ package runtimewire
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"net/http"
-	"net/http/httptest"
-	"sync"
 	"testing"
 
+	"core/internal/testharness/openairesponses"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
@@ -203,36 +200,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 		t.Fatalf("lock session: %v", err)
 	}
 
-	var (
-		mu       sync.Mutex
-		payloads = make(map[string]map[string]any)
-	)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		mu.Lock()
-		payloads[r.URL.Path] = payload
-		mu.Unlock()
-
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/v1/responses":
-			_, _ = w.Write([]byte(`{
-				"id":"resp_locked_verbosity",
-				"object":"response",
-				"output":[{"type":"message","id":"msg_locked_verbosity","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],
-				"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
-			}`))
-		case "/v1/responses/input_tokens":
-			_, _ = w.Write([]byte(`{"object":"response.input_tokens","input_tokens":1}`))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
+	recorder := openairesponses.NewRecorder(t)
 
 	var mainClient llm.Client
 	factory := RuntimeClientFactoryFunc(func(_ context.Context, req RuntimeClientRequest) (llm.Client, error) {
@@ -247,7 +215,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 			Provider:                     llm.Provider(req.ProviderSettings.ProviderOverride),
 			Model:                        req.ProviderSettings.Model,
 			Auth:                         nil,
-			HTTPClient:                   server.Client(),
+			HTTPClient:                   recorder.Client(),
 			OpenAIBaseURL:                req.ProviderSettings.OpenAIBaseURL,
 			ModelVerbosity:               string(req.ProviderSettings.ModelVerbosity),
 			Store:                        req.ProviderSettings.Store,
@@ -266,7 +234,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 		config.Settings{
 			Model:              "operator-alias",
 			ProviderOverride:   "openai",
-			OpenAIBaseURL:      server.URL + "/v1",
+			OpenAIBaseURL:      recorder.URL() + "/v1",
 			ModelVerbosity:     config.ModelVerbosityHigh,
 			ModelContextWindow: 200000,
 			ProviderCapabilities: config.ProviderCapabilitiesOverride{
@@ -306,19 +274,5 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 		t.Fatalf("count input tokens through resumed main client: %v", err)
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	for _, path := range []string{"/v1/responses", "/v1/responses/input_tokens"} {
-		payload, ok := payloads[path]
-		if !ok {
-			t.Fatalf("expected request payload for %s", path)
-		}
-		text, ok := payload["text"].(map[string]any)
-		if !ok {
-			t.Fatalf("expected text config in %s payload, got %#v", path, payload)
-		}
-		if got := text["verbosity"]; got != "high" {
-			t.Fatalf("%s text.verbosity = %#v, want high", path, got)
-		}
-	}
+	recorder.AssertTextVerbosity(t, "high")
 }
