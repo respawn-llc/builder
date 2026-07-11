@@ -33,7 +33,7 @@ kent run wait <session-id>
 
 Live controls target an explicitly named active session. They do not use `KENT_SESSION_ID` as a default, and they reject targeting their own `KENT_SESSION_ID`.
 
-`kent run steer <session-id> <message...>` queues a non-empty message into an already-active run and prints `ok`. If the run is idle, Kent reports the equivalent `kent run --continue <session-id> <message>` command instead of starting a new turn.
+`kent run steer <session-id> <message...>` queues a non-empty message into an already-active run and prints `ok`. The active `kent run` process prints `Steered message: <full text>` when it accepts the message. If the run is idle, Kent reports the equivalent `kent run --continue <session-id> <message>` command instead of starting a new turn.
 
 `kent run stop <session-id>` interrupts the active shared runtime. It prints `Stopped` when it interrupts work, and `No active run` when the session is idle or nonexistent.
 
@@ -114,13 +114,15 @@ The main agent will fix these issues on their own.
 
 ## Output Modes
 
-The default headless output mode is plain final text. For scripting, use JSON mode:
+By default, `kent run` writes each finalized assistant commentary or final response to `stdout` as it is committed. It does not stream token deltas. New sessions print a ready-to-use steering command to `stderr` after the run becomes steerable; resumed sessions omit that notice. Compaction and accepted-steering notices also use `stderr`.
+
+Use `-q`, `--quiet`, or `--progress-mode=quiet` to suppress live output and print only the terminal result. For scripting, use JSON mode:
 
 ```bash
 kent run --output-mode=json "summarize the repo" | jq
 ```
 
-JSON mode emits exactly one final object on `stdout`.
+JSON mode implicitly uses quiet progress behavior and emits exactly one final object on `stdout`.
 
 ```json
 {
@@ -136,7 +138,7 @@ JSON mode emits exactly one final object on `stdout`.
 ```
 
 On failure, JSON mode emits `status: "error"` and an `error` object instead of `result`.
-If a selected subagent role emits startup warnings, `final-text` prints them above the model response and JSON mode returns them in `warnings`.
+Final-text mode surfaces run warnings, while JSON mode returns them in `warnings`.
 
 ---
 
@@ -146,7 +148,8 @@ Supported run-specific flags:
 | --- | --- |
 | `--timeout` | Optional run timeout such as `30s`, `5m`, or `1h`. Default is no timeout. |
 | `--output-mode` | `final-text` or `json`. Default is `final-text`. |
-| `--progress-mode` | `quiet` or `stderr`. Default is `quiet`. |
+| `--progress-mode` | `stderr` for live responses and notices, or `quiet` for final-result-only output. Default is `stderr`. |
+| `-q`, `--quiet` | Shortcut for `--progress-mode=quiet`. |
 | `--continue` | Continue a previous session by id. |
 | `--agent` | Select a named subagent role from `config.toml`; use `default` for the base role. |
 | `--fast` | Shortcut for the built-in `fast` subagent role. |

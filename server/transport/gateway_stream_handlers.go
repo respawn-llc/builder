@@ -48,7 +48,11 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 		if progressBroken.Load() {
 			return
 		}
-		data, err := json.Marshal(update)
+		err := update.Validate()
+		var data []byte
+		if err == nil {
+			data, err = json.Marshal(update)
+		}
 		if err == nil {
 			err = conn.Send(runCtx, rpcwire.FrameFromRequest(protocol.Request{JSONRPC: protocol.JSONRPCVersion, Method: route.EventMethod, Params: data}))
 		}

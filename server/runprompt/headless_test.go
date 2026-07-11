@@ -15,12 +15,15 @@ import (
 
 	"core/server/auth"
 	"core/server/launch"
+	"core/server/llm"
 	"core/server/registry"
 	"core/server/requestmemo"
 	"core/server/runlog"
+	"core/server/runtime"
 	"core/server/session"
 	"core/server/sessionlaunch"
 	"core/server/sessionruntime"
+	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -31,6 +34,104 @@ type stubRunPromptService struct {
 	calls    int
 	run      func(context.Context, serverapi.RunPromptRequest, serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error)
 	callHook func()
+}
+
+func TestRunPromptProgressFromRuntimeEventPublishesUserVisibleEvents(t *testing.T) {
+	tests := []struct {
+		name      string
+		event     runtime.Event
+		wantKind  serverapi.RunPromptProgressKind
+		wantText  string
+		wantPhase clientui.MessagePhase
+	}{
+		{
+			name: "assistant commentary",
+			event: runtime.Event{
+				Kind: runtime.EventAssistantMessage,
+				Message: llm.Message{
+					Role:    llm.RoleAssistant,
+					Phase:   llm.MessagePhaseCommentary,
+					Content: "I am checking the runtime.",
+				},
+			},
+			wantKind:  serverapi.RunPromptProgressKindAssistantMessage,
+			wantText:  "I am checking the runtime.",
+			wantPhase: clientui.MessagePhaseCommentary,
+		},
+		{
+			name:     "compaction started",
+			event:    runtime.Event{Kind: runtime.EventCompactionStarted},
+			wantKind: serverapi.RunPromptProgressKindCompactionStarted,
+		},
+		{
+			name: "compaction failed",
+			event: runtime.Event{
+				Kind:       runtime.EventCompactionFailed,
+				Compaction: &runtime.CompactionStatus{Error: "provider rejected compaction"},
+			},
+			wantKind: serverapi.RunPromptProgressKindCompactionFailed,
+			wantText: "provider rejected compaction",
+		},
+		{
+			name: "steering accepted",
+			event: runtime.Event{
+				Kind: runtime.EventQueuedUserMessageStatus,
+				QueuedUserMessageStatus: &runtime.QueuedUserMessageStatusEvent{
+					Status:      runtime.QueuedUserMessageAccepted,
+					RestoreText: "use the safer migration",
+				},
+			},
+			wantKind: serverapi.RunPromptProgressKindSteeredMessage,
+			wantText: "use the safer migration",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := RunPromptProgressFromRuntimeEvent(test.event)
+			if !ok {
+				t.Fatal("expected user-visible progress event")
+			}
+			if got.Kind != test.wantKind {
+				t.Fatalf("kind = %q, want %q", got.Kind, test.wantKind)
+			}
+			switch test.wantKind {
+			case serverapi.RunPromptProgressKindAssistantMessage:
+				if got.AssistantMessage == nil {
+					t.Fatal("assistant message payload is absent")
+				}
+				if got.AssistantMessage.Content != test.wantText || got.AssistantMessage.Phase != test.wantPhase {
+					t.Fatalf("assistant message = %+v", got.AssistantMessage)
+				}
+			case serverapi.RunPromptProgressKindCompactionFailed:
+				if got.Failure == nil || got.Failure.Error == nil || *got.Failure.Error != test.wantText {
+					t.Fatalf("failure = %+v", got.Failure)
+				}
+			case serverapi.RunPromptProgressKindSteeredMessage:
+				if got.SteeredMessage == nil || got.SteeredMessage.Content != test.wantText {
+					t.Fatalf("steered message = %+v", got.SteeredMessage)
+				}
+			}
+		})
+	}
+}
+
+func TestRunPromptProgressFromRuntimeEventDropsOperationalSpam(t *testing.T) {
+	for _, event := range []runtime.Event{
+		{Kind: runtime.EventToolCallStarted},
+		{Kind: runtime.EventToolCallCompleted},
+		{Kind: runtime.EventReviewerCompleted},
+		{
+			Kind: runtime.EventQueuedUserMessageStatus,
+			QueuedUserMessageStatus: &runtime.QueuedUserMessageStatusEvent{
+				Status: runtime.QueuedUserMessageSubmitted,
+			},
+		},
+	} {
+		if got, ok := RunPromptProgressFromRuntimeEvent(event); ok {
+			t.Fatalf("unexpected progress event for %q: %+v", event.Kind, got)
+		}
+	}
 }
 
 func (s *stubRunPromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
@@ -201,11 +302,14 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 		SessionRuntime:  newTestHeadlessSessionRuntime(root, authManager, runtimes),
 	})
 
+	var progresses []serverapi.RunPromptProgress
 	response, err := client.RunPrompt(context.Background(), serverapi.RunPromptRequest{
 		ClientRequestID:   "continuation-direct-1",
 		SelectedSessionID: store.Meta().SessionID,
 		Prompt:            "hello",
-	}, nil)
+	}, serverapi.RunPromptProgressFunc(func(progress serverapi.RunPromptProgress) {
+		progresses = append(progresses, progress)
+	}))
 	if err != nil {
 		t.Fatalf("RunPrompt: %v", err)
 	}
@@ -214,6 +318,11 @@ func TestLoopbackRunPromptClientUsesSelectedSessionContinuationContext(t *testin
 	}
 	if response.Result != "from persisted continuation" {
 		t.Fatalf("result = %q, want from persisted continuation", response.Result)
+	}
+	for _, progress := range progresses {
+		if progress.Kind == serverapi.RunPromptProgressKindSessionStarted {
+			t.Fatalf("continued run announced a new session: %+v", progress)
+		}
 	}
 	if got := store.Meta().Continuation; got == nil || got.OpenAIBaseURL != server.URL {
 		t.Fatalf("expected persisted continuation preserved, got %+v", got)

@@ -263,7 +263,10 @@ func runSubcommand(args []string) int {
 	fastRole := runFS.Bool("fast", false, "use the built-in fast subagent role")
 	timeoutRaw := runFS.String("timeout", "", "optional timeout duration (e.g. 30s, 2m); default is no timeout")
 	outputModeRaw := runFS.String("output-mode", string(runOutputModeFinalText), "output mode: final-text|json")
-	progressModeRaw := runFS.String("progress-mode", string(runProgressModeQuiet), "progress mode: quiet|stderr")
+	progressModeRaw := runFS.String("progress-mode", string(runProgressModeStderr), "live output: stderr|quiet")
+	quiet := false
+	runFS.BoolVar(&quiet, "quiet", false, "suppress live output and print only the final result")
+	runFS.BoolVar(&quiet, "q", false, "shorthand for --quiet")
 	usageOutputMode := inferRunOutputMode(args)
 	if err := runFS.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -320,6 +323,16 @@ func runSubcommand(args []string) int {
 		emitRunUsageError(outputMode, err.Error())
 		return 2
 	}
+	if quiet {
+		if flagExplicit(runFS, "progress-mode") && progressMode != runProgressModeQuiet {
+			emitRunUsageError(outputMode, "--quiet conflicts with --progress-mode="+string(progressMode))
+			return 2
+		}
+		progressMode = runProgressModeQuiet
+	}
+	if outputMode == runOutputModeJSON {
+		progressMode = runProgressModeQuiet
+	}
 	if err := publishPersistenceRootEnv(flags.PersistenceRoot); err != nil {
 		emitRunUsageError(outputMode, err.Error())
 		return 2
@@ -345,9 +358,11 @@ func runSubcommand(args []string) int {
 		ConfigRoot:                strings.TrimSpace(flags.PersistenceRoot),
 	}
 
-	var progress io.Writer
+	var progress serverapi.RunPromptProgressSink
+	var progressRenderer *runProgressRenderer
 	if progressMode == runProgressModeStderr {
-		progress = os.Stderr
+		progressRenderer = newRunProgressRenderer(os.Stdout, os.Stderr)
+		progress = progressRenderer
 	}
 	result, runErr := runPromptApp(ctx, opts, prompt, timeout, progress)
 	continueID := strings.TrimSpace(result.SessionID)
@@ -395,7 +410,11 @@ func runSubcommand(args []string) int {
 			DurationMS:  result.Duration.Milliseconds(),
 		})
 	} else {
-		emitRunFinalText(os.Stdout, result.Warnings, result.Result, continueHint)
+		if progressRenderer != nil {
+			progressRenderer.Complete(result.Result, result.Warnings, continueHint)
+		} else {
+			emitRunFinalText(os.Stdout, result.Warnings, result.Result, continueHint)
+		}
 	}
 	return 0
 }
