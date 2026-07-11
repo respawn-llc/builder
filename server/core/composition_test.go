@@ -133,12 +133,50 @@ func TestNewWithContextFencesOrphanedExecutionTargetsBeforeStartingScheduler(t *
 		State:                       workflow.ExecutionTargetStateInitialProvisioning,
 		ProvisioningGeneration:      &provisioningGeneration,
 		SetupProvisioningGeneration: &provisioningGeneration,
-		SetupState:                  workflow.ExecutionTargetSetupRunning,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
 		ActiveClaim:                 &workflow.ExecutionTargetClaim{Generation: claimGeneration, Phase: workflow.ExecutionTargetClaimMaterializing},
 		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
 	}
 	if err := workflowStore.SaveTaskExecutionTarget(ctx, target); err != nil {
 		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+	runningTask, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Interrupted setup", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask interrupted setup: %v", err)
+	}
+	runningProvisioningGeneration := "running-provisioning"
+	runningClaimGeneration := "running-claim"
+	runningTarget := workflow.ExecutionTarget{
+		TaskID: runningTask.ID,
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: "cafebabe",
+		},
+		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		ProvisioningGeneration:      &runningProvisioningGeneration,
+		SetupProvisioningGeneration: &runningProvisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
+		ActiveClaim:                 &workflow.ExecutionTargetClaim{Generation: runningClaimGeneration, Phase: workflow.ExecutionTargetClaimMaterializing},
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := workflowStore.SaveTaskExecutionTarget(ctx, runningTarget); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget interrupted setup: %v", err)
+	}
+	lockedRunningTarget := runningTarget
+	lockedRunningTarget.State = workflow.ExecutionTargetStateLocked
+	if _, err := workflowStore.AttachManagedExecutionTargetWorktree(ctx, workflowstore.AttachManagedExecutionTargetWorktreeRequest{
+		Target:        lockedRunningTarget,
+		ExpectedClaim: *runningTarget.ActiveClaim,
+		WorkspaceID:   binding.WorkspaceID,
+		WorktreeRoot:  t.TempDir(),
+		CreatedBranch: true,
+	}); err != nil {
+		t.Fatalf("AttachManagedExecutionTargetWorktree: %v", err)
+	}
+	lockedRunningTarget.SetupState = workflow.ExecutionTargetSetupRunning
+	if err := workflowStore.UpdateTaskExecutionTargetLifecycle(ctx, lockedRunningTarget, *runningTarget.ActiveClaim); err != nil {
+		t.Fatalf("UpdateTaskExecutionTargetLifecycle running setup: %v", err)
 	}
 	if err := seedStore.Close(); err != nil {
 		t.Fatalf("seed metadata close: %v", err)
@@ -169,8 +207,18 @@ func TestNewWithContextFencesOrphanedExecutionTargetsBeforeStartingScheduler(t *
 	if recovered == nil || recovered.ActiveClaim == nil ||
 		recovered.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued ||
 		recovered.ActiveClaim.Generation == claimGeneration ||
-		recovered.SetupState != workflow.ExecutionTargetSetupFailed {
-		t.Fatalf("recovered target = %+v, want queued replacement claim and failed setup", recovered)
+		recovered.SetupState != workflow.ExecutionTargetSetupPending {
+		t.Fatalf("recovered target = %+v, want queued replacement claim and pending setup", recovered)
+	}
+	recoveredRunning, err := recoveredStore.GetTaskExecutionTarget(ctx, runningTask.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget interrupted setup: %v", err)
+	}
+	if recoveredRunning == nil || recoveredRunning.ActiveClaim == nil ||
+		recoveredRunning.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued ||
+		recoveredRunning.ActiveClaim.Generation == runningClaimGeneration ||
+		recoveredRunning.SetupState != workflow.ExecutionTargetSetupFailed {
+		t.Fatalf("interrupted setup target = %+v, want queued replacement claim and failed setup", recoveredRunning)
 	}
 	if !appCore.bundles.Workflows.scheduler.Started() {
 		t.Fatal("scheduler did not start after recovery fence")
