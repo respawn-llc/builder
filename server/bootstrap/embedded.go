@@ -30,12 +30,22 @@ type Request struct {
 }
 
 type ConfigPlan struct {
-	Config       config.App
-	ContainerDir string
+	Config         config.App
+	ContainerDir   string
+	SessionContext *SessionCallerContext
 }
 
-func ResolveSessionAgentRole(persistenceRoot string, sessionID string) (string, error) {
-	return launch.ResolveSessionAgentRole(persistenceRoot, sessionID)
+type SessionCallerContext struct {
+	WorkflowSession bool
+	AgentRole       *string
+}
+
+func ResolveSessionCallerContext(persistenceRoot string, sessionID string) (SessionCallerContext, error) {
+	context, err := launch.ResolveSessionCallerContext(persistenceRoot, sessionID)
+	if err != nil {
+		return SessionCallerContext{}, err
+	}
+	return SessionCallerContext{WorkflowSession: context.WorkflowSession, AgentRole: context.AgentRole}, nil
 }
 
 type AuthSupport struct {
@@ -78,7 +88,14 @@ func ResolveConfig(req Request) (ConfigPlan, error) {
 	if err != nil {
 		return ConfigPlan{}, err
 	}
-	return ConfigPlan{Config: cfg}, nil
+	var sessionContext *SessionCallerContext
+	if bootstrapPlan.SessionContext != nil {
+		sessionContext = &SessionCallerContext{
+			WorkflowSession: bootstrapPlan.SessionContext.WorkflowSession,
+			AgentRole:       bootstrapPlan.SessionContext.AgentRole,
+		}
+	}
+	return ConfigPlan{Config: cfg, SessionContext: sessionContext}, nil
 }
 
 func BuildAuthSupport(store auth.Store, lookupEnv func(string) string, now func() time.Time) (AuthSupport, error) {

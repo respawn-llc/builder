@@ -80,6 +80,40 @@ func SubagentRoleCallable(role SubagentRole) bool {
 	return !role.AgentCallableSet || role.AgentCallable
 }
 
+func SubagentRoleWorkflowCallable(role SubagentRole) bool {
+	return !role.WorkflowSubagentSet || role.WorkflowSubagent
+}
+
+type SubagentInvocationContext string
+
+const (
+	SubagentInvocationContextOrdinary SubagentInvocationContext = "ordinary"
+	SubagentInvocationContextWorkflow SubagentInvocationContext = "workflow"
+)
+
+// SubagentRoleCallableInContext applies the model-originated subagent policy.
+// It intentionally does not decide whether a role exists for workflow nodes;
+// use LookupSubagentRole for identity resolution.
+func SubagentRoleCallableInContext(settings Settings, rawSelector string, context SubagentInvocationContext) bool {
+	switch context {
+	case SubagentInvocationContextOrdinary, SubagentInvocationContextWorkflow:
+	default:
+		panic("unknown subagent invocation context: " + string(context))
+	}
+
+	lookup := LookupSubagentRole(settings, rawSelector)
+	if lookup.Status != SubagentRoleLookupPresent {
+		return false
+	}
+	if !SubagentRoleCallable(lookup.Role) {
+		return false
+	}
+	if context == SubagentInvocationContextOrdinary || *lookup.NormalizedSelector == BuiltInSubagentRoleFast {
+		return true
+	}
+	return settings.Workflow.Subagents && SubagentRoleWorkflowCallable(lookup.Role)
+}
+
 type SubagentRoleLookupStatus string
 
 const (
@@ -131,8 +165,22 @@ func subagentRoleLookupSelector(selector string) *string {
 // out configured roles that have no runtime diff from the base settings and can
 // optionally filter non-callable roles. Use LookupSubagentRole for existence.
 func AvailableSubagentRoleNames(settings Settings, agentCallableOnly bool) []string {
+	return availableSubagentRoleNames(settings, func(name string, _ SubagentRole) bool {
+		return !agentCallableOnly || SubagentRoleCallableInContext(settings, name, SubagentInvocationContextOrdinary)
+	})
+}
+
+// AvailableCallableSubagentRoleNames returns presentation-ready roles that a
+// model may invoke from the supplied context.
+func AvailableCallableSubagentRoleNames(settings Settings, context SubagentInvocationContext) []string {
+	return availableSubagentRoleNames(settings, func(name string, _ SubagentRole) bool {
+		return SubagentRoleCallableInContext(settings, name, context)
+	})
+}
+
+func availableSubagentRoleNames(settings Settings, include func(string, SubagentRole) bool) []string {
 	names := []string{}
-	if !agentCallableOnly || SubagentRoleCallable(settings.Subagents[BuiltInSubagentRoleFast]) {
+	if include(BuiltInSubagentRoleFast, settings.Subagents[BuiltInSubagentRoleFast]) {
 		names = append(names, BuiltInSubagentRoleFast)
 	}
 	for name, role := range settings.Subagents {
@@ -143,7 +191,7 @@ func AvailableSubagentRoleNames(settings Settings, agentCallableOnly bool) []str
 		if !SubagentRoleHasMeaningfulDiff(settings, role) {
 			continue
 		}
-		if agentCallableOnly && !SubagentRoleCallable(role) {
+		if !include(normalized, role) {
 			continue
 		}
 		names = append(names, normalized)

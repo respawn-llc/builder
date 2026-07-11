@@ -23,6 +23,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
@@ -1410,7 +1411,7 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open source session: %v", err)
 	}
-	if got := sourceStore.Meta().Continuation; got == nil || got.AgentRole != "reviewer" {
+	if got := sourceStore.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("reviewer")) {
 		t.Fatalf("continuation role = %+v, want reviewer", got)
 	}
 	if locked := sourceStore.Meta().Locked; locked == nil || !locked.HasSystemPrompt || !locked.HasEnabledTools {
@@ -1516,7 +1517,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 
@@ -1543,7 +1544,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != "" {
+	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared role", got)
 	}
 }
@@ -1582,7 +1583,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got == nil || got.AgentRole != "coder" {
+	if got := reopened.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("coder")) {
 		t.Fatalf("continuation = %+v, want coder role persisted", got)
 	}
 }
@@ -1594,7 +1595,7 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: "reviewer"}); err != nil {
+	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("reviewer")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
@@ -1633,7 +1634,7 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 	if err != nil {
 		t.Fatalf("workflow planSession: %v", err)
 	}
-	if got := plan.Store.Meta().Continuation; got == nil || got.AgentRole != "coder" {
+	if got := plan.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("coder")) {
 		t.Fatalf("workflow continuation = %+v, want coder role", got)
 	}
 }
@@ -1662,14 +1663,17 @@ func TestWorkflowRuntimeStartFailsWhenRoleDisappearedAfterTaskStart(t *testing.T
 	}
 }
 
-func TestWorkflowRuntimeStartsConfiguredNoOpRole(t *testing.T) {
+func TestWorkflowRuntimeStartsWorkflowHiddenConfiguredNoOpRole(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput,
 		ScriptedFinalAnswer(`{"commentary":"first comments","prior_summary":"first summary"}`),
 		ScriptedFinalAnswer(`{"commentary":"second done"}`),
 	)
+	fixture.cfg.Settings.Workflow.Subagents = false
 	fixture.cfg.Settings.Subagents["planner"] = config.SubagentRole{
-		Settings: config.Settings{ThinkingLevel: fixture.cfg.Settings.ThinkingLevel},
-		Sources:  map[string]string{"thinking_level": "test"},
+		Settings:            config.Settings{ThinkingLevel: fixture.cfg.Settings.ThinkingLevel},
+		Sources:             map[string]string{"thinking_level": "test"},
+		WorkflowSubagent:    false,
+		WorkflowSubagentSet: true,
 	}
 	fixture.rebuildStarter(t)
 	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeNewSession, "planner")

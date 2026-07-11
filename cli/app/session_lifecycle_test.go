@@ -7,6 +7,7 @@ import (
 	"core/server/metadata"
 	"core/server/registry"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
 	shelltool "core/server/tools/shell"
 	"core/shared/client"
@@ -151,7 +152,7 @@ func TestRunSessionLifecycleRejectsDifferentAgentRoleForLockedContinuation(t *te
 	if err := store.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable: %v", err)
 	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "reviewer"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("reviewer")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {

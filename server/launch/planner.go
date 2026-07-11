@@ -110,13 +110,12 @@ func ResolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 	baseSource := app.Source
 	active, source := baseActive, baseSource
 	if meta.Continuation != nil {
-		role := strings.TrimSpace(meta.Continuation.AgentRole)
 		var err error
-		active, source, err = applyPersistedSubagentRoleSettings(baseActive, baseSource, role, meta.Locked == nil, !skipContinuationAgentRoleValidation)
+		active, source, err = applyPersistedSubagentRoleSettings(baseActive, baseSource, meta.Continuation.AgentRole, meta.Locked == nil, !skipContinuationAgentRoleValidation)
 		if err != nil {
 			return SessionPlan{}, err
 		}
-		if shouldApplyPersistedContinuationBaseURL(baseActive, role) {
+		if shouldApplyPersistedContinuationBaseURL(baseActive, meta.Continuation.AgentRole) {
 			if baseURL := strings.TrimSpace(meta.Continuation.OpenAIBaseURL); baseURL != "" {
 				active.OpenAIBaseURL = baseURL
 			}
@@ -178,10 +177,10 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	meta := store.Meta()
 	baseActive := EffectiveSettings(p.Config.Settings, meta.Locked)
 	baseSource := p.Config.Source
-	continuationAgentRole := ""
+	var continuationAgentRole *string
 	continuationBaseURL := ""
 	if meta.Continuation != nil {
-		continuationAgentRole = strings.TrimSpace(meta.Continuation.AgentRole)
+		continuationAgentRole = cloneContinuationRole(meta.Continuation.AgentRole)
 		continuationBaseURL = strings.TrimSpace(meta.Continuation.OpenAIBaseURL)
 	}
 	active, source := baseActive, baseSource
@@ -237,8 +236,11 @@ func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPl
 	}, nil
 }
 
-func applyPersistedSubagentRoleSettings(base config.Settings, source config.SourceReport, roleName string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, error) {
-	lookup := config.LookupSubagentRole(base, roleName)
+func applyPersistedSubagentRoleSettings(base config.Settings, source config.SourceReport, roleName *string, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, error) {
+	if roleName == nil {
+		return base, source, nil
+	}
+	lookup := config.LookupSubagentRole(base, *roleName)
 	if lookup.Status == config.SubagentRoleLookupInvalid {
 		return base, source, nil
 	}
@@ -254,8 +256,11 @@ func applyPersistedSubagentRoleSettings(base config.Settings, source config.Sour
 	return resolved, effectiveSource, nil
 }
 
-func shouldApplyPersistedContinuationBaseURL(base config.Settings, roleName string) bool {
-	lookup := config.LookupSubagentRole(base, roleName)
+func shouldApplyPersistedContinuationBaseURL(base config.Settings, roleName *string) bool {
+	if roleName == nil {
+		return true
+	}
+	lookup := config.LookupSubagentRole(base, *roleName)
 	if lookup.Status == config.SubagentRoleLookupInvalid {
 		return true
 	}
@@ -311,9 +316,9 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 		baseSource = plan.Source
 	}
 	shouldPersistContinuation := false
-	continuationAgentRole := ""
+	var continuationAgentRole *string
 	if plan.Store.Meta().Continuation != nil {
-		continuationAgentRole = strings.TrimSpace(plan.Store.Meta().Continuation.AgentRole)
+		continuationAgentRole = cloneContinuationRole(plan.Store.Meta().Continuation.AgentRole)
 	}
 	activeToolLock := plan.Store.Meta().Locked
 	if options.AllowLockedAgentRoleChange {
@@ -335,15 +340,19 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 	if err != nil {
 		return SessionPlan{}, nil, fmt.Errorf("%w: %v", errInvalidAgentRole, err)
 	}
-	if roleOverride.Present && plan.ModelContractLocked && continuationAgentRole != roleOverride.Role && !options.AllowLockedAgentRoleChange && !plan.SkipContinuationAgentRoleValidation {
-		return SessionPlan{}, nil, fmt.Errorf("%w: current=%q requested=%q", ErrLockedAgentRoleChange, continuationAgentRole, roleOverride.Role)
+	var requestedContinuationRole *string
+	if roleOverride.Present && !roleOverride.Default {
+		requestedContinuationRole = cloneContinuationRole(&roleOverride.Role)
 	}
-	if roleOverride.Present && plan.ModelContractLocked && continuationAgentRole != roleOverride.Role && options.AllowLockedAgentRoleChange {
+	if roleOverride.Present && plan.ModelContractLocked && !sameContinuationRole(continuationAgentRole, requestedContinuationRole) && !options.AllowLockedAgentRoleChange && !plan.SkipContinuationAgentRoleValidation {
+		return SessionPlan{}, nil, fmt.Errorf("%w: current=%q requested=%q", ErrLockedAgentRoleChange, continuationRoleDisplay(continuationAgentRole), roleOverride.Role)
+	}
+	if roleOverride.Present && plan.ModelContractLocked && !sameContinuationRole(continuationAgentRole, requestedContinuationRole) && options.AllowLockedAgentRoleChange {
 		staleLockedPromptFacingContract = true
 	}
 	if roleOverride.Present {
 		shouldPersistContinuation = true
-		continuationAgentRole = roleOverride.Role
+		continuationAgentRole = requestedContinuationRole
 		next.ActiveSettings = cloneSettings(baseSettings)
 		next.Source = baseSource
 		if !plan.ModelContractLocked {
@@ -459,6 +468,28 @@ func applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, overrides server
 		}
 	}
 	return next, warnings, nil
+}
+
+func continuationRoleDisplay(role *string) string {
+	if role == nil {
+		return config.DefaultSubagentRole
+	}
+	return *role
+}
+
+func cloneContinuationRole(role *string) *string {
+	if role == nil {
+		return nil
+	}
+	copyRole := *role
+	return &copyRole
+}
+
+func sameContinuationRole(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func validateRunPromptOverrideSettings(settings config.Settings, source config.SourceReport) (config.Settings, error) {

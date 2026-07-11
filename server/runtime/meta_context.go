@@ -45,6 +45,7 @@ type metaContextBuildOptions struct {
 	IncludeAgents             bool
 	IncludeSkills             bool
 	IncludeSubagents          bool
+	SubagentInvocationContext config.SubagentInvocationContext
 	IncludeEnvironment        bool
 	IncludeHeadless           bool
 	IncludeHeadlessExit       bool
@@ -115,11 +116,12 @@ func newMetaContextBuilder(workspaceRoot, model, thinkingLevel string, disabledS
 
 func baseMetaContextBuildOptions(includeSkillWarnings bool) metaContextBuildOptions {
 	return metaContextBuildOptions{
-		IncludeAgents:        true,
-		IncludeSkills:        true,
-		IncludeSubagents:     true,
-		IncludeEnvironment:   true,
-		IncludeSkillWarnings: includeSkillWarnings,
+		IncludeAgents:             true,
+		IncludeSkills:             true,
+		IncludeSubagents:          true,
+		SubagentInvocationContext: config.SubagentInvocationContextOrdinary,
+		IncludeEnvironment:        true,
+		IncludeSkillWarnings:      includeSkillWarnings,
 	}
 }
 
@@ -178,7 +180,7 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 	}
 
 	if opts.IncludeSubagents {
-		if message, ok := b.subagentsMetaMessage(); ok {
+		if message, ok := b.subagentsMetaMessage(opts.SubagentInvocationContext); ok {
 			collector.addMessages([]llm.Message{message})
 		}
 	}
@@ -261,11 +263,11 @@ func (b metaContextBuilder) discoverAgents(permissive bool) ([]llm.Message, erro
 	return out, nil
 }
 
-func (b metaContextBuilder) subagentsMetaMessage() (llm.Message, bool) {
+func (b metaContextBuilder) subagentsMetaMessage(context config.SubagentInvocationContext) (llm.Message, bool) {
 	if !toolEnabled(b.enabledTools, toolspec.ToolExecCommand) {
 		return llm.Message{}, false
 	}
-	roles := b.renderableSubagentRoles()
+	roles := b.renderableSubagentRoles(context)
 	if len(roles) == 0 {
 		return llm.Message{}, false
 	}
@@ -285,7 +287,7 @@ type renderedSubagentRole struct {
 	Description string
 }
 
-func (b metaContextBuilder) renderableSubagentRoles() []renderedSubagentRole {
+func (b metaContextBuilder) renderableSubagentRoles(context config.SubagentInvocationContext) []renderedSubagentRole {
 	settings := b.subagentSettings
 	if len(settings.Subagents) == 0 {
 		return nil
@@ -302,7 +304,7 @@ func (b metaContextBuilder) renderableSubagentRoles() []renderedSubagentRole {
 	out := make([]renderedSubagentRole, 0, len(names))
 	for _, name := range names {
 		role := settings.Subagents[name]
-		if !config.SubagentRoleCallable(role) || !config.SubagentRoleHasMeaningfulDiff(settings, role) {
+		if !config.SubagentRoleCallableInContext(settings, name, context) || !config.SubagentRoleHasMeaningfulDiff(settings, role) {
 			continue
 		}
 		description := strings.TrimSpace(role.Description)

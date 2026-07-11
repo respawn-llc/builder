@@ -218,6 +218,9 @@
 - Subagent roles are file-only `[subagents.<role>]` config tables and inherit main config unless overridden.
 - Subagent role `model_context_window` and `reviewer.model_context_window` overrides must resolve to at least `40000` or config validation crashes the server.
 - Subagent roles may set `agent_callable=false`; such roles are hidden from agent-facing role context and rejected for Kent-session subagent calls, while humans may still run them from ordinary shells as headless, or use them in workflows.
+- `[workflow] subagents = false` is a TOML-only, default-disabled control for custom-role delegation by workflow agents. When enabled, a custom role may additionally set `workflow_subagent=false` to reject workflow-agent launches and omit that role from workflow-agent role context; this does not affect ordinary human-shell launches or direct workflow-node assignment.
+- Workflow-agent custom-role delegation requires `agent_callable=true`, `[workflow] subagents = true`, and an effective `workflow_subagent=true`; the global setting remains authoritative over per-role metadata.
+- The built-in `fast` role remains absent from the custom-role catalog and bypasses the workflow-specific controls while continuing to obey `agent_callable`.
 - The built-in `fast` role exists without config and may switch to a smaller/faster profile on exact provider first-party setups, or be configured by the user.
 - Headless executes a single non-interactive prompt with normal runtime/session persistence.
 - It creates/resumes normal sessions and auto-names unnamed sessions `<session-id> subagent`.

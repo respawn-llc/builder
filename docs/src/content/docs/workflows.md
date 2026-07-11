@@ -41,6 +41,7 @@ From a project, create or link a workflow, open the workflow editor, then edit t
 ## 2. Set Up Agent Roles
 
 Workflow agent nodes run existing Kent subagent roles. Create roles for the specialists you want in your process, then choose those roles in the node's Assignee field.
+Roles hidden from workflow-agent delegation remain valid node assignees.
 
 ```toml
 [subagents.implementer]
