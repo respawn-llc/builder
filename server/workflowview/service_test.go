@@ -2264,6 +2264,43 @@ func TestAttentionListExcludesUserInterruptedRuns(t *testing.T) {
 	}
 }
 
+func TestAttentionListExcludesBlankReasonInterruptedRuns(t *testing.T) {
+	ctx, store, workflowStore, binding := newWorkflowViewTestContextStore(t)
+	view, err := New(store)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Blank interruption reason", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	started, err := workflowStore.StartTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	claimed, err := workflowStore.ClaimRun(ctx, started.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if err := workflowStore.InterruptRunGeneration(ctx, started.RunID, claimed.Generation, " \t ", "{}"); err != nil {
+		t.Fatalf("InterruptRunGeneration: %v", err)
+	}
+
+	resp, err := view.ListAttention(ctx, serverapi.WorkflowAttentionListRequest{ProjectID: binding.ProjectID}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("ListAttention: %v", err)
+	}
+	for _, item := range resp.Items {
+		if item.Kind == "interrupted_run" {
+			t.Fatalf("blank-reason run surfaced as attention: %+v", resp.Items)
+		}
+	}
+}
+
 func TestAttentionListExcludesRuntimeCanceledRuns(t *testing.T) {
 	ctx, store, workflowStore, binding, _ := newWorkflowViewTestContextService(t)
 	view, err := New(store)

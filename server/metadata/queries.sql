@@ -3515,6 +3515,7 @@ WITH attention_candidates(
     JOIN task_node_placements p ON p.id = r.placement_id
     WHERE r.interrupted_at_unix_ms IS NOT NULL
       AND r.completed_at_unix_ms IS NULL
+      AND trim(COALESCE(r.interruption_reason, '')) != ''
       AND trim(COALESCE(r.interruption_reason, '')) NOT IN ('user_interrupt', 'workflow_runtime_canceled')
       AND p.state IN ('active', 'waiting_approval')
       AND t.canceled_at_unix_ms IS NULL
@@ -3603,6 +3604,7 @@ JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
 WHERE r.interrupted_at_unix_ms IS NOT NULL
   AND r.completed_at_unix_ms IS NULL
+  AND trim(COALESCE(r.interruption_reason, '')) != ''
   AND trim(COALESCE(r.interruption_reason, '')) NOT IN ('user_interrupt', 'workflow_runtime_canceled')
   AND p.state IN ('active', 'waiting_approval')
   AND t.canceled_at_unix_ms IS NULL
