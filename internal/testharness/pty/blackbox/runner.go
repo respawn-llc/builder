@@ -192,6 +192,7 @@ func appendCleanupFailure(cleanup *IncompleteCleanup, owner string, cause error)
 func runActions(session *driver.Session, environment *IsolatedEnvironment, actions []Action) (RunObservation, error) {
 	observation := RunObservation{ServerReady: true, Model: environment.Stub.Snapshot()}
 	events := session.Events()
+	sessionFailures := session.Failure()
 	modelEvents := environment.Stub.Events()
 	serverFailures := environment.Server.Failure()
 	for index, action := range actions {
@@ -238,6 +239,11 @@ func runActions(session *driver.Session, environment *IsolatedEnvironment, actio
 						return observation, fmt.Errorf("command %s failed: %w", commandID, event.Err)
 					}
 				}
+			case <-sessionFailures:
+				if err := session.Error(); err != nil {
+					return observation, fmt.Errorf("client PTY failure: %w", err)
+				}
+				return observation, errors.New("client PTY reported an unknown failure")
 			case <-modelEvents:
 				observation.Model = environment.Stub.Snapshot()
 			case <-serverFailures:

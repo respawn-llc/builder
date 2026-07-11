@@ -148,14 +148,18 @@ func (e *IsolatedEnvironment) WaitReady() error {
 	return fmt.Errorf("standalone server readiness timed out: stderr=%s", e.Server.stderr.String())
 }
 
-func (e *IsolatedEnvironment) BindProject() error {
+func (e *IsolatedEnvironment) BindProject() (returnErr error) {
 	dialContext, cancelDial := context.WithTimeout(context.Background(), fixedWait)
 	remote, err := client.DialRemoteURL(dialContext, "ws://"+net.JoinHostPort(e.Host, strconv.Itoa(e.Port))+"/rpc")
 	cancelDial()
 	if err != nil {
 		return fmt.Errorf("dial standalone server project API: %w", err)
 	}
-	defer remote.Close()
+	defer func() {
+		if err := remote.Close(); err != nil && returnErr == nil {
+			returnErr = fmt.Errorf("close standalone project API: %w", err)
+		}
+	}()
 	acknowledgeContext, cancelAcknowledge := context.WithTimeout(context.Background(), fixedWait)
 	err = remote.EnableNoAuthBootstrapAcknowledgement(acknowledgeContext)
 	cancelAcknowledge()

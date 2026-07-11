@@ -91,12 +91,13 @@ func TestNewCaptureRejectsAfterChunkResizeForEmptyCapture(t *testing.T) {
 func TestAnalyzeRejectsMalformedPublicCaptureInsteadOfPanicking(t *testing.T) {
 	t.Parallel()
 
+	offset := int64(0)
 	capture := pty.Capture{
 		Dimensions: pty.MustDimensions(2, 4),
 		Raw:        []byte("x"),
 		Resizes: []pty.ResizeEvent{{
 			Placement:  pty.BeforeFirstChunk(),
-			Offset:     0,
+			Offset:     &offset,
 			Dimensions: pty.Dimensions{},
 		}},
 	}

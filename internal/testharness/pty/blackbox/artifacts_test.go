@@ -124,6 +124,14 @@ func startLeaseHolder(path string) (*leaseHolder, error) {
 	if err := command.Start(); err != nil {
 		return nil, err
 	}
+	cleanupChild := true
+	defer func() {
+		if cleanupChild {
+			_ = stdin.Close()
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	}()
 	line, err := bufio.NewReader(stdout).ReadString('\n')
 	if err != nil {
 		return nil, err
@@ -131,6 +139,7 @@ func startLeaseHolder(path string) (*leaseHolder, error) {
 	if line != "locked\n" {
 		return nil, errors.New("cross-process artifact lease holder did not lock")
 	}
+	cleanupChild = false
 	return &leaseHolder{stdin: stdin, cmd: command}, nil
 }
 

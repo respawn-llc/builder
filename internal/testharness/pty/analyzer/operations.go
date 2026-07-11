@@ -86,9 +86,13 @@ func (b *tracingBackend) writeBatchControls() []Operation {
 }
 
 func (b *tracingBackend) operationForWriteBatch(segments []WriteSegment, controls []Operation) Operation {
+	kind := OperationCursorMove
+	if len(controls) > 0 {
+		kind = controls[0].Kind
+	}
 	batch := Operation{
 		Sequence:      len(b.ops),
-		Kind:          OperationCursorMove,
+		Kind:          kind,
 		WriteSegments: segments,
 		Controls:      controls,
 	}

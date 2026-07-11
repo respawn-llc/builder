@@ -47,11 +47,13 @@ type Session struct {
 	commands chan SessionCommand
 	events   chan SessionEvent
 	done     chan struct{}
+	failure  chan struct{}
 
-	mu      sync.Mutex
-	capture analyzer.Capture
-	err     error
-	closed  bool
+	mu          sync.Mutex
+	capture     analyzer.Capture
+	err         error
+	closed      bool
+	failureOnce sync.Once
 }
 
 // StartSession starts a child with exactly SessionSpec.Env, not an ambient
@@ -73,6 +75,7 @@ func StartSession(spec SessionSpec) (*Session, error) {
 		commands: make(chan SessionCommand, sessionCommandCapacity),
 		events:   make(chan SessionEvent, 128),
 		done:     make(chan struct{}),
+		failure:  make(chan struct{}),
 	}
 	go session.run(spec.Dimensions)
 	return session, nil
@@ -92,6 +95,22 @@ func (s *Session) Done() <-chan struct{} {
 	return s.done
 }
 
+func (s *Session) Failure() <-chan struct{} {
+	if s == nil {
+		return nil
+	}
+	return s.failure
+}
+
+func (s *Session) Error() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
 // Enqueue never blocks the runner. Validation happens before the command
 // becomes visible to the reactor.
 func (s *Session) Enqueue(command SessionCommand) error {
@@ -102,9 +121,8 @@ func (s *Session) Enqueue(command SessionCommand) error {
 		return err
 	}
 	s.mu.Lock()
-	closed := s.closed
-	s.mu.Unlock()
-	if closed {
+	defer s.mu.Unlock()
+	if s.closed {
 		return errors.New("PTY session is closed")
 	}
 	select {
@@ -196,11 +214,20 @@ func (s *Session) run(dimensions analyzer.Dimensions) {
 		}
 		select {
 		case command := <-s.commands:
-			s.emit(SessionEvent{Kind: SessionEventCommandStarted, CommandID: command.ID})
+			if err := s.emit(SessionEvent{Kind: SessionEventCommandStarted, CommandID: command.ID}); err != nil {
+				s.fail(err)
+				return
+			}
 			if err := s.execute(command, assembler, stream, buffer, &responder); err != nil {
-				s.emit(SessionEvent{Kind: SessionEventCommandFailed, CommandID: command.ID, Err: err})
+				if emitErr := s.emit(SessionEvent{Kind: SessionEventCommandFailed, CommandID: command.ID, Err: err}); emitErr != nil {
+					s.fail(emitErr)
+					return
+				}
 			} else {
-				s.emit(SessionEvent{Kind: SessionEventCommandCompleted, CommandID: command.ID})
+				if err := s.emit(SessionEvent{Kind: SessionEventCommandCompleted, CommandID: command.ID}); err != nil {
+					s.fail(err)
+					return
+				}
 			}
 		case waitErr = <-wait:
 			exited = true
@@ -218,16 +245,22 @@ func (s *Session) run(dimensions analyzer.Dimensions) {
 	}
 	capture.ProcessExit = processExit(s.cmd.ProcessState)
 	capture.ReadLoopDone = true
+	s.mu.Lock()
+	s.capture = capture
+	s.mu.Unlock()
 	analysis, analysisErr := analyzer.Analyze(capture)
 	if analysisErr != nil {
 		s.fail(analysisErr)
 		return
 	}
-	s.mu.Lock()
-	s.capture = capture
-	s.mu.Unlock()
-	s.emit(SessionEvent{Kind: SessionEventTerminalAnalysis, Analysis: &analysis})
-	s.emit(SessionEvent{Kind: SessionEventProcessExit, ProcessExit: capture.ProcessExit})
+	if err := s.emit(SessionEvent{Kind: SessionEventTerminalAnalysis, Analysis: &analysis}); err != nil {
+		s.fail(err)
+		return
+	}
+	if err := s.emit(SessionEvent{Kind: SessionEventProcessExit, ProcessExit: capture.ProcessExit}); err != nil {
+		s.fail(err)
+		return
+	}
 	_ = waitErr // Exit status is an immutable process observation, not a driver failure.
 }
 
@@ -292,7 +325,9 @@ func (s *Session) drainReadable(buffer []byte, assembler *analyzer.CaptureAssemb
 			if snapshotErr != nil {
 				return snapshotErr
 			}
-			s.emit(SessionEvent{Kind: SessionEventTerminalAnalysis, Analysis: &analysis})
+			if err := s.emit(SessionEvent{Kind: SessionEventTerminalAnalysis, Analysis: &analysis}); err != nil {
+				return err
+			}
 		}
 		if err == nil {
 			if count == 0 {
@@ -337,11 +372,12 @@ func (s *Session) writeAll(payload []byte) error {
 	return nil
 }
 
-func (s *Session) emit(event SessionEvent) {
+func (s *Session) emit(event SessionEvent) error {
 	select {
 	case s.events <- event:
+		return nil
 	default:
-		s.fail(errors.New("PTY session event buffer is full"))
+		return errors.New("PTY session event buffer is full")
 	}
 }
 
@@ -354,6 +390,7 @@ func (s *Session) fail(err error) {
 		s.err = err
 	}
 	s.mu.Unlock()
+	s.failureOnce.Do(func() { close(s.failure) })
 	select {
 	case s.events <- SessionEvent{Kind: SessionEventFailure, Err: err}:
 	default:

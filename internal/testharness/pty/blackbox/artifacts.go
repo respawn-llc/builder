@@ -28,6 +28,7 @@ type artifactRun struct {
 	final     string
 	lease     *fileLease
 	publisher *artifactPublisher
+	published bool
 }
 
 type artifactEvidence struct {
@@ -142,7 +143,7 @@ func publishFailureArtifacts(deadline time.Time, run *artifactRun, evidence arti
 	if err := os.Rename(run.staging, run.final); err != nil {
 		return "", fmt.Errorf("publish artifact bundle: %w", err)
 	}
-	run.staging = ""
+	run.published = true
 
 	latestLease, err := run.store.acquireLatestLeaseUntil(deadline)
 	if err != nil {
@@ -246,7 +247,7 @@ func (r *artifactRun) discard(deadline time.Time) error {
 	if err := r.release(); err != nil {
 		return err
 	}
-	if r.staging == "" {
+	if r.published {
 		return nil
 	}
 	return removeTreeUntil(r.staging, deadline)

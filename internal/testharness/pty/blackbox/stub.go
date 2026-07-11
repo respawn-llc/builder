@@ -457,11 +457,15 @@ func (s *ResponsesStub) notify() {
 	}
 }
 
-func boundedBody(request *http.Request) ([]byte, error) {
+func boundedBody(request *http.Request) (body []byte, returnErr error) {
 	if request.ContentLength > maxHTTPBodyBytes {
 		return nil, errors.New("request body exceeds limit")
 	}
-	defer request.Body.Close()
+	defer func() {
+		if err := request.Body.Close(); err != nil && returnErr == nil {
+			returnErr = fmt.Errorf("close model request: %w", err)
+		}
+	}()
 	body, err := io.ReadAll(io.LimitReader(request.Body, maxHTTPBodyBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read model request: %w", err)

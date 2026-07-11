@@ -42,7 +42,9 @@ func TestCaptureAssemblerCoalescesEquivalentFragmentationAtResizeBarrier(t *test
 	if !bytes.Equal(split.Raw, coalesced.Raw) {
 		t.Fatalf("raw evidence differs: split=%q coalesced=%q", split.Raw, coalesced.Raw)
 	}
-	if len(split.Resizes) != 1 || len(coalesced.Resizes) != 1 || split.Resizes[0].Offset != coalesced.Resizes[0].Offset {
+	if len(split.Resizes) != 1 || len(coalesced.Resizes) != 1 ||
+		split.Resizes[0].Offset == nil || coalesced.Resizes[0].Offset == nil ||
+		*split.Resizes[0].Offset != *coalesced.Resizes[0].Offset {
 		t.Fatalf("resize evidence differs: split=%#v coalesced=%#v", split.Resizes, coalesced.Resizes)
 	}
 }

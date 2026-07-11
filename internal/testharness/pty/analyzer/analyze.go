@@ -7,16 +7,28 @@ import (
 )
 
 func Analyze(capture Capture) (Analysis, error) {
+	normalized, err := normalizeReplayCapture(capture)
+	if err != nil {
+		return Analysis{}, err
+	}
+	capture = normalized
 	stream, err := NewStream(capture.Dimensions)
 	if err != nil {
 		return Analysis{}, err
 	}
-	if err := validateReplayCapture(capture); err != nil {
-		return Analysis{}, err
+	finished := false
+	defer func() {
+		if !finished {
+			_, _ = stream.Finish()
+		}
+	}()
+	finish := func() (Analysis, error) {
+		finished = true
+		return stream.Finish()
 	}
 	resizeIndex := 0
 	applyResizes := func(offset int64, source Chunk) error {
-		for resizeIndex < len(capture.Resizes) && capture.Resizes[resizeIndex].Offset == offset {
+		for resizeIndex < len(capture.Resizes) && *capture.Resizes[resizeIndex].Offset == offset {
 			resize := capture.Resizes[resizeIndex]
 			if err := stream.ResizeFrom(resize.Dimensions, source, resize.At); err != nil {
 				return fmt.Errorf("apply replay resize at offset %d: %w", offset, err)
@@ -45,23 +57,23 @@ func Analyze(capture Capture) (Analysis, error) {
 		return Analysis{}, err
 	}
 	if resizeIndex != len(capture.Resizes) {
-		return Analysis{}, fmt.Errorf("resize event %d has invalid observer offset %d for %d bytes", resizeIndex, capture.Resizes[resizeIndex].Offset, offset)
+		return Analysis{}, fmt.Errorf("resize event %d has invalid observer offset %d for %d bytes", resizeIndex, *capture.Resizes[resizeIndex].Offset, offset)
 	}
-	return stream.Finish()
+	return finish()
 }
 
-func validateReplayCapture(capture Capture) error {
+func normalizeReplayCapture(capture Capture) (Capture, error) {
 	if _, err := NewDimensions(capture.Dimensions.Rows, capture.Dimensions.Cols); err != nil {
-		return err
+		return Capture{}, err
 	}
 	rebuilt, err := NewCaptureWithEvents(capture.Dimensions, capture.Chunks, capture.Resizes)
 	if err != nil {
-		return err
+		return Capture{}, err
 	}
 	if !bytes.Equal(rebuilt.Raw, capture.Raw) {
-		return fmt.Errorf("capture raw bytes do not match chunk evidence: raw=%d chunk_bytes=%d", len(capture.Raw), len(rebuilt.Raw))
+		return Capture{}, fmt.Errorf("capture raw bytes do not match chunk evidence: raw=%d chunk_bytes=%d", len(capture.Raw), len(rebuilt.Raw))
 	}
-	return nil
+	return rebuilt, nil
 }
 
 func mergePrivateModeOperations(operations []Operation, changes []PrivateModeChange) []Operation {

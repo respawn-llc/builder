@@ -109,7 +109,7 @@ type ProcessExit struct {
 
 type ResizeEvent struct {
 	Placement  ResizePlacement
-	Offset     int64
+	Offset     *int64
 	At         time.Duration
 	Dimensions Dimensions
 }
@@ -243,18 +243,6 @@ func (a *CaptureAssembler) tailExcerpt(extra []byte) []byte {
 	return tail
 }
 
-func (a *CaptureAssembler) evidenceBytes() []byte {
-	size := len(a.current)
-	for _, block := range a.blocks {
-		size += len(block)
-	}
-	evidence := make([]byte, 0, size)
-	for _, block := range a.blocks {
-		evidence = append(evidence, block...)
-	}
-	return append(evidence, a.current...)
-}
-
 // copyEvidencePrefix copies only the requested bounded diagnostic prefix.
 func (a *CaptureAssembler) copyEvidencePrefix(dst []byte) {
 	cursor := 0
@@ -306,9 +294,10 @@ func (a *CaptureAssembler) Resize(dimensions Dimensions) error {
 	if len(a.blocks) > 0 {
 		placement = AfterChunk(len(a.blocks) - 1)
 	}
+	offset := a.offset
 	a.resizes = append(a.resizes, ResizeEvent{
 		Placement:  placement,
-		Offset:     a.offset,
+		Offset:     &offset,
 		Dimensions: dimensions,
 	})
 	return nil
@@ -387,18 +376,22 @@ func NewCaptureWithEvents(dimensions Dimensions, chunks []Chunk, resizes []Resiz
 			return Capture{}, fmt.Errorf("resize event timestamps must be monotonic: resize=%d at=%s previous=%s", i, resize.At, resizes[i-1].At)
 		}
 		copiedResizes[i] = resize
-		if copiedResizes[i].Offset == 0 {
-			copiedResizes[i].Offset = resizePlacementOffset(resize.Placement, copied)
+		if copiedResizes[i].Offset == nil {
+			offset := resizePlacementOffset(resize.Placement, copied)
+			copiedResizes[i].Offset = &offset
+		} else {
+			offset := *resize.Offset
+			copiedResizes[i].Offset = &offset
 		}
-		if copiedResizes[i].Offset < 0 || copiedResizes[i].Offset > int64(rawLen) {
-			return Capture{}, fmt.Errorf("resize event %d observer offset %d outside captured byte range [0,%d]", i, copiedResizes[i].Offset, rawLen)
+		if *copiedResizes[i].Offset < 0 || *copiedResizes[i].Offset > int64(rawLen) {
+			return Capture{}, fmt.Errorf("resize event %d observer offset %d outside captured byte range [0,%d]", i, *copiedResizes[i].Offset, rawLen)
 		}
-		if previousOffset != nil && copiedResizes[i].Offset < *previousOffset {
-			return Capture{}, fmt.Errorf("resize event observer offsets must be monotonic: resize=%d offset=%d previous=%d", i, copiedResizes[i].Offset, *previousOffset)
+		if previousOffset != nil && *copiedResizes[i].Offset < *previousOffset {
+			return Capture{}, fmt.Errorf("resize event observer offsets must be monotonic: resize=%d offset=%d previous=%d", i, *copiedResizes[i].Offset, *previousOffset)
 		}
 		placement := resize.Placement
 		previousPlacement = &placement
-		offset := copiedResizes[i].Offset
+		offset := *copiedResizes[i].Offset
 		previousOffset = &offset
 	}
 	return Capture{

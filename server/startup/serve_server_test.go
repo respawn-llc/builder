@@ -660,9 +660,10 @@ openai_base_url = "http://127.0.0.1:11434/v1"
 		t.Fatalf("config.Load: %v", err)
 	}
 	readyURL := config.ServerHTTPBaseURL(loadCfg) + protocol.ReadinessPath
+	client := &http.Client{Timeout: time.Second}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		resp, requestErr := http.Get(readyURL)
+		resp, requestErr := client.Get(readyURL)
 		if requestErr == nil {
 			defer func() { _ = resp.Body.Close() }()
 			if resp.StatusCode != http.StatusOK {

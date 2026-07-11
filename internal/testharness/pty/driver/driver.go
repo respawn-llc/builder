@@ -49,6 +49,12 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	if err != nil {
 		return analyzer.Capture{}, fmt.Errorf("start PTY dispatcher stream: %w", err)
 	}
+	streamFinished := false
+	defer func() {
+		if !streamFinished {
+			_, _ = stream.Finish()
+		}
+	}()
 	readDone := make(chan struct{})
 	dispatcherErr := make(chan error, 1)
 	reportDispatcherError := func(err error) {
@@ -187,6 +193,10 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	}
 	capture.ProcessExit = processExit(cmd.ProcessState)
 	capture.ReadLoopDone = true
+	if _, err := stream.Finish(); err != nil {
+		return analyzer.Capture{}, fmt.Errorf("finish PTY dispatcher stream: %w", err)
+	}
+	streamFinished = true
 	if timeout {
 		return capture, &TimeoutError{Command: spec.Path, Elapsed: time.Since(started)}
 	}
