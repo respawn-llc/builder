@@ -1,6 +1,6 @@
 ---
 name: kent-dogfooding
-description: How to use `kent` cli to change your behavior, environment, config, or debug issues. Read when the user asks to change Kent config/settings/behavior/hooks/subagents; or to debug project/workspace/workflow errors.
+description: How to use `kent` cli to change your behavior, environment, config, or debug issues. Read when the user asks to change Kent config.toml/settings/behavior/hooks/subagents; or to debug project/workspace/workflow errors.
 ---
 
 Kent is the harness you are running inside, but it's also a server that runs agentic loops, a TUI, and a CLI.
