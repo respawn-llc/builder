@@ -858,6 +858,27 @@ func (q *Queries) CountWorkflowNodesByGroup(ctx context.Context, groupID sql.Nul
 	return node_count, err
 }
 
+const deleteInitialTaskExecutionTargetRecovery = `-- name: DeleteInitialTaskExecutionTargetRecovery :execrows
+DELETE FROM task_execution_targets
+WHERE task_id = ?1
+  AND state = 'initial_provisioning'
+  AND active_claim_generation = ?2
+  AND active_claim_phase = 'recovering'
+`
+
+type DeleteInitialTaskExecutionTargetRecoveryParams struct {
+	TaskID                  string
+	ExpectedClaimGeneration sql.NullString
+}
+
+func (q *Queries) DeleteInitialTaskExecutionTargetRecovery(ctx context.Context, arg DeleteInitialTaskExecutionTargetRecoveryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteInitialTaskExecutionTargetRecovery, arg.TaskID, arg.ExpectedClaimGeneration)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteProject = `-- name: DeleteProject :execrows
 DELETE FROM projects
 WHERE id = ?1

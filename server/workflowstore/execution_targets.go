@@ -26,6 +26,13 @@ type BeginManagedExecutionTargetMaterializationRequest struct {
 	ExpectedNegotiation *workflow.ExecutionTargetNegotiation
 }
 
+type ExecutionTargetRecoveryContext struct {
+	Target          workflow.ExecutionTarget
+	TaskShortID     string
+	ProjectID       string
+	SourceWorkspace workflow.ExecutionWorkspace
+}
+
 func (s *Store) BeginManagedExecutionTargetMaterialization(ctx context.Context, req BeginManagedExecutionTargetMaterializationRequest) error {
 	target := req.Target
 	if err := target.Validate(); err != nil {
@@ -336,6 +343,51 @@ func (s *Store) RequeueExecutionTargetRecovery(ctx context.Context, taskID workf
 	return target, nil
 }
 
+// DeleteInitialExecutionTargetRecovery clears an unprovisioned recovery claim
+// only when recovery has proven that neither the intended root nor task branch
+// exists. The next initiating action may therefore resolve current policy.
+func (s *Store) DeleteInitialExecutionTargetRecovery(ctx context.Context, taskID workflow.TaskID, expectedClaim workflow.ExecutionTargetClaim) error {
+	if strings.TrimSpace(string(taskID)) == "" {
+		return errors.New("task id is required")
+	}
+	if err := expectedClaim.Validate(); err != nil {
+		return err
+	}
+	if expectedClaim.Phase != workflow.ExecutionTargetClaimRecovering {
+		return errors.New("execution target recovery claim must be recovering")
+	}
+	deleted, err := s.queries.DeleteInitialTaskExecutionTargetRecovery(ctx, sqlitegen.DeleteInitialTaskExecutionTargetRecoveryParams{
+		TaskID:                  string(taskID),
+		ExpectedClaimGeneration: sql.NullString{String: expectedClaim.Generation, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	if deleted != 1 {
+		return ErrTaskExecutionTargetClaimChanged
+	}
+	return nil
+}
+
+// MarkExecutionTargetManualRecovery records a target-local recovery failure
+// and releases the worker claim. It preserves immutable target facts for an
+// explicit operator recovery selection or manual repair.
+func (s *Store) MarkExecutionTargetManualRecovery(ctx context.Context, target workflow.ExecutionTarget, expectedClaim workflow.ExecutionTargetClaim, cause workflow.ExecutionTargetRecoveryCause) error {
+	if err := expectedClaim.Validate(); err != nil {
+		return err
+	}
+	if expectedClaim.Phase != workflow.ExecutionTargetClaimRecovering {
+		return errors.New("execution target recovery claim must be recovering")
+	}
+	if strings.TrimSpace(string(cause)) == "" {
+		return errors.New("execution target manual recovery cause is required")
+	}
+	target.ActiveClaim = nil
+	target.RecoveryDisposition = workflow.ExecutionTargetRecoveryManualRecovery
+	target.RecoveryCause = &cause
+	return s.UpdateTaskExecutionTargetLifecycle(ctx, target, expectedClaim)
+}
+
 func updateTaskExecutionTargetLifecycle(ctx context.Context, q *sqlitegen.Queries, target workflow.ExecutionTarget, expectedClaim workflow.ExecutionTargetClaim) error {
 	if err := target.Validate(); err != nil {
 		return err
@@ -468,6 +520,37 @@ func (s *Store) GetTaskExecutionTarget(ctx context.Context, taskID workflow.Task
 		return nil, fmt.Errorf("decode task execution target: %w", err)
 	}
 	return &target, nil
+}
+
+func (s *Store) ExecutionTargetRecoveryContext(ctx context.Context, taskID workflow.TaskID) (ExecutionTargetRecoveryContext, error) {
+	if strings.TrimSpace(string(taskID)) == "" {
+		return ExecutionTargetRecoveryContext{}, errors.New("task id is required")
+	}
+	task, err := s.queries.GetTask(ctx, string(taskID))
+	if err != nil {
+		return ExecutionTargetRecoveryContext{}, err
+	}
+	target, err := s.GetTaskExecutionTarget(ctx, taskID)
+	if err != nil {
+		return ExecutionTargetRecoveryContext{}, err
+	}
+	if target == nil {
+		return ExecutionTargetRecoveryContext{}, ErrTaskExecutionTargetClaimChanged
+	}
+	workspaceID := strings.TrimSpace(task.SourceWorkspaceID.String)
+	if workspaceID == "" {
+		return ExecutionTargetRecoveryContext{}, errors.New("task source workspace is required for execution target recovery")
+	}
+	workspace, err := s.metadata.GetWorkspaceByID(ctx, workspaceID)
+	if err != nil {
+		return ExecutionTargetRecoveryContext{}, err
+	}
+	return ExecutionTargetRecoveryContext{
+		Target:          *target,
+		TaskShortID:     task.ShortID,
+		ProjectID:       task.ProjectID,
+		SourceWorkspace: workflow.ExecutionWorkspace{ID: workspace.ID, Root: workspace.CanonicalRootPath},
+	}, nil
 }
 
 func nullableExecutionTargetString(value *string) sql.NullString {

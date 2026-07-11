@@ -120,6 +120,11 @@ type WorktreeBundle struct {
 type WorkflowBundle struct {
 	workflows client.WorkflowClient
 	scheduler *workflowrunner.SchedulerService
+	recovery  workflowRecoveryCoordinator
+}
+
+type workflowRecoveryCoordinator interface {
+	Close() error
 }
 
 func (s *Core) safeBundles() *Bundles {
@@ -216,6 +221,7 @@ type bundleCompositionInput struct {
 }
 
 func composeBundles(in bundleCompositionInput) *Bundles {
+	workflows := newWorkflowBundle(in.workflowService, in.workflowScheduler)
 	return &Bundles{
 		Auth:       newAuthBundle(in.authSupport, in.authBootstrapService, in.authStatusService, in.serverStatusService, authservice.StartupAuthRequired(in.cfg.Settings)),
 		Capability: newCapabilityBundle(in.capabilityFactsService),
@@ -229,6 +235,7 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 				}
 				return in.workflowRuntimeStarter.Close()
 			}},
+			{name: "workflow execution target recovery", close: workflows.closeRecovery},
 			{name: "workflow scheduler", close: func() error {
 				if in.workflowScheduler == nil {
 					return nil
@@ -249,7 +256,7 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeControlService, in.sessionRuntimeService, in.sessionActivityService),
 		Sessions:    newSessionBundle(in.sessionViewService, in.sessionLifecycleService),
 		Updates:     &UpdateBundle{updateStatus: in.updateStatusService},
-		Workflows:   newWorkflowBundle(in.workflowService, in.workflowScheduler),
+		Workflows:   workflows,
 		Worktrees:   &WorktreeBundle{worktrees: client.NewLoopbackWorktreeClient(in.worktreeService)},
 	}
 }
@@ -323,6 +330,13 @@ func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegi
 
 func newWorkflowBundle(workflowService *workflowsvc.Service, scheduler *workflowrunner.SchedulerService) *WorkflowBundle {
 	return &WorkflowBundle{workflows: client.NewLoopbackWorkflowClient(workflowService), scheduler: scheduler}
+}
+
+func (b *WorkflowBundle) closeRecovery() error {
+	if b == nil || b.recovery == nil {
+		return nil
+	}
+	return b.recovery.Close()
 }
 
 func newSessionBundle(sessionViewService *sessionview.Service, sessionLifecycleService *sessionservice.SessionLifecycleService) *SessionBundle {

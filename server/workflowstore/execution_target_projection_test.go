@@ -362,6 +362,105 @@ func TestStoreRequeuesOwnedExecutionTargetRecoveryWithGenerationFence(t *testing
 	}
 }
 
+func TestStoreFinalizesClaimedExecutionTargetRecoveryWithGenerationFence(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+
+	t.Run("deletes a no-side-effect initial target", func(t *testing.T) {
+		task := createTask(t, ctx, store, CreateTaskRequest{
+			ProjectID:  binding.ProjectID,
+			WorkflowID: workflowID,
+			Title:      "Unprovisioned recovery",
+			Body:       "Body",
+		})
+		provisioningGeneration := "provisioning-1"
+		recoveringClaim := workflow.ExecutionTargetClaim{
+			Generation: "recovering-claim-1",
+			Phase:      workflow.ExecutionTargetClaimRecovering,
+		}
+		target := workflow.ExecutionTarget{
+			TaskID: task.ID,
+			Policy: workflow.ExecutionPolicyHead,
+			ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+				Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+				Commit: "deadbeef",
+			},
+			State:                       workflow.ExecutionTargetStateInitialProvisioning,
+			IntendedWorktreeRoot:        &provisioningGeneration,
+			ProvisioningGeneration:      &provisioningGeneration,
+			SetupProvisioningGeneration: &provisioningGeneration,
+			SetupState:                  workflow.ExecutionTargetSetupPending,
+			ActiveClaim:                 &recoveringClaim,
+			RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+		}
+		if err := store.SaveTaskExecutionTarget(ctx, target); err != nil {
+			t.Fatalf("SaveTaskExecutionTarget: %v", err)
+		}
+		if err := store.DeleteInitialExecutionTargetRecovery(ctx, task.ID, recoveringClaim); err != nil {
+			t.Fatalf("DeleteInitialExecutionTargetRecovery: %v", err)
+		}
+		actual, err := store.GetTaskExecutionTarget(ctx, task.ID)
+		if err != nil {
+			t.Fatalf("GetTaskExecutionTarget: %v", err)
+		}
+		if actual != nil {
+			t.Fatalf("target after no-side-effect recovery = %+v, want nil", actual)
+		}
+		if err := store.DeleteInitialExecutionTargetRecovery(ctx, task.ID, recoveringClaim); !errors.Is(err, ErrTaskExecutionTargetClaimChanged) {
+			t.Fatalf("stale DeleteInitialExecutionTargetRecovery error = %v, want %v", err, ErrTaskExecutionTargetClaimChanged)
+		}
+	})
+
+	t.Run("records manual recovery and clears the owned claim", func(t *testing.T) {
+		task := createTask(t, ctx, store, CreateTaskRequest{
+			ProjectID:  binding.ProjectID,
+			WorkflowID: workflowID,
+			Title:      "Ambiguous recovery",
+			Body:       "Body",
+		})
+		provisioningGeneration := "provisioning-2"
+		recoveringClaim := workflow.ExecutionTargetClaim{
+			Generation: "recovering-claim-2",
+			Phase:      workflow.ExecutionTargetClaimRecovering,
+		}
+		target := workflow.ExecutionTarget{
+			TaskID: task.ID,
+			Policy: workflow.ExecutionPolicyHead,
+			ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+				Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+				Commit: "cafebabe",
+			},
+			State:                       workflow.ExecutionTargetStateLocked,
+			ProvisioningGeneration:      &provisioningGeneration,
+			SetupProvisioningGeneration: &provisioningGeneration,
+			SetupState:                  workflow.ExecutionTargetSetupFailed,
+			ActiveClaim:                 &recoveringClaim,
+			RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+		}
+		if err := store.SaveTaskExecutionTarget(ctx, target); err != nil {
+			t.Fatalf("SaveTaskExecutionTarget: %v", err)
+		}
+		cause := workflow.ExecutionTargetRecoveryCause("ambiguous_provisioning")
+		if err := store.MarkExecutionTargetManualRecovery(ctx, target, recoveringClaim, cause); err != nil {
+			t.Fatalf("MarkExecutionTargetManualRecovery: %v", err)
+		}
+		actual, err := store.GetTaskExecutionTarget(ctx, task.ID)
+		if err != nil {
+			t.Fatalf("GetTaskExecutionTarget: %v", err)
+		}
+		if actual == nil ||
+			actual.ActiveClaim != nil ||
+			actual.RecoveryDisposition != workflow.ExecutionTargetRecoveryManualRecovery ||
+			actual.RecoveryCause == nil ||
+			*actual.RecoveryCause != cause {
+			t.Fatalf("manual recovery target = %+v, want cleared claim and cause %q", actual, cause)
+		}
+		if err := store.MarkExecutionTargetManualRecovery(ctx, target, recoveringClaim, cause); !errors.Is(err, ErrTaskExecutionTargetClaimChanged) {
+			t.Fatalf("stale MarkExecutionTargetManualRecovery error = %v, want %v", err, ErrTaskExecutionTargetClaimChanged)
+		}
+	})
+}
+
 func TestStoreAttachManagedExecutionTargetWorktreeLocksClaimedTarget(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)

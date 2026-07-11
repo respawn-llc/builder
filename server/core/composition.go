@@ -260,6 +260,11 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	if err := workflowScheduler.Start(context.Background()); err != nil {
 		return nil, startupFailureWithCleanup(core, fmt.Errorf("workflow bundle: scheduler start: %w", err))
 	}
+	recoveryCoordinator, err := workflowService.StartExecutionTargetRecovery(context.Background())
+	if err != nil {
+		return nil, startupFailureWithCleanup(core, fmt.Errorf("workflow bundle: execution target recovery: %w", err))
+	}
+	core.bundles.Workflows.recovery = recoveryCoordinator
 	updateStatusService.Start()
 	return core, nil
 }

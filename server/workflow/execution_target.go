@@ -48,6 +48,14 @@ const (
 
 type ExecutionTargetRecoveryCause string
 
+const (
+	ExecutionTargetRecoveryCauseAmbiguousProvisioning ExecutionTargetRecoveryCause = "ambiguous_provisioning"
+	ExecutionTargetRecoveryCauseAmbiguousWorktree     ExecutionTargetRecoveryCause = "ambiguous_worktree"
+	ExecutionTargetRecoveryCauseInspectionFailed      ExecutionTargetRecoveryCause = "inspection_failed"
+	ExecutionTargetRecoveryCauseMissingManagedRoot    ExecutionTargetRecoveryCause = "missing_managed_root"
+	ExecutionTargetRecoveryCauseUnsupportedState      ExecutionTargetRecoveryCause = "unsupported_recovery_state"
+)
+
 type ExecutionTargetResolvedSource struct {
 	Kind     ExecutionTargetSourceKind
 	NamedRef *string

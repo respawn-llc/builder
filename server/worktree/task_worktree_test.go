@@ -78,6 +78,56 @@ func TestProvisionExecutionTargetWorktreeCreatesTaskBranchFromExactCommit(t *tes
 	}
 }
 
+func TestInspectExecutionTargetWorktreeClassifiesExactProvisioningEvidence(t *testing.T) {
+	env := newServiceTestEnv(t)
+	commit := runGit(t, env.workspaceRoot, "rev-parse", "HEAD")
+	worktreeRoot, err := env.service.PlanExecutionTargetWorktreeRoot(env.binding.WorkspaceID, "WOR-101")
+	if err != nil {
+		t.Fatalf("PlanExecutionTargetWorktreeRoot: %v", err)
+	}
+	request := InspectExecutionTargetWorktreeRequest{
+		SourceWorkspaceRoot: env.workspaceRoot,
+		WorktreeRoot:        worktreeRoot,
+		TaskShortID:         "WOR-101",
+		ResolvedCommit:      commit,
+	}
+	inspection, err := env.service.InspectExecutionTargetWorktree(env.ctx, request)
+	if err != nil {
+		t.Fatalf("InspectExecutionTargetWorktree before provision: %v", err)
+	}
+	if inspection.Kind != ExecutionTargetWorktreeInspectionNoSideEffects {
+		t.Fatalf("inspection before provision = %+v, want no side effects", inspection)
+	}
+	if _, err := env.service.ProvisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{
+		WorkspaceID:         env.binding.WorkspaceID,
+		SourceWorkspaceRoot: env.workspaceRoot,
+		TaskShortID:         "WOR-101",
+		ResolvedCommit:      commit,
+		WorktreeRoot:        worktreeRoot,
+	}); err != nil {
+		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)
+	}
+	inspection, err = env.service.InspectExecutionTargetWorktree(env.ctx, request)
+	if err != nil {
+		t.Fatalf("InspectExecutionTargetWorktree after provision: %v", err)
+	}
+	if inspection.Kind != ExecutionTargetWorktreeInspectionExact || inspection.BranchName != "WOR-101" {
+		t.Fatalf("inspection after provision = %+v, want exact task branch evidence", inspection)
+	}
+	inspection, err = env.service.InspectExecutionTargetWorktree(env.ctx, InspectExecutionTargetWorktreeRequest{
+		SourceWorkspaceRoot: env.workspaceRoot,
+		WorktreeRoot:        filepath.Join(t.TempDir(), "other-root"),
+		TaskShortID:         "WOR-101",
+		ResolvedCommit:      commit,
+	})
+	if err != nil {
+		t.Fatalf("InspectExecutionTargetWorktree ambiguous branch: %v", err)
+	}
+	if inspection.Kind != ExecutionTargetWorktreeInspectionAmbiguous {
+		t.Fatalf("inspection with surviving branch = %+v, want ambiguous", inspection)
+	}
+}
+
 func TestRunExecutionTargetSetupRunsFromProvisionedWorktree(t *testing.T) {
 	env := newServiceTestEnv(t)
 	scriptRelpath := filepath.Join("scripts", "target-setup.sh")

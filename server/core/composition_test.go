@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +23,7 @@ import (
 	"core/server/workflowstore"
 	"core/server/worktree"
 	"core/shared/clientui"
+	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
@@ -85,8 +85,8 @@ func TestNewWithContextComposesRequiredBundles(t *testing.T) {
 	if appCore.bundles.Workflows == nil || appCore.bundles.Workflows.workflows == nil {
 		t.Fatal("expected workflow bundle client")
 	}
-	if appCore.bundles.Workflows.scheduler == nil || !appCore.bundles.Workflows.scheduler.Started() {
-		t.Fatal("expected started workflow scheduler")
+	if appCore.bundles.Workflows.scheduler == nil || !appCore.bundles.Workflows.scheduler.Started() || appCore.bundles.Workflows.recovery == nil {
+		t.Fatal("expected started workflow scheduler and execution-target recovery")
 	}
 	scheduler := appCore.bundles.Workflows.scheduler
 	if err := appCore.Close(); err != nil {
@@ -210,26 +210,22 @@ func TestNewWithContextFencesOrphanedExecutionTargetsBeforeStartingScheduler(t *
 	if err != nil {
 		t.Fatalf("workflowstore.New recovered: %v", err)
 	}
-	recovered, err := recoveredStore.GetTaskExecutionTarget(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("GetTaskExecutionTarget: %v", err)
-	}
-	if recovered == nil || recovered.ActiveClaim == nil ||
-		recovered.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued ||
-		recovered.ActiveClaim.Generation == claimGeneration ||
-		recovered.SetupState != workflow.ExecutionTargetSetupPending {
-		t.Fatalf("recovered target = %+v, want queued replacement claim and pending setup", recovered)
-	}
-	recoveredRunning, err := recoveredStore.GetTaskExecutionTarget(ctx, runningTask.ID)
-	if err != nil {
-		t.Fatalf("GetTaskExecutionTarget interrupted setup: %v", err)
-	}
-	if recoveredRunning == nil || recoveredRunning.ActiveClaim == nil ||
-		recoveredRunning.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued ||
-		recoveredRunning.ActiveClaim.Generation == runningClaimGeneration ||
-		recoveredRunning.SetupState != workflow.ExecutionTargetSetupFailed {
-		t.Fatalf("interrupted setup target = %+v, want queued replacement claim and failed setup", recoveredRunning)
-	}
+	waitForCoreExecutionTarget(t, recoveredStore, task.ID, func(recovered *workflow.ExecutionTarget) bool {
+		return recovered != nil &&
+			recovered.ActiveClaim == nil &&
+			recovered.RecoveryDisposition == workflow.ExecutionTargetRecoveryManualRecovery &&
+			recovered.RecoveryCause != nil &&
+			*recovered.RecoveryCause == workflow.ExecutionTargetRecoveryCauseInspectionFailed
+	})
+	waitForCoreExecutionTarget(t, recoveredStore, runningTask.ID, func(recovered *workflow.ExecutionTarget) bool {
+		return recovered != nil &&
+			recovered.ActiveClaim == nil &&
+			recovered.State == workflow.ExecutionTargetStateLocked &&
+			recovered.SetupState == workflow.ExecutionTargetSetupFailed &&
+			recovered.RecoveryDisposition == workflow.ExecutionTargetRecoveryManualRecovery &&
+			recovered.RecoveryCause != nil &&
+			*recovered.RecoveryCause == workflow.ExecutionTargetRecoveryCauseInspectionFailed
+	})
 	if !appCore.bundles.Workflows.scheduler.Started() {
 		t.Fatal("scheduler did not start after recovery fence")
 	}
@@ -324,24 +320,47 @@ func TestNewWithContextFencesProvisionedUnattachedTargetWithoutMutatingGitState(
 	if err != nil {
 		t.Fatalf("workflowstore.New recovered: %v", err)
 	}
-	actual, err := recoveredStore.GetTaskExecutionTarget(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("GetTaskExecutionTarget: %v", err)
-	}
-	if actual == nil || actual.ActiveClaim == nil ||
-		actual.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued ||
-		actual.ActiveClaim.Generation == claimGeneration ||
-		actual.SetupState != workflow.ExecutionTargetSetupPending {
-		t.Fatalf("recovered target = %+v, want queued claim and unchanged pending setup", actual)
-	}
+	waitForCoreExecutionTarget(t, recoveredStore, task.ID, func(recovered *workflow.ExecutionTarget) bool {
+		return recovered != nil &&
+			recovered.ActiveClaim == nil &&
+			recovered.State == workflow.ExecutionTargetStateLocked &&
+			recovered.IntendedWorktreeRoot == nil &&
+			recovered.SetupState == workflow.ExecutionTargetSetupSucceeded
+	})
 	if _, err := os.Stat(provisioned.WorktreeRoot); err != nil {
 		t.Fatalf("provisioned worktree after startup fence: %v", err)
 	}
 	if got := runCoreTestGit(t, provisioned.WorktreeRoot, "rev-parse", "HEAD"); got != commit {
 		t.Fatalf("provisioned worktree commit after startup fence = %q, want %q", got, commit)
 	}
-	if _, err := recoveredStore.ResolveTaskExecutionRoot(ctx, task.ID); !errors.Is(err, workflowstore.ErrTaskExecutionRootUnavailable) {
-		t.Fatalf("ResolveTaskExecutionRoot after unattached provision error = %v, want %v", err, workflowstore.ErrTaskExecutionRootUnavailable)
+	root, err := recoveredStore.ResolveTaskExecutionRoot(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ResolveTaskExecutionRoot after recovery: %v", err)
+	}
+	expectedRoot, err := config.CanonicalWorkspaceRoot(provisioned.WorktreeRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot provisioned worktree: %v", err)
+	}
+	if root.ManagedWorktree == nil || root.ManagedWorktree.Root != expectedRoot || root.EffectiveRoot != expectedRoot {
+		t.Fatalf("recovered execution root = %+v, want attached provisioned worktree", root)
+	}
+}
+
+func waitForCoreExecutionTarget(t *testing.T, store *workflowstore.Store, taskID workflow.TaskID, matches func(*workflow.ExecutionTarget) bool) *workflow.ExecutionTarget {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		target, err := store.GetTaskExecutionTarget(t.Context(), taskID)
+		if err != nil {
+			t.Fatalf("GetTaskExecutionTarget: %v", err)
+		}
+		if matches(target) {
+			return target
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("execution target = %+v, did not reach expected recovery state", target)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

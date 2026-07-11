@@ -1426,6 +1426,13 @@ WHERE task_id = sqlc.arg(task_id)
   AND active_claim_generation = sqlc.arg(expected_claim_generation)
   AND active_claim_phase = sqlc.arg(expected_claim_phase);
 
+-- name: DeleteInitialTaskExecutionTargetRecovery :execrows
+DELETE FROM task_execution_targets
+WHERE task_id = sqlc.arg(task_id)
+  AND state = 'initial_provisioning'
+  AND active_claim_generation = sqlc.arg(expected_claim_generation)
+  AND active_claim_phase = 'recovering';
+
 -- name: GetTaskExecutionTargetNegotiation :one
 SELECT
     task_id,

@@ -135,6 +135,26 @@ type ProvisionExecutionTargetWorktreeResponse struct {
 	CreatedBranch bool
 }
 
+type ExecutionTargetWorktreeInspectionKind string
+
+const (
+	ExecutionTargetWorktreeInspectionNoSideEffects ExecutionTargetWorktreeInspectionKind = "no_side_effects"
+	ExecutionTargetWorktreeInspectionExact         ExecutionTargetWorktreeInspectionKind = "exact"
+	ExecutionTargetWorktreeInspectionAmbiguous     ExecutionTargetWorktreeInspectionKind = "ambiguous"
+)
+
+type InspectExecutionTargetWorktreeRequest struct {
+	SourceWorkspaceRoot string
+	WorktreeRoot        string
+	TaskShortID         string
+	ResolvedCommit      string
+}
+
+type ExecutionTargetWorktreeInspection struct {
+	Kind       ExecutionTargetWorktreeInspectionKind
+	BranchName string
+}
+
 type RunExecutionTargetSetupRequest struct {
 	SetupOperationID    serverapi.WorktreeSetupOperationID
 	SourceWorkspaceRoot string
@@ -207,6 +227,72 @@ func (s *Service) PlanExecutionTargetWorktreeRoot(workspaceID string, taskShortI
 		return "", err
 	}
 	return s.resolveRequestedWorktreeRoot("", trimmedWorkspaceID, createSpec)
+}
+
+// InspectExecutionTargetWorktree proves whether an initial provisioning claim
+// left no Git side effects, one exact task branch/root pair, or ambiguous
+// repository state. It never mutates Git or filesystem state.
+func (s *Service) InspectExecutionTargetWorktree(ctx context.Context, req InspectExecutionTargetWorktreeRequest) (ExecutionTargetWorktreeInspection, error) {
+	if s == nil || s.git == nil {
+		return ExecutionTargetWorktreeInspection{}, errors.New("worktree service dependencies are required")
+	}
+	workspaceRoot := strings.TrimSpace(req.SourceWorkspaceRoot)
+	worktreeRoot := strings.TrimSpace(req.WorktreeRoot)
+	taskShortID := strings.TrimSpace(req.TaskShortID)
+	resolvedCommit := strings.TrimSpace(req.ResolvedCommit)
+	if workspaceRoot == "" {
+		return ExecutionTargetWorktreeInspection{}, errors.New("source workspace root is required")
+	}
+	if worktreeRoot == "" {
+		return ExecutionTargetWorktreeInspection{}, errors.New("worktree root is required")
+	}
+	if taskShortID == "" {
+		return ExecutionTargetWorktreeInspection{}, errors.New("task short id is required")
+	}
+	if resolvedCommit == "" {
+		return ExecutionTargetWorktreeInspection{}, errors.New("resolved commit is required")
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		return ExecutionTargetWorktreeInspection{}, err
+	}
+	release, err := s.AcquireRepositoryMutationLock(ctx, workspaceRoot)
+	if err != nil {
+		return ExecutionTargetWorktreeInspection{}, err
+	}
+	defer release()
+	entries, err := s.git.List(ctx, workspaceRoot)
+	if err != nil {
+		return ExecutionTargetWorktreeInspection{}, err
+	}
+	branchExists, err := s.git.BranchExists(ctx, workspaceRoot, taskShortID)
+	if err != nil {
+		return ExecutionTargetWorktreeInspection{}, err
+	}
+	rootExists := false
+	if _, err := os.Stat(canonicalWorktreeRoot); err == nil {
+		rootExists = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return ExecutionTargetWorktreeInspection{}, err
+	}
+	for _, entry := range entries {
+		if entry.Root != canonicalWorktreeRoot {
+			continue
+		}
+		if branchExists &&
+			entry.BranchRef == "refs/heads/"+taskShortID &&
+			entry.HeadOID == resolvedCommit {
+			return ExecutionTargetWorktreeInspection{
+				Kind:       ExecutionTargetWorktreeInspectionExact,
+				BranchName: taskShortID,
+			}, nil
+		}
+		return ExecutionTargetWorktreeInspection{Kind: ExecutionTargetWorktreeInspectionAmbiguous}, nil
+	}
+	if !branchExists && !rootExists {
+		return ExecutionTargetWorktreeInspection{Kind: ExecutionTargetWorktreeInspectionNoSideEffects}, nil
+	}
+	return ExecutionTargetWorktreeInspection{Kind: ExecutionTargetWorktreeInspectionAmbiguous}, nil
 }
 
 // ProvisionExecutionTargetWorktree creates the task-derived branch from the
