@@ -75,7 +75,9 @@ func testTaskListRunStatusFromCardStatus(status serverapi.WorkflowTaskStatus) st
 		return "done"
 	case "canceled":
 		return "canceled"
-	case "running", "interrupted", "waiting_question", "waiting_approval":
+	case "interrupted":
+		return "interrupted"
+	case "running", "waiting_question", "waiting_approval":
 		return "running"
 	default:
 		return "open"

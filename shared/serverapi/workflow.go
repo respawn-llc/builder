@@ -1145,10 +1145,11 @@ type WorkflowBoardRequest struct {
 type WorkflowTaskRunStatus string
 
 const (
-	WorkflowTaskRunStatusOpen     WorkflowTaskRunStatus = "open"
-	WorkflowTaskRunStatusRunning  WorkflowTaskRunStatus = "running"
-	WorkflowTaskRunStatusDone     WorkflowTaskRunStatus = "done"
-	WorkflowTaskRunStatusCanceled WorkflowTaskRunStatus = "canceled"
+	WorkflowTaskRunStatusOpen        WorkflowTaskRunStatus = "open"
+	WorkflowTaskRunStatusRunning     WorkflowTaskRunStatus = "running"
+	WorkflowTaskRunStatusInterrupted WorkflowTaskRunStatus = "interrupted"
+	WorkflowTaskRunStatusDone        WorkflowTaskRunStatus = "done"
+	WorkflowTaskRunStatusCanceled    WorkflowTaskRunStatus = "canceled"
 )
 
 type WorkflowTaskListSortField string
@@ -2362,9 +2363,9 @@ func (r WorkflowTaskListRequest) Validate() error {
 	}
 	for index, status := range r.RunStatuses {
 		switch status {
-		case WorkflowTaskRunStatusOpen, WorkflowTaskRunStatusRunning, WorkflowTaskRunStatusDone, WorkflowTaskRunStatusCanceled:
+		case WorkflowTaskRunStatusOpen, WorkflowTaskRunStatusRunning, WorkflowTaskRunStatusInterrupted, WorkflowTaskRunStatusDone, WorkflowTaskRunStatusCanceled:
 		default:
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("run_statuses[%d]", index), "run_status must be open, running, done, or canceled")
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("run_statuses[%d]", index), "run_status must be open, running, interrupted, done, or canceled")
 		}
 	}
 	seenSortFields := map[WorkflowTaskListSortField]bool{}

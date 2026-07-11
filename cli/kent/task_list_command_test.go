@@ -30,7 +30,7 @@ func TestTaskListParsesStructuredFiltersAndSort(t *testing.T) {
 		"--project", "project-1",
 		"--status", "backlog,recon",
 		"--column", "plan",
-		"--run-status", "open,running",
+		"--run-status", "open,running,interrupted",
 		"--sort", "created_at:desc",
 		"--sort", "run_count:asc",
 	)
@@ -44,7 +44,7 @@ func TestTaskListParsesStructuredFiltersAndSort(t *testing.T) {
 	if !reflect.DeepEqual(req.StatusKeys, []string{"backlog", "recon", "plan"}) {
 		t.Fatalf("status keys = %+v", req.StatusKeys)
 	}
-	if !reflect.DeepEqual(req.RunStatuses, []serverapi.WorkflowTaskRunStatus{serverapi.WorkflowTaskRunStatusOpen, serverapi.WorkflowTaskRunStatusRunning}) {
+	if !reflect.DeepEqual(req.RunStatuses, []serverapi.WorkflowTaskRunStatus{serverapi.WorkflowTaskRunStatusOpen, serverapi.WorkflowTaskRunStatusRunning, serverapi.WorkflowTaskRunStatusInterrupted}) {
 		t.Fatalf("run statuses = %+v", req.RunStatuses)
 	}
 	wantSort := []serverapi.WorkflowTaskListSort{

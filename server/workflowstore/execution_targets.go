@@ -485,11 +485,21 @@ func (s *Store) FenceExecutionTargetRecovery(ctx context.Context, limit int) ([]
 
 // ListQueuedExecutionTargetRecoveries returns one bounded page of targets
 // whose durable recovery claim is awaiting a recovery worker.
-func (s *Store) ListQueuedExecutionTargetRecoveries(ctx context.Context, limit int) ([]workflow.ExecutionTarget, error) {
+func (s *Store) ListQueuedExecutionTargetRecoveries(ctx context.Context, afterTaskID *workflow.TaskID, limit int) ([]workflow.ExecutionTarget, error) {
 	if limit <= 0 {
 		return nil, errors.New("queued execution target recovery limit must be positive")
 	}
-	rows, err := s.queries.ListQueuedExecutionTargetRecoveries(ctx, int64(limit))
+	var after sql.NullString
+	if afterTaskID != nil {
+		if strings.TrimSpace(string(*afterTaskID)) == "" {
+			return nil, errors.New("queued execution target recovery cursor task id is required")
+		}
+		after = sql.NullString{String: string(*afterTaskID), Valid: true}
+	}
+	rows, err := s.queries.ListQueuedExecutionTargetRecoveries(ctx, sqlitegen.ListQueuedExecutionTargetRecoveriesParams{
+		AfterTaskID: after,
+		Limit:       int64(limit),
+	})
 	if err != nil {
 		return nil, err
 	}

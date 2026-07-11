@@ -6,7 +6,7 @@ Usage of kent task:
   kent task approve <transition-id> [--execution-target <none|head|default_branch|custom_ref> [--custom-ref <ref>]]
   kent task move <short-id-or-task-id> <target-node-id> [--output name=value] [--execution-target <none|head|default_branch|custom_ref> [--custom-ref <ref>]]
   kent task complete [--transition <id>] [--commentary <text>] [--param name=value] [--<parameter> <value>] [--json <payload>|--json-file <path>] [--run <run-id>|--session <session-id>|--task <task-id-or-short-id> [--project <project>]] [--force]
-  kent task list [--project <project>] [--status <key>[,<key>...]] [--column <key>[,<key>...]] [--run-status <open|running|done|canceled>[,...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
+  kent task list [--project <project>] [--status <key>[,<key>...]] [--column <key>[,<key>...]] [--run-status <open|running|interrupted|done|canceled>[,...]] [--sort <field:asc|desc>[,...]] [--page-size <n>] [--page-token <token>] [--json]
   kent task show <short-id-or-task-id> [--json]
   kent task cancel <short-id-or-task-id> [--reason <text>]
   kent task delete <short-id-or-task-id>

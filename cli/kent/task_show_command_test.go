@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
+	"core/server/workflow"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -23,6 +25,91 @@ func TestTaskShowHelpIncludesJSONFlag(t *testing.T) {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("task show --help stderr = %q, want %q", stderr, want)
 		}
+	}
+}
+
+func TestTaskShowJSONIncludesLockedExecutionTarget(t *testing.T) {
+	cfg, binding, remote := newWorkflowCommandLoopback(t)
+	restore := replaceWorkflowCommandRemoteOpener(t, cfg, remote)
+	defer restore()
+
+	workflowID := createRunnableWorkflowForCommandTest(t, "Task target JSON")
+	if _, linkErr, code := runWorkflowRootCommand("workflow", "link", binding.ProjectID, workflowID, "--default"); code != 0 {
+		t.Fatalf("workflow link exit=%d stderr=%q", code, linkErr)
+	}
+
+	createTask := func(title string) serverapi.WorkflowTaskDetail {
+		t.Helper()
+		taskOut, taskErr, code := runWorkflowRootCommand("task", "create", "--title", title, "--body", "Body", "--workflow", workflowID, "--project", binding.ProjectID)
+		if code != 0 {
+			t.Fatalf("task create exit=%d stderr=%q", code, taskErr)
+		}
+		shortID := taskDetailHeadingShortID(t, taskOut)
+		resp, err := remote.GetWorkflowTask(context.Background(), serverapi.WorkflowTaskGetRequest{ProjectID: binding.ProjectID, ShortID: shortID})
+		if err != nil {
+			t.Fatalf("GetWorkflowTask %s: %v", shortID, err)
+		}
+		return resp.Task
+	}
+
+	noneTask := createTask("None target")
+	if err := remote.store.SaveTaskExecutionTarget(context.Background(), workflow.ExecutionTarget{
+		TaskID:              workflow.TaskID(noneTask.Summary.ID),
+		Policy:              workflow.ExecutionPolicyNone,
+		State:               workflow.ExecutionTargetStateLocked,
+		SetupState:          workflow.ExecutionTargetSetupNotApplicable,
+		RecoveryDisposition: workflow.ExecutionTargetRecoveryAvailable,
+	}); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget none: %v", err)
+	}
+	noneJSON, noneErr, code := runWorkflowRootCommand("task", "show", "--project", binding.ProjectID, "--json", noneTask.Summary.ShortID)
+	if code != 0 {
+		t.Fatalf("task show none exit=%d stderr=%q", code, noneErr)
+	}
+	var noneOutput taskShowOutput
+	if err := json.Unmarshal([]byte(noneJSON), &noneOutput); err != nil {
+		t.Fatalf("decode none task JSON: %v", err)
+	}
+	if noneOutput.ExecutionTarget == nil || noneOutput.ExecutionTarget.Policy != serverapi.WorkflowExecutionPolicyNone || noneOutput.ManagedWorktree != nil {
+		t.Fatalf("none task JSON = %+v, want locked none target without worktree", noneOutput)
+	}
+
+	managedTask := createTask("Managed target")
+	customRef := "refs/tags/v1.2.3"
+	provisioningGeneration := "provisioning-1"
+	if err := remote.store.SaveTaskExecutionTarget(context.Background(), workflow.ExecutionTarget{
+		TaskID:             workflow.TaskID(managedTask.Summary.ID),
+		Policy:             workflow.ExecutionPolicyCustomRef,
+		RequestedCustomRef: &customRef,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: "deadbeef",
+		},
+		State:                       workflow.ExecutionTargetStateLocked,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupSucceeded,
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+	}); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget managed: %v", err)
+	}
+	managedJSON, managedErr, code := runWorkflowRootCommand("task", "show", "--project", binding.ProjectID, "--json", managedTask.Summary.ShortID)
+	if code != 0 {
+		t.Fatalf("task show managed exit=%d stderr=%q", code, managedErr)
+	}
+	var managedOutput taskShowOutput
+	if err := json.Unmarshal([]byte(managedJSON), &managedOutput); err != nil {
+		t.Fatalf("decode managed task JSON: %v", err)
+	}
+	if managedOutput.ExecutionTarget == nil ||
+		managedOutput.ExecutionTarget.Policy != serverapi.WorkflowExecutionPolicyCustomRef ||
+		managedOutput.ExecutionTarget.CustomRef == nil ||
+		*managedOutput.ExecutionTarget.CustomRef != customRef ||
+		managedOutput.ExecutionTarget.Source == nil ||
+		managedOutput.ExecutionTarget.Source.Kind != serverapi.WorkflowTaskExecutionTargetSourceDetachedCommit ||
+		managedOutput.ExecutionTarget.Source.Commit == nil ||
+		*managedOutput.ExecutionTarget.Source.Commit != "deadbeef" {
+		t.Fatalf("managed task JSON = %+v, want locked custom target facts", managedOutput)
 	}
 }
 

@@ -5349,12 +5349,18 @@ SELECT
     intended_worktree_root
 FROM task_execution_targets
 WHERE active_claim_phase = 'recovery_queued'
+  AND (?1 IS NULL OR task_id > ?1)
 ORDER BY task_id ASC
-LIMIT ?1
+LIMIT ?2
 `
 
-func (q *Queries) ListQueuedExecutionTargetRecoveries(ctx context.Context, limit int64) ([]TaskExecutionTarget, error) {
-	rows, err := q.db.QueryContext(ctx, listQueuedExecutionTargetRecoveries, limit)
+type ListQueuedExecutionTargetRecoveriesParams struct {
+	AfterTaskID interface{}
+	Limit       int64
+}
+
+func (q *Queries) ListQueuedExecutionTargetRecoveries(ctx context.Context, arg ListQueuedExecutionTargetRecoveriesParams) ([]TaskExecutionTarget, error) {
+	rows, err := q.db.QueryContext(ctx, listQueuedExecutionTargetRecoveries, arg.AfterTaskID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -8015,14 +8021,22 @@ SELECT
     CASE
         WHEN t.canceled_at_unix_ms != 0 THEN 'canceled'
         WHEN EXISTS (SELECT 1 FROM effective_placements ep_done WHERE ep_done.task_id = t.id AND ep_done.node_kind = 'terminal') THEN 'done'
-        WHEN EXISTS (SELECT 1 FROM effective_placements ep_waiting WHERE ep_waiting.task_id = t.id AND ep_waiting.state = 'waiting_approval')
-          OR EXISTS (
+        WHEN EXISTS (SELECT 1 FROM effective_placements ep_waiting WHERE ep_waiting.task_id = t.id AND ep_waiting.state = 'waiting_approval') THEN 'running'
+        WHEN EXISTS (
               SELECT 1
               FROM task_run_records r
               JOIN effective_placements ep_run ON ep_run.placement_id = r.placement_id
               WHERE ep_run.task_id = t.id
                 AND r.completed_at_unix_ms = 0
-                AND (r.started_at_unix_ms != 0 OR r.interrupted_at_unix_ms != 0 OR trim(r.waiting_ask_id) != '')
+                AND r.interrupted_at_unix_ms != 0
+          ) THEN 'interrupted'
+        WHEN EXISTS (
+              SELECT 1
+              FROM task_run_records r
+              JOIN effective_placements ep_run ON ep_run.placement_id = r.placement_id
+              WHERE ep_run.task_id = t.id
+                AND r.completed_at_unix_ms = 0
+                AND (r.started_at_unix_ms != 0 OR trim(r.waiting_ask_id) != '')
           ) THEN 'running'
         ELSE 'open'
     END AS run_status,

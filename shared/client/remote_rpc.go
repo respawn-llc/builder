@@ -61,6 +61,34 @@ type remoteDialPlan struct {
 	endpoints []rpcwire.Endpoint
 }
 
+// RemoteConnectionError reports that none of the configured server endpoints
+// accepted a connection. It retains the transport error for structured callers.
+type RemoteConnectionError struct {
+	Endpoint rpcwire.Endpoint
+	Cause    error
+}
+
+func (e *RemoteConnectionError) Error() string {
+	if e == nil {
+		return "Kent server is unavailable"
+	}
+	address := strings.TrimSpace(e.Endpoint.Address)
+	if address == "" {
+		address = "the configured endpoint"
+	}
+	if e.Cause == nil {
+		return fmt.Sprintf("Kent server is unavailable at %s; start or reconnect the server and retry", address)
+	}
+	return fmt.Sprintf("Kent server is unavailable at %s; start or reconnect the server and retry: %v", address, e.Cause)
+}
+
+func (e *RemoteConnectionError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 type remoteControlConn struct {
 	conn      rpcwire.Conn
 	pendingMu sync.Mutex
@@ -167,7 +195,7 @@ func (p remoteDialPlan) dial(ctx context.Context, transport rpcwire.ClientTransp
 	if dialErr == nil {
 		dialErr = errors.New("remote rpc endpoint is required")
 	}
-	return nil, dialErr
+	return nil, &RemoteConnectionError{Endpoint: p.endpoints[len(p.endpoints)-1], Cause: dialErr}
 }
 
 func endpointDialContext(ctx context.Context, endpoint rpcwire.Endpoint, hasFallback bool) (context.Context, context.CancelFunc) {

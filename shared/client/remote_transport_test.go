@@ -50,6 +50,40 @@ func TestDialConfiguredRemotePrefersLocalUnixSocket(t *testing.T) {
 	requireNoHandlerError(t, handlerErrs)
 }
 
+func TestDialConfiguredRemoteReturnsTypedConnectionError(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+	host, portRaw, err := net.SplitHostPort(address)
+	if err != nil {
+		t.Fatalf("split address: %v", err)
+	}
+	port, err := strconv.Atoi(portRaw)
+	if err != nil {
+		t.Fatalf("parse port: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = DialConfiguredRemote(ctx, config.App{PersistenceRoot: t.TempDir(), Settings: config.Settings{ServerHost: host, ServerPort: port}})
+	var connectionErr *RemoteConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("DialConfiguredRemote error = %v, want RemoteConnectionError", err)
+	}
+	if connectionErr.Endpoint.Address != address {
+		t.Fatalf("connection endpoint = %+v, want %q", connectionErr.Endpoint, address)
+	}
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		t.Fatalf("connection error = %v, want wrapped transport operation error", err)
+	}
+}
+
 func TestRemoteReleaseSessionRuntimePropagatesClosePolicy(t *testing.T) {
 	handlerErrs := make(chan error, 8)
 	releaseRequests := make(chan serverapi.SessionRuntimeReleaseRequest, 1)

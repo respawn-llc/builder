@@ -556,7 +556,7 @@ func TestWorkflowTaskListRequestValidation(t *testing.T) {
 		PageSize:    WorkflowTaskListMaxPageSize,
 		PageToken:   "token",
 		StatusKeys:  []string{"backlog", "plan"},
-		RunStatuses: []WorkflowTaskRunStatus{WorkflowTaskRunStatusOpen, WorkflowTaskRunStatusRunning, WorkflowTaskRunStatusDone, WorkflowTaskRunStatusCanceled},
+		RunStatuses: []WorkflowTaskRunStatus{WorkflowTaskRunStatusOpen, WorkflowTaskRunStatusRunning, WorkflowTaskRunStatusInterrupted, WorkflowTaskRunStatusDone, WorkflowTaskRunStatusCanceled},
 		Sort: []WorkflowTaskListSort{
 			{Field: WorkflowTaskListSortFieldStatus, Direction: WorkflowTaskListSortDirectionAsc},
 			{Field: WorkflowTaskListSortFieldUpdated, Direction: WorkflowTaskListSortDirectionDesc},

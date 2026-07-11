@@ -13,6 +13,7 @@ import (
 	"core/prompts"
 	"core/shared/client"
 	"core/shared/config"
+	"core/shared/rpcwire"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
@@ -31,6 +32,28 @@ func TestTaskCreateAcceptsSourceWorkspace(t *testing.T) {
 	}
 	if resp.Task.Summary.SourceWorkspaceID != binding.WorkspaceID {
 		t.Fatalf("created task source workspace = %q, want %q", resp.Task.Summary.SourceWorkspaceID, binding.WorkspaceID)
+	}
+}
+
+func TestTaskStartReportsOperatorActionableConnectionFailure(t *testing.T) {
+	previous := workflowCommandRemoteOpener
+	workflowCommandRemoteOpener = func(context.Context, string) (config.App, workflowCommandRemote, error) {
+		return config.App{}, nil, &client.RemoteConnectionError{
+			Endpoint: rpcwire.Endpoint{Transport: rpcwire.TransportTCP, Address: "127.0.0.1:54338"},
+			Cause:    errors.New("connection refused"),
+		}
+	}
+	defer func() { workflowCommandRemoteOpener = previous }()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := taskStartSubcommand([]string{"TASK-1"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("task start exit=%d stderr=%q, want connection failure", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Kent server is unavailable at 127.0.0.1:54338") ||
+		!strings.Contains(stderr.String(), "start or reconnect the server and retry") ||
+		!strings.Contains(stderr.String(), "connection refused") {
+		t.Fatalf("task start stderr=%q, want actionable connection failure with cause", stderr.String())
 	}
 }
 

@@ -392,7 +392,6 @@ func TestListTasksRunStatusAndRunCountUseCurrentPlacements(t *testing.T) {
 		if err := workflowStore.InterruptRunGeneration(ctx, interruptedRunID, 1, "manual", "{}"); err != nil {
 			t.Fatalf("InterruptRunGeneration: %v", err)
 		}
-		wantRunningIDs[string(interruptedTask.ID)] = true
 
 		questionTask, questionRunID := createWorkflowViewTaskWithClaimedRun(t, ctx, workflowStore, binding.ProjectID, workflowID, "Question")
 		if err := workflowStore.SetRunWaitingAsk(ctx, questionRunID, 1, "ask-1"); err != nil {
@@ -432,6 +431,13 @@ func TestListTasksRunStatusAndRunCountUseCurrentPlacements(t *testing.T) {
 		}
 		if !reflect.DeepEqual(taskListIDs(resp.Tasks), wantRunningIDs) {
 			t.Fatalf("running ids = %+v, want %+v; tasks=%+v", taskListIDs(resp.Tasks), wantRunningIDs, resp.Tasks)
+		}
+		interruptedResp, err := view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{ProjectID: binding.ProjectID, RunStatuses: []serverapi.WorkflowTaskRunStatus{serverapi.WorkflowTaskRunStatusInterrupted}}, workflow.StaticRoleResolver{"coder": true})
+		if err != nil {
+			t.Fatalf("ListTasks interrupted: %v", err)
+		}
+		if !reflect.DeepEqual(taskListIDs(interruptedResp.Tasks), taskListIDSet{string(interruptedTask.ID): true}) {
+			t.Fatalf("interrupted ids = %+v, want interrupted task %s", taskListIDs(interruptedResp.Tasks), interruptedTask.ID)
 		}
 	})
 

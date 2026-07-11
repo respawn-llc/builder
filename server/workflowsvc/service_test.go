@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -1167,15 +1168,13 @@ func TestExecutionTargetRecoveryCoordinatorContinuesAfterTargetLocalFailure(t *t
 	if err != nil {
 		t.Fatalf("StartExecutionTargetRecovery: %v", err)
 	}
-	defer func() {
-		if closeErr := coordinator.Close(); closeErr != nil {
-			t.Fatalf("ExecutionTargetRecoveryCoordinator.Close: %v", closeErr)
-		}
-	}()
 	waitForWorkflowServiceCondition(t, func() bool {
 		recovered, getErr := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(recoveredTask.Task.ID))
 		return getErr == nil && recovered == nil
 	})
+	if closeErr := coordinator.Close(); closeErr != nil {
+		t.Fatalf("ExecutionTargetRecoveryCoordinator.Close: %v", closeErr)
+	}
 	failed, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(failedTask.Task.ID))
 	if err != nil {
 		t.Fatalf("GetTaskExecutionTarget failed target: %v", err)
@@ -1184,6 +1183,49 @@ func TestExecutionTargetRecoveryCoordinatorContinuesAfterTargetLocalFailure(t *t
 		failed.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued {
 		t.Fatalf("failed target = %+v, want requeued target after local failure", failed)
 	}
+}
+
+func TestExecutionTargetRecoveryCoordinatorPagesPastTwoHundredRecoverableFailures(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+
+	tasks := make([]serverapi.WorkflowTaskCreateResponse, 0, executionTargetRecoveryFencePageSize+1)
+	for range executionTargetRecoveryFencePageSize + 1 {
+		tasks = append(tasks, createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID))
+	}
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].Task.ID < tasks[j].Task.ID })
+	for _, task := range tasks[:executionTargetRecoveryFencePageSize] {
+		saveQueuedLockedExecutionTargetRecovery(t, ctx, service, binding, task)
+	}
+	healthyTask := tasks[executionTargetRecoveryFencePageSize]
+	saveQueuedInitialRecoveryTarget(t, ctx, service, healthyTask.Task.ID)
+
+	service.targetWorktrees = &recordingTaskExecutionTargetWorktreeMaterializer{
+		provisionErr: errors.New("transient recovery failure"),
+		inspect: func(_ context.Context, req worktree.InspectExecutionTargetWorktreeRequest) (worktree.ExecutionTargetWorktreeInspection, error) {
+			if req.TaskShortID == healthyTask.Task.ShortID {
+				return worktree.ExecutionTargetWorktreeInspection{Kind: worktree.ExecutionTargetWorktreeInspectionNoSideEffects}, nil
+			}
+			return worktree.ExecutionTargetWorktreeInspection{
+				Kind:       worktree.ExecutionTargetWorktreeInspectionExactMissingRoot,
+				BranchName: req.TaskShortID,
+			}, nil
+		},
+	}
+	coordinator, err := service.StartExecutionTargetRecovery(ctx)
+	if err != nil {
+		t.Fatalf("StartExecutionTargetRecovery: %v", err)
+	}
+	defer func() {
+		if closeErr := coordinator.Close(); closeErr != nil {
+			t.Fatalf("ExecutionTargetRecoveryCoordinator.Close: %v", closeErr)
+		}
+	}()
+	waitForWorkflowServiceCondition(t, func() bool {
+		target, getErr := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(healthyTask.Task.ID))
+		return getErr == nil && target == nil
+	})
 }
 
 func TestExecutionTargetRecoveryCoordinatorDeletesUnprovisionedInitialTarget(t *testing.T) {
@@ -4875,6 +4917,51 @@ func saveQueuedInitialRecoveryTarget(t *testing.T, ctx context.Context, service 
 	}
 	if err := service.store.SaveTaskExecutionTarget(ctx, target); err != nil {
 		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+}
+
+func saveQueuedLockedExecutionTargetRecovery(t *testing.T, ctx context.Context, service *Service, binding metadata.Binding, task serverapi.WorkflowTaskCreateResponse) {
+	t.Helper()
+	worktreeRoot := filepath.Join(t.TempDir(), task.Task.ShortID)
+	branchTip := "queued-recovery-commit"
+	provisioningGeneration := "queued-recovery-provisioning-" + task.Task.ID
+	queuedClaim := workflow.ExecutionTargetClaim{
+		Generation: "queued-recovery-claim-" + task.Task.ID,
+		Phase:      workflow.ExecutionTargetClaimRecoveryQueued,
+	}
+	target := workflow.ExecutionTarget{
+		TaskID: workflow.TaskID(task.Task.ID),
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:     workflow.ExecutionTargetSourceNamedRef,
+			NamedRef: stringPtr("refs/heads/main"),
+			Commit:   branchTip,
+		},
+		State:                       workflow.ExecutionTargetStateLocked,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupPending,
+		ActiveClaim:                 &queuedClaim,
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+		ExactBranchObservation:      &branchTip,
+		LinkedWorktreeOwnership: &workflow.ExecutionTargetLinkedWorktreeOwnership{
+			CommonDir:  "/test/common-dir",
+			AdminEntry: "worktrees/" + task.Task.ShortID,
+			GitDir:     filepath.Join(worktreeRoot, ".git"),
+			HeadRef:    "refs/heads/" + task.Task.ShortID,
+		},
+	}
+	if err := service.store.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget %s: %v", task.Task.ID, err)
+	}
+	if _, err := service.store.AttachManagedExecutionTargetWorktree(ctx, workflowstore.AttachManagedExecutionTargetWorktreeRequest{
+		Target:        target,
+		ExpectedClaim: queuedClaim,
+		WorkspaceID:   binding.WorkspaceID,
+		WorktreeRoot:  worktreeRoot,
+		CreatedBranch: true,
+	}); err != nil {
+		t.Fatalf("AttachManagedExecutionTargetWorktree %s: %v", task.Task.ID, err)
 	}
 }
 

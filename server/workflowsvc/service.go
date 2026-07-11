@@ -124,7 +124,7 @@ type executionTargetRecoveryCoordinator struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 
-	deferred map[workflow.TaskID]struct{}
+	cursor   *workflow.TaskID
 	mu       sync.Mutex
 	closeErr error
 }
@@ -243,11 +243,10 @@ func (s *Service) StartExecutionTargetRecovery(ctx context.Context) (*executionT
 	}
 	recoveryContext, cancel := context.WithCancel(ctx)
 	coordinator := &executionTargetRecoveryCoordinator{
-		service:  s,
-		ctx:      recoveryContext,
-		cancel:   cancel,
-		done:     make(chan struct{}),
-		deferred: map[workflow.TaskID]struct{}{},
+		service: s,
+		ctx:     recoveryContext,
+		cancel:  cancel,
+		done:    make(chan struct{}),
 	}
 	go coordinator.run()
 	return coordinator, nil
@@ -270,7 +269,7 @@ func (c *executionTargetRecoveryCoordinator) run() {
 		if err := c.ctx.Err(); err != nil {
 			return
 		}
-		targets, err := c.service.store.ListQueuedExecutionTargetRecoveries(c.ctx, executionTargetRecoveryFencePageSize)
+		targets, err := c.service.store.ListQueuedExecutionTargetRecoveries(c.ctx, c.cursor, executionTargetRecoveryFencePageSize)
 		if err != nil {
 			if c.ctx.Err() != nil {
 				return
@@ -278,8 +277,10 @@ func (c *executionTargetRecoveryCoordinator) run() {
 			c.recordCloseError(fmt.Errorf("list queued execution target recoveries: %w", err))
 			return
 		}
-		target, found := c.nextQueuedTarget(targets)
-		if !found {
+		if len(targets) == 0 {
+			if c.cursor != nil {
+				c.cursor = nil
+			}
 			timer := time.NewTimer(100 * time.Millisecond)
 			select {
 			case <-c.ctx.Done():
@@ -289,9 +290,11 @@ func (c *executionTargetRecoveryCoordinator) run() {
 				return
 			case <-timer.C:
 			}
-			clear(c.deferred)
 			continue
 		}
+		target := targets[0]
+		cursor := target.TaskID
+		c.cursor = &cursor
 		if target.ActiveClaim == nil {
 			c.recordCloseError(errors.New("queued execution target recovery is missing its claim"))
 			return
@@ -319,19 +322,9 @@ func (c *executionTargetRecoveryCoordinator) run() {
 			if errors.Is(err, workflowstore.ErrTaskExecutionTargetClaimChanged) {
 				continue
 			}
-			c.deferred[claimed.TaskID] = struct{}{}
 			continue
 		}
 	}
-}
-
-func (c *executionTargetRecoveryCoordinator) nextQueuedTarget(targets []workflow.ExecutionTarget) (workflow.ExecutionTarget, bool) {
-	for _, target := range targets {
-		if _, deferred := c.deferred[target.TaskID]; !deferred {
-			return target, true
-		}
-	}
-	return workflow.ExecutionTarget{}, false
 }
 
 func (c *executionTargetRecoveryCoordinator) recover(target workflow.ExecutionTarget, claim workflow.ExecutionTargetClaim) error {

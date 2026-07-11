@@ -406,7 +406,7 @@ func TestStoreClaimsQueuedExecutionTargetRecoveryWithGenerationFence(t *testing.
 		t.Fatalf("SaveTaskExecutionTarget: %v", err)
 	}
 
-	queued, err := store.ListQueuedExecutionTargetRecoveries(ctx, 1)
+	queued, err := store.ListQueuedExecutionTargetRecoveries(ctx, nil, 1)
 	if err != nil {
 		t.Fatalf("ListQueuedExecutionTargetRecoveries: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestStoreClaimsQueuedExecutionTargetRecoveryWithGenerationFence(t *testing.
 	if _, err := store.ClaimQueuedExecutionTargetRecovery(ctx, task.ID, queuedClaim); !errors.Is(err, ErrTaskExecutionTargetClaimChanged) {
 		t.Fatalf("stale ClaimQueuedExecutionTargetRecovery error = %v, want %v", err, ErrTaskExecutionTargetClaimChanged)
 	}
-	queued, err = store.ListQueuedExecutionTargetRecoveries(ctx, 1)
+	queued, err = store.ListQueuedExecutionTargetRecoveries(ctx, nil, 1)
 	if err != nil {
 		t.Fatalf("ListQueuedExecutionTargetRecoveries after claim: %v", err)
 	}

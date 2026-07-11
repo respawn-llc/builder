@@ -44,7 +44,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 	var sortFlags repeatedStringFlag
 	fs.Var(&statusFlags, "status", "workflow status key filter; comma-separated or repeatable")
 	fs.Var(&columnFlags, "column", "alias for --status")
-	fs.Var(&runStatusFlags, "run-status", "run status filter: open|running|done|canceled; comma-separated or repeatable")
+	fs.Var(&runStatusFlags, "run-status", "run status filter: open|running|interrupted|done|canceled; comma-separated or repeatable")
 	fs.Var(&sortFlags, "sort", "sort selectors such as status:asc,updated:desc")
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
 	if ok, exitCode := parseCommandFlags(fs, args); !ok {
@@ -171,10 +171,10 @@ func parseTaskListRunStatuses(raw []string) ([]serverapi.WorkflowTaskRunStatus, 
 	for _, value := range values {
 		status := serverapi.WorkflowTaskRunStatus(value)
 		switch status {
-		case serverapi.WorkflowTaskRunStatusOpen, serverapi.WorkflowTaskRunStatusRunning, serverapi.WorkflowTaskRunStatusDone, serverapi.WorkflowTaskRunStatusCanceled:
+		case serverapi.WorkflowTaskRunStatusOpen, serverapi.WorkflowTaskRunStatusRunning, serverapi.WorkflowTaskRunStatusInterrupted, serverapi.WorkflowTaskRunStatusDone, serverapi.WorkflowTaskRunStatusCanceled:
 			statuses = append(statuses, status)
 		default:
-			return nil, fmt.Errorf("--run-status must be open, running, done, or canceled")
+			return nil, fmt.Errorf("--run-status must be open, running, interrupted, done, or canceled")
 		}
 	}
 	return statuses, nil

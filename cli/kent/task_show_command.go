@@ -14,20 +14,21 @@ import (
 )
 
 type taskShowOutput struct {
-	Summary         serverapi.WorkflowTaskSummary     `json:"summary"`
-	Body            string                            `json:"body"`
-	SourceURL       string                            `json:"source_url,omitempty"`
-	Project         serverapi.ProjectBoardProject     `json:"project"`
-	Workflow        serverapi.WorkflowPickerItem      `json:"workflow"`
-	SourceWorkspace serverapi.ProjectWorkspaceSummary `json:"source_workspace"`
-	ManagedWorktree *serverapi.WorktreeView           `json:"managed_worktree,omitempty"`
-	Status          serverapi.WorkflowTaskStatus      `json:"status"`
-	Actions         serverapi.WorkflowTaskActions     `json:"actions"`
-	AttentionCount  int                               `json:"attention_count"`
-	PlacementCount  int                               `json:"placement_count"`
-	RunCount        int                               `json:"run_count"`
-	TransitionCount int                               `json:"transition_count"`
-	CommentCount    int                               `json:"comment_count"`
+	Summary         serverapi.WorkflowTaskSummary          `json:"summary"`
+	Body            string                                 `json:"body"`
+	SourceURL       string                                 `json:"source_url,omitempty"`
+	Project         serverapi.ProjectBoardProject          `json:"project"`
+	Workflow        serverapi.WorkflowPickerItem           `json:"workflow"`
+	SourceWorkspace serverapi.ProjectWorkspaceSummary      `json:"source_workspace"`
+	ManagedWorktree *serverapi.WorktreeView                `json:"managed_worktree,omitempty"`
+	ExecutionTarget *serverapi.WorkflowTaskExecutionTarget `json:"execution_target,omitempty"`
+	Status          serverapi.WorkflowTaskStatus           `json:"status"`
+	Actions         serverapi.WorkflowTaskActions          `json:"actions"`
+	AttentionCount  int                                    `json:"attention_count"`
+	PlacementCount  int                                    `json:"placement_count"`
+	RunCount        int                                    `json:"run_count"`
+	TransitionCount int                                    `json:"transition_count"`
+	CommentCount    int                                    `json:"comment_count"`
 }
 
 func taskShowSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -77,6 +78,7 @@ func taskShowOutputFromDetail(task serverapi.WorkflowTaskDetail) taskShowOutput 
 		Workflow:        task.Workflow,
 		SourceWorkspace: task.SourceWorkspace,
 		ManagedWorktree: task.ManagedWorktree,
+		ExecutionTarget: task.ExecutionTarget,
 		Status:          task.Status,
 		Actions:         task.Actions,
 		AttentionCount:  len(task.Attention),
