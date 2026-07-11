@@ -26,6 +26,7 @@ import (
 const fixedWait = 500 * time.Millisecond
 const readinessWait = 2 * time.Second
 const cleanupWait = 10 * time.Second
+const preflightWait = cleanupWait
 
 var directHTTPClient = &http.Client{
 	Transport: &http.Transport{Proxy: nil},
@@ -242,7 +243,7 @@ func (s *ServerHandle) ForceKill() error {
 }
 
 func startServer(binary string, root string, host string, port int, stubURL string) (*ServerHandle, error) {
-	preflightContext, cancelPreflight := context.WithTimeout(context.Background(), readinessWait)
+	preflightContext, cancelPreflight := context.WithTimeout(context.Background(), preflightWait)
 	preflightOutput, preflightErr := exec.CommandContext(preflightContext, binary, "--version").CombinedOutput()
 	cancelPreflight()
 	if preflightErr != nil {
