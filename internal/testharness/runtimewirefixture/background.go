@@ -3,6 +3,8 @@ package runtimewirefixture
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	shelltool "core/server/tools/shell"
@@ -13,6 +15,14 @@ func BackgroundCompletionEvent(id string, ownerSessionID string, root string) sh
 }
 
 func BackgroundCompletionEventWithExit(id string, ownerSessionID string, root string, exitCode int) shelltool.Event {
+	return BackgroundCompletionEventWithOutput(id, ownerSessionID, root, "done", exitCode)
+}
+
+func BackgroundCompletionEventWithOutput(id string, ownerSessionID string, root string, output string, exitCode int) shelltool.Event {
+	sourcePath := filepath.Join(root, id+".fixture-output")
+	if err := os.WriteFile(sourcePath, []byte(output), 0o644); err != nil {
+		panic(fmt.Sprintf("write background shell fixture output: %v", err))
+	}
 	manager, err := shelltool.NewManager(shelltool.WithMinimumExecToBgTime(time.Millisecond))
 	if err != nil {
 		panic(fmt.Sprintf("create background shell manager fixture: %v", err))
@@ -26,7 +36,7 @@ func BackgroundCompletionEventWithExit(id string, ownerSessionID string, root st
 		}
 	})
 	result, err := manager.Start(context.Background(), shelltool.ExecRequest{
-		Command:        []string{"/bin/sh", "-c", fmt.Sprintf("sleep 0.02; printf done; exit %d", exitCode)},
+		Command:        []string{"/bin/sh", "-c", fmt.Sprintf("sleep 0.02; cat %q; exit %d", sourcePath, exitCode)},
 		DisplayCommand: "fixture background completion",
 		OwnerSessionID: ownerSessionID,
 		Workdir:        root,

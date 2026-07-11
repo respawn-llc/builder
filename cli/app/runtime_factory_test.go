@@ -405,69 +405,46 @@ func TestBackgroundEventRouterQueuesNoticeForActiveOwnerSession(t *testing.T) {
 
 func TestBackgroundEventRouterShapesBackgroundNoticeByOutputMode(t *testing.T) {
 	tests := []struct {
-		name            string
-		mode            shelltool.BackgroundOutputMode
-		exitCode        int
-		maxChars        int
-		content         string
-		wantContains    []string
-		wantNotContains []string
+		name              string
+		mode              shelltool.BackgroundOutputMode
+		exitCode          int
+		maxChars          int
+		content           string
+		wantInlinePreview bool
+		wantTruncated     bool
 	}{
 		{
-			name:     "concise success omits output section",
-			mode:     shelltool.BackgroundOutputConcise,
-			exitCode: 0,
-			maxChars: 16,
-			content:  "alpha\nbeta\ngamma\n",
-			wantContains: []string{
-				"Output file (3 lines):",
-			},
-			wantNotContains: []string{
-				"Output:",
-				"alpha",
-			},
+			name:              "concise success suppresses inline preview",
+			mode:              shelltool.BackgroundOutputConcise,
+			exitCode:          0,
+			maxChars:          16,
+			content:           "alpha\nbeta\ngamma\n",
+			wantInlinePreview: false,
 		},
 		{
-			name:     "verbose success keeps full output",
-			mode:     shelltool.BackgroundOutputVerbose,
-			exitCode: 0,
-			maxChars: 5,
-			content:  "alpha\nbeta\ngamma\n",
-			wantContains: []string{
-				"Output:",
-				"alpha\nbeta\ngamma",
-			},
-			wantNotContains: []string{
-				"omitted",
-			},
+			name:              "verbose success keeps inline preview",
+			mode:              shelltool.BackgroundOutputVerbose,
+			exitCode:          0,
+			maxChars:          5,
+			content:           "alpha\nbeta\ngamma\n",
+			wantInlinePreview: true,
 		},
 		{
-			name:     "concise non-zero falls back to default truncation",
-			mode:     shelltool.BackgroundOutputConcise,
-			exitCode: 17,
-			maxChars: 32,
-			content:  "alpha line\n" + strings.Repeat("middle-noise-", 40) + "\nomega line\n",
-			wantContains: []string{
-				"Output:",
-				"alpha line",
-				"omega line",
-				"Omitted ",
-				"read log file for details",
-			},
+			name:              "concise non-zero uses default preview",
+			mode:              shelltool.BackgroundOutputConcise,
+			exitCode:          17,
+			maxChars:          32,
+			content:           "alpha line\n" + strings.Repeat("middle-noise-", 40) + "\nomega line\n",
+			wantInlinePreview: true,
+			wantTruncated:     true,
 		},
 		{
-			name:     "verbose non-zero keeps full output",
-			mode:     shelltool.BackgroundOutputVerbose,
-			exitCode: 17,
-			maxChars: 5,
-			content:  "alpha\nbeta\ngamma\n",
-			wantContains: []string{
-				"Output:",
-				"alpha\nbeta\ngamma",
-			},
-			wantNotContains: []string{
-				"omitted",
-			},
+			name:              "verbose non-zero keeps inline preview",
+			mode:              shelltool.BackgroundOutputVerbose,
+			exitCode:          17,
+			maxChars:          5,
+			content:           "alpha\nbeta\ngamma\n",
+			wantInlinePreview: true,
 		},
 	}
 
@@ -486,14 +463,9 @@ func TestBackgroundEventRouterShapesBackgroundNoticeByOutputMode(t *testing.T) {
 			})
 			t.Cleanup(func() { _ = eng.Close() })
 
-			logPath := filepath.Join(root, "1000.log")
-			if err := os.WriteFile(logPath, []byte(tt.content), 0o644); err != nil {
-				t.Fatalf("write log: %v", err)
-			}
-
 			router := newBackgroundEventRouter(nil, tt.maxChars, tt.mode)
 			router.SetActiveSession(store.Meta().SessionID, eng)
-			event := runtimewirefixture.BackgroundCompletionEventWithExit("1000", store.Meta().SessionID, root, tt.exitCode)
+			event := runtimewirefixture.BackgroundCompletionEventWithOutput("1000", store.Meta().SessionID, root, tt.content, tt.exitCode)
 			event.NoticeSuppressed = true
 			router.handle(event)
 
@@ -503,6 +475,12 @@ func TestBackgroundEventRouterShapesBackgroundNoticeByOutputMode(t *testing.T) {
 					evt.Background.ExitCode == nil || *evt.Background.ExitCode != tt.exitCode ||
 					evt.Background.NoticeText == "" || evt.Background.CompactText == "" {
 					t.Fatalf("background update = %+v", evt.Background)
+				}
+				if got := evt.Background.Preview != ""; got != tt.wantInlinePreview {
+					t.Fatalf("inline preview = %t, want %t", got, tt.wantInlinePreview)
+				}
+				if got := evt.Background.PreviewRemoved > 0; got != tt.wantTruncated {
+					t.Fatalf("preview truncation = %t, want %t", got, tt.wantTruncated)
 				}
 			case <-time.After(time.Second):
 				t.Fatal("timed out waiting for background update event")
