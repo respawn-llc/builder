@@ -367,6 +367,35 @@ func TestResponsesStubAcceptsCompactedSessionCacheKey(t *testing.T) {
 	}
 }
 
+func TestResponsesStubAcceptsSupervisorCompactedSessionCacheKey(t *testing.T) {
+	t.Parallel()
+
+	sessionID := uuid.New().String()
+	sessionKey := sessionID + "/supervisor"
+	cacheKey := sessionKey + "/compact-1"
+	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
+		ID: uuid.New(), Route: blackbox.RouteResponses, SessionCacheKey: true, Outcome: blackbox.OutcomeJSON,
+	}})
+	if err != nil {
+		t.Fatalf("StartResponsesStub: %v", err)
+	}
+	t.Cleanup(stub.Close)
+
+	request, err := http.NewRequest(http.MethodPost, stub.URL()+"/responses", bytes.NewBufferString(`{"input":[],"prompt_cache_key":"`+cacheKey+`"}`))
+	if err != nil {
+		t.Fatalf("NewRequest response: %v", err)
+	}
+	request.Header.Set("session_id", sessionKey)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatalf("POST response: %v", err)
+	}
+	_ = response.Body.Close()
+	if err := stub.Verify(); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+}
+
 func TestResponsesStubRejectsProbeMismatch(t *testing.T) {
 	t.Parallel()
 

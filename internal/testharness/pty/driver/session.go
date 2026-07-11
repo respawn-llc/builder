@@ -1,3 +1,5 @@
+//go:build !windows
+
 package driver
 
 import (
@@ -14,6 +16,7 @@ import (
 
 	creackpty "github.com/creack/pty"
 	"github.com/google/uuid"
+	"golang.org/x/sys/unix"
 )
 
 const sessionCommandCapacity = 64
@@ -364,12 +367,47 @@ func (s *Session) writeAll(payload []byte) error {
 		if !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK) {
 			return err
 		}
-		if time.Now().After(deadline) {
-			return errors.New("PTY write remained blocked")
+		if err := s.waitWritable(deadline); err != nil {
+			return err
 		}
-		time.Sleep(time.Millisecond)
 	}
 	return nil
+}
+
+func (s *Session) waitWritable(deadline time.Time) error {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return errors.New("PTY write remained blocked")
+	}
+	timeout := int(remaining.Milliseconds())
+	if timeout == 0 {
+		timeout = 1
+	}
+	descriptors := []unix.PollFd{{
+		Fd:     int32(s.ptmx.Fd()),
+		Events: unix.POLLOUT,
+	}}
+	for {
+		ready, err := unix.Poll(descriptors, timeout)
+		if errors.Is(err, syscall.EINTR) {
+			remaining = time.Until(deadline)
+			if remaining <= 0 {
+				return errors.New("PTY write remained blocked")
+			}
+			timeout = int(remaining.Milliseconds())
+			if timeout == 0 {
+				timeout = 1
+			}
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("wait for PTY write capacity: %w", err)
+		}
+		if ready == 0 || descriptors[0].Revents&unix.POLLOUT == 0 {
+			return errors.New("PTY write remained blocked")
+		}
+		return nil
+	}
 }
 
 func (s *Session) emit(event SessionEvent) error {

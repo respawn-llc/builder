@@ -16,7 +16,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"core/internal/testharness/pty/analyzer"
@@ -55,6 +54,9 @@ type ServerHandle struct {
 }
 
 func NewIsolatedEnvironment(serverBinary string, operations []RequiredOperation) (*IsolatedEnvironment, error) {
+	if err := requirePTYPlatform(); err != nil {
+		return nil, err
+	}
 	if serverBinary == "" {
 		return nil, errors.New("server binary is required")
 	}
@@ -229,20 +231,14 @@ func (s *ServerHandle) Terminate() error {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
 		return nil
 	}
-	if err := syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("terminate standalone server process group: %w", err)
-	}
-	return nil
+	return terminateServerProcessGroup(s.cmd)
 }
 
 func (s *ServerHandle) ForceKill() error {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
 		return nil
 	}
-	if err := syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("force-kill standalone server process group: %w", err)
-	}
-	return nil
+	return killServerProcessGroup(s.cmd)
 }
 
 func startServer(binary string, root string, host string, port int, stubURL string) (*ServerHandle, error) {
@@ -258,7 +254,9 @@ func startServer(binary string, root string, host string, port int, stubURL stri
 		return nil, err
 	}
 	cmd.Env = environment
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := configureServerProcessGroup(cmd); err != nil {
+		return nil, err
+	}
 	failure := make(chan struct{})
 	var signalFailure sync.Once
 	notifyFailure := func() {
