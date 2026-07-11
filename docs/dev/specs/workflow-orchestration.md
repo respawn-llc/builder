@@ -188,7 +188,7 @@
 - A workflow owns one execution policy: no worktree, source-workspace `HEAD`, repository default branch, custom ref, or start-time selection. Start-time selection is the default for new workflows and for existing workflow records without a stored policy.
 - A task cannot override its workflow execution policy at creation.
 - The CLI may explicitly choose a task execution policy when it starts a task, including overriding a valid fixed workflow policy. The validated choice becomes the task's durable execution target for all later nodes and retries. Desktop offers that choice only when the workflow uses start-time selection or a configured managed target cannot resolve.
-- An unstarted Backlog task resolves the workflow's latest execution policy when task automation starts. Workflow policy edits affect unstarted Backlog tasks.
+- A targetless task with no run history resolves the workflow's latest execution policy when an executable action starts it, moves it, or applies an approval. Workflow policy edits affect targetless tasks with no run history.
 - `HEAD` creates the task managed worktree from the checked-out commit of its source workspace repository when Kent first materializes an executable target.
 - `Default branch` creates the task managed worktree from the local default-branch pointer of the source workspace's checked-out branch upstream remote. Detached `HEAD` or a branch without an upstream uses `origin`. Kent does not fetch or guess branch names; an unavailable default-branch pointer requires explicit selection before Kent materializes an executable target.
 - `Custom ref` creates the task managed worktree from its configured existing ref after validation before Kent materializes an executable target.

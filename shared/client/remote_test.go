@@ -626,6 +626,22 @@ func TestProtocolErrorMapsWorkflowTaskNotFoundCode(t *testing.T) {
 	}
 }
 
+func TestProtocolErrorReconstructsLegacyWorkflowTaskExecutionTargetMissing(t *testing.T) {
+	original := &serverapi.WorkflowTaskLegacyExecutionTargetMissingError{TaskID: "task-legacy"}
+	err := protocolError(&protocol.ResponseError{
+		Code:    original.RPCErrorCode(),
+		Message: original.Error(),
+		Data:    original.RPCErrorData(),
+	})
+	if !errors.Is(err, serverapi.ErrWorkflowTaskLegacyExecutionTargetMissing) {
+		t.Fatalf("reconstructed error = %v, want legacy execution-target-missing sentinel", err)
+	}
+	var typed *serverapi.WorkflowTaskLegacyExecutionTargetMissingError
+	if !errors.As(err, &typed) || typed.TaskID != original.TaskID {
+		t.Fatalf("reconstructed error = %v, want task-scoped typed legacy error", err)
+	}
+}
+
 func TestProtocolErrorMapsWorkflowTaskCompleteAmbiguousCode(t *testing.T) {
 	if err := protocolError(&protocol.ResponseError{Code: protocol.ErrCodeWorkflowTaskCompleteAmbiguous, Message: "ambiguous completion target"}); !errors.Is(err, serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous) {
 		t.Fatalf("expected ambiguous workflow task completion target, got %v", err)

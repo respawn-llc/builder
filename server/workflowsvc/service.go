@@ -1112,7 +1112,7 @@ func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	}
 	negotiation, err := s.negotiateTaskStartExecutionTarget(ctx, req)
 	if err != nil {
-		return serverapi.WorkflowTaskInitiatingActionResult{}, err
+		return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(err)
 	}
 	if negotiation != nil {
 		if negotiation.Started != nil {
@@ -1127,7 +1127,7 @@ func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	}
 	started, err := s.startTaskAutomation(ctx, TaskAutomationStartRequest{TaskID: req.TaskID, SetupOperationID: req.SetupOperationID})
 	if err != nil {
-		return serverapi.WorkflowTaskInitiatingActionResult{}, err
+		return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(err)
 	}
 	if detail, detailErr := s.view.GetTask(ctx, req.TaskID); detailErr == nil {
 		s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "started", req.TaskID, string(started.RunID))
@@ -1142,6 +1142,9 @@ func (s *Service) negotiateTaskStartExecutionTarget(ctx context.Context, req ser
 	prepared, err := s.store.PrepareTaskStartExecutionTargetNegotiation(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return nil, err
+	}
+	if prepared.ExecutionState == workflowstore.TaskExecutionTargetStateLegacyManaged {
+		return nil, nil
 	}
 	materialization, err := s.materializeTaskExecutionTargetForAction(ctx, prepared, req.SelectionGeneration, req.Selection, req.SetupOperationID)
 	if err != nil {
@@ -1173,6 +1176,14 @@ func (s *Service) negotiateTaskStartExecutionTarget(ctx context.Context, req ser
 		}, nil
 	}
 	return nil, nil
+}
+
+func workflowTaskInitiatingActionError(err error) error {
+	var legacyMissing workflowstore.LegacyTaskExecutionTargetMissingError
+	if errors.As(err, &legacyMissing) {
+		return &serverapi.WorkflowTaskLegacyExecutionTargetMissingError{TaskID: string(legacyMissing.TaskID)}
+	}
+	return err
 }
 
 type taskExecutionTargetActionMaterialization struct {
@@ -1680,16 +1691,23 @@ func (s *Service) StartTaskAutomationWithSetup(ctx context.Context, req TaskAuto
 
 func (s *Service) startTaskAutomation(ctx context.Context, req TaskAutomationStartRequest) (workflowstore.StartTaskResult, error) {
 	taskID := strings.TrimSpace(req.TaskID)
-	target, err := s.store.GetTaskExecutionTarget(ctx, workflow.TaskID(taskID))
+	state, err := s.store.TaskExecutionTargetState(ctx, workflow.TaskID(taskID))
 	if err != nil {
 		return workflowstore.StartTaskResult{}, err
 	}
-	if target == nil && s.taskWorktrees != nil {
+	switch state.Kind {
+	case workflowstore.TaskExecutionTargetStateLegacyMissing:
+		return workflowstore.StartTaskResult{}, workflowstore.LegacyTaskExecutionTargetMissingError{TaskID: workflow.TaskID(taskID)}
+	case workflowstore.TaskExecutionTargetStateUnstarted:
+		return workflowstore.StartTaskResult{}, workflowstore.ErrTaskExecutionTargetNegotiationRequired
+	case workflowstore.TaskExecutionTargetStateLegacyManaged:
 		if err := s.store.ValidateTaskStart(ctx, workflow.TaskID(taskID)); err != nil {
 			return workflowstore.StartTaskResult{}, err
 		}
-		if err := s.taskWorktrees.EnsureTaskWorktree(ctx, TaskWorktreeEnsureRequest{TaskID: workflow.TaskID(taskID), SetupOperationID: req.SetupOperationID}); err != nil {
-			return workflowstore.StartTaskResult{}, err
+		if s.taskWorktrees != nil {
+			if err := s.taskWorktrees.EnsureTaskWorktree(ctx, TaskWorktreeEnsureRequest{TaskID: workflow.TaskID(taskID), SetupOperationID: req.SetupOperationID}); err != nil {
+				return workflowstore.StartTaskResult{}, err
+			}
 		}
 	}
 	started, err := s.store.StartTask(ctx, workflow.TaskID(taskID))
@@ -1716,12 +1734,12 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 	}
 	prepared, requiresExecutionTarget, err := s.store.PrepareApprovalExecutionTargetNegotiation(ctx, workflow.TransitionID(transitionID))
 	if err != nil {
-		return serverapi.WorkflowTaskInitiatingActionResult{}, err
+		return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(err)
 	}
-	if requiresExecutionTarget {
+	if requiresExecutionTarget && prepared.ExecutionState != workflowstore.TaskExecutionTargetStateLegacyManaged {
 		materialization, materializationErr := s.materializeTaskExecutionTargetForAction(ctx, prepared, req.SelectionGeneration, req.Selection, req.SetupOperationID)
 		if materializationErr != nil {
-			return serverapi.WorkflowTaskInitiatingActionResult{}, materializationErr
+			return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(materializationErr)
 		}
 		if materialization.conflict != nil {
 			return *materialization.conflict, nil
@@ -1738,14 +1756,14 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 				approved, approveErr = s.store.ApproveTransitionWithExecutionTarget(ctx, noneExecutionTarget(prepared.TaskID), workflow.TransitionID(transitionID))
 			}
 			if approveErr != nil {
-				return serverapi.WorkflowTaskInitiatingActionResult{}, approveErr
+				return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(approveErr)
 			}
 			return s.approvedWorkflowTaskResult(ctx, approved, taskID, projectID, workflowID, transitionID)
 		}
 	}
 	approved, err := s.approveTransition(ctx, workflow.TransitionID(transitionID), taskID, req.SetupOperationID)
 	if err != nil {
-		return serverapi.WorkflowTaskInitiatingActionResult{}, err
+		return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(err)
 	}
 	return s.approvedWorkflowTaskResult(ctx, approved, taskID, projectID, workflowID, transitionID)
 }
@@ -1769,12 +1787,12 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 	moveRequest := workflowstore.ManualMoveRequest{TaskID: workflow.TaskID(req.TaskID), TargetNodeID: workflow.NodeID(req.TargetNodeID), OutputValues: req.OutputValues, Commentary: req.Commentary, Actor: "user", AllowMissingEdge: req.AllowMissingEdge}
 	prepared, requiresExecutionTarget, err := s.store.PrepareManualMoveExecutionTargetNegotiation(ctx, moveRequest)
 	if err != nil {
-		return serverapi.WorkflowTaskInitiatingActionResult{}, err
+		return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(err)
 	}
-	if requiresExecutionTarget {
+	if requiresExecutionTarget && prepared.ExecutionState != workflowstore.TaskExecutionTargetStateLegacyManaged {
 		materialization, materializationErr := s.materializeTaskExecutionTargetForAction(ctx, prepared, req.SelectionGeneration, req.Selection, req.SetupOperationID)
 		if materializationErr != nil {
-			return serverapi.WorkflowTaskInitiatingActionResult{}, materializationErr
+			return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(materializationErr)
 		}
 		if materialization.conflict != nil {
 			return *materialization.conflict, nil
@@ -1791,17 +1809,21 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 				moved, moveErr = s.store.ManualMoveTaskWithExecutionTarget(ctx, noneExecutionTarget(prepared.TaskID), moveRequest)
 			}
 			if moveErr != nil {
-				return serverapi.WorkflowTaskInitiatingActionResult{}, moveErr
+				return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(moveErr)
 			}
 			return s.movedWorkflowTaskResult(ctx, req, moved)
 		}
 		if err := s.store.ValidateManualMoveExecutionScripts(ctx, moveRequest); err != nil {
-			return serverapi.WorkflowTaskInitiatingActionResult{}, err
+			return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(err)
+		}
+	} else if requiresExecutionTarget {
+		if err := s.store.ValidateManualMoveExecutionScripts(ctx, moveRequest); err != nil {
+			return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(err)
 		}
 	}
 	moved, err := s.store.ManualMoveTask(ctx, moveRequest)
 	if err != nil {
-		return serverapi.WorkflowTaskInitiatingActionResult{}, err
+		return serverapi.WorkflowTaskInitiatingActionResult{}, workflowTaskInitiatingActionError(err)
 	}
 	return s.movedWorkflowTaskResult(ctx, req, moved)
 }
@@ -1844,14 +1866,21 @@ func (s *Service) approveTransition(ctx context.Context, transitionID workflow.T
 			return workflowstore.CompleteRunResult{}, err
 		}
 	}
-	target, err := s.store.GetTaskExecutionTarget(ctx, workflow.TaskID(resolvedTaskID))
+	state, err := s.store.TaskExecutionTargetState(ctx, workflow.TaskID(resolvedTaskID))
 	if err != nil {
 		return workflowstore.CompleteRunResult{}, err
 	}
-	if target != nil {
+	switch state.Kind {
+	case workflowstore.TaskExecutionTargetStateMaterialized:
 		return s.approve(ctx, transitionID)
-	}
-	if s.taskWorktrees != nil {
+	case workflowstore.TaskExecutionTargetStateLegacyMissing:
+		return workflowstore.CompleteRunResult{}, workflowstore.LegacyTaskExecutionTargetMissingError{TaskID: workflow.TaskID(resolvedTaskID)}
+	case workflowstore.TaskExecutionTargetStateUnstarted:
+		return workflowstore.CompleteRunResult{}, workflowstore.ErrTaskExecutionTargetNegotiationRequired
+	case workflowstore.TaskExecutionTargetStateLegacyManaged:
+		if s.taskWorktrees == nil {
+			return s.approve(ctx, transitionID)
+		}
 		requiresWorktree, err := s.store.PendingTransitionTargetsExecutableNode(ctx, transitionID)
 		if err != nil {
 			return workflowstore.CompleteRunResult{}, err

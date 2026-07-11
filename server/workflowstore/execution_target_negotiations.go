@@ -21,12 +21,24 @@ type TaskExecutionTargetNegotiationPreparation struct {
 	WorkflowID          workflow.WorkflowID
 	SourceWorkspace     workflow.ExecutionWorkspace
 	ExecutionPolicy     workflow.ExecutionPolicy
+	ExecutionState      TaskExecutionTargetStateKind
 	ExistingTarget      *workflow.ExecutionTarget
 	ExistingNegotiation *workflow.ExecutionTargetNegotiation
 	Action              workflow.ExecutionTargetNegotiationAction
 }
 
 func (s *Store) PrepareTaskStartExecutionTargetNegotiation(ctx context.Context, taskID workflow.TaskID) (TaskExecutionTargetNegotiationPreparation, error) {
+	task, err := s.queries.GetTask(ctx, string(taskID))
+	if err != nil {
+		return TaskExecutionTargetNegotiationPreparation{}, err
+	}
+	state, err := s.taskExecutionTargetState(ctx, task)
+	if err != nil {
+		return TaskExecutionTargetNegotiationPreparation{}, err
+	}
+	if state.Kind == TaskExecutionTargetStateLegacyMissing {
+		return TaskExecutionTargetNegotiationPreparation{}, LegacyTaskExecutionTargetMissingError{TaskID: taskID}
+	}
 	prepared, err := s.prepareTaskStart(ctx, taskID)
 	if err != nil {
 		return TaskExecutionTargetNegotiationPreparation{}, err
@@ -122,9 +134,12 @@ func (s *Store) taskExecutionTargetNegotiationPreparation(ctx context.Context, t
 	if err != nil {
 		return TaskExecutionTargetNegotiationPreparation{}, err
 	}
-	target, err := s.GetTaskExecutionTarget(ctx, workflow.TaskID(task.ID))
+	state, err := s.taskExecutionTargetState(ctx, task)
 	if err != nil {
 		return TaskExecutionTargetNegotiationPreparation{}, err
+	}
+	if state.Kind == TaskExecutionTargetStateLegacyMissing {
+		return TaskExecutionTargetNegotiationPreparation{}, LegacyTaskExecutionTargetMissingError{TaskID: workflow.TaskID(task.ID)}
 	}
 	negotiation, err := s.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.ID))
 	if err != nil {
@@ -137,7 +152,8 @@ func (s *Store) taskExecutionTargetNegotiationPreparation(ctx context.Context, t
 		WorkflowID:          workflow.WorkflowID(task.WorkflowID),
 		SourceWorkspace:     workflow.ExecutionWorkspace{ID: workspace.ID, Root: workspace.CanonicalRootPath},
 		ExecutionPolicy:     definition.ExecutionPolicy,
-		ExistingTarget:      target,
+		ExecutionState:      state.Kind,
+		ExistingTarget:      state.Target,
 		ExistingNegotiation: negotiation,
 		Action:              action,
 	}, nil

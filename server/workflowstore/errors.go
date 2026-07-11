@@ -44,6 +44,7 @@ var (
 	ErrTaskExecutionTargetNegotiationRequired    = errors.New("task execution target negotiation is required")
 	ErrTaskExecutionTargetNegotiationChanged     = errors.New("task execution target negotiation changed")
 	ErrTaskExecutionTargetNegotiationInProgress  = errors.New("task execution target negotiation is in progress")
+	ErrLegacyTaskExecutionTargetMissing          = errors.New("legacy task execution target is unavailable")
 
 	// ErrRunAlreadyCompleted is returned when completing a run that already has a
 	// completion timestamp.
@@ -90,6 +91,21 @@ var (
 	ErrManualMoveMultiplePendingApprovals   = errors.New("manual move with multiple pending approvals is not supported")
 	ErrManualMovePendingApprovalResolved    = errors.New("pending approval was resolved before the manual move could override it")
 )
+
+// LegacyTaskExecutionTargetMissingError identifies a historical task that
+// predates execution targets but no longer has its managed worktree attachment.
+// The workflow policy cannot safely reconstruct that lost execution history.
+type LegacyTaskExecutionTargetMissingError struct {
+	TaskID workflow.TaskID
+}
+
+func (e LegacyTaskExecutionTargetMissingError) Error() string {
+	return fmt.Sprintf("legacy task %q has no managed execution root: %v", e.TaskID, ErrLegacyTaskExecutionTargetMissing)
+}
+
+func (e LegacyTaskExecutionTargetMissingError) Is(target error) bool {
+	return target == ErrLegacyTaskExecutionTargetMissing
+}
 
 // ContextSourceKind identifies which context-source resolution failed to find a
 // completed run.

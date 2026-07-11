@@ -464,6 +464,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodeServerNotReady && len(resp.Data) > 0 {
 		return serverapi.DecodeServerNotReadyError(resp.Data, message)
 	}
+	if resp.Code == protocol.ErrCodeWorkflowTaskLegacyExecutionTargetMissing && len(resp.Data) > 0 {
+		return serverapi.DecodeWorkflowTaskLegacyExecutionTargetMissingError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeRequestCanceled {
 		return requestCanceledError{message: message}
 	}
@@ -512,6 +515,8 @@ func protocolError(resp *protocol.ResponseError) error {
 		return errors.Join(serverapi.ErrWorkflowTaskCompleteTargetNotFound, errors.New(message))
 	case protocol.ErrCodeWorkflowTaskCompleteAmbiguous:
 		return errors.Join(serverapi.ErrWorkflowTaskCompleteSelectorAmbiguous, errors.New(message))
+	case protocol.ErrCodeWorkflowTaskLegacyExecutionTargetMissing:
+		return serverapi.ErrWorkflowTaskLegacyExecutionTargetMissing
 	default:
 		return errors.New(message)
 	}

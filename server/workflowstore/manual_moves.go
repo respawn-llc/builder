@@ -55,11 +55,28 @@ func (s *Store) ValidateManualMoveExecutionScripts(ctx context.Context, req Manu
 	if prepared.targetNode.Kind() != workflow.NodeKindScript {
 		return nil
 	}
-	root, err := s.ResolveTaskExecutionRoot(ctx, req.TaskID)
+	state, err := s.TaskExecutionTargetState(ctx, req.TaskID)
 	if err != nil {
 		return err
 	}
-	return s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.targetNode), root.EffectiveRoot)
+	switch state.Kind {
+	case TaskExecutionTargetStateMaterialized:
+		root, err := s.ResolveTaskExecutionRoot(ctx, req.TaskID)
+		if err != nil {
+			return err
+		}
+		return s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.targetNode), root.EffectiveRoot)
+	case TaskExecutionTargetStateLegacyManaged:
+		root, err := taskManagedWorktreeRoot(ctx, s.queries, prepared.task)
+		if err != nil {
+			return err
+		}
+		return s.validateScriptNodeForExecution(ctx, s.queries, workflow.NodeIDOf(prepared.targetNode), root)
+	case TaskExecutionTargetStateLegacyMissing:
+		return LegacyTaskExecutionTargetMissingError{TaskID: req.TaskID}
+	default:
+		return ErrTaskExecutionTargetNegotiationRequired
+	}
 }
 
 func (s *Store) ManualMoveTaskWithExecutionTarget(ctx context.Context, target workflow.ExecutionTarget, req ManualMoveRequest) (ManualMoveResult, error) {
