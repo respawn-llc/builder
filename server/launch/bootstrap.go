@@ -36,8 +36,7 @@ func ResolveSessionCallerContext(persistenceRoot string, sessionID string) (Sess
 	meta := store.Meta()
 	context := SessionCallerContext{WorkflowSession: meta.WorkflowSession != nil}
 	if meta.Continuation != nil && meta.Continuation.AgentRole != nil {
-		role := *meta.Continuation.AgentRole
-		context.AgentRole = &role
+		context.AgentRole = cloneContinuationRole(meta.Continuation.AgentRole)
 	}
 	return context, nil
 }
