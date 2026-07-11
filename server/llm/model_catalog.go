@@ -92,7 +92,7 @@ func VerbositySupportForModelAndProvider(model string, providerCaps ProviderCapa
 			Levels:    verbosityLevelsFromSupport(contract.SupportsVerbosity, contract.SupportedVerbosityLevels),
 		}
 	}
-	supported := strings.TrimSpace(model) != "" && providerCaps.IsOpenAIFirstParty
+	supported := strings.TrimSpace(model) != "" && providerCaps.SupportsProviderVerbosity
 	return ModelVerbositySupport{
 		Supported: supported,
 		Source:    ModelVerbositySupportSourceProviderDefault,

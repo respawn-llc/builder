@@ -179,6 +179,63 @@ func TestBuildPayload_IgnoresConfiguredModelVerbosityForUnknownNonFirstPartyProv
 	}
 }
 
+func TestRequestBuildersUseProviderVerbosityCapabilityForUnknownModels(t *testing.T) {
+	tests := []struct {
+		name     string
+		caps     ProviderCapabilities
+		wantText bool
+	}{
+		{
+			name: "enabled independently of first-party classification",
+			caps: ProviderCapabilities{
+				ProviderID:                "custom-enabled",
+				IsOpenAIFirstParty:        false,
+				SupportsProviderVerbosity: true,
+			},
+			wantText: true,
+		},
+		{
+			name: "disabled independently of first-party classification",
+			caps: ProviderCapabilities{
+				ProviderID:                "custom-disabled",
+				IsOpenAIFirstParty:        true,
+				SupportsProviderVerbosity: false,
+			},
+			wantText: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			transport := NewHTTPTransport(staticAuth{})
+			transport.ModelVerbosity = "high"
+
+			responsePayload, err := transport.buildPayload(OpenAIRequest{Model: "operator-alias"}, OpenAIAuthMode{}, tt.caps)
+			if err != nil {
+				t.Fatalf("build response payload: %v", err)
+			}
+			assertTextVerbosityPresence(t, mustMarshalObject(t, responsePayload), tt.wantText)
+
+			inputTokenCountPayload, err := transport.buildInputTokenCountParams(OpenAIRequest{Model: "operator-alias"}, tt.caps)
+			if err != nil {
+				t.Fatalf("build input-token-count payload: %v", err)
+			}
+			assertTextVerbosityPresence(t, mustMarshalJSONMap(t, inputTokenCountPayload), tt.wantText)
+		})
+	}
+}
+
+func assertTextVerbosityPresence(t *testing.T, payload map[string]any, wantText bool) {
+	t.Helper()
+	text, ok := payload["text"].(map[string]any)
+	if ok != wantText {
+		t.Fatalf("text config presence = %v, want %v, payload=%#v", ok, wantText, payload)
+	}
+	if wantText && text["verbosity"] != "high" {
+		t.Fatalf("text.verbosity = %#v, want high", text["verbosity"])
+	}
+}
+
 func TestBuildPayload_MergesConfiguredModelVerbosityWithStructuredOutput(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.ModelVerbosity = "low"

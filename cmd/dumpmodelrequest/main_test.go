@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,9 +52,15 @@ func TestResolveInspectionProviderCapabilitiesUsesRuntimeBaseURLResolution(t *te
 }
 
 func TestResolveInspectionProviderCapabilitiesAcceptsProviderContractOverrides(t *testing.T) {
+	lockedVerbosity := true
+	locked := &session.LockedContract{ProviderContract: session.LockedProviderCapabilities{
+		ProviderID:                "locked",
+		SupportsResponsesAPI:      true,
+		SupportsProviderVerbosity: &lockedVerbosity,
+	}}
 	for _, providerID := range []string{"openai", "openai-compatible", "chatgpt-codex"} {
 		t.Run(providerID, func(t *testing.T) {
-			caps, forced, err := resolveInspectionProviderCapabilities(auth.EmptyState(), config.Settings{OpenAIBaseURL: "https://example.invalid/v1"}, nil, providerID)
+			caps, forced, err := resolveInspectionProviderCapabilities(auth.EmptyState(), config.Settings{OpenAIBaseURL: "https://example.invalid/v1"}, locked, providerID)
 			if err != nil {
 				t.Fatalf("resolveInspectionProviderCapabilities: %v", err)
 			}
@@ -67,21 +74,33 @@ func TestResolveInspectionProviderCapabilitiesAcceptsProviderContractOverrides(t
 	}
 }
 
-func TestResolveInspectionProviderCapabilitiesPrefersConfiguredContractOverLockedContract(t *testing.T) {
+func TestResolveInspectionProviderCapabilitiesPrefersLockedContractOverChangedConfiguration(t *testing.T) {
+	lockedVerbosity := true
 	caps, forced, err := resolveInspectionProviderCapabilities(
 		auth.EmptyState(),
-		config.Settings{ProviderCapabilities: config.ProviderCapabilitiesOverride{ProviderID: "configured", SupportsResponsesAPI: true}},
-		&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{ProviderID: "locked"}},
+		config.Settings{ProviderCapabilities: config.ProviderCapabilitiesOverride{
+			ProviderID:                "configured",
+			SupportsResponsesAPI:      true,
+			SupportsProviderVerbosity: false,
+		}},
+		&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{
+			ProviderID:                "locked",
+			SupportsResponsesAPI:      true,
+			SupportsProviderVerbosity: &lockedVerbosity,
+		}},
 		"",
 	)
 	if err != nil {
 		t.Fatalf("resolveInspectionProviderCapabilities: %v", err)
 	}
 	if forced {
-		t.Fatal("configured contract unexpectedly forced an inspector override")
+		t.Fatal("locked contract unexpectedly forced an inspector override")
 	}
-	if got, want := caps.ProviderID, "configured"; got != want {
+	if got, want := caps.ProviderID, "locked"; got != want {
 		t.Fatalf("provider id = %q, want %q", got, want)
+	}
+	if !caps.SupportsProviderVerbosity {
+		t.Fatalf("locked provider verbosity support = false, want true")
 	}
 }
 
@@ -103,41 +122,52 @@ func TestResolveInspectionProviderCapabilitiesUsesLockedContract(t *testing.T) {
 	}
 }
 
+func TestResumedInspectionWirePayloadUsesLockedVerbosityAcrossConfigChanges(t *testing.T) {
+	lockedVerbosity := true
+	caps, _, err := resolveInspectionProviderCapabilities(
+		auth.EmptyState(),
+		config.Settings{ProviderCapabilities: config.ProviderCapabilitiesOverride{
+			ProviderID:                "configured",
+			SupportsResponsesAPI:      true,
+			SupportsProviderVerbosity: false,
+		}},
+		&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{
+			ProviderID:                "locked",
+			SupportsResponsesAPI:      true,
+			SupportsProviderVerbosity: &lockedVerbosity,
+		}},
+		"",
+	)
+	if err != nil {
+		t.Fatalf("resolve inspection provider capabilities: %v", err)
+	}
+	wire, err := llm.MarshalOpenAIWirePayload(
+		llm.OpenAIRequest{Model: "operator-alias"},
+		false,
+		"high",
+		llm.OpenAIAuthMode{},
+		caps,
+	)
+	if err != nil {
+		t.Fatalf("marshal wire payload: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(wire, &payload); err != nil {
+		t.Fatalf("decode wire payload: %v", err)
+	}
+	text, ok := payload["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected text config in wire payload, got %#v", payload)
+	}
+	if got := text["verbosity"]; got != "high" {
+		t.Fatalf("text.verbosity = %#v, want high", got)
+	}
+}
+
 func TestValidateOpenAIResponsesInspectionProviderRejectsUnsupportedProvider(t *testing.T) {
 	err := validateOpenAIResponsesInspectionProvider(llm.ProviderCapabilities{ProviderID: "anthropic"})
 	if err == nil {
 		t.Fatal("expected unsupported provider error")
-	}
-}
-
-func TestResolveOpenAIWirePayloadCapabilitiesUsesLiveBaseURLContract(t *testing.T) {
-	caps, err := resolveOpenAIWirePayloadCapabilities(
-		llm.OpenAIAuthMode{},
-		config.Settings{
-			ProviderOverride: "openai",
-			OpenAIBaseURL:    "https://example.invalid/v1",
-		},
-		"",
-	)
-	if err != nil {
-		t.Fatalf("resolveOpenAIWirePayloadCapabilities: %v", err)
-	}
-	if got, want := caps.ProviderID, "openai-compatible"; got != want {
-		t.Fatalf("provider id = %q, want %q", got, want)
-	}
-}
-
-func TestResolveOpenAIWirePayloadCapabilitiesHonorsExplicitProviderOverride(t *testing.T) {
-	caps, err := resolveOpenAIWirePayloadCapabilities(
-		llm.OpenAIAuthMode{},
-		config.Settings{OpenAIBaseURL: "https://example.invalid/v1"},
-		"openai",
-	)
-	if err != nil {
-		t.Fatalf("resolveOpenAIWirePayloadCapabilities: %v", err)
-	}
-	if got, want := caps.ProviderID, "openai"; got != want {
-		t.Fatalf("provider id = %q, want %q", got, want)
 	}
 }
 

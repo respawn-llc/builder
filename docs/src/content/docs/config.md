@@ -193,6 +193,7 @@ Use these for custom supervisor models or supervisor providers when the built-in
 | `supports_native_web_search` | bool | inherits `provider_capabilities.supports_native_web_search` | `KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_NATIVE_WEB_SEARCH` | Marks the reviewer provider as supporting native web search. |
 | `supports_reasoning_encrypted` | bool | inherits `provider_capabilities.supports_reasoning_encrypted` | `KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_REASONING_ENCRYPTED` | Marks the reviewer provider as supporting encrypted reasoning items. |
 | `supports_server_side_context_edit` | bool | inherits `provider_capabilities.supports_server_side_context_edit` | `KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_SERVER_SIDE_CONTEXT_EDIT` | Marks the reviewer provider as supporting server-side context editing. |
+| `supports_provider_verbosity` | bool | inherits `provider_capabilities.supports_provider_verbosity` | `KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_PROVIDER_VERBOSITY` | Controls Responses `text.verbosity` for unknown reviewer models; known models use catalog facts. |
 | `is_openai_first_party` | bool | inherits `provider_capabilities.is_openai_first_party` | `KENT_REVIEWER_PROVIDER_CAPABILITIES_IS_OPENAI_FIRST_PARTY` | Marks the reviewer provider as first-party OpenAI semantics. |
 
 ### Model Capability Overrides
@@ -219,7 +220,10 @@ Use these only for custom providers or models (such as local models).
 | `provider_capabilities.supports_native_web_search` | bool | `false` | `KENT_PROVIDER_CAPABILITIES_SUPPORTS_NATIVE_WEB_SEARCH` | Marks the provider as supporting native web search. |
 | `provider_capabilities.supports_reasoning_encrypted` | bool | `false` | `KENT_PROVIDER_CAPABILITIES_SUPPORTS_REASONING_ENCRYPTED` | Marks the provider as supporting encrypted reasoning items. |
 | `provider_capabilities.supports_server_side_context_edit` | bool | `false` | `KENT_PROVIDER_CAPABILITIES_SUPPORTS_SERVER_SIDE_CONTEXT_EDIT` | Marks the provider as supporting server-side context editing. |
+| `provider_capabilities.supports_provider_verbosity` | bool | `false` | `KENT_PROVIDER_CAPABILITIES_SUPPORTS_PROVIDER_VERBOSITY` | Controls Responses `text.verbosity` for unknown models; known models use catalog facts. |
 | `provider_capabilities.is_openai_first_party` | bool | `false` | `KENT_PROVIDER_CAPABILITIES_IS_OPENAI_FIRST_PARTY` | Marks the provider as first-party OpenAI semantics, which gates some Responses-specific behavior such as fast mode and phase protocol features. |
+
+Known models always use the built-in catalog. For unknown non-empty models, `supports_provider_verbosity` controls whether Kent sends `text.verbosity`. Without a provider override, OpenAI and ChatGPT Codex built-ins enable it; OpenAI-compatible and Anthropic built-ins disable it.
 
 ### Tools
 

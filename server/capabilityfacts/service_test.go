@@ -123,6 +123,38 @@ func TestServiceProjectsProviderFactsAndExplicitProviders(t *testing.T) {
 	}
 }
 
+func TestServiceProjectsProviderVerbosityIndependentlyOfFirstPartyClassification(t *testing.T) {
+	tests := []struct {
+		name                      string
+		isOpenAIFirstParty        bool
+		supportsProviderVerbosity bool
+	}{
+		{name: "enabled for non-first-party provider", isOpenAIFirstParty: false, supportsProviderVerbosity: true},
+		{name: "disabled for first-party provider", isOpenAIFirstParty: true, supportsProviderVerbosity: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := NewService(Options{Config: testConfig(t, config.Settings{
+				Model: "operator-alias",
+				ProviderCapabilities: config.ProviderCapabilitiesOverride{
+					ProviderID:                "custom-provider",
+					IsOpenAIFirstParty:        tt.isOpenAIFirstParty,
+					SupportsProviderVerbosity: tt.supportsProviderVerbosity,
+				},
+			})})
+
+			resp, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+			if err != nil {
+				t.Fatalf("GetCapabilityFacts: %v", err)
+			}
+			if got := resp.Providers.CurrentEffective.SupportsProviderVerbosity; got != tt.supportsProviderVerbosity {
+				t.Fatalf("provider verbosity = %v, want %v, provider=%+v", got, tt.supportsProviderVerbosity, resp.Providers.CurrentEffective)
+			}
+		})
+	}
+}
+
 func TestServiceRejectsUnsupportedExplicitProvider(t *testing.T) {
 	service := NewService(Options{Config: testConfig(t, config.Settings{Model: "gpt-5.5"})})
 

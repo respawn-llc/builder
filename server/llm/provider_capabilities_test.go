@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -20,6 +21,9 @@ func TestInferProviderCapabilities_UsesRegistryContracts(t *testing.T) {
 	if !openai.SupportsPromptCacheKey {
 		t.Fatalf("expected openai prompt cache key support, got %+v", openai)
 	}
+	if !openai.SupportsProviderVerbosity {
+		t.Fatalf("expected openai provider verbosity support, got %+v", openai)
+	}
 
 	oauth, err := InferProviderCapabilities("chatgpt-codex")
 	if err != nil {
@@ -30,6 +34,9 @@ func TestInferProviderCapabilities_UsesRegistryContracts(t *testing.T) {
 	}
 	if !oauth.SupportsPromptCacheKey {
 		t.Fatalf("expected chatgpt-codex prompt cache key support, got %+v", oauth)
+	}
+	if !oauth.SupportsProviderVerbosity {
+		t.Fatalf("expected chatgpt-codex provider verbosity support, got %+v", oauth)
 	}
 }
 
@@ -179,6 +186,98 @@ func TestKnownNonFirstPartyProviderContractsRemainLocalCompactionOnly(t *testing
 		if caps.SupportsNativeWebSearch {
 			t.Fatalf("expected native web search unsupported for %s, got %+v", providerID, caps)
 		}
+		if caps.SupportsProviderVerbosity {
+			t.Fatalf("expected provider verbosity unsupported for %s, got %+v", providerID, caps)
+		}
+	}
+}
+
+func TestProviderCapabilitiesFromOverrideCopiesProviderVerbosityValue(t *testing.T) {
+	for _, supportsProviderVerbosity := range []bool{true, false} {
+		t.Run(map[bool]string{true: "enabled", false: "disabled"}[supportsProviderVerbosity], func(t *testing.T) {
+			caps, ok := ProviderCapabilitiesFromOverride(config.ProviderCapabilitiesOverride{
+				ProviderID:                "custom-provider",
+				SupportsProviderVerbosity: supportsProviderVerbosity,
+			})
+			if !ok {
+				t.Fatal("expected provider override capabilities")
+			}
+			if caps.SupportsProviderVerbosity != supportsProviderVerbosity {
+				t.Fatalf("provider verbosity = %v, want %v, caps=%+v", caps.SupportsProviderVerbosity, supportsProviderVerbosity, caps)
+			}
+		})
+	}
+}
+
+func TestLockedProviderVerbosityPreservesExplicitFalseAndFallsBackOnlyWhenAbsent(t *testing.T) {
+	explicitFalse := false
+	locked := LockedProviderCapabilitiesFromContract(ProviderCapabilities{
+		ProviderID:                "custom-provider",
+		SupportsProviderVerbosity: explicitFalse,
+	})
+	if locked.SupportsProviderVerbosity == nil || *locked.SupportsProviderVerbosity {
+		t.Fatalf("expected newly locked explicit false provider verbosity, got %+v", locked)
+	}
+
+	encoded, err := json.Marshal(locked)
+	if err != nil {
+		t.Fatalf("marshal locked provider capabilities: %v", err)
+	}
+	var restored session.LockedProviderCapabilities
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatalf("unmarshal locked provider capabilities: %v", err)
+	}
+	if restored.SupportsProviderVerbosity == nil || *restored.SupportsProviderVerbosity {
+		t.Fatalf("expected round-tripped explicit false provider verbosity, got %+v", restored)
+	}
+
+	explicitCaps, ok := ProviderCapabilitiesFromLocked(&session.LockedContract{
+		ProviderContract: session.LockedProviderCapabilities{
+			ProviderID:                "openai",
+			IsOpenAIFirstParty:        true,
+			SupportsProviderVerbosity: &explicitFalse,
+		},
+	})
+	if !ok {
+		t.Fatal("expected explicit locked provider capabilities")
+	}
+	if explicitCaps.SupportsProviderVerbosity {
+		t.Fatalf("expected explicit false provider verbosity to win, got %+v", explicitCaps)
+	}
+
+	legacyCaps, ok := ProviderCapabilitiesFromLocked(&session.LockedContract{
+		ProviderContract: session.LockedProviderCapabilities{
+			ProviderID:         "openai",
+			IsOpenAIFirstParty: true,
+		},
+	})
+	if !ok {
+		t.Fatal("expected legacy locked provider capabilities")
+	}
+	if !legacyCaps.SupportsProviderVerbosity {
+		t.Fatalf("expected absent legacy provider verbosity to fall back to first-party behavior, got %+v", legacyCaps)
+	}
+}
+
+func TestProviderCapabilitiesFromLockedOrOverridePrefersSessionContract(t *testing.T) {
+	lockedVerbosity := true
+	caps, ok := ProviderCapabilitiesFromLockedOrOverride(
+		&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{
+			ProviderID:                "locked-provider",
+			SupportsResponsesAPI:      true,
+			SupportsProviderVerbosity: &lockedVerbosity,
+		}},
+		config.ProviderCapabilitiesOverride{
+			ProviderID:                "configured-provider",
+			SupportsResponsesAPI:      true,
+			SupportsProviderVerbosity: false,
+		},
+	)
+	if !ok {
+		t.Fatal("expected resolved provider capabilities")
+	}
+	if caps.ProviderID != "locked-provider" || !caps.SupportsProviderVerbosity {
+		t.Fatalf("resolved capabilities = %+v, want locked contract", caps)
 	}
 }
 

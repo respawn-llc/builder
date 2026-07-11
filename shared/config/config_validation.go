@@ -159,12 +159,12 @@ func validateOpenAIBaseURL(state settingsState, _ map[string]string) error {
 	return nil
 }
 
-func validateProviderCapabilitiesProviderID(state settingsState, _ map[string]string) error {
+func validateProviderCapabilitiesProviderID(state settingsState, sources map[string]string) error {
 	capabilities := state.Settings.ProviderCapabilities
 	if strings.TrimSpace(capabilities.ProviderID) != "" {
 		return nil
 	}
-	if capabilities.SupportsResponsesAPI || capabilities.SupportsResponsesCompact || capabilities.SupportsRequestInputTokenCount || capabilities.SupportsPromptCacheKey || capabilities.SupportsNativeWebSearch || capabilities.SupportsReasoningEncrypted || capabilities.SupportsServerSideContextEdit || capabilities.IsOpenAIFirstParty {
+	if hasAnyConfiguredSource(sources, mainProviderCapabilitySourceKeys.values...) || hasProviderCapabilitiesOverride(capabilities) {
 		return errProviderCapabilitiesNeedID
 	}
 	return nil
@@ -363,7 +363,7 @@ func validateReviewer(state settingsState, sources map[string]string) error {
 	if strings.TrimSpace(reviewer.OpenAIBaseURL) != "" && provider != "" && provider != "openai" {
 		return fmt.Errorf("reviewer.provider_override %q conflicts with reviewer.openai_base_url; reviewer.openai_base_url requires reviewer.provider_override=openai or unset", reviewer.ProviderOverride)
 	}
-	if err := validateReviewerProviderCapabilities(reviewer.ProviderCapabilities); err != nil {
+	if err := validateReviewerProviderCapabilities(reviewer.ProviderCapabilities, sources); err != nil {
 		return err
 	}
 	if reviewer.ModelContextWindow < 0 {
@@ -396,12 +396,12 @@ func validateModelContextWindowMinimum(field string, window int) error {
 	)
 }
 
-func validateReviewerProviderCapabilities(capabilities ProviderCapabilitiesOverride) error {
+func validateReviewerProviderCapabilities(capabilities ProviderCapabilitiesOverride, sources map[string]string) error {
 	if strings.TrimSpace(capabilities.ProviderID) != "" {
 		return nil
 	}
-	if capabilities.SupportsResponsesAPI || capabilities.SupportsResponsesCompact || capabilities.SupportsRequestInputTokenCount || capabilities.SupportsPromptCacheKey || capabilities.SupportsNativeWebSearch || capabilities.SupportsReasoningEncrypted || capabilities.SupportsServerSideContextEdit || capabilities.IsOpenAIFirstParty {
-		return fmt.Errorf("reviewer.provider_capabilities.provider_id must not be empty when reviewer provider capability overrides are set")
+	if hasAnyConfiguredSource(sources, reviewerProviderCapabilitySourceKeys.values...) || hasProviderCapabilitiesOverride(capabilities) {
+		return errReviewerProviderCapabilitiesNeedID
 	}
 	return nil
 }

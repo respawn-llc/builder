@@ -270,6 +270,15 @@ func newSettingsRegistry() settingsRegistry {
 			},
 			"KENT_PROVIDER_CAPABILITIES_SUPPORTS_SERVER_SIDE_CONTEXT_EDIT",
 			settingDocOptions{commented: true}),
+		newBoolSetting("provider_capabilities.supports_provider_verbosity", false,
+			func(state *settingsState, value bool) {
+				state.Settings.ProviderCapabilities.SupportsProviderVerbosity = value
+			},
+			func(state settingsState) bool {
+				return state.Settings.ProviderCapabilities.SupportsProviderVerbosity
+			},
+			"KENT_PROVIDER_CAPABILITIES_SUPPORTS_PROVIDER_VERBOSITY",
+			settingDocOptions{commented: true}),
 		newBoolSetting("provider_capabilities.is_openai_first_party", false,
 			func(state *settingsState, value bool) { state.Settings.ProviderCapabilities.IsOpenAIFirstParty = value },
 			func(state settingsState) bool { return state.Settings.ProviderCapabilities.IsOpenAIFirstParty },
@@ -574,6 +583,15 @@ func newSettingsRegistry() settingsRegistry {
 				return state.Settings.Reviewer.ProviderCapabilities.SupportsServerSideContextEdit
 			},
 			"KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_SERVER_SIDE_CONTEXT_EDIT",
+			settingDocOptions{commented: true}),
+		newBoolSetting("reviewer.provider_capabilities.supports_provider_verbosity", false,
+			func(state *settingsState, value bool) {
+				state.Settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity = value
+			},
+			func(state settingsState) bool {
+				return state.Settings.Reviewer.ProviderCapabilities.SupportsProviderVerbosity
+			},
+			"KENT_REVIEWER_PROVIDER_CAPABILITIES_SUPPORTS_PROVIDER_VERBOSITY",
 			settingDocOptions{commented: true}),
 		newBoolSetting("reviewer.provider_capabilities.is_openai_first_party", false,
 			func(state *settingsState, value bool) {
