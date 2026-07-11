@@ -324,9 +324,7 @@ func (c *executionTargetRecoveryCoordinator) run() {
 		}
 		targetContext, cancel := context.WithTimeout(c.ctx, c.targetTimeout)
 		recoveryErr := c.recover(targetContext, claimed, *claimed.ActiveClaim)
-		targetTimedOut := recoveryErr != nil &&
-			errors.Is(targetContext.Err(), context.DeadlineExceeded) &&
-			c.ctx.Err() == nil
+		targetTimedOut := errors.Is(targetContext.Err(), context.DeadlineExceeded) && c.ctx.Err() == nil
 		cancel()
 		if targetTimedOut {
 			if err := c.markRecoveryDeadlineExceeded(claimed.TaskID, *claimed.ActiveClaim); err != nil {
@@ -382,12 +380,15 @@ func (c *executionTargetRecoveryCoordinator) recover(ctx context.Context, target
 			}
 			return err
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		switch inspection.Kind {
 		case worktree.ExecutionTargetWorktreeInspectionNoSideEffects:
-			if err := c.service.store.DeleteInitialExecutionTargetRecovery(c.ctx, recovery.Target.TaskID, claim); err != nil {
+			if err := c.service.store.DeleteInitialExecutionTargetRecovery(ctx, recovery.Target.TaskID, claim); err != nil {
 				return fmt.Errorf("delete unprovisioned initial execution target recovery: %w", err)
 			}
-			c.service.publishExecutionTargetRecoveryUpdate(c.ctx, recovery.Target.TaskID)
+			c.service.publishExecutionTargetRecoveryUpdate(ctx, recovery.Target.TaskID)
 			return nil
 		case worktree.ExecutionTargetWorktreeInspectionExact:
 			if inspection.BranchName != recovery.TaskShortID {

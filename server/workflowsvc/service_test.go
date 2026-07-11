@@ -1185,7 +1185,7 @@ func TestExecutionTargetRecoveryCoordinatorContinuesAfterTargetLocalFailure(t *t
 	}
 }
 
-func TestExecutionTargetRecoveryCoordinatorDeadlineMarksOnlyBlockedTargetManualAndContinues(t *testing.T) {
+func TestExecutionTargetRecoveryCoordinatorDeadlineAfterLateNoSideEffectsMarksManualAndContinues(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
@@ -1203,7 +1203,7 @@ func TestExecutionTargetRecoveryCoordinatorDeadlineMarksOnlyBlockedTargetManualA
 				return worktree.ExecutionTargetWorktreeInspection{Kind: worktree.ExecutionTargetWorktreeInspectionNoSideEffects}, nil
 			}
 			<-ctx.Done()
-			return worktree.ExecutionTargetWorktreeInspection{}, ctx.Err()
+			return worktree.ExecutionTargetWorktreeInspection{Kind: worktree.ExecutionTargetWorktreeInspectionNoSideEffects}, nil
 		},
 	}
 
