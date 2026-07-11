@@ -110,7 +110,7 @@ func TestUIUpdateRoutesClipboardPasteMessagesThroughReducer(t *testing.T) {
 	next, cmd := m.Update(clipboardPasteDoneMsg{
 		Target:         uiClipboardPasteTargetMain,
 		MainDraftToken: 3,
-		Content:        newRetainedClipboardImage("/tmp/image.png"),
+		Content:        retainedClipboardImage("/tmp/image.png"),
 	})
 	updated := next.(*uiModel)
 

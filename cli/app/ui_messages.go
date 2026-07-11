@@ -227,6 +227,10 @@ type clipboardPasteDoneMsg struct {
 	Err            error
 }
 
+type clipboardImageDiscardDoneMsg struct {
+	Err error
+}
+
 type clipboardTextCopyDoneMsg struct {
 	Err error
 }

@@ -1,9 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"os"
 	"testing"
 )
@@ -46,6 +48,9 @@ func TestSystemClipboardPasterWindowsReturnsUnicodeTextThroughASCIIEnvelope(t *t
 		if name != "pwsh" {
 			t.Fatalf("command = %q, want pwsh", name)
 		}
+		if len(args) != 5 || args[3] != "-EncodedCommand" {
+			t.Fatalf("Windows clipboard invocation must use one encoded command, args=%q", args)
+		}
 		return []byte(`{"kind":"text","textBase64":"` + base64.StdEncoding.EncodeToString([]byte(text)) + `"}`), nil
 	}
 	runner.runFn = func(string, ...string) error {
@@ -67,6 +72,25 @@ func TestSystemClipboardPasterWindowsReturnsUnicodeTextThroughASCIIEnvelope(t *t
 	}
 	if len(entries) != 0 {
 		t.Fatalf("reserved image file was not cleaned: %v", entries)
+	}
+}
+
+type closeErrorClipboardFile struct {
+	*bytes.Reader
+}
+
+func (closeErrorClipboardFile) Close() error {
+	return errors.New("close failed")
+}
+
+func TestSystemClipboardPasterSurfacesClipboardImageCloseFailure(t *testing.T) {
+	paster, _, _ := newTestSystemClipboardPaster(t, "darwin")
+	paster.openFile = func(string) (io.ReadCloser, error) {
+		return closeErrorClipboardFile{Reader: bytes.NewReader(pngHeader[:])}, nil
+	}
+
+	if err := paster.ensurePNGFile("/tmp/kent-clipboard.png"); err == nil {
+		t.Fatal("expected clipboard image close failure")
 	}
 }
 

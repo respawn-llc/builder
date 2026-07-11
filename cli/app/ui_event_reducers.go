@@ -251,6 +251,10 @@ func (r uiClipboardFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		cmd := m.handleClipboardPasteDone(msg)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, m.batchWithNativeOngoingRepaint(cmd))
+	case clipboardImageDiscardDoneMsg:
+		cmd := m.handleClipboardImageDiscardDone(msg)
+		m.layout().syncViewport()
+		return handledUIFeatureUpdate(m, m.batchWithNativeOngoingRepaint(cmd))
 	case clipboardTextCopyDoneMsg:
 		cmd := m.handleClipboardTextCopyDone(msg)
 		m.layout().syncViewport()

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"core/shared/clientui"
@@ -13,6 +14,16 @@ type clipboardPasterFunc func(context.Context) (uiClipboardContent, error)
 
 func (f clipboardPasterFunc) Paste(ctx context.Context) (uiClipboardContent, error) {
 	return f(ctx)
+}
+
+type retainedClipboardImageLifetime struct{}
+
+func (retainedClipboardImageLifetime) discard() error {
+	return nil
+}
+
+func retainedClipboardImage(path string) uiClipboardImage {
+	return uiClipboardImage{Path: path, lifetime: retainedClipboardImageLifetime{}}
 }
 
 type clipboardTestInputTarget uint8
@@ -112,13 +123,13 @@ func TestClipboardPasteDoneInsertsTextAndImageAtActiveCursor(t *testing.T) {
 		{
 			name:    "main image path",
 			target:  clipboardTestInputMain,
-			content: newRetainedClipboardImage("/tmp/kent-clipboard.png"),
+			content: retainedClipboardImage("/tmp/kent-clipboard.png"),
 			want:    "before/tmp/kent-clipboard.pngafter",
 		},
 		{
 			name:    "freeform ask image path",
 			target:  clipboardTestInputAsk,
-			content: newRetainedClipboardImage("/tmp/kent-clipboard.png"),
+			content: retainedClipboardImage("/tmp/kent-clipboard.png"),
 			want:    "before/tmp/kent-clipboard.pngafter",
 		},
 	}
@@ -228,15 +239,54 @@ func TestClipboardPasteDoneRemovesStaleTemporaryImage(t *testing.T) {
 				m.ask.freeform = true
 			}
 
-			next, _ := m.Update(msg)
+			next, cmd := m.Update(msg)
 			updated := next.(*uiModel)
-			if removed != 1 {
-				t.Fatalf("temporary image remove calls = %d, want 1", removed)
+			if removed != 0 {
+				t.Fatalf("temporary image remove calls = %d before command execution, want 0", removed)
 			}
 			if tc.target == clipboardTestInputMain && updated.input != "replacement" {
 				t.Fatalf("input = %q, want replacement", updated.input)
 			}
+			if cmd == nil {
+				t.Fatal("expected stale image disposal command")
+			}
+			next, _ = updated.Update(cmd())
+			updated = next.(*uiModel)
+			if removed != 1 {
+				t.Fatalf("temporary image remove calls = %d after command execution, want 1", removed)
+			}
 		})
+	}
+}
+
+func TestClipboardPasteDoneReportsAsynchronousStaleImageCleanupFailure(t *testing.T) {
+	m := setupClipboardTestInput(t, newProjectedStaticUIModel(), clipboardTestInputMain)
+	staleToken := m.mainInputDraftToken
+	m.replaceMainInput("replacement", -1)
+	image := newTemporaryClipboardImage("/tmp/kent-stale-clipboard.png", &uiClipboardTempImage{
+		path: "/tmp/kent-stale-clipboard.png",
+		remove: func(string) error {
+			return errors.New("remove failed")
+		},
+	})
+
+	next, cmd := m.Update(clipboardPasteDoneMsg{
+		Target:         uiClipboardPasteTargetMain,
+		MainDraftToken: staleToken,
+		Content:        image,
+	})
+	updated := next.(*uiModel)
+	if cmd == nil {
+		t.Fatal("expected stale image disposal command")
+	}
+	if updated.transientStatus != "" {
+		t.Fatalf("unexpected synchronous cleanup status %q", updated.transientStatus)
+	}
+
+	next, _ = updated.Update(cmd())
+	updated = next.(*uiModel)
+	if updated.transientStatus == "" || updated.transientStatusKind != uiStatusNoticeError {
+		t.Fatalf("expected asynchronous cleanup error status, got %q kind=%d", updated.transientStatus, updated.transientStatusKind)
 	}
 }
 

@@ -176,7 +176,7 @@ func TestNativeOngoingClipboardPasteRepaintsInput(t *testing.T) {
 	next, _ := m.Update(clipboardPasteDoneMsg{
 		Target:         uiClipboardPasteTargetMain,
 		MainDraftToken: 3,
-		Content:        newRetainedClipboardImage("/tmp/kent-clipboard.png"),
+		Content:        retainedClipboardImage("/tmp/kent-clipboard.png"),
 	})
 	updated := next.(*uiModel)
 

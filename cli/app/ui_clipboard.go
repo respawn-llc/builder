@@ -50,12 +50,6 @@ type uiClipboardImageLifetime interface {
 	discard() error
 }
 
-type uiClipboardRetainedImage struct{}
-
-func (uiClipboardRetainedImage) discard() error {
-	return nil
-}
-
 type uiClipboardTempImage struct {
 	path    string
 	remove  func(string) error
@@ -71,10 +65,6 @@ func (i *uiClipboardTempImage) discard() error {
 	}
 	i.removed = true
 	return nil
-}
-
-func newRetainedClipboardImage(path string) uiClipboardImage {
-	return uiClipboardImage{Path: path, lifetime: uiClipboardRetainedImage{}}
 }
 
 func newTemporaryClipboardImage(path string, lifetime *uiClipboardTempImage) uiClipboardImage {
@@ -276,18 +266,9 @@ func (p *systemClipboardPaster) pasteDarwin(ctx context.Context) (uiClipboardCon
 		}
 		return newTemporaryClipboardImage(filepath.Clean(path), temporaryImage), nil
 	case "text":
-		if err := temporaryImage.discard(); err != nil {
-			return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Could not remove clipboard image temp file", Err: err}
-		}
-		if envelope.Text == "" {
-			return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorNoContent, Message: "Clipboard does not contain supported content"}
-		}
-		return uiClipboardText{Text: envelope.Text}, nil
+		return p.textClipboardContent(envelope.Text, temporaryImage)
 	case "empty":
-		if err := temporaryImage.discard(); err != nil {
-			return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Could not remove clipboard image temp file", Err: err}
-		}
-		return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorNoContent, Message: "Clipboard does not contain supported content"}
+		return p.textClipboardContent("", temporaryImage)
 	default:
 		return nil, p.cleanupPasteError(&uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Clipboard paste returned unsupported content"}, temporaryImage)
 	}
@@ -425,7 +406,7 @@ func (p *systemClipboardPaster) pasteWindows(ctx context.Context) (uiClipboardCo
 	if tempErr != nil {
 		return nil, tempErr
 	}
-	output, err := p.runner.Output(ctx, powershell, "-NoProfile", "-NonInteractive", "-STA", "-Command", windowsClipboardPasteScript(), path)
+	output, err := p.runner.Output(ctx, powershell, windowsClipboardPasteArgs(path)...)
 	if err != nil {
 		return nil, p.cleanupPasteError(&uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Clipboard paste failed", Err: err}, temporaryImage)
 	}
@@ -440,25 +421,16 @@ func (p *systemClipboardPaster) pasteWindows(ctx context.Context) (uiClipboardCo
 		}
 		return newTemporaryClipboardImage(filepath.Clean(path), temporaryImage), nil
 	case "text":
-		if err := temporaryImage.discard(); err != nil {
-			return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Could not remove clipboard image temp file", Err: err}
-		}
 		text, err := base64.StdEncoding.DecodeString(envelope.TextBase64)
 		if err != nil {
-			return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Clipboard paste returned malformed content", Err: err}
+			return nil, p.cleanupPasteError(&uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Clipboard paste returned malformed content", Err: err}, temporaryImage)
 		}
 		if !utf8.Valid(text) {
-			return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Clipboard paste returned malformed content"}
+			return nil, p.cleanupPasteError(&uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Clipboard paste returned malformed content"}, temporaryImage)
 		}
-		if len(text) == 0 {
-			return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorNoContent, Message: "Clipboard does not contain supported content"}
-		}
-		return uiClipboardText{Text: string(text)}, nil
+		return p.textClipboardContent(string(text), temporaryImage)
 	case "empty":
-		if err := temporaryImage.discard(); err != nil {
-			return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Could not remove clipboard image temp file", Err: err}
-		}
-		return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorNoContent, Message: "Clipboard does not contain supported content"}
+		return p.textClipboardContent("", temporaryImage)
 	default:
 		return nil, p.cleanupPasteError(&uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Clipboard paste returned unsupported content"}, temporaryImage)
 	}
@@ -473,9 +445,20 @@ func decodeWindowsClipboardEnvelope(output []byte) (clipboardPlatformEnvelope, e
 	return decodeClipboardPlatformEnvelope(output)
 }
 
-func windowsClipboardPasteScript() string {
+func windowsClipboardPasteArgs(path string) []string {
+	command := windowsClipboardPasteScript(base64.StdEncoding.EncodeToString([]byte(path)))
+	return []string{
+		"-NoProfile",
+		"-NonInteractive",
+		"-STA",
+		"-EncodedCommand",
+		base64.StdEncoding.EncodeToString(utf16LEClipboardText(command)),
+	}
+}
+
+func windowsClipboardPasteScript(encodedPath string) string {
 	return strings.Join([]string{
-		`$path = $args[0];`,
+		`$path = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('` + encodedPath + `'));`,
 		`Add-Type -AssemblyName System.Windows.Forms;`,
 		`Add-Type -AssemblyName System.Drawing;`,
 		`[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false);`,
@@ -542,15 +525,29 @@ func (p *systemClipboardPaster) cleanupPasteError(cause error, temporaryImage *u
 	return cause
 }
 
+func (p *systemClipboardPaster) textClipboardContent(text string, temporaryImage *uiClipboardTempImage) (uiClipboardContent, error) {
+	if err := temporaryImage.discard(); err != nil {
+		return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Could not remove clipboard image temp file", Err: err}
+	}
+	if text == "" {
+		return nil, &uiClipboardPasteError{Kind: uiClipboardPasteErrorNoContent, Message: "Clipboard does not contain supported content"}
+	}
+	return uiClipboardText{Text: text}, nil
+}
+
 func (p *systemClipboardPaster) ensurePNGFile(path string) error {
 	file, err := p.openFile(path)
 	if err != nil {
 		return &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Clipboard paste failed", Err: err}
 	}
-	defer file.Close()
 	header := make([]byte, len(pngHeader))
-	if _, err := io.ReadFull(file, header); err != nil {
-		return &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Clipboard image data is not PNG", Err: err}
+	_, readErr := io.ReadFull(file, header)
+	closeErr := file.Close()
+	if readErr != nil {
+		return &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Clipboard image data is not PNG", Err: errors.Join(readErr, closeErr)}
+	}
+	if closeErr != nil {
+		return &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Could not close clipboard image file", Err: closeErr}
 	}
 	if !bytes.Equal(header, pngHeader[:]) {
 		return &uiClipboardPasteError{Kind: uiClipboardPasteErrorFailed, Message: "Clipboard image data is not PNG"}
@@ -698,27 +695,33 @@ func (m *uiModel) handleClipboardPasteDone(msg clipboardPasteDoneMsg) tea.Cmd {
 	switch msg.Target {
 	case uiClipboardPasteTargetAsk:
 		if !m.ask.hasCurrent() || !m.ask.freeform || msg.AskToken == 0 || msg.AskToken != m.ask.currentToken {
-			return m.discardStaleClipboardImage(msg.Content)
+			return m.discardStaleClipboardImageCmd(msg.Content)
 		}
 		m.insertAskInputRunes(chars)
 	default:
 		if !m.inputMode().showsMainInput() || msg.MainDraftToken == 0 || msg.MainDraftToken != m.mainInputDraftToken {
-			return m.discardStaleClipboardImage(msg.Content)
+			return m.discardStaleClipboardImageCmd(msg.Content)
 		}
 		m.insertInputRunes(chars)
 	}
 	return nil
 }
 
-func (m *uiModel) discardStaleClipboardImage(content uiClipboardContent) tea.Cmd {
+func (m *uiModel) discardStaleClipboardImageCmd(content uiClipboardContent) tea.Cmd {
 	image, ok := content.(uiClipboardImage)
 	if !ok {
 		return nil
 	}
-	if err := image.discard(); err != nil {
-		return m.sendTransientStatusWithNoticeID("Could not remove stale clipboard image", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
+	return func() tea.Msg {
+		return clipboardImageDiscardDoneMsg{Err: image.discard()}
 	}
-	return nil
+}
+
+func (m *uiModel) handleClipboardImageDiscardDone(msg clipboardImageDiscardDoneMsg) tea.Cmd {
+	if msg.Err == nil {
+		return nil
+	}
+	return m.sendTransientStatusWithNoticeID("Could not remove stale clipboard image", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 }
 
 func clipboardContentRunes(content uiClipboardContent) ([]rune, error) {
