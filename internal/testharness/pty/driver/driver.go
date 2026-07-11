@@ -370,9 +370,9 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	}
 	cancel()
 	eventWG.Wait()
-	_ = ptmx.Close()
 	<-readDone
 	<-analysisDone
+	_ = ptmx.Close()
 	readinessErr := readiness.Close()
 
 	mu.Lock()
