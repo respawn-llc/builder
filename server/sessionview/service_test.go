@@ -60,6 +60,14 @@ func (p staticUpdateStatusProvider) Status(context.Context) clientui.UpdateStatu
 	return p.status
 }
 
+type failingSessionStoreResolver struct {
+	err error
+}
+
+func (r failingSessionStoreResolver) ResolveSessionStore(context.Context, string) (*session.Store, error) {
+	return nil, r.err
+}
+
 func (t serviceBlockingTool) Call(_ context.Context, c tools.Call) (tools.Result, error) {
 	select {
 	case <-t.started:
@@ -69,6 +77,68 @@ func (t serviceBlockingTool) Call(_ context.Context, c tools.Call) (tools.Result
 	<-t.release
 	out, _ := json.Marshal(map[string]any{"ok": true})
 	return tools.Result{CallID: c.ID, Name: c.Name, Output: out}, nil
+}
+
+func TestServiceGetLatestCommittedAssistantFinalAnswer(t *testing.T) {
+	t.Run("present answer", func(t *testing.T) {
+		store, err := session.Create(t.TempDir(), "ws", t.TempDir())
+		if err != nil {
+			t.Fatalf("create store: %v", err)
+		}
+		if _, _, err := store.AppendEvent("step", "message", llm.Message{Role: llm.RoleAssistant, Phase: llm.MessagePhaseFinal, Content: "durable answer"}); err != nil {
+			t.Fatalf("append final: %v", err)
+		}
+		resp, err := NewService(NewStaticSessionResolver(store), nil, nil).GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: store.Meta().SessionID})
+		if err != nil {
+			t.Fatalf("get latest final answer: %v", err)
+		}
+		if resp.Answer == nil || *resp.Answer != "durable answer" {
+			t.Fatalf("answer = %v, want durable answer", resp.Answer)
+		}
+	})
+
+	t.Run("true absence", func(t *testing.T) {
+		store, err := session.Create(t.TempDir(), "ws", t.TempDir())
+		if err != nil {
+			t.Fatalf("create store: %v", err)
+		}
+		resp, err := NewService(NewStaticSessionResolver(store), nil, nil).GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: store.Meta().SessionID})
+		if err != nil {
+			t.Fatalf("get latest final answer: %v", err)
+		}
+		if resp.Answer != nil {
+			t.Fatalf("answer = %q, want absence", *resp.Answer)
+		}
+	})
+
+	t.Run("invalid session id", func(t *testing.T) {
+		_, err := NewService(nil, nil, nil).GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{})
+		if !errors.Is(err, serverapi.ErrSessionIDRequired) {
+			t.Fatalf("error = %v, want session id validation error", err)
+		}
+	})
+
+	t.Run("store resolution failure", func(t *testing.T) {
+		want := errors.New("store unavailable")
+		_, err := NewService(failingSessionStoreResolver{err: want}, nil, nil).GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: "session-1"})
+		if !errors.Is(err, want) {
+			t.Fatalf("error = %v, want store resolution failure", err)
+		}
+	})
+
+	t.Run("persisted decode failure", func(t *testing.T) {
+		store, err := session.Create(t.TempDir(), "ws", t.TempDir())
+		if err != nil {
+			t.Fatalf("create store: %v", err)
+		}
+		if _, err := store.AppendReplayEvents([]session.ReplayEvent{{StepID: "step", Kind: "message", Payload: []byte(`"not a message"`)}}); err != nil {
+			t.Fatalf("append malformed event: %v", err)
+		}
+		_, err = NewService(NewStaticSessionResolver(store), nil, nil).GetLatestCommittedAssistantFinalAnswer(context.Background(), serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{SessionID: store.Meta().SessionID})
+		if err == nil {
+			t.Fatal("expected persisted decode failure")
+		}
+	})
 }
 
 func TestServiceGetSessionMainViewUsesLiveRuntimeWhenAttached(t *testing.T) {

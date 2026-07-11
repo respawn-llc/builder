@@ -232,7 +232,8 @@ type clipboardImageDiscardDoneMsg struct {
 }
 
 type clipboardTextCopyDoneMsg struct {
-	Err error
+	token uint64
+	Err   error
 }
 
 type askEvent struct {

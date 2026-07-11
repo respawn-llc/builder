@@ -20,6 +20,9 @@ func (r uiKeyFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		if m.debugKeys {
 			m.setDebugKeyTransientStatus(msg, keyMsg, source)
 		}
+		if m.finalAnswerOperation != nil {
+			return handledUIFeatureUpdate(m, nil)
+		}
 		if m.helpVisible {
 			m.helpVisible = false
 			if isHelpKey(keyMsg, m) && m.canShowHelp() {

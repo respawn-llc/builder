@@ -82,7 +82,7 @@ func TestSessionPickerEnterDefaultsToCreateNew(t *testing.T) {
 	}
 }
 
-func TestSessionPickerNewHotkeyAndCancel(t *testing.T) {
+func TestSessionPickerNewHotkeyAndExitKeys(t *testing.T) {
 	m := newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{})
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
@@ -91,11 +91,29 @@ func TestSessionPickerNewHotkeyAndCancel(t *testing.T) {
 		t.Fatal("expected create-new result")
 	}
 
+	for _, key := range []tea.KeyMsg{
+		{Type: tea.KeyEsc},
+		{Type: tea.KeyRunes, Runes: []rune{'q'}},
+	} {
+		m = newSessionPickerModel([]clientui.SessionSummary{{SessionID: "s-1"}}, "dark", sessionPickerHeaderInfo{})
+		next, cmd := m.Update(key)
+		m = next.(*sessionPickerModel)
+		if cmd != nil {
+			t.Fatalf("%v unexpectedly ended the session picker", key)
+		}
+		if m.cursor != 0 || m.result.CreateNew || m.result.Canceled || m.result.Session != nil {
+			t.Fatalf("%v changed picker state: cursor=%d result=%+v", key, m.cursor, m.result)
+		}
+	}
+
 	m = newSessionPickerModel(nil, "dark", sessionPickerHeaderInfo{})
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = next.(*sessionPickerModel)
+	if cmd == nil {
+		t.Fatal("expected Ctrl+C to exit the session picker")
+	}
 	if !m.result.Canceled {
-		t.Fatal("expected canceled result")
+		t.Fatal("expected Ctrl+C cancellation result")
 	}
 }
 

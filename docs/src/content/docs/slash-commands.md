@@ -8,9 +8,9 @@ Press Tab to autocomplete a command, and Enter to autocomplete and send. Press T
 
 | Command | Input | What it does |
 | --- | --- | --- |
-| `/exit` | none | Exit Kent, same as Ctrl/Cmd+C. |
-| `/new` | none | Start a new session. |
-| `/resume` | none | Return to the startup session picker. |
+| `/exit` | none | Exit Kent. During active work, Kent detaches while the server continues the run. |
+| `/new` | none | Start a new session without stopping active work in the current session. |
+| `/resume` | none | Open the session picker without stopping active work in the current session. |
 | `/login` | none | Open auth options. |
 | `/compact <instructions>` | optional free-form text | Compact the current context. Trailing text is passed through as **additional** compaction instructions. |
 | `/name <title>` | optional free-form text | Set the session title. Empty input resets. |
@@ -25,10 +25,10 @@ Press Tab to autocomplete a command, and Enter to autocomplete and send. Press T
 | <code>/wt create</code> | none | Open the create-worktree dialog; new branches require a non-empty base ref. |
 | <code>/wt switch &lt;target&gt;</code> | required selector | Switch directly to a worktree by id/branch/path. |
 | <code>/wt delete [&lt;target&gt;]</code> | optional selector | Delete a worktree. |
-| `/copy` | none | Copy the latest model final answer to the system clipboard. |
-| `/back` | none | Teleport back to the parent session, if present. |
-| `/review <what to review>` | optional free-form text | Trigger Kent's native code review. Trailing text is appended to the prompt body. |
-| `/init <instructions>` | optional free-form text | Start a new session that sets up the workspace on first-use. Trailing text is appended to the prompt body. |
+| `/copy` | none | Copy the latest durable model final answer to the system clipboard. |
+| `/back` | none | Return to the parent session, if present, with the child’s latest durable final answer prefilled. |
+| `/review <what to review>` | optional free-form text | Trigger Kent's native code review. It reuses an empty session; otherwise it starts a fresh child session. |
+| `/init <instructions>` | optional free-form text | Run repository initialization. It reuses an empty session; otherwise it starts a fresh child session. |
 | `/prompt:<name>` | optional free-form text | Run a custom Markdown prompt (see [prompts](../prompts/)). |
 
 
@@ -37,6 +37,10 @@ Press Tab to autocomplete a command, and Enter to autocomplete and send. Press T
 - `Enter` runs the selected command immediately, even when the name is only partially typed.
 - `Tab` on a partial command autocompletes the selected command and inserts a trailing space so you can continue with arguments.
 - `Tab` on an exact known command adds it into the queue. Use this to make chains of prompts and slash commands like /compact -> /review -> /prompts:commit.
+- During active work, `/exit`, `/new`, `/resume`, `/back`, `/review`, and `/init` remain available and do not interrupt the originating run. Busy `Ctrl+C` interrupts the current turn and keeps the TUI open.
+- `/resume` always opens the session picker. In that picker, `Esc` does nothing and `Ctrl+C` exits.
+- `/copy` looks up the latest committed final answer from the active transcript segment. Kent blocks input during the lookup and bounded clipboard write; a missing answer is reported without using cached transcript state.
+- `/back` uses the same lookup for its prefill. If the child has no committed final answer in the active segment, the parent opens with an empty prefill.
 - While the model is working on an active goal, `/goal` still opens the read-only goal page. `/goal pause` and `/goal clear` run immediately and append one persistent goal info line; setting or resuming a goal is rejected until the runtime is idle.
 - If `ask_question` is disabled, Kent opens sessions with active goals for management, but goal set/resume fails until `ask_question` is enabled; pause and clear remain available.
 

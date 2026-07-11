@@ -33,6 +33,7 @@ type UpdateStatusProvider interface {
 }
 
 type Service struct {
+	sessions         SessionStoreResolver
 	snapshots        SessionSnapshotSource
 	updates          UpdateStatusProvider
 	operations       *runtimeops.Coordinator
@@ -42,6 +43,7 @@ type Service struct {
 
 func NewService(sessions SessionStoreResolver, runtimes RuntimeResolver, targets ExecutionTargetResolver) *Service {
 	svc := &Service{
+		sessions:         sessions,
 		cacheWarningMode: config.CacheWarningModeDefault,
 		operations:       runtimeops.NewCoordinator(),
 	}
@@ -211,6 +213,27 @@ func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.Se
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
 	return serverapi.SessionTranscriptPageResponse{Transcript: page}, nil
+}
+
+func (s *Service) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
+	}
+	if s == nil || s.sessions == nil {
+		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errSessionStoreResolverRequired
+	}
+	store, err := s.sessions.ResolveSessionStore(ctx, req.SessionID)
+	if err != nil {
+		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
+	}
+	answer, err := runtime.LatestCommittedAssistantFinalAnswerFromStore(store)
+	if err != nil {
+		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
+	}
+	if answer != nil && strings.TrimSpace(*answer) == "" {
+		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errors.New("latest committed assistant final answer must not be blank")
+	}
+	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{Answer: answer}, nil
 }
 
 func (s *Service) resolveSnapshot(ctx context.Context, sessionID string, refs []clientui.RuntimeOperationRef) (SessionSnapshot, error) {

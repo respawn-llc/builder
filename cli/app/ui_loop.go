@@ -127,7 +127,6 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUITheme(request.active.Theme),
 		WithUIDebug(request.active.Debug),
 		WithUICommandRegistry(request.commandRegistry),
-		WithUIHasOtherSessions(request.wiring.hasOtherSessionsKnown, request.wiring.hasOtherSessions),
 		WithUITurnQueueHook(request.wiring.turnQueueHook),
 		WithUIProcessClient(newUIProcessClientWithReads(request.wiring.processViews, request.wiring.processControls)),
 		WithUIWorktreeClient(request.wiring.worktrees),

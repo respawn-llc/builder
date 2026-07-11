@@ -11,6 +11,7 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
 )
 
@@ -71,6 +72,15 @@ func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, i
 }
 
 func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string, opts sessionLifecycleOptions) error {
+	return runSessionLifecycleWithRunner(ctx, server, interactor, initialSessionID, opts, runUILoop)
+}
+
+type sessionLifecycleUIRunner func(uiLoopRequest) (tea.Model, error)
+
+func runSessionLifecycleWithRunner(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string, opts sessionLifecycleOptions, runUI sessionLifecycleUIRunner) error {
+	if runUI == nil {
+		return errors.New("session UI runner is required")
+	}
 	originalServer := server
 	boundServer, err := ensureInteractiveProjectBinding(ctx, server)
 	if err != nil {
@@ -128,27 +138,32 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		if err != nil {
 			return err
 		}
-		finalModel, runErr := runUILoop(request)
+		finalModel, runErr := runUI(request)
 		showStartupUpdateNotice = shouldRetryStartupUpdateNotice(finalModel, showStartupUpdateNotice)
 		nextSessionInitialPrompt = ""
 		nextSessionInitialPromptHistoryRecorded = false
 		nextSessionInitialInput = ""
 		if runErr != nil {
-			runtimePlan.Close()
+			if closeErr := runtimePlan.Close(); closeErr != nil {
+				return errors.Join(runErr, closeErr)
+			}
 			return runErr
 		}
 		if err := persistSessionDraftToServer(ctx, server, plan.SessionID, finalModel); err != nil {
-			runtimePlan.Close()
+			if closeErr := runtimePlan.Close(); closeErr != nil {
+				return errors.Join(err, closeErr)
+			}
 			return err
 		}
 
 		transition := extractUITransition(finalModel)
 		if transition.Exit {
-			closeRuntimePlanAfterUIExit(runtimePlan, finalModel)
+			if err := closeRuntimePlanAfterUIExit(runtimePlan, finalModel); err != nil {
+				return err
+			}
 			return nil
 		}
-		resolved, err := resolveSessionAction(ctx, server, interactor, plan.SessionID, transition)
-		runtimePlan.Close()
+		resolved, err := resolveAndReleaseSessionAction(ctx, server, interactor, plan.SessionID, transition, runtimePlan)
 		if err != nil {
 			return err
 		}
@@ -162,6 +177,17 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		nextSessionParentID = resolved.ParentSessionID
 		forceNewSession = resolved.ForceNewSession
 	}
+}
+
+func resolveAndReleaseSessionAction(ctx context.Context, server sessionTransitionServer, interactor authInteractor, sessionID string, transition UITransition, runtimePlan *runtimeLaunchPlan) (resolvedSessionAction, error) {
+	resolved, err := resolveSessionAction(ctx, server, interactor, sessionID, transition)
+	if err != nil {
+		return resolvedSessionAction{}, err
+	}
+	if err := runtimePlan.Close(); err != nil {
+		return resolvedSessionAction{}, err
+	}
+	return resolved, nil
 }
 
 func prepareSessionUIRun(
@@ -181,7 +207,9 @@ func prepareSessionUIRun(
 	cfg := server.Config()
 	commandRegistry, err := commands.NewDefaultRegistryWithFilePrompts(cfg.WorkspaceRoot, cfg.PersistenceRoot)
 	if err != nil {
-		runtimePlan.Close()
+		if closeErr := runtimePlan.Close(); closeErr != nil {
+			return nil, uiLoopRequest{}, errors.Join(err, closeErr)
+		}
 		return nil, uiLoopRequest{}, err
 	}
 	initialState := sessionLaunchInitialStateFromServer(ctx, server, plan.SessionID, transitionInput)
@@ -202,12 +230,11 @@ func prepareSessionUIRun(
 	}, nil
 }
 
-func closeRuntimePlanAfterUIExit(runtimePlan *runtimeLaunchPlan, finalModel any) {
+func closeRuntimePlanAfterUIExit(runtimePlan *runtimeLaunchPlan, finalModel any) error {
 	if ui, ok := finalModel.(*uiModel); ok && ui != nil && ui.forcedLocalExit {
-		runtimePlan.DetachOnlyClose()
-		return
+		return runtimePlan.DetachOnlyClose()
 	}
-	runtimePlan.Close()
+	return runtimePlan.Close()
 }
 
 func shouldRetryStartupUpdateNotice(model any, enabled bool) bool {

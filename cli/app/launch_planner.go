@@ -40,8 +40,6 @@ type sessionLaunchPlan struct {
 	SelectedViaPicker                    bool
 	SelectedSessionWorkspaceRoot         string
 	SelectedSessionWorkspaceLookupFailed bool
-	HasOtherSessions                     bool
-	HasOtherSessionsKnown                bool
 	ActiveSettings                       config.Settings
 	EnabledTools                         []toolspec.ID
 	ConfiguredModelName                  string
@@ -63,26 +61,25 @@ type resolvedSessionPlanRequest struct {
 type runtimeLaunchPlan struct {
 	Logger      *runLogger
 	Wiring      *runtimeWiring
-	close       func()
-	detachClose func()
+	close       func() error
+	detachClose func() error
 }
 
-func (p *runtimeLaunchPlan) Close() {
+func (p *runtimeLaunchPlan) Close() error {
 	if p == nil || p.close == nil {
-		return
+		return nil
 	}
-	p.close()
+	return p.close()
 }
 
-func (p *runtimeLaunchPlan) DetachOnlyClose() {
+func (p *runtimeLaunchPlan) DetachOnlyClose() error {
 	if p == nil {
-		return
+		return nil
 	}
 	if p.detachClose != nil {
-		p.detachClose()
-		return
+		return p.detachClose()
 	}
-	p.Close()
+	return p.Close()
 }
 
 type sessionPickerRunner func([]clientui.SessionSummary, string, sessionPickerHeaderInfo) (sessionPickerResult, error)
@@ -157,15 +154,12 @@ func (p *launchPlanner) PlanSession(ctx context.Context, req sessionLaunchReques
 			selectedSessionWorkspaceLookupFailed = true
 		}
 	}
-	hasOtherSessions, hasOtherSessionsKnown := p.resolveHasOtherSessions(ctx, resolved, resp.Plan.SessionID)
 	return sessionLaunchPlan{
 		Mode:                                 req.Mode,
 		SessionID:                            resp.Plan.SessionID,
 		SelectedViaPicker:                    resolved.selectedViaPicker,
 		SelectedSessionWorkspaceRoot:         selectedSessionWorkspaceRoot,
 		SelectedSessionWorkspaceLookupFailed: selectedSessionWorkspaceLookupFailed,
-		HasOtherSessions:                     hasOtherSessions,
-		HasOtherSessionsKnown:                hasOtherSessionsKnown,
 		ActiveSettings:                       resp.Plan.ActiveSettings,
 		EnabledTools:                         enabledTools,
 		ConfiguredModelName:                  resp.Plan.ConfiguredModelName,
@@ -315,27 +309,6 @@ func (p *launchPlanner) listSessionSummaries(ctx context.Context) ([]clientui.Se
 		return nil, err
 	}
 	return append([]clientui.SessionSummary(nil), resp.Overview.Sessions...), nil
-}
-
-func (p *launchPlanner) resolveHasOtherSessions(ctx context.Context, resolved resolvedSessionPlanRequest, sessionID string) (bool, bool) {
-	if strings.TrimSpace(sessionID) == "" {
-		return false, false
-	}
-	summaries := resolved.sessionSummaries
-	if !resolved.hasSessionSummaries {
-		var err error
-		summaries, err = p.listSessionSummaries(ctx)
-		if err != nil {
-			return false, false
-		}
-	}
-	for _, summary := range summaries {
-		if strings.TrimSpace(summary.SessionID) == strings.TrimSpace(sessionID) {
-			continue
-		}
-		return true, true
-	}
-	return false, true
 }
 
 func sessionPlanOverridesFromConfig(cfg config.App) serverapi.RunPromptOverrides {
