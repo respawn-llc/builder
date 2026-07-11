@@ -200,6 +200,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
 	}
+	if err := workflowService.FenceExecutionTargetRecovery(ctx); err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: recovery fence: %w", err)
+	}
 	core := &Core{bundles: composeBundles(bundleCompositionInput{
 		cfg:                     cfg,
 		containerDir:            containerDir,

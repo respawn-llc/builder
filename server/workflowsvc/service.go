@@ -110,6 +110,7 @@ type workflowInterruptedRunFinalizer interface {
 
 const workflowAttentionResolutionPageSize = 200
 const workflowAttentionFinalizationTimeout = 5 * time.Second
+const executionTargetRecoveryFencePageSize = 200
 
 type taskQuestionAnswerMemoRequest struct {
 	TaskID               string
@@ -187,6 +188,27 @@ func New(store *workflowstore.Store, view *workflowview.Service, roleResolver wo
 		opt(service)
 	}
 	return service, nil
+}
+
+// FenceExecutionTargetRecovery establishes the database-only startup fence for
+// orphaned target materialization before scheduler admission begins.
+func (s *Service) FenceExecutionTargetRecovery(ctx context.Context) error {
+	for {
+		taskIDs, err := s.store.FenceExecutionTargetRecovery(ctx, executionTargetRecoveryFencePageSize)
+		if err != nil {
+			return err
+		}
+		if len(taskIDs) == 0 {
+			return nil
+		}
+		for _, taskID := range taskIDs {
+			detail, err := s.view.GetTask(ctx, string(taskID))
+			if err != nil {
+				return fmt.Errorf("get fenced execution target task %s: %w", taskID, err)
+			}
+			s.publishWorkflowEvent(ctx, detail.Summary.ProjectID, detail.Summary.WorkflowID, "task", "updated", string(taskID))
+		}
+	}
 }
 
 func (s *Service) CreateWorkflow(ctx context.Context, req serverapi.WorkflowCreateRequest) (serverapi.WorkflowCreateResponse, error) {

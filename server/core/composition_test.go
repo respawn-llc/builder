@@ -10,6 +10,7 @@ import (
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/llm"
+	"core/server/metadata"
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimewire"
@@ -88,6 +89,91 @@ func TestNewWithContextComposesRequiredBundles(t *testing.T) {
 	}
 	if !scheduler.Stopped() {
 		t.Fatal("expected workflow scheduler to stop during core close")
+	}
+}
+
+func TestNewWithContextFencesOrphanedExecutionTargetsBeforeStartingScheduler(t *testing.T) {
+	ctx := t.Context()
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	seedStore, err := metadata.Open(resolved.Config.PersistenceRoot)
+	if err != nil {
+		t.Fatalf("metadata.Open seed: %v", err)
+	}
+	binding, err := seedStore.RegisterWorkspaceBinding(ctx, resolved.Config.WorkspaceRoot)
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	workflowStore, err := workflowstore.New(seedStore, workflowstore.WithRoleResolver(workflow.StaticRoleResolver{"coder": true}))
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	workflowID := createCoreValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Orphaned materialization", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	provisioningGeneration := "orphaned-provisioning"
+	claimGeneration := "orphaned-claim"
+	target := workflow.ExecutionTarget{
+		TaskID: task.ID,
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:   workflow.ExecutionTargetSourceDetachedCommit,
+			Commit: "deadbeef",
+		},
+		State:                       workflow.ExecutionTargetStateInitialProvisioning,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupRunning,
+		ActiveClaim:                 &workflow.ExecutionTargetClaim{Generation: claimGeneration, Phase: workflow.ExecutionTargetClaimMaterializing},
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := workflowStore.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+	if err := seedStore.Close(); err != nil {
+		t.Fatalf("seed metadata close: %v", err)
+	}
+
+	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(auth.EmptyState()), nil, nil)
+	if err != nil {
+		t.Fatalf("BuildAuthSupport: %v", err)
+	}
+	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(resolved.Config)
+	if err != nil {
+		t.Fatalf("BuildRuntimeSupport: %v", err)
+	}
+	appCore, err := NewWithContext(ctx, resolved.Config, authSupport, runtimeSupport)
+	if err != nil {
+		t.Fatalf("NewWithContext: %v", err)
+	}
+	t.Cleanup(func() { _ = appCore.Close() })
+
+	recoveredStore, err := workflowstore.New(appCore.bundles.Persistence.metadataStore, workflowstore.WithRoleResolver(workflow.StaticRoleResolver{"coder": true}))
+	if err != nil {
+		t.Fatalf("workflowstore.New recovered: %v", err)
+	}
+	recovered, err := recoveredStore.GetTaskExecutionTarget(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if recovered == nil || recovered.ActiveClaim == nil ||
+		recovered.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued ||
+		recovered.ActiveClaim.Generation == claimGeneration ||
+		recovered.SetupState != workflow.ExecutionTargetSetupFailed {
+		t.Fatalf("recovered target = %+v, want queued replacement claim and failed setup", recovered)
+	}
+	if !appCore.bundles.Workflows.scheduler.Started() {
+		t.Fatal("scheduler did not start after recovery fence")
 	}
 }
 
