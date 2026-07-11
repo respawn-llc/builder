@@ -226,6 +226,26 @@ func TestNoopFinalStreamNeverPromotesIntoImmutableScrollback(t *testing.T) {
 	}
 }
 
+func TestNoopFinalSegmentAfterCommentaryNeverPromotesIntoImmutableScrollback(t *testing.T) {
+	surface := NewSurface(&bytes.Buffer{})
+	streamID := uuid.New()
+	commentary := assistantDeltaMessage(streamID, "commentary\n\n")
+	commentary.AssistantDelta.Phase = clientui.MessagePhaseCommentary
+	if _, err := surface.ApplyTerminalMessage(commentary, FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
+		t.Fatalf("apply commentary delta: %v", err)
+	}
+	promotedBeforeFinal := surface.activeAssistant.promotedSourceBoundary
+
+	final := assistantDeltaMessage(streamID, "NO_OP\n\n")
+	final.AssistantDelta.Phase = clientui.MessagePhaseFinal
+	if _, err := surface.ApplyTerminalMessage(final, FrameInput{Size: Size{Width: 40, Height: 5}}); err != nil {
+		t.Fatalf("apply no-op final delta after commentary: %v", err)
+	}
+	if got := surface.activeAssistant.promotedSourceBoundary; got != promotedBeforeFinal {
+		t.Fatalf("promoted source boundary = %d, want unchanged %d", got, promotedBeforeFinal)
+	}
+}
+
 func assistantDeltaMessage(streamID uuid.UUID, delta string) clientui.TranscriptMessage {
 	return clientui.TranscriptMessage{
 		Kind: clientui.TranscriptMessageAssistantDelta,

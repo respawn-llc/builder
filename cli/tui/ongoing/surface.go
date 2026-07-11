@@ -103,6 +103,7 @@ type activeAssistantState struct {
 	streamID               *uuid.UUID
 	source                 string
 	phase                  clientui.MessagePhase
+	phaseSourceStart       int
 	promotedSourceBoundary int
 }
 
@@ -171,9 +172,10 @@ func (s *Surface) hydrateActiveAssistantStream(stream *clientui.TranscriptAssist
 	}
 	streamIDCopy := stream.StreamID
 	s.activeAssistant = activeAssistantState{
-		streamID: &streamIDCopy,
-		source:   stream.Text,
-		phase:    stream.Phase,
+		streamID:         &streamIDCopy,
+		source:           stream.Text,
+		phase:            stream.Phase,
+		phaseSourceStart: 0,
 	}
 	return stream.Text != ""
 }
@@ -190,15 +192,9 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, phase cl
 			"height":            frame.Size.Height,
 		})
 	}
-	if s.activeAssistant.phase == "" {
+	if phase != "" && s.activeAssistant.phase != phase {
 		s.activeAssistant.phase = phase
-	} else if phase != "" && s.activeAssistant.phase != phase {
-		panicOngoingDeveloperError("assistant_delta", "phase does not match active stream", map[string]any{
-			"active_phase":  s.activeAssistant.phase,
-			"message_phase": phase,
-			"width":         frame.Size.Width,
-			"height":        frame.Size.Height,
-		})
+		s.activeAssistant.phaseSourceStart = len(s.activeAssistant.source)
 	}
 	s.activeAssistant.source += delta
 	if s.activeAssistantPromotionDeferred() {
@@ -226,7 +222,7 @@ func (s *Surface) applyAssistantDelta(streamID uuid.UUID, delta string, phase cl
 
 func (s *Surface) activeAssistantPromotionDeferred() bool {
 	return s.activeAssistant.phase == clientui.MessagePhaseFinal &&
-		transcript.IsNoopFinalText(s.activeAssistant.source)
+		transcript.IsNoopFinalText(s.activeAssistant.source[s.activeAssistant.phaseSourceStart:])
 }
 
 func (s *Surface) abortAssistantStream(streamID uuid.UUID, frame FrameInput) (Result, error) {
