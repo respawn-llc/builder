@@ -47,6 +47,7 @@ type SessionEvent struct {
 type Session struct {
 	cmd      *exec.Cmd
 	ptmx     *os.File
+	fd       int
 	commands chan SessionCommand
 	events   chan SessionEvent
 	done     chan struct{}
@@ -66,7 +67,8 @@ func StartSession(spec SessionSpec) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.SetNonblock(int(ptmx.Fd()), true); err != nil {
+	fd := int(ptmx.Fd())
+	if err := syscall.SetNonblock(fd, true); err != nil {
 		_ = ptmx.Close()
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -75,6 +77,7 @@ func StartSession(spec SessionSpec) (*Session, error) {
 	session := &Session{
 		cmd:      cmd,
 		ptmx:     ptmx,
+		fd:       fd,
 		commands: make(chan SessionCommand, sessionCommandCapacity),
 		events:   make(chan SessionEvent, 128),
 		done:     make(chan struct{}),
@@ -281,6 +284,9 @@ func (s *Session) execute(command SessionCommand, assembler *analyzer.CaptureAss
 		if err := creackpty.Setsize(s.ptmx, &creackpty.Winsize{Rows: uint16(command.Dimensions.Rows), Cols: uint16(command.Dimensions.Cols)}); err != nil {
 			return fmt.Errorf("resize PTY command %s: %w", command.ID, err)
 		}
+		if err := syscall.SetNonblock(s.fd, true); err != nil {
+			return fmt.Errorf("restore nonblocking PTY after resize: %w", err)
+		}
 		if err := assembler.Resize(*command.Dimensions); err != nil {
 			return err
 		}
@@ -310,7 +316,7 @@ func signalProcessGroup(pid int, signal syscall.Signal) error {
 
 func (s *Session) drainReadable(buffer []byte, assembler *analyzer.CaptureAssembler, stream *analyzer.Stream, responder *terminalResponder) error {
 	for {
-		count, err := unix.Read(int(s.ptmx.Fd()), buffer)
+		count, err := unix.Read(s.fd, buffer)
 		if count > 0 {
 			payload := append([]byte(nil), buffer[:count]...)
 			if appendErr := assembler.Append(payload); appendErr != nil {
@@ -354,7 +360,7 @@ func (s *Session) drainReadable(buffer []byte, assembler *analyzer.CaptureAssemb
 func (s *Session) writeAll(payload []byte) error {
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for len(payload) > 0 {
-		count, err := s.ptmx.Write(payload)
+		count, err := unix.Write(s.fd, payload)
 		if count > 0 {
 			payload = payload[count:]
 		}
@@ -384,7 +390,7 @@ func (s *Session) waitWritable(deadline time.Time) error {
 		timeout = 1
 	}
 	descriptors := []unix.PollFd{{
-		Fd:     int32(s.ptmx.Fd()),
+		Fd:     int32(s.fd),
 		Events: unix.POLLOUT,
 	}}
 	for {
