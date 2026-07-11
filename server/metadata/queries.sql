@@ -1363,6 +1363,7 @@ args AS (
     SELECT
         CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
         CAST(sqlc.arg(workflow_id) AS TEXT) AS workflow_id,
+        CAST(sqlc.arg(canceled_terminal_node_id) AS TEXT) AS canceled_terminal_node_id,
         CAST(sqlc.arg(visible_columns_json) AS TEXT) AS visible_columns_json,
         CAST(sqlc.arg(column_filter_set) AS INTEGER) AS column_filter_set,
         CAST(sqlc.arg(column_keys_json) AS TEXT) AS column_keys_json,
@@ -1398,13 +1399,6 @@ visible_columns AS (
         CAST(json_extract(value, '$.status_order') AS INTEGER) AS column_rank
     FROM args, json_each(args.visible_columns_json)
 ),
-canceled_terminal_column AS (
-    SELECT node_id
-    FROM visible_columns
-    WHERE node_kind = 'terminal'
-    ORDER BY CASE node_key WHEN 'done' THEN 0 ELSE 1 END ASC, column_rank ASC
-    LIMIT 1
-),
 current_positions AS (
     SELECT p.task_id, p.node_id
     FROM task_node_placements p
@@ -1434,13 +1428,13 @@ current_positions AS (
 
     UNION
 
-    SELECT t.id, terminal.node_id
+    SELECT t.id, args.canceled_terminal_node_id AS node_id
     FROM task_records t
     CROSS JOIN args
-    CROSS JOIN canceled_terminal_column terminal
     WHERE t.project_id = args.project_id
       AND t.workflow_id = args.workflow_id
       AND t.canceled_at_unix_ms IS NOT NULL
+      AND trim(args.canceled_terminal_node_id) != ''
       AND NOT EXISTS (
           SELECT 1
           FROM task_node_placements p

@@ -7501,32 +7501,33 @@ args AS (
     SELECT
         CAST(?1 AS TEXT) AS project_id,
         CAST(?2 AS TEXT) AS workflow_id,
-        CAST(?3 AS TEXT) AS visible_columns_json,
-        CAST(?4 AS INTEGER) AS column_filter_set,
-        CAST(?5 AS TEXT) AS column_keys_json,
-        CAST(?6 AS INTEGER) AS status_filter_set,
-        CAST(?7 AS TEXT) AS status_kinds_json,
-        CAST(?8 AS INTEGER) AS attention_filter_set,
-        CAST(?9 AS TEXT) AS attention_kinds_json,
-        CAST(?10 AS INTEGER) AS cursor_set,
-        CAST(?11 AS INTEGER) AS cursor_created_at_unix_ms,
-        CAST(?12 AS INTEGER) AS cursor_updated_at_unix_ms,
-        CAST(?13 AS INTEGER) AS cursor_primary_status_rank,
-        CAST(?14 AS INTEGER) AS cursor_column_rank,
-        CAST(?15 AS INTEGER) AS cursor_run_count,
-        CAST(?16 AS TEXT) AS cursor_title_sort,
-        CAST(?17 AS TEXT) AS cursor_task_id,
-        CAST(?18 AS TEXT) AS sort_1_field,
-        CAST(?19 AS INTEGER) AS sort_1_desc,
-        CAST(?20 AS TEXT) AS sort_2_field,
-        CAST(?21 AS INTEGER) AS sort_2_desc,
-        CAST(?22 AS TEXT) AS sort_3_field,
-        CAST(?23 AS INTEGER) AS sort_3_desc,
-        CAST(?24 AS TEXT) AS sort_4_field,
-        CAST(?25 AS INTEGER) AS sort_4_desc,
-        CAST(?26 AS TEXT) AS sort_5_field,
-        CAST(?27 AS INTEGER) AS sort_5_desc,
-        CAST(?28 AS INTEGER) AS limit_rows
+        CAST(?3 AS TEXT) AS canceled_terminal_node_id,
+        CAST(?4 AS TEXT) AS visible_columns_json,
+        CAST(?5 AS INTEGER) AS column_filter_set,
+        CAST(?6 AS TEXT) AS column_keys_json,
+        CAST(?7 AS INTEGER) AS status_filter_set,
+        CAST(?8 AS TEXT) AS status_kinds_json,
+        CAST(?9 AS INTEGER) AS attention_filter_set,
+        CAST(?10 AS TEXT) AS attention_kinds_json,
+        CAST(?11 AS INTEGER) AS cursor_set,
+        CAST(?12 AS INTEGER) AS cursor_created_at_unix_ms,
+        CAST(?13 AS INTEGER) AS cursor_updated_at_unix_ms,
+        CAST(?14 AS INTEGER) AS cursor_primary_status_rank,
+        CAST(?15 AS INTEGER) AS cursor_column_rank,
+        CAST(?16 AS INTEGER) AS cursor_run_count,
+        CAST(?17 AS TEXT) AS cursor_title_sort,
+        CAST(?18 AS TEXT) AS cursor_task_id,
+        CAST(?19 AS TEXT) AS sort_1_field,
+        CAST(?20 AS INTEGER) AS sort_1_desc,
+        CAST(?21 AS TEXT) AS sort_2_field,
+        CAST(?22 AS INTEGER) AS sort_2_desc,
+        CAST(?23 AS TEXT) AS sort_3_field,
+        CAST(?24 AS INTEGER) AS sort_3_desc,
+        CAST(?25 AS TEXT) AS sort_4_field,
+        CAST(?26 AS INTEGER) AS sort_4_desc,
+        CAST(?27 AS TEXT) AS sort_5_field,
+        CAST(?28 AS INTEGER) AS sort_5_desc,
+        CAST(?29 AS INTEGER) AS limit_rows
 ),
 visible_columns AS (
     SELECT
@@ -7535,13 +7536,6 @@ visible_columns AS (
         CAST(json_extract(value, '$.node_kind') AS TEXT) AS node_kind,
         CAST(json_extract(value, '$.status_order') AS INTEGER) AS column_rank
     FROM args, json_each(args.visible_columns_json)
-),
-canceled_terminal_column AS (
-    SELECT node_id
-    FROM visible_columns
-    WHERE node_kind = 'terminal'
-    ORDER BY CASE node_key WHEN 'done' THEN 0 ELSE 1 END ASC, column_rank ASC
-    LIMIT 1
 ),
 current_positions AS (
     SELECT p.task_id, p.node_id
@@ -7572,13 +7566,13 @@ current_positions AS (
 
     UNION
 
-    SELECT t.id, terminal.node_id
+    SELECT t.id, args.canceled_terminal_node_id AS node_id
     FROM task_records t
     CROSS JOIN args
-    CROSS JOIN canceled_terminal_column terminal
     WHERE t.project_id = args.project_id
       AND t.workflow_id = args.workflow_id
       AND t.canceled_at_unix_ms IS NOT NULL
+      AND trim(args.canceled_terminal_node_id) != ''
       AND NOT EXISTS (
           SELECT 1
           FROM task_node_placements p
@@ -7821,6 +7815,7 @@ LIMIT (SELECT limit_rows FROM args)
 type ListWorkflowTaskListRowsParams struct {
 	ProjectID               string
 	WorkflowID              string
+	CanceledTerminalNodeID  string
 	VisibleColumnsJson      string
 	ColumnFilterSet         int64
 	ColumnKeysJson          string
@@ -7882,6 +7877,7 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 	rows, err := q.db.QueryContext(ctx, listWorkflowTaskListRows,
 		arg.ProjectID,
 		arg.WorkflowID,
+		arg.CanceledTerminalNodeID,
 		arg.VisibleColumnsJson,
 		arg.ColumnFilterSet,
 		arg.ColumnKeysJson,

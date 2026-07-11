@@ -317,16 +317,17 @@ func (s *Service) ListTasks(ctx context.Context, req serverapi.WorkflowTaskListR
 		cursor = pageToken.Cursor
 	}
 	rows, err := s.listWorkflowTaskListRows(ctx, workflowTaskListQueryRequest{
-		projectID:      projectID,
-		workflowID:     selected.WorkflowID,
-		columns:        columns,
-		columnKeys:     req.ColumnKeys,
-		statusKinds:    req.StatusKinds,
-		attentionKinds: req.AttentionKinds,
-		sortSelectors:  sortSelectors,
-		cursor:         cursor,
-		cursorSet:      hasPageToken,
-		limit:          pageSize + 1,
+		projectID:              projectID,
+		workflowID:             selected.WorkflowID,
+		canceledTerminalNodeID: canceledBoardTerminalNodeID(def),
+		columns:                columns,
+		columnKeys:             req.ColumnKeys,
+		statusKinds:            req.StatusKinds,
+		attentionKinds:         req.AttentionKinds,
+		sortSelectors:          sortSelectors,
+		cursor:                 cursor,
+		cursorSet:              hasPageToken,
+		limit:                  pageSize + 1,
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err

@@ -53,6 +53,99 @@ func TestListTasksUsesCanonicalStatusProjection(t *testing.T) {
 	if !reflect.DeepEqual(resp.Tasks[0].Status, detail.Status) || containsString(resp.Tasks[0].Status.RunIDs, string(started.RunID)) {
 		t.Fatalf("list/detail status = %+v/%+v", resp.Tasks[0].Status, detail.Status)
 	}
+	if err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+	detail, err = view.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask canceled: %v", err)
+	}
+	if detail.Status.Kind != serverapi.WorkflowTaskStatusKindCanceled || len(detail.Status.AttentionTypes) != 0 {
+		t.Fatalf("canceled detail status = %+v, want canceled without approval attention", detail.Status)
+	}
+	resp, err = view.ListTasks(ctx, serverapi.WorkflowTaskListRequest{
+		ProjectID:      &projectID,
+		AttentionKinds: []serverapi.WorkflowTaskAttentionKind{serverapi.WorkflowTaskAttentionKindApproval},
+	}, workflow.StaticRoleResolver{"coder": true})
+	if err != nil {
+		t.Fatalf("ListTasks canceled approval attention: %v", err)
+	}
+	if len(resp.Tasks) != 0 {
+		t.Fatalf("approval attention after cancellation = %+v, want none", resp.Tasks)
+	}
+}
+
+func TestListTasksUsesBoardCanceledTerminalNode(t *testing.T) {
+	ctx, _, workflowStore, binding, view := newWorkflowViewTestContextService(t)
+	workflowID := createWorkflowViewValidWorkflow(t, ctx, workflowStore)
+	if _, err := workflowStore.LinkWorkflow(ctx, binding.ProjectID, workflowID, true); err != nil {
+		t.Fatalf("LinkWorkflow: %v", err)
+	}
+	def, _, err := view.GetDefinition(ctx, string(workflowID))
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	boardTerminalNodeID := canceledBoardTerminalNodeID(def)
+	if boardTerminalNodeID == "" {
+		t.Fatal("workflow must have a board canceled-terminal node")
+	}
+	extraTerminalNodeID := workflow.NodeID("node-extra-terminal-" + string(workflowID))
+	if _, err := workflowStore.AddNode(ctx, workflowstore.NodeRecord{
+		ID:          extraTerminalNodeID,
+		WorkflowID:  workflowID,
+		Key:         "extra_terminal",
+		Kind:        workflow.NodeKindTerminal,
+		DisplayName: "Extra terminal",
+	}); err != nil {
+		t.Fatalf("AddNode extra terminal: %v", err)
+	}
+	def, _, err = view.GetDefinition(ctx, string(workflowID))
+	if err != nil {
+		t.Fatalf("GetDefinition after extra terminal: %v", err)
+	}
+	columns := boardColumns(def)
+	boardTerminalIndex, extraTerminalIndex := -1, -1
+	for index, column := range columns {
+		switch column.Node.NodeID {
+		case boardTerminalNodeID:
+			boardTerminalIndex = index
+		case string(extraTerminalNodeID):
+			extraTerminalIndex = index
+		}
+	}
+	if boardTerminalIndex < 0 || extraTerminalIndex < 0 {
+		t.Fatalf("terminal columns missing: %+v", columns)
+	}
+	columns[boardTerminalIndex], columns[extraTerminalIndex] = columns[extraTerminalIndex], columns[boardTerminalIndex]
+	for index := range columns {
+		columns[index].SortOrder = index
+	}
+
+	task, err := workflowStore.CreateTask(ctx, workflowstore.CreateTaskRequest{ProjectID: binding.ProjectID, Title: "Canceled", Body: "Body"})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := workflowStore.CancelTask(ctx, task.ID, "stop"); err != nil {
+		t.Fatalf("CancelTask: %v", err)
+	}
+	rows, err := view.listWorkflowTaskListRows(ctx, workflowTaskListQueryRequest{
+		projectID:              binding.ProjectID,
+		workflowID:             string(workflowID),
+		canceledTerminalNodeID: boardTerminalNodeID,
+		columns:                columns,
+		limit:                  2,
+	})
+	if err != nil {
+		t.Fatalf("listWorkflowTaskListRows: %v", err)
+	}
+	if len(rows) != 1 || len(rows[0].item.ColumnKeys) != 1 {
+		t.Fatalf("canceled task rows = %+v", rows)
+	}
+	for _, column := range columns {
+		if column.Node.NodeID == boardTerminalNodeID && rows[0].item.ColumnKeys[0] != column.Node.Key {
+			t.Fatalf("canceled task column key = %q, want board terminal %q", rows[0].item.ColumnKeys[0], column.Node.Key)
+		}
+	}
 }
 
 func TestListTasksFiltersTypedStatusAndColumn(t *testing.T) {

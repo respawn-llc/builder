@@ -132,16 +132,17 @@ func dedupeSortedStrings(values []string) []string {
 }
 
 type workflowTaskListQueryRequest struct {
-	projectID      string
-	workflowID     string
-	columns        []serverapi.WorkflowBoardColumn
-	columnKeys     []string
-	statusKinds    []serverapi.WorkflowTaskStatusKind
-	attentionKinds []serverapi.WorkflowTaskAttentionKind
-	sortSelectors  []serverapi.WorkflowTaskListSort
-	cursor         workflowTaskListCursor
-	cursorSet      bool
-	limit          int
+	projectID              string
+	workflowID             string
+	canceledTerminalNodeID string
+	columns                []serverapi.WorkflowBoardColumn
+	columnKeys             []string
+	statusKinds            []serverapi.WorkflowTaskStatusKind
+	attentionKinds         []serverapi.WorkflowTaskAttentionKind
+	sortSelectors          []serverapi.WorkflowTaskListSort
+	cursor                 workflowTaskListCursor
+	cursorSet              bool
+	limit                  int
 }
 
 type workflowTaskListRow struct {
@@ -182,6 +183,7 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 	rows, err := s.queries.ListWorkflowTaskListRows(ctx, sqlitegen.ListWorkflowTaskListRowsParams{
 		ProjectID:               req.projectID,
 		WorkflowID:              req.workflowID,
+		CanceledTerminalNodeID:  req.canceledTerminalNodeID,
 		VisibleColumnsJson:      visibleColumnsJSON,
 		ColumnFilterSet:         boolInt64(len(req.columnKeys) > 0),
 		ColumnKeysJson:          string(columnKeysJSON),
