@@ -21,7 +21,7 @@ func (s *Store) ListRunnableRuns(ctx context.Context, limit int64) ([]RunnableRu
 	}
 	out := make([]RunnableRunRecord, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, RunnableRunRecord{RunRecord: runRecordFromTaskRun(row), WorkflowRevisionSeen: row.WorkflowRevisionSeen})
+		out = append(out, RunnableRunRecord{RunRecord: runRecordFromRunnableWorkflowRun(row), ProjectID: row.ProjectID, WorkflowRevisionSeen: row.WorkflowRevisionSeen})
 	}
 	return out, nil
 }
@@ -32,7 +32,45 @@ func (s *Store) ClaimRun(ctx context.Context, runID workflow.RunID, expectedGene
 	if err != nil {
 		return RunnableRunRecord{}, err
 	}
-	return RunnableRunRecord{RunRecord: runRecordFromClaimedTaskRun(row), WorkflowRevisionSeen: row.WorkflowRevisionSeen}, nil
+	return RunnableRunRecord{RunRecord: runRecordFromClaimedWorkflowRun(row), ProjectID: row.ProjectID, WorkflowRevisionSeen: row.WorkflowRevisionSeen}, nil
+}
+
+func runRecordFromRunnableWorkflowRun(row sqlitegen.ListRunnableWorkflowRunsRow) RunRecord {
+	return RunRecord{
+		ID:                      workflow.RunID(row.ID),
+		TaskID:                  workflow.TaskID(row.TaskID),
+		PlacementID:             workflow.PlacementID(row.PlacementID),
+		NodeID:                  workflow.NodeID(row.NodeID.String),
+		SessionID:               row.SessionID.String,
+		Generation:              row.RunGeneration,
+		AutomationRequestedAt:   row.AutomationRequestedAtUnixMs,
+		StartedAt:               row.StartedAtUnixMs,
+		CompletedAt:             row.CompletedAtUnixMs,
+		InterruptedAt:           row.InterruptedAtUnixMs,
+		InterruptionReason:      row.InterruptionReason,
+		WaitingAskID:            row.WaitingAskID,
+		EffectiveCompletionMode: strings.TrimSpace(row.EffectiveCompletionMode),
+		InvalidCompletions:      row.InvalidCompletionCount,
+	}
+}
+
+func runRecordFromClaimedWorkflowRun(row sqlitegen.ClaimWorkflowRunRow) RunRecord {
+	return RunRecord{
+		ID:                      workflow.RunID(row.ID),
+		TaskID:                  workflow.TaskID(row.TaskID),
+		PlacementID:             workflow.PlacementID(row.PlacementID),
+		NodeID:                  workflow.NodeID(row.NodeID.String),
+		SessionID:               row.SessionID.String,
+		Generation:              row.RunGeneration,
+		AutomationRequestedAt:   row.AutomationRequestedAtUnixMs,
+		StartedAt:               row.StartedAtUnixMs,
+		CompletedAt:             row.CompletedAtUnixMs,
+		InterruptedAt:           row.InterruptedAtUnixMs,
+		InterruptionReason:      row.InterruptionReason,
+		WaitingAskID:            row.WaitingAskID,
+		EffectiveCompletionMode: strings.TrimSpace(row.EffectiveCompletionMode),
+		InvalidCompletions:      row.InvalidCompletionCount,
+	}
 }
 
 func (s *Store) GetRun(ctx context.Context, runID workflow.RunID) (RunRecord, error) {

@@ -233,6 +233,12 @@ RETURNING
         FROM task_node_placements p
         WHERE p.id = task_runs.placement_id
     ) AS task_id,
+    (
+        SELECT t.project_id
+        FROM task_records t
+        JOIN task_node_placements p ON p.task_id = t.id
+        WHERE p.id = task_runs.placement_id
+    ) AS project_id,
     placement_id,
     (
         SELECT p.node_id
@@ -267,6 +273,7 @@ type ClaimWorkflowRunParams struct {
 type ClaimWorkflowRunRow struct {
 	ID                          string
 	TaskID                      string
+	ProjectID                   string
 	PlacementID                 string
 	NodeID                      sql.NullString
 	SessionID                   sql.NullString
@@ -298,6 +305,7 @@ func (q *Queries) ClaimWorkflowRun(ctx context.Context, arg ClaimWorkflowRunPara
 	err := row.Scan(
 		&i.ID,
 		&i.TaskID,
+		&i.ProjectID,
 		&i.PlacementID,
 		&i.NodeID,
 		&i.SessionID,
@@ -5357,6 +5365,7 @@ const listRunnableWorkflowRuns = `-- name: ListRunnableWorkflowRuns :many
 SELECT
     r.id,
     r.task_id,
+    t.project_id,
     r.placement_id,
     r.node_id,
     r.session_id,
@@ -5391,18 +5400,43 @@ ORDER BY r.automation_requested_at_unix_ms ASC, r.id ASC
 LIMIT ?1
 `
 
-func (q *Queries) ListRunnableWorkflowRuns(ctx context.Context, limit int64) ([]TaskRunRecord, error) {
+type ListRunnableWorkflowRunsRow struct {
+	ID                          string
+	TaskID                      string
+	ProjectID                   string
+	PlacementID                 string
+	NodeID                      sql.NullString
+	SessionID                   sql.NullString
+	RunGeneration               int64
+	WorkflowRevisionSeen        int64
+	AutomationRequestedAtUnixMs int64
+	CreatedAtUnixMs             int64
+	UpdatedAtUnixMs             int64
+	StartedAtUnixMs             int64
+	CompletedAtUnixMs           int64
+	InterruptedAtUnixMs         int64
+	InterruptionReason          string
+	InterruptionDetailJson      string
+	WaitingAskID                string
+	EffectiveCompletionMode     string
+	InvalidCompletionCount      int64
+	RunStartSnapshotJson        string
+	MetadataJson                string
+}
+
+func (q *Queries) ListRunnableWorkflowRuns(ctx context.Context, limit int64) ([]ListRunnableWorkflowRunsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listRunnableWorkflowRuns, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []TaskRunRecord
+	var items []ListRunnableWorkflowRunsRow
 	for rows.Next() {
-		var i TaskRunRecord
+		var i ListRunnableWorkflowRunsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.TaskID,
+			&i.ProjectID,
 			&i.PlacementID,
 			&i.NodeID,
 			&i.SessionID,

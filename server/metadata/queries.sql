@@ -2260,6 +2260,7 @@ LIMIT 1;
 SELECT
     r.id,
     r.task_id,
+    t.project_id,
     r.placement_id,
     r.node_id,
     r.session_id,
@@ -2323,6 +2324,12 @@ RETURNING
         FROM task_node_placements p
         WHERE p.id = task_runs.placement_id
     ) AS task_id,
+    (
+        SELECT t.project_id
+        FROM task_records t
+        JOIN task_node_placements p ON p.task_id = t.id
+        WHERE p.id = task_runs.placement_id
+    ) AS project_id,
     placement_id,
     (
         SELECT p.node_id
