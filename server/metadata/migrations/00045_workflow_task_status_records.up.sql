@@ -1,12 +1,10 @@
 -- +goose Up
 
--- Legacy task and run tables encode unset optional lifecycle facts with
--- sentinels. This boundary normalizes those persisted values to nullable facts
--- before the current-status and attention projections consume them.
+-- Status projections consume nullable lifecycle facts directly.
 CREATE VIEW workflow_task_status_task_records AS
 SELECT
     t.id,
-    NULLIF(t.canceled_at_unix_ms, 0) AS canceled_at_unix_ms
+    t.canceled_at_unix_ms
 FROM task_records t;
 
 CREATE VIEW workflow_task_status_run_records AS
@@ -16,17 +14,17 @@ SELECT
     r.placement_id,
     r.session_id,
     r.updated_at_unix_ms,
-    NULLIF(r.started_at_unix_ms, 0) AS started_at_unix_ms,
-    NULLIF(r.completed_at_unix_ms, 0) AS completed_at_unix_ms,
-    NULLIF(r.interrupted_at_unix_ms, 0) AS interrupted_at_unix_ms,
-    NULLIF(r.waiting_ask_id, '') AS waiting_ask_id
+    r.started_at_unix_ms,
+    r.completed_at_unix_ms,
+    r.interrupted_at_unix_ms,
+    r.waiting_ask_id
 FROM task_run_records r;
 
 CREATE VIEW workflow_task_status_transition_records AS
 SELECT
     tt.task_id,
     tt.state,
-    NULLIF(tt.source_node_id, '') AS source_node_id
+    tt.source_node_id
 FROM task_transition_records tt;
 
 CREATE VIEW workflow_task_current_run_records AS

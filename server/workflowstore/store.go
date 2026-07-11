@@ -236,7 +236,7 @@ type TaskRecord struct {
 	SourceURL         string
 	SourceWorkspaceID string
 	ManagedWorktreeID string
-	CanceledAt        int64
+	CanceledAt        *int64
 	CancelReason      string
 	Version           int64
 }

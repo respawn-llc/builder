@@ -9,9 +9,8 @@ import (
 	"strings"
 
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
-
-	"github.com/google/uuid"
 )
 
 const taskListDefaultPageSize = 100
@@ -270,22 +269,12 @@ func parseTaskListAttentionKinds(raw []string) ([]serverapi.WorkflowTaskAttentio
 }
 
 func workflowPointer(value string) (*string, error) {
-	if strings.TrimSpace(value) == "" {
-		return nil, errors.New("workflow selector is required")
+	selector, err := runtimeids.ParseCanonicalUUIDv4(value, "workflow selector")
+	if err != nil {
+		return nil, err
 	}
-	if strings.TrimSpace(value) != value {
-		return nil, errors.New("workflow selector must not have leading or trailing whitespace")
-	}
-	const workflowIDPrefix = "workflow-"
-	rawUUID, hasPrefix := strings.CutPrefix(value, workflowIDPrefix)
-	if !hasPrefix {
-		return nil, errors.New("workflow selector must be a workflow UUID")
-	}
-	parsed, err := uuid.Parse(rawUUID)
-	if err != nil || parsed.Version() != 4 || parsed.String() != rawUUID {
-		return nil, errors.New("workflow selector must be a workflow UUID")
-	}
-	return &value, nil
+	workflowID := "workflow-" + selector.String()
+	return &workflowID, nil
 }
 
 func parseTaskListSortSelectors(raw []string) ([]serverapi.WorkflowTaskListSort, error) {

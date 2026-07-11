@@ -30,7 +30,7 @@ func TestListTasksUsesCanonicalStatusProjection(t *testing.T) {
 	if _, err := workflowStore.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: started.RunID, TransitionID: "done"}); err != nil {
 		t.Fatalf("CompleteRun: %v", err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `UPDATE task_runs SET completed_at_unix_ms = 0, interrupted_at_unix_ms = 1 WHERE id = ?`, string(started.RunID)); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `UPDATE task_runs SET completed_at_unix_ms = NULL, interrupted_at_unix_ms = 1 WHERE id = ?`, string(started.RunID)); err != nil {
 		t.Fatalf("create stale historical run fixture: %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestListTasksStatusAndFiltersMatchCanonicalDetail(t *testing.T) {
 	if _, err := workflowStore.CompleteRun(ctx, workflowstore.CompleteRunRequest{RunID: approvalStarted.RunID, TransitionID: "done"}); err != nil {
 		t.Fatalf("CompleteRun approval: %v", err)
 	}
-	if _, err := store.DB().ExecContext(ctx, `UPDATE task_runs SET completed_at_unix_ms = 0, interrupted_at_unix_ms = 1, waiting_ask_id = 'stale-list-ask' WHERE id = ?`, string(approvalStarted.RunID)); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `UPDATE task_runs SET completed_at_unix_ms = NULL, interrupted_at_unix_ms = 1, waiting_ask_id = 'stale-list-ask' WHERE id = ?`, string(approvalStarted.RunID)); err != nil {
 		t.Fatalf("create stale completed-placement run fixture: %v", err)
 	}
 	canceled := createTask("Canceled")

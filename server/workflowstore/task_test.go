@@ -122,6 +122,57 @@ func TestTaskCreateStartCancelAndComments(t *testing.T) {
 	}
 }
 
+func TestTaskAndRunLifecycleAbsencePersistsAsNull(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+
+	var canceledAt, startedAt, completedAt, interruptedAt sql.NullInt64
+	var waitingAskID sql.NullString
+	readFacts := func() {
+		t.Helper()
+		if err := store.db.QueryRowContext(ctx, `
+SELECT
+    t.canceled_at_unix_ms,
+    r.started_at_unix_ms,
+    r.completed_at_unix_ms,
+    r.interrupted_at_unix_ms,
+    r.waiting_ask_id
+FROM tasks t
+JOIN task_node_placements p ON p.task_id = t.id
+JOIN task_runs r ON r.placement_id = p.id
+WHERE t.id = ? AND r.id = ?
+`, string(task.ID), string(started.RunID)).Scan(&canceledAt, &startedAt, &completedAt, &interruptedAt, &waitingAskID); err != nil {
+			t.Fatalf("read lifecycle facts: %v", err)
+		}
+	}
+
+	readFacts()
+	if canceledAt.Valid || startedAt.Valid || completedAt.Valid || interruptedAt.Valid || waitingAskID.Valid {
+		t.Fatalf("new lifecycle facts = canceled=%+v started=%+v completed=%+v interrupted=%+v waiting_ask=%+v, want NULL absence", canceledAt, startedAt, completedAt, interruptedAt, waitingAskID)
+	}
+
+	claimed, err := store.ClaimRun(ctx, started.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if err := store.SetRunWaitingAsk(ctx, started.RunID, claimed.Generation, "ask-lifecycle-null"); err != nil {
+		t.Fatalf("SetRunWaitingAsk: %v", err)
+	}
+	readFacts()
+	if !startedAt.Valid || !waitingAskID.Valid || completedAt.Valid || interruptedAt.Valid {
+		t.Fatalf("claimed/question lifecycle facts = started=%+v completed=%+v interrupted=%+v waiting_ask=%+v", startedAt, completedAt, interruptedAt, waitingAskID)
+	}
+	if err := store.ClearRunWaitingAsk(ctx, started.RunID, claimed.Generation, "ask-lifecycle-null"); err != nil {
+		t.Fatalf("ClearRunWaitingAsk: %v", err)
+	}
+	readFacts()
+	if waitingAskID.Valid {
+		t.Fatalf("cleared waiting ask = %+v, want NULL", waitingAskID)
+	}
+}
+
 func TestCancelTaskAfterMovingOutOfDoneWritesCurrentTerminalPlacement(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)

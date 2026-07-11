@@ -445,6 +445,66 @@ func TestOpenNormalizesCurrentCompletedTerminalSinkWithoutChangingRuns(t *testin
 	}
 }
 
+func TestOpenMigratesLifecycleAbsenceSentinelsToNull(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 45)
+	if err != nil {
+		t.Fatalf("open test database at version 45: %v", err)
+	}
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json) VALUES ('project-lifecycle-null', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-lifecycle-null", now)
+	execSeed(t, db, "workflow task", workflowSeedTaskSQL, "task-lifecycle-null", "link-1", 1, "NUL-1", now, now)
+	execSeed(t, db, "legacy lifecycle sentinels", `
+UPDATE tasks
+SET canceled_at_unix_ms = 0
+WHERE id = 'task-lifecycle-null';
+INSERT INTO task_node_placements (id, task_id, node_id, state, created_at_unix_ms, updated_at_unix_ms)
+VALUES ('placement-lifecycle-null', 'task-lifecycle-null', 'node-agent', 'active', ?, ?);
+INSERT INTO task_runs (
+    id,
+    placement_id,
+    workflow_revision_seen,
+    created_at_unix_ms,
+    updated_at_unix_ms,
+    started_at_unix_ms,
+    completed_at_unix_ms,
+    interrupted_at_unix_ms,
+    waiting_ask_id
+) VALUES ('run-lifecycle-null', 'placement-lifecycle-null', 1, ?, ?, 0, 0, 0, '');
+`, now, now, now, now)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close version 45 db: %v", err)
+	}
+
+	store, err := Open(root)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	var canceledAt, startedAt, completedAt, interruptedAt sql.NullInt64
+	var waitingAskID sql.NullString
+	if err := store.db.QueryRowContext(t.Context(), `
+SELECT
+    t.canceled_at_unix_ms,
+    r.started_at_unix_ms,
+    r.completed_at_unix_ms,
+    r.interrupted_at_unix_ms,
+    r.waiting_ask_id
+FROM tasks t
+JOIN task_node_placements p ON p.task_id = t.id
+JOIN task_runs r ON r.placement_id = p.id
+WHERE t.id = 'task-lifecycle-null'
+`).Scan(&canceledAt, &startedAt, &completedAt, &interruptedAt, &waitingAskID); err != nil {
+		t.Fatalf("query migrated lifecycle facts: %v", err)
+	}
+	if canceledAt.Valid || startedAt.Valid || completedAt.Valid || interruptedAt.Valid || waitingAskID.Valid {
+		t.Fatalf("migrated lifecycle facts = canceled=%+v started=%+v completed=%+v interrupted=%+v waiting_ask=%+v, want NULL absence", canceledAt, startedAt, completedAt, interruptedAt, waitingAskID)
+	}
+}
+
 func TestOpenMigratesWorkflowScriptNodesWithRuntimeReferences(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")

@@ -81,7 +81,7 @@ func (s *Store) resolveContextInvocation(ctx context.Context, q *sqlitegen.Queri
 		if !ok {
 			return resolvedContextInvocation{}, fmt.Errorf("selected context source node %q missing from run snapshot", source.NodeKey)
 		}
-		runID, err := q.GetLatestCompletedContextSourceRun(ctx, sqlitegen.GetLatestCompletedContextSourceRunParams{TaskID: taskID, NodeID: nullableString(string(node.ID)), BeforeUnixMs: beforeUnixMs})
+		runID, err := q.GetLatestCompletedContextSourceRun(ctx, sqlitegen.GetLatestCompletedContextSourceRunParams{TaskID: taskID, NodeID: nullableString(string(node.ID)), BeforeUnixMs: sql.NullInt64{Int64: beforeUnixMs, Valid: true}})
 		if errors.Is(err, sql.ErrNoRows) {
 			return resolvedContextInvocation{}, ContextSourceNoCompletedRunError{Kind: ContextSourceKindSelected, NodeKey: string(source.NodeKey)}
 		}
@@ -141,9 +141,9 @@ func contextSourceBatchScope(ctx context.Context, q *sqlitegen.Queries, sourcePl
 
 func latestCompletedContextSourceRun(ctx context.Context, q *sqlitegen.Queries, taskID string, nodeID string, beforeUnixMs int64, batchID string, batchScoped bool) (string, error) {
 	if !batchScoped {
-		return q.GetLatestCompletedContextSourceRun(ctx, sqlitegen.GetLatestCompletedContextSourceRunParams{TaskID: taskID, NodeID: nullableString(nodeID), BeforeUnixMs: beforeUnixMs})
+		return q.GetLatestCompletedContextSourceRun(ctx, sqlitegen.GetLatestCompletedContextSourceRunParams{TaskID: taskID, NodeID: nullableString(nodeID), BeforeUnixMs: sql.NullInt64{Int64: beforeUnixMs, Valid: true}})
 	}
-	return q.GetLatestCompletedContextSourceRunInBatch(ctx, sqlitegen.GetLatestCompletedContextSourceRunInBatchParams{TaskID: taskID, NodeID: nullableString(nodeID), BatchID: sql.NullString{String: batchID, Valid: true}, BeforeUnixMs: beforeUnixMs})
+	return q.GetLatestCompletedContextSourceRunInBatch(ctx, sqlitegen.GetLatestCompletedContextSourceRunInBatchParams{TaskID: taskID, NodeID: nullableString(nodeID), BatchID: sql.NullString{String: batchID, Valid: true}, BeforeUnixMs: sql.NullInt64{Int64: beforeUnixMs, Valid: true}})
 }
 
 func (s *Store) resolvePromptPriorParameterValues(ctx context.Context, q *sqlitegen.Queries, taskID string, beforeUnixMs int64, sourcePlacementID string, edge edgeContractSnapshot) (map[string]map[string]string, error) {

@@ -1155,13 +1155,21 @@ func taskSummary(task sqlitegen.TaskRecord, status serverapi.WorkflowTaskStatus,
 		Title:             task.Title,
 		BodyPreview:       bodyPreview(task.Body),
 		SourceWorkspaceID: strings.TrimSpace(task.SourceWorkspaceID.String),
-		CanceledAt:        task.CanceledAtUnixMs,
-		CancelReason:      task.CancellationReason,
+		CanceledAt:        nullableUnixMillis(task.CanceledAtUnixMs),
+		CancelReason:      task.CancellationReason.String,
 		CreatedAtUnixMs:   task.CreatedAtUnixMs,
 		UpdatedAtUnixMs:   task.UpdatedAtUnixMs,
 		Done:              done,
 		ActiveNodeIDs:     append([]string(nil), status.NodeIDs...),
 	}
+}
+
+func nullableUnixMillis(value sql.NullInt64) *int64 {
+	if !value.Valid {
+		return nil
+	}
+	valueCopy := value.Int64
+	return &valueCopy
 }
 
 func placementDTO(placement sqlitegen.TaskNodePlacementRecord, nodes map[string]serverapi.WorkflowNode) serverapi.WorkflowPlacement {
@@ -1309,8 +1317,8 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 			case "run_completed":
 				item.Summary = "Run completed"
 			case "run_interrupted":
-				item.Summary = interruptedRunMessage(run.InterruptionReason, run.InterruptionDetailJson)
-				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: task.WorkflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, DetailJSON: run.InterruptionDetailJson, OccurredAtUnixMs: run.InterruptedAtUnixMs}
+				item.Summary = interruptedRunMessage(run.InterruptionReason.String, run.InterruptionDetailJson)
+				attention := serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + run.ID, Kind: attentionKindInterruptedRun, ProjectID: task.ProjectID, WorkflowID: task.WorkflowID, TaskID: task.ID, TaskShortID: task.ShortID, TaskTitle: task.Title, RunID: run.ID, SessionID: run.SessionID.String, Message: item.Summary, DetailJSON: run.InterruptionDetailJson, OccurredAtUnixMs: run.InterruptedAtUnixMs.Int64}
 				item.Attention = &attention
 			}
 		case "task_canceled":
@@ -1325,7 +1333,7 @@ func (s *Service) activityItemsFromRows(task sqlitegen.TaskRecord, rows []taskAc
 
 func runDTO(run sqlitegen.TaskRunRecord, nodes map[string]serverapi.WorkflowNode, sessionNames map[string]string) serverapi.WorkflowRun {
 	nodeID := nullableWorkflowViewNodeID(run.NodeID)
-	dto := serverapi.WorkflowRun{ID: run.ID, TaskID: run.TaskID, PlacementID: run.PlacementID, NodeID: nodeID, SessionID: run.SessionID.String, Generation: run.RunGeneration, StartedAtUnixMs: run.StartedAtUnixMs, CompletedAtUnixMs: run.CompletedAtUnixMs, InterruptedAtUnixMs: run.InterruptedAtUnixMs, InterruptionReason: run.InterruptionReason, InterruptionDetail: run.InterruptionDetailJson, WaitingAskID: run.WaitingAskID, Status: runStatus(run)}
+	dto := serverapi.WorkflowRun{ID: run.ID, TaskID: run.TaskID, PlacementID: run.PlacementID, NodeID: nodeID, SessionID: run.SessionID.String, Generation: run.RunGeneration, StartedAtUnixMs: run.StartedAtUnixMs.Int64, CompletedAtUnixMs: run.CompletedAtUnixMs.Int64, InterruptedAtUnixMs: run.InterruptedAtUnixMs.Int64, InterruptionReason: run.InterruptionReason.String, InterruptionDetail: run.InterruptionDetailJson, WaitingAskID: run.WaitingAskID.String, Status: runStatus(run)}
 	if node, ok := nodes[nodeID]; ok {
 		dto.NodeKind = node.Kind
 		if node.ScriptPath != nil {
@@ -1341,13 +1349,13 @@ func runDTO(run sqlitegen.TaskRunRecord, nodes map[string]serverapi.WorkflowNode
 
 func runStatus(run sqlitegen.TaskRunRecord) string {
 	switch {
-	case run.CompletedAtUnixMs != 0:
+	case run.CompletedAtUnixMs.Valid:
 		return "completed"
-	case run.InterruptedAtUnixMs != 0:
+	case run.InterruptedAtUnixMs.Valid:
 		return "interrupted"
-	case strings.TrimSpace(run.WaitingAskID) != "":
+	case run.WaitingAskID.Valid:
 		return "waiting_question"
-	case run.StartedAtUnixMs != 0:
+	case run.StartedAtUnixMs.Valid:
 		return "running"
 	default:
 		return "pending"
@@ -1619,8 +1627,8 @@ func (s *Service) questionAttentionItems(ctx context.Context, projectID string, 
 	items := []serverapi.WorkflowAttentionItem{}
 	questions := newPendingQuestionResolver(s.transcripts, s.prompts)
 	for _, row := range rows {
-		askID, ok := row.WaitingAskID.(string)
-		if !ok || strings.TrimSpace(askID) == "" {
+		askID := strings.TrimSpace(row.WaitingAskID)
+		if askID == "" {
 			return nil, fmt.Errorf("workflow question attention projection returned invalid ask id for run %q", row.RunID)
 		}
 		question, err := questions.Question(ctx, row.SessionID, askID)
@@ -1769,7 +1777,7 @@ func (s *Service) interruptedRunAttentionItems(ctx context.Context, projectID st
 	}
 	items := make([]serverapi.WorkflowAttentionItem, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(row.InterruptionReason, row.InterruptionDetailJson), DetailJSON: row.InterruptionDetailJson, OccurredAtUnixMs: row.InterruptedAtUnixMs})
+		items = append(items, serverapi.WorkflowAttentionItem{ID: attentionKindInterruptedRun + ":" + row.RunID, Kind: attentionKindInterruptedRun, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, TaskID: row.TaskID, TaskShortID: row.ShortID, TaskTitle: row.Title, RunID: row.RunID, SessionID: row.SessionID, Message: interruptedRunMessage(row.InterruptionReason.String, row.InterruptionDetailJson), DetailJSON: row.InterruptionDetailJson, OccurredAtUnixMs: row.InterruptedAtUnixMs.Int64})
 	}
 	return items, nil
 }
@@ -2084,7 +2092,7 @@ func (s *Service) taskCard(ctx context.Context, task sqlitegen.TaskRecord, statu
 }
 
 func taskActions(task sqlitegen.TaskRecord, summary serverapi.WorkflowTaskSummary, placements []sqlitegen.TaskNodePlacementRecord, runs []sqlitegen.TaskRunRecord, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind) serverapi.WorkflowTaskActions {
-	actions := serverapi.WorkflowTaskActions{CanCancel: task.CanceledAtUnixMs == 0 && !summary.Done}
+	actions := serverapi.WorkflowTaskActions{CanCancel: !task.CanceledAtUnixMs.Valid && !summary.Done}
 	currentPlacementIDs := currentTaskPlacementIDs(placements)
 	runningRunIDs := []string{}
 	interruptedRunIDs := []string{}
@@ -2104,22 +2112,22 @@ func taskActions(task sqlitegen.TaskRecord, summary serverapi.WorkflowTaskSummar
 		if !currentPlacementIDs[run.PlacementID] {
 			continue
 		}
-		if run.CompletedAtUnixMs != 0 {
+		if run.CompletedAtUnixMs.Valid {
 			continue
 		}
-		if strings.TrimSpace(run.WaitingAskID) != "" {
+		if run.WaitingAskID.Valid {
 			waitingAskRunIDs = append(waitingAskRunIDs, run.ID)
 		}
-		if run.InterruptedAtUnixMs != 0 {
+		if run.InterruptedAtUnixMs.Valid {
 			interruptedRunIDs = append(interruptedRunIDs, run.ID)
 			continue
 		}
-		if run.StartedAtUnixMs != 0 {
+		if run.StartedAtUnixMs.Valid {
 			runningRunIDs = append(runningRunIDs, run.ID)
 		}
 	}
-	actions.CanStart = task.CanceledAtUnixMs == 0 && backlog && !waitingApproval && len(runningRunIDs) == 0 && len(waitingAskRunIDs) == 0
-	taskActive := task.CanceledAtUnixMs == 0
+	actions.CanStart = !task.CanceledAtUnixMs.Valid && backlog && !waitingApproval && len(runningRunIDs) == 0 && len(waitingAskRunIDs) == 0
+	taskActive := !task.CanceledAtUnixMs.Valid
 	if taskActive && len(runningRunIDs) == 0 {
 		actions.ManualMoveTargetNodeIDs = manualMoveTargetNodeIDs(def, placements, nodeKinds)
 	}
@@ -2249,7 +2257,7 @@ func effectiveBoardPlacements(placements []sqlitegen.TaskNodePlacementRecord, no
 
 func effectiveBoardPlacementsForTask(task sqlitegen.TaskRecord, placements []sqlitegen.TaskNodePlacementRecord, def serverapi.WorkflowDefinition, nodeKinds map[string]workflow.NodeKind) []sqlitegen.TaskNodePlacementRecord {
 	active := effectiveBoardPlacements(placements, nodeKinds)
-	if task.CanceledAtUnixMs == 0 {
+	if !task.CanceledAtUnixMs.Valid {
 		return active
 	}
 	terminalNodeID := canceledBoardTerminalNodeID(def)

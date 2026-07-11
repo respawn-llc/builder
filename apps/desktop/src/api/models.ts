@@ -645,7 +645,7 @@ export type TaskDetail = Readonly<{
   createdAt: number;
   updatedAt: number;
   done: boolean;
-  canceledAt: number;
+  canceledAt: number | null;
 }>;
 
 export type ActivityItem = Readonly<{

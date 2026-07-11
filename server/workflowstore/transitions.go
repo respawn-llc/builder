@@ -291,11 +291,11 @@ func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.Tra
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		interruptedAt := int64(0)
+		interruptedAt := sql.NullInt64{}
 		if invalidScript {
-			interruptedAt = now
+			interruptedAt = sql.NullInt64{Int64: now, Valid: true}
 		}
-		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: interruptionReason, InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
+		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: nullableString(interruptionReason), InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
 			return CompleteRunResult{}, fmt.Errorf("insert approved target run: %w", err)
 		}
 		targetRun := workflow.RunID(targetRunID)

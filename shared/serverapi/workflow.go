@@ -1226,7 +1226,7 @@ type WorkflowTaskSummary struct {
 	Title             string   `json:"title"`
 	BodyPreview       string   `json:"body_preview,omitempty"`
 	SourceWorkspaceID string   `json:"source_workspace_id,omitempty"`
-	CanceledAt        int64    `json:"canceled_at_unix_ms"`
+	CanceledAt        *int64   `json:"canceled_at_unix_ms,omitempty"`
 	CancelReason      string   `json:"cancel_reason,omitempty"`
 	CreatedAtUnixMs   int64    `json:"created_at_unix_ms"`
 	UpdatedAtUnixMs   int64    `json:"updated_at_unix_ms"`

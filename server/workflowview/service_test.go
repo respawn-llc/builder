@@ -1126,7 +1126,7 @@ func TestTaskDetailProjectsCancellationAndInterruptedRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if detail.Summary.CanceledAt == 0 || detail.Summary.CancelReason != "stop" {
+	if detail.Summary.CanceledAt == nil || *detail.Summary.CanceledAt == 0 || detail.Summary.CancelReason != "stop" {
 		t.Fatalf("summary does not project cancellation: %+v", detail.Summary)
 	}
 	if len(detail.Runs) != 1 || detail.Runs[0].InterruptedAtUnixMs == 0 || detail.Runs[0].InterruptionReason != "task_canceled" {
@@ -1281,7 +1281,7 @@ func TestTaskStatusIgnoresHistoricalRunUnderCompletedPlacement(t *testing.T) {
 	// Intentional historical-corruption fixture: prior binaries could leave an
 	// unfinished run below this completed source placement. Read projections
 	// must never treat that history as current task state.
-	if _, err := store.DB().ExecContext(ctx, `UPDATE task_runs SET completed_at_unix_ms = 0, waiting_ask_id = 'stale-ask' WHERE id = ?`, string(started.RunID)); err != nil {
+	if _, err := store.DB().ExecContext(ctx, `UPDATE task_runs SET completed_at_unix_ms = NULL, waiting_ask_id = 'stale-ask' WHERE id = ?`, string(started.RunID)); err != nil {
 		t.Fatalf("create stale historical run fixture: %v", err)
 	}
 

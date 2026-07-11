@@ -119,7 +119,7 @@ func TestMetadataServiceSortsProjectHomeByTaskChildActivitySources(t *testing.T)
 				t.Helper()
 				placementID, _ := taskPlacement(t, ctx, fixture.store, string(fixture.task.ID))
 				if _, err := fixture.store.DB().ExecContext(ctx, homeSortTaskRunSQL,
-					"run-home-sort", placementID, fixture.highUnixMs, fixture.highUnixMs,
+					"run-home-sort", placementID, fixture.highUnixMs, fixture.highUnixMs, fixture.highUnixMs,
 				); err != nil {
 					t.Fatalf("insert run activity: %v", err)
 				}
@@ -207,7 +207,7 @@ func BenchmarkMetadataServiceListProjectHomeSummaries(b *testing.B) {
 			placementID, _ := taskPlacement(b, ctx, store, string(task.ID))
 			timestamp := int64(projectIndex*10 + taskIndex + 1)
 			if _, err := store.DB().ExecContext(ctx, homeSortTaskRunSQL,
-				fmt.Sprintf("bench-run-%d-%d", projectIndex, taskIndex), placementID, timestamp, timestamp,
+				fmt.Sprintf("bench-run-%d-%d", projectIndex, taskIndex), placementID, timestamp, timestamp, timestamp,
 			); err != nil {
 				b.Fatalf("insert run %d/%d: %v", projectIndex, taskIndex, err)
 			}

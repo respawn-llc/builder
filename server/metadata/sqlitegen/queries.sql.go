@@ -148,9 +148,9 @@ SET
     session_id = ?2
 WHERE id = ?3
   AND run_generation = ?4
-  AND started_at_unix_ms > 0
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+  AND started_at_unix_ms IS NOT NULL
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
   AND (session_id IS NULL OR session_id = ?2)
 `
 
@@ -184,8 +184,8 @@ WHERE id = ?4
 `
 
 type CancelTaskParams struct {
-	CanceledAtUnixMs   int64
-	CancellationReason string
+	CanceledAtUnixMs   sql.NullInt64
+	CancellationReason sql.NullString
 	UpdatedAtUnixMs    int64
 	ID                 string
 }
@@ -213,17 +213,17 @@ SET
 WHERE task_runs.id = ?3
   AND run_generation = ?4
   AND automation_requested_at_unix_ms > 0
-  AND started_at_unix_ms = 0
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
-  AND waiting_ask_id = ''
+  AND started_at_unix_ms IS NULL
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
+  AND waiting_ask_id IS NULL
   AND EXISTS (
       SELECT 1
       FROM tasks t
       JOIN task_node_placements p ON p.id = task_runs.placement_id
       JOIN workflow_nodes n ON n.id = p.node_id
       WHERE t.id = p.task_id
-        AND t.canceled_at_unix_ms = 0
+        AND t.canceled_at_unix_ms IS NULL
         AND p.state = 'active'
         AND n.kind IN ('agent', 'script')
   )
@@ -260,7 +260,7 @@ RETURNING
 
 type ClaimWorkflowRunParams struct {
 	UpdatedAtUnixMs    int64
-	StartedAtUnixMs    int64
+	StartedAtUnixMs    sql.NullInt64
 	ID                 string
 	ExpectedGeneration int64
 }
@@ -276,13 +276,13 @@ type ClaimWorkflowRunRow struct {
 	AutomationRequestedAtUnixMs int64
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
-	StartedAtUnixMs             int64
-	CompletedAtUnixMs           int64
-	InterruptedAtUnixMs         int64
-	InterruptionReason          string
+	StartedAtUnixMs             sql.NullInt64
+	CompletedAtUnixMs           sql.NullInt64
+	InterruptedAtUnixMs         sql.NullInt64
+	InterruptionReason          sql.NullString
 	InterruptionDetailJson      string
-	WaitingAskID                string
-	EffectiveCompletionMode     string
+	WaitingAskID                sql.NullString
+	EffectiveCompletionMode     sql.NullString
 	InvalidCompletionCount      int64
 	RunStartSnapshotJson        string
 	MetadataJson                string
@@ -368,11 +368,11 @@ const clearRunWaitingAsk = `-- name: ClearRunWaitingAsk :execrows
 UPDATE task_runs
 SET
     updated_at_unix_ms = ?1,
-    waiting_ask_id = ''
+    waiting_ask_id = NULL
 WHERE id = ?2
   AND run_generation = ?3
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
   AND waiting_ask_id = ?4
 `
 
@@ -380,7 +380,7 @@ type ClearRunWaitingAskParams struct {
 	UpdatedAtUnixMs int64
 	RunID           string
 	RunGeneration   int64
-	AskID           string
+	AskID           sql.NullString
 }
 
 func (q *Queries) ClearRunWaitingAsk(ctx context.Context, arg ClearRunWaitingAskParams) (int64, error) {
@@ -422,16 +422,16 @@ UPDATE task_runs
 SET
     updated_at_unix_ms = ?1,
     completed_at_unix_ms = ?2,
-    waiting_ask_id = ''
+    waiting_ask_id = NULL
 WHERE id = ?3
   AND run_generation = ?4
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
 `
 
 type CompleteRunUpdateRunParams struct {
 	UpdatedAtUnixMs   int64
-	CompletedAtUnixMs int64
+	CompletedAtUnixMs sql.NullInt64
 	RunID             string
 	RunGeneration     int64
 }
@@ -467,8 +467,8 @@ SELECT CAST(COUNT(DISTINCT r.id) AS INTEGER) AS run_count
 FROM task_run_records r
 JOIN task_records t ON t.id = r.task_id
 LEFT JOIN sessions s ON s.id = r.session_id
-WHERE r.completed_at_unix_ms = 0
-  AND r.interrupted_at_unix_ms = 0
+WHERE r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
   AND (
       t.source_workspace_id = ?1
       OR s.workspace_id = ?1
@@ -513,14 +513,14 @@ FROM (
       AND (
           p.state IN ('active', 'waiting_approval')
       )
-      AND t.canceled_at_unix_ms = 0
+      AND t.canceled_at_unix_ms IS NULL
     UNION ALL
     SELECT tt.id
     FROM task_transition_records tt
     JOIN task_records t ON t.id = tt.task_id
     WHERE tt.source_node_id = ?1
       AND tt.state = 'pending_approval'
-      AND t.canceled_at_unix_ms = 0
+      AND t.canceled_at_unix_ms IS NULL
     UNION ALL
     SELECT te.id
     FROM task_transition_edges te
@@ -529,7 +529,7 @@ FROM (
     WHERE te.target_node_id = ?1
       AND tt.state = 'pending_approval'
       AND te.state = 'pending'
-      AND t.canceled_at_unix_ms = 0
+      AND t.canceled_at_unix_ms IS NULL
 )
 `
 
@@ -563,7 +563,7 @@ JOIN task_node_placements p
     AND p.state IN ('active', 'waiting_approval')
 JOIN workflow_nodes n ON n.id = p.node_id
 WHERE t.managed_worktree_id = ?1
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND n.kind != 'terminal'
 `
 
@@ -580,7 +580,7 @@ FROM tasks t
 JOIN task_node_placements p ON p.task_id = t.id AND p.state IN ('active', 'waiting_approval')
 JOIN workflow_nodes n ON n.id = p.node_id
 WHERE t.project_workflow_link_id = ?1
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND n.kind != 'terminal'
 `
 
@@ -595,7 +595,7 @@ const countNonTerminalTasksBySourceWorkspace = `-- name: CountNonTerminalTasksBy
 SELECT CAST(COUNT(DISTINCT t.id) AS INTEGER) AS task_count
 FROM tasks t
 WHERE t.source_workspace_id = ?1
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND (
       EXISTS (
           SELECT 1
@@ -627,7 +627,7 @@ FROM task_records t
 JOIN task_node_placements p ON p.task_id = t.id AND p.state IN ('active', 'waiting_approval')
 JOIN workflow_nodes n ON n.id = p.node_id
 WHERE t.workflow_id = ?1
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND n.kind != 'terminal'
 `
 
@@ -647,7 +647,7 @@ JOIN task_node_placements p
 JOIN workflow_nodes n ON n.id = p.node_id
 WHERE t.managed_worktree_id = ?1
   AND t.id != ?2
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND n.kind != 'terminal'
 `
 
@@ -718,7 +718,7 @@ FROM (
     JOIN task_transition_records tt ON tt.id = te.task_transition_id
     JOIN task_records t ON t.id = tt.task_id
     WHERE te.workflow_edge_id = ?1
-      AND t.canceled_at_unix_ms = 0
+      AND t.canceled_at_unix_ms IS NULL
       AND tt.state = 'pending_approval'
       AND te.state = 'pending'
     UNION ALL
@@ -728,7 +728,7 @@ FROM (
     JOIN workflow_nodes n ON n.id = p.node_id
     WHERE p.parallel_branch_edge_id = ?1
       AND p.state IN ('active', 'waiting_approval')
-      AND t.canceled_at_unix_ms = 0
+      AND t.canceled_at_unix_ms IS NULL
       AND n.kind != 'terminal'
 )
 `
@@ -810,25 +810,25 @@ JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
 WHERE t.workflow_id = ?1
   AND r.node_id = ?2
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND p.state = 'active'
   AND n.kind IN ('agent', 'script')
   AND (
       (
-          r.started_at_unix_ms > 0
-          AND r.completed_at_unix_ms = 0
-          AND r.interrupted_at_unix_ms = 0
+          r.started_at_unix_ms IS NOT NULL
+          AND r.completed_at_unix_ms IS NULL
+          AND r.interrupted_at_unix_ms IS NULL
       )
       OR (
-          r.completed_at_unix_ms = 0
-          AND r.interrupted_at_unix_ms > 0
+          r.completed_at_unix_ms IS NULL
+          AND r.interrupted_at_unix_ms IS NOT NULL
       )
       OR (
           r.automation_requested_at_unix_ms > 0
-          AND r.started_at_unix_ms = 0
-          AND r.completed_at_unix_ms = 0
-          AND r.interrupted_at_unix_ms = 0
-          AND r.waiting_ask_id = ''
+          AND r.started_at_unix_ms IS NULL
+          AND r.completed_at_unix_ms IS NULL
+          AND r.interrupted_at_unix_ms IS NULL
+          AND r.waiting_ask_id IS NULL
       )
   )
 `
@@ -1272,7 +1272,7 @@ FROM task_runs r
 JOIN task_node_placements p ON p.id = r.placement_id
 WHERE p.task_id = ?1
   AND p.node_id = ?2
-  AND r.completed_at_unix_ms > 0
+  AND r.completed_at_unix_ms IS NOT NULL
   AND r.completed_at_unix_ms <= ?3
 ORDER BY r.completed_at_unix_ms DESC, r.rowid DESC
 LIMIT 1
@@ -1281,7 +1281,7 @@ LIMIT 1
 type GetLatestCompletedContextSourceRunParams struct {
 	TaskID       string
 	NodeID       sql.NullString
-	BeforeUnixMs int64
+	BeforeUnixMs sql.NullInt64
 }
 
 func (q *Queries) GetLatestCompletedContextSourceRun(ctx context.Context, arg GetLatestCompletedContextSourceRunParams) (string, error) {
@@ -1298,7 +1298,7 @@ JOIN task_node_placements p ON p.id = r.placement_id
 WHERE p.task_id = ?1
   AND p.node_id = ?2
   AND p.parallel_batch_transition_id = ?3
-  AND r.completed_at_unix_ms > 0
+  AND r.completed_at_unix_ms IS NOT NULL
   AND r.completed_at_unix_ms <= ?4
 ORDER BY r.completed_at_unix_ms DESC, r.rowid DESC
 LIMIT 1
@@ -1308,7 +1308,7 @@ type GetLatestCompletedContextSourceRunInBatchParams struct {
 	TaskID       string
 	NodeID       sql.NullString
 	BatchID      sql.NullString
-	BeforeUnixMs int64
+	BeforeUnixMs sql.NullInt64
 }
 
 func (q *Queries) GetLatestCompletedContextSourceRunInBatch(ctx context.Context, arg GetLatestCompletedContextSourceRunInBatchParams) (string, error) {
@@ -1475,7 +1475,7 @@ SELECT
             JOIN task_node_placements p ON p.task_id = t.id AND p.state IN ('active', 'waiting_approval')
             JOIN workflow_nodes n ON n.id = p.node_id
             WHERE t.project_id = ?1
-              AND t.canceled_at_unix_ms = 0
+              AND t.canceled_at_unix_ms IS NULL
               -- Backlog/start-node tasks are drafts, not active project work.
               AND n.kind NOT IN ('start', 'terminal')
             UNION
@@ -1483,7 +1483,7 @@ SELECT
             FROM task_records t
             JOIN task_transitions tt ON tt.task_id = t.id AND tt.state = 'pending_approval'
             WHERE t.project_id = ?1
-              AND t.canceled_at_unix_ms = 0
+              AND t.canceled_at_unix_ms IS NULL
         )
     ) AS INTEGER) AS non_terminal_tasks,
     CAST((
@@ -1493,10 +1493,10 @@ SELECT
         JOIN task_node_placements p ON p.id = r.placement_id
         JOIN workflow_nodes n ON n.id = r.node_id
         WHERE t.project_id = ?1
-          AND t.canceled_at_unix_ms = 0
-          AND r.started_at_unix_ms > 0
-          AND r.completed_at_unix_ms = 0
-          AND r.interrupted_at_unix_ms = 0
+          AND t.canceled_at_unix_ms IS NULL
+          AND r.started_at_unix_ms IS NOT NULL
+          AND r.completed_at_unix_ms IS NULL
+          AND r.interrupted_at_unix_ms IS NULL
           AND p.state = 'active'
           AND n.kind IN ('agent', 'script')
     ) AS INTEGER) AS active_runs,
@@ -1507,12 +1507,12 @@ SELECT
         JOIN task_node_placements p ON p.id = r.placement_id
         JOIN workflow_nodes n ON n.id = r.node_id
         WHERE t.project_id = ?1
-          AND t.canceled_at_unix_ms = 0
+          AND t.canceled_at_unix_ms IS NULL
           AND r.automation_requested_at_unix_ms > 0
-          AND r.started_at_unix_ms = 0
-          AND r.completed_at_unix_ms = 0
-          AND r.interrupted_at_unix_ms = 0
-          AND r.waiting_ask_id = ''
+          AND r.started_at_unix_ms IS NULL
+          AND r.completed_at_unix_ms IS NULL
+          AND r.interrupted_at_unix_ms IS NULL
+          AND r.waiting_ask_id IS NULL
           AND p.state = 'active'
           AND n.kind IN ('agent', 'script')
     ) AS INTEGER) AS runnable_runs
@@ -2206,39 +2206,39 @@ SELECT
     END) AS INTEGER) AS default_replacement_project_count,
     CAST(COUNT(DISTINCT t.id) AS INTEGER) AS task_count,
     CAST(COUNT(DISTINCT CASE
-        WHEN r.started_at_unix_ms > 0
-          AND r.completed_at_unix_ms = 0
-          AND r.interrupted_at_unix_ms = 0
+        WHEN r.started_at_unix_ms IS NOT NULL
+          AND r.completed_at_unix_ms IS NULL
+          AND r.interrupted_at_unix_ms IS NULL
           AND placement.state = 'active'
           AND n.kind IN ('agent', 'script')
         THEN r.id
     END) AS INTEGER) AS active_run_count,
     CAST(COUNT(DISTINCT CASE
         WHEN r.automation_requested_at_unix_ms > 0
-          AND r.started_at_unix_ms = 0
-          AND r.completed_at_unix_ms = 0
-          AND r.interrupted_at_unix_ms = 0
-          AND r.waiting_ask_id = ''
-          AND t.canceled_at_unix_ms = 0
+          AND r.started_at_unix_ms IS NULL
+          AND r.completed_at_unix_ms IS NULL
+          AND r.interrupted_at_unix_ms IS NULL
+          AND r.waiting_ask_id IS NULL
+          AND t.canceled_at_unix_ms IS NULL
           AND placement.state = 'active'
           AND n.kind IN ('agent', 'script')
         THEN r.id
     END) AS INTEGER) AS runnable_run_count,
     CAST(COUNT(DISTINCT CASE
         WHEN (
-            r.started_at_unix_ms > 0
-            AND r.completed_at_unix_ms = 0
-            AND r.interrupted_at_unix_ms = 0
+            r.started_at_unix_ms IS NOT NULL
+            AND r.completed_at_unix_ms IS NULL
+            AND r.interrupted_at_unix_ms IS NULL
             AND placement.state = 'active'
             AND n.kind IN ('agent', 'script')
         )
         OR (
             r.automation_requested_at_unix_ms > 0
-            AND r.started_at_unix_ms = 0
-            AND r.completed_at_unix_ms = 0
-            AND r.interrupted_at_unix_ms = 0
-            AND r.waiting_ask_id = ''
-            AND t.canceled_at_unix_ms = 0
+            AND r.started_at_unix_ms IS NULL
+            AND r.completed_at_unix_ms IS NULL
+            AND r.interrupted_at_unix_ms IS NULL
+            AND r.waiting_ask_id IS NULL
+            AND t.canceled_at_unix_ms IS NULL
             AND placement.state = 'active'
             AND n.kind IN ('agent', 'script')
         )
@@ -2354,14 +2354,14 @@ SELECT
         JOIN task_node_placements p ON p.task_id = t.id AND p.state IN ('active', 'waiting_approval')
         JOIN workflow_nodes n ON n.id = p.node_id
         WHERE t.workflow_id = ?1
-          AND t.canceled_at_unix_ms = 0
+          AND t.canceled_at_unix_ms IS NULL
           AND n.kind NOT IN ('start', 'terminal')
           AND NOT EXISTS (
               SELECT 1
               FROM task_run_records interrupted
               WHERE interrupted.placement_id = p.id
-                AND interrupted.completed_at_unix_ms = 0
-                AND interrupted.interrupted_at_unix_ms > 0
+                AND interrupted.completed_at_unix_ms IS NULL
+                AND interrupted.interrupted_at_unix_ms IS NOT NULL
           )
     ) AS active_node_placement_count,
     (
@@ -2369,7 +2369,7 @@ SELECT
         FROM task_transition_records tt
         JOIN task_records t ON t.id = tt.task_id
         WHERE t.workflow_id = ?1
-          AND t.canceled_at_unix_ms = 0
+          AND t.canceled_at_unix_ms IS NULL
           AND tt.state = 'pending_approval'
     ) AS pending_approval_count,
     (
@@ -2379,10 +2379,10 @@ SELECT
         JOIN task_node_placements p ON p.id = r.placement_id
         JOIN workflow_nodes n ON n.id = r.node_id
         WHERE t.workflow_id = ?1
-          AND t.canceled_at_unix_ms = 0
-          AND r.started_at_unix_ms > 0
-          AND r.completed_at_unix_ms = 0
-          AND r.interrupted_at_unix_ms = 0
+          AND t.canceled_at_unix_ms IS NULL
+          AND r.started_at_unix_ms IS NOT NULL
+          AND r.completed_at_unix_ms IS NULL
+          AND r.interrupted_at_unix_ms IS NULL
           AND p.state = 'active'
           AND n.kind IN ('agent', 'script')
     ) AS active_run_count,
@@ -2393,12 +2393,12 @@ SELECT
         JOIN task_node_placements p ON p.id = r.placement_id
         JOIN workflow_nodes n ON n.id = r.node_id
         WHERE t.workflow_id = ?1
-          AND t.canceled_at_unix_ms = 0
+          AND t.canceled_at_unix_ms IS NULL
           AND r.automation_requested_at_unix_ms > 0
-          AND r.started_at_unix_ms = 0
-          AND r.completed_at_unix_ms = 0
-          AND r.interrupted_at_unix_ms = 0
-          AND r.waiting_ask_id = ''
+          AND r.started_at_unix_ms IS NULL
+          AND r.completed_at_unix_ms IS NULL
+          AND r.interrupted_at_unix_ms IS NULL
+          AND r.waiting_ask_id IS NULL
           AND p.state = 'active'
           AND n.kind IN ('agent', 'script')
     ) AS runnable_run_count
@@ -2903,8 +2903,8 @@ INSERT INTO tasks (
     ?8,
     ?9,
     ?10,
-    0,
-    '',
+    NULL,
+    NULL,
     ?11,
     ?12,
     ?13
@@ -3085,12 +3085,12 @@ type InsertTaskRunParams struct {
 	AutomationRequestedAtUnixMs int64
 	CreatedAtUnixMs             int64
 	UpdatedAtUnixMs             int64
-	StartedAtUnixMs             int64
-	CompletedAtUnixMs           int64
-	InterruptedAtUnixMs         int64
-	InterruptionReason          string
+	StartedAtUnixMs             sql.NullInt64
+	CompletedAtUnixMs           sql.NullInt64
+	InterruptedAtUnixMs         sql.NullInt64
+	InterruptionReason          sql.NullString
 	InterruptionDetailJson      string
-	WaitingAskID                string
+	WaitingAskID                sql.NullString
 	InvalidCompletionCount      int64
 	RunStartSnapshotJson        string
 	MetadataJson                string
@@ -3570,21 +3570,21 @@ SET
     interrupted_at_unix_ms = ?2,
     interruption_reason = ?3,
     interruption_detail_json = ?4,
-    waiting_ask_id = ''
+    waiting_ask_id = NULL
 WHERE EXISTS (
       SELECT 1
       FROM task_node_placements p
       WHERE p.id = task_runs.placement_id
         AND p.task_id = ?5
   )
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
 `
 
 type InterruptActiveTaskRunsParams struct {
 	UpdatedAtUnixMs        int64
-	InterruptedAtUnixMs    int64
-	InterruptionReason     string
+	InterruptedAtUnixMs    sql.NullInt64
+	InterruptionReason     sql.NullString
 	InterruptionDetailJson string
 	TaskID                 string
 }
@@ -3610,17 +3610,17 @@ SET
     interrupted_at_unix_ms = ?2,
     interruption_reason = ?3,
     interruption_detail_json = ?4,
-    waiting_ask_id = ''
+    waiting_ask_id = NULL
 WHERE id = ?5
   AND run_generation = ?6
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
 `
 
 type InterruptRunGenerationParams struct {
 	UpdatedAtUnixMs        int64
-	InterruptedAtUnixMs    int64
-	InterruptionReason     string
+	InterruptedAtUnixMs    sql.NullInt64
+	InterruptionReason     sql.NullString
 	InterruptionDetailJson string
 	RunID                  string
 	RunGeneration          int64
@@ -3648,16 +3648,16 @@ SET
     interrupted_at_unix_ms = ?2,
     interruption_reason = ?3,
     interruption_detail_json = ?4
-WHERE started_at_unix_ms > 0
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
-  AND waiting_ask_id = ''
+WHERE started_at_unix_ms IS NOT NULL
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
+  AND waiting_ask_id IS NULL
 `
 
 type InterruptStartedWorkflowRunsForRecoveryParams struct {
 	UpdatedAtUnixMs        int64
-	InterruptedAtUnixMs    int64
-	InterruptionReason     string
+	InterruptedAtUnixMs    sql.NullInt64
+	InterruptionReason     sql.NullString
 	InterruptionDetailJson string
 }
 
@@ -3681,16 +3681,16 @@ SET
     interrupted_at_unix_ms = ?2,
     interruption_reason = ?3,
     interruption_detail_json = ?4,
-    waiting_ask_id = ''
+    waiting_ask_id = NULL
 WHERE id = ?5
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
 `
 
 type InterruptWorkflowRunParams struct {
 	UpdatedAtUnixMs        int64
-	InterruptedAtUnixMs    int64
-	InterruptionReason     string
+	InterruptedAtUnixMs    sql.NullInt64
+	InterruptionReason     sql.NullString
 	InterruptionDetailJson string
 	ID                     string
 }
@@ -3760,7 +3760,7 @@ WITH effective_board_placements AS (
       AND t.project_id = ?1
       AND t.workflow_id = ?2
       AND (
-          t.canceled_at_unix_ms = 0
+          t.canceled_at_unix_ms IS NULL
           OR n.kind = 'terminal'
           OR trim(?3) = ''
       )
@@ -3771,7 +3771,7 @@ WITH effective_board_placements AS (
     FROM task_records t
     WHERE t.project_id = ?1
       AND t.workflow_id = ?2
-      AND t.canceled_at_unix_ms != 0
+      AND t.canceled_at_unix_ms IS NOT NULL
       AND trim(?3) != ''
       AND NOT EXISTS (
           SELECT 1
@@ -3791,7 +3791,7 @@ WITH effective_board_placements AS (
       AND t.project_id = ?1
       AND t.workflow_id = ?2
       AND (
-          t.canceled_at_unix_ms = 0
+          t.canceled_at_unix_ms IS NULL
           OR trim(?3) = ''
       )
       AND trim(tt.source_node_id) != ''
@@ -3870,7 +3870,7 @@ WHERE t.project_id = ?1
             AND n.kind = 'terminal'
       )
       OR (
-          t.canceled_at_unix_ms != 0
+          t.canceled_at_unix_ms IS NOT NULL
           AND trim(?3) != ''
       )
   )
@@ -3945,7 +3945,7 @@ WITH board_node_task_ids AS (
       AND t.project_id = ?6
       AND t.workflow_id = ?7
       AND (
-        t.canceled_at_unix_ms = 0
+        t.canceled_at_unix_ms IS NULL
         OR n.kind = 'terminal'
       )
     UNION
@@ -3957,14 +3957,14 @@ WITH board_node_task_ids AS (
       AND tt.state = 'pending_approval'
       AND t.project_id = ?6
       AND t.workflow_id = ?7
-      AND t.canceled_at_unix_ms = 0
+      AND t.canceled_at_unix_ms IS NULL
     UNION
     SELECT
         t.id
     FROM task_records t
     WHERE t.project_id = ?6
       AND t.workflow_id = ?7
-      AND t.canceled_at_unix_ms != 0
+      AND t.canceled_at_unix_ms IS NOT NULL
       AND ?5 = ?8
       AND EXISTS (
         SELECT 1
@@ -4086,7 +4086,7 @@ WITH board_open_task_ids AS (
       AND t.project_id = ?5
       AND t.workflow_id = ?6
       AND (
-          t.canceled_at_unix_ms = 0
+          t.canceled_at_unix_ms IS NULL
           OR trim(?7) = ''
       )
     UNION
@@ -4100,7 +4100,7 @@ WITH board_open_task_ids AS (
       AND t.project_id = ?5
       AND t.workflow_id = ?6
       AND (
-          t.canceled_at_unix_ms = 0
+          t.canceled_at_unix_ms IS NULL
           OR trim(?7) = ''
       )
 )
@@ -4230,9 +4230,9 @@ JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
 WHERE r.task_id = ?1
   AND (?2 = '' OR r.session_id = ?2)
-  AND r.started_at_unix_ms > 0
-  AND r.completed_at_unix_ms = 0
-  AND r.interrupted_at_unix_ms = 0
+  AND r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
   AND p.state = 'active'
   AND n.kind IN ('agent', 'script')
 ORDER BY r.started_at_unix_ms DESC, (
@@ -4434,7 +4434,6 @@ FROM task_transition_records
 WHERE task_id IN (/*SLICE:task_ids*/?)
   AND state = 'pending_approval'
   AND source_node_id IS NOT NULL
-  AND trim(source_node_id) != ''
 ORDER BY task_id ASC, created_at_unix_ms ASC, id ASC
 `
 
@@ -4529,7 +4528,7 @@ SELECT tt.id
 FROM task_transition_records tt
 JOIN task_records t ON t.id = tt.task_id
 WHERE t.workflow_id = ?1
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND tt.state = 'pending_approval'
 ORDER BY tt.created_at_unix_ms ASC, tt.id ASC
 `
@@ -5089,8 +5088,8 @@ FROM task_run_records r
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
 WHERE r.task_id = ?1
-  AND r.completed_at_unix_ms = 0
-  AND r.interrupted_at_unix_ms > 0
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NOT NULL
   AND p.state = 'active'
   AND n.kind IN ('agent', 'script')
 ORDER BY r.interrupted_at_unix_ms DESC, (
@@ -5155,11 +5154,11 @@ JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
 WHERE r.automation_requested_at_unix_ms > 0
-  AND r.started_at_unix_ms = 0
-  AND r.completed_at_unix_ms = 0
-  AND r.interrupted_at_unix_ms = 0
-  AND r.waiting_ask_id = ''
-  AND t.canceled_at_unix_ms = 0
+  AND r.started_at_unix_ms IS NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
+  AND r.waiting_ask_id IS NULL
+  AND t.canceled_at_unix_ms IS NULL
   AND p.state = 'active'
   AND n.kind IN ('agent', 'script')
 ORDER BY r.automation_requested_at_unix_ms ASC, r.id ASC
@@ -5389,10 +5388,10 @@ SELECT
     run_start_snapshot_json,
     metadata_json
 FROM task_run_records
-WHERE started_at_unix_ms > 0
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
-  AND waiting_ask_id = ''
+WHERE started_at_unix_ms IS NOT NULL
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
+  AND waiting_ask_id IS NULL
 ORDER BY updated_at_unix_ms ASC, (
     SELECT storage.rowid
     FROM task_runs storage
@@ -5407,13 +5406,13 @@ type ListStartedWorkflowRunRecoveryCandidatesRow struct {
 	NodeID                  sql.NullString
 	SessionID               sql.NullString
 	RunGeneration           int64
-	StartedAtUnixMs         int64
-	CompletedAtUnixMs       int64
-	InterruptedAtUnixMs     int64
-	InterruptionReason      string
+	StartedAtUnixMs         sql.NullInt64
+	CompletedAtUnixMs       sql.NullInt64
+	InterruptedAtUnixMs     sql.NullInt64
+	InterruptionReason      sql.NullString
 	InterruptionDetailJson  string
-	WaitingAskID            string
-	EffectiveCompletionMode string
+	WaitingAskID            sql.NullString
+	EffectiveCompletionMode sql.NullString
 	InvalidCompletionCount  int64
 	RunStartSnapshotJson    string
 	MetadataJson            string
@@ -6383,9 +6382,9 @@ SELECT
     run_start_snapshot_json,
     metadata_json
 FROM task_run_records
-WHERE waiting_ask_id != ''
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+WHERE waiting_ask_id IS NOT NULL
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
 ORDER BY updated_at_unix_ms ASC, (
     SELECT storage.rowid
     FROM task_runs storage
@@ -6442,7 +6441,7 @@ SELECT tt.id AS task_transition_id, t.project_id, t.workflow_id, t.id AS task_id
 FROM task_transitions tt
 JOIN task_records t ON t.id = tt.task_id
 WHERE tt.state = 'pending_approval'
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND (?1 = '' OR t.project_id = ?1)
   AND (?2 = '' OR t.id = ?2)
 ORDER BY tt.created_at_unix_ms DESC, tt.rowid DESC
@@ -6529,7 +6528,7 @@ WITH attention_candidates(
     FROM task_transitions tt
     JOIN task_records t ON t.id = tt.task_id
     WHERE tt.state = 'pending_approval'
-      AND t.canceled_at_unix_ms = 0
+      AND t.canceled_at_unix_ms IS NULL
       AND (?2 = '' OR t.project_id = ?2)
       AND (?3 = '' OR t.id = ?3)
       AND (
@@ -6586,11 +6585,11 @@ WITH attention_candidates(
     FROM task_run_records r
     JOIN task_records t ON t.id = r.task_id
     JOIN task_node_placements p ON p.id = r.placement_id
-    WHERE r.interrupted_at_unix_ms > 0
-      AND r.completed_at_unix_ms = 0
+    WHERE r.interrupted_at_unix_ms IS NOT NULL
+      AND r.completed_at_unix_ms IS NULL
       AND trim(COALESCE(r.interruption_reason, '')) NOT IN ('user_interrupt', 'workflow_runtime_canceled')
       AND p.state IN ('active', 'waiting_approval')
-      AND t.canceled_at_unix_ms = 0
+      AND t.canceled_at_unix_ms IS NULL
       AND (?2 = '' OR t.project_id = ?2)
       AND (?3 = '' OR t.id = ?3)
       AND (
@@ -6797,11 +6796,11 @@ SELECT t.project_id, t.workflow_id, t.id AS task_id, t.short_id, t.title, r.id A
 FROM task_run_records r
 JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
-WHERE r.interrupted_at_unix_ms > 0
-  AND r.completed_at_unix_ms = 0
+WHERE r.interrupted_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
   AND trim(COALESCE(r.interruption_reason, '')) NOT IN ('user_interrupt', 'workflow_runtime_canceled')
   AND p.state IN ('active', 'waiting_approval')
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND (?1 = '' OR t.project_id = ?1)
   AND (?2 = '' OR t.id = ?2)
 ORDER BY r.interrupted_at_unix_ms DESC, r.id DESC
@@ -6820,9 +6819,9 @@ type ListWorkflowInterruptedRunAttentionItemsRow struct {
 	Title                  string
 	RunID                  string
 	SessionID              string
-	InterruptionReason     string
+	InterruptionReason     sql.NullString
 	InterruptionDetailJson string
-	InterruptedAtUnixMs    int64
+	InterruptedAtUnixMs    sql.NullInt64
 }
 
 func (q *Queries) ListWorkflowInterruptedRunAttentionItems(ctx context.Context, arg ListWorkflowInterruptedRunAttentionItemsParams) ([]ListWorkflowInterruptedRunAttentionItemsRow, error) {
@@ -7045,7 +7044,7 @@ type ListWorkflowQuestionAttentionItemsParams struct {
 type ListWorkflowQuestionAttentionItemsRow struct {
 	RunID           string
 	SessionID       string
-	WaitingAskID    interface{}
+	WaitingAskID    string
 	ProjectID       string
 	WorkflowID      string
 	TaskID          string
@@ -7264,7 +7263,7 @@ WITH activity(
         '' AS actor
     FROM task_run_records r
     WHERE r.task_id = ?2
-      AND r.started_at_unix_ms > 0
+      AND r.started_at_unix_ms IS NOT NULL
       AND (
           ?3 = 0
           OR r.started_at_unix_ms < ?4
@@ -7282,7 +7281,7 @@ WITH activity(
         '' AS actor
     FROM task_run_records r
     WHERE r.task_id = ?2
-      AND r.completed_at_unix_ms > 0
+      AND r.completed_at_unix_ms IS NOT NULL
       AND (
           ?3 = 0
           OR r.completed_at_unix_ms < ?4
@@ -7300,7 +7299,7 @@ WITH activity(
         '' AS actor
     FROM task_run_records r
     WHERE r.task_id = ?2
-      AND r.interrupted_at_unix_ms > 0
+      AND r.interrupted_at_unix_ms IS NOT NULL
       AND (
           ?3 = 0
           OR r.interrupted_at_unix_ms < ?4
@@ -7318,7 +7317,7 @@ WITH activity(
         '' AS actor
     FROM task_records t
     WHERE t.id = ?2
-      AND t.canceled_at_unix_ms > 0
+      AND t.canceled_at_unix_ms IS NOT NULL
       AND (
           ?3 = 0
           OR t.canceled_at_unix_ms < ?4
@@ -7742,8 +7741,8 @@ type ListWorkflowTaskListRowsRow struct {
 	SourceUrl             string
 	SourceWorkspaceID     sql.NullString
 	ManagedWorktreeID     sql.NullString
-	CanceledAtUnixMs      int64
-	CancellationReason    string
+	CanceledAtUnixMs      sql.NullInt64
+	CancellationReason    sql.NullString
 	CreatedAtUnixMs       int64
 	UpdatedAtUnixMs       int64
 	MetadataJson          string
@@ -8227,8 +8226,8 @@ SET
     interruption_reason = CASE WHEN invalid_completion_count + 1 >= ?2 THEN 'workflow_protocol_violation_limit' ELSE interruption_reason END,
     interruption_detail_json = CASE WHEN invalid_completion_count + 1 >= ?2 THEN ?4 ELSE interruption_detail_json END
 WHERE id = ?5
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
   AND (?6 = 0 OR run_generation = ?7)
 RETURNING invalid_completion_count, interrupted_at_unix_ms
 `
@@ -8236,7 +8235,7 @@ RETURNING invalid_completion_count, interrupted_at_unix_ms
 type RecordInvalidCompletionProtocolViolationParams struct {
 	UpdatedAtUnixMs        int64
 	MaxCount               int64
-	InterruptedAtUnixMs    int64
+	InterruptedAtUnixMs    sql.NullInt64
 	InterruptionDetailJson string
 	RunID                  string
 	RequireGeneration      interface{}
@@ -8245,7 +8244,7 @@ type RecordInvalidCompletionProtocolViolationParams struct {
 
 type RecordInvalidCompletionProtocolViolationRow struct {
 	InvalidCompletionCount int64
-	InterruptedAtUnixMs    int64
+	InterruptedAtUnixMs    sql.NullInt64
 }
 
 func (q *Queries) RecordInvalidCompletionProtocolViolation(ctx context.Context, arg RecordInvalidCompletionProtocolViolationParams) (RecordInvalidCompletionProtocolViolationRow, error) {
@@ -8335,11 +8334,11 @@ FROM task_run_records r
 JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.started_at_unix_ms > 0
-  AND r.completed_at_unix_ms = 0
-  AND r.interrupted_at_unix_ms = 0
+WHERE r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
   AND trim(COALESCE(r.session_id, '')) != ''
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND p.state = 'active'
   AND n.kind IN ('agent', 'script')
   AND t.short_id = ?1
@@ -8426,11 +8425,11 @@ FROM task_run_records r
 JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.started_at_unix_ms > 0
-  AND r.completed_at_unix_ms = 0
-  AND r.interrupted_at_unix_ms = 0
+WHERE r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
   AND trim(COALESCE(r.session_id, '')) != ''
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND p.state = 'active'
   AND n.kind IN ('agent', 'script')
   AND r.id = ?1
@@ -8511,11 +8510,11 @@ FROM task_run_records r
 JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.started_at_unix_ms > 0
-  AND r.completed_at_unix_ms = 0
-  AND r.interrupted_at_unix_ms = 0
+WHERE r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
   AND trim(COALESCE(r.session_id, '')) != ''
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND p.state = 'active'
   AND n.kind IN ('agent', 'script')
   AND r.session_id = ?1
@@ -8596,11 +8595,11 @@ FROM task_run_records r
 JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.started_at_unix_ms > 0
-  AND r.completed_at_unix_ms = 0
-  AND r.interrupted_at_unix_ms = 0
+WHERE r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
   AND trim(COALESCE(r.session_id, '')) != ''
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND p.state = 'active'
   AND n.kind IN ('agent', 'script')
   AND t.short_id = ?1
@@ -8681,11 +8680,11 @@ FROM task_run_records r
 JOIN task_records t ON t.id = r.task_id
 JOIN task_node_placements p ON p.id = r.placement_id
 JOIN workflow_nodes n ON n.id = r.node_id
-WHERE r.started_at_unix_ms > 0
-  AND r.completed_at_unix_ms = 0
-  AND r.interrupted_at_unix_ms = 0
+WHERE r.started_at_unix_ms IS NOT NULL
+  AND r.completed_at_unix_ms IS NULL
+  AND r.interrupted_at_unix_ms IS NULL
   AND trim(COALESCE(r.session_id, '')) != ''
-  AND t.canceled_at_unix_ms = 0
+  AND t.canceled_at_unix_ms IS NULL
   AND p.state = 'active'
   AND n.kind IN ('agent', 'script')
   AND t.id = ?1
@@ -8766,8 +8765,8 @@ FROM task_run_records
 WHERE task_id = ?1
   AND waiting_ask_id = ?2
   AND (?3 = '' OR id = ?3)
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
   AND trim(COALESCE(session_id, '')) != ''
 ORDER BY updated_at_unix_ms DESC, (
     SELECT storage.rowid
@@ -8778,7 +8777,7 @@ ORDER BY updated_at_unix_ms DESC, (
 
 type ResolveTaskWaitingAskParams struct {
 	TaskID string
-	AskID  string
+	AskID  sql.NullString
 	RunID  interface{}
 }
 
@@ -8830,16 +8829,16 @@ const resumeTaskRun = `-- name: ResumeTaskRun :execrows
 UPDATE task_runs
 SET
     updated_at_unix_ms = ?1,
-    started_at_unix_ms = 0,
-    interrupted_at_unix_ms = 0,
-    interruption_reason = '',
+    started_at_unix_ms = NULL,
+    interrupted_at_unix_ms = NULL,
+    interruption_reason = NULL,
     interruption_detail_json = '{}',
-    waiting_ask_id = '',
+    waiting_ask_id = NULL,
     invalid_completion_count = 0,
     run_generation = run_generation + 1
 WHERE id = ?2
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms > 0
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NOT NULL
 `
 
 type ResumeTaskRunParams struct {
@@ -8950,15 +8949,15 @@ SET
     waiting_ask_id = ?2
 WHERE id = ?3
   AND run_generation = ?4
-  AND started_at_unix_ms > 0
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
-  AND waiting_ask_id = ''
+  AND started_at_unix_ms IS NOT NULL
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
+  AND waiting_ask_id IS NULL
 `
 
 type SetRunWaitingAskParams struct {
 	UpdatedAtUnixMs int64
-	AskID           string
+	AskID           sql.NullString
 	RunID           string
 	RunGeneration   int64
 }
@@ -8983,17 +8982,17 @@ SET
     effective_completion_mode = ?2
 WHERE id = ?3
   AND run_generation = ?4
-  AND completed_at_unix_ms = 0
-  AND interrupted_at_unix_ms = 0
+  AND completed_at_unix_ms IS NULL
+  AND interrupted_at_unix_ms IS NULL
   AND (
-      effective_completion_mode = ''
+      effective_completion_mode IS NULL
       OR effective_completion_mode = ?2
   )
 `
 
 type SetTaskRunEffectiveCompletionModeParams struct {
 	UpdatedAtUnixMs         int64
-	EffectiveCompletionMode string
+	EffectiveCompletionMode sql.NullString
 	ID                      string
 	ExpectedGeneration      int64
 }
@@ -9020,7 +9019,7 @@ WHERE task_node_placements.id = ?3
       SELECT tasks.id
       FROM tasks
       WHERE tasks.id = ?4
-        AND tasks.canceled_at_unix_ms = 0
+        AND tasks.canceled_at_unix_ms IS NULL
   )
 `
 
@@ -9238,11 +9237,11 @@ WHERE id = ?8
 
 type UpdateTaskRunOutcomeParams struct {
 	UpdatedAtUnixMs        int64
-	CompletedAtUnixMs      int64
-	InterruptedAtUnixMs    int64
-	InterruptionReason     string
+	CompletedAtUnixMs      sql.NullInt64
+	InterruptedAtUnixMs    sql.NullInt64
+	InterruptionReason     sql.NullString
 	InterruptionDetailJson string
-	WaitingAskID           string
+	WaitingAskID           sql.NullString
 	InvalidCompletionCount int64
 	ID                     string
 }

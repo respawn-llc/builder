@@ -174,7 +174,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
         created_at_unix_ms: z.number(),
         updated_at_unix_ms: z.number(),
         done: z.boolean(),
-        canceled_at_unix_ms: z.number().optional().default(0),
+        canceled_at_unix_ms: z.number().nullable().optional(),
       }),
       project: z.object({
         display_name: z.string(),
@@ -223,7 +223,7 @@ export const taskDetailSchema: z.ZodType<TaskDetail> = z
     createdAt: value.task.summary.created_at_unix_ms,
     updatedAt: value.task.summary.updated_at_unix_ms,
     done: value.task.summary.done,
-    canceledAt: value.task.summary.canceled_at_unix_ms,
+    canceledAt: value.task.summary.canceled_at_unix_ms ?? null,
   }));
 
 export const activityPageSchema: z.ZodType<ActivityPage> = z

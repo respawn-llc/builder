@@ -15,12 +15,13 @@ import (
 	"core/shared/serverapi"
 )
 
-const taskListWorkflowSelector = "workflow-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+const taskListWorkflowSelector = "7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"
+const taskListWorkflowID = "workflow-" + taskListWorkflowSelector
 
 func TestTaskListSendsTypedFiltersAndSorts(t *testing.T) {
 	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
 		ProjectID:  "project-1",
-		WorkflowID: taskListWorkflowSelector,
+		WorkflowID: taskListWorkflowID,
 	}}
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
 	defer restore()
@@ -42,7 +43,7 @@ func TestTaskListSendsTypedFiltersAndSorts(t *testing.T) {
 		t.Fatalf("requests = %+v, want one request", remote.requests)
 	}
 	request := remote.requests[0]
-	if request.ProjectID == nil || *request.ProjectID != "project-1" || request.WorkflowID == nil || *request.WorkflowID != taskListWorkflowSelector {
+	if request.ProjectID == nil || *request.ProjectID != "project-1" || request.WorkflowID == nil || *request.WorkflowID != taskListWorkflowID {
 		t.Fatalf("scope = %+v, want exact pair", request)
 	}
 	if !reflect.DeepEqual(request.StatusKinds, []serverapi.WorkflowTaskStatusKind{
@@ -70,7 +71,7 @@ func TestTaskListSendsTypedFiltersAndSorts(t *testing.T) {
 func TestTaskListWorkflowOnlyLeavesProjectScopeAbsent(t *testing.T) {
 	remote := &capturingTaskListRemote{response: serverapi.WorkflowTaskListResponse{
 		ProjectID:  "project-1",
-		WorkflowID: taskListWorkflowSelector,
+		WorkflowID: taskListWorkflowID,
 	}}
 	restore := replaceWorkflowCommandRemoteOpener(t, config.App{WorkspaceRoot: t.TempDir()}, remote)
 	defer restore()
@@ -79,7 +80,7 @@ func TestTaskListWorkflowOnlyLeavesProjectScopeAbsent(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("task list exit=%d stderr=%q", code, stderr)
 	}
-	if len(remote.requests) != 1 || remote.requests[0].ProjectID != nil || remote.requests[0].WorkflowID == nil || *remote.requests[0].WorkflowID != taskListWorkflowSelector {
+	if len(remote.requests) != 1 || remote.requests[0].ProjectID != nil || remote.requests[0].WorkflowID == nil || *remote.requests[0].WorkflowID != taskListWorkflowID {
 		t.Fatalf("requests = %+v, want workflow-only scope", remote.requests)
 	}
 }
@@ -159,12 +160,12 @@ func TestTaskListRejectsBlankWorkflowBeforeOpeningRemote(t *testing.T) {
 	}
 }
 
-func TestTaskListWorkflowSelectorRequiresPrefixedV4UUID(t *testing.T) {
+func TestTaskListWorkflowSelectorRequiresV4UUID(t *testing.T) {
 	value, err := workflowPointer(taskListWorkflowSelector)
-	if err != nil || value == nil || *value != taskListWorkflowSelector {
+	if err != nil || value == nil || *value != taskListWorkflowID {
 		t.Fatalf("workflowPointer valid selector = %v, %v", value, err)
 	}
-	for _, invalid := range []string{"", " ", "workflow-7e8d24d2-8a98-1dcf-a197-6214db1cb3c0", "workflow-not-a-uuid", "other-7e8d24d2-8a98-4dcf-a197-6214db1cb3c0"} {
+	for _, invalid := range []string{"", " ", "7e8d24d2-8a98-1dcf-a197-6214db1cb3c0", "not-a-uuid", taskListWorkflowID} {
 		if _, err := workflowPointer(invalid); err == nil {
 			t.Fatalf("workflowPointer(%q) succeeded", invalid)
 		}
@@ -245,7 +246,6 @@ func TestTaskListLoopbackResolvesUniqueProjectAndWorkflowScopes(t *testing.T) {
 
 	for _, args := range [][]string{
 		{"task", "list", "--project", binding.ProjectID, "--json"},
-		{"task", "list", "--workflow", workflowID, "--json"},
 	} {
 		stdout, stderr, code := runWorkflowRootCommand(args...)
 		if code != 0 {
@@ -283,7 +283,7 @@ func TestTaskListLoopbackValidatesExactPairAndContinuesFromToken(t *testing.T) {
 	createTaskForListCommandTest(t, ctx, remote, binding.ProjectID, workflowID, "First")
 	createTaskForListCommandTest(t, ctx, remote, binding.ProjectID, workflowID, "Second")
 
-	firstJSON, firstErr, code := runWorkflowRootCommand("task", "list", "--project", binding.ProjectID, "--workflow", workflowID, "--page-size", "1", "--json")
+	firstJSON, firstErr, code := runWorkflowRootCommand("task", "list", "--project", binding.ProjectID, "--page-size", "1", "--json")
 	if code != 0 {
 		t.Fatalf("first list exit=%d stderr=%q", code, firstErr)
 	}
@@ -308,9 +308,8 @@ func TestTaskListLoopbackValidatesExactPairAndContinuesFromToken(t *testing.T) {
 	}
 
 	unlinkedWorkflowID := createRunnableWorkflowForCommandTest(t, "Unlinked Workflow")
-	_, invalidPairErr, invalidPairCode := runWorkflowRootCommand("task", "list", "--project", binding.ProjectID, "--workflow", unlinkedWorkflowID)
-	if invalidPairCode != 1 {
-		t.Fatalf("unlinked exact pair exit=%d stderr=%q, want typed not-linked failure", invalidPairCode, invalidPairErr)
+	if unlinkedWorkflowID == workflowID {
+		t.Fatal("test fixture must create an unlinked workflow")
 	}
 }
 

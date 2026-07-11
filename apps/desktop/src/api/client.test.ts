@@ -785,7 +785,7 @@ const emptyTaskDetailResponse = {
       created_at_unix_ms: 1,
       updated_at_unix_ms: 1,
       done: false,
-      canceled_at_unix_ms: 0,
+      canceled_at_unix_ms: null,
     },
     project: {
       display_name: "Project",

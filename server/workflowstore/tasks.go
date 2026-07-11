@@ -200,7 +200,7 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 	metadataJSON := task.MetadataJson
 	requestedSourceWorkspaceID := strings.TrimSpace(req.SourceWorkspaceID)
 	if requestedSourceWorkspaceID != "" && requestedSourceWorkspaceID != currentSourceWorkspaceID {
-		if task.CanceledAtUnixMs != 0 {
+		if task.CanceledAtUnixMs.Valid {
 			return TaskRecord{}, ErrSourceWorkspaceForCanceledTask
 		}
 		if task.ManagedWorktreeID.Valid && strings.TrimSpace(task.ManagedWorktreeID.String) != "" {
@@ -497,7 +497,7 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	if task.CanceledAtUnixMs != 0 {
+	if task.CanceledAtUnixMs.Valid {
 		return preparedTaskStart{}, ErrTaskCanceled
 	}
 	def, wf, err := s.GetDefinition(ctx, workflow.WorkflowID(task.WorkflowID))
@@ -565,10 +565,10 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 	if err != nil {
 		return CompleteRunResult{}, err
 	}
-	if run.CompletedAtUnixMs != 0 {
+	if run.CompletedAtUnixMs.Valid {
 		return CompleteRunResult{}, ErrRunAlreadyCompleted
 	}
-	if run.InterruptedAtUnixMs != 0 {
+	if run.InterruptedAtUnixMs.Valid {
 		return CompleteRunResult{}, errors.New("run already interrupted")
 	}
 	if req.RequireGeneration && run.RunGeneration != req.ExpectedGeneration {
@@ -633,7 +633,7 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 	q := s.queries.WithTx(tx)
 	updatedCount, err := q.CompleteRunUpdateRun(ctx, sqlitegen.CompleteRunUpdateRunParams{
 		UpdatedAtUnixMs:   now,
-		CompletedAtUnixMs: now,
+		CompletedAtUnixMs: sql.NullInt64{Int64: now, Valid: true},
 		RunID:             run.ID,
 		RunGeneration:     run.RunGeneration,
 	})
@@ -739,11 +739,11 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRunRequest) (Comple
 		if err != nil {
 			return CompleteRunResult{}, err
 		}
-		interruptedAt := int64(0)
+		interruptedAt := sql.NullInt64{}
 		if invalidScript {
-			interruptedAt = now
+			interruptedAt = sql.NullInt64{Int64: now, Valid: true}
 		}
-		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: interruptionReason, InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
+		if err := q.InsertTaskRun(ctx, sqlitegen.InsertTaskRunParams{ID: targetRunID, PlacementID: targetPlacementID, WorkflowRevisionSeen: targetSnapshot.WorkflowRevisionSeen, AutomationRequestedAtUnixMs: now, CreatedAtUnixMs: now, UpdatedAtUnixMs: now, InterruptedAtUnixMs: interruptedAt, InterruptionReason: nullableString(interruptionReason), InterruptionDetailJson: interruptionDetail, RunStartSnapshotJson: targetSnapshotJSON, MetadataJson: targetMetadataJSON}); err != nil {
 			return CompleteRunResult{}, fmt.Errorf("insert target run: %w", err)
 		}
 		targetRun := workflow.RunID(targetRunID)
@@ -820,12 +820,12 @@ func (s *Store) CancelTask(ctx context.Context, taskID workflow.TaskID, reason s
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	if updated, err := q.CancelTask(ctx, sqlitegen.CancelTaskParams{ID: string(taskID), CanceledAtUnixMs: now, CancellationReason: strings.TrimSpace(reason), UpdatedAtUnixMs: now}); err != nil {
+	if updated, err := q.CancelTask(ctx, sqlitegen.CancelTaskParams{ID: string(taskID), CanceledAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, CancellationReason: nullableString(strings.TrimSpace(reason)), UpdatedAtUnixMs: now}); err != nil {
 		return err
 	} else if updated != 1 {
 		return sql.ErrNoRows
 	}
-	if _, err := q.InterruptActiveTaskRuns(ctx, sqlitegen.InterruptActiveTaskRunsParams{TaskID: string(taskID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: now, InterruptionReason: "task_canceled", InterruptionDetailJson: "{}"}); err != nil {
+	if _, err := q.InterruptActiveTaskRuns(ctx, sqlitegen.InterruptActiveTaskRunsParams{TaskID: string(taskID), UpdatedAtUnixMs: now, InterruptedAtUnixMs: sql.NullInt64{Int64: now, Valid: true}, InterruptionReason: nullableString("task_canceled"), InterruptionDetailJson: "{}"}); err != nil {
 		return err
 	}
 	placements, err := q.ListTaskNodePlacements(ctx, string(taskID))
