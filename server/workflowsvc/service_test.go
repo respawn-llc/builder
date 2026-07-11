@@ -1029,8 +1029,15 @@ func TestExecutionTargetRecoveryCoordinatorAttachesExactInitialTargetAndRecovers
 	materializer := &recordingTaskExecutionTargetWorktreeMaterializer{
 		inspect: func(_ context.Context, _ worktree.InspectExecutionTargetWorktreeRequest) (worktree.ExecutionTargetWorktreeInspection, error) {
 			return worktree.ExecutionTargetWorktreeInspection{
-				Kind:       worktree.ExecutionTargetWorktreeInspectionExact,
-				BranchName: task.Task.ShortID,
+				Kind:                   worktree.ExecutionTargetWorktreeInspectionExact,
+				BranchName:             task.Task.ShortID,
+				ExactBranchObservation: "deadbeef",
+				LinkedWorktreeOwnership: &workflow.ExecutionTargetLinkedWorktreeOwnership{
+					CommonDir:  "/test/common-dir",
+					AdminEntry: "worktrees/" + task.Task.ShortID,
+					GitDir:     filepath.Join(intendedWorktreeRoot, ".git"),
+					HeadRef:    "refs/heads/" + task.Task.ShortID,
+				},
 			}, nil
 		},
 	}
@@ -3551,7 +3558,18 @@ func (m *recordingTaskExecutionTargetWorktreeMaterializer) ProvisionExecutionTar
 	if m.provisionErr != nil {
 		return worktree.ProvisionExecutionTargetWorktreeResponse{}, m.provisionErr
 	}
-	return worktree.ProvisionExecutionTargetWorktreeResponse{WorktreeRoot: m.worktreeRoot, BranchName: req.TaskShortID, CreatedBranch: true}, nil
+	return worktree.ProvisionExecutionTargetWorktreeResponse{
+		WorktreeRoot:           m.worktreeRoot,
+		BranchName:             req.TaskShortID,
+		CreatedBranch:          true,
+		ExactBranchObservation: req.ResolvedCommit,
+		LinkedWorktreeOwnership: &workflow.ExecutionTargetLinkedWorktreeOwnership{
+			CommonDir:  "/test/common-dir",
+			AdminEntry: "worktrees/" + req.TaskShortID,
+			GitDir:     filepath.Join(m.worktreeRoot, ".git"),
+			HeadRef:    "refs/heads/" + req.TaskShortID,
+		},
+	}, nil
 }
 
 func (m *recordingTaskExecutionTargetWorktreeMaterializer) InspectExecutionTargetWorktree(ctx context.Context, req worktree.InspectExecutionTargetWorktreeRequest) (worktree.ExecutionTargetWorktreeInspection, error) {

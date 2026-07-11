@@ -173,6 +173,61 @@ func (i *GitInspector) CommonDirectory(ctx context.Context, workspaceRoot string
 	return config.CanonicalWorkspaceRoot(commonDir)
 }
 
+func (i *GitInspector) executionTargetLinkedWorktreeOwnership(ctx context.Context, workspaceRoot string, worktreeRoot string, taskShortID string) (*workflow.ExecutionTargetLinkedWorktreeOwnership, error) {
+	canonicalWorkspaceRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		return nil, err
+	}
+	trimmedTaskShortID := strings.TrimSpace(taskShortID)
+	if trimmedTaskShortID == "" {
+		return nil, errors.New("task short id is required")
+	}
+	commonDir, err := i.CommonDirectory(ctx, canonicalWorkspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	output, exitCode, err := i.runner.Run(ctx, canonicalWorktreeRoot, "rev-parse", "--path-format=absolute", "--git-dir")
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, formatGitRunError(exitCode, err, output, "rev-parse", "--path-format=absolute", "--git-dir")
+	}
+	adminDir, err := config.CanonicalWorkspaceRoot(strings.TrimSpace(string(output)))
+	if err != nil {
+		return nil, err
+	}
+	adminEntry, err := filepath.Rel(commonDir, adminDir)
+	if err != nil {
+		return nil, err
+	}
+	adminEntry = filepath.Clean(adminEntry)
+	if adminEntry == "." || filepath.IsAbs(adminEntry) || adminEntry == ".." || strings.HasPrefix(adminEntry, ".."+string(filepath.Separator)) {
+		return nil, fmt.Errorf("linked worktree administrative entry %q is outside common directory", adminDir)
+	}
+	headOutput, headExit, err := i.runner.Run(ctx, canonicalWorktreeRoot, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, formatGitRunError(headExit, err, headOutput, "symbolic-ref", "--quiet", "HEAD")
+	}
+	headRef := strings.TrimSpace(string(headOutput))
+	if headRef != "refs/heads/"+trimmedTaskShortID {
+		return nil, fmt.Errorf("linked worktree HEAD ref %q does not match task branch %q", headRef, trimmedTaskShortID)
+	}
+	return &workflow.ExecutionTargetLinkedWorktreeOwnership{
+		CommonDir:  commonDir,
+		AdminEntry: filepath.ToSlash(adminEntry),
+		GitDir:     filepath.Join(canonicalWorktreeRoot, ".git"),
+		HeadRef:    headRef,
+	}, nil
+}
+
 func (i *GitInspector) ResolveExecutionTarget(ctx context.Context, workspaceRoot string, policy workflow.ExecutionPolicyMode, customRef *string) (ExecutionTargetResolution, error) {
 	if i == nil {
 		return ExecutionTargetResolution{}, fmt.Errorf("git inspector is required")

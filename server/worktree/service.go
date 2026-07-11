@@ -130,9 +130,11 @@ type ProvisionExecutionTargetWorktreeRequest struct {
 }
 
 type ProvisionExecutionTargetWorktreeResponse struct {
-	WorktreeRoot  string
-	BranchName    string
-	CreatedBranch bool
+	WorktreeRoot            string
+	BranchName              string
+	CreatedBranch           bool
+	ExactBranchObservation  string
+	LinkedWorktreeOwnership *workflow.ExecutionTargetLinkedWorktreeOwnership
 }
 
 type ExecutionTargetWorktreeInspectionKind string
@@ -151,8 +153,10 @@ type InspectExecutionTargetWorktreeRequest struct {
 }
 
 type ExecutionTargetWorktreeInspection struct {
-	Kind       ExecutionTargetWorktreeInspectionKind
-	BranchName string
+	Kind                    ExecutionTargetWorktreeInspectionKind
+	BranchName              string
+	ExactBranchObservation  string
+	LinkedWorktreeOwnership *workflow.ExecutionTargetLinkedWorktreeOwnership
 }
 
 type RunExecutionTargetSetupRequest struct {
@@ -279,12 +283,19 @@ func (s *Service) InspectExecutionTargetWorktree(ctx context.Context, req Inspec
 		if entry.Root != canonicalWorktreeRoot {
 			continue
 		}
-		if branchExists &&
+		if rootExists &&
+			branchExists &&
 			entry.BranchRef == "refs/heads/"+taskShortID &&
 			entry.HeadOID == resolvedCommit {
+			ownership, evidenceErr := s.git.executionTargetLinkedWorktreeOwnership(ctx, workspaceRoot, canonicalWorktreeRoot, taskShortID)
+			if evidenceErr != nil {
+				return ExecutionTargetWorktreeInspection{}, evidenceErr
+			}
 			return ExecutionTargetWorktreeInspection{
-				Kind:       ExecutionTargetWorktreeInspectionExact,
-				BranchName: taskShortID,
+				Kind:                    ExecutionTargetWorktreeInspectionExact,
+				BranchName:              taskShortID,
+				ExactBranchObservation:  entry.HeadOID,
+				LinkedWorktreeOwnership: ownership,
 			}, nil
 		}
 		return ExecutionTargetWorktreeInspection{Kind: ExecutionTargetWorktreeInspectionAmbiguous}, nil
@@ -346,10 +357,16 @@ func (s *Service) ProvisionExecutionTargetWorktree(ctx context.Context, req Prov
 	if err != nil {
 		return ProvisionExecutionTargetWorktreeResponse{}, err
 	}
+	ownership, err := s.git.executionTargetLinkedWorktreeOwnership(ctx, workspaceRoot, worktreeRoot, createSpec.BranchName)
+	if err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
 	return ProvisionExecutionTargetWorktreeResponse{
-		WorktreeRoot:  worktreeRoot,
-		BranchName:    createSpec.BranchName,
-		CreatedBranch: createdBranch,
+		WorktreeRoot:            worktreeRoot,
+		BranchName:              createSpec.BranchName,
+		CreatedBranch:           createdBranch,
+		ExactBranchObservation:  resolvedCommit,
+		LinkedWorktreeOwnership: ownership,
 	}, nil
 }
 

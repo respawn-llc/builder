@@ -12,6 +12,7 @@ import (
 
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -107,12 +108,23 @@ func TestInspectExecutionTargetWorktreeClassifiesExactProvisioningEvidence(t *te
 	}); err != nil {
 		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)
 	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
 	inspection, err = env.service.InspectExecutionTargetWorktree(env.ctx, request)
 	if err != nil {
 		t.Fatalf("InspectExecutionTargetWorktree after provision: %v", err)
 	}
-	if inspection.Kind != ExecutionTargetWorktreeInspectionExact || inspection.BranchName != "WOR-101" {
-		t.Fatalf("inspection after provision = %+v, want exact task branch evidence", inspection)
+	if inspection.Kind != ExecutionTargetWorktreeInspectionExact ||
+		inspection.BranchName != "WOR-101" ||
+		inspection.ExactBranchObservation != commit ||
+		inspection.LinkedWorktreeOwnership == nil ||
+		inspection.LinkedWorktreeOwnership.CommonDir == "" ||
+		inspection.LinkedWorktreeOwnership.AdminEntry == "" ||
+		inspection.LinkedWorktreeOwnership.GitDir != filepath.Join(canonicalWorktreeRoot, ".git") ||
+		inspection.LinkedWorktreeOwnership.HeadRef != "refs/heads/WOR-101" {
+		t.Fatalf("inspection after provision = %+v ownership = %+v, want exact task branch ownership evidence", inspection, inspection.LinkedWorktreeOwnership)
 	}
 	inspection, err = env.service.InspectExecutionTargetWorktree(env.ctx, InspectExecutionTargetWorktreeRequest{
 		SourceWorkspaceRoot: env.workspaceRoot,

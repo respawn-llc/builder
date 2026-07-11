@@ -359,7 +359,7 @@ func (c *executionTargetRecoveryCoordinator) recover(target workflow.ExecutionTa
 			if inspection.BranchName != recovery.TaskShortID {
 				return c.markManualRecovery(recovery.Target, claim, workflow.ExecutionTargetRecoveryCauseAmbiguousProvisioning)
 			}
-			return c.attachAndRecoverInitialSetup(recovery, claim, inspection.BranchName)
+			return c.attachAndRecoverInitialSetup(recovery, claim, inspection)
 		case worktree.ExecutionTargetWorktreeInspectionAmbiguous:
 			return c.markManualRecovery(recovery.Target, claim, workflow.ExecutionTargetRecoveryCauseAmbiguousProvisioning)
 		default:
@@ -372,13 +372,18 @@ func (c *executionTargetRecoveryCoordinator) recover(target workflow.ExecutionTa
 	}
 }
 
-func (c *executionTargetRecoveryCoordinator) attachAndRecoverInitialSetup(recovery workflowstore.ExecutionTargetRecoveryContext, claim workflow.ExecutionTargetClaim, branchName string) error {
+func (c *executionTargetRecoveryCoordinator) attachAndRecoverInitialSetup(recovery workflowstore.ExecutionTargetRecoveryContext, claim workflow.ExecutionTargetClaim, inspection worktree.ExecutionTargetWorktreeInspection) error {
 	if recovery.Target.IntendedWorktreeRoot == nil {
 		return errors.New("initial execution target recovery is missing intended worktree root")
+	}
+	if strings.TrimSpace(inspection.ExactBranchObservation) == "" || inspection.LinkedWorktreeOwnership == nil {
+		return c.markManualRecovery(recovery.Target, claim, workflow.ExecutionTargetRecoveryCauseAmbiguousProvisioning)
 	}
 	target := recovery.Target
 	target.State = workflow.ExecutionTargetStateLocked
 	target.IntendedWorktreeRoot = nil
+	target.ExactBranchObservation = stringPointer(inspection.ExactBranchObservation)
+	target.LinkedWorktreeOwnership = inspection.LinkedWorktreeOwnership
 	attached, err := c.service.store.AttachManagedExecutionTargetWorktree(c.ctx, workflowstore.AttachManagedExecutionTargetWorktreeRequest{
 		Target:        target,
 		ExpectedClaim: claim,
@@ -390,7 +395,7 @@ func (c *executionTargetRecoveryCoordinator) attachAndRecoverInitialSetup(recove
 		return fmt.Errorf("attach exact recovered execution target worktree: %w", err)
 	}
 	c.service.publishExecutionTargetRecoveryUpdate(c.ctx, target.TaskID)
-	return c.recoverAttachedSetup(recovery, target, claim, attached, branchName)
+	return c.recoverAttachedSetup(recovery, target, claim, attached, inspection.BranchName)
 }
 
 func (c *executionTargetRecoveryCoordinator) recoverAttachedSetup(recovery workflowstore.ExecutionTargetRecoveryContext, target workflow.ExecutionTarget, claim workflow.ExecutionTargetClaim, attached workflow.ExecutionWorktree, branchName string) error {
@@ -1200,8 +1205,13 @@ func (s *Service) materializeManagedExecutionTarget(ctx context.Context, prepare
 	if provisioned.WorktreeRoot != intendedWorktreeRoot {
 		return fmt.Errorf("provisioned execution target root %q does not match intended root %q", provisioned.WorktreeRoot, intendedWorktreeRoot)
 	}
+	if strings.TrimSpace(provisioned.ExactBranchObservation) == "" || provisioned.LinkedWorktreeOwnership == nil {
+		return errors.New("provisioned execution target is missing exact linked-worktree ownership evidence")
+	}
 	target.State = workflow.ExecutionTargetStateLocked
 	target.IntendedWorktreeRoot = nil
+	target.ExactBranchObservation = stringPointer(provisioned.ExactBranchObservation)
+	target.LinkedWorktreeOwnership = provisioned.LinkedWorktreeOwnership
 	attached, err := s.store.AttachManagedExecutionTargetWorktree(ctx, workflowstore.AttachManagedExecutionTargetWorktreeRequest{
 		Target:        target,
 		ExpectedClaim: claim,
