@@ -36,8 +36,6 @@ type uiLoopRequest struct {
 	startupUpdateNotice          bool
 }
 
-type uiLoopRunner func(uiLoopRequest) (tea.Model, error)
-
 func runUILoop(request uiLoopRequest) (tea.Model, error) {
 	composition, err := composeUIProgram(request, os.Stdout)
 	if err != nil {

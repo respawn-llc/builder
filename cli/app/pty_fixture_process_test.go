@@ -8,8 +8,6 @@ import (
 
 	checkpoint "core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/appfixture"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type ptyCheckpointTerminalFile struct {
@@ -106,32 +104,34 @@ func runPTYFixtureProcess(ctx context.Context, processConfig appfixture.ProcessC
 	}
 	defer func() { _ = server.Close() }()
 
-	runUI := uiLoopRunner(func(request uiLoopRequest) (tea.Model, error) {
-		composition, err := composeUIProgram(request, terminal)
-		if err != nil {
-			return nil, err
-		}
-		wrapped := newPTYCheckpointModel(composition.model, terminal.writer, scenarioState)
-		finalModel, err := runUIProgram(composition, wrapped)
-		if err != nil {
-			return nil, err
-		}
-		finalWrapped, ok := finalModel.(*ptyCheckpointModel)
-		if !ok {
-			return nil, fmt.Errorf("PTY fixture final model has unexpected type %T", finalModel)
-		}
-		finalAppModel, ok := finalWrapped.appModel()
-		if !ok {
-			return nil, fmt.Errorf("PTY fixture inner final model has unexpected type %T", finalWrapped.inner)
-		}
-		return finalAppModel, nil
+	planner := newSessionLaunchPlanner(server)
+	plan, err := planner.PlanSession(ctx, sessionLaunchRequest{
+		Mode:              launchModeInteractive,
+		SelectedSessionID: sessionID,
 	})
-	return runSessionLifecycleWithUIRunner(
-		ctx,
-		server,
-		interactor,
-		sessionID,
-		sessionLifecycleOptions{},
-		runUI,
-	)
+	if err != nil {
+		return err
+	}
+	runtimePlan, request, err := prepareSessionUIRun(ctx, server, planner, plan, "", false, "", true)
+	if err != nil {
+		return err
+	}
+	defer runtimePlan.Close()
+	composition, err := composeUIProgram(request, terminal)
+	if err != nil {
+		return err
+	}
+	wrapped := newPTYCheckpointModel(composition.model, terminal.writer, scenarioState)
+	finalModel, err := runUIProgram(composition, wrapped)
+	if err != nil {
+		return err
+	}
+	finalWrapped, ok := finalModel.(*ptyCheckpointModel)
+	if !ok {
+		return fmt.Errorf("PTY fixture final model has unexpected type %T", finalModel)
+	}
+	if _, ok := finalWrapped.appModel(); !ok {
+		return fmt.Errorf("PTY fixture inner final model has unexpected type %T", finalWrapped.inner)
+	}
+	return nil
 }

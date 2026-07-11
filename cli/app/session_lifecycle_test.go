@@ -23,7 +23,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/google/uuid"
 )
 
 func TestRunSessionLifecycleMissingWorkspacePrepareRuntimeSuggestsRebind(t *testing.T) {
@@ -116,96 +115,6 @@ func TestRunSessionLifecycleAppliesInitialAgentOverride(t *testing.T) {
 	}
 	if got.Overrides.AgentRole != "worker" {
 		t.Fatalf("agent override = %q, want worker", got.Overrides.AgentRole)
-	}
-}
-
-func TestRunSessionLifecycleUsesSharedUIRunnerForInteractiveLifecycle(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	persistenceRoot := t.TempDir()
-	projectID := uuid.NewString()
-	workspaceID := uuid.NewString()
-	sessionID := uuid.NewString()
-	wiring := &runtimeWiring{}
-	runtimeClosed := false
-	persisted := false
-	lifecycle := &recordingSessionLifecycleClient{
-		getInitialInput: func(_ context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
-			if req.SessionID != sessionID {
-				t.Fatalf("initial-input session = %q, want %q", req.SessionID, sessionID)
-			}
-			return serverapi.SessionInitialInputResponse{Input: "restored draft"}, nil
-		},
-		persistInputDraft: func(_ context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-			if req.SessionID != sessionID || req.Input != "draft after UI" {
-				t.Fatalf("persist request = %+v, want session %q and updated draft", req, sessionID)
-			}
-			persisted = true
-			return serverapi.SessionPersistInputDraftResponse{}, nil
-		},
-	}
-	server := &testEmbeddedServer{
-		cfg: config.App{
-			WorkspaceRoot:   workspaceRoot,
-			PersistenceRoot: persistenceRoot,
-			Settings:        config.Settings{Theme: "dark"},
-		},
-		projectID: projectID,
-		projectViewClient: sessionLifecycleProjectViewClient(metadata.Binding{
-			ProjectID:   projectID,
-			WorkspaceID: workspaceID,
-		}, workspaceRoot, nil),
-		sessionLaunch: stubSessionLaunchClient{planSession: func(_ context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-			if req.SelectedSessionID != sessionID || req.Mode != serverapi.SessionLaunchModeInteractive {
-				t.Fatalf("launch request = %+v, want interactive session %q", req, sessionID)
-			}
-			return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
-				SessionID:           sessionID,
-				SessionName:         "shared lifecycle",
-				WorkspaceRoot:       workspaceRoot,
-				ActiveSettings:      config.Settings{Theme: "dark"},
-				ConfiguredModelName: "configured-model",
-			}}, nil
-		}},
-		sessionLifecycle: lifecycle,
-		prepareRuntime: func(_ context.Context, plan sessionLaunchPlan, _ io.Writer, _ string) (*runtimeLaunchPlan, error) {
-			if plan.SessionID != sessionID {
-				t.Fatalf("prepared session = %q, want %q", plan.SessionID, sessionID)
-			}
-			return &runtimeLaunchPlan{
-				Wiring: wiring,
-				close:  func() { runtimeClosed = true },
-			}, nil
-		},
-	}
-	runCalls := 0
-	runUI := uiLoopRunner(func(request uiLoopRequest) (tea.Model, error) {
-		runCalls++
-		if request.wiring != wiring ||
-			request.initialInput != "restored draft" ||
-			request.sessionName != "shared lifecycle" ||
-			request.configuredModelName != "configured-model" ||
-			!request.startupUpdateNotice ||
-			request.commandRegistry == nil {
-			t.Fatalf("UI loop request = %+v, want fully prepared lifecycle request", request)
-		}
-		model := &uiModel{}
-		model.input = "draft after UI"
-		model.exitAction = UIActionExit
-		return model, nil
-	})
-
-	if err := runSessionLifecycleWithUIRunner(
-		context.Background(),
-		server,
-		nil,
-		sessionID,
-		sessionLifecycleOptions{},
-		runUI,
-	); err != nil {
-		t.Fatalf("run shared session lifecycle: %v", err)
-	}
-	if runCalls != 1 || !persisted || !runtimeClosed {
-		t.Fatalf("lifecycle calls run=%d persisted=%t runtime_closed=%t, want 1/true/true", runCalls, persisted, runtimeClosed)
 	}
 }
 
