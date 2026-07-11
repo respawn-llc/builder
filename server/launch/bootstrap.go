@@ -28,17 +28,20 @@ type SessionCallerContext struct {
 	AgentRole       *string
 }
 
+func sessionCallerContext(meta session.Meta) SessionCallerContext {
+	context := SessionCallerContext{WorkflowSession: meta.WorkflowSession != nil}
+	if meta.Continuation != nil {
+		context.AgentRole = cloneContinuationRole(meta.Continuation.AgentRole)
+	}
+	return context
+}
+
 func ResolveSessionCallerContext(persistenceRoot string, sessionID string) (SessionCallerContext, error) {
 	store, err := openSessionByID(persistenceRoot, sessionID)
 	if err != nil {
 		return SessionCallerContext{}, err
 	}
-	meta := store.Meta()
-	context := SessionCallerContext{WorkflowSession: meta.WorkflowSession != nil}
-	if meta.Continuation != nil && meta.Continuation.AgentRole != nil {
-		context.AgentRole = cloneContinuationRole(meta.Continuation.AgentRole)
-	}
-	return context, nil
+	return sessionCallerContext(store.Meta()), nil
 }
 
 func ResolveBootstrapPlan(persistenceRoot string, req BootstrapRequest) (BootstrapPlan, error) {
@@ -58,10 +61,8 @@ func ResolveBootstrapPlan(persistenceRoot string, req BootstrapRequest) (Bootstr
 		return BootstrapPlan{}, err
 	}
 	meta := store.Meta()
-	plan.SessionContext = &SessionCallerContext{WorkflowSession: meta.WorkflowSession != nil}
-	if meta.Continuation != nil && meta.Continuation.AgentRole != nil {
-		plan.SessionContext.AgentRole = cloneContinuationRole(meta.Continuation.AgentRole)
-	}
+	context := sessionCallerContext(meta)
+	plan.SessionContext = &context
 	if !req.WorkspaceRootExplicit && strings.TrimSpace(meta.WorkspaceRoot) != "" {
 		plan.WorkspaceRoot = strings.TrimSpace(meta.WorkspaceRoot)
 	}

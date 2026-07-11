@@ -1124,21 +1124,7 @@ func registerSubagentFileKeys(tree *fileKeyTree, settings []registrySetting) {
 	if tree == nil {
 		return
 	}
-	template := newFileKeyTree()
-	template.allowPath([]string{"description"})
-	template.allowPath([]string{"agent_callable"})
-	template.allowPath([]string{"workflow_subagent"})
-	for _, setting := range settings {
-		if _, ok := setting.(subagentsSetting); ok {
-			continue
-		}
-		if !settingAppliesToSubagentRole(setting) {
-			continue
-		}
-		if fileKeySetting, ok := setting.(fileKeyRegisteringSetting); ok {
-			fileKeySetting.registerFileKeys(template)
-		}
-	}
+	template := subagentRoleMetadataFileKeyTree(settings)
 	tree.allowDynamicChildren([]string{"subagents"}, func(key string) bool {
 		return IsSubagentRoleNameShape(key)
 	}, template)
@@ -1211,6 +1197,10 @@ func parseSubagentRole(raw settingsFile, settingsPath string, roleKey string) (S
 }
 
 func subagentRoleKeyTree(settings []registrySetting) *fileKeyTree {
+	return subagentRoleMetadataFileKeyTree(settings)
+}
+
+func subagentRoleMetadataFileKeyTree(settings []registrySetting) *fileKeyTree {
 	tree := newFileKeyTree()
 	tree.allowPath([]string{"description"})
 	tree.allowPath([]string{"agent_callable"})

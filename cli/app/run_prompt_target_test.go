@@ -223,7 +223,7 @@ func TestValidateRunPromptAgentRoleUnknownRoleListsCallableRolesForKentSession(t
 	}
 }
 
-func TestStartRunPromptClientUnknownRoleKentSessionErrorUsesCallableAvailableRoles(t *testing.T) {
+func TestStartRunPromptClientMissingWorkspaceContextSessionFailsBeforeRoleValidation(t *testing.T) {
 	home := newAppTestHome(t)
 	workspace := t.TempDir()
 	configPath := filepath.Join(home, config.ConfigDirName, "config.toml")
