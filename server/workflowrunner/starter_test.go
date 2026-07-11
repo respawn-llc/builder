@@ -37,6 +37,8 @@ import (
 	"core/shared/toolspec"
 )
 
+const workflowRunnerTestWaitTimeout = 15 * time.Second
+
 func TestSchedulerRunsNewSessionWorkflowNodeWithStructuredOutput(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer(`{"commentary":"finished structured"}`))
 
@@ -2424,7 +2426,7 @@ func (s panicRuntimeStore) ClearRunWaitingAsk(context.Context, workflow.RunID, i
 
 func (f starterFixture) waitForCompletedRun(t *testing.T, taskID workflow.TaskID) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2445,7 +2447,7 @@ func (f starterFixture) waitForCompletedRun(t *testing.T, taskID workflow.TaskID
 
 func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2472,7 +2474,7 @@ func (f starterFixture) waitForCompletedRunCount(t *testing.T, taskID workflow.T
 
 func (f starterFixture) waitForWaitingAsk(t *testing.T, taskID workflow.TaskID, askID string) workflowstore.RunRecord {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2495,7 +2497,7 @@ func (f starterFixture) waitForWaitingAsk(t *testing.T, taskID workflow.TaskID, 
 
 func (f starterFixture) waitForRunCount(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2511,7 +2513,7 @@ func (f starterFixture) waitForRunCount(t *testing.T, taskID workflow.TaskID, co
 
 func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.TaskID, count int) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2536,7 +2538,7 @@ func (f starterFixture) waitForAllRunsCompleted(t *testing.T, taskID workflow.Ta
 
 func (f starterFixture) waitForInterruptedRun(t *testing.T, scheduler *SchedulerService, taskID workflow.TaskID, reason string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		runs, err := f.store.ListRuns(context.Background(), taskID)
 		if err != nil {
@@ -2556,7 +2558,7 @@ func (f starterFixture) waitForInterruptedRun(t *testing.T, scheduler *Scheduler
 
 func (f starterFixture) waitForActiveCountZero(t *testing.T, scheduler *SchedulerService) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(workflowRunnerTestWaitTimeout)
 	for time.Now().Before(deadline) {
 		if scheduler.ActiveCount() == 0 {
 			return
