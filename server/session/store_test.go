@@ -1,6 +1,7 @@
 package session
 
 import (
+	"core/internal/testharness/testoption"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -395,7 +396,7 @@ func TestSetContinuationContextAndLockedPromptFacingContractStalePersistsTogethe
 		t.Fatalf("mark model dispatch locked: %v", err)
 	}
 
-	result, err := store.SetContinuationContextAndMarkLockedPromptFacingContractStale(ContinuationContext{AgentRole: "reviewer"})
+	result, err := store.SetContinuationContextAndMarkLockedPromptFacingContractStale(ContinuationContext{AgentRole: testoption.String("reviewer")})
 	if err != nil {
 		t.Fatalf("set continuation and stale contract: %v", err)
 	}
@@ -407,7 +408,7 @@ func TestSetContinuationContextAndLockedPromptFacingContractStalePersistsTogethe
 		t.Fatalf("open store: %v", err)
 	}
 	meta := opened.Meta()
-	if meta.Continuation == nil || meta.Continuation.AgentRole != "reviewer" {
+	if meta.Continuation == nil || meta.Continuation.AgentRole == nil || *meta.Continuation.AgentRole != "reviewer" {
 		t.Fatalf("continuation = %+v, want reviewer", meta.Continuation)
 	}
 	if locked := meta.Locked; locked == nil || locked.HasSystemPrompt || locked.HasEnabledTools || len(locked.EnabledTools) != 0 || locked.WebSearchMode != "" {

@@ -2,6 +2,7 @@ package sessionlaunch
 
 import (
 	"context"
+	"core/internal/testharness/testoption"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -296,7 +297,7 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: testoption.String("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
@@ -330,7 +331,7 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	if err != nil {
 		t.Fatalf("reopen session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != "" {
+	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared agent role", got)
 	}
 }
@@ -344,7 +345,7 @@ func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleVali
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: testoption.String("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
@@ -385,7 +386,7 @@ func TestServicePlanSessionInvalidRoleOverridePrecedesPersistedRoleValidation(t 
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: testoption.String("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)

@@ -24,6 +24,7 @@ const (
 	defaultWorkflowCompletionMode        = WorkflowCompletionModeAuto
 	defaultWorkflowConcurrency           = 5
 	defaultWorkflowInvalidCompletionCap  = 5
+	defaultWorkflowSubagents             = false
 	defaultCompactionThreshold           = defaultModelContextWindow * 95 / 100
 	defaultPreSubmitCompactionLeadTokens = DefaultPreSubmitRunwayTokens
 	defaultReviewerFrequency             = "edits"

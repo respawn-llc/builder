@@ -65,6 +65,7 @@ postprocessing_mode = "all" # shell output token optimizations by Kent, or "all"
 completion_mode = "auto"
 concurrency = 5
 max_invalid_completion_attempts = 5
+subagents = false # TOML-only; workflow agents cannot launch custom roles unless enabled
 
 [skills]
 "skill name" = true
@@ -88,6 +89,12 @@ verbose_output = false # show supervisor suggestions in ongoing transcript
 # model = "gpt-5.4-mini"
 # priority_request_mode = true
 ```
+
+### Workflow subagent delegation
+
+`[workflow] subagents` defaults to `false` and has no environment override. Set it to `true` to let workflow agents launch eligible custom roles.
+
+`workflow_subagent` is optional role metadata and defaults to `true`. A custom role is workflow-callable only when `agent_callable`, `[workflow] subagents`, and its effective `workflow_subagent` value all permit it. The global workflow setting remains authoritative.
 
 ## CLI Overrides
 

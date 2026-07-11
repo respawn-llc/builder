@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"context"
+	"core/internal/testharness/testoption"
 	"core/server/metadata/sqlitegen"
 	"core/server/session"
 	"core/shared/clientui"
@@ -44,6 +45,78 @@ func TestResolvePersistedSessionRejectsEscapingArtifactRelpath(t *testing.T) {
 	_, err := store.ResolvePersistedSession(ctx, "session-escape")
 	if !errors.Is(err, ErrPathEscapesPersistenceRoot) {
 		t.Fatalf("expected escaping artifact relpath error, got %v", err)
+	}
+}
+
+func TestResolvePersistedSessionValidatesContinuationRoleJSON(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	if err := sess.SetWorkflowSessionState(&session.WorkflowSessionState{RunID: "run-1", TaskID: "task-1", WorkflowID: "workflow-1"}); err != nil {
+		t.Fatalf("SetWorkflowSessionState: %v", err)
+	}
+	tests := []struct {
+		name     string
+		payload  string
+		wantRole *string
+		wantErr  bool
+	}{
+		{name: "omitted role", payload: `{}`},
+		{name: "null role", payload: `{"agent_role":null}`},
+		{name: "custom role", payload: `{"agent_role":"worker"}`, wantRole: testoption.String("worker")},
+		{name: "fast role", payload: `{"agent_role":"fast"}`, wantRole: testoption.String("fast")},
+		{name: "empty role", payload: `{"agent_role":""}`, wantErr: true},
+		{name: "whitespace role", payload: `{"agent_role":" \t "}`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := store.db.ExecContext(ctx, "UPDATE sessions SET continuation_json = ? WHERE id = ?", tt.payload, sess.Meta().SessionID); err != nil {
+				t.Fatalf("persist continuation JSON: %v", err)
+			}
+			record, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID)
+			if tt.wantErr {
+				if !errors.Is(err, session.ErrInvalidContinuationAgentRole) {
+					t.Fatalf("ResolvePersistedSession error = %v, want invalid role", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolvePersistedSession: %v", err)
+			}
+			if record.Meta.WorkflowSession == nil || record.Meta.WorkflowSession.RunID != "run-1" {
+				t.Fatalf("workflow session = %+v, want persisted workflow association", record.Meta.WorkflowSession)
+			}
+			got := record.Meta.Continuation
+			if tt.wantRole == nil {
+				if got != nil && got.AgentRole != nil {
+					t.Fatalf("continuation = %+v, want absent role", got)
+				}
+				return
+			}
+			if got == nil || got.AgentRole == nil || *got.AgentRole != *tt.wantRole {
+				t.Fatalf("continuation = %+v, want role %q", got, *tt.wantRole)
+			}
+		})
+	}
+}
+
+func TestImportSessionSnapshotRejectsInvalidContinuationRole(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	snapshot := session.PersistedStoreSnapshot{SessionDir: sess.Dir(), Meta: sess.Meta()}
+	snapshot.Meta.Continuation = &session.ContinuationContext{AgentRole: testoption.String(" ")}
+
+	err := store.ImportSessionSnapshot(ctx, snapshot)
+	if !errors.Is(err, session.ErrInvalidContinuationAgentRole) {
+		t.Fatalf("ImportSessionSnapshot error = %v, want invalid continuation role", err)
+	}
+	record, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession after rejected write: %v", err)
+	}
+	if record.Meta.Continuation != nil {
+		t.Fatalf("continuation = %+v, want unchanged absent continuation", record.Meta.Continuation)
 	}
 }
 

@@ -86,6 +86,23 @@ type toolsSetting struct{}
 type skillsSetting struct{}
 type subagentsSetting struct{}
 
+type subagentRoleApplicableSetting interface {
+	appliesToSubagentRole() bool
+}
+
+type rootOnlyBoolSetting struct {
+	scalarSetting[bool]
+}
+
+func (rootOnlyBoolSetting) appliesToSubagentRole() bool {
+	return false
+}
+
+func settingAppliesToSubagentRole(setting registrySetting) bool {
+	scoped, ok := setting.(subagentRoleApplicableSetting)
+	return !ok || scoped.appliesToSubagentRole()
+}
+
 var configRegistry = newSettingsRegistry()
 
 func newSettingsRegistry() settingsRegistry {
@@ -397,6 +414,11 @@ func newSettingsRegistry() settingsRegistry {
 			"KENT_WORKFLOW_MAX_INVALID_COMPLETION_ATTEMPTS",
 			nil,
 			settingDocOptions{}),
+		rootOnlyBoolSetting{newBoolSetting("workflow.subagents", defaultWorkflowSubagents,
+			func(state *settingsState, value bool) { state.Settings.Workflow.Subagents = value },
+			func(state settingsState) bool { return state.Settings.Workflow.Subagents },
+			"",
+			settingDocOptions{})},
 		newStringSetting("reviewer.frequency", defaultReviewerFrequency,
 			func(state *settingsState, value string) { state.Settings.Reviewer.Frequency = value },
 			func(state settingsState) string { return state.Settings.Reviewer.Frequency },
@@ -1105,8 +1127,12 @@ func registerSubagentFileKeys(tree *fileKeyTree, settings []registrySetting) {
 	template := newFileKeyTree()
 	template.allowPath([]string{"description"})
 	template.allowPath([]string{"agent_callable"})
+	template.allowPath([]string{"workflow_subagent"})
 	for _, setting := range settings {
 		if _, ok := setting.(subagentsSetting); ok {
+			continue
+		}
+		if !settingAppliesToSubagentRole(setting) {
 			continue
 		}
 		if fileKeySetting, ok := setting.(fileKeyRegisteringSetting); ok {
@@ -1133,10 +1159,17 @@ func parseSubagentRole(raw settingsFile, settingsPath string, roleKey string) (S
 	if err != nil {
 		return SubagentRole{}, fmt.Errorf("%w subagents.%s: %w", errSubagentRole, roleKey, err)
 	}
+	workflowSubagent, workflowSubagentSet, err := parseSubagentWorkflowSubagent(raw)
+	if err != nil {
+		return SubagentRole{}, fmt.Errorf("%w subagents.%s: %w", errSubagentRole, roleKey, err)
+	}
 	roleState := configRegistry.defaultState()
 	roleSources := configRegistry.defaultSourceMap()
 	for _, setting := range configRegistry.settings {
 		if _, ok := setting.(subagentsSetting); ok {
+			continue
+		}
+		if !settingAppliesToSubagentRole(setting) {
 			continue
 		}
 		if err := setting.applyFile(raw, settingsPath, &roleState, roleSources); err != nil {
@@ -1167,11 +1200,13 @@ func parseSubagentRole(raw settingsFile, settingsPath string, roleKey string) (S
 	}
 	roleState.Settings.Subagents = nil
 	return SubagentRole{
-		Settings:         roleState.Settings,
-		Sources:          explicitSources,
-		Description:      description,
-		AgentCallable:    agentCallable,
-		AgentCallableSet: agentCallableSet,
+		Settings:            roleState.Settings,
+		Sources:             explicitSources,
+		Description:         description,
+		AgentCallable:       agentCallable,
+		AgentCallableSet:    agentCallableSet,
+		WorkflowSubagent:    workflowSubagent,
+		WorkflowSubagentSet: workflowSubagentSet,
 	}, nil
 }
 
@@ -1179,8 +1214,12 @@ func subagentRoleKeyTree(settings []registrySetting) *fileKeyTree {
 	tree := newFileKeyTree()
 	tree.allowPath([]string{"description"})
 	tree.allowPath([]string{"agent_callable"})
+	tree.allowPath([]string{"workflow_subagent"})
 	for _, setting := range settings {
 		if _, ok := setting.(subagentsSetting); ok {
+			continue
+		}
+		if !settingAppliesToSubagentRole(setting) {
 			continue
 		}
 		if fileKeySetting, ok := setting.(fileKeyRegisteringSetting); ok {
@@ -1207,7 +1246,15 @@ func parseSubagentDescription(raw settingsFile) (string, error) {
 }
 
 func parseSubagentAgentCallable(raw settingsFile) (bool, bool, error) {
-	value, ok, err := lookupFileBool(raw, []string{"agent_callable"})
+	return parseSubagentBooleanMetadata(raw, "agent_callable")
+}
+
+func parseSubagentWorkflowSubagent(raw settingsFile) (bool, bool, error) {
+	return parseSubagentBooleanMetadata(raw, "workflow_subagent")
+}
+
+func parseSubagentBooleanMetadata(raw settingsFile, key string) (bool, bool, error) {
+	value, ok, err := lookupFileBool(raw, []string{key})
 	if err != nil {
 		return false, false, err
 	}

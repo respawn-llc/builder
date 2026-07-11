@@ -29,6 +29,7 @@ func TestResolveRunPromptConfigWrapsMissingImplicitWorkspaceContextSession(t *te
 	_, err := ResolveRunPromptConfig(Request{
 		WorkspaceRoot:             workspace,
 		WorkspaceContextSessionID: "missing-context-session",
+		LoadOptions:               config.LoadOptions{ConfigRoot: t.TempDir()},
 	})
 	if err == nil {
 		t.Fatal("expected missing context session error")
@@ -49,6 +50,7 @@ func TestResolveRunPromptConfigKeepsExplicitSessionLookupStrict(t *testing.T) {
 	_, err := ResolveRunPromptConfig(Request{
 		WorkspaceRoot: workspace,
 		SessionID:     "missing-explicit-session",
+		LoadOptions:   config.LoadOptions{ConfigRoot: t.TempDir()},
 	})
 	if !errors.Is(err, sessioncontract.ErrSessionNotFound) {
 		t.Fatalf("error = %v, want ErrSessionNotFound", err)

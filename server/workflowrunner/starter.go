@@ -503,11 +503,14 @@ func allowLockedWorkflowContinuationRoleChange(plan launch.SessionPlan, override
 	if err != nil || !roleOverride.Present {
 		return false
 	}
-	currentRole := ""
+	var currentRole *string
 	if plan.Store != nil && plan.Store.Meta().Continuation != nil {
-		currentRole = strings.TrimSpace(plan.Store.Meta().Continuation.AgentRole)
+		currentRole = plan.Store.Meta().Continuation.AgentRole
 	}
-	return currentRole != roleOverride.Role
+	if currentRole == nil {
+		return !roleOverride.Default
+	}
+	return roleOverride.Default || *currentRole != roleOverride.Role
 }
 
 func applyWorkflowSessionPromptOverrides(plan launch.SessionPlan, input workflowstore.RunStartContext) (launch.SessionPlan, []string, error) {
