@@ -59,6 +59,17 @@ func (e *Engine) recordWorkflowProtocolViolation(ctx context.Context, kind workf
 	})
 }
 
+func (e *Engine) resetWorkflowProtocolViolationBudget(ctx context.Context) error {
+	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
+		return nil
+	}
+	return e.cfg.WorkflowRun.Controller.ResetWorkflowProtocolViolationBudget(ctx, workflowruntime.ViolationResetRequest{
+		RunID:              e.cfg.WorkflowRun.Contract.RunID,
+		ExpectedGeneration: e.cfg.WorkflowRun.Contract.ExpectedGeneration,
+		RequireGeneration:  e.cfg.WorkflowRun.Contract.RequireGeneration,
+	})
+}
+
 func (e *Engine) observeWorkflowDurableCompletion(ctx context.Context) (bool, error) {
 	if !e.workflowRunActive() || e.cfg.WorkflowRun.Controller == nil {
 		return false, nil

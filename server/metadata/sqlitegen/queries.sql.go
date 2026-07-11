@@ -208,6 +208,7 @@ UPDATE task_runs
 SET
     updated_at_unix_ms = ?1,
     started_at_unix_ms = ?2,
+    invalid_completion_count = 0,
     run_generation = run_generation + 1
 WHERE task_runs.id = ?3
   AND run_generation = ?4
@@ -8073,6 +8074,37 @@ func (q *Queries) RejectPendingApprovalTransition(ctx context.Context, transitio
 	return result.RowsAffected()
 }
 
+const resetInvalidCompletionProtocolViolationBudget = `-- name: ResetInvalidCompletionProtocolViolationBudget :execrows
+UPDATE task_runs
+SET
+    updated_at_unix_ms = ?1,
+    invalid_completion_count = 0
+WHERE id = ?2
+  AND completed_at_unix_ms = 0
+  AND interrupted_at_unix_ms = 0
+  AND (?3 = 0 OR run_generation = ?4)
+`
+
+type ResetInvalidCompletionProtocolViolationBudgetParams struct {
+	UpdatedAtUnixMs    int64
+	RunID              string
+	RequireGeneration  interface{}
+	ExpectedGeneration int64
+}
+
+func (q *Queries) ResetInvalidCompletionProtocolViolationBudget(ctx context.Context, arg ResetInvalidCompletionProtocolViolationBudgetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resetInvalidCompletionProtocolViolationBudget,
+		arg.UpdatedAtUnixMs,
+		arg.RunID,
+		arg.RequireGeneration,
+		arg.ExpectedGeneration,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const resolveActiveRunCompletionTargetByProjectShortID = `-- name: ResolveActiveRunCompletionTargetByProjectShortID :many
 SELECT
     r.id,
@@ -8599,6 +8631,7 @@ SET
     interruption_reason = '',
     interruption_detail_json = '{}',
     waiting_ask_id = '',
+    invalid_completion_count = 0,
     run_generation = run_generation + 1
 WHERE id = ?2
   AND completed_at_unix_ms = 0

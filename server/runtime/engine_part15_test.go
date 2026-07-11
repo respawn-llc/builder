@@ -14,6 +14,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -906,6 +907,41 @@ func TestWorkflowRequestAfterCompactionDoesNotDuplicateReinjectedWorkflowPrompt(
 	}
 	if workflowMessages[0].SourcePath != "run-1" {
 		t.Fatalf("workflow prompt source path = %q, want run-1", workflowMessages[0].SourcePath)
+	}
+}
+
+func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	client := &fakeCompactionClient{
+		compactionResponses: []llm.CompactionResponse{{
+			OutputItems: []llm.ResponseItem{
+				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "remote summary"},
+				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+			},
+			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
+		}},
+	}
+	workflowCfg := testWorkflowConfig(controller, config.WorkflowCompletionModeTool)
+	eng := mustNewWorkflowTestEngine(t, store, client, workflowCfg, Config{Model: "gpt-5"})
+	if _, err := controller.RecordWorkflowProtocolViolation(context.Background(), workflowruntime.ViolationRequest{MaxCount: 5}); err != nil {
+		t.Fatalf("RecordWorkflowProtocolViolation: %v", err)
+	}
+	if _, err := controller.RecordWorkflowProtocolViolation(context.Background(), workflowruntime.ViolationRequest{MaxCount: 5}); err != nil {
+		t.Fatalf("RecordWorkflowProtocolViolation: %v", err)
+	}
+	if err := eng.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("CompactContext: %v", err)
+	}
+	if got := controller.protocolBudgetResets.Load(); got != 1 {
+		t.Fatalf("protocol budget resets = %d, want 1", got)
+	}
+	violation, err := controller.RecordWorkflowProtocolViolation(context.Background(), workflowruntime.ViolationRequest{MaxCount: 5})
+	if err != nil {
+		t.Fatalf("RecordWorkflowProtocolViolation after compaction: %v", err)
+	}
+	if violation.Count != 1 {
+		t.Fatalf("violation count after compaction = %d, want 1", violation.Count)
 	}
 }
 

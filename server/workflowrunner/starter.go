@@ -55,6 +55,7 @@ type RuntimeStore interface {
 	ClearRunWaitingAsk(context.Context, workflow.RunID, int64, string) error
 	CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error)
 	RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error)
+	ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
 	InterruptRun(context.Context, workflow.RunID, string, string) error
 	InterruptRunGeneration(context.Context, workflow.RunID, int64, string, string) error

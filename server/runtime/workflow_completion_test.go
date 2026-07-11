@@ -23,6 +23,7 @@ import (
 type fakeWorkflowController struct {
 	completed                           atomic.Int64
 	violations                          atomic.Int64
+	protocolBudgetResets                atomic.Int64
 	maxHits                             atomic.Int64
 	completionObservations              atomic.Int64
 	completeExternallyAfterObservations int64
@@ -48,6 +49,12 @@ func (c *fakeWorkflowController) RecordWorkflowProtocolViolation(_ context.Conte
 		c.maxHits.Add(1)
 	}
 	return workflowruntime.ViolationResult{Count: count, Interrupted: interrupted}, nil
+}
+
+func (c *fakeWorkflowController) ResetWorkflowProtocolViolationBudget(_ context.Context, _ workflowruntime.ViolationResetRequest) error {
+	c.violations.Store(0)
+	c.protocolBudgetResets.Add(1)
+	return nil
 }
 
 func (c *fakeWorkflowController) ObserveWorkflowRunCompletion(_ context.Context, req workflowruntime.CompletionObservationRequest) (workflowruntime.CompletionObservationResult, error) {

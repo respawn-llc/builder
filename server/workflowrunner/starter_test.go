@@ -2312,6 +2312,10 @@ func (s *recordingRuntimeStore) RecordProtocolViolation(context.Context, workflo
 	panic("RecordProtocolViolation not expected")
 }
 
+func (s *recordingRuntimeStore) ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error {
+	panic("ResetProtocolViolationBudget not expected")
+}
+
 func (s *recordingRuntimeStore) CountTaskComments(context.Context, workflow.TaskID) (int64, error) {
 	panic("CountTaskComments not expected")
 }

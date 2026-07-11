@@ -81,6 +81,14 @@ func TestManualMoveFromTerminalToStartResetsTaskToBacklog(t *testing.T) {
 	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
+	if _, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    started.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"first attempt"}`,
+	}); err != nil {
+		t.Fatalf("RecordProtocolViolation: %v", err)
+	}
 	completeRun(t, ctx, store, CompleteRunRequest{RunID: started.RunID, TransitionID: "done"})
 	def, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
@@ -122,6 +130,18 @@ func TestManualMoveFromTerminalToStartResetsTaskToBacklog(t *testing.T) {
 	}
 	if len(runs) != 2 {
 		t.Fatalf("runs after restart = %+v, want second automation run", runs)
+	}
+	secondAttempt, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    restarted.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"second attempt"}`,
+	})
+	if err != nil {
+		t.Fatalf("RecordProtocolViolation after manual restart: %v", err)
+	}
+	if secondAttempt.Count != 1 || secondAttempt.Interrupted {
+		t.Fatalf("violation after manual restart = %+v, want count 1 active", secondAttempt)
 	}
 }
 

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"sort"
@@ -408,6 +409,12 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	_, committed, appendErr := e.store.AppendEvent(stepID, "history_replaced", replacement.payload)
 	if appendErr != nil && !committed {
 		return appendErr
+	}
+	// The durable history replacement is the compaction boundary. A workflow
+	// run receives a new invalid-completion budget only after that boundary has
+	// committed.
+	if err := e.resetWorkflowProtocolViolationBudget(context.Background()); err != nil {
+		return errors.Join(appendErr, err)
 	}
 	// The committed event is the single durable record of this compaction's
 	// provenance; mirror it into runtime state so an in-process gate sees it

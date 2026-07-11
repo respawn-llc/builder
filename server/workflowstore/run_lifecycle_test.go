@@ -37,6 +37,168 @@ func TestRecordProtocolViolationInterruptsAtCap(t *testing.T) {
 	}
 }
 
+func TestResetProtocolViolationBudgetResetsCurrentRunGeneration(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+	claimed, err := store.ClaimRun(ctx, started.RunID, 0)
+	if err != nil {
+		t.Fatalf("ClaimRun: %v", err)
+	}
+	if _, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:              started.RunID,
+		Kind:               ProtocolViolationInvalidCompletion,
+		MaxCount:           2,
+		Detail:             `{"detail":"before compaction"}`,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+	}); err != nil {
+		t.Fatalf("RecordProtocolViolation: %v", err)
+	}
+	if err := store.ResetProtocolViolationBudget(ctx, ResetProtocolViolationBudgetRequest{
+		RunID:              started.RunID,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+	}); err != nil {
+		t.Fatalf("ResetProtocolViolationBudget: %v", err)
+	}
+
+	afterReset, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:              started.RunID,
+		Kind:               ProtocolViolationInvalidCompletion,
+		MaxCount:           2,
+		Detail:             `{"detail":"after compaction"}`,
+		ExpectedGeneration: claimed.Generation,
+		RequireGeneration:  true,
+	})
+	if err != nil {
+		t.Fatalf("RecordProtocolViolation after reset: %v", err)
+	}
+	if afterReset.Count != 1 || afterReset.Interrupted {
+		t.Fatalf("violation after reset = %+v, want count 1 active", afterReset)
+	}
+}
+
+func TestResumeTaskRunsResetsProtocolViolationBudget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+
+	if _, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    started.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"first"}`,
+	}); err != nil {
+		t.Fatalf("RecordProtocolViolation: %v", err)
+	}
+	if err := store.InterruptRun(ctx, started.RunID, "user_interrupt", "{}"); err != nil {
+		t.Fatalf("InterruptRun: %v", err)
+	}
+	if _, err := store.ResumeTaskRuns(ctx, task.ID); err != nil {
+		t.Fatalf("ResumeTaskRuns: %v", err)
+	}
+
+	resumed, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    started.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"after resume"}`,
+	})
+	if err != nil {
+		t.Fatalf("RecordProtocolViolation after resume: %v", err)
+	}
+	if resumed.Count != 1 || resumed.Interrupted {
+		t.Fatalf("violation after resume = %+v, want count 1 active", resumed)
+	}
+}
+
+func TestResumeTaskRunsResetsProtocolViolationBudgetAfterCap(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+
+	capped, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    started.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 1,
+		Detail:   `{"detail":"cap"}`,
+	})
+	if err != nil {
+		t.Fatalf("RecordProtocolViolation: %v", err)
+	}
+	if capped.Count != 1 || !capped.Interrupted {
+		t.Fatalf("capped violation = %+v, want count 1 interrupted", capped)
+	}
+	if _, err := store.ResumeTaskRuns(ctx, task.ID); err != nil {
+		t.Fatalf("ResumeTaskRuns: %v", err)
+	}
+
+	resumed, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    started.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"after cap resume"}`,
+	})
+	if err != nil {
+		t.Fatalf("RecordProtocolViolation after cap resume: %v", err)
+	}
+	if resumed.Count != 1 || resumed.Interrupted {
+		t.Fatalf("violation after cap resume = %+v, want count 1 active", resumed)
+	}
+}
+
+func TestNodeTransitionStartsWithFreshProtocolViolationBudget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID)
+
+	if _, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    started.RunID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"plan attempt"}`,
+	}); err != nil {
+		t.Fatalf("RecordProtocolViolation plan: %v", err)
+	}
+	completeRun(t, ctx, store, CompleteRunRequest{
+		RunID:        started.RunID,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "plan complete"},
+	})
+
+	runs, err := store.ListRuns(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	def, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	implementation := nodeByKey(t, def, "implement")
+	nextRun := runForNode(t, ctx, store, task.ID, workflow.NodeIDOf(implementation))
+	if nextRun.InvalidCompletions != 0 {
+		t.Fatalf("new node run invalid completions = %d, want 0; runs=%+v", nextRun.InvalidCompletions, runs)
+	}
+	nextViolation, err := store.RecordProtocolViolation(ctx, RecordProtocolViolationRequest{
+		RunID:    nextRun.ID,
+		Kind:     ProtocolViolationInvalidCompletion,
+		MaxCount: 2,
+		Detail:   `{"detail":"implementation attempt"}`,
+	})
+	if err != nil {
+		t.Fatalf("RecordProtocolViolation implementation: %v", err)
+	}
+	if nextViolation.Count != 1 || nextViolation.Interrupted {
+		t.Fatalf("violation after node transition = %+v, want count 1 active", nextViolation)
+	}
+}
+
 func TestSetRunEffectiveCompletionModePersistsAndRefusesDrift(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)

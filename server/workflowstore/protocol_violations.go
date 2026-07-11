@@ -72,6 +72,29 @@ func (s *Store) RecordProtocolViolation(ctx context.Context, req RecordProtocolV
 	return RecordProtocolViolationResult{Count: count, Interrupted: interruptedAt != 0}, nil
 }
 
+func (s *Store) ResetProtocolViolationBudget(ctx context.Context, req ResetProtocolViolationBudgetRequest) error {
+	if strings.TrimSpace(string(req.RunID)) == "" {
+		return errors.New("run id is required")
+	}
+	requireGeneration := int64(0)
+	if req.RequireGeneration {
+		requireGeneration = 1
+	}
+	updated, err := s.queries.ResetInvalidCompletionProtocolViolationBudget(ctx, sqlitegen.ResetInvalidCompletionProtocolViolationBudgetParams{
+		UpdatedAtUnixMs:    s.now().UnixMilli(),
+		RunID:              string(req.RunID),
+		RequireGeneration:  requireGeneration,
+		ExpectedGeneration: req.ExpectedGeneration,
+	})
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func protocolViolationCount(run sqlitegen.TaskRunRecord, kind ProtocolViolationKind) int64 {
 	switch kind {
 	case ProtocolViolationInvalidCompletion:
