@@ -20,7 +20,12 @@ func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
 		}
 	case llm.RoleAssistant:
 		if strings.TrimSpace(msg.Content) != "" && !isNoopFinalAnswer(msg) {
-			entries = append(entries, ChatEntry{Visibility: transcript.EntryVisibilityOngoing, Role: "assistant", Text: msg.Content, Phase: msg.Phase})
+			entries = append(entries, ChatEntry{
+				Visibility: assistantTranscriptVisibility(msg.Phase),
+				Role:       "assistant",
+				Text:       msg.Content,
+				Phase:      msg.Phase,
+			})
 		}
 		for _, call := range msg.ToolCalls {
 			entries = append(entries, formatPersistedToolCall(call))
@@ -37,6 +42,17 @@ func VisibleChatEntriesFromMessage(msg llm.Message) []ChatEntry {
 		}
 	}
 	return entries
+}
+
+func assistantTranscriptVisibility(phase llm.MessagePhase) transcript.EntryVisibility {
+	switch transcript.ClassifyAssistantPhase(string(phase)) {
+	case transcript.AssistantPhaseCommentary:
+		return transcript.EntryVisibilityDetail
+	case transcript.AssistantPhaseFinal, transcript.AssistantPhaseLegacyFinal:
+		return transcript.EntryVisibilityOngoing
+	default:
+		panic(fmt.Sprintf("unsupported assistant transcript phase %q", phase))
+	}
 }
 
 func TranscriptEntriesFromEvent(evt Event) []ChatEntry {

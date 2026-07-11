@@ -172,7 +172,7 @@ func transcriptCommittedRowFactsFromMessage(msg llm.Message, streamID *uuid.UUID
 	case llm.RoleAssistant:
 		out := make([]TranscriptCommittedRowFact, 0, 1+len(msg.ToolCalls))
 		if strings.TrimSpace(msg.Content) != "" && !isNoopFinalAnswer(msg) {
-			out = append(out, TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactAssistant, Visibility: transcript.EntryVisibilityOngoing, Assistant: &TranscriptAssistantRowFact{
+			out = append(out, TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactAssistant, Visibility: assistantTranscriptVisibility(msg.Phase), Assistant: &TranscriptAssistantRowFact{
 				Text:     msg.Content,
 				Phase:    msg.Phase,
 				StreamID: cloneTranscriptStreamID(streamID),

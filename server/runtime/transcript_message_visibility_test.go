@@ -33,6 +33,48 @@ func TestMessageTypeTranscriptVisibilityMatrix(t *testing.T) {
 	}
 }
 
+func TestAssistantCommentaryIsDetailOnlyWhileFinalAnswersRemainOngoing(t *testing.T) {
+	tests := []struct {
+		name  string
+		phase llm.MessagePhase
+		want  transcript.EntryVisibility
+	}{
+		{name: "commentary", phase: llm.MessagePhaseCommentary, want: transcript.EntryVisibilityDetail},
+		{name: "final", phase: llm.MessagePhaseFinal, want: transcript.EntryVisibilityOngoing},
+		{name: "legacy final", want: transcript.EntryVisibilityOngoing},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entries := VisibleChatEntriesFromMessage(llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   test.phase,
+				Content: "assistant content",
+			})
+			if len(entries) != 1 || entries[0].Visibility != test.want {
+				t.Fatalf("assistant entries = %+v, want one %q row", entries, test.want)
+			}
+			facts := transcriptCommittedRowFactsFromMessage(llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   test.phase,
+				Content: "assistant content",
+			}, nil, nil, nil)
+			if len(facts) != 1 || facts[0].Visibility != test.want {
+				t.Fatalf("assistant facts = %+v, want one %q row", facts, test.want)
+			}
+			scan := newInMemoryTranscriptScan(inMemoryTranscriptScanRequest{Limit: 1}, nil, nil)
+			scan.ApplyMessage(llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   test.phase,
+				Content: "assistant content",
+			}, 1)
+			scannedEntries := scan.PageSnapshot().Snapshot.Entries
+			if len(scannedEntries) != 1 || scannedEntries[0].Visibility != test.want {
+				t.Fatalf("scanned assistant entries = %+v, want one %q row", scannedEntries, test.want)
+			}
+		})
+	}
+}
+
 func TestUnknownDeveloperMessageVisibilityDependsOnRecoverableContent(t *testing.T) {
 	unknownType := llm.MessageType("unknown_future_context")
 

@@ -113,10 +113,11 @@
 - Thinking-level feedback from `/thinking` is not rendered as a transcript row in ongoing or detail. The TUI surfaces thinking level through the status-line model label/reasoning segment instead of neutral transcript notices.
 - Locked non-message roles:
 - user turns: `O`
-- assistant turns: `O`
+- final assistant turns: `O`
+- assistant commentary/thinking turns: `D`
 - tool calls: `OC`
 - reviewer suggestions/status: `OC` or `O`
-- reasoning-summary progress updates: `D`; their live first bold span is projected into the status-line reasoning slot while the model is reasoning.
+- reasoning-summary progress updates: `D`; their live first bold span is projected into the status-line reasoning slot while the model is reasoning. Ongoing scrollback contains neither reasoning-summary rows nor assistant commentary/thinking rows.
 - Runtime projection decides whether persisted/runtime messages become transcript entries and which role they use.
 - TUI rendering decides how transcript roles behave in ongoing and detail.
 - When a concept already has a dedicated transcript role, do not also render its raw developer/request artifact.
