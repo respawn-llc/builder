@@ -502,7 +502,8 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 	if err := newCompactionPersistence(eng).replaceHistory("step-1", "local", compactionModeManual, replacement); err != nil {
 		t.Fatalf("replace history: %v", err)
 	}
-	if err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionCompleted, compactionModeManual, "local", "", 2, 1, ""); err != nil {
+	trimmed := 2
+	if err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionCompleted, compactionModeManual, "local", "", &trimmed, 1, ""); err != nil {
 		t.Fatalf("emit compaction status: %v", err)
 	}
 

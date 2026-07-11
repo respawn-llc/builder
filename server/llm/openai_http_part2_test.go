@@ -608,6 +608,9 @@ func TestCompactRequestTargetsResponsesCompactPath(t *testing.T) {
 	if resp.OutputItems[1].Type != ResponseItemTypeCompaction {
 		t.Fatalf("expected compaction output item, got %+v", resp.OutputItems[1])
 	}
+	if resp.TrimmedItemsCount != nil {
+		t.Fatalf("trimmed item count = %#v, want unavailable nil", resp.TrimmedItemsCount)
+	}
 }
 
 func TestCompactRequestAcceptsJSONBodyWithNonJSONContentType(t *testing.T) {

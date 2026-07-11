@@ -158,7 +158,7 @@ type CompactionStatus struct {
 	Mode              string
 	Engine            string
 	Provider          string
-	TrimmedItemsCount int
+	TrimmedItemsCount *int
 	Count             int
 	Error             string
 }

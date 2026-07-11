@@ -1,3 +1,5 @@
+//go:build !windows
+
 package driver
 
 import (
@@ -45,7 +47,24 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	resizes := make([]analyzer.ResizeEvent, 0, len(spec.Resizes))
 	phaseInputs := newPhaseInputDispatcher(spec.PhaseInputs)
 	parseableInputs := newParseableInputDispatcher(spec.ParseableInputs)
+	stream, err := analyzer.NewStream(spec.Dimensions)
+	if err != nil {
+		return analyzer.Capture{}, fmt.Errorf("start PTY dispatcher stream: %w", err)
+	}
+	streamFinished := false
+	defer func() {
+		if !streamFinished {
+			_, _ = stream.Finish()
+		}
+	}()
 	readDone := make(chan struct{})
+	dispatcherErr := make(chan error, 1)
+	reportDispatcherError := func(err error) {
+		select {
+		case dispatcherErr <- err:
+		default:
+		}
+	}
 	go func() {
 		defer close(readDone)
 		buffer := make([]byte, 4096)
@@ -53,14 +72,26 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			n, err := ptmx.Read(buffer)
 			if n > 0 {
 				mu.Lock()
-				chunks = append(chunks, analyzer.NewChunk(len(chunks), time.Since(started), buffer[:n]))
-				copied := append([]analyzer.Chunk(nil), chunks...)
-				copiedResizes := append([]analyzer.ResizeEvent(nil), resizes...)
+				chunk := analyzer.NewChunk(len(chunks), time.Since(started), buffer[:n])
+				chunks = append(chunks, chunk)
+				if feedErr := stream.FeedChunk(chunk); feedErr != nil {
+					mu.Unlock()
+					reportDispatcherError(feedErr)
+					return
+				}
+				analysis, snapshotErr := stream.Snapshot()
+				if snapshotErr != nil {
+					mu.Unlock()
+					reportDispatcherError(snapshotErr)
+					return
+				}
+				phasePayloads := phaseInputs.pending(analysis)
+				parseablePayloads := parseableInputs.pending(analysis)
 				mu.Unlock()
-				for _, payload := range phaseInputs.pending(copied, spec.Dimensions, copiedResizes) {
+				for _, payload := range phasePayloads {
 					_, _ = ptmx.Write(payload)
 				}
-				for _, payload := range parseableInputs.pending(copied, spec.Dimensions, copiedResizes) {
+				for _, payload := range parseablePayloads {
 					_, _ = ptmx.Write(payload)
 				}
 			}
@@ -82,13 +113,25 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			defer timer.Stop()
 			select {
 			case <-timer.C:
-				_ = creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(resize.Dimensions.Rows), Cols: uint16(resize.Dimensions.Cols)})
 				mu.Lock()
+				if err := creackpty.Setsize(ptmx, &creackpty.Winsize{Rows: uint16(resize.Dimensions.Rows), Cols: uint16(resize.Dimensions.Cols)}); err != nil {
+					mu.Unlock()
+					reportDispatcherError(fmt.Errorf("resize PTY: %w", err))
+					return
+				}
 				placement := analyzer.BeforeFirstChunk()
+				source := analyzer.Chunk{Index: 0}
 				if len(chunks) > 0 {
 					placement = analyzer.AfterChunk(len(chunks) - 1)
+					source = chunks[len(chunks)-1]
 				}
-				resizes = append(resizes, analyzer.ResizeEvent{Placement: placement, At: time.Since(started), Dimensions: resize.Dimensions})
+				at := time.Since(started)
+				resizes = append(resizes, analyzer.ResizeEvent{Placement: placement, At: at, Dimensions: resize.Dimensions})
+				if err := stream.ResizeFrom(resize.Dimensions, source, at); err != nil {
+					mu.Unlock()
+					reportDispatcherError(fmt.Errorf("apply live PTY resize: %w", err))
+					return
+				}
 				mu.Unlock()
 			case <-ctx.Done():
 			}
@@ -119,6 +162,16 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	select {
 	case waitErr = <-waitDone:
 		timeout = errors.Is(ctx.Err(), context.DeadlineExceeded)
+	case dispatchErr := <-dispatcherErr:
+		_ = ptmx.Close()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		waitErr = <-waitDone
+		cancel()
+		<-readDone
+		eventWG.Wait()
+		return analyzer.Capture{}, fmt.Errorf("PTY dispatcher analysis: %w", dispatchErr)
 	case <-ctx.Done():
 		timeout = errors.Is(ctx.Err(), context.DeadlineExceeded)
 		_ = ptmx.Close()
@@ -142,6 +195,10 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	}
 	capture.ProcessExit = processExit(cmd.ProcessState)
 	capture.ReadLoopDone = true
+	if _, err := stream.Finish(); err != nil {
+		return analyzer.Capture{}, fmt.Errorf("finish PTY dispatcher stream: %w", err)
+	}
+	streamFinished = true
 	if timeout {
 		return capture, &TimeoutError{Command: spec.Path, Elapsed: time.Since(started)}
 	}
@@ -160,16 +217,8 @@ func newPhaseInputDispatcher(events []PhaseInputEvent) *phaseInputDispatcher {
 	return &phaseInputDispatcher{events: append([]PhaseInputEvent(nil), events...), triggered: make([]bool, len(events))}
 }
 
-func (d *phaseInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analyzer.Dimensions, resizes []analyzer.ResizeEvent) [][]byte {
-	if d == nil || len(d.events) == 0 || len(chunks) == 0 {
-		return nil
-	}
-	capture, err := analyzer.NewCaptureWithEvents(dimensions, chunks, resizes)
-	if err != nil {
-		return nil
-	}
-	analysis, err := analyzer.Analyze(capture)
-	if err != nil {
+func (d *phaseInputDispatcher) pending(analysis analyzer.Analysis) [][]byte {
+	if d == nil || len(d.events) == 0 {
 		return nil
 	}
 	out := make([][]byte, 0)
@@ -194,18 +243,8 @@ func newParseableInputDispatcher(events []ParseableInputEvent) *parseableInputDi
 	return &parseableInputDispatcher{events: append([]ParseableInputEvent(nil), events...), triggered: make([]bool, len(events))}
 }
 
-func (d *parseableInputDispatcher) pending(chunks []analyzer.Chunk, dimensions analyzer.Dimensions, resizes []analyzer.ResizeEvent) [][]byte {
-	if d == nil || len(d.events) == 0 || len(chunks) == 0 {
-		return nil
-	}
-	capture, err := analyzer.NewCaptureWithEvents(dimensions, chunks, resizes)
-	if err != nil {
-		return nil
-	}
-	if len(capture.Raw) == 0 {
-		return nil
-	}
-	if _, err := analyzer.Analyze(capture); err != nil {
+func (d *parseableInputDispatcher) pending(analysis analyzer.Analysis) [][]byte {
+	if d == nil || len(d.events) == 0 {
 		return nil
 	}
 	out := make([][]byte, 0)

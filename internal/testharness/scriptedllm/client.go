@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"core/server/llm"
+	"core/shared/textutil"
 )
 
 const defaultContextWindowTokens = 200000
@@ -76,6 +77,7 @@ func (c *Client) Compact(_ context.Context, req llm.CompactionRequest) (llm.Comp
 	}
 	response := c.compactions[0]
 	c.compactions = c.compactions[1:]
+	response.TrimmedItemsCount = textutil.CloneInt(response.TrimmedItemsCount)
 	return response, nil
 }
 

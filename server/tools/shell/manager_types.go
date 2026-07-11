@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"core/server/tools/shell/postprocess"
+	"core/shared/textutil"
 )
 
 const (
@@ -212,7 +213,7 @@ func (p *processEntry) snapshotLocked() Snapshot {
 		Workdir:                 p.workdir,
 		StartedAt:               p.startedAt,
 		FinishedAt:              p.finishedAt,
-		ExitCode:                postprocess.CloneIntPtr(p.exitCode),
+		ExitCode:                textutil.CloneInt(p.exitCode),
 		LogPath:                 p.logPath,
 		RecentOutput:            recentOutput,
 		OutputAvailable:         p.logPath != "",

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/shared/textutil"
 )
 
 type compactionPersistence struct {
@@ -28,13 +29,13 @@ func (p compactionPersistence) replaceHistory(stepID, engine string, mode compac
 	return e.steer(stepID, steerHistoryReplacementIntent(engine, mode, workflowRunID, e.compactionRuntimeState().Count()+1, pendingHandoffFutureMessage, e.LastCommittedAssistantFinalAnswer(), items))
 }
 
-func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode compactionMode, engine, provider string, trimmed, count int, errText string) error {
+func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode compactionMode, engine, provider string, trimmed *int, count int, errText string) error {
 	e := p.engine
 	status := &CompactionStatus{
 		Mode:              string(mode),
 		Engine:            strings.TrimSpace(engine),
 		Provider:          strings.TrimSpace(provider),
-		TrimmedItemsCount: trimmed,
+		TrimmedItemsCount: textutil.CloneInt(trimmed),
 		Count:             count,
 		Error:             strings.TrimSpace(errText),
 	}

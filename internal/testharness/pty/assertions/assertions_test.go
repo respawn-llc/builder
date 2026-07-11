@@ -1,6 +1,7 @@
 package assertions_test
 
 import (
+	"errors"
 	"testing"
 
 	"core/internal/testharness/pty"
@@ -166,6 +167,28 @@ func TestNoAlternateScroll1007ChecksEveryProvidedWindow(t *testing.T) {
 
 	if err := assertions.NoAlternateScroll1007(analysis, pty.OperationWindow{Start: 0, End: 1}, pty.OperationWindow{Start: 1, End: 2}); err == nil {
 		t.Fatalf("NoAlternateScroll1007 succeeded when second provided window enabled ?1007")
+	}
+}
+
+func TestBlankFrameReportsFirstOccupiedCellWithTypedDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	analysis := pty.Analysis{
+		Screen: pty.ScreenSnapshot{
+			Dimensions: pty.MustDimensions(2, 4),
+			Cells: [][]pty.Cell{
+				{{}, {}, {Content: "x"}, {}},
+				{{Content: "later"}, {}, {}, {}},
+			},
+		},
+	}
+	err := assertions.BlankFrame(analysis)
+	var diagnostic *assertions.BlankFrameAssertionError
+	if !errors.As(err, &diagnostic) {
+		t.Fatalf("BlankFrame error = %T %v, want BlankFrameAssertionError", err, err)
+	}
+	if diagnostic.Dimensions != (pty.MustDimensions(2, 4)) || diagnostic.Position != (pty.Position{Row: 0, Col: 2}) || diagnostic.Content != "x" {
+		t.Fatalf("blank frame assertion diagnostic = %+v", diagnostic)
 	}
 }
 

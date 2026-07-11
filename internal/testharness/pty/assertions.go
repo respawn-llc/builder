@@ -2,6 +2,12 @@ package pty
 
 import "core/internal/testharness/pty/assertions"
 
+type BlankFrameAssertionError = assertions.BlankFrameAssertionError
+
+func BlankFrame(analysis Analysis) error {
+	return assertions.BlankFrame(analysis)
+}
+
 func NoWritesAbove(analysis Analysis, window OperationWindow, immutableBoundary int) error {
 	return assertions.NoWritesAbove(analysis, window, immutableBoundary)
 }

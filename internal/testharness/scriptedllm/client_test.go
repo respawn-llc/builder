@@ -80,6 +80,7 @@ func TestClientValidatesExpectedToolResultAndReturnsToolCall(t *testing.T) {
 func TestClientCompactionCapabilitiesTokensAndContextWindow(t *testing.T) {
 	tokens := 42
 	window := 128000
+	trimmed := 3
 	caps := llm.ProviderCapabilities{ProviderID: "scripted"}
 	client := scriptedllm.NewClient(scriptedllm.Script{
 		Capabilities:        &caps,
@@ -87,7 +88,7 @@ func TestClientCompactionCapabilitiesTokensAndContextWindow(t *testing.T) {
 		ContextWindowTokens: &window,
 		Compactions: []llm.CompactionResponse{{
 			OutputItems:       []llm.ResponseItem{{Type: llm.ResponseItemTypeCompaction, Content: "summary"}},
-			TrimmedItemsCount: 3,
+			TrimmedItemsCount: &trimmed,
 		}},
 	})
 
@@ -108,8 +109,34 @@ func TestClientCompactionCapabilitiesTokensAndContextWindow(t *testing.T) {
 		t.Fatalf("ResolveModelContextWindow = %d, %v", resolved, err)
 	}
 	compaction, err := client.Compact(context.Background(), llm.CompactionRequest{Model: "m"})
-	if err != nil || compaction.TrimmedItemsCount != 3 {
+	if err != nil || compaction.TrimmedItemsCount == nil || *compaction.TrimmedItemsCount != 3 {
 		t.Fatalf("Compact = %+v, %v", compaction, err)
+	}
+}
+
+func TestClientCompactionPreservesReportedZeroAndUnavailableCount(t *testing.T) {
+	zero := 0
+	client := scriptedllm.NewClient(scriptedllm.Script{
+		Compactions: []llm.CompactionResponse{
+			{TrimmedItemsCount: &zero},
+			{TrimmedItemsCount: nil},
+		},
+	})
+
+	reported, err := client.Compact(context.Background(), llm.CompactionRequest{Model: "m"})
+	if err != nil {
+		t.Fatalf("Compact reported zero: %v", err)
+	}
+	if reported.TrimmedItemsCount == nil || *reported.TrimmedItemsCount != 0 {
+		t.Fatalf("reported trimmed count = %#v, want explicit zero", reported.TrimmedItemsCount)
+	}
+
+	unavailable, err := client.Compact(context.Background(), llm.CompactionRequest{Model: "m"})
+	if err != nil {
+		t.Fatalf("Compact unavailable: %v", err)
+	}
+	if unavailable.TrimmedItemsCount != nil {
+		t.Fatalf("unavailable trimmed count = %#v, want nil", unavailable.TrimmedItemsCount)
 	}
 }
 

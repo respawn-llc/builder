@@ -331,7 +331,7 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 		return nil
 	}
 
-	err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionFailed, compactionModeAuto, "remote", "openai", 0, 2, "quota exceeded")
+	err := newCompactionPersistence(eng).emitStatus("step-1", EventCompactionFailed, compactionModeAuto, "remote", "openai", nil, 2, "quota exceeded")
 	if !errors.Is(err, localEntryErr) {
 		t.Fatalf("emitCompactionStatus error = %v, want %v", err, localEntryErr)
 	}

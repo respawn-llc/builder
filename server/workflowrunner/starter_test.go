@@ -560,6 +560,40 @@ func TestWorkflowAskHandlerCancellationAfterDurableClearResolvesBatch(t *testing
 	}
 }
 
+func TestWorkflowAskHandlerApprovalCancellationAfterDurableClearResolvesQuestion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
+	store := &recordingRuntimeStore{
+		clearErr: sql.ErrNoRows,
+		getRun: workflowstore.RunRecord{
+			ID:            "run-1",
+			Generation:    7,
+			InterruptedAt: 123,
+		},
+	}
+	starter := &Starter{store: store, runtimes: runtimes}
+	_, err := starter.handleWorkflowAsk(ctx, "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
+		ID:       "approval-1",
+		Question: "Approve?",
+		Approval: true,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{{
+			Decision: askquestion.AskQuestionApprovalDecisionAllowOnce,
+			Label:    "Allow once",
+		}},
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("handleWorkflowAsk approval error = %v, want context.Canceled", err)
+	}
+	if store.clearedAskID != "approval-1" {
+		t.Fatalf("cleared ask id = %q, want approval-1", store.clearedAskID)
+	}
+	if got, want := runtimes.approvalCleared, []string{"approval-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("approval clear markers = %+v, want %+v", got, want)
+	}
+}
+
 func TestWorkflowRuntimeStarterCloseCancelsInFlightRun(t *testing.T) {
 	client := newBlockingClient()
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput, ScriptedFinalAnswer("{}"))

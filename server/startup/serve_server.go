@@ -393,13 +393,14 @@ func buildServerMux(deps transport.GatewayDependencies, identity protocol.Server
 		}
 		authReady := serverAuthReady(r.Context(), deps)
 		// The mux is only reachable once the listeners are accepting, so the
-		// transport is always ready here; readiness then tracks auth readiness.
-		if authReady {
+		// transport is always ready here. Auth gates readiness only when this
+		// provider configuration requires startup authentication.
+		if !deps.ServerAuthRequired() || authReady {
 			writeStatusJSON(w, http.StatusOK, map[string]any{
 				"ready":      true,
 				"server_id":  identity.ServerID,
 				"pid":        identity.PID,
-				"auth_ready": true,
+				"auth_ready": authReady,
 			})
 			return
 		}

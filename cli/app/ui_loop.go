@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -43,6 +44,11 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 	askEvents := wiring.askEvents
 	if askEvents == nil {
 		return nil, errors.New("prompt event stream is required")
+	}
+	// The first renderer write occurs only after Bubble Tea owns terminal mode.
+	// Queue the native-cursor signal there, so it is a real input-ready boundary.
+	if err := terminalOutput.AnnounceInputReady(); err != nil {
+		return nil, fmt.Errorf("announce terminal input readiness: %w", err)
 	}
 	sessionID := ""
 	if runtimeClient != nil {

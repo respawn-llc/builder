@@ -30,6 +30,19 @@ var NewCaptureWithEvents = analyzer.NewCaptureWithEvents
 
 type ResizeEvent = analyzer.ResizeEvent
 
+type CaptureAssembler = analyzer.CaptureAssembler
+
+var NewCaptureAssembler = analyzer.NewCaptureAssembler
+
+type EvidenceLimitExceeded = analyzer.EvidenceLimitExceeded
+
+type EvidenceSource = analyzer.EvidenceSource
+
+const (
+	EvidenceSourcePTY           = analyzer.EvidenceSourcePTY
+	EvidenceSourceOperationText = analyzer.EvidenceSourceOperationText
+)
+
 type ResizePlacement = analyzer.ResizePlacement
 
 type ResizePlacementKind = analyzer.ResizePlacementKind
@@ -60,9 +73,17 @@ type Operation = analyzer.Operation
 
 type WritePayload = analyzer.WritePayload
 
+type WriteSegment = analyzer.WriteSegment
+
+type TextSpan = analyzer.TextSpan
+
 var NewWritePayload = analyzer.NewWritePayload
 
 var MustWritePayload = analyzer.MustWritePayload
+
+var OperationRecords = analyzer.OperationRecords
+
+var WriteTextArena = analyzer.WriteTextArena
 
 type Analysis = analyzer.Analysis
 
@@ -99,5 +120,7 @@ var ClassifyAppends = analyzer.ClassifyAppends
 type Cell = analyzer.Cell
 
 type ScreenSnapshot = analyzer.ScreenSnapshot
+
+type BlankFrameDiagnostic = analyzer.BlankFrameDiagnostic
 
 var NewScreenSnapshot = analyzer.NewScreenSnapshot

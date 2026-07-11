@@ -63,10 +63,7 @@ func TestTerminalPhaseMarkerRequestsRequireEncoder(t *testing.T) {
 }
 
 func TestTerminalPhaseMarkerCarriesTypedWindowID(t *testing.T) {
-	windowID, err := uuid.NewV7()
-	if err != nil {
-		t.Fatalf("NewV7: %v", err)
-	}
+	windowID := uuid.New()
 	var got runner.TerminalPhaseMarker
 	terminal := newUITerminalOutput(&bytes.Buffer{}, terminalPhaseMarkerEncoderFunc(func(marker runner.TerminalPhaseMarker) ([]byte, error) {
 		got = marker
@@ -87,8 +84,8 @@ func TestTerminalPhaseMarkerCarriesTypedWindowID(t *testing.T) {
 	}
 }
 
-func TestTerminalPhaseMarkerRejectsNonV7WindowID(t *testing.T) {
-	windowID := uuid.New()
+func TestTerminalPhaseMarkerRejectsNonV4WindowID(t *testing.T) {
+	windowID := uuid.Must(uuid.NewV7())
 	terminal := newUITerminalOutput(&bytes.Buffer{}, terminalPhaseMarkerEncoderFunc(func(runner.TerminalPhaseMarker) ([]byte, error) {
 		t.Fatal("encoder should not receive invalid marker")
 		return nil, nil
@@ -99,7 +96,7 @@ func TestTerminalPhaseMarkerRejectsNonV7WindowID(t *testing.T) {
 		WindowID: &windowID,
 	})
 	if err == nil {
-		t.Fatal("expected UUIDv7 validation error")
+		t.Fatal("expected UUIDv4 validation error")
 	}
 }
 
