@@ -310,7 +310,7 @@ func signalProcessGroup(pid int, signal syscall.Signal) error {
 
 func (s *Session) drainReadable(buffer []byte, assembler *analyzer.CaptureAssembler, stream *analyzer.Stream, responder *terminalResponder) error {
 	for {
-		count, err := s.ptmx.Read(buffer)
+		count, err := unix.Read(int(s.ptmx.Fd()), buffer)
 		if count > 0 {
 			payload := append([]byte(nil), buffer[:count]...)
 			if appendErr := assembler.Append(payload); appendErr != nil {
@@ -341,7 +341,7 @@ func (s *Session) drainReadable(buffer []byte, assembler *analyzer.CaptureAssemb
 		if errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK) {
 			return nil
 		}
-		if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) {
+		if errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) || errors.Is(err, syscall.EBADF) || errors.Is(err, syscall.EIO) {
 			return nil
 		}
 		return fmt.Errorf("read PTY: %w", err)
