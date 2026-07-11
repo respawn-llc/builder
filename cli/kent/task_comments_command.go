@@ -38,7 +38,7 @@ func taskCommentSubcommand(args []string, stdout io.Writer, stderr io.Writer) in
 	default:
 		fmt.Fprintf(stderr, "unknown task comment command: %s\n\n", args[0])
 		fs := newCommandFlagSet(config.Command+" task comment", stderr, taskCommentUsage)
-		taskUsage.write(fs)
+		fs.Usage()
 		return 2
 	}
 }

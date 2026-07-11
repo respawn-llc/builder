@@ -3,7 +3,7 @@ name: kent-dogfooding
 description: How to use `kent` cli to change your behavior, environment, config, or debug issues. Read when the user asks to change Kent config/settings/behavior/hooks/subagents; or to debug project/workspace/workflow errors.
 ---
 
-Kent is the harness you are running inside, but it's also a server that runs agentic loops, a TUI, and a CLI interface.
+Kent is the harness you are running inside, but it's also a server that runs agentic loops, a TUI, and a CLI.
 
 Source-of-truth for commands and public docs:
 
@@ -48,4 +48,4 @@ You can disable this feature with `raw=true` in your `exec_command` tool. This h
 
 ## Goals 
 
-The user can set you a goal, or you may set a goal for yourself at will by running `kent goal set "<objective>"`. This goal will nudge you and all future agents across handoffs to work on a shared objective until completion. You should proactively set goals for yourself for larger tasks (this is encouraged) that might take multiple handoffs to complete. Goal text is a .md-formatted clear and exhaustive description of what needs to be done. Provide paths to relevant context: plan/doc files,  checklists, etc., clear Definiton of Done, and measurable explicit completion criteria, in the goal text. Assume the agents that will read your goal text will know nothing about this conversation or session. Avoid assigning subtasks, phases of a larger plan, or implementation slices, as goals - instead, assign the overall task as a goal and keep a file-based worklog or checklist. If you are blocked and unable to complete your goal, ask the User a question to summon them to help you.
+The user can set you a goal, or you may set a goal for yourself at will by running `kent goal set "<objective>"`. This goal will nudge you and all future agents across handoffs to work on a shared objective until completion. You should proactively set goals for yourself for larger tasks (this is encouraged) that might take multiple handoffs to complete. Goal text is a .md-formatted clear and exhaustive description of what needs to be done. Provide paths to relevant context: plan/doc files,  checklists, etc., clear Definition of Done, and measurable explicit completion criteria, in the goal text. Assume the agents that will read your goal text will know nothing about this conversation or session. Avoid assigning subtasks, phases of a larger plan, or implementation slices, as goals - instead, assign the overall task as a goal and keep a file-based worklog or checklist. If you are blocked and unable to complete your goal, ask the User a question to summon them to help you.

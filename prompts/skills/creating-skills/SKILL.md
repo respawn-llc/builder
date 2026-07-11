@@ -73,7 +73,7 @@ Overall, treat writing skills like public developer documentation or guidance. A
 - Don't praise or explain what you're writing by contrasting it with an implied worse alternative.
   - Bad: "Guide to effective test writing, not shallow coverage pumping". Good: "Testing with Kotest"
 - Do not include a global H1 header like `# My Skill`. Do not add extra blank lines immediately after a header line.
-- Do not use eye-candy formatting, emoji, tables, file trees, fancy diagrams that contain a lot of symbols. Skills are read by AIs, not humans.
+- Do not use eye-candy formatting, emoji, tables, decorative file trees, or fancy diagrams that contain a lot of symbols. Skills are read by AIs, not humans.
 - Do not include large code examples, or API docs in SKILL.md. Generated, third-party, or optional content like templates / API docs lives either as a reference to SSOT, or in adjacent directories. Skills rot just as much as any documentation, so referring to a source is better than duplicating its content.
 - Keep SKILL.md under ~300 lines of markdown text. If some content doesn't fit, reference remaining guidance by topic in SKILL.md and use paths relative to the SKILL.md-containing directory (aka "skill dir"), turning SKILL.md into a summary + doc index.
 - Keep source-of-truth details in their owning docs or commands; link or delegate instead of copying long chunks of text.

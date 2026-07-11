@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"strconv"
 	"strings"
@@ -12,6 +13,33 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
+
+func TestTaskCommentUnknownSubcommandWritesCommentUsage(t *testing.T) {
+	var helpStdout bytes.Buffer
+	var helpStderr bytes.Buffer
+	if code := taskCommentSubcommand([]string{"--help"}, &helpStdout, &helpStderr); code != 0 {
+		t.Fatalf("task comment help exit=%d", code)
+	}
+	if helpStdout.Len() != 0 {
+		t.Fatalf("task comment help stdout = %q, want empty", helpStdout.String())
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := taskCommentSubcommand([]string{"unknown"}, &stdout, &stderr); code != 2 {
+		t.Fatalf("task comment unknown exit=%d, want 2", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("task comment unknown stdout = %q, want empty", stdout.String())
+	}
+	if stderr.Len() < helpStderr.Len() {
+		t.Fatal("task comment unknown stderr is shorter than command help")
+	}
+	gotHelp := stderr.Bytes()[stderr.Len()-helpStderr.Len():]
+	if !bytes.Equal(gotHelp, helpStderr.Bytes()) {
+		t.Fatal("task comment unknown help does not match task comment help")
+	}
+}
 
 func TestTaskCommentAuthorForAddUsesUserWithoutKentSession(t *testing.T) {
 	t.Setenv(sessionenv.SessionIDEnv, "")

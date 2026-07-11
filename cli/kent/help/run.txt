@@ -25,7 +25,7 @@ Subagents:
 
 Examples:
   kent run "summarize the unstaged changes"
-  kent run --continue <session-id> "follow-up"
+  kent run --session <session-id> "follow-up"
   kent run steer <session-id> "use the safer migration path"
   kent run wait --output-mode=json <session-id>
   kent run --fast "scan the repo"
