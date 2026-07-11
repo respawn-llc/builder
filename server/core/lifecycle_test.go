@@ -107,6 +107,43 @@ func TestCoreCloseRetriesFailedBarrierBeforeClosingDownstreamResources(t *testin
 	}
 }
 
+func TestCoreCloseDoesNotRepeatResourcesClosedBeforeRetryBarrier(t *testing.T) {
+	fail := true
+	var calls []string
+	appCore := &Core{
+		bundles: &Bundles{
+			cleanup: []lifecycleResource{
+				{name: "root lock", close: func() error {
+					calls = append(calls, "root lock")
+					return nil
+				}},
+				{name: "metadata store", close: func() error {
+					calls = append(calls, "metadata store")
+					if fail {
+						return errors.New("blocked")
+					}
+					return nil
+				}},
+				{name: "background manager", close: func() error {
+					calls = append(calls, "background manager")
+					return nil
+				}},
+			},
+		},
+	}
+
+	if err := appCore.Close(); err == nil {
+		t.Fatal("first Close unexpectedly succeeded")
+	}
+	fail = false
+	if err := appCore.Close(); err != nil {
+		t.Fatalf("retry Close: %v", err)
+	}
+	if want := []string{"background manager", "metadata store", "metadata store", "root lock"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("close calls = %v, want %v", calls, want)
+	}
+}
+
 func TestNewWithContextNamesMissingAuthBundleResource(t *testing.T) {
 	cfg := config.App{PersistenceRoot: t.TempDir()}
 	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(cfg)
