@@ -39,7 +39,6 @@ import (
 	"core/server/worktree"
 	rpccontract "core/shared/apicontract"
 	"core/shared/client"
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -465,13 +464,7 @@ func (r runtimePendingAskResolver) CanRehydrate(_ context.Context, sessionID str
 }
 
 func taskScopedApprovalPendingAsk(req askquestion.AskQuestionRequest, askID string) bool {
-	if !req.Approval || req.AttentionTarget == nil {
-		return false
-	}
-	if req.AttentionTarget.Kind != clientui.AttentionNotificationTargetWorkflowTask || req.AttentionTarget.Focus == nil {
-		return false
-	}
-	if req.AttentionTarget.Focus.Kind != clientui.AttentionNotificationFocusQuestion {
+	if !req.IsTaskScopedApprovalQuestion() {
 		return false
 	}
 	for _, focusedAskID := range req.AttentionTarget.Focus.AskIDs {

@@ -14,7 +14,7 @@ import (
 	"core/server/tools"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -247,7 +247,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 			return ExecResult{}, err
 		}
 		display, truncated, _ := truncateWithTemplate(processed.Output, maxOutputChars, truncationBannerTemplate)
-		result.ExitCode = valuecopy.Pointer(snapshot.ExitCode)
+		result.ExitCode = textutil.CloneInt(snapshot.ExitCode)
 		result.Output = display
 		result.Truncated = truncated
 		result.Warning = processed.Warning
@@ -366,7 +366,7 @@ func (m *Manager) WriteStdin(ctx context.Context, req WriteRequest) (ExecResult,
 		OutputPath:         snapshot.LogPath,
 		Running:            snapshot.Running,
 		Backgrounded:       snapshot.Backgrounded,
-		ExitCode:           valuecopy.Pointer(snapshot.ExitCode),
+		ExitCode:           textutil.CloneInt(snapshot.ExitCode),
 		RawOutputRequested: snapshot.RawOutputRequested,
 		Truncated:          sourceTruncated || displayTruncated,
 	}, nil

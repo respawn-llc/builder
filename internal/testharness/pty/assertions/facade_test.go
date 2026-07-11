@@ -15,4 +15,8 @@ func TestFacadeAssertionHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NoWritesAbove facade: %v", err)
 	}
+
+	if err := pty.BlankFrame(pty.Analysis{Screen: pty.NewScreenSnapshot(pty.MustDimensions(2, 4))}); err != nil {
+		t.Fatalf("BlankFrame facade: %v", err)
+	}
 }

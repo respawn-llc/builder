@@ -8,6 +8,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -49,7 +50,7 @@ func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.R
 		engine:            "remote",
 		items:             replacement,
 		usage:             resp.Usage,
-		trimmedItemsCount: resp.TrimmedItemsCount,
+		trimmedItemsCount: textutil.CloneInt(resp.TrimmedItemsCount),
 		overflowRepair:    repairStats,
 		provider:          providerID,
 	}, nil
@@ -232,7 +233,7 @@ func (e *Engine) compactLocal(ctx context.Context, input []llm.ResponseItem, pro
 		engine:            "local",
 		items:             replacement,
 		usage:             llm.Usage{InputTokens: usageInputTokens, WindowTokens: e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())},
-		trimmedItemsCount: 0,
+		trimmedItemsCount: nil,
 		overflowRepair:    repairStats,
 		provider:          providerID,
 		summary:           strings.TrimSpace(summary),

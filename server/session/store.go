@@ -749,9 +749,13 @@ func (s *Store) SetUsageState(state *UsageState) error {
 }
 
 func (s *Store) SetContinuationContext(ctx ContinuationContext) error {
+	normalized, err := NormalizeContinuationContext(ctx)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 
-	s.meta.Continuation = normalizeContinuationContext(ctx)
+	s.meta.Continuation = normalized
 	s.meta.UpdatedAt = time.Now().UTC()
 	if !s.persisted {
 		s.mu.Unlock()
@@ -761,8 +765,12 @@ func (s *Store) SetContinuationContext(ctx ContinuationContext) error {
 }
 
 func (s *Store) SetContinuationContextAndMarkLockedPromptFacingContractStale(ctx ContinuationContext) (LockedContractMutationResult, error) {
+	normalized, err := NormalizeContinuationContext(ctx)
+	if err != nil {
+		return LockedContractMutationResult{}, err
+	}
 	return s.mutateMetaAndLockedContractWithCommitStatus(func(meta *Meta) {
-		meta.Continuation = normalizeContinuationContext(ctx)
+		meta.Continuation = normalized
 	}, markLockedPromptFacingContractStale, false)
 }
 
@@ -1134,6 +1142,9 @@ func readMetaFile(path string) (Meta, error) {
 func (s *Store) loadMetaLocked() error {
 	m, err := readMetaFile(s.sessionFP)
 	if err == nil {
+		if err := normalizeMetaContinuation(&m); err != nil {
+			return fmt.Errorf("validate session continuation: %w", err)
+		}
 		s.meta = m
 		return nil
 	}
@@ -1148,6 +1159,9 @@ func (s *Store) loadMetaLocked() error {
 		return fmt.Errorf("%w (resolver fallback returned nil metadata)", err)
 	}
 	s.meta = *record.Meta
+	if err := normalizeMetaContinuation(&s.meta); err != nil {
+		return fmt.Errorf("validate session continuation: %w", err)
+	}
 	return nil
 }
 
@@ -1261,15 +1275,6 @@ func (s *Store) observePersistence(observation *persistenceObservation) error {
 		s.mu.Unlock()
 	}
 	return nil
-}
-
-func normalizeContinuationContext(ctx ContinuationContext) *ContinuationContext {
-	openAIBaseURL := strings.TrimSpace(ctx.OpenAIBaseURL)
-	agentRole := strings.TrimSpace(ctx.AgentRole)
-	if openAIBaseURL == "" && agentRole == "" {
-		return nil
-	}
-	return &ContinuationContext{OpenAIBaseURL: openAIBaseURL, AgentRole: agentRole}
 }
 
 func normalizeUsageState(state *UsageState) *UsageState {

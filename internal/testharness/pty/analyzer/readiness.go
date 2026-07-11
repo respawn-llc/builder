@@ -65,6 +65,9 @@ func (t *ReadinessTracker) AdvanceChunk(chunk Chunk) error {
 	t.nextChunkIndex++
 	chunkAt := chunk.At
 	t.lastChunkAt = &chunkAt
+	if err := t.emulator.Drain(); err != nil {
+		return fmt.Errorf("drain readiness terminal emulator after chunk %d: %w", chunk.Index, err)
+	}
 	t.collectReadinessBoundaries()
 	if err := t.sideChannel.error(); err != nil {
 		return err
@@ -137,8 +140,17 @@ func (t *ReadinessTracker) Close() error {
 }
 
 func (t *ReadinessTracker) collectReadinessBoundaries() {
-	for ; t.observedOperationCount < len(t.backend.ops); t.observedOperationCount++ {
-		operation := t.backend.ops[t.observedOperationCount]
+	operations := t.backend.operations()
+	if err := t.backend.error(); err != nil {
+		t.sideChannel.err = err
+		return
+	}
+	records := make([]Operation, 0, len(operations))
+	for _, operation := range operations {
+		records = append(records, OperationRecords(operation)...)
+	}
+	for ; t.observedOperationCount < len(records); t.observedOperationCount++ {
+		operation := records[t.observedOperationCount]
 		boundary, ok := readinessBoundaryFromOperation(operation, t.dimensions)
 		if ok && boundary.Kind == ReadinessRendererFrame {
 			t.readiness.append(boundary)

@@ -41,8 +41,38 @@ func TestResolveOperationWindowAndClassifyAppends(t *testing.T) {
 	if len(appends) != 1 {
 		t.Fatalf("append count = %d, want 1: %#v", len(appends), appends)
 	}
-	if appends[0].Operation.Write == nil || appends[0].Operation.Write.Text != "bottom" {
+	if appends[0].Operation.Write == nil || appends[0].Operation.Write.Text() != "bottom" {
 		t.Fatalf("append write payload = %#v, want text %q", appends[0].Operation.Write, "bottom")
+	}
+}
+
+func TestWindowMarkersDelimitBatchedBottomWrites(t *testing.T) {
+	t.Parallel()
+
+	windowID := mustWindowID(t)
+	capture, err := pty.NewCapture(pty.MustDimensions(3, 16), []pty.Chunk{
+		pty.NewChunk(0, 0, []byte(
+			"\x1b[3;1Hbefore"+
+				marker(t, 1, "WindowStart", windowID)+
+				"\x1b[3;1Hinside"+
+				marker(t, 2, "WindowEnd", windowID)+
+				"\x1b[3;1Hafter",
+		)),
+	})
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	analysis, err := pty.Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	windows, err := pty.ResolveOperationWindows(analysis)
+	if err != nil {
+		t.Fatalf("ResolveOperationWindows: %v", err)
+	}
+	appends := pty.ClassifyAppends(analysis, windows[windowID], 2)
+	if len(appends) != 1 || appends[0].Operation.Write == nil || appends[0].Operation.Write.Text() != "inside" {
+		t.Fatalf("window append records = %#v, want only inside", appends)
 	}
 }
 
@@ -54,7 +84,8 @@ func TestPhaseMarkerRejectsInvalidWindowID(t *testing.T) {
 		windowID string
 	}{
 		{name: "empty", windowID: ""},
-		{name: "v7", windowID: "0197efce-6976-7c0e-83f6-c0a0c1875f4c"},
+		{name: "nil", windowID: uuid.Nil.String()},
+		{name: "v7", windowID: uuid.Must(uuid.NewV7()).String()},
 		{name: "malformed", windowID: "not-a-uuid"},
 	} {
 		tc := tc
@@ -112,7 +143,7 @@ func TestClassifyAppendsDoesNotTreatEveryMutableBandWriteAsAppend(t *testing.T) 
 		},
 	}
 	appends := pty.ClassifyAppends(analysis, pty.OperationWindow{Start: 0, End: len(analysis.Operations)}, 2)
-	if len(appends) != 2 || appends[0].Operation.Write == nil || appends[0].Operation.Write.Text != "boundary" || appends[1].Operation.Write == nil || appends[1].Operation.Write.Text != "bottom" {
+	if len(appends) != 2 || appends[0].Operation.Write == nil || appends[0].Operation.Write.Text() != "boundary" || appends[1].Operation.Write == nil || appends[1].Operation.Write.Text() != "bottom" {
 		t.Fatalf("appends = %#v, want boundary and bottom writes only", appends)
 	}
 }
@@ -128,10 +159,10 @@ func TestCoalesceAppendRowsMergesStyledAdjacentFragments(t *testing.T) {
 	if len(coalesced) != 2 {
 		t.Fatalf("coalesced append count = %d, want 2", len(coalesced))
 	}
-	if coalesced[0].Operation.Write == nil || coalesced[0].Operation.Write.Text != "hello" {
+	if coalesced[0].Operation.Write == nil || coalesced[0].Operation.Write.Text() != "hello" {
 		t.Fatalf("first coalesced payload = %#v, want hello", coalesced[0].Operation.Write)
 	}
-	if coalesced[1].Operation.Write == nil || coalesced[1].Operation.Write.Text != "world" {
+	if coalesced[1].Operation.Write == nil || coalesced[1].Operation.Write.Text() != "world" {
 		t.Fatalf("second coalesced payload = %#v, want world", coalesced[1].Operation.Write)
 	}
 }
@@ -170,8 +201,7 @@ func mustCapture(t *testing.T, payload []byte, dimensions pty.Dimensions) pty.Ca
 
 func mustWindowID(t *testing.T) pty.WindowID {
 	t.Helper()
-	id := uuid.New()
-	windowID, err := pty.NewWindowID(id.String())
+	windowID, err := pty.NewWindowID(uuid.NewString())
 	if err != nil {
 		t.Fatalf("NewWindowID: %v", err)
 	}

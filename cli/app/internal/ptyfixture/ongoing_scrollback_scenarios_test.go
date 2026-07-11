@@ -694,13 +694,15 @@ func allScenarioAppendRows(analysis pty.Analysis, expected []string) ([]logicalA
 func scrollbackTransactionWrites(analysis pty.Analysis, window pty.OperationWindow) []logicalAppendRow {
 	out := make([]pty.AppendOperation, 0)
 	inRestrictedScrollRegion := false
-	for _, operation := range analysis.Operations[window.Start:window.End] {
-		if operation.Kind == pty.OperationScrollRegionChange {
-			inRestrictedScrollRegion = operation.Region.Bottom < analysis.Dimensions.Rows
-			continue
-		}
-		if inRestrictedScrollRegion && operation.Write != nil {
-			out = append(out, pty.AppendOperation{Operation: operation})
+	for _, transaction := range analysis.Operations[window.Start:window.End] {
+		for _, operation := range pty.OperationRecords(transaction) {
+			if operation.Kind == pty.OperationScrollRegionChange {
+				inRestrictedScrollRegion = operation.Region.Bottom < analysis.Dimensions.Rows
+				continue
+			}
+			if inRestrictedScrollRegion && operation.Write != nil {
+				out = append(out, pty.AppendOperation{Operation: operation})
+			}
 		}
 	}
 	return coalesceCompleteAppendRows(out)
@@ -718,14 +720,16 @@ func classifyLogicalAppendRows(analysis pty.Analysis, window pty.OperationWindow
 		panic(fmt.Sprintf("invalid operation window: window=%+v operation_count=%d", window, len(analysis.Operations)))
 	}
 	appends := make([]pty.AppendOperation, 0)
-	for _, operation := range analysis.Operations[window.Start:window.End] {
-		if operation.Kind != pty.OperationWrite || operation.Region.Top < immutableBoundary {
-			continue
+	for _, transaction := range analysis.Operations[window.Start:window.End] {
+		for _, operation := range pty.OperationRecords(transaction) {
+			if operation.Kind != pty.OperationWrite || operation.Region.Top < immutableBoundary {
+				continue
+			}
+			if operation.Write == nil {
+				panic(fmt.Sprintf("append write operation missing payload: sequence=%d byte_range=%+v", operation.Sequence, operation.ByteRange))
+			}
+			appends = append(appends, pty.AppendOperation{Operation: operation})
 		}
-		if operation.Write == nil {
-			panic(fmt.Sprintf("append write operation missing payload: sequence=%d byte_range=%+v", operation.Sequence, operation.ByteRange))
-		}
-		appends = append(appends, pty.AppendOperation{Operation: operation})
 	}
 	return coalesceCompleteAppendRows(appends)
 }
@@ -736,7 +740,7 @@ func (row logicalAppendRow) text() string {
 		if segment.Operation.Write == nil {
 			panic(fmt.Sprintf("logical append row contains operation without write payload: sequence=%d", segment.Operation.Sequence))
 		}
-		out.WriteString(segment.Operation.Write.Text)
+		out.WriteString(segment.Operation.Write.Text())
 	}
 	return out.String()
 }

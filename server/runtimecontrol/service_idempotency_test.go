@@ -247,6 +247,7 @@ func TestServiceInterruptDedupesSuccessfulRetry(t *testing.T) {
 
 func newRuntimeControlCompactionFixture(t *testing.T) (*session.Store, *runtime.Engine, *runtimeControlFakeClient) {
 	t.Helper()
+	trimmed := 1
 	store, err := session.Create(t.TempDir(), "workspace-x", "/tmp/workspace-x")
 	if err != nil {
 		t.Fatalf("create session store: %v", err)
@@ -262,7 +263,7 @@ func newRuntimeControlCompactionFixture(t *testing.T) (*session.Store, *runtime.
 				{Type: llm.ResponseItemTypeCompaction, EncryptedContent: "checkpoint"},
 			},
 			Usage:             llm.Usage{WindowTokens: 200000},
-			TrimmedItemsCount: 1,
+			TrimmedItemsCount: &trimmed,
 		}},
 	}
 	engine, err := runtime.New(store, client, tools.NewRegistry(), runtime.Config{Model: "gpt-5", ProviderCapabilitiesOverride: &runtimeControlOpenAICapabilities})

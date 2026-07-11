@@ -1,13 +1,19 @@
 package app
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"sync"
+
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 type uiTerminalOutput struct {
-	mu  sync.Mutex
-	out io.Writer
+	mu               sync.Mutex
+	out              io.Writer
+	started          bool
+	readinessPending bool
 }
 
 func newUITerminalOutput(out io.Writer) *uiTerminalOutput {
@@ -23,7 +29,32 @@ func (w *uiTerminalOutput) Write(payload []byte) (int, error) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.out.Write(payload)
+	if w.readinessPending {
+		if _, err := w.out.Write([]byte(xansi.ShowCursor)); err != nil {
+			return 0, fmt.Errorf("announce terminal input readiness: %w", err)
+		}
+		w.readinessPending = false
+	}
+	n, err := w.out.Write(payload)
+	if err == nil && n == len(payload) {
+		w.started = true
+	}
+	return n, err
+}
+
+// AnnounceInputReady queues the standard native-cursor readiness signal for
+// the first renderer write, which occurs after Bubble Tea owns terminal mode.
+func (w *uiTerminalOutput) AnnounceInputReady() error {
+	if w == nil || w.out == nil {
+		return io.ErrClosedPipe
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.started {
+		return errors.New("terminal output already started before input readiness")
+	}
+	w.readinessPending = true
+	return nil
 }
 
 // uiTerminalOutputFile forwards the terminal-cursor-file interface (Read/Close/

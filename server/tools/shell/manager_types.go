@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"core/server/tools/shell/postprocess"
-	"core/shared/valuecopy"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -218,7 +218,7 @@ func (p *processEntry) snapshotLocked() Snapshot {
 		Workdir:                 p.workdir,
 		StartedAt:               p.startedAt,
 		FinishedAt:              p.finishedAt,
-		ExitCode:                valuecopy.Pointer(p.exitCode),
+		ExitCode:                textutil.CloneInt(p.exitCode),
 		LogPath:                 p.logPath,
 		RecentOutput:            recentOutput,
 		OutputAvailable:         p.logPath != "",

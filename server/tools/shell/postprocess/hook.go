@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/valuecopy"
 )
 
 const (
@@ -61,7 +61,7 @@ func (p userHookProcessor) Process(ctx context.Context, envelope Envelope) (Deci
 		Workdir:         req.Workdir,
 		OriginalOutput:  envelope.OriginalOutput,
 		CurrentOutput:   envelope.CurrentOutput,
-		ExitCode:        valuecopy.Pointer(req.ExitCode),
+		ExitCode:        textutil.CloneInt(req.ExitCode),
 		Backgrounded:    req.Backgrounded,
 		MaxDisplayChars: req.MaxDisplayChars,
 	})

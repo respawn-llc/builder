@@ -572,7 +572,7 @@ type CompactionRequest struct {
 type CompactionResponse struct {
 	OutputItems       []ResponseItem
 	Usage             Usage
-	TrimmedItemsCount int
+	TrimmedItemsCount *int
 }
 
 type CompactionClient interface {

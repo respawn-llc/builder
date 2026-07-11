@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func TestTerminalOutputSharesRendererAndNativeWriteOrdering(t *testing.T) {
@@ -29,6 +31,30 @@ func TestTerminalOutputSharesRendererAndNativeWriteOrdering(t *testing.T) {
 
 	if got := out.String(); got != "renderer-1|native-1|renderer-2" {
 		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestTerminalOutputAnnouncesInputReadinessOnFirstWrite(t *testing.T) {
+	var out bytes.Buffer
+	terminal := newUITerminalOutput(&out)
+	if err := terminal.AnnounceInputReady(); err != nil {
+		t.Fatalf("announce input ready: %v", err)
+	}
+	if _, err := terminal.Write([]byte("frame")); err != nil {
+		t.Fatalf("write first frame: %v", err)
+	}
+	if got, want := out.String(), xansi.ShowCursor+"frame"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestTerminalOutputRejectsLateInputReadinessAnnouncement(t *testing.T) {
+	terminal := newUITerminalOutput(&bytes.Buffer{})
+	if _, err := terminal.Write([]byte("frame")); err != nil {
+		t.Fatalf("write first frame: %v", err)
+	}
+	if err := terminal.AnnounceInputReady(); err == nil {
+		t.Fatal("expected late readiness announcement error")
 	}
 }
 

@@ -82,9 +82,9 @@ func TestOngoingRenderedWidthFollowsTerminalWidth(t *testing.T) {
 			if op.Operation.Write == nil {
 				continue
 			}
-			if w := visualWidth(op.Operation.Write.Text); w > maxWidth {
+			if w := visualWidth(op.Operation.Write.Text()); w > maxWidth {
 				maxWidth = w
-				widestSample = truncateRawForWidth([]byte(op.Operation.Write.Text))
+				widestSample = truncateRawForWidth([]byte(op.Operation.Write.Text()))
 			}
 		}
 	}

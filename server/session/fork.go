@@ -170,6 +170,10 @@ func cloneContinuationContext(in *ContinuationContext) *ContinuationContext {
 		return nil
 	}
 	copyContext := *in
+	if in.AgentRole != nil {
+		role := *in.AgentRole
+		copyContext.AgentRole = &role
+	}
 	return &copyContext
 }
 

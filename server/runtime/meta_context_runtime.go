@@ -7,6 +7,7 @@ import (
 
 	"core/server/llm"
 	"core/server/workflow"
+	"core/shared/config"
 	"core/shared/transcript"
 )
 
@@ -42,7 +43,11 @@ func (e *Engine) steerBaseMetaContextIfNeeded(stepID string) error {
 		return nil
 	}
 	builder := newActiveMetaContextBuilder(e.store.Meta(), e.cfg.Model, e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.DisabledSkills, time.Now()).withSubagents(e.cfg.SubagentCatalogSettings, e.cfg.EnabledTools)
-	metaResult, err := builder.Build(baseMetaContextBuildOptions(true))
+	opts := baseMetaContextBuildOptions(true)
+	if e.workflowRunActive() {
+		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
+	}
+	metaResult, err := builder.Build(opts)
 	if err != nil {
 		return err
 	}
@@ -131,6 +136,7 @@ func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Me
 	builder := newActiveMetaContextBuilder(e.store.Meta(), e.currentModel(), e.ThinkingLevel(), e.cfg.GlobalConfigDir, e.cfg.DisabledSkills, time.Now()).withSubagents(e.cfg.SubagentCatalogSettings, e.cfg.EnabledTools)
 	opts := baseMetaContextBuildOptions(false)
 	if e.workflowRunActive() {
+		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
 		mode, err := e.workflowCompletionMode(ctx)
 		if err != nil {
 			return nil, err

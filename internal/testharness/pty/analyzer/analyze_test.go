@@ -41,7 +41,7 @@ func TestAnalyzePrintableChunkRecordsScreenAndWriteOperation(t *testing.T) {
 	if op.Region != (pty.Region{Top: 0, Bottom: 1, Left: 0, Right: 5}) {
 		t.Fatalf("operation region = %#v, want first row columns [0,5)", op.Region)
 	}
-	if op.Write == nil || op.Write.Text != "hello" {
+	if op.Write == nil || op.Write.Text() != "hello" {
 		t.Fatalf("operation write payload = %#v, want text %q", op.Write, "hello")
 	}
 	if op.ByteRange != (pty.ByteRange{Start: 0, End: 5}) {
@@ -79,14 +79,16 @@ func TestAnalyzePersistsCellStyleFacts(t *testing.T) {
 	var boldWrite *pty.WritePayload
 	var faintWrite *pty.WritePayload
 	for _, operation := range analysis.Operations {
-		if operation.Kind != pty.OperationWrite || operation.Write == nil {
-			continue
-		}
-		switch operation.Write.Text {
-		case "B":
-			boldWrite = operation.Write
-		case "F":
-			faintWrite = operation.Write
+		for _, record := range pty.OperationRecords(operation) {
+			if record.Kind != pty.OperationWrite || record.Write == nil {
+				continue
+			}
+			switch record.Write.Text() {
+			case "B":
+				boldWrite = record.Write
+			case "F":
+				faintWrite = record.Write
+			}
 		}
 	}
 	if boldWrite == nil || faintWrite == nil {
@@ -136,6 +138,51 @@ func TestNewCaptureRejectsAfterChunkResizeForEmptyCapture(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("NewCaptureWithEvents succeeded for after-chunk resize without chunks")
+	}
+}
+
+func TestAnalyzeRejectsMalformedPublicCaptureInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+
+	offset := int64(0)
+	capture := pty.Capture{
+		Dimensions: pty.MustDimensions(2, 4),
+		Raw:        []byte("x"),
+		Resizes: []pty.ResizeEvent{{
+			Placement:  pty.BeforeFirstChunk(),
+			Offset:     &offset,
+			Dimensions: pty.Dimensions{},
+		}},
+	}
+	if _, err := pty.Analyze(capture); err == nil {
+		t.Fatal("Analyze succeeded for malformed public capture")
+	}
+}
+
+func TestAnalyzePreservesChunkAndTimestampMetadataAcrossReplay(t *testing.T) {
+	t.Parallel()
+
+	capture, err := pty.NewCapture(
+		pty.MustDimensions(2, 8),
+		[]pty.Chunk{
+			pty.NewChunk(0, time.Millisecond, []byte("\x1b[?1049h")),
+			pty.NewChunk(1, 2*time.Millisecond, []byte("x")),
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	analysis, err := pty.Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if len(analysis.PrivateModeChanges) != 1 || analysis.PrivateModeChanges[0].ChunkIndex != 0 || analysis.PrivateModeChanges[0].CapturedAt != time.Millisecond {
+		t.Fatalf("mode metadata = %#v", analysis.PrivateModeChanges)
+	}
+	for _, operation := range analysis.Operations {
+		if operation.Kind == pty.OperationWrite && (operation.ChunkIndex != 1 || operation.CapturedAt != 2*time.Millisecond) {
+			t.Fatalf("write metadata = %#v", operation)
+		}
 	}
 }
 
@@ -244,10 +291,50 @@ func TestScreenSnapshotReportsBlankFrame(t *testing.T) {
 	if !blank.IsBlank() {
 		t.Fatal("new screen snapshot should be blank")
 	}
+	if diagnostic := blank.BlankFrameDiagnostic(); diagnostic != nil {
+		t.Fatalf("blank frame diagnostic = %+v, want nil", diagnostic)
+	}
 	written := analyzeBytes(t, []byte("x"), pty.MustDimensions(2, 4)).Screen
 	if written.IsBlank() {
 		t.Fatal("screen with content should not be blank")
 	}
+	diagnostic := written.BlankFrameDiagnostic()
+	if diagnostic == nil {
+		t.Fatal("nonblank screen diagnostic = nil")
+	}
+	if diagnostic.Dimensions != (pty.MustDimensions(2, 4)) || diagnostic.Position != (pty.Position{Row: 0, Col: 0}) || diagnostic.Content != "x" {
+		t.Fatalf("blank frame diagnostic = %+v", diagnostic)
+	}
+}
+
+func TestDimensionsRejectOutOfRangeAndOversizedGeometryBeforeScreenAllocation(t *testing.T) {
+	t.Parallel()
+
+	for _, dimensions := range []pty.Dimensions{
+		{Rows: 0, Cols: 1},
+		{Rows: 201, Cols: 1},
+		{Rows: 1, Cols: 501},
+		{Rows: 201, Cols: 500},
+	} {
+		if _, err := pty.NewDimensions(dimensions.Rows, dimensions.Cols); err == nil {
+			t.Fatalf("NewDimensions(%+v) succeeded", dimensions)
+		}
+	}
+
+	if _, err := pty.NewCaptureWithEvents(
+		pty.MustDimensions(1, 1),
+		nil,
+		[]pty.ResizeEvent{{Placement: pty.BeforeFirstChunk(), Dimensions: pty.Dimensions{Rows: 201, Cols: 500}}},
+	); err == nil {
+		t.Fatal("NewCaptureWithEvents accepted oversized resize")
+	}
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("NewScreenSnapshot accepted invalid dimensions")
+		}
+	}()
+	_ = pty.NewScreenSnapshot(pty.Dimensions{Rows: 201, Cols: 500})
 }
 
 func TestAnalyzeResizeEventRecordsTypedOperation(t *testing.T) {
@@ -371,6 +458,11 @@ func requireOperation(t *testing.T, analysis pty.Analysis, kind pty.OperationKin
 	for _, op := range analysis.Operations {
 		if op.Kind == kind && op.Region == region {
 			return
+		}
+		for _, control := range op.Controls {
+			if control.Kind == kind && control.Region == region {
+				return
+			}
 		}
 	}
 	t.Fatalf("operation kind=%v region=%#v not found in %#v", kind, region, analysis.Operations)

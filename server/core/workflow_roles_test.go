@@ -11,6 +11,7 @@ import (
 func TestConfigRoleResolverUsesConfiguredRoleIdentity(t *testing.T) {
 	settings := config.Settings{
 		ThinkingLevel: "medium",
+		Workflow:      config.WorkflowSettings{Subagents: false},
 		Subagents: map[string]config.SubagentRole{
 			"planner": {
 				Settings: config.Settings{ThinkingLevel: "medium"},
@@ -20,6 +21,16 @@ func TestConfigRoleResolverUsesConfiguredRoleIdentity(t *testing.T) {
 				AgentCallable:    false,
 				AgentCallableSet: true,
 				Sources:          map[string]string{"agent_callable": "file"},
+			},
+			"workflow_hidden": {
+				Settings: config.Settings{ThinkingLevel: "high"},
+				Sources:  map[string]string{"thinking_level": "file"},
+			},
+			"role_hidden": {
+				Settings:            config.Settings{ThinkingLevel: "high"},
+				Sources:             map[string]string{"thinking_level": "file"},
+				WorkflowSubagent:    false,
+				WorkflowSubagentSet: true,
 			},
 		},
 	}
@@ -33,6 +44,8 @@ func TestConfigRoleResolverUsesConfiguredRoleIdentity(t *testing.T) {
 		{name: "configured no-op role", role: " Planner ", want: true},
 		{name: "built-in fast role", role: config.BuiltInSubagentRoleFast, want: true},
 		{name: "configured non-callable role", role: "blocked", want: true},
+		{name: "globally workflow-hidden role", role: "workflow_hidden", want: true},
+		{name: "per-role workflow-hidden role", role: "role_hidden", want: true},
 		{name: "workflow default role", role: workflow.DefaultAgentRole, want: true},
 		{name: "missing valid role", role: "missing", want: false},
 		{name: "reserved none role", role: "none", want: false},
@@ -53,10 +66,17 @@ func TestConfigRoleResolverUsesConfiguredRoleIdentity(t *testing.T) {
 func TestWorkflowValidationUsesConfigRoleResolverIdentity(t *testing.T) {
 	settings := config.Settings{
 		ThinkingLevel: "medium",
+		Workflow:      config.WorkflowSettings{Subagents: false},
 		Subagents: map[string]config.SubagentRole{
 			"planner": {
 				Settings: config.Settings{ThinkingLevel: "medium"},
 				Sources:  map[string]string{"thinking_level": "file"},
+			},
+			"role_hidden": {
+				Settings:            config.Settings{ThinkingLevel: "high"},
+				Sources:             map[string]string{"thinking_level": "file"},
+				WorkflowSubagent:    false,
+				WorkflowSubagentSet: true,
 			},
 		},
 	}
@@ -70,6 +90,17 @@ func TestWorkflowValidationUsesConfigRoleResolverIdentity(t *testing.T) {
 		assertCoreWorkflowHasNoCode(t, result, workflow.CodeAgentRoleMissing)
 		if result.HasErrors() {
 			t.Fatalf("configured role workflow should validate, got errors: %+v", result.Errors)
+		}
+	})
+
+	t.Run("workflow-hidden configured role", func(t *testing.T) {
+		result := workflow.ValidateDefinition(coreWorkflowValidationDefinition("role_hidden"), workflow.ValidationOptions{
+			Context:      workflow.ValidationContextTaskCreation,
+			RoleResolver: configRoleResolver{settings: settings},
+		})
+		assertCoreWorkflowHasNoCode(t, result, workflow.CodeAgentRoleMissing)
+		if result.HasErrors() {
+			t.Fatalf("workflow-hidden role workflow should validate, got errors: %+v", result.Errors)
 		}
 	})
 

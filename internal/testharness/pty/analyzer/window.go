@@ -47,8 +47,10 @@ func ClassifyAppends(analysis Analysis, window OperationWindow, immutableBoundar
 	}
 	appends := make([]AppendOperation, 0)
 	for _, operation := range analysis.Operations[window.Start:window.End] {
-		if isAppendWrite(analysis.Dimensions, operation, immutableBoundary) {
-			appends = append(appends, AppendOperation{Operation: operation})
+		for _, record := range OperationRecords(operation) {
+			if isAppendWrite(analysis.Dimensions, record, immutableBoundary) {
+				appends = append(appends, AppendOperation{Operation: record})
+			}
 		}
 	}
 	return appends
@@ -85,7 +87,7 @@ func CoalesceAppendRows(appends []AppendOperation) []AppendOperation {
 		previous.ByteRange.End = current.ByteRange.End
 		previous.After = current.After
 		previous.CapturedAt = current.CapturedAt
-		payload := MustWritePayload(previous.Write.Text + current.Write.Text)
+		payload := MustWritePayload(previous.Write.Text() + current.Write.Text())
 		payload.Faint = previous.Write.Faint
 		payload.Bold = previous.Write.Bold
 		payload.Italic = previous.Write.Italic

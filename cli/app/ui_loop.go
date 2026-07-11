@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -103,6 +104,11 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 			_ = tuiLogger.Close()
 		}
 		return nil, errors.New("prompt event stream is required")
+	}
+	// The first renderer write occurs only after Bubble Tea owns terminal mode.
+	// Queue the native-cursor signal there, so it is a real input-ready boundary.
+	if err := terminalOutput.AnnounceInputReady(); err != nil {
+		return nil, fmt.Errorf("announce terminal input readiness: %w", err)
 	}
 	sessionID := ""
 	if runtimeClient != nil {

@@ -23,6 +23,7 @@ import (
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/server/workflow"
@@ -556,6 +557,40 @@ func TestWorkflowAskHandlerCancellationAfterDurableClearResolvesBatch(t *testing
 	}
 	if got, want := runtimes.skipped, []string{"ask-2"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("skipped attention ids = %+v, want %+v", got, want)
+	}
+}
+
+func TestWorkflowAskHandlerApprovalCancellationAfterDurableClearResolvesQuestion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	runtimes := &workflowAskHandlerRuntime{err: context.Canceled}
+	store := &recordingRuntimeStore{
+		clearErr: sql.ErrNoRows,
+		getRun: workflowstore.RunRecord{
+			ID:            "run-1",
+			Generation:    7,
+			InterruptedAt: 123,
+		},
+	}
+	starter := &Starter{store: store, runtimes: runtimes}
+	_, err := starter.handleWorkflowAsk(ctx, "session-1", SchedulerStartRunRequest{RunID: "run-1", Generation: 7}, workflowTestRunStartContext(), askquestion.AskQuestionRequest{
+		ID:       "approval-1",
+		Question: "Approve?",
+		Approval: true,
+		ApprovalOptions: []askquestion.AskQuestionApprovalOption{{
+			Decision: askquestion.AskQuestionApprovalDecisionAllowOnce,
+			Label:    "Allow once",
+		}},
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("handleWorkflowAsk approval error = %v, want context.Canceled", err)
+	}
+	if store.clearedAskID != "approval-1" {
+		t.Fatalf("cleared ask id = %q, want approval-1", store.clearedAskID)
+	}
+	if got, want := runtimes.approvalCleared, []string{"approval-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("approval clear markers = %+v, want %+v", got, want)
 	}
 }
 
@@ -1431,7 +1466,7 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open source session: %v", err)
 	}
-	if got := sourceStore.Meta().Continuation; got == nil || got.AgentRole != "reviewer" {
+	if got := sourceStore.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("reviewer")) {
 		t.Fatalf("continuation role = %+v, want reviewer", got)
 	}
 	if got := sourceStore.Meta().PromptCacheLineageGeneration; got != 1 {
@@ -1548,7 +1583,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: "worker"}); err != nil {
+	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("worker")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 
@@ -1575,7 +1610,7 @@ func TestWorkflowRuntimeDefaultRoleClearsInvalidPersistedRoleBeforeValidation(t 
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != "" {
+	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared role", got)
 	}
 }
@@ -1614,7 +1649,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open source session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got == nil || got.AgentRole != "coder" {
+	if got := reopened.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("coder")) {
 		t.Fatalf("continuation = %+v, want coder role persisted", got)
 	}
 }
@@ -1626,7 +1661,7 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: "reviewer"}); err != nil {
+	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("reviewer")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
@@ -1665,7 +1700,7 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 	if err != nil {
 		t.Fatalf("workflow planSession: %v", err)
 	}
-	if got := plan.Store.Meta().Continuation; got == nil || got.AgentRole != "coder" {
+	if got := plan.Store.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("coder")) {
 		t.Fatalf("workflow continuation = %+v, want coder role", got)
 	}
 }
@@ -1694,14 +1729,17 @@ func TestWorkflowRuntimeStartFailsWhenRoleDisappearedAfterTaskStart(t *testing.T
 	}
 }
 
-func TestWorkflowRuntimeStartsConfiguredNoOpRole(t *testing.T) {
+func TestWorkflowRuntimeStartsWorkflowHiddenConfiguredNoOpRole(t *testing.T) {
 	fixture := newStarterFixture(t, config.WorkflowCompletionModeStructuredOutput,
 		ScriptedFinalAnswer(`{"commentary":"first comments","prior_summary":"first summary"}`),
 		ScriptedFinalAnswer(`{"commentary":"second done"}`),
 	)
+	fixture.cfg.Settings.Workflow.Subagents = false
 	fixture.cfg.Settings.Subagents["planner"] = config.SubagentRole{
-		Settings: config.Settings{ThinkingLevel: fixture.cfg.Settings.ThinkingLevel},
-		Sources:  map[string]string{"thinking_level": "test"},
+		Settings:            config.Settings{ThinkingLevel: fixture.cfg.Settings.ThinkingLevel},
+		Sources:             map[string]string{"thinking_level": "test"},
+		WorkflowSubagent:    false,
+		WorkflowSubagentSet: true,
 	}
 	fixture.rebuildStarter(t)
 	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeNewSession, "planner")

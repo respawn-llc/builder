@@ -40,6 +40,7 @@ func (s *sequenceSideChannel) advance(b byte, chunk Chunk, offset int64) {
 	}
 	s.currentChunk = chunk
 	s.currentOffset = offset
+	s.backend.observeByte(b)
 	s.parser.Advance(b)
 	if s.parser.State() == parser.GroundState {
 		s.activeSequence = nil
@@ -94,6 +95,11 @@ func (s *sequenceSideChannel) handleCSI(cmd ansi.Cmd, params ansi.Params) {
 		if cmd.Prefix() == '?' {
 			enabled := cmd.Final() == 'h'
 			params.ForEach(0, func(_ int, mode int, _ bool) {
+				s.backend.operationBudget.detail = "private_mode"
+				if err := s.backend.operationBudget.reserve(); err != nil {
+					s.err = err
+					return
+				}
 				s.privateModeChanges = append(s.privateModeChanges, PrivateModeChange{
 					Mode:       mode,
 					Enabled:    enabled,
@@ -134,6 +140,22 @@ func (s *sequenceSideChannel) handleOSC(cmd int, data []byte) {
 		s.err = fmt.Errorf("phase marker sequence must increase: previous=%d current=%d", s.phaseEvents[len(s.phaseEvents)-1].Sequence, event.Sequence)
 		return
 	}
+	// Marker windows are a legacy assertion boundary. Finalize the current
+	// terminal transaction before recording either edge so a batch can never
+	// contain writes from both sides of a window.
+	if err := s.backend.flushPendingWrite(); err != nil {
+		s.err = err
+		return
+	}
+	if err := s.backend.flushWriteBatch(); err != nil {
+		s.err = err
+		return
+	}
+	s.backend.operationBudget.detail = "phase_marker"
+	if err := s.backend.operationBudget.reserve(); err != nil {
+		s.err = err
+		return
+	}
 	s.phaseEvents = append(s.phaseEvents, event)
 }
 
@@ -148,8 +170,7 @@ func (s *sequenceSideChannel) activeByteRange(kind string) (ByteRange, bool) {
 func (s *sequenceSideChannel) recordCursorMove(position Position, byteRange ByteRange) {
 	position.Row = clamp(position.Row, 0, s.backend.dimensions.Rows-1)
 	position.Col = clamp(position.Col, 0, s.backend.dimensions.Cols-1)
-	s.backend.ops = append(s.backend.ops, Operation{
-		Sequence:   len(s.backend.ops),
+	s.backend.appendOperation(Operation{
 		Kind:       OperationCursorMove,
 		ChunkIndex: s.currentChunk.Index,
 		ByteRange:  byteRange,
@@ -161,8 +182,7 @@ func (s *sequenceSideChannel) recordCursorMove(position Position, byteRange Byte
 }
 
 func (s *sequenceSideChannel) recordErase(region Region, byteRange ByteRange) {
-	s.backend.ops = append(s.backend.ops, Operation{
-		Sequence:   len(s.backend.ops),
+	s.backend.appendOperation(Operation{
 		Kind:       OperationErase,
 		ChunkIndex: s.currentChunk.Index,
 		ByteRange:  byteRange,
@@ -174,8 +194,7 @@ func (s *sequenceSideChannel) recordErase(region Region, byteRange ByteRange) {
 }
 
 func (s *sequenceSideChannel) recordScrollRegion(region Region, byteRange ByteRange) {
-	s.backend.ops = append(s.backend.ops, Operation{
-		Sequence:   len(s.backend.ops),
+	s.backend.appendOperation(Operation{
 		Kind:       OperationScrollRegionChange,
 		ChunkIndex: s.currentChunk.Index,
 		ByteRange:  byteRange,
