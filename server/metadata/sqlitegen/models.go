@@ -18,6 +18,8 @@ type Project struct {
 	NextTaskSeq                  int64
 	DefaultProjectWorkflowLinkID string
 	PrimaryWorkspaceID           string
+	LifecycleState               string
+	LifecycleGeneration          int64
 }
 
 type ProjectWorkflowLink struct {

@@ -218,11 +218,13 @@ WHERE task_runs.id = ?3
   AND waiting_ask_id = ''
   AND EXISTS (
       SELECT 1
-      FROM tasks t
+      FROM task_records t
+      JOIN projects project ON project.id = t.project_id
       JOIN task_node_placements p ON p.id = task_runs.placement_id
       JOIN workflow_nodes n ON n.id = p.node_id
       WHERE t.id = p.task_id
         AND t.canceled_at_unix_ms = 0
+        AND project.lifecycle_state = 'active'
         AND p.state = 'active'
         AND n.kind IN ('agent', 'script')
   )
