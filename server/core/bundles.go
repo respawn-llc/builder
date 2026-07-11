@@ -231,17 +231,17 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 				}
 				return nil
 			}},
-			{name: "workflow runtime starter", close: func() error {
-				if in.workflowRuntimeStarter == nil {
-					return nil
-				}
-				return in.workflowRuntimeStarter.Close()
-			}},
 			{name: "project activity drain", close: func() error {
 				if in.projectActivity == nil {
 					return nil
 				}
 				return in.projectActivity.Drain(context.Background())
+			}},
+			{name: "workflow runtime starter", close: func() error {
+				if in.workflowRuntimeStarter == nil {
+					return nil
+				}
+				return in.workflowRuntimeStarter.Close()
 			}},
 			{name: "workflow scheduler", close: func() error {
 				if in.workflowScheduler == nil {
