@@ -200,7 +200,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
 	}
-	core := &Core{bundles: composeBundles(bundleCompositionInput{
+	projectActivity := &projectActivityCoordinator{}
+	core := &Core{activity: projectActivity, bundles: composeBundles(bundleCompositionInput{
 		cfg:                     cfg,
 		containerDir:            containerDir,
 		authSupport:             authSupport,
@@ -232,6 +233,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		workflowRuntimeStarter:  workflowRuntimeStarter,
 		worktreeService:         worktreeService,
 		sleepManager:            sleepManager,
+		projectActivity:         projectActivity,
 	})}
 	if err := workflowService.FenceExecutionTargetRecovery(ctx); err != nil {
 		return nil, startupFailureWithCleanup(core, fmt.Errorf("workflow bundle: recovery fence: %w", err))

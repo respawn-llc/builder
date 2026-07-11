@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"sync"
 
 	"core/server/authservice"
@@ -213,6 +214,7 @@ type bundleCompositionInput struct {
 	workflowRuntimeStarter  *workflowrunner.Starter
 	worktreeService         *worktree.Service
 	sleepManager            *sleepguard.Manager
+	projectActivity         *projectActivityCoordinator
 }
 
 func composeBundles(in bundleCompositionInput) *Bundles {
@@ -223,11 +225,23 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 			{name: "persistence root lock", close: in.rootLease.Close},
 			{name: "metadata store", close: in.metadataStore.Close},
 			{name: "background manager", close: in.runtimeSupport.Background.Close},
+			{name: "sleep manager", close: func() error {
+				if in.sleepManager != nil {
+					in.sleepManager.Close()
+				}
+				return nil
+			}},
 			{name: "workflow runtime starter", close: func() error {
 				if in.workflowRuntimeStarter == nil {
 					return nil
 				}
 				return in.workflowRuntimeStarter.Close()
+			}},
+			{name: "project activity drain", close: func() error {
+				if in.projectActivity == nil {
+					return nil
+				}
+				return in.projectActivity.Drain(context.Background())
 			}},
 			{name: "workflow scheduler", close: func() error {
 				if in.workflowScheduler == nil {
@@ -235,9 +249,9 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 				}
 				return in.workflowScheduler.Close()
 			}},
-			{name: "sleep manager", close: func() error {
-				if in.sleepManager != nil {
-					in.sleepManager.Close()
+			{name: "project activity admission", close: func() error {
+				if in.projectActivity != nil {
+					in.projectActivity.CloseAdmission()
 				}
 				return nil
 			}},
