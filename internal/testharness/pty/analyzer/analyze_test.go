@@ -52,6 +52,59 @@ func TestAnalyzePrintableChunkRecordsScreenAndWriteOperation(t *testing.T) {
 	}
 }
 
+func TestAnalyzePersistsCellStyleFacts(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeBytes(t, []byte(
+		"\x1b[1;3;4;38;2;17;34;51;48;2;68;85;102mB\x1b[0m"+
+			"\x1b[2;38;2;17;34;51;48;2;68;85;102mF\x1b[0m",
+	), pty.MustDimensions(2, 4))
+
+	boldCell := analysis.Screen.Cells[0][0]
+	if boldCell.Content != "B" {
+		t.Fatalf("bold cell content = %q, want B", boldCell.Content)
+	}
+	if boldCell.Foreground == "" || boldCell.Background == "" || boldCell.Foreground == boldCell.Background {
+		t.Fatalf("bold cell colors = foreground %q background %q, want distinct terminal colors", boldCell.Foreground, boldCell.Background)
+	}
+	if !boldCell.Bold || boldCell.Faint || !boldCell.Italic || !boldCell.Underline {
+		t.Fatalf("bold cell attributes = bold=%t faint=%t italic=%t underline=%t", boldCell.Bold, boldCell.Faint, boldCell.Italic, boldCell.Underline)
+	}
+
+	faintCell := analysis.Screen.Cells[0][1]
+	if faintCell.Content != "F" || !faintCell.Faint || faintCell.Bold {
+		t.Fatalf("faint cell = content %q bold=%t faint=%t", faintCell.Content, faintCell.Bold, faintCell.Faint)
+	}
+
+	var boldWrite *pty.WritePayload
+	var faintWrite *pty.WritePayload
+	for _, operation := range analysis.Operations {
+		for _, record := range pty.OperationRecords(operation) {
+			if record.Kind != pty.OperationWrite || record.Write == nil {
+				continue
+			}
+			switch record.Write.Text() {
+			case "B":
+				boldWrite = record.Write
+			case "F":
+				faintWrite = record.Write
+			}
+		}
+	}
+	if boldWrite == nil || faintWrite == nil {
+		t.Fatalf("styled write operations missing: bold=%#v faint=%#v", boldWrite, faintWrite)
+	}
+	if boldWrite.Foreground != boldCell.Foreground || boldWrite.Background != boldCell.Background {
+		t.Fatalf("bold write colors = foreground %q background %q, want cell colors %q/%q", boldWrite.Foreground, boldWrite.Background, boldCell.Foreground, boldCell.Background)
+	}
+	if !boldWrite.Bold || boldWrite.Faint || !boldWrite.Italic || !boldWrite.Underline {
+		t.Fatalf("bold write attributes = bold=%t faint=%t italic=%t underline=%t", boldWrite.Bold, boldWrite.Faint, boldWrite.Italic, boldWrite.Underline)
+	}
+	if !faintWrite.Faint || faintWrite.Bold {
+		t.Fatalf("faint write attributes = bold=%t faint=%t", faintWrite.Bold, faintWrite.Faint)
+	}
+}
+
 func TestAnalyzeEmptyCapturePreservesBlankScreen(t *testing.T) {
 	t.Parallel()
 
@@ -215,6 +268,19 @@ func TestAnalyzeDECPrivateModesRecordTypedOperations(t *testing.T) {
 		if modeOps[i].Mode != expected.mode || modeOps[i].Enabled != expected.enabled {
 			t.Fatalf("mode operation %d = %#v, want mode=%d enabled=%v", i, modeOps[i], expected.mode, expected.enabled)
 		}
+	}
+}
+
+func TestAnalyzeAlternateScreenRestoresNormalBuffer(t *testing.T) {
+	t.Parallel()
+
+	analysis := analyzeBytes(
+		t,
+		[]byte("normal\x1b[?1049h\x1b[2J\x1b[Halternate\x1b[?1049l"),
+		pty.MustDimensions(2, 12),
+	)
+	if got := analysis.Screen.TextInRegion(pty.Region{Top: 0, Bottom: 1, Left: 0, Right: 6}); got != "normal" {
+		t.Fatalf("restored normal buffer = %q, want %q", got, "normal")
 	}
 }
 

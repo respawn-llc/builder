@@ -58,7 +58,7 @@ If that session has a locked model request shape, the role must match the sessio
 
 ```toml
 [subagents.research]
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 thinking_level = "xhigh"
 system_prompt_file = "research-agent.md"
 description = "Use when you need fast, smart general-purpose researcher for deep thinking or complicated plans."

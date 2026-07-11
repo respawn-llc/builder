@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -110,6 +111,182 @@ func TestRunCommandFeedsInputAndAppliesResize(t *testing.T) {
 	}
 	if !foundResize {
 		t.Fatalf("resize operation not found in %#v", analysis.Operations)
+	}
+}
+
+func TestRunCommandDelaysInputRelativeToPhase(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "phase-input-writer")
+	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/phase-input-writer", output); err != nil {
+		t.Fatalf("BuildPackage: %v", err)
+	}
+	delay := 100 * time.Millisecond
+	capture, err := driver.RunCommand(context.Background(), driver.CommandSpec{
+		Path:       output,
+		Dimensions: pty.MustDimensions(2, 16),
+		PhaseInputs: []driver.PhaseInputEvent{{
+			Phase: pty.PhaseScenarioStart,
+			After: delay,
+			Bytes: []byte("x\n"),
+		}},
+		Timeout: commandTestTimeout,
+	})
+	if err != nil {
+		t.Fatalf("RunCommand: %v", err)
+	}
+	analysis, err := pty.Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if len(analysis.PhaseEvents) != 1 {
+		t.Fatalf("phase events = %#v, want one scenario start", analysis.PhaseEvents)
+	}
+	if len(capture.PhaseInputDispatches) != 1 {
+		t.Fatalf("phase input dispatches = %#v, want one", capture.PhaseInputDispatches)
+	}
+	dispatch := capture.PhaseInputDispatches[0]
+	if dispatch.Phase != pty.PhaseScenarioStart || dispatch.ScheduledAfter != delay {
+		t.Fatalf("phase input dispatch = %#v, want scenario-start after %s", dispatch, delay)
+	}
+	if elapsed := dispatch.StartedAt - analysis.PhaseEvents[0].CapturedAt; elapsed < delay {
+		t.Fatalf("recorded phase input elapsed = %s, want at least %s", elapsed, delay)
+	}
+	var inputWriteAt *time.Duration
+	for _, operation := range analysis.Operations {
+		for _, record := range pty.OperationRecords(operation) {
+			if record.Write != nil && record.Write.Text() == "input:x" {
+				capturedAt := record.CapturedAt
+				inputWriteAt = &capturedAt
+				break
+			}
+		}
+		if inputWriteAt != nil {
+			break
+		}
+	}
+	if inputWriteAt == nil {
+		t.Fatalf("delayed input output missing: operations=%#v", analysis.Operations)
+	}
+	if elapsed := *inputWriteAt - analysis.PhaseEvents[0].CapturedAt; elapsed < delay {
+		t.Fatalf("phase-relative input elapsed = %s, want at least %s", elapsed, delay)
+	}
+}
+
+func TestRunCommandDispatchesFrameInputSequenceAfterCompletedFrames(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "phase-input-writer")
+	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/phase-input-writer", output); err != nil {
+		t.Fatalf("BuildPackage: %v", err)
+	}
+	capture, err := driver.RunCommand(context.Background(), driver.CommandSpec{
+		Path:       output,
+		Args:       []string{"frame-sequence"},
+		Dimensions: pty.MustDimensions(2, 16),
+		FrameInputSequences: []driver.FrameInputSequence{{
+			Phase: pty.PhaseScenarioStart,
+			Inputs: []driver.FrameInput{
+				{Readiness: pty.ReadinessRendererFrame, Bytes: []byte("x\n")},
+				{Readiness: pty.ReadinessRendererFrame, Bytes: []byte("y\n")},
+				{Readiness: pty.ReadinessRendererFrame, Bytes: []byte("z\n")},
+			},
+		}},
+		Timeout: commandTestTimeout,
+	})
+	if err != nil {
+		t.Fatalf("RunCommand: %v", err)
+	}
+	if len(capture.FrameInputDispatches) != 3 {
+		t.Fatalf("frame input dispatches = %#v, want three", capture.FrameInputDispatches)
+	}
+	for index, dispatch := range capture.FrameInputDispatches {
+		if dispatch.Phase != pty.PhaseScenarioStart || dispatch.InputIndex != index {
+			t.Fatalf("frame input dispatch %d = %#v", index, dispatch)
+		}
+		if dispatch.ReadyBoundary != pty.ReadinessRendererFrame {
+			t.Fatalf("frame input dispatch %d boundary = %d, want renderer frame", index, dispatch.ReadyBoundary)
+		}
+		if dispatch.ReadyBoundaryEndByteOffset <= 0 {
+			t.Fatalf("frame input dispatch %d ready boundary end = %d, want positive", index, dispatch.ReadyBoundaryEndByteOffset)
+		}
+		if index > 0 && dispatch.ReadyBoundaryEndByteOffset <= capture.FrameInputDispatches[index-1].ReadyBoundaryEndByteOffset {
+			t.Fatalf("frame input ready offsets are not increasing: %#v", capture.FrameInputDispatches)
+		}
+	}
+	analysis, err := pty.Analyze(capture)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	var inputWrites []string
+	for _, operation := range analysis.Operations {
+		for _, record := range pty.OperationRecords(operation) {
+			if record.Write == nil {
+				continue
+			}
+			switch record.Write.Text() {
+			case "input:x", "input:y", "input:z":
+				inputWrites = append(inputWrites, record.Write.Text())
+			}
+		}
+	}
+	if want := []string{"input:x", "input:y", "input:z"}; !slices.Equal(inputWrites, want) {
+		t.Fatalf("input writes = %#v, want %#v", inputWrites, want)
+	}
+}
+
+func TestRunCommandDispatchesFrameInputsAcrossTypedReadinessBoundaries(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "phase-input-writer")
+	if err := driver.BuildPackage(context.Background(), "core/internal/testharness/pty/testdata/cmd/phase-input-writer", output); err != nil {
+		t.Fatalf("BuildPackage: %v", err)
+	}
+	capture, err := driver.RunCommand(context.Background(), driver.CommandSpec{
+		Path:       output,
+		Args:       []string{"typed-readiness-sequence"},
+		Dimensions: pty.MustDimensions(2, 16),
+		FrameInputSequences: []driver.FrameInputSequence{{
+			Phase: pty.PhaseScenarioStart,
+			Inputs: []driver.FrameInput{
+				{Readiness: pty.ReadinessRendererFrame, Bytes: []byte("x\n")},
+				{Readiness: pty.ReadinessInputApplied, Bytes: []byte("y\n")},
+				{Readiness: pty.ReadinessRendererFrame, Bytes: []byte("z\n")},
+				{Readiness: pty.ReadinessNormalBufferRestored, Bytes: []byte("q\n")},
+			},
+		}},
+		Timeout: commandTestTimeout,
+	})
+	if err != nil {
+		t.Fatalf("RunCommand: %v", err)
+	}
+	if len(capture.FrameInputDispatches) != 4 {
+		t.Fatalf("frame input dispatches = %#v, want four", capture.FrameInputDispatches)
+	}
+	wantBoundaries := []pty.ReadinessBoundaryKind{
+		pty.ReadinessRendererFrame,
+		pty.ReadinessInputApplied,
+		pty.ReadinessRendererFrame,
+		pty.ReadinessNormalBufferRestored,
+	}
+	for index, want := range wantBoundaries {
+		if got := capture.FrameInputDispatches[index].ReadyBoundary; got != want {
+			t.Fatalf("frame input dispatch %d boundary = %d, want %d", index, got, want)
+		}
+	}
+}
+
+func TestRunCommandRejectsFirstInputAppliedReadiness(t *testing.T) {
+	binary := buildHelper(t)
+	_, err := driver.RunCommand(context.Background(), driver.CommandSpec{
+		Path:       binary,
+		Args:       []string{"write"},
+		Dimensions: pty.MustDimensions(2, 16),
+		FrameInputSequences: []driver.FrameInputSequence{{
+			Phase: pty.PhaseScenarioStart,
+			Inputs: []driver.FrameInput{{
+				Readiness: pty.ReadinessInputApplied,
+				Bytes:     []byte("x\n"),
+			}},
+		}},
+		Timeout: commandTestTimeout,
+	})
+	if err == nil {
+		t.Fatal("RunCommand accepted input-applied readiness for the first sequence input")
 	}
 }
 

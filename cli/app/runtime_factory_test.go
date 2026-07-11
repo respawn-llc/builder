@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/runtimewirefixture"
 	"core/server/auth"
 	"core/server/llm"
 	"core/server/runtime"
@@ -21,6 +22,8 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/shared/config"
 	"core/shared/toolspec"
+
+	"github.com/google/uuid"
 )
 
 type stubTriggerHandoffController struct{}
@@ -336,7 +339,7 @@ func TestBackgroundEventRouterSkipsDeveloperNoticeForOrphanedShells(t *testing.T
 
 	router := &backgroundEventRouter{}
 	router.SetActiveSession(storeB.Meta().SessionID, engB)
-	router.handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1000", OwnerSessionID: storeA.Meta().SessionID, State: "completed", Command: "kent run", Workdir: root, LogPath: filepath.Join(root, "1000.log")}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.handle(runtimewirefixture.BackgroundCompletionEvent("1000", storeA.Meta().SessionID, root))
 
 	time.Sleep(150 * time.Millisecond)
 	if got := clientB.CallCount(); got != 0 {
@@ -368,7 +371,7 @@ func TestBackgroundEventRouterRoutesCompletionToMatchingActiveOwnerSession(t *te
 	router := &backgroundEventRouter{}
 	router.SetActiveSession(storeA.Meta().SessionID, engA)
 	router.SetActiveSession(storeB.Meta().SessionID, engB)
-	router.handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1002", OwnerSessionID: storeA.Meta().SessionID, State: "completed", Command: "kent run", Workdir: root, LogPath: filepath.Join(root, "1002.log")}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.handle(runtimewirefixture.BackgroundCompletionEvent("1002", storeA.Meta().SessionID, root))
 
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for clientA.CallCount() == 0 && time.Now().Before(deadline) {
@@ -391,7 +394,7 @@ func TestBackgroundEventRouterQueuesNoticeForActiveOwnerSession(t *testing.T) {
 
 	router := &backgroundEventRouter{}
 	router.SetActiveSession(store.Meta().SessionID, eng)
-	router.handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1001", OwnerSessionID: store.Meta().SessionID, State: "completed", Command: "kent run", Workdir: root, LogPath: filepath.Join(root, "1001.log")}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.handle(runtimewirefixture.BackgroundCompletionEvent("1001", store.Meta().SessionID, root))
 
 	deadline := time.Now().Add(2 * time.Second)
 	for client.CallCount() == 0 && time.Now().Before(deadline) {
@@ -497,6 +500,7 @@ func TestBackgroundEventRouterShapesBackgroundNoticeByOutputMode(t *testing.T) {
 				NoticeSuppressed: true,
 				Snapshot: shelltool.Snapshot{
 					ID:             "1000",
+					ActivityID:     uuid.New(),
 					OwnerSessionID: store.Meta().SessionID,
 					State:          "completed",
 					LogPath:        logPath,
@@ -548,6 +552,7 @@ func TestBackgroundEventRouterWhitespacePreviewUsesNoOutputLine(t *testing.T) {
 		NoticeSuppressed: true,
 		Snapshot: shelltool.Snapshot{
 			ID:             "1000",
+			ActivityID:     uuid.New(),
 			OwnerSessionID: store.Meta().SessionID,
 			State:          "completed",
 			ExitCode:       &exitCode,
@@ -685,7 +690,7 @@ func TestBackgroundEventRouterDropsNoticeWhenNoSessionIsActive(t *testing.T) {
 	eng := newAppRuntimeEngineWithStore(t, store, client, runtime.Config{})
 	router.SetActiveSession(store.Meta().SessionID, eng)
 	router.ClearActiveSession(store.Meta().SessionID, eng)
-	router.handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1002", OwnerSessionID: store.Meta().SessionID, State: "completed"}, Type: shelltool.EventCompleted, Preview: "done"})
+	router.handle(shelltool.Event{Snapshot: shelltool.Snapshot{ID: "1002", ActivityID: uuid.New(), OwnerSessionID: store.Meta().SessionID, State: "completed"}, Type: shelltool.EventCompleted, Preview: "done"})
 	time.Sleep(50 * time.Millisecond)
 	if got := client.CallCount(); got != 0 {
 		t.Fatalf("expected no notice delivery while no session is active, got %d", got)

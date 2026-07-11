@@ -1243,7 +1243,7 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 		t.Fatalf("runs after first process = %+v, want completed source and unstarted target", runs)
 	}
 	role := fixture.cfg.Settings.Subagents["coder"]
-	role.Settings.Model = "gpt-5.5-drifted"
+	role.Settings.Model = "gpt-5.6-sol-drifted"
 	role.Sources["model"] = "drifted-test"
 	fixture.cfg.Settings.Subagents["coder"] = role
 	fixture.rebuildStarter(t)
@@ -1257,7 +1257,7 @@ func TestWorkflowRuntimeContinueSessionKeepsLockedSetupAfterRoleConfigDrift(t *t
 	if len(reqs) < 2 {
 		t.Fatalf("fake model request count = %d, want 2", len(reqs))
 	}
-	if reqs[0].Model == "" || reqs[1].Model != reqs[0].Model || reqs[1].Model == "gpt-5.5-drifted" {
+	if reqs[0].Model == "" || reqs[1].Model != reqs[0].Model || reqs[1].Model == "gpt-5.6-sol-drifted" {
 		t.Fatalf("request models = %q then %q, want locked source session model reused after config drift", reqs[0].Model, reqs[1].Model)
 	}
 }
@@ -1404,7 +1404,12 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 		ScriptedFinalAnswer(`{"commentary":"compaction summary"}`),
 		ScriptedFinalAnswer(`{"commentary":"second done"}`),
 	)
+	coderRole := fixture.cfg.Settings.Subagents["coder"]
+	coderRole.Settings.Model = "gpt-5.3-codex-spark"
+	coderRole.Sources = map[string]string{"model": "test"}
+	fixture.cfg.Settings.Subagents["coder"] = coderRole
 	reviewerRole := fixture.cfg.Settings.Subagents["reviewer"]
+	reviewerRole.Settings.Model = "gpt-5.6-sol"
 	reviewerRole.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolEdit: true}
 	reviewerRole.Sources = map[string]string{
 		"model":       "test",
@@ -1413,6 +1418,15 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 		"tools.edit":  "test",
 	}
 	fixture.cfg.Settings.Subagents["reviewer"] = reviewerRole
+	fixture.client = NewScriptedClient(llm.ProviderCapabilities{
+		ProviderID:             "fake",
+		SupportsResponsesAPI:   true,
+		SupportsPromptCacheKey: true,
+	}, ScriptedFinalAnswer(`{"commentary":"first comments","prior_summary":"first summary"}`),
+		ScriptedFinalAnswer(`{"commentary":"compaction summary"}`),
+		ScriptedFinalAnswer(`{"commentary":"second done"}`),
+	)
+	fixture.clientFactory = func(SchedulerStartRunRequest) llm.Client { return fixture.client }
 	fixture.rebuildStarter(t)
 	workflowID := createChainedStarterWorkflowWithContextMode(t, fixture.store, workflow.ContextModeCompactAndContinueSession, "reviewer")
 	if _, err := fixture.store.LinkWorkflow(context.Background(), fixture.projectID, workflowID, true); err != nil {
@@ -1436,6 +1450,13 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if len(runs) != 2 || runs[1].InterruptedAt != 0 || runs[1].CompletedAt == 0 || runs[0].SessionID != runs[1].SessionID {
 		t.Fatalf("runs = %+v, want cross-role compact_and_continue to complete in source session", runs)
 	}
+	reqs := fixture.client.Requests()
+	if len(reqs) != 3 {
+		t.Fatalf("model request count = %d, want source turn, target-contract compaction, and target turn", len(reqs))
+	}
+	if reqs[0].Model != "gpt-5.3-codex-spark" || reqs[1].Model != "gpt-5.6-sol" || reqs[2].Model != "gpt-5.6-sol" {
+		t.Fatalf("request models = %q, %q, %q, want source model then target model for compaction and target turn", reqs[0].Model, reqs[1].Model, reqs[2].Model)
+	}
 	containerDir := filepath.Join(filepath.Join(fixture.cfg.PersistenceRoot, "projects"), fixture.projectID, "sessions")
 	sourceDir, err := session.ResolveScopedSessionDir(containerDir, runs[1].SessionID)
 	if err != nil {
@@ -1448,10 +1469,21 @@ func TestWorkflowRuntimeCompactAndContinueAllowsCrossRole(t *testing.T) {
 	if got := sourceStore.Meta().Continuation; got == nil || !sessiontest.SameAgentRole(got.AgentRole, sessiontest.AgentRole("reviewer")) {
 		t.Fatalf("continuation role = %+v, want reviewer", got)
 	}
+	if got := sourceStore.Meta().PromptCacheLineageGeneration; got != 1 {
+		t.Fatalf("prompt cache lineage generation = %d, want fresh target generation 1", got)
+	}
 	if locked := sourceStore.Meta().Locked; locked == nil || !locked.HasSystemPrompt || !locked.HasEnabledTools {
 		t.Fatalf("locked prompt-facing contract = %+v, want refreshed prompt and request shape", locked)
 	} else if !lockedContractHasTool(locked, toolspec.ToolEdit) || lockedContractHasTool(locked, toolspec.ToolExecCommand) {
 		t.Fatalf("locked enabled tools = %+v, want refreshed reviewer role tools", locked.EnabledTools)
+	} else if locked.Model != "gpt-5.6-sol" {
+		t.Fatalf("locked model = %q, want target reviewer model", locked.Model)
+	}
+	if reqs[0].PromptCacheKey == "" || reqs[1].PromptCacheKey == "" {
+		t.Fatalf("request cache keys = %q, %q, want cache lineages for source and target contracts", reqs[0].PromptCacheKey, reqs[1].PromptCacheKey)
+	}
+	if reqs[1].PromptCacheKey == reqs[0].PromptCacheKey {
+		t.Fatalf("target compaction cache key = %q, want fresh target-contract cache lineage instead of source key %q", reqs[1].PromptCacheKey, reqs[0].PromptCacheKey)
 	}
 }
 
@@ -1590,7 +1622,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create source session: %v", err)
 	}
-	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 
@@ -1610,7 +1642,7 @@ func TestWorkflowRuntimeLockedBaseSessionAcceptsTargetRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planSession: %v", err)
 	}
-	if plan.ActiveSettings.Model != "gpt-5.5" {
+	if plan.ActiveSettings.Model != "gpt-5.6-sol" {
 		t.Fatalf("model = %q, want locked model", plan.ActiveSettings.Model)
 	}
 	reopened, err := session.Open(source.Dir(), fixture.metadata.AuthoritativeSessionStoreOptions()...)
@@ -1632,7 +1664,7 @@ func TestWorkflowRuntimeIsOnlyPathAllowedToReplaceLockedSessionRole(t *testing.T
 	if err := source.SetContinuationContext(session.ContinuationContext{AgentRole: sessiontest.AgentRole("reviewer")}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
-	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.5", EnabledTools: []string{"shell"}}); err != nil {
+	if err := source.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5.6-sol", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 	planner := launch.Planner{
@@ -2316,6 +2348,10 @@ func (s *recordingRuntimeStore) CompleteRun(context.Context, workflowstore.Compl
 
 func (s *recordingRuntimeStore) RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error) {
 	panic("RecordProtocolViolation not expected")
+}
+
+func (s *recordingRuntimeStore) ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error {
+	panic("ResetProtocolViolationBudget not expected")
 }
 
 func (s *recordingRuntimeStore) CountTaskComments(context.Context, workflow.TaskID) (int64, error) {

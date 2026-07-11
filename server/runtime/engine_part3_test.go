@@ -348,6 +348,7 @@ func TestSubmitUserMessageContinuesAfterHostedToolOnlyTurn(t *testing.T) {
 
 func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 	store := mustCreateTestSession(t)
+	var hostedStart *llm.ToolCall
 
 	client := &fakeClient{responses: []llm.Response{
 		{
@@ -371,6 +372,12 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 		Model:         "gpt-5",
 		WebSearchMode: "native",
 		EnabledTools:  []toolspec.ID{toolspec.ToolWebSearch},
+		OnEvent: func(evt Event) {
+			if evt.Kind == EventToolCallStarted && evt.ToolCall != nil && evt.ToolCall.ID == "ws_invalid" {
+				call := *evt.ToolCall
+				hostedStart = &call
+			}
+		},
 	})
 
 	msg, err := eng.SubmitUserMessage(context.Background(), "find latest")
@@ -404,6 +411,12 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 	if !foundHostedOutput {
 		t.Fatalf("expected invalid hosted tool output item in follow-up request, got %+v", client.calls[1].Items)
 	}
+	if hostedStart == nil {
+		t.Fatal("expected explicit hosted tool start event")
+	}
+	if meta := decodeToolCallMeta(*hostedStart); meta == nil || meta.Command != "web search: invalid query" {
+		t.Fatalf("hosted tool start presentation = %+v, want typed query input", meta)
+	}
 
 	events, err := sessiontest.CollectEvents(store)
 	if err != nil {
@@ -431,6 +444,9 @@ func TestSubmitUserMessageContinuesAfterInvalidHostedWebSearch(t *testing.T) {
 		}
 		if output["error"] != tools.InvalidWebSearchQueryMessage {
 			t.Fatalf("expected persisted invalid query error, got %+v", output)
+		}
+		if completion.Presentation == nil || completion.Presentation.Command != "web search: invalid query" {
+			t.Fatalf("persisted hosted presentation = %+v, want typed query input", completion.Presentation)
 		}
 	}
 	if !foundPersistedError {

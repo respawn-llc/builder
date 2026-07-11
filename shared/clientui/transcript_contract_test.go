@@ -175,11 +175,15 @@ func TestTranscriptDTOsDoNotExposeLegacyCoordinatesOrGenericEscapes(t *testing.T
 
 func TestTranscriptAssistantStreamIdentityUsesUUIDValues(t *testing.T) {
 	uuidType := reflect.TypeOf(uuid.UUID{})
+	streamIDField, ok := reflect.TypeOf(TranscriptAssistantRow{}).FieldByName("StreamID")
+	if !ok {
+		t.Fatal("TranscriptAssistantRow.StreamID field not found")
+	}
 	tests := map[string]reflect.Type{
 		"TranscriptAssistantStream.StreamID":      reflect.TypeOf(TranscriptAssistantStream{}).Field(0).Type,
 		"TranscriptAssistantDelta.StreamID":       reflect.TypeOf(TranscriptAssistantDelta{}).Field(0).Type,
 		"TranscriptAssistantStreamAbort.StreamID": reflect.TypeOf(TranscriptAssistantStreamAbort{}).Field(0).Type,
-		"TranscriptAssistantRow.StreamID":         reflect.TypeOf(TranscriptAssistantRow{}).Field(2).Type,
+		"TranscriptAssistantRow.StreamID":         streamIDField.Type,
 	}
 	for name, typ := range tests {
 		if typ == uuidType {

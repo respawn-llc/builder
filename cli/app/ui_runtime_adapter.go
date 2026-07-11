@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"core/cli/app/internal/runtimestate"
+	"core/cli/tui"
 	"core/shared/clientui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -80,12 +81,21 @@ func (a uiRuntimeAdapter) applyProjectedSessionMetadata(session clientui.Runtime
 	if a.model == nil {
 		return nil
 	}
-	if strings.TrimSpace(session.SessionID) != "" {
-		a.model.sessionID = strings.TrimSpace(session.SessionID)
+	previousSessionID := strings.TrimSpace(a.model.sessionID)
+	nextSessionID := strings.TrimSpace(session.SessionID)
+	if nextSessionID != "" {
+		a.model.sessionID = nextSessionID
 	}
 	if strings.TrimSpace(session.SessionName) != "" {
 		a.model.sessionName = strings.TrimSpace(session.SessionName)
 	}
 	a.model.conversationFreshness = session.ConversationFreshness
+	if previousSessionID != "" && nextSessionID != "" && previousSessionID != nextSessionID {
+		cancelCmd := a.model.cancelPendingDetailTranscriptRequest()
+		a.model.detailTranscript.reset()
+		resetCmd := a.model.forwardToView(tui.ResetDetailTranscriptMsg{})
+		loadCmd := a.model.loadDetailTranscriptPageCmd(a.model.detailTranscript.requestedPageForDetailEntry())
+		return sequenceCmds(cancelCmd, resetCmd, loadCmd)
+	}
 	return nil
 }

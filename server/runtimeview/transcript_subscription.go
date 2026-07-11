@@ -1,10 +1,13 @@
 package runtimeview
 
 import (
+	"fmt"
 	"strings"
 
 	"core/server/runtime"
 	"core/shared/clientui"
+	"core/shared/transcript"
+	"core/shared/valuecopy"
 
 	"github.com/google/uuid"
 )
@@ -147,16 +150,7 @@ func transcriptFeedStateMessages(evt runtime.Event) []clientui.TranscriptMessage
 		out = append(out, clientui.TranscriptMessage{Kind: clientui.TranscriptMessageGoalStatus, GoalStatus: &goal})
 	}
 	if evt.Background != nil {
-		background := clientui.TranscriptBackgroundActivity{
-			ID:                evt.Background.ID,
-			State:             evt.Background.State,
-			Command:           evt.Background.Command,
-			Workdir:           evt.Background.Workdir,
-			LogPath:           evt.Background.LogPath,
-			Preview:           evt.Background.Preview,
-			Removed:           evt.Background.Removed > 0,
-			UserRequestedKill: evt.Background.UserRequestedKill,
-		}
+		background := transcriptBackgroundActivity(*evt.Background)
 		if evt.Background.ExitCode != nil {
 			exitCode := *evt.Background.ExitCode
 			background.ExitCode = &exitCode
@@ -164,6 +158,22 @@ func transcriptFeedStateMessages(evt runtime.Event) []clientui.TranscriptMessage
 		out = append(out, clientui.TranscriptMessage{Kind: clientui.TranscriptMessageBackgroundActivity, BackgroundActivity: &background})
 	}
 	return out
+}
+
+func transcriptBackgroundActivity(evt runtime.BackgroundShellEvent) clientui.TranscriptBackgroundActivity {
+	if evt.ActivityID == uuid.Nil || evt.ActivityID.Version() != 4 {
+		panic(fmt.Sprintf("runtime background transcript activity missing UUIDv4 activity id: process_id=%q activity_id=%q", evt.ID, evt.ActivityID))
+	}
+	return clientui.TranscriptBackgroundActivity{
+		ID:                evt.ActivityID.String(),
+		State:             evt.State,
+		Command:           evt.Command,
+		Workdir:           evt.Workdir,
+		LogPath:           evt.LogPath,
+		Preview:           evt.Preview,
+		Removed:           evt.Type.IsTerminal(),
+		UserRequestedKill: evt.UserRequestedKill,
+	}
 }
 
 func TranscriptSessionIdentityFromRuntime(engine *runtime.Engine) clientui.TranscriptSessionIdentity {
@@ -178,12 +188,11 @@ func TranscriptSessionIdentityFromRuntime(engine *runtime.Engine) clientui.Trans
 }
 
 func transcriptCommittedRowMessages(evt runtime.Event) []clientui.TranscriptMessage {
-	startMessages := transcriptToolStartMessages(runtime.TranscriptToolStartFactsFromEvent(evt))
 	rowFacts := runtime.TranscriptCommittedRowFactsFromEvent(evt)
 	if len(rowFacts) == 0 {
-		return startMessages
+		return nil
 	}
-	out := make([]clientui.TranscriptMessage, 0, len(startMessages)+len(rowFacts))
+	out := make([]clientui.TranscriptMessage, 0, len(rowFacts))
 	for _, fact := range rowFacts {
 		row := transcriptRowFromFact(fact)
 		out = append(out, clientui.TranscriptMessage{
@@ -191,7 +200,6 @@ func transcriptCommittedRowMessages(evt runtime.Event) []clientui.TranscriptMess
 			CommittedRow: &row,
 		})
 	}
-	out = append(out, startMessages...)
 	return out
 }
 
@@ -234,27 +242,32 @@ func transcriptToolStartMessages(starts []runtime.TranscriptLiveToolStart) []cli
 }
 
 func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.TranscriptCommittedRow {
+	visibility := clientui.EntryVisibility(fact.Visibility)
 	switch fact.Kind {
 	case runtime.TranscriptCommittedRowFactUser:
 		if fact.User == nil {
-			return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
+			return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
 		}
-		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: fact.User.Text}}
+		return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowUser, User: &clientui.TranscriptUserRow{Text: fact.User.Text, CondensedText: fact.User.CondensedText}}
 	case runtime.TranscriptCommittedRowFactAssistant:
 		if fact.Assistant == nil {
-			return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
+			return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
 		}
-		row := clientui.TranscriptAssistantRow{Text: fact.Assistant.Text, Phase: clientui.MessagePhase(fact.Assistant.Phase)}
+		row := clientui.TranscriptAssistantRow{
+			Text:          fact.Assistant.Text,
+			CondensedText: fact.Assistant.CondensedText,
+			Phase:         transcript.ClassifyAssistantPhase(string(fact.Assistant.Phase)),
+		}
 		if fact.Assistant.StreamID != nil {
 			parsed := *fact.Assistant.StreamID
 			row.StreamID = &parsed
 		}
-		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowAssistant, Assistant: &row}
+		return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowAssistant, Assistant: &row}
 	case runtime.TranscriptCommittedRowFactTool:
 		if fact.Tool == nil {
-			return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
+			return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowNotice, Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeRuntimeDiagnostic, Severity: clientui.TranscriptNoticeError}}
 		}
-		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
+		return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowTool, Tool: &clientui.TranscriptToolRow{
 			ToolCallID:       strings.TrimSpace(fact.Tool.ToolCallID),
 			ToolName:         strings.TrimSpace(fact.Tool.ToolName),
 			Text:             fact.Tool.Text,
@@ -264,7 +277,7 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 			ToolPresentation: cloneToolCallMeta(fact.Tool.Presentation),
 		}}
 	default:
-		return clientui.TranscriptCommittedRow{Kind: clientui.TranscriptRowNotice, Notice: transcriptNoticeFromFact(fact.Notice)}
+		return clientui.TranscriptCommittedRow{Visibility: visibility, Integrity: fact.Integrity, Kind: clientui.TranscriptRowNotice, Notice: transcriptNoticeFromFact(fact.Notice)}
 	}
 }
 
@@ -276,12 +289,13 @@ func transcriptNoticeFromFact(fact *runtime.TranscriptNoticeRowFact) *clientui.T
 		Reason:   clientui.TranscriptNoticeReason(strings.TrimSpace(fact.Reason)),
 		Severity: clientui.TranscriptNoticeSeverity(strings.TrimSpace(fact.Severity)),
 		Data: clientui.TranscriptNoticeData{
-			LegacyText:    fact.LegacyText,
-			NoticeID:      fact.NoticeID,
-			MessageType:   clientui.MessageType(strings.TrimSpace(string(fact.MessageType))),
-			SourcePath:    strings.TrimSpace(fact.SourcePath),
-			CondensedText: strings.TrimSpace(fact.CondensedText),
-			CompactLabel:  strings.TrimSpace(fact.CompactLabel),
+			LegacyText:         fact.LegacyText,
+			NoticeID:           fact.NoticeID,
+			MessageType:        clientui.MessageType(strings.TrimSpace(string(fact.MessageType))),
+			SourcePath:         strings.TrimSpace(fact.SourcePath),
+			CondensedText:      strings.TrimSpace(fact.CondensedText),
+			CompactLabel:       strings.TrimSpace(fact.CompactLabel),
+			BackgroundExitCode: valuecopy.Pointer(fact.BackgroundExitCode),
 		},
 	}
 	if strings.TrimSpace(fact.DiagnosticCode) != "" || strings.TrimSpace(fact.DiagnosticDetail) != "" {

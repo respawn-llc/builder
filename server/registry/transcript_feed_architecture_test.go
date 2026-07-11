@@ -36,14 +36,12 @@ func TestRuntimeRegistryDoesNotBypassSessionFeedSequencerForTranscriptBroker(t *
 func TestTranscriptSubscriptionHydrationDoesNotUseLegacyTranscriptReaders(t *testing.T) {
 	repoRoot := findRegistryRepoRoot(t)
 	forbidden := map[string]bool{
-		"TranscriptSegmentPage":                true,
-		"TranscriptSegmentPageForward":         true,
-		"TranscriptSegmentPageFromStore":       true,
-		"GetSessionTranscriptPage":             true,
-		"GetSessionCommittedTranscriptSuffix":  true,
-		"CommittedTranscriptSuffixFromRuntime": true,
-		"ReadSegmentBackward":                  true,
-		"ReadEventsBackwardUntil":              true,
+		"TranscriptSegmentPage":          true,
+		"TranscriptSegmentPageForward":   true,
+		"TranscriptSegmentPageFromStore": true,
+		"GetSessionTranscriptPage":       true,
+		"ReadSegmentBackward":            true,
+		"ReadEventsBackwardUntil":        true,
 	}
 	for _, rel := range []string{
 		filepath.Join("server", "runtime", "transcript_subscription.go"),
@@ -80,9 +78,8 @@ func TestTranscriptRuntimeViewProjectionDoesNotUseLegacyChatEntryShape(t *testin
 		t.Fatalf("parse %s: %v", rel, err)
 	}
 	forbidden := map[string]bool{
-		"ChatEntry":          true,
-		"ChatSnapshot":       true,
-		"TranscriptMetadata": true,
+		"ChatEntry":    true,
+		"ChatSnapshot": true,
 	}
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch typed := node.(type) {

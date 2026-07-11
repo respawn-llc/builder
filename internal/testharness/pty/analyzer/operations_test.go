@@ -9,9 +9,9 @@ import (
 func TestRecordPutMergesContiguousSpansWithoutCopyingPriorText(t *testing.T) {
 	backend := newTracingBackend(MustDimensions(1, 8))
 	backend.beginByte(Chunk{}, 0)
-	backend.recordPut(Position{Row: 0, Col: 0}, "a")
+	backend.recordPut(Position{Row: 0, Col: 0}, Cell{Content: "a"})
 	backend.beginByte(Chunk{}, 1)
-	backend.recordPut(Position{Row: 0, Col: 1}, "b")
+	backend.recordPut(Position{Row: 0, Col: 1}, Cell{Content: "b"})
 
 	operations := backend.operations()
 	if len(operations) != 1 {

@@ -1,48 +1,108 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/runner"
+	"core/cli/tui/ongoing"
 	"core/shared/config"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, logger *runLogger, commandRegistry *commands.Registry, initialPrompt string, initialPromptHistoryRecorded bool, initialInput string, recoveryBuffers []serverapi.SessionDraftRecoveryBuffer, sessionName string, modelContractLocked bool, configuredModelName string, statusConfig uiStatusConfig, startupUpdateNotice bool, markerEncoder runner.TerminalPhaseMarkerEncoder, markerSinkObserver runner.TerminalPhaseMarkerSinkObserver) (tea.Model, error) {
+type uiProgramComposition struct {
+	model   *uiModel
+	options []tea.ProgramOption
+	logger  uiLogger
+	close   func()
+}
+
+type uiLoopRequest struct {
+	wiring                       *runtimeWiring
+	active                       config.Settings
+	logger                       *runLogger
+	commandRegistry              *commands.Registry
+	initialPrompt                string
+	initialPromptHistoryRecorded bool
+	initialInput                 string
+	recoveryBuffers              []serverapi.SessionDraftRecoveryBuffer
+	sessionName                  string
+	modelContractLocked          bool
+	configuredModelName          string
+	statusConfig                 uiStatusConfig
+	startupUpdateNotice          bool
+}
+
+func runUILoop(request uiLoopRequest) (tea.Model, error) {
+	composition, err := composeUIProgram(request, os.Stdout)
+	if err != nil {
+		return nil, err
+	}
+	return runUIProgram(composition, composition.model)
+}
+
+func runUIProgram(composition *uiProgramComposition, initialModel tea.Model) (tea.Model, error) {
+	if composition == nil {
+		return nil, errors.New("UI program composition is required")
+	}
+	if initialModel == nil {
+		return nil, errors.New("UI program model is required")
+	}
+	defer composition.close()
+	finalModel, runErr := tea.NewProgram(initialModel, composition.options...).Run()
+	if runErr != nil {
+		if composition.logger != nil {
+			composition.logger.Logf("app.exit err=%q", runErr.Error())
+		}
+		return nil, runErr
+	}
+	if composition.logger != nil {
+		composition.logger.Logf("app.exit ok")
+	}
+	return finalModel, nil
+}
+
+func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramComposition, error) {
 	terminalCursor := newUITerminalCursorState()
 	rendererOutputGate := newUIRendererOutputGateState()
-	terminalOutput := newUITerminalOutput(os.Stdout, markerEncoder)
-	if markerSinkObserver != nil {
-		if err := markerSinkObserver.TerminalPhaseMarkerSinkReady(context.Background(), terminalOutput); err != nil {
-			return nil, err
-		}
+	// Preserve terminal-file identity (Fd/Read/Close) so Bubble Tea can detect
+	// the real terminal and emit WindowSizeMsg.
+	terminalOutput := newUITerminalOutputFile(output)
+	ongoingSurface := ongoing.NewSurface(terminalOutput)
+	options := mainUIProgramOptionsWithOutput(
+		request.active,
+		terminalCursor,
+		rendererOutputGate,
+		terminalOutput,
+	)
+	tuiLogger, err := newRollingTUILogger(request.statusConfig.PersistenceRoot)
+	if err != nil && request.logger != nil {
+		request.logger.Logf("tui_log.open err=%q", err.Error())
 	}
-	options := mainUIProgramOptionsWithOutput(active, terminalCursor, rendererOutputGate, terminalOutput)
-	tuiLogger, err := newRollingTUILogger(statusConfig.PersistenceRoot)
-	if err != nil && logger != nil {
-		logger.Logf("tui_log.open err=%q", err.Error())
-	}
-	if tuiLogger != nil {
-		defer tuiLogger.Close()
-	}
-	uiLogger := newMultiUILogger(logger, tuiLogger)
-	runtimeClient := wiring.runtimeClient
+	uiLogger := newMultiUILogger(request.logger, tuiLogger)
+	runtimeClient := request.wiring.runtimeClient
 	if runtimeClient == nil {
+		if tuiLogger != nil {
+			_ = tuiLogger.Close()
+		}
 		return nil, errors.New("runtime client is required")
 	}
-	runtimeEvents := wiring.runtimeEvents
+	runtimeEvents := request.wiring.runtimeEvents
 	if runtimeEvents == nil {
+		if tuiLogger != nil {
+			_ = tuiLogger.Close()
+		}
 		return nil, errors.New("runtime event stream is required")
 	}
-	askEvents := wiring.askEvents
+	askEvents := request.wiring.askEvents
 	if askEvents == nil {
+		if tuiLogger != nil {
+			_ = tuiLogger.Close()
+		}
 		return nil, errors.New("prompt event stream is required")
 	}
 	// The first renderer write occurs only after Bubble Tea owns terminal mode.
@@ -55,55 +115,69 @@ func runUILoopWithInitialPrompt(wiring *runtimeWiring, active config.Settings, l
 		sessionID = runtimeClient.MainView().Session.SessionID
 	}
 
-	model := NewProjectedUIModel(
+	rawModel := NewProjectedUIModel(
 		runtimeClient,
 		runtimeEvents,
 		askEvents,
 		WithUILogger(uiLogger),
-		WithUIModelName(active.Model),
-		WithUIConfiguredModelName(configuredModelName),
-		WithUIThinkingLevel(active.ThinkingLevel),
-		WithUIModelContractLocked(modelContractLocked),
-		WithUITheme(active.Theme),
-		WithUIDebug(active.Debug),
-		WithUICommandRegistry(commandRegistry),
-		WithUIHasOtherSessions(wiring.hasOtherSessionsKnown, wiring.hasOtherSessions),
-		WithUITurnQueueHook(wiring.turnQueueHook),
-		WithUIProcessClient(newUIProcessClientWithReads(wiring.processViews, wiring.processControls)),
-		WithUIWorktreeClient(wiring.worktrees),
-		WithUIPromptHistory(wiring.promptHistory),
-		WithUIStartupSubmit(initialPrompt),
-		WithUIStartupSubmitPromptHistoryRecorded(initialPromptHistoryRecorded),
-		WithUIInitialInput(initialInput),
-		WithUIInitialRecoveryBuffers(recoveryBuffers),
-		WithUISessionName(sessionName),
+		WithUIModelName(request.active.Model),
+		WithUIConfiguredModelName(request.configuredModelName),
+		WithUIThinkingLevel(request.active.ThinkingLevel),
+		WithUIModelContractLocked(request.modelContractLocked),
+		WithUITheme(request.active.Theme),
+		WithUIDebug(request.active.Debug),
+		WithUICommandRegistry(request.commandRegistry),
+		WithUIHasOtherSessions(request.wiring.hasOtherSessionsKnown, request.wiring.hasOtherSessions),
+		WithUITurnQueueHook(request.wiring.turnQueueHook),
+		WithUIProcessClient(newUIProcessClientWithReads(request.wiring.processViews, request.wiring.processControls)),
+		WithUIWorktreeClient(request.wiring.worktrees),
+		WithUIPromptHistory(request.wiring.promptHistory),
+		WithUIStartupSubmit(request.initialPrompt),
+		WithUIStartupSubmitPromptHistoryRecorded(request.initialPromptHistoryRecorded),
+		WithUIInitialInput(request.initialInput),
+		WithUIInitialRecoveryBuffers(request.recoveryBuffers),
+		WithUISessionName(request.sessionName),
 		WithUISessionID(sessionID),
-		WithUIStatusConfig(statusConfig),
-		WithUIStartupUpdateNotice(startupUpdateNotice),
+		WithUIStatusConfig(request.statusConfig),
+		WithUIStartupUpdateNotice(request.startupUpdateNotice),
 		WithUITerminalCursorState(terminalCursor),
 		WithUIRendererOutputGateState(rendererOutputGate),
-		WithUITerminalFocusState(wiring.terminalFocus),
+		WithUIOngoingSurface(ongoingSurface),
+		WithUIOngoingTranscriptEvents(request.wiring.transcriptEvents),
+		WithUIOngoingTranscriptReopen(request.wiring.requestTranscriptOpen),
+		WithUITerminalFocusState(request.wiring.terminalFocus),
 	)
-	if closable, ok := model.(interface{ Close() }); ok {
-		defer closable.Close()
-	}
-	program := tea.NewProgram(model, options...)
-
-	finalModel, runErr := program.Run()
-	if runErr != nil {
-		if uiLogger != nil {
-			uiLogger.Logf("app.exit err=%q", runErr.Error())
+	model, ok := rawModel.(*uiModel)
+	if !ok {
+		if tuiLogger != nil {
+			_ = tuiLogger.Close()
 		}
-		return nil, runErr
+		return nil, errors.New("projected UI model has unexpected type")
 	}
-	if uiLogger != nil {
-		uiLogger.Logf("app.exit ok")
-	}
-	return finalModel, nil
+	model.ongoingTranscript = newOngoingTranscriptController(ongoingSurface, model.ongoingFrameInput)
+	return &uiProgramComposition{
+		model:   model,
+		options: options,
+		logger:  uiLogger,
+		close: func() {
+			model.Close()
+			if tuiLogger != nil {
+				_ = tuiLogger.Close()
+			}
+		},
+	}, nil
 }
 
-func mainUIProgramOptionsWithOutput(active config.Settings, terminalCursor *uiTerminalCursorState, rendererOutputGate *uiRendererOutputGateState, output io.Writer) []tea.ProgramOption {
-	options := []tea.ProgramOption{tea.WithFilter(terminalCursorProgramFilter(terminalCursor)), tea.WithReportFocus()}
+func mainUIProgramOptionsWithOutput(
+	active config.Settings,
+	terminalCursor *uiTerminalCursorState,
+	rendererOutputGate *uiRendererOutputGateState,
+	output io.Writer,
+) []tea.ProgramOption {
+	options := []tea.ProgramOption{
+		tea.WithFilter(terminalCursorProgramFilter(terminalCursor)),
+		tea.WithReportFocus(),
+	}
 	rendererOutput := output
 	if terminalCursor != nil {
 		rendererOutput = newUITerminalCursorWriter(rendererOutput, terminalCursor)

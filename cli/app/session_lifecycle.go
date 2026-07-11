@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"core/cli/app/commands"
-	"core/cli/app/internal/runner"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -63,10 +62,8 @@ type interactiveSessionServer interface {
 }
 
 type sessionLifecycleOptions struct {
-	ForceNewSession                 bool
-	Overrides                       serverapi.RunPromptOverrides
-	TerminalPhaseMarkerEncoder      runner.TerminalPhaseMarkerEncoder
-	TerminalPhaseMarkerSinkObserver runner.TerminalPhaseMarkerSinkObserver
+	ForceNewSession bool
+	Overrides       serverapi.RunPromptOverrides
 }
 
 func runSessionLifecycle(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string) error {
@@ -118,35 +115,20 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 			currentSessionID = plan.SessionID
 			continue
 		}
-		runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.WorkspaceRoot+" model="+plan.ActiveSettings.Model)
-		if err != nil {
-			return err
-		}
-		cfg := server.Config()
-		commandRegistry, err := commands.NewDefaultRegistryWithFilePrompts(cfg.WorkspaceRoot, cfg.PersistenceRoot)
-		if err != nil {
-			runtimePlan.Close()
-			return err
-		}
-		initialState := sessionLaunchInitialStateFromServer(ctx, server, plan.SessionID, nextSessionInitialInput)
-
-		finalModel, runErr := runUILoopWithInitialPrompt(
-			runtimePlan.Wiring,
-			plan.ActiveSettings,
-			runtimePlan.Logger,
-			commandRegistry,
+		runtimePlan, request, err := prepareSessionUIRun(
+			ctx,
+			server,
+			planner,
+			plan,
 			nextSessionInitialPrompt,
 			nextSessionInitialPromptHistoryRecorded,
-			initialState.Input,
-			initialState.RecoveryBuffers,
-			plan.SessionName,
-			plan.ModelContractLocked,
-			plan.ConfiguredModelName,
-			plan.StatusConfig,
+			nextSessionInitialInput,
 			showStartupUpdateNotice,
-			opts.TerminalPhaseMarkerEncoder,
-			opts.TerminalPhaseMarkerSinkObserver,
 		)
+		if err != nil {
+			return err
+		}
+		finalModel, runErr := runUILoop(request)
 		showStartupUpdateNotice = shouldRetryStartupUpdateNotice(finalModel, showStartupUpdateNotice)
 		nextSessionInitialPrompt = ""
 		nextSessionInitialPromptHistoryRecorded = false
@@ -180,6 +162,44 @@ func runSessionLifecycleWithOptions(ctx context.Context, server interactiveSessi
 		nextSessionParentID = resolved.ParentSessionID
 		forceNewSession = resolved.ForceNewSession
 	}
+}
+
+func prepareSessionUIRun(
+	ctx context.Context,
+	server interactiveSessionServer,
+	planner *launchPlanner,
+	plan sessionLaunchPlan,
+	initialPrompt string,
+	initialPromptHistoryRecorded bool,
+	transitionInput string,
+	startupUpdateNotice bool,
+) (*runtimeLaunchPlan, uiLoopRequest, error) {
+	runtimePlan, err := planner.PrepareRuntime(ctx, plan, os.Stderr, "app.start session_id="+plan.SessionID+" workspace="+plan.WorkspaceRoot+" model="+plan.ActiveSettings.Model)
+	if err != nil {
+		return nil, uiLoopRequest{}, err
+	}
+	cfg := server.Config()
+	commandRegistry, err := commands.NewDefaultRegistryWithFilePrompts(cfg.WorkspaceRoot, cfg.PersistenceRoot)
+	if err != nil {
+		runtimePlan.Close()
+		return nil, uiLoopRequest{}, err
+	}
+	initialState := sessionLaunchInitialStateFromServer(ctx, server, plan.SessionID, transitionInput)
+	return runtimePlan, uiLoopRequest{
+		wiring:                       runtimePlan.Wiring,
+		active:                       plan.ActiveSettings,
+		logger:                       runtimePlan.Logger,
+		commandRegistry:              commandRegistry,
+		initialPrompt:                initialPrompt,
+		initialPromptHistoryRecorded: initialPromptHistoryRecorded,
+		initialInput:                 initialState.Input,
+		recoveryBuffers:              initialState.RecoveryBuffers,
+		sessionName:                  plan.SessionName,
+		modelContractLocked:          plan.ModelContractLocked,
+		configuredModelName:          plan.ConfiguredModelName,
+		statusConfig:                 plan.StatusConfig,
+		startupUpdateNotice:          startupUpdateNotice,
+	}, nil
 }
 
 func closeRuntimePlanAfterUIExit(runtimePlan *runtimeLaunchPlan, finalModel any) {

@@ -82,7 +82,7 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 	req.FastMode = e.FastModeEnabled()
 	req.SessionID = e.SessionID()
 	if e.supportsPromptCacheKey(ctx) {
-		if cacheKey := conversationPromptCacheKey(e.SessionID(), e.compactionRuntimeState().Count()); cacheKey != "" {
+		if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
 			req.PromptCacheKey = cacheKey
 			req.PromptCacheScope = transcript.CacheWarningScopeConversation
 		}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -643,6 +644,22 @@ func TestDetailModeHidesInputBox(t *testing.T) {
 	}
 }
 
+func TestTabInsideDetailReturnsToOngoingMode(t *testing.T) {
+	m := newProjectedStaticUIModel()
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	updated := next.(*uiModel)
+	if updated.view.Mode() != tui.ModeDetail {
+		t.Fatalf("mode=%q want detail", updated.view.Mode())
+	}
+
+	next, _ = updated.Update(tea.KeyMsg{Type: tea.KeyTab})
+	updated = next.(*uiModel)
+	if updated.view.Mode() != tui.ModeOngoing {
+		t.Fatalf("mode=%q want ongoing after Tab", updated.view.Mode())
+	}
+}
+
 func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
 	m := newProjectedStaticUIModel(
 		WithUIModelName("gpt-5"),
@@ -661,7 +678,7 @@ func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
 
 	lines := strings.Split(ansi.Strip(updated.View()), "\n")
 	statusLine := lines[len(lines)-1]
-	if want := statusStateCircleGlyph + statusLineSpinnerSeparator + "gpt-5 · detail-mode-v2"; !strings.HasPrefix(statusLine, want) {
+	if want := statusStateCircleGlyph + statusLineSpinnerSeparator + "detail-mode-v2 · gpt-5"; !strings.HasPrefix(statusLine, want) {
 		t.Fatalf("detail status line prefix = %q, want prefix %q", statusLine, want)
 	}
 	if strings.Contains(statusLine, statusStateCircleGlyph+statusLineSpinnerSeparator+"ongoing"+statusLineSeparator) ||
@@ -671,6 +688,49 @@ func TestDetailModeStatusLineOmitsModeLabel(t *testing.T) {
 		t.Fatalf("did not expect transcript mode label in detail status line, got %q", statusLine)
 	}
 }
+
+func TestDetailModeStatusLineShowsSelectedExpandAction(t *testing.T) {
+	page := clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{
+			detailTestAssistantRow("line one\nline two\nline three\nline four"),
+		},
+	}
+	m := newProjectedStaticUIModel(
+		WithUISessionID(detailTestSessionID),
+		WithUIModelName("gpt-5"),
+	)
+	m.statusConfig.SessionViews = &countingSessionViewClient{page: page}
+	m.termWidth = 100
+	m.termHeight = 16
+	m.windowSizeKnown = true
+	m.layout().syncViewport()
+
+	cmd := m.transitionTranscriptModeWithOptions(transcriptModeTransitionOptions{
+		target:            tui.ModeDetail,
+		suppressAltScreen: true,
+		preserveSurface:   true,
+	})
+	updated := m
+	for _, msg := range collectCmdMessages(t, cmd) {
+		if load, ok := msg.(detailTranscriptLoadMsg); ok {
+			updated = updateUIModel(t, updated, load)
+		}
+	}
+	if updated.view.Mode() != tui.ModeDetail {
+		t.Fatalf("mode=%q want detail", updated.view.Mode())
+	}
+	if got := updated.view.DetailSelectionAction(); got != tui.DetailSelectionActionExpand {
+		t.Fatalf("detail selection action = %v, want expand", got)
+	}
+
+	next, _ := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = next.(*uiModel)
+	if got := updated.view.DetailSelectionAction(); got != tui.DetailSelectionActionCollapse {
+		t.Fatalf("detail selection action = %v, want collapse", got)
+	}
+}
+
 func TestAskQuestionMarkdownPromptCursorTracksInputAfterExpandedQuestion(t *testing.T) {
 	question := strings.Join([]string{
 		"Review **this plan** before answer:",
@@ -701,5 +761,137 @@ func TestAskQuestionMarkdownPromptCursorTracksInputAfterExpandedQuestion(t *test
 	}
 	if visible[visibleCursor].Line.Kind != askPromptLineKindInput {
 		t.Fatalf("expected visible cursor to land on input after markdown-expanded question, got line %+v", visible[visibleCursor])
+	}
+}
+
+func TestAskQuestionPickerMarkdownQuestionWrapsWithoutSourceMarkers(t *testing.T) {
+	question := strings.Join([]string{
+		"Review **generated plan** and the [design note](https://example.com/design).",
+		"",
+		"- First item",
+		"- Second item",
+	}, "\n")
+	m := newProjectedStaticUIModel()
+	m.termWidth = 40
+	m.termHeight = 14
+	m.windowSizeKnown = true
+	m.layout().syncViewport()
+	testSetActiveAsk(m, &askEvent{
+		req:   clientui.PendingPromptEvent{Question: question},
+		reply: make(chan askReply, 1),
+	})
+
+	wrapped, _ := m.layout().wrappedAskPromptLines(32)
+	var questionLines []string
+	for _, line := range wrapped {
+		if line.Line.Kind != askPromptLineKindQuestion {
+			continue
+		}
+		if width := lipgloss.Width(line.Text); width > 32 {
+			t.Fatalf("question line width = %d, want <= 32: %q", width, line.Text)
+		}
+		questionLines = append(questionLines, ansi.Strip(line.Text))
+	}
+	plain := strings.Join(questionLines, "\n")
+	if len(questionLines) < 3 {
+		t.Fatalf("question lines = %d, want wrapped Markdown: %q", len(questionLines), plain)
+	}
+	if strings.Contains(plain, "**generated plan**") || strings.Contains(plain, "- First item") {
+		t.Fatalf("question retained Markdown source markers: %q", plain)
+	}
+	continuous := strings.ReplaceAll(plain, "\n", "")
+	for _, content := range []string{"Review generated plan", "design note", "First item", "Second item"} {
+		if !strings.Contains(continuous, content) {
+			t.Fatalf("question Markdown missing %q: %q", content, plain)
+		}
+	}
+}
+
+func TestAskQuestionViewportPrioritizesAnswerOptionsOverQuestionLines(t *testing.T) {
+	m := newProjectedStaticUIModel()
+	m.termWidth = 56
+	m.termHeight = 9
+	m.windowSizeKnown = true
+	m.layout().syncViewport()
+	testSetActiveAsk(m, &askEvent{
+		req: clientui.PendingPromptEvent{
+			Question: strings.Repeat("Long **Markdown question** content. ", 8),
+			Suggestions: []string{
+				"First",
+				"Second",
+			},
+		},
+		reply: make(chan askReply, 1),
+	})
+
+	visible, _ := m.layout().visibleAskPromptLinesWithCursor(48)
+	questionLines := 0
+	optionLines := 0
+	hintLines := 0
+	for _, line := range visible {
+		switch line.Line.Kind {
+		case askPromptLineKindQuestion:
+			questionLines++
+		case askPromptLineKindOption:
+			optionLines++
+		case askPromptLineKindHint:
+			hintLines++
+		}
+	}
+	if optionLines != 3 {
+		t.Fatalf("visible option lines = %d, want all two suggestions plus freeform: %+v", optionLines, visible)
+	}
+	if hintLines != 1 {
+		t.Fatalf("visible hint lines = %d, want 1: %+v", hintLines, visible)
+	}
+	if questionLines != 1 {
+		t.Fatalf("visible question lines = %d, want remaining one-line capacity: %+v", questionLines, visible)
+	}
+}
+
+func TestAskQuestionPickerRendersHeadingsRulesAndTables(t *testing.T) {
+	question := strings.Join([]string{
+		"# Primary heading",
+		"",
+		"---",
+		"",
+		"## Results",
+		"",
+		"| Element | State |",
+		"| --- | --- |",
+		"| Header | Ready |",
+		"| Table | Ready |",
+	}, "\n")
+	m := newProjectedStaticUIModel()
+	m.termWidth = 64
+	m.termHeight = 20
+	m.windowSizeKnown = true
+	m.layout().syncViewport()
+	testSetActiveAsk(m, &askEvent{
+		req:   clientui.PendingPromptEvent{Question: question},
+		reply: make(chan askReply, 1),
+	})
+
+	wrapped, _ := m.layout().wrappedAskPromptLines(56)
+	var questionLines []string
+	for _, line := range wrapped {
+		if line.Line.Kind != askPromptLineKindQuestion {
+			continue
+		}
+		if width := lipgloss.Width(line.Text); width > 56 {
+			t.Fatalf("question line width = %d, want <= 56: %q", width, line.Text)
+		}
+		questionLines = append(questionLines, ansi.Strip(line.Text))
+	}
+	plain := strings.Join(questionLines, "\n")
+	for _, source := range []string{"| Element | State |", "| --- | --- |"} {
+		if strings.Contains(plain, source) {
+			t.Fatalf("question retained Markdown source %q: %q", source, plain)
+		}
+	}
+	for _, content := range []string{"Primary heading", "Results", "Element", "State", "Header", "Table", "Ready"} {
+		if !strings.Contains(plain, content) {
+			t.Fatalf("question Markdown missing %q: %q", content, plain)
+		}
 	}
 }

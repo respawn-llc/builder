@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gdamore/tcell/v3/color"
 	"github.com/gdamore/tcell/v3/vt"
 )
 
@@ -11,6 +12,7 @@ type tracingBackend struct {
 	dimensions      Dimensions
 	cells           [][]Cell
 	cursor          Position
+	normal          *ScreenSnapshot
 	modes           map[vt.PrivateMode]vt.ModeStatus
 	chunk           Chunk
 	byteOffset      int64
@@ -29,7 +31,7 @@ type pendingWrite struct {
 	before    Position
 	after     Position
 	region    Region
-	span      TextSpan
+	write     WritePayload
 }
 
 type writeBatch struct {
@@ -40,9 +42,11 @@ type writeBatch struct {
 func newTracingBackend(dimensions Dimensions) *tracingBackend {
 	snapshot := NewScreenSnapshot(dimensions)
 	return &tracingBackend{
-		dimensions:      dimensions,
-		cells:           snapshot.Cells,
-		modes:           map[vt.PrivateMode]vt.ModeStatus{},
+		dimensions: dimensions,
+		cells:      snapshot.Cells,
+		modes: map[vt.PrivateMode]vt.ModeStatus{
+			vt.PmAltScreen: vt.ModeOff,
+		},
 		writeText:       newDefaultWriteTextArena(),
 		operationBudget: newOperationBudget(),
 	}
@@ -125,8 +129,7 @@ func (b *tracingBackend) snapshotOperations() ([]Operation, error) {
 	controls := append([]Operation(nil), b.writeBatchControls()...)
 	if b.pendingWrite != nil {
 		pending := b.pendingWrite
-		payload := WritePayload{Span: pending.span, arena: b.writeText}
-		segments = append(segments, WriteSegment{ChunkIndex: pending.chunk.Index, ByteRange: pending.byteRange, Before: pending.before, After: pending.after, Region: pending.region, Write: payload, CapturedAt: pending.chunk.At})
+		segments = append(segments, WriteSegment{ChunkIndex: pending.chunk.Index, ByteRange: pending.byteRange, Before: pending.before, After: pending.after, Region: pending.region, Write: pending.write, CapturedAt: pending.chunk.At})
 	}
 	if len(segments) > 0 || len(controls) > 0 {
 		operations = append(operations, b.operationForWriteBatch(segments, controls))
@@ -148,17 +151,14 @@ func (b *tracingBackend) snapshot() ScreenSnapshot {
 
 func (b *tracingBackend) resize(dimensions Dimensions, at time.Duration) {
 	old := b.snapshot()
-	newCells := NewScreenSnapshot(dimensions).Cells
-	copyRows := min(len(old.Cells), dimensions.Rows)
-	for row := 0; row < copyRows; row++ {
-		copy(newCells[row], old.Cells[row][:min(len(old.Cells[row]), dimensions.Cols)])
+	resized := resizeScreenSnapshot(old, dimensions)
+	if b.normal != nil {
+		normal := resizeScreenSnapshot(*b.normal, dimensions)
+		b.normal = &normal
 	}
 	b.dimensions = dimensions
-	b.cells = newCells
-	b.cursor = Position{
-		Row: clamp(b.cursor.Row, 0, dimensions.Rows-1),
-		Col: clamp(b.cursor.Col, 0, dimensions.Cols-1),
-	}
+	b.cells = resized.Cells
+	b.cursor = resized.Cursor
 	b.appendOperation(Operation{
 		Kind:       OperationResize,
 		ChunkIndex: b.chunk.Index,
@@ -178,8 +178,41 @@ func (b *tracingBackend) GetPrivateMode(mode vt.PrivateMode) vt.ModeStatus {
 }
 
 func (b *tracingBackend) SetPrivateMode(mode vt.PrivateMode, status vt.ModeStatus) error {
+	if mode == vt.PmAltScreen {
+		switch status {
+		case vt.ModeOn:
+			if b.modes[mode] != vt.ModeOn {
+				normal := b.snapshot()
+				b.normal = &normal
+				alternate := NewScreenSnapshot(b.dimensions)
+				b.cells = alternate.Cells
+				b.cursor = alternate.Cursor
+			}
+		case vt.ModeOff:
+			if b.modes[mode] == vt.ModeOn && b.normal != nil {
+				b.cells = b.normal.Cells
+				b.cursor = b.normal.Cursor
+				b.normal = nil
+			}
+		default:
+			return fmt.Errorf("set alternate-screen mode to unsupported status %d", status)
+		}
+	}
 	b.modes[mode] = status
 	return nil
+}
+
+func resizeScreenSnapshot(snapshot ScreenSnapshot, dimensions Dimensions) ScreenSnapshot {
+	resized := NewScreenSnapshot(dimensions)
+	copyRows := min(len(snapshot.Cells), dimensions.Rows)
+	for row := 0; row < copyRows; row++ {
+		copy(resized.Cells[row], snapshot.Cells[row][:min(len(snapshot.Cells[row]), dimensions.Cols)])
+	}
+	resized.Cursor = Position{
+		Row: clamp(snapshot.Cursor.Row, 0, dimensions.Rows-1),
+		Col: clamp(snapshot.Cursor.Col, 0, dimensions.Cols-1),
+	}
+	return resized
 }
 
 func (b *tracingBackend) GetSize() vt.Coord {
@@ -195,11 +228,53 @@ func (b *tracingBackend) Put(coord vt.Coord, cell vt.Cell) {
 	if position.Row < 0 || position.Row >= b.dimensions.Rows || position.Col < 0 || position.Col >= b.dimensions.Cols {
 		return
 	}
-	b.cells[position.Row][position.Col] = Cell{Content: cell.C}
+	style := cellStyle(cell.S)
+	styledCell := Cell{
+		Content:    cell.C,
+		Faint:      style.Faint,
+		Bold:       style.Bold,
+		Italic:     style.Italic,
+		Underline:  style.Underline,
+		Foreground: style.Foreground,
+		Background: style.Background,
+	}
+	b.cells[position.Row][position.Col] = styledCell
 	if cell.C == "" {
 		return
 	}
-	b.recordPut(position, cell.C)
+	b.recordPut(position, styledCell)
+}
+
+type terminalCellStyle struct {
+	Faint      bool
+	Bold       bool
+	Italic     bool
+	Underline  bool
+	Foreground string
+	Background string
+}
+
+func cellStyle(style vt.Style) terminalCellStyle {
+	if style == nil {
+		return terminalCellStyle{}
+	}
+	attrs := style.Attr()
+	return terminalCellStyle{
+		Faint:      attrs&vt.Dim != 0,
+		Bold:       attrs&vt.Bold != 0,
+		Italic:     attrs&vt.Italic != 0,
+		Underline:  attrs&vt.Underline != 0,
+		Foreground: styleColor(style.Fg()),
+		Background: styleColor(style.Bg()),
+	}
+}
+
+func styleColor(value color.Color) string {
+	if !value.Valid() || value == color.Default {
+		return ""
+	}
+	r, g, b := value.TrueColor().RGB()
+	return fmt.Sprintf("#%02x%02x%02x", uint8(r), uint8(g), uint8(b))
 }
 
 // Blit applies emulator-internal scrolling without synthesizing terminal

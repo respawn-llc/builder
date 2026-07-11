@@ -46,14 +46,14 @@ Roles hidden from workflow-agent delegation remain valid node assignees.
 ```toml
 [subagents.implementer]
 description = "Implements approved tasks and leaves reviewable changes."
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 thinking_level = "high"
 system_prompt_file = "agents/implementer.md"
 agent_callable = true
 
 [subagents.reviewer]
 description = "Reviews changes and returns actionable findings."
-model = "gpt-5.5"
+model = "gpt-5.6-sol"
 thinking_level = "xhigh"
 system_prompt_file = "agents/reviewer.md"
 agent_callable = true

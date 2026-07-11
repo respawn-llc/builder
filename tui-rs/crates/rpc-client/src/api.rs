@@ -35,11 +35,10 @@ use client_contracts::runtime_control::{
     RuntimeSubmitUserTurnResponse,
 };
 use client_contracts::session::{
-    SessionActivitySubscribeRequest, SessionCommittedTranscriptSuffixRequest,
-    SessionCommittedTranscriptSuffixResponse, SessionInitialInputRequest,
-    SessionInitialInputResponse, SessionMainViewRequest, SessionMainViewResponse,
-    SessionPersistInputDraftRequest, SessionPersistInputDraftResponse, SessionPlanRequest,
-    SessionPlanResponse, SessionResolveTransitionRequest, SessionResolveTransitionResponse,
+    SessionActivitySubscribeRequest, SessionInitialInputRequest, SessionInitialInputResponse,
+    SessionMainViewRequest, SessionMainViewResponse, SessionPersistInputDraftRequest,
+    SessionPersistInputDraftResponse, SessionPlanRequest, SessionPlanResponse,
+    SessionResolveTransitionRequest, SessionResolveTransitionResponse,
     SessionRetargetWorkspaceRequest, SessionRetargetWorkspaceResponse,
     SessionRuntimeActivateRequest, SessionRuntimeActivateResponse, SessionRuntimeReleaseRequest,
     SessionRuntimeReleaseResponse, SessionTranscriptPageRequest, SessionTranscriptPageResponse,
@@ -73,7 +72,6 @@ const METHOD_PROJECT_CREATE: &str = "project.create";
 const METHOD_PROJECT_GET_OVERVIEW: &str = "project.getOverview";
 const METHOD_PROJECT_PLAN_WORKSPACE_BINDING: &str = "project.planWorkspaceBinding";
 const METHOD_SESSION_ATTACH: &str = "session.attach";
-const METHOD_SESSION_GET_COMMITTED_TRANSCRIPT_SUFFIX: &str = "session.getCommittedTranscriptSuffix";
 const METHOD_SESSION_GET_INITIAL_INPUT: &str = "session.getInitialInput";
 const METHOD_SESSION_GET_MAIN_VIEW: &str = "session.getMainView";
 const METHOD_SESSION_GET_TRANSCRIPT_PAGE: &str = "session.getTranscriptPage";
@@ -284,13 +282,6 @@ impl<C: FrameConnection> Client<C> {
         request: SessionRetargetWorkspaceRequest,
     ) -> Result<SessionRetargetWorkspaceResponse, RpcError> {
         self.call(METHOD_SESSION_RETARGET_WORKSPACE, &request)
-    }
-
-    pub fn get_committed_transcript_suffix(
-        &mut self,
-        request: SessionCommittedTranscriptSuffixRequest,
-    ) -> Result<SessionCommittedTranscriptSuffixResponse, RpcError> {
-        self.call(METHOD_SESSION_GET_COMMITTED_TRANSCRIPT_SUFFIX, &request)
     }
 
     pub fn get_transcript_page(

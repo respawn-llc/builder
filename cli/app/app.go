@@ -6,37 +6,29 @@ import (
 	"strings"
 	"time"
 
-	"core/cli/app/internal/apphooks"
 	"core/cli/app/internal/embeddedattach"
 	"core/cli/app/internal/runner"
 )
 
 type Options struct {
-	WorkspaceRoot                   string
-	WorkspaceRootExplicit           bool
-	SessionID                       string
-	WorkspaceContextSessionID       string
-	AgentRole                       string
-	Model                           string
-	ProviderOverride                string
-	ThinkingLevel                   string
-	Theme                           string
-	ModelTimeoutSeconds             int
-	Tools                           string
-	OpenAIBaseURL                   string
-	OpenAIBaseURLExplicit           bool
-	ConfigRoot                      string
-	startupOptions                  embeddedattach.StartupOptions
-	terminalPhaseMarkerEncoder      runner.TerminalPhaseMarkerEncoder
-	terminalPhaseMarkerSinkObserver runner.TerminalPhaseMarkerSinkObserver
+	WorkspaceRoot             string
+	WorkspaceRootExplicit     bool
+	SessionID                 string
+	WorkspaceContextSessionID string
+	AgentRole                 string
+	Model                     string
+	ProviderOverride          string
+	ThinkingLevel             string
+	Theme                     string
+	ModelTimeoutSeconds       int
+	Tools                     string
+	OpenAIBaseURL             string
+	OpenAIBaseURLExplicit     bool
+	ConfigRoot                string
+	startupOptions            embeddedattach.StartupOptions
 }
 
 func Run(ctx context.Context, opts Options) error {
-	if hooks, ok := apphooks.FromContext(ctx); ok {
-		opts.startupOptions = hooks.StartupOptions
-		opts.terminalPhaseMarkerEncoder = hooks.TerminalPhaseMarkerEncoder
-		opts.terminalPhaseMarkerSinkObserver = hooks.TerminalPhaseMarkerSinkObserver
-	}
 	return runner.RunInteractive(ctx, runnerRequestFromOptions(opts), runner.Dependencies[interactiveSessionServer, authInteractor, embeddedattach.StartupOptions]{
 		NewAuthInteractor: newInteractiveAuthInteractor,
 		StartSessionServer: func(ctx context.Context, req runner.Request[embeddedattach.StartupOptions], interactor authInteractor, interactive bool) (interactiveSessionServer, error) {
@@ -44,10 +36,8 @@ func Run(ctx context.Context, opts Options) error {
 		},
 		RunSessionLifecycle: func(ctx context.Context, server interactiveSessionServer, interactor authInteractor, initialSessionID string, opts runner.SessionLifecycleOptions) error {
 			return runSessionLifecycleWithOptions(ctx, server, interactor, initialSessionID, sessionLifecycleOptions{
-				ForceNewSession:                 opts.ForceNewSession,
-				Overrides:                       opts.Overrides,
-				TerminalPhaseMarkerEncoder:      opts.TerminalPhaseMarkerEncoder,
-				TerminalPhaseMarkerSinkObserver: opts.TerminalPhaseMarkerSinkObserver,
+				ForceNewSession: opts.ForceNewSession,
+				Overrides:       opts.Overrides,
 			})
 		},
 	})
@@ -68,44 +58,40 @@ func RunPrompt(ctx context.Context, opts Options, prompt string, timeout time.Du
 
 func runnerRequestFromOptions(opts Options) runner.Request[embeddedattach.StartupOptions] {
 	return runner.Request[embeddedattach.StartupOptions]{
-		WorkspaceRoot:                   opts.WorkspaceRoot,
-		WorkspaceRootExplicit:           opts.WorkspaceRootExplicit,
-		SessionID:                       opts.SessionID,
-		WorkspaceContextSessionID:       opts.WorkspaceContextSessionID,
-		AgentRole:                       opts.AgentRole,
-		Model:                           opts.Model,
-		ProviderOverride:                opts.ProviderOverride,
-		ThinkingLevel:                   opts.ThinkingLevel,
-		Theme:                           opts.Theme,
-		ModelTimeoutSeconds:             opts.ModelTimeoutSeconds,
-		Tools:                           opts.Tools,
-		OpenAIBaseURL:                   opts.OpenAIBaseURL,
-		OpenAIBaseURLExplicit:           opts.OpenAIBaseURLExplicit,
-		ConfigRoot:                      opts.ConfigRoot,
-		StartupOptions:                  opts.startupOptions,
-		TerminalPhaseMarkerEncoder:      opts.terminalPhaseMarkerEncoder,
-		TerminalPhaseMarkerSinkObserver: opts.terminalPhaseMarkerSinkObserver,
+		WorkspaceRoot:             opts.WorkspaceRoot,
+		WorkspaceRootExplicit:     opts.WorkspaceRootExplicit,
+		SessionID:                 opts.SessionID,
+		WorkspaceContextSessionID: opts.WorkspaceContextSessionID,
+		AgentRole:                 opts.AgentRole,
+		Model:                     opts.Model,
+		ProviderOverride:          opts.ProviderOverride,
+		ThinkingLevel:             opts.ThinkingLevel,
+		Theme:                     opts.Theme,
+		ModelTimeoutSeconds:       opts.ModelTimeoutSeconds,
+		Tools:                     opts.Tools,
+		OpenAIBaseURL:             opts.OpenAIBaseURL,
+		OpenAIBaseURLExplicit:     opts.OpenAIBaseURLExplicit,
+		ConfigRoot:                opts.ConfigRoot,
+		StartupOptions:            opts.startupOptions,
 	}
 }
 
 func optionsFromRunnerRequest(req runner.Request[embeddedattach.StartupOptions]) Options {
 	return Options{
-		WorkspaceRoot:                   req.WorkspaceRoot,
-		WorkspaceRootExplicit:           req.WorkspaceRootExplicit,
-		SessionID:                       req.SessionID,
-		WorkspaceContextSessionID:       req.WorkspaceContextSessionID,
-		AgentRole:                       req.AgentRole,
-		Model:                           req.Model,
-		ProviderOverride:                req.ProviderOverride,
-		ThinkingLevel:                   req.ThinkingLevel,
-		Theme:                           req.Theme,
-		ModelTimeoutSeconds:             req.ModelTimeoutSeconds,
-		Tools:                           req.Tools,
-		OpenAIBaseURL:                   req.OpenAIBaseURL,
-		OpenAIBaseURLExplicit:           req.OpenAIBaseURLExplicit,
-		ConfigRoot:                      req.ConfigRoot,
-		startupOptions:                  req.StartupOptions,
-		terminalPhaseMarkerEncoder:      req.TerminalPhaseMarkerEncoder,
-		terminalPhaseMarkerSinkObserver: req.TerminalPhaseMarkerSinkObserver,
+		WorkspaceRoot:             req.WorkspaceRoot,
+		WorkspaceRootExplicit:     req.WorkspaceRootExplicit,
+		SessionID:                 req.SessionID,
+		WorkspaceContextSessionID: req.WorkspaceContextSessionID,
+		AgentRole:                 req.AgentRole,
+		Model:                     req.Model,
+		ProviderOverride:          req.ProviderOverride,
+		ThinkingLevel:             req.ThinkingLevel,
+		Theme:                     req.Theme,
+		ModelTimeoutSeconds:       req.ModelTimeoutSeconds,
+		Tools:                     req.Tools,
+		OpenAIBaseURL:             req.OpenAIBaseURL,
+		OpenAIBaseURLExplicit:     req.OpenAIBaseURLExplicit,
+		ConfigRoot:                req.ConfigRoot,
+		startupOptions:            req.StartupOptions,
 	}
 }

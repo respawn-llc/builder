@@ -2,7 +2,8 @@ package clientui
 
 import (
 	"fmt"
-	"strings"
+
+	"core/shared/transcript"
 
 	"github.com/google/uuid"
 )
@@ -10,19 +11,16 @@ import (
 type MessagePhase string
 
 const (
-	MessagePhaseCommentary MessagePhase = "commentary"
-	MessagePhaseFinal      MessagePhase = "final_answer"
+	MessagePhaseCommentary MessagePhase = MessagePhase(transcript.AssistantPhaseCommentary)
+	MessagePhaseFinal      MessagePhase = MessagePhase(transcript.AssistantPhaseFinal)
 )
 
 func NormalizeMessagePhase(raw string) MessagePhase {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "commentary":
-		return MessagePhaseCommentary
-	case "final_answer", "finalanswer", "final":
-		return MessagePhaseFinal
-	default:
+	phase, ok := transcript.ParseExplicitAssistantPhase(raw)
+	if !ok {
 		return ""
 	}
+	return MessagePhase(phase)
 }
 
 type MessageType string
@@ -98,17 +96,17 @@ const (
 type TranscriptNoticeReason string
 
 const (
-	TranscriptNoticeCacheWarning        TranscriptNoticeReason = "cache_warning"
-	TranscriptNoticeRuntimeDiagnostic   TranscriptNoticeReason = "runtime_diagnostic"
-	TranscriptNoticeLegacyUntypedNotice TranscriptNoticeReason = "legacy_untyped_notice"
+	TranscriptNoticeCacheWarning        TranscriptNoticeReason = TranscriptNoticeReason(transcript.NoticeReasonCacheWarning)
+	TranscriptNoticeRuntimeDiagnostic   TranscriptNoticeReason = TranscriptNoticeReason(transcript.NoticeReasonRuntimeDiagnostic)
+	TranscriptNoticeLegacyUntypedNotice TranscriptNoticeReason = TranscriptNoticeReason(transcript.NoticeReasonLegacyUntypedNotice)
 )
 
 type TranscriptNoticeSeverity string
 
 const (
-	TranscriptNoticeInfo    TranscriptNoticeSeverity = "info"
-	TranscriptNoticeWarning TranscriptNoticeSeverity = "warning"
-	TranscriptNoticeError   TranscriptNoticeSeverity = "error"
+	TranscriptNoticeInfo    TranscriptNoticeSeverity = TranscriptNoticeSeverity(transcript.NoticeSeverityInfo)
+	TranscriptNoticeWarning TranscriptNoticeSeverity = TranscriptNoticeSeverity(transcript.NoticeSeverityWarning)
+	TranscriptNoticeError   TranscriptNoticeSeverity = TranscriptNoticeSeverity(transcript.NoticeSeverityError)
 )
 
 type TranscriptPromptKind string
@@ -166,21 +164,25 @@ type TranscriptHydration struct {
 }
 
 type TranscriptCommittedRow struct {
-	Kind      TranscriptRowKind
-	User      *TranscriptUserRow
-	Assistant *TranscriptAssistantRow
-	Tool      *TranscriptToolRow
-	Notice    *TranscriptNoticeRow
+	Visibility EntryVisibility
+	Integrity  transcript.RowIntegrity
+	Kind       TranscriptRowKind
+	User       *TranscriptUserRow
+	Assistant  *TranscriptAssistantRow
+	Tool       *TranscriptToolRow
+	Notice     *TranscriptNoticeRow
 }
 
 type TranscriptUserRow struct {
-	Text string
+	Text          string
+	CondensedText string
 }
 
 type TranscriptAssistantRow struct {
-	Text     string
-	Phase    MessagePhase
-	StreamID *uuid.UUID
+	Text          string
+	CondensedText string
+	Phase         transcript.AssistantPhase
+	StreamID      *uuid.UUID
 }
 
 type TranscriptToolRow struct {
@@ -201,14 +203,15 @@ type TranscriptNoticeRow struct {
 }
 
 type TranscriptNoticeData struct {
-	LegacyText        *string
-	NoticeID          *string
-	CacheWarning      *TranscriptCacheWarningData
-	RuntimeDiagnostic *TranscriptDiagnosticData
-	MessageType       MessageType
-	SourcePath        string
-	CondensedText     string
-	CompactLabel      string
+	LegacyText         *string
+	NoticeID           *string
+	CacheWarning       *TranscriptCacheWarningData
+	RuntimeDiagnostic  *TranscriptDiagnosticData
+	MessageType        MessageType
+	SourcePath         string
+	CondensedText      string
+	CompactLabel       string
+	BackgroundExitCode *int
 }
 
 type TranscriptCacheWarningData struct {

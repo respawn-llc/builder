@@ -1,6 +1,7 @@
 package serverapi
 
 import (
+	"errors"
 	"testing"
 
 	"core/shared/clientui"
@@ -15,6 +16,27 @@ func TestSessionMainViewRequestCarriesPendingOperationRefs(t *testing.T) {
 	}
 	if len(req.PendingOperationRefs) != 1 || req.PendingOperationRefs[0] != ref {
 		t.Fatalf("pending refs = %+v, want %+v", req.PendingOperationRefs, ref)
+	}
+}
+
+func TestSessionTranscriptPageRequestRejectsAmbiguousDirection(t *testing.T) {
+	cursor := int64(10)
+	newerCursor := int64(20)
+	req := SessionTranscriptPageRequest{
+		SessionID:   "session-1",
+		Cursor:      &cursor,
+		NewerCursor: &newerCursor,
+	}
+	if err := req.Validate(); !errors.Is(err, ErrTranscriptCursorDirectionAmbiguous) {
+		t.Fatalf("Validate error = %v, want ambiguous cursor direction", err)
+	}
+}
+
+func TestSessionTranscriptPageRequestRejectsZeroCursor(t *testing.T) {
+	cursor := int64(0)
+	req := SessionTranscriptPageRequest{SessionID: "session-1", Cursor: &cursor}
+	if err := req.Validate(); !errors.Is(err, ErrTranscriptCursorInvalid) {
+		t.Fatalf("Validate error = %v, want invalid cursor", err)
 	}
 }
 

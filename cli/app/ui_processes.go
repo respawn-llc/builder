@@ -316,7 +316,7 @@ func (m *uiModel) applyProcessActionDone(msg processActionDoneMsg) tea.Cmd {
 		if m.processList.open && msg.surfaceGeneration == m.processList.surfaceGeneration {
 			refreshCmd = m.requestProcessListRefresh()
 		}
-		return tea.Batch(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, ""), refreshCmd, c.resumeQueuedInputsAfterIdleRuntime())
+		return tea.Batch(m.sendTransientStatusWithNoticeID(status, uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""), refreshCmd, c.resumeQueuedInputsAfterIdleRuntime())
 	case "inline":
 		if msg.inputDraftToken != 0 && msg.inputDraftToken != m.mainInputDraftToken {
 			return c.resumeQueuedInputsAfterIdleRuntime()
@@ -327,11 +327,11 @@ func (m *uiModel) applyProcessActionDone(msg processActionDoneMsg) tea.Cmd {
 		}
 		m.appendProcessOutputToInput(msg.id, preview)
 		if m.processList.open && msg.surfaceGeneration == m.processList.surfaceGeneration {
-			return tea.Batch(c.stopProcessListFlowCmd(), c.model.sendTransientStatusWithNoticeID("Pasted shell transcript", uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, ""))
+			return tea.Batch(c.stopProcessListFlowCmd(), c.model.sendTransientStatusWithNoticeID("Pasted shell transcript", uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""))
 		}
-		return c.model.sendTransientStatusWithNoticeID("Pasted shell transcript", uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, "")
+		return c.model.sendTransientStatusWithNoticeID("Pasted shell transcript", uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, "")
 	case "logs":
-		statusCmd := c.model.sendTransientStatusWithNoticeID("Opened logs", uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, "")
+		statusCmd := c.model.sendTransientStatusWithNoticeID("Opened logs", uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, "")
 		if msg.editorCmd != nil {
 			execCmd := tea.ExecProcess(msg.editorCmd, func(runErr error) tea.Msg {
 				return openProcessLogsDoneMsg{err: runErr}
@@ -376,7 +376,7 @@ func (c uiInputController) handleProcessListKey(msg tea.KeyMsg) (tea.Model, tea.
 		m.selectLastProcess()
 		return m, nil
 	case "r":
-		return m, tea.Batch(m.requestProcessListRefresh(), c.model.sendTransientStatusWithNoticeID("refreshing processes", uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, ""))
+		return m, tea.Batch(m.requestProcessListRefresh(), c.model.sendTransientStatusWithNoticeID("refreshing processes", uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, ""))
 	case "enter":
 		return c.runProcessListAction("inline")
 	case "k":
@@ -405,7 +405,7 @@ func (c uiInputController) runProcessAction(action, id string) (tea.Model, tea.C
 		return m, c.model.sendTransientStatusWithNoticeID("background process client is unavailable", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	if m.processList.actionInFlight {
-		return m, c.model.sendTransientStatusWithNoticeID("process action already in flight", uiStatusNoticeNeutral, transientStatusDuration, uiStatusNoticeReplace, "")
+		return m, c.model.sendTransientStatusWithNoticeID("process action already in flight", uiStatusNoticeInfo, transientStatusDuration, uiStatusNoticeReplace, "")
 	}
 	action = strings.ToLower(strings.TrimSpace(action))
 	id = strings.TrimSpace(id)

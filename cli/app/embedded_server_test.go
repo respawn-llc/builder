@@ -753,6 +753,7 @@ func TestEmbeddedAppServerRoutesBackgroundCompletionToOwningSessionOnly(t *testi
 		NoticeSuppressed: true,
 		Snapshot: shelltool.Snapshot{
 			ID:             processID,
+			ActivityID:     uuid.New(),
 			OwnerSessionID: planA.SessionID,
 			State:          "completed",
 			Command:        "sleep 1; printf done",

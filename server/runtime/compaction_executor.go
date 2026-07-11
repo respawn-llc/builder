@@ -180,7 +180,7 @@ func (e *Engine) compactionCacheObservationRequest(ctx context.Context, request 
 	if e == nil {
 		return llm.Request{}, false, nil
 	}
-	cacheKey := conversationPromptCacheKey(e.SessionID(), e.compactionRuntimeState().Count())
+	cacheKey := e.conversationPromptCacheKey(e.SessionID())
 	if cacheKey == "" {
 		return llm.Request{}, false, nil
 	}
@@ -327,7 +327,7 @@ func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, locked se
 		req.FastMode = e.FastModeEnabled()
 		req.SessionID = e.SessionID()
 		if e.supportsPromptCacheKey(ctx) {
-			if cacheKey := conversationPromptCacheKey(e.SessionID(), e.compactionRuntimeState().Count()); cacheKey != "" {
+			if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
 				req.PromptCacheKey = cacheKey
 				req.PromptCacheScope = transcript.CacheWarningScopeConversation
 			}

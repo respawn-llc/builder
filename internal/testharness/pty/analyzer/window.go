@@ -1,9 +1,6 @@
 package analyzer
 
-import (
-	"errors"
-	"fmt"
-)
+import "fmt"
 
 func ResolveOperationWindows(analysis Analysis) (map[WindowID]OperationWindow, error) {
 	starts := map[WindowID]PhaseEvent{}
@@ -59,6 +56,49 @@ func ClassifyAppends(analysis Analysis, window OperationWindow, immutableBoundar
 	return appends
 }
 
+func CoalesceAppendRows(appends []AppendOperation) []AppendOperation {
+	out := make([]AppendOperation, 0, len(appends))
+	for _, appendOperation := range appends {
+		current := appendOperation.Operation
+		if current.Kind != OperationWrite || current.Write == nil {
+			out = append(out, appendOperation)
+			continue
+		}
+		if len(out) == 0 {
+			out = append(out, appendOperation)
+			continue
+		}
+		previous := &out[len(out)-1].Operation
+		if previous.Kind != OperationWrite ||
+			previous.Write == nil ||
+			previous.Write.Faint != current.Write.Faint ||
+			previous.Write.Bold != current.Write.Bold ||
+			previous.Write.Italic != current.Write.Italic ||
+			previous.Write.Underline != current.Write.Underline ||
+			previous.Write.Foreground != current.Write.Foreground ||
+			previous.Write.Background != current.Write.Background ||
+			previous.Region.Top != current.Region.Top ||
+			previous.Region.Bottom != current.Region.Bottom ||
+			previous.Region.Right != current.Region.Left {
+			out = append(out, appendOperation)
+			continue
+		}
+		previous.Region.Right = current.Region.Right
+		previous.ByteRange.End = current.ByteRange.End
+		previous.After = current.After
+		previous.CapturedAt = current.CapturedAt
+		payload := MustWritePayload(previous.Write.Text() + current.Write.Text())
+		payload.Faint = previous.Write.Faint
+		payload.Bold = previous.Write.Bold
+		payload.Italic = previous.Write.Italic
+		payload.Underline = previous.Write.Underline
+		payload.Foreground = previous.Write.Foreground
+		payload.Background = previous.Write.Background
+		previous.Write = &payload
+	}
+	return out
+}
+
 func isAppendWrite(dimensions Dimensions, operation Operation, immutableBoundary int) bool {
 	if operation.Kind != OperationWrite {
 		return false
@@ -88,28 +128,4 @@ func firstOperationAtOrAfter(operations []Operation, byteOffset int64) int {
 		}
 	}
 	return len(operations)
-}
-
-func phaseKindFromProtocol(raw string) (PhaseKind, error) {
-	switch raw {
-	case "ScenarioStart":
-		return PhaseScenarioStart, nil
-	case "WindowStart":
-		return PhaseWindowStart, nil
-	case "WindowEnd":
-		return PhaseWindowEnd, nil
-	case "ReadyForQuit":
-		return PhaseReadyForQuit, nil
-	case "ScenarioComplete":
-		return PhaseScenarioComplete, nil
-	default:
-		return 0, fmt.Errorf("unknown phase %q", raw)
-	}
-}
-
-func validateWindowEventID(kind PhaseKind, id *WindowID) error {
-	if (kind == PhaseWindowStart || kind == PhaseWindowEnd) && id == nil {
-		return errors.New("window phase requires window_id")
-	}
-	return nil
 }

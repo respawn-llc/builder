@@ -14,6 +14,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -303,7 +304,7 @@ func TestCompactionLabelsSingleSummaryEntry(t *testing.T) {
 	for _, entry := range snap.Entries {
 		if entry.Role == string(transcript.EntryRoleCompactionSummary) {
 			summaries++
-			if entry.CompactLabel != "context compacted for the 1st time" || entry.CondensedText != "context compacted for the 1st time" {
+			if entry.CompactLabel != "Context compacted for the 1st time." || entry.CondensedText != "Context compacted for the 1st time." {
 				t.Fatalf("unexpected compaction summary label: %+v", entry)
 			}
 		}
@@ -869,6 +870,26 @@ func TestHistoryReplacementAppendObserverFailureUpdatesLiveActiveListForNextTurn
 	}
 }
 
+func TestWorkflowBudgetResetFailureKeepsCommittedReplacementLive(t *testing.T) {
+	store := mustCreateTestSession(t)
+	resetErr := errors.New("workflow budget reset failed")
+	controller := &fakeWorkflowController{protocolBudgetResetErr: resetErr}
+	workflowCfg := testWorkflowConfig(controller, config.WorkflowCompletionModeTool)
+	eng := mustNewWorkflowTestEngine(t, store, &fakeClient{}, workflowCfg, Config{Model: "gpt-5"})
+	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: "before replacement"}})); err != nil {
+		t.Fatalf("append seed message: %v", err)
+	}
+
+	err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeCompactionSummary, Content: "summary seed"}}))
+	if !errors.Is(err, resetErr) {
+		t.Fatalf("replaceHistory error = %v, want %v", err, resetErr)
+	}
+	messages := eng.transcriptRuntimeState().SnapshotMessages()
+	if len(messages) != 1 || messages[0].MessageType != llm.MessageTypeCompactionSummary || messages[0].Content != "summary seed" {
+		t.Fatalf("live active list after committed reset error = %+v, want compacted seed", messages)
+	}
+}
+
 func TestWorkflowRequestAfterCompactionDoesNotDuplicateReinjectedWorkflowPrompt(t *testing.T) {
 	store := mustCreateTestSession(t)
 	controller := &fakeWorkflowController{}
@@ -906,6 +927,41 @@ func TestWorkflowRequestAfterCompactionDoesNotDuplicateReinjectedWorkflowPrompt(
 	}
 	if workflowMessages[0].SourcePath != "run-1" {
 		t.Fatalf("workflow prompt source path = %q, want run-1", workflowMessages[0].SourcePath)
+	}
+}
+
+func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	client := &fakeCompactionClient{
+		compactionResponses: []llm.CompactionResponse{{
+			OutputItems: []llm.ResponseItem{
+				{Type: llm.ResponseItemTypeMessage, Role: llm.RoleUser, MessageType: llm.MessageTypeCompactionSummary, Content: "remote summary"},
+				{Type: llm.ResponseItemTypeCompaction, ID: "cmp_1", EncryptedContent: "enc_1"},
+			},
+			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 100, WindowTokens: 200000},
+		}},
+	}
+	workflowCfg := testWorkflowConfig(controller, config.WorkflowCompletionModeTool)
+	eng := mustNewWorkflowTestEngine(t, store, client, workflowCfg, Config{Model: "gpt-5"})
+	if _, err := controller.RecordWorkflowProtocolViolation(context.Background(), workflowruntime.ViolationRequest{MaxCount: 5}); err != nil {
+		t.Fatalf("RecordWorkflowProtocolViolation: %v", err)
+	}
+	if _, err := controller.RecordWorkflowProtocolViolation(context.Background(), workflowruntime.ViolationRequest{MaxCount: 5}); err != nil {
+		t.Fatalf("RecordWorkflowProtocolViolation: %v", err)
+	}
+	if err := eng.CompactContext(context.Background(), ""); err != nil {
+		t.Fatalf("CompactContext: %v", err)
+	}
+	if got := controller.protocolBudgetResets.Load(); got != 1 {
+		t.Fatalf("protocol budget resets = %d, want 1", got)
+	}
+	violation, err := controller.RecordWorkflowProtocolViolation(context.Background(), workflowruntime.ViolationRequest{MaxCount: 5})
+	if err != nil {
+		t.Fatalf("RecordWorkflowProtocolViolation after compaction: %v", err)
+	}
+	if violation.Count != 1 {
+		t.Fatalf("violation count after compaction = %d, want 1", violation.Count)
 	}
 }
 

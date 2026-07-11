@@ -2000,6 +2000,7 @@ UPDATE task_runs
 SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
     started_at_unix_ms = sqlc.arg(started_at_unix_ms),
+    invalid_completion_count = 0,
     run_generation = run_generation + 1
 WHERE task_runs.id = sqlc.arg(id)
   AND run_generation = sqlc.arg(expected_generation)
@@ -3714,6 +3715,7 @@ SET
     interruption_reason = '',
     interruption_detail_json = '{}',
     waiting_ask_id = '',
+    invalid_completion_count = 0,
     run_generation = run_generation + 1
 WHERE id = sqlc.arg(run_id)
   AND completed_at_unix_ms = 0
@@ -3875,6 +3877,16 @@ WHERE id = sqlc.arg(run_id)
   AND interrupted_at_unix_ms = 0
   AND (sqlc.arg(require_generation) = 0 OR run_generation = sqlc.arg(expected_generation))
 RETURNING invalid_completion_count, interrupted_at_unix_ms;
+
+-- name: ResetInvalidCompletionProtocolViolationBudget :execrows
+UPDATE task_runs
+SET
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms),
+    invalid_completion_count = 0
+WHERE id = sqlc.arg(run_id)
+  AND completed_at_unix_ms = 0
+  AND interrupted_at_unix_ms = 0
+  AND (sqlc.arg(require_generation) = 0 OR run_generation = sqlc.arg(expected_generation));
 
 -- name: ResolveActiveRunCompletionTargetByRunID :many
 SELECT

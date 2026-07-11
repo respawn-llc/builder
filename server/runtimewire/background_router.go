@@ -1,12 +1,16 @@
 package runtimewire
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"core/server/runtime"
 	shelltool "core/server/tools/shell"
+	"core/shared/valuecopy"
+
+	"github.com/google/uuid"
 )
 
 type BackgroundEventRouter struct {
@@ -64,6 +68,9 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 	if ownerSessionID == "" {
 		return
 	}
+	if evt.Snapshot.ActivityID == uuid.Nil || evt.Snapshot.ActivityID.Version() != 4 {
+		panic(fmt.Sprintf("background event missing UUIDv4 activity id: process_id=%q activity_id=%q", evt.Snapshot.ID, evt.Snapshot.ActivityID))
+	}
 	r.mu.RLock()
 	activeRuntime, ok := r.active[ownerSessionID]
 	outputLimit := r.outputLimit
@@ -83,9 +90,17 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 	if shouldNotify && !evt.Snapshot.FinishedAt.IsZero() && evt.Snapshot.FinishedAt.Before(activeRuntime.activatedAt) {
 		shouldNotify = false
 	}
+	eventType := runtime.BackgroundShellEventBackgrounded
+	switch evt.Type {
+	case shelltool.EventCompleted:
+		eventType = runtime.BackgroundShellEventCompleted
+	case shelltool.EventKilled:
+		eventType = runtime.BackgroundShellEventKilled
+	}
 	activeRuntime.engine.HandleBackgroundShellUpdate(runtime.BackgroundShellEvent{
-		Type:              string(evt.Type),
+		Type:              eventType,
 		ID:                evt.Snapshot.ID,
+		ActivityID:        evt.Snapshot.ActivityID,
 		State:             evt.Snapshot.State,
 		Command:           evt.Snapshot.Command,
 		Workdir:           evt.Snapshot.Workdir,
@@ -93,8 +108,8 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 		NoticeText:        summary.DetailText,
 		CompactText:       summary.CondensedText,
 		Preview:           evt.Preview,
-		Removed:           evt.Removed,
-		ExitCode:          cloneIntPtr(evt.Snapshot.ExitCode),
+		PreviewRemoved:    evt.Removed,
+		ExitCode:          valuecopy.Pointer(evt.Snapshot.ExitCode),
 		UserRequestedKill: evt.Snapshot.KillRequested,
 		NoticeSuppressed:  evt.NoticeSuppressed,
 	}, shouldNotify)
@@ -102,12 +117,4 @@ func (r *BackgroundEventRouter) handle(evt shelltool.Event) {
 
 func (r *BackgroundEventRouter) Handle(evt shelltool.Event) {
 	r.handle(evt)
-}
-
-func cloneIntPtr(v *int) *int {
-	if v == nil {
-		return nil
-	}
-	out := *v
-	return &out
 }

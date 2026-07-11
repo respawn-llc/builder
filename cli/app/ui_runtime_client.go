@@ -108,9 +108,9 @@ func (c *sessionRuntimeClient) appendRuntimeReconnectWarning() {
 		SessionID:       c.sessionID,
 		Role:            "warning",
 		Text:            runtimeReconnectWarningText,
-		Visibility:      string(clientui.EntryVisibilityAll),
+		Visibility:      string(clientui.EntryVisibilityOngoing),
 	}); err != nil {
-		c.notifyRuntimeReconnectWarning(runtimeReconnectWarningText, clientui.EntryVisibilityAll)
+		c.notifyRuntimeReconnectWarning(runtimeReconnectWarningText, clientui.EntryVisibilityOngoing)
 	}
 }
 

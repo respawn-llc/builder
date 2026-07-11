@@ -248,8 +248,8 @@ func TestRunPromptFastRoleUsesRoleLevelProviderSettingsForHeuristics(t *testing.
 		t.Fatalf("result = %q, want %q", result.Result, "fast via role provider")
 	}
 	payload := <-requestBodies
-	if got := payload["model"]; got != "gpt-5.4-mini" {
-		t.Fatalf("model payload = %#v, want gpt-5.4-mini", got)
+	if got := payload["model"]; got != "gpt-5.6-terra" {
+		t.Fatalf("model payload = %#v, want gpt-5.6-terra", got)
 	}
 	store := openAuthoritativeWorkspaceSessionStore(t, workspace, server.URL, result.SessionID)
 	if store.Meta().Continuation == nil || store.Meta().Continuation.OpenAIBaseURL != server.URL {

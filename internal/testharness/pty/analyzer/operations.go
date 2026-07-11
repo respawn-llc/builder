@@ -1,16 +1,16 @@
 package analyzer
 
-func (b *tracingBackend) recordPut(position Position, text string) {
+func (b *tracingBackend) recordPut(position Position, cell Cell) {
 	if b.err != nil {
 		return
 	}
-	if b.pendingWrite != nil && canExtendWrite(*b.pendingWrite, position, text, b) {
-		payload, err := b.writePayload(text)
+	if b.pendingWrite != nil && canExtendWrite(*b.pendingWrite, position, cell, b) {
+		payload, err := b.writePayload(cell.Content)
 		if err != nil {
 			b.err = err
 			return
 		}
-		b.pendingWrite.span.End = payload.Span.End
+		b.pendingWrite.write.Span.End = payload.Span.End
 		b.pendingWrite.after = position
 		b.pendingWrite.region.Right = position.Col + 1
 		b.pendingWrite.byteRange.End = b.byteEnd
@@ -20,28 +20,30 @@ func (b *tracingBackend) recordPut(position Position, text string) {
 		b.err = err
 		return
 	}
-	payload, err := b.writePayload(text)
+	payload, err := b.writePayload(cell.Content)
 	if err != nil {
 		b.err = err
 		return
 	}
+	payload.applyCellStyle(cell)
 	b.pendingWrite = &pendingWrite{
 		chunk:     b.chunk,
 		byteRange: ByteRange{Start: b.byteOffset, End: b.byteEnd},
 		before:    b.cursor,
 		after:     position,
 		region:    Region{Top: position.Row, Bottom: position.Row + 1, Left: position.Col, Right: position.Col + 1},
-		span:      payload.Span,
+		write:     payload,
 	}
 }
 
-func canExtendWrite(pending pendingWrite, position Position, text string, backend *tracingBackend) bool {
+func canExtendWrite(pending pendingWrite, position Position, cell Cell, backend *tracingBackend) bool {
 	return backend.chunk.Index == pending.chunk.Index &&
 		backend.chunk.At == pending.chunk.At &&
 		pending.region.Top == position.Row &&
 		pending.region.Right == position.Col &&
 		pending.byteRange.End == backend.byteOffset &&
-		text != ""
+		cell.Content != "" &&
+		pending.write.sameCellStyle(cell)
 }
 
 // flushPendingWrite stages one semantic row segment in the current logical
@@ -52,14 +54,13 @@ func (b *tracingBackend) flushPendingWrite() error {
 	}
 	pending := b.pendingWrite
 	b.pendingWrite = nil
-	payload := WritePayload{Span: pending.span, arena: b.writeText}
 	if b.writeBatch == nil {
 		b.writeBatch = &writeBatch{}
 	}
 	if len(b.writeBatch.segments)+len(b.writeBatch.controls) >= maxWriteBatchSegments {
 		return writeBatchLimitExceeded(b)
 	}
-	b.writeBatch.segments = append(b.writeBatch.segments, WriteSegment{ChunkIndex: pending.chunk.Index, ByteRange: pending.byteRange, Before: pending.before, After: pending.after, Region: pending.region, Write: payload, CapturedAt: pending.chunk.At})
+	b.writeBatch.segments = append(b.writeBatch.segments, WriteSegment{ChunkIndex: pending.chunk.Index, ByteRange: pending.byteRange, Before: pending.before, After: pending.after, Region: pending.region, Write: pending.write, CapturedAt: pending.chunk.At})
 	return nil
 }
 

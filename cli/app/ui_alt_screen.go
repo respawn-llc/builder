@@ -7,8 +7,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-var writeTerminalSequence = func(sequence string) {
-	_, _ = os.Stdout.WriteString(sequence)
+var writeTerminalSequence = func(sequence string) error {
+	_, err := os.Stdout.WriteString(sequence)
+	return err
 }
 
 func (m *uiModel) toggleTranscriptMode() tea.Cmd {
@@ -31,27 +32,31 @@ type transcriptModeTransitionOptions struct {
 
 func (m *uiModel) transitionTranscriptModeWithOptions(options transcriptModeTransitionOptions) tea.Cmd {
 	prevMode := m.view.Mode()
-	m.forwardToView(tui.SetModeMsg{Mode: options.target, SkipDetailWarmup: options.skipDetailWarmup})
+	prevSurface := m.surface()
+	next, _ := m.view.Update(tui.SetModeMsg{Mode: options.target, SkipDetailWarmup: options.skipDetailWarmup})
+	if casted, ok := next.(tui.Model); ok {
+		m.view = casted
+	}
 	nextMode := m.view.Mode()
 	if nextMode != tui.ModeOngoing {
 		m.helpVisible = false
 	} else if prevMode != nextMode && m.inputMode() == uiInputModeMain {
 		m.restorePrimaryInputMode()
 	}
+	surfaceTransitionCmd := tea.Cmd(nil)
 	if !options.preserveSurface && (nextMode == tui.ModeOngoing || nextMode == tui.ModeDetail) {
-		m.activeSurface = surfaceForTranscriptMode(nextMode)
-		m.syncRendererOutputGate()
+		surfaceTransitionCmd = m.activateSurfaceFrom(prevSurface, surfaceForTranscriptMode(nextMode), options.suppressAltScreen)
 	}
 	clearCmd := m.clearCmdForModeTransition(prevMode, nextMode)
 	transitionCmd := tea.Cmd(nil)
-	if !options.suppressAltScreen {
+	if !options.suppressAltScreen && surfaceTransitionCmd == nil {
 		transitionCmd = m.altScreenCmdForModeTransition(prevMode, nextMode)
 	}
 	detailLoadCmd := m.detailLoadCmdForModeTransition(prevMode, nextMode)
-	if clearCmd == nil && transitionCmd == nil && detailLoadCmd == nil {
+	if clearCmd == nil && surfaceTransitionCmd == nil && transitionCmd == nil && detailLoadCmd == nil {
 		return nil
 	}
-	return sequenceCmds(clearCmd, transitionCmd, detailLoadCmd)
+	return sequenceCmds(clearCmd, surfaceTransitionCmd, transitionCmd, detailLoadCmd)
 }
 
 func (m *uiModel) clearCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
@@ -65,7 +70,12 @@ func (m *uiModel) clearCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
 }
 
 func (m *uiModel) detailLoadCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
-	return nil
+	if prev == next || next != tui.ModeDetail {
+		return nil
+	}
+	cancelCmd := m.cancelPendingDetailTranscriptRequest()
+	loadCmd := m.loadDetailTranscriptPageCmd(m.detailTranscript.requestedPageForDetailEntry())
+	return sequenceCmds(cancelCmd, loadCmd)
 }
 
 func sequenceCmds(cmds ...tea.Cmd) tea.Cmd {
@@ -93,14 +103,18 @@ func (m *uiModel) altScreenCmdForModeTransition(prev, next tui.Mode) tea.Cmd {
 
 func enableAlternateScrollCmd() tea.Cmd {
 	return func() tea.Msg {
-		writeTerminalSequence("\x1b[?1007h")
+		if err := writeTerminalSequence("\x1b[?1007h"); err != nil {
+			return terminalSequenceWriteErrMsg{err: err}
+		}
 		return nil
 	}
 }
 
 func disableAlternateScrollCmd() tea.Cmd {
 	return func() tea.Msg {
-		writeTerminalSequence("\x1b[?1007l")
+		if err := writeTerminalSequence("\x1b[?1007l"); err != nil {
+			return terminalSequenceWriteErrMsg{err: err}
+		}
 		return nil
 	}
 }

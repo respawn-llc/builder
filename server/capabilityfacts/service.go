@@ -12,6 +12,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/valuecopy"
 )
 
 const (
@@ -218,7 +219,7 @@ func thinkingDefaultFact(raw string) serverapi.ThinkingDefaultFact {
 
 func importFacts(result onboardingimports.Result) serverapi.ImportCapabilityFacts {
 	return serverapi.ImportCapabilityFacts{
-		Workspace:       serverapi.ImportWorkspaceFact{Root: cloneStringPtr(result.Workspace.Root)},
+		Workspace:       serverapi.ImportWorkspaceFact{Root: valuecopy.Pointer(result.Workspace.Root)},
 		Skills:          itemGroupFact(result.Skills),
 		Commands:        itemGroupFact(result.Commands),
 		SkillEnablement: skillEnablementFacts(result.SkillEnablement),
@@ -249,7 +250,7 @@ func importChoiceFacts(choices []onboardingimports.Choice) []serverapi.ImportCho
 		out = append(out, serverapi.ImportChoiceFact{
 			Ref:              choiceRefFact(choice.Ref),
 			ImportProviderID: providerIDPtr(choice.ProviderID),
-			SourceRootPath:   cloneStringPtr(choice.SourceRoot),
+			SourceRootPath:   valuecopy.Pointer(choice.SourceRoot),
 			ItemCount:        choice.ItemCount,
 		})
 	}
@@ -281,7 +282,7 @@ func importItemFact(item onboardingimports.Item) serverapi.ImportItemFact {
 	return serverapi.ImportItemFact{
 		Ref:            itemRefFact(item.Ref),
 		Conflicts:      conflictFacts(item.Conflicts),
-		DefaultEnabled: cloneBoolPtr(item.DefaultEnabled),
+		DefaultEnabled: valuecopy.Pointer(item.DefaultEnabled),
 	}
 }
 
@@ -290,11 +291,11 @@ func itemRefFact(ref onboardingimports.ItemRef) serverapi.ImportItemRef {
 		ItemKind:         string(ref.ItemKind),
 		SourceKind:       string(ref.SourceKind),
 		ImportProviderID: providerIDPtr(ref.ProviderID),
-		SourceRootPath:   cloneStringPtr(ref.SourceRoot),
-		SourcePath:       cloneStringPtr(ref.SourcePath),
+		SourceRootPath:   valuecopy.Pointer(ref.SourceRoot),
+		SourcePath:       valuecopy.Pointer(ref.SourcePath),
 		TargetName:       ref.TargetName,
-		Name:             cloneStringPtr(ref.Name),
-		ModifiedUnixMs:   cloneInt64Ptr(ref.ModifiedUnixMs),
+		Name:             valuecopy.Pointer(ref.Name),
+		ModifiedUnixMs:   valuecopy.Pointer(ref.ModifiedUnixMs),
 	}
 }
 
@@ -303,7 +304,7 @@ func choiceRefFact(ref onboardingimports.ChoiceRef) serverapi.ImportChoiceRef {
 		Mode:             string(ref.Mode),
 		SourceKind:       sourceKindPtr(ref.SourceKind),
 		ImportProviderID: providerIDPtr(ref.ProviderID),
-		SourceRootPath:   cloneStringPtr(ref.SourceRoot),
+		SourceRootPath:   valuecopy.Pointer(ref.SourceRoot),
 	}
 }
 
@@ -313,7 +314,7 @@ func conflictFacts(conflicts []onboardingimports.Conflict) []serverapi.ImportCon
 		out = append(out, serverapi.ImportConflictFact{
 			SourceKind:       string(conflict.SourceKind),
 			ImportProviderID: providerIDPtr(conflict.ProviderID),
-			Path:             cloneStringPtr(conflict.Path),
+			Path:             valuecopy.Pointer(conflict.Path),
 		})
 	}
 	return out
@@ -337,7 +338,7 @@ func importErrorFacts(errs []onboardingimports.Error) []serverapi.ImportErrorFac
 			Code:             err.Code,
 			Scope:            string(err.Scope),
 			ImportProviderID: providerIDPtr(err.ProviderID),
-			Path:             cloneStringPtr(err.Path),
+			Path:             valuecopy.Pointer(err.Path),
 			Operation:        err.Operation,
 			Message:          err.Message,
 		})
@@ -372,27 +373,6 @@ func positiveIntPtr(value int) *int {
 
 func cloneStrings(values []string) []string {
 	return append([]string(nil), values...)
-}
-
-func cloneStringPtr(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	return ptr(*value)
-}
-
-func cloneBoolPtr(value *bool) *bool {
-	if value == nil {
-		return nil
-	}
-	return ptr(*value)
-}
-
-func cloneInt64Ptr(value *int64) *int64 {
-	if value == nil {
-		return nil
-	}
-	return ptr(*value)
 }
 
 func providerIDPtr(value *onboardingimports.ProviderID) *string {

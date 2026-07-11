@@ -110,7 +110,21 @@ func TranscriptSegmentPageFromStore(store *session.Store, cursor int64, cacheWar
 	if store == nil {
 		return TranscriptSegmentPage{}, nil
 	}
+	if cursor <= 0 {
+		return TranscriptSegmentPage{}, fmt.Errorf("transcript segment cursor must be positive, got %d", cursor)
+	}
 	window, err := store.ReadSegmentBackward(cursor, isCompactionSegmentBoundary)
+	if err != nil {
+		return TranscriptSegmentPage{}, err
+	}
+	return segmentPageFromWindow(window, cacheWarningMode)
+}
+
+func TranscriptNewestSegmentPageFromStore(store *session.Store, cacheWarningMode config.CacheWarningMode) (TranscriptSegmentPage, error) {
+	if store == nil {
+		return TranscriptSegmentPage{}, nil
+	}
+	window, err := store.ReadNewestSegmentBackward(isCompactionSegmentBoundary)
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
@@ -153,9 +167,18 @@ func (e *Engine) TranscriptSegmentPage(cursor int64) (TranscriptSegmentPage, err
 	if err != nil {
 		return TranscriptSegmentPage{}, err
 	}
-	if cursor <= 0 {
-		e.overlayLiveStreaming(&page.Snapshot)
+	return page, nil
+}
+
+func (e *Engine) TranscriptNewestSegmentPage() (TranscriptSegmentPage, error) {
+	if e == nil || e.store == nil {
+		return TranscriptSegmentPage{}, nil
 	}
+	page, err := TranscriptNewestSegmentPageFromStore(e.store, e.cfg.CacheWarningMode)
+	if err != nil {
+		return TranscriptSegmentPage{}, err
+	}
+	e.overlayLiveStreaming(&page.Snapshot)
 	return page, nil
 }
 
@@ -241,7 +264,7 @@ func (e *Engine) AppendCommittedEntry(role, text string) error {
 
 func (e *Engine) AppendCommittedEntryWithVisibility(role, text string, visibility transcript.EntryVisibility) error {
 	return e.appendCommittedEntry(storedLocalEntry{
-		Visibility: transcript.NormalizeEntryVisibility(visibility),
+		Visibility: normalizeRuntimeEntryVisibility(visibility),
 		Role:       strings.TrimSpace(role),
 		Text:       strings.TrimSpace(text),
 	})
@@ -678,6 +701,25 @@ func conversationPromptCacheKey(sessionID string, compactionCount int) string {
 		return trimmed
 	}
 	return fmt.Sprintf("%s/compact-%d", trimmed, compactionCount)
+}
+
+func conversationPromptCacheKeyForLineage(sessionID string, lineageGeneration, compactionCount int) string {
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return ""
+	}
+	if lineageGeneration > 0 {
+		trimmed = fmt.Sprintf("%s/contract-%d", trimmed, lineageGeneration)
+	}
+	return conversationPromptCacheKey(trimmed, compactionCount)
+}
+
+func (e *Engine) conversationPromptCacheKey(sessionID string) string {
+	if e == nil || e.store == nil {
+		return ""
+	}
+	meta := e.store.Meta()
+	return conversationPromptCacheKeyForLineage(sessionID, meta.PromptCacheLineageGeneration, e.compactionRuntimeState().Count())
 }
 
 func (e *Engine) ParentSessionID() string {

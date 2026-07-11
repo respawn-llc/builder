@@ -15,19 +15,20 @@ import (
 )
 
 type ChatEntry struct {
-	Visibility        transcript.EntryVisibility
-	RollbackTargetID  string
-	Role              string
-	Text              string
-	CondensedText     string
-	Phase             llm.MessagePhase
-	MessageType       llm.MessageType
-	SourcePath        string
-	CompactLabel      string
-	ToolResultSummary string
-	ToolCallID        string
-	NoticeID          string
-	ToolCall          *transcript.ToolCallMeta
+	Visibility         transcript.EntryVisibility
+	RollbackTargetID   string
+	Role               string
+	Text               string
+	CondensedText      string
+	Phase              llm.MessagePhase
+	MessageType        llm.MessageType
+	SourcePath         string
+	CompactLabel       string
+	ToolResultSummary  string
+	ToolCallID         string
+	NoticeID           string
+	BackgroundExitCode *int
+	ToolCall           *transcript.ToolCallMeta
 }
 
 type ChatSnapshot struct {
@@ -231,6 +232,52 @@ func (s *chatStore) snapshotItems() []llm.ResponseItem {
 	return s.snapshotProviderItemsLocked()
 }
 
+func (s *chatStore) toolCallSnapshot(callID string) (llm.ToolCall, bool) {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return llm.ToolCall{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if call, ok := toolCallSnapshotFromItems(s.items, callID); ok {
+		return call, true
+	}
+	if s.compact != nil {
+		return toolCallSnapshotFromItems(s.compact.Items, callID)
+	}
+	return llm.ToolCall{}, false
+}
+
+func toolCallSnapshotFromItems(items []llm.ResponseItem, callID string) (llm.ToolCall, bool) {
+	for index := len(items) - 1; index >= 0; index-- {
+		item := items[index]
+		if !isToolCallItem(item.Type) {
+			continue
+		}
+		itemCallID := strings.TrimSpace(item.CallID)
+		if itemCallID == "" {
+			itemCallID = strings.TrimSpace(item.ID)
+		}
+		if itemCallID != callID {
+			continue
+		}
+		call := llm.ToolCall{
+			ID:           itemCallID,
+			Name:         strings.TrimSpace(item.Name),
+			Presentation: append(json.RawMessage(nil), item.ToolPresentation...),
+		}
+		if item.Type == llm.ResponseItemTypeCustomToolCall {
+			call.Custom = true
+			call.CustomInput = item.CustomInput
+			call.Input = normalizeRuntimeToolInput(item.CustomInput)
+		} else {
+			call.Input = append(json.RawMessage(nil), item.Arguments...)
+		}
+		return call, true
+	}
+	return llm.ToolCall{}, false
+}
+
 func (s *chatStore) restoreToolCompletionPayload(payload []byte) error {
 	var completion storedToolCompletion
 	if err := json.Unmarshal(payload, &completion); err != nil {
@@ -409,7 +456,7 @@ func (s *chatStore) appendLocalEntryRecord(entry ChatEntry) {
 	if strings.TrimSpace(entry.Text) == "" {
 		return
 	}
-	entry.Visibility = transcript.NormalizeEntryVisibility(entry.Visibility)
+	entry.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)
 	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
 	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
 	s.mu.Lock()
@@ -429,7 +476,7 @@ func (s *chatStore) appendProjectedHistoryReplacementEntriesLocked(entries []Cha
 }
 
 func (s *chatStore) appendProjectedEntryLocked(entry ChatEntry, marksBoundary bool) {
-	entry.Visibility = transcript.NormalizeEntryVisibility(entry.Visibility)
+	entry.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)
 	entry.ToolCallID = strings.TrimSpace(entry.ToolCallID)
 	s.local = append(s.local, localChatEntry{
 		Entry:             entry,
@@ -739,11 +786,13 @@ func (s *transcriptDeliveryFactScan) ApplyLocalEntry(entry ChatEntry, projected 
 		return
 	}
 	if projected {
-		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry); ok {
+		if fact, ok := transcriptCommittedRowFactFromChatEntry(entry, transcriptCommittedStreamProjection); ok {
 			s.rows = append(s.rows, fact)
 		}
 	} else {
-		s.rows = append(s.rows, localEntryNoticeFact(entry))
+		if fact, ok := transcriptNoticeRowFactFromChatEntry(entry); ok {
+			s.rows = append(s.rows, fact)
+		}
 	}
 	s.currentEntryIndex++
 }

@@ -16,10 +16,7 @@ func TestFixtureCommandRunsScriptedRuntimeThroughPTY(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	bin := filepath.Join(t.TempDir(), "kent-pty-fixture")
-	if err := pty.BuildPackage(ctx, "core/cli/app/internal/ptyfixture/cmd/kent-pty-fixture", bin); err != nil {
-		t.Fatalf("build fixture: %v", err)
-	}
+	bin := buildPTYFixtureBinary(t, ctx)
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
 	scriptPath := filepath.Join(t.TempDir(), "script.json")
@@ -31,16 +28,20 @@ func TestFixtureCommandRunsScriptedRuntimeThroughPTY(t *testing.T) {
 
 	capture, err := pty.RunCommand(ctx, pty.CommandSpec{
 		Path: bin,
-		Args: []string{
-			"--workspace", workspace,
-			"--persistence-root", persistenceRoot,
-			"--script", scriptPath,
-			"--observations", observationsPath,
+		Env: []string{
+			ptyFixtureProcessEnv(
+				t,
+				filepath.Dir(scriptPath),
+				workspace,
+				persistenceRoot,
+				scriptPath,
+				observationsPath,
+			),
 		},
 		Dimensions: pty.MustDimensions(24, 80),
 		PhaseInputs: []pty.PhaseInputEvent{
 			{Phase: pty.PhaseScenarioStart, Bytes: []byte("hello fixture\r")},
-			{Phase: pty.PhaseScenarioComplete, Bytes: []byte{0x03, 0x03}},
+			{Phase: pty.PhaseScenarioFinalApplied, Bytes: []byte{0x03, 0x03}},
 		},
 		Timeout: 20 * time.Second,
 	})
@@ -55,8 +56,13 @@ func TestFixtureCommandRunsScriptedRuntimeThroughPTY(t *testing.T) {
 	for _, event := range analysis.PhaseEvents {
 		phases = append(phases, event.Phase)
 	}
-	if !slices.Contains(phases, pty.PhaseScenarioStart) || !slices.Contains(phases, pty.PhaseScenarioComplete) {
-		t.Fatalf("phases = %+v, want scenario start and complete", phases)
+	completeIndex := slices.Index(phases, pty.PhaseScenarioComplete)
+	appliedIndex := slices.Index(phases, pty.PhaseScenarioFinalApplied)
+	if !slices.Contains(phases, pty.PhaseScenarioStart) ||
+		completeIndex < 0 ||
+		appliedIndex < 0 ||
+		completeIndex >= appliedIndex {
+		t.Fatalf("phases = %+v, want scenario start and scenario final applied after scenario complete", phases)
 	}
 
 	var obs fixtureObservation

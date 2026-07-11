@@ -37,10 +37,10 @@ func (c goalContinuation) nudgeMessage() (llm.Message, bool) {
 	}, c.engine.transcriptWorkingDir()), true
 }
 
-func (c goalContinuation) reminderText() (string, bool) {
+func (c goalContinuation) reminderContext() (string, string, bool) {
 	goal, ok := c.activeGoal()
 	if !ok {
-		return "", false
+		return "", "", false
 	}
-	return strings.TrimSpace(prompts.RenderGoalNudgePrompt(goal.Objective, string(goal.Status))), true
+	return strings.TrimSpace(goal.Objective), strings.TrimSpace(prompts.RenderGoalNudgePrompt(goal.Objective, string(goal.Status))), true
 }

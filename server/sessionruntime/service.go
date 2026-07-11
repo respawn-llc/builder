@@ -110,7 +110,7 @@ func (s *Service) appendRecoveredWarningIfNeeded(store *session.Store) error {
 		return nil
 	}
 	_, _, appendErr := store.AppendEvent("", "local_entry", recoveredWarningEntry{
-		Visibility: transcript.EntryVisibilityAll,
+		Visibility: transcript.EntryVisibilityOngoing,
 		Role:       "warning",
 		Text:       warning,
 	})

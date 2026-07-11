@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 type Dimensions struct {
@@ -94,12 +92,28 @@ func NewChunk(index int, at time.Duration, payload []byte) Chunk {
 }
 
 type Capture struct {
-	Dimensions   Dimensions
-	Chunks       []Chunk
-	Resizes      []ResizeEvent
-	Raw          []byte
-	ProcessExit  *ProcessExit
-	ReadLoopDone bool
+	Dimensions           Dimensions
+	Chunks               []Chunk
+	Resizes              []ResizeEvent
+	PhaseInputDispatches []PhaseInputDispatch
+	FrameInputDispatches []FrameInputDispatch
+	Raw                  []byte
+	ProcessExit          *ProcessExit
+	ReadLoopDone         bool
+}
+
+type PhaseInputDispatch struct {
+	Phase          PhaseKind
+	ScheduledAfter time.Duration
+	StartedAt      time.Duration
+}
+
+type FrameInputDispatch struct {
+	Phase                      PhaseKind
+	InputIndex                 int
+	ReadyBoundary              ReadinessBoundaryKind
+	ReadyBoundaryEndByteOffset int64
+	StartedAt                  time.Duration
 }
 
 type ProcessExit struct {
@@ -489,8 +503,14 @@ type WriteSegment struct {
 }
 
 type WritePayload struct {
-	Span  TextSpan
-	arena *writeTextArena
+	Span       TextSpan
+	arena      *writeTextArena
+	Faint      bool
+	Bold       bool
+	Italic     bool
+	Underline  bool
+	Foreground string
+	Background string
 }
 
 type TextSpan struct {
@@ -510,6 +530,24 @@ func (payload WritePayload) Text() string {
 		panic(fmt.Sprintf("invalid write payload span=%+v arena_bytes=%d", payload.Span, len(payload.arena.bytes)))
 	}
 	return string(payload.arena.bytes[payload.Span.Start:payload.Span.End])
+}
+
+func (payload *WritePayload) applyCellStyle(cell Cell) {
+	payload.Faint = cell.Faint
+	payload.Bold = cell.Bold
+	payload.Italic = cell.Italic
+	payload.Underline = cell.Underline
+	payload.Foreground = cell.Foreground
+	payload.Background = cell.Background
+}
+
+func (payload WritePayload) sameCellStyle(cell Cell) bool {
+	return payload.Faint == cell.Faint &&
+		payload.Bold == cell.Bold &&
+		payload.Italic == cell.Italic &&
+		payload.Underline == cell.Underline &&
+		payload.Foreground == cell.Foreground &&
+		payload.Background == cell.Background
 }
 
 func NewWritePayload(text string) (WritePayload, error) {
@@ -548,36 +586,37 @@ type PrivateModeChange struct {
 	CapturedAt time.Duration
 }
 
-type PhaseKind int
+type PhaseKind = Kind
 
 const (
-	PhaseScenarioStart PhaseKind = iota + 1
-	PhaseWindowStart
-	PhaseWindowEnd
-	PhaseReadyForQuit
-	PhaseScenarioComplete
+	PhaseScenarioStart            = KindScenarioStart
+	PhaseWindowStart              = KindWindowStart
+	PhaseWindowEnd                = KindWindowEnd
+	PhaseReadyForQuit             = KindReadyForQuit
+	PhaseScenarioComplete         = KindScenarioComplete
+	PhaseInputApplied             = KindInputApplied
+	PhaseDetailInitialPageApplied = KindDetailInitialPageApplied
+	PhaseScenarioFinalApplied     = KindScenarioFinalApplied
 )
 
-type WindowID struct {
-	value uuid.UUID
+type ReadinessBoundaryKind uint8
+
+const (
+	ReadinessRendererFrame ReadinessBoundaryKind = iota + 1
+	ReadinessInputApplied
+	ReadinessNormalBufferRestored
+)
+
+func (k ReadinessBoundaryKind) Valid() bool {
+	return k == ReadinessRendererFrame ||
+		k == ReadinessInputApplied ||
+		k == ReadinessNormalBufferRestored
 }
 
-func NewWindowID(raw string) (WindowID, error) {
-	id, err := uuid.Parse(raw)
-	if err != nil {
-		return WindowID{}, fmt.Errorf("parse window_id as UUID: %w", err)
-	}
-	if id == uuid.Nil {
-		return WindowID{}, errors.New("window_id must not be nil UUID")
-	}
-	if id.Version() != 4 {
-		return WindowID{}, fmt.Errorf("window_id must be UUIDv4: got version %d", id.Version())
-	}
-	return WindowID{value: id}, nil
-}
-
-func (id WindowID) String() string {
-	return id.value.String()
+type ReadinessBoundary struct {
+	Kind       ReadinessBoundaryKind
+	ByteRange  ByteRange
+	CapturedAt time.Duration
 }
 
 type PhaseEvent struct {

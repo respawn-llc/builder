@@ -89,6 +89,12 @@ type RecordProtocolViolationResult struct {
 	Interrupted bool
 }
 
+type ResetProtocolViolationBudgetRequest struct {
+	RunID              workflow.RunID
+	ExpectedGeneration int64
+	RequireGeneration  bool
+}
+
 type CompleteRunResult struct {
 	TransitionID                  workflow.TransitionID
 	State                         string

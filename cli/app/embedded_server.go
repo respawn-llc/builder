@@ -138,6 +138,7 @@ func (s *embeddedAppServer) RuntimeAttachmentClients() runtimeAttachmentClients 
 		PromptControl:                   s.inner.PromptControlClient(),
 		RuntimeControls:                 s.inner.RuntimeControlClient(),
 		SessionActivity:                 s.inner.SessionActivityClient(),
+		SessionTranscript:               s.inner.SessionTranscriptClient(),
 		SessionRuntime:                  s.inner.SessionRuntimeClient(),
 		SessionViews:                    s.inner.SessionViewClient(),
 		Worktrees:                       s.inner.WorktreeClient(),

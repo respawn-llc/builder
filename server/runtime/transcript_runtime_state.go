@@ -6,6 +6,7 @@ import (
 
 	"core/server/llm"
 	"core/server/tools"
+	"core/shared/transcript"
 )
 
 type transcriptRuntimeState struct {
@@ -90,6 +91,22 @@ func (s *transcriptRuntimeState) LiveToolSnapshot() []TranscriptLiveToolStart {
 		return ledger.Snapshot()
 	}
 	return nil
+}
+
+func (s *transcriptRuntimeState) ToolCallSnapshot(callID string) (llm.ToolCall, bool) {
+	if ledger := s.liveToolLedger(); ledger != nil {
+		if start, ok := ledger.Lookup(callID); ok && start.Presentation != nil {
+			return llm.ToolCall{
+				ID:           start.ToolCallID,
+				Name:         start.ToolName,
+				Presentation: transcript.EncodeToolCallMeta(*start.Presentation),
+			}, true
+		}
+	}
+	if chat := s.chatProjection(); chat != nil {
+		return chat.toolCallSnapshot(callID)
+	}
+	return llm.ToolCall{}, false
 }
 
 func (s *transcriptRuntimeState) AbortLiveTools() []TranscriptLiveToolStart {

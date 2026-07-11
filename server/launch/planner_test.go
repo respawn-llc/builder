@@ -90,11 +90,11 @@ func TestPlannerHeadlessUsesDefaultGPT55ModelAndOpenAIProviderInference(t *testi
 	if err != nil {
 		t.Fatalf("plan session: %v", err)
 	}
-	if plan.ActiveSettings.Model != "gpt-5.5" {
-		t.Fatalf("active model = %q, want gpt-5.5", plan.ActiveSettings.Model)
+	if plan.ActiveSettings.Model != "gpt-5.6-sol" {
+		t.Fatalf("active model = %q, want gpt-5.6-sol", plan.ActiveSettings.Model)
 	}
-	if plan.ConfiguredModelName != "gpt-5.5" {
-		t.Fatalf("configured model = %q, want gpt-5.5", plan.ConfiguredModelName)
+	if plan.ConfiguredModelName != "gpt-5.6-sol" {
+		t.Fatalf("configured model = %q, want gpt-5.6-sol", plan.ConfiguredModelName)
 	}
 	provider, err := llm.InferProviderFromModel(plan.ActiveSettings.Model)
 	if err != nil {
@@ -224,7 +224,7 @@ func TestPlannerIgnoresMissingPersistedSubagentRoleOnResume(t *testing.T) {
 			WorkspaceRoot:   workspace,
 			PersistenceRoot: root,
 			Settings: config.Settings{
-				Model:         "gpt-5.5",
+				Model:         "gpt-5.6-sol",
 				ThinkingLevel: "medium",
 			},
 		},
@@ -362,7 +362,7 @@ func TestApplyRunPromptOverridesExplicitRoleUsesBaseSettingsAfterPersistedRoleRe
 		ActiveSettings:      resumedSettings,
 		BaseSettings:        baseSettings,
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
-		ConfiguredModelName: "gpt-5.5",
+		ConfiguredModelName: "gpt-5.6-sol",
 		WorkspaceRoot:       workspace,
 		Source:              resumedSource,
 		BaseSource:          baseSource,
@@ -390,7 +390,7 @@ func TestApplyRunPromptOverridesExplicitDefaultClearsPersistedRole(t *testing.T)
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	baseSettings := config.Settings{
-		Model:         "gpt-5.5",
+		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",
 		EnabledTools:  map[toolspec.ID]bool{toolspec.ToolExecCommand: true},
 	}
@@ -401,7 +401,7 @@ func TestApplyRunPromptOverridesExplicitDefaultClearsPersistedRole(t *testing.T)
 		ActiveSettings:      resumedSettings,
 		BaseSettings:        baseSettings,
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
-		ConfiguredModelName: "gpt-5.5",
+		ConfiguredModelName: "gpt-5.6-sol",
 		WorkspaceRoot:       workspace,
 		Source:              config.SourceReport{Sources: map[string]string{"thinking_level": "subagent"}},
 		BaseSource:          config.SourceReport{Sources: map[string]string{"thinking_level": "file"}},
@@ -424,7 +424,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 	loaded := loadLaunchConfig(t, workspace)
 	baseSettings := loaded.Settings
 	baseSettings.EnabledTools = cloneEnabledToolSet(baseSettings.EnabledTools)
-	baseSettings.Model = "gpt-5.5"
+	baseSettings.Model = "gpt-5.6-sol"
 	baseSettings.ThinkingLevel = "medium"
 	baseSettings.EnabledTools[toolspec.ToolExecCommand] = true
 	baseSettings.EnabledTools[toolspec.ToolPatch] = true
@@ -464,7 +464,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 		{
 			name:             "no override keeps resumed role",
 			overrides:        serverapi.RunPromptOverrides{},
-			wantModel:        "gpt-5.5",
+			wantModel:        "gpt-5.6-sol",
 			wantThinking:     "xhigh",
 			wantPatchSetting: false,
 			wantAgentRole:    sessiontest.AgentRole("old_role"),
@@ -480,7 +480,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 		{
 			name:             "default clears resumed role",
 			overrides:        serverapi.RunPromptOverrides{AgentRole: config.DefaultSubagentRole},
-			wantModel:        "gpt-5.5",
+			wantModel:        "gpt-5.6-sol",
 			wantThinking:     "medium",
 			wantPatchSetting: true,
 			wantAgentRole:    nil,
@@ -506,7 +506,7 @@ func TestApplyRunPromptOverridesResumedRoleMatrix(t *testing.T) {
 				ActiveSettings:      planResumedSettings,
 				BaseSettings:        planBaseSettings,
 				EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
-				ConfiguredModelName: "gpt-5.5",
+				ConfiguredModelName: "gpt-5.6-sol",
 				WorkspaceRoot:       workspace,
 				Source:              resumedSource,
 				BaseSource:          baseSource,
@@ -538,7 +538,7 @@ func TestApplyRunPromptOverridesRejectsDifferentAgentRoleForLockedSession(t *tes
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace,
 		"[subagents.old_role]",
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[subagents.worker]",
 		"model = \"gpt-5.4-mini\"",
@@ -713,7 +713,7 @@ func TestApplyRunPromptOverridesLockedModelDoesNotMarkModelSourceAsSubagent(t *t
 		ActiveSettings:      baseSettings,
 		BaseSettings:        baseSettings,
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
-		ConfiguredModelName: "gpt-5.5",
+		ConfiguredModelName: "gpt-5.6-sol",
 		WorkspaceRoot:       workspace,
 		Source:              baseSource,
 		BaseSource:          baseSource,
@@ -1426,20 +1426,20 @@ func TestApplyRunPromptOverridesFastRoleAppliesBuiltInHeuristics(t *testing.T) {
 	plan := newLoadedConfigPlan(t, workspace, loaded)
 
 	updated := applyRunPromptOverridesNoWarnings(t, plan, serverapi.RunPromptOverrides{AgentRole: config.BuiltInSubagentRoleFast}, auth.State{Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}}})
-	if updated.ActiveSettings.Model != "gpt-5.4-mini" {
-		t.Fatalf("model = %q, want gpt-5.4-mini", updated.ActiveSettings.Model)
+	if updated.ActiveSettings.Model != "gpt-5.6-terra" {
+		t.Fatalf("model = %q, want gpt-5.6-terra", updated.ActiveSettings.Model)
 	}
 	if !updated.ActiveSettings.PriorityRequestMode {
 		t.Fatal("expected priority request mode enabled for fast role")
 	}
-	if updated.ActiveSettings.Reviewer.Model != "gpt-5.4-mini" {
-		t.Fatalf("reviewer model = %q, want gpt-5.4-mini", updated.ActiveSettings.Reviewer.Model)
+	if updated.ActiveSettings.Reviewer.Model != "gpt-5.6-terra" {
+		t.Fatalf("reviewer model = %q, want gpt-5.6-terra", updated.ActiveSettings.Reviewer.Model)
 	}
-	if updated.ActiveSettings.ModelContextWindow != 272_000 {
-		t.Fatalf("context window = %d, want 272000", updated.ActiveSettings.ModelContextWindow)
+	if updated.ActiveSettings.ModelContextWindow != 372_000 {
+		t.Fatalf("context window = %d, want 372000", updated.ActiveSettings.ModelContextWindow)
 	}
-	if updated.ConfiguredModelName != "gpt-5.4-mini" {
-		t.Fatalf("configured model = %q, want gpt-5.4-mini", updated.ConfiguredModelName)
+	if updated.ConfiguredModelName != "gpt-5.6-terra" {
+		t.Fatalf("configured model = %q, want gpt-5.6-terra", updated.ConfiguredModelName)
 	}
 }
 
@@ -1488,6 +1488,8 @@ func TestApplyRunPromptOverridesFastRoleWarnsWhenExplicitRoleMatchesBase(t *test
 	loaded := loadLaunchConfig(t, workspace,
 		"model = \"gpt-5.4\"",
 		"thinking_level = \"medium\"",
+		"model_context_window = 272000",
+		"context_compaction_threshold_tokens = 258400",
 		"",
 		"[subagents.fast]",
 		"model = \"gpt-5.4\"",
@@ -1534,7 +1536,7 @@ func TestApplyRunPromptOverridesSubagentProviderOverrideCanInheritBaseModel(t *t
 func TestApplyRunPromptOverridesSubagentReviewerSystemPromptFile(t *testing.T) {
 	workspace := t.TempDir()
 	loaded, home := loadLaunchConfigWithHome(t, workspace,
-		"model = \"gpt-5.5\"",
+		"model = \"gpt-5.6-sol\"",
 		"",
 		"[reviewer]",
 		"system_prompt_file = \"base-reviewer.md\"",
@@ -1644,8 +1646,8 @@ func TestApplyRunPromptOverridesFastRoleUsesCLIProviderOverrideForHeuristic(t *t
 		ProviderOverride: "openai",
 		OpenAIBaseURL:    "https://api.openai.com/v1",
 	}, auth.State{Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}}})
-	if updated.ActiveSettings.Model != "gpt-5.4-mini" {
-		t.Fatalf("model = %q, want gpt-5.4-mini", updated.ActiveSettings.Model)
+	if updated.ActiveSettings.Model != "gpt-5.6-terra" {
+		t.Fatalf("model = %q, want gpt-5.6-terra", updated.ActiveSettings.Model)
 	}
 	if !updated.ActiveSettings.PriorityRequestMode {
 		t.Fatal("expected priority request mode enabled")
@@ -1678,7 +1680,7 @@ func TestPlannerResumeFastRoleUsesProviderOverrideForHeuristic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
-	if plan.ActiveSettings.Model != "gpt-5.4-mini" {
+	if plan.ActiveSettings.Model != "gpt-5.6-terra" {
 		t.Fatalf("model = %q, want fast heuristic model", plan.ActiveSettings.Model)
 	}
 	if !plan.ActiveSettings.PriorityRequestMode {
@@ -1754,7 +1756,7 @@ func TestPlannerResumeFastRoleUsesOpenAIBaseURLForHeuristic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
-	if plan.ActiveSettings.Model != "gpt-5.4-mini" {
+	if plan.ActiveSettings.Model != "gpt-5.6-terra" {
 		t.Fatalf("model = %q, want fast heuristic model", plan.ActiveSettings.Model)
 	}
 	if !plan.ActiveSettings.PriorityRequestMode {

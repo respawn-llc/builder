@@ -15,6 +15,8 @@ import (
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
 	"core/shared/textutil"
+
+	"github.com/google/uuid"
 )
 
 type Manager struct {
@@ -139,6 +141,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 	}
 	entry := &processEntry{
 		id:             id,
+		activityID:     uuid.New(),
 		ownerSessionID: ownerSessionID,
 		ownerRunID:     ownerRunID,
 		ownerStepID:    ownerStepID,

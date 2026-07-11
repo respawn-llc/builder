@@ -21,7 +21,7 @@ func (s *fakeCapabilityFactsService) GetCapabilityFacts(ctx context.Context, req
 	if s.err != nil {
 		return serverapi.CapabilityFactsResponse{}, s.err
 	}
-	return serverapi.CapabilityFactsResponse{Defaults: serverapi.CapabilityDefaultFacts{PrimaryModelID: "gpt-5.5"}}, nil
+	return serverapi.CapabilityFactsResponse{Defaults: serverapi.CapabilityDefaultFacts{PrimaryModelID: "gpt-5.6-sol"}}, nil
 }
 
 func TestLoopbackCapabilityFactsClientCallsServiceAndSurfacesErrors(t *testing.T) {
@@ -33,7 +33,7 @@ func TestLoopbackCapabilityFactsClientCallsServiceAndSurfacesErrors(t *testing.T
 	if err != nil {
 		t.Fatalf("GetCapabilityFacts: %v", err)
 	}
-	if resp.Defaults.PrimaryModelID != "gpt-5.5" || service.req.WorkspaceRoot == nil || *service.req.WorkspaceRoot != workspace {
+	if resp.Defaults.PrimaryModelID != "gpt-5.6-sol" || service.req.WorkspaceRoot == nil || *service.req.WorkspaceRoot != workspace {
 		t.Fatalf("response=%+v req=%+v", resp, service.req)
 	}
 

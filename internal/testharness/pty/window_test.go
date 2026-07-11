@@ -148,8 +148,45 @@ func TestClassifyAppendsDoesNotTreatEveryMutableBandWriteAsAppend(t *testing.T) 
 	}
 }
 
+func TestCoalesceAppendRowsMergesStyledAdjacentFragments(t *testing.T) {
+	t.Parallel()
+
+	coalesced := pty.CoalesceAppendRows([]pty.AppendOperation{
+		{Operation: writeOperation(pty.Region{Top: 1, Bottom: 2, Left: 0, Right: 2}, "he")},
+		{Operation: writeOperation(pty.Region{Top: 1, Bottom: 2, Left: 2, Right: 5}, "llo")},
+		{Operation: writeOperation(pty.Region{Top: 2, Bottom: 3, Left: 0, Right: 5}, "world")},
+	})
+	if len(coalesced) != 2 {
+		t.Fatalf("coalesced append count = %d, want 2", len(coalesced))
+	}
+	if coalesced[0].Operation.Write == nil || coalesced[0].Operation.Write.Text() != "hello" {
+		t.Fatalf("first coalesced payload = %#v, want hello", coalesced[0].Operation.Write)
+	}
+	if coalesced[1].Operation.Write == nil || coalesced[1].Operation.Write.Text() != "world" {
+		t.Fatalf("second coalesced payload = %#v, want world", coalesced[1].Operation.Write)
+	}
+}
+
+func TestCoalesceAppendRowsKeepsDifferentForegroundFragmentsSeparate(t *testing.T) {
+	t.Parallel()
+
+	coalesced := pty.CoalesceAppendRows([]pty.AppendOperation{
+		{Operation: writeOperationWithForeground(pty.Region{Top: 1, Bottom: 2, Left: 0, Right: 2}, "he", "#ff0000")},
+		{Operation: writeOperationWithForeground(pty.Region{Top: 1, Bottom: 2, Left: 2, Right: 5}, "llo", "#00ff00")},
+	})
+	if len(coalesced) != 2 {
+		t.Fatalf("coalesced append count = %d, want 2", len(coalesced))
+	}
+}
+
 func writeOperation(region pty.Region, text string) pty.Operation {
 	payload := pty.MustWritePayload(text)
+	return pty.Operation{Kind: pty.OperationWrite, Region: region, Write: &payload}
+}
+
+func writeOperationWithForeground(region pty.Region, text string, foreground string) pty.Operation {
+	payload := pty.MustWritePayload(text)
+	payload.Foreground = foreground
 	return pty.Operation{Kind: pty.OperationWrite, Region: region, Write: &payload}
 }
 
@@ -182,7 +219,7 @@ func markerRaw(t *testing.T, seq int, phase string, windowID *string) string {
 	payload := map[string]any{
 		"version": 1,
 		"seq":     seq,
-		"phase":   phase,
+		"kind":    phase,
 	}
 	if windowID != nil {
 		payload["window_id"] = *windowID
@@ -191,5 +228,5 @@ func markerRaw(t *testing.T, seq int, phase string, windowID *string) string {
 	if err != nil {
 		t.Fatalf("marshal marker: %v", err)
 	}
-	return "\x1b]777;kent-pty-phase;" + base64.RawURLEncoding.EncodeToString(encoded) + "\a"
+	return "\x1b]777;kent-pty-checkpoint;" + base64.RawURLEncoding.EncodeToString(encoded) + "\a"
 }

@@ -264,6 +264,42 @@ func TestLockedContractPersistenceIncludesExplicitZeroToolsAndWebSearchMode(t *t
 	}
 }
 
+func TestResetLockedContractForCompactionBoundaryPersistsFreshContractBoundary(t *testing.T) {
+	store := newSessionTestStore(t)
+	if err := store.MarkModelDispatchLocked(LockedContract{
+		Model:             "gpt-5.3-codex-spark",
+		SystemPrompt:      "source prompt",
+		HasSystemPrompt:   true,
+		ReviewerPrompt:    "source reviewer prompt",
+		HasReviewerPrompt: true,
+		EnabledTools:      []string{"shell"},
+		HasEnabledTools:   true,
+		WebSearchMode:     "native",
+	}); err != nil {
+		t.Fatalf("mark model dispatch locked: %v", err)
+	}
+
+	if err := store.ResetLockedContractForCompactionBoundary(); err != nil {
+		t.Fatalf("reset locked contract for compaction boundary: %v", err)
+	}
+	if locked := store.Meta().Locked; locked != nil {
+		t.Fatalf("in-memory locked contract = %+v, want absent", locked)
+	}
+	if got := store.Meta().PromptCacheLineageGeneration; got != 1 {
+		t.Fatalf("prompt cache lineage generation = %d, want 1", got)
+	}
+	opened, err := Open(store.Dir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if locked := opened.Meta().Locked; locked != nil {
+		t.Fatalf("persisted locked contract = %+v, want absent", locked)
+	}
+	if got := opened.Meta().PromptCacheLineageGeneration; got != 1 {
+		t.Fatalf("persisted prompt cache lineage generation = %d, want 1", got)
+	}
+}
+
 func TestLockedPromptFacingMutationsPreserveLifetimeFields(t *testing.T) {
 	store := newSessionTestStore(t)
 	toolPreambles := true

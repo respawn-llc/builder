@@ -355,6 +355,49 @@ func TestRenderGoalNudgePrompt(t *testing.T) {
 	}
 }
 
+func TestRenderWorkflowNudgePrompt(t *testing.T) {
+	rendered, err := RenderWorkflowNudgePrompt(
+		"transition is required",
+		"Call complete_node with the selected transition.",
+		"Ship workflow execution.",
+		"Continue working toward the active session goal.",
+	)
+	if err != nil {
+		t.Fatalf("RenderWorkflowNudgePrompt: %v", err)
+	}
+	for _, want := range []string{
+		"transition is required",
+		"Call complete_node with the selected transition.",
+		"Ship workflow execution.",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected workflow nudge to substitute %q, got %q", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "{{") {
+		t.Fatalf("expected workflow nudge placeholders rendered, got %q", rendered)
+	}
+}
+
+func TestRenderWorkflowNudgePromptRequiresReasonAndNodeCompletionInstructions(t *testing.T) {
+	tests := []struct {
+		name         string
+		reason       string
+		instructions string
+	}{
+		{name: "missing rejection reason", instructions: "Call complete_node."},
+		{name: "missing node completion instructions", reason: "transition is required"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := RenderWorkflowNudgePrompt(tt.reason, tt.instructions, "", ""); err == nil {
+				t.Fatal("RenderWorkflowNudgePrompt accepted an incomplete nudge")
+			}
+		})
+	}
+}
+
 func TestRenderGoalSetPrompt(t *testing.T) {
 	rendered := RenderGoalSetPrompt("ship /goal mode")
 	if !strings.Contains(rendered, "ship /goal mode") {

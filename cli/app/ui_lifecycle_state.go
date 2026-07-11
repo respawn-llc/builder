@@ -25,6 +25,16 @@ func (m *uiModel) runtimeActivityBlocksControl() bool {
 	return m != nil && m.runtimeActivityProjection.ActiveForControl()
 }
 
+func (m *uiModel) runtimeActivityBlocksInput() bool {
+	if m == nil {
+		return false
+	}
+	if m.runtimeActivityProjection.State == clientui.RuntimeActivityDraining {
+		return false
+	}
+	return m.runtimeActivityProjection.ActiveForControl()
+}
+
 func (m *uiModel) applyRuntimeActivityProjection(activity clientui.RuntimeActivity) error {
 	if m == nil {
 		return nil
@@ -119,7 +129,7 @@ func (m *uiModel) hasLocalDispatchPending() bool {
 }
 
 func (m *uiModel) blocksRuntimeInput() bool {
-	return m != nil && (m.isBusy() || m.runtimeActivityBlocksControl() || m.hasLocalDispatchPending())
+	return m != nil && (m.isBusy() || m.runtimeActivityBlocksInput() || m.hasLocalDispatchPending())
 }
 
 func (m *uiModel) setPendingInterrupt(pending bool) {

@@ -55,6 +55,7 @@ type RuntimeStore interface {
 	ClearRunWaitingAsk(context.Context, workflow.RunID, int64, string) error
 	CompleteRun(context.Context, workflowstore.CompleteRunRequest) (workflowstore.CompleteRunResult, error)
 	RecordProtocolViolation(context.Context, workflowstore.RecordProtocolViolationRequest) (workflowstore.RecordProtocolViolationResult, error)
+	ResetProtocolViolationBudget(context.Context, workflowstore.ResetProtocolViolationBudgetRequest) error
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
 	InterruptRun(context.Context, workflow.RunID, string, string) error
 	InterruptRunGeneration(context.Context, workflow.RunID, int64, string, string) error
@@ -487,12 +488,33 @@ func (s *Starter) planSession(ctx context.Context, input workflowstore.RunStartC
 			return launch.SessionPlan{}, nil, err
 		}
 	}
+	if compactAndContinueRequiresFreshContract(input, plan) {
+		if err := plan.Store.ResetLockedContractForCompactionBoundary(); err != nil {
+			return launch.SessionPlan{}, nil, err
+		}
+		plan, err = planner.PlanSession(ctx, launch.SessionRequest{
+			Mode:                                launch.ModeHeadless,
+			SelectedSessionID:                   plan.Store.Meta().SessionID,
+			SkipContinuationAgentRoleValidation: skipPersistedRoleValidation,
+		})
+		if err != nil {
+			return launch.SessionPlan{}, nil, err
+		}
+	}
 	plan, warnings, err := applyWorkflowSessionPromptOverrides(plan, input)
 	if err != nil {
 		return launch.SessionPlan{}, nil, err
 	}
 	planSucceeded = true
 	return plan, warnings, nil
+}
+
+func compactAndContinueRequiresFreshContract(input workflowstore.RunStartContext, plan launch.SessionPlan) bool {
+	if input.ContextMode != workflow.ContextModeCompactAndContinueSession || plan.Store == nil {
+		return false
+	}
+	activeWorkflowSession := plan.Store.Meta().WorkflowSession
+	return activeWorkflowSession == nil || strings.TrimSpace(activeWorkflowSession.RunID) != strings.TrimSpace(string(input.Run.ID))
 }
 
 func allowLockedWorkflowContinuationRoleChange(plan launch.SessionPlan, overrides serverapi.RunPromptOverrides) bool {

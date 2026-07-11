@@ -494,13 +494,13 @@ func TestPatchToolCallFormattingFallsBackToRawPatchWhenFileViewParseFails(t *tes
 	if rendered.ToolCall.RenderHint == nil || rendered.ToolCall.RenderHint.Kind != transcript.ToolRenderKindDiff {
 		t.Fatalf("expected diff render hint for patch fallback, got %+v", rendered.ToolCall.RenderHint)
 	}
-	if rendered.ToolCall.PatchSummary != "Patch" {
+	if rendered.ToolCall.PatchSummary != patchText {
 		t.Fatalf("expected fallback patch summary, got %q", rendered.ToolCall.PatchSummary)
 	}
 	if rendered.ToolCall.PatchRender == nil {
 		t.Fatalf("expected fallback typed patch render metadata, got %+v", rendered.ToolCall)
 	}
-	if !strings.Contains(rendered.ToolCall.PatchDetail, patchText) {
+	if rendered.ToolCall.PatchDetail != patchText {
 		t.Fatalf("expected fallback patch detail to include raw payload, got %q", rendered.ToolCall.PatchDetail)
 	}
 }
@@ -738,7 +738,7 @@ func TestChatStoreSnapshotIncludesDeveloperErrorFeedbackAsOngoingVisibleRole(t *
 	}
 }
 
-func TestChatStoreSnapshotIncludesDeveloperContextAsVerboseRole(t *testing.T) {
+func TestChatStoreSnapshotIncludesDeveloperContextAsDetailRole(t *testing.T) {
 	s := newChatStore()
 	s.appendMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeAgentsMD, Content: "AGENTS context"})
 	s.appendMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeEnvironment, Content: "Environment context"})
@@ -753,12 +753,12 @@ func TestChatStoreSnapshotIncludesDeveloperContextAsVerboseRole(t *testing.T) {
 	if snap.Entries[1].Role != string(transcript.EntryRoleDeveloperContext) || snap.Entries[1].Text != "Environment context" {
 		t.Fatalf("unexpected environment context entry: %+v", snap.Entries[1])
 	}
-	if snap.Entries[0].Visibility != transcript.EntryVisibilityVerbose || snap.Entries[1].Visibility != transcript.EntryVisibilityVerbose {
-		t.Fatalf("expected developer context visibility to be verbose, got %+v", snap.Entries)
+	if snap.Entries[0].Visibility != transcript.EntryVisibilityDetail || snap.Entries[1].Visibility != transcript.EntryVisibilityDetail {
+		t.Fatalf("expected developer context visibility to be detail-only, got %+v", snap.Entries)
 	}
 }
 
-func TestChatStoreSnapshotIncludesUnknownDeveloperMessagesAsVerboseContext(t *testing.T) {
+func TestChatStoreSnapshotIncludesUnknownDeveloperMessagesAsOngoingContext(t *testing.T) {
 	s := newChatStore()
 	s.appendMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageType("custom_internal"), Content: "Internal developer note"})
 
@@ -766,12 +766,12 @@ func TestChatStoreSnapshotIncludesUnknownDeveloperMessagesAsVerboseContext(t *te
 	if len(snap.Entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d (%+v)", len(snap.Entries), snap.Entries)
 	}
-	if got := snap.Entries[0]; got.Role != string(transcript.EntryRoleDeveloperContext) || got.Text != "Internal developer note" || got.Visibility != transcript.EntryVisibilityVerbose || got.MessageType != llm.MessageType("custom_internal") || got.CompactLabel != "Developer context: custom_internal" {
+	if got := snap.Entries[0]; got.Role != string(transcript.EntryRoleDeveloperContext) || got.Text != "Internal developer note" || got.Visibility != transcript.EntryVisibilityOngoing || got.MessageType != llm.MessageType("custom_internal") || got.CompactLabel != "Developer context: custom_internal" {
 		t.Fatalf("unexpected unknown developer context entry: %+v", got)
 	}
 }
 
-func TestChatStoreSnapshotIncludesInterruptionAsVerboseRole(t *testing.T) {
+func TestChatStoreSnapshotIncludesInterruptionAsOngoingRole(t *testing.T) {
 	s := newChatStore()
 	s.appendMessage(llm.Message{Role: llm.RoleDeveloper, MessageType: llm.MessageTypeInterruption, Content: "Interrupted by user."})
 
@@ -782,8 +782,8 @@ func TestChatStoreSnapshotIncludesInterruptionAsVerboseRole(t *testing.T) {
 	if snap.Entries[0].Role != string(transcript.EntryRoleInterruption) || snap.Entries[0].Text != "Interrupted by user." {
 		t.Fatalf("unexpected interruption entry: %+v", snap.Entries[0])
 	}
-	if snap.Entries[0].Visibility != transcript.EntryVisibilityVerbose {
-		t.Fatalf("expected interruption verbose visibility, got %+v", snap.Entries[0])
+	if snap.Entries[0].Visibility != transcript.EntryVisibilityOngoing {
+		t.Fatalf("expected interruption ongoing visibility, got %+v", snap.Entries[0])
 	}
 }
 
@@ -880,7 +880,7 @@ func TestChatStoreSnapshotIncludesCompactTextForBackgroundNotice(t *testing.T) {
 	}
 }
 
-func TestChatStoreSnapshotShowsManualCompactionCarryoverAsVerboseMessage(t *testing.T) {
+func TestChatStoreSnapshotShowsManualCompactionCarryoverAsDetailMessage(t *testing.T) {
 	s := newChatStore()
 	s.appendMessage(llm.Message{
 		Role:        llm.RoleDeveloper,
@@ -892,7 +892,7 @@ func TestChatStoreSnapshotShowsManualCompactionCarryoverAsVerboseMessage(t *test
 	if len(snap.Entries) != 1 {
 		t.Fatalf("expected carryover message to project once into transcript, got %+v", snap.Entries)
 	}
-	if got := snap.Entries[0]; got.Role != string(transcript.EntryRoleManualCompactionCarryover) || got.Text != "# Last user message before manual compaction\n\nplease keep tests green" || got.Visibility != transcript.EntryVisibilityVerbose {
+	if got := snap.Entries[0]; got.Role != string(transcript.EntryRoleManualCompactionCarryover) || got.Text != "# Last user message before manual compaction\n\nplease keep tests green" || got.Visibility != transcript.EntryVisibilityDetail {
 		t.Fatalf("unexpected carryover transcript entry: %+v", got)
 	}
 }
@@ -1051,13 +1051,57 @@ func TestTranscriptFactsPreserveCacheWarningVisibility(t *testing.T) {
 	facts := TranscriptCommittedRowFactsFromEvent(Event{
 		Kind:                   EventCacheWarning,
 		CacheWarning:           &transcript.CacheWarning{Scope: transcript.CacheWarningScopeConversation, Reason: transcript.CacheWarningReasonNonPostfix, LostInputTokens: 42},
-		CacheWarningVisibility: transcript.EntryVisibilityVerbose,
+		CacheWarningVisibility: transcript.EntryVisibilityDetail,
 	})
 	if len(facts) != 1 || facts[0].Notice == nil || facts[0].Notice.CacheWarning == nil {
 		t.Fatalf("facts = %+v, want cache warning notice", facts)
 	}
-	if facts[0].Notice.CacheWarning.Visibility != transcript.EntryVisibilityVerbose {
-		t.Fatalf("visibility = %q, want verbose", facts[0].Notice.CacheWarning.Visibility)
+	if facts[0].Notice.CacheWarning.Visibility != transcript.EntryVisibilityDetail {
+		t.Fatalf("visibility = %q, want detail", facts[0].Notice.CacheWarning.Visibility)
+	}
+	if facts[0].Visibility != transcript.EntryVisibilityDetail {
+		t.Fatalf("row visibility = %q, want detail", facts[0].Visibility)
+	}
+}
+
+func TestTranscriptFactsSuppressProjectedHiddenLocalEntries(t *testing.T) {
+	facts := TranscriptCommittedRowFactsFromEvent(Event{
+		Kind:                EventLocalEntryAdded,
+		LocalEntryProjected: true,
+		LocalEntry: &ChatEntry{
+			Visibility: transcript.EntryVisibilityHidden,
+			Role:       "assistant",
+			Text:       "hidden assistant",
+		},
+	})
+	if len(facts) != 0 {
+		t.Fatalf("facts = %+v, want hidden projected entry suppressed", facts)
+	}
+}
+
+func TestTranscriptFactsNormalizeLegacyProjectedLocalEntryVisibility(t *testing.T) {
+	for _, tt := range []struct {
+		legacy transcript.EntryVisibility
+		want   transcript.EntryVisibility
+	}{
+		{legacy: transcript.EntryVisibility("all"), want: transcript.EntryVisibilityOngoing},
+		{legacy: transcript.EntryVisibility("verbose"), want: transcript.EntryVisibilityDetail},
+	} {
+		facts := TranscriptCommittedRowFactsFromEvent(Event{
+			Kind:                EventLocalEntryAdded,
+			LocalEntryProjected: true,
+			LocalEntry: &ChatEntry{
+				Visibility: tt.legacy,
+				Role:       "system",
+				Text:       "legacy visibility",
+			},
+		})
+		if len(facts) != 1 {
+			t.Fatalf("legacy %q facts = %+v, want one row", tt.legacy, facts)
+		}
+		if facts[0].Visibility != tt.want {
+			t.Fatalf("legacy %q row visibility = %q, want %q", tt.legacy, facts[0].Visibility, tt.want)
+		}
 	}
 }
 
@@ -1101,6 +1145,10 @@ func TestTranscriptDeliverySnapshotHydratesLocalEntriesAsLiveTypedFacts(t *testi
 	if len(snapshot.Rows) != 1 || snapshot.Rows[0].Notice == nil || snapshot.Rows[0].Notice.Reason != "runtime_diagnostic" {
 		t.Fatalf("hydrated rows = %+v, want typed runtime diagnostic notice", snapshot.Rows)
 	}
+	notice := snapshot.Rows[0].Notice
+	if notice.MessageType != llm.MessageTypeReviewerFeedback || notice.DiagnosticCode != string(transcript.EntryRoleReviewerStatus) {
+		t.Fatalf("hydrated reviewer notice = %+v, want reviewer metadata", notice)
+	}
 }
 
 func TestTranscriptDeliverySnapshotFossilizesOnlyUntypedLocalEntries(t *testing.T) {
@@ -1143,7 +1191,7 @@ func TestTranscriptDeliveryLiveAndHydrationAgreeOnProjectedCompactionEntries(t *
 
 func TestTranscriptFactsMapToolResultEntriesWithoutCallIDToNotices(t *testing.T) {
 	entry := ChatEntry{Visibility: transcript.EntryVisibilityAuto, Role: "tool_result_ok", Text: "orphan result"}
-	fact, ok := transcriptCommittedRowFactFromChatEntry(entry)
+	fact, ok := transcriptCommittedRowFactFromChatEntry(entry, transcriptCommittedStreamProjection)
 	if !ok || fact.Notice == nil || fact.Notice.DiagnosticDetail != "orphan result" {
 		t.Fatalf("fact = %+v ok=%t, want notice preserving text", fact, ok)
 	}

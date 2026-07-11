@@ -145,6 +145,22 @@ func TestNonRunRuntimeActivityBlocksInputWithoutRunLifecycle(t *testing.T) {
 	}
 }
 
+func TestDrainingRuntimeActivityDoesNotTrapNextInputInLocalQueue(t *testing.T) {
+	m := newProjectedTestUIModel(&runtimeControlFakeClient{}, closedProjectedRuntimeEvents(), closedAskEvents())
+	m.startupCmds = nil
+
+	if err := m.applyRuntimeActivityProjection(clientui.MustRuntimeActivity(clientui.RuntimeActivityDraining, clientui.RuntimeActivityOptions{})); err != nil {
+		t.Fatalf("apply draining activity: %v", err)
+	}
+
+	if m.blocksRuntimeInput() {
+		t.Fatal("draining runtime activity must not trap the next prompt in the client-local queue")
+	}
+	if !m.runtimeActivityBlocksControl() {
+		t.Fatal("draining runtime activity should still be represented as server control activity")
+	}
+}
+
 func TestRuntimeReadModelMainViewHydrationAcceptsNewGenerationReset(t *testing.T) {
 	current := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 1, Sequence: 9}
 	nextVersion := clientui.ReadModelVersion{Epoch: "epoch-1", Generation: 2, Sequence: 1}

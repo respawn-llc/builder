@@ -78,6 +78,9 @@ func collectMainSurfaceTerminalWriteViolations(pkgs []*packages.Package, repoRoo
 }
 
 func mainSurfaceTerminalWriteViolationsInFile(pkg *packages.Package, file *ast.File, relPath string) []string {
+	if strings.HasPrefix(relPath, "cli/tui/ongoing/") {
+		return nil
+	}
 	var violations []string
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)

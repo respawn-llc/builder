@@ -73,7 +73,7 @@ func TestResolveRuntimeProviderCapabilities(t *testing.T) {
 		{
 			name:     "oauth defaults to chatgpt codex",
 			auth:     auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
-			settings: config.Settings{Model: "gpt-5.5"},
+			settings: config.Settings{Model: "gpt-5.6-sol"},
 			wantID:   "chatgpt-codex",
 		},
 		{
@@ -97,7 +97,7 @@ func TestResolveRuntimeProviderCapabilities(t *testing.T) {
 		{
 			name:     "none auth with no override falls back to openai",
 			auth:     auth.State{Method: auth.Method{Type: auth.MethodNone}},
-			settings: config.Settings{Model: "gpt-5.5"},
+			settings: config.Settings{Model: "gpt-5.6-sol"},
 			wantID:   "openai",
 		},
 		{

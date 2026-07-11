@@ -87,8 +87,17 @@ func WriteArtifactsWithAttachments(dir string, capture Capture, analysis Analysi
 	if err := budget.writeOperations(filepath.Join(dir, "operations.json"), analysis.Operations); err != nil {
 		return err
 	}
+	if err := budget.writeJSON(filepath.Join(dir, "phase-input-dispatches.json"), capture.PhaseInputDispatches); err != nil {
+		return err
+	}
+	if err := budget.writeJSON(filepath.Join(dir, "frame-input-dispatches.json"), capture.FrameInputDispatches); err != nil {
+		return err
+	}
 	if err := budget.write(filepath.Join(dir, "screen.txt"), []byte(analysis.Screen.RenderText())); err != nil {
 		return fmt.Errorf("write screen artifact: %w", err)
+	}
+	if err := budget.writeJSON(filepath.Join(dir, "screen.json"), analysis.Screen); err != nil {
+		return err
 	}
 	diagnostics := artifactDiagnostics{
 		ProcessExit:  capture.ProcessExit,

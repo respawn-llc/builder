@@ -729,7 +729,7 @@ func TestReopenedManualCompactionKeepsCarryoverAsSingleDetailTranscriptEntry(t *
 		if !strings.Contains(entry.Text, "please keep tests green") {
 			t.Fatalf("expected reopened transcript carryover to preserve last user text, got %q", entry.Text)
 		}
-		if entry.Visibility != transcript.EntryVisibilityVerbose {
+		if entry.Visibility != transcript.EntryVisibilityDetail {
 			t.Fatalf("expected reopened transcript carryover to stay detail-only, got %+v", entry)
 		}
 	}

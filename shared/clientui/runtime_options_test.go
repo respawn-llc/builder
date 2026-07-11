@@ -13,9 +13,11 @@ func TestNormalizeThinkingLevel(t *testing.T) {
 		{name: "medium", raw: "medium", want: "medium", ok: true},
 		{name: "high", raw: "high", want: "high", ok: true},
 		{name: "xhigh", raw: "xhigh", want: "xhigh", ok: true},
+		{name: "max", raw: "max", want: "max", ok: true},
+		{name: "ultra", raw: "ultra", want: "ultra", ok: true},
 		{name: "trim lower", raw: " HIGH ", want: "high", ok: true},
 		{name: "empty", raw: "", ok: false},
-		{name: "unknown", raw: "max", want: "max", ok: false},
+		{name: "unknown", raw: "unsupported", want: "unsupported", ok: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

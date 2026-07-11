@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"core/shared/serverapi"
 
@@ -11,6 +12,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
+
+func disableTransientStatusClearForTest(t *testing.T) {
+	t.Helper()
+	originalClear := scheduleTransientStatusClear
+	scheduleTransientStatusClear = func(time.Duration, uint64) tea.Cmd { return nil }
+	t.Cleanup(func() {
+		scheduleTransientStatusClear = originalClear
+	})
+}
 
 type stubSessionViewClient struct {
 	getSessionMainView func(context.Context, serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error)
@@ -21,6 +31,10 @@ func (s stubSessionViewClient) GetSessionMainView(ctx context.Context, req serve
 		return serverapi.SessionMainViewResponse{}, errors.New("session view stub is required")
 	}
 	return s.getSessionMainView(ctx, req)
+}
+
+func (s stubSessionViewClient) GetSessionTranscriptPage(context.Context, serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
+	return serverapi.SessionTranscriptPageResponse{}, nil
 }
 
 func updateUIModel(t *testing.T, m *uiModel, msg tea.Msg) *uiModel {

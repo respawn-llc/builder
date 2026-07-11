@@ -202,7 +202,7 @@ func TestValidateRunPromptAgentRoleBlocksNonCallableRoleForKentSession(t *testin
 
 func TestValidateRunPromptAgentRoleUnknownRoleListsCallableRolesForKentSession(t *testing.T) {
 	settings := config.Settings{
-		Model:         "gpt-5.5",
+		Model:         "gpt-5.6-sol",
 		ThinkingLevel: "medium",
 		Subagents: map[string]config.SubagentRole{
 			"callable":    {Settings: config.Settings{Model: "gpt-5.4-mini"}, Sources: map[string]string{"model": "file"}},

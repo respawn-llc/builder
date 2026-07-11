@@ -53,7 +53,7 @@ Options:
 
 Examples:
   scripts/sandbox/sandbox-serve.sh up
-  scripts/sandbox/sandbox-serve.sh up --host-port 53100 --project-name kent -- --model gpt-5.5
+  scripts/sandbox/sandbox-serve.sh up --host-port 53100 --project-name kent -- --model gpt-5.6-sol
   scripts/sandbox/sandbox-serve.sh env --host-port 53100
   scripts/sandbox/sandbox-serve.sh down --reset
 USAGE

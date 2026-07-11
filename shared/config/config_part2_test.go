@@ -10,7 +10,7 @@ import (
 )
 
 func TestLoadCapabilityOverridesFromFile(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.5"
+	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.6-sol"
 
 [model_capabilities]
 supports_reasoning_effort = true
@@ -97,9 +97,9 @@ func TestLoadCapabilityOverridesFromEnv(t *testing.T) {
 }
 
 func TestLoadReviewerCapabilityOverridesFromFileAndEnv(t *testing.T) {
-	_, workspace, cfg := loadConfigTestFileApp(t, `model = "gpt-5.5"
+	_, workspace, cfg := loadConfigTestFileApp(t, `model = "gpt-5.6-sol"
 model_verbosity = "high"
-model_context_window = 272000
+model_context_window = 372000
 
 [reviewer]
 model = "local-reviewer"
@@ -174,7 +174,7 @@ supports_provider_verbosity = false
 }
 
 func TestLoadReviewerCapabilitiesInheritMainWhenUnset(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.5"
+	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.6-sol"
 model_verbosity = "high"
 model_context_window = 128000
 context_compaction_threshold_tokens = 121600
@@ -205,7 +205,7 @@ supports_provider_verbosity = true
 }
 
 func TestEffectiveReviewerSettingsPreservesLoadedExplicitFalseCapabilities(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.5"
+	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.6-sol"
 
 [model_capabilities]
 supports_reasoning_effort = true
@@ -275,7 +275,7 @@ model_context_window = 0
 }
 
 func TestLoadReviewerModelCapabilityFalseOverrideDoesNotInheritMainTrue(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.5"
+	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.6-sol"
 
 [model_capabilities]
 supports_reasoning_effort = true
@@ -422,7 +422,7 @@ func TestValidateSettingsWithSourcesAllowsSubagentReviewerAnthropicOverride(t *t
 }
 
 func TestLoadReviewerProviderCapabilitiesDoNotInheritMainForSeparateEndpoint(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.5"
+	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.6-sol"
 
 [provider_capabilities]
 provider_id = "main-provider"
@@ -439,7 +439,7 @@ openai_base_url = "http://127.0.0.1:11434/v1"
 }
 
 func TestLoadReviewerProviderCapabilitiesInheritMainForNoOpOpenAIProviderOverride(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.5"
+	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.6-sol"
 openai_base_url = "http://127.0.0.1:8080/v1"
 
 [provider_capabilities]
@@ -470,7 +470,7 @@ provider_override = "anthropic"
 }
 
 func TestLoadReviewerProviderAllowsExplicitAnthropicProvider(t *testing.T) {
-	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.5"
+	_, _, cfg := loadConfigTestFileApp(t, `model = "gpt-5.6-sol"
 
 [reviewer]
 model = "claude-test"

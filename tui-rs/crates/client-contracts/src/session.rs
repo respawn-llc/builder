@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::project::ProjectBinding;
 
-use crate::clientui::{CommittedTranscriptSuffix, RuntimeMainView, TranscriptPage};
+use crate::clientui::{RuntimeMainView, TranscriptPage};
 use crate::config::{Settings, SourceReport, null_to_default};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -221,26 +221,19 @@ pub struct SessionActivitySubscribeRequest {
 pub struct SessionTranscriptPageRequest {
     #[serde(rename = "session_id", default)]
     pub session_id: String,
-    #[serde(rename = "cursor", default, skip_serializing_if = "is_zero_i64")]
-    pub cursor: i64,
-    #[serde(rename = "newer_cursor", default, skip_serializing_if = "is_zero_i64")]
-    pub newer_cursor: i64,
+    #[serde(rename = "cursor", default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<i64>,
+    #[serde(
+        rename = "newer_cursor",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub newer_cursor: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SessionTranscriptPageResponse {
     pub transcript: TranscriptPage,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
-pub struct SessionCommittedTranscriptSuffixRequest {
-    #[serde(rename = "session_id", default)]
-    pub session_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct SessionCommittedTranscriptSuffixResponse {
-    pub suffix: CommittedTranscriptSuffix,
 }
 
 impl Serialize for SessionLaunchMode {
@@ -333,8 +326,4 @@ impl Default for SessionLaunchMode {
 
 fn is_false(value: &bool) -> bool {
     !*value
-}
-
-fn is_zero_i64(value: &i64) -> bool {
-    *value == 0
 }

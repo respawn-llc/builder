@@ -90,7 +90,7 @@ func (r uiNoticeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case clearTransientStatusMsg:
 		if msg.token == m.transientStatusToken {
-			return handledUIFeatureUpdate(m, m.advanceTransientStatusQueue())
+			return handledUIFeatureUpdate(m, m.batchWithNativeOngoingRepaint(m.advanceTransientStatusQueue()))
 		}
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, nil)
@@ -99,7 +99,8 @@ func (r uiNoticeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 			m.layout().syncViewport()
 			return handledUIFeatureUpdate(m, nil)
 		}
-		cmd := m.sendTransientStatusWithNoticeID("update available: "+strings.TrimSpace(msg.version), uiStatusNoticeUpdateAvailable, updateNoticeDuration, uiStatusNoticeQueue, "")
+		m.startupUpdateShown = true
+		cmd := m.sendTransientStatusWithNoticeID("update available: "+strings.TrimSpace(msg.version), uiStatusNoticeSuccess, updateNoticeDuration, uiStatusNoticeQueue, "")
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, cmd)
 	}
@@ -128,6 +129,12 @@ func (r uiInputAsyncFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		}
 		m.logf("prompt_history.persist_error err=%q stack=%s", msg.err.Error(), debug.Stack())
 		return handledUIFeatureUpdate(m, m.sendTransientStatusWithNoticeID("prompt history persistence failed: "+msg.err.Error(), uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
+	case terminalSequenceWriteErrMsg:
+		if msg.err == nil {
+			return handledUIFeatureUpdate(m, nil)
+		}
+		m.logf("terminal.sequence_write_error err=%q stack=%s", msg.err.Error(), debug.Stack())
+		return handledUIFeatureUpdate(m, m.handleOngoingSurfaceError(msg.err))
 	case committedEntryPersistDoneMsg:
 		m.observeRuntimeRequestResult(msg.err)
 		if msg.err == nil {
@@ -172,7 +179,7 @@ func (r uiInputAsyncFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		next, cmd := m.inputController().handleSpinnerTick(msg)
 		nextModel := next.(*uiModel)
 		nextModel.layout().syncViewport()
-		return handledUIFeatureUpdate(nextModel, cmd)
+		return handledUIFeatureUpdate(nextModel, tea.Batch(cmd, nextModel.renderNativeOngoingSurface()))
 	}
 	return uiFeatureUpdateResult{}
 }
@@ -243,11 +250,11 @@ func (r uiClipboardFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	case clipboardImagePasteDoneMsg:
 		cmd := m.handleClipboardImagePasteDone(msg)
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, cmd)
+		return handledUIFeatureUpdate(m, m.batchWithNativeOngoingRepaint(cmd))
 	case clipboardTextCopyDoneMsg:
 		cmd := m.handleClipboardTextCopyDone(msg)
 		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, cmd)
+		return handledUIFeatureUpdate(m, m.batchWithNativeOngoingRepaint(cmd))
 	}
 	return uiFeatureUpdateResult{}
 }

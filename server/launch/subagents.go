@@ -80,7 +80,8 @@ func applyBuiltInRoleHeuristics(settings *config.Settings, roleName string, prov
 	if !allowModelOverride {
 		return true
 	}
-	settings.Model = "gpt-5.4-mini"
+	settings.Model = "gpt-5.6-terra"
+	settings.ThinkingLevel = "low"
 	llm.ApplyDerivedModelContextBudget(settings, settings.Model, settings.ModelContextWindow, settings.ContextCompactionThresholdTokens)
 	settings.PreSubmitCompactionLeadTokens = config.DefaultPreSubmitRunwayTokens
 	return true

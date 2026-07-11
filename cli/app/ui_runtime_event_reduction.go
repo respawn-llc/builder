@@ -126,6 +126,7 @@ func (m *uiModel) acknowledgePendingInterrupt() tea.Cmd {
 	m.setPendingInterrupt(false)
 	m.activity = uiActivityInterrupted
 	m.clearReviewerState()
+	cmd = tea.Batch(cmd, m.interruptedStatusNoticeCmd())
 	if ambiguous {
 		cmd = tea.Batch(cmd, m.sendTransientStatusWithNoticeID("runtime input state is unknown; restored local text for review", uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, ""))
 	}
