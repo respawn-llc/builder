@@ -156,6 +156,9 @@ func (m *uiModel) Init() tea.Cmd {
 		tea.SetWindowTitle(sessionTitle(m.sessionName)),
 		tea.WindowSize(),
 	}
+	if !m.windowSizeKnown && m.nativeOngoingSurfaceActive() {
+		cmds = append(cmds, m.setOngoingNormalBufferOwned(false))
+	}
 	if m.runtimeConnectionEvents != nil {
 		cmds = append(cmds, waitRuntimeConnectionStateChange(m.runtimeConnectionEvents))
 	}

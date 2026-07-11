@@ -74,6 +74,31 @@ func TestNativeOngoingInitDefersRenderUntilWindowSizeKnown(t *testing.T) {
 	}
 }
 
+func TestNativeOngoingHydrationWaitsForWindowSize(t *testing.T) {
+	var out bytes.Buffer
+	nativeSurface := ongoing.NewSurface(&out)
+	spySurface := &ongoingSurfaceSpy{}
+	m := newProjectedStaticUIModel(WithUIOngoingSurface(nativeSurface))
+	m.ongoingTranscript = newOngoingTranscriptController(spySurface, m.ongoingFrameInput)
+
+	_ = m.Init()
+	_, _ = m.Update(ongoingTranscriptEvent{
+		Kind:    ongoingTranscriptEventMessage,
+		Message: ongoingHydrationMessage(1),
+	})
+	if len(spySurface.calls) != 0 {
+		t.Fatalf("surface calls before window size = %v, want none", spySurface.callKinds())
+	}
+
+	_, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if got, want := spySurface.callKinds(), []string{"resize", "apply"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls after window size = %v, want %v", got, want)
+	}
+	if got := spySurface.calls[1].frame.Size.Width; got != 80 {
+		t.Fatalf("hydration frame width = %d, want 80", got)
+	}
+}
+
 func TestOngoingTranscriptEventReachesNativeSurface(t *testing.T) {
 	var out bytes.Buffer
 	surface := ongoing.NewSurface(&out)
@@ -194,6 +219,38 @@ func TestNativeOngoingClipboardImagePasteErrorRepaintsStatus(t *testing.T) {
 	}
 	if got, want := spySurface.lastFrameSectionLines(ongoing.FrameSectionStatus), section.Lines; !reflect.DeepEqual(got, want) {
 		t.Fatalf("rendered status section lines = %v, want %v", got, want)
+	}
+}
+
+func TestNativeOngoingReconnectWarningRepaintsAndClearsStatus(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	var out bytes.Buffer
+	nativeSurface := ongoing.NewSurface(&out)
+	spySurface := &ongoingSurfaceSpy{}
+	m := sizedTestUIModel(newProjectedStaticUIModel(
+		WithUIOngoingSurface(nativeSurface),
+	), 40, 8)
+	m.ongoingTranscript = newOngoingTranscriptController(spySurface, m.ongoingFrameInput)
+
+	next, _ := m.Update(runtimeReconnectWarningMsg{text: "connection interrupted"})
+	updated := next.(*uiModel)
+	if got, want := spySurface.callKinds(), []string{"render"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls after reconnect warning = %v, want %v", got, want)
+	}
+	statusSection, ok := frameSection(updated.ongoingFrameInput(), ongoing.FrameSectionStatus)
+	if !ok {
+		t.Fatal("warning status section missing")
+	}
+	if got, want := spySurface.lastFrameSectionLines(ongoing.FrameSectionStatus), statusSection.Lines; !reflect.DeepEqual(got, want) {
+		t.Fatalf("rendered warning status = %v, want %v", got, want)
+	}
+
+	_, _ = updated.Update(clearTransientStatusMsg{token: updated.transientStatusToken})
+	if got, want := spySurface.callKinds(), []string{"render", "render"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("surface calls after warning clear = %v, want %v", got, want)
+	}
+	if updated.transientStatus != "" {
+		t.Fatalf("transient status after clear = %q, want empty", updated.transientStatus)
 	}
 }
 

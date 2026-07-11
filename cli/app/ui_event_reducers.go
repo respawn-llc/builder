@@ -90,7 +90,7 @@ func (r uiNoticeFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 	switch msg := msg.(type) {
 	case clearTransientStatusMsg:
 		if msg.token == m.transientStatusToken {
-			return handledUIFeatureUpdate(m, m.advanceTransientStatusQueue())
+			return handledUIFeatureUpdate(m, m.batchWithNativeOngoingRepaint(m.advanceTransientStatusQueue()))
 		}
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, nil)

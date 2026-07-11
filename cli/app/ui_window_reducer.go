@@ -48,7 +48,11 @@ func (r uiWindowFeatureReducer) Update(msg tea.Msg) uiFeatureUpdateResult {
 		if err != nil {
 			return handledUIFeatureUpdate(m, m.handleOngoingSurfaceError(err))
 		}
-		return handledUIFeatureUpdate(m, m.handleOngoingResult(result))
+		cmd := m.handleOngoingResult(result)
+		if !previousKnown {
+			cmd = tea.Batch(cmd, m.setOngoingNormalBufferOwned(true))
+		}
+		return handledUIFeatureUpdate(m, cmd)
 	}
 	return uiFeatureUpdateResult{}
 }
