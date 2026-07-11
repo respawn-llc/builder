@@ -318,6 +318,16 @@ func TestClipboardPasteDoneRejectsEmptyAndUnknownContent(t *testing.T) {
 	}
 }
 
+func TestClipboardPasteNoContentUsesErrorStatus(t *testing.T) {
+	_, kind := clipboardPasteStatus(&uiClipboardPasteError{
+		Kind:    uiClipboardPasteErrorNoContent,
+		Message: "Clipboard does not contain supported content",
+	})
+	if kind != uiStatusNoticeError {
+		t.Fatalf("status kind = %d, want error", kind)
+	}
+}
+
 func TestClipboardPasteBindingsDispatchForMainAndFreeformAskInput(t *testing.T) {
 	tests := []struct {
 		name   string

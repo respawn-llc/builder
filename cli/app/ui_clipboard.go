@@ -772,9 +772,6 @@ func (m *uiModel) handleClipboardTextCopyDone(msg clipboardTextCopyDoneMsg) tea.
 func clipboardPasteStatus(err error) (string, uiStatusNoticeKind) {
 	var pasteErr *uiClipboardPasteError
 	if errors.As(err, &pasteErr) {
-		if pasteErr.Kind == uiClipboardPasteErrorNoContent {
-			return pasteErr.Message, uiStatusNoticeInfo
-		}
 		return pasteErr.Message, uiStatusNoticeError
 	}
 	if err == nil {
