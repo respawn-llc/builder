@@ -214,7 +214,7 @@ func (s *Service) listWorkflowTaskListRows(ctx context.Context, req workflowTask
 	}
 	out := make([]workflowTaskListRow, 0, len(rows))
 	for _, row := range rows {
-		status, err := workflowTaskStatusFromFields(row.ID, row.Kind, row.NativeState, row.NodeIdsJson, row.RunIdsJson, row.AttentionTypesJson)
+		status, err := workflowTaskStatusFromFields(row.ID, row.Kind, row.NodeIdsJson, row.RunIdsJson, row.AttentionTypesJson)
 		if err != nil {
 			return nil, err
 		}

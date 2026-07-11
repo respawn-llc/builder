@@ -323,7 +323,6 @@ type WorkflowTaskStatusRecord struct {
 	TaskID             string
 	IsDone             int64
 	Kind               string
-	NativeState        string
 	PrimaryStatusRank  int64
 	NodeIdsJson        interface{}
 	RunIdsJson         interface{}

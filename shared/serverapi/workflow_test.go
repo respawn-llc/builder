@@ -883,6 +883,33 @@ func TestWorkflowProjectLinkRequestValidation(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskStatusKindNativeState(t *testing.T) {
+	cases := []struct {
+		kind WorkflowTaskStatusKind
+		want WorkflowTaskNativeState
+	}{
+		{WorkflowTaskStatusKindCanceled, WorkflowTaskNativeStateCanceled},
+		{WorkflowTaskStatusKindDone, WorkflowTaskNativeStateTerminal},
+		{WorkflowTaskStatusKindWaitingQuestion, WorkflowTaskNativeStateWaitingAsk},
+		{WorkflowTaskStatusKindWaitingApproval, WorkflowTaskNativeStateWaitingApproval},
+		{WorkflowTaskStatusKindInterrupted, WorkflowTaskNativeStateInterrupted},
+		{WorkflowTaskStatusKindRunning, WorkflowTaskNativeStateRunning},
+		{WorkflowTaskStatusKindQueued, WorkflowTaskNativeStateQueued},
+		{WorkflowTaskStatusKindBacklog, WorkflowTaskNativeStateActive},
+		{WorkflowTaskStatusKindActive, WorkflowTaskNativeStateActive},
+	}
+	for _, tt := range cases {
+		t.Run(string(tt.kind), func(t *testing.T) {
+			if got, valid := tt.kind.NativeState(); !valid || got != tt.want {
+				t.Fatalf("%q NativeState() = (%q, %t), want (%q, true)", tt.kind, got, valid, tt.want)
+			}
+		})
+	}
+	if nativeState, valid := WorkflowTaskStatusKind("invalid").NativeState(); valid || nativeState != "" {
+		t.Fatalf("invalid NativeState() = (%q, %t), want (empty, false)", nativeState, valid)
+	}
+}
+
 func TestWorkflowDeleteRequestValidation(t *testing.T) {
 	if err := (WorkflowDeletePreviewRequest{WorkflowID: "workflow-1"}).Validate(); err != nil {
 		t.Fatalf("valid delete preview rejected: %v", err)

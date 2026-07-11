@@ -59,17 +59,18 @@ func (s *Service) taskStatusFacts(ctx context.Context, taskIDs []string) (map[st
 }
 
 func workflowTaskStatusFactFromRecord(row sqlitegen.WorkflowTaskStatusRecord) (workflowTaskStatusFact, error) {
-	status, err := workflowTaskStatusFromFields(row.TaskID, row.Kind, row.NativeState, row.NodeIdsJson, row.RunIdsJson, row.AttentionTypesJson)
+	status, err := workflowTaskStatusFromFields(row.TaskID, row.Kind, row.NodeIdsJson, row.RunIdsJson, row.AttentionTypesJson)
 	if err != nil {
 		return workflowTaskStatusFact{}, err
 	}
 	return workflowTaskStatusFact{Status: status, Done: row.IsDone != 0}, nil
 }
 
-func workflowTaskStatusFromFields(taskID string, kindValue string, nativeState string, nodeIDsValue any, runIDsValue any, attentionTypesValue any) (serverapi.WorkflowTaskStatus, error) {
+func workflowTaskStatusFromFields(taskID string, kindValue string, nodeIDsValue any, runIDsValue any, attentionTypesValue any) (serverapi.WorkflowTaskStatus, error) {
 	kind := serverapi.WorkflowTaskStatusKind(kindValue)
-	if !validWorkflowTaskStatusNativeState(kind, nativeState) {
-		return serverapi.WorkflowTaskStatus{}, fmt.Errorf("workflow task status record for task %q has invalid kind/native state %q/%q", taskID, kindValue, nativeState)
+	nativeState, valid := kind.NativeState()
+	if !valid {
+		return serverapi.WorkflowTaskStatus{}, fmt.Errorf("workflow task status record for task %q has invalid kind %q", taskID, kindValue)
 	}
 	nodeIDsJSON, err := workflowTaskStatusProjectionJSON(taskID, "node_ids_json", nodeIDsValue)
 	if err != nil {
@@ -110,29 +111,6 @@ func workflowTaskStatusProjectionJSON(taskID string, field string, value any) (s
 		return "", fmt.Errorf("workflow task status record for task %q has non-text %s", taskID, field)
 	}
 	return encoded, nil
-}
-
-func validWorkflowTaskStatusNativeState(kind serverapi.WorkflowTaskStatusKind, nativeState string) bool {
-	switch kind {
-	case serverapi.WorkflowTaskStatusKindCanceled:
-		return nativeState == "canceled"
-	case serverapi.WorkflowTaskStatusKindDone:
-		return nativeState == "terminal"
-	case serverapi.WorkflowTaskStatusKindWaitingQuestion:
-		return nativeState == "waiting_ask"
-	case serverapi.WorkflowTaskStatusKindWaitingApproval:
-		return nativeState == "waiting_approval"
-	case serverapi.WorkflowTaskStatusKindInterrupted:
-		return nativeState == "interrupted"
-	case serverapi.WorkflowTaskStatusKindRunning:
-		return nativeState == "running"
-	case serverapi.WorkflowTaskStatusKindQueued:
-		return nativeState == "queued"
-	case serverapi.WorkflowTaskStatusKindBacklog, serverapi.WorkflowTaskStatusKindActive:
-		return nativeState == "active"
-	default:
-		return false
-	}
 }
 
 func workflowTaskStatusIDs(taskID string, field string, encoded string) ([]string, error) {

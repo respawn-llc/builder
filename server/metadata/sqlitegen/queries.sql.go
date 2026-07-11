@@ -2544,7 +2544,6 @@ SELECT
     task_id,
     is_done,
     kind,
-    native_state,
     primary_status_rank,
     node_ids_json,
     run_ids_json,
@@ -2561,7 +2560,6 @@ func (q *Queries) GetWorkflowTaskStatusRecord(ctx context.Context, taskID string
 		&i.TaskID,
 		&i.IsDone,
 		&i.Kind,
-		&i.NativeState,
 		&i.PrimaryStatusRank,
 		&i.NodeIdsJson,
 		&i.RunIdsJson,
@@ -7513,7 +7511,6 @@ selected_rows AS (
         CAST(column_facts.column_rank AS INTEGER) AS column_rank,
         column_facts.column_keys_json,
         status.kind,
-        status.native_state,
         CAST(status.primary_status_rank AS INTEGER) AS primary_status_rank,
         CAST(status.node_ids_json AS TEXT) AS node_ids_json,
         CAST(status.run_ids_json AS TEXT) AS run_ids_json,
@@ -7663,7 +7660,6 @@ SELECT
     rows.column_rank,
     rows.column_keys_json,
     rows.kind,
-    rows.native_state,
     rows.primary_status_rank,
     rows.node_ids_json,
     rows.run_ids_json,
@@ -7749,7 +7745,6 @@ type ListWorkflowTaskListRowsRow struct {
 	ColumnRank            int64
 	ColumnKeysJson        string
 	Kind                  string
-	NativeState           string
 	PrimaryStatusRank     int64
 	NodeIdsJson           string
 	RunIdsJson            string
@@ -7817,7 +7812,6 @@ func (q *Queries) ListWorkflowTaskListRows(ctx context.Context, arg ListWorkflow
 			&i.ColumnRank,
 			&i.ColumnKeysJson,
 			&i.Kind,
-			&i.NativeState,
 			&i.PrimaryStatusRank,
 			&i.NodeIdsJson,
 			&i.RunIdsJson,
@@ -7843,7 +7837,6 @@ SELECT
     task_id,
     is_done,
     kind,
-    native_state,
     primary_status_rank,
     node_ids_json,
     run_ids_json,
@@ -7876,7 +7869,6 @@ func (q *Queries) ListWorkflowTaskStatusRecordsByTasks(ctx context.Context, task
 			&i.TaskID,
 			&i.IsDone,
 			&i.Kind,
-			&i.NativeState,
 			&i.PrimaryStatusRank,
 			&i.NodeIdsJson,
 			&i.RunIdsJson,

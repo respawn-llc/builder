@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -55,10 +56,11 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		_ = ptmx.Close()
 	}()
 	waitDone := make(chan error, 1)
-	processDone := make(chan struct{})
+	var processExited atomic.Bool
 	go func() {
-		defer close(processDone)
-		waitDone <- cmd.Wait()
+		waitErr := cmd.Wait()
+		processExited.Store(true)
+		waitDone <- waitErr
 	}()
 
 	var mu sync.Mutex
@@ -70,7 +72,7 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 	frameInputDispatches := make([]analyzer.FrameInputDispatch, 0)
 	dispatchPhaseInputs := func(inputs []PhaseInputEvent) error {
 		for _, input := range inputs {
-			if commandExited(processDone) {
+			if processExited.Load() {
 				return nil
 			}
 			recordPhaseDispatch := func(startedAt time.Duration) {
@@ -85,7 +87,7 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			if input.After == 0 {
 				startedAt := time.Since(started)
 				if err := writeFull(ptmx, input.Bytes); err != nil {
-					if commandExited(processDone) {
+					if processExited.Load() {
 						return nil
 					}
 					return fmt.Errorf("write phase-relative PTY input for phase=%d: %w", input.Phase, err)
@@ -101,12 +103,12 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 				defer timer.Stop()
 				select {
 				case <-timer.C:
-					if commandExited(processDone) || ctx.Err() != nil {
+					if processExited.Load() || ctx.Err() != nil {
 						return
 					}
 					startedAt := time.Since(started)
 					if err := writeFull(ptmx, input.Bytes); err != nil {
-						if commandExited(processDone) {
+						if processExited.Load() {
 							return
 						}
 						eventErrors.Add(fmt.Errorf("write phase-relative PTY input for phase=%d: %w", input.Phase, err))
@@ -121,7 +123,7 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		return nil
 	}
 	dispatchPendingInputs := func() error {
-		if commandExited(processDone) {
+		if processExited.Load() {
 			return nil
 		}
 		if err := dispatchPhaseInputs(phaseInputs.pending(readiness.PhaseEvents())); err != nil {
@@ -129,12 +131,12 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		}
 		pendingFrameInputs := frameInputs.pending(readiness)
 		for _, input := range pendingFrameInputs {
-			if commandExited(processDone) {
+			if processExited.Load() {
 				return nil
 			}
 			startedAt := time.Since(started)
 			if err := writeFull(ptmx, input.Bytes); err != nil {
-				if commandExited(processDone) {
+				if processExited.Load() {
 					return nil
 				}
 				return fmt.Errorf(
@@ -157,7 +159,7 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 		if len(phaseInputs.events) == 0 || allDispatchesTriggered(phaseInputs.triggered) {
 			for _, payload := range parseableInputs.pending(analyzer.Analysis{}) {
 				if err := writeFull(ptmx, payload); err != nil {
-					if commandExited(processDone) {
+					if processExited.Load() {
 						return nil
 					}
 					return fmt.Errorf("write parseable PTY input: %w", err)
@@ -316,11 +318,11 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			defer timer.Stop()
 			select {
 			case <-timer.C:
-				if commandExited(processDone) || ctx.Err() != nil {
+				if processExited.Load() || ctx.Err() != nil {
 					return
 				}
 				if err := applyResize(resize); err != nil {
-					if commandExited(processDone) {
+					if processExited.Load() {
 						return
 					}
 					eventErrors.Add(err)
@@ -339,11 +341,11 @@ func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error)
 			defer timer.Stop()
 			select {
 			case <-timer.C:
-				if commandExited(processDone) || ctx.Err() != nil {
+				if processExited.Load() || ctx.Err() != nil {
 					return
 				}
 				if err := writeFull(ptmx, input.Bytes); err != nil {
-					if commandExited(processDone) {
+					if processExited.Load() {
 						return
 					}
 					eventErrors.Add(fmt.Errorf("write scheduled PTY input: %w", err))
@@ -702,15 +704,6 @@ func writeFull(writer io.Writer, payload []byte) error {
 		return fmt.Errorf("short PTY write: wrote=%d expected=%d: %w", written, len(payload), io.ErrShortWrite)
 	}
 	return nil
-}
-
-func commandExited(done <-chan struct{}) bool {
-	select {
-	case <-done:
-		return true
-	default:
-		return false
-	}
 }
 
 func processExit(state *os.ProcessState) *analyzer.ProcessExit {

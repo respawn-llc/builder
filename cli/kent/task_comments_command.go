@@ -12,6 +12,7 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
+	"core/shared/valuecopy"
 )
 
 const taskCommentListDefaultPageSize = 100
@@ -189,33 +190,16 @@ func (s workflowTaskAgentRunScore) betterThan(other workflowTaskAgentRunScore) b
 		return s.Current
 	case s.Unfinished != other.Unfinished:
 		return s.Unfinished
-	case compareOptionalUnixMillis(s.StartedAt, other.StartedAt) != 0:
-		return compareOptionalUnixMillis(s.StartedAt, other.StartedAt) > 0
-	case compareOptionalUnixMillis(s.CompletedAt, other.CompletedAt) != 0:
-		return compareOptionalUnixMillis(s.CompletedAt, other.CompletedAt) > 0
-	case compareOptionalUnixMillis(s.InterruptedAt, other.InterruptedAt) != 0:
-		return compareOptionalUnixMillis(s.InterruptedAt, other.InterruptedAt) > 0
+	case valuecopy.CompareOptional(s.StartedAt, other.StartedAt) != 0:
+		return valuecopy.CompareOptional(s.StartedAt, other.StartedAt) > 0
+	case valuecopy.CompareOptional(s.CompletedAt, other.CompletedAt) != 0:
+		return valuecopy.CompareOptional(s.CompletedAt, other.CompletedAt) > 0
+	case valuecopy.CompareOptional(s.InterruptedAt, other.InterruptedAt) != 0:
+		return valuecopy.CompareOptional(s.InterruptedAt, other.InterruptedAt) > 0
 	case s.Generation != other.Generation:
 		return s.Generation > other.Generation
 	default:
 		return s.ID > other.ID
-	}
-}
-
-func compareOptionalUnixMillis(left *int64, right *int64) int {
-	switch {
-	case left == nil && right == nil:
-		return 0
-	case left == nil:
-		return -1
-	case right == nil:
-		return 1
-	case *left < *right:
-		return -1
-	case *left > *right:
-		return 1
-	default:
-		return 0
 	}
 }
 

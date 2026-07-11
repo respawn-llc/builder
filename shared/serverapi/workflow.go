@@ -924,6 +924,43 @@ const (
 	WorkflowTaskStatusKindActive          WorkflowTaskStatusKind = "active"
 )
 
+type WorkflowTaskNativeState string
+
+const (
+	WorkflowTaskNativeStateCanceled        WorkflowTaskNativeState = "canceled"
+	WorkflowTaskNativeStateTerminal        WorkflowTaskNativeState = "terminal"
+	WorkflowTaskNativeStateWaitingAsk      WorkflowTaskNativeState = "waiting_ask"
+	WorkflowTaskNativeStateWaitingApproval WorkflowTaskNativeState = "waiting_approval"
+	WorkflowTaskNativeStateInterrupted     WorkflowTaskNativeState = "interrupted"
+	WorkflowTaskNativeStateRunning         WorkflowTaskNativeState = "running"
+	WorkflowTaskNativeStateQueued          WorkflowTaskNativeState = "queued"
+	WorkflowTaskNativeStateActive          WorkflowTaskNativeState = "active"
+)
+
+// NativeState returns the runtime-native state represented by a public task status.
+func (k WorkflowTaskStatusKind) NativeState() (WorkflowTaskNativeState, bool) {
+	switch k {
+	case WorkflowTaskStatusKindCanceled:
+		return WorkflowTaskNativeStateCanceled, true
+	case WorkflowTaskStatusKindDone:
+		return WorkflowTaskNativeStateTerminal, true
+	case WorkflowTaskStatusKindWaitingQuestion:
+		return WorkflowTaskNativeStateWaitingAsk, true
+	case WorkflowTaskStatusKindWaitingApproval:
+		return WorkflowTaskNativeStateWaitingApproval, true
+	case WorkflowTaskStatusKindInterrupted:
+		return WorkflowTaskNativeStateInterrupted, true
+	case WorkflowTaskStatusKindRunning:
+		return WorkflowTaskNativeStateRunning, true
+	case WorkflowTaskStatusKindQueued:
+		return WorkflowTaskNativeStateQueued, true
+	case WorkflowTaskStatusKindBacklog, WorkflowTaskStatusKindActive:
+		return WorkflowTaskNativeStateActive, true
+	default:
+		return "", false
+	}
+}
+
 type WorkflowTaskAttentionKind string
 
 const (
@@ -1155,7 +1192,7 @@ type WorkflowBoardTaskCard struct {
 
 type WorkflowTaskStatus struct {
 	Kind           WorkflowTaskStatusKind      `json:"kind"`
-	NativeState    string                      `json:"native_state"`
+	NativeState    WorkflowTaskNativeState     `json:"native_state"`
 	NodeIDs        []string                    `json:"node_ids,omitempty"`
 	RunIDs         []string                    `json:"run_ids,omitempty"`
 	AttentionTypes []WorkflowTaskAttentionKind `json:"attention_types,omitempty"`
@@ -2051,17 +2088,7 @@ func (r WorkflowTaskListRequest) Validate() error {
 		}
 	}
 	for index, status := range r.StatusKinds {
-		switch status {
-		case WorkflowTaskStatusKindCanceled,
-			WorkflowTaskStatusKindDone,
-			WorkflowTaskStatusKindWaitingQuestion,
-			WorkflowTaskStatusKindWaitingApproval,
-			WorkflowTaskStatusKindInterrupted,
-			WorkflowTaskStatusKindRunning,
-			WorkflowTaskStatusKindQueued,
-			WorkflowTaskStatusKindBacklog,
-			WorkflowTaskStatusKindActive:
-		default:
+		if _, valid := status.NativeState(); !valid {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("status_kinds[%d]", index), "status kind is invalid")
 		}
 	}
