@@ -370,6 +370,61 @@ func (s *Service) ProvisionExecutionTargetWorktree(ctx context.Context, req Prov
 	}, nil
 }
 
+// ReprovisionExecutionTargetWorktree recreates a missing managed root only
+// after its workflow owner has already proved exact durable ownership.
+func (s *Service) ReprovisionExecutionTargetWorktree(ctx context.Context, req ProvisionExecutionTargetWorktreeRequest) (ProvisionExecutionTargetWorktreeResponse, error) {
+	if s == nil || s.git == nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("worktree service dependencies are required")
+	}
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	workspaceRoot := strings.TrimSpace(req.SourceWorkspaceRoot)
+	taskShortID := strings.TrimSpace(req.TaskShortID)
+	resolvedCommit := strings.TrimSpace(req.ResolvedCommit)
+	worktreeRoot := strings.TrimSpace(req.WorktreeRoot)
+	if workspaceID == "" || workspaceRoot == "" || taskShortID == "" || resolvedCommit == "" || worktreeRoot == "" {
+		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("reprovision execution target requires workspace, task, commit, and root")
+	}
+	release, err := s.AcquireRepositoryMutationLock(ctx, workspaceRoot)
+	if err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	defer release()
+	branchCommit, err := s.git.resolveCommit(ctx, workspaceRoot, "refs/heads/"+taskShortID, workflow.ExecutionPolicyHead, ExecutionTargetResolutionFailureUnavailable, "")
+	if err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	if branchCommit != resolvedCommit {
+		return ProvisionExecutionTargetWorktreeResponse{}, fmt.Errorf("task branch %q no longer matches recorded commit", taskShortID)
+	}
+	if err := s.git.Prune(ctx, workspaceRoot); err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	worktreeRoot, err = config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	if _, err := os.Stat(worktreeRoot); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			return ProvisionExecutionTargetWorktreeResponse{}, fmt.Errorf("reprovision execution target root %q already exists", worktreeRoot)
+		}
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	if _, err := s.git.Add(ctx, workspaceRoot, worktreeRoot, CreateSpec{BaseRef: taskShortID}); err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	ownership, err := s.git.executionTargetLinkedWorktreeOwnership(ctx, workspaceRoot, worktreeRoot, taskShortID)
+	if err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	return ProvisionExecutionTargetWorktreeResponse{
+		WorktreeRoot:            worktreeRoot,
+		BranchName:              taskShortID,
+		CreatedBranch:           false,
+		ExactBranchObservation:  branchCommit,
+		LinkedWorktreeOwnership: ownership,
+	}, nil
+}
+
 // RunExecutionTargetSetup executes the configured setup script after the
 // workflow service has durably attached a provisioned managed root.
 func (s *Service) RunExecutionTargetSetup(ctx context.Context, req RunExecutionTargetSetupRequest) error {

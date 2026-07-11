@@ -79,6 +79,53 @@ func TestProvisionExecutionTargetWorktreeCreatesTaskBranchFromExactCommit(t *tes
 	}
 }
 
+func TestReprovisionExecutionTargetWorktreeRecreatesMissingRootFromExactTaskBranch(t *testing.T) {
+	env := newServiceTestEnv(t)
+	commit := runGit(t, env.workspaceRoot, "rev-parse", "HEAD")
+	worktreeRoot, err := env.service.PlanExecutionTargetWorktreeRoot(env.binding.WorkspaceID, "WOR-100")
+	if err != nil {
+		t.Fatalf("PlanExecutionTargetWorktreeRoot: %v", err)
+	}
+	if _, err := env.service.ProvisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{
+		WorkspaceID:         env.binding.WorkspaceID,
+		SourceWorkspaceRoot: env.workspaceRoot,
+		TaskShortID:         "WOR-100",
+		ResolvedCommit:      commit,
+		WorktreeRoot:        worktreeRoot,
+	}); err != nil {
+		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+	movedRoot := filepath.Join(t.TempDir(), "missing-root")
+	if err := os.Rename(canonicalWorktreeRoot, movedRoot); err != nil {
+		t.Fatalf("rename managed worktree root: %v", err)
+	}
+
+	reprovisioned, err := env.service.ReprovisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{
+		WorkspaceID:         env.binding.WorkspaceID,
+		SourceWorkspaceRoot: env.workspaceRoot,
+		TaskShortID:         "WOR-100",
+		ResolvedCommit:      commit,
+		WorktreeRoot:        canonicalWorktreeRoot,
+	})
+	if err != nil {
+		t.Fatalf("ReprovisionExecutionTargetWorktree: %v", err)
+	}
+	if reprovisioned.WorktreeRoot != canonicalWorktreeRoot ||
+		reprovisioned.BranchName != "WOR-100" ||
+		reprovisioned.CreatedBranch ||
+		reprovisioned.ExactBranchObservation != commit ||
+		reprovisioned.LinkedWorktreeOwnership == nil {
+		t.Fatalf("reprovisioned worktree = %+v, want exact existing branch at durable root", reprovisioned)
+	}
+	if got := runGit(t, canonicalWorktreeRoot, "rev-parse", "HEAD"); got != commit {
+		t.Fatalf("reprovisioned worktree commit = %q, want %q", got, commit)
+	}
+}
+
 func TestInspectExecutionTargetWorktreeClassifiesExactProvisioningEvidence(t *testing.T) {
 	env := newServiceTestEnv(t)
 	commit := runGit(t, env.workspaceRoot, "rev-parse", "HEAD")
