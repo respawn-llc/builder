@@ -120,13 +120,13 @@ func (Runner) Run(request RunRequest) (result RunResult) {
 	return result
 }
 
-func failureArtifactEvidence(capture analyzer.Capture, analysis *analyzer.Analysis, dimensions Dimensions, environment *IsolatedEnvironment) (artifactEvidence, error) {
+func failureArtifactEvidence(capture *analyzer.Capture, analysis *analyzer.Analysis, dimensions Dimensions, environment *IsolatedEnvironment) (artifactEvidence, error) {
 	attachments, err := artifactAttachments(environment)
 	if err != nil {
 		return artifactEvidence{}, err
 	}
-	if capture.Dimensions.Rows != 0 && capture.Dimensions.Cols != 0 {
-		return artifactEvidence{capture: capture, analysis: analysis, attachments: attachments}, nil
+	if capture != nil {
+		return artifactEvidence{capture: *capture, analysis: analysis, attachments: attachments}, nil
 	}
 	empty, err := analyzer.NewCapture(analyzer.MustDimensions(dimensions.Rows, dimensions.Cols), nil)
 	if err != nil {
@@ -332,19 +332,21 @@ func (s cleanupSupervisor) finishUntil(result *RunResult, dimensions Dimensions,
 	session := *s.session
 	environment := *s.environment
 	incomplete := s.stopOwners(session, environment, deadline)
+	var capture *analyzer.Capture
 	if session != nil {
-		capture, err := session.Capture()
+		collected, err := session.Capture()
 		if err != nil {
 			incomplete = appendCleanupFailure(incomplete, "client_capture", err)
 		} else {
-			result.Capture = capture
+			result.Capture = collected
+			capture = &result.Capture
 		}
 	}
 	if result.Err == nil && incomplete != nil {
 		result.Err = incomplete
 	}
 	if result.Err != nil && s.artifacts != nil {
-		evidence, evidenceErr := failureArtifactEvidence(result.Capture, result.Observation.Analysis, dimensions, environment)
+		evidence, evidenceErr := failureArtifactEvidence(capture, result.Observation.Analysis, dimensions, environment)
 		if evidenceErr != nil {
 			incomplete = appendCleanupFailure(incomplete, "artifact_evidence", evidenceErr)
 		} else {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"core/internal/testharness/pty"
+	"core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/driver"
 )
 
@@ -83,6 +84,31 @@ func TestCleanupForceKillsTERMAndHUPIgnoringClientAtGraceDeadline(t *testing.T) 
 	case <-session.Done():
 	default:
 		t.Fatal("TERM-ignoring client remains live after cleanup")
+	}
+}
+
+func TestFailureArtifactEvidenceTracksCaptureAvailabilityExplicitly(t *testing.T) {
+	dimensions := Dimensions{Rows: 2, Cols: 8}
+	empty, err := failureArtifactEvidence(nil, nil, dimensions, nil)
+	if err != nil {
+		t.Fatalf("failureArtifactEvidence without capture: %v", err)
+	}
+	if empty.capture.Dimensions.Rows != dimensions.Rows || empty.capture.Dimensions.Cols != dimensions.Cols {
+		t.Fatalf("synthetic capture dimensions = %+v, want %+v", empty.capture.Dimensions, dimensions)
+	}
+
+	capture, err := analyzer.NewCapture(analyzer.MustDimensions(3, 9), []analyzer.Chunk{
+		analyzer.NewChunk(0, 0, []byte("captured")),
+	})
+	if err != nil {
+		t.Fatalf("NewCapture: %v", err)
+	}
+	evidence, err := failureArtifactEvidence(&capture, nil, dimensions, nil)
+	if err != nil {
+		t.Fatalf("failureArtifactEvidence with capture: %v", err)
+	}
+	if string(evidence.capture.Raw) != "captured" {
+		t.Fatalf("failure evidence lost collected capture: %#v", evidence.capture)
 	}
 }
 
