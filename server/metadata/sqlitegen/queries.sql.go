@@ -218,13 +218,11 @@ WHERE task_runs.id = ?3
   AND waiting_ask_id = ''
   AND EXISTS (
       SELECT 1
-      FROM task_records t
-      JOIN projects project ON project.id = t.project_id
+      FROM tasks t
       JOIN task_node_placements p ON p.id = task_runs.placement_id
       JOIN workflow_nodes n ON n.id = p.node_id
       WHERE t.id = p.task_id
         AND t.canceled_at_unix_ms = 0
-        AND project.lifecycle_state = 'active'
         AND p.state = 'active'
         AND n.kind IN ('agent', 'script')
   )
@@ -235,12 +233,6 @@ RETURNING
         FROM task_node_placements p
         WHERE p.id = task_runs.placement_id
     ) AS task_id,
-    (
-        SELECT t.project_id
-        FROM task_records t
-        JOIN task_node_placements p ON p.task_id = t.id
-        WHERE p.id = task_runs.placement_id
-    ) AS project_id,
     placement_id,
     (
         SELECT p.node_id
@@ -275,7 +267,6 @@ type ClaimWorkflowRunParams struct {
 type ClaimWorkflowRunRow struct {
 	ID                          string
 	TaskID                      string
-	ProjectID                   string
 	PlacementID                 string
 	NodeID                      sql.NullString
 	SessionID                   sql.NullString
@@ -307,7 +298,6 @@ func (q *Queries) ClaimWorkflowRun(ctx context.Context, arg ClaimWorkflowRunPara
 	err := row.Scan(
 		&i.ID,
 		&i.TaskID,
-		&i.ProjectID,
 		&i.PlacementID,
 		&i.NodeID,
 		&i.SessionID,
@@ -1156,34 +1146,6 @@ func (q *Queries) DeleteWorktreeByID(ctx context.Context, id string) (int64, err
 	return result.RowsAffected()
 }
 
-const getActiveProjectLifecycle = `-- name: GetActiveProjectLifecycle :one
-SELECT
-    lifecycle_state,
-    lifecycle_generation
-FROM projects
-WHERE id = ?1
-  AND lifecycle_state = 'active'
-  AND lifecycle_generation = ?2
-LIMIT 1
-`
-
-type GetActiveProjectLifecycleParams struct {
-	ProjectID          string
-	ExpectedGeneration int64
-}
-
-type GetActiveProjectLifecycleRow struct {
-	LifecycleState      string
-	LifecycleGeneration int64
-}
-
-func (q *Queries) GetActiveProjectLifecycle(ctx context.Context, arg GetActiveProjectLifecycleParams) (GetActiveProjectLifecycleRow, error) {
-	row := q.db.QueryRowContext(ctx, getActiveProjectLifecycle, arg.ProjectID, arg.ExpectedGeneration)
-	var i GetActiveProjectLifecycleRow
-	err := row.Scan(&i.LifecycleState, &i.LifecycleGeneration)
-	return i, err
-}
-
 const getActiveProjectWorkflowLinkByWorkflow = `-- name: GetActiveProjectWorkflowLinkByWorkflow :one
 SELECT
     id,
@@ -1628,27 +1590,6 @@ func (q *Queries) GetProjectKeyState(ctx context.Context, projectID string) (Get
 		&i.NextTaskSeq,
 		&i.TaskCount,
 	)
-	return i, err
-}
-
-const getProjectLifecycle = `-- name: GetProjectLifecycle :one
-SELECT
-    lifecycle_state,
-    lifecycle_generation
-FROM projects
-WHERE id = ?1
-LIMIT 1
-`
-
-type GetProjectLifecycleRow struct {
-	LifecycleState      string
-	LifecycleGeneration int64
-}
-
-func (q *Queries) GetProjectLifecycle(ctx context.Context, projectID string) (GetProjectLifecycleRow, error) {
-	row := q.db.QueryRowContext(ctx, getProjectLifecycle, projectID)
-	var i GetProjectLifecycleRow
-	err := row.Scan(&i.LifecycleState, &i.LifecycleGeneration)
 	return i, err
 }
 
@@ -5416,7 +5357,6 @@ const listRunnableWorkflowRuns = `-- name: ListRunnableWorkflowRuns :many
 SELECT
     r.id,
     r.task_id,
-    t.project_id,
     r.placement_id,
     r.node_id,
     r.session_id,
@@ -5451,43 +5391,18 @@ ORDER BY r.automation_requested_at_unix_ms ASC, r.id ASC
 LIMIT ?1
 `
 
-type ListRunnableWorkflowRunsRow struct {
-	ID                          string
-	TaskID                      string
-	ProjectID                   string
-	PlacementID                 string
-	NodeID                      sql.NullString
-	SessionID                   sql.NullString
-	RunGeneration               int64
-	WorkflowRevisionSeen        int64
-	AutomationRequestedAtUnixMs int64
-	CreatedAtUnixMs             int64
-	UpdatedAtUnixMs             int64
-	StartedAtUnixMs             int64
-	CompletedAtUnixMs           int64
-	InterruptedAtUnixMs         int64
-	InterruptionReason          string
-	InterruptionDetailJson      string
-	WaitingAskID                string
-	EffectiveCompletionMode     string
-	InvalidCompletionCount      int64
-	RunStartSnapshotJson        string
-	MetadataJson                string
-}
-
-func (q *Queries) ListRunnableWorkflowRuns(ctx context.Context, limit int64) ([]ListRunnableWorkflowRunsRow, error) {
+func (q *Queries) ListRunnableWorkflowRuns(ctx context.Context, limit int64) ([]TaskRunRecord, error) {
 	rows, err := q.db.QueryContext(ctx, listRunnableWorkflowRuns, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListRunnableWorkflowRunsRow
+	var items []TaskRunRecord
 	for rows.Next() {
-		var i ListRunnableWorkflowRunsRow
+		var i TaskRunRecord
 		if err := rows.Scan(
 			&i.ID,
 			&i.TaskID,
-			&i.ProjectID,
 			&i.PlacementID,
 			&i.NodeID,
 			&i.SessionID,
@@ -9400,36 +9315,6 @@ func (q *Queries) TouchTaskUpdatedAt(ctx context.Context, arg TouchTaskUpdatedAt
 		return 0, err
 	}
 	return result.RowsAffected()
-}
-
-const transitionProjectLifecycleToDeleting = `-- name: TransitionProjectLifecycleToDeleting :one
-UPDATE projects
-SET
-    lifecycle_state = 'deleting',
-    lifecycle_generation = lifecycle_generation + 1,
-    updated_at_unix_ms = ?1
-WHERE id = ?2
-  AND lifecycle_state = 'active'
-  AND lifecycle_generation = ?3
-RETURNING lifecycle_state, lifecycle_generation
-`
-
-type TransitionProjectLifecycleToDeletingParams struct {
-	UpdatedAtUnixMs    int64
-	ProjectID          string
-	ExpectedGeneration int64
-}
-
-type TransitionProjectLifecycleToDeletingRow struct {
-	LifecycleState      string
-	LifecycleGeneration int64
-}
-
-func (q *Queries) TransitionProjectLifecycleToDeleting(ctx context.Context, arg TransitionProjectLifecycleToDeletingParams) (TransitionProjectLifecycleToDeletingRow, error) {
-	row := q.db.QueryRowContext(ctx, transitionProjectLifecycleToDeleting, arg.UpdatedAtUnixMs, arg.ProjectID, arg.ExpectedGeneration)
-	var i TransitionProjectLifecycleToDeletingRow
-	err := row.Scan(&i.LifecycleState, &i.LifecycleGeneration)
-	return i, err
 }
 
 const updateSessionExecutionTargetByID = `-- name: UpdateSessionExecutionTargetByID :execrows

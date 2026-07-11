@@ -25,7 +25,6 @@ import (
 
 type Core struct {
 	bundles   *Bundles
-	activity  *projectActivityCoordinator
 	lifecycle lifecycleController
 }
 
@@ -315,13 +314,6 @@ func (s *Core) Close() error {
 		return nil
 	}
 	return s.lifecycle.Close(s.safeBundles().cleanup)
-}
-
-func (s *Core) AcquireProjectActivity(projectID string) (func(), error) {
-	if s == nil || s.activity == nil {
-		return nil, ErrProjectActivityAdmissionClosed
-	}
-	return s.activity.AcquireProjectActivity(projectID)
 }
 
 func (s *Core) Config() config.App {

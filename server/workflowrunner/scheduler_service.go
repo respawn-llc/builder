@@ -48,10 +48,6 @@ type SchedulerInterruptedRunFinalizer interface {
 	FinalizeInterruptedRun(context.Context, workflow.RunID)
 }
 
-type SchedulerProjectActivityAdmitter interface {
-	AcquireProjectActivity(projectID string) (func(), error)
-}
-
 type SchedulerStartRunRequest struct {
 	RunID       workflow.RunID
 	TaskID      workflow.TaskID
@@ -74,11 +70,9 @@ type SchedulerService struct {
 	processInterval    time.Duration
 	logger             SchedulerLogger
 	attentionFinalizer SchedulerInterruptedRunFinalizer
-	projectActivity    SchedulerProjectActivityAdmitter
 
 	mu         sync.Mutex
 	active     map[workflow.RunID]SchedulerStartRunRequest
-	permits    map[workflow.RunID]func()
 	stopped    bool
 	started    bool
 	loopCancel context.CancelFunc
@@ -101,7 +95,7 @@ func NewSchedulerService(store SchedulerStore, starter SchedulerRuntimeStarter, 
 	if concurrency <= 0 {
 		concurrency = 1
 	}
-	service := &SchedulerService{store: store, starter: starter, concurrency: concurrency, claimRetries: defaultClaimRetries, claimBackoff: defaultClaimBackoff, processInterval: defaultProcessInterval, active: map[workflow.RunID]SchedulerStartRunRequest{}, permits: map[workflow.RunID]func(){}, wake: make(chan struct{}, defaultWakeBuffer)}
+	service := &SchedulerService{store: store, starter: starter, concurrency: concurrency, claimRetries: defaultClaimRetries, claimBackoff: defaultClaimBackoff, processInterval: defaultProcessInterval, active: map[workflow.RunID]SchedulerStartRunRequest{}, wake: make(chan struct{}, defaultWakeBuffer)}
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -119,12 +113,6 @@ func WithSchedulerPendingAskResolver(resolver SchedulerPendingAskResolver) Sched
 func WithSchedulerAttentionFinalizer(finalizer SchedulerInterruptedRunFinalizer) SchedulerOption {
 	return func(s *SchedulerService) {
 		s.attentionFinalizer = finalizer
-	}
-}
-
-func WithSchedulerProjectActivity(admitter SchedulerProjectActivityAdmitter) SchedulerOption {
-	return func(s *SchedulerService) {
-		s.projectActivity = admitter
 	}
 }
 
@@ -214,17 +202,10 @@ func (s *SchedulerService) ActiveCount() int {
 func (s *SchedulerService) RuntimeFinished(runID workflow.RunID, generation int64) {
 	s.mu.Lock()
 	current, ok := s.active[runID]
-	release := s.permits[runID]
 	if ok && current.Generation == generation {
 		delete(s.active, runID)
-		delete(s.permits, runID)
-	} else {
-		release = nil
 	}
 	s.mu.Unlock()
-	if release != nil {
-		release()
-	}
 	s.Notify()
 }
 
@@ -321,40 +302,21 @@ func (s *SchedulerService) Process(ctx context.Context) error {
 		return err
 	}
 	for _, candidate := range candidates {
-		var release func()
-		if s.projectActivity != nil {
-			release, err = s.projectActivity.AcquireProjectActivity(candidate.ProjectID)
-			if err != nil {
-				return err
-			}
-		}
 		s.mu.Lock()
 		if s.stopped {
 			s.mu.Unlock()
-			if release != nil {
-				release()
-			}
 			return ErrSchedulerStopped
 		}
 		if len(s.active) >= s.concurrency {
 			s.mu.Unlock()
-			if release != nil {
-				release()
-			}
 			return nil
 		}
 		if _, ok := s.active[candidate.ID]; ok {
 			s.mu.Unlock()
-			if release != nil {
-				release()
-			}
 			continue
 		}
 		reserved := SchedulerStartRunRequest{RunID: candidate.ID, TaskID: candidate.TaskID, PlacementID: candidate.PlacementID, NodeID: candidate.NodeID, Generation: candidate.Generation}
 		s.active[candidate.ID] = reserved
-		if release != nil {
-			s.permits[candidate.ID] = release
-		}
 		s.mu.Unlock()
 
 		claimed, err := s.claimRunWithRetry(ctx, candidate)

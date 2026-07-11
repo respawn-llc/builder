@@ -2260,7 +2260,6 @@ LIMIT 1;
 SELECT
     r.id,
     r.task_id,
-    t.project_id,
     r.placement_id,
     r.node_id,
     r.session_id,
@@ -2309,13 +2308,11 @@ WHERE task_runs.id = sqlc.arg(id)
   AND waiting_ask_id = ''
   AND EXISTS (
       SELECT 1
-      FROM task_records t
-      JOIN projects project ON project.id = t.project_id
+      FROM tasks t
       JOIN task_node_placements p ON p.id = task_runs.placement_id
       JOIN workflow_nodes n ON n.id = p.node_id
       WHERE t.id = p.task_id
         AND t.canceled_at_unix_ms = 0
-        AND project.lifecycle_state = 'active'
         AND p.state = 'active'
         AND n.kind IN ('agent', 'script')
   )
@@ -2326,12 +2323,6 @@ RETURNING
         FROM task_node_placements p
         WHERE p.id = task_runs.placement_id
     ) AS task_id,
-    (
-        SELECT t.project_id
-        FROM task_records t
-        JOIN task_node_placements p ON p.task_id = t.id
-        WHERE p.id = task_runs.placement_id
-    ) AS project_id,
     placement_id,
     (
         SELECT p.node_id
@@ -2923,35 +2914,6 @@ ON CONFLICT(id) DO UPDATE SET
     display_name = excluded.display_name,
     updated_at_unix_ms = excluded.updated_at_unix_ms,
     metadata_json = excluded.metadata_json;
-
--- name: GetProjectLifecycle :one
-SELECT
-    lifecycle_state,
-    lifecycle_generation
-FROM projects
-WHERE id = sqlc.arg(project_id)
-LIMIT 1;
-
--- name: GetActiveProjectLifecycle :one
-SELECT
-    lifecycle_state,
-    lifecycle_generation
-FROM projects
-WHERE id = sqlc.arg(project_id)
-  AND lifecycle_state = 'active'
-  AND lifecycle_generation = sqlc.arg(expected_generation)
-LIMIT 1;
-
--- name: TransitionProjectLifecycleToDeleting :one
-UPDATE projects
-SET
-    lifecycle_state = 'deleting',
-    lifecycle_generation = lifecycle_generation + 1,
-    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
-WHERE id = sqlc.arg(project_id)
-  AND lifecycle_state = 'active'
-  AND lifecycle_generation = sqlc.arg(expected_generation)
-RETURNING lifecycle_state, lifecycle_generation;
 
 -- name: UpsertWorkspace :exec
 INSERT INTO workspaces (

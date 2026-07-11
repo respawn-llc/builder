@@ -184,7 +184,7 @@ func TestStartTaskSchedulesScriptFirstTargetRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRunnableRuns: %v", err)
 	}
-	if len(runnable) != 1 || runnable[0].ID != started.RunID || runnable[0].ProjectID != binding.ProjectID || runnable[0].NodeID != "node-script" {
+	if len(runnable) != 1 || runnable[0].ID != started.RunID || runnable[0].NodeID != "node-script" {
 		t.Fatalf("runnable = %+v, want script run", runnable)
 	}
 }

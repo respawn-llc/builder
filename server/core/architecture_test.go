@@ -15,7 +15,7 @@ func TestCoreStructOnlyExposesCompositionState(t *testing.T) {
 	coreStruct := findStruct(t, file, "Core")
 
 	got := structFieldNames(coreStruct)
-	want := []string{"activity", "bundles", "lifecycle"}
+	want := []string{"bundles", "lifecycle"}
 	assertStringSet(t, "Core fields", got, want)
 }
 

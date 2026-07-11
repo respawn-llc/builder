@@ -280,7 +280,6 @@ type ActiveRunCompletionTarget struct {
 
 type RunnableRunRecord struct {
 	RunRecord
-	ProjectID            string
 	WorkflowRevisionSeen int64
 }
 
