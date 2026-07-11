@@ -2,12 +2,132 @@ package workflowstore
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 )
+
+func TestRecordManagedExecutionTargetWorktreeDetachmentPreservesExactEvidence(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowID,
+		Title:      "Detached managed target",
+		Body:       "Body",
+	})
+	const worktreeID = "worktree-detachment"
+	worktreeRoot := t.TempDir()
+	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID: worktreeID, WorkspaceID: binding.WorkspaceID, CanonicalRoot: worktreeRoot, DisplayName: "target", Availability: "available", Managed: true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if _, err := store.queries.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID: string(task.ID), ManagedWorktreeID: nullableString(worktreeID), UpdatedAtUnixMs: store.now().UnixMilli(),
+	}); err != nil {
+		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
+	}
+	provisioningGeneration := "provisioning-1"
+	target := workflow.ExecutionTarget{
+		TaskID: task.ID, Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{Kind: workflow.ExecutionTargetSourceNamedRef, NamedRef: executionTargetStringPointer("refs/heads/main"), Commit: "base-commit"},
+		State:          workflow.ExecutionTargetStateLocked, ProvisioningGeneration: &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration, SetupState: workflow.ExecutionTargetSetupSucceeded,
+		RecoveryDisposition: workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := store.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+	ownership := &workflow.ExecutionTargetLinkedWorktreeOwnership{
+		CommonDir: "/repo/.git", AdminEntry: "worktrees/" + task.ShortID, GitDir: filepath.Join(worktreeRoot, ".git"), HeadRef: "refs/heads/" + task.ShortID,
+	}
+	taskIDs, err := store.RecordManagedExecutionTargetWorktreeDetachment(ctx, ManagedExecutionTargetWorktreeDetachment{
+		WorktreeID: worktreeID, WorktreeRoot: worktreeRoot, ExactBranchObservation: "observed-commit", LinkedWorktreeOwnership: ownership,
+	})
+	if err != nil {
+		t.Fatalf("RecordManagedExecutionTargetWorktreeDetachment: %v", err)
+	}
+	if len(taskIDs) != 1 || taskIDs[0] != task.ID {
+		t.Fatalf("affected task ids = %+v, want %q", taskIDs, task.ID)
+	}
+	actual, err := store.GetTaskExecutionTarget(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if actual == nil || actual.State != workflow.ExecutionTargetStateLockedReprovisioning || actual.IntendedWorktreeRoot == nil ||
+		actual.ExactBranchObservation == nil || *actual.ExactBranchObservation != "observed-commit" ||
+		actual.ExpectedDetachmentCommit == nil || *actual.ExpectedDetachmentCommit != "observed-commit" ||
+		actual.LinkedWorktreeOwnership == nil || *actual.LinkedWorktreeOwnership != *ownership {
+		t.Fatalf("detached target = %+v, want exact expected-detachment evidence", actual)
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("task managed worktree = %+v, want cleared attachment", row.ManagedWorktreeID)
+	}
+}
+
+func TestQueueMissingManagedExecutionTargetWorktreeKeepsTargetRecoveryRoot(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: workflowID,
+		Title:      "Missing managed target",
+		Body:       "Body",
+	})
+	const worktreeID = "worktree-missing-target"
+	worktreeRoot := t.TempDir()
+	if err := store.metadata.UpsertWorktreeRecord(ctx, metadata.WorktreeRecord{
+		ID: worktreeID, WorkspaceID: binding.WorkspaceID, CanonicalRoot: worktreeRoot, DisplayName: "target", Availability: "missing", Managed: true,
+	}); err != nil {
+		t.Fatalf("UpsertWorktreeRecord: %v", err)
+	}
+	if _, err := store.queries.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+		ID: string(task.ID), ManagedWorktreeID: nullableString(worktreeID), UpdatedAtUnixMs: store.now().UnixMilli(),
+	}); err != nil {
+		t.Fatalf("UpdateTaskManagedWorktree: %v", err)
+	}
+	provisioningGeneration := "provisioning-1"
+	target := workflow.ExecutionTarget{
+		TaskID: task.ID, Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{Kind: workflow.ExecutionTargetSourceNamedRef, NamedRef: executionTargetStringPointer("refs/heads/main"), Commit: "base-commit"},
+		State:          workflow.ExecutionTargetStateLocked, ProvisioningGeneration: &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration, SetupState: workflow.ExecutionTargetSetupSucceeded,
+		RecoveryDisposition: workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := store.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+	taskIDs, err := store.QueueMissingManagedExecutionTargetWorktree(ctx, worktreeID, worktreeRoot)
+	if err != nil {
+		t.Fatalf("QueueMissingManagedExecutionTargetWorktree: %v", err)
+	}
+	if len(taskIDs) != 1 || taskIDs[0] != task.ID {
+		t.Fatalf("affected task ids = %+v, want %q", taskIDs, task.ID)
+	}
+	actual, err := store.GetTaskExecutionTarget(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget: %v", err)
+	}
+	if actual == nil || actual.State != workflow.ExecutionTargetStateLockedReprovisioning || actual.IntendedWorktreeRoot == nil ||
+		actual.ActiveClaim == nil || actual.ActiveClaim.Phase != workflow.ExecutionTargetClaimRecoveryQueued {
+		t.Fatalf("queued target = %+v, want recovery-queued claim", actual)
+	}
+	row, err := store.queries.GetTask(ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("task managed worktree = %+v, want cleared missing attachment", row.ManagedWorktreeID)
+	}
+}
 
 func TestTaskExecutionTargetProjectionRoundTripsNoneExecutionRoot(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)

@@ -200,6 +200,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
 	}
+	worktreeService.WithManagedTaskWorktreeObserver(workflowService)
 	core := &Core{bundles: composeBundles(bundleCompositionInput{
 		cfg:                     cfg,
 		containerDir:            containerDir,

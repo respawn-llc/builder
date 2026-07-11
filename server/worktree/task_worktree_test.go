@@ -2,6 +2,7 @@ package worktree
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"core/server/metadata"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
@@ -208,6 +210,42 @@ func TestInspectExecutionTargetWorktreeRejectsMissingRootWithChangedBranchTip(t 
 	}
 	if inspection.Kind != ExecutionTargetWorktreeInspectionAmbiguous {
 		t.Fatalf("inspection after branch move = %+v, want ambiguous", inspection)
+	}
+}
+
+func TestInspectExecutionTargetWorktreeAcceptsExpectedKentDetachment(t *testing.T) {
+	env := newServiceTestEnv(t)
+	commit := runGit(t, env.workspaceRoot, "rev-parse", "HEAD")
+	worktreeRoot, err := env.service.PlanExecutionTargetWorktreeRoot(env.binding.WorkspaceID, "WOR-103")
+	if err != nil {
+		t.Fatalf("PlanExecutionTargetWorktreeRoot: %v", err)
+	}
+	if _, err := env.service.ProvisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{
+		WorkspaceID:         env.binding.WorkspaceID,
+		SourceWorkspaceRoot: env.workspaceRoot,
+		TaskShortID:         "WOR-103",
+		ResolvedCommit:      commit,
+		WorktreeRoot:        worktreeRoot,
+	}); err != nil {
+		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)
+	}
+	if err := env.service.git.Remove(env.ctx, env.workspaceRoot, worktreeRoot, false); err != nil {
+		t.Fatalf("Remove execution target worktree: %v", err)
+	}
+	inspection, err := env.service.InspectExecutionTargetWorktree(env.ctx, InspectExecutionTargetWorktreeRequest{
+		SourceWorkspaceRoot: env.workspaceRoot,
+		WorktreeRoot:        worktreeRoot,
+		TaskShortID:         "WOR-103",
+		ResolvedCommit:      commit,
+		ExpectedDetachment:  &commit,
+	})
+	if err != nil {
+		t.Fatalf("InspectExecutionTargetWorktree: %v", err)
+	}
+	if inspection.Kind != ExecutionTargetWorktreeInspectionExactMissingRoot ||
+		inspection.BranchName != "WOR-103" ||
+		inspection.ExactBranchObservation != commit {
+		t.Fatalf("inspection = %+v, want exact expected detachment", inspection)
 	}
 }
 
@@ -634,6 +672,85 @@ func TestDeleteTaskWorktreeRemovesManagedWorktreeAndBranch(t *testing.T) {
 	if row.ManagedWorktreeID.Valid {
 		t.Fatalf("task managed worktree id = %+v, want cleared after worktree record delete", row.ManagedWorktreeID)
 	}
+}
+
+func TestDeleteWorktreePreservesTargetOwnedRecordAfterDeliberateRemoval(t *testing.T) {
+	env := newServiceTestEnv(t)
+	task, workflowStore := createTaskWorktreeTestTask(t, env)
+	created, err := env.service.EnsureTaskWorktree(env.ctx, EnsureTaskWorktreeRequest{TaskID: task.ID})
+	if err != nil {
+		t.Fatalf("EnsureTaskWorktree: %v", err)
+	}
+	provisioningGeneration := "provisioning-1"
+	target := workflow.ExecutionTarget{
+		TaskID: task.ID, Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind: workflow.ExecutionTargetSourceNamedRef, NamedRef: worktreeStringPointer("refs/heads/main"), Commit: runGit(t, env.workspaceRoot, "rev-parse", "HEAD"),
+		},
+		State: workflow.ExecutionTargetStateLocked, ProvisioningGeneration: &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration, SetupState: workflow.ExecutionTargetSetupSucceeded,
+		RecoveryDisposition: workflow.ExecutionTargetRecoveryAvailable,
+	}
+	if err := workflowStore.SaveTaskExecutionTarget(env.ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+	started, err := workflowStore.StartTask(env.ctx, task.ID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if _, err := workflowStore.CompleteRun(env.ctx, workflowstore.CompleteRunRequest{RunID: started.RunID, TransitionID: "done"}); err != nil {
+		t.Fatalf("CompleteRun: %v", err)
+	}
+	observer := &recordingManagedTaskWorktreeObserver{}
+	env.service.WithManagedTaskWorktreeObserver(observer)
+
+	if _, err := env.service.DeleteWorktree(env.ctx, serverapi.WorktreeDeleteRequest{
+		ClientRequestID: "delete-target-owned-worktree",
+		SessionID:       env.session.Meta().SessionID,
+		WorktreeID:      created.Worktree.WorktreeID,
+	}); err != nil {
+		t.Fatalf("DeleteWorktree: %v", err)
+	}
+	if len(observer.detachments) != 1 {
+		t.Fatalf("detachment observations = %+v, want one", observer.detachments)
+	}
+	detachment := observer.detachments[0]
+	if detachment.WorktreeID != created.Worktree.WorktreeID ||
+		detachment.ExactBranchObservation == "" ||
+		detachment.LinkedWorktreeOwnership == nil ||
+		detachment.LinkedWorktreeOwnership.HeadRef != "refs/heads/"+task.ShortID {
+		t.Fatalf("detachment = %+v, want exact task branch evidence", detachment)
+	}
+	if _, err := os.Stat(created.Worktree.CanonicalRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected worktree root removed, stat err=%v", err)
+	}
+	if _, err := env.store.GetWorktreeRecordByID(env.ctx, created.Worktree.WorktreeID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetWorktreeRecordByID error = %v, want missing record", err)
+	}
+	row, err := env.store.Queries().GetTask(env.ctx, string(task.ID))
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if row.ManagedWorktreeID.Valid {
+		t.Fatalf("task managed worktree = %+v, want cleared target attachment", row.ManagedWorktreeID)
+	}
+}
+
+type recordingManagedTaskWorktreeObserver struct {
+	detachments []ManagedTaskWorktreeDetachment
+}
+
+func (o *recordingManagedTaskWorktreeObserver) PrepareManagedTaskWorktreeDetachment(_ context.Context, detachment ManagedTaskWorktreeDetachment) error {
+	o.detachments = append(o.detachments, detachment)
+	return nil
+}
+
+func (o *recordingManagedTaskWorktreeObserver) HandleMissingManagedTaskWorktree(_ context.Context, _ metadata.WorktreeRecord) error {
+	return nil
+}
+
+func worktreeStringPointer(value string) *string {
+	return &value
 }
 
 func createTaskWorktreeTestTask(t *testing.T, env *serviceTestEnv) (workflowstore.TaskRecord, *workflowstore.Store) {

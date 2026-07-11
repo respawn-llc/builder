@@ -33,6 +33,16 @@ type ExecutionTargetRecoveryContext struct {
 	SourceWorkspace workflow.ExecutionWorkspace
 }
 
+// ManagedExecutionTargetWorktreeDetachment is the exact Git evidence captured
+// by worktree while a task root is still attached. Workflowstore persists it
+// before a deliberate Kent removal without owning Git inspection itself.
+type ManagedExecutionTargetWorktreeDetachment struct {
+	WorktreeID              string
+	WorktreeRoot            string
+	ExactBranchObservation  string
+	LinkedWorktreeOwnership *workflow.ExecutionTargetLinkedWorktreeOwnership
+}
+
 func (s *Store) BeginManagedExecutionTargetMaterialization(ctx context.Context, req BeginManagedExecutionTargetMaterializationRequest) error {
 	return s.beginManagedExecutionTargetMaterialization(ctx, req, nil)
 }
@@ -237,6 +247,179 @@ func executionTargetLifecycleFieldsFromTarget(target workflow.ExecutionTarget) e
 
 func (s *Store) UpdateTaskExecutionTargetLifecycle(ctx context.Context, target workflow.ExecutionTarget, expectedClaim workflow.ExecutionTargetClaim) error {
 	return updateTaskExecutionTargetLifecycle(ctx, s.queries, target, expectedClaim)
+}
+
+// RecordManagedExecutionTargetWorktreeDetachment records exact branch and
+// linked-worktree ownership facts before Kent removes a managed root, then
+// clears the attachment and queues a fresh root-provisioning generation.
+func (s *Store) RecordManagedExecutionTargetWorktreeDetachment(ctx context.Context, detachment ManagedExecutionTargetWorktreeDetachment) ([]workflow.TaskID, error) {
+	worktreeID := strings.TrimSpace(detachment.WorktreeID)
+	worktreeRoot, err := config.CanonicalWorkspaceRoot(detachment.WorktreeRoot)
+	if err != nil {
+		return nil, err
+	}
+	branchObservation := strings.TrimSpace(detachment.ExactBranchObservation)
+	if worktreeID == "" || branchObservation == "" || detachment.LinkedWorktreeOwnership == nil {
+		return nil, errors.New("managed execution target detachment requires worktree id, branch observation, and ownership")
+	}
+	if err := validateExecutionTargetDetachmentOwnership(*detachment.LinkedWorktreeOwnership); err != nil {
+		return nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	rows, err := q.ListTaskExecutionTargetsByManagedWorktree(ctx, nullableString(worktreeID))
+	if err != nil {
+		return nil, err
+	}
+	taskIDs := make([]workflow.TaskID, 0, len(rows))
+	for _, row := range rows {
+		target, err := taskExecutionTargetFromManagedWorktreeRow(row)
+		if err != nil {
+			return nil, fmt.Errorf("decode managed worktree execution target: %w", err)
+		}
+		if err := queueManagedExecutionTargetWorktreeRecovery(ctx, q, row.TaskShortID, target, worktreeRoot, &detachment); err != nil {
+			return nil, err
+		}
+		if _, err := q.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+			ID: string(target.TaskID), UpdatedAtUnixMs: s.now().UnixMilli(),
+		}); err != nil {
+			return nil, err
+		}
+		taskIDs = append(taskIDs, target.TaskID)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return taskIDs, nil
+}
+
+// QueueMissingManagedExecutionTargetWorktree turns an externally missing
+// attachment into target-owned reprovisioning before generic sync deletes the
+// stale worktree record.
+func (s *Store) QueueMissingManagedExecutionTargetWorktree(ctx context.Context, worktreeID string, worktreeRoot string) ([]workflow.TaskID, error) {
+	worktreeID = strings.TrimSpace(worktreeID)
+	if worktreeID == "" {
+		return nil, errors.New("managed worktree id is required")
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	rows, err := q.ListTaskExecutionTargetsByManagedWorktree(ctx, nullableString(worktreeID))
+	if err != nil {
+		return nil, err
+	}
+	taskIDs := make([]workflow.TaskID, 0, len(rows))
+	for _, row := range rows {
+		target, err := taskExecutionTargetFromManagedWorktreeRow(row)
+		if err != nil {
+			return nil, fmt.Errorf("decode missing managed worktree execution target: %w", err)
+		}
+		taskIDs = append(taskIDs, target.TaskID)
+		if err := queueManagedExecutionTargetWorktreeRecovery(ctx, q, row.TaskShortID, target, canonicalWorktreeRoot, nil); err != nil {
+			return nil, err
+		}
+		if _, err := q.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+			ID: string(target.TaskID), UpdatedAtUnixMs: s.now().UnixMilli(),
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return taskIDs, nil
+}
+
+func queueManagedExecutionTargetWorktreeRecovery(ctx context.Context, q *sqlitegen.Queries, taskShortID string, target workflow.ExecutionTarget, worktreeRoot string, detachment *ManagedExecutionTargetWorktreeDetachment) error {
+	if target.Policy == workflow.ExecutionPolicyNone {
+		return errors.New("none execution target cannot own a managed worktree")
+	}
+	if target.ActiveClaim != nil {
+		return ErrTaskExecutionTargetClaimChanged
+	}
+	if target.RecoveryDisposition == workflow.ExecutionTargetRecoveryManualRecovery {
+		return nil
+	}
+	if target.State != workflow.ExecutionTargetStateLocked {
+		return errors.New("missing managed worktree does not belong to a locked execution target")
+	}
+	if detachment != nil {
+		if taskShortID != strings.TrimPrefix(detachment.LinkedWorktreeOwnership.HeadRef, "refs/heads/") {
+			return errors.New("managed worktree detachment does not match a locked task branch")
+		}
+		target.ExactBranchObservation = executionTargetStringPointer(strings.TrimSpace(detachment.ExactBranchObservation))
+		target.LinkedWorktreeOwnership = detachment.LinkedWorktreeOwnership
+		target.ExpectedDetachmentCommit = executionTargetStringPointer(strings.TrimSpace(detachment.ExactBranchObservation))
+	}
+	provisioningGeneration := uuid.NewString()
+	target.State = workflow.ExecutionTargetStateLockedReprovisioning
+	target.IntendedWorktreeRoot = executionTargetStringPointer(worktreeRoot)
+	target.ProvisioningGeneration = &provisioningGeneration
+	target.SetupProvisioningGeneration = &provisioningGeneration
+	target.SetupState = workflow.ExecutionTargetSetupPending
+	target.ActiveClaim = &workflow.ExecutionTargetClaim{
+		Generation: uuid.NewString(),
+		Phase:      workflow.ExecutionTargetClaimRecoveryQueued,
+	}
+	return updateUnclaimedTaskExecutionTargetLifecycle(ctx, q, target)
+}
+
+func validateExecutionTargetDetachmentOwnership(ownership workflow.ExecutionTargetLinkedWorktreeOwnership) error {
+	for name, value := range map[string]string{
+		"linked worktree common directory":     ownership.CommonDir,
+		"linked worktree administrative entry": ownership.AdminEntry,
+		"linked worktree gitdir":               ownership.GitDir,
+		"linked worktree head ref":             ownership.HeadRef,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", name)
+		}
+	}
+	if !strings.HasPrefix(ownership.HeadRef, "refs/heads/") || strings.TrimPrefix(ownership.HeadRef, "refs/heads/") == "" {
+		return errors.New("managed worktree detachment requires a symbolic task branch")
+	}
+	return nil
+}
+
+func executionTargetStringPointer(value string) *string {
+	return &value
+}
+
+func taskExecutionTargetFromManagedWorktreeRow(row sqlitegen.ListTaskExecutionTargetsByManagedWorktreeRow) (workflow.ExecutionTarget, error) {
+	return taskExecutionTargetFromRow(sqlitegen.TaskExecutionTarget{
+		TaskID:                      row.TaskID,
+		Policy:                      row.Policy,
+		RequestedCustomRef:          row.RequestedCustomRef,
+		ResolvedSourceKind:          row.ResolvedSourceKind,
+		ResolvedSourceRef:           row.ResolvedSourceRef,
+		ResolvedCommit:              row.ResolvedCommit,
+		State:                       row.State,
+		ProvisioningGeneration:      row.ProvisioningGeneration,
+		SetupProvisioningGeneration: row.SetupProvisioningGeneration,
+		SetupState:                  row.SetupState,
+		ActiveClaimGeneration:       row.ActiveClaimGeneration,
+		ActiveClaimPhase:            row.ActiveClaimPhase,
+		RecoveryDisposition:         row.RecoveryDisposition,
+		RecoveryCause:               row.RecoveryCause,
+		ExactBranchObservation:      row.ExactBranchObservation,
+		LinkedWorktreeCommonDir:     row.LinkedWorktreeCommonDir,
+		LinkedWorktreeAdminEntry:    row.LinkedWorktreeAdminEntry,
+		LinkedWorktreeGitdir:        row.LinkedWorktreeGitdir,
+		LinkedWorktreeHeadRef:       row.LinkedWorktreeHeadRef,
+		ExpectedDetachmentCommit:    row.ExpectedDetachmentCommit,
+		IntendedWorktreeRoot:        row.IntendedWorktreeRoot,
+	})
 }
 
 // FenceExecutionTargetRecovery performs the database-only startup fence for
@@ -487,6 +670,38 @@ func updateTaskExecutionTargetLifecycle(ctx context.Context, q *sqlitegen.Querie
 		TaskID:                      string(target.TaskID),
 		ExpectedClaimGeneration:     sql.NullString{String: expectedClaim.Generation, Valid: true},
 		ExpectedClaimPhase:          sql.NullString{String: string(expectedClaim.Phase), Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return ErrTaskExecutionTargetClaimChanged
+	}
+	return nil
+}
+
+func updateUnclaimedTaskExecutionTargetLifecycle(ctx context.Context, q *sqlitegen.Queries, target workflow.ExecutionTarget) error {
+	if err := target.Validate(); err != nil {
+		return err
+	}
+	lifecycle := executionTargetLifecycleFieldsFromTarget(target)
+	updated, err := q.UpdateUnclaimedTaskExecutionTargetLifecycle(ctx, sqlitegen.UpdateUnclaimedTaskExecutionTargetLifecycleParams{
+		State:                       string(target.State),
+		IntendedWorktreeRoot:        nullableExecutionTargetString(target.IntendedWorktreeRoot),
+		ProvisioningGeneration:      lifecycle.provisioningGeneration,
+		SetupProvisioningGeneration: lifecycle.setupProvisioningGeneration,
+		SetupState:                  lifecycle.setupState,
+		ActiveClaimGeneration:       lifecycle.activeClaimGeneration,
+		ActiveClaimPhase:            lifecycle.activeClaimPhase,
+		RecoveryDisposition:         lifecycle.recoveryDisposition,
+		RecoveryCause:               lifecycle.recoveryCause,
+		ExactBranchObservation:      lifecycle.exactBranchObservation,
+		LinkedWorktreeCommonDir:     lifecycle.linkedWorktreeCommonDir,
+		LinkedWorktreeAdminEntry:    lifecycle.linkedWorktreeAdminEntry,
+		LinkedWorktreeGitdir:        lifecycle.linkedWorktreeGitdir,
+		LinkedWorktreeHeadRef:       lifecycle.linkedWorktreeHeadRef,
+		ExpectedDetachmentCommit:    lifecycle.expectedDetachmentCommit,
+		TaskID:                      string(target.TaskID),
 	})
 	if err != nil {
 		return err

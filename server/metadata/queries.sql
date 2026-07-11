@@ -1357,6 +1357,35 @@ WHERE active_claim_phase = 'recovery_queued'
 ORDER BY task_id ASC
 LIMIT sqlc.arg(limit);
 
+-- name: ListTaskExecutionTargetsByManagedWorktree :many
+SELECT
+    t.short_id AS task_short_id,
+    et.task_id,
+    et.policy,
+    et.requested_custom_ref,
+    et.resolved_source_kind,
+    et.resolved_source_ref,
+    et.resolved_commit,
+    et.state,
+    et.provisioning_generation,
+    et.setup_provisioning_generation,
+    et.setup_state,
+    et.active_claim_generation,
+    et.active_claim_phase,
+    et.recovery_disposition,
+    et.recovery_cause,
+    et.exact_branch_observation,
+    et.linked_worktree_common_dir,
+    et.linked_worktree_admin_entry,
+    et.linked_worktree_gitdir,
+    et.linked_worktree_head_ref,
+    et.expected_detachment_commit,
+    et.intended_worktree_root
+FROM task_execution_targets et
+JOIN tasks t ON t.id = et.task_id
+WHERE t.managed_worktree_id = sqlc.arg(managed_worktree_id)
+ORDER BY et.task_id ASC;
+
 -- name: InsertTaskExecutionTarget :exec
 INSERT INTO task_execution_targets (
     task_id,
@@ -1425,6 +1454,28 @@ SET
 WHERE task_id = sqlc.arg(task_id)
   AND active_claim_generation = sqlc.arg(expected_claim_generation)
   AND active_claim_phase = sqlc.arg(expected_claim_phase);
+
+-- name: UpdateUnclaimedTaskExecutionTargetLifecycle :execrows
+UPDATE task_execution_targets
+SET
+    state = sqlc.arg(state),
+    intended_worktree_root = sqlc.narg(intended_worktree_root),
+    provisioning_generation = sqlc.narg(provisioning_generation),
+    setup_provisioning_generation = sqlc.narg(setup_provisioning_generation),
+    setup_state = sqlc.arg(setup_state),
+    active_claim_generation = sqlc.narg(active_claim_generation),
+    active_claim_phase = sqlc.narg(active_claim_phase),
+    recovery_disposition = sqlc.arg(recovery_disposition),
+    recovery_cause = sqlc.narg(recovery_cause),
+    exact_branch_observation = sqlc.narg(exact_branch_observation),
+    linked_worktree_common_dir = sqlc.narg(linked_worktree_common_dir),
+    linked_worktree_admin_entry = sqlc.narg(linked_worktree_admin_entry),
+    linked_worktree_gitdir = sqlc.narg(linked_worktree_gitdir),
+    linked_worktree_head_ref = sqlc.narg(linked_worktree_head_ref),
+    expected_detachment_commit = sqlc.narg(expected_detachment_commit)
+WHERE task_id = sqlc.arg(task_id)
+  AND active_claim_generation IS NULL
+  AND active_claim_phase IS NULL;
 
 -- name: DeleteInitialTaskExecutionTargetRecovery :execrows
 DELETE FROM task_execution_targets

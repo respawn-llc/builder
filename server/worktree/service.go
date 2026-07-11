@@ -58,6 +58,7 @@ type ServiceOptions struct {
 type Service struct {
 	metadata            *metadata.Store
 	git                 *GitInspector
+	targetWorktrees     ManagedTaskWorktreeObserver
 	runtime             runtimeController
 	active              activeRuntimeSource
 	processes           processSource
@@ -79,6 +80,10 @@ type repositoryMutationLock struct {
 type syncedWorktree struct {
 	record metadata.WorktreeRecord
 	git    GitWorktree
+}
+
+type syncMissingWorktreeOptions struct {
+	skipObserverIDs map[string]struct{}
 }
 
 type sessionWorkspaceContext struct {
@@ -137,6 +142,24 @@ type ProvisionExecutionTargetWorktreeResponse struct {
 	LinkedWorktreeOwnership *workflow.ExecutionTargetLinkedWorktreeOwnership
 }
 
+// ManagedTaskWorktreeDetachment carries exact Git facts observed while a
+// managed task worktree is still attached. The workflow owner persists these
+// facts before Kent deliberately removes the worktree.
+type ManagedTaskWorktreeDetachment struct {
+	WorktreeID              string
+	WorktreeRoot            string
+	ExactBranchObservation  string
+	LinkedWorktreeOwnership *workflow.ExecutionTargetLinkedWorktreeOwnership
+}
+
+// ManagedTaskWorktreeObserver keeps workflow-target persistence out of the
+// worktree package. Worktree owns Git observation and removal; the observer
+// owns whether a missing managed record belongs to a durable task target.
+type ManagedTaskWorktreeObserver interface {
+	PrepareManagedTaskWorktreeDetachment(context.Context, ManagedTaskWorktreeDetachment) error
+	HandleMissingManagedTaskWorktree(context.Context, metadata.WorktreeRecord) error
+}
+
 type ExecutionTargetWorktreeInspectionKind string
 
 const (
@@ -153,6 +176,7 @@ type InspectExecutionTargetWorktreeRequest struct {
 	ResolvedCommit      string
 	ExpectedOwnership   *workflow.ExecutionTargetLinkedWorktreeOwnership
 	ExpectedBranchTip   *string
+	ExpectedDetachment  *string
 }
 
 type ExecutionTargetWorktreeInspection struct {
@@ -205,6 +229,16 @@ func NewService(metadataStore *metadata.Store, gitInspector *GitInspector, activ
 		setupBroker:         newSetupEventBroker(),
 		repositoryLocks:     make(map[string]*repositoryMutationLock),
 	}
+}
+
+// WithManagedTaskWorktreeObserver connects the workflow-owned target lifecycle
+// after both services are composed. It is intentionally a narrow callback:
+// worktree retains Git/filesystem ownership and the observer retains target SQL.
+func (s *Service) WithManagedTaskWorktreeObserver(observer ManagedTaskWorktreeObserver) *Service {
+	if s != nil {
+		s.targetWorktrees = observer
+	}
+	return s
 }
 
 func (s *Service) ResolveExecutionTarget(ctx context.Context, workspaceRoot string, policy workflow.ExecutionPolicyMode, customRef *string) (ExecutionTargetResolution, error) {
@@ -289,6 +323,16 @@ func (s *Service) InspectExecutionTargetWorktree(ctx context.Context, req Inspec
 				BranchName:              taskShortID,
 				ExactBranchObservation:  *req.ExpectedBranchTip,
 				LinkedWorktreeOwnership: req.ExpectedOwnership,
+			}, nil
+		}
+	}
+	if !rootExists && req.ExpectedDetachment != nil && strings.TrimSpace(*req.ExpectedDetachment) != "" && branchExists {
+		branchTip, tipErr := s.git.resolveCommit(ctx, workspaceRoot, "refs/heads/"+taskShortID, workflow.ExecutionPolicyHead, ExecutionTargetResolutionFailureUnavailable, "")
+		if tipErr == nil && branchTip == strings.TrimSpace(*req.ExpectedDetachment) {
+			return ExecutionTargetWorktreeInspection{
+				Kind:                   ExecutionTargetWorktreeInspectionExactMissingRoot,
+				BranchName:             taskShortID,
+				ExactBranchObservation: branchTip,
 			}, nil
 		}
 	}
@@ -709,7 +753,9 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	if branchErr != nil {
 		branchDeleted = false
 	}
-	if _, err := s.syncWorkspace(ctx, record.WorkspaceID, workspaceRoot, false); err != nil {
+	if _, err := s.syncWorkspace(ctx, record.WorkspaceID, workspaceRoot, false, syncMissingWorktreeOptions{
+		skipObserverIDs: map[string]struct{}{worktreeID: {}},
+	}); err != nil {
 		return DeleteTaskWorktreeResponse{}, err
 	}
 	if err := s.metadata.DeleteWorktreeRecordByID(ctx, worktreeID); err != nil {
@@ -1131,6 +1177,9 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 		return serverapi.WorktreeDeleteResponse{}, err
 	}
 	if registeredTarget, ok := findSyncedWorktreeByID(synced, req.WorktreeID); ok {
+		if err := s.prepareManagedTaskWorktreeDetachment(ctx, workspaceCtx.workspaceRoot, registeredTarget); err != nil {
+			return serverapi.WorktreeDeleteResponse{}, err
+		}
 		dirtyCount, dirtyErr := s.git.DirtyFileCount(ctx, registeredTarget.record.CanonicalRoot)
 		force := dirtyCount > 0 || dirtyErr != nil
 		if err := s.git.Remove(ctx, workspaceCtx.workspaceRoot, registeredTarget.record.CanonicalRoot, force); err != nil {
@@ -1253,9 +1302,13 @@ func (s *Service) resolveSessionWorkspaceContext(ctx context.Context, sessionID 
 	}, nil
 }
 
-func (s *Service) syncWorkspace(ctx context.Context, workspaceID string, workspaceRoot string, includeDirtyCount bool) ([]syncedWorktree, error) {
+func (s *Service) syncWorkspace(ctx context.Context, workspaceID string, workspaceRoot string, includeDirtyCount bool, options ...syncMissingWorktreeOptions) ([]syncedWorktree, error) {
 	if s == nil || s.metadata == nil || s.git == nil {
 		return nil, errors.New("worktree service dependencies are required")
+	}
+	missingOptions := syncMissingWorktreeOptions{}
+	if len(options) > 0 {
+		missingOptions = options[0]
 	}
 	gitEntries, err := s.git.List(ctx, workspaceRoot)
 	if err != nil {
@@ -1303,6 +1356,11 @@ func (s *Service) syncWorkspace(ctx context.Context, workspaceID string, workspa
 		if err := s.retargetSessionsFromWorktree(ctx, strings.TrimSpace(workspaceID), strings.TrimSpace(workspaceRoot), record, worktreeSessionRetargetOptions{reminder: worktreeReminderStateForExitedWorktree}); err != nil {
 			return nil, err
 		}
+		if _, skipObserver := missingOptions.skipObserverIDs[record.ID]; !skipObserver && s.targetWorktrees != nil {
+			if err := s.targetWorktrees.HandleMissingManagedTaskWorktree(ctx, record); err != nil {
+				return nil, err
+			}
+		}
 		if err := s.metadata.DeleteWorktreeRecordByID(ctx, record.ID); err != nil {
 			return nil, err
 		}
@@ -1332,6 +1390,27 @@ func (s *Service) syncWorkspace(ctx context.Context, workspaceID string, workspa
 		synced = append(synced, syncedWorktree{record: record, git: gitEntry})
 	}
 	return synced, nil
+}
+
+func (s *Service) prepareManagedTaskWorktreeDetachment(ctx context.Context, workspaceRoot string, target syncedWorktree) error {
+	if s.targetWorktrees == nil || !target.record.Managed {
+		return nil
+	}
+	branchName := strings.TrimSpace(target.git.BranchName)
+	branchObservation := strings.TrimSpace(target.git.HeadOID)
+	if branchName == "" || branchObservation == "" {
+		return nil
+	}
+	ownership, err := s.git.executionTargetLinkedWorktreeOwnership(ctx, workspaceRoot, target.record.CanonicalRoot, branchName)
+	if err != nil {
+		return err
+	}
+	return s.targetWorktrees.PrepareManagedTaskWorktreeDetachment(ctx, ManagedTaskWorktreeDetachment{
+		WorktreeID:              target.record.ID,
+		WorktreeRoot:            target.record.CanonicalRoot,
+		ExactBranchObservation:  branchObservation,
+		LinkedWorktreeOwnership: ownership,
+	})
 }
 
 func (s *Service) ensureDeletionUnblocked(ctx context.Context, currentSessionID string, worktreeID string, worktreeRoot string) (func(), error) {

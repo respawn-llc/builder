@@ -5976,6 +5976,107 @@ func (q *Queries) ListTaskCommentsPage(ctx context.Context, arg ListTaskComments
 	return items, nil
 }
 
+const listTaskExecutionTargetsByManagedWorktree = `-- name: ListTaskExecutionTargetsByManagedWorktree :many
+SELECT
+    t.short_id AS task_short_id,
+    et.task_id,
+    et.policy,
+    et.requested_custom_ref,
+    et.resolved_source_kind,
+    et.resolved_source_ref,
+    et.resolved_commit,
+    et.state,
+    et.provisioning_generation,
+    et.setup_provisioning_generation,
+    et.setup_state,
+    et.active_claim_generation,
+    et.active_claim_phase,
+    et.recovery_disposition,
+    et.recovery_cause,
+    et.exact_branch_observation,
+    et.linked_worktree_common_dir,
+    et.linked_worktree_admin_entry,
+    et.linked_worktree_gitdir,
+    et.linked_worktree_head_ref,
+    et.expected_detachment_commit,
+    et.intended_worktree_root
+FROM task_execution_targets et
+JOIN tasks t ON t.id = et.task_id
+WHERE t.managed_worktree_id = ?1
+ORDER BY et.task_id ASC
+`
+
+type ListTaskExecutionTargetsByManagedWorktreeRow struct {
+	TaskShortID                 string
+	TaskID                      string
+	Policy                      string
+	RequestedCustomRef          sql.NullString
+	ResolvedSourceKind          sql.NullString
+	ResolvedSourceRef           sql.NullString
+	ResolvedCommit              sql.NullString
+	State                       string
+	ProvisioningGeneration      sql.NullString
+	SetupProvisioningGeneration sql.NullString
+	SetupState                  string
+	ActiveClaimGeneration       sql.NullString
+	ActiveClaimPhase            sql.NullString
+	RecoveryDisposition         string
+	RecoveryCause               sql.NullString
+	ExactBranchObservation      sql.NullString
+	LinkedWorktreeCommonDir     sql.NullString
+	LinkedWorktreeAdminEntry    sql.NullString
+	LinkedWorktreeGitdir        sql.NullString
+	LinkedWorktreeHeadRef       sql.NullString
+	ExpectedDetachmentCommit    sql.NullString
+	IntendedWorktreeRoot        sql.NullString
+}
+
+func (q *Queries) ListTaskExecutionTargetsByManagedWorktree(ctx context.Context, managedWorktreeID sql.NullString) ([]ListTaskExecutionTargetsByManagedWorktreeRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTaskExecutionTargetsByManagedWorktree, managedWorktreeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTaskExecutionTargetsByManagedWorktreeRow
+	for rows.Next() {
+		var i ListTaskExecutionTargetsByManagedWorktreeRow
+		if err := rows.Scan(
+			&i.TaskShortID,
+			&i.TaskID,
+			&i.Policy,
+			&i.RequestedCustomRef,
+			&i.ResolvedSourceKind,
+			&i.ResolvedSourceRef,
+			&i.ResolvedCommit,
+			&i.State,
+			&i.ProvisioningGeneration,
+			&i.SetupProvisioningGeneration,
+			&i.SetupState,
+			&i.ActiveClaimGeneration,
+			&i.ActiveClaimPhase,
+			&i.RecoveryDisposition,
+			&i.RecoveryCause,
+			&i.ExactBranchObservation,
+			&i.LinkedWorktreeCommonDir,
+			&i.LinkedWorktreeAdminEntry,
+			&i.LinkedWorktreeGitdir,
+			&i.LinkedWorktreeHeadRef,
+			&i.ExpectedDetachmentCommit,
+			&i.IntendedWorktreeRoot,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTaskExecutionTargetsNeedingRecoveryFence = `-- name: ListTaskExecutionTargetsNeedingRecoveryFence :many
 SELECT
     task_id,
@@ -9674,6 +9775,73 @@ func (q *Queries) UpdateTaskRunOutcome(ctx context.Context, arg UpdateTaskRunOut
 		arg.WaitingAskID,
 		arg.InvalidCompletionCount,
 		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateUnclaimedTaskExecutionTargetLifecycle = `-- name: UpdateUnclaimedTaskExecutionTargetLifecycle :execrows
+UPDATE task_execution_targets
+SET
+    state = ?1,
+    intended_worktree_root = ?2,
+    provisioning_generation = ?3,
+    setup_provisioning_generation = ?4,
+    setup_state = ?5,
+    active_claim_generation = ?6,
+    active_claim_phase = ?7,
+    recovery_disposition = ?8,
+    recovery_cause = ?9,
+    exact_branch_observation = ?10,
+    linked_worktree_common_dir = ?11,
+    linked_worktree_admin_entry = ?12,
+    linked_worktree_gitdir = ?13,
+    linked_worktree_head_ref = ?14,
+    expected_detachment_commit = ?15
+WHERE task_id = ?16
+  AND active_claim_generation IS NULL
+  AND active_claim_phase IS NULL
+`
+
+type UpdateUnclaimedTaskExecutionTargetLifecycleParams struct {
+	State                       string
+	IntendedWorktreeRoot        sql.NullString
+	ProvisioningGeneration      sql.NullString
+	SetupProvisioningGeneration sql.NullString
+	SetupState                  string
+	ActiveClaimGeneration       sql.NullString
+	ActiveClaimPhase            sql.NullString
+	RecoveryDisposition         string
+	RecoveryCause               sql.NullString
+	ExactBranchObservation      sql.NullString
+	LinkedWorktreeCommonDir     sql.NullString
+	LinkedWorktreeAdminEntry    sql.NullString
+	LinkedWorktreeGitdir        sql.NullString
+	LinkedWorktreeHeadRef       sql.NullString
+	ExpectedDetachmentCommit    sql.NullString
+	TaskID                      string
+}
+
+func (q *Queries) UpdateUnclaimedTaskExecutionTargetLifecycle(ctx context.Context, arg UpdateUnclaimedTaskExecutionTargetLifecycleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateUnclaimedTaskExecutionTargetLifecycle,
+		arg.State,
+		arg.IntendedWorktreeRoot,
+		arg.ProvisioningGeneration,
+		arg.SetupProvisioningGeneration,
+		arg.SetupState,
+		arg.ActiveClaimGeneration,
+		arg.ActiveClaimPhase,
+		arg.RecoveryDisposition,
+		arg.RecoveryCause,
+		arg.ExactBranchObservation,
+		arg.LinkedWorktreeCommonDir,
+		arg.LinkedWorktreeAdminEntry,
+		arg.LinkedWorktreeGitdir,
+		arg.LinkedWorktreeHeadRef,
+		arg.ExpectedDetachmentCommit,
+		arg.TaskID,
 	)
 	if err != nil {
 		return 0, err
