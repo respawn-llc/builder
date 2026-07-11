@@ -459,7 +459,7 @@ func (s *Service) ProvisionExecutionTargetWorktree(ctx context.Context, req Prov
 // after its workflow owner has already proved exact durable ownership.
 func (s *Service) ReprovisionExecutionTargetWorktree(ctx context.Context, req ProvisionExecutionTargetWorktreeRequest) (ProvisionExecutionTargetWorktreeResponse, error) {
 	if s == nil || s.git == nil {
-		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("worktree service dependencies are required")
+		return ProvisionExecutionTargetWorktreeResponse{}, reprovisionOperationError(ctx, errors.New("worktree service dependencies are required"))
 	}
 	workspaceID := strings.TrimSpace(req.WorkspaceID)
 	workspaceRoot := strings.TrimSpace(req.SourceWorkspaceRoot)
@@ -467,39 +467,39 @@ func (s *Service) ReprovisionExecutionTargetWorktree(ctx context.Context, req Pr
 	resolvedCommit := strings.TrimSpace(req.ResolvedCommit)
 	worktreeRoot := strings.TrimSpace(req.WorktreeRoot)
 	if workspaceID == "" || workspaceRoot == "" || taskShortID == "" || resolvedCommit == "" || worktreeRoot == "" {
-		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("reprovision execution target requires workspace, task, commit, and root")
+		return ProvisionExecutionTargetWorktreeResponse{}, reprovisionOperationError(ctx, errors.New("reprovision execution target requires workspace, task, commit, and root"))
 	}
 	release, err := s.AcquireRepositoryMutationLock(ctx, workspaceRoot)
 	if err != nil {
-		return ProvisionExecutionTargetWorktreeResponse{}, err
+		return ProvisionExecutionTargetWorktreeResponse{}, reprovisionOperationError(ctx, err)
 	}
 	defer release()
 	branchCommit, err := s.git.resolveCommit(ctx, workspaceRoot, "refs/heads/"+taskShortID, workflow.ExecutionPolicyHead, ExecutionTargetResolutionFailureUnavailable, "")
 	if err != nil {
-		return ProvisionExecutionTargetWorktreeResponse{}, err
+		return ProvisionExecutionTargetWorktreeResponse{}, reprovisionOperationError(ctx, err)
 	}
 	if branchCommit != resolvedCommit {
-		return ProvisionExecutionTargetWorktreeResponse{}, fmt.Errorf("task branch %q no longer matches recorded commit", taskShortID)
+		return ProvisionExecutionTargetWorktreeResponse{}, reprovisionOperationError(ctx, fmt.Errorf("task branch %q no longer matches recorded commit", taskShortID))
 	}
 	if err := s.git.Prune(ctx, workspaceRoot); err != nil {
-		return ProvisionExecutionTargetWorktreeResponse{}, err
+		return ProvisionExecutionTargetWorktreeResponse{}, reprovisionOperationError(ctx, err)
 	}
 	worktreeRoot, err = config.CanonicalWorkspaceRoot(worktreeRoot)
 	if err != nil {
-		return ProvisionExecutionTargetWorktreeResponse{}, err
+		return ProvisionExecutionTargetWorktreeResponse{}, reprovisionOperationError(ctx, err)
 	}
 	if _, err := os.Stat(worktreeRoot); !errors.Is(err, os.ErrNotExist) {
 		if err == nil {
-			return ProvisionExecutionTargetWorktreeResponse{}, fmt.Errorf("reprovision execution target root %q already exists", worktreeRoot)
+			return ProvisionExecutionTargetWorktreeResponse{}, reprovisionOperationError(ctx, fmt.Errorf("reprovision execution target root %q already exists", worktreeRoot))
 		}
-		return ProvisionExecutionTargetWorktreeResponse{}, err
+		return ProvisionExecutionTargetWorktreeResponse{}, reprovisionOperationError(ctx, err)
 	}
 	if _, err := s.git.Add(ctx, workspaceRoot, worktreeRoot, CreateSpec{BaseRef: taskShortID}); err != nil {
-		return ProvisionExecutionTargetWorktreeResponse{}, err
+		return ProvisionExecutionTargetWorktreeResponse{}, reprovisionOperationError(ctx, err)
 	}
 	ownership, err := s.git.executionTargetLinkedWorktreeOwnership(ctx, workspaceRoot, worktreeRoot, taskShortID)
 	if err != nil {
-		return ProvisionExecutionTargetWorktreeResponse{}, err
+		return ProvisionExecutionTargetWorktreeResponse{}, reprovisionOperationError(ctx, err)
 	}
 	return ProvisionExecutionTargetWorktreeResponse{
 		WorktreeRoot:            worktreeRoot,
@@ -1578,6 +1578,31 @@ type TaskBranchCollisionError struct {
 
 func (e *TaskBranchCollisionError) Error() string {
 	return fmt.Sprintf("task worktree branch %q already exists or resolves to %q", e.BranchName, e.ResolvedRef)
+}
+
+// ExecutionTargetReprovisionManualRecoveryError marks a reprovisioning
+// failure that cannot be retried safely without an operator's intervention.
+type ExecutionTargetReprovisionManualRecoveryError struct {
+	Err error
+}
+
+func (e *ExecutionTargetReprovisionManualRecoveryError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *ExecutionTargetReprovisionManualRecoveryError) Unwrap() error {
+	return e.Err
+}
+
+func reprovisionManualRecoveryError(err error) error {
+	return &ExecutionTargetReprovisionManualRecoveryError{Err: err}
+}
+
+func reprovisionOperationError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return err
+	}
+	return reprovisionManualRecoveryError(err)
 }
 
 func nextAvailableWorktreeRoot(baseRoot string) (string, error) {

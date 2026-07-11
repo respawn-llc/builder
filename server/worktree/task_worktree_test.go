@@ -213,6 +213,49 @@ func TestInspectExecutionTargetWorktreeRejectsMissingRootWithChangedBranchTip(t 
 	}
 }
 
+func TestReprovisionExecutionTargetWorktreeClassifiesChangedTaskBranchAsManualRecovery(t *testing.T) {
+	env := newServiceTestEnv(t)
+	commit := runGit(t, env.workspaceRoot, "rev-parse", "HEAD")
+	worktreeRoot, err := env.service.PlanExecutionTargetWorktreeRoot(env.binding.WorkspaceID, "WOR-104")
+	if err != nil {
+		t.Fatalf("PlanExecutionTargetWorktreeRoot: %v", err)
+	}
+	if _, err := env.service.ProvisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{
+		WorkspaceID:         env.binding.WorkspaceID,
+		SourceWorkspaceRoot: env.workspaceRoot,
+		TaskShortID:         "WOR-104",
+		ResolvedCommit:      commit,
+		WorktreeRoot:        worktreeRoot,
+	}); err != nil {
+		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+	if err := os.Rename(canonicalWorktreeRoot, filepath.Join(t.TempDir(), "missing-root")); err != nil {
+		t.Fatalf("rename managed worktree root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(env.workspaceRoot, "later.txt"), []byte("later\n"), 0o644); err != nil {
+		t.Fatalf("write later commit: %v", err)
+	}
+	runGit(t, env.workspaceRoot, "add", "later.txt")
+	runGit(t, env.workspaceRoot, "commit", "-q", "-m", "later")
+	runGit(t, env.workspaceRoot, "update-ref", "refs/heads/WOR-104", "HEAD")
+
+	_, err = env.service.ReprovisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{
+		WorkspaceID:         env.binding.WorkspaceID,
+		SourceWorkspaceRoot: env.workspaceRoot,
+		TaskShortID:         "WOR-104",
+		ResolvedCommit:      commit,
+		WorktreeRoot:        canonicalWorktreeRoot,
+	})
+	var manualRecoveryErr *ExecutionTargetReprovisionManualRecoveryError
+	if !errors.As(err, &manualRecoveryErr) {
+		t.Fatalf("ReprovisionExecutionTargetWorktree error = %v, want ExecutionTargetReprovisionManualRecoveryError", err)
+	}
+}
+
 func TestInspectExecutionTargetWorktreeAcceptsExpectedKentDetachment(t *testing.T) {
 	env := newServiceTestEnv(t)
 	commit := runGit(t, env.workspaceRoot, "rev-parse", "HEAD")

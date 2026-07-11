@@ -1185,6 +1185,42 @@ func TestExecutionTargetRecoveryCoordinatorContinuesAfterTargetLocalFailure(t *t
 	}
 }
 
+func TestExecutionTargetRecoveryCoordinatorPermanentReprovisionFailureMarksManualRecovery(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	saveQueuedLockedExecutionTargetRecovery(t, ctx, service, binding, task)
+	service.targetWorktrees = &recordingTaskExecutionTargetWorktreeMaterializer{
+		provisionErr: &worktree.ExecutionTargetReprovisionManualRecoveryError{Err: errors.New("task branch no longer matches recorded commit")},
+		inspect: func(_ context.Context, req worktree.InspectExecutionTargetWorktreeRequest) (worktree.ExecutionTargetWorktreeInspection, error) {
+			return worktree.ExecutionTargetWorktreeInspection{
+				Kind:       worktree.ExecutionTargetWorktreeInspectionExactMissingRoot,
+				BranchName: req.TaskShortID,
+			}, nil
+		},
+	}
+	coordinator, err := service.StartExecutionTargetRecovery(ctx)
+	if err != nil {
+		t.Fatalf("StartExecutionTargetRecovery: %v", err)
+	}
+	defer func() {
+		if closeErr := coordinator.Close(); closeErr != nil {
+			t.Fatalf("ExecutionTargetRecoveryCoordinator.Close: %v", closeErr)
+		}
+	}()
+
+	waitForWorkflowServiceCondition(t, func() bool {
+		target, getErr := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+		return getErr == nil &&
+			target != nil &&
+			target.ActiveClaim == nil &&
+			target.RecoveryDisposition == workflow.ExecutionTargetRecoveryManualRecovery &&
+			target.RecoveryCause != nil &&
+			*target.RecoveryCause == workflow.ExecutionTargetRecoveryCauseAmbiguousWorktree
+	})
+}
+
 func TestExecutionTargetRecoveryCoordinatorDeadlineAfterLateNoSideEffectsMarksManualAndContinues(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -1708,6 +1744,9 @@ func TestExecutionTargetRecoveryCoordinatorReprovisionsExpectedDetachment(t *tes
 	}
 	if materializer.provision.WorktreeRoot != worktreeRoot || materializer.setup.WorktreeRoot != worktreeRoot {
 		t.Fatalf("reprovision/setup = provision:%+v setup:%+v, want durable root", materializer.provision, materializer.setup)
+	}
+	if materializer.setup.CreatedBranch {
+		t.Fatalf("reprovision setup = %+v, want CreatedBranch false", materializer.setup)
 	}
 }
 
@@ -4045,7 +4084,12 @@ func (m *recordingTaskExecutionTargetWorktreeMaterializer) ProvisionExecutionTar
 }
 
 func (m *recordingTaskExecutionTargetWorktreeMaterializer) ReprovisionExecutionTargetWorktree(ctx context.Context, req worktree.ProvisionExecutionTargetWorktreeRequest) (worktree.ProvisionExecutionTargetWorktreeResponse, error) {
-	return m.ProvisionExecutionTargetWorktree(ctx, req)
+	response, err := m.ProvisionExecutionTargetWorktree(ctx, req)
+	if err != nil {
+		return worktree.ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	response.CreatedBranch = false
+	return response, nil
 }
 
 func (m *recordingTaskExecutionTargetWorktreeMaterializer) InspectExecutionTargetWorktree(ctx context.Context, req worktree.InspectExecutionTargetWorktreeRequest) (worktree.ExecutionTargetWorktreeInspection, error) {

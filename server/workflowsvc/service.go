@@ -432,10 +432,10 @@ func (c *executionTargetRecoveryCoordinator) attachAndRecoverInitialSetup(ctx co
 		return fmt.Errorf("attach exact recovered execution target worktree: %w", err)
 	}
 	c.service.publishExecutionTargetRecoveryUpdate(ctx, target.TaskID)
-	return c.recoverAttachedSetup(ctx, recovery, target, claim, attached, inspection.BranchName)
+	return c.recoverAttachedSetup(ctx, recovery, target, claim, attached, inspection.BranchName, true)
 }
 
-func (c *executionTargetRecoveryCoordinator) recoverAttachedSetup(ctx context.Context, recovery workflowstore.ExecutionTargetRecoveryContext, target workflow.ExecutionTarget, claim workflow.ExecutionTargetClaim, attached workflow.ExecutionWorktree, branchName string) error {
+func (c *executionTargetRecoveryCoordinator) recoverAttachedSetup(ctx context.Context, recovery workflowstore.ExecutionTargetRecoveryContext, target workflow.ExecutionTarget, claim workflow.ExecutionTargetClaim, attached workflow.ExecutionWorktree, branchName string, createdBranch bool) error {
 	switch target.SetupState {
 	case workflow.ExecutionTargetSetupPending:
 		target.SetupState = workflow.ExecutionTargetSetupRunning
@@ -451,7 +451,7 @@ func (c *executionTargetRecoveryCoordinator) recoverAttachedSetup(ctx context.Co
 			ProjectID:           recovery.ProjectID,
 			WorkspaceID:         recovery.SourceWorkspace.ID,
 			WorktreeID:          attached.ID,
-			CreatedBranch:       true,
+			CreatedBranch:       createdBranch,
 		})
 		if err != nil {
 			if ctx.Err() != nil {
@@ -519,7 +519,7 @@ func (c *executionTargetRecoveryCoordinator) recoverLockedTarget(ctx context.Con
 		}
 		return c.markManualRecovery(ctx, recovery.Target, claim, cause)
 	}
-	return c.recoverAttachedSetup(ctx, recovery, recovery.Target, claim, *root.ManagedWorktree, recovery.TaskShortID)
+	return c.recoverAttachedSetup(ctx, recovery, recovery.Target, claim, *root.ManagedWorktree, recovery.TaskShortID, true)
 }
 
 func (c *executionTargetRecoveryCoordinator) reprovisionLockedTarget(ctx context.Context, recovery workflowstore.ExecutionTargetRecoveryContext, claim workflow.ExecutionTargetClaim, worktreeRoot string) error {
@@ -546,6 +546,13 @@ func (c *executionTargetRecoveryCoordinator) reprovisionLockedTarget(ctx context
 		WorktreeRoot:        worktreeRoot,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
+		var manualRecoveryErr *worktree.ExecutionTargetReprovisionManualRecoveryError
+		if errors.As(err, &manualRecoveryErr) {
+			return c.markManualRecovery(ctx, target, claim, workflow.ExecutionTargetRecoveryCauseAmbiguousWorktree)
+		}
 		return err
 	}
 	if strings.TrimSpace(provisioned.ExactBranchObservation) == "" || provisioned.LinkedWorktreeOwnership == nil {
@@ -566,7 +573,7 @@ func (c *executionTargetRecoveryCoordinator) reprovisionLockedTarget(ctx context
 	if err != nil {
 		return err
 	}
-	return c.recoverAttachedSetup(ctx, recovery, target, claim, attached, recovery.TaskShortID)
+	return c.recoverAttachedSetup(ctx, recovery, target, claim, attached, recovery.TaskShortID, provisioned.CreatedBranch)
 }
 
 func (c *executionTargetRecoveryCoordinator) recoverLockedReprovisioningTarget(ctx context.Context, recovery workflowstore.ExecutionTargetRecoveryContext, claim workflow.ExecutionTargetClaim) error {
@@ -600,12 +607,12 @@ func (c *executionTargetRecoveryCoordinator) recoverLockedReprovisioningTarget(c
 		target.LinkedWorktreeOwnership = inspection.LinkedWorktreeOwnership
 		target.ExpectedDetachmentCommit = nil
 		attached, attachErr := c.service.store.AttachManagedExecutionTargetWorktree(ctx, workflowstore.AttachManagedExecutionTargetWorktreeRequest{
-			Target: target, ExpectedClaim: claim, WorkspaceID: recovery.SourceWorkspace.ID, WorktreeRoot: *recovery.Target.IntendedWorktreeRoot,
+			Target: target, ExpectedClaim: claim, WorkspaceID: recovery.SourceWorkspace.ID, WorktreeRoot: *recovery.Target.IntendedWorktreeRoot, CreatedBranch: false,
 		})
 		if attachErr != nil {
 			return attachErr
 		}
-		return c.recoverAttachedSetup(ctx, recovery, target, claim, attached, recovery.TaskShortID)
+		return c.recoverAttachedSetup(ctx, recovery, target, claim, attached, recovery.TaskShortID, false)
 	case worktree.ExecutionTargetWorktreeInspectionExactMissingRoot:
 		return c.reprovisionLockedTarget(ctx, recovery, claim, *recovery.Target.IntendedWorktreeRoot)
 	case worktree.ExecutionTargetWorktreeInspectionNoSideEffects:
