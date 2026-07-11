@@ -365,14 +365,18 @@ jobs:
             echo "Expected LSMinimumSystemVersion 15.0, got ${minimum_system_version}." >&2
             exit 1
           fi
-          lipo -verify_arch arm64 "$executable"
+          lipo "$executable" -verify_arch arm64
 
           "$executable" >"$RUNNER_TEMP/kent-desktop.log" 2>&1 &
           app_pid=$!
           sleep 10
           if ! kill -0 "$app_pid"; then
+            set +e
             wait "$app_pid"
-            exit $?
+            app_status=$?
+            set -e
+            cat "$RUNNER_TEMP/kent-desktop.log" >&2
+            exit "$app_status"
           fi
           kill -TERM "$app_pid"
           wait "$app_pid" || true
