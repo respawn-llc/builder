@@ -153,6 +153,64 @@ func TestReprovisionExecutionTargetWorktreeRecreatesMissingRootFromExactTaskBran
 	}
 }
 
+func TestInspectExecutionTargetWorktreeRejectsMissingRootWithChangedBranchTip(t *testing.T) {
+	env := newServiceTestEnv(t)
+	commit := runGit(t, env.workspaceRoot, "rev-parse", "HEAD")
+	worktreeRoot, err := env.service.PlanExecutionTargetWorktreeRoot(env.binding.WorkspaceID, "WOR-102")
+	if err != nil {
+		t.Fatalf("PlanExecutionTargetWorktreeRoot: %v", err)
+	}
+	if _, err := env.service.ProvisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{
+		WorkspaceID:         env.binding.WorkspaceID,
+		SourceWorkspaceRoot: env.workspaceRoot,
+		TaskShortID:         "WOR-102",
+		ResolvedCommit:      commit,
+		WorktreeRoot:        worktreeRoot,
+	}); err != nil {
+		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)
+	}
+	canonicalWorktreeRoot, err := config.CanonicalWorkspaceRoot(worktreeRoot)
+	if err != nil {
+		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
+	}
+	exact, err := env.service.InspectExecutionTargetWorktree(env.ctx, InspectExecutionTargetWorktreeRequest{
+		SourceWorkspaceRoot: env.workspaceRoot,
+		WorktreeRoot:        canonicalWorktreeRoot,
+		TaskShortID:         "WOR-102",
+		ResolvedCommit:      commit,
+	})
+	if err != nil {
+		t.Fatalf("InspectExecutionTargetWorktree exact: %v", err)
+	}
+	if exact.LinkedWorktreeOwnership == nil {
+		t.Fatal("exact inspection is missing ownership")
+	}
+	if err := os.Rename(canonicalWorktreeRoot, filepath.Join(t.TempDir(), "missing-root")); err != nil {
+		t.Fatalf("rename managed worktree root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(env.workspaceRoot, "later.txt"), []byte("later\n"), 0o644); err != nil {
+		t.Fatalf("write later commit: %v", err)
+	}
+	runGit(t, env.workspaceRoot, "add", "later.txt")
+	runGit(t, env.workspaceRoot, "commit", "-q", "-m", "later")
+	runGit(t, env.workspaceRoot, "update-ref", "refs/heads/WOR-102", "HEAD")
+	expectedBranchTip := commit
+	inspection, err := env.service.InspectExecutionTargetWorktree(env.ctx, InspectExecutionTargetWorktreeRequest{
+		SourceWorkspaceRoot: env.workspaceRoot,
+		WorktreeRoot:        canonicalWorktreeRoot,
+		TaskShortID:         "WOR-102",
+		ResolvedCommit:      commit,
+		ExpectedOwnership:   exact.LinkedWorktreeOwnership,
+		ExpectedBranchTip:   &expectedBranchTip,
+	})
+	if err != nil {
+		t.Fatalf("InspectExecutionTargetWorktree after branch move: %v", err)
+	}
+	if inspection.Kind != ExecutionTargetWorktreeInspectionAmbiguous {
+		t.Fatalf("inspection after branch move = %+v, want ambiguous", inspection)
+	}
+}
+
 func TestInspectExecutionTargetWorktreeClassifiesExactProvisioningEvidence(t *testing.T) {
 	env := newServiceTestEnv(t)
 	commit := runGit(t, env.workspaceRoot, "rev-parse", "HEAD")
