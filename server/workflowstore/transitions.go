@@ -138,7 +138,7 @@ func (s *Store) ApprovalTransitionProjection(ctx context.Context, transitionID w
 }
 
 func (s *Store) ApproveTransition(ctx context.Context, transitionID workflow.TransitionID) (CompleteRunResult, error) {
-	return s.approveTransition(ctx, transitionID, nil)
+	return s.approveTransition(ctx, transitionID, nil, nil)
 }
 
 // ApproveTransitionWithExecutionTarget commits a validated first execution
@@ -152,10 +152,23 @@ func (s *Store) ApproveTransitionWithExecutionTarget(ctx context.Context, target
 	if target.Policy != workflow.ExecutionPolicyNone {
 		return CompleteRunResult{}, errors.New("managed execution targets require provisioning before approval")
 	}
-	return s.approveTransition(ctx, transitionID, &target)
+	return s.approveTransition(ctx, transitionID, &target, nil)
 }
 
-func (s *Store) approveTransition(ctx context.Context, transitionID workflow.TransitionID, target *workflow.ExecutionTarget) (CompleteRunResult, error) {
+// ReplaceManualExecutionTargetAndApprove atomically replaces a
+// manual-recovery target with an operator-selected source-root target and
+// applies the pending approval.
+func (s *Store) ReplaceManualExecutionTargetAndApprove(ctx context.Context, target workflow.ExecutionTarget, transitionID workflow.TransitionID, expectedNegotiation workflow.ExecutionTargetNegotiation) (CompleteRunResult, error) {
+	if err := target.Validate(); err != nil {
+		return CompleteRunResult{}, err
+	}
+	if target.Policy != workflow.ExecutionPolicyNone {
+		return CompleteRunResult{}, errors.New("managed execution targets require provisioning before approval")
+	}
+	return s.approveTransition(ctx, transitionID, &target, &expectedNegotiation)
+}
+
+func (s *Store) approveTransition(ctx context.Context, transitionID workflow.TransitionID, target *workflow.ExecutionTarget, manualReplacement *workflow.ExecutionTargetNegotiation) (CompleteRunResult, error) {
 	id := strings.TrimSpace(string(transitionID))
 	if id == "" {
 		return CompleteRunResult{}, ErrTransitionIDRequired
@@ -251,11 +264,17 @@ func (s *Store) approveTransition(ctx context.Context, transitionID workflow.Tra
 			return CompleteRunResult{}, err
 		}
 	} else {
-		if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
-			return CompleteRunResult{}, err
-		}
-		if err := insertValidatedTaskExecutionTarget(ctx, q, *target); err != nil {
-			return CompleteRunResult{}, err
+		if manualReplacement != nil {
+			if err := replaceManualExecutionTarget(ctx, q, *target, *manualReplacement); err != nil {
+				return CompleteRunResult{}, err
+			}
+		} else {
+			if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
+				return CompleteRunResult{}, err
+			}
+			if err := insertValidatedTaskExecutionTarget(ctx, q, *target); err != nil {
+				return CompleteRunResult{}, err
+			}
 		}
 	}
 	updatedCount, err := q.ApprovePendingTransition(ctx, sqlitegen.ApprovePendingTransitionParams{

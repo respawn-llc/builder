@@ -450,6 +450,16 @@ func (s *Store) StartTask(ctx context.Context, taskID workflow.TaskID) (StartTas
 // source-root targets; managed targets need the separate Git provisioning
 // saga before they can safely reach this action boundary.
 func (s *Store) StartTaskWithExecutionTarget(ctx context.Context, target workflow.ExecutionTarget) (StartTaskResult, error) {
+	return s.startTaskWithExecutionTarget(ctx, target, nil)
+}
+
+// ReplaceManualExecutionTargetAndStart atomically replaces a manual-recovery
+// target with an operator-selected source-root target and starts the task.
+func (s *Store) ReplaceManualExecutionTargetAndStart(ctx context.Context, target workflow.ExecutionTarget, expectedNegotiation workflow.ExecutionTargetNegotiation) (StartTaskResult, error) {
+	return s.startTaskWithExecutionTarget(ctx, target, &expectedNegotiation)
+}
+
+func (s *Store) startTaskWithExecutionTarget(ctx context.Context, target workflow.ExecutionTarget, manualReplacement *workflow.ExecutionTargetNegotiation) (StartTaskResult, error) {
 	if err := target.Validate(); err != nil {
 		return StartTaskResult{}, err
 	}
@@ -480,11 +490,17 @@ func (s *Store) StartTaskWithExecutionTarget(ctx context.Context, target workflo
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
-		return StartTaskResult{}, err
-	}
-	if err := insertValidatedTaskExecutionTarget(ctx, q, target); err != nil {
-		return StartTaskResult{}, err
+	if manualReplacement != nil {
+		if err := replaceManualExecutionTarget(ctx, q, target, *manualReplacement); err != nil {
+			return StartTaskResult{}, err
+		}
+	} else {
+		if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
+			return StartTaskResult{}, err
+		}
+		if err := insertValidatedTaskExecutionTarget(ctx, q, target); err != nil {
+			return StartTaskResult{}, err
+		}
 	}
 	result, err := s.applyPreparedTaskStart(ctx, q, target.TaskID, prepared, now)
 	if err != nil {

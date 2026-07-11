@@ -34,15 +34,16 @@ var (
 
 	// Source-workspace edit guards. Each names a distinct condition under which
 	// a task's source workspace cannot be changed.
-	ErrSourceWorkspaceForCanceledTask           = errors.New("cannot edit source workspace for canceled task")
-	ErrSourceWorkspaceAfterAutomation           = errors.New("cannot edit source workspace after automation starts")
-	ErrSourceWorkspaceNotInProject              = errors.New("source workspace does not belong to project")
-	ErrTaskExecutionTargetNotMaterialized       = errors.New("task execution target is not materialized")
-	ErrTaskExecutionRootUnavailable             = errors.New("task execution root is unavailable")
-	ErrTaskExecutionTargetClaimChanged          = errors.New("task execution target claim changed")
-	ErrTaskExecutionTargetNegotiationRequired   = errors.New("task execution target negotiation is required")
-	ErrTaskExecutionTargetNegotiationChanged    = errors.New("task execution target negotiation changed")
-	ErrTaskExecutionTargetNegotiationInProgress = errors.New("task execution target negotiation is in progress")
+	ErrSourceWorkspaceForCanceledTask            = errors.New("cannot edit source workspace for canceled task")
+	ErrSourceWorkspaceAfterAutomation            = errors.New("cannot edit source workspace after automation starts")
+	ErrSourceWorkspaceNotInProject               = errors.New("source workspace does not belong to project")
+	ErrTaskExecutionTargetNotMaterialized        = errors.New("task execution target is not materialized")
+	ErrTaskExecutionRootUnavailable              = errors.New("task execution root is unavailable")
+	ErrTaskExecutionTargetClaimChanged           = errors.New("task execution target claim changed")
+	ErrTaskExecutionTargetReplacementUnavailable = errors.New("task execution target replacement is unavailable")
+	ErrTaskExecutionTargetNegotiationRequired    = errors.New("task execution target negotiation is required")
+	ErrTaskExecutionTargetNegotiationChanged     = errors.New("task execution target negotiation changed")
+	ErrTaskExecutionTargetNegotiationInProgress  = errors.New("task execution target negotiation is in progress")
 
 	// ErrRunAlreadyCompleted is returned when completing a run that already has a
 	// completion timestamp.

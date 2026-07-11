@@ -63,6 +63,16 @@ func (s *Store) ValidateManualMoveExecutionScripts(ctx context.Context, req Manu
 }
 
 func (s *Store) ManualMoveTaskWithExecutionTarget(ctx context.Context, target workflow.ExecutionTarget, req ManualMoveRequest) (ManualMoveResult, error) {
+	return s.manualMoveTaskWithExecutionTarget(ctx, target, req, nil)
+}
+
+// ReplaceManualExecutionTargetAndMove atomically replaces a manual-recovery
+// target with an operator-selected source-root target and applies the move.
+func (s *Store) ReplaceManualExecutionTargetAndMove(ctx context.Context, target workflow.ExecutionTarget, req ManualMoveRequest, expectedNegotiation workflow.ExecutionTargetNegotiation) (ManualMoveResult, error) {
+	return s.manualMoveTaskWithExecutionTarget(ctx, target, req, &expectedNegotiation)
+}
+
+func (s *Store) manualMoveTaskWithExecutionTarget(ctx context.Context, target workflow.ExecutionTarget, req ManualMoveRequest, manualReplacement *workflow.ExecutionTargetNegotiation) (ManualMoveResult, error) {
 	if err := target.Validate(); err != nil {
 		return ManualMoveResult{}, err
 	}
@@ -90,11 +100,17 @@ func (s *Store) ManualMoveTaskWithExecutionTarget(ctx context.Context, target wo
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
-		return ManualMoveResult{}, err
-	}
-	if err := insertValidatedTaskExecutionTarget(ctx, q, target); err != nil {
-		return ManualMoveResult{}, err
+	if manualReplacement != nil {
+		if err := replaceManualExecutionTarget(ctx, q, target, *manualReplacement); err != nil {
+			return ManualMoveResult{}, err
+		}
+	} else {
+		if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
+			return ManualMoveResult{}, err
+		}
+		if err := insertValidatedTaskExecutionTarget(ctx, q, target); err != nil {
+			return ManualMoveResult{}, err
+		}
 	}
 	result, err := s.applyPreparedManualMove(ctx, q, req, prepared, now)
 	if err != nil {

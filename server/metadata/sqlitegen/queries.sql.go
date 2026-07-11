@@ -879,6 +879,22 @@ func (q *Queries) DeleteInitialTaskExecutionTargetRecovery(ctx context.Context, 
 	return result.RowsAffected()
 }
 
+const deleteManualTaskExecutionTarget = `-- name: DeleteManualTaskExecutionTarget :execrows
+DELETE FROM task_execution_targets
+WHERE task_id = ?1
+  AND recovery_disposition = 'manual_recovery'
+  AND active_claim_generation IS NULL
+  AND active_claim_phase IS NULL
+`
+
+func (q *Queries) DeleteManualTaskExecutionTarget(ctx context.Context, taskID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteManualTaskExecutionTarget, taskID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteProject = `-- name: DeleteProject :execrows
 DELETE FROM projects
 WHERE id = ?1

@@ -34,6 +34,17 @@ type ExecutionTargetRecoveryContext struct {
 }
 
 func (s *Store) BeginManagedExecutionTargetMaterialization(ctx context.Context, req BeginManagedExecutionTargetMaterializationRequest) error {
+	return s.beginManagedExecutionTargetMaterialization(ctx, req, nil)
+}
+
+// ReplaceManualExecutionTargetMaterialization atomically replaces a durable
+// manual-recovery target with a new managed materialization claim selected by
+// an operator. The exact negotiation is the replacement fence.
+func (s *Store) ReplaceManualExecutionTargetMaterialization(ctx context.Context, req BeginManagedExecutionTargetMaterializationRequest, expectedNegotiation workflow.ExecutionTargetNegotiation) error {
+	return s.beginManagedExecutionTargetMaterialization(ctx, req, &expectedNegotiation)
+}
+
+func (s *Store) beginManagedExecutionTargetMaterialization(ctx context.Context, req BeginManagedExecutionTargetMaterializationRequest, manualReplacement *workflow.ExecutionTargetNegotiation) error {
 	target := req.Target
 	if err := target.Validate(); err != nil {
 		return err
@@ -52,18 +63,34 @@ func (s *Store) BeginManagedExecutionTargetMaterialization(ctx context.Context, 
 			return errors.New("managed execution target negotiation must belong to the target task")
 		}
 	}
+	if manualReplacement != nil {
+		if req.ExpectedNegotiation == nil || !executionTargetNegotiationsEqual(*req.ExpectedNegotiation, *manualReplacement) {
+			return errors.New("manual execution target replacement requires its expected negotiation")
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	if manualReplacement != nil {
+		if err := replaceManualExecutionTarget(ctx, q, target, *manualReplacement); err != nil {
+			return err
+		}
+	} else if err := insertNewExecutionTargetAfterNegotiation(ctx, q, target, req.ExpectedNegotiation); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertNewExecutionTargetAfterNegotiation(ctx context.Context, q *sqlitegen.Queries, target workflow.ExecutionTarget, expectedNegotiation *workflow.ExecutionTargetNegotiation) error {
 	negotiationRow, err := q.GetTaskExecutionTargetNegotiation(ctx, string(target.TaskID))
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("get task execution target negotiation: %w", err)
 		}
-		if req.ExpectedNegotiation != nil {
+		if expectedNegotiation != nil {
 			return ErrTaskExecutionTargetNegotiationChanged
 		}
 	} else {
@@ -71,20 +98,65 @@ func (s *Store) BeginManagedExecutionTargetMaterialization(ctx context.Context, 
 		if decodeErr != nil {
 			return fmt.Errorf("decode task execution target negotiation: %w", decodeErr)
 		}
-		if req.ExpectedNegotiation == nil {
+		if expectedNegotiation == nil {
 			return ErrTaskExecutionTargetNegotiationInProgress
 		}
-		if !executionTargetNegotiationsEqual(negotiation, *req.ExpectedNegotiation) {
+		if !executionTargetNegotiationsEqual(negotiation, *expectedNegotiation) {
 			return ErrTaskExecutionTargetNegotiationChanged
 		}
 	}
 	if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
 		return err
 	}
-	if err := insertValidatedTaskExecutionTarget(ctx, q, target); err != nil {
+	return insertValidatedTaskExecutionTarget(ctx, q, target)
+}
+
+func replaceManualExecutionTarget(ctx context.Context, q *sqlitegen.Queries, target workflow.ExecutionTarget, expectedNegotiation workflow.ExecutionTargetNegotiation) error {
+	if err := expectedNegotiation.Validate(); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if expectedNegotiation.TaskID != target.TaskID {
+		return errors.New("manual execution target replacement negotiation must belong to the target task")
+	}
+	row, err := q.GetTaskExecutionTarget(ctx, string(target.TaskID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrTaskExecutionTargetReplacementUnavailable
+	}
+	if err != nil {
+		return err
+	}
+	existing, err := taskExecutionTargetFromRow(row)
+	if err != nil {
+		return fmt.Errorf("decode manual execution target replacement: %w", err)
+	}
+	if existing.ActiveClaim != nil || existing.RecoveryDisposition != workflow.ExecutionTargetRecoveryManualRecovery {
+		return ErrTaskExecutionTargetReplacementUnavailable
+	}
+	negotiationRow, err := q.GetTaskExecutionTargetNegotiation(ctx, string(target.TaskID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrTaskExecutionTargetNegotiationChanged
+	}
+	if err != nil {
+		return err
+	}
+	negotiation, err := taskExecutionTargetNegotiationFromRow(negotiationRow)
+	if err != nil {
+		return fmt.Errorf("decode manual execution target replacement negotiation: %w", err)
+	}
+	if !executionTargetNegotiationsEqual(negotiation, expectedNegotiation) {
+		return ErrTaskExecutionTargetNegotiationChanged
+	}
+	if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
+		return err
+	}
+	deleted, err := q.DeleteManualTaskExecutionTarget(ctx, string(target.TaskID))
+	if err != nil {
+		return err
+	}
+	if deleted != 1 {
+		return ErrTaskExecutionTargetReplacementUnavailable
+	}
+	return insertValidatedTaskExecutionTarget(ctx, q, target)
 }
 
 func insertValidatedTaskExecutionTarget(ctx context.Context, q *sqlitegen.Queries, target workflow.ExecutionTarget) error {

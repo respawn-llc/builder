@@ -1010,7 +1010,12 @@ func (s *Service) negotiateTaskStartExecutionTarget(ctx context.Context, req ser
 		return materialization.selectionRequired, nil
 	}
 	if materialization.none {
-		started, err := s.store.StartTaskWithExecutionTarget(ctx, noneExecutionTarget(prepared.TaskID))
+		var started workflowstore.StartTaskResult
+		if materialization.manualReplacement != nil {
+			started, err = s.store.ReplaceManualExecutionTargetAndStart(ctx, noneExecutionTarget(prepared.TaskID), *materialization.manualReplacement)
+		} else {
+			started, err = s.store.StartTaskWithExecutionTarget(ctx, noneExecutionTarget(prepared.TaskID))
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1030,6 +1035,7 @@ type taskExecutionTargetActionMaterialization struct {
 	none              bool
 	selectionRequired *serverapi.WorkflowTaskInitiatingActionResult
 	conflict          *serverapi.WorkflowTaskInitiatingActionResult
+	manualReplacement *workflow.ExecutionTargetNegotiation
 }
 
 func (s *Service) materializeTaskExecutionTargetForAction(ctx context.Context, prepared workflowstore.TaskExecutionTargetNegotiationPreparation, selectionGeneration *string, requestedSelection *serverapi.WorkflowTaskExecutionTargetSelection, setupOperationID serverapi.WorktreeSetupOperationID) (taskExecutionTargetActionMaterialization, error) {
@@ -1045,7 +1051,7 @@ func (s *Service) materializeTaskExecutionTargetForAction(ctx context.Context, p
 		return taskExecutionTargetActionMaterialization{}, err
 	}
 	if matchesNoneSelection {
-		return taskExecutionTargetActionMaterialization{none: true}, nil
+		return taskExecutionTargetActionMaterialization{none: true, manualReplacement: manualExecutionTargetReplacement(prepared)}, nil
 	}
 	matchesSelection, err := s.matchesExecutionTargetSelection(ctx, prepared, selectionGeneration, selection)
 	if err != nil {
@@ -1059,7 +1065,7 @@ func (s *Service) materializeTaskExecutionTargetForAction(ctx context.Context, p
 		if policyErr != nil {
 			return taskExecutionTargetActionMaterialization{}, policyErr
 		}
-		if err := s.materializeManagedExecutionTarget(ctx, prepared, policy, setupOperationID); err != nil {
+		if err := s.materializeManagedExecutionTarget(ctx, prepared, policy, setupOperationID, manualExecutionTargetReplacement(prepared)); err != nil {
 			if implicitPolicySelection && executionTargetResolutionRequiresSelection(err) {
 				selectionRequired, selectionErr := s.requireTaskExecutionTargetSelection(ctx, prepared)
 				if selectionErr != nil {
@@ -1105,10 +1111,19 @@ func (s *Service) matchesNoneExecutionTargetSelection(ctx context.Context, prepa
 }
 
 func (s *Service) matchesExecutionTargetSelection(ctx context.Context, prepared workflowstore.TaskExecutionTargetNegotiationPreparation, selectionGeneration *string, selection *serverapi.WorkflowTaskExecutionTargetSelection) (bool, error) {
-	if selection == nil || prepared.ExistingTarget != nil {
+	if selection == nil {
+		return false, nil
+	}
+	if prepared.ExistingTarget != nil && prepared.ExistingTarget.RecoveryDisposition != workflow.ExecutionTargetRecoveryManualRecovery {
+		return false, nil
+	}
+	if prepared.ExistingTarget != nil && prepared.ExistingTarget.ActiveClaim != nil {
 		return false, nil
 	}
 	if prepared.ExistingNegotiation == nil {
+		if prepared.ExistingTarget != nil {
+			return false, nil
+		}
 		if prepared.ExecutionPolicy.Mode == workflow.ExecutionPolicyAsk {
 			return false, nil
 		}
@@ -1127,7 +1142,7 @@ func (s *Service) matchesExecutionTargetSelection(ctx context.Context, prepared 
 	return true, nil
 }
 
-func (s *Service) materializeManagedExecutionTarget(ctx context.Context, prepared workflowstore.TaskExecutionTargetNegotiationPreparation, policy workflow.ExecutionPolicy, setupOperationID serverapi.WorktreeSetupOperationID) error {
+func (s *Service) materializeManagedExecutionTarget(ctx context.Context, prepared workflowstore.TaskExecutionTargetNegotiationPreparation, policy workflow.ExecutionPolicy, setupOperationID serverapi.WorktreeSetupOperationID, manualReplacement *workflow.ExecutionTargetNegotiation) error {
 	if err := policy.Validate(); err != nil {
 		return err
 	}
@@ -1160,10 +1175,16 @@ func (s *Service) materializeManagedExecutionTarget(ctx context.Context, prepare
 		ActiveClaim:                 &claim,
 		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
 	}
-	if err := s.store.BeginManagedExecutionTargetMaterialization(ctx, workflowstore.BeginManagedExecutionTargetMaterializationRequest{
+	materialization := workflowstore.BeginManagedExecutionTargetMaterializationRequest{
 		Target:              target,
 		ExpectedNegotiation: prepared.ExistingNegotiation,
-	}); err != nil {
+	}
+	if manualReplacement != nil {
+		err = s.store.ReplaceManualExecutionTargetMaterialization(ctx, materialization, *manualReplacement)
+	} else {
+		err = s.store.BeginManagedExecutionTargetMaterialization(ctx, materialization)
+	}
+	if err != nil {
 		return err
 	}
 	provisioned, err := s.targetWorktrees.ProvisionExecutionTargetWorktree(ctx, worktree.ProvisionExecutionTargetWorktreeRequest{
@@ -1275,7 +1296,9 @@ func (s *Service) requireTaskExecutionTargetSelection(ctx context.Context, prepa
 		if prepared.ExistingTarget.ActiveClaim != nil {
 			return taskExecutionTargetInProgressResult(prepared.TaskID, prepared.ExistingTarget.ActiveClaim.Phase), nil
 		}
-		return nil, nil
+		if prepared.ExistingTarget.RecoveryDisposition != workflow.ExecutionTargetRecoveryManualRecovery {
+			return nil, nil
+		}
 	}
 	source, err := s.executionTargetNegotiationSource(ctx, prepared.SourceWorkspace.Root)
 	if err != nil {
@@ -1296,6 +1319,9 @@ func (s *Service) requireTaskExecutionTargetSelection(ctx context.Context, prepa
 		SourceWorkspaceID: prepared.SourceWorkspace.ID,
 		Source:            source,
 		Action:            prepared.Action,
+	}
+	if prepared.ExistingTarget != nil {
+		negotiation.RecoveryCause = prepared.ExistingTarget.RecoveryCause
 	}
 	if err := s.store.SaveTaskExecutionTargetNegotiationIfExpected(ctx, prepared.ExistingNegotiation, negotiation); err != nil {
 		return nil, err
@@ -1336,6 +1362,11 @@ func (s *Service) executionTargetNegotiationSource(ctx context.Context, workspac
 }
 
 func taskExecutionTargetSelectionRequiredResult(negotiation workflow.ExecutionTargetNegotiation, policy workflow.ExecutionPolicy) *serverapi.WorkflowTaskInitiatingActionResult {
+	var recoveryCause *serverapi.WorkflowTaskExecutionTargetRecoveryCause
+	if negotiation.RecoveryCause != nil {
+		cause := serverapi.WorkflowTaskExecutionTargetRecoveryCause(*negotiation.RecoveryCause)
+		recoveryCause = &cause
+	}
 	return &serverapi.WorkflowTaskInitiatingActionResult{
 		Outcome: serverapi.WorkflowTaskInitiatingActionOutcomeSelectionRequired,
 		SelectionRequired: &serverapi.WorkflowTaskExecutionTargetSelectionRequired{
@@ -1345,8 +1376,19 @@ func taskExecutionTargetSelectionRequiredResult(negotiation workflow.ExecutionTa
 			Source:              taskExecutionTargetSource(negotiation.Source),
 			SupportedSelections: []serverapi.WorkflowTaskExecutionTargetSelectionMode{serverapi.WorkflowTaskExecutionTargetSelectionNone, serverapi.WorkflowTaskExecutionTargetSelectionHead, serverapi.WorkflowTaskExecutionTargetSelectionDefaultBranch, serverapi.WorkflowTaskExecutionTargetSelectionCustomRef},
 			ConfiguredPolicy:    workflowview.ExecutionPolicyDTO(policy),
+			RecoveryCause:       recoveryCause,
 		},
 	}
+}
+
+func manualExecutionTargetReplacement(prepared workflowstore.TaskExecutionTargetNegotiationPreparation) *workflow.ExecutionTargetNegotiation {
+	if prepared.ExistingTarget == nil ||
+		prepared.ExistingTarget.ActiveClaim != nil ||
+		prepared.ExistingTarget.RecoveryDisposition != workflow.ExecutionTargetRecoveryManualRecovery ||
+		prepared.ExistingNegotiation == nil {
+		return nil
+	}
+	return prepared.ExistingNegotiation
 }
 
 func taskExecutionTargetInProgressResult(taskID workflow.TaskID, phase workflow.ExecutionTargetClaimPhase) *serverapi.WorkflowTaskInitiatingActionResult {
@@ -1539,7 +1581,13 @@ func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.Workflo
 			return *materialization.selectionRequired, nil
 		}
 		if materialization.none {
-			approved, approveErr := s.store.ApproveTransitionWithExecutionTarget(ctx, noneExecutionTarget(prepared.TaskID), workflow.TransitionID(transitionID))
+			var approved workflowstore.CompleteRunResult
+			var approveErr error
+			if materialization.manualReplacement != nil {
+				approved, approveErr = s.store.ReplaceManualExecutionTargetAndApprove(ctx, noneExecutionTarget(prepared.TaskID), workflow.TransitionID(transitionID), *materialization.manualReplacement)
+			} else {
+				approved, approveErr = s.store.ApproveTransitionWithExecutionTarget(ctx, noneExecutionTarget(prepared.TaskID), workflow.TransitionID(transitionID))
+			}
 			if approveErr != nil {
 				return serverapi.WorkflowTaskInitiatingActionResult{}, approveErr
 			}
@@ -1586,7 +1634,13 @@ func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTa
 			return *materialization.selectionRequired, nil
 		}
 		if materialization.none {
-			moved, moveErr := s.store.ManualMoveTaskWithExecutionTarget(ctx, noneExecutionTarget(prepared.TaskID), moveRequest)
+			var moved workflowstore.ManualMoveResult
+			var moveErr error
+			if materialization.manualReplacement != nil {
+				moved, moveErr = s.store.ReplaceManualExecutionTargetAndMove(ctx, noneExecutionTarget(prepared.TaskID), moveRequest, *materialization.manualReplacement)
+			} else {
+				moved, moveErr = s.store.ManualMoveTaskWithExecutionTarget(ctx, noneExecutionTarget(prepared.TaskID), moveRequest)
+			}
 			if moveErr != nil {
 				return serverapi.WorkflowTaskInitiatingActionResult{}, moveErr
 			}

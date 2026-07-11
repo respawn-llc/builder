@@ -698,6 +698,187 @@ func TestServiceStartReturnsInProgressWhileManagedTargetMaterializes(t *testing.
 	}
 }
 
+func TestServiceStartManualRecoveryRequiresSelectionThenReplacesTarget(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyHead)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	manualTarget := saveWorkflowServiceManualRecoveryTarget(t, ctx, service, task.Task.ID)
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "selection-commit"),
+	}}
+
+	required, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask selection requirement: %v", err)
+	}
+	if required.Outcome != serverapi.WorkflowTaskInitiatingActionOutcomeSelectionRequired ||
+		required.SelectionRequired == nil ||
+		required.SelectionRequired.RecoveryCause == nil ||
+		*required.SelectionRequired.RecoveryCause != serverapi.WorkflowTaskExecutionTargetRecoveryCause(*manualTarget.RecoveryCause) {
+		t.Fatalf("selection requirement = %+v, want manual-recovery selection with cause %q", required, *manualTarget.RecoveryCause)
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget before selection: %v", err)
+	}
+	if target == nil || target.Policy != manualTarget.Policy || target.ResolvedSource == nil || target.ResolvedSource.Commit != "manual-recovery-commit" {
+		t.Fatalf("target before selection = %+v, want original manual-recovery target", target)
+	}
+	negotiation, err := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation before selection: %v", err)
+	}
+	if negotiation == nil || negotiation.Generation != required.SelectionRequired.Generation {
+		t.Fatalf("negotiation before selection = %+v, want persisted selection fence", negotiation)
+	}
+
+	started, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:              task.Task.ID,
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SelectionGeneration: &required.SelectionRequired.Generation,
+		Selection:           &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionNone},
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask manual-recovery selection: %v", err)
+	}
+	if started.Outcome != serverapi.WorkflowTaskInitiatingActionOutcomeStarted || started.Started == nil {
+		t.Fatalf("start result = %+v, want started", started)
+	}
+	target, err = service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget after selection: %v", err)
+	}
+	if target == nil ||
+		target.Policy != workflow.ExecutionPolicyNone ||
+		target.RecoveryDisposition != workflow.ExecutionTargetRecoveryAvailable ||
+		target.RecoveryCause != nil {
+		t.Fatalf("target after selection = %+v, want replacement none target", target)
+	}
+	negotiation, err = service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation after selection: %v", err)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation after selection = %+v, want cleared", negotiation)
+	}
+	runs, err := service.store.ListRuns(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListRuns after selection: %v", err)
+	}
+	if len(runs) != 1 || string(runs[0].ID) != started.Started.RunID {
+		t.Fatalf("runs after selection = %+v, want the started run", runs)
+	}
+}
+
+func TestServiceStartManualRecoveryManagedSelectionReplacesTarget(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	saveWorkflowServiceManualRecoveryTarget(t, ctx, service, task.Task.ID)
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "replacement-commit"),
+	}}
+	service.targetWorktrees = &recordingTaskExecutionTargetWorktreeMaterializer{worktreeRoot: t.TempDir()}
+
+	required, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask selection requirement: %v", err)
+	}
+	if required.SelectionRequired == nil {
+		t.Fatalf("selection requirement = %+v, want manual-recovery selection", required)
+	}
+	started, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:              task.Task.ID,
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SelectionGeneration: &required.SelectionRequired.Generation,
+		Selection:           &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionHead},
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask managed manual-recovery selection: %v", err)
+	}
+	if started.Started == nil {
+		t.Fatalf("start result = %+v, want started", started)
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget after selection: %v", err)
+	}
+	if target == nil ||
+		target.Policy != workflow.ExecutionPolicyHead ||
+		target.ResolvedSource == nil ||
+		target.ResolvedSource.Commit != "replacement-commit" ||
+		target.RecoveryDisposition != workflow.ExecutionTargetRecoveryAvailable ||
+		target.ActiveClaim != nil {
+		t.Fatalf("target after selection = %+v, want locked managed replacement", target)
+	}
+	negotiation, err := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation after selection: %v", err)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation after selection = %+v, want cleared", negotiation)
+	}
+}
+
+func TestServiceStartManualRecoveryNoneValidationFailurePreservesTargetAndClearsSelection(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceScriptWorkflow(t, ctx, service, "scripts/missing")
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	manualTarget := saveWorkflowServiceManualRecoveryTarget(t, ctx, service, task.Task.ID)
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "selection-commit"),
+	}}
+
+	required, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	})
+	if err != nil {
+		t.Fatalf("StartWorkflowTask selection requirement: %v", err)
+	}
+	if required.SelectionRequired == nil {
+		t.Fatalf("selection requirement = %+v, want manual-recovery selection", required)
+	}
+	if _, err := service.StartWorkflowTask(ctx, serverapi.WorkflowTaskStartRequest{
+		TaskID:              task.Task.ID,
+		SetupOperationID:    serverapi.NewWorktreeSetupOperationID(),
+		SelectionGeneration: &required.SelectionRequired.Generation,
+		Selection:           &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionNone},
+	}); err == nil {
+		t.Fatal("StartWorkflowTask missing source script succeeded")
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget after validation failure: %v", err)
+	}
+	if target == nil ||
+		target.Policy != manualTarget.Policy ||
+		target.ResolvedSource == nil ||
+		target.ResolvedSource.Commit != manualTarget.ResolvedSource.Commit ||
+		target.RecoveryDisposition != workflow.ExecutionTargetRecoveryManualRecovery {
+		t.Fatalf("target after validation failure = %+v, want original manual-recovery target", target)
+	}
+	negotiation, err := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation after validation failure: %v", err)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation after validation failure = %+v, want cleared", negotiation)
+	}
+}
+
 func TestExecutionTargetRecoveryCoordinatorClaimsThenRequeuesOnClose(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -1461,6 +1642,59 @@ func TestServiceExecutableManualMoveAskNoneSelectionLocksTargetAndAppliesMove(t 
 	}
 }
 
+func TestServiceExecutableManualMoveManualRecoveryNoneSelectionReplacesTargetAndAppliesMove(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	saveWorkflowServiceManualRecoveryTarget(t, ctx, service, task.Task.ID)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "selection-commit"),
+	}}
+	request := serverapi.WorkflowTaskMoveRequest{
+		TaskID:           task.Task.ID,
+		TargetNodeID:     workflowServiceNodeIDByKind(t, def.Definition, "agent"),
+		AllowMissingEdge: true,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	}
+
+	required, err := service.MoveWorkflowTask(ctx, request)
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask selection requirement: %v", err)
+	}
+	if required.SelectionRequired == nil {
+		t.Fatalf("move result = %+v, want selection_required", required)
+	}
+	request.SelectionGeneration = &required.SelectionRequired.Generation
+	request.Selection = &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionNone}
+	moved, err := service.MoveWorkflowTask(ctx, request)
+	if err != nil {
+		t.Fatalf("MoveWorkflowTask manual-recovery selection: %v", err)
+	}
+	if moved.Moved == nil {
+		t.Fatalf("move result = %+v, want moved", moved)
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget after selection: %v", err)
+	}
+	if target == nil || target.Policy != workflow.ExecutionPolicyNone || target.RecoveryDisposition != workflow.ExecutionTargetRecoveryAvailable {
+		t.Fatalf("target after selection = %+v, want none replacement", target)
+	}
+	negotiation, err := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation after selection: %v", err)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation after selection = %+v, want cleared", negotiation)
+	}
+}
+
 func TestServiceExecutableManualMoveAskNoneMissingSourceScriptLeavesNoTargetOrMove(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceScriptWorkflow(t, ctx, service, "scripts/missing")
@@ -1635,6 +1869,65 @@ func TestServiceExecutableApprovalAskNoneSelectionLocksTargetAndAppliesApproval(
 	}
 	if len(transitions) != 1 || transitions[0].State != "approved" || string(transitions[0].ID) != approved.Approved.TransitionID {
 		t.Fatalf("transitions = %+v, want exactly the approved transition", transitions)
+	}
+}
+
+func TestServiceExecutableApprovalManualRecoveryNoneSelectionReplacesTargetAndAppliesApproval(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	def, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	pending, err := service.store.ManualMoveTask(ctx, workflowstore.ManualMoveRequest{
+		TaskID:           workflow.TaskID(task.Task.ID),
+		TargetNodeID:     workflow.NodeID(workflowServiceNodeIDByKind(t, def.Definition, "agent")),
+		AllowMissingEdge: true,
+	})
+	if err != nil {
+		t.Fatalf("ManualMoveTask setup: %v", err)
+	}
+	saveWorkflowServiceManualRecoveryTarget(t, ctx, service, task.Task.ID)
+	setWorkflowServiceExecutionPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionPolicyAsk)
+	service.targetResolver = &recordingTaskExecutionTargetResolver{resolutions: []worktree.ExecutionTargetResolution{
+		namedExecutionTargetResolution("refs/heads/main", "selection-commit"),
+	}}
+	request := serverapi.WorkflowTaskApproveRequest{
+		TaskTransitionID: string(pending.TransitionID),
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+	}
+
+	required, err := service.ApproveWorkflowTask(ctx, request)
+	if err != nil {
+		t.Fatalf("ApproveWorkflowTask selection requirement: %v", err)
+	}
+	if required.SelectionRequired == nil {
+		t.Fatalf("approval result = %+v, want selection_required", required)
+	}
+	request.SelectionGeneration = &required.SelectionRequired.Generation
+	request.Selection = &serverapi.WorkflowTaskExecutionTargetSelection{Mode: serverapi.WorkflowTaskExecutionTargetSelectionNone}
+	approved, err := service.ApproveWorkflowTask(ctx, request)
+	if err != nil {
+		t.Fatalf("ApproveWorkflowTask manual-recovery selection: %v", err)
+	}
+	if approved.Approved == nil || approved.Approved.State != "approved" {
+		t.Fatalf("approval result = %+v, want approved", approved)
+	}
+	target, err := service.store.GetTaskExecutionTarget(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTarget after selection: %v", err)
+	}
+	if target == nil || target.Policy != workflow.ExecutionPolicyNone || target.RecoveryDisposition != workflow.ExecutionTargetRecoveryAvailable {
+		t.Fatalf("target after selection = %+v, want none replacement", target)
+	}
+	negotiation, err := service.store.GetTaskExecutionTargetNegotiation(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation after selection: %v", err)
+	}
+	if negotiation != nil {
+		t.Fatalf("negotiation after selection = %+v, want cleared", negotiation)
 	}
 }
 
@@ -4153,6 +4446,31 @@ func newWorkflowServiceTestServiceWithMetadata(t *testing.T) (*Service, metadata
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func saveWorkflowServiceManualRecoveryTarget(t *testing.T, ctx context.Context, service *Service, taskID string) workflow.ExecutionTarget {
+	t.Helper()
+	provisioningGeneration := "manual-recovery-provisioning"
+	recoveryCause := workflow.ExecutionTargetRecoveryCauseAmbiguousWorktree
+	target := workflow.ExecutionTarget{
+		TaskID: workflow.TaskID(taskID),
+		Policy: workflow.ExecutionPolicyHead,
+		ResolvedSource: &workflow.ExecutionTargetResolvedSource{
+			Kind:     workflow.ExecutionTargetSourceNamedRef,
+			NamedRef: stringPtr("refs/heads/main"),
+			Commit:   "manual-recovery-commit",
+		},
+		State:                       workflow.ExecutionTargetStateLocked,
+		ProvisioningGeneration:      &provisioningGeneration,
+		SetupProvisioningGeneration: &provisioningGeneration,
+		SetupState:                  workflow.ExecutionTargetSetupFailed,
+		RecoveryDisposition:         workflow.ExecutionTargetRecoveryManualRecovery,
+		RecoveryCause:               &recoveryCause,
+	}
+	if err := service.store.SaveTaskExecutionTarget(ctx, target); err != nil {
+		t.Fatalf("SaveTaskExecutionTarget: %v", err)
+	}
+	return target
 }
 
 func linkWorkflowServiceProject(t *testing.T, ctx context.Context, service *Service, req serverapi.WorkflowLinkProjectRequest) serverapi.WorkflowLinkProjectResponse {
