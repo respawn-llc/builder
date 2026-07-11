@@ -351,6 +351,9 @@ func TestGuardedGraphDeletesRespectTaskHistory(t *testing.T) {
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID)
 	agentID := workflow.NodeID("node-agent-" + string(workflowID))
+	if _, err := store.queries.DeleteWorkflowNode(ctx, string(agentID)); err == nil || !strings.Contains(err.Error(), "workflow node has current task references") {
+		t.Fatalf("direct active-node delete error = %v, want current-task trigger guard", err)
+	}
 	if err := store.DeleteNode(ctx, agentID); !errors.Is(err, ErrNodeHasTaskHistory) {
 		t.Fatalf("expected active node task-history guard, got %v", err)
 	}
