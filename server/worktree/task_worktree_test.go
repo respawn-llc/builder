@@ -47,6 +47,32 @@ func TestEnsureTaskWorktreeCreatesShortIDBranchWithoutControllerLease(t *testing
 	}
 }
 
+func TestProvisionExecutionTargetWorktreeCreatesTaskBranchFromExactCommit(t *testing.T) {
+	env := newServiceTestEnv(t)
+	baseCommit := runGit(t, env.workspaceRoot, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(env.workspaceRoot, "later.txt"), []byte("later\n"), 0o644); err != nil {
+		t.Fatalf("write later commit: %v", err)
+	}
+	runGit(t, env.workspaceRoot, "add", "later.txt")
+	runGit(t, env.workspaceRoot, "commit", "-q", "-m", "later")
+
+	provisioned, err := env.service.ProvisionExecutionTargetWorktree(env.ctx, ProvisionExecutionTargetWorktreeRequest{
+		WorkspaceID:         env.binding.WorkspaceID,
+		SourceWorkspaceRoot: env.workspaceRoot,
+		TaskShortID:         "WOR-99",
+		ResolvedCommit:      baseCommit,
+	})
+	if err != nil {
+		t.Fatalf("ProvisionExecutionTargetWorktree: %v", err)
+	}
+	if !provisioned.CreatedBranch || provisioned.BranchName != "WOR-99" || provisioned.WorktreeRoot == "" {
+		t.Fatalf("provisioned worktree = %+v, want created task branch", provisioned)
+	}
+	if got := runGit(t, provisioned.WorktreeRoot, "rev-parse", "HEAD"); got != baseCommit {
+		t.Fatalf("provisioned worktree commit = %q, want resolved commit %q", got, baseCommit)
+	}
+}
+
 func TestRepositoryMutationLockSerializesLinkedWorkspaceBindings(t *testing.T) {
 	env := newServiceTestEnv(t)
 	linkedRoot := filepath.Join(t.TempDir(), "linked")

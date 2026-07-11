@@ -121,6 +121,19 @@ type EnsureTaskWorktreeResponse struct {
 	CreatedBranch bool
 }
 
+type ProvisionExecutionTargetWorktreeRequest struct {
+	WorkspaceID         string
+	SourceWorkspaceRoot string
+	TaskShortID         string
+	ResolvedCommit      string
+}
+
+type ProvisionExecutionTargetWorktreeResponse struct {
+	WorktreeRoot  string
+	BranchName    string
+	CreatedBranch bool
+}
+
 type DeleteTaskWorktreeRequest struct {
 	TaskID string
 }
@@ -160,6 +173,60 @@ func (s *Service) ResolveExecutionTarget(ctx context.Context, workspaceRoot stri
 		return ExecutionTargetResolution{}, errors.New("worktree service dependencies are required")
 	}
 	return s.git.ResolveExecutionTarget(ctx, workspaceRoot, policy, customRef)
+}
+
+// ProvisionExecutionTargetWorktree creates the task-derived branch from the
+// caller's immutable resolved commit. It owns only Git/filesystem effects;
+// workflow target and task-worktree metadata remain workflow-owned.
+func (s *Service) ProvisionExecutionTargetWorktree(ctx context.Context, req ProvisionExecutionTargetWorktreeRequest) (ProvisionExecutionTargetWorktreeResponse, error) {
+	if s == nil || s.git == nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("worktree service dependencies are required")
+	}
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	workspaceRoot := strings.TrimSpace(req.SourceWorkspaceRoot)
+	taskShortID := strings.TrimSpace(req.TaskShortID)
+	resolvedCommit := strings.TrimSpace(req.ResolvedCommit)
+	if workspaceID == "" {
+		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("workspace id is required")
+	}
+	if workspaceRoot == "" {
+		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("source workspace root is required")
+	}
+	if taskShortID == "" {
+		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("task short id is required")
+	}
+	if resolvedCommit == "" {
+		return ProvisionExecutionTargetWorktreeResponse{}, errors.New("resolved commit is required")
+	}
+	createSpec, err := normalizeCreateSpec(CreateSpec{BaseRef: resolvedCommit, CreateBranch: true, BranchName: taskShortID})
+	if err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	release, err := s.AcquireRepositoryMutationLock(ctx, workspaceRoot)
+	if err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	defer release()
+	resolution, err := s.git.ResolveCreateTarget(ctx, workspaceRoot, createSpec.BranchName)
+	if err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	if resolution.Kind != CreateTargetResolutionKindNewBranch {
+		return ProvisionExecutionTargetWorktreeResponse{}, &TaskBranchCollisionError{BranchName: createSpec.BranchName, ResolvedRef: resolution.ResolvedRef}
+	}
+	worktreeRoot, err := s.resolveRequestedWorktreeRoot("", workspaceID, createSpec)
+	if err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	createdBranch, err := s.git.Add(ctx, workspaceRoot, worktreeRoot, createSpec)
+	if err != nil {
+		return ProvisionExecutionTargetWorktreeResponse{}, err
+	}
+	return ProvisionExecutionTargetWorktreeResponse{
+		WorktreeRoot:  worktreeRoot,
+		BranchName:    createSpec.BranchName,
+		CreatedBranch: createdBranch,
+	}, nil
 }
 
 func (s *Service) EnsureTaskWorktree(ctx context.Context, req EnsureTaskWorktreeRequest) (resp EnsureTaskWorktreeResponse, err error) {
