@@ -270,7 +270,31 @@ func TestStoreBeginManagedExecutionTargetMaterializationClearsNegotiation(t *tes
 		ActiveClaim:                 &workflow.ExecutionTargetClaim{Generation: claimGeneration, Phase: workflow.ExecutionTargetClaimMaterializing},
 		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
 	}
-	if err := store.BeginManagedExecutionTargetMaterialization(ctx, target); err != nil {
+	expectedNegotiation, err := store.GetTaskExecutionTargetNegotiation(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetNegotiation: %v", err)
+	}
+	if expectedNegotiation == nil {
+		t.Fatal("GetTaskExecutionTargetNegotiation = nil, want persisted negotiation")
+	}
+	staleNegotiation := *expectedNegotiation
+	staleNegotiation.Generation = "stale-negotiation"
+	if err := store.BeginManagedExecutionTargetMaterialization(ctx, BeginManagedExecutionTargetMaterializationRequest{
+		Target:              target,
+		ExpectedNegotiation: &staleNegotiation,
+	}); !errors.Is(err, ErrTaskExecutionTargetNegotiationChanged) {
+		t.Fatalf("BeginManagedExecutionTargetMaterialization stale negotiation error = %v, want %v", err, ErrTaskExecutionTargetNegotiationChanged)
+	}
+	if materialized, materializedErr := store.GetTaskExecutionTarget(ctx, task.ID); materializedErr != nil || materialized != nil {
+		t.Fatalf("GetTaskExecutionTarget after stale begin = target:%+v err:%v, want no target", materialized, materializedErr)
+	}
+	if err := store.BeginManagedExecutionTargetMaterialization(ctx, BeginManagedExecutionTargetMaterializationRequest{Target: target}); !errors.Is(err, ErrTaskExecutionTargetNegotiationInProgress) {
+		t.Fatalf("BeginManagedExecutionTargetMaterialization unexpected negotiation error = %v, want %v", err, ErrTaskExecutionTargetNegotiationInProgress)
+	}
+	if err := store.BeginManagedExecutionTargetMaterialization(ctx, BeginManagedExecutionTargetMaterializationRequest{
+		Target:              target,
+		ExpectedNegotiation: expectedNegotiation,
+	}); err != nil {
 		t.Fatalf("BeginManagedExecutionTargetMaterialization: %v", err)
 	}
 	actual, err := store.GetTaskExecutionTarget(ctx, task.ID)

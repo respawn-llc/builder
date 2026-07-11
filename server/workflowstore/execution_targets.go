@@ -19,7 +19,13 @@ func (s *Store) SaveTaskExecutionTarget(ctx context.Context, target workflow.Exe
 	return insertValidatedTaskExecutionTarget(ctx, s.queries, target)
 }
 
-func (s *Store) BeginManagedExecutionTargetMaterialization(ctx context.Context, target workflow.ExecutionTarget) error {
+type BeginManagedExecutionTargetMaterializationRequest struct {
+	Target              workflow.ExecutionTarget
+	ExpectedNegotiation *workflow.ExecutionTargetNegotiation
+}
+
+func (s *Store) BeginManagedExecutionTargetMaterialization(ctx context.Context, req BeginManagedExecutionTargetMaterializationRequest) error {
+	target := req.Target
 	if err := target.Validate(); err != nil {
 		return err
 	}
@@ -29,12 +35,40 @@ func (s *Store) BeginManagedExecutionTargetMaterialization(ctx context.Context, 
 		target.ActiveClaim.Phase != workflow.ExecutionTargetClaimMaterializing {
 		return errors.New("managed execution target materialization requires an initial materializing claim")
 	}
+	if req.ExpectedNegotiation != nil {
+		if err := req.ExpectedNegotiation.Validate(); err != nil {
+			return err
+		}
+		if req.ExpectedNegotiation.TaskID != target.TaskID {
+			return errors.New("managed execution target negotiation must belong to the target task")
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	negotiationRow, err := q.GetTaskExecutionTargetNegotiation(ctx, string(target.TaskID))
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("get task execution target negotiation: %w", err)
+		}
+		if req.ExpectedNegotiation != nil {
+			return ErrTaskExecutionTargetNegotiationChanged
+		}
+	} else {
+		negotiation, decodeErr := taskExecutionTargetNegotiationFromRow(negotiationRow)
+		if decodeErr != nil {
+			return fmt.Errorf("decode task execution target negotiation: %w", decodeErr)
+		}
+		if req.ExpectedNegotiation == nil {
+			return ErrTaskExecutionTargetNegotiationInProgress
+		}
+		if !executionTargetNegotiationsEqual(negotiation, *req.ExpectedNegotiation) {
+			return ErrTaskExecutionTargetNegotiationChanged
+		}
+	}
 	if _, err := q.DeleteTaskExecutionTargetNegotiation(ctx, string(target.TaskID)); err != nil {
 		return err
 	}

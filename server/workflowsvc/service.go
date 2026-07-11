@@ -810,7 +810,10 @@ func (s *Service) materializeManagedExecutionTarget(ctx context.Context, prepare
 		ActiveClaim:                 &claim,
 		RecoveryDisposition:         workflow.ExecutionTargetRecoveryAvailable,
 	}
-	if err := s.store.BeginManagedExecutionTargetMaterialization(ctx, target); err != nil {
+	if err := s.store.BeginManagedExecutionTargetMaterialization(ctx, workflowstore.BeginManagedExecutionTargetMaterializationRequest{
+		Target:              target,
+		ExpectedNegotiation: prepared.ExistingNegotiation,
+	}); err != nil {
 		return err
 	}
 	provisioned, err := s.targetWorktrees.ProvisionExecutionTargetWorktree(ctx, worktree.ProvisionExecutionTargetWorktreeRequest{
